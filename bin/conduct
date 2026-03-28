@@ -105,9 +105,15 @@ run_claude() {
 
   ensure_pipeline_dir
 
-  # Always use --session-id — works for both creating and continuing a session.
-  # --resume fails if the session doesn't exist yet (e.g., first call failed).
-  local session_flag="--session-id ${session_id}"
+  # First successful call uses --session-id (creates session).
+  # Subsequent calls use --resume (continues session).
+  # The marker file is only created AFTER a successful call.
+  local session_flag
+  if [ -f "${PIPELINE_DIR}/session-created" ]; then
+    session_flag="--resume ${session_id}"
+  else
+    session_flag="--session-id ${session_id}"
+  fi
 
   # Build loop context
   local iteration
@@ -127,33 +133,20 @@ else:
   if [ "$mode" = "print" ]; then
     log "Sending to Claude (session: ${session_id:0:8}...)..."
 
-    # Run with stream-json output for parseable responses
     claude -p "$prompt" \
       $session_flag \
       --append-system-prompt "$context" \
-      --output-format stream-json \
-      --verbose \
       --dangerously-skip-permissions \
-      2>/dev/null \
-    | while IFS= read -r line; do
-        # Log raw output
-        echo "$line" >> "$SESSION_LOG"
-        # Extract and display text content
-        local msg_type
-        msg_type=$(echo "$line" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('type',''))" 2>/dev/null || echo "")
-        if [ "$msg_type" = "assistant" ]; then
-          echo "$line" | python3 -c "
-import sys, json
-d = json.load(sys.stdin)
-for block in d.get('message', {}).get('content', []):
-    if block.get('type') == 'text':
-        print(block['text'])
-" 2>/dev/null || true
-        fi
-      done
+      2>&1 | tee -a "$SESSION_LOG"
+
+    local exit_code=${PIPESTATUS[0]}
+    if [ "$exit_code" -eq 0 ]; then
+      touch "${PIPELINE_DIR}/session-created"
+    fi
   else
     log "Interactive session (session: ${session_id:0:8}...). Type /quit when done."
     claude $session_flag --append-system-prompt "$context. $prompt"
+    touch "${PIPELINE_DIR}/session-created"
   fi
 }
 
@@ -445,7 +438,10 @@ recover() {
         local session_id
         session_id=$(get_session_id)
         log "Interactive session. Fix the issue, then /quit to return."
-        claude --session-id "$session_id" --append-system-prompt "The conduct script needs you to complete step: ${step_name}. Run the appropriate skill."
+        local recover_flag="--session-id ${session_id}"
+        [ -f "${PIPELINE_DIR}/session-created" ] && recover_flag="--resume ${session_id}"
+        claude $recover_flag --append-system-prompt "The conduct script needs you to complete step: ${step_name}. Run the appropriate skill."
+        touch "${PIPELINE_DIR}/session-created"
         log "Back from interactive session. Rechecking..."
         return 0  # retry
         ;;
@@ -503,7 +499,7 @@ while [[ $# -gt 0 ]]; do
     --interactive)  RUN_MODE="interactive" ;;
     --step)         SINGLE_STEP="$2"; shift ;;
     --from)         START_STEP="$2"; shift ;;
-    --reset)        rm -f "$STATE_FILE" "$SESSION_FILE" "${PIPELINE_DIR}/conduct-session-started" "${SESSION_LOG}" 2>/dev/null; log "Session reset."; exit 0 ;;
+    --reset)        rm -f "$STATE_FILE" "$SESSION_FILE" "${PIPELINE_DIR}/session-created" "${SESSION_LOG}" 2>/dev/null; log "Session reset."; exit 0 ;;
     -h|--help)      usage; exit 0 ;;
     *)              FEATURE_DESC="$1" ;;
   esac
