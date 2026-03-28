@@ -175,6 +175,141 @@ PYEOF
   fi
 }
 
+# ─── Hooks ────────────────────────────────────────────────────────────────────
+
+configure_hooks() {
+  local settings_file=$1
+  local hooks_dir="${HARNESS_DIR}/hooks/claude"
+
+  local output
+  output=$(python3 << PYEOF
+import json, os
+
+settings_path = "$settings_file"
+hooks_dir = "$hooks_dir"
+
+# Read existing settings
+if os.path.exists(settings_path):
+    with open(settings_path) as f:
+        settings = json.load(f)
+else:
+    settings = {}
+
+if "hooks" not in settings:
+    settings["hooks"] = {}
+
+# Define harness hooks
+harness_hooks = {
+    "PreToolUse": [
+        {
+            "matcher": "Bash",
+            "hooks": [
+                {
+                    "type": "command",
+                    "command": f"{hooks_dir}/block-destructive-git.sh",
+                    "timeout": 10
+                }
+            ]
+        },
+        {
+            "matcher": "Bash",
+            "hooks": [
+                {
+                    "type": "command",
+                    "command": f"{hooks_dir}/tdd-commit-gate.sh",
+                    "timeout": 10
+                }
+            ]
+        }
+    ],
+    "PostToolUse": [
+        {
+            "matcher": "Edit|Write",
+            "hooks": [
+                {
+                    "type": "command",
+                    "command": f"{hooks_dir}/lint-after-edit.sh",
+                    "timeout": 30
+                },
+                {
+                    "type": "command",
+                    "command": f"{hooks_dir}/spec-coverage-check.sh",
+                    "timeout": 10
+                }
+            ]
+        },
+        {
+            "matcher": "Bash",
+            "hooks": [
+                {
+                    "type": "command",
+                    "command": f"{hooks_dir}/post-commit-pipeline-sync.sh",
+                    "timeout": 10
+                }
+            ]
+        }
+    ],
+    "SessionStart": [
+        {
+            "hooks": [
+                {
+                    "type": "command",
+                    "command": f"{hooks_dir}/session-start-context.sh",
+                    "timeout": 15
+                }
+            ]
+        }
+    ],
+    "Stop": [
+        {
+            "hooks": [
+                {
+                    "type": "command",
+                    "command": f"{hooks_dir}/stop-memory-reminder.sh",
+                    "timeout": 10
+                }
+            ]
+        }
+    ]
+}
+
+# Track what we add
+added = 0
+skipped = 0
+
+for event, hook_entries in harness_hooks.items():
+    if event not in settings["hooks"]:
+        settings["hooks"][event] = []
+
+    existing_commands = set()
+    for entry in settings["hooks"][event]:
+        for h in entry.get("hooks", []):
+            existing_commands.add(h.get("command", ""))
+
+    for entry in hook_entries:
+        entry_commands = {h.get("command", "") for h in entry.get("hooks", [])}
+        if entry_commands - existing_commands:
+            settings["hooks"][event].append(entry)
+            added += len(entry_commands - existing_commands)
+        else:
+            skipped += len(entry_commands)
+
+with open(settings_path, "w") as f:
+    json.dump(settings, f, indent=2)
+    f.write("\n")
+
+print(f"{added} added, {skipped} already set")
+PYEOF
+  )
+
+  if [ $? -eq 0 ]; then
+    ok "Hooks: ${output}"
+  else
+    warn "Could not configure hooks automatically"
+    info "Manually add hooks to ${settings_file}"
+  fi
+}
+
 # ─── Install ──────────────────────────────────────────────────────────────────
 
 install() {
@@ -242,9 +377,10 @@ install() {
     ok "Installed conduct script to ${conduct_target}"
   fi
 
-  # 4. Configure Claude Code permissions
+  # 4. Configure Claude Code permissions and hooks
   local settings_file="${HOME}/.claude/settings.json"
   configure_permissions "$settings_file"
+  configure_hooks "$settings_file"
 
   # 5. Check PATH
   if echo "$PATH" | tr ':' '\n' | grep -q "\.local/bin"; then
