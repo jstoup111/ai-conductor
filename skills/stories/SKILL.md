@@ -20,6 +20,9 @@ ensuring error handling and edge cases are tested first, not bolted on later.
 - Read the approved design document from `docs/specs/`
 - Check tech-context if loaded (e.g., `tech-context/rails-postgres/stories.md` for Rails-specific negative paths)
 - Review existing stories in `docs/stories/` for this feature area (avoid duplicates)
+- **Check for DRAFT stories from `/bootstrap`** — if stories have `Status: DRAFT`, review and
+  complete them rather than generating from scratch. Fill in `TODO` negative paths, verify happy
+  paths match actual behavior, and mark as accepted when done.
 - Recall relevant `.memory/` entries
 
 ### 2. Generate Stories

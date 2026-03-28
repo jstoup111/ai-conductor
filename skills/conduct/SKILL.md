@@ -40,7 +40,7 @@ Check for these artifacts in order. The **first missing artifact** determines th
 | 1. bootstrap | Project CLAUDE.md exists AND `.memory/` directory exists AND `docs/` subdirectories exist | Glob for `CLAUDE.md` in project root, check `.memory/index.md`, check `docs/specs/` exists |
 | 2. memory | `.memory/index.md` has been read this session | Memory recall happens automatically — if bootstrap is done, mark this as done |
 | 3. brainstorm | At least one file exists in `docs/specs/` | Glob `docs/specs/*.md` |
-| 4. stories | At least one file exists in `docs/stories/` | Glob `docs/stories/*.md` |
+| 4. stories | At least one **accepted** story exists in `docs/stories/` (not just DRAFT) | Glob `docs/stories/*.md` — if all stories contain `Status: DRAFT`, this step is pending (run `/stories` to review and accept) |
 | 5. conflict-check | Conflict report exists in `docs/conflicts/` OR a clean-check marker exists | Glob `docs/conflicts/*.md` — if stories exist but no conflict report, this step is pending |
 | 6. plan | At least one file exists in `docs/plans/` | Glob `docs/plans/*.md` |
 | 7. build | Implementation tasks from the plan are completed with passing tests | Check `.pipeline/task-status.json` if pipeline used, OR check that test suite passes and commits exist beyond the plan |

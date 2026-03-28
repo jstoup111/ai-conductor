@@ -112,7 +112,13 @@ check_brainstorm() {
 }
 
 check_stories() {
-  compgen -G "${PROJECT_DIR}/docs/stories/*.md" > /dev/null 2>&1
+  # Stories must exist AND not all be DRAFT status
+  compgen -G "${PROJECT_DIR}/docs/stories/*.md" > /dev/null 2>&1 || return 1
+  # If any story contains "Status: DRAFT", stories step is not complete
+  if grep -rl "Status: DRAFT" "${PROJECT_DIR}/docs/stories/" > /dev/null 2>&1; then
+    return 1
+  fi
+  return 0
 }
 
 check_conflict_check() {
