@@ -30,13 +30,19 @@ Default to **Standard** unless the user specifies otherwise.
 For each task in the implementation plan:
 
 ```
-1. DECOMPOSE — Read task, identify files to touch, check dependencies met
-2. IMPLEMENT — TDD cycle (RED → DOMAIN → GREEN → DOMAIN → COMMIT)
-3. REVIEW   — Dispatch evaluator with fresh context
-4. FIX      — Address review findings (if any)
-5. VERIFY   — Run full test suite
-6. COMMIT   — Clean commit with descriptive message
+0. UPDATE STATUS — Mark task as "in_progress" in .pipeline/task-status.json
+1. DECOMPOSE    — Read task, identify files to touch, check dependencies met
+2. IMPLEMENT    — TDD cycle (RED → DOMAIN → GREEN → DOMAIN → COMMIT)
+3. REVIEW       — Dispatch evaluator with fresh context
+4. FIX          — Address review findings (if any)
+5. VERIFY       — Run full test suite
+6. COMMIT       — Clean commit with descriptive message
+7. UPDATE STATUS — Mark task as "completed" in .pipeline/task-status.json
 ```
+
+**Task status tracking is mandatory.** Update `.pipeline/task-status.json` at the START and
+END of every task. The post-commit hook also updates status, but do not rely on it alone —
+update explicitly. Status must reflect reality at all times.
 
 ### Quality Gates
 

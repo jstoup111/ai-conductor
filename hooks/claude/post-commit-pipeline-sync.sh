@@ -1,6 +1,6 @@
 #!/bin/bash
 # After a git commit, update .pipeline/task-status.json if pipeline is active.
-# Marks the current in_progress task as completed.
+# Completes the first pending/in_progress task and starts the next one.
 set -e
 
 PIPELINE_STATE=".pipeline/task-status.json"
@@ -22,7 +22,6 @@ if ! echo "$COMMAND" | grep -qE 'git\s+commit'; then
   exit 0
 fi
 
-# Find and complete the first in_progress task
 python3 << 'PYEOF'
 import json, os
 
@@ -33,18 +32,56 @@ if not os.path.exists(path):
 with open(path) as f:
     state = json.load(f)
 
-updated = False
-for task_id in sorted(state.keys(), key=lambda x: int(x.split("-")[-1]) if x.split("-")[-1].isdigit() else 0):
+def task_sort_key(task_id):
+    parts = task_id.split("-")
+    try:
+        return int(parts[-1])
+    except (ValueError, IndexError):
+        return 0
+
+sorted_ids = sorted(state.keys(), key=task_sort_key)
+
+# Find the first task that needs completing (in_progress first, then pending)
+completed_id = None
+for task_id in sorted_ids:
     task = state[task_id]
     if isinstance(task, dict) and task.get("status") == "in_progress":
         task["status"] = "completed"
-        updated = True
-        print(f"Pipeline: marked {task_id} as completed")
+        completed_id = task_id
         break
 
-if updated:
-    with open(path, "w") as f:
-        json.dump(state, f, indent=2)
+# If nothing was in_progress, complete the first pending task
+if completed_id is None:
+    for task_id in sorted_ids:
+        task = state[task_id]
+        if isinstance(task, dict) and task.get("status") == "pending":
+            task["status"] = "completed"
+            completed_id = task_id
+            break
+
+if completed_id is None:
+    exit(0)
+
+# Mark the next pending task as in_progress
+next_started = None
+for task_id in sorted_ids:
+    task = state[task_id]
+    if isinstance(task, dict) and task.get("status") == "pending":
+        task["status"] = "in_progress"
+        next_started = task_id
+        break
+
+# Count progress
+total = len(sorted_ids)
+done = sum(1 for t in state.values() if isinstance(t, dict) and t.get("status") == "completed")
+
+with open(path, "w") as f:
+    json.dump(state, f, indent=2)
+
+msg = f"Pipeline: {completed_id} → completed ({done}/{total})"
+if next_started:
+    msg += f", {next_started} → in_progress"
+print(msg)
 PYEOF
 
 exit 0
