@@ -88,13 +88,21 @@ run_claude() {
 
   ensure_pipeline_dir
 
+  # Use --continue after first step to maintain session context
+  local continue_flag=""
+  if [ -f "${PROJECT_DIR}/.pipeline/conduct-session" ]; then
+    continue_flag="--continue"
+  fi
+  touch "${PROJECT_DIR}/.pipeline/conduct-session"
+
   if [ "$mode" = "print" ]; then
     claude -p "$prompt" \
+      $continue_flag \
       --dangerously-skip-permissions \
       2>&1 | tee -a "$SESSION_LOG"
   else
     log "Dropping into interactive session. Type /quit when done."
-    claude --append-system-prompt "$prompt"
+    claude $continue_flag --append-system-prompt "$prompt"
   fi
 }
 
@@ -577,16 +585,66 @@ fi
 # Run steps in order
 STEP_FUNCS=(run_bootstrap run_memory run_brainstorm run_stories run_conflict_check run_plan run_acceptance_specs run_build run_finish run_retro)
 
-for i in $(seq "$start_index" $((${#STEP_FUNCS[@]} - 1))); do
-  if ! ${STEP_FUNCS[$i]}; then
-    echo ""
-    fail "Stopped at step: ${ALL_STEPS[$i]}"
-    show_status
-    echo -e "Fix the issue and run: ${BOLD}conduct --resume${NC}"
-    exit 1
+i=$start_index
+while [ "$i" -lt "${#STEP_FUNCS[@]}" ]; do
+  if ${STEP_FUNCS[$i]}; then
+    # Step succeeded — advance
+    i=$((i + 1))
+    continue
   fi
+
+  # Step failed — interactive recovery
+  echo ""
+  show_status
+  echo ""
+  echo -e "${BOLD}Step failed: ${ALL_STEPS[$i]}${NC}"
+  echo ""
+  echo -e "  ${CYAN}r${NC} — Retry this step"
+  echo -e "  ${CYAN}s${NC} — Skip to next step (advisory steps only)"
+  echo -e "  ${CYAN}i${NC} — Drop into interactive Claude session to fix manually"
+  echo -e "  ${CYAN}q${NC} — Quit (resume later with: conduct --resume)"
+  echo ""
+
+  while true; do
+    read -rp "$(echo -e "${BOLD}[r/s/i/q]:${NC} ")" choice
+    case "$choice" in
+      r|R|retry)
+        break  # Break inner loop, retry step in outer loop
+        ;;
+      s|S|skip)
+        # Only allow skipping advisory steps
+        case "${ALL_STEPS[$i]}" in
+          memory|brainstorm|retro)
+            warn "Skipping ${ALL_STEPS[$i]} (advisory step)"
+            save_state "${ALL_STEPS[$i]//"-"/"_"}" "skipped"
+            i=$((i + 1))
+            break
+            ;;
+          *)
+            fail "${ALL_STEPS[$i]} is a gating step — cannot skip"
+            ;;
+        esac
+        ;;
+      i|I|interactive)
+        log "Launching interactive Claude session. Run the step manually, then /quit when done."
+        claude --append-system-prompt "The conduct script is at step: ${ALL_STEPS[$i]}. Run the appropriate skill and complete this step."
+        log "Returned from interactive session. Rechecking..."
+        break  # Break inner loop, retry check in outer loop
+        ;;
+      q|Q|quit)
+        echo ""
+        show_status
+        echo -e "\nResume later with: ${BOLD}conduct --resume${NC}"
+        exit 0
+        ;;
+      *)
+        echo "  Enter r, s, i, or q"
+        ;;
+    esac
+  done
 done
 
 # Done
+echo ""
 show_status
 echo -e "${GREEN}${BOLD}SDLC complete.${NC} Review the retro in docs/retros/"
