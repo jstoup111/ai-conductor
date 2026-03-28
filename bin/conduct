@@ -127,11 +127,12 @@ else:
   if [ "$mode" = "print" ]; then
     log "Sending to Claude (session: ${session_id:0:8}...)..."
 
-    # Run with stream-json output, pipe through jq for live text display
+    # Run with stream-json output for parseable responses
     claude -p "$prompt" \
       $session_flag \
       --append-system-prompt "$context" \
       --output-format stream-json \
+      --verbose \
       --dangerously-skip-permissions \
       2>/dev/null \
     | while IFS= read -r line; do
@@ -502,7 +503,7 @@ while [[ $# -gt 0 ]]; do
     --interactive)  RUN_MODE="interactive" ;;
     --step)         SINGLE_STEP="$2"; shift ;;
     --from)         START_STEP="$2"; shift ;;
-    --reset)        rm -f "$STATE_FILE" "$SESSION_FILE" 2>/dev/null; log "Session reset."; exit 0 ;;
+    --reset)        rm -f "$STATE_FILE" "$SESSION_FILE" "${PIPELINE_DIR}/conduct-session-started" "${SESSION_LOG}" 2>/dev/null; log "Session reset."; exit 0 ;;
     -h|--help)      usage; exit 0 ;;
     *)              FEATURE_DESC="$1" ;;
   esac
