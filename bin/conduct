@@ -105,14 +105,9 @@ run_claude() {
 
   ensure_pipeline_dir
 
-  # Build resume flag — first call uses --session-id, subsequent use --resume
-  local session_flag
-  if [ -f "${PIPELINE_DIR}/conduct-session-started" ]; then
-    session_flag="--resume ${session_id}"
-  else
-    session_flag="--session-id ${session_id}"
-    touch "${PIPELINE_DIR}/conduct-session-started"
-  fi
+  # Always use --session-id — works for both creating and continuing a session.
+  # --resume fails if the session doesn't exist yet (e.g., first call failed).
+  local session_flag="--session-id ${session_id}"
 
   # Build loop context
   local iteration
@@ -449,7 +444,7 @@ recover() {
         local session_id
         session_id=$(get_session_id)
         log "Interactive session. Fix the issue, then /quit to return."
-        claude --resume "$session_id" --append-system-prompt "The conduct script needs you to complete step: ${step_name}. Run the appropriate skill."
+        claude --session-id "$session_id" --append-system-prompt "The conduct script needs you to complete step: ${step_name}. Run the appropriate skill."
         log "Back from interactive session. Rechecking..."
         return 0  # retry
         ;;
@@ -507,7 +502,7 @@ while [[ $# -gt 0 ]]; do
     --interactive)  RUN_MODE="interactive" ;;
     --step)         SINGLE_STEP="$2"; shift ;;
     --from)         START_STEP="$2"; shift ;;
-    --reset)        rm -f "$STATE_FILE" "$SESSION_FILE" "${PIPELINE_DIR}/conduct-session-started" 2>/dev/null; log "Session reset."; exit 0 ;;
+    --reset)        rm -f "$STATE_FILE" "$SESSION_FILE" 2>/dev/null; log "Session reset."; exit 0 ;;
     -h|--help)      usage; exit 0 ;;
     *)              FEATURE_DESC="$1" ;;
   esac
