@@ -302,8 +302,17 @@ API projects: spec/integration/. Full-stack: spec/system/. Every criterion (happ
 run_build() {
   step_header 8 "tdd / pipeline" "BUILD"
   check_plan || { fail "GATE: Need plan first"; return 1; }
-  log "Starting TDD pipeline..."
-  run_claude "Run the /pipeline skill at Standard autonomy. Execute each task via TDD (RED→DOMAIN→GREEN→DOMAIN→COMMIT).
+
+  local autonomy="Standard"
+  local mode="print"
+  if [ "${RUN_MODE}" = "interactive" ]; then
+    mode="interactive"
+  elif [ "${RUN_MODE}" = "auto" ]; then
+    autonomy="Full"
+  fi
+
+  log "Starting TDD pipeline (${autonomy} autonomy, ${mode} mode)..."
+  run_claude "Run the /pipeline skill at ${autonomy} autonomy. Execute each task via TDD (RED→DOMAIN→GREEN→DOMAIN→COMMIT).
 
 MANDATORY at batch boundaries:
 - Dispatch evaluator with fresh context (hard gate)
@@ -312,16 +321,20 @@ MANDATORY at batch boundaries:
 - Persist at least one .memory/ entry per batch
 - Run micro-retro
 
-Track state in .pipeline/. Follow rework budget (3 cycles, then escalate)." "interactive"
+Track state in .pipeline/. Follow rework budget (3 cycles, then escalate).
+Do NOT stop to ask for approval — execute all tasks to completion." "$mode"
 
   check_build && { ok "Build complete — tests passing"; save_state "build" "done"; return 0; }
-  warn "Build session ended — verify tests pass"; save_state "build" "needs_verification"; return 0
+  warn "Build may be incomplete — checking tests"; save_state "build" "needs_verification"; return 0
 }
 
 run_finish() {
   step_header 9 "finish" "SHIP"
+  local mode="print"
+  [ "${RUN_MODE}" = "interactive" ] && mode="interactive"
+
   log "Fresh verification..."
-  run_claude "Run the /finish skill. Run test suite NOW, check git status, verify ALL story criteria covered. Present options — choose 'keep as-is' for this test project." "interactive"
+  run_claude "Run the /finish skill. Run test suite NOW, check git status, verify ALL story criteria covered. Choose 'keep as-is' for completion." "$mode"
   save_state "finish" "done"; ok "Finish complete"
 }
 
@@ -382,8 +395,32 @@ show_status() {
 
 # ─── Interactive Recovery ─────────────────────────────────────────────────────
 
+MAX_AUTO_RETRIES=3
+
 recover() {
   local step_name=$1
+
+  # Auto mode: retry up to MAX_AUTO_RETRIES, then fail hard
+  if [ "${RUN_MODE}" = "auto" ]; then
+    local retry_key="retry_${step_name//-/_}"
+    local retries
+    retries=$(get_state "$retry_key")
+    [ "$retries" = "pending" ] && retries=0
+
+    retries=$((retries + 1))
+    save_state "$retry_key" "$retries"
+
+    if [ "$retries" -le "$MAX_AUTO_RETRIES" ]; then
+      warn "Auto-retry ${retries}/${MAX_AUTO_RETRIES} for ${step_name}..."
+      return 0  # retry
+    else
+      fail "Step ${step_name} failed after ${MAX_AUTO_RETRIES} retries. Run 'conduct --resume' to continue manually."
+      show_status
+      exit 1
+    fi
+  fi
+
+  # Interactive/default mode: prompt user
   echo ""
   show_status
   echo -e "${BOLD}Step failed: ${step_name}${NC}"
@@ -433,6 +470,12 @@ usage() {
   echo ""
   echo "Drives a feature through the full SDLC harness using a persistent Claude session."
   echo ""
+  echo "Run modes:"
+  echo "  (default)         Each step runs non-interactively; prompts on failure"
+  echo "  --auto            Fully hands-off. All steps non-interactive, auto-retry on failure,"
+  echo "                    pipeline at Full autonomy. Only stops after 3 retries exhausted."
+  echo "  --interactive     All steps run interactively. You stay in Claude for each step."
+  echo ""
   echo "Options:"
   echo "  --status          Show current progress"
   echo "  --resume          Pick up from last completed step"
@@ -443,22 +486,30 @@ usage() {
   echo ""
   echo "Steps: bootstrap, memory, brainstorm, stories, conflict-check, plan,"
   echo "       acceptance-specs, build, finish, retro"
+  echo ""
+  echo "Examples:"
+  echo "  conduct --auto \"URL shortener with click tracking\"    # Fully automated"
+  echo "  conduct --interactive \"User auth system\"              # Manual oversight"
+  echo "  conduct \"Payment processing\"                          # Default: auto with prompts on failure"
 }
 
 FEATURE_DESC=""
 MODE="full"
+RUN_MODE="default"  # default | auto | interactive
 START_STEP=""
 SINGLE_STEP=""
 
 while [[ $# -gt 0 ]]; do
   case $1 in
-    --status)  show_status; exit 0 ;;
-    --resume)  MODE="resume" ;;
-    --step)    SINGLE_STEP="$2"; shift ;;
-    --from)    START_STEP="$2"; shift ;;
-    --reset)   rm -f "$STATE_FILE" "$SESSION_FILE" "${PIPELINE_DIR}/conduct-session-started" 2>/dev/null; log "Session reset."; exit 0 ;;
-    -h|--help) usage; exit 0 ;;
-    *)         FEATURE_DESC="$1" ;;
+    --status)       show_status; exit 0 ;;
+    --resume)       MODE="resume" ;;
+    --auto)         RUN_MODE="auto" ;;
+    --interactive)  RUN_MODE="interactive" ;;
+    --step)         SINGLE_STEP="$2"; shift ;;
+    --from)         START_STEP="$2"; shift ;;
+    --reset)        rm -f "$STATE_FILE" "$SESSION_FILE" "${PIPELINE_DIR}/conduct-session-started" 2>/dev/null; log "Session reset."; exit 0 ;;
+    -h|--help)      usage; exit 0 ;;
+    *)              FEATURE_DESC="$1" ;;
   esac
   shift
 done
@@ -470,6 +521,7 @@ echo -e "${BOLD}${CYAN}║     SDLC Conductor — Harness Runner     ║${NC}"
 echo -e "${BOLD}${CYAN}╚══════════════════════════════════════════╝${NC}"
 echo -e "  Project: ${PROJECT_DIR}"
 [ -n "$FEATURE_DESC" ] && echo -e "  Feature: ${FEATURE_DESC}"
+echo -e "  Mode:    ${RUN_MODE}"
 echo ""
 
 ensure_pipeline_dir
