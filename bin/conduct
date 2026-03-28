@@ -382,77 +382,48 @@ show_status() {
   echo ""
 }
 
-# ─── Interactive Recovery ─────────────────────────────────────────────────────
+# ─── Notification ─────────────────────────────────────────────────────────────
 
-MAX_AUTO_RETRIES=3
+send_notification() {
+  local title=$1
+  local message=$2
+
+  # Desktop notification (Linux)
+  if command -v notify-send &>/dev/null; then
+    notify-send "Conduct: ${title}" "$message" 2>/dev/null || true
+  fi
+
+  # macOS notification
+  if command -v osascript &>/dev/null; then
+    osascript -e "display notification \"${message}\" with title \"Conduct: ${title}\"" 2>/dev/null || true
+  fi
+
+  # Terminal bell
+  printf '\a'
+}
+
+# ─── Recovery ─────────────────────────────────────────────────────────────────
 
 recover() {
   local step_name=$1
+  local session_id
+  session_id=$(get_session_id)
 
-  # Auto mode: retry up to MAX_AUTO_RETRIES, then fail hard
-  if [ "${RUN_MODE}" = "auto" ]; then
-    local retry_key="retry_${step_name//-/_}"
-    local retries
-    retries=$(get_state "$retry_key")
-    [ "$retries" = "pending" ] && retries=0
+  send_notification "Step failed" "${step_name} — dropping to interactive session"
 
-    retries=$((retries + 1))
-    save_state "$retry_key" "$retries"
-
-    if [ "$retries" -le "$MAX_AUTO_RETRIES" ]; then
-      warn "Auto-retry ${retries}/${MAX_AUTO_RETRIES} for ${step_name}..."
-      return 0  # retry
-    else
-      fail "Step ${step_name} failed after ${MAX_AUTO_RETRIES} retries. Run 'conduct --resume' to continue manually."
-      show_status
-      exit 1
-    fi
-  fi
-
-  # Interactive/default mode: prompt user
   echo ""
   show_status
-  echo -e "${BOLD}Step failed: ${step_name}${NC}"
-  echo ""
-  echo -e "  ${CYAN}r${NC}  Retry this step"
-  echo -e "  ${CYAN}s${NC}  Skip (advisory steps only)"
-  echo -e "  ${CYAN}i${NC}  Interactive Claude session to fix manually"
-  echo -e "  ${CYAN}q${NC}  Quit (conduct --resume to continue later)"
+  warn "Step failed: ${step_name}. Dropping into interactive session to resolve."
+  log "Fix the issue, then /quit to return to the conductor."
   echo ""
 
-  while true; do
-    read -rp "$(echo -e "${BOLD}[r/s/i/q]:${NC} ")" choice
-    case "$choice" in
-      r|R) return 0 ;;  # retry
-      s|S)
-        case "$step_name" in
-          memory|brainstorm|retro)
-            warn "Skipping ${step_name}"
-            save_state "${step_name//-/_}" "skipped"
-            return 1  # skip (advance index in caller)
-            ;;
-          *) fail "${step_name} is a gating step — cannot skip" ;;
-        esac
-        ;;
-      i|I)
-        local session_id
-        session_id=$(get_session_id)
-        log "Interactive session. Fix the issue, then /quit to return."
-        local recover_flag="--session-id ${session_id}"
-        [ -f "${PIPELINE_DIR}/session-created" ] && recover_flag="--resume ${session_id}"
-        claude $recover_flag --append-system-prompt "The conduct script needs you to complete step: ${step_name}. Run the appropriate skill."
-        touch "${PIPELINE_DIR}/session-created"
-        log "Back from interactive session. Rechecking..."
-        return 0  # retry
-        ;;
-      q|Q)
-        show_status
-        echo -e "Resume later: ${BOLD}conduct --resume${NC}"
-        exit 0
-        ;;
-      *) echo "  Enter r, s, i, or q" ;;
-    esac
-  done
+  local recover_flag="--session-id ${session_id}"
+  [ -f "${PIPELINE_DIR}/session-created" ] && recover_flag="--resume ${session_id}"
+  claude $recover_flag --append-system-prompt "The conduct script hit a failure at step: ${step_name}. Complete this step, then /quit to return to the conductor."
+  touch "${PIPELINE_DIR}/session-created"
+
+  log "Back from interactive session. Rechecking..."
+  return 0  # always retry the check after interactive fix
 }
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
@@ -593,4 +564,5 @@ done
 # Done
 echo ""
 show_status
+send_notification "SDLC complete" "All steps finished. Review retro in docs/retros/"
 echo -e "${GREEN}${BOLD}SDLC complete.${NC} Review the retro in docs/retros/"
