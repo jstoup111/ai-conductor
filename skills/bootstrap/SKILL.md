@@ -20,11 +20,12 @@ code, tests, and history already in place).
 
 ### 1. Determine Bootstrap Mode
 
-Check for existing harness artifacts to determine mode:
+Check the project directory to determine mode:
 
 | Indicator | Mode |
 |-----------|------|
-| No `.memory/`, no `docs/`, no harness-generated `CLAUDE.md` | **Fresh** — full setup |
+| Empty directory or no project files (no Gemfile, package.json, etc.) | **New** — scaffold the project first |
+| Project files exist but no harness artifacts (.memory/, docs/) | **Fresh** — full harness setup |
 | `.memory/` or `docs/` exist but some are missing | **Partial** — fill gaps only |
 | All harness artifacts exist | **Re-bootstrap** — update detection, re-run smoke test |
 
@@ -36,6 +37,34 @@ Also check for existing project maturity:
 | `app/models/` or `src/` has 5+ files | Substantial codebase — needs inventory |
 | `spec/` or `test/` has existing tests | Test coverage exists — assess before adding more |
 | `CLAUDE.md` already exists (not harness-generated) | User has custom instructions — **preserve, don't overwrite** |
+
+### 1b. Scaffold New Project (New Mode Only)
+
+If the directory is empty or has no project files, ask the user what to create:
+
+1. **Ask for framework** — or infer from context (e.g., if the user said "Rails API" in their prompt)
+2. **Scaffold the project:**
+
+| Framework | Command |
+|-----------|---------|
+| Rails API | `rails new . --api --database=postgresql --skip-bundle` |
+| Rails full-stack | `rails new . --database=postgresql --skip-bundle` |
+| Next.js | `npx create-next-app@latest . --typescript` |
+| Express | `npm init -y` + install express |
+| FastAPI | `mkdir -p app && touch app/__init__.py app/main.py` |
+
+3. **Install dependencies:** `bundle install`, `npm install`, etc.
+4. **Add test framework** if not included:
+   - Rails: add `rspec-rails`, `factory_bot_rails`, `shoulda-matchers` to Gemfile, run `rails generate rspec:install`
+   - Node: add jest or vitest
+   - Python: add pytest
+5. **Configure database** for Docker if docker-compose.yml exists or user mentions Docker:
+   - Create `docker-compose.yml` with PostgreSQL service if needed
+   - Update `database.yml` (or equivalent) with connection settings
+   - Start the container and create databases
+6. **Initialize git** if not already a repo: `git init && git add -A && git commit -m "Initial project scaffold"`
+
+After scaffolding, continue to Step 2 (detect project type) — the scaffold will now be detected.
 
 ### 2. Detect Project Type
 
