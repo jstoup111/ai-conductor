@@ -23,7 +23,7 @@ fail() { echo -e "  ${RED}✗${NC} $*"; }
 warn() { echo -e "  ${YELLOW}⚠${NC} $*"; }
 info() { echo -e "  ${CYAN}→${NC} $*"; }
 
-SKILLS=(bootstrap brainstorm code-review conduct conflict-check debugging finish memory pipeline plan retro stories tdd)
+SKILLS=(bootstrap brainstorm code-review conduct conflict-check debugging finish memory pipeline plan retro stories tdd writing-system-tests)
 
 # ─── Check Mode ───────────────────────────────────────────────────────────────
 
