@@ -17,16 +17,17 @@ Does NOT run other skills internally — it assesses state and directs. The user
 ## The Flow
 
 ```
-Step 1: /bootstrap        → UNDERSTAND
-Step 2: /memory            → UNDERSTAND
-Step 3: /brainstorm        → DECIDE
-Step 4: /stories           → DECIDE
-Step 5: /conflict-check    → DECIDE
-Step 6: /plan              → DECIDE
-Step 7: /pipeline or /tdd  → BUILD
-Step 8: /code-review       → BUILD (if not already run by pipeline)
-Step 9: /finish            → SHIP
-Step 10: /retro            → SHIP
+Step 1:  /bootstrap             → UNDERSTAND
+Step 2:  /memory                → UNDERSTAND
+Step 3:  /brainstorm            → DECIDE
+Step 4:  /stories               → DECIDE
+Step 5:  /conflict-check        → DECIDE
+Step 6:  /plan                  → DECIDE
+Step 7:  /writing-system-tests  → BUILD (failing acceptance specs)
+Step 8:  /pipeline or /tdd      → BUILD (make them pass)
+Step 9:  /code-review           → BUILD (if not already run by pipeline)
+Step 10: /finish                → SHIP
+Step 11: /retro                 → SHIP
 ```
 
 ## Practices
@@ -43,10 +44,11 @@ Check for these artifacts in order. The **first missing artifact** determines th
 | 4. stories | At least one **accepted** story exists in `docs/stories/` (not just DRAFT) | Glob `docs/stories/*.md` — if all stories contain `Status: DRAFT`, this step is pending (run `/stories` to review and accept) |
 | 5. conflict-check | Conflict report exists in `docs/conflicts/` OR a clean-check marker exists | Glob `docs/conflicts/*.md` — if stories exist but no conflict report, this step is pending |
 | 6. plan | At least one file exists in `docs/plans/` | Glob `docs/plans/*.md` |
-| 7. build | Implementation tasks from the plan are completed with passing tests | Check `.pipeline/task-status.json` if pipeline used, OR check that test suite passes and commits exist beyond the plan |
-| 8. code-review | Review verdict exists in `.pipeline/audit-trail/` OR code-review was run | Check audit trail or ask user |
-| 9. finish | Fresh verification has been performed | Check `docs/retros/` does NOT yet exist but build is complete |
-| 10. retro | Retro report exists in `docs/retros/` | Glob `docs/retros/*.md` |
+| 7. writing-system-tests | Acceptance specs exist for stories | API: glob `spec/integration/*_spec.rb`. Full-stack: glob `spec/system/*_spec.rb`. If stories exist but no acceptance specs, this step is pending |
+| 8. build | Implementation tasks from the plan are completed with passing tests | Check `.pipeline/task-status.json` if pipeline used, OR check that test suite passes and commits exist beyond the plan |
+| 9. code-review | Review verdict exists in `.pipeline/audit-trail/` OR code-review was run | Check audit trail or ask user |
+| 10. finish | Fresh verification has been performed | Check `docs/retros/` does NOT yet exist but build is complete |
+| 11. retro | Retro report exists in `docs/retros/` | Glob `docs/retros/*.md` |
 
 ### 2. Report Status
 
@@ -111,6 +113,7 @@ Before suggesting the next step, verify that the previous step's **quality gates
 | stories | No (gating) | Negative paths are mandatory for TDD |
 | conflict-check | No (gating) | Must verify zero blocking conflicts |
 | plan | No (gating) | Tasks needed for build phase |
+| writing-system-tests | No (gating) | Acceptance specs must exist before implementation |
 | build | No (structural) | This is the implementation |
 | code-review | No (gating) | Quality gate before ship |
 | finish | No (gating) | Fresh verification required |

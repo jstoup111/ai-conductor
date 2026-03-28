@@ -22,7 +22,7 @@ UNDERSTAND → DECIDE → BUILD → SHIP
 | ALL | **conduct** (orchestrator) | Status dashboard, gate enforcement |
 | UNDERSTAND | bootstrap, memory | CLAUDE.md, .memory/ |
 | DECIDE | brainstorm → stories → conflict-check → plan | docs/specs/, docs/stories/, docs/conflicts/, docs/plans/ |
-| BUILD | tdd, debugging, code-review, pipeline | Code, tests, .pipeline/ |
+| BUILD | writing-system-tests → tdd/pipeline, debugging, code-review | Acceptance specs, code, unit tests, .pipeline/ |
 | SHIP | finish, retro | docs/retros/ |
 
 ## Skill Invocation

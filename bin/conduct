@@ -129,6 +129,12 @@ check_plan() {
   compgen -G "${PROJECT_DIR}/docs/plans/*.md" > /dev/null 2>&1
 }
 
+check_acceptance_specs() {
+  # API projects: spec/integration/  Full-stack: spec/system/
+  compgen -G "${PROJECT_DIR}/spec/integration/*_spec.rb" > /dev/null 2>&1 || \
+  compgen -G "${PROJECT_DIR}/spec/system/*_spec.rb" > /dev/null 2>&1
+}
+
 check_build() {
   # Tests exist and pass
   if [ -f "${PROJECT_DIR}/.rspec" ] || [ -d "${PROJECT_DIR}/spec" ]; then
@@ -311,8 +317,41 @@ Generate an implementation plan in docs/plans/ with:
   fi
 }
 
+run_acceptance_specs() {
+  step_header 7 "writing-system-tests" "BUILD"
+
+  if check_acceptance_specs; then
+    ok "Already complete — acceptance specs exist"
+    save_state "acceptance_specs" "done"
+    return 0
+  fi
+
+  if ! check_plan; then
+    fail "GATE: Cannot write acceptance specs without implementation plan in docs/plans/"
+    return 1
+  fi
+
+  log "Generating failing acceptance specs from stories..."
+  run_claude "Run the /writing-system-tests skill. Read ALL stories in docs/stories/ and generate failing acceptance specs.
+
+- For API-only projects: generate integration request specs in spec/integration/
+- For full-stack projects: generate system specs in spec/system/
+- Every acceptance criterion (happy AND negative) becomes a concrete test
+- Tests should FAIL (RED) since nothing is implemented yet
+- Commit the failing specs"
+
+  if check_acceptance_specs; then
+    ok "Acceptance specs created"
+    save_state "acceptance_specs" "done"
+  else
+    fail "No acceptance specs found in spec/integration/ or spec/system/"
+    save_state "acceptance_specs" "failed"
+    return 1
+  fi
+}
+
 run_build() {
-  step_header 7 "tdd / pipeline" "BUILD"
+  step_header 8 "tdd / pipeline" "BUILD"
 
   if ! check_plan; then
     fail "GATE: Cannot build without implementation plan in docs/plans/"
@@ -344,7 +383,7 @@ Run the full test suite at batch boundaries." "interactive"
 }
 
 run_finish() {
-  step_header 8 "finish" "SHIP"
+  step_header 9 "finish" "SHIP"
 
   log "Running fresh verification..."
   run_claude "Run the /finish skill.
@@ -360,7 +399,7 @@ run_finish() {
 }
 
 run_retro() {
-  step_header 9 "retro" "SHIP"
+  step_header 10 "retro" "SHIP"
 
   if check_retro; then
     ok "Already complete — retro exists in docs/retros/"
@@ -400,10 +439,10 @@ show_status() {
   echo -e "${BOLD}SDLC Progress${NC}"
   echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 
-  local steps=("bootstrap" "memory" "brainstorm" "stories" "conflict_check" "plan" "build" "finish" "retro")
-  local labels=("bootstrap" "memory" "brainstorm" "stories" "conflict-check" "plan" "tdd/pipeline" "finish" "retro")
-  local phases=("UNDERSTAND" "UNDERSTAND" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "BUILD" "SHIP" "SHIP")
-  local checks=(check_bootstrap "" check_brainstorm check_stories check_conflict_check check_plan check_build "" check_retro)
+  local steps=("bootstrap" "memory" "brainstorm" "stories" "conflict_check" "plan" "acceptance_specs" "build" "finish" "retro")
+  local labels=("bootstrap" "memory" "brainstorm" "stories" "conflict-check" "plan" "acceptance specs" "tdd/pipeline" "finish" "retro")
+  local phases=("UNDERSTAND" "UNDERSTAND" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "BUILD" "BUILD" "SHIP" "SHIP")
+  local checks=(check_bootstrap "" check_brainstorm check_stories check_conflict_check check_plan check_acceptance_specs check_build "" check_retro)
 
   for i in "${!steps[@]}"; do
     local state
@@ -442,7 +481,7 @@ usage() {
   echo "  --from <name>     Start from a specific step"
   echo "  -h, --help        Show this help"
   echo ""
-  echo "Steps: bootstrap, memory, brainstorm, stories, conflict-check, plan, build, finish, retro"
+  echo "Steps: bootstrap, memory, brainstorm, stories, conflict-check, plan, acceptance-specs, build, finish, retro"
   echo ""
   echo "Examples:"
   echo "  conduct \"Shared task board API with status transitions\""
@@ -482,15 +521,17 @@ ensure_pipeline_dir
 # Single step mode
 if [ -n "$SINGLE_STEP" ]; then
   case "$SINGLE_STEP" in
-    bootstrap)      run_bootstrap ;;
-    memory)         run_memory ;;
-    brainstorm)     run_brainstorm ;;
-    stories)        run_stories ;;
-    conflict-check) run_conflict_check ;;
-    plan)           run_plan ;;
-    build)          run_build ;;
-    finish)         run_finish ;;
-    retro)          run_retro ;;
+    bootstrap)              run_bootstrap ;;
+    memory)                 run_memory ;;
+    brainstorm)             run_brainstorm ;;
+    stories)                run_stories ;;
+    conflict-check)         run_conflict_check ;;
+    plan)                   run_plan ;;
+    acceptance-specs)       run_acceptance_specs ;;
+    writing-system-tests)   run_acceptance_specs ;;
+    build)                  run_build ;;
+    finish)                 run_finish ;;
+    retro)                  run_retro ;;
     *)              fail "Unknown step: $SINGLE_STEP"; usage; exit 1 ;;
   esac
   show_status
@@ -498,7 +539,7 @@ if [ -n "$SINGLE_STEP" ]; then
 fi
 
 # Determine starting point
-ALL_STEPS=(bootstrap memory brainstorm stories conflict-check plan build finish retro)
+ALL_STEPS=(bootstrap memory brainstorm stories conflict-check plan acceptance-specs build finish retro)
 start_index=0
 
 if [ "$MODE" = "resume" ] || [ -n "$START_STEP" ]; then
@@ -534,7 +575,7 @@ if [ -z "$FEATURE_DESC" ] && [ "$start_index" -le 2 ]; then
 fi
 
 # Run steps in order
-STEP_FUNCS=(run_bootstrap run_memory run_brainstorm run_stories run_conflict_check run_plan run_build run_finish run_retro)
+STEP_FUNCS=(run_bootstrap run_memory run_brainstorm run_stories run_conflict_check run_plan run_acceptance_specs run_build run_finish run_retro)
 
 for i in $(seq "$start_index" $((${#STEP_FUNCS[@]} - 1))); do
   if ! ${STEP_FUNCS[$i]}; then
