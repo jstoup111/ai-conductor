@@ -91,6 +91,90 @@ check_installation() {
   fi
 }
 
+# ─── Permissions ──────────────────────────────────────────────────────────────
+
+# Permissions the harness needs pre-approved to run without friction
+HARNESS_PERMISSIONS=(
+  # Read harness files (skills, agents, tech-context)
+  "Read(${HARNESS_DIR}/**)"
+  # Test runners
+  "Bash(bundle exec rspec:*)"
+  "Bash(bundle exec standardrb:*)"
+  "Bash(bundle exec rails:*)"
+  "Bash(bundle install:*)"
+  # Project scaffolding
+  "Bash(rails new:*)"
+  "Bash(rails generate:*)"
+  "Bash(docker compose:*)"
+  # Git (non-destructive)
+  "Bash(git init:*)"
+  "Bash(git add:*)"
+  "Bash(git commit:*)"
+  "Bash(git status:*)"
+  "Bash(git log:*)"
+  "Bash(git diff:*)"
+  "Bash(git branch:*)"
+  "Bash(git checkout -b:*)"
+  # GitHub (read-only)
+  "Bash(gh pr list:*)"
+  "Bash(gh issue list:*)"
+)
+
+configure_permissions() {
+  local settings_file=$1
+
+  # Write permissions list to a temp file for python to read
+  local perms_file
+  perms_file=$(mktemp)
+  printf '%s\n' "${HARNESS_PERMISSIONS[@]}" > "$perms_file"
+
+  local output
+  output=$(python3 << PYEOF
+import json, os
+
+settings_path = "$settings_file"
+perms_path = "$perms_file"
+
+# Read desired permissions
+with open(perms_path) as f:
+    harness_perms = [line.strip() for line in f if line.strip()]
+
+# Read or create settings
+if os.path.exists(settings_path):
+    with open(settings_path) as f:
+        settings = json.load(f)
+else:
+    settings = {}
+
+if "permissions" not in settings:
+    settings["permissions"] = {}
+if "allow" not in settings["permissions"]:
+    settings["permissions"]["allow"] = []
+
+existing = set(settings["permissions"]["allow"])
+added = 0
+for perm in harness_perms:
+    if perm not in existing:
+        settings["permissions"]["allow"].append(perm)
+        added += 1
+
+with open(settings_path, "w") as f:
+    json.dump(settings, f, indent=2)
+    f.write("\n")
+
+print(f"{added} added, {len(harness_perms) - added} already set")
+PYEOF
+  )
+  rm -f "$perms_file"
+
+  if [ $? -eq 0 ]; then
+    ok "Permissions: ${output}"
+  else
+    warn "Could not configure permissions automatically"
+    info "Manually add harness read permissions to ${settings_file}"
+  fi
+}
+
 # ─── Install ──────────────────────────────────────────────────────────────────
 
 install() {
@@ -158,7 +242,11 @@ install() {
     ok "Installed conduct script to ${conduct_target}"
   fi
 
-  # 4. Check PATH
+  # 4. Configure Claude Code permissions
+  local settings_file="${HOME}/.claude/settings.json"
+  configure_permissions "$settings_file"
+
+  # 5. Check PATH
   if echo "$PATH" | tr ':' '\n' | grep -q "\.local/bin"; then
     ok "~/.local/bin is on PATH"
   else
@@ -166,7 +254,7 @@ install() {
     info "Add to your shell profile: export PATH=\"\$HOME/.local/bin:\$PATH\""
   fi
 
-  # 5. Check Claude Code
+  # 6. Check Claude Code
   if command -v claude &>/dev/null; then
     ok "Claude Code found"
   else
