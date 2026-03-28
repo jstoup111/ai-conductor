@@ -1,0 +1,14 @@
+# Project-local state (generated per target project, not part of harness)
+.pipeline/
+.memory/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+*.swp
+*.swo
+*~
+.vscode/
+.idea/

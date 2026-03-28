@@ -1,0 +1,36 @@
+# {{PROJECT_NAME}}
+
+## Harness
+
+This project uses the james-stoup-agents harness at `{{HARNESS_PATH}}`.
+
+## Tech Stack
+
+- **Framework:** {{FRAMEWORK}}
+- **Database:** {{DATABASE}}
+- **Test Framework:** {{TEST_FRAMEWORK}}
+- **Tech-Context:** {{TECH_CONTEXT_PATH}} (or "none — skills use generic behavior")
+
+## Active Skills
+
+| Phase | Skills |
+|-------|--------|
+| UNDERSTAND | bootstrap, memory |
+| DECIDE | brainstorm, stories, conflict-check, plan |
+| BUILD | tdd, debugging, code-review{{PIPELINE_SKILL}} |
+| SHIP | finish, retro |
+
+## Skill References
+
+Skills are loaded from the harness:
+- Skills: `{{HARNESS_PATH}}/skills/`
+- Agents: `{{HARNESS_PATH}}/agents/`
+- Tech-Context: `{{HARNESS_PATH}}/tech-context/{{TECH_CONTEXT_DIR}}/`
+
+## Project Conventions
+
+{{PROJECT_CONVENTIONS}}
+
+## Memory
+
+Project memory is stored in `.memory/`. Every session starts with recall.

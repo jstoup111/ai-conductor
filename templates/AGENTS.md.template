@@ -1,0 +1,53 @@
+# Agents — {{PROJECT_NAME}}
+
+## Agent Personas
+
+This project uses agent personas from the harness at `{{HARNESS_PATH}}/agents/`.
+
+### Generator
+- **Prompt:** `{{HARNESS_PATH}}/agents/generator.md`
+- **Role:** Implements code via TDD
+- **Context:** Receives only files relevant to current task
+- **Statuses:** DONE, DONE_WITH_CONCERNS, NEEDS_CONTEXT, NEEDS_DRILL_DOWN, BLOCKED
+
+### Evaluator
+- **Prompt:** `{{HARNESS_PATH}}/agents/evaluator.md`
+- **Role:** Reviews code with calibrated skepticism
+- **Context:** Fresh context reset — no shared state with generator
+- **Stages:** Spec compliance → Code quality → Domain integrity
+
+### Domain Reviewer
+- **Prompt:** `{{HARNESS_PATH}}/agents/domain-reviewer.md`
+- **Role:** Checks domain integrity during TDD DOMAIN phases
+- **Authority:** Veto — can reject and send back to RED/GREEN
+
+### Planner
+- **Prompt:** `{{HARNESS_PATH}}/agents/planner.md`
+- **Role:** Expands requirements into specifications
+- **Output:** Structured specs with scope, edge cases, and story suggestions
+
+## Dispatch Patterns
+
+### TDD Cycle (Structural Enforcement)
+```
+Generator (RED, test-only context)
+  → Domain Reviewer (test review)
+  → Generator (GREEN, source-only context)
+  → Domain Reviewer (implementation review)
+  → COMMIT
+```
+
+### Code Review (Generator/Evaluator Separation)
+```
+Generator produces code
+  → Evaluator reviews with fresh context
+  → Generator fixes (if needed)
+  → Evaluator re-reviews
+```
+
+### Pipeline (Autonomy-Based)
+```
+Conservative: Human approves → Generator → Evaluator → Human reviews
+Standard:     Generator → Evaluator → auto-continue (escalate on 3 rework failures)
+Full:         Parallel Generators → Evaluators → auto-merge on green
+```

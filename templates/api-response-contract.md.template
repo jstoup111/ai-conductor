@@ -1,0 +1,78 @@
+# ADR: API Response Contract
+
+**Date:** YYYY-MM-DD
+**Status:** Proposed | Accepted
+**Scope:** All API endpoints in this project
+
+## Context
+
+API projects need a consistent response contract defined before implementation. Without one,
+each controller invents its own envelope, error format, and pagination structure — leading to
+inconsistency that compounds across endpoints.
+
+## Decision
+
+### Success Envelope
+
+```json
+{
+  "data": { ... }
+}
+```
+
+For collections:
+```json
+{
+  "data": [ ... ],
+  "meta": {
+    "cursor": "next_cursor_value",
+    "has_more": true
+  }
+}
+```
+
+### Error Envelope
+
+```json
+{
+  "error": {
+    "type": "validation_error | not_found | unauthorized | forbidden | conflict | internal",
+    "message": "Human-readable description",
+    "details": [
+      { "field": "email", "message": "is already taken" }
+    ]
+  }
+}
+```
+
+### HTTP Status Conventions
+
+| Status | When |
+|--------|------|
+| 200 | Successful GET, PUT, PATCH |
+| 201 | Successful POST (resource created) |
+| 204 | Successful DELETE (no body) |
+| 400 | Validation error, malformed request |
+| 401 | Not authenticated |
+| 403 | Authenticated but not authorized |
+| 404 | Resource not found (also for unauthorized resource access to prevent enumeration) |
+| 409 | Conflict (concurrent modification, state conflict) |
+| 422 | Unprocessable entity (valid JSON but business rule violation) |
+| 500 | Unexpected server error |
+
+### Pagination
+
+Use cursor-based pagination for all list endpoints. Cursors are opaque strings.
+
+Query params: `?cursor=xxx&limit=25` (default limit: 25, max: 100)
+
+### Conventions
+
+- All timestamps in ISO 8601 UTC
+- All IDs as integers or UUIDs (consistent per project, don't mix)
+- Null fields included in response (don't omit)
+- Nested resources embedded to 1 level; deeper nesting uses IDs with separate endpoints
+
+## Deviations
+
+Any endpoint deviating from this contract requires an amendment to this ADR with rationale.

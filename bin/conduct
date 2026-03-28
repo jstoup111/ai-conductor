@@ -1,0 +1,545 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# conduct — Drives a feature through the full SDLC harness with minimal intervention.
+#
+# Usage:
+#   conduct "Build a shared task board API"
+#   conduct --resume          # Pick up where you left off
+#   conduct --status          # Show current progress without running anything
+#   conduct --step bootstrap  # Run a specific step only
+#
+# Runs in the current directory. Expects Claude Code (`claude`) on PATH.
+# Each step uses `claude -p` (non-interactive) with --dangerously-skip-permissions.
+# Steps that need user decisions will pause and drop into an interactive session.
+
+HARNESS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+PROJECT_DIR="$(pwd)"
+SESSION_LOG="${PROJECT_DIR}/.pipeline/conduct.log"
+STATE_FILE="${PROJECT_DIR}/.pipeline/conduct-state.json"
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+NC='\033[0m' # No Color
+BOLD='\033[1m'
+
+# ─── Helpers ──────────────────────────────────────────────────────────────────
+
+log()  { echo -e "${BLUE}[conduct]${NC} $*"; }
+ok()   { echo -e "${GREEN}  ✓${NC} $*"; }
+fail() { echo -e "${RED}  ✗${NC} $*"; }
+warn() { echo -e "${YELLOW}  ⚠${NC} $*"; }
+step_header() {
+  local num=$1 name=$2 phase=$3
+  echo ""
+  echo -e "${BOLD}${CYAN}━━━ Step ${num}: ${name} (${phase}) ━━━${NC}"
+}
+
+ensure_pipeline_dir() {
+  mkdir -p "${PROJECT_DIR}/.pipeline"
+}
+
+save_state() {
+  local step=$1 status=$2
+  ensure_pipeline_dir
+  # Simple JSON state tracking
+  if [ -f "$STATE_FILE" ]; then
+    # Update existing state using python (available on most systems)
+    python3 -c "
+import json, sys
+with open('$STATE_FILE') as f:
+    state = json.load(f)
+state['$step'] = '$status'
+state['last_step'] = '$step'
+with open('$STATE_FILE', 'w') as f:
+    json.dump(state, f, indent=2)
+"
+  else
+    python3 -c "
+import json
+state = {'$step': '$status', 'last_step': '$step'}
+with open('$STATE_FILE', 'w') as f:
+    json.dump(state, f, indent=2)
+"
+  fi
+}
+
+get_state() {
+  local step=$1
+  if [ -f "$STATE_FILE" ]; then
+    python3 -c "
+import json
+with open('$STATE_FILE') as f:
+    state = json.load(f)
+print(state.get('$step', 'pending'))
+"
+  else
+    echo "pending"
+  fi
+}
+
+run_claude() {
+  local prompt=$1
+  local mode=${2:-print}  # "print" or "interactive"
+
+  ensure_pipeline_dir
+
+  if [ "$mode" = "print" ]; then
+    claude -p "$prompt" \
+      --dangerously-skip-permissions \
+      2>&1 | tee -a "$SESSION_LOG"
+  else
+    log "Dropping into interactive session. Type /quit when done."
+    claude --append-system-prompt "$prompt"
+  fi
+}
+
+# ─── Artifact Checks ─────────────────────────────────────────────────────────
+
+check_bootstrap() {
+  [ -d "${PROJECT_DIR}/.memory" ] && \
+  [ -d "${PROJECT_DIR}/docs/specs" ] && \
+  [ -d "${PROJECT_DIR}/docs/stories" ] && \
+  [ -d "${PROJECT_DIR}/docs/plans" ]
+}
+
+check_brainstorm() {
+  compgen -G "${PROJECT_DIR}/docs/specs/*.md" > /dev/null 2>&1
+}
+
+check_stories() {
+  compgen -G "${PROJECT_DIR}/docs/stories/*.md" > /dev/null 2>&1
+}
+
+check_conflict_check() {
+  compgen -G "${PROJECT_DIR}/docs/conflicts/*.md" > /dev/null 2>&1
+}
+
+check_plan() {
+  compgen -G "${PROJECT_DIR}/docs/plans/*.md" > /dev/null 2>&1
+}
+
+check_build() {
+  # Tests exist and pass
+  if [ -f "${PROJECT_DIR}/.rspec" ] || [ -d "${PROJECT_DIR}/spec" ]; then
+    bundle exec rspec --no-color 2>&1 | tail -1 | grep -q "0 failures" 2>/dev/null
+  elif [ -f "${PROJECT_DIR}/package.json" ]; then
+    npm test 2>&1 | tail -1 | grep -qiE "passed|success" 2>/dev/null
+  else
+    return 1
+  fi
+}
+
+check_retro() {
+  compgen -G "${PROJECT_DIR}/docs/retros/*.md" > /dev/null 2>&1
+}
+
+# ─── Steps ────────────────────────────────────────────────────────────────────
+
+run_bootstrap() {
+  step_header 1 "bootstrap" "UNDERSTAND"
+
+  if check_bootstrap; then
+    ok "Already complete — .memory/ and docs/ exist"
+    save_state "bootstrap" "done"
+    return 0
+  fi
+
+  log "Detecting project stack and scaffolding directories..."
+  run_claude "You are in a project directory. Run the /bootstrap skill now. Detect the project type, tech stack, set up directories (.memory/, docs/specs, docs/stories, docs/conflicts, docs/plans, docs/retros, .pipeline/), and generate CLAUDE.md. Do everything the bootstrap skill specifies."
+
+  if check_bootstrap; then
+    ok "Bootstrap complete"
+    save_state "bootstrap" "done"
+  else
+    fail "Bootstrap did not create expected directories"
+    save_state "bootstrap" "failed"
+    return 1
+  fi
+}
+
+run_memory() {
+  step_header 2 "memory" "UNDERSTAND"
+
+  log "Memory recall (auto on first session)..."
+  if [ -f "${PROJECT_DIR}/.memory/index.md" ]; then
+    ok "Memory index exists"
+  else
+    warn "No prior memory — fresh project"
+  fi
+  save_state "memory" "done"
+}
+
+run_brainstorm() {
+  step_header 3 "brainstorm" "DECIDE"
+
+  if check_brainstorm; then
+    ok "Already complete — design doc exists in docs/specs/"
+    save_state "brainstorm" "done"
+    return 0
+  fi
+
+  if [ -z "${FEATURE_DESC:-}" ]; then
+    fail "No feature description provided. Pass it as an argument to conduct."
+    return 1
+  fi
+
+  log "Generating design doc..."
+  run_claude "Run the /brainstorm skill for this feature: ${FEATURE_DESC}
+
+Explore 2-3 design approaches with trade-offs. Write a design document to docs/specs/ following the brainstorm skill format. Include Problem, Solution, Scope, Key Decisions, and Open Questions sections. Choose the best approach and mark the document as approved since the user has already described what they want."
+
+  if check_brainstorm; then
+    ok "Design doc created"
+    save_state "brainstorm" "done"
+  else
+    fail "No design doc found in docs/specs/"
+    save_state "brainstorm" "failed"
+    return 1
+  fi
+}
+
+run_stories() {
+  step_header 4 "stories" "DECIDE"
+
+  if check_stories; then
+    ok "Already complete — stories exist in docs/stories/"
+    save_state "stories" "done"
+    return 0
+  fi
+
+  if ! check_brainstorm; then
+    fail "GATE: Cannot run stories without a design doc in docs/specs/"
+    return 1
+  fi
+
+  log "Generating user stories with mandatory negative paths..."
+  run_claude "Run the /stories skill. Read the design doc in docs/specs/ and generate user stories in docs/stories/.
+
+CRITICAL REQUIREMENTS:
+- Every story MUST have happy path with Given/When/Then
+- Every acceptance criterion MUST have at least one concrete negative path
+- Negative paths must be specific (not 'handle errors gracefully')
+- Include all 8 mandatory negative path categories where applicable: invalid input, auth failures, timeouts, concurrent access, resource exhaustion, partial failure, dependency unavailability, data integrity
+- If tech-context is loaded, include stack-specific negative paths (N+1 queries, missing validations, enum consistency, etc.)"
+
+  if check_stories; then
+    ok "Stories created"
+    save_state "stories" "done"
+  else
+    fail "No stories found in docs/stories/"
+    save_state "stories" "failed"
+    return 1
+  fi
+}
+
+run_conflict_check() {
+  step_header 5 "conflict-check" "DECIDE"
+
+  if check_conflict_check; then
+    ok "Already complete — conflict report exists in docs/conflicts/"
+    save_state "conflict_check" "done"
+    return 0
+  fi
+
+  if ! check_stories; then
+    fail "GATE: Cannot run conflict-check without stories in docs/stories/"
+    return 1
+  fi
+
+  log "Checking stories for conflicts..."
+  run_claude "Run the /conflict-check skill. Read ALL stories in docs/stories/ and check every pair against all 5 conflict types: contradiction, behavioral overlap, state conflict, resource contention, sequencing conflict.
+
+If conflicts are found, write a conflict report to docs/conflicts/ with type, severity, and 3 resolution options per conflict. Choose the best resolution for each and update the stories accordingly.
+
+If NO conflicts are found, write a clean-check marker to docs/conflicts/ with the date and list of stories checked.
+
+Re-run the check after any resolutions to verify zero blocking conflicts remain."
+
+  if check_conflict_check; then
+    ok "Conflict check complete"
+    save_state "conflict_check" "done"
+  else
+    fail "No conflict report found in docs/conflicts/"
+    save_state "conflict_check" "failed"
+    return 1
+  fi
+}
+
+run_plan() {
+  step_header 6 "plan" "DECIDE"
+
+  if check_plan; then
+    ok "Already complete — implementation plan exists in docs/plans/"
+    save_state "plan" "done"
+    return 0
+  fi
+
+  if ! check_conflict_check; then
+    fail "GATE: Cannot run plan without clean conflict-check in docs/conflicts/"
+    return 1
+  fi
+
+  log "Generating implementation plan..."
+  run_claude "Run the /plan skill. Read the stories in docs/stories/ and the conflict report in docs/conflicts/.
+
+Generate an implementation plan in docs/plans/ with:
+- 2-5 minute granularity tasks
+- Task ordering: infrastructure first, then happy paths, then negative paths
+- Every acceptance criterion (happy AND negative) mapped to at least one task
+- Explicit dependencies between tasks
+- Files likely touched per task
+- Task dependency graph"
+
+  if check_plan; then
+    ok "Implementation plan created"
+    save_state "plan" "done"
+  else
+    fail "No plan found in docs/plans/"
+    save_state "plan" "failed"
+    return 1
+  fi
+}
+
+run_build() {
+  step_header 7 "tdd / pipeline" "BUILD"
+
+  if ! check_plan; then
+    fail "GATE: Cannot build without implementation plan in docs/plans/"
+    return 1
+  fi
+
+  log "Starting TDD pipeline (interactive — needs your oversight)..."
+  run_claude "Run the /pipeline skill at Standard autonomy.
+
+Read the implementation plan in docs/plans/ and execute each task using TDD:
+- RED: Write one failing test (test files only, no source)
+- DOMAIN: Review test for primitive obsession, invalid states, boundary violations
+- GREEN: Write simplest passing code (source files only, no tests)
+- DOMAIN: Review implementation for domain integrity
+- COMMIT: Full suite passes, clean tree
+
+Track state in .pipeline/task-status.json and .pipeline/audit-trail/.
+After each task, run code-review with a fresh evaluator context.
+Follow the rework budget (3 cycles, then escalate).
+Run the full test suite at batch boundaries." "interactive"
+
+  if check_build; then
+    ok "Build complete — tests passing"
+    save_state "build" "done"
+  else
+    warn "Build session ended — verify tests pass before continuing"
+    save_state "build" "needs_verification"
+  fi
+}
+
+run_finish() {
+  step_header 8 "finish" "SHIP"
+
+  log "Running fresh verification..."
+  run_claude "Run the /finish skill.
+
+1. Run the full test suite NOW (not cached) and read the output
+2. Check git status for uncommitted changes
+3. Cross-reference ALL story acceptance criteria (happy AND negative) against implemented tests
+4. Present completion options: merge locally, push & create PR, keep as-is, or discard
+5. Choose 'keep as-is' since this is a test project" "interactive"
+
+  save_state "finish" "done"
+  ok "Finish complete"
+}
+
+run_retro() {
+  step_header 9 "retro" "SHIP"
+
+  if check_retro; then
+    ok "Already complete — retro exists in docs/retros/"
+    save_state "retro" "done"
+    return 0
+  fi
+
+  log "Running dual retrospective..."
+  run_claude "Run the /retro skill. Perform BOTH parts:
+
+Part A — Harness Retro:
+- Correctness: Did bugs escape TDD? Were negative paths comprehensive?
+- Gate Quality: False positives/negatives in evaluator and domain reviewer?
+- Autonomy: Count human interventions, classify as necessary vs preventable
+
+Part B — Application Retro:
+- Architecture health, code quality, test quality
+- Security & performance (OWASP, N+1, auth, pagination)
+- Technical debt (TODOs, workarounds)
+
+Write the retro report to docs/retros/. Include specific findings with file:line references and proposed changes for both harness and application."
+
+  if check_retro; then
+    ok "Retro complete"
+    save_state "retro" "done"
+  else
+    fail "No retro found in docs/retros/"
+    save_state "retro" "failed"
+    return 1
+  fi
+}
+
+# ─── Status Display ───────────────────────────────────────────────────────────
+
+show_status() {
+  echo ""
+  echo -e "${BOLD}SDLC Progress${NC}"
+  echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+
+  local steps=("bootstrap" "memory" "brainstorm" "stories" "conflict_check" "plan" "build" "finish" "retro")
+  local labels=("bootstrap" "memory" "brainstorm" "stories" "conflict-check" "plan" "tdd/pipeline" "finish" "retro")
+  local phases=("UNDERSTAND" "UNDERSTAND" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "BUILD" "SHIP" "SHIP")
+  local checks=(check_bootstrap "" check_brainstorm check_stories check_conflict_check check_plan check_build "" check_retro)
+
+  for i in "${!steps[@]}"; do
+    local state
+    state=$(get_state "${steps[$i]}")
+    local icon
+    case "$state" in
+      done)     icon="${GREEN}✓${NC}" ;;
+      failed)   icon="${RED}✗${NC}" ;;
+      *)
+        # Check artifacts directly
+        if [ -n "${checks[$i]}" ] && ${checks[$i]} 2>/dev/null; then
+          icon="${GREEN}✓${NC}"
+        else
+          icon="⬚"
+        fi
+        ;;
+    esac
+    printf "  %b  %-14s  %s\n" "$icon" "${labels[$i]}" "${phases[$i]}"
+  done
+
+  echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  echo ""
+}
+
+# ─── Main ─────────────────────────────────────────────────────────────────────
+
+usage() {
+  echo "Usage: conduct [options] \"<feature description>\""
+  echo ""
+  echo "Drives a feature through the full SDLC harness."
+  echo ""
+  echo "Options:"
+  echo "  --status          Show current progress"
+  echo "  --resume          Pick up from last completed step"
+  echo "  --step <name>     Run a specific step only"
+  echo "  --from <name>     Start from a specific step"
+  echo "  -h, --help        Show this help"
+  echo ""
+  echo "Steps: bootstrap, memory, brainstorm, stories, conflict-check, plan, build, finish, retro"
+  echo ""
+  echo "Examples:"
+  echo "  conduct \"Shared task board API with status transitions\""
+  echo "  conduct --status"
+  echo "  conduct --resume"
+  echo "  conduct --from build"
+}
+
+FEATURE_DESC=""
+MODE="full"
+START_STEP=""
+SINGLE_STEP=""
+
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --status)   show_status; exit 0 ;;
+    --resume)   MODE="resume" ;;
+    --step)     SINGLE_STEP="$2"; shift ;;
+    --from)     START_STEP="$2"; shift ;;
+    -h|--help)  usage; exit 0 ;;
+    *)          FEATURE_DESC="$1" ;;
+  esac
+  shift
+done
+
+# Header
+echo ""
+echo -e "${BOLD}${CYAN}╔══════════════════════════════════════════╗${NC}"
+echo -e "${BOLD}${CYAN}║     SDLC Conductor — Harness Runner     ║${NC}"
+echo -e "${BOLD}${CYAN}╚══════════════════════════════════════════╝${NC}"
+echo -e "  Project: ${PROJECT_DIR}"
+[ -n "$FEATURE_DESC" ] && echo -e "  Feature: ${FEATURE_DESC}"
+echo ""
+
+ensure_pipeline_dir
+
+# Single step mode
+if [ -n "$SINGLE_STEP" ]; then
+  case "$SINGLE_STEP" in
+    bootstrap)      run_bootstrap ;;
+    memory)         run_memory ;;
+    brainstorm)     run_brainstorm ;;
+    stories)        run_stories ;;
+    conflict-check) run_conflict_check ;;
+    plan)           run_plan ;;
+    build)          run_build ;;
+    finish)         run_finish ;;
+    retro)          run_retro ;;
+    *)              fail "Unknown step: $SINGLE_STEP"; usage; exit 1 ;;
+  esac
+  show_status
+  exit 0
+fi
+
+# Determine starting point
+ALL_STEPS=(bootstrap memory brainstorm stories conflict-check plan build finish retro)
+start_index=0
+
+if [ "$MODE" = "resume" ] || [ -n "$START_STEP" ]; then
+  target="${START_STEP:-}"
+
+  if [ "$MODE" = "resume" ] && [ -f "$STATE_FILE" ]; then
+    last=$(python3 -c "import json; print(json.load(open('$STATE_FILE')).get('last_step','bootstrap'))")
+    # Find index of last completed step and start from next
+    for i in "${!ALL_STEPS[@]}"; do
+      if [ "${ALL_STEPS[$i]}" = "$last" ]; then
+        start_index=$((i + 1))
+        break
+      fi
+    done
+    log "Resuming after: $last"
+  elif [ -n "$target" ]; then
+    for i in "${!ALL_STEPS[@]}"; do
+      if [ "${ALL_STEPS[$i]}" = "$target" ]; then
+        start_index=$i
+        break
+      fi
+    done
+    log "Starting from: $target"
+  fi
+fi
+
+if [ -z "$FEATURE_DESC" ] && [ "$start_index" -le 2 ]; then
+  # Need feature description for brainstorm
+  if ! check_brainstorm; then
+    fail "Feature description required. Usage: conduct \"description of your feature\""
+    exit 1
+  fi
+fi
+
+# Run steps in order
+STEP_FUNCS=(run_bootstrap run_memory run_brainstorm run_stories run_conflict_check run_plan run_build run_finish run_retro)
+
+for i in $(seq "$start_index" $((${#STEP_FUNCS[@]} - 1))); do
+  if ! ${STEP_FUNCS[$i]}; then
+    echo ""
+    fail "Stopped at step: ${ALL_STEPS[$i]}"
+    show_status
+    echo -e "Fix the issue and run: ${BOLD}conduct --resume${NC}"
+    exit 1
+  fi
+done
+
+# Done
+show_status
+echo -e "${GREEN}${BOLD}SDLC complete.${NC} Review the retro in docs/retros/"
