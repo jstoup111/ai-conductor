@@ -1,22 +1,27 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# conduct — Drives a feature through the full SDLC harness with minimal intervention.
+# conduct — Drives a feature through the full SDLC harness.
+#
+# Uses a persistent Claude session (Ralph-style loop):
+#   - Single session ID maintained across all steps
+#   - --resume to continue context between invocations
+#   - --output-format stream-json for real-time output parsing
+#   - Interactive recovery on failure (retry, skip, manual fix, quit)
 #
 # Usage:
-#   conduct "Build a shared task board API"
-#   conduct --resume          # Pick up where you left off
-#   conduct --status          # Show current progress without running anything
-#   conduct --step bootstrap  # Run a specific step only
-#
-# Runs in the current directory. Expects Claude Code (`claude`) on PATH.
-# Each step uses `claude -p` (non-interactive) with --dangerously-skip-permissions.
-# Steps that need user decisions will pause and drop into an interactive session.
+#   conduct "Build a URL shortener API"
+#   conduct --resume
+#   conduct --status
+#   conduct --step bootstrap
+#   conduct --from plan
 
 HARNESS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PROJECT_DIR="$(pwd)"
-SESSION_LOG="${PROJECT_DIR}/.pipeline/conduct.log"
-STATE_FILE="${PROJECT_DIR}/.pipeline/conduct-state.json"
+PIPELINE_DIR="${PROJECT_DIR}/.pipeline"
+SESSION_LOG="${PIPELINE_DIR}/conduct.log"
+STATE_FILE="${PIPELINE_DIR}/conduct-state.json"
+SESSION_FILE="${PIPELINE_DIR}/conduct-session-id"
 
 # Colors
 RED='\033[0;31m'
@@ -24,7 +29,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 CYAN='\033[0;36m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 BOLD='\033[1m'
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -33,6 +38,7 @@ log()  { echo -e "${BLUE}[conduct]${NC} $*"; }
 ok()   { echo -e "${GREEN}  ✓${NC} $*"; }
 fail() { echo -e "${RED}  ✗${NC} $*"; }
 warn() { echo -e "${YELLOW}  ⚠${NC} $*"; }
+
 step_header() {
   local num=$1 name=$2 phase=$3
   echo ""
@@ -40,32 +46,39 @@ step_header() {
 }
 
 ensure_pipeline_dir() {
-  mkdir -p "${PROJECT_DIR}/.pipeline"
+  mkdir -p "${PIPELINE_DIR}"
 }
+
+# ─── Session Management ──────────────────────────────────────────────────────
+
+get_session_id() {
+  if [ -f "$SESSION_FILE" ]; then
+    cat "$SESSION_FILE"
+  else
+    local sid
+    sid=$(python3 -c "import uuid; print(uuid.uuid4())")
+    echo "$sid" > "$SESSION_FILE"
+    echo "$sid"
+  fi
+}
+
+# ─── State Management ────────────────────────────────────────────────────────
 
 save_state() {
   local step=$1 status=$2
   ensure_pipeline_dir
-  # Simple JSON state tracking
-  if [ -f "$STATE_FILE" ]; then
-    # Update existing state using python (available on most systems)
-    python3 -c "
-import json, sys
-with open('$STATE_FILE') as f:
-    state = json.load(f)
-state['$step'] = '$status'
-state['last_step'] = '$step'
-with open('$STATE_FILE', 'w') as f:
+  python3 << PYEOF
+import json, os
+path = "$STATE_FILE"
+state = {}
+if os.path.exists(path):
+    with open(path) as f:
+        state = json.load(f)
+state["$step"] = "$status"
+state["last_step"] = "$step"
+with open(path, "w") as f:
     json.dump(state, f, indent=2)
-"
-  else
-    python3 -c "
-import json
-state = {'$step': '$status', 'last_step': '$step'}
-with open('$STATE_FILE', 'w') as f:
-    json.dump(state, f, indent=2)
-"
-  fi
+PYEOF
 }
 
 get_state() {
@@ -82,27 +95,69 @@ print(state.get('$step', 'pending'))
   fi
 }
 
+# ─── Claude Invocation ────────────────────────────────────────────────────────
+
 run_claude() {
   local prompt=$1
   local mode=${2:-print}  # "print" or "interactive"
+  local session_id
+  session_id=$(get_session_id)
 
   ensure_pipeline_dir
 
-  # Use --continue after first step to maintain session context
-  local continue_flag=""
-  if [ -f "${PROJECT_DIR}/.pipeline/conduct-session" ]; then
-    continue_flag="--continue"
+  # Build resume flag — first call uses --session-id, subsequent use --resume
+  local session_flag
+  if [ -f "${PIPELINE_DIR}/conduct-session-started" ]; then
+    session_flag="--resume ${session_id}"
+  else
+    session_flag="--session-id ${session_id}"
+    touch "${PIPELINE_DIR}/conduct-session-started"
   fi
-  touch "${PROJECT_DIR}/.pipeline/conduct-session"
+
+  # Build loop context
+  local iteration
+  iteration=$(python3 -c "
+import json, os
+path = '$STATE_FILE'
+if os.path.exists(path):
+    with open(path) as f:
+        state = json.load(f)
+    done = sum(1 for v in state.values() if v in ('done', 'skipped') and not v == state.get('last_step'))
+    print(done)
+else:
+    print(0)
+")
+  local context="[Conduct step ${iteration}/10] Feature: ${FEATURE_DESC:-unknown}"
 
   if [ "$mode" = "print" ]; then
+    log "Sending to Claude (session: ${session_id:0:8}...)..."
+
+    # Run with stream-json output, pipe through jq for live text display
     claude -p "$prompt" \
-      $continue_flag \
+      $session_flag \
+      --append-system-prompt "$context" \
+      --output-format stream-json \
       --dangerously-skip-permissions \
-      2>&1 | tee -a "$SESSION_LOG"
+      2>/dev/null \
+    | while IFS= read -r line; do
+        # Log raw output
+        echo "$line" >> "$SESSION_LOG"
+        # Extract and display text content
+        local msg_type
+        msg_type=$(echo "$line" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('type',''))" 2>/dev/null || echo "")
+        if [ "$msg_type" = "assistant" ]; then
+          echo "$line" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+for block in d.get('message', {}).get('content', []):
+    if block.get('type') == 'text':
+        print(block['text'])
+" 2>/dev/null || true
+        fi
+      done
   else
-    log "Dropping into interactive session. Type /quit when done."
-    claude $continue_flag --append-system-prompt "$prompt"
+    log "Interactive session (session: ${session_id:0:8}...). Type /quit when done."
+    claude $session_flag --append-system-prompt "$context. $prompt"
   fi
 }
 
@@ -120,9 +175,8 @@ check_brainstorm() {
 }
 
 check_stories() {
-  # Stories must exist AND not all be DRAFT status
   compgen -G "${PROJECT_DIR}/docs/stories/*.md" > /dev/null 2>&1 || return 1
-  # If any story contains "Status: DRAFT", stories step is not complete
+  # DRAFT stories don't count as complete
   if grep -rl "Status: DRAFT" "${PROJECT_DIR}/docs/stories/" > /dev/null 2>&1; then
     return 1
   fi
@@ -138,17 +192,15 @@ check_plan() {
 }
 
 check_acceptance_specs() {
-  # API projects: spec/integration/  Full-stack: spec/system/
   compgen -G "${PROJECT_DIR}/spec/integration/*_spec.rb" > /dev/null 2>&1 || \
   compgen -G "${PROJECT_DIR}/spec/system/*_spec.rb" > /dev/null 2>&1
 }
 
 check_build() {
-  # Tests exist and pass
   if [ -f "${PROJECT_DIR}/.rspec" ] || [ -d "${PROJECT_DIR}/spec" ]; then
-    bundle exec rspec --no-color 2>&1 | tail -1 | grep -q "0 failures" 2>/dev/null
+    cd "$PROJECT_DIR" && bundle exec rspec --no-color 2>&1 | tail -1 | grep -q "0 failures" 2>/dev/null
   elif [ -f "${PROJECT_DIR}/package.json" ]; then
-    npm test 2>&1 | tail -1 | grep -qiE "passed|success" 2>/dev/null
+    cd "$PROJECT_DIR" && npm test 2>&1 | tail -1 | grep -qiE "passed|success" 2>/dev/null
   else
     return 1
   fi
@@ -158,286 +210,133 @@ check_retro() {
   compgen -G "${PROJECT_DIR}/docs/retros/*.md" > /dev/null 2>&1
 }
 
-# ─── Steps ────────────────────────────────────────────────────────────────────
+# ─── Step Definitions ─────────────────────────────────────────────────────────
 
 run_bootstrap() {
   step_header 1 "bootstrap" "UNDERSTAND"
-
   if check_bootstrap; then
-    ok "Already complete — .memory/ and docs/ exist"
-    save_state "bootstrap" "done"
-    return 0
+    ok "Already complete"; save_state "bootstrap" "done"; return 0
   fi
-
-  log "Detecting project stack and scaffolding directories..."
-  run_claude "You are in a project directory. Run the /bootstrap skill now. Detect the project type, tech stack, set up directories (.memory/, docs/specs, docs/stories, docs/conflicts, docs/plans, docs/retros, .pipeline/), and generate CLAUDE.md. Do everything the bootstrap skill specifies."
-
-  if check_bootstrap; then
-    ok "Bootstrap complete"
-    save_state "bootstrap" "done"
-  else
-    fail "Bootstrap did not create expected directories"
-    save_state "bootstrap" "failed"
-    return 1
-  fi
+  log "Detecting project stack and scaffolding..."
+  run_claude "Run the /bootstrap skill. Detect project type, tech stack, scaffold directories (.memory/, docs/, .pipeline/), generate CLAUDE.md, run smoke test. If this is an empty directory, scaffold the project first (Rails API + PostgreSQL with Docker for this project)."
+  check_bootstrap && { ok "Bootstrap complete"; save_state "bootstrap" "done"; return 0; }
+  fail "Bootstrap incomplete"; save_state "bootstrap" "failed"; return 1
 }
 
 run_memory() {
   step_header 2 "memory" "UNDERSTAND"
-
-  log "Memory recall (auto on first session)..."
-  if [ -f "${PROJECT_DIR}/.memory/index.md" ]; then
-    ok "Memory index exists"
-  else
-    warn "No prior memory — fresh project"
-  fi
+  log "Memory recall..."
+  [ -f "${PROJECT_DIR}/.memory/index.md" ] && ok "Memory index exists" || warn "No prior memory"
   save_state "memory" "done"
 }
 
 run_brainstorm() {
   step_header 3 "brainstorm" "DECIDE"
-
   if check_brainstorm; then
-    ok "Already complete — design doc exists in docs/specs/"
-    save_state "brainstorm" "done"
-    return 0
+    ok "Already complete"; save_state "brainstorm" "done"; return 0
   fi
-
-  if [ -z "${FEATURE_DESC:-}" ]; then
-    fail "No feature description provided. Pass it as an argument to conduct."
-    return 1
-  fi
-
+  [ -z "${FEATURE_DESC:-}" ] && { fail "No feature description provided"; return 1; }
   log "Generating design doc..."
-  run_claude "Run the /brainstorm skill for this feature: ${FEATURE_DESC}
+  run_claude "Run the /brainstorm skill for: ${FEATURE_DESC}
 
-Explore 2-3 design approaches with trade-offs. Write a design document to docs/specs/ following the brainstorm skill format. Include Problem, Solution, Scope, Key Decisions, and Open Questions sections. Choose the best approach and mark the document as approved since the user has already described what they want."
-
-  if check_brainstorm; then
-    ok "Design doc created"
-    save_state "brainstorm" "done"
-  else
-    fail "No design doc found in docs/specs/"
-    save_state "brainstorm" "failed"
-    return 1
-  fi
+Write a design document to docs/specs/. Include Problem, Solution, Scope (In/Out), Key Decisions. Perform a scope check — compare the design against the original request and flag if scope expanded. Mark as approved."
+  check_brainstorm && { ok "Design doc created"; save_state "brainstorm" "done"; return 0; }
+  fail "No design doc in docs/specs/"; save_state "brainstorm" "failed"; return 1
 }
 
 run_stories() {
   step_header 4 "stories" "DECIDE"
-
   if check_stories; then
-    ok "Already complete — stories exist in docs/stories/"
-    save_state "stories" "done"
-    return 0
+    ok "Already complete"; save_state "stories" "done"; return 0
   fi
+  check_brainstorm || { fail "GATE: Need design doc in docs/specs/ first"; return 1; }
+  log "Generating stories with mandatory negative paths..."
+  run_claude "Run the /stories skill. Read docs/specs/ and generate stories in docs/stories/.
 
-  if ! check_brainstorm; then
-    fail "GATE: Cannot run stories without a design doc in docs/specs/"
-    return 1
-  fi
-
-  log "Generating user stories with mandatory negative paths..."
-  run_claude "Run the /stories skill. Read the design doc in docs/specs/ and generate user stories in docs/stories/.
-
-CRITICAL REQUIREMENTS:
-- Every story MUST have happy path with Given/When/Then
-- Every acceptance criterion MUST have at least one concrete negative path
-- Negative paths must be specific (not 'handle errors gracefully')
-- Include all 8 mandatory negative path categories where applicable: invalid input, auth failures, timeouts, concurrent access, resource exhaustion, partial failure, dependency unavailability, data integrity
-- If tech-context is loaded, include stack-specific negative paths (N+1 queries, missing validations, enum consistency, etc.)"
-
-  if check_stories; then
-    ok "Stories created"
-    save_state "stories" "done"
-  else
-    fail "No stories found in docs/stories/"
-    save_state "stories" "failed"
-    return 1
-  fi
+REQUIREMENTS:
+- Every story: happy path + concrete negative paths (Given/When/Then)
+- All 10 negative path categories where applicable
+- Stack-specific paths from tech-context if loaded
+- NO vague paths like 'handle errors gracefully'"
+  check_stories && { ok "Stories created"; save_state "stories" "done"; return 0; }
+  fail "No accepted stories in docs/stories/"; save_state "stories" "failed"; return 1
 }
 
 run_conflict_check() {
   step_header 5 "conflict-check" "DECIDE"
-
   if check_conflict_check; then
-    ok "Already complete — conflict report exists in docs/conflicts/"
-    save_state "conflict_check" "done"
-    return 0
+    ok "Already complete"; save_state "conflict_check" "done"; return 0
   fi
-
-  if ! check_stories; then
-    fail "GATE: Cannot run conflict-check without stories in docs/stories/"
-    return 1
-  fi
-
-  log "Checking stories for conflicts..."
-  run_claude "Run the /conflict-check skill. Read ALL stories in docs/stories/ and check every pair against all 5 conflict types: contradiction, behavioral overlap, state conflict, resource contention, sequencing conflict.
-
-If conflicts are found, write a conflict report to docs/conflicts/ with type, severity, and 3 resolution options per conflict. Choose the best resolution for each and update the stories accordingly.
-
-If NO conflicts are found, write a clean-check marker to docs/conflicts/ with the date and list of stories checked.
-
-Re-run the check after any resolutions to verify zero blocking conflicts remain."
-
-  if check_conflict_check; then
-    ok "Conflict check complete"
-    save_state "conflict_check" "done"
-  else
-    fail "No conflict report found in docs/conflicts/"
-    save_state "conflict_check" "failed"
-    return 1
-  fi
+  check_stories || { fail "GATE: Need stories in docs/stories/ first"; return 1; }
+  log "Checking for conflicts..."
+  run_claude "Run the /conflict-check skill. Check ALL stories against all 5 conflict types. Write report to docs/conflicts/. If clean, write a clean-check marker. Resolve any blocking conflicts and re-check."
+  check_conflict_check && { ok "Conflict check complete"; save_state "conflict_check" "done"; return 0; }
+  fail "No conflict report in docs/conflicts/"; save_state "conflict_check" "failed"; return 1
 }
 
 run_plan() {
   step_header 6 "plan" "DECIDE"
-
   if check_plan; then
-    ok "Already complete — implementation plan exists in docs/plans/"
-    save_state "plan" "done"
-    return 0
+    ok "Already complete"; save_state "plan" "done"; return 0
   fi
-
-  if ! check_conflict_check; then
-    fail "GATE: Cannot run plan without clean conflict-check in docs/conflicts/"
-    return 1
-  fi
-
+  check_conflict_check || { fail "GATE: Need clean conflict-check first"; return 1; }
   log "Generating implementation plan..."
-  run_claude "Run the /plan skill. Read the stories in docs/stories/ and the conflict report in docs/conflicts/.
-
-Generate an implementation plan in docs/plans/ with:
-- 2-5 minute granularity tasks
-- Task ordering: infrastructure first, then happy paths, then negative paths
-- Every acceptance criterion (happy AND negative) mapped to at least one task
-- Explicit dependencies between tasks
-- Files likely touched per task
-- Task dependency graph"
-
-  if check_plan; then
-    ok "Implementation plan created"
-    save_state "plan" "done"
-  else
-    fail "No plan found in docs/plans/"
-    save_state "plan" "failed"
-    return 1
-  fi
+  run_claude "Run the /plan skill. Generate plan in docs/plans/ with 2-5 min tasks, dependency graph, coverage mapping. Check scope: warn if >20 tasks, hard stop if >40."
+  check_plan && { ok "Plan created"; save_state "plan" "done"; return 0; }
+  fail "No plan in docs/plans/"; save_state "plan" "failed"; return 1
 }
 
 run_acceptance_specs() {
-  step_header 7 "writing-system-tests" "BUILD"
-
+  step_header 7 "acceptance specs" "BUILD"
   if check_acceptance_specs; then
-    ok "Already complete — acceptance specs exist"
-    save_state "acceptance_specs" "done"
-    return 0
+    ok "Already complete"; save_state "acceptance_specs" "done"; return 0
   fi
-
-  if ! check_plan; then
-    fail "GATE: Cannot write acceptance specs without implementation plan in docs/plans/"
-    return 1
-  fi
-
+  check_plan || { fail "GATE: Need plan in docs/plans/ first"; return 1; }
   log "Generating failing acceptance specs from stories..."
-  run_claude "Run the /writing-system-tests skill. Read ALL stories in docs/stories/ and generate failing acceptance specs.
-
-- For API-only projects: generate integration request specs in spec/integration/
-- For full-stack projects: generate system specs in spec/system/
-- Every acceptance criterion (happy AND negative) becomes a concrete test
-- Tests should FAIL (RED) since nothing is implemented yet
-- Commit the failing specs"
-
-  if check_acceptance_specs; then
-    ok "Acceptance specs created"
-    save_state "acceptance_specs" "done"
-  else
-    fail "No acceptance specs found in spec/integration/ or spec/system/"
-    save_state "acceptance_specs" "failed"
-    return 1
-  fi
+  run_claude "Run the /writing-system-tests skill. Generate failing acceptance specs from ALL stories.
+API projects: spec/integration/. Full-stack: spec/system/. Every criterion (happy + negative) becomes a test. Commit the failing specs."
+  check_acceptance_specs && { ok "Acceptance specs created"; save_state "acceptance_specs" "done"; return 0; }
+  fail "No acceptance specs found"; save_state "acceptance_specs" "failed"; return 1
 }
 
 run_build() {
   step_header 8 "tdd / pipeline" "BUILD"
+  check_plan || { fail "GATE: Need plan first"; return 1; }
+  log "Starting TDD pipeline..."
+  run_claude "Run the /pipeline skill at Standard autonomy. Execute each task via TDD (RED→DOMAIN→GREEN→DOMAIN→COMMIT).
 
-  if ! check_plan; then
-    fail "GATE: Cannot build without implementation plan in docs/plans/"
-    return 1
-  fi
+MANDATORY at batch boundaries:
+- Dispatch evaluator with fresh context (hard gate)
+- Run linter (standardrb)
+- Run /simplify for duplication
+- Persist at least one .memory/ entry per batch
+- Run micro-retro
 
-  log "Starting TDD pipeline (interactive — needs your oversight)..."
-  run_claude "Run the /pipeline skill at Standard autonomy.
+Track state in .pipeline/. Follow rework budget (3 cycles, then escalate)." "interactive"
 
-Read the implementation plan in docs/plans/ and execute each task using TDD:
-- RED: Write one failing test (test files only, no source)
-- DOMAIN: Review test for primitive obsession, invalid states, boundary violations
-- GREEN: Write simplest passing code (source files only, no tests)
-- DOMAIN: Review implementation for domain integrity
-- COMMIT: Full suite passes, clean tree
-
-Track state in .pipeline/task-status.json and .pipeline/audit-trail/.
-After each task, run code-review with a fresh evaluator context.
-Follow the rework budget (3 cycles, then escalate).
-Run the full test suite at batch boundaries." "interactive"
-
-  if check_build; then
-    ok "Build complete — tests passing"
-    save_state "build" "done"
-  else
-    warn "Build session ended — verify tests pass before continuing"
-    save_state "build" "needs_verification"
-  fi
+  check_build && { ok "Build complete — tests passing"; save_state "build" "done"; return 0; }
+  warn "Build session ended — verify tests pass"; save_state "build" "needs_verification"; return 0
 }
 
 run_finish() {
   step_header 9 "finish" "SHIP"
-
-  log "Running fresh verification..."
-  run_claude "Run the /finish skill.
-
-1. Run the full test suite NOW (not cached) and read the output
-2. Check git status for uncommitted changes
-3. Cross-reference ALL story acceptance criteria (happy AND negative) against implemented tests
-4. Present completion options: merge locally, push & create PR, keep as-is, or discard
-5. Choose 'keep as-is' since this is a test project" "interactive"
-
-  save_state "finish" "done"
-  ok "Finish complete"
+  log "Fresh verification..."
+  run_claude "Run the /finish skill. Run test suite NOW, check git status, verify ALL story criteria covered. Present options — choose 'keep as-is' for this test project." "interactive"
+  save_state "finish" "done"; ok "Finish complete"
 }
 
 run_retro() {
   step_header 10 "retro" "SHIP"
-
   if check_retro; then
-    ok "Already complete — retro exists in docs/retros/"
-    save_state "retro" "done"
-    return 0
+    ok "Already complete"; save_state "retro" "done"; return 0
   fi
-
   log "Running dual retrospective..."
-  run_claude "Run the /retro skill. Perform BOTH parts:
-
-Part A — Harness Retro:
-- Correctness: Did bugs escape TDD? Were negative paths comprehensive?
-- Gate Quality: False positives/negatives in evaluator and domain reviewer?
-- Autonomy: Count human interventions, classify as necessary vs preventable
-
-Part B — Application Retro:
-- Architecture health, code quality, test quality
-- Security & performance (OWASP, N+1, auth, pagination)
-- Technical debt (TODOs, workarounds)
-
-Write the retro report to docs/retros/. Include specific findings with file:line references and proposed changes for both harness and application."
-
-  if check_retro; then
-    ok "Retro complete"
-    save_state "retro" "done"
-  else
-    fail "No retro found in docs/retros/"
-    save_state "retro" "failed"
-    return 1
-  fi
+  run_claude "Run the /retro skill. Both parts:
+Part A (Harness): correctness, gate quality, autonomy friction
+Part B (Application): architecture, code quality, test quality, security, tech debt
+Write to docs/retros/ with file:line references."
+  check_retro && { ok "Retro complete"; save_state "retro" "done"; return 0; }
+  fail "No retro in docs/retros/"; save_state "retro" "failed"; return 1
 }
 
 # ─── Status Display ───────────────────────────────────────────────────────────
@@ -445,6 +344,12 @@ Write the retro report to docs/retros/. Include specific findings with file:line
 show_status() {
   echo ""
   echo -e "${BOLD}SDLC Progress${NC}"
+
+  local session_id="none"
+  [ -f "$SESSION_FILE" ] && session_id="$(cat "$SESSION_FILE" | head -c 8)..."
+
+  echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  echo -e "  Session: ${session_id}"
   echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 
   local steps=("bootstrap" "memory" "brainstorm" "stories" "conflict_check" "plan" "acceptance_specs" "build" "finish" "retro")
@@ -458,9 +363,9 @@ show_status() {
     local icon
     case "$state" in
       done)     icon="${GREEN}✓${NC}" ;;
+      skipped)  icon="${YELLOW}→${NC}" ;;
       failed)   icon="${RED}✗${NC}" ;;
       *)
-        # Check artifacts directly
         if [ -n "${checks[$i]}" ] && ${checks[$i]} 2>/dev/null; then
           icon="${GREEN}✓${NC}"
         else
@@ -468,11 +373,57 @@ show_status() {
         fi
         ;;
     esac
-    printf "  %b  %-14s  %s\n" "$icon" "${labels[$i]}" "${phases[$i]}"
+    printf "  %b  %-16s  %s\n" "$icon" "${labels[$i]}" "${phases[$i]}"
   done
 
   echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
   echo ""
+}
+
+# ─── Interactive Recovery ─────────────────────────────────────────────────────
+
+recover() {
+  local step_name=$1
+  echo ""
+  show_status
+  echo -e "${BOLD}Step failed: ${step_name}${NC}"
+  echo ""
+  echo -e "  ${CYAN}r${NC}  Retry this step"
+  echo -e "  ${CYAN}s${NC}  Skip (advisory steps only)"
+  echo -e "  ${CYAN}i${NC}  Interactive Claude session to fix manually"
+  echo -e "  ${CYAN}q${NC}  Quit (conduct --resume to continue later)"
+  echo ""
+
+  while true; do
+    read -rp "$(echo -e "${BOLD}[r/s/i/q]:${NC} ")" choice
+    case "$choice" in
+      r|R) return 0 ;;  # retry
+      s|S)
+        case "$step_name" in
+          memory|brainstorm|retro)
+            warn "Skipping ${step_name}"
+            save_state "${step_name//-/_}" "skipped"
+            return 1  # skip (advance index in caller)
+            ;;
+          *) fail "${step_name} is a gating step — cannot skip" ;;
+        esac
+        ;;
+      i|I)
+        local session_id
+        session_id=$(get_session_id)
+        log "Interactive session. Fix the issue, then /quit to return."
+        claude --resume "$session_id" --append-system-prompt "The conduct script needs you to complete step: ${step_name}. Run the appropriate skill."
+        log "Back from interactive session. Rechecking..."
+        return 0  # retry
+        ;;
+      q|Q)
+        show_status
+        echo -e "Resume later: ${BOLD}conduct --resume${NC}"
+        exit 0
+        ;;
+      *) echo "  Enter r, s, i, or q" ;;
+    esac
+  done
 }
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
@@ -480,22 +431,18 @@ show_status() {
 usage() {
   echo "Usage: conduct [options] \"<feature description>\""
   echo ""
-  echo "Drives a feature through the full SDLC harness."
+  echo "Drives a feature through the full SDLC harness using a persistent Claude session."
   echo ""
   echo "Options:"
   echo "  --status          Show current progress"
   echo "  --resume          Pick up from last completed step"
   echo "  --step <name>     Run a specific step only"
   echo "  --from <name>     Start from a specific step"
+  echo "  --reset           Clear session state and start fresh"
   echo "  -h, --help        Show this help"
   echo ""
-  echo "Steps: bootstrap, memory, brainstorm, stories, conflict-check, plan, acceptance-specs, build, finish, retro"
-  echo ""
-  echo "Examples:"
-  echo "  conduct \"Shared task board API with status transitions\""
-  echo "  conduct --status"
-  echo "  conduct --resume"
-  echo "  conduct --from build"
+  echo "Steps: bootstrap, memory, brainstorm, stories, conflict-check, plan,"
+  echo "       acceptance-specs, build, finish, retro"
 }
 
 FEATURE_DESC=""
@@ -505,12 +452,13 @@ SINGLE_STEP=""
 
 while [[ $# -gt 0 ]]; do
   case $1 in
-    --status)   show_status; exit 0 ;;
-    --resume)   MODE="resume" ;;
-    --step)     SINGLE_STEP="$2"; shift ;;
-    --from)     START_STEP="$2"; shift ;;
-    -h|--help)  usage; exit 0 ;;
-    *)          FEATURE_DESC="$1" ;;
+    --status)  show_status; exit 0 ;;
+    --resume)  MODE="resume" ;;
+    --step)    SINGLE_STEP="$2"; shift ;;
+    --from)    START_STEP="$2"; shift ;;
+    --reset)   rm -f "$STATE_FILE" "$SESSION_FILE" "${PIPELINE_DIR}/conduct-session-started" 2>/dev/null; log "Session reset."; exit 0 ;;
+    -h|--help) usage; exit 0 ;;
+    *)         FEATURE_DESC="$1" ;;
   esac
   shift
 done
@@ -529,33 +477,32 @@ ensure_pipeline_dir
 # Single step mode
 if [ -n "$SINGLE_STEP" ]; then
   case "$SINGLE_STEP" in
-    bootstrap)              run_bootstrap ;;
-    memory)                 run_memory ;;
-    brainstorm)             run_brainstorm ;;
-    stories)                run_stories ;;
-    conflict-check)         run_conflict_check ;;
-    plan)                   run_plan ;;
-    acceptance-specs)       run_acceptance_specs ;;
-    writing-system-tests)   run_acceptance_specs ;;
-    build)                  run_build ;;
-    finish)                 run_finish ;;
-    retro)                  run_retro ;;
-    *)              fail "Unknown step: $SINGLE_STEP"; usage; exit 1 ;;
+    bootstrap)            run_bootstrap ;;
+    memory)               run_memory ;;
+    brainstorm)           run_brainstorm ;;
+    stories)              run_stories ;;
+    conflict-check)       run_conflict_check ;;
+    plan)                 run_plan ;;
+    acceptance-specs|writing-system-tests) run_acceptance_specs ;;
+    build)                run_build ;;
+    finish)               run_finish ;;
+    retro)                run_retro ;;
+    *) fail "Unknown step: $SINGLE_STEP"; usage; exit 1 ;;
   esac
   show_status
   exit 0
 fi
 
-# Determine starting point
+# Step registry
 ALL_STEPS=(bootstrap memory brainstorm stories conflict-check plan acceptance-specs build finish retro)
+STEP_FUNCS=(run_bootstrap run_memory run_brainstorm run_stories run_conflict_check run_plan run_acceptance_specs run_build run_finish run_retro)
+
+# Determine starting point
 start_index=0
 
 if [ "$MODE" = "resume" ] || [ -n "$START_STEP" ]; then
-  target="${START_STEP:-}"
-
   if [ "$MODE" = "resume" ] && [ -f "$STATE_FILE" ]; then
     last=$(python3 -c "import json; print(json.load(open('$STATE_FILE')).get('last_step','bootstrap'))")
-    # Find index of last completed step and start from next
     for i in "${!ALL_STEPS[@]}"; do
       if [ "${ALL_STEPS[$i]}" = "$last" ]; then
         start_index=$((i + 1))
@@ -563,85 +510,40 @@ if [ "$MODE" = "resume" ] || [ -n "$START_STEP" ]; then
       fi
     done
     log "Resuming after: $last"
-  elif [ -n "$target" ]; then
+  elif [ -n "$START_STEP" ]; then
     for i in "${!ALL_STEPS[@]}"; do
-      if [ "${ALL_STEPS[$i]}" = "$target" ]; then
+      if [ "${ALL_STEPS[$i]}" = "$START_STEP" ]; then
         start_index=$i
         break
       fi
     done
-    log "Starting from: $target"
+    log "Starting from: $START_STEP"
   fi
 fi
 
+# Check feature description needed
 if [ -z "$FEATURE_DESC" ] && [ "$start_index" -le 2 ]; then
-  # Need feature description for brainstorm
   if ! check_brainstorm; then
-    fail "Feature description required. Usage: conduct \"description of your feature\""
+    fail "Feature description required. Usage: conduct \"description\""
     exit 1
   fi
 fi
 
-# Run steps in order
-STEP_FUNCS=(run_bootstrap run_memory run_brainstorm run_stories run_conflict_check run_plan run_acceptance_specs run_build run_finish run_retro)
+# ─── Main Loop ────────────────────────────────────────────────────────────────
 
 i=$start_index
 while [ "$i" -lt "${#STEP_FUNCS[@]}" ]; do
   if ${STEP_FUNCS[$i]}; then
-    # Step succeeded — advance
     i=$((i + 1))
     continue
   fi
 
   # Step failed — interactive recovery
-  echo ""
-  show_status
-  echo ""
-  echo -e "${BOLD}Step failed: ${ALL_STEPS[$i]}${NC}"
-  echo ""
-  echo -e "  ${CYAN}r${NC} — Retry this step"
-  echo -e "  ${CYAN}s${NC} — Skip to next step (advisory steps only)"
-  echo -e "  ${CYAN}i${NC} — Drop into interactive Claude session to fix manually"
-  echo -e "  ${CYAN}q${NC} — Quit (resume later with: conduct --resume)"
-  echo ""
-
-  while true; do
-    read -rp "$(echo -e "${BOLD}[r/s/i/q]:${NC} ")" choice
-    case "$choice" in
-      r|R|retry)
-        break  # Break inner loop, retry step in outer loop
-        ;;
-      s|S|skip)
-        # Only allow skipping advisory steps
-        case "${ALL_STEPS[$i]}" in
-          memory|brainstorm|retro)
-            warn "Skipping ${ALL_STEPS[$i]} (advisory step)"
-            save_state "${ALL_STEPS[$i]//"-"/"_"}" "skipped"
-            i=$((i + 1))
-            break
-            ;;
-          *)
-            fail "${ALL_STEPS[$i]} is a gating step — cannot skip"
-            ;;
-        esac
-        ;;
-      i|I|interactive)
-        log "Launching interactive Claude session. Run the step manually, then /quit when done."
-        claude --append-system-prompt "The conduct script is at step: ${ALL_STEPS[$i]}. Run the appropriate skill and complete this step."
-        log "Returned from interactive session. Rechecking..."
-        break  # Break inner loop, retry check in outer loop
-        ;;
-      q|Q|quit)
-        echo ""
-        show_status
-        echo -e "\nResume later with: ${BOLD}conduct --resume${NC}"
-        exit 0
-        ;;
-      *)
-        echo "  Enter r, s, i, or q"
-        ;;
-    esac
-  done
+  if recover "${ALL_STEPS[$i]}"; then
+    continue  # retry (don't advance i)
+  else
+    i=$((i + 1))  # skip (advance i)
+  fi
 done
 
 # Done
