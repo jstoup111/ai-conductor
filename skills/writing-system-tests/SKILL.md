@@ -80,34 +80,62 @@ correct RED behavior.
 ```ruby
 require "rails_helper"
 
-RSpec.describe "Links", type: :request do
-  describe "Story: Create a short link" do
+RSpec.describe "Link lifecycle", type: :request do
+  describe "Story: Create and use a short link" do
     context "happy path" do
-      it "creates a link and returns the short URL" do
+      it "creates a link, redirects via short code, and records a click" do
+        # Step 1: Create the link
         post "/links", params: { link: { original_url: "https://example.com" } },
                         headers: auth_headers
         expect(response).to have_http_status(:created)
-        expect(json_body["link"]["short_code"]).to match(/\A[a-zA-Z0-9]{6}\z/)
+        short_code = json_body["link"]["short_code"]
+
+        # Step 2: Visit the short URL
+        get "/#{short_code}"
+        expect(response).to redirect_to("https://example.com")
+
+        # Step 3: Verify click was recorded
+        get "/links", headers: auth_headers
+        link = json_body["links"].find { |l| l["short_code"] == short_code }
+        expect(link["click_count"]).to eq(1)
       end
     end
 
-    context "negative: invalid URL" do
-      it "rejects a blank URL with 422" do
-        post "/links", params: { link: { original_url: "" } },
+    context "negative: expired link" do
+      it "creates a link, lets it expire, and gets 410 Gone" do
+        post "/links", params: { link: { original_url: "https://example.com", expires_at: 1.hour.from_now } },
                         headers: auth_headers
-        expect(response).to have_http_status(:unprocessable_entity)
-        expect(json_body["error"]).to be_present
+        short_code = json_body["link"]["short_code"]
+
+        travel_to 2.hours.from_now do
+          get "/#{short_code}"
+          expect(response).to have_http_status(:gone)
+        end
       end
     end
   end
 end
 ```
 
+**Key distinction: acceptance specs test FLOWS, not endpoints.**
+
+An acceptance spec that only hits one endpoint is a request spec wearing a costume. If the test
+doesn't cross at least 2 endpoints or verify a multi-step story, it belongs in `spec/requests/`
+instead.
+
+| Test hits one endpoint | → `spec/requests/` (request spec) |
+| Test hits 2+ endpoints in sequence | → `spec/integration/` (acceptance spec) |
+| Test verifies model logic directly | → `spec/models/` (unit spec) |
+
+**This avoids duplication.** Request specs own individual endpoint behavior (status codes, error
+formats, params validation). Acceptance specs own the story flow (create → use → verify outcome).
+Neither duplicates the other.
+
 **Rules for integration specs:**
-- Test the full HTTP contract: method, path, params, headers, status, body
+- Test multi-step flows that map to stories, not individual endpoints
 - One `describe` per story, `context` per happy/negative path
 - Each test is independent — creates own data via factories
-- Assert against the API response contract (from `docs/decisions/api-response-contract.md` if it exists)
+- Assert outcomes, not intermediate HTTP details (request specs own those)
 - Auth uses helper methods, not hardcoded tokens
 - No mocking external services in integration specs — test the real flow
 
@@ -225,16 +253,22 @@ Implementation (via `/pipeline` or `/tdd`) makes them pass.
 ## How This Relates to Other Test Types
 
 ```
-Acceptance specs (this skill)     — Story-level, multi-endpoint/multi-page flows
-  ↕ generated from docs/stories/
+Acceptance specs (this skill)      — Multi-step story flows across 2+ endpoints
+  ↕ generated from docs/stories/     "Create link → visit → verify click recorded"
+  ↕ NO single-endpoint tests here
+
 Request specs (TDD per-controller) — Single endpoint HTTP contract
-  ↕ generated during RED phase of TDD
-Unit specs (TDD per-model)         — Model logic, validations, associations
-  ↕ generated during RED phase of TDD
+  ↕ generated during RED phase        "POST /links with blank URL returns 422"
+  ↕ owns: status codes, error formats, params validation, headers
+
+Unit specs (TDD per-model)         — Model logic in isolation
+  ↕ generated during RED phase        "Link.generate_short_code returns 6 chars"
+  ↕ owns: validations, callbacks, business methods
 ```
 
-All three layers are required. This skill handles the top layer.
-TDD handles the bottom two.
+**Each layer tests something the others don't.** If a test could live in a lower layer, it should.
+Acceptance specs are expensive — only use them for multi-step flows that can't be verified at a
+lower level. This skill handles the top layer. TDD handles the bottom two.
 
 ## Common Mistakes
 
