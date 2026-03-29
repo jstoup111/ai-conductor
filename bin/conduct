@@ -539,14 +539,15 @@ if ip > 0:
 }
 
 show_status() {
-  echo ""
-  echo -e "${BOLD}SDLC Progress${NC}"
-
   local session_id="none"
   [ -f "$SESSION_FILE" ] && session_id="$(cat "$SESSION_FILE" | head -c 8)..."
 
-  echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-  echo -e "  Session: ${session_id}    Project: $(basename "$PROJECT_DIR")"
+  echo -e "${BOLD}${CYAN}╔══════════════════════════════════════════╗${NC}"
+  echo -e "${BOLD}${CYAN}║     SDLC Conductor — Harness Runner     ║${NC}"
+  echo -e "${BOLD}${CYAN}╚══════════════════════════════════════════╝${NC}"
+  echo -e "  Project: $(basename "$PROJECT_DIR")"
+  [ -n "${FEATURE_DESC:-}" ] && echo -e "  Feature: ${FEATURE_DESC}"
+  echo -e "  Mode:    ${RUN_MODE:-default}    Session: ${session_id}"
   echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 
   local steps=("bootstrap" "memory" "brainstorm" "stories" "conflict_check" "plan" "architecture_review" "acceptance_specs" "build" "finish" "manual_test" "retro")
@@ -844,16 +845,6 @@ fi
 if [ -z "$FEATURE_DESC" ] && [ -f "$STATE_FILE" ]; then
   FEATURE_DESC=$(python3 -c "import json; print(json.load(open('$STATE_FILE')).get('feature_desc',''))" 2>/dev/null || echo "")
 fi
-
-# Header
-echo ""
-echo -e "${BOLD}${CYAN}╔══════════════════════════════════════════╗${NC}"
-echo -e "${BOLD}${CYAN}║     SDLC Conductor — Harness Runner     ║${NC}"
-echo -e "${BOLD}${CYAN}╚══════════════════════════════════════════╝${NC}"
-echo -e "  Project: ${PROJECT_DIR}"
-[ -n "$FEATURE_DESC" ] && echo -e "  Feature: ${FEATURE_DESC}"
-echo -e "  Mode:    ${RUN_MODE}"
-echo ""
 
 ensure_pipeline_dir
 
