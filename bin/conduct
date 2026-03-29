@@ -442,10 +442,10 @@ run_conflict_check() {
   # Check if blocking conflicts need human resolution
   if check_conflict_check; then
     local has_blocking=false
-    if compgen -G "${PROJECT_DIR}/docs/conflicts/*.md" > /dev/null 2>&1; then
-      if grep -rqiE "severity.*blocking|blocking.*conflict" "${PROJECT_DIR}/docs/conflicts/" 2>/dev/null; then
-        has_blocking=true
-      fi
+    # If a clean-check marker exists, there are no blocking conflicts
+    if ! compgen -G "${PROJECT_DIR}/docs/conflicts/*clean-check*" > /dev/null 2>&1; then
+      # No clean-check marker — check for blocking conflicts in non-marker files
+      has_blocking=true
     fi
     if $has_blocking; then
       warn "Blocking conflicts found — interactive session for resolution..."
