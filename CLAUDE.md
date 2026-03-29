@@ -43,6 +43,37 @@ Agent prompt templates are in `agents/`. Skills define *what* to do; agents defi
 - `domain-reviewer.md` — Checks domain integrity, has veto authority
 - `planner.md` — Expands requirements into specs
 
+## Model Selection
+
+Use the cheapest model that can do the job. Opus for reasoning-heavy work, Sonnet for
+standard implementation, Haiku for mechanical checks.
+
+| Skill/Agent | Recommended Model | Why |
+|---|---|---|
+| brainstorm | opus | Design decisions, trade-off analysis require deep reasoning |
+| stories | sonnet | Pattern-following from design doc, structured output |
+| conflict-check | opus | Cross-referencing multiple stories, subtle contradiction detection |
+| plan | sonnet | Structured task breakdown from stories |
+| writing-system-tests | sonnet | Generating specs from acceptance criteria — templated work |
+| tdd (RED phase) | sonnet | Writing one test at a time — focused, constrained |
+| tdd (GREEN phase) | sonnet | Writing minimal implementation — constrained scope |
+| domain-reviewer | opus | Subtle judgment calls on primitive obsession, boundaries |
+| evaluator | opus | Calibrated skepticism requires deep analysis |
+| code-review | opus | Multi-dimensional analysis (spec, quality, domain) |
+| debugging | opus | Root cause analysis requires reasoning chains |
+| pipeline | sonnet | Orchestration — mostly dispatching and state tracking |
+| finish | haiku | Mechanical checks — run tests, check git status, verify coverage |
+| retro | opus | Analytical — comparing patterns, identifying trends |
+| bootstrap | sonnet | Detection and scaffolding — largely mechanical |
+| memory | haiku | Read/write files, update index — mechanical |
+| conduct | haiku | Artifact checks and status reporting — mechanical |
+
+When dispatching subagents via the Agent tool, set the `model` parameter to match:
+```
+Agent(subagent_type="general-purpose", model="sonnet", prompt="RED phase: write test...")
+Agent(subagent_type="general-purpose", model="opus", prompt="Evaluate this code...")
+```
+
 ## Tech-Context
 
 Stack-specific knowledge lives in `tech-context/`. Bootstrap detects the project stack and loads

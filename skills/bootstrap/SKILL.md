@@ -113,6 +113,67 @@ detected: no match           → proceed without tech-context (graceful degradat
 
 If tech-context is loaded, note it in the generated CLAUDE.md so other skills know to reference it.
 
+### 3b. Generate .claudeignore
+
+Create a `.claudeignore` file to keep irrelevant files out of Claude's context window. This
+reduces token usage and prevents Claude from reading generated/vendor files.
+
+Generate based on detected stack:
+
+**All projects:**
+```
+# Dependencies
+node_modules/
+vendor/bundle/
+.bundle/
+
+# Build artifacts
+tmp/
+log/
+coverage/
+.cache/
+
+# Docker/system
+.docker/
+*.pid
+*.sock
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Assets (binary)
+public/assets/
+public/packs/
+app/assets/images/
+*.png
+*.jpg
+*.gif
+*.ico
+*.woff
+*.woff2
+*.ttf
+*.eot
+```
+
+**Rails additions:**
+```
+db/schema.rb        # Generated — read migrations instead
+storage/
+```
+
+**Node additions:**
+```
+dist/
+build/
+.next/
+.nuxt/
+```
+
+If `.claudeignore` already exists, do NOT overwrite — the user may have customized it.
+
 ### 4. Analyze Existing Code (Existing Projects Only)
 
 **Skip this step for fresh projects.**
@@ -416,6 +477,23 @@ Walk through connecting the project to external tools via MCP servers:
 - If the user mentions Linear, Jira, or another tracker, offer to configure the appropriate MCP server
 - This enables: creating stories/tickets from `docs/stories/`, linking commits to issues, tracking progress
 - Ask the user which tracker they use and help configure it
+
+**Browser automation (full-stack projects only):**
+- If frontend detection found views or components, offer to configure Chrome/Puppeteer MCP
+- This enables: `/manual-test` to automate browser testing, take screenshots, interact with UI
+- Configuration:
+  ```json
+  {
+    "mcpServers": {
+      "puppeteer": {
+        "command": "npx",
+        "args": ["-y", "@anthropic-ai/puppeteer-mcp"],
+        "env": {}
+      }
+    }
+  }
+  ```
+- For API-only projects, skip this — `curl` is sufficient for manual testing
 
 **Skip if:** The user declines or no git remote exists. MCP setup is optional but recommended.
 

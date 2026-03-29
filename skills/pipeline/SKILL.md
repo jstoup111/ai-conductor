@@ -122,10 +122,20 @@ When autonomy is set to Full and tasks have no dependencies:
 ### Batch Boundaries
 
 At natural batch boundaries (after completing a group of related tasks):
-- Run the full test suite
+
+**Pre-batch verification (before starting next batch):**
+- Run the full test suite — if ANY test fails that is NOT an expected RED test, stop and fix
+  before proceeding. Previous session bugs must not accumulate.
+- Verify the current branch is merge-ready: no WIP commits, no TODO-fixme code added this batch,
+  all new code has tests. The branch should be shippable at any batch boundary, even if the
+  feature is incomplete.
+
+**Post-batch checks:**
 - Run the linter (if tech-context specifies one)
 - Run `/simplify` to check for accumulated duplication (dry business logic, not dry code)
 - Run a **micro-retro** (see below)
+- Append to `.pipeline/progress.log` — a chronological narrative of what was done, what was
+  tried, what worked, and what's next (see Progress Log below)
 - Present a progress summary to the user
 - In Conservative mode: get explicit approval to continue
 - In Standard mode: continue unless the user intervenes
@@ -156,6 +166,34 @@ At each batch boundary, ask:
 
 Update `.memory/index.md` after each write. An empty `.memory/` at the end of a pipeline
 run means the harness failed — future sessions will have no context for why decisions were made.
+
+### Progress Log
+
+Append to `.pipeline/progress.log` at every batch boundary. This is a chronological narrative
+for cross-session continuity — when a new session starts, reading the last 30 lines tells the
+agent exactly where things stand.
+
+```
+## Batch 1 — 2026-03-28 14:30
+- Completed: task-1 (User model + validations), task-2 (registration endpoint)
+- Rework: 0 cycles
+- Issue hit: PostgreSQL JSONB casting needed explicit type (wrote .memory/gotchas/)
+- Next up: task-3 (authentication)
+- State: 2/13 tasks, all tests passing, branch merge-ready
+```
+
+The `session-start-context.sh` hook reads the last 30 lines of this file at session start.
+
+### Git Revert Recovery
+
+When the rework budget is exhausted (3 cycles failed), before escalating consider:
+
+1. Find the last clean batch boundary commit: `git log --oneline | head -10`
+2. Check if reverting to that commit and re-approaching would be faster than patching
+3. If yes: `git revert --no-commit HEAD~N..HEAD` to undo the failed batch, then re-attempt
+
+The last clean TDD commit is always a safe revert point. Each batch boundary produces a
+merge-ready state, so reverting to one never loses unrelated work.
 
 ### Pipeline Summary
 

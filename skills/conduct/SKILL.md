@@ -23,11 +23,13 @@ Step 3:  /brainstorm            → DECIDE
 Step 4:  /stories               → DECIDE
 Step 5:  /conflict-check        → DECIDE
 Step 6:  /plan                  → DECIDE
-Step 7:  /writing-system-tests  → BUILD (failing acceptance specs)
-Step 8:  /pipeline or /tdd      → BUILD (make them pass)
-Step 9:  /code-review           → BUILD (if not already run by pipeline)
-Step 10: /finish                → SHIP
-Step 11: /retro                 → SHIP
+Step 7:  /architecture-review    → DECIDE (feasibility, alignment, risks)
+Step 8:  /writing-system-tests  → BUILD (failing acceptance specs)
+Step 9:  /pipeline or /tdd      → BUILD (make them pass)
+Step 10: /code-review           → BUILD (if not already run by pipeline)
+Step 11: /finish                → SHIP
+Step 12: /manual-test           → SHIP (validate stories, bug loop via /tdd)
+Step 13: /retro                 → SHIP
 ```
 
 ## Practices
@@ -47,8 +49,9 @@ Check for these artifacts in order. The **first missing artifact** determines th
 | 7. writing-system-tests | Acceptance specs exist for stories | API: glob `spec/integration/*_spec.rb`. Full-stack: glob `spec/system/*_spec.rb`. If stories exist but no acceptance specs, this step is pending |
 | 8. build | Implementation tasks from the plan are completed with passing tests | Check `.pipeline/task-status.json` if pipeline used, OR check that test suite passes and commits exist beyond the plan |
 | 9. code-review | Review verdict exists in `.pipeline/audit-trail/` OR code-review was run | Check audit trail or ask user |
-| 10. finish | Fresh verification has been performed | Check `docs/retros/` does NOT yet exist but build is complete |
-| 11. retro | Retro report exists in `docs/retros/` | Glob `docs/retros/*.md` |
+| 10. finish | Fresh verification has been performed | Build complete + tests pass |
+| 11. manual-test | Manual test results exist with no FAILs | Glob `docs/manual-test-results.md` — if file contains FAIL rows, step is pending (bugs need /tdd loop) |
+| 12. retro | Retro report exists in `docs/retros/` | Glob `docs/retros/*.md` |
 
 ### 2. Report Status
 

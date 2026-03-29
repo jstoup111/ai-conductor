@@ -1,0 +1,35 @@
+# ADR {{NUMBER}}: {{TITLE}}
+
+**Date:** {{DATE}}
+**Status:** Proposed | Accepted | Superseded by ADR-{{N}}
+**Deciders:** {{who made this decision}}
+
+## Context
+
+What is the issue? What forces are at play? What constraints exist?
+
+## Options Considered
+
+### Option A: {{name}}
+- **Pros:** ...
+- **Cons:** ...
+
+### Option B: {{name}}
+- **Pros:** ...
+- **Cons:** ...
+
+## Decision
+
+What was decided and WHY. Not just "we chose A" but "we chose A because [specific reasoning
+that helps future readers understand trade-offs]."
+
+## Consequences
+
+### Positive
+- What becomes easier or better
+
+### Negative
+- What becomes harder or worse (be honest — every decision has costs)
+
+### Follow-up Actions
+- [ ] Concrete actions needed to implement this decision

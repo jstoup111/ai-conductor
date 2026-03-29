@@ -98,6 +98,19 @@ After user selects:
 2. Note what changed and why in the story file
 3. Save the conflict report to `docs/conflicts/YYYY-MM-DD-<description>.md`
 
+**Conflict reports are overwritten on re-run.** If a re-check after resolution finds new or
+changed conflicts, overwrite the existing conflict report file. The report reflects the CURRENT
+state — git has the history.
+
+**Conflict resolutions that change architectural decisions create new ADRs.** Never overwrite
+an existing ADR. Instead:
+1. Write a new ADR in `docs/decisions/` that supersedes the old one
+2. Update the old ADR's status to `Superseded by ADR-NNN`
+3. The new ADR references the old one and explains why the decision changed
+
+Example: If conflict resolution changes the API authentication approach from ADR-005,
+create ADR-012 with the new approach and mark ADR-005 as superseded.
+
 ### 5. Re-Check
 
 After all resolutions are applied, re-run the full conflict check.
