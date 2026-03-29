@@ -311,6 +311,33 @@ exists. The normal SDLC flow handles quality:
 This keeps bootstrap fast and composable. The heavy validation work stays in the skills
 designed for it.
 
+### 4c. Document Existing Architectural Decisions (Existing Projects Only)
+
+**Skip for new/fresh projects.**
+
+Existing repos have implicit architectural decisions embedded in the code. Surface these as
+ADRs in `docs/decisions/` using `templates/adr.md.template` so architecture-review and
+domain-reviewer have authoritative references instead of guessing from code patterns.
+
+**Detect and document these categories:**
+
+| Category | How to Detect | ADR Title Example |
+|----------|--------------|-------------------|
+| Framework + version | `Gemfile`, `package.json`, `go.mod` | "Use Rails 7 API-only" |
+| Database | `database.yml`, `Gemfile` (`pg`, `mysql2`) | "Use PostgreSQL 15" |
+| Auth approach | Devise, JWT gems, custom auth middleware, `has_secure_password` | "Token auth via Devise + JWT" |
+| API format | Response shapes in controllers, serializers, `jbuilder`/`jsonapi-serializer` | "JSON envelope with data/errors keys" |
+| Test framework | `.rspec`, `jest.config`, `pytest.ini` | "RSpec for all test layers" |
+| Background jobs | `Gemfile` (`sidekiq`, `good_job`), `app/jobs/` | "Sidekiq for async processing" |
+| Key libraries | Major gems/packages that shape architecture | "Pundit for authorization" |
+
+**Rules:**
+- Only document decisions that are **observable in the code**. Don't invent rationale.
+- Use `Status: Observed` (not `Accepted`) to indicate these were inferred, not explicitly decided.
+- One ADR per decision. Keep them short — title, context (what exists), decision (what was chosen).
+- If `docs/decisions/` already has ADRs, read them first and don't duplicate.
+- Sequential numbering: check highest existing ADR number and increment.
+
 ### 5. Set Up Project Directories
 
 Create these directories if they don't exist (idempotent — safe to re-run):
