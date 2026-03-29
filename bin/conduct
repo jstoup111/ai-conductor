@@ -348,6 +348,7 @@ run_build() {
   fi
 
   log "Starting TDD pipeline (${autonomy} autonomy, ${mode} mode)..."
+  start_live_refresh 15
   run_claude "Run the /pipeline skill at ${autonomy} autonomy. Execute each task via TDD (RED→DOMAIN→GREEN→DOMAIN→COMMIT).
 
 MANDATORY at batch boundaries:
@@ -360,6 +361,8 @@ MANDATORY at batch boundaries:
 Track state in .pipeline/. Follow rework budget (3 cycles, then escalate).
 Do NOT stop to ask for approval — execute all tasks to completion." "$mode"
 
+  stop_live_refresh
+  refresh_display
   check_build && { ok "Build complete — tests passing"; save_state "build" "done"; return 0; }
   warn "Build may be incomplete — checking tests"; save_state "build" "needs_verification"; return 0
 }
@@ -380,10 +383,13 @@ run_manual_test() {
     ok "Already complete — all stories pass manual testing"; save_state "manual_test" "done"; return 0
   fi
   log "Running manual tests against stories..."
+  start_live_refresh 10
   run_claude "Run the /manual-test skill. Start the application server, then test every story's acceptance criteria using curl (API) or browser (full-stack).
 
 Record results in docs/manual-test-results.md. For any FAILs, write a failing test (RED), fix it (GREEN), commit, and re-test until all stories pass. Do NOT proceed with bugs remaining."
 
+  stop_live_refresh
+  refresh_display
   check_manual_test && { ok "Manual tests all pass"; save_state "manual_test" "done"; return 0; }
   fail "Manual test has FAILs — bugs need fixing"; save_state "manual_test" "failed"; return 1
 }
@@ -559,6 +565,49 @@ show_status() {
   echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
   echo ""
 }
+
+# ─── Live Display ─────────────────────────────────────────────────────────────
+
+STATUS_LINES=0
+
+refresh_display() {
+  # Move cursor up to overwrite previous status, then redraw
+  if [ "$STATUS_LINES" -gt 0 ]; then
+    printf "\033[%dA" "$STATUS_LINES"  # Move up N lines
+    printf "\033[J"                     # Clear from cursor to end of screen
+  fi
+
+  # Capture status output and count lines
+  local output
+  output=$(show_status)
+  STATUS_LINES=$(echo "$output" | wc -l)
+  echo "$output"
+}
+
+# Background refresh for long-running steps (build, manual-test)
+REFRESH_PID=""
+
+start_live_refresh() {
+  local interval=${1:-15}
+  (
+    while true; do
+      sleep "$interval"
+      refresh_display 2>/dev/null
+    done
+  ) &
+  REFRESH_PID=$!
+}
+
+stop_live_refresh() {
+  if [ -n "$REFRESH_PID" ] && kill -0 "$REFRESH_PID" 2>/dev/null; then
+    kill "$REFRESH_PID" 2>/dev/null
+    wait "$REFRESH_PID" 2>/dev/null || true
+  fi
+  REFRESH_PID=""
+}
+
+# Clean up on exit
+trap 'stop_live_refresh' EXIT
 
 # ─── Rate Limit ───────────────────────────────────────────────────────────────
 
@@ -774,15 +823,20 @@ fi
 
 # ─── Main Loop ────────────────────────────────────────────────────────────────
 
+# Initial display
+refresh_display
+
 i=$start_index
 while [ "$i" -lt "${#STEP_FUNCS[@]}" ]; do
   if ${STEP_FUNCS[$i]}; then
+    refresh_display
     i=$((i + 1))
     continue
   fi
 
   # Step failed — interactive recovery
   if recover "${ALL_STEPS[$i]}"; then
+    refresh_display
     continue  # retry (don't advance i)
   else
     i=$((i + 1))  # skip (advance i)
@@ -790,7 +844,6 @@ while [ "$i" -lt "${#STEP_FUNCS[@]}" ]; do
 done
 
 # Done
-echo ""
-show_status
+refresh_display
 send_notification "SDLC complete" "All steps finished. Review retro in docs/retros/"
 echo -e "${GREEN}${BOLD}SDLC complete.${NC} Review the retro in docs/retros/"
