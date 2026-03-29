@@ -404,6 +404,115 @@ Write to docs/retros/ with file:line references."
 
 # ─── Status Display ───────────────────────────────────────────────────────────
 
+get_phase_detail() {
+  local step=$1
+
+  case "$step" in
+    brainstorm)
+      local count
+      count=$(compgen -G "${PROJECT_DIR}/docs/specs/*.md" 2>/dev/null | wc -l)
+      [ "$count" -gt 0 ] && echo "${count} design doc(s)"
+      ;;
+    stories)
+      local total=0 draft=0
+      total=$(compgen -G "${PROJECT_DIR}/docs/stories/*.md" 2>/dev/null | wc -l)
+      [ "$total" -gt 0 ] && draft=$(grep -rl "Status: DRAFT" "${PROJECT_DIR}/docs/stories/" 2>/dev/null | wc -l)
+      if [ "$total" -gt 0 ]; then
+        [ "$draft" -gt 0 ] && echo "${total} stories (${draft} DRAFT)" || echo "${total} stories"
+      fi
+      ;;
+    conflict_check)
+      local f="${PROJECT_DIR}/docs/conflicts/"
+      if compgen -G "${f}*.md" > /dev/null 2>&1; then
+        if grep -rql "Clean Pass\|clean" "$f" 2>/dev/null; then
+          echo "clean"
+        else
+          local blocking
+          blocking=$(grep -rci "blocking" "$f" 2>/dev/null | awk -F: '{s+=$2}END{print s}')
+          [ "$blocking" -gt 0 ] && echo "${blocking} blocking" || echo "resolved"
+        fi
+      fi
+      ;;
+    plan)
+      if compgen -G "${PROJECT_DIR}/docs/plans/*.md" > /dev/null 2>&1; then
+        local tasks
+        tasks=$(grep -c "^### Task" "${PROJECT_DIR}"/docs/plans/*.md 2>/dev/null | awk -F: '{s+=$2}END{print s}')
+        [ "$tasks" -gt 0 ] && echo "${tasks} tasks"
+      fi
+      ;;
+    architecture_review)
+      if compgen -G "${PROJECT_DIR}/docs/decisions/architecture-review-*.md" > /dev/null 2>&1; then
+        local verdict
+        verdict=$(grep -h "Verdict:" "${PROJECT_DIR}"/docs/decisions/architecture-review-*.md 2>/dev/null | tail -1 | sed 's/.*Verdict:\s*//' | tr -d '*')
+        [ -n "$verdict" ] && echo "$verdict"
+      fi
+      ;;
+    acceptance_specs)
+      local count=0
+      count=$(compgen -G "${PROJECT_DIR}/spec/integration/*_spec.rb" 2>/dev/null | wc -l)
+      [ "$count" -eq 0 ] && count=$(compgen -G "${PROJECT_DIR}/spec/system/*_spec.rb" 2>/dev/null | wc -l)
+      [ "$count" -gt 0 ] && echo "${count} spec file(s)"
+      ;;
+    build)
+      # Show test results — the key visual cue
+      local pipeline_detail=""
+      if [ -f "${PROJECT_DIR}/.pipeline/task-status.json" ]; then
+        pipeline_detail=$(python3 -c "
+import json
+with open('${PROJECT_DIR}/.pipeline/task-status.json') as f:
+    state = json.load(f)
+total = len(state)
+done = sum(1 for v in state.values() if isinstance(v, dict) and v.get('status') == 'completed')
+ip = sum(1 for v in state.values() if isinstance(v, dict) and v.get('status') == 'in_progress')
+print(f'{done}/{total} tasks', end='')
+if ip > 0:
+    print(f' ({ip} active)', end='')
+" 2>/dev/null)
+      fi
+
+      # Get test counts
+      local test_detail=""
+      if [ -f "${PROJECT_DIR}/.rspec" ] || [ -d "${PROJECT_DIR}/spec" ]; then
+        test_detail=$(cd "$PROJECT_DIR" && bundle exec rspec --no-color --format progress 2>&1 | tail -1 | sed 's/Finished.*//' 2>/dev/null || true)
+        # Parse "X examples, Y failures" or "X examples, Y failures, Z pending"
+        test_detail=$(cd "$PROJECT_DIR" && bundle exec rspec --no-color 2>&1 | grep -oE "[0-9]+ examples?, [0-9]+ failures?" 2>/dev/null || true)
+      fi
+
+      local result=""
+      [ -n "$pipeline_detail" ] && result="$pipeline_detail"
+      if [ -n "$test_detail" ]; then
+        # Colorize: green if 0 failures, red otherwise
+        if echo "$test_detail" | grep -q "0 failures"; then
+          [ -n "$result" ] && result="${result} | "
+          result="${result}${GREEN}${test_detail}${NC}"
+        else
+          [ -n "$result" ] && result="${result} | "
+          result="${result}${RED}${test_detail}${NC}"
+        fi
+      fi
+      [ -n "$result" ] && echo "$result"
+      ;;
+    manual_test)
+      local f="${PROJECT_DIR}/docs/manual-test-results.md"
+      if [ -f "$f" ]; then
+        local pass fail
+        pass=$(grep -ci "| PASS" "$f" 2>/dev/null || echo 0)
+        fail=$(grep -ci "| FAIL" "$f" 2>/dev/null || echo 0)
+        if [ "$fail" -gt 0 ]; then
+          echo "${GREEN}${pass} pass${NC} ${RED}${fail} fail${NC}"
+        else
+          echo "${GREEN}${pass} pass${NC}"
+        fi
+      fi
+      ;;
+    retro)
+      if compgen -G "${PROJECT_DIR}/docs/retros/*.md" > /dev/null 2>&1; then
+        echo "complete"
+      fi
+      ;;
+  esac
+}
+
 show_status() {
   echo ""
   echo -e "${BOLD}SDLC Progress${NC}"
@@ -411,9 +520,9 @@ show_status() {
   local session_id="none"
   [ -f "$SESSION_FILE" ] && session_id="$(cat "$SESSION_FILE" | head -c 8)..."
 
-  echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-  echo -e "  Session: ${session_id}"
-  echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  echo -e "  Session: ${session_id}    Project: $(basename "$PROJECT_DIR")"
+  echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 
   local steps=("bootstrap" "memory" "brainstorm" "stories" "conflict_check" "plan" "architecture_review" "acceptance_specs" "build" "finish" "manual_test" "retro")
   local labels=("bootstrap" "memory" "brainstorm" "stories" "conflict-check" "plan" "arch review" "acceptance specs" "tdd/pipeline" "finish" "manual-test" "retro")
@@ -436,10 +545,18 @@ show_status() {
         fi
         ;;
     esac
-    printf "  %b  %-16s  %s\n" "$icon" "${labels[$i]}" "${phases[$i]}"
+
+    local detail
+    detail=$(get_phase_detail "${steps[$i]}" 2>/dev/null || true)
+
+    if [ -n "$detail" ]; then
+      printf "  %b  %-16s  %-10s  %b\n" "$icon" "${labels[$i]}" "${phases[$i]}" "$detail"
+    else
+      printf "  %b  %-16s  %s\n" "$icon" "${labels[$i]}" "${phases[$i]}"
+    fi
   done
 
-  echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
   echo ""
 }
 
