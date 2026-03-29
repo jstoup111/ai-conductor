@@ -90,6 +90,9 @@ review_artifacts() {
     return 0
   fi
 
+  # Pause live refresh so it doesn't overwrite the review display
+  stop_live_refresh
+
   for file in "${files[@]}"; do
     i=$((i + 1))
     echo ""
@@ -104,12 +107,14 @@ review_artifacts() {
     if [ -t 0 ]; then
       read -r -p "  [enter=approve / r=reject / s=skip remaining]: " verdict
       case "$verdict" in
-        [rR]) warn "Rejected: $(basename "$file")"; return 1 ;;
-        [sS]) log "Skipping review of remaining artifacts"; return 0 ;;
+        [rR]) warn "Rejected: $(basename "$file")"; start_live_refresh 10; return 1 ;;
+        [sS]) log "Skipping review of remaining artifacts"; start_live_refresh 10; return 0 ;;
         *)    ok "Approved: $(basename "$file")" ;;
       esac
     fi
   done
+
+  start_live_refresh 10
   return 0
 }
 
