@@ -238,21 +238,29 @@ check_acceptance_specs() {
 }
 
 check_build() {
-  # Quick check: pipeline says all tasks completed
+  # Pipeline must exist with at least 1 completed task
   if [ -f "${PROJECT_DIR}/.pipeline/task-status.json" ]; then
-    local pending
-    pending=$(python3 -c "
+    local result
+    result=$(python3 -c "
 import json
 with open('${PROJECT_DIR}/.pipeline/task-status.json') as f:
     state = json.load(f)
-pending = sum(1 for v in state.values() if isinstance(v, dict) and v.get('status') in ('pending', 'in_progress'))
-print(pending)
-" 2>/dev/null || echo "1")
-    [ "$pending" -eq 0 ] && return 0
+total = sum(1 for v in state.values() if isinstance(v, dict))
+completed = sum(1 for v in state.values() if isinstance(v, dict) and v.get('status') == 'completed')
+pending = total - completed
+if total == 0:
+    print('empty')
+elif pending == 0:
+    print('done')
+else:
+    print('pending')
+" 2>/dev/null || echo "pending")
+    [ "$result" = "done" ] && return 0
   fi
-  # Fallback: check log for 0 failures
+  # Fallback: check log for passing tests (must have >0 examples)
   if [ -f "$SESSION_LOG" ]; then
-    grep -q "0 failures" "$SESSION_LOG" 2>/dev/null && return 0
+    # Match "N examples, 0 failures" where N > 0
+    grep -qE "[1-9][0-9]* examples?, 0 failures" "$SESSION_LOG" 2>/dev/null && return 0
   fi
   return 1
 }
