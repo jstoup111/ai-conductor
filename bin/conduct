@@ -606,17 +606,20 @@ show_status() {
 
   echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 
-  # Show last activity from log
+  # Show last activity from log — pad to fixed width to overwrite previous content
+  local activity_line=""
   if [ -n "$current_step" ] && [ -f "$SESSION_LOG" ]; then
     local last_line
-    last_line=$(grep -v '^$' "$SESSION_LOG" 2>/dev/null | tail -1 | cut -c1-70)
+    last_line=$(grep -v '^$' "$SESSION_LOG" 2>/dev/null | tail -1 | cut -c1-68)
     if [ -n "$last_line" ]; then
-      echo -e "  ${YELLOW}▶${NC} ${last_line}"
+      activity_line="  ${YELLOW}▶${NC} ${last_line}"
     else
-      echo -e "  ${YELLOW}▶${NC} Running ${current_step}..."
+      activity_line="  ${YELLOW}▶${NC} Running ${current_step}..."
     fi
   fi
-  echo ""
+  # Clear line then print (handles variable-length content)
+  printf "\033[2K%b\n" "$activity_line"
+  printf "\033[2K\n"
 }
 
 # ─── Live Display ─────────────────────────────────────────────────────────────
@@ -656,19 +659,14 @@ refresh_display() {
   new_lines=$(echo "$buffer" | wc -l)
 
   if [ "$prev_lines" -eq 0 ]; then
-    # First draw — just clear and print
     clear
     echo "$buffer"
   else
-    # Move cursor to top of previous block and overwrite
+    # Move cursor to top and overwrite
     tput cup 0 0 2>/dev/null || printf "\033[H"
     echo "$buffer"
-    # Clear any leftover lines below
-    local i
-    for ((i=new_lines; i<prev_lines; i++)); do
-      tput el 2>/dev/null || printf "\033[2K"
-      echo ""
-    done
+    # Clear everything below the new content to remove stale lines
+    tput ed 2>/dev/null || printf "\033[J"
   fi
 
   set_status_lines "$new_lines"
