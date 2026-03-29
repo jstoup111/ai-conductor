@@ -175,7 +175,9 @@ else:
   else
     log "Interactive session (session: ${session_id:0:8}...). Type /quit when done."
     stop_live_refresh
+    STATUS_LINES=0
     claude $session_flag --append-system-prompt "$context. $prompt"
+    reset_display
     start_live_refresh 10
     touch "${PIPELINE_DIR}/session-created"
     append_progress "$prompt"
@@ -587,32 +589,43 @@ show_status() {
 
 STATUS_LINES=0
 
+reset_display() {
+  # Full clear — use after interactive sessions or on first draw
+  clear
+  STATUS_LINES=0
+  local buffer
+  buffer=$(show_status)
+  STATUS_LINES=$(echo "$buffer" | wc -l)
+  echo "$buffer"
+}
+
 refresh_display() {
   # In output mode, skip dashboard refresh
   [ "${VIEW_MODE}" = "output" ] && return 0
 
-  # Render into buffer first, then overwrite in one shot — no flash
+  # If no prior status on screen, do a full reset
+  if [ "$STATUS_LINES" -eq 0 ]; then
+    reset_display
+    return
+  fi
+
+  # Render into buffer, then overwrite in place
   local buffer
   buffer=$(show_status)
   local new_lines
   new_lines=$(echo "$buffer" | wc -l)
 
-  # Move cursor up to start of previous status block
-  if [ "$STATUS_LINES" -gt 0 ]; then
-    printf "\033[%dA" "$STATUS_LINES"
-  fi
-
-  # Print new content (overwrites old lines)
+  # Move cursor to start of status block and overwrite
+  printf "\033[%dA" "$STATUS_LINES"
   echo "$buffer"
 
-  # If new output is shorter than old, clear leftover lines
+  # Clear any leftover lines if new output is shorter
+  local i
+  for ((i=new_lines; i<STATUS_LINES; i++)); do
+    printf "\033[2K\n"
+  done
   if [ "$new_lines" -lt "$STATUS_LINES" ]; then
-    local extra=$(( STATUS_LINES - new_lines ))
-    for _ in $(seq 1 "$extra"); do
-      printf "\033[2K\n"  # Clear line
-    done
-    # Move back up past the cleared lines
-    printf "\033[%dA" "$extra"
+    printf "\033[%dA" $(( STATUS_LINES - new_lines ))
   fi
 
   STATUS_LINES=$new_lines
@@ -742,7 +755,9 @@ recover() {
   local recover_flag="--session-id ${session_id}"
   [ -f "${PIPELINE_DIR}/session-created" ] && recover_flag="--resume ${session_id}"
   stop_live_refresh
+  STATUS_LINES=0
   claude $recover_flag --append-system-prompt "The conduct script hit a failure at step: ${step_name}. Complete this step, then /quit to return to the conductor."
+  reset_display
   start_live_refresh 10
   touch "${PIPELINE_DIR}/session-created"
 
@@ -905,7 +920,7 @@ fi
 # ─── Main Loop ────────────────────────────────────────────────────────────────
 
 # Initial display + start live refresh for the entire run
-refresh_display
+reset_display
 start_live_refresh 10
 
 i=$start_index
