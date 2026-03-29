@@ -855,13 +855,24 @@ start_index=0
 if [ "$MODE" = "resume" ] || [ -n "$START_STEP" ]; then
   if [ "$MODE" = "resume" ] && [ -f "$STATE_FILE" ]; then
     last=$(python3 -c "import json; print(json.load(open('$STATE_FILE')).get('last_step','bootstrap'))")
+    last_status=$(python3 -c "import json; s=json.load(open('$STATE_FILE')); print(s.get('$last','pending'))" 2>/dev/null || echo "pending")
+
+    # Restore feature description from state if not provided
+    if [ -z "$FEATURE_DESC" ] && [ -f "$STATE_FILE" ]; then
+      FEATURE_DESC=$(python3 -c "import json; print(json.load(open('$STATE_FILE')).get('feature_desc',''))" 2>/dev/null || echo "")
+    fi
+
     for i in "${!ALL_STEPS[@]}"; do
       if [ "${ALL_STEPS[$i]}" = "$last" ]; then
-        start_index=$((i + 1))
+        if [ "$last_status" = "done" ] || [ "$last_status" = "skipped" ]; then
+          start_index=$((i + 1))  # Step succeeded — start from next
+        else
+          start_index=$i  # Step failed — retry it
+        fi
         break
       fi
     done
-    log "Resuming after: $last"
+    log "Resuming at: ${ALL_STEPS[$start_index]:-done} (last: $last = $last_status)"
   elif [ -n "$START_STEP" ]; then
     for i in "${!ALL_STEPS[@]}"; do
       if [ "${ALL_STEPS[$i]}" = "$START_STEP" ]; then
@@ -879,6 +890,22 @@ if [ -z "$FEATURE_DESC" ] && [ "$start_index" -le 2 ]; then
     fail "Feature description required. Usage: conduct \"description\""
     exit 1
   fi
+fi
+
+# Save feature description to state for --resume
+if [ -n "$FEATURE_DESC" ]; then
+  ensure_pipeline_dir
+  python3 << PYEOF
+import json, os
+path = "$STATE_FILE"
+state = {}
+if os.path.exists(path):
+    with open(path) as f:
+        state = json.load(f)
+state["feature_desc"] = "$FEATURE_DESC"
+with open(path, "w") as f:
+    json.dump(state, f, indent=2)
+PYEOF
 fi
 
 # ─── Main Loop ────────────────────────────────────────────────────────────────
