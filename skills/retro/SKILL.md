@@ -25,71 +25,41 @@ Before analysis, gather:
 
 ## Part A: Harness Retro
 
-Analyze three dimensions, aligned with the optimization targets:
+**Only report problems and improvements.** If a dimension has no issues, write "No issues." and move on.
 
-### A1. Correctness (Is the feature 100% functional?)
+### A1. Correctness
+Report ONLY: bugs that escaped TDD, negative paths that were missed, edge cases found late.
+For each escape: what was missed, which gate should have caught it, what story/test pattern
+would prevent recurrence.
 
-- Did any bugs escape the TDD cycle to manual testing or user discovery?
-- Were negative path stories comprehensive enough? Any failure modes missed?
-- Did TDD test coverage catch all edge cases, or were some found late?
-- Gap analysis: what additional story/test patterns would have caught escapes?
+### A2. Gate Quality
+Report ONLY: false positives (gates that blocked correct work — wasted rework) and false
+negatives (problems that passed all gates). For each: which gate, what triggered/missed it,
+specific calibration fix.
 
-### A2. Gate Quality (Does gating catch real problems?)
-
-- Gate pass/fail ratio per stage — are gates too lenient or too strict?
-- **False positives:** Gates that blocked correct work (wasted rework cycles)
-  - Which gate? What triggered it? Was the trigger miscalibrated?
-- **False negatives:** Problems that passed all gates but were caught later
-  - Which gate should have caught it? What criteria were missing?
-- Domain reviewer effectiveness: did vetoes prevent real issues or create churn?
-- Evaluator calibration: did the evaluator find issues the generator missed?
-
-### A3. Autonomy (How much user intervention was needed?)
-
-- Count of human interventions during pipeline execution
-- For each intervention, classify:
-  - **Necessary:** Genuine ambiguity, policy decision, design choice — these SHOULD require a human
-  - **Preventable:** Skill gap, missing context, bad prompt — these should be eliminated
-- For preventable interventions: what specific skill/agent/memory change would prevent recurrence?
+### A3. Autonomy
+Report ONLY: preventable human interventions (skill gap, missing context, bad prompt).
+For each: what specific skill/agent/memory change would prevent recurrence.
+Do not list necessary interventions (design decisions, policy choices) — those are expected.
 
 ---
 
 ## Part B: Application Retro
 
-Analyze the code we actually produced:
+**Only report defects, risks, and debt.** Do not describe what is correct or well-structured.
 
-### B1. Architecture Health
+### B1. Architecture & Code Quality
+Report ONLY: god classes, coupling violations, leaky abstractions, methods >15 lines or
+>3 branches, copy-paste duplication, misleading names, swallowed exceptions, stack-specific
+issues (N+1, missing indexes, unsafe migrations).
 
-- **Coupling:** Are new modules appropriately decoupled? Any god classes introduced?
-- **Cohesion:** Does each class/module have a single clear purpose?
-- **Dependency direction:** Do dependencies flow toward stable abstractions?
-- **Domain boundaries:** Are they respected? Any leaky abstractions?
+### B2. Test Quality
+Report ONLY: missing coverage (acceptance criteria without tests, untested code paths),
+fragile tests coupled to internals, assertions testing implementation instead of behavior.
 
-### B2. Code Quality
-
-- **Complexity:** Methods/functions that are too long or deeply nested?
-- **Duplication:** Copy-paste patterns that should be extracted?
-- **Naming:** Intention-revealing names? Any misleading names?
-- **Error handling:** Consistent patterns? Swallowed exceptions?
-- **Stack-specific** (if tech-context loaded):
-  - Rails: N+1 queries, missing indexes, unsafe migrations, missing validations
-  - PostgreSQL: missing constraints, transaction safety, index coverage
-
-### B3. Test Quality
-
-- **Coverage:** Are all acceptance criteria covered by tests?
-- **Assertion quality:** Testing behavior or implementation details?
-- **Fragility:** Tests coupled to internal structure that break on refactor?
-- **Negative paths:** All documented negative scenarios actually tested?
-- **Missing tests:** Code paths with no test coverage?
-
-### B4. Security, Performance & Debt
-
-- OWASP top 10 scan: auth/authz on new endpoints, input validation at boundaries
-- Performance: N+1 queries, missing pagination, unbounded queries
-- TODOs introduced — tracked or will they be forgotten?
-- Workarounds — "for now" code that needs a follow-up story?
-- Dependency health — new dependencies with known vulnerabilities?
+### B3. Security, Performance & Debt
+Report ONLY: auth gaps, unvalidated inputs, SQL injection risks, unbounded queries, missing
+pagination, untracked TODOs, workarounds needing follow-up stories, vulnerable dependencies.
 
 ---
 
@@ -116,16 +86,14 @@ Review token/context consumption for this feature cycle and identify optimizatio
 
 ## Writing Rules
 
-**Be concise. No repetition.**
+**Problems only. No praise.**
 
-- State each finding ONCE. If a finding is relevant to multiple sections, state it in the most
-  relevant section and reference it by ID elsewhere: "See H-3" or "See A-2."
-- Use bullet points, not paragraphs. One line per finding.
-- Every finding needs: what, where (file:line), severity, and proposed fix.
-- Do NOT restate what worked correctly. Only mention working things in a one-line summary.
-  Focus the report on what needs to change.
 - If nothing is wrong in a section, write "No issues." — not a paragraph explaining why
-  everything is fine.
+  everything is fine. Never describe what worked correctly.
+- State each finding ONCE. Reference by ID elsewhere: "See H-3."
+- One line per finding. Every finding needs: what, where (file:line), severity, proposed fix.
+- The retro exists to improve the harness and the code. Anything that doesn't propose a
+  concrete change is wasted tokens.
 
 **Finding IDs:** Number findings sequentially across the whole report.
 - H-1, H-2, H-3... for harness findings
