@@ -124,10 +124,12 @@ Track all state in `.pipeline/`: `config.yaml` (autonomy level, project refs), `
 ### Parallel Execution (Full Autonomy Only)
 
 When autonomy is set to Full and tasks have no dependencies:
-- Dispatch multiple generator agents in parallel via the Agent tool
-- Each agent works in an isolated git worktree
-- Merge results after all parallel tasks complete and pass review
-- If merge conflicts arise: resolve sequentially, re-run affected tests
+- Dispatch the `worktree-manager` agent (see `agents/worktree-manager.md`) with operation
+  CREATE_PARALLEL to set up one worktree per independent task batch
+- Dispatch generator agents into their assigned worktrees via the Agent tool
+- After all parallel tasks complete and pass review, dispatch `worktree-manager` with
+  MERGE_PARALLEL to merge results back sequentially, resolving conflicts as needed
+- The worktree-manager handles merge order, conflict resolution, and post-merge testing
 
 ### Batch Boundaries
 

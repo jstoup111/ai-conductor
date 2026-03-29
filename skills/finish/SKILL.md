@@ -80,13 +80,13 @@ Wait for the user to choose. Do not assume.
 ### 5. Cleanup
 
 After executing the chosen option:
-- Clean up git worktrees if used (Options 1, 2, 4)
+- **Worktree merge/cleanup:** Dispatch the `worktree-manager` agent (see `agents/worktree-manager.md`):
+  - Options 1 (merge) and 2 (PR): agent merges the feature branch, runs post-merge tests,
+    then removes the worktree and prunes the branch
+  - Option 4 (discard): agent removes the worktree and deletes the branch
+  - Option 3 (keep): no cleanup — worktree stays for later
 - Update `.pipeline/task-status.json` if pipeline was active
-- Suggest next step: `/manual-test` — validate stories against the running application
-  before retro. The full flow from here is:
-  ```
-  /finish (you are here) → /manual-test → /retro
-  ```
+- Suggest next step: `/manual-test` → `/retro`
 
 ## Verification
 

@@ -42,6 +42,7 @@ Agent prompt templates are in `agents/`. Skills define *what* to do; agents defi
 - `evaluator.md` — Reviews with calibrated skepticism (fresh context, no shared state with generator)
 - `domain-reviewer.md` — Checks domain integrity, has veto authority
 - `planner.md` — Expands requirements into specs
+- `worktree-manager.md` — Manages git worktrees for feature isolation and parallel execution
 
 ## Model Selection
 
@@ -67,6 +68,7 @@ standard implementation, Haiku for mechanical checks.
 | bootstrap | sonnet | Detection and scaffolding — largely mechanical |
 | conduct | haiku | Artifact checking and status reporting — mechanical |
 | memory | haiku | Read/write files, update index — mechanical |
+| worktree-manager | haiku | Git operations — mechanical branch/worktree management |
 | conduct | haiku | Artifact checks and status reporting — mechanical |
 
 When dispatching subagents via the Agent tool, set the `model` parameter to match:
