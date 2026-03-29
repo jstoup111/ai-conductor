@@ -588,48 +588,57 @@ show_status() {
 
 # ─── Live Display ─────────────────────────────────────────────────────────────
 
-STATUS_LINES=0
+# Use a file to share line count between parent and background refresh process
+LINES_FILE="${PIPELINE_DIR}/.display-lines"
+
+get_status_lines() {
+  cat "$LINES_FILE" 2>/dev/null || echo 0
+}
+
+set_status_lines() {
+  echo "$1" > "$LINES_FILE" 2>/dev/null
+}
 
 reset_display() {
-  # Full clear — use after interactive sessions or on first draw
   clear
-  STATUS_LINES=0
+  set_status_lines 0
   local buffer
   buffer=$(show_status)
-  STATUS_LINES=$(echo "$buffer" | wc -l)
+  local count
+  count=$(echo "$buffer" | wc -l)
+  set_status_lines "$count"
   echo "$buffer"
 }
 
 refresh_display() {
-  # In output mode, skip dashboard refresh
   [ "${VIEW_MODE}" = "output" ] && return 0
 
-  # If no prior status on screen, do a full reset
-  if [ "$STATUS_LINES" -eq 0 ]; then
-    reset_display
-    return
-  fi
+  local prev_lines
+  prev_lines=$(get_status_lines)
 
-  # Render into buffer, then overwrite in place
+  # Render new content
   local buffer
   buffer=$(show_status)
   local new_lines
   new_lines=$(echo "$buffer" | wc -l)
 
-  # Move cursor to start of status block and overwrite
-  printf "\033[%dA" "$STATUS_LINES"
-  echo "$buffer"
-
-  # Clear any leftover lines if new output is shorter
-  local i
-  for ((i=new_lines; i<STATUS_LINES; i++)); do
-    printf "\033[2K\n"
-  done
-  if [ "$new_lines" -lt "$STATUS_LINES" ]; then
-    printf "\033[%dA" $(( STATUS_LINES - new_lines ))
+  if [ "$prev_lines" -eq 0 ]; then
+    # First draw — just clear and print
+    clear
+    echo "$buffer"
+  else
+    # Move cursor to top of previous block and overwrite
+    tput cup 0 0 2>/dev/null || printf "\033[H"
+    echo "$buffer"
+    # Clear any leftover lines below
+    local i
+    for ((i=new_lines; i<prev_lines; i++)); do
+      tput el 2>/dev/null || printf "\033[2K"
+      echo ""
+    done
   fi
 
-  STATUS_LINES=$new_lines
+  set_status_lines "$new_lines"
 }
 
 # Background refresh for long-running steps (build, manual-test)
