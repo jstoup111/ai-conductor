@@ -20,578 +20,152 @@ code, tests, and history already in place).
 
 ### 1. Determine Bootstrap Mode
 
-Check the project directory to determine mode:
-
 | Indicator | Mode |
 |-----------|------|
-| Empty directory or no project files (no Gemfile, package.json, etc.) | **New** — scaffold the project first |
-| Project files exist but no harness artifacts (.memory/, docs/) | **Fresh** — full harness setup |
-| `.memory/` or `docs/` exist but some are missing | **Partial** — fill gaps only |
+| Empty directory or no project files | **New** — scaffold first (Step 1b) |
+| Project files exist but no harness artifacts | **Fresh** — full harness setup |
+| `.memory/` or `docs/` exist but some missing | **Partial** — fill gaps only |
 | All harness artifacts exist | **Re-bootstrap** — update detection, re-run smoke test |
 
-Also check for existing project maturity:
-
-| Indicator | Meaning |
-|-----------|---------|
-| `git log` has 50+ commits | Mature project — significant existing code to analyze |
-| `app/models/` or `src/` has 5+ files | Substantial codebase — needs inventory |
-| `spec/` or `test/` has existing tests | Test coverage exists — assess before adding more |
-| `CLAUDE.md` already exists (not harness-generated) | User has custom instructions — **preserve, don't overwrite** |
+Also check maturity: 50+ commits = mature, 5+ model files = substantial, existing specs = assess
+coverage, existing CLAUDE.md = **preserve, don't overwrite**.
 
 ### 1b. Scaffold New Project (New Mode Only)
 
-If the directory is empty or has no project files, ask the user what to create:
+1. Ask for or infer framework from user prompt
+2. Scaffold: `rails new . --api --database=postgresql --skip-bundle` (or equivalent)
+3. Install dependencies, add test framework if missing (rspec-rails, jest, pytest)
+4. Configure database — detect port conflicts before writing docker-compose.yml
+5. Set up .gitignore before first commit (vendor/bundle, node_modules, tmp, log)
+6. Initialize git if not already a repo
 
-1. **Ask for framework** — or infer from context (e.g., if the user said "Rails API" in their prompt)
-2. **Scaffold the project:**
-
-| Framework | Command |
-|-----------|---------|
-| Rails API | `rails new . --api --database=postgresql --skip-bundle` |
-| Rails full-stack | `rails new . --database=postgresql --skip-bundle` |
-| Next.js | `npx create-next-app@latest . --typescript` |
-| Express | `npm init -y` + install express |
-| FastAPI | `mkdir -p app && touch app/__init__.py app/main.py` |
-
-3. **Install dependencies:** `bundle install`, `npm install`, etc.
-4. **Add test framework** if not included:
-   - Rails: add `rspec-rails`, `factory_bot_rails`, `shoulda-matchers` to Gemfile, run `rails generate rspec:install`
-   - Node: add jest or vitest
-   - Python: add pytest
-5. **Configure database** for Docker if docker-compose.yml exists or user mentions Docker:
-   - **Detect port conflicts BEFORE writing docker-compose.yml:**
-     ```bash
-     # Check which ports are in use
-     docker ps --format '{{.Ports}}' 2>/dev/null | grep -oE '[0-9]+->5432'
-     ss -tlnp 2>/dev/null | grep -oE ':[0-9]+' | sort -u
-     ```
-   - Pick the next available port starting from 5432 (try 5432, 5433, 5434...)
-   - Create `docker-compose.yml` with the available port
-   - Update `database.yml` (or equivalent) with matching connection settings
-   - Start the container and create databases
-
-### Worktree Compatibility
-
-All project infrastructure must be namespaced to support git worktrees running in parallel:
-
-- **Database name:** Must include a branch/worktree identifier. For Rails: configure
-  `database.yml` to derive the DB name from `ENV['WORKTREE_DB_SUFFIX']` or the current
-  directory name (e.g., `myapp_development_feature_xyz`).
-- **Redis namespace:** If Redis is used, namespace keys by worktree
-  (e.g., `ENV['REDIS_URL']` includes a DB number or key prefix).
-- **Ports:** If dev servers bind to specific ports, use `ENV['PORT']` with a default that
-  can be overridden per worktree.
-- **Temp/cache dirs:** Use project-local `.tmp/` or `tmp/` rather than system-global paths.
-
-When generating `database.yml` or similar config, include a comment explaining the worktree
-namespacing strategy so future developers understand why the name is dynamic.
-
-6. **Set up .gitignore BEFORE first commit:**
-   - Ensure these are in `.gitignore` before any `git add`:
-     ```
-     /vendor/bundle
-     /node_modules
-     /tmp
-     /log
-     /.bundle
-     ```
-   - This prevents committing thousands of vendor files then removing them
-7. **Initialize git** if not already a repo: `git init && git add -A && git commit -m "Initial project scaffold"`
-
-After scaffolding, continue to Step 2 (detect project type) — the scaffold will now be detected.
+**Worktree Compatibility:** All infrastructure must be namespaced for parallel worktrees:
+- Database name via `ENV['WORKTREE_DB_SUFFIX']` or directory name
+- Redis namespace per worktree
+- Ports via `ENV['PORT']` with overridable defaults
+- Temp/cache dirs project-local
 
 ### 2. Detect Project Type
 
-Scan the project root for these indicators (check in order, stop at first match per category):
+Scan project root for indicators (first match per category):
 
-**Language/Framework:**
-- `Gemfile` with `rails` → Ruby on Rails
-- `Gemfile` without `rails` → Ruby
-- `package.json` with `next` → Next.js
-- `package.json` with `express` → Express/Node
-- `package.json` with `react` (no next) → React SPA
-- `pyproject.toml` or `requirements.txt` with `django` → Django
-- `pyproject.toml` or `requirements.txt` with `fastapi` → FastAPI
-- `pyproject.toml` or `requirements.txt` → Python
-- `Cargo.toml` → Rust
-- `go.mod` → Go
+**Language/Framework:** Gemfile+rails→Rails, package.json+next→Next.js,
+package.json+express→Express, pyproject.toml+django→Django, Cargo.toml→Rust, go.mod→Go
 
-**Database:**
-- `database.yml` with `postgresql` or `Gemfile` with `pg` → PostgreSQL
-- `database.yml` with `mysql` or `Gemfile` with `mysql2` → MySQL
-- `database.yml` with `sqlite` → SQLite
+**Database:** database.yml+postgresql→PostgreSQL, +mysql→MySQL, +sqlite→SQLite
 
-**Test Framework:**
-- `.rspec` or `spec/` directory → RSpec
-- `test/` with `_test.rb` files → Minitest
-- `jest.config.*` or `package.json` with `jest` → Jest
-- `vitest.config.*` → Vitest
-- `pytest.ini` or `conftest.py` → pytest
+**Test Framework:** .rspec→RSpec, test/*_test.rb→Minitest, jest.config→Jest, pytest.ini→pytest
 
-**Frontend (check even if backend framework detected — project may be full-stack):**
-- `app/views/` with `.erb`/`.haml`/`.slim` → Rails views (server-rendered)
-- `app/javascript/` or `app/frontend/` → Rails with JS frontend
-- `package.json` with `react`/`vue`/`svelte`/`angular` → SPA or component library
-- `app/assets/stylesheets/` or `tailwind.config.*` → CSS/styling layer
-- None of the above → API-only (no frontend)
+**Frontend:** app/views/→server-rendered, app/javascript/→JS frontend,
+package.json+react/vue/svelte→SPA, none→API-only
 
 ### 3. Load Tech-Context
 
-Based on detected stack, check for matching tech-context in the harness:
-
-```
-detected: Rails + PostgreSQL → load tech-context/rails-postgres/
-detected: Node + TypeScript  → load tech-context/node-ts/ (if exists)
-detected: no match           → proceed without tech-context (graceful degradation)
-```
-
-If tech-context is loaded, note it in the generated CLAUDE.md so other skills know to reference it.
+Match detected stack to `tech-context/` (e.g., Rails+PostgreSQL → `tech-context/rails-postgres/`).
+Note in CLAUDE.md so skills reference session-loaded context.
 
 ### 3b. Generate .claudeignore
 
-Create a `.claudeignore` file to keep irrelevant files out of Claude's context window. This
-reduces token usage and prevents Claude from reading generated/vendor files.
-
-Generate based on detected stack:
-
-**All projects:**
-```
-# Dependencies
-node_modules/
-vendor/bundle/
-.bundle/
-
-# Build artifacts
-tmp/
-log/
-coverage/
-.cache/
-
-# Docker/system
-.docker/
-*.pid
-*.sock
-
-# IDE
-.idea/
-.vscode/
-*.swp
-*.swo
-
-# Assets (binary)
-public/assets/
-public/packs/
-app/assets/images/
-*.png
-*.jpg
-*.gif
-*.ico
-*.woff
-*.woff2
-*.ttf
-*.eot
-```
-
-**Rails additions:**
-```
-db/schema.rb        # Generated — read migrations instead
-storage/
-```
-
-**Node additions:**
-```
-dist/
-build/
-.next/
-.nuxt/
-```
-
-If `.claudeignore` already exists, do NOT overwrite — the user may have customized it.
+Generate from `templates/claudeignore.template`. Remove stack-irrelevant sections (e.g., Rails
+sections for Node projects). If `.claudeignore` already exists, do NOT overwrite.
 
 ### 4. Analyze Existing Code (Existing Projects Only)
 
-**Skip this step for fresh projects.**
+**Skip for new/fresh projects.** Build an inventory:
 
-For projects with existing code, build an inventory before setting up the harness:
+- **Codebase:** models, controllers, services, jobs — count source and test files
+- **Test coverage:** run suite, identify files with NO specs
+- **Architecture:** routes, patterns (service objects, concerns), auth approach, existing docs
+- **In-flight work:** open PRs/issues (`gh pr list`, `gh issue list`), TODO comments
+- **Git history:** `git log --oneline -20`, `git shortlog -sn --no-merges`
 
-**Codebase scan:**
-- List all models/entities (e.g., `app/models/*.rb`, `src/models/`)
-- List all controllers/routes/endpoints
-- List all service objects, jobs, or other business logic files
-- Count total source files and test files
-
-**Test coverage assessment:**
-- Run the test suite — record pass/fail/pending counts
-- For each source file, check if a corresponding spec/test file exists
-- Identify files with NO test coverage — these become candidates for stories
-
-**Architecture snapshot:**
-- Read `config/routes.rb` (or equivalent) for the full API/page surface
-- Check for patterns: service objects, concerns, middleware, background jobs
-- Note the authentication/authorization approach
-- Check for existing documentation in README, docs/, wiki
-
-**Existing plans and task tracking:**
-- Check for in-flight work: open PRs (`gh pr list`), open issues (`gh issue list`), TODO comments in code
-- Check for project boards, milestones, or roadmap docs
-- Note any external trackers mentioned in README or config (Linear, Jira, etc.)
-- These feed into story generation — in-flight work becomes draft stories
-
-**Git history scan:**
-- `git log --oneline -20` — understand recent activity
-- `git shortlog -sn --no-merges` — who works on this project
-- Check for open branches that indicate in-progress work
-
-Present the inventory to the user as a summary:
-
-```
-Existing Project Inventory:
-- Models: 12 (User, Order, Product, ...)
-- Controllers: 8 (API endpoints: 34 total)
-- Test files: 45 (coverage: 78% of source files have specs)
-- Files WITHOUT specs: app/models/product.rb, app/services/pricing_service.rb, ...
-- Recent activity: 15 commits in last 30 days
-- Auth: Devise with JWT
-- Background jobs: Sidekiq (3 job classes)
-- Open PRs: 2, Open issues: 7
-```
+Present inventory summary to user before proceeding.
 
 ### 4b. Draft As-Built Stories (Existing Projects Only)
 
-**Bootstrap creates DRAFTS. The `/stories` skill validates them.**
+Generate DRAFT stories for what exists. One file per feature area with happy paths from
+routes/tests. Negative paths left as `TODO` — `/stories` fills them in.
 
-From the inventory, generate draft stories for what already exists. These go into
-`docs/stories/` with a `Status: DRAFT` marker so `/stories` knows to review them.
-
-**How to draft:**
-- One story file per major feature area (auth, CRUD per resource, background jobs, etc.)
-- Each story gets a happy path derived from existing routes/tests
-- Negative paths are left as `TODO` placeholders — `/stories` fills these in
-- Untested files are flagged: "No spec exists for this file — negative paths unknown"
-
-```markdown
-## Story: User Registration [AS-BUILT]
-**Status:** DRAFT — needs /stories review
-
-As a visitor, I want to register an account so that I can access the system.
-
-### Acceptance Criteria
-
-#### Happy Path
-- Given valid email and password, when POST /users, then 201 with user object
-
-#### Negative Paths
-- TODO: invalid input scenarios (bootstrap detected no spec coverage)
-- TODO: duplicate email handling
-
-### Coverage Notes
-- Request spec exists: spec/requests/users_spec.rb (3 examples)
-- Model spec exists: spec/models/user_spec.rb (5 examples)
-- Missing: no negative path tests for duplicate email
-```
-
-**For in-flight work (open issues/PRs):**
-- Create draft stories with `[PLANNED]` marker instead of `[AS-BUILT]`
-- Reference the issue/PR number
-- These are placeholders — the user confirms and `/stories` validates
-
-**Key principle:** Bootstrap does not validate stories. It creates drafts that capture what
-exists. The normal SDLC flow handles quality:
-
-```
-/bootstrap → drafts as-built + planned stories (DRAFT status)
-     ↓
-/stories → reviews drafts, adds negative paths, fills TODOs, marks as accepted
-     ↓
-/conflict-check → verifies as-built stories don't conflict with new work
-     ↓
-/plan, /tdd, etc. — normal flow from here
-```
-
-This keeps bootstrap fast and composable. The heavy validation work stays in the skills
-designed for it.
+Mark as `Status: DRAFT` and `[AS-BUILT]`. In-flight work gets `[PLANNED]` marker with
+issue/PR reference. Bootstrap does NOT validate stories — the normal flow handles that:
+`/bootstrap → /stories (review drafts) → /conflict-check → normal flow`
 
 ### 4c. Document Existing Architectural Decisions (Existing Projects Only)
 
-**Skip for new/fresh projects.**
+Surface implicit decisions as ADRs in `docs/decisions/` using `templates/adr.md.template`.
 
-Existing repos have implicit architectural decisions embedded in the code. Surface these as
-ADRs in `docs/decisions/` using `templates/adr.md.template` so architecture-review and
-domain-reviewer have authoritative references instead of guessing from code patterns.
-
-**Detect and document these categories:**
-
-| Category | How to Detect | ADR Title Example |
-|----------|--------------|-------------------|
-| Framework + version | `Gemfile`, `package.json`, `go.mod` | "Use Rails 7 API-only" |
-| Database | `database.yml`, `Gemfile` (`pg`, `mysql2`) | "Use PostgreSQL 15" |
-| Auth approach | Devise, JWT gems, custom auth middleware, `has_secure_password` | "Token auth via Devise + JWT" |
-| API format | Response shapes in controllers, serializers, `jbuilder`/`jsonapi-serializer` | "JSON envelope with data/errors keys" |
-| Test framework | `.rspec`, `jest.config`, `pytest.ini` | "RSpec for all test layers" |
-| Background jobs | `Gemfile` (`sidekiq`, `good_job`), `app/jobs/` | "Sidekiq for async processing" |
-| Key libraries | Major gems/packages that shape architecture | "Pundit for authorization" |
+**Detect:** framework+version, database, auth approach, API format, test framework,
+background jobs, key architecture-shaping libraries.
 
 **Rules:**
-- Only document decisions that are **observable in the code**. Don't invent rationale.
-- Use `Status: Observed` (not `Accepted`) to indicate these were inferred, not explicitly decided.
-- One ADR per decision. Keep them short — title, context (what exists), decision (what was chosen).
-- If `docs/decisions/` already has ADRs, read them first and don't duplicate.
-- Sequential numbering: check highest existing ADR number and increment.
+- Only document what's **observable in code** — don't invent rationale
+- Use `Status: Observed` (inferred, not explicitly decided)
+- One short ADR per decision. Don't duplicate existing ADRs.
 
 ### 5. Set Up Project Directories
 
-Create these directories if they don't exist (idempotent — safe to re-run):
-
-```
-.memory/
-  decisions/
-  patterns/
-  gotchas/
-  context/
-  index.md          # Empty index to start
-
-.pipeline/           # Only if pipeline skill will be used
-  audit-trail/
-
-docs/
-  specs/
-  stories/
-  conflicts/
-  plans/
-  decisions/
-  retros/
-```
+Create if missing (idempotent): `.memory/` (decisions/, patterns/, gotchas/, context/,
+index.md), `.pipeline/` (audit-trail/), `docs/` (specs/, stories/, conflicts/, plans/,
+decisions/, retros/).
 
 ### 6. Generate or Update CLAUDE.md
 
-**Fresh project:** Generate `CLAUDE.md` from `templates/CLAUDE.md.template`.
+- **Fresh/no CLAUDE.md:** Generate from `templates/CLAUDE.md.template`
+- **Existing CLAUDE.md:** Append harness section below `<!-- Generated by /bootstrap -->` marker.
+  Never overwrite content above the marker. On re-bootstrap, update only the harness section.
 
-**Existing project with no CLAUDE.md:** Same as fresh — generate from template.
+### 7. Bootstrap Memory (Existing Projects Only)
 
-**Existing project with CLAUDE.md:**
-1. Read the existing CLAUDE.md
-2. **Do NOT overwrite it.** The user's custom instructions are authoritative.
-3. Instead, **append** a harness section at the end:
+Seed `.memory/` from existing code. Use detection from Steps 4 and 4c — don't re-scan.
+- **decisions/** — architectural choices (from 4c ADRs)
+- **patterns/** — service object conventions, controller patterns, test patterns
+- **gotchas/** — reverts/hotfixes in git history, files changed 5+ times recently
+- **context/** — domain entities and relationships from models
 
-```markdown
-
-## Harness (james-stoup-agents)
-
-<!-- Generated by /bootstrap — edit freely, re-bootstrap won't overwrite above this line -->
-
-- **Tech Stack:** {{FRAMEWORK}} + {{DATABASE}}
-- **Tech-Context:** {{TECH_CONTEXT_PATH}}
-- **Skills:** /conduct → /bootstrap → /brainstorm → /stories → /conflict-check → /plan → /tdd → /finish → /retro
-- **Memory:** .memory/ (decisions, patterns, gotchas, context)
-- **Docs:** docs/ (specs, stories, conflicts, plans, retros)
-```
-
-On re-bootstrap: only update the section below the `<!-- Generated by /bootstrap -->` marker.
-Everything above the marker is preserved.
-
-### 7. Bootstrap Memory from Existing Code (Existing Projects Only)
-
-**Skip for fresh projects.**
-
-Seed `.memory/` with knowledge extracted from the existing codebase:
-
-**decisions/** — Scan for architectural patterns and record them:
-- Authentication approach (Devise, JWT, custom)
-- API format (REST, GraphQL, RPC)
-- Background job framework (Sidekiq, Solid Queue, Celery)
-- Database patterns (soft deletes, UUIDs vs integers, multi-tenancy)
-
-**patterns/** — Identify recurring code patterns:
-- Service object conventions (naming, interface)
-- Controller patterns (before_actions, response format)
-- Test patterns (shared contexts, factory conventions)
-
-**gotchas/** — Check git history for reverts, hotfixes, or repeated changes to the same file:
-- `git log --all --oneline --grep="fix" --grep="revert" --grep="hotfix" | head -10`
-- Files changed more than 5 times in last 30 days (potential trouble spots)
-
-**context/** — Domain knowledge from existing code:
-- Business entities and their relationships (from models)
-- Key domain terms (from model/method names)
-
-Write each finding to the appropriate `.memory/` subdirectory and update `.memory/index.md`.
-
-Present what was captured: "Bootstrapped memory with N decisions, M patterns, K gotchas."
+Update `.memory/index.md`. Report: "Bootstrapped memory with N decisions, M patterns, K gotchas."
 
 ### 8. Frontend Styleguide (Projects with Frontend Only)
 
-If frontend detection found views, components, or a CSS layer, set up a UI/UX styleguide:
+If frontend detected, generate from `templates/styleguide.md.template` to
+`docs/decisions/styleguide.md`. If styleguide already exists, reference it instead.
+Skip for API-only projects.
 
-1. Create `docs/decisions/styleguide.md` with:
+### 9. MCP Integration Setup
 
-```markdown
-# UI/UX Styleguide
+Offer MCP server configuration based on project:
+- **GitHub:** if git remote exists, configure `gh copilot mcp` in settings
+- **Issue tracker:** if user mentions Linear/Jira, help configure appropriate MCP
+- **Browser automation (full-stack only):** configure `@modelcontextprotocol/server-puppeteer`
+  for manual-test automation. Skip for API-only (curl suffices).
 
-**Date:** YYYY-MM-DD
-**Status:** Draft | Accepted
-
-## Design Tokens
-- **Colors:** primary, secondary, error, warning, success, neutral scale
-- **Typography:** font families, size scale, weight scale, line heights
-- **Spacing:** spacing scale (4px base recommended)
-- **Breakpoints:** mobile, tablet, desktop thresholds
-
-## Component Conventions
-- Component naming convention (PascalCase, kebab-case)
-- File structure (one component per file, co-located styles/tests)
-- State management approach (local, context, store)
-
-## Accessibility Standards
-- WCAG 2.1 AA minimum
-- All interactive elements keyboard accessible
-- All images have alt text
-- Color contrast ratios met
-- Form inputs have labels
-
-## Patterns
-- Loading states (skeleton, spinner, or placeholder)
-- Error states (inline, toast, page-level)
-- Empty states (illustration + CTA)
-- Responsive behavior (mobile-first vs desktop-first)
-```
-
-2. **Existing projects:** If a styleguide or design system already exists (check for
-   `styleguide.md`, `STYLE_GUIDE.md`, design tokens file, Storybook config), read it instead
-   of generating a new one. Reference the existing styleguide in the harness docs.
-3. Present to user for review and customization
-4. Skip for API-only projects
-
-### 9. Recommend Next Steps
-
-Based on project type and mode, recommend a specific path. Use `/conduct` to enforce it.
-
-**Fresh projects:**
-```
-/conduct → /brainstorm → /stories → /conflict-check → /plan → /pipeline → /finish → /retro
-```
-
-**Existing projects — first-time harness setup:**
-Bootstrap created DRAFT as-built stories. The next step validates them:
-```
-/stories (review drafts, add negative paths) → /conflict-check → then normal flow for new work
-```
-
-**Existing projects — adding a new feature:**
-As-built stories already exist. Write new feature stories alongside them:
-```
-/brainstorm (new feature) → /stories (new + review drafts) → /conflict-check (new vs as-built) → /plan → /pipeline
-```
-
-**Existing projects — improving test coverage:**
-As-built stories identify untested files. Use them directly:
-```
-/stories (fill TODO negative paths) → /plan (tasks for missing specs) → /tdd → /finish → /retro
-```
-
-**Existing projects — onboarding (understanding the code):**
-Bootstrap + memory is enough. Read the inventory and memory entries.
-```
-/conduct --status (see what's set up)
-```
+MCP setup is optional. Skip if user declines.
 
 ### 10. Smoke Test
 
-After setup, verify the project actually works:
+Verify the project works: database connects, test framework runs, app loads without errors.
+Report failures before proceeding — a broken foundation wastes all downstream effort.
 
-**For Rails projects:**
-- `bundle exec rails db:migrate:status` — confirms database connection
-- `bundle exec rspec` (or `bundle exec rails test`) — confirms test framework runs
-- `bundle exec rails routes` — confirms app loads without errors
+### 11. Recommend Next Steps
 
-**For Node projects:**
-- `npm test` or `npx jest --passWithNoTests` — confirms test framework
-- `npm run build` (if build script exists) — confirms compilation
-
-**For Python projects:**
-- `pytest --collect-only` — confirms test framework discovers tests
-- `python -c "import <main_module>"` — confirms imports resolve
-
-Report failures before proceeding. A broken project foundation wastes all downstream effort.
-
-### 11. MCP Integration Setup
-
-Walk through connecting the project to external tools via MCP servers:
-
-**GitHub (recommended for all projects with a git remote):**
-1. Check if a git remote exists (`git remote -v`)
-2. If yes, offer to configure the GitHub MCP server in `.claude/settings.json`
-3. This enables: creating issues, PRs, reading PR comments, managing releases — all from within Claude Code
-4. Configuration:
-   ```json
-   {
-     "mcpServers": {
-       "github": {
-         "command": "gh",
-         "args": ["copilot", "mcp"],
-         "env": {}
-       }
-     }
-   }
-   ```
-
-**Issue tracker (optional):**
-- If the user mentions Linear, Jira, or another tracker, offer to configure the appropriate MCP server
-- This enables: creating stories/tickets from `docs/stories/`, linking commits to issues, tracking progress
-- Ask the user which tracker they use and help configure it
-
-**Browser automation (full-stack projects only):**
-- If frontend detection found views or components, offer to configure Chrome/Puppeteer MCP
-- This enables: `/manual-test` to automate browser testing, take screenshots, interact with UI
-- Configuration:
-  ```json
-  {
-    "mcpServers": {
-      "puppeteer": {
-        "command": "npx",
-        "args": ["-y", "@anthropic-ai/puppeteer-mcp"],
-        "env": {}
-      }
-    }
-  }
-  ```
-- For API-only projects, skip this — `curl` is sufficient for manual testing
-
-**Skip if:** The user declines or no git remote exists. MCP setup is optional but recommended.
-
-### 12. Report
-
-Present to the user:
-
-**Fresh project:**
-- Detected project type and tech stack
-- Loaded tech-context (or note that none matched)
-- Created directories
-- Smoke test results (pass/fail)
-- MCP integrations configured (or skipped)
-- Recommended workflow: start with `/brainstorm` or `/conduct`
-
-**Existing project:**
-- Detected project type and tech stack
-- Loaded tech-context
-- Codebase inventory summary (models, controllers, test coverage)
-- Files without test coverage (candidates for stories)
-- Memory bootstrapped (N decisions, M patterns, K gotchas)
-- CLAUDE.md updated (appended, not overwritten)
-- Smoke test results
-- MCP integrations
-- Recommended starting point based on user's goal
+| Mode | Recommendation |
+|------|---------------|
+| Fresh | `/conduct → /brainstorm → /stories → normal flow` |
+| Existing (first harness setup) | `/stories (review drafts) → /conflict-check → normal flow` |
+| Existing (new feature) | `/brainstorm → /stories (new + review drafts) → normal flow` |
+| Existing (improve coverage) | `/stories (fill TODOs) → /plan → /tdd → /finish` |
+| Existing (onboarding) | `/conduct --status` — read inventory and memory |
 
 ## Verification
 
-- [ ] Bootstrap mode correctly determined (fresh, partial, re-bootstrap)
-- [ ] Project type correctly detected from file indicators
+- [ ] Bootstrap mode correctly determined
+- [ ] Project type detected from file indicators
 - [ ] Tech-context loaded if matching stack found
-- [ ] Existing code analyzed (if existing project)
-- [ ] .memory/ directory created with index.md
-- [ ] .memory/ seeded from existing code (if existing project)
+- [ ] Existing code analyzed with inventory presented (if existing project)
+- [ ] As-built stories drafted (if existing project)
+- [ ] Existing architectural decisions documented as ADRs (if existing project)
+- [ ] .memory/ created and seeded (if existing project)
 - [ ] docs/ subdirectories created
-- [ ] CLAUDE.md generated (fresh) or appended to (existing) — never overwritten
-- [ ] Frontend styleguide created or existing one referenced
-- [ ] Smoke test passed (DB connects, tests run, app loads)
-- [ ] MCP integration offered (GitHub, issue tracker)
-- [ ] Report presented with appropriate recommendations for project mode
+- [ ] CLAUDE.md generated or appended — never overwritten
+- [ ] Worktree-compatible infrastructure configuration
+- [ ] Smoke test passed
+- [ ] MCP integration offered

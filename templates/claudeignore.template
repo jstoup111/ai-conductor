@@ -1,0 +1,44 @@
+# Dependencies
+node_modules/
+vendor/bundle/
+.bundle/
+
+# Build artifacts
+tmp/
+log/
+coverage/
+.cache/
+
+# Docker/system
+.docker/
+*.pid
+*.sock
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Assets (binary)
+public/assets/
+public/packs/
+app/assets/images/
+*.png
+*.jpg
+*.gif
+*.ico
+*.woff
+*.woff2
+*.ttf
+*.eot
+
+# Rails
+db/schema.rb
+storage/
+
+# Node
+dist/
+build/
+.next/
+.nuxt/

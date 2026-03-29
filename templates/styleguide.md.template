@@ -1,0 +1,28 @@
+# UI/UX Styleguide
+
+**Date:** YYYY-MM-DD
+**Status:** Draft
+
+## Design Tokens
+- **Colors:** primary, secondary, error, warning, success, neutral scale
+- **Typography:** font families, size scale, weight scale, line heights
+- **Spacing:** spacing scale (4px base recommended)
+- **Breakpoints:** mobile, tablet, desktop thresholds
+
+## Component Conventions
+- Component naming convention (PascalCase, kebab-case)
+- File structure (one component per file, co-located styles/tests)
+- State management approach (local, context, store)
+
+## Accessibility Standards
+- WCAG 2.1 AA minimum
+- All interactive elements keyboard accessible
+- All images have alt text
+- Color contrast ratios met
+- Form inputs have labels
+
+## Patterns
+- Loading states (skeleton, spinner, or placeholder)
+- Error states (inline, toast, page-level)
+- Empty states (illustration + CTA)
+- Responsive behavior (mobile-first vs desktop-first)
