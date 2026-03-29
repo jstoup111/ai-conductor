@@ -181,7 +181,9 @@ else:
     fi
   else
     log "Interactive session (session: ${session_id:0:8}...). Type /quit when done."
+    stop_live_refresh
     claude $session_flag --append-system-prompt "$context. $prompt"
+    start_live_refresh 10
     touch "${PIPELINE_DIR}/session-created"
     append_progress "$prompt"
   fi
@@ -746,7 +748,9 @@ recover() {
 
   local recover_flag="--session-id ${session_id}"
   [ -f "${PIPELINE_DIR}/session-created" ] && recover_flag="--resume ${session_id}"
+  stop_live_refresh
   claude $recover_flag --append-system-prompt "The conduct script hit a failure at step: ${step_name}. Complete this step, then /quit to return to the conductor."
+  start_live_refresh 10
   touch "${PIPELINE_DIR}/session-created"
 
   log "Back from interactive session. Rechecking..."
