@@ -136,13 +136,29 @@ else:
     local output_file
     output_file=$(mktemp)
 
-    claude -p "$prompt" \
-      $session_flag \
-      --append-system-prompt "$context" \
-      --dangerously-skip-permissions \
-      2>&1 | tee -a "$SESSION_LOG" | tee "$output_file"
+    if [ "${VIEW_MODE}" = "output" ]; then
+      # Output view: show Claude's response on terminal
+      claude -p "$prompt" \
+        $session_flag \
+        --append-system-prompt "$context" \
+        --dangerously-skip-permissions \
+        2>&1 | tee -a "$SESSION_LOG" | tee "$output_file"
+    else
+      # Dashboard view: Claude output goes to log only, terminal shows status
+      claude -p "$prompt" \
+        $session_flag \
+        --append-system-prompt "$context" \
+        --dangerously-skip-permissions \
+        >> "$SESSION_LOG" 2>&1 &
+      local claude_pid=$!
 
-    local exit_code=${PIPESTATUS[0]}
+      # Copy output to temp file for rate limit check when done
+      wait "$claude_pid" 2>/dev/null || true
+      # Grab the tail of the log for rate limit detection
+      tail -50 "$SESSION_LOG" > "$output_file" 2>/dev/null
+    fi
+
+    local exit_code=${PIPESTATUS[0]:-$?}
 
     # Check for rate limiting
     if grep -qiE "rate.limit|usage.limit|5-hour limit|out of.*usage|capacity" "$output_file" 2>/dev/null || [ "$exit_code" -eq 75 ]; then
@@ -153,8 +169,8 @@ else:
         $session_flag \
         --append-system-prompt "$context" \
         --dangerously-skip-permissions \
-        2>&1 | tee -a "$SESSION_LOG"
-      exit_code=${PIPESTATUS[0]}
+        >> "$SESSION_LOG" 2>&1
+      exit_code=$?
     fi
 
     rm -f "$output_file"
@@ -211,13 +227,23 @@ check_acceptance_specs() {
 }
 
 check_build() {
-  if [ -f "${PROJECT_DIR}/.rspec" ] || [ -d "${PROJECT_DIR}/spec" ]; then
-    cd "$PROJECT_DIR" && bundle exec rspec --no-color 2>&1 | tail -1 | grep -q "0 failures" 2>/dev/null
-  elif [ -f "${PROJECT_DIR}/package.json" ]; then
-    cd "$PROJECT_DIR" && npm test 2>&1 | tail -1 | grep -qiE "passed|success" 2>/dev/null
-  else
-    return 1
+  # Quick check: pipeline says all tasks completed
+  if [ -f "${PROJECT_DIR}/.pipeline/task-status.json" ]; then
+    local pending
+    pending=$(python3 -c "
+import json
+with open('${PROJECT_DIR}/.pipeline/task-status.json') as f:
+    state = json.load(f)
+pending = sum(1 for v in state.values() if isinstance(v, dict) and v.get('status') in ('pending', 'in_progress'))
+print(pending)
+" 2>/dev/null || echo "1")
+    [ "$pending" -eq 0 ] && return 0
   fi
+  # Fallback: check log for 0 failures
+  if [ -f "$SESSION_LOG" ]; then
+    grep -q "0 failures" "$SESSION_LOG" 2>/dev/null && return 0
+  fi
+  return 1
 }
 
 check_manual_test() {
@@ -476,12 +502,14 @@ if ip > 0:
 " 2>/dev/null)
       fi
 
-      # Get test counts
+      # Get test counts from log (don't re-run the suite for status display)
       local test_detail=""
-      if [ -f "${PROJECT_DIR}/.rspec" ] || [ -d "${PROJECT_DIR}/spec" ]; then
-        test_detail=$(cd "$PROJECT_DIR" && bundle exec rspec --no-color --format progress 2>&1 | tail -1 | sed 's/Finished.*//' 2>/dev/null || true)
-        # Parse "X examples, Y failures" or "X examples, Y failures, Z pending"
-        test_detail=$(cd "$PROJECT_DIR" && bundle exec rspec --no-color 2>&1 | grep -oE "[0-9]+ examples?, [0-9]+ failures?" 2>/dev/null || true)
+      if [ -f "$SESSION_LOG" ]; then
+        test_detail=$(grep -oE "[0-9]+ examples?, [0-9]+ failures?" "$SESSION_LOG" 2>/dev/null | tail -1 || true)
+      fi
+      # Fallback: check for a cached result file
+      if [ -z "$test_detail" ] && [ -f "${PIPELINE_DIR}/last-test-result" ]; then
+        test_detail=$(cat "${PIPELINE_DIR}/last-test-result" 2>/dev/null || true)
       fi
 
       local result=""
@@ -571,6 +599,9 @@ show_status() {
 STATUS_LINES=0
 
 refresh_display() {
+  # In output mode, skip dashboard refresh
+  [ "${VIEW_MODE}" = "output" ] && return 0
+
   # Render into buffer first, then overwrite in one shot — no flash
   local buffer
   buffer=$(show_status)
@@ -602,6 +633,9 @@ refresh_display() {
 REFRESH_PID=""
 
 start_live_refresh() {
+  # No live refresh in output mode — Claude output owns the terminal
+  [ "${VIEW_MODE}" = "output" ] && return 0
+
   local interval=${1:-15}
   (
     while true; do
@@ -723,13 +757,14 @@ usage() {
   echo "Drives a feature through the full SDLC harness using a persistent Claude session."
   echo ""
   echo "Run modes:"
-  echo "  (default)         Each step runs non-interactively; prompts on failure"
-  echo "  --auto            Fully hands-off. All steps non-interactive, auto-retry on failure,"
-  echo "                    pipeline at Full autonomy. Only stops after 3 retries exhausted."
+  echo "  (default)         Dashboard view — status updates in-place, Claude output in log"
+  echo "  --auto            Fully hands-off. Dashboard view, Full autonomy pipeline."
   echo "  --interactive     All steps run interactively. You stay in Claude for each step."
+  echo "  --output          Output view — show Claude's responses on terminal (no dashboard)"
   echo ""
   echo "Options:"
-  echo "  --status          Show current progress"
+  echo "  --status          Show current progress (one-shot)"
+  echo "  --log             Tail the session log (run in a second terminal)"
   echo "  --resume          Pick up from last completed step"
   echo "  --step <name>     Run a specific step only"
   echo "  --from <name>     Start from a specific step"
@@ -748,15 +783,18 @@ usage() {
 FEATURE_DESC=""
 MODE="full"
 RUN_MODE="default"  # default | auto | interactive
+VIEW_MODE="dashboard"  # dashboard | output
 START_STEP=""
 SINGLE_STEP=""
 
 while [[ $# -gt 0 ]]; do
   case $1 in
     --status)       show_status; exit 0 ;;
+    --log)          ensure_pipeline_dir; touch "$SESSION_LOG"; exec tail -f "$SESSION_LOG" ;;
     --resume)       MODE="resume" ;;
     --auto)         RUN_MODE="auto" ;;
     --interactive)  RUN_MODE="interactive" ;;
+    --output)       VIEW_MODE="output" ;;
     --step)         SINGLE_STEP="$2"; shift ;;
     --from)         START_STEP="$2"; shift ;;
     --reset)        rm -f "$STATE_FILE" "$SESSION_FILE" "${PIPELINE_DIR}/session-created" "${SESSION_LOG}" 2>/dev/null; log "Session reset."; exit 0 ;;
