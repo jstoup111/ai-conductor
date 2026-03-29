@@ -71,8 +71,11 @@ Before generating specs, classify each story:
   be covered by TDD request specs during implementation. Do NOT generate an acceptance spec for it.
   Examples: "create a contact", "delete a tag", "update a contact's email"
 
+**If ALL stories are single-endpoint (pure CRUD with no multi-step business logic), skip
+integration spec generation entirely.** Request specs from TDD will cover all acceptance
+criteria. Only generate integration specs when at least one story genuinely crosses 2+ endpoints.
+
 This avoids generating integration specs that duplicate request specs for simple CRUD operations.
-Only generate acceptance specs for stories whose flows genuinely cross 2+ endpoints.
 
 ### 4. Read App Context
 

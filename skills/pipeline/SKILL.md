@@ -48,8 +48,15 @@ Update `.pipeline/task-status.json` — mark task as `in_progress` before coding
 
 **HARD GATE: Evaluator dispatch is mandatory at required batch boundaries.**
 
-At batch boundaries, dispatch an evaluator agent with **fresh context** (no shared state
-with the generator). The evaluator runs the full 3-stage review from the `code-review` skill.
+At batch boundaries, dispatch an evaluator agent with **fresh, scoped context** (no shared
+state with the generator). Provide the evaluator with:
+- The **git diff** for this batch only (not the full codebase)
+- The **acceptance criteria** for this batch's tasks (extracted from stories, not full story files)
+- The **test output summary** (pass/fail counts + failure snippets, not full verbose output)
+- The tech-context review checklist if loaded in session
+
+Do NOT send full story files, full plan files, or unrelated source files. The evaluator
+runs the full 3-stage review from the `code-review` skill on this scoped context.
 
 **Evaluator frequency scaling:** For plans with ≤15 tasks, dispatch the evaluator at every
 OTHER batch boundary, plus always on the final batch. Pre-batch verification (full test suite,

@@ -347,31 +347,48 @@ run_complexity_assessment() {
     fi
   fi
   check_brainstorm || { fail "GATE: Need design doc first"; return 1; }
-  log "Assessing feature complexity (interactive — you can override)..."
-  run_claude "Read the design doc in docs/specs/. Classify this feature's complexity:
+
+  # Assess complexity by reading the design doc directly — no interactive handoff gap
+  log "Assessing feature complexity from design doc..."
+  local tier_result
+  tier_result=$(claude -p "Read the design doc in docs/specs/. Count these signals and output ONLY a single character: S, M, or L.
 
 SIGNALS:
-- Models/tables: 1-3=Small, 4-7=Medium, 8+=Large
-- External integrations: 0=Small, 1-2=Medium, 3+=Large
-- Auth complexity: None/basic=Small, Role-based=Medium, Multi-tenant/OAuth=Large
-- State machines: None=Small, 1 simple=Medium, Complex/multiple=Large
-- Estimated stories: 1-5=Small, 6-15=Medium, 16+=Large
+- Models/tables: 1-3=S, 4-7=M, 8+=L
+- External integrations: 0=S, 1-2=M, 3+=L
+- Auth complexity: None/basic=S, Role-based=M, Multi-tenant/OAuth=L
+- State machines: None=S, 1 simple=M, Complex/multiple=L
+- Estimated stories: 1-5=S, 6-15=M, 16+=L
 
-Majority determines tier. Ties break UP. Present your assessment and ask the user to confirm or override [S/M/L].
+Majority of signals determines tier. Ties break UP.
+Output ONLY the single letter: S, M, or L. Nothing else." \
+    --dangerously-skip-permissions 2>/dev/null | tr -d '[:space:]' | tail -c 1)
 
-IMPORTANT: After the user confirms, write the tier to .pipeline/conduct-state.json as complexity_tier: 'S', 'M', or 'L'.
-Also explain what this means: which steps will be skipped for this tier." "interactive"
+  # Validate — must be S, M, or L
+  case "$tier_result" in
+    S|M|L) ;;
+    *) tier_result="M"; warn "Could not parse tier, defaulting to Medium" ;;
+  esac
 
-  # Read the tier back
-  if [ -f "$STATE_FILE" ]; then
-    local tier
-    tier=$(python3 -c "import json; print(json.load(open('$STATE_FILE')).get('complexity_tier',''))" 2>/dev/null || echo "")
-    if [ -n "$tier" ]; then
-      ok "Complexity tier: ${tier}"; save_state "complexity" "done"; return 0
-    fi
-  fi
-  # Fallback: check if Claude wrote it
-  warn "Tier not found in state — defaulting to Medium"
+  # Show assessment and let user override
+  local tier_name
+  case "$tier_result" in
+    S) tier_name="Small (skips: conflict-check, arch-review, acceptance-specs, pipeline, code-review)" ;;
+    M) tier_name="Medium (full flow, lightweight arch-review)" ;;
+    L) tier_name="Large (full ceremony)" ;;
+  esac
+  echo ""
+  echo -e "  ${BOLD}Complexity assessment: ${tier_result} — ${tier_name}${NC}"
+  echo ""
+  read -r -p "  Accept or override [S/M/L/enter=accept]: " override
+  case "$override" in
+    [Ss]) tier_result="S" ;;
+    [Mm]) tier_result="M" ;;
+    [Ll]) tier_result="L" ;;
+    *)    ;; # accept as-is
+  esac
+
+  # Write to state file
   python3 << PYEOF
 import json, os
 path = "$STATE_FILE"
@@ -379,10 +396,12 @@ state = {}
 if os.path.exists(path):
     with open(path) as f:
         state = json.load(f)
-state["complexity_tier"] = "M"
+state["complexity_tier"] = "$tier_result"
 with open(path, "w") as f:
     json.dump(state, f, indent=2)
 PYEOF
+
+  ok "Complexity tier: ${tier_result}"
   save_state "complexity" "done"
 }
 
