@@ -20,14 +20,13 @@ Does NOT run other skills internally — it assesses state and directs. The user
 Step 1:  /bootstrap             → UNDERSTAND
 Step 2:  /memory                → UNDERSTAND
 Step 3:  /brainstorm            → DECIDE
-Step 3.5: Complexity Assessment  → DECIDE (classify S/M/L, determines which steps run)
-Step 4:  /stories               → DECIDE
-Step 5:  /conflict-check        → DECIDE
-Step 6:  /plan                  → DECIDE
-Step 7:  /architecture-review    → DECIDE (feasibility, alignment, risks)
-Step 8:  /writing-system-tests  → BUILD (failing acceptance specs)
-Step 9:  /pipeline or /tdd      → BUILD (make them pass)
-Step 10: /code-review           → BUILD (if not already run by pipeline)
+Step 4:  Complexity Assessment   → DECIDE (classify S/M/L, determines which steps run)
+Step 5:  /stories               → DECIDE
+Step 6:  /conflict-check        → DECIDE (skipped for Small)
+Step 7:  /plan                  → DECIDE
+Step 8:  /architecture-review    → DECIDE (skipped for Small, lightweight for Medium)
+Step 9:  /writing-system-tests  → BUILD (skipped for Small)
+Step 10: /pipeline or /tdd      → BUILD (pipeline evaluator satisfies code-review gate)
 Step 11: /finish                → SHIP
 Step 12: /manual-test           → SHIP (validate stories, bug loop via /tdd)
 Step 13: /retro                 → SHIP
@@ -44,15 +43,16 @@ Check for these artifacts in order. The **first missing artifact** determines th
 | 1. bootstrap | Project CLAUDE.md exists AND `.memory/` directory exists AND `docs/` subdirectories exist | Glob for `CLAUDE.md` in project root, check `.memory/index.md`, check `docs/specs/` exists |
 | 2. memory | `.memory/index.md` has been read this session | Memory recall happens automatically — if bootstrap is done, mark this as done |
 | 3. brainstorm | At least one file exists in `docs/specs/` | Glob `docs/specs/*.md` |
-| 4. stories | At least one **accepted** story exists in `docs/stories/` (not just DRAFT) | Glob `docs/stories/*.md` — if all stories contain `Status: DRAFT`, this step is pending (run `/stories` to review and accept) |
-| 5. conflict-check | Conflict report exists in `docs/conflicts/` OR a clean-check marker exists | Glob `docs/conflicts/*.md` — if stories exist but no conflict report, this step is pending |
-| 6. plan | At least one file exists in `docs/plans/` | Glob `docs/plans/*.md` |
-| 7. writing-system-tests | Acceptance specs exist for stories | API: glob `spec/integration/*_spec.rb`. Full-stack: glob `spec/system/*_spec.rb`. If stories exist but no acceptance specs, this step is pending |
-| 8. build | Implementation tasks from the plan are completed with passing tests | Check `.pipeline/task-status.json` if pipeline used, OR check that test suite passes and commits exist beyond the plan |
-| 9. code-review | Review verdict exists — check `.pipeline/audit-trail/code-review-satisfied.md` first (written by pipeline after final evaluator APPROVE). If that marker exists, code-review is done without a separate dispatch. Otherwise check if `/code-review` was run manually. | Check marker file → audit trail → ask user |
-| 10. finish | Fresh verification has been performed | Build complete + tests pass |
-| 11. manual-test | Manual test results exist with no FAILs | Glob `docs/manual-test-results.md` — if file contains FAIL rows, step is pending (bugs need /tdd loop) |
-| 12. retro | Retro report exists in `docs/retros/` | Glob `docs/retros/*.md` |
+| 4. complexity | Complexity tier set in `.pipeline/conduct-state.json` | Check `complexity_tier` key exists and is S, M, or L |
+| 5. stories | At least one **accepted** story exists in `docs/stories/` (not just DRAFT) | Glob `docs/stories/*.md` — if all stories contain `Status: DRAFT`, this step is pending |
+| 6. conflict-check | Conflict report exists in `docs/conflicts/` OR skipped (Small tier) | Glob `docs/conflicts/*.md` or check state is "skipped" |
+| 7. plan | At least one file exists in `docs/plans/` | Glob `docs/plans/*.md` |
+| 8. architecture-review | Review exists in `docs/decisions/` OR skipped (Small tier) | Glob `docs/decisions/architecture-review-*.md` or check state is "skipped" |
+| 9. writing-system-tests | Acceptance specs exist OR skipped (Small tier) | Glob `spec/integration/*_spec.rb` or `spec/system/*_spec.rb`, or check state is "skipped" |
+| 10. build | Implementation tasks completed with passing tests | Check `.pipeline/task-status.json` or test suite passes. Pipeline evaluator satisfies code-review gate. |
+| 11. finish | Fresh verification has been performed | Build complete + tests pass |
+| 12. manual-test | Manual test results exist with no FAILs | Glob `docs/manual-test-results.md` — if file contains FAIL rows, step is pending |
+| 13. retro | Retro report exists in `docs/retros/` | Glob `docs/retros/*.md` |
 
 ### 2. Report Status
 

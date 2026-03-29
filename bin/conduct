@@ -148,15 +148,16 @@ run_claude() {
   iteration=$(python3 -c "
 import json, os
 path = '$STATE_FILE'
+skip_keys = {'last_step', 'feature_desc', 'complexity_tier'}
 if os.path.exists(path):
     with open(path) as f:
         state = json.load(f)
-    done = sum(1 for v in state.values() if v in ('done', 'skipped') and not v == state.get('last_step'))
+    done = sum(1 for k, v in state.items() if k not in skip_keys and isinstance(v, str) and v in ('done', 'skipped'))
     print(done)
 else:
     print(0)
 ")
-  local context="[Conduct step ${iteration}/10] Feature: ${FEATURE_DESC:-unknown}"
+  local context="[Conduct step ${iteration}/13] Feature: ${FEATURE_DESC:-unknown}"
 
   if [ "$mode" = "print" ]; then
     log "Sending to Claude (session: ${session_id:0:8}...)..."
@@ -380,13 +381,18 @@ Output ONLY the single letter: S, M, or L. Nothing else." \
   echo ""
   echo -e "  ${BOLD}Complexity assessment: ${tier_result} — ${tier_name}${NC}"
   echo ""
-  read -r -p "  Accept or override [S/M/L/enter=accept]: " override
-  case "$override" in
-    [Ss]) tier_result="S" ;;
-    [Mm]) tier_result="M" ;;
-    [Ll]) tier_result="L" ;;
-    *)    ;; # accept as-is
-  esac
+  # Allow override in interactive modes; skip in auto mode or non-TTY
+  if [ "${RUN_MODE}" != "auto" ] && [ -t 0 ]; then
+    read -r -p "  Accept or override [S/M/L/enter=accept]: " override
+    case "$override" in
+      [Ss]) tier_result="S" ;;
+      [Mm]) tier_result="M" ;;
+      [Ll]) tier_result="L" ;;
+      *)    ;; # accept as-is
+    esac
+  else
+    log "Auto mode — accepting complexity tier: ${tier_result}"
+  fi
 
   # Write to state file
   python3 << PYEOF
@@ -469,6 +475,10 @@ run_conflict_check() {
     if $has_blocking; then
       warn "Blocking conflicts found — interactive session for resolution..."
       run_claude "There are blocking conflicts in docs/conflicts/. Present each to the user with resolution options. The user must choose. Update stories after each resolution. Re-run conflict check until clean." "interactive"
+      # Verify conflicts were actually resolved
+      if ! compgen -G "${PROJECT_DIR}/docs/conflicts/*clean-check*" > /dev/null 2>&1; then
+        fail "Blocking conflicts still unresolved"; save_state "conflict_check" "failed"; return 1
+      fi
     fi
     ok "Conflict check complete"; save_state "conflict_check" "done"; return 0
   fi
@@ -480,7 +490,12 @@ run_plan() {
   if check_plan; then
     ok "Already complete"; save_state "plan" "done"; return 0
   fi
-  check_conflict_check || { fail "GATE: Need clean conflict-check first"; return 1; }
+  # Gate: conflict-check must be done or skipped (Small tier skips it)
+  local cc_state
+  cc_state=$(get_state "conflict_check")
+  if [ "$cc_state" != "done" ] && [ "$cc_state" != "skipped" ]; then
+    fail "GATE: Need conflict-check first (state: $cc_state)"; return 1
+  fi
   log "Generating implementation plan..."
   run_claude "Run the /plan skill. Generate plan in docs/plans/ with 2-5 min tasks, dependency graph, coverage mapping. Check scope: warn if >20 tasks, hard stop if >40."
   check_plan && { ok "Plan created"; save_state "plan" "done"; return 0; }
@@ -1082,17 +1097,17 @@ done
 # Save feature description immediately if provided (before any checks can fail)
 if [ -n "$FEATURE_DESC" ]; then
   ensure_pipeline_dir
-  python3 << PYEOF
-import json, os
-path = "$STATE_FILE"
+  python3 -c "
+import json, os, sys
+path = '$STATE_FILE'
 state = {}
 if os.path.exists(path):
     with open(path) as f:
         state = json.load(f)
-state["feature_desc"] = """$FEATURE_DESC"""
-with open(path, "w") as f:
+state['feature_desc'] = sys.argv[1]
+with open(path, 'w') as f:
     json.dump(state, f, indent=2)
-PYEOF
+" "$FEATURE_DESC"
 fi
 
 # Restore feature description from state if resuming without one
@@ -1105,27 +1120,27 @@ ensure_pipeline_dir
 # Single step mode
 if [ -n "$SINGLE_STEP" ]; then
   case "$SINGLE_STEP" in
-    bootstrap)            run_bootstrap ;;
-    memory)               run_memory ;;
-    brainstorm)           run_brainstorm ;;
-    complexity)           run_complexity_assessment ;;
-    stories)              run_stories ;;
-    conflict-check)       run_conflict_check ;;
-    plan)                 run_plan ;;
-    architecture-review)  run_architecture_review ;;
-    acceptance-specs|writing-system-tests) run_acceptance_specs ;;
-    build)                run_build ;;
-    finish)               run_finish ;;
-    manual-test)          run_manual_test ;;
-    retro)                run_retro ;;
+    bootstrap)                              run_bootstrap ;;
+    memory)                                 run_memory ;;
+    brainstorm)                             run_brainstorm ;;
+    complexity)                             run_complexity_assessment ;;
+    stories)                                run_stories ;;
+    conflict-check|conflict_check)          run_conflict_check ;;
+    plan)                                   run_plan ;;
+    architecture-review|architecture_review) run_architecture_review ;;
+    acceptance-specs|acceptance_specs|writing-system-tests) run_acceptance_specs ;;
+    build)                                  run_build ;;
+    finish)                                 run_finish ;;
+    manual-test|manual_test)                run_manual_test ;;
+    retro)                                  run_retro ;;
     *) fail "Unknown step: $SINGLE_STEP"; usage; exit 1 ;;
   esac
   show_status
   exit 0
 fi
 
-# Step registry
-ALL_STEPS=(bootstrap memory brainstorm complexity stories conflict-check plan architecture-review acceptance-specs build finish manual-test retro)
+# Step registry — use underscores to match save_state() keys in conduct-state.json
+ALL_STEPS=(bootstrap memory brainstorm complexity stories conflict_check plan architecture_review acceptance_specs build finish manual_test retro)
 STEP_FUNCS=(run_bootstrap run_memory run_brainstorm run_complexity_assessment run_stories run_conflict_check run_plan run_architecture_review run_acceptance_specs run_build run_finish run_manual_test run_retro)
 
 # Determine starting point
@@ -1148,8 +1163,10 @@ if [ "$MODE" = "resume" ] || [ -n "$START_STEP" ]; then
     done
     log "Resuming at: ${ALL_STEPS[$start_index]:-done} (last: $last = $last_status)"
   elif [ -n "$START_STEP" ]; then
+    # Normalize dashes to underscores for matching
+    local normalized_start="${START_STEP//-/_}"
     for i in "${!ALL_STEPS[@]}"; do
-      if [ "${ALL_STEPS[$i]}" = "$START_STEP" ]; then
+      if [ "${ALL_STEPS[$i]}" = "$normalized_start" ]; then
         start_index=$i
         break
       fi
