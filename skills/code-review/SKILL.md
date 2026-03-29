@@ -22,7 +22,7 @@ Gather what the evaluator needs:
 - The story/acceptance criteria being implemented (from `docs/stories/`)
 - The implementation plan task (from `docs/plans/`)
 - The test results (full suite output)
-- Tech-context review checklist if loaded (e.g., `tech-context/rails-postgres/review.md`)
+- Tech-context review checklist if loaded in session
 
 ### 2. Dispatch Evaluator Agent
 
@@ -33,7 +33,7 @@ Provide the evaluator with:
 - The diff
 - The spec (story + acceptance criteria)
 - The test output
-- The review checklist (generic + tech-context if available)
+- The review checklist (generic + tech-context from session if available)
 
 ### 3. Three-Stage Review
 

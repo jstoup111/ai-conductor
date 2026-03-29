@@ -20,6 +20,7 @@ Does NOT run other skills internally — it assesses state and directs. The user
 Step 1:  /bootstrap             → UNDERSTAND
 Step 2:  /memory                → UNDERSTAND
 Step 3:  /brainstorm            → DECIDE
+Step 3.5: Complexity Assessment  → DECIDE (classify S/M/L, determines which steps run)
 Step 4:  /stories               → DECIDE
 Step 5:  /conflict-check        → DECIDE
 Step 6:  /plan                  → DECIDE
@@ -48,7 +49,7 @@ Check for these artifacts in order. The **first missing artifact** determines th
 | 6. plan | At least one file exists in `docs/plans/` | Glob `docs/plans/*.md` |
 | 7. writing-system-tests | Acceptance specs exist for stories | API: glob `spec/integration/*_spec.rb`. Full-stack: glob `spec/system/*_spec.rb`. If stories exist but no acceptance specs, this step is pending |
 | 8. build | Implementation tasks from the plan are completed with passing tests | Check `.pipeline/task-status.json` if pipeline used, OR check that test suite passes and commits exist beyond the plan |
-| 9. code-review | Review verdict exists in `.pipeline/audit-trail/` OR code-review was run | Check audit trail or ask user |
+| 9. code-review | Review verdict exists — check `.pipeline/audit-trail/code-review-satisfied.md` first (written by pipeline after final evaluator APPROVE). If that marker exists, code-review is done without a separate dispatch. Otherwise check if `/code-review` was run manually. | Check marker file → audit trail → ask user |
 | 10. finish | Fresh verification has been performed | Build complete + tests pass |
 | 11. manual-test | Manual test results exist with no FAILs | Glob `docs/manual-test-results.md` — if file contains FAIL rows, step is pending (bugs need /tdd loop) |
 | 12. retro | Retro report exists in `docs/retros/` | Glob `docs/retros/*.md` |
@@ -76,6 +77,35 @@ Present a clear status dashboard:
 ### Next Step
 Run `/conflict-check` to check stories for contradictions before planning.
 ```
+
+### 2.5 Complexity Assessment (after brainstorm, before stories)
+
+After the design doc is approved, classify the feature's complexity tier:
+
+| Signal | Small | Medium | Large |
+|---|---|---|---|
+| Models/tables | 1-3 | 4-7 | 8+ |
+| External integrations | 0 | 1-2 | 3+ |
+| Auth/authz | None/basic | Role-based | Multi-tenant/OAuth |
+| State machines | None | 1 simple | Complex/multiple |
+| Estimated stories | 1-5 | 6-15 | 16+ |
+
+Majority of signals determines the tier. Ties break toward the higher tier. **The user can
+override.** Present it as: "Complexity: SMALL (3 models, no deps). Override? [S/M/L/accept]"
+
+Store the tier in `.pipeline/conduct-state.json` as `"complexity_tier": "S"` (or M/L).
+
+**Tier-specific step behavior:**
+
+| Step | Small | Medium | Large |
+|---|---|---|---|
+| conflict-check | **Skip** | Run | Run |
+| architecture-review | **Skip** | Lightweight (feasibility + alignment only) | Full |
+| writing-system-tests | **Skip** (request specs in TDD suffice) | Run | Run |
+| pipeline | **Skip** (use direct /tdd) | Run | Run |
+| code-review | **Skip** (domain review in TDD suffices) | Run | Run |
+
+**Small flow:** brainstorm → stories → plan → direct /tdd → finish → retro
 
 ### 3. Gate Enforcement
 
@@ -114,11 +144,11 @@ Before suggesting the next step, verify that the previous step's **quality gates
 | memory | Yes (advisory) | Fresh project may have no memory |
 | brainstorm | Yes (advisory) | User may already have a clear design |
 | stories | No (gating) | Negative paths are mandatory for TDD |
-| conflict-check | No (gating) | Must verify zero blocking conflicts |
+| conflict-check | Tier-dependent | Skip for Small, required for Medium/Large |
 | plan | No (gating) | Tasks needed for build phase |
-| writing-system-tests | No (gating) | Acceptance specs must exist before implementation |
+| writing-system-tests | Tier-dependent | Skip for Small (request specs in TDD suffice), required for Medium/Large |
 | build | No (structural) | This is the implementation |
-| code-review | No (gating) | Quality gate before ship |
+| code-review | Tier-dependent | Skip for Small (domain review suffices), required for Medium/Large |
 | finish | No (gating) | Fresh verification required |
 | retro | Yes (advisory) | Recommended but not blocking |
 

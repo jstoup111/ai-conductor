@@ -52,19 +52,20 @@ standard implementation, Haiku for mechanical checks.
 |---|---|---|
 | brainstorm | opus | Design decisions, trade-off analysis require deep reasoning |
 | stories | sonnet | Pattern-following from design doc, structured output |
-| conflict-check | opus | Cross-referencing multiple stories, subtle contradiction detection |
+| conflict-check | sonnet (S/M), opus (L) | Pairwise comparison is manageable for Sonnet with ≤15 stories; Large needs Opus for subtle contradictions |
 | plan | sonnet | Structured task breakdown from stories |
 | writing-system-tests | sonnet | Generating specs from acceptance criteria — templated work |
 | tdd (RED phase) | sonnet | Writing one test at a time — focused, constrained |
 | tdd (GREEN phase) | sonnet | Writing minimal implementation — constrained scope |
-| domain-reviewer | opus | Subtle judgment calls on primitive obsession, boundaries |
+| domain-reviewer | sonnet (S/M), opus (L) | With scoped context (inlined code + type list), focused checklist review; Large features need Opus for cross-boundary judgment |
 | evaluator | opus | Calibrated skepticism requires deep analysis |
 | code-review | opus | Multi-dimensional analysis (spec, quality, domain) |
 | debugging | opus | Root cause analysis requires reasoning chains |
-| pipeline | sonnet | Orchestration — mostly dispatching and state tracking |
+| pipeline | haiku | State tracking, dispatch orchestration — purely mechanical |
 | finish | haiku | Mechanical checks — run tests, check git status, verify coverage |
-| retro | opus | Analytical — comparing patterns, identifying trends |
+| retro | sonnet | Structured analysis from concrete data; Part C (context efficiency) is checklist-based |
 | bootstrap | sonnet | Detection and scaffolding — largely mechanical |
+| conduct | haiku | Artifact checking and status reporting — mechanical |
 | memory | haiku | Read/write files, update index — mechanical |
 | conduct | haiku | Artifact checks and status reporting — mechanical |
 
@@ -77,7 +78,12 @@ Agent(subagent_type="general-purpose", model="opus", prompt="Evaluate this code.
 ## Tech-Context
 
 Stack-specific knowledge lives in `tech-context/`. Bootstrap detects the project stack and loads
-the matching context. Skills reference tech-context when available, work without it.
+the matching context into the session. Skills reference tech-context when available, work without it.
+
+**Load once, reference everywhere:** Tech-context files are read once during `/bootstrap` and
+become part of the session context. Skills that need tech-context (stories, tdd, writing-system-tests,
+code-review, debugging, retro) should reference the already-loaded context rather than re-reading
+the files independently. This avoids redundant file reads across skill invocations.
 
 ## Enforcement Levels
 

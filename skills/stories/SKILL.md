@@ -18,7 +18,7 @@ ensuring error handling and edge cases are tested first, not bolted on later.
 ### 1. Load Input
 
 - Read the approved design document from `docs/specs/`
-- Check tech-context if loaded (e.g., `tech-context/rails-postgres/stories.md` for Rails-specific negative paths)
+- Reference tech-context from session if loaded (e.g., Rails-specific negative paths)
 - Review existing stories in `docs/stories/` for this feature area (avoid duplicates)
 - **Check for DRAFT stories from `/bootstrap`** — if stories have `Status: DRAFT`, review and
   complete them rather than generating from scratch. Fill in `TODO` negative paths, verify happy
@@ -45,7 +45,17 @@ As a [role], I want [action] so that [outcome].
 - Given [precondition], when [unauthorized access attempted], then [specific rejection]
 - Given [precondition], when [dependency times out], then [specific graceful degradation]
 - Given [precondition], when [concurrent modification occurs], then [specific conflict resolution]
+
+### Done When
+- [ ] [Concrete, verifiable output — e.g., POST /contacts returns 201 with contact JSON including `id`, `name`, `email`]
+- [ ] [Persistent side effect confirmed — e.g., contact row exists in database with correct attributes]
+- [ ] [Contract/format verified — e.g., response envelope matches API contract]
 ```
+
+> **"Done When" is the primary success gate.** Acceptance criteria describe *behavior*; "Done When"
+> defines the measurable outputs the evaluator checks to confirm the story is complete. Every story
+> MUST have a "Done When" section. Checkboxes must be concrete and independently verifiable — not
+> restatements of acceptance criteria.
 
 ### 3. Mandatory Negative Path Categories
 
@@ -71,6 +81,11 @@ explicitly evaluated and included when relevant:
 - Mass assignment via unexpected params
 - Missing database indexes
 - Background job failure and retry behavior
+
+**Complexity-Aware Depth:** When the feature is classified as **Small** by `/conduct`'s
+complexity assessment, negative paths are required per STORY (at least 1 per story), not per
+criterion. Focus on the highest-risk negative path for each story (typically validation/auth).
+For **Medium** and **Large** features, the full per-criterion rule applies.
 
 ### 4. Quality Gates
 
@@ -99,6 +114,7 @@ with existing stories.
 - [ ] Every story has both happy AND negative paths
 - [ ] At least one negative path per acceptance criterion
 - [ ] All negative paths are concrete Given/When/Then (not vague)
+- [ ] Every story has a "Done When" section with concrete, verifiable output checkboxes
 - [ ] Stack-specific negative paths included if tech-context loaded
 - [ ] Stories saved to `docs/stories/<feature-name>.md`
 - [ ] No duplicate stories with existing content

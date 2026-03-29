@@ -42,27 +42,19 @@ For each task in the implementation plan:
 
 **Task status tracking is mandatory and must be done by the pipeline agent, not the hook.**
 
-Before ANY code work on a task:
-```bash
-# Mark in_progress — do this FIRST, before writing any code
-python3 -c "import json; d=json.load(open('.pipeline/task-status.json')); d['task-N']['status']='in_progress'; json.dump(d,open('.pipeline/task-status.json','w'),indent=2)"
-```
-
-After committing the task:
-```bash
-# Mark completed — do this AFTER git commit succeeds
-python3 -c "import json; d=json.load(open('.pipeline/task-status.json')); d['task-N']['status']='completed'; json.dump(d,open('.pipeline/task-status.json','w'),indent=2)"
-```
-
-The post-commit hook is a backup, not the primary mechanism. If task-status.json is stale
-(shows in_progress when git log shows the task was committed), fix it immediately.
+Update `.pipeline/task-status.json` — mark task as `in_progress` before coding, `completed` after commit. The post-commit hook is a backup; fix stale status immediately if detected.
 
 ### Quality Gates
 
-**HARD GATE: Evaluator dispatch is mandatory. No batch completes without an evaluator verdict.**
+**HARD GATE: Evaluator dispatch is mandatory at required batch boundaries.**
 
-At every batch boundary, dispatch an evaluator agent with **fresh context** (no shared state
+At batch boundaries, dispatch an evaluator agent with **fresh context** (no shared state
 with the generator). The evaluator runs the full 3-stage review from the `code-review` skill.
+
+**Evaluator frequency scaling:** For plans with ≤15 tasks, dispatch the evaluator at every
+OTHER batch boundary, plus always on the final batch. Pre-batch verification (full test suite,
+linter, `/simplify`) still runs at EVERY boundary regardless. For plans with >15 tasks,
+dispatch the evaluator at every batch boundary (no change).
 
 **Enforcement:** After each batch, write the evaluator verdict to
 `.pipeline/audit-trail/batch-N/review.json`. If this file does not exist for the current
@@ -92,6 +84,11 @@ The pipeline **cannot proceed** past a batch boundary without an evaluator verdi
 Skipping the evaluator is what allows duplication, missing specs, and security gaps to compound
 across an entire pipeline run. This is the harness's strongest quality mechanism — never skip it.
 
+**Code-review gate satisfaction:** The final batch evaluator verdict satisfies the code-review
+gate (Step 10 in `/conduct`). After the final batch evaluator returns APPROVE, write a marker
+file at `.pipeline/audit-trail/code-review-satisfied.md` containing the verdict date and batch
+number. When pipeline is used, a separate `/code-review` dispatch is not needed.
+
 ### Rework Budget
 
 Each task gets **3 rework cycles** per quality gate:
@@ -109,27 +106,7 @@ If stories in `docs/stories/` have been modified since the plan was created:
 
 ### State Management
 
-Track all state in `.pipeline/`:
-
-```
-.pipeline/
-├── config.yaml              # Autonomy level, project references
-├── plan-ref.md              # Path to the active implementation plan
-├── task-status.json         # Per-task status tracking
-│   {
-│     "task-1": {"status": "completed", "rework_cycles": 0},
-│     "task-2": {"status": "in_progress", "rework_cycles": 1},
-│     "task-3": {"status": "pending"}
-│   }
-└── audit-trail/
-    ├── task-1/
-    │   ├── review.json      # Evaluator verdict
-    │   ├── rework-1.json    # First rework attempt (if any)
-    │   └── commit.txt       # Final commit SHA
-    ├── task-2/
-    │   └── ...
-    └── summary.json         # Aggregate stats for retro
-```
+Track all state in `.pipeline/`: `config.yaml` (autonomy level, project refs), `plan-ref.md` (active plan path), `task-status.json` (per-task status and rework cycle counts), and `audit-trail/` (per-task `review.json`, `rework-N.json`, `commit.txt`, plus `summary.json` for retro).
 
 ### Parallel Execution (Full Autonomy Only)
 
@@ -163,67 +140,32 @@ At natural batch boundaries (after completing a group of related tasks):
 
 ### Micro-Retros (Per-Phase)
 
-At each batch boundary, perform a lightweight retro covering just the completed batch:
-
-1. **Spec compliance** — Are all acceptance criteria for completed tasks covered by tests?
-2. **Duplication check** — Has business logic been copy-pasted? Extract on 2nd occurrence.
-3. **Complexity check** — Any methods >15 lines or >3 branches? Extract to service objects.
-4. **Gate accuracy** — Did the evaluator catch real issues? Miss anything obvious?
-5. **Autonomy friction** — Did any approval prompt fire more than once for the same action?
-
-Record findings in `.pipeline/audit-trail/batch-N-retro.md`. These feed the full `/retro`
-at the end, giving it phase-level granularity instead of just a single end-of-feature view.
+At each batch boundary, perform a lightweight retro: spec compliance, duplication, complexity, gate accuracy, and autonomy friction. Record findings in `.pipeline/audit-trail/batch-N-retro.md`. These feed the full `/retro` with phase-level granularity.
 
 ### Memory Checkpoint (Per-Batch)
 
 **GATE: Every batch must persist at least one `.memory/` entry before proceeding.**
 
-At each batch boundary, ask:
-- **Decisions** — What architectural choices were made? Why? → `.memory/decisions/`
-- **Patterns** — What code patterns emerged or were reused? → `.memory/patterns/`
-- **Gotchas** — What was surprising, tricky, or broke unexpectedly? → `.memory/gotchas/`
-- **Context** — What domain knowledge was learned? → `.memory/context/`
-
-Update `.memory/index.md` after each write. An empty `.memory/` at the end of a pipeline
-run means the harness failed — future sessions will have no context for why decisions were made.
+Persist decisions, patterns, gotchas, or context learned during the batch. Update `.memory/index.md` after each write.
 
 ### Progress Log
 
-Append to `.pipeline/progress.log` at every batch boundary. This is a chronological narrative
-for cross-session continuity — when a new session starts, reading the last 30 lines tells the
-agent exactly where things stand.
+Append to `.pipeline/progress.log` at every batch boundary — a chronological narrative for cross-session continuity. The `session-start-context.sh` hook reads the last 30 lines at session start.
 
 ```
 ## Batch 1 — 2026-03-28 14:30
-- Completed: task-1 (User model + validations), task-2 (registration endpoint)
-- Rework: 0 cycles
-- Issue hit: PostgreSQL JSONB casting needed explicit type (wrote .memory/gotchas/)
-- Next up: task-3 (authentication)
-- State: 2/13 tasks, all tests passing, branch merge-ready
+- Completed: task-1 (User model), task-2 (registration endpoint) | Rework: 0 cycles
+- Issue: PostgreSQL JSONB casting needed explicit type (wrote .memory/gotchas/)
+- Next: task-3 (authentication) | State: 2/13 tasks, all tests passing, merge-ready
 ```
-
-The `session-start-context.sh` hook reads the last 30 lines of this file at session start.
 
 ### Git Revert Recovery
 
-When the rework budget is exhausted (3 cycles failed), before escalating consider:
-
-1. Find the last clean batch boundary commit: `git log --oneline | head -10`
-2. Check if reverting to that commit and re-approaching would be faster than patching
-3. If yes: `git revert --no-commit HEAD~N..HEAD` to undo the failed batch, then re-attempt
-
-The last clean TDD commit is always a safe revert point. Each batch boundary produces a
-merge-ready state, so reverting to one never loses unrelated work.
+When the rework budget is exhausted, consider reverting to the last clean batch boundary commit (`git revert --no-commit HEAD~N..HEAD`) and re-approaching rather than continuing to patch. Each batch boundary is a merge-ready state, so reverting never loses unrelated work.
 
 ### Pipeline Summary
 
-Track and surface:
-- Tasks completed / total
-- Rework cycles used
-- Human interventions triggered
-- Time between first task start and last task commit
-
-This data feeds directly into the `retro` skill.
+Track tasks completed/total, rework cycles used, human interventions triggered, and elapsed time (first task start to last commit). This data feeds directly into the `retro` skill.
 
 ## Verification
 

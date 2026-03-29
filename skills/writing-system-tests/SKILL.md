@@ -61,6 +61,19 @@ Extract from each story file:
 
 **Both happy AND negative paths become tests.** Negative paths are not optional.
 
+### 3a. Classify Story Flows
+
+Before generating specs, classify each story:
+
+- **Multi-endpoint flow** (2+ endpoints in the happy path): Generate an integration/acceptance spec.
+  Examples: "create a contact then assign tags", "search contacts filtered by tag"
+- **Single-endpoint operation** (1 endpoint CRUD): Mark as `request-spec-only` — this story will
+  be covered by TDD request specs during implementation. Do NOT generate an acceptance spec for it.
+  Examples: "create a contact", "delete a tag", "update a contact's email"
+
+This avoids generating integration specs that duplicate request specs for simple CRUD operations.
+Only generate acceptance specs for stories whose flows genuinely cross 2+ endpoints.
+
 ### 4. Read App Context
 
 For each story, read the relevant:
@@ -78,39 +91,19 @@ correct RED behavior.
 **File mapping:** `docs/stories/links.md` → `spec/integration/links_spec.rb`
 
 ```ruby
-require "rails_helper"
-
 RSpec.describe "Link lifecycle", type: :request do
   describe "Story: Create and use a short link" do
     context "happy path" do
       it "creates a link, redirects via short code, and records a click" do
-        # Step 1: Create the link
-        post "/links", params: { link: { original_url: "https://example.com" } },
-                        headers: auth_headers
-        expect(response).to have_http_status(:created)
+        post "/links", params: { link: { original_url: "https://example.com" } }, headers: auth_headers
         short_code = json_body["link"]["short_code"]
-
-        # Step 2: Visit the short URL
         get "/#{short_code}"
         expect(response).to redirect_to("https://example.com")
-
-        # Step 3: Verify click was recorded
-        get "/links", headers: auth_headers
-        link = json_body["links"].find { |l| l["short_code"] == short_code }
-        expect(link["click_count"]).to eq(1)
       end
     end
-
     context "negative: expired link" do
-      it "creates a link, lets it expire, and gets 410 Gone" do
-        post "/links", params: { link: { original_url: "https://example.com", expires_at: 1.hour.from_now } },
-                        headers: auth_headers
-        short_code = json_body["link"]["short_code"]
-
-        travel_to 2.hours.from_now do
-          get "/#{short_code}"
-          expect(response).to have_http_status(:gone)
-        end
+      it "returns 410 Gone for an expired link" do
+        # create link, travel past expiry, assert :gone
       end
     end
   end
@@ -139,56 +132,30 @@ Neither duplicates the other.
 - Auth uses helper methods, not hardcoded tokens
 - No mocking external services in integration specs — test the real flow
 
-**Helpers to create if missing:**
-
-```ruby
-# spec/support/request_helpers.rb
-module RequestHelpers
-  def json_body
-    JSON.parse(response.body)
-  end
-
-  def auth_headers(user = nil)
-    user ||= create(:user)
-    token = user.sessions.create!.token
-    { "Authorization" => "Bearer #{token}" }
-  end
-end
-
-RSpec.configure do |config|
-  config.include RequestHelpers, type: :request
-end
-```
+**Helpers to create if missing:** Create `spec/support/request_helpers.rb` with `json_body` and `auth_headers` helpers if missing.
 
 ### 5b. Generate System Specs (Full-Stack Projects)
 
 **File mapping:** `docs/stories/auth.md` → `spec/system/auth_spec.rb`
 
 ```ruby
-require "rails_helper"
-
 RSpec.describe "Authentication", type: :system do
-  before do
-    driven_by :selenium, using: :headless_chrome
-  end
+  before { driven_by :selenium, using: :headless_chrome }
 
   describe "Story: User Registration" do
     context "happy path" do
       it "registers with valid email and password" do
         visit new_registration_path
         fill_in "Email", with: "user@example.com"
-        fill_in "Password", with: "secure_password"
         click_button "Sign Up"
         expect(page).to have_text("Welcome")
       end
     end
-
     context "negative: duplicate email" do
       it "shows error for existing email" do
         create(:user, email: "taken@example.com")
         visit new_registration_path
         fill_in "Email", with: "taken@example.com"
-        fill_in "Password", with: "secure_password"
         click_button "Sign Up"
         expect(page).to have_text("already taken")
       end
@@ -217,28 +184,20 @@ bundle exec rspec spec/system/
 Confirm tests fail for the **right reasons**. This is critical:
 
 **Acceptable pre-implementation failures:**
-- `RoutingError` — route doesn't exist yet
-- `NameError` / `UndefinedTable` — model/class doesn't exist yet
+- `RoutingError`, `NameError`, `UndefinedTable` — infrastructure doesn't exist yet
 - `404 Not Found` — endpoint not implemented
 
 **Unacceptable failures (fix the spec):**
-- Test passes when it shouldn't — behavior already exists or assertion is wrong
-- Test fails with wrong error — e.g., `can't be blank` when you expected `not found`
-- Syntax errors or typos in the spec itself
+- Test passes when it shouldn't, or fails with a wrong error (e.g., `can't be blank` when expecting `not found`)
+- Syntax errors or typos in the spec
 
-**A test that fails for the wrong reason is not RED — it's broken.** The failure message must
-align with what the test is asserting. If a collision-exhaustion test fails with "can't be blank"
-instead of "unable to generate unique code," the stub is wrong.
+**A test that fails for the wrong reason is not RED — it's broken.**
 
 ### Stubbing Rules for Pre-Implementation Specs
 
-**Stub at system boundaries, not internal methods:**
-- **Good:** `allow(SecureRandom).to receive(:alphanumeric).and_return("aaa")` — stable public API
-- **Bad:** `allow(model).to receive(:generate_short_code)` — method doesn't exist yet, will couple to implementation
-
-Internal methods (private callbacks, service internals) don't exist pre-implementation. Stubs
-targeting them will silently break when the implementation takes a different shape. Stub at the
-edges: `SecureRandom`, `Time.zone.now`, external API clients, `ENV` values.
+- Stub at system boundaries only: `SecureRandom`, `Time.zone.now`, external API clients, `ENV` values
+- Never stub internal methods (private callbacks, service internals) — they don't exist yet and coupling to them breaks on implementation
+- Example of correct boundary stub: `allow(SecureRandom).to receive(:alphanumeric).and_return("aaa")`
 
 ### 7. Commit the Failing Tests
 
@@ -270,12 +229,3 @@ Unit specs (TDD per-model)         — Model logic in isolation
 Acceptance specs are expensive — only use them for multi-step flows that can't be verified at a
 lower level. This skill handles the top layer. TDD handles the bottom two.
 
-## Common Mistakes
-
-- **Skipping acceptance tests** — jumping straight to unit tests leaves story coverage unverified
-- **Testing implementation details** — assert what the user/client sees, not internal state
-- **Shared state between tests** — each `it` block sets up its own data
-- **Mocking in acceptance tests** — these test the real stack, end to end
-- **Only testing happy paths** — every negative path in the story gets a test too
-- **Accepting wrong failure reason as RED** — a test that fails with `can't be blank` when you expected `not found` is broken, not RED
-- **Stubbing internal methods pre-implementation** — stub boundaries (`SecureRandom`, `Time.zone.now`), not methods that don't exist yet

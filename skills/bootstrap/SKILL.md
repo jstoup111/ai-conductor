@@ -69,6 +69,23 @@ If the directory is empty or has no project files, ask the user what to create:
    - Create `docker-compose.yml` with the available port
    - Update `database.yml` (or equivalent) with matching connection settings
    - Start the container and create databases
+
+### Worktree Compatibility
+
+All project infrastructure must be namespaced to support git worktrees running in parallel:
+
+- **Database name:** Must include a branch/worktree identifier. For Rails: configure
+  `database.yml` to derive the DB name from `ENV['WORKTREE_DB_SUFFIX']` or the current
+  directory name (e.g., `myapp_development_feature_xyz`).
+- **Redis namespace:** If Redis is used, namespace keys by worktree
+  (e.g., `ENV['REDIS_URL']` includes a DB number or key prefix).
+- **Ports:** If dev servers bind to specific ports, use `ENV['PORT']` with a default that
+  can be overridden per worktree.
+- **Temp/cache dirs:** Use project-local `.tmp/` or `tmp/` rather than system-global paths.
+
+When generating `database.yml` or similar config, include a comment explaining the worktree
+namespacing strategy so future developers understand why the name is dynamic.
+
 6. **Set up .gitignore BEFORE first commit:**
    - Ensure these are in `.gitignore` before any `git add`:
      ```

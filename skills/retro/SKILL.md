@@ -18,20 +18,8 @@ skill improvements, evaluator calibration, and new stories.
 ### Data Collection
 
 Before analysis, gather:
-
-**Harness data:**
-- `.pipeline/audit-trail/` — gate pass/fail history, rework cycles, task timings
-- `.pipeline/task-status.json` — completion stats
-- Git log for the feature branch — commit frequency, reverts, amend count
-- `.memory/gotchas/` — issues encountered during this feature
-- `docs/conflicts/` — conflicts detected and resolved
-- Code review findings from audit trail — recurring themes
-
-**Application data:**
-- The code diff for the entire feature (from branch point to HEAD)
-- Test suite output (coverage, pass/fail counts, timing)
-- Stories from `docs/stories/` — the acceptance criteria we targeted
-- Tech-context if loaded — stack-specific review criteria
+- **Harness:** `.pipeline/audit-trail/` (gate history, rework cycles), `.pipeline/task-status.json`, git log (reverts, amends), `.memory/gotchas/`, `docs/conflicts/`
+- **Application:** full feature diff (branch point to HEAD), test suite output, `docs/stories/` acceptance criteria, tech-context if loaded
 
 ---
 
@@ -46,9 +34,6 @@ Analyze three dimensions, aligned with the optimization targets:
 - Did TDD test coverage catch all edge cases, or were some found late?
 - Gap analysis: what additional story/test patterns would have caught escapes?
 
-**Output:** List of escaped bugs with root cause analysis. Recommended new negative path
-categories for the `stories` skill.
-
 ### A2. Gate Quality (Does gating catch real problems?)
 
 - Gate pass/fail ratio per stage — are gates too lenient or too strict?
@@ -59,8 +44,6 @@ categories for the `stories` skill.
 - Domain reviewer effectiveness: did vetoes prevent real issues or create churn?
 - Evaluator calibration: did the evaluator find issues the generator missed?
 
-**Output:** Specific calibration adjustments for evaluator and domain reviewer prompts.
-
 ### A3. Autonomy (How much user intervention was needed?)
 
 - Count of human interventions during pipeline execution
@@ -68,9 +51,6 @@ categories for the `stories` skill.
   - **Necessary:** Genuine ambiguity, policy decision, design choice — these SHOULD require a human
   - **Preventable:** Skill gap, missing context, bad prompt — these should be eliminated
 - For preventable interventions: what specific skill/agent/memory change would prevent recurrence?
-
-**Output:** Count and classification of interventions. Specific change proposals to reduce
-preventable interventions.
 
 ---
 
@@ -103,18 +83,34 @@ Analyze the code we actually produced:
 - **Negative paths:** All documented negative scenarios actually tested?
 - **Missing tests:** Code paths with no test coverage?
 
-### B4. Security & Performance
+### B4. Security, Performance & Debt
 
-- OWASP top 10 scan of new code paths
-- Auth/authz: new endpoints properly protected?
-- Input validation: boundaries correctly defended?
-- Performance: N+1 queries, missing pagination, unbounded queries?
-
-### B5. Technical Debt
-
-- TODOs introduced — are they tracked or will they be forgotten?
+- OWASP top 10 scan: auth/authz on new endpoints, input validation at boundaries
+- Performance: N+1 queries, missing pagination, unbounded queries
+- TODOs introduced — tracked or will they be forgotten?
 - Workarounds — "for now" code that needs a follow-up story?
 - Dependency health — new dependencies with known vulnerabilities?
+
+---
+
+## Part C: Context Efficiency Retro
+
+Review token/context consumption for this feature cycle and identify optimization opportunities.
+
+**Analyze:**
+- Which skills or subagent dispatches consumed the most context? (Count dispatches, estimate scope)
+- Were there redundant file reads, unnecessary explorations, or overly broad subagent prompts?
+- Did any skill load tech-context or memory that wasn't actually referenced in its output?
+- Were complexity tiers correctly applied? (Would a different tier have been appropriate?)
+- Did the evaluator/domain reviewer dispatches feel proportionate to the feature's complexity?
+
+**Propose:**
+- Specific SKILL.md changes that would reduce context without degrading output
+- Subagent prompt refinements (more focused context, fewer files)
+- Steps that could be skipped or batched for this feature's complexity tier
+- Model downgrades that would have been safe (e.g., Opus → Sonnet for a specific phase)
+
+**Output:** 2-3 concrete, actionable findings with finding IDs (C-1, C-2, C-3).
 
 ---
 
@@ -134,6 +130,7 @@ Analyze the code we actually produced:
 **Finding IDs:** Number findings sequentially across the whole report.
 - H-1, H-2, H-3... for harness findings
 - A-1, A-2, A-3... for application findings
+- C-1, C-2, C-3... for context efficiency findings
 
 ## Output: Retro Report
 
@@ -141,30 +138,29 @@ Save to `docs/retros/YYYY-MM-DD-<feature-name>.md`:
 
 ```markdown
 # Retro: [Feature Name]
-
-**Date:** YYYY-MM-DD
-**Stats:** N tasks, M rework cycles, K interventions | N tests, all passing
+**Date:** YYYY-MM-DD | **Stats:** N tasks, M rework cycles, K interventions, N tests passing
 
 ## Part A: Harness
-
-- **H-1:** [finding — what, where, severity, fix]
-- **H-2:** [finding]
+- **H-1:** [what, where, severity, fix]
 
 **Proposed changes:**
 - [ ] H-1: [specific change]
-- [ ] H-2: [specific change]
 
 ## Part B: Application
-
-- **A-1:** [finding — what, file:line, severity, fix]
-- **A-2:** [finding]
+- **A-1:** [what, file:line, severity, fix]
 
 **Proposed changes:**
 - [ ] A-1: [specific change → new story]
-- [ ] A-2: [specific change → new story]
+
+## Part C: Context Efficiency
+### Context Efficiency
+- **C-1:** [what, where, impact, proposed change]
+
+**Proposed changes:**
+- [ ] C-1: [specific SKILL.md change, prompt refinement, or model downgrade]
 
 ## Trends
-[Compare against prior retros if they exist. One line per trend.]
+[One line per trend vs. prior retros.]
 ```
 
 ---
@@ -173,29 +169,16 @@ Save to `docs/retros/YYYY-MM-DD-<feature-name>.md`:
 
 After writing the retro report, take these actions:
 
-### Harness findings → Harness improvements
-- Persist learnings to `.memory/` (gotchas, patterns, decisions)
-- Propose concrete skill/agent prompt modifications (as diffs the user can approve)
-- Update evaluator calibration notes in `agents/evaluator.md` if needed
-- Add newly discovered negative path categories to `skills/stories/SKILL.md`
+**Harness findings → Harness improvements:** Persist learnings to `.memory/` (gotchas, patterns, decisions). Propose skill/agent prompt modifications as diffs; update `agents/evaluator.md` calibration and `skills/stories/SKILL.md` negative path categories as needed.
 
-### Application findings → New stories
-- Create new stories in `docs/stories/` for technical debt and fixes
-- Run `conflict-check` on the new stories
-- These become tracked work for the next development cycle — not lost "we should fix this" notes
+**Application findings → New stories:** Create stories in `docs/stories/` for debt and fixes; run `conflict-check`. These become tracked work, not lost "we should fix this" notes.
 
-### Trend Tracking
-
-If this is not the first retro, compare against previous retro reports:
-- Is the intervention count trending down? (Good — harness is learning)
-- Are the same gate failures recurring? (Bad — calibration needs adjustment)
-- Are the same application issues appearing? (Bad — tech-context needs updating)
-
-Note trends in the retro report.
+**Trend tracking:** Compare against prior retros — intervention count down (good), same gate failures recurring (calibration needed), same application issues recurring (tech-context needs updating). Note trends in the report.
 
 ## Verification
 
 - [ ] Both Part A and Part B completed (neither skipped)
+- [ ] Part C context efficiency analyzed with at least 1 finding
 - [ ] Harness analysis covers correctness, gate quality, and autonomy
 - [ ] Application analysis covers architecture, code quality, tests, security, debt
 - [ ] All findings include specific file:line references or concrete examples

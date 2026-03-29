@@ -51,21 +51,9 @@ See `references/red.md` for detailed RED phase guidance.
 
 ### Phase 2: DOMAIN (Post-RED)
 
-**Agent:** Domain Reviewer
-**Goal:** Review the test for domain integrity before implementation begins.
-
-Check for:
-- **Primitive obsession:** Is the test using raw strings/integers where a domain type should exist?
-  - `user_id: "abc123"` → Should this be a `UserId` type?
-  - `status: "active"` → Should this be an enum?
-- **Invalid state representability:** Could the test's setup create an impossible business state?
-- **Boundary violations:** Is the test reaching across domain boundaries it shouldn't?
-- **Naming:** Do test names use domain language, not technical jargon?
-
-**Veto authority:** The domain reviewer can reject the test and send it back to RED with
-specific feedback on what to change.
-
-See `references/domain-review.md` for domain review criteria.
+**Agent:** Domain Reviewer (see `agents/domain-reviewer.md` for full criteria)
+**Goal:** Review the test for domain integrity — primitive obsession, invalid states, boundary
+violations, domain language. Has veto authority to send back to RED.
 
 ### Phase 3: GREEN
 
@@ -93,16 +81,9 @@ See `references/drill-down.md` for nested TDD cycle instructions.
 
 ### Phase 4: DOMAIN (Post-GREEN)
 
-**Agent:** Domain Reviewer
-**Goal:** Review the implementation for domain integrity.
-
-Check for:
-- **Primitive obsession in production code:** Raw types where domain types should be
-- **Leaky abstractions:** Implementation details exposed across boundaries
-- **Missing domain types:** Should a new value object or entity be introduced?
-- **Naming:** Do method/variable names use domain language?
-
-**Veto authority:** Can reject and send back to GREEN with feedback.
+**Agent:** Domain Reviewer (see `agents/domain-reviewer.md` for full criteria)
+**Goal:** Review the implementation for domain integrity — primitive obsession, leaky
+abstractions, missing domain types, naming. Has veto authority to send back to GREEN.
 
 ### Phase 5: COMMIT
 
@@ -137,41 +118,40 @@ Refactoring gets its own commit(s) — separate from feature commits. Tests must
 
 ### Structural Enforcement
 
-When using the Agent tool for subagent dispatch:
+When using the Agent tool for subagent dispatch, **inline the relevant context directly in the
+prompt** rather than giving broad file access. This keeps each dispatch focused and token-efficient.
 
-| Phase | Agent | Context Provided | Files Visible |
-|-------|-------|-----------------|---------------|
-| RED | Generator | Test files, story/plan for this task | `spec/` or `test/` only |
-| DOMAIN | Domain Reviewer | Domain types, current test or impl | Domain models + current file |
-| GREEN | Generator | Source files, failing test output | `app/` or `src/` only |
+| Phase | Agent | Provide in Prompt | Do NOT Provide |
+|-------|-------|-------------------|----------------|
+| RED | Generator | Task description, acceptance criterion text, test dir path, factory file path | Implementation files, other stories, full plan |
+| DOMAIN (post-RED) | Domain Reviewer | New/changed test code (inline), list of existing domain types | Full file tree, `.memory/` files, other test files |
+| GREEN | Generator | Failing test output (inline), source dir path, 1-2 specific source files to modify | Test files, stories, plan |
+| DOMAIN (post-GREEN) | Domain Reviewer | New/changed implementation code (inline), the test it satisfies (inline) | Full file tree, `.memory/` files, other source files |
 | COMMIT | (main agent) | Full context | All files |
+
+**Context budget rules:**
+- **Inline diffs, don't let agents explore.** Paste the specific new/changed code into the
+  subagent prompt. Agents should not need to read files to find the code under review.
+- **Name domain types that exist** (e.g., "Domain types: Contact, Tag, ContactTag") so the
+  domain reviewer doesn't scan the codebase.
+- **One criterion per RED dispatch** — the generator prompt contains exactly the acceptance
+  criterion being implemented, not the full story.
+- **Cap GREEN file access** — name the 1-2 files to modify, not the full source tree.
+- **Pre-gather decisions** — the TDD orchestrator checks `.memory/decisions/` for relevant
+  prior decisions and includes them in the domain reviewer prompt. The reviewer does not
+  search `.memory/` itself.
 
 This isolation prevents the RED agent from peeking at implementation (biasing the test)
 and the GREEN agent from over-engineering beyond what the test requires.
 
 ### Spec Coverage Rule: Every File Gets a Spec
 
-**Every file in `app/` (or `src/`) must have a corresponding spec file.** This is a hard gate.
+**Every file in `app/` (or `src/`) must have a corresponding spec file.** Hard gate.
 
-| Source File | Spec File | Spec Type |
-|---|---|---|
-| `app/models/card.rb` | `spec/models/card_spec.rb` | **Unit** — validations, associations, enums, callbacks, business logic |
-| `app/controllers/cards_controller.rb` | `spec/requests/cards_spec.rb` | **Request** — HTTP contract, auth, response format, status codes |
-| `app/services/cards/move_service.rb` | `spec/services/cards/move_service_spec.rb` | **Unit** — business logic in isolation |
-| `app/jobs/cleanup_job.rb` | `spec/jobs/cleanup_job_spec.rb` | **Unit** — job behavior, retry, idempotency |
-
-**Unit specs** test logic in isolation — validations fire, associations exist, methods return
-correct values, state transitions work. Fast, no HTTP stack.
-
-**Request specs** test the HTTP contract — correct status codes, response envelopes match the
-API contract (if one exists), auth is enforced, error formats are consistent. These are the
-BDD/acceptance layer.
-
-**Both are required.** Request specs alone miss model-level logic. Unit specs alone miss
-integration issues (routing, middleware, serialization).
-
-During RED phase: if the task creates or modifies a file in `app/`, verify the corresponding
-spec file exists. If not, create it as part of this TDD cycle.
+- Models/services/jobs → unit specs (`spec/models/`, `spec/services/`, `spec/jobs/`)
+- Controllers → request specs (`spec/requests/`)
+- Both layers required. During RED: if the task creates/modifies a file in `app/`, verify the
+  corresponding spec exists. If not, create it as part of this TDD cycle.
 
 ## Verification
 

@@ -72,6 +72,20 @@ get_session_id() {
   fi
 }
 
+# Name the session after brainstorm so it's identifiable in /resume and remote-control
+name_session() {
+  local session_id
+  session_id=$(get_session_id)
+  local project_name
+  project_name=$(basename "$PROJECT_DIR")
+  # Build a short descriptive name: project + feature summary (first 40 chars)
+  local feature_short="${FEATURE_DESC:0:40}"
+  local session_name="${project_name}: ${feature_short}"
+  # Resume with --name to set the display name, then immediately exit with a no-op prompt
+  claude --resume "$session_id" --name "$session_name" -p "Session named." --auto >> "$SESSION_LOG" 2>&1 || true
+  log "Session named: ${session_name}"
+}
+
 # ─── State Management ────────────────────────────────────────────────────────
 
 save_state() {
@@ -150,17 +164,20 @@ else:
     # Clear any stale rate limit marker
     rm -f "${PIPELINE_DIR}/rate-limit-hit"
 
+    # Prefer --auto over --dangerously-skip-permissions
+    local perm_flag="--auto"
+
     if [ "${VIEW_MODE}" = "output" ]; then
       claude -p "$prompt" \
         $session_flag \
         --append-system-prompt "$context" \
-        --dangerously-skip-permissions \
+        $perm_flag \
         2>&1 | tee -a "$SESSION_LOG"
     else
       claude -p "$prompt" \
         $session_flag \
         --append-system-prompt "$context" \
-        --dangerously-skip-permissions \
+        $perm_flag \
         >> "$SESSION_LOG" 2>&1 || true
     fi
 
@@ -173,13 +190,13 @@ else:
         claude -p "$prompt" \
           $session_flag \
           --append-system-prompt "$context" \
-          --dangerously-skip-permissions \
+          $perm_flag \
           2>&1 | tee -a "$SESSION_LOG"
       else
         claude -p "$prompt" \
           $session_flag \
           --append-system-prompt "$context" \
-          --dangerously-skip-permissions \
+          $perm_flag \
           >> "$SESSION_LOG" 2>&1 || true
       fi
     fi
@@ -311,8 +328,86 @@ run_brainstorm() {
   run_claude "Run the /brainstorm skill for: ${FEATURE_DESC}
 
 Write a design document to docs/specs/. Include Problem, Solution, Scope (In/Out), Key Decisions. Perform a scope check — compare the design against the original request and flag if scope expanded. Get user approval before marking as approved." "interactive"
-  check_brainstorm && { ok "Design doc created"; save_state "brainstorm" "done"; return 0; }
+  if check_brainstorm; then
+    ok "Design doc created"; save_state "brainstorm" "done"
+    # Name the session post-brainstorm for easy pickup via remote-control / phone
+    name_session
+    return 0
+  fi
   fail "No design doc in docs/specs/"; save_state "brainstorm" "failed"; return 1
+}
+
+run_complexity_assessment() {
+  step_header 3.5 "complexity" "DECIDE"
+  # Check if already assessed
+  if [ -f "$STATE_FILE" ]; then
+    local tier
+    tier=$(python3 -c "import json; print(json.load(open('$STATE_FILE')).get('complexity_tier',''))" 2>/dev/null || echo "")
+    if [ -n "$tier" ]; then
+      ok "Complexity tier: ${tier}"; save_state "complexity" "done"; return 0
+    fi
+  fi
+  check_brainstorm || { fail "GATE: Need design doc first"; return 1; }
+  log "Assessing feature complexity (interactive — you can override)..."
+  run_claude "Read the design doc in docs/specs/. Classify this feature's complexity:
+
+SIGNALS:
+- Models/tables: 1-3=Small, 4-7=Medium, 8+=Large
+- External integrations: 0=Small, 1-2=Medium, 3+=Large
+- Auth complexity: None/basic=Small, Role-based=Medium, Multi-tenant/OAuth=Large
+- State machines: None=Small, 1 simple=Medium, Complex/multiple=Large
+- Estimated stories: 1-5=Small, 6-15=Medium, 16+=Large
+
+Majority determines tier. Ties break UP. Present your assessment and ask the user to confirm or override [S/M/L].
+
+IMPORTANT: After the user confirms, write the tier to .pipeline/conduct-state.json as complexity_tier: 'S', 'M', or 'L'.
+Also explain what this means: which steps will be skipped for this tier." "interactive"
+
+  # Read the tier back
+  if [ -f "$STATE_FILE" ]; then
+    local tier
+    tier=$(python3 -c "import json; print(json.load(open('$STATE_FILE')).get('complexity_tier',''))" 2>/dev/null || echo "")
+    if [ -n "$tier" ]; then
+      ok "Complexity tier: ${tier}"; save_state "complexity" "done"; return 0
+    fi
+  fi
+  # Fallback: check if Claude wrote it
+  warn "Tier not found in state — defaulting to Medium"
+  python3 << PYEOF
+import json, os
+path = "$STATE_FILE"
+state = {}
+if os.path.exists(path):
+    with open(path) as f:
+        state = json.load(f)
+state["complexity_tier"] = "M"
+with open(path, "w") as f:
+    json.dump(state, f, indent=2)
+PYEOF
+  save_state "complexity" "done"
+}
+
+# Helper: get complexity tier (S/M/L, defaults to M)
+get_complexity_tier() {
+  if [ -f "$STATE_FILE" ]; then
+    python3 -c "import json; print(json.load(open('$STATE_FILE')).get('complexity_tier','M'))" 2>/dev/null || echo "M"
+  else
+    echo "M"
+  fi
+}
+
+# Helper: check if a step should be skipped based on complexity tier
+should_skip_for_tier() {
+  local step=$1
+  local tier
+  tier=$(get_complexity_tier)
+  case "$step" in
+    conflict-check)       [ "$tier" = "S" ] && return 0 ;;
+    architecture-review)  [ "$tier" = "S" ] && return 0 ;;
+    acceptance-specs)     [ "$tier" = "S" ] && return 0 ;;
+    code-review)          [ "$tier" = "S" ] && return 0 ;;
+  esac
+  return 1  # don't skip
 }
 
 run_stories() {
@@ -335,6 +430,9 @@ REQUIREMENTS:
 
 run_conflict_check() {
   step_header 5 "conflict-check" "DECIDE"
+  if should_skip_for_tier "conflict-check"; then
+    ok "Skipped (Small tier)"; save_state "conflict_check" "skipped"; return 0
+  fi
   if check_conflict_check; then
     ok "Already complete"; save_state "conflict_check" "done"; return 0
   fi
@@ -373,6 +471,9 @@ run_plan() {
 
 run_architecture_review() {
   step_header 7 "architecture-review" "DECIDE"
+  if should_skip_for_tier "architecture-review"; then
+    ok "Skipped (Small tier)"; save_state "architecture_review" "skipped"; return 0
+  fi
   if check_architecture_review; then
     ok "Already complete"; save_state "architecture_review" "done"; return 0
   fi
@@ -393,6 +494,9 @@ run_architecture_review() {
 
 run_acceptance_specs() {
   step_header 8 "acceptance specs" "BUILD"
+  if should_skip_for_tier "acceptance-specs"; then
+    ok "Skipped (Small tier — request specs in TDD suffice)"; save_state "acceptance_specs" "skipped"; return 0
+  fi
   if check_acceptance_specs; then
     ok "Already complete"; save_state "acceptance_specs" "done"; return 0
   fi
@@ -414,6 +518,21 @@ run_build() {
     mode="interactive"
   elif [ "${RUN_MODE}" = "auto" ]; then
     autonomy="Full"
+  fi
+
+  local tier
+  tier=$(get_complexity_tier)
+
+  # Small tier: direct TDD without pipeline overhead
+  if [ "$tier" = "S" ]; then
+    log "Starting direct TDD (Small tier, no pipeline overhead)..."
+    run_claude "Run /tdd for each task in the plan (docs/plans/). Execute tasks sequentially via TDD (RED→DOMAIN→GREEN→DOMAIN→COMMIT).
+
+Track progress yourself — no pipeline state machine needed. Commit after each task.
+Do NOT stop to ask for approval — execute all tasks to completion." "$mode"
+
+    check_build && { ok "Build complete — tests passing"; save_state "build" "done"; return 0; }
+    warn "Build may be incomplete — checking tests"; save_state "build" "needs_verification"; return 0
   fi
 
   log "Starting TDD pipeline (${autonomy} autonomy, ${mode} mode)..."
@@ -481,6 +600,18 @@ get_phase_detail() {
       local count
       count=$(compgen -G "${PROJECT_DIR}/docs/specs/*.md" 2>/dev/null | wc -l)
       [ "$count" -gt 0 ] && echo "${count} design doc(s)"
+      ;;
+    complexity)
+      local tier
+      tier=$(get_complexity_tier 2>/dev/null || echo "")
+      if [ -n "$tier" ]; then
+        case "$tier" in
+          S) echo "Small" ;;
+          M) echo "Medium" ;;
+          L) echo "Large" ;;
+          *) echo "$tier" ;;
+        esac
+      fi
       ;;
     stories)
       local total=0 draft=0
@@ -596,10 +727,10 @@ show_status() {
   echo -e "  Mode:    ${RUN_MODE:-default}    Session: ${session_id}"
   echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 
-  local steps=("bootstrap" "memory" "brainstorm" "stories" "conflict_check" "plan" "architecture_review" "acceptance_specs" "build" "finish" "manual_test" "retro")
-  local labels=("bootstrap" "memory" "brainstorm" "stories" "conflict-check" "plan" "arch review" "acceptance specs" "tdd/pipeline" "finish" "manual-test" "retro")
-  local phases=("UNDERSTAND" "UNDERSTAND" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "BUILD" "BUILD" "SHIP" "SHIP" "SHIP")
-  local checks=(check_bootstrap "" check_brainstorm check_stories check_conflict_check check_plan check_architecture_review check_acceptance_specs check_build "" check_manual_test check_retro)
+  local steps=("bootstrap" "memory" "brainstorm" "complexity" "stories" "conflict_check" "plan" "architecture_review" "acceptance_specs" "build" "finish" "manual_test" "retro")
+  local labels=("bootstrap" "memory" "brainstorm" "complexity" "stories" "conflict-check" "plan" "arch review" "acceptance specs" "tdd/pipeline" "finish" "manual-test" "retro")
+  local phases=("UNDERSTAND" "UNDERSTAND" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "BUILD" "BUILD" "SHIP" "SHIP" "SHIP")
+  local checks=(check_bootstrap "" check_brainstorm "" check_stories check_conflict_check check_plan check_architecture_review check_acceptance_specs check_build "" check_manual_test check_retro)
 
   local current_step
   current_step=$(get_current_step)
@@ -817,6 +948,27 @@ recover() {
   local session_id
   session_id=$(get_session_id)
 
+  # If rate limit was hit, wait for reset instead of dropping to interactive
+  # (an interactive session would also be rate-limited, wasting the user's time)
+  if [ -f "${PIPELINE_DIR}/rate-limit-hit" ]; then
+    rm -f "${PIPELINE_DIR}/rate-limit-hit"
+    handle_rate_limit
+    log "Rate limit cleared. Retrying step: ${step_name}"
+    return 0  # retry the step
+  fi
+
+  # Check session log for rate limit indicators (backup detection)
+  if [ -f "$SESSION_LOG" ]; then
+    local last_lines
+    last_lines=$(tail -20 "$SESSION_LOG" 2>/dev/null || true)
+    if echo "$last_lines" | grep -qiE "rate.limit|usage.limit|overloaded|429|too.many.requests" 2>/dev/null; then
+      warn "Rate/usage limit detected in output. Waiting for reset..."
+      handle_rate_limit
+      log "Rate limit cleared. Retrying step: ${step_name}"
+      return 0  # retry the step
+    fi
+  fi
+
   send_notification "Step failed" "${step_name} — dropping to interactive session"
 
   echo ""
@@ -864,8 +1016,8 @@ usage() {
   echo "  --reset           Clear session state and start fresh"
   echo "  -h, --help        Show this help"
   echo ""
-  echo "Steps: bootstrap, memory, brainstorm, stories, conflict-check, plan,"
-  echo "       acceptance-specs, build, finish, manual-test, retro"
+  echo "Steps: bootstrap, memory, brainstorm, complexity, stories, conflict-check, plan,"
+  echo "       architecture-review, acceptance-specs, build, finish, manual-test, retro"
   echo ""
   echo "Examples:"
   echo "  conduct --auto \"URL shortener with click tracking\"    # Fully automated"
@@ -926,6 +1078,7 @@ if [ -n "$SINGLE_STEP" ]; then
     bootstrap)            run_bootstrap ;;
     memory)               run_memory ;;
     brainstorm)           run_brainstorm ;;
+    complexity)           run_complexity_assessment ;;
     stories)              run_stories ;;
     conflict-check)       run_conflict_check ;;
     plan)                 run_plan ;;
@@ -942,8 +1095,8 @@ if [ -n "$SINGLE_STEP" ]; then
 fi
 
 # Step registry
-ALL_STEPS=(bootstrap memory brainstorm stories conflict-check plan architecture-review acceptance-specs build finish manual-test retro)
-STEP_FUNCS=(run_bootstrap run_memory run_brainstorm run_stories run_conflict_check run_plan run_architecture_review run_acceptance_specs run_build run_finish run_manual_test run_retro)
+ALL_STEPS=(bootstrap memory brainstorm complexity stories conflict-check plan architecture-review acceptance-specs build finish manual-test retro)
+STEP_FUNCS=(run_bootstrap run_memory run_brainstorm run_complexity_assessment run_stories run_conflict_check run_plan run_architecture_review run_acceptance_specs run_build run_finish run_manual_test run_retro)
 
 # Determine starting point
 start_index=0

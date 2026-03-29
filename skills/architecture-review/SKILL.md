@@ -18,6 +18,20 @@ early — when they're cheap to fix.
 
 Also invocable at pipeline batch boundaries to verify implementation stays architecturally sound.
 
+### Lightweight Mode (Medium Complexity Tier)
+
+When the feature is classified as **Medium** by `/conduct`'s complexity assessment, run only:
+- **Section 2: Technical Feasibility** — full check
+- **Section 4: Architectural Alignment** — full check
+
+Skip:
+- Section 3 (Complexity Assessment) — already done by `/conduct`
+- Section 5 (Domain Integrity Pre-Check) — handled by TDD domain reviewer per-cycle
+- Section 7 (mandatory ADR creation) — only create ADRs for genuinely novel architectural decisions
+
+For **Small** features, architecture-review is skipped entirely by `/conduct`.
+For **Large** features, run the full review (all sections).
+
 ## Practices
 
 ### 1. Load Architecture Context
@@ -47,14 +61,12 @@ For each story in the plan, assess:
 
 ### 3. Complexity Assessment
 
-Rate each story:
-
 | Level | Criteria | Action |
 |---|---|---|
 | **Low** | 1 model, 1 endpoint, no external deps | Proceed |
-| **Medium** | 2-3 models, cross-model logic, background jobs | Proceed with attention to boundaries |
-| **High** | 4+ models, external APIs, complex state machines | Consider splitting into smaller stories |
-| **Spike** | Unknown technology, unclear requirements, novel patterns | Recommend a time-boxed spike before planning |
+| **Medium** | 2–3 models, cross-model logic, background jobs | Proceed with boundary attention |
+| **High** | 4+ models, external APIs, complex state machines | Consider splitting |
+| **Spike** | Unknown tech, unclear requirements, novel patterns | Time-box spike before planning |
 
 ### 4. Architectural Alignment
 
@@ -93,37 +105,21 @@ Before implementation begins, check the plan for domain modeling issues:
 
 ### 6. Risk Register
 
-For each identified risk:
-
 ```markdown
 | Risk | Type | Likelihood | Impact | Mitigation |
 |---|---|---|---|---|
-| Concurrent card moves corrupt positions | Data | Medium | High | Row-level locking in transaction |
-| External API timeout blocks request | Integration | High | Medium | Async job with retry, timeout at 5s |
+| Concurrent moves corrupt positions | Data | Medium | High | Row-level locking in transaction |
 ```
 
 Risk types: **Technical**, **Integration**, **Data**, **Performance**, **Security**, **Knowledge**
 
 ### 7. ADR for Every Architectural Decision
 
-Every decision made during architecture review MUST be captured as an ADR using
-`templates/adr.md.template`. This includes:
-
-- Technology choices (gem/library selection, database features used)
-- Pattern decisions (service objects vs. concerns, state machine approach)
-- Boundary definitions (which models belong to which domain)
-- Security decisions (auth approach, token strategy)
-- Trade-offs accepted (e.g., "denormalized for read performance, accepted write complexity")
-
-**Numbering:** Sequential in `docs/decisions/`. Check the highest existing number and increment.
-Example: if `003-api-response-contract.md` exists, next is `004-<title>.md`.
-
-**ADRs are append-only.** Never delete an ADR. If a decision changes, write a new ADR with
-`Status: Superseded by ADR-N` on the old one.
+Capture every architectural decision as an ADR using `templates/adr.md.template`. Sequential numbering in `docs/decisions/`. ADRs are append-only — supersede, don't delete.
 
 ### 8. Output
 
-Write the review itself to `docs/decisions/architecture-review-YYYY-MM-DD-<feature>.md`:
+Write the review to `docs/decisions/architecture-review-YYYY-MM-DD-<feature>.md`:
 
 ```markdown
 # Architecture Review: [Feature Name]
@@ -132,46 +128,22 @@ Write the review itself to `docs/decisions/architecture-review-YYYY-MM-DD-<featu
 **Verdict:** APPROVED | APPROVED WITH CONDITIONS | BLOCKED
 
 ## Feasibility
-[findings per story]
-
 ## Complexity
-[ratings per story]
-
 ## Alignment
-[findings — any drift from documented architecture]
-
 ## Domain Integrity
-[pre-check findings — any primitive obsession, invalid states, etc.]
-
 ## Risks
-[risk register]
-
 ## ADRs Created
-- ADR-NNN: [title] — [one-line summary of decision]
-
 ## Conditions (if APPROVED WITH CONDITIONS)
-- [ ] [specific condition — tracked in plan, verified by evaluator]
-
 ## Blocking Issues (if BLOCKED)
-- [issue with specific resolution required]
 ```
 
 ### 9. Verdict Enforcement
 
 **APPROVED** — Proceed to `/writing-system-tests`.
 
-**APPROVED WITH CONDITIONS** — Proceed, but conditions are tracked in the plan. The evaluator
-checks conditions at code review. Unmet conditions at `/finish` are blocking.
+**APPROVED WITH CONDITIONS** — Proceed; conditions tracked in the plan. Evaluator checks at code review. Unmet conditions at `/finish` are blocking.
 
-**BLOCKED — Requires human intervention.** The pipeline HALTS. Claude cannot resolve
-architectural violations autonomously — they require human judgment about trade-offs, scope
-changes, or design pivots. Present the blocking issues to the user with:
-1. What is violated and why it matters
-2. Options for resolution (with trade-offs per option)
-3. Which ADRs or conventions are in conflict
-
-**The user must explicitly approve a resolution.** Do not auto-resolve BLOCKED verdicts.
-After the user decides, capture the resolution as a new ADR and re-run the review.
+**BLOCKED** — Pipeline HALTS. Present to the user: what is violated, resolution options with trade-offs, and which ADRs are in conflict. The user must explicitly approve a resolution. Do not auto-resolve. Capture the resolution as a new ADR and re-run the review.
 
 ### 10. Recurring Review (Pipeline Batch Boundaries)
 
