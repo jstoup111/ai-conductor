@@ -40,16 +40,36 @@ For each task in the implementation plan:
 7. UPDATE STATUS — Mark task as "completed" in .pipeline/task-status.json
 ```
 
-**Task status tracking is mandatory.** Update `.pipeline/task-status.json` at the START and
-END of every task. The post-commit hook also updates status, but do not rely on it alone —
-update explicitly. Status must reflect reality at all times.
+**Task status tracking is mandatory and must be done by the pipeline agent, not the hook.**
+
+Before ANY code work on a task:
+```bash
+# Mark in_progress — do this FIRST, before writing any code
+python3 -c "import json; d=json.load(open('.pipeline/task-status.json')); d['task-N']['status']='in_progress'; json.dump(d,open('.pipeline/task-status.json','w'),indent=2)"
+```
+
+After committing the task:
+```bash
+# Mark completed — do this AFTER git commit succeeds
+python3 -c "import json; d=json.load(open('.pipeline/task-status.json')); d['task-N']['status']='completed'; json.dump(d,open('.pipeline/task-status.json','w'),indent=2)"
+```
+
+The post-commit hook is a backup, not the primary mechanism. If task-status.json is stale
+(shows in_progress when git log shows the task was committed), fix it immediately.
 
 ### Quality Gates
 
-**HARD GATE: Evaluator dispatch is mandatory, not optional.**
+**HARD GATE: Evaluator dispatch is mandatory. No batch completes without an evaluator verdict.**
 
 At every batch boundary, dispatch an evaluator agent with **fresh context** (no shared state
-with the generator). The evaluator runs the full 3-stage review from the `code-review` skill:
+with the generator). The evaluator runs the full 3-stage review from the `code-review` skill.
+
+**Enforcement:** After each batch, write the evaluator verdict to
+`.pipeline/audit-trail/batch-N/review.json`. If this file does not exist for the current
+batch, the next batch CANNOT start. The pipeline must check for the verdict file before
+proceeding — not rely on the agent remembering to dispatch the evaluator.
+
+The evaluator runs:
 
 1. **Spec compliance** — All acceptance criteria (happy + negative) have corresponding tests?
 2. **Code quality** — Clear, readable, no duplication, no complexity violations, stack-specific checks?

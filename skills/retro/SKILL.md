@@ -118,63 +118,53 @@ Analyze the code we actually produced:
 
 ---
 
+## Writing Rules
+
+**Be concise. No repetition.**
+
+- State each finding ONCE. If a finding is relevant to multiple sections, state it in the most
+  relevant section and reference it by ID elsewhere: "See H-3" or "See A-2."
+- Use bullet points, not paragraphs. One line per finding.
+- Every finding needs: what, where (file:line), severity, and proposed fix.
+- Do NOT restate what worked correctly. Only mention working things in a one-line summary.
+  Focus the report on what needs to change.
+- If nothing is wrong in a section, write "No issues." — not a paragraph explaining why
+  everything is fine.
+
+**Finding IDs:** Number findings sequentially across the whole report.
+- H-1, H-2, H-3... for harness findings
+- A-1, A-2, A-3... for application findings
+
 ## Output: Retro Report
 
 Save to `docs/retros/YYYY-MM-DD-<feature-name>.md`:
 
 ```markdown
-## Retro: [Feature Name]
+# Retro: [Feature Name]
 
 **Date:** YYYY-MM-DD
-**Autonomy level:** conservative | standard | full
-**Pipeline stats:** X tasks, Y rework cycles, Z human interventions
-
----
+**Stats:** N tasks, M rework cycles, K interventions | N tests, all passing
 
 ## Part A: Harness
 
-### Correctness
-- Bugs escaped: [count, description, root cause]
-- Story gaps: [negative paths that should have been written]
-- New story patterns recommended: [list]
+- **H-1:** [finding — what, where, severity, fix]
+- **H-2:** [finding]
 
-### Gate Quality
-- False positives: [count — gates that blocked correct work]
-- False negatives: [count — problems that escaped gates]
-- Evaluator calibration: [too lenient / too strict / well-calibrated, with specifics]
-- Domain reviewer: [veto accuracy, unnecessary vetoes]
-
-### Autonomy
-- Total interventions: [count]
-- Necessary: [count — genuine decisions]
-- Preventable: [count — with root cause per intervention]
-
-### Harness Changes Proposed
-- [ ] [Specific change to skill/agent/hook with rationale]
-- [ ] [Specific change with rationale]
-
----
+**Proposed changes:**
+- [ ] H-1: [specific change]
+- [ ] H-2: [specific change]
 
 ## Part B: Application
 
-### Architecture Health
-- [Findings with file:line references]
+- **A-1:** [finding — what, file:line, severity, fix]
+- **A-2:** [finding]
 
-### Code Quality
-- [Findings — stack-specific if tech-context loaded]
+**Proposed changes:**
+- [ ] A-1: [specific change → new story]
+- [ ] A-2: [specific change → new story]
 
-### Test Quality
-- [Coverage gaps, fragile tests, missing negative paths]
-
-### Security & Performance
-- [Findings with severity: critical / important / minor]
-
-### Technical Debt
-- [TODOs, workarounds, follow-up stories needed]
-
-### Application Changes Proposed
-- [ ] [Specific fix/refactor — becomes a new story]
-- [ ] [Specific fix/refactor — becomes a new story]
+## Trends
+[Compare against prior retros if they exist. One line per trend.]
 ```
 
 ---
