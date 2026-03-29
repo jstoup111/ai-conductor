@@ -82,7 +82,11 @@ Wait for the user to choose. Do not assume.
 After executing the chosen option:
 - Clean up git worktrees if used (Options 1, 2, 4)
 - Update `.pipeline/task-status.json` if pipeline was active
-- Suggest running the `retro` skill
+- Suggest next step: `/manual-test` — validate stories against the running application
+  before retro. The full flow from here is:
+  ```
+  /finish (you are here) → /manual-test → /retro
+  ```
 
 ## Verification
 
@@ -91,4 +95,4 @@ After executing the chosen option:
 - [ ] All story acceptance criteria verified as covered
 - [ ] Option presented to user and their choice executed
 - [ ] Cleanup completed (worktrees, pipeline state)
-- [ ] Retro suggested as next step
+- [ ] Manual-test suggested as next step

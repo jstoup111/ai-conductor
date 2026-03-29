@@ -124,9 +124,15 @@ After generating the plan, cross-reference:
 
 Save the plan to `docs/plans/YYYY-MM-DD-<feature>.md`
 
-Suggest next steps:
-- For small features: invoke `tdd` skill and work through tasks manually
-- For larger features: invoke `pipeline` skill for automated execution with quality gates
+Suggest next step: `/architecture-review` — the plan must pass architecture review before
+any code is written. The full flow from here is:
+
+```
+/plan (you are here)
+  → /architecture-review (feasibility, alignment, risks — may BLOCK)
+  → /writing-system-tests (failing acceptance specs from stories)
+  → /pipeline or /tdd (implement until all tests pass)
+```
 
 ## Verification
 
