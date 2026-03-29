@@ -80,6 +80,20 @@ check_installation() {
     all_ok=false
   fi
 
+  # Check dependencies
+  echo ""
+  if command -v glow &>/dev/null; then
+    ok "glow installed (artifact review)"
+  else
+    warn "glow not installed — artifact review will use cat fallback"
+  fi
+  local puppeteer_dir="${HARNESS_DIR}/skills/pr-screenshots/tools/node_modules/puppeteer"
+  if [ -d "$puppeteer_dir" ]; then
+    ok "puppeteer installed (pr-screenshots)"
+  else
+    warn "puppeteer not installed — pr-screenshots may not work"
+  fi
+
   # Summary
   echo ""
   if [ "$missing" -eq 0 ] && [ "$stale" -eq 0 ] && $all_ok; then
@@ -322,6 +336,45 @@ PYEOF
   fi
 }
 
+# ─── Dependencies ────────────────────────────────────────────────────────────
+
+install_dependencies() {
+  echo ""
+  echo -e "${BOLD}Dependencies${NC}"
+
+  # glow — terminal markdown renderer (for artifact review in conduct)
+  if command -v glow &>/dev/null; then
+    ok "glow already installed"
+  else
+    info "Installing glow (terminal markdown renderer)..."
+    if command -v go &>/dev/null; then
+      go install github.com/charmbracelet/glow@latest 2>/dev/null && ok "glow installed via go" || warn "glow install failed — artifact review will use cat fallback"
+    elif command -v snap &>/dev/null; then
+      sudo snap install glow 2>/dev/null && ok "glow installed via snap" || warn "glow install failed — artifact review will use cat fallback"
+    elif command -v brew &>/dev/null; then
+      brew install glow 2>/dev/null && ok "glow installed via brew" || warn "glow install failed — artifact review will use cat fallback"
+    else
+      warn "glow not installed — no package manager found (go/snap/brew). Artifact review will use cat fallback."
+      info "Install manually: https://github.com/charmbracelet/glow#installation"
+    fi
+  fi
+
+  # puppeteer — needed by pr-screenshots skill for screenshot capture
+  if command -v node &>/dev/null; then
+    local puppeteer_tools="${HARNESS_DIR}/skills/pr-screenshots/tools"
+    if [ -d "$puppeteer_tools" ] && [ -f "${puppeteer_tools}/package.json" ]; then
+      if [ -d "${puppeteer_tools}/node_modules/puppeteer" ]; then
+        ok "puppeteer already installed (pr-screenshots)"
+      else
+        info "Installing puppeteer for pr-screenshots..."
+        (cd "$puppeteer_tools" && npm install 2>/dev/null) && ok "puppeteer installed" || warn "puppeteer install failed"
+      fi
+    fi
+  else
+    warn "Node.js not found — puppeteer (pr-screenshots) not installed"
+  fi
+}
+
 # ─── Install ──────────────────────────────────────────────────────────────────
 
 install() {
@@ -402,7 +455,10 @@ install() {
     info "Add to your shell profile: export PATH=\"\$HOME/.local/bin:\$PATH\""
   fi
 
-  # 6. Check Claude Code
+  # 6. Install dependencies
+  install_dependencies
+
+  # 7. Check Claude Code
   if command -v claude &>/dev/null; then
     ok "Claude Code found"
   else

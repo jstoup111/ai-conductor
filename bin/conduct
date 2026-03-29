@@ -59,6 +59,60 @@ ensure_pipeline_dir() {
   mkdir -p "${PIPELINE_DIR}"
 }
 
+# ─── Artifact Review ─────────────────────────────────────────────────────────
+
+# Render a markdown file in the terminal using the best available tool
+render_md() {
+  local file=$1
+  if command -v glow &>/dev/null; then
+    glow -w 80 "$file"
+  elif command -v bat &>/dev/null; then
+    bat --style=plain --language=md "$file"
+  elif command -v batcat &>/dev/null; then
+    batcat --style=plain --language=md "$file"
+  else
+    cat "$file"
+  fi
+}
+
+# Review one or more artifacts with approve/reject per file.
+# Usage: review_artifacts "step_name" file1 [file2 ...]
+# Returns 0 if all approved, 1 if any rejected.
+review_artifacts() {
+  local step_name=$1; shift
+  local files=("$@")
+  local total=${#files[@]}
+  local i=0
+
+  # Skip review in auto mode
+  if [ "${RUN_MODE}" = "auto" ]; then
+    log "Auto mode — accepting ${total} artifact(s) for ${step_name}"
+    return 0
+  fi
+
+  for file in "${files[@]}"; do
+    i=$((i + 1))
+    echo ""
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "  ${BOLD}[${i}/${total}] ${step_name}: $(basename "$file")${NC}"
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+    render_md "$file"
+    echo ""
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+
+    if [ -t 0 ]; then
+      read -r -p "  [enter=approve / r=reject / s=skip remaining]: " verdict
+      case "$verdict" in
+        [rR]) warn "Rejected: $(basename "$file")"; return 1 ;;
+        [sS]) log "Skipping review of remaining artifacts"; return 0 ;;
+        *)    ok "Approved: $(basename "$file")" ;;
+      esac
+    fi
+  done
+  return 0
+}
+
 # ─── Session Management ──────────────────────────────────────────────────────
 
 get_session_id() {
@@ -448,7 +502,17 @@ REQUIREMENTS:
 - All 10 negative path categories where applicable
 - Stack-specific paths from tech-context if loaded
 - NO vague paths like 'handle errors gracefully'"
-  check_stories && { ok "Stories created"; save_state "stories" "done"; return 0; }
+  if check_stories; then
+    # Review each story file before accepting
+    local story_files=()
+    while IFS= read -r f; do story_files+=("$f"); done < <(compgen -G "${PROJECT_DIR}/docs/stories/*.md" | sort)
+    if [ ${#story_files[@]} -gt 0 ]; then
+      if ! review_artifacts "stories" "${story_files[@]}"; then
+        fail "Stories rejected — re-run /stories"; save_state "stories" "failed"; return 1
+      fi
+    fi
+    ok "Stories created"; save_state "stories" "done"; return 0
+  fi
   fail "No accepted stories in docs/stories/"; save_state "stories" "failed"; return 1
 }
 
@@ -498,7 +562,16 @@ run_plan() {
   fi
   log "Generating implementation plan..."
   run_claude "Run the /plan skill. Generate plan in docs/plans/ with 2-5 min tasks, dependency graph, coverage mapping. Check scope: warn if >20 tasks, hard stop if >40."
-  check_plan && { ok "Plan created"; save_state "plan" "done"; return 0; }
+  if check_plan; then
+    local plan_files=()
+    while IFS= read -r f; do plan_files+=("$f"); done < <(compgen -G "${PROJECT_DIR}/docs/plans/*.md" | sort)
+    if [ ${#plan_files[@]} -gt 0 ]; then
+      if ! review_artifacts "plan" "${plan_files[@]}"; then
+        fail "Plan rejected — re-run /plan"; save_state "plan" "failed"; return 1
+      fi
+    fi
+    ok "Plan created"; save_state "plan" "done"; return 0
+  fi
   fail "No plan in docs/plans/"; save_state "plan" "failed"; return 1
 }
 
