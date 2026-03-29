@@ -812,6 +812,27 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
+# Save feature description immediately if provided (before any checks can fail)
+if [ -n "$FEATURE_DESC" ]; then
+  ensure_pipeline_dir
+  python3 << PYEOF
+import json, os
+path = "$STATE_FILE"
+state = {}
+if os.path.exists(path):
+    with open(path) as f:
+        state = json.load(f)
+state["feature_desc"] = """$FEATURE_DESC"""
+with open(path, "w") as f:
+    json.dump(state, f, indent=2)
+PYEOF
+fi
+
+# Restore feature description from state if resuming without one
+if [ -z "$FEATURE_DESC" ] && [ -f "$STATE_FILE" ]; then
+  FEATURE_DESC=$(python3 -c "import json; print(json.load(open('$STATE_FILE')).get('feature_desc',''))" 2>/dev/null || echo "")
+fi
+
 # Header
 echo ""
 echo -e "${BOLD}${CYAN}╔══════════════════════════════════════════╗${NC}"
@@ -857,11 +878,6 @@ if [ "$MODE" = "resume" ] || [ -n "$START_STEP" ]; then
     last=$(python3 -c "import json; print(json.load(open('$STATE_FILE')).get('last_step','bootstrap'))")
     last_status=$(python3 -c "import json; s=json.load(open('$STATE_FILE')); print(s.get('$last','pending'))" 2>/dev/null || echo "pending")
 
-    # Restore feature description from state if not provided
-    if [ -z "$FEATURE_DESC" ] && [ -f "$STATE_FILE" ]; then
-      FEATURE_DESC=$(python3 -c "import json; print(json.load(open('$STATE_FILE')).get('feature_desc',''))" 2>/dev/null || echo "")
-    fi
-
     for i in "${!ALL_STEPS[@]}"; do
       if [ "${ALL_STEPS[$i]}" = "$last" ]; then
         if [ "$last_status" = "done" ] || [ "$last_status" = "skipped" ]; then
@@ -892,21 +908,6 @@ if [ -z "$FEATURE_DESC" ] && [ "$start_index" -le 2 ]; then
   fi
 fi
 
-# Save feature description to state for --resume
-if [ -n "$FEATURE_DESC" ]; then
-  ensure_pipeline_dir
-  python3 << PYEOF
-import json, os
-path = "$STATE_FILE"
-state = {}
-if os.path.exists(path):
-    with open(path) as f:
-        state = json.load(f)
-state["feature_desc"] = "$FEATURE_DESC"
-with open(path, "w") as f:
-    json.dump(state, f, indent=2)
-PYEOF
-fi
 
 # ─── Main Loop ────────────────────────────────────────────────────────────────
 
