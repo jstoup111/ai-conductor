@@ -297,10 +297,12 @@ run_brainstorm() {
     ok "Already complete"; save_state "brainstorm" "done"; return 0
   fi
   [ -z "${FEATURE_DESC:-}" ] && { fail "No feature description provided"; return 1; }
-  log "Generating design doc..."
+  log "Design decisions require your input — interactive session..."
+  # Brainstorm is ALWAYS interactive. Design decisions have the highest ROI for human input.
+  # Wrong design cascades to wrong stories, wrong plan, wrong code.
   run_claude "Run the /brainstorm skill for: ${FEATURE_DESC}
 
-Write a design document to docs/specs/. Include Problem, Solution, Scope (In/Out), Key Decisions. Perform a scope check — compare the design against the original request and flag if scope expanded. Mark as approved."
+Write a design document to docs/specs/. Include Problem, Solution, Scope (In/Out), Key Decisions. Perform a scope check — compare the design against the original request and flag if scope expanded. Get user approval before marking as approved." "interactive"
   check_brainstorm && { ok "Design doc created"; save_state "brainstorm" "done"; return 0; }
   fail "No design doc in docs/specs/"; save_state "brainstorm" "failed"; return 1
 }
@@ -330,8 +332,22 @@ run_conflict_check() {
   fi
   check_stories || { fail "GATE: Need stories in docs/stories/ first"; return 1; }
   log "Checking for conflicts..."
-  run_claude "Run the /conflict-check skill. Check ALL stories against all 5 conflict types. Write report to docs/conflicts/. If clean, write a clean-check marker. Resolve any blocking conflicts and re-check."
-  check_conflict_check && { ok "Conflict check complete"; save_state "conflict_check" "done"; return 0; }
+  run_claude "Run the /conflict-check skill. Check ALL stories against all 5 conflict types. Write report to docs/conflicts/. If clean, write a clean-check marker. If blocking conflicts found, list them with resolution options but do NOT auto-resolve — the user must choose."
+
+  # Check if blocking conflicts need human resolution
+  if check_conflict_check; then
+    local has_blocking=false
+    if compgen -G "${PROJECT_DIR}/docs/conflicts/*.md" > /dev/null 2>&1; then
+      if grep -rqiE "severity.*blocking|blocking.*conflict" "${PROJECT_DIR}/docs/conflicts/" 2>/dev/null; then
+        has_blocking=true
+      fi
+    fi
+    if $has_blocking; then
+      warn "Blocking conflicts found — interactive session for resolution..."
+      run_claude "There are blocking conflicts in docs/conflicts/. Present each to the user with resolution options. The user must choose. Update stories after each resolution. Re-run conflict check until clean." "interactive"
+    fi
+    ok "Conflict check complete"; save_state "conflict_check" "done"; return 0
+  fi
   fail "No conflict report in docs/conflicts/"; save_state "conflict_check" "failed"; return 1
 }
 
@@ -355,7 +371,15 @@ run_architecture_review() {
   check_plan || { fail "GATE: Need plan in docs/plans/ first"; return 1; }
   log "Reviewing architecture feasibility and alignment..."
   run_claude "Run the /architecture-review skill. Review all stories and the plan for technical feasibility, architectural alignment, domain integrity, and risks. Write review to docs/decisions/architecture-review-*.md. Issue APPROVED, APPROVED WITH CONDITIONS, or BLOCKED verdict."
-  check_architecture_review && { ok "Architecture review complete"; save_state "architecture_review" "done"; return 0; }
+
+  if check_architecture_review; then
+    # Check for BLOCKED verdict — requires human
+    if grep -rqiE "verdict.*blocked" "${PROJECT_DIR}"/docs/decisions/architecture-review-*.md 2>/dev/null; then
+      warn "Architecture BLOCKED — interactive session to resolve..."
+      run_claude "The architecture review issued a BLOCKED verdict. Present the blocking issues to the user with resolution options. The user must decide. After resolution, update the review and re-issue verdict." "interactive"
+    fi
+    ok "Architecture review complete"; save_state "architecture_review" "done"; return 0
+  fi
   fail "No architecture review in docs/decisions/"; save_state "architecture_review" "failed"; return 1
 }
 
