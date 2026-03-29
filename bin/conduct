@@ -654,8 +654,18 @@ stop_live_refresh() {
   REFRESH_PID=""
 }
 
-# Clean up on exit
+cleanup_and_exit() {
+  stop_live_refresh
+  echo ""
+  log "Interrupted. Saving state..."
+  show_status
+  echo -e "Resume later: ${BOLD}conduct --resume${NC}"
+  exit 130
+}
+
+# Clean up on exit, save state on Ctrl+C
 trap 'stop_live_refresh' EXIT
+trap 'cleanup_and_exit' INT TERM
 
 # ─── Rate Limit ───────────────────────────────────────────────────────────────
 
