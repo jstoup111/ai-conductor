@@ -44,6 +44,12 @@ For each task in the implementation plan:
 
 Update `.pipeline/task-status.json` — mark task as `in_progress` before coding, `completed` after commit. The post-commit hook is a backup; fix stale status immediately if detected.
 
+**Batch identical-pattern tasks:** When consecutive tasks follow the same pattern (e.g., "add
+validations to Model X" repeated for 5 models), batch them into a single agent dispatch rather
+than running one-at-a-time. The agent handles all models in one TDD pass. This avoids repetitive
+RED/GREEN narration for identical patterns. Only batch when tasks share the same pattern AND
+don't modify overlapping files.
+
 ### Quality Gates
 
 **HARD GATE: Evaluator dispatch is mandatory at required batch boundaries.**

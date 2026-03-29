@@ -22,6 +22,21 @@ Load ALL stories and specs:
 - Active specs from `docs/specs/` (for design-level context)
 - Previous conflict reports from `docs/conflicts/` (to check for recurring patterns)
 
+### 1b. As-Built Story Handling
+
+When stories have `[AS-BUILT]` markers (from `/bootstrap`), they document **existing working
+code**. Overlap between as-built stories is expected — the same endpoint may appear in multiple
+stories describing different aspects of the same feature.
+
+**Scoring adjustment for as-built pairs:**
+- Two `[AS-BUILT]` stories sharing an endpoint → **not a conflict** unless they assert
+  contradictory behavior. Same endpoint, same behavior, different story angle = normal.
+- `[AS-BUILT]` vs new story → check normally. New work may genuinely conflict with existing behavior.
+- Two new stories → check normally.
+
+This prevents false positives when bootstrapping an existing codebase where stories naturally
+overlap because they were reverse-engineered from the same working system.
+
 ### 2. Conflict Scan
 
 Check each pair of stories for these conflict types:

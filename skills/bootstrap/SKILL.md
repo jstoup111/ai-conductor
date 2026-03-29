@@ -138,7 +138,8 @@ Offer MCP server configuration based on project:
 - **Browser automation (full-stack only):** configure `@modelcontextprotocol/server-puppeteer`
   for manual-test automation. Skip for API-only (curl suffices).
 
-MCP setup is optional. Skip if user declines.
+**For full-stack projects, GitHub and browser automation MCP are expected** — configure them
+unless the user explicitly declines. For API-only projects, MCP is optional.
 
 ### 10. Smoke Test
 
