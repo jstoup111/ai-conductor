@@ -58,28 +58,40 @@ Then in the Claude Code session:
 ```
 
 The conductor checks artifact state, tells you what to run next, and blocks when gates aren't met.
-It walks you through:
+It walks you through all 13 steps:
 
 ```
-/bootstrap → /brainstorm → /stories → /conflict-check → /plan → /pipeline → /finish → /retro
+/bootstrap → /brainstorm → /stories → /conflict-check → /plan → /architecture-review
+→ /writing-system-tests → /pipeline → /finish → /manual-test → /retro
 ```
 
 ### Automated
 
 ```bash
 cd your-project/
-conduct "Add user authentication with session tokens"
+
+# Fully automated — walk away and come back
+conduct --auto "URL shortener with click tracking"
+
+# Default — auto with interactive recovery on failure
+conduct "Add user authentication"
+
+# Manual oversight — interactive Claude for every step
+conduct --interactive "Payment processing"
 ```
 
-Runs the full SDLC with minimal intervention. Non-interactive steps use `claude -p`. The build
-step drops to an interactive session for TDD oversight.
-
 ```bash
-conduct --status          # Check progress
+conduct --status          # Check progress (shows all 13 steps)
 conduct --resume          # Pick up where you left off
 conduct --step stories    # Run one step only
 conduct --from plan       # Start from a specific step
+conduct --reset           # Clear session state and start fresh
 ```
+
+On failure, conduct sends a desktop notification and drops into an interactive Claude session
+to fix the issue. After you `/quit`, it rechecks artifacts and continues automatically.
+
+Handles API rate limits by waiting for reset and auto-retrying.
 
 ## How It Works
 
@@ -91,29 +103,32 @@ UNDERSTAND → DECIDE → BUILD → SHIP
 
 | Phase | Skills | What Happens |
 |-------|--------|-------------|
-| UNDERSTAND | `/bootstrap`, `/memory` | Detect stack, scaffold dirs, load tech-context, recall prior decisions |
-| DECIDE | `/brainstorm` → `/stories` → `/conflict-check` → `/plan` | Design doc → stories with negative paths → conflict detection → task breakdown |
-| BUILD | `/tdd`, `/pipeline`, `/code-review`, `/debugging` | TDD cycles with domain review, evaluator gates, quality checks |
-| SHIP | `/finish`, `/retro` | Fresh verification, merge/PR options, dual retrospective |
+| UNDERSTAND | `/bootstrap`, `/memory` | Detect/scaffold project, load tech-context, recall prior decisions |
+| DECIDE | `/brainstorm` → `/stories` → `/conflict-check` → `/plan` → `/architecture-review` | Design → stories → conflicts → tasks → architecture gate |
+| BUILD | `/writing-system-tests` → `/pipeline` or `/tdd`, `/code-review`, `/debugging` | Acceptance specs → TDD → evaluator gates |
+| SHIP | `/finish` → `/manual-test` → `/retro` | Verification → curl/browser validation → dual retrospective |
 
-### Skills (14 total)
+### Skills (17 total)
 
-| Skill | Enforcement | Purpose |
-|-------|-------------|---------|
-| `/bootstrap` | Advisory | Detect project type, scaffold directories, smoke test, MCP setup |
-| `/memory` | Gating | Recall/persist decisions, patterns, gotchas across sessions |
-| `/brainstorm` | Advisory | Explore requirements, propose approaches, write design doc, scope check |
-| `/stories` | Gating | Generate user stories with mandatory negative paths (10 categories) |
-| `/conflict-check` | Gating | Detect contradictions between stories (5 conflict types) |
-| `/plan` | Gating | Break stories into 2-5 minute tasks with dependency graph |
-| `/tdd` | Structural | RED → DOMAIN → GREEN → DOMAIN → COMMIT with subagent isolation |
-| `/pipeline` | Structural | Multi-task orchestration with quality gates and rework budgets |
-| `/code-review` | Gating | Evaluator dispatch: spec compliance → code quality → domain integrity |
-| `/debugging` | Gating | 4-phase investigation before any fix (no shotgun debugging) |
-| `/finish` | Gating | Fresh verification, story coverage check, merge/PR options |
-| `/retro` | Advisory | Dual analysis: harness performance + application code health |
-| `/conduct` | Gating | SDLC orchestrator: status dashboard, gate enforcement, flow guidance |
-| `/simplify` | Advisory | Review changed code for reuse, quality, and efficiency |
+| Skill | Enforcement | Model | Purpose |
+|-------|-------------|-------|---------|
+| `/bootstrap` | Advisory | sonnet | Detect/scaffold project, .claudeignore, smoke test, MCP setup |
+| `/memory` | Gating | haiku | Recall/persist decisions, patterns, gotchas across sessions |
+| `/brainstorm` | Advisory | opus | Explore requirements, scope check, API contract, design doc |
+| `/stories` | Gating | sonnet | User stories with mandatory negative paths (10 categories) |
+| `/conflict-check` | Gating | opus | Detect contradictions (5 types), resolutions create ADRs |
+| `/plan` | Gating | sonnet | 2-5 min tasks, dependency graph, scope sanity check |
+| `/architecture-review` | Gating | opus | Feasibility, alignment, domain integrity, risk register. BLOCKED = human required |
+| `/writing-system-tests` | Gating | sonnet | Failing acceptance specs (integration for API, system for full-stack) |
+| `/tdd` | Structural | sonnet | RED → DOMAIN → GREEN → DOMAIN → COMMIT with subagent isolation |
+| `/pipeline` | Structural | sonnet | Multi-task orchestration, quality gates, rework budgets, progress log |
+| `/code-review` | Gating | opus | Evaluator: spec compliance (+ OVER-BUILT) → quality → domain |
+| `/debugging` | Gating | opus | 4-phase investigation before any fix |
+| `/finish` | Gating | haiku | Fresh verification, story coverage, merge/PR options |
+| `/manual-test` | Gating | sonnet | Validate stories via curl/browser, bug loop through /tdd |
+| `/retro` | Advisory | opus | Dual analysis: harness + application, trend tracking |
+| `/conduct` | Gating | haiku | SDLC orchestrator: 13-step flow with gate enforcement |
+| `/simplify` | Advisory | sonnet | Review code for duplication and complexity |
 
 ### Agent Personas
 
