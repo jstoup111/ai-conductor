@@ -374,7 +374,6 @@ run_build() {
   fi
 
   log "Starting TDD pipeline (${autonomy} autonomy, ${mode} mode)..."
-  start_live_refresh 15
   run_claude "Run the /pipeline skill at ${autonomy} autonomy. Execute each task via TDD (RED→DOMAIN→GREEN→DOMAIN→COMMIT).
 
 MANDATORY at batch boundaries:
@@ -387,8 +386,6 @@ MANDATORY at batch boundaries:
 Track state in .pipeline/. Follow rework budget (3 cycles, then escalate).
 Do NOT stop to ask for approval — execute all tasks to completion." "$mode"
 
-  stop_live_refresh
-  refresh_display
   check_build && { ok "Build complete — tests passing"; save_state "build" "done"; return 0; }
   warn "Build may be incomplete — checking tests"; save_state "build" "needs_verification"; return 0
 }
@@ -409,13 +406,10 @@ run_manual_test() {
     ok "Already complete — all stories pass manual testing"; save_state "manual_test" "done"; return 0
   fi
   log "Running manual tests against stories..."
-  start_live_refresh 10
   run_claude "Run the /manual-test skill. Start the application server, then test every story's acceptance criteria using curl (API) or browser (full-stack).
 
 Record results in docs/manual-test-results.md. For any FAILs, write a failing test (RED), fix it (GREEN), commit, and re-test until all stories pass. Do NOT proceed with bugs remaining."
 
-  stop_live_refresh
-  refresh_display
   check_manual_test && { ok "Manual tests all pass"; save_state "manual_test" "done"; return 0; }
   fail "Manual test has FAILs — bugs need fixing"; save_state "manual_test" "failed"; return 1
 }
@@ -885,8 +879,9 @@ fi
 
 # ─── Main Loop ────────────────────────────────────────────────────────────────
 
-# Initial display
+# Initial display + start live refresh for the entire run
 refresh_display
+start_live_refresh 10
 
 i=$start_index
 while [ "$i" -lt "${#STEP_FUNCS[@]}" ]; do
@@ -906,6 +901,7 @@ while [ "$i" -lt "${#STEP_FUNCS[@]}" ]; do
 done
 
 # Done
+stop_live_refresh
 refresh_display
 send_notification "SDLC complete" "All steps finished. Review retro in docs/retros/"
 echo -e "${GREEN}${BOLD}SDLC complete.${NC} Review the retro in docs/retros/"
