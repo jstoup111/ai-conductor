@@ -82,7 +82,7 @@ name_session() {
   local feature_short="${FEATURE_DESC:0:40}"
   local session_name="${project_name}: ${feature_short}"
   # Resume with --name to set the display name, then immediately exit with a no-op prompt
-  claude --resume "$session_id" --name "$session_name" -p "Session named." --auto >> "$SESSION_LOG" 2>&1 || true
+  claude --resume "$session_id" --name "$session_name" -p "Session named." --permission-mode auto >> "$SESSION_LOG" 2>&1 || true
   log "Session named: ${session_name}"
 }
 
@@ -164,8 +164,8 @@ else:
     # Clear any stale rate limit marker
     rm -f "${PIPELINE_DIR}/rate-limit-hit"
 
-    # Prefer --auto over --dangerously-skip-permissions
-    local perm_flag="--auto"
+    # Prefer --permission-mode auto over --dangerously-skip-permissions
+    local perm_flag="--permission-mode auto"
 
     if [ "${VIEW_MODE}" = "output" ]; then
       claude -p "$prompt" \
