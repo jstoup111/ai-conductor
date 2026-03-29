@@ -39,10 +39,20 @@ ok()   { echo -e "${GREEN}  ✓${NC} $*"; }
 fail() { echo -e "${RED}  ✗${NC} $*"; }
 warn() { echo -e "${YELLOW}  ⚠${NC} $*"; }
 
+CURRENT_STEP_FILE="${PIPELINE_DIR}/.current-step"
+
+set_current_step() {
+  ensure_pipeline_dir
+  echo "$1" > "$CURRENT_STEP_FILE" 2>/dev/null
+}
+
+get_current_step() {
+  cat "$CURRENT_STEP_FILE" 2>/dev/null || echo ""
+}
+
 step_header() {
   local num=$1 name=$2 phase=$3
-  echo ""
-  echo -e "${BOLD}${CYAN}━━━ Step ${num}: ${name} (${phase}) ━━━${NC}"
+  set_current_step "$name"
 }
 
 ensure_pipeline_dir() {
@@ -67,6 +77,10 @@ get_session_id() {
 save_state() {
   local step=$1 status=$2
   ensure_pipeline_dir
+  # Clear current step indicator when a step completes
+  if [ "$status" = "done" ] || [ "$status" = "skipped" ] || [ "$status" = "failed" ]; then
+    echo "" > "$CURRENT_STEP_FILE" 2>/dev/null
+  fi
   python3 << PYEOF
 import json, os
 path = "$STATE_FILE"
@@ -555,10 +569,15 @@ show_status() {
   local phases=("UNDERSTAND" "UNDERSTAND" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "BUILD" "BUILD" "SHIP" "SHIP" "SHIP")
   local checks=(check_bootstrap "" check_brainstorm check_stories check_conflict_check check_plan check_architecture_review check_acceptance_specs check_build "" check_manual_test check_retro)
 
+  local current_step
+  current_step=$(get_current_step)
+
   for i in "${!steps[@]}"; do
     local state
     state=$(get_state "${steps[$i]}")
     local icon
+    local is_active=false
+
     case "$state" in
       done)     icon="${GREEN}✓${NC}" ;;
       skipped)  icon="${YELLOW}→${NC}" ;;
@@ -566,6 +585,9 @@ show_status() {
       *)
         if [ -n "${checks[$i]}" ] && ${checks[$i]} 2>/dev/null; then
           icon="${GREEN}✓${NC}"
+        elif [ "${labels[$i]}" = "$current_step" ]; then
+          icon="${YELLOW}▶${NC}"
+          is_active=true
         else
           icon="⬚"
         fi
@@ -583,6 +605,17 @@ show_status() {
   done
 
   echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+
+  # Show last activity from log
+  if [ -n "$current_step" ] && [ -f "$SESSION_LOG" ]; then
+    local last_line
+    last_line=$(grep -v '^$' "$SESSION_LOG" 2>/dev/null | tail -1 | cut -c1-70)
+    if [ -n "$last_line" ]; then
+      echo -e "  ${YELLOW}▶${NC} ${last_line}"
+    else
+      echo -e "  ${YELLOW}▶${NC} Running ${current_step}..."
+    fi
+  fi
   echo ""
 }
 
