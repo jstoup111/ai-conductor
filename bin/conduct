@@ -571,17 +571,31 @@ show_status() {
 STATUS_LINES=0
 
 refresh_display() {
-  # Move cursor up to overwrite previous status, then redraw
+  # Render into buffer first, then overwrite in one shot — no flash
+  local buffer
+  buffer=$(show_status)
+  local new_lines
+  new_lines=$(echo "$buffer" | wc -l)
+
+  # Move cursor up to start of previous status block
   if [ "$STATUS_LINES" -gt 0 ]; then
-    printf "\033[%dA" "$STATUS_LINES"  # Move up N lines
-    printf "\033[J"                     # Clear from cursor to end of screen
+    printf "\033[%dA" "$STATUS_LINES"
   fi
 
-  # Capture status output and count lines
-  local output
-  output=$(show_status)
-  STATUS_LINES=$(echo "$output" | wc -l)
-  echo "$output"
+  # Print new content (overwrites old lines)
+  echo "$buffer"
+
+  # If new output is shorter than old, clear leftover lines
+  if [ "$new_lines" -lt "$STATUS_LINES" ]; then
+    local extra=$(( STATUS_LINES - new_lines ))
+    for _ in $(seq 1 "$extra"); do
+      printf "\033[2K\n"  # Clear line
+    done
+    # Move back up past the cleared lines
+    printf "\033[%dA" "$extra"
+  fi
+
+  STATUS_LINES=$new_lines
 }
 
 # Background refresh for long-running steps (build, manual-test)
