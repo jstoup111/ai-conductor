@@ -32,9 +32,11 @@ Execute in order. Failures in earlier stages block later stages.
 ### Stage 1: Spec Compliance
 - Read the story acceptance criteria (happy AND negative paths)
 - For each criterion: is there a test? Does the test actually verify it?
-- Is anything implemented that wasn't asked for?
+- Is anything implemented that wasn't asked for? (Flag as OVER-BUILT)
 - Are there criteria with no corresponding test?
-- **Verdict:** PASS or FAIL with specific findings
+- **Verdict:** PASS | FAIL | OVER-BUILT with specific findings
+- **OVER-BUILT** is a distinct problem — extra code means extra tests, extra maintenance,
+  extra surface for bugs. If it wasn't in the story, it shouldn't be in the code.
 
 ### Stage 2: Code Quality
 - Is the code clear to read without explanation?
@@ -86,6 +88,15 @@ Execute in order. Failures in earlier stages block later stages.
 | **Critical** | Will cause bugs, data loss, or security vulnerabilities in production | Missing auth check, SQL injection, data corruption |
 | **Important** | Missing functionality, incomplete testing, or significant maintainability risk | Untested negative path, missing validation, tight coupling |
 | **Minor** | Style, readability, or minor improvements that don't affect correctness | Naming suggestions, comment improvements, minor refactors |
+
+## Escalation of Recurring Issues
+
+Track findings across consecutive reviews. If a non-blocking SUGGESTION appears in 2+
+consecutive reviews of different tasks/slices, escalate it to blocking IMPORTANT severity.
+
+Patterns of suggestions indicate systemic problems, not one-offs. Examples:
+- "Consider extracting a service object" in 3 reviews → IMPORTANT: extract now
+- "Missing index" suggested twice → IMPORTANT: add indexes before continuing
 
 ## What You Are NOT
 
