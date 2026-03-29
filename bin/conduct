@@ -542,9 +542,9 @@ show_status() {
   local session_id="none"
   [ -f "$SESSION_FILE" ] && session_id="$(cat "$SESSION_FILE" | head -c 8)..."
 
-  echo -e "${BOLD}${CYAN}╔══════════════════════════════════════════╗${NC}"
-  echo -e "${BOLD}${CYAN}║     SDLC Conductor — Harness Runner     ║${NC}"
-  echo -e "${BOLD}${CYAN}╚══════════════════════════════════════════╝${NC}"
+  echo -e "${BOLD}${CYAN}╔═══════════════════════════════════════════╗${NC}"
+  echo -e "${BOLD}${CYAN}║     SDLC Conductor - Harness Runner      ║${NC}"
+  echo -e "${BOLD}${CYAN}╚═══════════════════════════════════════════╝${NC}"
   echo -e "  Project: $(basename "$PROJECT_DIR")"
   [ -n "${FEATURE_DESC:-}" ] && echo -e "  Feature: ${FEATURE_DESC}"
   echo -e "  Mode:    ${RUN_MODE:-default}    Session: ${session_id}"
