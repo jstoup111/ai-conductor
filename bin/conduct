@@ -756,7 +756,11 @@ recover() {
   [ -f "${PIPELINE_DIR}/session-created" ] && recover_flag="--resume ${session_id}"
   stop_live_refresh
   STATUS_LINES=0
-  claude $recover_flag --append-system-prompt "The conduct script hit a failure at step: ${step_name}. Complete this step, then /quit to return to the conductor."
+  claude $recover_flag --append-system-prompt "The conduct script hit a failure at step: ${step_name}.
+
+IMPORTANT: Complete ONLY this step (${step_name}), then /quit to return to the conductor.
+Do NOT run other skills or advance to later phases. The conductor manages the flow —
+your job is to fix this one step only. Run /${step_name} and stop."
   reset_display
   start_live_refresh 10
   touch "${PIPELINE_DIR}/session-created"

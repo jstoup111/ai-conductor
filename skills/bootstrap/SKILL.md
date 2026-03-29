@@ -59,10 +59,27 @@ If the directory is empty or has no project files, ask the user what to create:
    - Node: add jest or vitest
    - Python: add pytest
 5. **Configure database** for Docker if docker-compose.yml exists or user mentions Docker:
-   - Create `docker-compose.yml` with PostgreSQL service if needed
-   - Update `database.yml` (or equivalent) with connection settings
+   - **Detect port conflicts BEFORE writing docker-compose.yml:**
+     ```bash
+     # Check which ports are in use
+     docker ps --format '{{.Ports}}' 2>/dev/null | grep -oE '[0-9]+->5432'
+     ss -tlnp 2>/dev/null | grep -oE ':[0-9]+' | sort -u
+     ```
+   - Pick the next available port starting from 5432 (try 5432, 5433, 5434...)
+   - Create `docker-compose.yml` with the available port
+   - Update `database.yml` (or equivalent) with matching connection settings
    - Start the container and create databases
-6. **Initialize git** if not already a repo: `git init && git add -A && git commit -m "Initial project scaffold"`
+6. **Set up .gitignore BEFORE first commit:**
+   - Ensure these are in `.gitignore` before any `git add`:
+     ```
+     /vendor/bundle
+     /node_modules
+     /tmp
+     /log
+     /.bundle
+     ```
+   - This prevents committing thousands of vendor files then removing them
+7. **Initialize git** if not already a repo: `git init && git add -A && git commit -m "Initial project scaffold"`
 
 After scaffolding, continue to Step 2 (detect project type) — the scaffold will now be detected.
 
