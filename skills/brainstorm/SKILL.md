@@ -55,33 +55,9 @@ Include a recommendation with reasoning. The user decides.
 
 ### 4. Write Design Document
 
-After the user selects an approach, write a design document:
+After the user selects an approach, write a design document using `templates/design-doc.md.template`.
 
-```markdown
-# Design: [Feature Name]
-
-**Date:** YYYY-MM-DD
-**Status:** Draft | Approved
-
-## Problem
-[What problem this solves and why it matters]
-
-## Solution
-[Selected approach and how it works at a high level]
-
-## Scope
-### In Scope
-- [Specific deliverable]
-- [Specific deliverable]
-
-### Out of Scope
-- [Explicitly excluded item]
-
-## Key Decisions
-- [Decision and rationale]
-
-## Open Questions
-- [Anything still unresolved]
+Required sections: Problem, Solution, Scope (In/Out), Key Decisions, Open Questions.
 ```
 
 Save to `docs/specs/YYYY-MM-DD-<topic>.md`

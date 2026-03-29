@@ -1,0 +1,23 @@
+# Design: [Feature Name]
+
+**Date:** YYYY-MM-DD
+**Status:** Draft | Approved
+
+## Problem
+[What problem this solves and why it matters]
+
+## Solution
+[Selected approach and how it works at a high level]
+
+## Scope
+### In Scope
+- [Specific deliverable]
+
+### Out of Scope
+- [Explicitly excluded item]
+
+## Key Decisions
+- [Decision and rationale]
+
+## Open Questions
+- [Anything still unresolved]
