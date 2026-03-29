@@ -216,7 +216,7 @@ if os.path.exists(path):
 else:
     print(0)
 ")
-  local context="[Conduct step ${iteration}/13] Feature: ${FEATURE_DESC:-unknown}"
+  local context="[Conduct step ${iteration}/14] Feature: ${FEATURE_DESC:-unknown}"
 
   if [ "$mode" = "print" ]; then
     log "Sending to Claude (session: ${session_id:0:8}...)..."
@@ -470,6 +470,121 @@ PYEOF
   save_state "complexity" "done"
 }
 
+# ─── Worktree Management ────────────────────────────────────────────────────
+
+WORKTREE_DIR=""
+WORKTREE_BRANCH=""
+
+# Create a worktree for the feature. Called after plan is approved.
+create_worktree() {
+  # Skip if already in a worktree or not a git repo
+  if ! git rev-parse --is-inside-work-tree &>/dev/null; then
+    warn "Not a git repo — skipping worktree"; return 0
+  fi
+  if [ "$(git rev-parse --is-inside-work-tree 2>/dev/null)" = "true" ] && \
+     [ -n "$(git rev-parse --git-common-dir 2>/dev/null)" ] && \
+     [ "$(git rev-parse --git-common-dir)" != "$(git rev-parse --git-dir)" ]; then
+    warn "Already in a worktree — skipping"; return 0
+  fi
+
+  # Derive branch name from feature description
+  local branch_name
+  branch_name="feature/$(echo "${FEATURE_DESC:-work}" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | cut -c1-50 | sed 's/-$//')"
+
+  # Check if branch already exists
+  if git show-ref --verify --quiet "refs/heads/${branch_name}" 2>/dev/null; then
+    # Branch exists — check for existing worktree
+    local existing_wt
+    existing_wt=$(git worktree list --porcelain | grep -B1 "branch refs/heads/${branch_name}" | grep "^worktree " | sed 's/^worktree //')
+    if [ -n "$existing_wt" ] && [ -d "$existing_wt" ]; then
+      WORKTREE_DIR="$existing_wt"
+      WORKTREE_BRANCH="$branch_name"
+      ok "Reusing existing worktree: ${WORKTREE_DIR}"
+      return 0
+    fi
+  fi
+
+  local wt_dir="${PROJECT_DIR}/../$(basename "$PROJECT_DIR")-${branch_name##*/}"
+
+  log "Creating worktree: ${branch_name}"
+  if git worktree add "$wt_dir" -b "$branch_name" 2>/dev/null || \
+     git worktree add "$wt_dir" "$branch_name" 2>/dev/null; then
+    WORKTREE_DIR="$wt_dir"
+    WORKTREE_BRANCH="$branch_name"
+    ok "Worktree created: ${WORKTREE_DIR} (branch: ${branch_name})"
+
+    # Copy pipeline state to worktree so conduct can continue
+    if [ -d "${PROJECT_DIR}/.pipeline" ]; then
+      cp -r "${PROJECT_DIR}/.pipeline" "${WORKTREE_DIR}/.pipeline"
+    fi
+    # Copy docs artifacts generated in DECIDE phase
+    if [ -d "${PROJECT_DIR}/docs" ]; then
+      cp -r "${PROJECT_DIR}/docs" "${WORKTREE_DIR}/docs"
+    fi
+    if [ -d "${PROJECT_DIR}/.memory" ]; then
+      cp -r "${PROJECT_DIR}/.memory" "${WORKTREE_DIR}/.memory"
+    fi
+  else
+    warn "Worktree creation failed — continuing in main directory"
+  fi
+}
+
+# Switch conduct's working directory to the worktree
+enter_worktree() {
+  if [ -n "$WORKTREE_DIR" ] && [ -d "$WORKTREE_DIR" ]; then
+    PROJECT_DIR="$WORKTREE_DIR"
+    PIPELINE_DIR="${PROJECT_DIR}/.pipeline"
+    SESSION_LOG="${PIPELINE_DIR}/conduct.log"
+    STATE_FILE="${PIPELINE_DIR}/conduct-state.json"
+    cd "$PROJECT_DIR"
+    log "Working in worktree: ${PROJECT_DIR}"
+  fi
+}
+
+# Clean up worktree after PR merge or discard
+cleanup_worktree() {
+  if [ -z "$WORKTREE_DIR" ] || [ -z "$WORKTREE_BRANCH" ]; then
+    return 0
+  fi
+  log "Cleaning up worktree..."
+  local original_dir="${WORKTREE_DIR%%-*}"  # approximate — may need adjustment
+  cd "$original_dir" 2>/dev/null || cd "$HOME"
+  git worktree remove "$WORKTREE_DIR" --force 2>/dev/null && ok "Worktree removed" || warn "Worktree removal failed — clean up manually: git worktree remove ${WORKTREE_DIR}"
+  WORKTREE_DIR=""
+}
+
+# Save worktree info to state for resume across sessions
+save_worktree_state() {
+  if [ -n "$WORKTREE_DIR" ]; then
+    python3 -c "
+import json, os, sys
+path = '$STATE_FILE'
+state = {}
+if os.path.exists(path):
+    with open(path) as f:
+        state = json.load(f)
+state['worktree_dir'] = sys.argv[1]
+state['worktree_branch'] = sys.argv[2]
+with open(path, 'w') as f:
+    json.dump(state, f, indent=2)
+" "$WORKTREE_DIR" "$WORKTREE_BRANCH"
+  fi
+}
+
+# Restore worktree info from state on resume
+restore_worktree_state() {
+  if [ -f "$STATE_FILE" ]; then
+    WORKTREE_DIR=$(python3 -c "import json; print(json.load(open('$STATE_FILE')).get('worktree_dir',''))" 2>/dev/null || echo "")
+    WORKTREE_BRANCH=$(python3 -c "import json; print(json.load(open('$STATE_FILE')).get('worktree_branch',''))" 2>/dev/null || echo "")
+    if [ -n "$WORKTREE_DIR" ] && [ -d "$WORKTREE_DIR" ]; then
+      enter_worktree
+    else
+      WORKTREE_DIR=""
+      WORKTREE_BRANCH=""
+    fi
+  fi
+}
+
 # Helper: get complexity tier (S/M/L, defaults to M)
 get_complexity_tier() {
   if [ -f "$STATE_FILE" ]; then
@@ -603,8 +718,31 @@ run_architecture_review() {
   fail "No architecture review in docs/decisions/"; save_state "architecture_review" "failed"; return 1
 }
 
+run_worktree_setup() {
+  step_header 8 "worktree" "BUILD"
+  # Check if already set up
+  if [ -n "$WORKTREE_DIR" ] && [ -d "$WORKTREE_DIR" ]; then
+    ok "Already in worktree: ${WORKTREE_DIR}"; save_state "worktree" "done"; return 0
+  fi
+  local wt_state
+  wt_state=$(get_state "worktree")
+  if [ "$wt_state" = "done" ] || [ "$wt_state" = "skipped" ]; then
+    restore_worktree_state
+    ok "Worktree restored"; return 0
+  fi
+
+  create_worktree
+  if [ -n "$WORKTREE_DIR" ]; then
+    enter_worktree
+    save_worktree_state
+    save_state "worktree" "done"
+  else
+    save_state "worktree" "skipped"
+  fi
+}
+
 run_acceptance_specs() {
-  step_header 8 "acceptance specs" "BUILD"
+  step_header 9 "acceptance specs" "BUILD"
   if should_skip_for_tier "acceptance-specs"; then
     ok "Skipped (Small tier — request specs in TDD suffice)"; save_state "acceptance_specs" "skipped"; return 0
   fi
@@ -764,6 +902,11 @@ get_phase_detail() {
       [ "$count" -eq 0 ] && count=$(compgen -G "${PROJECT_DIR}/spec/system/*_spec.rb" 2>/dev/null | wc -l)
       [ "$count" -gt 0 ] && echo "${count} spec file(s)"
       ;;
+    worktree)
+      if [ -n "$WORKTREE_DIR" ] && [ -d "$WORKTREE_DIR" ]; then
+        echo "${WORKTREE_BRANCH:-$(basename "$WORKTREE_DIR")}"
+      fi
+      ;;
     build)
       # Show test results — the key visual cue
       local pipeline_detail=""
@@ -838,10 +981,10 @@ show_status() {
   echo -e "  Mode:    ${RUN_MODE:-default}    Session: ${session_id}"
   echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 
-  local steps=("bootstrap" "memory" "brainstorm" "complexity" "stories" "conflict_check" "plan" "architecture_review" "acceptance_specs" "build" "finish" "manual_test" "retro")
-  local labels=("bootstrap" "memory" "brainstorm" "complexity" "stories" "conflict-check" "plan" "arch review" "acceptance specs" "tdd/pipeline" "finish" "manual-test" "retro")
-  local phases=("UNDERSTAND" "UNDERSTAND" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "BUILD" "BUILD" "SHIP" "SHIP" "SHIP")
-  local checks=(check_bootstrap "" check_brainstorm "" check_stories check_conflict_check check_plan check_architecture_review check_acceptance_specs check_build "" check_manual_test check_retro)
+  local steps=("bootstrap" "memory" "brainstorm" "complexity" "stories" "conflict_check" "plan" "architecture_review" "worktree" "acceptance_specs" "build" "finish" "manual_test" "retro")
+  local labels=("bootstrap" "memory" "brainstorm" "complexity" "stories" "conflict-check" "plan" "arch review" "worktree" "acceptance specs" "tdd/pipeline" "finish" "manual-test" "retro")
+  local phases=("UNDERSTAND" "UNDERSTAND" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "BUILD" "BUILD" "BUILD" "SHIP" "SHIP" "SHIP")
+  local checks=(check_bootstrap "" check_brainstorm "" check_stories check_conflict_check check_plan check_architecture_review "" check_acceptance_specs check_build "" check_manual_test check_retro)
 
   local current_step
   current_step=$(get_current_step)
@@ -1140,7 +1283,7 @@ usage() {
   echo "  -h, --help        Show this help"
   echo ""
   echo "Steps: bootstrap, memory, brainstorm, complexity, stories, conflict-check, plan,"
-  echo "       architecture-review, acceptance-specs, build, finish, manual-test, retro"
+  echo "       architecture-review, worktree, acceptance-specs, build, finish, manual-test, retro"
   echo ""
   echo "Examples:"
   echo "  conduct --auto \"URL shortener with click tracking\"    # Fully automated"
@@ -1193,6 +1336,9 @@ if [ -z "$FEATURE_DESC" ] && [ -f "$STATE_FILE" ]; then
   FEATURE_DESC=$(python3 -c "import json; print(json.load(open('$STATE_FILE')).get('feature_desc',''))" 2>/dev/null || echo "")
 fi
 
+# Restore worktree state if resuming
+restore_worktree_state
+
 ensure_pipeline_dir
 
 # Single step mode
@@ -1206,6 +1352,7 @@ if [ -n "$SINGLE_STEP" ]; then
     conflict-check|conflict_check)          run_conflict_check ;;
     plan)                                   run_plan ;;
     architecture-review|architecture_review) run_architecture_review ;;
+    worktree)                                               run_worktree_setup ;;
     acceptance-specs|acceptance_specs|writing-system-tests) run_acceptance_specs ;;
     build)                                  run_build ;;
     finish)                                 run_finish ;;
@@ -1218,8 +1365,8 @@ if [ -n "$SINGLE_STEP" ]; then
 fi
 
 # Step registry — use underscores to match save_state() keys in conduct-state.json
-ALL_STEPS=(bootstrap memory brainstorm complexity stories conflict_check plan architecture_review acceptance_specs build finish manual_test retro)
-STEP_FUNCS=(run_bootstrap run_memory run_brainstorm run_complexity_assessment run_stories run_conflict_check run_plan run_architecture_review run_acceptance_specs run_build run_finish run_manual_test run_retro)
+ALL_STEPS=(bootstrap memory brainstorm complexity stories conflict_check plan architecture_review worktree acceptance_specs build finish manual_test retro)
+STEP_FUNCS=(run_bootstrap run_memory run_brainstorm run_complexity_assessment run_stories run_conflict_check run_plan run_architecture_review run_worktree_setup run_acceptance_specs run_build run_finish run_manual_test run_retro)
 
 # Determine starting point
 start_index=0

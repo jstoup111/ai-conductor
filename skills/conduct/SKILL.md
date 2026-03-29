@@ -25,11 +25,12 @@ Step 5:  /stories               → DECIDE
 Step 6:  /conflict-check        → DECIDE (skipped for Small)
 Step 7:  /plan                  → DECIDE
 Step 8:  /architecture-review    → DECIDE (skipped for Small, lightweight for Medium)
-Step 9:  /writing-system-tests  → BUILD (skipped for Small)
-Step 10: /pipeline or /tdd      → BUILD (pipeline evaluator satisfies code-review gate)
-Step 11: /finish                → SHIP
-Step 12: /manual-test           → SHIP (validate stories, bug loop via /tdd)
-Step 13: /retro                 → SHIP
+Step 9:  Worktree setup          → BUILD (create feature branch + worktree for isolation)
+Step 10: /writing-system-tests  → BUILD (skipped for Small)
+Step 11: /pipeline or /tdd      → BUILD (pipeline evaluator satisfies code-review gate)
+Step 12: /finish                → SHIP (merge/PR from worktree, cleanup)
+Step 13: /manual-test           → SHIP (validate stories, bug loop via /tdd)
+Step 14: /retro                 → SHIP
 ```
 
 ## Practices
