@@ -87,11 +87,10 @@ check_installation() {
   else
     warn "glow not installed — artifact review will use cat fallback"
   fi
-  local puppeteer_dir="${HARNESS_DIR}/skills/pr-screenshots/tools/node_modules/puppeteer"
-  if [ -d "$puppeteer_dir" ]; then
-    ok "puppeteer installed (pr-screenshots)"
+  if command -v node &>/dev/null && npm list -g @modelcontextprotocol/server-puppeteer &>/dev/null; then
+    ok "puppeteer MCP server installed"
   else
-    warn "puppeteer not installed — pr-screenshots may not work"
+    warn "puppeteer MCP server not installed"
   fi
 
   # Summary
@@ -359,19 +358,16 @@ install_dependencies() {
     fi
   fi
 
-  # puppeteer — needed by pr-screenshots skill for screenshot capture
+  # @modelcontextprotocol/server-puppeteer — MCP server for browser automation
   if command -v node &>/dev/null; then
-    local puppeteer_tools="${HARNESS_DIR}/skills/pr-screenshots/tools"
-    if [ -d "$puppeteer_tools" ] && [ -f "${puppeteer_tools}/package.json" ]; then
-      if [ -d "${puppeteer_tools}/node_modules/puppeteer" ]; then
-        ok "puppeteer already installed (pr-screenshots)"
-      else
-        info "Installing puppeteer for pr-screenshots..."
-        (cd "$puppeteer_tools" && npm install 2>/dev/null) && ok "puppeteer installed" || warn "puppeteer install failed"
-      fi
+    if npm list -g @modelcontextprotocol/server-puppeteer &>/dev/null; then
+      ok "puppeteer MCP server already installed"
+    else
+      info "Installing @modelcontextprotocol/server-puppeteer globally..."
+      npm install -g @modelcontextprotocol/server-puppeteer 2>/dev/null && ok "puppeteer MCP server installed" || warn "puppeteer MCP install failed"
     fi
   else
-    warn "Node.js not found — puppeteer (pr-screenshots) not installed"
+    warn "Node.js not found — puppeteer MCP server not installed"
   fi
 }
 
