@@ -270,6 +270,18 @@ harness_hooks = {
                 }
             ]
         }
+    ],
+    "StopFailure": [
+        {
+            "matcher": "rate_limit",
+            "hooks": [
+                {
+                    "type": "command",
+                    "command": f"{hooks_dir}/rate-limit-wait.sh",
+                    "timeout": 10
+                }
+            ]
+        }
     ]
 }
 

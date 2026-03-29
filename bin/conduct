@@ -133,52 +133,45 @@ else:
   if [ "$mode" = "print" ]; then
     log "Sending to Claude (session: ${session_id:0:8}...)..."
 
-    local output_file
-    output_file=$(mktemp)
+    # Clear any stale rate limit marker
+    rm -f "${PIPELINE_DIR}/rate-limit-hit"
 
     if [ "${VIEW_MODE}" = "output" ]; then
-      # Output view: show Claude's response on terminal
       claude -p "$prompt" \
         $session_flag \
         --append-system-prompt "$context" \
         --dangerously-skip-permissions \
-        2>&1 | tee -a "$SESSION_LOG" | tee "$output_file"
+        2>&1 | tee -a "$SESSION_LOG"
     else
-      # Dashboard view: Claude output goes to log only, terminal shows status
       claude -p "$prompt" \
         $session_flag \
         --append-system-prompt "$context" \
         --dangerously-skip-permissions \
-        >> "$SESSION_LOG" 2>&1 &
-      local claude_pid=$!
-
-      # Copy output to temp file for rate limit check when done
-      wait "$claude_pid" 2>/dev/null || true
-      # Grab the tail of the log for rate limit detection
-      tail -50 "$SESSION_LOG" > "$output_file" 2>/dev/null
+        >> "$SESSION_LOG" 2>&1 || true
     fi
 
-    local exit_code=${PIPESTATUS[0]:-$?}
-
-    # Check for rate limiting
-    if grep -qiE "rate.limit|usage.limit|5-hour limit|out of.*usage|capacity" "$output_file" 2>/dev/null || [ "$exit_code" -eq 75 ]; then
-      rm -f "$output_file"
+    # Check for rate limit via hook marker (StopFailure hook writes this)
+    if [ -f "${PIPELINE_DIR}/rate-limit-hit" ]; then
+      rm -f "${PIPELINE_DIR}/rate-limit-hit"
       handle_rate_limit
       # Retry after wait
-      claude -p "$prompt" \
-        $session_flag \
-        --append-system-prompt "$context" \
-        --dangerously-skip-permissions \
-        >> "$SESSION_LOG" 2>&1
-      exit_code=$?
+      if [ "${VIEW_MODE}" = "output" ]; then
+        claude -p "$prompt" \
+          $session_flag \
+          --append-system-prompt "$context" \
+          --dangerously-skip-permissions \
+          2>&1 | tee -a "$SESSION_LOG"
+      else
+        claude -p "$prompt" \
+          $session_flag \
+          --append-system-prompt "$context" \
+          --dangerously-skip-permissions \
+          >> "$SESSION_LOG" 2>&1 || true
+      fi
     fi
 
-    rm -f "$output_file"
-
-    if [ "$exit_code" -eq 0 ]; then
-      touch "${PIPELINE_DIR}/session-created"
-      append_progress "$prompt"
-    fi
+    touch "${PIPELINE_DIR}/session-created"
+    append_progress "$prompt"
   else
     log "Interactive session (session: ${session_id:0:8}...). Type /quit when done."
     stop_live_refresh
