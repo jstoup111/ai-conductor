@@ -1308,6 +1308,22 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
+# Detect new feature vs resume
+if [ -n "$FEATURE_DESC" ] && [ -f "$STATE_FILE" ]; then
+  prev_desc=$(python3 -c "import json; print(json.load(open('$STATE_FILE')).get('feature_desc',''))" 2>/dev/null || echo "")
+  if [ -n "$prev_desc" ] && [ "$prev_desc" != "$FEATURE_DESC" ]; then
+    log "New feature detected — resetting state"
+    log "  Previous: ${prev_desc:0:60}"
+    log "  New:      ${FEATURE_DESC:0:60}"
+    # Reset state but preserve session
+    rm -f "$STATE_FILE"
+    rm -f "${PIPELINE_DIR}/session-created"
+    rm -f "$SESSION_FILE"
+    WORKTREE_DIR=""
+    WORKTREE_BRANCH=""
+  fi
+fi
+
 # Save feature description immediately if provided (before any checks can fail)
 if [ -n "$FEATURE_DESC" ]; then
   ensure_pipeline_dir
