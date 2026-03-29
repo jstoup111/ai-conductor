@@ -973,18 +973,30 @@ recover() {
   echo ""
   show_status
   warn "Step failed: ${step_name}. Dropping into interactive session to resolve."
-  log "Fix the issue, then /quit to return to the conductor."
+  log "Claude will start working on this step. Press Enter if prompted, or /quit when done."
   echo ""
 
   local recover_flag="--session-id ${session_id}"
   [ -f "${PIPELINE_DIR}/session-created" ] && recover_flag="--resume ${session_id}"
   stop_live_refresh
   STATUS_LINES=0
-  claude $recover_flag --append-system-prompt "The conduct script hit a failure at step: ${step_name}.
 
-IMPORTANT: Complete ONLY this step (${step_name}), then /quit to return to the conductor.
-Do NOT run other skills or advance to later phases. The conductor manages the flow —
-your job is to fix this one step only. Run /${step_name} and stop."
+  # Pass the recovery action as the first message so Claude starts immediately.
+  # The user just watches and approves — no need to figure out what to type.
+  local recover_prompt="Run /${step_name}. Complete this step, then stop."
+  if [ "$step_name" = "bootstrap" ]; then
+    recover_prompt="Run /bootstrap. Detect the project stack, scaffold directories, generate CLAUDE.md. Stop when done."
+  elif [ "$step_name" = "brainstorm" ]; then
+    recover_prompt="Run /brainstorm for: ${FEATURE_DESC:-this feature}. Write a design doc to docs/specs/."
+  elif [ "$step_name" = "stories" ]; then
+    recover_prompt="Run /stories. Read docs/specs/ and generate stories with negative paths to docs/stories/."
+  elif [ "$step_name" = "build" ]; then
+    recover_prompt="Continue the build. Check .pipeline/task-status.json for progress, run /tdd on the next incomplete task."
+  fi
+
+  claude $recover_flag \
+    --append-system-prompt "The conduct script hit a failure at step: ${step_name}. Complete ONLY this step, then let the user /quit to return to the conductor." \
+    "$recover_prompt"
   reset_display
   start_live_refresh 10
   touch "${PIPELINE_DIR}/session-created"
@@ -1143,24 +1155,44 @@ reset_display
 start_live_refresh 10
 
 i=$start_index
+max_retries=3
+retry_count=0
+
 while [ "$i" -lt "${#STEP_FUNCS[@]}" ]; do
   if ${STEP_FUNCS[$i]}; then
     refresh_display
+    retry_count=0
     i=$((i + 1))
     continue
   fi
 
-  # Step failed — interactive recovery
+  # Step failed — try interactive recovery (up to max_retries)
+  retry_count=$((retry_count + 1))
+  if [ "$retry_count" -ge "$max_retries" ]; then
+    fail "Step ${ALL_STEPS[$i]} failed after $max_retries attempts. Stopping."
+    save_state "${ALL_STEPS[$i]}" "failed"
+    break
+  fi
+
   if recover "${ALL_STEPS[$i]}"; then
     refresh_display
     continue  # retry (don't advance i)
   else
-    i=$((i + 1))  # skip (advance i)
+    fail "Step ${ALL_STEPS[$i]} could not be recovered. Stopping."
+    save_state "${ALL_STEPS[$i]}" "failed"
+    break
   fi
 done
 
-# Done
+# Done — show final status
 stop_live_refresh
 refresh_display
-send_notification "SDLC complete" "All steps finished. Review retro in docs/retros/"
-echo -e "${GREEN}${BOLD}SDLC complete.${NC} Review the retro in docs/retros/"
+
+# Only declare complete if we actually finished all steps
+if [ "$i" -ge "${#STEP_FUNCS[@]}" ]; then
+  send_notification "SDLC complete" "All steps finished. Review retro in docs/retros/"
+  echo -e "${GREEN}${BOLD}SDLC complete.${NC} Review the retro in docs/retros/"
+else
+  send_notification "SDLC stopped" "Failed at step: ${ALL_STEPS[$i]}"
+  echo -e "${RED}${BOLD}SDLC stopped${NC} at step: ${ALL_STEPS[$i]}. Resume with: ${BOLD}conduct --resume${NC}"
+fi
