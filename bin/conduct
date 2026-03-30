@@ -40,14 +40,33 @@ fail() { echo -e "${RED}  ✗${NC} $*"; }
 warn() { echo -e "${YELLOW}  ⚠${NC} $*"; }
 
 CURRENT_STEP_FILE="${PIPELINE_DIR}/.current-step"
+STEP_START_FILE="${PIPELINE_DIR}/.step-start-time"
 
 set_current_step() {
   ensure_pipeline_dir
   echo "$1" > "$CURRENT_STEP_FILE" 2>/dev/null
+  date +%s > "$STEP_START_FILE" 2>/dev/null
 }
 
 get_current_step() {
   cat "$CURRENT_STEP_FILE" 2>/dev/null || echo ""
+}
+
+# Elapsed time since step started, formatted as Xm Ys
+get_step_elapsed() {
+  local start
+  start=$(cat "$STEP_START_FILE" 2>/dev/null || echo "0")
+  [ "$start" = "0" ] && return
+  local now elapsed mins secs
+  now=$(date +%s)
+  elapsed=$((now - start))
+  mins=$((elapsed / 60))
+  secs=$((elapsed % 60))
+  if [ "$mins" -gt 0 ]; then
+    echo "${mins}m ${secs}s"
+  else
+    echo "${secs}s"
+  fi
 }
 
 step_header() {
@@ -1217,6 +1236,10 @@ show_status() {
       done)     icon="${GREEN}✓${NC}" ;;
       skipped)  icon="${YELLOW}→${NC}" ;;
       failed)   icon="${RED}✗${NC}" ;;
+      in_progress)
+        icon="${YELLOW}▶${NC}"
+        is_active=true
+        ;;
       *)
         if [ -n "${checks[$i]}" ] && ${checks[$i]} 2>/dev/null; then
           icon="${GREEN}✓${NC}"
@@ -1241,15 +1264,34 @@ show_status() {
 
   echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 
-  # Show last activity from log — pad to fixed width to overwrite previous content
+  # Show activity: elapsed time, log growth, last meaningful line
   local activity_line=""
-  if [ -n "$current_step" ] && [ -f "$SESSION_LOG" ]; then
-    local last_line
-    last_line=$(grep -v '^$' "$SESSION_LOG" 2>/dev/null | tail -1 | cut -c1-68)
-    if [ -n "$last_line" ]; then
-      activity_line="  ${YELLOW}▶${NC} ${last_line}"
-    else
-      activity_line="  ${YELLOW}▶${NC} Running ${current_step}..."
+  if [ -n "$current_step" ]; then
+    local elapsed
+    elapsed=$(get_step_elapsed)
+    local log_size=""
+    if [ -f "$SESSION_LOG" ]; then
+      local bytes
+      bytes=$(stat -c %s "$SESSION_LOG" 2>/dev/null || stat -f %z "$SESSION_LOG" 2>/dev/null || echo 0)
+      if [ "$bytes" -gt 1048576 ]; then
+        log_size="$(( bytes / 1048576 ))MB"
+      elif [ "$bytes" -gt 1024 ]; then
+        log_size="$(( bytes / 1024 ))KB"
+      elif [ "$bytes" -gt 0 ]; then
+        log_size="${bytes}B"
+      fi
+    fi
+
+    local status_parts="${current_step}"
+    [ -n "$elapsed" ] && status_parts="${status_parts} (${elapsed})"
+    [ -n "$log_size" ] && status_parts="${status_parts} [log: ${log_size}]"
+    activity_line="  ${YELLOW}▶${NC} ${status_parts}"
+
+    # Show last meaningful log line as secondary context
+    if [ -f "$SESSION_LOG" ]; then
+      local last_line
+      last_line=$(grep -v '^$' "$SESSION_LOG" 2>/dev/null | tail -1 | cut -c1-60)
+      [ -n "$last_line" ] && activity_line="${activity_line}\n    ${last_line}"
     fi
   fi
   # Clear line then print (handles variable-length content)
