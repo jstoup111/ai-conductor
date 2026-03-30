@@ -785,6 +785,7 @@ enter_worktree() {
     CURRENT_STEP_FILE="${PIPELINE_DIR}/.current-step"
     STEP_START_FILE="${PIPELINE_DIR}/.step-start-time"
     LINES_FILE="${PIPELINE_DIR}/.display-lines"
+    REFRESH_STOP_FILE="${PIPELINE_DIR}/.refresh-stop"
     mkdir -p "$PIPELINE_DIR"
     # Start a fresh Claude session in the worktree — the old session's
     # context references the main repo paths, not the worktree.
@@ -1443,18 +1444,29 @@ refresh_display() {
 # Background refresh for long-running steps (build, manual-test)
 REFRESH_PID=""
 
+REFRESH_STOP_FILE="${PIPELINE_DIR}/.refresh-stop"
+
 start_live_refresh() {
   # No live refresh in output mode — Claude output owns the terminal
   [ "${VIEW_MODE}" = "output" ] && return 0
 
+  stop_live_refresh  # kill any existing refresh first
+  rm -f "$REFRESH_STOP_FILE"
+
   local interval=${1:-15}
   (
-    # Use background sleep + wait so TERM/INT can interrupt immediately.
-    # Plain `sleep N` blocks signal delivery until it completes on WSL2.
     trap 'exit 0' TERM INT
     while true; do
-      sleep "$interval" &
-      wait $! 2>/dev/null || exit 0
+      # Check stop file every second instead of sleeping the full interval.
+      # This makes stop_live_refresh near-instant on WSL2 where signals
+      # don't interrupt sleep reliably.
+      local waited=0
+      while [ "$waited" -lt "$interval" ]; do
+        [ -f "$REFRESH_STOP_FILE" ] && exit 0
+        sleep 1
+        waited=$((waited + 1))
+      done
+      [ -f "$REFRESH_STOP_FILE" ] && exit 0
       refresh_display 2>/dev/null
     done
   ) &
@@ -1463,14 +1475,16 @@ start_live_refresh() {
 
 stop_live_refresh() {
   if [ -n "$REFRESH_PID" ] && kill -0 "$REFRESH_PID" 2>/dev/null; then
-    # Kill the subshell and any child processes (sleep)
-    kill -- -"$REFRESH_PID" 2>/dev/null || kill "$REFRESH_PID" 2>/dev/null
-    # Timed wait — don't block forever if WSL2 signal delivery stalls
-    local deadline=$(( $(date +%s) + 2 ))
-    while kill -0 "$REFRESH_PID" 2>/dev/null; do
-      [ "$(date +%s)" -ge "$deadline" ] && { kill -9 "$REFRESH_PID" 2>/dev/null; break; }
+    # Signal via file (reliable on WSL2) + kill (belt and suspenders)
+    touch "$REFRESH_STOP_FILE" 2>/dev/null
+    kill "$REFRESH_PID" 2>/dev/null || true
+    # Wait up to 2 seconds, then force kill
+    local i=0
+    while [ "$i" -lt 20 ] && kill -0 "$REFRESH_PID" 2>/dev/null; do
       sleep 0.1 2>/dev/null || true
+      i=$((i + 1))
     done
+    kill -9 "$REFRESH_PID" 2>/dev/null || true
     wait "$REFRESH_PID" 2>/dev/null || true
   fi
   REFRESH_PID=""
