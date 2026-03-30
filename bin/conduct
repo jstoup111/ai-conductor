@@ -2062,6 +2062,89 @@ if [ "$i" -ge "${#STEP_FUNCS[@]}" ]; then
 Co-Authored-By: conduct" 2>/dev/null || true
   fi
 
+  # Pre-push validation: lint + type-check to catch CI failures before pushing
+  log "Running pre-push checks (lint, type-check)..."
+  prepush_ok=true
+
+  # Detect and run linter
+  if [ -f ".rubocop.yml" ] || [ -f ".standard.yml" ]; then
+    log "  Running Ruby linter..."
+    if command -v standardrb &>/dev/null; then
+      standardrb --fix 2>/dev/null || prepush_ok=false
+    elif command -v rubocop &>/dev/null; then
+      rubocop -A 2>/dev/null || prepush_ok=false
+    fi
+  elif [ -f "package.json" ]; then
+    if grep -q '"lint"' package.json 2>/dev/null; then
+      log "  Running npm lint..."
+      npm run lint -- --fix 2>/dev/null || npx eslint --fix . 2>/dev/null || prepush_ok=false
+    fi
+  elif [ -f "pyproject.toml" ] || [ -f "setup.cfg" ]; then
+    if command -v ruff &>/dev/null; then
+      log "  Running ruff..."
+      ruff check --fix . 2>/dev/null || prepush_ok=false
+    fi
+  fi
+
+  # Detect and run type checker
+  if [ -f "tsconfig.json" ]; then
+    log "  Running TypeScript type-check..."
+    npx tsc --noEmit 2>/dev/null || prepush_ok=false
+  elif [ -f "mypy.ini" ] || [ -f "pyproject.toml" ] && grep -q "mypy" pyproject.toml 2>/dev/null; then
+    log "  Running mypy..."
+    mypy . 2>/dev/null || prepush_ok=false
+  fi
+
+  # If checks failed, try to auto-fix via Claude
+  if [ "$prepush_ok" = false ]; then
+    warn "Pre-push checks failed — attempting auto-fix..."
+    git add -A 2>/dev/null || true
+    if ! git diff --cached --quiet 2>/dev/null; then
+      git commit -m "Auto-fix lint issues
+
+Co-Authored-By: conduct" 2>/dev/null || true
+    fi
+
+    # Re-run to see if auto-fix was sufficient
+    prepush_ok=true
+    if [ -f "tsconfig.json" ]; then
+      npx tsc --noEmit 2>/dev/null || prepush_ok=false
+    fi
+    if [ -f "package.json" ] && grep -q '"lint"' package.json 2>/dev/null; then
+      npm run lint 2>/dev/null || prepush_ok=false
+    fi
+
+    if [ "$prepush_ok" = false ]; then
+      warn "Auto-fix insufficient — launching Claude to resolve..."
+      stop_live_refresh
+      sleep 0.2 2>/dev/null || true
+      clear
+      echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+      echo -e "  ${BOLD}Pre-push fix session${NC} — lint/type-check failures"
+      echo -e "  Type ${BOLD}/quit${NC} when done to return to conductor"
+      echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+      echo ""
+      session_id=$(get_session_id)
+      session_flag="--session-id ${session_id}"
+      [ -f "${PIPELINE_DIR}/session-created" ] && session_flag="--resume ${session_id}"
+      claude $session_flag --append-system-prompt "Pre-push checks failed (lint/type-check). Fix all lint and type errors, run the checks again to verify, then commit the fixes." || true
+      clear
+      ok "Back from fix session"
+      start_live_refresh 10
+      # Commit any fixes
+      git add -A 2>/dev/null || true
+      if ! git diff --cached --quiet 2>/dev/null; then
+        git commit -m "Fix lint and type-check errors
+
+Co-Authored-By: conduct" 2>/dev/null || true
+      fi
+    else
+      ok "Auto-fix resolved all issues"
+    fi
+  else
+    ok "Pre-push checks passed"
+  fi
+
   # Push and create PR
   log "Pushing branch and creating PR..."
   branch=$(git branch --show-current 2>/dev/null || echo "")
@@ -2096,6 +2179,62 @@ PRBODY
       fi
       if [ -n "$pr_url" ]; then
         ok "PR: ${pr_url}"
+
+        # Monitor CI checks — wait up to 5 minutes for results
+        log "Waiting for CI checks..."
+        ci_attempts=0
+        ci_max=30  # 30 x 10s = 5 minutes
+        ci_passed=false
+        while [ "$ci_attempts" -lt "$ci_max" ]; do
+          sleep 10
+          ci_attempts=$((ci_attempts + 1))
+          check_output=$(gh pr checks --json name,state 2>/dev/null || echo "")
+          [ -z "$check_output" ] && continue
+
+          # Check if all checks have completed
+          pending=$(echo "$check_output" | python3 -c "
+import json, sys
+checks = json.load(sys.stdin)
+print(sum(1 for c in checks if c.get('state','') in ('PENDING','QUEUED','IN_PROGRESS','')))" 2>/dev/null || echo "1")
+          [ "$pending" = "0" ] || continue
+
+          # All done — check for failures
+          failures=$(echo "$check_output" | python3 -c "
+import json, sys
+checks = json.load(sys.stdin)
+failed = [c['name'] for c in checks if c.get('state','') == 'FAILURE']
+print(','.join(failed) if failed else '')" 2>/dev/null || echo "")
+
+          if [ -z "$failures" ]; then
+            ok "CI checks passed"
+            ci_passed=true
+          else
+            warn "CI checks failed: ${failures}"
+            log "Launching Claude to fix CI failures..."
+            stop_live_refresh
+            sleep 0.2 2>/dev/null || true
+            clear
+            echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+            echo -e "  ${BOLD}CI fix session${NC} — failed checks: ${failures}"
+            echo -e "  Type ${BOLD}/quit${NC} when done to return to conductor"
+            echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+            echo ""
+            session_id=$(get_session_id)
+            session_flag="--session-id ${session_id}"
+            [ -f "${PIPELINE_DIR}/session-created" ] && session_flag="--resume ${session_id}"
+            claude $session_flag --append-system-prompt "CI checks failed: ${failures}. Read the CI logs with 'gh pr checks', fix the issues, run the checks locally to verify, commit, and push." || true
+            clear
+            git push 2>/dev/null || true
+            start_live_refresh 10
+            # Reset and re-poll
+            ci_attempts=0
+            continue
+          fi
+          break
+        done
+        if [ "$ci_passed" = false ] && [ "$ci_attempts" -ge "$ci_max" ]; then
+          warn "CI checks did not complete within 5 minutes — check manually"
+        fi
       else
         warn "Could not create PR — create manually with: gh pr create"
       fi
