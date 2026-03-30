@@ -2051,23 +2051,67 @@ refresh_display
 
 # Only declare complete if we actually finished all steps
 if [ "$i" -ge "${#STEP_FUNCS[@]}" ]; then
-  send_notification "SDLC complete" "All steps finished. Review retro in docs/retros/"
+  send_notification "SDLC complete" "All steps finished."
+
+  # Commit any uncommitted artifacts (retro, manual-test results, etc.)
+  log "Committing final artifacts..."
+  git add docs/ .pipeline/ .memory/ 2>/dev/null || true
+  if ! git diff --cached --quiet 2>/dev/null; then
+    git commit -m "Add SHIP phase artifacts: retro, manual-test results
+
+Co-Authored-By: conduct" 2>/dev/null || true
+  fi
+
+  # Push and create PR
+  log "Pushing branch and creating PR..."
+  local branch
+  branch=$(git branch --show-current 2>/dev/null || echo "")
+  local base_branch="main"
+  git rev-parse --verify main &>/dev/null || base_branch="master"
+
+  if [ -n "$branch" ] && [ "$branch" != "$base_branch" ]; then
+    git push -u origin "$branch" 2>/dev/null || { warn "Push failed — you may need to push manually"; }
+
+    if command -v gh &>/dev/null; then
+      local pr_url
+      # Check if PR already exists
+      pr_url=$(gh pr view --json url -q '.url' 2>/dev/null || echo "")
+      if [ -z "$pr_url" ]; then
+        pr_url=$(gh pr create \
+          --title "${FEATURE_DESC:-Feature implementation}" \
+          --body "$(cat <<PRBODY
+## Summary
+Automated SDLC run via \`conduct\`.
+
+**Feature:** ${FEATURE_DESC:-N/A}
+**Stories:** $(ls docs/stories/*.md 2>/dev/null | wc -l) stories
+**Retro:** $(ls docs/retros/*.md 2>/dev/null | head -1 || echo "N/A")
+
+## Artifacts
+- Design: \`docs/specs/\`
+- Stories: \`docs/stories/\`
+- Plan: \`docs/plans/\`
+- Retro: \`docs/retros/\`
+PRBODY
+)" 2>/dev/null || echo "")
+      fi
+      if [ -n "$pr_url" ]; then
+        ok "PR: ${pr_url}"
+      else
+        warn "Could not create PR — create manually with: gh pr create"
+      fi
+    else
+      warn "gh CLI not installed — create PR manually"
+    fi
+  else
+    warn "On ${base_branch} branch — no PR needed"
+  fi
+
   echo ""
   echo -e "${GREEN}${BOLD}SDLC complete.${NC}"
-  echo ""
-  if [ -n "$WORKTREE_DIR" ] && [ "$WORKTREE_DIR" != "$ORIGINAL_CWD" ]; then
-    echo -e "  ${BOLD}Worktree:${NC} ${WORKTREE_DIR}"
-    echo -e "  ${BOLD}Branch:${NC}   ${WORKTREE_BRANCH}"
-    echo ""
-    echo -e "  ${BOLD}What's next?${NC}"
-    echo "    cd ${WORKTREE_DIR}"
-    echo "    git push -u origin HEAD && gh pr create"
-  else
-    echo -e "  ${BOLD}What's next?${NC}"
-    echo "    Push & PR:  git push -u origin HEAD && gh pr create"
-  fi
-  echo "    Review:     docs/retros/"
-  echo "    Cleanup:    conduct --reset"
+  [ -n "$pr_url" ] && echo -e "  PR: ${pr_url}"
+  echo "  Retro: $(ls docs/retros/*.md 2>/dev/null | head -1 || echo 'docs/retros/')"
+  echo "  Cleanup: conduct --reset"
   echo ""
 else
   send_notification "SDLC stopped" "Failed at step: ${ALL_STEPS[$i]}"
