@@ -772,6 +772,14 @@ enter_worktree() {
     PIPELINE_DIR="${PROJECT_DIR}/.pipeline"
     SESSION_LOG="${PIPELINE_DIR}/conduct.log"
     STATE_FILE="${PIPELINE_DIR}/conduct-state.json"
+    SESSION_FILE="${PIPELINE_DIR}/conduct-session-id"
+    CURRENT_STEP_FILE="${PIPELINE_DIR}/.current-step"
+    STEP_START_FILE="${PIPELINE_DIR}/.step-start-time"
+    LINES_FILE="${PIPELINE_DIR}/.display-lines"
+    mkdir -p "$PIPELINE_DIR"
+    # Start a fresh Claude session in the worktree — the old session's
+    # context references the main repo paths, not the worktree.
+    rm -f "$SESSION_FILE" "${PIPELINE_DIR}/session-created"
     cd "$PROJECT_DIR"
     log "Working in worktree: ${PROJECT_DIR}"
   fi
@@ -790,9 +798,14 @@ cleanup_worktree() {
   WORKTREE_BRANCH=""
 }
 
-# Save worktree info to state for resume across sessions
+# Save worktree info to state for resume across sessions.
+# Writes to BOTH the main repo state file and the worktree state file
+# so restore_worktree_state can find it on next run (reads main repo first).
+ORIGINAL_PIPELINE_DIR=""
+
 save_worktree_state() {
   if [ -n "$WORKTREE_DIR" ]; then
+    # Save to current state file (worktree)
     python3 -c "
 import json, os, sys
 path = '$STATE_FILE'
@@ -805,6 +818,22 @@ state['worktree_branch'] = sys.argv[2]
 with open(path, 'w') as f:
     json.dump(state, f, indent=2)
 " "$WORKTREE_DIR" "$WORKTREE_BRANCH"
+    # Also save to main repo state file so restore finds it on resume
+    if [ -n "$ORIGINAL_PIPELINE_DIR" ] && [ "$ORIGINAL_PIPELINE_DIR" != "$PIPELINE_DIR" ]; then
+      local main_state="${ORIGINAL_PIPELINE_DIR}/conduct-state.json"
+      python3 -c "
+import json, os, sys
+path = sys.argv[3]
+state = {}
+if os.path.exists(path):
+    with open(path) as f:
+        state = json.load(f)
+state['worktree_dir'] = sys.argv[1]
+state['worktree_branch'] = sys.argv[2]
+with open(path, 'w') as f:
+    json.dump(state, f, indent=2)
+" "$WORKTREE_DIR" "$WORKTREE_BRANCH" "$main_state"
+    fi
   fi
 }
 
@@ -1676,6 +1705,9 @@ fi
 if [ -z "$FEATURE_DESC" ] && [ -f "$STATE_FILE" ]; then
   FEATURE_DESC=$(python3 -c "import json; print(json.load(open('$STATE_FILE')).get('feature_desc',''))" 2>/dev/null || echo "")
 fi
+
+# Remember original pipeline dir before worktree switch
+ORIGINAL_PIPELINE_DIR="$PIPELINE_DIR"
 
 # Restore worktree state if resuming
 restore_worktree_state
