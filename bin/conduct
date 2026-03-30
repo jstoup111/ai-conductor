@@ -782,6 +782,10 @@ enter_worktree() {
     rm -f "$SESSION_FILE" "${PIPELINE_DIR}/session-created"
     cd "$PROJECT_DIR"
     log "Working in worktree: ${PROJECT_DIR}"
+    # Restart live refresh — the background subshell inherited the old
+    # PROJECT_DIR/STATE_FILE/etc. and would read from the main repo.
+    stop_live_refresh
+    start_live_refresh 10
   fi
 }
 
