@@ -17,6 +17,7 @@ set -euo pipefail
 #   conduct --from plan
 
 HARNESS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+ORIGINAL_CWD="$(pwd)"
 PROJECT_DIR="$(pwd)"
 PIPELINE_DIR="${PROJECT_DIR}/.pipeline"
 SESSION_LOG="${PIPELINE_DIR}/conduct.log"
@@ -1448,7 +1449,12 @@ cleanup_and_exit() {
   echo ""
   log "Interrupted. Saving state..."
   show_status
-  echo -e "Resume later: ${BOLD}conduct --resume${NC}"
+  if [ -n "$WORKTREE_DIR" ] && [ "$WORKTREE_DIR" != "$ORIGINAL_CWD" ]; then
+    echo -e "  Worktree: ${WORKTREE_DIR}"
+    echo -e "Resume: cd ${WORKTREE_DIR} && ${BOLD}conduct --resume${NC}"
+  else
+    echo -e "Resume later: ${BOLD}conduct --resume${NC}"
+  fi
   exit 130
 }
 
@@ -1992,14 +1998,29 @@ if [ "$i" -ge "${#STEP_FUNCS[@]}" ]; then
   echo ""
   echo -e "${GREEN}${BOLD}SDLC complete.${NC}"
   echo ""
-  echo -e "  ${BOLD}What's next?${NC}"
-  echo "    Push & PR:  git push -u origin HEAD && gh pr create"
+  if [ -n "$WORKTREE_DIR" ] && [ "$WORKTREE_DIR" != "$ORIGINAL_CWD" ]; then
+    echo -e "  ${BOLD}Worktree:${NC} ${WORKTREE_DIR}"
+    echo -e "  ${BOLD}Branch:${NC}   ${WORKTREE_BRANCH}"
+    echo ""
+    echo -e "  ${BOLD}What's next?${NC}"
+    echo "    cd ${WORKTREE_DIR}"
+    echo "    git push -u origin HEAD && gh pr create"
+  else
+    echo -e "  ${BOLD}What's next?${NC}"
+    echo "    Push & PR:  git push -u origin HEAD && gh pr create"
+  fi
   echo "    Review:     docs/retros/"
   echo "    Cleanup:    conduct --reset"
   echo ""
 else
   send_notification "SDLC stopped" "Failed at step: ${ALL_STEPS[$i]}"
-  echo -e "${RED}${BOLD}SDLC stopped${NC} at step: ${ALL_STEPS[$i]}. Resume with: ${BOLD}conduct --resume${NC}"
+  if [ -n "$WORKTREE_DIR" ] && [ "$WORKTREE_DIR" != "$ORIGINAL_CWD" ]; then
+    echo -e "${RED}${BOLD}SDLC stopped${NC} at step: ${ALL_STEPS[$i]}"
+    echo -e "  Worktree: ${WORKTREE_DIR}"
+    echo -e "  Resume:   cd ${WORKTREE_DIR} && conduct --resume"
+  else
+    echo -e "${RED}${BOLD}SDLC stopped${NC} at step: ${ALL_STEPS[$i]}. Resume with: ${BOLD}conduct --resume${NC}"
+  fi
 fi
 
 exit 0
