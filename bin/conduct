@@ -1105,11 +1105,10 @@ Do NOT stop to ask for approval — execute all tasks to completion." "$mode"
 
 run_finish() {
   step_header 11 "finish" "SHIP"
-  local mode="print"
-  [ "${RUN_MODE}" = "interactive" ] && mode="interactive"
 
-  log "Fresh verification..."
-  run_claude "Run the /finish skill. Run test suite NOW, check git status, verify ALL story criteria covered. Choose 'keep as-is' for completion." "$mode"
+  log "Fresh verification and completion options..."
+  # Always interactive — user must choose merge/PR/keep/discard
+  run_claude "Run the /finish skill. Run test suite NOW, check git status, verify ALL story criteria covered. Present all 4 options (merge locally, push & create PR, keep as-is, discard) and wait for the user to choose." "interactive"
   save_state "finish" "done"; ok "Finish complete"
 }
 
@@ -1989,8 +1988,17 @@ refresh_display
 # Only declare complete if we actually finished all steps
 if [ "$i" -ge "${#STEP_FUNCS[@]}" ]; then
   send_notification "SDLC complete" "All steps finished. Review retro in docs/retros/"
-  echo -e "${GREEN}${BOLD}SDLC complete.${NC} Review the retro in docs/retros/"
+  echo ""
+  echo -e "${GREEN}${BOLD}SDLC complete.${NC}"
+  echo ""
+  echo -e "  ${BOLD}What's next?${NC}"
+  echo "    Push & PR:  git push -u origin HEAD && gh pr create"
+  echo "    Review:     docs/retros/"
+  echo "    Cleanup:    conduct --reset"
+  echo ""
 else
   send_notification "SDLC stopped" "Failed at step: ${ALL_STEPS[$i]}"
   echo -e "${RED}${BOLD}SDLC stopped${NC} at step: ${ALL_STEPS[$i]}. Resume with: ${BOLD}conduct --resume${NC}"
 fi
+
+exit 0
