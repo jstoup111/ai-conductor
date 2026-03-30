@@ -2064,16 +2064,15 @@ Co-Authored-By: conduct" 2>/dev/null || true
 
   # Push and create PR
   log "Pushing branch and creating PR..."
-  local branch
   branch=$(git branch --show-current 2>/dev/null || echo "")
-  local base_branch="main"
+  base_branch="main"
   git rev-parse --verify main &>/dev/null || base_branch="master"
 
   if [ -n "$branch" ] && [ "$branch" != "$base_branch" ]; then
     git push -u origin "$branch" 2>/dev/null || { warn "Push failed — you may need to push manually"; }
 
     if command -v gh &>/dev/null; then
-      local pr_url
+      pr_url=""
       # Check if PR already exists
       pr_url=$(gh pr view --json url -q '.url' 2>/dev/null || echo "")
       if [ -z "$pr_url" ]; then
