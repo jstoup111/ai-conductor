@@ -1701,6 +1701,99 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
+# Resume menu: show active features and let user pick
+if [ "$MODE" = "resume" ] && [ -z "$FEATURE_DESC" ] && [ -f "$STATE_FILE" ]; then
+  # Gather resumable features from worktrees map + current state
+  resume_options=$(python3 -c "
+import json, os, sys
+
+state_path = '$STATE_FILE'
+pipeline_dir = '$PIPELINE_DIR'
+
+features = []
+
+with open(state_path) as f:
+    state = json.load(f)
+
+# Check worktrees map for parallel features
+worktrees = state.get('worktrees', {})
+for feat, wt in worktrees.items():
+    wt_dir = wt.get('dir', '')
+    wt_state_path = os.path.join(wt_dir, '.pipeline', 'conduct-state.json') if wt_dir else ''
+    step = '?'
+    status = 'unknown'
+    alive = os.path.isdir(wt_dir) if wt_dir else False
+    if alive and os.path.exists(wt_state_path):
+        with open(wt_state_path) as wf:
+            ws = json.load(wf)
+        step = ws.get('last_step', '?')
+        status = ws.get(step, 'pending')
+    features.append({
+        'desc': feat,
+        'step': step,
+        'status': status,
+        'dir': wt_dir,
+        'alive': alive
+    })
+
+# If no worktrees, add the main feature
+if not features:
+    feat = state.get('feature_desc', '')
+    if feat:
+        step = state.get('last_step', '?')
+        status = state.get(step, 'pending')
+        features.append({
+            'desc': feat,
+            'step': step,
+            'status': status,
+            'dir': '',
+            'alive': True
+        })
+
+# Output as lines: index|desc|step|status|dir|alive
+for i, f in enumerate(features):
+    print(f\"{i}|{f['desc']}|{f['step']}|{f['status']}|{f['dir']}|{f['alive']}\")
+" 2>/dev/null || echo "")
+
+  if [ -n "$resume_options" ]; then
+    option_count=$(echo "$resume_options" | wc -l)
+
+    if [ "$option_count" -eq 1 ]; then
+      # Single feature — auto-select
+      FEATURE_DESC=$(echo "$resume_options" | head -1 | cut -d'|' -f2)
+    else
+      # Multiple features — show menu
+      echo ""
+      echo -e "${BOLD}${CYAN}Resume which feature?${NC}"
+      echo ""
+      while IFS='|' read -r idx desc step status dir alive; do
+        local_num=$((idx + 1))
+        # Status icon
+        case "$status" in
+          done|skipped) icon="${GREEN}✓${NC}" ;;
+          in_progress)  icon="${YELLOW}▶${NC}" ;;
+          failed)       icon="${RED}✗${NC}" ;;
+          *)            icon="⬚" ;;
+        esac
+        # Dead worktree warning
+        dead_marker=""
+        [ "$alive" = "False" ] && dead_marker=" ${RED}(worktree missing)${NC}"
+        printf "  %b %d) %-50s  %b %-20s %b\n" "$icon" "$local_num" "${desc:0:50}" "$icon" "$step" "$dead_marker"
+      done <<< "$resume_options"
+      echo ""
+      read -r -p "  Select [1-${option_count}]: " pick
+
+      if [[ "$pick" =~ ^[0-9]+$ ]] && [ "$pick" -ge 1 ] && [ "$pick" -le "$option_count" ]; then
+        selected_line=$(echo "$resume_options" | sed -n "${pick}p")
+        FEATURE_DESC=$(echo "$selected_line" | cut -d'|' -f2)
+      else
+        fail "Invalid selection"
+        exit 1
+      fi
+    fi
+  fi
+fi
+
 # Detect new feature vs resume
 if [ -n "$FEATURE_DESC" ] && [ -f "$STATE_FILE" ]; then
   prev_desc=$(python3 -c "import json; print(json.load(open('$STATE_FILE')).get('feature_desc',''))" 2>/dev/null || echo "")
