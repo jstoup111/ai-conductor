@@ -318,8 +318,14 @@ else:
     touch "${PIPELINE_DIR}/session-created"
     append_progress "$prompt"
   else
-    log "Interactive session (session: ${session_id:0:8}...). Type /quit when done."
     stop_live_refresh
+    sleep 0.2 2>/dev/null || true  # let any in-flight refresh flush
+    clear
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "  ${BOLD}Interactive session${NC} — $(get_current_step)"
+    echo -e "  Type ${BOLD}/quit${NC} when done to return to conductor"
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
     STATUS_LINES=0
     if ! claude $session_flag --append-system-prompt "$context. $prompt"; then
       # Stale session — retry with fresh ID
@@ -327,6 +333,7 @@ else:
       session_id=$(get_session_id)
       claude --session-id "${session_id}" --append-system-prompt "$context. $prompt"
     fi
+    clear
     reset_display
     start_live_refresh 10
     touch "${PIPELINE_DIR}/session-created"
@@ -1637,12 +1644,16 @@ recover() {
     esac
   fi
 
-  log "Launching interactive session to fix ${step_name}..."
-  echo ""
-
   local recover_flag="--session-id ${session_id}"
   [ -f "${PIPELINE_DIR}/session-created" ] && recover_flag="--resume ${session_id}"
   stop_live_refresh
+  sleep 0.2 2>/dev/null || true
+  clear
+  echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  echo -e "  ${BOLD}Recovery session${NC} — ${step_name}"
+  echo -e "  Type ${BOLD}/quit${NC} when done to return to conductor"
+  echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  echo ""
   STATUS_LINES=0
 
   # Pass the recovery action as the first message so Claude starts immediately.
@@ -1668,6 +1679,7 @@ recover() {
       --append-system-prompt "The conduct script hit a failure at step: ${step_name}. Complete ONLY this step, then let the user /quit to return to the conductor." \
       "$recover_prompt"
   fi
+  clear
   reset_display
   start_live_refresh 10
   touch "${PIPELINE_DIR}/session-created"
