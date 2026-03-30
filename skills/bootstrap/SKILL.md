@@ -69,6 +69,13 @@ Note in CLAUDE.md so skills reference session-loaded context.
 Generate from `templates/claudeignore.template`. Remove stack-irrelevant sections (e.g., Rails
 sections for Node projects). If `.claudeignore` already exists, do NOT overwrite.
 
+### 3c. Generate PR Template
+
+Copy `templates/pull_request_template.md` to `.github/pull_request_template.md`.
+Create `.github/` directory if it doesn't exist. If a PR template already exists, do NOT overwrite.
+The template contains `[feature_description]`, `[story_count]`, and `[branch]` placeholders
+that `conduct` fills in when creating the PR after retro.
+
 ### 4. Analyze Existing Code (Existing Projects Only)
 
 This step performs a **structural scan only** — file counts, directory layout, test framework detection. Deep analysis of security, architecture, testing strategy, dependencies, and code health has moved to `/assess`.
@@ -178,6 +185,7 @@ Report failures before proceeding — a broken foundation wastes all downstream 
 - [ ] Existing architectural decisions documented as ADRs (if existing project)
 - [ ] .memory/ created and seeded (if existing project)
 - [ ] docs/ subdirectories created
+- [ ] `.github/pull_request_template.md` created (if not already present)
 - [ ] CLAUDE.md generated or appended — never overwritten
 - [ ] Worktree-compatible infrastructure configuration
 - [ ] Smoke test passed

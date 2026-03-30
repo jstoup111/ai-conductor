@@ -2159,23 +2159,35 @@ Co-Authored-By: conduct" 2>/dev/null || true
       # Check if PR already exists
       pr_url=$(gh pr view --json url -q '.url' 2>/dev/null || echo "")
       if [ -z "$pr_url" ]; then
-        pr_url=$(gh pr create \
-          --title "${FEATURE_DESC:-Feature implementation}" \
-          --body "$(cat <<PRBODY
-## Summary
-Automated SDLC run via \`conduct\`.
+        # Truncate title to 70 chars
+        pr_title="${FEATURE_DESC:-Feature implementation}"
+        pr_title="${pr_title:0:70}"
 
-**Feature:** ${FEATURE_DESC:-N/A}
-**Stories:** $(ls docs/stories/*.md 2>/dev/null | wc -l) stories
-**Retro:** $(ls docs/retros/*.md 2>/dev/null | head -1 || echo "N/A")
+        # Use PR template if it exists, otherwise use default body
+        pr_body=""
+        if [ -f ".github/pull_request_template.md" ]; then
+          # Fill in template placeholders
+          pr_body=$(sed \
+            -e "s|\[feature_description\]|${FEATURE_DESC:-N/A}|g" \
+            -e "s|\[story_count\]|$(ls docs/stories/*.md 2>/dev/null | wc -l)|g" \
+            -e "s|\[branch\]|${branch}|g" \
+            .github/pull_request_template.md 2>/dev/null)
+        fi
+        if [ -z "$pr_body" ]; then
+          pr_body="## Summary
+Feature: ${FEATURE_DESC:-N/A}
+Stories: $(ls docs/stories/*.md 2>/dev/null | wc -l) | Retro: $(ls docs/retros/*.md 2>/dev/null | head -1 || echo 'N/A')
 
 ## Artifacts
 - Design: \`docs/specs/\`
 - Stories: \`docs/stories/\`
 - Plan: \`docs/plans/\`
-- Retro: \`docs/retros/\`
-PRBODY
-)" 2>/dev/null || echo "")
+- Retro: \`docs/retros/\`"
+        fi
+
+        pr_url=$(gh pr create \
+          --title "$pr_title" \
+          --body "$pr_body" 2>/dev/null || echo "")
       fi
       if [ -n "$pr_url" ]; then
         ok "PR: ${pr_url}"
