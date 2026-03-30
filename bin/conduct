@@ -70,6 +70,9 @@ render_md() {
     bat --style=plain --language=md "$file"
   elif command -v batcat &>/dev/null; then
     batcat --style=plain --language=md "$file"
+  elif [ -t 1 ] && command -v less &>/dev/null; then
+    # Fallback: cat with line numbers, paged for readability
+    cat -n "$file" | less -R -F -X
   else
     cat "$file"
   fi
@@ -90,8 +93,10 @@ review_artifacts() {
     return 0
   fi
 
-  # Pause live refresh so it doesn't overwrite the review display
+  # Pause live refresh so it doesn't overwrite the review display.
+  # Full stop + terminal reset to prevent ANSI escape collisions (WSL2 safe).
   stop_live_refresh
+  tput sgr0 2>/dev/null || true
 
   for file in "${files[@]}"; do
     i=$((i + 1))
@@ -1275,6 +1280,7 @@ start_live_refresh() {
 
   local interval=${1:-15}
   (
+    trap 'exit 0' TERM INT
     while true; do
       sleep "$interval"
       refresh_display 2>/dev/null
@@ -1287,6 +1293,9 @@ stop_live_refresh() {
   if [ -n "$REFRESH_PID" ] && kill -0 "$REFRESH_PID" 2>/dev/null; then
     kill "$REFRESH_PID" 2>/dev/null
     wait "$REFRESH_PID" 2>/dev/null || true
+    # WSL2 signal delivery can lag — ensure the subshell's last refresh_display
+    # has fully flushed before we return control to the caller's terminal output.
+    sleep 0.1 2>/dev/null || true
   fi
   REFRESH_PID=""
 }
