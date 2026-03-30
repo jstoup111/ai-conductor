@@ -136,6 +136,13 @@ get_session_id() {
   fi
 }
 
+# Reset session when Claude reports the session ID is stale/expired
+reset_session() {
+  warn "Session expired — starting fresh"
+  rm -f "$SESSION_FILE" "${PIPELINE_DIR}/session-created"
+  get_session_id > /dev/null
+}
+
 # Name the session after brainstorm so it's identifiable in /resume and remote-control
 name_session() {
   local session_id
@@ -146,7 +153,9 @@ name_session() {
   local feature_short="${FEATURE_DESC:0:40}"
   local session_name="${project_name}: ${feature_short}"
   # Resume with --name to set the display name, then immediately exit with a no-op prompt
-  claude --resume "$session_id" --name "$session_name" -p "Session named." --dangerously-skip-permissions >> "$SESSION_LOG" 2>&1 || true
+  claude --resume "$session_id" --name "$session_name" -p "Session named." --dangerously-skip-permissions >> "$SESSION_LOG" 2>&1 || {
+    warn "Could not name session (session may have expired)"
+  }
   log "Session named: ${session_name}"
 }
 
@@ -265,13 +274,38 @@ else:
       fi
     fi
 
+    # Detect stale session and retry with fresh ID
+    if tail -5 "$SESSION_LOG" 2>/dev/null | grep -qi "No conversation found"; then
+      reset_session
+      session_id=$(get_session_id)
+      session_flag="--session-id ${session_id}"
+      if [ "${VIEW_MODE}" = "output" ]; then
+        claude -p "$prompt" \
+          $session_flag \
+          --append-system-prompt "$context" \
+          $perm_flag \
+          2>&1 | tee -a "$SESSION_LOG"
+      else
+        claude -p "$prompt" \
+          $session_flag \
+          --append-system-prompt "$context" \
+          $perm_flag \
+          >> "$SESSION_LOG" 2>&1 || true
+      fi
+    fi
+
     touch "${PIPELINE_DIR}/session-created"
     append_progress "$prompt"
   else
     log "Interactive session (session: ${session_id:0:8}...). Type /quit when done."
     stop_live_refresh
     STATUS_LINES=0
-    claude $session_flag --append-system-prompt "$context. $prompt"
+    if ! claude $session_flag --append-system-prompt "$context. $prompt"; then
+      # Stale session — retry with fresh ID
+      reset_session
+      session_id=$(get_session_id)
+      claude --session-id "${session_id}" --append-system-prompt "$context. $prompt"
+    fi
     reset_display
     start_live_refresh 10
     touch "${PIPELINE_DIR}/session-created"
@@ -1487,9 +1521,16 @@ recover() {
     recover_prompt="Continue the build. Check .pipeline/task-status.json for progress, run /tdd on the next incomplete task."
   fi
 
-  claude $recover_flag \
+  if ! claude $recover_flag \
     --append-system-prompt "The conduct script hit a failure at step: ${step_name}. Complete ONLY this step, then let the user /quit to return to the conductor." \
-    "$recover_prompt"
+    "$recover_prompt"; then
+    # Stale session — retry with fresh ID
+    reset_session
+    session_id=$(get_session_id)
+    claude --session-id "${session_id}" \
+      --append-system-prompt "The conduct script hit a failure at step: ${step_name}. Complete ONLY this step, then let the user /quit to return to the conductor." \
+      "$recover_prompt"
+  fi
   reset_display
   start_live_refresh 10
   touch "${PIPELINE_DIR}/session-created"
