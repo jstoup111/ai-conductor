@@ -1449,9 +1449,12 @@ start_live_refresh() {
 
   local interval=${1:-15}
   (
+    # Use background sleep + wait so TERM/INT can interrupt immediately.
+    # Plain `sleep N` blocks signal delivery until it completes on WSL2.
     trap 'exit 0' TERM INT
     while true; do
-      sleep "$interval"
+      sleep "$interval" &
+      wait $! 2>/dev/null || exit 0
       refresh_display 2>/dev/null
     done
   ) &
@@ -1460,11 +1463,15 @@ start_live_refresh() {
 
 stop_live_refresh() {
   if [ -n "$REFRESH_PID" ] && kill -0 "$REFRESH_PID" 2>/dev/null; then
-    kill "$REFRESH_PID" 2>/dev/null
+    # Kill the subshell and any child processes (sleep)
+    kill -- -"$REFRESH_PID" 2>/dev/null || kill "$REFRESH_PID" 2>/dev/null
+    # Timed wait — don't block forever if WSL2 signal delivery stalls
+    local deadline=$(( $(date +%s) + 2 ))
+    while kill -0 "$REFRESH_PID" 2>/dev/null; do
+      [ "$(date +%s)" -ge "$deadline" ] && { kill -9 "$REFRESH_PID" 2>/dev/null; break; }
+      sleep 0.1 2>/dev/null || true
+    done
     wait "$REFRESH_PID" 2>/dev/null || true
-    # WSL2 signal delivery can lag — ensure the subshell's last refresh_display
-    # has fully flushed before we return control to the caller's terminal output.
-    sleep 0.1 2>/dev/null || true
   fi
   REFRESH_PID=""
 }
