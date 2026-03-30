@@ -1430,13 +1430,14 @@ recover() {
 
   send_notification "Step failed" "${step_name} — needs recovery"
 
+  # Stop refresh BEFORE any output so it can't wipe the recovery menu
+  stop_live_refresh
   echo ""
   show_status
   warn "Step failed: ${step_name}."
 
   # Let the user choose how to recover instead of forcing interactive session
   if [ "${RUN_MODE}" != "auto" ] && [ -t 0 ]; then
-    stop_live_refresh
     echo ""
     echo -e "  ${BOLD}Recovery options:${NC}"
     echo "    r = retry (re-run the step)"
@@ -1693,11 +1694,11 @@ while [ "$i" -lt "${#STEP_FUNCS[@]}" ]; do
   # Step failed — try interactive recovery (up to max_retries)
   retry_count=$((retry_count + 1))
   if [ "$retry_count" -ge "$max_retries" ]; then
+    stop_live_refresh
     fail "Step ${ALL_STEPS[$i]} failed after $max_retries attempts."
     save_state "${ALL_STEPS[$i]}" "failed"
     # Offer skip for non-gating steps instead of hard stop
     if [ "${RUN_MODE}" != "auto" ] && [ -t 0 ]; then
-      stop_live_refresh
       read -r -p "  [s=skip this step / q=quit]: " choice
       start_live_refresh 10
       if [ "$choice" = "s" ] || [ "$choice" = "S" ]; then
