@@ -83,8 +83,14 @@ Present inventory summary to user before proceeding.
 
 ### 4b. Draft As-Built Stories (Existing Projects Only)
 
-Generate DRAFT stories for what exists. One file per feature area with happy paths from
-routes/tests. Negative paths left as `TODO` — `/stories` fills them in.
+**Priority order for story sources:**
+1. `docs/plans/*.md` — if existing plans exist, derive stories from them first. Plans represent
+   intended behavior more accurately than code inspection. Each plan phase becomes a story group.
+2. `.pipeline/bootstrap-inventory.md` — supplement with test coverage gaps and untested files.
+3. Code scan — last resort if neither plans nor inventory exist.
+
+Generate DRAFT stories for what exists. One file per feature area (or per plan phase) with
+happy paths from plan tasks or routes/tests. Negative paths left as `TODO` — `/stories` fills them in.
 
 Mark as `Status: DRAFT` and `[AS-BUILT]`. In-flight work gets `[PLANNED]` marker with
 issue/PR reference. Bootstrap does NOT validate stories — the normal flow handles that:

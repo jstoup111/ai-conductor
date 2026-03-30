@@ -416,19 +416,22 @@ run_bootstrap() {
     ok "Already complete"; save_state "bootstrap" "done"; return 0
   fi
 
-  # Bootstrap is split into focused sub-steps to avoid context overload on large projects.
-  # Each sub-step gets its own Claude call with a narrow prompt.
+  # Bootstrap is split into focused sub-steps. Each gets a FRESH Claude session
+  # (claude -p) to avoid context accumulation on large projects.
+  # Handoff between steps is via file artifacts, not session context.
+
+  local bs_state
 
   # Sub-step 1: Detect stack + scaffold directories
-  local bs_state
   bs_state=$(get_state "bootstrap_detect")
   if [ "$bs_state" != "done" ]; then
     log "Step 1/6: Detecting project stack and scaffolding directories..."
-    run_claude "Run /bootstrap Steps 1-3b ONLY. Detect project type and tech stack. Create directories (.memory/, docs/, .pipeline/) if missing. Generate .claudeignore from templates/claudeignore.template. Load tech-context if matched.
+    claude -p "Run /bootstrap Steps 1-3b ONLY. Detect project type and tech stack. Create directories (.memory/, docs/, .pipeline/) if missing. Generate .claudeignore from templates/claudeignore.template. Load tech-context if matched.
 
 If this is an empty directory, scaffold the project first (ask what framework).
-Do NOT analyze existing code, draft stories, or generate CLAUDE.md yet — later steps handle those.
-Write detection results to .pipeline/bootstrap-detection.json: {framework, database, test_framework, frontend, tech_context}"
+Do NOT analyze existing code, draft stories, or generate CLAUDE.md yet.
+Write detection results to .pipeline/bootstrap-detection.json: {framework, database, test_framework, frontend, tech_context}" \
+      --dangerously-skip-permissions >> "$SESSION_LOG" 2>&1 || true
     save_state "bootstrap_detect" "done"
   fi
 
@@ -437,7 +440,15 @@ Write detection results to .pipeline/bootstrap-detection.json: {framework, datab
   if [ "$bs_state" != "done" ]; then
     if [ -d "${PROJECT_DIR}/app" ] || [ -d "${PROJECT_DIR}/src" ] || [ -f "${PROJECT_DIR}/main.py" ]; then
       log "Step 2/6: Scanning existing codebase..."
-      run_claude "Run /bootstrap Step 4 ONLY. Analyze the existing code — list models, controllers, services, jobs. Count source and test files. Check test coverage (which files have specs, which don't). Check git history (recent commits, open PRs). Write inventory summary to .pipeline/bootstrap-inventory.md. Keep it concise — this file will be read by later steps instead of re-scanning the codebase."
+      claude -p "Run /bootstrap Step 4 ONLY. Analyze the existing code:
+- List models, controllers, services, jobs
+- Count source files and test files
+- Check test coverage (which files have specs, which don't)
+- Check git history: git log --oneline -20, open PRs
+- List any existing plan files in docs/plans/ (note their names and phases)
+
+Write inventory summary to .pipeline/bootstrap-inventory.md. Keep concise — later steps read this file instead of re-scanning the codebase." \
+        --dangerously-skip-permissions >> "$SESSION_LOG" 2>&1 || true
     else
       log "Step 2/6: Fresh project — skipping inventory"
     fi
@@ -445,13 +456,36 @@ Write detection results to .pipeline/bootstrap-detection.json: {framework, datab
   fi
 
   # Sub-step 3: Draft as-built stories (existing projects only)
+  # Reads plans FIRST (richer source), inventory SECOND (gap filler)
   bs_state=$(get_state "bootstrap_stories")
   if [ "$bs_state" != "done" ]; then
-    if [ -f "${PROJECT_DIR}/.pipeline/bootstrap-inventory.md" ]; then
-      log "Step 3/6: Drafting as-built stories from inventory..."
-      run_claude "Run /bootstrap Step 4b ONLY. Read .pipeline/bootstrap-inventory.md (do NOT re-scan the codebase). Draft as-built stories to docs/stories/ with Status: DRAFT and [AS-BUILT] markers. One story per major feature area. Happy paths from routes/tests, negative paths as TODO."
+    local has_plans=false
+    compgen -G "${PROJECT_DIR}/docs/plans/*.md" > /dev/null 2>&1 && has_plans=true
+
+    if $has_plans || [ -f "${PROJECT_DIR}/.pipeline/bootstrap-inventory.md" ]; then
+      log "Step 3/6: Drafting as-built stories..."
+
+      local story_prompt="Run /bootstrap Step 4b ONLY. Draft as-built stories to docs/stories/ with Status: DRAFT and [AS-BUILT] markers."
+
+      if $has_plans; then
+        # Plans exist — multiple agents, one per plan file
+        local plan_count
+        plan_count=$(compgen -G "${PROJECT_DIR}/docs/plans/*.md" | wc -l)
+        log "  Found ${plan_count} plan files — deriving stories from plans"
+
+        story_prompt="Run /bootstrap Step 4b ONLY. Read docs/plans/*.md FIRST — derive stories from existing plans. Each plan phase becomes a story group with acceptance criteria based on the plan's tasks.
+
+PRIORITY ORDER:
+1. docs/plans/*.md — primary source (intended behavior)
+2. .pipeline/bootstrap-inventory.md — supplement with test coverage gaps and untested files
+
+Draft stories to docs/stories/ with Status: DRAFT and [AS-BUILT] markers. One story per plan phase or major feature area. Happy paths from plan tasks, negative paths as TODO."
+      fi
+
+      claude -p "$story_prompt" \
+        --dangerously-skip-permissions >> "$SESSION_LOG" 2>&1 || true
     else
-      log "Step 3/6: No inventory — skipping as-built stories"
+      log "Step 3/6: No plans or inventory — skipping stories"
     fi
     save_state "bootstrap_stories" "done"
   fi
@@ -461,7 +495,8 @@ Write detection results to .pipeline/bootstrap-detection.json: {framework, datab
   if [ "$bs_state" != "done" ]; then
     if [ -f "${PROJECT_DIR}/.pipeline/bootstrap-inventory.md" ]; then
       log "Step 4/6: Documenting architectural decisions..."
-      run_claude "Run /bootstrap Step 4c ONLY. Read .pipeline/bootstrap-inventory.md and .pipeline/bootstrap-detection.json. Create ADRs in docs/decisions/ for observed architectural decisions (framework, database, auth, API format, test framework, background jobs, key libraries). Use templates/adr.md.template. Status: Observed. Do NOT re-scan the codebase."
+      claude -p "Run /bootstrap Step 4c ONLY. Read .pipeline/bootstrap-inventory.md and .pipeline/bootstrap-detection.json. Create ADRs in docs/decisions/ for observed architectural decisions (framework, database, auth, API format, test framework, background jobs, key libraries). Use templates/adr.md.template. Status: Observed. Do NOT re-scan the codebase." \
+        --dangerously-skip-permissions >> "$SESSION_LOG" 2>&1 || true
     else
       log "Step 4/6: Fresh project — skipping ADRs"
     fi
@@ -472,7 +507,8 @@ Write detection results to .pipeline/bootstrap-detection.json: {framework, datab
   bs_state=$(get_state "bootstrap_config")
   if [ "$bs_state" != "done" ]; then
     log "Step 5/6: Generating CLAUDE.md and seeding memory..."
-    run_claude "Run /bootstrap Steps 6-7 ONLY. Generate or update CLAUDE.md from templates/CLAUDE.md.template (append harness section if CLAUDE.md exists — never overwrite). Seed .memory/ from docs/decisions/ and .pipeline/bootstrap-inventory.md if they exist. Update .memory/index.md."
+    claude -p "Run /bootstrap Steps 6-7 ONLY. Generate or update CLAUDE.md from templates/CLAUDE.md.template (append harness section if CLAUDE.md exists — never overwrite). Seed .memory/ from docs/decisions/ and .pipeline/bootstrap-inventory.md if they exist. Update .memory/index.md." \
+      --dangerously-skip-permissions >> "$SESSION_LOG" 2>&1 || true
     save_state "bootstrap_config" "done"
   fi
 
@@ -480,7 +516,8 @@ Write detection results to .pipeline/bootstrap-detection.json: {framework, datab
   bs_state=$(get_state "bootstrap_verify")
   if [ "$bs_state" != "done" ]; then
     log "Step 6/6: Smoke test and MCP setup..."
-    run_claude "Run /bootstrap Steps 9-10 ONLY. Run the smoke test (database connects, tests run, app loads). Report failures. Then offer MCP integration setup (GitHub, browser automation for full-stack). Configure in .claude/settings.json if accepted."
+    claude -p "Run /bootstrap Steps 9-10 ONLY. Run the smoke test (database connects, tests run, app loads). Report failures. Then configure MCP integration (GitHub if git remote exists, browser automation for full-stack projects). Configure in .claude/settings.json." \
+      --dangerously-skip-permissions >> "$SESSION_LOG" 2>&1 || true
     save_state "bootstrap_verify" "done"
   fi
 
