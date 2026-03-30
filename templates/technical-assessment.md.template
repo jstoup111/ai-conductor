@@ -1,0 +1,52 @@
+# Technical Assessment: [Project Name]
+
+**Date:** YYYY-MM-DD
+**Assessed by:** 9 specialist agents + CTO synthesis
+**Verdict:** [HEALTHY | NEEDS_WORK | CRITICAL]
+
+## Executive Summary
+
+[3-5 sentences summarizing overall code health, key strengths, and primary concerns]
+
+## Critical Findings
+
+[Issues that block deployment or risk data loss. If none, state "No critical findings."]
+
+| # | Finding | Specialist | Severity | File(s) |
+|---|---------|-----------|----------|---------|
+| 1 | [description] | [source agent] | Critical | [file:line] |
+
+## Systemic Patterns
+
+[Issues spanning 2+ specialist areas — these indicate architectural or process problems, not isolated bugs]
+
+| # | Pattern | Specialists | Impact | Recommendation |
+|---|---------|------------|--------|----------------|
+| 1 | [description] | [agent1, agent2] | [impact] | [recommendation] |
+
+## Prioritized Roadmap
+
+[Ordered by: critical > systemic > important > low. Each item includes reasoning.]
+
+1. **[Action item]** — [Why this is prioritized here. Source: specialist-name]
+2. **[Action item]** — [Why. Source: specialist-name]
+
+## Quick Wins
+
+[Low effort, high impact fixes that can be done immediately]
+
+- [ ] [Quick win description] — [Source: specialist-name]
+
+## Specialist Reports
+
+| Area | Agent | Verdict | Report |
+|------|-------|---------|--------|
+| Security | cto-security | [verdict] | .pipeline/assessment/cto-security.md |
+| Data Integrity | cto-data-integrity | [verdict] | .pipeline/assessment/cto-data-integrity.md |
+| Dependencies | cto-dependencies | [verdict] | .pipeline/assessment/cto-dependencies.md |
+| Architecture | cto-architecture | [verdict] | .pipeline/assessment/cto-architecture.md |
+| Duplication | cto-duplication | [verdict] | .pipeline/assessment/cto-duplication.md |
+| Testing | cto-testing | [verdict] | .pipeline/assessment/cto-testing.md |
+| Infrastructure | cto-infrastructure | [verdict] | .pipeline/assessment/cto-infrastructure.md |
+| Observability | cto-observability | [verdict] | .pipeline/assessment/cto-observability.md |
+| Developer Experience | cto-devex | [verdict] | .pipeline/assessment/cto-devex.md |

@@ -216,7 +216,7 @@ if os.path.exists(path):
 else:
     print(0)
 ")
-  local context="[Conduct step ${iteration}/14] Feature: ${FEATURE_DESC:-unknown}"
+  local context="[Conduct step ${iteration}/15] Feature: ${FEATURE_DESC:-unknown}"
 
   if [ "$mode" = "print" ]; then
     log "Sending to Claude (session: ${session_id:0:8}...)..."
@@ -317,6 +317,10 @@ check_bootstrap() {
   [ -d "${PROJECT_DIR}/docs/specs" ] && \
   [ -d "${PROJECT_DIR}/docs/stories" ] && \
   [ -d "${PROJECT_DIR}/docs/plans" ]
+}
+
+check_assess() {
+  has_recent_artifacts "${PROJECT_DIR}/docs/decisions/technical-assessment-*.md"
 }
 
 check_brainstorm() {
@@ -530,6 +534,29 @@ run_memory() {
   log "Memory recall..."
   [ -f "${PROJECT_DIR}/.memory/index.md" ] && ok "Memory index exists" || warn "No prior memory"
   save_state "memory" "done"
+}
+
+run_assess() {
+  step_header 2.5 "assess" "UNDERSTAND"
+  # Skip for new projects (nothing to assess)
+  if [ ! -d "${PROJECT_DIR}/app" ] && [ ! -d "${PROJECT_DIR}/src" ] && [ ! -f "${PROJECT_DIR}/main.py" ]; then
+    ok "Skipped (new project — nothing to assess)"; save_state "assess" "skipped"; return 0
+  fi
+  if check_assess; then
+    ok "Already complete"; save_state "assess" "done"; return 0
+  fi
+  log "Running technical assessment (9 specialists + CTO synthesis)..."
+  run_claude "Run the /assess skill. Dispatch all 9 specialist agents in 3 batches of 3 (parallel within batch). Each specialist writes to .pipeline/assessment/<name>.md. After all 9 complete, dispatch the CTO orchestrator to synthesize findings into docs/decisions/technical-assessment-$(date +%Y-%m-%d).md. Present the final report for review."
+
+  if check_assess; then
+    ok "Assessment complete"; save_state "assess" "done"
+    # Extract verdict for status display
+    local verdict
+    verdict=$(grep -oP 'Verdict:\s*\K\S+' "${PROJECT_DIR}"/docs/decisions/technical-assessment-*.md 2>/dev/null | tail -1 || echo "")
+    [ -n "$verdict" ] && save_state "assess_verdict" "$verdict"
+    return 0
+  fi
+  fail "No assessment report in docs/decisions/"; save_state "assess" "failed"; return 1
 }
 
 run_brainstorm() {
@@ -1131,10 +1158,10 @@ show_status() {
   echo -e "  Mode:    ${RUN_MODE:-default}    Session: ${session_id}"
   echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 
-  local steps=("bootstrap" "memory" "brainstorm" "complexity" "worktree" "stories" "conflict_check" "plan" "architecture_review" "acceptance_specs" "build" "finish" "manual_test" "retro")
-  local labels=("bootstrap" "memory" "brainstorm" "complexity" "worktree" "stories" "conflict-check" "plan" "arch review" "acceptance specs" "tdd/pipeline" "finish" "manual-test" "retro")
-  local phases=("UNDERSTAND" "UNDERSTAND" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "BUILD" "BUILD" "SHIP" "SHIP" "SHIP")
-  local checks=(check_bootstrap "" check_brainstorm "" "" check_stories check_conflict_check check_plan check_architecture_review check_acceptance_specs check_build "" check_manual_test check_retro)
+  local steps=("bootstrap" "memory" "assess" "brainstorm" "complexity" "worktree" "stories" "conflict_check" "plan" "architecture_review" "acceptance_specs" "build" "finish" "manual_test" "retro")
+  local labels=("bootstrap" "memory" "assess" "brainstorm" "complexity" "worktree" "stories" "conflict-check" "plan" "arch review" "acceptance specs" "tdd/pipeline" "finish" "manual-test" "retro")
+  local phases=("UNDERSTAND" "UNDERSTAND" "UNDERSTAND" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "BUILD" "BUILD" "SHIP" "SHIP" "SHIP")
+  local checks=(check_bootstrap "" check_assess check_brainstorm "" "" check_stories check_conflict_check check_plan check_architecture_review check_acceptance_specs check_build "" check_manual_test check_retro)
 
   local current_step
   current_step=$(get_current_step)
@@ -1449,7 +1476,7 @@ usage() {
   echo "  --reset           Clear session state and start fresh"
   echo "  -h, --help        Show this help"
   echo ""
-  echo "Steps: bootstrap, memory, brainstorm, complexity, worktree, stories, conflict-check,"
+  echo "Steps: bootstrap, memory, assess, brainstorm, complexity, worktree, stories, conflict-check,"
   echo "       plan, architecture-review, acceptance-specs, build, finish, manual-test, retro"
   echo ""
   echo "Examples:"
@@ -1533,6 +1560,7 @@ if [ -n "$SINGLE_STEP" ]; then
   case "$SINGLE_STEP" in
     bootstrap)                              run_bootstrap ;;
     memory)                                 run_memory ;;
+    assess)                                 run_assess ;;
     brainstorm)                             run_brainstorm ;;
     complexity)                             run_complexity_assessment ;;
     worktree)                               run_worktree_setup ;;
@@ -1554,8 +1582,8 @@ fi
 # Step registry — use underscores to match save_state() keys in conduct-state.json
 # Worktree is created right after complexity assessment so all subsequent commits
 # (stories, plan, build, etc.) are isolated on the feature branch.
-ALL_STEPS=(bootstrap memory brainstorm complexity worktree stories conflict_check plan architecture_review acceptance_specs build finish manual_test retro)
-STEP_FUNCS=(run_bootstrap run_memory run_brainstorm run_complexity_assessment run_worktree_setup run_stories run_conflict_check run_plan run_architecture_review run_acceptance_specs run_build run_finish run_manual_test run_retro)
+ALL_STEPS=(bootstrap memory assess brainstorm complexity worktree stories conflict_check plan architecture_review acceptance_specs build finish manual_test retro)
+STEP_FUNCS=(run_bootstrap run_memory run_assess run_brainstorm run_complexity_assessment run_worktree_setup run_stories run_conflict_check run_plan run_architecture_review run_acceptance_specs run_build run_finish run_manual_test run_retro)
 
 # Determine starting point
 start_index=0
@@ -1590,7 +1618,7 @@ if [ "$MODE" = "resume" ] || [ -n "$START_STEP" ]; then
 fi
 
 # Check feature description needed
-if [ -z "$FEATURE_DESC" ] && [ "$start_index" -le 2 ]; then
+if [ -z "$FEATURE_DESC" ] && [ "$start_index" -le 3 ]; then
   if ! check_brainstorm; then
     fail "Feature description required. Usage: conduct \"description\""
     exit 1

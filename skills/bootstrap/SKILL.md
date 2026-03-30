@@ -71,6 +71,8 @@ sections for Node projects). If `.claudeignore` already exists, do NOT overwrite
 
 ### 4. Analyze Existing Code (Existing Projects Only)
 
+This step performs a **structural scan only** — file counts, directory layout, test framework detection. Deep analysis of security, architecture, testing strategy, dependencies, and code health has moved to `/assess`.
+
 **Skip for new/fresh projects.** Build an inventory:
 
 - **Codebase:** models, controllers, services, jobs — count source and test files
@@ -82,6 +84,8 @@ sections for Node projects). If `.claudeignore` already exists, do NOT overwrite
 Present inventory summary to user before proceeding.
 
 ### 4b. Draft As-Built Stories (Existing Projects Only)
+
+If a recent assessment report exists (`docs/decisions/technical-assessment-*.md`), reference its findings as additional context for story drafting.
 
 **Priority order for story sources:**
 1. `docs/plans/*.md` — if existing plans exist, derive stories from them first. Plans represent
@@ -97,6 +101,8 @@ issue/PR reference. Bootstrap does NOT validate stories — the normal flow hand
 `/bootstrap → /stories (review drafts) → /conflict-check → normal flow`
 
 ### 4c. Document Existing Architectural Decisions (Existing Projects Only)
+
+If a recent assessment report exists, defer to `/assess`'s architecture findings for deeper analysis. Bootstrap ADRs capture only what is observable in code — the assessment provides the judgment layer.
 
 Surface implicit decisions as ADRs in `docs/decisions/` using `templates/adr.md.template`.
 
