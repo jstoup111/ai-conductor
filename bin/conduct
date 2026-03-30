@@ -1428,12 +1428,44 @@ recover() {
     fi
   fi
 
-  send_notification "Step failed" "${step_name} — dropping to interactive session"
+  send_notification "Step failed" "${step_name} — needs recovery"
 
   echo ""
   show_status
-  warn "Step failed: ${step_name}. Dropping into interactive session to resolve."
-  log "Claude will start working on this step. Press Enter if prompted, or /quit when done."
+  warn "Step failed: ${step_name}."
+
+  # Let the user choose how to recover instead of forcing interactive session
+  if [ "${RUN_MODE}" != "auto" ] && [ -t 0 ]; then
+    stop_live_refresh
+    echo ""
+    echo -e "  ${BOLD}Recovery options:${NC}"
+    echo "    r = retry (re-run the step)"
+    echo "    i = interactive Claude session to fix"
+    echo "    s = skip this step"
+    echo "    q = quit conductor"
+    read -r -p "  [r/i/s/q]: " recovery_choice
+    start_live_refresh 10
+    case "$recovery_choice" in
+      [sS])
+        warn "Skipping ${step_name}"
+        save_state "$step_name" "skipped"
+        return 1  # signal caller to advance past this step
+        ;;
+      [qQ])
+        save_state "$step_name" "failed"
+        stop_live_refresh
+        echo -e "Resume later: ${BOLD}conduct --resume${NC}"
+        exit 0
+        ;;
+      [rR])
+        log "Retrying ${step_name}..."
+        return 0  # retry without interactive session
+        ;;
+      # i or default: fall through to interactive session
+    esac
+  fi
+
+  log "Launching interactive session to fix ${step_name}..."
   echo ""
 
   local recover_flag="--session-id ${session_id}"
@@ -1648,6 +1680,9 @@ max_retries=3
 retry_count=0
 
 while [ "$i" -lt "${#STEP_FUNCS[@]}" ]; do
+  # Record which step we're attempting so --resume lands here if we crash
+  save_state "${ALL_STEPS[$i]}" "in_progress"
+
   if ${STEP_FUNCS[$i]}; then
     refresh_display
     retry_count=0
@@ -1658,14 +1693,35 @@ while [ "$i" -lt "${#STEP_FUNCS[@]}" ]; do
   # Step failed — try interactive recovery (up to max_retries)
   retry_count=$((retry_count + 1))
   if [ "$retry_count" -ge "$max_retries" ]; then
-    fail "Step ${ALL_STEPS[$i]} failed after $max_retries attempts. Stopping."
+    fail "Step ${ALL_STEPS[$i]} failed after $max_retries attempts."
     save_state "${ALL_STEPS[$i]}" "failed"
+    # Offer skip for non-gating steps instead of hard stop
+    if [ "${RUN_MODE}" != "auto" ] && [ -t 0 ]; then
+      stop_live_refresh
+      read -r -p "  [s=skip this step / q=quit]: " choice
+      start_live_refresh 10
+      if [ "$choice" = "s" ] || [ "$choice" = "S" ]; then
+        warn "Skipping ${ALL_STEPS[$i]}"
+        save_state "${ALL_STEPS[$i]}" "skipped"
+        retry_count=0
+        i=$((i + 1))
+        continue
+      fi
+    fi
     break
   fi
 
-  if recover "${ALL_STEPS[$i]}"; then
+  recover "${ALL_STEPS[$i]}"
+  recover_rc=$?
+  if [ "$recover_rc" -eq 0 ]; then
     refresh_display
     continue  # retry (don't advance i)
+  elif [ "$recover_rc" -eq 1 ]; then
+    # Step was skipped by user in recovery menu
+    refresh_display
+    retry_count=0
+    i=$((i + 1))
+    continue
   else
     fail "Step ${ALL_STEPS[$i]} could not be recovered. Stopping."
     save_state "${ALL_STEPS[$i]}" "failed"
