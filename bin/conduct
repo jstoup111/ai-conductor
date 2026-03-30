@@ -1118,9 +1118,10 @@ run_manual_test() {
     ok "Already complete — all stories pass manual testing"; save_state "manual_test" "done"; return 0
   fi
   log "Running manual tests against stories..."
+  # Always interactive — may need user to confirm test results, start servers, etc.
   run_claude "Run the /manual-test skill. Start the application server, then test every story's acceptance criteria using curl (API) or browser (full-stack).
 
-Record results in docs/manual-test-results.md. For any FAILs, write a failing test (RED), fix it (GREEN), commit, and re-test until all stories pass. Do NOT proceed with bugs remaining."
+Record results in docs/manual-test-results.md. For any FAILs, write a failing test (RED), fix it (GREEN), commit, and re-test until all stories pass. Do NOT proceed with bugs remaining." "interactive"
 
   check_manual_test && { ok "Manual tests all pass"; save_state "manual_test" "done"; return 0; }
   fail "Manual test has FAILs — bugs need fixing"; save_state "manual_test" "failed"; return 1
