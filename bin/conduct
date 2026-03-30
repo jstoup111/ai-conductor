@@ -18,6 +18,7 @@ set -euo pipefail
 
 HARNESS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 ORIGINAL_CWD="$(pwd)"
+ORIGINAL_ARGS=("$@")
 PROJECT_DIR="$(pwd)"
 PIPELINE_DIR="${PROJECT_DIR}/.pipeline"
 SESSION_LOG="${PIPELINE_DIR}/conduct.log"
@@ -855,6 +856,10 @@ with open(path, 'w') as f:
 # Supports parallel worktrees: the main repo state stores a map of
 # active worktrees keyed by feature description. On resume, we match
 # by FEATURE_DESC or fall back to the single-worktree legacy format.
+#
+# If a worktree is found and we're not already in it, re-exec conduct
+# from the worktree directory so the entire process runs there — this
+# ensures the user's terminal shows the right cwd after exit.
 restore_worktree_state() {
   if [ -f "$STATE_FILE" ]; then
     # Try feature-keyed worktree map first (parallel-safe)
@@ -880,6 +885,16 @@ print(wt.get('branch', ''))
       WORKTREE_BRANCH=$(python3 -c "import json; print(json.load(open('$STATE_FILE')).get('worktree_branch',''))" 2>/dev/null || echo "")
     fi
     if [ -n "$WORKTREE_DIR" ] && [ -d "$WORKTREE_DIR" ]; then
+      # If we're not already in the worktree, re-exec from there
+      local resolved_wt
+      resolved_wt=$(cd "$WORKTREE_DIR" && pwd -P)
+      local resolved_cwd
+      resolved_cwd=$(pwd -P)
+      if [ "$resolved_wt" != "$resolved_cwd" ]; then
+        log "Re-launching from worktree: ${WORKTREE_DIR}"
+        cd "$WORKTREE_DIR"
+        exec "$0" "${ORIGINAL_ARGS[@]}"
+      fi
       enter_worktree
     else
       WORKTREE_DIR=""
@@ -1281,7 +1296,10 @@ show_status() {
   echo -e "${BOLD}${CYAN}+-------------------------------------------+${NC}"
   echo -e "  Project: $(basename "$PROJECT_DIR")"
   [ -n "${FEATURE_DESC:-}" ] && echo -e "  Feature: ${FEATURE_DESC}"
-  echo -e "  Mode:    ${RUN_MODE:-default}    Session: ${session_id}"
+  local location_info="Mode: ${RUN_MODE:-default}"
+  [ -n "$WORKTREE_BRANCH" ] && location_info="${location_info}  Branch: ${WORKTREE_BRANCH}"
+  echo -e "  ${location_info}"
+  echo -e "  ${BOLD}Ctrl+C${NC} pause  ${BOLD}--log${NC} tail output  ${BOLD}--status${NC} check progress"
   echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 
   local steps=("bootstrap" "memory" "assess" "brainstorm" "complexity" "worktree" "stories" "conflict_check" "plan" "architecture_review" "acceptance_specs" "build" "finish" "manual_test" "retro")
@@ -1447,14 +1465,20 @@ stop_live_refresh() {
 cleanup_and_exit() {
   stop_live_refresh
   echo ""
-  log "Interrupted. Saving state..."
+  log "Paused. State saved."
   show_status
+  echo ""
+  echo -e "  ${BOLD}Continue options:${NC}"
   if [ -n "$WORKTREE_DIR" ] && [ "$WORKTREE_DIR" != "$ORIGINAL_CWD" ]; then
-    echo -e "  Worktree: ${WORKTREE_DIR}"
-    echo -e "Resume: cd ${WORKTREE_DIR} && ${BOLD}conduct --resume${NC}"
+    echo "    conduct --resume                        # resume from main repo"
+    echo "    cd ${WORKTREE_DIR} && conduct --resume   # resume from worktree"
   else
-    echo -e "Resume later: ${BOLD}conduct --resume${NC}"
+    echo "    conduct --resume            # pick up where you left off"
   fi
+  echo "    conduct --from <step>       # restart from a specific step"
+  echo "    conduct --status            # check progress without running"
+  echo "    conduct --log               # tail the session log"
+  echo ""
   exit 130
 }
 
