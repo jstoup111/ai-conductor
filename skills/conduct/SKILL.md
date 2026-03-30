@@ -21,11 +21,11 @@ Step 1:  /bootstrap             → UNDERSTAND
 Step 2:  /memory                → UNDERSTAND
 Step 3:  /brainstorm            → DECIDE
 Step 4:  Complexity Assessment   → DECIDE (classify S/M/L, determines which steps run)
-Step 5:  /stories               → DECIDE
-Step 6:  /conflict-check        → DECIDE (skipped for Small)
-Step 7:  /plan                  → DECIDE
-Step 8:  /architecture-review    → DECIDE (skipped for Small, lightweight for Medium)
-Step 9:  Worktree setup          → BUILD (create feature branch + worktree for isolation)
+Step 5:  Worktree setup          → DECIDE (create feature branch + worktree — all subsequent commits are isolated)
+Step 6:  /stories               → DECIDE
+Step 7:  /conflict-check        → DECIDE (skipped for Small)
+Step 8:  /plan                  → DECIDE
+Step 9:  /architecture-review    → DECIDE (skipped for Small, lightweight for Medium)
 Step 10: /writing-system-tests  → BUILD (skipped for Small)
 Step 11: /pipeline or /tdd      → BUILD (pipeline evaluator satisfies code-review gate)
 Step 12: /finish                → SHIP (merge/PR from worktree, cleanup)
