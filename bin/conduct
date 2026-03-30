@@ -276,6 +276,42 @@ else:
 
 # ─── Artifact Checks ─────────────────────────────────────────────────────────
 
+# Only count artifacts created AFTER the current conduct run started.
+# This prevents pre-existing artifacts from a prior workflow from
+# short-circuiting the current feature's steps.
+RUN_STARTED_AT=""
+
+get_run_start_time() {
+  if [ -z "$RUN_STARTED_AT" ] && [ -f "$STATE_FILE" ]; then
+    RUN_STARTED_AT=$(python3 -c "import json; print(json.load(open('$STATE_FILE')).get('run_started_at',''))" 2>/dev/null || echo "")
+  fi
+  echo "${RUN_STARTED_AT:-0}"
+}
+
+# Check if any files matching a glob were modified after the run started
+has_recent_artifacts() {
+  local pattern=$1
+  local start_time
+  start_time=$(get_run_start_time)
+  # If no start time recorded, fall back to existence check
+  if [ "$start_time" = "0" ] || [ -z "$start_time" ]; then
+    compgen -G "$pattern" > /dev/null 2>&1
+    return $?
+  fi
+  # Check for files newer than start time
+  local found=false
+  for f in $pattern; do
+    [ -f "$f" ] || continue
+    local mtime
+    mtime=$(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f" 2>/dev/null || echo 0)
+    if [ "$mtime" -ge "$start_time" ] 2>/dev/null; then
+      found=true
+      break
+    fi
+  done
+  $found
+}
+
 check_bootstrap() {
   [ -d "${PROJECT_DIR}/.memory" ] && \
   [ -d "${PROJECT_DIR}/docs/specs" ] && \
@@ -284,33 +320,50 @@ check_bootstrap() {
 }
 
 check_brainstorm() {
-  compgen -G "${PROJECT_DIR}/docs/specs/*.md" > /dev/null 2>&1
+  has_recent_artifacts "${PROJECT_DIR}/docs/specs/*.md"
 }
 
 check_stories() {
-  compgen -G "${PROJECT_DIR}/docs/stories/*.md" > /dev/null 2>&1 || return 1
-  # DRAFT stories don't count as complete
-  if grep -rl "Status: DRAFT" "${PROJECT_DIR}/docs/stories/" > /dev/null 2>&1; then
-    return 1
+  has_recent_artifacts "${PROJECT_DIR}/docs/stories/*.md" || return 1
+  # DRAFT stories don't count as complete — but only check recent ones
+  local start_time
+  start_time=$(get_run_start_time)
+  if [ "$start_time" != "0" ] && [ -n "$start_time" ]; then
+    for f in ${PROJECT_DIR}/docs/stories/*.md; do
+      [ -f "$f" ] || continue
+      local mtime
+      mtime=$(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f" 2>/dev/null || echo 0)
+      if [ "$mtime" -ge "$start_time" ] 2>/dev/null; then
+        if grep -q "Status: DRAFT" "$f" 2>/dev/null; then
+          return 1
+        fi
+      fi
+    done
+  else
+    if grep -rl "Status: DRAFT" "${PROJECT_DIR}/docs/stories/" > /dev/null 2>&1; then
+      return 1
+    fi
   fi
   return 0
 }
 
 check_conflict_check() {
-  compgen -G "${PROJECT_DIR}/docs/conflicts/*.md" > /dev/null 2>&1
+  has_recent_artifacts "${PROJECT_DIR}/docs/conflicts/*.md"
 }
 
 check_plan() {
-  compgen -G "${PROJECT_DIR}/docs/plans/*.md" > /dev/null 2>&1
+  has_recent_artifacts "${PROJECT_DIR}/docs/plans/*.md"
 }
 
 check_architecture_review() {
-  compgen -G "${PROJECT_DIR}/docs/decisions/architecture-review-*.md" > /dev/null 2>&1
+  has_recent_artifacts "${PROJECT_DIR}/docs/decisions/architecture-review-*.md"
 }
 
 check_acceptance_specs() {
-  compgen -G "${PROJECT_DIR}/spec/integration/*_spec.rb" > /dev/null 2>&1 || \
-  compgen -G "${PROJECT_DIR}/spec/system/*_spec.rb" > /dev/null 2>&1
+  has_recent_artifacts "${PROJECT_DIR}/spec/integration/*_spec.rb" || \
+  has_recent_artifacts "${PROJECT_DIR}/spec/system/*_spec.rb" || \
+  has_recent_artifacts "${PROJECT_DIR}/tests/integration/test_*.py" || \
+  has_recent_artifacts "${PROJECT_DIR}/tests/acceptance/test_*.py"
 }
 
 check_build() {
@@ -1341,20 +1394,24 @@ if [ -n "$FEATURE_DESC" ] && [ -f "$STATE_FILE" ]; then
   fi
 fi
 
-# Save feature description immediately if provided (before any checks can fail)
+# Save feature description and run start time
 if [ -n "$FEATURE_DESC" ]; then
   ensure_pipeline_dir
   python3 -c "
-import json, os, sys
+import json, os, sys, time
 path = '$STATE_FILE'
 state = {}
 if os.path.exists(path):
     with open(path) as f:
         state = json.load(f)
 state['feature_desc'] = sys.argv[1]
+# Record run start time if not already set (new feature or reset)
+if 'run_started_at' not in state:
+    state['run_started_at'] = int(time.time())
 with open(path, 'w') as f:
     json.dump(state, f, indent=2)
 " "$FEATURE_DESC"
+  RUN_STARTED_AT=$(python3 -c "import json; print(json.load(open('$STATE_FILE')).get('run_started_at','0'))" 2>/dev/null || echo "0")
 fi
 
 # Restore feature description from state if resuming without one
