@@ -1615,7 +1615,7 @@ if [ "$MODE" = "resume" ] || [ -n "$START_STEP" ]; then
     log "Resuming at: ${ALL_STEPS[$start_index]:-done} (last: $last = $last_status)"
   elif [ -n "$START_STEP" ]; then
     # Normalize dashes to underscores for matching
-    local normalized_start="${START_STEP//-/_}"
+    normalized_start="${START_STEP//-/_}"
     for i in "${!ALL_STEPS[@]}"; do
       if [ "${ALL_STEPS[$i]}" = "$normalized_start" ]; then
         start_index=$i
