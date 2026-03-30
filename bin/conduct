@@ -631,6 +631,7 @@ Output ONLY the single letter: S, M, or L. Nothing else." \
   echo ""
   # Allow override in interactive modes; skip in auto mode or non-TTY
   if [ "${RUN_MODE}" != "auto" ] && [ -t 0 ]; then
+    stop_live_refresh
     read -r -p "  Accept or override [S/M/L/enter=accept]: " override
     case "$override" in
       [Ss]) tier_result="S" ;;
@@ -638,6 +639,7 @@ Output ONLY the single letter: S, M, or L. Nothing else." \
       [Ll]) tier_result="L" ;;
       *)    ;; # accept as-is
     esac
+    start_live_refresh 10
   else
     log "Auto mode — accepting complexity tier: ${tier_result}"
   fi
