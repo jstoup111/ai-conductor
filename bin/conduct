@@ -1078,7 +1078,7 @@ run_acceptance_specs() {
   check_plan || { fail "GATE: Need plan in docs/plans/ first"; return 1; }
   log "Generating failing acceptance specs from stories..."
   run_claude "Run the /writing-system-tests skill. Generate failing acceptance specs from ALL stories.
-API projects: spec/integration/. Full-stack: spec/system/. Every criterion (happy + negative) becomes a test. Commit the failing specs."
+API projects: spec/integration/. Full-stack: spec/system/. Every criterion (happy + negative) becomes a test. Commit the failing specs." "interactive"
   check_acceptance_specs && { ok "Acceptance specs created"; save_state "acceptance_specs" "done"; return 0; }
   fail "No acceptance specs found"; save_state "acceptance_specs" "failed"; return 1
 }
@@ -1088,43 +1088,37 @@ run_build() {
   check_plan || { fail "GATE: Need plan first"; return 1; }
 
   local autonomy="Standard"
-  local mode="print"
-  if [ "${RUN_MODE}" = "interactive" ]; then
-    mode="interactive"
-  elif [ "${RUN_MODE}" = "auto" ]; then
-    autonomy="Full"
-  fi
+  [ "${RUN_MODE}" = "auto" ] && autonomy="Full"
 
   local tier
   tier=$(get_complexity_tier)
 
-  # Small tier: direct TDD without pipeline overhead
+  # Build is always interactive — a single non-interactive call can't reliably
+  # execute full TDD cycles across multiple tasks. Claude needs to work
+  # iteratively, and the user needs visibility into progress.
   if [ "$tier" = "S" ]; then
     log "Starting direct TDD (Small tier, no pipeline overhead)..."
     run_claude "Run /tdd for each task in the plan (docs/plans/). Execute tasks sequentially via TDD (RED→DOMAIN→GREEN→DOMAIN→COMMIT).
 
 Track progress yourself — no pipeline state machine needed. Commit after each task.
-Do NOT stop to ask for approval — execute all tasks to completion." "$mode"
-
-    check_build && { ok "Build complete — tests passing"; save_state "build" "done"; return 0; }
-    warn "Build may be incomplete — checking tests"; save_state "build" "needs_verification"; return 0
-  fi
-
-  log "Starting TDD pipeline (${autonomy} autonomy, ${mode} mode)..."
-  run_claude "Run the /pipeline skill at ${autonomy} autonomy. Execute each task via TDD (RED→DOMAIN→GREEN→DOMAIN→COMMIT).
+Do NOT stop to ask for approval — execute all tasks to completion." "interactive"
+  else
+    log "Starting TDD pipeline (${autonomy} autonomy)..."
+    run_claude "Run the /pipeline skill at ${autonomy} autonomy. Execute each task via TDD (RED→DOMAIN→GREEN→DOMAIN→COMMIT).
 
 MANDATORY at batch boundaries:
 - Dispatch evaluator with fresh context (hard gate)
-- Run linter (standardrb)
+- Run linter
 - Run /simplify for duplication
 - Persist at least one .memory/ entry per batch
 - Run micro-retro
 
 Track state in .pipeline/. Follow rework budget (3 cycles, then escalate).
-Do NOT stop to ask for approval — execute all tasks to completion." "$mode"
+Do NOT stop to ask for approval — execute all tasks to completion." "interactive"
+  fi
 
   check_build && { ok "Build complete — tests passing"; save_state "build" "done"; return 0; }
-  warn "Build may be incomplete — checking tests"; save_state "build" "needs_verification"; return 0
+  fail "Build incomplete — tests not passing"; save_state "build" "failed"; return 1
 }
 
 run_finish() {
