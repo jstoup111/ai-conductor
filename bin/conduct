@@ -822,7 +822,9 @@ state['worktree_branch'] = sys.argv[2]
 with open(path, 'w') as f:
     json.dump(state, f, indent=2)
 " "$WORKTREE_DIR" "$WORKTREE_BRANCH"
-    # Also save to main repo state file so restore finds it on resume
+    # Also save to main repo state file so restore finds it on resume.
+    # Uses a feature-keyed map for parallel worktree support, plus
+    # legacy single-key format for backwards compatibility.
     if [ -n "$ORIGINAL_PIPELINE_DIR" ] && [ "$ORIGINAL_PIPELINE_DIR" != "$PIPELINE_DIR" ]; then
       local main_state="${ORIGINAL_PIPELINE_DIR}/conduct-state.json"
       python3 -c "
@@ -832,20 +834,50 @@ state = {}
 if os.path.exists(path):
     with open(path) as f:
         state = json.load(f)
+# Legacy format (single worktree)
 state['worktree_dir'] = sys.argv[1]
 state['worktree_branch'] = sys.argv[2]
+# Parallel-safe format (keyed by feature description)
+feat = sys.argv[4] if len(sys.argv) > 4 and sys.argv[4] else None
+if feat:
+    if 'worktrees' not in state:
+        state['worktrees'] = {}
+    state['worktrees'][feat] = {'dir': sys.argv[1], 'branch': sys.argv[2]}
 with open(path, 'w') as f:
     json.dump(state, f, indent=2)
-" "$WORKTREE_DIR" "$WORKTREE_BRANCH" "$main_state"
+" "$WORKTREE_DIR" "$WORKTREE_BRANCH" "$main_state" "${FEATURE_DESC:-}"
     fi
   fi
 }
 
-# Restore worktree info from state on resume
+# Restore worktree info from state on resume.
+# Supports parallel worktrees: the main repo state stores a map of
+# active worktrees keyed by feature description. On resume, we match
+# by FEATURE_DESC or fall back to the single-worktree legacy format.
 restore_worktree_state() {
   if [ -f "$STATE_FILE" ]; then
-    WORKTREE_DIR=$(python3 -c "import json; print(json.load(open('$STATE_FILE')).get('worktree_dir',''))" 2>/dev/null || echo "")
-    WORKTREE_BRANCH=$(python3 -c "import json; print(json.load(open('$STATE_FILE')).get('worktree_branch',''))" 2>/dev/null || echo "")
+    # Try feature-keyed worktree map first (parallel-safe)
+    if [ -n "$FEATURE_DESC" ]; then
+      WORKTREE_DIR=$(python3 -c "
+import json, sys
+with open('$STATE_FILE') as f:
+    state = json.load(f)
+wt = state.get('worktrees', {}).get(sys.argv[1], {})
+print(wt.get('dir', ''))
+" "$FEATURE_DESC" 2>/dev/null || echo "")
+      WORKTREE_BRANCH=$(python3 -c "
+import json, sys
+with open('$STATE_FILE') as f:
+    state = json.load(f)
+wt = state.get('worktrees', {}).get(sys.argv[1], {})
+print(wt.get('branch', ''))
+" "$FEATURE_DESC" 2>/dev/null || echo "")
+    fi
+    # Fall back to legacy single-worktree format
+    if [ -z "$WORKTREE_DIR" ]; then
+      WORKTREE_DIR=$(python3 -c "import json; print(json.load(open('$STATE_FILE')).get('worktree_dir',''))" 2>/dev/null || echo "")
+      WORKTREE_BRANCH=$(python3 -c "import json; print(json.load(open('$STATE_FILE')).get('worktree_branch',''))" 2>/dev/null || echo "")
+    fi
     if [ -n "$WORKTREE_DIR" ] && [ -d "$WORKTREE_DIR" ]; then
       enter_worktree
     else
