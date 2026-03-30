@@ -1741,6 +1741,14 @@ if [ "$MODE" = "resume" ] || [ -n "$START_STEP" ]; then
       fi
     done
     log "Starting from: $START_STEP"
+    # Mark all prior steps as done — they're assumed complete when using --from
+    for j in "${!ALL_STEPS[@]}"; do
+      [ "$j" -ge "$start_index" ] && break
+      prev_state=$(get_state "${ALL_STEPS[$j]}")
+      if [ "$prev_state" != "done" ] && [ "$prev_state" != "skipped" ]; then
+        save_state "${ALL_STEPS[$j]}" "done"
+      fi
+    done
   fi
 fi
 
