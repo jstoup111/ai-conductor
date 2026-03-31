@@ -694,27 +694,46 @@ run_complexity_assessment() {
   fi
   check_brainstorm || { fail "GATE: Need design doc first"; return 1; }
 
-  # Assess complexity by reading the design doc directly — no interactive handoff gap
+  # Assess complexity by reading the design doc
   log "Assessing feature complexity from design doc..."
+  local tier_output
+  tier_output=$(claude -p "Read the design doc in docs/specs/. Score each signal, then output the tier.
+
+SIGNALS (score each one):
+1. Models/tables: 1-3=S, 4-7=M, 8+=L
+2. External integrations: 0=S, 1-2=M, 3+=L
+3. Auth complexity: None/basic=S, Role-based=M, Multi-tenant/OAuth=L
+4. State machines: None=S, 1 simple=M, Complex/multiple=L
+5. Estimated stories: 1-5=S, 6-15=M, 16+=L
+
+Output format (exactly):
+1. Models: [count] → [S/M/L]
+2. Integrations: [count] → [S/M/L]
+3. Auth: [description] → [S/M/L]
+4. State machines: [count] → [S/M/L]
+5. Stories: [count] → [S/M/L]
+TIER: [S/M/L]" \
+    --dangerously-skip-permissions 2>/dev/null || echo "")
+
+  # Parse tier from last line containing TIER:
   local tier_result
-  tier_result=$(claude -p "Read the design doc in docs/specs/. Count these signals and output ONLY a single character: S, M, or L.
+  tier_result=$(echo "$tier_output" | grep -oE 'TIER:\s*[SML]' | tail -1 | grep -oE '[SML]')
 
-SIGNALS:
-- Models/tables: 1-3=S, 4-7=M, 8+=L
-- External integrations: 0=S, 1-2=M, 3+=L
-- Auth complexity: None/basic=S, Role-based=M, Multi-tenant/OAuth=L
-- State machines: None=S, 1 simple=M, Complex/multiple=L
-- Estimated stories: 1-5=S, 6-15=M, 16+=L
+  # Fallback: look for any standalone S, M, or L on its own line
+  if [ -z "$tier_result" ]; then
+    tier_result=$(echo "$tier_output" | grep -xE '\s*[SML]\s*' | tail -1 | tr -d '[:space:]')
+  fi
 
-Majority of signals determines tier. Ties break UP.
-Output ONLY the single letter: S, M, or L. Nothing else." \
-    --dangerously-skip-permissions 2>/dev/null | tr -d '[:space:]' | tail -c 1)
+  if [ -z "$tier_result" ]; then
+    warn "Could not parse tier from Claude output — defaulting to Medium"
+    tier_result="M"
+  fi
 
-  # Validate — must be S, M, or L
-  case "$tier_result" in
-    S|M|L) ;;
-    *) tier_result="M"; warn "Could not parse tier, defaulting to Medium" ;;
-  esac
+  # Show reasoning so user can verify
+  if [ -n "$tier_output" ]; then
+    echo ""
+    echo "$tier_output" | tail -8
+  fi
 
   # Show assessment and let user override
   local tier_name
