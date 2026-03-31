@@ -25,6 +25,30 @@ SESSION_LOG="${PIPELINE_DIR}/conduct.log"
 STATE_FILE="${PIPELINE_DIR}/conduct-state.json"
 SESSION_FILE="${PIPELINE_DIR}/conduct-session-id"
 
+LOCK_FILE="${PIPELINE_DIR}/conduct.lock"
+
+# Check for another conduct running in this directory
+check_lock() {
+  if [ -f "$LOCK_FILE" ]; then
+    local lock_pid
+    lock_pid=$(cat "$LOCK_FILE" 2>/dev/null || echo "")
+    if [ -n "$lock_pid" ] && kill -0 "$lock_pid" 2>/dev/null; then
+      echo -e "\033[0;31m  ✗\033[0m Another conduct is running in this directory (PID: $lock_pid)"
+      echo "  Use a separate worktree for parallel features:"
+      echo "    conduct \"other feature\"   # creates its own worktree"
+      exit 1
+    fi
+    # Stale lock — remove it
+    rm -f "$LOCK_FILE"
+  fi
+  ensure_pipeline_dir
+  echo $$ > "$LOCK_FILE"
+}
+
+release_lock() {
+  rm -f "$LOCK_FILE" 2>/dev/null
+}
+
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -1505,7 +1529,7 @@ cleanup_and_exit() {
 }
 
 # Clean up on exit, save state on Ctrl+C
-trap 'stop_live_refresh' EXIT
+trap 'stop_live_refresh; release_lock' EXIT
 trap 'cleanup_and_exit' INT TERM
 
 # ─── Rate Limit ───────────────────────────────────────────────────────────────
@@ -1899,6 +1923,7 @@ ORIGINAL_PIPELINE_DIR="$PIPELINE_DIR"
 restore_worktree_state
 
 ensure_pipeline_dir
+check_lock
 
 # Single step mode
 if [ -n "$SINGLE_STEP" ]; then
