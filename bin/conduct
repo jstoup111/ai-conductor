@@ -251,7 +251,7 @@ if os.path.exists(path):
 else:
     print(0)
 ")
-  local context="[Conduct step ${iteration}/15] Feature: ${FEATURE_DESC:-unknown}"
+  local context="[Conduct step ${iteration}/13] Feature: ${FEATURE_DESC:-unknown}"
 
   if [ "$mode" = "print" ]; then
     log "Sending to Claude (session: ${session_id:0:8}...)..."
@@ -383,6 +383,8 @@ has_recent_artifacts() {
 }
 
 check_bootstrap() {
+  # Bootstrap artifacts are project-level (committed to git, inherited by worktrees).
+  # Existence check only — no timestamp check.
   [ -d "${PROJECT_DIR}/.memory" ] && \
   [ -d "${PROJECT_DIR}/docs/specs" ] && \
   [ -d "${PROJECT_DIR}/docs/stories" ] && \
@@ -390,7 +392,8 @@ check_bootstrap() {
 }
 
 check_assess() {
-  has_recent_artifacts "${PROJECT_DIR}/docs/decisions/technical-assessment-*.md"
+  # Assessment is project-level. Existence check only.
+  compgen -G "${PROJECT_DIR}/docs/decisions/technical-assessment-*.md" > /dev/null 2>&1
 }
 
 check_brainstorm() {
@@ -621,15 +624,7 @@ run_assess() {
   run_claude "Run the /assess skill. Dispatch all 9 specialist agents in 3 batches of 3 (parallel within batch). Each specialist writes to .pipeline/assessment/<name>.md. After all 9 complete, dispatch the CTO orchestrator to synthesize findings into docs/decisions/technical-assessment-$(date +%Y-%m-%d).md. Present the final report for review."
 
   if check_assess; then
-    # Review the assessment report
-    local assess_files=()
-    while IFS= read -r f; do assess_files+=("$f"); done < <(compgen -G "${PROJECT_DIR}/docs/decisions/technical-assessment-*.md" | sort)
-    if [ ${#assess_files[@]} -gt 0 ]; then
-      if ! review_artifacts "assess" "${assess_files[@]}"; then
-        fail "Assessment rejected"; save_state "assess" "failed"; return 1
-      fi
-    fi
-    ok "Assessment approved"; save_state "assess" "done"
+    ok "Assessment complete"; save_state "assess" "done"
     local verdict
     verdict=$(grep -oP 'Verdict:\s*\K\S+' "${PROJECT_DIR}"/docs/decisions/technical-assessment-*.md 2>/dev/null | tail -1 || echo "")
     [ -n "$verdict" ] && save_state "assess_verdict" "$verdict"
@@ -1063,15 +1058,7 @@ run_conflict_check() {
         fail "Blocking conflicts still unresolved"; save_state "conflict_check" "failed"; return 1
       fi
     fi
-    # Review the conflict report
-    local conflict_files=()
-    while IFS= read -r f; do conflict_files+=("$f"); done < <(compgen -G "${PROJECT_DIR}/docs/conflicts/*.md" | sort)
-    if [ ${#conflict_files[@]} -gt 0 ]; then
-      if ! review_artifacts "conflict-check" "${conflict_files[@]}"; then
-        fail "Conflict report rejected"; save_state "conflict_check" "failed"; return 1
-      fi
-    fi
-    ok "Conflict check approved"; save_state "conflict_check" "done"; return 0
+    ok "Conflict check complete"; save_state "conflict_check" "done"; return 0
   fi
   fail "No conflict report in docs/conflicts/"; save_state "conflict_check" "failed"; return 1
 }
@@ -1120,15 +1107,7 @@ run_architecture_review() {
       warn "Architecture BLOCKED — interactive session to resolve..."
       run_claude "The architecture review issued a BLOCKED verdict. Present the blocking issues to the user with resolution options. The user must decide. After resolution, update the review and re-issue verdict." "interactive"
     fi
-    # Review the architecture review
-    local arch_files=()
-    while IFS= read -r f; do arch_files+=("$f"); done < <(compgen -G "${PROJECT_DIR}/docs/decisions/architecture-review-*.md" | sort)
-    if [ ${#arch_files[@]} -gt 0 ]; then
-      if ! review_artifacts "architecture-review" "${arch_files[@]}"; then
-        fail "Architecture review rejected"; save_state "architecture_review" "failed"; return 1
-      fi
-    fi
-    ok "Architecture review approved"; save_state "architecture_review" "done"; return 0
+    ok "Architecture review complete"; save_state "architecture_review" "done"; return 0
   fi
   fail "No architecture review in docs/decisions/"; save_state "architecture_review" "failed"; return 1
 }
@@ -1145,6 +1124,26 @@ run_worktree_setup() {
     restore_worktree_state
     ok "Worktree restored"; return 0
   fi
+
+  # Run bootstrap and assess in the MAIN REPO before creating the worktree.
+  # These are project-level (run once), their artifacts get committed so
+  # worktrees inherit them via git.
+  if ! check_bootstrap; then
+    log "Running bootstrap in main repo (one-time project setup)..."
+    run_bootstrap
+  fi
+  if ! check_assess; then
+    # Only assess existing projects (not empty/new ones)
+    if [ -d "${PROJECT_DIR}/app" ] || [ -d "${PROJECT_DIR}/src" ] || [ -f "${PROJECT_DIR}/main.py" ]; then
+      log "Running assess in main repo (one-time project assessment)..."
+      run_assess
+    fi
+  fi
+
+  # Commit bootstrap/assess artifacts so worktree inherits them
+  git add docs/ .memory/ .gitignore .github/ 2>/dev/null || true
+  git diff --cached --quiet 2>/dev/null || \
+    git commit -m "Project setup: bootstrap + assess artifacts" 2>/dev/null || true
 
   create_worktree
   if [ -n "$WORKTREE_DIR" ]; then
@@ -1397,10 +1396,10 @@ show_status() {
   echo -e "  ${BOLD}Ctrl+C${NC} pause  ${BOLD}--log${NC} tail output  ${BOLD}--status${NC} check progress"
   echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 
-  local steps=("worktree" "bootstrap" "memory" "assess" "brainstorm" "complexity" "stories" "conflict_check" "plan" "architecture_review" "acceptance_specs" "build" "finish" "manual_test" "retro")
-  local labels=("worktree" "bootstrap" "memory" "assess" "brainstorm" "complexity" "stories" "conflict-check" "plan" "arch review" "acceptance specs" "tdd/pipeline" "finish" "manual-test" "retro")
-  local phases=("SETUP" "UNDERSTAND" "UNDERSTAND" "UNDERSTAND" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "BUILD" "BUILD" "SHIP" "SHIP" "SHIP")
-  local checks=("" check_bootstrap "" check_assess check_brainstorm "" check_stories check_conflict_check check_plan check_architecture_review check_acceptance_specs check_build "" check_manual_test check_retro)
+  local steps=("worktree" "memory" "brainstorm" "complexity" "stories" "conflict_check" "plan" "architecture_review" "acceptance_specs" "build" "finish" "manual_test" "retro")
+  local labels=("worktree" "memory" "brainstorm" "complexity" "stories" "conflict-check" "plan" "arch review" "acceptance specs" "tdd/pipeline" "finish" "manual-test" "retro")
+  local phases=("SETUP" "UNDERSTAND" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "BUILD" "BUILD" "SHIP" "SHIP" "SHIP")
+  local checks=("" "" check_brainstorm "" check_stories check_conflict_check check_plan check_architecture_review check_acceptance_specs check_build "" check_manual_test check_retro)
 
   local current_step
   current_step=$(get_current_step)
@@ -1807,8 +1806,10 @@ usage() {
   echo "  --reset           Clear session state and start fresh"
   echo "  -h, --help        Show this help"
   echo ""
-  echo "Steps: worktree, bootstrap, memory, assess, brainstorm, complexity, stories, conflict-check,"
+  echo "Steps: worktree, memory, brainstorm, complexity, stories, conflict-check,"
   echo "       plan, architecture-review, acceptance-specs, build, finish, manual-test, retro"
+  echo ""
+  echo "Project-level (run once, not per-feature): bootstrap, assess"
   echo ""
   echo "Examples:"
   echo "  conduct --auto \"URL shortener with click tracking\"    # Fully automated"
@@ -2009,8 +2010,8 @@ fi
 # Step registry — use underscores to match save_state() keys in conduct-state.json
 # Worktree is created right after complexity assessment so all subsequent commits
 # (stories, plan, build, etc.) are isolated on the feature branch.
-ALL_STEPS=(worktree bootstrap memory assess brainstorm complexity stories conflict_check plan architecture_review acceptance_specs build finish manual_test retro)
-STEP_FUNCS=(run_worktree_setup run_bootstrap run_memory run_assess run_brainstorm run_complexity_assessment run_stories run_conflict_check run_plan run_architecture_review run_acceptance_specs run_build run_finish run_manual_test run_retro)
+ALL_STEPS=(worktree memory brainstorm complexity stories conflict_check plan architecture_review acceptance_specs build finish manual_test retro)
+STEP_FUNCS=(run_worktree_setup run_memory run_brainstorm run_complexity_assessment run_stories run_conflict_check run_plan run_architecture_review run_acceptance_specs run_build run_finish run_manual_test run_retro)
 
 # Determine starting point
 start_index=0
@@ -2053,7 +2054,7 @@ if [ "$MODE" = "resume" ] || [ -n "$START_STEP" ]; then
 fi
 
 # Check feature description needed
-if [ -z "$FEATURE_DESC" ] && [ "$start_index" -le 4 ]; then
+if [ -z "$FEATURE_DESC" ] && [ "$start_index" -le 2 ]; then
   if ! check_brainstorm; then
     fail "Feature description required. Usage: conduct \"description\""
     exit 1
