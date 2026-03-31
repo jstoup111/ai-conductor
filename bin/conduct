@@ -321,18 +321,21 @@ else:
     stop_live_refresh
     sleep 0.2 2>/dev/null || true  # let any in-flight refresh flush
     clear
+    local step_name
+    step_name=$(get_current_step)
     echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "  ${BOLD}Interactive session${NC} — $(get_current_step)"
+    echo -e "  ${BOLD}Interactive session${NC} — ${step_name}"
     echo -e "  Type ${BOLD}/quit${NC} when done to return to conductor"
     echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
     STATUS_LINES=0
-    if ! claude $session_flag --append-system-prompt "$context. $prompt"; then
-      # Stale session — retry with fresh ID
-      reset_session
-      session_id=$(get_session_id)
-      claude --session-id "${session_id}" --append-system-prompt "$context. $prompt"
-    fi
+    # Each interactive step gets a FRESH session so Claude doesn't carry
+    # momentum from prior steps and start implementing after plan creation.
+    # The system prompt tells Claude to complete ONLY this step then stop.
+    local step_context="You are running step: ${step_name}. Complete ONLY this step, then stop and let the user /quit to return to the conductor. Do NOT proceed to subsequent steps. ${context}."
+    claude --session-id "$(python3 -c 'import uuid; print(uuid.uuid4())')" \
+      --append-system-prompt "$step_context" \
+      "$prompt" || true
     clear
     reset_display
     start_live_refresh 10
@@ -1743,8 +1746,6 @@ recover() {
     esac
   fi
 
-  local recover_flag="--session-id ${session_id}"
-  [ -f "${PIPELINE_DIR}/session-created" ] && recover_flag="--resume ${session_id}"
   sleep 0.2 2>/dev/null || true
   clear
   echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
@@ -1754,8 +1755,6 @@ recover() {
   echo ""
   STATUS_LINES=0
 
-  # Pass the recovery action as the first message so Claude starts immediately.
-  # The user just watches and approves — no need to figure out what to type.
   local recover_prompt="Run /${step_name}. Complete this step, then stop."
   if [ "$step_name" = "bootstrap" ]; then
     recover_prompt="Run /bootstrap. Detect the project stack, scaffold directories, generate CLAUDE.md. Stop when done."
@@ -1767,16 +1766,10 @@ recover() {
     recover_prompt="Continue the build. Check .pipeline/task-status.json for progress, run /tdd on the next incomplete task."
   fi
 
-  if ! claude $recover_flag \
-    --append-system-prompt "The conduct script hit a failure at step: ${step_name}. Complete ONLY this step, then let the user /quit to return to the conductor." \
-    "$recover_prompt"; then
-    # Stale session — retry with fresh ID
-    reset_session
-    session_id=$(get_session_id)
-    claude --session-id "${session_id}" \
-      --append-system-prompt "The conduct script hit a failure at step: ${step_name}. Complete ONLY this step, then let the user /quit to return to the conductor." \
-      "$recover_prompt"
-  fi
+  # Fresh session — don't carry context from prior steps
+  claude --session-id "$(python3 -c 'import uuid; print(uuid.uuid4())')" \
+    --append-system-prompt "Recovery for step: ${step_name}. Complete ONLY this step, then stop and let the user /quit to return to the conductor. Do NOT proceed to subsequent steps." \
+    "$recover_prompt" || true
   clear
   reset_display
   start_live_refresh 10
