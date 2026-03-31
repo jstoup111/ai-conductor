@@ -44,6 +44,10 @@ npm start &
 
 Verify it's up: `curl -s http://localhost:3000/up` (or health check endpoint).
 
+**Verify the server matches current code.** A stale server from a prior session will give false
+results. Check that expected routes/endpoints exist (e.g., `GET /openapi.json` for FastAPI,
+`rails routes` output). If the server is stale, restart it before testing.
+
 ### 3. Walk Through Stories (API Projects)
 
 For each story in `docs/stories/`, execute the acceptance criteria manually using `curl`:

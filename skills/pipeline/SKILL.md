@@ -40,9 +40,13 @@ For each task in the implementation plan:
 7. UPDATE STATUS — Mark task as "completed" in .pipeline/task-status.json
 ```
 
-**Task status tracking is mandatory and must be done by the pipeline agent, not the hook.**
+**Task status tracking is mandatory — write directly to `.pipeline/task-status.json`.**
 
-Update `.pipeline/task-status.json` — mark task as `in_progress` before coding, `completed` after commit. The post-commit hook is a backup; fix stale status immediately if detected.
+Do NOT rely on conversation-level task tools (TaskCreate/TaskUpdate) for persistence — those
+are ephemeral and lost between sessions. Write to the JSON file at each task boundary:
+- Mark `in_progress` before coding
+- Mark `completed` after commit
+- The post-commit hook is a backup; fix stale status immediately if detected
 
 **Batch independent tasks:** Group tasks that don't modify overlapping files into batches for
 parallel or combined execution. Two strategies:
@@ -73,6 +77,11 @@ runs the full 3-stage review from the `code-review` skill on this scoped context
 OTHER batch boundary, plus always on the final batch. Pre-batch verification (full test suite,
 linter, `/simplify`) still runs at EVERY boundary regardless. For plans with >15 tasks,
 dispatch the evaluator at every batch boundary (no change).
+
+**Evaluator diff scope:** Always scope the evaluator to the **current batch's diff only**
+(`git diff <batch-start-commit>..HEAD`), not the full branch diff. For the final batch,
+add a lightweight integration check (full branch stat summary) but do NOT re-review earlier
+batches line by line — they already passed their own evaluator gate.
 
 **Enforcement:** After each batch, write the evaluator verdict to
 `.pipeline/audit-trail/batch-N/review.json`. If this file does not exist for the current

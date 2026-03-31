@@ -17,7 +17,17 @@ before discussing how.
 
 ### 1. Explore Project Context
 
-Before asking questions, understand what exists:
+Before asking questions, understand what exists. If the conversation already contains
+exploration results (e.g., from a prior Explore agent or `/bootstrap`), summarize what's
+known and only explore gaps — do not re-explore files already in context.
+
+When dispatching Explore agents:
+- **Max 2 agents** with explicitly partitioned search spaces (no file overlap)
+- Agent 1: feature-relevant source files (routes, models, services in the affected area)
+- Agent 2: existing tests and stories for the affected area
+- Do NOT dispatch agents to read `.memory/` (auto-loaded at session start)
+
+Checklist:
 - Read relevant code, routes, models, and tests
 - Check `.memory/` for prior decisions and context about this area
 - Review existing stories in `docs/stories/` for related features
@@ -100,6 +110,11 @@ If the project exposes an API (detected by: `--api` flag, API-only controllers, 
 
 This MUST happen before stories — stories reference the contract for response format assertions.
 
+## Constraints
+
+- **Do NOT call `ExitPlanMode`.** Brainstorm is a design phase, not an implementation plan.
+  Write the design doc and return. `ExitPlanMode` is owned by plan mode, not brainstorm.
+
 ## Verification
 
 - [ ] Project context explored before asking questions
@@ -108,3 +123,4 @@ This MUST happen before stories — stories reference the contract for response 
 - [ ] Design document written with all required sections
 - [ ] Design document saved to `docs/specs/`
 - [ ] User explicitly approved before proceeding
+- [ ] `ExitPlanMode` was NOT called
