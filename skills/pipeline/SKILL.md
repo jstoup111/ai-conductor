@@ -19,9 +19,9 @@ feeds the retro skill with audit data.
 
 | Level | Human Role | Agent Authority | When to Use |
 |-------|-----------|----------------|-------------|
-| **Conservative** | Approves each task before execution | Proposes, doesn't execute | First time using the harness, unfamiliar domain |
-| **Standard** | Reviews at batch boundaries | Executes with quality gates, escalates on failure | Known domain, trusted test suite |
-| **Full** | Reviews completed features | Parallel execution, auto-merge on green | Mature project, well-defined stories |
+| **Conservative** | Approves each task before execution | Sequential only, proposes before executing | First time using the harness, unfamiliar domain |
+| **Standard** | Reviews at batch boundaries | Parallel agents on non-overlapping files, quality gates | Known domain, trusted test suite |
+| **Full** | Reviews completed features | Parallel agents + parallel worktrees, auto-merge on green | Mature project, well-defined stories |
 
 Default to **Standard** unless the user specifies otherwise.
 
@@ -44,11 +44,16 @@ For each task in the implementation plan:
 
 Update `.pipeline/task-status.json` — mark task as `in_progress` before coding, `completed` after commit. The post-commit hook is a backup; fix stale status immediately if detected.
 
-**Batch identical-pattern tasks:** When consecutive tasks follow the same pattern (e.g., "add
-validations to Model X" repeated for 5 models), batch them into a single agent dispatch rather
-than running one-at-a-time. The agent handles all models in one TDD pass. This avoids repetitive
-RED/GREEN narration for identical patterns. Only batch when tasks share the same pattern AND
-don't modify overlapping files.
+**Batch independent tasks:** Group tasks that don't modify overlapping files into batches for
+parallel or combined execution. Two strategies:
+
+1. **Combined dispatch** — When consecutive tasks follow the same pattern (e.g., "add validations
+   to Model X" repeated for 5 models), batch into a single agent that handles all in one TDD pass.
+2. **Parallel dispatch** — When tasks are independent but follow different patterns, dispatch each
+   as a separate parallel Agent tool call (Standard/Full autonomy).
+
+Only batch/parallelize when tasks don't modify overlapping files (check `**Files likely touched:**`
+in the plan). When in doubt, run sequentially.
 
 ### Quality Gates
 
@@ -121,15 +126,34 @@ If stories in `docs/stories/` have been modified since the plan was created:
 
 Track all state in `.pipeline/`: `config.yaml` (autonomy level, project refs), `plan-ref.md` (active plan path), `task-status.json` (per-task status and rework cycle counts), and `audit-trail/` (per-task `review.json`, `rework-N.json`, `commit.txt`, plus `summary.json` for retro).
 
-### Parallel Execution (Full Autonomy Only)
+### Parallel Execution (Standard and Full Autonomy)
 
-When autonomy is set to Full and tasks have no dependencies:
-- Dispatch the `worktree-manager` agent (see `agents/worktree-manager.md`) with operation
-  CREATE_PARALLEL to set up one worktree per independent task batch
-- Dispatch generator agents into their assigned worktrees via the Agent tool
-- After all parallel tasks complete and pass review, dispatch `worktree-manager` with
-  MERGE_PARALLEL to merge results back sequentially, resolving conflicts as needed
+When tasks within a batch have no file-level dependencies on each other, dispatch them
+in parallel using the Agent tool. This does NOT require worktrees — parallel agents work
+in the same directory on non-overlapping files.
+
+**When to parallelize:**
+- Tasks touch different files (check `**Files likely touched:**` in the plan)
+- Tasks have `Dependencies: none` or depend only on already-completed tasks
+- Tasks follow the same pattern (e.g., "add validation to Model X" for 5 models)
+
+**How to parallelize:**
+1. Read the plan and identify tasks with no mutual dependencies
+2. Group independent tasks into parallel batches (max 3 concurrent agents)
+3. Dispatch each task as a separate Agent tool call in a single message
+4. Each agent receives: the task description, the test directory, the source directory
+5. Wait for all agents to complete
+6. Run the full test suite to verify no conflicts
+7. If tests fail: identify the conflict, fix sequentially, re-run
+
+**Worktree-based parallelism (Full autonomy only):**
+For tasks that touch overlapping files or need full isolation:
+- Dispatch the `worktree-manager` agent to create parallel worktrees under `.worktrees/`
+- Each worktree gets its own task batch
+- After completion, merge results back sequentially
 - The worktree-manager handles merge order, conflict resolution, and post-merge testing
+
+**Conservative autonomy:** All tasks run sequentially. No parallel execution.
 
 ### Batch Boundaries
 

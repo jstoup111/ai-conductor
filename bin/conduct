@@ -1119,6 +1119,10 @@ Do NOT stop to ask for approval — execute all tasks to completion." "interacti
     log "Starting TDD pipeline (${autonomy} autonomy)..."
     run_claude "Run the /pipeline skill at ${autonomy} autonomy. Execute each task via TDD (RED→DOMAIN→GREEN→DOMAIN→COMMIT).
 
+PARALLEL EXECUTION: Read the plan's Dependencies and Files likely touched fields. Group tasks
+with no mutual file overlap into parallel batches. Dispatch independent tasks as parallel Agent
+tool calls (max 3 concurrent). Run test suite after each parallel batch to verify no conflicts.
+
 MANDATORY at batch boundaries:
 - Dispatch evaluator with fresh context (hard gate)
 - Run linter
