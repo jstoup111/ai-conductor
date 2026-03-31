@@ -1651,22 +1651,22 @@ recover() {
     echo "    s = skip this step"
     echo "    q = quit conductor"
     read -r -p "  [r/i/s/q]: " recovery_choice
-    start_live_refresh 10
     case "$recovery_choice" in
       [sS])
         warn "Skipping ${step_name}"
         save_state "$step_name" "skipped"
+        start_live_refresh 10
         return 1  # signal caller to advance past this step
         ;;
       [qQ])
         save_state "$step_name" "failed"
-        stop_live_refresh
         echo -e "Resume later: ${BOLD}conduct --resume${NC}"
         exit 0
         ;;
       [rR])
         log "Retrying ${step_name}..."
-        return 0  # retry without interactive session
+        start_live_refresh 10
+        return 2  # signal caller to retry without burning retry count
         ;;
       # i or default: fall through to interactive session
     esac
@@ -1674,7 +1674,6 @@ recover() {
 
   local recover_flag="--session-id ${session_id}"
   [ -f "${PIPELINE_DIR}/session-created" ] && recover_flag="--resume ${session_id}"
-  stop_live_refresh
   sleep 0.2 2>/dev/null || true
   clear
   echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
@@ -2037,13 +2036,19 @@ while [ "$i" -lt "${#STEP_FUNCS[@]}" ]; do
   recover "${ALL_STEPS[$i]}"
   recover_rc=$?
   if [ "$recover_rc" -eq 0 ]; then
+    # Interactive fix session completed — retry the step
     refresh_display
-    continue  # retry (don't advance i)
+    continue
   elif [ "$recover_rc" -eq 1 ]; then
-    # Step was skipped by user in recovery menu
+    # User chose skip
     refresh_display
     retry_count=0
     i=$((i + 1))
+    continue
+  elif [ "$recover_rc" -eq 2 ]; then
+    # User chose retry — don't burn retry count
+    retry_count=$((retry_count - 1))
+    refresh_display
     continue
   else
     fail "Step ${ALL_STEPS[$i]} could not be recovered. Stopping."
