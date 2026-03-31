@@ -618,8 +618,15 @@ run_assess() {
   run_claude "Run the /assess skill. Dispatch all 9 specialist agents in 3 batches of 3 (parallel within batch). Each specialist writes to .pipeline/assessment/<name>.md. After all 9 complete, dispatch the CTO orchestrator to synthesize findings into docs/decisions/technical-assessment-$(date +%Y-%m-%d).md. Present the final report for review."
 
   if check_assess; then
-    ok "Assessment complete"; save_state "assess" "done"
-    # Extract verdict for status display
+    # Review the assessment report
+    local assess_files=()
+    while IFS= read -r f; do assess_files+=("$f"); done < <(compgen -G "${PROJECT_DIR}/docs/decisions/technical-assessment-*.md" | sort)
+    if [ ${#assess_files[@]} -gt 0 ]; then
+      if ! review_artifacts "assess" "${assess_files[@]}"; then
+        fail "Assessment rejected"; save_state "assess" "failed"; return 1
+      fi
+    fi
+    ok "Assessment approved"; save_state "assess" "done"
     local verdict
     verdict=$(grep -oP 'Verdict:\s*\K\S+' "${PROJECT_DIR}"/docs/decisions/technical-assessment-*.md 2>/dev/null | tail -1 || echo "")
     [ -n "$verdict" ] && save_state "assess_verdict" "$verdict"
@@ -641,8 +648,15 @@ run_brainstorm() {
 
 Write a design document to docs/specs/. Include Problem, Solution, Scope (In/Out), Key Decisions. Perform a scope check — compare the design against the original request and flag if scope expanded. Get user approval before marking as approved." "interactive"
   if check_brainstorm; then
-    ok "Design doc created"; save_state "brainstorm" "done"
-    # Name the session post-brainstorm for easy pickup via remote-control / phone
+    # Review the design doc — user must approve before proceeding
+    local spec_files=()
+    while IFS= read -r f; do spec_files+=("$f"); done < <(compgen -G "${PROJECT_DIR}/docs/specs/*.md" | sort)
+    if [ ${#spec_files[@]} -gt 0 ]; then
+      if ! review_artifacts "brainstorm" "${spec_files[@]}"; then
+        fail "Design doc rejected — re-run /brainstorm"; save_state "brainstorm" "failed"; return 1
+      fi
+    fi
+    ok "Design doc approved"; save_state "brainstorm" "done"
     name_session
     return 0
   fi
@@ -1003,7 +1017,15 @@ run_conflict_check() {
         fail "Blocking conflicts still unresolved"; save_state "conflict_check" "failed"; return 1
       fi
     fi
-    ok "Conflict check complete"; save_state "conflict_check" "done"; return 0
+    # Review the conflict report
+    local conflict_files=()
+    while IFS= read -r f; do conflict_files+=("$f"); done < <(compgen -G "${PROJECT_DIR}/docs/conflicts/*.md" | sort)
+    if [ ${#conflict_files[@]} -gt 0 ]; then
+      if ! review_artifacts "conflict-check" "${conflict_files[@]}"; then
+        fail "Conflict report rejected"; save_state "conflict_check" "failed"; return 1
+      fi
+    fi
+    ok "Conflict check approved"; save_state "conflict_check" "done"; return 0
   fi
   fail "No conflict report in docs/conflicts/"; save_state "conflict_check" "failed"; return 1
 }
@@ -1052,7 +1074,15 @@ run_architecture_review() {
       warn "Architecture BLOCKED — interactive session to resolve..."
       run_claude "The architecture review issued a BLOCKED verdict. Present the blocking issues to the user with resolution options. The user must decide. After resolution, update the review and re-issue verdict." "interactive"
     fi
-    ok "Architecture review complete"; save_state "architecture_review" "done"; return 0
+    # Review the architecture review
+    local arch_files=()
+    while IFS= read -r f; do arch_files+=("$f"); done < <(compgen -G "${PROJECT_DIR}/docs/decisions/architecture-review-*.md" | sort)
+    if [ ${#arch_files[@]} -gt 0 ]; then
+      if ! review_artifacts "architecture-review" "${arch_files[@]}"; then
+        fail "Architecture review rejected"; save_state "architecture_review" "failed"; return 1
+      fi
+    fi
+    ok "Architecture review approved"; save_state "architecture_review" "done"; return 0
   fi
   fail "No architecture review in docs/decisions/"; save_state "architecture_review" "failed"; return 1
 }
