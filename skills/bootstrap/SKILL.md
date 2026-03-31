@@ -124,8 +124,12 @@ background jobs, key architecture-shaping libraries.
 ### 5. Set Up Project Directories
 
 Create if missing (idempotent): `.memory/` (decisions/, patterns/, gotchas/, context/,
-index.md), `.pipeline/` (audit-trail/), `docs/` (specs/, stories/, conflicts/, plans/,
-decisions/, retros/).
+index.md), `.pipeline/` (audit-trail/), `.worktrees/`, `docs/` (specs/, stories/, conflicts/,
+plans/, decisions/, retros/).
+
+Add to `.gitignore` (idempotent — don't duplicate):
+- `.pipeline/` — runtime state, not source
+- `.worktrees/` — git worktrees for parallel feature development
 
 ### 6. Generate or Update CLAUDE.md
 

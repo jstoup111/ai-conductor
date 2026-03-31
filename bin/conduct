@@ -497,7 +497,9 @@ run_bootstrap() {
   bs_state=$(get_state "bootstrap_detect")
   if [ "$bs_state" != "done" ]; then
     log "Step 1/6: Detecting project stack and scaffolding directories..."
-    claude -p "Run /bootstrap Steps 1-3b ONLY. Detect project type and tech stack. Create directories (.memory/, docs/, .pipeline/) if missing. Generate .claudeignore from templates/claudeignore.template. Load tech-context if matched.
+    claude -p "Run /bootstrap Steps 1-3c ONLY. Detect project type and tech stack. Create directories (.memory/, docs/, .pipeline/, .worktrees/) if missing. Generate .claudeignore from templates/claudeignore.template. Generate PR template from templates/pull_request_template.md to .github/pull_request_template.md (if not present). Load tech-context if matched.
+
+Add to .gitignore (idempotent): .pipeline/ and .worktrees/
 
 If this is an empty directory, scaffold the project first (ask what framework).
 Do NOT analyze existing code, draft stories, or generate CLAUDE.md yet.
@@ -728,9 +730,8 @@ PYEOF
 WORKTREE_DIR=""
 WORKTREE_BRANCH=""
 
-# Dispatch worktree-manager agent to create a worktree for the feature.
-# The agent handles branch naming, worktree creation, artifact inheritance.
-# Falls back to bash if not in a git repo.
+# Create a worktree for the feature under .worktrees/ (gitignored).
+# Handles parallel runs — each feature gets its own worktree.
 create_worktree() {
   if ! git rev-parse --is-inside-work-tree &>/dev/null; then
     warn "Not a git repo — skipping worktree"; return 0
@@ -740,35 +741,47 @@ create_worktree() {
     warn "Already in a worktree — skipping"; return 0
   fi
 
-  log "Dispatching worktree-manager agent..."
+  # Ensure .worktrees/ exists and is gitignored
+  mkdir -p "${PROJECT_DIR}/.worktrees"
+  if ! grep -qx '.worktrees/' "${PROJECT_DIR}/.gitignore" 2>/dev/null; then
+    echo '.worktrees/' >> "${PROJECT_DIR}/.gitignore"
+  fi
+  if ! grep -qx '.pipeline/' "${PROJECT_DIR}/.gitignore" 2>/dev/null; then
+    echo '.pipeline/' >> "${PROJECT_DIR}/.gitignore"
+  fi
 
-  # First commit DECIDE phase artifacts so the worktree inherits them
-  git add docs/ .memory/ .pipeline/ 2>/dev/null || true
+  # Commit DECIDE phase artifacts so the worktree inherits them
+  git add docs/ .memory/ .gitignore 2>/dev/null || true
   git diff --cached --quiet 2>/dev/null || \
     git commit -m "Add DECIDE phase artifacts for feature: ${FEATURE_DESC:-work}" 2>/dev/null || true
 
-  local result
-  result=$(claude -p "You are the worktree-manager agent. Read agents/worktree-manager.md for your full instructions.
+  # Derive branch name from feature description
+  local slug
+  slug=$(echo "${FEATURE_DESC:-work}" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | sed 's/^-//;s/-$//' | cut -c1-50)
+  WORKTREE_BRANCH="feature/${slug}"
 
-Operation: CREATE
-Feature: ${FEATURE_DESC:-work}
-Base branch: $(git branch --show-current 2>/dev/null || echo main)
-Project dir: ${PROJECT_DIR}
+  local wt_path="${PROJECT_DIR}/.worktrees/${slug}"
 
-Create a worktree for this feature. Report the worktree path and branch name.
-Output EXACTLY two lines:
-WORKTREE_DIR=<absolute path>
-WORKTREE_BRANCH=<branch name>" \
-    --dangerously-skip-permissions 2>/dev/null || echo "")
+  # Check if worktree/branch already exists — reuse
+  if [ -d "$wt_path" ]; then
+    log "Reusing existing worktree: ${wt_path}"
+    WORKTREE_DIR="$wt_path"
+    ok "Worktree exists: ${WORKTREE_DIR} (branch: ${WORKTREE_BRANCH})"
+    return 0
+  fi
 
-  # Parse agent output
-  WORKTREE_DIR=$(echo "$result" | grep "^WORKTREE_DIR=" | head -1 | cut -d= -f2-)
-  WORKTREE_BRANCH=$(echo "$result" | grep "^WORKTREE_BRANCH=" | head -1 | cut -d= -f2-)
+  # Check if branch exists (from a prior run)
+  if git rev-parse --verify "$WORKTREE_BRANCH" &>/dev/null; then
+    git worktree add "$wt_path" "$WORKTREE_BRANCH" 2>/dev/null
+  else
+    git worktree add -b "$WORKTREE_BRANCH" "$wt_path" 2>/dev/null
+  fi
 
-  if [ -n "$WORKTREE_DIR" ] && [ -d "$WORKTREE_DIR" ]; then
+  if [ -d "$wt_path" ]; then
+    WORKTREE_DIR="$wt_path"
     ok "Worktree created: ${WORKTREE_DIR} (branch: ${WORKTREE_BRANCH})"
   else
-    warn "Worktree agent returned no valid path — continuing in main directory"
+    warn "Worktree creation failed — continuing in main directory"
     WORKTREE_DIR=""
     WORKTREE_BRANCH=""
   fi
