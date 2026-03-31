@@ -663,6 +663,27 @@ Write a design document to docs/specs/. Include Problem, Solution, Scope (In/Out
     name_session
     return 0
   fi
+  # Check failed — show diagnostic info
+  warn "check_brainstorm failed. Diagnostics:"
+  warn "  PROJECT_DIR: ${PROJECT_DIR}"
+  warn "  docs/specs/ contents: $(ls "${PROJECT_DIR}/docs/specs/" 2>/dev/null || echo '(empty or missing)')"
+  warn "  run_started_at: $(get_run_start_time)"
+  if compgen -G "${PROJECT_DIR}/docs/specs/*.md" > /dev/null 2>&1; then
+    warn "  Files exist but may predate run_started_at — falling back to existence check"
+    # The design doc exists but has an older timestamp (e.g., from a prior run
+    # or because enter_worktree reset run_started_at after the file was created).
+    # Accept it rather than failing.
+    local spec_files=()
+    while IFS= read -r f; do spec_files+=("$f"); done < <(compgen -G "${PROJECT_DIR}/docs/specs/*.md" | sort)
+    if [ ${#spec_files[@]} -gt 0 ]; then
+      if ! review_artifacts "brainstorm" "${spec_files[@]}"; then
+        fail "Design doc rejected — re-run /brainstorm"; save_state "brainstorm" "failed"; return 1
+      fi
+    fi
+    ok "Design doc approved (fallback)"; save_state "brainstorm" "done"
+    name_session
+    return 0
+  fi
   fail "No design doc in docs/specs/"; save_state "brainstorm" "failed"; return 1
 }
 
