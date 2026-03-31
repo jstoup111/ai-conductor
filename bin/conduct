@@ -791,10 +791,10 @@ create_worktree() {
   # Remove .pipeline/ from git tracking if it was committed before gitignore
   git rm -r --cached .pipeline/ 2>/dev/null || true
 
-  # Commit DECIDE phase artifacts so the worktree inherits them
-  git add docs/ .memory/ .gitignore 2>/dev/null || true
+  # Commit gitignore updates before creating worktree
+  git add .gitignore 2>/dev/null || true
   git diff --cached --quiet 2>/dev/null || \
-    git commit -m "Add DECIDE phase artifacts for feature: ${FEATURE_DESC:-work}" 2>/dev/null || true
+    git commit -m "Add .worktrees/ and .pipeline/ to gitignore" 2>/dev/null || true
 
   # Derive branch name from feature description
   local slug
@@ -845,36 +845,21 @@ enter_worktree() {
     # Remove .pipeline/ from git tracking if it was committed before gitignore
     git rm -r --cached "${PIPELINE_DIR}" 2>/dev/null || true
 
-    # Reset state for the new feature. The worktree may have inherited
-    # the main branch's conduct-state.json with all steps marked "done".
-    # Only preserve steps that actually ran on the main branch before
-    # the worktree was created (UNDERSTAND + DECIDE phases).
-    if [ -f "$STATE_FILE" ]; then
-      python3 -c "
-import json, os, sys, time
-path = '$STATE_FILE'
-with open(path) as f:
-    old = json.load(f)
-# Keep: feature_desc, complexity_tier, worktree info, run_started_at
-# Keep DECIDE steps as done (they ran on main before worktree creation)
-# Reset BUILD/SHIP steps (they haven't run in this worktree)
-keep_keys = {'feature_desc', 'complexity_tier', 'run_started_at',
-             'worktree_dir', 'worktree_branch', 'worktrees'}
-decide_steps = {'bootstrap', 'memory', 'assess', 'brainstorm',
-                'complexity', 'worktree', 'stories', 'conflict_check',
-                'plan', 'architecture_review'}
-new = {}
-for k, v in old.items():
-    if k in keep_keys:
-        new[k] = v
-    elif k in decide_steps:
-        new[k] = v  # preserve — these ran on main
-    # else: drop (build, finish, manual_test, retro, acceptance_specs, etc.)
-new['run_started_at'] = int(time.time())  # new run in worktree
-with open(path, 'w') as f:
-    json.dump(new, f, indent=2)
-" 2>/dev/null || true
-    fi
+    # Initialize worktree state. Worktree is step 1 — no prior steps
+    # have run yet. Create a fresh state file with just the feature
+    # metadata and mark worktree as done.
+    python3 -c "
+import json, sys, time
+wt_path = sys.argv[1]
+state = {
+    'feature_desc': sys.argv[2],
+    'worktree': 'done',
+    'run_started_at': int(time.time()),
+    'last_step': 'worktree'
+}
+with open(wt_path, 'w') as f:
+    json.dump(state, f, indent=2)
+" "$STATE_FILE" "${FEATURE_DESC:-}" 2>/dev/null || true
 
     # Start a fresh Claude session in the worktree
     rm -f "$SESSION_FILE" "${PIPELINE_DIR}/session-created"
@@ -1149,7 +1134,7 @@ run_architecture_review() {
 }
 
 run_worktree_setup() {
-  step_header 5 "worktree" "DECIDE"
+  step_header 0 "worktree" "SETUP"
   # Check if already set up
   if [ -n "$WORKTREE_DIR" ] && [ -d "$WORKTREE_DIR" ]; then
     ok "Already in worktree: ${WORKTREE_DIR}"; save_state "worktree" "done"; return 0
@@ -1412,10 +1397,10 @@ show_status() {
   echo -e "  ${BOLD}Ctrl+C${NC} pause  ${BOLD}--log${NC} tail output  ${BOLD}--status${NC} check progress"
   echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 
-  local steps=("bootstrap" "memory" "assess" "brainstorm" "complexity" "worktree" "stories" "conflict_check" "plan" "architecture_review" "acceptance_specs" "build" "finish" "manual_test" "retro")
-  local labels=("bootstrap" "memory" "assess" "brainstorm" "complexity" "worktree" "stories" "conflict-check" "plan" "arch review" "acceptance specs" "tdd/pipeline" "finish" "manual-test" "retro")
-  local phases=("UNDERSTAND" "UNDERSTAND" "UNDERSTAND" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "BUILD" "BUILD" "SHIP" "SHIP" "SHIP")
-  local checks=(check_bootstrap "" check_assess check_brainstorm "" "" check_stories check_conflict_check check_plan check_architecture_review check_acceptance_specs check_build "" check_manual_test check_retro)
+  local steps=("worktree" "bootstrap" "memory" "assess" "brainstorm" "complexity" "stories" "conflict_check" "plan" "architecture_review" "acceptance_specs" "build" "finish" "manual_test" "retro")
+  local labels=("worktree" "bootstrap" "memory" "assess" "brainstorm" "complexity" "stories" "conflict-check" "plan" "arch review" "acceptance specs" "tdd/pipeline" "finish" "manual-test" "retro")
+  local phases=("SETUP" "UNDERSTAND" "UNDERSTAND" "UNDERSTAND" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "BUILD" "BUILD" "SHIP" "SHIP" "SHIP")
+  local checks=("" check_bootstrap "" check_assess check_brainstorm "" check_stories check_conflict_check check_plan check_architecture_review check_acceptance_specs check_build "" check_manual_test check_retro)
 
   local current_step
   current_step=$(get_current_step)
@@ -1822,7 +1807,7 @@ usage() {
   echo "  --reset           Clear session state and start fresh"
   echo "  -h, --help        Show this help"
   echo ""
-  echo "Steps: bootstrap, memory, assess, brainstorm, complexity, worktree, stories, conflict-check,"
+  echo "Steps: worktree, bootstrap, memory, assess, brainstorm, complexity, stories, conflict-check,"
   echo "       plan, architecture-review, acceptance-specs, build, finish, manual-test, retro"
   echo ""
   echo "Examples:"
@@ -2024,8 +2009,8 @@ fi
 # Step registry — use underscores to match save_state() keys in conduct-state.json
 # Worktree is created right after complexity assessment so all subsequent commits
 # (stories, plan, build, etc.) are isolated on the feature branch.
-ALL_STEPS=(bootstrap memory assess brainstorm complexity worktree stories conflict_check plan architecture_review acceptance_specs build finish manual_test retro)
-STEP_FUNCS=(run_bootstrap run_memory run_assess run_brainstorm run_complexity_assessment run_worktree_setup run_stories run_conflict_check run_plan run_architecture_review run_acceptance_specs run_build run_finish run_manual_test run_retro)
+ALL_STEPS=(worktree bootstrap memory assess brainstorm complexity stories conflict_check plan architecture_review acceptance_specs build finish manual_test retro)
+STEP_FUNCS=(run_worktree_setup run_bootstrap run_memory run_assess run_brainstorm run_complexity_assessment run_stories run_conflict_check run_plan run_architecture_review run_acceptance_specs run_build run_finish run_manual_test run_retro)
 
 # Determine starting point
 start_index=0
@@ -2068,7 +2053,7 @@ if [ "$MODE" = "resume" ] || [ -n "$START_STEP" ]; then
 fi
 
 # Check feature description needed
-if [ -z "$FEATURE_DESC" ] && [ "$start_index" -le 3 ]; then
+if [ -z "$FEATURE_DESC" ] && [ "$start_index" -le 4 ]; then
   if ! check_brainstorm; then
     fail "Feature description required. Usage: conduct \"description\""
     exit 1
