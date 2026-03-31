@@ -119,6 +119,12 @@ Each skill declares its enforcement level honestly:
 Project-level memory lives in `.memory/` with categories: decisions, patterns, gotchas, context.
 Every session starts with recall. Significant decisions are persisted during work.
 
+## Push Policy
+
+**Never push to a remote until confident the work is complete and passing.**
+Run whatever verification the project requires (tests, lint, type-check, etc.) locally
+before pushing. The `/pr` skill enforces this gate. Conduct delegates push+PR to `/pr`.
+
 ## Autonomy Principle
 
 **Anything approved more than once is a candidate for automation.**
