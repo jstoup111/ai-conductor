@@ -845,21 +845,21 @@ enter_worktree() {
     # Remove .pipeline/ from git tracking if it was committed before gitignore
     git rm -r --cached "${PIPELINE_DIR}" 2>/dev/null || true
 
-    # Initialize worktree state. Worktree is step 1 — no prior steps
-    # have run yet. Create a fresh state file with just the feature
-    # metadata and mark worktree as done.
-    python3 -c "
+    # Initialize worktree state only if no state file exists yet.
+    # On resume, the state file already has progress — don't overwrite it.
+    if [ ! -f "$STATE_FILE" ]; then
+      python3 -c "
 import json, sys, time
-wt_path = sys.argv[1]
 state = {
     'feature_desc': sys.argv[2],
     'worktree': 'done',
     'run_started_at': int(time.time()),
     'last_step': 'worktree'
 }
-with open(wt_path, 'w') as f:
+with open(sys.argv[1], 'w') as f:
     json.dump(state, f, indent=2)
 " "$STATE_FILE" "${FEATURE_DESC:-}" 2>/dev/null || true
+    fi
 
     # Start a fresh Claude session in the worktree
     rm -f "$SESSION_FILE" "${PIPELINE_DIR}/session-created"
