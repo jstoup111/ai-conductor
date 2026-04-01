@@ -1,13 +1,13 @@
 ---
 name: writing-system-tests
-description: "Use BEFORE implementing any feature that has stories in docs/stories/ — generates failing acceptance specs from acceptance criteria as the RED phase of TDD. Generates integration request specs for API projects, system specs for full-stack projects."
+description: "Use BEFORE implementing any feature that has stories in .docs/stories/ — generates failing acceptance specs from acceptance criteria as the RED phase of TDD. Generates integration request specs for API projects, system specs for full-stack projects."
 ---
 
 # Writing Acceptance Tests
 
 ## Overview
 
-Generate failing acceptance specs from user stories in `docs/stories/*.md`. Each acceptance
+Generate failing acceptance specs from user stories in `.docs/stories/*.md`. Each acceptance
 criterion (happy AND negative paths) becomes a concrete test. Tests are generated BEFORE
 implementation — they are the RED phase of BDD.
 
@@ -28,7 +28,7 @@ Run this **after `/plan` and before `/pipeline`** (or `/tdd`). The flow is:
 
 **Trigger when:**
 - About to implement a feature and stories exist without corresponding acceptance specs
-- New story files added to `docs/stories/`
+- New story files added to `.docs/stories/`
 - User asks for acceptance tests, integration tests, BDD tests, or system tests
 
 **Skip when:**
@@ -46,8 +46,8 @@ Check for views/frontend to determine spec type:
 
 ### 2. Check for Missing Acceptance Specs
 
-**API projects:** Compare `docs/stories/*.md` against `spec/integration/*_spec.rb`
-**Full-stack:** Compare `docs/stories/*.md` against `spec/system/*_spec.rb`
+**API projects:** Compare `.docs/stories/*.md` against `spec/integration/*_spec.rb`
+**Full-stack:** Compare `.docs/stories/*.md` against `spec/system/*_spec.rb`
 
 Generate specs for any story file that lacks a corresponding spec.
 
@@ -101,7 +101,7 @@ correct RED behavior.
 
 ### 5a. Generate Integration Specs (API Projects)
 
-**File mapping:** `docs/stories/links.md` → `spec/integration/links_spec.rb`
+**File mapping:** `.docs/stories/links.md` → `spec/integration/links_spec.rb`
 
 ```ruby
 RSpec.describe "Link lifecycle", type: :request do
@@ -149,7 +149,7 @@ Neither duplicates the other.
 
 ### 5b. Generate System Specs (Full-Stack Projects)
 
-**File mapping:** `docs/stories/auth.md` → `spec/system/auth_spec.rb`
+**File mapping:** `.docs/stories/auth.md` → `spec/system/auth_spec.rb`
 
 ```ruby
 RSpec.describe "Authentication", type: :system do
@@ -226,7 +226,7 @@ Implementation (via `/pipeline` or `/tdd`) makes them pass.
 
 ```
 Acceptance specs (this skill)      — Multi-step story flows across 2+ endpoints
-  ↕ generated from docs/stories/     "Create link → visit → verify click recorded"
+  ↕ generated from .docs/stories/     "Create link → visit → verify click recorded"
   ↕ NO single-endpoint tests here
 
 Request specs (TDD per-controller) — Single endpoint HTTP contract

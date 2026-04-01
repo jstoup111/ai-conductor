@@ -8,7 +8,7 @@ No custom runtime. Claude Code is the execution engine.
 
 ## Requirements
 
-- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) v2.0+
+- [Claude Code](https://docs.anthropic.com/en/.docs/claude-code) v2.0+
 - Git
 - A project to work on (Rails+PostgreSQL has full tech-context support; other stacks work with generic skills)
 
@@ -197,7 +197,7 @@ james-stoup-agents/
 │   └── api-response-contract.md.template
 ├── hooks/                   # Optional git hooks
 │   └── pre-commit-tdd-gate.sh
-├── docs/decisions/          # Harness ADRs
+├── .docs/decisions/          # Harness ADRs
 └── CLAUDE.md                # Harness internal docs (loaded by Claude Code)
 ```
 
@@ -215,7 +215,7 @@ your-project/
 ├── .pipeline/               # Pipeline state (if using /pipeline)
 │   ├── task-status.json
 │   └── audit-trail/
-├── docs/
+├── .docs/
 │   ├── specs/               # Design docs from /brainstorm
 │   ├── stories/             # User stories from /stories
 │   ├── conflicts/           # Conflict reports from /conflict-check
@@ -240,7 +240,7 @@ tech-context/<framework>-<database>/
 ## Key Design Principles
 
 1. **One skill, one responsibility** — Skills have singular focus
-2. **Artifacts are the interface** — Skills communicate via files in `docs/`, not internal orchestration
+2. **Artifacts are the interface** — Skills communicate via files in `.docs/`, not internal orchestration
 3. **Negative paths are mandatory** — Every story must have concrete failure scenarios
 4. **Evaluator sees fresh context** — No shared state with the generator prevents confirmation bias
 5. **Dry business logic, not dry code** — Extract shared behavior, not shared shape

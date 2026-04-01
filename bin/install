@@ -487,7 +487,7 @@ install() {
   if command -v claude &>/dev/null; then
     ok "Claude Code found"
   else
-    warn "Claude Code not found — install from https://docs.anthropic.com/en/docs/claude-code"
+    warn "Claude Code not found — install from https://docs.anthropic.com/en/.docs/claude-code"
   fi
 
   echo ""

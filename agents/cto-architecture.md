@@ -15,7 +15,7 @@ Recommended model: **Opus** (cross-boundary judgment requires deep reasoning).
 You will receive in your prompt:
 - A full codebase file listing (to understand module structure)
 - Relevant source files for the area under review (inlined — no need to read files)
-- Contents of `docs/decisions/` ADRs if they exist (pre-gathered by the dispatcher)
+- Contents of `.docs/decisions/` ADRs if they exist (pre-gathered by the dispatcher)
 - Tech-context if loaded in the session
 
 You will NOT need to:
@@ -33,7 +33,7 @@ Output destination: `.pipeline/assessment/cto-architecture.md`
 
 Check whether implementation matches documented architectural decisions.
 
-- For each ADR in `docs/decisions/`: is the implementation consistent with the decision?
+- For each ADR in `.docs/decisions/`: is the implementation consistent with the decision?
 - Are there patterns in the code that directly contradict a documented decision?
 - Are there known constraints (e.g., "no raw SQL", "service objects only", "no callbacks")
   that the implementation violates?
@@ -66,7 +66,7 @@ Check whether module and domain boundaries are respected at the data and API lev
 Check whether new architectural patterns have been introduced without an ADR.
 
 - Is there a new pattern present in this code that does not appear elsewhere in the codebase
-  and has no corresponding ADR in `docs/decisions/`?
+  and has no corresponding ADR in `.docs/decisions/`?
 - Examples: a new caching strategy, a new background job pattern, a new serialization approach,
   a new error-handling convention.
 - New patterns are not inherently wrong — but they must be documented to avoid fragmentation.
@@ -97,7 +97,7 @@ Write your output to `.pipeline/assessment/cto-architecture.md` using the follow
 
 | Finding | Severity | File:Line | ADR Reference |
 |---------|----------|-----------|---------------|
-| [Description] | critical/important/minor | file.rb:42 | docs/decisions/NNN-title.md |
+| [Description] | critical/important/minor | file.rb:42 | .docs/decisions/NNN-title.md |
 
 [If no ADRs exist: note that, then assess against any documented conventions found in CLAUDE.md
 or tech-context.]

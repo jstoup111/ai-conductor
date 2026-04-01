@@ -50,7 +50,7 @@ results. Check that expected routes/endpoints exist (e.g., `GET /openapi.json` f
 
 ### 3. Walk Through Stories (API Projects)
 
-For each story in `docs/stories/`, execute the acceptance criteria manually using `curl`:
+For each story in `.docs/stories/`, execute the acceptance criteria manually using `curl`:
 
 ```bash
 # Story: Create a short link (happy path)
@@ -82,7 +82,7 @@ Use browser automation (Chrome MCP if configured, otherwise manual Capybara-styl
 
 ### 5. Record Results
 
-Write results to `docs/manual-test-results.md`:
+Write results to `.docs/manual-test-results.md`:
 
 ```markdown
 # Manual Test Results
@@ -133,7 +133,7 @@ docker compose down
 
 - [ ] Application started and accessible
 - [ ] Every story (happy + negative paths) tested manually
-- [ ] Results recorded in docs/manual-test-results.md
+- [ ] Results recorded in .docs/manual-test-results.md
 - [ ] All bugs fixed via TDD loop
 - [ ] Re-verification passed after bug fixes
 - [ ] Application shut down cleanly

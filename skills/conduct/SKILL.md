@@ -42,21 +42,21 @@ Check for these artifacts in order. The **first missing artifact** determines th
 
 | Step | Check | How to Verify |
 |------|-------|---------------|
-| 1. bootstrap | Project CLAUDE.md exists AND `.memory/` directory exists AND `docs/` subdirectories exist | Glob for `CLAUDE.md` in project root, check `.memory/index.md`, check `docs/specs/` exists |
+| 1. bootstrap | Project CLAUDE.md exists AND `.memory/` directory exists AND `.docs/` subdirectories exist | Glob for `CLAUDE.md` in project root, check `.memory/index.md`, check `.docs/specs/` exists |
 | 2. memory | `.memory/index.md` has been read this session | Memory recall happens automatically — if bootstrap is done, mark this as done |
-| 2.5. assess | Assessment report exists OR skipped (new project) | Glob `docs/decisions/technical-assessment-*.md` or check state is "skipped" |
-| 3. brainstorm | At least one file exists in `docs/specs/` | Glob `docs/specs/*.md` |
+| 2.5. assess | Assessment report exists OR skipped (new project) | Glob `.docs/decisions/technical-assessment-*.md` or check state is "skipped" |
+| 3. brainstorm | At least one file exists in `.docs/specs/` | Glob `.docs/specs/*.md` |
 | 4. complexity | Complexity tier set in `.pipeline/conduct-state.json` | Check `complexity_tier` key exists and is S, M, or L |
 | 5. worktree | Feature worktree created | Check `.pipeline/conduct-state.json` worktree state is "done" or "skipped" |
-| 6. stories | At least one **accepted** story exists in `docs/stories/` (not just DRAFT) | Glob `docs/stories/*.md` — if all stories contain `Status: DRAFT`, this step is pending |
-| 7. conflict-check | Conflict report exists in `docs/conflicts/` OR skipped (Small tier) | Glob `docs/conflicts/*.md` or check state is "skipped" |
-| 8. plan | At least one file exists in `docs/plans/` | Glob `docs/plans/*.md` |
-| 9. architecture-review | Review exists in `docs/decisions/` OR skipped (Small tier) | Glob `docs/decisions/architecture-review-*.md` or check state is "skipped" |
+| 6. stories | At least one **accepted** story exists in `.docs/stories/` (not just DRAFT) | Glob `.docs/stories/*.md` — if all stories contain `Status: DRAFT`, this step is pending |
+| 7. conflict-check | Conflict report exists in `.docs/conflicts/` OR skipped (Small tier) | Glob `.docs/conflicts/*.md` or check state is "skipped" |
+| 8. plan | At least one file exists in `.docs/plans/` | Glob `.docs/plans/*.md` |
+| 9. architecture-review | Review exists in `.docs/decisions/` OR skipped (Small tier) | Glob `.docs/decisions/architecture-review-*.md` or check state is "skipped" |
 | 10. writing-system-tests | Acceptance specs exist OR skipped (Small tier) | Glob `spec/integration/*_spec.rb` or `spec/system/*_spec.rb`, or check state is "skipped" |
 | 11. build | Implementation tasks completed with passing tests | Check `.pipeline/task-status.json` or test suite passes. Pipeline evaluator satisfies code-review gate. |
 | 12. finish | Fresh verification has been performed | Build complete + tests pass |
-| 13. manual-test | Manual test results exist with no FAILs | Glob `docs/manual-test-results.md` — if file contains FAIL rows, step is pending |
-| 14. retro | Retro report exists in `docs/retros/` | Glob `docs/retros/*.md` |
+| 13. manual-test | Manual test results exist with no FAILs | Glob `.docs/manual-test-results.md` — if file contains FAIL rows, step is pending |
+| 14. retro | Retro report exists in `.docs/retros/` | Glob `.docs/retros/*.md` |
 
 ### 2. Report Status
 
@@ -67,10 +67,10 @@ Present a clear status dashboard:
 
 | Phase | Step | Status | Artifact |
 |-------|------|--------|----------|
-| UNDERSTAND | bootstrap | ✅ Done | CLAUDE.md, .memory/, docs/ |
+| UNDERSTAND | bootstrap | ✅ Done | CLAUDE.md, .memory/, .docs/ |
 | UNDERSTAND | memory | ✅ Done | .memory/index.md |
-| DECIDE | brainstorm | ✅ Done | docs/specs/2026-03-28-task-board.md |
-| DECIDE | stories | ✅ Done | docs/stories/task-board.md |
+| DECIDE | brainstorm | ✅ Done | .docs/specs/2026-03-28-task-board.md |
+| DECIDE | stories | ✅ Done | .docs/stories/task-board.md |
 | DECIDE | conflict-check | ⏳ NEXT | — |
 | DECIDE | plan | ⬚ Pending | — |
 | BUILD | tdd/pipeline | ⬚ Pending | — |
@@ -164,7 +164,7 @@ If the user asks to skip a gating step, say: "[Step] is a gating step — it can
 When conflict-check finds NO conflicts, create a marker file so the conductor knows it ran:
 
 ```
-docs/conflicts/YYYY-MM-DD-clean-check.md
+.docs/conflicts/YYYY-MM-DD-clean-check.md
 ```
 
 Contents:
@@ -185,11 +185,11 @@ When all steps show ✅ Done:
 ## SDLC Complete 🎉
 
 All phases finished. Artifacts:
-- Design: docs/specs/...
-- Stories: docs/stories/...
-- Conflicts: docs/conflicts/...
-- Plan: docs/plans/...
-- Retro: docs/retros/...
+- Design: .docs/specs/...
+- Stories: .docs/stories/...
+- Conflicts: .docs/conflicts/...
+- Plan: .docs/plans/...
+- Retro: .docs/retros/...
 
 Harness test complete. Review the retro for improvement findings.
 ```

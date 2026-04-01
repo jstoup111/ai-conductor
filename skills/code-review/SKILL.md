@@ -19,8 +19,8 @@ issues, not rubber-stamping work.
 
 Gather what the evaluator needs:
 - Git diff of changes (staged + unstaged, or commit range)
-- The story/acceptance criteria being implemented (from `docs/stories/`)
-- The implementation plan task (from `docs/plans/`)
+- The story/acceptance criteria being implemented (from `.docs/stories/`)
+- The implementation plan task (from `.docs/plans/`)
 - The test results (full suite output)
 - Tech-context review checklist if loaded in session
 

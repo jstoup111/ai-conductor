@@ -30,10 +30,10 @@ Skip:
 - Section 7 (mandatory ADR creation) — only create ADRs for genuinely novel architectural decisions
 
 **Explore agent limits for Medium tier:** Max 2 agents with non-overlapping scopes:
-- Agent 1: stories + plan files (`docs/stories/`, `docs/plans/`)
+- Agent 1: stories + plan files (`.docs/stories/`, `.docs/plans/`)
 - Agent 2: relevant source files for the feature area
 - Do NOT dispatch agents to read `.memory/` (auto-loaded at session start)
-- Do NOT dispatch a third agent for decisions/ADRs (read `docs/decisions/` directly if needed)
+- Do NOT dispatch a third agent for decisions/ADRs (read `.docs/decisions/` directly if needed)
 
 For **Small** features, architecture-review is skipped entirely by `/conduct`.
 For **Large** features, run the full review (all sections).
@@ -44,7 +44,7 @@ For **Large** features, run the full review (all sections).
 
 Read in order of authority (higher overrides lower):
 
-1. `docs/decisions/` — ADRs are the authoritative architecture reference
+1. `.docs/decisions/` — ADRs are the authoritative architecture reference
 2. `CLAUDE.md` — Project conventions and constraints
 3. `.memory/decisions/` — Prior architectural decisions
 4. Existing code structure — `config/routes.rb`, model relationships, directory layout
@@ -121,11 +121,11 @@ Risk types: **Technical**, **Integration**, **Data**, **Performance**, **Securit
 
 ### 7. ADR for Every Architectural Decision
 
-Capture every architectural decision as an ADR using `templates/adr.md.template`. Sequential numbering in `docs/decisions/`. ADRs are append-only — supersede, don't delete.
+Capture every architectural decision as an ADR using `templates/adr.md.template`. Sequential numbering in `.docs/decisions/`. ADRs are append-only — supersede, don't delete.
 
 ### 8. Output
 
-Write the review to `docs/decisions/architecture-review-YYYY-MM-DD-<feature>.md`:
+Write the review to `.docs/decisions/architecture-review-YYYY-MM-DD-<feature>.md`:
 
 ```markdown
 # Architecture Review: [Feature Name]
@@ -169,10 +169,10 @@ If drift is detected at a batch boundary:
 
 - [ ] All stories assessed for feasibility
 - [ ] Complexity rated per story
-- [ ] Alignment checked against docs/decisions/ and CLAUDE.md
+- [ ] Alignment checked against .docs/decisions/ and CLAUDE.md
 - [ ] Domain integrity pre-checked
 - [ ] Risk register populated
 - [ ] ADR created for every architectural decision made
-- [ ] Review written to docs/decisions/
+- [ ] Review written to .docs/decisions/
 - [ ] Verdict issued (APPROVED / CONDITIONS / BLOCKED)
 - [ ] BLOCKED verdicts halt pipeline and require human resolution

@@ -18,8 +18,8 @@ skill improvements, evaluator calibration, and new stories.
 ### Data Collection
 
 Before analysis, gather:
-- **Harness:** `.pipeline/audit-trail/` (gate history, rework cycles), `.pipeline/task-status.json`, git log (reverts, amends), `.memory/gotchas/`, `docs/conflicts/`
-- **Application:** full feature diff (branch point to HEAD), test suite output, `docs/stories/` acceptance criteria, tech-context if loaded
+- **Harness:** `.pipeline/audit-trail/` (gate history, rework cycles), `.pipeline/task-status.json`, git log (reverts, amends), `.memory/gotchas/`, `.docs/conflicts/`
+- **Application:** full feature diff (branch point to HEAD), test suite output, `.docs/stories/` acceptance criteria, tech-context if loaded
 
 ---
 
@@ -102,7 +102,7 @@ Review token/context consumption for this feature cycle and identify optimizatio
 
 ## Output: Retro Report
 
-Save to `docs/retros/YYYY-MM-DD-<feature-name>.md`:
+Save to `.docs/retros/YYYY-MM-DD-<feature-name>.md`:
 
 ```markdown
 # Retro: [Feature Name]
@@ -139,7 +139,7 @@ After writing the retro report, take these actions:
 
 **Harness findings → Harness improvements:** Persist learnings to `.memory/` (gotchas, patterns, decisions). Propose skill/agent prompt modifications as diffs; update `agents/evaluator.md` calibration and `skills/stories/SKILL.md` negative path categories as needed.
 
-**Application findings → New stories:** Create stories in `docs/stories/` for debt and fixes; run `conflict-check`. These become tracked work, not lost "we should fix this" notes.
+**Application findings → New stories:** Create stories in `.docs/stories/` for debt and fixes; run `conflict-check`. These become tracked work, not lost "we should fix this" notes.
 
 **Trend tracking:** Compare against prior retros — intervention count down (good), same gate failures recurring (calibration needed), same application issues recurring (tech-context needs updating). Note trends in the report.
 
@@ -153,6 +153,6 @@ After writing the retro report, take these actions:
 - [ ] Proposed changes are specific (not vague "improve X")
 - [ ] Harness changes are actionable diffs/modifications
 - [ ] Application changes are written as new stories
-- [ ] Retro report saved to `docs/retros/`
+- [ ] Retro report saved to `.docs/retros/`
 - [ ] Learnings persisted to `.memory/`
 - [ ] Trends compared against previous retros (if any exist)

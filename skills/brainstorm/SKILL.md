@@ -30,7 +30,7 @@ When dispatching Explore agents:
 Checklist:
 - Read relevant code, routes, models, and tests
 - Check `.memory/` for prior decisions and context about this area
-- Review existing stories in `docs/stories/` for related features
+- Review existing stories in `.docs/stories/` for related features
 - Note existing patterns and conventions
 
 ### 2. Ask Clarifying Questions
@@ -70,7 +70,7 @@ After the user selects an approach, write a design document using `templates/des
 Required sections: Problem, Solution, Scope (In/Out), Key Decisions, Open Questions.
 ```
 
-Save to `docs/specs/YYYY-MM-DD-<topic>.md`
+Save to `.docs/specs/YYYY-MM-DD-<topic>.md`
 
 ### 5. Scope Check
 
@@ -101,11 +101,11 @@ After approval, update the document status to "Approved" and suggest invoking th
 
 If the project exposes an API (detected by: `--api` flag, API-only controllers, JSON responses):
 
-1. Check if `docs/decisions/api-response-contract.md` already exists
+1. Check if `.docs/decisions/api-response-contract.md` already exists
 2. If not, generate one from `templates/api-response-contract.md.template`
 3. Present to user for review — the contract defines: success/error envelopes, HTTP status
    conventions, pagination structure, timestamp format
-4. Save approved contract to `docs/decisions/api-response-contract.md`
+4. Save approved contract to `.docs/decisions/api-response-contract.md`
 5. All controllers must conform. Deviations require an ADR amendment.
 
 This MUST happen before stories — stories reference the contract for response format assertions.
@@ -121,6 +121,6 @@ This MUST happen before stories — stories reference the contract for response 
 - [ ] Questions asked one at a time (not batched)
 - [ ] 2-3 approaches presented with trade-offs
 - [ ] Design document written with all required sections
-- [ ] Design document saved to `docs/specs/`
+- [ ] Design document saved to `.docs/specs/`
 - [ ] User explicitly approved before proceeding
 - [ ] `ExitPlanMode` was NOT called

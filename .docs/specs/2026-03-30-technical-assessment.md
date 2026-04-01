@@ -30,7 +30,7 @@ prioritized assessment report with opinionated recommendations.
 9 specialist agents (3 parallel batches of 3)
   → 9 dimension reports in .pipeline/assessment/
     → CTO orchestrator reads all 9, cross-references, synthesizes
-      → Final report: docs/decisions/technical-assessment-YYYY-MM-DD.md
+      → Final report: .docs/decisions/technical-assessment-YYYY-MM-DD.md
 ```
 
 ## Specialist Agents (9)
@@ -61,7 +61,7 @@ prioritized assessment report with opinionated recommendations.
 ### Batch 2 (parallel)
 
 **4. Architecture Coherence Reviewer** (`agents/cto-architecture.md`) — Opus
-- Implementation matches documented decisions (docs/decisions/)?
+- Implementation matches documented decisions (.docs/decisions/)?
 - Cross-module consistency: same pattern used everywhere or inconsistent?
 - Domain boundaries respected at data and API level
 - No new patterns introduced without ADR
