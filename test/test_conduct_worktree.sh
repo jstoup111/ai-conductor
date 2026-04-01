@@ -493,6 +493,104 @@ test_cleanup_instructions() {
 }
 test_cleanup_instructions
 
+# ─── Test 11: Per-feature steps use step_done, not artifact checks ───────
+
+echo ""
+echo -e "${BOLD}Test Suite: Step Completion Uses State, Not Artifacts${NC}"
+echo ""
+
+test_step_done_authority() {
+  # Per-feature steps must use step_done (state file) not check_* (artifact files)
+  # for their "Already complete" guard. Otherwise inherited artifacts from prior
+  # features cause steps to skip on new features.
+
+  local per_feature_steps=("brainstorm" "stories" "conflict_check" "plan" "architecture_review" "acceptance_specs" "manual_test" "retro")
+
+  for step in "${per_feature_steps[@]}"; do
+    local func_name="run_${step}"
+    # Find the function and check it uses step_done for "Already complete"
+    local uses_step_done
+    uses_step_done=$(grep -A3 "^${func_name}()" "$CONDUCT" | grep -c "step_done" || true)
+    # Allow architecture_review which has should_skip_for_tier before step_done
+    if [ "$uses_step_done" -eq 0 ]; then
+      uses_step_done=$(grep -A5 "^${func_name}()" "$CONDUCT" | grep -c "step_done" || true)
+    fi
+    assert "${func_name} uses step_done for completion check" \
+      "$([ "$uses_step_done" -ge 1 ] && echo 0 || echo 1)"
+  done
+
+  # Verify step_done helper exists
+  local has_helper
+  has_helper=$(grep -c '^step_done()' "$CONDUCT" || true)
+  assert "step_done() helper function exists" \
+    "$([ "$has_helper" -ge 1 ] && echo 0 || echo 1)"
+}
+test_step_done_authority
+
+# ─── Test 12: Worktree setup only commits project-level artifacts ────────
+
+echo ""
+echo -e "${BOLD}Test Suite: Worktree Setup Commit Scope${NC}"
+echo ""
+
+test_worktree_commit_scope() {
+  # The git add before worktree creation should NOT include .docs/ wholesale.
+  # It should only add .docs/decisions/ (project-level), not .docs/specs/,
+  # .docs/stories/, .docs/plans/, .docs/conflicts/ (per-feature).
+
+  local worktree_setup
+  worktree_setup=$(sed -n '/^run_worktree_setup/,/^}/p' "$CONDUCT")
+
+  # Should NOT have "git add .docs/" (wholesale)
+  local has_wholesale
+  has_wholesale=$(echo "$worktree_setup" | grep -c 'git add .docs/ ' || true)
+  assert "Worktree setup does NOT git add .docs/ wholesale" \
+    "$([ "$has_wholesale" -eq 0 ] && echo 0 || echo 1)"
+
+  # Should have "git add .docs/decisions/" (project-level only)
+  local has_decisions
+  has_decisions=$(echo "$worktree_setup" | grep -c 'git add .docs/decisions/' || true)
+  assert "Worktree setup commits .docs/decisions/ (project-level)" \
+    "$([ "$has_decisions" -ge 1 ] && echo 0 || echo 1)"
+
+  # Should have "git add .memory/"
+  local has_memory
+  has_memory=$(echo "$worktree_setup" | grep -c 'git add .memory/' || true)
+  assert "Worktree setup commits .memory/" \
+    "$([ "$has_memory" -ge 1 ] && echo 0 || echo 1)"
+}
+test_worktree_commit_scope
+
+# ─── Test 13: Gates use step_done, not artifact checks ──────────────────
+
+echo ""
+echo -e "${BOLD}Test Suite: Gates Use State Authority${NC}"
+echo ""
+
+test_gates_use_state() {
+  # Gates that block progression should use step_done, not check_* functions.
+  # This prevents inherited artifacts from satisfying gates for a new feature.
+
+  # brainstorm gate (used by complexity, stories)
+  local brainstorm_gates
+  brainstorm_gates=$(grep -c 'step_done "brainstorm" ||' "$CONDUCT" || true)
+  assert "Brainstorm gate uses step_done (2 occurrences)" \
+    "$([ "$brainstorm_gates" -ge 2 ] && echo 0 || echo 1)"
+
+  # stories gate (used by conflict-check)
+  local stories_gates
+  stories_gates=$(grep -c 'step_done "stories" ||' "$CONDUCT" || true)
+  assert "Stories gate uses step_done" \
+    "$([ "$stories_gates" -ge 1 ] && echo 0 || echo 1)"
+
+  # plan gate (used by arch-review, acceptance-specs, build)
+  local plan_gates
+  plan_gates=$(grep -c 'step_done "plan" ||' "$CONDUCT" || true)
+  assert "Plan gate uses step_done (3 occurrences)" \
+    "$([ "$plan_gates" -ge 3 ] && echo 0 || echo 1)"
+}
+test_gates_use_state
+
 # ─── Summary ─────────────────────────────────────────────────────────────
 
 echo ""

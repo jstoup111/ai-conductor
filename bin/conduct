@@ -217,6 +217,16 @@ print(state.get('$step', 'pending'))
   fi
 }
 
+# Check if a step is recorded as done/skipped in the state file.
+# Per-feature steps use this as the primary "already complete" check
+# because artifact files from prior features may be inherited by the worktree.
+step_done() {
+  local step=$1
+  local s
+  s=$(get_state "$step")
+  [ "$s" = "done" ] || [ "$s" = "skipped" ]
+}
+
 # ─── Claude Invocation ────────────────────────────────────────────────────────
 
 run_claude() {
@@ -598,8 +608,8 @@ run_assess() {
 
 run_brainstorm() {
   step_header 3 "brainstorm" "DECIDE"
-  if check_brainstorm; then
-    ok "Already complete"; save_state "brainstorm" "done"; return 0
+  if step_done "brainstorm"; then
+    ok "Already complete"; return 0
   fi
   [ -z "${FEATURE_DESC:-}" ] && { fail "No feature description provided"; return 1; }
   log "Design decisions require your input — interactive session..."
@@ -635,7 +645,7 @@ run_complexity_assessment() {
       ok "Complexity tier: ${tier}"; save_state "complexity" "done"; return 0
     fi
   fi
-  check_brainstorm || { fail "GATE: Need design doc first"; return 1; }
+  step_done "brainstorm" || { fail "GATE: Need design doc first"; return 1; }
 
   # Assess complexity by reading the design doc
   log "Assessing feature complexity from design doc..."
@@ -921,10 +931,10 @@ should_skip_for_tier() {
 
 run_stories() {
   step_header 4 "stories" "DECIDE"
-  if check_stories; then
-    ok "Already complete"; save_state "stories" "done"; return 0
+  if step_done "stories"; then
+    ok "Already complete"; return 0
   fi
-  check_brainstorm || { fail "GATE: Need design doc in .docs/specs/ first"; return 1; }
+  step_done "brainstorm" || { fail "GATE: Need design doc in .docs/specs/ first"; return 1; }
   log "Generating stories with mandatory negative paths..."
   run_claude "Run the /stories skill. Read .docs/specs/ and generate stories in .docs/stories/.
 
@@ -954,10 +964,10 @@ run_conflict_check() {
   if should_skip_for_tier "conflict-check"; then
     ok "Skipped (Small tier)"; save_state "conflict_check" "skipped"; return 0
   fi
-  if check_conflict_check; then
-    ok "Already complete"; save_state "conflict_check" "done"; return 0
+  if step_done "conflict_check"; then
+    ok "Already complete"; return 0
   fi
-  check_stories || { fail "GATE: Need stories in .docs/stories/ first"; return 1; }
+  step_done "stories" || { fail "GATE: Need stories in .docs/stories/ first"; return 1; }
   log "Checking for conflicts..."
   run_claude "Run the /conflict-check skill. Check ALL stories against all 5 conflict types. Write report to .docs/conflicts/. If clean, write a clean-check marker. If blocking conflicts found, list them with resolution options but do NOT auto-resolve — the user must choose."
 
@@ -984,8 +994,8 @@ run_conflict_check() {
 
 run_plan() {
   step_header 6 "plan" "DECIDE"
-  if check_plan; then
-    ok "Already complete"; save_state "plan" "done"; return 0
+  if step_done "plan"; then
+    ok "Already complete"; return 0
   fi
   # Gate: conflict-check must be done or skipped (Small tier skips it)
   local cc_state
@@ -1014,10 +1024,10 @@ run_architecture_review() {
   if should_skip_for_tier "architecture-review"; then
     ok "Skipped (Small tier)"; save_state "architecture_review" "skipped"; return 0
   fi
-  if check_architecture_review; then
-    ok "Already complete"; save_state "architecture_review" "done"; return 0
+  if step_done "architecture_review"; then
+    ok "Already complete"; return 0
   fi
-  check_plan || { fail "GATE: Need plan in .docs/plans/ first"; return 1; }
+  step_done "plan" || { fail "GATE: Need plan in .docs/plans/ first"; return 1; }
   log "Reviewing architecture feasibility and alignment..."
   run_claude "Run the /architecture-review skill. Review all stories and the plan for technical feasibility, architectural alignment, domain integrity, and risks. Write review to .docs/decisions/architecture-review-*.md. Issue APPROVED, APPROVED WITH CONDITIONS, or BLOCKED verdict."
 
@@ -1060,8 +1070,12 @@ run_worktree_setup() {
     fi
   fi
 
-  # Commit bootstrap/assess artifacts so worktree inherits them
-  git add .docs/ .memory/ .gitignore .github/ 2>/dev/null || true
+  # Commit ONLY project-level artifacts so worktree inherits them.
+  # Do NOT commit per-feature artifacts (.docs/specs/, .docs/stories/,
+  # .docs/plans/, .docs/conflicts/) — those belong to prior features
+  # and would cause the new feature's steps to skip as "Already complete".
+  git add .memory/ .gitignore .github/ 2>/dev/null || true
+  git add .docs/decisions/ 2>/dev/null || true
   git diff --cached --quiet 2>/dev/null || \
     git commit -m "Project setup: bootstrap + assess artifacts" 2>/dev/null || true
 
@@ -1080,10 +1094,10 @@ run_acceptance_specs() {
   if should_skip_for_tier "acceptance-specs"; then
     ok "Skipped (Small tier — request specs in TDD suffice)"; save_state "acceptance_specs" "skipped"; return 0
   fi
-  if check_acceptance_specs; then
-    ok "Already complete"; save_state "acceptance_specs" "done"; return 0
+  if step_done "acceptance_specs"; then
+    ok "Already complete"; return 0
   fi
-  check_plan || { fail "GATE: Need plan in .docs/plans/ first"; return 1; }
+  step_done "plan" || { fail "GATE: Need plan in .docs/plans/ first"; return 1; }
   log "Generating failing acceptance specs from stories..."
   run_claude "Run the /writing-system-tests skill. Generate failing acceptance specs from ALL stories.
 API projects: tests/integration/ or spec/integration/. Full-stack: tests/e2e/ or spec/system/. Every criterion (happy + negative) becomes a test. Commit the failing specs." "interactive"
@@ -1098,7 +1112,7 @@ API projects: tests/integration/ or spec/integration/. Full-stack: tests/e2e/ or
 
 run_build() {
   step_header 9 "tdd / pipeline" "BUILD"
-  check_plan || { fail "GATE: Need plan first"; return 1; }
+  step_done "plan" || { fail "GATE: Need plan first"; return 1; }
 
   local autonomy="Standard"
   [ "${RUN_MODE}" = "auto" ] && autonomy="Full"
@@ -1149,8 +1163,8 @@ run_finish() {
 
 run_manual_test() {
   step_header 12 "manual-test" "SHIP"
-  if check_manual_test; then
-    ok "Already complete — all stories pass manual testing"; save_state "manual_test" "done"; return 0
+  if step_done "manual_test"; then
+    ok "Already complete — all stories pass manual testing"; return 0
   fi
   log "Running manual tests against stories..."
   # Always interactive — may need user to confirm test results, start servers, etc.
@@ -1164,8 +1178,8 @@ Record results in .docs/manual-test-results.md. For any FAILs, write a failing t
 
 run_retro() {
   step_header 13 "retro" "SHIP"
-  if check_retro; then
-    ok "Already complete"; save_state "retro" "done"; return 0
+  if step_done "retro"; then
+    ok "Already complete"; return 0
   fi
   log "Running dual retrospective..."
   run_claude "Run the /retro skill. Both parts:
