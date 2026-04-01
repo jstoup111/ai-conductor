@@ -31,7 +31,7 @@ as the execution engine. No custom runtime.
 3. **4-level enforcement declared per skill:** Advisory, Gating, Structural, Mechanical.
 
 4. **Planning is 4 distinct skills** (brainstorm, stories, conflict-check, plan), each with its
-   own enforcement gate, communicating via artifacts in `docs/`.
+   own enforcement gate, communicating via artifacts in `.docs/`.
 
 5. **Dual retrospective** analyzes both harness workflow and application code health after each feature.
 

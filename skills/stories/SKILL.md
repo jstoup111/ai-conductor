@@ -17,9 +17,9 @@ ensuring error handling and edge cases are tested first, not bolted on later.
 
 ### 1. Load Input
 
-- Read the approved design document from `docs/specs/`
+- Read the approved design document from `.docs/specs/`
 - Reference tech-context from session if loaded (e.g., Rails-specific negative paths)
-- Review existing stories in `docs/stories/` for this feature area (avoid duplicates)
+- Review existing stories in `.docs/stories/` for this feature area (avoid duplicates)
 - **Check for DRAFT stories from `/bootstrap`** — if stories have `Status: DRAFT`, review and
   complete them rather than generating from scratch. Fill in `TODO` negative paths, verify happy
   paths match actual behavior, and mark as accepted when done.
@@ -98,7 +98,7 @@ Each negative path MUST be:
 
 ### 5. Save Stories
 
-Save to `docs/stories/<feature-name>.md` (one file per feature area).
+Save to `.docs/stories/<feature-name>.md` (one file per feature area).
 
 If stories already exist for this feature area, append new stories to the existing file.
 Note any stories that supersede or modify existing ones.
@@ -116,5 +116,5 @@ with existing stories.
 - [ ] All negative paths are concrete Given/When/Then (not vague)
 - [ ] Every story has a "Done When" section with concrete, verifiable output checkboxes
 - [ ] Stack-specific negative paths included if tech-context loaded
-- [ ] Stories saved to `docs/stories/<feature-name>.md`
+- [ ] Stories saved to `.docs/stories/<feature-name>.md`
 - [ ] No duplicate stories with existing content

@@ -24,7 +24,7 @@ code, tests, and history already in place).
 |-----------|------|
 | Empty directory or no project files | **New** — scaffold first (Step 1b) |
 | Project files exist but no harness artifacts | **Fresh** — full harness setup |
-| `.memory/` or `docs/` exist but some missing | **Partial** — fill gaps only |
+| `.memory/` or `.docs/` exist but some missing | **Partial** — fill gaps only |
 | All harness artifacts exist | **Re-bootstrap** — update detection, re-run smoke test |
 
 Also check maturity: 50+ commits = mature, 5+ model files = substantial, existing specs = assess
@@ -92,10 +92,10 @@ Present inventory summary to user before proceeding.
 
 ### 4b. Draft As-Built Stories (Existing Projects Only)
 
-If a recent assessment report exists (`docs/decisions/technical-assessment-*.md`), reference its findings as additional context for story drafting.
+If a recent assessment report exists (`.docs/decisions/technical-assessment-*.md`), reference its findings as additional context for story drafting.
 
 **Priority order for story sources:**
-1. `docs/plans/*.md` — if existing plans exist, derive stories from them first. Plans represent
+1. `.docs/plans/*.md` — if existing plans exist, derive stories from them first. Plans represent
    intended behavior more accurately than code inspection. Each plan phase becomes a story group.
 2. `.pipeline/bootstrap-inventory.md` — supplement with test coverage gaps and untested files.
 3. Code scan — last resort if neither plans nor inventory exist.
@@ -111,7 +111,7 @@ issue/PR reference. Bootstrap does NOT validate stories — the normal flow hand
 
 If a recent assessment report exists, defer to `/assess`'s architecture findings for deeper analysis. Bootstrap ADRs capture only what is observable in code — the assessment provides the judgment layer.
 
-Surface implicit decisions as ADRs in `docs/decisions/` using `templates/adr.md.template`.
+Surface implicit decisions as ADRs in `.docs/decisions/` using `templates/adr.md.template`.
 
 **Detect:** framework+version, database, auth approach, API format, test framework,
 background jobs, key architecture-shaping libraries.
@@ -124,7 +124,7 @@ background jobs, key architecture-shaping libraries.
 ### 5. Set Up Project Directories
 
 Create if missing (idempotent): `.memory/` (decisions/, patterns/, gotchas/, context/,
-index.md), `.pipeline/` (audit-trail/), `.worktrees/`, `docs/` (specs/, stories/, conflicts/,
+index.md), `.pipeline/` (audit-trail/), `.worktrees/`, `.docs/` (specs/, stories/, conflicts/,
 plans/, decisions/, retros/).
 
 Add to `.gitignore` (idempotent — don't duplicate):
@@ -150,7 +150,7 @@ Update `.memory/index.md`. Report: "Bootstrapped memory with N decisions, M patt
 ### 8. Frontend Styleguide (Projects with Frontend Only)
 
 If frontend detected, generate from `templates/styleguide.md.template` to
-`docs/decisions/styleguide.md`. If styleguide already exists, reference it instead.
+`.docs/decisions/styleguide.md`. If styleguide already exists, reference it instead.
 Skip for API-only projects.
 
 ### 9. MCP Integration Setup
@@ -188,7 +188,7 @@ Report failures before proceeding — a broken foundation wastes all downstream 
 - [ ] As-built stories drafted (if existing project)
 - [ ] Existing architectural decisions documented as ADRs (if existing project)
 - [ ] .memory/ created and seeded (if existing project)
-- [ ] docs/ subdirectories created
+- [ ] .docs/ subdirectories created
 - [ ] `.github/pull_request_template.md` created (if not already present)
 - [ ] CLAUDE.md generated or appended — never overwritten
 - [ ] Worktree-compatible infrastructure configuration

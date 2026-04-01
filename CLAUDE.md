@@ -11,7 +11,7 @@ Built on Claude Code as the execution engine — no custom runtime, pure Markdow
 
 ## SDLC Phase Flow
 
-Skills chain via artifacts in `docs/`. No skill orchestrates another internally.
+Skills chain via artifacts in `.docs/`. No skill orchestrates another internally.
 
 ```
 UNDERSTAND → DECIDE → BUILD → SHIP
@@ -20,10 +20,10 @@ UNDERSTAND → DECIDE → BUILD → SHIP
 | Phase | Skills | Artifacts |
 |-------|--------|-----------|
 | ALL | **conduct** (orchestrator) | Status dashboard, gate enforcement |
-| UNDERSTAND | bootstrap, memory, assess | CLAUDE.md, .memory/, docs/decisions/technical-assessment-*.md |
-| DECIDE | brainstorm → stories → conflict-check → plan | docs/specs/, docs/stories/, docs/conflicts/, docs/plans/ |
+| UNDERSTAND | bootstrap, memory, assess | CLAUDE.md, .memory/, .docs/decisions/technical-assessment-*.md |
+| DECIDE | brainstorm → stories → conflict-check → plan | .docs/specs/, .docs/stories/, .docs/conflicts/, .docs/plans/ |
 | BUILD | writing-system-tests → tdd/pipeline, debugging, code-review | Acceptance specs, code, unit tests, .pipeline/ |
-| SHIP | finish, retro | docs/retros/ |
+| SHIP | finish, retro | .docs/retros/ |
 
 ## Skill Invocation
 

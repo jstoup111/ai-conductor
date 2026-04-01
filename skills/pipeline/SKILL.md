@@ -4,7 +4,7 @@ description: "Use when executing an implementation plan with multiple tasks. Fac
 enforcement: structural
 phase: build
 standalone: false
-requires: ["docs/plans/ with implementation plan"]
+requires: [".docs/plans/ with implementation plan"]
 ---
 
 ## Purpose
@@ -127,7 +127,7 @@ Each task gets **3 rework cycles** per quality gate:
 
 ### Conflict Check Integration
 
-If stories in `docs/stories/` have been modified since the plan was created:
+If stories in `.docs/stories/` have been modified since the plan was created:
 - Re-run `conflict-check` before starting the next task
 - If new conflicts found: halt and resolve before continuing
 

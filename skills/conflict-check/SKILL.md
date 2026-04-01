@@ -18,9 +18,9 @@ the expensive discovery of contradictions during or after coding.
 ### 1. Inventory
 
 Load ALL stories and specs:
-- All files in `docs/stories/` (existing + newly written)
-- Active specs from `docs/specs/` (for design-level context)
-- Previous conflict reports from `docs/conflicts/` (to check for recurring patterns)
+- All files in `.docs/stories/` (existing + newly written)
+- Active specs from `.docs/specs/` (for design-level context)
+- Previous conflict reports from `.docs/conflicts/` (to check for recurring patterns)
 
 ### 1b. As-Built Story Handling
 
@@ -79,7 +79,7 @@ For each conflict found:
 ## Conflict: [Short description]
 
 **Stories involved:** [Story A title] vs [Story B title]
-**Files:** [docs/stories/file-a.md] vs [docs/stories/file-b.md]
+**Files:** [.docs/stories/file-a.md] vs [.docs/stories/file-b.md]
 **Type:** contradiction | overlap | state-conflict | resource-contention | sequencing
 **Severity:** blocking | degrading
 
@@ -109,9 +109,9 @@ For each conflict:
 4. User selects a resolution
 
 After user selects:
-1. Update the affected stories in `docs/stories/` to reflect the resolution
+1. Update the affected stories in `.docs/stories/` to reflect the resolution
 2. Note what changed and why in the story file
-3. Save the conflict report to `docs/conflicts/YYYY-MM-DD-<description>.md`
+3. Save the conflict report to `.docs/conflicts/YYYY-MM-DD-<description>.md`
 
 **Conflict reports are overwritten on re-run.** If a re-check after resolution finds new or
 changed conflicts, overwrite the existing conflict report file. The report reflects the CURRENT
@@ -119,7 +119,7 @@ state — git has the history.
 
 **Conflict resolutions that change architectural decisions create new ADRs.** Never overwrite
 an existing ADR. Instead:
-1. Write a new ADR in `docs/decisions/` that supersedes the old one
+1. Write a new ADR in `.docs/decisions/` that supersedes the old one
 2. Update the old ADR's status to `Superseded by ADR-NNN`
 3. The new ADR references the old one and explains why the decision changed
 
@@ -143,11 +143,11 @@ When no blocking conflicts remain:
 
 ## Verification
 
-- [ ] All stories in `docs/stories/` scanned (not just new ones)
+- [ ] All stories in `.docs/stories/` scanned (not just new ones)
 - [ ] All 5 conflict types checked (contradiction, overlap, state, resource, sequencing)
 - [ ] Each conflict has severity, description, and resolution options
 - [ ] User selected resolution for each blocking conflict
 - [ ] Affected stories updated to reflect resolutions
-- [ ] Conflict reports saved to `docs/conflicts/`
+- [ ] Conflict reports saved to `.docs/conflicts/`
 - [ ] Re-check passed clean after resolutions
 - [ ] Zero blocking conflicts remain before proceeding

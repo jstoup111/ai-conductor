@@ -17,8 +17,8 @@ Create a worktree for a feature branch:
 3. Create worktree: `git worktree add <path> -b <branch>` (or without `-b` if branch exists)
 4. Worktree path: `.worktrees/<branch-slug>` (inside the project, gitignored)
 5. Commit DECIDE phase artifacts to main branch first, then create worktree so it inherits them:
-   - `docs/specs/`, `docs/stories/`, `docs/conflicts/`, `docs/plans/`
-   - `docs/decisions/` (architecture review, ADRs)
+   - `.docs/specs/`, `.docs/stories/`, `.docs/conflicts/`, `.docs/plans/`
+   - `.docs/decisions/` (architecture review, ADRs)
    - `.memory/`
 6. Report: worktree path, branch name, what was inherited
 

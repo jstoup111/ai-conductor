@@ -1,6 +1,6 @@
 # Implementation Plan: Technical Assessment (/assess)
 
-**Design:** `docs/specs/2026-03-30-technical-assessment.md`
+**Design:** `.docs/specs/2026-03-30-technical-assessment.md`
 **Branch:** `feature/technical-assessment`
 
 ## Tasks
@@ -44,7 +44,7 @@ Write 3 agent persona files following the existing pattern (Role, Context Expect
 5. Write prioritized roadmap (ordered, with reasoning)
 6. Identify quick wins (low effort, high impact)
 
-**Output:** `docs/decisions/technical-assessment-YYYY-MM-DD.md`
+**Output:** `.docs/decisions/technical-assessment-YYYY-MM-DD.md`
 
 ### Task 5: Create /assess SKILL.md
 
@@ -58,7 +58,7 @@ Write 3 agent persona files following the existing pattern (Role, Context Expect
 3. Dispatch specialists in 3 batches of 3 (parallel within batch, sequential between batches)
 4. Each specialist writes to `.pipeline/assessment/<name>.md`
 5. After all 9 complete, dispatch CTO orchestrator
-6. CTO writes final report to `docs/decisions/technical-assessment-YYYY-MM-DD.md`
+6. CTO writes final report to `.docs/decisions/technical-assessment-YYYY-MM-DD.md`
 7. Present findings to user with review_artifacts
 8. Verdict: HEALTHY | NEEDS_WORK | CRITICAL
 
@@ -144,5 +144,5 @@ Task 9 is independent.
 2. `skills/assess/SKILL.md` exists with frontmatter and all practices
 3. `bin/conduct` includes assess step, syntax validates (`bash -n`)
 4. `conduct --step assess` runs without error in an existing project
-5. Assessment report generated in `docs/decisions/`
+5. Assessment report generated in `.docs/decisions/`
 6. CLAUDE.md model table includes all 10 new agents

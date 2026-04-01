@@ -33,8 +33,8 @@ git diff <base>..HEAD
 ```
 
 Also check for harness artifacts that provide motivation context:
-- `docs/specs/*.md` — design docs (the "why")
-- `docs/stories/*.md` — acceptance criteria
+- `.docs/specs/*.md` — design docs (the "why")
+- `.docs/stories/*.md` — acceptance criteria
 - `.pipeline/conduct-state.json` — feature name if available
 
 ### 2. Analyze Changes

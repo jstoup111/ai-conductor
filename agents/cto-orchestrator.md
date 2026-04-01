@@ -79,7 +79,7 @@ Quick wins meet ALL of these criteria:
 
 ### Step 7: Write Final Report
 
-Fill in the assessment report template. Output to `docs/decisions/technical-assessment-YYYY-MM-DD.md`.
+Fill in the assessment report template. Output to `.docs/decisions/technical-assessment-YYYY-MM-DD.md`.
 
 Be opinionated:
 - Don't hedge with "consider" or "might want to" — say what should be done
