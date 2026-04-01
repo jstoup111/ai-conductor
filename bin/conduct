@@ -358,39 +358,39 @@ check_bootstrap() {
   # Bootstrap artifacts are project-level (committed to git, inherited by worktrees).
   # Existence check only — no timestamp check.
   [ -d "${PROJECT_DIR}/.memory" ] && \
-  [ -d "${PROJECT_DIR}/docs/specs" ] && \
-  [ -d "${PROJECT_DIR}/docs/stories" ] && \
-  [ -d "${PROJECT_DIR}/docs/plans" ]
+  [ -d "${PROJECT_DIR}/.docs/specs" ] && \
+  [ -d "${PROJECT_DIR}/.docs/stories" ] && \
+  [ -d "${PROJECT_DIR}/.docs/plans" ]
 }
 
 check_assess() {
   # Assessment is project-level. Existence check only.
-  compgen -G "${PROJECT_DIR}/docs/decisions/technical-assessment-*.md" > /dev/null 2>&1
+  compgen -G "${PROJECT_DIR}/.docs/decisions/technical-assessment-*.md" > /dev/null 2>&1
 }
 
 check_brainstorm() {
-  has_artifacts "${PROJECT_DIR}/docs/specs/*.md"
+  has_artifacts "${PROJECT_DIR}/.docs/specs/*.md"
 }
 
 check_stories() {
-  has_artifacts "${PROJECT_DIR}/docs/stories/*.md" || return 1
+  has_artifacts "${PROJECT_DIR}/.docs/stories/*.md" || return 1
   # DRAFT stories don't count as complete
-  if grep -rl "Status: DRAFT" "${PROJECT_DIR}/docs/stories/" > /dev/null 2>&1; then
+  if grep -rl "Status: DRAFT" "${PROJECT_DIR}/.docs/stories/" > /dev/null 2>&1; then
     return 1
   fi
   return 0
 }
 
 check_conflict_check() {
-  has_artifacts "${PROJECT_DIR}/docs/conflicts/*.md"
+  has_artifacts "${PROJECT_DIR}/.docs/conflicts/*.md"
 }
 
 check_plan() {
-  has_artifacts "${PROJECT_DIR}/docs/plans/*.md"
+  has_artifacts "${PROJECT_DIR}/.docs/plans/*.md"
 }
 
 check_architecture_review() {
-  has_artifacts "${PROJECT_DIR}/docs/decisions/architecture-review-*.md"
+  has_artifacts "${PROJECT_DIR}/.docs/decisions/architecture-review-*.md"
 }
 
 check_acceptance_specs() {
@@ -435,7 +435,7 @@ else:
 }
 
 check_manual_test() {
-  local results="${PROJECT_DIR}/docs/manual-test-results.md"
+  local results="${PROJECT_DIR}/.docs/manual-test-results.md"
   [ -f "$results" ] || return 1
   # Fail if any FAIL results remain
   if grep -qi "| FAIL" "$results" 2>/dev/null; then
@@ -445,7 +445,7 @@ check_manual_test() {
 }
 
 check_retro() {
-  compgen -G "${PROJECT_DIR}/docs/retros/*.md" > /dev/null 2>&1
+  compgen -G "${PROJECT_DIR}/.docs/retros/*.md" > /dev/null 2>&1
 }
 
 # ─── Step Definitions ─────────────────────────────────────────────────────────
@@ -466,7 +466,7 @@ run_bootstrap() {
   bs_state=$(get_state "bootstrap_detect")
   if [ "$bs_state" != "done" ]; then
     log "Step 1/6: Detecting project stack and scaffolding directories..."
-    claude -p "Run /bootstrap Steps 1-3c ONLY. Detect project type and tech stack. Create directories (.memory/, docs/, .pipeline/, .worktrees/) if missing. Generate .claudeignore from templates/claudeignore.template. Generate PR template from templates/pull_request_template.md to .github/pull_request_template.md (if not present). Load tech-context if matched.
+    claude -p "Run /bootstrap Steps 1-3c ONLY. Detect project type and tech stack. Create directories (.memory/, .docs/, .pipeline/, .worktrees/) if missing. Generate .claudeignore from templates/claudeignore.template. Generate PR template from templates/pull_request_template.md to .github/pull_request_template.md (if not present). Load tech-context if matched.
 
 Add to .gitignore (idempotent): .pipeline/ and .worktrees/
 
@@ -487,7 +487,7 @@ Write detection results to .pipeline/bootstrap-detection.json: {framework, datab
 - Count source files and test files
 - Check test coverage (which files have specs, which don't)
 - Check git history: git log --oneline -20, open PRs
-- List any existing plan files in docs/plans/ (note their names and phases)
+- List any existing plan files in .docs/plans/ (note their names and phases)
 
 Write inventory summary to .pipeline/bootstrap-inventory.md. Keep concise — later steps read this file instead of re-scanning the codebase." \
         --dangerously-skip-permissions >> "$SESSION_LOG" 2>&1 || true
@@ -502,26 +502,26 @@ Write inventory summary to .pipeline/bootstrap-inventory.md. Keep concise — la
   bs_state=$(get_state "bootstrap_stories")
   if [ "$bs_state" != "done" ]; then
     local has_plans=false
-    compgen -G "${PROJECT_DIR}/docs/plans/*.md" > /dev/null 2>&1 && has_plans=true
+    compgen -G "${PROJECT_DIR}/.docs/plans/*.md" > /dev/null 2>&1 && has_plans=true
 
     if $has_plans || [ -f "${PROJECT_DIR}/.pipeline/bootstrap-inventory.md" ]; then
       log "Step 3/6: Drafting as-built stories..."
 
-      local story_prompt="Run /bootstrap Step 4b ONLY. Draft as-built stories to docs/stories/ with Status: DRAFT and [AS-BUILT] markers."
+      local story_prompt="Run /bootstrap Step 4b ONLY. Draft as-built stories to .docs/stories/ with Status: DRAFT and [AS-BUILT] markers."
 
       if $has_plans; then
         # Plans exist — multiple agents, one per plan file
         local plan_count
-        plan_count=$(compgen -G "${PROJECT_DIR}/docs/plans/*.md" | wc -l)
+        plan_count=$(compgen -G "${PROJECT_DIR}/.docs/plans/*.md" | wc -l)
         log "  Found ${plan_count} plan files — deriving stories from plans"
 
-        story_prompt="Run /bootstrap Step 4b ONLY. Read docs/plans/*.md FIRST — derive stories from existing plans. Each plan phase becomes a story group with acceptance criteria based on the plan's tasks.
+        story_prompt="Run /bootstrap Step 4b ONLY. Read .docs/plans/*.md FIRST — derive stories from existing plans. Each plan phase becomes a story group with acceptance criteria based on the plan's tasks.
 
 PRIORITY ORDER:
-1. docs/plans/*.md — primary source (intended behavior)
+1. .docs/plans/*.md — primary source (intended behavior)
 2. .pipeline/bootstrap-inventory.md — supplement with test coverage gaps and untested files
 
-Draft stories to docs/stories/ with Status: DRAFT and [AS-BUILT] markers. One story per plan phase or major feature area. Happy paths from plan tasks, negative paths as TODO."
+Draft stories to .docs/stories/ with Status: DRAFT and [AS-BUILT] markers. One story per plan phase or major feature area. Happy paths from plan tasks, negative paths as TODO."
       fi
 
       claude -p "$story_prompt" \
@@ -537,7 +537,7 @@ Draft stories to docs/stories/ with Status: DRAFT and [AS-BUILT] markers. One st
   if [ "$bs_state" != "done" ]; then
     if [ -f "${PROJECT_DIR}/.pipeline/bootstrap-inventory.md" ]; then
       log "Step 4/6: Documenting architectural decisions..."
-      claude -p "Run /bootstrap Step 4c ONLY. Read .pipeline/bootstrap-inventory.md and .pipeline/bootstrap-detection.json. Create ADRs in docs/decisions/ for observed architectural decisions (framework, database, auth, API format, test framework, background jobs, key libraries). Use templates/adr.md.template. Status: Observed. Do NOT re-scan the codebase." \
+      claude -p "Run /bootstrap Step 4c ONLY. Read .pipeline/bootstrap-inventory.md and .pipeline/bootstrap-detection.json. Create ADRs in .docs/decisions/ for observed architectural decisions (framework, database, auth, API format, test framework, background jobs, key libraries). Use templates/adr.md.template. Status: Observed. Do NOT re-scan the codebase." \
         --dangerously-skip-permissions >> "$SESSION_LOG" 2>&1 || true
     else
       log "Step 4/6: Fresh project — skipping ADRs"
@@ -549,7 +549,7 @@ Draft stories to docs/stories/ with Status: DRAFT and [AS-BUILT] markers. One st
   bs_state=$(get_state "bootstrap_config")
   if [ "$bs_state" != "done" ]; then
     log "Step 5/6: Generating CLAUDE.md and seeding memory..."
-    claude -p "Run /bootstrap Steps 6-7 ONLY. Generate or update CLAUDE.md from templates/CLAUDE.md.template (append harness section if CLAUDE.md exists — never overwrite). Seed .memory/ from docs/decisions/ and .pipeline/bootstrap-inventory.md if they exist. Update .memory/index.md." \
+    claude -p "Run /bootstrap Steps 6-7 ONLY. Generate or update CLAUDE.md from templates/CLAUDE.md.template (append harness section if CLAUDE.md exists — never overwrite). Seed .memory/ from .docs/decisions/ and .pipeline/bootstrap-inventory.md if they exist. Update .memory/index.md." \
       --dangerously-skip-permissions >> "$SESSION_LOG" 2>&1 || true
     save_state "bootstrap_config" "done"
   fi
@@ -584,16 +584,16 @@ run_assess() {
     ok "Already complete"; save_state "assess" "done"; return 0
   fi
   log "Running technical assessment (9 specialists + CTO synthesis)..."
-  run_claude "Run the /assess skill. Dispatch all 9 specialist agents in 3 batches of 3 (parallel within batch). Each specialist writes to .pipeline/assessment/<name>.md. After all 9 complete, dispatch the CTO orchestrator to synthesize findings into docs/decisions/technical-assessment-$(date +%Y-%m-%d).md. Present the final report for review."
+  run_claude "Run the /assess skill. Dispatch all 9 specialist agents in 3 batches of 3 (parallel within batch). Each specialist writes to .pipeline/assessment/<name>.md. After all 9 complete, dispatch the CTO orchestrator to synthesize findings into .docs/decisions/technical-assessment-$(date +%Y-%m-%d).md. Present the final report for review."
 
   if check_assess; then
     ok "Assessment complete"; save_state "assess" "done"
     local verdict
-    verdict=$(grep -oP 'Verdict:\s*\K\S+' "${PROJECT_DIR}"/docs/decisions/technical-assessment-*.md 2>/dev/null | tail -1 || echo "")
+    verdict=$(grep -oP 'Verdict:\s*\K\S+' "${PROJECT_DIR}"/.docs/decisions/technical-assessment-*.md 2>/dev/null | tail -1 || echo "")
     [ -n "$verdict" ] && save_state "assess_verdict" "$verdict"
     return 0
   fi
-  fail "No assessment report in docs/decisions/"; save_state "assess" "failed"; return 1
+  fail "No assessment report in .docs/decisions/"; save_state "assess" "failed"; return 1
 }
 
 run_brainstorm() {
@@ -607,11 +607,11 @@ run_brainstorm() {
   # Wrong design cascades to wrong stories, wrong plan, wrong code.
   run_claude "Run the /brainstorm skill for: ${FEATURE_DESC}
 
-Write a design document to docs/specs/. Include Problem, Solution, Scope (In/Out), Key Decisions. Perform a scope check — compare the design against the original request and flag if scope expanded. Get user approval before marking as approved." "interactive"
+Write a design document to .docs/specs/. Include Problem, Solution, Scope (In/Out), Key Decisions. Perform a scope check — compare the design against the original request and flag if scope expanded. Get user approval before marking as approved." "interactive"
   if check_brainstorm; then
     # Review the design doc — user must approve before proceeding
     local spec_files=()
-    while IFS= read -r f; do spec_files+=("$f"); done < <(compgen -G "${PROJECT_DIR}/docs/specs/*.md" | sort)
+    while IFS= read -r f; do spec_files+=("$f"); done < <(compgen -G "${PROJECT_DIR}/.docs/specs/*.md" | sort)
     if [ ${#spec_files[@]} -gt 0 ]; then
       if ! review_artifacts "brainstorm" "${spec_files[@]}"; then
         for f in "${spec_files[@]}"; do rm -f "$f"; done
@@ -622,7 +622,7 @@ Write a design document to docs/specs/. Include Problem, Solution, Scope (In/Out
     name_session
     return 0
   fi
-  fail "No design doc in docs/specs/"; save_state "brainstorm" "failed"; return 1
+  fail "No design doc in .docs/specs/"; save_state "brainstorm" "failed"; return 1
 }
 
 run_complexity_assessment() {
@@ -640,7 +640,7 @@ run_complexity_assessment() {
   # Assess complexity by reading the design doc
   log "Assessing feature complexity from design doc..."
   local tier_output
-  tier_output=$(claude -p "Read the design doc in docs/specs/. Score each signal, then output the tier.
+  tier_output=$(claude -p "Read the design doc in .docs/specs/. Score each signal, then output the tier.
 
 SIGNALS (score each one):
 1. Models/tables: 1-3=S, 4-7=M, 8+=L
@@ -816,10 +816,9 @@ state = {
 with open(sys.argv[1], 'w') as f:
     json.dump(state, f, indent=2)
 " "$STATE_FILE" "${FEATURE_DESC:-}" 2>/dev/null || true
+      # Start a fresh Claude session only on first entry (not resume)
+      rm -f "$SESSION_FILE" "${PIPELINE_DIR}/session-created"
     fi
-
-    # Start a fresh Claude session in the worktree
-    rm -f "$SESSION_FILE" "${PIPELINE_DIR}/session-created"
     cd "$PROJECT_DIR"
     log "Working in worktree: ${PROJECT_DIR}"
     # Restart live refresh — the background subshell inherited the old
@@ -843,13 +842,10 @@ cleanup_worktree() {
 }
 
 # Save worktree info to state for resume across sessions.
-# Writes to BOTH the main repo state file and the worktree state file
-# so restore_worktree_state can find it on next run (reads main repo first).
-ORIGINAL_PIPELINE_DIR=""
-
+# Only writes to the worktree state file. Resume discovers worktrees
+# by scanning .worktrees/ — no writes back to the root repo.
 save_worktree_state() {
   if [ -n "$WORKTREE_DIR" ]; then
-    # Save to current state file (worktree)
     python3 -c "
 import json, os, sys
 path = '$STATE_FILE'
@@ -862,82 +858,41 @@ state['worktree_branch'] = sys.argv[2]
 with open(path, 'w') as f:
     json.dump(state, f, indent=2)
 " "$WORKTREE_DIR" "$WORKTREE_BRANCH"
-    # Also save to main repo state file so restore finds it on resume.
-    # Uses a feature-keyed map for parallel worktree support, plus
-    # legacy single-key format for backwards compatibility.
-    if [ -n "$ORIGINAL_PIPELINE_DIR" ] && [ "$ORIGINAL_PIPELINE_DIR" != "$PIPELINE_DIR" ]; then
-      local main_state="${ORIGINAL_PIPELINE_DIR}/conduct-state.json"
-      python3 -c "
-import json, os, sys
-path = sys.argv[3]
-state = {}
-if os.path.exists(path):
-    with open(path) as f:
-        state = json.load(f)
-# Legacy format (single worktree)
-state['worktree_dir'] = sys.argv[1]
-state['worktree_branch'] = sys.argv[2]
-# Parallel-safe format (keyed by feature description)
-feat = sys.argv[4] if len(sys.argv) > 4 and sys.argv[4] else None
-if feat:
-    if 'worktrees' not in state:
-        state['worktrees'] = {}
-    state['worktrees'][feat] = {'dir': sys.argv[1], 'branch': sys.argv[2]}
-with open(path, 'w') as f:
-    json.dump(state, f, indent=2)
-" "$WORKTREE_DIR" "$WORKTREE_BRANCH" "$main_state" "${FEATURE_DESC:-}"
-    fi
   fi
 }
 
-# Restore worktree info from state on resume.
-# Supports parallel worktrees: the main repo state stores a map of
-# active worktrees keyed by feature description. On resume, we match
-# by FEATURE_DESC or fall back to the single-worktree legacy format.
-#
-# If a worktree is found and we're not already in it, re-exec conduct
-# from the worktree directory so the entire process runs there — this
-# ensures the user's terminal shows the right cwd after exit.
+# Restore worktree context on resume.
+# Two paths: (1) detect we're already in a worktree (after re-exec) and
+# enter it, or (2) scan .worktrees/ for a matching feature and re-exec.
+# No reads from root repo state — worktree presence is the source of truth.
 restore_worktree_state() {
-  if [ -f "$STATE_FILE" ]; then
-    # Try feature-keyed worktree map first (parallel-safe)
-    if [ -n "$FEATURE_DESC" ]; then
-      WORKTREE_DIR=$(python3 -c "
-import json, sys
-with open('$STATE_FILE') as f:
-    state = json.load(f)
-wt = state.get('worktrees', {}).get(sys.argv[1], {})
-print(wt.get('dir', ''))
-" "$FEATURE_DESC" 2>/dev/null || echo "")
-      WORKTREE_BRANCH=$(python3 -c "
-import json, sys
-with open('$STATE_FILE') as f:
-    state = json.load(f)
-wt = state.get('worktrees', {}).get(sys.argv[1], {})
-print(wt.get('branch', ''))
-" "$FEATURE_DESC" 2>/dev/null || echo "")
-    fi
-    # Fall back to legacy single-worktree format
-    if [ -z "$WORKTREE_DIR" ]; then
-      WORKTREE_DIR=$(python3 -c "import json; print(json.load(open('$STATE_FILE')).get('worktree_dir',''))" 2>/dev/null || echo "")
-      WORKTREE_BRANCH=$(python3 -c "import json; print(json.load(open('$STATE_FILE')).get('worktree_branch',''))" 2>/dev/null || echo "")
-    fi
-    if [ -n "$WORKTREE_DIR" ] && [ -d "$WORKTREE_DIR" ]; then
-      # If we're not already in the worktree, re-exec from there
-      local resolved_wt
-      resolved_wt=$(cd "$WORKTREE_DIR" && pwd -P)
-      local resolved_cwd
-      resolved_cwd=$(pwd -P)
-      if [ "$resolved_wt" != "$resolved_cwd" ]; then
+  # Path 1: already in a git worktree (landed here via re-exec)
+  local git_common git_dir
+  git_common=$(git rev-parse --git-common-dir 2>/dev/null || echo "")
+  git_dir=$(git rev-parse --git-dir 2>/dev/null || echo "")
+  if [ -n "$git_common" ] && [ -n "$git_dir" ] && [ "$git_common" != "$git_dir" ]; then
+    WORKTREE_DIR="$PROJECT_DIR"
+    WORKTREE_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+    enter_worktree
+    return
+  fi
+
+  # Path 2: in main repo — scan .worktrees/ for a matching feature
+  if [ -n "$FEATURE_DESC" ] && [ -d "${PROJECT_DIR}/.worktrees" ]; then
+    local wt_dir wt_state wt_feat
+    for wt_dir in "${PROJECT_DIR}/.worktrees/"*/; do
+      [ -d "$wt_dir" ] || continue
+      wt_state="${wt_dir}.pipeline/conduct-state.json"
+      [ -f "$wt_state" ] || continue
+      wt_feat=$(python3 -c "import json; print(json.load(open('$wt_state')).get('feature_desc',''))" 2>/dev/null || echo "")
+      if [ "$wt_feat" = "$FEATURE_DESC" ]; then
+        WORKTREE_DIR="${wt_dir%/}"
+        WORKTREE_BRANCH=$(python3 -c "import json; print(json.load(open('$wt_state')).get('worktree_branch',''))" 2>/dev/null || echo "")
         log "Re-launching from worktree: ${WORKTREE_DIR}"
         cd "$WORKTREE_DIR"
         exec "$0" "${ORIGINAL_ARGS[@]}"
       fi
-      enter_worktree
-    else
-      WORKTREE_DIR=""
-      WORKTREE_BRANCH=""
-    fi
+    done
   fi
 }
 
@@ -969,9 +924,9 @@ run_stories() {
   if check_stories; then
     ok "Already complete"; save_state "stories" "done"; return 0
   fi
-  check_brainstorm || { fail "GATE: Need design doc in docs/specs/ first"; return 1; }
+  check_brainstorm || { fail "GATE: Need design doc in .docs/specs/ first"; return 1; }
   log "Generating stories with mandatory negative paths..."
-  run_claude "Run the /stories skill. Read docs/specs/ and generate stories in docs/stories/.
+  run_claude "Run the /stories skill. Read .docs/specs/ and generate stories in .docs/stories/.
 
 REQUIREMENTS:
 - Every story: happy path + concrete negative paths (Given/When/Then)
@@ -981,7 +936,7 @@ REQUIREMENTS:
   if check_stories; then
     # Review each story file before accepting
     local story_files=()
-    while IFS= read -r f; do story_files+=("$f"); done < <(compgen -G "${PROJECT_DIR}/docs/stories/*.md" | sort)
+    while IFS= read -r f; do story_files+=("$f"); done < <(compgen -G "${PROJECT_DIR}/.docs/stories/*.md" | sort)
     if [ ${#story_files[@]} -gt 0 ]; then
       if ! review_artifacts "stories" "${story_files[@]}"; then
         # Delete rejected stories so check_stories fails on retry
@@ -991,7 +946,7 @@ REQUIREMENTS:
     fi
     ok "Stories created"; save_state "stories" "done"; return 0
   fi
-  fail "No accepted stories in docs/stories/"; save_state "stories" "failed"; return 1
+  fail "No accepted stories in .docs/stories/"; save_state "stories" "failed"; return 1
 }
 
 run_conflict_check() {
@@ -1002,29 +957,29 @@ run_conflict_check() {
   if check_conflict_check; then
     ok "Already complete"; save_state "conflict_check" "done"; return 0
   fi
-  check_stories || { fail "GATE: Need stories in docs/stories/ first"; return 1; }
+  check_stories || { fail "GATE: Need stories in .docs/stories/ first"; return 1; }
   log "Checking for conflicts..."
-  run_claude "Run the /conflict-check skill. Check ALL stories against all 5 conflict types. Write report to docs/conflicts/. If clean, write a clean-check marker. If blocking conflicts found, list them with resolution options but do NOT auto-resolve — the user must choose."
+  run_claude "Run the /conflict-check skill. Check ALL stories against all 5 conflict types. Write report to .docs/conflicts/. If clean, write a clean-check marker. If blocking conflicts found, list them with resolution options but do NOT auto-resolve — the user must choose."
 
   # Check if blocking conflicts need human resolution
   if check_conflict_check; then
     local has_blocking=false
     # If a clean-check marker exists, there are no blocking conflicts
-    if ! compgen -G "${PROJECT_DIR}/docs/conflicts/*clean-check*" > /dev/null 2>&1; then
+    if ! compgen -G "${PROJECT_DIR}/.docs/conflicts/*clean-check*" > /dev/null 2>&1; then
       # No clean-check marker — check for blocking conflicts in non-marker files
       has_blocking=true
     fi
     if $has_blocking; then
       warn "Blocking conflicts found — interactive session for resolution..."
-      run_claude "There are blocking conflicts in docs/conflicts/. Present each to the user with resolution options. The user must choose. Update stories after each resolution. Re-run conflict check until clean." "interactive"
+      run_claude "There are blocking conflicts in .docs/conflicts/. Present each to the user with resolution options. The user must choose. Update stories after each resolution. Re-run conflict check until clean." "interactive"
       # Verify conflicts were actually resolved
-      if ! compgen -G "${PROJECT_DIR}/docs/conflicts/*clean-check*" > /dev/null 2>&1; then
+      if ! compgen -G "${PROJECT_DIR}/.docs/conflicts/*clean-check*" > /dev/null 2>&1; then
         fail "Blocking conflicts still unresolved"; save_state "conflict_check" "failed"; return 1
       fi
     fi
     ok "Conflict check complete"; save_state "conflict_check" "done"; return 0
   fi
-  fail "No conflict report in docs/conflicts/"; save_state "conflict_check" "failed"; return 1
+  fail "No conflict report in .docs/conflicts/"; save_state "conflict_check" "failed"; return 1
 }
 
 run_plan() {
@@ -1039,10 +994,10 @@ run_plan() {
     fail "GATE: Need conflict-check first (state: $cc_state)"; return 1
   fi
   log "Generating implementation plan..."
-  run_claude "Run the /plan skill. Generate plan in docs/plans/ with 2-5 min tasks, dependency graph, coverage mapping. Check scope: warn if >20 tasks, hard stop if >40."
+  run_claude "Run the /plan skill. Generate plan in .docs/plans/ with 2-5 min tasks, dependency graph, coverage mapping. Check scope: warn if >20 tasks, hard stop if >40."
   if check_plan; then
     local plan_files=()
-    while IFS= read -r f; do plan_files+=("$f"); done < <(compgen -G "${PROJECT_DIR}/docs/plans/*.md" | sort)
+    while IFS= read -r f; do plan_files+=("$f"); done < <(compgen -G "${PROJECT_DIR}/.docs/plans/*.md" | sort)
     if [ ${#plan_files[@]} -gt 0 ]; then
       if ! review_artifacts "plan" "${plan_files[@]}"; then
         for f in "${plan_files[@]}"; do rm -f "$f"; done
@@ -1051,7 +1006,7 @@ run_plan() {
     fi
     ok "Plan created"; save_state "plan" "done"; return 0
   fi
-  fail "No plan in docs/plans/"; save_state "plan" "failed"; return 1
+  fail "No plan in .docs/plans/"; save_state "plan" "failed"; return 1
 }
 
 run_architecture_review() {
@@ -1062,19 +1017,19 @@ run_architecture_review() {
   if check_architecture_review; then
     ok "Already complete"; save_state "architecture_review" "done"; return 0
   fi
-  check_plan || { fail "GATE: Need plan in docs/plans/ first"; return 1; }
+  check_plan || { fail "GATE: Need plan in .docs/plans/ first"; return 1; }
   log "Reviewing architecture feasibility and alignment..."
-  run_claude "Run the /architecture-review skill. Review all stories and the plan for technical feasibility, architectural alignment, domain integrity, and risks. Write review to docs/decisions/architecture-review-*.md. Issue APPROVED, APPROVED WITH CONDITIONS, or BLOCKED verdict."
+  run_claude "Run the /architecture-review skill. Review all stories and the plan for technical feasibility, architectural alignment, domain integrity, and risks. Write review to .docs/decisions/architecture-review-*.md. Issue APPROVED, APPROVED WITH CONDITIONS, or BLOCKED verdict."
 
   if check_architecture_review; then
     # Check for BLOCKED verdict — requires human
-    if grep -rqiE "verdict.*blocked" "${PROJECT_DIR}"/docs/decisions/architecture-review-*.md 2>/dev/null; then
+    if grep -rqiE "verdict.*blocked" "${PROJECT_DIR}"/.docs/decisions/architecture-review-*.md 2>/dev/null; then
       warn "Architecture BLOCKED — interactive session to resolve..."
       run_claude "The architecture review issued a BLOCKED verdict. Present the blocking issues to the user with resolution options. The user must decide. After resolution, update the review and re-issue verdict." "interactive"
     fi
     ok "Architecture review complete"; save_state "architecture_review" "done"; return 0
   fi
-  fail "No architecture review in docs/decisions/"; save_state "architecture_review" "failed"; return 1
+  fail "No architecture review in .docs/decisions/"; save_state "architecture_review" "failed"; return 1
 }
 
 run_worktree_setup() {
@@ -1106,7 +1061,7 @@ run_worktree_setup() {
   fi
 
   # Commit bootstrap/assess artifacts so worktree inherits them
-  git add docs/ .memory/ .gitignore .github/ 2>/dev/null || true
+  git add .docs/ .memory/ .gitignore .github/ 2>/dev/null || true
   git diff --cached --quiet 2>/dev/null || \
     git commit -m "Project setup: bootstrap + assess artifacts" 2>/dev/null || true
 
@@ -1128,7 +1083,7 @@ run_acceptance_specs() {
   if check_acceptance_specs; then
     ok "Already complete"; save_state "acceptance_specs" "done"; return 0
   fi
-  check_plan || { fail "GATE: Need plan in docs/plans/ first"; return 1; }
+  check_plan || { fail "GATE: Need plan in .docs/plans/ first"; return 1; }
   log "Generating failing acceptance specs from stories..."
   run_claude "Run the /writing-system-tests skill. Generate failing acceptance specs from ALL stories.
 API projects: tests/integration/ or spec/integration/. Full-stack: tests/e2e/ or spec/system/. Every criterion (happy + negative) becomes a test. Commit the failing specs." "interactive"
@@ -1156,7 +1111,7 @@ run_build() {
   # iteratively, and the user needs visibility into progress.
   if [ "$tier" = "S" ]; then
     log "Starting direct TDD (Small tier, no pipeline overhead)..."
-    run_claude "Run /tdd for each task in the plan (docs/plans/). Execute tasks sequentially via TDD (RED→DOMAIN→GREEN→DOMAIN→COMMIT).
+    run_claude "Run /tdd for each task in the plan (.docs/plans/). Execute tasks sequentially via TDD (RED→DOMAIN→GREEN→DOMAIN→COMMIT).
 
 Track progress yourself — no pipeline state machine needed. Commit after each task.
 Do NOT stop to ask for approval — execute all tasks to completion." "interactive"
@@ -1201,7 +1156,7 @@ run_manual_test() {
   # Always interactive — may need user to confirm test results, start servers, etc.
   run_claude "Run the /manual-test skill. Start the application server, then test every story's acceptance criteria using curl (API) or browser (full-stack).
 
-Record results in docs/manual-test-results.md. For any FAILs, write a failing test (RED), fix it (GREEN), commit, and re-test until all stories pass. Do NOT proceed with bugs remaining." "interactive"
+Record results in .docs/manual-test-results.md. For any FAILs, write a failing test (RED), fix it (GREEN), commit, and re-test until all stories pass. Do NOT proceed with bugs remaining." "interactive"
 
   check_manual_test && { ok "Manual tests all pass"; save_state "manual_test" "done"; return 0; }
   fail "Manual test has FAILs — bugs need fixing"; save_state "manual_test" "failed"; return 1
@@ -1216,9 +1171,9 @@ run_retro() {
   run_claude "Run the /retro skill. Both parts:
 Part A (Harness): correctness, gate quality, autonomy friction
 Part B (Application): architecture, code quality, test quality, security, tech debt
-Write to docs/retros/ with file:line references."
+Write to .docs/retros/ with file:line references."
   check_retro && { ok "Retro complete"; save_state "retro" "done"; return 0; }
-  fail "No retro in docs/retros/"; save_state "retro" "failed"; return 1
+  fail "No retro in .docs/retros/"; save_state "retro" "failed"; return 1
 }
 
 # ─── Status Display ───────────────────────────────────────────────────────────
@@ -1229,7 +1184,7 @@ get_phase_detail() {
   case "$step" in
     brainstorm)
       local count
-      count=$(compgen -G "${PROJECT_DIR}/docs/specs/*.md" 2>/dev/null | wc -l)
+      count=$(compgen -G "${PROJECT_DIR}/.docs/specs/*.md" 2>/dev/null | wc -l)
       [ "$count" -gt 0 ] && echo "${count} design doc(s)"
       ;;
     complexity)
@@ -1246,14 +1201,14 @@ get_phase_detail() {
       ;;
     stories)
       local total=0 draft=0
-      total=$(compgen -G "${PROJECT_DIR}/docs/stories/*.md" 2>/dev/null | wc -l)
-      [ "$total" -gt 0 ] && draft=$(grep -rl "Status: DRAFT" "${PROJECT_DIR}/docs/stories/" 2>/dev/null | wc -l)
+      total=$(compgen -G "${PROJECT_DIR}/.docs/stories/*.md" 2>/dev/null | wc -l)
+      [ "$total" -gt 0 ] && draft=$(grep -rl "Status: DRAFT" "${PROJECT_DIR}/.docs/stories/" 2>/dev/null | wc -l)
       if [ "$total" -gt 0 ]; then
         [ "$draft" -gt 0 ] && echo "${total} stories (${draft} DRAFT)" || echo "${total} stories"
       fi
       ;;
     conflict_check)
-      local f="${PROJECT_DIR}/docs/conflicts/"
+      local f="${PROJECT_DIR}/.docs/conflicts/"
       if compgen -G "${f}*.md" > /dev/null 2>&1; then
         if grep -rql "Clean Pass\|clean" "$f" 2>/dev/null; then
           echo "clean"
@@ -1265,16 +1220,16 @@ get_phase_detail() {
       fi
       ;;
     plan)
-      if compgen -G "${PROJECT_DIR}/docs/plans/*.md" > /dev/null 2>&1; then
+      if compgen -G "${PROJECT_DIR}/.docs/plans/*.md" > /dev/null 2>&1; then
         local tasks
-        tasks=$(grep -c "^### Task" "${PROJECT_DIR}"/docs/plans/*.md 2>/dev/null | awk -F: '{s+=$2}END{print s}')
+        tasks=$(grep -c "^### Task" "${PROJECT_DIR}"/.docs/plans/*.md 2>/dev/null | awk -F: '{s+=$2}END{print s}')
         [ "$tasks" -gt 0 ] && echo "${tasks} tasks"
       fi
       ;;
     architecture_review)
-      if compgen -G "${PROJECT_DIR}/docs/decisions/architecture-review-*.md" > /dev/null 2>&1; then
+      if compgen -G "${PROJECT_DIR}/.docs/decisions/architecture-review-*.md" > /dev/null 2>&1; then
         local verdict
-        verdict=$(grep -h "Verdict:" "${PROJECT_DIR}"/docs/decisions/architecture-review-*.md 2>/dev/null | tail -1 | sed 's/.*Verdict:\s*//' | tr -d '*')
+        verdict=$(grep -h "Verdict:" "${PROJECT_DIR}"/.docs/decisions/architecture-review-*.md 2>/dev/null | tail -1 | sed 's/.*Verdict:\s*//' | tr -d '*')
         [ -n "$verdict" ] && echo "$verdict"
       fi
       ;;
@@ -1331,7 +1286,7 @@ if ip > 0:
       [ -n "$result" ] && echo "$result"
       ;;
     manual_test)
-      local f="${PROJECT_DIR}/docs/manual-test-results.md"
+      local f="${PROJECT_DIR}/.docs/manual-test-results.md"
       if [ -f "$f" ]; then
         local pass fail
         pass=$(grep -ci "| PASS" "$f" 2>/dev/null || echo 0)
@@ -1344,7 +1299,7 @@ if ip > 0:
       fi
       ;;
     retro)
-      if compgen -G "${PROJECT_DIR}/docs/retros/*.md" > /dev/null 2>&1; then
+      if compgen -G "${PROJECT_DIR}/.docs/retros/*.md" > /dev/null 2>&1; then
         echo "complete"
       fi
       ;;
@@ -1553,12 +1508,7 @@ cleanup_and_exit() {
   show_status
   echo ""
   echo -e "  ${BOLD}Continue options:${NC}"
-  if [ -n "$WORKTREE_DIR" ] && [ "$WORKTREE_DIR" != "$ORIGINAL_CWD" ]; then
-    echo "    conduct --resume                        # resume from main repo"
-    echo "    cd ${WORKTREE_DIR} && conduct --resume   # resume from worktree"
-  else
-    echo "    conduct --resume            # pick up where you left off"
-  fi
+  echo "    conduct --resume            # pick up where you left off"
   echo "    conduct --from <step>       # restart from a specific step"
   echo "    conduct --status            # check progress without running"
   echo "    conduct --log               # tail the session log"
@@ -1568,7 +1518,7 @@ cleanup_and_exit() {
 
 # Clean up on exit, save state on Ctrl+C
 trap 'stop_live_refresh' EXIT
-trap 'cleanup_and_exit' INT TERM
+trap 'cleanup_and_exit' INT TERM HUP
 
 # ─── Rate Limit ───────────────────────────────────────────────────────────────
 
@@ -1734,9 +1684,9 @@ recover() {
   if [ "$step_name" = "bootstrap" ]; then
     recover_prompt="Run /bootstrap. Detect the project stack, scaffold directories, generate CLAUDE.md. Stop when done."
   elif [ "$step_name" = "brainstorm" ]; then
-    recover_prompt="Run /brainstorm for: ${FEATURE_DESC:-this feature}. Write a design doc to docs/specs/."
+    recover_prompt="Run /brainstorm for: ${FEATURE_DESC:-this feature}. Write a design doc to .docs/specs/."
   elif [ "$step_name" = "stories" ]; then
-    recover_prompt="Run /stories. Read docs/specs/ and generate stories with negative paths to docs/stories/."
+    recover_prompt="Run /stories. Read .docs/specs/ and generate stories with negative paths to .docs/stories/."
   elif [ "$step_name" = "build" ]; then
     recover_prompt="Continue the build. Check .pipeline/task-status.json for progress, run /tdd on the next incomplete task."
   fi
@@ -1811,96 +1761,91 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
-# Resume menu: show active features and let user pick
-if [ "$MODE" = "resume" ] && [ -z "$FEATURE_DESC" ] && [ -f "$STATE_FILE" ]; then
-  # Gather resumable features from worktrees map + current state
+# Resume/from menu: scan .worktrees/ for active features and let user pick.
+# Presence of a worktree = work left to do. No root repo state needed.
+if ([ "$MODE" = "resume" ] || [ -n "$START_STEP" ]) && [ -z "$FEATURE_DESC" ] && [ -d "${PROJECT_DIR}/.worktrees" ]; then
   resume_options=$(python3 -c "
 import json, os, sys
 
-state_path = '$STATE_FILE'
-pipeline_dir = '$PIPELINE_DIR'
-
+worktrees_dir = os.path.join(sys.argv[1], '.worktrees')
 features = []
 
-with open(state_path) as f:
-    state = json.load(f)
-
-# Check worktrees map for parallel features
-worktrees = state.get('worktrees', {})
-for feat, wt in worktrees.items():
-    wt_dir = wt.get('dir', '')
-    wt_state_path = os.path.join(wt_dir, '.pipeline', 'conduct-state.json') if wt_dir else ''
-    step = '?'
-    status = 'unknown'
-    alive = os.path.isdir(wt_dir) if wt_dir else False
-    if alive and os.path.exists(wt_state_path):
-        with open(wt_state_path) as wf:
-            ws = json.load(wf)
-        step = ws.get('last_step', '?')
-        status = ws.get(step, 'pending')
-    features.append({
-        'desc': feat,
-        'step': step,
-        'status': status,
-        'dir': wt_dir,
-        'alive': alive
-    })
-
-# If no worktrees, add the main feature
-if not features:
-    feat = state.get('feature_desc', '')
-    if feat:
-        step = state.get('last_step', '?')
-        status = state.get(step, 'pending')
+if os.path.isdir(worktrees_dir):
+    for entry in sorted(os.listdir(worktrees_dir)):
+        wt_dir = os.path.join(worktrees_dir, entry)
+        if not os.path.isdir(wt_dir):
+            continue
+        state_path = os.path.join(wt_dir, '.pipeline', 'conduct-state.json')
+        if not os.path.exists(state_path):
+            continue
+        try:
+            with open(state_path) as f:
+                state = json.load(f)
+        except (json.JSONDecodeError, IOError):
+            continue
+        feat = state.get('feature_desc', entry)
+        last_step = state.get('last_step', '?')
+        status = state.get(last_step, 'pending')
+        branch = state.get('worktree_branch', '')
         features.append({
             'desc': feat,
-            'step': step,
+            'step': last_step,
             'status': status,
-            'dir': '',
-            'alive': True
+            'dir': wt_dir,
+            'branch': branch
         })
 
-# Output as lines: index|desc|step|status|dir|alive
 for i, f in enumerate(features):
-    print(f\"{i}|{f['desc']}|{f['step']}|{f['status']}|{f['dir']}|{f['alive']}\")
-" 2>/dev/null || echo "")
+    print(f\"{i}|{f['desc']}|{f['step']}|{f['status']}|{f['dir']}|{f['branch']}\")
+" "$PROJECT_DIR" 2>/dev/null || echo "")
 
-  if [ -n "$resume_options" ]; then
-    option_count=$(echo "$resume_options" | wc -l)
+  if [ -z "$resume_options" ]; then
+    fail "No active worktrees found. Nothing to resume."
+    fail "Start a new feature: conduct \"feature description\""
+    exit 1
+  fi
 
-    if [ "$option_count" -eq 1 ]; then
-      # Single feature — auto-select
-      FEATURE_DESC=$(echo "$resume_options" | head -1 | cut -d'|' -f2)
+  option_count=$(echo "$resume_options" | wc -l)
+  selected_wt_dir=""
+
+  if [ "$option_count" -eq 1 ]; then
+    # Single feature — auto-select
+    FEATURE_DESC=$(echo "$resume_options" | head -1 | cut -d'|' -f2)
+    selected_wt_dir=$(echo "$resume_options" | head -1 | cut -d'|' -f5)
+    log "Resuming: ${FEATURE_DESC}"
+  else
+    # Multiple features — show menu
+    echo ""
+    echo -e "${BOLD}${CYAN}Resume which feature?${NC}"
+    echo ""
+    while IFS='|' read -r idx desc step status dir branch; do
+      local_num=$((idx + 1))
+      case "$status" in
+        done|skipped) icon="${GREEN}✓${NC}" ;;
+        in_progress)  icon="${YELLOW}▶${NC}" ;;
+        failed)       icon="${RED}✗${NC}" ;;
+        *)            icon="⬚" ;;
+      esac
+      printf "  %b %d) %-40s  step: %-20s  %s\n" "$icon" "$local_num" "${desc:0:40}" "$step" "$branch"
+    done <<< "$resume_options"
+    echo ""
+    read -r -p "  Select [1-${option_count}]: " pick
+
+    if [[ "$pick" =~ ^[0-9]+$ ]] && [ "$pick" -ge 1 ] && [ "$pick" -le "$option_count" ]; then
+      selected_line=$(echo "$resume_options" | sed -n "${pick}p")
+      FEATURE_DESC=$(echo "$selected_line" | cut -d'|' -f2)
+      selected_wt_dir=$(echo "$selected_line" | cut -d'|' -f5)
     else
-      # Multiple features — show menu
-      echo ""
-      echo -e "${BOLD}${CYAN}Resume which feature?${NC}"
-      echo ""
-      while IFS='|' read -r idx desc step status dir alive; do
-        local_num=$((idx + 1))
-        # Status icon
-        case "$status" in
-          done|skipped) icon="${GREEN}✓${NC}" ;;
-          in_progress)  icon="${YELLOW}▶${NC}" ;;
-          failed)       icon="${RED}✗${NC}" ;;
-          *)            icon="⬚" ;;
-        esac
-        # Dead worktree warning
-        dead_marker=""
-        [ "$alive" = "False" ] && dead_marker=" ${RED}(worktree missing)${NC}"
-        printf "  %b %d) %-50s  %b %-20s %b\n" "$icon" "$local_num" "${desc:0:50}" "$icon" "$step" "$dead_marker"
-      done <<< "$resume_options"
-      echo ""
-      read -r -p "  Select [1-${option_count}]: " pick
-
-      if [[ "$pick" =~ ^[0-9]+$ ]] && [ "$pick" -ge 1 ] && [ "$pick" -le "$option_count" ]; then
-        selected_line=$(echo "$resume_options" | sed -n "${pick}p")
-        FEATURE_DESC=$(echo "$selected_line" | cut -d'|' -f2)
-      else
-        fail "Invalid selection"
-        exit 1
-      fi
+      fail "Invalid selection"
+      exit 1
     fi
+  fi
+
+  # Re-launch from the selected worktree
+  if [ -n "$selected_wt_dir" ] && [ -d "$selected_wt_dir" ]; then
+    log "Re-launching from worktree: ${selected_wt_dir}"
+    cd "$selected_wt_dir"
+    exec "$0" "${ORIGINAL_ARGS[@]}" "$FEATURE_DESC"
   fi
 fi
 
@@ -1943,9 +1888,6 @@ fi
 if [ -z "$FEATURE_DESC" ] && [ -f "$STATE_FILE" ]; then
   FEATURE_DESC=$(python3 -c "import json; print(json.load(open('$STATE_FILE')).get('feature_desc',''))" 2>/dev/null || echo "")
 fi
-
-# Remember original pipeline dir before worktree switch
-ORIGINAL_PIPELINE_DIR="$PIPELINE_DIR"
 
 # Restore worktree state if resuming
 restore_worktree_state
@@ -2073,8 +2015,7 @@ while [ "$i" -lt "${#STEP_FUNCS[@]}" ]; do
     break
   fi
 
-  recover "${ALL_STEPS[$i]}"
-  recover_rc=$?
+  recover "${ALL_STEPS[$i]}" && recover_rc=0 || recover_rc=$?
   if [ "$recover_rc" -eq 0 ]; then
     # Interactive fix session completed — retry the step
     refresh_display
@@ -2107,7 +2048,7 @@ if [ "$i" -ge "${#STEP_FUNCS[@]}" ]; then
 
   # Commit any uncommitted artifacts (retro, manual-test results, etc.)
   log "Committing final artifacts..."
-  git add docs/ .pipeline/ .memory/ 2>/dev/null || true
+  git add .docs/ .pipeline/ .memory/ 2>/dev/null || true
   if ! git diff --cached --quiet 2>/dev/null; then
     git commit -m "Add SHIP phase artifacts: retro, manual-test results
 
@@ -2126,7 +2067,7 @@ Co-Authored-By: conduct" 2>/dev/null || true
   echo ""
   echo -e "${GREEN}${BOLD}SDLC complete.${NC}"
   [ -n "$pr_url" ] && echo -e "  PR: ${pr_url}"
-  echo "  Retro: $(ls docs/retros/*.md 2>/dev/null | head -1 || echo 'docs/retros/')"
+  echo "  Retro: $(ls .docs/retros/*.md 2>/dev/null | head -1 || echo '.docs/retros/')"
   echo "  Cleanup: conduct --reset"
   echo ""
 else

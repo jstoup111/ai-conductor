@@ -1,11 +1,11 @@
 #!/bin/bash
 # On session start, load harness context into Claude's context window.
-# Reads .memory/index.md and summarizes docs/ state.
+# Reads .memory/index.md and summarizes .docs/ state.
 set -e
 
 MEMORY_INDEX=".memory/index.md"
-STORIES_DIR="docs/stories"
-PLANS_DIR="docs/plans"
+STORIES_DIR=".docs/stories"
+PLANS_DIR=".docs/plans"
 PIPELINE_STATE=".pipeline/task-status.json"
 
 echo "=== Harness Context ==="
@@ -24,7 +24,7 @@ fi
 # Stories
 if compgen -G "${STORIES_DIR}/*.md" > /dev/null 2>&1; then
   STORY_COUNT=$(ls -1 "${STORIES_DIR}/"*.md 2>/dev/null | wc -l)
-  echo "Stories: ${STORY_COUNT} files in docs/stories/"
+  echo "Stories: ${STORY_COUNT} files in .docs/stories/"
   DRAFT_COUNT=$(grep -rl "Status: DRAFT" "$STORIES_DIR" 2>/dev/null | wc -l || echo "0")
   if [ "$DRAFT_COUNT" -gt 0 ]; then
     echo "  (${DRAFT_COUNT} still in DRAFT status — need /stories review)"

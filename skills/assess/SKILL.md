@@ -40,7 +40,7 @@ Before dispatching specialists, gather context they all need:
 
 1. **Codebase file listing** — `find . -type f` filtered to source/config files (exclude vendor, node_modules, .git, tmp, log)
 2. **Tech-context** — if loaded in session from `/bootstrap`, include it
-3. **Existing decisions** — list files in `docs/decisions/` so architecture specialist can cross-reference
+3. **Existing decisions** — list files in `.docs/decisions/` so architecture specialist can cross-reference
 
 ### 4. Dispatch Specialists (3 Batches of 3)
 
@@ -102,7 +102,7 @@ Use the template from templates/technical-assessment.md.template.
 Project name: [project name]
 Date: [YYYY-MM-DD]
 
-Write the final assessment report to docs/decisions/technical-assessment-[YYYY-MM-DD].md.
+Write the final assessment report to .docs/decisions/technical-assessment-[YYYY-MM-DD].md.
 ```
 
 Model: opus (cross-referencing 9 reports requires deep reasoning).
@@ -139,7 +139,7 @@ Save assessment metadata to `.pipeline/conduct-state.json`:
 
 - [ ] `.pipeline/assessment/` directory created
 - [ ] All 9 specialist reports written (or single report for `--area` mode)
-- [ ] CTO orchestrator report written to `docs/decisions/technical-assessment-YYYY-MM-DD.md`
+- [ ] CTO orchestrator report written to `.docs/decisions/technical-assessment-YYYY-MM-DD.md`
 - [ ] Report follows template structure from `templates/technical-assessment.md.template`
 - [ ] Verdict is one of: HEALTHY, NEEDS_WORK, CRITICAL
 - [ ] Assessment metadata saved to `.pipeline/conduct-state.json`
