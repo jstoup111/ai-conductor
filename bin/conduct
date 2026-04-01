@@ -346,40 +346,12 @@ else:
 
 # ─── Artifact Checks ─────────────────────────────────────────────────────────
 
-# Only count artifacts created AFTER the current conduct run started.
-# This prevents pre-existing artifacts from a prior workflow from
-# short-circuiting the current feature's steps.
-RUN_STARTED_AT=""
-
-get_run_start_time() {
-  if [ -z "$RUN_STARTED_AT" ] && [ -f "$STATE_FILE" ]; then
-    RUN_STARTED_AT=$(python3 -c "import json; print(json.load(open('$STATE_FILE')).get('run_started_at',''))" 2>/dev/null || echo "")
-  fi
-  echo "${RUN_STARTED_AT:-0}"
-}
-
-# Check if any files matching a glob were modified after the run started
-has_recent_artifacts() {
+# Check if any files matching a glob exist.
+# The state file (conduct-state.json) tracks per-step completion.
+# Artifact checks only need to verify files are present, not timestamp them.
+has_artifacts() {
   local pattern=$1
-  local start_time
-  start_time=$(get_run_start_time)
-  # If no start time recorded, fall back to existence check
-  if [ "$start_time" = "0" ] || [ -z "$start_time" ]; then
-    compgen -G "$pattern" > /dev/null 2>&1
-    return $?
-  fi
-  # Check for files newer than start time
-  local found=false
-  for f in $pattern; do
-    [ -f "$f" ] || continue
-    local mtime
-    mtime=$(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f" 2>/dev/null || echo 0)
-    if [ "$mtime" -ge "$start_time" ] 2>/dev/null; then
-      found=true
-      break
-    fi
-  done
-  $found
+  compgen -G "$pattern" > /dev/null 2>&1
 }
 
 check_bootstrap() {
@@ -397,56 +369,41 @@ check_assess() {
 }
 
 check_brainstorm() {
-  has_recent_artifacts "${PROJECT_DIR}/docs/specs/*.md"
+  has_artifacts "${PROJECT_DIR}/docs/specs/*.md"
 }
 
 check_stories() {
-  has_recent_artifacts "${PROJECT_DIR}/docs/stories/*.md" || return 1
-  # DRAFT stories don't count as complete — but only check recent ones
-  local start_time
-  start_time=$(get_run_start_time)
-  if [ "$start_time" != "0" ] && [ -n "$start_time" ]; then
-    for f in ${PROJECT_DIR}/docs/stories/*.md; do
-      [ -f "$f" ] || continue
-      local mtime
-      mtime=$(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f" 2>/dev/null || echo 0)
-      if [ "$mtime" -ge "$start_time" ] 2>/dev/null; then
-        if grep -q "Status: DRAFT" "$f" 2>/dev/null; then
-          return 1
-        fi
-      fi
-    done
-  else
-    if grep -rl "Status: DRAFT" "${PROJECT_DIR}/docs/stories/" > /dev/null 2>&1; then
-      return 1
-    fi
+  has_artifacts "${PROJECT_DIR}/docs/stories/*.md" || return 1
+  # DRAFT stories don't count as complete
+  if grep -rl "Status: DRAFT" "${PROJECT_DIR}/docs/stories/" > /dev/null 2>&1; then
+    return 1
   fi
   return 0
 }
 
 check_conflict_check() {
-  has_recent_artifacts "${PROJECT_DIR}/docs/conflicts/*.md"
+  has_artifacts "${PROJECT_DIR}/docs/conflicts/*.md"
 }
 
 check_plan() {
-  has_recent_artifacts "${PROJECT_DIR}/docs/plans/*.md"
+  has_artifacts "${PROJECT_DIR}/docs/plans/*.md"
 }
 
 check_architecture_review() {
-  has_recent_artifacts "${PROJECT_DIR}/docs/decisions/architecture-review-*.md"
+  has_artifacts "${PROJECT_DIR}/docs/decisions/architecture-review-*.md"
 }
 
 check_acceptance_specs() {
   # Check common test locations across stacks
-  has_recent_artifacts "${PROJECT_DIR}/spec/integration/*_spec.rb" || \
-  has_recent_artifacts "${PROJECT_DIR}/spec/system/*_spec.rb" || \
-  has_recent_artifacts "${PROJECT_DIR}/tests/integration/test_*.py" || \
-  has_recent_artifacts "${PROJECT_DIR}/tests/acceptance/test_*.py" || \
-  has_recent_artifacts "${PROJECT_DIR}/spec/integration/*.py" || \
-  has_recent_artifacts "${PROJECT_DIR}/spec/acceptance/*.py" || \
-  has_recent_artifacts "${PROJECT_DIR}/tests/**/test_*_acceptance.py" || \
-  has_recent_artifacts "${PROJECT_DIR}/test/integration/*.test.*" || \
-  has_recent_artifacts "${PROJECT_DIR}/tests/e2e/*.py"
+  has_artifacts "${PROJECT_DIR}/spec/integration/*_spec.rb" || \
+  has_artifacts "${PROJECT_DIR}/spec/system/*_spec.rb" || \
+  has_artifacts "${PROJECT_DIR}/tests/integration/test_*.py" || \
+  has_artifacts "${PROJECT_DIR}/tests/acceptance/test_*.py" || \
+  has_artifacts "${PROJECT_DIR}/spec/integration/*.py" || \
+  has_artifacts "${PROJECT_DIR}/spec/acceptance/*.py" || \
+  has_artifacts "${PROJECT_DIR}/tests/**/test_*_acceptance.py" || \
+  has_artifacts "${PROJECT_DIR}/test/integration/*.test.*" || \
+  has_artifacts "${PROJECT_DIR}/tests/e2e/*.py"
 }
 
 check_build() {
@@ -1980,7 +1937,6 @@ if 'run_started_at' not in state:
 with open(path, 'w') as f:
     json.dump(state, f, indent=2)
 " "$FEATURE_DESC"
-  RUN_STARTED_AT=$(python3 -c "import json; print(json.load(open('$STATE_FILE')).get('run_started_at','0'))" 2>/dev/null || echo "0")
 fi
 
 # Restore feature description from state if resuming without one
