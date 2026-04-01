@@ -69,7 +69,16 @@ Note in CLAUDE.md so skills reference session-loaded context.
 Generate from `templates/claudeignore.template`. Remove stack-irrelevant sections (e.g., Rails
 sections for Node projects). If `.claudeignore` already exists, do NOT overwrite.
 
+### 3c. Generate PR Template
+
+Copy `templates/pull_request_template.md` to `.github/pull_request_template.md`.
+Create `.github/` directory if it doesn't exist. If a PR template already exists, do NOT overwrite.
+The template contains `[feature_description]`, `[story_count]`, and `[branch]` placeholders
+that `conduct` fills in when creating the PR after retro.
+
 ### 4. Analyze Existing Code (Existing Projects Only)
+
+This step performs a **structural scan only** — file counts, directory layout, test framework detection. Deep analysis of security, architecture, testing strategy, dependencies, and code health has moved to `/assess`.
 
 **Skip for new/fresh projects.** Build an inventory:
 
@@ -82,6 +91,8 @@ sections for Node projects). If `.claudeignore` already exists, do NOT overwrite
 Present inventory summary to user before proceeding.
 
 ### 4b. Draft As-Built Stories (Existing Projects Only)
+
+If a recent assessment report exists (`docs/decisions/technical-assessment-*.md`), reference its findings as additional context for story drafting.
 
 **Priority order for story sources:**
 1. `docs/plans/*.md` — if existing plans exist, derive stories from them first. Plans represent
@@ -98,6 +109,8 @@ issue/PR reference. Bootstrap does NOT validate stories — the normal flow hand
 
 ### 4c. Document Existing Architectural Decisions (Existing Projects Only)
 
+If a recent assessment report exists, defer to `/assess`'s architecture findings for deeper analysis. Bootstrap ADRs capture only what is observable in code — the assessment provides the judgment layer.
+
 Surface implicit decisions as ADRs in `docs/decisions/` using `templates/adr.md.template`.
 
 **Detect:** framework+version, database, auth approach, API format, test framework,
@@ -111,8 +124,12 @@ background jobs, key architecture-shaping libraries.
 ### 5. Set Up Project Directories
 
 Create if missing (idempotent): `.memory/` (decisions/, patterns/, gotchas/, context/,
-index.md), `.pipeline/` (audit-trail/), `docs/` (specs/, stories/, conflicts/, plans/,
-decisions/, retros/).
+index.md), `.pipeline/` (audit-trail/), `.worktrees/`, `docs/` (specs/, stories/, conflicts/,
+plans/, decisions/, retros/).
+
+Add to `.gitignore` (idempotent — don't duplicate):
+- `.pipeline/` — runtime state, not source
+- `.worktrees/` — git worktrees for parallel feature development
 
 ### 6. Generate or Update CLAUDE.md
 
@@ -172,6 +189,7 @@ Report failures before proceeding — a broken foundation wastes all downstream 
 - [ ] Existing architectural decisions documented as ADRs (if existing project)
 - [ ] .memory/ created and seeded (if existing project)
 - [ ] docs/ subdirectories created
+- [ ] `.github/pull_request_template.md` created (if not already present)
 - [ ] CLAUDE.md generated or appended — never overwritten
 - [ ] Worktree-compatible infrastructure configuration
 - [ ] Smoke test passed

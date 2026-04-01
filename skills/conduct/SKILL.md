@@ -19,6 +19,7 @@ Does NOT run other skills internally — it assesses state and directs. The user
 ```
 Step 1:  /bootstrap             → UNDERSTAND
 Step 2:  /memory                → UNDERSTAND
+Step 2.5: /assess               → UNDERSTAND (existing projects only — skipped for new)
 Step 3:  /brainstorm            → DECIDE
 Step 4:  Complexity Assessment   → DECIDE (classify S/M/L, determines which steps run)
 Step 5:  Worktree setup          → DECIDE (create feature branch + worktree — all subsequent commits are isolated)
@@ -43,17 +44,19 @@ Check for these artifacts in order. The **first missing artifact** determines th
 |------|-------|---------------|
 | 1. bootstrap | Project CLAUDE.md exists AND `.memory/` directory exists AND `docs/` subdirectories exist | Glob for `CLAUDE.md` in project root, check `.memory/index.md`, check `docs/specs/` exists |
 | 2. memory | `.memory/index.md` has been read this session | Memory recall happens automatically — if bootstrap is done, mark this as done |
+| 2.5. assess | Assessment report exists OR skipped (new project) | Glob `docs/decisions/technical-assessment-*.md` or check state is "skipped" |
 | 3. brainstorm | At least one file exists in `docs/specs/` | Glob `docs/specs/*.md` |
 | 4. complexity | Complexity tier set in `.pipeline/conduct-state.json` | Check `complexity_tier` key exists and is S, M, or L |
-| 5. stories | At least one **accepted** story exists in `docs/stories/` (not just DRAFT) | Glob `docs/stories/*.md` — if all stories contain `Status: DRAFT`, this step is pending |
-| 6. conflict-check | Conflict report exists in `docs/conflicts/` OR skipped (Small tier) | Glob `docs/conflicts/*.md` or check state is "skipped" |
-| 7. plan | At least one file exists in `docs/plans/` | Glob `docs/plans/*.md` |
-| 8. architecture-review | Review exists in `docs/decisions/` OR skipped (Small tier) | Glob `docs/decisions/architecture-review-*.md` or check state is "skipped" |
-| 9. writing-system-tests | Acceptance specs exist OR skipped (Small tier) | Glob `spec/integration/*_spec.rb` or `spec/system/*_spec.rb`, or check state is "skipped" |
-| 10. build | Implementation tasks completed with passing tests | Check `.pipeline/task-status.json` or test suite passes. Pipeline evaluator satisfies code-review gate. |
-| 11. finish | Fresh verification has been performed | Build complete + tests pass |
-| 12. manual-test | Manual test results exist with no FAILs | Glob `docs/manual-test-results.md` — if file contains FAIL rows, step is pending |
-| 13. retro | Retro report exists in `docs/retros/` | Glob `docs/retros/*.md` |
+| 5. worktree | Feature worktree created | Check `.pipeline/conduct-state.json` worktree state is "done" or "skipped" |
+| 6. stories | At least one **accepted** story exists in `docs/stories/` (not just DRAFT) | Glob `docs/stories/*.md` — if all stories contain `Status: DRAFT`, this step is pending |
+| 7. conflict-check | Conflict report exists in `docs/conflicts/` OR skipped (Small tier) | Glob `docs/conflicts/*.md` or check state is "skipped" |
+| 8. plan | At least one file exists in `docs/plans/` | Glob `docs/plans/*.md` |
+| 9. architecture-review | Review exists in `docs/decisions/` OR skipped (Small tier) | Glob `docs/decisions/architecture-review-*.md` or check state is "skipped" |
+| 10. writing-system-tests | Acceptance specs exist OR skipped (Small tier) | Glob `spec/integration/*_spec.rb` or `spec/system/*_spec.rb`, or check state is "skipped" |
+| 11. build | Implementation tasks completed with passing tests | Check `.pipeline/task-status.json` or test suite passes. Pipeline evaluator satisfies code-review gate. |
+| 12. finish | Fresh verification has been performed | Build complete + tests pass |
+| 13. manual-test | Manual test results exist with no FAILs | Glob `docs/manual-test-results.md` — if file contains FAIL rows, step is pending |
+| 14. retro | Retro report exists in `docs/retros/` | Glob `docs/retros/*.md` |
 
 ### 2. Report Status
 
@@ -143,6 +146,7 @@ Before suggesting the next step, verify that the previous step's **quality gates
 |------|-----------|--------|
 | bootstrap | No (gating) | Other skills need CLAUDE.md and directory structure |
 | memory | Yes (advisory) | Fresh project may have no memory |
+| assess | Yes (advisory) | Skipped for new projects; optional on-demand for existing |
 | brainstorm | Yes (advisory) | User may already have a clear design |
 | stories | No (gating) | Negative paths are mandatory for TDD |
 | conflict-check | Tier-dependent | Skip for Small, required for Medium/Large |
@@ -193,7 +197,7 @@ Harness test complete. Review the retro for improvement findings.
 ## Verification
 
 - [ ] Correctly identifies current step from artifact state
-- [ ] Status dashboard shows all 10 steps with correct status
+- [ ] Status dashboard shows all 15 steps with correct status
 - [ ] Gate enforcement blocks progression when quality gates not met
 - [ ] Skippable vs non-skippable steps correctly enforced
 - [ ] Re-entry works (picks up from current state, doesn't restart)

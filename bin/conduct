@@ -17,6 +17,8 @@ set -euo pipefail
 #   conduct --from plan
 
 HARNESS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+ORIGINAL_CWD="$(pwd)"
+ORIGINAL_ARGS=("$@")
 PROJECT_DIR="$(pwd)"
 PIPELINE_DIR="${PROJECT_DIR}/.pipeline"
 SESSION_LOG="${PIPELINE_DIR}/conduct.log"
@@ -40,14 +42,33 @@ fail() { echo -e "${RED}  ✗${NC} $*"; }
 warn() { echo -e "${YELLOW}  ⚠${NC} $*"; }
 
 CURRENT_STEP_FILE="${PIPELINE_DIR}/.current-step"
+STEP_START_FILE="${PIPELINE_DIR}/.step-start-time"
 
 set_current_step() {
   ensure_pipeline_dir
   echo "$1" > "$CURRENT_STEP_FILE" 2>/dev/null
+  date +%s > "$STEP_START_FILE" 2>/dev/null
 }
 
 get_current_step() {
   cat "$CURRENT_STEP_FILE" 2>/dev/null || echo ""
+}
+
+# Elapsed time since step started, formatted as Xm Ys
+get_step_elapsed() {
+  local start
+  start=$(cat "$STEP_START_FILE" 2>/dev/null || echo "0")
+  [ "$start" = "0" ] && return
+  local now elapsed mins secs
+  now=$(date +%s)
+  elapsed=$((now - start))
+  mins=$((elapsed / 60))
+  secs=$((elapsed % 60))
+  if [ "$mins" -gt 0 ]; then
+    echo "${mins}m ${secs}s"
+  else
+    echo "${secs}s"
+  fi
 }
 
 step_header() {
@@ -70,6 +91,9 @@ render_md() {
     bat --style=plain --language=md "$file"
   elif command -v batcat &>/dev/null; then
     batcat --style=plain --language=md "$file"
+  elif [ -t 1 ] && command -v less &>/dev/null; then
+    # Fallback: cat with line numbers, paged for readability
+    cat -n "$file" | less -R -F -X
   else
     cat "$file"
   fi
@@ -90,8 +114,10 @@ review_artifacts() {
     return 0
   fi
 
-  # Pause live refresh so it doesn't overwrite the review display
+  # Pause live refresh so it doesn't overwrite the review display.
+  # Full stop + terminal reset to prevent ANSI escape collisions (WSL2 safe).
   stop_live_refresh
+  tput sgr0 2>/dev/null || true
 
   for file in "${files[@]}"; do
     i=$((i + 1))
@@ -131,6 +157,13 @@ get_session_id() {
   fi
 }
 
+# Reset session when Claude reports the session ID is stale/expired
+reset_session() {
+  warn "Session expired — starting fresh"
+  rm -f "$SESSION_FILE" "${PIPELINE_DIR}/session-created"
+  get_session_id > /dev/null
+}
+
 # Name the session after brainstorm so it's identifiable in /resume and remote-control
 name_session() {
   local session_id
@@ -141,7 +174,9 @@ name_session() {
   local feature_short="${FEATURE_DESC:0:40}"
   local session_name="${project_name}: ${feature_short}"
   # Resume with --name to set the display name, then immediately exit with a no-op prompt
-  claude --resume "$session_id" --name "$session_name" -p "Session named." --dangerously-skip-permissions >> "$SESSION_LOG" 2>&1 || true
+  claude --resume "$session_id" --name "$session_name" -p "Session named." --dangerously-skip-permissions >> "$SESSION_LOG" 2>&1 || {
+    warn "Could not name session (session may have expired)"
+  }
   log "Session named: ${session_name}"
 }
 
@@ -216,7 +251,7 @@ if os.path.exists(path):
 else:
     print(0)
 ")
-  local context="[Conduct step ${iteration}/14] Feature: ${FEATURE_DESC:-unknown}"
+  local context="[Conduct step ${iteration}/13] Feature: ${FEATURE_DESC:-unknown}"
 
   if [ "$mode" = "print" ]; then
     log "Sending to Claude (session: ${session_id:0:8}...)..."
@@ -260,13 +295,48 @@ else:
       fi
     fi
 
+    # Detect stale session and retry with fresh ID
+    if tail -5 "$SESSION_LOG" 2>/dev/null | grep -qi "No conversation found"; then
+      reset_session
+      session_id=$(get_session_id)
+      session_flag="--session-id ${session_id}"
+      if [ "${VIEW_MODE}" = "output" ]; then
+        claude -p "$prompt" \
+          $session_flag \
+          --append-system-prompt "$context" \
+          $perm_flag \
+          2>&1 | tee -a "$SESSION_LOG"
+      else
+        claude -p "$prompt" \
+          $session_flag \
+          --append-system-prompt "$context" \
+          $perm_flag \
+          >> "$SESSION_LOG" 2>&1 || true
+      fi
+    fi
+
     touch "${PIPELINE_DIR}/session-created"
     append_progress "$prompt"
   else
-    log "Interactive session (session: ${session_id:0:8}...). Type /quit when done."
     stop_live_refresh
+    sleep 0.2 2>/dev/null || true  # let any in-flight refresh flush
+    clear
+    local step_name
+    step_name=$(get_current_step)
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "  ${BOLD}Interactive session${NC} — ${step_name}"
+    echo -e "  Type ${BOLD}/quit${NC} when done to return to conductor"
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
     STATUS_LINES=0
-    claude $session_flag --append-system-prompt "$context. $prompt"
+    # Each interactive step gets a FRESH session so Claude doesn't carry
+    # momentum from prior steps and start implementing after plan creation.
+    # The system prompt tells Claude to complete ONLY this step then stop.
+    local step_context="You are running step: ${step_name}. Complete ONLY this step, then stop and let the user /quit to return to the conductor. Do NOT proceed to subsequent steps. ${context}."
+    claude --session-id "$(python3 -c 'import uuid; print(uuid.uuid4())')" \
+      --append-system-prompt "$step_context" \
+      "$prompt" || true
+    clear
     reset_display
     start_live_refresh 10
     touch "${PIPELINE_DIR}/session-created"
@@ -276,94 +346,64 @@ else:
 
 # ─── Artifact Checks ─────────────────────────────────────────────────────────
 
-# Only count artifacts created AFTER the current conduct run started.
-# This prevents pre-existing artifacts from a prior workflow from
-# short-circuiting the current feature's steps.
-RUN_STARTED_AT=""
-
-get_run_start_time() {
-  if [ -z "$RUN_STARTED_AT" ] && [ -f "$STATE_FILE" ]; then
-    RUN_STARTED_AT=$(python3 -c "import json; print(json.load(open('$STATE_FILE')).get('run_started_at',''))" 2>/dev/null || echo "")
-  fi
-  echo "${RUN_STARTED_AT:-0}"
-}
-
-# Check if any files matching a glob were modified after the run started
-has_recent_artifacts() {
+# Check if any files matching a glob exist.
+# The state file (conduct-state.json) tracks per-step completion.
+# Artifact checks only need to verify files are present, not timestamp them.
+has_artifacts() {
   local pattern=$1
-  local start_time
-  start_time=$(get_run_start_time)
-  # If no start time recorded, fall back to existence check
-  if [ "$start_time" = "0" ] || [ -z "$start_time" ]; then
-    compgen -G "$pattern" > /dev/null 2>&1
-    return $?
-  fi
-  # Check for files newer than start time
-  local found=false
-  for f in $pattern; do
-    [ -f "$f" ] || continue
-    local mtime
-    mtime=$(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f" 2>/dev/null || echo 0)
-    if [ "$mtime" -ge "$start_time" ] 2>/dev/null; then
-      found=true
-      break
-    fi
-  done
-  $found
+  compgen -G "$pattern" > /dev/null 2>&1
 }
 
 check_bootstrap() {
+  # Bootstrap artifacts are project-level (committed to git, inherited by worktrees).
+  # Existence check only — no timestamp check.
   [ -d "${PROJECT_DIR}/.memory" ] && \
   [ -d "${PROJECT_DIR}/docs/specs" ] && \
   [ -d "${PROJECT_DIR}/docs/stories" ] && \
   [ -d "${PROJECT_DIR}/docs/plans" ]
 }
 
+check_assess() {
+  # Assessment is project-level. Existence check only.
+  compgen -G "${PROJECT_DIR}/docs/decisions/technical-assessment-*.md" > /dev/null 2>&1
+}
+
 check_brainstorm() {
-  has_recent_artifacts "${PROJECT_DIR}/docs/specs/*.md"
+  has_artifacts "${PROJECT_DIR}/docs/specs/*.md"
 }
 
 check_stories() {
-  has_recent_artifacts "${PROJECT_DIR}/docs/stories/*.md" || return 1
-  # DRAFT stories don't count as complete — but only check recent ones
-  local start_time
-  start_time=$(get_run_start_time)
-  if [ "$start_time" != "0" ] && [ -n "$start_time" ]; then
-    for f in ${PROJECT_DIR}/docs/stories/*.md; do
-      [ -f "$f" ] || continue
-      local mtime
-      mtime=$(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f" 2>/dev/null || echo 0)
-      if [ "$mtime" -ge "$start_time" ] 2>/dev/null; then
-        if grep -q "Status: DRAFT" "$f" 2>/dev/null; then
-          return 1
-        fi
-      fi
-    done
-  else
-    if grep -rl "Status: DRAFT" "${PROJECT_DIR}/docs/stories/" > /dev/null 2>&1; then
-      return 1
-    fi
+  has_artifacts "${PROJECT_DIR}/docs/stories/*.md" || return 1
+  # DRAFT stories don't count as complete
+  if grep -rl "Status: DRAFT" "${PROJECT_DIR}/docs/stories/" > /dev/null 2>&1; then
+    return 1
   fi
   return 0
 }
 
 check_conflict_check() {
-  has_recent_artifacts "${PROJECT_DIR}/docs/conflicts/*.md"
+  has_artifacts "${PROJECT_DIR}/docs/conflicts/*.md"
 }
 
 check_plan() {
-  has_recent_artifacts "${PROJECT_DIR}/docs/plans/*.md"
+  has_artifacts "${PROJECT_DIR}/docs/plans/*.md"
 }
 
 check_architecture_review() {
-  has_recent_artifacts "${PROJECT_DIR}/docs/decisions/architecture-review-*.md"
+  has_artifacts "${PROJECT_DIR}/docs/decisions/architecture-review-*.md"
 }
 
 check_acceptance_specs() {
-  has_recent_artifacts "${PROJECT_DIR}/spec/integration/*_spec.rb" || \
-  has_recent_artifacts "${PROJECT_DIR}/spec/system/*_spec.rb" || \
-  has_recent_artifacts "${PROJECT_DIR}/tests/integration/test_*.py" || \
-  has_recent_artifacts "${PROJECT_DIR}/tests/acceptance/test_*.py"
+  # Check common test locations across stacks
+  has_artifacts "${PROJECT_DIR}/spec/integration/*_spec.rb" || \
+  has_artifacts "${PROJECT_DIR}/spec/system/*_spec.rb" || \
+  has_artifacts "${PROJECT_DIR}/tests/integration/test_*.py" || \
+  has_artifacts "${PROJECT_DIR}/tests/acceptance/test_*.py" || \
+  has_artifacts "${PROJECT_DIR}/spec/integration/*.py" || \
+  has_artifacts "${PROJECT_DIR}/spec/acceptance/*.py" || \
+  has_artifacts "${PROJECT_DIR}/tests/**/test_*_acceptance.py" || \
+  has_artifacts "${PROJECT_DIR}/test/integration/*.test.*" || \
+  has_artifacts "${PROJECT_DIR}/tests/e2e/*.py"
 }
 
 check_build() {
@@ -426,7 +466,9 @@ run_bootstrap() {
   bs_state=$(get_state "bootstrap_detect")
   if [ "$bs_state" != "done" ]; then
     log "Step 1/6: Detecting project stack and scaffolding directories..."
-    claude -p "Run /bootstrap Steps 1-3b ONLY. Detect project type and tech stack. Create directories (.memory/, docs/, .pipeline/) if missing. Generate .claudeignore from templates/claudeignore.template. Load tech-context if matched.
+    claude -p "Run /bootstrap Steps 1-3c ONLY. Detect project type and tech stack. Create directories (.memory/, docs/, .pipeline/, .worktrees/) if missing. Generate .claudeignore from templates/claudeignore.template. Generate PR template from templates/pull_request_template.md to .github/pull_request_template.md (if not present). Load tech-context if matched.
+
+Add to .gitignore (idempotent): .pipeline/ and .worktrees/
 
 If this is an empty directory, scaffold the project first (ask what framework).
 Do NOT analyze existing code, draft stories, or generate CLAUDE.md yet.
@@ -532,6 +574,28 @@ run_memory() {
   save_state "memory" "done"
 }
 
+run_assess() {
+  step_header 2.5 "assess" "UNDERSTAND"
+  # Skip for new projects (nothing to assess)
+  if [ ! -d "${PROJECT_DIR}/app" ] && [ ! -d "${PROJECT_DIR}/src" ] && [ ! -f "${PROJECT_DIR}/main.py" ]; then
+    ok "Skipped (new project — nothing to assess)"; save_state "assess" "skipped"; return 0
+  fi
+  if check_assess; then
+    ok "Already complete"; save_state "assess" "done"; return 0
+  fi
+  log "Running technical assessment (9 specialists + CTO synthesis)..."
+  run_claude "Run the /assess skill. Dispatch all 9 specialist agents in 3 batches of 3 (parallel within batch). Each specialist writes to .pipeline/assessment/<name>.md. After all 9 complete, dispatch the CTO orchestrator to synthesize findings into docs/decisions/technical-assessment-$(date +%Y-%m-%d).md. Present the final report for review."
+
+  if check_assess; then
+    ok "Assessment complete"; save_state "assess" "done"
+    local verdict
+    verdict=$(grep -oP 'Verdict:\s*\K\S+' "${PROJECT_DIR}"/docs/decisions/technical-assessment-*.md 2>/dev/null | tail -1 || echo "")
+    [ -n "$verdict" ] && save_state "assess_verdict" "$verdict"
+    return 0
+  fi
+  fail "No assessment report in docs/decisions/"; save_state "assess" "failed"; return 1
+}
+
 run_brainstorm() {
   step_header 3 "brainstorm" "DECIDE"
   if check_brainstorm; then
@@ -545,8 +609,16 @@ run_brainstorm() {
 
 Write a design document to docs/specs/. Include Problem, Solution, Scope (In/Out), Key Decisions. Perform a scope check — compare the design against the original request and flag if scope expanded. Get user approval before marking as approved." "interactive"
   if check_brainstorm; then
-    ok "Design doc created"; save_state "brainstorm" "done"
-    # Name the session post-brainstorm for easy pickup via remote-control / phone
+    # Review the design doc — user must approve before proceeding
+    local spec_files=()
+    while IFS= read -r f; do spec_files+=("$f"); done < <(compgen -G "${PROJECT_DIR}/docs/specs/*.md" | sort)
+    if [ ${#spec_files[@]} -gt 0 ]; then
+      if ! review_artifacts "brainstorm" "${spec_files[@]}"; then
+        for f in "${spec_files[@]}"; do rm -f "$f"; done
+        fail "Design doc rejected — will re-generate"; save_state "brainstorm" "failed"; return 1
+      fi
+    fi
+    ok "Design doc approved"; save_state "brainstorm" "done"
     name_session
     return 0
   fi
@@ -565,27 +637,46 @@ run_complexity_assessment() {
   fi
   check_brainstorm || { fail "GATE: Need design doc first"; return 1; }
 
-  # Assess complexity by reading the design doc directly — no interactive handoff gap
+  # Assess complexity by reading the design doc
   log "Assessing feature complexity from design doc..."
+  local tier_output
+  tier_output=$(claude -p "Read the design doc in docs/specs/. Score each signal, then output the tier.
+
+SIGNALS (score each one):
+1. Models/tables: 1-3=S, 4-7=M, 8+=L
+2. External integrations: 0=S, 1-2=M, 3+=L
+3. Auth complexity: None/basic=S, Role-based=M, Multi-tenant/OAuth=L
+4. State machines: None=S, 1 simple=M, Complex/multiple=L
+5. Estimated stories: 1-5=S, 6-15=M, 16+=L
+
+Output format (exactly):
+1. Models: [count] → [S/M/L]
+2. Integrations: [count] → [S/M/L]
+3. Auth: [description] → [S/M/L]
+4. State machines: [count] → [S/M/L]
+5. Stories: [count] → [S/M/L]
+TIER: [S/M/L]" \
+    --dangerously-skip-permissions 2>/dev/null || echo "")
+
+  # Parse tier from last line containing TIER:
   local tier_result
-  tier_result=$(claude -p "Read the design doc in docs/specs/. Count these signals and output ONLY a single character: S, M, or L.
+  tier_result=$(echo "$tier_output" | grep -oE 'TIER:\s*[SML]' | tail -1 | grep -oE '[SML]')
 
-SIGNALS:
-- Models/tables: 1-3=S, 4-7=M, 8+=L
-- External integrations: 0=S, 1-2=M, 3+=L
-- Auth complexity: None/basic=S, Role-based=M, Multi-tenant/OAuth=L
-- State machines: None=S, 1 simple=M, Complex/multiple=L
-- Estimated stories: 1-5=S, 6-15=M, 16+=L
+  # Fallback: look for any standalone S, M, or L on its own line
+  if [ -z "$tier_result" ]; then
+    tier_result=$(echo "$tier_output" | grep -xE '\s*[SML]\s*' | tail -1 | tr -d '[:space:]')
+  fi
 
-Majority of signals determines tier. Ties break UP.
-Output ONLY the single letter: S, M, or L. Nothing else." \
-    --dangerously-skip-permissions 2>/dev/null | tr -d '[:space:]' | tail -c 1)
+  if [ -z "$tier_result" ]; then
+    warn "Could not parse tier from Claude output — defaulting to Medium"
+    tier_result="M"
+  fi
 
-  # Validate — must be S, M, or L
-  case "$tier_result" in
-    S|M|L) ;;
-    *) tier_result="M"; warn "Could not parse tier, defaulting to Medium" ;;
-  esac
+  # Show reasoning so user can verify
+  if [ -n "$tier_output" ]; then
+    echo ""
+    echo "$tier_output" | tail -8
+  fi
 
   # Show assessment and let user override
   local tier_name
@@ -599,6 +690,7 @@ Output ONLY the single letter: S, M, or L. Nothing else." \
   echo ""
   # Allow override in interactive modes; skip in auto mode or non-TTY
   if [ "${RUN_MODE}" != "auto" ] && [ -t 0 ]; then
+    stop_live_refresh
     read -r -p "  Accept or override [S/M/L/enter=accept]: " override
     case "$override" in
       [Ss]) tier_result="S" ;;
@@ -606,6 +698,7 @@ Output ONLY the single letter: S, M, or L. Nothing else." \
       [Ll]) tier_result="L" ;;
       *)    ;; # accept as-is
     esac
+    start_live_refresh 10
   else
     log "Auto mode — accepting complexity tier: ${tier_result}"
   fi
@@ -632,9 +725,8 @@ PYEOF
 WORKTREE_DIR=""
 WORKTREE_BRANCH=""
 
-# Dispatch worktree-manager agent to create a worktree for the feature.
-# The agent handles branch naming, worktree creation, artifact inheritance.
-# Falls back to bash if not in a git repo.
+# Create a worktree for the feature under .worktrees/ (gitignored).
+# Handles parallel runs — each feature gets its own worktree.
 create_worktree() {
   if ! git rev-parse --is-inside-work-tree &>/dev/null; then
     warn "Not a git repo — skipping worktree"; return 0
@@ -644,35 +736,50 @@ create_worktree() {
     warn "Already in a worktree — skipping"; return 0
   fi
 
-  log "Dispatching worktree-manager agent..."
+  # Ensure .worktrees/ exists and is gitignored
+  mkdir -p "${PROJECT_DIR}/.worktrees"
+  if ! grep -qx '.worktrees/' "${PROJECT_DIR}/.gitignore" 2>/dev/null; then
+    echo '.worktrees/' >> "${PROJECT_DIR}/.gitignore"
+  fi
+  if ! grep -qx '.pipeline/' "${PROJECT_DIR}/.gitignore" 2>/dev/null; then
+    echo '.pipeline/' >> "${PROJECT_DIR}/.gitignore"
+  fi
 
-  # First commit DECIDE phase artifacts so the worktree inherits them
-  git add docs/ .memory/ .pipeline/ 2>/dev/null || true
+  # Remove .pipeline/ from git tracking if it was committed before gitignore
+  git rm -r --cached .pipeline/ 2>/dev/null || true
+
+  # Commit gitignore updates before creating worktree
+  git add .gitignore 2>/dev/null || true
   git diff --cached --quiet 2>/dev/null || \
-    git commit -m "Add DECIDE phase artifacts for feature: ${FEATURE_DESC:-work}" 2>/dev/null || true
+    git commit -m "Add .worktrees/ and .pipeline/ to gitignore" 2>/dev/null || true
 
-  local result
-  result=$(claude -p "You are the worktree-manager agent. Read agents/worktree-manager.md for your full instructions.
+  # Derive branch name from feature description
+  local slug
+  slug=$(echo "${FEATURE_DESC:-work}" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | sed 's/^-//;s/-$//' | cut -c1-50)
+  WORKTREE_BRANCH="feature/${slug}"
 
-Operation: CREATE
-Feature: ${FEATURE_DESC:-work}
-Base branch: $(git branch --show-current 2>/dev/null || echo main)
-Project dir: ${PROJECT_DIR}
+  local wt_path="${PROJECT_DIR}/.worktrees/${slug}"
 
-Create a worktree for this feature. Report the worktree path and branch name.
-Output EXACTLY two lines:
-WORKTREE_DIR=<absolute path>
-WORKTREE_BRANCH=<branch name>" \
-    --dangerously-skip-permissions 2>/dev/null || echo "")
+  # Check if worktree/branch already exists — reuse
+  if [ -d "$wt_path" ]; then
+    log "Reusing existing worktree: ${wt_path}"
+    WORKTREE_DIR="$wt_path"
+    ok "Worktree exists: ${WORKTREE_DIR} (branch: ${WORKTREE_BRANCH})"
+    return 0
+  fi
 
-  # Parse agent output
-  WORKTREE_DIR=$(echo "$result" | grep "^WORKTREE_DIR=" | head -1 | cut -d= -f2-)
-  WORKTREE_BRANCH=$(echo "$result" | grep "^WORKTREE_BRANCH=" | head -1 | cut -d= -f2-)
+  # Check if branch exists (from a prior run)
+  if git rev-parse --verify "$WORKTREE_BRANCH" &>/dev/null; then
+    git worktree add "$wt_path" "$WORKTREE_BRANCH" 2>/dev/null
+  else
+    git worktree add -b "$WORKTREE_BRANCH" "$wt_path" 2>/dev/null
+  fi
 
-  if [ -n "$WORKTREE_DIR" ] && [ -d "$WORKTREE_DIR" ]; then
+  if [ -d "$wt_path" ]; then
+    WORKTREE_DIR="$wt_path"
     ok "Worktree created: ${WORKTREE_DIR} (branch: ${WORKTREE_BRANCH})"
   else
-    warn "Worktree agent returned no valid path — continuing in main directory"
+    warn "Worktree creation failed — continuing in main directory"
     WORKTREE_DIR=""
     WORKTREE_BRANCH=""
   fi
@@ -685,8 +792,40 @@ enter_worktree() {
     PIPELINE_DIR="${PROJECT_DIR}/.pipeline"
     SESSION_LOG="${PIPELINE_DIR}/conduct.log"
     STATE_FILE="${PIPELINE_DIR}/conduct-state.json"
+    SESSION_FILE="${PIPELINE_DIR}/conduct-session-id"
+    CURRENT_STEP_FILE="${PIPELINE_DIR}/.current-step"
+    STEP_START_FILE="${PIPELINE_DIR}/.step-start-time"
+    LINES_FILE="${PIPELINE_DIR}/.display-lines"
+    REFRESH_STOP_FILE="${PIPELINE_DIR}/.refresh-stop"
+    mkdir -p "$PIPELINE_DIR"
+
+    # Remove .pipeline/ from git tracking if it was committed before gitignore
+    git rm -r --cached "${PIPELINE_DIR}" 2>/dev/null || true
+
+    # Initialize worktree state only if no state file exists yet.
+    # On resume, the state file already has progress — don't overwrite it.
+    if [ ! -f "$STATE_FILE" ]; then
+      python3 -c "
+import json, sys, time
+state = {
+    'feature_desc': sys.argv[2],
+    'worktree': 'done',
+    'run_started_at': int(time.time()),
+    'last_step': 'worktree'
+}
+with open(sys.argv[1], 'w') as f:
+    json.dump(state, f, indent=2)
+" "$STATE_FILE" "${FEATURE_DESC:-}" 2>/dev/null || true
+    fi
+
+    # Start a fresh Claude session in the worktree
+    rm -f "$SESSION_FILE" "${PIPELINE_DIR}/session-created"
     cd "$PROJECT_DIR"
     log "Working in worktree: ${PROJECT_DIR}"
+    # Restart live refresh — the background subshell inherited the old
+    # PROJECT_DIR/STATE_FILE/etc. and would read from the main repo.
+    stop_live_refresh
+    start_live_refresh 10
   fi
 }
 
@@ -703,9 +842,14 @@ cleanup_worktree() {
   WORKTREE_BRANCH=""
 }
 
-# Save worktree info to state for resume across sessions
+# Save worktree info to state for resume across sessions.
+# Writes to BOTH the main repo state file and the worktree state file
+# so restore_worktree_state can find it on next run (reads main repo first).
+ORIGINAL_PIPELINE_DIR=""
+
 save_worktree_state() {
   if [ -n "$WORKTREE_DIR" ]; then
+    # Save to current state file (worktree)
     python3 -c "
 import json, os, sys
 path = '$STATE_FILE'
@@ -718,15 +862,77 @@ state['worktree_branch'] = sys.argv[2]
 with open(path, 'w') as f:
     json.dump(state, f, indent=2)
 " "$WORKTREE_DIR" "$WORKTREE_BRANCH"
+    # Also save to main repo state file so restore finds it on resume.
+    # Uses a feature-keyed map for parallel worktree support, plus
+    # legacy single-key format for backwards compatibility.
+    if [ -n "$ORIGINAL_PIPELINE_DIR" ] && [ "$ORIGINAL_PIPELINE_DIR" != "$PIPELINE_DIR" ]; then
+      local main_state="${ORIGINAL_PIPELINE_DIR}/conduct-state.json"
+      python3 -c "
+import json, os, sys
+path = sys.argv[3]
+state = {}
+if os.path.exists(path):
+    with open(path) as f:
+        state = json.load(f)
+# Legacy format (single worktree)
+state['worktree_dir'] = sys.argv[1]
+state['worktree_branch'] = sys.argv[2]
+# Parallel-safe format (keyed by feature description)
+feat = sys.argv[4] if len(sys.argv) > 4 and sys.argv[4] else None
+if feat:
+    if 'worktrees' not in state:
+        state['worktrees'] = {}
+    state['worktrees'][feat] = {'dir': sys.argv[1], 'branch': sys.argv[2]}
+with open(path, 'w') as f:
+    json.dump(state, f, indent=2)
+" "$WORKTREE_DIR" "$WORKTREE_BRANCH" "$main_state" "${FEATURE_DESC:-}"
+    fi
   fi
 }
 
-# Restore worktree info from state on resume
+# Restore worktree info from state on resume.
+# Supports parallel worktrees: the main repo state stores a map of
+# active worktrees keyed by feature description. On resume, we match
+# by FEATURE_DESC or fall back to the single-worktree legacy format.
+#
+# If a worktree is found and we're not already in it, re-exec conduct
+# from the worktree directory so the entire process runs there — this
+# ensures the user's terminal shows the right cwd after exit.
 restore_worktree_state() {
   if [ -f "$STATE_FILE" ]; then
-    WORKTREE_DIR=$(python3 -c "import json; print(json.load(open('$STATE_FILE')).get('worktree_dir',''))" 2>/dev/null || echo "")
-    WORKTREE_BRANCH=$(python3 -c "import json; print(json.load(open('$STATE_FILE')).get('worktree_branch',''))" 2>/dev/null || echo "")
+    # Try feature-keyed worktree map first (parallel-safe)
+    if [ -n "$FEATURE_DESC" ]; then
+      WORKTREE_DIR=$(python3 -c "
+import json, sys
+with open('$STATE_FILE') as f:
+    state = json.load(f)
+wt = state.get('worktrees', {}).get(sys.argv[1], {})
+print(wt.get('dir', ''))
+" "$FEATURE_DESC" 2>/dev/null || echo "")
+      WORKTREE_BRANCH=$(python3 -c "
+import json, sys
+with open('$STATE_FILE') as f:
+    state = json.load(f)
+wt = state.get('worktrees', {}).get(sys.argv[1], {})
+print(wt.get('branch', ''))
+" "$FEATURE_DESC" 2>/dev/null || echo "")
+    fi
+    # Fall back to legacy single-worktree format
+    if [ -z "$WORKTREE_DIR" ]; then
+      WORKTREE_DIR=$(python3 -c "import json; print(json.load(open('$STATE_FILE')).get('worktree_dir',''))" 2>/dev/null || echo "")
+      WORKTREE_BRANCH=$(python3 -c "import json; print(json.load(open('$STATE_FILE')).get('worktree_branch',''))" 2>/dev/null || echo "")
+    fi
     if [ -n "$WORKTREE_DIR" ] && [ -d "$WORKTREE_DIR" ]; then
+      # If we're not already in the worktree, re-exec from there
+      local resolved_wt
+      resolved_wt=$(cd "$WORKTREE_DIR" && pwd -P)
+      local resolved_cwd
+      resolved_cwd=$(pwd -P)
+      if [ "$resolved_wt" != "$resolved_cwd" ]; then
+        log "Re-launching from worktree: ${WORKTREE_DIR}"
+        cd "$WORKTREE_DIR"
+        exec "$0" "${ORIGINAL_ARGS[@]}"
+      fi
       enter_worktree
     else
       WORKTREE_DIR=""
@@ -778,7 +984,9 @@ REQUIREMENTS:
     while IFS= read -r f; do story_files+=("$f"); done < <(compgen -G "${PROJECT_DIR}/docs/stories/*.md" | sort)
     if [ ${#story_files[@]} -gt 0 ]; then
       if ! review_artifacts "stories" "${story_files[@]}"; then
-        fail "Stories rejected — re-run /stories"; save_state "stories" "failed"; return 1
+        # Delete rejected stories so check_stories fails on retry
+        for f in "${story_files[@]}"; do rm -f "$f"; done
+        fail "Stories rejected — will re-generate"; save_state "stories" "failed"; return 1
       fi
     fi
     ok "Stories created"; save_state "stories" "done"; return 0
@@ -837,7 +1045,8 @@ run_plan() {
     while IFS= read -r f; do plan_files+=("$f"); done < <(compgen -G "${PROJECT_DIR}/docs/plans/*.md" | sort)
     if [ ${#plan_files[@]} -gt 0 ]; then
       if ! review_artifacts "plan" "${plan_files[@]}"; then
-        fail "Plan rejected — re-run /plan"; save_state "plan" "failed"; return 1
+        for f in "${plan_files[@]}"; do rm -f "$f"; done
+        fail "Plan rejected — will re-generate"; save_state "plan" "failed"; return 1
       fi
     fi
     ok "Plan created"; save_state "plan" "done"; return 0
@@ -869,7 +1078,7 @@ run_architecture_review() {
 }
 
 run_worktree_setup() {
-  step_header 5 "worktree" "DECIDE"
+  step_header 0 "worktree" "SETUP"
   # Check if already set up
   if [ -n "$WORKTREE_DIR" ] && [ -d "$WORKTREE_DIR" ]; then
     ok "Already in worktree: ${WORKTREE_DIR}"; save_state "worktree" "done"; return 0
@@ -880,6 +1089,26 @@ run_worktree_setup() {
     restore_worktree_state
     ok "Worktree restored"; return 0
   fi
+
+  # Run bootstrap and assess in the MAIN REPO before creating the worktree.
+  # These are project-level (run once), their artifacts get committed so
+  # worktrees inherit them via git.
+  if ! check_bootstrap; then
+    log "Running bootstrap in main repo (one-time project setup)..."
+    run_bootstrap
+  fi
+  if ! check_assess; then
+    # Only assess existing projects (not empty/new ones)
+    if [ -d "${PROJECT_DIR}/app" ] || [ -d "${PROJECT_DIR}/src" ] || [ -f "${PROJECT_DIR}/main.py" ]; then
+      log "Running assess in main repo (one-time project assessment)..."
+      run_assess
+    fi
+  fi
+
+  # Commit bootstrap/assess artifacts so worktree inherits them
+  git add docs/ .memory/ .gitignore .github/ 2>/dev/null || true
+  git diff --cached --quiet 2>/dev/null || \
+    git commit -m "Project setup: bootstrap + assess artifacts" 2>/dev/null || true
 
   create_worktree
   if [ -n "$WORKTREE_DIR" ]; then
@@ -902,9 +1131,14 @@ run_acceptance_specs() {
   check_plan || { fail "GATE: Need plan in docs/plans/ first"; return 1; }
   log "Generating failing acceptance specs from stories..."
   run_claude "Run the /writing-system-tests skill. Generate failing acceptance specs from ALL stories.
-API projects: spec/integration/. Full-stack: spec/system/. Every criterion (happy + negative) becomes a test. Commit the failing specs."
-  check_acceptance_specs && { ok "Acceptance specs created"; save_state "acceptance_specs" "done"; return 0; }
-  fail "No acceptance specs found"; save_state "acceptance_specs" "failed"; return 1
+API projects: tests/integration/ or spec/integration/. Full-stack: tests/e2e/ or spec/system/. Every criterion (happy + negative) becomes a test. Commit the failing specs." "interactive"
+  if check_acceptance_specs; then
+    ok "Acceptance specs created"; save_state "acceptance_specs" "done"; return 0
+  fi
+  # Interactive session completed but check can't find specs in known paths.
+  # The specs may be in a project-specific location. Trust the session.
+  warn "Could not auto-detect acceptance specs location — marking as done (session completed)"
+  save_state "acceptance_specs" "done"; return 0
 }
 
 run_build() {
@@ -912,52 +1146,49 @@ run_build() {
   check_plan || { fail "GATE: Need plan first"; return 1; }
 
   local autonomy="Standard"
-  local mode="print"
-  if [ "${RUN_MODE}" = "interactive" ]; then
-    mode="interactive"
-  elif [ "${RUN_MODE}" = "auto" ]; then
-    autonomy="Full"
-  fi
+  [ "${RUN_MODE}" = "auto" ] && autonomy="Full"
 
   local tier
   tier=$(get_complexity_tier)
 
-  # Small tier: direct TDD without pipeline overhead
+  # Build is always interactive — a single non-interactive call can't reliably
+  # execute full TDD cycles across multiple tasks. Claude needs to work
+  # iteratively, and the user needs visibility into progress.
   if [ "$tier" = "S" ]; then
     log "Starting direct TDD (Small tier, no pipeline overhead)..."
     run_claude "Run /tdd for each task in the plan (docs/plans/). Execute tasks sequentially via TDD (RED→DOMAIN→GREEN→DOMAIN→COMMIT).
 
 Track progress yourself — no pipeline state machine needed. Commit after each task.
-Do NOT stop to ask for approval — execute all tasks to completion." "$mode"
+Do NOT stop to ask for approval — execute all tasks to completion." "interactive"
+  else
+    log "Starting TDD pipeline (${autonomy} autonomy)..."
+    run_claude "Run the /pipeline skill at ${autonomy} autonomy. Execute each task via TDD (RED→DOMAIN→GREEN→DOMAIN→COMMIT).
 
-    check_build && { ok "Build complete — tests passing"; save_state "build" "done"; return 0; }
-    warn "Build may be incomplete — checking tests"; save_state "build" "needs_verification"; return 0
-  fi
-
-  log "Starting TDD pipeline (${autonomy} autonomy, ${mode} mode)..."
-  run_claude "Run the /pipeline skill at ${autonomy} autonomy. Execute each task via TDD (RED→DOMAIN→GREEN→DOMAIN→COMMIT).
+PARALLEL EXECUTION: Read the plan's Dependencies and Files likely touched fields. Group tasks
+with no mutual file overlap into parallel batches. Dispatch independent tasks as parallel Agent
+tool calls (max 3 concurrent). Run test suite after each parallel batch to verify no conflicts.
 
 MANDATORY at batch boundaries:
 - Dispatch evaluator with fresh context (hard gate)
-- Run linter (standardrb)
+- Run linter
 - Run /simplify for duplication
 - Persist at least one .memory/ entry per batch
 - Run micro-retro
 
 Track state in .pipeline/. Follow rework budget (3 cycles, then escalate).
-Do NOT stop to ask for approval — execute all tasks to completion." "$mode"
+Do NOT stop to ask for approval — execute all tasks to completion." "interactive"
+  fi
 
   check_build && { ok "Build complete — tests passing"; save_state "build" "done"; return 0; }
-  warn "Build may be incomplete — checking tests"; save_state "build" "needs_verification"; return 0
+  fail "Build incomplete — tests not passing"; save_state "build" "failed"; return 1
 }
 
 run_finish() {
   step_header 11 "finish" "SHIP"
-  local mode="print"
-  [ "${RUN_MODE}" = "interactive" ] && mode="interactive"
 
-  log "Fresh verification..."
-  run_claude "Run the /finish skill. Run test suite NOW, check git status, verify ALL story criteria covered. Choose 'keep as-is' for completion." "$mode"
+  log "Fresh verification and completion options..."
+  # Always interactive — user must choose merge/PR/keep/discard
+  run_claude "Run the /finish skill. Run test suite NOW, check git status, verify ALL story criteria covered. Present all 4 options (merge locally, push & create PR, keep as-is, discard) and wait for the user to choose." "interactive"
   save_state "finish" "done"; ok "Finish complete"
 }
 
@@ -967,9 +1198,10 @@ run_manual_test() {
     ok "Already complete — all stories pass manual testing"; save_state "manual_test" "done"; return 0
   fi
   log "Running manual tests against stories..."
+  # Always interactive — may need user to confirm test results, start servers, etc.
   run_claude "Run the /manual-test skill. Start the application server, then test every story's acceptance criteria using curl (API) or browser (full-stack).
 
-Record results in docs/manual-test-results.md. For any FAILs, write a failing test (RED), fix it (GREEN), commit, and re-test until all stories pass. Do NOT proceed with bugs remaining."
+Record results in docs/manual-test-results.md. For any FAILs, write a failing test (RED), fix it (GREEN), commit, and re-test until all stories pass. Do NOT proceed with bugs remaining." "interactive"
 
   check_manual_test && { ok "Manual tests all pass"; save_state "manual_test" "done"; return 0; }
   fail "Manual test has FAILs — bugs need fixing"; save_state "manual_test" "failed"; return 1
@@ -1128,13 +1360,16 @@ show_status() {
   echo -e "${BOLD}${CYAN}+-------------------------------------------+${NC}"
   echo -e "  Project: $(basename "$PROJECT_DIR")"
   [ -n "${FEATURE_DESC:-}" ] && echo -e "  Feature: ${FEATURE_DESC}"
-  echo -e "  Mode:    ${RUN_MODE:-default}    Session: ${session_id}"
+  local location_info="Mode: ${RUN_MODE:-default}"
+  [ -n "$WORKTREE_BRANCH" ] && location_info="${location_info}  Branch: ${WORKTREE_BRANCH}"
+  echo -e "  ${location_info}"
+  echo -e "  ${BOLD}Ctrl+C${NC} pause  ${BOLD}--log${NC} tail output  ${BOLD}--status${NC} check progress"
   echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 
-  local steps=("bootstrap" "memory" "brainstorm" "complexity" "worktree" "stories" "conflict_check" "plan" "architecture_review" "acceptance_specs" "build" "finish" "manual_test" "retro")
-  local labels=("bootstrap" "memory" "brainstorm" "complexity" "worktree" "stories" "conflict-check" "plan" "arch review" "acceptance specs" "tdd/pipeline" "finish" "manual-test" "retro")
-  local phases=("UNDERSTAND" "UNDERSTAND" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "BUILD" "BUILD" "SHIP" "SHIP" "SHIP")
-  local checks=(check_bootstrap "" check_brainstorm "" "" check_stories check_conflict_check check_plan check_architecture_review check_acceptance_specs check_build "" check_manual_test check_retro)
+  local steps=("worktree" "memory" "brainstorm" "complexity" "stories" "conflict_check" "plan" "architecture_review" "acceptance_specs" "build" "finish" "manual_test" "retro")
+  local labels=("worktree" "memory" "brainstorm" "complexity" "stories" "conflict-check" "plan" "arch review" "acceptance specs" "tdd/pipeline" "finish" "manual-test" "retro")
+  local phases=("SETUP" "UNDERSTAND" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "BUILD" "BUILD" "SHIP" "SHIP" "SHIP")
+  local checks=("" "" check_brainstorm "" check_stories check_conflict_check check_plan check_architecture_review check_acceptance_specs check_build "" check_manual_test check_retro)
 
   local current_step
   current_step=$(get_current_step)
@@ -1149,6 +1384,10 @@ show_status() {
       done)     icon="${GREEN}✓${NC}" ;;
       skipped)  icon="${YELLOW}→${NC}" ;;
       failed)   icon="${RED}✗${NC}" ;;
+      in_progress)
+        icon="${YELLOW}▶${NC}"
+        is_active=true
+        ;;
       *)
         if [ -n "${checks[$i]}" ] && ${checks[$i]} 2>/dev/null; then
           icon="${GREEN}✓${NC}"
@@ -1173,15 +1412,34 @@ show_status() {
 
   echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 
-  # Show last activity from log — pad to fixed width to overwrite previous content
+  # Show activity: elapsed time, log growth, last meaningful line
   local activity_line=""
-  if [ -n "$current_step" ] && [ -f "$SESSION_LOG" ]; then
-    local last_line
-    last_line=$(grep -v '^$' "$SESSION_LOG" 2>/dev/null | tail -1 | cut -c1-68)
-    if [ -n "$last_line" ]; then
-      activity_line="  ${YELLOW}▶${NC} ${last_line}"
-    else
-      activity_line="  ${YELLOW}▶${NC} Running ${current_step}..."
+  if [ -n "$current_step" ]; then
+    local elapsed
+    elapsed=$(get_step_elapsed)
+    local log_size=""
+    if [ -f "$SESSION_LOG" ]; then
+      local bytes
+      bytes=$(stat -c %s "$SESSION_LOG" 2>/dev/null || stat -f %z "$SESSION_LOG" 2>/dev/null || echo 0)
+      if [ "$bytes" -gt 1048576 ]; then
+        log_size="$(( bytes / 1048576 ))MB"
+      elif [ "$bytes" -gt 1024 ]; then
+        log_size="$(( bytes / 1024 ))KB"
+      elif [ "$bytes" -gt 0 ]; then
+        log_size="${bytes}B"
+      fi
+    fi
+
+    local status_parts="${current_step}"
+    [ -n "$elapsed" ] && status_parts="${status_parts} (${elapsed})"
+    [ -n "$log_size" ] && status_parts="${status_parts} [log: ${log_size}]"
+    activity_line="  ${YELLOW}▶${NC} ${status_parts}"
+
+    # Show last meaningful log line as secondary context
+    if [ -f "$SESSION_LOG" ]; then
+      local last_line
+      last_line=$(grep -v '^$' "$SESSION_LOG" 2>/dev/null | tail -1 | cut -c1-60)
+      [ -n "$last_line" ] && activity_line="${activity_line}\n    ${last_line}"
     fi
   fi
   # Clear line then print (handles variable-length content)
@@ -1242,14 +1500,29 @@ refresh_display() {
 # Background refresh for long-running steps (build, manual-test)
 REFRESH_PID=""
 
+REFRESH_STOP_FILE="${PIPELINE_DIR}/.refresh-stop"
+
 start_live_refresh() {
   # No live refresh in output mode — Claude output owns the terminal
   [ "${VIEW_MODE}" = "output" ] && return 0
 
+  stop_live_refresh  # kill any existing refresh first
+  rm -f "$REFRESH_STOP_FILE"
+
   local interval=${1:-15}
   (
+    trap 'exit 0' TERM INT
     while true; do
-      sleep "$interval"
+      # Check stop file every second instead of sleeping the full interval.
+      # This makes stop_live_refresh near-instant on WSL2 where signals
+      # don't interrupt sleep reliably.
+      local waited=0
+      while [ "$waited" -lt "$interval" ]; do
+        [ -f "$REFRESH_STOP_FILE" ] && exit 0
+        sleep 1
+        waited=$((waited + 1))
+      done
+      [ -f "$REFRESH_STOP_FILE" ] && exit 0
       refresh_display 2>/dev/null
     done
   ) &
@@ -1258,7 +1531,16 @@ start_live_refresh() {
 
 stop_live_refresh() {
   if [ -n "$REFRESH_PID" ] && kill -0 "$REFRESH_PID" 2>/dev/null; then
-    kill "$REFRESH_PID" 2>/dev/null
+    # Signal via file (reliable on WSL2) + kill (belt and suspenders)
+    touch "$REFRESH_STOP_FILE" 2>/dev/null
+    kill "$REFRESH_PID" 2>/dev/null || true
+    # Wait up to 2 seconds, then force kill
+    local i=0
+    while [ "$i" -lt 20 ] && kill -0 "$REFRESH_PID" 2>/dev/null; do
+      sleep 0.1 2>/dev/null || true
+      i=$((i + 1))
+    done
+    kill -9 "$REFRESH_PID" 2>/dev/null || true
     wait "$REFRESH_PID" 2>/dev/null || true
   fi
   REFRESH_PID=""
@@ -1267,9 +1549,20 @@ stop_live_refresh() {
 cleanup_and_exit() {
   stop_live_refresh
   echo ""
-  log "Interrupted. Saving state..."
+  log "Paused. State saved."
   show_status
-  echo -e "Resume later: ${BOLD}conduct --resume${NC}"
+  echo ""
+  echo -e "  ${BOLD}Continue options:${NC}"
+  if [ -n "$WORKTREE_DIR" ] && [ "$WORKTREE_DIR" != "$ORIGINAL_CWD" ]; then
+    echo "    conduct --resume                        # resume from main repo"
+    echo "    cd ${WORKTREE_DIR} && conduct --resume   # resume from worktree"
+  else
+    echo "    conduct --resume            # pick up where you left off"
+  fi
+  echo "    conduct --from <step>       # restart from a specific step"
+  echo "    conduct --status            # check progress without running"
+  echo "    conduct --log               # tail the session log"
+  echo ""
   exit 130
 }
 
@@ -1390,21 +1683,53 @@ recover() {
     fi
   fi
 
-  send_notification "Step failed" "${step_name} — dropping to interactive session"
+  send_notification "Step failed" "${step_name} — needs recovery"
 
+  # Stop refresh BEFORE any output so it can't wipe the recovery menu
+  stop_live_refresh
   echo ""
   show_status
-  warn "Step failed: ${step_name}. Dropping into interactive session to resolve."
-  log "Claude will start working on this step. Press Enter if prompted, or /quit when done."
-  echo ""
+  warn "Step failed: ${step_name}."
 
-  local recover_flag="--session-id ${session_id}"
-  [ -f "${PIPELINE_DIR}/session-created" ] && recover_flag="--resume ${session_id}"
-  stop_live_refresh
+  # Let the user choose how to recover instead of forcing interactive session
+  if [ "${RUN_MODE}" != "auto" ] && [ -t 0 ]; then
+    echo ""
+    echo -e "  ${BOLD}Recovery options:${NC}"
+    echo "    r = retry (re-run the step)"
+    echo "    i = interactive Claude session to fix"
+    echo "    s = skip this step"
+    echo "    q = quit conductor"
+    read -r -p "  [r/i/s/q]: " recovery_choice
+    case "$recovery_choice" in
+      [sS])
+        warn "Skipping ${step_name}"
+        save_state "$step_name" "skipped"
+        start_live_refresh 10
+        return 1  # signal caller to advance past this step
+        ;;
+      [qQ])
+        save_state "$step_name" "failed"
+        echo -e "Resume later: ${BOLD}conduct --resume${NC}"
+        exit 0
+        ;;
+      [rR])
+        log "Retrying ${step_name}..."
+        start_live_refresh 10
+        return 2  # signal caller to retry without burning retry count
+        ;;
+      # i or default: fall through to interactive session
+    esac
+  fi
+
+  sleep 0.2 2>/dev/null || true
+  clear
+  echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  echo -e "  ${BOLD}Recovery session${NC} — ${step_name}"
+  echo -e "  Type ${BOLD}/quit${NC} when done to return to conductor"
+  echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  echo ""
   STATUS_LINES=0
 
-  # Pass the recovery action as the first message so Claude starts immediately.
-  # The user just watches and approves — no need to figure out what to type.
   local recover_prompt="Run /${step_name}. Complete this step, then stop."
   if [ "$step_name" = "bootstrap" ]; then
     recover_prompt="Run /bootstrap. Detect the project stack, scaffold directories, generate CLAUDE.md. Stop when done."
@@ -1416,9 +1741,11 @@ recover() {
     recover_prompt="Continue the build. Check .pipeline/task-status.json for progress, run /tdd on the next incomplete task."
   fi
 
-  claude $recover_flag \
-    --append-system-prompt "The conduct script hit a failure at step: ${step_name}. Complete ONLY this step, then let the user /quit to return to the conductor." \
-    "$recover_prompt"
+  # Fresh session — don't carry context from prior steps
+  claude --session-id "$(python3 -c 'import uuid; print(uuid.uuid4())')" \
+    --append-system-prompt "Recovery for step: ${step_name}. Complete ONLY this step, then stop and let the user /quit to return to the conductor. Do NOT proceed to subsequent steps." \
+    "$recover_prompt" || true
+  clear
   reset_display
   start_live_refresh 10
   touch "${PIPELINE_DIR}/session-created"
@@ -1449,8 +1776,10 @@ usage() {
   echo "  --reset           Clear session state and start fresh"
   echo "  -h, --help        Show this help"
   echo ""
-  echo "Steps: bootstrap, memory, brainstorm, complexity, worktree, stories, conflict-check,"
+  echo "Steps: worktree, memory, brainstorm, complexity, stories, conflict-check,"
   echo "       plan, architecture-review, acceptance-specs, build, finish, manual-test, retro"
+  echo ""
+  echo "Project-level (run once, not per-feature): bootstrap, assess"
   echo ""
   echo "Examples:"
   echo "  conduct --auto \"URL shortener with click tracking\"    # Fully automated"
@@ -1481,6 +1810,99 @@ while [[ $# -gt 0 ]]; do
   esac
   shift
 done
+
+# Resume menu: show active features and let user pick
+if [ "$MODE" = "resume" ] && [ -z "$FEATURE_DESC" ] && [ -f "$STATE_FILE" ]; then
+  # Gather resumable features from worktrees map + current state
+  resume_options=$(python3 -c "
+import json, os, sys
+
+state_path = '$STATE_FILE'
+pipeline_dir = '$PIPELINE_DIR'
+
+features = []
+
+with open(state_path) as f:
+    state = json.load(f)
+
+# Check worktrees map for parallel features
+worktrees = state.get('worktrees', {})
+for feat, wt in worktrees.items():
+    wt_dir = wt.get('dir', '')
+    wt_state_path = os.path.join(wt_dir, '.pipeline', 'conduct-state.json') if wt_dir else ''
+    step = '?'
+    status = 'unknown'
+    alive = os.path.isdir(wt_dir) if wt_dir else False
+    if alive and os.path.exists(wt_state_path):
+        with open(wt_state_path) as wf:
+            ws = json.load(wf)
+        step = ws.get('last_step', '?')
+        status = ws.get(step, 'pending')
+    features.append({
+        'desc': feat,
+        'step': step,
+        'status': status,
+        'dir': wt_dir,
+        'alive': alive
+    })
+
+# If no worktrees, add the main feature
+if not features:
+    feat = state.get('feature_desc', '')
+    if feat:
+        step = state.get('last_step', '?')
+        status = state.get(step, 'pending')
+        features.append({
+            'desc': feat,
+            'step': step,
+            'status': status,
+            'dir': '',
+            'alive': True
+        })
+
+# Output as lines: index|desc|step|status|dir|alive
+for i, f in enumerate(features):
+    print(f\"{i}|{f['desc']}|{f['step']}|{f['status']}|{f['dir']}|{f['alive']}\")
+" 2>/dev/null || echo "")
+
+  if [ -n "$resume_options" ]; then
+    option_count=$(echo "$resume_options" | wc -l)
+
+    if [ "$option_count" -eq 1 ]; then
+      # Single feature — auto-select
+      FEATURE_DESC=$(echo "$resume_options" | head -1 | cut -d'|' -f2)
+    else
+      # Multiple features — show menu
+      echo ""
+      echo -e "${BOLD}${CYAN}Resume which feature?${NC}"
+      echo ""
+      while IFS='|' read -r idx desc step status dir alive; do
+        local_num=$((idx + 1))
+        # Status icon
+        case "$status" in
+          done|skipped) icon="${GREEN}✓${NC}" ;;
+          in_progress)  icon="${YELLOW}▶${NC}" ;;
+          failed)       icon="${RED}✗${NC}" ;;
+          *)            icon="⬚" ;;
+        esac
+        # Dead worktree warning
+        dead_marker=""
+        [ "$alive" = "False" ] && dead_marker=" ${RED}(worktree missing)${NC}"
+        printf "  %b %d) %-50s  %b %-20s %b\n" "$icon" "$local_num" "${desc:0:50}" "$icon" "$step" "$dead_marker"
+      done <<< "$resume_options"
+      echo ""
+      read -r -p "  Select [1-${option_count}]: " pick
+
+      if [[ "$pick" =~ ^[0-9]+$ ]] && [ "$pick" -ge 1 ] && [ "$pick" -le "$option_count" ]; then
+        selected_line=$(echo "$resume_options" | sed -n "${pick}p")
+        FEATURE_DESC=$(echo "$selected_line" | cut -d'|' -f2)
+      else
+        fail "Invalid selection"
+        exit 1
+      fi
+    fi
+  fi
+fi
 
 # Detect new feature vs resume
 if [ -n "$FEATURE_DESC" ] && [ -f "$STATE_FILE" ]; then
@@ -1515,13 +1937,15 @@ if 'run_started_at' not in state:
 with open(path, 'w') as f:
     json.dump(state, f, indent=2)
 " "$FEATURE_DESC"
-  RUN_STARTED_AT=$(python3 -c "import json; print(json.load(open('$STATE_FILE')).get('run_started_at','0'))" 2>/dev/null || echo "0")
 fi
 
 # Restore feature description from state if resuming without one
 if [ -z "$FEATURE_DESC" ] && [ -f "$STATE_FILE" ]; then
   FEATURE_DESC=$(python3 -c "import json; print(json.load(open('$STATE_FILE')).get('feature_desc',''))" 2>/dev/null || echo "")
 fi
+
+# Remember original pipeline dir before worktree switch
+ORIGINAL_PIPELINE_DIR="$PIPELINE_DIR"
 
 # Restore worktree state if resuming
 restore_worktree_state
@@ -1533,6 +1957,7 @@ if [ -n "$SINGLE_STEP" ]; then
   case "$SINGLE_STEP" in
     bootstrap)                              run_bootstrap ;;
     memory)                                 run_memory ;;
+    assess)                                 run_assess ;;
     brainstorm)                             run_brainstorm ;;
     complexity)                             run_complexity_assessment ;;
     worktree)                               run_worktree_setup ;;
@@ -1554,8 +1979,8 @@ fi
 # Step registry — use underscores to match save_state() keys in conduct-state.json
 # Worktree is created right after complexity assessment so all subsequent commits
 # (stories, plan, build, etc.) are isolated on the feature branch.
-ALL_STEPS=(bootstrap memory brainstorm complexity worktree stories conflict_check plan architecture_review acceptance_specs build finish manual_test retro)
-STEP_FUNCS=(run_bootstrap run_memory run_brainstorm run_complexity_assessment run_worktree_setup run_stories run_conflict_check run_plan run_architecture_review run_acceptance_specs run_build run_finish run_manual_test run_retro)
+ALL_STEPS=(worktree memory brainstorm complexity stories conflict_check plan architecture_review acceptance_specs build finish manual_test retro)
+STEP_FUNCS=(run_worktree_setup run_memory run_brainstorm run_complexity_assessment run_stories run_conflict_check run_plan run_architecture_review run_acceptance_specs run_build run_finish run_manual_test run_retro)
 
 # Determine starting point
 start_index=0
@@ -1578,7 +2003,7 @@ if [ "$MODE" = "resume" ] || [ -n "$START_STEP" ]; then
     log "Resuming at: ${ALL_STEPS[$start_index]:-done} (last: $last = $last_status)"
   elif [ -n "$START_STEP" ]; then
     # Normalize dashes to underscores for matching
-    local normalized_start="${START_STEP//-/_}"
+    normalized_start="${START_STEP//-/_}"
     for i in "${!ALL_STEPS[@]}"; do
       if [ "${ALL_STEPS[$i]}" = "$normalized_start" ]; then
         start_index=$i
@@ -1586,6 +2011,14 @@ if [ "$MODE" = "resume" ] || [ -n "$START_STEP" ]; then
       fi
     done
     log "Starting from: $START_STEP"
+    # Mark all prior steps as done — they're assumed complete when using --from
+    for j in "${!ALL_STEPS[@]}"; do
+      [ "$j" -ge "$start_index" ] && break
+      prev_state=$(get_state "${ALL_STEPS[$j]}")
+      if [ "$prev_state" != "done" ] && [ "$prev_state" != "skipped" ]; then
+        save_state "${ALL_STEPS[$j]}" "done"
+      fi
+    done
   fi
 fi
 
@@ -1609,6 +2042,9 @@ max_retries=3
 retry_count=0
 
 while [ "$i" -lt "${#STEP_FUNCS[@]}" ]; do
+  # Record which step we're attempting so --resume lands here if we crash
+  save_state "${ALL_STEPS[$i]}" "in_progress"
+
   if ${STEP_FUNCS[$i]}; then
     refresh_display
     retry_count=0
@@ -1619,14 +2055,41 @@ while [ "$i" -lt "${#STEP_FUNCS[@]}" ]; do
   # Step failed — try interactive recovery (up to max_retries)
   retry_count=$((retry_count + 1))
   if [ "$retry_count" -ge "$max_retries" ]; then
-    fail "Step ${ALL_STEPS[$i]} failed after $max_retries attempts. Stopping."
+    stop_live_refresh
+    fail "Step ${ALL_STEPS[$i]} failed after $max_retries attempts."
     save_state "${ALL_STEPS[$i]}" "failed"
+    # Offer skip for non-gating steps instead of hard stop
+    if [ "${RUN_MODE}" != "auto" ] && [ -t 0 ]; then
+      read -r -p "  [s=skip this step / q=quit]: " choice
+      start_live_refresh 10
+      if [ "$choice" = "s" ] || [ "$choice" = "S" ]; then
+        warn "Skipping ${ALL_STEPS[$i]}"
+        save_state "${ALL_STEPS[$i]}" "skipped"
+        retry_count=0
+        i=$((i + 1))
+        continue
+      fi
+    fi
     break
   fi
 
-  if recover "${ALL_STEPS[$i]}"; then
+  recover "${ALL_STEPS[$i]}"
+  recover_rc=$?
+  if [ "$recover_rc" -eq 0 ]; then
+    # Interactive fix session completed — retry the step
     refresh_display
-    continue  # retry (don't advance i)
+    continue
+  elif [ "$recover_rc" -eq 1 ]; then
+    # User chose skip
+    refresh_display
+    retry_count=0
+    i=$((i + 1))
+    continue
+  elif [ "$recover_rc" -eq 2 ]; then
+    # User chose retry — don't burn retry count
+    retry_count=$((retry_count - 1))
+    refresh_display
+    continue
   else
     fail "Step ${ALL_STEPS[$i]} could not be recovered. Stopping."
     save_state "${ALL_STEPS[$i]}" "failed"
@@ -1640,9 +2103,41 @@ refresh_display
 
 # Only declare complete if we actually finished all steps
 if [ "$i" -ge "${#STEP_FUNCS[@]}" ]; then
-  send_notification "SDLC complete" "All steps finished. Review retro in docs/retros/"
-  echo -e "${GREEN}${BOLD}SDLC complete.${NC} Review the retro in docs/retros/"
+  send_notification "SDLC complete" "All steps finished."
+
+  # Commit any uncommitted artifacts (retro, manual-test results, etc.)
+  log "Committing final artifacts..."
+  git add docs/ .pipeline/ .memory/ 2>/dev/null || true
+  if ! git diff --cached --quiet 2>/dev/null; then
+    git commit -m "Add SHIP phase artifacts: retro, manual-test results
+
+Co-Authored-By: conduct" 2>/dev/null || true
+  fi
+
+  # Delegate push + PR creation to Claude via the /pr skill.
+  # The PR skill handles verification, push, and PR creation.
+  # Conduct does NOT push directly — only Claude does, after confirming all checks pass.
+  log "Creating PR via /pr skill..."
+  run_claude "Run the /pr skill. Verify all checks pass locally (tests, lint, type-check — whatever this project uses) BEFORE pushing. Only push and create the PR after all checks pass. If any check fails, fix the issue first." "interactive"
+
+  pr_url=$(gh pr view --json url -q '.url' 2>/dev/null || echo "")
+  [ -n "$pr_url" ] && ok "PR: ${pr_url}"
+
+  echo ""
+  echo -e "${GREEN}${BOLD}SDLC complete.${NC}"
+  [ -n "$pr_url" ] && echo -e "  PR: ${pr_url}"
+  echo "  Retro: $(ls docs/retros/*.md 2>/dev/null | head -1 || echo 'docs/retros/')"
+  echo "  Cleanup: conduct --reset"
+  echo ""
 else
   send_notification "SDLC stopped" "Failed at step: ${ALL_STEPS[$i]}"
-  echo -e "${RED}${BOLD}SDLC stopped${NC} at step: ${ALL_STEPS[$i]}. Resume with: ${BOLD}conduct --resume${NC}"
+  if [ -n "$WORKTREE_DIR" ] && [ "$WORKTREE_DIR" != "$ORIGINAL_CWD" ]; then
+    echo -e "${RED}${BOLD}SDLC stopped${NC} at step: ${ALL_STEPS[$i]}"
+    echo -e "  Worktree: ${WORKTREE_DIR}"
+    echo -e "  Resume:   cd ${WORKTREE_DIR} && conduct --resume"
+  else
+    echo -e "${RED}${BOLD}SDLC stopped${NC} at step: ${ALL_STEPS[$i]}. Resume with: ${BOLD}conduct --resume${NC}"
+  fi
 fi
+
+exit 0

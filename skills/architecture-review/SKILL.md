@@ -29,6 +29,12 @@ Skip:
 - Section 5 (Domain Integrity Pre-Check) — handled by TDD domain reviewer per-cycle
 - Section 7 (mandatory ADR creation) — only create ADRs for genuinely novel architectural decisions
 
+**Explore agent limits for Medium tier:** Max 2 agents with non-overlapping scopes:
+- Agent 1: stories + plan files (`docs/stories/`, `docs/plans/`)
+- Agent 2: relevant source files for the feature area
+- Do NOT dispatch agents to read `.memory/` (auto-loaded at session start)
+- Do NOT dispatch a third agent for decisions/ADRs (read `docs/decisions/` directly if needed)
+
 For **Small** features, architecture-review is skipped entirely by `/conduct`.
 For **Large** features, run the full review (all sections).
 

@@ -346,14 +346,43 @@ install_dependencies() {
     ok "glow already installed"
   else
     info "Installing glow (terminal markdown renderer)..."
-    if command -v go &>/dev/null; then
-      go install github.com/charmbracelet/glow@latest 2>/dev/null && ok "glow installed via go" || warn "glow install failed — artifact review will use cat fallback"
-    elif command -v snap &>/dev/null; then
-      sudo snap install glow 2>/dev/null && ok "glow installed via snap" || warn "glow install failed — artifact review will use cat fallback"
-    elif command -v brew &>/dev/null; then
-      brew install glow 2>/dev/null && ok "glow installed via brew" || warn "glow install failed — artifact review will use cat fallback"
+    local glow_installed=false
+    if command -v brew &>/dev/null; then
+      brew install glow 2>/dev/null && glow_installed=true
+    fi
+    if ! $glow_installed && command -v go &>/dev/null; then
+      go install github.com/charmbracelet/glow@latest 2>/dev/null && glow_installed=true
+    fi
+    # Direct binary download (works on Linux/WSL when package managers aren't available)
+    if ! $glow_installed; then
+      local arch
+      arch=$(uname -m)
+      case "$arch" in
+        x86_64)  arch="x86_64" ;;
+        aarch64) arch="arm64" ;;
+        *)       arch="" ;;
+      esac
+      if [ -n "$arch" ]; then
+        local glow_ver="2.1.0"
+        local glow_url="https://github.com/charmbracelet/glow/releases/download/v${glow_ver}/glow_${glow_ver}_Linux_${arch}.tar.gz"
+        local glow_tmp="/tmp/glow-install-$$"
+        mkdir -p "$glow_tmp"
+        if curl -sL "$glow_url" -o "${glow_tmp}/glow.tar.gz" 2>/dev/null; then
+          tar -xzf "${glow_tmp}/glow.tar.gz" -C "$glow_tmp" --strip-components=1 2>/dev/null
+          if [ -f "${glow_tmp}/glow" ]; then
+            mkdir -p "${HOME}/.local/bin"
+            mv "${glow_tmp}/glow" "${HOME}/.local/bin/glow"
+            chmod +x "${HOME}/.local/bin/glow"
+            glow_installed=true
+          fi
+        fi
+        rm -rf "$glow_tmp"
+      fi
+    fi
+    if $glow_installed; then
+      ok "glow installed"
     else
-      warn "glow not installed — no package manager found (go/snap/brew). Artifact review will use cat fallback."
+      warn "glow not installed — artifact review will use batcat/cat fallback"
       info "Install manually: https://github.com/charmbracelet/glow#installation"
     fi
   fi

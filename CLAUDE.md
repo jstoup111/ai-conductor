@@ -20,7 +20,7 @@ UNDERSTAND → DECIDE → BUILD → SHIP
 | Phase | Skills | Artifacts |
 |-------|--------|-----------|
 | ALL | **conduct** (orchestrator) | Status dashboard, gate enforcement |
-| UNDERSTAND | bootstrap, memory | CLAUDE.md, .memory/ |
+| UNDERSTAND | bootstrap, memory, assess | CLAUDE.md, .memory/, docs/decisions/technical-assessment-*.md |
 | DECIDE | brainstorm → stories → conflict-check → plan | docs/specs/, docs/stories/, docs/conflicts/, docs/plans/ |
 | BUILD | writing-system-tests → tdd/pipeline, debugging, code-review | Acceptance specs, code, unit tests, .pipeline/ |
 | SHIP | finish, retro | docs/retros/ |
@@ -43,6 +43,16 @@ Agent prompt templates are in `agents/`. Skills define *what* to do; agents defi
 - `domain-reviewer.md` — Checks domain integrity, has veto authority
 - `planner.md` — Expands requirements into specs
 - `worktree-manager.md` — Manages git worktrees for feature isolation and parallel execution
+- `cto-security.md` — Security auditor: auth, input validation, OWASP top 10
+- `cto-data-integrity.md` — Data integrity: transactions, event sourcing, race conditions
+- `cto-dependencies.md` — Dependency auditor: outdated packages, CVEs, license compliance
+- `cto-architecture.md` — Architecture coherence: decisions vs implementation, coupling
+- `cto-duplication.md` — Code duplication: boilerplate, copy-paste, blast radius
+- `cto-testing.md` — Test strategy: coverage gaps, layer balance, assertion quality
+- `cto-infrastructure.md` — Infrastructure: DB pooling, caching, background jobs, prod parity
+- `cto-observability.md` — Observability: error handling, logging, monitoring, debugging context
+- `cto-devex.md` — Developer experience: onboarding, CI/CD, local dev, documentation
+- `cto-orchestrator.md` — CTO synthesizer: reads all 9 specialist reports, prioritizes findings
 
 ## Model Selection
 
@@ -69,7 +79,16 @@ standard implementation, Haiku for mechanical checks.
 | conduct | haiku | Artifact checking and status reporting — mechanical |
 | memory | haiku | Read/write files, update index — mechanical |
 | worktree-manager | haiku | Git operations — mechanical branch/worktree management |
-| conduct | haiku | Artifact checks and status reporting — mechanical |
+| cto-security | opus | Deep security analysis requires reasoning about attack vectors |
+| cto-data-integrity | opus | Transaction and race condition analysis requires deep reasoning |
+| cto-dependencies | sonnet | Checklist-based package and license scanning |
+| cto-architecture | opus | Cross-module coherence and coupling analysis requires deep reasoning |
+| cto-duplication | sonnet | Pattern matching across modules — structured checklist work |
+| cto-testing | sonnet | Coverage gap analysis and test quality review — structured |
+| cto-infrastructure | sonnet | Infrastructure config review — checklist-based |
+| cto-observability | sonnet | Error handling and logging pattern review — checklist-based |
+| cto-devex | sonnet | Documentation and tooling review — checklist-based |
+| cto-orchestrator | opus | Cross-referencing 9 reports and prioritizing requires deep reasoning |
 
 When dispatching subagents via the Agent tool, set the `model` parameter to match:
 ```
@@ -99,6 +118,12 @@ Each skill declares its enforcement level honestly:
 
 Project-level memory lives in `.memory/` with categories: decisions, patterns, gotchas, context.
 Every session starts with recall. Significant decisions are persisted during work.
+
+## Push Policy
+
+**Never push to a remote until confident the work is complete and passing.**
+Run whatever verification the project requires (tests, lint, type-check, etc.) locally
+before pushing. The `/pr` skill enforces this gate. Conduct delegates push+PR to `/pr`.
 
 ## Autonomy Principle
 

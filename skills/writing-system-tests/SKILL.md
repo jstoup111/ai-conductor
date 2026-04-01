@@ -51,6 +51,16 @@ Check for views/frontend to determine spec type:
 
 Generate specs for any story file that lacks a corresponding spec.
 
+**Skip specs for already-tested behavior:** Before generating, check the existing test suite
+for overlap. If an acceptance criterion is already covered by existing tests (e.g., unit tests,
+request specs, or prior integration specs), do not generate a duplicate spec for it.
+
+**End-to-end, not mocked:** Acceptance specs test the real system. Do NOT mock internal
+infrastructure (database, queues, caches, background jobs). Only mock **third-party external
+services** (payment APIs, email providers, external webhooks) that are outside the project's
+control. If a spec requires infrastructure that isn't available in the test environment,
+configure the test environment to provide it — don't mock it away.
+
 ### 3. Parse Acceptance Criteria
 
 Extract from each story file:

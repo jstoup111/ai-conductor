@@ -15,11 +15,11 @@ Create a worktree for a feature branch:
 1. Derive branch name from the feature description: `feature/<slugified-description>`
 2. Check if branch/worktree already exists — reuse if so
 3. Create worktree: `git worktree add <path> -b <branch>` (or without `-b` if branch exists)
-4. Worktree path: `../<project>-<branch-slug>` (sibling of main repo)
+4. Worktree path: `.worktrees/<branch-slug>` (inside the project, gitignored)
 5. Commit DECIDE phase artifacts to main branch first, then create worktree so it inherits them:
    - `docs/specs/`, `docs/stories/`, `docs/conflicts/`, `docs/plans/`
    - `docs/decisions/` (architecture review, ADRs)
-   - `.memory/`, `.pipeline/conduct-state.json`
+   - `.memory/`
 6. Report: worktree path, branch name, what was inherited
 
 ### Create Parallel (for pipeline Full autonomy)
@@ -83,7 +83,7 @@ You have full git access. You do NOT need permission to create branches or workt
 - Never force-push or rebase published branches
 - Always run tests after merge before reporting success
 - If merge conflicts can't be resolved confidently, report BLOCKED and let the user decide
-- Worktree paths must be siblings of the main repo (not nested inside it)
+- Worktree paths must be under `.worktrees/` inside the project (gitignored)
 - Branch names must be valid git refs (no spaces, special chars)
 - Clean up is non-destructive by default — use `git worktree remove`, not `rm -rf`
 
