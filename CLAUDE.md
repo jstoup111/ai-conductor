@@ -68,7 +68,7 @@ standard implementation, Haiku for mechanical checks.
 | writing-system-tests | sonnet | Generating specs from acceptance criteria — templated work |
 | tdd (RED phase) | sonnet | Writing one test at a time — focused, constrained |
 | tdd (GREEN phase) | sonnet | Writing minimal implementation — constrained scope |
-| domain-reviewer | sonnet (S/M), opus (L) | With scoped context (inlined code + type list), focused checklist review; Large features need Opus for cross-boundary judgment |
+| domain-reviewer | sonnet (<50-line diff), opus (≥50-line diff) | Right-sized by diff size: Sonnet for focused small diffs, Opus for large changes needing cross-boundary judgment |
 | evaluator | opus | Calibrated skepticism requires deep analysis |
 | code-review | opus | Multi-dimensional analysis (spec, quality, domain) |
 | debugging | opus | Root cause analysis requires reasoning chains |

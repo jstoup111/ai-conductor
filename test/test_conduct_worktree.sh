@@ -591,6 +591,128 @@ test_gates_use_state() {
 }
 test_gates_use_state
 
+# ─── Test 14: Rate limit cooldown variables exist ───────────────────────
+
+echo ""
+echo -e "${BOLD}Test Suite: Rate Limit Cooldown${NC}"
+echo ""
+
+test_rate_limit_cooldown() {
+  # STEP_COOLDOWN variable exists with default 10
+  local has_cooldown
+  has_cooldown=$(grep -c '^STEP_COOLDOWN=10' "$CONDUCT" || true)
+  assert "STEP_COOLDOWN variable exists with default 10" \
+    "$([ "$has_cooldown" -ge 1 ] && echo 0 || echo 1)"
+
+  # STEP_COOLDOWN_ORIG exists for escalation math
+  local has_orig
+  has_orig=$(grep -c '^STEP_COOLDOWN_ORIG=10' "$CONDUCT" || true)
+  assert "STEP_COOLDOWN_ORIG variable exists with default 10" \
+    "$([ "$has_orig" -ge 1 ] && echo 0 || echo 1)"
+
+  # CLAUDE_CALL_COUNT variable exists with default 0
+  local has_counter
+  has_counter=$(grep -c '^CLAUDE_CALL_COUNT=0' "$CONDUCT" || true)
+  assert "CLAUDE_CALL_COUNT variable exists with default 0" \
+    "$([ "$has_counter" -ge 1 ] && echo 0 || echo 1)"
+
+  # --cooldown flag is parsed in the argument handler
+  local has_flag
+  has_flag=$(grep -c '\-\-cooldown)' "$CONDUCT" || true)
+  assert "--cooldown flag parsed in argument handler" \
+    "$([ "$has_flag" -ge 1 ] && echo 0 || echo 1)"
+
+  # --cooldown appears in usage
+  local in_usage
+  in_usage=$(grep -c '\-\-cooldown' "$CONDUCT" || true)
+  assert "--cooldown documented in usage and arg handler" \
+    "$([ "$in_usage" -ge 2 ] && echo 0 || echo 1)"
+
+  # run_claude increments CLAUDE_CALL_COUNT
+  local increments
+  increments=$(grep -c 'CLAUDE_CALL_COUNT=\$((CLAUDE_CALL_COUNT + 1))' "$CONDUCT" || true)
+  assert "run_claude increments CLAUDE_CALL_COUNT" \
+    "$([ "$increments" -ge 1 ] && echo 0 || echo 1)"
+
+  # Escalation thresholds at 10 and 20 calls
+  local has_threshold_10 has_threshold_20
+  has_threshold_10=$(grep -c 'CLAUDE_CALL_COUNT.*-ge 10' "$CONDUCT" || true)
+  has_threshold_20=$(grep -c 'CLAUDE_CALL_COUNT.*-ge 20' "$CONDUCT" || true)
+  assert "Escalation threshold at 10 calls" \
+    "$([ "$has_threshold_10" -ge 1 ] && echo 0 || echo 1)"
+  assert "Escalation threshold at 20 calls" \
+    "$([ "$has_threshold_20" -ge 1 ] && echo 0 || echo 1)"
+}
+test_rate_limit_cooldown
+
+# ─── Test 15: Build completion detection ────────────────────────────────
+
+echo ""
+echo -e "${BOLD}Test Suite: Build Completion Detection${NC}"
+echo ""
+
+test_build_completion() {
+  # check_build should look for build-complete marker file
+  local has_marker_check
+  has_marker_check=$(grep -c 'build-complete' "$CONDUCT" || true)
+  assert "check_build looks for build-complete marker (multiple refs)" \
+    "$([ "$has_marker_check" -ge 2 ] && echo 0 || echo 1)"
+
+  # run_build tells Claude to write the marker
+  local build_func
+  build_func=$(sed -n '/^run_build/,/^}/p' "$CONDUCT")
+  local has_instruction
+  has_instruction=$(echo "$build_func" | grep -c 'build-complete' || true)
+  assert "run_build instructs Claude to write build-complete marker" \
+    "$([ "$has_instruction" -ge 1 ] && echo 0 || echo 1)"
+
+  # run_build clears stale marker before starting
+  local clears_marker
+  clears_marker=$(echo "$build_func" | grep -c 'rm -f.*build-complete' || true)
+  assert "run_build clears stale build-complete marker" \
+    "$([ "$clears_marker" -ge 1 ] && echo 0 || echo 1)"
+
+  # check_build supports pytest output format (N passed)
+  local has_pytest
+  has_pytest=$(grep -c 'passed.*SESSION_LOG\|SESSION_LOG.*passed' "$CONDUCT" || true)
+  # Alternative: check the grep pattern itself
+  has_pytest=$(sed -n '/^check_build/,/^}/p' "$CONDUCT" | grep -c 'passed' || true)
+  assert "check_build matches pytest output format" \
+    "$([ "$has_pytest" -ge 1 ] && echo 0 || echo 1)"
+}
+test_build_completion
+
+# ─── Test 16: Skill files contain rate limit delay instructions ─────────
+
+echo ""
+echo -e "${BOLD}Test Suite: Skill Rate Limit Instructions${NC}"
+echo ""
+
+test_skill_delay_instructions() {
+  local assess_skill="$HARNESS_DIR/skills/assess/SKILL.md"
+  local pipeline_skill="$HARNESS_DIR/skills/pipeline/SKILL.md"
+  local tdd_skill="$HARNESS_DIR/skills/tdd/SKILL.md"
+
+  # Assess skill has inter-batch cooldown instructions
+  local assess_delays
+  assess_delays=$(grep -ci 'cooldown.*sleep 30' "$assess_skill" || true)
+  assert "Assess skill has 30s inter-batch cooldown instructions" \
+    "$([ "$assess_delays" -ge 3 ] && echo 0 || echo 1)"
+
+  # Pipeline skill has pre-evaluator cooldown
+  local pipeline_delay
+  pipeline_delay=$(grep -ci 'cooldown.*sleep 15' "$pipeline_skill" || true)
+  assert "Pipeline skill has 15s pre-evaluator cooldown" \
+    "$([ "$pipeline_delay" -ge 1 ] && echo 0 || echo 1)"
+
+  # TDD skill has domain reviewer model selection
+  local tdd_model
+  tdd_model=$(grep -c 'model="sonnet"' "$tdd_skill" || true)
+  assert "TDD skill has sonnet model option for domain reviewer" \
+    "$([ "$tdd_model" -ge 1 ] && echo 0 || echo 1)"
+}
+test_skill_delay_instructions
+
 # ─── Summary ─────────────────────────────────────────────────────────────
 
 echo ""
