@@ -82,35 +82,41 @@ ensure_pipeline_dir() {
 
 # ─── Artifact Review ─────────────────────────────────────────────────────────
 
-# Render a markdown file in the terminal using the best available tool
+# Render a markdown file in the terminal using glow.
 render_md() {
   local file=$1
-  if command -v glow &>/dev/null; then
-    glow -w 80 "$file"
-  elif command -v bat &>/dev/null; then
-    bat --style=plain --language=md "$file"
-  elif command -v batcat &>/dev/null; then
-    batcat --style=plain --language=md "$file"
-  elif [ -t 1 ] && command -v less &>/dev/null; then
-    # Fallback: cat with line numbers, paged for readability
-    cat -n "$file" | less -R -F -X
-  else
-    cat "$file"
-  fi
+  glow -w 80 "$file"
 }
 
 # Review one or more artifacts with approve/reject per file.
 # Usage: review_artifacts "step_name" file1 [file2 ...]
 # Returns 0 if all approved, 1 if any rejected.
+# Skips files already recorded as approved in .pipeline/approved-artifacts.
 review_artifacts() {
   local step_name=$1; shift
-  local files=("$@")
+  local all_files=("$@")
+  local approved_log="${PIPELINE_DIR}/approved-artifacts"
+
+  # Filter out already-approved files
+  local files=()
+  for f in "${all_files[@]}"; do
+    if ! grep -qxF "$f" "$approved_log" 2>/dev/null; then
+      files+=("$f")
+    fi
+  done
+
+  if [ ${#files[@]} -eq 0 ]; then
+    ok "All ${step_name} artifacts already approved"
+    return 0
+  fi
+
   local total=${#files[@]}
   local i=0
 
   # Skip review in auto mode
   if [ "${RUN_MODE}" = "auto" ]; then
     log "Auto mode — accepting ${total} artifact(s) for ${step_name}"
+    for f in "${files[@]}"; do echo "$f" >> "$approved_log"; done
     return 0
   fi
 
@@ -134,8 +140,16 @@ review_artifacts() {
       read -r -p "  [enter=approve / r=reject / s=skip remaining]: " verdict
       case "$verdict" in
         [rR]) warn "Rejected: $(basename "$file")"; start_live_refresh 10; return 1 ;;
-        [sS]) log "Skipping review of remaining artifacts"; start_live_refresh 10; return 0 ;;
-        *)    ok "Approved: $(basename "$file")" ;;
+        [sS])
+          # Record everything shown so far + remaining as approved
+          for f in "${files[@]}"; do echo "$f" >> "$approved_log"; done
+          log "Skipping review of remaining artifacts"
+          start_live_refresh 10; return 0
+          ;;
+        *)
+          ok "Approved: $(basename "$file")"
+          echo "$file" >> "$approved_log"
+          ;;
       esac
     fi
   done
@@ -352,6 +366,22 @@ else:
     touch "${PIPELINE_DIR}/session-created"
     append_progress "$prompt"
   fi
+
+  # Rate limit prevention: cooldown between steps + escalation on heavy sessions
+  CLAUDE_CALL_COUNT=$((CLAUDE_CALL_COUNT + 1))
+  local effective_cooldown=$STEP_COOLDOWN
+  if [ "$CLAUDE_CALL_COUNT" -ge 20 ]; then
+    effective_cooldown=$((STEP_COOLDOWN_ORIG * 3))
+  elif [ "$CLAUDE_CALL_COUNT" -ge 10 ]; then
+    effective_cooldown=$((STEP_COOLDOWN_ORIG * 2))
+  fi
+  if [ "$effective_cooldown" -ne "$STEP_COOLDOWN" ]; then
+    STEP_COOLDOWN=$effective_cooldown
+    warn "Escalating cooldown to ${STEP_COOLDOWN}s (${CLAUDE_CALL_COUNT} calls this session)"
+  fi
+  if [ "$effective_cooldown" -gt 0 ]; then
+    sleep "$effective_cooldown"
+  fi
 }
 
 # ─── Artifact Checks ─────────────────────────────────────────────────────────
@@ -417,7 +447,10 @@ check_acceptance_specs() {
 }
 
 check_build() {
-  # Pipeline must exist with at least 1 completed task
+  # 1. Build-complete marker (written by Claude when all tasks done + tests pass)
+  [ -f "${PIPELINE_DIR}/build-complete" ] && return 0
+
+  # 2. Pipeline task-status.json with all tasks completed
   if [ -f "${PROJECT_DIR}/.pipeline/task-status.json" ]; then
     local result
     result=$(python3 -c "
@@ -436,10 +469,11 @@ else:
 " 2>/dev/null || echo "pending")
     [ "$result" = "done" ] && return 0
   fi
-  # Fallback: check log for passing tests (must have >0 examples)
+
+  # 3. Fallback: check log for passing tests (RSpec or pytest format)
   if [ -f "$SESSION_LOG" ]; then
-    # Match "N examples, 0 failures" where N > 0
     grep -qE "[1-9][0-9]* examples?, 0 failures" "$SESSION_LOG" 2>/dev/null && return 0
+    grep -qE "[1-9][0-9]* passed" "$SESSION_LOG" 2>/dev/null && return 0
   fi
   return 1
 }
@@ -971,19 +1005,22 @@ run_conflict_check() {
   log "Checking for conflicts..."
   run_claude "Run the /conflict-check skill. Check ALL stories against all 5 conflict types. Write report to .docs/conflicts/. If clean, write a clean-check marker. If blocking conflicts found, list them with resolution options but do NOT auto-resolve — the user must choose."
 
-  # Check if blocking conflicts need human resolution
+  # Check report content for blocking conflicts
   if check_conflict_check; then
-    local has_blocking=false
-    # If a clean-check marker exists, there are no blocking conflicts
-    if ! compgen -G "${PROJECT_DIR}/.docs/conflicts/*clean-check*" > /dev/null 2>&1; then
-      # No clean-check marker — check for blocking conflicts in non-marker files
-      has_blocking=true
+    # Clean if: clean-check marker exists, OR report contains CLEAN/no blocking verdict
+    local is_clean=false
+    if compgen -G "${PROJECT_DIR}/.docs/conflicts/*clean-check*" > /dev/null 2>&1; then
+      is_clean=true
+    elif grep -rqiE "Result:.*CLEAN|0 blocking|no blocking" "${PROJECT_DIR}/.docs/conflicts/" 2>/dev/null; then
+      is_clean=true
     fi
-    if $has_blocking; then
+
+    if ! $is_clean; then
       warn "Blocking conflicts found — interactive session for resolution..."
       run_claude "There are blocking conflicts in .docs/conflicts/. Present each to the user with resolution options. The user must choose. Update stories after each resolution. Re-run conflict check until clean." "interactive"
-      # Verify conflicts were actually resolved
-      if ! compgen -G "${PROJECT_DIR}/.docs/conflicts/*clean-check*" > /dev/null 2>&1; then
+      # Re-check after resolution
+      if ! grep -rqiE "Result:.*CLEAN|0 blocking|no blocking" "${PROJECT_DIR}/.docs/conflicts/" 2>/dev/null && \
+         ! compgen -G "${PROJECT_DIR}/.docs/conflicts/*clean-check*" > /dev/null 2>&1; then
         fail "Blocking conflicts still unresolved"; save_state "conflict_check" "failed"; return 1
       fi
     fi
@@ -1123,12 +1160,22 @@ run_build() {
   # Build is always interactive — a single non-interactive call can't reliably
   # execute full TDD cycles across multiple tasks. Claude needs to work
   # iteratively, and the user needs visibility into progress.
+  #
+  # Remove stale build-complete marker so check_build doesn't see a prior run
+  rm -f "${PIPELINE_DIR}/build-complete"
+
+  local build_complete_instruction="
+COMPLETION SIGNAL: When ALL tasks are implemented and the full test suite passes,
+write the file .pipeline/build-complete with contents 'done'. This is how the
+conductor detects that the build step succeeded."
+
   if [ "$tier" = "S" ]; then
     log "Starting direct TDD (Small tier, no pipeline overhead)..."
     run_claude "Run /tdd for each task in the plan (.docs/plans/). Execute tasks sequentially via TDD (RED→DOMAIN→GREEN→DOMAIN→COMMIT).
 
 Track progress yourself — no pipeline state machine needed. Commit after each task.
-Do NOT stop to ask for approval — execute all tasks to completion." "interactive"
+Do NOT stop to ask for approval — execute all tasks to completion.
+${build_complete_instruction}" "interactive"
   else
     log "Starting TDD pipeline (${autonomy} autonomy)..."
     run_claude "Run the /pipeline skill at ${autonomy} autonomy. Execute each task via TDD (RED→DOMAIN→GREEN→DOMAIN→COMMIT).
@@ -1145,7 +1192,8 @@ MANDATORY at batch boundaries:
 - Run micro-retro
 
 Track state in .pipeline/. Follow rework budget (3 cycles, then escalate).
-Do NOT stop to ask for approval — execute all tasks to completion." "interactive"
+Do NOT stop to ask for approval — execute all tasks to completion.
+${build_complete_instruction}" "interactive"
   fi
 
   check_build && { ok "Build complete — tests passing"; save_state "build" "done"; return 0; }
@@ -1694,20 +1742,37 @@ recover() {
   echo ""
   STATUS_LINES=0
 
-  local recover_prompt="Run /${step_name}. Complete this step, then stop."
-  if [ "$step_name" = "bootstrap" ]; then
-    recover_prompt="Run /bootstrap. Detect the project stack, scaffold directories, generate CLAUDE.md. Stop when done."
-  elif [ "$step_name" = "brainstorm" ]; then
-    recover_prompt="Run /brainstorm for: ${FEATURE_DESC:-this feature}. Write a design doc to .docs/specs/."
-  elif [ "$step_name" = "stories" ]; then
-    recover_prompt="Run /stories. Read .docs/specs/ and generate stories with negative paths to .docs/stories/."
-  elif [ "$step_name" = "build" ]; then
-    recover_prompt="Continue the build. Check .pipeline/task-status.json for progress, run /tdd on the next incomplete task."
-  fi
+  # Convert underscore step names to dash skill names (conflict_check → conflict-check)
+  local skill_name="${step_name//_/-}"
+  local recover_prompt="Run /${skill_name}. Complete this step, then stop."
+  case "$step_name" in
+    bootstrap)
+      recover_prompt="Run /bootstrap. Detect the project stack, scaffold directories, generate CLAUDE.md. Stop when done." ;;
+    brainstorm)
+      recover_prompt="Run /brainstorm for: ${FEATURE_DESC:-this feature}. Write a design doc to .docs/specs/." ;;
+    stories)
+      recover_prompt="Run /stories. Read .docs/specs/ and generate stories with negative paths to .docs/stories/." ;;
+    conflict_check)
+      recover_prompt="Run /conflict-check. Check ALL stories for conflicts. Write report to .docs/conflicts/." ;;
+    plan)
+      recover_prompt="Run /plan. Generate implementation plan from stories to .docs/plans/." ;;
+    architecture_review)
+      recover_prompt="Run /architecture-review. Review stories and plan for feasibility. Write to .docs/decisions/." ;;
+    acceptance_specs)
+      recover_prompt="Run /writing-system-tests. Generate failing acceptance specs from stories." ;;
+    build)
+      recover_prompt="Continue the build. Check .pipeline/task-status.json for progress, run /tdd on the next incomplete task." ;;
+    finish)
+      recover_prompt="Run /finish. Run tests, check git status, present completion options." ;;
+    manual_test)
+      recover_prompt="Run /manual-test. Test every story's acceptance criteria. Record results in .docs/manual-test-results.md." ;;
+    retro)
+      recover_prompt="Run /retro. Both parts: harness + application. Write to .docs/retros/." ;;
+  esac
 
   # Fresh session — don't carry context from prior steps
   claude --session-id "$(python3 -c 'import uuid; print(uuid.uuid4())')" \
-    --append-system-prompt "Recovery for step: ${step_name}. Complete ONLY this step, then stop and let the user /quit to return to the conductor. Do NOT proceed to subsequent steps." \
+    --append-system-prompt "Recovery for step: ${skill_name}. Complete ONLY this step, then stop and let the user /quit to return to the conductor. Do NOT proceed to subsequent steps." \
     "$recover_prompt" || true
   clear
   reset_display
@@ -1737,6 +1802,7 @@ usage() {
   echo "  --resume          Pick up from last completed step"
   echo "  --step <name>     Run a specific step only"
   echo "  --from <name>     Start from a specific step"
+  echo "  --cooldown <sec>  Seconds between steps (default: 10, 0 to disable)"
   echo "  --reset           Clear session state and start fresh"
   echo "  -h, --help        Show this help"
   echo ""
@@ -1757,6 +1823,9 @@ RUN_MODE="default"  # default | auto | interactive
 VIEW_MODE="dashboard"  # dashboard | output
 START_STEP=""
 SINGLE_STEP=""
+STEP_COOLDOWN=10          # seconds between steps (prevents rate limit bursts)
+STEP_COOLDOWN_ORIG=10     # original value for escalation math
+CLAUDE_CALL_COUNT=0       # cumulative calls this session
 
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -1768,6 +1837,7 @@ while [[ $# -gt 0 ]]; do
     --output)       VIEW_MODE="output" ;;
     --step)         SINGLE_STEP="$2"; shift ;;
     --from)         START_STEP="$2"; shift ;;
+    --cooldown)     STEP_COOLDOWN="$2"; STEP_COOLDOWN_ORIG="$2"; shift ;;
     --reset)        rm -f "$STATE_FILE" "$SESSION_FILE" "${PIPELINE_DIR}/session-created" "${SESSION_LOG}" 2>/dev/null; log "Session reset."; exit 0 ;;
     -h|--help)      usage; exit 0 ;;
     *)              FEATURE_DESC="$1" ;;
