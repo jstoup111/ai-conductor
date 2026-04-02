@@ -82,38 +82,10 @@ ensure_pipeline_dir() {
 
 # ─── Artifact Review ─────────────────────────────────────────────────────────
 
-# Render a markdown file in the terminal with basic formatting.
-# Converts headings, bold, italic, bullets, and code blocks to ANSI.
+# Render a markdown file in the terminal using glow.
 render_md() {
   local file=$1
-  awk '
-  BEGIN {
-    B = "\033[1m"; I = "\033[3m"; U = "\033[4m"
-    D = "\033[2m"; C = "\033[36m"; R = "\033[0m"
-    in_code = 0
-  }
-  /^```/ { in_code = !in_code; print D $0 R; next }
-  in_code { print D "  " $0 R; next }
-  /^#### / { sub(/^#### /, ""); printf "    %s▸ %s%s\n", D, $0, R; next }
-  /^### /  { sub(/^### /, "");  printf "   %s%s%s\n", B, $0, R; next }
-  /^## /   { sub(/^## /, "");   printf "  %s%s%s%s\n", B, U, $0, R; next }
-  /^# /    { sub(/^# /, "");    printf "%s%s%s%s\n", B, U, $0, R; next }
-  /^---$/  { printf "%s──────────────────────────────────────%s\n", D, R; next }
-  {
-    sub(/^- /, "  • ")
-    sub(/^  - /, "    ◦ ")
-    while (match($0, /\*\*[^*]+\*\*/)) {
-      $0 = substr($0,1,RSTART-1) B substr($0,RSTART+2,RLENGTH-4) R substr($0,RSTART+RLENGTH)
-    }
-    while (match($0, /\*[^*]+\*/)) {
-      $0 = substr($0,1,RSTART-1) I substr($0,RSTART+1,RLENGTH-2) R substr($0,RSTART+RLENGTH)
-    }
-    while (match($0, /`[^`]+`/)) {
-      $0 = substr($0,1,RSTART-1) C substr($0,RSTART+1,RLENGTH-2) R substr($0,RSTART+RLENGTH)
-    }
-    print
-  }
-  ' "$file"
+  glow -w 80 "$file"
 }
 
 # Review one or more artifacts with approve/reject per file.
