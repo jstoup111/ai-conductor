@@ -1297,6 +1297,25 @@ run_build() {
     local task_files
     task_files=$(extract_task_files "$task_block")
 
+    # Check dependencies before starting
+    local task_deps
+    task_deps=$(extract_task_deps "$task_block")
+    if [ "$task_deps" != "none" ]; then
+      local deps_met=true
+      for dep in $task_deps; do
+        if ! is_task_complete "$dep"; then
+          deps_met=false
+          warn "Task ${task_num} blocked — dependency task ${dep} not complete"
+          break
+        fi
+      done
+      if ! $deps_met; then
+        fail "Task ${task_num}/${total_tasks}: BLOCKED (unmet dependencies)"
+        failed_tasks="${failed_tasks} ${task_num}"
+        continue
+      fi
+    fi
+
     log "Task ${task_num}/${total_tasks}: $(echo "$task_block" | head -1 | sed 's/^### //')"
     set_task_status "$task_num" "in_progress"
 
@@ -1311,12 +1330,12 @@ Provide the subagent with ONLY this task context (do not send the full plan or a
 ${task_block}
 --- END TASK ---
 
-After the subagent completes, verify:
-1. The test suite passes (run it yourself to confirm)
-2. A commit was created for this task
-3. Report the result as: PASS or FAIL with reason
-
-Update .pipeline/task-status.json: set task-${task_num} status to 'completed' if PASS."
+After the subagent completes:
+1. Run the full test suite to confirm all tests pass
+2. Verify a commit was created for this task
+3. If tests fail, dispatch the subagent again with the error context (rework)
+4. Update .pipeline/task-status.json: set task-${task_num} status to 'completed' if PASS
+5. Report the result as: PASS or FAIL with reason"
 
     # Check if task was completed
     if is_task_complete "$task_num"; then

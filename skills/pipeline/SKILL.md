@@ -32,21 +32,42 @@ context bounded to ~2-3 summary lines per task regardless of feature size.
 
 ## Practices
 
+### Autonomy Levels
+
+| Level | Human Role | Agent Authority | When to Use |
+|-------|-----------|----------------|-------------|
+| **Conservative** | Approves each task before execution | Sequential only, proposes before executing | First time using the harness, unfamiliar domain |
+| **Standard** | Reviews at batch boundaries | Parallel agents on non-overlapping files, quality gates | Known domain, trusted test suite |
+| **Full** | Reviews completed features | Parallel agents + parallel worktrees, auto-merge on green | Mature project, well-defined stories |
+
+Default to **Standard** unless the user specifies otherwise.
+
 ### Per-Task Execution
 
-The conductor sends one prompt per task. For each task, Claude:
+The conductor marks the task as `in_progress` in `.pipeline/task-status.json`, then sends
+one prompt to Claude. Claude orchestrates the task through these steps:
 
 ```
-1. DISPATCH    — Send task to a TDD subagent via Agent tool (scoped context only)
-2. VERIFY      — Run the test suite to confirm the subagent's work
-3. UPDATE      — Mark task as "completed" in .pipeline/task-status.json
-4. REPORT      — Return PASS or FAIL with reason to the conductor
+0. UPDATE STATUS — Conductor marks task "in_progress" in .pipeline/task-status.json
+1. DECOMPOSE    — Read task, identify files to touch, check dependencies met
+2. DISPATCH     — Send task to a TDD subagent via Agent tool (scoped context only)
+                  Subagent runs full TDD cycle: RED → DOMAIN → GREEN → DOMAIN → COMMIT
+3. VERIFY       — Run the full test suite to confirm the subagent's work
+4. FIX          — If tests fail, dispatch subagent again with error context (rework cycle)
+5. UPDATE       — Mark task as "completed" in .pipeline/task-status.json
+6. REPORT       — Return PASS or FAIL with reason to the conductor
 ```
+
+**Dependency checking (step 1):** Before dispatching the subagent, verify that all tasks
+listed in the task's `**Dependencies:**` field are marked as completed in
+`.pipeline/task-status.json`. If a dependency is not met, report BLOCKED to the conductor.
 
 **Task status tracking is mandatory — write directly to `.pipeline/task-status.json`.**
 
 Do NOT rely on conversation-level task tools (TaskCreate/TaskUpdate) for persistence — those
-are ephemeral and lost between sessions. Write to the JSON file at each task boundary.
+are ephemeral and lost between sessions. Write to the JSON file at each task boundary:
+- Mark `in_progress` before dispatching the subagent
+- Mark `completed` after tests pass and commit is confirmed
 
 **Subagent context scoping:** The subagent receives ONLY:
 - The task description and acceptance criteria (from the plan)
@@ -54,6 +75,7 @@ are ephemeral and lost between sessions. Write to the JSON file at each task bou
 - The TDD skill instructions
 
 The subagent does NOT receive the full plan, all stories, or prior task history.
+The subagent handles the commit as part of the TDD COMMIT phase.
 
 ### Quality Gates
 
