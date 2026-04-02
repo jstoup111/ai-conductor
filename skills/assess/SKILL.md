@@ -55,6 +55,8 @@ Each specialist is a subagent dispatched via the Agent tool using the correspond
 | Data Integrity Reviewer | `agents/cto-data-integrity.md` | opus | `.pipeline/assessment/cto-data-integrity.md` |
 | Dependency Auditor | `agents/cto-dependencies.md` | sonnet | `.pipeline/assessment/cto-dependencies.md` |
 
+**Rate limit cooldown: sleep 30 seconds before dispatching Batch 2.**
+
 **Batch 2** (parallel, after Batch 1 completes):
 
 | Specialist | Agent File | Model | Output |
@@ -62,6 +64,8 @@ Each specialist is a subagent dispatched via the Agent tool using the correspond
 | Architecture Coherence | `agents/cto-architecture.md` | opus | `.pipeline/assessment/cto-architecture.md` |
 | Code Duplication | `agents/cto-duplication.md` | sonnet | `.pipeline/assessment/cto-duplication.md` |
 | Test Strategy | `agents/cto-testing.md` | sonnet | `.pipeline/assessment/cto-testing.md` |
+
+**Rate limit cooldown: sleep 30 seconds before dispatching Batch 3.**
 
 **Batch 3** (parallel, after Batch 2 completes):
 
@@ -89,6 +93,8 @@ defined in your persona file. Be thorough — this is a deep assessment, not a s
 for single-area assessments). Present the specialist report directly.
 
 ### 5. Dispatch CTO Orchestrator
+
+**Rate limit cooldown: sleep 30 seconds before dispatching the CTO orchestrator.**
 
 After all 9 specialist reports are written, dispatch the CTO orchestrator:
 

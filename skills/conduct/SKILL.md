@@ -14,6 +14,20 @@ to the correct next skill. Run `/conduct` at any point to see where you are and 
 
 Does NOT run other skills internally — it assesses state and directs. The user invokes each skill.
 
+### Session Model
+
+**One Claude session per feature/worktree.** All steps — design through retro — share the same
+session. The session ID is stored in `.pipeline/conduct-session-id`.
+
+- **Design phase** (bootstrap → plan): Context grows moderately. All artifacts persist to disk.
+- **Build phase** (pipeline): The conductor drives the task loop. Claude orchestrates each task
+  by dispatching subagents. Subagent context is isolated and discarded — only a ~2-3 line summary
+  returns to the orchestrator per task. No context compaction needed.
+- **Ship phase** (finish → retro): Lightweight steps, context stays bounded.
+
+Interactive steps reuse the feature session via `--resume`. No fresh sessions are created
+mid-feature. This prevents redundant cold starts that waste API calls and hit rate limits.
+
 ## The Flow
 
 ```

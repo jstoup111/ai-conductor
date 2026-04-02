@@ -9,59 +9,58 @@ requires: [".docs/plans/ with implementation plan"]
 
 ## Purpose
 
-Orchestrates execution of an implementation plan through quality-gated stages. Three autonomy
-levels let the user dial trust up or down. Tracks state in `.pipeline/` for visibility and
-feeds the retro skill with audit data.
+Orchestrates execution of an implementation plan through quality-gated stages. The conductor
+(`bin/conduct`) drives the task loop — it parses the plan, iterates tasks, and sends one prompt
+per task. Claude orchestrates each task by dispatching subagents for implementation. Subagent
+context is isolated and discarded after completion, keeping the orchestrator's context lean.
+
+## Execution Model
+
+```
+bin/conduct (bash)          Claude (orchestrator)         Subagent (implementer)
+─────────────────          ─────────────────────         ──────────────────────
+Parse plan, extract task →  Receive task context    →     Full TDD cycle
+                            Dispatch subagent       →     RED → DOMAIN → GREEN
+                            Verify result           ←     → DOMAIN → COMMIT
+Check task-status.json  ←   Report PASS/FAIL              (context discarded)
+Next task or evaluator
+```
+
+**Key constraint:** Claude MUST dispatch subagents for implementation via the Agent tool.
+It must NOT implement directly in the orchestration session. This keeps the orchestrator's
+context bounded to ~2-3 summary lines per task regardless of feature size.
 
 ## Practices
 
-### Autonomy Levels
-
-| Level | Human Role | Agent Authority | When to Use |
-|-------|-----------|----------------|-------------|
-| **Conservative** | Approves each task before execution | Sequential only, proposes before executing | First time using the harness, unfamiliar domain |
-| **Standard** | Reviews at batch boundaries | Parallel agents on non-overlapping files, quality gates | Known domain, trusted test suite |
-| **Full** | Reviews completed features | Parallel agents + parallel worktrees, auto-merge on green | Mature project, well-defined stories |
-
-Default to **Standard** unless the user specifies otherwise.
-
 ### Per-Task Execution
 
-For each task in the implementation plan:
+The conductor sends one prompt per task. For each task, Claude:
 
 ```
-0. UPDATE STATUS — Mark task as "in_progress" in .pipeline/task-status.json
-1. DECOMPOSE    — Read task, identify files to touch, check dependencies met
-2. IMPLEMENT    — TDD cycle (RED → DOMAIN → GREEN → DOMAIN → COMMIT)
-3. REVIEW       — Dispatch evaluator with fresh context
-4. FIX          — Address review findings (if any)
-5. VERIFY       — Run full test suite
-6. COMMIT       — Clean commit with descriptive message
-7. UPDATE STATUS — Mark task as "completed" in .pipeline/task-status.json
+1. DISPATCH    — Send task to a TDD subagent via Agent tool (scoped context only)
+2. VERIFY      — Run the test suite to confirm the subagent's work
+3. UPDATE      — Mark task as "completed" in .pipeline/task-status.json
+4. REPORT      — Return PASS or FAIL with reason to the conductor
 ```
 
 **Task status tracking is mandatory — write directly to `.pipeline/task-status.json`.**
 
 Do NOT rely on conversation-level task tools (TaskCreate/TaskUpdate) for persistence — those
-are ephemeral and lost between sessions. Write to the JSON file at each task boundary:
-- Mark `in_progress` before coding
-- Mark `completed` after commit
-- The post-commit hook is a backup; fix stale status immediately if detected
+are ephemeral and lost between sessions. Write to the JSON file at each task boundary.
 
-**Batch independent tasks:** Group tasks that don't modify overlapping files into batches for
-parallel or combined execution. Two strategies:
+**Subagent context scoping:** The subagent receives ONLY:
+- The task description and acceptance criteria (from the plan)
+- File paths to modify (from the plan's "Files likely touched")
+- The TDD skill instructions
 
-1. **Combined dispatch** — When consecutive tasks follow the same pattern (e.g., "add validations
-   to Model X" repeated for 5 models), batch into a single agent that handles all in one TDD pass.
-2. **Parallel dispatch** — When tasks are independent but follow different patterns, dispatch each
-   as a separate parallel Agent tool call (Standard/Full autonomy).
-
-Only batch/parallelize when tasks don't modify overlapping files (check `**Files likely touched:**`
-in the plan). When in doubt, run sequentially.
+The subagent does NOT receive the full plan, all stories, or prior task history.
 
 ### Quality Gates
 
 **HARD GATE: Evaluator dispatch is mandatory at required batch boundaries.**
+
+**Rate limit cooldown: sleep 15 seconds before dispatching the evaluator** to avoid stacking
+on top of the just-completed TDD agent's API usage.
 
 At batch boundaries, dispatch an evaluator agent with **fresh, scoped context** (no shared
 state with the generator). Provide the evaluator with:

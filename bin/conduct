@@ -339,11 +339,10 @@ else:
     echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
     STATUS_LINES=0
-    # Each interactive step gets a FRESH session so Claude doesn't carry
-    # momentum from prior steps and start implementing after plan creation.
-    # The system prompt tells Claude to complete ONLY this step then stop.
+    # Reuse the feature session — context stays lean because each step's
+    # system prompt scopes behavior. No fresh sessions needed.
     local step_context="You are running step: ${step_name}. Complete ONLY this step, then stop and let the user /quit to return to the conductor. Do NOT proceed to subsequent steps. ${context}."
-    claude --session-id "$(python3 -c 'import uuid; print(uuid.uuid4())')" \
+    claude $session_flag \
       --append-system-prompt "$step_context" \
       "$prompt" || true
     clear
@@ -351,6 +350,22 @@ else:
     start_live_refresh 10
     touch "${PIPELINE_DIR}/session-created"
     append_progress "$prompt"
+  fi
+
+  # Rate limit prevention: cooldown between steps + escalation on heavy sessions
+  CLAUDE_CALL_COUNT=$((CLAUDE_CALL_COUNT + 1))
+  local effective_cooldown=$STEP_COOLDOWN
+  if [ "$CLAUDE_CALL_COUNT" -ge 20 ]; then
+    effective_cooldown=$((STEP_COOLDOWN_ORIG * 3))
+  elif [ "$CLAUDE_CALL_COUNT" -ge 10 ]; then
+    effective_cooldown=$((STEP_COOLDOWN_ORIG * 2))
+  fi
+  if [ "$effective_cooldown" -ne "$STEP_COOLDOWN" ]; then
+    STEP_COOLDOWN=$effective_cooldown
+    warn "Escalating cooldown to ${STEP_COOLDOWN}s (${CLAUDE_CALL_COUNT} calls this session)"
+  fi
+  if [ "$effective_cooldown" -gt 0 ]; then
+    sleep "$effective_cooldown"
   fi
 }
 
@@ -929,6 +944,103 @@ should_skip_for_tier() {
   return 1  # don't skip
 }
 
+# ─── Task Extraction from Plan Files ─────────────────────────────────────────
+
+# Find the active plan file.
+get_plan_file() {
+  # Check for plan-ref first (pipeline sets this)
+  if [ -f "${PIPELINE_DIR}/plan-ref.md" ]; then
+    local ref
+    ref=$(cat "${PIPELINE_DIR}/plan-ref.md" 2>/dev/null | head -1)
+    [ -f "$ref" ] && echo "$ref" && return 0
+  fi
+  # Fallback: most recent plan file
+  local latest
+  latest=$(ls -t "${PROJECT_DIR}/.docs/plans/"*.md 2>/dev/null | head -1)
+  [ -n "$latest" ] && echo "$latest" && return 0
+  return 1
+}
+
+# Extract task count from a plan file.
+get_task_count() {
+  local plan_file=$1
+  grep -cE '^### Task [0-9]+:' "$plan_file" 2>/dev/null || echo 0
+}
+
+# Extract a single task block from the plan file (Task N's full markdown).
+# Outputs the text between "### Task N:" and the next "### Task" or "##" header.
+extract_task() {
+  local plan_file=$1
+  local task_num=$2
+  python3 -c "
+import re, sys
+
+with open(sys.argv[1]) as f:
+    content = f.read()
+
+pattern = r'(### Task ' + sys.argv[2] + r':.*?)(?=\n### Task \d+:|\n## [^#]|\Z)'
+match = re.search(pattern, content, re.DOTALL)
+if match:
+    print(match.group(1).strip())
+else:
+    sys.exit(1)
+" "$plan_file" "$task_num"
+}
+
+# Extract the "Files likely touched" list from a task block.
+extract_task_files() {
+  local task_block="$1"
+  echo "$task_block" | sed -n '/\*\*Files likely touched:\*\*/,/^\*\*/{ /^\*\*Files/d; /^\*\*/d; p; }' | sed 's/^- //' | sed 's/ — .*//'
+}
+
+# Extract the dependency task numbers from a task block.
+# Returns "none" or space-separated task numbers like "1 3 5".
+extract_task_deps() {
+  local task_block="$1"
+  local deps_line
+  deps_line=$(echo "$task_block" | grep -oP '\*\*Dependencies:\*\*\s*\K.*' || echo "none")
+  if echo "$deps_line" | grep -qi "none"; then
+    echo "none"
+  else
+    echo "$deps_line" | grep -oP '\d+' | tr '\n' ' '
+  fi
+}
+
+# Check if a task is complete in .pipeline/task-status.json.
+is_task_complete() {
+  local task_num=$1
+  [ -f "${PIPELINE_DIR}/task-status.json" ] || return 1
+  python3 -c "
+import json, sys
+with open('${PIPELINE_DIR}/task-status.json') as f:
+    state = json.load(f)
+task = state.get('task-' + sys.argv[1], state.get('task_' + sys.argv[1], {}))
+if isinstance(task, dict) and task.get('status') == 'completed':
+    sys.exit(0)
+sys.exit(1)
+" "$task_num" 2>/dev/null
+}
+
+# Mark a task as in_progress or completed in .pipeline/task-status.json.
+set_task_status() {
+  local task_num=$1
+  local status=$2  # in_progress | completed
+  python3 -c "
+import json, os, sys
+path = '${PIPELINE_DIR}/task-status.json'
+state = {}
+if os.path.exists(path):
+    with open(path) as f:
+        state = json.load(f)
+key = 'task-' + sys.argv[1]
+if key not in state:
+    state[key] = {}
+state[key]['status'] = sys.argv[2]
+with open(path, 'w') as f:
+    json.dump(state, f, indent=2)
+" "$task_num" "$status"
+}
+
 run_stories() {
   step_header 4 "stories" "DECIDE"
   if step_done "stories"; then
@@ -1114,42 +1226,134 @@ run_build() {
   step_header 9 "tdd / pipeline" "BUILD"
   step_done "plan" || { fail "GATE: Need plan first"; return 1; }
 
-  local autonomy="Standard"
-  [ "${RUN_MODE}" = "auto" ] && autonomy="Full"
+  local plan_file
+  plan_file=$(get_plan_file) || { fail "No plan file found in .docs/plans/"; return 1; }
+
+  local total_tasks
+  total_tasks=$(get_task_count "$plan_file")
+  [ "$total_tasks" -eq 0 ] && { fail "No tasks found in plan: $plan_file"; return 1; }
 
   local tier
   tier=$(get_complexity_tier)
 
-  # Build is always interactive — a single non-interactive call can't reliably
-  # execute full TDD cycles across multiple tasks. Claude needs to work
-  # iteratively, and the user needs visibility into progress.
-  if [ "$tier" = "S" ]; then
-    log "Starting direct TDD (Small tier, no pipeline overhead)..."
-    run_claude "Run /tdd for each task in the plan (.docs/plans/). Execute tasks sequentially via TDD (RED→DOMAIN→GREEN→DOMAIN→COMMIT).
+  log "Building from plan: $(basename "$plan_file") (${total_tasks} tasks, tier ${tier})"
+  ensure_pipeline_dir
 
-Track progress yourself — no pipeline state machine needed. Commit after each task.
-Do NOT stop to ask for approval — execute all tasks to completion." "interactive"
-  else
-    log "Starting TDD pipeline (${autonomy} autonomy)..."
-    run_claude "Run the /pipeline skill at ${autonomy} autonomy. Execute each task via TDD (RED→DOMAIN→GREEN→DOMAIN→COMMIT).
+  # Save plan reference for pipeline state
+  echo "$plan_file" > "${PIPELINE_DIR}/plan-ref.md"
 
-PARALLEL EXECUTION: Read the plan's Dependencies and Files likely touched fields. Group tasks
-with no mutual file overlap into parallel batches. Dispatch independent tasks as parallel Agent
-tool calls (max 3 concurrent). Run test suite after each parallel batch to verify no conflicts.
+  # ─── Conductor-driven task loop ──────────────────────────────────────────
+  # The conductor owns the loop. Claude orchestrates each task by dispatching
+  # subagents. Subagent context is isolated and discarded after completion.
+  # The orchestrator's context grows only by summary lines (~2-3 per task).
 
-MANDATORY at batch boundaries:
-- Dispatch evaluator with fresh context (hard gate)
-- Run linter
-- Run /simplify for duplication
-- Persist at least one .memory/ entry per batch
-- Run micro-retro
+  local completed=0
+  local failed_tasks=""
+  local batch_start_task=1
+  local batch_size=4  # evaluator runs every N tasks
 
-Track state in .pipeline/. Follow rework budget (3 cycles, then escalate).
-Do NOT stop to ask for approval — execute all tasks to completion." "interactive"
+  for task_num in $(seq 1 "$total_tasks"); do
+    # Skip already-completed tasks (resume support)
+    if is_task_complete "$task_num"; then
+      ok "Task ${task_num}/${total_tasks}: already complete"
+      completed=$((completed + 1))
+      continue
+    fi
+
+    local task_block
+    task_block=$(extract_task "$plan_file" "$task_num")
+    if [ -z "$task_block" ]; then
+      warn "Could not extract task ${task_num} from plan — skipping"
+      continue
+    fi
+
+    local task_files
+    task_files=$(extract_task_files "$task_block")
+
+    log "Task ${task_num}/${total_tasks}: $(echo "$task_block" | head -1 | sed 's/^### //')"
+    set_task_status "$task_num" "in_progress"
+
+    # Dispatch task to Claude — it must use subagents for implementation
+    run_claude "Implement the following task using the /tdd skill. You MUST dispatch a subagent
+via the Agent tool to do the implementation — do NOT implement directly in this session.
+The subagent handles the full TDD cycle: RED → DOMAIN → GREEN → DOMAIN → COMMIT.
+
+Provide the subagent with ONLY this task context (do not send the full plan or all stories):
+
+--- TASK ---
+${task_block}
+--- END TASK ---
+
+After the subagent completes, verify:
+1. The test suite passes (run it yourself to confirm)
+2. A commit was created for this task
+3. Report the result as: PASS or FAIL with reason
+
+Update .pipeline/task-status.json: set task-${task_num} status to 'completed' if PASS."
+
+    # Check if task was completed
+    if is_task_complete "$task_num"; then
+      ok "Task ${task_num}/${total_tasks}: PASS"
+      completed=$((completed + 1))
+    else
+      fail "Task ${task_num}/${total_tasks}: FAIL"
+      failed_tasks="${failed_tasks} ${task_num}"
+
+      # Rework: retry once before moving on
+      warn "Retrying task ${task_num}..."
+      run_claude "Task ${task_num} failed. Review the test output and error. Dispatch a subagent
+to fix the issue and complete the TDD cycle. Update .pipeline/task-status.json on success."
+
+      if is_task_complete "$task_num"; then
+        ok "Task ${task_num}/${total_tasks}: PASS (rework)"
+        completed=$((completed + 1))
+        failed_tasks=$(echo "$failed_tasks" | sed "s/ ${task_num}//")
+      else
+        fail "Task ${task_num}: failed after rework — continuing to next task"
+      fi
+    fi
+
+    # Evaluator at batch boundaries (every batch_size tasks)
+    if [ $((task_num % batch_size)) -eq 0 ] && [ "$task_num" -lt "$total_tasks" ]; then
+      log "Batch boundary (tasks ${batch_start_task}-${task_num}) — dispatching evaluator..."
+      run_claude "Dispatch an evaluator subagent via the Agent tool using agents/evaluator.md persona
+with model='opus'. Provide it ONLY with:
+- The git diff since task ${batch_start_task} started: git diff HEAD~$((task_num - batch_start_task + 1))..HEAD
+- The acceptance criteria for tasks ${batch_start_task}-${task_num} from the plan
+- Test output summary (run tests, report pass/fail counts)
+
+The evaluator reviews: spec compliance, code quality, domain integrity, security.
+Write verdict to .pipeline/audit-trail/batch-${task_num}/review.json.
+If BLOCK verdict: stop and report to user. If REQUEST_CHANGES: note for next task."
+      batch_start_task=$((task_num + 1))
+    fi
+  done
+
+  # Final evaluator on the last batch
+  if [ "$completed" -gt 0 ] && [ "$batch_start_task" -le "$total_tasks" ]; then
+    log "Final batch evaluator (tasks ${batch_start_task}-${total_tasks})..."
+    run_claude "Dispatch a final evaluator subagent via the Agent tool using agents/evaluator.md
+persona with model='opus'. Review the final batch diff and full branch summary.
+Write verdict to .pipeline/audit-trail/final/review.json.
+Also write .pipeline/audit-trail/code-review-satisfied.md if APPROVE."
   fi
 
-  check_build && { ok "Build complete — tests passing"; save_state "build" "done"; return 0; }
-  fail "Build incomplete — tests not passing"; save_state "build" "failed"; return 1
+  # Summary
+  log "Build summary: ${completed}/${total_tasks} tasks completed"
+  if [ -n "$failed_tasks" ]; then
+    warn "Failed tasks:${failed_tasks}"
+  fi
+
+  if [ "$completed" -eq "$total_tasks" ]; then
+    ok "Build complete — all ${total_tasks} tasks done"
+    echo "done" > "${PIPELINE_DIR}/build-complete"
+    save_state "build" "done"
+    return 0
+  else
+    fail "Build incomplete — ${completed}/${total_tasks} tasks done"
+    save_state "build" "failed"
+    return 1
+  fi
 }
 
 run_finish() {
@@ -1757,6 +1961,9 @@ RUN_MODE="default"  # default | auto | interactive
 VIEW_MODE="dashboard"  # dashboard | output
 START_STEP=""
 SINGLE_STEP=""
+STEP_COOLDOWN=10          # seconds between steps (prevents rate limit bursts)
+STEP_COOLDOWN_ORIG=10     # original value for escalation math
+CLAUDE_CALL_COUNT=0       # cumulative calls this session
 
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -1768,6 +1975,7 @@ while [[ $# -gt 0 ]]; do
     --output)       VIEW_MODE="output" ;;
     --step)         SINGLE_STEP="$2"; shift ;;
     --from)         START_STEP="$2"; shift ;;
+    --cooldown)     STEP_COOLDOWN="$2"; STEP_COOLDOWN_ORIG="$2"; shift ;;
     --reset)        rm -f "$STATE_FILE" "$SESSION_FILE" "${PIPELINE_DIR}/session-created" "${SESSION_LOG}" 2>/dev/null; log "Session reset."; exit 0 ;;
     -h|--help)      usage; exit 0 ;;
     *)              FEATURE_DESC="$1" ;;
