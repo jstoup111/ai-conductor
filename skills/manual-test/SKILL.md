@@ -42,11 +42,19 @@ npm start &
 # Or: npm run dev &
 ```
 
-Verify it's up: `curl -s http://localhost:3000/up` (or health check endpoint).
+**Always stop and restart the server before testing.** A stale server from a prior session
+runs old code and gives false results. Kill any existing server process, then start fresh:
 
-**Verify the server matches current code.** A stale server from a prior session will give false
-results. Check that expected routes/endpoints exist (e.g., `GET /openapi.json` for FastAPI,
-`rails routes` output). If the server is stale, restart it before testing.
+```bash
+# Kill existing server (check common ports)
+lsof -ti:3000 | xargs kill -9 2>/dev/null || true  # Rails
+lsof -ti:8000 | xargs kill -9 2>/dev/null || true  # FastAPI/Django
+lsof -ti:5173 | xargs kill -9 2>/dev/null || true  # Vite
+
+# Start fresh
+```
+
+After starting, verify it's up: `curl -s http://localhost:3000/up` (or health check endpoint).
 
 ### 3. Walk Through Stories (API Projects)
 

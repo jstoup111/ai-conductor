@@ -51,9 +51,14 @@ Check for views/frontend to determine spec type:
 
 Generate specs for any story file that lacks a corresponding spec.
 
-**Skip specs for already-tested behavior:** Before generating, check the existing test suite
-for overlap. If an acceptance criterion is already covered by existing tests (e.g., unit tests,
-request specs, or prior integration specs), do not generate a duplicate spec for it.
+**Skip specs for already-tested behavior:** Before generating, grep the existing test suite
+for overlap. For each acceptance criterion, search test files for keywords from the criterion
+(e.g., method names, status codes, error messages). If a matching test already exists — unit
+test, request spec, or prior integration spec — do not generate a duplicate acceptance spec.
+
+Concrete check: `grep -r "criterion keyword" tests/ spec/` across the existing test directories.
+If a test file already asserts the expected behavior, skip that criterion. Log skipped criteria
+so the retro can verify nothing was missed.
 
 **End-to-end, not mocked:** Acceptance specs test the real system. Do NOT mock internal
 infrastructure (database, queues, caches, background jobs). Only mock **third-party external
