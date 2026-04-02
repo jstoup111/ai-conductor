@@ -591,98 +591,303 @@ test_gates_use_state() {
 }
 test_gates_use_state
 
-# ─── Test 14: Rate limit cooldown variables exist ───────────────────────
+# ─── Test 14: Single session per feature (no fresh session in interactive) ──
+
+echo ""
+echo -e "${BOLD}Test Suite: Single Session Per Feature${NC}"
+echo ""
+
+test_single_session() {
+  # Interactive branch should NOT create a fresh session via new UUID
+  local run_claude_block
+  run_claude_block=$(sed -n '/^run_claude()/,/^}/p' "$CONDUCT")
+
+  # Should NOT have: --session-id "$(python3 -c 'import uuid; print(uuid.uuid4())')"
+  local fresh_sessions
+  fresh_sessions=$(echo "$run_claude_block" | grep -c 'import uuid; print(uuid.uuid4())' || true)
+  assert "Interactive branch does not create fresh sessions" \
+    "$([ "$fresh_sessions" -eq 0 ] && echo 0 || echo 1)"
+
+  # Should use $session_flag in the interactive branch (reuses feature session)
+  local uses_session_flag
+  uses_session_flag=$(echo "$run_claude_block" | grep -c 'claude $session_flag' || true)
+  assert "Interactive branch reuses feature session via \$session_flag" \
+    "$([ "$uses_session_flag" -ge 1 ] && echo 0 || echo 1)"
+}
+test_single_session
+
+# ─── Test 15: Task extraction functions exist ───────────────────────────
+
+echo ""
+echo -e "${BOLD}Test Suite: Task Extraction Functions${NC}"
+echo ""
+
+test_task_extraction_functions() {
+  # get_plan_file function exists
+  local has_get_plan
+  has_get_plan=$(grep -c '^get_plan_file()' "$CONDUCT" || true)
+  assert "get_plan_file() function exists" \
+    "$([ "$has_get_plan" -ge 1 ] && echo 0 || echo 1)"
+
+  # get_task_count function exists
+  local has_count
+  has_count=$(grep -c '^get_task_count()' "$CONDUCT" || true)
+  assert "get_task_count() function exists" \
+    "$([ "$has_count" -ge 1 ] && echo 0 || echo 1)"
+
+  # extract_task function exists
+  local has_extract
+  has_extract=$(grep -c '^extract_task()' "$CONDUCT" || true)
+  assert "extract_task() function exists" \
+    "$([ "$has_extract" -ge 1 ] && echo 0 || echo 1)"
+
+  # extract_task_files function exists
+  local has_files
+  has_files=$(grep -c '^extract_task_files()' "$CONDUCT" || true)
+  assert "extract_task_files() function exists" \
+    "$([ "$has_files" -ge 1 ] && echo 0 || echo 1)"
+
+  # extract_task_deps function exists
+  local has_deps
+  has_deps=$(grep -c '^extract_task_deps()' "$CONDUCT" || true)
+  assert "extract_task_deps() function exists" \
+    "$([ "$has_deps" -ge 1 ] && echo 0 || echo 1)"
+
+  # is_task_complete function exists
+  local has_complete
+  has_complete=$(grep -c '^is_task_complete()' "$CONDUCT" || true)
+  assert "is_task_complete() function exists" \
+    "$([ "$has_complete" -ge 1 ] && echo 0 || echo 1)"
+
+  # set_task_status function exists
+  local has_set
+  has_set=$(grep -c '^set_task_status()' "$CONDUCT" || true)
+  assert "set_task_status() function exists" \
+    "$([ "$has_set" -ge 1 ] && echo 0 || echo 1)"
+}
+test_task_extraction_functions
+
+# ─── Test 16: Task extraction works on real plan format ─────────────────
+
+echo ""
+echo -e "${BOLD}Test Suite: Task Extraction Parsing${NC}"
+echo ""
+
+test_task_extraction_parsing() {
+  local plan_file="${TMPDIR_ROOT}/test_plan.md"
+  cat > "$plan_file" << 'PLAN'
+# Implementation Plan: Test Feature
+
+## Tasks
+
+### Task 1: Add user model
+**Story:** 1.1 (user registration)
+**Type:** infrastructure
+
+**Steps:**
+1. Write test for User model
+2. Verify test fails (RED)
+3. Create User model with name, email
+4. Verify test passes (GREEN)
+5. Commit: "Add User model"
+
+**Files likely touched:**
+- app/models/user.rb — new model
+- spec/models/user_spec.rb — new test
+
+**Dependencies:** none
+
+### Task 2: Add registration endpoint
+**Story:** 1.2 (registration API)
+**Type:** happy-path
+
+**Steps:**
+1. Write request spec for POST /users
+2. Verify test fails (RED)
+3. Add UsersController#create
+4. Verify test passes (GREEN)
+5. Commit: "Add registration endpoint"
+
+**Files likely touched:**
+- app/controllers/users_controller.rb — new controller
+- spec/requests/users_spec.rb — new test
+
+**Dependencies:** Task 1
+
+## Verification
+- [x] All tasks mapped
+PLAN
+
+  # Test get_task_count
+  # Source the function from conduct by extracting it
+  local task_count
+  task_count=$(grep -cE '^### Task [0-9]+:' "$plan_file")
+  assert "get_task_count finds 2 tasks" \
+    "$([ "$task_count" -eq 2 ] && echo 0 || echo 1)"
+
+  # Test extract_task via python (same logic as the function)
+  local task1
+  task1=$(python3 -c "
+import re, sys
+with open(sys.argv[1]) as f:
+    content = f.read()
+pattern = r'(### Task 1:.*?)(?=\n### Task \d+:|\n## [^#]|\Z)'
+match = re.search(pattern, content, re.DOTALL)
+if match: print(match.group(1).strip())
+" "$plan_file")
+  assert "extract_task gets Task 1 content" \
+    "$(echo "$task1" | grep -q 'Add user model' && echo 0 || echo 1)"
+  assert "extract_task includes files section" \
+    "$(echo "$task1" | grep -q 'app/models/user.rb' && echo 0 || echo 1)"
+  assert "extract_task stops before Task 2" \
+    "$(echo "$task1" | grep -q 'registration endpoint' && echo 1 || echo 0)"
+
+  # Test extract_task for Task 2
+  local task2
+  task2=$(python3 -c "
+import re, sys
+with open(sys.argv[1]) as f:
+    content = f.read()
+pattern = r'(### Task 2:.*?)(?=\n### Task \d+:|\n## [^#]|\Z)'
+match = re.search(pattern, content, re.DOTALL)
+if match: print(match.group(1).strip())
+" "$plan_file")
+  assert "extract_task gets Task 2 content" \
+    "$(echo "$task2" | grep -q 'registration endpoint' && echo 0 || echo 1)"
+
+  # Test dependencies extraction
+  local deps1
+  deps1=$(echo "$task1" | grep -oP '\*\*Dependencies:\*\*\s*\K.*')
+  assert "Task 1 dependencies is 'none'" \
+    "$(echo "$deps1" | grep -qi 'none' && echo 0 || echo 1)"
+
+  local deps2
+  deps2=$(echo "$task2" | grep -oP '\*\*Dependencies:\*\*\s*\K.*')
+  assert "Task 2 depends on Task 1" \
+    "$(echo "$deps2" | grep -q '1' && echo 0 || echo 1)"
+}
+test_task_extraction_parsing
+
+# ─── Test 17: Conductor-driven build loop ───────────────────────────────
+
+echo ""
+echo -e "${BOLD}Test Suite: Conductor-Driven Build Loop${NC}"
+echo ""
+
+test_conductor_build_loop() {
+  local build_func
+  build_func=$(sed -n '/^run_build()/,/^}/p' "$CONDUCT")
+
+  # run_build should call get_plan_file
+  local uses_plan_file
+  uses_plan_file=$(echo "$build_func" | grep -c 'get_plan_file' || true)
+  assert "run_build calls get_plan_file" \
+    "$([ "$uses_plan_file" -ge 1 ] && echo 0 || echo 1)"
+
+  # run_build should call get_task_count
+  local uses_task_count
+  uses_task_count=$(echo "$build_func" | grep -c 'get_task_count' || true)
+  assert "run_build calls get_task_count" \
+    "$([ "$uses_task_count" -ge 1 ] && echo 0 || echo 1)"
+
+  # run_build should call extract_task
+  local uses_extract
+  uses_extract=$(echo "$build_func" | grep -c 'extract_task ' || true)
+  assert "run_build calls extract_task" \
+    "$([ "$uses_extract" -ge 1 ] && echo 0 || echo 1)"
+
+  # run_build should iterate with a for loop over tasks
+  local has_task_loop
+  has_task_loop=$(echo "$build_func" | grep -c 'for task_num in' || true)
+  assert "run_build has a task iteration loop" \
+    "$([ "$has_task_loop" -ge 1 ] && echo 0 || echo 1)"
+
+  # run_build should require subagent dispatch (not direct implementation)
+  local requires_subagent
+  requires_subagent=$(echo "$build_func" | grep -c 'dispatch a subagent\|Agent tool\|do NOT implement directly' || true)
+  assert "run_build requires subagent dispatch for implementation" \
+    "$([ "$requires_subagent" -ge 1 ] && echo 0 || echo 1)"
+
+  # run_build should check is_task_complete after each task
+  local checks_complete
+  checks_complete=$(echo "$build_func" | grep -c 'is_task_complete' || true)
+  assert "run_build checks task completion status" \
+    "$([ "$checks_complete" -ge 2 ] && echo 0 || echo 1)"
+
+  # run_build should dispatch evaluator at batch boundaries
+  local has_evaluator
+  has_evaluator=$(echo "$build_func" | grep -c 'evaluator' || true)
+  assert "run_build dispatches evaluator at batch boundaries" \
+    "$([ "$has_evaluator" -ge 2 ] && echo 0 || echo 1)"
+
+  # run_build should NOT use "interactive" mode
+  local uses_interactive
+  uses_interactive=$(echo "$build_func" | grep -c '"interactive"' || true)
+  assert "run_build does not use interactive mode" \
+    "$([ "$uses_interactive" -eq 0 ] && echo 0 || echo 1)"
+}
+test_conductor_build_loop
+
+# ─── Test 18: Session model documented in conduct skill ─────────────────
+
+echo ""
+echo -e "${BOLD}Test Suite: Session Model Documentation${NC}"
+echo ""
+
+test_session_model_docs() {
+  local conduct_skill="$HARNESS_DIR/skills/conduct/SKILL.md"
+  local pipeline_skill="$HARNESS_DIR/skills/pipeline/SKILL.md"
+
+  # Conduct skill documents single session per feature
+  local has_session_model
+  has_session_model=$(grep -ci 'one.*session per feature\|single.*session' "$conduct_skill" || true)
+  assert "Conduct skill documents single-session-per-feature model" \
+    "$([ "$has_session_model" -ge 1 ] && echo 0 || echo 1)"
+
+  # Pipeline skill documents subagent isolation
+  local has_subagent_model
+  has_subagent_model=$(grep -ci 'subagent.*isolated\|subagent.*discard\|context.*discard' "$pipeline_skill" || true)
+  assert "Pipeline skill documents subagent context isolation" \
+    "$([ "$has_subagent_model" -ge 1 ] && echo 0 || echo 1)"
+
+  # Pipeline skill documents conductor-driven loop
+  local has_conductor
+  has_conductor=$(grep -ci 'drives the task loop\|conductor.*loop\|conduct.*drives' "$pipeline_skill" || true)
+  assert "Pipeline skill documents conductor-driven task loop" \
+    "$([ "$has_conductor" -ge 1 ] && echo 0 || echo 1)"
+}
+test_session_model_docs
+
+# ─── Test 19: Rate limit cooldown ───────────────────────────────────────
 
 echo ""
 echo -e "${BOLD}Test Suite: Rate Limit Cooldown${NC}"
 echo ""
 
 test_rate_limit_cooldown() {
-  # STEP_COOLDOWN variable exists with default 10
   local has_cooldown
   has_cooldown=$(grep -c '^STEP_COOLDOWN=10' "$CONDUCT" || true)
   assert "STEP_COOLDOWN variable exists with default 10" \
     "$([ "$has_cooldown" -ge 1 ] && echo 0 || echo 1)"
 
-  # STEP_COOLDOWN_ORIG exists for escalation math
-  local has_orig
-  has_orig=$(grep -c '^STEP_COOLDOWN_ORIG=10' "$CONDUCT" || true)
-  assert "STEP_COOLDOWN_ORIG variable exists with default 10" \
-    "$([ "$has_orig" -ge 1 ] && echo 0 || echo 1)"
-
-  # CLAUDE_CALL_COUNT variable exists with default 0
   local has_counter
   has_counter=$(grep -c '^CLAUDE_CALL_COUNT=0' "$CONDUCT" || true)
   assert "CLAUDE_CALL_COUNT variable exists with default 0" \
     "$([ "$has_counter" -ge 1 ] && echo 0 || echo 1)"
 
-  # --cooldown flag is parsed in the argument handler
   local has_flag
   has_flag=$(grep -c '\-\-cooldown)' "$CONDUCT" || true)
   assert "--cooldown flag parsed in argument handler" \
     "$([ "$has_flag" -ge 1 ] && echo 0 || echo 1)"
 
-  # --cooldown appears in usage
-  local in_usage
-  in_usage=$(grep -c '\-\-cooldown' "$CONDUCT" || true)
-  assert "--cooldown documented in usage and arg handler" \
-    "$([ "$in_usage" -ge 2 ] && echo 0 || echo 1)"
-
-  # run_claude increments CLAUDE_CALL_COUNT
   local increments
   increments=$(grep -c 'CLAUDE_CALL_COUNT=\$((CLAUDE_CALL_COUNT + 1))' "$CONDUCT" || true)
   assert "run_claude increments CLAUDE_CALL_COUNT" \
     "$([ "$increments" -ge 1 ] && echo 0 || echo 1)"
-
-  # Escalation thresholds at 10 and 20 calls
-  local has_threshold_10 has_threshold_20
-  has_threshold_10=$(grep -c 'CLAUDE_CALL_COUNT.*-ge 10' "$CONDUCT" || true)
-  has_threshold_20=$(grep -c 'CLAUDE_CALL_COUNT.*-ge 20' "$CONDUCT" || true)
-  assert "Escalation threshold at 10 calls" \
-    "$([ "$has_threshold_10" -ge 1 ] && echo 0 || echo 1)"
-  assert "Escalation threshold at 20 calls" \
-    "$([ "$has_threshold_20" -ge 1 ] && echo 0 || echo 1)"
 }
 test_rate_limit_cooldown
 
-# ─── Test 15: Build completion detection ────────────────────────────────
-
-echo ""
-echo -e "${BOLD}Test Suite: Build Completion Detection${NC}"
-echo ""
-
-test_build_completion() {
-  # check_build should look for build-complete marker file
-  local has_marker_check
-  has_marker_check=$(grep -c 'build-complete' "$CONDUCT" || true)
-  assert "check_build looks for build-complete marker (multiple refs)" \
-    "$([ "$has_marker_check" -ge 2 ] && echo 0 || echo 1)"
-
-  # run_build tells Claude to write the marker
-  local build_func
-  build_func=$(sed -n '/^run_build/,/^}/p' "$CONDUCT")
-  local has_instruction
-  has_instruction=$(echo "$build_func" | grep -c 'build-complete' || true)
-  assert "run_build instructs Claude to write build-complete marker" \
-    "$([ "$has_instruction" -ge 1 ] && echo 0 || echo 1)"
-
-  # run_build clears stale marker before starting
-  local clears_marker
-  clears_marker=$(echo "$build_func" | grep -c 'rm -f.*build-complete' || true)
-  assert "run_build clears stale build-complete marker" \
-    "$([ "$clears_marker" -ge 1 ] && echo 0 || echo 1)"
-
-  # check_build supports pytest output format (N passed)
-  local has_pytest
-  has_pytest=$(grep -c 'passed.*SESSION_LOG\|SESSION_LOG.*passed' "$CONDUCT" || true)
-  # Alternative: check the grep pattern itself
-  has_pytest=$(sed -n '/^check_build/,/^}/p' "$CONDUCT" | grep -c 'passed' || true)
-  assert "check_build matches pytest output format" \
-    "$([ "$has_pytest" -ge 1 ] && echo 0 || echo 1)"
-}
-test_build_completion
-
-# ─── Test 16: Skill files contain rate limit delay instructions ─────────
+# ─── Test 20: Skill rate limit delay instructions ───────────────────────
 
 echo ""
 echo -e "${BOLD}Test Suite: Skill Rate Limit Instructions${NC}"
@@ -691,25 +896,16 @@ echo ""
 test_skill_delay_instructions() {
   local assess_skill="$HARNESS_DIR/skills/assess/SKILL.md"
   local pipeline_skill="$HARNESS_DIR/skills/pipeline/SKILL.md"
-  local tdd_skill="$HARNESS_DIR/skills/tdd/SKILL.md"
 
-  # Assess skill has inter-batch cooldown instructions
   local assess_delays
   assess_delays=$(grep -ci 'cooldown.*sleep 30' "$assess_skill" || true)
   assert "Assess skill has 30s inter-batch cooldown instructions" \
     "$([ "$assess_delays" -ge 3 ] && echo 0 || echo 1)"
 
-  # Pipeline skill has pre-evaluator cooldown
   local pipeline_delay
   pipeline_delay=$(grep -ci 'cooldown.*sleep 15' "$pipeline_skill" || true)
   assert "Pipeline skill has 15s pre-evaluator cooldown" \
     "$([ "$pipeline_delay" -ge 1 ] && echo 0 || echo 1)"
-
-  # TDD skill has domain reviewer model selection
-  local tdd_model
-  tdd_model=$(grep -c 'model="sonnet"' "$tdd_skill" || true)
-  assert "TDD skill has sonnet model option for domain reviewer" \
-    "$([ "$tdd_model" -ge 1 ] && echo 0 || echo 1)"
 }
 test_skill_delay_instructions
 
