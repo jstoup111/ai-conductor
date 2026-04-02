@@ -417,15 +417,24 @@ check_acceptance_specs() {
 }
 
 check_build() {
-  # Pipeline must exist with at least 1 completed task
+  # 1. Build-complete marker (written by Claude when all tasks done + tests pass)
+  [ -f "${PIPELINE_DIR}/build-complete" ] && return 0
+
+  # 2. Pipeline task-status.json with all tasks completed
   if [ -f "${PROJECT_DIR}/.pipeline/task-status.json" ]; then
     local result
     result=$(python3 -c "
 import json
 with open('${PROJECT_DIR}/.pipeline/task-status.json') as f:
     state = json.load(f)
-total = sum(1 for v in state.values() if isinstance(v, dict))
-completed = sum(1 for v in state.values() if isinstance(v, dict) and v.get('status') == 'completed')
+# Handle both formats: tasks nested under 'tasks' key, or flat top-level
+tasks = state.get('tasks', state) if isinstance(state, dict) else state
+if isinstance(tasks, dict):
+    entries = [v for v in tasks.values() if isinstance(v, dict) and 'status' in v]
+else:
+    entries = []
+total = len(entries)
+completed = sum(1 for v in entries if v.get('status') == 'completed')
 pending = total - completed
 if total == 0:
     print('empty')
@@ -436,10 +445,11 @@ else:
 " 2>/dev/null || echo "pending")
     [ "$result" = "done" ] && return 0
   fi
-  # Fallback: check log for passing tests (must have >0 examples)
+
+  # 3. Fallback: check log for passing tests (RSpec or pytest format)
   if [ -f "$SESSION_LOG" ]; then
-    # Match "N examples, 0 failures" where N > 0
     grep -qE "[1-9][0-9]* examples?, 0 failures" "$SESSION_LOG" 2>/dev/null && return 0
+    grep -qE "[1-9][0-9]* passed" "$SESSION_LOG" 2>/dev/null && return 0
   fi
   return 1
 }
@@ -1123,12 +1133,20 @@ run_build() {
   # Build is always interactive — a single non-interactive call can't reliably
   # execute full TDD cycles across multiple tasks. Claude needs to work
   # iteratively, and the user needs visibility into progress.
+  rm -f "${PIPELINE_DIR}/build-complete"
+
+  local build_complete_instruction="
+COMPLETION SIGNAL: When ALL tasks are implemented and the full test suite passes,
+write the file .pipeline/build-complete with contents 'done'. This is how the
+conductor detects that the build step succeeded."
+
   if [ "$tier" = "S" ]; then
     log "Starting direct TDD (Small tier, no pipeline overhead)..."
     run_claude "Run /tdd for each task in the plan (.docs/plans/). Execute tasks sequentially via TDD (RED→DOMAIN→GREEN→DOMAIN→COMMIT).
 
 Track progress yourself — no pipeline state machine needed. Commit after each task.
-Do NOT stop to ask for approval — execute all tasks to completion." "interactive"
+Do NOT stop to ask for approval — execute all tasks to completion.
+${build_complete_instruction}" "interactive"
   else
     log "Starting TDD pipeline (${autonomy} autonomy)..."
     run_claude "Run the /pipeline skill at ${autonomy} autonomy. Execute each task via TDD (RED→DOMAIN→GREEN→DOMAIN→COMMIT).
@@ -1145,7 +1163,8 @@ MANDATORY at batch boundaries:
 - Run micro-retro
 
 Track state in .pipeline/. Follow rework budget (3 cycles, then escalate).
-Do NOT stop to ask for approval — execute all tasks to completion." "interactive"
+Do NOT stop to ask for approval — execute all tasks to completion.
+${build_complete_instruction}" "interactive"
   fi
 
   check_build && { ok "Build complete — tests passing"; save_state "build" "done"; return 0; }
