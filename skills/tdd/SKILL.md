@@ -144,6 +144,15 @@ prompt** rather than giving broad file access. This keeps each dispatch focused 
 This isolation prevents the RED agent from peeking at implementation (biasing the test)
 and the GREEN agent from over-engineering beyond what the test requires.
 
+### Domain Reviewer Model Selection
+
+Right-size the model to the diff size to reduce API cost and rate limit pressure:
+
+- **Diffs under 50 lines:** dispatch with `model="sonnet"` — sufficient for focused domain checks
+- **Diffs of 50+ lines:** dispatch with `model="opus"` — deep analysis for larger changes
+
+Most TDD diffs are small (under 20 lines), so the majority of domain reviews will use Sonnet.
+
 ### Spec Coverage Rule: Every File Gets a Spec
 
 **Every file in `app/` (or `src/`) must have a corresponding spec file.** Hard gate.

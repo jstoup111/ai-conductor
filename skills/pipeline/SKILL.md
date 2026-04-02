@@ -63,6 +63,9 @@ in the plan). When in doubt, run sequentially.
 
 **HARD GATE: Evaluator dispatch is mandatory at required batch boundaries.**
 
+**Rate limit cooldown: sleep 15 seconds before dispatching the evaluator** to avoid stacking
+on top of the just-completed TDD agent's API usage.
+
 At batch boundaries, dispatch an evaluator agent with **fresh, scoped context** (no shared
 state with the generator). Provide the evaluator with:
 - The **git diff** for this batch only (not the full codebase)
