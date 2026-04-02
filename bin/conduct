@@ -457,8 +457,14 @@ check_build() {
 import json
 with open('${PROJECT_DIR}/.pipeline/task-status.json') as f:
     state = json.load(f)
-total = sum(1 for v in state.values() if isinstance(v, dict))
-completed = sum(1 for v in state.values() if isinstance(v, dict) and v.get('status') == 'completed')
+# Handle both formats: tasks nested under 'tasks' key, or flat top-level
+tasks = state.get('tasks', state) if isinstance(state, dict) else state
+if isinstance(tasks, dict):
+    entries = [v for v in tasks.values() if isinstance(v, dict) and 'status' in v]
+else:
+    entries = []
+total = len(entries)
+completed = sum(1 for v in entries if v.get('status') == 'completed')
 pending = total - completed
 if total == 0:
     print('empty')
@@ -1160,7 +1166,6 @@ run_build() {
   # Build is always interactive — a single non-interactive call can't reliably
   # execute full TDD cycles across multiple tasks. Claude needs to work
   # iteratively, and the user needs visibility into progress.
-  #
   # Remove stale build-complete marker so check_build doesn't see a prior run
   rm -f "${PIPELINE_DIR}/build-complete"
 
