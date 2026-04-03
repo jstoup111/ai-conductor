@@ -1608,9 +1608,10 @@ show_status() {
         is_active=true
         ;;
       *)
-        if [ -n "${checks[$i]}" ] && ${checks[$i]} 2>/dev/null; then
-          icon="${GREEN}✓${NC}"
-        elif [ "${labels[$i]}" = "$current_step" ]; then
+        # No state recorded — step hasn't run yet. Never show green check
+        # from artifact existence alone (artifacts may be inherited from
+        # prior features via worktree).
+        if [ "${labels[$i]}" = "$current_step" ]; then
           icon="${YELLOW}▶${NC}"
           is_active=true
         else
