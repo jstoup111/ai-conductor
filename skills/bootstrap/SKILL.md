@@ -147,6 +147,19 @@ Seed `.memory/` from existing code. Use detection from Steps 4 and 4c — don't 
 
 Update `.memory/index.md`. Report: "Bootstrapped memory with N decisions, M patterns, K gotchas."
 
+### 7b. Generate Architecture Diagrams
+
+Run `/architecture-diagram` to generate initial C4 diagrams from the codebase scan.
+Use the inventory from Step 4 — don't re-scan.
+
+Output: `.docs/architecture/` with system-context.md, containers.md, components.md, erd.md,
+and up to 5 sequence diagrams for primary request flows.
+
+For new/fresh projects, generate skeleton diagrams with placeholder components from
+the scaffold output. These will be populated as the design develops.
+
+Present diagrams to user for validation before proceeding.
+
 ### 8. Frontend Styleguide (Projects with Frontend Only)
 
 If frontend detected, generate from `templates/styleguide.md.template` to
@@ -193,4 +206,5 @@ Report failures before proceeding — a broken foundation wastes all downstream 
 - [ ] CLAUDE.md generated or appended — never overwritten
 - [ ] Worktree-compatible infrastructure configuration
 - [ ] Smoke test passed
+- [ ] Architecture diagrams generated in `.docs/architecture/`
 - [ ] MCP integration offered

@@ -199,6 +199,7 @@ At natural batch boundaries (after completing a group of related tasks):
 **Post-batch checks:**
 - Run the linter (if tech-context specifies one)
 - Run `/simplify` to check for accumulated duplication (dry business logic, not dry code)
+- Verify architecture diagrams are current (if structural files changed in this batch, run `/architecture-diagram` in verification mode)
 - Run a **micro-retro** (see below)
 - Append to `.pipeline/progress.log` — a chronological narrative of what was done, what was
   tried, what worked, and what's next (see Progress Log below)

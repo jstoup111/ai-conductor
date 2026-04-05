@@ -45,9 +45,10 @@ For **Large** features, run the full review (all sections).
 Read in order of authority (higher overrides lower):
 
 1. `.docs/decisions/` — ADRs are the authoritative architecture reference
-2. `CLAUDE.md` — Project conventions and constraints
-3. `.memory/decisions/` — Prior architectural decisions
-4. Existing code structure — `config/routes.rb`, model relationships, directory layout
+2. `.docs/architecture/` — C4 diagrams (system context, containers, components, ERD, sequences)
+3. `CLAUDE.md` — Project conventions and constraints
+4. `.memory/decisions/` — Prior architectural decisions
+5. Existing code structure — `config/routes.rb`, model relationships, directory layout
 
 **Convention over precedent:** Written decisions override observed patterns. Existing code that
 violates a documented decision is tech debt, not precedent. Never downgrade a finding because
@@ -91,6 +92,11 @@ Check stories and plan against documented architecture:
 - Can invalid states be represented in the proposed data model?
 - Are state transitions explicit (enum/state machine) or implicit (boolean flags)?
 - Does the proposal use `is_*` boolean flags where an enum would prevent invalid combinations?
+
+**Diagram accuracy:**
+- Do architecture diagrams in `.docs/architecture/` reflect the proposed changes?
+- If the plan introduces new containers, services, or external integrations, are diagrams updated?
+- Reference diagrams when assessing domain boundaries and coupling.
 
 **Security boundaries:**
 - Are new endpoints authenticated and authorized?
@@ -158,6 +164,7 @@ At pipeline batch boundaries, perform a lightweight architecture check:
 - Has the implementation drifted from the approved plan?
 - Have new patterns been introduced without an ADR?
 - Are domain boundaries being respected in the actual code?
+- Are architecture diagrams still accurate after this batch's changes?
 - Escalation: non-blocking findings that appear in 2+ consecutive reviews become blocking
 
 If drift is detected at a batch boundary:
@@ -175,4 +182,5 @@ If drift is detected at a batch boundary:
 - [ ] ADR created for every architectural decision made
 - [ ] Review written to .docs/decisions/
 - [ ] Verdict issued (APPROVED / CONDITIONS / BLOCKED)
+- [ ] Architecture diagrams reviewed for accuracy against plan/implementation
 - [ ] BLOCKED verdicts halt pipeline and require human resolution

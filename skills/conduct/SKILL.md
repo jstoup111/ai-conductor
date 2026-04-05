@@ -40,7 +40,8 @@ Step 5:  Worktree setup          → DECIDE (create feature branch + worktree �
 Step 6:  /stories               → DECIDE
 Step 7:  /conflict-check        → DECIDE (skipped for Small)
 Step 8:  /plan                  → DECIDE
-Step 9:  /architecture-review    → DECIDE (skipped for Small, lightweight for Medium)
+Step 8b: /architecture-diagram  → DECIDE (update proposed-state diagrams for plan)
+Step 9:  /architecture-review    → DECIDE (skipped for Small, lightweight for Medium — consumes diagrams)
 Step 10: /writing-system-tests  → BUILD (skipped for Small)
 Step 11: /pipeline or /tdd      → BUILD (pipeline evaluator satisfies code-review gate)
 Step 12: /finish                → SHIP (merge/PR from worktree, cleanup)
@@ -65,6 +66,7 @@ Check for these artifacts in order. The **first missing artifact** determines th
 | 6. stories | At least one **accepted** story exists in `.docs/stories/` (not just DRAFT) | Glob `.docs/stories/*.md` — if all stories contain `Status: DRAFT`, this step is pending |
 | 7. conflict-check | Conflict report exists in `.docs/conflicts/` OR skipped (Small tier) | Glob `.docs/conflicts/*.md` or check state is "skipped" |
 | 8. plan | At least one file exists in `.docs/plans/` | Glob `.docs/plans/*.md` |
+| 8b. diagrams | Proposed-state diagrams exist | Check `.docs/architecture/*-proposed.md` exist, or check state is "skipped" |
 | 9. architecture-review | Review exists in `.docs/decisions/` OR skipped (Small tier) | Glob `.docs/decisions/architecture-review-*.md` or check state is "skipped" |
 | 10. writing-system-tests | Acceptance specs exist OR skipped (Small tier) | Glob `spec/integration/*_spec.rb` or `spec/system/*_spec.rb`, or check state is "skipped" |
 | 11. build | Implementation tasks completed with passing tests | Check `.pipeline/task-status.json` or test suite passes. Pipeline evaluator satisfies code-review gate. |
@@ -118,6 +120,7 @@ Store the tier in `.pipeline/conduct-state.json` as `"complexity_tier": "S"` (or
 | Step | Small | Medium | Large |
 |---|---|---|---|
 | conflict-check | **Skip** | Run | Run |
+| architecture-diagram | **Skip** | Run | Run |
 | architecture-review | **Skip** | Lightweight (feasibility + alignment only) | Full |
 | writing-system-tests | **Skip** (request specs in TDD suffice) | Run | Run |
 | pipeline | **Skip** (use direct /tdd) | Run | Run |
@@ -165,6 +168,7 @@ Before suggesting the next step, verify that the previous step's **quality gates
 | stories | No (gating) | Negative paths are mandatory for TDD |
 | conflict-check | Tier-dependent | Skip for Small, required for Medium/Large |
 | plan | No (gating) | Tasks needed for build phase |
+| architecture-diagram | Tier-dependent | Skip for Small, required for Medium/Large |
 | writing-system-tests | Tier-dependent | Skip for Small (request specs in TDD suffice), required for Medium/Large |
 | build | No (structural) | This is the implementation |
 | code-review | Tier-dependent | Skip for Small (domain review suffices), required for Medium/Large |
@@ -203,6 +207,7 @@ All phases finished. Artifacts:
 - Stories: .docs/stories/...
 - Conflicts: .docs/conflicts/...
 - Plan: .docs/plans/...
+- Architecture: .docs/architecture/...
 - Retro: .docs/retros/...
 
 Harness test complete. Review the retro for improvement findings.
