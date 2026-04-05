@@ -21,9 +21,9 @@ UNDERSTAND → DECIDE → BUILD → SHIP
 |-------|--------|-----------|
 | ALL | **conduct** (orchestrator) | Status dashboard, gate enforcement |
 | UNDERSTAND | bootstrap, memory, assess | CLAUDE.md, .memory/, .docs/decisions/technical-assessment-*.md |
-| DECIDE | brainstorm → stories → conflict-check → plan | .docs/specs/, .docs/stories/, .docs/conflicts/, .docs/plans/ |
+| DECIDE | brainstorm → stories → conflict-check → plan → architecture-review | .docs/specs/, .docs/stories/, .docs/conflicts/, .docs/plans/ |
 | BUILD | writing-system-tests → tdd/pipeline, debugging, code-review | Acceptance specs, code, unit tests, .pipeline/ |
-| SHIP | finish, retro | .docs/retros/ |
+| SHIP | finish, manual-test, retro, pr | .docs/retros/ |
 
 ## Skill Invocation
 
@@ -65,6 +65,7 @@ standard implementation, Haiku for mechanical checks.
 | stories | sonnet | Pattern-following from design doc, structured output |
 | conflict-check | sonnet (S/M), opus (L) | Pairwise comparison is manageable for Sonnet with ≤15 stories; Large needs Opus for subtle contradictions |
 | plan | sonnet | Structured task breakdown from stories |
+| architecture-review | opus | Feasibility, alignment, domain integrity — deep architectural reasoning |
 | writing-system-tests | sonnet | Generating specs from acceptance criteria — templated work |
 | tdd (RED phase) | sonnet | Writing one test at a time — focused, constrained |
 | tdd (GREEN phase) | sonnet | Writing minimal implementation — constrained scope |
@@ -74,8 +75,11 @@ standard implementation, Haiku for mechanical checks.
 | debugging | opus | Root cause analysis requires reasoning chains |
 | pipeline | haiku | State tracking, dispatch orchestration — purely mechanical |
 | finish | haiku | Mechanical checks — run tests, check git status, verify coverage |
+| manual-test | sonnet | Structured validation against stories — pattern-following |
 | retro | sonnet | Structured analysis from concrete data; Part C (context efficiency) is checklist-based |
+| pr | sonnet | Diff analysis and structured PR body — templated output |
 | bootstrap | sonnet | Detection and scaffolding — largely mechanical |
+| assess | haiku | Dispatches specialists then synthesizes — orchestration is mechanical |
 | conduct | haiku | Artifact checking and status reporting — mechanical |
 | memory | haiku | Read/write files, update index — mechanical |
 | worktree-manager | haiku | Git operations — mechanical branch/worktree management |
