@@ -20,7 +20,7 @@ cd james-stoup-agents
 ./bin/install
 ```
 
-This symlinks all 14 skills into `~/.claude/skills/` and puts the `conduct` script on your PATH
+This symlinks all 18 skills into `~/.claude/skills/` and puts the `conduct` script on your PATH
 via `~/.local/bin/`.
 
 Verify:
@@ -103,17 +103,18 @@ UNDERSTAND → DECIDE → BUILD → SHIP
 
 | Phase | Skills | What Happens |
 |-------|--------|-------------|
-| UNDERSTAND | `/bootstrap`, `/memory` | Detect/scaffold project, load tech-context, recall prior decisions |
+| UNDERSTAND | `/bootstrap`, `/memory`, `/assess` | Detect/scaffold project, load tech-context, recall prior decisions, codebase health assessment |
 | DECIDE | `/brainstorm` → `/stories` → `/conflict-check` → `/plan` → `/architecture-review` | Design → stories → conflicts → tasks → architecture gate |
 | BUILD | `/writing-system-tests` → `/pipeline` or `/tdd`, `/code-review`, `/debugging` | Acceptance specs → TDD → evaluator gates |
-| SHIP | `/finish` → `/manual-test` → `/retro` | Verification → curl/browser validation → dual retrospective |
+| SHIP | `/finish` → `/manual-test` → `/retro`, `/pr` | Verification → curl/browser validation → dual retrospective → pull request |
 
-### Skills (17 total)
+### Skills (18 total)
 
 | Skill | Enforcement | Model | Purpose |
 |-------|-------------|-------|---------|
 | `/bootstrap` | Advisory | sonnet | Detect/scaffold project, .claudeignore, smoke test, MCP setup |
 | `/memory` | Gating | haiku | Recall/persist decisions, patterns, gotchas across sessions |
+| `/assess` | Gating | haiku | Dispatch 9 CTO specialists for codebase health assessment |
 | `/brainstorm` | Advisory | opus | Explore requirements, scope check, API contract, design doc |
 | `/stories` | Gating | sonnet | User stories with mandatory negative paths (10 categories) |
 | `/conflict-check` | Gating | opus | Detect contradictions (5 types), resolutions create ADRs |
@@ -128,7 +129,6 @@ UNDERSTAND → DECIDE → BUILD → SHIP
 | `/manual-test` | Gating | sonnet | Validate stories via curl/browser, bug loop through /tdd |
 | `/retro` | Advisory | opus | Dual analysis: harness + application, trend tracking |
 | `/conduct` | Gating | haiku | SDLC orchestrator: 13-step flow with gate enforcement |
-| `/simplify` | Advisory | sonnet | Review code for duplication and complexity |
 
 ### Agent Personas
 
@@ -140,6 +140,17 @@ Skills define *what* to do. Agents define *who* does it with what context.
 | Evaluator | Reviews with skepticism | Fresh context, no shared state with generator |
 | Domain Reviewer | Checks domain integrity | Veto authority — can reject and send back |
 | Planner | Expands requirements | Surfaces edge cases the user didn't consider |
+| Worktree Manager | Git worktree lifecycle | Feature isolation via create/merge/cleanup/status |
+| CTO Security | Auth & input validation | OWASP top 10, attack vector analysis |
+| CTO Data Integrity | Transactions & race conditions | Event sourcing, data safety |
+| CTO Dependencies | Package & license auditing | CVEs, outdated packages, license compliance |
+| CTO Architecture | Coherence & coupling | Decisions vs implementation alignment |
+| CTO Duplication | Code duplication detection | Boilerplate, copy-paste, blast radius |
+| CTO Testing | Test strategy review | Coverage gaps, layer balance, assertion quality |
+| CTO Infrastructure | Infra config review | DB pooling, caching, background jobs, prod parity |
+| CTO Observability | Logging & monitoring | Error handling, debugging context |
+| CTO DevEx | Developer experience | Onboarding, CI/CD, local dev, documentation |
+| CTO Orchestrator | Synthesizes 9 specialist reports | Cross-references and prioritizes findings |
 
 ### Enforcement Levels
 
@@ -169,6 +180,8 @@ james-stoup-agents/
 │   ├── install              # Install/update/uninstall harness
 │   └── conduct              # Automated SDLC runner
 ├── skills/                  # One directory per skill, each with SKILL.md
+│   ├── architecture-review/
+│   ├── assess/
 │   ├── bootstrap/
 │   ├── brainstorm/
 │   ├── code-review/
@@ -176,27 +189,57 @@ james-stoup-agents/
 │   ├── conflict-check/
 │   ├── debugging/
 │   ├── finish/
+│   ├── manual-test/
 │   ├── memory/
 │   ├── pipeline/
 │   ├── plan/
+│   ├── pr/
 │   ├── retro/
 │   ├── stories/
-│   └── tdd/
-│       └── references/      # Detailed RED, GREEN, drill-down, domain-review guidance
+│   ├── tdd/
+│   │   └── references/      # Detailed RED, GREEN, drill-down, domain-review guidance
+│   └── writing-system-tests/
 ├── agents/                  # Agent persona prompts
 │   ├── generator.md
 │   ├── evaluator.md
 │   ├── domain-reviewer.md
-│   └── planner.md
+│   ├── planner.md
+│   ├── worktree-manager.md
+│   ├── cto-security.md
+│   ├── cto-data-integrity.md
+│   ├── cto-dependencies.md
+│   ├── cto-architecture.md
+│   ├── cto-duplication.md
+│   ├── cto-testing.md
+│   ├── cto-infrastructure.md
+│   ├── cto-observability.md
+│   ├── cto-devex.md
+│   └── cto-orchestrator.md
 ├── tech-context/            # Stack-specific knowledge
 │   ├── FORMAT.md            # Contract for adding new stacks
 │   └── rails-postgres/
 ├── templates/               # Templates for generated files
 │   ├── CLAUDE.md.template
 │   ├── AGENTS.md.template
-│   └── api-response-contract.md.template
-├── hooks/                   # Optional git hooks
-│   └── pre-commit-tdd-gate.sh
+│   ├── adr.md.template
+│   ├── api-response-contract.md.template
+│   ├── claudeignore.template
+│   ├── design-doc.md.template
+│   ├── pull_request_template.md
+│   ├── styleguide.md.template
+│   └── technical-assessment.md.template
+├── hooks/
+│   ├── pre-commit-tdd-gate.sh          # Optional git hook for TDD phase enforcement
+│   └── claude/                          # Claude Code session hooks
+│       ├── block-destructive-git.sh
+│       ├── lint-after-edit.sh
+│       ├── post-commit-pipeline-sync.sh
+│       ├── rate-limit-wait.sh
+│       ├── session-start-context.sh
+│       ├── spec-coverage-check.sh
+│       ├── stop-memory-reminder.sh
+│       ├── tdd-commit-gate.sh
+│       └── worktree-check.sh
 ├── .docs/decisions/          # Harness ADRs
 └── CLAUDE.md                # Harness internal docs (loaded by Claude Code)
 ```
