@@ -654,13 +654,23 @@ run_brainstorm() {
   log "Design decisions require your input — interactive session..."
   # Brainstorm is ALWAYS interactive. Design decisions have the highest ROI for human input.
   # Wrong design cascades to wrong stories, wrong plan, wrong code.
+  # Snapshot existing files so we only review NEW artifacts (not inherited from prior features)
+  local existing_specs=()
+  while IFS= read -r f; do existing_specs+=("$f"); done < <(compgen -G "${PROJECT_DIR}/.docs/specs/*.md" 2>/dev/null || true)
   run_claude "Run the /brainstorm skill for: ${FEATURE_DESC}
 
 Write a design document to .docs/specs/. Include Problem, Solution, Scope (In/Out), Key Decisions. Perform a scope check — compare the design against the original request and flag if scope expanded. Get user approval before marking as approved." "interactive"
   if check_brainstorm; then
-    # Review the design doc — user must approve before proceeding
-    local spec_files=()
-    while IFS= read -r f; do spec_files+=("$f"); done < <(compgen -G "${PROJECT_DIR}/.docs/specs/*.md" | sort)
+    # Review only NEW files (not pre-existing from prior features)
+    local spec_files=() all_specs=()
+    while IFS= read -r f; do all_specs+=("$f"); done < <(compgen -G "${PROJECT_DIR}/.docs/specs/*.md" | sort)
+    for f in "${all_specs[@]}"; do
+      local is_existing=false
+      for e in "${existing_specs[@]}"; do
+        [ "$f" = "$e" ] && is_existing=true && break
+      done
+      $is_existing || spec_files+=("$f")
+    done
     if [ ${#spec_files[@]} -gt 0 ]; then
       if ! review_artifacts "brainstorm" "${spec_files[@]}"; then
         for f in "${spec_files[@]}"; do rm -f "$f"; done
@@ -1072,6 +1082,9 @@ run_stories() {
   fi
   step_done "brainstorm" || { fail "GATE: Need design doc in .docs/specs/ first"; return 1; }
   log "Generating stories with mandatory negative paths..."
+  # Snapshot existing files so we only review NEW artifacts (not inherited from prior features)
+  local existing_stories=()
+  while IFS= read -r f; do existing_stories+=("$f"); done < <(compgen -G "${PROJECT_DIR}/.docs/stories/*.md" 2>/dev/null || true)
   run_claude "Run the /stories skill. Read .docs/specs/ and generate stories in .docs/stories/.
 
 REQUIREMENTS:
@@ -1080,9 +1093,16 @@ REQUIREMENTS:
 - Stack-specific paths from tech-context if loaded
 - NO vague paths like 'handle errors gracefully'"
   if check_stories; then
-    # Review each story file before accepting
-    local story_files=()
-    while IFS= read -r f; do story_files+=("$f"); done < <(compgen -G "${PROJECT_DIR}/.docs/stories/*.md" | sort)
+    # Review only NEW files (not pre-existing from prior features)
+    local story_files=() all_stories=()
+    while IFS= read -r f; do all_stories+=("$f"); done < <(compgen -G "${PROJECT_DIR}/.docs/stories/*.md" | sort)
+    for f in "${all_stories[@]}"; do
+      local is_existing=false
+      for e in "${existing_stories[@]}"; do
+        [ "$f" = "$e" ] && is_existing=true && break
+      done
+      $is_existing || story_files+=("$f")
+    done
     if [ ${#story_files[@]} -gt 0 ]; then
       if ! review_artifacts "stories" "${story_files[@]}"; then
         # Delete rejected stories so check_stories fails on retry
@@ -1143,10 +1163,21 @@ run_plan() {
     fail "GATE: Need conflict-check first (state: $cc_state)"; return 1
   fi
   log "Generating implementation plan..."
+  # Snapshot existing files so we only review NEW artifacts (not inherited from prior features)
+  local existing_plans=()
+  while IFS= read -r f; do existing_plans+=("$f"); done < <(compgen -G "${PROJECT_DIR}/.docs/plans/*.md" 2>/dev/null || true)
   run_claude "Run the /plan skill. Generate plan in .docs/plans/ with 2-5 min tasks, dependency graph, coverage mapping. Check scope: warn if >20 tasks, hard stop if >40."
   if check_plan; then
-    local plan_files=()
-    while IFS= read -r f; do plan_files+=("$f"); done < <(compgen -G "${PROJECT_DIR}/.docs/plans/*.md" | sort)
+    # Review only NEW files (not pre-existing from prior features)
+    local plan_files=() all_plans=()
+    while IFS= read -r f; do all_plans+=("$f"); done < <(compgen -G "${PROJECT_DIR}/.docs/plans/*.md" | sort)
+    for f in "${all_plans[@]}"; do
+      local is_existing=false
+      for e in "${existing_plans[@]}"; do
+        [ "$f" = "$e" ] && is_existing=true && break
+      done
+      $is_existing || plan_files+=("$f")
+    done
     if [ ${#plan_files[@]} -gt 0 ]; then
       if ! review_artifacts "plan" "${plan_files[@]}"; then
         for f in "${plan_files[@]}"; do rm -f "$f"; done
@@ -2272,7 +2303,10 @@ retry_count=0
 
 while [ "$i" -lt "${#STEP_FUNCS[@]}" ]; do
   # Record which step we're attempting so --resume lands here if we crash
-  save_state "${ALL_STEPS[$i]}" "in_progress"
+  # Don't overwrite "done"/"skipped" — prevents re-entering completed steps
+  if ! step_done "${ALL_STEPS[$i]}"; then
+    save_state "${ALL_STEPS[$i]}" "in_progress"
+  fi
 
   if ${STEP_FUNCS[$i]}; then
     refresh_display
