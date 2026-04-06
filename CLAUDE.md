@@ -21,7 +21,7 @@ UNDERSTAND → DECIDE → BUILD → SHIP
 |-------|--------|-----------|
 | ALL | **conduct** (orchestrator) | Status dashboard, gate enforcement |
 | UNDERSTAND | bootstrap, memory, assess | CLAUDE.md, .memory/, .docs/decisions/technical-assessment-*.md |
-| DECIDE | brainstorm → stories → conflict-check → plan → architecture-review | .docs/specs/, .docs/stories/, .docs/conflicts/, .docs/plans/ |
+| DECIDE | brainstorm → stories → conflict-check → plan → architecture-diagram → architecture-review | .docs/specs/, .docs/stories/, .docs/conflicts/, .docs/plans/, .docs/architecture/ |
 | BUILD | writing-system-tests → tdd/pipeline, debugging, code-review | Acceptance specs, code, unit tests, .pipeline/ |
 | SHIP | finish, manual-test, retro, pr | .docs/retros/ |
 
@@ -65,6 +65,7 @@ standard implementation, Haiku for mechanical checks.
 | stories | sonnet | Pattern-following from design doc, structured output |
 | conflict-check | sonnet (S/M), opus (L) | Pairwise comparison is manageable for Sonnet with ≤15 stories; Large needs Opus for subtle contradictions |
 | plan | sonnet | Structured task breakdown from stories |
+| architecture-diagram | sonnet | Structured output generation from codebase scan — pattern-following |
 | architecture-review | opus | Feasibility, alignment, domain integrity — deep architectural reasoning |
 | writing-system-tests | sonnet | Generating specs from acceptance criteria — templated work |
 | tdd (RED phase) | sonnet | Writing one test at a time — focused, constrained |
@@ -73,6 +74,7 @@ standard implementation, Haiku for mechanical checks.
 | evaluator | opus | Calibrated skepticism requires deep analysis |
 | code-review | opus | Multi-dimensional analysis (spec, quality, domain) |
 | debugging | opus | Root cause analysis requires reasoning chains |
+| simplify | sonnet | Pattern matching for duplication and complexity — structured checklist work |
 | pipeline | haiku | State tracking, dispatch orchestration — purely mechanical |
 | finish | haiku | Mechanical checks — run tests, check git status, verify coverage |
 | manual-test | sonnet | Structured validation against stories — pattern-following |

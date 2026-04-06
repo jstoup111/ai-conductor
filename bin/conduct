@@ -428,6 +428,10 @@ check_plan() {
   has_artifacts "${PROJECT_DIR}/.docs/plans/*.md"
 }
 
+check_architecture_diagram() {
+  has_artifacts "${PROJECT_DIR}/.docs/architecture/*.md"
+}
+
 check_architecture_review() {
   has_artifacts "${PROJECT_DIR}/.docs/decisions/architecture-review-*.md"
 }
@@ -961,6 +965,7 @@ should_skip_for_tier() {
   tier=$(get_complexity_tier)
   case "$step" in
     conflict-check)       [ "$tier" = "S" ] && return 0 ;;
+    architecture-diagram) [ "$tier" = "S" ] && return 0 ;;
     architecture-review)  [ "$tier" = "S" ] && return 0 ;;
     acceptance-specs)     [ "$tier" = "S" ] && return 0 ;;
     code-review)          [ "$tier" = "S" ] && return 0 ;;
@@ -1158,8 +1163,32 @@ run_plan() {
   fail "No plan in .docs/plans/"; save_state "plan" "failed"; return 1
 }
 
+run_architecture_diagram() {
+  step_header 7 "architecture-diagram" "DECIDE"
+  if should_skip_for_tier "architecture-diagram"; then
+    ok "Skipped (Small tier)"; save_state "architecture_diagram" "skipped"; return 0
+  fi
+  if step_done "architecture_diagram"; then
+    ok "Already complete"; return 0
+  fi
+  step_done "plan" || { fail "GATE: Need plan first"; return 1; }
+  log "Generating/updating architecture diagrams..."
+  run_claude "Run the /architecture-diagram skill. Generate or update C4 architecture diagrams in .docs/architecture/ based on the implementation plan. Create proposed-state diagrams showing planned changes. Present diagrams for engineer validation before proceeding."
+  if check_architecture_diagram; then
+    local diagram_files=()
+    while IFS= read -r f; do diagram_files+=("$f"); done < <(compgen -G "${PROJECT_DIR}/.docs/architecture/*.md" | sort)
+    if [ ${#diagram_files[@]} -gt 0 ]; then
+      if ! review_artifacts "architecture-diagram" "${diagram_files[@]}"; then
+        fail "Diagrams rejected — will re-generate"; save_state "architecture_diagram" "failed"; return 1
+      fi
+    fi
+    ok "Architecture diagrams updated"; save_state "architecture_diagram" "done"; return 0
+  fi
+  fail "No diagrams in .docs/architecture/"; save_state "architecture_diagram" "failed"; return 1
+}
+
 run_architecture_review() {
-  step_header 7 "architecture-review" "DECIDE"
+  step_header 8 "architecture-review" "DECIDE"
   if should_skip_for_tier "architecture-review"; then
     ok "Skipped (Small tier)"; save_state "architecture_review" "skipped"; return 0
   fi
@@ -1168,7 +1197,7 @@ run_architecture_review() {
   fi
   step_done "plan" || { fail "GATE: Need plan in .docs/plans/ first"; return 1; }
   log "Reviewing architecture feasibility and alignment..."
-  run_claude "Run the /architecture-review skill. Review all stories and the plan for technical feasibility, architectural alignment, domain integrity, and risks. Write review to .docs/decisions/architecture-review-*.md. Issue APPROVED, APPROVED WITH CONDITIONS, or BLOCKED verdict."
+  run_claude "Run the /architecture-review skill. Review all stories, plan, AND architecture diagrams in .docs/architecture/ for technical feasibility, architectural alignment, domain integrity, and risks. Write review to .docs/decisions/architecture-review-*.md. Issue APPROVED, APPROVED WITH CONDITIONS, or BLOCKED verdict."
 
   if check_architecture_review; then
     # Check for BLOCKED verdict — requires human
@@ -1490,6 +1519,13 @@ get_phase_detail() {
         [ "$tasks" -gt 0 ] && echo "${tasks} tasks"
       fi
       ;;
+    architecture_diagram)
+      if compgen -G "${PROJECT_DIR}/.docs/architecture/*.md" > /dev/null 2>&1; then
+        local count
+        count=$(compgen -G "${PROJECT_DIR}/.docs/architecture/*.md" | wc -l)
+        echo "${count} diagram(s)"
+      fi
+      ;;
     architecture_review)
       if compgen -G "${PROJECT_DIR}/.docs/decisions/architecture-review-*.md" > /dev/null 2>&1; then
         local verdict
@@ -1585,10 +1621,10 @@ show_status() {
   echo -e "  ${BOLD}Ctrl+C${NC} pause  ${BOLD}--log${NC} tail output  ${BOLD}--status${NC} check progress"
   echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 
-  local steps=("worktree" "memory" "brainstorm" "complexity" "stories" "conflict_check" "plan" "architecture_review" "acceptance_specs" "build" "finish" "manual_test" "retro")
-  local labels=("worktree" "memory" "brainstorm" "complexity" "stories" "conflict-check" "plan" "arch review" "acceptance specs" "tdd/pipeline" "finish" "manual-test" "retro")
-  local phases=("SETUP" "UNDERSTAND" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "BUILD" "BUILD" "SHIP" "SHIP" "SHIP")
-  local checks=("" "" check_brainstorm "" check_stories check_conflict_check check_plan check_architecture_review check_acceptance_specs check_build "" check_manual_test check_retro)
+  local steps=("worktree" "memory" "brainstorm" "complexity" "stories" "conflict_check" "plan" "architecture_diagram" "architecture_review" "acceptance_specs" "build" "finish" "manual_test" "retro")
+  local labels=("worktree" "memory" "brainstorm" "complexity" "stories" "conflict-check" "plan" "diagrams" "arch review" "acceptance specs" "tdd/pipeline" "finish" "manual-test" "retro")
+  local phases=("SETUP" "UNDERSTAND" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "BUILD" "BUILD" "SHIP" "SHIP" "SHIP")
+  local checks=("" "" check_brainstorm "" check_stories check_conflict_check check_plan check_architecture_diagram check_architecture_review check_acceptance_specs check_build "" check_manual_test check_retro)
 
   local current_step
   current_step=$(get_current_step)
@@ -1959,8 +1995,10 @@ recover() {
       recover_prompt="Run /conflict-check. Check ALL stories for conflicts. Write report to .docs/conflicts/." ;;
     plan)
       recover_prompt="Run /plan. Generate implementation plan from stories to .docs/plans/." ;;
+    architecture_diagram)
+      recover_prompt="Run /architecture-diagram. Generate or update C4 diagrams in .docs/architecture/ for the current plan." ;;
     architecture_review)
-      recover_prompt="Run /architecture-review. Review stories and plan for feasibility. Write to .docs/decisions/." ;;
+      recover_prompt="Run /architecture-review. Review stories, plan, and architecture diagrams for feasibility. Write to .docs/decisions/." ;;
     acceptance_specs)
       recover_prompt="Run /writing-system-tests. Generate failing acceptance specs from stories." ;;
     build)
@@ -2010,7 +2048,8 @@ usage() {
   echo "  -h, --help        Show this help"
   echo ""
   echo "Steps: worktree, memory, brainstorm, complexity, stories, conflict-check,"
-  echo "       plan, architecture-review, acceptance-specs, build, finish, manual-test, retro"
+  echo "       plan, architecture-diagram, architecture-review, acceptance-specs,"
+  echo "       build, finish, manual-test, retro"
   echo ""
   echo "Project-level (run once, not per-feature): bootstrap, assess"
   echo ""
@@ -2193,6 +2232,7 @@ if [ -n "$SINGLE_STEP" ]; then
     stories)                                run_stories ;;
     conflict-check|conflict_check)          run_conflict_check ;;
     plan)                                   run_plan ;;
+    architecture-diagram|architecture_diagram) run_architecture_diagram ;;
     architecture-review|architecture_review) run_architecture_review ;;
     acceptance-specs|acceptance_specs|writing-system-tests) run_acceptance_specs ;;
     build)                                  run_build ;;
@@ -2208,8 +2248,8 @@ fi
 # Step registry — use underscores to match save_state() keys in conduct-state.json
 # Worktree is created right after complexity assessment so all subsequent commits
 # (stories, plan, build, etc.) are isolated on the feature branch.
-ALL_STEPS=(worktree memory brainstorm complexity stories conflict_check plan architecture_review acceptance_specs build finish manual_test retro)
-STEP_FUNCS=(run_worktree_setup run_memory run_brainstorm run_complexity_assessment run_stories run_conflict_check run_plan run_architecture_review run_acceptance_specs run_build run_finish run_manual_test run_retro)
+ALL_STEPS=(worktree memory brainstorm complexity stories conflict_check plan architecture_diagram architecture_review acceptance_specs build finish manual_test retro)
+STEP_FUNCS=(run_worktree_setup run_memory run_brainstorm run_complexity_assessment run_stories run_conflict_check run_plan run_architecture_diagram run_architecture_review run_acceptance_specs run_build run_finish run_manual_test run_retro)
 
 # Determine starting point
 start_index=0

@@ -1,0 +1,20 @@
+# {{DIAGRAM_TYPE}}: {{PROJECT_NAME}}
+
+**Last updated:** {{DATE}}
+**Scope:** {{SCOPE_DESCRIPTION}}
+
+## Diagram
+
+```mermaid
+{{MERMAID_CONTENT}}
+```
+
+## Legend
+
+{{LEGEND}}
+
+## Change Log
+
+| Date | Change | Reason |
+|------|--------|--------|
+| {{DATE}} | Initial generation | Created during /bootstrap |

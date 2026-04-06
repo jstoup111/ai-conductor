@@ -20,7 +20,7 @@ cd james-stoup-agents
 ./bin/install
 ```
 
-This symlinks all 18 skills into `~/.claude/skills/` and puts the `conduct` script on your PATH
+This symlinks all 20 skills into `~/.claude/skills/` and puts the `conduct` script on your PATH
 via `~/.local/bin/`.
 
 Verify:
@@ -58,11 +58,11 @@ Then in the Claude Code session:
 ```
 
 The conductor checks artifact state, tells you what to run next, and blocks when gates aren't met.
-It walks you through all 13 steps:
+It walks you through all 14 steps:
 
 ```
-/bootstrap → /brainstorm → /stories → /conflict-check → /plan → /architecture-review
-→ /writing-system-tests → /pipeline → /finish → /manual-test → /retro
+/bootstrap → /brainstorm → /stories → /conflict-check → /plan → /architecture-diagram
+→ /architecture-review → /writing-system-tests → /pipeline → /finish → /manual-test → /retro
 ```
 
 ### Automated
@@ -81,7 +81,7 @@ conduct --interactive "Payment processing"
 ```
 
 ```bash
-conduct --status          # Check progress (shows all 13 steps)
+conduct --status          # Check progress (shows all 14 steps)
 conduct --resume          # Pick up where you left off
 conduct --step stories    # Run one step only
 conduct --from plan       # Start from a specific step
@@ -104,11 +104,11 @@ UNDERSTAND → DECIDE → BUILD → SHIP
 | Phase | Skills | What Happens |
 |-------|--------|-------------|
 | UNDERSTAND | `/bootstrap`, `/memory`, `/assess` | Detect/scaffold project, load tech-context, recall prior decisions, codebase health assessment |
-| DECIDE | `/brainstorm` → `/stories` → `/conflict-check` → `/plan` → `/architecture-review` | Design → stories → conflicts → tasks → architecture gate |
+| DECIDE | `/brainstorm` → `/stories` → `/conflict-check` → `/plan` → `/architecture-diagram` → `/architecture-review` | Design → stories → conflicts → tasks → diagrams → architecture gate |
 | BUILD | `/writing-system-tests` → `/pipeline` or `/tdd`, `/code-review`, `/debugging` | Acceptance specs → TDD → evaluator gates |
 | SHIP | `/finish` → `/manual-test` → `/retro`, `/pr` | Verification → curl/browser validation → dual retrospective → pull request |
 
-### Skills (18 total)
+### Skills (20 total)
 
 | Skill | Enforcement | Model | Purpose |
 |-------|-------------|-------|---------|
@@ -119,16 +119,18 @@ UNDERSTAND → DECIDE → BUILD → SHIP
 | `/stories` | Gating | sonnet | User stories with mandatory negative paths (10 categories) |
 | `/conflict-check` | Gating | opus | Detect contradictions (5 types), resolutions create ADRs |
 | `/plan` | Gating | sonnet | 2-5 min tasks, dependency graph, scope sanity check |
+| `/architecture-diagram` | Gating | sonnet | C4 architecture diagrams in Mermaid, maintained across SDLC |
 | `/architecture-review` | Gating | opus | Feasibility, alignment, domain integrity, risk register. BLOCKED = human required |
 | `/writing-system-tests` | Gating | sonnet | Failing acceptance specs (integration for API, system for full-stack) |
 | `/tdd` | Structural | sonnet | RED → DOMAIN → GREEN → DOMAIN → COMMIT with subagent isolation |
+| `/simplify` | Gating | sonnet | Deduplication + complexity reduction at batch boundaries |
 | `/pipeline` | Structural | sonnet | Multi-task orchestration, quality gates, rework budgets, progress log |
 | `/code-review` | Gating | opus | Evaluator: spec compliance (+ OVER-BUILT) → quality → domain |
 | `/debugging` | Gating | opus | 4-phase investigation before any fix |
 | `/finish` | Gating | haiku | Fresh verification, story coverage, merge/PR options |
 | `/manual-test` | Gating | sonnet | Validate stories via curl/browser, bug loop through /tdd |
 | `/retro` | Advisory | opus | Dual analysis: harness + application, trend tracking |
-| `/conduct` | Gating | haiku | SDLC orchestrator: 13-step flow with gate enforcement |
+| `/conduct` | Gating | haiku | SDLC orchestrator: 14-step flow with gate enforcement |
 
 ### Agent Personas
 
@@ -180,6 +182,7 @@ james-stoup-agents/
 │   ├── install              # Install/update/uninstall harness
 │   └── conduct              # Automated SDLC runner
 ├── skills/                  # One directory per skill, each with SKILL.md
+│   ├── architecture-diagram/
 │   ├── architecture-review/
 │   ├── assess/
 │   ├── bootstrap/
@@ -195,6 +198,7 @@ james-stoup-agents/
 │   ├── plan/
 │   ├── pr/
 │   ├── retro/
+│   ├── simplify/
 │   ├── stories/
 │   ├── tdd/
 │   │   └── references/      # Detailed RED, GREEN, drill-down, domain-review guidance
@@ -222,6 +226,7 @@ james-stoup-agents/
 │   ├── CLAUDE.md.template
 │   ├── AGENTS.md.template
 │   ├── adr.md.template
+│   ├── architecture-diagram.md.template
 │   ├── api-response-contract.md.template
 │   ├── claudeignore.template
 │   ├── design-doc.md.template
@@ -232,6 +237,7 @@ james-stoup-agents/
 │   ├── pre-commit-tdd-gate.sh          # Optional git hook for TDD phase enforcement
 │   └── claude/                          # Claude Code session hooks
 │       ├── block-destructive-git.sh
+│       ├── diagram-coverage-check.sh
 │       ├── lint-after-edit.sh
 │       ├── post-commit-pipeline-sync.sh
 │       ├── rate-limit-wait.sh
@@ -264,6 +270,12 @@ your-project/
 │   ├── conflicts/           # Conflict reports from /conflict-check
 │   ├── plans/               # Implementation plans from /plan
 │   ├── decisions/           # ADRs (API contract, styleguide, etc.)
+│   ├── architecture/        # C4 diagrams from /architecture-diagram
+│   │   ├── system-context.md
+│   │   ├── containers.md
+│   │   ├── components.md
+│   │   ├── sequences/
+│   │   └── erd.md
 │   └── retros/              # Retrospective reports from /retro
 └── CLAUDE.md                # Project-specific harness config
 ```

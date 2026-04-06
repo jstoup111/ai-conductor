@@ -124,12 +124,21 @@ After generating the plan, cross-reference:
 
 Save the plan to `.docs/plans/YYYY-MM-DD-<feature>.md`
 
-Suggest next step: `/architecture-review` — the plan must pass architecture review before
+### 8b. Update Architecture Diagrams
+
+After saving the plan, run `/architecture-diagram` in plan-update mode to generate
+proposed-state diagrams showing the planned changes. These are saved with `-proposed`
+suffix alongside current-state diagrams and consumed by `/architecture-review`.
+
+### 8c. Suggest Next Step
+
+`/architecture-review` — the plan must pass architecture review before
 any code is written. The full flow from here is:
 
 ```
 /plan (you are here)
-  → /architecture-review (feasibility, alignment, risks — may BLOCK)
+  → /architecture-diagram (update proposed-state diagrams)
+  → /architecture-review (feasibility, alignment, risks — consumes diagrams, may BLOCK)
   → /writing-system-tests (failing acceptance specs from stories)
   → /pipeline or /tdd (implement until all tests pass)
 ```

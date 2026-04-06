@@ -23,7 +23,7 @@ fail() { echo -e "  ${RED}✗${NC} $*"; }
 warn() { echo -e "  ${YELLOW}⚠${NC} $*"; }
 info() { echo -e "  ${CYAN}→${NC} $*"; }
 
-SKILLS=(architecture-review bootstrap brainstorm code-review conduct conflict-check debugging finish manual-test memory pipeline plan retro stories tdd writing-system-tests)
+SKILLS=(architecture-diagram architecture-review assess bootstrap brainstorm code-review conduct conflict-check debugging finish manual-test memory pipeline plan pr retro simplify stories tdd writing-system-tests)
 
 # ─── Check Mode ───────────────────────────────────────────────────────────────
 
@@ -247,6 +247,11 @@ harness_hooks = {
                 {
                     "type": "command",
                     "command": f"{hooks_dir}/spec-coverage-check.sh",
+                    "timeout": 10
+                },
+                {
+                    "type": "command",
+                    "command": f"{hooks_dir}/diagram-coverage-check.sh",
                     "timeout": 10
                 }
             ]
