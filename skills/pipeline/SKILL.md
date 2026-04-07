@@ -203,7 +203,7 @@ At natural batch boundaries (after completing a group of related tasks):
 - Run a **micro-retro** (see below)
 - Append to `.pipeline/progress.log` — a chronological narrative of what was done, what was
   tried, what worked, and what's next (see Progress Log below)
-- Present a progress summary to the user
+- Report batch status as a single line: `Batch N: X/Y PASS, Z rework`
 - In Conservative mode: get explicit approval to continue
 - In Standard mode: continue unless the user intervenes
 - In Full mode: continue automatically

@@ -153,6 +153,15 @@ Right-size the model to the diff size to reduce API cost and rate limit pressure
 
 Most TDD diffs are small (under 20 lines), so the majority of domain reviews will use Sonnet.
 
+### Orchestrator Output Discipline
+
+Between TDD phases, the orchestrator outputs ONLY:
+- The dispatch (silently — no announcement)
+- The subagent's structured response
+- A one-line status: `RED: FAIL (expected)` / `GREEN: PASS` / `DOMAIN: APPROVED` / `DOMAIN: VETO — [reason]`
+
+No narration, no explanation of what just happened, no preview of what comes next.
+
 ### Spec Coverage Rule: Every File Gets a Spec
 
 **Every file in `app/` (or `src/`) must have a corresponding spec file.** Hard gate.

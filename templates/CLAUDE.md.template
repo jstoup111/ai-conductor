@@ -20,6 +20,13 @@ This project uses the james-stoup-agents harness at `{{HARNESS_PATH}}`.
 | BUILD | tdd, debugging, code-review{{PIPELINE_SKILL}} |
 | SHIP | finish, retro |
 
+## Harness Behavioral Rules
+
+All behavioral rules, model selection, communication protocol, and conventions are defined in:
+`{{HARNESS_PATH}}/HARNESS.md`
+
+Claude MUST read and follow HARNESS.md at the start of every session.
+
 ## Skill References
 
 Skills are loaded from the harness:
