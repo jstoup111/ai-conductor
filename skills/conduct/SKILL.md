@@ -44,9 +44,9 @@ Step 8b: /architecture-diagram  → DECIDE (update proposed-state diagrams for p
 Step 9:  /architecture-review    → DECIDE (skipped for Small, lightweight for Medium — consumes diagrams)
 Step 10: /writing-system-tests  → BUILD (skipped for Small)
 Step 11: /pipeline or /tdd      → BUILD (pipeline evaluator satisfies code-review gate)
-Step 12: /finish                → SHIP (merge/PR from worktree, cleanup)
-Step 13: /manual-test           → SHIP (validate stories, bug loop via /tdd)
-Step 14: /retro                 → SHIP
+Step 12: /manual-test           → SHIP (validate stories, bug loop via /tdd)
+Step 13: /retro                 → SHIP
+Step 14: /finish                → SHIP (verify, push, create PR)
 ```
 
 ## Practices
@@ -70,9 +70,9 @@ Check for these artifacts in order. The **first missing artifact** determines th
 | 9. architecture-review | Review exists in `.docs/decisions/` OR skipped (Small tier) | Glob `.docs/decisions/architecture-review-*.md` or check state is "skipped" |
 | 10. writing-system-tests | Acceptance specs exist OR skipped (Small tier) | Glob `spec/integration/*_spec.rb` or `spec/system/*_spec.rb`, or check state is "skipped" |
 | 11. build | Implementation tasks completed with passing tests | Check `.pipeline/task-status.json` or test suite passes. Pipeline evaluator satisfies code-review gate. |
-| 12. finish | Fresh verification has been performed | Build complete + tests pass |
-| 13. manual-test | Manual test results exist with no FAILs | Glob `.docs/manual-test-results.md` — if file contains FAIL rows, step is pending |
-| 14. retro | Retro report exists in `.docs/retros/` | Glob `.docs/retros/*.md` |
+| 12. manual-test | Manual test results exist with no FAILs | Glob `.docs/manual-test-results.md` — if file contains FAIL rows, step is pending |
+| 13. retro | Retro report exists in `.docs/retros/` | Glob `.docs/retros/*.md` |
+| 14. finish | PR created or branch pushed | Check `pr_url` in state or step is "done" |
 
 ### 2. Report Status
 
@@ -91,8 +91,9 @@ Present a clear status dashboard:
 | DECIDE | plan | ⬚ Pending | — |
 | BUILD | tdd/pipeline | ⬚ Pending | — |
 | BUILD | code-review | ⬚ Pending | — |
-| SHIP | finish | ⬚ Pending | — |
+| SHIP | manual-test | ⬚ Pending | — |
 | SHIP | retro | ⬚ Pending | — |
+| SHIP | finish/pr | ⬚ Pending | — |
 
 ### Next Step
 Run `/conflict-check` to check stories for contradictions before planning.

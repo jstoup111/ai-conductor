@@ -1507,17 +1507,8 @@ Also write .pipeline/audit-trail/code-review-satisfied.md if APPROVE."
   fi
 }
 
-run_finish() {
-  step_header 11 "finish" "SHIP"
-
-  log "Fresh verification and completion options..."
-  # Always interactive — user must choose merge/PR/keep/discard
-  run_claude "Run the /finish skill. Run test suite NOW, check git status, verify ALL story criteria covered. Present all 4 options (merge locally, push & create PR, keep as-is, discard) and wait for the user to choose." "interactive"
-  save_state "finish" "done"; ok "Finish complete"
-}
-
 run_manual_test() {
-  step_header 12 "manual-test" "SHIP"
+  step_header 11 "manual-test" "SHIP"
   if step_done "manual_test"; then
     ok "Already complete — all stories pass manual testing"; return 0
   fi
@@ -1532,7 +1523,7 @@ Record results in .docs/manual-test-results.md. For any FAILs, write a failing t
 }
 
 run_retro() {
-  step_header 13 "retro" "SHIP"
+  step_header 12 "retro" "SHIP"
   if step_done "retro"; then
     ok "Already complete"; return 0
   fi
@@ -1543,6 +1534,50 @@ Part B (Application): architecture, code quality, test quality, security, tech d
 Write to .docs/retros/ with file:line references."
   check_retro && { ok "Retro complete"; save_state "retro" "done"; return 0; }
   fail "No retro in .docs/retros/"; save_state "retro" "failed"; return 1
+}
+
+run_finish() {
+  step_header 13 "finish" "SHIP"
+  if step_done "finish"; then
+    ok "Already complete"; return 0
+  fi
+
+  log "Running fresh verification and creating PR..."
+  # Non-interactive: run tests, verify stories, push, and create PR.
+  # Only falls back to interactive if verification or PR creation fails.
+  run_claude "Run the /finish skill, then run the /pr skill. Steps:
+1. Run the full test suite NOW — read the output, count pass/fail/pending
+2. Run git status — check for uncommitted changes
+3. Run linters/type-checks if the project has them
+4. Verify ALL story criteria from .docs/stories/ are covered
+5. If all checks pass: push the branch and create a PR using the /pr skill
+6. If any check fails: report what failed and stop
+
+Do NOT present interactive options. The goal is: verify → push → PR."
+
+  # Check if PR was created by looking for the URL in the log
+  local pr_url
+  pr_url=$(tail -50 "$SESSION_LOG" 2>/dev/null | grep -oE 'https://github\.com/[^ ]+/pull/[0-9]+' | tail -1 || echo "")
+  if [ -n "$pr_url" ]; then
+    ok "PR created: ${pr_url}"
+    save_state "finish" "done"
+    save_state "pr_url" "$pr_url"
+    return 0
+  fi
+
+  # PR not detected — fall back to interactive session for recovery
+  warn "Automated finish did not complete — launching interactive session..."
+  run_claude "The automated finish step did not create a PR. Check the session log for errors. Run /finish to verify, then /pr to create the pull request." "interactive"
+
+  pr_url=$(tail -50 "$SESSION_LOG" 2>/dev/null | grep -oE 'https://github\.com/[^ ]+/pull/[0-9]+' | tail -1 || echo "")
+  if [ -n "$pr_url" ]; then
+    ok "PR created: ${pr_url}"
+    save_state "finish" "done"
+    save_state "pr_url" "$pr_url"
+    return 0
+  fi
+
+  save_state "finish" "done"; ok "Finish complete"
 }
 
 # ─── Status Display ───────────────────────────────────────────────────────────
@@ -1679,6 +1714,11 @@ if ip > 0:
         echo "complete"
       fi
       ;;
+    finish)
+      local pr_url
+      pr_url=$(python3 -c "import json; print(json.load(open('$STATE_FILE')).get('pr_url',''))" 2>/dev/null || echo "")
+      [ -n "$pr_url" ] && echo "$pr_url"
+      ;;
   esac
 }
 
@@ -1697,10 +1737,10 @@ show_status() {
   echo -e "  ${BOLD}Ctrl+C${NC} pause  ${BOLD}--log${NC} tail output  ${BOLD}--status${NC} check progress"
   echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 
-  local steps=("worktree" "memory" "brainstorm" "complexity" "stories" "conflict_check" "plan" "architecture_diagram" "architecture_review" "acceptance_specs" "build" "finish" "manual_test" "retro")
-  local labels=("worktree" "memory" "brainstorm" "complexity" "stories" "conflict-check" "plan" "diagrams" "arch review" "acceptance specs" "tdd/pipeline" "finish" "manual-test" "retro")
+  local steps=("worktree" "memory" "brainstorm" "complexity" "stories" "conflict_check" "plan" "architecture_diagram" "architecture_review" "acceptance_specs" "build" "manual_test" "retro" "finish")
+  local labels=("worktree" "memory" "brainstorm" "complexity" "stories" "conflict-check" "plan" "diagrams" "arch review" "acceptance specs" "tdd/pipeline" "manual-test" "retro" "finish/pr")
   local phases=("SETUP" "UNDERSTAND" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "BUILD" "BUILD" "SHIP" "SHIP" "SHIP")
-  local checks=("" "" check_brainstorm "" check_stories check_conflict_check check_plan check_architecture_diagram check_architecture_review check_acceptance_specs check_build "" check_manual_test check_retro)
+  local checks=("" "" check_brainstorm "" check_stories check_conflict_check check_plan check_architecture_diagram check_architecture_review check_acceptance_specs check_build check_manual_test check_retro "")
 
   local current_step
   current_step=$(get_current_step)
@@ -2079,12 +2119,12 @@ recover() {
       recover_prompt="Run /writing-system-tests. Generate failing acceptance specs from stories." ;;
     build)
       recover_prompt="Continue the build. Check .pipeline/task-status.json for progress, run /tdd on the next incomplete task." ;;
-    finish)
-      recover_prompt="Run /finish. Run tests, check git status, present completion options." ;;
     manual_test)
       recover_prompt="Run /manual-test. Test every story's acceptance criteria. Record results in .docs/manual-test-results.md." ;;
     retro)
       recover_prompt="Run /retro. Both parts: harness + application. Write to .docs/retros/." ;;
+    finish)
+      recover_prompt="Run /finish to verify all tests pass, then run /pr to push and create a pull request." ;;
   esac
 
   # Fresh session — don't carry context from prior steps
@@ -2126,7 +2166,7 @@ usage() {
   echo ""
   echo "Steps: worktree, memory, brainstorm, complexity, stories, conflict-check,"
   echo "       plan, architecture-diagram, architecture-review, acceptance-specs,"
-  echo "       build, finish, manual-test, retro"
+  echo "       build, manual-test, retro, finish"
   echo ""
   echo "Project-level (run once, not per-feature): bootstrap, assess"
   echo ""
@@ -2329,8 +2369,8 @@ fi
 # Step registry — use underscores to match save_state() keys in conduct-state.json
 # Worktree is created right after complexity assessment so all subsequent commits
 # (stories, plan, build, etc.) are isolated on the feature branch.
-ALL_STEPS=(worktree memory brainstorm complexity stories conflict_check plan architecture_diagram architecture_review acceptance_specs build finish manual_test retro)
-STEP_FUNCS=(run_worktree_setup run_memory run_brainstorm run_complexity_assessment run_stories run_conflict_check run_plan run_architecture_diagram run_architecture_review run_acceptance_specs run_build run_finish run_manual_test run_retro)
+ALL_STEPS=(worktree memory brainstorm complexity stories conflict_check plan architecture_diagram architecture_review acceptance_specs build manual_test retro finish)
+STEP_FUNCS=(run_worktree_setup run_memory run_brainstorm run_complexity_assessment run_stories run_conflict_check run_plan run_architecture_diagram run_architecture_review run_acceptance_specs run_build run_manual_test run_retro run_finish)
 
 # Determine starting point
 start_index=0
