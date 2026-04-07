@@ -23,7 +23,7 @@ UNDERSTAND → DECIDE → BUILD → SHIP
 | UNDERSTAND | bootstrap, memory, assess | CLAUDE.md, .memory/, .docs/decisions/technical-assessment-*.md |
 | DECIDE | brainstorm → stories → conflict-check → plan → architecture-diagram → architecture-review | .docs/specs/, .docs/stories/, .docs/conflicts/, .docs/plans/, .docs/architecture/ |
 | BUILD | writing-system-tests → tdd/pipeline, debugging, code-review | Acceptance specs, code, unit tests, .pipeline/ |
-| SHIP | finish, manual-test, retro, pr | .docs/retros/ |
+| SHIP | manual-test, retro, finish/pr | .docs/retros/ |
 
 ## Skill Invocation
 
