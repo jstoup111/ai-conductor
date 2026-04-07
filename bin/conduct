@@ -80,6 +80,58 @@ ensure_pipeline_dir() {
   mkdir -p "${PIPELINE_DIR}"
 }
 
+# Check if the harness repo has updates available on its remote.
+# Prompts the user to update or skip. Pulls automatically on 'y'.
+check_harness_update() {
+  # Only check if harness dir is a git repo
+  [ -d "${HARNESS_DIR}/.git" ] || return 0
+
+  # Fetch remote quietly (timeout after 5s to avoid blocking on network issues)
+  timeout 5 git -C "$HARNESS_DIR" fetch --quiet 2>/dev/null || return 0
+
+  local local_head remote_head branch
+  branch=$(git -C "$HARNESS_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+  [ -z "$branch" ] && return 0
+
+  local_head=$(git -C "$HARNESS_DIR" rev-parse HEAD 2>/dev/null || echo "")
+  remote_head=$(git -C "$HARNESS_DIR" rev-parse "origin/${branch}" 2>/dev/null || echo "")
+
+  # Nothing to do if up to date or remote doesn't exist
+  [ "$local_head" = "$remote_head" ] && return 0
+  [ -z "$remote_head" ] && return 0
+
+  # Check that local is behind (not ahead or diverged with unpushed work)
+  if ! git -C "$HARNESS_DIR" merge-base --is-ancestor HEAD "origin/${branch}" 2>/dev/null; then
+    return 0  # local has unpushed commits — don't prompt
+  fi
+
+  local behind_count
+  behind_count=$(git -C "$HARNESS_DIR" rev-list --count "HEAD..origin/${branch}" 2>/dev/null || echo "0")
+  [ "$behind_count" = "0" ] && return 0
+
+  echo ""
+  warn "Harness update available (${behind_count} commit(s) behind origin/${branch})"
+  if [ -t 0 ]; then
+    read -r -p "  Pull latest? [y/n]: " update_choice
+    case "$update_choice" in
+      [yY])
+        log "Updating harness..."
+        if git -C "$HARNESS_DIR" pull --ff-only 2>/dev/null; then
+          ok "Harness updated. Re-launching..."
+          exec "$0" "${ORIGINAL_ARGS[@]}"
+        else
+          warn "Fast-forward pull failed — update manually: cd ${HARNESS_DIR} && git pull"
+        fi
+        ;;
+      *)
+        log "Skipping update"
+        ;;
+    esac
+  else
+    warn "Run: cd ${HARNESS_DIR} && git pull"
+  fi
+}
+
 # ─── Artifact Review ─────────────────────────────────────────────────────────
 
 # Render a markdown file in the terminal using glow.
@@ -2069,6 +2121,7 @@ usage() {
   echo "  --from <name>     Start from a specific step"
   echo "  --cooldown <sec>  Seconds between steps (default: 10, 0 to disable)"
   echo "  --reset           Clear session state and start fresh"
+  echo "  --update          Pull latest harness version and exit"
   echo "  -h, --help        Show this help"
   echo ""
   echo "Steps: worktree, memory, brainstorm, complexity, stories, conflict-check,"
@@ -2105,11 +2158,15 @@ while [[ $# -gt 0 ]]; do
     --from)         START_STEP="$2"; shift ;;
     --cooldown)     STEP_COOLDOWN="$2"; STEP_COOLDOWN_ORIG="$2"; shift ;;
     --reset)        rm -f "$STATE_FILE" "$SESSION_FILE" "${PIPELINE_DIR}/session-created" "${SESSION_LOG}" 2>/dev/null; log "Session reset."; exit 0 ;;
+    --update)       log "Updating harness..."; git -C "$HARNESS_DIR" pull --ff-only && ok "Harness updated" || fail "Update failed — pull manually"; exit 0 ;;
     -h|--help)      usage; exit 0 ;;
     *)              FEATURE_DESC="$1" ;;
   esac
   shift
 done
+
+# Check for harness updates before starting
+check_harness_update
 
 # Resume/from menu: scan .worktrees/ for active features and let user pick.
 # Presence of a worktree = work left to do. No root repo state needed.
