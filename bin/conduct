@@ -1467,7 +1467,7 @@ run_build() {
 
     # Dispatch task to Claude — it must use subagents for implementation
     run_claude "Implement the following task using the /tdd skill. You MUST dispatch a subagent
-via the Agent tool to do the implementation — do NOT implement directly in this session.
+via the Agent tool with model='sonnet' to do the implementation — do NOT implement directly in this session.
 The subagent handles the full TDD cycle: RED → DOMAIN → GREEN → DOMAIN → COMMIT.
 
 Provide the subagent with ONLY this task context (do not send the full plan or all stories):
@@ -1495,7 +1495,7 @@ No narration between steps. Dispatch subagents silently."
       # Rework: retry once before moving on
       warn "Retrying task ${task_num}..."
       run_claude "Task ${task_num} failed. Review the test output and error. Dispatch a subagent
-to fix the issue and complete the TDD cycle. Update .pipeline/task-status.json on success."
+with model='sonnet' to fix the issue and complete the TDD cycle. Update .pipeline/task-status.json on success."
 
       if is_task_complete "$task_num"; then
         ok "Task ${task_num}/${total_tasks}: PASS (rework)"

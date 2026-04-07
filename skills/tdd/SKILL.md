@@ -29,7 +29,7 @@ RED → DOMAIN → GREEN → DOMAIN → COMMIT
 
 ### Phase 1: RED
 
-**Agent:** Generator (test-files-only context)
+**Agent:** Generator (test-files-only context) — dispatch with `model="sonnet"`
 **Goal:** Write exactly one failing test that captures the next behavior.
 
 1. Choose the next acceptance criterion from the plan (or the most obvious next behavior)
@@ -57,7 +57,7 @@ violations, domain language. Has veto authority to send back to RED.
 
 ### Phase 3: GREEN
 
-**Agent:** Generator (source-files-only context)
+**Agent:** Generator (source-files-only context) — dispatch with `model="sonnet"`
 **Goal:** Write the simplest code that makes the failing test pass.
 
 1. **Scope check BEFORE writing code:**

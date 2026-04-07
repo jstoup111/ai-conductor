@@ -26,8 +26,8 @@ Gather what the evaluator needs:
 
 ### 2. Dispatch Evaluator Agent
 
-Use the Agent tool with `agents/evaluator.md` persona. The evaluator runs in a **fresh context**
-— it does not share conversation history with the generator.
+Use the Agent tool with `agents/evaluator.md` persona and `model="opus"`. The evaluator runs in
+a **fresh context** — it does not share conversation history with the generator.
 
 Provide the evaluator with:
 - The diff

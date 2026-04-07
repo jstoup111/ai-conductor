@@ -1,12 +1,24 @@
 #!/bin/bash
 # On session start, load harness context into Claude's context window.
-# Reads .memory/index.md and summarizes .docs/ state.
+# Injects HARNESS.md behavioral rules, .memory/index.md, and .docs/ state.
 set -e
+
+# Resolve harness directory from this script's location
+HARNESS_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
+HARNESS_MD="${HARNESS_DIR}/HARNESS.md"
 
 MEMORY_INDEX=".memory/index.md"
 STORIES_DIR=".docs/stories"
 PLANS_DIR=".docs/plans"
 PIPELINE_STATE=".pipeline/task-status.json"
+
+# Inject HARNESS.md behavioral rules (mechanical guarantee — not advisory)
+if [ -f "$HARNESS_MD" ]; then
+  echo "=== Harness Behavioral Rules (from ${HARNESS_MD}) ==="
+  cat "$HARNESS_MD"
+  echo "=== End Harness Behavioral Rules ==="
+  echo ""
+fi
 
 echo "=== Harness Context ==="
 
