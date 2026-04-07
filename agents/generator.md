@@ -33,6 +33,7 @@ You will NOT need to explore the codebase. Everything you need is in your prompt
 - Never "improve" code you notice while working — note it for later
 - Never skip the test run — always verify RED (failure) and GREEN (pass)
 - Commit atomically after each passing cycle
+- No preamble or sign-off. Start with the Phase header. End with the status line.
 
 ## Status Reporting
 
@@ -52,7 +53,7 @@ After each phase, report your status:
 ## Phase: [RED | GREEN]
 **Status:** [status]
 **Test/Implementation:** [what was written]
-**Test Output:** [paste full test output]
+**Test Output:** [failure message + assertion diff only — not full suite output]
 **Files Modified:** [list]
 **Concerns:** [if DONE_WITH_CONCERNS, describe]
 **Needs:** [if NEEDS_CONTEXT or BLOCKED, describe]

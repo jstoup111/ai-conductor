@@ -29,7 +29,7 @@ RED → DOMAIN → GREEN → DOMAIN → COMMIT
 
 ### Phase 1: RED
 
-**Agent:** Generator (test-files-only context)
+**Agent:** Generator (test-files-only context) — dispatch with `model="sonnet"`
 **Goal:** Write exactly one failing test that captures the next behavior.
 
 1. Choose the next acceptance criterion from the plan (or the most obvious next behavior)
@@ -57,7 +57,7 @@ violations, domain language. Has veto authority to send back to RED.
 
 ### Phase 3: GREEN
 
-**Agent:** Generator (source-files-only context)
+**Agent:** Generator (source-files-only context) — dispatch with `model="sonnet"`
 **Goal:** Write the simplest code that makes the failing test pass.
 
 1. **Scope check BEFORE writing code:**
@@ -152,6 +152,15 @@ Right-size the model to the diff size to reduce API cost and rate limit pressure
 - **Diffs of 50+ lines:** dispatch with `model="opus"` — deep analysis for larger changes
 
 Most TDD diffs are small (under 20 lines), so the majority of domain reviews will use Sonnet.
+
+### Orchestrator Output Discipline
+
+Between TDD phases, the orchestrator outputs ONLY:
+- The dispatch (silently — no announcement)
+- The subagent's structured response
+- A one-line status: `RED: FAIL (expected)` / `GREEN: PASS` / `DOMAIN: APPROVED` / `DOMAIN: VETO — [reason]`
+
+No narration, no explanation of what just happened, no preview of what comes next.
 
 ### Spec Coverage Rule: Every File Gets a Spec
 

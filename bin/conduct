@@ -132,6 +132,47 @@ check_harness_update() {
   fi
 }
 
+check_harness_config() {
+  # Only run if we're in a project (not the harness repo itself)
+  [ -f "CLAUDE.md" ] || return 0
+  [ -f "${HARNESS_DIR}/HARNESS.md" ] || return 0
+
+  # Skip if this IS the harness repo
+  [ "$(cd "$HARNESS_DIR" && pwd)" = "$(pwd)" ] && return 0
+
+  # Check if project CLAUDE.md already references HARNESS.md
+  if grep -q "HARNESS.md" CLAUDE.md 2>/dev/null; then
+    return 0
+  fi
+
+  # Prompt user for approval before modifying their CLAUDE.md
+  warn "Project CLAUDE.md does not reference HARNESS.md (harness behavioral rules)"
+  if [ -t 0 ]; then
+    read -r -p "  Add HARNESS.md reference to CLAUDE.md? [y/n]: " upgrade_choice
+    case "$upgrade_choice" in
+      [yY])
+        cat >> CLAUDE.md << EOF
+
+## Harness Behavioral Rules
+
+All behavioral rules, model selection, communication protocol, and conventions are defined in:
+\`${HARNESS_DIR}/HARNESS.md\`
+
+Claude MUST read and follow HARNESS.md at the start of every session.
+EOF
+        git add CLAUDE.md
+        git commit -m "chore: add HARNESS.md reference to CLAUDE.md (harness auto-upgrade)"
+        ok "CLAUDE.md upgraded — now references HARNESS.md"
+        ;;
+      *)
+        log "Skipping CLAUDE.md upgrade"
+        ;;
+    esac
+  else
+    warn "Add HARNESS.md reference manually or re-run interactively"
+  fi
+}
+
 # ─── Artifact Review ─────────────────────────────────────────────────────────
 
 # Render a markdown file in the terminal using glow.
@@ -1426,7 +1467,7 @@ run_build() {
 
     # Dispatch task to Claude — it must use subagents for implementation
     run_claude "Implement the following task using the /tdd skill. You MUST dispatch a subagent
-via the Agent tool to do the implementation — do NOT implement directly in this session.
+via the Agent tool with model='sonnet' to do the implementation — do NOT implement directly in this session.
 The subagent handles the full TDD cycle: RED → DOMAIN → GREEN → DOMAIN → COMMIT.
 
 Provide the subagent with ONLY this task context (do not send the full plan or all stories):
@@ -1440,7 +1481,8 @@ After the subagent completes:
 2. Verify a commit was created for this task
 3. If tests fail, dispatch the subagent again with the error context (rework)
 4. Update .pipeline/task-status.json: set task-${task_num} status to 'completed' if PASS
-5. Report the result as: PASS or FAIL with reason"
+5. Report the result as: PASS or FAIL with reason
+No narration between steps. Dispatch subagents silently."
 
     # Check if task was completed
     if is_task_complete "$task_num"; then
@@ -1453,7 +1495,7 @@ After the subagent completes:
       # Rework: retry once before moving on
       warn "Retrying task ${task_num}..."
       run_claude "Task ${task_num} failed. Review the test output and error. Dispatch a subagent
-to fix the issue and complete the TDD cycle. Update .pipeline/task-status.json on success."
+with model='sonnet' to fix the issue and complete the TDD cycle. Update .pipeline/task-status.json on success."
 
       if is_task_complete "$task_num"; then
         ok "Task ${task_num}/${total_tasks}: PASS (rework)"
@@ -2207,6 +2249,9 @@ done
 
 # Check for harness updates before starting
 check_harness_update
+
+# Check if project CLAUDE.md references HARNESS.md (auto-upgrade for existing projects)
+check_harness_config
 
 # Resume/from menu: scan .worktrees/ for active features and let user pick.
 # Presence of a worktree = work left to do. No root repo state needed.

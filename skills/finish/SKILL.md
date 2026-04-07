@@ -80,7 +80,7 @@ Wait for the user to choose. Do not assume.
 ### 5. Cleanup
 
 After executing the chosen option:
-- **Worktree merge/cleanup:** Dispatch the `worktree-manager` agent (see `agents/worktree-manager.md`):
+- **Worktree merge/cleanup:** Dispatch the `worktree-manager` agent with `model="haiku"` (see `agents/worktree-manager.md`):
   - Options 1 (merge) and 2 (PR): agent merges the feature branch, runs post-merge tests,
     then removes the worktree and prunes the branch
   - Option 4 (discard): agent removes the worktree and deletes the branch

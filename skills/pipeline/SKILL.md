@@ -50,7 +50,7 @@ one prompt to Claude. Claude orchestrates the task through these steps:
 ```
 0. UPDATE STATUS — Conductor marks task "in_progress" in .pipeline/task-status.json
 1. DECOMPOSE    — Read task, identify files to touch, check dependencies met
-2. DISPATCH     — Send task to a TDD subagent via Agent tool (scoped context only)
+2. DISPATCH     — Send task to a TDD subagent via Agent tool with model="sonnet" (scoped context only)
                   Subagent runs full TDD cycle: RED → DOMAIN → GREEN → DOMAIN → COMMIT
 3. VERIFY       — Run the full test suite to confirm the subagent's work
 4. FIX          — If tests fail, dispatch subagent again with error context (rework cycle)
@@ -84,8 +84,8 @@ The subagent handles the commit as part of the TDD COMMIT phase.
 **Rate limit cooldown: sleep 15 seconds before dispatching the evaluator** to avoid stacking
 on top of the just-completed TDD agent's API usage.
 
-At batch boundaries, dispatch an evaluator agent with **fresh, scoped context** (no shared
-state with the generator). Provide the evaluator with:
+At batch boundaries, dispatch an evaluator agent with `model="opus"` and **fresh, scoped context**
+(no shared state with the generator). Provide the evaluator with:
 - The **git diff** for this batch only (not the full codebase)
 - The **acceptance criteria** for this batch's tasks (extracted from stories, not full story files)
 - The **test output summary** (pass/fail counts + failure snippets, not full verbose output)
@@ -178,7 +178,7 @@ in the same directory on non-overlapping files.
 
 **Worktree-based parallelism (Full autonomy only):**
 For tasks that touch overlapping files or need full isolation:
-- Dispatch the `worktree-manager` agent to create parallel worktrees under `.worktrees/`
+- Dispatch the `worktree-manager` agent with `model="haiku"` to create parallel worktrees under `.worktrees/`
 - Each worktree gets its own task batch
 - After completion, merge results back sequentially
 - The worktree-manager handles merge order, conflict resolution, and post-merge testing
@@ -203,7 +203,7 @@ At natural batch boundaries (after completing a group of related tasks):
 - Run a **micro-retro** (see below)
 - Append to `.pipeline/progress.log` — a chronological narrative of what was done, what was
   tried, what worked, and what's next (see Progress Log below)
-- Present a progress summary to the user
+- Report batch status as a single line: `Batch N: X/Y PASS, Z rework`
 - In Conservative mode: get explicit approval to continue
 - In Standard mode: continue unless the user intervenes
 - In Full mode: continue automatically
