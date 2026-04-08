@@ -166,6 +166,7 @@ Each skill declares its enforcement level honestly:
 
 Project-level memory lives in `.memory/` with categories: decisions, patterns, gotchas, context.
 Every session starts with recall. Significant decisions are persisted during work.
+Skills with Memory Checkpoint sections define when writes are expected — check skill verification lists.
 
 ## Push Policy
 

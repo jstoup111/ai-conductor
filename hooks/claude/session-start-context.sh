@@ -55,5 +55,17 @@ print(f'Pipeline: {done}/{total} tasks completed')
 " 2>/dev/null || true
 fi
 
+# Record memory entry count for session-delta check at stop
+MEMORY_DIR=".memory"
+MEMORY_START_COUNT=0
+for dir in decisions patterns gotchas context; do
+  if [ -d "${MEMORY_DIR}/${dir}" ]; then
+    COUNT=$(find "${MEMORY_DIR}/${dir}" -name "*.md" -not -empty 2>/dev/null | wc -l)
+    MEMORY_START_COUNT=$((MEMORY_START_COUNT + COUNT))
+  fi
+done
+mkdir -p .pipeline
+echo "$MEMORY_START_COUNT" > .pipeline/.memory-count-at-start
+
 echo "=== End Harness Context ==="
 exit 0
