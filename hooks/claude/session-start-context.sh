@@ -20,6 +20,27 @@ if [ -f "$HARNESS_MD" ]; then
   echo ""
 fi
 
+# Check if project CLAUDE.md references HARNESS.md (skip if this IS the harness repo)
+if [ -f "CLAUDE.md" ] && [ -f "$HARNESS_MD" ]; then
+  PROJECT_DIR="$(pwd)"
+  if [ "$HARNESS_DIR" != "$PROJECT_DIR" ]; then
+    if ! grep -q "HARNESS.md" CLAUDE.md 2>/dev/null; then
+      echo "=== HARNESS.md Missing ==="
+      echo "WARNING: This project's CLAUDE.md does not reference HARNESS.md."
+      echo "Run /conduct or add manually:"
+      echo ""
+      echo "  ## Harness Behavioral Rules"
+      echo ""
+      echo "  All behavioral rules, model selection, communication protocol, and conventions are defined in:"
+      echo "  \`${HARNESS_MD}\`"
+      echo ""
+      echo "  Claude MUST read and follow HARNESS.md at the start of every session."
+      echo "=== End HARNESS.md Missing ==="
+      echo ""
+    fi
+  fi
+fi
+
 echo "=== Harness Context ==="
 
 # Memory
