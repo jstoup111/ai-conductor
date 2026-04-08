@@ -25,15 +25,31 @@ if echo "$error_text" | grep -qoiE "retry.*(after|in)\s*[0-9]+" 2>/dev/null; the
   fi
 fi
 
-# Parse "resets at HH:MM" or ISO timestamp
-if [ -z "$wait_seconds" ] && echo "$error_text" | grep -qoiE "resets?\s*(at|:)\s*[0-9T:-]+" 2>/dev/null; then
-  reset_time=$(echo "$error_text" | grep -oiE "[0-9]{1,2}:[0-9]{2}" | head -1)
+# Parse "resets at HH:MM", "resets 11pm", "resets 11:00pm", or ISO timestamp
+if [ -z "$wait_seconds" ] && echo "$error_text" | grep -qoiE "resets?\s*[0-9]" 2>/dev/null; then
+  reset_epoch=""
+  now_epoch=$(date +%s)
+
+  # Try HH:MM format first (e.g., "resets at 23:00", "resets 23:00")
+  reset_time=$(echo "$error_text" | grep -oiE "[0-9]{1,2}:[0-9]{2}\s*(am|pm)?" | head -1)
   if [ -n "$reset_time" ]; then
     reset_epoch=$(date -d "$reset_time" +%s 2>/dev/null || echo "")
-    now_epoch=$(date +%s)
-    if [ -n "$reset_epoch" ] && [ "$reset_epoch" -gt "$now_epoch" ]; then
-      wait_seconds=$((reset_epoch - now_epoch))
+  fi
+
+  # Try bare hour with am/pm (e.g., "resets 11pm", "resets 3am")
+  if [ -z "$reset_epoch" ] || [ "$reset_epoch" -le "$now_epoch" ] 2>/dev/null; then
+    bare_time=$(echo "$error_text" | grep -oiE "[0-9]{1,2}\s*(am|pm)" | head -1)
+    if [ -n "$bare_time" ]; then
+      reset_epoch=$(date -d "$bare_time" +%s 2>/dev/null || echo "")
     fi
+  fi
+
+  # Calculate wait if we got a valid future time
+  if [ -n "$reset_epoch" ] && [ "$reset_epoch" -gt "$now_epoch" ] 2>/dev/null; then
+    wait_seconds=$((reset_epoch - now_epoch))
+  # If parsed time is in the past, it might mean tomorrow
+  elif [ -n "$reset_epoch" ] && [ "$reset_epoch" -le "$now_epoch" ] 2>/dev/null; then
+    wait_seconds=$(( reset_epoch + 86400 - now_epoch ))
   fi
 fi
 

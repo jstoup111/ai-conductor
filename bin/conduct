@@ -2084,7 +2084,7 @@ recover() {
   if [ -f "$SESSION_LOG" ]; then
     local last_lines
     last_lines=$(tail -20 "$SESSION_LOG" 2>/dev/null || true)
-    if echo "$last_lines" | grep -qiE "rate.limit|usage.limit|overloaded|429|too.many.requests" 2>/dev/null; then
+    if echo "$last_lines" | grep -qiE "rate.limit|usage.limit|hit.your.limit|overloaded|429|too.many.requests" 2>/dev/null; then
       warn "Rate/usage limit detected in output. Waiting for reset..."
       handle_rate_limit
       log "Rate limit cleared. Retrying step: ${step_name}"
