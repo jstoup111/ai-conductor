@@ -105,6 +105,14 @@ The evaluator produces a structured verdict:
 
 **GATE: BLOCK verdict prevents merge. REQUEST_CHANGES must be addressed before re-review.**
 
+### Memory Checkpoint
+
+After acting on evaluator findings, persist:
+- **Category: `patterns/`** — If the evaluator identified a recurring quality pattern (positive or negative) that should inform future TDD cycles
+- **Category: `gotchas/`** — If the evaluator found a subtle issue that the generator/domain-reviewer missed
+
+Skip if: all findings were standard quality issues (naming, complexity) with no cross-session value.
+
 ## Verification
 
 - [ ] Evaluator dispatched with fresh context (no shared state with generator)
@@ -114,3 +122,4 @@ The evaluator produces a structured verdict:
 - [ ] Findings include file:line references
 - [ ] Critical/Important issues addressed before proceeding
 - [ ] Re-review ran after fixing critical issues
+- [ ] Recurring patterns or missed-by-TDD issues persisted to `.memory/` (if applicable)

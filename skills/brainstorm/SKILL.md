@@ -115,6 +115,14 @@ This MUST happen before stories — stories reference the contract for response 
 - **Do NOT call `ExitPlanMode`.** Brainstorm is a design phase, not an implementation plan.
   Write the design doc and return. `ExitPlanMode` is owned by plan mode, not brainstorm.
 
+### Memory Checkpoint
+
+After the user approves the design document, persist:
+- **Category: `decisions/`** — The selected approach and why alternatives were rejected
+- Only if: the decision involves a non-obvious trade-off that would not be apparent from reading the design doc alone
+
+Do NOT persist: the design doc contents (that is in `.docs/specs/`).
+
 ## Verification
 
 - [ ] Project context explored before asking questions
@@ -124,3 +132,4 @@ This MUST happen before stories — stories reference the contract for response 
 - [ ] Design document saved to `.docs/specs/`
 - [ ] User explicitly approved before proceeding
 - [ ] `ExitPlanMode` was NOT called
+- [ ] Architectural decision persisted to `.memory/decisions/` (if non-obvious trade-off made)

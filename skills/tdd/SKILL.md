@@ -97,6 +97,14 @@ abstractions, missing domain types, naming. Has veto authority to send back to G
 **After commit:** Return to RED for the next cycle, or stop if all criteria for the current
 task are covered.
 
+### Memory Checkpoint (Per-Cycle, Conditional)
+
+After COMMIT, if this TDD cycle revealed any of the following, persist immediately:
+- **Category: `gotchas/`** — An unexpected framework/library behavior that caused the test to fail for the wrong reason
+- **Category: `patterns/`** — A new pattern established in this cycle that future cycles should follow
+
+Most cycles will NOT trigger a memory write — that is correct. Only persist genuinely surprising discoveries.
+
 ### Refactoring Principle: Dry Business Logic, Not Dry Code
 
 **Refactoring does NOT happen during GREEN.** GREEN writes the simplest passing code — nothing
@@ -183,3 +191,4 @@ No narration, no explanation of what just happened, no preview of what comes nex
 - [ ] Working tree clean at commit
 - [ ] One behavior per cycle (not multiple changes lumped together)
 - [ ] Every `app/` file has a corresponding spec file (unit + request where applicable)
+- [ ] Non-obvious gotchas or new patterns persisted to `.memory/` (if encountered this cycle)

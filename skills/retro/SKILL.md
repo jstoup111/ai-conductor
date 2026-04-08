@@ -154,5 +154,6 @@ After writing the retro report, take these actions:
 - [ ] Harness changes are actionable diffs/modifications
 - [ ] Application changes are written as new stories
 - [ ] Retro report saved to `.docs/retros/`
-- [ ] Learnings persisted to `.memory/`
+- [ ] At least one harness or application learning persisted to `.memory/` (decisions, patterns, or gotchas)
+- [ ] `.memory/index.md` updated after write
 - [ ] Trends compared against previous retros (if any exist)
