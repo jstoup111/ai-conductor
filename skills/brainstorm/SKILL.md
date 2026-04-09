@@ -72,6 +72,11 @@ Required sections: Problem, Solution, Scope (In/Out), Key Decisions, Open Questi
 
 Save to `.docs/specs/YYYY-MM-DD-<topic>.md`
 
+**Post-write verification:** After writing the design doc, verify the file exists on disk with
+`ls`. If prior design docs exist for the same feature in `.docs/specs/`, archive them by
+prepending `SUPERSEDED-` to the filename. This prevents competing design docs with
+contradictory decisions from coexisting on disk.
+
 ### 5. Scope Check
 
 Before presenting for approval, compare the design against the user's **original request**:
