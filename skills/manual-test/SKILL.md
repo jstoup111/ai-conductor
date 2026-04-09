@@ -23,7 +23,7 @@ Before starting manual testing, check the stories in `.docs/stories/` for this f
 - If **no stories reference HTTP endpoints, API routes, or user-facing UI**, report SKIP:
   "Manual test skipped — feature has no endpoint/UI criteria (services, jobs, mailers, CI)."
 - Suggest console-based verification instead: `rails console` smoke test or script execution.
-- Write skip reason to `.docs/manual-test-results.md` so conduct can mark the step as done.
+- Display skip reason to the user so conduct can mark the step as done.
 
 ### 1. Detect Project Type
 
@@ -96,11 +96,12 @@ Use browser automation (Chrome MCP if configured, otherwise manual Capybara-styl
 3. Verify visible output matches expected behavior
 4. Take screenshots of key states for the retro
 
-### 5. Record Results
+### 5. Display Results
 
-Write results to `.docs/manual-test-results.md`:
+Display results to the user in the conversation. Do NOT write results to a file or commit them.
+Use this format:
 
-```markdown
+```
 # Manual Test Results
 **Date:** YYYY-MM-DD
 **Server:** localhost:3000
@@ -149,7 +150,7 @@ docker compose down
 
 - [ ] Application started and accessible
 - [ ] Every story (happy + negative paths) tested manually
-- [ ] Results recorded in .docs/manual-test-results.md
+- [ ] Results displayed to user
 - [ ] All bugs fixed via TDD loop
 - [ ] Re-verification passed after bug fixes
 - [ ] Application shut down cleanly
