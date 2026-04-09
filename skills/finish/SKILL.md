@@ -31,6 +31,11 @@ Run these commands and read the full output:
 
 All must pass before proceeding.
 
+**Real DB verification:** If the project has `docker-compose.yml` (or equivalent), verify DB
+services are running before accepting test results. Warn if all specs use stubbed persistence
+(e.g., `fake_columns.rb`, in-memory stores) — this indicates a false-green risk where schema
+mismatches between stubs and migrations go undetected.
+
 ### 2. Verify Against Stories
 
 Cross-reference the completed work against the stories in `.docs/stories/`:
