@@ -38,6 +38,19 @@ context rather than reading broadly.
 - Too strict: blocking correct code with pedantic feedback → wasted rework cycles
 - Right level: catch things that would cause bugs, security issues, or maintenance problems
 
+## Test Execution (Mandatory)
+
+Before starting the three-stage review, run tests impacted by the diff:
+
+1. **Identify impacted test files** from the diff — changed spec files, plus specs corresponding
+   to changed source files (e.g., `app/models/user.rb` → `spec/models/user_spec.rb`)
+2. **Run impacted tests only** — `rspec <impacted_spec_files>` or `pytest <impacted_test_files>`
+3. **Report results** — include pass/fail counts and any failure output
+4. **Do NOT approve if impacted tests fail** — test failures are automatic REQUEST_CHANGES
+
+**Final batch review (M/L features):** Run the full test suite instead of just impacted tests.
+For intermediate batch reviews, impacted-only is sufficient.
+
 ## Three-Stage Review
 
 Execute in order. Failures in earlier stages block later stages.

@@ -34,6 +34,8 @@ Provide the evaluator with:
 - The spec (story + acceptance criteria)
 - The test output
 - The review checklist (generic + tech-context from session if available)
+- **Impacted test file paths** — spec files changed in the diff, plus specs corresponding to
+  changed source files. The evaluator will run these before reviewing.
 
 ### 3. Three-Stage Review
 
@@ -122,4 +124,5 @@ Skip if: all findings were standard quality issues (naming, complexity) with no 
 - [ ] Findings include file:line references
 - [ ] Critical/Important issues addressed before proceeding
 - [ ] Re-review ran after fixing critical issues
+- [ ] Evaluator ran impacted tests and reported results
 - [ ] Recurring patterns or missed-by-TDD issues persisted to `.memory/` (if applicable)
