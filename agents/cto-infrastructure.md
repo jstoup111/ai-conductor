@@ -78,6 +78,17 @@ describe the problem, and assign severity.
 - [ ] Secret rotation does not require a code deploy (secrets are external to the app)
 - [ ] Different secrets per environment (dev/staging/production do not share credentials)
 
+### Category 6: Worktree Isolation
+
+- [ ] `.env.example` committed with explicit shared-infrastructure and worktree-specific sections
+- [ ] `.env` and `.env.local` are in `.gitignore` (not committed to version control)
+- [ ] Database name is parameterized via env var (suffix or full name), not hardcoded
+- [ ] Redis namespace is parameterized via env var, not hardcoded
+- [ ] Application port is configurable via `PORT` env var with a default
+- [ ] Docker services are shared (one `docker-compose.yml`), not duplicated per worktree
+- [ ] No hardcoded file paths for temp/cache that would collide between worktrees
+- [ ] Two worktrees can run simultaneously without port, database, or queue name conflicts
+
 ## Output Format
 
 Write your findings to `.pipeline/assessment/cto-infrastructure.md` using this structure:
@@ -122,6 +133,11 @@ _(If no findings: "No issues found.")_
 
 [same table format]
 
+## Category 6: Worktree Isolation
+**Status:** PASS | NEEDS_WORK | CRITICAL | UNABLE_TO_ASSESS
+
+[same table format]
+
 ---
 
 ## Summary
@@ -136,9 +152,9 @@ _(If no findings: "No issues found.")_
 
 | Severity | Definition | Examples |
 |----------|-----------|----------|
-| **critical** | Causes data loss, outage, security breach, or will fail at production scale | Hardcoded production password, no connection pool (exhausts DB), no job timeout (worker hangs forever) |
-| **important** | Degrades reliability, observability, or developer productivity significantly | Missing dead letter handling, TTL-less cache, staging/prod share credentials |
-| **minor** | Suboptimal but not immediately harmful | Pool size at framework default, missing `.env.example` comment |
+| **critical** | Causes data loss, outage, security breach, or will fail at production scale | Hardcoded production password, no connection pool (exhausts DB), no job timeout (worker hangs forever), two worktrees corrupt each other's database because DB name is hardcoded |
+| **important** | Degrades reliability, observability, or developer productivity significantly | Missing dead letter handling, TTL-less cache, staging/prod share credentials, no `.env.local` pattern requiring manual file editing per worktree |
+| **minor** | Suboptimal but not immediately harmful | Pool size at framework default, missing `.env.example` comment, port default works but isn't documented in `.env.example` |
 
 ## Verdict Definitions
 

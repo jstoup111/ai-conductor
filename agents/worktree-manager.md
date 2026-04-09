@@ -20,7 +20,14 @@ Create a worktree for a feature branch:
    - `.docs/specs/`, `.docs/stories/`, `.docs/conflicts/`, `.docs/plans/`
    - `.docs/decisions/` (architecture review, ADRs)
    - `.memory/`
-6. Report: worktree path, branch name, what was inherited
+6. Set up worktree infrastructure:
+   a. Copy `.env.local` from the main worktree to the new worktree
+   b. Update worktree-specific values: `WORKTREE_DB_SUFFIX=_<branch-slug>`,
+      `REDIS_NAMESPACE=<branch-slug>`, `PORT=<next-available-port>`
+   c. If the project has a database, create the worktree-specific database
+      (e.g., `bin/rails db:create` or equivalent for the detected stack)
+   d. Report: what `.env.local` values were set
+7. Report: worktree path, branch name, what was inherited, infrastructure setup
 
 ### Create Parallel (for pipeline Full autonomy)
 
@@ -29,7 +36,9 @@ Create multiple worktrees for concurrent task execution:
 1. Accept a list of task batches that can run in parallel
 2. Create one worktree per batch: `feature/<name>-batch-N`
 3. Each worktree starts from the same base commit
-4. Report: list of worktree paths and their assigned tasks
+4. For each worktree, generate `.env.local` with unique DB suffix, Redis namespace,
+   and port (base port + batch index). Create worktree-specific databases.
+5. Report: list of worktree paths, their assigned tasks, and infrastructure values
 
 ### Merge
 
@@ -56,9 +65,10 @@ Merge multiple parallel worktrees back sequentially:
 Remove worktrees after merge/PR:
 
 1. `git worktree remove <path>` for each completed worktree
-2. Delete the feature branch if merged: `git branch -d <branch>`
-3. Prune stale worktree references: `git worktree prune`
-4. Report: what was cleaned up
+2. Drop worktree-specific database if it exists (e.g., `bin/rails db:drop` in worktree context)
+3. Delete the feature branch if merged: `git branch -d <branch>`
+4. Prune stale worktree references: `git worktree prune`
+5. Report: what was cleaned up (worktree, database, branch)
 
 ### Status
 
@@ -86,6 +96,9 @@ You have full git access. You do NOT need permission to create branches or workt
 - Worktree paths must be under `.worktrees/` inside the project (gitignored)
 - Branch names must be valid git refs (no spaces, special chars)
 - Clean up is non-destructive by default — use `git worktree remove`, not `rm -rf`
+- Always generate `.env.local` with unique infrastructure namespaces when creating worktrees
+- Never share a database name or Redis namespace between worktrees
+- Port assignment: main worktree uses default (e.g., 3000), subsequent worktrees increment (+1, +2)
 
 ## Output Format
 
