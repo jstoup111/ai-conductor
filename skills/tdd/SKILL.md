@@ -138,8 +138,11 @@ prompt** rather than giving broad file access. This keeps each dispatch focused 
 | COMMIT | (main agent) | Full context | All files |
 
 **Context budget rules:**
-- **Inline diffs, don't let agents explore.** Paste the specific new/changed code into the
-  subagent prompt. Agents should not need to read files to find the code under review.
+- **Provide file paths and metadata, not full contents.** Give subagents file paths, line
+  counts, and key method names/signatures. Subagents read files themselves — copying full
+  file contents into prompts wastes tokens (40-50K per feature observed in retros).
+- **For domain review: inline the diff only.** Paste the specific new/changed code (the diff)
+  into the domain reviewer prompt — this is typically small (<50 lines). Do NOT inline entire files.
 - **Name domain types that exist** (e.g., "Domain types: Contact, Tag, ContactTag") so the
   domain reviewer doesn't scan the codebase.
 - **One criterion per RED dispatch** — the generator prompt contains exactly the acceptance
@@ -148,6 +151,9 @@ prompt** rather than giving broad file access. This keeps each dispatch focused 
 - **Pre-gather decisions** — the TDD orchestrator checks `.memory/decisions/` for relevant
   prior decisions and includes them in the domain reviewer prompt. The reviewer does not
   search `.memory/` itself.
+- **Reuse subagents for sequential tasks on same files.** When consecutive tasks modify the
+  same files, use SendMessage to continue the existing subagent instead of spawning a new
+  one — this preserves the file cache and avoids redundant reads.
 
 This isolation prevents the RED agent from peeking at implementation (biasing the test)
 and the GREEN agent from over-engineering beyond what the test requires.
