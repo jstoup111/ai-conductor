@@ -79,6 +79,13 @@ Check for these artifacts in order. The **first missing artifact** determines th
 | 13. retro | Retro report exists in `.docs/retros/` OR skipped (Small tier) | Glob `.docs/retros/*.md` or check state is "skipped" |
 | 14. finish | PR created or branch pushed | Check `pr_url` in state or step is "done" |
 
+**Feature completion:** After all steps finish and PR is created, `feature_status` is set to
+`"complete"` in `conduct-state.json`. Complete features are excluded from `--resume` menus.
+
+**Worktree cleanup:** On `--resume` or `--cleanup`, conduct checks all worktrees for merged PRs.
+If a PR is merged, it offers to: remove the worktree, delete the local branch, and mark complete.
+This prevents stale worktrees from accumulating.
+
 ### 2. Report Status
 
 Present a clear status dashboard:
@@ -238,3 +245,7 @@ Harness test complete. Review the retro for improvement findings.
 - [ ] Re-entry works (picks up from current state, doesn't restart)
 - [ ] Clean conflict-check creates marker file
 - [ ] Completion message shown when all steps done
+- [ ] Feature marked complete (`feature_status: complete`) after all steps finish
+- [ ] `--resume` cleans up worktrees with merged PRs before showing menu
+- [ ] `--cleanup` removes worktrees, deletes branches, marks features complete
+- [ ] Resume menu and interactive prompts offer quit option
