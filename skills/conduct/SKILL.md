@@ -53,6 +53,11 @@ Step 14: /finish                → SHIP (verify, push, create PR)
 
 ### 1. Assess Current State
 
+**Do not assume module structure or codebase layout.** Conduct should describe WHAT to explore,
+not assert what exists. Verify structure during exploration (brainstorm/bootstrap). Prompts that
+assume specific module counts or technology choices before exploration lead to wrong premises
+and wasted rework.
+
 Check for these artifacts in order. The **first missing artifact** determines the current step.
 
 | Step | Check | How to Verify |
