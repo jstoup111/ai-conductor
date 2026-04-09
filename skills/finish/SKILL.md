@@ -31,12 +31,18 @@ Run these commands and read the full output:
 
 All must pass before proceeding.
 
-### 2. Verify Against Stories
+### 2. Verify Against Stories and ADRs
 
 Cross-reference the completed work against the stories in `.docs/stories/`:
 - Are ALL happy path criteria implemented and tested?
 - Are ALL negative path criteria implemented and tested?
 - If any are missing, this is NOT complete — go back to the appropriate BUILD skill.
+
+**ADR compliance check:**
+- Verify no DRAFT ADRs remain in `.docs/decisions/` — all must be APPROVED
+- Verify implementation does not contradict any APPROVED ADR
+- If architecture-review had "APPROVED WITH CONDITIONS", verify all conditions are met
+- BLOCK if any ADR violation is detected — the ADR must be superseded or the code changed
 
 ### 3. Present Options
 

@@ -1342,6 +1342,22 @@ run_architecture_review() {
       warn "Architecture BLOCKED — interactive session to resolve..."
       run_claude "The architecture review issued a BLOCKED verdict. Present the blocking issues to the user with resolution options. The user must decide. After resolution, update the review and re-issue verdict." "interactive"
     fi
+
+    # ADR approval gate — all DRAFT ADRs must be approved before proceeding
+    local draft_adrs=()
+    while IFS= read -r f; do draft_adrs+=("$f"); done < <(grep -rl "Status: DRAFT" "${PROJECT_DIR}"/.docs/decisions/adr-*.md 2>/dev/null || true)
+    if [ ${#draft_adrs[@]} -gt 0 ]; then
+      log "Found ${#draft_adrs[@]} DRAFT ADR(s) requiring approval..."
+      if ! review_artifacts "ADR" "${draft_adrs[@]}"; then
+        fail "ADRs rejected — re-run architecture review"; save_state "architecture_review" "failed"; return 1
+      fi
+      # Mark approved ADRs — update Status from DRAFT to APPROVED
+      for f in "${draft_adrs[@]}"; do
+        sed -i 's/^Status: DRAFT$/Status: APPROVED/' "$f"
+        ok "ADR approved: $(basename "$f")"
+      done
+    fi
+
     ok "Architecture review complete"; save_state "architecture_review" "done"; return 0
   fi
   fail "No architecture review in .docs/decisions/"; save_state "architecture_review" "failed"; return 1
