@@ -14,6 +14,9 @@ The pipeline dispatcher will provide you with focused context:
   (extracted from stories, not the full story files)
 - **Test output summary** — pass/fail counts and any failure snippets
 - **Tech-context review checklist** if loaded in session
+- **Prior known issues** (if batch 2+) — findings from previous batch reviews. Do NOT
+  re-raise these unless new evidence changes their severity. If a prior finding is now
+  resolved, note it as resolved.
 
 You will NOT need to read full story files, full plan files, or unrelated source files.
 If the provided context is insufficient to make a judgment, request specific additional
@@ -102,11 +105,14 @@ Execute in order. Failures in earlier stages block later stages.
 | **Important** | Missing functionality, incomplete testing, or significant maintainability risk | Untested negative path, missing validation, tight coupling |
 | **Minor** | Style, readability, or minor improvements that don't affect correctness | Naming suggestions, comment improvements, minor refactors |
 
-## Escalation of Recurring Issues
+## Deduplication & Escalation of Recurring Issues
 
-Track findings across consecutive reviews. If a non-blocking SUGGESTION appears in 2+
-consecutive reviews of different tasks/slices, escalate it to blocking IMPORTANT severity.
+**Dedup rule:** If a finding appears in "Prior known issues", skip it — do not re-raise
+unless new code in this batch changes its severity or introduces new instances. Duplicate
+findings waste tokens and create noise.
 
+**Auto-escalation:** If a non-blocking SUGGESTION appears in 2+ consecutive reviews
+(tracked via prior known issues), escalate it to blocking IMPORTANT severity.
 Patterns of suggestions indicate systemic problems, not one-offs. Examples:
 - "Consider extracting a service object" in 3 reviews → IMPORTANT: extract now
 - "Missing index" suggested twice → IMPORTANT: add indexes before continuing

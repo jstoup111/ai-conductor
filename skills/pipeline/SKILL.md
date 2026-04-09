@@ -90,6 +90,9 @@ At batch boundaries, dispatch an evaluator agent with `model="opus"` and **fresh
 - The **acceptance criteria** for this batch's tasks (extracted from stories, not full story files)
 - The **test output summary** (pass/fail counts + failure snippets, not full verbose output)
 - The tech-context review checklist if loaded in session
+- **Prior known issues** (batch 2+) — collect findings from previous `audit-trail/batch-*/review.json`
+  files and pass as a deduplicated list. This prevents the evaluator from re-raising the same
+  finding across batches. Findings that appear in 2+ consecutive reviews auto-escalate in severity.
 
 Do NOT send full story files, full plan files, or unrelated source files. The evaluator
 runs the full 3-stage review from the `code-review` skill on this scoped context.
