@@ -39,11 +39,57 @@ coverage, existing CLAUDE.md = **preserve, don't overwrite**.
 5. Set up .gitignore before first commit (vendor/bundle, node_modules, tmp, log)
 6. Initialize git if not already a repo
 
-**Worktree Compatibility:** All infrastructure must be namespaced for parallel worktrees:
-- Database name via `ENV['WORKTREE_DB_SUFFIX']` or directory name
-- Redis namespace per worktree
-- Ports via `ENV['PORT']` with overridable defaults
-- Temp/cache dirs project-local
+**Worktree Compatibility:** All infrastructure must support parallel worktrees sharing
+a single set of Docker services. See Step 1c for the `.env` boundary pattern that enforces this.
+
+### 1c. Generate Infrastructure Boundary Files
+
+Infrastructure splits into two layers:
+- **Shared:** Docker services (database, Redis, message queue) run ONCE regardless of worktree count
+- **Worktree-specific:** Database name, Redis namespace, app port differ per worktree
+
+**Generate these files:**
+
+1. **`.env.example`** — from `templates/env.example.template`. Committed to version control. Shows
+   all required env vars with placeholder values. Replace `{{DB_ENGINE}}`, `{{DB_DEFAULT_PORT}}`,
+   `{{APP_DEFAULT_PORT}}`, and `{{FRAMEWORK_ENV_VAR}}` based on stack detection from Step 2.
+2. **`.env`** — copy `.env.example` with real default values filled in. Gitignored. This is the
+   working env file developers use locally.
+3. **`.env.local`** — from `templates/env.local.template`. Gitignored. Contains worktree-specific
+   overrides: `WORKTREE_DB_SUFFIX`, `REDIS_NAMESPACE`, `PORT`. For the main worktree, use `_main`
+   suffix. For feature worktrees, derive from branch slug.
+
+If `.env`, `.env.example`, or `.env.local` already exists, do NOT overwrite.
+
+**Add to `.gitignore`** (idempotent):
+- `.env`
+- `.env.local`
+- `.env.local.*`
+- `.env.*.local`
+
+**Boot sequence:**
+```
+# 1. Start shared infrastructure (once)
+docker compose up -d
+
+# 2. .env.local is pre-generated with worktree-specific values (automatic)
+
+# 3. Start the app (reads .env then .env.local overrides)
+{{DEV_COMMAND}}
+```
+
+**Stack-specific variable mapping:**
+
+| Stack | DB Engine Var | Default DB Port | Default App Port | Framework Env Var |
+|-------|-------------|-----------------|-----------------|-------------------|
+| Rails+PostgreSQL | `POSTGRES` | 5432 | 3000 | `RAILS_ENV` |
+| Rails+MySQL | `MYSQL` | 3306 | 3000 | `RAILS_ENV` |
+| Node/Express | `POSTGRES` | 5432 | 3000 | `NODE_ENV` |
+| Django | `POSTGRES` | 5432 | 8000 | `DJANGO_SETTINGS_MODULE` |
+| Phoenix | `POSTGRES` | 5432 | 4000 | `MIX_ENV` |
+
+**Verification:** App boots successfully reading `.env` + `.env.local`. A second worktree
+with different `.env.local` values can run simultaneously without port or namespace conflicts.
 
 ### 2. Detect Project Type
 
@@ -58,6 +104,11 @@ package.json+express→Express, pyproject.toml+django→Django, Cargo.toml→Rus
 
 **Frontend:** app/views/→server-rendered, app/javascript/→JS frontend,
 package.json+react/vue/svelte→SPA, none→API-only
+
+**Process Manager:** Procfile.dev+overmind.yml→Overmind, Procfile.dev→Foreman/Overmind,
+Procfile+foreman→Foreman, bin/dev→bin/dev script, none→bare commands.
+Determines `{{DEV_COMMAND}}` in generated files: `overmind start`, `foreman start -f Procfile.dev`,
+`bin/dev`, or stack default (`bin/rails server`, `npm start`, etc.).
 
 ### 3. Load Tech-Context
 
@@ -130,6 +181,8 @@ plans/, decisions/, retros/).
 Add to `.gitignore` (idempotent — don't duplicate):
 - `.pipeline/` — runtime state, not source
 - `.worktrees/` — git worktrees for parallel feature development
+- `.env` — local environment (not committed; `.env.example` is the committed reference)
+- `.env.local` — worktree-specific environment overrides
 
 ### 6. Generate or Update CLAUDE.md
 
@@ -204,7 +257,11 @@ Report failures before proceeding — a broken foundation wastes all downstream 
 - [ ] .docs/ subdirectories created
 - [ ] `.github/pull_request_template.md` created (if not already present)
 - [ ] CLAUDE.md generated or appended — never overwritten
-- [ ] Worktree-compatible infrastructure configuration
+- [ ] `.env.example` generated with shared/worktree-specific boundary sections
+- [ ] `.env` generated from `.env.example` with real defaults
+- [ ] `.env.local` generated with worktree-specific overrides
+- [ ] `.env` and `.env.local` added to `.gitignore`
+- [ ] Process manager detected (or noted as absent)
 - [ ] Smoke test passed
 - [ ] Architecture diagrams generated in `.docs/architecture/`
 - [ ] MCP integration offered

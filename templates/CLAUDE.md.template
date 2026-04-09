@@ -38,6 +38,25 @@ Skills are loaded from the harness:
 
 {{PROJECT_CONVENTIONS}}
 
+## Infrastructure Boundaries
+
+This project uses a two-layer environment configuration for worktree compatibility:
+
+- **`.env.example`** (committed) — Reference file showing all required env vars. Copy to `.env`.
+- **`.env`** (gitignored) — Working environment. Shared infrastructure defaults (Docker service
+  hosts/ports). Do not put secrets here in production.
+- **`.env.local`** (gitignored) — Worktree-specific overrides: database suffix, Redis namespace,
+  app port. Each worktree has its own copy.
+
+**Boot sequence:**
+1. `docker compose up -d` — start shared services (once, not per worktree)
+2. `.env.local` is read automatically — sets DB suffix, Redis namespace, port
+3. `{{DEV_COMMAND}}` — start the app
+
+**Adding new infrastructure:** New Docker services or external dependencies must follow the
+`.env` boundary pattern: shared config in `.env`, worktree-varying config in `.env.local`.
+This requires an ADR (see architecture-review Infrastructure trigger).
+
 ## Memory
 
 Project memory is stored in `.memory/`. Every session starts with recall.

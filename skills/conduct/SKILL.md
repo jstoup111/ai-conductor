@@ -76,7 +76,7 @@ Check for these artifacts in order. The **first missing artifact** determines th
 | 10. writing-system-tests | Acceptance specs exist OR skipped (Small tier) | Glob `spec/integration/*_spec.rb` or `spec/system/*_spec.rb`, or check state is "skipped" |
 | 11. build | Implementation tasks completed with passing tests | Check `.pipeline/task-status.json` or test suite passes. Pipeline evaluator satisfies code-review gate. |
 | 12. manual-test | Manual test results exist with no FAILs, OR auto-skipped (non-endpoint feature) | Glob `.docs/manual-test-results.md` — if file contains FAIL rows, step is pending. **Auto-skip:** If no stories reference HTTP endpoints, API routes, or user-facing UI, skip `/manual-test` and log reason. For internal components (services, background jobs, mailers, CI config), suggest Rails console or script-based smoke test instead. |
-| 13. retro | Retro report exists in `.docs/retros/` | Glob `.docs/retros/*.md` |
+| 13. retro | Retro report exists in `.docs/retros/` OR skipped (Small tier) | Glob `.docs/retros/*.md` or check state is "skipped" |
 | 14. finish | PR created or branch pushed | Check `pr_url` in state or step is "done" |
 
 ### 2. Report Status
@@ -131,8 +131,9 @@ Store the tier in `.pipeline/conduct-state.json` as `"complexity_tier": "S"` (or
 | writing-system-tests | **Skip** (request specs in TDD suffice) | Run | Run |
 | pipeline | **Skip** (use direct /tdd) | Run | Run |
 | code-review | **Skip** (domain review in TDD suffices) | Run | Run |
+| retro | **Skip** | Run | Run |
 
-**Small flow:** brainstorm → stories → plan → direct /tdd → finish → retro
+**Small flow:** brainstorm → stories → plan → direct /tdd → finish (skip retro)
 
 ### 3. Gate Enforcement
 
@@ -188,7 +189,7 @@ re-dispatching. JSON state can become stale — the actual test suite is the sou
 | build | No (structural) | This is the implementation |
 | code-review | Tier-dependent | Skip for Small (domain review suffices), required for Medium/Large |
 | finish | No (gating) | Fresh verification required |
-| retro | Yes (advisory) | Recommended but not blocking |
+| retro | Tier-dependent | Skip for Small, recommended for Medium/Large |
 
 If the user asks to skip a gating step, say: "[Step] is a gating step — it cannot be skipped because [reason]."
 

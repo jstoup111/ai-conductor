@@ -65,6 +65,7 @@ For each story in the plan, assess:
 | **Integration surface** | What other systems/modules does this touch? | Crosses 3+ module boundaries or hits external APIs |
 | **Data implications** | Schema changes, migrations, data backfills? | Large table migrations, breaking schema changes, data loss risk |
 | **Performance risk** | Will this create N+1s, unbounded queries, heavy computation? | List endpoints without pagination, missing indexes on query paths |
+| **Worktree isolation** | Can this run in parallel worktrees without conflicts? | New Docker services, ports, databases, or shared state without `.env` boundary pattern |
 
 ### 3. Complexity Assessment
 
@@ -97,6 +98,12 @@ Check stories and plan against documented architecture:
 - Do architecture diagrams in `.docs/architecture/` reflect the proposed changes?
 - If the plan introduces new containers, services, or external integrations, are diagrams updated?
 - Reference diagrams when assessing domain boundaries and coupling.
+
+**Worktree isolation:**
+- Does the new infrastructure use the `.env` / `.env.local` boundary pattern?
+- Are new services added to shared infrastructure (Docker) or per-worktree?
+- If new ports or databases are introduced, are they parameterized via environment variables?
+- Would two worktrees running simultaneously conflict on any resource (port, DB name, file path, queue name)?
 
 **Security boundaries:**
 - Are new endpoints authenticated and authorized?
@@ -160,6 +167,7 @@ no existing ADR covers it, one must be created before implementation proceeds.
 - New background job framework or queue
 - Database connection pooling or caching strategy
 - CI/CD pipeline structural changes
+- Worktree isolation boundary changes (new shared services, new per-worktree resources)
 
 **ADR format:** Use `templates/adr.md.template`. Sequential numbering in `.docs/decisions/`.
 ADRs are append-only — supersede, don't delete. Every claim about external dependency behavior

@@ -50,6 +50,11 @@ If validation fails, fix the issue before committing. Do not commit with known v
 failures. If a check is failing due to a legitimate structural change (e.g., renaming a skill),
 fix all references before committing.
 
+## Branch Policy
+
+All work MUST happen on a feature branch — never commit directly to main.
+Create a branch before making changes, and open a PR to merge.
+
 ## HARNESS.md Flow
 
 HARNESS.md is the single source of truth for behavioral rules consumed by projects using this harness.
