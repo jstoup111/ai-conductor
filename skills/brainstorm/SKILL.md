@@ -113,8 +113,10 @@ This MUST happen before stories — stories reference the contract for response 
 
 ## Constraints
 
-- **Do NOT call `ExitPlanMode`.** Brainstorm is a design phase, not an implementation plan.
-  Write the design doc and return. `ExitPlanMode` is owned by plan mode, not brainstorm.
+- **HARD CONSTRAINT: Brainstorm MUST NEVER call `ExitPlanMode`.** This skill produces a design
+  document, not an implementation plan. Calling ExitPlanMode will cause `/conduct` to mark
+  brainstorm as "failed" in conduct-state because plan mode was already exited when brainstorm
+  was invoked mid-conversation. Write the design doc and return — plan mode is not active.
 
 ### Memory Checkpoint
 
