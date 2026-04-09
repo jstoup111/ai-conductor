@@ -74,6 +74,8 @@ explicitly evaluated and included when relevant:
 | **Data integrity** | Writes, updates, deletes | Orphaned records, constraint violations, cascade effects |
 | **Cascade deletion effects** | Entity has dependents (direct or transitive) | User deleted → what happens to their assigned cards, authored comments, owned teams? Test at every FK reference, not just direct parent |
 | **Model-level immutability** | Record should be read-only after creation | Audit log entry, completed transaction — enforce at model layer (readonly!, validation), not just by omitting API endpoints |
+| **Exception class hierarchy** | Code rescues/catches specific exception types | Verify rescue clauses match the actual exception tree — e.g., `Stripe::AuthenticationError` is NOT a subclass of `Stripe::CardError`. Test that the right exception type is caught, not a parent or sibling. |
+| **Dedup/idempotency key analysis** | Any idempotency or deduplication criterion | Verify the dedup key correctly identifies duplicates without false positives (blocking legitimate operations) or false negatives (allowing true duplicates through). Test with edits that should NOT trigger dedup. |
 
 **If tech-context is loaded**, also include stack-specific categories. For Rails:
 - N+1 queries on list endpoints
