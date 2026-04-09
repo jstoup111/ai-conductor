@@ -66,6 +66,12 @@ services** (payment APIs, email providers, external webhooks) that are outside t
 control. If a spec requires infrastructure that isn't available in the test environment,
 configure the test environment to provide it — don't mock it away.
 
+**Real DB gate:** At least one integration/system spec per feature MUST hit the real database
+(no stubs/mocks for the persistence layer). If the project uses docker-compose or a similar
+service definition, verify the DB service is available before generating specs. Specs that
+stub the entire persistence layer create false-green gates — schema mismatches between stubs
+and actual migrations are never caught until production.
+
 ### 3. Parse Acceptance Criteria
 
 Extract from each story file:
