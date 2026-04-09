@@ -154,6 +154,9 @@ Before suggesting the next step, verify that the previous step's **quality gates
 - If tests fail or tree is dirty, BLOCK
 - Say: "Build incomplete — [N] tests failing / uncommitted changes exist."
 
+**When pipeline reports task failure:** Verify by running tests before escalating or
+re-dispatching. JSON state can become stale — the actual test suite is the source of truth.
+
 ### 4. Handle Edge Cases
 
 **Re-entry:** If the user runs `/conduct` mid-flow (e.g., after completing brainstorm), pick up from the current state. Don't restart.

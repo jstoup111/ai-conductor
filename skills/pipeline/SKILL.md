@@ -53,7 +53,7 @@ one prompt to Claude. Claude orchestrates the task through these steps:
 2. DISPATCH     — Send task to a TDD subagent via Agent tool with model="sonnet" (scoped context only)
                   Subagent runs full TDD cycle: RED → DOMAIN → GREEN → DOMAIN → COMMIT
 3. VERIFY       — Run the full test suite to confirm the subagent's work
-4. FIX          — If tests fail, dispatch subagent again with error context (rework cycle)
+4. FIX          — If tests fail, VERIFY failure first (see below), then dispatch subagent with error context
 5. UPDATE       — Mark task as "completed" in .pipeline/task-status.json
 6. REPORT       — Return PASS or FAIL with reason to the conductor
 ```
@@ -61,6 +61,11 @@ one prompt to Claude. Claude orchestrates the task through these steps:
 **Dependency checking (step 1):** Before dispatching the subagent, verify that all tasks
 listed in the task's `**Dependencies:**` field are marked as completed in
 `.pipeline/task-status.json`. If a dependency is not met, report BLOCKED to the conductor.
+
+**Failure verification (step 4):** Before re-dispatching a failed task, run the test suite to
+confirm the failure is real. If tests pass and commits exist for the task, mark as completed —
+do not trust JSON state alone. JSON state can become stale after connection interruptions or
+subagent context loss.
 
 **Task status tracking is mandatory — write directly to `.pipeline/task-status.json`.**
 
