@@ -92,7 +92,9 @@ abstractions, missing domain types, naming. Has veto authority to send back to G
 1. Full test suite passes (not just the new test)
 2. Linter passes (if tech-context specifies one — e.g., `bundle exec standardrb` for Rails)
 3. Working tree is clean (no uncommitted changes outside this task)
-4. Commit with descriptive message referencing the behavior added
+4. **Commit immediately** — do not defer commits to end of cycle or batch. Connection
+   interruptions lose uncommitted work. Commit as soon as GREEN passes and linter is clean.
+5. Commit with descriptive message referencing the behavior added
 
 **After commit:** Return to RED for the next cycle, or stop if all criteria for the current
 task are covered.
