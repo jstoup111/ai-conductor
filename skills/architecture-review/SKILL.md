@@ -125,9 +125,53 @@ Before implementation begins, check the plan for domain modeling issues:
 
 Risk types: **Technical**, **Integration**, **Data**, **Performance**, **Security**, **Knowledge**
 
-### 7. ADR for Every Architectural Decision
+### 7. ADR Creation — Triggers and Decision Categories
 
-Capture every architectural decision as an ADR using `templates/adr.md.template`. Sequential numbering in `.docs/decisions/`. ADRs are append-only — supersede, don't delete.
+An ADR is required when a change touches any of these decision categories. This checklist
+defines what constitutes an "architectural decision" — if a change fits a category below and
+no existing ADR covers it, one must be created before implementation proceeds.
+
+**Technology Stack:**
+- Language/runtime selection or version change
+- Framework adoption or replacement
+- Database or event store selection
+- Messaging, queuing, or caching layer changes
+
+**Domain Architecture:**
+- Bounded context boundary definition or change
+- New aggregate identification
+- Service decomposition or merging
+- New domain type that crosses module boundaries
+
+**Integration Patterns:**
+- New external API integration (sync or async)
+- Anti-corruption layer design
+- Data import/export mechanisms
+- New webhook or callback pattern
+
+**Cross-Cutting Concerns:**
+- Authentication/authorization strategy changes
+- Observability approach (logging, metrics, tracing)
+- Error handling and resilience patterns
+- New middleware or interceptor patterns
+
+**Infrastructure:**
+- Deployment topology changes
+- New background job framework or queue
+- Database connection pooling or caching strategy
+- CI/CD pipeline structural changes
+
+**ADR format:** Use `templates/adr.md.template`. Sequential numbering in `.docs/decisions/`.
+ADRs are append-only — supersede, don't delete. Every claim about external dependency behavior
+must cite specific evidence (documentation, tested behavior, or source code).
+
+**Lightweight mode (Medium tier):** Create ADRs only for categories marked above — do not skip
+ADR creation just because the feature is medium-sized. The threshold is the decision category,
+not the feature complexity.
+
+**GATE: If a change touches a decision category above and no ADR exists, architecture-review
+MUST create one. An architecture review that approves without documenting decisions is
+incomplete.**
 
 ### 8. Output
 

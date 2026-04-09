@@ -92,6 +92,23 @@ defined in your persona file. Be thorough — this is a deep assessment, not a s
 **For `--area` mode:** Dispatch only the named specialist. Skip Steps 5-6 (no CTO synthesis
 for single-area assessments). Present the specialist report directly.
 
+### 4b. Structure Verification
+
+After specialist reports complete, verify that the actual codebase structure matches
+documented architectural decisions. This catches assumption drift — where code evolves
+away from what was decided, or decisions were never documented.
+
+**Checks:**
+1. **ADR compliance** — For each ADR in `.docs/decisions/`, verify the decision is reflected
+   in code. Flag violations where code contradicts a documented decision.
+2. **Undocumented decisions** — Flag architectural patterns in code that have no corresponding
+   ADR (e.g., a new external integration, a new persistence strategy, a service decomposition
+   that was never decided on paper).
+3. **Stale ADRs** — Flag ADRs whose referenced code no longer exists or has been substantially
+   rewritten without updating the decision record.
+
+This feeds into the CTO orchestrator synthesis as a "structure verification" section.
+
 ### 5. Dispatch CTO Orchestrator
 
 **Rate limit cooldown: sleep 30 seconds before dispatching the CTO orchestrator.**
