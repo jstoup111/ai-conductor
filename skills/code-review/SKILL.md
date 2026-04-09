@@ -18,7 +18,10 @@ issues, not rubber-stamping work.
 ### 1. Prepare Review Context
 
 Gather what the evaluator needs:
-- Git diff of changes (staged + unstaged, or commit range)
+- Git diff of changes — **for batch reviews, scope to the current batch only** (commits since
+  last batch boundary via `git diff <batch-start-commit>..HEAD`), not the full branch diff.
+  For the final batch, add a lightweight integration check (full branch diff stat summary) but
+  do NOT re-review earlier batches line by line — they already passed their own evaluator gate.
 - The story/acceptance criteria being implemented (from `.docs/stories/`)
 - The implementation plan task (from `.docs/plans/`)
 - The test results (full suite output)
