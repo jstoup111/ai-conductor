@@ -60,7 +60,7 @@ Check for these artifacts in order. The **first missing artifact** determines th
 | 1. bootstrap | Project CLAUDE.md exists AND `.memory/` directory exists AND `.docs/` subdirectories exist | Glob for `CLAUDE.md` in project root, check `.memory/index.md`, check `.docs/specs/` exists |
 | 2. memory | `.memory/index.md` has been read this session | Memory recall happens automatically — if bootstrap is done, mark this as done |
 | 2.5. assess | Assessment report exists OR skipped (new project) | Glob `.docs/decisions/technical-assessment-*.md` or check state is "skipped" |
-| 3. brainstorm | At least one file exists in `.docs/specs/` | Glob `.docs/specs/*.md` |
+| 3. brainstorm | At least one file exists in `.docs/specs/` (not SUPERSEDED) | Glob `.docs/specs/*.md` — exclude files prefixed with `SUPERSEDED-`. Before launching brainstorm, check for existing Draft specs on the same topic and pass them as context to avoid contradictory decisions. |
 | 4. complexity | Complexity tier set in `.pipeline/conduct-state.json` | Check `complexity_tier` key exists and is S, M, or L |
 | 5. worktree | Feature worktree created | Check `.pipeline/conduct-state.json` worktree state is "done" or "skipped" |
 | 6. stories | At least one **accepted** story exists in `.docs/stories/` (not just DRAFT) | Glob `.docs/stories/*.md` — if all stories contain `Status: DRAFT`, this step is pending |
