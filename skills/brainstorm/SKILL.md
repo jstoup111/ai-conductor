@@ -22,9 +22,10 @@ exploration results (e.g., from a prior Explore agent or `/bootstrap`), summariz
 known and only explore gaps — do not re-explore files already in context.
 
 When dispatching Explore agents:
-- **Max 2 agents** with explicitly partitioned search spaces (no file overlap)
-- Agent 1: feature-relevant source files (routes, models, services in the affected area)
-- Agent 2: existing tests and stories for the affected area
+- **Max 2 agents** with **directory-based partitioning** (not topic-based — topic partitioning
+  causes 30-50% file overlap)
+- Agent 1: `app/` + `db/` + `config/` (source files, migrations, routes)
+- Agent 2: `spec/` + `.docs/` (tests, stories, specs)
 - Do NOT dispatch agents to read `.memory/` (auto-loaded at session start)
 
 Checklist:
