@@ -164,6 +164,15 @@ gate (Step 10 in `/conduct`). After the final batch evaluator returns APPROVE, w
 file at `.pipeline/audit-trail/code-review-satisfied.md` containing the verdict date and batch
 number. When pipeline is used, a separate `/code-review` dispatch is not needed.
 
+### Retry Pre-Check (Connection Interruption Recovery)
+
+Before re-dispatching a task after a connection interruption or session resume:
+1. Check for uncommitted changes (`git status`) — work may exist but not be committed
+2. Check recent commits (`git log --oneline -3`) — subagent may have committed before disconnect
+3. If work exists, verify it (run tests) before re-doing — do not blindly re-dispatch
+
+This prevents wasting a full subagent dispatch to redo work that was already completed.
+
 ### Rework Budget
 
 Each task gets **3 rework cycles** per quality gate:
