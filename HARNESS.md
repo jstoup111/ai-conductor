@@ -193,6 +193,15 @@ external-facing actions warrant interactive approval:
 When setting up a new project with `/bootstrap`, configure `allowedTools` in
 `.claude/settings.json` to pre-approve routine operations.
 
+## Explore Agent Partitioning
+
+When launching multiple Explore agents, partition by **directory** (e.g., Agent 1: `app/` + `db/`,
+Agent 2: `spec/` + `.docs/`) — never by topic. Topic-based partitioning causes 30-50% file read
+overlap (observed in retros). Directory partitioning ensures each agent reads a disjoint set of files.
+
+If exploration was already performed earlier in the session (e.g., during brainstorm), pass the
+summary to subsequent agents (e.g., Plan) instead of re-exploring the same scope.
+
 ## Key Conventions
 
 - One skill, one responsibility, one enforcement level
