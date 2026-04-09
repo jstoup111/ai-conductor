@@ -48,6 +48,14 @@ The conductor marks the task as `in_progress` in `.pipeline/task-status.json`, t
 one prompt to Claude. Claude orchestrates the task through these steps:
 
 ```
+PLAN VALIDATION (at pipeline start):
+  - Verify all task IDs from the plan exist in task-status.json
+  - Flag missing tasks as errors before dispatching any work
+  - Parse the Task Dependency Graph from `.docs/plans/` and build topological order
+
+DEPENDENCY ORDER — Dispatch tasks in topological order respecting declared dependencies.
+  Never skip a task unless its acceptance criteria are already satisfied (verified by test run).
+
 0. UPDATE STATUS — Conductor marks task "in_progress" in .pipeline/task-status.json
 1. DECOMPOSE    — Read task, identify files to touch, check dependencies met
 2. DISPATCH     — Send task to a TDD subagent via Agent tool with model="sonnet" (scoped context only)
