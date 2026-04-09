@@ -66,6 +66,13 @@ DEPENDENCY ORDER — Dispatch tasks in topological order respecting declared dep
 6. REPORT       — Return PASS or FAIL with reason to the conductor
 ```
 
+**Pre-completion scan (at pipeline start):** Before dispatching any tasks, check each task's
+acceptance criteria against existing code and test coverage (git log, test files). Mark tasks
+as `pre-completed` if criteria are already satisfied. Batch-verify in one pass — do not
+dispatch individual subagents to discover "already done." If Task N's implementation was a
+side effect of Task N-1 (verified by passing tests), auto-complete Task N with a note
+referencing the completing task.
+
 **Dependency checking (step 1):** Before dispatching the subagent, verify that all tasks
 listed in the task's `**Dependencies:**` field are marked as completed in
 `.pipeline/task-status.json`. If a dependency is not met, report BLOCKED to the conductor.
