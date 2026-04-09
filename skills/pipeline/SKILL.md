@@ -97,6 +97,11 @@ line range of interest, and method signature. The subagent reads files as needed
 sequential tasks on the same files, reuse the existing subagent via SendMessage instead of
 spawning a new agent — this preserves file cache and avoids redundant reads.
 
+**Scope discipline:** Subagents MUST only modify lines directly related to their assigned task.
+Changes to unrelated code in the same file (e.g., changing a CI command while fixing a service
+definition, or "improving" a method signature while adding a validation) are scope violations.
+The evaluator should flag scope violations as IMPORTANT severity.
+
 ### Quality Gates
 
 **HARD GATE: Evaluator dispatch is mandatory at required batch boundaries.**
