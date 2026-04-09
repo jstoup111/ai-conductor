@@ -44,7 +44,7 @@ Step 8b: /architecture-diagram  → DECIDE (update proposed-state diagrams for p
 Step 9:  /architecture-review    → DECIDE (skipped for Small, lightweight for Medium — consumes diagrams)
 Step 10: /writing-system-tests  → BUILD (skipped for Small)
 Step 11: /pipeline or /tdd      → BUILD (pipeline evaluator satisfies code-review gate)
-Step 12: /manual-test           → SHIP (validate stories, bug loop via /tdd)
+Step 12: /manual-test           → SHIP (validate stories, bug loop via /tdd — auto-skip for non-endpoint features)
 Step 13: /retro                 → SHIP
 Step 14: /finish                → SHIP (verify, push, create PR)
 ```
@@ -70,7 +70,7 @@ Check for these artifacts in order. The **first missing artifact** determines th
 | 9. architecture-review | Review exists in `.docs/decisions/` OR skipped (Small tier) | Glob `.docs/decisions/architecture-review-*.md` or check state is "skipped" |
 | 10. writing-system-tests | Acceptance specs exist OR skipped (Small tier) | Glob `spec/integration/*_spec.rb` or `spec/system/*_spec.rb`, or check state is "skipped" |
 | 11. build | Implementation tasks completed with passing tests | Check `.pipeline/task-status.json` or test suite passes. Pipeline evaluator satisfies code-review gate. |
-| 12. manual-test | Manual test results exist with no FAILs | Glob `.docs/manual-test-results.md` — if file contains FAIL rows, step is pending |
+| 12. manual-test | Manual test results exist with no FAILs, OR auto-skipped (non-endpoint feature) | Glob `.docs/manual-test-results.md` — if file contains FAIL rows, step is pending. **Auto-skip:** If no stories reference HTTP endpoints, API routes, or user-facing UI, skip `/manual-test` and log reason. For internal components (services, background jobs, mailers, CI config), suggest Rails console or script-based smoke test instead. |
 | 13. retro | Retro report exists in `.docs/retros/` | Glob `.docs/retros/*.md` |
 | 14. finish | PR created or branch pushed | Check `pr_url` in state or step is "done" |
 

@@ -17,6 +17,14 @@ as a user would experience it.
 
 ## Practices
 
+### 0. Feature Type Check
+
+Before starting manual testing, check the stories in `.docs/stories/` for this feature:
+- If **no stories reference HTTP endpoints, API routes, or user-facing UI**, report SKIP:
+  "Manual test skipped — feature has no endpoint/UI criteria (services, jobs, mailers, CI)."
+- Suggest console-based verification instead: `rails console` smoke test or script execution.
+- Write skip reason to `.docs/manual-test-results.md` so conduct can mark the step as done.
+
 ### 1. Detect Project Type
 
 | Indicator | Testing Method |
