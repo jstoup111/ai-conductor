@@ -76,6 +76,19 @@ Extract from each story file:
 
 **Both happy AND negative paths become tests.** Negative paths are not optional.
 
+**Derive specs from stories, not code.** Extract field names, value types, and expected
+behaviors from the story acceptance criteria TEXT — not from existing implementation code.
+If the story says `refresh_token`, the spec must use `refresh_token` even if the current
+code uses `token`. The spec defines what SHOULD exist, not what DOES exist.
+
+### 3.5. Domain Alignment Check
+
+Before generating specs, compare field names and context keys used in generated specs against
+the story language. Flag any spec that uses implementation-derived names instead of
+story-specified names. This catches cases where code conventions diverge from domain language
+(e.g., builder context key `token` vs story's `refresh_token`, model field `payload` vs
+story's `request_payload`).
+
 ### 3a. Classify Story Flows
 
 Before generating specs, classify each story:
