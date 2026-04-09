@@ -2005,6 +2005,7 @@ cleanup_and_exit() {
   echo -e "  ${BOLD}Continue options:${NC}"
   echo "    conduct --resume            # pick up where you left off"
   echo "    conduct --from <step>       # restart from a specific step"
+  echo "    conduct --cleanup           # clean up worktrees with merged PRs"
   echo "    conduct --status            # check progress without running"
   echo "    conduct --log               # tail the session log"
   echo ""
@@ -2218,6 +2219,111 @@ recover() {
   return 0  # always retry the check after interactive fix
 }
 
+# ─── Cleanup ──────────────────────────────────────────────────────────────────
+
+# Check if a worktree's PR has been merged and offer cleanup.
+# Returns 0 if cleanup was performed, 1 if skipped/not applicable.
+check_and_cleanup_worktree() {
+  local wt_dir=$1
+  local wt_branch=$2
+  local wt_desc=$3
+
+  # Check if the PR for this branch is merged
+  local pr_state=""
+  pr_state=$(gh pr view "$wt_branch" --json state -q '.state' 2>/dev/null || echo "")
+
+  if [ "$pr_state" != "MERGED" ]; then
+    return 1
+  fi
+
+  echo ""
+  echo -e "  ${GREEN}✓${NC} PR merged for: ${BOLD}${wt_desc}${NC}"
+  echo -e "    Branch: ${wt_branch}"
+  echo -e "    Worktree: ${wt_dir}"
+  echo ""
+  echo -e "  ${BOLD}Clean up this feature?${NC}"
+  echo "    y = remove worktree, delete branch, mark complete"
+  echo "    n = keep as-is"
+  echo "    q = quit"
+  read -r -p "  [y/n/q]: " cleanup_choice
+
+  case "$cleanup_choice" in
+    [yY])
+      log "Cleaning up: ${wt_desc}"
+
+      # Mark complete in the worktree's state file
+      local wt_state_file="${wt_dir}/.pipeline/conduct-state.json"
+      if [ -f "$wt_state_file" ]; then
+        python3 -c "
+import json
+with open('$wt_state_file') as f:
+    state = json.load(f)
+state['feature_status'] = 'complete'
+with open('$wt_state_file', 'w') as f:
+    json.dump(state, f, indent=2)
+" 2>/dev/null || true
+      fi
+
+      # Remove the worktree
+      git worktree remove "$wt_dir" --force 2>/dev/null && ok "Worktree removed" || warn "Could not remove worktree"
+
+      # Delete the local branch (already merged)
+      git branch -d "$wt_branch" 2>/dev/null && ok "Branch deleted: ${wt_branch}" || warn "Could not delete branch"
+
+      # Prune stale worktree refs
+      git worktree prune 2>/dev/null
+
+      ok "Cleanup complete: ${wt_desc}"
+      return 0
+      ;;
+    [qQ])
+      return 2  # signal: user wants to quit entirely
+      ;;
+    *)
+      log "Keeping worktree for: ${wt_desc}"
+      return 1
+      ;;
+  esac
+}
+
+# Run cleanup across all worktrees with merged PRs.
+# Called from --resume and --cleanup.
+run_cleanup() {
+  local worktrees_dir="${PROJECT_DIR}/.worktrees"
+  [ -d "$worktrees_dir" ] || return 0
+
+  local found_merged=false
+
+  for entry in "$worktrees_dir"/*/; do
+    [ -d "$entry" ] || continue
+    local wt_state_file="${entry}.pipeline/conduct-state.json"
+    [ -f "$wt_state_file" ] || continue
+
+    local wt_desc wt_branch wt_feature_status
+    wt_desc=$(python3 -c "import json; print(json.load(open('$wt_state_file')).get('feature_desc',''))" 2>/dev/null || echo "")
+    wt_branch=$(python3 -c "import json; print(json.load(open('$wt_state_file')).get('worktree_branch',''))" 2>/dev/null || echo "")
+    wt_feature_status=$(python3 -c "import json; print(json.load(open('$wt_state_file')).get('feature_status',''))" 2>/dev/null || echo "")
+
+    # Skip already-complete features
+    [ "$wt_feature_status" = "complete" ] && continue
+    [ -z "$wt_branch" ] && continue
+
+    # Check PR state
+    local pr_state=""
+    pr_state=$(gh pr view "$wt_branch" --json state -q '.state' 2>/dev/null || echo "")
+    if [ "$pr_state" = "MERGED" ]; then
+      found_merged=true
+      check_and_cleanup_worktree "${entry%/}" "$wt_branch" "$wt_desc"
+      local rc=$?
+      [ "$rc" -eq 2 ] && return 0  # user chose quit
+    fi
+  done
+
+  if ! $found_merged; then
+    log "No merged PRs found to clean up."
+  fi
+}
+
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 usage() {
@@ -2234,7 +2340,8 @@ usage() {
   echo "Options:"
   echo "  --status          Show current progress (one-shot)"
   echo "  --log             Tail the session log (run in a second terminal)"
-  echo "  --resume          Pick up from last completed step"
+  echo "  --resume          Pick up from last completed step (cleans up merged PRs first)"
+  echo "  --cleanup         Clean up worktrees with merged PRs and exit"
   echo "  --step <name>     Run a specific step only"
   echo "  --from <name>     Start from a specific step"
   echo "  --cooldown <sec>  Seconds between steps (default: 10, 0 to disable)"
@@ -2269,6 +2376,7 @@ while [[ $# -gt 0 ]]; do
     --status)       show_status; exit 0 ;;
     --log)          ensure_pipeline_dir; touch "$SESSION_LOG"; exec tail -f "$SESSION_LOG" ;;
     --resume)       MODE="resume" ;;
+    --cleanup)      run_cleanup; exit 0 ;;
     --auto)         RUN_MODE="auto" ;;
     --interactive)  RUN_MODE="interactive" ;;
     --output)       VIEW_MODE="output" ;;
@@ -2288,6 +2396,11 @@ check_harness_update
 
 # Check if project CLAUDE.md references HARNESS.md (auto-upgrade for existing projects)
 check_harness_config
+
+# On resume, check for merged PRs and offer cleanup first
+if [ "$MODE" = "resume" ] && [ -d "${PROJECT_DIR}/.worktrees" ]; then
+  run_cleanup
+fi
 
 # Resume/from menu: scan .worktrees/ for active features and let user pick.
 # Presence of a worktree = work left to do. No root repo state needed.
@@ -2312,6 +2425,9 @@ if os.path.isdir(worktrees_dir):
         except (json.JSONDecodeError, IOError):
             continue
         feat = state.get('feature_desc', entry)
+        feature_status = state.get('feature_status', '')
+        if feature_status == 'complete':
+            continue  # skip completed features
         last_step = state.get('last_step', '?')
         status = state.get(last_step, 'pending')
         branch = state.get('worktree_branch', '')
@@ -2357,7 +2473,14 @@ for i, f in enumerate(features):
       printf "  %b %d) %-40s  step: %-20s  %s\n" "$icon" "$local_num" "${desc:0:40}" "$step" "$branch"
     done <<< "$resume_options"
     echo ""
-    read -r -p "  Select [1-${option_count}]: " pick
+    echo -e "  ${BOLD}q${NC}) Quit"
+    echo ""
+    read -r -p "  Select [1-${option_count}/q]: " pick
+
+    case "$pick" in
+      [qQ])
+        log "Exiting."; exit 0 ;;
+    esac
 
     if [[ "$pick" =~ ^[0-9]+$ ]] && [ "$pick" -ge 1 ] && [ "$pick" -le "$option_count" ]; then
       selected_line=$(echo "$resume_options" | sed -n "${pick}p")
@@ -2596,11 +2719,14 @@ Co-Authored-By: conduct" 2>/dev/null || true
   pr_url=$(gh pr view --json url -q '.url' 2>/dev/null || echo "")
   [ -n "$pr_url" ] && ok "PR: ${pr_url}"
 
+  # Mark feature as complete
+  save_state "feature_status" "complete"
+
   echo ""
   echo -e "${GREEN}${BOLD}SDLC complete.${NC}"
   [ -n "$pr_url" ] && echo -e "  PR: ${pr_url}"
   echo "  Retro: $(ls .docs/retros/*.md 2>/dev/null | head -1 || echo '.docs/retros/')"
-  echo "  Cleanup: conduct --reset"
+  echo "  Cleanup: conduct --cleanup (or automatic on next --resume)"
   echo ""
 else
   send_notification "SDLC stopped" "Failed at step: ${ALL_STEPS[$i]}"
