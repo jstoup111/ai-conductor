@@ -173,6 +173,33 @@ not the feature complexity.
 MUST create one. An architecture review that approves without documenting decisions is
 incomplete.**
 
+### 7b. ADR Approval Lifecycle
+
+ADRs follow a three-phase lifecycle. No ADR becomes authoritative without human approval.
+
+**Phase 1: DRAFT**
+- Architecture-review creates the ADR with `Status: DRAFT` in the frontmatter
+- DRAFT ADRs are written to `.docs/decisions/` with the standard naming convention
+- DRAFT ADRs cannot be cited as justification in code review, evaluator verdicts, or
+  implementation decisions — they are proposals, not decisions
+
+**Phase 2: REVIEW**
+- All DRAFT ADRs created during architecture-review are presented to the user for approval
+  via `review_artifacts` (clear screen, one at a time)
+- The user approves, rejects (launches interactive Claude to revise), or requests changes
+- On approval, status is updated to `Status: APPROVED` and the ADR becomes authoritative
+- On rejection, the ADR is revised in-place and re-presented until approved
+
+**Phase 3: AUTHORITATIVE**
+- Only `Status: APPROVED` ADRs are binding on downstream work
+- Pipeline evaluators, code review, and `/finish` gates may cite APPROVED ADRs
+- If a subsequent feature conflicts with an APPROVED ADR, the conflict must be resolved by
+  either superseding the ADR (new ADR with `Supersedes: <old>`) or changing the implementation
+- Superseded ADRs get `Status: SUPERSEDED` and a `Superseded by:` reference
+
+**HARD GATE: No feature proceeds past architecture-review with DRAFT ADRs. All ADRs created
+during the review must reach APPROVED status before `/writing-system-tests` can begin.**
+
 ### 8. Output
 
 Write the review to `.docs/decisions/architecture-review-YYYY-MM-DD-<feature>.md`:

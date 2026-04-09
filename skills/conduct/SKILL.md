@@ -67,7 +67,7 @@ Check for these artifacts in order. The **first missing artifact** determines th
 | 7. conflict-check | Conflict report exists in `.docs/conflicts/` OR skipped (Small tier) | Glob `.docs/conflicts/*.md` or check state is "skipped" |
 | 8. plan | At least one file exists in `.docs/plans/` | Glob `.docs/plans/*.md` |
 | 8b. diagrams | Proposed-state diagrams exist | Check `.docs/architecture/*-proposed.md` exist, or check state is "skipped" |
-| 9. architecture-review | Review exists in `.docs/decisions/` OR skipped (Small tier) | Glob `.docs/decisions/architecture-review-*.md` or check state is "skipped" |
+| 9. architecture-review | Review exists in `.docs/decisions/` OR skipped (Small tier). **All ADRs must be APPROVED** (no DRAFT ADRs remaining). | Glob `.docs/decisions/architecture-review-*.md` or check state is "skipped". Grep `.docs/decisions/adr-*.md` for `Status: DRAFT` — if any DRAFT ADRs exist, this step is pending. |
 | 10. writing-system-tests | Acceptance specs exist OR skipped (Small tier) | Glob `spec/integration/*_spec.rb` or `spec/system/*_spec.rb`, or check state is "skipped" |
 | 11. build | Implementation tasks completed with passing tests | Check `.pipeline/task-status.json` or test suite passes. Pipeline evaluator satisfies code-review gate. |
 | 12. manual-test | Manual test results exist with no FAILs, OR auto-skipped (non-endpoint feature) | Glob `.docs/manual-test-results.md` — if file contains FAIL rows, step is pending. **Auto-skip:** If no stories reference HTTP endpoints, API routes, or user-facing UI, skip `/manual-test` and log reason. For internal components (services, background jobs, mailers, CI config), suggest Rails console or script-based smoke test instead. |
@@ -147,6 +147,12 @@ Before suggesting the next step, verify that the previous step's **quality gates
 - Open the plan and verify every acceptance criterion from stories maps to at least one task
 - If coverage gaps exist, BLOCK
 - Say: "Plan has coverage gaps — [criterion] has no corresponding task. Run `/plan` again."
+
+**After architecture-review (before suggesting writing-system-tests):**
+- Check all ADR files in `.docs/decisions/adr-*.md` for `Status: DRAFT`
+- If ANY DRAFT ADRs exist, BLOCK
+- Say: "DRAFT ADRs remain unapproved — [list files]. All ADRs must be APPROVED before BUILD."
+- Present DRAFT ADRs for review. Only APPROVED ADRs are binding on implementation.
 
 **After build (before suggesting finish):**
 - Run the test suite and verify it passes
