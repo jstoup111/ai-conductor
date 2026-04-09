@@ -26,8 +26,14 @@ Gather what the evaluator needs:
 
 ### 2. Dispatch Evaluator Agent
 
-Use the Agent tool with `agents/evaluator.md` persona and `model="opus"`. The evaluator runs in
-a **fresh context** — it does not share conversation history with the generator.
+Use the Agent tool with `agents/evaluator.md` persona. The evaluator runs in a **fresh context**
+— it does not share conversation history with the generator.
+
+**Model selection by batch content:**
+- **Sonnet** (`model="sonnet"`) — batches containing only: value objects, pure functions,
+  configuration files, infrastructure setup, or view templates
+- **Opus** (`model="opus"`) — batches with: concurrency, state mutation, security boundaries,
+  financial calculations, auth logic, or complex domain interactions
 
 Provide the evaluator with:
 - The diff
