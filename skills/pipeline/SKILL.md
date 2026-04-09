@@ -97,10 +97,14 @@ At batch boundaries, dispatch an evaluator agent with `model="opus"` and **fresh
 Do NOT send full story files, full plan files, or unrelated source files. The evaluator
 runs the full 3-stage review from the `code-review` skill on this scoped context.
 
-**Evaluator frequency scaling:** For plans with ≤15 tasks, dispatch the evaluator at every
-OTHER batch boundary, plus always on the final batch. Pre-batch verification (full test suite,
-linter, `/simplify`) still runs at EVERY boundary regardless. For plans with >15 tasks,
-dispatch the evaluator at every batch boundary (no change).
+**Evaluator frequency scaling by complexity tier:**
+- **Small features:** Final review only — skip intermediate batch evaluators. Domain review
+  in TDD provides sufficient quality gating for small changes.
+- **Medium features:** Every 8 tasks, plus always on the final batch.
+- **Large features (>15 tasks):** Every 4 tasks (current behavior).
+
+Pre-batch verification (full test suite, linter, `/simplify`) still runs at EVERY boundary
+regardless of tier.
 
 **Evaluator diff scope:** Always scope the evaluator to the **current batch's diff only**
 (`git diff <batch-start-commit>..HEAD`), not the full branch diff. For the final batch,
