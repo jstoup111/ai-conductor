@@ -94,6 +94,11 @@ check_installation() {
   fi
   if command -v rtk &>/dev/null; then
     ok "rtk installed (token usage reduction)"
+    if [ -f "${HOME}/.claude/hooks/rtk-rewrite.sh" ]; then
+      ok "rtk hook initialized"
+    else
+      warn "rtk installed but not initialized — run ./bin/install or 'rtk init -g'"
+    fi
   else
     warn "rtk not installed — token usage reduction unavailable"
   fi
@@ -419,6 +424,20 @@ install_dependencies() {
       ok "rtk installed"
     else
       warn "rtk not installed — install manually: https://github.com/rtk-ai/rtk"
+    fi
+  fi
+
+  # rtk init — install Claude Code hook for transparent command rewriting
+  if command -v rtk &>/dev/null; then
+    if [ -f "${HOME}/.claude/hooks/rtk-rewrite.sh" ]; then
+      ok "rtk hook already initialized"
+    else
+      info "Initializing rtk for Claude Code..."
+      if rtk init -g --auto-patch 2>/dev/null; then
+        ok "rtk initialized (restart Claude Code to activate)"
+      else
+        warn "rtk init failed — run 'rtk init -g' manually"
+      fi
     fi
   fi
 
