@@ -1644,41 +1644,26 @@ run_finish() {
     ok "Already complete"; return 0
   fi
 
-  log "Running fresh verification and creating PR..."
-  # Non-interactive: run tests, verify stories, push, and create PR.
-  # Only falls back to interactive if verification or PR creation fails.
-  run_claude "Run the /finish skill, then run the /pr skill. Steps:
-1. Run the full test suite NOW — read the output, count pass/fail/pending
-2. Run git status — check for uncommitted changes
-3. Run linters/type-checks if the project has them
-4. Verify ALL story criteria from .docs/stories/ are covered
-5. If all checks pass: push the branch and create a PR using the /pr skill
-6. If any check fails: report what failed and stop
+  log "Running fresh verification and presenting options..."
+  run_claude "Run the /finish skill. Follow ALL steps:
+1. Fresh verification (tests, git status, linting)
+2. Verify against stories and ADRs
+3. Show changes for review (diff summary, offer full diff)
+4. Present completion options and wait for the user's choice
+5. Execute the chosen option (Option 2 delegates to /pr skill)
 
-Do NOT present interactive options. The goal is: verify → push → PR."
+Let the user review and choose. Do not skip the options menu." "interactive"
 
-  # Check if PR was created by looking for the URL in the log
+  # Check if PR was created (user may have chosen Option 2)
   local pr_url
   pr_url=$(tail -50 "$SESSION_LOG" 2>/dev/null | grep -oE 'https://github\.com/[^ ]+/pull/[0-9]+' | tail -1 || echo "")
+  if [ -z "$pr_url" ]; then
+    pr_url=$(gh pr view --json url -q '.url' 2>/dev/null || echo "")
+  fi
   if [ -n "$pr_url" ]; then
     ok "PR created: ${pr_url}"
-    save_state "finish" "done"
     save_state "pr_url" "$pr_url"
-    return 0
   fi
-
-  # PR not detected — fall back to interactive session for recovery
-  warn "Automated finish did not complete — launching interactive session..."
-  run_claude "The automated finish step did not create a PR. Check the session log for errors. Run /finish to verify, then /pr to create the pull request." "interactive"
-
-  pr_url=$(tail -50 "$SESSION_LOG" 2>/dev/null | grep -oE 'https://github\.com/[^ ]+/pull/[0-9]+' | tail -1 || echo "")
-  if [ -n "$pr_url" ]; then
-    ok "PR created: ${pr_url}"
-    save_state "finish" "done"
-    save_state "pr_url" "$pr_url"
-    return 0
-  fi
-
   save_state "finish" "done"; ok "Finish complete"
 }
 
@@ -2227,7 +2212,7 @@ recover() {
     retro)
       recover_prompt="Run /retro. Both parts: harness + application. Write to .docs/retros/." ;;
     finish)
-      recover_prompt="Run /finish to verify all tests pass, then run /pr to push and create a pull request." ;;
+      recover_prompt="Run /finish to verify all tests pass, show changes for review, and present completion options." ;;
   esac
 
   # Fresh session — don't carry context from prior steps
@@ -2734,12 +2719,9 @@ if [ "$i" -ge "${#STEP_FUNCS[@]}" ]; then
 Co-Authored-By: conduct" 2>/dev/null || true
   fi
 
-  # Delegate push + PR creation to Claude via the /pr skill.
-  # The PR skill handles verification, push, and PR creation.
-  # Conduct does NOT push directly — only Claude does, after confirming all checks pass.
-  log "Creating PR via /pr skill..."
-  run_claude "Run the /pr skill. Verify all checks pass locally (tests, lint, type-check — whatever this project uses) BEFORE pushing. Only push and create the PR after all checks pass. If any check fails, fix the issue first." "interactive"
-
+  # PR creation is handled by /finish (Option 2 delegates to /pr).
+  # No separate /pr call needed here.
+  local pr_url
   pr_url=$(gh pr view --json url -q '.url' 2>/dev/null || echo "")
   [ -n "$pr_url" ] && ok "PR: ${pr_url}"
 

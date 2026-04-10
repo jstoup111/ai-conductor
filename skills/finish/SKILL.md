@@ -44,9 +44,20 @@ Cross-reference the completed work against the stories in `.docs/stories/`:
 - If architecture-review had "APPROVED WITH CONDITIONS", verify all conditions are met
 - BLOCK if any ADR violation is detected — the ADR must be superseded or the code changed
 
-### 3. Present Options
+### 3. Review Changes
 
-After verification passes, present these options to the user:
+Before presenting options, show the user what was built so they can review:
+
+1. Determine the base branch (`main`, `master`, or `develop`)
+2. Show a summary: `git diff --stat <base>..HEAD` and `git log --oneline <base>..HEAD`
+3. Ask the user if they want to see the full diff before deciding
+4. If yes, show the full diff (use Agent for very large diffs to avoid context overflow)
+
+Do not skip this step. The user must have the opportunity to review before choosing.
+
+### 4. Present Options
+
+After review, present these options to the user:
 
 ```
 Feature implementation complete. All tests pass. Options:
@@ -59,7 +70,7 @@ Feature implementation complete. All tests pass. Options:
 
 Wait for the user to choose. Do not assume.
 
-### 4. Execute Choice
+### 5. Execute Choice
 
 **Option 1: Merge locally**
 - Determine the base branch (main, master, develop)
@@ -68,10 +79,8 @@ Wait for the user to choose. Do not assume.
 - Delete the feature branch after successful merge
 
 **Option 2: Push & PR**
-- Push the branch with `-u` to set upstream
-- Create a PR with:
-  - Title: concise description of the feature
-  - Body: reference to stories, summary of changes, test plan
+- Run the `/pr` skill — it handles pre-push verification, title/body generation, push, and
+  PR creation
 - Return the PR URL to the user
 
 **Option 3: Keep as-is**
@@ -83,7 +92,7 @@ Wait for the user to choose. Do not assume.
 - If confirmed: checkout base branch, delete feature branch
 - If not confirmed: return to options
 
-### 5. Cleanup
+### 6. Cleanup
 
 After executing the chosen option:
 - **Worktree merge/cleanup:** Dispatch the `worktree-manager` agent with `model="haiku"` (see `agents/worktree-manager.md`):
@@ -99,6 +108,7 @@ After executing the chosen option:
 - [ ] Test suite ran fresh (not cached) — output read
 - [ ] Git status clean (no unexpected uncommitted changes)
 - [ ] All story acceptance criteria verified as covered
+- [ ] Changes shown to user for review before options presented
 - [ ] Option presented to user and their choice executed
 - [ ] Cleanup completed (worktrees, pipeline state)
 - [ ] Manual-test suggested as next step

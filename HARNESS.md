@@ -172,7 +172,8 @@ Skills with Memory Checkpoint sections define when writes are expected — check
 
 **Never push to a remote until confident the work is complete and passing.**
 Run whatever verification the project requires (tests, lint, type-check, etc.) locally
-before pushing. The `/pr` skill enforces this gate. Conduct delegates push+PR to `/pr`.
+before pushing. The `/finish` skill presents the user with completion options and delegates
+to `/pr` when the user chooses Push & PR. The `/pr` skill enforces the pre-push gate.
 
 ## Autonomy Principle
 
