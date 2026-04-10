@@ -95,8 +95,8 @@ Check stories and plan against documented architecture:
 - Does the proposal use `is_*` boolean flags where an enum would prevent invalid combinations?
 
 **Diagram accuracy:**
-- Do architecture diagrams in `.docs/architecture/` reflect the proposed changes?
-- If the plan introduces new containers, services, or external integrations, are diagrams updated?
+- Do architecture diagrams in `.docs/architecture/` reflect the current architecture?
+- If new containers, services, or external integrations have been added, are diagrams updated?
 - Reference diagrams when assessing domain boundaries and coupling.
 
 **Worktree isolation:**
@@ -261,5 +261,5 @@ If drift is detected at a batch boundary:
 - [ ] ADR created for every architectural decision made
 - [ ] Review written to .docs/decisions/
 - [ ] Verdict issued (APPROVED / CONDITIONS / BLOCKED)
-- [ ] Architecture diagrams reviewed for accuracy against plan/implementation
+- [ ] Architecture diagrams reviewed for accuracy against current implementation
 - [ ] BLOCKED verdicts halt pipeline and require human resolution
