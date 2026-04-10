@@ -271,6 +271,16 @@ review_artifacts() {
   return 0
 }
 
+# Remove approved-artifacts entries matching a pattern so retried steps get full re-review.
+# Usage: clear_step_approvals "pattern"
+clear_step_approvals() {
+  local pattern=$1
+  local approved_log="${PIPELINE_DIR}/approved-artifacts"
+  [ -f "$approved_log" ] || return 0
+  grep -v "$pattern" "$approved_log" > "${approved_log}.tmp" 2>/dev/null || true
+  mv "${approved_log}.tmp" "$approved_log"
+}
+
 # ─── Session Management ──────────────────────────────────────────────────────
 
 get_session_id() {
@@ -1309,8 +1319,15 @@ run_architecture_diagram() {
     ok "Already complete"; return 0
   fi
   step_done "plan" || { fail "GATE: Need plan first"; return 1; }
-  log "Generating/updating architecture diagrams..."
-  run_claude "Run the /architecture-diagram skill. Generate or update C4 architecture diagrams in .docs/architecture/ based on the implementation plan. Create proposed-state diagrams showing planned changes. Present diagrams for engineer validation before proceeding."
+  # On retry, clear stale approvals so all diagrams get re-reviewed
+  clear_step_approvals ".docs/architecture/"
+  # Only generate if no diagrams exist yet; otherwise resume straight to review
+  if ! check_architecture_diagram; then
+    log "Generating/updating architecture diagrams..."
+    run_claude "Run the /architecture-diagram skill. Generate or update C4 architecture diagrams in .docs/architecture/ based on the implementation plan. Create proposed-state diagrams showing planned changes. Present diagrams for engineer validation before proceeding."
+  else
+    log "Diagrams exist — resuming review..."
+  fi
   if check_architecture_diagram; then
     local diagram_files=()
     while IFS= read -r f; do diagram_files+=("$f"); done < <(compgen -G "${PROJECT_DIR}/.docs/architecture/*.md" | sort)
@@ -1333,8 +1350,15 @@ run_architecture_review() {
     ok "Already complete"; return 0
   fi
   step_done "plan" || { fail "GATE: Need plan in .docs/plans/ first"; return 1; }
-  log "Reviewing architecture feasibility and alignment..."
-  run_claude "Run the /architecture-review skill. Review all stories, plan, AND architecture diagrams in .docs/architecture/ for technical feasibility, architectural alignment, domain integrity, and risks. Write review to .docs/decisions/architecture-review-*.md. Issue APPROVED, APPROVED WITH CONDITIONS, or BLOCKED verdict."
+  # On retry, clear stale approvals so all ADRs get re-reviewed
+  clear_step_approvals ".docs/decisions/adr-"
+  # Only generate if no review exists yet; otherwise resume straight to review
+  if ! check_architecture_review; then
+    log "Reviewing architecture feasibility and alignment..."
+    run_claude "Run the /architecture-review skill. Review all stories, plan, AND architecture diagrams in .docs/architecture/ for technical feasibility, architectural alignment, domain integrity, and risks. Write review to .docs/decisions/architecture-review-*.md. Issue APPROVED, APPROVED WITH CONDITIONS, or BLOCKED verdict."
+  else
+    log "Architecture review exists — resuming approval..."
+  fi
 
   if check_architecture_review; then
     # Check for BLOCKED verdict — requires human
