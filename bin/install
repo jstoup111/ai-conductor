@@ -92,6 +92,11 @@ check_installation() {
   else
     warn "puppeteer MCP server not installed"
   fi
+  if command -v rtk &>/dev/null; then
+    ok "rtk installed (token usage reduction)"
+  else
+    warn "rtk not installed — token usage reduction unavailable"
+  fi
 
   # Summary
   echo ""
@@ -389,6 +394,31 @@ install_dependencies() {
     else
       warn "glow not installed — artifact review will use batcat/cat fallback"
       info "Install manually: https://github.com/charmbracelet/glow#installation"
+    fi
+  fi
+
+  # rtk — reduces token usage in Claude Code sessions
+  if command -v rtk &>/dev/null; then
+    ok "rtk already installed"
+  else
+    info "Installing rtk (token usage reduction)..."
+    local rtk_installed=false
+    if command -v brew &>/dev/null; then
+      brew install rtk 2>/dev/null && rtk_installed=true
+    fi
+    if ! $rtk_installed && command -v cargo &>/dev/null; then
+      cargo install --git https://github.com/rtk-ai/rtk 2>/dev/null && rtk_installed=true
+    fi
+    # Fallback: official install script (installs to ~/.local/bin)
+    if ! $rtk_installed; then
+      if curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/refs/heads/master/install.sh | sh 2>/dev/null; then
+        rtk_installed=true
+      fi
+    fi
+    if $rtk_installed; then
+      ok "rtk installed"
+    else
+      warn "rtk not installed — install manually: https://github.com/rtk-ai/rtk"
     fi
   fi
 
