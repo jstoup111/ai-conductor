@@ -203,6 +203,55 @@ overlap (observed in retros). Directory partitioning ensures each agent reads a 
 If exploration was already performed earlier in the session (e.g., during brainstorm), pass the
 summary to subsequent agents (e.g., Plan) instead of re-exploring the same scope.
 
+## Harness Updates
+
+The harness version your project runs against is controlled by
+`~/.claude/ai-conductor.config.json`:
+
+```json
+{
+  "updateChannel": "tagged",
+  "autoCheck": true,
+  "currentVersion": "v0.3.0",
+  "lastCheckedAt": "2026-04-11T00:00:00Z"
+}
+```
+
+- **`updateChannel`** — `tagged` (default, stable semver releases) or `main`
+  (bleeding edge, every merge to main).
+- **`autoCheck`** — if `true`, every `/conduct` run checks for updates on the
+  configured channel before running any pipeline step.
+- **`currentVersion`** — the version of the harness your project is pinned to.
+  On the tagged channel this is a `vX.Y.Z` tag; on main it's `main@<sha>`.
+
+### Update flow
+
+1. On every `conduct` invocation, `check_harness_update()` in `bin/conduct`
+   fetches either the latest tag (`tagged`) or the remote branch (`main`).
+2. If a newer version exists, the relevant `CHANGELOG.md` blocks are rendered
+   with `glow` and the user is prompted before anything is applied. Updates
+   never apply without explicit approval.
+3. On approval, the harness is checked out at the new version and
+   `bin/migrate` runs automatically. It:
+   - Re-runs `bin/install --update` to refresh symlinks and re-merge
+     `settings.json` entries.
+   - Walks `CHANGELOG.md` entries between the old and new version for any
+     `## Migration` bash blocks, displays them, and runs them on approval.
+4. On success, `currentVersion` is written back to the config and `conduct`
+   re-launches. On failure, the harness is rolled back to the previous ref and
+   the user is notified.
+
+### Changing channels
+
+```
+conduct --set-channel tagged   # follow stable semver tags
+conduct --set-channel main     # follow main branch
+conduct --update               # force an update check now
+```
+
+The `updateChannel` setting is per-user (lives in `~/.claude/`), so every
+project using this harness inherits the same channel.
+
 ## Key Conventions
 
 - One skill, one responsibility, one enforcement level

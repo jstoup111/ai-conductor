@@ -55,6 +55,43 @@ fix all references before committing.
 All work MUST happen on a feature branch — never commit directly to main.
 Create a branch before making changes, and open a PR to merge.
 
+## Release & Update Gates
+
+The harness uses a semver tagging system and an auto-update flow. Every change
+to this repo must honor these gates:
+
+1. **Changelog on every PR.** Every PR to `main` MUST add an entry under
+   `## [Unreleased]` in `CHANGELOG.md` under one of: Added / Changed / Fixed /
+   Removed. The `.github/pull_request_template.md` scaffolds the required
+   sections. **CI enforces this** — `.github/workflows/release.yml` fails the
+   release workflow post-merge if `[Unreleased]` is empty. This rule applies
+   to the harness repo only. It does NOT change how Claude opens PRs in
+   consumer projects that use the harness.
+
+2. **Migration blocks for breaking changes.** Any PR that changes
+   `settings.json` schema, hook wiring, skill symlink targets, or `bin/conduct`
+   CLI MUST include a `## Migration` section in `CHANGELOG.md` with a runnable
+   ```` ```bash migration ```` fenced block. `bin/migrate` will execute these
+   blocks (after user approval) when consumers update past this version.
+
+3. **Releases are cut by CI on merge to main.** `.github/workflows/release.yml`
+   reads `VERSION`, tags `vX.Y.Z`, rewrites the `[Unreleased]` block under
+   `## [X.Y.Z] - <today>`, bumps `VERSION` to the next patch, and publishes a
+   GitHub Release. There is no manual release script. Version bumps beyond
+   patch happen by editing `VERSION` directly in the PR so reviewers can see
+   the semver decision.
+
+4. **Semver rules:**
+   - **MAJOR** — breaking change to skill contracts, `bin/conduct` CLI, or
+     `settings.json` schema.
+   - **MINOR** — new skill, new hook, new gate, additive HARNESS.md rule.
+   - **PATCH** — bug fix, wording, non-behavioral cleanup.
+
+5. **Integrity checks apply to release artifacts too.**
+   `test/test_harness_integrity.sh` validates: `VERSION` is valid semver,
+   `CHANGELOG.md` has a `## [Unreleased]` section, and every `vX.Y.Z` tag has
+   a matching `## [X.Y.Z]` section in `CHANGELOG.md`.
+
 ## HARNESS.md Flow
 
 HARNESS.md is the single source of truth for behavioral rules consumed by projects using this harness.

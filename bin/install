@@ -10,6 +10,12 @@ set -euo pipefail
 HARNESS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 SKILLS_DIR="${HOME}/.claude/skills"
 LOCAL_BIN="${HOME}/.local/bin"
+CONDUCTOR_CONFIG="${HOME}/.claude/ai-conductor.config.json"
+
+# UPDATE_MODE=true skips first-run-only work (dependency bootstrap, channel
+# prompt). Set via the --update flag; used by bin/migrate after an accepted
+# harness update.
+UPDATE_MODE=false
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -454,6 +460,89 @@ install_dependencies() {
   fi
 }
 
+# ─── AI Conductor config (channel, current version) ──────────────────────────
+
+# Detect the current harness version from git tag or VERSION file.
+# Returns "vX.Y.Z" when on an exact tag, "vX.Y.Z" from VERSION as a fallback,
+# or "main@<short-sha>" when on main.
+detect_current_version() {
+  local tag
+  tag=$(git -C "$HARNESS_DIR" describe --tags --exact-match HEAD 2>/dev/null || echo "")
+  if [ -n "$tag" ]; then
+    echo "$tag"
+    return 0
+  fi
+  if [ -f "${HARNESS_DIR}/VERSION" ]; then
+    local v
+    v=$(tr -d '[:space:]' < "${HARNESS_DIR}/VERSION")
+    if [ -n "$v" ]; then
+      echo "v$v"
+      return 0
+    fi
+  fi
+  local sha
+  sha=$(git -C "$HARNESS_DIR" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+  echo "main@$sha"
+}
+
+# Create or refresh ~/.claude/ai-conductor.config.json.
+# First run: prompt for channel (tagged vs main), write a new config with the
+# current version. Update mode: refresh currentVersion only; preserve channel,
+# autoCheck, and any other fields the user has set.
+configure_conductor() {
+  local detected
+  detected=$(detect_current_version)
+  local now
+  now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+  mkdir -p "$(dirname "$CONDUCTOR_CONFIG")"
+
+  if [ ! -f "$CONDUCTOR_CONFIG" ]; then
+    # First run — pick a channel.
+    local channel="tagged"
+    if [ "$UPDATE_MODE" != true ] && [ -t 0 ]; then
+      echo ""
+      info "Harness update channel — which version should /conduct follow?"
+      echo "    1) tagged  — stable semver releases (recommended)"
+      echo "    2) main    — bleeding edge, every merge to main"
+      read -r -p "  Choice [1]: " choice
+      case "$choice" in
+        2) channel="main" ;;
+        *) channel="tagged" ;;
+      esac
+    fi
+    CFG_PATH="$CONDUCTOR_CONFIG" DETECTED="$detected" CHANNEL="$channel" NOW="$now" python3 -c '
+import json, os
+from pathlib import Path
+cfg = {
+    "updateChannel": os.environ["CHANNEL"],
+    "autoCheck": True,
+    "currentVersion": os.environ["DETECTED"],
+    "lastCheckedAt": os.environ["NOW"],
+}
+Path(os.environ["CFG_PATH"]).write_text(json.dumps(cfg, indent=2) + "\n")
+'
+    ok "Created ${CONDUCTOR_CONFIG} (channel: ${channel}, version: ${detected})"
+  else
+    # Update — refresh currentVersion + lastCheckedAt, preserve everything else.
+    CFG_PATH="$CONDUCTOR_CONFIG" DETECTED="$detected" NOW="$now" python3 -c '
+import json, os
+from pathlib import Path
+p = Path(os.environ["CFG_PATH"])
+try:
+    cfg = json.loads(p.read_text())
+except Exception:
+    cfg = {}
+cfg.setdefault("updateChannel", "tagged")
+cfg.setdefault("autoCheck", True)
+cfg["currentVersion"] = os.environ["DETECTED"]
+cfg["lastCheckedAt"] = os.environ["NOW"]
+p.write_text(json.dumps(cfg, indent=2) + "\n")
+'
+    ok "Refreshed ${CONDUCTOR_CONFIG} (version: ${detected})"
+  fi
+}
+
 # ─── Install ──────────────────────────────────────────────────────────────────
 
 install() {
@@ -534,8 +623,15 @@ install() {
     info "Add to your shell profile: export PATH=\"\$HOME/.local/bin:\$PATH\""
   fi
 
-  # 6. Install dependencies
-  install_dependencies
+  # 6. Install dependencies (skip in --update mode — one-time bootstrap only)
+  if [ "$UPDATE_MODE" = true ]; then
+    info "Update mode — skipping dependency bootstrap"
+  else
+    install_dependencies
+  fi
+
+  # 6b. Seed or refresh the AI-conductor config (channel prompt only on first run)
+  configure_conductor
 
   # 7. Check Claude Code
   if command -v claude &>/dev/null; then
@@ -596,11 +692,13 @@ uninstall() {
 case "${1:-}" in
   --check)     check_installation ;;
   --uninstall) uninstall ;;
+  --update)    UPDATE_MODE=true; install ;;
   -h|--help)
-    echo "Usage: ./bin/install [--check | --uninstall | -h]"
+    echo "Usage: ./bin/install [--check | --update | --uninstall | -h]"
     echo ""
     echo "  (no args)     Install/update harness skills and conduct script"
     echo "  --check       Check installation status"
+    echo "  --update      Refresh symlinks + settings (skip deps + channel prompt)"
     echo "  --uninstall   Remove all symlinks"
     echo "  -h, --help    Show this help"
     ;;
