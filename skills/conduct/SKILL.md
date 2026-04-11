@@ -46,7 +46,7 @@ Step 10: /writing-system-tests  → BUILD (skipped for Small)
 Step 11: /pipeline or /tdd      → BUILD (pipeline evaluator satisfies code-review gate)
 Step 12: /manual-test           → SHIP (validate stories, bug loop via /tdd — auto-skip for non-endpoint features)
 Step 13: /retro                 → SHIP
-Step 14: /finish                → SHIP (verify, push, create PR)
+Step 14: /finish                → SHIP (verify, review changes, present options — delegates to /pr if user chooses Push & PR)
 ```
 
 ## Practices
@@ -72,7 +72,7 @@ Check for these artifacts in order. The **first missing artifact** determines th
 | 11. build | Implementation tasks completed with passing tests | Check `.pipeline/task-status.json` or test suite passes. Pipeline evaluator satisfies code-review gate. |
 | 12. manual-test | Manual test results exist with no FAILs, OR auto-skipped (non-endpoint feature) | Glob `.docs/manual-test-results.md` — if file contains FAIL rows, step is pending. **Auto-skip:** If no stories reference HTTP endpoints, API routes, or user-facing UI, skip `/manual-test` and log reason. For internal components (services, background jobs, mailers, CI config), suggest Rails console or script-based smoke test instead. |
 | 13. retro | Retro report exists in `.docs/retros/` OR skipped (Small tier) | Glob `.docs/retros/*.md` or check state is "skipped" |
-| 14. finish | PR created or branch pushed | Check `pr_url` in state or step is "done" |
+| 14. finish | User chose a completion option | Step is "done" in state (`pr_url` saved if Option 2 chosen) |
 
 **Feature completion:** After all steps finish and PR is created, `feature_status` is set to
 `"complete"` in `conduct-state.json`. Complete features are excluded from `--resume` menus.

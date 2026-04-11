@@ -53,7 +53,19 @@ not by file path.
 
 ### 3. Write the Title
 
-Rules:
+**Check for project conventions first:**
+
+Look for PR title format conventions in the project's `CLAUDE.md` under a
+`### PR Title Format` heading (or similar). Projects may specify their preferred format
+(conventional commits, ticket prefixes, etc.). If found, follow those conventions instead
+of the defaults below.
+
+**Common project convention examples:**
+- Conventional Commits: `feat: add notification channel`, `fix(auth): resolve token expiry`
+- Ticket prefix: `[PROJ-123] Add notification channel`
+- Type/scope: `feat(notifications): add in-app channel`
+
+**Default rules (when no project convention is defined):**
 - **Under 72 characters** — hard limit, no exceptions
 - **Imperative mood** — "Add notifications module" not "Added" or "Adding"
 - **Specific** — "Add in-app notification channel with persistence" not "Update notifications"
