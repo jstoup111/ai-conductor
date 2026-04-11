@@ -1,0 +1,129 @@
+name: release
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    # Skip the auto-commit this workflow creates so we don't recurse forever.
+    if: "!contains(github.event.head_commit.message, '[skip ci]')"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Read VERSION
+        id: version
+        run: |
+          if [ ! -f VERSION ]; then
+            echo "VERSION file missing" >&2
+            exit 1
+          fi
+          version=$(tr -d '[:space:]' < VERSION)
+          if ! echo "$version" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "VERSION '$version' is not valid semver" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+
+      - name: Skip if tag already exists
+        id: tag_check
+        run: |
+          tag="${{ steps.version.outputs.tag }}"
+          if git rev-parse "refs/tags/$tag" >/dev/null 2>&1; then
+            echo "Tag $tag already exists — nothing to release."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Verify [Unreleased] has content
+        if: steps.tag_check.outputs.skip == 'false'
+        run: |
+          if [ ! -f CHANGELOG.md ]; then
+            echo "CHANGELOG.md missing" >&2
+            exit 1
+          fi
+          # Extract content between ## [Unreleased] and the next ## heading.
+          block=$(awk '
+            /^## \[Unreleased\]/ { inblock=1; next }
+            inblock && /^## / { exit }
+            inblock { print }
+          ' CHANGELOG.md)
+          # Strip whitespace and section headers (### Added etc.) to check for real content.
+          stripped=$(printf '%s\n' "$block" | sed -E '/^[[:space:]]*$/d; /^###[[:space:]]/d')
+          if [ -z "$stripped" ]; then
+            echo "CHANGELOG.md [Unreleased] block is empty — every PR must add an entry." >&2
+            exit 1
+          fi
+
+      - name: Rewrite CHANGELOG and bump VERSION
+        if: steps.tag_check.outputs.skip == 'false'
+        id: rewrite
+        run: |
+          version="${{ steps.version.outputs.version }}"
+          tag="${{ steps.version.outputs.tag }}"
+          today=$(date -u +%Y-%m-%d)
+
+          # Extract the Unreleased block for the GitHub Release body.
+          awk '
+            /^## \[Unreleased\]/ { inblock=1; next }
+            inblock && /^## / { exit }
+            inblock { print }
+          ' CHANGELOG.md > /tmp/release-body.md
+
+          # Replace "## [Unreleased]" with "## [Unreleased]\n\n## [X.Y.Z] - today"
+          NEW_VERSION="$version" RELEASE_DATE="$today" python3 -c '
+          import os
+          from pathlib import Path
+          path = Path("CHANGELOG.md")
+          text = path.read_text()
+          marker = "## [Unreleased]"
+          version = os.environ["NEW_VERSION"]
+          date = os.environ["RELEASE_DATE"]
+          replacement = f"## [Unreleased]\n\n## [{version}] - {date}"
+          if marker not in text:
+              raise SystemExit("CHANGELOG.md missing ## [Unreleased] marker")
+          path.write_text(text.replace(marker, replacement, 1))
+          '
+
+          # Bump VERSION to the next patch.
+          major=$(echo "$version" | cut -d. -f1)
+          minor=$(echo "$version" | cut -d. -f2)
+          patch=$(echo "$version" | cut -d. -f3)
+          next_patch=$((patch + 1))
+          echo "${major}.${minor}.${next_patch}" > VERSION
+
+          echo "body_path=/tmp/release-body.md" >> "$GITHUB_OUTPUT"
+
+      - name: Commit, tag, push
+        if: steps.tag_check.outputs.skip == 'false'
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG.md VERSION
+          git commit -m "chore(release): ${TAG} [skip ci]"
+          git tag -a "${TAG}" -m "Release ${TAG}"
+          git push origin main
+          git push origin "${TAG}"
+
+      - name: Create GitHub Release
+        if: steps.tag_check.outputs.skip == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          gh release create "${TAG}" \
+            --title "${TAG}" \
+            --notes-file /tmp/release-body.md

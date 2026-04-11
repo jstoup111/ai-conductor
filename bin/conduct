@@ -80,29 +80,186 @@ ensure_pipeline_dir() {
   mkdir -p "${PIPELINE_DIR}"
 }
 
-# Check if the harness repo has updates available on its remote.
-# Prompts the user to update or skip. Pulls automatically on 'y'.
-check_harness_update() {
-  # Only check if harness dir is a git repo
-  [ -d "${HARNESS_DIR}/.git" ] || return 0
+CONDUCTOR_CONFIG="${HOME}/.claude/ai-conductor.config.json"
 
-  # Fetch remote quietly (timeout after 5s to avoid blocking on network issues)
+# ─── Harness update flow ─────────────────────────────────────────────────────
+
+# Read a scalar field from ai-conductor.config.json.
+# Usage: conductor_cfg_get <field> [default]
+conductor_cfg_get() {
+  local field=$1 default=${2:-}
+  [ -f "$CONDUCTOR_CONFIG" ] || { echo "$default"; return 0; }
+  python3 - "$CONDUCTOR_CONFIG" "$field" "$default" <<'PY' 2>/dev/null || echo "$default"
+import json, sys
+try:
+    with open(sys.argv[1]) as f:
+        cfg = json.load(f)
+    val = cfg.get(sys.argv[2], sys.argv[3])
+    print(val if val is not None else sys.argv[3])
+except Exception:
+    print(sys.argv[3])
+PY
+}
+
+# Write a scalar field to ai-conductor.config.json, preserving other fields.
+# Usage: conductor_cfg_set <field> <value>
+conductor_cfg_set() {
+  local field=$1 value=$2
+  mkdir -p "$(dirname "$CONDUCTOR_CONFIG")"
+  CFG_PATH="$CONDUCTOR_CONFIG" FIELD="$field" VALUE="$value" python3 -c '
+import json, os
+from pathlib import Path
+p = Path(os.environ["CFG_PATH"])
+try:
+    cfg = json.loads(p.read_text())
+except Exception:
+    cfg = {}
+cfg[os.environ["FIELD"]] = os.environ["VALUE"]
+p.write_text(json.dumps(cfg, indent=2) + "\n")
+'
+}
+
+# Render the CHANGELOG.md blocks strictly between from_ver (exclusive) and
+# to_ver (inclusive) via glow. Falls back to cat if glow is unavailable.
+render_changelog_range() {
+  local from_ver=$1 to_ver=$2
+  local changelog="${HARNESS_DIR}/CHANGELOG.md"
+  [ -f "$changelog" ] || return 0
+  local preview
+  preview=$(FROM_VER="$from_ver" TO_VER="$to_ver" python3 - "$changelog" <<'PY'
+import os, re, sys
+from pathlib import Path
+
+def norm(v):
+    if not v:
+        return ()
+    s = v.lstrip("v")
+    try:
+        return tuple(int(p) for p in s.split("."))
+    except ValueError:
+        return ()
+
+path = Path(sys.argv[1])
+text = path.read_text()
+from_ver = norm(os.environ.get("FROM_VER", ""))
+to_ver = norm(os.environ.get("TO_VER", ""))
+
+sections = re.split(r"(?m)^## \[", text)
+out = []
+for sec in sections[1:]:
+    m = re.match(r"([^\]]+)\]", sec)
+    if not m:
+        continue
+    label = m.group(1).strip()
+    if label.lower() == "unreleased":
+        continue
+    nv = norm(label)
+    if not nv:
+        continue
+    if (not from_ver or nv > from_ver) and (not to_ver or nv <= to_ver):
+        body = sec[m.end():].rstrip()
+        out.append(f"## [{label}]{body}\n")
+sys.stdout.write("\n".join(reversed(out)))
+PY
+  )
+  [ -z "$preview" ] && return 0
+  if command -v glow &>/dev/null; then
+    printf '%s\n' "$preview" | glow -w 80 -
+  else
+    printf '%s\n' "$preview"
+  fi
+}
+
+# Compare two semver-ish versions. Returns 0 if $1 < $2 (i.e. update available).
+semver_lt() {
+  [ "$1" = "$2" ] && return 1
+  local a="${1#v}" b="${2#v}"
+  local hi
+  hi=$(printf '%s\n%s\n' "$a" "$b" | sort -V | tail -1)
+  [ "$hi" = "$b" ]
+}
+
+# Run bin/migrate for the accepted update, then write the new currentVersion
+# back to config and re-launch conduct. On failure, roll back the checkout.
+apply_harness_update() {
+  local new_version=$1 rollback_ref=$2
+
+  if "${HARNESS_DIR}/bin/migrate"; then
+    conductor_cfg_set currentVersion "$new_version"
+    conductor_cfg_set lastCheckedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    ok "Harness updated to ${new_version}. Re-launching..."
+    exec "$0" "${ORIGINAL_ARGS[@]}"
+  else
+    fail "bin/migrate failed — rolling back to ${rollback_ref}"
+    git -C "$HARNESS_DIR" checkout "$rollback_ref" >/dev/null 2>&1 || true
+    return 1
+  fi
+}
+
+# Tagged-channel update: find the latest vX.Y.Z tag and prompt before applying.
+check_harness_update_tagged() {
+  timeout 5 git -C "$HARNESS_DIR" fetch --tags --quiet 2>/dev/null || return 0
+
+  local latest_tag
+  latest_tag=$(git -C "$HARNESS_DIR" tag -l 'v*.*.*' --sort=-v:refname 2>/dev/null | head -1)
+  [ -z "$latest_tag" ] && return 0
+
+  local current_version
+  current_version=$(conductor_cfg_get currentVersion "")
+
+  if [ -z "$current_version" ] || [[ "$current_version" == main@* ]]; then
+    # No recorded tagged version — seed it silently and return.
+    conductor_cfg_set currentVersion "$latest_tag"
+    return 0
+  fi
+
+  if ! semver_lt "$current_version" "$latest_tag"; then
+    conductor_cfg_set lastCheckedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    return 0
+  fi
+
+  echo ""
+  warn "Harness update available: ${current_version} → ${latest_tag}"
+  echo ""
+  render_changelog_range "$current_version" "$latest_tag"
+  echo ""
+
+  if [ ! -t 0 ]; then
+    warn "No TTY — run: cd ${HARNESS_DIR} && git checkout ${latest_tag} && bin/migrate"
+    return 0
+  fi
+
+  read -r -p "  Update to ${latest_tag}? [y/n]: " choice
+  case "$choice" in
+    [yY]) ;;
+    *) log "Skipping update"; return 0 ;;
+  esac
+
+  local rollback_ref
+  rollback_ref=$(git -C "$HARNESS_DIR" rev-parse HEAD 2>/dev/null || echo "HEAD")
+  if ! git -C "$HARNESS_DIR" checkout "tags/${latest_tag}" 2>/dev/null; then
+    fail "Failed to checkout ${latest_tag} — update aborted"
+    return 0
+  fi
+  apply_harness_update "$latest_tag" "$rollback_ref" || true
+}
+
+# Main-channel update: preserve the old fast-forward pull behavior but run
+# bin/migrate afterward so symlinks and settings refresh.
+check_harness_update_main() {
   timeout 5 git -C "$HARNESS_DIR" fetch --quiet 2>/dev/null || return 0
 
-  local local_head remote_head branch
+  local branch local_head remote_head
   branch=$(git -C "$HARNESS_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
   [ -z "$branch" ] && return 0
 
   local_head=$(git -C "$HARNESS_DIR" rev-parse HEAD 2>/dev/null || echo "")
   remote_head=$(git -C "$HARNESS_DIR" rev-parse "origin/${branch}" 2>/dev/null || echo "")
-
-  # Nothing to do if up to date or remote doesn't exist
   [ "$local_head" = "$remote_head" ] && return 0
   [ -z "$remote_head" ] && return 0
 
-  # Check that local is behind (not ahead or diverged with unpushed work)
   if ! git -C "$HARNESS_DIR" merge-base --is-ancestor HEAD "origin/${branch}" 2>/dev/null; then
-    return 0  # local has unpushed commits — don't prompt
+    return 0
   fi
 
   local behind_count
@@ -111,25 +268,54 @@ check_harness_update() {
 
   echo ""
   warn "Harness update available (${behind_count} commit(s) behind origin/${branch})"
-  if [ -t 0 ]; then
-    read -r -p "  Pull latest? [y/n]: " update_choice
-    case "$update_choice" in
-      [yY])
-        log "Updating harness..."
-        if git -C "$HARNESS_DIR" pull --ff-only 2>/dev/null; then
-          ok "Harness updated. Re-launching..."
-          exec "$0" "${ORIGINAL_ARGS[@]}"
-        else
-          warn "Fast-forward pull failed — update manually: cd ${HARNESS_DIR} && git pull"
-        fi
-        ;;
-      *)
-        log "Skipping update"
-        ;;
-    esac
-  else
-    warn "Run: cd ${HARNESS_DIR} && git pull"
+  if [ ! -t 0 ]; then
+    warn "Run: cd ${HARNESS_DIR} && git pull && bin/migrate"
+    return 0
   fi
+
+  read -r -p "  Pull latest? [y/n]: " choice
+  case "$choice" in
+    [yY]) ;;
+    *) log "Skipping update"; return 0 ;;
+  esac
+
+  local rollback_ref
+  rollback_ref=$(git -C "$HARNESS_DIR" rev-parse HEAD 2>/dev/null || echo "HEAD")
+  if ! git -C "$HARNESS_DIR" pull --ff-only 2>/dev/null; then
+    fail "Fast-forward pull failed — update manually: cd ${HARNESS_DIR} && git pull"
+    return 0
+  fi
+
+  local new_sha
+  new_sha=$(git -C "$HARNESS_DIR" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+  apply_harness_update "main@${new_sha}" "$rollback_ref" || true
+}
+
+# Dispatch based on the configured update channel.
+check_harness_update() {
+  [ -d "${HARNESS_DIR}/.git" ] || return 0
+
+  local auto_check channel
+  auto_check=$(conductor_cfg_get autoCheck true)
+  [ "$auto_check" = "false" ] && return 0
+
+  channel=$(conductor_cfg_get updateChannel tagged)
+  case "$channel" in
+    main)   check_harness_update_main ;;
+    tagged|*) check_harness_update_tagged ;;
+  esac
+}
+
+# Flip the update channel and exit. Invoked via `conduct --set-channel <name>`.
+set_update_channel() {
+  local new_channel=$1
+  case "$new_channel" in
+    tagged|main) ;;
+    *) fail "Invalid channel: ${new_channel} (expected: tagged, main)"; exit 2 ;;
+  esac
+  conductor_cfg_set updateChannel "$new_channel"
+  ok "Update channel set to: ${new_channel}"
+  exit 0
 }
 
 check_harness_config() {
@@ -2355,7 +2541,8 @@ usage() {
   echo "  --from <name>     Start from a specific step"
   echo "  --cooldown <sec>  Seconds between steps (default: 10, 0 to disable)"
   echo "  --reset           Clear session state and start fresh"
-  echo "  --update          Pull latest harness version and exit"
+  echo "  --update          Run the harness update check now and exit"
+  echo "  --set-channel <c> Set update channel (tagged|main) and exit"
   echo "  -h, --help        Show this help"
   echo ""
   echo "Steps: worktree, memory, brainstorm, complexity, stories, conflict-check,"
@@ -2393,7 +2580,8 @@ while [[ $# -gt 0 ]]; do
     --from)         START_STEP="$2"; shift ;;
     --cooldown)     STEP_COOLDOWN="$2"; STEP_COOLDOWN_ORIG="$2"; shift ;;
     --reset)        rm -f "$STATE_FILE" "$SESSION_FILE" "${PIPELINE_DIR}/session-created" "${SESSION_LOG}" 2>/dev/null; log "Session reset."; exit 0 ;;
-    --update)       log "Updating harness..."; git -C "$HARNESS_DIR" pull --ff-only && ok "Harness updated" || fail "Update failed — pull manually"; exit 0 ;;
+    --update)       log "Forcing harness update check..."; check_harness_update; exit 0 ;;
+    --set-channel)  set_update_channel "$2"; shift ;;
     -h|--help)      usage; exit 0 ;;
     *)              FEATURE_DESC="$1" ;;
   esac

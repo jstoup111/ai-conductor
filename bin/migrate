@@ -1,0 +1,252 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# migrate — Post-update migration runner for the james-stoup-agents harness.
+#
+# Invoked by bin/conduct after an update is accepted (tagged or main channel).
+# Self-configuring: reads the current ("from") version from
+# ~/.claude/ai-conductor.config.json and the target ("to") version from the
+# harness repo's VERSION file (or the checked-out tag).
+#
+# Responsibilities:
+#   1. Re-run `bin/install --update` to refresh symlinks and settings.json.
+#   2. If invoked from a project dir (not the harness repo itself), walk
+#      CHANGELOG.md entries strictly between from_version and to_version and
+#      execute any ```bash migration``` blocks inside ## Migration sections,
+#      after user approval.
+#
+# Usage: bin/migrate [--yes] [--dry-run]
+
+HARNESS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+CONFIG_FILE="${HOME}/.claude/ai-conductor.config.json"
+CHANGELOG="${HARNESS_DIR}/CHANGELOG.md"
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
+NC='\033[0m'
+
+ok()   { echo -e "  ${GREEN}✓${NC} $*"; }
+fail() { echo -e "  ${RED}✗${NC} $*"; }
+warn() { echo -e "  ${YELLOW}⚠${NC} $*"; }
+info() { echo -e "  ${CYAN}→${NC} $*"; }
+log()  { echo "  $*"; }
+
+AUTO_YES=false
+DRY_RUN=false
+for arg in "$@"; do
+  case "$arg" in
+    --yes|-y) AUTO_YES=true ;;
+    --dry-run) DRY_RUN=true ;;
+    *) fail "Unknown flag: $arg"; exit 2 ;;
+  esac
+done
+
+# ─── Read from_version from config ────────────────────────────────────────────
+
+read_from_version() {
+  if [ ! -f "$CONFIG_FILE" ]; then
+    echo ""
+    return 0
+  fi
+  python3 - "$CONFIG_FILE" <<'PY' 2>/dev/null || echo ""
+import json, sys
+try:
+    with open(sys.argv[1]) as f:
+        cfg = json.load(f)
+    print(cfg.get("currentVersion", ""))
+except Exception:
+    print("")
+PY
+}
+
+# ─── Determine to_version ─────────────────────────────────────────────────────
+
+read_to_version() {
+  # Prefer the exact checked-out tag if HEAD points at one.
+  local tag
+  tag=$(git -C "$HARNESS_DIR" describe --tags --exact-match HEAD 2>/dev/null || echo "")
+  if [ -n "$tag" ]; then
+    echo "$tag"
+    return 0
+  fi
+  # Fall back to VERSION file (prefix with v for consistency).
+  if [ -f "${HARNESS_DIR}/VERSION" ]; then
+    local version
+    version=$(tr -d '[:space:]' < "${HARNESS_DIR}/VERSION")
+    [ -n "$version" ] && echo "v$version" && return 0
+  fi
+  # Last resort: short SHA on main.
+  local sha
+  sha=$(git -C "$HARNESS_DIR" rev-parse --short HEAD 2>/dev/null || echo "")
+  [ -n "$sha" ] && echo "main@$sha"
+}
+
+FROM_VERSION=$(read_from_version)
+TO_VERSION=$(read_to_version)
+
+info "Migrating harness: ${FROM_VERSION:-<unknown>} → ${TO_VERSION:-<unknown>}"
+
+# ─── Step 1: Harness-level install refresh ────────────────────────────────────
+
+run_install_update() {
+  info "Refreshing harness installation (bin/install --update)…"
+  if [ "$DRY_RUN" = true ]; then
+    log "(dry-run) would exec: ${HARNESS_DIR}/bin/install --update"
+    return 0
+  fi
+  if ! "${HARNESS_DIR}/bin/install" --update; then
+    fail "bin/install --update failed"
+    return 1
+  fi
+  ok "Harness install refreshed"
+}
+
+# ─── Step 2: Project-level migration blocks ───────────────────────────────────
+
+in_harness_repo() {
+  [ "$(cd "$HARNESS_DIR" && pwd)" = "$(pwd)" ]
+}
+
+# Extract ## Migration bash blocks from CHANGELOG.md entries strictly between
+# from_version (exclusive) and to_version (inclusive). Emit one bash block
+# per line-group, separated by `---MIGRATION-BLOCK---` markers.
+extract_migration_blocks() {
+  local from="$1" to="$2"
+  FROM_VER="$from" TO_VER="$to" python3 - "$CHANGELOG" <<'PY'
+import os, re, sys
+from pathlib import Path
+
+def norm(v):
+    """Strip leading 'v' for comparison; return tuple for semver sort."""
+    if not v:
+        return ()
+    s = v.lstrip("v")
+    parts = s.split(".")
+    try:
+        return tuple(int(p) for p in parts)
+    except ValueError:
+        return ()
+
+path = Path(sys.argv[1])
+if not path.exists():
+    sys.exit(0)
+
+from_ver = norm(os.environ.get("FROM_VER", ""))
+to_ver = norm(os.environ.get("TO_VER", ""))
+text = path.read_text()
+
+# Split into version sections: ## [X.Y.Z] - date ... until next ## [
+sections = re.split(r"(?m)^## \[", text)
+entries = []  # list of (version_tuple, version_str, body)
+for sec in sections[1:]:
+    m = re.match(r"([^\]]+)\]", sec)
+    if not m:
+        continue
+    ver_label = m.group(1).strip()
+    if ver_label.lower() == "unreleased":
+        continue
+    body = sec[m.end():]
+    nv = norm(ver_label)
+    if not nv:
+        continue
+    entries.append((nv, ver_label, body))
+
+# Filter entries in range (from_ver, to_ver].
+applicable = [
+    (nv, label, body) for (nv, label, body) in entries
+    if (not from_ver or nv > from_ver) and (not to_ver or nv <= to_ver)
+]
+applicable.sort(key=lambda e: e[0])
+
+# Inside each entry, find ## Migration section, then pull ```bash migration``` fences.
+out = []
+for nv, label, body in applicable:
+    mig_match = re.search(r"(?ms)^###?\s+Migration\s*\n(.*?)(?=^##\s|\Z)", body)
+    if not mig_match:
+        continue
+    mig_body = mig_match.group(1)
+    for code in re.findall(r"```bash migration\s*\n(.*?)```", mig_body, re.DOTALL):
+        out.append(f"---MIGRATION-BLOCK--- version={label}\n{code.rstrip()}\n")
+
+sys.stdout.write("".join(out))
+PY
+}
+
+run_project_migrations() {
+  if in_harness_repo; then
+    info "Running inside the harness repo — skipping project-level migrations"
+    return 0
+  fi
+  if [ ! -f "$CHANGELOG" ]; then
+    warn "No CHANGELOG.md in harness — skipping project-level migrations"
+    return 0
+  fi
+
+  local blocks
+  blocks=$(extract_migration_blocks "$FROM_VERSION" "$TO_VERSION" || true)
+  if [ -z "$blocks" ]; then
+    info "No migration blocks between ${FROM_VERSION:-<start>} and ${TO_VERSION}"
+    return 0
+  fi
+
+  warn "Found migration blocks between ${FROM_VERSION:-<start>} and ${TO_VERSION}:"
+  echo ""
+  echo "$blocks"
+  echo ""
+
+  if [ "$DRY_RUN" = true ]; then
+    log "(dry-run) would execute the blocks above"
+    return 0
+  fi
+
+  if [ "$AUTO_YES" != true ]; then
+    if [ -t 0 ]; then
+      read -r -p "  Run these migration commands now? [y/N]: " choice
+      case "$choice" in
+        [yY]) ;;
+        *) warn "Skipping project migrations — you can run them manually later"; return 0 ;;
+      esac
+    else
+      warn "No TTY and --yes not set — skipping project migrations"
+      return 0
+    fi
+  fi
+
+  # Execute blocks one at a time so a failure stops the sequence.
+  local current_version=""
+  local current_script=""
+  local exec_block=""
+  while IFS= read -r line; do
+    if [[ "$line" == ---MIGRATION-BLOCK---* ]]; then
+      if [ -n "$current_script" ]; then
+        info "Executing migration for $current_version"
+        if ! bash -c "$current_script"; then
+          fail "Migration for $current_version failed"
+          return 1
+        fi
+        ok "Migration $current_version applied"
+      fi
+      current_version="${line#*version=}"
+      current_script=""
+    else
+      current_script+="$line"$'\n'
+    fi
+  done <<< "$blocks"
+  if [ -n "$current_script" ]; then
+    info "Executing migration for $current_version"
+    if ! bash -c "$current_script"; then
+      fail "Migration for $current_version failed"
+      return 1
+    fi
+    ok "Migration $current_version applied"
+  fi
+}
+
+# ─── Main ─────────────────────────────────────────────────────────────────────
+
+run_install_update || exit 1
+run_project_migrations || exit 1
+
+ok "Migration to ${TO_VERSION} complete"

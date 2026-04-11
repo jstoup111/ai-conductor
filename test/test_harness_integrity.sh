@@ -226,6 +226,56 @@ for skill_file in "${HARNESS_DIR}"/skills/*/SKILL.md; do
   fi
 done
 
+# ── 8. Release artifacts (VERSION, CHANGELOG, tag consistency) ──────────────
+
+echo ""
+echo -e "${BOLD}8. Release artifacts${NC}"
+
+# 8a. VERSION file exists and is valid semver
+version_file="${HARNESS_DIR}/VERSION"
+if [ ! -f "$version_file" ]; then
+  assert "VERSION file exists" 1
+else
+  version=$(tr -d '[:space:]' < "$version_file")
+  if echo "$version" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+    assert "VERSION is valid semver (${version})" 0
+  else
+    assert "VERSION is valid semver — got '${version}'" 1
+  fi
+fi
+
+# 8b. CHANGELOG.md exists and has an [Unreleased] section
+changelog="${HARNESS_DIR}/CHANGELOG.md"
+if [ ! -f "$changelog" ]; then
+  assert "CHANGELOG.md exists" 1
+else
+  assert "CHANGELOG.md exists" 0
+  if grep -q '^## \[Unreleased\]' "$changelog"; then
+    assert "CHANGELOG.md has [Unreleased] section" 0
+  else
+    assert "CHANGELOG.md has [Unreleased] section" 1
+  fi
+fi
+
+# 8c. Every vX.Y.Z tag has a matching ## [X.Y.Z] section in CHANGELOG.md.
+# Only run when we're inside the harness repo's own git dir AND CHANGELOG.md
+# exists (skips cleanly in shallow clones).
+if [ -d "${HARNESS_DIR}/.git" ] && [ -f "$changelog" ]; then
+  tags=$(git -C "$HARNESS_DIR" tag -l 'v*.*.*' 2>/dev/null || true)
+  if [ -z "$tags" ]; then
+    assert "no vX.Y.Z tags yet — nothing to cross-check" 0
+  else
+    for tag in $tags; do
+      ver="${tag#v}"
+      if grep -qE "^## \[${ver}\]" "$changelog"; then
+        assert "${tag} has CHANGELOG entry" 0
+      else
+        assert "${tag} missing CHANGELOG entry [${ver}]" 1
+      fi
+    done
+  fi
+fi
+
 # ── Summary ──────────────────────────────────────────────────────────────────
 
 echo ""
