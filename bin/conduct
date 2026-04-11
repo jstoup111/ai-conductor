@@ -1324,7 +1324,7 @@ run_architecture_diagram() {
   # Only generate if no diagrams exist yet; otherwise resume straight to review
   if ! check_architecture_diagram; then
     log "Generating/updating architecture diagrams..."
-    run_claude "Run the /architecture-diagram skill. Generate or update C4 architecture diagrams in .docs/architecture/ based on the implementation plan. Create proposed-state diagrams showing planned changes. Present diagrams for engineer validation before proceeding."
+    run_claude "Run the /architecture-diagram skill. Generate or update C4 architecture diagrams in .docs/architecture/ to reflect the planned architecture. Update existing diagrams in place — do not create proposed-state files. Present diagrams for engineer validation before proceeding."
   else
     log "Diagrams exist — resuming review..."
   fi
@@ -2215,7 +2215,7 @@ recover() {
     plan)
       recover_prompt="Run /plan. Generate implementation plan from stories to .docs/plans/." ;;
     architecture_diagram)
-      recover_prompt="Run /architecture-diagram. Generate or update C4 diagrams in .docs/architecture/ for the current plan." ;;
+      recover_prompt="Run /architecture-diagram. Generate or update C4 diagrams in .docs/architecture/ in place — no proposed-state files." ;;
     architecture_review)
       recover_prompt="Run /architecture-review. Review stories, plan, and architecture diagrams for feasibility. Write to .docs/decisions/." ;;
     acceptance_specs)

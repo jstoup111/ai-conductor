@@ -101,22 +101,13 @@ Present all diagrams to the engineer for validation before proceeding.
 
 ### 2. Plan Update
 
-When invoked from `/plan` (Step 8b), read the implementation plan and stories to generate
-**proposed-state diagrams** showing planned changes:
+When invoked from `/plan` (Step 8b), read the implementation plan and stories, then
+**update the existing diagrams in place** to reflect the planned architecture. Do not
+create separate proposed-state files — mutate the current diagrams directly.
 
-| Element | Mermaid Convention |
-|---------|-------------------|
-| New component/container | Dashed border: `style NewService stroke-dasharray: 5 5` |
-| New relationship | Dashed line: `A -.-> B` |
-| Modified component | Bold border: `style ModifiedService stroke-width:3px` |
-| Removed component | Strikethrough in label: `~~RemovedService~~` |
+Update the change log in each modified diagram file with the date and reason.
 
-Save proposed-state diagrams with a `-proposed` suffix alongside current-state diagrams:
-- `.docs/architecture/components.md` (current)
-- `.docs/architecture/components-proposed.md` (after implementation)
-
-After implementation completes, the proposed version replaces the current version and the
-`-proposed` files are removed.
+Present updated diagrams to the engineer for validation before proceeding.
 
 ### 3. Post-Implementation Verification
 
@@ -188,9 +179,6 @@ Generated files:
 - `.docs/architecture/sequences/<flow-name>.md` (one per flow)
 - `.docs/architecture/erd.md`
 
-During plan update, also:
-- `.docs/architecture/*-proposed.md` (proposed-state variants)
-
 ## Verification
 
 - [ ] System context diagram reflects all external systems and user types
@@ -202,4 +190,3 @@ During plan update, also:
 - [ ] Diagrams stored in `.docs/architecture/`
 - [ ] Change log updated when diagrams are modified
 - [ ] Engineer validation requested and received
-- [ ] Proposed-state diagrams use dashed/bold conventions
