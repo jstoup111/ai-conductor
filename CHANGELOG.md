@@ -8,6 +8,8 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 (see `.github/workflows/release.yml`). Every PR must add an entry under
 `## [Unreleased]
 
+## [0.4.0] - 2026-04-12
+
 ## [0.3.0] - 2026-04-11` before merge — CI fails the release workflow if the block is
 empty.
 
