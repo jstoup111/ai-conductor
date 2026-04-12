@@ -65,6 +65,11 @@ Categories:
 No migration steps required when upgrading from 0.3.0 — the new update flow
 takes effect on the next `conduct` run after this release is installed.
 
+### Fixed
+
+- Feature-level state (manual-test, retro, etc.) no longer bleeds across features in root state file; project-level steps (bootstrap, assess) persist correctly.
+- Task progress counter shows correct total from the start (0/10, 1/10) instead of growing denominator (1/1, 2/2).
+
 ---
 
 ## [0.3.0] - 2026-04-11

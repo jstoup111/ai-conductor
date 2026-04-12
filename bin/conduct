@@ -25,6 +25,9 @@ SESSION_LOG="${PIPELINE_DIR}/conduct.log"
 STATE_FILE="${PIPELINE_DIR}/conduct-state.json"
 SESSION_FILE="${PIPELINE_DIR}/conduct-session-id"
 
+# Project-level steps persist across features; all others are feature-scoped.
+PROJECT_LEVEL_STEPS="bootstrap bootstrap_detect bootstrap_inventory bootstrap_stories bootstrap_adrs bootstrap_config bootstrap_verify assess"
+
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -1669,6 +1672,23 @@ run_build() {
   log "Building from plan: $(basename "$plan_file") (${total_tasks} tasks, tier ${tier})"
   ensure_pipeline_dir
 
+  # Pre-populate all tasks so status bar shows correct total from the start.
+  # Only initialize missing entries — preserve completed/in_progress on resume.
+  python3 -c "
+import json, os
+path = '${PIPELINE_DIR}/task-status.json'
+state = {}
+if os.path.exists(path):
+    with open(path) as f:
+        state = json.load(f)
+for t in range(1, int('${total_tasks}') + 1):
+    key = f'task-{t}'
+    if key not in state:
+        state[key] = {'status': 'pending'}
+with open(path, 'w') as f:
+    json.dump(state, f, indent=2)
+"
+
   # Save plan reference for pipeline state
   echo "$plan_file" > "${PIPELINE_DIR}/plan-ref.md"
 
@@ -2970,6 +2990,22 @@ fi
 
 
 # ─── Main Loop ────────────────────────────────────────────────────────────────
+
+# New feature: clear feature-level state from root, keep project-level (bootstrap, assess).
+if [ "$start_index" -eq 0 ] && [ "$MODE" != "resume" ] && [ -z "$START_STEP" ]; then
+  if [ -f "$STATE_FILE" ]; then
+    python3 -c "
+import json
+path = '$STATE_FILE'
+project_keys = set('$PROJECT_LEVEL_STEPS'.split()) | {'run_started_at', 'feature_desc'}
+with open(path) as f:
+    state = json.load(f)
+state = {k: v for k, v in state.items() if k in project_keys}
+with open(path, 'w') as f:
+    json.dump(state, f, indent=2)
+"
+  fi
+fi
 
 # Initial display + start live refresh for the entire run
 reset_display
