@@ -18,16 +18,23 @@ Claude MUST read and follow this file at the start of every session.
 Skills chain via artifacts in `.docs/`. No skill orchestrates another internally.
 
 ```
-UNDERSTAND → DECIDE → BUILD → SHIP
+UNDERSTAND → DECIDE → BUILD → ✓checkpoint → SHIP(manual-test) → ✓checkpoint → SHIP(retro, finish)
 ```
 
 | Phase | Skills | Artifacts |
 |-------|--------|-----------|
-| ALL | **conduct** (orchestrator) | Status dashboard, gate enforcement |
+| ALL | **conduct** (orchestrator) | Status dashboard, gate enforcement, checkpoints |
 | UNDERSTAND | bootstrap, memory, assess | CLAUDE.md, .memory/, .docs/decisions/technical-assessment-*.md |
 | DECIDE | brainstorm → stories → conflict-check → plan → architecture-diagram → architecture-review | .docs/specs/, .docs/stories/, .docs/conflicts/, .docs/plans/, .docs/architecture/ |
 | BUILD | writing-system-tests → tdd/pipeline, debugging, code-review | Acceptance specs, code, unit tests, .pipeline/ |
+| CHECKPOINT | User validation after build | Harness pause — continue, go back, or quit |
 | SHIP | manual-test, retro, finish/pr | .docs/retros/ |
+| CHECKPOINT | User validation after manual-test | Harness pause — continue, go back, or quit |
+
+**Checkpoints** are harness-level pauses (no Claude session). The user reviews output and
+chooses to continue, navigate back to a prior step, or quit. Navigating back marks the target
+step as `pending` and all downstream steps as `stale` (⚠), then re-runs from the target forward.
+Checkpoints are skipped in auto mode.
 
 ## Skill Invocation
 

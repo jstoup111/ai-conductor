@@ -87,6 +87,11 @@ to this repo must honor these gates:
    - **MINOR** — new skill, new hook, new gate, additive HARNESS.md rule.
    - **PATCH** — bug fix, wording, non-behavioral cleanup.
 
+   **Before creating a PR**, Claude MUST present the proposed VERSION bump to
+   the user for approval. State the current VERSION, the proposed new VERSION,
+   and the semver justification (which rule applies). Do not edit VERSION or
+   create the PR until the user confirms.
+
 5. **Integrity checks apply to release artifacts too.**
    `test/test_harness_integrity.sh` validates: `VERSION` is valid semver,
    `CHANGELOG.md` has a `## [Unreleased]` section, and every `vX.Y.Z` tag has
