@@ -44,7 +44,9 @@ Step 8b: /architecture-diagram  → DECIDE (generate/update current-state diagra
 Step 9:  /architecture-review    → DECIDE (skipped for Small, lightweight for Medium — consumes diagrams)
 Step 10: /writing-system-tests  → BUILD (skipped for Small)
 Step 11: /pipeline or /tdd      → BUILD (pipeline evaluator satisfies code-review gate)
+       ── CHECKPOINT ──         → User reviews build output, can go back or continue
 Step 12: /manual-test           → SHIP (validate stories, bug loop via /tdd — auto-skip for non-endpoint features)
+       ── CHECKPOINT ──         → User reviews test results, can go back or continue
 Step 13: /retro                 → SHIP
 Step 14: /finish                → SHIP (verify, review changes, present options — delegates to /pr if user chooses Push & PR)
 ```
@@ -105,6 +107,56 @@ Present a clear status dashboard:
 ### Next Step
 Run `/conflict-check` to check stories for contradictions before planning.
 ```
+
+**Status icons:**
+- `✓` Done — step completed successfully
+- `⚠` Stale — step was done but an upstream step was revisited; will re-run automatically
+- `→` Skipped — intentionally skipped (tier-dependent)
+- `✗` Failed — step failed after retries
+- `▶` In progress — currently running
+- `⬚` Pending — not yet started
+
+### 2.1 User Validation Checkpoints
+
+The conductor pauses at **harness-level checkpoints** after key steps: **build** and **manual-test**.
+These are bash prompts — no Claude session is involved.
+
+```
+── Checkpoint: build complete ──
+Review the status above and choose:
+  c = continue to next step
+  b = go back to a previous step
+  q = quit (resume later with conduct --resume)
+[c/b/q]:
+```
+
+Choosing `b` opens a navigation menu listing all completed prior steps. The user picks a step
+to revisit. That step is set to `pending` and all downstream steps are marked `stale` (⚠).
+The conductor then re-runs from the chosen step forward through all downstream steps.
+
+Checkpoints are skipped in auto mode (`RUN_MODE=auto`) and non-interactive terminals.
+
+### 2.2 Backward Navigation
+
+Available at checkpoints and in the recovery menu (`b = go back`). Presents a numbered menu:
+
+```
+Go back to which step?
+   1) brainstorm           [done]    DECIDE
+   2) stories              [done]    DECIDE
+   3) plan                 [done]    DECIDE
+   4) tdd/pipeline         [done]    BUILD
+   0) Cancel
+Choice [0-4]:
+```
+
+Only steps with state `done` or `stale` appear (no point navigating to pending/failed/skipped).
+On selection, the target step is set to `pending` and all downstream steps become `stale`.
+The loop index jumps to the target and re-runs forward from there.
+
+**Stale state:** A stale step was previously completed but an upstream step has been revisited.
+Stale steps still satisfy gate requirements (via `step_satisfied()`) but will re-run when the
+loop reaches them. This preserves the record that work was done while ensuring it gets refreshed.
 
 ### 2.5 Complexity Assessment (after brainstorm, before stories)
 
@@ -244,3 +296,10 @@ Harness test complete. Review the retro for improvement findings.
 - [ ] `--resume` cleans up worktrees with merged PRs before showing menu
 - [ ] `--cleanup` removes worktrees, deletes branches, marks features complete
 - [ ] Resume menu and interactive prompts offer quit option
+- [ ] Checkpoints pause after build and manual-test (interactive mode only)
+- [ ] Backward navigation menu shows completed steps with labels and phases
+- [ ] Navigating back marks target as pending, downstream as stale
+- [ ] Stale steps re-run when the loop reaches them
+- [ ] Stale steps satisfy gate checks (step_satisfied)
+- [ ] Recovery menu includes `b = go back` option
+- [ ] Checkpoints skipped in auto mode

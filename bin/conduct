@@ -550,6 +550,17 @@ step_done() {
   [ "$s" = "done" ] || [ "$s" = "skipped" ]
 }
 
+# Check if a step's gate requirement is satisfied.
+# Like step_done() but also accepts "stale" — a stale step was previously
+# completed and its artifacts exist, so downstream gates should still pass.
+# Used in prerequisite checks (e.g., "need plan before build").
+step_satisfied() {
+  local step=$1
+  local s
+  s=$(get_state "$step")
+  [ "$s" = "done" ] || [ "$s" = "skipped" ] || [ "$s" = "stale" ]
+}
+
 # ─── Claude Invocation ────────────────────────────────────────────────────────
 
 run_claude() {
@@ -1005,7 +1016,7 @@ run_complexity_assessment() {
       ok "Complexity tier: ${tier}"; save_state "complexity" "done"; return 0
     fi
   fi
-  step_done "brainstorm" || { fail "GATE: Need design doc first"; return 1; }
+  step_satisfied "brainstorm" || { fail "GATE: Need design doc first"; return 1; }
 
   # Assess complexity by reading the design doc
   log "Assessing feature complexity from design doc..."
@@ -1392,7 +1403,7 @@ run_stories() {
   if step_done "stories"; then
     ok "Already complete"; return 0
   fi
-  step_done "brainstorm" || { fail "GATE: Need design doc in .docs/specs/ first"; return 1; }
+  step_satisfied "brainstorm" || { fail "GATE: Need design doc in .docs/specs/ first"; return 1; }
   log "Generating stories with mandatory negative paths..."
   # Rejection loops internally — never bubbles up to main loop recovery.
   while true; do
@@ -1432,7 +1443,7 @@ run_conflict_check() {
   if step_done "conflict_check"; then
     ok "Already complete"; return 0
   fi
-  step_done "stories" || { fail "GATE: Need stories in .docs/stories/ first"; return 1; }
+  step_satisfied "stories" || { fail "GATE: Need stories in .docs/stories/ first"; return 1; }
   log "Checking for conflicts..."
   run_claude "Run the /conflict-check skill. Check ALL stories against all 5 conflict types. Write report to .docs/conflicts/. If clean, write a clean-check marker. If blocking conflicts found, list them with resolution options but do NOT auto-resolve — the user must choose."
 
@@ -1504,7 +1515,7 @@ run_architecture_diagram() {
   if step_done "architecture_diagram"; then
     ok "Already complete"; return 0
   fi
-  step_done "plan" || { fail "GATE: Need plan first"; return 1; }
+  step_satisfied "plan" || { fail "GATE: Need plan first"; return 1; }
   # On retry, clear stale approvals so all diagrams get re-reviewed
   clear_step_approvals ".docs/architecture/"
   # Only generate if no diagrams exist yet; otherwise resume straight to review
@@ -1535,7 +1546,7 @@ run_architecture_review() {
   if step_done "architecture_review"; then
     ok "Already complete"; return 0
   fi
-  step_done "plan" || { fail "GATE: Need plan in .docs/plans/ first"; return 1; }
+  step_satisfied "plan" || { fail "GATE: Need plan in .docs/plans/ first"; return 1; }
   # On retry, clear stale approvals so all ADRs get re-reviewed
   clear_step_approvals ".docs/decisions/adr-"
   # Only generate if no review exists yet; otherwise resume straight to review
@@ -1628,7 +1639,7 @@ run_acceptance_specs() {
   if step_done "acceptance_specs"; then
     ok "Already complete"; return 0
   fi
-  step_done "plan" || { fail "GATE: Need plan in .docs/plans/ first"; return 1; }
+  step_satisfied "plan" || { fail "GATE: Need plan in .docs/plans/ first"; return 1; }
   log "Generating failing acceptance specs from stories..."
   run_claude "Run the /writing-system-tests skill. Generate failing acceptance specs from ALL stories.
 API projects: tests/integration/ or spec/integration/. Full-stack: tests/e2e/ or spec/system/. Every criterion (happy + negative) becomes a test. Commit the failing specs." "interactive"
@@ -1643,7 +1654,7 @@ API projects: tests/integration/ or spec/integration/. Full-stack: tests/e2e/ or
 
 run_build() {
   step_header 9 "tdd / pipeline" "BUILD"
-  step_done "plan" || { fail "GATE: Need plan first"; return 1; }
+  step_satisfied "plan" || { fail "GATE: Need plan first"; return 1; }
 
   local plan_file
   plan_file=$(get_plan_file) || { fail "No plan file found in .docs/plans/"; return 1; }
@@ -1801,10 +1812,10 @@ run_manual_test() {
     ok "Already complete — all stories pass manual testing"; return 0
   fi
   log "Running manual tests against stories..."
-  # Always interactive — may need user to confirm test results, start servers, etc.
+  # Automated — harness checkpoint after completion provides user review opportunity
   run_claude "Run the /manual-test skill. Start the application server, then test every story's acceptance criteria using curl (API) or browser (full-stack).
 
-Record results in .docs/manual-test-results.md. For any FAILs, write a failing test (RED), fix it (GREEN), commit, and re-test until all stories pass. Do NOT proceed with bugs remaining." "interactive"
+Record results in .docs/manual-test-results.md. For any FAILs, write a failing test (RED), fix it (GREEN), commit, and re-test until all stories pass. Do NOT proceed with bugs remaining."
 
   check_manual_test && { ok "Manual tests all pass"; save_state "manual_test" "done"; return 0; }
   fail "Manual test has FAILs — bugs need fixing"; save_state "manual_test" "failed"; return 1
@@ -2026,6 +2037,7 @@ show_status() {
 
     case "$state" in
       done)     icon="${GREEN}✓${NC}" ;;
+      stale)    icon="${YELLOW}⚠${NC}" ;;
       skipped)  icon="${YELLOW}→${NC}" ;;
       failed)   icon="${RED}✗${NC}" ;;
       in_progress)
@@ -2300,6 +2312,7 @@ send_notification() {
 
 recover() {
   local step_name=$1
+  local current_index=${2:-0}
   local session_id
   session_id=$(get_session_id)
 
@@ -2338,10 +2351,22 @@ recover() {
     echo -e "  ${BOLD}Recovery options:${NC}"
     echo "    r = retry (re-run the step)"
     echo "    i = interactive Claude session to fix"
+    echo "    b = go back to a previous step"
     echo "    s = skip this step"
     echo "    q = quit conductor"
-    read -r -p "  [r/i/s/q]: " recovery_choice
+    read -r -p "  [r/i/b/s/q]: " recovery_choice
     case "$recovery_choice" in
+      [bB])
+        if navigate_back "$current_index"; then
+          save_state "$step_name" "failed"
+          start_live_refresh 10
+          return 3  # signal: jump back
+        fi
+        # Cancelled — fall through to retry
+        log "Cancelled. Retrying ${step_name}..."
+        start_live_refresh 10
+        return 2
+        ;;
       [sS])
         warn "Skipping ${step_name}"
         save_state "$step_name" "skipped"
@@ -2773,6 +2798,128 @@ fi
 ALL_STEPS=(worktree memory brainstorm complexity stories conflict_check plan architecture_diagram architecture_review acceptance_specs build manual_test retro finish)
 STEP_FUNCS=(run_worktree_setup run_memory run_brainstorm run_complexity_assessment run_stories run_conflict_check run_plan run_architecture_diagram run_architecture_review run_acceptance_specs run_build run_manual_test run_retro run_finish)
 
+# Labels and phases for navigate_back menu (must match ALL_STEPS order)
+STEP_LABELS=("worktree" "memory" "brainstorm" "complexity" "stories" "conflict-check" "plan" "diagrams" "arch review" "acceptance specs" "tdd/pipeline" "manual-test" "retro" "finish/pr")
+STEP_PHASES=("SETUP" "UNDERSTAND" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "DECIDE" "BUILD" "BUILD" "SHIP" "SHIP" "SHIP")
+
+# Steps that trigger a user validation checkpoint after completion
+CHECKPOINT_STEPS="build manual_test"
+
+# Global used by navigate_back() to communicate the jump target index
+JUMP_TO_INDEX=-1
+
+# Mark all steps downstream of a given step as "stale" (if they were "done").
+# Stale steps will be re-run when the loop reaches them, but their gate
+# requirements still pass (via step_satisfied).
+mark_downstream_stale() {
+  local target_step=$1
+  local found=false
+  for step in "${ALL_STEPS[@]}"; do
+    if [ "$found" = true ]; then
+      local current_state
+      current_state=$(get_state "$step")
+      if [ "$current_state" = "done" ]; then
+        save_state "$step" "stale"
+      fi
+    fi
+    [ "$step" = "$target_step" ] && found=true
+  done
+}
+
+# Present a numbered menu of prior completed steps and let the user pick one.
+# Sets JUMP_TO_INDEX to the chosen step's index, or -1 if cancelled.
+navigate_back() {
+  local current_index=$1
+  JUMP_TO_INDEX=-1
+
+  # Build list of eligible steps (done or stale, before current)
+  local eligible_indices=()
+  for j in $(seq 0 $((current_index - 1))); do
+    local st
+    st=$(get_state "${ALL_STEPS[$j]}")
+    if [ "$st" = "done" ] || [ "$st" = "stale" ]; then
+      eligible_indices+=("$j")
+    fi
+  done
+
+  if [ ${#eligible_indices[@]} -eq 0 ]; then
+    warn "No completed steps to navigate back to."
+    return 1
+  fi
+
+  echo ""
+  echo -e "  ${BOLD}Go back to which step?${NC}"
+  for menu_num in "${!eligible_indices[@]}"; do
+    local idx="${eligible_indices[$menu_num]}"
+    local st
+    st=$(get_state "${ALL_STEPS[$idx]}")
+    printf "    %2d) %-18s [%-5s]  %s\n" "$((menu_num + 1))" "${STEP_LABELS[$idx]}" "$st" "${STEP_PHASES[$idx]}"
+  done
+  echo "     0) Cancel"
+
+  while true; do
+    read -r -p "  Choice [0-${#eligible_indices[@]}]: " back_choice
+    if [ "$back_choice" = "0" ]; then
+      return 1  # cancelled
+    fi
+    if [[ "$back_choice" =~ ^[0-9]+$ ]] && [ "$back_choice" -ge 1 ] && [ "$back_choice" -le "${#eligible_indices[@]}" ]; then
+      local target_index="${eligible_indices[$((back_choice - 1))]}"
+      local target_step="${ALL_STEPS[$target_index]}"
+
+      # Set target to pending so it re-runs
+      save_state "$target_step" "pending"
+      # Mark everything downstream as stale
+      mark_downstream_stale "$target_step"
+
+      JUMP_TO_INDEX=$target_index
+      log "Navigating back to: ${STEP_LABELS[$target_index]}"
+      return 0
+    fi
+    echo "  Invalid choice. Enter 0-${#eligible_indices[@]}."
+  done
+}
+
+# Harness-level validation checkpoint. Pauses the flow, shows the dashboard,
+# and lets the user continue, go back, or quit. No Claude session involved.
+# Returns: 0 = continue, 2 = jump back (JUMP_TO_INDEX set)
+user_checkpoint() {
+  local step_name=$1
+  local current_index=$2
+
+  stop_live_refresh
+  echo ""
+  show_status
+  echo ""
+  echo -e "  ${BOLD}${GREEN}── Checkpoint: ${step_name} complete ──${NC}"
+  echo -e "  Review the status above and choose:"
+  echo "    c = continue to next step"
+  echo "    b = go back to a previous step"
+  echo "    q = quit (resume later with conduct --resume)"
+  read -r -p "  [c/b/q]: " checkpoint_choice
+  case "$checkpoint_choice" in
+    [bB])
+      if navigate_back "$current_index"; then
+        refresh_display
+        start_live_refresh 10
+        return 2  # signal: jump back
+      fi
+      # Cancelled — treat as continue
+      echo "  Continuing..."
+      start_live_refresh 10
+      return 0
+      ;;
+    [qQ])
+      save_state "$step_name" "done"
+      echo -e "Resume later: ${BOLD}conduct --resume${NC}"
+      exit 0
+      ;;
+    *)
+      start_live_refresh 10
+      return 0  # continue
+      ;;
+  esac
+}
+
 # Determine starting point
 start_index=0
 
@@ -2842,6 +2989,19 @@ while [ "$i" -lt "${#STEP_FUNCS[@]}" ]; do
   if ${STEP_FUNCS[$i]}; then
     refresh_display
     retry_count=0
+
+    # User validation checkpoint after key steps (interactive mode only)
+    if [[ " $CHECKPOINT_STEPS " == *" ${ALL_STEPS[$i]} "* ]] && [ "${RUN_MODE}" != "auto" ] && [ -t 0 ]; then
+      user_checkpoint "${ALL_STEPS[$i]}" "$i"
+      local cp_rc=$?
+      if [ "$cp_rc" -eq 2 ]; then
+        # User chose to go back — JUMP_TO_INDEX is set
+        i=$JUMP_TO_INDEX
+        retry_count=0
+        continue
+      fi
+    fi
+
     i=$((i + 1))
     continue
   fi
@@ -2867,7 +3027,7 @@ while [ "$i" -lt "${#STEP_FUNCS[@]}" ]; do
     break
   fi
 
-  recover "${ALL_STEPS[$i]}" && recover_rc=0 || recover_rc=$?
+  recover "${ALL_STEPS[$i]}" "$i" && recover_rc=0 || recover_rc=$?
   if [ "$recover_rc" -eq 0 ]; then
     # Interactive fix session completed — retry the step
     refresh_display
@@ -2881,6 +3041,12 @@ while [ "$i" -lt "${#STEP_FUNCS[@]}" ]; do
   elif [ "$recover_rc" -eq 2 ]; then
     # User chose retry — don't burn retry count
     retry_count=$((retry_count - 1))
+    refresh_display
+    continue
+  elif [ "$recover_rc" -eq 3 ]; then
+    # User chose go back — JUMP_TO_INDEX is set
+    i=$JUMP_TO_INDEX
+    retry_count=0
     refresh_display
     continue
   else

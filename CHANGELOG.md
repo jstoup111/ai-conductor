@@ -26,7 +26,16 @@ Categories:
 
 ### Added
 
+- User validation checkpoints after build and manual-test steps in conductor.
+- Backward navigation (`b = go back`) from checkpoints and recovery menu with numbered step menu.
+- `stale` state marking (⚠) for downstream steps when revisiting earlier phases.
+- `step_satisfied()` gate function — stale steps pass prerequisite checks but re-run when reached.
 - Semver tagging system with CI-driven releases on merge to `main`.
+
+### Changed
+
+- `run_manual_test()` now runs in print mode (automated) instead of interactive mode; harness checkpoint provides user review.
+- Recovery menu expanded from `r/i/s/q` to `r/i/b/s/q` with backward navigation option.
 - `VERSION` and `CHANGELOG.md` as the source of truth for release cadence.
 - `.github/workflows/release.yml` — auto-tag, rewrite changelog, bump version,
   create GitHub Release on every merge to `main`.
