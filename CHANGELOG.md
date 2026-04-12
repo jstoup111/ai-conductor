@@ -35,7 +35,9 @@ Categories:
 ### Changed
 
 - `run_manual_test()` now runs in print mode (automated) instead of interactive mode; harness checkpoint provides user review.
+- `run_acceptance_specs()` now runs in print mode (automated) instead of interactive mode.
 - Recovery menu expanded from `r/i/s/q` to `r/i/b/s/q` with backward navigation option.
+- CLAUDE.md now requires Claude to present VERSION bump for user approval before creating a PR.
 - `VERSION` and `CHANGELOG.md` as the source of truth for release cadence.
 - `.github/workflows/release.yml` — auto-tag, rewrite changelog, bump version,
   create GitHub Release on every merge to `main`.
