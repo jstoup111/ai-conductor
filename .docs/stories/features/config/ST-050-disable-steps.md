@@ -1,6 +1,6 @@
 # Story: Disable Steps via Project Config
 
-**Status:** DRAFT
+**Status:** ACCEPTED
 **Epic:** EP-002 Pluggable Step Configuration
 **Skill:** (new — config system)
 

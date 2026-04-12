@@ -1,6 +1,6 @@
 # Story: Before/After Hooks on Skills
 
-**Status:** DRAFT
+**Status:** ACCEPTED
 **Epic:** EP-003 Skill Override System
 **Skill:** (new — config system)
 

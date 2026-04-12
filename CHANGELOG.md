@@ -32,6 +32,9 @@ Categories:
 - Backward navigation (`b = go back`) from checkpoints and recovery menu with numbered step menu.
 - `stale` state marking (⚠) for downstream steps when revisiting earlier phases.
 - `step_satisfied()` gate function — stale steps pass prerequisite checks but re-run when reached.
+- Story catalog: 5 product epics and 36 feature stories specifying all harness behavior as Given/When/Then acceptance criteria.
+- Design doc for pluggable harness architecture (phased rewrite: stories -> language eval -> conductor rewrite -> skill overrides -> UI abstraction).
+- Implementation plan for Phase 1 (story catalog review and acceptance).
 - Semver tagging system with CI-driven releases on merge to `main`.
 
 ### Changed

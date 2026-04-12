@@ -1,6 +1,6 @@
 # Story: Full Skill Replacement
 
-**Status:** DRAFT
+**Status:** ACCEPTED
 **Epic:** EP-003 Skill Override System
 **Skill:** (new — config system)
 

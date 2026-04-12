@@ -1,6 +1,6 @@
 # Epic: LLM Provider Abstraction
 
-**Status:** DRAFT
+**Status:** ACCEPTED
 
 ## Description
 

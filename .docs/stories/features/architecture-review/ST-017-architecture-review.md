@@ -1,6 +1,6 @@
 # Story: Architecture Review and ADR Generation
 
-**Status:** DRAFT
+**Status:** ACCEPTED
 **Epic:** EP-001 Conductor Core Engine
 **Skill:** architecture-review/SKILL.md
 

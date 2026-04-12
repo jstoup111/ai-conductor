@@ -1,6 +1,6 @@
 # Story: Config File Loading and Validation
 
-**Status:** DRAFT
+**Status:** ACCEPTED
 **Epic:** EP-002 Pluggable Step Configuration
 **Skill:** (new — config system)
 

@@ -1,6 +1,6 @@
 # Story: Code Review via Evaluator Agent
 
-**Status:** DRAFT
+**Status:** ACCEPTED
 **Epic:** EP-001 Conductor Core Engine
 **Skill:** code-review/SKILL.md
 

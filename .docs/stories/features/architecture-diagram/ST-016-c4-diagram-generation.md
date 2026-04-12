@@ -1,6 +1,6 @@
 # Story: C4 Architecture Diagram Generation
 
-**Status:** DRAFT
+**Status:** ACCEPTED
 **Epic:** EP-001 Conductor Core Engine
 **Skill:** architecture-diagram/SKILL.md
 

@@ -1,6 +1,6 @@
 # Epic: Conductor Core Engine
 
-**Status:** DRAFT
+**Status:** ACCEPTED
 
 ## Description
 

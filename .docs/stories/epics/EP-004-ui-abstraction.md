@@ -1,6 +1,6 @@
 # Epic: UI Abstraction Layer
 
-**Status:** DRAFT
+**Status:** ACCEPTED
 
 ## Description
 

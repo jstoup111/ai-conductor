@@ -1,6 +1,6 @@
 # Epic: Skill Override System
 
-**Status:** DRAFT
+**Status:** ACCEPTED
 
 ## Description
 

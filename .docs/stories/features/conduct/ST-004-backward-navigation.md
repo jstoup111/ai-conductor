@@ -1,6 +1,6 @@
 # Story: Backward Navigation
 
-**Status:** DRAFT
+**Status:** ACCEPTED
 **Epic:** EP-001 Conductor Core Engine
 **Skill:** conduct/SKILL.md
 

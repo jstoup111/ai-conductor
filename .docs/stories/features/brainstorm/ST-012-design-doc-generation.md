@@ -1,6 +1,6 @@
 # Story: Design Document Generation
 
-**Status:** DRAFT
+**Status:** ACCEPTED
 **Epic:** EP-001 Conductor Core Engine
 **Skill:** brainstorm/SKILL.md
 

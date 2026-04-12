@@ -1,6 +1,6 @@
 # Story: Project Detection and Scaffolding
 
-**Status:** DRAFT
+**Status:** ACCEPTED
 **Epic:** EP-001 Conductor Core Engine
 **Skill:** bootstrap/SKILL.md
 

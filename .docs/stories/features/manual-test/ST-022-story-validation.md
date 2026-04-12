@@ -1,6 +1,6 @@
 # Story: Manual Test Story Validation
 
-**Status:** DRAFT
+**Status:** ACCEPTED
 **Epic:** EP-001 Conductor Core Engine
 **Skill:** manual-test/SKILL.md
 
@@ -30,6 +30,8 @@ experience it.
   type check runs, then manual-test is auto-skipped with a logged reason
 - Given a stale server from a prior session is running, when manual-test starts, then it
   kills the existing process before starting fresh
+- Given testing completes (pass or fail), when the step finishes, then the application
+  server is shut down cleanly
 
 ### Done When
 - [ ] Application server started fresh (stale servers killed)

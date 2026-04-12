@@ -1,6 +1,6 @@
 # Story: Recovery from Step Failure
 
-**Status:** DRAFT
+**Status:** ACCEPTED
 **Epic:** EP-001 Conductor Core Engine
 **Skill:** conduct/SKILL.md
 
@@ -14,8 +14,9 @@ so that I can fix issues without losing progress or restarting from scratch.
   Claude session, b=go back, s=skip, q=quit
 - Given the user chooses `r` (retry), when the step re-runs, then the retry count is not
   incremented (free retry)
-- Given the user chooses `i` (interactive), when a fresh Claude session opens, then it is
-  scoped to the failed step only — it does not carry orchestrator context
+- Given the user chooses `i` (interactive), when a Claude session opens for recovery, then
+  it is scoped to the failed step only with a system prompt restricting it to that step —
+  it must not proceed to subsequent steps
 - Given the user chooses `s` (skip), when applied, then the step is marked `skipped` and the
   conductor advances
 - Given the user chooses `q` (quit), when applied, then the step is marked `failed` and
@@ -35,7 +36,7 @@ so that I can fix issues without losing progress or restarting from scratch.
 ### Done When
 - [ ] Recovery menu offers r/i/b/s/q options
 - [ ] Retry does not increment the retry counter
-- [ ] Interactive session is fresh (not the orchestrator session)
+- [ ] Interactive session is scoped to the failed step only
 - [ ] Skip is blocked for gating steps
 - [ ] Quit preserves state for --resume
 - [ ] Rate limits trigger wait, not recovery menu

@@ -1,6 +1,6 @@
 # Story: Code Simplification Review
 
-**Status:** DRAFT
+**Status:** ACCEPTED
 **Epic:** EP-001 Conductor Core Engine
 **Skill:** simplify/SKILL.md
 

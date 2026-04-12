@@ -1,6 +1,6 @@
 # Epic: Pluggable Step Configuration
 
-**Status:** DRAFT
+**Status:** ACCEPTED
 
 ## Description
 

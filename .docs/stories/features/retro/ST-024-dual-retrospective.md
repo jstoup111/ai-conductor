@@ -1,6 +1,6 @@
 # Story: Dual Retrospective
 
-**Status:** DRAFT
+**Status:** ACCEPTED
 **Epic:** EP-001 Conductor Core Engine
 **Skill:** retro/SKILL.md
 

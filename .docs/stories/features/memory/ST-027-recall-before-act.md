@@ -1,6 +1,6 @@
 # Story: Memory Recall-Before-Act Protocol
 
-**Status:** DRAFT
+**Status:** ACCEPTED
 **Epic:** EP-001 Conductor Core Engine
 **Skill:** memory/SKILL.md
 

@@ -1,6 +1,6 @@
 # Story: Conflict Detection Between Stories
 
-**Status:** DRAFT
+**Status:** ACCEPTED
 **Epic:** EP-001 Conductor Core Engine
 **Skill:** conflict-check/SKILL.md
 

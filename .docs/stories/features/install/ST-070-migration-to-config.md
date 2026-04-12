@@ -1,6 +1,6 @@
 # Story: Migration to Project Config
 
-**Status:** DRAFT
+**Status:** ACCEPTED
 **Epic:** EP-002 Pluggable Step Configuration
 **Skill:** (bin/migrate enhancement)
 

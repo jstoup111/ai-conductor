@@ -1,6 +1,6 @@
 # Story: Acceptance Spec Generation
 
-**Status:** DRAFT
+**Status:** ACCEPTED
 **Epic:** EP-001 Conductor Core Engine
 **Skill:** writing-system-tests/SKILL.md
 

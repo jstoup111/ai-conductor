@@ -1,6 +1,6 @@
 # Story: Fresh Verification and Completion Options
 
-**Status:** DRAFT
+**Status:** ACCEPTED
 **Epic:** EP-001 Conductor Core Engine
 **Skill:** finish/SKILL.md
 
@@ -18,6 +18,9 @@ structured options so that I can confidently close out the feature.
   1) Merge locally, 2) Push & create PR, 3) Keep as-is, 4) Discard
 - Given the user chooses Option 2 (Push & PR), when executed, then the `/pr` skill handles
   push and PR creation, and the PR URL is returned
+- Given the user chooses Option 1 (Merge locally), when executed, then the feature branch
+  is merged into the detected base branch (main/master/develop), tests run again post-merge,
+  and the feature branch is deleted
 
 ### Negative Paths
 - Given tests fail during fresh verification, when detected, then finish BLOCKS: "Build
@@ -26,6 +29,10 @@ structured options so that I can confidently close out the feature.
   "uncommitted changes exist"
 - Given story acceptance criteria are not all covered, when cross-referenced, then finish
   BLOCKS: "[criterion] is not implemented — go back to BUILD"
+- Given DRAFT ADRs remain in `.docs/decisions/`, when ADR compliance is checked, then finish
+  BLOCKS: "DRAFT ADRs remain unapproved"
+- Given implementation contradicts an APPROVED ADR, when detected, then finish BLOCKS until
+  the ADR is superseded or the code is changed
 - Given the user chooses Option 4 (Discard), when selected, then explicit confirmation is
   required: "Are you sure? This deletes all work on this branch."
 - Given the user chooses Discard but then declines confirmation, when cancelled, then the
@@ -40,4 +47,7 @@ structured options so that I can confidently close out the feature.
 - [ ] Four options presented; user choice executed
 - [ ] Option 2 delegates to /pr skill
 - [ ] Option 4 requires explicit confirmation
+- [ ] Option 1 runs post-merge tests and deletes feature branch
+- [ ] ADR compliance verified (no DRAFT ADRs, no contradictions)
+- [ ] Base branch auto-detected (main/master/develop)
 - [ ] Worktree cleanup handled after chosen option

@@ -1,6 +1,6 @@
 # Story: Pipeline Factory Orchestration
 
-**Status:** DRAFT
+**Status:** ACCEPTED
 **Epic:** EP-001 Conductor Core Engine
 **Skill:** pipeline/SKILL.md
 
@@ -11,33 +11,47 @@ phase is systematic and quality-controlled.
 ## Acceptance Criteria
 
 ### Happy Path
-- Given a plan with ordered tasks, when the pipeline runs, then it executes tasks sequentially,
-  dispatching each to a subagent via the TDD skill
+- Given a plan with ordered tasks, when the pipeline runs, then it checks each task's
+  acceptance criteria against existing code and marks already-satisfied tasks as `pre-completed`
+- Given tasks remain, when execution begins, then tasks within a batch are dispatched to
+  subagents — in parallel when files don't overlap, sequentially when they do
 - Given a task completes successfully, when verified, then its status is recorded in
   `.pipeline/task-status.json` as `completed`
-- Given a batch boundary is reached (every N tasks), when the evaluator runs, then it reviews
-  the batch diff for spec compliance, code quality, domain integrity, and security
-- Given the evaluator approves, when the next batch starts, then it proceeds with any
-  REQUEST_CHANGES noted for improvement
+- Given a batch boundary is reached, when the evaluator runs, then it reviews the batch diff
+  for spec compliance, code quality, domain integrity, and security. Evaluator frequency
+  scales by tier: Large every 4 tasks, Medium every 8 tasks, Small skips intermediate
+- Given the evaluator writes its verdict file, when the next batch starts, then it checks
+  the verdict file exists — the next batch CANNOT start without it
+- Given a batch boundary, when post-batch checks run, then the pipeline runs `/simplify`,
+  linting, and a micro-retro before proceeding
 - Given all tasks complete, when a final evaluator runs, then it reviews the full branch
   summary and writes `.pipeline/audit-trail/code-review-satisfied.md` if approved
+- Given each batch completes, when a memory checkpoint runs, then at least one `.memory/`
+  entry is persisted per batch
 
 ### Negative Paths
-- Given a task fails, when the pipeline retries, then it gets one rework attempt before
-  moving to the next task — failed tasks are logged
+- Given a task fails, when the pipeline retries, then it gets 3 rework cycles per quality
+  gate — each cycle re-dispatches the subagent with error context
+- Given all 3 rework cycles fail, when exhausted, then the pipeline escalates to the user
+  with full context
 - Given the evaluator returns BLOCK verdict, when the batch review completes, then the
-  pipeline stops and escalates to the user with full context
-- Given a task has unmet dependencies, when it is reached, then it is skipped with a warning
-  and the dependency failure is logged
+  pipeline stops and escalates to the user
+- Given a task has unmet dependencies, when it is reached, then it is blocked and reported —
+  the pipeline does not silently skip it
 - Given all tasks complete but some failed, when the build summary is shown, then it reports
   "incomplete — X/Y tasks done" and the build step fails
+- Given a connection interruption occurs mid-task, when the pipeline resumes, then it checks
+  for uncommitted changes and recent commits before re-dispatching
 
 ### Done When
-- [ ] Tasks execute sequentially from the plan
-- [ ] Each task dispatched to subagent with isolated context
+- [ ] Pre-completion scan marks already-satisfied tasks before dispatching
+- [ ] Tasks dispatch in parallel when files don't overlap, sequential when they do
 - [ ] Task status tracked in .pipeline/task-status.json
-- [ ] Evaluator runs at batch boundaries
+- [ ] Evaluator frequency scales by tier (Large/4, Medium/8, Small/skip)
+- [ ] Evaluator verdict file gates next batch
+- [ ] Post-batch: /simplify, linting, micro-retro
+- [ ] 3 rework cycles per failed task (not 1)
 - [ ] BLOCK verdict stops the pipeline
-- [ ] One rework retry per failed task
+- [ ] Memory checkpoint per batch
 - [ ] Build marked done only when all tasks complete
 - [ ] Skipped for Small tier (direct /tdd instead)
