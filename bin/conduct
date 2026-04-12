@@ -1645,7 +1645,7 @@ run_acceptance_specs() {
   step_satisfied "plan" || { fail "GATE: Need plan in .docs/plans/ first"; return 1; }
   log "Generating failing acceptance specs from stories..."
   run_claude "Run the /writing-system-tests skill. Generate failing acceptance specs from ALL stories.
-API projects: tests/integration/ or spec/integration/. Full-stack: tests/e2e/ or spec/system/. Every criterion (happy + negative) becomes a test. Commit the failing specs." "interactive"
+API projects: tests/integration/ or spec/integration/. Full-stack: tests/e2e/ or spec/system/. Every criterion (happy + negative) becomes a test. Commit the failing specs."
   if check_acceptance_specs; then
     ok "Acceptance specs created"; save_state "acceptance_specs" "done"; return 0
   fi
@@ -3029,7 +3029,7 @@ while [ "$i" -lt "${#STEP_FUNCS[@]}" ]; do
     # User validation checkpoint after key steps (interactive mode only)
     if [[ " $CHECKPOINT_STEPS " == *" ${ALL_STEPS[$i]} "* ]] && [ "${RUN_MODE}" != "auto" ] && [ -t 0 ]; then
       user_checkpoint "${ALL_STEPS[$i]}" "$i"
-      local cp_rc=$?
+      cp_rc=$?
       if [ "$cp_rc" -eq 2 ]; then
         # User chose to go back — JUMP_TO_INDEX is set
         i=$JUMP_TO_INDEX
