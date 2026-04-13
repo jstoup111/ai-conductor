@@ -41,11 +41,14 @@ export class Conductor {
       await saveStepStatus(this.stateFilePath, step.name, 'in_progress');
       state[step.name] = 'in_progress';
 
+      this.events.emit({ type: 'step_started', step: step.name, index: i });
+
       const result = await this.stepRunner.run(step.name, state);
 
       if (result.success) {
         await saveStepStatus(this.stateFilePath, step.name, 'done');
         state[step.name] = 'done';
+        this.events.emit({ type: 'step_completed', step: step.name, status: 'done' });
       }
     }
 

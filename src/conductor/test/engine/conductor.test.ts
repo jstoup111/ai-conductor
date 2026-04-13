@@ -109,4 +109,31 @@ describe('engine/conductor', () => {
       expect(result.value.feature_status).toBe('complete');
     }
   });
+
+  it('emits step_started and step_completed events', async () => {
+    const runner = createMockStepRunner();
+    const conductor = new Conductor({ stateFilePath: statePath, stepRunner: runner, events });
+
+    const emitted: Array<{ type: string; step: string }> = [];
+    events.on('step_started', (e) => {
+      if (e.type === 'step_started') emitted.push({ type: e.type, step: e.step });
+    });
+    events.on('step_completed', (e) => {
+      if (e.type === 'step_completed') emitted.push({ type: e.type, step: e.step });
+    });
+
+    await conductor.run();
+
+    // Should have started and completed events for each step
+    expect(emitted.length).toBe(ALL_STEPS.length * 2);
+
+    // Check first step events are in correct order
+    expect(emitted[0]).toEqual({ type: 'step_started', step: 'worktree' });
+    expect(emitted[1]).toEqual({ type: 'step_completed', step: 'worktree' });
+
+    // Check last step
+    const lastIdx = (ALL_STEPS.length - 1) * 2;
+    expect(emitted[lastIdx]).toEqual({ type: 'step_started', step: 'finish' });
+    expect(emitted[lastIdx + 1]).toEqual({ type: 'step_completed', step: 'finish' });
+  });
 });
