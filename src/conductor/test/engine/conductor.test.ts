@@ -890,6 +890,32 @@ describe('engine/conductor', () => {
       expect(result.state['brainstorm']).toBe('pending');
     });
 
+    it('navigateBack marks all downstream done steps as stale', () => {
+      const state: ConductState = {
+        worktree: 'done',
+        memory: 'done',
+        brainstorm: 'done',
+        complexity: 'done',
+        stories: 'done',
+        conflict_check: 'skipped',
+        plan: 'done',
+      };
+
+      const result = navigateBack(state, 'brainstorm');
+
+      // brainstorm itself is pending (not stale)
+      expect(result.state['brainstorm']).toBe('pending');
+      // Upstream steps remain done
+      expect(result.state['worktree']).toBe('done');
+      expect(result.state['memory']).toBe('done');
+      // Downstream done steps become stale
+      expect(result.state['complexity']).toBe('stale');
+      expect(result.state['stories']).toBe('stale');
+      expect(result.state['plan']).toBe('stale');
+      // Skipped steps stay skipped (markDownstreamStale only touches done)
+      expect(result.state['conflict_check']).toBe('skipped');
+    });
+
     it('getNavigableSteps returns empty array when no steps completed', () => {
       const state: ConductState = {
         worktree: 'pending',
