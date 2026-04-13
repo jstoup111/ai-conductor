@@ -2,7 +2,7 @@ import type { ConductState } from '../types/index.js';
 import type { StepName } from '../types/index.js';
 import { ConductorEventEmitter } from '../ui/events.js';
 import { readState, writeState, saveStepStatus, getStepStatus } from './state.js';
-import { ALL_STEPS, getStepIndex } from './steps.js';
+import { ALL_STEPS, getStepIndex, shouldSkipForTier } from './steps.js';
 
 export interface StepRunResult {
   success: boolean;
@@ -54,8 +54,19 @@ export class Conductor {
     };
     process.on('SIGINT', sigintHandler);
 
+    // Read complexity tier from state, default to 'L' (no skips)
+    const tier = state.complexity_tier ?? 'L';
+
     for (let i = startIndex; i < ALL_STEPS.length; i++) {
       const step = ALL_STEPS[i];
+
+      // Check if step should be skipped for this complexity tier
+      if (shouldSkipForTier(step.name, tier)) {
+        await saveStepStatus(this.stateFilePath, step.name, 'skipped');
+        state[step.name] = 'skipped';
+        this.events.emit({ type: 'tier_skip', step: step.name, tier });
+        continue;
+      }
 
       // Mark in_progress before running
       await saveStepStatus(this.stateFilePath, step.name, 'in_progress');
