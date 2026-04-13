@@ -41,4 +41,26 @@ describe('engine/conductor', () => {
     expect(runner.run).toHaveBeenCalledTimes(ALL_STEPS.length);
     expect((runner.run as ReturnType<typeof vi.fn>).mock.calls[0][0]).toBe('worktree');
   });
+
+  it('marks step in_progress before running', async () => {
+    const statusesDuringRun: Record<string, string | undefined> = {};
+    const runner: StepRunner = {
+      run: async (step: StepName, state: ConductState) => {
+        // Capture the state at the time the runner is called
+        const stateResult = await readState(statePath);
+        if (stateResult.ok) {
+          statusesDuringRun[step] = stateResult.value[step] as string | undefined;
+        }
+        return { success: true };
+      },
+    };
+    const conductor = new Conductor({ stateFilePath: statePath, stepRunner: runner, events });
+
+    await conductor.run();
+
+    // Every step should have been in_progress when its runner was called
+    expect(statusesDuringRun['worktree']).toBe('in_progress');
+    expect(statusesDuringRun['brainstorm']).toBe('in_progress');
+    expect(statusesDuringRun['finish']).toBe('in_progress');
+  });
 });

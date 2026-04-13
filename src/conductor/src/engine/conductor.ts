@@ -36,6 +36,11 @@ export class Conductor {
 
     for (let i = 0; i < ALL_STEPS.length; i++) {
       const step = ALL_STEPS[i];
+
+      // Mark in_progress before running
+      await saveStepStatus(this.stateFilePath, step.name, 'in_progress');
+      state[step.name] = 'in_progress';
+
       await this.stepRunner.run(step.name, state);
     }
   }
