@@ -486,6 +486,33 @@ describe('engine/conductor', () => {
     expect(stepsRun).not.toContain('stories');
   });
 
+  it('blocks and emits gate_blocked event when gate fails', async () => {
+    // stories requires brainstorm — leave brainstorm pending
+    await writeState(statePath, {} as ConductState);
+
+    const runner = createMockStepRunner();
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      fromStep: 'stories',
+    });
+
+    const blockedEvents: Array<{ type: string; step: string; reason: string }> = [];
+    events.on('gate_blocked', (e) => {
+      if (e.type === 'gate_blocked') {
+        blockedEvents.push({ type: e.type, step: e.step, reason: e.reason });
+      }
+    });
+
+    await conductor.run();
+
+    expect(blockedEvents.length).toBe(1);
+    expect(blockedEvents[0].type).toBe('gate_blocked');
+    expect(blockedEvents[0].step).toBe('stories');
+    expect(blockedEvents[0].reason).toContain('brainstorm');
+  });
+
   it('saves state on SIGINT before exit', async () => {
     let sigintHandler: (() => void) | undefined;
     const processOnSpy = vi.spyOn(process, 'on').mockImplementation(((
