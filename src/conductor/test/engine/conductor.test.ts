@@ -720,6 +720,91 @@ describe('engine/conductor', () => {
     expect(onCheckpoint).not.toHaveBeenCalled();
   });
 
+  it('advances when checkpoint response is continue', async () => {
+    await writeState(statePath, {
+      worktree: 'done',
+      memory: 'done',
+      brainstorm: 'done',
+      complexity: 'done',
+      stories: 'done',
+      conflict_check: 'done',
+      plan: 'done',
+      architecture_diagram: 'done',
+      architecture_review: 'done',
+      acceptance_specs: 'done',
+    } as ConductState);
+
+    const stepsRun: StepName[] = [];
+    const runner: StepRunner = {
+      run: async (step: StepName) => {
+        stepsRun.push(step);
+        return { success: true };
+      },
+    };
+    const onCheckpoint = vi.fn().mockResolvedValue('continue' as const);
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      fromStep: 'build',
+      onCheckpoint,
+    });
+
+    await conductor.run();
+
+    // After 'continue' at build checkpoint, conductor should proceed to manual_test and beyond
+    expect(stepsRun).toContain('build');
+    expect(stepsRun).toContain('manual_test');
+    expect(stepsRun).toContain('retro');
+    expect(stepsRun).toContain('finish');
+  });
+
+  it('stops and saves state when checkpoint response is quit', async () => {
+    await writeState(statePath, {
+      worktree: 'done',
+      memory: 'done',
+      brainstorm: 'done',
+      complexity: 'done',
+      stories: 'done',
+      conflict_check: 'done',
+      plan: 'done',
+      architecture_diagram: 'done',
+      architecture_review: 'done',
+      acceptance_specs: 'done',
+    } as ConductState);
+
+    const stepsRun: StepName[] = [];
+    const runner: StepRunner = {
+      run: async (step: StepName) => {
+        stepsRun.push(step);
+        return { success: true };
+      },
+    };
+    const onCheckpoint = vi.fn().mockResolvedValue('quit' as const);
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      fromStep: 'build',
+      onCheckpoint,
+    });
+
+    await conductor.run();
+
+    // Should have run build but stopped after checkpoint
+    expect(stepsRun).toContain('build');
+    expect(stepsRun).not.toContain('manual_test');
+
+    // State should be saved with build=done
+    const result = await readState(statePath);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value['build']).toBe('done');
+      // feature_status should NOT be complete
+      expect(result.value.feature_status).toBeUndefined();
+    }
+  });
+
   it('saves state on SIGINT before exit', async () => {
     let sigintHandler: (() => void) | undefined;
     const processOnSpy = vi.spyOn(process, 'on').mockImplementation(((
