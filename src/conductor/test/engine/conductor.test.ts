@@ -63,4 +63,20 @@ describe('engine/conductor', () => {
     expect(statusesDuringRun['brainstorm']).toBe('in_progress');
     expect(statusesDuringRun['finish']).toBe('in_progress');
   });
+
+  it('marks step done after success', async () => {
+    const runner = createMockStepRunner();
+    const conductor = new Conductor({ stateFilePath: statePath, stepRunner: runner, events });
+
+    await conductor.run();
+
+    // After run completes, all steps should be 'done' in state file
+    const result = await readState(statePath);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value['worktree']).toBe('done');
+      expect(result.value['brainstorm']).toBe('done');
+      expect(result.value['finish']).toBe('done');
+    }
+  });
 });
