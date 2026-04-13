@@ -993,6 +993,44 @@ describe('engine/conductor', () => {
       expect(storiesIdx).toBeGreaterThan(0);
     });
 
+    it('Stale steps re-run when conductor reaches them', async () => {
+      // Set up state where stories is stale (downstream of a back navigation)
+      await writeState(statePath, {
+        worktree: 'done',
+        memory: 'done',
+        brainstorm: 'done',
+        complexity: 'done',
+        stories: 'stale',
+      } as ConductState);
+
+      const stepsRun: StepName[] = [];
+      const runner: StepRunner = {
+        run: async (step: StepName) => {
+          stepsRun.push(step);
+          return { success: true };
+        },
+      };
+      const onCheckpoint = vi.fn().mockResolvedValue('continue' as const);
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'stories',
+        onCheckpoint,
+      });
+
+      await conductor.run();
+
+      // stories (stale) should have been run, not skipped
+      expect(stepsRun).toContain('stories');
+      // After running, stories should be done
+      const result = await readState(statePath);
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value['stories']).toBe('done');
+      }
+    });
+
     it('getNavigableSteps returns empty array when no steps completed', () => {
       const state: ConductState = {
         worktree: 'pending',
