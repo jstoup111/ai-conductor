@@ -381,6 +381,30 @@ describe('engine/conductor', () => {
     expect(stepsRun).toEqual(expectedOrder);
   });
 
+  it('marks all skipped steps as skipped in state for tier S', async () => {
+    await writeState(statePath, { complexity_tier: 'S' } as ConductState);
+
+    const runner = createMockStepRunner();
+    const conductor = new Conductor({ stateFilePath: statePath, stepRunner: runner, events });
+
+    await conductor.run();
+
+    const result = await readState(statePath);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      // All S-tier skippable steps should be 'skipped'
+      expect(result.value['conflict_check']).toBe('skipped');
+      expect(result.value['architecture_diagram']).toBe('skipped');
+      expect(result.value['architecture_review']).toBe('skipped');
+      expect(result.value['acceptance_specs']).toBe('skipped');
+      expect(result.value['retro']).toBe('skipped');
+      // Non-skippable steps should be 'done'
+      expect(result.value['worktree']).toBe('done');
+      expect(result.value['build']).toBe('done');
+      expect(result.value['finish']).toBe('done');
+    }
+  });
+
   it('saves state on SIGINT before exit', async () => {
     let sigintHandler: (() => void) | undefined;
     const processOnSpy = vi.spyOn(process, 'on').mockImplementation(((
