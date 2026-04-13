@@ -7,7 +7,7 @@ import type { StepName } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { readState, writeState } from '../../src/engine/state.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
-import { Conductor, getNavigableSteps } from '../../src/engine/conductor.js';
+import { Conductor, getNavigableSteps, navigateBack } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 
 function createMockStepRunner(result: StepRunResult = { success: true }): StepRunner {
@@ -876,6 +876,20 @@ describe('engine/conductor', () => {
         expect(step).toHaveProperty('phase');
       }
     });
+    it('navigateBack sets target step to pending', () => {
+      const state: ConductState = {
+        worktree: 'done',
+        memory: 'done',
+        brainstorm: 'done',
+        complexity: 'done',
+        stories: 'done',
+      };
+
+      const result = navigateBack(state, 'brainstorm');
+
+      expect(result.state['brainstorm']).toBe('pending');
+    });
+
     it('getNavigableSteps returns empty array when no steps completed', () => {
       const state: ConductState = {
         worktree: 'pending',

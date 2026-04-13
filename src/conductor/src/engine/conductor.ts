@@ -1,7 +1,7 @@
 import type { ConductState } from '../types/index.js';
 import type { StepName, StepStatus, Phase, RunMode } from '../types/index.js';
 import { ConductorEventEmitter } from '../ui/events.js';
-import { readState, writeState, saveStepStatus, getStepStatus } from './state.js';
+import { readState, writeState, saveStepStatus, getStepStatus, markDownstreamStale } from './state.js';
 import { ALL_STEPS, getStepIndex, shouldSkipForTier, isCheckpointStep } from './steps.js';
 import { checkGate } from './gates.js';
 
@@ -12,6 +12,17 @@ export interface NavigableStep {
   label: string;
   status: StepStatus;
   phase: Phase;
+}
+
+export function navigateBack(
+  state: ConductState,
+  target: StepName,
+): { state: ConductState; index: number } {
+  const allStepNames = ALL_STEPS.map((s) => s.name);
+  let updated = markDownstreamStale(state, target, allStepNames);
+  (updated as Record<string, unknown>)[target] = 'pending';
+  const index = getStepIndex(target);
+  return { state: updated, index };
 }
 
 export function getNavigableSteps(state: ConductState): NavigableStep[] {
