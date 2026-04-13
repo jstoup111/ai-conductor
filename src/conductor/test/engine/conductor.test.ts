@@ -79,4 +79,21 @@ describe('engine/conductor', () => {
       expect(result.value['finish']).toBe('done');
     }
   });
+
+  it('advances to next step after success', async () => {
+    const callOrder: StepName[] = [];
+    const runner: StepRunner = {
+      run: async (step: StepName) => {
+        callOrder.push(step);
+        return { success: true };
+      },
+    };
+    const conductor = new Conductor({ stateFilePath: statePath, stepRunner: runner, events });
+
+    await conductor.run();
+
+    // Steps should be called in exact ALL_STEPS order
+    const expectedOrder = ALL_STEPS.map((s) => s.name);
+    expect(callOrder).toEqual(expectedOrder);
+  });
 });
