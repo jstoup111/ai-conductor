@@ -544,6 +544,36 @@ describe('engine/conductor', () => {
     expect(blockedEvents.length).toBe(0);
   });
 
+  it('passes gate when prerequisite is stale', async () => {
+    // brainstorm=stale should still satisfy the stories gate
+    await writeState(statePath, { brainstorm: 'stale' } as ConductState);
+
+    const stepsRun: StepName[] = [];
+    const runner: StepRunner = {
+      run: async (step: StepName) => {
+        stepsRun.push(step);
+        return { success: true };
+      },
+    };
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      fromStep: 'stories',
+    });
+
+    const blockedEvents: Array<{ step: string }> = [];
+    events.on('gate_blocked', (e) => {
+      if (e.type === 'gate_blocked') blockedEvents.push({ step: e.step });
+    });
+
+    await conductor.run();
+
+    // stories should have been run — stale satisfies gates
+    expect(stepsRun).toContain('stories');
+    expect(blockedEvents.length).toBe(0);
+  });
+
   it('saves state on SIGINT before exit', async () => {
     let sigintHandler: (() => void) | undefined;
     const processOnSpy = vi.spyOn(process, 'on').mockImplementation(((
