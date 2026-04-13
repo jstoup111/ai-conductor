@@ -428,6 +428,33 @@ describe('engine/conductor', () => {
     expect(tierSkipEvents.every((e) => e.tier === 'S')).toBe(true);
   });
 
+  it('runs all steps when complexity_tier is not set (defaults to L)', async () => {
+    // No complexity_tier in state
+    await writeState(statePath, {} as ConductState);
+
+    const stepsRun: StepName[] = [];
+    const runner: StepRunner = {
+      run: async (step: StepName) => {
+        stepsRun.push(step);
+        return { success: true };
+      },
+    };
+    const conductor = new Conductor({ stateFilePath: statePath, stepRunner: runner, events });
+
+    await conductor.run();
+
+    // L tier has no skips, so all steps should run
+    const expectedOrder = ALL_STEPS.map((s) => s.name);
+    expect(stepsRun).toEqual(expectedOrder);
+
+    // No tier_skip events should be emitted
+    const tierSkipEvents: Array<{ step: string }> = [];
+    events.on('tier_skip', (e) => {
+      if (e.type === 'tier_skip') tierSkipEvents.push({ step: e.step });
+    });
+    expect(tierSkipEvents.length).toBe(0);
+  });
+
   it('saves state on SIGINT before exit', async () => {
     let sigintHandler: (() => void) | undefined;
     const processOnSpy = vi.spyOn(process, 'on').mockImplementation(((
