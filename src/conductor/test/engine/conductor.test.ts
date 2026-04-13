@@ -611,6 +611,43 @@ describe('engine/conductor', () => {
     expect(onCheckpoint).toHaveBeenCalledWith('build');
   });
 
+  it('fires checkpoint_reached event after manual_test step', async () => {
+    // Set up prerequisites so manual_test gate passes
+    await writeState(statePath, {
+      worktree: 'done',
+      memory: 'done',
+      brainstorm: 'done',
+      complexity: 'done',
+      stories: 'done',
+      conflict_check: 'done',
+      plan: 'done',
+      architecture_diagram: 'done',
+      architecture_review: 'done',
+      acceptance_specs: 'done',
+      build: 'done',
+    } as ConductState);
+
+    const runner = createMockStepRunner();
+    const onCheckpoint = vi.fn().mockResolvedValue('continue' as const);
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      fromStep: 'manual_test',
+      onCheckpoint,
+    });
+
+    const checkpointEvents: Array<{ step: string }> = [];
+    events.on('checkpoint_reached', (e) => {
+      if (e.type === 'checkpoint_reached') checkpointEvents.push({ step: e.step });
+    });
+
+    await conductor.run();
+
+    expect(checkpointEvents.some((e) => e.step === 'manual_test')).toBe(true);
+    expect(onCheckpoint).toHaveBeenCalledWith('manual_test');
+  });
+
   it('saves state on SIGINT before exit', async () => {
     let sigintHandler: (() => void) | undefined;
     const processOnSpy = vi.spyOn(process, 'on').mockImplementation(((
