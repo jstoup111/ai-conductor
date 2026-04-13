@@ -1,9 +1,11 @@
 import type { ConductState } from '../types/index.js';
-import type { StepName } from '../types/index.js';
+import type { StepName, RunMode } from '../types/index.js';
 import { ConductorEventEmitter } from '../ui/events.js';
 import { readState, writeState, saveStepStatus, getStepStatus } from './state.js';
-import { ALL_STEPS, getStepIndex, shouldSkipForTier } from './steps.js';
+import { ALL_STEPS, getStepIndex, shouldSkipForTier, isCheckpointStep } from './steps.js';
 import { checkGate } from './gates.js';
+
+export type CheckpointResponse = 'continue' | 'back' | 'quit';
 
 export interface StepRunResult {
   success: boolean;
@@ -20,6 +22,8 @@ export interface ConductorOptions {
   events: ConductorEventEmitter;
   resume?: boolean;
   fromStep?: StepName;
+  mode?: RunMode;
+  onCheckpoint?: (step: StepName) => Promise<CheckpointResponse>;
 }
 
 export class Conductor {
@@ -28,6 +32,8 @@ export class Conductor {
   private events: ConductorEventEmitter;
   private resume: boolean;
   private fromStep?: StepName;
+  private mode: RunMode;
+  private onCheckpoint: (step: StepName) => Promise<CheckpointResponse>;
 
   constructor(opts: ConductorOptions) {
     this.stateFilePath = opts.stateFilePath;
@@ -35,6 +41,8 @@ export class Conductor {
     this.events = opts.events;
     this.resume = opts.resume ?? false;
     this.fromStep = opts.fromStep;
+    this.mode = opts.mode ?? 'default';
+    this.onCheckpoint = opts.onCheckpoint ?? (async () => 'continue' as const);
   }
 
   async run(): Promise<void> {
@@ -90,6 +98,18 @@ export class Conductor {
         await saveStepStatus(this.stateFilePath, step.name, 'done');
         state[step.name] = 'done';
         this.events.emit({ type: 'step_completed', step: step.name, status: 'done' });
+
+        // Checkpoint handling
+        if (isCheckpointStep(step.name) && this.mode !== 'auto') {
+          this.events.emit({ type: 'checkpoint_reached', step: step.name });
+          const response = await this.onCheckpoint(step.name);
+          if (response === 'quit') {
+            await writeState(this.stateFilePath, state);
+            process.off('SIGINT', sigintHandler);
+            return;
+          }
+          // 'continue' and 'back' both proceed (back handled in Task 25)
+        }
       } else {
         // Mark step as failed, emit event, save state, and stop
         await saveStepStatus(this.stateFilePath, step.name, 'failed');
