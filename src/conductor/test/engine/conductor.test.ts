@@ -876,5 +876,15 @@ describe('engine/conductor', () => {
         expect(step).toHaveProperty('phase');
       }
     });
+    it('getNavigableSteps returns empty array when no steps completed', () => {
+      const state: ConductState = {
+        worktree: 'pending',
+        memory: 'in_progress',
+      };
+
+      const navigable = getNavigableSteps(state);
+
+      expect(navigable).toEqual([]);
+    });
   });
 });
