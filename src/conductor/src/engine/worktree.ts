@@ -1,4 +1,4 @@
-import { mkdir, readdir, readFile } from 'fs/promises';
+import { mkdir, readdir, readFile, stat } from 'fs/promises';
 import { join } from 'path';
 import { execFile as execFileCb } from 'child_process';
 import { promisify } from 'util';
@@ -37,15 +37,71 @@ export class WorktreeManager {
   constructor(private projectRoot: string) {}
 
   async create(featureDesc: string): Promise<{ path: string; branch: string }> {
-    const slug = slugify(featureDesc);
+    const baseSlug = slugify(featureDesc);
     const worktreesDir = join(this.projectRoot, '.worktrees');
-    const worktreePath = join(worktreesDir, slug);
-    const branch = `feature/${slug}`;
 
     await mkdir(worktreesDir, { recursive: true });
+
+    // Check if worktree already exists for this slug
+    let slug = baseSlug;
+    let worktreePath = join(worktreesDir, slug);
+    let branch = `feature/${slug}`;
+
+    if (await this.dirExists(worktreePath)) {
+      // Check if same branch — reuse
+      try {
+        const existingBranch = await git(worktreePath, 'rev-parse', '--abbrev-ref', 'HEAD');
+        if (existingBranch === branch) {
+          return { path: worktreePath, branch };
+        }
+      } catch {
+        // directory exists but isn't a valid worktree — fall through to collision handling
+      }
+      // Slug collision with different branch — append suffix
+      let suffix = 2;
+      while (await this.dirExists(join(worktreesDir, `${baseSlug}-${suffix}`))) {
+        suffix++;
+      }
+      slug = `${baseSlug}-${suffix}`;
+      worktreePath = join(worktreesDir, slug);
+      branch = `feature/${slug}`;
+    }
+
     await git(this.projectRoot, 'worktree', 'add', '-b', branch, worktreePath);
 
     return { path: worktreePath, branch };
+  }
+
+  async cleanup(name: string): Promise<void> {
+    const worktreePath = join(this.projectRoot, '.worktrees', name);
+    const branch = `feature/${name}`;
+
+    // Remove worktree (--force handles dirty worktrees)
+    try {
+      await git(this.projectRoot, 'worktree', 'remove', '--force', worktreePath);
+    } catch {
+      // If worktree remove fails (e.g., already removed), clean up manually
+      const { rm } = await import('fs/promises');
+      await rm(worktreePath, { recursive: true, force: true });
+      // Prune stale worktree entries
+      await git(this.projectRoot, 'worktree', 'prune');
+    }
+
+    // Delete the branch
+    try {
+      await git(this.projectRoot, 'branch', '-D', branch);
+    } catch {
+      // Branch may already be deleted — ignore
+    }
+  }
+
+  private async dirExists(path: string): Promise<boolean> {
+    try {
+      const s = await stat(path);
+      return s.isDirectory();
+    } catch {
+      return false;
+    }
   }
 
   async scan(): Promise<WorktreeInfo[]> {
