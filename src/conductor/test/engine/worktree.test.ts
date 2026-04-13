@@ -6,5 +6,15 @@ describe('engine/worktree', () => {
     it('returns lowercase with spaces as hyphens', () => {
       expect(slugify('URL shortener service')).toBe('url-shortener-service');
     });
+
+    it('truncates at 50 characters', () => {
+      const long = 'a very long feature description that definitely exceeds fifty characters in length';
+      const result = slugify(long);
+      expect(result.length).toBeLessThanOrEqual(50);
+    });
+
+    it('removes special characters', () => {
+      expect(slugify('hello@world! (v2.0)')).toBe('helloworld-v20');
+    });
   });
 });
