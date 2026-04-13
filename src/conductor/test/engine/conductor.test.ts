@@ -682,6 +682,44 @@ describe('engine/conductor', () => {
     }
   });
 
+  it('skips checkpoint when mode is auto', async () => {
+    await writeState(statePath, {
+      worktree: 'done',
+      memory: 'done',
+      brainstorm: 'done',
+      complexity: 'done',
+      stories: 'done',
+      conflict_check: 'done',
+      plan: 'done',
+      architecture_diagram: 'done',
+      architecture_review: 'done',
+      acceptance_specs: 'done',
+    } as ConductState);
+
+    const runner = createMockStepRunner();
+    const onCheckpoint = vi.fn().mockResolvedValue('continue' as const);
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      fromStep: 'build',
+      mode: 'auto',
+      onCheckpoint,
+    });
+
+    const checkpointEvents: Array<{ step: string }> = [];
+    events.on('checkpoint_reached', (e) => {
+      if (e.type === 'checkpoint_reached') checkpointEvents.push({ step: e.step });
+    });
+
+    await conductor.run();
+
+    // In auto mode, no checkpoint events should be emitted
+    expect(checkpointEvents).toHaveLength(0);
+    // onCheckpoint should never be called
+    expect(onCheckpoint).not.toHaveBeenCalled();
+  });
+
   it('saves state on SIGINT before exit', async () => {
     let sigintHandler: (() => void) | undefined;
     const processOnSpy = vi.spyOn(process, 'on').mockImplementation(((
