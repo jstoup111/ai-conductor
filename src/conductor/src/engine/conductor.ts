@@ -177,6 +177,7 @@ export class Conductor {
     process.off('SIGINT', sigintHandler);
 
     // All steps completed successfully
+    this.events.emit({ type: 'feature_complete', prUrl: state.pr_url });
     state.feature_status = 'complete';
     await writeState(this.stateFilePath, state);
   }

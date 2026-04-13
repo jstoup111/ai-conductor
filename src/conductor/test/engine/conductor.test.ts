@@ -1096,6 +1096,24 @@ describe('engine/conductor', () => {
       }
     });
 
+  });
+
+  describe('feature completion', () => {
+    it('emits feature_complete event when all steps done', async () => {
+      const runner = createMockStepRunner();
+      const conductor = new Conductor({ stateFilePath: statePath, stepRunner: runner, events });
+
+      const completeEvents: Array<{ type: string; prUrl?: string }> = [];
+      events.on('feature_complete', (e) => {
+        if (e.type === 'feature_complete') completeEvents.push({ type: e.type, prUrl: (e as { type: string; prUrl?: string }).prUrl });
+      });
+
+      await conductor.run();
+
+      expect(completeEvents.length).toBe(1);
+      expect(completeEvents[0].type).toBe('feature_complete');
+    });
+
     it('getNavigableSteps returns empty array when no steps completed', () => {
       const state: ConductState = {
         worktree: 'pending',
