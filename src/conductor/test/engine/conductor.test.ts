@@ -405,6 +405,29 @@ describe('engine/conductor', () => {
     }
   });
 
+  it('emits tier_skip event for skipped steps', async () => {
+    await writeState(statePath, { complexity_tier: 'S' } as ConductState);
+
+    const runner = createMockStepRunner();
+    const conductor = new Conductor({ stateFilePath: statePath, stepRunner: runner, events });
+
+    const tierSkipEvents: Array<{ step: string; tier: string }> = [];
+    events.on('tier_skip', (e) => {
+      if (e.type === 'tier_skip') tierSkipEvents.push({ step: e.step, tier: e.tier });
+    });
+
+    await conductor.run();
+
+    expect(tierSkipEvents.length).toBe(5);
+    expect(tierSkipEvents.map((e) => e.step)).toContain('conflict_check');
+    expect(tierSkipEvents.map((e) => e.step)).toContain('architecture_diagram');
+    expect(tierSkipEvents.map((e) => e.step)).toContain('architecture_review');
+    expect(tierSkipEvents.map((e) => e.step)).toContain('acceptance_specs');
+    expect(tierSkipEvents.map((e) => e.step)).toContain('retro');
+    // All events should have tier 'S'
+    expect(tierSkipEvents.every((e) => e.tier === 'S')).toBe(true);
+  });
+
   it('saves state on SIGINT before exit', async () => {
     let sigintHandler: (() => void) | undefined;
     const processOnSpy = vi.spyOn(process, 'on').mockImplementation(((
