@@ -48,5 +48,9 @@ export class Conductor {
         state[step.name] = 'done';
       }
     }
+
+    // All steps completed successfully
+    state.feature_status = 'complete';
+    await writeState(this.stateFilePath, state);
   }
 }

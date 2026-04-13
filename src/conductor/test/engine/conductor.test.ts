@@ -96,4 +96,17 @@ describe('engine/conductor', () => {
     const expectedOrder = ALL_STEPS.map((s) => s.name);
     expect(callOrder).toEqual(expectedOrder);
   });
+
+  it('sets feature_status=complete when all steps done', async () => {
+    const runner = createMockStepRunner();
+    const conductor = new Conductor({ stateFilePath: statePath, stepRunner: runner, events });
+
+    await conductor.run();
+
+    const result = await readState(statePath);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.feature_status).toBe('complete');
+    }
+  });
 });
