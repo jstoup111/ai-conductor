@@ -363,6 +363,24 @@ describe('engine/conductor', () => {
     }
   });
 
+  it('runs all steps when tier is M', async () => {
+    await writeState(statePath, { complexity_tier: 'M' } as ConductState);
+
+    const stepsRun: StepName[] = [];
+    const runner: StepRunner = {
+      run: async (step: StepName) => {
+        stepsRun.push(step);
+        return { success: true };
+      },
+    };
+    const conductor = new Conductor({ stateFilePath: statePath, stepRunner: runner, events });
+
+    await conductor.run();
+
+    const expectedOrder = ALL_STEPS.map((s) => s.name);
+    expect(stepsRun).toEqual(expectedOrder);
+  });
+
   it('saves state on SIGINT before exit', async () => {
     let sigintHandler: (() => void) | undefined;
     const processOnSpy = vi.spyOn(process, 'on').mockImplementation(((
