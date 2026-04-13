@@ -513,6 +513,37 @@ describe('engine/conductor', () => {
     expect(blockedEvents[0].reason).toContain('brainstorm');
   });
 
+  it('passes gate when prerequisite is done', async () => {
+    // brainstorm=done satisfies stories prerequisite
+    await writeState(statePath, { brainstorm: 'done' } as ConductState);
+
+    const stepsRun: StepName[] = [];
+    const runner: StepRunner = {
+      run: async (step: StepName) => {
+        stepsRun.push(step);
+        return { success: true };
+      },
+    };
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      fromStep: 'stories',
+    });
+
+    const blockedEvents: Array<{ step: string }> = [];
+    events.on('gate_blocked', (e) => {
+      if (e.type === 'gate_blocked') blockedEvents.push({ step: e.step });
+    });
+
+    await conductor.run();
+
+    // stories should have been run
+    expect(stepsRun).toContain('stories');
+    // No gate_blocked events
+    expect(blockedEvents.length).toBe(0);
+  });
+
   it('saves state on SIGINT before exit', async () => {
     let sigintHandler: (() => void) | undefined;
     const processOnSpy = vi.spyOn(process, 'on').mockImplementation(((
