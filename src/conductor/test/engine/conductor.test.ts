@@ -1031,6 +1031,71 @@ describe('engine/conductor', () => {
       }
     });
 
+    it('Cancel navigation (no target) returns to checkpoint without state changes', async () => {
+      await writeState(statePath, {
+        worktree: 'done',
+        memory: 'done',
+        brainstorm: 'done',
+        complexity: 'done',
+        stories: 'done',
+        conflict_check: 'done',
+        plan: 'done',
+        architecture_diagram: 'done',
+        architecture_review: 'done',
+        acceptance_specs: 'done',
+      } as ConductState);
+
+      const stepsRun: StepName[] = [];
+      const runner: StepRunner = {
+        run: async (step: StepName) => {
+          stepsRun.push(step);
+          return { success: true };
+        },
+      };
+
+      // First checkpoint: back then cancel (null), second checkpoint: continue
+      let checkpointCallCount = 0;
+      const onCheckpoint = vi.fn(async () => {
+        checkpointCallCount++;
+        if (checkpointCallCount === 1) return 'back' as const;
+        return 'continue' as const;
+      });
+
+      // onNavigate returns null (user cancels)
+      const onNavigate = vi.fn(async () => null);
+
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'build',
+        onCheckpoint,
+        onNavigate,
+      });
+
+      const navEvents: Array<{ from: string; to: string }> = [];
+      events.on('navigation_back', (e) => {
+        if (e.type === 'navigation_back') navEvents.push({ from: e.from, to: e.to });
+      });
+
+      await conductor.run();
+
+      // onNavigate was called but returned null
+      expect(onNavigate).toHaveBeenCalled();
+      // No navigation_back events
+      expect(navEvents).toHaveLength(0);
+      // Conductor should have continued forward (build, manual_test, retro, finish)
+      expect(stepsRun).toContain('build');
+      expect(stepsRun).toContain('manual_test');
+      expect(stepsRun).toContain('finish');
+      // State should not have been mutated by navigation
+      const result = await readState(statePath);
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value['stories']).toBe('done');
+      }
+    });
+
     it('getNavigableSteps returns empty array when no steps completed', () => {
       const state: ConductState = {
         worktree: 'pending',
