@@ -1,11 +1,32 @@
 import type { ConductState } from '../types/index.js';
-import type { StepName, RunMode } from '../types/index.js';
+import type { StepName, StepStatus, Phase, RunMode } from '../types/index.js';
 import { ConductorEventEmitter } from '../ui/events.js';
 import { readState, writeState, saveStepStatus, getStepStatus } from './state.js';
 import { ALL_STEPS, getStepIndex, shouldSkipForTier, isCheckpointStep } from './steps.js';
 import { checkGate } from './gates.js';
 
 export type CheckpointResponse = 'continue' | 'back' | 'quit';
+
+export interface NavigableStep {
+  name: StepName;
+  label: string;
+  status: StepStatus;
+  phase: Phase;
+}
+
+export function getNavigableSteps(state: ConductState): NavigableStep[] {
+  return ALL_STEPS
+    .filter((step) => {
+      const status = state[step.name];
+      return status === 'done' || status === 'stale';
+    })
+    .map((step) => ({
+      name: step.name,
+      label: step.label,
+      status: state[step.name] as StepStatus,
+      phase: step.phase,
+    }));
+}
 
 export interface StepRunResult {
   success: boolean;

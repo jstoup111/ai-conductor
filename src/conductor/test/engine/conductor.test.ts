@@ -7,7 +7,7 @@ import type { StepName } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { readState, writeState } from '../../src/engine/state.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
-import { Conductor } from '../../src/engine/conductor.js';
+import { Conductor, getNavigableSteps } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 
 function createMockStepRunner(result: StepRunResult = { success: true }): StepRunner {
@@ -848,5 +848,33 @@ describe('engine/conductor', () => {
     expect(result.ok).toBe(true);
 
     processOnSpy.mockRestore();
+  });
+
+  describe('backward navigation', () => {
+    it('getNavigableSteps returns only done and stale steps', () => {
+      const state: ConductState = {
+        worktree: 'done',
+        memory: 'done',
+        brainstorm: 'in_progress',
+        complexity: 'pending',
+        stories: 'stale',
+      };
+
+      const navigable = getNavigableSteps(state);
+
+      const names = navigable.map((s) => s.name);
+      expect(names).toContain('worktree');
+      expect(names).toContain('memory');
+      expect(names).toContain('stories');
+      expect(names).not.toContain('brainstorm');
+      expect(names).not.toContain('complexity');
+      // Each entry should have name, label, status, phase
+      for (const step of navigable) {
+        expect(step).toHaveProperty('name');
+        expect(step).toHaveProperty('label');
+        expect(step).toHaveProperty('status');
+        expect(step).toHaveProperty('phase');
+      }
+    });
   });
 });
