@@ -273,6 +273,13 @@ describe('engine/conductor', () => {
   });
 
   it('with fromStep option starts at specified step', async () => {
+    // Pre-populate prerequisites so gate passes
+    await writeState(statePath, {
+      worktree: 'done',
+      memory: 'done',
+      brainstorm: 'done',
+    } as ConductState);
+
     const stepsRun: StepName[] = [];
     const runner: StepRunner = {
       run: async (step: StepName) => {
@@ -453,6 +460,30 @@ describe('engine/conductor', () => {
       if (e.type === 'tier_skip') tierSkipEvents.push({ step: e.step });
     });
     expect(tierSkipEvents.length).toBe(0);
+  });
+
+  it('checks gate before running each step', async () => {
+    // stories requires brainstorm — set brainstorm='pending', start from stories
+    await writeState(statePath, {} as ConductState);
+
+    const stepsRun: StepName[] = [];
+    const runner: StepRunner = {
+      run: async (step: StepName) => {
+        stepsRun.push(step);
+        return { success: true };
+      },
+    };
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      fromStep: 'stories',
+    });
+
+    await conductor.run();
+
+    // stories should NOT have been run because brainstorm is pending
+    expect(stepsRun).not.toContain('stories');
   });
 
   it('saves state on SIGINT before exit', async () => {

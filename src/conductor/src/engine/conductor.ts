@@ -3,6 +3,7 @@ import type { StepName } from '../types/index.js';
 import { ConductorEventEmitter } from '../ui/events.js';
 import { readState, writeState, saveStepStatus, getStepStatus } from './state.js';
 import { ALL_STEPS, getStepIndex, shouldSkipForTier } from './steps.js';
+import { checkGate } from './gates.js';
 
 export interface StepRunResult {
   success: boolean;
@@ -66,6 +67,15 @@ export class Conductor {
         state[step.name] = 'skipped';
         this.events.emit({ type: 'tier_skip', step: step.name, tier });
         continue;
+      }
+
+      // Check gate: all prerequisites must be satisfied
+      const gate = checkGate(step.name, state);
+      if (!gate.passed) {
+        this.events.emit({ type: 'gate_blocked', step: step.name, reason: gate.reason });
+        await writeState(this.stateFilePath, state);
+        process.off('SIGINT', sigintHandler);
+        return;
       }
 
       // Mark in_progress before running
