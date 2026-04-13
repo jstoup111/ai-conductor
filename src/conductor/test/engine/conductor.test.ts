@@ -136,4 +136,49 @@ describe('engine/conductor', () => {
     expect(emitted[lastIdx]).toEqual({ type: 'step_started', step: 'finish' });
     expect(emitted[lastIdx + 1]).toEqual({ type: 'step_completed', step: 'finish' });
   });
+
+  it('saves state on SIGINT before exit', async () => {
+    let sigintHandler: (() => void) | undefined;
+    const processOnSpy = vi.spyOn(process, 'on').mockImplementation(((
+      event: string,
+      handler: (...args: unknown[]) => void,
+    ) => {
+      if (event === 'SIGINT') {
+        sigintHandler = handler as () => void;
+      }
+      return process;
+    }) as typeof process.on);
+
+    // Create a runner that blocks on the 3rd step so we can trigger SIGINT
+    let stepCount = 0;
+    let resolveBlock: (() => void) | undefined;
+    const blockPromise = new Promise<void>((resolve) => {
+      resolveBlock = resolve;
+    });
+
+    const runner: StepRunner = {
+      run: async (step: StepName) => {
+        stepCount++;
+        if (stepCount === 3) {
+          // Trigger SIGINT while we're "running" step 3
+          if (sigintHandler) sigintHandler();
+          // Let the step finish after SIGINT handler runs
+          resolveBlock!();
+        }
+        return { success: true };
+      },
+    };
+
+    const conductor = new Conductor({ stateFilePath: statePath, stepRunner: runner, events });
+    await conductor.run();
+
+    // SIGINT handler should have been registered
+    expect(processOnSpy).toHaveBeenCalledWith('SIGINT', expect.any(Function));
+
+    // State should have been saved (handler calls writeState)
+    const result = await readState(statePath);
+    expect(result.ok).toBe(true);
+
+    processOnSpy.mockRestore();
+  });
 });

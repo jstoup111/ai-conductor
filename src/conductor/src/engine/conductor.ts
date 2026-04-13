@@ -34,6 +34,12 @@ export class Conductor {
     const stateResult = await readState(this.stateFilePath);
     let state: ConductState = stateResult.ok ? stateResult.value : {};
 
+    // Save state on SIGINT before exit
+    const sigintHandler = async () => {
+      await writeState(this.stateFilePath, state);
+    };
+    process.on('SIGINT', sigintHandler);
+
     for (let i = 0; i < ALL_STEPS.length; i++) {
       const step = ALL_STEPS[i];
 
@@ -51,6 +57,9 @@ export class Conductor {
         this.events.emit({ type: 'step_completed', step: step.name, status: 'done' });
       }
     }
+
+    // Clean up SIGINT handler
+    process.off('SIGINT', sigintHandler);
 
     // All steps completed successfully
     state.feature_status = 'complete';
