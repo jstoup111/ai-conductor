@@ -916,6 +916,21 @@ describe('engine/conductor', () => {
       expect(result.state['conflict_check']).toBe('skipped');
     });
 
+    it('navigateBack returns new loop index at target step', () => {
+      const state: ConductState = {
+        worktree: 'done',
+        memory: 'done',
+        brainstorm: 'done',
+        complexity: 'done',
+      };
+
+      const result = navigateBack(state, 'brainstorm');
+
+      // brainstorm is index 2 in ALL_STEPS
+      const expectedIndex = ALL_STEPS.findIndex((s) => s.name === 'brainstorm');
+      expect(result.index).toBe(expectedIndex);
+    });
+
     it('getNavigableSteps returns empty array when no steps completed', () => {
       const state: ConductState = {
         worktree: 'pending',
