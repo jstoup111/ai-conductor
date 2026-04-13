@@ -1,0 +1,2 @@
+#!/bin/bash
+exec node "$(dirname "$0")/../src/conductor/dist/index.js" "$@"
