@@ -1114,6 +1114,31 @@ describe('engine/conductor', () => {
       expect(completeEvents[0].type).toBe('feature_complete');
     });
 
+    it('stores prUrl in state when finish step returns a URL', async () => {
+      const runner: StepRunner = {
+        run: async (step: StepName) => {
+          if (step === 'finish') return { success: true, output: 'https://github.com/org/repo/pull/42' };
+          return { success: true };
+        },
+      };
+      const conductor = new Conductor({ stateFilePath: statePath, stepRunner: runner, events });
+
+      const completeEvents: Array<{ prUrl?: string }> = [];
+      events.on('feature_complete', (e) => {
+        if (e.type === 'feature_complete') completeEvents.push({ prUrl: (e as { type: string; prUrl?: string }).prUrl });
+      });
+
+      await conductor.run();
+
+      const result = await readState(statePath);
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value.pr_url).toBe('https://github.com/org/repo/pull/42');
+      }
+      // feature_complete event should include the prUrl
+      expect(completeEvents[0].prUrl).toBe('https://github.com/org/repo/pull/42');
+    });
+
     it('getNavigableSteps returns empty array when no steps completed', () => {
       const state: ConductState = {
         worktree: 'pending',

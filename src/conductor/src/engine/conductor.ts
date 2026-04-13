@@ -134,6 +134,14 @@ export class Conductor {
         state[step.name] = 'done';
         this.events.emit({ type: 'step_completed', step: step.name, status: 'done' });
 
+        // Store PR URL from finish step output
+        if (step.name === 'finish' && result.output) {
+          const urlMatch = result.output.match(/https?:\/\/[^\s]+\/pull\/\d+/);
+          if (urlMatch) {
+            state.pr_url = urlMatch[0];
+          }
+        }
+
         // Checkpoint handling
         if (isCheckpointStep(step.name) && this.mode !== 'auto') {
           this.events.emit({ type: 'checkpoint_reached', step: step.name });
