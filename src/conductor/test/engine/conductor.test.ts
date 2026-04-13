@@ -931,6 +931,68 @@ describe('engine/conductor', () => {
       expect(result.index).toBe(expectedIndex);
     });
 
+    it('Conductor jumps to target index after back navigation', async () => {
+      // Set up all prerequisites done through build (a checkpoint step)
+      await writeState(statePath, {
+        worktree: 'done',
+        memory: 'done',
+        brainstorm: 'done',
+        complexity: 'done',
+        stories: 'done',
+        conflict_check: 'done',
+        plan: 'done',
+        architecture_diagram: 'done',
+        architecture_review: 'done',
+        acceptance_specs: 'done',
+      } as ConductState);
+
+      const stepsRun: StepName[] = [];
+      const runner: StepRunner = {
+        run: async (step: StepName) => {
+          stepsRun.push(step);
+          return { success: true };
+        },
+      };
+
+      // First checkpoint (build) returns 'back', subsequent ones return 'continue'
+      let checkpointCallCount = 0;
+      const onCheckpoint = vi.fn(async () => {
+        checkpointCallCount++;
+        if (checkpointCallCount === 1) return 'back' as const;
+        return 'continue' as const;
+      });
+
+      const onNavigate = vi.fn(async () => 'stories' as StepName);
+
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'build',
+        onCheckpoint,
+        onNavigate,
+      });
+
+      const navEvents: Array<{ from: string; to: string }> = [];
+      events.on('navigation_back', (e) => {
+        if (e.type === 'navigation_back') navEvents.push({ from: e.from, to: e.to });
+      });
+
+      await conductor.run();
+
+      // onNavigate should have been called
+      expect(onNavigate).toHaveBeenCalled();
+      // navigation_back event should have been emitted
+      expect(navEvents.length).toBe(1);
+      expect(navEvents[0].from).toBe('build');
+      expect(navEvents[0].to).toBe('stories');
+      // After navigating back to stories, conductor should re-run from stories onward
+      // stepsRun should contain: build (first run), then stories, conflict_check, plan, ...
+      expect(stepsRun[0]).toBe('build');
+      const storiesIdx = stepsRun.indexOf('stories');
+      expect(storiesIdx).toBeGreaterThan(0);
+    });
+
     it('getNavigableSteps returns empty array when no steps completed', () => {
       const state: ConductState = {
         worktree: 'pending',

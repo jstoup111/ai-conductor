@@ -56,6 +56,7 @@ export interface ConductorOptions {
   fromStep?: StepName;
   mode?: RunMode;
   onCheckpoint?: (step: StepName) => Promise<CheckpointResponse>;
+  onNavigate?: (steps: NavigableStep[]) => Promise<StepName | null>;
 }
 
 export class Conductor {
@@ -66,6 +67,7 @@ export class Conductor {
   private fromStep?: StepName;
   private mode: RunMode;
   private onCheckpoint: (step: StepName) => Promise<CheckpointResponse>;
+  private onNavigate: (steps: NavigableStep[]) => Promise<StepName | null>;
 
   constructor(opts: ConductorOptions) {
     this.stateFilePath = opts.stateFilePath;
@@ -75,6 +77,7 @@ export class Conductor {
     this.fromStep = opts.fromStep;
     this.mode = opts.mode ?? 'default';
     this.onCheckpoint = opts.onCheckpoint ?? (async () => 'continue' as const);
+    this.onNavigate = opts.onNavigate ?? (async () => null);
   }
 
   async run(): Promise<void> {
@@ -140,7 +143,19 @@ export class Conductor {
             process.off('SIGINT', sigintHandler);
             return;
           }
-          // 'continue' and 'back' both proceed (back handled in Task 25)
+          if (response === 'back') {
+            const navigable = getNavigableSteps(state);
+            const target = await this.onNavigate(navigable);
+            if (target) {
+              const nav = navigateBack(state, target);
+              this.events.emit({ type: 'navigation_back', from: step.name, to: target });
+              state = nav.state;
+              await writeState(this.stateFilePath, state);
+              i = nav.index - 1; // for loop will i++
+              continue;
+            }
+          }
+          // 'continue' proceeds normally
         }
       } else {
         // Mark step as failed, emit event, save state, and stop
