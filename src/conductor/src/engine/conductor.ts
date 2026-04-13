@@ -1,8 +1,8 @@
 import type { ConductState } from '../types/index.js';
 import type { StepName } from '../types/index.js';
 import { ConductorEventEmitter } from '../ui/events.js';
-import { readState, writeState, saveStepStatus } from './state.js';
-import { ALL_STEPS } from './steps.js';
+import { readState, writeState, saveStepStatus, getStepStatus } from './state.js';
+import { ALL_STEPS, getStepIndex } from './steps.js';
 
 export interface StepRunResult {
   success: boolean;
@@ -17,22 +17,36 @@ export interface ConductorOptions {
   stateFilePath: string;
   stepRunner: StepRunner;
   events: ConductorEventEmitter;
+  resume?: boolean;
+  fromStep?: StepName;
 }
 
 export class Conductor {
   private stateFilePath: string;
   private stepRunner: StepRunner;
   private events: ConductorEventEmitter;
+  private resume: boolean;
+  private fromStep?: StepName;
 
   constructor(opts: ConductorOptions) {
     this.stateFilePath = opts.stateFilePath;
     this.stepRunner = opts.stepRunner;
     this.events = opts.events;
+    this.resume = opts.resume ?? false;
+    this.fromStep = opts.fromStep;
   }
 
   async run(): Promise<void> {
     const stateResult = await readState(this.stateFilePath);
     let state: ConductState = stateResult.ok ? stateResult.value : {};
+
+    // Determine starting index
+    let startIndex = 0;
+    if (this.fromStep) {
+      startIndex = getStepIndex(this.fromStep);
+    } else if (this.resume) {
+      startIndex = this.findResumeIndex(state);
+    }
 
     // Save state on SIGINT before exit
     const sigintHandler = async () => {
@@ -40,7 +54,7 @@ export class Conductor {
     };
     process.on('SIGINT', sigintHandler);
 
-    for (let i = 0; i < ALL_STEPS.length; i++) {
+    for (let i = startIndex; i < ALL_STEPS.length; i++) {
       const step = ALL_STEPS[i];
 
       // Mark in_progress before running
@@ -55,6 +69,19 @@ export class Conductor {
         await saveStepStatus(this.stateFilePath, step.name, 'done');
         state[step.name] = 'done';
         this.events.emit({ type: 'step_completed', step: step.name, status: 'done' });
+      } else {
+        // Mark step as failed, emit event, save state, and stop
+        await saveStepStatus(this.stateFilePath, step.name, 'failed');
+        state[step.name] = 'failed';
+        this.events.emit({
+          type: 'step_failed',
+          step: step.name,
+          error: result.output ?? 'Step failed',
+          retryCount: 0,
+        });
+        await writeState(this.stateFilePath, state);
+        process.off('SIGINT', sigintHandler);
+        return;
       }
     }
 
@@ -64,5 +91,28 @@ export class Conductor {
     // All steps completed successfully
     state.feature_status = 'complete';
     await writeState(this.stateFilePath, state);
+  }
+
+  /**
+   * Find the index to resume from: first in_progress step,
+   * or first pending step after the last done step.
+   */
+  private findResumeIndex(state: ConductState): number {
+    // First, look for an in_progress step
+    for (let i = 0; i < ALL_STEPS.length; i++) {
+      if (getStepStatus(state, ALL_STEPS[i].name) === 'in_progress') {
+        return i;
+      }
+    }
+
+    // Otherwise, find the first pending step after the last done step
+    let lastDoneIndex = -1;
+    for (let i = 0; i < ALL_STEPS.length; i++) {
+      if (getStepStatus(state, ALL_STEPS[i].name) === 'done') {
+        lastDoneIndex = i;
+      }
+    }
+
+    return lastDoneIndex + 1;
   }
 }

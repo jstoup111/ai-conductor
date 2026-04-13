@@ -137,6 +137,188 @@ describe('engine/conductor', () => {
     expect(emitted[lastIdx + 1]).toEqual({ type: 'step_completed', step: 'finish' });
   });
 
+  it('enters recovery flow when step returns failure', async () => {
+    // Fail on the 3rd step (brainstorm)
+    let callCount = 0;
+    const runner: StepRunner = {
+      run: vi.fn(async () => {
+        callCount++;
+        if (callCount === 3) return { success: false, output: 'brainstorm failed' };
+        return { success: true };
+      }),
+    };
+    const conductor = new Conductor({ stateFilePath: statePath, stepRunner: runner, events });
+
+    const failedEvents: Array<{ step: string; error: string; retryCount: number }> = [];
+    events.on('step_failed', (e) => {
+      if (e.type === 'step_failed') failedEvents.push({ step: e.step, error: e.error, retryCount: e.retryCount });
+    });
+
+    await conductor.run();
+
+    // step_failed should have been emitted
+    expect(failedEvents.length).toBe(1);
+    expect(failedEvents[0].step).toBe('brainstorm');
+
+    // Should NOT have advanced past the failed step
+    expect(runner.run).toHaveBeenCalledTimes(3);
+  });
+
+  it('does NOT advance to next step on failure', async () => {
+    const stepsRun: StepName[] = [];
+    const runner: StepRunner = {
+      run: async (step: StepName) => {
+        stepsRun.push(step);
+        if (step === 'brainstorm') return { success: false, output: 'error' };
+        return { success: true };
+      },
+    };
+    const conductor = new Conductor({ stateFilePath: statePath, stepRunner: runner, events });
+
+    await conductor.run();
+
+    // Should have run worktree, memory, brainstorm and stopped
+    expect(stepsRun).toEqual(['worktree', 'memory', 'brainstorm']);
+    // complexity (the step after brainstorm) should NOT have been called
+    expect(stepsRun).not.toContain('complexity');
+  });
+
+  it('does NOT set feature_status=complete on failure', async () => {
+    let callCount = 0;
+    const runner: StepRunner = {
+      run: async () => {
+        callCount++;
+        if (callCount === 2) return { success: false };
+        return { success: true };
+      },
+    };
+    const conductor = new Conductor({ stateFilePath: statePath, stepRunner: runner, events });
+
+    await conductor.run();
+
+    const result = await readState(statePath);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.feature_status).toBeUndefined();
+    }
+  });
+
+  it('marks failed step as failed in state', async () => {
+    let callCount = 0;
+    const runner: StepRunner = {
+      run: async () => {
+        callCount++;
+        if (callCount === 3) return { success: false };
+        return { success: true };
+      },
+    };
+    const conductor = new Conductor({ stateFilePath: statePath, stepRunner: runner, events });
+
+    await conductor.run();
+
+    const result = await readState(statePath);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value['brainstorm']).toBe('failed');
+    }
+  });
+
+  it('with resume option starts at last in_progress step', async () => {
+    // Pre-populate state: worktree=done, memory=done, brainstorm=in_progress
+    await writeState(statePath, {
+      worktree: 'done',
+      memory: 'done',
+      brainstorm: 'in_progress',
+    } as ConductState);
+
+    const stepsRun: StepName[] = [];
+    const runner: StepRunner = {
+      run: async (step: StepName) => {
+        stepsRun.push(step);
+        return { success: true };
+      },
+    };
+    const conductor = new Conductor({ stateFilePath: statePath, stepRunner: runner, events, resume: true });
+
+    await conductor.run();
+
+    // Should start at brainstorm (the in_progress step), not worktree
+    expect(stepsRun[0]).toBe('brainstorm');
+    expect(stepsRun).not.toContain('worktree');
+    expect(stepsRun).not.toContain('memory');
+  });
+
+  it('with resume option starts at first pending after last done when no in_progress', async () => {
+    // Pre-populate state: worktree=done, memory=done, brainstorm=pending
+    await writeState(statePath, {
+      worktree: 'done',
+      memory: 'done',
+    } as ConductState);
+
+    const stepsRun: StepName[] = [];
+    const runner: StepRunner = {
+      run: async (step: StepName) => {
+        stepsRun.push(step);
+        return { success: true };
+      },
+    };
+    const conductor = new Conductor({ stateFilePath: statePath, stepRunner: runner, events, resume: true });
+
+    await conductor.run();
+
+    // Should start at brainstorm (first pending after last done)
+    expect(stepsRun[0]).toBe('brainstorm');
+    expect(stepsRun).not.toContain('worktree');
+    expect(stepsRun).not.toContain('memory');
+  });
+
+  it('with fromStep option starts at specified step', async () => {
+    const stepsRun: StepName[] = [];
+    const runner: StepRunner = {
+      run: async (step: StepName) => {
+        stepsRun.push(step);
+        return { success: true };
+      },
+    };
+    const conductor = new Conductor({ stateFilePath: statePath, stepRunner: runner, events, fromStep: 'stories' });
+
+    await conductor.run();
+
+    // Should start at stories
+    expect(stepsRun[0]).toBe('stories');
+    expect(stepsRun).not.toContain('worktree');
+    expect(stepsRun).not.toContain('brainstorm');
+  });
+
+  it('emits step_failed event with correct payload on failure', async () => {
+    let callCount = 0;
+    const runner: StepRunner = {
+      run: async () => {
+        callCount++;
+        if (callCount === 2) return { success: false, output: 'memory check failed' };
+        return { success: true };
+      },
+    };
+    const conductor = new Conductor({ stateFilePath: statePath, stepRunner: runner, events });
+
+    const failedEvents: Array<{ type: string; step: string; error: string; retryCount: number }> = [];
+    events.on('step_failed', (e) => {
+      if (e.type === 'step_failed') {
+        failedEvents.push({ type: e.type, step: e.step, error: e.error, retryCount: e.retryCount });
+      }
+    });
+
+    await conductor.run();
+
+    expect(failedEvents.length).toBe(1);
+    expect(failedEvents[0]).toEqual({
+      type: 'step_failed',
+      step: 'memory',
+      error: 'memory check failed',
+      retryCount: 0,
+    });
+  });
+
   it('saves state on SIGINT before exit', async () => {
     let sigintHandler: (() => void) | undefined;
     const processOnSpy = vi.spyOn(process, 'on').mockImplementation(((
