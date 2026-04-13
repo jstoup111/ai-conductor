@@ -39,7 +39,7 @@ export function parseArgs(argv: string[]): CLIOptions {
   const opts = program.opts();
   const featureDesc = program.args[0];
 
-  return {
+  const result: CLIOptions = {
     featureDesc,
     resume: opts.resume ?? false,
     auto: opts.auto ?? false,
@@ -50,4 +50,11 @@ export function parseArgs(argv: string[]): CLIOptions {
     reset: opts.reset ?? false,
     output: opts.output ?? false,
   };
+
+  const hasStateFlag = result.resume || result.status || result.cleanup || result.reset || !!result.step;
+  if (!result.featureDesc && !hasStateFlag) {
+    throw new Error('Feature description is required when no state flags are provided');
+  }
+
+  return result;
 }
