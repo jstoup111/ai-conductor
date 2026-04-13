@@ -1139,6 +1139,76 @@ describe('engine/conductor', () => {
       expect(completeEvents[0].prUrl).toBe('https://github.com/org/repo/pull/42');
     });
 
+    it('feature with feature_status=complete is excluded from resume', async () => {
+      // Pre-populate state as a completed feature
+      const completedState: ConductState = {
+        feature_status: 'complete',
+        worktree: 'done',
+        memory: 'done',
+        brainstorm: 'done',
+        complexity: 'done',
+        stories: 'done',
+        conflict_check: 'done',
+        plan: 'done',
+        architecture_diagram: 'done',
+        architecture_review: 'done',
+        acceptance_specs: 'done',
+        build: 'done',
+        manual_test: 'done',
+        retro: 'done',
+        finish: 'done',
+      };
+      await writeState(statePath, completedState);
+
+      const stepsRun: StepName[] = [];
+      const runner: StepRunner = {
+        run: async (step: StepName) => {
+          stepsRun.push(step);
+          return { success: true };
+        },
+      };
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        resume: true,
+      });
+
+      await conductor.run();
+
+      // When feature is already complete and resume=true, conductor should
+      // start from step 0 (treat as new feature), running all steps again
+      expect(stepsRun[0]).toBe('worktree');
+      expect(stepsRun.length).toBe(ALL_STEPS.length);
+    });
+
+    it('does not set feature_status=complete if any step failed', async () => {
+      let callCount = 0;
+      const runner: StepRunner = {
+        run: async () => {
+          callCount++;
+          if (callCount === 2) return { success: false };
+          return { success: true };
+        },
+      };
+      const conductor = new Conductor({ stateFilePath: statePath, stepRunner: runner, events });
+
+      const completeEvents: Array<{ type: string }> = [];
+      events.on('feature_complete', (e) => {
+        if (e.type === 'feature_complete') completeEvents.push({ type: e.type });
+      });
+
+      await conductor.run();
+
+      const result = await readState(statePath);
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value.feature_status).toBeUndefined();
+      }
+      // feature_complete event should NOT have been emitted
+      expect(completeEvents.length).toBe(0);
+    });
+
     it('getNavigableSteps returns empty array when no steps completed', () => {
       const state: ConductState = {
         worktree: 'pending',

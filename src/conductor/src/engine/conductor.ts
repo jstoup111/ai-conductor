@@ -195,6 +195,11 @@ export class Conductor {
    * or first pending step after the last done step.
    */
   private findResumeIndex(state: ConductState): number {
+    // If feature is already complete, treat as new feature (start from 0)
+    if (state.feature_status === 'complete') {
+      return 0;
+    }
+
     // First, look for an in_progress step
     for (let i = 0; i < ALL_STEPS.length; i++) {
       if (getStepStatus(state, ALL_STEPS[i].name) === 'in_progress') {
