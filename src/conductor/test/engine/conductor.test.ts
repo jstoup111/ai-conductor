@@ -648,6 +648,40 @@ describe('engine/conductor', () => {
     expect(onCheckpoint).toHaveBeenCalledWith('manual_test');
   });
 
+  it('does NOT fire checkpoint for non-checkpoint steps', async () => {
+    // Run only brainstorm (non-checkpoint step)
+    await writeState(statePath, {
+      worktree: 'done',
+      memory: 'done',
+    } as ConductState);
+
+    const runner = createMockStepRunner();
+    const onCheckpoint = vi.fn().mockResolvedValue('continue' as const);
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      fromStep: 'brainstorm',
+      onCheckpoint,
+    });
+
+    const checkpointEvents: Array<{ step: string }> = [];
+    events.on('checkpoint_reached', (e) => {
+      if (e.type === 'checkpoint_reached') checkpointEvents.push({ step: e.step });
+    });
+
+    await conductor.run();
+
+    // brainstorm, stories, plan etc. are not checkpoint steps
+    expect(checkpointEvents.filter((e) =>
+      e.step === 'brainstorm' || e.step === 'stories' || e.step === 'plan'
+    )).toHaveLength(0);
+    // onCheckpoint should only have been called for build and manual_test
+    for (const call of onCheckpoint.mock.calls) {
+      expect(['build', 'manual_test']).toContain(call[0]);
+    }
+  });
+
   it('saves state on SIGINT before exit', async () => {
     let sigintHandler: (() => void) | undefined;
     const processOnSpy = vi.spyOn(process, 'on').mockImplementation(((
