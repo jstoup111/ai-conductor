@@ -341,6 +341,28 @@ describe('engine/conductor', () => {
     }
   });
 
+  it('skips architecture_diagram when tier is S', async () => {
+    await writeState(statePath, { complexity_tier: 'S' } as ConductState);
+
+    const stepsRun: StepName[] = [];
+    const runner: StepRunner = {
+      run: async (step: StepName) => {
+        stepsRun.push(step);
+        return { success: true };
+      },
+    };
+    const conductor = new Conductor({ stateFilePath: statePath, stepRunner: runner, events });
+
+    await conductor.run();
+
+    expect(stepsRun).not.toContain('architecture_diagram');
+    const result = await readState(statePath);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value['architecture_diagram']).toBe('skipped');
+    }
+  });
+
   it('saves state on SIGINT before exit', async () => {
     let sigintHandler: (() => void) | undefined;
     const processOnSpy = vi.spyOn(process, 'on').mockImplementation(((
