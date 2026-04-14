@@ -37,8 +37,16 @@ export async function loadConfig(
   try {
     parsed = loadYaml(raw);
   } catch (e: unknown) {
-    const message =
-      e instanceof Error ? e.message : 'Failed to parse YAML';
+    let message = 'Failed to parse YAML';
+    if (e instanceof Error) {
+      message = e.message;
+      // js-yaml YAMLException includes mark with line info
+      const yamlErr = e as Error & { mark?: { line?: number } };
+      if (yamlErr.mark && typeof yamlErr.mark.line === 'number') {
+        // mark.line is 0-based, make it 1-based for humans
+        message = `YAML parse error at line ${yamlErr.mark.line + 1}: ${e.message}`;
+      }
+    }
     return {
       ok: false,
       error: { type: 'parse_error', message },

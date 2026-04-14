@@ -30,6 +30,23 @@ describe('config', () => {
       }
     });
 
+    it('reports parse error with line number for malformed YAML', async () => {
+      const badYaml = `harness_version: ">=1.0.0"
+steps:
+  disable:
+    - valid
+  bad_indent
+    : broken
+`;
+      await writeFile(join(tmpDir, '.harness', 'config.yml'), badYaml);
+
+      const result = await loadConfig(tmpDir);
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.type).toBe('parse_error');
+      expect(result.error.message).toMatch(/line \d+/i);
+    });
+
     it('parses valid .harness/config.yml and returns HarnessConfig', async () => {
       const configYaml = `
 harness_version: ">=1.0.0"
