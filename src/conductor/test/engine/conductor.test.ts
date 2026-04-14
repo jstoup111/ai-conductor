@@ -1220,4 +1220,56 @@ describe('engine/conductor', () => {
       expect(navigable).toEqual([]);
     });
   });
+
+  it('skips steps listed in config.steps.disable', async () => {
+    const stepsRun: StepName[] = [];
+    const runner: StepRunner = {
+      run: async (step: StepName) => {
+        stepsRun.push(step);
+        return { success: true };
+      },
+    };
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      config: { steps: { disable: ['memory', 'brainstorm'] } },
+    });
+
+    await conductor.run();
+
+    expect(stepsRun).not.toContain('memory');
+    expect(stepsRun).not.toContain('brainstorm');
+
+    const result = await readState(statePath);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value['memory']).toBe('skipped');
+      expect(result.value['brainstorm']).toBe('skipped');
+    }
+  });
+
+  it('disabled step satisfies downstream gate', async () => {
+    // Disable brainstorm, which is a prerequisite for stories
+    const stepsRun: StepName[] = [];
+    const runner: StepRunner = {
+      run: async (step: StepName) => {
+        stepsRun.push(step);
+        return { success: true };
+      },
+    };
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      config: { steps: { disable: ['brainstorm'] } },
+    });
+
+    await conductor.run();
+
+    // stories depends on brainstorm — it should still run because
+    // brainstorm was skipped and stepSatisfied returns true for 'skipped'
+    expect(stepsRun).not.toContain('brainstorm');
+    expect(stepsRun).toContain('stories');
+  });
 });

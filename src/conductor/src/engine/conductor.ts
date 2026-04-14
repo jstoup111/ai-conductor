@@ -1,5 +1,6 @@
 import type { ConductState } from '../types/index.js';
 import type { StepName, StepStatus, Phase, RunMode } from '../types/index.js';
+import type { HarnessConfig } from '../types/config.js';
 import { ConductorEventEmitter } from '../ui/events.js';
 import { readState, writeState, saveStepStatus, getStepStatus, markDownstreamStale } from './state.js';
 import { ALL_STEPS, getStepIndex, shouldSkipForTier, isCheckpointStep } from './steps.js';
@@ -55,6 +56,7 @@ export interface ConductorOptions {
   resume?: boolean;
   fromStep?: StepName;
   mode?: RunMode;
+  config?: HarnessConfig;
   onCheckpoint?: (step: StepName) => Promise<CheckpointResponse>;
   onNavigate?: (steps: NavigableStep[]) => Promise<StepName | null>;
 }
@@ -66,6 +68,7 @@ export class Conductor {
   private resume: boolean;
   private fromStep?: StepName;
   private mode: RunMode;
+  private config: HarnessConfig;
   private onCheckpoint: (step: StepName) => Promise<CheckpointResponse>;
   private onNavigate: (steps: NavigableStep[]) => Promise<StepName | null>;
 
@@ -76,6 +79,7 @@ export class Conductor {
     this.resume = opts.resume ?? false;
     this.fromStep = opts.fromStep;
     this.mode = opts.mode ?? 'default';
+    this.config = opts.config ?? {};
     this.onCheckpoint = opts.onCheckpoint ?? (async () => 'continue' as const);
     this.onNavigate = opts.onNavigate ?? (async () => null);
   }
@@ -109,6 +113,15 @@ export class Conductor {
         await saveStepStatus(this.stateFilePath, step.name, 'skipped');
         state[step.name] = 'skipped';
         this.events.emit({ type: 'tier_skip', step: step.name, tier });
+        continue;
+      }
+
+      // Check if step is disabled via config
+      const disabledSteps = this.config.steps?.disable ?? [];
+      if (disabledSteps.includes(step.name)) {
+        await saveStepStatus(this.stateFilePath, step.name, 'skipped');
+        state[step.name] = 'skipped';
+        this.events.emit({ type: 'config_skip', step: step.name });
         continue;
       }
 

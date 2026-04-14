@@ -10,6 +10,7 @@ export type ConductorEvent =
   | { type: 'recovery_needed'; step: StepName; options: RecoveryOption[] }
   | { type: 'gate_blocked'; step: StepName; reason: string }
   | { type: 'tier_skip'; step: StepName; tier: ComplexityTier }
+  | { type: 'config_skip'; step: StepName }
   | { type: 'navigation_back'; from: StepName; to: StepName }
   | { type: 'rate_limit'; waitSeconds: number }
   | { type: 'session_reset'; reason: string }

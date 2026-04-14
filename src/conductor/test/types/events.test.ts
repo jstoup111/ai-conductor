@@ -17,13 +17,13 @@ describe('Event types', () => {
     expect(event.type).toBe('recovery_needed');
   });
 
-  it('ConductorEvent covers all 12 event types', () => {
+  it('ConductorEvent covers all 13 event types', () => {
     const eventTypes: ConductorEvent['type'][] = [
       'step_started', 'step_completed', 'step_failed', 'checkpoint_reached',
-      'recovery_needed', 'gate_blocked', 'tier_skip', 'navigation_back',
+      'recovery_needed', 'gate_blocked', 'tier_skip', 'config_skip', 'navigation_back',
       'rate_limit', 'session_reset', 'feature_complete', 'dashboard_refresh',
     ];
-    expect(eventTypes).toHaveLength(12);
+    expect(eventTypes).toHaveLength(13);
   });
 
   it('RecoveryOption has 5 values', () => {
