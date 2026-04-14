@@ -13,6 +13,14 @@ export interface ResolvedSkill {
 
 const REQUIRED_FRONTMATTER_FIELDS = ['name', 'description', 'enforcement', 'phase'];
 
+/** Steps whose enforcement level cannot be overridden by project-local skills. */
+const ENFORCEMENT_LOCKED_STEPS: ReadonlySet<string> = new Set([
+  'stories',
+  'plan',
+  'build',
+  'finish',
+]);
+
 function parseFrontmatter(content: string): Record<string, string> | null {
   const match = content.match(/^---\n([\s\S]*?)\n---/);
   if (!match) return null;
@@ -61,11 +69,15 @@ export function resolveSkill(
 
   if (overridePath) {
     const fullPath = path.join(projectRoot, overridePath);
-    validateOverrideFile(fullPath);
+    const frontmatter = validateOverrideFile(fullPath);
+
+    const enforcement = ENFORCEMENT_LOCKED_STEPS.has(stepName)
+      ? stepDef.enforcement
+      : (frontmatter.enforcement as EnforcementLevel);
 
     return {
       path: fullPath,
-      enforcement: stepDef.enforcement,
+      enforcement,
       isOverride: true,
     };
   }

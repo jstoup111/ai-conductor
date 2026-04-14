@@ -16,17 +16,21 @@ describe('engine/skill-resolver', () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  function writeValidSkill(stepDir: string): void {
+  function writeSkillFile(
+    stepDir: string,
+    opts: { name?: string; enforcement?: string; phase?: string } = {},
+  ): void {
+    const { name = 'stories', enforcement = 'gating', phase = 'DECIDE' } = opts;
     fs.mkdirSync(stepDir, { recursive: true });
     fs.writeFileSync(
       path.join(stepDir, 'SKILL.md'),
-      '---\nname: stories\ndescription: Custom stories\nenforcement: gating\nphase: DECIDE\n---\n\n# Stories\n',
+      `---\nname: ${name}\ndescription: Custom ${name}\nenforcement: ${enforcement}\nphase: ${phase}\n---\n\n# ${name}\n`,
     );
   }
 
   describe('Task 13: project-local override happy path', () => {
     it('resolveSkill() returns project override path when configured', () => {
-      writeValidSkill(path.join(tmpDir, '.harness', 'skills', 'stories'));
+      writeSkillFile(path.join(tmpDir, '.harness', 'skills', 'stories'));
 
       const config: HarnessConfig = {
         skills: {
@@ -124,6 +128,52 @@ describe('engine/skill-resolver', () => {
 
       const result = resolveSkill('stories', config, tmpDir);
       expect(result.path).toBe(path.join(tmpDir, '.harness/skills/stories/SKILL.md'));
+      expect(result.isOverride).toBe(true);
+    });
+  });
+
+  describe('Task 15: enforcement locked for gating steps', () => {
+    it('resolveSkill() ignores enforcement override for gating step', () => {
+      // stories is a gating step — override tries to downgrade to advisory
+      writeSkillFile(path.join(tmpDir, '.harness', 'skills', 'stories'), {
+        name: 'stories',
+        enforcement: 'advisory',
+        phase: 'DECIDE',
+      });
+
+      const config: HarnessConfig = {
+        skills: {
+          overrides: {
+            stories: '.harness/skills/stories/SKILL.md',
+          },
+        },
+      };
+
+      const result = resolveSkill('stories', config, tmpDir);
+      // enforcement stays gating (the harness default), not advisory
+      expect(result.enforcement).toBe('gating');
+      expect(result.isOverride).toBe(true);
+    });
+
+    it('resolveSkill() accepts enforcement override for non-gating step', () => {
+      // retro is advisory by default — override upgrades to gating
+      writeSkillFile(path.join(tmpDir, '.harness', 'skills', 'retro'), {
+        name: 'retro',
+        enforcement: 'gating',
+        phase: 'SHIP',
+      });
+
+      const config: HarnessConfig = {
+        skills: {
+          overrides: {
+            retro: '.harness/skills/retro/SKILL.md',
+          },
+        },
+      };
+
+      const result = resolveSkill('retro', config, tmpDir);
+      // enforcement comes from the override file
+      expect(result.enforcement).toBe('gating');
       expect(result.isOverride).toBe(true);
     });
   });
