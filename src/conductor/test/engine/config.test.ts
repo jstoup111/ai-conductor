@@ -72,7 +72,7 @@ steps:
 harness_version: ">=1.0.0"
 steps:
   disable:
-    - architecture-review
+    - memory
 skills:
   overrides:
     tdd: custom-tdd
@@ -86,7 +86,7 @@ complexity:
       expect(result.ok).toBe(true);
       if (!result.ok) return;
       expect(result.config.harness_version).toBe('>=1.0.0');
-      expect(result.config.steps?.disable).toEqual(['architecture-review']);
+      expect(result.config.steps?.disable).toEqual(['memory']);
       expect(result.config.skills?.overrides?.tdd).toBe('custom-tdd');
       expect(result.config.complexity?.default_tier).toBe('M');
       expect(result.warnings).toEqual([]);
@@ -103,6 +103,40 @@ complexity:
       if (result.ok) return;
       expect(result.error.type).toBe('validation_error');
       expect(result.error.message).toContain('steps.disable must be an array');
+    });
+
+    it('rejects disabling gating step with error message', () => {
+      const result = validateConfig({
+        steps: { disable: ['stories'] },
+      });
+
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.type).toBe('validation_error');
+      expect(result.error.message).toContain('stories');
+      expect(result.error.message).toMatch(/gating/i);
+    });
+
+    it('rejects disabling structural step with error message', () => {
+      const result = validateConfig({
+        steps: { disable: ['build'] },
+      });
+
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.type).toBe('validation_error');
+      expect(result.error.message).toContain('build');
+    });
+
+    it('warns on unknown step name in steps.disable', () => {
+      const result = validateConfig({
+        steps: { disable: ['nonexistent_step'] },
+      });
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.warnings.length).toBeGreaterThan(0);
+      expect(result.warnings[0]).toContain('nonexistent_step');
     });
 
     it('warns on unknown top-level keys but does not fail', () => {

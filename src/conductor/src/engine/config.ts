@@ -2,6 +2,7 @@ import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { load as loadYaml } from 'js-yaml';
 import type { HarnessConfig } from '../types/index.js';
+import { ALL_STEPS } from './steps.js';
 
 export type ConfigError = {
   type: 'missing' | 'parse_error' | 'version_mismatch' | 'validation_error';
@@ -124,6 +125,27 @@ export function validateConfig(
           message: 'steps.disable must be an array',
         },
       };
+    }
+
+    if (Array.isArray(steps.disable)) {
+      const stepMap = new Map(ALL_STEPS.map((s) => [s.name, s]));
+
+      for (const name of steps.disable as string[]) {
+        const stepDef = stepMap.get(name);
+        if (!stepDef) {
+          warnings.push(`Unknown step name in steps.disable: "${name}"`);
+          continue;
+        }
+        if (stepDef.enforcement === 'gating' || stepDef.enforcement === 'structural') {
+          return {
+            ok: false,
+            error: {
+              type: 'validation_error',
+              message: `Cannot disable gating step: "${name}" (enforcement: ${stepDef.enforcement})`,
+            },
+          };
+        }
+      }
     }
   }
 
