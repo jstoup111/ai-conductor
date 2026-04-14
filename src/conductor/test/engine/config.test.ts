@@ -17,6 +17,19 @@ describe('config', () => {
   });
 
   describe('loadConfig', () => {
+    it('returns error with migration message when config missing', async () => {
+      const emptyDir = await mkdtemp(join(tmpdir(), 'config-missing-'));
+      try {
+        const result = await loadConfig(emptyDir);
+        expect(result.ok).toBe(false);
+        if (result.ok) return;
+        expect(result.error.type).toBe('missing');
+        expect(result.error.message).toContain('Run bin/migrate');
+      } finally {
+        await rm(emptyDir, { recursive: true, force: true });
+      }
+    });
+
     it('parses valid .harness/config.yml and returns HarnessConfig', async () => {
       const configYaml = `
 harness_version: ">=1.0.0"
