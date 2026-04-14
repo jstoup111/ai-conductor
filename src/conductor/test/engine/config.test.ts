@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, writeFile, rm, mkdir } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { loadConfig, validateConfig } from '../../src/engine/config.js';
+import { loadConfig, validateConfig, type ConfigResult } from '../../src/engine/config.js';
 
 describe('config', () => {
   let tmpDir: string;
@@ -90,6 +90,33 @@ complexity:
       expect(result.config.skills?.overrides?.tdd).toBe('custom-tdd');
       expect(result.config.complexity?.default_tier).toBe('M');
       expect(result.warnings).toEqual([]);
+    });
+  });
+
+  describe('validateConfig', () => {
+    it('rejects steps.disable as string (not array)', () => {
+      const result = validateConfig({
+        steps: { disable: 'architecture-review' },
+      });
+
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.type).toBe('validation_error');
+      expect(result.error.message).toContain('steps.disable must be an array');
+    });
+
+    it('warns on unknown top-level keys but does not fail', () => {
+      const result = validateConfig({
+        harness_version: '>=1.0.0',
+        unknown_key: 'value',
+        another_unknown: 42,
+      });
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.warnings).toHaveLength(2);
+      expect(result.warnings[0]).toContain('unknown_key');
+      expect(result.warnings[1]).toContain('another_unknown');
     });
   });
 });
