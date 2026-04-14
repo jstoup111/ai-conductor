@@ -1,4 +1,5 @@
 import type { StepDefinition, StepName, ComplexityTier } from '../types/index.js';
+import type { HarnessConfig } from '../types/config.js';
 
 export const ALL_STEPS: StepDefinition[] = [
   {
@@ -181,4 +182,40 @@ export function isCheckpointStep(step: StepName): boolean {
 
 export function getPrerequisites(step: StepName): StepName[] {
   return getStepDefinition(step).prerequisites;
+}
+
+export function buildStepRegistry(config: HarnessConfig): StepDefinition[] {
+  const result = [...ALL_STEPS];
+  const additions = config.steps?.add ?? [];
+
+  // Group insertions by their `after` target, preserving config order
+  const insertionsByTarget = new Map<string, typeof additions>();
+  for (const custom of additions) {
+    const list = insertionsByTarget.get(custom.after) ?? [];
+    list.push(custom);
+    insertionsByTarget.set(custom.after, list);
+  }
+
+  // Process each target: find position in current result, insert all steps after it
+  // Work backwards through the result to avoid index shifting issues
+  for (const [target, customs] of insertionsByTarget) {
+    const targetIdx = result.findIndex((s) => s.name === target);
+    if (targetIdx === -1) continue; // validation catches this separately
+
+    const targetStep = result[targetIdx];
+    const newSteps: StepDefinition[] = customs.map((c) => ({
+      name: c.name as StepName,
+      label: c.name,
+      phase: targetStep.phase,
+      enforcement: c.enforcement,
+      prerequisites: [target as StepName],
+      skippableForTiers: [],
+      isCheckpoint: false,
+      skillName: c.skill,
+    }));
+
+    result.splice(targetIdx + 1, 0, ...newSteps);
+  }
+
+  return result;
 }

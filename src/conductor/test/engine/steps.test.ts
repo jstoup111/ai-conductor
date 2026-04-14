@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { StepName, ComplexityTier } from '../../src/types/index.js';
+import type { HarnessConfig } from '../../src/types/config.js';
 import {
   ALL_STEPS,
   getStepDefinition,
@@ -9,6 +10,7 @@ import {
   getSkippableSteps,
   isCheckpointStep,
   getPrerequisites,
+  buildStepRegistry,
 } from '../../src/engine/steps.js';
 
 describe('engine/steps', () => {
@@ -282,6 +284,74 @@ describe('engine/steps', () => {
 
     it('finish requires retro', () => {
       expect(getPrerequisites('finish')).toEqual(['retro']);
+    });
+  });
+
+  // --- buildStepRegistry ---
+
+  describe('buildStepRegistry', () => {
+    it('inserts custom step after specified step', () => {
+      const config: HarnessConfig = {
+        steps: {
+          add: [
+            {
+              name: 'lint',
+              after: 'build',
+              skill: 'custom-lint',
+              enforcement: 'gating',
+            },
+          ],
+        },
+      };
+
+      const registry = buildStepRegistry(config);
+
+      const names = registry.map((s) => s.name);
+      const buildIdx = names.indexOf('build');
+      const lintIdx = names.indexOf('lint' as StepName);
+
+      expect(lintIdx).toBe(buildIdx + 1);
+
+      const lintStep = registry[lintIdx];
+      expect(lintStep.label).toBe('lint');
+      expect(lintStep.phase).toBe('BUILD'); // inherits from 'build'
+      expect(lintStep.enforcement).toBe('gating');
+      expect(lintStep.prerequisites).toEqual(['build']);
+      expect(lintStep.skippableForTiers).toEqual([]);
+      expect(lintStep.isCheckpoint).toBe(false);
+      expect(lintStep.skillName).toBe('custom-lint');
+    });
+
+    it('preserves config file order for multiple custom steps at same position', () => {
+      const config: HarnessConfig = {
+        steps: {
+          add: [
+            {
+              name: 'lint',
+              after: 'build',
+              skill: 'custom-lint',
+              enforcement: 'gating',
+            },
+            {
+              name: 'security_scan',
+              after: 'build',
+              skill: 'security-scan',
+              enforcement: 'advisory',
+            },
+          ],
+        },
+      };
+
+      const registry = buildStepRegistry(config);
+
+      const names = registry.map((s) => s.name);
+      const buildIdx = names.indexOf('build');
+      const lintIdx = names.indexOf('lint' as StepName);
+      const scanIdx = names.indexOf('security_scan' as StepName);
+
+      // Both come after build, in config order
+      expect(lintIdx).toBe(buildIdx + 1);
+      expect(scanIdx).toBe(buildIdx + 2);
     });
   });
 });
