@@ -152,5 +152,72 @@ complexity:
       expect(result.warnings[0]).toContain('unknown_key');
       expect(result.warnings[1]).toContain('another_unknown');
     });
+
+    it('rejects custom step with missing SKILL.md', () => {
+      const result = validateConfig(
+        {
+          steps: {
+            add: [
+              {
+                name: 'lint',
+                after: 'build',
+                skill: 'nonexistent-skill',
+                enforcement: 'gating',
+              },
+            ],
+          },
+        },
+        tmpDir,
+      );
+
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.type).toBe('validation_error');
+      expect(result.error.message).toContain('nonexistent-skill');
+      expect(result.error.message).toContain('SKILL.md');
+    });
+
+    it('rejects custom step with unknown after target', () => {
+      const result = validateConfig({
+        steps: {
+          add: [
+            {
+              name: 'lint',
+              after: 'nonexistent_step',
+              skill: 'custom-lint',
+              enforcement: 'gating',
+            },
+          ],
+        },
+      });
+
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.type).toBe('validation_error');
+      expect(result.error.message).toContain('nonexistent_step');
+    });
+
+    it('accepts custom step with valid after target and existing SKILL.md', async () => {
+      await mkdir(join(tmpDir, 'skills', 'custom-lint'), { recursive: true });
+      await writeFile(join(tmpDir, 'skills', 'custom-lint', 'SKILL.md'), '---\nname: custom-lint\n---\n');
+
+      const result = validateConfig(
+        {
+          steps: {
+            add: [
+              {
+                name: 'lint',
+                after: 'build',
+                skill: 'custom-lint',
+                enforcement: 'gating',
+              },
+            ],
+          },
+        },
+        tmpDir,
+      );
+
+      expect(result.ok).toBe(true);
+    });
   });
 });

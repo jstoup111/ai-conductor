@@ -1,7 +1,8 @@
 import { readFile } from 'fs/promises';
+import { existsSync } from 'fs';
 import { join } from 'path';
 import { load as loadYaml } from 'js-yaml';
-import type { HarnessConfig } from '../types/index.js';
+import type { HarnessConfig, CustomStep } from '../types/index.js';
 import { ALL_STEPS } from './steps.js';
 
 export type ConfigError = {
@@ -74,6 +75,7 @@ export async function loadConfig(
 
 export function validateConfig(
   raw: unknown,
+  projectRoot?: string,
 ): { ok: true; config: HarnessConfig; warnings: ConfigWarning[] } | { ok: false; error: ConfigError } {
   if (raw === null || raw === undefined) {
     return { ok: true, config: {}, warnings: [] };
@@ -144,6 +146,35 @@ export function validateConfig(
               message: `Cannot disable gating step: "${name}" (enforcement: ${stepDef.enforcement})`,
             },
           };
+        }
+      }
+    }
+
+    // Validate steps.add custom steps
+    if (Array.isArray(steps.add)) {
+      const validStepNames = new Set(ALL_STEPS.map((s) => s.name));
+      for (const custom of steps.add as CustomStep[]) {
+        if (!validStepNames.has(custom.after)) {
+          return {
+            ok: false,
+            error: {
+              type: 'validation_error',
+              message: `Custom step "${custom.name}" references unknown after target: "${custom.after}"`,
+            },
+          };
+        }
+
+        if (projectRoot) {
+          const skillPath = join(projectRoot, 'skills', custom.skill, 'SKILL.md');
+          if (!existsSync(skillPath)) {
+            return {
+              ok: false,
+              error: {
+                type: 'validation_error',
+                message: `Custom step "${custom.name}" references skill "${custom.skill}" but SKILL.md not found at ${skillPath}`,
+              },
+            };
+          }
         }
       }
     }
