@@ -47,6 +47,26 @@ steps:
       expect(result.error.message).toMatch(/line \d+/i);
     });
 
+    it('accepts config when harness version satisfies constraint', async () => {
+      const configYaml = `harness_version: ">=1.0.0"\n`;
+      await writeFile(join(tmpDir, '.harness', 'config.yml'), configYaml);
+
+      const result = await loadConfig(tmpDir, '1.0.0');
+      expect(result.ok).toBe(true);
+    });
+
+    it('rejects config when version too low', async () => {
+      const configYaml = `harness_version: ">=2.0.0"\n`;
+      await writeFile(join(tmpDir, '.harness', 'config.yml'), configYaml);
+
+      const result = await loadConfig(tmpDir, '1.0.0');
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.type).toBe('version_mismatch');
+      expect(result.error.message).toContain('1.0.0');
+      expect(result.error.message).toContain('>=2.0.0');
+    });
+
     it('parses valid .harness/config.yml and returns HarnessConfig', async () => {
       const configYaml = `
 harness_version: ">=1.0.0"
