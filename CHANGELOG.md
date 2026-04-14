@@ -28,6 +28,16 @@ Categories:
 
 ### Added
 
+- TypeScript conductor rewrite (`src/conductor/`) — 3-layer architecture (Engine/Execution/UI) replacing the 3,100-line bash `bin/conduct`.
+- `bin/conduct-ts` shell wrapper for the TypeScript conductor.
+- 14-step state machine with typed events, gate enforcement, tier-based skipping, checkpoint handling, backward navigation, and recovery flow.
+- LLM provider abstraction with Claude CLI adapter, session management, and rate limit handling.
+- ink-based terminal UI: dashboard, checkpoint prompts, recovery menus, navigation menus.
+- CLI entry point with commander: `--resume`, `--auto`, `--status`, `--from`, `--step`, `--reset`, `--cleanup`, `--output` flags.
+- Worktree management: slugify, create, scan, cleanup with collision handling.
+- 310 tests across 21 test files + 4 integration tests.
+- Architecture diagrams (C4 levels 1-3) and architecture review for conductor rewrite.
+- Phase 2 language evaluation choosing TypeScript over Python/Rust/Go.
 - User validation checkpoints after build and manual-test steps in conductor.
 - Backward navigation (`b = go back`) from checkpoints and recovery menu with numbered step menu.
 - `stale` state marking (⚠) for downstream steps when revisiting earlier phases.
