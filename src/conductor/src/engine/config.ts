@@ -2,7 +2,7 @@ import { readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { load as loadYaml } from 'js-yaml';
-import type { HarnessConfig, CustomStep } from '../types/index.js';
+import type { HarnessConfig, CustomStep, StepName } from '../types/index.js';
 import { ALL_STEPS } from './steps.js';
 
 export type ConfigError = {
@@ -133,7 +133,7 @@ export function validateConfig(
       const stepMap = new Map(ALL_STEPS.map((s) => [s.name, s]));
 
       for (const name of steps.disable as string[]) {
-        const stepDef = stepMap.get(name);
+        const stepDef = stepMap.get(name as StepName);
         if (!stepDef) {
           warnings.push(`Unknown step name in steps.disable: "${name}"`);
           continue;
@@ -154,7 +154,7 @@ export function validateConfig(
     if (Array.isArray(steps.add)) {
       const validStepNames = new Set(ALL_STEPS.map((s) => s.name));
       for (const custom of steps.add as CustomStep[]) {
-        if (!validStepNames.has(custom.after)) {
+        if (!validStepNames.has(custom.after as StepName)) {
           return {
             ok: false,
             error: {
