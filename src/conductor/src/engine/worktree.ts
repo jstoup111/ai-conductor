@@ -104,6 +104,23 @@ export class WorktreeManager {
     }
   }
 
+  /**
+   * Check if a PR is merged and clean up the worktree if so.
+   * Returns true if the worktree was cleaned up.
+   */
+  async cleanupIfMerged(
+    name: string,
+    prUrl: string,
+    ghRunner?: (url: string) => Promise<string>,
+  ): Promise<boolean> {
+    const merged = await checkPrMerged(prUrl, ghRunner);
+    if (merged) {
+      await this.cleanup(name);
+      return true;
+    }
+    return false;
+  }
+
   async scan(): Promise<WorktreeInfo[]> {
     const worktreesDir = join(this.projectRoot, '.worktrees');
     let entries: string[];
@@ -135,4 +152,27 @@ export class WorktreeManager {
 
     return results;
   }
+}
+
+/**
+ * Check if a PR has been merged using `gh pr view`.
+ * Accepts an optional runner for testability (avoids mocking child_process globally).
+ */
+export async function checkPrMerged(
+  prUrl: string,
+  ghRunner?: (url: string) => Promise<string>,
+): Promise<boolean> {
+  try {
+    const runner = ghRunner ?? defaultGhRunner;
+    const output = await runner(prUrl);
+    const data = JSON.parse(output);
+    return data.state === 'MERGED';
+  } catch {
+    return false;
+  }
+}
+
+async function defaultGhRunner(prUrl: string): Promise<string> {
+  const { stdout } = await execFile('gh', ['pr', 'view', prUrl, '--json', 'state']);
+  return stdout;
 }

@@ -1,10 +1,10 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, stat, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { execFile as execFileCb } from 'child_process';
 import { promisify } from 'util';
-import { slugify, WorktreeManager } from '../../src/engine/worktree.js';
+import { slugify, WorktreeManager, checkPrMerged } from '../../src/engine/worktree.js';
 
 const execFile = promisify(execFileCb);
 
@@ -153,6 +153,35 @@ describe('engine/worktree', () => {
         const branches = await git(tempDir, 'branch', '--list', 'feature/cleanup-target');
         expect(branches).toBe('');
       });
+    });
+  });
+
+  describe('checkPrMerged', () => {
+    it('returns true when PR state is MERGED', async () => {
+      // Mock execFile to simulate `gh pr view` returning MERGED
+      const { execFile: realExecFile } = await import('child_process');
+      const originalExecFile = realExecFile;
+
+      // We test via the exported function which uses its own execFile
+      // Use vi.mock for child_process within checkPrMerged
+      const result = await checkPrMerged('https://github.com/test/repo/pull/1', async () => {
+        return JSON.stringify({ state: 'MERGED' });
+      });
+      expect(result).toBe(true);
+    });
+
+    it('returns false when PR state is OPEN', async () => {
+      const result = await checkPrMerged('https://github.com/test/repo/pull/1', async () => {
+        return JSON.stringify({ state: 'OPEN' });
+      });
+      expect(result).toBe(false);
+    });
+
+    it('returns false when gh command fails', async () => {
+      const result = await checkPrMerged('https://github.com/test/repo/pull/1', async () => {
+        throw new Error('gh not found');
+      });
+      expect(result).toBe(false);
     });
   });
 });
