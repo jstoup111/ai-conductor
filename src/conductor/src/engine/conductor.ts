@@ -1,12 +1,12 @@
 import { readdir } from 'fs/promises';
 import { join } from 'path';
 import type { ConductState } from '../types/index.js';
-import type { StepName, StepStatus, Phase, RunMode } from '../types/index.js';
+import type { StepName, StepStatus, Phase, RunMode, ComplexityTier, RecoveryOption } from '../types/index.js';
 import type { HarnessConfig } from '../types/config.js';
 import { ConductorEventEmitter } from '../ui/events.js';
 import { readState, writeState, saveStepStatus, getStepStatus, markDownstreamStale } from './state.js';
 import { ALL_STEPS, getStepIndex, shouldSkipForTier, isCheckpointStep } from './steps.js';
-import { checkGate } from './gates.js';
+import { checkGate, isGatingStep } from './gates.js';
 
 export type CheckpointResponse = 'continue' | 'back' | 'quit';
 
@@ -49,6 +49,7 @@ export interface StepRunResult {
 
 export interface StepRunner {
   run(step: StepName, state: ConductState): Promise<StepRunResult>;
+  runInteractive?(step: StepName): Promise<void>;
 }
 
 export type ArtifactReviewResult = 'approved' | 'rejected' | 'skip';
@@ -65,6 +66,8 @@ export interface ConductorOptions {
   onCheckpoint?: (step: StepName) => Promise<CheckpointResponse>;
   onNavigate?: (steps: NavigableStep[]) => Promise<StepName | null>;
   onReviewArtifacts?: (step: StepName, files: string[]) => Promise<ArtifactReviewResult>;
+  onRecovery?: (step: StepName, isGating: boolean) => Promise<RecoveryOption>;
+  onComplexityAssessment?: () => Promise<ComplexityTier>;
 }
 
 // Steps that require artifact review after completion
@@ -97,6 +100,8 @@ export class Conductor {
   private onCheckpoint: (step: StepName) => Promise<CheckpointResponse>;
   private onNavigate: (steps: NavigableStep[]) => Promise<StepName | null>;
   private onReviewArtifacts: (step: StepName, files: string[]) => Promise<ArtifactReviewResult>;
+  private onRecovery?: (step: StepName, isGating: boolean) => Promise<RecoveryOption>;
+  private onComplexityAssessment?: () => Promise<ComplexityTier>;
 
   constructor(opts: ConductorOptions) {
     this.stateFilePath = opts.stateFilePath;
@@ -110,6 +115,8 @@ export class Conductor {
     this.onCheckpoint = opts.onCheckpoint ?? (async () => 'continue' as const);
     this.onNavigate = opts.onNavigate ?? (async () => null);
     this.onReviewArtifacts = opts.onReviewArtifacts ?? (async () => 'approved' as const);
+    this.onRecovery = opts.onRecovery;
+    this.onComplexityAssessment = opts.onComplexityAssessment;
   }
 
   async run(): Promise<void> {
@@ -127,14 +134,15 @@ export class Conductor {
     // Save state on SIGINT before exit
     const sigintHandler = async () => {
       await writeState(this.stateFilePath, state);
+      process.exit(130); // 128 + SIGINT(2) — standard Unix convention
     };
     process.on('SIGINT', sigintHandler);
 
-    // Read complexity tier from state, default to 'L' (no skips)
-    const tier = state.complexity_tier ?? 'L';
-
     for (let i = startIndex; i < ALL_STEPS.length; i++) {
       const step = ALL_STEPS[i];
+
+      // Read complexity tier from state each iteration (may change after complexity step)
+      const tier = state.complexity_tier ?? 'L';
 
       // Check if step should be skipped for this complexity tier
       if (shouldSkipForTier(step.name, tier)) {
@@ -188,6 +196,13 @@ export class Conductor {
         state[step.name] = 'done';
         this.events.emit({ type: 'step_completed', step: step.name, status: 'done' });
 
+        // Complexity assessment after complexity step
+        if (step.name === 'complexity' && this.mode !== 'auto' && !state.complexity_tier && this.onComplexityAssessment) {
+          const assessedTier = await this.onComplexityAssessment();
+          state.complexity_tier = assessedTier;
+          await writeState(this.stateFilePath, state);
+        }
+
         // Store PR URL from finish step output
         if (step.name === 'finish' && result.output) {
           const urlMatch = result.output.match(/https?:\/\/[^\s]+\/pull\/\d+/);
@@ -220,7 +235,7 @@ export class Conductor {
           // 'continue' proceeds normally
         }
       } else {
-        // Mark step as failed, emit event, save state, and stop
+        // Step failed — invoke recovery menu if available
         await saveStepStatus(this.stateFilePath, step.name, 'failed');
         state[step.name] = 'failed';
         this.events.emit({
@@ -229,6 +244,42 @@ export class Conductor {
           error: result.output ?? 'Step failed',
           retryCount: 0,
         });
+
+        if (this.onRecovery) {
+          const gating = isGatingStep(step.name);
+          const action = await this.onRecovery(step.name, gating);
+
+          if (action === 'retry') {
+            i--; // for loop will i++, staying on same step
+            continue;
+          }
+          if (action === 'skip' && !gating) {
+            await saveStepStatus(this.stateFilePath, step.name, 'skipped');
+            state[step.name] = 'skipped';
+            continue;
+          }
+          if (action === 'back') {
+            const navigable = getNavigableSteps(state);
+            const target = await this.onNavigate(navigable);
+            if (target) {
+              const nav = navigateBack(state, target);
+              this.events.emit({ type: 'navigation_back', from: step.name, to: target });
+              state = nav.state;
+              await writeState(this.stateFilePath, state);
+              i = nav.index - 1; // for loop will i++
+              continue;
+            }
+          }
+          if (action === 'interactive') {
+            if (this.stepRunner.runInteractive) {
+              await this.stepRunner.runInteractive(step.name);
+            }
+            i--; // re-run the step after interactive fix
+            continue;
+          }
+        }
+
+        // quit (default) — save state and return
         await writeState(this.stateFilePath, state);
         process.off('SIGINT', sigintHandler);
         return;

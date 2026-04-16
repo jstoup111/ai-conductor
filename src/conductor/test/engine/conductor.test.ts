@@ -1221,6 +1221,284 @@ describe('engine/conductor', () => {
     });
   });
 
+  describe('recovery menu', () => {
+    it('calls onRecovery on step failure', async () => {
+      let callCount = 0;
+      const runner: StepRunner = {
+        run: vi.fn(async () => {
+          callCount++;
+          if (callCount === 3) return { success: false, output: 'brainstorm failed' };
+          return { success: true };
+        }),
+      };
+      const onRecovery = vi.fn().mockResolvedValue('quit' as const);
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        onRecovery,
+      });
+
+      await conductor.run();
+
+      expect(onRecovery).toHaveBeenCalledWith('brainstorm', false);
+    });
+
+    it('retries step when recovery returns retry', async () => {
+      let brainstormCalls = 0;
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          if (step === 'brainstorm') {
+            brainstormCalls++;
+            if (brainstormCalls === 1) return { success: false, output: 'failed first time' };
+            return { success: true };
+          }
+          return { success: true };
+        }),
+      };
+      const onRecovery = vi.fn().mockResolvedValueOnce('retry' as const);
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        onRecovery,
+      });
+
+      await conductor.run();
+
+      // brainstorm should have been called twice (fail + retry)
+      expect(brainstormCalls).toBe(2);
+      // All steps should have completed
+      const result = await readState(statePath);
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value.feature_status).toBe('complete');
+      }
+    });
+
+    it('skips step when recovery returns skip (non-gating)', async () => {
+      // brainstorm is advisory (non-gating), so skip should work
+      let callCount = 0;
+      const runner: StepRunner = {
+        run: vi.fn(async () => {
+          callCount++;
+          if (callCount === 3) return { success: false, output: 'brainstorm failed' };
+          return { success: true };
+        }),
+      };
+      const onRecovery = vi.fn().mockResolvedValue('skip' as const);
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        onRecovery,
+      });
+
+      await conductor.run();
+
+      // brainstorm should be marked skipped
+      const result = await readState(statePath);
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value['brainstorm']).toBe('skipped');
+        // Should have continued past brainstorm
+        expect(result.value.feature_status).toBe('complete');
+      }
+    });
+
+    it('quits when recovery returns quit', async () => {
+      let callCount = 0;
+      const runner: StepRunner = {
+        run: vi.fn(async () => {
+          callCount++;
+          if (callCount === 3) return { success: false, output: 'brainstorm failed' };
+          return { success: true };
+        }),
+      };
+      const onRecovery = vi.fn().mockResolvedValue('quit' as const);
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        onRecovery,
+      });
+
+      await conductor.run();
+
+      // Should have stopped
+      const result = await readState(statePath);
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value['brainstorm']).toBe('failed');
+        expect(result.value.feature_status).toBeUndefined();
+      }
+    });
+
+    it('calls onRecovery with isGating=true for gating steps', async () => {
+      // stories is gating — set up prerequisites
+      await writeState(statePath, {
+        worktree: 'done',
+        memory: 'done',
+        brainstorm: 'done',
+        complexity: 'done',
+      } as ConductState);
+
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          if (step === 'stories') return { success: false, output: 'stories failed' };
+          return { success: true };
+        }),
+      };
+      const onRecovery = vi.fn().mockResolvedValue('quit' as const);
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'stories',
+        onRecovery,
+      });
+
+      await conductor.run();
+
+      expect(onRecovery).toHaveBeenCalledWith('stories', true);
+    });
+
+    it('navigates back when recovery returns back', async () => {
+      // Set up prerequisites through brainstorm
+      await writeState(statePath, {
+        worktree: 'done',
+        memory: 'done',
+        brainstorm: 'done',
+        complexity: 'done',
+      } as ConductState);
+
+      let storiesCalls = 0;
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          if (step === 'stories') {
+            storiesCalls++;
+            if (storiesCalls === 1) return { success: false, output: 'stories failed' };
+          }
+          return { success: true };
+        }),
+      };
+
+      const onRecovery = vi.fn().mockResolvedValueOnce('back' as const);
+      const onNavigate = vi.fn().mockResolvedValue('brainstorm' as StepName);
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'stories',
+        onRecovery,
+        onNavigate,
+      });
+
+      await conductor.run();
+
+      // onNavigate should have been called
+      expect(onNavigate).toHaveBeenCalled();
+    });
+
+    it('calls runInteractive when recovery returns interactive', async () => {
+      let brainstormCalls = 0;
+      const runner: StepRunner & { runInteractive?: ReturnType<typeof vi.fn> } = {
+        run: vi.fn(async (step: StepName) => {
+          if (step === 'brainstorm') {
+            brainstormCalls++;
+            if (brainstormCalls === 1) return { success: false, output: 'brainstorm failed' };
+            return { success: true };
+          }
+          return { success: true };
+        }),
+        runInteractive: vi.fn().mockResolvedValue(undefined),
+      };
+      const onRecovery = vi.fn().mockResolvedValueOnce('interactive' as const);
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        onRecovery,
+      });
+
+      await conductor.run();
+
+      // runInteractive should have been called with the failed step
+      expect(runner.runInteractive).toHaveBeenCalledWith('brainstorm');
+      // Then the step should have been retried
+      expect(brainstormCalls).toBe(2);
+    });
+  });
+
+  describe('complexity assessment', () => {
+    it('calls onComplexityAssessment after complexity step', async () => {
+      const runner = createMockStepRunner();
+      const onComplexityAssessment = vi.fn().mockResolvedValue('M' as const);
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        onComplexityAssessment,
+      });
+
+      await conductor.run();
+
+      expect(onComplexityAssessment).toHaveBeenCalled();
+    });
+
+    it('stores tier in state after assessment', async () => {
+      const runner = createMockStepRunner();
+      const onComplexityAssessment = vi.fn().mockResolvedValue('S' as const);
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        onComplexityAssessment,
+      });
+
+      await conductor.run();
+
+      const result = await readState(statePath);
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value.complexity_tier).toBe('S');
+      }
+    });
+
+    it('does not call onComplexityAssessment if tier already in state', async () => {
+      await writeState(statePath, { complexity_tier: 'L' } as ConductState);
+
+      const runner = createMockStepRunner();
+      const onComplexityAssessment = vi.fn().mockResolvedValue('M' as const);
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        onComplexityAssessment,
+      });
+
+      await conductor.run();
+
+      expect(onComplexityAssessment).not.toHaveBeenCalled();
+    });
+
+    it('does not call onComplexityAssessment in auto mode', async () => {
+      const runner = createMockStepRunner();
+      const onComplexityAssessment = vi.fn().mockResolvedValue('M' as const);
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        mode: 'auto',
+        onComplexityAssessment,
+      });
+
+      await conductor.run();
+
+      expect(onComplexityAssessment).not.toHaveBeenCalled();
+    });
+  });
+
   it('skips steps listed in config.steps.disable', async () => {
     const stepsRun: StepName[] = [];
     const runner: StepRunner = {
