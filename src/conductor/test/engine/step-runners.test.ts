@@ -1,4 +1,7 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { mkdtemp, rm, readFile, writeFile, access } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { LLMProvider, InvokeOptions, InvokeResult } from '../../src/execution/llm-provider.js';
 import type { ConductState } from '../../src/types/index.js';
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
@@ -163,5 +166,74 @@ describe('DefaultStepRunner', () => {
     const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
     expect(opts.systemPrompt).toContain('[Conduct step 11/14]');
     expect(opts.systemPrompt).not.toContain('Complete ONLY this step');
+  });
+
+  // --- Feature 2: Session creation marker ---
+
+  describe('session marker persistence', () => {
+    let pipeDir: string;
+
+    beforeEach(async () => {
+      pipeDir = await mkdtemp(join(tmpdir(), 'step-runner-'));
+    });
+
+    afterEach(async () => {
+      await rm(pipeDir, { recursive: true, force: true });
+    });
+
+    it('persists session-created marker after first success', async () => {
+      const provider = createMockProvider();
+      const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
+        pipelineDir: pipeDir,
+      });
+
+      await runner.run('worktree', emptyState);
+
+      // Marker file should exist
+      const markerPath = join(pipeDir, 'session-created');
+      await expect(access(markerPath).then(() => true, () => false)).resolves.toBe(true);
+    });
+
+    it('reads existing session-created marker on init', async () => {
+      // Pre-create the marker file
+      await writeFile(join(pipeDir, 'session-created'), '1', 'utf-8');
+
+      const provider = createMockProvider();
+      const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
+        pipelineDir: pipeDir,
+      });
+
+      // First run should use resume=true because marker exists
+      await runner.run('brainstorm', emptyState);
+
+      const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+      expect(opts.resume).toBe(true);
+    });
+
+    it('persists session ID to conduct-session-id file', async () => {
+      const provider = createMockProvider();
+      const runner = new DefaultStepRunner(provider, 'my-session-id', '/tmp/project', {
+        pipelineDir: pipeDir,
+      });
+
+      await runner.run('worktree', emptyState);
+
+      const sessionIdPath = join(pipeDir, 'conduct-session-id');
+      const content = await readFile(sessionIdPath, 'utf-8');
+      expect(content.trim()).toBe('my-session-id');
+    });
+
+    it('does not write marker when step fails', async () => {
+      const provider = createMockProvider();
+      (provider.invokeInteractive as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('crash'));
+      const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
+        pipelineDir: pipeDir,
+      });
+
+      await runner.run('worktree', emptyState);
+
+      const markerPath = join(pipeDir, 'session-created');
+      await expect(access(markerPath).then(() => true, () => false)).resolves.toBe(false);
+    });
   });
 });

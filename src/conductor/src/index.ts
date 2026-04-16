@@ -196,12 +196,21 @@ async function main(): Promise<void> {
     return;
   }
 
-  // Set up conductor
-  const sessionId = uuidv4();
+  // Set up conductor — reuse persisted session ID if resuming
+  let sessionId: string;
+  const sessionIdPath = join(pipelineDir, 'conduct-session-id');
+  try {
+    const persisted = await readFile(sessionIdPath, 'utf-8');
+    sessionId = persisted.trim() || uuidv4();
+  } catch {
+    sessionId = uuidv4();
+  }
+
   const events = new ConductorEventEmitter();
   const provider = new ClaudeProvider();
   const stepRunner = new DefaultStepRunner(provider, sessionId, projectRoot, {
     featureDesc: opts.featureDesc,
+    pipelineDir,
   });
 
   // Set up terminal UI

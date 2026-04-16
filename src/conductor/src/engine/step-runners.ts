@@ -1,3 +1,5 @@
+import { writeFile, access } from 'node:fs/promises';
+import { join } from 'node:path';
 import type { LLMProvider } from '../execution/llm-provider.js';
 import type { StepName, ConductState } from '../types/index.js';
 import type { StepRunner, StepRunResult } from './conductor.js';
@@ -32,12 +34,15 @@ const AUTONOMOUS_STEPS: Set<StepName> = new Set([
 export interface StepRunnerOptions {
   featureDesc?: string;
   totalSteps?: number;
+  pipelineDir?: string;
 }
 
 export class DefaultStepRunner implements StepRunner {
   private sessionStarted = false;
+  private sessionStartedInitialized = false;
   private featureDesc: string;
   private totalSteps: number;
+  private pipelineDir: string | null;
 
   constructor(
     private provider: LLMProvider,
@@ -47,9 +52,16 @@ export class DefaultStepRunner implements StepRunner {
   ) {
     this.featureDesc = options?.featureDesc ?? '';
     this.totalSteps = options?.totalSteps ?? ALL_STEPS.length;
+    this.pipelineDir = options?.pipelineDir ?? null;
   }
 
   async run(step: StepName, state: ConductState): Promise<StepRunResult> {
+    // Lazy-init: check marker file on first run
+    if (!this.sessionStartedInitialized && this.pipelineDir) {
+      this.sessionStarted = await this.fileExists(join(this.pipelineDir, 'session-created'));
+      this.sessionStartedInitialized = true;
+    }
+
     const prompt = STEP_PROMPTS[step];
     const resume = this.sessionStarted;
     const autonomous = AUTONOMOUS_STEPS.has(step);
@@ -65,9 +77,35 @@ export class DefaultStepRunner implements StepRunner {
         systemPrompt,
       });
       this.sessionStarted = true;
+
+      // Persist marker and session ID after first success
+      if (this.pipelineDir) {
+        await writeFile(join(this.pipelineDir, 'session-created'), '1', 'utf-8');
+        await writeFile(join(this.pipelineDir, 'conduct-session-id'), this.sessionId, 'utf-8');
+      }
+
       return { success: true };
     } catch {
       return { success: false, output: `Session for ${step} exited with error` };
+    }
+  }
+
+  async runInteractive(step: StepName): Promise<void> {
+    await this.provider.invokeInteractive({
+      prompt: `Fix issues from the failed ${step} step, then exit when done.`,
+      sessionId: this.sessionId,
+      resume: true,
+      interactive: true,
+      dangerouslySkipPermissions: false,
+    });
+  }
+
+  private async fileExists(path: string): Promise<boolean> {
+    try {
+      await access(path);
+      return true;
+    } catch {
+      return false;
     }
   }
 
