@@ -19,6 +19,23 @@ const STEP_PROMPTS: Record<StepName, string> = {
   finish: '/finish',
 };
 
+// Steps where the engineer works WITH Claude interactively
+const INTERACTIVE_STEPS: Set<StepName> = new Set([
+  'brainstorm',
+  'complexity',
+  'stories',
+  'conflict_check',
+  'plan',
+  'architecture_diagram',
+  'architecture_review',
+  'manual_test',
+  'retro',
+  'finish',
+]);
+
+// Steps that run autonomously with --print (no human interaction)
+// worktree, memory, acceptance_specs, build
+
 export class DefaultStepRunner implements StepRunner {
   private sessionStarted = false;
 
@@ -31,7 +48,25 @@ export class DefaultStepRunner implements StepRunner {
   async run(step: StepName, state: ConductState): Promise<StepRunResult> {
     const prompt = STEP_PROMPTS[step];
     const resume = this.sessionStarted;
+    const interactive = INTERACTIVE_STEPS.has(step);
 
+    if (interactive) {
+      // Interactive: hand control to Claude, engineer collaborates in terminal
+      try {
+        await this.provider.invokeInteractive({
+          prompt,
+          sessionId: this.sessionId,
+          resume,
+          dangerouslySkipPermissions: false, // interactive needs permissions
+        });
+        this.sessionStarted = true;
+        return { success: true };
+      } catch {
+        return { success: false, output: `Interactive session for ${step} exited with error` };
+      }
+    }
+
+    // Non-interactive: --print mode, capture output
     let result = await this.provider.invoke({
       prompt,
       sessionId: this.sessionId,
