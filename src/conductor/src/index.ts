@@ -20,6 +20,7 @@ import { ALL_STEPS } from './engine/steps.js';
 import * as readline from 'node:readline';
 import { sendNotification } from './ui/notifications.js';
 import { scanResumableFeatures, selectFeature, formatResumeMenu } from './engine/resume.js';
+import { WorktreeManager, checkPrMerged } from './engine/worktree.js';
 
 // --- Interactive prompts ---
 
@@ -159,6 +160,56 @@ async function handleComplexityAssessment(): Promise<ComplexityTier> {
   }
 }
 
+// --- Merged worktree cleanup ---
+
+async function cleanupMergedWorktrees(projectRoot: string): Promise<void> {
+  const features = await scanResumableFeatures(projectRoot);
+  const manager = new WorktreeManager(projectRoot);
+  let cleaned = 0;
+
+  for (const feature of features) {
+    // Read state to check for pr_url
+    let prUrl: string | undefined;
+    try {
+      const stateResult = await readState(join(feature.path, 'conduct-state.json'));
+      if (stateResult.ok) {
+        prUrl = stateResult.value.pr_url;
+      }
+    } catch {
+      // No state — skip
+    }
+    // Also check .pipeline location
+    if (!prUrl) {
+      try {
+        const stateResult = await readState(join(feature.path, '.pipeline', 'conduct-state.json'));
+        if (stateResult.ok) {
+          prUrl = stateResult.value.pr_url;
+        }
+      } catch {
+        // No state — skip
+      }
+    }
+
+    if (!prUrl) continue;
+
+    const merged = await checkPrMerged(prUrl);
+    if (merged) {
+      const answer = await prompt(`  Remove merged worktree "${feature.name}"? [y/n]: `);
+      if (answer === 'y') {
+        await manager.cleanup(feature.name);
+        console.log(`  Removed: ${feature.name}`);
+        cleaned++;
+      }
+    }
+  }
+
+  if (cleaned === 0) {
+    console.log('  No merged worktrees to clean up.');
+  } else {
+    console.log(`  Cleaned up ${cleaned} merged worktree${cleaned === 1 ? '' : 's'}.`);
+  }
+}
+
 // --- Main ---
 
 async function main(): Promise<void> {
@@ -206,8 +257,16 @@ async function main(): Promise<void> {
     return;
   }
 
-  // Handle --resume: scan worktrees and present selection menu
+  // Handle --cleanup: check for merged worktrees and clean up
+  if (opts.cleanup) {
+    console.log('\nChecking for merged worktrees...\n');
+    await cleanupMergedWorktrees(projectRoot);
+    return;
+  }
+
+  // Handle --resume: check for merged worktrees, then scan and present selection menu
   if (opts.resume) {
+    await cleanupMergedWorktrees(projectRoot);
     const features = await scanResumableFeatures(projectRoot);
     if (features.length === 0) {
       console.error('No active features found in .worktrees/');
