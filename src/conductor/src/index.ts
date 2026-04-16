@@ -2,10 +2,10 @@ export * from './types/index.js';
 export { parseArgs, createProgram, type CLIOptions } from './cli.js';
 
 import { join } from 'node:path';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import { v4 as uuidv4 } from 'uuid';
 import { Conductor } from './engine/conductor.js';
-import type { CheckpointResponse, NavigableStep } from './engine/conductor.js';
+import type { CheckpointResponse, NavigableStep, ArtifactReviewResult } from './engine/conductor.js';
 import { DefaultStepRunner } from './engine/step-runners.js';
 import { ClaudeProvider } from './execution/claude-provider.js';
 import { ConductorEventEmitter } from './ui/events.js';
@@ -102,6 +102,53 @@ async function handleNavigate(steps: NavigableStep[]): Promise<StepName | null> 
   return null;
 }
 
+// --- Artifact review ---
+
+async function handleReviewArtifacts(step: StepName, files: string[]): Promise<ArtifactReviewResult> {
+  const total = files.length;
+  console.log(`\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+  console.log(`  Artifact review: ${step} (${total} file${total === 1 ? '' : 's'})`);
+  console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);
+
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
+    const basename = file.split('/').pop() ?? file;
+
+    console.log(`━━━ [${i + 1}/${total}] ${basename} ━━━\n`);
+
+    // Display file contents
+    try {
+      const content = await readFile(file, 'utf-8');
+      console.log(content);
+    } catch {
+      console.log(`  (could not read file: ${file})`);
+    }
+
+    console.log(`\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+
+    while (true) {
+      const answer = await prompt('  [enter=approve / r=reject / s=skip remaining]: ');
+      if (answer === '' || answer === 'a') {
+        console.log(`  ✓ Approved: ${basename}`);
+        break;
+      }
+      if (answer === 'r') {
+        console.log(`  ✗ Rejected: ${basename}`);
+        console.log(`  Returning to ${step} to address issues...\n`);
+        return 'rejected';
+      }
+      if (answer === 's') {
+        console.log(`  Skipping review of remaining artifacts.`);
+        return 'approved';
+      }
+      console.log('  Invalid choice. Press enter to approve, r to reject, s to skip.');
+    }
+  }
+
+  console.log(`\n  ✓ All ${step} artifacts approved.\n`);
+  return 'approved';
+}
+
 // --- Main ---
 
 async function main(): Promise<void> {
@@ -181,8 +228,10 @@ async function main(): Promise<void> {
     fromStep: opts.from as StepName | undefined,
     mode,
     config,
+    projectRoot,
     onCheckpoint: handleCheckpoint,
     onNavigate: handleNavigate,
+    onReviewArtifacts: handleReviewArtifacts,
   });
 
   await conductor.run();

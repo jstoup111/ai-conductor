@@ -1,3 +1,5 @@
+import { readdir } from 'fs/promises';
+import { join } from 'path';
 import type { ConductState } from '../types/index.js';
 import type { StepName, StepStatus, Phase, RunMode } from '../types/index.js';
 import type { HarnessConfig } from '../types/config.js';
@@ -49,6 +51,8 @@ export interface StepRunner {
   run(step: StepName, state: ConductState): Promise<StepRunResult>;
 }
 
+export type ArtifactReviewResult = 'approved' | 'rejected' | 'skip';
+
 export interface ConductorOptions {
   stateFilePath: string;
   stepRunner: StepRunner;
@@ -57,9 +61,29 @@ export interface ConductorOptions {
   fromStep?: StepName;
   mode?: RunMode;
   config?: HarnessConfig;
+  projectRoot?: string;
   onCheckpoint?: (step: StepName) => Promise<CheckpointResponse>;
   onNavigate?: (steps: NavigableStep[]) => Promise<StepName | null>;
+  onReviewArtifacts?: (step: StepName, files: string[]) => Promise<ArtifactReviewResult>;
 }
+
+// Steps that require artifact review after completion
+const ARTIFACT_REVIEW_STEPS: Set<StepName> = new Set([
+  'brainstorm',
+  'stories',
+  'plan',
+  'architecture_diagram',
+  'architecture_review',
+]);
+
+// Glob patterns for artifacts produced by each reviewable step
+const ARTIFACT_GLOBS: Record<string, string[]> = {
+  brainstorm: ['.docs/specs/*.md'],
+  stories: ['.docs/stories/**/*.md'],
+  plan: ['.docs/plans/*.md'],
+  architecture_diagram: ['.docs/architecture/*.md'],
+  architecture_review: ['.docs/decisions/architecture-review-*.md', '.docs/decisions/adr-*.md'],
+};
 
 export class Conductor {
   private stateFilePath: string;
@@ -69,8 +93,10 @@ export class Conductor {
   private fromStep?: StepName;
   private mode: RunMode;
   private config: HarnessConfig;
+  private projectRoot: string;
   private onCheckpoint: (step: StepName) => Promise<CheckpointResponse>;
   private onNavigate: (steps: NavigableStep[]) => Promise<StepName | null>;
+  private onReviewArtifacts: (step: StepName, files: string[]) => Promise<ArtifactReviewResult>;
 
   constructor(opts: ConductorOptions) {
     this.stateFilePath = opts.stateFilePath;
@@ -80,8 +106,10 @@ export class Conductor {
     this.fromStep = opts.fromStep;
     this.mode = opts.mode ?? 'default';
     this.config = opts.config ?? {};
+    this.projectRoot = opts.projectRoot ?? process.cwd();
     this.onCheckpoint = opts.onCheckpoint ?? (async () => 'continue' as const);
     this.onNavigate = opts.onNavigate ?? (async () => null);
+    this.onReviewArtifacts = opts.onReviewArtifacts ?? (async () => 'approved' as const);
   }
 
   async run(): Promise<void> {
@@ -143,6 +171,19 @@ export class Conductor {
       const result = await this.stepRunner.run(step.name, state);
 
       if (result.success) {
+        // Artifact review gate — show artifacts for approval before marking done
+        if (ARTIFACT_REVIEW_STEPS.has(step.name) && this.mode !== 'auto') {
+          const files = await this.findArtifactFiles(step.name);
+          if (files.length > 0) {
+            const reviewResult = await this.onReviewArtifacts(step.name, files);
+            if (reviewResult === 'rejected') {
+              // Re-run the step — user rejected artifacts
+              i--; // for loop will i++, so we stay on the same step
+              continue;
+            }
+          }
+        }
+
         await saveStepStatus(this.stateFilePath, step.name, 'done');
         state[step.name] = 'done';
         this.events.emit({ type: 'step_completed', step: step.name, status: 'done' });
@@ -229,5 +270,62 @@ export class Conductor {
     }
 
     return lastDoneIndex + 1;
+  }
+
+  /**
+   * Find artifact files produced by a step for review.
+   * Uses the glob patterns defined in ARTIFACT_GLOBS.
+   */
+  private async findArtifactFiles(step: StepName): Promise<string[]> {
+    const patterns = ARTIFACT_GLOBS[step];
+    if (!patterns) return [];
+
+    const files: string[] = [];
+    for (const pattern of patterns) {
+      // Simple glob: support dir/*.md and dir/**/*.md
+      const parts = pattern.split('/');
+      const isRecursive = parts.includes('**');
+
+      if (isRecursive) {
+        // e.g., .docs/stories/**/*.md — walk subdirectories
+        const baseDir = join(this.projectRoot, parts.slice(0, parts.indexOf('**')).join('/'));
+        const ext = parts[parts.length - 1]; // e.g., *.md
+        const collected = await this.walkDir(baseDir, ext.replace('*', ''));
+        files.push(...collected);
+      } else {
+        // e.g., .docs/specs/*.md — single directory
+        const dir = join(this.projectRoot, parts.slice(0, -1).join('/'));
+        const ext = parts[parts.length - 1].replace('*', ''); // .md
+        try {
+          const entries = await readdir(dir);
+          for (const entry of entries) {
+            if (entry.endsWith(ext)) {
+              files.push(join(dir, entry));
+            }
+          }
+        } catch {
+          // Directory doesn't exist — no artifacts
+        }
+      }
+    }
+    return files;
+  }
+
+  private async walkDir(dir: string, ext: string): Promise<string[]> {
+    const files: string[] = [];
+    try {
+      const entries = await readdir(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        const fullPath = join(dir, entry.name);
+        if (entry.isDirectory()) {
+          files.push(...await this.walkDir(fullPath, ext));
+        } else if (entry.name.endsWith(ext)) {
+          files.push(fullPath);
+        }
+      }
+    } catch {
+      // Directory doesn't exist
+    }
+    return files;
   }
 }
