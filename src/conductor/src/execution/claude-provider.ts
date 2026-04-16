@@ -12,11 +12,19 @@ export class ClaudeProvider implements LLMProvider {
       args.push('--print', '--output-format', 'text', '-p', options.prompt);
     }
 
-    const result = await execa('claude', args, { reject: false });
+    // Stream stdout/stderr to terminal while also capturing for analysis
+    const result = await execa('claude', args, {
+      reject: false,
+      stdout: ['pipe', 'inherit'],
+      stderr: ['pipe', 'inherit'],
+    });
 
-    const output = (result.stdout ?? '') as string;
+    const stdout = (result.stdout ?? '') as string;
     const stderr = (result.stderr ?? '') as string;
     const exitCode = (result.exitCode ?? 1) as number;
+
+    // Combine stdout + stderr so the caller has full context
+    const output = stderr ? `${stdout}\n${stderr}`.trim() : stdout;
 
     // Detect missing binary (exit 127 or ENOENT in stderr)
     if (exitCode === 127 || /ENOENT|not found/i.test(stderr)) {

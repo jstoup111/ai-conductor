@@ -36,7 +36,10 @@ function renderEvent(event: ConductorEvent): void {
       console.log(`  ${STATUS_ICONS.done} ${event.step} — done`);
       break;
     case 'step_failed':
-      console.log(`  ${STATUS_ICONS.failed} ${event.step} — FAILED: ${event.error}`);
+      console.log(`  ${STATUS_ICONS.failed} ${event.step} — FAILED`);
+      if (event.error) {
+        console.log(`\n--- Step output ---\n${event.error}\n--- End output ---\n`);
+      }
       break;
     case 'tier_skip':
       console.log(`  ${STATUS_ICONS.skipped} ${event.step} — skipped (tier ${event.tier})`);
