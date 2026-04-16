@@ -3,7 +3,7 @@ import { mkdtemp, rm, readFile, writeFile, access } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { LLMProvider, InvokeOptions, InvokeResult } from '../../src/execution/llm-provider.js';
-import type { ConductState } from '../../src/types/index.js';
+import type { ConductState, StepName } from '../../src/types/index.js';
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 
 function createMockProvider(): LLMProvider {
@@ -234,6 +234,95 @@ describe('DefaultStepRunner', () => {
 
       const markerPath = join(pipeDir, 'session-created');
       await expect(access(markerPath).then(() => true, () => false)).resolves.toBe(false);
+    });
+  });
+
+  // --- Feature 3: Step cooldown ---
+
+  describe('step cooldown', () => {
+    it('tracks call count across steps', async () => {
+      const sleepSpy = vi.fn().mockResolvedValue(undefined);
+      const provider = createMockProvider();
+      const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
+        stepCooldown: 10,
+        sleepFn: sleepSpy,
+      });
+
+      await runner.run('worktree', emptyState);
+      await runner.run('memory', emptyState);
+
+      expect(runner.callCount).toBe(2);
+    });
+
+    it('skips cooldown for the very first step', async () => {
+      const sleepSpy = vi.fn().mockResolvedValue(undefined);
+      const provider = createMockProvider();
+      const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
+        stepCooldown: 10,
+        sleepFn: sleepSpy,
+      });
+
+      await runner.run('worktree', emptyState);
+
+      // No sleep before the first step
+      expect(sleepSpy).not.toHaveBeenCalled();
+    });
+
+    it('applies cooldown after the first step', async () => {
+      const sleepSpy = vi.fn().mockResolvedValue(undefined);
+      const provider = createMockProvider();
+      const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
+        stepCooldown: 10,
+        sleepFn: sleepSpy,
+      });
+
+      await runner.run('worktree', emptyState);
+      await runner.run('memory', emptyState);
+
+      // Sleep called once before the second step
+      expect(sleepSpy).toHaveBeenCalledOnce();
+      expect(sleepSpy).toHaveBeenCalledWith(10000); // 10 seconds in ms
+    });
+
+    it('cooldown escalates after 10 calls', async () => {
+      const sleepSpy = vi.fn().mockResolvedValue(undefined);
+      const provider = createMockProvider();
+      const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
+        stepCooldown: 10,
+        sleepFn: sleepSpy,
+      });
+
+      // Run 11 steps (first has no cooldown, steps 2-10 use base, step 11 uses 2x)
+      const steps: StepName[] = [
+        'worktree', 'memory', 'brainstorm', 'complexity', 'stories',
+        'conflict_check', 'plan', 'architecture_diagram', 'architecture_review',
+        'acceptance_specs', 'build',
+      ];
+      for (const step of steps) {
+        await runner.run(step, emptyState);
+      }
+
+      // 10 sleep calls (steps 2-11)
+      expect(sleepSpy).toHaveBeenCalledTimes(10);
+      // Last call (11th step, callCount=10 at that point) should use 2x cooldown
+      expect(sleepSpy).toHaveBeenLastCalledWith(20000); // 2x base
+    });
+
+    it('cooldown escalates to 3x after 20 calls', async () => {
+      const sleepSpy = vi.fn().mockResolvedValue(undefined);
+      const provider = createMockProvider();
+      const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
+        stepCooldown: 5,
+        sleepFn: sleepSpy,
+      });
+
+      // Simulate 21 calls by running same step repeatedly
+      for (let i = 0; i < 21; i++) {
+        await runner.run('worktree', emptyState);
+      }
+
+      // Last call (21st step, callCount=20 at that point) should use 3x cooldown
+      expect(sleepSpy).toHaveBeenLastCalledWith(15000); // 3x * 5s
     });
   });
 });

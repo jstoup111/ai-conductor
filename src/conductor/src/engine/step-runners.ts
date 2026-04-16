@@ -31,10 +31,16 @@ const AUTONOMOUS_STEPS: Set<StepName> = new Set([
   'build',
 ]);
 
+function defaultSleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export interface StepRunnerOptions {
   featureDesc?: string;
   totalSteps?: number;
   pipelineDir?: string;
+  stepCooldown?: number;
+  sleepFn?: (ms: number) => Promise<void>;
 }
 
 export class DefaultStepRunner implements StepRunner {
@@ -43,6 +49,9 @@ export class DefaultStepRunner implements StepRunner {
   private featureDesc: string;
   private totalSteps: number;
   private pipelineDir: string | null;
+  private stepCooldown: number;
+  private sleepFn: (ms: number) => Promise<void>;
+  callCount = 0;
 
   constructor(
     private provider: LLMProvider,
@@ -53,6 +62,8 @@ export class DefaultStepRunner implements StepRunner {
     this.featureDesc = options?.featureDesc ?? '';
     this.totalSteps = options?.totalSteps ?? ALL_STEPS.length;
     this.pipelineDir = options?.pipelineDir ?? null;
+    this.stepCooldown = options?.stepCooldown ?? 0;
+    this.sleepFn = options?.sleepFn ?? defaultSleep;
   }
 
   async run(step: StepName, state: ConductState): Promise<StepRunResult> {
@@ -60,6 +71,12 @@ export class DefaultStepRunner implements StepRunner {
     if (!this.sessionStartedInitialized && this.pipelineDir) {
       this.sessionStarted = await this.fileExists(join(this.pipelineDir, 'session-created'));
       this.sessionStartedInitialized = true;
+    }
+
+    // Apply cooldown before steps (skip first step)
+    if (this.callCount > 0 && this.stepCooldown > 0) {
+      const multiplier = this.callCount >= 20 ? 3 : this.callCount >= 10 ? 2 : 1;
+      await this.sleepFn(this.stepCooldown * 1000 * multiplier);
     }
 
     const prompt = STEP_PROMPTS[step];
@@ -77,6 +94,7 @@ export class DefaultStepRunner implements StepRunner {
         systemPrompt,
       });
       this.sessionStarted = true;
+      this.callCount++;
 
       // Persist marker and session ID after first success
       if (this.pipelineDir) {
@@ -86,6 +104,7 @@ export class DefaultStepRunner implements StepRunner {
 
       return { success: true };
     } catch {
+      this.callCount++;
       return { success: false, output: `Session for ${step} exited with error` };
     }
   }

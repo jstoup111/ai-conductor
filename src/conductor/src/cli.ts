@@ -10,6 +10,7 @@ export interface CLIOptions {
   step?: string;
   reset: boolean;
   output: boolean;
+  cooldown: number;
 }
 
 export function createProgram(): Command {
@@ -25,7 +26,8 @@ export function createProgram(): Command {
     .option('--cleanup', 'Clean up worktrees')
     .option('--step <step>', 'Run single step')
     .option('--reset', 'Clear state')
-    .option('--output', 'Raw output mode');
+    .option('--output', 'Raw output mode')
+    .option('--cooldown <seconds>', 'Cooldown between steps in seconds', '10');
   return program;
 }
 
@@ -47,6 +49,7 @@ export function parseArgs(argv: string[]): CLIOptions {
     step: opts.step,
     reset: opts.reset ?? false,
     output: opts.output ?? false,
+    cooldown: parseInt(opts.cooldown ?? '10', 10),
   };
 
   const hasStateFlag = result.resume || result.status || result.cleanup || result.reset || !!result.step;
