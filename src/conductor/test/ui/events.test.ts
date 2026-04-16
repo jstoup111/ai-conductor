@@ -63,6 +63,27 @@ describe('ConductorEventEmitter', () => {
     expect(result).toEqual(event);
   });
 
+  it('continues operating when listener throws', () => {
+    const emitter = new ConductorEventEmitter();
+
+    // Register a listener that throws
+    emitter.on('step_started', () => {
+      throw new Error('subscriber kaboom');
+    });
+
+    // Emit should not throw despite the broken listener
+    expect(() => {
+      emitter.emit({ type: 'step_started', step: 'brainstorm', index: 0 });
+    }).not.toThrow();
+
+    // Emitter must still work after the error
+    const handler2 = vi.fn();
+    emitter.on('dashboard_refresh', handler2);
+    emitter.emit({ type: 'dashboard_refresh' });
+
+    expect(handler2).toHaveBeenCalledOnce();
+  });
+
   it('multiple listeners on same event type all fire', () => {
     const emitter = new ConductorEventEmitter();
     const handler1 = vi.fn();

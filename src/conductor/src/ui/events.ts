@@ -7,7 +7,11 @@ export class ConductorEventEmitter {
   private emitter = new EventEmitter();
 
   emit(event: ConductorEvent): void {
-    this.emitter.emit(event.type, event);
+    try {
+      this.emitter.emit(event.type, event);
+    } catch {
+      // UI subscriber errors must not crash the engine
+    }
   }
 
   on(type: ConductorEvent['type'], handler: EventHandler): void {
