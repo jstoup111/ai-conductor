@@ -118,6 +118,19 @@ describe('ClaudeProvider', () => {
       expect(result.exitCode).toBe(0);
     });
 
+    it('returns failure with clear message when claude binary not found', async () => {
+      mockExeca.mockResolvedValue({
+        stdout: '',
+        stderr: 'ENOENT',
+        exitCode: 127,
+        failed: true,
+      } as any);
+
+      const result = await provider.invoke(baseOptions);
+      expect(result.success).toBe(false);
+      expect(result.output).toMatch(/not found/i);
+    });
+
     it('includes --name when sessionName provided', async () => {
       mockExeca.mockResolvedValue({
         stdout: 'ok',

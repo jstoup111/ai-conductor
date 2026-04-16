@@ -15,7 +15,18 @@ export class ClaudeProvider implements LLMProvider {
     const result = await execa('claude', args, { reject: false });
 
     const output = (result.stdout ?? '') as string;
+    const stderr = (result.stderr ?? '') as string;
     const exitCode = (result.exitCode ?? 1) as number;
+
+    // Detect missing binary (exit 127 or ENOENT in stderr)
+    if (exitCode === 127 || /ENOENT|not found/i.test(stderr)) {
+      return {
+        success: false,
+        output: "LLM provider 'claude' not found. Install it or check your PATH.",
+        exitCode,
+      };
+    }
+
     const rateLimited = RATE_LIMIT_RE.test(output);
     const sessionExpired = STALE_SESSION_RE.test(output);
 
