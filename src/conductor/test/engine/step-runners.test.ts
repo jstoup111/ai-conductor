@@ -3,13 +3,12 @@ import type { LLMProvider, InvokeOptions, InvokeResult } from '../../src/executi
 import type { ConductState } from '../../src/types/index.js';
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 
-function createMockProvider(result?: Partial<InvokeResult>): LLMProvider {
+function createMockProvider(): LLMProvider {
   return {
     invoke: vi.fn().mockResolvedValue({
       success: true,
       output: 'done',
       exitCode: 0,
-      ...result,
     }),
     invokeInteractive: vi.fn().mockResolvedValue(undefined),
   };
@@ -18,8 +17,7 @@ function createMockProvider(result?: Partial<InvokeResult>): LLMProvider {
 const emptyState: ConductState = {};
 
 describe('DefaultStepRunner', () => {
-  // Interactive steps use invokeInteractive
-  it('invokes interactive session for brainstorm', async () => {
+  it('all steps use invokeInteractive (stdio: inherit)', async () => {
     const provider = createMockProvider();
     const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project');
 
@@ -27,75 +25,39 @@ describe('DefaultStepRunner', () => {
 
     expect(provider.invokeInteractive).toHaveBeenCalledOnce();
     expect(provider.invoke).not.toHaveBeenCalled();
+  });
+
+  it('passes correct prompt for brainstorm', async () => {
+    const provider = createMockProvider();
+    const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project');
+
+    await runner.run('brainstorm', emptyState);
+
     const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
     expect(opts.prompt).toContain('/brainstorm');
   });
 
-  it('invokes interactive session for stories', async () => {
-    const provider = createMockProvider();
-    const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project');
-
-    await runner.run('stories', emptyState);
-
-    expect(provider.invokeInteractive).toHaveBeenCalledOnce();
-    const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
-    expect(opts.prompt).toContain('/stories');
-  });
-
-  it('invokes interactive session for plan', async () => {
-    const provider = createMockProvider();
-    const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project');
-
-    await runner.run('plan', emptyState);
-
-    expect(provider.invokeInteractive).toHaveBeenCalledOnce();
-    const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
-    expect(opts.prompt).toContain('/plan');
-  });
-
-  // Non-interactive steps use invoke with --print
-  it('invokes LLM provider with --print for build', async () => {
+  it('passes correct prompt for build (pipeline)', async () => {
     const provider = createMockProvider();
     const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project');
 
     await runner.run('build', emptyState);
 
-    expect(provider.invoke).toHaveBeenCalledOnce();
-    expect(provider.invokeInteractive).not.toHaveBeenCalled();
-    const opts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
     expect(opts.prompt).toMatch(/\/pipeline|\/tdd/);
   });
 
-  it('returns success for interactive step', async () => {
+  it('autonomous steps use --dangerouslySkipPermissions', async () => {
     const provider = createMockProvider();
     const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project');
 
-    const result = await runner.run('brainstorm', emptyState);
+    await runner.run('build', emptyState);
 
-    expect(result.success).toBe(true);
+    const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    expect(opts.dangerouslySkipPermissions).toBe(true);
   });
 
-  it('returns success when non-interactive LLM returns success', async () => {
-    const provider = createMockProvider({ success: true, output: 'all good', exitCode: 0 });
-    const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project');
-
-    const result = await runner.run('build', emptyState);
-
-    expect(result.success).toBe(true);
-    expect(result.output).toBe('all good');
-  });
-
-  it('returns failure when non-interactive LLM returns failure', async () => {
-    const provider = createMockProvider({ success: false, output: 'error occurred', exitCode: 1 });
-    const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project');
-
-    const result = await runner.run('build', emptyState);
-
-    expect(result.success).toBe(false);
-    expect(result.output).toBe('error occurred');
-  });
-
-  it('does not use --dangerouslySkipPermissions for interactive steps', async () => {
+  it('collaborative steps do NOT use --dangerouslySkipPermissions', async () => {
     const provider = createMockProvider();
     const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project');
 
@@ -105,13 +67,55 @@ describe('DefaultStepRunner', () => {
     expect(opts.dangerouslySkipPermissions).toBe(false);
   });
 
-  it('uses --dangerouslySkipPermissions for non-interactive steps', async () => {
+  it('worktree is autonomous', async () => {
     const provider = createMockProvider();
     const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project');
 
-    await runner.run('build', emptyState);
+    await runner.run('worktree', emptyState);
 
-    const opts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
     expect(opts.dangerouslySkipPermissions).toBe(true);
+  });
+
+  it('stories is collaborative', async () => {
+    const provider = createMockProvider();
+    const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project');
+
+    await runner.run('stories', emptyState);
+
+    const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    expect(opts.dangerouslySkipPermissions).toBe(false);
+  });
+
+  it('returns success on normal completion', async () => {
+    const provider = createMockProvider();
+    const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project');
+
+    const result = await runner.run('brainstorm', emptyState);
+
+    expect(result.success).toBe(true);
+  });
+
+  it('returns failure when session throws', async () => {
+    const provider = createMockProvider();
+    (provider.invokeInteractive as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('crash'));
+    const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project');
+
+    const result = await runner.run('brainstorm', emptyState);
+
+    expect(result.success).toBe(false);
+  });
+
+  it('first step does not resume, subsequent steps do', async () => {
+    const provider = createMockProvider();
+    const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project');
+
+    await runner.run('worktree', emptyState);
+    await runner.run('memory', emptyState);
+
+    const call1 = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    const call2 = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[1][0] as InvokeOptions;
+    expect(call1.resume).toBe(false);
+    expect(call2.resume).toBe(true);
   });
 });

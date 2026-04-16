@@ -5,6 +5,10 @@ const RATE_LIMIT_RE = /rate limit|429|overloaded|usage limit/i;
 const STALE_SESSION_RE = /No conversation found/i;
 
 export class ClaudeProvider implements LLMProvider {
+  /**
+   * Run Claude with --print mode. Captures output for analysis.
+   * Used only for truly non-interactive one-shot queries.
+   */
   async invoke(options: InvokeOptions): Promise<InvokeResult> {
     const args = this.buildArgs(options);
 
@@ -47,8 +51,17 @@ export class ClaudeProvider implements LLMProvider {
     };
   }
 
+  /**
+   * Run Claude with stdio inherited — user sees output and can interact.
+   * Used for all skill steps (both collaborative and autonomous).
+   * The prompt is passed via -p flag (starts the session with the skill command).
+   */
   async invokeInteractive(options: InvokeOptions): Promise<void> {
     const args = this.buildArgs(options);
+
+    if (options.prompt) {
+      args.push('-p', options.prompt);
+    }
 
     await execa('claude', args, {
       stdio: 'inherit',
