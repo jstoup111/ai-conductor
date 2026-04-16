@@ -27,6 +27,10 @@ export class TerminalSubscriber implements UISubscriber {
       'checkpoint_reached',
       'recovery_needed',
       'dashboard_refresh',
+      'tier_skip',
+      'config_skip',
+      'gate_blocked',
+      'feature_complete',
     ];
 
     for (const type of eventTypes) {
