@@ -6,7 +6,7 @@ export interface UISubscriber {
   stop(): void;
 }
 
-export type RenderCallback = (event: ConductorEvent) => void;
+export type RenderCallback = (event: ConductorEvent) => void | Promise<void>;
 
 export class TerminalSubscriber implements UISubscriber {
   private eventEmitter: ConductorEventEmitter;

@@ -13,60 +13,13 @@ import { TerminalSubscriber } from './ui/subscriber.js';
 import { loadConfig } from './engine/config.js';
 import { readState, writeState } from './engine/state.js';
 import { parseArgs, type CLIOptions } from './cli.js';
-import type { StepName, RunMode, ConductorEvent, RecoveryOption, ComplexityTier } from './types/index.js';
+import type { StepName, RunMode, RecoveryOption, ComplexityTier } from './types/index.js';
 import { getRecoveryOptions } from './engine/recovery.js';
+import { createRenderer } from './ui/create-renderer.js';
+import { ALL_STEPS } from './engine/steps.js';
 import * as readline from 'node:readline';
 import { sendNotification } from './ui/notifications.js';
 import { scanResumableFeatures, selectFeature, formatResumeMenu } from './engine/resume.js';
-
-// --- Terminal UI rendering ---
-
-const STATUS_ICONS: Record<string, string> = {
-  done: '✓',
-  in_progress: '▶',
-  pending: '⬚',
-  skipped: '→',
-  stale: '⚠',
-  failed: '✗',
-};
-
-function renderEvent(event: ConductorEvent): void {
-  switch (event.type) {
-    case 'step_started':
-      console.log(`  ${STATUS_ICONS.in_progress} ${event.step} — running...`);
-      break;
-    case 'step_completed':
-      console.log(`  ${STATUS_ICONS.done} ${event.step} — done`);
-      sendNotification('Conductor', `Step completed: ${event.step}`).catch(() => {});
-      break;
-    case 'step_failed':
-      console.log(`  ${STATUS_ICONS.failed} ${event.step} — FAILED`);
-      if (event.error) {
-        console.log(`\n--- Step output ---\n${event.error}\n--- End output ---\n`);
-      }
-      sendNotification('Conductor', `Step failed: ${event.step}`).catch(() => {});
-      break;
-    case 'tier_skip':
-      console.log(`  ${STATUS_ICONS.skipped} ${event.step} — skipped (tier ${event.tier})`);
-      break;
-    case 'config_skip':
-      console.log(`  ${STATUS_ICONS.skipped} ${event.step} — skipped (disabled via config)`);
-      break;
-    case 'gate_blocked':
-      console.log(`  ${STATUS_ICONS.failed} ${event.step} — BLOCKED: ${event.reason}`);
-      break;
-    case 'checkpoint_reached':
-      console.log(`\n── Checkpoint: ${event.step} complete ──`);
-      break;
-    case 'feature_complete':
-      console.log(`\n✓ Feature complete.${event.prUrl ? ` PR: ${event.prUrl}` : ''}`);
-      sendNotification('Conductor', 'Pipeline complete!').catch(() => {});
-      break;
-    case 'dashboard_refresh':
-      // silent
-      break;
-  }
-}
 
 // --- Interactive prompts ---
 
@@ -318,7 +271,14 @@ async function main(): Promise<void> {
     stepCooldown: opts.cooldown,
   });
 
-  // Set up terminal UI
+  // Set up terminal UI with live dashboard
+  const renderEvent = createRenderer({
+    stateFilePath,
+    featureDesc: opts.featureDesc,
+    steps: ALL_STEPS,
+    readStateFn: readState,
+    notifyFn: sendNotification,
+  });
   const subscriber = new TerminalSubscriber(events, renderEvent);
   subscriber.start();
 

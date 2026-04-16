@@ -7,6 +7,7 @@ export interface CreateRendererOptions {
   featureDesc?: string;
   steps: StepDefinition[];
   readStateFn: (path: string) => Promise<StateResult<ConductState>>;
+  notifyFn?: (title: string, message: string) => Promise<void>;
 }
 
 const STATUS_ICONS: Record<string, string> = {
@@ -24,8 +25,12 @@ const STATUS_ICONS: Record<string, string> = {
  * active interactive steps.
  */
 export function createRenderer(opts: CreateRendererOptions): (event: ConductorEvent) => Promise<void> {
-  const { stateFilePath, featureDesc, steps, readStateFn } = opts;
+  const { stateFilePath, featureDesc, steps, readStateFn, notifyFn } = opts;
   let stepActive = false;
+
+  function notify(title: string, message: string): void {
+    if (notifyFn) notifyFn(title, message).catch(() => {});
+  }
 
   async function renderDashboard(): Promise<void> {
     const stateResult = await readStateFn(stateFilePath);
@@ -46,6 +51,7 @@ export function createRenderer(opts: CreateRendererOptions): (event: ConductorEv
       case 'step_completed':
         stepActive = false;
         await renderDashboard();
+        notify('Conductor', `Step completed: ${event.step}`);
         break;
 
       case 'step_failed':
@@ -54,6 +60,7 @@ export function createRenderer(opts: CreateRendererOptions): (event: ConductorEv
         if (event.error) {
           console.log(`\n--- Step output ---\n${event.error}\n--- End output ---\n`);
         }
+        notify('Conductor', `Step failed: ${event.step}`);
         break;
 
       case 'tier_skip':
@@ -75,6 +82,7 @@ export function createRenderer(opts: CreateRendererOptions): (event: ConductorEv
         stepActive = false;
         await renderDashboard();
         console.log(`\n✓ Feature complete.${event.prUrl ? ` PR: ${event.prUrl}` : ''}`);
+        notify('Conductor', 'Pipeline complete!');
         break;
 
       case 'dashboard_refresh':
