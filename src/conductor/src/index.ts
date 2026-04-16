@@ -13,7 +13,8 @@ import { TerminalSubscriber } from './ui/subscriber.js';
 import { loadConfig } from './engine/config.js';
 import { readState, writeState } from './engine/state.js';
 import { parseArgs, type CLIOptions } from './cli.js';
-import type { StepName, RunMode, ConductorEvent } from './types/index.js';
+import type { StepName, RunMode, ConductorEvent, RecoveryOption, ComplexityTier } from './types/index.js';
+import { getRecoveryOptions } from './engine/recovery.js';
 import * as readline from 'node:readline';
 
 // --- Terminal UI rendering ---
@@ -149,6 +150,57 @@ async function handleReviewArtifacts(step: StepName, files: string[]): Promise<A
   return 'approved';
 }
 
+// --- Recovery menu ---
+
+const RECOVERY_LABELS: Record<RecoveryOption, string> = {
+  retry: '[r]etry',
+  interactive: '[i]nteractive fix',
+  back: '[b]ack',
+  skip: '[s]kip',
+  quit: '[q]uit',
+};
+
+const RECOVERY_KEYS: Record<string, RecoveryOption> = {
+  r: 'retry',
+  i: 'interactive',
+  b: 'back',
+  s: 'skip',
+  q: 'quit',
+};
+
+async function handleRecovery(step: StepName, isGating: boolean): Promise<RecoveryOption> {
+  const options = getRecoveryOptions(step, isGating);
+  const labels = options.map((o) => RECOVERY_LABELS[o]).join(' / ');
+  const keys = options.map((o) => o[0]).join('/');
+
+  while (true) {
+    const answer = await prompt(`  ${labels} [${keys}]: `);
+    const action = RECOVERY_KEYS[answer];
+    if (action && options.includes(action)) return action;
+    console.log(`  Invalid choice. Enter one of: ${keys}`);
+  }
+}
+
+// --- Complexity assessment ---
+
+async function handleComplexityAssessment(): Promise<ComplexityTier> {
+  console.log(`\nComplexity signals:`);
+  console.log(`  Models/tables:         ?`);
+  console.log(`  External integrations: ?`);
+  console.log(`  Auth/authz:            ?`);
+  console.log(`  State machines:        ?`);
+  console.log(`  Estimated stories:     ?`);
+  console.log();
+
+  while (true) {
+    const answer = await prompt('  Based on the brainstorm, classify complexity [S/M/L]: ');
+    if (answer === 's') return 'S';
+    if (answer === 'm') return 'M';
+    if (answer === 'l') return 'L';
+    console.log('  Invalid choice. Enter s, m, or l.');
+  }
+}
+
 // --- Main ---
 
 async function main(): Promise<void> {
@@ -211,6 +263,7 @@ async function main(): Promise<void> {
   const stepRunner = new DefaultStepRunner(provider, sessionId, projectRoot, {
     featureDesc: opts.featureDesc,
     pipelineDir,
+    stepCooldown: opts.cooldown,
   });
 
   // Set up terminal UI
@@ -243,6 +296,8 @@ async function main(): Promise<void> {
     onCheckpoint: handleCheckpoint,
     onNavigate: handleNavigate,
     onReviewArtifacts: handleReviewArtifacts,
+    onRecovery: handleRecovery,
+    onComplexityAssessment: handleComplexityAssessment,
   });
 
   await conductor.run();
