@@ -1,6 +1,7 @@
 import type { LLMProvider } from '../execution/llm-provider.js';
 import type { StepName, ConductState } from '../types/index.js';
 import type { StepRunner, StepRunResult } from './conductor.js';
+import { ALL_STEPS, getStepIndex, getStepDefinition } from './steps.js';
 
 const STEP_PROMPTS: Record<StepName, string> = {
   worktree: '/conduct worktree',
@@ -28,19 +29,32 @@ const AUTONOMOUS_STEPS: Set<StepName> = new Set([
   'build',
 ]);
 
+export interface StepRunnerOptions {
+  featureDesc?: string;
+  totalSteps?: number;
+}
+
 export class DefaultStepRunner implements StepRunner {
   private sessionStarted = false;
+  private featureDesc: string;
+  private totalSteps: number;
 
   constructor(
     private provider: LLMProvider,
     private sessionId: string,
     private projectDir: string,
-  ) {}
+    options?: StepRunnerOptions,
+  ) {
+    this.featureDesc = options?.featureDesc ?? '';
+    this.totalSteps = options?.totalSteps ?? ALL_STEPS.length;
+  }
 
   async run(step: StepName, state: ConductState): Promise<StepRunResult> {
     const prompt = STEP_PROMPTS[step];
     const resume = this.sessionStarted;
     const autonomous = AUTONOMOUS_STEPS.has(step);
+
+    const systemPrompt = this.buildSystemPrompt(step, autonomous);
 
     try {
       await this.provider.invokeInteractive({
@@ -48,11 +62,26 @@ export class DefaultStepRunner implements StepRunner {
         sessionId: this.sessionId,
         resume,
         dangerouslySkipPermissions: autonomous,
+        systemPrompt,
       });
       this.sessionStarted = true;
       return { success: true };
     } catch {
       return { success: false, output: `Session for ${step} exited with error` };
     }
+  }
+
+  private buildSystemPrompt(step: StepName, autonomous: boolean): string {
+    const stepIndex = getStepIndex(step) + 1; // 1-based for display
+    const stepDef = getStepDefinition(step);
+    const featurePart = this.featureDesc ? ` Feature: ${this.featureDesc}` : '';
+
+    let prompt = `[Conduct step ${stepIndex}/${this.totalSteps}]${featurePart}`;
+
+    if (!autonomous) {
+      prompt = `You are running step: ${stepDef.label}. Complete ONLY this step, then stop and let the user /quit to return to the conductor.\n${prompt}`;
+    }
+
+    return prompt;
   }
 }

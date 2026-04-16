@@ -100,7 +100,7 @@ export class ClaudeProvider implements LLMProvider {
     }
 
     if (options.systemPrompt) {
-      args.push('--system-prompt', options.systemPrompt);
+      args.push('--append-system-prompt', options.systemPrompt);
     }
 
     return args;

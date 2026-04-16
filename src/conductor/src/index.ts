@@ -200,7 +200,9 @@ async function main(): Promise<void> {
   const sessionId = uuidv4();
   const events = new ConductorEventEmitter();
   const provider = new ClaudeProvider();
-  const stepRunner = new DefaultStepRunner(provider, sessionId, projectRoot);
+  const stepRunner = new DefaultStepRunner(provider, sessionId, projectRoot, {
+    featureDesc: opts.featureDesc,
+  });
 
   // Set up terminal UI
   const subscriber = new TerminalSubscriber(events, renderEvent);

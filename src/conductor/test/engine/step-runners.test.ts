@@ -118,4 +118,50 @@ describe('DefaultStepRunner', () => {
     expect(call1.resume).toBe(false);
     expect(call2.resume).toBe(true);
   });
+
+  // --- Feature 1: Step-scoped system prompts ---
+
+  it('step runner passes system prompt with step context', async () => {
+    const provider = createMockProvider();
+    const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
+      featureDesc: 'Add user auth',
+      totalSteps: 14,
+    });
+
+    await runner.run('brainstorm', emptyState);
+
+    const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    expect(opts.systemPrompt).toContain('[Conduct step 3/14]');
+    expect(opts.systemPrompt).toContain('Feature: Add user auth');
+  });
+
+  it('collaborative step system prompt includes "Complete ONLY this step"', async () => {
+    const provider = createMockProvider();
+    const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
+      featureDesc: 'Add user auth',
+      totalSteps: 14,
+    });
+
+    // brainstorm is collaborative (not autonomous)
+    await runner.run('brainstorm', emptyState);
+
+    const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    expect(opts.systemPrompt).toContain('Complete ONLY this step');
+    expect(opts.systemPrompt).toContain('Brainstorm');
+  });
+
+  it('autonomous step system prompt does NOT include "Complete ONLY this step"', async () => {
+    const provider = createMockProvider();
+    const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
+      featureDesc: 'Add user auth',
+      totalSteps: 14,
+    });
+
+    // build is autonomous
+    await runner.run('build', emptyState);
+
+    const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    expect(opts.systemPrompt).toContain('[Conduct step 11/14]');
+    expect(opts.systemPrompt).not.toContain('Complete ONLY this step');
+  });
 });
