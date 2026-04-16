@@ -54,13 +54,26 @@ export class ClaudeProvider implements LLMProvider {
   /**
    * Run Claude with stdio inherited — user sees output and can interact.
    * Used for all skill steps (both collaborative and autonomous).
-   * The prompt is passed via -p flag (starts the session with the skill command).
+   *
+   * For collaborative steps (no --dangerously-skip-permissions):
+   *   Prompt is passed as a positional arg — Claude opens an interactive
+   *   REPL with the prompt as the first message. User can continue typing.
+   *
+   * For autonomous steps (--dangerously-skip-permissions):
+   *   Prompt is passed with -p (print mode) — Claude processes the prompt
+   *   and exits when done. No user interaction needed.
    */
   async invokeInteractive(options: InvokeOptions): Promise<void> {
     const args = this.buildArgs(options);
 
     if (options.prompt) {
-      args.push('-p', options.prompt);
+      if (options.dangerouslySkipPermissions) {
+        // Autonomous: -p sends prompt and exits when done
+        args.push('-p', options.prompt);
+      } else {
+        // Collaborative: positional arg opens interactive REPL
+        args.push(options.prompt);
+      }
     }
 
     await execa('claude', args, {
