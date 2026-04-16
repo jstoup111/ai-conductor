@@ -17,6 +17,7 @@ import type { StepName, RunMode, ConductorEvent, RecoveryOption, ComplexityTier 
 import { getRecoveryOptions } from './engine/recovery.js';
 import * as readline from 'node:readline';
 import { sendNotification } from './ui/notifications.js';
+import { scanResumableFeatures, selectFeature, formatResumeMenu } from './engine/resume.js';
 
 // --- Terminal UI rendering ---
 
@@ -216,9 +217,9 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const projectRoot = process.cwd();
-  const pipelineDir = join(projectRoot, '.pipeline');
-  const stateFilePath = join(pipelineDir, 'conduct-state.json');
+  let projectRoot = process.cwd();
+  let pipelineDir = join(projectRoot, '.pipeline');
+  let stateFilePath = join(pipelineDir, 'conduct-state.json');
 
   // Ensure .pipeline/ exists
   await mkdir(pipelineDir, { recursive: true });
@@ -250,6 +251,53 @@ async function main(): Promise<void> {
     await writeState(stateFilePath, {});
     console.log('State cleared.');
     return;
+  }
+
+  // Handle --resume: scan worktrees and present selection menu
+  if (opts.resume) {
+    const features = await scanResumableFeatures(projectRoot);
+    if (features.length === 0) {
+      console.error('No active features found in .worktrees/');
+      process.exit(1);
+    }
+
+    let selected = selectFeature(features, undefined);
+    if (!selected) {
+      // Multiple features — show menu and prompt
+      console.log(`\n${formatResumeMenu(features)}\n`);
+      const answer = await prompt(`Choose feature [0-${features.length}]: `);
+      const choice = parseInt(answer, 10);
+      selected = selectFeature(features, isNaN(choice) ? 0 : choice);
+      if (!selected) {
+        console.log('Cancelled.');
+        return;
+      }
+    }
+
+    // Reconfigure paths to point at the selected worktree
+    projectRoot = selected.path;
+    pipelineDir = join(projectRoot, '.pipeline');
+    stateFilePath = join(pipelineDir, 'conduct-state.json');
+    await mkdir(pipelineDir, { recursive: true });
+
+    // Also check for state in worktree root (legacy location)
+    const legacyStatePath = join(selected.path, 'conduct-state.json');
+    try {
+      const legacyState = await readFile(legacyStatePath, 'utf-8');
+      if (legacyState.trim()) {
+        // Use worktree root state if .pipeline state doesn't exist
+        const pipelineResult = await readState(stateFilePath);
+        if (!pipelineResult.ok || Object.keys(pipelineResult.value).length === 0) {
+          stateFilePath = legacyStatePath;
+        }
+      }
+    } catch {
+      // No legacy state — use .pipeline
+    }
+
+    if (!opts.featureDesc && selected.featureDesc) {
+      opts.featureDesc = selected.featureDesc;
+    }
   }
 
   // Set up conductor — reuse persisted session ID if resuming
