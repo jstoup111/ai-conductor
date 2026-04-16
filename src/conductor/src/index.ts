@@ -16,6 +16,7 @@ import { parseArgs, type CLIOptions } from './cli.js';
 import type { StepName, RunMode, ConductorEvent, RecoveryOption, ComplexityTier } from './types/index.js';
 import { getRecoveryOptions } from './engine/recovery.js';
 import * as readline from 'node:readline';
+import { sendNotification } from './ui/notifications.js';
 
 // --- Terminal UI rendering ---
 
@@ -35,12 +36,14 @@ function renderEvent(event: ConductorEvent): void {
       break;
     case 'step_completed':
       console.log(`  ${STATUS_ICONS.done} ${event.step} — done`);
+      sendNotification('Conductor', `Step completed: ${event.step}`).catch(() => {});
       break;
     case 'step_failed':
       console.log(`  ${STATUS_ICONS.failed} ${event.step} — FAILED`);
       if (event.error) {
         console.log(`\n--- Step output ---\n${event.error}\n--- End output ---\n`);
       }
+      sendNotification('Conductor', `Step failed: ${event.step}`).catch(() => {});
       break;
     case 'tier_skip':
       console.log(`  ${STATUS_ICONS.skipped} ${event.step} — skipped (tier ${event.tier})`);
@@ -56,6 +59,7 @@ function renderEvent(event: ConductorEvent): void {
       break;
     case 'feature_complete':
       console.log(`\n✓ Feature complete.${event.prUrl ? ` PR: ${event.prUrl}` : ''}`);
+      sendNotification('Conductor', 'Pipeline complete!').catch(() => {});
       break;
     case 'dashboard_refresh':
       // silent
