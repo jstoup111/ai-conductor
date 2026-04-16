@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseArgs } from '../../src/index.js';
+import { parseArgs } from '../../src/cli.js';
 
 describe('CLI', () => {
   it('parses feature description as positional arg', () => {
