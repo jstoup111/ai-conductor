@@ -1,0 +1,23 @@
+README.md
+  448a65469570fd1a 18-19,180
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.17",
+  "base_commit_sha": "5425675fd85a9860d01269913a3a8ce745b32f6e",
+  "prompts": {
+    "448a65469570fd1a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a9da38c3-b24a-42db-83a9-3b5ddbf65db2",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Grant Schneider <grant@upstart.com>",
+      "messages": [],
+      "total_additions": 3,
+      "total_deletions": 3,
+      "accepted_lines": 3,
+      "overriden_lines": 0
+    }
+  }
+}
