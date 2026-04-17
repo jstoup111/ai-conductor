@@ -4,6 +4,7 @@ import type {
   StepName,
   ComplexityTier,
   RecoveryOption,
+  RecoveryContext,
 } from '../../types/index.js';
 import type {
   CheckpointResponse,
@@ -142,8 +143,22 @@ export class TerminalPromptHost implements UIPromptHost {
     return 'approved';
   }
 
-  async recovery(step: StepName, isGating: boolean): Promise<RecoveryOption> {
-    const options = getRecoveryOptions(step, isGating);
+  async recovery(
+    step: StepName,
+    isGating: boolean,
+    context?: RecoveryContext,
+  ): Promise<RecoveryOption> {
+    let options = getRecoveryOptions(step, isGating);
+    if (context?.retriesExhausted) {
+      // Strip `retry` from the menu — the conductor has already seen this
+      // step bounce off the recovery screen MAX_RECOVERY_RETRIES times and
+      // it's not going to heal itself. Push the user toward interactive,
+      // back, or quit instead.
+      options = options.filter((o) => o !== 'retry');
+      this.log(
+        `\n  Retry budget exhausted for ${step} — pick a different path below.`,
+      );
+    }
     const labels = options.map((o) => RECOVERY_LABELS[o]).join(' / ');
     const keys = options.map((o) => o[0]).join('/');
     const gatingTag = isGating ? ' [gating]' : '';

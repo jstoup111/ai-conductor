@@ -2,6 +2,23 @@ import type { StepName, StepStatus, ComplexityTier } from './steps.js';
 
 export type RecoveryOption = 'retry' | 'interactive' | 'back' | 'skip' | 'quit';
 
+/**
+ * Extra state threaded into onRecovery so the UI can adapt its menu
+ * without the engine dictating the layout.
+ *
+ * - `recoveryCount` — how many times the user has entered the recovery
+ *   menu for this step in the current session (0 on first entry).
+ * - `retriesExhausted` — `true` when the per-step recovery-retry budget
+ *   has been hit. The UI SHOULD drop `retry` from the offered options
+ *   when this is set; the engine will loop back to the menu if it
+ *   receives `retry` anyway (so the worst case is the user sees the
+ *   same menu twice, not an infinite retry storm).
+ */
+export interface RecoveryContext {
+  recoveryCount: number;
+  retriesExhausted: boolean;
+}
+
 export type ConductorEvent =
   | { type: 'step_started'; step: StepName; index: number }
   | { type: 'step_completed'; step: StepName; status: StepStatus; tail?: string[] }

@@ -5,6 +5,7 @@ import type {
   Phase,
   ComplexityTier,
   RecoveryOption,
+  RecoveryContext,
 } from '../types/index.js';
 import type { ArtifactPatternStatus } from '../engine/artifacts.js';
 import type {
@@ -48,7 +49,11 @@ export type RenderPayload =
 
 export interface UIPromptHost {
   checkpoint(step: StepName): Promise<CheckpointResponse>;
-  recovery(step: StepName, isGating: boolean): Promise<RecoveryOption>;
+  recovery(
+    step: StepName,
+    isGating: boolean,
+    context?: RecoveryContext,
+  ): Promise<RecoveryOption>;
   reviewArtifacts(step: StepName, files: string[]): Promise<ArtifactReviewResult>;
   complexityAssessment(recommended: ComplexityTier | null): Promise<ComplexityTier>;
   navigate(steps: NavigableStep[]): Promise<StepName | null>;

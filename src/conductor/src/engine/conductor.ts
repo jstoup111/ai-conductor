@@ -2,7 +2,15 @@ import { readFile, access as accessFile, unlink as unlinkFile } from 'node:fs/pr
 import { createHash } from 'node:crypto';
 import { relative, join } from 'node:path';
 import type { ConductState } from '../types/index.js';
-import type { StepName, StepStatus, Phase, RunMode, ComplexityTier, RecoveryOption } from '../types/index.js';
+import type {
+  StepName,
+  StepStatus,
+  Phase,
+  RunMode,
+  ComplexityTier,
+  RecoveryOption,
+  RecoveryContext,
+} from '../types/index.js';
 import type { HarnessConfig } from '../types/config.js';
 import { ConductorEventEmitter } from '../ui/events.js';
 import { readState, writeState, saveStepStatus, getStepStatus, markDownstreamStale } from './state.js';
@@ -17,6 +25,14 @@ import {
 import { resolveStepConfig, phaseForStep } from './resolved-config.js';
 
 export type CheckpointResponse = 'continue' | 'back' | 'quit';
+
+/**
+ * How many times a user may pick `retry` from the recovery menu for a single
+ * step in one conductor session before the UI drops the option. After this,
+ * the step has clearly entered a loop the auto-retry couldn't escape — the
+ * user is pushed toward `interactive`, `back`, or `quit` instead.
+ */
+export const MAX_RECOVERY_RETRIES = 2;
 
 export interface NavigableStep {
   name: StepName;
@@ -121,7 +137,11 @@ export interface ConductorOptions {
   onCheckpoint?: (step: StepName) => Promise<CheckpointResponse>;
   onNavigate?: (steps: NavigableStep[]) => Promise<StepName | null>;
   onReviewArtifacts?: (step: StepName, files: string[]) => Promise<ArtifactReviewResult>;
-  onRecovery?: (step: StepName, isGating: boolean) => Promise<RecoveryOption>;
+  onRecovery?: (
+    step: StepName,
+    isGating: boolean,
+    context?: RecoveryContext,
+  ) => Promise<RecoveryOption>;
   onComplexityAssessment?: (recommended: ComplexityTier | null) => Promise<ComplexityTier>;
 }
 
@@ -144,7 +164,11 @@ export class Conductor {
   private verifyArtifacts: boolean;
   private sleep: (ms: number) => Promise<void>;
   private onReviewArtifacts: (step: StepName, files: string[]) => Promise<ArtifactReviewResult>;
-  private onRecovery?: (step: StepName, isGating: boolean) => Promise<RecoveryOption>;
+  private onRecovery?: (
+    step: StepName,
+    isGating: boolean,
+    context?: RecoveryContext,
+  ) => Promise<RecoveryOption>;
   private onComplexityAssessment?: (recommended: ComplexityTier | null) => Promise<ComplexityTier>;
 
   constructor(opts: ConductorOptions) {
@@ -191,6 +215,11 @@ export class Conductor {
       process.exit(130); // 128 + SIGINT(2) — standard Unix convention
     };
     process.on('SIGINT', sigintHandler);
+
+    // Per-step counter for how many times the user has picked `retry` from the
+    // recovery menu in this session. Once it hits MAX_RECOVERY_RETRIES, the
+    // UI is told retry is exhausted so the step can't spin forever.
+    const recoveryRetries = new Map<StepName, number>();
 
     for (let i = startIndex; i < ALL_STEPS.length; i++) {
       const step = ALL_STEPS[i];
@@ -300,7 +329,7 @@ export class Conductor {
           const completion = await checkStepCompletion(this.projectRoot, step.name);
           if (!completion.done) {
             lastError = `Step '${step.name}' completed but completion check failed: ${completion.reason ?? 'unknown'}`;
-            retryHint = `Previous attempt did not satisfy the completion check: ${completion.reason ?? 'unknown'}. Finish the work now.`;
+            retryHint = buildRetryHint(step.name, completion.reason);
             if (attempt < stepMaxRetries) {
               await this.events.emit({
                 type: 'step_retry',
@@ -333,8 +362,23 @@ export class Conductor {
 
         if (this.onRecovery) {
           const gating = isGatingStep(step.name);
-          const action = await this.onRecovery(step.name, gating);
+          let action: RecoveryOption;
+          // Keep polling the UI until it returns something other than `retry`
+          // once retries are exhausted. Terminal-side prompt hosts should drop
+          // `retry` from the menu when `retriesExhausted` is set; if a caller
+          // ignores the context, this loop prevents an infinite retry storm.
+          while (true) {
+            const count = recoveryRetries.get(step.name) ?? 0;
+            const retriesExhausted = count >= MAX_RECOVERY_RETRIES;
+            action = await this.onRecovery(step.name, gating, {
+              recoveryCount: count,
+              retriesExhausted,
+            });
+            if (action === 'retry' && retriesExhausted) continue;
+            break;
+          }
           if (action === 'retry') {
+            recoveryRetries.set(step.name, (recoveryRetries.get(step.name) ?? 0) + 1);
             i--;
             continue;
           }
@@ -578,6 +622,31 @@ export class Conductor {
     return lastDoneIndex + 1;
   }
 
+}
+
+/**
+ * Build the retry hint injected into Claude's system prompt after a
+ * completion-gate miss. The default hint assumes work is unfinished and
+ * tells Claude to "finish the work now." That wording is actively
+ * misleading when the real failure is a stale status file — Claude sees
+ * "finish the work" and re-implements already-done tasks, producing
+ * duplicate commits and never updating the tracking file. For `build`
+ * with a "tasks not completed" reason, redirect Claude to verify on disk
+ * before rewriting and to update `.pipeline/task-status.json` when the
+ * work is already there.
+ */
+export function buildRetryHint(step: StepName, reason: string | undefined): string {
+  const r = reason ?? 'unknown';
+  if (step === 'build' && /tasks? not completed/i.test(r)) {
+    return (
+      `Previous attempt did not satisfy the completion check: ${r}. ` +
+      `The implementation may already be done — verify each listed task ID ` +
+      `against git log and files on disk before rewriting. If the work is ` +
+      `complete, update .pipeline/task-status.json to mark those tasks ` +
+      `"completed" (with their commit SHAs) instead of re-implementing.`
+    );
+  }
+  return `Previous attempt did not satisfy the completion check: ${r}. Finish the work now.`;
 }
 
 /**

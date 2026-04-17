@@ -123,6 +123,17 @@ describe('TerminalPromptHost.recovery', () => {
     await expect(host.recovery('plan', true)).resolves.toBe('retry');
     expect(logs.some((l) => l.includes('Invalid choice'))).toBe(true);
   });
+
+  it('drops "retry" from the menu when retriesExhausted is set', async () => {
+    // User types r (rejected — retry is gone), then i (interactive). Invalid
+    // choice triggers the "Enter one of:" message.
+    const { host, logs } = makeHost(['r', 'i']);
+    await expect(
+      host.recovery('build', false, { recoveryCount: 2, retriesExhausted: true }),
+    ).resolves.toBe('interactive');
+    expect(logs.some((l) => l.includes('Retry budget exhausted'))).toBe(true);
+    expect(logs.some((l) => l.includes('Invalid choice'))).toBe(true);
+  });
 });
 
 describe('TerminalPromptHost.reviewArtifacts', () => {

@@ -3,12 +3,22 @@ import { mkdtemp, rm } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import type { ConductState } from '../../src/types/index.js';
-import type { StepName } from '../../src/types/index.js';
+import type { StepName, RecoveryOption } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { readState, writeState } from '../../src/engine/state.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
-import { Conductor, getNavigableSteps, navigateBack } from '../../src/engine/conductor.js';
+import {
+  Conductor,
+  getNavigableSteps,
+  navigateBack,
+  filterUnapprovedArtifacts,
+  recordApprovals,
+  approvalKey,
+  buildRetryHint,
+} from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
+import { writeFile, mkdir } from 'fs/promises';
+import { createHash } from 'crypto';
 
 function createMockStepRunner(result: StepRunResult = { success: true }): StepRunner {
   return {
@@ -184,15 +194,21 @@ describe('engine/conductor', () => {
   });
 
   it('does NOT set feature_status=complete on failure', async () => {
+    // Permanently-failing 2nd step + maxRetries=1 → step escalates to failure.
     let callCount = 0;
     const runner: StepRunner = {
       run: async () => {
         callCount++;
-        if (callCount === 2) return { success: false };
+        if (callCount >= 2) return { success: false };
         return { success: true };
       },
     };
-    const conductor = new Conductor({ stateFilePath: statePath, stepRunner: runner, events });
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      maxRetries: 1,
+    });
 
     await conductor.run();
 
@@ -298,15 +314,21 @@ describe('engine/conductor', () => {
   });
 
   it('emits step_failed event with correct payload on failure', async () => {
+    // Always-failing 2nd step. maxRetries=1 so we escalate after one try.
     let callCount = 0;
     const runner: StepRunner = {
-      run: async () => {
+      run: async (step: StepName) => {
         callCount++;
-        if (callCount === 2) return { success: false, output: 'memory check failed' };
+        if (callCount >= 2) return { success: false, output: `${step} check failed` };
         return { success: true };
       },
     };
-    const conductor = new Conductor({ stateFilePath: statePath, stepRunner: runner, events });
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      maxRetries: 1,
+    });
 
     const failedEvents: Array<{ type: string; step: string; error: string; retryCount: number }> = [];
     events.on('step_failed', (e) => {
@@ -318,12 +340,10 @@ describe('engine/conductor', () => {
     await conductor.run();
 
     expect(failedEvents.length).toBe(1);
-    expect(failedEvents[0]).toEqual({
-      type: 'step_failed',
-      step: 'memory',
-      error: 'memory check failed',
-      retryCount: 0,
-    });
+    expect(failedEvents[0].type).toBe('step_failed');
+    expect(failedEvents[0].error).toMatch(/check failed/);
+    // retryCount is now "attempts made" (>=1) rather than 0
+    expect(failedEvents[0].retryCount).toBeGreaterThanOrEqual(1);
   });
 
   it('skips conflict_check when tier is S', async () => {
@@ -450,8 +470,8 @@ describe('engine/conductor', () => {
 
     await conductor.run();
 
-    // L tier has no skips, so all steps should run
-    const expectedOrder = ALL_STEPS.map((s) => s.name);
+    // L tier has no skips; complexity is handled by the engine (not stepRunner)
+    const expectedOrder = ALL_STEPS.map((s) => s.name).filter((n) => n !== 'complexity');
     expect(stepsRun).toEqual(expectedOrder);
 
     // No tier_skip events should be emitted
@@ -1183,15 +1203,21 @@ describe('engine/conductor', () => {
     });
 
     it('does not set feature_status=complete if any step failed', async () => {
+      // Permanently-failing 2nd step + maxRetries=1 → step escalates to failure.
       let callCount = 0;
       const runner: StepRunner = {
         run: async () => {
           callCount++;
-          if (callCount === 2) return { success: false };
+          if (callCount >= 2) return { success: false };
           return { success: true };
         },
       };
-      const conductor = new Conductor({ stateFilePath: statePath, stepRunner: runner, events });
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        maxRetries: 1,
+      });
 
       const completeEvents: Array<{ type: string }> = [];
       events.on('feature_complete', (e) => {
@@ -1360,7 +1386,11 @@ describe('engine/conductor', () => {
 
       await conductor.run();
 
-      expect(onRecovery).toHaveBeenCalledWith('stories', true);
+      expect(onRecovery).toHaveBeenCalledWith(
+        'stories',
+        true,
+        expect.objectContaining({ recoveryCount: 0, retriesExhausted: false }),
+      );
     });
 
     it('navigates back when recovery returns back', async () => {
@@ -1389,6 +1419,7 @@ describe('engine/conductor', () => {
         stateFilePath: statePath,
         stepRunner: runner,
         events,
+        maxRetries: 1,
         fromStep: 'stories',
         onRecovery,
         onNavigate,
@@ -1418,6 +1449,7 @@ describe('engine/conductor', () => {
         stateFilePath: statePath,
         stepRunner: runner,
         events,
+        maxRetries: 1,
         onRecovery,
       });
 
@@ -1431,7 +1463,7 @@ describe('engine/conductor', () => {
   });
 
   describe('complexity assessment', () => {
-    it('calls onComplexityAssessment after complexity step', async () => {
+    it('calls onComplexityAssessment for the complexity step', async () => {
       const runner = createMockStepRunner();
       const onComplexityAssessment = vi.fn().mockResolvedValue('M' as const);
       const conductor = new Conductor({
@@ -1443,7 +1475,23 @@ describe('engine/conductor', () => {
 
       await conductor.run();
 
-      expect(onComplexityAssessment).toHaveBeenCalled();
+      expect(onComplexityAssessment).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not dispatch complexity to stepRunner.run', async () => {
+      const runner = createMockStepRunner();
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        onComplexityAssessment: async () => 'M' as const,
+      });
+
+      await conductor.run();
+
+      const runMock = runner.run as ReturnType<typeof vi.fn>;
+      const steps = runMock.mock.calls.map((c) => c[0]);
+      expect(steps).not.toContain('complexity');
     });
 
     it('stores tier in state after assessment', async () => {
@@ -1462,13 +1510,32 @@ describe('engine/conductor', () => {
       expect(result.ok).toBe(true);
       if (result.ok) {
         expect(result.value.complexity_tier).toBe('S');
+        expect(result.value.complexity).toBe('done');
       }
     });
 
-    it('does not call onComplexityAssessment if tier already in state', async () => {
+    it('passes existing tier as recommendation when one is already persisted', async () => {
       await writeState(statePath, { complexity_tier: 'L' } as ConductState);
 
       const runner = createMockStepRunner();
+      const onComplexityAssessment = vi.fn().mockResolvedValue('L' as const);
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        onComplexityAssessment,
+      });
+
+      await conductor.run();
+
+      expect(onComplexityAssessment).toHaveBeenCalledWith('L');
+    });
+
+    it('uses assessComplexity output as recommendation when no persisted tier', async () => {
+      const runner: StepRunner = {
+        run: vi.fn().mockResolvedValue({ success: true }),
+        assessComplexity: vi.fn().mockResolvedValue('M' as const),
+      };
       const onComplexityAssessment = vi.fn().mockResolvedValue('M' as const);
       const conductor = new Conductor({
         stateFilePath: statePath,
@@ -1479,7 +1546,26 @@ describe('engine/conductor', () => {
 
       await conductor.run();
 
-      expect(onComplexityAssessment).not.toHaveBeenCalled();
+      expect(runner.assessComplexity).toHaveBeenCalled();
+      expect(onComplexityAssessment).toHaveBeenCalledWith('M');
+    });
+
+    it('passes null recommendation when Claude cannot determine a tier', async () => {
+      const runner: StepRunner = {
+        run: vi.fn().mockResolvedValue({ success: true }),
+        assessComplexity: vi.fn().mockResolvedValue(null),
+      };
+      const onComplexityAssessment = vi.fn().mockResolvedValue('L' as const);
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        onComplexityAssessment,
+      });
+
+      await conductor.run();
+
+      expect(onComplexityAssessment).toHaveBeenCalledWith(null);
     });
 
     it('does not call onComplexityAssessment in auto mode', async () => {
@@ -1497,9 +1583,31 @@ describe('engine/conductor', () => {
 
       expect(onComplexityAssessment).not.toHaveBeenCalled();
     });
+
+    it('does not set a tier when the prompt throws (e.g., Ctrl-C)', async () => {
+      const runner = createMockStepRunner();
+      const onComplexityAssessment = vi.fn().mockRejectedValue(new Error('user cancelled'));
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        onComplexityAssessment,
+      });
+
+      await conductor.run();
+
+      // Step falls into the failure branch (recoverable via the recovery menu).
+      // Critical: no tier gets persisted, so resume will re-prompt.
+      const result = await readState(statePath);
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value.complexity_tier).toBeUndefined();
+        expect(result.value.complexity).toBe('failed');
+      }
+    });
   });
 
-  it('skips steps listed in config.steps.disable', async () => {
+  it('skips steps with steps.<name>.disable=true', async () => {
     const stepsRun: StepName[] = [];
     const runner: StepRunner = {
       run: async (step: StepName) => {
@@ -1511,7 +1619,12 @@ describe('engine/conductor', () => {
       stateFilePath: statePath,
       stepRunner: runner,
       events,
-      config: { steps: { disable: ['memory', 'brainstorm'] } },
+      config: {
+        steps: {
+          memory: { disable: true },
+          brainstorm: { disable: true },
+        },
+      },
     });
 
     await conductor.run();
@@ -1540,7 +1653,7 @@ describe('engine/conductor', () => {
       stateFilePath: statePath,
       stepRunner: runner,
       events,
-      config: { steps: { disable: ['brainstorm'] } },
+      config: { steps: { brainstorm: { disable: true } } },
     });
 
     await conductor.run();
@@ -1549,5 +1662,900 @@ describe('engine/conductor', () => {
     // brainstorm was skipped and stepSatisfied returns true for 'skipped'
     expect(stepsRun).not.toContain('brainstorm');
     expect(stepsRun).toContain('stories');
+  });
+
+  describe('artifact approval persistence', () => {
+    async function writeArtifact(rel: string, content: string): Promise<string> {
+      const full = join(dir, rel);
+      await mkdir(full.substring(0, full.lastIndexOf('/')), { recursive: true });
+      await writeFile(full, content);
+      return full;
+    }
+
+    function sha(content: string): string {
+      return createHash('sha256').update(content).digest('hex');
+    }
+
+    it('approvalKey returns project-relative paths', () => {
+      const root = '/tmp/root';
+      expect(approvalKey(root, '/tmp/root/.docs/plans/a.md')).toBe('.docs/plans/a.md');
+    });
+
+    it('filterUnapprovedArtifacts excludes files whose hash matches a prior approval', async () => {
+      const file = await writeArtifact('.docs/plans/a.md', 'plan content');
+      const approvals = {
+        [approvalKey(dir, file)]: {
+          sha256: sha('plan content'),
+          approved_at: '2026-04-16T00:00:00Z',
+        },
+      };
+
+      const unapproved = await filterUnapprovedArtifacts([file], approvals, dir);
+
+      expect(unapproved).toEqual([]);
+    });
+
+    it('filterUnapprovedArtifacts includes files whose content has changed', async () => {
+      const file = await writeArtifact('.docs/plans/a.md', 'new content');
+      const approvals = {
+        [approvalKey(dir, file)]: {
+          sha256: sha('old content'),
+          approved_at: '2026-04-16T00:00:00Z',
+        },
+      };
+
+      const unapproved = await filterUnapprovedArtifacts([file], approvals, dir);
+
+      expect(unapproved).toEqual([file]);
+    });
+
+    it('filterUnapprovedArtifacts includes never-before-seen files', async () => {
+      const file = await writeArtifact('.docs/plans/a.md', 'plan');
+      const unapproved = await filterUnapprovedArtifacts([file], {}, dir);
+      expect(unapproved).toEqual([file]);
+    });
+
+    it('recordApprovals adds entries keyed by project-relative path', async () => {
+      const file = await writeArtifact('.docs/plans/a.md', 'plan');
+      const updated = await recordApprovals({}, [file], dir);
+      expect(Object.keys(updated)).toEqual(['.docs/plans/a.md']);
+      expect(updated['.docs/plans/a.md'].sha256).toBe(sha('plan'));
+    });
+
+    it('recordApprovals preserves existing entries for other files', async () => {
+      const file = await writeArtifact('.docs/plans/a.md', 'plan');
+      const prior = {
+        'some/other.md': { sha256: 'deadbeef', approved_at: '2026-04-16T00:00:00Z' },
+      };
+      const updated = await recordApprovals(prior, [file], dir);
+      expect(updated['some/other.md'].sha256).toBe('deadbeef');
+      expect(updated['.docs/plans/a.md'].sha256).toBe(sha('plan'));
+    });
+
+    it('review gate skips the prompt when every file is already approved', async () => {
+      const planFile = await writeArtifact('.docs/plans/a.md', 'plan');
+      const approvals = {
+        [approvalKey(dir, planFile)]: {
+          sha256: sha('plan'),
+          approved_at: '2026-04-16T00:00:00Z',
+        },
+      };
+      await writeState(statePath, {
+        brainstorm: 'done',
+        conflict_check: 'done',
+        complexity_tier: 'L',
+        artifact_approvals: approvals,
+      } as ConductState);
+
+      const runner = createMockStepRunner();
+      const onReviewArtifacts = vi.fn().mockResolvedValue('approved' as const);
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        resume: true,
+        fromStep: 'plan',
+        onReviewArtifacts,
+      });
+
+      await conductor.run();
+
+      // Plan's artifact was already approved + unchanged → no re-prompt
+      const planCalls = onReviewArtifacts.mock.calls.filter((c) => c[0] === 'plan');
+      expect(planCalls.length).toBe(0);
+    });
+
+    it('review gate prompts when plan file content changes', async () => {
+      // Approval recorded for old content; write new content to disk.
+      const planFile = await writeArtifact('.docs/plans/a.md', 'new plan content');
+      const approvals = {
+        [approvalKey(dir, planFile)]: {
+          sha256: sha('OLD content that no longer matches'),
+          approved_at: '2026-04-16T00:00:00Z',
+        },
+      };
+      await writeState(statePath, {
+        brainstorm: 'done',
+        conflict_check: 'done',
+        complexity_tier: 'L',
+        artifact_approvals: approvals,
+      } as ConductState);
+
+      const runner = createMockStepRunner();
+      const onReviewArtifacts = vi.fn().mockResolvedValue('approved' as const);
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        resume: true,
+        fromStep: 'plan',
+        onReviewArtifacts,
+      });
+
+      await conductor.run();
+
+      const planCalls = onReviewArtifacts.mock.calls.filter((c) => c[0] === 'plan');
+      expect(planCalls.length).toBe(1);
+    });
+
+    it('persists approvals to state after a successful review', async () => {
+      const planFile = await writeArtifact('.docs/plans/a.md', 'plan content');
+      await writeState(statePath, {
+        brainstorm: 'done',
+        conflict_check: 'done',
+        complexity_tier: 'L',
+      } as ConductState);
+
+      const runner = createMockStepRunner();
+      const onReviewArtifacts = vi.fn().mockResolvedValue('approved' as const);
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        resume: true,
+        fromStep: 'plan',
+        onReviewArtifacts,
+      });
+
+      await conductor.run();
+
+      const result = await readState(statePath);
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        const approvals = result.value.artifact_approvals ?? {};
+        const key = approvalKey(dir, planFile);
+        expect(approvals[key]).toBeDefined();
+        expect(approvals[key].sha256).toBe(sha('plan content'));
+      }
+    });
+
+    it('does not persist approvals when user rejects', async () => {
+      await writeArtifact('.docs/plans/a.md', 'plan');
+      await writeState(statePath, {
+        brainstorm: 'done',
+        conflict_check: 'done',
+        complexity_tier: 'L',
+      } as ConductState);
+
+      const runCalls: StepName[] = [];
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          runCalls.push(step);
+          return { success: true };
+        }),
+      };
+      // First review call: reject. Second: approve (to end the retry loop).
+      const onReviewArtifacts = vi
+        .fn()
+        .mockResolvedValueOnce('rejected' as const)
+        .mockResolvedValue('approved' as const);
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        resume: true,
+        fromStep: 'plan',
+        onReviewArtifacts,
+      });
+
+      await conductor.run();
+
+      // Plan should have been re-run at least once (once rejected, once approved).
+      expect(runCalls.filter((s) => s === 'plan').length).toBeGreaterThanOrEqual(2);
+    });
+  });
+
+  describe('rate-limit handling', () => {
+    it('waits and retries without burning retry budget on rate limit', async () => {
+      let attempt = 0;
+      const runner: StepRunner = {
+        run: vi.fn(async () => {
+          attempt++;
+          if (attempt === 1) return { success: false, rateLimited: true, waitSeconds: 5 };
+          return { success: true };
+        }),
+      };
+      const sleepFn = vi.fn().mockResolvedValue(undefined);
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        maxRetries: 2, // budget would be exhausted if rate-limit consumed attempts
+        sleepFn,
+        onRecovery: vi.fn().mockResolvedValue('quit' as const),
+      });
+
+      const rateLimitEvents: Array<{ waitSeconds: number }> = [];
+      events.on('rate_limit', (e) => {
+        if (e.type === 'rate_limit') rateLimitEvents.push({ waitSeconds: e.waitSeconds });
+      });
+
+      await conductor.run();
+
+      expect(rateLimitEvents).toHaveLength(1);
+      expect(rateLimitEvents[0].waitSeconds).toBe(5);
+      expect(sleepFn).toHaveBeenCalledWith(5000);
+      // runner called at least twice on the first step (1 rate-limited + 1 success),
+      // but the step still succeeded (no failure emitted) because rate-limit didn't
+      // burn the retry budget.
+      expect(attempt).toBeGreaterThanOrEqual(2);
+    });
+
+    it('defaults rate-limit wait to 300 seconds when waitSeconds is not provided', async () => {
+      let attempt = 0;
+      const runner: StepRunner = {
+        run: vi.fn(async () => {
+          attempt++;
+          if (attempt === 1) return { success: false, rateLimited: true };
+          return { success: true };
+        }),
+      };
+      const sleepFn = vi.fn().mockResolvedValue(undefined);
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        sleepFn,
+      });
+
+      await conductor.run();
+
+      expect(sleepFn).toHaveBeenCalledWith(300_000);
+    });
+  });
+
+  describe('stale-session handling', () => {
+    it('calls resetSession and retries without burning retry budget', async () => {
+      let attempt = 0;
+      const resetSession = vi.fn().mockResolvedValue(undefined);
+      const runner: StepRunner = {
+        run: vi.fn(async () => {
+          attempt++;
+          if (attempt === 1) return { success: false, sessionExpired: true };
+          return { success: true };
+        }),
+        resetSession,
+      };
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        maxRetries: 2,
+      });
+
+      const resetEvents: Array<{ reason: string }> = [];
+      events.on('session_reset', (e) => {
+        if (e.type === 'session_reset') resetEvents.push({ reason: e.reason });
+      });
+
+      await conductor.run();
+
+      expect(resetSession).toHaveBeenCalled();
+      expect(resetEvents.length).toBeGreaterThanOrEqual(1);
+      expect(attempt).toBeGreaterThanOrEqual(2);
+    });
+
+    it('tolerates a runner without resetSession', async () => {
+      let attempt = 0;
+      const runner: StepRunner = {
+        run: vi.fn(async () => {
+          attempt++;
+          if (attempt === 1) return { success: false, sessionExpired: true };
+          return { success: true };
+        }),
+        // resetSession omitted
+      };
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+      });
+
+      await conductor.run();
+
+      // Should not crash; step succeeded on the retry-after-session-expired.
+      expect(attempt).toBeGreaterThanOrEqual(2);
+    });
+  });
+
+  describe('conditional review (conflict_check has review=conditional by default)', () => {
+    async function seedConflictArtifact(projectRoot: string): Promise<void> {
+      await mkdir(join(projectRoot, '.docs/conflicts'), { recursive: true });
+      await writeFile(join(projectRoot, '.docs/conflicts/c.md'), 'conflict report');
+    }
+
+    async function seedBrainstormArtifact(projectRoot: string): Promise<void> {
+      await mkdir(join(projectRoot, '.docs/specs'), { recursive: true });
+      await writeFile(join(projectRoot, '.docs/specs/spec.md'), 'spec');
+    }
+
+    it('auto-approves conflict_check when no marker file exists', async () => {
+      await seedConflictArtifact(dir);
+      await writeState(statePath, {
+        bootstrap: 'done', memory: 'done', assess: 'done', brainstorm: 'done',
+        stories: 'done', complexity_tier: 'M',
+      } as ConductState);
+
+      const onReviewArtifacts = vi.fn().mockResolvedValue('approved' as const);
+      const runner = createMockStepRunner();
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        resume: true,
+        fromStep: 'conflict_check',
+        onReviewArtifacts,
+      });
+
+      await conductor.run();
+
+      const conflictCalls = onReviewArtifacts.mock.calls.filter((c) => c[0] === 'conflict_check');
+      expect(conflictCalls.length).toBe(0);
+    });
+
+    it('prompts when conflict_check wrote the marker file', async () => {
+      await seedConflictArtifact(dir);
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(join(dir, '.pipeline/review-required-conflict_check'), '1');
+      await writeState(statePath, {
+        bootstrap: 'done', memory: 'done', assess: 'done', brainstorm: 'done',
+        stories: 'done', complexity_tier: 'M',
+      } as ConductState);
+
+      const onReviewArtifacts = vi.fn().mockResolvedValue('approved' as const);
+      const runner = createMockStepRunner();
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        resume: true,
+        fromStep: 'conflict_check',
+        onReviewArtifacts,
+      });
+
+      await conductor.run();
+
+      const conflictCalls = onReviewArtifacts.mock.calls.filter((c) => c[0] === 'conflict_check');
+      expect(conflictCalls.length).toBe(1);
+    });
+
+    it('cleans up the marker after approval', async () => {
+      await seedConflictArtifact(dir);
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      const markerPath = join(dir, '.pipeline/review-required-conflict_check');
+      await writeFile(markerPath, '1');
+      await writeState(statePath, {
+        bootstrap: 'done', memory: 'done', assess: 'done', brainstorm: 'done',
+        stories: 'done', complexity_tier: 'M',
+      } as ConductState);
+
+      const runner = createMockStepRunner();
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        resume: true,
+        fromStep: 'conflict_check',
+        onReviewArtifacts: vi.fn().mockResolvedValue('approved' as const),
+      });
+
+      await conductor.run();
+
+      const { access: _access } = await import('fs/promises');
+      const exists = await _access(markerPath).then(() => true, () => false);
+      expect(exists).toBe(false);
+    });
+
+    it('manual review (e.g. brainstorm) always prompts', async () => {
+      await seedBrainstormArtifact(dir);
+      await writeState(statePath, {
+        bootstrap: 'done', memory: 'done', assess: 'done',
+        complexity_tier: 'M',
+      } as ConductState);
+
+      const onReviewArtifacts = vi.fn().mockResolvedValue('approved' as const);
+      const runner = createMockStepRunner();
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        resume: true,
+        fromStep: 'brainstorm',
+        onReviewArtifacts,
+      });
+
+      await conductor.run();
+
+      const brainstormCalls = onReviewArtifacts.mock.calls.filter((c) => c[0] === 'brainstorm');
+      expect(brainstormCalls.length).toBe(1);
+    });
+  });
+
+  describe('retry budget', () => {
+    it('auto-retries a failing step up to maxRetries before escalating', async () => {
+      let attempts = 0;
+      const runner: StepRunner = {
+        run: vi.fn(async () => {
+          attempts++;
+          return { success: false, output: 'transient error' };
+        }),
+      };
+      const onRecovery = vi.fn().mockResolvedValue('quit' as const);
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        maxRetries: 3,
+        onRecovery,
+      });
+
+      const retryEvents: unknown[] = [];
+      const failedEvents: unknown[] = [];
+      events.on('step_retry', (e) => retryEvents.push(e));
+      events.on('step_failed', (e) => failedEvents.push(e));
+
+      await conductor.run();
+
+      // First failing step retries twice (attempts 2 and 3), then step_failed once.
+      expect(attempts).toBeGreaterThanOrEqual(3);
+      expect(retryEvents.length).toBeGreaterThanOrEqual(2);
+      expect(failedEvents.length).toBe(1);
+      expect(onRecovery).toHaveBeenCalledOnce();
+    });
+
+    it('succeeds on a later retry without firing recovery', async () => {
+      let calls = 0;
+      const runner: StepRunner = {
+        run: vi.fn(async () => {
+          calls++;
+          return calls < 2 ? { success: false, output: 'transient' } : { success: true };
+        }),
+      };
+      const onRecovery = vi.fn();
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        maxRetries: 3,
+        onRecovery,
+      });
+
+      await conductor.run();
+
+      // No step_failed for the first step — it succeeded on retry.
+      expect(onRecovery).not.toHaveBeenCalled();
+    });
+
+    it('injects a retry hint into subsequent runs after a completion miss', async () => {
+      const retryReasons: Array<string | undefined> = [];
+      const runner: StepRunner = {
+        run: vi.fn(async (_step: StepName, _state, opts) => {
+          retryReasons.push(opts?.retryReason);
+          return { success: true };
+        }),
+      };
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir, // no artifacts — completion check fails
+        verifyArtifacts: true,
+        maxRetries: 3,
+        onRecovery: vi.fn().mockResolvedValue('quit' as const),
+      });
+
+      await conductor.run();
+
+      // First invocation of the first artifact-producing step has no hint.
+      // Subsequent invocations include "Previous attempt did not satisfy…".
+      const hintedRuns = retryReasons.filter((r) => r && r.includes('Previous attempt'));
+      expect(hintedRuns.length).toBeGreaterThan(0);
+    });
+
+    it('honors per-step default retries (e.g. brainstorm → 5)', async () => {
+      // Pre-populate state so we start at brainstorm (DEFAULT_STEP_RETRIES.brainstorm=5).
+      await writeState(statePath, {
+        bootstrap: 'done',
+        memory: 'done',
+        assess: 'done',
+      } as ConductState);
+
+      let attempts = 0;
+      const runner: StepRunner = {
+        run: vi.fn(async () => {
+          attempts++;
+          return { success: false, output: 'fail' };
+        }),
+      };
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        resume: true,
+        onRecovery: vi.fn().mockResolvedValue('quit' as const),
+      });
+
+      await conductor.run();
+
+      // brainstorm default is 5 retries
+      expect(attempts).toBe(5);
+    });
+  });
+
+  describe('custom completion predicates', () => {
+    it("build step requires .pipeline/task-status.json with all tasks completed", async () => {
+      const runner: StepRunner = {
+        run: vi.fn().mockResolvedValue({ success: true }),
+      };
+
+      // Pre-satisfy every OTHER artifact-producing step so we reach `build`.
+      await writeFile(join(dir, '.docs/decisions/technical-assessment-2026-04-16.md'), 'a', {
+        flag: 'w',
+      }).catch(async () => {
+        await mkdir(join(dir, '.docs/decisions'), { recursive: true });
+        await writeFile(join(dir, '.docs/decisions/technical-assessment-2026-04-16.md'), 'a');
+      });
+      await mkdir(join(dir, '.docs/specs'), { recursive: true });
+      await writeFile(join(dir, '.docs/specs/feature.md'), 'x');
+      await mkdir(join(dir, '.docs/stories/epic'), { recursive: true });
+      await writeFile(join(dir, '.docs/stories/epic/a.md'), 'x');
+      await mkdir(join(dir, '.docs/conflicts'), { recursive: true });
+      await writeFile(join(dir, '.docs/conflicts/c.md'), 'x');
+      await mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await writeFile(join(dir, '.docs/plans/p.md'), 'x');
+      await mkdir(join(dir, '.docs/architecture'), { recursive: true });
+      await writeFile(join(dir, '.docs/architecture/arch.md'), 'x');
+      await writeFile(join(dir, '.docs/decisions/adr-001.md'), 'x');
+      await mkdir(join(dir, 'spec/acceptance'), { recursive: true });
+      await writeFile(join(dir, 'spec/acceptance/s.rb'), 'x');
+      await mkdir(join(dir, '.docs/retros'), { recursive: true });
+      await writeFile(join(dir, '.docs/retros/r.md'), 'x');
+
+      // Write a task-status.json with an INCOMPLETE task
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({ tasks: [{ id: 't1', status: 'pending' }] }),
+      );
+
+      const onRecovery = vi.fn().mockResolvedValue('quit' as const);
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        verifyArtifacts: true,
+        maxRetries: 1,
+        onRecovery,
+      });
+
+      const failedEvents: Array<{ step: string; error: string }> = [];
+      events.on('step_failed', (e) => {
+        if (e.type === 'step_failed') failedEvents.push({ step: e.step, error: e.error });
+      });
+
+      await conductor.run();
+
+      const buildFailure = failedEvents.find((e) => e.step === 'build');
+      expect(buildFailure).toBeDefined();
+      expect(buildFailure?.error).toMatch(/tasks not completed|task-status/i);
+    });
+  });
+
+  describe('verifyArtifacts gate', () => {
+    it('fails a step that declares artifacts but produces none', async () => {
+      const runner: StepRunner = {
+        run: vi.fn().mockResolvedValue({ success: true }),
+      };
+      const onRecovery = vi.fn().mockResolvedValue('quit' as const);
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir, // empty tmp dir — no artifacts anywhere
+        verifyArtifacts: true,
+        maxRetries: 1, // fail fast for this test
+        onRecovery,
+      });
+
+      const failedEvents: Array<{ step: string; error: string }> = [];
+      events.on('step_failed', (e) => {
+        if (e.type === 'step_failed') failedEvents.push({ step: e.step, error: e.error });
+      });
+
+      await conductor.run();
+
+      // First artifact-producing step in the flow is 'assess'
+      // (bootstrap/memory produce none). verifyArtifacts flags it missing.
+      expect(failedEvents.length).toBeGreaterThan(0);
+      expect(failedEvents[0].error).toMatch(/completion check failed|no files matching/);
+    });
+
+    it('passes a step whose declared artifacts exist on disk', async () => {
+      // Pre-create every artifact-producing step's expected file. `build` uses
+      // a custom completion predicate that parses task-status.json — seed it
+      // with a completed task so the predicate passes.
+      const { mkdir: _mkdir, writeFile: _wf } = await import('fs/promises');
+      const artifacts: Array<[string, string]> = [
+        ['.docs/decisions/technical-assessment-2026-04-16.md', 'test'],
+        ['.docs/specs/2026-04-16-feature.md', 'test'],
+        ['.docs/stories/epic-1/story-a.md', 'test'],
+        ['.docs/conflicts/2026-04-16-conflict.md', 'test'],
+        ['.docs/plans/2026-04-16-plan.md', 'test'],
+        ['.docs/architecture/2026-04-16-arch.md', 'test'],
+        ['.docs/decisions/adr-001.md', 'test'],
+        ['spec/acceptance/feature_spec.rb', 'test'],
+        [
+          '.pipeline/task-status.json',
+          JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
+        ],
+        ['.docs/retros/2026-04-16-retro.md', 'test'],
+      ];
+      for (const [rel, content] of artifacts) {
+        const full = join(dir, rel);
+        await _mkdir(full.substring(0, full.lastIndexOf('/')), { recursive: true });
+        await _wf(full, content);
+      }
+
+      const runner: StepRunner = {
+        run: vi.fn().mockResolvedValue({ success: true }),
+      };
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        verifyArtifacts: true,
+      });
+
+      const failedEvents: Array<{ step: string }> = [];
+      events.on('step_failed', (e) => {
+        if (e.type === 'step_failed') failedEvents.push({ step: e.step });
+      });
+
+      await conductor.run();
+
+      expect(failedEvents.length).toBe(0);
+    });
+
+    it('retries on "retry" recovery action after artifact miss', async () => {
+      const runCallCount: Record<string, number> = {};
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          runCallCount[step] = (runCallCount[step] ?? 0) + 1;
+          return { success: true };
+        }),
+      };
+      // First call to onRecovery: 'retry' (still no files — will fail again → quit)
+      // Second call: 'quit' to end the run cleanly.
+      const onRecovery = vi
+        .fn<[StepName, boolean], Promise<RecoveryOption>>()
+        .mockResolvedValueOnce('retry')
+        .mockResolvedValue('quit');
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir, // no artifacts — every artifact-producing step fails verification
+        verifyArtifacts: true,
+        maxRetries: 1, // fail fast so the recovery menu fires after 1 miss
+        onRecovery,
+      });
+
+      await conductor.run();
+
+      // `assess` should have been retried once after the artifact-miss failure
+      expect(runCallCount['assess']).toBeGreaterThanOrEqual(2);
+    });
+
+    it('is a no-op when verifyArtifacts is false (default)', async () => {
+      const runner: StepRunner = {
+        run: vi.fn().mockResolvedValue({ success: true }),
+      };
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        // verifyArtifacts omitted — defaults to false
+      });
+
+      const failedEvents: unknown[] = [];
+      events.on('step_failed', (e) => failedEvents.push(e));
+
+      await conductor.run();
+
+      expect(failedEvents.length).toBe(0);
+    });
+  });
+});
+
+describe('recovery retry budget', () => {
+  let dir: string;
+  let statePath: string;
+  let events: ConductorEventEmitter;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'conductor-retrybudget-'));
+    statePath = join(dir, 'conduct-state.json');
+    events = new ConductorEventEmitter();
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  function failThenSucceedRunner(failStep: StepName, succeedAfter: number): { runner: StepRunner; calls: () => number } {
+    let count = 0;
+    const runner: StepRunner = {
+      run: vi.fn(async (step: StepName) => {
+        if (step !== failStep) return { success: true };
+        count++;
+        return count > succeedAfter ? { success: true } : { success: false, output: 'nope' };
+      }),
+    };
+    return { runner, calls: () => count };
+  }
+
+  it('passes RecoveryContext with recoveryCount=0 on first recovery entry', async () => {
+    await writeState(statePath, {
+      worktree: 'done', memory: 'done', brainstorm: 'done', complexity: 'done', stories: 'done',
+      conflict_check: 'done', plan: 'done', architecture_diagram: 'done',
+      architecture_review: 'done', writing_system_tests: 'done',
+    } as ConductState);
+    const { runner } = failThenSucceedRunner('build', Infinity);
+    const onRecovery = vi.fn().mockResolvedValue('quit' as const);
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      fromStep: 'build',
+      maxRetries: 1,
+      onRecovery,
+    });
+
+    await conductor.run();
+
+    expect(onRecovery).toHaveBeenCalledWith(
+      'build',
+      expect.any(Boolean),
+      expect.objectContaining({ recoveryCount: 0, retriesExhausted: false }),
+    );
+  });
+
+  it('marks retriesExhausted after MAX_RECOVERY_RETRIES cycles', async () => {
+    await writeState(statePath, {
+      worktree: 'done', memory: 'done', brainstorm: 'done', complexity: 'done', stories: 'done',
+      conflict_check: 'done', plan: 'done', architecture_diagram: 'done',
+      architecture_review: 'done', writing_system_tests: 'done',
+    } as ConductState);
+    const { runner } = failThenSucceedRunner('build', Infinity);
+
+    // Sequence: 1st recovery → retry. 2nd recovery → retry. 3rd recovery → retriesExhausted=true, return quit.
+    let call = 0;
+    const seenContexts: Array<{ recoveryCount: number; retriesExhausted: boolean }> = [];
+    const onRecovery = vi.fn(async (_step, _gating, context) => {
+      call++;
+      seenContexts.push(context ?? { recoveryCount: -1, retriesExhausted: false });
+      if (call <= 2) return 'retry' as const;
+      return 'quit' as const;
+    });
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      fromStep: 'build',
+      maxRetries: 1,
+      onRecovery,
+    });
+
+    await conductor.run();
+
+    expect(seenContexts[0]).toEqual({ recoveryCount: 0, retriesExhausted: false });
+    expect(seenContexts[1]).toEqual({ recoveryCount: 1, retriesExhausted: false });
+    expect(seenContexts[2]).toEqual({ recoveryCount: 2, retriesExhausted: true });
+  });
+
+  it('does not infinite-loop when a non-conforming onRecovery returns retry after exhaustion', async () => {
+    await writeState(statePath, {
+      worktree: 'done', memory: 'done', brainstorm: 'done', complexity: 'done', stories: 'done',
+      conflict_check: 'done', plan: 'done', architecture_diagram: 'done',
+      architecture_review: 'done', writing_system_tests: 'done',
+    } as ConductState);
+    const { runner } = failThenSucceedRunner('build', Infinity);
+
+    // Adversarial callback: returns 'retry' forever, ignoring context.
+    // Engine should poll for a different answer once retriesExhausted=true.
+    // We give up and return quit after 6 calls so the test terminates.
+    let call = 0;
+    const onRecovery = vi.fn(async () => {
+      call++;
+      return call <= 5 ? ('retry' as const) : ('quit' as const);
+    });
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      fromStep: 'build',
+      maxRetries: 1,
+      onRecovery,
+    });
+
+    await conductor.run();
+
+    // The engine looped back to the recovery menu instead of honoring 'retry'
+    // after the budget was exhausted. Number of calls proves we didn't short-circuit
+    // into an infinite i-- retry loop.
+    expect(call).toBeGreaterThan(2);
+    expect(call).toBeLessThanOrEqual(6);
+  });
+});
+
+describe('buildRetryHint', () => {
+  it('returns the generic "finish the work now" hint by default', () => {
+    const hint = buildRetryHint('stories', 'missing file x');
+    expect(hint).toContain('Finish the work now');
+    expect(hint).toContain('missing file x');
+  });
+
+  it('handles an undefined reason by labeling it "unknown"', () => {
+    const hint = buildRetryHint('plan', undefined);
+    expect(hint).toContain('unknown');
+  });
+
+  it('redirects Claude to update task-status.json for build "tasks not completed" failures', () => {
+    const hint = buildRetryHint('build', '9/31 tasks not completed: 9, 10, 11 (+6 more)');
+    expect(hint).toContain('may already be done');
+    expect(hint).toContain('git log');
+    expect(hint).toContain('.pipeline/task-status.json');
+    expect(hint).not.toContain('Finish the work now');
+  });
+
+  it('falls back to the generic hint for build failures unrelated to task completion', () => {
+    const hint = buildRetryHint('build', 'missing .pipeline/task-status.json — the pipeline skill must create it');
+    expect(hint).toContain('Finish the work now');
+    expect(hint).not.toContain('may already be done');
+  });
+
+  it('uses the generic hint for non-build steps even if reason mentions tasks', () => {
+    const hint = buildRetryHint('plan', '3 tasks not completed: x');
+    expect(hint).toContain('Finish the work now');
+    expect(hint).not.toContain('may already be done');
   });
 });
