@@ -68,6 +68,21 @@ Categories:
   channel (`tagged` vs `main`), current version, and auto-check preference.
 - `conduct --set-channel {tagged|main}` — switch update channels without
   re-running install.
+- Conductor-TS UI abstractions: `UISubscriber`, `UIEventHandler`,
+  `DashboardSnapshot`, `RenderPayload`, and `UIPromptHost` in
+  `src/conductor/src/ui/types.ts`; `TerminalPromptHost` reference
+  implementation in `src/ui/terminal/prompt-host.ts`.
+- `buildDashboardSnapshot(...)` pure builder split out from
+  `renderDashboardLines`, enabling future non-terminal renderers to
+  consume structured data instead of parsing strings.
+- `chalk` + `ora` dependencies in `src/conductor/package.json`; colored
+  dashboard output and an `ora` countdown spinner on `rate_limit` events.
+- Current-step banner (step label + HH:MM:SS start time) on the dashboard
+  and a post-step `lastStepTail` pane showing the last N lines of the
+  previous step's captured stdout.
+- `--view full|focus|log` and `--tail-lines <n>` flags on `bin/conduct-ts`.
+- Optional `tail?: string[]` field on `step_completed` events (last 200
+  lines of captured output; backwards-compatible additive).
 
 ### Changed
 
@@ -76,6 +91,15 @@ Categories:
   block via `glow` before prompting, and calls `bin/migrate` on approval.
 - `HARNESS.md` now documents the update flow in a new "Harness Updates" section.
 - `CLAUDE.md` (harness-repo-level) documents the new release and update gates.
+- Conductor-TS readline prompts (checkpoint, recovery, artifact review,
+  complexity, navigation) consolidated behind `TerminalPromptHost` instead
+  of being scattered top-level functions in `src/conductor/src/index.ts`.
+  `ConductorOptions` shape is unchanged — the engine contract is stable.
+- `renderDashboardLines` now delegates through the snapshot builder +
+  `formatDashboardSnapshot` formatter. Public signature preserved; string
+  output is identical apart from additive color on TTY.
+- Dashboard step-started transient line shows the step's display label
+  (e.g. `Brainstorm`) instead of the raw step name (`brainstorm`).
 
 ### Migration
 
@@ -86,6 +110,20 @@ takes effect on the next `conduct` run after this release is installed.
 
 - Feature-level state (manual-test, retro, etc.) no longer bleeds across features in root state file; project-level steps (bootstrap, assess) persist correctly.
 - Task progress counter shows correct total from the start (0/10, 1/10) instead of growing denominator (1/1, 2/2).
+- `bin/conduct-ts` autonomous Claude invocations no longer print
+  `Warning: no stdin data received in 3s, proceeding without it.` — the
+  provider now passes `stdin: 'ignore'` to execa on the print-mode path.
+
+### Removed
+
+- Dead Ink/React terminal components and their tests
+  (`src/conductor/src/ui/terminal/*.tsx`,
+  `src/conductor/test/ui/terminal/*.test.tsx`) — superseded by the
+  text-based live-region renderer.
+- `ink`, `react`, `ink-testing-library` dependencies from
+  `src/conductor/package.json` (`react` peerDeps removed too); the
+  `"jsx": "react-jsx"` compiler option is dropped from
+  `src/conductor/tsconfig.json`.
 
 ---
 
