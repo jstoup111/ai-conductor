@@ -4,8 +4,15 @@ export type RecoveryOption = 'retry' | 'interactive' | 'back' | 'skip' | 'quit';
 
 export type ConductorEvent =
   | { type: 'step_started'; step: StepName; index: number }
-  | { type: 'step_completed'; step: StepName; status: StepStatus }
+  | { type: 'step_completed'; step: StepName; status: StepStatus; tail?: string[] }
   | { type: 'step_failed'; step: StepName; error: string; retryCount: number }
+  | {
+      type: 'step_retry';
+      step: StepName;
+      attempt: number; // 1-based: "attempt 2 of 3"
+      maxAttempts: number;
+      reason: string;
+    }
   | { type: 'checkpoint_reached'; step: StepName }
   | { type: 'recovery_needed'; step: StepName; options: RecoveryOption[] }
   | { type: 'gate_blocked'; step: StepName; reason: string }

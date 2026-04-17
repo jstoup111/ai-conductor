@@ -32,7 +32,14 @@ export interface DashboardSnapshot {
   featureName?: string;
   complexityTier?: ComplexityTier;
   steps: StepSnapshot[];
+  /** Step currently running. Set by the renderer on step_started,
+   *  cleared on step_completed / step_failed / skip / gate_blocked. */
+  currentStep?: { name: StepName; label: string; startedAtMs: number };
+  /** Tail of the most recently completed step's captured stdout. */
+  lastStepTail?: { step: StepName; lines: string[] };
 }
+
+export type ViewMode = 'full' | 'focus' | 'log';
 
 export type RenderPayload =
   | { kind: 'dashboard'; snapshot: DashboardSnapshot }

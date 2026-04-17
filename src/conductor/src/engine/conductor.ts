@@ -1,5 +1,6 @@
-import { readdir } from 'fs/promises';
-import { join } from 'path';
+import { readFile, access as accessFile, unlink as unlinkFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { relative, join } from 'node:path';
 import type { ConductState } from '../types/index.js';
 import type { StepName, StepStatus, Phase, RunMode, ComplexityTier, RecoveryOption } from '../types/index.js';
 import type { HarnessConfig } from '../types/config.js';
@@ -7,6 +8,13 @@ import { ConductorEventEmitter } from '../ui/events.js';
 import { readState, writeState, saveStepStatus, getStepStatus, markDownstreamStale } from './state.js';
 import { ALL_STEPS, getStepIndex, shouldSkipForTier, isCheckpointStep } from './steps.js';
 import { checkGate, isGatingStep } from './gates.js';
+import {
+  findArtifactFiles as findArtifactFilesForStep,
+  STEP_ARTIFACT_GLOBS,
+  checkStepCompletion,
+  CUSTOM_COMPLETION_PREDICATES,
+} from './artifacts.js';
+import { resolveStepConfig, phaseForStep } from './resolved-config.js';
 
 export type CheckpointResponse = 'continue' | 'back' | 'quit';
 
@@ -45,11 +53,41 @@ export function getNavigableSteps(state: ConductState): NavigableStep[] {
 export interface StepRunResult {
   success: boolean;
   output?: string;
+  /**
+   * Set when the provider detected a rate-limit signal in the output (or via
+   * marker file). The conductor waits `waitSeconds` and retries without
+   * burning the retry budget.
+   */
+  rateLimited?: boolean;
+  /**
+   * Number of seconds to wait before retrying after a rate-limit. Default 300.
+   */
+  waitSeconds?: number;
+  /**
+   * Set when Claude reports "No conversation found" (session evaporated).
+   * The conductor resets the session state and retries without burning budget.
+   */
+  sessionExpired?: boolean;
+}
+
+export interface StepRunOptions {
+  /**
+   * Retry hint injected into the system prompt when the conductor re-invokes
+   * this step after a completion-gate miss. Example: "previous attempt did not
+   * produce .docs/plans/*.md".
+   */
+  retryReason?: string;
 }
 
 export interface StepRunner {
-  run(step: StepName, state: ConductState): Promise<StepRunResult>;
+  run(step: StepName, state: ConductState, opts?: StepRunOptions): Promise<StepRunResult>;
   runInteractive?(step: StepName): Promise<void>;
+  assessComplexity?(): Promise<ComplexityTier | null>;
+  /**
+   * Drop session state so the next invocation creates a fresh Claude session.
+   * Called by the conductor when `sessionExpired` is reported.
+   */
+  resetSession?(): Promise<void>;
 }
 
 export type ArtifactReviewResult = 'approved' | 'rejected' | 'skip';
@@ -63,30 +101,34 @@ export interface ConductorOptions {
   mode?: RunMode;
   config?: HarnessConfig;
   projectRoot?: string;
+  /**
+   * When true, after each step that declares artifact globs, require at least
+   * one matching file on disk. If not, mark the step failed and route through
+   * the recovery menu. Default: false (opt-in — production wires this on).
+   */
+  verifyArtifacts?: boolean;
+  /**
+   * Maximum auto-retries before a failing step (including artifact miss)
+   * escalates to the recovery menu. Matches `max_retries=3` in bin/conduct.
+   * Default: 3.
+   */
+  maxRetries?: number;
+  /**
+   * Sleep implementation for rate-limit waits. Defaults to setTimeout.
+   * Tests inject a spy to avoid real waits.
+   */
+  sleepFn?: (ms: number) => Promise<void>;
   onCheckpoint?: (step: StepName) => Promise<CheckpointResponse>;
   onNavigate?: (steps: NavigableStep[]) => Promise<StepName | null>;
   onReviewArtifacts?: (step: StepName, files: string[]) => Promise<ArtifactReviewResult>;
   onRecovery?: (step: StepName, isGating: boolean) => Promise<RecoveryOption>;
-  onComplexityAssessment?: () => Promise<ComplexityTier>;
+  onComplexityAssessment?: (recommended: ComplexityTier | null) => Promise<ComplexityTier>;
 }
 
-// Steps that require artifact review after completion
-const ARTIFACT_REVIEW_STEPS: Set<StepName> = new Set([
-  'brainstorm',
-  'stories',
-  'plan',
-  'architecture_diagram',
-  'architecture_review',
-]);
-
-// Glob patterns for artifacts produced by each reviewable step
-const ARTIFACT_GLOBS: Record<string, string[]> = {
-  brainstorm: ['.docs/specs/*.md'],
-  stories: ['.docs/stories/**/*.md'],
-  plan: ['.docs/plans/*.md'],
-  architecture_diagram: ['.docs/architecture/*.md'],
-  architecture_review: ['.docs/decisions/architecture-review-*.md', '.docs/decisions/adr-*.md'],
-};
+function stepHasCompletionCheck(step: StepName): boolean {
+  if (CUSTOM_COMPLETION_PREDICATES[step]) return true;
+  return (STEP_ARTIFACT_GLOBS[step] ?? []).length > 0;
+}
 
 export class Conductor {
   private stateFilePath: string;
@@ -99,9 +141,11 @@ export class Conductor {
   private projectRoot: string;
   private onCheckpoint: (step: StepName) => Promise<CheckpointResponse>;
   private onNavigate: (steps: NavigableStep[]) => Promise<StepName | null>;
+  private verifyArtifacts: boolean;
+  private sleep: (ms: number) => Promise<void>;
   private onReviewArtifacts: (step: StepName, files: string[]) => Promise<ArtifactReviewResult>;
   private onRecovery?: (step: StepName, isGating: boolean) => Promise<RecoveryOption>;
-  private onComplexityAssessment?: () => Promise<ComplexityTier>;
+  private onComplexityAssessment?: (recommended: ComplexityTier | null) => Promise<ComplexityTier>;
 
   constructor(opts: ConductorOptions) {
     this.stateFilePath = opts.stateFilePath;
@@ -112,6 +156,16 @@ export class Conductor {
     this.mode = opts.mode ?? 'default';
     this.config = opts.config ?? {};
     this.projectRoot = opts.projectRoot ?? process.cwd();
+    this.verifyArtifacts = opts.verifyArtifacts ?? false;
+    // Legacy maxRetries option: inject as defaults.max_retries on the config
+    // so per-step resolution still works. Tests often pass this directly.
+    if (opts.maxRetries !== undefined) {
+      this.config = {
+        ...this.config,
+        defaults: { ...(this.config.defaults ?? {}), max_retries: opts.maxRetries },
+      };
+    }
+    this.sleep = opts.sleepFn ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
     this.onCheckpoint = opts.onCheckpoint ?? (async () => 'continue' as const);
     this.onNavigate = opts.onNavigate ?? (async () => null);
     this.onReviewArtifacts = opts.onReviewArtifacts ?? (async () => 'approved' as const);
@@ -148,23 +202,29 @@ export class Conductor {
       if (shouldSkipForTier(step.name, tier)) {
         await saveStepStatus(this.stateFilePath, step.name, 'skipped');
         state[step.name] = 'skipped';
-        this.events.emit({ type: 'tier_skip', step: step.name, tier });
+        await this.events.emit({ type: 'tier_skip', step: step.name, tier });
         continue;
       }
 
+      // Resolve per-step config (model, effort, retries, review…). Tier is
+      // threaded in so `by_tier` overrides apply when the feature's complexity
+      // is known (post-complexity step).
+      const resolved = resolveStepConfig(step.name, phaseForStep(step.name), this.config, {
+        tier: state.complexity_tier,
+      });
+
       // Check if step is disabled via config
-      const disabledSteps = this.config.steps?.disable ?? [];
-      if (disabledSteps.includes(step.name)) {
+      if (resolved.disabled) {
         await saveStepStatus(this.stateFilePath, step.name, 'skipped');
         state[step.name] = 'skipped';
-        this.events.emit({ type: 'config_skip', step: step.name });
+        await this.events.emit({ type: 'config_skip', step: step.name });
         continue;
       }
 
       // Check gate: all prerequisites must be satisfied
       const gate = checkGate(step.name, state);
       if (!gate.passed) {
-        this.events.emit({ type: 'gate_blocked', step: step.name, reason: gate.reason });
+        await this.events.emit({ type: 'gate_blocked', step: step.name, reason: gate.reason });
         await writeState(this.stateFilePath, state);
         process.off('SIGINT', sigintHandler);
         return;
@@ -174,83 +234,108 @@ export class Conductor {
       await saveStepStatus(this.stateFilePath, step.name, 'in_progress');
       state[step.name] = 'in_progress';
 
-      this.events.emit({ type: 'step_started', step: step.name, index: i });
+      await this.events.emit({ type: 'step_started', step: step.name, index: i });
 
-      const result = await this.stepRunner.run(step.name, state);
+      // Retry loop: auto-retry on step-runner failure OR completion-gate miss,
+      // up to `maxRetries` attempts total. Only after the budget is exhausted
+      // do we escalate to the recovery menu. Matches bash bin/conduct's
+      // max_retries=3 behavior.
+      let attempt = 0;
+      let lastError: string = '';
+      let succeeded = false;
+      let retryHint: string | undefined;
+      let successOutput: string | undefined;
 
-      if (result.success) {
-        // Artifact review gate — show artifacts for approval before marking done
-        if (ARTIFACT_REVIEW_STEPS.has(step.name) && this.mode !== 'auto') {
-          const files = await this.findArtifactFiles(step.name);
-          if (files.length > 0) {
-            const reviewResult = await this.onReviewArtifacts(step.name, files);
-            if (reviewResult === 'rejected') {
-              // Re-run the step — user rejected artifacts
-              i--; // for loop will i++, so we stay on the same step
+      const stepMaxRetries = resolved.max_retries;
+      while (attempt < stepMaxRetries) {
+        attempt++;
+
+        const result =
+          step.name === 'complexity'
+            ? await this.runComplexityStep(state)
+            : await this.stepRunner.run(step.name, state, { retryReason: retryHint });
+
+        // Rate limit: wait deterministically, then retry WITHOUT burning the
+        // retry budget (matches bin/conduct:2248–2280 handle_rate_limit).
+        if (result.rateLimited) {
+          const waitSeconds = result.waitSeconds ?? 300;
+          await this.events.emit({ type: 'rate_limit', waitSeconds });
+          await this.sleep(waitSeconds * 1000);
+          attempt--;
+          continue;
+        }
+
+        // Stale session: reset + retry without burning budget
+        // (matches bin/conduct:645–663 stale-session detection).
+        if (result.sessionExpired) {
+          await this.events.emit({
+            type: 'session_reset',
+            reason: 'Claude reported "No conversation found"',
+          });
+          if (this.stepRunner.resetSession) {
+            await this.stepRunner.resetSession();
+          }
+          attempt--;
+          continue;
+        }
+
+        if (!result.success) {
+          lastError = result.output ?? `Step '${step.name}' session ended with error`;
+          retryHint = `Previous attempt failed: ${lastError}. Finish the work now.`;
+          if (attempt < stepMaxRetries) {
+            await this.events.emit({
+              type: 'step_retry',
+              step: step.name,
+              attempt: attempt + 1,
+              maxAttempts: stepMaxRetries,
+              reason: lastError,
+            });
+            continue;
+          }
+          break;
+        }
+
+        // Step runner returned success. Now verify real completion.
+        if (this.verifyArtifacts && stepHasCompletionCheck(step.name) && step.name !== 'complexity') {
+          const completion = await checkStepCompletion(this.projectRoot, step.name);
+          if (!completion.done) {
+            lastError = `Step '${step.name}' completed but completion check failed: ${completion.reason ?? 'unknown'}`;
+            retryHint = `Previous attempt did not satisfy the completion check: ${completion.reason ?? 'unknown'}. Finish the work now.`;
+            if (attempt < stepMaxRetries) {
+              await this.events.emit({
+                type: 'step_retry',
+                step: step.name,
+                attempt: attempt + 1,
+                maxAttempts: stepMaxRetries,
+                reason: completion.reason ?? 'completion check failed',
+              });
               continue;
             }
+            break;
           }
         }
 
-        await saveStepStatus(this.stateFilePath, step.name, 'done');
-        state[step.name] = 'done';
-        this.events.emit({ type: 'step_completed', step: step.name, status: 'done' });
+        succeeded = true;
+        successOutput = result.output;
+        break;
+      }
 
-        // Complexity assessment after complexity step
-        if (step.name === 'complexity' && this.mode !== 'auto' && !state.complexity_tier && this.onComplexityAssessment) {
-          const assessedTier = await this.onComplexityAssessment();
-          state.complexity_tier = assessedTier;
-          await writeState(this.stateFilePath, state);
-        }
-
-        // Store PR URL from finish step output
-        if (step.name === 'finish' && result.output) {
-          const urlMatch = result.output.match(/https?:\/\/[^\s]+\/pull\/\d+/);
-          if (urlMatch) {
-            state.pr_url = urlMatch[0];
-          }
-        }
-
-        // Checkpoint handling
-        if (isCheckpointStep(step.name) && this.mode !== 'auto') {
-          this.events.emit({ type: 'checkpoint_reached', step: step.name });
-          const response = await this.onCheckpoint(step.name);
-          if (response === 'quit') {
-            await writeState(this.stateFilePath, state);
-            process.off('SIGINT', sigintHandler);
-            return;
-          }
-          if (response === 'back') {
-            const navigable = getNavigableSteps(state);
-            const target = await this.onNavigate(navigable);
-            if (target) {
-              const nav = navigateBack(state, target);
-              this.events.emit({ type: 'navigation_back', from: step.name, to: target });
-              state = nav.state;
-              await writeState(this.stateFilePath, state);
-              i = nav.index - 1; // for loop will i++
-              continue;
-            }
-          }
-          // 'continue' proceeds normally
-        }
-      } else {
-        // Step failed — invoke recovery menu if available
+      if (!succeeded) {
+        // Exhausted retries — route through the recovery menu.
         await saveStepStatus(this.stateFilePath, step.name, 'failed');
         state[step.name] = 'failed';
-        this.events.emit({
+        await this.events.emit({
           type: 'step_failed',
           step: step.name,
-          error: result.output ?? 'Step failed',
-          retryCount: 0,
+          error: lastError,
+          retryCount: attempt,
         });
 
         if (this.onRecovery) {
           const gating = isGatingStep(step.name);
           const action = await this.onRecovery(step.name, gating);
-
           if (action === 'retry') {
-            i--; // for loop will i++, staying on same step
+            i--;
             continue;
           }
           if (action === 'skip' && !gating) {
@@ -263,10 +348,10 @@ export class Conductor {
             const target = await this.onNavigate(navigable);
             if (target) {
               const nav = navigateBack(state, target);
-              this.events.emit({ type: 'navigation_back', from: step.name, to: target });
+              await this.events.emit({ type: 'navigation_back', from: step.name, to: target });
               state = nav.state;
               await writeState(this.stateFilePath, state);
-              i = nav.index - 1; // for loop will i++
+              i = nav.index - 1;
               continue;
             }
           }
@@ -274,15 +359,128 @@ export class Conductor {
             if (this.stepRunner.runInteractive) {
               await this.stepRunner.runInteractive(step.name);
             }
-            i--; // re-run the step after interactive fix
+            i--;
             continue;
           }
         }
 
-        // quit (default) — save state and return
         await writeState(this.stateFilePath, state);
         process.off('SIGINT', sigintHandler);
         return;
+      }
+
+      // Success path ------------------------------------------------------
+      {
+        // Artifact review gate. Runs for every step that declares artifact
+        // globs (STEP_ARTIFACT_GLOBS[step].length > 0). Behavior is driven by
+        // resolved.review:
+        //   - auto:        silently record approvals; no prompt
+        //   - manual:      always prompt the user
+        //   - conditional: auto-approve unless the skill wrote
+        //                  `.pipeline/review-required-<step>` (signalling it
+        //                  found issues worth human attention)
+        // Approved (path + sha256 match) files skip re-prompting across runs.
+        if (stepHasCompletionCheck(step.name) && this.mode !== 'auto') {
+          const allFiles = await findArtifactFilesForStep(this.projectRoot, step.name);
+          if (allFiles.length > 0) {
+            const unapproved = await filterUnapprovedArtifacts(
+              allFiles,
+              state.artifact_approvals ?? {},
+              this.projectRoot,
+            );
+            if (unapproved.length > 0) {
+              let reviewResult: ArtifactReviewResult = 'approved';
+              let shouldPrompt = false;
+
+              if (resolved.review === 'manual') {
+                shouldPrompt = true;
+              } else if (resolved.review === 'conditional') {
+                const markerPath = join(
+                  this.projectRoot,
+                  '.pipeline',
+                  `review-required-${step.name}`,
+                );
+                try {
+                  await accessFile(markerPath);
+                  shouldPrompt = true;
+                } catch {
+                  // No marker → auto-approve (skill reported no issues).
+                }
+              }
+              // review === 'auto' → shouldPrompt stays false.
+
+              if (shouldPrompt) {
+                reviewResult = await this.onReviewArtifacts(step.name, unapproved);
+              }
+
+              if (reviewResult === 'rejected') {
+                i--; // Re-run the step; user rejected artifacts
+                continue;
+              }
+
+              // Approved — record hashes for the reviewed files.
+              state.artifact_approvals = await recordApprovals(
+                state.artifact_approvals ?? {},
+                unapproved,
+                this.projectRoot,
+              );
+              await writeState(this.stateFilePath, state);
+
+              // Clean up the conditional marker, if any, so next run starts fresh.
+              if (resolved.review === 'conditional') {
+                const markerPath = join(
+                  this.projectRoot,
+                  '.pipeline',
+                  `review-required-${step.name}`,
+                );
+                await unlinkFile(markerPath).catch(() => {
+                  /* marker absent — nothing to clean up */
+                });
+              }
+            }
+          }
+        }
+
+        // For complexity, tier + 'done' are written atomically in runComplexityStep.
+        // For all other steps, write status here.
+        if (step.name !== 'complexity') {
+          await saveStepStatus(this.stateFilePath, step.name, 'done');
+        }
+        state[step.name] = 'done';
+        const tail = successOutput ? successOutput.split('\n').slice(-200) : undefined;
+        await this.events.emit({ type: 'step_completed', step: step.name, status: 'done', tail });
+
+        // Store PR URL from finish step output — read the latest state file
+        // rather than the (captured, possibly stale) runner output, so manual
+        // fixes during recovery or interactive mode still pick up the URL.
+        if (step.name === 'finish') {
+          const current = await readState(this.stateFilePath);
+          if (current.ok && current.value.pr_url) state.pr_url = current.value.pr_url;
+        }
+
+        // Checkpoint handling
+        if (isCheckpointStep(step.name) && this.mode !== 'auto') {
+          await this.events.emit({ type: 'checkpoint_reached', step: step.name });
+          const response = await this.onCheckpoint(step.name);
+          if (response === 'quit') {
+            await writeState(this.stateFilePath, state);
+            process.off('SIGINT', sigintHandler);
+            return;
+          }
+          if (response === 'back') {
+            const navigable = getNavigableSteps(state);
+            const target = await this.onNavigate(navigable);
+            if (target) {
+              const nav = navigateBack(state, target);
+              await this.events.emit({ type: 'navigation_back', from: step.name, to: target });
+              state = nav.state;
+              await writeState(this.stateFilePath, state);
+              i = nav.index - 1; // for loop will i++
+              continue;
+            }
+          }
+          // 'continue' proceeds normally
+        }
       }
     }
 
@@ -290,9 +488,66 @@ export class Conductor {
     process.off('SIGINT', sigintHandler);
 
     // All steps completed successfully
-    this.events.emit({ type: 'feature_complete', prUrl: state.pr_url });
+    await this.events.emit({ type: 'feature_complete', prUrl: state.pr_url });
     state.feature_status = 'complete';
     await writeState(this.stateFilePath, state);
+  }
+
+  /**
+   * Handle the `complexity` step entirely in the engine:
+   * 1. Ask Claude (--print mode) for a recommended tier.
+   * 2. Let the UI confirm or override via onComplexityAssessment(recommended).
+   * 3. Write tier + step status atomically.
+   * On callback error (e.g., Ctrl-C), leave the step pending — no stuck state.
+   */
+  private async runComplexityStep(state: ConductState): Promise<StepRunResult> {
+    // Auto mode: take any existing tier, else default to L. No prompt, no Claude call.
+    if (this.mode === 'auto') {
+      state.complexity_tier = state.complexity_tier ?? 'L';
+      state.complexity = 'done';
+      state.last_step = 'complexity';
+      await writeState(this.stateFilePath, state);
+      return { success: true };
+    }
+
+    // If a tier is already persisted (e.g., resume after crash, or back-nav re-entry),
+    // use that as the default recommendation. Otherwise ask Claude in print mode.
+    let recommended: ComplexityTier | null = state.complexity_tier ?? null;
+    if (!recommended && this.stepRunner.assessComplexity) {
+      try {
+        recommended = await this.stepRunner.assessComplexity();
+      } catch {
+        recommended = null;
+      }
+    }
+
+    if (!this.onComplexityAssessment) {
+      // No UI callback — accept the recommendation or default to L.
+      state.complexity_tier = recommended ?? state.complexity_tier ?? 'L';
+      state.complexity = 'done';
+      state.last_step = 'complexity';
+      await writeState(this.stateFilePath, state);
+      return { success: true };
+    }
+
+    let tier: ComplexityTier;
+    try {
+      tier = await this.onComplexityAssessment(recommended);
+    } catch (err) {
+      // User cancelled / prompt errored. Outer loop marks the step 'failed'
+      // and routes through the recovery menu. No tier persisted, so resume
+      // will re-prompt.
+      return {
+        success: false,
+        output: err instanceof Error ? err.message : 'complexity prompt cancelled',
+      };
+    }
+
+    state.complexity_tier = tier;
+    state.complexity = 'done';
+    state.last_step = 'complexity';
+    await writeState(this.stateFilePath, state);
+    return { success: true };
   }
 
   /**
@@ -323,60 +578,71 @@ export class Conductor {
     return lastDoneIndex + 1;
   }
 
-  /**
-   * Find artifact files produced by a step for review.
-   * Uses the glob patterns defined in ARTIFACT_GLOBS.
-   */
-  private async findArtifactFiles(step: StepName): Promise<string[]> {
-    const patterns = ARTIFACT_GLOBS[step];
-    if (!patterns) return [];
+}
 
-    const files: string[] = [];
-    for (const pattern of patterns) {
-      // Simple glob: support dir/*.md and dir/**/*.md
-      const parts = pattern.split('/');
-      const isRecursive = parts.includes('**');
-
-      if (isRecursive) {
-        // e.g., .docs/stories/**/*.md — walk subdirectories
-        const baseDir = join(this.projectRoot, parts.slice(0, parts.indexOf('**')).join('/'));
-        const ext = parts[parts.length - 1]; // e.g., *.md
-        const collected = await this.walkDir(baseDir, ext.replace('*', ''));
-        files.push(...collected);
-      } else {
-        // e.g., .docs/specs/*.md — single directory
-        const dir = join(this.projectRoot, parts.slice(0, -1).join('/'));
-        const ext = parts[parts.length - 1].replace('*', ''); // .md
-        try {
-          const entries = await readdir(dir);
-          for (const entry of entries) {
-            if (entry.endsWith(ext)) {
-              files.push(join(dir, entry));
-            }
-          }
-        } catch {
-          // Directory doesn't exist — no artifacts
-        }
-      }
-    }
-    return files;
+/**
+ * SHA-256 of a file's contents, hex encoded. Returns null if the file can't be read.
+ */
+async function hashFile(path: string): Promise<string | null> {
+  try {
+    const buf = await readFile(path);
+    return createHash('sha256').update(buf).digest('hex');
+  } catch {
+    return null;
   }
+}
 
-  private async walkDir(dir: string, ext: string): Promise<string[]> {
-    const files: string[] = [];
-    try {
-      const entries = await readdir(dir, { withFileTypes: true });
-      for (const entry of entries) {
-        const fullPath = join(dir, entry.name);
-        if (entry.isDirectory()) {
-          files.push(...await this.walkDir(fullPath, ext));
-        } else if (entry.name.endsWith(ext)) {
-          files.push(fullPath);
-        }
-      }
-    } catch {
-      // Directory doesn't exist
+/**
+ * Approval key for an artifact file: path relative to projectRoot (falls back
+ * to the absolute path if outside the root).
+ */
+export function approvalKey(projectRoot: string, file: string): string {
+  const rel = relative(projectRoot, file);
+  return rel.startsWith('..') ? file : rel;
+}
+
+/**
+ * Return the subset of `files` that are not yet approved OR whose content has
+ * changed since approval. Files whose hash still matches the recorded approval
+ * are filtered out (skip re-prompting).
+ */
+export async function filterUnapprovedArtifacts(
+  files: string[],
+  approvals: Record<string, { sha256: string; approved_at: string }>,
+  projectRoot: string,
+): Promise<string[]> {
+  const out: string[] = [];
+  for (const file of files) {
+    const key = approvalKey(projectRoot, file);
+    const prior = approvals[key];
+    if (!prior) {
+      out.push(file);
+      continue;
     }
-    return files;
+    const hash = await hashFile(file);
+    if (hash !== prior.sha256) {
+      out.push(file);
+    }
   }
+  return out;
+}
+
+/**
+ * Record approvals for a list of files. Returns a new approvals map (does not
+ * mutate the input). Skips any file that cannot be read.
+ */
+export async function recordApprovals(
+  approvals: Record<string, { sha256: string; approved_at: string }>,
+  files: string[],
+  projectRoot: string,
+): Promise<Record<string, { sha256: string; approved_at: string }>> {
+  const out = { ...approvals };
+  const now = new Date().toISOString();
+  for (const file of files) {
+    const hash = await hashFile(file);
+    if (!hash) continue;
+    const key = approvalKey(projectRoot, file);
+    out[key] = { sha256: hash, approved_at: now };
+  }
+  return out;
 }

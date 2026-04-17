@@ -1,7 +1,10 @@
+import chalk from 'chalk';
+import ora, { type Ora } from 'ora';
 import type { ConductorEvent, ConductState, StepDefinition, StepName } from '../types/index.js';
 import type { StateResult } from '../types/state.js';
 import { formatDashboardSnapshot } from './dashboard-text.js';
 import { buildDashboardSnapshot, type ArtifactsByStep } from './dashboard-snapshot.js';
+import type { DashboardSnapshot, ViewMode } from './types.js';
 import { getArtifactStatus, STEP_ARTIFACT_GLOBS } from '../engine/artifacts.js';
 import { createLiveRegion, type LiveRegion } from './live-region.js';
 
@@ -21,16 +24,11 @@ export interface CreateRendererOptions {
    * writing to process.stdout. Tests can inject a non-TTY region.
    */
   liveRegion?: LiveRegion;
+  /** How to lay out the dashboard. Defaults to 'full'. */
+  viewMode?: ViewMode;
+  /** Max lines to show in the post-step log tail. 0 disables. Default 20. */
+  tailLines?: number;
 }
-
-const STATUS_ICONS: Record<string, string> = {
-  done: '✓',
-  in_progress: '▶',
-  pending: '⬚',
-  skipped: '→',
-  stale: '⚠',
-  failed: '✗',
-};
 
 /**
  * Create a render callback that draws the dashboard into a sticky live region.
@@ -43,6 +41,20 @@ export function createRenderer(
 ): (event: ConductorEvent) => Promise<void> {
   const { stateFilePath, featureDesc, steps, readStateFn, notifyFn, projectRoot } = opts;
   const region = opts.liveRegion ?? createLiveRegion();
+  const viewMode: ViewMode = opts.viewMode ?? 'full';
+  const tailLines = opts.tailLines ?? 20;
+
+  // UI-only overlay state (kept in the renderer, not in engine state).
+  let currentStep: DashboardSnapshot['currentStep'];
+  let lastStepTail: DashboardSnapshot['lastStepTail'];
+  let spinner: Ora | null = null;
+
+  function stopSpinner(): void {
+    if (spinner) {
+      spinner.stop();
+      spinner = null;
+    }
+  }
 
   function notify(title: string, message: string): void {
     if (notifyFn) notifyFn(title, message).catch(() => {});
@@ -63,35 +75,52 @@ export function createRenderer(
     const stateResult = await readStateFn(stateFilePath);
     const state: ConductState = stateResult.ok ? stateResult.value : {};
     const artifacts = await collectArtifacts();
-    const snapshot = buildDashboardSnapshot(state, steps, featureDesc, artifacts);
-    const lines = formatDashboardSnapshot(snapshot);
+    const base = buildDashboardSnapshot(state, steps, featureDesc, artifacts);
+    const snapshot: DashboardSnapshot = { ...base, currentStep, lastStepTail };
+    const lines = formatDashboardSnapshot(snapshot, { viewMode, tailLines });
     region.update(lines);
   }
 
   return async (event: ConductorEvent): Promise<void> => {
+    // Any event other than rate_limit itself means we're unblocked — stop
+    // the countdown spinner if one is running.
+    if (event.type !== 'rate_limit' && spinner) {
+      stopSpinner();
+    }
+
     switch (event.type) {
-      case 'step_started':
-        // Transient log above the region, then suspend the region so the
-        // interactive Claude session owns the terminal.
-        region.log(`  ${STATUS_ICONS.in_progress} ${event.step} — running...`);
+      case 'step_started': {
+        const def = steps.find((s) => s.name === event.step);
+        currentStep = {
+          name: event.step,
+          label: def?.label ?? event.step,
+          startedAtMs: Date.now(),
+        };
+        region.log(`  ${chalk.cyan('▶')} ${def?.label ?? event.step} ${chalk.dim('— running...')}`);
         region.suspend();
         break;
+      }
 
       case 'step_completed':
+        currentStep = undefined;
+        if (event.tail && event.tail.length > 0) {
+          lastStepTail = { step: event.step, lines: event.tail };
+        }
         region.resume();
         await renderDashboard();
         notify('Conductor', `Step completed: ${event.step}`);
         break;
 
       case 'step_failed':
+        currentStep = undefined;
         region.resume();
         region.log('');
-        region.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
-        region.log(`  ${STATUS_ICONS.failed} STEP FAILED: ${event.step}`);
-        region.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+        region.log(chalk.bold.red('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'));
+        region.log(chalk.bold.red(`  ✗ STEP FAILED: ${event.step}`));
+        region.log(chalk.bold.red('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'));
         if (event.error) {
-          region.log(`  Error output:`);
-          for (const line of event.error.split('\n')) region.log(`    ${line}`);
+          region.log(chalk.red('  Error output:'));
+          for (const line of event.error.split('\n')) region.log(chalk.red(`    ${line}`));
         }
         region.log('');
         await renderDashboard();
@@ -100,30 +129,37 @@ export function createRenderer(
 
       case 'step_retry':
         region.log(
-          `  ↻ ${event.step} — retry ${event.attempt}/${event.maxAttempts}: ${event.reason}`,
+          chalk.yellow(`  ↻ ${event.step} — retry ${event.attempt}/${event.maxAttempts}: ${event.reason}`),
         );
         break;
 
       case 'rate_limit': {
         const mins = Math.ceil(event.waitSeconds / 60);
-        region.log(`  ⏸  Rate limited — waiting ${event.waitSeconds}s (~${mins}m) before retry`);
+        // Install a spinner rather than a static line. The conductor is
+        // sleeping in the engine; we stop the spinner when the next event
+        // arrives (retry kicks in, or session_reset, or step_completed).
+        stopSpinner();
+        region.suspend();
+        spinner = ora(chalk.yellow(`Rate limited — resuming in ~${mins}m (${event.waitSeconds}s)`)).start();
         notify('Conductor', `Rate limited — resuming in ~${mins}m`);
         break;
       }
 
       case 'session_reset':
-        region.log(`  ⟳  Session reset: ${event.reason}`);
+        region.log(chalk.yellow(`  ⟳  Session reset: ${event.reason}`));
         break;
 
       case 'tier_skip':
       case 'config_skip':
       case 'gate_blocked':
+        currentStep = undefined;
         await renderDashboard();
         break;
 
       case 'feature_complete':
+        currentStep = undefined;
         await renderDashboard();
-        region.log(`\n✓ Feature complete.${event.prUrl ? ` PR: ${event.prUrl}` : ''}`);
+        region.log(chalk.bold.green(`\n✓ Feature complete.${event.prUrl ? ` PR: ${event.prUrl}` : ''}`));
         notify('Conductor', 'Pipeline complete!');
         break;
 
@@ -132,7 +168,7 @@ export function createRenderer(
         break;
 
       case 'checkpoint_reached':
-        region.log(`\n── Checkpoint: ${event.step} complete ──`);
+        region.log(chalk.dim(`\n── Checkpoint: ${event.step} complete ──`));
         break;
     }
   };

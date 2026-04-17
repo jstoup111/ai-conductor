@@ -50,4 +50,39 @@ describe('CLI', () => {
   it('requires feature description when no state exists', () => {
     expect(() => parseArgs(['node', 'conduct'])).toThrow();
   });
+
+  it('defaults --view to full', () => {
+    const opts = parseArgs(['node', 'conduct', 'feature']);
+    expect(opts.view).toBe('full');
+  });
+
+  it('parses --view focus', () => {
+    const opts = parseArgs(['node', 'conduct', 'feature', '--view', 'focus']);
+    expect(opts.view).toBe('focus');
+  });
+
+  it('parses --view log', () => {
+    const opts = parseArgs(['node', 'conduct', 'feature', '--view', 'log']);
+    expect(opts.view).toBe('log');
+  });
+
+  it('falls back to full when --view gets a bogus value', () => {
+    const opts = parseArgs(['node', 'conduct', 'feature', '--view', 'garbage']);
+    expect(opts.view).toBe('full');
+  });
+
+  it('defaults --tail-lines to 20', () => {
+    const opts = parseArgs(['node', 'conduct', 'feature']);
+    expect(opts.tailLines).toBe(20);
+  });
+
+  it('parses --tail-lines override', () => {
+    const opts = parseArgs(['node', 'conduct', 'feature', '--tail-lines', '50']);
+    expect(opts.tailLines).toBe(50);
+  });
+
+  it('accepts --tail-lines 0 to disable the tail pane', () => {
+    const opts = parseArgs(['node', 'conduct', 'feature', '--tail-lines', '0']);
+    expect(opts.tailLines).toBe(0);
+  });
 });

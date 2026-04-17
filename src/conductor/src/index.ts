@@ -247,6 +247,8 @@ async function main(): Promise<void> {
     notifyFn: sendNotification,
     projectRoot,
     liveRegion,
+    viewMode: opts.view,
+    tailLines: opts.tailLines,
   });
   const subscriber = new TerminalSubscriber(events, renderEvent);
   subscriber.start();
