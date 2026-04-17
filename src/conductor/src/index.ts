@@ -5,7 +5,6 @@ import { join } from 'node:path';
 import { mkdir, readFile } from 'node:fs/promises';
 import { v4 as uuidv4 } from 'uuid';
 import { Conductor } from './engine/conductor.js';
-import type { CheckpointResponse, NavigableStep, ArtifactReviewResult } from './engine/conductor.js';
 import { DefaultStepRunner } from './engine/step-runners.js';
 import { ClaudeProvider } from './execution/claude-provider.js';
 import { ConductorEventEmitter } from './ui/events.js';
@@ -13,156 +12,22 @@ import { TerminalSubscriber } from './ui/subscriber.js';
 import { loadConfig } from './engine/config.js';
 import { readState, writeState } from './engine/state.js';
 import { parseArgs, type CLIOptions } from './cli.js';
-import type { StepName, RunMode, RecoveryOption, ComplexityTier } from './types/index.js';
-import { getRecoveryOptions } from './engine/recovery.js';
+import type { StepName, RunMode } from './types/index.js';
 import { createRenderer } from './ui/create-renderer.js';
 import { ALL_STEPS } from './engine/steps.js';
-import * as readline from 'node:readline';
 import { sendNotification } from './ui/notifications.js';
 import { scanResumableFeatures, selectFeature, formatResumeMenu } from './engine/resume.js';
 import { WorktreeManager, checkPrMerged } from './engine/worktree.js';
-
-// --- Interactive prompts ---
-
-function prompt(question: string): Promise<string> {
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  return new Promise((resolve) => {
-    rl.question(question, (answer) => {
-      rl.close();
-      resolve(answer.trim().toLowerCase());
-    });
-  });
-}
-
-async function handleCheckpoint(_step: StepName): Promise<CheckpointResponse> {
-  while (true) {
-    const answer = await prompt('  c = continue, b = go back, q = quit [c/b/q]: ');
-    if (answer === 'c') return 'continue';
-    if (answer === 'b') return 'back';
-    if (answer === 'q') return 'quit';
-    console.log('  Invalid choice. Enter c, b, or q.');
-  }
-}
-
-async function handleNavigate(steps: NavigableStep[]): Promise<StepName | null> {
-  if (steps.length === 0) {
-    console.log('  No completed steps to navigate to.');
-    return null;
-  }
-  console.log('\nGo back to which step?');
-  steps.forEach((s, i) => {
-    console.log(`   ${i + 1}) ${s.label.padEnd(25)} [${s.status}]    ${s.phase}`);
-  });
-  console.log('   0) Cancel');
-
-  const answer = await prompt(`Choice [0-${steps.length}]: `);
-  const idx = parseInt(answer, 10);
-  if (isNaN(idx) || idx === 0) return null;
-  if (idx >= 1 && idx <= steps.length) return steps[idx - 1].name;
-  return null;
-}
-
-// --- Artifact review ---
-
-async function handleReviewArtifacts(step: StepName, files: string[]): Promise<ArtifactReviewResult> {
-  const total = files.length;
-  console.log(`\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
-  console.log(`  Artifact review: ${step} (${total} file${total === 1 ? '' : 's'})`);
-  console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);
-
-  for (let i = 0; i < files.length; i++) {
-    const file = files[i];
-    const basename = file.split('/').pop() ?? file;
-
-    console.log(`━━━ [${i + 1}/${total}] ${basename} ━━━\n`);
-
-    // Display file contents
-    try {
-      const content = await readFile(file, 'utf-8');
-      console.log(content);
-    } catch {
-      console.log(`  (could not read file: ${file})`);
-    }
-
-    console.log(`\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
-
-    while (true) {
-      const answer = await prompt('  [enter=approve / r=reject / s=skip remaining]: ');
-      if (answer === '' || answer === 'a') {
-        console.log(`  ✓ Approved: ${basename}`);
-        break;
-      }
-      if (answer === 'r') {
-        console.log(`  ✗ Rejected: ${basename}`);
-        console.log(`  Returning to ${step} to address issues...\n`);
-        return 'rejected';
-      }
-      if (answer === 's') {
-        console.log(`  Skipping review of remaining artifacts.`);
-        return 'approved';
-      }
-      console.log('  Invalid choice. Press enter to approve, r to reject, s to skip.');
-    }
-  }
-
-  console.log(`\n  ✓ All ${step} artifacts approved.\n`);
-  return 'approved';
-}
-
-// --- Recovery menu ---
-
-const RECOVERY_LABELS: Record<RecoveryOption, string> = {
-  retry: '[r]etry',
-  interactive: '[i]nteractive fix',
-  back: '[b]ack',
-  skip: '[s]kip',
-  quit: '[q]uit',
-};
-
-const RECOVERY_KEYS: Record<string, RecoveryOption> = {
-  r: 'retry',
-  i: 'interactive',
-  b: 'back',
-  s: 'skip',
-  q: 'quit',
-};
-
-async function handleRecovery(step: StepName, isGating: boolean): Promise<RecoveryOption> {
-  const options = getRecoveryOptions(step, isGating);
-  const labels = options.map((o) => RECOVERY_LABELS[o]).join(' / ');
-  const keys = options.map((o) => o[0]).join('/');
-
-  while (true) {
-    const answer = await prompt(`  ${labels} [${keys}]: `);
-    const action = RECOVERY_KEYS[answer];
-    if (action && options.includes(action)) return action;
-    console.log(`  Invalid choice. Enter one of: ${keys}`);
-  }
-}
-
-// --- Complexity assessment ---
-
-async function handleComplexityAssessment(): Promise<ComplexityTier> {
-  console.log(`\nComplexity signals:`);
-  console.log(`  Models/tables:         ?`);
-  console.log(`  External integrations: ?`);
-  console.log(`  Auth/authz:            ?`);
-  console.log(`  State machines:        ?`);
-  console.log(`  Estimated stories:     ?`);
-  console.log();
-
-  while (true) {
-    const answer = await prompt('  Based on the brainstorm, classify complexity [S/M/L]: ');
-    if (answer === 's') return 'S';
-    if (answer === 'm') return 'M';
-    if (answer === 'l') return 'L';
-    console.log('  Invalid choice. Enter s, m, or l.');
-  }
-}
+import { detectAutoResume } from './engine/auto-resume.js';
+import { createLiveRegion } from './ui/live-region.js';
+import { TerminalPromptHost } from './ui/terminal/prompt-host.js';
 
 // --- Merged worktree cleanup ---
 
-async function cleanupMergedWorktrees(projectRoot: string): Promise<void> {
+async function cleanupMergedWorktrees(
+  projectRoot: string,
+  promptHost: TerminalPromptHost,
+): Promise<void> {
   const features = await scanResumableFeatures(projectRoot);
   const manager = new WorktreeManager(projectRoot);
   let cleaned = 0;
@@ -194,7 +59,7 @@ async function cleanupMergedWorktrees(projectRoot: string): Promise<void> {
 
     const merged = await checkPrMerged(prUrl);
     if (merged) {
-      const answer = await prompt(`  Remove merged worktree "${feature.name}"? [y/n]: `);
+      const answer = await promptHost.ask(`  Remove merged worktree "${feature.name}"? [y/n]: `);
       if (answer === 'y') {
         await manager.cleanup(feature.name);
         console.log(`  Removed: ${feature.name}`);
@@ -228,6 +93,12 @@ async function main(): Promise<void> {
   // Ensure .pipeline/ exists
   await mkdir(pipelineDir, { recursive: true });
 
+  // Shared UI state: one live region, one prompt host. The host suspends the
+  // region around each readline prompt so dashboard and prompts don't fight
+  // for the terminal.
+  const liveRegion = createLiveRegion();
+  const promptHost = new TerminalPromptHost(liveRegion);
+
   // Load config (optional — conductor works without it)
   const configResult = await loadConfig(projectRoot);
   const config = configResult.ok ? configResult.config : undefined;
@@ -260,13 +131,48 @@ async function main(): Promise<void> {
   // Handle --cleanup: check for merged worktrees and clean up
   if (opts.cleanup) {
     console.log('\nChecking for merged worktrees...\n');
-    await cleanupMergedWorktrees(projectRoot);
+    await cleanupMergedWorktrees(projectRoot, promptHost);
     return;
   }
 
+  // Auto-resume: if a feature description was provided and a worktree for its
+  // slug already exists with in-progress state, silently redirect to that
+  // worktree and enable resume. --fresh bypasses this.
+  if (opts.featureDesc && !opts.resume && !opts.fresh && !opts.from && !opts.step) {
+    const detection = await detectAutoResume(projectRoot, opts.featureDesc);
+    if (detection.kind === 'resume') {
+      projectRoot = detection.worktreePath;
+      pipelineDir = join(projectRoot, '.pipeline');
+      stateFilePath = detection.stateFilePath;
+      await mkdir(pipelineDir, { recursive: true });
+      opts.resume = true;
+      const position =
+        detection.lastStep
+          ? `${detection.stepIndex}/${detection.totalSteps} (after ${detection.lastStep})`
+          : 'step 1';
+      console.log(
+        `\nResuming "${opts.featureDesc}" at ${position}. Use --fresh to start over.\n`,
+      );
+    } else if (detection.kind === 'complete') {
+      const answer = await promptHost.ask(
+        `Feature "${opts.featureDesc}" is already marked complete (${detection.worktreePath}). Start over? [y/N]: `,
+      );
+      if (answer !== 'y') {
+        console.log('Exiting. Use --fresh to force a new start.');
+        return;
+      }
+      // User chose to start over — clear the existing state and continue fresh.
+      projectRoot = detection.worktreePath;
+      pipelineDir = join(projectRoot, '.pipeline');
+      stateFilePath = join(pipelineDir, 'conduct-state.json');
+      await mkdir(pipelineDir, { recursive: true });
+      await writeState(stateFilePath, {});
+    }
+  }
+
   // Handle --resume: check for merged worktrees, then scan and present selection menu
-  if (opts.resume) {
-    await cleanupMergedWorktrees(projectRoot);
+  if (opts.resume && !opts.featureDesc) {
+    await cleanupMergedWorktrees(projectRoot, promptHost);
     const features = await scanResumableFeatures(projectRoot);
     if (features.length === 0) {
       console.error('No active features found in .worktrees/');
@@ -277,7 +183,7 @@ async function main(): Promise<void> {
     if (!selected) {
       // Multiple features — show menu and prompt
       console.log(`\n${formatResumeMenu(features)}\n`);
-      const answer = await prompt(`Choose feature [0-${features.length}]: `);
+      const answer = await promptHost.ask(`Choose feature [0-${features.length}]: `);
       const choice = parseInt(answer, 10);
       selected = selectFeature(features, isNaN(choice) ? 0 : choice);
       if (!selected) {
@@ -328,6 +234,8 @@ async function main(): Promise<void> {
     featureDesc: opts.featureDesc,
     pipelineDir,
     stepCooldown: opts.cooldown,
+    config,
+    modelOverride: opts.model,
   });
 
   // Set up terminal UI with live dashboard
@@ -337,6 +245,8 @@ async function main(): Promise<void> {
     steps: ALL_STEPS,
     readStateFn: readState,
     notifyFn: sendNotification,
+    projectRoot,
+    liveRegion,
   });
   const subscriber = new TerminalSubscriber(events, renderEvent);
   subscriber.start();
@@ -364,11 +274,12 @@ async function main(): Promise<void> {
     mode,
     config,
     projectRoot,
-    onCheckpoint: handleCheckpoint,
-    onNavigate: handleNavigate,
-    onReviewArtifacts: handleReviewArtifacts,
-    onRecovery: handleRecovery,
-    onComplexityAssessment: handleComplexityAssessment,
+    verifyArtifacts: true,
+    onCheckpoint: (s) => promptHost.checkpoint(s),
+    onNavigate: (steps) => promptHost.navigate(steps),
+    onReviewArtifacts: (s, files) => promptHost.reviewArtifacts(s, files),
+    onRecovery: (s, isGating) => promptHost.recovery(s, isGating),
+    onComplexityAssessment: (r) => promptHost.complexityAssessment(r),
   });
 
   await conductor.run();

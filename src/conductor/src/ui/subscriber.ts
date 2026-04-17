@@ -1,35 +1,38 @@
 import type { ConductorEvent } from '../types/index.js';
 import { ConductorEventEmitter, type EventHandler } from './events.js';
+import type { UISubscriber, UIEventHandler } from './types.js';
 
-export interface UISubscriber {
-  start(): void;
-  stop(): void;
-}
-
-export type RenderCallback = (event: ConductorEvent) => void | Promise<void>;
+export type { UISubscriber, UIEventHandler } from './types.js';
+/** @deprecated use UIEventHandler */
+export type RenderCallback = UIEventHandler;
 
 export class TerminalSubscriber implements UISubscriber {
   private eventEmitter: ConductorEventEmitter;
-  private onRender: RenderCallback;
-  private refreshInterval: ReturnType<typeof setInterval> | null = null;
+  private onRender: UIEventHandler;
   private handlers: Array<{ type: ConductorEvent['type']; handler: EventHandler }> = [];
 
-  constructor(eventEmitter: ConductorEventEmitter, onRender: RenderCallback) {
+  constructor(eventEmitter: ConductorEventEmitter, onRender: UIEventHandler) {
     this.eventEmitter = eventEmitter;
     this.onRender = onRender;
   }
 
   start(): void {
+    // Dashboard renders are event-driven. No periodic refresh — the sticky
+    // live region is updated when conductor state changes. A polling refresh
+    // would accumulate stale frames in the scrollback.
     const eventTypes: ConductorEvent['type'][] = [
       'step_started',
       'step_completed',
       'step_failed',
+      'step_retry',
       'checkpoint_reached',
       'recovery_needed',
       'dashboard_refresh',
       'tier_skip',
       'config_skip',
       'gate_blocked',
+      'rate_limit',
+      'session_reset',
       'feature_complete',
     ];
 
@@ -38,10 +41,6 @@ export class TerminalSubscriber implements UISubscriber {
       this.handlers.push({ type, handler });
       this.eventEmitter.on(type, handler);
     }
-
-    this.refreshInterval = setInterval(() => {
-      this.eventEmitter.emit({ type: 'dashboard_refresh' });
-    }, 10_000);
   }
 
   stop(): void {
@@ -49,10 +48,5 @@ export class TerminalSubscriber implements UISubscriber {
       this.eventEmitter.off(type, handler);
     }
     this.handlers = [];
-
-    if (this.refreshInterval !== null) {
-      clearInterval(this.refreshInterval);
-      this.refreshInterval = null;
-    }
   }
 }
