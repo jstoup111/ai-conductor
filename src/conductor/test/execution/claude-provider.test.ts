@@ -42,6 +42,19 @@ describe('ClaudeProvider', () => {
       expect(args).not.toContain('--resume');
     });
 
+    it('passes stdin: ignore to execa so Claude does not wait on piped stdin', async () => {
+      mockExeca.mockResolvedValue({
+        stdout: 'ok',
+        exitCode: 0,
+        failed: false,
+      } as any);
+
+      await provider.invoke({ ...baseOptions, dangerouslySkipPermissions: true });
+
+      const [, , opts] = mockExeca.mock.calls[0] as [string, string[], any];
+      expect(opts).toMatchObject({ stdin: 'ignore' });
+    });
+
     it('builds correct args for resume call', async () => {
       mockExeca.mockResolvedValue({
         stdout: 'ok',
@@ -143,6 +156,36 @@ describe('ClaudeProvider', () => {
       const [, args] = mockExeca.mock.calls[0] as [string, string[], any];
       expect(args).toContain('--name');
       expect(args).toContain('my-feature');
+    });
+  });
+
+  describe('effort env var', () => {
+    it('passes CLAUDE_CODE_EFFORT_LEVEL via execa env when effort set', async () => {
+      mockExeca.mockResolvedValue({ stdout: '', exitCode: 0, failed: false } as any);
+
+      await provider.invoke({ ...baseOptions, effort: 'xhigh' });
+
+      const [, , opts] = mockExeca.mock.calls[0] as [string, string[], any];
+      expect(opts.env).toBeDefined();
+      expect(opts.env.CLAUDE_CODE_EFFORT_LEVEL).toBe('xhigh');
+    });
+
+    it('omits env overlay when effort is not set (inherits parent env)', async () => {
+      mockExeca.mockResolvedValue({ stdout: '', exitCode: 0, failed: false } as any);
+
+      await provider.invoke({ ...baseOptions });
+
+      const [, , opts] = mockExeca.mock.calls[0] as [string, string[], any];
+      expect(opts.env).toBeUndefined();
+    });
+
+    it('invokeInteractive also forwards the effort env var', async () => {
+      mockExeca.mockResolvedValue({ exitCode: 0 } as any);
+
+      await provider.invokeInteractive({ ...baseOptions, effort: 'high' });
+
+      const [, , opts] = mockExeca.mock.calls[0] as [string, string[], any];
+      expect(opts.env?.CLAUDE_CODE_EFFORT_LEVEL).toBe('high');
     });
   });
 });
