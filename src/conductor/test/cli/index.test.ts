@@ -85,4 +85,12 @@ describe('CLI', () => {
     const opts = parseArgs(['node', 'conduct', 'feature', '--tail-lines', '0']);
     expect(opts.tailLines).toBe(0);
   });
+
+  it('accepts --from without a feature description (state-flag)', () => {
+    // --from targets a step in an existing feature; there's nothing to
+    // describe that the state file doesn't already carry.
+    const opts = parseArgs(['node', 'conduct', '--from', 'manual_test']);
+    expect(opts.from).toBe('manual_test');
+    expect(opts.featureDesc).toBeUndefined();
+  });
 });

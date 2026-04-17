@@ -74,7 +74,13 @@ export function parseArgs(argv: string[]): CLIOptions {
     tailLines: parseInt(opts.tailLines ?? '20', 10),
   };
 
-  const hasStateFlag = result.resume || result.status || result.cleanup || result.reset || !!result.step;
+  const hasStateFlag =
+    result.resume ||
+    result.status ||
+    result.cleanup ||
+    result.reset ||
+    !!result.step ||
+    !!result.from;
   if (!result.featureDesc && !hasStateFlag) {
     throw new Error('Feature description is required when no state flags are provided');
   }
