@@ -15,8 +15,8 @@ No custom runtime. Claude Code is the execution engine.
 ## Install
 
 ```bash
-git clone https://github.com/jamesstoup/james-stoup-agents.git
-cd james-stoup-agents
+git clone git@github.com:jstoup111/ai-conductor.git
+cd ai-conductor
 ./bin/install
 ```
 
@@ -177,7 +177,7 @@ tech-context use generic skill behavior.
 ## Project Structure
 
 ```
-james-stoup-agents/
+ai-conductor/
 ├── bin/
 │   ├── install              # Install/update/uninstall harness
 │   └── conduct              # Automated SDLC runner
