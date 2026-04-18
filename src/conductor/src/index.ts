@@ -19,6 +19,7 @@ import { sendNotification } from './ui/notifications.js';
 import { scanResumableFeatures, selectFeature, formatResumeMenu } from './engine/resume.js';
 import { WorktreeManager, checkPrMerged } from './engine/worktree.js';
 import { detectAutoResume } from './engine/auto-resume.js';
+import { ensureClaudeSettings } from './engine/preflight.js';
 import { createLiveRegion } from './ui/live-region.js';
 import { TerminalPromptHost } from './ui/terminal/prompt-host.js';
 
@@ -92,6 +93,11 @@ async function main(): Promise<void> {
 
   // Ensure .pipeline/ exists
   await mkdir(pipelineDir, { recursive: true });
+
+  // Preflight: ensure .claude/settings.json exists with project-scoped
+  // permissions. Solves the chicken-and-egg where bootstrap can't write its
+  // own permission file without permission. Idempotent — no-op if present.
+  await ensureClaudeSettings(projectRoot);
 
   // Shared UI state: one live region, one prompt host. The host suspends the
   // region around each readline prompt so dashboard and prompts don't fight
