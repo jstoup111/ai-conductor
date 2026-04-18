@@ -113,6 +113,15 @@ takes effect on the next `conduct` run after this release is installed.
 - `bin/conduct-ts` autonomous Claude invocations no longer print
   `Warning: no stdin data received in 3s, proceeding without it.` — the
   provider now passes `stdin: 'ignore'` to execa on the print-mode path.
+- Conductor auto-heals `.pipeline/task-status.json` drift before
+  re-invoking the build step. When the completion gate fails with
+  "tasks not completed", the engine reconciles each pending task against
+  the current branch's git log (commit-message + touched-file match); any
+  task with unambiguous prior-run evidence is flipped to "completed"
+  in-place and the gate re-checks without a Claude retry. Audit trail
+  under `.pipeline/audit-trail/autoheal-*.json`. Runs once per session
+  per step; scoped to `build`; silently skips when git is absent.
+  Additive `auto_heal` event on `ConductorEvent` for UI visibility.
 
 ### Removed
 

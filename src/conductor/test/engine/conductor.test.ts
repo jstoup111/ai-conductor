@@ -1,7 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm } from 'fs/promises';
+import { mkdtemp, rm, readdir } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
+
+vi.mock('execa', () => ({ execa: vi.fn() }));
+import { execa } from 'execa';
 import type { ConductState } from '../../src/types/index.js';
 import type { StepName, RecoveryOption } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
@@ -2557,5 +2560,336 @@ describe('buildRetryHint', () => {
     const hint = buildRetryHint('plan', '3 tasks not completed: x');
     expect(hint).toContain('Finish the work now');
     expect(hint).not.toContain('may already be done');
+  });
+});
+
+describe('auto-heal', () => {
+  let dir: string;
+  let statePath: string;
+  let events: ConductorEventEmitter;
+  const mockedExeca = vi.mocked(execa);
+
+  // Fixture: a plan file with two tasks and a task-status.json marking task 9
+  // pending and task 10 completed. Shared across the happy-path, skip, and
+  // once-per-session tests so each describes only the mocked git behavior.
+  async function seedProjectFixture(opts: {
+    planContent?: string;
+    task9Status?: 'pending' | 'completed';
+  } = {}): Promise<void> {
+    const {
+      planContent = [
+        '# Harden MVP',
+        '',
+        '## Task 9: Users slice',
+        '',
+        'Implements the Users slice.',
+        '',
+        '- `src/users/controller.ts`',
+        '- `src/users/routes.ts`',
+        '',
+        '## Task 10: Habits slice',
+        '',
+        '- `src/habits/controller.ts`',
+        '',
+      ].join('\n'),
+      task9Status = 'pending',
+    } = opts;
+
+    await mkdir(join(dir, '.docs/plans'), { recursive: true });
+    await writeFile(join(dir, '.docs/plans/2026-04-17-harden-mvp.md'), planContent);
+
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(
+      join(dir, '.pipeline/task-status.json'),
+      JSON.stringify(
+        {
+          plan_ref: '2026-04-17-harden-mvp.md',
+          tasks: {
+            '9': { name: 'Users slice', status: task9Status, batch: 'C' },
+            '10': { name: 'Habits slice', status: 'completed', batch: 'C', commit: 'cafef00d' },
+          },
+        },
+        null,
+        2,
+      ),
+    );
+  }
+
+  function seedAllOtherArtifacts(): Promise<void[]> {
+    // Pre-create every artifact-producing step's expected file so the
+    // conductor advances to `build`. Mirrors the verifyArtifacts-gate tests.
+    const artifacts: Array<[string, string]> = [
+      ['.docs/decisions/technical-assessment-2026-04-17.md', 'test'],
+      ['.docs/specs/2026-04-17-feature.md', 'test'],
+      ['.docs/stories/epic-1/story-a.md', 'test'],
+      ['.docs/conflicts/2026-04-17-conflict.md', 'test'],
+      ['.docs/architecture/2026-04-17-arch.md', 'test'],
+      ['.docs/decisions/adr-001.md', 'test'],
+      ['spec/acceptance/feature_spec.rb', 'test'],
+      ['.docs/retros/2026-04-17-retro.md', 'test'],
+    ];
+    return Promise.all(
+      artifacts.map(async ([rel, content]) => {
+        const full = join(dir, rel);
+        await mkdir(full.substring(0, full.lastIndexOf('/')), { recursive: true });
+        await writeFile(full, content);
+      }),
+    );
+  }
+
+  function routeGitMock(
+    handlers: Partial<{
+      mergeBase: { stdout: string; exitCode?: number };
+      log: { stdout: string; exitCode?: number };
+      diffTree: (sha: string) => { stdout: string; exitCode?: number };
+    }>,
+  ): void {
+    mockedExeca.mockImplementation(((cmd: string, args: readonly string[]) => {
+      if (cmd !== 'git') {
+        return Promise.resolve({ stdout: '', exitCode: 1 } as never);
+      }
+      const subcommand = args[0];
+      if (subcommand === 'merge-base') {
+        const h = handlers.mergeBase ?? { stdout: '', exitCode: 128 };
+        return Promise.resolve({ stdout: h.stdout, exitCode: h.exitCode ?? 0 } as never);
+      }
+      if (subcommand === 'log') {
+        const h = handlers.log ?? { stdout: '', exitCode: 0 };
+        return Promise.resolve({ stdout: h.stdout, exitCode: h.exitCode ?? 0 } as never);
+      }
+      if (subcommand === 'diff-tree') {
+        const sha = args[args.length - 1] as string;
+        const h = handlers.diffTree
+          ? handlers.diffTree(sha)
+          : { stdout: '', exitCode: 0 };
+        return Promise.resolve({ stdout: h.stdout, exitCode: h.exitCode ?? 0 } as never);
+      }
+      return Promise.resolve({ stdout: '', exitCode: 1 } as never);
+    }) as never);
+  }
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'conductor-autoheal-'));
+    statePath = join(dir, 'conduct-state.json');
+    events = new ConductorEventEmitter();
+    mockedExeca.mockReset();
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('heals a pending task when commit subject + files match unambiguously', async () => {
+    await seedAllOtherArtifacts();
+    await seedProjectFixture();
+    routeGitMock({
+      mergeBase: { stdout: 'deadbeef0000000000000000000000000000dead' },
+      log: { stdout: 'abc1234567890000000000000000000000000000\tfeat(T9): add users slice' },
+      diffTree: () => ({ stdout: 'src/users/controller.ts\nsrc/users/routes.ts' }),
+    });
+
+    const runner: StepRunner = { run: vi.fn().mockResolvedValue({ success: true }) };
+    const healEvents: Array<{ healed: number; skipped: number }> = [];
+    events.on('auto_heal', (e) => {
+      if (e.type === 'auto_heal') healEvents.push({ healed: e.healed, skipped: e.skipped });
+    });
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      verifyArtifacts: true,
+      maxRetries: 2,
+    });
+
+    await conductor.run();
+
+    const { readFile: _rf } = await import('fs/promises');
+    const afterRaw = await _rf(join(dir, '.pipeline/task-status.json'), 'utf-8');
+    const after = JSON.parse(afterRaw);
+    expect(after.tasks['9'].status).toBe('completed');
+    expect(after.tasks['9'].commit).toBe('abc1234');
+
+    // Build runner was called exactly once — no retry was needed.
+    const buildCalls = (runner.run as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (c: unknown[]) => c[0] === 'build',
+    );
+    expect(buildCalls).toHaveLength(1);
+    expect(healEvents).toEqual([{ healed: 1, skipped: 0 }]);
+  });
+
+  it('leaves a task pending when evidence is weak and runs the normal retry path', async () => {
+    await seedAllOtherArtifacts();
+    await seedProjectFixture();
+    routeGitMock({
+      mergeBase: { stdout: 'deadbeef0000000000000000000000000000dead' },
+      log: { stdout: 'deadbeef1111111111111111111111111111beef\tchore: lint fixes' },
+      diffTree: () => ({ stdout: 'eslintrc.js' }),
+    });
+
+    let buildCalls = 0;
+    const runner: StepRunner = {
+      run: vi.fn(async (step: StepName) => {
+        if (step === 'build') buildCalls++;
+        return { success: true };
+      }),
+    };
+    const retryEvents: Array<{ reason: string }> = [];
+    events.on('step_retry', (e) => {
+      if (e.type === 'step_retry' && e.step === 'build') retryEvents.push({ reason: e.reason });
+    });
+    const onRecovery = vi.fn().mockResolvedValue('quit' as const);
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      verifyArtifacts: true,
+      maxRetries: 2,
+      onRecovery,
+    });
+
+    await conductor.run();
+
+    const { readFile: _rf } = await import('fs/promises');
+    const afterRaw = await _rf(join(dir, '.pipeline/task-status.json'), 'utf-8');
+    const after = JSON.parse(afterRaw);
+    expect(after.tasks['9'].status).toBe('pending');
+    expect(buildCalls).toBeGreaterThanOrEqual(2);
+    expect(retryEvents.length).toBeGreaterThanOrEqual(1);
+    expect(retryEvents[0].reason).toMatch(/tasks not completed/i);
+  });
+
+  it('runs auto-heal at most once per session even across multiple gate failures', async () => {
+    await seedAllOtherArtifacts();
+    await seedProjectFixture();
+    routeGitMock({
+      mergeBase: { stdout: 'deadbeef0000000000000000000000000000dead' },
+      log: { stdout: 'feedface1111111111111111111111111111face\tchore: nothing relevant' },
+      diffTree: () => ({ stdout: 'README.md' }),
+    });
+
+    const runner: StepRunner = { run: vi.fn().mockResolvedValue({ success: true }) };
+    const onRecovery = vi.fn().mockResolvedValue('quit' as const);
+    const healEventCount = { count: 0 };
+    events.on('auto_heal', () => {
+      healEventCount.count++;
+    });
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      verifyArtifacts: true,
+      maxRetries: 3,
+      onRecovery,
+    });
+
+    await conductor.run();
+
+    const gitLogCalls = mockedExeca.mock.calls.filter(
+      (c) => c[0] === 'git' && (c[1] as string[])[0] === 'log',
+    );
+    expect(gitLogCalls).toHaveLength(1);
+    expect(healEventCount.count).toBe(1);
+  });
+
+  it('silently skips when git is absent and falls through to the normal retry path', async () => {
+    await seedAllOtherArtifacts();
+    await seedProjectFixture();
+    // No .git dir and merge-base fails with 128 (fatal: not a git repository)
+    routeGitMock({
+      mergeBase: { stdout: '', exitCode: 128 },
+      log: { stdout: '', exitCode: 128 },
+    });
+
+    const runner: StepRunner = { run: vi.fn().mockResolvedValue({ success: true }) };
+    const onRecovery = vi.fn().mockResolvedValue('quit' as const);
+    const healEvents: Array<{ healed: number; skipped: number }> = [];
+    events.on('auto_heal', (e) => {
+      if (e.type === 'auto_heal') healEvents.push({ healed: e.healed, skipped: e.skipped });
+    });
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      verifyArtifacts: true,
+      maxRetries: 2,
+      onRecovery,
+    });
+
+    await conductor.run();
+
+    const { readFile: _rf } = await import('fs/promises');
+    const afterRaw = await _rf(join(dir, '.pipeline/task-status.json'), 'utf-8');
+    const after = JSON.parse(afterRaw);
+    expect(after.tasks['9'].status).toBe('pending');
+    // Auto-heal still fired once (and skipped everything) — the dashboard should record the attempt.
+    expect(healEvents).toEqual([{ healed: 0, skipped: 1 }]);
+  });
+
+  it('writes an audit file under .pipeline/audit-trail with healed + skipped entries', async () => {
+    await seedAllOtherArtifacts();
+    await seedProjectFixture();
+    routeGitMock({
+      mergeBase: { stdout: 'deadbeef0000000000000000000000000000dead' },
+      log: { stdout: 'abc1234567890000000000000000000000000000\tfeat(T9): add users slice' },
+      diffTree: () => ({ stdout: 'src/users/controller.ts' }),
+    });
+
+    const runner: StepRunner = { run: vi.fn().mockResolvedValue({ success: true }) };
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      verifyArtifacts: true,
+      maxRetries: 2,
+    });
+
+    await conductor.run();
+
+    const auditDir = join(dir, '.pipeline/audit-trail');
+    const entries = await readdir(auditDir);
+    const autohealFiles = entries.filter((e) => e.startsWith('autoheal-') && e.endsWith('.json'));
+    expect(autohealFiles).toHaveLength(1);
+    const { readFile: _rf } = await import('fs/promises');
+    const audit = JSON.parse(await _rf(join(auditDir, autohealFiles[0]), 'utf-8'));
+    expect(Array.isArray(audit.healed)).toBe(true);
+    expect(Array.isArray(audit.skipped)).toBe(true);
+    expect(audit.healed[0]).toMatchObject({
+      taskId: '9',
+      commit: 'abc1234',
+      subject: 'feat(T9): add users slice',
+    });
+    expect(audit.healed[0].matchedFiles).toContain('src/users/controller.ts');
+  });
+
+  it('never invokes git for non-build steps even when their completion gate fails', async () => {
+    // Don't seed artifacts — `assess` will fail its gate, not `build`.
+    const runner: StepRunner = { run: vi.fn().mockResolvedValue({ success: true }) };
+    const onRecovery = vi.fn().mockResolvedValue('quit' as const);
+    const healEvents: unknown[] = [];
+    events.on('auto_heal', (e) => healEvents.push(e));
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      verifyArtifacts: true,
+      maxRetries: 1,
+      onRecovery,
+    });
+
+    await conductor.run();
+
+    expect(mockedExeca).not.toHaveBeenCalled();
+    expect(healEvents).toHaveLength(0);
   });
 });

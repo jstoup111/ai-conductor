@@ -23,6 +23,7 @@ import {
   CUSTOM_COMPLETION_PREDICATES,
 } from './artifacts.js';
 import { resolveStepConfig, phaseForStep } from './resolved-config.js';
+import { attemptAutoHeal } from './autoheal.js';
 
 export type CheckpointResponse = 'continue' | 'back' | 'quit';
 
@@ -221,6 +222,11 @@ export class Conductor {
     // UI is told retry is exhausted so the step can't spin forever.
     const recoveryRetries = new Map<StepName, number>();
 
+    // Per-step guard: run auto-heal at most once per session. A second run
+    // against the same git log + same task-status.json can't produce new
+    // healings, so additional invocations are wasted git calls.
+    const autoHealAttempted = new Set<StepName>();
+
     for (let i = startIndex; i < ALL_STEPS.length; i++) {
       const step = ALL_STEPS[i];
 
@@ -326,7 +332,34 @@ export class Conductor {
 
         // Step runner returned success. Now verify real completion.
         if (this.verifyArtifacts && stepHasCompletionCheck(step.name) && step.name !== 'complexity') {
-          const completion = await checkStepCompletion(this.projectRoot, step.name);
+          let completion = await checkStepCompletion(this.projectRoot, step.name);
+
+          // Auto-heal hook: before treating a build-gate miss as a failure,
+          // reconcile .pipeline/task-status.json against git log. If the
+          // prior pipeline run committed work for tasks still marked
+          // "pending", mark them completed in-place and re-check the gate
+          // — the retry never has to fire.
+          if (
+            !completion.done &&
+            step.name === 'build' &&
+            !autoHealAttempted.has('build')
+          ) {
+            autoHealAttempted.add('build');
+            const heal = await attemptAutoHeal(this.projectRoot).catch(() => ({
+              healed: [],
+              skipped: [],
+            }));
+            await this.events.emit({
+              type: 'auto_heal',
+              step: 'build',
+              healed: heal.healed.length,
+              skipped: heal.skipped.length,
+            });
+            if (heal.healed.length > 0) {
+              completion = await checkStepCompletion(this.projectRoot, step.name);
+            }
+          }
+
           if (!completion.done) {
             lastError = `Step '${step.name}' completed but completion check failed: ${completion.reason ?? 'unknown'}`;
             retryHint = buildRetryHint(step.name, completion.reason);

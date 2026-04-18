@@ -39,4 +39,5 @@ export type ConductorEvent =
   | { type: 'rate_limit'; waitSeconds: number }
   | { type: 'session_reset'; reason: string }
   | { type: 'feature_complete'; prUrl?: string }
-  | { type: 'dashboard_refresh' };
+  | { type: 'dashboard_refresh' }
+  | { type: 'auto_heal'; step: StepName; healed: number; skipped: number };
