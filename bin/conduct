@@ -2754,6 +2754,10 @@ usage() {
   echo "  conduct --auto \"URL shortener with click tracking\"    # Fully automated"
   echo "  conduct --interactive \"User auth system\"              # Manual oversight"
   echo "  conduct \"Payment processing\"                          # Default: auto with prompts on failure"
+  echo ""
+  echo "Also available: conduct-ts — TypeScript rewrite with a richer dashboard,"
+  echo "  typed completion gates, and auto-heal for stale pipeline state. Same CLI"
+  echo "  surface (minus --interactive, for now). Drop-in replace the binary name."
 }
 
 FEATURE_DESC=""
@@ -2791,6 +2795,20 @@ done
 # Translate any legacy ~/.claude/ai-conductor.config.json fields into
 # ~/.ai-conductor/config.yml on first run. Idempotent no-op afterwards.
 migrate_legacy_conductor_config
+
+# One-time heads-up about conduct-ts. Shown the first time `conduct` runs on a
+# box where `conduct-ts` is on PATH. Marker in ~/.ai-conductor so it persists
+# across projects and is easy to reset.
+CONDUCT_TS_NOTICE_MARKER="${HOME}/.ai-conductor/conduct-ts-notice-shown"
+if command -v conduct-ts >/dev/null 2>&1 && [ ! -f "$CONDUCT_TS_NOTICE_MARKER" ]; then
+  mkdir -p "$(dirname "$CONDUCT_TS_NOTICE_MARKER")" 2>/dev/null || true
+  echo -e "${CYAN}[heads up]${NC} ${BOLD}conduct-ts${NC} is installed on this machine."
+  echo -e "           Same CLI, richer dashboard + auto-heal. ${BOLD}conduct${NC} stays the default."
+  echo -e "           Try: ${BOLD}conduct-ts${NC} ${ORIGINAL_ARGS[*]:-\"<feature description>\"}"
+  echo -e "           (This notice shows once. Delete ${CONDUCT_TS_NOTICE_MARKER} to re-show.)"
+  echo ""
+  touch "$CONDUCT_TS_NOTICE_MARKER" 2>/dev/null || true
+fi
 
 check_harness_update
 

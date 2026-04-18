@@ -17,16 +17,15 @@ No custom runtime. Claude Code is the execution engine.
 ```bash
 git clone https://github.com/jamesstoup/james-stoup-agents.git
 cd james-stoup-agents
-# Optional but recommended: build the TypeScript conductor bundle
+# Optional: build the TypeScript conductor bundle if you want to try conduct-ts
 (cd src/conductor && npm install && npm run build)
 ./bin/install
 ```
 
-This symlinks all 20 skills into `~/.claude/skills/` and installs two conductor CLIs to
-`~/.local/bin/`: the stable bash `conduct` and — if `src/conductor/dist/` has been built —
-the TypeScript rewrite `conduct-ts`. Both accept the same flags; `conduct-ts` adds event-driven
-dashboards, structured completion gates, and auto-heal for stale `task-status.json`
-(see "TypeScript Conductor" below).
+This symlinks all 20 skills into `~/.claude/skills/` and installs the conductor CLI(s) to
+`~/.local/bin/`. See [Choosing a Conductor](#choosing-a-conductor) below — both binaries
+coexist, `conduct` is the default, `conduct-ts` is opt-in and only symlinked if you've
+built the dist bundle.
 
 Verify:
 
@@ -93,15 +92,43 @@ conduct --from plan       # Start from a specific step
 conduct --reset           # Clear session state and start fresh
 ```
 
-Prefer the TypeScript conductor? Replace `conduct` with `conduct-ts` in any of the above
-commands — the CLI surface is identical, but you get a richer dashboard, event subscribers,
-and engine-side auto-heal for stale pipeline state. See `src/conductor/README.md` for the
-architectural overview.
-
 On failure, conduct sends a desktop notification and drops into an interactive Claude session
 to fix the issue. After you `/quit`, it rechecks artifacts and continues automatically.
 
 Handles API rate limits by waiting for reset and auto-retrying.
+
+## Choosing a Conductor
+
+Two conductor binaries ship together. Both drive the same 16-step SDLC pipeline and read
+the same `.pipeline/` state, so you can switch between them per-invocation. `conduct`
+remains the default; `conduct-ts` is the in-progress rewrite — stable enough to use
+day-to-day, but the surface is still changing.
+
+|                              | `conduct` (bash, stable)                      | `conduct-ts` (TypeScript, opt-in)                                |
+|------------------------------|-----------------------------------------------|------------------------------------------------------------------|
+| **Status**                   | Reference implementation                      | Active rewrite — feature parity ongoing                          |
+| **Install**                  | Always symlinked by `bin/install`             | Symlinked only when `src/conductor/dist/` has been built         |
+| **Build step**               | None                                          | `cd src/conductor && npm install && npm run build`               |
+| **CLI flags**                | Full surface (`--auto`, `--interactive`, …)   | Same flags **except `--interactive`** is not yet wired           |
+| **Dashboard**                | Terminal status log                           | Event-driven renderer with live-region updates and tail pane     |
+| **Completion gates**         | Artifact grep                                 | Typed events + structured gate-runner                            |
+| **Auto-heal**                | None                                          | Reconciles stale `task-status.json` against git log before retry |
+| **Pluggable UI**             | No                                            | Yes — UI is a subscriber behind the engine                       |
+| **Test coverage**            | `test/test_conduct_worktree.sh`               | 673 vitest tests across engine/execution/UI/integration          |
+| **Pinned Node**              | N/A                                           | Reads `src/conductor/.tool-versions` via asdf                    |
+
+**Default:** use `conduct`. Everything in this README's examples works.
+
+**Try `conduct-ts`** when you want the richer dashboard or auto-heal, or if you're helping
+test the rewrite. Drop-in replace the binary name in any command; if a flag isn't
+supported yet, commander will tell you.
+
+Both binaries read `~/.ai-conductor/config.yml` (user-level) and the project's
+`.ai-conductor/config.yml` if present. Legacy `~/.claude/ai-conductor.config.json` is
+read as a fallback for installs that predate the YAML migration.
+
+See `src/conductor/README.md` for the three-layer architecture (Engine / Execution / UI)
+behind `conduct-ts`.
 
 ## How It Works
 
@@ -186,12 +213,12 @@ tech-context use generic skill behavior.
 
 ## TypeScript Conductor (`src/conductor/`)
 
-A from-scratch rewrite of the bash `conduct` script in TypeScript. Three-layer
-architecture — Engine / Execution / UI — with typed events, pluggable UI renderers, and
-dedicated test coverage (545 tests). See `src/conductor/README.md` for the architectural
-details; the summary is:
+The TypeScript rewrite behind `conduct-ts`. Three-layer architecture —
+Engine / Execution / UI — with typed events, pluggable UI renderers, and
+dedicated test coverage (673 tests). See the feature comparison in
+[Choosing a Conductor](#choosing-a-conductor); implementation notes below.
 
-- **`bin/conduct-ts`** (thin shell wrapper) → `src/conductor/dist/index.js`
+- **`bin/conduct-ts`** is a thin shell wrapper around `src/conductor/dist/index.js`.
 - **Engine** owns state machine, gates, completion checks, auto-heal logic.
 - **Execution** invokes Claude via `execa` with session + rate-limit handling.
 - **UI** is a pluggable subscriber: the default terminal renderer is event-driven.

@@ -49,6 +49,21 @@ Categories:
 
 ### Changed
 
+- `README.md` reorganized around a "Choosing a Conductor" section: side-by-side
+  comparison of `conduct` (stable bash, default) and `conduct-ts` (TypeScript
+  rewrite, opt-in) covering install, CLI parity, dashboard, gates, auto-heal,
+  and test coverage. Install section no longer implies the TS build is
+  required.
+- `bin/conduct` prints a one-time "conduct-ts is installed" heads-up the
+  first time it runs on a machine where `conduct-ts` is on PATH, with a
+  marker at `~/.ai-conductor/conduct-ts-notice-shown` so it never spams.
+  `conduct --help` also now mentions `conduct-ts` at the bottom of its
+  examples block. Neither changes default behavior — bash conduct stays
+  the default.
+- `VERSION` pinned to `0.99.0` to signal the harness is pre-1.0 while the
+  TypeScript conductor rewrite stabilizes feature parity (notably the
+  `--interactive` flag is still bash-only). CI-cut releases will continue
+  on the 0.x line until conductor parity is declared complete.
 - `run_manual_test()` now runs in print mode (automated) instead of interactive mode; harness checkpoint provides user review.
 - `run_acceptance_specs()` now runs in print mode (automated) instead of interactive mode.
 - Recovery menu expanded from `r/i/s/q` to `r/i/b/s/q` with backward navigation option.
