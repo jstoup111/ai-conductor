@@ -2894,6 +2894,154 @@ describe('auto-heal', () => {
   });
 });
 
+describe('skip-already-resolved steps', () => {
+  let dir: string;
+  let statePath: string;
+  let events: ConductorEventEmitter;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'conductor-skipdone-'));
+    statePath = join(dir, 'conduct-state.json');
+    events = new ConductorEventEmitter();
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('does not re-dispatch steps already marked done', async () => {
+    // Pre-populate state with some steps already done — this mirrors the
+    // real-world situation of running conduct-ts against a project that
+    // already made progress on a previous invocation.
+    await writeState(statePath, {
+      worktree: 'done',
+      memory: 'done',
+      brainstorm: 'done',
+      complexity: 'done',
+      stories: 'done',
+      conflict_check: 'done',
+      plan: 'done',
+      architecture_diagram: 'done',
+      architecture_review: 'done',
+      acceptance_specs: 'done',
+      complexity_tier: 'L',
+    } as ConductState);
+
+    const calledSteps: StepName[] = [];
+    const runner: StepRunner = {
+      run: vi.fn(async (step: StepName) => {
+        calledSteps.push(step);
+        return { success: true };
+      }),
+    };
+
+    const conductor = new Conductor({ stateFilePath: statePath, stepRunner: runner, events });
+    await conductor.run();
+
+    // None of the `done` steps should have been re-dispatched.
+    expect(calledSteps).not.toContain('worktree');
+    expect(calledSteps).not.toContain('brainstorm');
+    expect(calledSteps).not.toContain('plan');
+    expect(calledSteps).not.toContain('acceptance_specs');
+
+    // Only the remaining steps (build → finish) should have run.
+    expect(calledSteps).toContain('build');
+    expect(calledSteps).toContain('finish');
+  });
+
+  it('does not re-dispatch steps marked skipped', async () => {
+    await writeState(statePath, {
+      worktree: 'done',
+      memory: 'skipped',
+      brainstorm: 'done',
+      complexity: 'done',
+      complexity_tier: 'S',
+      stories: 'done',
+      plan: 'done',
+      acceptance_specs: 'skipped',
+    } as ConductState);
+
+    const calledSteps: StepName[] = [];
+    const runner: StepRunner = {
+      run: vi.fn(async (step: StepName) => {
+        calledSteps.push(step);
+        return { success: true };
+      }),
+    };
+
+    const conductor = new Conductor({ stateFilePath: statePath, stepRunner: runner, events });
+    await conductor.run();
+
+    expect(calledSteps).not.toContain('memory');
+    expect(calledSteps).not.toContain('acceptance_specs');
+  });
+
+  it('DOES re-dispatch steps marked failed (so recovery flow can run again)', async () => {
+    await writeState(statePath, {
+      worktree: 'done',
+      memory: 'done',
+      brainstorm: 'done',
+      complexity: 'done',
+      complexity_tier: 'L',
+      stories: 'done',
+      conflict_check: 'done',
+      plan: 'done',
+      architecture_diagram: 'done',
+      architecture_review: 'done',
+      acceptance_specs: 'done',
+      build: 'failed',
+    } as ConductState);
+
+    const calledSteps: StepName[] = [];
+    const runner: StepRunner = {
+      run: vi.fn(async (step: StepName) => {
+        calledSteps.push(step);
+        return { success: true };
+      }),
+    };
+
+    const conductor = new Conductor({ stateFilePath: statePath, stepRunner: runner, events });
+    await conductor.run();
+
+    // failed build is re-entered; done steps before it are skipped.
+    expect(calledSteps).toContain('build');
+    expect(calledSteps).not.toContain('worktree');
+    expect(calledSteps).not.toContain('plan');
+  });
+
+  it('DOES re-dispatch a done step when --from targets it explicitly', async () => {
+    await writeState(statePath, {
+      worktree: 'done',
+      memory: 'done',
+      brainstorm: 'done',
+      complexity: 'done',
+      complexity_tier: 'L',
+      stories: 'done',
+      conflict_check: 'done',
+      plan: 'done',
+    } as ConductState);
+
+    const calledSteps: StepName[] = [];
+    const runner: StepRunner = {
+      run: vi.fn(async (step: StepName) => {
+        calledSteps.push(step);
+        return { success: true };
+      }),
+    };
+
+    // --from explicitly asks to re-run `plan` regardless of its current status.
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      fromStep: 'plan',
+    });
+    await conductor.run();
+
+    expect(calledSteps[0]).toBe('plan');
+  });
+});
+
 describe('bootstrap-mode skip', () => {
   let dir: string;
   let statePath: string;

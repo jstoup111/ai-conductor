@@ -70,6 +70,19 @@ Categories:
   `ASDF_NODEJS_VERSION` (reading `src/conductor/.tool-versions`) so
   users with an older default Node don't hit the `addAbortListener`
   import error from execa.
+- Conductor skips already-resolved steps on every run. Steps marked
+  `done` or `skipped` in `.pipeline/conduct-state.json` are no longer
+  re-dispatched when `conduct-ts` is invoked against a project with
+  existing progress (e.g. after a terminal close, a crash, or a fresh
+  invocation that skipped `--resume`). Previously the main loop
+  iterated ALL_STEPS unconditionally, so a re-invocation without
+  `--resume` re-ran `worktree`, `memory`, `brainstorm`, etc. from the
+  top even though those steps were already `done`. `failed` steps are
+  still re-entered so the recovery flow can continue; `--from <step>`
+  still forces a re-run of the targeted step regardless of status.
+  Observed in the focus-timer-api test: build failed at 7/21 tasks,
+  user re-invoked, conductor restarted at `worktree` — now it skips
+  everything and lands back on `build`.
 - Pre-flight `ensureClaudeSettings(projectRoot)` at conductor startup.
   Before any Claude dispatch, `conduct-ts` checks for
   `$PROJECT_ROOT/.claude/settings.json`; if absent, it writes one with

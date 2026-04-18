@@ -236,6 +236,24 @@ export class Conductor {
     for (let i = startIndex; i < ALL_STEPS.length; i++) {
       const step = ALL_STEPS[i];
 
+      // Skip already-completed work. Without this, re-invoking the conductor
+      // against a project with existing `done` / `skipped` state (e.g. after
+      // a crash, a terminal close, or a fresh `conduct-ts` call without
+      // `--resume` / `--from`) re-dispatches every completed step from the
+      // top of ALL_STEPS. The `--from <step>` flag is the explicit opt-in to
+      // re-run a specific step regardless of its current status.
+      //
+      // `failed` is NOT short-circuited here — the conductor re-enters a
+      // failed step so it can run through the retry/recovery flow again.
+      const currentStatus = state[step.name];
+      const alreadyResolved = currentStatus === 'done' || currentStatus === 'skipped';
+      const explicitlyTargeted = this.fromStep === step.name;
+      if (alreadyResolved && !explicitlyTargeted) {
+        // No event — the step simply isn't re-dispatched. Dashboard renders
+        // the persisted status verbatim.
+        continue;
+      }
+
       // Read complexity tier from state each iteration (may change after complexity step)
       const tier = state.complexity_tier ?? 'L';
 
