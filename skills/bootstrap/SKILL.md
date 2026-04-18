@@ -129,19 +129,91 @@ that `conduct` fills in when creating the PR after retro.
 
 ### 3d. Generate Claude Code Settings
 
-Generate `.claude/settings.json` from `templates/claude-settings.json.template`. Replace
-`{{PROJECT_ROOT}}` with the absolute path of the project root (the bootstrap working directory,
-with leading slash stripped — the template already supplies the `//` prefix required by
-Claude Code's permission path syntax). Create the `.claude/` directory if it doesn't exist.
+Generate `.claude/settings.json` in two parts: permissions (3d-i) and a pre-PR lint hook
+(3d-ii). The file is project-scoped — per-user overrides belong in
+`.claude/settings.local.json` (gitignored).
+
+#### 3d-i. Permissions
+
+Copy `templates/claude-settings.json.template` to `.claude/settings.json`. Replace
+`{{PROJECT_ROOT}}` with the absolute path of the project root (the bootstrap working
+directory, with leading slash stripped — the template already supplies the `//` prefix
+required by Claude Code's permission path syntax). Create the `.claude/` directory if it
+doesn't exist.
 
 The generated file scopes Read/Edit/Write permission to the entire project tree (including
 dotfiles under `.claude/`, `.pipeline/`, `.docs/`, `.memory/`, `.github/`, etc.) so that
-downstream skills don't block on permission prompts when they touch harness artifacts. The
-rule set uses absolute paths so the permissions travel with the project even when invoked
-from a different CWD (e.g., inside a worktree).
+downstream skills don't block on permission prompts when they touch harness artifacts.
+Absolute paths mean the permissions travel with the project even when invoked from a
+different CWD (e.g., inside a worktree).
 
-If `.claude/settings.json` already exists, do NOT overwrite — per-user overrides belong in
-`.claude/settings.local.json` (gitignored), not this file.
+If `.claude/settings.json` already exists, do NOT overwrite it — skip to 3d-ii and merge
+the hook block only if the hook is missing.
+
+#### 3d-ii. Pre-PR Lint Hook
+
+Linting is deterministic — it should never consume model tokens. This step wires a
+`PreToolUse` hook that runs the project's lint command before any `gh pr create`
+invocation; a non-zero exit code blocks the PR until the user (or Claude) fixes the lint
+failure. TDD, pipeline, and code-review skills do NOT invoke the linter themselves;
+this hook is the single source of lint enforcement.
+
+**Detect the lint command** from project signals (first match wins, but combine if
+multiple apply — e.g. Node+TS gets both scripts):
+
+| Signal | Lint Command |
+|--------|--------------|
+| `package.json` has `scripts.lint` | `npm run lint` |
+| `tsconfig.json` exists | `npx tsc --noEmit` (AND above, joined with `&&`) |
+| `biome.json` / `biome.jsonc` | `npx biome check .` |
+| `.eslintrc*` without a `scripts.lint` entry | `npx eslint .` |
+| `Gemfile` contains `rubocop` | `bundle exec rubocop` |
+| `Gemfile` contains `sorbet-runtime` | `bundle exec srb tc` (AND rubocop if also present) |
+| `pyproject.toml` lists `ruff` | `ruff check` |
+| `pyproject.toml` lists `mypy` | `mypy .` (AND ruff if also present) |
+| `Cargo.toml` | `cargo clippy --all-targets -- -D warnings` |
+| `go.mod` | `go vet ./...` |
+
+If multiple commands apply, chain them with `&&` — the hook fails fast on the first
+non-zero exit. If nothing matches, ask the user: "What command lints/type-checks this
+project? (leave blank to skip the pre-PR lint gate)". In auto mode, skip the hook when
+detection fails rather than prompting.
+
+**Write the hook** into `.claude/settings.json` (merge with the permissions from 3d-i —
+do not overwrite):
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "<detected or user-provided lint command>",
+            "if": "Bash(gh pr create*)",
+            "timeout": 300,
+            "statusMessage": "Running pre-PR lint gate"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+The `if: "Bash(gh pr create*)"` filter means the hook only fires when Claude actually
+tries to open a PR — every other `Bash` call is untouched, so the hook has zero runtime
+cost during regular development.
+
+**Idempotence:** If a `PreToolUse` hook with `if: "Bash(gh pr create*)"` already exists
+in `.claude/settings.json`, do NOT add a duplicate. Re-running bootstrap should be safe;
+users who want to change the lint command can edit the existing hook directly.
+
+**User override at any time** — the hook lives in `.claude/settings.json` and is a
+regular config value. Users may edit the command, bump the timeout, or remove the hook
+entirely without re-running bootstrap.
 
 ### 4. Analyze Existing Code (Existing Projects Only)
 

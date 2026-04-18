@@ -63,6 +63,15 @@ Categories:
   (`Read`/`Edit`/`Write` under the bootstrapped directory, including
   dotfiles) so downstream skills don't block on permission prompts when
   they touch harness artifacts.
+- `bootstrap` step 3d-ii — pre-PR lint hook. Bootstrap now detects the
+  project's lint command (stack-specific table: npm + tsc, rubocop +
+  sorbet, ruff + mypy, clippy, go vet) and writes a `PreToolUse` hook in
+  `.claude/settings.json` that runs the command before any
+  `gh pr create` invocation. Non-zero exit blocks the PR. Linting is
+  now deterministic harness machinery — TDD, pipeline, and code-review
+  skills no longer invoke the linter themselves. Users can edit the
+  hook command in `.claude/settings.json` at any time; re-running
+  bootstrap is idempotent.
 - `bin/migrate` — self-configuring migration runner that reads the current
   version from `~/.claude/ai-conductor.config.json`, re-runs
   `bin/install --update`, and executes any `## Migration` bash blocks from the
