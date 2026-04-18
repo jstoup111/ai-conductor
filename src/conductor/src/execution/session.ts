@@ -74,6 +74,8 @@ export class SessionManager {
 
     if (!options.interactive) {
       args.push('--dangerously-skip-permissions');
+    } else {
+      args.push('--permission-mode', 'default');
     }
 
     return args;

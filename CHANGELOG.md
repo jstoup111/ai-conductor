@@ -207,6 +207,18 @@ takes effect on the next `conduct` run after this release is installed.
 
 ### Fixed
 
+- Conductor-spawned Claude sessions no longer inherit the user's global
+  `permissions.defaultMode`. `SessionManager.buildClaudeArgs()` in
+  `src/conductor/src/execution/session.ts` now explicitly passes
+  `--permission-mode default` for interactive step invocations (which
+  previously passed nothing and fell through to whatever the user had
+  globally). This was silently breaking interactive steps like
+  `/brainstorm`, `/stories`, `/plan` for users whose global
+  `~/.claude/settings.json` had `"defaultMode": "plan"` — those sessions
+  booted into plan mode and the skill could not write its required
+  `.docs/specs/`, `.docs/stories/`, or `.docs/plans/` artifacts. Non-
+  interactive invocations are unaffected (they already pass
+  `--dangerously-skip-permissions`).
 - Feature-level state (manual-test, retro, etc.) no longer bleeds across features in root state file; project-level steps (bootstrap, assess) persist correctly.
 - Task progress counter shows correct total from the start (0/10, 1/10) instead of growing denominator (1/1, 2/2).
 - `bin/conduct-ts` autonomous Claude invocations no longer print

@@ -106,6 +106,20 @@ describe('SessionManager', () => {
       const args = mgr.buildClaudeArgs({ interactive: true });
       expect(args).not.toContain('--dangerously-skip-permissions');
     });
+
+    it('passes --permission-mode default for interactive mode so it does not inherit user-global plan mode', async () => {
+      await mgr.getSessionId();
+      const args = mgr.buildClaudeArgs({ interactive: true });
+      const idx = args.indexOf('--permission-mode');
+      expect(idx).toBeGreaterThanOrEqual(0);
+      expect(args[idx + 1]).toBe('default');
+    });
+
+    it('does not pass --permission-mode for non-interactive mode (permissions already skipped)', async () => {
+      await mgr.getSessionId();
+      const args = mgr.buildClaudeArgs({ interactive: false });
+      expect(args).not.toContain('--permission-mode');
+    });
   });
 
   // --- Detection ---
