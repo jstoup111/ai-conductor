@@ -1,5 +1,5 @@
-import { readdir, readFile, stat } from 'fs/promises';
-import { join } from 'path';
+import { readdir, readFile } from 'fs/promises';
+import { basename, join } from 'path';
 import { ALL_STEPS } from './steps.js';
 import type { ConductState } from '../types/index.js';
 
@@ -14,54 +14,103 @@ export interface ResumableFeature {
 }
 
 /**
- * Scan .worktrees/ for active (non-complete) features with their state.
+ * Read a state file at one of the supported locations. Returns empty state if
+ * no file exists, or the parsed state (whatever that happens to be).
+ */
+async function readStateFile(...candidates: string[]): Promise<ConductState> {
+  for (const candidate of candidates) {
+    try {
+      const raw = await readFile(candidate, 'utf-8');
+      return JSON.parse(raw) as ConductState;
+    } catch {
+      // Try the next candidate
+    }
+  }
+  return {};
+}
+
+function toFeature(
+  name: string,
+  path: string,
+  branch: string,
+  state: ConductState,
+  totalSteps: number,
+): ResumableFeature {
+  const lastStep = state.last_step;
+  let stepIndex = 0;
+  if (lastStep) {
+    const idx = ALL_STEPS.findIndex((s) => s.name === lastStep);
+    if (idx >= 0) stepIndex = idx + 1; // +1 because last_step is done
+  }
+  return {
+    name,
+    path,
+    branch,
+    lastStep,
+    stepIndex,
+    totalSteps,
+    featureDesc: state.feature_desc,
+  };
+}
+
+/**
+ * Scan for active (non-complete) features.
+ *
+ * Looks in two places:
+ *   1. `projectRoot/.worktrees/<slug>/` — features that made it past the
+ *      `worktree` step. Each has its own state file.
+ *   2. `projectRoot/` itself — the common case BEFORE the worktree step runs,
+ *      where `projectRoot/.pipeline/conduct-state.json` (or legacy
+ *      `projectRoot/conduct-state.json`) holds the in-progress feature.
+ *
+ * This lets `--resume` find features that failed early (e.g., at build after
+ * many steps done) even if they never got their own worktree.
  */
 export async function scanResumableFeatures(projectRoot: string): Promise<ResumableFeature[]> {
-  const worktreesDir = join(projectRoot, '.worktrees');
   const totalSteps = ALL_STEPS.length;
+  const results: ResumableFeature[] = [];
+  const seenPaths = new Set<string>();
 
+  // (1) Root-level feature state — features living at projectRoot itself.
+  const rootState = await readStateFile(
+    join(projectRoot, '.pipeline', 'conduct-state.json'),
+    join(projectRoot, 'conduct-state.json'),
+  );
+  if (Object.keys(rootState).length > 0 && rootState.feature_status !== 'complete') {
+    results.push(
+      toFeature(
+        basename(projectRoot),
+        projectRoot,
+        '(current branch)',
+        rootState,
+        totalSteps,
+      ),
+    );
+    seenPaths.add(projectRoot);
+  }
+
+  // (2) Per-worktree features under .worktrees/.
+  const worktreesDir = join(projectRoot, '.worktrees');
   let entries: string[];
   try {
     const dirents = await readdir(worktreesDir, { withFileTypes: true });
     entries = dirents.filter((d) => d.isDirectory()).map((d) => d.name);
   } catch {
-    return [];
+    return results;
   }
-
-  const results: ResumableFeature[] = [];
 
   for (const name of entries) {
     const wtPath = join(worktreesDir, name);
-    const branch = `feature/${name}`;
+    if (seenPaths.has(wtPath)) continue;
 
-    let state: ConductState = {};
-    try {
-      const raw = await readFile(join(wtPath, 'conduct-state.json'), 'utf-8');
-      state = JSON.parse(raw);
-    } catch {
-      // No state file — include as new worktree
-    }
-
-    // Skip completed features
+    const state = await readStateFile(
+      join(wtPath, '.pipeline', 'conduct-state.json'),
+      join(wtPath, 'conduct-state.json'),
+    );
     if (state.feature_status === 'complete') continue;
+    // Empty state still counts as a resumable worktree (new/uninitialized).
 
-    // Determine step index from last_step
-    const lastStep = state.last_step;
-    let stepIndex = 0;
-    if (lastStep) {
-      const idx = ALL_STEPS.findIndex((s) => s.name === lastStep);
-      if (idx >= 0) stepIndex = idx + 1; // +1 because last_step is done
-    }
-
-    results.push({
-      name,
-      path: wtPath,
-      branch,
-      lastStep: lastStep,
-      stepIndex,
-      totalSteps,
-      featureDesc: state.feature_desc,
-    });
+    results.push(toFeature(name, wtPath, `feature/${name}`, state, totalSteps));
   }
 
   return results;

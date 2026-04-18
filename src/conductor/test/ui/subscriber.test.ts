@@ -49,27 +49,21 @@ describe('TerminalSubscriber', () => {
     expect(renderCallback).toHaveBeenCalledTimes(3);
   });
 
-  it('periodic refresh emits dashboard_refresh every 10s', () => {
+  it('does NOT emit periodic dashboard_refresh (renders are event-driven)', () => {
     subscriber.start();
 
-    vi.advanceTimersByTime(10_000);
-    // The interval emits dashboard_refresh, which triggers the render callback
-    expect(renderCallback).toHaveBeenCalledWith({ type: 'dashboard_refresh' });
+    vi.advanceTimersByTime(60_000);
 
-    vi.advanceTimersByTime(10_000);
-    // Two refreshes now
+    // No periodic emissions — dashboard refreshes only when conductor events fire.
     const refreshCalls = renderCallback.mock.calls.filter(
       (call) => (call[0] as ConductorEvent).type === 'dashboard_refresh',
     );
-    expect(refreshCalls.length).toBe(2);
+    expect(refreshCalls.length).toBe(0);
   });
 
-  it('clears refresh interval on stop', () => {
+  it('still forwards an explicit dashboard_refresh event to the renderer', () => {
     subscriber.start();
-    subscriber.stop();
-
-    vi.advanceTimersByTime(30_000);
-
-    expect(renderCallback).not.toHaveBeenCalled();
+    emitter.emit({ type: 'dashboard_refresh' });
+    expect(renderCallback).toHaveBeenCalledWith({ type: 'dashboard_refresh' });
   });
 });

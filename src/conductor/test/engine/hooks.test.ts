@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, writeFile, rm, mkdir, chmod } from 'fs/promises';
+import { mkdtemp, writeFile, rm } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import type { HarnessConfig } from '../../src/types/config.js';
-import { runWithHooks, type HookRunner, type HookResult } from '../../src/engine/hooks.js';
+import { runWithHooks, type HookRunner } from '../../src/engine/hooks.js';
 
 describe('runWithHooks', () => {
   let tmpDir: string;
@@ -22,7 +22,6 @@ describe('runWithHooks', () => {
     return path;
   }
 
-  // Task 16: Happy path
   it('executes before-hook, then skill, then after-hook', async () => {
     const beforePath = await createScript('before.sh');
     const afterPath = await createScript('after.sh');
@@ -41,10 +40,8 @@ describe('runWithHooks', () => {
     });
 
     const config: HarnessConfig = {
-      skills: {
-        hooks: {
-          build: { before: beforePath, after: afterPath },
-        },
+      steps: {
+        build: { hooks: { before: beforePath, after: afterPath } },
       },
     };
 
@@ -73,10 +70,8 @@ describe('runWithHooks', () => {
     const hookRunner: HookRunner = { runHook: vi.fn() };
     const skillRunner = vi.fn().mockResolvedValue({ success: true, output: 'skill done' });
     const config: HarnessConfig = {
-      skills: {
-        hooks: {
-          other: { before: otherPath },
-        },
+      steps: {
+        other: { hooks: { before: otherPath } },
       },
     };
 
@@ -86,7 +81,6 @@ describe('runWithHooks', () => {
     expect(hookRunner.runHook).not.toHaveBeenCalled();
   });
 
-  // Task 17: Failure handling
   it('skips skill when before-hook fails', async () => {
     const beforePath = await createScript('before.sh');
     const hookRunner: HookRunner = {
@@ -94,10 +88,8 @@ describe('runWithHooks', () => {
     };
     const skillRunner = vi.fn().mockResolvedValue({ success: true, output: 'skill done' });
     const config: HarnessConfig = {
-      skills: {
-        hooks: {
-          build: { before: beforePath },
-        },
+      steps: {
+        build: { hooks: { before: beforePath } },
       },
     };
 
@@ -116,10 +108,8 @@ describe('runWithHooks', () => {
     };
     const skillRunner = vi.fn().mockResolvedValue({ success: true, output: 'skill ok' });
     const config: HarnessConfig = {
-      skills: {
-        hooks: {
-          build: { after: afterPath },
-        },
+      steps: {
+        build: { hooks: { after: afterPath } },
       },
     };
 
@@ -135,10 +125,8 @@ describe('runWithHooks', () => {
     const hookRunner: HookRunner = { runHook: vi.fn() };
     const skillRunner = vi.fn().mockResolvedValue({ success: true, output: 'skill done' });
     const config: HarnessConfig = {
-      skills: {
-        hooks: {
-          build: { before: missingPath },
-        },
+      steps: {
+        build: { hooks: { before: missingPath } },
       },
     };
 
@@ -160,10 +148,8 @@ describe('runWithHooks', () => {
     const skillRunner = vi.fn().mockResolvedValue({ success: true, output: 'skill done' });
 
     const config: HarnessConfig = {
-      skills: {
-        hooks: {
-          build: { before: scriptPath },
-        },
+      steps: {
+        build: { hooks: { before: scriptPath } },
       },
     };
 

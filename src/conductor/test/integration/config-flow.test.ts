@@ -6,7 +6,7 @@ import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { readState, writeState } from '../../src/engine/state.js';
-import { buildStepRegistry } from '../../src/engine/steps.js';
+import { buildStepRegistry, ALL_STEPS } from '../../src/engine/steps.js';
 import { resolveSkill } from '../../src/engine/skill-resolver.js';
 import { runWithHooks } from '../../src/engine/hooks.js';
 import type { HarnessConfig } from '../../src/types/config.js';
@@ -54,7 +54,10 @@ describe('Integration: config flow', () => {
     await writeState(statePath, { complexity_tier: 'L' } as ConductState);
 
     const config: HarnessConfig = {
-      steps: { disable: ['retro', 'architecture_review'] },
+      steps: {
+        retro: { disable: true },
+        architecture_review: { disable: true },
+      },
     };
 
     const conductor = new Conductor({
@@ -98,14 +101,11 @@ describe('Integration: config flow', () => {
   it('Conductor with custom step executes it at correct position', () => {
     const config: HarnessConfig = {
       steps: {
-        add: [
-          {
-            name: 'security_scan',
-            after: 'build',
-            skill: 'security-scan',
-            enforcement: 'advisory',
-          },
-        ],
+        security_scan: {
+          after: 'build',
+          skill: 'security-scan',
+          enforcement: 'advisory',
+        },
       },
     };
 
@@ -114,20 +114,17 @@ describe('Integration: config flow', () => {
     const customIdx = registry.findIndex((s) => s.name === 'security_scan');
     const manualTestIdx = registry.findIndex((s) => s.name === 'manual_test');
 
-    // Custom step inserted immediately after build
     expect(customIdx).toBe(buildIdx + 1);
-    // manual_test shifted one position later
     expect(manualTestIdx).toBe(customIdx + 1);
 
-    // Custom step inherits phase from its anchor
     const customStep = registry[customIdx];
     expect(customStep.phase).toBe('BUILD');
     expect(customStep.enforcement).toBe('advisory');
     expect(customStep.prerequisites).toEqual(['build']);
     expect(customStep.skillName).toBe('security-scan');
 
-    // Total steps is 14 + 1 custom
-    expect(registry).toHaveLength(15);
+    // Registry length = ALL_STEPS count + 1 custom
+    expect(registry).toHaveLength(ALL_STEPS.length + 1);
   });
 
   it('Conductor with skill override uses project-local skill', async () => {
@@ -147,10 +144,8 @@ describe('Integration: config flow', () => {
     ].join('\n'));
 
     const config: HarnessConfig = {
-      skills: {
-        overrides: {
-          build: overridePath,
-        },
+      steps: {
+        build: { skill: overridePath },
       },
     };
 
@@ -178,9 +173,9 @@ describe('Integration: config flow', () => {
     await writeFile(afterHookPath, '#!/bin/bash\necho after');
 
     const config: HarnessConfig = {
-      skills: {
-        hooks: {
-          build: {
+      steps: {
+        build: {
+          hooks: {
             before: beforeHookPath,
             after: afterHookPath,
           },

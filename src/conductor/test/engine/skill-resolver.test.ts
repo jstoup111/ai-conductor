@@ -28,15 +28,13 @@ describe('engine/skill-resolver', () => {
     );
   }
 
-  describe('Task 13: project-local override happy path', () => {
-    it('resolveSkill() returns project override path when configured', () => {
+  describe('project-local override happy path', () => {
+    it('returns project override path when configured via steps.<name>.skill', () => {
       writeSkillFile(path.join(tmpDir, '.harness', 'skills', 'stories'));
 
       const config: HarnessConfig = {
-        skills: {
-          overrides: {
-            stories: '.harness/skills/stories/SKILL.md',
-          },
+        steps: {
+          stories: { skill: '.harness/skills/stories/SKILL.md' },
         },
       };
 
@@ -46,7 +44,7 @@ describe('engine/skill-resolver', () => {
       expect(result.isOverride).toBe(true);
     });
 
-    it('resolveSkill() returns default harness skill path when no override', () => {
+    it('returns default harness skill path when no override', () => {
       const config: HarnessConfig = {};
 
       const result = resolveSkill('stories', config, tmpDir);
@@ -55,16 +53,13 @@ describe('engine/skill-resolver', () => {
       expect(result.isOverride).toBe(false);
     });
 
-    it('resolveSkill() returns default path when overrides exist but not for this step', () => {
+    it('returns default path when overrides exist but not for this step', () => {
       const config: HarnessConfig = {
-        skills: {
-          overrides: {
-            retro: '.harness/skills/retro/SKILL.md',
-          },
+        steps: {
+          retro: { skill: '.harness/skills/retro/SKILL.md' },
         },
       };
 
-      // retro override configured but we ask for stories (no override)
       const result = resolveSkill('stories', config, tmpDir);
 
       expect(result.path).toBe('skills/stories/SKILL.md');
@@ -72,14 +67,10 @@ describe('engine/skill-resolver', () => {
     });
   });
 
-  describe('Task 14: validate override file exists and has valid frontmatter', () => {
-    it('resolveSkill() throws when override path does not exist', () => {
+  describe('override file validation', () => {
+    it('throws when override path does not exist', () => {
       const config: HarnessConfig = {
-        skills: {
-          overrides: {
-            stories: 'nonexistent/SKILL.md',
-          },
-        },
+        steps: { stories: { skill: 'nonexistent/SKILL.md' } },
       };
 
       expect(() => resolveSkill('stories', config, tmpDir)).toThrow(
@@ -87,7 +78,7 @@ describe('engine/skill-resolver', () => {
       );
     });
 
-    it('resolveSkill() throws when override has invalid frontmatter (missing required fields)', () => {
+    it('throws when override has invalid frontmatter (missing required fields)', () => {
       const overridePath = path.join(tmpDir, '.harness', 'skills', 'stories');
       fs.mkdirSync(overridePath, { recursive: true });
       const skillFile = path.join(overridePath, 'SKILL.md');
@@ -97,11 +88,7 @@ describe('engine/skill-resolver', () => {
       );
 
       const config: HarnessConfig = {
-        skills: {
-          overrides: {
-            stories: '.harness/skills/stories/SKILL.md',
-          },
-        },
+        steps: { stories: { skill: '.harness/skills/stories/SKILL.md' } },
       };
 
       expect(() => resolveSkill('stories', config, tmpDir)).toThrow(
@@ -109,7 +96,7 @@ describe('engine/skill-resolver', () => {
       );
     });
 
-    it('resolveSkill() succeeds when override has valid frontmatter', () => {
+    it('succeeds when override has valid frontmatter', () => {
       const overridePath = path.join(tmpDir, '.harness', 'skills', 'stories');
       fs.mkdirSync(overridePath, { recursive: true });
       const skillFile = path.join(overridePath, 'SKILL.md');
@@ -119,11 +106,7 @@ describe('engine/skill-resolver', () => {
       );
 
       const config: HarnessConfig = {
-        skills: {
-          overrides: {
-            stories: '.harness/skills/stories/SKILL.md',
-          },
-        },
+        steps: { stories: { skill: '.harness/skills/stories/SKILL.md' } },
       };
 
       const result = resolveSkill('stories', config, tmpDir);
@@ -132,9 +115,8 @@ describe('engine/skill-resolver', () => {
     });
   });
 
-  describe('Task 15: enforcement locked for gating steps', () => {
-    it('resolveSkill() ignores enforcement override for gating step', () => {
-      // stories is a gating step — override tries to downgrade to advisory
+  describe('enforcement locking for gating steps', () => {
+    it('ignores enforcement override for gating step', () => {
       writeSkillFile(path.join(tmpDir, '.harness', 'skills', 'stories'), {
         name: 'stories',
         enforcement: 'advisory',
@@ -142,21 +124,15 @@ describe('engine/skill-resolver', () => {
       });
 
       const config: HarnessConfig = {
-        skills: {
-          overrides: {
-            stories: '.harness/skills/stories/SKILL.md',
-          },
-        },
+        steps: { stories: { skill: '.harness/skills/stories/SKILL.md' } },
       };
 
       const result = resolveSkill('stories', config, tmpDir);
-      // enforcement stays gating (the harness default), not advisory
       expect(result.enforcement).toBe('gating');
       expect(result.isOverride).toBe(true);
     });
 
-    it('resolveSkill() accepts enforcement override for non-gating step', () => {
-      // retro is advisory by default — override upgrades to gating
+    it('accepts enforcement override for non-gating step', () => {
       writeSkillFile(path.join(tmpDir, '.harness', 'skills', 'retro'), {
         name: 'retro',
         enforcement: 'gating',
@@ -164,15 +140,10 @@ describe('engine/skill-resolver', () => {
       });
 
       const config: HarnessConfig = {
-        skills: {
-          overrides: {
-            retro: '.harness/skills/retro/SKILL.md',
-          },
-        },
+        steps: { retro: { skill: '.harness/skills/retro/SKILL.md' } },
       };
 
       const result = resolveSkill('retro', config, tmpDir);
-      // enforcement comes from the override file
       expect(result.enforcement).toBe('gating');
       expect(result.isOverride).toBe(true);
     });

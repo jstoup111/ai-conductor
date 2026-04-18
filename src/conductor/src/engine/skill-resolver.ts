@@ -65,7 +65,8 @@ export function resolveSkill(
   projectRoot: string,
 ): ResolvedSkill {
   const stepDef = getStepDefinition(stepName as StepName);
-  const overridePath = config.skills?.overrides?.[stepName];
+  // New schema: per-step skill override lives at config.steps.<name>.skill
+  const overridePath = config.steps?.[stepName]?.skill;
 
   if (overridePath) {
     const fullPath = path.join(projectRoot, overridePath);

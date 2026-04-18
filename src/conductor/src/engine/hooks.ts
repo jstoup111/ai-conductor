@@ -50,7 +50,8 @@ export async function runWithHooks(
   skillRunner: () => Promise<{ success: boolean; output: string }>,
   hookRunner: HookRunner,
 ): Promise<HookResult> {
-  const hooks = config.skills?.hooks?.[stepName];
+  // New schema: hooks live at config.steps.<name>.hooks
+  const hooks = config.steps?.[stepName]?.hooks;
 
   // No hooks configured — just run the skill
   if (!hooks) {

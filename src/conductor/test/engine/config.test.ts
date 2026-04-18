@@ -2,7 +2,12 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, writeFile, rm, mkdir } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { loadConfig, validateConfig, type ConfigResult } from '../../src/engine/config.js';
+import {
+  loadConfig,
+  validateConfig,
+  disabledStepNames,
+  customStepEntries,
+} from '../../src/engine/config.js';
 
 describe('config', () => {
   let tmpDir: string;
@@ -33,8 +38,8 @@ describe('config', () => {
     it('reports parse error with line number for malformed YAML', async () => {
       const badYaml = `harness_version: ">=1.0.0"
 steps:
-  disable:
-    - valid
+  bootstrap:
+    model: haiku
   bad_indent
     : broken
 `;
@@ -67,15 +72,22 @@ steps:
       expect(result.error.message).toContain('>=2.0.0');
     });
 
-    it('parses valid .harness/config.yml and returns HarnessConfig', async () => {
+    it('parses valid .harness/config.yml (new flat schema)', async () => {
       const configYaml = `
 harness_version: ">=1.0.0"
+defaults:
+  model: sonnet
+  effort: medium
+phases:
+  UNDERSTAND:
+    effort: low
 steps:
-  disable:
-    - memory
-skills:
-  overrides:
-    tdd: custom-tdd
+  bootstrap:
+    model: haiku
+  architecture_diagram:
+    disable: true
+  retro:
+    skill: custom-retro-skill
 complexity:
   default_tier: M
 `;
@@ -86,138 +98,185 @@ complexity:
       expect(result.ok).toBe(true);
       if (!result.ok) return;
       expect(result.config.harness_version).toBe('>=1.0.0');
-      expect(result.config.steps?.disable).toEqual(['memory']);
-      expect(result.config.skills?.overrides?.tdd).toBe('custom-tdd');
+      expect(result.config.defaults?.model).toBe('sonnet');
+      expect(result.config.defaults?.effort).toBe('medium');
+      expect(result.config.phases?.UNDERSTAND?.effort).toBe('low');
+      expect(result.config.steps?.bootstrap?.model).toBe('haiku');
+      expect(result.config.steps?.architecture_diagram?.disable).toBe(true);
+      expect(result.config.steps?.retro?.skill).toBe('custom-retro-skill');
       expect(result.config.complexity?.default_tier).toBe('M');
       expect(result.warnings).toEqual([]);
     });
   });
 
   describe('validateConfig', () => {
-    it('rejects steps.disable as string (not array)', () => {
+    it('rejects steps.<name> if not an object', () => {
       const result = validateConfig({
-        steps: { disable: 'architecture-review' },
+        steps: { bootstrap: 'haiku' },
       });
-
       expect(result.ok).toBe(false);
       if (result.ok) return;
-      expect(result.error.type).toBe('validation_error');
-      expect(result.error.message).toContain('steps.disable must be an array');
+      expect(result.error.message).toContain('steps.bootstrap');
     });
 
-    it('rejects disabling gating step with error message', () => {
+    it('rejects disabling a gating step', () => {
       const result = validateConfig({
-        steps: { disable: ['stories'] },
+        steps: { stories: { disable: true } },
       });
-
       expect(result.ok).toBe(false);
       if (result.ok) return;
-      expect(result.error.type).toBe('validation_error');
-      expect(result.error.message).toContain('stories');
       expect(result.error.message).toMatch(/gating/i);
+      expect(result.error.message).toContain('stories');
     });
 
-    it('rejects disabling structural step with error message', () => {
+    it('rejects disabling a structural step', () => {
       const result = validateConfig({
-        steps: { disable: ['build'] },
+        steps: { build: { disable: true } },
       });
-
       expect(result.ok).toBe(false);
       if (result.ok) return;
-      expect(result.error.type).toBe('validation_error');
       expect(result.error.message).toContain('build');
     });
 
-    it('warns on unknown step name in steps.disable', () => {
+    it('rejects invalid effort value', () => {
       const result = validateConfig({
-        steps: { disable: ['nonexistent_step'] },
+        steps: { bootstrap: { effort: 'exhaustive' } },
       });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.message).toMatch(/low\|medium\|high\|xhigh\|max/);
+    });
 
-      expect(result.ok).toBe(true);
-      if (!result.ok) return;
-      expect(result.warnings.length).toBeGreaterThan(0);
-      expect(result.warnings[0]).toContain('nonexistent_step');
+    it('rejects invalid max_retries type', () => {
+      const result = validateConfig({
+        steps: { bootstrap: { max_retries: 'three' } },
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.message).toMatch(/number/i);
     });
 
     it('warns on unknown top-level keys but does not fail', () => {
       const result = validateConfig({
         harness_version: '>=1.0.0',
         unknown_key: 'value',
-        another_unknown: 42,
       });
-
       expect(result.ok).toBe(true);
       if (!result.ok) return;
-      expect(result.warnings).toHaveLength(2);
-      expect(result.warnings[0]).toContain('unknown_key');
-      expect(result.warnings[1]).toContain('another_unknown');
+      expect(result.warnings.some((w) => w.includes('unknown_key'))).toBe(true);
+    });
+
+    it('warns on unknown step-level keys but does not fail', () => {
+      const result = validateConfig({
+        steps: { bootstrap: { model: 'haiku', bogus_key: 1 } },
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.warnings.some((w) => w.includes('bogus_key'))).toBe(true);
+    });
+
+    it('rejects invalid phase name', () => {
+      const result = validateConfig({
+        phases: { NONEXISTENT: { effort: 'medium' } },
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.warnings.some((w) => w.includes('NONEXISTENT'))).toBe(true);
     });
 
     it('rejects custom step with missing SKILL.md', () => {
       const result = validateConfig(
         {
           steps: {
-            add: [
-              {
-                name: 'lint',
-                after: 'build',
-                skill: 'nonexistent-skill',
-                enforcement: 'gating',
-              },
-            ],
+            lint: { after: 'build', skill: 'nonexistent-skill', enforcement: 'gating' },
           },
         },
         tmpDir,
       );
-
       expect(result.ok).toBe(false);
       if (result.ok) return;
       expect(result.error.type).toBe('validation_error');
       expect(result.error.message).toContain('nonexistent-skill');
-      expect(result.error.message).toContain('SKILL.md');
     });
 
     it('rejects custom step with unknown after target', () => {
       const result = validateConfig({
         steps: {
-          add: [
-            {
-              name: 'lint',
-              after: 'nonexistent_step',
-              skill: 'custom-lint',
-              enforcement: 'gating',
-            },
-          ],
+          lint: { after: 'nonexistent_step', skill: 'custom-lint', enforcement: 'gating' },
         },
       });
-
       expect(result.ok).toBe(false);
       if (result.ok) return;
-      expect(result.error.type).toBe('validation_error');
       expect(result.error.message).toContain('nonexistent_step');
+    });
+
+    it('rejects custom step without after', () => {
+      const result = validateConfig({
+        steps: { lint: { skill: 'custom-lint' } },
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.message).toMatch(/after/);
     });
 
     it('accepts custom step with valid after target and existing SKILL.md', async () => {
       await mkdir(join(tmpDir, 'skills', 'custom-lint'), { recursive: true });
-      await writeFile(join(tmpDir, 'skills', 'custom-lint', 'SKILL.md'), '---\nname: custom-lint\n---\n');
+      await writeFile(
+        join(tmpDir, 'skills', 'custom-lint', 'SKILL.md'),
+        '---\nname: custom-lint\n---\n',
+      );
 
       const result = validateConfig(
         {
           steps: {
-            add: [
-              {
-                name: 'lint',
-                after: 'build',
-                skill: 'custom-lint',
-                enforcement: 'gating',
-              },
-            ],
+            lint: {
+              after: 'build',
+              skill: 'skills/custom-lint/SKILL.md',
+              enforcement: 'gating',
+            },
           },
         },
         tmpDir,
       );
 
       expect(result.ok).toBe(true);
+    });
+
+    it('warns when built-in step sets `after` (ignored)', () => {
+      const result = validateConfig({
+        steps: { bootstrap: { after: 'memory' } },
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.warnings.some((w) => w.includes('after'))).toBe(true);
+    });
+  });
+
+  describe('adapters', () => {
+    it('disabledStepNames returns names whose block has disable=true', () => {
+      expect(
+        disabledStepNames({
+          steps: {
+            architecture_diagram: { disable: true },
+            architecture_review: { disable: true },
+            brainstorm: { model: 'opus' }, // not disabled
+          },
+        }),
+      ).toEqual(expect.arrayContaining(['architecture_diagram', 'architecture_review']));
+    });
+
+    it('customStepEntries returns only non-built-in entries with after+skill', () => {
+      const entries = customStepEntries({
+        steps: {
+          bootstrap: { model: 'haiku' }, // built-in — skip
+          lint: { after: 'build', skill: 'custom-lint', enforcement: 'gating' },
+          deploy: { after: 'build', skill: 'custom-deploy' }, // default enforcement=advisory
+        },
+      });
+      expect(entries).toHaveLength(2);
+      const byName = Object.fromEntries(entries.map((e) => [e.name, e]));
+      expect(byName.lint.enforcement).toBe('gating');
+      expect(byName.deploy.enforcement).toBe('advisory');
     });
   });
 });

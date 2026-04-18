@@ -1,6 +1,7 @@
 export type StepName =
-  | 'worktree'
+  | 'bootstrap'
   | 'memory'
+  | 'assess'
   | 'brainstorm'
   | 'complexity'
   | 'stories'
@@ -8,6 +9,7 @@ export type StepName =
   | 'plan'
   | 'architecture_diagram'
   | 'architecture_review'
+  | 'worktree'
   | 'acceptance_specs'
   | 'build'
   | 'manual_test'
