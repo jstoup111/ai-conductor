@@ -7,6 +7,7 @@ import {
   getStepIndex,
   getStepByIndex,
   shouldSkipForTier,
+  shouldSkipForBootstrapMode,
   getSkippableSteps,
   isCheckpointStep,
   getPrerequisites,
@@ -353,5 +354,41 @@ describe('engine/steps', () => {
       expect(lintIdx).toBe(buildIdx + 1);
       expect(scanIdx).toBe(buildIdx + 2);
     });
+  });
+});
+
+describe('shouldSkipForBootstrapMode', () => {
+  it("returns true for 'assess' when mode is 'new'", () => {
+    expect(shouldSkipForBootstrapMode('assess', 'new')).toBe(true);
+  });
+
+  it("returns false for 'assess' when mode is 'fresh'", () => {
+    expect(shouldSkipForBootstrapMode('assess', 'fresh')).toBe(false);
+  });
+
+  it("returns false for 'assess' when mode is 'partial'", () => {
+    expect(shouldSkipForBootstrapMode('assess', 'partial')).toBe(false);
+  });
+
+  it("returns false for 'assess' when mode is 're-bootstrap'", () => {
+    expect(shouldSkipForBootstrapMode('assess', 're-bootstrap')).toBe(false);
+  });
+
+  it('returns false for assess when mode is undefined (missing state field)', () => {
+    expect(shouldSkipForBootstrapMode('assess', undefined)).toBe(false);
+  });
+
+  it("never skips non-assess steps even when mode is 'new'", () => {
+    const nonAssessSteps: StepName[] = [
+      'memory',
+      'brainstorm',
+      'stories',
+      'plan',
+      'build',
+      'finish',
+    ];
+    for (const step of nonAssessSteps) {
+      expect(shouldSkipForBootstrapMode(step, 'new')).toBe(false);
+    }
   });
 });

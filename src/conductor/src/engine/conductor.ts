@@ -14,7 +14,13 @@ import type {
 import type { HarnessConfig } from '../types/config.js';
 import { ConductorEventEmitter } from '../ui/events.js';
 import { readState, writeState, saveStepStatus, getStepStatus, markDownstreamStale } from './state.js';
-import { ALL_STEPS, getStepIndex, shouldSkipForTier, isCheckpointStep } from './steps.js';
+import {
+  ALL_STEPS,
+  getStepIndex,
+  shouldSkipForTier,
+  shouldSkipForBootstrapMode,
+  isCheckpointStep,
+} from './steps.js';
 import { checkGate, isGatingStep } from './gates.js';
 import {
   findArtifactFiles as findArtifactFilesForStep,
@@ -238,6 +244,23 @@ export class Conductor {
         await saveStepStatus(this.stateFilePath, step.name, 'skipped');
         state[step.name] = 'skipped';
         await this.events.emit({ type: 'tier_skip', step: step.name, tier });
+        continue;
+      }
+
+      // Check if step should be skipped because bootstrap detected a 'new'
+      // project (nothing to assess on an empty-directory scaffold). This
+      // sits after the tier skip and before the gate check so the skipped
+      // step is still recorded in state but the skill never runs and the
+      // completion gate never fires against a missing artifact.
+      if (shouldSkipForBootstrapMode(step.name, state.bootstrap_mode)) {
+        await saveStepStatus(this.stateFilePath, step.name, 'skipped');
+        state[step.name] = 'skipped';
+        await this.events.emit({
+          type: 'mode_skip',
+          step: step.name,
+          mode: state.bootstrap_mode!,
+          reason: `bootstrap mode '${state.bootstrap_mode}' — no codebase to act on`,
+        });
         continue;
       }
 

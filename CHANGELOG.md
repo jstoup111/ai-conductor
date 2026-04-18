@@ -70,6 +70,20 @@ Categories:
   `ASDF_NODEJS_VERSION` (reading `src/conductor/.tool-versions`) so
   users with an older default Node don't hit the `addAbortListener`
   import error from execa.
+- `bootstrap_mode` state field + `mode_skip` event. Bootstrap now persists
+  the detected mode (`new` / `fresh` / `partial` / `re-bootstrap`) into
+  `.pipeline/conduct-state.json`. When mode is `new` the conductor
+  skips `assess` with a `mode_skip` event (the 9 CTO specialists have
+  no codebase to evaluate on an empty-directory scaffold). Other modes
+  run `assess` normally. Closes the "assess silently loops and fails"
+  failure mode observed in the focus-timer-api test run.
+- `src/conductor/README.md` — new architectural overview for the
+  TypeScript conductor (layout, state machine, events,
+  bootstrap-mode-skip, auto-heal, pinned Node, testing pattern).
+- `README.md` updated: TypeScript Conductor section, project structure
+  includes `src/conductor/`, "What Your Project Gets" includes
+  `.claude/settings.json`, lint hook explanation, step count corrected
+  from 14 to 16.
 - `bootstrap` step 3d-ii — pre-PR lint hook. Bootstrap now detects the
   project's lint command (stack-specific table: npm + tsc, rubocop +
   sorbet, ruff + mypy, clippy, go vet) and writes a `PreToolUse` hook in

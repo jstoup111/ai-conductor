@@ -20,15 +20,24 @@ code, tests, and history already in place).
 
 ### 1. Determine Bootstrap Mode
 
-| Indicator | Mode |
+| Indicator | Mode (`bootstrap_mode` value) |
 |-----------|------|
-| Empty directory or no project files | **New** — scaffold first (Step 1b) |
-| Project files exist but no harness artifacts | **Fresh** — full harness setup |
-| `.memory/` or `.docs/` exist but some missing | **Partial** — fill gaps only |
-| All harness artifacts exist | **Re-bootstrap** — update detection, re-run smoke test |
+| Empty directory or no project files | `new` — scaffold first (Step 1b) |
+| Project files exist but no harness artifacts | `fresh` — full harness setup |
+| `.memory/` or `.docs/` exist but some missing | `partial` — fill gaps only |
+| All harness artifacts exist | `re-bootstrap` — update detection, re-run smoke test |
 
 Also check maturity: 50+ commits = mature, 5+ model files = substantial, existing specs = assess
 coverage, existing CLAUDE.md = **preserve, don't overwrite**.
+
+**Persist the detected mode** into `.pipeline/conduct-state.json` under the key
+`bootstrap_mode` with one of the four string values above (`new`, `fresh`, `partial`,
+`re-bootstrap`). This MUST happen before any downstream step dispatches, because the
+conductor uses the value to skip steps that have no material to act on — notably
+`assess`, which is skipped when mode is `new` (no codebase yet = nothing for the 9
+specialists to evaluate). If the value is missing or unrecognized, the conductor
+defaults to running every step, so a missing write silently loses the optimization but
+never breaks the flow.
 
 ### 1b. Scaffold New Project (New Mode Only)
 

@@ -1,4 +1,5 @@
 import type { StepName, StepStatus, ComplexityTier } from './steps.js';
+import type { BootstrapMode } from './state.js';
 
 export type RecoveryOption = 'retry' | 'interactive' | 'back' | 'skip' | 'quit';
 
@@ -40,4 +41,5 @@ export type ConductorEvent =
   | { type: 'session_reset'; reason: string }
   | { type: 'feature_complete'; prUrl?: string }
   | { type: 'dashboard_refresh' }
-  | { type: 'auto_heal'; step: StepName; healed: number; skipped: number };
+  | { type: 'auto_heal'; step: StepName; healed: number; skipped: number }
+  | { type: 'mode_skip'; step: StepName; mode: BootstrapMode; reason: string };

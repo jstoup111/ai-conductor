@@ -2893,3 +2893,154 @@ describe('auto-heal', () => {
     expect(healEvents).toHaveLength(0);
   });
 });
+
+describe('bootstrap-mode skip', () => {
+  let dir: string;
+  let statePath: string;
+  let events: ConductorEventEmitter;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'conductor-modeskip-'));
+    statePath = join(dir, 'conduct-state.json');
+    events = new ConductorEventEmitter();
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("skips assess with a mode_skip event when bootstrap_mode is 'new'", async () => {
+    await writeState(statePath, {
+      bootstrap: 'done',
+      bootstrap_mode: 'new',
+    } as ConductState);
+
+    const calledSteps: StepName[] = [];
+    const runner: StepRunner = {
+      run: vi.fn(async (step: StepName) => {
+        calledSteps.push(step);
+        return { success: true };
+      }),
+    };
+
+    const modeSkipEvents: Array<{ step: string; mode: string }> = [];
+    events.on('mode_skip', (e) => {
+      if (e.type === 'mode_skip') modeSkipEvents.push({ step: e.step, mode: e.mode });
+    });
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+    });
+
+    await conductor.run();
+
+    expect(calledSteps).not.toContain('assess');
+    expect(modeSkipEvents).toHaveLength(1);
+    expect(modeSkipEvents[0]).toEqual({ step: 'assess', mode: 'new' });
+
+    const finalState = await readState(statePath);
+    expect(finalState.ok).toBe(true);
+    if (finalState.ok) {
+      expect(finalState.value.assess).toBe('skipped');
+    }
+  });
+
+  it("runs assess normally when bootstrap_mode is 'fresh'", async () => {
+    await writeState(statePath, {
+      bootstrap: 'done',
+      bootstrap_mode: 'fresh',
+    } as ConductState);
+
+    const calledSteps: StepName[] = [];
+    const runner: StepRunner = {
+      run: vi.fn(async (step: StepName) => {
+        calledSteps.push(step);
+        return { success: true };
+      }),
+    };
+    const modeSkipEvents: unknown[] = [];
+    events.on('mode_skip', (e) => modeSkipEvents.push(e));
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+    });
+
+    await conductor.run();
+
+    expect(calledSteps).toContain('assess');
+    expect(modeSkipEvents).toHaveLength(0);
+  });
+
+  it('runs assess normally when bootstrap_mode is absent from state', async () => {
+    await writeState(statePath, { bootstrap: 'done' } as ConductState);
+
+    const calledSteps: StepName[] = [];
+    const runner: StepRunner = {
+      run: vi.fn(async (step: StepName) => {
+        calledSteps.push(step);
+        return { success: true };
+      }),
+    };
+    const modeSkipEvents: unknown[] = [];
+    events.on('mode_skip', (e) => modeSkipEvents.push(e));
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+    });
+
+    await conductor.run();
+
+    expect(calledSteps).toContain('assess');
+    expect(modeSkipEvents).toHaveLength(0);
+  });
+
+  it("does not skip any non-assess step when mode is 'new'", async () => {
+    await writeState(statePath, {
+      bootstrap: 'done',
+      bootstrap_mode: 'new',
+    } as ConductState);
+
+    const calledSteps: StepName[] = [];
+    const runner: StepRunner = {
+      run: vi.fn(async (step: StepName) => {
+        calledSteps.push(step);
+        return { success: true };
+      }),
+    };
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+    });
+
+    await conductor.run();
+
+    // Every non-complexity, non-assess step should have run. (complexity is
+    // handled by the engine, not by runner.run.)
+    const expectedSteps: StepName[] = [
+      'memory',
+      'brainstorm',
+      'stories',
+      'conflict_check',
+      'plan',
+      'architecture_diagram',
+      'architecture_review',
+      'worktree',
+      'acceptance_specs',
+      'build',
+      'manual_test',
+      'retro',
+      'finish',
+    ];
+    for (const step of expectedSteps) {
+      expect(calledSteps).toContain(step);
+    }
+  });
+});

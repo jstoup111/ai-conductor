@@ -17,11 +17,16 @@ No custom runtime. Claude Code is the execution engine.
 ```bash
 git clone https://github.com/jamesstoup/james-stoup-agents.git
 cd james-stoup-agents
+# Optional but recommended: build the TypeScript conductor bundle
+(cd src/conductor && npm install && npm run build)
 ./bin/install
 ```
 
-This symlinks all 20 skills into `~/.claude/skills/` and puts the `conduct` script on your PATH
-via `~/.local/bin/`.
+This symlinks all 20 skills into `~/.claude/skills/` and installs two conductor CLIs to
+`~/.local/bin/`: the stable bash `conduct` and — if `src/conductor/dist/` has been built —
+the TypeScript rewrite `conduct-ts`. Both accept the same flags; `conduct-ts` adds event-driven
+dashboards, structured completion gates, and auto-heal for stale `task-status.json`
+(see "TypeScript Conductor" below).
 
 Verify:
 
@@ -58,7 +63,7 @@ Then in the Claude Code session:
 ```
 
 The conductor checks artifact state, tells you what to run next, and blocks when gates aren't met.
-It walks you through all 14 steps:
+It walks you through all 16 steps:
 
 ```
 /bootstrap → /brainstorm → /stories → /conflict-check → /plan → /architecture-diagram
@@ -81,12 +86,17 @@ conduct --interactive "Payment processing"
 ```
 
 ```bash
-conduct --status          # Check progress (shows all 14 steps)
+conduct --status          # Check progress (shows all 16 steps)
 conduct --resume          # Pick up where you left off
 conduct --step stories    # Run one step only
 conduct --from plan       # Start from a specific step
 conduct --reset           # Clear session state and start fresh
 ```
+
+Prefer the TypeScript conductor? Replace `conduct` with `conduct-ts` in any of the above
+commands — the CLI surface is identical, but you get a richer dashboard, event subscribers,
+and engine-side auto-heal for stale pipeline state. See `src/conductor/README.md` for the
+architectural overview.
 
 On failure, conduct sends a desktop notification and drops into an interactive Claude session
 to fix the issue. After you `/quit`, it rechecks artifacts and continues automatically.
@@ -174,13 +184,54 @@ Stack-specific knowledge in `tech-context/`. Currently supported:
 Tech-context is additive — it supplements skills, never overrides them. Projects without matching
 tech-context use generic skill behavior.
 
+## TypeScript Conductor (`src/conductor/`)
+
+A from-scratch rewrite of the bash `conduct` script in TypeScript. Three-layer
+architecture — Engine / Execution / UI — with typed events, pluggable UI renderers, and
+dedicated test coverage (545 tests). See `src/conductor/README.md` for the architectural
+details; the summary is:
+
+- **`bin/conduct-ts`** (thin shell wrapper) → `src/conductor/dist/index.js`
+- **Engine** owns state machine, gates, completion checks, auto-heal logic.
+- **Execution** invokes Claude via `execa` with session + rate-limit handling.
+- **UI** is a pluggable subscriber: the default terminal renderer is event-driven.
+- **Auto-heal**: before a build-gate retry, the engine cross-checks
+  `.pipeline/task-status.json` against git log and flips pending tasks to completed
+  when there's unambiguous evidence of a prior-run commit. Audit trail under
+  `.pipeline/audit-trail/autoheal-*.json`.
+- **Bootstrap-mode skip**: when bootstrap detects a `new`-mode project (empty directory
+  before scaffolding), the conductor skips `assess` rather than dispatching 9 specialists
+  against a blank codebase.
+- **Pinned Node**: `conduct-ts` reads `src/conductor/.tool-versions` and exports
+  `ASDF_NODEJS_VERSION` so the bundle runs on its required Node even when your shell's
+  default is older.
+
+Build and install:
+
+```bash
+cd src/conductor
+npm install
+npm run build
+cd ../..
+./bin/install  # creates ~/.local/bin/conduct-ts symlink
+```
+
 ## Project Structure
 
 ```
 james-stoup-agents/
 ├── bin/
 │   ├── install              # Install/update/uninstall harness
-│   └── conduct              # Automated SDLC runner
+│   ├── conduct              # Stable bash SDLC runner
+│   ├── conduct-ts           # TypeScript conductor wrapper (requires built dist/)
+│   └── migrate              # Changelog-driven migration runner
+├── src/conductor/           # TypeScript conductor (tsup bundle, vitest tests)
+│   ├── src/engine/          # State machine, gates, completion, auto-heal
+│   ├── src/execution/       # Claude provider, subprocess, rate limiting
+│   ├── src/ui/              # Pluggable UI subscribers (terminal, live-region)
+│   ├── src/types/           # State + event type definitions
+│   ├── test/                # vitest suites (engine, execution, ui, integration)
+│   └── dist/                # Built bundle — created by `npm run build`
 ├── skills/                  # One directory per skill, each with SKILL.md
 │   ├── architecture-diagram/
 │   ├── architecture-review/
@@ -256,6 +307,9 @@ After running `/bootstrap` on a project, it creates:
 
 ```
 your-project/
+├── .claude/
+│   └── settings.json        # Project-scoped Read/Edit/Write permissions +
+│                            # pre-PR lint hook (PreToolUse on gh pr create)
 ├── .memory/                 # Cross-session knowledge
 │   ├── decisions/
 │   ├── patterns/
@@ -263,7 +317,10 @@ your-project/
 │   └── context/
 ├── .pipeline/               # Pipeline state (if using /pipeline)
 │   ├── task-status.json
+│   ├── summary.json         # Written at final-task completion; retro reads this
 │   └── audit-trail/
+│       ├── batch-N/         # Evaluator verdicts (review.json per batch)
+│       └── autoheal-*.json  # Conductor auto-heal records (TS conductor only)
 ├── .docs/
 │   ├── specs/               # Design docs from /brainstorm
 │   ├── stories/             # User stories from /stories
@@ -277,8 +334,16 @@ your-project/
 │   │   ├── sequences/
 │   │   └── erd.md
 │   └── retros/              # Retrospective reports from /retro
+├── .github/
+│   └── pull_request_template.md  # Changelog + Migration scaffolding
 └── CLAUDE.md                # Project-specific harness config
 ```
+
+Bootstrap detects your stack (Node+TS, Rails+Rubocop, Python+ruff/mypy, Rust+clippy,
+Go+vet) and writes the lint command into `.claude/settings.json` as a `PreToolUse(Bash)`
+hook with `if: "Bash(gh pr create*)"`. Linting becomes fully deterministic machinery —
+TDD, pipeline, and code-review skills never invoke the linter themselves. Non-zero
+exit from the lint command blocks the PR; users edit the command in place.
 
 ## Adding Tech-Context for New Stacks
 

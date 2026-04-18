@@ -1,4 +1,4 @@
-import type { StepDefinition, StepName, ComplexityTier } from '../types/index.js';
+import type { StepDefinition, StepName, ComplexityTier, BootstrapMode } from '../types/index.js';
 import type { HarnessConfig } from '../types/config.js';
 
 export const ALL_STEPS: StepDefinition[] = [
@@ -168,6 +168,29 @@ export function getStepByIndex(index: number): StepDefinition {
 export function shouldSkipForTier(step: StepName, tier: ComplexityTier): boolean {
   const def = getStepDefinition(step);
   return def.skippableForTiers.includes(tier);
+}
+
+/**
+ * Steps that have nothing to do when the project has no codebase yet
+ * (bootstrap mode = 'new' — bootstrap is the one scaffolding it). For these
+ * the conductor short-circuits with a `mode_skip` event rather than
+ * dispatching the skill and letting the completion gate fail.
+ *
+ * Currently just `assess` — the nine-specialist review has no material in
+ * a project that was an empty directory a minute ago. Add to this list
+ * sparingly; most steps are still meaningful on a freshly-scaffolded
+ * codebase.
+ */
+const STEPS_SKIPPED_WHEN_NEW: ReadonlySet<StepName> = new Set<StepName>([
+  'assess',
+]);
+
+export function shouldSkipForBootstrapMode(
+  step: StepName,
+  mode: BootstrapMode | undefined,
+): boolean {
+  if (mode !== 'new') return false;
+  return STEPS_SKIPPED_WHEN_NEW.has(step);
 }
 
 export function getSkippableSteps(tier: ComplexityTier): StepName[] {
