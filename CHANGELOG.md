@@ -58,6 +58,11 @@ Categories:
   create GitHub Release on every merge to `main`.
 - `.github/pull_request_template.md` — scaffolds the Changelog + Migration
   sections for PRs against this repo. Does not affect consumer projects.
+- `templates/claude-settings.json.template` and new `bootstrap` step 3d —
+  bootstrap now emits a `.claude/settings.json` scoped to the project root
+  (`Read`/`Edit`/`Write` under the bootstrapped directory, including
+  dotfiles) so downstream skills don't block on permission prompts when
+  they touch harness artifacts.
 - `bin/migrate` — self-configuring migration runner that reads the current
   version from `~/.claude/ai-conductor.config.json`, re-runs
   `bin/install --update`, and executes any `## Migration` bash blocks from the
@@ -122,6 +127,25 @@ takes effect on the next `conduct` run after this release is installed.
   under `.pipeline/audit-trail/autoheal-*.json`. Runs once per session
   per step; scoped to `build`; silently skips when git is absent.
   Additive `auto_heal` event on `ConductorEvent` for UI visibility.
+- `skills/pipeline/SKILL.md` — orchestrator-writes-review.json gate tightened:
+  after each batch evaluator returns, the orchestrator must atomically
+  `mkdir -p`, write `.pipeline/audit-trail/batch-N/review.json`, and
+  stat-check the file before advancing. Missing or empty file is a hard
+  halt. Closes the "silently bypassed 4 evaluator gates" failure mode.
+- `skills/pipeline/SKILL.md` — Pipeline Entry Guard added: if every task
+  is already `completed`/`skipped`, the skill early-exits with a one-line
+  progress.log note instead of loading the plan and dispatching work.
+  Prevents token burn on crashed-then-resumed sessions that already
+  finished.
+- `skills/pipeline/SKILL.md` — `.pipeline/summary.json` is now required
+  at final-task completion (fields: plan_ref, complexity_tier, autonomy,
+  task counts, batch counts, rework cycles, interventions, timestamps,
+  first/last commit SHAs). Retro consumes this file instead of
+  recomputing stats via an Explore agent.
+- `skills/pipeline/SKILL.md` — Evaluator model table added: Medium-tier
+  intermediate batch evaluators run on Sonnet (not Opus); only the final
+  batch evaluator runs on Opus. Small stays Sonnet-only. Large keeps
+  Opus throughout.
 
 ### Removed
 

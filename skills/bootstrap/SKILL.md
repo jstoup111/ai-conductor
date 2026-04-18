@@ -127,6 +127,22 @@ Create `.github/` directory if it doesn't exist. If a PR template already exists
 The template contains `[feature_description]`, `[story_count]`, and `[branch]` placeholders
 that `conduct` fills in when creating the PR after retro.
 
+### 3d. Generate Claude Code Settings
+
+Generate `.claude/settings.json` from `templates/claude-settings.json.template`. Replace
+`{{PROJECT_ROOT}}` with the absolute path of the project root (the bootstrap working directory,
+with leading slash stripped — the template already supplies the `//` prefix required by
+Claude Code's permission path syntax). Create the `.claude/` directory if it doesn't exist.
+
+The generated file scopes Read/Edit/Write permission to the entire project tree (including
+dotfiles under `.claude/`, `.pipeline/`, `.docs/`, `.memory/`, `.github/`, etc.) so that
+downstream skills don't block on permission prompts when they touch harness artifacts. The
+rule set uses absolute paths so the permissions travel with the project even when invoked
+from a different CWD (e.g., inside a worktree).
+
+If `.claude/settings.json` already exists, do NOT overwrite — per-user overrides belong in
+`.claude/settings.local.json` (gitignored), not this file.
+
 ### 4. Analyze Existing Code (Existing Projects Only)
 
 This step performs a **structural scan only** — file counts, directory layout, test framework detection. Deep analysis of security, architecture, testing strategy, dependencies, and code health has moved to `/assess`.
@@ -256,6 +272,7 @@ Report failures before proceeding — a broken foundation wastes all downstream 
 - [ ] .memory/ created and seeded (if existing project)
 - [ ] .docs/ subdirectories created
 - [ ] `.github/pull_request_template.md` created (if not already present)
+- [ ] `.claude/settings.json` created with project-scoped Read/Edit/Write permissions (if not already present)
 - [ ] CLAUDE.md generated or appended — never overwritten
 - [ ] `.env.example` generated with shared/worktree-specific boundary sections
 - [ ] `.env` generated from `.env.example` with real defaults
