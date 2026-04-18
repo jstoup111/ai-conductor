@@ -251,6 +251,31 @@ If drift is detected at a batch boundary:
 2. If the drift violates a prior ADR: BLOCK — human must decide whether to update the ADR
    or revert the code
 
+### 11. Signal Review Requirement
+
+Before exiting, decide whether the conductor should prompt the user to review
+the architecture report and ADRs. Review mode for this step is **conditional** —
+auto-approved unless you write a marker file.
+
+Write `.pipeline/review-required-architecture_review` (any content; the file's
+existence is the signal) if ANY of the following is true:
+
+- Verdict is **APPROVED WITH CONDITIONS** or **BLOCKED**
+- Any new ADR was drafted (DRAFT ADRs must be approved before they become authoritative)
+- Any existing ADR was superseded
+- Any risk with Impact=High was entered in the Risk Register
+- Batch-boundary review found drift from the approved plan
+
+If the verdict is a clean **APPROVED** with zero new/superseded ADRs and no
+High-impact risks, do NOT write the marker — the conductor auto-approves and
+moves to the next step.
+
+```bash
+# Example: write the marker when review flagged issues
+mkdir -p .pipeline
+echo "verdict: APPROVED_WITH_CONDITIONS, new ADRs: 2" > .pipeline/review-required-architecture_review
+```
+
 ## Verification
 
 - [ ] All stories assessed for feasibility
@@ -263,3 +288,6 @@ If drift is detected at a batch boundary:
 - [ ] Verdict issued (APPROVED / CONDITIONS / BLOCKED)
 - [ ] Architecture diagrams reviewed for accuracy against current implementation
 - [ ] BLOCKED verdicts halt pipeline and require human resolution
+- [ ] `.pipeline/review-required-architecture_review` marker written IF
+      verdict ≠ clean APPROVED, or any ADR was drafted/superseded, or any
+      High-impact risk was registered (skip only on truly clean APPROVED)

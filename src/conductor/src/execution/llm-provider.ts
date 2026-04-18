@@ -1,0 +1,35 @@
+export interface InvokeResult {
+  success: boolean;
+  output: string;
+  exitCode: number;
+  rateLimited?: boolean;
+  sessionExpired?: boolean;
+}
+
+export interface InvokeOptions {
+  prompt: string;
+  systemPrompt?: string;
+  sessionId: string;
+  resume: boolean;
+  interactive?: boolean;
+  dangerouslySkipPermissions?: boolean;
+  stepCooldown?: number;
+  sessionName?: string;
+  /**
+   * Claude model to use for this invocation (e.g. "haiku", "sonnet", "opus", or
+   * a full model ID). When omitted, the Claude CLI picks its own default.
+   */
+  model?: string;
+  /**
+   * Claude reasoning effort level for this invocation. Passed via
+   * CLAUDE_CODE_EFFORT_LEVEL env var (which takes precedence over settings.json
+   * and skill frontmatter, and cascades to subagent invocations spawned within
+   * the session). Values: low | medium | high | xhigh | max.
+   */
+  effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+}
+
+export interface LLMProvider {
+  invoke(options: InvokeOptions): Promise<InvokeResult>;
+  invokeInteractive(options: InvokeOptions): Promise<void>;
+}

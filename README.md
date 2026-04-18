@@ -17,11 +17,15 @@ No custom runtime. Claude Code is the execution engine.
 ```bash
 git clone git@github.com:jstoup111/ai-conductor.git
 cd ai-conductor
+# Optional: build the TypeScript conductor bundle if you want to try conduct-ts
+(cd src/conductor && npm install && npm run build)
 ./bin/install
 ```
 
-This symlinks all 20 skills into `~/.claude/skills/` and puts the `conduct` script on your PATH
-via `~/.local/bin/`.
+This symlinks all 20 skills into `~/.claude/skills/` and installs the conductor CLI(s) to
+`~/.local/bin/`. See [Choosing a Conductor](#choosing-a-conductor) below — both binaries
+coexist, `conduct` is the default, `conduct-ts` is opt-in and only symlinked if you've
+built the dist bundle.
 
 Verify:
 
@@ -58,7 +62,7 @@ Then in the Claude Code session:
 ```
 
 The conductor checks artifact state, tells you what to run next, and blocks when gates aren't met.
-It walks you through all 14 steps:
+It walks you through all 16 steps:
 
 ```
 /bootstrap → /brainstorm → /stories → /conflict-check → /plan → /architecture-diagram
@@ -81,7 +85,7 @@ conduct --interactive "Payment processing"
 ```
 
 ```bash
-conduct --status          # Check progress (shows all 14 steps)
+conduct --status          # Check progress (shows all 16 steps)
 conduct --resume          # Pick up where you left off
 conduct --step stories    # Run one step only
 conduct --from plan       # Start from a specific step
@@ -92,6 +96,39 @@ On failure, conduct sends a desktop notification and drops into an interactive C
 to fix the issue. After you `/quit`, it rechecks artifacts and continues automatically.
 
 Handles API rate limits by waiting for reset and auto-retrying.
+
+## Choosing a Conductor
+
+Two conductor binaries ship together. Both drive the same 16-step SDLC pipeline and read
+the same `.pipeline/` state, so you can switch between them per-invocation. `conduct`
+remains the default; `conduct-ts` is the in-progress rewrite — stable enough to use
+day-to-day, but the surface is still changing.
+
+|                              | `conduct` (bash, stable)                      | `conduct-ts` (TypeScript, opt-in)                                |
+|------------------------------|-----------------------------------------------|------------------------------------------------------------------|
+| **Status**                   | Reference implementation                      | Active rewrite — feature parity ongoing                          |
+| **Install**                  | Always symlinked by `bin/install`             | Symlinked only when `src/conductor/dist/` has been built         |
+| **Build step**               | None                                          | `cd src/conductor && npm install && npm run build`               |
+| **CLI flags**                | Full surface (`--auto`, `--interactive`, …)   | Same flags **except `--interactive`** is not yet wired           |
+| **Dashboard**                | Terminal status log                           | Event-driven renderer with live-region updates and tail pane     |
+| **Completion gates**         | Artifact grep                                 | Typed events + structured gate-runner                            |
+| **Auto-heal**                | None                                          | Reconciles stale `task-status.json` against git log before retry |
+| **Pluggable UI**             | No                                            | Yes — UI is a subscriber behind the engine                       |
+| **Test coverage**            | `test/test_conduct_worktree.sh`               | 673 vitest tests across engine/execution/UI/integration          |
+| **Pinned Node**              | N/A                                           | Reads `src/conductor/.tool-versions` via asdf                    |
+
+**Default:** use `conduct`. Everything in this README's examples works.
+
+**Try `conduct-ts`** when you want the richer dashboard or auto-heal, or if you're helping
+test the rewrite. Drop-in replace the binary name in any command; if a flag isn't
+supported yet, commander will tell you.
+
+Both binaries read `~/.ai-conductor/config.yml` (user-level) and the project's
+`.ai-conductor/config.yml` if present. Legacy `~/.claude/ai-conductor.config.json` is
+read as a fallback for installs that predate the YAML migration.
+
+See `src/conductor/README.md` for the three-layer architecture (Engine / Execution / UI)
+behind `conduct-ts`.
 
 ## How It Works
 
@@ -174,13 +211,54 @@ Stack-specific knowledge in `tech-context/`. Currently supported:
 Tech-context is additive — it supplements skills, never overrides them. Projects without matching
 tech-context use generic skill behavior.
 
+## TypeScript Conductor (`src/conductor/`)
+
+The TypeScript rewrite behind `conduct-ts`. Three-layer architecture —
+Engine / Execution / UI — with typed events, pluggable UI renderers, and
+dedicated test coverage (673 tests). See the feature comparison in
+[Choosing a Conductor](#choosing-a-conductor); implementation notes below.
+
+- **`bin/conduct-ts`** is a thin shell wrapper around `src/conductor/dist/index.js`.
+- **Engine** owns state machine, gates, completion checks, auto-heal logic.
+- **Execution** invokes Claude via `execa` with session + rate-limit handling.
+- **UI** is a pluggable subscriber: the default terminal renderer is event-driven.
+- **Auto-heal**: before a build-gate retry, the engine cross-checks
+  `.pipeline/task-status.json` against git log and flips pending tasks to completed
+  when there's unambiguous evidence of a prior-run commit. Audit trail under
+  `.pipeline/audit-trail/autoheal-*.json`.
+- **Bootstrap-mode skip**: when bootstrap detects a `new`-mode project (empty directory
+  before scaffolding), the conductor skips `assess` rather than dispatching 9 specialists
+  against a blank codebase.
+- **Pinned Node**: `conduct-ts` reads `src/conductor/.tool-versions` and exports
+  `ASDF_NODEJS_VERSION` so the bundle runs on its required Node even when your shell's
+  default is older.
+
+Build and install:
+
+```bash
+cd src/conductor
+npm install
+npm run build
+cd ../..
+./bin/install  # creates ~/.local/bin/conduct-ts symlink
+```
+
 ## Project Structure
 
 ```
 ai-conductor/
 ├── bin/
 │   ├── install              # Install/update/uninstall harness
-│   └── conduct              # Automated SDLC runner
+│   ├── conduct              # Stable bash SDLC runner
+│   ├── conduct-ts           # TypeScript conductor wrapper (requires built dist/)
+│   └── migrate              # Changelog-driven migration runner
+├── src/conductor/           # TypeScript conductor (tsup bundle, vitest tests)
+│   ├── src/engine/          # State machine, gates, completion, auto-heal
+│   ├── src/execution/       # Claude provider, subprocess, rate limiting
+│   ├── src/ui/              # Pluggable UI subscribers (terminal, live-region)
+│   ├── src/types/           # State + event type definitions
+│   ├── test/                # vitest suites (engine, execution, ui, integration)
+│   └── dist/                # Built bundle — created by `npm run build`
 ├── skills/                  # One directory per skill, each with SKILL.md
 │   ├── architecture-diagram/
 │   ├── architecture-review/
@@ -256,6 +334,9 @@ After running `/bootstrap` on a project, it creates:
 
 ```
 your-project/
+├── .claude/
+│   └── settings.json        # Project-scoped Read/Edit/Write permissions +
+│                            # pre-PR lint hook (PreToolUse on gh pr create)
 ├── .memory/                 # Cross-session knowledge
 │   ├── decisions/
 │   ├── patterns/
@@ -263,7 +344,10 @@ your-project/
 │   └── context/
 ├── .pipeline/               # Pipeline state (if using /pipeline)
 │   ├── task-status.json
+│   ├── summary.json         # Written at final-task completion; retro reads this
 │   └── audit-trail/
+│       ├── batch-N/         # Evaluator verdicts (review.json per batch)
+│       └── autoheal-*.json  # Conductor auto-heal records (TS conductor only)
 ├── .docs/
 │   ├── specs/               # Design docs from /brainstorm
 │   ├── stories/             # User stories from /stories
@@ -277,8 +361,16 @@ your-project/
 │   │   ├── sequences/
 │   │   └── erd.md
 │   └── retros/              # Retrospective reports from /retro
+├── .github/
+│   └── pull_request_template.md  # Changelog + Migration scaffolding
 └── CLAUDE.md                # Project-specific harness config
 ```
+
+Bootstrap detects your stack (Node+TS, Rails+Rubocop, Python+ruff/mypy, Rust+clippy,
+Go+vet) and writes the lint command into `.claude/settings.json` as a `PreToolUse(Bash)`
+hook with `if: "Bash(gh pr create*)"`. Linting becomes fully deterministic machinery —
+TDD, pipeline, and code-review skills never invoke the linter themselves. Non-zero
+exit from the lint command blocks the PR; users edit the command in place.
 
 ## Adding Tech-Context for New Stacks
 

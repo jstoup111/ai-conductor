@@ -13,6 +13,25 @@ Explores the user's intent, gathers requirements, and produces a design document
 implementation begins. Prevents building the wrong thing by ensuring alignment on what and why
 before discussing how.
 
+## Boundaries
+
+Brainstorm produces a single artifact — a design doc in `.docs/specs/` — and nothing else.
+
+Do NOT:
+- Write, edit, or create any file outside `.docs/specs/`
+- Write code, migrations, configs, tests, or stubs
+- Create files in `.docs/plans/`, `.docs/stories/`, or elsewhere — those are downstream skills'
+  outputs
+- Invoke `/plan`, `/stories`, or any other skill
+- Describe implementation details beyond what's needed to evaluate the design (pseudocode, file
+  layouts, function signatures are all out of scope)
+
+Implementation belongs to `/build`. Task breakdown belongs to `/plan`. Stories belong to
+`/stories`. Brainstorm is requirements + high-level design, period.
+
+After the design doc is saved and approved, **exit the session immediately**. Do not ask what's
+next — the conductor handles the handoff.
+
 ## Practices
 
 ### 1. Explore Project Context
@@ -96,12 +115,15 @@ Confirm you want the expanded scope, or should I trim to [specific suggestion]?
 
 Do NOT silently expand scope. The user must explicitly approve any expansion beyond their request.
 
-### 6. Get Approval
+### 6. Get Approval, Then Exit
 
-Present the design document to the user. Do NOT proceed to stories until the user explicitly
-approves. "Looks good" or "yes" counts as approval. Ambiguous responses → ask for clarification.
+Present the design document to the user. Do NOT proceed until the user explicitly approves.
+"Looks good" or "yes" counts as approval. Ambiguous responses → ask for clarification.
 
-After approval, update the document status to "Approved" and suggest invoking the `stories` skill.
+After approval:
+1. Update the document status to "Approved"
+2. **Exit the session immediately.** The conductor handles the handoff to the next skill.
+   Do NOT suggest running any other skill or command.
 
 ### 7. API Contract (API Projects Only)
 
@@ -138,6 +160,9 @@ Do NOT persist: the design doc contents (that is in `.docs/specs/`).
 - [ ] 2-3 approaches presented with trade-offs
 - [ ] Design document written with all required sections
 - [ ] Design document saved to `.docs/specs/`
+- [ ] **No files written outside `.docs/specs/`**
+- [ ] **No code, plans, stories, or migrations produced**
 - [ ] User explicitly approved before proceeding
 - [ ] `ExitPlanMode` was NOT called
+- [ ] Session exited immediately after approval (no further suggestions to the user)
 - [ ] Architectural decision persisted to `.memory/decisions/` (if non-obvious trade-off made)

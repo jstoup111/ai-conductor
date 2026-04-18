@@ -20,15 +20,24 @@ code, tests, and history already in place).
 
 ### 1. Determine Bootstrap Mode
 
-| Indicator | Mode |
+| Indicator | Mode (`bootstrap_mode` value) |
 |-----------|------|
-| Empty directory or no project files | **New** — scaffold first (Step 1b) |
-| Project files exist but no harness artifacts | **Fresh** — full harness setup |
-| `.memory/` or `.docs/` exist but some missing | **Partial** — fill gaps only |
-| All harness artifacts exist | **Re-bootstrap** — update detection, re-run smoke test |
+| Empty directory or no project files | `new` — scaffold first (Step 1b) |
+| Project files exist but no harness artifacts | `fresh` — full harness setup |
+| `.memory/` or `.docs/` exist but some missing | `partial` — fill gaps only |
+| All harness artifacts exist | `re-bootstrap` — update detection, re-run smoke test |
 
 Also check maturity: 50+ commits = mature, 5+ model files = substantial, existing specs = assess
 coverage, existing CLAUDE.md = **preserve, don't overwrite**.
+
+**Persist the detected mode** into `.pipeline/conduct-state.json` under the key
+`bootstrap_mode` with one of the four string values above (`new`, `fresh`, `partial`,
+`re-bootstrap`). This MUST happen before any downstream step dispatches, because the
+conductor uses the value to skip steps that have no material to act on — notably
+`assess`, which is skipped when mode is `new` (no codebase yet = nothing for the 9
+specialists to evaluate). If the value is missing or unrecognized, the conductor
+defaults to running every step, so a missing write silently loses the optimization but
+never breaks the flow.
 
 ### 1b. Scaffold New Project (New Mode Only)
 
@@ -126,6 +135,94 @@ Copy `templates/pull_request_template.md` to `.github/pull_request_template.md`.
 Create `.github/` directory if it doesn't exist. If a PR template already exists, do NOT overwrite.
 The template contains `[feature_description]`, `[story_count]`, and `[branch]` placeholders
 that `conduct` fills in when creating the PR after retro.
+
+### 3d. Generate Claude Code Settings
+
+Generate `.claude/settings.json` in two parts: permissions (3d-i) and a pre-PR lint hook
+(3d-ii). The file is project-scoped — per-user overrides belong in
+`.claude/settings.local.json` (gitignored).
+
+#### 3d-i. Permissions
+
+Copy `templates/claude-settings.json.template` to `.claude/settings.json`. Replace
+`{{PROJECT_ROOT}}` with the absolute path of the project root (the bootstrap working
+directory, with leading slash stripped — the template already supplies the `//` prefix
+required by Claude Code's permission path syntax). Create the `.claude/` directory if it
+doesn't exist.
+
+The generated file scopes Read/Edit/Write permission to the entire project tree (including
+dotfiles under `.claude/`, `.pipeline/`, `.docs/`, `.memory/`, `.github/`, etc.) so that
+downstream skills don't block on permission prompts when they touch harness artifacts.
+Absolute paths mean the permissions travel with the project even when invoked from a
+different CWD (e.g., inside a worktree).
+
+If `.claude/settings.json` already exists, do NOT overwrite it — skip to 3d-ii and merge
+the hook block only if the hook is missing.
+
+#### 3d-ii. Pre-PR Lint Hook
+
+Linting is deterministic — it should never consume model tokens. This step wires a
+`PreToolUse` hook that runs the project's lint command before any `gh pr create`
+invocation; a non-zero exit code blocks the PR until the user (or Claude) fixes the lint
+failure. TDD, pipeline, and code-review skills do NOT invoke the linter themselves;
+this hook is the single source of lint enforcement.
+
+**Detect the lint command** from project signals (first match wins, but combine if
+multiple apply — e.g. Node+TS gets both scripts):
+
+| Signal | Lint Command |
+|--------|--------------|
+| `package.json` has `scripts.lint` | `npm run lint` |
+| `tsconfig.json` exists | `npx tsc --noEmit` (AND above, joined with `&&`) |
+| `biome.json` / `biome.jsonc` | `npx biome check .` |
+| `.eslintrc*` without a `scripts.lint` entry | `npx eslint .` |
+| `Gemfile` contains `rubocop` | `bundle exec rubocop` |
+| `Gemfile` contains `sorbet-runtime` | `bundle exec srb tc` (AND rubocop if also present) |
+| `pyproject.toml` lists `ruff` | `ruff check` |
+| `pyproject.toml` lists `mypy` | `mypy .` (AND ruff if also present) |
+| `Cargo.toml` | `cargo clippy --all-targets -- -D warnings` |
+| `go.mod` | `go vet ./...` |
+
+If multiple commands apply, chain them with `&&` — the hook fails fast on the first
+non-zero exit. If nothing matches, ask the user: "What command lints/type-checks this
+project? (leave blank to skip the pre-PR lint gate)". In auto mode, skip the hook when
+detection fails rather than prompting.
+
+**Write the hook** into `.claude/settings.json` (merge with the permissions from 3d-i —
+do not overwrite):
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "<detected or user-provided lint command>",
+            "if": "Bash(gh pr create*)",
+            "timeout": 300,
+            "statusMessage": "Running pre-PR lint gate"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+The `if: "Bash(gh pr create*)"` filter means the hook only fires when Claude actually
+tries to open a PR — every other `Bash` call is untouched, so the hook has zero runtime
+cost during regular development.
+
+**Idempotence:** If a `PreToolUse` hook with `if: "Bash(gh pr create*)"` already exists
+in `.claude/settings.json`, do NOT add a duplicate. Re-running bootstrap should be safe;
+users who want to change the lint command can edit the existing hook directly.
+
+**User override at any time** — the hook lives in `.claude/settings.json` and is a
+regular config value. Users may edit the command, bump the timeout, or remove the hook
+entirely without re-running bootstrap.
 
 ### 4. Analyze Existing Code (Existing Projects Only)
 
@@ -256,6 +353,7 @@ Report failures before proceeding — a broken foundation wastes all downstream 
 - [ ] .memory/ created and seeded (if existing project)
 - [ ] .docs/ subdirectories created
 - [ ] `.github/pull_request_template.md` created (if not already present)
+- [ ] `.claude/settings.json` created with project-scoped Read/Edit/Write permissions (if not already present)
 - [ ] CLAUDE.md generated or appended — never overwritten
 - [ ] `.env.example` generated with shared/worktree-specific boundary sections
 - [ ] `.env` generated from `.env.example` with real defaults

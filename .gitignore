@@ -2,6 +2,10 @@
 .pipeline/
 .memory/
 
+# Node / TypeScript conductor build artifacts
+node_modules/
+src/conductor/dist/
+
 # OS
 .DS_Store
 Thumbs.db

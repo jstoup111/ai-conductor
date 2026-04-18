@@ -42,6 +42,25 @@ context bounded to ~2-3 summary lines per task regardless of feature size.
 
 Default to **Standard** unless the user specifies otherwise.
 
+### Pipeline Entry Guard (Early Exit)
+
+Before loading any plan, validating tasks, or dispatching subagents, check
+`.pipeline/task-status.json`:
+
+```
+jq -e 'all(.tasks[]; .status == "completed" or .status == "skipped")' .pipeline/task-status.json
+```
+
+If every task is already `completed` or `skipped`, write a one-line note to
+`.pipeline/progress.log` ("pipeline entry: all N tasks already complete, exiting") and
+return immediately — do NOT load plan text, dispatch the evaluator, or run any
+subagent. The conductor's completion gate will read the JSON and advance.
+
+This guard exists because a crashed session resumed against a fully-completed pipeline
+otherwise loads the full skill text, dispatches the Plan-Validation step, and burns tokens
+rediscovering there is nothing to do. Auto-heal (engine-side) handles drift between git
+and the JSON; this guard handles the happy-path where the JSON is already correct.
+
 ### Per-Task Execution
 
 The conductor marks the task as `in_progress` in `.pipeline/task-status.json`, then sends
@@ -114,8 +133,9 @@ The evaluator should flag scope violations as IMPORTANT severity.
 **Rate limit cooldown: sleep 15 seconds before dispatching the evaluator** to avoid stacking
 on top of the just-completed TDD agent's API usage.
 
-At batch boundaries, dispatch an evaluator agent with `model="opus"` and **fresh, scoped context**
-(no shared state with the generator). Provide the evaluator with:
+At batch boundaries, dispatch an evaluator agent (see the model table below for the right
+model per tier and batch position) with **fresh, scoped context** (no shared state with the
+generator). Provide the evaluator with:
 - The **git diff** for this batch only (not the full codebase)
 - The **acceptance criteria** for this batch's tasks (extracted from stories, not full story files)
 - The **test output summary** (pass/fail counts + failure snippets, not full verbose output)
@@ -127,11 +147,20 @@ At batch boundaries, dispatch an evaluator agent with `model="opus"` and **fresh
 Do NOT send full story files, full plan files, or unrelated source files. The evaluator
 runs the full 3-stage review from the `code-review` skill on this scoped context.
 
-**Evaluator frequency scaling by complexity tier:**
-- **Small features:** Final review only — skip intermediate batch evaluators. Domain review
-  in TDD provides sufficient quality gating for small changes.
-- **Medium features:** Every 8 tasks, plus always on the final batch.
-- **Large features (>15 tasks):** Every 4 tasks (current behavior).
+**Evaluator frequency + model scaling by complexity tier:**
+
+| Tier | Intermediate batches | Final batch | Intermediate model | Final model |
+|------|---------------------|-------------|--------------------|-------------|
+| **Small** | Skipped | Always | — | Sonnet |
+| **Medium** | Every 8 tasks | Always | **Sonnet** | **Opus** |
+| **Large (>15 tasks)** | Every 4 tasks | Always | Sonnet | Opus |
+
+Rationale: intermediate-batch reviews check compliance against a narrow diff + a handful
+of acceptance criteria — a task Sonnet handles well. The final batch review evaluates
+cross-batch integration and the full architectural picture, which is where Opus's deeper
+reasoning pays off. Retro on the 2026-04-17 Medium run (31 tasks, 7 batches) showed all
+4 intermediate evaluators could have run on Sonnet without verdict drift — they were the
+largest single token line item in that run.
 
 Pre-batch verification (full test suite, linter, `/simplify`) still runs at EVERY boundary
 regardless of tier.
@@ -141,10 +170,22 @@ regardless of tier.
 add a lightweight integration check (full branch stat summary) but do NOT re-review earlier
 batches line by line — they already passed their own evaluator gate.
 
-**Enforcement:** After each batch, write the evaluator verdict to
-`.pipeline/audit-trail/batch-N/review.json`. If this file does not exist for the current
-batch, the next batch CANNOT start. The pipeline must check for the verdict file before
-proceeding — not rely on the agent remembering to dispatch the evaluator.
+**Enforcement — orchestrator writes, not the subagent.** After the evaluator agent
+returns, the orchestrator (not the evaluator subagent) MUST perform these three actions
+atomically before advancing one single token further:
+
+1. `mkdir -p .pipeline/audit-trail/batch-N`
+2. Write the full evaluator return (verdict, findings, severity, diff scope) to
+   `.pipeline/audit-trail/batch-N/review.json`
+3. Stat-check `test -s .pipeline/audit-trail/batch-N/review.json` — non-empty file must
+   exist before the next batch starts
+
+A missing or empty `review.json` is a hard gate: the pipeline MUST halt and dispatch the
+evaluator again rather than advancing. Do NOT trust "the evaluator ran successfully in
+the transcript" as evidence — only the file on disk counts. Past runs have silently
+bypassed 4+ evaluator gates because the subagent result was summarized back to the
+orchestrator but the write step was skipped; the file check is the only reliable
+safeguard.
 
 The evaluator runs:
 
@@ -173,6 +214,41 @@ across an entire pipeline run. This is the harness's strongest quality mechanism
 gate (Step 10 in `/conduct`). After the final batch evaluator returns APPROVE, write a marker
 file at `.pipeline/audit-trail/code-review-satisfied.md` containing the verdict date and batch
 number. When pipeline is used, a separate `/code-review` dispatch is not needed.
+
+### Halt-and-Escalate (Explicit User-Input Required)
+
+When pipeline detects a state that NO automated retry could resolve — a scope
+mismatch between the complexity tier and the task list, an ambiguous requirement
+that needs user judgement, a decision between two approaches where the plan
+doesn't specify, etc. — do NOT output a rhetorical question like "here are
+three options, what would you prefer?" as a wrap-up. Autonomous retries will
+re-dispatch Claude against the same unresolved question and burn the retry
+budget without producing new task completions.
+
+Instead, write a marker file and exit:
+
+```bash
+mkdir -p .pipeline
+echo "Need user decision: <one-line summary of the blocker>" > \
+  .pipeline/halt-user-input-required
+```
+
+The conductor's build-retry loop checks for this file after each attempt. When
+present, it:
+
+1. Emits a `build_stall` event (reason: `halt_marker`).
+2. Clears the marker (ack).
+3. Opens an interactive Claude REPL scoped to the build step, so the user
+   can discuss the blocker with Claude and take action.
+4. Re-checks the completion predicate once the REPL exits.
+5. Either succeeds (user + Claude resolved enough tasks) or falls into the
+   normal recovery menu.
+
+**Also triggered implicitly** when two consecutive build attempts produce zero
+new task completions (measured via `.pipeline/task-status.json` resolved count).
+So even if you forget to write the marker, the circuit breaker catches the
+stall — but writing the marker is the polite contract: it labels the reason
+and prevents a speculative second retry.
 
 ### Retry Pre-Check (Connection Interruption Recovery)
 
@@ -281,7 +357,38 @@ When the rework budget is exhausted, consider reverting to the last clean batch 
 
 ### Pipeline Summary
 
-Track tasks completed/total, rework cycles used, human interventions triggered, and elapsed time (first task start to last commit). This data feeds directly into the `retro` skill.
+**GATE: At final-task completion, write `.pipeline/summary.json` before marking the
+pipeline done.** The retro skill reads this file; if it is missing, retro has to spawn an
+Explore agent to recompute stats from git log + task-status.json. That is wasted tokens.
+
+Required fields (all numeric unless noted):
+
+```json
+{
+  "plan_ref": "<relative path to plan file>",
+  "complexity_tier": "S|M|L",
+  "autonomy_level": "conservative|standard|full",
+  "tasks_total": 0,
+  "tasks_completed": 0,
+  "tasks_skipped": 0,
+  "batches_total": 0,
+  "batches_with_evaluator": 0,
+  "rework_cycles_used": 0,
+  "human_interventions": 0,
+  "started_at": "<ISO-8601>",
+  "completed_at": "<ISO-8601>",
+  "elapsed_seconds": 0,
+  "first_commit": "<SHA>",
+  "last_commit": "<SHA>"
+}
+```
+
+Counts come from `.pipeline/task-status.json` and `.pipeline/audit-trail/`. Timestamps
+come from `session-created` (start) and the write time (end). Commit SHAs come from
+`git log --format=%H --reverse <plan-ref-commit>..HEAD` (first + last).
+
+Do NOT defer this to the `/retro` skill — by retro time the session may have compacted
+mid-task telemetry. Write the file while the data is still in context.
 
 ## Verification
 

@@ -11,6 +11,7 @@ HARNESS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 SKILLS_DIR="${HOME}/.claude/skills"
 LOCAL_BIN="${HOME}/.local/bin"
 CONDUCTOR_CONFIG="${HOME}/.claude/ai-conductor.config.json"
+HARNESS_USER_CONFIG="${HOME}/.ai-conductor/config.yml"
 
 # UPDATE_MODE=true skips first-run-only work (dependency bootstrap, channel
 # prompt). Set via the --update flag; used by bin/migrate after an accepted
@@ -88,10 +89,16 @@ check_installation() {
 
   # Check dependencies
   echo ""
-  if command -v glow &>/dev/null; then
-    ok "glow installed (artifact review)"
+  if [ -f "$HARNESS_USER_CONFIG" ] && grep -q "^markdown_viewer:" "$HARNESS_USER_CONFIG" 2>/dev/null; then
+    local mv_cmd
+    mv_cmd=$(python3 -c "import yaml,sys; c=yaml.safe_load(open('$HARNESS_USER_CONFIG')) or {}; print((c.get('markdown_viewer') or {}).get('command',''))" 2>/dev/null)
+    if [ -n "$mv_cmd" ] && command -v "$mv_cmd" &>/dev/null; then
+      ok "markdown viewer: ${mv_cmd} (artifact review)"
+    else
+      warn "markdown viewer '${mv_cmd:-unset}' configured but not on PATH — will fall back to cat"
+    fi
   else
-    warn "glow not installed — artifact review will use cat fallback"
+    warn "markdown viewer not configured — run ./bin/install to select one"
   fi
   if command -v node &>/dev/null && npm list -g @modelcontextprotocol/server-puppeteer &>/dev/null; then
     ok "puppeteer MCP server installed"
@@ -362,51 +369,9 @@ install_dependencies() {
   echo ""
   echo -e "${BOLD}Dependencies${NC}"
 
-  # glow — terminal markdown renderer (for artifact review in conduct)
-  if command -v glow &>/dev/null; then
-    ok "glow already installed"
-  else
-    info "Installing glow (terminal markdown renderer)..."
-    local glow_installed=false
-    if command -v brew &>/dev/null; then
-      brew install glow 2>/dev/null && glow_installed=true
-    fi
-    if ! $glow_installed && command -v go &>/dev/null; then
-      go install github.com/charmbracelet/glow@latest 2>/dev/null && glow_installed=true
-    fi
-    # Direct binary download (works on Linux/WSL when package managers aren't available)
-    if ! $glow_installed; then
-      local arch
-      arch=$(uname -m)
-      case "$arch" in
-        x86_64)  arch="x86_64" ;;
-        aarch64) arch="arm64" ;;
-        *)       arch="" ;;
-      esac
-      if [ -n "$arch" ]; then
-        local glow_ver="2.1.0"
-        local glow_url="https://github.com/charmbracelet/glow/releases/download/v${glow_ver}/glow_${glow_ver}_Linux_${arch}.tar.gz"
-        local glow_tmp="/tmp/glow-install-$$"
-        mkdir -p "$glow_tmp"
-        if curl -sL "$glow_url" -o "${glow_tmp}/glow.tar.gz" 2>/dev/null; then
-          tar -xzf "${glow_tmp}/glow.tar.gz" -C "$glow_tmp" --strip-components=1 2>/dev/null
-          if [ -f "${glow_tmp}/glow" ]; then
-            mkdir -p "${HOME}/.local/bin"
-            mv "${glow_tmp}/glow" "${HOME}/.local/bin/glow"
-            chmod +x "${HOME}/.local/bin/glow"
-            glow_installed=true
-          fi
-        fi
-        rm -rf "$glow_tmp"
-      fi
-    fi
-    if $glow_installed; then
-      ok "glow installed"
-    else
-      warn "glow not installed — artifact review will use batcat/cat fallback"
-      info "Install manually: https://github.com/charmbracelet/glow#installation"
-    fi
-  fi
+  # Markdown viewer — handled by configure_md_viewer (below). Earlier versions
+  # hard-installed glow here; the viewer is now user-selectable and installed
+  # on-demand inside configure_md_viewer.
 
   # rtk — reduces token usage in Claude Code sessions
   if command -v rtk &>/dev/null; then
@@ -458,6 +423,192 @@ install_dependencies() {
   else
     warn "Node.js not found — puppeteer MCP server not installed"
   fi
+}
+
+# ─── Markdown viewer config ───────────────────────────────────────────────────
+
+# Preset table parallels src/conductor/src/engine/md-viewer-presets.ts.
+# Keep in sync if you add/remove presets on either side.
+# Columns: key | label | command | args | mode
+MD_VIEWER_PRESETS=(
+  "glow|glow       (terminal, paged)|glow|-p -w 80 {file}|inline"
+  "bat|bat        (terminal, syntax-highlighted)|bat|--style=plain --paging=never {file}|inline"
+  "mdcat|mdcat      (terminal)|mdcat|{file}|inline"
+  "code|VSCode     (GUI, code --wait)|code|--wait {file}|blocking"
+  "typora|Typora     (GUI)|typora|--wait {file}|blocking"
+  "marktext|MarkText   (GUI)|marktext|{file}|external"
+  "nvim|neovim     (terminal editor)|nvim|{file}|blocking"
+  "obsidian|Obsidian   (GUI)|obsidian|{file}|external"
+  "cat|cat        (universal fallback)|cat|{file}|inline"
+)
+
+# Try to install one of the terminal viewers via common package managers.
+# Silent best-effort; returns 0 if installed or already present, 1 otherwise.
+install_md_viewer_tool() {
+  local tool=$1
+  command -v "$tool" &>/dev/null && return 0
+  case "$tool" in
+    glow)
+      if command -v brew &>/dev/null; then
+        brew install glow &>/dev/null && return 0
+      fi
+      if command -v go &>/dev/null; then
+        go install github.com/charmbracelet/glow@latest &>/dev/null && return 0
+      fi
+      local arch
+      arch=$(uname -m)
+      case "$arch" in
+        x86_64)  arch="x86_64" ;;
+        aarch64) arch="arm64" ;;
+        *)       return 1 ;;
+      esac
+      local glow_ver="2.1.0"
+      local glow_url="https://github.com/charmbracelet/glow/releases/download/v${glow_ver}/glow_${glow_ver}_Linux_${arch}.tar.gz"
+      local glow_tmp="/tmp/glow-install-$$"
+      mkdir -p "$glow_tmp"
+      if curl -sL "$glow_url" -o "${glow_tmp}/glow.tar.gz" 2>/dev/null; then
+        tar -xzf "${glow_tmp}/glow.tar.gz" -C "$glow_tmp" --strip-components=1 2>/dev/null
+        if [ -f "${glow_tmp}/glow" ]; then
+          mkdir -p "${HOME}/.local/bin"
+          mv "${glow_tmp}/glow" "${HOME}/.local/bin/glow"
+          chmod +x "${HOME}/.local/bin/glow"
+          rm -rf "$glow_tmp"
+          return 0
+        fi
+      fi
+      rm -rf "$glow_tmp"
+      return 1
+      ;;
+    bat)
+      if command -v brew &>/dev/null; then
+        brew install bat &>/dev/null && return 0
+      fi
+      if command -v apt-get &>/dev/null; then
+        sudo apt-get install -y bat &>/dev/null && return 0
+      fi
+      return 1
+      ;;
+    mdcat)
+      if command -v brew &>/dev/null; then
+        brew install mdcat &>/dev/null && return 0
+      fi
+      if command -v cargo &>/dev/null; then
+        cargo install mdcat &>/dev/null && return 0
+      fi
+      return 1
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+# Persist the chosen viewer to ~/.ai-conductor/config.yml. Uses Python+yaml
+# so existing keys (e.g. conductor.*) are preserved.
+write_md_viewer_config() {
+  local preset=$1 cmd=$2 args=$3 mode=$4
+  mkdir -p "$(dirname "$HARNESS_USER_CONFIG")"
+  CFG_PATH="$HARNESS_USER_CONFIG" PRESET="$preset" CMD="$cmd" ARGS="$args" MODE="$mode" python3 - <<'PY'
+import os, yaml
+from pathlib import Path
+p = Path(os.environ["CFG_PATH"])
+try:
+    cfg = yaml.safe_load(p.read_text()) if p.exists() else {}
+except Exception:
+    cfg = {}
+if cfg is None:
+    cfg = {}
+cfg["markdown_viewer"] = {
+    "preset": os.environ["PRESET"],
+    "command": os.environ["CMD"],
+    "args": os.environ["ARGS"].split(),
+    "mode": os.environ["MODE"],
+}
+p.parent.mkdir(parents=True, exist_ok=True)
+p.write_text(yaml.safe_dump(cfg, sort_keys=False, default_flow_style=False))
+PY
+}
+
+# Prompt the user for a markdown viewer preset, probe PATH for availability,
+# optionally install the chosen terminal tool, and persist the selection.
+# Skipped entirely in --update mode (leaves any existing selection alone).
+configure_md_viewer() {
+  # Skip in non-interactive or update-mode runs. Emit a nudge if nothing is
+  # configured yet so users know how to set it later.
+  if [ "$UPDATE_MODE" = true ] || [ ! -t 0 ]; then
+    if ! grep -q "^markdown_viewer:" "$HARNESS_USER_CONFIG" 2>/dev/null; then
+      info "markdown viewer not configured — run bin/install (no flags) or edit $HARNESS_USER_CONFIG"
+    fi
+    return 0
+  fi
+
+  echo ""
+  info "Markdown viewer — how should /conduct display artifacts for review?"
+  echo "    [*] = installed and on PATH"
+  echo ""
+  local i=1
+  local -a preset_keys=()
+  local default_idx=""
+  local entry key label cmd args mode marker
+  for entry in "${MD_VIEWER_PRESETS[@]}"; do
+    IFS='|' read -r key label cmd args mode <<< "$entry"
+    preset_keys+=("$entry")
+    if command -v "$cmd" &>/dev/null; then
+      marker=" [*]"
+      [ -z "$default_idx" ] && default_idx=$i
+    else
+      marker=""
+    fi
+    printf "    %d) %s%s\n" "$i" "$label" "$marker"
+    i=$((i + 1))
+  done
+  printf "    %d) Custom    (enter a command)\n" "$i"
+  [ -z "$default_idx" ] && default_idx=1
+
+  local choice
+  read -r -p "  Choice [${default_idx}]: " choice
+  choice=${choice:-$default_idx}
+
+  if [ "$choice" = "$i" ]; then
+    # Custom preset — ask for everything.
+    local c_cmd c_args c_mode
+    read -r -p "    command (e.g. glow, code, obsidian): " c_cmd
+    read -r -p "    args (must include {file}) [${c_cmd} {file}]: " c_args
+    c_args=${c_args:-"{file}"}
+    read -r -p "    mode (inline|blocking|external) [inline]: " c_mode
+    c_mode=${c_mode:-inline}
+    case "$c_mode" in
+      inline|blocking|external) ;;
+      *) warn "invalid mode '${c_mode}' — defaulting to inline"; c_mode=inline ;;
+    esac
+    if [[ "$c_args" != *"{file}"* ]]; then
+      warn "args must contain {file} — appending"
+      c_args="${c_args} {file}"
+    fi
+    write_md_viewer_config "custom" "$c_cmd" "$c_args" "$c_mode"
+    ok "Markdown viewer: custom (${c_cmd})"
+    return 0
+  fi
+
+  if ! [[ "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -lt 1 ] || [ "$choice" -ge "$i" ]; then
+    warn "invalid choice '${choice}' — defaulting to preset ${default_idx}"
+    choice=$default_idx
+  fi
+
+  IFS='|' read -r key label cmd args mode <<< "${preset_keys[$((choice - 1))]}"
+
+  if ! command -v "$cmd" &>/dev/null; then
+    info "Trying to install ${key}..."
+    if install_md_viewer_tool "$key"; then
+      ok "${key} installed"
+    else
+      warn "${key} not installed automatically — the viewer will fall back to cat until you install it"
+      info "Install manually, then re-run bin/install"
+    fi
+  fi
+
+  write_md_viewer_config "$key" "$cmd" "$args" "$mode"
+  ok "Markdown viewer: ${key} (${mode})"
 }
 
 # ─── AI Conductor config (channel, current version) ──────────────────────────
@@ -610,6 +761,33 @@ install() {
     ok "Installed conduct script to ${conduct_target}"
   fi
 
+  # 3b. Symlink conduct-ts (TypeScript conductor) if the dist bundle exists.
+  # conduct-ts is the engine-layer rewrite of conduct; users opt in today by
+  # invoking `conduct-ts` explicitly. The bundle is produced by
+  # `npm run build` inside src/conductor/; skip the symlink if it's missing
+  # (fresh checkout without a build).
+  local conduct_ts_source="${HARNESS_DIR}/bin/conduct-ts"
+  local conduct_ts_target="${LOCAL_BIN}/conduct-ts"
+  local conduct_ts_dist="${HARNESS_DIR}/src/conductor/dist/index.js"
+
+  if [ -f "$conduct_ts_dist" ]; then
+    if [ -L "$conduct_ts_target" ]; then
+      local current_ts
+      current_ts=$(readlink -f "$conduct_ts_target" 2>/dev/null || echo "")
+      if [ "$current_ts" != "$conduct_ts_source" ]; then
+        ln -sfn "$conduct_ts_source" "$conduct_ts_target"
+        ok "Updated conduct-ts script symlink"
+      else
+        ok "conduct-ts script already current"
+      fi
+    else
+      ln -sfn "$conduct_ts_source" "$conduct_ts_target"
+      ok "Installed conduct-ts script to ${conduct_ts_target}"
+    fi
+  else
+    info "conduct-ts bundle not found (run 'npm run build' in src/conductor/); skipping symlink"
+  fi
+
   # 4. Configure Claude Code permissions and hooks
   local settings_file="${HOME}/.claude/settings.json"
   configure_permissions "$settings_file"
@@ -632,6 +810,9 @@ install() {
 
   # 6b. Seed or refresh the AI-conductor config (channel prompt only on first run)
   configure_conductor
+
+  # 6c. Prompt for a markdown viewer (skipped on --update)
+  configure_md_viewer
 
   # 7. Check Claude Code
   if command -v claude &>/dev/null; then

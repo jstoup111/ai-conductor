@@ -141,6 +141,29 @@ When no blocking conflicts remain:
 - Note any accepted degrading conflicts
 - Suggest invoking the `plan` skill
 
+### 7. Signal Review Requirement
+
+Before exiting, decide whether the conductor should prompt the user to review
+the conflict report(s). Review mode for this step is **conditional** — auto-approved
+unless you write a marker file.
+
+Write `.pipeline/review-required-conflict_check` (any content; the file's
+existence is the signal) if ANY of the following is true:
+
+- Blocking conflicts were found (even if resolved — the user should see what
+  was reconciled)
+- Degrading conflicts were accepted
+- Any conflict resolution created a superseding ADR
+
+If the report shows zero conflicts and zero resolutions, do NOT write the
+marker — the conductor will auto-approve and move to the next step.
+
+```bash
+# Example: write the marker when issues were found
+mkdir -p .pipeline
+echo "blocking conflicts resolved: 2, degrading accepted: 1" > .pipeline/review-required-conflict_check
+```
+
 ## Verification
 
 - [ ] All stories in `.docs/stories/` scanned (not just new ones)
@@ -151,3 +174,5 @@ When no blocking conflicts remain:
 - [ ] Conflict reports saved to `.docs/conflicts/`
 - [ ] Re-check passed clean after resolutions
 - [ ] Zero blocking conflicts remain before proceeding
+- [ ] `.pipeline/review-required-conflict_check` marker written IF any conflict
+      was found/resolved or degrading conflict was accepted (skip if truly clean)
