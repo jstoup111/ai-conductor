@@ -15,8 +15,8 @@ No custom runtime. Claude Code is the execution engine.
 ## Install
 
 ```bash
-git clone https://github.com/jamesstoup/james-stoup-agents.git
-cd james-stoup-agents
+git clone git@github.com:jstoup111/ai-conductor.git
+cd ai-conductor
 # Optional: build the TypeScript conductor bundle if you want to try conduct-ts
 (cd src/conductor && npm install && npm run build)
 ./bin/install
@@ -246,7 +246,7 @@ cd ../..
 ## Project Structure
 
 ```
-james-stoup-agents/
+ai-conductor/
 ├── bin/
 │   ├── install              # Install/update/uninstall harness
 │   ├── conduct              # Stable bash SDLC runner
