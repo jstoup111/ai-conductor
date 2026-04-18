@@ -73,12 +73,18 @@ Categories:
 - Pre-flight `ensureClaudeSettings(projectRoot)` at conductor startup.
   Before any Claude dispatch, `conduct-ts` checks for
   `$PROJECT_ROOT/.claude/settings.json`; if absent, it writes one with
-  project-scoped Read/Edit/Write rules. Solves the chicken-and-egg where
+  project-scoped Read/Edit/Write rules plus a baseline Bash allow-list
+  for harness tooling (`git`, `gh`, `rtk`, `npm`, `npx`, `node`, `mkdir`,
+  `touch`, `chmod`, `ln`, `glow`). Solves the chicken-and-egg where
   bootstrap is supposed to write its own permission file (step 3d-i)
-  but can't do so without permission to write. Idempotent — existing
-  files are preserved, so user customizations and bootstrap's own
-  generation on a later run remain authoritative. 8 unit tests cover
-  the create-if-missing / never-overwrite / scope-correctness matrix.
+  but can't do so without permission to write. Stack-specific tooling
+  (bundle, rails, pytest, cargo, go…) is intentionally NOT in the
+  baseline — bootstrap adds those per detected stack so dead rules
+  don't accumulate. Idempotent — existing files are preserved, so user
+  customizations and bootstrap's own generation on a later run remain
+  authoritative. 10 unit tests cover create-if-missing /
+  never-overwrite / scope-correctness / baseline-Bash-allows /
+  no-stack-specific-pollution.
 - `INTERACTIVE_STEPS` — conversational steps (`brainstorm`, `stories`,
   `plan`, `architecture_review`, `manual_test`) now open a real Claude
   REPL (positional prompt, no `-p`) instead of one-shot print mode,

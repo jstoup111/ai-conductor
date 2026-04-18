@@ -34,11 +34,63 @@ describe('preflight', () => {
       const path = join(dir, '.claude', 'settings.json');
       const parsed = JSON.parse(await readFile(path, 'utf-8'));
       const scope = dir.slice(1); // strip leading slash
-      expect(parsed.permissions.allow).toEqual([
+
+      // Project file-op rules first, path-scoped.
+      expect(parsed.permissions.allow.slice(0, 3)).toEqual([
         `Read(//${scope}/**)`,
         `Edit(//${scope}/**)`,
         `Write(//${scope}/**)`,
       ]);
+    });
+
+    it('includes baseline Bash allows for harness tooling', async () => {
+      await ensureClaudeSettings(dir);
+
+      const path = join(dir, '.claude', 'settings.json');
+      const parsed = JSON.parse(await readFile(path, 'utf-8'));
+
+      // These are the tools skills invoke routinely; their presence means
+      // the first `gh pr create`, `git log`, `rtk read`, `npm install`, etc
+      // doesn't fire a permission prompt.
+      const expected = [
+        'Bash(git:*)',
+        'Bash(gh:*)',
+        'Bash(rtk:*)',
+        'Bash(npm:*)',
+        'Bash(npx:*)',
+        'Bash(node:*)',
+        'Bash(mkdir:*)',
+        'Bash(touch:*)',
+        'Bash(chmod:*)',
+        'Bash(ln:*)',
+        'Bash(glow:*)',
+      ];
+      for (const rule of expected) {
+        expect(parsed.permissions.allow).toContain(rule);
+      }
+    });
+
+    it('does NOT include stack-specific tools (those belong to bootstrap)', async () => {
+      await ensureClaudeSettings(dir);
+
+      const path = join(dir, '.claude', 'settings.json');
+      const parsed = JSON.parse(await readFile(path, 'utf-8'));
+
+      // Ruby/Rails, Python, Rust, Go tooling is project-dependent — projects
+      // that don't use these shouldn't carry dead allow rules. Bootstrap
+      // adds them per detected stack.
+      const forbidden = [
+        'Bash(bundle:*)',
+        'Bash(rails:*)',
+        'Bash(rake:*)',
+        'Bash(pytest:*)',
+        'Bash(pip:*)',
+        'Bash(cargo:*)',
+        'Bash(go:*)',
+      ];
+      for (const rule of forbidden) {
+        expect(parsed.permissions.allow).not.toContain(rule);
+      }
     });
 
     it('creates the .claude/ directory if it does not exist', async () => {

@@ -37,6 +37,33 @@ export async function ensureClaudeSettings(projectRoot: string): Promise<void> {
   await writeFile(settingsPath, contents, 'utf-8');
 }
 
+/**
+ * Baseline Bash allow-list for harness operations. These are tools that the
+ * skills invoke on essentially every project type — denying them would force
+ * a permission prompt on nearly every step, which is the exact noise the
+ * preflight exists to avoid.
+ *
+ * Stack-specific tooling (bundle/rails/rake for Ruby, pytest/pip for Python,
+ * cargo for Rust, go, etc.) is NOT included here — those belong in the
+ * bootstrap step's stack-detection output, so projects that don't use them
+ * don't carry dead allow rules. Anything a user's skill needs beyond this
+ * list can be appended to `.claude/settings.json` or (for machine-specific
+ * overrides) `.claude/settings.local.json`.
+ */
+const BASELINE_BASH_ALLOWS: readonly string[] = [
+  'Bash(git:*)',
+  'Bash(gh:*)',
+  'Bash(rtk:*)',
+  'Bash(npm:*)',
+  'Bash(npx:*)',
+  'Bash(node:*)',
+  'Bash(mkdir:*)',
+  'Bash(touch:*)',
+  'Bash(chmod:*)',
+  'Bash(ln:*)',
+  'Bash(glow:*)',
+];
+
 export function buildSettingsJson(projectRoot: string): string {
   const scope = projectRoot.startsWith('/') ? projectRoot.slice(1) : projectRoot;
   const payload = {
@@ -46,6 +73,7 @@ export function buildSettingsJson(projectRoot: string): string {
         `Read(//${scope}/**)`,
         `Edit(//${scope}/**)`,
         `Write(//${scope}/**)`,
+        ...BASELINE_BASH_ALLOWS,
       ],
     },
   };
