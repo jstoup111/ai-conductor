@@ -63,6 +63,13 @@ Categories:
   (`Read`/`Edit`/`Write` under the bootstrapped directory, including
   dotfiles) so downstream skills don't block on permission prompts when
   they touch harness artifacts.
+- `bin/install` now symlinks `conduct-ts` into `~/.local/bin` alongside
+  the bash `conduct` when `src/conductor/dist/index.js` is present.
+  `bin/conduct-ts` resolves its own path via `readlink -f` so the
+  symlink works, and it honors the conductor-pinned Node version via
+  `ASDF_NODEJS_VERSION` (reading `src/conductor/.tool-versions`) so
+  users with an older default Node don't hit the `addAbortListener`
+  import error from execa.
 - `bootstrap` step 3d-ii — pre-PR lint hook. Bootstrap now detects the
   project's lint command (stack-specific table: npm + tsc, rubocop +
   sorbet, ruff + mypy, clippy, go vet) and writes a `PreToolUse` hook in

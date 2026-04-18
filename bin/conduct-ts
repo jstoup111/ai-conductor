@@ -1,2 +1,29 @@
 #!/bin/bash
-exec node "$(dirname "$0")/../src/conductor/dist/index.js" "$@"
+# Resolve the real script path so the binary works when symlinked into
+# ~/.local/bin (otherwise dirname resolves to ~/.local/bin and the dist/
+# path lookup breaks).
+set -e
+REAL_PATH="$(readlink -f "$0")"
+BIN_DIR="$(dirname "$REAL_PATH")"
+CONDUCTOR_DIR="${BIN_DIR}/../src/conductor"
+DIST="${CONDUCTOR_DIR}/dist/index.js"
+
+if [ ! -f "$DIST" ]; then
+  echo "conduct-ts: missing ${DIST}" >&2
+  echo "conduct-ts: run 'npm run build' in src/conductor/" >&2
+  exit 1
+fi
+
+# Honor the conductor's pinned Node version via asdf, so conduct-ts works
+# from any working directory regardless of the project's own .tool-versions.
+# The conductor bundle targets node20; anything older throws on execa
+# imports (addAbortListener from node:events landed in 20).
+TOOL_VERSIONS="${CONDUCTOR_DIR}/.tool-versions"
+if [ -f "$TOOL_VERSIONS" ] && command -v asdf >/dev/null 2>&1; then
+  PINNED_NODE=$(awk '$1 == "nodejs" {print $2; exit}' "$TOOL_VERSIONS")
+  if [ -n "$PINNED_NODE" ]; then
+    export ASDF_NODEJS_VERSION="$PINNED_NODE"
+  fi
+fi
+
+exec node "$DIST" "$@"

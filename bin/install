@@ -610,6 +610,33 @@ install() {
     ok "Installed conduct script to ${conduct_target}"
   fi
 
+  # 3b. Symlink conduct-ts (TypeScript conductor) if the dist bundle exists.
+  # conduct-ts is the engine-layer rewrite of conduct; users opt in today by
+  # invoking `conduct-ts` explicitly. The bundle is produced by
+  # `npm run build` inside src/conductor/; skip the symlink if it's missing
+  # (fresh checkout without a build).
+  local conduct_ts_source="${HARNESS_DIR}/bin/conduct-ts"
+  local conduct_ts_target="${LOCAL_BIN}/conduct-ts"
+  local conduct_ts_dist="${HARNESS_DIR}/src/conductor/dist/index.js"
+
+  if [ -f "$conduct_ts_dist" ]; then
+    if [ -L "$conduct_ts_target" ]; then
+      local current_ts
+      current_ts=$(readlink -f "$conduct_ts_target" 2>/dev/null || echo "")
+      if [ "$current_ts" != "$conduct_ts_source" ]; then
+        ln -sfn "$conduct_ts_source" "$conduct_ts_target"
+        ok "Updated conduct-ts script symlink"
+      else
+        ok "conduct-ts script already current"
+      fi
+    else
+      ln -sfn "$conduct_ts_source" "$conduct_ts_target"
+      ok "Installed conduct-ts script to ${conduct_ts_target}"
+    fi
+  else
+    info "conduct-ts bundle not found (run 'npm run build' in src/conductor/); skipping symlink"
+  fi
+
   # 4. Configure Claude Code permissions and hooks
   local settings_file="${HOME}/.claude/settings.json"
   configure_permissions "$settings_file"
