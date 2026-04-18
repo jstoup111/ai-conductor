@@ -209,10 +209,35 @@ export function getPrerequisites(step: StepName): StepName[] {
 
 export function buildStepRegistry(config: HarnessConfig): StepDefinition[] {
   const result = [...ALL_STEPS];
-  const additions = config.steps?.add ?? [];
+
+  // Custom steps are entries under config.steps whose name isn't in ALL_STEPS.
+  // Each has `after` (insertion target) and `skill` (SKILL.md path). Entries
+  // that match built-in step names are treated as per-step overrides, not
+  // additions, and are ignored here.
+  const builtInNames = new Set(result.map((s) => s.name as string));
+  type Addition = {
+    name: string;
+    after: string;
+    skill: string;
+    enforcement: import('../types/index.js').EnforcementLevel;
+  };
+  const additions: Addition[] = [];
+  for (const [name, cfg] of Object.entries(config.steps ?? {})) {
+    if (builtInNames.has(name)) continue;
+    if (!cfg || typeof cfg !== 'object') continue;
+    const after = (cfg as { after?: string }).after;
+    const skill = (cfg as { skill?: string }).skill;
+    if (!after || !skill) continue;
+    additions.push({
+      name,
+      after,
+      skill,
+      enforcement: ((cfg as { enforcement?: import('../types/index.js').EnforcementLevel }).enforcement ?? 'advisory'),
+    });
+  }
 
   // Group insertions by their `after` target, preserving config order
-  const insertionsByTarget = new Map<string, typeof additions>();
+  const insertionsByTarget = new Map<string, Addition[]>();
   for (const custom of additions) {
     const list = insertionsByTarget.get(custom.after) ?? [];
     list.push(custom);
@@ -220,7 +245,6 @@ export function buildStepRegistry(config: HarnessConfig): StepDefinition[] {
   }
 
   // Process each target: find position in current result, insert all steps after it
-  // Work backwards through the result to avoid index shifting issues
   for (const [target, customs] of insertionsByTarget) {
     const targetIdx = result.findIndex((s) => s.name === target);
     if (targetIdx === -1) continue; // validation catches this separately

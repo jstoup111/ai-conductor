@@ -230,12 +230,14 @@ async function main(): Promise<void> {
 
   const events = new ConductorEventEmitter();
   const provider = new ClaudeProvider();
+  const mode: RunMode = opts.auto ? 'auto' : 'default';
   const stepRunner = new DefaultStepRunner(provider, sessionId, projectRoot, {
     featureDesc: opts.featureDesc,
     pipelineDir,
     stepCooldown: opts.cooldown,
     config,
     modelOverride: opts.model,
+    mode,
   });
 
   // Set up terminal UI with live dashboard
@@ -262,8 +264,6 @@ async function main(): Promise<void> {
       await writeState(stateFilePath, state);
     }
   }
-
-  const mode: RunMode = opts.auto ? 'auto' : 'default';
 
   console.log(`\n## Conductor: ${opts.featureDesc ?? '(resuming)'}\n`);
 

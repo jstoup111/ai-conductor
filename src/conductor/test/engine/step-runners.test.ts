@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { LLMProvider, InvokeOptions, InvokeResult } from '../../src/execution/llm-provider.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
-import { DefaultStepRunner } from '../../src/engine/step-runners.js';
+import { DefaultStepRunner, parseTierFromOutput } from '../../src/engine/step-runners.js';
 
 function createMockProvider(): LLMProvider {
   return {
@@ -46,7 +46,8 @@ describe('DefaultStepRunner', () => {
 
     await runner.run('build', emptyState);
 
-    const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    // Autonomous steps use invoke() (captured output) not invokeInteractive()
+    const opts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
     expect(opts.prompt).toMatch(/\/pipeline|\/tdd/);
   });
 
@@ -56,7 +57,7 @@ describe('DefaultStepRunner', () => {
 
     await runner.run('build', emptyState);
 
-    const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    const opts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
     expect(opts.dangerouslySkipPermissions).toBe(true);
   });
 
@@ -76,7 +77,8 @@ describe('DefaultStepRunner', () => {
 
     await runner.run('worktree', emptyState);
 
-    const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    // Autonomous → invoke()
+    const opts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
     expect(opts.dangerouslySkipPermissions).toBe(true);
   });
 
@@ -113,11 +115,11 @@ describe('DefaultStepRunner', () => {
     const provider = createMockProvider();
     const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project');
 
-    await runner.run('worktree', emptyState);
-    await runner.run('memory', emptyState);
+    await runner.run('worktree', emptyState); // autonomous → invoke
+    await runner.run('memory', emptyState);   // autonomous → invoke
 
-    const call1 = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
-    const call2 = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[1][0] as InvokeOptions;
+    const call1 = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    const call2 = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[1][0] as InvokeOptions;
     expect(call1.resume).toBe(false);
     expect(call2.resume).toBe(true);
   });
@@ -160,11 +162,11 @@ describe('DefaultStepRunner', () => {
       totalSteps: 14,
     });
 
-    // build is autonomous
+    // build is autonomous → invoke() path
     await runner.run('build', emptyState);
 
-    const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
-    expect(opts.systemPrompt).toContain('[Conduct step 11/14]');
+    const opts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    expect(opts.systemPrompt).toContain('Feature: Add user auth');
     expect(opts.systemPrompt).not.toContain('Complete ONLY this step');
   });
 
@@ -225,7 +227,12 @@ describe('DefaultStepRunner', () => {
 
     it('does not write marker when step fails', async () => {
       const provider = createMockProvider();
-      (provider.invokeInteractive as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('crash'));
+      // worktree is autonomous → invoke() path. Mock it to return failure.
+      (provider.invoke as ReturnType<typeof vi.fn>).mockResolvedValue({
+        success: false,
+        output: 'step exited nonzero',
+        exitCode: 1,
+      });
       const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
         pipelineDir: pipeDir,
       });
@@ -292,11 +299,12 @@ describe('DefaultStepRunner', () => {
         sleepFn: sleepSpy,
       });
 
-      // Run 11 steps (first has no cooldown, steps 2-10 use base, step 11 uses 2x)
+      // Run 11 steps (first has no cooldown, steps 2-10 use base, step 11 uses 2x).
+      // complexity is engine-managed, so it is excluded from runner.run paths.
       const steps: StepName[] = [
-        'worktree', 'memory', 'brainstorm', 'complexity', 'stories',
-        'conflict_check', 'plan', 'architecture_diagram', 'architecture_review',
-        'acceptance_specs', 'build',
+        'worktree', 'memory', 'brainstorm', 'stories', 'conflict_check',
+        'plan', 'architecture_diagram', 'architecture_review',
+        'acceptance_specs', 'build', 'manual_test',
       ];
       for (const step of steps) {
         await runner.run(step, emptyState);
@@ -323,6 +331,274 @@ describe('DefaultStepRunner', () => {
 
       // Last call (21st step, callCount=20 at that point) should use 3x cooldown
       expect(sleepSpy).toHaveBeenLastCalledWith(15000); // 3x * 5s
+    });
+  });
+
+  describe('complexity assessment', () => {
+    it('refuses to run() the complexity step (engine-managed)', async () => {
+      const provider = createMockProvider();
+      const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project');
+
+      await expect(runner.run('complexity' as StepName, emptyState)).rejects.toThrow(
+        /engine/i,
+      );
+    });
+
+    it('assessComplexity calls provider.invoke in print mode', async () => {
+      const provider = createMockProvider();
+      (provider.invoke as ReturnType<typeof vi.fn>).mockResolvedValue({
+        success: true,
+        output: 'Reasoning...\n\nTIER: M',
+        exitCode: 0,
+      });
+      const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project');
+
+      const tier = await runner.assessComplexity();
+
+      expect(provider.invoke).toHaveBeenCalledOnce();
+      expect(provider.invokeInteractive).not.toHaveBeenCalled();
+      expect(tier).toBe('M');
+    });
+
+    it('assessComplexity returns null when provider fails', async () => {
+      const provider = createMockProvider();
+      (provider.invoke as ReturnType<typeof vi.fn>).mockResolvedValue({
+        success: false,
+        output: 'rate limited',
+        exitCode: 1,
+      });
+      const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project');
+
+      expect(await runner.assessComplexity()).toBeNull();
+    });
+
+    it('assessComplexity returns null when output has no tier', async () => {
+      const provider = createMockProvider();
+      (provider.invoke as ReturnType<typeof vi.fn>).mockResolvedValue({
+        success: true,
+        output: 'I could not determine a clear tier from the brainstorm.',
+        exitCode: 0,
+      });
+      const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project');
+
+      expect(await runner.assessComplexity()).toBeNull();
+    });
+  });
+
+  describe('parseTierFromOutput', () => {
+    it.each([
+      ['TIER: S', 'S'],
+      ['TIER: M', 'M'],
+      ['TIER: L', 'L'],
+      ['tier: s', 'S'],
+      ['Reasoning about scope...\n\nFinal answer\n\nTIER: L', 'L'],
+      ['TIER: M\nsome trailing text\nTIER: L', 'L'], // last match wins
+    ])('extracts tier from %j → %s', (output, expected) => {
+      expect(parseTierFromOutput(output)).toBe(expected);
+    });
+
+    it('falls back to trailing standalone letter', () => {
+      expect(parseTierFromOutput('Analysis done.\n\nM.')).toBe('M');
+      expect(parseTierFromOutput('Analysis done.\n\nL')).toBe('L');
+    });
+
+    it('returns null when no tier is present', () => {
+      expect(parseTierFromOutput('')).toBeNull();
+      expect(parseTierFromOutput('no tier here')).toBeNull();
+      expect(parseTierFromOutput('TIER: X')).toBeNull();
+    });
+  });
+
+  describe('rate-limit detection', () => {
+    let pipeDir: string;
+    beforeEach(async () => {
+      pipeDir = await mkdtemp(join(tmpdir(), 'runner-ratelimit-'));
+    });
+    afterEach(async () => {
+      await rm(pipeDir, { recursive: true, force: true });
+    });
+
+    it('surfaces rateLimited=true when provider reports it', async () => {
+      const provider = createMockProvider();
+      (provider.invoke as ReturnType<typeof vi.fn>).mockResolvedValue({
+        success: false,
+        output: 'rate limit hit, try again',
+        exitCode: 1,
+        rateLimited: true,
+      });
+      const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
+        pipelineDir: pipeDir,
+      });
+
+      const result = await runner.run('worktree', emptyState);
+
+      expect(result.rateLimited).toBe(true);
+      // No marker file → default wait
+      expect(result.waitSeconds).toBe(300);
+    });
+
+    it('reads wait seconds from line 2 of the rate-limit-hit marker', async () => {
+      const provider = createMockProvider();
+      (provider.invoke as ReturnType<typeof vi.fn>).mockResolvedValue({
+        success: false,
+        output: 'rate limited',
+        exitCode: 1,
+        rateLimited: true,
+      });
+      await writeFile(join(pipeDir, 'rate-limit-hit'), 'timestamp\n450\n', 'utf-8');
+      const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
+        pipelineDir: pipeDir,
+      });
+
+      const result = await runner.run('worktree', emptyState);
+
+      expect(result.waitSeconds).toBe(450);
+    });
+
+    it('surfaces sessionExpired=true when provider reports it', async () => {
+      const provider = createMockProvider();
+      (provider.invoke as ReturnType<typeof vi.fn>).mockResolvedValue({
+        success: false,
+        output: 'No conversation found with id abc',
+        exitCode: 1,
+        sessionExpired: true,
+      });
+      const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
+        pipelineDir: pipeDir,
+      });
+
+      const result = await runner.run('worktree', emptyState);
+
+      expect(result.sessionExpired).toBe(true);
+    });
+  });
+
+  describe('resetSession', () => {
+    let pipeDir: string;
+    beforeEach(async () => {
+      pipeDir = await mkdtemp(join(tmpdir(), 'runner-reset-'));
+    });
+    afterEach(async () => {
+      await rm(pipeDir, { recursive: true, force: true });
+    });
+
+    it('deletes session-created marker and writes a fresh session ID', async () => {
+      const provider = createMockProvider();
+      const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
+        pipelineDir: pipeDir,
+      });
+
+      // Simulate a prior successful autonomous run that wrote the marker.
+      await writeFile(join(pipeDir, 'session-created'), '1', 'utf-8');
+      await writeFile(join(pipeDir, 'conduct-session-id'), 'session-1', 'utf-8');
+
+      await runner.resetSession();
+
+      // Marker gone
+      const stillExists = await access(join(pipeDir, 'session-created'))
+        .then(() => true, () => false);
+      expect(stillExists).toBe(false);
+
+      // Fresh session ID persisted
+      const newId = (await readFile(join(pipeDir, 'conduct-session-id'), 'utf-8')).trim();
+      expect(newId).not.toBe('session-1');
+      expect(newId).toMatch(/^[0-9a-f-]{36}$/);
+    });
+
+    it('tolerates resetSession when the marker never existed', async () => {
+      const provider = createMockProvider();
+      const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
+        pipelineDir: pipeDir,
+      });
+      await expect(runner.resetSession()).resolves.toBeUndefined();
+    });
+
+    it('after reset, next autonomous run uses --session-id (not --resume)', async () => {
+      const provider = createMockProvider();
+      const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
+        pipelineDir: pipeDir,
+      });
+
+      // First run — creates session
+      await runner.run('worktree', emptyState);
+      // Second run — would normally use resume (sessionStarted=true)
+      await runner.run('memory', emptyState);
+
+      // Reset and run again — should go back to resume=false
+      await runner.resetSession();
+      await runner.run('bootstrap', emptyState);
+
+      const calls = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls;
+      expect(calls[0][0].resume).toBe(false);  // first
+      expect(calls[1][0].resume).toBe(true);   // second
+      expect(calls[2][0].resume).toBe(false);  // post-reset
+    });
+  });
+
+  describe('interactive REPL dispatch for conversational steps', () => {
+    const replSteps: StepName[] = [
+      'brainstorm',
+      'stories',
+      'plan',
+      'architecture_review',
+      'manual_test',
+    ];
+
+    for (const step of replSteps) {
+      it(`${step}: passes interactive: true when mode is 'default'`, async () => {
+        const provider = createMockProvider();
+        const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
+          mode: 'default',
+        });
+
+        await runner.run(step, emptyState);
+
+        const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+        expect(opts.interactive).toBe(true);
+      });
+
+      it(`${step}: does NOT pass interactive: true when mode is 'auto'`, async () => {
+        const provider = createMockProvider();
+        const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
+          mode: 'auto',
+        });
+
+        await runner.run(step, emptyState);
+
+        const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+        expect(opts.interactive).toBe(false);
+      });
+    }
+
+    it('complexity-adjacent one-shot steps stay print-mode even in default mode', async () => {
+      const oneShotSteps: StepName[] = [
+        'conflict_check',
+        'architecture_diagram',
+        'retro',
+        'finish',
+      ];
+      for (const step of oneShotSteps) {
+        const provider = createMockProvider();
+        const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
+          mode: 'default',
+        });
+
+        await runner.run(step, emptyState);
+
+        const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+        expect(opts.interactive).toBe(false);
+      }
+    });
+
+    it('default mode is the default when options.mode is absent', async () => {
+      const provider = createMockProvider();
+      // No options → mode defaults to 'default'
+      const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project');
+
+      await runner.run('brainstorm', emptyState);
+
+      const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+      expect(opts.interactive).toBe(true);
     });
   });
 });

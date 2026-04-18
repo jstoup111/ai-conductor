@@ -70,6 +70,19 @@ Categories:
   `ASDF_NODEJS_VERSION` (reading `src/conductor/.tool-versions`) so
   users with an older default Node don't hit the `addAbortListener`
   import error from execa.
+- `INTERACTIVE_STEPS` — conversational steps (`brainstorm`, `stories`,
+  `plan`, `architecture_review`, `manual_test`) now open a real Claude
+  REPL (positional prompt, no `-p`) instead of one-shot print mode,
+  unless the conductor was invoked with `--auto`. The design of these
+  skills depends on back-and-forth with the user — one-shot print
+  closed the session after a single Claude response, so the user
+  couldn't refine scope or iterate. One-shot steps (`complexity`,
+  `conflict_check`, `architecture_diagram`, `retro`, `finish`) stay
+  print-mode — they generate artifacts from existing context without
+  user input. `--auto` still forces print mode for everything so
+  unattended runs don't block waiting for `/quit`. New `mode: RunMode`
+  option on `StepRunnerOptions`; threaded from `src/index.ts` based on
+  `--auto` flag. 12 unit tests covering the REPL dispatch matrix.
 - `bootstrap_mode` state field + `mode_skip` event. Bootstrap now persists
   the detected mode (`new` / `fresh` / `partial` / `re-bootstrap`) into
   `.pipeline/conduct-state.json`. When mode is `new` the conductor
