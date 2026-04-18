@@ -215,6 +215,41 @@ gate (Step 10 in `/conduct`). After the final batch evaluator returns APPROVE, w
 file at `.pipeline/audit-trail/code-review-satisfied.md` containing the verdict date and batch
 number. When pipeline is used, a separate `/code-review` dispatch is not needed.
 
+### Halt-and-Escalate (Explicit User-Input Required)
+
+When pipeline detects a state that NO automated retry could resolve — a scope
+mismatch between the complexity tier and the task list, an ambiguous requirement
+that needs user judgement, a decision between two approaches where the plan
+doesn't specify, etc. — do NOT output a rhetorical question like "here are
+three options, what would you prefer?" as a wrap-up. Autonomous retries will
+re-dispatch Claude against the same unresolved question and burn the retry
+budget without producing new task completions.
+
+Instead, write a marker file and exit:
+
+```bash
+mkdir -p .pipeline
+echo "Need user decision: <one-line summary of the blocker>" > \
+  .pipeline/halt-user-input-required
+```
+
+The conductor's build-retry loop checks for this file after each attempt. When
+present, it:
+
+1. Emits a `build_stall` event (reason: `halt_marker`).
+2. Clears the marker (ack).
+3. Opens an interactive Claude REPL scoped to the build step, so the user
+   can discuss the blocker with Claude and take action.
+4. Re-checks the completion predicate once the REPL exits.
+5. Either succeeds (user + Claude resolved enough tasks) or falls into the
+   normal recovery menu.
+
+**Also triggered implicitly** when two consecutive build attempts produce zero
+new task completions (measured via `.pipeline/task-status.json` resolved count).
+So even if you forget to write the marker, the circuit breaker catches the
+stall — but writing the marker is the polite contract: it labels the reason
+and prevents a speculative second retry.
+
 ### Retry Pre-Check (Connection Interruption Recovery)
 
 Before re-dispatching a task after a connection interruption or session resume:

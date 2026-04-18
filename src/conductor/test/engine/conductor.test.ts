@@ -3042,6 +3042,206 @@ describe('skip-already-resolved steps', () => {
   });
 });
 
+describe('build-step stall circuit breaker', () => {
+  let dir: string;
+  let statePath: string;
+  let events: ConductorEventEmitter;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'conductor-stall-'));
+    statePath = join(dir, 'conduct-state.json');
+    events = new ConductorEventEmitter();
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  async function seedAllArtifactsExceptTaskStatus(): Promise<void> {
+    const artifacts: Array<[string, string]> = [
+      ['.docs/decisions/technical-assessment-2026-04-18.md', 'x'],
+      ['.docs/specs/2026-04-18-feature.md', 'x'],
+      ['.docs/stories/epic-1/a.md', 'x'],
+      ['.docs/conflicts/2026-04-18.md', 'x'],
+      ['.docs/plans/2026-04-18-plan.md', 'x'],
+      ['.docs/architecture/arch.md', 'x'],
+      ['.docs/decisions/adr-001.md', 'x'],
+      ['spec/acceptance/feature_spec.rb', 'x'],
+      ['.docs/retros/2026-04-18-retro.md', 'x'],
+    ];
+    for (const [rel, content] of artifacts) {
+      const full = join(dir, rel);
+      await mkdir(full.substring(0, full.lastIndexOf('/')), { recursive: true });
+      await writeFile(full, content);
+    }
+  }
+
+  async function writeTaskStatus(completed: number, total: number): Promise<void> {
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    const tasks: Array<{ id: number; status: string }> = [];
+    for (let i = 1; i <= total; i++) {
+      tasks.push({ id: i, status: i <= completed ? 'completed' : 'pending' });
+    }
+    await writeFile(join(dir, '.pipeline/task-status.json'), JSON.stringify({ tasks }));
+  }
+
+  it('triggers build_stall after two retries with zero new task completions', async () => {
+    await seedAllArtifactsExceptTaskStatus();
+    await writeTaskStatus(2, 5); // 2/5 done — and it never changes
+
+    const runner: StepRunner & { runInteractive: ReturnType<typeof vi.fn> } = {
+      run: vi.fn().mockResolvedValue({ success: true }),
+      runInteractive: vi.fn(async () => {
+        // The "interactive session" is a no-op for the test; it simulates the
+        // user dropping in and /quitting without doing additional work.
+      }),
+    };
+
+    const stallEvents: Array<{ reason: string; before: number; after: number }> = [];
+    events.on('build_stall', (e) => {
+      if (e.type === 'build_stall') {
+        stallEvents.push({
+          reason: e.reason,
+          before: e.resolvedBefore,
+          after: e.resolvedAfter,
+        });
+      }
+    });
+
+    const onRecovery = vi.fn().mockResolvedValue('quit' as const);
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      verifyArtifacts: true,
+      maxRetries: 3,
+      onRecovery,
+    });
+
+    await conductor.run();
+
+    expect(stallEvents).toHaveLength(1);
+    expect(stallEvents[0].reason).toBe('no_task_progress');
+    expect(stallEvents[0].before).toBe(2);
+    expect(stallEvents[0].after).toBe(2);
+    expect(runner.runInteractive).toHaveBeenCalledWith('build');
+  });
+
+  it('triggers build_stall on the first retry when .pipeline/halt-user-input-required is present', async () => {
+    await seedAllArtifactsExceptTaskStatus();
+    await writeTaskStatus(3, 10);
+    // Halt marker present — conductor should stall immediately without
+    // waiting for a second retry.
+    await writeFile(join(dir, '.pipeline/halt-user-input-required'), 'scope mismatch');
+
+    const runner: StepRunner & { runInteractive: ReturnType<typeof vi.fn> } = {
+      run: vi.fn().mockResolvedValue({ success: true }),
+      runInteractive: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const stallEvents: Array<{ reason: string }> = [];
+    events.on('build_stall', (e) => {
+      if (e.type === 'build_stall') stallEvents.push({ reason: e.reason });
+    });
+
+    const onRecovery = vi.fn().mockResolvedValue('quit' as const);
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      verifyArtifacts: true,
+      maxRetries: 3,
+      onRecovery,
+    });
+
+    await conductor.run();
+
+    expect(stallEvents).toHaveLength(1);
+    expect(stallEvents[0].reason).toBe('halt_marker');
+    expect(runner.runInteractive).toHaveBeenCalledWith('build');
+    // Marker cleared after acknowledgement.
+    let markerStillThere = false;
+    try {
+      await readFile(join(dir, '.pipeline/halt-user-input-required'));
+      markerStillThere = true;
+    } catch {
+      /* marker removed — expected */
+    }
+    expect(markerStillThere).toBe(false);
+  });
+
+  it('does NOT trigger build_stall when a retry produces new task completions', async () => {
+    await seedAllArtifactsExceptTaskStatus();
+
+    let progress = 0;
+    const runner: StepRunner & { runInteractive: ReturnType<typeof vi.fn> } = {
+      run: vi.fn(async (step: StepName) => {
+        if (step === 'build') {
+          // Each build attempt marks one more task completed.
+          progress++;
+          await writeTaskStatus(progress, 4);
+        }
+        return { success: true };
+      }),
+      runInteractive: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const stallEvents: unknown[] = [];
+    events.on('build_stall', (e) => stallEvents.push(e));
+
+    const onRecovery = vi.fn().mockResolvedValue('quit' as const);
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      verifyArtifacts: true,
+      maxRetries: 5,
+      onRecovery,
+    });
+
+    await conductor.run();
+
+    // Progress was made every attempt, so no stall.
+    expect(stallEvents).toHaveLength(0);
+    expect(runner.runInteractive).not.toHaveBeenCalled();
+  });
+
+  it('proceeds as succeeded when the interactive REPL finishes the work', async () => {
+    await seedAllArtifactsExceptTaskStatus();
+    await writeTaskStatus(2, 5); // stalled at 2/5
+
+    const runner: StepRunner & { runInteractive: ReturnType<typeof vi.fn> } = {
+      run: vi.fn().mockResolvedValue({ success: true }),
+      runInteractive: vi.fn(async () => {
+        // Simulate the user + Claude finishing the remaining tasks during
+        // the interactive session.
+        await writeTaskStatus(5, 5);
+      }),
+    };
+
+    const onRecovery = vi.fn().mockResolvedValue('quit' as const);
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      verifyArtifacts: true,
+      maxRetries: 3,
+      onRecovery,
+    });
+
+    await conductor.run();
+
+    // After the REPL the completion gate passed, so the step succeeded —
+    // onRecovery should NOT have fired.
+    expect(runner.runInteractive).toHaveBeenCalledWith('build');
+    expect(onRecovery).not.toHaveBeenCalledWith('build', expect.anything(), expect.anything());
+  });
+});
+
 describe('bootstrap-mode skip', () => {
   let dir: string;
   let statePath: string;

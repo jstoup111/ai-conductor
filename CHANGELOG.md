@@ -70,6 +70,29 @@ Categories:
   `ASDF_NODEJS_VERSION` (reading `src/conductor/.tool-versions`) so
   users with an older default Node don't hit the `addAbortListener`
   import error from execa.
+- Build-step stall circuit breaker + auto-interactive handoff. After a
+  completion-gate miss, the conductor compares the resolved-task count
+  (`completed` + `skipped` in `.pipeline/task-status.json`) before and
+  after the attempt. If two consecutive retries produce zero new
+  completions, or if the pipeline skill wrote
+  `.pipeline/halt-user-input-required`, the conductor stops retrying,
+  emits a `build_stall` event, clears the halt marker, and dispatches
+  an interactive Claude REPL for the build step so the user can unblock
+  whatever autonomous retry couldn't decide. Re-checks the completion
+  predicate once the REPL exits — if passing, step succeeds; if still
+  failing, falls into the existing recovery menu.
+  Closes the failure mode where Claude's build output contains a
+  rhetorical "here are three options, what would you prefer?" question
+  that no amount of automated retry could resolve. 14 new tests
+  (10 unit in task-progress, 4 integration in conductor).
+- `skills/pipeline/SKILL.md` — new "Halt-and-Escalate" section
+  documenting the `.pipeline/halt-user-input-required` marker contract.
+  Pipeline writes it when it knows it needs user judgement (scope
+  mismatch, ambiguous requirement, etc.) rather than guessing via a
+  rhetorical output question.
+- Additive `build_stall` event on `ConductorEvent` (step, reason:
+  `no_task_progress | halt_marker`, resolvedBefore, resolvedAfter).
+  `TerminalSubscriber` forwards it.
 - Conductor skips already-resolved steps on every run. Steps marked
   `done` or `skipped` in `.pipeline/conduct-state.json` are no longer
   re-dispatched when `conduct-ts` is invoked against a project with

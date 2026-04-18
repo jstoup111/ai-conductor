@@ -36,6 +36,7 @@ export class TerminalSubscriber implements UISubscriber {
       'feature_complete',
       'auto_heal',
       'mode_skip',
+      'build_stall',
     ];
 
     for (const type of eventTypes) {

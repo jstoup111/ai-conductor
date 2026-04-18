@@ -30,6 +30,11 @@ import {
 } from './artifacts.js';
 import { resolveStepConfig, phaseForStep } from './resolved-config.js';
 import { attemptAutoHeal } from './autoheal.js';
+import {
+  countResolvedTasks,
+  haltMarkerExists,
+  clearHaltMarker,
+} from './task-progress.js';
 
 export type CheckpointResponse = 'continue' | 'back' | 'quit';
 
@@ -323,6 +328,13 @@ export class Conductor {
       let successOutput: string | undefined;
 
       const stepMaxRetries = resolved.max_retries;
+      // Snapshot of resolved-task count before the most recent build retry,
+      // so the circuit breaker can detect "Claude ran but completed zero
+      // additional tasks" = no point retrying further, hand off to REPL.
+      let resolvedTasksBefore = step.name === 'build'
+        ? await countResolvedTasks(this.projectRoot)
+        : 0;
+
       while (attempt < stepMaxRetries) {
         attempt++;
 
@@ -404,6 +416,51 @@ export class Conductor {
           if (!completion.done) {
             lastError = `Step '${step.name}' completed but completion check failed: ${completion.reason ?? 'unknown'}`;
             retryHint = buildRetryHint(step.name, completion.reason);
+
+            // Stall circuit breaker (build step only). If Claude ran but the
+            // count of resolved tasks didn't move since the last attempt, or
+            // the pipeline skill wrote .pipeline/halt-user-input-required,
+            // we stop retrying and hand off to an interactive REPL so the
+            // user can unblock whatever Claude couldn't decide on its own.
+            // This covers the failure mode where Claude burns output on
+            // "three options: ..." rhetorical questions that no automated
+            // retry will ever resolve.
+            let stalled: 'no_task_progress' | 'halt_marker' | null = null;
+            if (step.name === 'build') {
+              const resolvedTasksAfter = await countResolvedTasks(this.projectRoot);
+              const markerSet = await haltMarkerExists(this.projectRoot);
+              if (markerSet) {
+                stalled = 'halt_marker';
+              } else if (attempt >= 2 && resolvedTasksAfter <= resolvedTasksBefore) {
+                stalled = 'no_task_progress';
+              }
+              if (stalled) {
+                await this.events.emit({
+                  type: 'build_stall',
+                  step: step.name,
+                  reason: stalled,
+                  resolvedBefore: resolvedTasksBefore,
+                  resolvedAfter: resolvedTasksAfter,
+                });
+                await clearHaltMarker(this.projectRoot);
+
+                // Hand off: open an interactive Claude session so the user
+                // can break the stall. After the REPL exits, re-check
+                // completion one more time. If passing, the step succeeds;
+                // if still failing, fall into the normal recovery menu.
+                if (this.stepRunner.runInteractive) {
+                  await this.stepRunner.runInteractive(step.name);
+                }
+                const recheck = await checkStepCompletion(this.projectRoot, step.name);
+                if (recheck.done) {
+                  succeeded = true;
+                  successOutput = result.output;
+                }
+                break;
+              }
+              resolvedTasksBefore = resolvedTasksAfter;
+            }
+
             if (attempt < stepMaxRetries) {
               await this.events.emit({
                 type: 'step_retry',

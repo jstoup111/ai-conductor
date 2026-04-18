@@ -42,4 +42,11 @@ export type ConductorEvent =
   | { type: 'feature_complete'; prUrl?: string }
   | { type: 'dashboard_refresh' }
   | { type: 'auto_heal'; step: StepName; healed: number; skipped: number }
-  | { type: 'mode_skip'; step: StepName; mode: BootstrapMode; reason: string };
+  | { type: 'mode_skip'; step: StepName; mode: BootstrapMode; reason: string }
+  | {
+      type: 'build_stall';
+      step: StepName;
+      reason: 'no_task_progress' | 'halt_marker';
+      resolvedBefore: number;
+      resolvedAfter: number;
+    };
