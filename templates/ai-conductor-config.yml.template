@@ -1,0 +1,43 @@
+# Harness config — ~/.ai-conductor/config.yml      (user level)
+#                  <repo>/.ai-conductor/config.yml  (project level, overrides user)
+#
+# Both files use the same schema. The project file takes precedence on any
+# key both files define. The `conductor:` block is user-level only — it
+# holds per-user global state (update channel, last check timestamp).
+
+harness_version: ">=1.0.0"
+
+# User-level global state. Written by bin/install and bin/conduct; safe to
+# edit by hand.
+conductor:
+  update_channel: tagged     # tagged | main
+  auto_check: true
+  current_version: ""         # filled in by bin/install
+  last_checked_at: ""         # ISO 8601 UTC timestamp
+
+# Preferred markdown viewer for artifact review and update changelog display.
+# `preset` is informational (for the install prompt); runtime reads
+# command/args/mode. {file} in args is replaced with the actual path.
+#
+# Modes:
+#   inline   — run in foreground, stdout to terminal (glow, bat, mdcat, cat)
+#   blocking — run in foreground, wait for exit (code --wait, nvim, typora --wait)
+#   external — spawn GUI, prompt "press enter" to continue (obsidian, marktext)
+markdown_viewer:
+  preset: glow
+  command: glow
+  args: ["-p", "-w", "80", "{file}"]
+  mode: inline
+
+# --- Per-step overrides (optional) -------------------------------------------
+# defaults:
+#   model: sonnet
+#   effort: medium
+# phases:
+#   UNDERSTAND:
+#     effort: low
+# steps:
+#   bootstrap:
+#     model: haiku
+# complexity:
+#   default_tier: M

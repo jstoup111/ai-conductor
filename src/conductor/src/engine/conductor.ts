@@ -13,7 +13,15 @@ import type {
 } from '../types/index.js';
 import type { HarnessConfig } from '../types/config.js';
 import { ConductorEventEmitter } from '../ui/events.js';
-import { readState, writeState, saveStepStatus, getStepStatus, markDownstreamStale } from './state.js';
+import {
+  readState,
+  writeState,
+  saveStepStatus,
+  getStepStatus,
+  markDownstreamStale,
+  savePrUrl,
+  extractPrUrl,
+} from './state.js';
 import {
   ALL_STEPS,
   getStepIndex,
@@ -625,12 +633,21 @@ export class Conductor {
         const tail = successOutput ? successOutput.split('\n').slice(-200) : undefined;
         await this.events.emit({ type: 'step_completed', step: step.name, status: 'done', tail });
 
-        // Store PR URL from finish step output — read the latest state file
-        // rather than the (captured, possibly stale) runner output, so manual
-        // fixes during recovery or interactive mode still pick up the URL.
+        // Store PR URL from finish step output. Prefer state-file write
+        // (skill-authored, survives recovery/interactive fixes), fall back to
+        // scraping the first URL out of the runner's stdout so the common
+        // path of `gh pr create` printing the URL just works.
         if (step.name === 'finish') {
           const current = await readState(this.stateFilePath);
-          if (current.ok && current.value.pr_url) state.pr_url = current.value.pr_url;
+          if (current.ok && current.value.pr_url) {
+            state.pr_url = current.value.pr_url;
+          } else if (successOutput) {
+            const scraped = extractPrUrl(successOutput);
+            if (scraped) {
+              state.pr_url = scraped;
+              await savePrUrl(this.stateFilePath, scraped);
+            }
+          }
         }
 
         // Checkpoint handling

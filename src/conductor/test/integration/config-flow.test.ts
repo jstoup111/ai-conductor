@@ -74,8 +74,10 @@ describe('Integration: config flow', () => {
     expect(runner.calls).not.toContain('retro');
     expect(runner.calls).not.toContain('architecture_review');
 
-    // All other steps should have run (14 total - 2 disabled = 12)
-    expect(runner.calls).toHaveLength(12);
+    // All other steps should have run: 14 total - 2 disabled - 1
+    // (complexity, engine-managed via assessComplexity, not dispatched to
+    // runner.run) = 11.
+    expect(runner.calls).toHaveLength(11);
 
     // Verify final state marks disabled steps as 'skipped'
     const result = await readState(statePath);

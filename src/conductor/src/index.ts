@@ -22,6 +22,33 @@ import { detectAutoResume } from './engine/auto-resume.js';
 import { ensureClaudeSettings } from './engine/preflight.js';
 import { createLiveRegion } from './ui/live-region.js';
 import { TerminalPromptHost } from './ui/terminal/prompt-host.js';
+import { runProjectPrelude } from './engine/project-prelude.js';
+
+// Harness VERSION lookup: probes a few candidate locations because the
+// installed layout can be a symlink chain (~/.local/bin/conduct-ts →
+// <harness>/bin/conduct-ts → <harness>/src/conductor/dist/index.js).
+// Returns '0.0.0' on failure so `defaultHasMigration` returns false (no
+// re-bootstrap triggered).
+async function readHarnessVersion(): Promise<string> {
+  // Resolve relative to the bundled entry: <harness>/src/conductor/dist/index.js
+  // or the dev path <harness>/src/conductor/src/index.ts. Either way VERSION
+  // is two levels up from the conductor package root.
+  const candidates = [
+    join(process.cwd(), 'VERSION'),
+    join(__dirname, '..', '..', '..', 'VERSION'),
+    join(__dirname, '..', '..', '..', '..', 'VERSION'),
+  ];
+  for (const path of candidates) {
+    try {
+      const raw = await readFile(path, 'utf-8');
+      const v = raw.trim();
+      if (/^\d+\.\d+\.\d+/.test(v)) return v;
+    } catch {
+      /* try next */
+    }
+  }
+  return '0.0.0';
+}
 
 // --- Merged worktree cleanup ---
 
@@ -272,6 +299,43 @@ async function main(): Promise<void> {
   }
 
   console.log(`\n## Conductor: ${opts.featureDesc ?? '(resuming)'}\n`);
+
+  // Project-level prelude: bootstrap (if never run or migration pending) and
+  // assess (if project has code and assessment is missing/stale). Runs ONCE
+  // before the per-feature loop. Auto mode skips the staleness prompt — users
+  // get a nudge on the next interactive run.
+  const harnessVersion = await readHarnessVersion();
+  const interactivePrompt: ((r: { days: number; commits: number }) => Promise<boolean>) | undefined =
+    mode === 'auto' ? undefined : async ({ days, commits }) => {
+      console.log(
+        `\n⚠ Last assessment was ${days} days / ${commits} commits ago ` +
+          `(thresholds: ${config.assess?.stale_after_days ?? 90} days / ` +
+          `${config.assess?.stale_after_commits ?? 500} commits).`,
+      );
+      const answer = await promptHost.confirm('Re-run /assess now?', false);
+      return answer;
+    };
+  const prelude = await runProjectPrelude(
+    projectRoot,
+    provider,
+    sessionId,
+    config,
+    { harnessVersion, onAssessStalePrompt: interactivePrompt },
+  );
+  if (prelude.bootstrapExecuted) {
+    console.log(
+      `[prelude] bootstrap ran (${prelude.bootstrapReason}): ${
+        prelude.bootstrapSuccess ? 'ok' : 'failed'
+      }`,
+    );
+  }
+  if (prelude.assessExecuted) {
+    console.log(
+      `[prelude] assess ran (${prelude.assessReason}): ${
+        prelude.assessSuccess ? 'ok' : 'failed'
+      }`,
+    );
+  }
 
   const conductor = new Conductor({
     stateFilePath,

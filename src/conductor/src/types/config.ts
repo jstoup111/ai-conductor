@@ -93,6 +93,42 @@ export interface DefaultsConfig {
   max_retries?: number;
 }
 
+/**
+ * User-level global state: harness update channel, detected version, last
+ * check timestamp. Lives in ~/.ai-conductor/config.yml. Project configs
+ * should not override this block — it's per-user, not per-repo.
+ */
+export interface ConductorConfig {
+  update_channel?: 'tagged' | 'main';
+  auto_check?: boolean;
+  current_version?: string;
+  last_checked_at?: string;
+}
+
+/**
+ * Markdown viewer resolution: used by conduct artifact-review + changelog
+ * rendering to invoke the user's preferred viewer. `command` + `args` are
+ * the resolved form (a preset pre-fills these). `{file}` in any arg is
+ * substituted with the file path at invocation time.
+ */
+export interface MarkdownViewerConfig {
+  preset?: string;
+  command: string;
+  args: string[];
+  mode: 'inline' | 'blocking' | 'external';
+}
+
+/**
+ * Staleness thresholds for the project-level `assess` prelude step. Either
+ * signal (time OR commit count) being exceeded makes an existing assessment
+ * "stale"; the user is prompted before a re-run is triggered. Defaults live
+ * in `project-prelude.ts` (`DEFAULT_ASSESS_STALE_*`).
+ */
+export interface AssessConfig {
+  stale_after_days?: number;
+  stale_after_commits?: number;
+}
+
 export interface HarnessConfig {
   harness_version?: string;
   defaults?: DefaultsConfig;
@@ -105,4 +141,10 @@ export interface HarnessConfig {
   complexity?: {
     default_tier?: ComplexityTier;
   };
+  /** User-level global state — loaded from ~/.ai-conductor/config.yml. */
+  conductor?: ConductorConfig;
+  /** Preferred markdown viewer — user-level default, project can override. */
+  markdown_viewer?: MarkdownViewerConfig;
+  /** Project-level assess staleness thresholds (optional). */
+  assess?: AssessConfig;
 }

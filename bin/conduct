@@ -84,10 +84,12 @@ ensure_pipeline_dir() {
 }
 
 CONDUCTOR_CONFIG="${HOME}/.claude/ai-conductor.config.json"
+HARNESS_USER_CONFIG="${HOME}/.ai-conductor/config.yml"
 
 # ─── Harness update flow ─────────────────────────────────────────────────────
 
-# Read a scalar field from ai-conductor.config.json.
+# Read a scalar field from the legacy ai-conductor.config.json. Kept as a
+# read-only fallback for installs that haven't migrated to YAML yet.
 # Usage: conductor_cfg_get <field> [default]
 conductor_cfg_get() {
   local field=$1 default=${2:-}
@@ -104,7 +106,9 @@ except Exception:
 PY
 }
 
-# Write a scalar field to ai-conductor.config.json, preserving other fields.
+# Write a scalar field to the legacy ai-conductor.config.json, preserving
+# other fields. Kept only so a pre-migration install can still boot; new
+# writes should target the YAML via harness_cfg_set.
 # Usage: conductor_cfg_set <field> <value>
 conductor_cfg_set() {
   local field=$1 value=$2
@@ -122,8 +126,123 @@ p.write_text(json.dumps(cfg, indent=2) + "\n")
 '
 }
 
+# Read a scalar or array from ~/.ai-conductor/config.yml using dotted paths
+# (e.g. "markdown_viewer.command"). Arrays come back space-joined. Falls back
+# to the default if the file or path is missing.
+# Usage: harness_cfg_get <dotted.path> [default]
+harness_cfg_get() {
+  local field=$1 default=${2:-}
+  [ -f "$HARNESS_USER_CONFIG" ] || { echo "$default"; return 0; }
+  CFG_PATH="$HARNESS_USER_CONFIG" FIELD="$field" DEFAULT="$default" python3 - <<'PY' 2>/dev/null || echo "$default"
+import os, sys
+try:
+    import yaml
+except Exception:
+    print(os.environ.get("DEFAULT", ""))
+    sys.exit(0)
+path = os.environ["CFG_PATH"]
+field = os.environ["FIELD"]
+default = os.environ.get("DEFAULT", "")
+try:
+    with open(path) as f:
+        cfg = yaml.safe_load(f) or {}
+except Exception:
+    print(default); sys.exit(0)
+node = cfg
+for part in field.split("."):
+    if isinstance(node, dict) and part in node:
+        node = node[part]
+    else:
+        print(default); sys.exit(0)
+if node is None:
+    print(default)
+elif isinstance(node, list):
+    print(" ".join(str(x) for x in node))
+elif isinstance(node, bool):
+    print("true" if node else "false")
+else:
+    print(node)
+PY
+}
+
+# Write a scalar to ~/.ai-conductor/config.yml at a dotted path, preserving
+# surrounding content. Intermediate mappings are created as needed.
+# Usage: harness_cfg_set <dotted.path> <value>
+harness_cfg_set() {
+  local field=$1 value=$2
+  mkdir -p "$(dirname "$HARNESS_USER_CONFIG")"
+  CFG_PATH="$HARNESS_USER_CONFIG" FIELD="$field" VALUE="$value" python3 - <<'PY'
+import os, yaml
+from pathlib import Path
+p = Path(os.environ["CFG_PATH"])
+field = os.environ["FIELD"]
+value = os.environ["VALUE"]
+try:
+    cfg = yaml.safe_load(p.read_text()) if p.exists() else {}
+except Exception:
+    cfg = {}
+if cfg is None:
+    cfg = {}
+node = cfg
+parts = field.split(".")
+for part in parts[:-1]:
+    nxt = node.get(part)
+    if not isinstance(nxt, dict):
+        nxt = {}
+        node[part] = nxt
+    node = nxt
+node[parts[-1]] = value
+p.parent.mkdir(parents=True, exist_ok=True)
+p.write_text(yaml.safe_dump(cfg, sort_keys=False, default_flow_style=False))
+PY
+}
+
+# One-shot, idempotent migration of legacy ~/.claude/ai-conductor.config.json
+# fields into ~/.ai-conductor/config.yml under the `conductor:` block. Leaves
+# the legacy JSON untouched as a backup. Safe to call on every invocation.
+migrate_legacy_conductor_config() {
+  [ -f "$CONDUCTOR_CONFIG" ] || return 0
+  # Skip if the new YAML already has a conductor block.
+  if [ -f "$HARNESS_USER_CONFIG" ]; then
+    local existing
+    existing=$(harness_cfg_get conductor.current_version "")
+    [ -n "$existing" ] && return 0
+  fi
+  JSON_PATH="$CONDUCTOR_CONFIG" YAML_PATH="$HARNESS_USER_CONFIG" python3 - <<'PY' 2>/dev/null || return 0
+import json, os, yaml
+from pathlib import Path
+src = Path(os.environ["JSON_PATH"])
+dst = Path(os.environ["YAML_PATH"])
+try:
+    j = json.loads(src.read_text())
+except Exception:
+    raise SystemExit(0)
+try:
+    cfg = yaml.safe_load(dst.read_text()) if dst.exists() else {}
+except Exception:
+    cfg = {}
+if cfg is None:
+    cfg = {}
+conductor = cfg.get("conductor") or {}
+mapping = [
+    ("updateChannel", "update_channel"),
+    ("autoCheck", "auto_check"),
+    ("currentVersion", "current_version"),
+    ("lastCheckedAt", "last_checked_at"),
+]
+for src_k, dst_k in mapping:
+    if src_k in j and j[src_k] is not None:
+        conductor.setdefault(dst_k, j[src_k])
+cfg["conductor"] = conductor
+dst.parent.mkdir(parents=True, exist_ok=True)
+dst.write_text(yaml.safe_dump(cfg, sort_keys=False, default_flow_style=False))
+PY
+}
+
 # Render the CHANGELOG.md blocks strictly between from_ver (exclusive) and
-# to_ver (inclusive) via glow. Falls back to cat if glow is unavailable.
+# to_ver (inclusive) using the user's configured markdown viewer. Writes to
+# a temp file so external/blocking viewers (VSCode, Typora) can open it the
+# same way they would for artifact review.
 render_changelog_range() {
   local from_ver=$1 to_ver=$2
   local changelog="${HARNESS_DIR}/CHANGELOG.md"
@@ -166,11 +285,11 @@ sys.stdout.write("\n".join(reversed(out)))
 PY
   )
   [ -z "$preview" ] && return 0
-  if command -v glow &>/dev/null; then
-    printf '%s\n' "$preview" | glow -w 80 -
-  else
-    printf '%s\n' "$preview"
-  fi
+  local tmp
+  tmp=$(mktemp --suffix=.md 2>/dev/null || mktemp -t changelog.XXXXXX.md)
+  printf '%s\n' "$preview" > "$tmp"
+  render_md "$tmp"
+  rm -f "$tmp"
 }
 
 # Compare two semver-ish versions. Returns 0 if $1 < $2 (i.e. update available).
@@ -364,10 +483,45 @@ EOF
 
 # ─── Artifact Review ─────────────────────────────────────────────────────────
 
-# Render a markdown file in the terminal using glow.
+# Render a markdown file using the configured viewer. Reads
+# markdown_viewer.{command,args,mode} from ~/.ai-conductor/config.yml (or
+# .ai-conductor/config.yml in the project — not read here directly; conduct-ts does
+# the full project-level merge). Falls back to cat if the configured viewer
+# isn't on PATH, so conduct never hard-crashes on a missing renderer.
 render_md() {
   local file=$1
-  glow -w 80 "$file"
+  local cmd args mode
+  cmd=$(harness_cfg_get markdown_viewer.command "glow")
+  args=$(harness_cfg_get markdown_viewer.args "-p -w 80 {file}")
+  mode=$(harness_cfg_get markdown_viewer.mode "inline")
+
+  if ! command -v "$cmd" &>/dev/null; then
+    warn "markdown viewer '$cmd' not found — falling back to cat"
+    cat "$file"
+    return
+  fi
+
+  local resolved_args=()
+  local a
+  for a in $args; do
+    resolved_args+=("${a//\{file\}/$file}")
+  done
+
+  case "$mode" in
+    inline|blocking)
+      "$cmd" "${resolved_args[@]}"
+      ;;
+    external)
+      "$cmd" "${resolved_args[@]}" &>/dev/null &
+      if [ -t 0 ]; then
+        read -r -p "  Press enter when done reviewing $(basename "$file"): " _ || true
+      fi
+      ;;
+    *)
+      warn "unknown markdown_viewer.mode '$mode' — running inline"
+      "$cmd" "${resolved_args[@]}"
+      ;;
+  esac
 }
 
 # Review one or more artifacts with approve/reject per file.
@@ -2634,6 +2788,10 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Check for harness updates before starting
+# Translate any legacy ~/.claude/ai-conductor.config.json fields into
+# ~/.ai-conductor/config.yml on first run. Idempotent no-op afterwards.
+migrate_legacy_conductor_config
+
 check_harness_update
 
 # Check if project CLAUDE.md references HARNESS.md (auto-upgrade for existing projects)

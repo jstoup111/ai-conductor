@@ -294,14 +294,11 @@ describe('engine/steps', () => {
     it('inserts custom step after specified step', () => {
       const config: HarnessConfig = {
         steps: {
-          add: [
-            {
-              name: 'lint',
-              after: 'build',
-              skill: 'custom-lint',
-              enforcement: 'gating',
-            },
-          ],
+          lint: {
+            after: 'build',
+            skill: 'custom-lint',
+            enforcement: 'gating',
+          },
         },
       };
 
@@ -326,20 +323,16 @@ describe('engine/steps', () => {
     it('preserves config file order for multiple custom steps at same position', () => {
       const config: HarnessConfig = {
         steps: {
-          add: [
-            {
-              name: 'lint',
-              after: 'build',
-              skill: 'custom-lint',
-              enforcement: 'gating',
-            },
-            {
-              name: 'security_scan',
-              after: 'build',
-              skill: 'security-scan',
-              enforcement: 'advisory',
-            },
-          ],
+          lint: {
+            after: 'build',
+            skill: 'custom-lint',
+            enforcement: 'gating',
+          },
+          security_scan: {
+            after: 'build',
+            skill: 'security-scan',
+            enforcement: 'advisory',
+          },
         },
       };
 
@@ -350,9 +343,37 @@ describe('engine/steps', () => {
       const lintIdx = names.indexOf('lint' as StepName);
       const scanIdx = names.indexOf('security_scan' as StepName);
 
-      // Both come after build, in config order
+      // Both come after build, in config file order (Option B: file-order tiebreak)
       expect(lintIdx).toBe(buildIdx + 1);
       expect(scanIdx).toBe(buildIdx + 2);
+    });
+
+    it('chains custom steps via after: <sibling-custom>', () => {
+      const config: HarnessConfig = {
+        steps: {
+          lint: {
+            after: 'build',
+            skill: 'custom-lint',
+            enforcement: 'advisory',
+          },
+          format: {
+            after: 'lint',
+            skill: 'custom-format',
+            enforcement: 'advisory',
+          },
+        },
+      };
+
+      const registry = buildStepRegistry(config);
+      const names = registry.map((s) => s.name);
+      const buildIdx = names.indexOf('build');
+      const lintIdx = names.indexOf('lint' as StepName);
+      const formatIdx = names.indexOf('format' as StepName);
+
+      // Chain: build → lint → format, contiguous.
+      expect(lintIdx).toBe(buildIdx + 1);
+      expect(formatIdx).toBe(lintIdx + 1);
+      expect(registry[formatIdx].prerequisites).toEqual(['lint']);
     });
   });
 });

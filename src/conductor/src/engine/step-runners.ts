@@ -10,6 +10,11 @@ import {
   phaseForStep,
   type ResolvedStepConfig,
 } from './resolved-config.js';
+import {
+  classifySignal,
+  hasInsufficientInfo,
+  type Signal,
+} from './complexity.js';
 
 const STEP_PROMPTS: Record<StepName, string> = {
   bootstrap: '/bootstrap',
@@ -89,6 +94,82 @@ export function parseTierFromOutput(output: string): ComplexityTier | null {
     if (m) return m[1].toUpperCase() as ComplexityTier;
   }
   return null;
+}
+
+/**
+ * Extract per-signal counts from Claude's complexity-assessment output.
+ * Expected lines (case-insensitive, in any order):
+ *   MODELS: <n>
+ *   INTEGRATIONS: <n>
+ *   AUTH: <0|1|2>          (0=none, 1=role, 2=oauth/multi-tenant)
+ *   STATE_MACHINES: <n>    (also accepts STATEMACHINES / STATE MACHINES)
+ *   STORIES: <n>
+ * Missing signals are omitted; caller decides what to do with <5 values.
+ */
+export function parseSignalCountsFromOutput(
+  output: string,
+): Partial<Record<Signal, number>> {
+  if (!output) return {};
+  const counts: Partial<Record<Signal, number>> = {};
+  const patterns: Array<[Signal, RegExp]> = [
+    ['models', /^\s*MODELS?\s*:\s*(\d+)/im],
+    ['integrations', /^\s*INTEGRATIONS?\s*:\s*(\d+)/im],
+    ['auth', /^\s*AUTH\s*:\s*(\d+)/im],
+    ['stateMachines', /^\s*STATE[_\s-]?MACHINES?\s*:\s*(\d+)/im],
+    ['stories', /^\s*STORIES\s*:\s*(\d+)/im],
+  ];
+  for (const [signal, pattern] of patterns) {
+    const match = output.match(pattern);
+    if (match) {
+      const n = parseInt(match[1], 10);
+      if (Number.isFinite(n) && n >= 0) counts[signal] = n;
+    }
+  }
+  return counts;
+}
+
+/**
+ * Deterministic complexity scoring. Classifies each extracted signal, then
+ * majority-votes across ONLY the signals that were actually provided (with
+ * tie-break toward the higher tier). Missing signals are NOT defaulted — that
+ * would bias the result toward S and reproduce the exact downgrade bug this
+ * scoring is meant to prevent.
+ *
+ * Returns null when fewer than 3 signals are available; caller should fall
+ * back to `parseTierFromOutput` (Claude's letter), which is less reliable
+ * but better than nothing.
+ */
+export function scoreComplexityFromCounts(
+  counts: Partial<Record<Signal, number>>,
+): ComplexityTier | null {
+  const entries = Object.entries(counts) as Array<[Signal, number]>;
+  if (hasInsufficientInfo(entries.length)) return null;
+  const presentTiers: Partial<Record<Signal, ComplexityTier>> = {};
+  for (const [signal, count] of entries) {
+    presentTiers[signal] = classifySignal(signal, count);
+  }
+  return assessTierPartial(presentTiers);
+}
+
+/**
+ * Majority-vote across a partial record of signal tiers, with tie-break toward
+ * the higher tier. Parallels `assessTier` but doesn't require all five signals
+ * to be present — important so un-extracted signals don't bias the outcome
+ * toward S (the default for un-set entries in a full record).
+ */
+function assessTierPartial(
+  signals: Partial<Record<Signal, ComplexityTier>>,
+): ComplexityTier {
+  const counts: Record<ComplexityTier, number> = { S: 0, M: 0, L: 0 };
+  for (const tier of Object.values(signals)) {
+    if (tier) counts[tier]++;
+  }
+  const maxCount = Math.max(counts.S, counts.M, counts.L);
+  const candidates = (['S', 'M', 'L'] as ComplexityTier[]).filter(
+    (t) => counts[t] === maxCount,
+  );
+  const order: Record<ComplexityTier, number> = { S: 0, M: 1, L: 2 };
+  return candidates.reduce((a, b) => (order[b] > order[a] ? b : a));
 }
 
 export interface StepRunnerOptions {
@@ -322,10 +403,22 @@ export class DefaultStepRunner implements StepRunner {
       this.sessionStartedInitialized = true;
     }
 
+    // Ask Claude for per-signal COUNTS so the tier is computed deterministically
+    // by `scoreComplexityFromCounts` below rather than trusting a subjective
+    // letter from Claude. Thresholds must match the rubric in
+    // skills/conduct/SKILL.md §2.5.
     const systemPrompt =
-      'You are assessing complexity for the current feature based on its brainstorm design doc. ' +
-      'Read .docs/specs/*.md (most recent) and classify complexity as S, M, or L per the /conduct complexity skill. ' +
-      'Output a short rationale, then on the FINAL line output exactly one of: TIER: S / TIER: M / TIER: L';
+      'You are assessing complexity for the current feature. Read .docs/specs/*.md ' +
+      '(most recent). Count the signals from the design doc. Auth uses a level: ' +
+      '0=none/basic, 1=role-based, 2=multi-tenant/OAuth. State machines = number of ' +
+      'distinct state machines implied (complex or multi-state counts as 2+). Output ' +
+      'exactly these six lines, each on its own line, then stop:\n' +
+      'MODELS: <integer>\n' +
+      'INTEGRATIONS: <integer>\n' +
+      'AUTH: <0|1|2>\n' +
+      'STATE_MACHINES: <integer>\n' +
+      'STORIES: <integer estimate>\n' +
+      'TIER: <S|M|L>   # your best letter judgement, used only as a fallback';
 
     const resolved = this.resolvedConfigFor('complexity');
     const result = await this.provider.invoke({
@@ -339,6 +432,12 @@ export class DefaultStepRunner implements StepRunner {
     });
 
     if (!result.success) return null;
+
+    // Prefer deterministic scoring over Claude's letter. Only fall back to the
+    // letter when we can't extract enough signal counts to score confidently.
+    const counts = parseSignalCountsFromOutput(result.output);
+    const scored = scoreComplexityFromCounts(counts);
+    if (scored) return scored;
     return parseTierFromOutput(result.output);
   }
 

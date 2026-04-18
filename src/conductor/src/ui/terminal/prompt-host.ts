@@ -71,6 +71,13 @@ export class TerminalPromptHost implements UIPromptHost {
     });
   }
 
+  async confirm(question: string, defaultValue = false): Promise<boolean> {
+    const hint = defaultValue ? '[Y/n]' : '[y/N]';
+    const answer = await this.ask(`${question} ${hint} `);
+    if (answer === '') return defaultValue;
+    return answer === 'y' || answer === 'yes';
+  }
+
   async checkpoint(_step: StepName): Promise<CheckpointResponse> {
     while (true) {
       const answer = await this.ask('  c = continue, b = go back, q = quit [c/b/q]: ');

@@ -30,17 +30,17 @@ describe('engine/skill-resolver', () => {
 
   describe('project-local override happy path', () => {
     it('returns project override path when configured via steps.<name>.skill', () => {
-      writeSkillFile(path.join(tmpDir, '.harness', 'skills', 'stories'));
+      writeSkillFile(path.join(tmpDir, '.ai-conductor', 'skills', 'stories'));
 
       const config: HarnessConfig = {
         steps: {
-          stories: { skill: '.harness/skills/stories/SKILL.md' },
+          stories: { skill: '.ai-conductor/skills/stories/SKILL.md' },
         },
       };
 
       const result = resolveSkill('stories', config, tmpDir);
 
-      expect(result.path).toBe(path.join(tmpDir, '.harness/skills/stories/SKILL.md'));
+      expect(result.path).toBe(path.join(tmpDir, '.ai-conductor/skills/stories/SKILL.md'));
       expect(result.isOverride).toBe(true);
     });
 
@@ -56,7 +56,7 @@ describe('engine/skill-resolver', () => {
     it('returns default path when overrides exist but not for this step', () => {
       const config: HarnessConfig = {
         steps: {
-          retro: { skill: '.harness/skills/retro/SKILL.md' },
+          retro: { skill: '.ai-conductor/skills/retro/SKILL.md' },
         },
       };
 
@@ -79,7 +79,7 @@ describe('engine/skill-resolver', () => {
     });
 
     it('throws when override has invalid frontmatter (missing required fields)', () => {
-      const overridePath = path.join(tmpDir, '.harness', 'skills', 'stories');
+      const overridePath = path.join(tmpDir, '.ai-conductor', 'skills', 'stories');
       fs.mkdirSync(overridePath, { recursive: true });
       const skillFile = path.join(overridePath, 'SKILL.md');
       fs.writeFileSync(
@@ -88,7 +88,7 @@ describe('engine/skill-resolver', () => {
       );
 
       const config: HarnessConfig = {
-        steps: { stories: { skill: '.harness/skills/stories/SKILL.md' } },
+        steps: { stories: { skill: '.ai-conductor/skills/stories/SKILL.md' } },
       };
 
       expect(() => resolveSkill('stories', config, tmpDir)).toThrow(
@@ -97,7 +97,7 @@ describe('engine/skill-resolver', () => {
     });
 
     it('succeeds when override has valid frontmatter', () => {
-      const overridePath = path.join(tmpDir, '.harness', 'skills', 'stories');
+      const overridePath = path.join(tmpDir, '.ai-conductor', 'skills', 'stories');
       fs.mkdirSync(overridePath, { recursive: true });
       const skillFile = path.join(overridePath, 'SKILL.md');
       fs.writeFileSync(
@@ -106,25 +106,25 @@ describe('engine/skill-resolver', () => {
       );
 
       const config: HarnessConfig = {
-        steps: { stories: { skill: '.harness/skills/stories/SKILL.md' } },
+        steps: { stories: { skill: '.ai-conductor/skills/stories/SKILL.md' } },
       };
 
       const result = resolveSkill('stories', config, tmpDir);
-      expect(result.path).toBe(path.join(tmpDir, '.harness/skills/stories/SKILL.md'));
+      expect(result.path).toBe(path.join(tmpDir, '.ai-conductor/skills/stories/SKILL.md'));
       expect(result.isOverride).toBe(true);
     });
   });
 
   describe('enforcement locking for gating steps', () => {
     it('ignores enforcement override for gating step', () => {
-      writeSkillFile(path.join(tmpDir, '.harness', 'skills', 'stories'), {
+      writeSkillFile(path.join(tmpDir, '.ai-conductor', 'skills', 'stories'), {
         name: 'stories',
         enforcement: 'advisory',
         phase: 'DECIDE',
       });
 
       const config: HarnessConfig = {
-        steps: { stories: { skill: '.harness/skills/stories/SKILL.md' } },
+        steps: { stories: { skill: '.ai-conductor/skills/stories/SKILL.md' } },
       };
 
       const result = resolveSkill('stories', config, tmpDir);
@@ -133,14 +133,14 @@ describe('engine/skill-resolver', () => {
     });
 
     it('accepts enforcement override for non-gating step', () => {
-      writeSkillFile(path.join(tmpDir, '.harness', 'skills', 'retro'), {
+      writeSkillFile(path.join(tmpDir, '.ai-conductor', 'skills', 'retro'), {
         name: 'retro',
         enforcement: 'gating',
         phase: 'SHIP',
       });
 
       const config: HarnessConfig = {
-        steps: { retro: { skill: '.harness/skills/retro/SKILL.md' } },
+        steps: { retro: { skill: '.ai-conductor/skills/retro/SKILL.md' } },
       };
 
       const result = resolveSkill('retro', config, tmpDir);

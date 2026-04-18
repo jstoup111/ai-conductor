@@ -211,9 +211,18 @@ export function buildStepRegistry(config: HarnessConfig): StepDefinition[] {
   const result = [...ALL_STEPS];
 
   // Custom steps are entries under config.steps whose name isn't in ALL_STEPS.
-  // Each has `after` (insertion target) and `skill` (SKILL.md path). Entries
+  // Each has `after` (insertion target — either a built-in step OR another
+  // custom step earlier in the chain) and `skill` (SKILL.md path). Entries
   // that match built-in step names are treated as per-step overrides, not
   // additions, and are ignored here.
+  //
+  // Ordering policy (Option B in the design discussion): steps are inserted
+  // in the order they appear in the config file. When two customs share the
+  // same `after`, the one that appears first in the file runs first (since
+  // we splice each immediately after its target, the latter gets pushed to
+  // index target+1 and the earlier slides to target+2 — so we walk in
+  // reverse when siblings share a target, or more simply: we insert each
+  // sibling after the previous sibling so file order == execution order).
   const builtInNames = new Set(result.map((s) => s.name as string));
   type Addition = {
     name: string;
@@ -232,36 +241,54 @@ export function buildStepRegistry(config: HarnessConfig): StepDefinition[] {
       name,
       after,
       skill,
-      enforcement: ((cfg as { enforcement?: import('../types/index.js').EnforcementLevel }).enforcement ?? 'advisory'),
+      enforcement:
+        (cfg as { enforcement?: import('../types/index.js').EnforcementLevel }).enforcement ??
+        'advisory',
     });
   }
 
-  // Group insertions by their `after` target, preserving config order
-  const insertionsByTarget = new Map<string, Addition[]>();
-  for (const custom of additions) {
-    const list = insertionsByTarget.get(custom.after) ?? [];
-    list.push(custom);
-    insertionsByTarget.set(custom.after, list);
-  }
-
-  // Process each target: find position in current result, insert all steps after it
-  for (const [target, customs] of insertionsByTarget) {
-    const targetIdx = result.findIndex((s) => s.name === target);
-    if (targetIdx === -1) continue; // validation catches this separately
-
-    const targetStep = result[targetIdx];
-    const newSteps: StepDefinition[] = customs.map((c) => ({
-      name: c.name as StepName,
-      label: c.name,
-      phase: targetStep.phase,
-      enforcement: c.enforcement,
-      prerequisites: [target as StepName],
-      skippableForTiers: [],
-      isCheckpoint: false,
-      skillName: c.skill,
-    }));
-
-    result.splice(targetIdx + 1, 0, ...newSteps);
+  // Resolve insertions iteratively. Each pass inserts every custom whose
+  // `after` target is already present in `result`, then repeats. Within a
+  // pass, customs are processed in config-file order; for same-target
+  // siblings we track the last inserted index so each subsequent sibling
+  // lands AFTER the previous one (preserving file order for execution).
+  //
+  // Customs whose `after` target never resolves (typo, broken chain) are
+  // skipped here — the validator catches that separately and surfaces the
+  // error.
+  const pending = [...additions];
+  let progress = true;
+  while (pending.length > 0 && progress) {
+    progress = false;
+    const stillPending: Addition[] = [];
+    // Track, for each `after` target processed this pass, the index at which
+    // the LAST sibling was inserted. The next sibling goes one slot later.
+    const lastInsertByTarget = new Map<string, number>();
+    for (const custom of pending) {
+      const existingIdx = result.findIndex((s) => s.name === custom.after);
+      if (existingIdx === -1) {
+        stillPending.push(custom);
+        continue;
+      }
+      const siblingAnchor = lastInsertByTarget.get(custom.after);
+      const insertAt = (siblingAnchor !== undefined ? siblingAnchor : existingIdx) + 1;
+      const targetStep = result[existingIdx];
+      const newStep: StepDefinition = {
+        name: custom.name as StepName,
+        label: custom.name,
+        phase: targetStep.phase,
+        enforcement: custom.enforcement,
+        prerequisites: [custom.after as StepName],
+        skippableForTiers: [],
+        isCheckpoint: false,
+        skillName: custom.skill,
+      };
+      result.splice(insertAt, 0, newStep);
+      lastInsertByTarget.set(custom.after, insertAt);
+      progress = true;
+    }
+    pending.length = 0;
+    pending.push(...stillPending);
   }
 
   return result;

@@ -236,8 +236,9 @@ The harness version your project runs against is controlled by
 1. On every `conduct` invocation, `check_harness_update()` in `bin/conduct`
    fetches either the latest tag (`tagged`) or the remote branch (`main`).
 2. If a newer version exists, the relevant `CHANGELOG.md` blocks are rendered
-   with `glow` and the user is prompted before anything is applied. Updates
-   never apply without explicit approval.
+   with the configured markdown viewer (see `markdown_viewer` in
+   `~/.ai-conductor/config.yml`) and the user is prompted before anything is
+   applied. Updates never apply without explicit approval.
 3. On approval, the harness is checked out at the new version and
    `bin/migrate` runs automatically. It:
    - Re-runs `bin/install --update` to refresh symlinks and re-merge

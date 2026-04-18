@@ -1,10 +1,17 @@
-import { readFile } from 'fs/promises';
+import { readFile, rename, mkdir } from 'fs/promises';
 import { existsSync } from 'fs';
-import { join, isAbsolute, resolve as resolvePath } from 'path';
+import { join, isAbsolute, resolve as resolvePath, dirname } from 'path';
 import { load as loadYaml } from 'js-yaml';
-import type { HarnessConfig, StepConfig, EffortLevel } from '../types/config.js';
+import type {
+  HarnessConfig,
+  StepConfig,
+  EffortLevel,
+  MarkdownViewerConfig,
+} from '../types/config.js';
 import type { StepName, EnforcementLevel } from '../types/index.js';
 import { ALL_STEPS } from './steps.js';
+import { readUserConfig } from './user-config.js';
+import { VALID_MARKDOWN_VIEWER_MODES } from './md-viewer-presets.js';
 
 export type ConfigError = {
   type: 'missing' | 'parse_error' | 'version_mismatch' | 'validation_error';
@@ -21,11 +28,47 @@ const VALID_PHASES = new Set(['SETUP', 'UNDERSTAND', 'DECIDE', 'BUILD', 'SHIP'])
 const VALID_EFFORTS = new Set<EffortLevel>(['low', 'medium', 'high', 'xhigh', 'max']);
 const VALID_ENFORCEMENTS = new Set<EnforcementLevel>(['structural', 'advisory', 'gating']);
 
+export const PROJECT_CONFIG_DIR = '.ai-conductor';
+export const PROJECT_CONFIG_FILE = 'config.yml';
+export const LEGACY_PROJECT_CONFIG_DIR = '.harness';
+
+export function projectConfigPath(projectRoot: string): string {
+  return join(projectRoot, PROJECT_CONFIG_DIR, PROJECT_CONFIG_FILE);
+}
+
+export function legacyProjectConfigPath(projectRoot: string): string {
+  return join(projectRoot, LEGACY_PROJECT_CONFIG_DIR, PROJECT_CONFIG_FILE);
+}
+
+/**
+ * One-shot, idempotent relocation of legacy .harness/config.yml into
+ * .ai-conductor/config.yml. Only moves the file when the new location is
+ * absent and the legacy file is readable; on any failure it leaves both
+ * files alone so callers can surface a clean error.
+ */
+export async function migrateLegacyProjectConfig(projectRoot: string): Promise<boolean> {
+  const newPath = projectConfigPath(projectRoot);
+  const oldPath = legacyProjectConfigPath(projectRoot);
+  if (existsSync(newPath) || !existsSync(oldPath)) return false;
+  try {
+    await mkdir(dirname(newPath), { recursive: true });
+    await rename(oldPath, newPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function loadConfig(
   projectRoot: string,
   harnessVersion?: string,
 ): Promise<ConfigResult> {
-  const configPath = join(projectRoot, '.harness', 'config.yml');
+  // One-shot: relocate legacy .harness/config.yml into .ai-conductor/ on first
+  // call. Idempotent — no-op if the new location already exists or legacy is
+  // absent.
+  await migrateLegacyProjectConfig(projectRoot);
+
+  const configPath = projectConfigPath(projectRoot);
 
   let raw: string;
   try {
@@ -97,10 +140,13 @@ export function validateConfig(
     'phases',
     'steps',
     'complexity',
+    'conductor',
+    'markdown_viewer',
+    'assess',
   ]);
   for (const key of Object.keys(obj)) {
     if (!knownTopLevelKeys.has(key)) {
-      warnings.push(`Unknown top-level key: "${key}"`);
+      return errVal(`Unknown top-level key: "${key}"`);
     }
   }
 
@@ -120,8 +166,7 @@ export function validateConfig(
     }
     for (const [phase, value] of Object.entries(obj.phases)) {
       if (!VALID_PHASES.has(phase)) {
-        warnings.push(`Unknown phase: "${phase}"`);
-        continue;
+        return errVal(`Unknown phase: "${phase}"`);
       }
       const err = validateEffortAndModelBag(value, `phases.${phase}`);
       if (err) return { ok: false, error: err };
@@ -139,6 +184,15 @@ export function validateConfig(
 
     const builtInNames = new Set(ALL_STEPS.map((s) => s.name));
     const stepDefs = new Map(ALL_STEPS.map((s) => [s.name, s]));
+    // Collect all custom-step names up-front so a custom can legally point
+    // `after` at a sibling custom (chain ordering). Validation still rejects
+    // references that don't resolve to either built-in or declared custom.
+    const customStepNames = new Set<string>();
+    for (const [n, v] of Object.entries(obj.steps as Record<string, unknown>)) {
+      if (!builtInNames.has(n as StepName) && isPlainObject(v)) {
+        customStepNames.add(n);
+      }
+    }
 
     for (const [name, value] of Object.entries(obj.steps as Record<string, unknown>)) {
       if (!isPlainObject(value)) {
@@ -163,7 +217,9 @@ export function validateConfig(
         'enforcement',
       ]);
       for (const k of Object.keys(cfg)) {
-        if (!knownStepKeys.has(k)) warnings.push(`Unknown key in steps.${name}: "${k}"`);
+        if (!knownStepKeys.has(k)) {
+          return errVal(`Unknown key in steps.${name}: "${k}"`);
+        }
       }
 
       // Common validations
@@ -205,9 +261,12 @@ export function validateConfig(
         if (typeof cfg.after !== 'string') {
           return errVal(`Custom step "${name}" requires 'after: <existing-step>'`);
         }
-        if (!builtInNames.has(cfg.after as StepName)) {
+        const afterTarget = cfg.after as string;
+        const isBuiltIn = builtInNames.has(afterTarget as StepName);
+        const isSiblingCustom = customStepNames.has(afterTarget) && afterTarget !== name;
+        if (!isBuiltIn && !isSiblingCustom) {
           return errVal(
-            `Custom step "${name}" references unknown after target: "${cfg.after}"`,
+            `Custom step "${name}" references unknown after target: "${afterTarget}"`,
           );
         }
         if (typeof cfg.skill !== 'string') {
@@ -229,12 +288,13 @@ export function validateConfig(
           }
         }
       } else {
-        // Built-in step: 'after' / 'enforcement' are meaningless — warn.
+        // Built-in step: 'after' / 'enforcement' are not permitted — they're
+        // built-in-step-only fields. Fail fast so the user sees the bad key.
         if (cfg.after !== undefined) {
-          warnings.push(`steps.${name}.after is ignored for built-in steps`);
+          return errVal(`steps.${name}.after is not valid for built-in steps`);
         }
         if (cfg.enforcement !== undefined) {
-          warnings.push(`steps.${name}.enforcement is ignored for built-in steps`);
+          return errVal(`steps.${name}.enforcement is not valid for built-in steps`);
         }
 
         // Disabling a gating/structural built-in is not allowed.
@@ -262,7 +322,129 @@ export function validateConfig(
     }
   }
 
+  // conductor (user-level global state)
+  if (obj.conductor !== undefined) {
+    const err = validateConductorBlock(obj.conductor);
+    if (err) return { ok: false, error: err };
+  }
+
+  // markdown_viewer
+  if (obj.markdown_viewer !== undefined) {
+    const err = validateMarkdownViewerBlock(obj.markdown_viewer);
+    if (err) return { ok: false, error: err };
+  }
+
+  // assess
+  if (obj.assess !== undefined) {
+    const err = validateAssessBlock(obj.assess);
+    if (err) return { ok: false, error: err };
+  }
+
   return { ok: true, config: obj as HarnessConfig, warnings };
+}
+
+function validateConductorBlock(raw: unknown): ConfigError | null {
+  if (!isPlainObject(raw)) {
+    return { type: 'validation_error', message: 'conductor must be an object' };
+  }
+  const obj = raw as Record<string, unknown>;
+  const allowed = new Set(['update_channel', 'auto_check', 'current_version', 'last_checked_at']);
+  for (const k of Object.keys(obj)) {
+    if (!allowed.has(k)) {
+      return {
+        type: 'validation_error',
+        message: `Unknown key in conductor: "${k}"`,
+      };
+    }
+  }
+  if (
+    obj.update_channel !== undefined &&
+    obj.update_channel !== 'tagged' &&
+    obj.update_channel !== 'main'
+  ) {
+    return {
+      type: 'validation_error',
+      message: 'conductor.update_channel must be "tagged" or "main"',
+    };
+  }
+  if (obj.auto_check !== undefined && typeof obj.auto_check !== 'boolean') {
+    return { type: 'validation_error', message: 'conductor.auto_check must be a boolean' };
+  }
+  if (obj.current_version !== undefined && typeof obj.current_version !== 'string') {
+    return { type: 'validation_error', message: 'conductor.current_version must be a string' };
+  }
+  if (obj.last_checked_at !== undefined && typeof obj.last_checked_at !== 'string') {
+    return { type: 'validation_error', message: 'conductor.last_checked_at must be a string' };
+  }
+  return null;
+}
+
+function validateAssessBlock(raw: unknown): ConfigError | null {
+  if (!isPlainObject(raw)) {
+    return { type: 'validation_error', message: 'assess must be an object' };
+  }
+  const obj = raw as Record<string, unknown>;
+  const allowed = new Set(['stale_after_days', 'stale_after_commits']);
+  for (const k of Object.keys(obj)) {
+    if (!allowed.has(k)) {
+      return { type: 'validation_error', message: `Unknown key in assess: "${k}"` };
+    }
+  }
+  for (const k of ['stale_after_days', 'stale_after_commits']) {
+    const v = obj[k];
+    if (v !== undefined) {
+      if (typeof v !== 'number' || !Number.isFinite(v) || v < 0) {
+        return {
+          type: 'validation_error',
+          message: `assess.${k} must be a non-negative number`,
+        };
+      }
+    }
+  }
+  return null;
+}
+
+function validateMarkdownViewerBlock(raw: unknown): ConfigError | null {
+  if (!isPlainObject(raw)) {
+    return { type: 'validation_error', message: 'markdown_viewer must be an object' };
+  }
+  const obj = raw as Record<string, unknown>;
+  const allowed = new Set(['preset', 'command', 'args', 'mode']);
+  for (const k of Object.keys(obj)) {
+    if (!allowed.has(k)) {
+      return {
+        type: 'validation_error',
+        message: `Unknown key in markdown_viewer: "${k}"`,
+      };
+    }
+  }
+  if (obj.preset !== undefined && typeof obj.preset !== 'string') {
+    return { type: 'validation_error', message: 'markdown_viewer.preset must be a string' };
+  }
+  if (obj.command !== undefined && typeof obj.command !== 'string') {
+    return { type: 'validation_error', message: 'markdown_viewer.command must be a string' };
+  }
+  if (obj.args !== undefined) {
+    if (!Array.isArray(obj.args) || obj.args.some((a) => typeof a !== 'string')) {
+      return {
+        type: 'validation_error',
+        message: 'markdown_viewer.args must be an array of strings',
+      };
+    }
+    if (!obj.args.includes('{file}')) {
+      return {
+        type: 'validation_error',
+        message: 'markdown_viewer.args must include "{file}" placeholder',
+      };
+    }
+  }
+  if (obj.mode !== undefined && !VALID_MARKDOWN_VIEWER_MODES.has(obj.mode as MarkdownViewerConfig['mode'])) {
+    return {
+      type: 'validation_error',
+      message: 'markdown_viewer.mode must be inline|blocking|external',
+    };
+  }
+  return null;
 }
 
 function validateEffortAndModelBag(raw: unknown, path: string): ConfigError | null {
@@ -352,6 +534,63 @@ function validateByTier(raw: unknown, path: string): ConfigError | null {
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return v !== null && typeof v === 'object' && !Array.isArray(v);
+}
+
+/**
+ * Deep-merge project config on top of user config. Objects merge key-by-key;
+ * scalars and arrays from `project` replace `user`.
+ */
+export function mergeConfigs(user: HarnessConfig, project: HarnessConfig): HarnessConfig {
+  return deepMerge(user as Record<string, unknown>, project as Record<string, unknown>) as HarnessConfig;
+}
+
+function deepMerge(a: Record<string, unknown>, b: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...a };
+  for (const [k, bv] of Object.entries(b)) {
+    const av = out[k];
+    if (isPlainObject(av) && isPlainObject(bv)) {
+      out[k] = deepMerge(av, bv);
+    } else {
+      out[k] = bv;
+    }
+  }
+  return out;
+}
+
+/**
+ * Load project config (.ai-conductor/config.yml), merge user config
+ * (~/.ai-conductor/config.yml) underneath, validate the result. Returns the
+ * merged + validated config. User-config parse errors become warnings, not
+ * hard failures, so a broken user file never blocks an otherwise-healthy
+ * project.
+ */
+export async function loadMergedConfig(
+  projectRoot: string,
+  harnessVersion?: string,
+): Promise<ConfigResult> {
+  const projectResult = await loadConfig(projectRoot, harnessVersion);
+  if (!projectResult.ok) return projectResult;
+
+  const userResult = await readUserConfig();
+  if (userResult.parseError) {
+    return {
+      ok: false,
+      error: {
+        type: 'parse_error',
+        message: `user config parse error: ${userResult.parseError}`,
+      },
+    };
+  }
+
+  const merged = mergeConfigs(userResult.config, projectResult.config);
+  const validated = validateConfig(merged, projectRoot);
+  if (!validated.ok) return validated;
+
+  return {
+    ok: true,
+    config: validated.config,
+    warnings: [...projectResult.warnings, ...validated.warnings],
+  };
 }
 
 function errVal(message: string): ConfigResult {

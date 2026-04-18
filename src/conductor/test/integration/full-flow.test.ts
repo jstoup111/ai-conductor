@@ -66,10 +66,12 @@ describe('Integration: full conductor flow', () => {
 
     await conductor.run();
 
-    // All 14 steps should have been called in order
+    // Every step EXCEPT `complexity` (engine-managed via assessComplexity)
+    // should have been dispatched to runner.run, in ALL_STEPS order.
     const allStepNames = ALL_STEPS.map((s) => s.name);
-    expect(runner.calls).toEqual(allStepNames);
-    expect(runner.calls).toHaveLength(14);
+    const dispatchedStepNames = allStepNames.filter((n) => n !== 'complexity');
+    expect(runner.calls).toEqual(dispatchedStepNames);
+    expect(runner.calls).toHaveLength(dispatchedStepNames.length);
 
     // Verify final state
     const result = await readState(statePath);
@@ -111,13 +113,14 @@ describe('Integration: full conductor flow', () => {
       'retro',
     ];
 
-    // Steps that should run (14 total - 5 skipped = 9 run)
+    // Steps that should run: ALL_STEPS minus skipped-for-S-tier minus the
+    // engine-managed `complexity` step.
     const expectedRun = ALL_STEPS
       .map((s) => s.name)
-      .filter((n) => !expectedSkipped.includes(n));
+      .filter((n) => !expectedSkipped.includes(n) && n !== 'complexity');
 
     expect(runner.calls).toEqual(expectedRun);
-    expect(runner.calls).toHaveLength(9);
+    expect(runner.calls).toHaveLength(expectedRun.length);
 
     // Verify final state
     const result = await readState(statePath);

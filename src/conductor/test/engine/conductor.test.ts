@@ -50,8 +50,11 @@ describe('engine/conductor', () => {
 
     await conductor.run();
 
-    // The first call to run should have been with the first step
-    expect(runner.run).toHaveBeenCalledTimes(ALL_STEPS.length);
+    // The first call to run should have been with the first step. `complexity`
+    // is engine-managed (dispatched via assessComplexity, not runner.run), so
+    // the runner is called for every step EXCEPT complexity.
+    const dispatchedSteps = ALL_STEPS.filter((s) => s.name !== 'complexity').length;
+    expect(runner.run).toHaveBeenCalledTimes(dispatchedSteps);
     expect((runner.run as ReturnType<typeof vi.fn>).mock.calls[0][0]).toBe('worktree');
   });
 
@@ -105,8 +108,9 @@ describe('engine/conductor', () => {
 
     await conductor.run();
 
-    // Steps should be called in exact ALL_STEPS order
-    const expectedOrder = ALL_STEPS.map((s) => s.name);
+    // Steps should be called in exact ALL_STEPS order, minus `complexity`
+    // (engine-managed via assessComplexity, not dispatched to runner.run).
+    const expectedOrder = ALL_STEPS.filter((s) => s.name !== 'complexity').map((s) => s.name);
     expect(callOrder).toEqual(expectedOrder);
   });
 
@@ -137,7 +141,8 @@ describe('engine/conductor', () => {
 
     await conductor.run();
 
-    // Should have started and completed events for each step
+    // Should have started + completed events for every step (complexity
+    // dispatches via the engine path but still emits the same event pair).
     expect(emitted.length).toBe(ALL_STEPS.length * 2);
 
     // Check first step events are in correct order
@@ -151,16 +156,20 @@ describe('engine/conductor', () => {
   });
 
   it('enters recovery flow when step returns failure', async () => {
-    // Fail on the 3rd step (brainstorm)
-    let callCount = 0;
+    // brainstorm (3rd step) permanently fails; maxRetries=0 so the first
+    // miss escalates immediately — the retry budget isn't the subject here.
     const runner: StepRunner = {
-      run: vi.fn(async () => {
-        callCount++;
-        if (callCount === 3) return { success: false, output: 'brainstorm failed' };
+      run: vi.fn(async (step: StepName) => {
+        if (step === 'brainstorm') return { success: false, output: 'brainstorm failed' };
         return { success: true };
       }),
     };
-    const conductor = new Conductor({ stateFilePath: statePath, stepRunner: runner, events });
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      maxRetries: 1,
+    });
 
     const failedEvents: Array<{ step: string; error: string; retryCount: number }> = [];
     events.on('step_failed', (e) => {
@@ -186,7 +195,12 @@ describe('engine/conductor', () => {
         return { success: true };
       },
     };
-    const conductor = new Conductor({ stateFilePath: statePath, stepRunner: runner, events });
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      maxRetries: 1,
+    });
 
     await conductor.run();
 
@@ -223,15 +237,18 @@ describe('engine/conductor', () => {
   });
 
   it('marks failed step as failed in state', async () => {
-    let callCount = 0;
     const runner: StepRunner = {
-      run: async () => {
-        callCount++;
-        if (callCount === 3) return { success: false };
+      run: async (step: StepName) => {
+        if (step === 'brainstorm') return { success: false };
         return { success: true };
       },
     };
-    const conductor = new Conductor({ stateFilePath: statePath, stepRunner: runner, events });
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      maxRetries: 1,
+    });
 
     await conductor.run();
 
@@ -407,7 +424,9 @@ describe('engine/conductor', () => {
 
     await conductor.run();
 
-    const expectedOrder = ALL_STEPS.map((s) => s.name);
+    // `complexity` is engine-managed (assessComplexity path), not dispatched
+    // to runner.run. Every OTHER step should fire, in order.
+    const expectedOrder = ALL_STEPS.filter((s) => s.name !== 'complexity').map((s) => s.name);
     expect(stepsRun).toEqual(expectedOrder);
   });
 
@@ -1199,10 +1218,12 @@ describe('engine/conductor', () => {
 
       await conductor.run();
 
-      // When feature is already complete and resume=true, conductor should
-      // start from step 0 (treat as new feature), running all steps again
-      expect(stepsRun[0]).toBe('worktree');
-      expect(stepsRun.length).toBe(ALL_STEPS.length);
+      // When every step is already `done` (feature_status=complete), the
+      // conductor's skip-already-resolved gate (src/engine/conductor.ts:264)
+      // no-ops every iteration — nothing gets re-dispatched. Starting a NEW
+      // feature creates a fresh state file elsewhere; resume against a
+      // completed state does not re-run work.
+      expect(stepsRun).toEqual([]);
     });
 
     it('does not set feature_status=complete if any step failed', async () => {
@@ -1252,11 +1273,9 @@ describe('engine/conductor', () => {
 
   describe('recovery menu', () => {
     it('calls onRecovery on step failure', async () => {
-      let callCount = 0;
       const runner: StepRunner = {
-        run: vi.fn(async () => {
-          callCount++;
-          if (callCount === 3) return { success: false, output: 'brainstorm failed' };
+        run: vi.fn(async (step: StepName) => {
+          if (step === 'brainstorm') return { success: false, output: 'brainstorm failed' };
           return { success: true };
         }),
       };
@@ -1266,11 +1285,13 @@ describe('engine/conductor', () => {
         stepRunner: runner,
         events,
         onRecovery,
+        maxRetries: 1,
       });
 
       await conductor.run();
 
-      expect(onRecovery).toHaveBeenCalledWith('brainstorm', false);
+      // onRecovery(step, isGating, context). brainstorm is advisory.
+      expect(onRecovery).toHaveBeenCalledWith('brainstorm', false, expect.any(Object));
     });
 
     it('retries step when recovery returns retry', async () => {
@@ -1307,11 +1328,9 @@ describe('engine/conductor', () => {
 
     it('skips step when recovery returns skip (non-gating)', async () => {
       // brainstorm is advisory (non-gating), so skip should work
-      let callCount = 0;
       const runner: StepRunner = {
-        run: vi.fn(async () => {
-          callCount++;
-          if (callCount === 3) return { success: false, output: 'brainstorm failed' };
+        run: vi.fn(async (step: StepName) => {
+          if (step === 'brainstorm') return { success: false, output: 'brainstorm failed' };
           return { success: true };
         }),
       };
@@ -1321,6 +1340,7 @@ describe('engine/conductor', () => {
         stepRunner: runner,
         events,
         onRecovery,
+        maxRetries: 1,
       });
 
       await conductor.run();
@@ -1336,11 +1356,9 @@ describe('engine/conductor', () => {
     });
 
     it('quits when recovery returns quit', async () => {
-      let callCount = 0;
       const runner: StepRunner = {
-        run: vi.fn(async () => {
-          callCount++;
-          if (callCount === 3) return { success: false, output: 'brainstorm failed' };
+        run: vi.fn(async (step: StepName) => {
+          if (step === 'brainstorm') return { success: false, output: 'brainstorm failed' };
           return { success: true };
         }),
       };
@@ -1350,6 +1368,7 @@ describe('engine/conductor', () => {
         stepRunner: runner,
         events,
         onRecovery,
+        maxRetries: 1,
       });
 
       await conductor.run();
@@ -2382,8 +2401,10 @@ describe('engine/conductor', () => {
 
       await conductor.run();
 
-      // `assess` should have been retried once after the artifact-miss failure
-      expect(runCallCount['assess']).toBeGreaterThanOrEqual(2);
+      // `brainstorm` (first step with artifacts) should have been retried once
+      // after the artifact-miss failure. (Previously asserted `assess` — which
+      // is now a project-level prelude step, not in ALL_STEPS.)
+      expect(runCallCount['brainstorm']).toBeGreaterThanOrEqual(2);
     });
 
     it('is a no-op when verifyArtifacts is false (default)', async () => {
@@ -3242,153 +3263,10 @@ describe('build-step stall circuit breaker', () => {
   });
 });
 
-describe('bootstrap-mode skip', () => {
-  let dir: string;
-  let statePath: string;
-  let events: ConductorEventEmitter;
-
-  beforeEach(async () => {
-    dir = await mkdtemp(join(tmpdir(), 'conductor-modeskip-'));
-    statePath = join(dir, 'conduct-state.json');
-    events = new ConductorEventEmitter();
-  });
-
-  afterEach(async () => {
-    await rm(dir, { recursive: true, force: true });
-  });
-
-  it("skips assess with a mode_skip event when bootstrap_mode is 'new'", async () => {
-    await writeState(statePath, {
-      bootstrap: 'done',
-      bootstrap_mode: 'new',
-    } as ConductState);
-
-    const calledSteps: StepName[] = [];
-    const runner: StepRunner = {
-      run: vi.fn(async (step: StepName) => {
-        calledSteps.push(step);
-        return { success: true };
-      }),
-    };
-
-    const modeSkipEvents: Array<{ step: string; mode: string }> = [];
-    events.on('mode_skip', (e) => {
-      if (e.type === 'mode_skip') modeSkipEvents.push({ step: e.step, mode: e.mode });
-    });
-
-    const conductor = new Conductor({
-      stateFilePath: statePath,
-      stepRunner: runner,
-      events,
-    });
-
-    await conductor.run();
-
-    expect(calledSteps).not.toContain('assess');
-    expect(modeSkipEvents).toHaveLength(1);
-    expect(modeSkipEvents[0]).toEqual({ step: 'assess', mode: 'new' });
-
-    const finalState = await readState(statePath);
-    expect(finalState.ok).toBe(true);
-    if (finalState.ok) {
-      expect(finalState.value.assess).toBe('skipped');
-    }
-  });
-
-  it("runs assess normally when bootstrap_mode is 'fresh'", async () => {
-    await writeState(statePath, {
-      bootstrap: 'done',
-      bootstrap_mode: 'fresh',
-    } as ConductState);
-
-    const calledSteps: StepName[] = [];
-    const runner: StepRunner = {
-      run: vi.fn(async (step: StepName) => {
-        calledSteps.push(step);
-        return { success: true };
-      }),
-    };
-    const modeSkipEvents: unknown[] = [];
-    events.on('mode_skip', (e) => modeSkipEvents.push(e));
-
-    const conductor = new Conductor({
-      stateFilePath: statePath,
-      stepRunner: runner,
-      events,
-    });
-
-    await conductor.run();
-
-    expect(calledSteps).toContain('assess');
-    expect(modeSkipEvents).toHaveLength(0);
-  });
-
-  it('runs assess normally when bootstrap_mode is absent from state', async () => {
-    await writeState(statePath, { bootstrap: 'done' } as ConductState);
-
-    const calledSteps: StepName[] = [];
-    const runner: StepRunner = {
-      run: vi.fn(async (step: StepName) => {
-        calledSteps.push(step);
-        return { success: true };
-      }),
-    };
-    const modeSkipEvents: unknown[] = [];
-    events.on('mode_skip', (e) => modeSkipEvents.push(e));
-
-    const conductor = new Conductor({
-      stateFilePath: statePath,
-      stepRunner: runner,
-      events,
-    });
-
-    await conductor.run();
-
-    expect(calledSteps).toContain('assess');
-    expect(modeSkipEvents).toHaveLength(0);
-  });
-
-  it("does not skip any non-assess step when mode is 'new'", async () => {
-    await writeState(statePath, {
-      bootstrap: 'done',
-      bootstrap_mode: 'new',
-    } as ConductState);
-
-    const calledSteps: StepName[] = [];
-    const runner: StepRunner = {
-      run: vi.fn(async (step: StepName) => {
-        calledSteps.push(step);
-        return { success: true };
-      }),
-    };
-
-    const conductor = new Conductor({
-      stateFilePath: statePath,
-      stepRunner: runner,
-      events,
-    });
-
-    await conductor.run();
-
-    // Every non-complexity, non-assess step should have run. (complexity is
-    // handled by the engine, not by runner.run.)
-    const expectedSteps: StepName[] = [
-      'memory',
-      'brainstorm',
-      'stories',
-      'conflict_check',
-      'plan',
-      'architecture_diagram',
-      'architecture_review',
-      'worktree',
-      'acceptance_specs',
-      'build',
-      'manual_test',
-      'retro',
-      'finish',
-    ];
-    for (const step of expectedSteps) {
-      expect(calledSteps).toContain(step);
-    }
-  });
-});
+// NOTE: The old `bootstrap-mode skip` suite was removed with the Option B
+// design decision: bootstrap + assess are project-level concerns handled by
+// `runProjectPrelude` (see src/engine/project-prelude.ts and its test file),
+// not per-feature-loop steps. The prelude invokes them on its own triggers
+// (marker presence, harness version bump, codebase detection) — there's no
+// longer a `bootstrap_mode` field in ConductState for the feature loop to
+// react to.

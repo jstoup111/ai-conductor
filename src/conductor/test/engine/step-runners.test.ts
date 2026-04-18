@@ -4,7 +4,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { LLMProvider, InvokeOptions, InvokeResult } from '../../src/execution/llm-provider.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
-import { DefaultStepRunner, parseTierFromOutput } from '../../src/engine/step-runners.js';
+import {
+  DefaultStepRunner,
+  parseTierFromOutput,
+  parseSignalCountsFromOutput,
+  scoreComplexityFromCounts,
+} from '../../src/engine/step-runners.js';
 
 function createMockProvider(): LLMProvider {
   return {
@@ -385,6 +390,148 @@ describe('DefaultStepRunner', () => {
     });
   });
 
+  describe('parseSignalCountsFromOutput', () => {
+    it('extracts all five signals from well-formed output', () => {
+      const output = `MODELS: 12
+INTEGRATIONS: 3
+AUTH: 2
+STATE_MACHINES: 4
+STORIES: 25
+TIER: L`;
+      expect(parseSignalCountsFromOutput(output)).toEqual({
+        models: 12,
+        integrations: 3,
+        auth: 2,
+        stateMachines: 4,
+        stories: 25,
+      });
+    });
+
+    it('tolerates STATE MACHINES with space or hyphen', () => {
+      expect(parseSignalCountsFromOutput('STATE MACHINES: 2').stateMachines).toBe(2);
+      expect(parseSignalCountsFromOutput('STATE-MACHINES: 3').stateMachines).toBe(3);
+      expect(parseSignalCountsFromOutput('STATEMACHINES: 1').stateMachines).toBe(1);
+    });
+
+    it('is case-insensitive and tolerates surrounding prose', () => {
+      const output = `Here is my assessment.
+models: 5
+Some filler.
+Integrations: 1
+auth: 0
+state_machines: 0
+stories: 8
+tier: m`;
+      expect(parseSignalCountsFromOutput(output)).toEqual({
+        models: 5,
+        integrations: 1,
+        auth: 0,
+        stateMachines: 0,
+        stories: 8,
+      });
+    });
+
+    it('returns an empty object when no signals found', () => {
+      expect(parseSignalCountsFromOutput('nothing useful')).toEqual({});
+      expect(parseSignalCountsFromOutput('TIER: S')).toEqual({});
+    });
+
+    it('omits signals whose value is not a non-negative integer', () => {
+      const output = `MODELS: abc
+INTEGRATIONS: 2
+AUTH: 1
+STORIES: 10`;
+      const parsed = parseSignalCountsFromOutput(output);
+      expect(parsed.models).toBeUndefined();
+      expect(parsed.integrations).toBe(2);
+      expect(parsed.auth).toBe(1);
+      expect(parsed.stories).toBe(10);
+    });
+  });
+
+  describe('scoreComplexityFromCounts', () => {
+    it('scores a Large project (many models + integrations)', () => {
+      expect(
+        scoreComplexityFromCounts({
+          models: 12,     // L
+          integrations: 3, // L
+          auth: 2,         // L
+          stateMachines: 2, // L
+          stories: 25,     // L
+        }),
+      ).toBe('L');
+    });
+
+    it('scores a Small project (trivial across the board)', () => {
+      expect(
+        scoreComplexityFromCounts({
+          models: 2,
+          integrations: 0,
+          auth: 0,
+          stateMachines: 0,
+          stories: 3,
+        }),
+      ).toBe('S');
+    });
+
+    it('breaks ties toward the higher tier (2S + 2L + 1M → L)', () => {
+      expect(
+        scoreComplexityFromCounts({
+          models: 2,        // S
+          integrations: 0,  // S
+          auth: 1,          // M
+          stateMachines: 2, // L
+          stories: 50,      // L
+        }),
+      ).toBe('L');
+    });
+
+    it('returns null when fewer than 3 signals are available', () => {
+      expect(scoreComplexityFromCounts({})).toBeNull();
+      expect(scoreComplexityFromCounts({ models: 5 })).toBeNull();
+      expect(
+        scoreComplexityFromCounts({ models: 5, integrations: 1 }),
+      ).toBeNull();
+    });
+
+    it('scores with exactly 3 signals (borderline)', () => {
+      // 3 signals: 1S + 1M + 1L → tie break toward L per assessTier
+      expect(
+        scoreComplexityFromCounts({ models: 2, integrations: 2, stories: 20 }),
+      ).toBe('L');
+    });
+  });
+
+  describe('assessComplexity deterministic scoring', () => {
+    it('prefers count-based scoring over Claude letter (L despite TIER: S)', async () => {
+      const provider = createMockProvider();
+      (provider.invoke as ReturnType<typeof vi.fn>).mockResolvedValue({
+        success: true,
+        output: `MODELS: 15
+INTEGRATIONS: 5
+AUTH: 2
+STATE_MACHINES: 3
+STORIES: 40
+TIER: S`,
+        exitCode: 0,
+      });
+      const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project');
+      expect(await runner.assessComplexity()).toBe('L');
+    });
+
+    it('falls back to Claude letter when <3 counts extracted', async () => {
+      const provider = createMockProvider();
+      (provider.invoke as ReturnType<typeof vi.fn>).mockResolvedValue({
+        success: true,
+        output: `MODELS: 2
+TIER: M`,
+        exitCode: 0,
+      });
+      const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project');
+      expect(await runner.assessComplexity()).toBe('M');
+    });
+  });
+
   describe('parseTierFromOutput', () => {
     it.each([
       ['TIER: S', 'S'],
@@ -524,9 +671,11 @@ describe('DefaultStepRunner', () => {
       // Second run — would normally use resume (sessionStarted=true)
       await runner.run('memory', emptyState);
 
-      // Reset and run again — should go back to resume=false
+      // Reset and run again — should go back to resume=false. Use a
+      // per-feature step (bootstrap/assess are project-level preludes, not in
+      // ALL_STEPS — see runProjectPrelude).
       await runner.resetSession();
-      await runner.run('bootstrap', emptyState);
+      await runner.run('acceptance_specs', emptyState);
 
       const calls = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls;
       expect(calls[0][0].resume).toBe(false);  // first

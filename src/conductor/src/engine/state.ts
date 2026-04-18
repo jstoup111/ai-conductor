@@ -98,6 +98,33 @@ export async function setComplexityTier(
 }
 
 /**
+ * Store the pull request URL returned by the finish step.
+ */
+export async function savePrUrl(path: string, url: string): Promise<void> {
+  const result = await readState(path);
+  const state: ConductState = result.ok ? result.value : {};
+  state.pr_url = url;
+  await writeState(path, state);
+}
+
+/**
+ * Pull the first http(s) URL out of free-form stdout. Used as a fallback when
+ * the finish skill doesn't write `pr_url` into conduct-state.json directly
+ * (e.g. `gh pr create` prints the URL and the skill exits). Matches
+ * https://... up to the first whitespace character so we don't trail off into
+ * surrounding prose; trailing punctuation like `.` `,` `;` or balanced quotes
+ * is stripped.
+ */
+export function extractPrUrl(output: string): string | null {
+  if (!output) return null;
+  const match = output.match(/https?:\/\/\S+/);
+  if (!match) return null;
+  let url = match[0];
+  url = url.replace(/[),.;'"!\]]+$/, '');
+  return url;
+}
+
+/**
  * Mark feature as complete.
  */
 export async function markFeatureComplete(path: string): Promise<void> {
