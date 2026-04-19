@@ -57,16 +57,25 @@ const AUTONOMOUS_STEPS: Set<StepName> = new Set([
 // ignored — the step still runs but through print mode, because auto mode
 // explicitly trades the Socratic flow for unattended execution.
 //
+// `finish` belongs here because the skill explicitly asks the user to choose
+// between Merge/PR/Keep/Discard (skills/finish/SKILL.md §4). In print mode,
+// Claude has no way to receive that choice and silently exits with prose
+// instead of acting — leaving the feature unshipped while state shows it
+// "complete." In auto mode (line 277 below), the print-mode dispatch + the
+// finish completion gate (artifacts.ts) together force the skill to either
+// produce a pr_url or write `.pipeline/finish-choice` before passing.
+//
 // Other non-autonomous steps (complexity, conflict_check, architecture_diagram,
-// retro, finish) are one-shot by design: they generate an artifact from
-// existing context without needing user input, so print mode is the right
-// dispatch for them even outside auto mode.
+// retro) are one-shot by design: they generate an artifact from existing
+// context without needing user input, so print mode is the right dispatch
+// for them even outside auto mode.
 const INTERACTIVE_STEPS: Set<StepName> = new Set([
   'brainstorm',
   'stories',
   'plan',
   'architecture_review',
   'manual_test',
+  'finish',
 ]);
 
 function defaultSleep(ms: number): Promise<void> {

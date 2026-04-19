@@ -32,6 +32,21 @@ Categories:
 
 ### Added
 
+- `finish` step now has a custom completion predicate
+  (`src/conductor/src/engine/artifacts.ts`) that requires either
+  `state.pr_url` to be set or `.pipeline/finish-choice` to contain one of
+  `pr | merge-local | keep | discard`. Without one, the conductor refuses
+  to mark the step done — closing the silent-no-PR failure mode where
+  print-mode finish exited with prose instead of acting.
+- `auto-resume.ts` learns a new `kind: 'orphaned-state'` result, returned
+  when project-root state is past the worktree step but no worktree exists
+  at any conventional location (`.worktrees/<slug>` or
+  `.claude/worktrees/<slug>`). `index.ts` surfaces a clear error with
+  recovery instructions instead of silently resuming on main and landing
+  artifacts on the wrong branch.
+- `auto-resume` and the worktree scan now find worktrees under
+  `.claude/worktrees/<slug>` in addition to `.worktrees/<slug>`, matching
+  the convention used by Claude Code's IDE Conductor feature.
 - TypeScript conductor rewrite (`src/conductor/`) — 3-layer architecture (Engine/Execution/UI) replacing the 3,100-line bash `bin/conduct`.
 - `bin/conduct-ts` shell wrapper for the TypeScript conductor.
 - 14-step state machine with typed events, gate enforcement, tier-based skipping, checkpoint handling, backward navigation, and recovery flow.
@@ -53,6 +68,18 @@ Categories:
 
 ### Changed
 
+- `finish` step is now dispatched as an interactive Claude REPL in default
+  mode (added to `INTERACTIVE_STEPS` in
+  `src/conductor/src/engine/step-runners.ts`), not print mode. The skill
+  asks the user to choose between Merge/PR/Keep/Discard; print mode
+  silently swallowed that prompt and the conductor wrote `done` against
+  no actual outcome. Auto mode still uses print mode and now relies on
+  the new completion gate to enforce the result.
+- `skills/finish/SKILL.md` requires the chosen option to be recorded:
+  `.pipeline/finish-choice` for every outcome, plus `pr_url` written to
+  `.pipeline/conduct-state.json` when the choice is "Push & PR". In
+  unattended (print/auto) mode, the skill defaults to "Push & PR" rather
+  than enumerating options to no-one.
 - `README.md` reorganized around a "Choosing a Conductor" section: side-by-side
   comparison of `conduct` (stable bash, default) and `conduct-ts` (TypeScript
   rewrite, opt-in) covering install, CLI parity, dashboard, gates, auto-heal,

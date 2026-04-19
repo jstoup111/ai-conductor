@@ -241,5 +241,104 @@ describe('Integration: auto-resume by feature description', () => {
         expect(result.lastStep).toBe('brainstorm');
       }
     });
+
+    it('returns orphaned-state when root state passed worktree but no worktree exists', async () => {
+      // Reproduces the user-reported bug: state in main says we shipped past
+      // the worktree step, but no worktree is at any conventional path.
+      await seedRoot({
+        feature_desc: 'orphaned feature',
+        worktree: 'done',
+        last_step: 'worktree',
+      });
+      const result = await detectAutoResume(projectRoot, 'orphaned feature');
+      expect(result.kind).toBe('orphaned-state');
+      if (result.kind === 'orphaned-state') {
+        expect(result.featureDesc).toBe('orphaned feature');
+        expect(result.expectedLocations).toHaveLength(2);
+        expect(result.expectedLocations[0]).toMatch(/\.worktrees\/orphaned-feature$/);
+        expect(result.expectedLocations[1]).toMatch(/\.claude\/worktrees\/orphaned-feature$/);
+      }
+    });
+
+    it('redirects to .worktrees/<slug> when root state passed worktree and that worktree exists', async () => {
+      const slug = slugify('redirected feature');
+      const wtPath = join(projectRoot, '.worktrees', slug);
+      await mkdir(join(wtPath, '.pipeline'), { recursive: true });
+      await writeState(join(wtPath, '.pipeline', 'conduct-state.json'), {
+        feature_desc: 'redirected feature',
+        worktree: 'done',
+        plan: 'done',
+        last_step: 'plan',
+      });
+      await seedRoot({
+        feature_desc: 'redirected feature',
+        worktree: 'done',
+        last_step: 'worktree',
+      });
+      const result = await detectAutoResume(projectRoot, 'redirected feature');
+      expect(result.kind).toBe('resume');
+      if (result.kind === 'resume') {
+        expect(result.worktreePath).toBe(wtPath);
+        expect(result.lastStep).toBe('plan');
+      }
+    });
+
+    it('redirects to .claude/worktrees/<slug> when only that location has the worktree', async () => {
+      const slug = slugify('claude-located feature');
+      const wtPath = join(projectRoot, '.claude/worktrees', slug);
+      await mkdir(join(wtPath, '.pipeline'), { recursive: true });
+      await writeState(join(wtPath, '.pipeline', 'conduct-state.json'), {
+        feature_desc: 'claude-located feature',
+        worktree: 'done',
+        last_step: 'worktree',
+      });
+      await seedRoot({
+        feature_desc: 'claude-located feature',
+        worktree: 'done',
+        last_step: 'worktree',
+      });
+      const result = await detectAutoResume(projectRoot, 'claude-located feature');
+      expect(result.kind).toBe('resume');
+      if (result.kind === 'resume') {
+        expect(result.worktreePath).toBe(wtPath);
+      }
+    });
+
+    it('redirects using root state when worktree exists but has no own state', async () => {
+      const slug = slugify('half-set-up feature');
+      const wtPath = join(projectRoot, '.worktrees', slug);
+      await mkdir(wtPath, { recursive: true });
+      await seedRoot({
+        feature_desc: 'half-set-up feature',
+        worktree: 'done',
+        plan: 'done',
+        last_step: 'plan',
+      });
+      const result = await detectAutoResume(projectRoot, 'half-set-up feature');
+      expect(result.kind).toBe('resume');
+      if (result.kind === 'resume') {
+        expect(result.worktreePath).toBe(wtPath);
+        expect(result.lastStep).toBe('plan');
+      }
+    });
+  });
+
+  describe('worktree directory conventions', () => {
+    it('finds worktrees under .claude/worktrees/<slug> just like .worktrees/<slug>', async () => {
+      const slug = slugify('claude convention');
+      const wtPath = join(projectRoot, '.claude/worktrees', slug);
+      await mkdir(join(wtPath, '.pipeline'), { recursive: true });
+      await writeState(join(wtPath, '.pipeline', 'conduct-state.json'), {
+        feature_desc: 'claude convention',
+        brainstorm: 'done',
+        last_step: 'brainstorm',
+      });
+      const result = await detectAutoResume(projectRoot, 'claude convention');
+      expect(result.kind).toBe('resume');
+      if (result.kind === 'resume') {
+        expect(result.worktreePath).toBe(wtPath);
+        expect(result.lastStep).toBe('brainstorm');
+      }
+    });
   });
 });

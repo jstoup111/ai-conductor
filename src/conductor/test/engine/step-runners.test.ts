@@ -691,6 +691,7 @@ TIER: M`,
       'plan',
       'architecture_review',
       'manual_test',
+      'finish',
     ];
 
     for (const step of replSteps) {
@@ -724,7 +725,6 @@ TIER: M`,
         'conflict_check',
         'architecture_diagram',
         'retro',
-        'finish',
       ];
       for (const step of oneShotSteps) {
         const provider = createMockProvider();

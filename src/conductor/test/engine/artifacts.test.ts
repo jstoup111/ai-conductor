@@ -7,6 +7,8 @@ import {
   findArtifactFiles,
   stepHasArtifacts,
   getArtifactStatus,
+  checkStepCompletion,
+  FINISH_CHOICE_MARKER,
 } from '../../src/engine/artifacts.js';
 
 describe('engine/artifacts', () => {
@@ -102,6 +104,61 @@ describe('engine/artifacts', () => {
     it('returns true once the expected file exists', async () => {
       await createFile('.docs/plans/2026-04-16-thing.md');
       expect(await stepHasArtifacts(dir, 'plan')).toBe(true);
+    });
+  });
+
+  describe('checkStepCompletion: finish predicate', () => {
+    it('passes when state.pr_url is set in .pipeline/conduct-state.json', async () => {
+      await createFile(
+        '.pipeline/conduct-state.json',
+        JSON.stringify({ pr_url: 'https://github.com/foo/bar/pull/1' }),
+      );
+      const result = await checkStepCompletion(dir, 'finish');
+      expect(result).toEqual({ done: true });
+    });
+
+    it('passes when finish-choice marker holds a recognized non-PR outcome', async () => {
+      for (const choice of ['merge-local', 'keep', 'discard']) {
+        const subDir = join(dir, choice);
+        await mkdir(join(subDir, '.pipeline'), { recursive: true });
+        await writeFile(join(subDir, FINISH_CHOICE_MARKER), choice);
+        const result = await checkStepCompletion(subDir, 'finish');
+        expect(result).toEqual({ done: true });
+      }
+    });
+
+    it('passes when finish-choice marker is "pr"', async () => {
+      await createFile(FINISH_CHOICE_MARKER, 'pr');
+      const result = await checkStepCompletion(dir, 'finish');
+      expect(result).toEqual({ done: true });
+    });
+
+    it('fails when neither pr_url nor finish-choice exists', async () => {
+      const result = await checkStepCompletion(dir, 'finish');
+      expect(result.done).toBe(false);
+      expect(result.reason).toMatch(/finish-choice/);
+    });
+
+    it('fails when state file exists but has no pr_url and no marker', async () => {
+      await createFile(
+        '.pipeline/conduct-state.json',
+        JSON.stringify({ feature_status: 'complete' }),
+      );
+      const result = await checkStepCompletion(dir, 'finish');
+      expect(result.done).toBe(false);
+    });
+
+    it('fails when finish-choice contains an unrecognized value', async () => {
+      await createFile(FINISH_CHOICE_MARKER, 'maybe');
+      const result = await checkStepCompletion(dir, 'finish');
+      expect(result.done).toBe(false);
+      expect(result.reason).toMatch(/unrecognized/);
+    });
+
+    it('trims whitespace around the marker value', async () => {
+      await createFile(FINISH_CHOICE_MARKER, '  pr\n');
+      const result = await checkStepCompletion(dir, 'finish');
+      expect(result).toEqual({ done: true });
     });
   });
 

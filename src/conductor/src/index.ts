@@ -200,6 +200,25 @@ async function main(): Promise<void> {
       stateFilePath = join(pipelineDir, 'conduct-state.json');
       await mkdir(pipelineDir, { recursive: true });
       await writeState(stateFilePath, {});
+    } else if (detection.kind === 'orphaned-state') {
+      // Root-level state says we're past the worktree step, but no worktree
+      // exists at any conventional location. Continuing would re-land all
+      // downstream artifacts on main and lose the per-feature isolation
+      // the worktree step is supposed to provide. Refuse and give the user
+      // a clear next-action.
+      console.error(
+        `\nOrphaned conductor state in ${detection.stateFilePath}.\n` +
+          `\n  Feature "${detection.featureDesc ?? opts.featureDesc}" was marked past the worktree step,\n` +
+          `  but no worktree exists at any of:\n` +
+          detection.expectedLocations.map((p) => `    - ${p}`).join('\n') +
+          `\n\n  Either:\n` +
+          `    1) Recreate the missing worktree at one of those paths, OR\n` +
+          `    2) Run \`conduct-ts --reset\` from this directory to clear the stale state\n` +
+          `       (you'll lose the recorded progress, but the actual code on the\n` +
+          `       feature branch — if it exists — is untouched).\n` +
+          `\n  Refusing to continue here so artifacts don't land on the wrong branch.\n`,
+      );
+      process.exit(1);
     }
   }
 
