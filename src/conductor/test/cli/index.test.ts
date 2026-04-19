@@ -93,4 +93,14 @@ describe('CLI', () => {
     expect(opts.from).toBe('manual_test');
     expect(opts.featureDesc).toBeUndefined();
   });
+
+  it('parses --interactive flag as true', () => {
+    const opts = parseArgs(['node', 'conduct', 'feature', '--interactive']);
+    expect(opts.interactive).toBe(true);
+  });
+
+  it('defaults --interactive to false when not provided', () => {
+    const opts = parseArgs(['node', 'conduct', 'feature']);
+    expect(opts.interactive).toBe(false);
+  });
 });
