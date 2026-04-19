@@ -16,7 +16,21 @@ export type AutoResumeResult =
       totalSteps: number;
       stepIndex: number;
       featureDesc?: string;
+    }
+  | {
+      // The root-level state shows the feature has already passed the
+      // `worktree` step, but no actual worktree is present at any of the
+      // expected locations. Resuming in main would silently land artifacts
+      // in the wrong place. Caller should error out and ask the user to
+      // either delete the stale state or recreate the worktree.
+      kind: 'orphaned-state';
+      stateFilePath: string;
+      expectedLocations: string[];
+      featureDesc?: string;
     };
+
+/** Conventional locations a worktree for `slug` might live, relative to projectRoot. */
+export const WORKTREE_DIR_CONVENTIONS = ['.worktrees', '.claude/worktrees'] as const;
 
 interface LoadedState {
   state: ConductState;
@@ -54,6 +68,22 @@ function buildResume(
   };
 }
 
+async function findExistingWorktree(
+  projectRoot: string,
+  slug: string,
+): Promise<string | null> {
+  for (const dir of WORKTREE_DIR_CONVENTIONS) {
+    const wtPath = join(projectRoot, dir, slug);
+    try {
+      await access(wtPath);
+      return wtPath;
+    } catch {
+      // not present — try next convention
+    }
+  }
+  return null;
+}
+
 /**
  * Decide whether an in-progress feature already exists for `featureDesc` so
  * the caller can silently redirect into it and flip into resume mode.
@@ -65,9 +95,18 @@ function buildResume(
  *      root BEFORE the `worktree` step runs. Only claimed as a match if the
  *      persisted `feature_desc` equals the one passed in.
  *
- *   2. `.worktrees/<slug>/.pipeline/conduct-state.json` (or legacy worktree
- *      root). Reached when the feature has already been promoted to its own
- *      worktree.
+ *      If that state has already passed the `worktree` step
+ *      (`state.worktree === 'done'`), execution belongs in a feature
+ *      worktree, not at the project root. We probe the conventional
+ *      worktree locations (`.worktrees/<slug>` and `.claude/worktrees/<slug>`)
+ *      and redirect there if found. If none exists, we surface
+ *      `kind: 'orphaned-state'` so the caller can refuse to silently
+ *      land artifacts on main — the historical bug where the conductor
+ *      kept running with `projectRoot = main`, leaving plans/stories
+ *      and the final PR creation orphaned.
+ *
+ *   2. `.worktrees/<slug>/` and `.claude/worktrees/<slug>/`. Reached when
+ *      the feature has already been promoted to its own worktree.
  *
  * `kind: 'complete'` short-circuits if either location shows the feature has
  * shipped. `kind: 'none'` when nothing matches.
@@ -92,6 +131,34 @@ export async function detectAutoResume(
       if (state.feature_status === 'complete') {
         return { kind: 'complete', worktreePath: projectRoot };
       }
+      // If state has already passed the worktree step, the actual worktree
+      // must exist somewhere — redirect to it. If it doesn't, treat the
+      // state as orphaned rather than silently resuming on main.
+      if (state.worktree === 'done') {
+        const wt = await findExistingWorktree(projectRoot, slug);
+        if (wt) {
+          const wtLoaded = await loadStateFromCandidates([
+            join(wt, '.pipeline', 'conduct-state.json'),
+            join(wt, 'conduct-state.json'),
+          ]);
+          if (wtLoaded) {
+            if (wtLoaded.state.feature_status === 'complete') {
+              return { kind: 'complete', worktreePath: wt };
+            }
+            return buildResume(wt, wtLoaded.state, wtLoaded.path);
+          }
+          // Worktree exists but has no state yet — resume there with the
+          // root state we already loaded. (Common when the worktree skill
+          // created the directory but state hasn't been copied across.)
+          return buildResume(wt, state, path);
+        }
+        return {
+          kind: 'orphaned-state',
+          stateFilePath: path,
+          expectedLocations: WORKTREE_DIR_CONVENTIONS.map((d) => join(projectRoot, d, slug)),
+          featureDesc: state.feature_desc,
+        };
+      }
       return buildResume(projectRoot, state, path);
     }
     // Root state exists but is for a different feature — fall through to
@@ -99,13 +166,9 @@ export async function detectAutoResume(
     // path matches and the root state is non-empty.
   }
 
-  // (2) Per-worktree state under .worktrees/<slug>/.
-  const worktreePath = join(projectRoot, '.worktrees', slug);
-  try {
-    await access(worktreePath);
-  } catch {
-    return { kind: 'none' };
-  }
+  // (2) Per-worktree state under either supported worktree directory.
+  const worktreePath = await findExistingWorktree(projectRoot, slug);
+  if (!worktreePath) return { kind: 'none' };
 
   const wtLoaded = await loadStateFromCandidates([
     join(worktreePath, '.pipeline', 'conduct-state.json'),

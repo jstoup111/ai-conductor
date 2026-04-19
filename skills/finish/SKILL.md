@@ -70,27 +70,51 @@ Feature implementation complete. All tests pass. Options:
 
 Wait for the user to choose. Do not assume.
 
+**Unattended/auto mode:** If you are running in print mode (no user attached) or
+`--auto`, do NOT prompt — default to **Option 2: Push & PR**. The conductor's
+finish completion gate (artifacts.ts) requires either `state.pr_url` or
+`.pipeline/finish-choice` to be set; choosing PR satisfies it without leaving
+the feature in a "complete-but-unshipped" state.
+
 ### 5. Execute Choice
+
+After executing any choice, **record the outcome** so the conductor's
+completion gate can verify the step actually did something:
+
+- **Always**: write the chosen option to `.pipeline/finish-choice` as one of
+  the literal strings `pr`, `merge-local`, `keep`, or `discard`.
+- **Option 2 (PR) only**: also write the resulting PR URL to
+  `.pipeline/conduct-state.json` as `pr_url` (the conductor will pick it up
+  from there; if the underlying `/pr` skill prints the URL to stdout the
+  conductor can also scrape it).
+
+Without one of these, the conductor will treat the step as failed and re-run
+it, even if the skill itself reports success.
 
 **Option 1: Merge locally**
 - Determine the base branch (main, master, develop)
 - Merge the feature branch
 - Run tests again after merge to verify no merge issues
 - Delete the feature branch after successful merge
+- Write `merge-local` to `.pipeline/finish-choice`
 
 **Option 2: Push & PR**
 - Run the `/pr` skill — it handles pre-push verification, title/body generation, push, and
   PR creation
 - Return the PR URL to the user
+- Write the PR URL to `.pipeline/conduct-state.json` (`pr_url` field)
+- Write `pr` to `.pipeline/finish-choice`
 
 **Option 3: Keep as-is**
 - No action needed
 - Remind the user which branch they're on
+- Write `keep` to `.pipeline/finish-choice`
 
 **Option 4: Discard**
 - Require explicit confirmation: "Are you sure? This deletes all work on this branch."
-- If confirmed: checkout base branch, delete feature branch
-- If not confirmed: return to options
+- If confirmed: checkout base branch, delete feature branch, write `discard` to
+  `.pipeline/finish-choice`
+- If not confirmed: return to options (do NOT write the marker)
 
 ### 6. Cleanup
 
@@ -110,5 +134,7 @@ After executing the chosen option:
 - [ ] All story acceptance criteria verified as covered
 - [ ] Changes shown to user for review before options presented
 - [ ] Option presented to user and their choice executed
+- [ ] `.pipeline/finish-choice` written with the chosen outcome
+- [ ] If Option 2 (PR): `pr_url` written to `.pipeline/conduct-state.json`
 - [ ] Cleanup completed (worktrees, pipeline state)
 - [ ] Manual-test suggested as next step

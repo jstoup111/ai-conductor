@@ -2347,6 +2347,9 @@ describe('engine/conductor', () => {
           JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
         ],
         ['.docs/retros/2026-04-16-retro.md', 'test'],
+        // finish has a custom predicate that requires either a pr_url in
+        // state or a recognized .pipeline/finish-choice marker.
+        ['.pipeline/finish-choice', 'pr'],
       ];
       for (const [rel, content] of artifacts) {
         const full = join(dir, rel);

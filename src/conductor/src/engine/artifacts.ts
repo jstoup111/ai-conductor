@@ -79,9 +79,43 @@ export interface CompletionResult {
  * `.pipeline/task-status.json` and requires every task's status to be
  * `completed` (lines 775–811, 1765–1784 of bin/conduct).
  */
+export const FINISH_CHOICE_MARKER = '.pipeline/finish-choice';
+export const FINISH_CHOICE_VALUES = ['pr', 'merge-local', 'keep', 'discard'] as const;
+export type FinishChoice = (typeof FINISH_CHOICE_VALUES)[number];
+
 export const CUSTOM_COMPLETION_PREDICATES: Partial<
   Record<StepName, (dir: string) => Promise<CompletionResult>>
 > = {
+  // The finish step has no file artifact; verify it produced one of the
+  // outcomes the skill is supposed to choose between: a PR (state.pr_url
+  // is set) or an explicit non-PR exit recorded in
+  // `.pipeline/finish-choice`. Without this, print-mode finish (no user
+  // attached) silently completes by listing options without acting.
+  finish: async (dir: string): Promise<CompletionResult> => {
+    try {
+      const raw = await readFile(join(dir, '.pipeline/conduct-state.json'), 'utf-8');
+      const state = JSON.parse(raw) as { pr_url?: string };
+      if (state.pr_url) return { done: true };
+    } catch {
+      // No state file readable — fall through to the marker check.
+    }
+    try {
+      const choice = (await readFile(join(dir, FINISH_CHOICE_MARKER), 'utf-8')).trim();
+      if ((FINISH_CHOICE_VALUES as readonly string[]).includes(choice)) {
+        return { done: true };
+      }
+      return {
+        done: false,
+        reason: `${FINISH_CHOICE_MARKER} contains unrecognized value "${choice}" — expected one of ${FINISH_CHOICE_VALUES.join(', ')}`,
+      };
+    } catch {
+      return {
+        done: false,
+        reason: `finish produced no pr_url and no ${FINISH_CHOICE_MARKER} marker (skill must record the chosen outcome)`,
+      };
+    }
+  },
+
   build: async (dir: string): Promise<CompletionResult> => {
     const statusPath = join(dir, '.pipeline/task-status.json');
     let raw: string;
