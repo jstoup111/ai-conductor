@@ -80,7 +80,7 @@ conduct --auto "URL shortener with click tracking"
 # Default — auto with interactive recovery on failure
 conduct "Add user authentication"
 
-# Manual oversight — interactive Claude for every step
+# Manual oversight — REPL mode for conversational steps (brainstorm, stories, plan, architecture_review, manual_test)
 conduct --interactive "Payment processing"
 ```
 

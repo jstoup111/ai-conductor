@@ -22,6 +22,8 @@ export interface CLIOptions {
   view: ViewMode;
   /** Max lines of last-step stdout to display. 0 disables the tail pane. */
   tailLines: number;
+  /** Run every step in interactive Claude REPL mode (no -p flag). */
+  interactive: boolean;
 }
 
 export function createProgram(): Command {
@@ -42,7 +44,8 @@ export function createProgram(): Command {
     .option('--cooldown <seconds>', 'Cooldown between steps in seconds', '10')
     .option('--model <name>', 'Override Claude model for every step (e.g. haiku, sonnet, opus, or full model ID)')
     .option('--view <mode>', 'Dashboard layout: full | focus | log', 'full')
-    .option('--tail-lines <n>', 'Max lines to show in post-step tail pane (0 disables)', '20');
+    .option('--tail-lines <n>', 'Max lines to show in post-step tail pane (0 disables)', '20')
+    .option('--interactive', 'Run every step in interactive Claude REPL mode (no -p flag)');
   return program;
 }
 
@@ -72,6 +75,7 @@ export function parseArgs(argv: string[]): CLIOptions {
     model: opts.model,
     view,
     tailLines: parseInt(opts.tailLines ?? '20', 10),
+    interactive: opts.interactive ?? false,
   };
 
   const hasStateFlag =

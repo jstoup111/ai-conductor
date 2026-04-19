@@ -1,6 +1,16 @@
 export * from './types/index.js';
 export { parseArgs, createProgram, type CLIOptions } from './cli.js';
 
+import type { RunMode } from './types/index.js';
+
+export function deriveMode(opts: { auto: boolean; interactive: boolean }): RunMode {
+  if (opts.auto && opts.interactive) {
+    console.error('Error: --auto and --interactive are mutually exclusive');
+    process.exit(1);
+  }
+  return opts.auto ? 'auto' : opts.interactive ? 'interactive' : 'default';
+}
+
 import { join } from 'node:path';
 import { mkdir, readFile } from 'node:fs/promises';
 import { v4 as uuidv4 } from 'uuid';
@@ -12,7 +22,7 @@ import { TerminalSubscriber } from './ui/subscriber.js';
 import { loadConfig } from './engine/config.js';
 import { readState, writeState } from './engine/state.js';
 import { parseArgs, type CLIOptions } from './cli.js';
-import type { StepName, RunMode } from './types/index.js';
+import type { StepName } from './types/index.js';
 import { createRenderer } from './ui/create-renderer.js';
 import { ALL_STEPS } from './engine/steps.js';
 import { sendNotification } from './ui/notifications.js';
@@ -282,7 +292,7 @@ async function main(): Promise<void> {
 
   const events = new ConductorEventEmitter();
   const provider = new ClaudeProvider();
-  const mode: RunMode = opts.auto ? 'auto' : 'default';
+  const mode = deriveMode(opts);
   const stepRunner = new DefaultStepRunner(provider, sessionId, projectRoot, {
     featureDesc: opts.featureDesc,
     pipelineDir,
