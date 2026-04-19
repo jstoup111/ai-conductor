@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseArgs } from '../../src/cli.js';
+import { parseArgs, createProgram } from '../../src/cli.js';
 
 describe('CLI', () => {
   it('parses feature description as positional arg', () => {
@@ -102,5 +102,11 @@ describe('CLI', () => {
   it('defaults --interactive to false when not provided', () => {
     const opts = parseArgs(['node', 'conduct', 'feature']);
     expect(opts.interactive).toBe(false);
+  });
+
+  it('--help output includes --interactive flag', () => {
+    const program = createProgram();
+    const helpOutput = program.helpInformation();
+    expect(helpOutput).toContain('--interactive');
   });
 });
