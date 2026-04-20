@@ -16,9 +16,7 @@ import { mkdir, readFile } from 'node:fs/promises';
 import { v4 as uuidv4 } from 'uuid';
 import { Conductor } from './engine/conductor.js';
 import { DefaultStepRunner } from './engine/step-runners.js';
-import { ClaudeProvider } from './execution/claude-provider.js';
 import { ConductorEventEmitter } from './ui/events.js';
-import { TerminalSubscriber } from './ui/subscriber.js';
 import { loadConfig } from './engine/config.js';
 import { readState, writeState } from './engine/state.js';
 import { parseArgs, type CLIOptions } from './cli.js';
@@ -33,6 +31,9 @@ import { ensureClaudeSettings } from './engine/preflight.js';
 import { createLiveRegion } from './ui/live-region.js';
 import { TerminalPromptHost } from './ui/terminal/prompt-host.js';
 import { runProjectPrelude } from './engine/project-prelude.js';
+import { discoverPlugins, registerBuiltins } from './engine/plugin-loader.js';
+import { PluginRegistry } from './engine/plugin-registry.js';
+import type { LLMProvider, UISubscriber } from './types/index.js';
 
 // Harness VERSION lookup: probes a few candidate locations because the
 // installed layout can be a symlink chain (~/.local/bin/conduct-ts →
@@ -290,19 +291,11 @@ async function main(): Promise<void> {
     sessionId = uuidv4();
   }
 
-  const events = new ConductorEventEmitter();
-  const provider = new ClaudeProvider();
-  const mode = deriveMode(opts);
-  const stepRunner = new DefaultStepRunner(provider, sessionId, projectRoot, {
-    featureDesc: opts.featureDesc,
-    pipelineDir,
-    stepCooldown: opts.cooldown,
-    config,
-    modelOverride: opts.model,
-    mode,
-  });
 
-  // Set up terminal UI with live dashboard
+  const events = new ConductorEventEmitter();
+  const mode = deriveMode(opts);
+
+  // Set up terminal UI with live dashboard (needed before registry initialization)
   const renderEvent = createRenderer({
     stateFilePath,
     featureDesc: opts.featureDesc,
@@ -314,20 +307,35 @@ async function main(): Promise<void> {
     viewMode: opts.view,
     tailLines: opts.tailLines,
   });
-  const subscriber = new TerminalSubscriber(events, renderEvent);
+
+  // Initialize plugin registry and discover plugins
+  const registry = new PluginRegistry();
+
+  // Determine plugin directories
+  const globalPluginsDir = join(process.env.HOME || '', '.ai-conductor', 'plugins');
+  const projectPluginsDir = join(projectRoot, '.ai-conductor', 'plugins');
+
+  // Discover and register external plugins, then built-ins
+  await discoverPlugins(globalPluginsDir, projectPluginsDir, registry);
+  const subscriber = registerBuiltins(registry, events, renderEvent);
+  registry.markInitialized();
+
+  // Retrieve provider and subscriber from registry with defaults
+  const provider = registry.get<LLMProvider>(
+    'llm_provider',
+    config?.llm_provider ?? 'claude'
+  );
+
   subscriber.start();
 
-  // Store feature description in state if provided
-  if (opts.featureDesc) {
-    const stateResult = await readState(stateFilePath);
-    const state = stateResult.ok ? stateResult.value : {};
-    if (!state.feature_desc) {
-      state.feature_desc = opts.featureDesc;
-      await writeState(stateFilePath, state);
-    }
-  }
-
-  console.log(`\n## Conductor: ${opts.featureDesc ?? '(resuming)'}\n`);
+  const stepRunner = new DefaultStepRunner(provider, sessionId, projectRoot, {
+    featureDesc: opts.featureDesc,
+    pipelineDir,
+    stepCooldown: opts.cooldown,
+    config,
+    modelOverride: opts.model,
+    mode,
+  });
 
   // Project-level prelude: bootstrap (if never run or migration pending) and
   // assess (if project has code and assessment is missing/stale). Runs ONCE

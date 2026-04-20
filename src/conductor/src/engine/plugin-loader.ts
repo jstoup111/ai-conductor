@@ -3,6 +3,10 @@ import { join } from 'path';
 import { loadManifestFromFile } from './plugin-manifest.js';
 import { PluginRegistry } from './plugin-registry.js';
 import { PluginManifestError, PluginLoadError } from '../types/plugin.js';
+import { ClaudeProvider } from '../execution/claude-provider.js';
+import { TerminalSubscriber } from '../ui/subscriber.js';
+import type { ConductorEventEmitter } from '../ui/events.js';
+import type { RenderEvent } from '../ui/create-renderer.js';
 
 /**
  * Discovers and registers plugins from filesystem directories.
@@ -67,4 +71,25 @@ export async function discoverPlugins(
       }
     }
   }
+}
+
+/**
+ * Registers built-in plugins (ClaudeProvider, TerminalSubscriber) into the registry.
+ * Task 11: ClaudeProvider registers as llm_provider:claude
+ * Task 12: TerminalSubscriber registers as ui_renderer:terminal
+ * @returns TerminalSubscriber instance so caller can call start()/stop()
+ */
+export function registerBuiltins(
+  registry: PluginRegistry,
+  events: ConductorEventEmitter,
+  renderEvent: RenderEvent
+): TerminalSubscriber {
+  // Task 11: Register ClaudeProvider
+  registry.register('llm_provider', 'claude', new ClaudeProvider());
+
+  // Task 12: Register TerminalSubscriber
+  const subscriber = new TerminalSubscriber(events, renderEvent);
+  registry.register('ui_renderer', 'terminal', subscriber);
+
+  return subscriber;
 }
