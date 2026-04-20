@@ -1,4 +1,11 @@
-import { PluginManifest, PluginManifestError, VALID_PLUGIN_KINDS } from '../types/plugin.js';
+import { satisfies } from 'semver';
+import { readFileSync } from 'fs';
+import { dirname, join } from 'path';
+import { fileURLToPath } from 'url';
+import { PluginManifest, PluginManifestError, PluginVersionError, VALID_PLUGIN_KINDS } from '../types/plugin.js';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const HARNESS_VERSION = readFileSync(join(__dirname, '../../../../VERSION'), 'utf-8').trim();
 
 /**
  * Validates a manifest object and ensures all required fields are present.
@@ -7,6 +14,7 @@ import { PluginManifest, PluginManifestError, VALID_PLUGIN_KINDS } from '../type
  * @param raw The manifest object to validate
  * @returns The validated PluginManifest with proper types
  * @throws PluginManifestError if any required field is missing or invalid
+ * @throws PluginVersionError if harness_version requirement is incompatible
  */
 export function validateManifest(raw: unknown): PluginManifest {
   if (typeof raw !== 'object' || raw === null) {
@@ -43,6 +51,18 @@ export function validateManifest(raw: unknown): PluginManifest {
     throw new PluginManifestError(
       `Invalid name "${name}". Name must match pattern [a-z0-9-]+`
     );
+  }
+
+  // Task 5: Check harness_version compatibility if specified
+  if ('harness_version' in manifest && manifest.harness_version !== undefined) {
+    const requiredRange = manifest.harness_version as string;
+    if (!satisfies(HARNESS_VERSION, requiredRange)) {
+      throw new PluginVersionError(
+        `Plugin requires harness ${requiredRange}, but harness is ${HARNESS_VERSION}`,
+        HARNESS_VERSION,
+        requiredRange
+      );
+    }
   }
 
   return manifest as PluginManifest;
