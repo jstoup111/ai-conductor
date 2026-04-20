@@ -30,12 +30,19 @@ describe('discoverPlugins', () => {
         manifestPath,
         `kind: llm_provider
 name: my-provider
-entrypoint: index.ts`
+entrypoint: index.js`
       );
 
-      // Mock the import() to avoid actually loading the plugin
-      const mockInstance = { name: 'my-provider-instance' };
-      vi.doMock(join(pluginDir, 'index.ts'), () => mockInstance, { virtual: true });
+      // Write a real plugin module with required interface
+      writeFileSync(
+        join(pluginDir, 'index.js'),
+        `export default {
+  async invoke(options) {
+    return { success: true, output: 'test', exitCode: 0 };
+  },
+  async invokeInteractive(options) {}
+};`
+      );
 
       await discoverPlugins(globalDir, projectDir, registry);
 
@@ -55,7 +62,18 @@ entrypoint: index.ts`
         manifestPath,
         `kind: llm_provider
 name: project-provider
-entrypoint: index.ts`
+entrypoint: index.js`
+      );
+
+      // Write a real plugin module with required interface
+      writeFileSync(
+        join(pluginDir, 'index.js'),
+        `export default {
+  async invoke(options) {
+    return { success: true, output: 'test', exitCode: 0 };
+  },
+  async invokeInteractive(options) {}
+};`
       );
 
       await discoverPlugins(globalDir, projectDir, registry);
@@ -75,7 +93,18 @@ entrypoint: index.ts`
         join(globalPluginDir, 'plugin.yml'),
         `kind: llm_provider
 name: my-provider
-entrypoint: index.ts`
+entrypoint: index.js`
+      );
+
+      // Write global plugin module
+      writeFileSync(
+        join(globalPluginDir, 'index.js'),
+        `export default {
+  async invoke(options) {
+    return { success: true, output: 'global', exitCode: 0 };
+  },
+  async invokeInteractive(options) {}
+};`
       );
 
       // Project-local plugin with same kind+name
@@ -85,7 +114,18 @@ entrypoint: index.ts`
         join(projectPluginDir, 'plugin.yml'),
         `kind: llm_provider
 name: my-provider
-entrypoint: index.ts`
+entrypoint: index.js`
+      );
+
+      // Write project plugin module
+      writeFileSync(
+        join(projectPluginDir, 'index.js'),
+        `export default {
+  async invoke(options) {
+    return { success: true, output: 'project', exitCode: 0 };
+  },
+  async invokeInteractive(options) {}
+};`
       );
 
       const spy = vi.spyOn(console, 'debug');
@@ -126,7 +166,18 @@ entrypoint: index.ts`
         join(globalPluginDir, 'plugin.yml'),
         `kind: llm_provider
 name: global-provider
-entrypoint: index.ts`
+entrypoint: index.js`
+      );
+
+      // Write global plugin module
+      writeFileSync(
+        join(globalPluginDir, 'index.js'),
+        `export default {
+  async invoke(options) {
+    return { success: true, output: 'global', exitCode: 0 };
+  },
+  async invokeInteractive(options) {}
+};`
       );
 
       // Project plugin (ui_renderer kind) - different kind, no shadowing
@@ -136,7 +187,16 @@ entrypoint: index.ts`
         join(projectPluginDir, 'plugin.yml'),
         `kind: ui_renderer
 name: project-renderer
-entrypoint: index.ts`
+entrypoint: index.js`
+      );
+
+      // Write project plugin module (ui_renderer doesn't need invoke/invokeInteractive)
+      writeFileSync(
+        join(projectPluginDir, 'index.js'),
+        `export default {
+  start() {},
+  stop() {}
+};`
       );
 
       await discoverPlugins(globalDir, projectDir, registry);

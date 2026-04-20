@@ -9,6 +9,46 @@ import type { ConductorEventEmitter } from '../ui/events.js';
 import type { RenderEvent } from '../ui/create-renderer.js';
 
 /**
+ * Load and instantiate a plugin from its manifest and entrypoint.
+ * Task 10: Validates the entrypoint file exists and the loaded module has
+ * the required interface methods (e.g., invoke() for llm_provider).
+ */
+async function loadPluginModule(
+  pluginDir: string,
+  manifest: { kind: string; name: string; entrypoint: string }
+): Promise<unknown> {
+  const entrypointPath = join(pluginDir, manifest.entrypoint);
+
+  try {
+    const mod = await import(entrypointPath);
+    const plugin = mod.default || mod;
+
+    // Task 10: Validate interface shape based on kind
+    if (manifest.kind === 'llm_provider') {
+      if (typeof plugin.invoke !== 'function') {
+        throw new PluginLoadError(
+          `Plugin ${manifest.name} missing required method: invoke`
+        );
+      }
+      if (typeof plugin.invokeInteractive !== 'function') {
+        throw new PluginLoadError(
+          `Plugin ${manifest.name} missing required method: invokeInteractive`
+        );
+      }
+    }
+
+    return plugin;
+  } catch (err) {
+    if (err instanceof PluginLoadError) {
+      throw err;
+    }
+    throw new PluginLoadError(
+      `Failed to load plugin ${manifest.name} from ${entrypointPath}: ${String(err)}`
+    );
+  }
+}
+
+/**
  * Discovers and registers plugins from filesystem directories.
  * Scans globalDir and projectDir for plugin subdirectories, loading plugin.yml
  * from each. Project-local plugins shadow global plugins with the same kind+name.
@@ -28,15 +68,16 @@ export async function discoverPlugins(
     const entries = readdirSync(globalDir, { withFileTypes: true });
     for (const entry of entries) {
       if (entry.isDirectory()) {
-        const manifestPath = join(globalDir, entry.name, 'plugin.yml');
+        const pluginPath = join(globalDir, entry.name);
+        const manifestPath = join(pluginPath, 'plugin.yml');
         try {
           const manifest = loadManifestFromFile(manifestPath);
-          // For now, we're just registering the manifest; actual plugin loading
-          // will be done in Task 10. Here we just validate and register metadata.
-          registry.register(manifest.kind, manifest.name, manifest);
+          // Task 10: Load the actual plugin module
+          const plugin = await loadPluginModule(pluginPath, manifest);
+          registry.register(manifest.kind, manifest.name, plugin);
         } catch (err) {
-          if (err instanceof PluginManifestError) {
-            // Skip invalid plugins in auto-discovery (Task 10 behavior preview)
+          if (err instanceof PluginManifestError || err instanceof PluginLoadError) {
+            // Skip invalid plugins in auto-discovery (Task 10 behavior)
             console.warn(`Skipping plugin ${entry.name}: ${err.message}`);
           }
         }
@@ -49,9 +90,13 @@ export async function discoverPlugins(
     const entries = readdirSync(projectDir, { withFileTypes: true });
     for (const entry of entries) {
       if (entry.isDirectory()) {
-        const manifestPath = join(projectDir, entry.name, 'plugin.yml');
+        const pluginPath = join(projectDir, entry.name);
+        const manifestPath = join(pluginPath, 'plugin.yml');
         try {
           const manifest = loadManifestFromFile(manifestPath);
+          // Task 10: Load the actual plugin module
+          const plugin = await loadPluginModule(pluginPath, manifest);
+
           // Check if we're shadowing a global plugin
           const globalPlugins = registry.list(manifest.kind);
           if (globalPlugins.includes(manifest.name)) {
@@ -60,10 +105,11 @@ export async function discoverPlugins(
               `project-local at ${projectDir} overrides global at ${globalDir}`
             );
           }
+
           // Register project-local plugin (overwrites global if same kind+name)
-          registry.register(manifest.kind, manifest.name, manifest);
+          registry.register(manifest.kind, manifest.name, plugin);
         } catch (err) {
-          if (err instanceof PluginManifestError) {
+          if (err instanceof PluginManifestError || err instanceof PluginLoadError) {
             // Skip invalid plugins in auto-discovery
             console.warn(`Skipping plugin ${entry.name}: ${err.message}`);
           }
