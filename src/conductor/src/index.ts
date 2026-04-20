@@ -33,7 +33,8 @@ import { TerminalPromptHost } from './ui/terminal/prompt-host.js';
 import { runProjectPrelude } from './engine/project-prelude.js';
 import { discoverPlugins, registerBuiltins } from './engine/plugin-loader.js';
 import { PluginRegistry } from './engine/plugin-registry.js';
-import type { LLMProvider, UISubscriber } from './types/index.js';
+import type { LLMProvider } from "./execution/llm-provider.js";
+import type { UISubscriber } from "./ui/types.js";
 
 // Harness VERSION lookup: probes a few candidate locations because the
 // installed layout can be a symlink chain (~/.local/bin/conduct-ts →
