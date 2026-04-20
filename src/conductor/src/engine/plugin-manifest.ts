@@ -2,6 +2,7 @@ import { satisfies } from 'semver';
 import { readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
+import { load } from 'js-yaml';
 import { PluginManifest, PluginManifestError, PluginVersionError, VALID_PLUGIN_KINDS } from '../types/plugin.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -66,4 +67,39 @@ export function validateManifest(raw: unknown): PluginManifest {
   }
 
   return manifest as PluginManifest;
+}
+
+/**
+ * Loads and validates a plugin manifest from a YAML file.
+ *
+ * @param filePath Path to the plugin.yml file
+ * @returns The validated PluginManifest
+ * @throws PluginManifestError if file does not exist, cannot be read, or contains invalid YAML
+ * @throws PluginManifestError if manifest validation fails (via validateManifest)
+ */
+export function loadManifestFromFile(filePath: string): PluginManifest {
+  let content: string;
+  try {
+    content = readFileSync(filePath, 'utf-8');
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new PluginManifestError(`Failed to read manifest file ${filePath}: ${message}`, filePath);
+  }
+
+  let raw: unknown;
+  try {
+    raw = load(content);
+  } catch (err) {
+    const yamlError = err instanceof Error ? err.message : String(err);
+    throw new PluginManifestError(`Invalid YAML in ${filePath}: ${yamlError}`, filePath);
+  }
+
+  try {
+    return validateManifest(raw);
+  } catch (err) {
+    if (err instanceof PluginManifestError) {
+      throw new PluginManifestError(`${err.message} (from ${filePath})`, filePath);
+    }
+    throw err;
+  }
 }
