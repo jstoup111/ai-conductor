@@ -1,4 +1,4 @@
-import { PluginManifest, PluginManifestError } from '../types/plugin.js';
+import { PluginManifest, PluginManifestError, VALID_PLUGIN_KINDS } from '../types/plugin.js';
 
 /**
  * Validates a manifest object and ensures all required fields are present.
@@ -6,7 +6,7 @@ import { PluginManifest, PluginManifestError } from '../types/plugin.js';
  *
  * @param raw The manifest object to validate
  * @returns The validated PluginManifest with proper types
- * @throws PluginManifestError if any required field is missing
+ * @throws PluginManifestError if any required field is missing or invalid
  */
 export function validateManifest(raw: unknown): PluginManifest {
   if (typeof raw !== 'object' || raw === null) {
@@ -26,6 +26,23 @@ export function validateManifest(raw: unknown): PluginManifest {
 
   if (!('entrypoint' in manifest)) {
     throw new PluginManifestError('Manifest must have required field: entrypoint');
+  }
+
+  // Task 4: Validate kind enum
+  const kind = manifest.kind;
+  if (!VALID_PLUGIN_KINDS.includes(kind as never)) {
+    throw new PluginManifestError(
+      `Invalid kind "${kind}". Valid kinds are: ${VALID_PLUGIN_KINDS.join(', ')}`
+    );
+  }
+
+  // Task 4: Validate name format - must match [a-z0-9-]+
+  const name = manifest.name;
+  const namePattern = /^[a-z0-9-]+$/;
+  if (typeof name !== 'string' || !namePattern.test(name)) {
+    throw new PluginManifestError(
+      `Invalid name "${name}". Name must match pattern [a-z0-9-]+`
+    );
   }
 
   return manifest as PluginManifest;
