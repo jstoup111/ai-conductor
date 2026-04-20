@@ -47,6 +47,70 @@ describe('validateManifest', () => {
     });
   });
 
+  describe('kind validation', () => {
+    it('throws PluginManifestError when kind is not a valid enum value', () => {
+      const manifest = {
+        kind: 'frobnicator',
+        name: 'test',
+        entrypoint: 'index.ts',
+      };
+      expect(() => validateManifest(manifest)).toThrow(PluginManifestError);
+      try {
+        validateManifest(manifest);
+        expect.fail('Should have thrown PluginManifestError');
+      } catch (err) {
+        expect(String(err)).toMatch(/Invalid kind/);
+        expect(String(err)).toMatch(/frobnicator/);
+      }
+    });
+  });
+
+  describe('name validation', () => {
+    it('throws PluginManifestError when name contains uppercase letters', () => {
+      const manifest = {
+        kind: 'llm_provider',
+        name: 'MyPlugin',
+        entrypoint: 'index.ts',
+      };
+      expect(() => validateManifest(manifest)).toThrow(PluginManifestError);
+      try {
+        validateManifest(manifest);
+        expect.fail('Should have thrown PluginManifestError');
+      } catch (err) {
+        expect(String(err)).toMatch(/Invalid name/);
+        expect(String(err)).toMatch(/MyPlugin/);
+      }
+    });
+
+    it('throws PluginManifestError when name contains underscores', () => {
+      const manifest = {
+        kind: 'llm_provider',
+        name: 'my_plugin',
+        entrypoint: 'index.ts',
+      };
+      expect(() => validateManifest(manifest)).toThrow(PluginManifestError);
+      try {
+        validateManifest(manifest);
+        expect.fail('Should have thrown PluginManifestError');
+      } catch (err) {
+        expect(String(err)).toMatch(/Invalid name/);
+        expect(String(err)).toMatch(/my_plugin/);
+      }
+    });
+
+    it('returns PluginManifest when name contains hyphens and numbers (valid pattern)', () => {
+      const manifest = {
+        kind: 'llm_provider',
+        name: 'my-provider-123',
+        entrypoint: 'index.ts',
+      };
+      const result = validateManifest(manifest);
+      expect(result).toHaveProperty('kind', 'llm_provider');
+      expect(result).toHaveProperty('name', 'my-provider-123');
+      expect(result).toHaveProperty('entrypoint', 'index.ts');
+    });
+  });
+
   describe('harness_version semver compatibility', () => {
     it('throws PluginVersionError when harness_version is incompatible with current harness', () => {
       const manifest = {
