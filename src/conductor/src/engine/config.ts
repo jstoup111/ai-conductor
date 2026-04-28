@@ -12,6 +12,7 @@ import type { StepName, EnforcementLevel } from '../types/index.js';
 import { ALL_STEPS } from './steps.js';
 import { readUserConfig } from './user-config.js';
 import { VALID_MARKDOWN_VIEWER_MODES } from './md-viewer-presets.js';
+import { validateWhenSyntax } from './when-expression.js';
 
 export type ConfigError = {
   type: 'missing' | 'parse_error' | 'version_mismatch' | 'validation_error';
@@ -215,6 +216,8 @@ export function validateConfig(
         'by_tier',
         'after',
         'enforcement',
+        'when',
+        'parallel',
       ]);
       for (const k of Object.keys(cfg)) {
         if (!knownStepKeys.has(k)) {
@@ -250,6 +253,64 @@ export function validateConfig(
         for (const h of ['before', 'after']) {
           if (hooks[h] !== undefined && typeof hooks[h] !== 'string') {
             return errVal(`steps.${name}.hooks.${h} must be a string path`);
+          }
+        }
+      }
+
+      // Validate when: syntax at config-load time (T8 / T13)
+      if (cfg.when !== undefined) {
+        if (typeof cfg.when !== 'string') {
+          return errVal(`steps.${name}.when must be a string expression`);
+        }
+        const syntaxErr = validateWhenSyntax(cfg.when);
+        if (syntaxErr) {
+          return errVal(`steps.${name}.when: ${syntaxErr}`);
+        }
+      }
+
+      // Validate parallel: structure (T13)
+      if (cfg.parallel !== undefined) {
+        if (!Array.isArray(cfg.parallel)) {
+          return errVal(`steps.${name}.parallel must be an array`);
+        }
+        if (cfg.skill !== undefined) {
+          return errVal(
+            `steps.${name}: "skill" and "parallel" are mutually exclusive`,
+          );
+        }
+        const branchNames = new Set<string>();
+        for (let bi = 0; bi < (cfg.parallel as unknown[]).length; bi++) {
+          const branch = (cfg.parallel as unknown[])[bi];
+          if (!isPlainObject(branch)) {
+            return errVal(`steps.${name}.parallel[${bi}] must be an object`);
+          }
+          const b = branch as Record<string, unknown>;
+          const knownBranchKeys = new Set(['name', 'skill', 'model', 'effort', 'advisory']);
+          for (const bk of Object.keys(b)) {
+            if (!knownBranchKeys.has(bk)) {
+              return errVal(`Unknown key in steps.${name}.parallel[${bi}]: "${bk}"`);
+            }
+          }
+          if (typeof b.name !== 'string' || !b.name) {
+            return errVal(`steps.${name}.parallel[${bi}].name must be a non-empty string`);
+          }
+          if (branchNames.has(b.name)) {
+            return errVal(
+              `steps.${name}.parallel has duplicate branch name: "${b.name}"`,
+            );
+          }
+          branchNames.add(b.name);
+          if (b.skill !== undefined && typeof b.skill !== 'string') {
+            return errVal(`steps.${name}.parallel[${bi}].skill must be a string`);
+          }
+          if (b.model !== undefined && typeof b.model !== 'string') {
+            return errVal(`steps.${name}.parallel[${bi}].model must be a string`);
+          }
+          if (b.effort !== undefined && !VALID_EFFORTS.has(b.effort as EffortLevel)) {
+            return errVal(`steps.${name}.parallel[${bi}].effort must be low|medium|high|xhigh|max`);
+          }
+          if (b.advisory !== undefined && typeof b.advisory !== 'boolean') {
+            return errVal(`steps.${name}.parallel[${bi}].advisory must be a boolean`);
           }
         }
       }
