@@ -149,6 +149,38 @@ export function createRenderer(
         region.log(chalk.yellow(`  ⟳  Session reset: ${event.reason}`));
         break;
 
+      case 'when_skip': {
+        currentStep = undefined;
+        const undefinedNote = event.undefinedKey
+          ? chalk.dim(` (key "${event.undefinedKey}" undefined → false)`)
+          : '';
+        region.log(
+          chalk.dim(`  ⊘ ${event.step} skipped — when: ${event.expression}${undefinedNote}`),
+        );
+        await renderDashboard();
+        break;
+      }
+
+      case 'parallel_started':
+        region.log(
+          chalk.cyan(`  ⇶ ${event.step} — parallel [${event.branches.join(', ')}] started`),
+        );
+        break;
+
+      case 'parallel_completed':
+        currentStep = undefined;
+        region.log(
+          chalk.green(`  ✓ ${event.step} — parallel [${event.branches.join(', ')}] completed`),
+        );
+        await renderDashboard();
+        break;
+
+      case 'parallel_failure':
+        region.log(
+          chalk.red(`  ✗ ${event.step} — branch "${event.branch}" failed: ${event.error}`),
+        );
+        break;
+
       case 'tier_skip':
       case 'config_skip':
       case 'gate_blocked':
