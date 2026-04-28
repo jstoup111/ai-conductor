@@ -33,27 +33,6 @@ export interface TierOverride {
 }
 
 /**
- * A branch inside a `parallel` group. Each branch has a name and its own
- * step configuration (model, effort, skill, etc.).
- */
-export interface ParallelBranch {
-  /** Unique name within the group. Used to form synthetic state key: <group>__<branch>. */
-  name: string;
-  /** Skill to run for this branch. */
-  skill?: string;
-  /** Model override for this branch. */
-  model?: string;
-  /** Effort override for this branch. */
-  effort?: EffortLevel;
-  /**
-   * When false (default): a failure in this branch blocks the group and
-   * propagates as a group failure. When true: this branch's failure is
-   * logged but the group continues and succeeds.
-   */
-  advisory?: boolean;
-}
-
-/**
  * Configuration for a single step. Every key is optional — unset values fall
  * back through phases > defaults > hardcoded baselines.
  *
@@ -93,31 +72,6 @@ export interface StepConfig {
 
   /** (Custom steps only) Enforcement level. Required when adding a step. */
   enforcement?: EnforcementLevel;
-
-  // --- Conditional + Parallel primitives ------------------------------------
-
-  /**
-   * Boolean expression evaluated against current conductor state. When the
-   * expression evaluates to false the step is skipped and a `when_skip` event
-   * is emitted. Mutually exclusive with `parallel`.
-   *
-   * Supported forms:
-   *   tier == L
-   *   tier in [M, L]
-   *   phase == BUILD
-   *   ${state_key} == value
-   *   A && B   (conjunction of any two of the above)
-   */
-  when?: string;
-
-  /**
-   * Concurrent branch group. When present, the step runs each branch via
-   * Promise.all. Mutually exclusive with `skill`.
-   *
-   * Synthetic state keys written to conduct-state.json:
-   *   <step_name>__<branch_name>  → "done" | "skipped" | "failed"
-   */
-  parallel?: ParallelBranch[];
 }
 
 /**

@@ -27,14 +27,6 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 - `registerBuiltins()` now accepts optional `TerminalRendererOptions` and registers `TerminalRenderer` as `ui_renderer:terminal_renderer` alongside the existing `TerminalSubscriber`
 - New test files: `test/ui/terminal-renderer.test.ts` (TerminalRenderer class), `test/ui/dispatch.test.ts` (dispatch + degradation + slow-renderer + dup-renderer scenarios)
 
-- `RecorderProvider` reference LLM provider plugin at `plugins/recorder-provider/` — JSONL logging, canned response, zero edits to `src/index.ts`
-- `when?: string` field on `StepConfig` — conditional step skip; five grammar forms evaluated before dispatch
-- `parallel?: ParallelBranch[]` — concurrent step groups via `Promise.all` with gating/advisory semantics and synthetic state keys
-- Four new events: `when_skip`, `parallel_started`, `parallel_completed`, `parallel_failure`
-- 59 new tests for when:/parallel across engine and UI layers
-- `RecorderProvider` reference LLM provider plugin at `plugins/recorder-provider/` — logs every `invoke()` and `invokeInteractive()` call as a JSONL line, returns a canned response, creates parent directories, throws `RecorderProviderError` on write failure
-- Unit tests (11) and integration tests (7) for RecorderProvider
-- RecorderProvider installs through the plugin loader with zero edits to `src/conductor/src/index.ts`
 ### Added (Feature 1.1 — Plugin Loader Foundation)
 - Plugin manifest schema (`plugin.yml`) with `kind`, `name`, `entrypoint`, `harness_version`, `capabilities?` fields
 - `PluginKind` enum: `llm_provider | ui_renderer | step | hook | visualizer`
