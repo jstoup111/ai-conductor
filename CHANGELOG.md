@@ -19,23 +19,6 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 ## [Unreleased]
 
 ### Added
-- `UIRenderer` interface (`handle(event): Promise<void>` + `stop()`) in `src/conductor/src/ui/types.ts` — new plugin contract for UI renderers
-- `TerminalRenderer` class in `src/conductor/src/ui/terminal-renderer.ts` implementing `UIRenderer` (replaces the `createRenderer` factory function; backward-compat factory retained in `create-renderer.ts`)
-- `dispatchRenderers(renderers, event)` in `src/conductor/src/ui/dispatch.ts` — fan-out via `Promise.allSettled`, renderer degradation (one throw doesn't kill others), re-emits `renderer_error` event to survivors
-- `renderer_error` event type in `src/conductor/src/types/events.ts` — carries `rendererName` and `error` string
-- `RecordingRenderer` test double in `test/ui/recording-renderer.ts` — records events, supports `delayMs` and `throwError` injection
-- `registerBuiltins()` now accepts optional `TerminalRendererOptions` and registers `TerminalRenderer` as `ui_renderer:terminal_renderer` alongside the existing `TerminalSubscriber`
-- New test files: `test/ui/terminal-renderer.test.ts` (TerminalRenderer class), `test/ui/dispatch.test.ts` (dispatch + degradation + slow-renderer + dup-renderer scenarios)
-
-- `RecorderProvider` reference LLM provider plugin at `plugins/recorder-provider/` — JSONL logging, canned response, zero edits to `src/index.ts`
-- `when?: string` field on `StepConfig` — conditional step skip; five grammar forms evaluated before dispatch
-- `parallel?: ParallelBranch[]` — concurrent step groups via `Promise.all` with gating/advisory semantics and synthetic state keys
-- Four new events: `when_skip`, `parallel_started`, `parallel_completed`, `parallel_failure`
-- 59 new tests for when:/parallel across engine and UI layers
-- `RecorderProvider` reference LLM provider plugin at `plugins/recorder-provider/` — logs every `invoke()` and `invokeInteractive()` call as a JSONL line, returns a canned response, creates parent directories, throws `RecorderProviderError` on write failure
-- Unit tests (11) and integration tests (7) for RecorderProvider
-- RecorderProvider installs through the plugin loader with zero edits to `src/conductor/src/index.ts`
-### Added (Feature 1.1 — Plugin Loader Foundation)
 - Plugin manifest schema (`plugin.yml`) with `kind`, `name`, `entrypoint`, `harness_version`, `capabilities?` fields
 - `PluginKind` enum: `llm_provider | ui_renderer | step | hook | visualizer`
 - Five typed error classes: `PluginManifestError`, `PluginVersionError`, `PluginLoadError`, `PluginNotFoundError`, `PluginRegistryError`

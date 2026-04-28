@@ -5,7 +5,6 @@ import { PluginRegistry } from './plugin-registry.js';
 import { PluginManifestError, PluginLoadError, PluginVersionError } from '../types/plugin.js';
 import { ClaudeProvider } from '../execution/claude-provider.js';
 import { TerminalSubscriber } from '../ui/subscriber.js';
-import { TerminalRenderer, type TerminalRendererOptions } from '../ui/terminal-renderer.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
 import type { UIEventHandler } from '../ui/subscriber.js';
 
@@ -129,30 +128,22 @@ export async function discoverPlugins(
 }
 
 /**
- * Registers built-in plugins (ClaudeProvider, TerminalSubscriber, TerminalRenderer) into the registry.
+ * Registers built-in plugins (ClaudeProvider, TerminalSubscriber) into the registry.
  * Task 11: ClaudeProvider registers as llm_provider:claude
- * Task 12: TerminalSubscriber registers as ui_renderer:terminal (lifecycle wrapper)
- * Feature 1.2 T11: TerminalRenderer also registers as ui_renderer:terminal_renderer (UIRenderer interface)
+ * Task 12: TerminalSubscriber registers as ui_renderer:terminal
  * @returns TerminalSubscriber instance so caller can call start()/stop()
  */
 export function registerBuiltins(
   registry: PluginRegistry,
   events: ConductorEventEmitter,
-  renderEvent: UIEventHandler,
-  rendererOpts?: TerminalRendererOptions
+  renderEvent: UIEventHandler
 ): TerminalSubscriber {
   // Task 11: Register ClaudeProvider
   registry.register('llm_provider', 'claude', new ClaudeProvider());
 
-  // Task 12: Register TerminalSubscriber (lifecycle wrapper — wires event emitter to render callback)
+  // Task 12: Register TerminalSubscriber
   const subscriber = new TerminalSubscriber(events, renderEvent);
   registry.register('ui_renderer', 'terminal', subscriber);
-
-  // Feature 1.2 T11: Also register TerminalRenderer (UIRenderer interface) if options provided
-  if (rendererOpts) {
-    const terminalRenderer = new TerminalRenderer(rendererOpts);
-    registry.register('ui_renderer', 'terminal_renderer', terminalRenderer);
-  }
 
   return subscriber;
 }
