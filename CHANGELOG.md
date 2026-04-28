@@ -34,6 +34,20 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 - Unit tests for RecorderProvider (11 tests) covering JSONL format, canned response, parent-dir creation, error handling, concurrent writes, and invokeInteractive
 - Integration tests for RecorderProvider flow (7 tests) covering happy path, misspelled kind rejection, missing plugin dir, version-incompatible manifest, and empty prompt
 - RecorderProvider installs through the plugin loader with zero edits to `src/conductor/src/index.ts`
+- `when?: string` field on `StepConfig` — conditional step skip evaluated before dispatch
+- `parallel?: ParallelBranch[]` field on `StepConfig` — concurrent step groups via `Promise.all`
+- `ParallelBranch` type: `{ name, skill?, model?, effort?, advisory? }` — discriminated from skill steps (mutual exclusion)
+- `evaluateWhen(expression, state)` in `src/engine/when-expression.ts` — five grammar forms: `tier == L`, `tier in [M, L]`, `phase == BUILD`, `${key} == value`, `A && B`
+- `validateWhenSyntax(expression)` — config-load-time syntax check, returns error string or null
+- Four new `ConductorEvent` variants: `when_skip`, `parallel_started`, `parallel_completed`, `parallel_failure`
+- Conductor evaluates `when:` before dispatching each step; emits `when_skip` when false
+- Conductor fans out `parallel:` branches via `Promise.all`; writes synthetic state keys `<group>__<branch>` to `conduct-state.json`
+- Gating branch failure (`advisory: false`, the default) → group fails → downstream blocked
+- Advisory branch failure (`advisory: true`) → logged via `parallel_failure` event, group continues to success
+- `when:` on a parallel group → all synthetic keys set to `"skipped"` when expression is false
+- Terminal renderer handles `when_skip`, `parallel_started`, `parallel_completed`, `parallel_failure` events in `create-renderer.ts`
+- Config validator (`engine/config.ts`) validates `when:` syntax and `parallel:` structure at config-load time
+- 59 new tests across `when-expression.test.ts`, `when-parallel.test.ts`, `when-parallel-renderer.test.ts`
 - Plugin manifest schema (`plugin.yml`) with `kind`, `name`, `entrypoint`, `harness_version`, `capabilities?` fields
 - `PluginKind` enum: `llm_provider | ui_renderer | step | hook | visualizer`
 - Five typed error classes: `PluginManifestError`, `PluginVersionError`, `PluginLoadError`, `PluginNotFoundError`, `PluginRegistryError`
@@ -46,6 +60,49 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 - Integration tests: default-fallback (blank config → claude provider), EchoProvider E2E (external plugin discovery and invocation), version-mismatch and missing-entrypoint negative paths
 
 ### Migration
+
+New optional `when:` and `parallel:` stanzas in `.ai-conductor/config.yml` (Feature 3.1):
+
+```bash
+# Conditionally skip a step — skip 'brainstorm' on small features:
+cat >> .ai-conductor/config.yml << 'EOF'
+steps:
+  brainstorm:
+    when: "tier in [M, L]"
+EOF
+
+# Skip a step based on bootstrap mode:
+cat >> .ai-conductor/config.yml << 'EOF'
+steps:
+  assess:
+    when: "${bootstrap_mode} == fresh"
+EOF
+
+# Run two skills concurrently in a parallel group:
+cat >> .ai-conductor/config.yml << 'EOF'
+steps:
+  build:
+    parallel:
+      - name: frontend
+        skill: skills/build-frontend/SKILL.md
+      - name: backend
+        skill: skills/build-backend/SKILL.md
+        advisory: false   # failure blocks the group (default)
+EOF
+
+# Combine when: with parallel: to skip the entire group on S-tier:
+cat >> .ai-conductor/config.yml << 'EOF'
+steps:
+  build:
+    when: "tier in [M, L]"
+    parallel:
+      - name: unit-tests
+      - name: integration-tests
+        advisory: true    # failure is logged but group succeeds
+EOF
+```
+
+Existing projects require no changes — both `when:` and `parallel:` are opt-in.
 
 New optional config stanzas in `.ai-conductor/config.yml` to select non-default plugins:
 
