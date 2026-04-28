@@ -8,6 +8,39 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 (see `.github/workflows/release.yml`). Every PR must add an entry under
 `## [Unreleased]
 
+## [Unreleased]
+
+### Added
+- Plugin manifest schema (`plugin.yml`) with `kind`, `name`, `entrypoint`, `harness_version`, `capabilities?` fields
+- `PluginKind` enum: `llm_provider | ui_renderer | step | hook | visualizer`
+- Five typed error classes: `PluginManifestError`, `PluginVersionError`, `PluginLoadError`, `PluginNotFoundError`, `PluginRegistryError`
+- `validateManifest()` with required-field, kind-enum, name-format (`/^[a-z0-9-]+$/`), and semver compatibility checks
+- `loadManifestFromFile()` wrapping YAML parse and I/O errors with file path context
+- `PluginRegistry` class: `register<K>()`, `get<T>()`, `list()`, `markInitialized()` with initialization guard
+- `discoverPlugins()`: scans global (`~/.ai-conductor/plugins/`) and project-local (`.ai-conductor/plugins/`) directories; project-local shadows global with debug log
+- `registerBuiltins()`: `ClaudeProvider` → `llm_provider:claude`, `TerminalSubscriber` → `ui_renderer:terminal`
+- `src/index.ts` refactored: no longer hardcodes `new ClaudeProvider()` or `new TerminalSubscriber()` — both retrieved from registry
+- Integration tests: default-fallback (blank config → claude provider), EchoProvider E2E (external plugin discovery and invocation), version-mismatch and missing-entrypoint negative paths
+
+### Migration
+
+New optional config stanzas in `.ai-conductor/config.yml` to select non-default plugins:
+
+```bash
+# Select a custom LLM provider (must be discoverable via plugin.yml in plugin dirs)
+# Default is 'claude' (ClaudeProvider built-in); omit to keep using ClaudeProvider
+echo "llm_provider: my-custom-provider" >> .ai-conductor/config.yml
+
+# Select a custom UI renderer (default is 'terminal'; omit to keep using TerminalSubscriber)
+echo "ui_renderer: my-custom-renderer" >> .ai-conductor/config.yml
+
+# Install a plugin by placing plugin.yml + entrypoint in either:
+#   ~/.ai-conductor/plugins/<plugin-name>/   (global — all projects)
+#   .ai-conductor/plugins/<plugin-name>/     (project-local — overrides global)
+```
+
+Existing projects require no changes — built-in defaults are preserved.
+
 ## [0.99.2] - 2026-04-19
 
 ## [0.99.1] - 2026-04-19

@@ -130,6 +130,168 @@ read as a fallback for installs that predate the YAML migration.
 See `src/conductor/README.md` for the three-layer architecture (Engine / Execution / UI)
 behind `conduct-ts`.
 
+## Configuration
+
+The harness reads two config files, merged in order (project overrides user):
+
+| File | Scope | Purpose |
+|------|-------|---------|
+| `~/.ai-conductor/config.yml` | User-level | Personal defaults, update channel, markdown viewer |
+| `.ai-conductor/config.yml` | Project-level | Per-project model/effort tuning, custom steps, plugin selection |
+
+Both files are optional. The conductor works with zero config.
+
+### Full reference
+
+```yaml
+# .ai-conductor/config.yml
+
+harness_version: ">=0.99.0"   # Minimum harness version this config requires
+
+# ── Global defaults ───────────────────────────────────────────────────────────
+defaults:
+  model: sonnet                 # "haiku" | "sonnet" | "opus" or full model ID
+  effort: medium                # "low" | "medium" | "high" | "xhigh" | "max"
+  max_retries: 3                # Retry budget before recovery-menu escalation
+
+# ── Phase-level defaults (override global) ───────────────────────────────────
+phases:
+  BUILD:
+    model: opus
+    effort: high
+  SHIP:
+    model: sonnet
+
+# ── Per-step overrides ────────────────────────────────────────────────────────
+steps:
+  # Override a built-in step
+  brainstorm:
+    model: opus
+    effort: max
+    max_retries: 1
+
+  # Disable a built-in step (gating/structural steps cannot be disabled)
+  assess:
+    disable: true
+
+  # Override the skill file for a step
+  tdd:
+    skill: .claude/skills/my-custom-tdd/SKILL.md
+
+  # Add a custom step after an existing one
+  my-security-scan:
+    after: writing-system-tests
+    skill: .claude/skills/security-scan/SKILL.md
+    enforcement: advisory
+    hooks:
+      before: scripts/setup-scan.sh
+      after: scripts/teardown-scan.sh
+
+  # Tier-specific overrides (applied when complexity_tier matches)
+  build:
+    by_tier:
+      L:
+        model: opus
+        effort: high
+        max_retries: 5
+      S:
+        model: haiku
+        max_retries: 2
+
+# ── Complexity tier ───────────────────────────────────────────────────────────
+complexity:
+  default_tier: M              # "S" | "M" | "L" — used when /assess hasn't run yet
+
+# ── Plugin selection (conduct-ts only) ───────────────────────────────────────
+llm_provider: claude           # Which registered LLM provider to use (default: "claude")
+ui_renderer: terminal          # Which registered UI renderer to use (default: "terminal")
+
+# ── Assess staleness thresholds ──────────────────────────────────────────────
+assess:
+  stale_after_days: 90         # Re-prompt if last assessment is older than this
+  stale_after_commits: 500     # Re-prompt if this many commits since last assessment
+
+# ── Markdown viewer (for artifact review + changelog rendering) ───────────────
+markdown_viewer:
+  preset: glow                 # Built-in presets: glow, bat, mdcat, less, cat
+  # Or configure manually:
+  # command: glow
+  # args: ["{file}"]
+  # mode: inline               # "inline" | "blocking" | "external"
+
+# ── User-level conductor state (lives in ~/.ai-conductor/config.yml) ─────────
+conductor:
+  update_channel: tagged       # "tagged" | "main"
+  auto_check: true             # Check for updates on startup
+```
+
+### Plugins (`conduct-ts` only)
+
+The TypeScript conductor supports a plugin system for swapping the LLM provider or UI renderer
+without modifying source code. Plugins are discovered from two directories at startup:
+
+| Directory | Scope |
+|-----------|-------|
+| `~/.ai-conductor/plugins/<name>/` | Global — available to all projects |
+| `.ai-conductor/plugins/<name>/` | Project-local — overrides global for same kind+name |
+
+**Writing a plugin manifest (`plugin.yml`):**
+
+```yaml
+kind: llm_provider             # llm_provider | ui_renderer | step | hook | visualizer
+name: my-provider              # lowercase letters, digits, hyphens only — no path chars
+entrypoint: ./index.js         # relative to the plugin directory
+harness_version: ">=0.99.4"   # semver range — conductor rejects incompatible plugins
+capabilities:                  # optional freeform metadata
+  streaming: false
+  recording: true
+```
+
+**Example: install a custom LLM provider**
+
+```bash
+# Create the plugin directory
+mkdir -p ~/.ai-conductor/plugins/my-provider
+
+# Write the manifest
+cat > ~/.ai-conductor/plugins/my-provider/plugin.yml <<EOF
+kind: llm_provider
+name: my-provider
+entrypoint: ./index.js
+harness_version: ">=0.99.4"
+EOF
+
+# Write the entrypoint (must export invoke() and invokeInteractive())
+cat > ~/.ai-conductor/plugins/my-provider/index.js <<EOF
+export default {
+  async invoke(options) {
+    // options: { prompt, model, effort, sessionId, projectRoot }
+    return { success: true, output: "...", exitCode: 0 };
+  },
+  async invokeInteractive(options) {
+    // called for conversational (REPL) steps
+  },
+};
+EOF
+
+# Select it in your project config
+echo "llm_provider: my-provider" >> .ai-conductor/config.yml
+```
+
+**Built-in plugins (always available, no install needed):**
+
+| Kind | Name | Description |
+|------|------|-------------|
+| `llm_provider` | `claude` | Default — invokes Claude CLI via `execa` |
+| `ui_renderer` | `terminal` | Default — ink-based live dashboard |
+
+**Plugin load rules:**
+
+- Manifest validation errors (invalid kind, bad name format) → plugin skipped with a warning; other plugins still load.
+- Version incompatibility (`harness_version` range excludes current version) → startup aborted with `PluginVersionError`.
+- Missing entrypoint file → startup aborted with `PluginLoadError` naming the missing path.
+- Project-local plugin with the same `kind:name` as a global plugin → project-local wins; a debug log line records the shadowing.
+
 ## How It Works
 
 ### SDLC Flow
