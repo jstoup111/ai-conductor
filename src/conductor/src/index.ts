@@ -347,8 +347,8 @@ async function main(): Promise<void> {
     mode === 'auto' ? undefined : async ({ days, commits }) => {
       console.log(
         `\n⚠ Last assessment was ${days} days / ${commits} commits ago ` +
-          `(thresholds: ${config.assess?.stale_after_days ?? 90} days / ` +
-          `${config.assess?.stale_after_commits ?? 500} commits).`,
+          `(thresholds: ${config?.assess?.stale_after_days ?? 90} days / ` +
+          `${config?.assess?.stale_after_commits ?? 500} commits).`,
       );
       const answer = await promptHost.confirm('Re-run /assess now?', false);
       return answer;
@@ -357,7 +357,7 @@ async function main(): Promise<void> {
     projectRoot,
     provider,
     sessionId,
-    config,
+    config ?? {},
     { harnessVersion, onAssessStalePrompt: interactivePrompt },
   );
   if (prelude.bootstrapExecuted) {

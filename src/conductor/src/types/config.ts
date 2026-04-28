@@ -147,4 +147,8 @@ export interface HarnessConfig {
   markdown_viewer?: MarkdownViewerConfig;
   /** Project-level assess staleness thresholds (optional). */
   assess?: AssessConfig;
+  /** Plugin selection: which LLM provider to use (defaults to 'claude'). */
+  llm_provider?: string;
+  /** Plugin selection: which UI renderer to use (defaults to 'terminal'). */
+  ui_renderer?: string;
 }

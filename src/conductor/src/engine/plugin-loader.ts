@@ -6,7 +6,7 @@ import { PluginManifestError, PluginLoadError, PluginVersionError } from '../typ
 import { ClaudeProvider } from '../execution/claude-provider.js';
 import { TerminalSubscriber } from '../ui/subscriber.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
-import type { RenderEvent } from '../ui/create-renderer.js';
+import type { UIEventHandler } from '../ui/subscriber.js';
 
 /**
  * Load and instantiate a plugin from its manifest and entrypoint.
@@ -136,7 +136,7 @@ export async function discoverPlugins(
 export function registerBuiltins(
   registry: PluginRegistry,
   events: ConductorEventEmitter,
-  renderEvent: RenderEvent
+  renderEvent: UIEventHandler
 ): TerminalSubscriber {
   // Task 11: Register ClaudeProvider
   registry.register('llm_provider', 'claude', new ClaudeProvider());

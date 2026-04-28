@@ -66,7 +66,7 @@ export function validateManifest(raw: unknown): PluginManifest {
     }
   }
 
-  return manifest as PluginManifest;
+  return manifest as unknown as PluginManifest;
 }
 
 /**
