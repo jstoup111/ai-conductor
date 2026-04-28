@@ -1,0 +1,6 @@
+kind: llm_provider
+name: recorder
+entrypoint: index.js
+harness_version: ">=0.99.0"
+capabilities:
+  recording: true
