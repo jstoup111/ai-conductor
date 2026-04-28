@@ -14,6 +14,11 @@ import type {
   ArtifactReviewResult,
 } from '../engine/conductor.js';
 
+export interface UIRenderer {
+  handle(event: ConductorEvent): Promise<void>;
+  stop(): void;
+}
+
 export interface UISubscriber {
   start(): void;
   stop(): void;

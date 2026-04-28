@@ -49,4 +49,9 @@ export type ConductorEvent =
       reason: 'no_task_progress' | 'halt_marker';
       resolvedBefore: number;
       resolvedAfter: number;
+    }
+  | {
+      type: 'renderer_error';
+      rendererName: string;
+      error: string;
     };
