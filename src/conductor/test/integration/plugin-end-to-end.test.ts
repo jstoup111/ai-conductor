@@ -166,4 +166,78 @@ export default {
     expect(content).not.toMatch(/EchoProvider/);
     expect(content).not.toMatch(/new EchoProvider/);
   });
+
+  // Task 16: Negative paths — version-mismatch and missing-entrypoint
+  it('throws PluginVersionError before any step runs when plugin harness_version is incompatible', async () => {
+    // Create a version-incompatible plugin with harness_version: "^99.0.0"
+    const incompatibleProviderDir = join(pluginDir, 'incompatible-provider');
+    await mkdir(incompatibleProviderDir, { recursive: true });
+
+    // Write plugin.yml with incompatible version
+    const manifestContent = `kind: llm_provider
+name: incompatible
+entrypoint: index.js
+harness_version: "^99.0.0"
+`;
+    await writeFile(join(incompatibleProviderDir, 'plugin.yml'), manifestContent);
+
+    // Write index.js (it won't be loaded due to version mismatch)
+    const indexContent = `
+export default {
+  async invoke(options) {
+    return { success: true, output: "SHOULD NOT LOAD", exitCode: 0 };
+  },
+  async invokeInteractive(options) {}
+};
+`;
+    await writeFile(join(incompatibleProviderDir, 'index.js'), indexContent);
+
+    // Attempt to discover and load plugins
+    const registry = new PluginRegistry();
+    const { PluginVersionError } = await import('../../src/types/plugin.js');
+
+    // Version mismatch should cause discovery to fail immediately
+    // This prevents incompatible plugins from being registered
+    let threwVersionError = false;
+    try {
+      await discoverPlugins(pluginDir, '', registry);
+    } catch (err) {
+      expect(err).toBeInstanceOf(PluginVersionError);
+      expect(err instanceof Error && err.message).toMatch(/incompatible|harness/i);
+      threwVersionError = true;
+    }
+    expect(threwVersionError).toBe(true);
+  });
+
+  it('throws PluginLoadError with file path when plugin entrypoint file is missing', async () => {
+    // Create a plugin with missing entrypoint file
+    const missingEntrypointDir = join(pluginDir, 'missing-entrypoint-provider');
+    await mkdir(missingEntrypointDir, { recursive: true });
+
+    // Write plugin.yml pointing to non-existent file
+    const manifestContent = `kind: llm_provider
+name: missing
+entrypoint: does-not-exist.js
+harness_version: ">=0.99.0"
+`;
+    await writeFile(join(missingEntrypointDir, 'plugin.yml'), manifestContent);
+
+    // Do NOT write the entrypoint file - it should be missing
+
+    // Attempt to discover and load plugins
+    const registry = new PluginRegistry();
+    const { PluginLoadError } = await import('../../src/types/plugin.js');
+
+    // Missing entrypoint should cause discovery to fail
+    let threwLoadError = false;
+    try {
+      await discoverPlugins(pluginDir, '', registry);
+    } catch (err) {
+      expect(err).toBeInstanceOf(PluginLoadError);
+      expect(err instanceof Error && err.message).toMatch(/does-not-exist\.js|missing/);
+      threwLoadError = true;
+    }
+    expect(threwLoadError).toBe(true);
+  });
+
 });

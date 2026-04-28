@@ -2,7 +2,7 @@ import { readdirSync, existsSync } from 'fs';
 import { join } from 'path';
 import { loadManifestFromFile } from './plugin-manifest.js';
 import { PluginRegistry } from './plugin-registry.js';
-import { PluginManifestError, PluginLoadError } from '../types/plugin.js';
+import { PluginManifestError, PluginLoadError, PluginVersionError } from '../types/plugin.js';
 import { ClaudeProvider } from '../execution/claude-provider.js';
 import { TerminalSubscriber } from '../ui/subscriber.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
@@ -76,9 +76,13 @@ export async function discoverPlugins(
           const plugin = await loadPluginModule(pluginPath, manifest);
           registry.register(manifest.kind, manifest.name, plugin);
         } catch (err) {
-          if (err instanceof PluginManifestError || err instanceof PluginLoadError) {
-            // Skip invalid plugins in auto-discovery (Task 10 behavior)
+          if (err instanceof PluginManifestError) {
+            // Skip invalid manifest in auto-discovery (Task 10 behavior)
             console.warn(`Skipping plugin ${entry.name}: ${err.message}`);
+          } else if (err instanceof PluginVersionError || err instanceof PluginLoadError) {
+            // Task 16: Version incompatibility and missing entrypoint errors should prevent conductor startup
+            // Re-throw to stop the discovery process
+            throw err;
           }
         }
       }
@@ -109,9 +113,13 @@ export async function discoverPlugins(
           // Register project-local plugin (overwrites global if same kind+name)
           registry.register(manifest.kind, manifest.name, plugin);
         } catch (err) {
-          if (err instanceof PluginManifestError || err instanceof PluginLoadError) {
-            // Skip invalid plugins in auto-discovery
+          if (err instanceof PluginManifestError) {
+            // Skip invalid manifest in auto-discovery
             console.warn(`Skipping plugin ${entry.name}: ${err.message}`);
+          } else if (err instanceof PluginVersionError || err instanceof PluginLoadError) {
+            // Task 16: Version incompatibility and missing entrypoint errors should prevent conductor startup
+            // Re-throw to stop the discovery process
+            throw err;
           }
         }
       }
