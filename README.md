@@ -113,8 +113,11 @@ day-to-day, but the surface is still changing.
 | **Dashboard**                | Terminal status log                           | Event-driven renderer with live-region updates and tail pane     |
 | **Completion gates**         | Artifact grep                                 | Typed events + structured gate-runner                            |
 | **Auto-heal**                | None                                          | Reconciles stale `task-status.json` against git log before retry |
-| **Pluggable UI**             | No                                            | Yes — UI is a subscriber behind the engine                       |
-| **Test coverage**            | `test/test_conduct_worktree.sh`               | 673 vitest tests across engine/execution/UI/integration          |
+| **Pluggable UI**             | No                                            | Yes — `UIRenderer` plugin point; custom renderers in one file    |
+| **Pluggable LLM provider**   | No                                            | Yes — swap provider via `plugin.yml` + `llm_provider:` config    |
+| **Conditional steps**        | No                                            | Yes — `when: tier == L` skips steps at runtime                   |
+| **Parallel step groups**     | No                                            | Yes — `parallel: [...]` fans out branches via `Promise.all`      |
+| **Test coverage**            | `test/test_conduct_worktree.sh`               | 820+ vitest tests across engine/execution/UI/integration         |
 | **Pinned Node**              | N/A                                           | Reads `src/conductor/.tool-versions` via asdf                    |
 
 **Default:** use `conduct`. Everything in this README's examples works.
@@ -186,6 +189,24 @@ steps:
     hooks:
       before: scripts/setup-scan.sh
       after: scripts/teardown-scan.sh
+
+  # Conditionally run a step (`conduct-ts` only)
+  # Supported forms: tier == L  |  tier in [M, L]  |  phase == BUILD
+  #                  ${state_key} == value  |  A && B
+  expensive-analysis:
+    after: plan
+    skill: .claude/skills/expensive-analysis/SKILL.md
+    when: "tier == L"                    # only runs for Large features
+
+  # Run steps concurrently in a parallel group (`conduct-ts` only)
+  parallel-design:
+    after: brainstorm
+    parallel:
+      - name: frontend
+        skill: .claude/skills/design-frontend/SKILL.md
+      - name: backend
+        skill: .claude/skills/design-backend/SKILL.md
+        advisory: true   # failure won't block the group
 
   # Tier-specific overrides (applied when complexity_tier matches)
   build:
@@ -284,6 +305,26 @@ echo "llm_provider: my-provider" >> .ai-conductor/config.yml
 |------|------|-------------|
 | `llm_provider` | `claude` | Default — invokes Claude CLI via `execa` |
 | `ui_renderer` | `terminal` | Default — ink-based live dashboard |
+| `llm_provider` | `recorder` | Reference plugin — logs every call to JSONL; returns canned response. Ships in `plugins/recorder-provider/`. Useful for testing. |
+
+**Writing a custom `ui_renderer`:**
+
+A UI renderer receives every conductor event and renders it. Implement the `UIRenderer` interface:
+
+```typescript
+// ~/.ai-conductor/plugins/my-renderer/index.ts
+import type { ConductorEvent } from 'ai-conductor';
+
+export default {
+  async handle(event: ConductorEvent): Promise<void> {
+    // render event — e.g. write JSON to stdout, push to SSE stream, etc.
+    console.log(JSON.stringify(event));
+  },
+  async stop(): Promise<void> {
+    // clean up (close streams, flush buffers)
+  },
+};
+```
 
 **Plugin load rules:**
 
