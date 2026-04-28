@@ -54,27 +54,4 @@ export type ConductorEvent =
       type: 'renderer_error';
       rendererName: string;
       error: string;
-    }
-  | {
-      type: 'when_skip';
-      step: StepName;
-      expression: string;
-      /** Set when a `${key}` reference resolved to undefined in state. */
-      undefinedKey?: string;
-    }
-  | {
-      type: 'parallel_started';
-      step: StepName;
-      branches: string[];
-    }
-  | {
-      type: 'parallel_completed';
-      step: StepName;
-      branches: string[];
-    }
-  | {
-      type: 'parallel_failure';
-      step: StepName;
-      branch: string;
-      error: string;
     };
