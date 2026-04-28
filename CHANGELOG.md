@@ -23,6 +23,10 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 - `registerBuiltins()` now accepts optional `TerminalRendererOptions` and registers `TerminalRenderer` as `ui_renderer:terminal_renderer` alongside the existing `TerminalSubscriber`
 - New test files: `test/ui/terminal-renderer.test.ts` (TerminalRenderer class), `test/ui/dispatch.test.ts` (dispatch + degradation + slow-renderer + dup-renderer scenarios)
 
+- `when?: string` field on `StepConfig` — conditional step skip evaluated before dispatch; `parallel?: ParallelBranch[]` — concurrent step groups via `Promise.all`
+- `evaluateWhen()` in `src/engine/when-expression.ts` — five grammar forms: `tier == L`, `tier in [M, L]`, `phase == BUILD`, `${key} == value`, `A && B`
+- Four new events: `when_skip`, `parallel_started`, `parallel_completed`, `parallel_failure`; gating/advisory branch semantics; synthetic state keys `<group>__<branch>`
+- Config validator enforces `when:` syntax and `parallel:` structure at config-load; 59 new tests
 ### Added (Feature 1.1 — Plugin Loader Foundation)
 - Plugin manifest schema (`plugin.yml`) with `kind`, `name`, `entrypoint`, `harness_version`, `capabilities?` fields
 - `PluginKind` enum: `llm_provider | ui_renderer | step | hook | visualizer`

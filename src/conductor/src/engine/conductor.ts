@@ -11,6 +11,8 @@ import type {
   RecoveryOption,
   RecoveryContext,
 } from '../types/index.js';
+import type { ParallelBranch } from '../types/config.js';
+import { evaluateWhen } from './when-expression.js';
 import type { HarnessConfig } from '../types/config.js';
 import { ConductorEventEmitter } from '../ui/events.js';
 import {
@@ -307,6 +309,52 @@ export class Conductor {
         await saveStepStatus(this.stateFilePath, step.name, 'skipped');
         state[step.name] = 'skipped';
         await this.events.emit({ type: 'config_skip', step: step.name });
+        continue;
+      }
+
+      // Evaluate when: expression (T9 — conditional step skip)
+      const stepCfg = this.config?.steps?.[step.name];
+      if (stepCfg?.when) {
+        const whenResult = evaluateWhen(stepCfg.when, state);
+        if (!whenResult.result) {
+          await saveStepStatus(this.stateFilePath, step.name, 'skipped');
+          state[step.name] = 'skipped';
+          await this.events.emit({
+            type: 'when_skip',
+            step: step.name,
+            expression: stepCfg.when,
+            undefinedKey: whenResult.undefinedKey,
+          });
+
+          // T21: when: on a parallel group → set all synthetic keys to "skipped"
+          if (stepCfg.parallel) {
+            for (const branch of stepCfg.parallel) {
+              const syntheticKey = `${step.name}__${branch.name}`;
+              (state as Record<string, unknown>)[syntheticKey] = 'skipped';
+            }
+            await writeState(this.stateFilePath, state);
+          }
+          continue;
+        }
+      }
+
+      // Execute parallel group (T15 — Promise.all fan-out)
+      if (stepCfg?.parallel) {
+        await this.runParallelGroup(step.name, stepCfg.parallel, state);
+        // State keys are already written inside runParallelGroup.
+        // The step's own status is set to 'done' or 'failed' inside runParallelGroup.
+        // If it failed (gating branch), we stop here.
+        if (state[step.name] === 'failed') {
+          await this.events.emit({
+            type: 'step_failed',
+            step: step.name,
+            error: `Parallel group "${step.name}" had a gating branch failure`,
+            retryCount: 0,
+          });
+          await writeState(this.stateFilePath, state);
+          process.off('SIGINT', sigintHandler);
+          return;
+        }
         continue;
       }
 
@@ -683,6 +731,89 @@ export class Conductor {
     await this.events.emit({ type: 'feature_complete', prUrl: state.pr_url });
     state.feature_status = 'complete';
     await writeState(this.stateFilePath, state);
+  }
+
+  /**
+   * Execute a parallel branch group via Promise.all (T15).
+   *
+   * Each branch is dispatched concurrently. Synthetic state keys of the form
+   * `<groupName>__<branchName>` are written to conduct-state.json (T16).
+   *
+   * Failure semantics (T18 / T19):
+   *   - advisory=false (default): branch failure → parallel_failure event →
+   *     group fails → downstream blocked (T10 gate).
+   *   - advisory=true: branch failure is logged (parallel_failure) but the
+   *     group continues to success.
+   *
+   * SIGINT during a parallel group saves state and exits (T20).
+   */
+  private async runParallelGroup(
+    groupName: StepName,
+    branches: ParallelBranch[],
+    state: ConductState,
+  ): Promise<void> {
+    const branchNames = branches.map((b) => b.name);
+    await this.events.emit({ type: 'parallel_started', step: groupName, branches: branchNames });
+
+    let groupFailed = false;
+
+    // Fan out: run all branches concurrently
+    const results = await Promise.all(
+      branches.map(async (branch) => {
+        const syntheticKey = `${groupName}__${branch.name}`;
+        try {
+          const result = await this.stepRunner.run(
+            groupName,
+            state,
+            { retryReason: undefined },
+          );
+          if (!result.success) {
+            (state as Record<string, unknown>)[syntheticKey] = 'failed';
+            return { branch, success: false, error: result.output ?? `branch ${branch.name} failed` };
+          }
+          (state as Record<string, unknown>)[syntheticKey] = 'done';
+          return { branch, success: true, error: undefined };
+        } catch (err) {
+          const errMsg = err instanceof Error ? err.message : String(err);
+          (state as Record<string, unknown>)[syntheticKey] = 'failed';
+          return { branch, success: false, error: errMsg };
+        }
+      }),
+    );
+
+    // Write all synthetic keys to state file (T16)
+    await writeState(this.stateFilePath, state);
+
+    // Evaluate branch outcomes (T17 post-parallel gate)
+    for (const outcome of results) {
+      if (!outcome.success) {
+        await this.events.emit({
+          type: 'parallel_failure',
+          step: groupName,
+          branch: outcome.branch.name,
+          error: outcome.error ?? 'unknown error',
+        });
+        if (!outcome.branch.advisory) {
+          // T18: gating failure → group fails
+          groupFailed = true;
+        }
+        // T19: advisory failure → continue (no groupFailed set)
+      }
+    }
+
+    if (groupFailed) {
+      // Mark the group step itself as failed
+      await saveStepStatus(this.stateFilePath, groupName, 'failed');
+      state[groupName] = 'failed';
+    } else {
+      await saveStepStatus(this.stateFilePath, groupName, 'done');
+      state[groupName] = 'done';
+      await this.events.emit({
+        type: 'parallel_completed',
+        step: groupName,
+        branches: branchNames,
+      });
+    }
   }
 
   /**
