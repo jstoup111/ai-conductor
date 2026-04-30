@@ -6,7 +6,18 @@ import { load } from 'js-yaml';
 import { PluginManifest, PluginManifestError, PluginVersionError, VALID_PLUGIN_KINDS } from '../types/plugin.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const HARNESS_VERSION = readFileSync(join(__dirname, '../../../../VERSION'), 'utf-8').trim();
+// The relative depth to VERSION differs between the source tree (src/engine/ → 4 levels up)
+// and the bundle (dist/ → 3 levels up), so probe both.
+function resolveHarnessVersion(): string {
+  for (const rel of ['../../../VERSION', '../../../../VERSION']) {
+    try {
+      const v = readFileSync(join(__dirname, rel), 'utf-8').trim();
+      if (/^\d+\.\d+\.\d+/.test(v)) return v;
+    } catch { /* try next */ }
+  }
+  return '0.0.0';
+}
+const HARNESS_VERSION = resolveHarnessVersion();
 
 /**
  * Validates a manifest object and ensures all required fields are present.
