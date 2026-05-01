@@ -6,7 +6,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 (see `.github/workflows/release.yml`). Every PR must add an entry under
-`## [Unreleased]`.
+`## [Unreleased]
+
+## [0.99.13] - 2026-05-01`.
 
 ## [0.99.12] - 2026-04-30
 
