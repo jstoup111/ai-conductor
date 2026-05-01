@@ -29,6 +29,14 @@ export type ConductState = {
   complexity_tier?: ComplexityTier;
   bootstrap_mode?: BootstrapMode;
   run_started_at?: number;
+  /**
+   * Epoch ms of the most recent `Conductor.run()` invocation. Set on every
+   * entry to `run()` so SHIP-phase completion gates can compare artifact
+   * mtimes against the current session's start and reject anything left
+   * over from a previous run. Old state files without this field are
+   * tolerated (gates fail open when undefined).
+   */
+  session_started_at?: number;
   last_step?: StepName;
   pr_url?: string;
   worktree_dir?: string;

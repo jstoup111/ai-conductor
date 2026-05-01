@@ -223,6 +223,27 @@ export class Conductor {
     const stateResult = await readState(this.stateFilePath);
     let state: ConductState = stateResult.ok ? stateResult.value : {};
 
+    // Stamp this conductor invocation. SHIP-phase completion predicates
+    // compare artifact mtimes against this timestamp so a stale file left
+    // over from a prior session can't satisfy a gate. Old state files
+    // without this field are tolerated — predicates fail open when it's
+    // missing.
+    const sessionStartedAt = Date.now();
+    state.session_started_at = sessionStartedAt;
+    if (!state.run_started_at) state.run_started_at = sessionStartedAt;
+    await writeState(this.stateFilePath, state);
+
+    // Sweep stale per-session markers from prior invocations. A marker left
+    // here from a previous run can't legitimately satisfy this run's gate
+    // — the finish skill writes it freshly on every successful run. The
+    // halt marker (.pipeline/halt-user-input-required) is intentionally
+    // NOT swept: a marker that survives across sessions is a real signal
+    // (the prior session left it; this session needs to address it on the
+    // next build attempt).
+    await unlinkFile(join(this.projectRoot, '.pipeline/finish-choice')).catch(() => {
+      // Marker absent — nothing to clean.
+    });
+
     // Determine starting index
     let startIndex = 0;
     if (this.fromStep) {
@@ -441,7 +462,10 @@ export class Conductor {
 
         // Step runner returned success. Now verify real completion.
         if (this.verifyArtifacts && stepHasCompletionCheck(step.name) && step.name !== 'complexity') {
-          let completion = await checkStepCompletion(this.projectRoot, step.name);
+          let completion = await checkStepCompletion(this.projectRoot, step.name, {
+            sessionStartedAt: state.session_started_at,
+            featureDesc: state.feature_desc,
+          });
 
           // Auto-heal hook: before treating a build-gate miss as a failure,
           // reconcile .pipeline/task-status.json against git log. If the
@@ -465,7 +489,10 @@ export class Conductor {
               skipped: heal.skipped.length,
             });
             if (heal.healed.length > 0) {
-              completion = await checkStepCompletion(this.projectRoot, step.name);
+              completion = await checkStepCompletion(this.projectRoot, step.name, {
+                sessionStartedAt: state.session_started_at,
+                featureDesc: state.feature_desc,
+              });
             }
           }
 
@@ -507,7 +534,10 @@ export class Conductor {
                 if (this.stepRunner.runInteractive) {
                   await this.stepRunner.runInteractive(step.name);
                 }
-                const recheck = await checkStepCompletion(this.projectRoot, step.name);
+                const recheck = await checkStepCompletion(this.projectRoot, step.name, {
+                  sessionStartedAt: state.session_started_at,
+                  featureDesc: state.feature_desc,
+                });
                 if (recheck.done) {
                   succeeded = true;
                   successOutput = result.output;
@@ -728,7 +758,12 @@ export class Conductor {
     process.off('SIGINT', sigintHandler);
 
     // All steps completed successfully
-    await this.events.emit({ type: 'feature_complete', prUrl: state.pr_url });
+    await this.events.emit({
+      type: 'feature_complete',
+      prUrl: state.pr_url,
+      featureDesc: state.feature_desc,
+      sessionStartedAt: state.session_started_at,
+    });
     state.feature_status = 'complete';
     await writeState(this.stateFilePath, state);
   }

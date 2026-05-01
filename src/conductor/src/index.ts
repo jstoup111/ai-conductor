@@ -27,6 +27,10 @@ import { sendNotification } from './ui/notifications.js';
 import { scanResumableFeatures, selectFeature, formatResumeMenu } from './engine/resume.js';
 import { WorktreeManager, checkPrMerged } from './engine/worktree.js';
 import { detectAutoResume } from './engine/auto-resume.js';
+import {
+  verifyCompleteState,
+  formatGapReport,
+} from './engine/complete-verifier.js';
 import { ensureClaudeSettings } from './engine/preflight.js';
 import { createLiveRegion } from './ui/live-region.js';
 import { TerminalPromptHost } from './ui/terminal/prompt-host.js';
@@ -180,6 +184,46 @@ async function main(): Promise<void> {
     return;
   }
 
+  // Handle --diagnose: re-verify SHIP-phase evidence for the named (or
+  // current) feature and report gaps. Non-mutating; exits 1 if the state
+  // claims complete but evidence is missing, 0 otherwise.
+  if (opts.diagnose) {
+    let targetWorktree = projectRoot;
+    let targetFeatureDesc: string | undefined;
+    if (opts.featureDesc) {
+      const detection = await detectAutoResume(projectRoot, opts.featureDesc);
+      if (detection.kind === 'complete' || detection.kind === 'resume') {
+        targetWorktree = detection.worktreePath;
+        targetFeatureDesc = opts.featureDesc;
+      } else if (detection.kind === 'none') {
+        console.log(
+          `No conductor state found for "${opts.featureDesc}" — nothing to diagnose.`,
+        );
+        return;
+      } else {
+        // orphaned-state: surface the same message --resume would
+        console.error(
+          `\nOrphaned conductor state in ${detection.stateFilePath}.\n  Run conduct-ts --reset to clear, or recreate the worktree.\n`,
+        );
+        process.exit(1);
+      }
+    }
+    const verification = await verifyCompleteState(targetWorktree);
+    if (verification.ok) {
+      console.log(
+        `\nState OK: ${targetFeatureDesc ? `"${targetFeatureDesc}"` : 'this worktree'} has consistent SHIP-phase evidence.\n`,
+      );
+      return;
+    }
+    console.error(formatGapReport(targetFeatureDesc, targetWorktree, verification));
+    console.error(
+      '  To roll back feature_status and resume at the first failing step, run:\n' +
+        `    conduct-ts ${targetFeatureDesc ? `"${targetFeatureDesc}"` : ''}\n` +
+        '  …and answer "y" at the recovery prompt. To inspect raw state: conduct-ts --status\n',
+    );
+    process.exit(1);
+  }
+
   // Auto-resume: if a feature description was provided and a worktree for its
   // slug already exists with in-progress state, silently redirect to that
   // worktree and enable resume. --fresh bypasses this.
@@ -199,19 +243,59 @@ async function main(): Promise<void> {
         `\nResuming "${opts.featureDesc}" at ${position}. Use --fresh to start over.\n`,
       );
     } else if (detection.kind === 'complete') {
-      const answer = await promptHost.ask(
-        `Feature "${opts.featureDesc}" is already marked complete (${detection.worktreePath}). Start over? [y/N]: `,
-      );
-      if (answer !== 'y') {
-        console.log('Exiting. Use --fresh to force a new start.');
-        return;
+      // Re-verify SHIP-phase evidence before trusting feature_status=complete.
+      // A prior buggy version of the conductor (pre-0.99.14) could mark a
+      // feature complete when pipeline exited mid-implementation without
+      // writing the halt marker — cascading lax SHIP gates would then fall
+      // through to feature_status=complete. This re-check self-heals those
+      // worktrees: if evidence is missing, we surface the gap and offer to
+      // roll back to the actual stopping point.
+      const verification = await verifyCompleteState(detection.worktreePath);
+      if (!verification.ok) {
+        console.warn(formatGapReport(opts.featureDesc, detection.worktreePath, verification));
+        const answer = await promptHost.ask(
+          'Roll back feature_status and resume at the first failing step? [Y/n/q]: ',
+        );
+        if (answer === 'n' || answer === 'q') {
+          console.log(
+            '\nNo changes made. To inspect: conduct-ts --status\n' +
+              `  To start over: conduct-ts --fresh ${opts.featureDesc ? `"${opts.featureDesc}"` : ''}\n`,
+          );
+          return;
+        }
+        // Default Y → roll back. Drop feature_status and flip the failing
+        // SHIP steps back to 'pending' so the conductor's resume index
+        // lands at the earliest one and the loop re-runs them.
+        projectRoot = detection.worktreePath;
+        pipelineDir = join(projectRoot, '.pipeline');
+        stateFilePath = join(pipelineDir, 'conduct-state.json');
+        await mkdir(pipelineDir, { recursive: true });
+        const r = await readState(stateFilePath);
+        const fixed = r.ok ? { ...r.value } : {};
+        delete fixed.feature_status;
+        for (const step of verification.failedSteps) {
+          (fixed as Record<string, unknown>)[step] = 'pending';
+        }
+        await writeState(stateFilePath, fixed);
+        opts.resume = true;
+        console.log(
+          `\nRolled back. Resuming "${opts.featureDesc}" at ${verification.failedSteps[0]}.\n`,
+        );
+      } else {
+        const answer = await promptHost.ask(
+          `Feature "${opts.featureDesc}" is already marked complete (${detection.worktreePath}). Start over? [y/N]: `,
+        );
+        if (answer !== 'y') {
+          console.log('Exiting. Use --fresh to force a new start.');
+          return;
+        }
+        // User chose to start over — clear the existing state and continue fresh.
+        projectRoot = detection.worktreePath;
+        pipelineDir = join(projectRoot, '.pipeline');
+        stateFilePath = join(pipelineDir, 'conduct-state.json');
+        await mkdir(pipelineDir, { recursive: true });
+        await writeState(stateFilePath, {});
       }
-      // User chose to start over — clear the existing state and continue fresh.
-      projectRoot = detection.worktreePath;
-      pipelineDir = join(projectRoot, '.pipeline');
-      stateFilePath = join(pipelineDir, 'conduct-state.json');
-      await mkdir(pipelineDir, { recursive: true });
-      await writeState(stateFilePath, {});
     } else if (detection.kind === 'orphaned-state') {
       // Root-level state says we're past the worktree step, but no worktree
       // exists at any conventional location. Continuing would re-land all

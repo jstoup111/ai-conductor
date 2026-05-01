@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, mkdir, writeFile } from 'fs/promises';
+import { mkdtemp, rm, mkdir, writeFile, utimes } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import {
@@ -9,6 +9,7 @@ import {
   getArtifactStatus,
   checkStepCompletion,
   FINISH_CHOICE_MARKER,
+  HALT_MARKER,
 } from '../../src/engine/artifacts.js';
 
 describe('engine/artifacts', () => {
@@ -40,8 +41,11 @@ describe('engine/artifacts', () => {
 
     it('returns an empty list for steps that produce no artifacts', () => {
       expect(STEP_ARTIFACT_GLOBS.complexity).toEqual([]);
-      expect(STEP_ARTIFACT_GLOBS.manual_test).toEqual([]);
       expect(STEP_ARTIFACT_GLOBS.finish).toEqual([]);
+    });
+
+    it('declares manual_test results file', () => {
+      expect(STEP_ARTIFACT_GLOBS.manual_test).toEqual(['.docs/manual-test-results.md']);
     });
   });
 
@@ -92,7 +96,6 @@ describe('engine/artifacts', () => {
   describe('stepHasArtifacts', () => {
     it('returns true for steps that produce no artifacts (vacuous truth)', async () => {
       expect(await stepHasArtifacts(dir, 'complexity')).toBe(true);
-      expect(await stepHasArtifacts(dir, 'manual_test')).toBe(true);
       expect(await stepHasArtifacts(dir, 'worktree')).toBe(true);
     });
 
@@ -108,7 +111,8 @@ describe('engine/artifacts', () => {
   });
 
   describe('checkStepCompletion: finish predicate', () => {
-    it('passes when state.pr_url is set in .pipeline/conduct-state.json', async () => {
+    it('passes when finish-choice="pr" AND state.pr_url is set', async () => {
+      await createFile(FINISH_CHOICE_MARKER, 'pr');
       await createFile(
         '.pipeline/conduct-state.json',
         JSON.stringify({ pr_url: 'https://github.com/foo/bar/pull/1' }),
@@ -127,25 +131,28 @@ describe('engine/artifacts', () => {
       }
     });
 
-    it('passes when finish-choice marker is "pr"', async () => {
+    it('fails when finish-choice="pr" but state has no pr_url', async () => {
       await createFile(FINISH_CHOICE_MARKER, 'pr');
+      // No .pipeline/conduct-state.json with pr_url.
       const result = await checkStepCompletion(dir, 'finish');
-      expect(result).toEqual({ done: true });
+      expect(result.done).toBe(false);
+      expect(result.reason).toMatch(/pr_url/);
+    });
+
+    it('fails when state.pr_url is set but finish-choice marker is missing', async () => {
+      await createFile(
+        '.pipeline/conduct-state.json',
+        JSON.stringify({ pr_url: 'https://github.com/foo/bar/pull/1' }),
+      );
+      const result = await checkStepCompletion(dir, 'finish');
+      expect(result.done).toBe(false);
+      expect(result.reason).toMatch(/finish-choice/);
     });
 
     it('fails when neither pr_url nor finish-choice exists', async () => {
       const result = await checkStepCompletion(dir, 'finish');
       expect(result.done).toBe(false);
       expect(result.reason).toMatch(/finish-choice/);
-    });
-
-    it('fails when state file exists but has no pr_url and no marker', async () => {
-      await createFile(
-        '.pipeline/conduct-state.json',
-        JSON.stringify({ feature_status: 'complete' }),
-      );
-      const result = await checkStepCompletion(dir, 'finish');
-      expect(result.done).toBe(false);
     });
 
     it('fails when finish-choice contains an unrecognized value', async () => {
@@ -156,8 +163,126 @@ describe('engine/artifacts', () => {
     });
 
     it('trims whitespace around the marker value', async () => {
-      await createFile(FINISH_CHOICE_MARKER, '  pr\n');
+      await createFile(FINISH_CHOICE_MARKER, '  keep\n');
       const result = await checkStepCompletion(dir, 'finish');
+      expect(result).toEqual({ done: true });
+    });
+
+    it('rejects a stale finish-choice when sessionStartedAt is in the future', async () => {
+      await createFile(FINISH_CHOICE_MARKER, 'keep');
+      // Backdate the marker to before the session.
+      const past = new Date(Date.now() - 60_000);
+      await utimes(join(dir, FINISH_CHOICE_MARKER), past, past);
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: Date.now(),
+      });
+      expect(result.done).toBe(false);
+      expect(result.reason).toMatch(/stale/);
+    });
+  });
+
+  describe('checkStepCompletion: build predicate (halt marker)', () => {
+    async function writeAllCompleteTaskStatus() {
+      await createFile(
+        '.pipeline/task-status.json',
+        JSON.stringify({
+          tasks: [
+            { id: 'T1', status: 'completed' },
+            { id: 'T2', status: 'completed' },
+          ],
+        }),
+      );
+    }
+
+    it('fails when .pipeline/halt-user-input-required is present, even with all-complete tasks', async () => {
+      await writeAllCompleteTaskStatus();
+      await createFile(HALT_MARKER, 'user requested exit; 1 regression pending');
+      const result = await checkStepCompletion(dir, 'build');
+      expect(result.done).toBe(false);
+      expect(result.reason).toMatch(/halt-user-input-required/);
+    });
+
+    it('passes when no halt marker and all tasks completed', async () => {
+      await writeAllCompleteTaskStatus();
+      const result = await checkStepCompletion(dir, 'build');
+      expect(result).toEqual({ done: true });
+    });
+  });
+
+  describe('checkStepCompletion: manual_test predicate', () => {
+    const RESULTS = '.docs/manual-test-results.md';
+
+    it('fails when manual-test-results.md is missing', async () => {
+      const result = await checkStepCompletion(dir, 'manual_test');
+      expect(result.done).toBe(false);
+      expect(result.reason).toMatch(/manual-test-results\.md/);
+    });
+
+    it('fails when manual-test-results.md contains a FAIL row', async () => {
+      await createFile(
+        RESULTS,
+        '# Results\n\n| Story | Result |\n|---|---|\n| Foo | PASS |\n| Bar | FAIL |\n',
+      );
+      const result = await checkStepCompletion(dir, 'manual_test', {
+        sessionStartedAt: 0,
+      });
+      expect(result.done).toBe(false);
+      expect(result.reason).toMatch(/FAIL/);
+    });
+
+    it('passes when results are PASS only and fresh enough', async () => {
+      await createFile(RESULTS, '| Story | Result |\n|---|---|\n| Foo | PASS |\n');
+      const result = await checkStepCompletion(dir, 'manual_test', {
+        sessionStartedAt: 0,
+      });
+      expect(result).toEqual({ done: true });
+    });
+
+    it('rejects a stale results file when sessionStartedAt is newer than mtime', async () => {
+      await createFile(RESULTS, '| Story | Result |\n|---|---|\n| Foo | PASS |\n');
+      const past = new Date(Date.now() - 60_000);
+      await utimes(join(dir, RESULTS), past, past);
+      const result = await checkStepCompletion(dir, 'manual_test', {
+        sessionStartedAt: Date.now(),
+      });
+      expect(result.done).toBe(false);
+      expect(result.reason).toMatch(/stale/);
+    });
+  });
+
+  describe('checkStepCompletion: retro predicate', () => {
+    it('fails when no retro files exist', async () => {
+      const result = await checkStepCompletion(dir, 'retro');
+      expect(result.done).toBe(false);
+      expect(result.reason).toMatch(/no \.docs\/retros/);
+    });
+
+    it('fails when only stale prior-feature retros exist', async () => {
+      await createFile('.docs/retros/2025-01-01-other-feature.md', '# Retro');
+      const past = new Date(Date.now() - 60_000);
+      await utimes(join(dir, '.docs/retros/2025-01-01-other-feature.md'), past, past);
+      const result = await checkStepCompletion(dir, 'retro', {
+        sessionStartedAt: Date.now(),
+        featureDesc: 'add foo',
+      });
+      expect(result.done).toBe(false);
+      expect(result.reason).toMatch(/no retro found for current feature|stale/);
+    });
+
+    it('passes when a fresh slug-matched retro exists', async () => {
+      await createFile('.docs/retros/2026-05-01-add-foo.md', '# Retro');
+      const result = await checkStepCompletion(dir, 'retro', {
+        sessionStartedAt: 0,
+        featureDesc: 'add foo',
+      });
+      expect(result).toEqual({ done: true });
+    });
+
+    it('passes when feature_desc is unavailable and any fresh retro file exists', async () => {
+      await createFile('.docs/retros/some-retro.md', '# Retro');
+      const result = await checkStepCompletion(dir, 'retro', {
+        sessionStartedAt: 0,
+      });
       expect(result).toEqual({ done: true });
     });
   });

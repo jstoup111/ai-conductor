@@ -1,6 +1,7 @@
-import { readdir, readFile } from 'fs/promises';
+import { access, readdir, readFile, stat } from 'fs/promises';
 import { join, relative } from 'path';
 import type { StepName } from '../types/index.js';
+import { slugify } from './worktree.js';
 
 /**
  * Artifact glob patterns per step. Each pattern is `<dir>/*.md`, `<dir>/**\/*.md`,
@@ -29,10 +30,36 @@ export const STEP_ARTIFACT_GLOBS: Record<StepName, string[]> = {
   worktree: [],
   acceptance_specs: ['spec/acceptance/**/*', 'test/acceptance/**/*'],
   build: ['.pipeline/task-status.json'],
-  manual_test: [],
+  manual_test: ['.docs/manual-test-results.md'],
   retro: ['.docs/retros/*.md'],
   finish: [],
 };
+
+/**
+ * True if `path` exists AND its mtime is at or after `sessionStartedAt`.
+ * SHIP-phase completion predicates use this to reject artifacts left over
+ * from a previous conductor session — without it, a `.docs/manual-test-
+ * results.md` from a prior feature, or a stale `.pipeline/finish-choice`,
+ * would silently satisfy the gate.
+ *
+ * When `sessionStartedAt` is undefined (legacy state without the stamp,
+ * or callers that opt out), returns true on file presence — fail open
+ * rather than break in-flight features on upgrade.
+ */
+export async function fileIsFreshSinceSession(
+  path: string,
+  sessionStartedAt: number | undefined,
+): Promise<boolean> {
+  try {
+    const s = await stat(path);
+    if (sessionStartedAt === undefined) return true;
+    return s.mtimeMs >= sessionStartedAt;
+  } catch {
+    return false;
+  }
+}
+
+export const HALT_MARKER = '.pipeline/halt-user-input-required';
 
 /**
  * Returns the absolute paths of files matching a step's artifact globs, rooted at `dir`.
@@ -83,40 +110,38 @@ export const FINISH_CHOICE_MARKER = '.pipeline/finish-choice';
 export const FINISH_CHOICE_VALUES = ['pr', 'merge-local', 'keep', 'discard'] as const;
 export type FinishChoice = (typeof FINISH_CHOICE_VALUES)[number];
 
-export const CUSTOM_COMPLETION_PREDICATES: Partial<
-  Record<StepName, (dir: string) => Promise<CompletionResult>>
-> = {
-  // The finish step has no file artifact; verify it produced one of the
-  // outcomes the skill is supposed to choose between: a PR (state.pr_url
-  // is set) or an explicit non-PR exit recorded in
-  // `.pipeline/finish-choice`. Without this, print-mode finish (no user
-  // attached) silently completes by listing options without acting.
-  finish: async (dir: string): Promise<CompletionResult> => {
-    try {
-      const raw = await readFile(join(dir, '.pipeline/conduct-state.json'), 'utf-8');
-      const state = JSON.parse(raw) as { pr_url?: string };
-      if (state.pr_url) return { done: true };
-    } catch {
-      // No state file readable — fall through to the marker check.
-    }
-    try {
-      const choice = (await readFile(join(dir, FINISH_CHOICE_MARKER), 'utf-8')).trim();
-      if ((FINISH_CHOICE_VALUES as readonly string[]).includes(choice)) {
-        return { done: true };
-      }
-      return {
-        done: false,
-        reason: `${FINISH_CHOICE_MARKER} contains unrecognized value "${choice}" — expected one of ${FINISH_CHOICE_VALUES.join(', ')}`,
-      };
-    } catch {
-      return {
-        done: false,
-        reason: `finish produced no pr_url and no ${FINISH_CHOICE_MARKER} marker (skill must record the chosen outcome)`,
-      };
-    }
-  },
+/** Context threaded through completion predicates. Optional fields fail open. */
+export interface CompletionContext {
+  /** Epoch ms; predicates reject artifacts older than this when set. */
+  sessionStartedAt?: number;
+  /** Used by the retro predicate to prefer slug-matched filenames. */
+  featureDesc?: string;
+}
 
+export const CUSTOM_COMPLETION_PREDICATES: Partial<
+  Record<StepName, (dir: string, ctx: CompletionContext) => Promise<CompletionResult>>
+> = {
+  // Build is "done" only when (a) no halt marker is present and (b) every
+  // task in .pipeline/task-status.json is completed or skipped. The halt-
+  // marker check exists because a pipeline session that exits at the user's
+  // explicit request (e.g. "exit to harness, continue later") may leave
+  // task-status.json showing all-complete from prior tasks while the
+  // user-requested blocker is still open. The pipeline skill writes
+  // .pipeline/halt-user-input-required in that case (skills/pipeline/SKILL.md
+  // §"User-requested exit during a run"); the conductor's stall handler
+  // clears it before re-checking, so a marker that survives to gate-check
+  // means a true halt that bypassed the stall handler.
   build: async (dir: string): Promise<CompletionResult> => {
+    try {
+      await access(join(dir, HALT_MARKER));
+      return {
+        done: false,
+        reason: `${HALT_MARKER} is present — pipeline halted; conductor will open a recovery REPL`,
+      };
+    } catch {
+      // No marker — proceed.
+    }
+
     const statusPath = join(dir, '.pipeline/task-status.json');
     let raw: string;
     try {
@@ -145,6 +170,131 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
         done: false,
         reason: `${incomplete.length}/${tasks.length} tasks not completed: ${names}${more}`,
       };
+    }
+    return { done: true };
+  },
+
+  // Manual-test passes only when .docs/manual-test-results.md exists, has
+  // no FAIL rows, and was written this session. Previously the step had no
+  // gate at all (STEP_ARTIFACT_GLOBS['manual_test'] = []) — any clean REPL
+  // exit marked it done with zero proof of work.
+  manual_test: async (dir, ctx): Promise<CompletionResult> => {
+    const file = join(dir, '.docs/manual-test-results.md');
+    let content: string;
+    try {
+      content = await readFile(file, 'utf-8');
+    } catch {
+      return {
+        done: false,
+        reason: '.docs/manual-test-results.md is missing — the manual-test skill must record per-story PASS/FAIL results before exiting',
+      };
+    }
+    if (/\|\s*FAIL/i.test(content)) {
+      return {
+        done: false,
+        reason: '.docs/manual-test-results.md contains FAIL rows — fix the bugs and re-run manual-test',
+      };
+    }
+    if (!(await fileIsFreshSinceSession(file, ctx.sessionStartedAt))) {
+      return {
+        done: false,
+        reason: '.docs/manual-test-results.md exists but is stale (mtime predates this conductor session); manual-test must re-run for the current feature',
+      };
+    }
+    return { done: true };
+  },
+
+  // Retro passes when a fresh retro file exists for THIS feature. Filename
+  // should contain the slug per skills/retro/SKILL.md ("Save to
+  // .docs/retros/YYYY-MM-DD-<feature-name>.md"). Falls back to "any retro
+  // fresh in this session" when no feature_desc is available.
+  retro: async (dir, ctx): Promise<CompletionResult> => {
+    const allFiles = await findArtifactFiles(dir, 'retro');
+    if (allFiles.length === 0) {
+      return {
+        done: false,
+        reason: 'no .docs/retros/*.md present (retro skill must save a report)',
+      };
+    }
+    const slug = ctx.featureDesc ? slugify(ctx.featureDesc) : null;
+    if (slug) {
+      const matched = allFiles.filter(
+        (f) => f.endsWith(`-${slug}.md`) || f.endsWith(`/${slug}.md`),
+      );
+      if (matched.length > 0) {
+        for (const f of matched) {
+          if (await fileIsFreshSinceSession(f, ctx.sessionStartedAt)) return { done: true };
+        }
+        return {
+          done: false,
+          reason: `slug-matched retro exists but is stale (mtime predates this session) — retro must re-run`,
+        };
+      }
+      // No slug match — accept any retro file fresh in this session as a
+      // fallback (covers very long feature_desc, slug truncation, etc.).
+      for (const f of allFiles) {
+        if (await fileIsFreshSinceSession(f, ctx.sessionStartedAt)) return { done: true };
+      }
+      return {
+        done: false,
+        reason: `no retro found for current feature (expected .docs/retros/*-${slug}.md OR a retro file with mtime >= session start)`,
+      };
+    }
+    for (const f of allFiles) {
+      if (await fileIsFreshSinceSession(f, ctx.sessionStartedAt)) return { done: true };
+    }
+    return {
+      done: false,
+      reason: 'retro files exist but none are fresh for this session',
+    };
+  },
+
+  // Finish passes only when a fresh .pipeline/finish-choice marker is
+  // present (mtime >= sessionStartedAt). The conductor sweeps stale markers
+  // at session start (Conductor.run), so any marker observed here was
+  // written by the finish skill in this run. For choice='pr', also require
+  // state.pr_url to be set. The previous "pr_url alone passes" path was
+  // dropped because pr_url from a prior feature in the same worktree could
+  // satisfy the gate spuriously.
+  finish: async (dir, ctx): Promise<CompletionResult> => {
+    const choicePath = join(dir, FINISH_CHOICE_MARKER);
+    let choice: string;
+    try {
+      choice = (await readFile(choicePath, 'utf-8')).trim();
+    } catch {
+      return {
+        done: false,
+        reason: `${FINISH_CHOICE_MARKER} is missing — the finish skill must record the chosen outcome (pr | merge-local | keep | discard)`,
+      };
+    }
+    if (!(FINISH_CHOICE_VALUES as readonly string[]).includes(choice)) {
+      return {
+        done: false,
+        reason: `${FINISH_CHOICE_MARKER} contains unrecognized value "${choice}" — expected one of ${FINISH_CHOICE_VALUES.join(', ')}`,
+      };
+    }
+    if (!(await fileIsFreshSinceSession(choicePath, ctx.sessionStartedAt))) {
+      return {
+        done: false,
+        reason: `${FINISH_CHOICE_MARKER} is stale (mtime predates this session) — finish must re-run`,
+      };
+    }
+    if (choice === 'pr') {
+      try {
+        const raw = await readFile(join(dir, '.pipeline/conduct-state.json'), 'utf-8');
+        const state = JSON.parse(raw) as { pr_url?: string };
+        if (!state.pr_url) {
+          return {
+            done: false,
+            reason: `${FINISH_CHOICE_MARKER}="pr" but no pr_url in state — the PR URL must be recorded`,
+          };
+        }
+      } catch {
+        return {
+          done: false,
+          reason: 'cannot read state to confirm pr_url for finish-choice="pr"',
+        };
+      }
     }
     return { done: true };
   },
@@ -182,13 +332,18 @@ function extractTasks(parsed: unknown): TaskEntry[] {
  * Decide whether a step is fully complete. Runs the custom predicate (if any),
  * otherwise falls back to artifact-glob presence. Steps with no declared
  * artifacts and no predicate are always considered complete.
+ *
+ * `ctx` is threaded into custom predicates that need to compare artifacts
+ * against the current session (`sessionStartedAt`) or scope to the current
+ * feature (`featureDesc`). When omitted, predicates fail open on freshness.
  */
 export async function checkStepCompletion(
   dir: string,
   step: StepName,
+  ctx: CompletionContext = {},
 ): Promise<CompletionResult> {
   const predicate = CUSTOM_COMPLETION_PREDICATES[step];
-  if (predicate) return predicate(dir);
+  if (predicate) return predicate(dir, ctx);
 
   const patterns = STEP_ARTIFACT_GLOBS[step];
   if (!patterns || patterns.length === 0) return { done: true };

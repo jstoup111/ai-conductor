@@ -98,8 +98,12 @@ Use browser automation (Chrome MCP if configured, otherwise manual Capybara-styl
 
 ### 5. Display Results
 
-Display results to the user in the conversation. Do NOT write results to a file or commit them.
-Use this format:
+Display results to the user in the conversation AND save the same table to
+`.docs/manual-test-results.md`. The conductor's completion gate reads this
+file to verify manual-test ran for the current feature — without it, the
+step has no objective on-disk evidence and cannot pass.
+
+Use this format (both in chat and in the file):
 
 ```
 # Manual Test Results
@@ -117,6 +121,10 @@ Use this format:
 1. **BUG-001:** Invalid URL returns 500 instead of 422 (story: create-link, negative path: invalid input)
 2. **BUG-002:** ...
 ```
+
+Do NOT commit `.docs/manual-test-results.md` — the conductor's freshness
+check requires the file's mtime to be newer than the current session's
+start, and committing it from a prior run would defeat that.
 
 ### 6. Bug Loop
 

@@ -169,12 +169,40 @@ export class TerminalRenderer implements UIRenderer {
         await this.renderDashboard();
         break;
 
-      case 'feature_complete':
+      case 'feature_complete': {
         this.currentStep = undefined;
         await this.renderDashboard();
-        this.region.log(chalk.bold.green(`\n✓ Feature complete.${event.prUrl ? ` PR: ${event.prUrl}` : ''}`));
-        this.notify('Conductor', 'Pipeline complete!');
+        const title = event.featureDesc
+          ? `   FEATURE COMPLETE: ${event.featureDesc}   `
+          : '   FEATURE COMPLETE   ';
+        // Pad both sides of the title bar to a fixed minimum so the banner
+        // is unmistakable even on a long terminal.
+        const minWidth = Math.max(title.length, 44);
+        const bar = ' '.repeat(minWidth);
+        const padded = title.padEnd(minWidth, ' ');
+        const lines = [
+          '',
+          chalk.bold.bgGreen.black(bar),
+          chalk.bold.bgGreen.black(padded),
+          chalk.bold.bgGreen.black(bar),
+          '',
+          chalk.green(
+            event.prUrl
+              ? `  PR: ${event.prUrl}`
+              : '  No PR (chosen outcome was merge-local / keep / discard).',
+          ),
+          chalk.dim(
+            '  All 14 steps verified. Re-run with --fresh to start a new feature.',
+          ),
+          '',
+        ];
+        this.region.log(lines.join('\n'));
+        this.notify(
+          'Conductor',
+          event.featureDesc ? `Feature complete: ${event.featureDesc}` : 'Pipeline complete!',
+        );
         break;
+      }
 
       case 'dashboard_refresh':
         await this.renderDashboard();
