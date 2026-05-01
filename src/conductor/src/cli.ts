@@ -24,6 +24,13 @@ export interface CLIOptions {
   tailLines: number;
   /** Run every step in interactive Claude REPL mode (no -p flag). */
   interactive: boolean;
+  /**
+   * Non-mutating diagnostic. Loads state for the named (or auto-detected)
+   * feature, re-verifies the SHIP-phase completion predicates, and prints
+   * any inconsistencies. Exits 0 when state is consistent, 1 when state
+   * is marked complete but evidence is missing. Never modifies anything.
+   */
+  diagnose: boolean;
 }
 
 export function createProgram(): Command {
@@ -45,7 +52,8 @@ export function createProgram(): Command {
     .option('--model <name>', 'Override Claude model for every step (e.g. haiku, sonnet, opus, or full model ID)')
     .option('--view <mode>', 'Dashboard layout: full | focus | log', 'full')
     .option('--tail-lines <n>', 'Max lines to show in post-step tail pane (0 disables)', '20')
-    .option('--interactive', 'Run every step in interactive Claude REPL mode (no -p flag)');
+    .option('--interactive', 'Run every step in interactive Claude REPL mode (no -p flag)')
+    .option('--diagnose', 'Diagnose conductor state (non-mutating); reports SHIP-phase evidence gaps and exits non-zero if state is marked complete but evidence is missing');
   return program;
 }
 
@@ -76,6 +84,7 @@ export function parseArgs(argv: string[]): CLIOptions {
     view,
     tailLines: parseInt(opts.tailLines ?? '20', 10),
     interactive: opts.interactive ?? false,
+    diagnose: opts.diagnose ?? false,
   };
 
   const hasStateFlag =
@@ -83,6 +92,7 @@ export function parseArgs(argv: string[]): CLIOptions {
     result.status ||
     result.cleanup ||
     result.reset ||
+    result.diagnose ||
     !!result.step ||
     !!result.from;
   if (!result.featureDesc && !hasStateFlag) {

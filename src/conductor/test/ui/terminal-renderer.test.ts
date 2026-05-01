@@ -72,7 +72,18 @@ describe('TerminalRenderer', () => {
     await renderer.handle({ type: 'feature_complete' });
     const output = stream.output();
     expect(output).toContain('Conductor: Add login');
-    expect(output).toContain('Feature complete');
+    expect(output).toContain('FEATURE COMPLETE');
+  });
+
+  it('feature_complete banner includes feature description and PR url when provided', async () => {
+    await renderer.handle({
+      type: 'feature_complete',
+      featureDesc: 'Add login',
+      prUrl: 'https://github.com/foo/bar/pull/42',
+    });
+    const output = stream.output();
+    expect(output).toContain('FEATURE COMPLETE: Add login');
+    expect(output).toContain('PR: https://github.com/foo/bar/pull/42');
   });
 
   it('prints a transient step-started line but no full dashboard', async () => {

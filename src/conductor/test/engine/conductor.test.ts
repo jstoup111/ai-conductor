@@ -2329,11 +2329,16 @@ describe('engine/conductor', () => {
     });
 
     it('passes a step whose declared artifacts exist on disk', async () => {
-      // Pre-create every artifact-producing step's expected file. `build` uses
-      // a custom completion predicate that parses task-status.json — seed it
-      // with a completed task so the predicate passes.
+      // Pre-create artifacts whose creation isn't part of the runner's
+      // simulated work (UNDERSTAND/DECIDE/BUILD steps that the conductor
+      // expects to find pre-existing). For SHIP-phase steps (manual_test,
+      // retro, finish), have the runner mock create the artifact when the
+      // step runs — this mirrors real behavior (skill writes its proof
+      // mid-step) and ensures the file's mtime is naturally fresh relative
+      // to session_started_at.
       const { mkdir: _mkdir, writeFile: _wf } = await import('fs/promises');
-      const artifacts: Array<[string, string]> = [
+      const RETRO_SLUG = 'add-foo';
+      const preFixtures: Array<[string, string]> = [
         ['.docs/decisions/technical-assessment-2026-04-16.md', 'test'],
         ['.docs/specs/2026-04-16-feature.md', 'test'],
         ['.docs/stories/epic-1/story-a.md', 'test'],
@@ -2346,19 +2351,41 @@ describe('engine/conductor', () => {
           '.pipeline/task-status.json',
           JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
         ],
-        ['.docs/retros/2026-04-16-retro.md', 'test'],
-        // finish has a custom predicate that requires either a pr_url in
-        // state or a recognized .pipeline/finish-choice marker.
-        ['.pipeline/finish-choice', 'pr'],
       ];
-      for (const [rel, content] of artifacts) {
+      for (const [rel, content] of preFixtures) {
         const full = join(dir, rel);
         await _mkdir(full.substring(0, full.lastIndexOf('/')), { recursive: true });
         await _wf(full, content);
       }
 
+      // Seed feature_desc so the retro predicate slug-matches on filename.
+      const seedRes = await readState(statePath);
+      const seed = seedRes.ok ? seedRes.value : {};
+      seed.feature_desc = 'add foo';
+      await writeState(statePath, seed);
+
       const runner: StepRunner = {
-        run: vi.fn().mockResolvedValue({ success: true }),
+        run: vi.fn(async (step: StepName) => {
+          // Simulate SHIP-phase skills writing their proof artifact during
+          // the step. This makes the mtime fresh relative to the conductor's
+          // session_started_at (set on Conductor.run() entry).
+          if (step === 'manual_test') {
+            await _wf(
+              join(dir, '.docs/manual-test-results.md'),
+              '# Results\n\n| Story | Result |\n|---|---|\n| story-a | PASS |\n',
+            );
+          } else if (step === 'retro') {
+            await _mkdir(join(dir, '.docs/retros'), { recursive: true });
+            await _wf(
+              join(dir, `.docs/retros/2026-05-01-${RETRO_SLUG}.md`),
+              '# Retro\n',
+            );
+          } else if (step === 'finish') {
+            await _mkdir(join(dir, '.pipeline'), { recursive: true });
+            await _wf(join(dir, '.pipeline/finish-choice'), 'keep');
+          }
+          return { success: true };
+        }),
       };
       const conductor = new Conductor({
         stateFilePath: statePath,
@@ -3273,3 +3300,144 @@ describe('build-step stall circuit breaker', () => {
 // (marker presence, harness version bump, codebase detection) — there's no
 // longer a `bootstrap_mode` field in ConductState for the feature loop to
 // react to.
+
+describe('engine/conductor: pipeline-exit false-completion regression', () => {
+  let dir: string;
+  let statePath: string;
+  let events: ConductorEventEmitter;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'conductor-bug-test-'));
+    statePath = join(dir, 'conduct-state.json');
+    events = new ConductorEventEmitter();
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('does NOT mark feature_status=complete when pipeline halt marker is present', async () => {
+    // The original user-reported bug: pipeline exited mid-implementation
+    // (user picked "exit to harness, continue later"), but Claude failed to
+    // write .pipeline/halt-user-input-required. Result: build gate read an
+    // all-completed task-status.json, build was marked done, SHIP-phase
+    // gates cascaded false-completion, feature_status=complete was set.
+    //
+    // Post-fix: the build predicate fails when the halt marker is present,
+    // even with all-complete task-status.json. The conductor's stall
+    // handler opens an interactive REPL, the user resolves the blocker
+    // there, and the gate re-checks. If the REPL was a no-op (this test),
+    // recovery menu fires.
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(
+      join(dir, '.pipeline/task-status.json'),
+      JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
+    );
+    await writeFile(
+      join(dir, '.pipeline/halt-user-input-required'),
+      'user requested exit; 1 regression in test_X',
+    );
+    // Pre-create earlier-step artifacts so the conductor doesn't fail
+    // before reaching build.
+    const preFixtures: Array<[string, string]> = [
+      ['.docs/decisions/technical-assessment-2026-04-16.md', 'a'],
+      ['.docs/specs/2026-04-16-feature.md', 'a'],
+      ['.docs/stories/epic-1/story-a.md', 'a'],
+      ['.docs/conflicts/2026-04-16-conflict.md', 'a'],
+      ['.docs/plans/2026-04-16-plan.md', 'a'],
+      ['.docs/architecture/2026-04-16-arch.md', 'a'],
+      ['.docs/decisions/adr-001.md', 'a'],
+      ['spec/acceptance/feature_spec.rb', 'a'],
+    ];
+    for (const [rel, content] of preFixtures) {
+      const full = join(dir, rel);
+      await mkdir(full.substring(0, full.lastIndexOf('/')), { recursive: true });
+      await writeFile(full, content);
+    }
+
+    // Re-write the halt marker on every run() call so the predicate keeps
+    // failing even after the conductor's stall handler clears it.
+    const runner: StepRunner = {
+      run: vi.fn(async () => {
+        await writeFile(
+          join(dir, '.pipeline/halt-user-input-required'),
+          'user requested exit; 1 regression in test_X',
+        );
+        return { success: true };
+      }),
+      // The stall handler opens this REPL on the build step. The mock is
+      // a no-op — the user did NOT resolve the halt — so the marker that
+      // gets re-written by run() (above) keeps the gate failing.
+      runInteractive: vi.fn().mockResolvedValue(undefined),
+    };
+    const onRecovery = vi.fn().mockResolvedValue('quit' as const);
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      verifyArtifacts: true,
+      maxRetries: 1,
+      onRecovery,
+    });
+
+    const buildStalls: string[] = [];
+    events.on('build_stall', (e) => {
+      if (e.type === 'build_stall') buildStalls.push(e.reason);
+    });
+
+    await conductor.run();
+
+    // The conductor must have detected the halt marker (build_stall event
+    // with reason='halt_marker').
+    expect(buildStalls).toContain('halt_marker');
+
+    // Most importantly: feature_status must NOT be 'complete' — the user's
+    // unresolved blocker must not silently cascade through to "feature done."
+    const r = await readState(statePath);
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.value.feature_status).toBeUndefined();
+    }
+  });
+
+  it('clears stale .pipeline/finish-choice on session start', async () => {
+    // A stale finish-choice marker from a previous run must not satisfy
+    // the gate. The conductor sweeps it on Conductor.run() entry, before
+    // any step runs.
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(join(dir, '.pipeline/finish-choice'), 'pr');
+
+    const runner: StepRunner = {
+      run: vi.fn(async (step: StepName) => {
+        // On the very first step, observe that the sweep happened: marker
+        // should already be gone before the runner is called.
+        const { access } = await import('fs/promises');
+        if (step === 'worktree') {
+          let stillExists = true;
+          try {
+            await access(join(dir, '.pipeline/finish-choice'));
+          } catch {
+            stillExists = false;
+          }
+          // Recorded on the runner's mock for assertion below.
+          (runner as unknown as { sweepObserved?: boolean }).sweepObserved = !stillExists;
+        }
+        return { success: true };
+      }),
+    };
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      verifyArtifacts: false,
+    });
+
+    await conductor.run();
+
+    expect(
+      (runner as unknown as { sweepObserved?: boolean }).sweepObserved,
+    ).toBe(true);
+  });
+});

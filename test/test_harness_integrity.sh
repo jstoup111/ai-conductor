@@ -257,6 +257,24 @@ else
   fi
 fi
 
+# 8d. skills/pipeline/SKILL.md must keep the "user-requested exit"
+# contract: when the user asks to exit during a pipeline run, the skill
+# must write `.pipeline/halt-user-input-required` before exiting.
+# Without this contract, the conductor's build gate can't tell the
+# difference between a successful pipeline exit and a user-requested
+# halt — the original false-completion bug fixed in 0.99.14. This
+# check fires if the contract section is removed or the marker name
+# diverges from artifacts.ts.
+pipeline_skill="${HARNESS_DIR}/skills/pipeline/SKILL.md"
+if [ -f "$pipeline_skill" ]; then
+  if grep -q -i "user-requested exit during a run" "$pipeline_skill" \
+    && grep -q "halt-user-input-required" "$pipeline_skill"; then
+    assert "skills/pipeline/SKILL.md preserves user-requested-exit halt-marker contract" 0
+  else
+    assert "skills/pipeline/SKILL.md preserves user-requested-exit halt-marker contract" 1
+  fi
+fi
+
 # 8c. Every vX.Y.Z tag has a matching ## [X.Y.Z] section in CHANGELOG.md.
 # Only run when we're inside the harness repo's own git dir AND CHANGELOG.md
 # exists (skips cleanly in shallow clones).

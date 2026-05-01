@@ -225,6 +225,10 @@ three options, what would you prefer?" as a wrap-up. Autonomous retries will
 re-dispatch Claude against the same unresolved question and burn the retry
 budget without producing new task completions.
 
+If you're tempted to ask "resolve now or exit to the harness?", you must
+instead write the halt marker — the user picking "exit" is a halt, not a
+successful exit. See "User-requested exit during a run" below.
+
 Instead, write a marker file and exit:
 
 ```bash
@@ -249,6 +253,30 @@ new task completions (measured via `.pipeline/task-status.json` resolved count).
 So even if you forget to write the marker, the circuit breaker catches the
 stall — but writing the marker is the polite contract: it labels the reason
 and prevents a speculative second retry.
+
+### User-requested exit during a run
+
+If the user explicitly asks to "exit to the harness", "stop and continue
+later", "pause", or anything equivalent at any point in the run, treat it
+as a halt — **not** as a successful exit. Before exiting, you MUST:
+
+1. Write `.pipeline/halt-user-input-required` with a one-line summary of the
+   next action (e.g. `"user requested exit; 1 regression in test_X pending fix"`).
+2. Set the in-flight task back to `pending` in `.pipeline/task-status.json`
+   if you flipped it to `in_progress` for this run (so the conductor's
+   build gate will re-enter the task on resume rather than treating it as
+   completed).
+3. Do NOT mark unfinished tasks as `completed` or `skipped`. Only tasks
+   that genuinely passed all TDD gates this run get `completed`.
+
+This contract is mandatory. Without the marker, the conductor reads
+`task-status.json`, sees nothing in flight, and concludes the build step
+is done — silently cascading through `manual-test` / `retro` / `finish`
+to mark the entire feature complete while the user's actual blocker is
+still open. The build-completion predicate in
+`src/conductor/src/engine/artifacts.ts` (`build` predicate) checks for the
+halt marker on every attempt; a marker present at gate-check time fails
+the gate.
 
 ### Retry Pre-Check (Connection Interruption Recovery)
 
