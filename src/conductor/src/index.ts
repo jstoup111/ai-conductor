@@ -11,8 +11,11 @@ export function deriveMode(opts: { auto: boolean; interactive: boolean }): RunMo
   return opts.auto ? 'auto' : opts.interactive ? 'interactive' : 'default';
 }
 
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { mkdir, readFile } from 'node:fs/promises';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 import { v4 as uuidv4 } from 'uuid';
 import { Conductor } from './engine/conductor.js';
 import { DefaultStepRunner } from './engine/step-runners.js';
