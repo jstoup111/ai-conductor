@@ -1,9 +1,17 @@
+export interface TokenUsage {
+  input: number;
+  output: number;
+  cacheRead?: number;
+  cacheCreation?: number;
+}
+
 export interface InvokeResult {
   success: boolean;
   output: string;
   exitCode: number;
   rateLimited?: boolean;
   sessionExpired?: boolean;
+  tokenUsage?: TokenUsage;
 }
 
 export interface InvokeOptions {
