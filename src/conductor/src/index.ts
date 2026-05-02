@@ -41,6 +41,7 @@ import { runProjectPrelude } from './engine/project-prelude.js';
 import { discoverPlugins, registerBuiltins } from './engine/plugin-loader.js';
 import { PluginRegistry } from './engine/plugin-registry.js';
 import { EventPersister } from './engine/event-persister.js';
+import { renderReport, ReportError } from './engine/report-renderer.js';
 import type { LLMProvider } from "./execution/llm-provider.js";
 import type { UISubscriber } from "./ui/types.js";
 
@@ -163,6 +164,22 @@ async function main(): Promise<void> {
   if (!configResult.ok && configResult.error.type !== 'missing') {
     console.error(`Config error: ${configResult.error.message}`);
     process.exit(1);
+  }
+
+  // Handle --report: render summary from events.jsonl and exit (read-only, no Claude session)
+  if (opts.report) {
+    const eventsLogPath = join(pipelineDir, 'events.jsonl');
+    try {
+      const report = renderReport(eventsLogPath);
+      console.log(report);
+    } catch (err) {
+      if (err instanceof ReportError) {
+        console.error(err.message);
+        process.exit(1);
+      }
+      throw err;
+    }
+    process.exit(0);
   }
 
   // Handle --status: show state and exit

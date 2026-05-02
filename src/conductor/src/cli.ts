@@ -31,6 +31,12 @@ export interface CLIOptions {
    * is marked complete but evidence is missing. Never modifies anything.
    */
   diagnose: boolean;
+  /**
+   * Print run summary from .pipeline/events.jsonl and exit.
+   * Renders step durations, retry hotspots, and token spend tables.
+   * Read-only — does NOT start a Claude session.
+   */
+  report: boolean;
 }
 
 export function createProgram(): Command {
@@ -53,7 +59,8 @@ export function createProgram(): Command {
     .option('--view <mode>', 'Dashboard layout: full | focus | log', 'full')
     .option('--tail-lines <n>', 'Max lines to show in post-step tail pane (0 disables)', '20')
     .option('--interactive', 'Run every step in interactive Claude REPL mode (no -p flag)')
-    .option('--diagnose', 'Diagnose conductor state (non-mutating); reports SHIP-phase evidence gaps and exits non-zero if state is marked complete but evidence is missing');
+    .option('--diagnose', 'Diagnose conductor state (non-mutating); reports SHIP-phase evidence gaps and exits non-zero if state is marked complete but evidence is missing')
+    .option('--report', 'Print run summary from .pipeline/events.jsonl (step durations, retry hotspots, token spend) and exit');
   return program;
 }
 
@@ -85,6 +92,7 @@ export function parseArgs(argv: string[]): CLIOptions {
     tailLines: parseInt(opts.tailLines ?? '20', 10),
     interactive: opts.interactive ?? false,
     diagnose: opts.diagnose ?? false,
+    report: opts.report ?? false,
   };
 
   const hasStateFlag =
@@ -93,6 +101,7 @@ export function parseArgs(argv: string[]): CLIOptions {
     result.cleanup ||
     result.reset ||
     result.diagnose ||
+    result.report ||
     !!result.step ||
     !!result.from;
   if (!result.featureDesc && !hasStateFlag) {
