@@ -1,8 +1,38 @@
 import { execa } from 'execa';
-import type { LLMProvider, InvokeOptions, InvokeResult } from './llm-provider.js';
+import type { LLMProvider, InvokeOptions, InvokeResult, TokenUsage } from './llm-provider.js';
 
 const RATE_LIMIT_RE = /rate limit|429|overloaded|usage limit/i;
 const STALE_SESSION_RE = /No conversation found/i;
+
+/**
+ * Scan stdout lines for a stream-json usage event and extract token counts.
+ * Returns undefined when no usage event is found or parsing fails.
+ */
+function parseTokenUsage(stdout: string): TokenUsage | undefined {
+  for (const line of stdout.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try {
+      const parsed = JSON.parse(trimmed) as Record<string, unknown>;
+      if (parsed.type === 'usage' && typeof parsed.input_tokens === 'number' && typeof parsed.output_tokens === 'number') {
+        const usage: TokenUsage = {
+          input: parsed.input_tokens as number,
+          output: parsed.output_tokens as number,
+        };
+        if (typeof parsed.cache_read_input_tokens === 'number') {
+          usage.cacheRead = parsed.cache_read_input_tokens as number;
+        }
+        if (typeof parsed.cache_creation_input_tokens === 'number') {
+          usage.cacheCreation = parsed.cache_creation_input_tokens as number;
+        }
+        return usage;
+      }
+    } catch {
+      // Not valid JSON — skip line
+    }
+  }
+  return undefined;
+}
 
 export class ClaudeProvider implements LLMProvider {
   /**
@@ -45,6 +75,7 @@ export class ClaudeProvider implements LLMProvider {
 
     const rateLimited = RATE_LIMIT_RE.test(output);
     const sessionExpired = STALE_SESSION_RE.test(output);
+    const tokenUsage = parseTokenUsage(stdout);
 
     return {
       success: exitCode === 0,
@@ -52,6 +83,7 @@ export class ClaudeProvider implements LLMProvider {
       exitCode,
       rateLimited: rateLimited || undefined,
       sessionExpired: sessionExpired || undefined,
+      tokenUsage,
     };
   }
 
