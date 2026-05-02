@@ -1,5 +1,6 @@
 import type { StepName, StepStatus, ComplexityTier } from './steps.js';
 import type { BootstrapMode } from './state.js';
+import type { TokenUsage } from '../execution/llm-provider.js';
 
 export type RecoveryOption = 'retry' | 'interactive' | 'back' | 'skip' | 'quit';
 
@@ -22,7 +23,7 @@ export interface RecoveryContext {
 
 export type ConductorEvent =
   | { type: 'step_started'; step: StepName; index: number }
-  | { type: 'step_completed'; step: StepName; status: StepStatus; tail?: string[] }
+  | { type: 'step_completed'; step: StepName; status: StepStatus; tail?: string[]; tokenUsage?: TokenUsage }
   | { type: 'step_failed'; step: StepName; error: string; retryCount: number }
   | {
       type: 'step_retry';
