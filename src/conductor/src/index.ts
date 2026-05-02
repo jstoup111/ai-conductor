@@ -40,6 +40,7 @@ import { TerminalPromptHost } from './ui/terminal/prompt-host.js';
 import { runProjectPrelude } from './engine/project-prelude.js';
 import { discoverPlugins, registerBuiltins } from './engine/plugin-loader.js';
 import { PluginRegistry } from './engine/plugin-registry.js';
+import { EventPersister } from './engine/event-persister.js';
 import type { LLMProvider } from "./execution/llm-provider.js";
 import type { UISubscriber } from "./ui/types.js";
 
@@ -422,6 +423,11 @@ async function main(): Promise<void> {
 
   subscriber.start();
 
+  // Wire EventPersister: appends every ConductorEvent as a JSON line to .pipeline/events.jsonl
+  const eventsLogPath = join(pipelineDir, 'events.jsonl');
+  const persister = new EventPersister(eventsLogPath, events);
+  persister.start();
+
   const stepRunner = new DefaultStepRunner(provider, sessionId, projectRoot, {
     featureDesc: opts.featureDesc,
     pipelineDir,
@@ -487,6 +493,7 @@ async function main(): Promise<void> {
 
   await conductor.run();
 
+  persister.stop();
   subscriber.stop();
 }
 
