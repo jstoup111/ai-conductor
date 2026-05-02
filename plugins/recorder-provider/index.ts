@@ -32,7 +32,7 @@ export class RecorderProvider implements LLMProvider {
   }
 
   /**
-   * Appends a JSONL record and returns a canned response.
+   * Appends a JSONL record and returns a canned response with deterministic tokenUsage.
    */
   async invoke(options: InvokeOptions): Promise<InvokeResult> {
     await this.appendRecord('invoke', options);
@@ -40,6 +40,7 @@ export class RecorderProvider implements LLMProvider {
       success: true,
       output: '[RecorderProvider] canned response',
       exitCode: 0,
+      tokenUsage: { input: 10, output: 5 },
     };
   }
 
