@@ -405,13 +405,19 @@ async function main(): Promise<void> {
 
   // Discover and register external plugins, then built-ins
   await discoverPlugins(globalPluginsDir, projectPluginsDir, registry);
-  const subscriber = registerBuiltins(registry, events, renderEvent);
+  registerBuiltins(registry, events, renderEvent);
   registry.markInitialized();
 
   // Retrieve provider and subscriber from registry with defaults
   const provider = registry.get<LLMProvider>(
     'llm_provider',
     config?.llm_provider ?? 'claude'
+  );
+
+  // Select UI subscriber based on config (default: 'terminal')
+  const subscriber = registry.get<UISubscriber>(
+    'ui_renderer',
+    config?.ui_renderer ?? 'terminal'
   );
 
   subscriber.start();
