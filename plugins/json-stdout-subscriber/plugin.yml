@@ -1,0 +1,4 @@
+kind: ui_renderer
+name: json-stdout
+entrypoint: ./index.js
+harness_version: ">=0.99.0"
