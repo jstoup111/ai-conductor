@@ -31,6 +31,12 @@ import { scanResumableFeatures, selectFeature, formatResumeMenu } from './engine
 import { WorktreeManager, checkPrMerged } from './engine/worktree.js';
 import { detectAutoResume } from './engine/auto-resume.js';
 import {
+  resolveFeaturePaths,
+  resolveRootPaths,
+  rootPipelineDir,
+} from './engine/feature-paths.js';
+import { migrateLegacyPipelineLayout } from './engine/legacy-migration.js';
+import {
   verifyCompleteState,
   formatGapReport,
 } from './engine/complete-verifier.js';
@@ -136,11 +142,19 @@ async function main(): Promise<void> {
   }
 
   let projectRoot = process.cwd();
-  let pipelineDir = join(projectRoot, '.pipeline');
-  let stateFilePath = join(pipelineDir, 'conduct-state.json');
 
-  // Ensure .pipeline/ exists
-  await mkdir(pipelineDir, { recursive: true });
+  // Always make sure top-level .pipeline/ exists. project-state.json (project-
+  // wide bootstrap_mode) and the .pipeline/features/ parent directory both
+  // live at this level, even before any feature has been started.
+  await mkdir(rootPipelineDir(projectRoot), { recursive: true });
+
+  // One-time migration: collapse the legacy `.pipeline/{conduct-state.json,
+  // conduct-session-id, events.jsonl}` shared layout into a feature-scoped
+  // subdirectory, hoisting bootstrap_mode into project-state.json.
+  // Idempotent — a second invocation finds nothing to move and returns a
+  // no-op result. Runs before any state read so state-only commands
+  // (`--status`, `--reset`) see the post-migration layout.
+  await migrateLegacyPipelineLayout(projectRoot);
 
   // Preflight: ensure .claude/settings.json exists with project-scoped
   // permissions. Solves the chicken-and-egg where bootstrap can't write its
@@ -166,9 +180,50 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  // State-only commands that need a feature target: when no feature was
+  // passed, scan and prompt to pick one. Mirrors --resume's UX
+  // (auto-pick when there's exactly one active feature, otherwise menu).
+  // --cleanup operates project-wide and doesn't need a target. --resume has
+  // its own scan flow further down.
+  if (
+    !opts.featureDesc &&
+    !opts.resume &&
+    !opts.cleanup &&
+    (opts.status || opts.reset || opts.report || opts.diagnose)
+  ) {
+    const features = await scanResumableFeatures(projectRoot);
+    if (features.length === 0) {
+      console.error(
+        'No active features found. Pass a feature description, or run --cleanup.',
+      );
+      process.exit(1);
+    }
+    let selected = selectFeature(features, undefined);
+    if (!selected) {
+      console.log(`\n${formatResumeMenu(features)}\n`);
+      const answer = await promptHost.ask(`Choose feature [0-${features.length}]: `);
+      const choice = parseInt(answer, 10);
+      selected = selectFeature(features, isNaN(choice) ? 0 : choice);
+      if (!selected) {
+        console.log('Cancelled.');
+        return;
+      }
+    }
+    opts.featureDesc = selected.featureDesc ?? selected.name;
+  }
+
+  // Resolve feature-scoped pipeline paths once we know which feature is in
+  // play. Before the worktree step runs, state lives at
+  // `.pipeline/features/<slug>/`; after the worktree step it migrates into
+  // the worktree's own .pipeline/ (handled below by detectAutoResume).
+  let { pipelineDir, stateFilePath, sessionIdPath, eventsLogPath } =
+    opts.featureDesc
+      ? resolveFeaturePaths(projectRoot, opts.featureDesc)
+      : resolveRootPaths(projectRoot);
+  await mkdir(pipelineDir, { recursive: true });
+
   // Handle --report: render summary from events.jsonl and exit (read-only, no Claude session)
   if (opts.report) {
-    const eventsLogPath = join(pipelineDir, 'events.jsonl');
     try {
       const report = renderReport(eventsLogPath);
       console.log(report);
@@ -254,6 +309,8 @@ async function main(): Promise<void> {
       projectRoot = detection.worktreePath;
       pipelineDir = join(projectRoot, '.pipeline');
       stateFilePath = detection.stateFilePath;
+      sessionIdPath = join(pipelineDir, 'conduct-session-id');
+      eventsLogPath = join(pipelineDir, 'events.jsonl');
       await mkdir(pipelineDir, { recursive: true });
       opts.resume = true;
       const position =
@@ -290,6 +347,8 @@ async function main(): Promise<void> {
         projectRoot = detection.worktreePath;
         pipelineDir = join(projectRoot, '.pipeline');
         stateFilePath = join(pipelineDir, 'conduct-state.json');
+        sessionIdPath = join(pipelineDir, 'conduct-session-id');
+        eventsLogPath = join(pipelineDir, 'events.jsonl');
         await mkdir(pipelineDir, { recursive: true });
         const r = await readState(stateFilePath);
         const fixed = r.ok ? { ...r.value } : {};
@@ -314,6 +373,8 @@ async function main(): Promise<void> {
         projectRoot = detection.worktreePath;
         pipelineDir = join(projectRoot, '.pipeline');
         stateFilePath = join(pipelineDir, 'conduct-state.json');
+        sessionIdPath = join(pipelineDir, 'conduct-session-id');
+        eventsLogPath = join(pipelineDir, 'events.jsonl');
         await mkdir(pipelineDir, { recursive: true });
         await writeState(stateFilePath, {});
       }
@@ -365,6 +426,8 @@ async function main(): Promise<void> {
     projectRoot = selected.path;
     pipelineDir = join(projectRoot, '.pipeline');
     stateFilePath = join(pipelineDir, 'conduct-state.json');
+    sessionIdPath = join(pipelineDir, 'conduct-session-id');
+    eventsLogPath = join(pipelineDir, 'events.jsonl');
     await mkdir(pipelineDir, { recursive: true });
 
     // Also check for state in worktree root (legacy location)
@@ -387,9 +450,11 @@ async function main(): Promise<void> {
     }
   }
 
-  // Set up conductor — reuse persisted session ID if resuming
+  // Set up conductor — reuse persisted session ID if resuming. The session
+  // file lives in the feature-scoped pipeline dir (or the worktree's once
+  // we've redirected), so two features in the same project root never
+  // share a Claude session.
   let sessionId: string;
-  const sessionIdPath = join(pipelineDir, 'conduct-session-id');
   try {
     const persisted = await readFile(sessionIdPath, 'utf-8');
     sessionId = persisted.trim() || uuidv4();
@@ -440,8 +505,8 @@ async function main(): Promise<void> {
 
   subscriber.start();
 
-  // Wire EventPersister: appends every ConductorEvent as a JSON line to .pipeline/events.jsonl
-  const eventsLogPath = join(pipelineDir, 'events.jsonl');
+  // Wire EventPersister: appends every ConductorEvent as a JSON line to the
+  // feature-scoped events.jsonl path resolved earlier.
   const persister = new EventPersister(eventsLogPath, events);
   persister.start();
 

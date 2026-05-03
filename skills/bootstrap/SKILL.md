@@ -30,14 +30,23 @@ code, tests, and history already in place).
 Also check maturity: 50+ commits = mature, 5+ model files = substantial, existing specs = assess
 coverage, existing CLAUDE.md = **preserve, don't overwrite**.
 
-**Persist the detected mode** into `.pipeline/conduct-state.json` under the key
+**Persist the detected mode** into `.pipeline/project-state.json` under the key
 `bootstrap_mode` with one of the four string values above (`new`, `fresh`, `partial`,
-`re-bootstrap`). This MUST happen before any downstream step dispatches, because the
-conductor uses the value to skip steps that have no material to act on — notably
-`assess`, which is skipped when mode is `new` (no codebase yet = nothing for the 9
-specialists to evaluate). If the value is missing or unrecognized, the conductor
-defaults to running every step, so a missing write silently loses the optimization but
-never breaks the flow.
+`re-bootstrap`). The file is a small JSON object shared across features — read it
+first if it exists, merge `bootstrap_mode` in, and write it back:
+
+```json
+{ "bootstrap_mode": "fresh" }
+```
+
+This MUST happen before any downstream step dispatches, because the conductor uses the
+value to skip steps that have no material to act on — notably `assess`, which is skipped
+when mode is `new` (no codebase yet = nothing for the 9 specialists to evaluate). If the
+value is missing or unrecognized, the conductor defaults to running every step, so a
+missing write silently loses the optimization but never breaks the flow.
+
+**Do NOT** write `bootstrap_mode` into the per-feature `.pipeline/features/<slug>/conduct-state.json`.
+That file is feature-scoped and would not propagate the value to subsequent features.
 
 ### 1b. Scaffold New Project (New Mode Only)
 

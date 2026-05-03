@@ -4,6 +4,7 @@ import type { ConductState } from '../types/index.js';
 import { readState } from './state.js';
 import { ALL_STEPS } from './steps.js';
 import { slugify } from './worktree.js';
+import { featurePipelineDir } from './feature-paths.js';
 
 export type AutoResumeResult =
   | { kind: 'none' }
@@ -118,10 +119,14 @@ export async function detectAutoResume(
   const slug = slugify(featureDesc);
   if (!slug) return { kind: 'none' };
 
-  // (1) Root-level state — pre-worktree path. Only resume if the stored
-  // feature_desc matches the input, to avoid hijacking an unrelated in-progress
-  // feature.
+  // (1) Root-level state — pre-worktree path. Look in the feature-scoped
+  // directory first (`.pipeline/features/<slug>/conduct-state.json`); fall
+  // back to the legacy shared paths so existing projects mid-feature keep
+  // resuming until the migration runs. Only claim a match if the stored
+  // feature_desc equals the input (defense-in-depth — feature-scoped paths
+  // already key by slug, but legacy locations don't).
   const rootLoaded = await loadStateFromCandidates([
+    join(featurePipelineDir(projectRoot, slug), 'conduct-state.json'),
     join(projectRoot, '.pipeline', 'conduct-state.json'),
     join(projectRoot, 'conduct-state.json'),
   ]);

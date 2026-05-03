@@ -45,6 +45,8 @@ import {
   haltMarkerExists,
   clearHaltMarker,
 } from './task-progress.js';
+import { readProjectState } from './project-state.js';
+import { projectStatePath } from './feature-paths.js';
 
 export type CheckpointResponse = 'continue' | 'back' | 'quit';
 
@@ -222,6 +224,16 @@ export class Conductor {
   async run(): Promise<void> {
     const stateResult = await readState(this.stateFilePath);
     let state: ConductState = stateResult.ok ? stateResult.value : {};
+
+    // Merge project-scoped state (bootstrap_mode, etc.) into the in-memory
+    // state for the duration of this run. The merged values are NOT written
+    // back to the per-feature state file — they live in
+    // `.pipeline/project-state.json` so they persist across features without
+    // bleeding step status between them.
+    const projectState = await readProjectState(projectStatePath(this.projectRoot));
+    if (projectState.bootstrap_mode !== undefined && state.bootstrap_mode === undefined) {
+      state.bootstrap_mode = projectState.bootstrap_mode;
+    }
 
     // Stamp this conductor invocation. SHIP-phase completion predicates
     // compare artifact mtimes against this timestamp so a stale file left
