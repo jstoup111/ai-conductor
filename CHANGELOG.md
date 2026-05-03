@@ -39,6 +39,9 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 ## [Unreleased]
 
 ### Fixed
+- conduct-ts: features and Claude sessions are now isolated per feature. Previously, `.pipeline/conduct-state.json`, `.pipeline/conduct-session-id`, and `.pipeline/events.jsonl` were single shared files at the project root, so starting Feature B in a project where Feature A had run would inherit A's "done" step keys (the conductor's `alreadyResolved` short-circuit silently skipped them), reuse A's Claude session id, and append B's events to A's log. Per-feature state now lives at `.pipeline/features/<slug>/{conduct-state.json,conduct-session-id,events.jsonl}`. Auto-resume reads the feature-scoped path first, with the legacy root paths kept as a fallback for one cycle so existing in-flight features keep resuming. New `engine/feature-paths.ts` centralizes the layout; `engine/legacy-migration.ts` runs a one-time, idempotent migration on startup that moves legacy files into a feature-scoped directory keyed by the persisted `feature_desc`.
+- conduct-ts: `bootstrap_mode` (the only project-wide piece of state previously kept in `conduct-state.json`) is now stored in `.pipeline/project-state.json`. The conductor merges it into the in-memory state at run start, read-only, so per-feature loops still see the value without writing it back into per-feature files. The `/bootstrap` skill writes the new file directly. Vestigial `bootstrap?` and `assess?` step-status fields were dropped from the `ConductState` type — both have been project-prelude concerns since the prior refactor and were never written to state.
+- conduct-ts: `--status`, `--reset`, `--report`, and `--diagnose` now scan `.pipeline/features/*` (plus worktrees and the legacy root) and prompt-and-pick when no feature argument is supplied, mirroring `--resume`. Previously each silently operated on the single shared root state file regardless of which feature was active.
 - conduct-ts: fixed `Fatal: __dirname is not defined` crash on startup. `src/conductor/src/index.ts` referenced the CommonJS-only `__dirname` global inside `readHarnessVersion()`, but the bundle is ESM (`tsup` `format: ['esm']`, `shims: false`), so the binary aborted before the CLI could parse args. Derived `__dirname` from `import.meta.url` using the same pattern already in `src/conductor/src/engine/plugin-manifest.ts`.
 - conduct-ts: SHIP-phase steps no longer silently mark a feature complete when pipeline exits mid-implementation. The conductor now stamps each invocation with `state.session_started_at` and the `manual_test`, `retro`, and `finish` completion predicates require fresh, feature-scoped evidence:
   - `manual_test` requires `.docs/manual-test-results.md` with no `| FAIL` rows AND mtime >= `session_started_at` (previously had no completion gate at all — any clean REPL exit marked it `done`)
@@ -156,6 +159,21 @@ echo "ui_renderer: my-custom-renderer" >> .ai-conductor/config.yml
 ```
 
 Existing projects require no changes — built-in defaults are preserved.
+
+Pipeline state layout migration runs automatically the first time `conduct-ts`
+is invoked after upgrading. No manual steps required:
+
+```bash
+# Auto-migration is performed by conduct-ts itself on startup. Running this
+# bash block is a no-op confirming the upgrade path; the next time the user
+# runs conduct-ts, legacy `.pipeline/conduct-state.json`,
+# `.pipeline/conduct-session-id`, and `.pipeline/events.jsonl` will be moved
+# into `.pipeline/features/<slug>/` keyed by the persisted `feature_desc`,
+# and `bootstrap_mode` (if present) will be hoisted into
+# `.pipeline/project-state.json`. The migration is idempotent and leaves
+# files in place if legacy state has no `feature_desc` to key by.
+true
+```
 
 ## [0.99.2] - 2026-04-19
 

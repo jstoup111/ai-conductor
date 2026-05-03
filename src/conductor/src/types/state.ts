@@ -48,9 +48,6 @@ export type ConductState = {
    * is recomputed on each review pass; unchanged files skip re-prompting.
    */
   artifact_approvals?: Record<string, ArtifactApproval>;
-  // Project-level state preserved across features
-  bootstrap?: StepStatus;
-  assess?: StepStatus;
 };
 
 export interface ArtifactApproval {
