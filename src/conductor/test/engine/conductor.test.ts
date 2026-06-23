@@ -859,6 +859,12 @@ describe('engine/conductor', () => {
       return process;
     }) as typeof process.on);
 
+    // The SIGINT handler calls process.exit(130); stub it so the real exit
+    // doesn't surface as an unhandled rejection that fails the vitest run.
+    const exitSpy = vi
+      .spyOn(process, 'exit')
+      .mockImplementation((() => undefined) as never);
+
     // Create a runner that blocks on the 3rd step so we can trigger SIGINT
     let stepCount = 0;
     let resolveBlock: (() => void) | undefined;
@@ -890,6 +896,7 @@ describe('engine/conductor', () => {
     expect(result.ok).toBe(true);
 
     processOnSpy.mockRestore();
+    exitSpy.mockRestore();
   });
 
   describe('backward navigation', () => {

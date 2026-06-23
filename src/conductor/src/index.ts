@@ -12,7 +12,7 @@ export function deriveMode(opts: { auto: boolean; interactive: boolean }): RunMo
 }
 
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { mkdir, readFile } from 'node:fs/promises';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -514,7 +514,14 @@ async function main(): Promise<void> {
   subscriber.stop();
 }
 
-main().catch((err) => {
-  console.error('Fatal:', err.message ?? err);
-  process.exit(1);
-});
+// Only run the CLI when executed directly (e.g. `node dist/index.js` via
+// bin/conduct-ts) — NOT when imported (e.g. by tests importing `deriveMode`).
+// Without this guard, importing the module runs main(), which process.exit(1)s
+// in a non-CLI context and pollutes the parallel test run with an unhandled
+// rejection (flaky failures + non-zero exit).
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((err) => {
+    console.error('Fatal:', err.message ?? err);
+    process.exit(1);
+  });
+}

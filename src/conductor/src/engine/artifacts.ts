@@ -300,6 +300,200 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
   },
 };
 
+/**
+ * Richer gate predicates for kickback-target steps, kept SEPARATE from
+ * CUSTOM_COMPLETION_PREDICATES so the existing linear conductor's completion
+ * gate is unchanged. Consumed only by the gate-verdict layer (gate-verdicts.ts);
+ * the loop (Phase 3) decides when to enforce them.
+ */
+export const GATE_ONLY_PREDICATES: Partial<
+  Record<StepName, (dir: string, ctx: CompletionContext) => Promise<CompletionResult>>
+> = {
+  // Stories pass when every story has a Happy Path AND a Negative Path(s)
+  // section (each with ≥1 Given/When/Then bullet) and no DRAFT status.
+  // Structural check against the repo convention (### Happy Path / ###
+  // Negative Paths headings, **Status:** marker). See gate-audit-2026-06-23.md.
+  stories: async (dir): Promise<CompletionResult> => {
+    const files = await findArtifactFiles(dir, 'stories');
+    if (files.length === 0) {
+      return { done: false, reason: 'no .docs/stories/**/*.md present' };
+    }
+    for (const file of files) {
+      const content = await readFile(file, 'utf-8');
+      const rel = relative(dir, file);
+      if (/^\s*\*\*Status:\*\*\s*DRAFT\b/im.test(content)) {
+        return {
+          done: false,
+          reason: `${rel}: story is DRAFT — must be accepted before planning`,
+        };
+      }
+      for (const block of splitStoryBlocks(content)) {
+        const label = `${rel}${block.id ? ` (Story ${block.id})` : ''}`;
+        const hasHappy = hasPathSection(block.text, 'happy');
+        const hasNegative = hasPathSection(block.text, 'negative');
+        if (!hasHappy || !hasNegative) {
+          const missing =
+            !hasHappy && !hasNegative
+              ? 'happy and negative paths'
+              : !hasHappy
+                ? 'a happy path'
+                : 'a negative path';
+          return {
+            done: false,
+            reason: `${label}: missing ${missing} (each story needs a Happy Path and a Negative Path(s) section with ≥1 Given/When/Then bullet)`,
+          };
+        }
+      }
+    }
+    return { done: true };
+  },
+
+  // Plan passes when every story's happy path AND negative path is covered by
+  // ≥1 task. Coverage is read from task `**Story:** <id> (happy|negative path)`
+  // lines and the `## Coverage Check` table. Falls back to story-level coverage
+  // when a plan has no path-type markers for a story. See gate-audit-2026-06-23.md.
+  plan: async (dir): Promise<CompletionResult> => {
+    const planFiles = await findArtifactFiles(dir, 'plan');
+    if (planFiles.length === 0) {
+      return { done: false, reason: 'no .docs/plans/*.md present' };
+    }
+    const storyFiles = await findArtifactFiles(dir, 'stories');
+    if (storyFiles.length === 0) {
+      return { done: false, reason: 'no .docs/stories to check plan coverage against' };
+    }
+
+    // Required coverage units: (storyId, pathType) for each path a story declares.
+    const required: { id: string; type: 'happy' | 'negative' }[] = [];
+    for (const sf of storyFiles) {
+      const content = await readFile(sf, 'utf-8');
+      for (const block of splitStoryBlocks(content)) {
+        const id = block.id ?? storyIdFromFilename(sf);
+        if (!id) continue;
+        if (hasPathSection(block.text, 'happy')) required.push({ id, type: 'happy' });
+        if (hasPathSection(block.text, 'negative')) required.push({ id, type: 'negative' });
+      }
+    }
+    // Stories exist but yield no parseable IDs/paths — plan presence suffices.
+    if (required.length === 0) return { done: true };
+
+    let planText = '';
+    for (const pf of planFiles) planText += '\n' + (await readFile(pf, 'utf-8'));
+    const covered = collectPlanCoverage(planText);
+
+    const gaps: string[] = [];
+    for (const r of required) {
+      if (covered.has(`${r.id}|${r.type}`)) continue;
+      // Fallback: if the plan declares no path-type for this story at all,
+      // accept a story-level reference as covering both paths.
+      const hasPathType =
+        covered.has(`${r.id}|happy`) || covered.has(`${r.id}|negative`);
+      if (!hasPathType && covered.has(`${r.id}|*`)) continue;
+      gaps.push(`${r.id} ${r.type}`);
+    }
+    if (gaps.length > 0) {
+      const shown = gaps.slice(0, 5).join(', ');
+      const more = gaps.length > 5 ? ` (+${gaps.length - 5} more)` : '';
+      return {
+        done: false,
+        reason: `plan does not cover: ${shown}${more} — add task(s) referencing these story paths`,
+      };
+    }
+    return { done: true };
+  },
+};
+
+// --- Story / plan structure parsing (shared by stories + plan predicates) ---
+
+interface StoryBlock {
+  id?: string;
+  text: string;
+}
+
+/**
+ * Split a stories file into per-story blocks on `## Story <id>:` headings.
+ * Single-story files (no such heading) return one block spanning the file.
+ */
+function splitStoryBlocks(content: string): StoryBlock[] {
+  const heading = /^##\s+Story\s+([A-Za-z0-9.\-]+)/i;
+  const blocks: StoryBlock[] = [];
+  let current: { id: string; lines: string[] } | null = null;
+  for (const line of content.split('\n')) {
+    const m = line.match(heading);
+    if (m) {
+      if (current) blocks.push({ id: current.id, text: current.lines.join('\n') });
+      current = { id: m[1], lines: [line] };
+    } else if (current) {
+      current.lines.push(line);
+    }
+  }
+  if (current) blocks.push({ id: current.id, text: current.lines.join('\n') });
+  return blocks.length > 0 ? blocks : [{ text: content }];
+}
+
+/** True if the block has a Happy/Negative path section containing a G/W/T bullet. */
+function hasPathSection(blockText: string, type: 'happy' | 'negative'): boolean {
+  const body = sectionBody(
+    blockText,
+    type === 'happy' ? /happy\s*path/i : /negative\s*paths?/i,
+  );
+  if (body === null) return false;
+  return /\bgiven\b/i.test(body) && /\bthen\b/i.test(body);
+}
+
+/**
+ * Return the text under the first heading matching `headingRegex`, up to the
+ * next heading of the same or higher level, or null if no such heading exists.
+ */
+function sectionBody(text: string, headingRegex: RegExp): string | null {
+  let capturing = false;
+  let level = 0;
+  const body: string[] = [];
+  for (const line of text.split('\n')) {
+    const hm = line.match(/^(#{1,6})\s+(.*)$/);
+    if (hm) {
+      if (capturing && hm[1].length <= level) break;
+      if (!capturing && headingRegex.test(hm[2])) {
+        capturing = true;
+        level = hm[1].length;
+        continue;
+      }
+    }
+    if (capturing) body.push(line);
+  }
+  return capturing ? body.join('\n') : null;
+}
+
+/** Extract a `ST-0NN` / `EP-0NN` id from a single-story filename, if present. */
+function storyIdFromFilename(path: string): string | undefined {
+  const base = path.split('/').pop() ?? '';
+  const m = base.match(/\b(ST-\d+|EP-\d+)/i);
+  return m ? m[1].toUpperCase() : undefined;
+}
+
+/**
+ * Coverage set keyed `${id}|happy` / `${id}|negative` / `${id}|*` (story-level),
+ * gathered from task `**Story:**` lines and `## Coverage Check` table rows.
+ */
+function collectPlanCoverage(planText: string): Set<string> {
+  const set = new Set<string>();
+  const storyRef = /\*\*Story:\*\*\s*([A-Za-z0-9.\-]+)\s*(?:\(([^)]*)\))?/gi;
+  let m: RegExpExecArray | null;
+  while ((m = storyRef.exec(planText)) !== null) {
+    const id = m[1];
+    if (/^n\/?a$/i.test(id)) continue;
+    set.add(`${id}|*`);
+    const qual = m[2] ?? '';
+    if (/happy/i.test(qual)) set.add(`${id}|happy`);
+    if (/negative/i.test(qual)) set.add(`${id}|negative`);
+  }
+  const tableRow = /^\|\s*([A-Za-z0-9.\-]+)\s+(happy|negative)\b/gim;
+  while ((m = tableRow.exec(planText)) !== null) {
+    set.add(`${m[1]}|*`);
+    set.add(`${m[1]}|${m[2].toLowerCase()}`);
+  }
+  return set;
+}
+
 interface TaskEntry {
   id?: string;
   status?: string;

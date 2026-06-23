@@ -1,10 +1,16 @@
-import { readFile, access as accessFile, unlink as unlinkFile } from 'node:fs/promises';
+import {
+  readFile,
+  writeFile,
+  access as accessFile,
+  unlink as unlinkFile,
+} from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { relative, join } from 'node:path';
 import type { ConductState } from '../types/index.js';
 import type {
   StepName,
   StepStatus,
+  StepDefinition,
   Phase,
   RunMode,
   ComplexityTier,
@@ -26,19 +32,19 @@ import {
 } from './state.js';
 import {
   ALL_STEPS,
-  getStepIndex,
-  shouldSkipForTier,
+  buildStepRegistry,
   shouldSkipForBootstrapMode,
-  isCheckpointStep,
 } from './steps.js';
-import { checkGate, isGatingStep } from './gates.js';
+import { checkGate } from './gates.js';
 import {
   findArtifactFiles as findArtifactFilesForStep,
   STEP_ARTIFACT_GLOBS,
   checkStepCompletion,
   CUSTOM_COMPLETION_PREDICATES,
 } from './artifacts.js';
-import { resolveStepConfig, phaseForStep } from './resolved-config.js';
+import { resolveStepConfig } from './resolved-config.js';
+import { selectNextGate } from './selector.js';
+import { computeAndWriteVerdict, readAllVerdicts } from './gate-verdicts.js';
 import { attemptAutoHeal } from './autoheal.js';
 import {
   countResolvedTasks,
@@ -56,6 +62,30 @@ export type CheckpointResponse = 'continue' | 'back' | 'quit';
  */
 export const MAX_RECOVERY_RETRIES = 2;
 
+// ── Gate-driven loop (Phase 3) ──────────────────────────────────────────────
+// Steps the loop controls (selector-driven) once the build step engages, plus
+// the kickback targets it may re-open. Upstream of `build` the conductor stays
+// linear (the front half produces the artifacts).
+const KICKBACK_TARGETS: StepName[] = ['stories', 'plan'];
+// Gate steps whose objective verdict the loop recomputes after each run.
+const LOOP_GATE_STEPS = new Set<StepName>([
+  'stories',
+  'plan',
+  'build',
+  'manual_test',
+  'retro',
+  'finish',
+]);
+// Anti-ping-pong: a single gate may be re-opened by kickback at most this many
+// times per feature before the loop HALTs for a human.
+const MAX_KICKBACKS_PER_GATE = 2;
+// Cap on how many times the selector may pick any single gate before it
+// satisfies. Catches a gate whose verdict never improves and a build↔plan
+// kickback oscillation. Generous enough to allow legitimate kickback re-walks.
+const MAX_GATE_SELECTIONS = 6;
+const DONE_MARKER = '.pipeline/DONE';
+const LOOP_HALT_MARKER = '.pipeline/HALT';
+
 export interface NavigableStep {
   name: StepName;
   label: string;
@@ -66,16 +96,20 @@ export interface NavigableStep {
 export function navigateBack(
   state: ConductState,
   target: StepName,
+  steps: StepDefinition[] = ALL_STEPS,
 ): { state: ConductState; index: number } {
-  const allStepNames = ALL_STEPS.map((s) => s.name);
-  let updated = markDownstreamStale(state, target, allStepNames);
+  const allStepNames = steps.map((s) => s.name);
+  const updated = markDownstreamStale(state, target, allStepNames);
   (updated as Record<string, unknown>)[target] = 'pending';
-  const index = getStepIndex(target);
+  const index = steps.findIndex((s) => s.name === target);
   return { state: updated, index };
 }
 
-export function getNavigableSteps(state: ConductState): NavigableStep[] {
-  return ALL_STEPS
+export function getNavigableSteps(
+  state: ConductState,
+  steps: StepDefinition[] = ALL_STEPS,
+): NavigableStep[] {
+  return steps
     .filter((step) => {
       const status = state[step.name];
       return status === 'done' || status === 'stale';
@@ -146,6 +180,14 @@ export interface ConductorOptions {
    */
   verifyArtifacts?: boolean;
   /**
+   * Hybrid session model (Phase 4): reset the LLM session before each new step
+   * in the looped region (`build`…`finish`) so each runs on fresh context
+   * (Ralph-style resilience — context never bloats across the SHIP phase). A
+   * step's internal retries still resume the same session. The front half keeps
+   * the persistent session. Default false (persistent session everywhere).
+   */
+  freshContextPerStep?: boolean;
+  /**
    * Maximum auto-retries before a failing step (including artifact miss)
    * escalates to the recovery menu. Matches `max_retries=3` in bin/conduct.
    * Default: 3.
@@ -184,6 +226,7 @@ export class Conductor {
   private onCheckpoint: (step: StepName) => Promise<CheckpointResponse>;
   private onNavigate: (steps: NavigableStep[]) => Promise<StepName | null>;
   private verifyArtifacts: boolean;
+  private freshContextPerStep: boolean;
   private sleep: (ms: number) => Promise<void>;
   private onReviewArtifacts: (step: StepName, files: string[]) => Promise<ArtifactReviewResult>;
   private onRecovery?: (
@@ -203,6 +246,7 @@ export class Conductor {
     this.config = opts.config ?? {};
     this.projectRoot = opts.projectRoot ?? process.cwd();
     this.verifyArtifacts = opts.verifyArtifacts ?? false;
+    this.freshContextPerStep = opts.freshContextPerStep ?? false;
     // Legacy maxRetries option: inject as defaults.max_retries on the config
     // so per-step resolution still works. Tests often pass this directly.
     if (opts.maxRetries !== undefined) {
@@ -244,12 +288,20 @@ export class Conductor {
       // Marker absent — nothing to clean.
     });
 
+    // Resolved, config-derived step list (built-ins + custom steps inserted via
+    // `after`). The loop, selector, and index math all key off THIS list so
+    // YAML custom steps run and participate in the gate loop. indexOf is the
+    // registry-relative index (getStepIndex's static map can't see customs).
+    const steps = buildStepRegistry(this.config);
+    const indexOf = (name: StepName): number =>
+      steps.findIndex((s) => s.name === name);
+
     // Determine starting index
     let startIndex = 0;
     if (this.fromStep) {
-      startIndex = getStepIndex(this.fromStep);
+      startIndex = indexOf(this.fromStep);
     } else if (this.resume) {
-      startIndex = this.findResumeIndex(state);
+      startIndex = this.findResumeIndex(state, steps);
     }
 
     // Save state on SIGINT before exit
@@ -269,8 +321,15 @@ export class Conductor {
     // healings, so additional invocations are wasted git calls.
     const autoHealAttempted = new Set<StepName>();
 
-    for (let i = startIndex; i < ALL_STEPS.length; i++) {
-      const step = ALL_STEPS[i];
+    // Per-gate count of kickback re-opens this feature, for the anti-ping-pong
+    // cap. Drives the gate-driven tail (see advanceTail).
+    const kickbackCounts = new Map<StepName, number>();
+    // Per-gate count of consecutive selector re-selects without satisfaction,
+    // for the stuck-gate HALT guard (see advanceTail).
+    const stuckGate = new Map<StepName, number>();
+
+    for (let i = startIndex; i < steps.length; i++) {
+      const step = steps[i];
 
       // Skip already-completed work. Without this, re-invoking the conductor
       // against a project with existing `done` / `skipped` state (e.g. after
@@ -294,7 +353,7 @@ export class Conductor {
       const tier = state.complexity_tier ?? 'L';
 
       // Check if step should be skipped for this complexity tier
-      if (shouldSkipForTier(step.name, tier)) {
+      if (step.skippableForTiers.includes(tier)) {
         await saveStepStatus(this.stateFilePath, step.name, 'skipped');
         state[step.name] = 'skipped';
         await this.events.emit({ type: 'tier_skip', step: step.name, tier });
@@ -321,7 +380,7 @@ export class Conductor {
       // Resolve per-step config (model, effort, retries, review…). Tier is
       // threaded in so `by_tier` overrides apply when the feature's complexity
       // is known (post-complexity step).
-      const resolved = resolveStepConfig(step.name, phaseForStep(step.name), this.config, {
+      const resolved = resolveStepConfig(step.name, step.phase, this.config, {
         tier: state.complexity_tier,
       });
 
@@ -380,7 +439,7 @@ export class Conductor {
       }
 
       // Check gate: all prerequisites must be satisfied
-      const gate = checkGate(step.name, state);
+      const gate = checkGate(step, state);
       if (!gate.passed) {
         await this.events.emit({ type: 'gate_blocked', step: step.name, reason: gate.reason });
         await writeState(this.stateFilePath, state);
@@ -393,6 +452,18 @@ export class Conductor {
       state[step.name] = 'in_progress';
 
       await this.events.emit({ type: 'step_started', step: step.name, index: i });
+
+      // Hybrid session (Phase 4): start each new step in the looped region on a
+      // fresh LLM session so context never bloats across build…finish. The
+      // retry loop below reuses this session (resume) for the step's own
+      // attempts. Front-half steps keep the persistent session.
+      if (
+        this.freshContextPerStep &&
+        this.stepRunner.resetSession &&
+        indexOf(step.name) >= indexOf('build')
+      ) {
+        await this.stepRunner.resetSession();
+      }
 
       // Retry loop: auto-retry on step-runner failure OR completion-gate miss,
       // up to `maxRetries` attempts total. Only after the budget is exhausted
@@ -578,7 +649,7 @@ export class Conductor {
         });
 
         if (this.onRecovery) {
-          const gating = isGatingStep(step.name);
+          const gating = step.enforcement === 'gating';
           let action: RecoveryOption;
           // Keep polling the UI until it returns something other than `retry`
           // once retries are exhausted. Terminal-side prompt hosts should drop
@@ -605,10 +676,10 @@ export class Conductor {
             continue;
           }
           if (action === 'back') {
-            const navigable = getNavigableSteps(state);
+            const navigable = getNavigableSteps(state, steps);
             const target = await this.onNavigate(navigable);
             if (target) {
-              const nav = navigateBack(state, target);
+              const nav = navigateBack(state, target, steps);
               await this.events.emit({ type: 'navigation_back', from: step.name, to: target });
               state = nav.state;
               await writeState(this.stateFilePath, state);
@@ -729,7 +800,7 @@ export class Conductor {
         }
 
         // Checkpoint handling
-        if (isCheckpointStep(step.name) && this.mode !== 'auto') {
+        if (step.isCheckpoint && this.mode !== 'auto') {
           await this.events.emit({ type: 'checkpoint_reached', step: step.name });
           const response = await this.onCheckpoint(step.name);
           if (response === 'quit') {
@@ -738,10 +809,10 @@ export class Conductor {
             return;
           }
           if (response === 'back') {
-            const navigable = getNavigableSteps(state);
+            const navigable = getNavigableSteps(state, steps);
             const target = await this.onNavigate(navigable);
             if (target) {
-              const nav = navigateBack(state, target);
+              const nav = navigateBack(state, target, steps);
               await this.events.emit({ type: 'navigation_back', from: step.name, to: target });
               state = nav.state;
               await writeState(this.stateFilePath, state);
@@ -750,6 +821,29 @@ export class Conductor {
             }
           }
           // 'continue' proceeds normally
+        }
+
+        // ── Gate-driven tail (Phase 3) ─────────────────────────────────
+        // Once `build` engages the loop, the SELECTOR (not i++) chooses the
+        // next step, and a step that re-opened an upstream gate (kickback)
+        // routes the loop back to plan/stories. Upstream of build → null →
+        // the for loop's normal linear i++ (front half untouched).
+        const advance = await this.advanceTail(
+          step,
+          state,
+          kickbackCounts,
+          stuckGate,
+          steps,
+          indexOf,
+        );
+        if (advance === 'halt') {
+          await writeState(this.stateFilePath, state);
+          process.off('SIGINT', sigintHandler);
+          return;
+        }
+        if (advance !== null) {
+          i = advance - 1; // the for loop's i++ lands on the selector's choice
+          continue;
         }
       }
     }
@@ -766,6 +860,131 @@ export class Conductor {
     });
     state.feature_status = 'complete';
     await writeState(this.stateFilePath, state);
+  }
+
+  /**
+   * Gate-driven tail advance (Phase 3). Called after a step succeeds to decide
+   * the next index:
+   *   - Front half (before `build`): returns null → caller does linear i++.
+   *   - Tail (`build`…`finish`): recompute the step's objective verdict, route
+   *     any kickback (a step that re-opened an upstream gate) back via
+   *     navigateBack + downstream-stale cascade, then ask the selector for the
+   *     next unsatisfied gate. Returns ALL_STEPS.length when the loop is done.
+   *   - 'halt': a gate exceeded the kickback cap; caller writes state and stops.
+   */
+  private async advanceTail(
+    step: StepDefinition,
+    state: ConductState,
+    kickbackCounts: Map<StepName, number>,
+    stuckGate: Map<StepName, number>,
+    steps: StepDefinition[],
+    indexOf: (name: StepName) => number,
+  ): Promise<number | null | 'halt'> {
+    // The gate-driven tail only engages when completion is verified against
+    // artifacts. Without verifyArtifacts the conductor trusts the runner and
+    // stays fully linear (unchanged behavior).
+    if (!this.verifyArtifacts) return null;
+
+    // Record the objective verdict for any gate we just ran — including in the
+    // front half, so a re-run plan/stories refreshes its verdict on disk.
+    if (LOOP_GATE_STEPS.has(step.name)) {
+      await computeAndWriteVerdict(this.projectRoot, step.name, {
+        sessionStartedAt: state.session_started_at,
+        featureDesc: state.feature_desc,
+      });
+    }
+
+    if (indexOf(step.name) < indexOf('build')) {
+      return null; // front half stays linear
+    }
+
+    // Mark tier/mode-skipped steps in the looped region as 'skipped' so the
+    // selector skips them AND downstream prerequisite gates (checkGate) pass —
+    // the selector-driven tail can jump over a step without the linear body
+    // ever marking it.
+    let markedSkip = false;
+    const tier = state.complexity_tier ?? 'L';
+    for (const s of steps) {
+      if (
+        getStepStatus(state, s.name) === 'pending' &&
+        (s.skippableForTiers.includes(tier) ||
+          shouldSkipForBootstrapMode(s.name, state.bootstrap_mode))
+      ) {
+        (state as Record<string, unknown>)[s.name] = 'skipped';
+        markedSkip = true;
+      }
+    }
+    if (markedSkip) await writeState(this.stateFilePath, state);
+
+    const verdicts = await readAllVerdicts(this.projectRoot);
+
+    // Kickback: a step re-opened an upstream gate (verdict is
+    // {satisfied:false, kickback.from === this step}). Re-open that gate
+    // (pending) + cascade-stale its downstream so they re-run; HALT if a gate
+    // has been re-opened past the cap.
+    for (const target of KICKBACK_TARGETS) {
+      const v = verdicts[target];
+      if (v && v.satisfied === false && v.kickback?.from === step.name) {
+        const count = (kickbackCounts.get(target) ?? 0) + 1;
+        kickbackCounts.set(target, count);
+        await this.events.emit({
+          type: 'navigation_back',
+          from: step.name,
+          to: target,
+        });
+        if (count > MAX_KICKBACKS_PER_GATE) {
+          await writeFile(
+            join(this.projectRoot, LOOP_HALT_MARKER),
+            `kickback ping-pong: ${target} re-opened ${count} times (cap ${MAX_KICKBACKS_PER_GATE})\n`,
+            'utf-8',
+          );
+          return 'halt';
+        }
+        const nav = navigateBack(state, target, steps);
+        Object.assign(state, nav.state);
+        await writeState(this.stateFilePath, state);
+      }
+    }
+
+    const decision = selectNextGate({
+      steps,
+      state,
+      verdicts,
+      regionStart: 'stories',
+    });
+    if (decision.kind === 'done') {
+      await writeFile(
+        join(this.projectRoot, DONE_MARKER),
+        'gate-driven loop converged\n',
+        'utf-8',
+      ).catch(() => {
+        /* best-effort marker */
+      });
+      return steps.length;
+    }
+
+    // Oscillation / stuck guard: cap how many times any single gate may be
+    // selected before it satisfies. Catches a gate whose verdict never improves
+    // and a build↔plan kickback oscillation.
+    const sel = (stuckGate.get(decision.step) ?? 0) + 1;
+    stuckGate.set(decision.step, sel);
+    if (sel > MAX_GATE_SELECTIONS) {
+      await writeFile(
+        join(this.projectRoot, LOOP_HALT_MARKER),
+        `gate '${decision.step}' selected ${sel} times without satisfying: ${decision.reason}\n`,
+        'utf-8',
+      );
+      return 'halt';
+    }
+
+    // The selector only returns UNSATISFIED gates; if such a gate is still
+    // marked 'done' (its verdict went false via kickback/recompute), reset it to
+    // 'pending' so the loop re-runs it instead of skipping it as already-resolved.
+    if (getStepStatus(state, decision.step) === 'done') {
+      (state as Record<string, unknown>)[decision.step] = 'pending';
+      await writeState(this.stateFilePath, state);
+    }
+    return indexOf(decision.step);
   }
 
   /**
@@ -912,23 +1131,26 @@ export class Conductor {
    * Find the index to resume from: first in_progress step,
    * or first pending step after the last done step.
    */
-  private findResumeIndex(state: ConductState): number {
+  private findResumeIndex(
+    state: ConductState,
+    steps: StepDefinition[] = ALL_STEPS,
+  ): number {
     // If feature is already complete, treat as new feature (start from 0)
     if (state.feature_status === 'complete') {
       return 0;
     }
 
     // First, look for an in_progress step
-    for (let i = 0; i < ALL_STEPS.length; i++) {
-      if (getStepStatus(state, ALL_STEPS[i].name) === 'in_progress') {
+    for (let i = 0; i < steps.length; i++) {
+      if (getStepStatus(state, steps[i].name) === 'in_progress') {
         return i;
       }
     }
 
     // Otherwise, find the first pending step after the last done step
     let lastDoneIndex = -1;
-    for (let i = 0; i < ALL_STEPS.length; i++) {
-      if (getStepStatus(state, ALL_STEPS[i].name) === 'done') {
+    for (let i = 0; i < steps.length; i++) {
+      if (getStepStatus(state, steps[i].name) === 'done') {
         lastDoneIndex = i;
       }
     }
