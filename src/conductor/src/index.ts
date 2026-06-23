@@ -182,6 +182,18 @@ async function main(): Promise<void> {
     process.exit(0);
   }
 
+  // Handle --daemon: drain the backlog of features (each in its own worktree,
+  // gate loop, PR on finish) and exit. Unattended.
+  if (opts.daemon) {
+    const { runDaemonMode } = await import('./daemon-cli.js');
+    await runDaemonMode({
+      projectRoot,
+      concurrency: opts.concurrency,
+      maxItems: opts.maxItems,
+    });
+    process.exit(0);
+  }
+
   // Handle --status: show state and exit
   if (opts.status) {
     const stateResult = await readState(stateFilePath);

@@ -37,6 +37,16 @@ export interface CLIOptions {
    * Read-only — does NOT start a Claude session.
    */
   report: boolean;
+  /**
+   * Daemon mode (Phase 6): drain the backlog of features with existing
+   * stories+plan, running each in its own worktree via the gate loop and
+   * opening a PR on finish. Runs unattended.
+   */
+  daemon: boolean;
+  /** Parallel worker count in daemon mode (default 1). */
+  concurrency: number;
+  /** Stop daemon after this many features (default: drain the backlog once). */
+  maxItems?: number;
 }
 
 export function createProgram(): Command {
@@ -60,7 +70,10 @@ export function createProgram(): Command {
     .option('--tail-lines <n>', 'Max lines to show in post-step tail pane (0 disables)', '20')
     .option('--interactive', 'Run every step in interactive Claude REPL mode (no -p flag)')
     .option('--diagnose', 'Diagnose conductor state (non-mutating); reports SHIP-phase evidence gaps and exits non-zero if state is marked complete but evidence is missing')
-    .option('--report', 'Print run summary from .pipeline/events.jsonl (step durations, retry hotspots, token spend) and exit');
+    .option('--report', 'Print run summary from .pipeline/events.jsonl (step durations, retry hotspots, token spend) and exit')
+    .option('--daemon', 'Daemon mode: drain the backlog of features with existing stories+plan, each in its own worktree, opening a PR on finish')
+    .option('--concurrency <n>', 'Parallel workers in daemon mode', '1')
+    .option('--max-items <n>', 'Stop daemon after this many features (default: drain backlog once)');
   return program;
 }
 
@@ -93,6 +106,9 @@ export function parseArgs(argv: string[]): CLIOptions {
     interactive: opts.interactive ?? false,
     diagnose: opts.diagnose ?? false,
     report: opts.report ?? false,
+    daemon: opts.daemon ?? false,
+    concurrency: parseInt(opts.concurrency ?? '1', 10),
+    maxItems: opts.maxItems != null ? parseInt(opts.maxItems, 10) : undefined,
   };
 
   const hasStateFlag =
