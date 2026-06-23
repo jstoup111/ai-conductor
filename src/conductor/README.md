@@ -15,7 +15,11 @@ src/conductor/
 │   │   ├── steps.ts         # ALL_STEPS + skip helpers (tier + bootstrap mode)
 │   │   ├── artifacts.ts     # Artifact globs + CUSTOM_COMPLETION_PREDICATES
 │   │   ├── autoheal.ts      # task-status.json ↔ git log reconciliation
-│   │   ├── gates.ts         # checkGate(step, state) prerequisites
+│   │   ├── gates.ts         # checkGate(step|def, state) prerequisites
+│   │   ├── gate-verdicts.ts # Gate-loop verdicts → .pipeline/gates/<step>.json
+│   │   ├── selector.ts      # selectNextGate — earliest unsatisfied gate
+│   │   ├── daemon.ts        # runDaemon — parallel feature worker pool
+│   │   ├── daemon-backlog.ts, daemon-runner.ts, daemon-deps.ts  # backlog + per-feature run
 │   │   ├── hooks.ts         # Step-boundary hook dispatch
 │   │   ├── step-runners.ts  # DefaultStepRunner (Claude provider integration)
 │   │   ├── skill-resolver.ts, resolved-config.ts, config.ts, resume.ts, auto-resume.ts
@@ -34,6 +38,7 @@ src/conductor/
 │   │   ├── state.ts             # ConductState, BootstrapMode
 │   │   ├── events.ts            # ConductorEvent union
 │   │   └── config.ts            # HarnessConfig
+│   ├── daemon-cli.ts            # --daemon entry: assembles per-worktree Conductors
 │   └── index.ts                 # CLI entry (commander-based)
 ├── test/                        # vitest suites mirroring src/ layout
 ├── tsup.config.ts               # Bundle config (node20 target, ESM, dts)
@@ -59,9 +64,59 @@ The bundle is committed-optional — the root `bin/install` gracefully skips the
 ### State machine
 
 `ALL_STEPS` in `engine/steps.ts` is the canonical ordered list (16 steps across four
-phases: UNDERSTAND, DECIDE, SETUP, BUILD, SHIP). The `Conductor.run()` method walks them
-in order, checking tier-skip → bootstrap-mode-skip → gate → runs the step → verifies
-completion → handles recovery.
+phases: UNDERSTAND, DECIDE, SETUP, BUILD, SHIP). `Conductor.run()` resolves the
+config-derived registry (`buildStepRegistry(config)` — so YAML **custom steps** run and
+are indexed), then walks it: tier-skip → bootstrap-mode-skip → gate → run → verify
+completion → recovery.
+
+The **front half** (`worktree`…`acceptance_specs`) is a linear `i++` walk. At `build` it
+hands off to the **gate-driven loop** (see below): the *selector*, not the index, chooses
+the next step. When `verifyArtifacts` is off the conductor stays fully linear (the gate
+loop never engages).
+
+### Gate-driven loop
+
+Once `build` engages, `advanceTail()` drives `build → manual_test → retro → finish` by
+**gate verdicts** instead of a fixed order:
+
+- **Verdicts** — after a gate step runs, its objective verdict is recomputed from on-disk
+  evidence (`engine/gate-verdicts.ts`, wrapping `checkGateCompletion`) and persisted to
+  `.pipeline/gates/<step>.json` as `{satisfied, reason, checkedAt, kickback?}`. The loop
+  owns verdicts; it does not trust an agent's self-report.
+- **Selector** (`engine/selector.ts`, `selectNextGate`) — returns the earliest unsatisfied
+  gate. A verdict is authoritative over step state; a `stale` step is unsatisfied (must
+  re-run).
+- **Kickback** — a downstream step can re-open an upstream gate by writing
+  `{satisfied:false, kickback.from}` for `plan`/`stories`. `advanceTail` detects it,
+  `navigateBack`s (target → pending, downstream → stale), and the selector routes back.
+  Capped per gate to prevent ping-pong.
+- **Stop** — `.pipeline/DONE` on convergence; `.pipeline/HALT` on the kickback cap or a
+  gate selected too many times without satisfying.
+- **Hybrid session** — with `freshContextPerStep`, the LLM session is reset before each new
+  tail step (Ralph-style; SHIP-phase context never bloats), while a step's own retries
+  resume. The front half keeps the persistent session.
+
+The new gate-grade predicates (`plan` = per-path-type story coverage; `stories` = happy +
+negative path, no DRAFT) live in `GATE_ONLY_PREDICATES` (`engine/artifacts.ts`), separate
+from the linear conductor's completion predicates. See `.docs/decisions/gate-audit-*.md`.
+
+### Daemon mode
+
+`conduct-ts --daemon` (`daemon-cli.ts`) drains a backlog of features that already have
+human-authored stories **and** plans, running each in its own worktree via the gate loop
+and opening a PR on finish:
+
+- `engine/daemon.ts` (`runDaemon`) — parallel worker pool (`--concurrency N`), hard
+  ceilings (`--max-items`, token cost), `once` vs idle-poll, and per-feature failure
+  isolation (a thrown feature becomes an `error` outcome; the pool survives).
+- `engine/daemon-backlog.ts` — eligibility: stories + plan present, not yet processed.
+- `engine/daemon-runner.ts` — per-feature discipline: done → mark + remove worktree + PR;
+  halted/error → keep the worktree for the human.
+- `engine/daemon-deps.ts` — concrete git/fs primitives (worktree add/remove, spec
+  materialization into the worktree, `.pipeline/DONE`/`HALT` outcome read).
+
+The daemon consumes specs — it never authors them. It ships in `once` mode; continuous
+(idle-poll) is gated on end-to-end validation.
 
 ### Events
 
@@ -69,6 +124,11 @@ completion → handles recovery.
 emits. UIs subscribe via `ConductorEventEmitter`. Events include `step_started`,
 `step_completed`, `step_failed`, `step_retry`, `checkpoint_reached`, `recovery_needed`,
 `rate_limit`, `session_reset`, `auto_heal`, `mode_skip`, `feature_complete`, etc.
+
+Gate-loop events: `gate_verdict` (a gate's verdict was (re)computed), `kickback` (a step
+re-opened an upstream gate, with reason + count), `loop_halt` (the loop stopped without
+converging), and `loop_converged`. `TerminalRenderer` surfaces them; the json-stdout
+subscriber serializes them generically.
 
 The contract is additive — new event types may be introduced without breaking existing
 subscribers. Subscribers receive only events they register for via `emitter.on(type, ...)`.

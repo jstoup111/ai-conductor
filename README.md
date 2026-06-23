@@ -92,6 +92,21 @@ conduct --from plan       # Start from a specific step
 conduct --reset           # Clear session state and start fresh
 ```
 
+Daemon mode (`conduct-ts` only) — drive many pre-specced features unattended, each in its
+own worktree, opening a PR on finish:
+
+```bash
+# Drain the backlog: every feature with stories + a plan under .docs/
+conduct-ts --daemon
+
+# Run 3 in parallel, cap at 10 features this pass
+conduct-ts --daemon --concurrency 3 --max-items 10
+```
+
+The daemon consumes existing specs — it never authors them — and skips features it has
+already shipped. A feature that can't converge is left in its worktree (`.pipeline/HALT`)
+for you; the pool keeps going.
+
 On failure, conduct sends a desktop notification and drops into an interactive Claude session
 to fix the issue. After you `/quit`, it rechecks artifacts and continues automatically.
 
@@ -377,7 +392,7 @@ tech-context use generic skill behavior.
 
 The TypeScript rewrite behind `conduct-ts`. Three-layer architecture —
 Engine / Execution / UI — with typed events, pluggable UI renderers, and
-dedicated test coverage (673 tests). See the feature comparison in
+dedicated test coverage (950+ tests). See the feature comparison in
 [Choosing a Conductor](#choosing-a-conductor); implementation notes below.
 
 - **`bin/conduct-ts`** is a thin shell wrapper around `src/conductor/dist/index.js`.
@@ -391,9 +406,24 @@ dedicated test coverage (673 tests). See the feature comparison in
 - **Bootstrap-mode skip**: when bootstrap detects a `new`-mode project (empty directory
   before scaffolding), the conductor skips `assess` rather than dispatching 9 specialists
   against a blank codebase.
+- **Gate-driven loop**: the SHIP-phase tail (`build → manual_test → retro → finish`) is
+  driven by a *selector* over machine-checkable **gate verdicts** rather than a fixed
+  order. A downstream step can **kick back** to `plan`/`stories` (re-open an upstream gate);
+  the loop converges to `.pipeline/DONE` or stops at `.pipeline/HALT`. Opt-in via
+  `verifyArtifacts`; with `freshContextPerStep`, each tail step runs on fresh context.
+- **Daemon mode** (`conduct-ts --daemon`): drains a backlog of features that already have
+  stories **and** plans, running each in its own worktree (parallel via `--concurrency N`,
+  bounded by `--max-items`), and opening a PR on finish. Per-feature failures are isolated;
+  the pool keeps going.
+- **Custom config steps run**: the conductor drives the resolved registry
+  (`buildStepRegistry`), so custom steps from `.ai-conductor/config.yml` are dispatched and
+  participate in the loop.
 - **Pinned Node**: `conduct-ts` reads `src/conductor/.tool-versions` and exports
   `ASDF_NODEJS_VERSION` so the bundle runs on its required Node even when your shell's
   default is older.
+
+See [`src/conductor/README.md`](src/conductor/README.md) for the gate-loop and daemon
+internals (verdicts, selector, kickback, worker pool).
 
 Build and install:
 
