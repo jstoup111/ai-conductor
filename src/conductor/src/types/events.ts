@@ -78,4 +78,30 @@ export type ConductorEvent =
       step: StepName;
       branch: string;
       error: string;
+    }
+  // ── Gate-driven loop (Phase 5 observability) ──
+  | {
+      /** A gate's objective verdict was (re)computed by the loop. */
+      type: 'gate_verdict';
+      step: StepName;
+      satisfied: boolean;
+      reason?: string;
+    }
+  | {
+      /** A downstream step re-opened an upstream gate (plan/stories). */
+      type: 'kickback';
+      from: StepName;
+      to: StepName;
+      evidence?: string;
+      /** How many times this gate has been re-opened this feature. */
+      count: number;
+    }
+  | {
+      /** The gate loop stopped without converging (kickback/stuck cap). */
+      type: 'loop_halt';
+      reason: string;
+    }
+  | {
+      /** The gate loop reached a fully-satisfied state (.pipeline/DONE). */
+      type: 'loop_converged';
     };
