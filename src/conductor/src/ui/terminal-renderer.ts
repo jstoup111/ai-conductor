@@ -216,6 +216,27 @@ export class TerminalRenderer implements UIRenderer {
         // Log renderer errors as warnings — don't crash the pipeline.
         this.region.log(chalk.yellow(`  ⚠ Renderer error [${event.rendererName}]: ${event.error}`));
         break;
+      case 'gate_verdict':
+        // Only surface unsatisfied verdicts — satisfied ones are routine.
+        if (!event.satisfied) {
+          this.region.log(
+            chalk.dim(`  gate ${event.step}: unsatisfied${event.reason ? ` — ${event.reason}` : ''}`),
+          );
+        }
+        break;
+      case 'kickback':
+        this.region.log(
+          chalk.yellow(
+            `  ↩ kickback: ${event.from} re-opened ${event.to}${event.evidence ? ` — ${event.evidence}` : ''} (×${event.count})`,
+          ),
+        );
+        break;
+      case 'loop_halt':
+        this.region.log(chalk.red(`  ✋ loop halted: ${event.reason}`));
+        break;
+      case 'loop_converged':
+        this.region.log(chalk.green('  ✓ gate loop converged'));
+        break;
     }
   }
 

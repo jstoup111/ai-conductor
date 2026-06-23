@@ -53,6 +53,13 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 - conduct-ts test: the `saves state on SIGINT` test in `test/engine/conductor.test.ts` now stubs `process.exit`; it previously invoked the real SIGINT handler's `process.exit(130)`, leaking an unhandled rejection into the run.
 
 ### Added
+- conduct-ts: gate-loop observability — new `ConductorEvent` types `gate_verdict`
+  (step, satisfied, reason), `kickback` (from, to, evidence, count), `loop_halt`
+  (reason), and `loop_converged`, emitted from the conductor's gate-driven tail.
+  `TerminalRenderer` surfaces unsatisfied verdicts, kickbacks (with reason + count),
+  HALTs, and convergence; the json-stdout subscriber serializes them as-is. (The
+  kickback now emits a dedicated `kickback` event instead of reusing
+  `navigation_back`, which stays reserved for user-driven back-navigation.)
 - conduct-ts: hybrid session model — new `freshContextPerStep` option. When on,
   the conductor resets the LLM session before each new step in the looped region
   (`build`…`finish`), so each runs on fresh context (Ralph-style — context never

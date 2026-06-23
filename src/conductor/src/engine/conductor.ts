@@ -888,9 +888,15 @@ export class Conductor {
     // Record the objective verdict for any gate we just ran — including in the
     // front half, so a re-run plan/stories refreshes its verdict on disk.
     if (LOOP_GATE_STEPS.has(step.name)) {
-      await computeAndWriteVerdict(this.projectRoot, step.name, {
+      const verdict = await computeAndWriteVerdict(this.projectRoot, step.name, {
         sessionStartedAt: state.session_started_at,
         featureDesc: state.feature_desc,
+      });
+      await this.events.emit({
+        type: 'gate_verdict',
+        step: step.name,
+        satisfied: verdict.satisfied,
+        reason: verdict.reason,
       });
     }
 
@@ -928,16 +934,20 @@ export class Conductor {
         const count = (kickbackCounts.get(target) ?? 0) + 1;
         kickbackCounts.set(target, count);
         await this.events.emit({
-          type: 'navigation_back',
+          type: 'kickback',
           from: step.name,
           to: target,
+          evidence: v.kickback?.evidence,
+          count,
         });
         if (count > MAX_KICKBACKS_PER_GATE) {
+          const reason = `kickback ping-pong: ${target} re-opened ${count} times (cap ${MAX_KICKBACKS_PER_GATE})`;
           await writeFile(
             join(this.projectRoot, LOOP_HALT_MARKER),
-            `kickback ping-pong: ${target} re-opened ${count} times (cap ${MAX_KICKBACKS_PER_GATE})\n`,
+            reason + '\n',
             'utf-8',
           );
+          await this.events.emit({ type: 'loop_halt', reason });
           return 'halt';
         }
         const nav = navigateBack(state, target, steps);
@@ -960,6 +970,7 @@ export class Conductor {
       ).catch(() => {
         /* best-effort marker */
       });
+      await this.events.emit({ type: 'loop_converged' });
       return steps.length;
     }
 
@@ -969,11 +980,9 @@ export class Conductor {
     const sel = (stuckGate.get(decision.step) ?? 0) + 1;
     stuckGate.set(decision.step, sel);
     if (sel > MAX_GATE_SELECTIONS) {
-      await writeFile(
-        join(this.projectRoot, LOOP_HALT_MARKER),
-        `gate '${decision.step}' selected ${sel} times without satisfying: ${decision.reason}\n`,
-        'utf-8',
-      );
+      const reason = `gate '${decision.step}' selected ${sel} times without satisfying: ${decision.reason}`;
+      await writeFile(join(this.projectRoot, LOOP_HALT_MARKER), reason + '\n', 'utf-8');
+      await this.events.emit({ type: 'loop_halt', reason });
       return 'halt';
     }
 

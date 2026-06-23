@@ -89,8 +89,12 @@ describe('integration/gate-loop', () => {
       },
     };
     let completed = false;
+    let converged = false;
     events.on('feature_complete', () => {
       completed = true;
+    });
+    events.on('loop_converged', () => {
+      converged = true;
     });
 
     await conductorWith(runner).run();
@@ -100,6 +104,7 @@ describe('integration/gate-loop', () => {
     expect(ran).toContain('finish');
     expect(ran).not.toContain('retro'); // tier-skipped for Small
     expect(completed).toBe(true);
+    expect(converged).toBe(true); // loop_converged event emitted
     await expect(access(join(dir, '.pipeline/DONE'))).resolves.toBeUndefined();
   });
 
@@ -137,14 +142,19 @@ describe('integration/gate-loop', () => {
       },
     };
     let completed = false;
+    const kicks: Array<{ from: string; to: string }> = [];
     events.on('feature_complete', () => {
       completed = true;
+    });
+    events.on('kickback', (e) => {
+      if (e.type === 'kickback') kicks.push({ from: e.from, to: e.to });
     });
 
     await conductorWith(runner).run();
 
     expect(buildRuns).toBe(2); // built → kicked back to plan → rebuilt
     expect(completed).toBe(true);
+    expect(kicks).toContainEqual({ from: 'build', to: 'plan' }); // kickback event
   });
 
   it('HALTs (no completion) when a kickback target never satisfies', async () => {
@@ -180,13 +190,18 @@ describe('integration/gate-loop', () => {
       },
     };
     let completed = false;
+    let halted = false;
     events.on('feature_complete', () => {
       completed = true;
+    });
+    events.on('loop_halt', () => {
+      halted = true;
     });
 
     await conductorWith(runner).run();
 
     expect(completed).toBe(false);
+    expect(halted).toBe(true); // loop_halt event emitted
     await expect(access(join(dir, '.pipeline/HALT'))).resolves.toBeUndefined();
   });
 
