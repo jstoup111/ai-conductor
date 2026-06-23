@@ -118,6 +118,17 @@ describe('ClaudeProvider', () => {
       expect(result.sessionExpired).toBe(true);
     });
 
+    it('treats a session-in-use lock as recoverable (sessionExpired)', async () => {
+      for (const msg of [
+        'Error: Session abc-123 is already in use',
+        'This conversation is currently in use by another process',
+      ]) {
+        mockExeca.mockResolvedValue({ stdout: msg, exitCode: 1, failed: true } as any);
+        const result = await provider.invoke(baseOptions);
+        expect(result.sessionExpired).toBe(true);
+      }
+    });
+
     it('returns success for exit code 0', async () => {
       mockExeca.mockResolvedValue({
         stdout: 'Done!',

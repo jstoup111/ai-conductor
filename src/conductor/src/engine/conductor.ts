@@ -506,7 +506,7 @@ export class Conductor {
         if (result.sessionExpired) {
           await this.events.emit({
             type: 'session_reset',
-            reason: 'Claude reported "No conversation found"',
+            reason: 'session unavailable (expired or in use) — resetting to a fresh session',
           });
           if (this.stepRunner.resetSession) {
             await this.stepRunner.resetSession();

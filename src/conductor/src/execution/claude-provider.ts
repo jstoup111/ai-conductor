@@ -3,6 +3,10 @@ import type { LLMProvider, InvokeOptions, InvokeResult, TokenUsage } from './llm
 
 const RATE_LIMIT_RE = /rate limit|429|overloaded|usage limit/i;
 const STALE_SESSION_RE = /No conversation found/i;
+// A session-id lock ("already in use" / "session is in use by another
+// process"). Recovers the same way as a stale session — reset to a fresh
+// session id and retry — so it's folded into the sessionExpired signal.
+const SESSION_IN_USE_RE = /\balready in use\b|\b(session|conversation)\b[^\n]{0,60}\bin use\b/i;
 
 /**
  * Scan stdout lines for a stream-json usage event and extract token counts.
@@ -74,7 +78,8 @@ export class ClaudeProvider implements LLMProvider {
     }
 
     const rateLimited = RATE_LIMIT_RE.test(output);
-    const sessionExpired = STALE_SESSION_RE.test(output);
+    const sessionExpired =
+      STALE_SESSION_RE.test(output) || SESSION_IN_USE_RE.test(output);
     const tokenUsage = parseTokenUsage(stdout);
 
     return {
