@@ -180,6 +180,14 @@ export interface ConductorOptions {
    */
   verifyArtifacts?: boolean;
   /**
+   * Hybrid session model (Phase 4): reset the LLM session before each new step
+   * in the looped region (`build`…`finish`) so each runs on fresh context
+   * (Ralph-style resilience — context never bloats across the SHIP phase). A
+   * step's internal retries still resume the same session. The front half keeps
+   * the persistent session. Default false (persistent session everywhere).
+   */
+  freshContextPerStep?: boolean;
+  /**
    * Maximum auto-retries before a failing step (including artifact miss)
    * escalates to the recovery menu. Matches `max_retries=3` in bin/conduct.
    * Default: 3.
@@ -218,6 +226,7 @@ export class Conductor {
   private onCheckpoint: (step: StepName) => Promise<CheckpointResponse>;
   private onNavigate: (steps: NavigableStep[]) => Promise<StepName | null>;
   private verifyArtifacts: boolean;
+  private freshContextPerStep: boolean;
   private sleep: (ms: number) => Promise<void>;
   private onReviewArtifacts: (step: StepName, files: string[]) => Promise<ArtifactReviewResult>;
   private onRecovery?: (
@@ -237,6 +246,7 @@ export class Conductor {
     this.config = opts.config ?? {};
     this.projectRoot = opts.projectRoot ?? process.cwd();
     this.verifyArtifacts = opts.verifyArtifacts ?? false;
+    this.freshContextPerStep = opts.freshContextPerStep ?? false;
     // Legacy maxRetries option: inject as defaults.max_retries on the config
     // so per-step resolution still works. Tests often pass this directly.
     if (opts.maxRetries !== undefined) {
@@ -442,6 +452,18 @@ export class Conductor {
       state[step.name] = 'in_progress';
 
       await this.events.emit({ type: 'step_started', step: step.name, index: i });
+
+      // Hybrid session (Phase 4): start each new step in the looped region on a
+      // fresh LLM session so context never bloats across build…finish. The
+      // retry loop below reuses this session (resume) for the step's own
+      // attempts. Front-half steps keep the persistent session.
+      if (
+        this.freshContextPerStep &&
+        this.stepRunner.resetSession &&
+        indexOf(step.name) >= indexOf('build')
+      ) {
+        await this.stepRunner.resetSession();
+      }
 
       // Retry loop: auto-retry on step-runner failure OR completion-gate miss,
       // up to `maxRetries` attempts total. Only after the budget is exhausted

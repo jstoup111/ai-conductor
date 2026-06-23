@@ -225,4 +225,34 @@ describe('integration/gate-loop', () => {
     const finalState = JSON.parse(await readFile(statePath, 'utf-8'));
     expect(finalState.lint).toBe('done');
   });
+
+  it('freshContextPerStep resets the session before each tail step', async () => {
+    // All front-half steps done; tail steps pending so they run. Start at build.
+    const state: Record<string, string> = {};
+    for (const s of ALL_STEPS) state[s.name] = 'done';
+    for (const name of ['build', 'manual_test', 'retro', 'finish']) delete state[name];
+    await writeState(statePath, {
+      ...(state as unknown as ConductState),
+      complexity_tier: 'S', // retro tier-skipped → tail is build, manual_test, finish
+    });
+
+    const resetSession = vi.fn(async () => {});
+    const runner: StepRunner & { resetSession: typeof resetSession } = {
+      run: async () => ({ success: true }),
+      resetSession,
+    };
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      fromStep: 'build',
+      freshContextPerStep: true,
+    });
+    await conductor.run();
+
+    // build, manual_test, finish ran (retro tier-skipped) → one reset each.
+    expect(resetSession).toHaveBeenCalledTimes(3);
+  });
 });
