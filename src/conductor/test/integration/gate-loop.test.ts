@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, mkdir, writeFile, access } from 'fs/promises';
+import { mkdtemp, rm, mkdir, writeFile, readFile, access } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
@@ -7,6 +7,7 @@ vi.mock('execa', () => ({ execa: vi.fn() }));
 import type { ConductState } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { writeState } from '../../src/engine/state.js';
+import { ALL_STEPS } from '../../src/engine/steps.js';
 import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import { writeVerdict } from '../../src/engine/gate-verdicts.js';
@@ -187,5 +188,41 @@ describe('integration/gate-loop', () => {
 
     expect(completed).toBe(false);
     await expect(access(join(dir, '.pipeline/HALT'))).resolves.toBeUndefined();
+  });
+
+  it('runs a custom config step inserted via `after` (config compatibility)', async () => {
+    // The conductor now drives the resolved registry (buildStepRegistry), so a
+    // custom step from .ai-conductor/config.yml is dispatched and indexed.
+    const config = {
+      steps: { lint: { after: 'memory', skill: 'lint-skill' } },
+    };
+    const allDone: Record<string, string> = {};
+    for (const s of ALL_STEPS) allDone[s.name] = 'done';
+    await writeState(statePath, {
+      ...(allDone as unknown as ConductState),
+      complexity_tier: 'M',
+    });
+
+    const ran: string[] = [];
+    const runner: StepRunner = {
+      run: async (step) => {
+        ran.push(step);
+        return { success: true };
+      },
+    };
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      config,
+      fromStep: 'lint',
+    });
+    await conductor.run();
+
+    expect(ran).toContain('lint'); // the custom step was dispatched
+    const finalState = JSON.parse(await readFile(statePath, 'utf-8'));
+    expect(finalState.lint).toBe('done');
   });
 });

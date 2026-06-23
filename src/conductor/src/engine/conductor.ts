@@ -32,19 +32,17 @@ import {
 } from './state.js';
 import {
   ALL_STEPS,
-  getStepIndex,
-  shouldSkipForTier,
+  buildStepRegistry,
   shouldSkipForBootstrapMode,
-  isCheckpointStep,
 } from './steps.js';
-import { checkGate, isGatingStep } from './gates.js';
+import { checkGate } from './gates.js';
 import {
   findArtifactFiles as findArtifactFilesForStep,
   STEP_ARTIFACT_GLOBS,
   checkStepCompletion,
   CUSTOM_COMPLETION_PREDICATES,
 } from './artifacts.js';
-import { resolveStepConfig, phaseForStep } from './resolved-config.js';
+import { resolveStepConfig } from './resolved-config.js';
 import { selectNextGate } from './selector.js';
 import { computeAndWriteVerdict, readAllVerdicts } from './gate-verdicts.js';
 import { attemptAutoHeal } from './autoheal.js';
@@ -98,16 +96,20 @@ export interface NavigableStep {
 export function navigateBack(
   state: ConductState,
   target: StepName,
+  steps: StepDefinition[] = ALL_STEPS,
 ): { state: ConductState; index: number } {
-  const allStepNames = ALL_STEPS.map((s) => s.name);
-  let updated = markDownstreamStale(state, target, allStepNames);
+  const allStepNames = steps.map((s) => s.name);
+  const updated = markDownstreamStale(state, target, allStepNames);
   (updated as Record<string, unknown>)[target] = 'pending';
-  const index = getStepIndex(target);
+  const index = steps.findIndex((s) => s.name === target);
   return { state: updated, index };
 }
 
-export function getNavigableSteps(state: ConductState): NavigableStep[] {
-  return ALL_STEPS
+export function getNavigableSteps(
+  state: ConductState,
+  steps: StepDefinition[] = ALL_STEPS,
+): NavigableStep[] {
+  return steps
     .filter((step) => {
       const status = state[step.name];
       return status === 'done' || status === 'stale';
@@ -276,12 +278,20 @@ export class Conductor {
       // Marker absent — nothing to clean.
     });
 
+    // Resolved, config-derived step list (built-ins + custom steps inserted via
+    // `after`). The loop, selector, and index math all key off THIS list so
+    // YAML custom steps run and participate in the gate loop. indexOf is the
+    // registry-relative index (getStepIndex's static map can't see customs).
+    const steps = buildStepRegistry(this.config);
+    const indexOf = (name: StepName): number =>
+      steps.findIndex((s) => s.name === name);
+
     // Determine starting index
     let startIndex = 0;
     if (this.fromStep) {
-      startIndex = getStepIndex(this.fromStep);
+      startIndex = indexOf(this.fromStep);
     } else if (this.resume) {
-      startIndex = this.findResumeIndex(state);
+      startIndex = this.findResumeIndex(state, steps);
     }
 
     // Save state on SIGINT before exit
@@ -308,8 +318,8 @@ export class Conductor {
     // for the stuck-gate HALT guard (see advanceTail).
     const stuckGate = new Map<StepName, number>();
 
-    for (let i = startIndex; i < ALL_STEPS.length; i++) {
-      const step = ALL_STEPS[i];
+    for (let i = startIndex; i < steps.length; i++) {
+      const step = steps[i];
 
       // Skip already-completed work. Without this, re-invoking the conductor
       // against a project with existing `done` / `skipped` state (e.g. after
@@ -333,7 +343,7 @@ export class Conductor {
       const tier = state.complexity_tier ?? 'L';
 
       // Check if step should be skipped for this complexity tier
-      if (shouldSkipForTier(step.name, tier)) {
+      if (step.skippableForTiers.includes(tier)) {
         await saveStepStatus(this.stateFilePath, step.name, 'skipped');
         state[step.name] = 'skipped';
         await this.events.emit({ type: 'tier_skip', step: step.name, tier });
@@ -360,7 +370,7 @@ export class Conductor {
       // Resolve per-step config (model, effort, retries, review…). Tier is
       // threaded in so `by_tier` overrides apply when the feature's complexity
       // is known (post-complexity step).
-      const resolved = resolveStepConfig(step.name, phaseForStep(step.name), this.config, {
+      const resolved = resolveStepConfig(step.name, step.phase, this.config, {
         tier: state.complexity_tier,
       });
 
@@ -419,7 +429,7 @@ export class Conductor {
       }
 
       // Check gate: all prerequisites must be satisfied
-      const gate = checkGate(step.name, state);
+      const gate = checkGate(step, state);
       if (!gate.passed) {
         await this.events.emit({ type: 'gate_blocked', step: step.name, reason: gate.reason });
         await writeState(this.stateFilePath, state);
@@ -617,7 +627,7 @@ export class Conductor {
         });
 
         if (this.onRecovery) {
-          const gating = isGatingStep(step.name);
+          const gating = step.enforcement === 'gating';
           let action: RecoveryOption;
           // Keep polling the UI until it returns something other than `retry`
           // once retries are exhausted. Terminal-side prompt hosts should drop
@@ -644,10 +654,10 @@ export class Conductor {
             continue;
           }
           if (action === 'back') {
-            const navigable = getNavigableSteps(state);
+            const navigable = getNavigableSteps(state, steps);
             const target = await this.onNavigate(navigable);
             if (target) {
-              const nav = navigateBack(state, target);
+              const nav = navigateBack(state, target, steps);
               await this.events.emit({ type: 'navigation_back', from: step.name, to: target });
               state = nav.state;
               await writeState(this.stateFilePath, state);
@@ -768,7 +778,7 @@ export class Conductor {
         }
 
         // Checkpoint handling
-        if (isCheckpointStep(step.name) && this.mode !== 'auto') {
+        if (step.isCheckpoint && this.mode !== 'auto') {
           await this.events.emit({ type: 'checkpoint_reached', step: step.name });
           const response = await this.onCheckpoint(step.name);
           if (response === 'quit') {
@@ -777,10 +787,10 @@ export class Conductor {
             return;
           }
           if (response === 'back') {
-            const navigable = getNavigableSteps(state);
+            const navigable = getNavigableSteps(state, steps);
             const target = await this.onNavigate(navigable);
             if (target) {
-              const nav = navigateBack(state, target);
+              const nav = navigateBack(state, target, steps);
               await this.events.emit({ type: 'navigation_back', from: step.name, to: target });
               state = nav.state;
               await writeState(this.stateFilePath, state);
@@ -796,7 +806,14 @@ export class Conductor {
         // next step, and a step that re-opened an upstream gate (kickback)
         // routes the loop back to plan/stories. Upstream of build → null →
         // the for loop's normal linear i++ (front half untouched).
-        const advance = await this.advanceTail(step, state, kickbackCounts, stuckGate);
+        const advance = await this.advanceTail(
+          step,
+          state,
+          kickbackCounts,
+          stuckGate,
+          steps,
+          indexOf,
+        );
         if (advance === 'halt') {
           await writeState(this.stateFilePath, state);
           process.off('SIGINT', sigintHandler);
@@ -838,6 +855,8 @@ export class Conductor {
     state: ConductState,
     kickbackCounts: Map<StepName, number>,
     stuckGate: Map<StepName, number>,
+    steps: StepDefinition[],
+    indexOf: (name: StepName) => number,
   ): Promise<number | null | 'halt'> {
     // The gate-driven tail only engages when completion is verified against
     // artifacts. Without verifyArtifacts the conductor trusts the runner and
@@ -853,7 +872,7 @@ export class Conductor {
       });
     }
 
-    if (getStepIndex(step.name) < getStepIndex('build')) {
+    if (indexOf(step.name) < indexOf('build')) {
       return null; // front half stays linear
     }
 
@@ -863,10 +882,10 @@ export class Conductor {
     // ever marking it.
     let markedSkip = false;
     const tier = state.complexity_tier ?? 'L';
-    for (const s of ALL_STEPS) {
+    for (const s of steps) {
       if (
         getStepStatus(state, s.name) === 'pending' &&
-        (shouldSkipForTier(s.name, tier) ||
+        (s.skippableForTiers.includes(tier) ||
           shouldSkipForBootstrapMode(s.name, state.bootstrap_mode))
       ) {
         (state as Record<string, unknown>)[s.name] = 'skipped';
@@ -899,14 +918,14 @@ export class Conductor {
           );
           return 'halt';
         }
-        const nav = navigateBack(state, target);
+        const nav = navigateBack(state, target, steps);
         Object.assign(state, nav.state);
         await writeState(this.stateFilePath, state);
       }
     }
 
     const decision = selectNextGate({
-      steps: ALL_STEPS,
+      steps,
       state,
       verdicts,
       regionStart: 'stories',
@@ -919,7 +938,7 @@ export class Conductor {
       ).catch(() => {
         /* best-effort marker */
       });
-      return ALL_STEPS.length;
+      return steps.length;
     }
 
     // Oscillation / stuck guard: cap how many times any single gate may be
@@ -943,7 +962,7 @@ export class Conductor {
       (state as Record<string, unknown>)[decision.step] = 'pending';
       await writeState(this.stateFilePath, state);
     }
-    return getStepIndex(decision.step);
+    return indexOf(decision.step);
   }
 
   /**
@@ -1090,23 +1109,26 @@ export class Conductor {
    * Find the index to resume from: first in_progress step,
    * or first pending step after the last done step.
    */
-  private findResumeIndex(state: ConductState): number {
+  private findResumeIndex(
+    state: ConductState,
+    steps: StepDefinition[] = ALL_STEPS,
+  ): number {
     // If feature is already complete, treat as new feature (start from 0)
     if (state.feature_status === 'complete') {
       return 0;
     }
 
     // First, look for an in_progress step
-    for (let i = 0; i < ALL_STEPS.length; i++) {
-      if (getStepStatus(state, ALL_STEPS[i].name) === 'in_progress') {
+    for (let i = 0; i < steps.length; i++) {
+      if (getStepStatus(state, steps[i].name) === 'in_progress') {
         return i;
       }
     }
 
     // Otherwise, find the first pending step after the last done step
     let lastDoneIndex = -1;
-    for (let i = 0; i < ALL_STEPS.length; i++) {
-      if (getStepStatus(state, ALL_STEPS[i].name) === 'done') {
+    for (let i = 0; i < steps.length; i++) {
+      if (getStepStatus(state, steps[i].name) === 'done') {
         lastDoneIndex = i;
       }
     }

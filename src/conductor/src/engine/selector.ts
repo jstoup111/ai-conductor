@@ -5,7 +5,7 @@ import type {
 } from '../types/index.js';
 import type { GateVerdict } from './gate-verdicts.js';
 import { getStepStatus } from './state.js';
-import { shouldSkipForBootstrapMode, shouldSkipForTier } from './steps.js';
+import { shouldSkipForBootstrapMode } from './steps.js';
 
 /**
  * The gate-driven loop's next-step selector. Given the resolved step list,
@@ -61,7 +61,7 @@ export function gateSatisfied(
 /** True when a step is skipped by explicit state, complexity tier, or bootstrap mode. */
 function isSkipped(step: StepDefinition, state: ConductState): boolean {
   if (getStepStatus(state, step.name) === 'skipped') return true;
-  if (state.complexity_tier && shouldSkipForTier(step.name, state.complexity_tier)) {
+  if (state.complexity_tier && step.skippableForTiers.includes(state.complexity_tier)) {
     return true;
   }
   if (shouldSkipForBootstrapMode(step.name, state.bootstrap_mode)) return true;

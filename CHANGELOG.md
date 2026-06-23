@@ -53,6 +53,15 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 - conduct-ts test: the `saves state on SIGINT` test in `test/engine/conductor.test.ts` now stubs `process.exit`; it previously invoked the real SIGINT handler's `process.exit(130)`, leaking an unhandled rejection into the run.
 
 ### Added
+- conduct-ts: the conductor now drives the **resolved step registry**
+  (`buildStepRegistry(config)`) instead of the static `ALL_STEPS`, so **custom
+  steps** defined in `.ai-conductor/config.yml` (via `after:` + `skill:`) are
+  dispatched, indexed, and participate in the gate loop. All index math, the
+  selector, `navigateBack`/`getNavigableSteps`, and `findResumeIndex` key off the
+  resolved list; loop-body checks use the registry def directly (so custom steps,
+  absent from the static map, no longer throw `Unknown step`). `checkGate` accepts
+  a `StepDefinition`. (Previously `buildStepRegistry` was built and tested but
+  never wired into the runtime — custom steps never ran.)
 - conduct-ts: gate-driven loop — selector + tail conversion. New
   `src/conductor/src/engine/selector.ts` (`selectNextGate` — earliest unsatisfied
   gate, config-agnostic). `conductor.ts` now drives the back half (`build`→`finish`)
