@@ -118,6 +118,7 @@ export function parseArgs(argv: string[]): CLIOptions {
     result.reset ||
     result.diagnose ||
     result.report ||
+    result.daemon ||
     !!result.step ||
     !!result.from;
   if (!result.featureDesc && !hasStateFlag) {
