@@ -39,6 +39,13 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 ## [Unreleased]
 
 ### Fixed
+- conduct-ts: interactive steps (`brainstorm`, `stories`, `plan`, `manual_test`,
+  `finish`) no longer hang silently in `--auto`. `invokeInteractive` ran every
+  step with `stdio: 'inherit'`, but in print mode (`claude -p`, used for all
+  interactive steps under `--auto`) an inherited TTY stdin never reaches EOF, so
+  the process blocked forever with no error. Print mode now uses
+  `['ignore', 'inherit', 'inherit']` (stdin ignored, output still live), matching
+  the autonomous path; REPL mode (`interactive: true`) still inherits all stdio.
 - conduct-ts: a "session in use" lock now self-recovers. `ClaudeProvider` detects
   the session-id lock message (`already in use` / `session … in use by another
   process`) and routes it through the existing stale-session path — the conductor

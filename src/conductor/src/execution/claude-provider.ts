@@ -118,8 +118,13 @@ export class ClaudeProvider implements LLMProvider {
       }
     }
 
+    // In REPL mode the user types, so stdin must be inherited. In print mode
+    // (`-p`, the default — including every interactive step under --auto) stdin
+    // must be IGNORED: `claude -p` with an inherited TTY stdin blocks waiting
+    // for EOF that never comes, hanging the step silently. stdout/stderr stay
+    // inherited so output is still live. (Mirrors `invoke`'s `stdin: 'ignore'`.)
     await execa('claude', args, {
-      stdio: 'inherit',
+      stdio: options.interactive ? 'inherit' : ['ignore', 'inherit', 'inherit'],
       reject: false,
       env: this.buildEnv(options),
     });

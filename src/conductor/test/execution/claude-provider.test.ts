@@ -198,5 +198,19 @@ describe('ClaudeProvider', () => {
       const [, , opts] = mockExeca.mock.calls[0] as [string, string[], any];
       expect(opts.env?.CLAUDE_CODE_EFFORT_LEVEL).toBe('high');
     });
+
+    it('ignores stdin in print mode so `claude -p` cannot hang on TTY stdin', async () => {
+      mockExeca.mockResolvedValue({ exitCode: 0 } as any);
+      await provider.invokeInteractive({ ...baseOptions, interactive: false });
+      const [, , opts] = mockExeca.mock.calls[0] as [string, string[], any];
+      expect(opts.stdio).toEqual(['ignore', 'inherit', 'inherit']);
+    });
+
+    it('inherits all stdio in REPL mode so the user can type', async () => {
+      mockExeca.mockResolvedValue({ exitCode: 0 } as any);
+      await provider.invokeInteractive({ ...baseOptions, interactive: true });
+      const [, , opts] = mockExeca.mock.calls[0] as [string, string[], any];
+      expect(opts.stdio).toBe('inherit');
+    });
   });
 });
