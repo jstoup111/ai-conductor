@@ -53,6 +53,24 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 - conduct-ts test: the `saves state on SIGINT` test in `test/engine/conductor.test.ts` now stubs `process.exit`; it previously invoked the real SIGINT handler's `process.exit(130)`, leaking an unhandled rejection into the run.
 
 ### Added
+- conduct-ts: gate-loop daemon foundation (Phase 6) — `engine/daemon.ts`
+  (`runDaemon`) is the parallel worker-pool orchestration core: pulls features
+  from a backlog, runs up to N concurrently (each isolated behind the injected
+  `runFeature`), enforces hard ceilings (max items, global token cost), honors
+  `once` vs idle-poll, and isolates a thrown feature as an `error` outcome so the
+  pool survives. `engine/daemon-backlog.ts` (`discoverBacklog`) finds
+  daemon-eligible features — those with both stories AND plan present (the daemon
+  consumes specs, never authors them) — skipping already-processed slugs.
+  `engine/daemon-runner.ts` (`makeRunFeature`) is the per-feature orchestration
+  (done → mark+remove worktree+PR; halted/error → keep worktree for the human; a
+  thrown primitive is caught). `engine/daemon-deps.ts` provides the concrete
+  git/fs primitives (worktree add/remove, spec materialization with commit,
+  `.pipeline/DONE`/`HALT` outcome read, processed markers). New `--daemon`
+  (+`--concurrency`, `--max-items`) CLI flag and `daemon-cli.ts` assemble a
+  per-worktree Conductor (`verifyArtifacts`+`freshContextPerStep`, `fromStep:
+  acceptance_specs`) and run the pool. 22 tests cover the orchestration,
+  ceilings, isolation, eligibility, and outcome-reading; the live git/provider/PR
+  path is exercised by end-to-end validation (Phase 7).
 - conduct-ts: gate-loop observability — new `ConductorEvent` types `gate_verdict`
   (step, satisfied, reason), `kickback` (from, to, evidence, count), `loop_halt`
   (reason), and `loop_converged`, emitted from the conductor's gate-driven tail.
