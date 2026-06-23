@@ -48,6 +48,10 @@ export function gateSatisfied(
   state: ConductState,
   verdicts: Partial<Record<StepName, GateVerdict>>,
 ): boolean {
+  // A staled step must re-run regardless of an old verdict — kickback's
+  // markDownstreamStale relies on this to force downstream steps to re-run
+  // even though their last verdict said satisfied.
+  if (getStepStatus(state, step) === 'stale') return false;
   const v = verdicts[step];
   if (v) return v.satisfied;
   const status = getStepStatus(state, step);

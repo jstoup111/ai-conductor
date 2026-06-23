@@ -122,4 +122,8 @@ describe('engine/selector — gateSatisfied', () => {
     expect(gateSatisfied('plan', { plan: 'stale' }, {})).toBe(false);
     expect(gateSatisfied('plan', { plan: 'pending' }, {})).toBe(false);
   });
+
+  it('stale overrides a stale satisfied verdict (kickback cascade re-opens it)', () => {
+    expect(gateSatisfied('build', { build: 'stale' }, { build: VSAT })).toBe(false);
+  });
 });

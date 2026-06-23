@@ -1,10 +1,16 @@
-import { readFile, access as accessFile, unlink as unlinkFile } from 'node:fs/promises';
+import {
+  readFile,
+  writeFile,
+  access as accessFile,
+  unlink as unlinkFile,
+} from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { relative, join } from 'node:path';
 import type { ConductState } from '../types/index.js';
 import type {
   StepName,
   StepStatus,
+  StepDefinition,
   Phase,
   RunMode,
   ComplexityTier,
@@ -39,6 +45,8 @@ import {
   CUSTOM_COMPLETION_PREDICATES,
 } from './artifacts.js';
 import { resolveStepConfig, phaseForStep } from './resolved-config.js';
+import { selectNextGate } from './selector.js';
+import { computeAndWriteVerdict, readAllVerdicts } from './gate-verdicts.js';
 import { attemptAutoHeal } from './autoheal.js';
 import {
   countResolvedTasks,
@@ -55,6 +63,30 @@ export type CheckpointResponse = 'continue' | 'back' | 'quit';
  * user is pushed toward `interactive`, `back`, or `quit` instead.
  */
 export const MAX_RECOVERY_RETRIES = 2;
+
+// ── Gate-driven loop (Phase 3) ──────────────────────────────────────────────
+// Steps the loop controls (selector-driven) once the build step engages, plus
+// the kickback targets it may re-open. Upstream of `build` the conductor stays
+// linear (the front half produces the artifacts).
+const KICKBACK_TARGETS: StepName[] = ['stories', 'plan'];
+// Gate steps whose objective verdict the loop recomputes after each run.
+const LOOP_GATE_STEPS = new Set<StepName>([
+  'stories',
+  'plan',
+  'build',
+  'manual_test',
+  'retro',
+  'finish',
+]);
+// Anti-ping-pong: a single gate may be re-opened by kickback at most this many
+// times per feature before the loop HALTs for a human.
+const MAX_KICKBACKS_PER_GATE = 2;
+// Cap on how many times the selector may pick any single gate before it
+// satisfies. Catches a gate whose verdict never improves and a build↔plan
+// kickback oscillation. Generous enough to allow legitimate kickback re-walks.
+const MAX_GATE_SELECTIONS = 6;
+const DONE_MARKER = '.pipeline/DONE';
+const LOOP_HALT_MARKER = '.pipeline/HALT';
 
 export interface NavigableStep {
   name: StepName;
@@ -268,6 +300,13 @@ export class Conductor {
     // against the same git log + same task-status.json can't produce new
     // healings, so additional invocations are wasted git calls.
     const autoHealAttempted = new Set<StepName>();
+
+    // Per-gate count of kickback re-opens this feature, for the anti-ping-pong
+    // cap. Drives the gate-driven tail (see advanceTail).
+    const kickbackCounts = new Map<StepName, number>();
+    // Per-gate count of consecutive selector re-selects without satisfaction,
+    // for the stuck-gate HALT guard (see advanceTail).
+    const stuckGate = new Map<StepName, number>();
 
     for (let i = startIndex; i < ALL_STEPS.length; i++) {
       const step = ALL_STEPS[i];
@@ -751,6 +790,22 @@ export class Conductor {
           }
           // 'continue' proceeds normally
         }
+
+        // ── Gate-driven tail (Phase 3) ─────────────────────────────────
+        // Once `build` engages the loop, the SELECTOR (not i++) chooses the
+        // next step, and a step that re-opened an upstream gate (kickback)
+        // routes the loop back to plan/stories. Upstream of build → null →
+        // the for loop's normal linear i++ (front half untouched).
+        const advance = await this.advanceTail(step, state, kickbackCounts, stuckGate);
+        if (advance === 'halt') {
+          await writeState(this.stateFilePath, state);
+          process.off('SIGINT', sigintHandler);
+          return;
+        }
+        if (advance !== null) {
+          i = advance - 1; // the for loop's i++ lands on the selector's choice
+          continue;
+        }
       }
     }
 
@@ -766,6 +821,129 @@ export class Conductor {
     });
     state.feature_status = 'complete';
     await writeState(this.stateFilePath, state);
+  }
+
+  /**
+   * Gate-driven tail advance (Phase 3). Called after a step succeeds to decide
+   * the next index:
+   *   - Front half (before `build`): returns null → caller does linear i++.
+   *   - Tail (`build`…`finish`): recompute the step's objective verdict, route
+   *     any kickback (a step that re-opened an upstream gate) back via
+   *     navigateBack + downstream-stale cascade, then ask the selector for the
+   *     next unsatisfied gate. Returns ALL_STEPS.length when the loop is done.
+   *   - 'halt': a gate exceeded the kickback cap; caller writes state and stops.
+   */
+  private async advanceTail(
+    step: StepDefinition,
+    state: ConductState,
+    kickbackCounts: Map<StepName, number>,
+    stuckGate: Map<StepName, number>,
+  ): Promise<number | null | 'halt'> {
+    // The gate-driven tail only engages when completion is verified against
+    // artifacts. Without verifyArtifacts the conductor trusts the runner and
+    // stays fully linear (unchanged behavior).
+    if (!this.verifyArtifacts) return null;
+
+    // Record the objective verdict for any gate we just ran — including in the
+    // front half, so a re-run plan/stories refreshes its verdict on disk.
+    if (LOOP_GATE_STEPS.has(step.name)) {
+      await computeAndWriteVerdict(this.projectRoot, step.name, {
+        sessionStartedAt: state.session_started_at,
+        featureDesc: state.feature_desc,
+      });
+    }
+
+    if (getStepIndex(step.name) < getStepIndex('build')) {
+      return null; // front half stays linear
+    }
+
+    // Mark tier/mode-skipped steps in the looped region as 'skipped' so the
+    // selector skips them AND downstream prerequisite gates (checkGate) pass —
+    // the selector-driven tail can jump over a step without the linear body
+    // ever marking it.
+    let markedSkip = false;
+    const tier = state.complexity_tier ?? 'L';
+    for (const s of ALL_STEPS) {
+      if (
+        getStepStatus(state, s.name) === 'pending' &&
+        (shouldSkipForTier(s.name, tier) ||
+          shouldSkipForBootstrapMode(s.name, state.bootstrap_mode))
+      ) {
+        (state as Record<string, unknown>)[s.name] = 'skipped';
+        markedSkip = true;
+      }
+    }
+    if (markedSkip) await writeState(this.stateFilePath, state);
+
+    const verdicts = await readAllVerdicts(this.projectRoot);
+
+    // Kickback: a step re-opened an upstream gate (verdict is
+    // {satisfied:false, kickback.from === this step}). Re-open that gate
+    // (pending) + cascade-stale its downstream so they re-run; HALT if a gate
+    // has been re-opened past the cap.
+    for (const target of KICKBACK_TARGETS) {
+      const v = verdicts[target];
+      if (v && v.satisfied === false && v.kickback?.from === step.name) {
+        const count = (kickbackCounts.get(target) ?? 0) + 1;
+        kickbackCounts.set(target, count);
+        await this.events.emit({
+          type: 'navigation_back',
+          from: step.name,
+          to: target,
+        });
+        if (count > MAX_KICKBACKS_PER_GATE) {
+          await writeFile(
+            join(this.projectRoot, LOOP_HALT_MARKER),
+            `kickback ping-pong: ${target} re-opened ${count} times (cap ${MAX_KICKBACKS_PER_GATE})\n`,
+            'utf-8',
+          );
+          return 'halt';
+        }
+        const nav = navigateBack(state, target);
+        Object.assign(state, nav.state);
+        await writeState(this.stateFilePath, state);
+      }
+    }
+
+    const decision = selectNextGate({
+      steps: ALL_STEPS,
+      state,
+      verdicts,
+      regionStart: 'stories',
+    });
+    if (decision.kind === 'done') {
+      await writeFile(
+        join(this.projectRoot, DONE_MARKER),
+        'gate-driven loop converged\n',
+        'utf-8',
+      ).catch(() => {
+        /* best-effort marker */
+      });
+      return ALL_STEPS.length;
+    }
+
+    // Oscillation / stuck guard: cap how many times any single gate may be
+    // selected before it satisfies. Catches a gate whose verdict never improves
+    // and a build↔plan kickback oscillation.
+    const sel = (stuckGate.get(decision.step) ?? 0) + 1;
+    stuckGate.set(decision.step, sel);
+    if (sel > MAX_GATE_SELECTIONS) {
+      await writeFile(
+        join(this.projectRoot, LOOP_HALT_MARKER),
+        `gate '${decision.step}' selected ${sel} times without satisfying: ${decision.reason}\n`,
+        'utf-8',
+      );
+      return 'halt';
+    }
+
+    // The selector only returns UNSATISFIED gates; if such a gate is still
+    // marked 'done' (its verdict went false via kickback/recompute), reset it to
+    // 'pending' so the loop re-runs it instead of skipping it as already-resolved.
+    if (getStepStatus(state, decision.step) === 'done') {
+      (state as Record<string, unknown>)[decision.step] = 'pending';
+      await writeState(this.stateFilePath, state);
+    }
+    return getStepIndex(decision.step);
   }
 
   /**

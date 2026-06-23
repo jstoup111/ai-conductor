@@ -53,6 +53,16 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 - conduct-ts test: the `saves state on SIGINT` test in `test/engine/conductor.test.ts` now stubs `process.exit`; it previously invoked the real SIGINT handler's `process.exit(130)`, leaking an unhandled rejection into the run.
 
 ### Added
+- conduct-ts: gate-driven loop — selector + tail conversion. New
+  `src/conductor/src/engine/selector.ts` (`selectNextGate` — earliest unsatisfied
+  gate, config-agnostic). `conductor.ts` now drives the back half (`build`→`finish`)
+  via the selector instead of a linear `i++`: after `build` engages, the next step
+  is the earliest unsatisfied gate; a step that re-opens an upstream gate (kickback
+  verdict `{satisfied:false, kickback.from}`) routes the loop back to plan/stories
+  via `navigateBack` + downstream-stale cascade. Convergence writes `.pipeline/DONE`;
+  an anti-ping-pong cap and a per-gate selection cap write `.pipeline/HALT`. The tail
+  engages only with `verifyArtifacts` on — otherwise the conductor stays fully linear
+  (unchanged). The front half (`worktree`…`acceptance_specs`) is untouched.
 - conduct-ts: gate-driven loop foundation (verdict layer) — new `src/conductor/src/engine/gate-verdicts.ts` with `computeAndWriteVerdict`/`writeVerdict`/`readVerdict`/`readAllVerdicts`/`checkGateCompletion`, persisting per-feature gate verdicts (`{satisfied, reason, checkedAt, kickback?}`) to `.pipeline/gates/<step>.json`. Adds `GATE_ONLY_PREDICATES` in `engine/artifacts.ts` with machine-checkable `stories` (happy + negative path, no DRAFT) and `plan` (per-path-type story coverage) predicates — kept separate from `CUSTOM_COMPLETION_PREDICATES` so the existing linear conductor is unchanged. Blueprint in `.docs/decisions/gate-audit-2026-06-23.md`. (Selector + loop conversion land in a later change.)
 - conduct-ts: new `--diagnose` CLI flag — non-mutating diagnostic that loads state for the named (or current) feature, re-verifies the SHIP-phase predicates, and prints any inconsistencies. Exits 0 when state is consistent, 1 when state is marked complete but evidence is missing.
 - conduct-ts: new `feature_complete` event payload fields (`featureDesc`, `sessionStartedAt`) and a multi-line bg-green completion banner in `TerminalRenderer` so a finished run is impossible to read as "stopped processing without error" — the previous single-line green render could be missed in a long pipeline run.
