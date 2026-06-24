@@ -57,6 +57,15 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   story → plan task.
 
 ### Fixed
+- conduct-ts: collaborative steps (`brainstorm`, `stories`, `plan`, `manual_test`,
+  `finish`) now skip permissions in `--auto` mode. They were dispatched with
+  `dangerouslySkipPermissions: false` even when unattended, so the spawned
+  `claude` launched in the user's default permission mode — if that's **plan
+  mode, every write is blocked**, so brainstorm could never save its
+  `.docs/specs/` PRD and the step looped (`no files matching .docs/specs/*.md`)
+  with no human and no ExitPlanMode tool to recover. In auto mode there is no one
+  to approve permissions, so these steps now skip them like autonomous steps do;
+  interactive REPL mode (non-auto) still prompts. Found in Phase 7 validation.
 - conduct-ts: the `worktree` step is now engine-managed (deterministic
   `WorktreeManager.create` → `git worktree add -b`) instead of dispatching
   `/conduct worktree` to Claude. The skill path let Claude run a broad

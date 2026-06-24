@@ -76,6 +76,18 @@ describe('DefaultStepRunner', () => {
     expect(opts.dangerouslySkipPermissions).toBe(false);
   });
 
+  it('in auto mode, collaborative steps DO skip permissions (no human to approve)', async () => {
+    const provider = createMockProvider();
+    const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', { mode: 'auto' });
+
+    await runner.run('brainstorm', emptyState);
+
+    const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    // Otherwise the spawned claude launches in the user's default permission
+    // mode (possibly `plan`), blocking the PRD write and looping the step.
+    expect(opts.dangerouslySkipPermissions).toBe(true);
+  });
+
   it('worktree is autonomous', async () => {
     const provider = createMockProvider();
     const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project');

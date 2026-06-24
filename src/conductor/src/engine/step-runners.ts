@@ -291,7 +291,13 @@ export class DefaultStepRunner implements StepRunner {
         sessionId: this.sessionId,
         resume,
         interactive,
-        dangerouslySkipPermissions: false,
+        // In auto mode there is no human to approve permissions, and the spawned
+        // `claude` would otherwise launch in the user's default permission mode
+        // (which may be `plan` → ALL writes blocked, so e.g. brainstorm can never
+        // save its `.docs/specs/` PRD and the step loops). Skip permissions so the
+        // step can write, like autonomous steps. Interactive REPL mode (non-auto)
+        // keeps prompts so the user approves.
+        dangerouslySkipPermissions: this.mode === 'auto',
         systemPrompt,
         model: resolved.model,
         effort: resolved.effort,
