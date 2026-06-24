@@ -610,7 +610,9 @@ export class Conductor {
                 // can break the stall. After the REPL exits, re-check
                 // completion one more time. If passing, the step succeeds;
                 // if still failing, fall into the normal recovery menu.
-                if (this.stepRunner.runInteractive) {
+                // Skipped in auto mode — there's no human to break the stall,
+                // so we fall straight through to the (auto) failure handling.
+                if (this.mode !== 'auto' && this.stepRunner.runInteractive) {
                   await this.stepRunner.runInteractive(step.name);
                 }
                 const recheck = await checkStepCompletion(this.projectRoot, step.name, {
@@ -655,6 +657,21 @@ export class Conductor {
           error: lastError,
           retryCount: attempt,
         });
+
+        // Auto mode is unattended — NEVER prompt or open a REPL. An advisory
+        // step's failure auto-skips so it can't block the run; a gating or
+        // structural failure (e.g. plan, build) stops the run for a human to
+        // inspect. This must come before the interactive recovery menu below.
+        if (this.mode === 'auto') {
+          if (step.enforcement === 'advisory') {
+            await saveStepStatus(this.stateFilePath, step.name, 'skipped');
+            state[step.name] = 'skipped';
+            continue;
+          }
+          await writeState(this.stateFilePath, state);
+          process.off('SIGINT', sigintHandler);
+          return;
+        }
 
         if (this.onRecovery) {
           const gating = step.enforcement === 'gating';

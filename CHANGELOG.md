@@ -57,6 +57,14 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   story → plan task.
 
 ### Fixed
+- conduct-ts: `--auto` no longer drops into an interactive session. Two paths
+  opened a REPL / recovery menu without checking the mode: the build-stall
+  circuit breaker (`runInteractive`) and the post-retry recovery menu
+  (`onRecovery`, which the CLI wires even in auto). Auto mode is unattended, so
+  on an exhausted-retry failure it now: auto-skips **advisory** steps (so an
+  advisory failure can't block the run) and stops on **gating/structural**
+  failures (e.g. plan, build) for a human to inspect — never prompting. Found in
+  Phase 7 validation.
 - conduct-ts: collaborative steps (`brainstorm`, `stories`, `plan`, `manual_test`,
   `finish`) now skip permissions in `--auto` mode. They were dispatched with
   `dangerouslySkipPermissions: false` even when unattended, so the spawned

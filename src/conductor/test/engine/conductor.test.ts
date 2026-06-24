@@ -212,6 +212,60 @@ describe('engine/conductor', () => {
     expect(stepsRun).not.toContain('complexity');
   });
 
+  it('auto mode never prompts: gating-step failure stops without recovery', async () => {
+    // `stories` is gating; it permanently fails. In auto mode the conductor must
+    // NOT open the recovery menu / a REPL — it stops for a human to inspect.
+    const onRecovery = vi.fn().mockResolvedValue('quit' as const);
+    const runner: StepRunner = {
+      run: async (step: StepName) =>
+        step === 'stories' ? { success: false, output: 'boom' } : { success: true },
+    };
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      mode: 'auto',
+      maxRetries: 1,
+      onRecovery,
+    });
+
+    await conductor.run();
+
+    expect(onRecovery).not.toHaveBeenCalled();
+    const result = await readState(statePath);
+    expect(result.ok && result.value.stories).toBe('failed');
+    expect(result.ok && result.value.feature_status).toBeUndefined();
+  });
+
+  it('auto mode auto-skips an advisory-step failure and continues', async () => {
+    // `memory` is advisory; it fails. In auto mode it auto-skips so the run isn't
+    // blocked, and no recovery prompt is shown.
+    const onRecovery = vi.fn();
+    const runner: StepRunner = {
+      run: async (step: StepName) =>
+        step === 'memory' ? { success: false } : { success: true },
+    };
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      mode: 'auto',
+      maxRetries: 1,
+      onRecovery,
+    });
+
+    let completed = false;
+    events.on('feature_complete', () => {
+      completed = true;
+    });
+    await conductor.run();
+
+    expect(onRecovery).not.toHaveBeenCalled();
+    expect(completed).toBe(true);
+    const result = await readState(statePath);
+    expect(result.ok && result.value.memory).toBe('skipped');
+  });
+
   it('does NOT set feature_status=complete on failure', async () => {
     // Permanently-failing 2nd step + maxRetries=1 → step escalates to failure.
     let callCount = 0;
