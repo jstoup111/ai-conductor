@@ -57,6 +57,15 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   story → plan task.
 
 ### Fixed
+- conduct-ts: the `worktree` step is now engine-managed (deterministic
+  `WorktreeManager.create` → `git worktree add -b`) instead of dispatching
+  `/conduct worktree` to Claude. The skill path let Claude run a broad
+  self-directed orchestration — skipping `brainstorm` ("Feature defined in
+  spec"), so **no PRD was persisted**, and botching git so the main repo ended
+  up on the feature branch with an empty detached worktree. The engine now
+  creates the worktree (main untouched) and drives `brainstorm` etc. normally,
+  so the PRD chain holds. Worktree-creation failure degrades gracefully (warn +
+  continue in-place) rather than blocking the run. Found in Phase 7 validation.
 - conduct-ts: interactive steps (`brainstorm`, `stories`, `plan`, `manual_test`,
   `finish`) no longer hang silently in `--auto`. `invokeInteractive` ran every
   step with `stdio: 'inherit'`, but in print mode (`claude -p`, used for all

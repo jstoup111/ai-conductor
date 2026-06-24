@@ -512,6 +512,7 @@ async function main(): Promise<void> {
     mode,
     config,
     projectRoot,
+    featureDesc: opts.featureDesc,
     verifyArtifacts: true,
     onCheckpoint: (s) => promptHost.checkpoint(s),
     onNavigate: (steps) => promptHost.navigate(steps),

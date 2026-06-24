@@ -45,6 +45,7 @@ import {
 import { resolveStepConfig } from './resolved-config.js';
 import { selectNextGate } from './selector.js';
 import { computeAndWriteVerdict, readAllVerdicts } from './gate-verdicts.js';
+import { WorktreeManager } from './worktree.js';
 import { attemptAutoHeal } from './autoheal.js';
 import {
   countResolvedTasks,
@@ -173,6 +174,9 @@ export interface ConductorOptions {
   mode?: RunMode;
   config?: HarnessConfig;
   projectRoot?: string;
+  /** Feature description — used by the engine-run worktree step to name the
+   *  worktree/branch when state.feature_desc isn't set yet. */
+  featureDesc?: string;
   /**
    * When true, after each step that declares artifact globs, require at least
    * one matching file on disk. If not, mark the step failed and route through
@@ -223,6 +227,7 @@ export class Conductor {
   private mode: RunMode;
   private config: HarnessConfig;
   private projectRoot: string;
+  private featureDesc?: string;
   private onCheckpoint: (step: StepName) => Promise<CheckpointResponse>;
   private onNavigate: (steps: NavigableStep[]) => Promise<StepName | null>;
   private verifyArtifacts: boolean;
@@ -245,6 +250,7 @@ export class Conductor {
     this.mode = opts.mode ?? 'default';
     this.config = opts.config ?? {};
     this.projectRoot = opts.projectRoot ?? process.cwd();
+    this.featureDesc = opts.featureDesc;
     this.verifyArtifacts = opts.verifyArtifacts ?? false;
     this.freshContextPerStep = opts.freshContextPerStep ?? false;
     // Legacy maxRetries option: inject as defaults.max_retries on the config
@@ -489,7 +495,9 @@ export class Conductor {
         const result =
           step.name === 'complexity'
             ? await this.runComplexityStep(state)
-            : await this.stepRunner.run(step.name, state, { retryReason: retryHint });
+            : step.name === 'worktree'
+              ? await this.runWorktreeStep(state)
+              : await this.stepRunner.run(step.name, state, { retryReason: retryHint });
 
         // Rate limit: wait deterministically, then retry WITHOUT burning the
         // retry budget (matches bin/conduct:2248–2280 handle_rate_limit).
@@ -773,9 +781,9 @@ export class Conductor {
           }
         }
 
-        // For complexity, tier + 'done' are written atomically in runComplexityStep.
-        // For all other steps, write status here.
-        if (step.name !== 'complexity') {
+        // For complexity + worktree, 'done' (and tier / worktree fields) are
+        // written atomically in their engine handlers. For all other steps, here.
+        if (step.name !== 'complexity' && step.name !== 'worktree') {
           await saveStepStatus(this.stateFilePath, step.name, 'done');
         }
         state[step.name] = 'done';
@@ -1077,6 +1085,45 @@ export class Conductor {
         branches: branchNames,
       });
     }
+  }
+
+  /**
+   * Handle the `worktree` step entirely in the engine via `WorktreeManager`
+   * (deterministic `git worktree add -b`), instead of dispatching the
+   * `/conduct worktree` skill to Claude. The skill path let Claude run a broad
+   * self-directed orchestration (skipping `brainstorm`, botching git so the main
+   * repo ended up on the feature branch). A direct call keeps main untouched and
+   * lets the per-step engine drive `brainstorm` etc. normally.
+   *
+   * With no feature description (e.g. tests, or a resume without one) it records
+   * the step done without creating a worktree — nothing to isolate yet.
+   */
+  private async runWorktreeStep(state: ConductState): Promise<StepRunResult> {
+    const featureDesc = this.featureDesc ?? state.feature_desc;
+    if (!featureDesc) {
+      state.worktree = 'done';
+      state.last_step = 'worktree';
+      await writeState(this.stateFilePath, state);
+      return { success: true };
+    }
+    try {
+      const { path, branch } = await new WorktreeManager(this.projectRoot).create(featureDesc);
+      state.feature_desc = featureDesc;
+      state.worktree_dir = path;
+      state.worktree_branch = branch;
+    } catch (err) {
+      // Best-effort: a worktree-creation failure (e.g. not a git repo, or a git
+      // error) must NOT block the feature — proceed in the current directory
+      // without isolation. The absence of state.worktree_dir signals no worktree.
+      console.warn(
+        `[worktree] could not create an isolated worktree (${err instanceof Error ? err.message : String(err)}); continuing in-place.`,
+      );
+      state.feature_desc = featureDesc;
+    }
+    state.worktree = 'done';
+    state.last_step = 'worktree';
+    await writeState(this.stateFilePath, state);
+    return { success: true };
   }
 
   /**
