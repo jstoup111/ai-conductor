@@ -57,6 +57,14 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   story → plan task.
 
 ### Fixed
+- conduct-ts: the `acceptance_specs` completion check no longer false-fails on
+  non-Rails projects. Its artifact globs were Rails-only (`spec/acceptance/**/*`,
+  `test/acceptance/**/*`), so a Node project — whose `writing-system-tests` skill
+  correctly wrote `app.test.js` at the root — failed the gate with "no files
+  matching …". Broadened to common conventions (`test/**/*`, `tests/**/*`,
+  `__tests__/**/*`, root-level `*.test.{js,ts}` / `*.spec.{js,ts}`, plus Rails
+  `spec/requests` and `spec/system`), scoped to avoid recursing `node_modules`.
+  Found in Phase 7 validation.
 - conduct-ts: `--auto` no longer drops into an interactive session. Two paths
   opened a REPL / recovery menu without checking the mode: the build-stall
   circuit breaker (`runInteractive`) and the post-retry recovery menu

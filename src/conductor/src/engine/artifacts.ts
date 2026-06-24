@@ -28,7 +28,24 @@ export const STEP_ARTIFACT_GLOBS: Record<StepName, string[]> = {
     '.docs/decisions/adr-*.md',
   ],
   worktree: [],
-  acceptance_specs: ['spec/acceptance/**/*', 'test/acceptance/**/*'],
+  // Acceptance/system specs land in stack-specific places. Cover the common
+  // conventions so the completion check doesn't false-fail on a non-Rails
+  // project (e.g. a Node app whose tests are `app.test.js` at the root). The
+  // patterns avoid recursing node_modules (root globs are non-recursive; the
+  // `**` ones are scoped to test dirs).
+  acceptance_specs: [
+    'spec/acceptance/**/*',
+    'spec/requests/**/*',
+    'spec/system/**/*',
+    'test/acceptance/**/*',
+    'test/**/*',
+    'tests/**/*',
+    '__tests__/**/*',
+    '*.test.js',
+    '*.test.ts',
+    '*.spec.js',
+    '*.spec.ts',
+  ],
   build: ['.pipeline/task-status.json'],
   manual_test: ['.docs/manual-test-results.md'],
   retro: ['.docs/retros/*.md'],

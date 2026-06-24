@@ -108,6 +108,13 @@ describe('engine/artifacts', () => {
       await createFile('.docs/plans/2026-04-16-thing.md');
       expect(await stepHasArtifacts(dir, 'plan')).toBe(true);
     });
+
+    it('recognizes acceptance_specs across stacks (Rails spec dir AND Node test file)', async () => {
+      expect(await stepHasArtifacts(dir, 'acceptance_specs')).toBe(false);
+      // Node convention: a root-level *.test.js must satisfy the step.
+      await createFile('app.test.js');
+      expect(await stepHasArtifacts(dir, 'acceptance_specs')).toBe(true);
+    });
   });
 
   describe('checkStepCompletion: finish predicate', () => {
