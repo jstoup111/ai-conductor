@@ -1772,6 +1772,8 @@ describe('engine/conductor', () => {
       await writeState(statePath, {
         brainstorm: 'done',
         conflict_check: 'done',
+        architecture_diagram: 'done',
+        architecture_review: 'done',
         complexity_tier: 'L',
         artifact_approvals: approvals,
       } as ConductState);
@@ -1807,6 +1809,8 @@ describe('engine/conductor', () => {
       await writeState(statePath, {
         brainstorm: 'done',
         conflict_check: 'done',
+        architecture_diagram: 'done',
+        architecture_review: 'done',
         complexity_tier: 'L',
         artifact_approvals: approvals,
       } as ConductState);
@@ -1834,6 +1838,8 @@ describe('engine/conductor', () => {
       await writeState(statePath, {
         brainstorm: 'done',
         conflict_check: 'done',
+        architecture_diagram: 'done',
+        architecture_review: 'done',
         complexity_tier: 'L',
       } as ConductState);
 
@@ -1866,6 +1872,8 @@ describe('engine/conductor', () => {
       await writeState(statePath, {
         brainstorm: 'done',
         conflict_check: 'done',
+        architecture_diagram: 'done',
+        architecture_review: 'done',
         complexity_tier: 'L',
       } as ConductState);
 
@@ -3076,6 +3084,8 @@ describe('skip-already-resolved steps', () => {
       complexity_tier: 'L',
       stories: 'done',
       conflict_check: 'done',
+      architecture_diagram: 'done',
+      architecture_review: 'done',
       plan: 'done',
     } as ConductState);
 

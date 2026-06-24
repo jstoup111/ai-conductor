@@ -129,6 +129,27 @@ describe('Integration: config flow', () => {
     expect(registry).toHaveLength(ALL_STEPS.length + 1);
   });
 
+  it('custom step after a reordered step (plan) inserts correctly', () => {
+    // After the DECIDE reorder (architecture now precedes plan), custom steps
+    // that target a built-in by name still resolve — buildStepRegistry inserts
+    // by name, not absolute position.
+    const config: HarnessConfig = {
+      steps: {
+        tech_review: { after: 'plan', skill: 'tech-review', enforcement: 'advisory' },
+      },
+    };
+    const registry = buildStepRegistry(config);
+    const archIdx = registry.findIndex((s) => s.name === 'architecture_review');
+    const planIdx = registry.findIndex((s) => s.name === 'plan');
+    const customIdx = registry.findIndex((s) => s.name === 'tech_review');
+    const specsIdx = registry.findIndex((s) => s.name === 'acceptance_specs');
+
+    expect(archIdx).toBeLessThan(planIdx); // architecture precedes plan (reorder)
+    expect(customIdx).toBe(planIdx + 1); // custom step lands right after plan
+    expect(specsIdx).toBe(customIdx + 1);
+    expect(registry[customIdx].prerequisites).toEqual(['plan']);
+  });
+
   it('Conductor with skill override uses project-local skill', async () => {
     // Create a project-local skill override file
     const projectRoot = dir;

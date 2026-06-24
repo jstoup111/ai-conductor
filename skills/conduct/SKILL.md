@@ -39,9 +39,9 @@ Step 4:  Complexity Assessment   → DECIDE (classify S/M/L, determines which st
 Step 5:  Worktree setup          → DECIDE (create feature branch + worktree — all subsequent commits are isolated)
 Step 6:  /stories               → DECIDE
 Step 7:  /conflict-check        → DECIDE (skipped for Small)
-Step 8:  /plan                  → DECIDE
-Step 8b: /architecture-diagram  → DECIDE (generate/update current-state diagrams)
-Step 9:  /architecture-review    → DECIDE (skipped for Small, lightweight for Medium — consumes diagrams)
+Step 8:  /architecture-diagram  → DECIDE (generate/update current-state diagrams; skipped for Small)
+Step 8b: /architecture-review    → DECIDE (skipped for Small, lightweight for Medium — consumes diagrams)
+Step 9:  /plan                  → DECIDE (technical implementation plan, grounded in the architecture)
 Step 10: /writing-system-tests  → BUILD (skipped for Small)
 Step 11: /pipeline or /tdd      → BUILD (pipeline evaluator satisfies code-review gate)
        ── CHECKPOINT ──         → User reviews build output, can go back or continue
@@ -50,6 +50,11 @@ Step 12: /manual-test           → SHIP (validate stories, bug loop via /tdd �
 Step 13: /retro                 → SHIP
 Step 14: /finish                → SHIP (verify, review changes, present options — delegates to /pr if user chooses Push & PR)
 ```
+
+> **Order note:** architecture (diagram + review) precedes `plan` so the technical
+> implementation plan is grounded in the agreed design. This is the canonical `conduct-ts`
+> order. The legacy bash `bin/conduct` retains the prior plan→architecture order (its
+> `architecture-review` gates on the plan); use `conduct-ts` for the PRD-driven flow.
 
 ## Practices
 
