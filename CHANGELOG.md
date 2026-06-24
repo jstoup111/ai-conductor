@@ -39,6 +39,14 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 ## [Unreleased]
 
 ### Changed
+- conduct-ts: DECIDE order now runs **architecture before plan** — `stories →
+  conflict_check → architecture_diagram → architecture_review → plan →
+  acceptance_specs`. Architecture (system-level HOW) grounds the technical plan
+  (task-level HOW) instead of being reviewed after it. Prerequisites reordered in
+  `engine/steps.ts`; skipped steps still satisfy gates so Small tier is unaffected;
+  custom `.ai-conductor/config.yml` steps still resolve (inserted by name). Legacy
+  bash `bin/conduct` keeps the prior plan→architecture order (its architecture-review
+  gates on the plan); `conduct-ts` is canonical.
 - DECIDE phase is now PRD-driven. `templates/design-doc.md.template` is a PRD with
   **enumerated functional requirements (`FR-N`)** plus goals/non-goals, users, NFRs,
   acceptance criteria, and dependencies. `skills/brainstorm` requires those sections;
