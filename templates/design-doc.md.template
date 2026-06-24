@@ -1,13 +1,39 @@
-# Design: [Feature Name]
+# PRD: [Feature Name]
 
 **Date:** YYYY-MM-DD
 **Status:** Draft | Approved
 
-## Problem
-[What problem this solves and why it matters]
+## Problem / Background
+[What problem this solves, who is affected, and why it matters now.]
 
-## Solution
-[Selected approach and how it works at a high level]
+## Goals & Non-Goals
+**Goals**
+- [Measurable outcome this feature must achieve]
+
+**Non-Goals**
+- [Explicitly NOT trying to do this]
+
+## Users / Personas
+- [Who uses this and what they're trying to accomplish]
+
+## Functional Requirements
+Enumerated, testable capabilities. Each FR is the unit stories extract from — keep them
+atomic and verifiable.
+
+- **FR-1:** [A single, testable capability — e.g. "POST /shorten stores a URL and returns a
+  6-char code"]
+- **FR-2:** [...]
+- **FR-3:** [Negative/edge behavior — e.g. "POST /shorten rejects a missing or non-http(s)
+  url with 400"]
+
+## Non-Functional Requirements
+[Performance, security, reliability, observability — only those that actually apply. Omit
+the bullets if none are material for this feature.]
+- [e.g. "Codes must be collision-free for the store's lifetime"]
+
+## Acceptance Criteria / Success Metrics
+[How we know the feature is done and working — the measurable bar, end to end.]
+- [e.g. "All FRs covered by passing tests; a round-trip shorten→redirect works"]
 
 ## Scope
 ### In Scope
@@ -16,8 +42,11 @@
 ### Out of Scope
 - [Explicitly excluded item]
 
-## Key Decisions
-- [Decision and rationale]
+## Key Decisions & Rationale
+- [Decision and why]
+
+## Dependencies
+- [External systems, libraries, or other features this relies on; "none" is valid]
 
 ## Open Questions
 - [Anything still unresolved]

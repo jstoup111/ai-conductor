@@ -38,6 +38,16 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ## [Unreleased]
 
+### Changed
+- DECIDE phase is now PRD-driven. `templates/design-doc.md.template` is a PRD with
+  **enumerated functional requirements (`FR-N`)** plus goals/non-goals, users, NFRs,
+  acceptance criteria, and dependencies. `skills/brainstorm` requires those sections;
+  `skills/stories` extracts **one or more granular stories per `FR-N`** (behavioral WHAT,
+  happy + negative) tagged with their `FR-N` for traceability; `skills/plan` is framed as
+  the **technical implementation plan (HOW)** build ships from — it opens with a Technical
+  Approach section and keeps the required Design-doc link. Traceability runs PRD `FR-N` →
+  story → plan task.
+
 ### Fixed
 - conduct-ts: interactive steps (`brainstorm`, `stories`, `plan`, `manual_test`,
   `finish`) no longer hang silently in `--auto`. `invokeInteractive` ran every

@@ -85,9 +85,19 @@ Include a recommendation with reasoning. The user decides.
 
 ### 4. Write Design Document
 
-After the user selects an approach, write a design document using `templates/design-doc.md.template`.
+After the user selects an approach, write a **PRD-grade design doc** using
+`templates/design-doc.md.template`. It must be clear enough that stories can be extracted
+directly from it.
 
-Required sections: Problem, Solution, Scope (In/Out), Key Decisions, Open Questions.
+Required sections: Problem/Background, Goals & Non-Goals, Users/Personas, **Functional
+Requirements (enumerated `FR-1, FR-2, …` — each atomic and testable, including the
+negative/edge behavior)**, Non-Functional Requirements (only those that apply), Acceptance
+Criteria / Success Metrics, Scope (In/Out), Key Decisions & Rationale, Dependencies, Open
+Questions.
+
+The enumerated `FR-N` are the hinge: stories extract one or more granular scenarios per FR,
+so vague or missing requirements here produce thin stories downstream. Keep each FR to a
+single verifiable capability.
 ```
 
 Save to `.docs/specs/YYYY-MM-DD-<topic>.md`

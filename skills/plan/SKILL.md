@@ -9,9 +9,19 @@ requires: [".docs/stories/ with both paths", ".docs/conflicts/ clean pass or no 
 
 ## Purpose
 
-Converts approved, conflict-free user stories into a detailed implementation plan that any
-agent can execute with zero additional context. Every acceptance criterion maps to at least
-one task. Negative path stories become explicit test tasks — not afterthoughts.
+The **technical implementation plan** (`HOW`) that `build` ships from — the bridge between the
+behavioral stories (`WHAT`) and shipped code. Stories say *what* the system should do; the plan
+decides *how*: the technical approach, which files change, the 2–5 min TDD tasks, and their
+dependencies/sequencing. Any agent can execute it with zero additional context.
+
+This is **not** a re-listing of the stories. It adds the engineering layer they don't carry:
+architecture/approach, file-level changes, task ordering, and dependencies. Traceability runs
+PRD `FR-N` → story → task. Every acceptance criterion maps to at least one task; negative-path
+stories become explicit test tasks — not afterthoughts.
+
+Open with a short **Technical Approach** (a paragraph or few bullets: the design decisions,
+key modules/files, and sequencing) before the task list, so `build` has the shape of the work
+before the steps.
 
 ## Practices
 
@@ -78,6 +88,11 @@ Break stories into tasks at **2-5 minute granularity**. Each task follows the TD
 
 ## Summary
 [1-2 sentences: what this plan builds and how many tasks]
+
+## Technical Approach
+[The HOW, before the steps: key design decisions, the modules/files involved, data shapes,
+and the sequencing rationale. A paragraph or a few bullets — enough that `build` understands
+the shape of the work before reading individual tasks.]
 
 ## Prerequisites
 - [Any setup, migrations, or dependencies that must exist before task 1]
