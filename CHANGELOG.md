@@ -67,6 +67,16 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   story → plan task.
 
 ### Fixed
+- conduct-ts: **worktree isolation** — the spawned `claude` subprocess now runs
+  in the step runner's `projectDir` (`cwd`), not the parent process's working
+  directory. `ClaudeProvider` invoked `execa('claude', …)` with **no `cwd`**, so
+  in daemon mode every step ran in the daemon's main checkout instead of the
+  feature's worktree: the build agent committed the whole implementation to
+  `main` (6 commits) while the `feat/daemon-<slug>` branch stayed empty, and the
+  worktree's `.pipeline` desynced (surfacing as a `session-created` ENOENT). The
+  `cwd` now threads `InvokeOptions.cwd` → `execa` and `DefaultStepRunner` passes
+  `projectDir` on all four provider calls. Found in Phase 7 daemon validation;
+  overlaps the intent of PR #72 (per-feature isolation).
 - conduct-ts daemon: an auto-mode hard failure now writes a `.pipeline/HALT`
   marker instead of returning silently. Previously a gating/structural step
   failing in `--auto` did `writeState; return` with no marker, so the daemon's

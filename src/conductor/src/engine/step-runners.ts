@@ -291,6 +291,7 @@ export class DefaultStepRunner implements StepRunner {
         sessionId: this.sessionId,
         resume,
         interactive,
+        cwd: this.projectDir,
         // In auto mode there is no human to approve permissions, and the spawned
         // `claude` would otherwise launch in the user's default permission mode
         // (which may be `plan` → ALL writes blocked, so e.g. brainstorm can never
@@ -333,6 +334,7 @@ export class DefaultStepRunner implements StepRunner {
       systemPrompt,
       model: resolved.model,
       effort: resolved.effort,
+      cwd: this.projectDir,
     });
     this.callCount++;
 
@@ -409,6 +411,7 @@ export class DefaultStepRunner implements StepRunner {
       dangerouslySkipPermissions: false,
       model: resolved.model,
       effort: resolved.effort,
+      cwd: this.projectDir,
     });
   }
 
@@ -444,6 +447,7 @@ export class DefaultStepRunner implements StepRunner {
       systemPrompt,
       model: resolved.model,
       effort: resolved.effort,
+      cwd: this.projectDir,
     });
 
     if (!result.success) return null;

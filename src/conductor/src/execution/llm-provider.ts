@@ -35,6 +35,13 @@ export interface InvokeOptions {
    * the session). Values: low | medium | high | xhigh | max.
    */
   effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+  /**
+   * Working directory for the spawned `claude` process. CRITICAL for the daemon:
+   * each feature runs in its own git worktree, so the agent's file writes and
+   * commits must land in that worktree — not the daemon's main checkout. When
+   * omitted, the subprocess inherits the parent process cwd.
+   */
+  cwd?: string;
 }
 
 export interface LLMProvider {

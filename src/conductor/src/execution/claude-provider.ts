@@ -59,6 +59,7 @@ export class ClaudeProvider implements LLMProvider {
       stdout: ['pipe', 'inherit'],
       stderr: ['pipe', 'inherit'],
       env: this.buildEnv(options),
+      cwd: options.cwd,
     });
 
     const stdout = (result.stdout ?? '') as string;
@@ -127,6 +128,7 @@ export class ClaudeProvider implements LLMProvider {
       stdio: options.interactive ? 'inherit' : ['ignore', 'inherit', 'inherit'],
       reject: false,
       env: this.buildEnv(options),
+      cwd: options.cwd,
     });
   }
 
