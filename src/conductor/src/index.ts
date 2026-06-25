@@ -44,6 +44,7 @@ import { EventPersister } from './engine/event-persister.js';
 import { renderReport, ReportError } from './engine/report-renderer.js';
 import type { LLMProvider } from "./execution/llm-provider.js";
 import type { UISubscriber } from "./ui/types.js";
+import { detectRegistryCommand, dispatchRegistry } from './engine/registry-cli.js';
 
 // Harness VERSION lookup: probes a few candidate locations because the
 // installed layout can be a symlink chain (~/.local/bin/conduct-ts →
@@ -127,6 +128,15 @@ async function cleanupMergedWorktrees(
 // --- Main ---
 
 async function main(): Promise<void> {
+  // Registry subcommands (Phase 9.2) run NON-INTERACTIVELY and exit — they must
+  // not boot the interactive pipeline / live region. Dispatch them before
+  // parseArgs (whose "feature description required" rule doesn't apply here).
+  const registryCmd = detectRegistryCommand(process.argv);
+  if (registryCmd) {
+    const code = await dispatchRegistry(registryCmd);
+    process.exit(code);
+  }
+
   let opts: CLIOptions;
   try {
     opts = parseArgs(process.argv);

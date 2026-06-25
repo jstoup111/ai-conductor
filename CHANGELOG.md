@@ -56,6 +56,18 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   runs are unchanged. Emission is **best-effort** — any store error is logged and
   swallowed, so a learning-signal write can never break a ship. A types-only
   `BrainStoreReader` interface is exported for the future brain (Phase 9.3).
+- conduct-ts: project registry + creation (Phase 9.2). A single-writer registry
+  module (`src/conductor/src/engine/registry.ts`) owns
+  `~/.ai-conductor/registry.json` (override via `$AI_CONDUCTOR_REGISTRY`): atomic
+  temp+rename writes, realpath-canonicalized dedup, credential redaction of remote
+  URLs, and status provenance (`created` is never downgraded to `registered`). Two
+  non-interactive CLI subcommands consume it: `conduct register [path]` registers an
+  existing git repo (name=basename, absolute path, redacted origin remote), and
+  `conduct create <name> [--remote <url>]` scaffolds a fresh project (git init +
+  skeleton CLAUDE.md referencing HARNESS.md + `.gitignore` with `.pipeline/`,
+  `.daemon/`, `.worktrees/`; `--remote` is add-only, no push) with a no-clobber
+  guard. `/bootstrap` now auto-registers the project via `conduct register .` after
+  onboarding (idempotent).
 - conduct-ts: the gate loop's topology is now **derived from the step registry**
   instead of hardcoded, so custom config steps participate (Phase 8). New
   declarative `StepDefinition` flags `loopGate` (in the gate-driven tail) and

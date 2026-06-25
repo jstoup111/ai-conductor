@@ -233,6 +233,42 @@ on execa's `addAbortListener` import. `bin/conduct-ts` reads this file and expor
 `ASDF_NODEJS_VERSION` so the conductor runs on its required Node even if the user's
 shell default is older.
 
+### Project registry (`register` / `create`)
+
+`engine/registry.ts` is the **single writer** for the harness project registry at
+`~/.ai-conductor/registry.json` (override with `$AI_CONDUCTOR_REGISTRY`; `resolveRegistryPath`
+is injectable, mirroring `engine/user-config.ts`). Per ADR-003 all three entry points
+(`conduct register`, `conduct create`, `/bootstrap`) funnel through it so correctness lives in
+one place:
+
+- **Atomic writes** — serialize the whole registry to a unique temp sibling, then `rename` over
+  the target (POSIX-atomic; readers never see a partial file, concurrency-safe).
+- **Canonical-path dedup** — `upsertProject` keys records by `realpath`-canonicalized absolute
+  path, so symlinked/relative aliases of the same repo collapse to one record. For a not-yet-
+  existing `create` target it canonicalizes the parent then rejoins the leaf.
+- **Status provenance** — an upsert never downgrades a `created` record to `registered`.
+- **Credential redaction** — `redactRemote` strips `user:token@` from `https://`/`ssh://` URLs
+  (scp-form `git@host:path` is left intact — it carries no secret) before any write.
+- **Reported failures** — register/create surface a registry write failure as a non-zero exit,
+  never swallowed (contrast the brain store's best-effort emission).
+- **Malformed registry** — `readRegistry` returns `[]` for an absent file but **throws** on
+  invalid JSON; a corrupt registry is surfaced, not masked as empty.
+
+`engine/registry-cli.ts` holds the two non-interactive handlers, dispatched from `index.ts`
+(`detectRegistryCommand`) **before** the interactive pipeline boots:
+
+- `conduct register [path]` (default cwd) — validate the path is an existing git repo (else
+  non-zero exit + clear stderr, registry byte-unchanged), derive the record (name=basename,
+  absolute path, redacted `git remote get-url origin` if present), upsert with `status: registered`.
+- `conduct create <name> [--remote <url>]` — no-clobber guard (a non-empty target writes nothing),
+  else `git init` + skeleton `CLAUDE.md` (references HARNESS.md) + `.gitignore` (`.pipeline/`,
+  `.daemon/`, `.worktrees/`) + `git remote add origin` when `--remote` is given (add-only, no
+  push), upsert with `status: created`.
+
+Types-only `ProjectRecord` and `RegistryReader` are exported for the future read-side consumer
+(Phase 9.3); no runtime reader ships here. See `test/engine/registry.test.ts` and
+`test/integration/registry-cli.test.ts`.
+
 ## Testing pattern
 
 - **Unit tests** live next to the module under test (e.g. `test/engine/autoheal.test.ts`
