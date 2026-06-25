@@ -190,6 +190,11 @@ async function main(): Promise<void> {
       projectRoot,
       concurrency: opts.concurrency,
       maxItems: opts.maxItems,
+      continuous: opts.continuous,
+      maxCostTokens: opts.maxCostTokens,
+      maxRuntimeSeconds: opts.maxRuntimeSeconds,
+      idlePollSeconds: opts.idlePollSeconds,
+      maxIdlePolls: opts.maxIdlePolls,
     });
     process.exit(0);
   }
@@ -512,6 +517,7 @@ async function main(): Promise<void> {
     mode,
     config,
     projectRoot,
+    featureDesc: opts.featureDesc,
     verifyArtifacts: true,
     onCheckpoint: (s) => promptHost.checkpoint(s),
     onNavigate: (steps) => promptHost.navigate(steps),

@@ -129,4 +129,25 @@ describe('engine/artifacts — plan predicate (per path-type coverage)', () => {
     const r = await checkGateCompletion(dir, 'plan');
     expect(r.done).toBe(true);
   });
+
+  // Regression: the real generator emits `## Story 1:` headings (id `1`) and
+  // tasks with `**Story:** Story 1 (FR-1, FR-2)` + a separate `**Type:**` line.
+  // The old regex captured the literal word "Story" and read path type only
+  // from the parens (which hold FR refs), so coverage never matched.
+  it('covers the real `Story N` + `**Type:**` plan format', async () => {
+    await story(
+      `# Stories\n**Status:** Accepted\n\n` +
+        `## Story 1: Shorten\n**Requirement:** FR-1, FR-2\n### Happy Path\n- Given x when y then z\n### Negative Paths\n- Given a when b then error\n\n` +
+        `## Story 2: Redirect\n**Requirement:** FR-3\n### Happy Path\n- Given x when y then z\n### Negative Paths\n- Given a when b then error\n`,
+    );
+    await plan(
+      `### Task 1: infra\n**Story:** prerequisite for all tasks\n**Type:** infrastructure\n\n` +
+        `### Task 2: POST happy\n**Story:** Story 1 (FR-1, FR-2) — "..."\n**Type:** happy-path\n\n` +
+        `### Task 3: POST negative\n**Story:** Story 1 (FR-4) — "..."\n**Type:** negative-path\n\n` +
+        `### Task 4: GET happy\n**Story:** Story 2 (FR-3) — "..."\n**Type:** happy-path\n\n` +
+        `### Task 5: GET negative\n**Story:** Story 2 (FR-6) — "..."\n**Type:** negative-path\n`,
+    );
+    const r = await checkGateCompletion(dir, 'plan');
+    expect(r.done).toBe(true);
+  });
 });

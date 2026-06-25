@@ -45,6 +45,25 @@ describe('DefaultStepRunner', () => {
     expect(opts.prompt).toContain('/brainstorm');
   });
 
+  // Worktree isolation: the spawned claude must run in the runner's projectDir,
+  // not the daemon's cwd. Without this, daemon feature builds committed to the
+  // main checkout's branch instead of the per-feature worktree branch.
+  it('passes projectDir as cwd to the provider (collaborative path)', async () => {
+    const provider = createMockProvider();
+    const runner = new DefaultStepRunner(provider, 'session-1', '/wt/feature-x');
+    await runner.run('brainstorm', emptyState);
+    const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    expect(opts.cwd).toBe('/wt/feature-x');
+  });
+
+  it('passes projectDir as cwd to the provider (autonomous path)', async () => {
+    const provider = createMockProvider();
+    const runner = new DefaultStepRunner(provider, 'session-1', '/wt/feature-x');
+    await runner.run('build', emptyState); // build is autonomous → invoke()
+    const opts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    expect(opts.cwd).toBe('/wt/feature-x');
+  });
+
   it('passes correct prompt for build (pipeline)', async () => {
     const provider = createMockProvider();
     const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project');
@@ -74,6 +93,18 @@ describe('DefaultStepRunner', () => {
 
     const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
     expect(opts.dangerouslySkipPermissions).toBe(false);
+  });
+
+  it('in auto mode, collaborative steps DO skip permissions (no human to approve)', async () => {
+    const provider = createMockProvider();
+    const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', { mode: 'auto' });
+
+    await runner.run('brainstorm', emptyState);
+
+    const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    // Otherwise the spawned claude launches in the user's default permission
+    // mode (possibly `plan`), blocking the PRD write and looping the step.
+    expect(opts.dangerouslySkipPermissions).toBe(true);
   });
 
   it('worktree is autonomous', async () => {

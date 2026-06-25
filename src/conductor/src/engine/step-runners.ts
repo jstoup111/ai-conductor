@@ -291,7 +291,14 @@ export class DefaultStepRunner implements StepRunner {
         sessionId: this.sessionId,
         resume,
         interactive,
-        dangerouslySkipPermissions: false,
+        cwd: this.projectDir,
+        // In auto mode there is no human to approve permissions, and the spawned
+        // `claude` would otherwise launch in the user's default permission mode
+        // (which may be `plan` → ALL writes blocked, so e.g. brainstorm can never
+        // save its `.docs/specs/` PRD and the step loops). Skip permissions so the
+        // step can write, like autonomous steps. Interactive REPL mode (non-auto)
+        // keeps prompts so the user approves.
+        dangerouslySkipPermissions: this.mode === 'auto',
         systemPrompt,
         model: resolved.model,
         effort: resolved.effort,
@@ -327,6 +334,7 @@ export class DefaultStepRunner implements StepRunner {
       systemPrompt,
       model: resolved.model,
       effort: resolved.effort,
+      cwd: this.projectDir,
     });
     this.callCount++;
 
@@ -403,6 +411,7 @@ export class DefaultStepRunner implements StepRunner {
       dangerouslySkipPermissions: false,
       model: resolved.model,
       effort: resolved.effort,
+      cwd: this.projectDir,
     });
   }
 
@@ -438,6 +447,7 @@ export class DefaultStepRunner implements StepRunner {
       systemPrompt,
       model: resolved.model,
       effort: resolved.effort,
+      cwd: this.projectDir,
     });
 
     if (!result.success) return null;
@@ -472,6 +482,25 @@ export class DefaultStepRunner implements StepRunner {
 
     // Effort is now controlled via CLAUDE_CODE_EFFORT_LEVEL env var (Claude's
     // native reasoning knob) — no prose hint needed in the system prompt.
+
+    // The finish skill normally asks the user to choose Merge/PR/Keep/Discard
+    // (skills/finish/SKILL.md §4). In auto/unattended mode there is no user, so
+    // print-mode Claude would emit prose and exit without writing
+    // `.pipeline/finish-choice` — leaving the gate permanently unsatisfied and
+    // the loop stuck (the validation failure this addresses). Tell it to decide
+    // deterministically and ACT, ending by writing the marker file.
+    if (step === 'finish' && this.mode === 'auto') {
+      prompt +=
+        '\n\nUNATTENDED (auto) MODE — no user is present to choose a finish outcome, so do NOT prompt. ' +
+        'Decide deterministically and ACT (do not merely describe):\n' +
+        '- If the repo has a configured git remote and `gh` is authenticated: push the branch, open a PR ' +
+        'with `gh pr create` (NEVER merge), record the resulting URL as the `pr_url` field in ' +
+        '`.pipeline/conduct-state.json`, then write the single word `pr` to `.pipeline/finish-choice`.\n' +
+        '- Otherwise (no remote, or `gh` unavailable/unauthenticated): leave the work committed on the ' +
+        'branch and write the single word `keep` to `.pipeline/finish-choice`.\n' +
+        'The step is NOT complete until `.pipeline/finish-choice` exists with one of those exact values ' +
+        '(and, for `pr`, `pr_url` is set in state). Writing that marker file must be your final action.';
+    }
 
     if (retryReason) {
       prompt = `RETRY: ${retryReason}\n${prompt}`;

@@ -20,7 +20,7 @@ import {
   buildRetryHint,
 } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
-import { writeFile, mkdir } from 'fs/promises';
+import { writeFile, mkdir, readFile } from 'fs/promises';
 import { createHash } from 'crypto';
 
 function createMockStepRunner(result: StepRunResult = { success: true }): StepRunner {
@@ -50,12 +50,12 @@ describe('engine/conductor', () => {
 
     await conductor.run();
 
-    // The first call to run should have been with the first step. `complexity`
-    // is engine-managed (dispatched via assessComplexity, not runner.run), so
-    // the runner is called for every step EXCEPT complexity.
-    const dispatchedSteps = ALL_STEPS.filter((s) => s.name !== 'complexity').length;
+    // `complexity` and `worktree` are engine-managed (runComplexityStep /
+    // runWorktreeStep, not runner.run), so the runner is called for every step
+    // EXCEPT those two, and the first runner dispatch is `memory`.
+    const dispatchedSteps = ALL_STEPS.filter((s) => s.name !== 'complexity' && s.name !== 'worktree').length;
     expect(runner.run).toHaveBeenCalledTimes(dispatchedSteps);
-    expect((runner.run as ReturnType<typeof vi.fn>).mock.calls[0][0]).toBe('worktree');
+    expect((runner.run as ReturnType<typeof vi.fn>).mock.calls[0][0]).toBe('memory');
   });
 
   it('marks step in_progress before running', async () => {
@@ -74,8 +74,9 @@ describe('engine/conductor', () => {
 
     await conductor.run();
 
-    // Every step should have been in_progress when its runner was called
-    expect(statusesDuringRun['worktree']).toBe('in_progress');
+    // Every runner-dispatched step should have been in_progress when called
+    // (worktree is engine-managed, so check memory as the first dispatched step).
+    expect(statusesDuringRun['memory']).toBe('in_progress');
     expect(statusesDuringRun['brainstorm']).toBe('in_progress');
     expect(statusesDuringRun['finish']).toBe('in_progress');
   });
@@ -110,7 +111,7 @@ describe('engine/conductor', () => {
 
     // Steps should be called in exact ALL_STEPS order, minus `complexity`
     // (engine-managed via assessComplexity, not dispatched to runner.run).
-    const expectedOrder = ALL_STEPS.filter((s) => s.name !== 'complexity').map((s) => s.name);
+    const expectedOrder = ALL_STEPS.filter((s) => s.name !== 'complexity' && s.name !== 'worktree').map((s) => s.name);
     expect(callOrder).toEqual(expectedOrder);
   });
 
@@ -182,8 +183,9 @@ describe('engine/conductor', () => {
     expect(failedEvents.length).toBe(1);
     expect(failedEvents[0].step).toBe('brainstorm');
 
-    // Should NOT have advanced past the failed step
-    expect(runner.run).toHaveBeenCalledTimes(3);
+    // Should NOT have advanced past the failed step. worktree is engine-managed
+    // (not runner-dispatched), so the runner saw memory + brainstorm = 2 calls.
+    expect(runner.run).toHaveBeenCalledTimes(2);
   });
 
   it('does NOT advance to next step on failure', async () => {
@@ -204,10 +206,96 @@ describe('engine/conductor', () => {
 
     await conductor.run();
 
-    // Should have run worktree, memory, brainstorm and stopped
-    expect(stepsRun).toEqual(['worktree', 'memory', 'brainstorm']);
+    // worktree is engine-managed, so the runner sees memory → brainstorm, then stops.
+    expect(stepsRun).toEqual(['memory', 'brainstorm']);
     // complexity (the step after brainstorm) should NOT have been called
     expect(stepsRun).not.toContain('complexity');
+  });
+
+  it('auto mode never prompts: gating-step failure stops without recovery', async () => {
+    // `stories` is gating; it permanently fails. In auto mode the conductor must
+    // NOT open the recovery menu / a REPL — it stops for a human to inspect.
+    const onRecovery = vi.fn().mockResolvedValue('quit' as const);
+    const runner: StepRunner = {
+      run: async (step: StepName) =>
+        step === 'stories' ? { success: false, output: 'boom' } : { success: true },
+    };
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      mode: 'auto',
+      maxRetries: 1,
+      onRecovery,
+    });
+
+    await conductor.run();
+
+    expect(onRecovery).not.toHaveBeenCalled();
+    const result = await readState(statePath);
+    expect(result.ok && result.value.stories).toBe('failed');
+    expect(result.ok && result.value.feature_status).toBeUndefined();
+  });
+
+  it('auto mode writes a HALT marker on a gating-step failure (daemon-classifiable)', async () => {
+    // A supervising daemon reads .pipeline/DONE / .pipeline/HALT to classify the
+    // outcome. Before this, an auto hard-failure returned with NO marker, so the
+    // daemon reported the opaque "loop ended without DONE or HALT marker" error
+    // and couldn't tell halt (retryable) from a crash. Now it writes HALT.
+    const runner: StepRunner = {
+      run: async (step: StepName) =>
+        step === 'stories' ? { success: false, output: 'boom' } : { success: true },
+    };
+    let halted = false;
+    events.on('loop_halt', () => {
+      halted = true;
+    });
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      maxRetries: 1,
+    });
+
+    await conductor.run();
+
+    expect(halted).toBe(true); // loop_halt event emitted
+    const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+    expect(halt).toMatch(/stories/);
+    // It HALTed, so it did not also mark the feature complete.
+    const result = await readState(statePath);
+    expect(result.ok && result.value.feature_status).toBeUndefined();
+  });
+
+  it('auto mode auto-skips an advisory-step failure and continues', async () => {
+    // `memory` is advisory; it fails. In auto mode it auto-skips so the run isn't
+    // blocked, and no recovery prompt is shown.
+    const onRecovery = vi.fn();
+    const runner: StepRunner = {
+      run: async (step: StepName) =>
+        step === 'memory' ? { success: false } : { success: true },
+    };
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      mode: 'auto',
+      maxRetries: 1,
+      onRecovery,
+    });
+
+    let completed = false;
+    events.on('feature_complete', () => {
+      completed = true;
+    });
+    await conductor.run();
+
+    expect(onRecovery).not.toHaveBeenCalled();
+    expect(completed).toBe(true);
+    const result = await readState(statePath);
+    expect(result.ok && result.value.memory).toBe('skipped');
   });
 
   it('does NOT set feature_status=complete on failure', async () => {
@@ -426,7 +514,7 @@ describe('engine/conductor', () => {
 
     // `complexity` is engine-managed (assessComplexity path), not dispatched
     // to runner.run. Every OTHER step should fire, in order.
-    const expectedOrder = ALL_STEPS.filter((s) => s.name !== 'complexity').map((s) => s.name);
+    const expectedOrder = ALL_STEPS.filter((s) => s.name !== 'complexity' && s.name !== 'worktree').map((s) => s.name);
     expect(stepsRun).toEqual(expectedOrder);
   });
 
@@ -493,7 +581,9 @@ describe('engine/conductor', () => {
     await conductor.run();
 
     // L tier has no skips; complexity is handled by the engine (not stepRunner)
-    const expectedOrder = ALL_STEPS.map((s) => s.name).filter((n) => n !== 'complexity');
+    const expectedOrder = ALL_STEPS.map((s) => s.name).filter(
+      (n) => n !== 'complexity' && n !== 'worktree',
+    );
     expect(stepsRun).toEqual(expectedOrder);
 
     // No tier_skip events should be emitted
@@ -1772,6 +1862,8 @@ describe('engine/conductor', () => {
       await writeState(statePath, {
         brainstorm: 'done',
         conflict_check: 'done',
+        architecture_diagram: 'done',
+        architecture_review: 'done',
         complexity_tier: 'L',
         artifact_approvals: approvals,
       } as ConductState);
@@ -1807,6 +1899,8 @@ describe('engine/conductor', () => {
       await writeState(statePath, {
         brainstorm: 'done',
         conflict_check: 'done',
+        architecture_diagram: 'done',
+        architecture_review: 'done',
         complexity_tier: 'L',
         artifact_approvals: approvals,
       } as ConductState);
@@ -1834,6 +1928,8 @@ describe('engine/conductor', () => {
       await writeState(statePath, {
         brainstorm: 'done',
         conflict_check: 'done',
+        architecture_diagram: 'done',
+        architecture_review: 'done',
         complexity_tier: 'L',
       } as ConductState);
 
@@ -1866,6 +1962,8 @@ describe('engine/conductor', () => {
       await writeState(statePath, {
         brainstorm: 'done',
         conflict_check: 'done',
+        architecture_diagram: 'done',
+        architecture_review: 'done',
         complexity_tier: 'L',
       } as ConductState);
 
@@ -3076,6 +3174,8 @@ describe('skip-already-resolved steps', () => {
       complexity_tier: 'L',
       stories: 'done',
       conflict_check: 'done',
+      architecture_diagram: 'done',
+      architecture_review: 'done',
       plan: 'done',
     } as ConductState);
 
@@ -3417,10 +3517,11 @@ describe('engine/conductor: pipeline-exit false-completion regression', () => {
 
     const runner: StepRunner = {
       run: vi.fn(async (step: StepName) => {
-        // On the very first step, observe that the sweep happened: marker
-        // should already be gone before the runner is called.
+        // On the first runner-dispatched step (memory — worktree is
+        // engine-managed), observe that the sweep happened: the marker should
+        // already be gone before any runner step.
         const { access } = await import('fs/promises');
-        if (step === 'worktree') {
+        if (step === 'memory') {
           let stillExists = true;
           try {
             await access(join(dir, '.pipeline/finish-choice'));

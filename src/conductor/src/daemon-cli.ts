@@ -8,7 +8,7 @@ import { ConductorEventEmitter } from './ui/events.js';
 import { DefaultStepRunner } from './engine/step-runners.js';
 import { Conductor } from './engine/conductor.js';
 import { loadConfig } from './engine/config.js';
-import type { ConductState, StepName } from './types/index.js';
+import type { ConductState, ConductorEvent, StepName } from './types/index.js';
 import { runDaemon, type BacklogItem } from './engine/daemon.js';
 import { discoverBacklog } from './engine/daemon-backlog.js';
 import { makeRunFeature, type FeatureWorktree } from './engine/daemon-runner.js';
@@ -22,6 +22,16 @@ export interface DaemonModeOptions {
   maxItems?: number;
   /** Branch the worktrees fork from. */
   baseBranch?: string;
+  /** Continuous: idle-poll for new features instead of draining once. */
+  continuous?: boolean;
+  /** Global output-token ceiling across all features. */
+  maxCostTokens?: number;
+  /** Wall-clock ceiling in seconds. */
+  maxRuntimeSeconds?: number;
+  /** Idle poll interval in seconds (continuous mode). */
+  idlePollSeconds?: number;
+  /** Stop after this many consecutive empty polls (continuous mode). */
+  maxIdlePolls?: number;
 }
 
 // Front-half steps the daemon treats as already done — the human authored the
@@ -56,7 +66,14 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   // One shared provider + event bus across workers (rate limits are shared).
   const events = new ConductorEventEmitter();
   const registry = new PluginRegistry();
-  const subscriber = registerBuiltins(registry, events, () => {});
+  // Surface per-step loop progress on the console. Without this the daemon was
+  // silent between `▶ start` and `✓ shipped` (the no-op renderer threw every
+  // step_started/gate_verdict/kickback away). Events don't carry a feature slug,
+  // so with concurrency > 1 lines from different workers interleave; the `·`
+  // prefix marks them as inner-loop progress under the active feature.
+  const subscriber = registerBuiltins(registry, events, (event) =>
+    renderDaemonEvent(event, log),
+  );
   registry.markInitialized();
   subscriber.start();
   const provider = registry.get<LLMProvider>('llm_provider', config?.llm_provider ?? 'claude');
@@ -106,14 +123,40 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   });
   const runFeature = makeRunFeature(deps);
 
-  log(`scanning backlog (concurrency ${opts.concurrency})…`);
+  const continuous = opts.continuous ?? false;
+  // Continuous with no ceiling at all runs unbounded — surface that loudly
+  // rather than silently looping forever (Phase 7 "hard ceilings" intent).
+  const hasCeiling =
+    opts.maxItems != null ||
+    opts.maxCostTokens != null ||
+    opts.maxRuntimeSeconds != null ||
+    opts.maxIdlePolls != null;
+  if (continuous && !hasCeiling) {
+    log(
+      'WARNING: --continuous with no ceiling (--max-items/--max-cost/--max-runtime/--max-idle-polls) runs unbounded; Ctrl-C to stop.',
+    );
+  }
+
+  log(
+    `scanning backlog (concurrency ${opts.concurrency}${continuous ? ', continuous' : ''})…`,
+  );
   const result = await runDaemon(
     {
       discoverBacklog: () => discoverBacklog(projectRoot, (slug) => isProcessed(projectRoot, slug)),
       runFeature,
       log,
     },
-    { concurrency: opts.concurrency, maxItems: opts.maxItems, once: true },
+    {
+      concurrency: opts.concurrency,
+      maxItems: opts.maxItems,
+      maxTotalCostTokens: opts.maxCostTokens,
+      maxRuntimeMs:
+        opts.maxRuntimeSeconds != null ? opts.maxRuntimeSeconds * 1000 : undefined,
+      once: !continuous,
+      idlePollMs:
+        opts.idlePollSeconds != null ? opts.idlePollSeconds * 1000 : undefined,
+      maxIdlePolls: opts.maxIdlePolls,
+    },
   );
 
   subscriber.stop();
@@ -122,5 +165,51 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     log(
       `  ${o.slug}: ${o.status}${o.prUrl ? ` ${o.prUrl}` : ''}${o.reason ? ` — ${o.reason}` : ''}`,
     );
+  }
+}
+
+/**
+ * Render the meaningful inner-loop events to the daemon console. Keeps the
+ * signal high: step boundaries, failures/retries, unsatisfied gates, kickbacks,
+ * halts/convergence, and rate limits — not the full event firehose.
+ */
+export function renderDaemonEvent(event: ConductorEvent, log: (msg: string) => void): void {
+  switch (event.type) {
+    case 'step_started':
+      log(`· ▶ ${event.step}`);
+      break;
+    case 'step_completed':
+      log(`·   ${event.step} ✓ ${event.status}`);
+      break;
+    case 'step_failed':
+      log(`· ✗ ${event.step} failed (try ${event.retryCount}): ${event.error}`);
+      break;
+    case 'step_retry':
+      log(`· ↻ ${event.step} retry`);
+      break;
+    case 'gate_verdict':
+      if (!event.satisfied) {
+        log(`· gate ${event.step}: unsatisfied${event.reason ? ` — ${event.reason}` : ''}`);
+      }
+      break;
+    case 'kickback':
+      log(
+        `· ↩ kickback: ${event.from} re-opened ${event.to}${event.evidence ? ` — ${event.evidence}` : ''} (×${event.count})`,
+      );
+      break;
+    case 'loop_halt':
+      log(`· ✋ loop halted: ${event.reason}`);
+      break;
+    case 'loop_converged':
+      log(`· ✓ gate loop converged`);
+      break;
+    case 'rate_limit':
+      log(`· ⏳ rate limited: waiting ${event.waitSeconds}s`);
+      break;
+    case 'session_reset':
+      log(`· session reset: ${event.reason}`);
+      break;
+    default:
+      break;
   }
 }

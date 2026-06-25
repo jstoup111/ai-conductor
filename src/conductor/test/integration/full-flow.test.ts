@@ -66,10 +66,12 @@ describe('Integration: full conductor flow', () => {
 
     await conductor.run();
 
-    // Every step EXCEPT `complexity` (engine-managed via assessComplexity)
+    // Every step EXCEPT `complexity` and `worktree` (both engine-managed)
     // should have been dispatched to runner.run, in ALL_STEPS order.
     const allStepNames = ALL_STEPS.map((s) => s.name);
-    const dispatchedStepNames = allStepNames.filter((n) => n !== 'complexity');
+    const dispatchedStepNames = allStepNames.filter(
+      (n) => n !== 'complexity' && n !== 'worktree',
+    );
     expect(runner.calls).toEqual(dispatchedStepNames);
     expect(runner.calls).toHaveLength(dispatchedStepNames.length);
 
@@ -117,7 +119,7 @@ describe('Integration: full conductor flow', () => {
     // engine-managed `complexity` step.
     const expectedRun = ALL_STEPS
       .map((s) => s.name)
-      .filter((n) => !expectedSkipped.includes(n) && n !== 'complexity');
+      .filter((n) => !expectedSkipped.includes(n) && n !== 'complexity' && n !== 'worktree');
 
     expect(runner.calls).toEqual(expectedRun);
     expect(runner.calls).toHaveLength(expectedRun.length);

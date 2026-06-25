@@ -3,7 +3,8 @@
  *
  * It pulls features from a backlog and runs up to N in parallel, each fully
  * isolated (own worktree/branch/.pipeline via `runFeature`). It enforces hard
- * ceilings (max items, global token cost), honors `once` vs idle-poll, and
+ * ceilings (max items, global token cost, wall-clock runtime), honors `once`
+ * (drain) vs continuous idle-poll, and
  * never lets one feature's failure take down the pool — a thrown `runFeature`
  * becomes an `error` outcome and the pool keeps going.
  *
@@ -44,6 +45,8 @@ export interface DaemonDeps {
   log?: (msg: string) => void;
   /** Injectable sleep (tests pass a no-op / fake clock). */
   sleep?: (ms: number) => Promise<void>;
+  /** Injectable clock for the wall-clock ceiling (tests pass a fake). */
+  now?: () => number;
 }
 
 export interface DaemonOptions {
@@ -53,6 +56,8 @@ export interface DaemonOptions {
   maxItems?: number;
   /** Global output-token ceiling across all features. */
   maxTotalCostTokens?: number;
+  /** Wall-clock ceiling in ms; stop STARTING new features past this. */
+  maxRuntimeMs?: number;
   /** Process the current backlog then exit instead of idle-polling for more. */
   once?: boolean;
   /** Idle poll interval when the backlog is empty (default 5000ms). */
@@ -65,6 +70,7 @@ export type DaemonStopReason =
   | 'backlog_drained'
   | 'max_items'
   | 'cost_ceiling'
+  | 'time_ceiling'
   | 'idle_timeout';
 
 export interface DaemonResult {
@@ -81,9 +87,11 @@ export async function runDaemon(
 ): Promise<DaemonResult> {
   const concurrency = Math.max(1, Math.floor(options.concurrency));
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  const now = deps.now ?? (() => Date.now());
   const log = deps.log ?? (() => {});
   const idlePollMs = options.idlePollMs ?? 5000;
   const maxIdlePolls = options.maxIdlePolls ?? Infinity;
+  const startedAt = now();
 
   const processed: FeatureOutcome[] = [];
   const inFlight = new Map<string, Tagged>();
@@ -91,12 +99,16 @@ export async function runDaemon(
   let totalCost = 0;
   let idlePolls = 0;
 
+  // Ceilings stop STARTING new features; in-flight work always drains.
   const ceilingHit = (): DaemonStopReason | null => {
     if (options.maxItems != null && processed.length >= options.maxItems) {
       return 'max_items';
     }
     if (options.maxTotalCostTokens != null && totalCost >= options.maxTotalCostTokens) {
       return 'cost_ceiling';
+    }
+    if (options.maxRuntimeMs != null && now() - startedAt >= options.maxRuntimeMs) {
+      return 'time_ceiling';
     }
     return null;
   };

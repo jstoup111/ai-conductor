@@ -109,6 +109,48 @@ describe('engine/daemon — runDaemon', () => {
     expect(res.processed[0].reason).toBe('needs human');
   });
 
+  it('stops at the wall-clock ceiling (injected clock)', async () => {
+    let clock = 0;
+    const deps: DaemonDeps = {
+      discoverBacklog: staticBacklog(items(10)),
+      runFeature: async (it) => {
+        clock += 1; // each completed feature advances the clock 1ms
+        return { slug: it.slug, status: 'done' };
+      },
+      now: () => clock,
+    };
+    const res = await runDaemon(deps, {
+      concurrency: 1,
+      once: true,
+      maxRuntimeMs: 2,
+    });
+    expect(res.stoppedReason).toBe('time_ceiling');
+    // Stopped early — did NOT drain all 10.
+    expect(res.processed.length).toBeGreaterThanOrEqual(1);
+    expect(res.processed.length).toBeLessThan(10);
+  });
+
+  it('continuous mode picks up a feature that appears after an empty poll', async () => {
+    let poll = 0;
+    let slept = 0;
+    const deps: DaemonDeps = {
+      // empty, then one feature, then empty forever
+      discoverBacklog: async () => (++poll === 2 ? items(1) : []),
+      runFeature: async (it) => ({ slug: it.slug, status: 'done' }),
+      sleep: async () => {
+        slept++;
+      },
+    };
+    const res = await runDaemon(deps, {
+      concurrency: 1,
+      once: false,
+      maxIdlePolls: 3,
+    });
+    expect(res.processed.map((o) => o.slug)).toEqual(['f0']); // picked up later
+    expect(res.stoppedReason).toBe('idle_timeout');
+    expect(slept).toBeGreaterThan(0);
+  });
+
   it('idle-polls an empty backlog and stops at maxIdlePolls', async () => {
     let slept = 0;
     const deps: DaemonDeps = {

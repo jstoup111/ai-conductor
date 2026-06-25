@@ -9,15 +9,18 @@ requires: []
 
 ## Purpose
 
-Translates an approved design document into structured user stories with both happy and negative
-path scenarios. Negative paths are mandatory — they directly feed TDD RED phases as test cases,
-ensuring error handling and edge cases are tested first, not bolted on later.
+Extracts granular user stories from the approved PRD's enumerated functional requirements
+(`FR-N`), with both happy and negative path scenarios. Stories describe **behavior (WHAT)** —
+the technical *how* is the plan's job. Negative paths are mandatory — they directly feed TDD
+RED phases as test cases, ensuring error handling and edge cases are tested first, not bolted
+on later.
 
 ## Practices
 
 ### 1. Load Input
 
-- Read the approved design document from `.docs/specs/`
+- Read the approved PRD from `.docs/specs/`; work through its **Functional Requirements
+  (`FR-N`)** — each FR is the unit you extract stories from
 - Reference tech-context from session if loaded (e.g., Rails-specific negative paths)
 - Review existing stories in `.docs/stories/` for this feature area (avoid duplicates)
 - **Check for DRAFT stories from `/bootstrap`** — if stories have `Status: DRAFT`, review and
@@ -27,10 +30,16 @@ ensuring error handling and edge cases are tested first, not bolted on later.
 
 ### 2. Generate Stories
 
-For each requirement in the design, write a user story:
+Work through the PRD's functional requirements in order. For **each `FR-N`**, write **one or
+more granular stories** — split a requirement into multiple stories when it spans distinct
+behaviors, so each story stays small and independently verifiable. Tag every story with the
+`FR-N` it came from (traceability: PRD → story → plan task). Every `FR-N` must be covered by
+at least one story.
 
 ```markdown
 ## Story: [Descriptive Title]
+
+**Requirement:** FR-N
 
 As a [role], I want [action] so that [outcome].
 

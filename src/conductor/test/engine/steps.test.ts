@@ -20,7 +20,7 @@ describe('engine/steps', () => {
   describe('ALL_STEPS', () => {
     const expectedOrder: StepName[] = [
       'worktree', 'memory', 'brainstorm', 'complexity', 'stories',
-      'conflict_check', 'plan', 'architecture_diagram', 'architecture_review',
+      'conflict_check', 'architecture_diagram', 'architecture_review', 'plan',
       'acceptance_specs', 'build', 'manual_test', 'retro', 'finish',
     ];
 
@@ -82,27 +82,27 @@ describe('engine/steps', () => {
       expect(s.skippableForTiers).toEqual(['S']);
     });
 
-    it('plan is DECIDE/gating with prereq conflict_check', () => {
-      const s = ALL_STEPS[6];
-      expect(s.name).toBe('plan');
-      expect(s.enforcement).toBe('gating');
-      expect(s.prerequisites).toEqual(['conflict_check']);
-    });
-
     it('architecture_diagram is DECIDE/advisory, skippable for S', () => {
-      const s = ALL_STEPS[7];
+      const s = ALL_STEPS[6];
       expect(s.name).toBe('architecture_diagram');
       expect(s.enforcement).toBe('advisory');
-      expect(s.prerequisites).toEqual(['plan']);
+      expect(s.prerequisites).toEqual(['conflict_check']);
       expect(s.skippableForTiers).toEqual(['S']);
     });
 
     it('architecture_review is DECIDE/advisory, skippable for S', () => {
-      const s = ALL_STEPS[8];
+      const s = ALL_STEPS[7];
       expect(s.name).toBe('architecture_review');
       expect(s.enforcement).toBe('advisory');
-      expect(s.prerequisites).toEqual(['plan']);
+      expect(s.prerequisites).toEqual(['architecture_diagram']);
       expect(s.skippableForTiers).toEqual(['S']);
+    });
+
+    it('plan is DECIDE/gating with prereq architecture_review', () => {
+      const s = ALL_STEPS[8];
+      expect(s.name).toBe('plan');
+      expect(s.enforcement).toBe('gating');
+      expect(s.prerequisites).toEqual(['architecture_review']);
     });
 
     it('acceptance_specs is BUILD/gating, skippable for S', () => {

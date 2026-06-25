@@ -38,7 +38,136 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ## [Unreleased]
 
+### Added
+- conduct-ts daemon: `--continuous` mode — instead of draining the backlog once
+  and exiting, the daemon idle-polls for newly-eligible features (the poll loop
+  already existed; this wires it through). Gated by hard ceilings, all new flags:
+  `--max-cost <tokens>` (global output-token ceiling), `--max-runtime <seconds>`
+  (wall-clock), `--idle-poll <seconds>` (poll interval), `--max-idle-polls <n>`
+  (stop after N empty polls). Ceilings stop *starting* new features; in-flight
+  work always drains. `--continuous` with no ceiling logs an unbounded-run
+  warning. Closes the Phase 7 "then enable continuous" deliverable. The
+  wall-clock ceiling (`time_ceiling` stop reason) is new in `runDaemon`;
+  `max_items` and `cost_ceiling` already existed.
+- conduct-ts daemon: per-step loop progress is now printed to the console. The
+  daemon previously wired a **no-op event renderer**, so it went silent between
+  `[daemon] ▶ start <slug>` and `✓ shipped` while the whole gate loop ran live in
+  the worktree — "started, no meaningful logs." `daemon-cli.ts` now renders
+  step boundaries, failures/retries, unsatisfied gate verdicts, kickbacks, halts,
+  convergence, and rate limits (prefixed `· `). Events carry no feature slug, so
+  with `--concurrency > 1` lines from different workers interleave. Found in
+  Phase 7 daemon validation.
+
+### Changed
+- conduct-ts: DECIDE order now runs **architecture before plan** — `stories →
+  conflict_check → architecture_diagram → architecture_review → plan →
+  acceptance_specs`. Architecture (system-level HOW) grounds the technical plan
+  (task-level HOW) instead of being reviewed after it. Prerequisites reordered in
+  `engine/steps.ts`; skipped steps still satisfy gates so Small tier is unaffected;
+  custom `.ai-conductor/config.yml` steps still resolve (inserted by name). Legacy
+  bash `bin/conduct` keeps the prior plan→architecture order (its architecture-review
+  gates on the plan); `conduct-ts` is canonical.
+- DECIDE phase is now PRD-driven. `templates/design-doc.md.template` is a PRD with
+  **enumerated functional requirements (`FR-N`)** plus goals/non-goals, users, NFRs,
+  acceptance criteria, and dependencies. `skills/brainstorm` requires those sections;
+  `skills/stories` extracts **one or more granular stories per `FR-N`** (behavioral WHAT,
+  happy + negative) tagged with their `FR-N` for traceability; `skills/plan` is framed as
+  the **technical implementation plan (HOW)** build ships from — it opens with a Technical
+  Approach section and keeps the required Design-doc link. Traceability runs PRD `FR-N` →
+  story → plan task.
+
 ### Fixed
+- conduct-ts: **worktree isolation** — the spawned `claude` subprocess now runs
+  in the step runner's `projectDir` (`cwd`), not the parent process's working
+  directory. `ClaudeProvider` invoked `execa('claude', …)` with **no `cwd`**, so
+  in daemon mode every step ran in the daemon's main checkout instead of the
+  feature's worktree: the build agent committed the whole implementation to
+  `main` (6 commits) while the `feat/daemon-<slug>` branch stayed empty, and the
+  worktree's `.pipeline` desynced (surfacing as a `session-created` ENOENT). The
+  `cwd` now threads `InvokeOptions.cwd` → `execa` and `DefaultStepRunner` passes
+  `projectDir` on all four provider calls. Found in Phase 7 daemon validation;
+  overlaps the intent of PR #72 (per-feature isolation).
+- conduct-ts daemon: an auto-mode hard failure now writes a `.pipeline/HALT`
+  marker instead of returning silently. Previously a gating/structural step
+  failing in `--auto` did `writeState; return` with no marker, so the daemon's
+  `readOutcome` saw neither `DONE` nor `HALT` and reported the opaque
+  `error — loop ended without DONE or HALT marker`. The conductor now writes
+  `HALT` (with the failed step in the reason) and emits `loop_halt`, so the
+  daemon classifies it as `halted` — worktree kept, NOT marked processed,
+  retryable after a human looks. Found in Phase 7 daemon validation.
+- conduct-ts daemon: re-running the daemon after a kept (halted/errored)
+  worktree no longer aborts with `fatal: A branch named 'feat/daemon-<slug>'
+  already exists`. `createWorktree` now reuses an existing registered worktree
+  for the slug (resume-after-human-fix), attaches to an existing branch when the
+  worktree was removed but the branch lingered, and only creates a fresh
+  branch+worktree when neither exists. Found in Phase 7 daemon validation.
+- conduct-ts: the `plan` coverage gate no longer false-fails (and kicks the loop
+  back to `plan` forever) on the real generator's output format. Stories use
+  `## Story N:` headings (id `N`) and plan tasks reference `**Story:** Story 1
+  (FR-1, FR-2)` with the path type on a separate `**Type:** happy-path` line. The
+  old matcher captured the literal word "Story" as the id and read happy/negative
+  only from the parens (which hold `FR-N` refs), so coverage never matched —
+  verdict `plan does not cover: 1 happy, 1 negative, …`. The matcher is now
+  task-block-aware: it strips an optional `Story `/`Epic ` prefix word from the
+  id and reads the path type from the `**Type:**` line, the Story parens, or a
+  path keyword — while still accepting the prior `**Story:** 3.2-1 (happy path)`
+  and `## Coverage Check` table formats. Found in Phase 7 validation.
+- conduct-ts: the `finish` step no longer stalls the loop in `--auto`. The finish
+  skill normally asks the user to pick Merge/PR/Keep/Discard; in unattended mode
+  print-mode Claude emitted prose and exited without writing
+  `.pipeline/finish-choice`, leaving the gate permanently unsatisfied. In auto
+  mode the step now gets an explicit directive to decide deterministically and
+  act: open a PR (never merge) and record `pr_url` when a git remote + `gh` are
+  available, else `keep` the branch — ending by writing the chosen value to
+  `.pipeline/finish-choice`. `skills/finish/SKILL.md` documents the same fallback.
+  Found in Phase 7 validation.
+- conduct-ts: the `acceptance_specs` completion check no longer false-fails on
+  non-Rails projects. Its artifact globs were Rails-only (`spec/acceptance/**/*`,
+  `test/acceptance/**/*`), so a Node project — whose `writing-system-tests` skill
+  correctly wrote `app.test.js` at the root — failed the gate with "no files
+  matching …". Broadened to common conventions (`test/**/*`, `tests/**/*`,
+  `__tests__/**/*`, root-level `*.test.{js,ts}` / `*.spec.{js,ts}`, plus Rails
+  `spec/requests` and `spec/system`), scoped to avoid recursing `node_modules`.
+  Found in Phase 7 validation.
+- conduct-ts: `--auto` no longer drops into an interactive session. Two paths
+  opened a REPL / recovery menu without checking the mode: the build-stall
+  circuit breaker (`runInteractive`) and the post-retry recovery menu
+  (`onRecovery`, which the CLI wires even in auto). Auto mode is unattended, so
+  on an exhausted-retry failure it now: auto-skips **advisory** steps (so an
+  advisory failure can't block the run) and stops on **gating/structural**
+  failures (e.g. plan, build) for a human to inspect — never prompting. Found in
+  Phase 7 validation.
+- conduct-ts: collaborative steps (`brainstorm`, `stories`, `plan`, `manual_test`,
+  `finish`) now skip permissions in `--auto` mode. They were dispatched with
+  `dangerouslySkipPermissions: false` even when unattended, so the spawned
+  `claude` launched in the user's default permission mode — if that's **plan
+  mode, every write is blocked**, so brainstorm could never save its
+  `.docs/specs/` PRD and the step looped (`no files matching .docs/specs/*.md`)
+  with no human and no ExitPlanMode tool to recover. In auto mode there is no one
+  to approve permissions, so these steps now skip them like autonomous steps do;
+  interactive REPL mode (non-auto) still prompts. Found in Phase 7 validation.
+- conduct-ts: the `worktree` step is now engine-managed (deterministic
+  `WorktreeManager.create` → `git worktree add -b`) instead of dispatching
+  `/conduct worktree` to Claude. The skill path let Claude run a broad
+  self-directed orchestration — skipping `brainstorm` ("Feature defined in
+  spec"), so **no PRD was persisted**, and botching git so the main repo ended
+  up on the feature branch with an empty detached worktree. The engine now
+  creates the worktree (main untouched) and drives `brainstorm` etc. normally,
+  so the PRD chain holds. Worktree-creation failure degrades gracefully (warn +
+  continue in-place) rather than blocking the run. Found in Phase 7 validation.
+- conduct-ts: interactive steps (`brainstorm`, `stories`, `plan`, `manual_test`,
+  `finish`) no longer hang silently in `--auto`. `invokeInteractive` ran every
+  step with `stdio: 'inherit'`, but in print mode (`claude -p`, used for all
+  interactive steps under `--auto`) an inherited TTY stdin never reaches EOF, so
+  the process blocked forever with no error. Print mode now uses
+  `['ignore', 'inherit', 'inherit']` (stdin ignored, output still live), matching
+  the autonomous path; REPL mode (`interactive: true`) still inherits all stdio.
+- conduct-ts: a "session in use" lock now self-recovers. `ClaudeProvider` detects
+  the session-id lock message (`already in use` / `session … in use by another
+  process`) and routes it through the existing stale-session path — the conductor
+  resets to a fresh session id and retries without burning the retry budget,
+  instead of failing the step. The `session_reset` event reason is now generic
+  ("session unavailable (expired or in use)").
 - conduct-ts: fixed `Fatal: __dirname is not defined` crash on startup. `src/conductor/src/index.ts` referenced the CommonJS-only `__dirname` global inside `readHarnessVersion()`, but the bundle is ESM (`tsup` `format: ['esm']`, `shims: false`), so the binary aborted before the CLI could parse args. Derived `__dirname` from `import.meta.url` using the same pattern already in `src/conductor/src/engine/plugin-manifest.ts`.
 - conduct-ts: SHIP-phase steps no longer silently mark a feature complete when pipeline exits mid-implementation. The conductor now stamps each invocation with `state.session_started_at` and the `manual_test`, `retro`, and `finish` completion predicates require fresh, feature-scoped evidence:
   - `manual_test` requires `.docs/manual-test-results.md` with no `| FAIL` rows AND mtime >= `session_started_at` (previously had no completion gate at all — any clean REPL exit marked it `done`)

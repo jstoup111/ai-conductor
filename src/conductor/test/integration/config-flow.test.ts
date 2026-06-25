@@ -74,10 +74,9 @@ describe('Integration: config flow', () => {
     expect(runner.calls).not.toContain('retro');
     expect(runner.calls).not.toContain('architecture_review');
 
-    // All other steps should have run: 14 total - 2 disabled - 1
-    // (complexity, engine-managed via assessComplexity, not dispatched to
-    // runner.run) = 11.
-    expect(runner.calls).toHaveLength(11);
+    // All other steps should have run: 14 total - 2 disabled - 2 engine-managed
+    // (complexity + worktree, not dispatched to runner.run) = 10.
+    expect(runner.calls).toHaveLength(10);
 
     // Verify final state marks disabled steps as 'skipped'
     const result = await readState(statePath);
@@ -127,6 +126,27 @@ describe('Integration: config flow', () => {
 
     // Registry length = ALL_STEPS count + 1 custom
     expect(registry).toHaveLength(ALL_STEPS.length + 1);
+  });
+
+  it('custom step after a reordered step (plan) inserts correctly', () => {
+    // After the DECIDE reorder (architecture now precedes plan), custom steps
+    // that target a built-in by name still resolve — buildStepRegistry inserts
+    // by name, not absolute position.
+    const config: HarnessConfig = {
+      steps: {
+        tech_review: { after: 'plan', skill: 'tech-review', enforcement: 'advisory' },
+      },
+    };
+    const registry = buildStepRegistry(config);
+    const archIdx = registry.findIndex((s) => s.name === 'architecture_review');
+    const planIdx = registry.findIndex((s) => s.name === 'plan');
+    const customIdx = registry.findIndex((s) => s.name === 'tech_review');
+    const specsIdx = registry.findIndex((s) => s.name === 'acceptance_specs');
+
+    expect(archIdx).toBeLessThan(planIdx); // architecture precedes plan (reorder)
+    expect(customIdx).toBe(planIdx + 1); // custom step lands right after plan
+    expect(specsIdx).toBe(customIdx + 1);
+    expect(registry[customIdx].prerequisites).toEqual(['plan']);
   });
 
   it('Conductor with skill override uses project-local skill', async () => {
