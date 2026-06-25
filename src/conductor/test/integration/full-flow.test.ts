@@ -66,11 +66,12 @@ describe('Integration: full conductor flow', () => {
 
     await conductor.run();
 
-    // Every step EXCEPT `complexity` and `worktree` (both engine-managed)
-    // should have been dispatched to runner.run, in ALL_STEPS order.
+    // Every step EXCEPT `complexity`, `worktree`, and `rebase` (all
+    // engine-managed) should have been dispatched to runner.run, in ALL_STEPS
+    // order.
     const allStepNames = ALL_STEPS.map((s) => s.name);
     const dispatchedStepNames = allStepNames.filter(
-      (n) => n !== 'complexity' && n !== 'worktree',
+      (n) => n !== 'complexity' && n !== 'worktree' && n !== 'rebase',
     );
     expect(runner.calls).toEqual(dispatchedStepNames);
     expect(runner.calls).toHaveLength(dispatchedStepNames.length);
@@ -116,10 +117,16 @@ describe('Integration: full conductor flow', () => {
     ];
 
     // Steps that should run: ALL_STEPS minus skipped-for-S-tier minus the
-    // engine-managed `complexity` step.
+    // engine-managed steps (complexity / worktree / rebase).
     const expectedRun = ALL_STEPS
       .map((s) => s.name)
-      .filter((n) => !expectedSkipped.includes(n) && n !== 'complexity' && n !== 'worktree');
+      .filter(
+        (n) =>
+          !expectedSkipped.includes(n) &&
+          n !== 'complexity' &&
+          n !== 'worktree' &&
+          n !== 'rebase',
+      );
 
     expect(runner.calls).toEqual(expectedRun);
     expect(runner.calls).toHaveLength(expectedRun.length);
@@ -216,10 +223,13 @@ describe('Integration: full conductor flow', () => {
 
     await conductor.run();
 
-    // Only remaining steps should have been run
-    const expectedRun = allStepNames.slice(doneCount);
+    // Only remaining steps should have been run. `rebase` is engine-managed
+    // (not dispatched to runner.run); the first `doneCount` steps include the
+    // other engine-managed steps (complexity/worktree), so the remaining
+    // runner-dispatched steps are slice(doneCount) minus `rebase`.
+    const expectedRun = allStepNames.slice(doneCount).filter((n) => n !== 'rebase');
     expect(runner.calls).toEqual(expectedRun);
-    expect(runner.calls).toHaveLength(ALL_STEPS.length - doneCount);
+    expect(runner.calls).toHaveLength(expectedRun.length);
 
     // Verify all steps are now done
     const result = await readState(statePath);

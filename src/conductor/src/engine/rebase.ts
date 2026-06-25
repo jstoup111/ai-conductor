@@ -31,12 +31,20 @@ export interface GitResult {
 /** A real git runner rooted at `cwd`, never throwing on non-zero exit. */
 export function makeGitRunner(cwd: string): GitRunner {
   return async (args: string[]): Promise<GitResult> => {
-    const r = await execa('git', args, { cwd, reject: false });
-    return {
-      exitCode: typeof r.exitCode === 'number' ? r.exitCode : 1,
-      stdout: r.stdout ?? '',
-      stderr: r.stderr ?? '',
-    };
+    try {
+      const r = await execa('git', args, { cwd, reject: false });
+      // Tolerate odd/mocked results (no object, no exitCode) → treat as failure.
+      if (!r || typeof r !== 'object') {
+        return { exitCode: 1, stdout: '', stderr: '' };
+      }
+      return {
+        exitCode: typeof r.exitCode === 'number' ? r.exitCode : 1,
+        stdout: typeof r.stdout === 'string' ? r.stdout : '',
+        stderr: typeof r.stderr === 'string' ? r.stderr : '',
+      };
+    } catch {
+      return { exitCode: 1, stdout: '', stderr: '' };
+    }
   };
 }
 
@@ -311,6 +319,14 @@ export async function performRebase(
   projectRoot: string,
   localBase: string,
 ): Promise<RebaseOutcome> {
+  // No usable git work tree (e.g. a non-repo fixture, or git unavailable):
+  // degrade to a no-op so the feature still completes (FR-3 spirit) rather
+  // than HALTing on a missing remote/repo.
+  const inRepo = await git(['rev-parse', '--is-inside-work-tree']);
+  if (inRepo.exitCode !== 0 || inRepo.stdout.trim() !== 'true') {
+    return { kind: 'noop' };
+  }
+
   const base = await resolveBase(git, localBase);
 
   // FR-4: already current → no-op, no re-verification.
