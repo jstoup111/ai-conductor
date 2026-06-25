@@ -110,6 +110,9 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       verifyArtifacts: true,
       freshContextPerStep: true,
       fromStep: 'acceptance_specs',
+      // Phase 9.1: daemon runs skip the in-loop retro; the emission step writes
+      // the narrative to the brain store instead of the repo's .docs/retros/.
+      daemon: true,
     });
     await conductor.run();
   };
@@ -119,6 +122,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     worktreeBase,
     baseBranch,
     runConductorInWorktree,
+    provider,
     log,
   });
   const runFeature = makeRunFeature(deps);

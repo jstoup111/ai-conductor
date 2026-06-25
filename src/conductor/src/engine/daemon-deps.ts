@@ -2,6 +2,7 @@ import { execa } from 'execa';
 import { mkdir, copyFile, writeFile, readFile, access, stat } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import type { BacklogItem } from './daemon.js';
+import type { LLMProvider } from '../execution/llm-provider.js';
 import type {
   FeatureRunnerDeps,
   FeatureWorktree,
@@ -17,6 +18,8 @@ export interface RealDepsConfig {
   baseBranch: string;
   /** Run the gate loop in a worktree to DONE/HALT (assembled by the CLI). */
   runConductorInWorktree: (worktree: FeatureWorktree, item: BacklogItem) => Promise<void>;
+  /** LLM provider used for the Phase 9.1 `done`-feature retro narrative. */
+  provider: LLMProvider;
   log?: (msg: string) => void;
 }
 
@@ -28,6 +31,13 @@ export function makeFeatureRunnerDeps(cfg: RealDepsConfig): FeatureRunnerDeps {
 
   return {
     log: cfg.log,
+    // The real daemon path always emits to the brain store on completion
+    // (Phase 9.1). Manual `/conduct` runs don't go through makeFeatureRunnerDeps.
+    daemon: true,
+    provider: cfg.provider,
+    // Project key for the brain store = the main checkout's basename (NOT the
+    // worktree path, which is always `<projectRoot>/.worktrees/<slug>`).
+    project: basename(cfg.projectRoot),
 
     createWorktree: async (slug) => {
       const branch = `feat/daemon-${slug}`;

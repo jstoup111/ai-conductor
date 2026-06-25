@@ -1,4 +1,9 @@
+import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 import type { BacklogItem, FeatureOutcome } from './daemon.js';
+import type { LLMProvider } from '../execution/llm-provider.js';
+import { emitBrainSignal, resolveBrainDir } from './brain-store.js';
 
 /**
  * Outcome of running the gate loop inside a feature's worktree, read from the
@@ -36,6 +41,22 @@ export interface FeatureRunnerDeps {
   teardownWorktree: (worktree: FeatureWorktree, keep: boolean) => Promise<void>;
   /** Persist that a slug shipped so discoverBacklog skips it next poll. */
   markProcessed: (slug: string) => Promise<void>;
+  /**
+   * Daemon mode. When true, emit a structured brain signal + narrative to the
+   * cross-project brain store on completion (Phase 9.1). Manual `/conduct` runs
+   * pass false — they keep writing repo `.docs/retros/` and emit nothing.
+   */
+  daemon: boolean;
+  /** LLM provider used to produce the `done`-feature retro narrative. */
+  provider: LLMProvider;
+  /**
+   * Project key for the brain store — the project's basename, derived from the
+   * main checkout (`basename(projectRoot)`), NOT the worktree path. Worktrees
+   * live at `<projectRoot>/.worktrees/<slug>`, so deriving from the worktree
+   * would yield `.worktrees` for every project and collapse cross-project
+   * disambiguation (FR-9).
+   */
+  project: string;
   log?: (msg: string) => void;
 }
 
@@ -59,6 +80,16 @@ export function makeRunFeature(
       await deps.materializeSpecs(worktree, item);
       await deps.runConductor(worktree, item);
       const outcome = await deps.readOutcome(worktree);
+
+      // Phase 9.1: on daemon completion, emit a structured signal + narrative to
+      // the cross-project brain store. Runs AFTER readOutcome and BEFORE any
+      // teardown (the worktree context is still present for the retro). Manual
+      // runs (daemon=false) emit nothing and keep their repo `.docs/retros/`.
+      // Best-effort inside emitBrainSignal — never throws, so it cannot affect
+      // the feature outcome or teardown discipline below.
+      if (deps.daemon) {
+        await emitDaemonSignal(deps, worktree, item, outcome);
+      }
 
       if (outcome.done) {
         await deps.markProcessed(item.slug);
@@ -100,4 +131,65 @@ export function makeRunFeature(
       };
     }
   };
+}
+
+/**
+ * Emit one brain signal for a completed daemon feature. Maps the worktree
+ * outcome to a `FeatureOutcome`, resolves the brain dir from the environment
+ * (`$AI_CONDUCTOR_BRAIN_DIR`), reads the worktree's `.pipeline/events.jsonl`,
+ * derives a fresh runId, and detects whether the retro step was tier-skipped.
+ * Best-effort: `emitBrainSignal` swallows all errors, so this never throws.
+ */
+async function emitDaemonSignal(
+  deps: FeatureRunnerDeps,
+  worktree: FeatureWorktree,
+  item: BacklogItem,
+  outcome: WorktreeOutcome,
+): Promise<void> {
+  const featureOutcome: FeatureOutcome = {
+    slug: item.slug,
+    status: outcome.done ? 'done' : outcome.halted ? 'halted' : 'error',
+    reason: outcome.reason,
+    prUrl: outcome.prUrl,
+    costTokens: outcome.costTokens,
+  };
+  const eventsPath = join(worktree.path, '.pipeline', 'events.jsonl');
+  const tierSkippedRetro = await retroTierSkipped(eventsPath);
+  await emitBrainSignal({
+    brainDir: resolveBrainDir(),
+    eventsPath,
+    outcome: featureOutcome,
+    project: deps.project,
+    feature: item.slug,
+    runId: `${Date.now()}-${randomUUID().slice(0, 8)}`,
+    worktreePath: worktree.path,
+    provider: deps.provider,
+    tierSkippedRetro,
+    log: deps.log,
+  });
+}
+
+
+/**
+ * True if the feature's events show the `retro` step was tier-skipped, so the
+ * emission produces a signal without a narrative (no narrative source to use).
+ * Tolerant of a missing/malformed log (returns false).
+ */
+async function retroTierSkipped(eventsPath: string): Promise<boolean> {
+  try {
+    const raw = await readFile(eventsPath, 'utf-8');
+    for (const line of raw.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      try {
+        const evt = JSON.parse(trimmed) as { type?: string; step?: string };
+        if (evt.type === 'tier_skip' && evt.step === 'retro') return true;
+      } catch {
+        // skip malformed lines
+      }
+    }
+  } catch {
+    // no log / unreadable → not tier-skipped (best-effort)
+  }
+  return false;
 }

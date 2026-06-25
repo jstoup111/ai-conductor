@@ -30,6 +30,14 @@ function deps(
     markProcessed: async () => {
       rec.processed = true;
     },
+    // Non-daemon path: emission never runs, so these are inert but keep the
+    // deps object type-complete.
+    daemon: false,
+    provider: {
+      invoke: async () => ({ success: true, output: '' }),
+      invokeInteractive: async () => {},
+    },
+    project: 'test-project',
   };
 }
 

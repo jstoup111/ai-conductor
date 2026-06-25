@@ -445,6 +445,15 @@ dedicated test coverage (950+ tests). See the feature comparison in
   stories **and** plans, running each in its own worktree (parallel via `--concurrency N`,
   bounded by `--max-items`), and opening a PR on finish. Per-feature failures are isolated;
   the pool keeps going.
+- **Brain memory store** (daemon only): on each feature completion the daemon emits a
+  structured learning signal + a narrative to a cross-project store at
+  `~/.ai-conductor/brain/` (override with `$AI_CONDUCTOR_BRAIN_DIR`). `signals.jsonl` holds
+  one append-only JSON line per feature-run (outcome, kickbacks, halts, retry hotspots,
+  token spend, per-step durations); `narratives/<project>/<feature>-<runId>.md` holds the
+  full retro (`done`) or a short halt note (`halted`). To keep daemon-built repos clean, the
+  in-loop `retro` step is **skipped under the daemon** and its narrative is redirected to the
+  store; manual `/conduct` runs still write `.docs/retros/` unchanged. Emission is
+  best-effort and append-safe — a store failure never breaks a ship.
 - **Custom config steps run**: the conductor drives the resolved registry
   (`buildStepRegistry`), so custom steps from `.ai-conductor/config.yml` are dispatched and
   participate in the loop.
