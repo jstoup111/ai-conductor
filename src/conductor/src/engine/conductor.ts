@@ -222,6 +222,14 @@ export interface ConductorOptions {
    */
   freshContextPerStep?: boolean;
   /**
+   * Daemon mode (Phase 9.1). When true, the in-loop `retro` step is skipped:
+   * the daemon's emission step owns narrative production into the cross-project
+   * brain store instead of writing `.docs/retros/` into the feature repo (ADR-002
+   * Option A). Manual `/conduct` runs leave this false and keep writing repo
+   * retros unchanged. Default false.
+   */
+  daemon?: boolean;
+  /**
    * Maximum auto-retries before a failing step (including artifact miss)
    * escalates to the recovery menu. Matches `max_retries=3` in bin/conduct.
    * Default: 3.
@@ -262,6 +270,7 @@ export class Conductor {
   private onNavigate: (steps: NavigableStep[]) => Promise<StepName | null>;
   private verifyArtifacts: boolean;
   private freshContextPerStep: boolean;
+  private daemon: boolean;
   private sleep: (ms: number) => Promise<void>;
   private onReviewArtifacts: (step: StepName, files: string[]) => Promise<ArtifactReviewResult>;
   private onRecovery?: (
@@ -290,6 +299,7 @@ export class Conductor {
     this.featureDesc = opts.featureDesc;
     this.verifyArtifacts = opts.verifyArtifacts ?? false;
     this.freshContextPerStep = opts.freshContextPerStep ?? false;
+    this.daemon = opts.daemon ?? false;
     // Legacy maxRetries option: inject as defaults.max_retries on the config
     // so per-step resolution still works. Tests often pass this directly.
     if (opts.maxRetries !== undefined) {
@@ -400,6 +410,18 @@ export class Conductor {
         await saveStepStatus(this.stateFilePath, step.name, 'skipped');
         state[step.name] = 'skipped';
         await this.events.emit({ type: 'tier_skip', step: step.name, tier });
+        continue;
+      }
+
+      // Phase 9.1 (ADR-002 Option A): under the daemon, skip the in-loop `retro`
+      // step. The daemon's emission step owns narrative production into the
+      // cross-project brain store, so writing `.docs/retros/` into the feature
+      // repo here would be redundant clutter. Manual runs (daemon=false) are
+      // unaffected and keep writing repo retros.
+      if (this.daemon && step.name === 'retro') {
+        await saveStepStatus(this.stateFilePath, step.name, 'skipped');
+        state[step.name] = 'skipped';
+        await this.events.emit({ type: 'config_skip', step: step.name });
         continue;
       }
 
