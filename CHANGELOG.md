@@ -149,6 +149,13 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   story → plan task.
 
 ### Fixed
+- `block-destructive-git` hook: **ad-hoc `git rebase` onto a base is now blocked**.
+  A mid-build rebase onto an advanced `main` rewrites history under active work and
+  triggers surprise conflicts (it disrupted two feature branches during Phase 9).
+  The only sanctioned rebase is the daemon's finish-time rebase-on-latest (runs via
+  execa, not this hook, with conflict→HALT + CHANGELOG auto-resolve); deliberate
+  branch updates require asking the user. Resolving an in-progress rebase
+  (`--continue`/`--abort`/`--skip`/`--edit-todo`) is still allowed.
 - `block-destructive-git` hook: `git branch -D` is no longer hard-blocked for
   **merged** branches. Squash/rebase-merged branches (GitHub's default) aren't
   ancestors of the default branch, so plain `git branch -d` refuses them and the
