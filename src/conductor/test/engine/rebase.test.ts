@@ -78,6 +78,24 @@ describe('engine/rebase — resolveBase (FR-2/FR-3)', () => {
     expect(base.kind).toBe('local');
     expect(base.branch).toBe('main');
   });
+
+  it('on fetch failure falls back to the caller localBase, not the bare origin default', async () => {
+    // origin's default ('trunk') differs from the local base ('develop'). A
+    // fetch failure must degrade to the known-existing localBase, not 'trunk'
+    // (which may not exist locally → a spurious rebase failure).
+    const { git } = fakeGit([
+      { match: ['remote'], result: { stdout: 'origin\n' } },
+      {
+        match: ['symbolic-ref', 'refs/remotes/origin/HEAD'],
+        result: { stdout: 'refs/remotes/origin/trunk\n' },
+      },
+      { match: ['fetch', 'origin', 'trunk'], result: { exitCode: 1, stderr: 'unreachable' } },
+    ]);
+    const base = await resolveBase(git, 'develop');
+    expect(base.kind).toBe('local');
+    expect(base.ref).toBe('develop');
+    expect(base.branch).toBe('develop');
+  });
 });
 
 describe('engine/rebase — isBranchCurrent (FR-4)', () => {

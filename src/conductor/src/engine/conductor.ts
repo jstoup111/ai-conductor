@@ -59,6 +59,7 @@ import {
   applyRebaseVerdicts,
   emitRebaseEvent,
   writeHalt,
+  originDefaultBranch,
   type RebaseOutcome,
 } from './rebase.js';
 
@@ -1286,11 +1287,8 @@ export class Conductor {
     git: ReturnType<typeof makeGitRunner>,
   ): Promise<string> {
     // origin default (name only) — works even if we later fall back to local.
-    const head = await git(['symbolic-ref', 'refs/remotes/origin/HEAD']);
-    if (head.exitCode === 0) {
-      const m = head.stdout.trim().match(/^refs\/remotes\/origin\/(.+)$/);
-      if (m) return m[1];
-    }
+    const fromOrigin = await originDefaultBranch(git);
+    if (fromOrigin) return fromOrigin;
     const current = (await git(['symbolic-ref', '--short', 'HEAD'])).stdout.trim();
     const branchesOut = await git(['branch', '--format=%(refname:short)']);
     const branches = branchesOut.stdout

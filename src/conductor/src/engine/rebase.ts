@@ -1,6 +1,6 @@
 import { execa } from 'execa';
-import { mkdir, writeFile, readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { mkdir, writeFile, readFile, access } from 'node:fs/promises';
+import { join, isAbsolute } from 'node:path';
 import type { StepName } from '../types/index.js';
 import { writeVerdict, type GateVerdict } from './gate-verdicts.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
@@ -65,6 +65,22 @@ export interface ResolvedBase {
 }
 
 /**
+ * origin's default branch NAME (no `origin/` prefix) from
+ * `git symbolic-ref refs/remotes/origin/HEAD`, e.g. `main` / `trunk`, or null
+ * if there is no origin/HEAD. Shared by `resolveBase` (the rebase ref) and the
+ * conductor's local-base discovery so the parse lives in one place.
+ */
+export async function originDefaultBranch(git: GitRunner): Promise<string | null> {
+  const head = await git(['symbolic-ref', 'refs/remotes/origin/HEAD']);
+  if (head.exitCode === 0 && head.stdout.trim()) {
+    // e.g. "refs/remotes/origin/main" → "main"
+    const m = head.stdout.trim().match(/^refs\/remotes\/origin\/(.+)$/);
+    if (m) return m[1];
+  }
+  return null;
+}
+
+/**
  * Discover the base to rebase onto:
  *   - origin's default branch via `git symbolic-ref refs/remotes/origin/HEAD`,
  *     fetched, → `origin/<default>` (kind 'remote');
@@ -84,13 +100,7 @@ export async function resolveBase(
   }
 
   // Discover the default branch name from origin/HEAD (never hardcode main).
-  const head = await git(['symbolic-ref', 'refs/remotes/origin/HEAD']);
-  let defaultBranch: string | null = null;
-  if (head.exitCode === 0 && head.stdout.trim()) {
-    // e.g. "refs/remotes/origin/main" → "main"
-    const m = head.stdout.trim().match(/^refs\/remotes\/origin\/(.+)$/);
-    if (m) defaultBranch = m[1];
-  }
+  let defaultBranch: string | null = await originDefaultBranch(git);
   if (!defaultBranch) {
     // Fall back to `git remote show origin` ("HEAD branch: <name>").
     const show = await git(['remote', 'show', 'origin']);
@@ -104,11 +114,14 @@ export async function resolveBase(
     return { ref: localBase, kind: 'local', branch: localBase };
   }
 
-  // Fetch the default branch. A failed fetch degrades to the local base
-  // (FR-3): remote-less/unreachable repos must still complete, not HALT.
+  // Fetch the default branch. A failed fetch degrades to the caller's local
+  // base (FR-3): remote-less/unreachable repos must still complete, not HALT.
+  // Use `localBase` (a known-existing local branch) rather than the bare origin
+  // default name, which may not exist locally — consistent with the no-origin
+  // and discovery-failed fallbacks above.
   const fetched = await git(['fetch', 'origin', defaultBranch]);
   if (fetched.exitCode !== 0) {
-    return { ref: defaultBranch, kind: 'local', branch: defaultBranch };
+    return { ref: localBase, kind: 'local', branch: localBase };
   }
   return { ref: `origin/${defaultBranch}`, kind: 'remote', branch: defaultBranch };
 }
@@ -182,6 +195,28 @@ export async function conflictedFiles(git: GitRunner): Promise<string[]> {
     .split('\n')
     .map((l) => l.trim())
     .filter((l) => l.length > 0);
+}
+
+/**
+ * Is a rebase paused mid-flight? True when git's rebase state directory
+ * (`rebase-merge` or `rebase-apply`) exists for this worktree. This catches an
+ * in-progress rebase even when the operator staged the resolution (`git add`)
+ * but never ran `git rebase --continue`, so there are no unmerged paths left.
+ * `--git-path` resolves the correct dir for linked worktrees too.
+ */
+export async function rebaseStateActive(
+  git: GitRunner,
+  projectRoot: string,
+): Promise<boolean> {
+  for (const name of ['rebase-merge', 'rebase-apply']) {
+    const r = await git(['rev-parse', '--git-path', name]);
+    if (r.exitCode !== 0) continue;
+    const p = r.stdout.trim();
+    if (!p) continue;
+    const abs = isAbsolute(p) ? p : join(projectRoot, p);
+    if (await access(abs).then(() => true, () => false)) return true;
+  }
+  return false;
 }
 
 // ── CHANGELOG auto-resolution (FR-7) ─────────────────────────────────────────
@@ -328,18 +363,19 @@ export async function performRebase(
   }
 
   // FR-9 (negative path): a rebase already in progress — the operator cleared
-  // .pipeline/HALT but did not finish resolving — leaves unmerged paths with
-  // HEAD detached at the base. That state would otherwise look "current" to
-  // isBranchCurrent (HEAD..base == 0) and ship a half-rebased tree with live
-  // conflict markers. Detect it BEFORE the current-branch check and re-park.
+  // .pipeline/HALT but did not finish — leaves HEAD detached at the base. That
+  // state would otherwise look "current" to isBranchCurrent (HEAD..base == 0)
+  // and ship a half-/un-rebased tree. Detect it BEFORE the current-branch check
+  // and re-park. We check unmerged paths AND git's rebase state dir, so a
+  // staged-but-not-`--continue`d rebase (no unmerged paths) is still caught.
   const preexistingConflicts = await conflictedFiles(git);
-  if (preexistingConflicts.length > 0) {
+  if (preexistingConflicts.length > 0 || (await rebaseStateActive(git, projectRoot))) {
     return {
       kind: 'conflict_halt',
       conflicts: preexistingConflicts,
       reason:
-        'rebase already in progress with unresolved conflicts — resolve them and run ' +
-        '`git rebase --continue`, then clear .pipeline/HALT before re-queueing',
+        'rebase already in progress — finish resolving and run `git rebase --continue`, ' +
+        'then clear .pipeline/HALT before re-queueing',
     };
   }
 

@@ -513,4 +513,56 @@ describe('integration/rebase-loop', () => {
     expect(ran).not.toContain('finish');
     expect(await rebaseInProgress()).toBe(true);
   });
+
+  it('re-parks when the rebase is paused but staged-without-continue (no unmerged paths) (FR-9 hardening)', async () => {
+    // The operator staged the resolution (`git add`) but never ran
+    // `git rebase --continue`: there are NO unmerged paths, yet the rebase is
+    // still in progress (rebase-merge dir present). The unmerged-paths check
+    // alone would miss this; the rebase-state-dir check must still re-park.
+    await execFileAsync('git', ['init', '-b', BASE, dir]);
+    await git('config', 'user.email', 'test@example.com');
+    await git('config', 'user.name', 'Test');
+    await git('config', 'commit.gpgsign', 'false');
+    await mkdir(join(dir, 'src'), { recursive: true });
+    await writeFile(join(dir, 'src/feature.ts'), 'export const v = 0;\n');
+    await git('add', '.');
+    await git('commit', '-m', 'initial feature file');
+    await git('checkout', '-b', 'feature/foo');
+    await writeFile(join(dir, 'src/feature.ts'), 'export const v = 1; // branch\n');
+    await git('add', '.');
+    await git('commit', '-m', 'branch edits feature');
+    await git('checkout', BASE);
+    await writeFile(join(dir, 'src/feature.ts'), 'export const v = 2; // base\n');
+    await git('add', '.');
+    await git('commit', '-m', 'base edits feature');
+    await git('checkout', 'feature/foo');
+    await git('rebase', BASE).catch(() => undefined);
+    // Stage a resolution WITHOUT continuing → clears unmerged status, leaves the
+    // rebase-merge dir in place.
+    await writeFile(join(dir, 'src/feature.ts'), 'export const v = 3; // resolved\n');
+    await git('add', 'src/feature.ts');
+    expect(await rebaseInProgress()).toBe(true);
+    // Sanity: no unmerged paths remain (the unmerged-paths guard would miss this).
+    const unmerged = await git('diff', '--name-only', '--diff-filter=U');
+    expect(unmerged).toBe('');
+
+    await writeState(statePath, { ...FRONT_DONE });
+    const ran: string[] = [];
+    let completed = false;
+    let halted = false;
+    events.on('feature_complete', () => {
+      completed = true;
+    });
+    events.on('loop_halt', () => {
+      halted = true;
+    });
+
+    await conductorWith(passthroughRunner(ran)).run();
+
+    await expect(access(join(dir, '.pipeline/HALT'))).resolves.toBeUndefined();
+    await expect(access(join(dir, '.pipeline/DONE'))).rejects.toThrow();
+    expect(completed).toBe(false);
+    expect(halted).toBe(true);
+    expect(ran).not.toContain('finish');
+  });
 });
