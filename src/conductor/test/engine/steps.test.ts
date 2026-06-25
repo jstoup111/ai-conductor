@@ -318,6 +318,34 @@ describe('engine/steps', () => {
       expect(lintStep.skippableForTiers).toEqual([]);
       expect(lintStep.isCheckpoint).toBe(false);
       expect(lintStep.skillName).toBe('custom-lint');
+      expect(lintStep.loopGate).toBe(true); // inherits build's loop membership
+    });
+
+    it('custom step joins the loop iff its `after` target is a loop step', () => {
+      const registry = buildStepRegistry({
+        steps: {
+          'in-loop': { after: 'manual_test', skill: 's1' }, // SHIP loop step
+          'front-half': { after: 'memory', skill: 's2' }, // not a loop step
+        },
+      });
+      const inLoop = registry.find((s) => s.name === ('in-loop' as StepName));
+      const frontHalf = registry.find((s) => s.name === ('front-half' as StepName));
+      expect(inLoop?.loopGate).toBe(true);
+      expect(frontHalf?.loopGate).toBeFalsy();
+    });
+
+    it('explicit gate / kickback_target override inheritance', () => {
+      const registry = buildStepRegistry({
+        steps: {
+          'opt-out': { after: 'build', skill: 's1', gate: false }, // in loop region but opted out
+          'opt-in': { after: 'memory', skill: 's2', gate: true }, // front half but forced into loop
+          're-openable': { after: 'plan', skill: 's3', kickback_target: true },
+        },
+      });
+      const r = (n: string) => registry.find((s) => s.name === (n as StepName));
+      expect(r('opt-out')?.loopGate).toBe(false);
+      expect(r('opt-in')?.loopGate).toBe(true);
+      expect(r('re-openable')?.kickbackTarget).toBe(true);
     });
 
     it('preserves config file order for multiple custom steps at same position', () => {

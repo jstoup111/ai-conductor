@@ -39,6 +39,18 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 ## [Unreleased]
 
 ### Added
+- conduct-ts: the gate loop's topology is now **derived from the step registry**
+  instead of hardcoded, so custom config steps participate (Phase 8). New
+  declarative `StepDefinition` flags `loopGate` (in the gate-driven tail) and
+  `kickbackTarget` (re-openable upstream gate) replace the hardcoded
+  `LOOP_GATE_STEPS`/`KICKBACK_TARGETS`/`regionStart` — built-ins set them
+  (build/manual_test/retro/finish = loopGate; stories/plan = kickbackTarget) so
+  behavior is unchanged. A custom `.ai-conductor/config.yml` step **inherits its
+  `after` target's loop membership** — one inserted among the loop steps
+  (build…finish) joins the loop automatically; `gate: true|false` forces/opts out,
+  and `kickback_target: true` marks it re-openable. The conductor derives the
+  front/loop boundary from the first loop gate, so reordering and custom steps
+  both flow through.
 - conduct-ts daemon: `--continuous` mode — instead of draining the backlog once
   and exiting, the daemon idle-polls for newly-eligible features (the poll loop
   already existed; this wires it through). Gated by hard ceilings, all new flags:
