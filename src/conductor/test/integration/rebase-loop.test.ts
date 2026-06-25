@@ -371,4 +371,92 @@ describe('integration/rebase-loop', () => {
     // its new commit.
     expect(await branchContains(baseSha)).toBe(true);
   });
+
+  it('resumes a resolved+continued+HALT-cleared worktree to a clean PR (FR-9)', async () => {
+    // Simulate the operator's post-HALT cleanup: the branch is ALREADY rebased
+    // onto the advanced base (conflict resolved + `git rebase --continue`), no
+    // rebase is in progress, and `.pipeline/HALT` was removed. Re-running the
+    // daemon must find the rebase a no-op and converge to finish.
+    await initRepoOnFeatureBranch({
+      path: 'src/feature.ts',
+      content: 'export const foo = 1;\n',
+    });
+    const baseSha = await advanceBaseNonConflicting();
+    // Operator already completed the rebase by hand.
+    await git('rebase', BASE);
+    expect(await branchContains(baseSha)).toBe(true);
+    expect(await rebaseInProgress()).toBe(false);
+
+    await writeState(statePath, { ...FRONT_DONE });
+    const ran: string[] = [];
+    let completed = false;
+    events.on('feature_complete', () => {
+      completed = true;
+    });
+
+    await conductorWith(passthroughRunner(ran)).run();
+
+    expect(completed).toBe(true);
+    expect(ran).toContain('finish');
+    await expect(access(join(dir, '.pipeline/DONE'))).resolves.toBeUndefined();
+    await expect(access(join(dir, '.pipeline/HALT'))).rejects.toThrow();
+  });
+
+  it('a stuck post-rebase build HALTs via the existing path, not a rebase special-case (FR-6)', async () => {
+    // A code-changing rebase kicks back to build; build NEVER satisfies (the
+    // runner refuses to write task-status.json), so the loop must HALT through
+    // the EXISTING build-failure path — the rebase itself succeeded (it is NOT
+    // the thing that HALTs) and finish must never run.
+    await initRepoOnFeatureBranch({
+      path: 'src/feature.ts',
+      content: 'export const foo = 1;\n',
+    });
+    await git('checkout', BASE);
+    await mkdir(join(dir, 'src'), { recursive: true });
+    await writeFile(join(dir, 'src/sibling.ts'), 'export const sib = 2;\n');
+    await git('add', '.');
+    await git('commit', '-m', 'sibling code merged to base');
+    await git('checkout', 'feature/foo');
+
+    await writeState(statePath, { ...FRONT_DONE });
+    const ran: string[] = [];
+    const kicks: Array<{ from: string; to: string }> = [];
+    let buildRuns = 0;
+    const runner: StepRunner = {
+      run: async (step) => {
+        ran.push(step);
+        if (step === 'build') {
+          buildRuns++;
+          // First build satisfies (so the loop reaches rebase); after the
+          // rebase kickback, build NEVER satisfies → stuck → existing HALT.
+          if (buildRuns === 1) return satisfy('build');
+          // Remove the prior task-status so the completion gate fails.
+          await rm(join(dir, '.pipeline/task-status.json'), { force: true });
+          return { success: true };
+        }
+        return satisfy(step);
+      },
+    };
+    let completed = false;
+    let halted = false;
+    events.on('feature_complete', () => {
+      completed = true;
+    });
+    events.on('loop_halt', () => {
+      halted = true;
+    });
+    events.on('kickback', (e) => {
+      if (e.type === 'kickback') kicks.push({ from: e.from, to: e.to });
+    });
+
+    await conductorWith(runner).run();
+
+    expect(completed).toBe(false);
+    expect(halted).toBe(true);
+    // The rebase ran and kicked back to build (the rebase succeeded) — the HALT
+    // came from the stuck build, and finish never ran.
+    expect(kicks).toContainEqual({ from: 'rebase', to: 'build' });
+    expect(ran).not.toContain('finish');
+    await expect(access(join(dir, '.pipeline/HALT'))).resolves.toBeUndefined();
+  });
 });
