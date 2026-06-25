@@ -152,12 +152,39 @@ and opening a PR on finish:
   a logged reason — the daemon pre-seeds the front half, so eligibility is the only place
   specs are vetted before autonomous build.
 - `engine/daemon-runner.ts` — per-feature discipline: done → mark + remove worktree + PR;
-  halted/error → keep the worktree for the human.
+  halted/error → keep the worktree for the human. On completion it also emits a brain
+  signal (see below).
 - `engine/daemon-deps.ts` — concrete git/fs primitives (worktree add/remove, spec
   materialization into the worktree, `.pipeline/DONE`/`HALT` outcome read).
 
 The daemon consumes specs — it never authors them. `--continuous` idle-polls for new
 eligible features, bounded by the ceilings.
+
+### Brain memory store (Phase 9.1)
+
+On **daemon** feature completion (`done`/`halted`), the runner emits a structured learning
+signal + a narrative to a cross-project store at `~/.ai-conductor/brain/` (override with
+`$AI_CONDUCTOR_BRAIN_DIR`; the dir is auto-created). The store lives outside any repo so
+daemon-built repos stay free of retro clutter. `engine/brain-store.ts` owns it:
+
+- `signals.jsonl` — append-only, **one JSON line per feature-run**. Each line is a
+  `BrainSignal`:
+  `{schemaVersion, ts, project, feature, runId, outcome, kickbacks[], halts[],
+  retryHotspots[], tokens{input,output,cacheRead,cacheCreation}, durationByStep{},
+  narrativeRef?}`. Empty signal categories serialize as `[]`; `narrativeRef` is optional
+  (absent when a complexity tier skipped the retro). Fields are assembled from the
+  feature's `.pipeline/events.jsonl` (reusing `report-renderer` aggregation) + the
+  `FeatureOutcome` — no new loop instrumentation.
+- `narratives/<project>/<feature>-<runId>.md` — the narrative, keyed by `runId` so re-runs
+  never overwrite a prior one. `done` → a full retro via the LLM provider; `halted` → a
+  short halt note (gate + reason, no LLM call).
+
+**Daemon retro redirect (ADR-002 Option A):** under the daemon the in-loop `retro` step is
+**skipped** — the emission step owns narrative production into the brain store instead of
+writing `.docs/retros/` into the feature repo. Manual `/conduct` runs are unaffected and
+still write repo retros. Emission is **best-effort**: every store error is logged and
+swallowed, and the append is a single atomic `O_APPEND` write so concurrent worker
+emissions never tear the log. A write failure can never break a ship.
 
 ### Events
 

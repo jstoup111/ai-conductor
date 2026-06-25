@@ -39,6 +39,23 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 ## [Unreleased]
 
 ### Added
+- conduct-ts daemon: **structured retro signal + brain memory store** (Phase 9.1).
+  On daemon feature completion (`done`/`halted`) the runner emits a structured
+  `BrainSignal` + a narrative to a cross-project store at `~/.ai-conductor/brain/`
+  (override `$AI_CONDUCTOR_BRAIN_DIR`, dir auto-created). `signals.jsonl` is
+  append-only, one atomic (`O_APPEND`, concurrency-safe) JSON line per
+  feature-run: `{schemaVersion, ts, project, feature, runId, outcome, kickbacks[],
+  halts[], retryHotspots[], tokens{...}, durationByStep{}, narrativeRef?}` —
+  assembled from the feature's `events.jsonl` (reusing `report-renderer`
+  aggregation) + `FeatureOutcome`, with empty categories as `[]` and an optional
+  `narrativeRef`. Narratives live in `narratives/<project>/<feature>-<runId>.md`,
+  keyed by `runId` so re-runs never overwrite (`done` → full retro via the LLM
+  provider; `halted` → short halt note, no LLM call). Per ADR-002 Option A the
+  in-loop `retro` step is **skipped under the daemon** (the emission step owns the
+  narrative, keeping repos free of `.docs/retros/` clutter); manual `/conduct`
+  runs are unchanged. Emission is **best-effort** — any store error is logged and
+  swallowed, so a learning-signal write can never break a ship. A types-only
+  `BrainStoreReader` interface is exported for the future brain (Phase 9.3).
 - conduct-ts: the gate loop's topology is now **derived from the step registry**
   instead of hardcoded, so custom config steps participate (Phase 8). New
   declarative `StepDefinition` flags `loopGate` (in the gate-driven tail) and
