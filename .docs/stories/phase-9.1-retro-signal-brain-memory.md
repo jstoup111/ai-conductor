@@ -79,6 +79,8 @@ machine-aggregable.
 #### Negative Paths
 - Given a feature with **no** kickbacks/halts/retries, when the signal is written, then those
   fields are present as **empty arrays** (not missing/null) so readers can aggregate uniformly.
+- Given a feature with **no narrative** (retro step skipped — see FR-5), when the signal is
+  written, then `narrativeRef` is **optional** (absent/null) and the record still validates.
 - Given any record, when parsed, then every line in the log independently parses as JSON (no
   partial/merged lines).
 
@@ -135,10 +137,15 @@ As the future brain, I want the full retro narrative for a completed feature sto
   project repo's `.docs/retros/` (assert the repo path is absent/unchanged).
 - Given the narrative file already exists from a prior run, when emitting again, then the prior
   narrative is **not** silently overwritten (versioned per `runId` — see FR-8).
+- Given a daemon feature whose complexity tier **skipped the retro step** (e.g. Small tier, per
+  ST-005), when emission runs, then the signal is **still** emitted with the structured fields and
+  `narrativeRef` is **absent/null** — no narrative is fabricated, and emission never depends on a
+  retro having run. (Resolves the FR-5/6 × ST-005 gap.)
 
 ### Done When
 - [ ] Done → narrative in store narratives dir; `narrativeRef` resolves to it; repo `.docs/retros/` untouched.
-- [ ] Test: done feature → store narrative present, repo retro absent.
+- [ ] Retro-skipped done feature → signal emitted, `narrativeRef` absent, no error.
+- [ ] Test: done feature → store narrative present, repo retro absent; tier-skipped → signal, no narrativeRef.
 
 ---
 
