@@ -39,6 +39,16 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 ## [Unreleased]
 
 ### Added
+- conduct-ts daemon: `--continuous` mode — instead of draining the backlog once
+  and exiting, the daemon idle-polls for newly-eligible features (the poll loop
+  already existed; this wires it through). Gated by hard ceilings, all new flags:
+  `--max-cost <tokens>` (global output-token ceiling), `--max-runtime <seconds>`
+  (wall-clock), `--idle-poll <seconds>` (poll interval), `--max-idle-polls <n>`
+  (stop after N empty polls). Ceilings stop *starting* new features; in-flight
+  work always drains. `--continuous` with no ceiling logs an unbounded-run
+  warning. Closes the Phase 7 "then enable continuous" deliverable. The
+  wall-clock ceiling (`time_ceiling` stop reason) is new in `runDaemon`;
+  `max_items` and `cost_ceiling` already existed.
 - conduct-ts daemon: per-step loop progress is now printed to the console. The
   daemon previously wired a **no-op event renderer**, so it went silent between
   `[daemon] ▶ start <slug>` and `✓ shipped` while the whole gate loop ran live in

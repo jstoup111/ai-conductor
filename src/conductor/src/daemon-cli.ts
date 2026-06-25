@@ -22,6 +22,16 @@ export interface DaemonModeOptions {
   maxItems?: number;
   /** Branch the worktrees fork from. */
   baseBranch?: string;
+  /** Continuous: idle-poll for new features instead of draining once. */
+  continuous?: boolean;
+  /** Global output-token ceiling across all features. */
+  maxCostTokens?: number;
+  /** Wall-clock ceiling in seconds. */
+  maxRuntimeSeconds?: number;
+  /** Idle poll interval in seconds (continuous mode). */
+  idlePollSeconds?: number;
+  /** Stop after this many consecutive empty polls (continuous mode). */
+  maxIdlePolls?: number;
 }
 
 // Front-half steps the daemon treats as already done — the human authored the
@@ -113,14 +123,40 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   });
   const runFeature = makeRunFeature(deps);
 
-  log(`scanning backlog (concurrency ${opts.concurrency})…`);
+  const continuous = opts.continuous ?? false;
+  // Continuous with no ceiling at all runs unbounded — surface that loudly
+  // rather than silently looping forever (Phase 7 "hard ceilings" intent).
+  const hasCeiling =
+    opts.maxItems != null ||
+    opts.maxCostTokens != null ||
+    opts.maxRuntimeSeconds != null ||
+    opts.maxIdlePolls != null;
+  if (continuous && !hasCeiling) {
+    log(
+      'WARNING: --continuous with no ceiling (--max-items/--max-cost/--max-runtime/--max-idle-polls) runs unbounded; Ctrl-C to stop.',
+    );
+  }
+
+  log(
+    `scanning backlog (concurrency ${opts.concurrency}${continuous ? ', continuous' : ''})…`,
+  );
   const result = await runDaemon(
     {
       discoverBacklog: () => discoverBacklog(projectRoot, (slug) => isProcessed(projectRoot, slug)),
       runFeature,
       log,
     },
-    { concurrency: opts.concurrency, maxItems: opts.maxItems, once: true },
+    {
+      concurrency: opts.concurrency,
+      maxItems: opts.maxItems,
+      maxTotalCostTokens: opts.maxCostTokens,
+      maxRuntimeMs:
+        opts.maxRuntimeSeconds != null ? opts.maxRuntimeSeconds * 1000 : undefined,
+      once: !continuous,
+      idlePollMs:
+        opts.idlePollSeconds != null ? opts.idlePollSeconds * 1000 : undefined,
+      maxIdlePolls: opts.maxIdlePolls,
+    },
   );
 
   subscriber.stop();

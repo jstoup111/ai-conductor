@@ -47,6 +47,19 @@ export interface CLIOptions {
   concurrency: number;
   /** Stop daemon after this many features (default: drain the backlog once). */
   maxItems?: number;
+  /**
+   * Continuous mode: instead of draining the backlog once and exiting, keep
+   * idle-polling for new eligible features. Honors the ceilings below.
+   */
+  continuous: boolean;
+  /** Global output-token ceiling across all features (daemon stop). */
+  maxCostTokens?: number;
+  /** Wall-clock ceiling in seconds (daemon stop). */
+  maxRuntimeSeconds?: number;
+  /** Idle poll interval in seconds when the backlog is empty (continuous mode). */
+  idlePollSeconds?: number;
+  /** Stop after this many consecutive empty polls (continuous mode). */
+  maxIdlePolls?: number;
 }
 
 export function createProgram(): Command {
@@ -73,7 +86,12 @@ export function createProgram(): Command {
     .option('--report', 'Print run summary from .pipeline/events.jsonl (step durations, retry hotspots, token spend) and exit')
     .option('--daemon', 'Daemon mode: drain the backlog of features with existing stories+plan, each in its own worktree, opening a PR on finish')
     .option('--concurrency <n>', 'Parallel workers in daemon mode', '1')
-    .option('--max-items <n>', 'Stop daemon after this many features (default: drain backlog once)');
+    .option('--max-items <n>', 'Stop daemon after this many features (default: drain backlog once)')
+    .option('--continuous', 'Daemon: keep idle-polling for new features instead of draining once and exiting (honors --max-* ceilings)')
+    .option('--max-cost <tokens>', 'Daemon ceiling: stop starting features after this many total output tokens')
+    .option('--max-runtime <seconds>', 'Daemon ceiling: stop starting features after this much wall-clock time')
+    .option('--idle-poll <seconds>', 'Continuous mode: seconds to wait between polls when the backlog is empty', '5')
+    .option('--max-idle-polls <n>', 'Continuous mode: stop after this many consecutive empty polls');
   return program;
 }
 
@@ -109,6 +127,11 @@ export function parseArgs(argv: string[]): CLIOptions {
     daemon: opts.daemon ?? false,
     concurrency: parseInt(opts.concurrency ?? '1', 10),
     maxItems: opts.maxItems != null ? parseInt(opts.maxItems, 10) : undefined,
+    continuous: opts.continuous ?? false,
+    maxCostTokens: opts.maxCost != null ? parseInt(opts.maxCost, 10) : undefined,
+    maxRuntimeSeconds: opts.maxRuntime != null ? parseInt(opts.maxRuntime, 10) : undefined,
+    idlePollSeconds: opts.idlePoll != null ? parseInt(opts.idlePoll, 10) : undefined,
+    maxIdlePolls: opts.maxIdlePolls != null ? parseInt(opts.maxIdlePolls, 10) : undefined,
   };
 
   const hasStateFlag =
