@@ -76,8 +76,8 @@ loop never engages).
 
 ### Gate-driven loop
 
-Once `build` engages, `advanceTail()` drives `build → manual_test → retro → finish` by
-**gate verdicts** instead of a fixed order:
+Once `build` engages, `advanceTail()` drives `build → manual_test → retro → rebase → finish`
+by **gate verdicts** instead of a fixed order:
 
 - **Verdicts** — after a gate step runs, its objective verdict is recomputed from on-disk
   evidence (`engine/gate-verdicts.ts`, wrapping `checkGateCompletion`) and persisted to
@@ -99,6 +99,42 @@ Once `build` engages, `advanceTail()` drives `build → manual_test → retro �
 The new gate-grade predicates (`plan` = per-path-type story coverage; `stories` = happy +
 negative path, no DRAFT) live in `GATE_ONLY_PREDICATES` (`engine/artifacts.ts`), separate
 from the linear conductor's completion predicates. See `.docs/decisions/gate-audit-*.md`.
+
+### Rebase-on-latest (before finish)
+
+The `rebase` step is an **engine-native** loopGate (like `complexity` — no Claude dispatch;
+the engine runs it in `Conductor.runRebaseStep`, helpers in `engine/rebase.ts`). It runs
+after `build`+`manual_test` are satisfied and before `finish`, so a PR is never built on a
+stale base:
+
+- **Base discovery** — origin's default branch via `git symbolic-ref refs/remotes/origin/HEAD`
+  (fetched), falling back to the **local** base when there's no origin or the fetch fails.
+  No literal `main`/`master`.
+- **Verdict = branch current with base** — *satisfied ⇔ zero commits in `HEAD..base`*. A
+  no-op rebase is the satisfied state, so re-entry after a kickback finds the branch current
+  and proceeds to `finish` without re-invalidating (no false `MAX_GATE_SELECTIONS` HALT). A
+  genuinely stale branch is never satisfied.
+- **Invalidation (code/test only)** — a clean rebase that changed **code/test paths** writes
+  `{satisfied:false, kickback:{from:'rebase'}}` for `build` (+`manual_test` if it ran) via the
+  existing kickback machinery → the selector routes back to `build`. A **docs-only /
+  CHANGELOG-only** change does **not** invalidate.
+- **CHANGELOG auto-resolve** — when `CHANGELOG.md` is the **sole** conflict and it's inside
+  `## [Unreleased]`, the resolver takes the base's merged entries and re-appends this
+  feature's `[Unreleased]` lines (captured `base..HEAD` pre-rebase) exactly once, then
+  `git rebase --continue`s. CHANGELOG conflicting alongside any other file, or outside
+  `[Unreleased]`, takes the HALT path instead.
+- **Conflict → HALT (paused)** — any other / mixed conflict writes `.pipeline/HALT` listing
+  the conflicted files and the resume steps, leaves the rebase **paused** (no `--abort`,
+  conflict markers intact), does **not** mark the feature processed, and opens **no PR**.
+- **Events** — each outcome emits a typed event: `rebase_noop`, `rebase_changed`,
+  `rebase_changelog_resolved`, `rebase_conflict_halt` (best-effort; emission failure never
+  affects the rebase result).
+
+**Resume a parked rebase:** resolve the conflict in the listed file(s) → `git rebase --continue`
+→ `rm .pipeline/HALT` → re-queue. The daemon reuses the existing worktree, finds the rebase a
+no-op (branch now current), and converges to the PR. If you clear HALT without finishing the
+rebase, the daemon detects the still-stale/in-progress state and re-parks rather than shipping
+a half-rebased branch.
 
 ### Daemon mode
 
