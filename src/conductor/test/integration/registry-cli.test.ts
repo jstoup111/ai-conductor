@@ -338,6 +338,33 @@ describe('conduct create — scaffold + register (FR-6)', () => {
     expect(records[0].remote).toBe(remoteUrl);
   });
 
+  it('--remote with embedded credentials → token NEVER reaches the registry (FR-11)', async () => {
+    const tokenUrl = 'https://user:ghp_secretcreatetoken@github.com/o/leaky.git';
+    const res = await runCli(
+      ['create', 'leaky', '--remote', tokenUrl],
+      { cwd: sandbox, registry },
+    );
+    expect(res.timedOut).toBe(false);
+    expect(res.code).toBe(0);
+
+    const records = await readRegistryFile(registry);
+    expect(records).toHaveLength(1);
+    const remote = String(records[0].remote ?? '');
+    // Redacted on disk: host/path kept, NO token.
+    expect(remote).toContain('github.com');
+    expect(remote).toContain('/o/leaky.git');
+    expect(remote).not.toContain('ghp_secretcreatetoken');
+    // The WHOLE registry file contains no token byte.
+    const rawFile = await readFile(registry, 'utf-8');
+    expect(rawFile).not.toContain('ghp_secretcreatetoken');
+
+    // But git still has the REAL credential-bearing URL (git needs it).
+    const originUrl = await execFileAsync('git', [
+      '-C', join(sandbox, 'leaky'), 'remote', 'get-url', 'origin',
+    ]).then((r) => r.stdout.trim()).catch(() => '');
+    expect(originUrl).toBe(tokenUrl);
+  });
+
   it('omitting --remote registers with remote absent, no network', async () => {
     const res = await runCli(['create', 'no-remote'], {
       cwd: sandbox,

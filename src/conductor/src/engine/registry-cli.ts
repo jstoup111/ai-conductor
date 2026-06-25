@@ -154,7 +154,10 @@ export async function runCreate(
     path: target,
     status: 'created',
     registeredAt: new Date().toISOString(),
-    ...(opts.remote ? { remote: opts.remote } : {}),
+    // Redact credentials before they reach disk (FR-11). The raw URL is still
+    // used for `git remote add` above (git needs the real credential); only the
+    // on-disk registry record must be credential-free.
+    ...(opts.remote ? { remote: redactRemote(opts.remote) } : {}),
   };
 
   try {
