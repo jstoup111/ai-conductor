@@ -457,6 +457,16 @@ dedicated test coverage (950+ tests). See the feature comparison in
 - **Custom config steps run**: the conductor drives the resolved registry
   (`buildStepRegistry`), so custom steps from `.ai-conductor/config.yml` are dispatched and
   participate in the loop.
+- **Project registry + creation** (`conduct register` / `conduct create`): a single-writer
+  registry module owns `~/.ai-conductor/registry.json` (override with `$AI_CONDUCTOR_REGISTRY`)
+  with atomic temp+rename writes, realpath-canonicalized dedup, credential redaction of remote
+  URLs, and status provenance (a `created` project is never downgraded to `registered`).
+  `conduct register [path]` records an existing git repo (name=basename, absolute path, redacted
+  origin remote); `conduct create <name> [--remote <url>]` scaffolds a fresh project (git init +
+  skeleton CLAUDE.md referencing HARNESS.md + `.gitignore` ignoring `.pipeline/`, `.daemon/`,
+  `.worktrees/`; `--remote` is add-only, no push) and refuses to clobber a non-empty target.
+  Both are **non-interactive** (run to completion and exit). `/bootstrap` auto-registers the
+  project via `conduct register .` after onboarding (idempotent).
 - **Pinned Node**: `conduct-ts` reads `src/conductor/.tool-versions` and exports
   `ASDF_NODEJS_VERSION` so the bundle runs on its required Node even when your shell's
   default is older.
