@@ -62,7 +62,11 @@ export interface CLIOptions {
   maxIdlePolls?: number;
 }
 
-export function createProgram(): Command {
+// Base program: the bare-positional pipeline invocation (`conduct [feature]`)
+// plus all its flags. parseArgs uses THIS so a bare feature description is never
+// mistaken for an unknown subcommand. createProgram() layers the registry
+// subcommands on top for the discoverable CLI surface / --help.
+function createBaseProgram(): Command {
   const program = new Command();
   program
     .name('conduct')
@@ -95,8 +99,27 @@ export function createProgram(): Command {
   return program;
 }
 
+export function createProgram(): Command {
+  const program = createBaseProgram();
+
+  // Registry subcommands (Phase 9.2). These are NON-INTERACTIVE: they run to
+  // completion and exit, rather than entering the interactive pipeline. The
+  // actual dispatch happens in index.ts (detectRegistryCommand) before the
+  // pipeline boots; these declarations exist so `--help` lists them and so the
+  // CLI surface is discoverable via createProgram().commands.
+  program
+    .command('register [path]')
+    .description('Register an existing git repository in the project registry (~/.ai-conductor/registry.json)');
+  program
+    .command('create <name>')
+    .description('Scaffold a new project (git init + skeleton CLAUDE.md + .gitignore) and register it')
+    .option('--remote <url>', 'Add an origin remote (add-only, no push)');
+
+  return program;
+}
+
 export function parseArgs(argv: string[]): CLIOptions {
-  const program = createProgram();
+  const program = createBaseProgram();
   program.exitOverride();
   program.parse(argv);
 
