@@ -120,6 +120,20 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   story → plan task.
 
 ### Fixed
+- `block-destructive-git` hook: `git branch -D` is no longer hard-blocked for
+  **merged** branches. Squash/rebase-merged branches (GitHub's default) aren't
+  ancestors of the default branch, so plain `git branch -d` refuses them and the
+  operator was forced to use `-D` — which the hook blocked outright, stranding
+  routine post-merge cleanup. The hook now allows `-D` only when every named
+  branch is provably merged (an ancestor of the default branch, or has a merged
+  PR via `gh`); genuinely unmerged force-deletes are still blocked.
+- `block-destructive-git` hook: detection now ignores blocked patterns that
+  appear **inside quoted arguments** (commit messages, `echo`, comments). The
+  hook previously grepped the raw command, so a command that merely *mentioned* a
+  pattern (e.g. `git commit -m "...git reset --hard..."`) was wrongly blocked. It
+  now matches against the command with quoted spans stripped, so only the real,
+  unquoted operation triggers a block. (Trade-off: a destructive command fully
+  wrapped in quotes, e.g. `bash -c "git reset --hard"`, is not caught.)
 - conduct-ts: test suites no longer fail to load on the dev machine's default
   Node. The conductor needs Node ≥20.5 (execa imports `addAbortListener`), but
   only `src/conductor/.tool-versions` pinned Node 20 — running `npm test` from
