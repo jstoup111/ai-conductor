@@ -1,6 +1,7 @@
 import { readdir, readFile, access } from 'node:fs/promises';
 import { basename, isAbsolute, join, resolve } from 'node:path';
 import type { BacklogItem } from './daemon.js';
+import { planHasDependencyTree } from './artifacts.js';
 
 /**
  * Discover daemon-eligible features (Phase 6). The daemon consumes existing,
@@ -15,6 +16,7 @@ import type { BacklogItem } from './daemon.js';
 export async function discoverBacklog(
   projectRoot: string,
   isProcessed: (slug: string) => Promise<boolean> = async () => false,
+  log: (msg: string) => void = () => {},
 ): Promise<BacklogItem[]> {
   const plansDir = join(projectRoot, '.docs/plans');
   let planFiles: string[];
@@ -34,9 +36,37 @@ export async function discoverBacklog(
 
     if (await isProcessed(slug)) continue;
 
+    // Eligibility = APPROVED + well-formed. The daemon pre-seeds the front half
+    // (stories/plan = done) and never re-runs their gates, so this is the only
+    // place specs are vetted before autonomous build. Reject unapproved or
+    // dependency-tree-less plans rather than silently building them.
+    const storiesContent = await readFile(storiesPath, 'utf-8').catch(() => '');
+    if (!isStoriesApproved(storiesContent)) {
+      log(`skip ${slug}: stories not approved (need "Status: Accepted", no DRAFT)`);
+      continue;
+    }
+    const planContent = await readFile(planPath, 'utf-8').catch(() => '');
+    if (!planHasDependencyTree(planContent)) {
+      log(
+        `skip ${slug}: plan has no dependency tree ("## Task Dependency Graph" or "**Dependencies:**" lines)`,
+      );
+      continue;
+    }
+
     items.push({ slug, storiesPath, planPath });
   }
   return items;
+}
+
+/**
+ * Approval signal for autonomous (daemon) work: the stories declare
+ * `Status: Accepted` and are not DRAFT. Mirrors the stories gate's Accepted/
+ * DRAFT convention (artifacts.ts). When the Phase 9 brain lands, its human
+ * approval gate is what sets this marker.
+ */
+function isStoriesApproved(content: string): boolean {
+  if (/\bstatus\b[\s*:]*\bdraft\b/i.test(content)) return false;
+  return /\bstatus\b[\s*:]*\baccepted\b/i.test(content);
 }
 
 /**

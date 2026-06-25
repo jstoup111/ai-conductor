@@ -21,12 +21,18 @@ describe('engine/daemon-backlog — discoverBacklog', () => {
     await rm(empty, { recursive: true, force: true });
   });
 
+  // Eligible specs must be APPROVED (stories Status: Accepted) and well-formed
+  // (plan declares a dependency tree). Helpers keep fixtures valid by default.
+  const APPROVED_STORIES = '# Stories\n**Status:** Accepted\n';
+  const planWithDeps = (storiesRef?: string) =>
+    `# Plan\n${storiesRef ? `**Stories:** ${storiesRef}\n` : ''}\n### Task 1\n**Dependencies:** none\n`;
+
   it('includes a feature whose plan + stories both exist (via **Stories:** ref)', async () => {
     await writeFile(
       join(dir, '.docs/plans/feature-a.md'),
-      '# Plan\n**Stories:** .docs/stories/feature-a.md\n',
+      planWithDeps('.docs/stories/feature-a.md'),
     );
-    await writeFile(join(dir, '.docs/stories/feature-a.md'), '# Stories\n');
+    await writeFile(join(dir, '.docs/stories/feature-a.md'), APPROVED_STORIES);
 
     const backlog = await discoverBacklog(dir);
     expect(backlog).toHaveLength(1);
@@ -36,8 +42,8 @@ describe('engine/daemon-backlog — discoverBacklog', () => {
   });
 
   it('falls back to a same-stem stories file when no **Stories:** line', async () => {
-    await writeFile(join(dir, '.docs/plans/feature-b.md'), '# Plan (no stories ref)\n');
-    await writeFile(join(dir, '.docs/stories/feature-b.md'), '# Stories\n');
+    await writeFile(join(dir, '.docs/plans/feature-b.md'), planWithDeps());
+    await writeFile(join(dir, '.docs/stories/feature-b.md'), APPROVED_STORIES);
 
     const backlog = await discoverBacklog(dir);
     expect(backlog.map((b) => b.slug)).toEqual(['feature-b']);
@@ -51,11 +57,35 @@ describe('engine/daemon-backlog — discoverBacklog', () => {
 
   it('skips features already marked processed', async () => {
     for (const slug of ['a', 'b']) {
-      await writeFile(join(dir, `.docs/plans/${slug}.md`), '# Plan\n');
-      await writeFile(join(dir, `.docs/stories/${slug}.md`), '# Stories\n');
+      await writeFile(join(dir, `.docs/plans/${slug}.md`), planWithDeps());
+      await writeFile(join(dir, `.docs/stories/${slug}.md`), APPROVED_STORIES);
     }
     const processed = new Set(['a']);
     const backlog = await discoverBacklog(dir, async (slug) => processed.has(slug));
     expect(backlog.map((b) => b.slug)).toEqual(['b']);
+  });
+
+  it('skips an UNAPPROVED feature (stories not Accepted / DRAFT)', async () => {
+    await writeFile(join(dir, '.docs/plans/draft.md'), planWithDeps());
+    await writeFile(
+      join(dir, '.docs/stories/draft.md'),
+      '# Stories\n**Status:** DRAFT\n',
+    );
+    const logs: string[] = [];
+    const backlog = await discoverBacklog(dir, undefined, (m) => logs.push(m));
+    expect(backlog).toEqual([]);
+    expect(logs.join('\n')).toMatch(/draft.*not approved/i);
+  });
+
+  it('skips a plan with no dependency tree', async () => {
+    await writeFile(
+      join(dir, '.docs/plans/nodeps.md'),
+      '# Plan\n**Stories:** .docs/stories/nodeps.md\n\n### Task 1\nDo the thing.\n',
+    );
+    await writeFile(join(dir, '.docs/stories/nodeps.md'), APPROVED_STORIES);
+    const logs: string[] = [];
+    const backlog = await discoverBacklog(dir, undefined, (m) => logs.push(m));
+    expect(backlog).toEqual([]);
+    expect(logs.join('\n')).toMatch(/nodeps.*dependency tree/i);
   });
 });

@@ -118,7 +118,7 @@ describe('integration/gate-loop', () => {
     await mkdir(join(dir, '.docs/plans'), { recursive: true });
     await writeFile(
       join(dir, '.docs/plans/p.md'),
-      '### Task 1\n**Story:** 1-1 (happy path)\n\n### Task 2\n**Story:** 1-1 (negative path)\n',
+      '### Task 1\n**Story:** 1-1 (happy path)\n**Dependencies:** none\n\n### Task 2\n**Story:** 1-1 (negative path)\n**Dependencies:** Task 1\n',
     );
     await writeState(statePath, { ...FRONT_DONE });
 
