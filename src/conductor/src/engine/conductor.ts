@@ -65,19 +65,39 @@ export type CheckpointResponse = 'continue' | 'back' | 'quit';
 export const MAX_RECOVERY_RETRIES = 2;
 
 // ── Gate-driven loop (Phase 3) ──────────────────────────────────────────────
-// Steps the loop controls (selector-driven) once the build step engages, plus
-// the kickback targets it may re-open. Upstream of `build` the conductor stays
-// linear (the front half produces the artifacts).
-const KICKBACK_TARGETS: StepName[] = ['stories', 'plan'];
-// Gate steps whose objective verdict the loop recomputes after each run.
-const LOOP_GATE_STEPS = new Set<StepName>([
-  'stories',
-  'plan',
-  'build',
-  'manual_test',
-  'retro',
-  'finish',
-]);
+// Gate topology — DERIVED from the resolved step registry, not hardcoded, so
+// custom config steps (and reordering) participate in the gate loop:
+//   - loopGate steps     → the selector-driven tail (build…finish by default)
+//   - kickbackTarget steps → upstream gates a downstream step may re-open
+//   - verdictSteps        → either of the above (verdict recomputed after run)
+//   - firstLoopIndex      → the front/loop boundary (first loopGate step)
+//   - regionStart         → where the selector starts scanning (first kickback target)
+interface GateTopology {
+  verdictSteps: Set<StepName>;
+  kickbackTargets: StepName[];
+  firstLoopIndex: number;
+  regionStart: StepName;
+}
+function deriveGateTopology(steps: StepDefinition[]): GateTopology {
+  const verdictSteps = new Set<StepName>();
+  const kickbackTargets: StepName[] = [];
+  let firstLoopIndex = steps.length;
+  steps.forEach((s, i) => {
+    if (s.loopGate) {
+      verdictSteps.add(s.name);
+      if (i < firstLoopIndex) firstLoopIndex = i;
+    }
+    if (s.kickbackTarget) {
+      verdictSteps.add(s.name);
+      kickbackTargets.push(s.name);
+    }
+  });
+  const regionStart =
+    kickbackTargets[0] ??
+    steps.find((s) => s.phase === 'DECIDE')?.name ??
+    steps[0]?.name;
+  return { verdictSteps, kickbackTargets, firstLoopIndex, regionStart };
+}
 // Anti-ping-pong: a single gate may be re-opened by kickback at most this many
 // times per feature before the loop HALTs for a human.
 const MAX_KICKBACKS_PER_GATE = 2;
@@ -927,9 +947,11 @@ export class Conductor {
     // stays fully linear (unchanged behavior).
     if (!this.verifyArtifacts) return null;
 
+    const topo = deriveGateTopology(steps);
+
     // Record the objective verdict for any gate we just ran — including in the
     // front half, so a re-run plan/stories refreshes its verdict on disk.
-    if (LOOP_GATE_STEPS.has(step.name)) {
+    if (topo.verdictSteps.has(step.name)) {
       const verdict = await computeAndWriteVerdict(this.projectRoot, step.name, {
         sessionStartedAt: state.session_started_at,
         featureDesc: state.feature_desc,
@@ -942,8 +964,8 @@ export class Conductor {
       });
     }
 
-    if (indexOf(step.name) < indexOf('build')) {
-      return null; // front half stays linear
+    if (indexOf(step.name) < topo.firstLoopIndex) {
+      return null; // front half stays linear (before the first loop gate)
     }
 
     // Mark tier/mode-skipped steps in the looped region as 'skipped' so the
@@ -970,7 +992,7 @@ export class Conductor {
     // {satisfied:false, kickback.from === this step}). Re-open that gate
     // (pending) + cascade-stale its downstream so they re-run; HALT if a gate
     // has been re-opened past the cap.
-    for (const target of KICKBACK_TARGETS) {
+    for (const target of topo.kickbackTargets) {
       const v = verdicts[target];
       if (v && v.satisfied === false && v.kickback?.from === step.name) {
         const count = (kickbackCounts.get(target) ?? 0) + 1;
@@ -1002,7 +1024,7 @@ export class Conductor {
       steps,
       state,
       verdicts,
-      regionStart: 'stories',
+      regionStart: topo.regionStart,
     });
     if (decision.kind === 'done') {
       await writeFile(

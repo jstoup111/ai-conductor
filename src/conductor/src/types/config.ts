@@ -94,6 +94,20 @@ export interface StepConfig {
   /** (Custom steps only) Enforcement level. Required when adding a step. */
   enforcement?: EnforcementLevel;
 
+  /**
+   * (Custom steps only) Force gate-loop membership. When omitted, the step
+   * inherits its `after` target's loop membership — so a custom step inserted
+   * among the loop steps (build…finish) joins the loop automatically. Set
+   * `gate: false` to keep a step in the loop region out of the loop.
+   */
+  gate?: boolean;
+
+  /**
+   * (Custom steps only) Mark this upstream gate as re-openable by a downstream
+   * kickback. Opt-in (default false).
+   */
+  kickback_target?: boolean;
+
   // --- Conditional + Parallel primitives ------------------------------------
 
   /**

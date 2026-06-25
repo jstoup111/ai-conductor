@@ -214,6 +214,15 @@ steps:
       before: scripts/setup-scan.sh
       after: scripts/teardown-scan.sh
 
+  # A custom step inserted among the gate-loop steps (build…finish) joins the
+  # gate-driven loop automatically (inherits its `after` target's membership).
+  verify-deploy:
+    after: manual_test          # SHIP loop step → verify-deploy is in the loop
+    skill: .claude/skills/verify-deploy/SKILL.md
+    enforcement: gating
+    # gate: true                # force loop membership (or `false` to opt out)
+    # kickback_target: true     # let a downstream step re-open this gate
+
   # Tier-specific overrides (applied when complexity_tier matches)
   build:
     by_tier:

@@ -37,4 +37,19 @@ export interface StepDefinition {
   skippableForTiers: ComplexityTier[];
   isCheckpoint: boolean;
   skillName?: string;
+  /**
+   * This step participates in the gate-driven tail loop (build…finish): its
+   * objective verdict is recomputed after it runs and the selector may route
+   * to/over it. The conductor derives the loop region and the front/loop
+   * boundary from this flag, so a custom config step inserted among the loop
+   * steps joins the loop. Built-ins: build, manual_test, retro, finish.
+   */
+  loopGate?: boolean;
+  /**
+   * This upstream gate can be re-opened by a downstream kickback (build /
+   * manual_test writing `{satisfied:false, kickback.from}`). The conductor
+   * derives KICKBACK_TARGETS + the selector's region start from this flag.
+   * Built-ins: stories, plan.
+   */
+  kickbackTarget?: boolean;
 }

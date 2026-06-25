@@ -50,6 +50,7 @@ export const ALL_STEPS: StepDefinition[] = [
     skippableForTiers: [],
     isCheckpoint: false,
     skillName: 'stories',
+    kickbackTarget: true,
   },
   {
     name: 'conflict_check',
@@ -92,6 +93,7 @@ export const ALL_STEPS: StepDefinition[] = [
     skippableForTiers: [],
     isCheckpoint: false,
     skillName: 'plan',
+    kickbackTarget: true,
   },
   {
     name: 'acceptance_specs',
@@ -112,6 +114,7 @@ export const ALL_STEPS: StepDefinition[] = [
     skippableForTiers: [],
     isCheckpoint: true,
     skillName: 'pipeline',
+    loopGate: true,
   },
   {
     name: 'manual_test',
@@ -122,6 +125,7 @@ export const ALL_STEPS: StepDefinition[] = [
     skippableForTiers: [],
     isCheckpoint: true,
     skillName: 'manual-test',
+    loopGate: true,
   },
   {
     name: 'retro',
@@ -132,6 +136,7 @@ export const ALL_STEPS: StepDefinition[] = [
     skippableForTiers: ['S'],
     isCheckpoint: false,
     skillName: 'retro',
+    loopGate: true,
   },
   {
     name: 'finish',
@@ -142,6 +147,7 @@ export const ALL_STEPS: StepDefinition[] = [
     skippableForTiers: [],
     isCheckpoint: false,
     skillName: 'finish',
+    loopGate: true,
   },
 ];
 
@@ -231,21 +237,28 @@ export function buildStepRegistry(config: HarnessConfig): StepDefinition[] {
     after: string;
     skill: string;
     enforcement: import('../types/index.js').EnforcementLevel;
+    gate?: boolean;
+    kickbackTarget?: boolean;
   };
   const additions: Addition[] = [];
   for (const [name, cfg] of Object.entries(config.steps ?? {})) {
     if (builtInNames.has(name)) continue;
     if (!cfg || typeof cfg !== 'object') continue;
-    const after = (cfg as { after?: string }).after;
-    const skill = (cfg as { skill?: string }).skill;
-    if (!after || !skill) continue;
+    const c = cfg as {
+      after?: string;
+      skill?: string;
+      enforcement?: import('../types/index.js').EnforcementLevel;
+      gate?: boolean;
+      kickback_target?: boolean;
+    };
+    if (!c.after || !c.skill) continue;
     additions.push({
       name,
-      after,
-      skill,
-      enforcement:
-        (cfg as { enforcement?: import('../types/index.js').EnforcementLevel }).enforcement ??
-        'advisory',
+      after: c.after,
+      skill: c.skill,
+      enforcement: c.enforcement ?? 'advisory',
+      gate: c.gate,
+      kickbackTarget: c.kickback_target,
     });
   }
 
@@ -284,6 +297,11 @@ export function buildStepRegistry(config: HarnessConfig): StepDefinition[] {
         skippableForTiers: [],
         isCheckpoint: false,
         skillName: custom.skill,
+        // A custom step joins the gate loop iff it's inserted among loop steps:
+        // it inherits the `after` target's loopGate (explicit config `gate`
+        // overrides). kickbackTarget is opt-in only (explicit `kickback_target`).
+        loopGate: custom.gate ?? targetStep.loopGate,
+        kickbackTarget: custom.kickbackTarget ?? false,
       };
       result.splice(insertAt, 0, newStep);
       lastInsertByTarget.set(custom.after, insertAt);
