@@ -136,9 +136,10 @@ the same way a kickback does, so that I never open a PR that was verified agains
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a clean rebase whose post-rebase worktree tree **differs** from the pre-rebase tree, when
-  the rebase completes, then the daemon writes `satisfied:false` (kickback-shaped) verdicts for
-  `build` (and `manual_test` if it ran) via the existing verdict mechanism.
+- Given a clean rebase whose post-rebase worktree tree differs from the pre-rebase tree **in
+  code/test paths**, when the rebase completes, then the daemon writes `satisfied:false`
+  (kickback-shaped) verdicts for `build` (and `manual_test` if it ran) via the existing verdict
+  mechanism.
 - Given those gates are invalidated, when the selector runs, then it routes back to `build`
   before `finish`.
 
@@ -148,6 +149,11 @@ the same way a kickback does, so that I never open a PR that was verified agains
   other external invalidation.
 - Given `manual_test` was auto-skipped for this feature, when a file-changing rebase occurs, then
   only the gates that actually ran are invalidated; the skipped gate is not spuriously required.
+- Given a rebase that changed **only docs/non-code paths** (e.g. a `CHANGELOG.md`-only change,
+  including the FR-7 auto-resolution), when the rebase completes, then build/manual_test are
+  **not** invalidated — the invalidation trigger is a change to **code/test paths**, not any
+  file change. (Resolves the FR-5 × FR-7 overlap: auto-resolving CHANGELOG must not force a
+  full re-verify.)
 
 ### Done When
 - [ ] Pre/post-rebase tree comparison drives invalidation (changed → invalidate, unchanged → not).
@@ -214,10 +220,13 @@ parallel-worktree collision never parks a human or loses entries.
 - Given the CHANGELOG conflict is structurally outside the `[Unreleased]` block (e.g. a released
   section diverged), when the safe append cannot be applied, then the daemon HALTs rather than
   guessing.
+- Given a successful CHANGELOG auto-resolution (a docs-only change), when the rebase completes,
+  then it does **not** trigger FR-5 build re-verification (see FR-5 docs-only exclusion).
 
 ### Done When
 - [ ] CHANGELOG-only conflict resolves to base-entries + this-feature-entries, no dup, no loss.
 - [ ] Auto-resolution is skipped when any non-CHANGELOG file also conflicts.
+- [ ] A CHANGELOG-only auto-resolution does not invalidate build/manual_test.
 - [ ] Test: concurrent-feature CHANGELOG collision → both entries present exactly once → rebase
       continues to finish.
 
