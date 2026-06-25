@@ -1,7 +1,7 @@
 # ADR 002: Brain store format + retro-redirect mechanism
 
 **Date:** 2026-06-25
-**Status:** DRAFT
+**Status:** APPROVED
 **Deciders:** James (solo dev) + harness architecture-review
 **Feature:** Phase 9.1 — structured retro signal + brain memory store
 
