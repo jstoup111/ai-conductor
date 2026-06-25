@@ -327,6 +327,22 @@ export async function performRebase(
     return { kind: 'noop' };
   }
 
+  // FR-9 (negative path): a rebase already in progress — the operator cleared
+  // .pipeline/HALT but did not finish resolving — leaves unmerged paths with
+  // HEAD detached at the base. That state would otherwise look "current" to
+  // isBranchCurrent (HEAD..base == 0) and ship a half-rebased tree with live
+  // conflict markers. Detect it BEFORE the current-branch check and re-park.
+  const preexistingConflicts = await conflictedFiles(git);
+  if (preexistingConflicts.length > 0) {
+    return {
+      kind: 'conflict_halt',
+      conflicts: preexistingConflicts,
+      reason:
+        'rebase already in progress with unresolved conflicts — resolve them and run ' +
+        '`git rebase --continue`, then clear .pipeline/HALT before re-queueing',
+    };
+  }
+
   const base = await resolveBase(git, localBase);
 
   // FR-4: already current → no-op, no re-verification.

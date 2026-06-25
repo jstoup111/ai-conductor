@@ -459,4 +459,58 @@ describe('integration/rebase-loop', () => {
     expect(ran).not.toContain('finish');
     await expect(access(join(dir, '.pipeline/HALT'))).resolves.toBeUndefined();
   });
+
+  it('re-parks (does NOT ship a PR) when HALT was cleared but the rebase is still in progress (FR-9 negative)', async () => {
+    // The operator cleared .pipeline/HALT but did NOT finish resolving the
+    // conflict — the rebase is paused mid-flight (HEAD detached at base, with
+    // unmerged paths). A naive "branch current?" check sees HEAD..base == 0 and
+    // would ship a half-rebased tree with live conflict markers. The daemon must
+    // detect the in-progress rebase and re-park instead.
+    // Base and branch modify the SAME source file differently → real conflict.
+    await execFileAsync('git', ['init', '-b', BASE, dir]);
+    await git('config', 'user.email', 'test@example.com');
+    await git('config', 'user.name', 'Test');
+    await git('config', 'commit.gpgsign', 'false');
+    await mkdir(join(dir, 'src'), { recursive: true });
+    await writeFile(join(dir, 'src/feature.ts'), 'export const v = 0;\n');
+    await git('add', '.');
+    await git('commit', '-m', 'initial feature file');
+
+    await git('checkout', '-b', 'feature/foo');
+    await writeFile(join(dir, 'src/feature.ts'), 'export const v = 1; // branch\n');
+    await git('add', '.');
+    await git('commit', '-m', 'branch edits feature');
+
+    await git('checkout', BASE);
+    await writeFile(join(dir, 'src/feature.ts'), 'export const v = 2; // base\n');
+    await git('add', '.');
+    await git('commit', '-m', 'base edits feature');
+    await git('checkout', 'feature/foo');
+    // Start the rebase by hand; it stops at the conflict, leaving it in progress.
+    await git('rebase', BASE).catch(() => undefined);
+    expect(await rebaseInProgress()).toBe(true);
+    // Simulate the operator clearing HALT without finishing (no marker present).
+    await rm(join(dir, '.pipeline/HALT'), { force: true });
+
+    await writeState(statePath, { ...FRONT_DONE });
+    const ran: string[] = [];
+    let completed = false;
+    let halted = false;
+    events.on('feature_complete', () => {
+      completed = true;
+    });
+    events.on('loop_halt', () => {
+      halted = true;
+    });
+
+    await conductorWith(passthroughRunner(ran)).run();
+
+    // Re-parked: HALT re-written, NO DONE, finish never ran, rebase still paused.
+    await expect(access(join(dir, '.pipeline/HALT'))).resolves.toBeUndefined();
+    await expect(access(join(dir, '.pipeline/DONE'))).rejects.toThrow();
+    expect(completed).toBe(false);
+    expect(halted).toBe(true);
+    expect(ran).not.toContain('finish');
+    expect(await rebaseInProgress()).toBe(true);
+  });
 });
