@@ -16,7 +16,7 @@ export class ReportError extends Error {
 
 // ─── Types for internal parsing ───────────────────────────────────────────────
 
-interface ParsedEvent {
+export interface ParsedEvent {
   type: string;
   step?: string;
   ts: string;
@@ -26,6 +26,143 @@ interface ParsedEvent {
   attempt?: number;
   tokenUsage?: TokenUsage;
   [key: string]: unknown;
+}
+
+/**
+ * Parse a raw events.jsonl string into events, skipping malformed lines
+ * (resilient parse). Shared by `renderReport` and the brain-store's signal
+ * assembly so both read the log the same way (no parallel parser).
+ */
+export function parseEvents(raw: string): ParsedEvent[] {
+  const events: ParsedEvent[] = [];
+  for (const line of raw.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try {
+      events.push(JSON.parse(trimmed) as ParsedEvent);
+    } catch {
+      // skip malformed lines
+    }
+  }
+  return events;
+}
+
+// ─── Structured aggregates (shared with brain-store) ──────────────────────────
+
+/** Per-step duration in ms (start→complete). Steps with no completion omitted. */
+export function aggregateDurations(events: ParsedEvent[]): Record<string, number> {
+  const startTimes = new Map<string, number>();
+  const completeTimes = new Map<string, number>();
+  for (const evt of events) {
+    if (!evt.step) continue;
+    if (evt.type === 'step_started') {
+      startTimes.set(evt.step, new Date(evt.ts).getTime());
+    } else if (evt.type === 'step_completed') {
+      completeTimes.set(evt.step, new Date(evt.ts).getTime());
+    }
+  }
+  const out: Record<string, number> = {};
+  for (const [step, startMs] of startTimes.entries()) {
+    const endMs = completeTimes.get(step);
+    if (endMs !== undefined) out[step] = endMs - startMs;
+  }
+  return out;
+}
+
+export interface RetryHotspot {
+  step: string;
+  count: number;
+  topReason: string;
+}
+
+/** Retry count + most-common reason per step (only steps that retried). */
+export function aggregateRetryHotspots(events: ParsedEvent[]): RetryHotspot[] {
+  const retryCounts = new Map<string, number>();
+  const retryReasons = new Map<string, Map<string, number>>();
+  for (const evt of events) {
+    if (!evt.step || evt.type !== 'step_retry') continue;
+    retryCounts.set(evt.step, (retryCounts.get(evt.step) ?? 0) + 1);
+    const reason = evt.reason ?? 'unknown';
+    let reasons = retryReasons.get(evt.step);
+    if (!reasons) {
+      reasons = new Map();
+      retryReasons.set(evt.step, reasons);
+    }
+    reasons.set(reason, (reasons.get(reason) ?? 0) + 1);
+  }
+  const out: RetryHotspot[] = [];
+  for (const [step, count] of retryCounts.entries()) {
+    const reasons = retryReasons.get(step) ?? new Map<string, number>();
+    let topReason = '';
+    let topCount = 0;
+    for (const [r, c] of reasons.entries()) {
+      if (c > topCount) {
+        topCount = c;
+        topReason = r;
+      }
+    }
+    out.push({ step, count, topReason });
+  }
+  out.sort((a, b) => b.count - a.count);
+  return out;
+}
+
+export interface TokenTotals {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheCreation: number;
+}
+
+/** Sum token spend across all step_completed events that carried tokenUsage. */
+export function aggregateTokens(events: ParsedEvent[]): TokenTotals {
+  const totals: TokenTotals = { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 };
+  for (const evt of events) {
+    if (evt.type === 'step_completed' && evt.step && evt.tokenUsage) {
+      const u = evt.tokenUsage;
+      totals.input += u.input ?? 0;
+      totals.output += u.output ?? 0;
+      totals.cacheRead += u.cacheRead ?? 0;
+      totals.cacheCreation += u.cacheCreation ?? 0;
+    }
+  }
+  return totals;
+}
+
+export interface KickbackEntry {
+  from: string;
+  to: string;
+  count: number;
+  evidence?: string;
+}
+
+/** Kickback events (a downstream gate re-opening an upstream step). */
+export function aggregateKickbacks(events: ParsedEvent[]): KickbackEntry[] {
+  const out: KickbackEntry[] = [];
+  for (const evt of events) {
+    if (evt.type !== 'kickback') continue;
+    const from = typeof evt.from === 'string' ? evt.from : '';
+    const to = typeof evt.to === 'string' ? evt.to : '';
+    const count = typeof evt.count === 'number' ? evt.count : 1;
+    const entry: KickbackEntry = { from, to, count };
+    if (typeof evt.evidence === 'string') entry.evidence = evt.evidence;
+    out.push(entry);
+  }
+  return out;
+}
+
+export interface HaltEntry {
+  reason: string;
+}
+
+/** loop_halt events (the gate that stopped the loop + why). */
+export function aggregateHalts(events: ParsedEvent[]): HaltEntry[] {
+  const out: HaltEntry[] = [];
+  for (const evt of events) {
+    if (evt.type !== 'loop_halt') continue;
+    out.push({ reason: typeof evt.reason === 'string' ? evt.reason : 'unknown' });
+  }
+  return out;
 }
 
 // ─── renderReport ─────────────────────────────────────────────────────────────
@@ -44,16 +181,7 @@ export function renderReport(eventsJsonlPath: string): string {
     throw new ReportError(eventsJsonlPath, err);
   }
 
-  const events: ParsedEvent[] = [];
-  for (const line of raw.split('\n')) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    try {
-      events.push(JSON.parse(trimmed) as ParsedEvent);
-    } catch {
-      // skip malformed lines
-    }
-  }
+  const events: ParsedEvent[] = parseEvents(raw);
 
   const sections: string[] = [];
   sections.push(renderDurations(events));
