@@ -77,6 +77,14 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   story → plan task.
 
 ### Fixed
+- conduct-ts: test suites no longer fail to load on the dev machine's default
+  Node. The conductor needs Node ≥20.5 (execa imports `addAbortListener`), but
+  only `src/conductor/.tool-versions` pinned Node 20 — running `npm test` from
+  the repo root used the machine default (e.g. 19.6), so 8 suites failed with
+  `node:events does not provide an export named 'addAbortListener'`. Added a root
+  `.tool-versions` (`nodejs 20.19.2`) so asdf selects Node 20 repo-wide, plus an
+  `engines: { node: ">=20.5.0" }` field documenting/enforcing the requirement for
+  non-asdf users. All 70 suites / 979 tests now run.
 - conduct-ts: **worktree isolation** — the spawned `claude` subprocess now runs
   in the step runner's `projectDir` (`cwd`), not the parent process's working
   directory. `ClaudeProvider` invoked `execa('claude', …)` with **no `cwd`**, so
