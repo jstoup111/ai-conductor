@@ -488,27 +488,87 @@ function storyIdFromFilename(path: string): string | undefined {
 }
 
 /**
- * Coverage set keyed `${id}|happy` / `${id}|negative` / `${id}|*` (story-level),
- * gathered from task `**Story:**` lines and `## Coverage Check` table rows.
+ * Coverage set keyed `${id}|happy` / `${id}|negative` / `${id}|*` (story-level).
+ *
+ * Plans are parsed per task block (split on `### ...` headings) so a task's
+ * story reference and its path type are associated together. Two real-world
+ * formats are both accepted:
+ *   - id + path-type in the parens: `**Story:** 3.2-1 (happy path — foo)`
+ *   - id with an optional `Story `/`Epic ` prefix word and the path type on a
+ *     separate `**Type:** happy-path` / `**Type:** negative-path` line:
+ *       `**Story:** Story 1 (FR-1, FR-2)` + `**Type:** happy-path`
+ * A `## Coverage Check` table (`| 1 | happy | ... |`) is also honored.
  */
 function collectPlanCoverage(planText: string): Set<string> {
   const set = new Set<string>();
-  const storyRef = /\*\*Story:\*\*\s*([A-Za-z0-9.\-]+)\s*(?:\(([^)]*)\))?/gi;
-  let m: RegExpExecArray | null;
-  while ((m = storyRef.exec(planText)) !== null) {
-    const id = m[1];
-    if (/^n\/?a$/i.test(id)) continue;
-    set.add(`${id}|*`);
-    const qual = m[2] ?? '';
-    if (/happy/i.test(qual)) set.add(`${id}|happy`);
-    if (/negative/i.test(qual)) set.add(`${id}|negative`);
+
+  for (const block of splitOnHeadings(planText, /^###\s+/)) {
+    // Story id(s) this task references. Strip an optional `Story `/`Epic `
+    // prefix word so `**Story:** Story 1` and `**Story:** 1` both yield `1`.
+    const ids = new Set<string>();
+    const storyRef = /\*\*Story:\*\*\s*(?:story|epic)?\s*([A-Za-z0-9.\-]+)/gi;
+    let m: RegExpExecArray | null;
+    while ((m = storyRef.exec(block)) !== null) {
+      const id = m[1];
+      if (/^(n\/?a|prerequisite|none|all)$/i.test(id)) continue;
+      ids.add(id);
+    }
+    if (ids.size === 0) continue;
+
+    // Path type(s) this task covers: prefer an explicit `**Type:**` line, then
+    // a happy/negative qualifier inside the Story parens, then a path keyword
+    // anywhere in the block.
+    const types = new Set<'happy' | 'negative'>();
+    const typeLine = block.match(/\*\*Type:\*\*\s*([^\n]*)/i);
+    if (typeLine) {
+      if (/happy/i.test(typeLine[1])) types.add('happy');
+      if (/negative/i.test(typeLine[1])) types.add('negative');
+    }
+    const parens = block.match(/\*\*Story:\*\*[^\n]*\(([^)]*)\)/i);
+    if (parens) {
+      if (/happy/i.test(parens[1])) types.add('happy');
+      if (/negative/i.test(parens[1])) types.add('negative');
+    }
+    if (types.size === 0) {
+      if (/\bhappy\s*path\b/i.test(block)) types.add('happy');
+      if (/\bnegative\s*path\b/i.test(block)) types.add('negative');
+    }
+
+    for (const id of ids) {
+      set.add(`${id}|*`);
+      for (const t of types) set.add(`${id}|${t}`);
+    }
   }
-  const tableRow = /^\|\s*([A-Za-z0-9.\-]+)\s+(happy|negative)\b/gim;
-  while ((m = tableRow.exec(planText)) !== null) {
-    set.add(`${m[1]}|*`);
-    set.add(`${m[1]}|${m[2].toLowerCase()}`);
+
+  // Coverage Check table rows: `| 1 | happy | ... |` or `| 1 happy | ... |`.
+  const tableRow =
+    /^\|\s*(?:story\s+)?([A-Za-z0-9.\-]+)\s*\|?\s*(happy|negative)\b/gim;
+  let tm: RegExpExecArray | null;
+  while ((tm = tableRow.exec(planText)) !== null) {
+    set.add(`${tm[1]}|*`);
+    set.add(`${tm[1]}|${tm[2].toLowerCase()}`);
   }
   return set;
+}
+
+/**
+ * Split `text` into blocks, each beginning at a line matching `headingRe`.
+ * Content before the first heading is discarded. Used to isolate plan task
+ * blocks (`### Task N`) so per-task fields stay associated.
+ */
+function splitOnHeadings(text: string, headingRe: RegExp): string[] {
+  const blocks: string[] = [];
+  let current: string[] | null = null;
+  for (const line of text.split('\n')) {
+    if (headingRe.test(line)) {
+      if (current) blocks.push(current.join('\n'));
+      current = [line];
+    } else if (current) {
+      current.push(line);
+    }
+  }
+  if (current) blocks.push(current.join('\n'));
+  return blocks;
 }
 
 interface TaskEntry {

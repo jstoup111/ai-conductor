@@ -479,6 +479,25 @@ export class DefaultStepRunner implements StepRunner {
     // Effort is now controlled via CLAUDE_CODE_EFFORT_LEVEL env var (Claude's
     // native reasoning knob) — no prose hint needed in the system prompt.
 
+    // The finish skill normally asks the user to choose Merge/PR/Keep/Discard
+    // (skills/finish/SKILL.md §4). In auto/unattended mode there is no user, so
+    // print-mode Claude would emit prose and exit without writing
+    // `.pipeline/finish-choice` — leaving the gate permanently unsatisfied and
+    // the loop stuck (the validation failure this addresses). Tell it to decide
+    // deterministically and ACT, ending by writing the marker file.
+    if (step === 'finish' && this.mode === 'auto') {
+      prompt +=
+        '\n\nUNATTENDED (auto) MODE — no user is present to choose a finish outcome, so do NOT prompt. ' +
+        'Decide deterministically and ACT (do not merely describe):\n' +
+        '- If the repo has a configured git remote and `gh` is authenticated: push the branch, open a PR ' +
+        'with `gh pr create` (NEVER merge), record the resulting URL as the `pr_url` field in ' +
+        '`.pipeline/conduct-state.json`, then write the single word `pr` to `.pipeline/finish-choice`.\n' +
+        '- Otherwise (no remote, or `gh` unavailable/unauthenticated): leave the work committed on the ' +
+        'branch and write the single word `keep` to `.pipeline/finish-choice`.\n' +
+        'The step is NOT complete until `.pipeline/finish-choice` exists with one of those exact values ' +
+        '(and, for `pr`, `pr_url` is set in state). Writing that marker file must be your final action.';
+    }
+
     if (retryReason) {
       prompt = `RETRY: ${retryReason}\n${prompt}`;
     }

@@ -71,10 +71,17 @@ Feature implementation complete. All tests pass. Options:
 Wait for the user to choose. Do not assume.
 
 **Unattended/auto mode:** If you are running in print mode (no user attached) or
-`--auto`, do NOT prompt — default to **Option 2: Push & PR**. The conductor's
-finish completion gate (artifacts.ts) requires either `state.pr_url` or
-`.pipeline/finish-choice` to be set; choosing PR satisfies it without leaving
-the feature in a "complete-but-unshipped" state.
+`--auto`, do NOT prompt — decide deterministically and **act** (do not merely
+describe the choice):
+- If the repo has a configured git remote and `gh` is authenticated → **Option 2:
+  Push & PR** (never merge). Record `pr_url` in `.pipeline/conduct-state.json`.
+- Otherwise (no remote, or `gh` unavailable/unauthenticated) → **Option 3: Keep
+  as-is** — leave the work committed on the branch.
+
+In both cases write the corresponding value to `.pipeline/finish-choice` as your
+final action. The conductor's finish completion gate (artifacts.ts) requires a
+fresh `.pipeline/finish-choice` (and, for `pr`, `state.pr_url`); without it the
+feature is left "complete-but-unshipped" and the loop stalls.
 
 ### 5. Execute Choice
 

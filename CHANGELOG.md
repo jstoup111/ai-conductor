@@ -57,6 +57,26 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   story → plan task.
 
 ### Fixed
+- conduct-ts: the `plan` coverage gate no longer false-fails (and kicks the loop
+  back to `plan` forever) on the real generator's output format. Stories use
+  `## Story N:` headings (id `N`) and plan tasks reference `**Story:** Story 1
+  (FR-1, FR-2)` with the path type on a separate `**Type:** happy-path` line. The
+  old matcher captured the literal word "Story" as the id and read happy/negative
+  only from the parens (which hold `FR-N` refs), so coverage never matched —
+  verdict `plan does not cover: 1 happy, 1 negative, …`. The matcher is now
+  task-block-aware: it strips an optional `Story `/`Epic ` prefix word from the
+  id and reads the path type from the `**Type:**` line, the Story parens, or a
+  path keyword — while still accepting the prior `**Story:** 3.2-1 (happy path)`
+  and `## Coverage Check` table formats. Found in Phase 7 validation.
+- conduct-ts: the `finish` step no longer stalls the loop in `--auto`. The finish
+  skill normally asks the user to pick Merge/PR/Keep/Discard; in unattended mode
+  print-mode Claude emitted prose and exited without writing
+  `.pipeline/finish-choice`, leaving the gate permanently unsatisfied. In auto
+  mode the step now gets an explicit directive to decide deterministically and
+  act: open a PR (never merge) and record `pr_url` when a git remote + `gh` are
+  available, else `keep` the branch — ending by writing the chosen value to
+  `.pipeline/finish-choice`. `skills/finish/SKILL.md` documents the same fallback.
+  Found in Phase 7 validation.
 - conduct-ts: the `acceptance_specs` completion check no longer false-fails on
   non-Rails projects. Its artifact globs were Rails-only (`spec/acceptance/**/*`,
   `test/acceptance/**/*`), so a Node project — whose `writing-system-tests` skill
