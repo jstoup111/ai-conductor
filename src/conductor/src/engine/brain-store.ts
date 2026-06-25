@@ -219,6 +219,10 @@ export async function produceNarrative(
     resume: false,
     cwd: args.worktreePath,
   });
+  // Don't persist provider error text as a narrative — on failure, emit the
+  // signal with no narrativeRef rather than a bogus retro (the best-effort
+  // caller logs it).
+  if (!result.success) return undefined;
   return result.output;
 }
 

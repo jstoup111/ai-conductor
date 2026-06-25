@@ -49,6 +49,14 @@ export interface FeatureRunnerDeps {
   daemon: boolean;
   /** LLM provider used to produce the `done`-feature retro narrative. */
   provider: LLMProvider;
+  /**
+   * Project key for the brain store — the project's basename, derived from the
+   * main checkout (`basename(projectRoot)`), NOT the worktree path. Worktrees
+   * live at `<projectRoot>/.worktrees/<slug>`, so deriving from the worktree
+   * would yield `.worktrees` for every project and collapse cross-project
+   * disambiguation (FR-9).
+   */
+  project: string;
   log?: (msg: string) => void;
 }
 
@@ -151,7 +159,7 @@ async function emitDaemonSignal(
     brainDir: resolveBrainDir(),
     eventsPath,
     outcome: featureOutcome,
-    project: deriveProjectName(worktree),
+    project: deps.project,
     feature: item.slug,
     runId: `${Date.now()}-${randomUUID().slice(0, 8)}`,
     worktreePath: worktree.path,
@@ -161,13 +169,6 @@ async function emitDaemonSignal(
   });
 }
 
-/** Project key for the store: the worktree's parent dir name (best-effort). */
-function deriveProjectName(worktree: FeatureWorktree): string {
-  const parts = worktree.path.split(/[\\/]/).filter(Boolean);
-  // …/<project>/.worktrees/<slug> or a tmp path — the parent dir name is a
-  // stable-enough project key for cross-project disambiguation.
-  return parts.length >= 2 ? parts[parts.length - 2] : (parts[parts.length - 1] ?? 'project');
-}
 
 /**
  * True if the feature's events show the `retro` step was tier-skipped, so the

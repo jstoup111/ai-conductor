@@ -48,6 +48,19 @@ describe('engine/daemon-deps', () => {
     });
   });
 
+  it('derives the brain-store project key from the projectRoot basename, not the worktree path (FR-9)', () => {
+    const d = makeFeatureRunnerDeps({
+      projectRoot: '/home/user/code/my-project',
+      worktreeBase: '/home/user/code/my-project/.worktrees',
+      baseBranch: 'main',
+      runConductorInWorktree: async () => {},
+    } as unknown as Parameters<typeof makeFeatureRunnerDeps>[0]);
+    // Must be the project's basename — NOT '.worktrees' (the worktree parent),
+    // which would collapse every project to the same key.
+    expect(d.project).toBe('my-project');
+    expect(d.project).not.toBe('.worktrees');
+  });
+
   describe('createWorktree (idempotent retry)', () => {
     const mockExeca = vi.mocked(execa);
     const slug = 'feat-x';

@@ -106,6 +106,9 @@ describe('integration/brain-emission — makeRunFeature emits on daemon completi
       // pre-implementation FeatureRunnerDeps type satisfied.
       daemon: extra.daemon ?? true,
       provider: extra.provider ?? makeProvider(),
+      // Project key for the store (production sets this to basename(projectRoot),
+      // never the worktree path — FR-9).
+      project: 'test-project',
     } as unknown as FeatureRunnerDeps;
   }
 
@@ -120,6 +123,10 @@ describe('integration/brain-emission — makeRunFeature emits on daemon completi
     const rec = JSON.parse(lines[0]);
     expect(rec.outcome).toBe('done');
     expect(rec.feature).toBe('feat-x');
+    // FR-9: the emitted project key comes from deps.project (basename of the
+    // project root in production), NOT the worktree path (which would be
+    // '.worktrees' for every project).
+    expect(rec.project).toBe('test-project');
   });
 
   // ─── FR-1 (happy): daemon halted → one line, outcome=halted ────────────────

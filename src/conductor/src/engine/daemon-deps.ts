@@ -35,6 +35,9 @@ export function makeFeatureRunnerDeps(cfg: RealDepsConfig): FeatureRunnerDeps {
     // (Phase 9.1). Manual `/conduct` runs don't go through makeFeatureRunnerDeps.
     daemon: true,
     provider: cfg.provider,
+    // Project key for the brain store = the main checkout's basename (NOT the
+    // worktree path, which is always `<projectRoot>/.worktrees/<slug>`).
+    project: basename(cfg.projectRoot),
 
     createWorktree: async (slug) => {
       const branch = `feat/daemon-${slug}`;
