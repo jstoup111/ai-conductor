@@ -785,7 +785,22 @@ install() {
       ok "Installed conduct-ts script to ${conduct_ts_target}"
     fi
   else
-    info "conduct-ts bundle not found (run 'npm run build' in src/conductor/); skipping symlink"
+    # conduct-ts needs Node >= 20.5 to build (execa imports addAbortListener).
+    # The repo pins Node 20.19.2 via the root .tool-versions, so a missing Node
+    # 20 yields a cryptic asdf error on `npm run build` — surface the real
+    # requirement here instead of letting the user trip over it.
+    local node_v="" node_major=0 node_minor=0 rest=""
+    node_v=$(node --version 2>/dev/null | sed 's/^v//') || true
+    if [ -n "$node_v" ]; then
+      node_major=${node_v%%.*}
+      rest=${node_v#*.}
+      node_minor=${rest%%.*}
+    fi
+    if [ -n "$node_v" ] && { [ "$node_major" -gt 20 ] || { [ "$node_major" -eq 20 ] && [ "$node_minor" -ge 5 ]; }; }; then
+      info "conduct-ts bundle not found — run 'npm install && npm run build' in src/conductor/ to enable it; skipping symlink"
+    else
+      warn "conduct-ts bundle not found and Node >=20.5 is not active (the repo pins 20.19.2 via .tool-versions). Install it (e.g. 'asdf install nodejs 20.19.2'), then run 'npm install && npm run build' in src/conductor/."
+    fi
   fi
 
   # 4. Configure Claude Code permissions and hooks
