@@ -59,6 +59,20 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   Phase 7 daemon validation.
 
 ### Changed
+- conduct-ts daemon: backlog **eligibility is now gated on approval + well-formedness**.
+  `discoverBacklog` only picks up a feature when its stories are **approved**
+  (`Status: Accepted`, not DRAFT) and its plan declares a **task dependency tree**
+  (`## Task Dependency Graph` or per-task `**Dependencies:**` lines). The daemon
+  pre-seeds the front half (stories/plan = done) and never re-runs their gates, so
+  eligibility is the only place specs are vetted before autonomous build — previously
+  any feature with stories+plan *files* present was picked up, DRAFT or not, dependency
+  tree or not. Ineligible features are skipped with a logged reason (`[daemon] skip …`).
+- harness: new **"Docs track features"** convention (HARNESS.md + this repo's CLAUDE.md):
+  every change that adds/alters user-facing behavior must update the `README` and affected
+  docs in the same PR; the `finish` step verifies docs reflect what shipped.
+- conduct-ts: the `plan` gate now also requires a **task dependency tree** (in addition to
+  per-path-type story coverage), so the dependency graph the `build`/pipeline skill
+  consumes for topological ordering is actually enforced, not just requested.
 - conduct-ts: DECIDE order now runs **architecture before plan** — `stories →
   conflict_check → architecture_diagram → architecture_review → plan →
   acceptance_specs`. Architecture (system-level HOW) grounds the technical plan

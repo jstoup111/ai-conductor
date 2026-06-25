@@ -415,9 +415,31 @@ export const GATE_ONLY_PREDICATES: Partial<
         reason: `plan does not cover: ${shown}${more} — add task(s) referencing these story paths`,
       };
     }
+    // The plan must declare a task dependency tree so `build` (pipeline) can
+    // order the work topologically. See skills/plan/SKILL.md (Task Dependency
+    // Graph) + skills/pipeline/SKILL.md which consumes it.
+    if (!planHasDependencyTree(planText)) {
+      return {
+        done: false,
+        reason:
+          'plan has no task dependency tree — add a "## Task Dependency Graph" section or per-task "**Dependencies:**" lines',
+      };
+    }
     return { done: true };
   },
 };
+
+/**
+ * True if the plan declares task dependencies — either a `## Task Dependency
+ * Graph` section or per-task `**Dependencies:**` lines. Required so `build` can
+ * order tasks topologically. Exported for daemon backlog eligibility.
+ */
+export function planHasDependencyTree(planText: string): boolean {
+  return (
+    /^##\s+task\s+dependency\s+graph/im.test(planText) ||
+    /\*\*dependencies:\*\*/i.test(planText)
+  );
+}
 
 // --- Story / plan structure parsing (shared by stories + plan predicates) ---
 

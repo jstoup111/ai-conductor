@@ -50,6 +50,21 @@ If validation fails, fix the issue before committing. Do not commit with known v
 failures. If a check is failing due to a legitimate structural change (e.g., renaming a skill),
 fix all references before committing.
 
+## Documentation Upkeep
+
+Docs track features. Every change that adds or alters user-facing behavior MUST
+update the relevant documentation in the **same** PR:
+
+- New `conduct`/`conduct-ts` flags or daemon options → update `README.md` and
+  `src/conductor/README.md`.
+- New skill, gate, hook, or HARNESS.md rule → reflect it in the README and the
+  relevant skill/architecture docs.
+- A PR is not complete while its docs are stale. This is in addition to the
+  CHANGELOG `[Unreleased]` requirement, not a replacement for it.
+
+This mirrors the harness-wide "Docs track features" convention in HARNESS.md that
+applies to consumer projects.
+
 ## Branch Policy
 
 All work MUST happen on a feature branch — never commit directly to main.

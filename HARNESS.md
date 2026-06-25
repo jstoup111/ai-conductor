@@ -268,3 +268,8 @@ project using this harness inherits the same channel.
 - No implementation plan without clean conflict-check
 - Retro runs on both harness AND application after every feature
 - Tech-context is additive — never overrides generic skill behavior
+- **Docs track features.** Every feature that adds or changes user-facing
+  behavior MUST update the project's `README` and any affected documentation in
+  the same change — new commands/flags, config keys, endpoints, setup steps. A
+  feature is not done while its docs are stale; the `finish` step verifies the
+  README/docs reflect what shipped before opening the PR.

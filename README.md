@@ -96,16 +96,28 @@ Daemon mode (`conduct-ts` only) — drive many pre-specced features unattended, 
 own worktree, opening a PR on finish:
 
 ```bash
-# Drain the backlog: every feature with stories + a plan under .docs/
+# Drain the backlog once: every eligible feature, then exit
 conduct-ts --daemon
 
 # Run 3 in parallel, cap at 10 features this pass
 conduct-ts --daemon --concurrency 3 --max-items 10
+
+# Continuous: keep polling for new features, bounded by ceilings
+conduct-ts --daemon --continuous --max-runtime 3600 --max-cost 2000000
 ```
 
-The daemon consumes existing specs — it never authors them — and skips features it has
-already shipped. A feature that can't converge is left in its worktree (`.pipeline/HALT`)
-for you; the pool keeps going.
+Daemon flags: `--continuous` (idle-poll instead of draining once),
+`--max-items <n>`, `--max-cost <tokens>`, `--max-runtime <seconds>`,
+`--idle-poll <seconds>`, `--max-idle-polls <n>`. Ceilings stop *starting* new
+features; in-flight work always drains.
+
+The daemon consumes existing specs — it never authors them — and only picks up
+**eligible** features: a feature is eligible when its stories are approved
+(`Status: Accepted`, not DRAFT) and its plan declares a task dependency tree
+(`## Task Dependency Graph` or per-task `**Dependencies:**` lines), and it hasn't
+already shipped. Ineligible features are skipped with a logged reason. A feature
+that can't converge is left in its worktree (`.pipeline/HALT`) for you; the pool
+keeps going.
 
 On failure, conduct sends a desktop notification and drops into an interactive Claude session
 to fix the issue. After you `/quit`, it rechecks artifacts and continues automatically.

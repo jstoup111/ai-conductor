@@ -100,7 +100,7 @@ describe('engine/artifacts — plan predicate (per path-type coverage)', () => {
   it('passes when happy + negative both covered by path-typed tasks', async () => {
     await story(STORY);
     await plan(
-      `### Task 1\n**Story:** 3.2-1 (happy path — foo)\n\n### Task 2\n**Story:** 3.2-1 (negative path — bar)\n`,
+      `### Task 1\n**Story:** 3.2-1 (happy path — foo)\n**Dependencies:** none\n\n### Task 2\n**Story:** 3.2-1 (negative path — bar)\n**Dependencies:** Task 1\n`,
     );
     const r = await checkGateCompletion(dir, 'plan');
     expect(r.done).toBe(true);
@@ -108,15 +108,25 @@ describe('engine/artifacts — plan predicate (per path-type coverage)', () => {
 
   it('fails when the negative path is uncovered', async () => {
     await story(STORY);
-    await plan(`### Task 1\n**Story:** 3.2-1 (happy path — foo)\n`);
+    await plan(`### Task 1\n**Story:** 3.2-1 (happy path — foo)\n**Dependencies:** none\n`);
     const r = await checkGateCompletion(dir, 'plan');
     expect(r.done).toBe(false);
     expect(r.reason).toMatch(/3\.2-1 negative/);
   });
 
+  it('fails when the plan has no dependency tree (covered but no deps)', async () => {
+    await story(STORY);
+    await plan(
+      `### Task 1\n**Story:** 3.2-1 (happy path)\n\n### Task 2\n**Story:** 3.2-1 (negative path)\n`,
+    );
+    const r = await checkGateCompletion(dir, 'plan');
+    expect(r.done).toBe(false);
+    expect(r.reason).toMatch(/dependency tree/i);
+  });
+
   it('story-level fallback: a bare **Story:** ref covers both paths', async () => {
     await story(STORY);
-    await plan(`### Task 1\n**Story:** 3.2-1\n`);
+    await plan(`### Task 1\n**Story:** 3.2-1\n**Dependencies:** none\n`);
     const r = await checkGateCompletion(dir, 'plan');
     expect(r.done).toBe(true);
   });
@@ -124,7 +134,7 @@ describe('engine/artifacts — plan predicate (per path-type coverage)', () => {
   it('a Coverage Check table satisfies coverage', async () => {
     await story(STORY);
     await plan(
-      `## Coverage Check\n| Story | Criterion | Task(s) |\n|---|---|---|\n| 3.2-1 happy | x | T1 |\n| 3.2-1 negative | y | T2 |\n`,
+      `## Coverage Check\n| Story | Criterion | Task(s) |\n|---|---|---|\n| 3.2-1 happy | x | T1 |\n| 3.2-1 negative | y | T2 |\n\n## Task Dependency Graph\n- T1 → none\n- T2 → T1\n`,
     );
     const r = await checkGateCompletion(dir, 'plan');
     expect(r.done).toBe(true);
@@ -145,7 +155,8 @@ describe('engine/artifacts — plan predicate (per path-type coverage)', () => {
         `### Task 2: POST happy\n**Story:** Story 1 (FR-1, FR-2) — "..."\n**Type:** happy-path\n\n` +
         `### Task 3: POST negative\n**Story:** Story 1 (FR-4) — "..."\n**Type:** negative-path\n\n` +
         `### Task 4: GET happy\n**Story:** Story 2 (FR-3) — "..."\n**Type:** happy-path\n\n` +
-        `### Task 5: GET negative\n**Story:** Story 2 (FR-6) — "..."\n**Type:** negative-path\n`,
+        `### Task 5: GET negative\n**Story:** Story 2 (FR-6) — "..."\n**Type:** negative-path\n\n` +
+        `## Task Dependency Graph\n- Task 2,3 depend on Task 1; Task 4,5 depend on Task 1\n`,
     );
     const r = await checkGateCompletion(dir, 'plan');
     expect(r.done).toBe(true);

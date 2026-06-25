@@ -107,16 +107,21 @@ human-authored stories **and** plans, running each in its own worktree via the g
 and opening a PR on finish:
 
 - `engine/daemon.ts` (`runDaemon`) — parallel worker pool (`--concurrency N`), hard
-  ceilings (`--max-items`, token cost), `once` vs idle-poll, and per-feature failure
-  isolation (a thrown feature becomes an `error` outcome; the pool survives).
-- `engine/daemon-backlog.ts` — eligibility: stories + plan present, not yet processed.
+  ceilings (`--max-items`, `--max-cost`, `--max-runtime`), `once` vs `--continuous`
+  idle-poll, and per-feature failure isolation (a thrown feature becomes an `error`
+  outcome; the pool survives).
+- `engine/daemon-backlog.ts` — eligibility: stories **approved** (`Status: Accepted`,
+  not DRAFT) + plan declares a **dependency tree** (`## Task Dependency Graph` or
+  per-task `**Dependencies:**`), not yet processed. Ineligible features are skipped with
+  a logged reason — the daemon pre-seeds the front half, so eligibility is the only place
+  specs are vetted before autonomous build.
 - `engine/daemon-runner.ts` — per-feature discipline: done → mark + remove worktree + PR;
   halted/error → keep the worktree for the human.
 - `engine/daemon-deps.ts` — concrete git/fs primitives (worktree add/remove, spec
   materialization into the worktree, `.pipeline/DONE`/`HALT` outcome read).
 
-The daemon consumes specs — it never authors them. It ships in `once` mode; continuous
-(idle-poll) is gated on end-to-end validation.
+The daemon consumes specs — it never authors them. `--continuous` idle-polls for new
+eligible features, bounded by the ceilings.
 
 ### Events
 
