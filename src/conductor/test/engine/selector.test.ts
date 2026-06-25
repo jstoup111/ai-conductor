@@ -67,6 +67,7 @@ describe('engine/selector — selectNextGate', () => {
       build: VSAT,
       manual_test: VSAT,
       retro: VSAT,
+      rebase: VSAT,
       finish: VSAT,
     };
     const d = selectNextGate(input(frontDone(), verdicts));
@@ -78,6 +79,7 @@ describe('engine/selector — selectNextGate', () => {
     const verdicts: Partial<Record<StepName, GateVerdict>> = {
       build: VSAT,
       manual_test: VSAT,
+      rebase: VSAT,
       // retro has no verdict and is pending, but is skippable for Small
     };
     const d = selectNextGate(input(state, verdicts));
@@ -91,7 +93,7 @@ describe('engine/selector — selectNextGate', () => {
       manual_test: 'skipped',
       retro: 'skipped',
     };
-    const verdicts: Partial<Record<StepName, GateVerdict>> = {};
+    const verdicts: Partial<Record<StepName, GateVerdict>> = { rebase: VSAT };
     const d = selectNextGate(input(state, verdicts));
     expect(d).toMatchObject({ kind: 'run', step: 'finish' });
   });

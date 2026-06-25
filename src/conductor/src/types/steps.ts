@@ -14,6 +14,7 @@ export type StepName =
   | 'build'
   | 'manual_test'
   | 'retro'
+  | 'rebase'
   | 'finish';
 
 export type StepStatus = 'pending' | 'in_progress' | 'done' | 'failed' | 'skipped' | 'stale';

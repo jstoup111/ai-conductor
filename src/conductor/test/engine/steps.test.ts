@@ -21,11 +21,11 @@ describe('engine/steps', () => {
     const expectedOrder: StepName[] = [
       'worktree', 'memory', 'brainstorm', 'complexity', 'stories',
       'conflict_check', 'architecture_diagram', 'architecture_review', 'plan',
-      'acceptance_specs', 'build', 'manual_test', 'retro', 'finish',
+      'acceptance_specs', 'build', 'manual_test', 'retro', 'rebase', 'finish',
     ];
 
-    it('has exactly 14 steps', () => {
-      expect(ALL_STEPS).toHaveLength(14);
+    it('has exactly 15 steps', () => {
+      expect(ALL_STEPS).toHaveLength(15);
     });
 
     it('steps are in exact order', () => {
@@ -139,12 +139,31 @@ describe('engine/steps', () => {
       expect(s.skippableForTiers).toEqual(['S']);
     });
 
-    it('finish is SHIP/gating with prereq retro', () => {
+    it('rebase is SHIP/structural loopGate, engine-native, before finish', () => {
       const s = ALL_STEPS[13];
+      expect(s.name).toBe('rebase');
+      expect(s.phase).toBe('SHIP');
+      expect(s.enforcement).toBe('structural');
+      expect(s.prerequisites).toEqual(['manual_test']);
+      expect(s.skippableForTiers).toEqual([]);
+      expect(s.isCheckpoint).toBe(false);
+      expect(s.loopGate).toBe(true);
+      // Engine-native: no skill is dispatched for rebase (like complexity).
+      expect(s.skillName).toBeUndefined();
+    });
+
+    it('finish is SHIP/gating with prereq rebase', () => {
+      const s = ALL_STEPS[14];
       expect(s.name).toBe('finish');
       expect(s.enforcement).toBe('gating');
-      expect(s.prerequisites).toEqual(['retro']);
+      expect(s.prerequisites).toEqual(['rebase']);
       expect(s.isCheckpoint).toBe(false);
+    });
+
+    it('build → manual_test → retro → rebase → finish loop-tail topology', () => {
+      const names = ALL_STEPS.map((s) => s.name);
+      const tail = names.slice(names.indexOf('build'));
+      expect(tail).toEqual(['build', 'manual_test', 'retro', 'rebase', 'finish']);
     });
   });
 
@@ -168,8 +187,8 @@ describe('engine/steps', () => {
       expect(getStepIndex('worktree')).toBe(0);
     });
 
-    it('returns 13 for finish', () => {
-      expect(getStepIndex('finish')).toBe(13);
+    it('returns 14 for finish', () => {
+      expect(getStepIndex('finish')).toBe(14);
     });
   });
 
@@ -178,12 +197,12 @@ describe('engine/steps', () => {
       expect(getStepByIndex(0).name).toBe('worktree');
     });
 
-    it('returns finish for index 13', () => {
-      expect(getStepByIndex(13).name).toBe('finish');
+    it('returns finish for index 14', () => {
+      expect(getStepByIndex(14).name).toBe('finish');
     });
 
     it('throws for out-of-range index', () => {
-      expect(() => getStepByIndex(14)).toThrow();
+      expect(() => getStepByIndex(15)).toThrow();
       expect(() => getStepByIndex(-1)).toThrow();
     });
   });
@@ -283,8 +302,12 @@ describe('engine/steps', () => {
       expect(getPrerequisites('build')).toEqual(['plan']);
     });
 
-    it('finish requires retro', () => {
-      expect(getPrerequisites('finish')).toEqual(['retro']);
+    it('rebase requires manual_test', () => {
+      expect(getPrerequisites('rebase')).toEqual(['manual_test']);
+    });
+
+    it('finish requires rebase', () => {
+      expect(getPrerequisites('finish')).toEqual(['rebase']);
     });
   });
 

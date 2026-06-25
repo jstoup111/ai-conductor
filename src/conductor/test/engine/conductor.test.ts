@@ -50,10 +50,13 @@ describe('engine/conductor', () => {
 
     await conductor.run();
 
-    // `complexity` and `worktree` are engine-managed (runComplexityStep /
-    // runWorktreeStep, not runner.run), so the runner is called for every step
-    // EXCEPT those two, and the first runner dispatch is `memory`.
-    const dispatchedSteps = ALL_STEPS.filter((s) => s.name !== 'complexity' && s.name !== 'worktree').length;
+    // `complexity`, `worktree`, and `rebase` are engine-managed
+    // (runComplexityStep / runWorktreeStep / runRebaseStep, not runner.run), so
+    // the runner is called for every step EXCEPT those, and the first runner
+    // dispatch is `memory`.
+    const dispatchedSteps = ALL_STEPS.filter(
+      (s) => s.name !== 'complexity' && s.name !== 'worktree' && s.name !== 'rebase',
+    ).length;
     expect(runner.run).toHaveBeenCalledTimes(dispatchedSteps);
     expect((runner.run as ReturnType<typeof vi.fn>).mock.calls[0][0]).toBe('memory');
   });
@@ -109,9 +112,11 @@ describe('engine/conductor', () => {
 
     await conductor.run();
 
-    // Steps should be called in exact ALL_STEPS order, minus `complexity`
-    // (engine-managed via assessComplexity, not dispatched to runner.run).
-    const expectedOrder = ALL_STEPS.filter((s) => s.name !== 'complexity' && s.name !== 'worktree').map((s) => s.name);
+    // Steps should be called in exact ALL_STEPS order, minus the engine-managed
+    // steps (complexity / worktree / rebase, not dispatched to runner.run).
+    const expectedOrder = ALL_STEPS.filter(
+      (s) => s.name !== 'complexity' && s.name !== 'worktree' && s.name !== 'rebase',
+    ).map((s) => s.name);
     expect(callOrder).toEqual(expectedOrder);
   });
 
@@ -512,9 +517,11 @@ describe('engine/conductor', () => {
 
     await conductor.run();
 
-    // `complexity` is engine-managed (assessComplexity path), not dispatched
+    // `complexity`, `worktree`, and `rebase` are engine-managed, not dispatched
     // to runner.run. Every OTHER step should fire, in order.
-    const expectedOrder = ALL_STEPS.filter((s) => s.name !== 'complexity' && s.name !== 'worktree').map((s) => s.name);
+    const expectedOrder = ALL_STEPS.filter(
+      (s) => s.name !== 'complexity' && s.name !== 'worktree' && s.name !== 'rebase',
+    ).map((s) => s.name);
     expect(stepsRun).toEqual(expectedOrder);
   });
 
@@ -580,9 +587,10 @@ describe('engine/conductor', () => {
 
     await conductor.run();
 
-    // L tier has no skips; complexity is handled by the engine (not stepRunner)
+    // L tier has no skips; complexity/worktree/rebase are engine-managed (not
+    // dispatched to stepRunner).
     const expectedOrder = ALL_STEPS.map((s) => s.name).filter(
-      (n) => n !== 'complexity' && n !== 'worktree',
+      (n) => n !== 'complexity' && n !== 'worktree' && n !== 'rebase',
     );
     expect(stepsRun).toEqual(expectedOrder);
 
@@ -1295,6 +1303,7 @@ describe('engine/conductor', () => {
         build: 'done',
         manual_test: 'done',
         retro: 'done',
+        rebase: 'done',
         finish: 'done',
       };
       await writeState(statePath, completedState);

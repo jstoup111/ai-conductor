@@ -104,4 +104,24 @@ export type ConductorEvent =
   | {
       /** The gate loop reached a fully-satisfied state (.pipeline/DONE). */
       type: 'loop_converged';
+    }
+  // ── Rebase-on-latest (Phase 9.0) — structured rebase outcome events ──
+  | {
+      /** The branch was already current with the base — rebase was a no-op. */
+      type: 'rebase_noop';
+    }
+  | {
+      /** A clean rebase changed code/test paths → downstream re-verification. */
+      type: 'rebase_changed';
+      changedPaths: string[];
+    }
+  | {
+      /** A CHANGELOG-only conflict was auto-resolved (FR-7). */
+      type: 'rebase_changelog_resolved';
+    }
+  | {
+      /** A non-trivial/mixed conflict parked the feature (FR-8). */
+      type: 'rebase_conflict_halt';
+      reason: string;
+      conflicts: string[];
     };

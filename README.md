@@ -427,11 +427,20 @@ dedicated test coverage (950+ tests). See the feature comparison in
 - **Bootstrap-mode skip**: when bootstrap detects a `new`-mode project (empty directory
   before scaffolding), the conductor skips `assess` rather than dispatching 9 specialists
   against a blank codebase.
-- **Gate-driven loop**: the SHIP-phase tail (`build → manual_test → retro → finish`) is
-  driven by a *selector* over machine-checkable **gate verdicts** rather than a fixed
+- **Gate-driven loop**: the SHIP-phase tail (`build → manual_test → retro → rebase → finish`)
+  is driven by a *selector* over machine-checkable **gate verdicts** rather than a fixed
   order. A downstream step can **kick back** to `plan`/`stories` (re-open an upstream gate);
   the loop converges to `.pipeline/DONE` or stops at `.pipeline/HALT`. Opt-in via
   `verifyArtifacts`; with `freshContextPerStep`, each tail step runs on fresh context.
+- **Rebase-on-latest before finish**: an engine-native `rebase` gate (no Claude dispatch)
+  rebases the worktree branch onto the **discovered** origin default branch (fetched; falls
+  back to the local base — no hardcoded `main`) before the PR is opened, so it's never built
+  on a stale base. Its verdict is *branch already current with base*, so a no-op goes straight
+  to finish. A clean rebase that changed **code/test paths** kicks back to `build` to
+  re-verify; a **CHANGELOG-only** `[Unreleased]` conflict is auto-resolved (both features'
+  entries kept, each once); any other / mixed conflict writes `.pipeline/HALT`, leaves the
+  rebase **paused**, and opens no PR. Resume: resolve → `git rebase --continue` →
+  `rm .pipeline/HALT` → re-queue.
 - **Daemon mode** (`conduct-ts --daemon`): drains a backlog of features that already have
   stories **and** plans, running each in its own worktree (parallel via `--concurrency N`,
   bounded by `--max-items`), and opening a PR on finish. Per-feature failures are isolated;

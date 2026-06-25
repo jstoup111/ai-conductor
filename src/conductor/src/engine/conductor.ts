@@ -53,6 +53,15 @@ import {
   haltMarkerExists,
   clearHaltMarker,
 } from './task-progress.js';
+import {
+  makeGitRunner,
+  performRebase,
+  applyRebaseVerdicts,
+  emitRebaseEvent,
+  writeHalt,
+  originDefaultBranch,
+  type RebaseOutcome,
+} from './rebase.js';
 
 export type CheckpointResponse = 'continue' | 'back' | 'quit';
 
@@ -261,6 +270,13 @@ export class Conductor {
     context?: RecoveryContext,
   ) => Promise<RecoveryOption>;
   private onComplexityAssessment?: (recommended: ComplexityTier | null) => Promise<ComplexityTier>;
+  /**
+   * The most recent engine-native rebase outcome. The `rebase` step is special:
+   * its gate verdict is computed by the native handler (not from a file
+   * artifact), so `advanceTail` must NOT recompute/overwrite it. A
+   * `conflict_halt` outcome here drives the loop to HALT.
+   */
+  private lastRebaseOutcome: RebaseOutcome | null = null;
 
   constructor(opts: ConductorOptions) {
     this.stateFilePath = opts.stateFilePath;
@@ -518,7 +534,9 @@ export class Conductor {
             ? await this.runComplexityStep(state)
             : step.name === 'worktree'
               ? await this.runWorktreeStep(state)
-              : await this.stepRunner.run(step.name, state, { retryReason: retryHint });
+              : step.name === 'rebase'
+                ? await this.runRebaseStep(state)
+                : await this.stepRunner.run(step.name, state, { retryReason: retryHint });
 
         // Rate limit: wait deterministically, then retry WITHOUT burning the
         // retry budget (matches bin/conduct:2248–2280 handle_rate_limit).
@@ -949,9 +967,44 @@ export class Conductor {
 
     const topo = deriveGateTopology(steps);
 
-    // Record the objective verdict for any gate we just ran — including in the
-    // front half, so a re-run plan/stories refreshes its verdict on disk.
-    if (topo.verdictSteps.has(step.name)) {
+    // The `rebase` step is engine-native: its gate verdict (and any FR-5
+    // downstream kickbacks) were already written authoritatively by
+    // runRebaseStep from git state, not from a file artifact. Recomputing it
+    // here via the artifact predicate would wrongly mark a conflicted/HALTed
+    // rebase as satisfied, so we skip the recompute for it. A conflict_halt
+    // outcome stops the loop.
+    if (step.name === 'rebase') {
+      if (this.lastRebaseOutcome?.kind === 'conflict_halt') {
+        const reason = `rebase conflict — parked for human resolution: ${this.lastRebaseOutcome.reason}`;
+        // writeHalt already wrote .pipeline/HALT in runRebaseStep.
+        await this.events.emit({ type: 'loop_halt', reason });
+        return 'halt';
+      }
+      // FR-5: a file-changing rebase invalidated build (+manual_test) via
+      // kickback-shaped verdicts. Those gates aren't `kickbackTarget` steps, so
+      // emit the kickback event(s) here; the selector below routes back to them.
+      if (this.lastRebaseOutcome?.kind === 'changed') {
+        const verdicts = await readAllVerdicts(this.projectRoot);
+        for (const target of ['build', 'manual_test'] as StepName[]) {
+          const v = verdicts[target];
+          if (v && v.satisfied === false && v.kickback?.from === 'rebase') {
+            await this.events.emit({
+              type: 'kickback',
+              from: 'rebase',
+              to: target,
+              evidence: v.kickback.evidence,
+              count: 1,
+            });
+            // Re-open the staled gate so the selector re-runs it.
+            const nav = navigateBack(state, target, steps);
+            Object.assign(state, nav.state);
+            await writeState(this.stateFilePath, state);
+          }
+        }
+      }
+    } else if (topo.verdictSteps.has(step.name)) {
+      // Record the objective verdict for any gate we just ran — including in the
+      // front half, so a re-run plan/stories refreshes its verdict on disk.
       const verdict = await computeAndWriteVerdict(this.projectRoot, step.name, {
         sessionStartedAt: state.session_started_at,
         featureDesc: state.feature_desc,
@@ -1180,6 +1233,73 @@ export class Conductor {
     state.last_step = 'worktree';
     await writeState(this.stateFilePath, state);
     return { success: true };
+  }
+
+  /**
+   * Handle the `rebase` step entirely in the engine (ADR-001 / Phase 9.0):
+   * rebase the feature branch onto the discovered base, classify the outcome,
+   * write the authoritative gate verdicts (including FR-5 kickbacks), emit the
+   * structured outcome event, and — on a conflict that isn't a CHANGELOG-only
+   * auto-resolve — write `.pipeline/HALT` and leave the rebase paused. The
+   * outcome is stashed on `lastRebaseOutcome` so `advanceTail` doesn't recompute
+   * the verdict and so a HALT routes the loop to stop.
+   */
+  private async runRebaseStep(state: ConductState): Promise<StepRunResult> {
+    const git = makeGitRunner(this.projectRoot);
+    const localBase = await this.discoverLocalBase(git);
+
+    let outcome: RebaseOutcome;
+    try {
+      outcome = await performRebase(git, this.projectRoot, localBase);
+    } catch (err) {
+      // A truly unexpected git failure parks for a human rather than shipping
+      // an unverified branch.
+      outcome = {
+        kind: 'conflict_halt',
+        conflicts: [],
+        reason: err instanceof Error ? err.message : String(err),
+      };
+    }
+    this.lastRebaseOutcome = outcome;
+
+    // manual_test counts as "ran" when it isn't skipped for this feature.
+    const ranManualTest =
+      getStepStatus(state, 'manual_test') !== 'skipped';
+    await applyRebaseVerdicts(this.projectRoot, outcome, ranManualTest);
+    await emitRebaseEvent(this.events, outcome);
+
+    if (outcome.kind === 'conflict_halt') {
+      await writeHalt(this.projectRoot, outcome.conflicts, outcome.reason);
+    }
+
+    // The step itself "succeeds" (it ran); advanceTail/the HALT signal decide
+    // routing. A conflict_halt is surfaced there, not as a step failure.
+    return { success: true };
+  }
+
+  /**
+   * Discover a sensible LOCAL base branch name for the rebase fallback, without
+   * hardcoding 'main'. Prefers origin's default branch name; else a local
+   * main/master/trunk if present; else the first local branch that isn't the
+   * current HEAD. Returns 'main' only as a last resort when nothing is found.
+   */
+  private async discoverLocalBase(
+    git: ReturnType<typeof makeGitRunner>,
+  ): Promise<string> {
+    // origin default (name only) — works even if we later fall back to local.
+    const fromOrigin = await originDefaultBranch(git);
+    if (fromOrigin) return fromOrigin;
+    const current = (await git(['symbolic-ref', '--short', 'HEAD'])).stdout.trim();
+    const branchesOut = await git(['branch', '--format=%(refname:short)']);
+    const branches = branchesOut.stdout
+      .split('\n')
+      .map((l) => l.trim())
+      .filter(Boolean);
+    for (const candidate of ['main', 'master', 'trunk']) {
+      if (branches.includes(candidate) && candidate !== current) return candidate;
+    }
+    const other = branches.find((b) => b !== current);
+    return other ?? 'main';
   }
 
   /**

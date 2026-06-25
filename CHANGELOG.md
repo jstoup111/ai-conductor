@@ -69,6 +69,23 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   convergence, and rate limits (prefixed `· `). Events carry no feature slug, so
   with `--concurrency > 1` lines from different workers interleave. Found in
   Phase 7 daemon validation.
+- conduct-ts: **rebase-on-latest before finish** (Phase 9.0). A new engine-native
+  `rebase` loopGate step (no Claude dispatch, like `complexity`) runs after
+  `build`+`manual_test` and before `finish`, rebasing the worktree branch onto the
+  **discovered** origin default branch (`git symbolic-ref refs/remotes/origin/HEAD`,
+  fetched; falls back to the local base when there's no origin or the fetch fails —
+  no hardcoded `main`). Its gate verdict is *satisfied ⇔ the branch is already
+  current with the base*, so a no-op rebase goes straight to the PR and re-entry
+  after a kickback never re-invalidates. A **clean rebase that changed code/test
+  paths** invalidates `build` (+`manual_test` if it ran) via the existing
+  kickback machinery (`{from:'rebase', to:'build'}`) so the PR is never built on a
+  stale base; a **docs-only / CHANGELOG-only** change does **not** invalidate. A
+  rebase conflict confined to `CHANGELOG.md`'s `[Unreleased]` block is
+  **auto-resolved** (take the base's merged entries, re-append this feature's lines
+  exactly once); any other or mixed conflict writes `.pipeline/HALT` (conflicted
+  files + resume steps), leaves the rebase **paused** (no `--abort`), and opens no
+  PR. Outcomes emit typed events (`rebase_noop` / `rebase_changed` /
+  `rebase_changelog_resolved` / `rebase_conflict_halt`).
 
 ### Changed
 - conduct-ts daemon: backlog **eligibility is now gated on approval + well-formedness**.
