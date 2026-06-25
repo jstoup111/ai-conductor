@@ -1,7 +1,7 @@
 # ADR 001: Rebase-on-latest insertion mechanism
 
 **Date:** 2026-06-25
-**Status:** DRAFT
+**Status:** APPROVED
 **Deciders:** James (solo dev) + harness architecture-review
 **Feature:** Phase 9.0 — daemon rebase-on-latest + conflict→HALT
 
