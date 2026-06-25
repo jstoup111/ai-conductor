@@ -4,7 +4,12 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 
 vi.mock('execa', () => ({ execa: vi.fn() }));
-import { isProcessed, readWorktreeOutcome } from '../../src/engine/daemon-deps.js';
+import { execa } from 'execa';
+import {
+  isProcessed,
+  readWorktreeOutcome,
+  makeFeatureRunnerDeps,
+} from '../../src/engine/daemon-deps.js';
 
 describe('engine/daemon-deps', () => {
   let dir: string;
@@ -40,6 +45,64 @@ describe('engine/daemon-deps', () => {
     it('reports neither when no markers exist', async () => {
       const out = await readWorktreeOutcome(dir);
       expect(out).toMatchObject({ done: false, halted: false });
+    });
+  });
+
+  describe('createWorktree (idempotent retry)', () => {
+    const mockExeca = vi.mocked(execa);
+    const slug = 'feat-x';
+
+    function deps(worktreePath: string) {
+      return makeFeatureRunnerDeps({
+        projectRoot: dir,
+        worktreeBase: join(dir, '.worktrees'),
+        baseBranch: 'main',
+        runConductorInWorktree: async () => {},
+      });
+    }
+    // Route git subcommands; `addCalls` records every `worktree add`.
+    function routeGit(opts: { worktreeListed: boolean; branchExists: boolean }) {
+      const path = join(dir, '.worktrees', slug);
+      const addCalls: string[][] = [];
+      mockExeca.mockImplementation((async (...callArgs: unknown[]) => {
+        const args = (callArgs[1] as string[]) ?? [];
+        if (args[0] === 'worktree' && args[1] === 'list') {
+          return { stdout: opts.worktreeListed ? `worktree ${path}\n` : 'worktree ' + dir };
+        }
+        if (args[0] === 'show-ref') {
+          if (opts.branchExists) return { stdout: '' };
+          throw new Error('no ref');
+        }
+        if (args[0] === 'worktree' && args[1] === 'add') {
+          addCalls.push(args);
+          return { stdout: '' };
+        }
+        return { stdout: '' };
+      }) as unknown as typeof execa);
+      return { path, addCalls };
+    }
+
+    beforeEach(() => mockExeca.mockReset());
+
+    it('creates a fresh branch+worktree when neither exists', async () => {
+      const { addCalls } = routeGit({ worktreeListed: false, branchExists: false });
+      const wt = await deps(dir).createWorktree(slug);
+      expect(wt.branch).toBe(`feat/daemon-${slug}`);
+      expect(addCalls).toHaveLength(1);
+      expect(addCalls[0]).toContain('-b'); // fresh: -b <branch> <path> main
+    });
+
+    it('reuses an already-registered worktree (resume) without adding', async () => {
+      const { addCalls } = routeGit({ worktreeListed: true, branchExists: true });
+      await deps(dir).createWorktree(slug);
+      expect(addCalls).toHaveLength(0); // no worktree add at all
+    });
+
+    it('attaches a worktree to an existing branch when the worktree was removed', async () => {
+      const { addCalls } = routeGit({ worktreeListed: false, branchExists: true });
+      await deps(dir).createWorktree(slug);
+      expect(addCalls).toHaveLength(1);
+      expect(addCalls[0]).not.toContain('-b'); // attach: add <path> <branch>
     });
   });
 

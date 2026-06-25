@@ -20,7 +20,7 @@ import {
   buildRetryHint,
 } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
-import { writeFile, mkdir } from 'fs/promises';
+import { writeFile, mkdir, readFile } from 'fs/promises';
 import { createHash } from 'crypto';
 
 function createMockStepRunner(result: StepRunResult = { success: true }): StepRunner {
@@ -234,6 +234,38 @@ describe('engine/conductor', () => {
     expect(onRecovery).not.toHaveBeenCalled();
     const result = await readState(statePath);
     expect(result.ok && result.value.stories).toBe('failed');
+    expect(result.ok && result.value.feature_status).toBeUndefined();
+  });
+
+  it('auto mode writes a HALT marker on a gating-step failure (daemon-classifiable)', async () => {
+    // A supervising daemon reads .pipeline/DONE / .pipeline/HALT to classify the
+    // outcome. Before this, an auto hard-failure returned with NO marker, so the
+    // daemon reported the opaque "loop ended without DONE or HALT marker" error
+    // and couldn't tell halt (retryable) from a crash. Now it writes HALT.
+    const runner: StepRunner = {
+      run: async (step: StepName) =>
+        step === 'stories' ? { success: false, output: 'boom' } : { success: true },
+    };
+    let halted = false;
+    events.on('loop_halt', () => {
+      halted = true;
+    });
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      maxRetries: 1,
+    });
+
+    await conductor.run();
+
+    expect(halted).toBe(true); // loop_halt event emitted
+    const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+    expect(halt).toMatch(/stories/);
+    // It HALTed, so it did not also mark the feature complete.
+    const result = await readState(statePath);
     expect(result.ok && result.value.feature_status).toBeUndefined();
   });
 

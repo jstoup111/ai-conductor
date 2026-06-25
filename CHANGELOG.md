@@ -38,6 +38,16 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ## [Unreleased]
 
+### Added
+- conduct-ts daemon: per-step loop progress is now printed to the console. The
+  daemon previously wired a **no-op event renderer**, so it went silent between
+  `[daemon] ▶ start <slug>` and `✓ shipped` while the whole gate loop ran live in
+  the worktree — "started, no meaningful logs." `daemon-cli.ts` now renders
+  step boundaries, failures/retries, unsatisfied gate verdicts, kickbacks, halts,
+  convergence, and rate limits (prefixed `· `). Events carry no feature slug, so
+  with `--concurrency > 1` lines from different workers interleave. Found in
+  Phase 7 daemon validation.
+
 ### Changed
 - conduct-ts: DECIDE order now runs **architecture before plan** — `stories →
   conflict_check → architecture_diagram → architecture_review → plan →
@@ -57,6 +67,20 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   story → plan task.
 
 ### Fixed
+- conduct-ts daemon: an auto-mode hard failure now writes a `.pipeline/HALT`
+  marker instead of returning silently. Previously a gating/structural step
+  failing in `--auto` did `writeState; return` with no marker, so the daemon's
+  `readOutcome` saw neither `DONE` nor `HALT` and reported the opaque
+  `error — loop ended without DONE or HALT marker`. The conductor now writes
+  `HALT` (with the failed step in the reason) and emits `loop_halt`, so the
+  daemon classifies it as `halted` — worktree kept, NOT marked processed,
+  retryable after a human looks. Found in Phase 7 daemon validation.
+- conduct-ts daemon: re-running the daemon after a kept (halted/errored)
+  worktree no longer aborts with `fatal: A branch named 'feat/daemon-<slug>'
+  already exists`. `createWorktree` now reuses an existing registered worktree
+  for the slug (resume-after-human-fix), attaches to an existing branch when the
+  worktree was removed but the branch lingered, and only creates a fresh
+  branch+worktree when neither exists. Found in Phase 7 daemon validation.
 - conduct-ts: the `plan` coverage gate no longer false-fails (and kicks the loop
   back to `plan` forever) on the real generator's output format. Stories use
   `## Story N:` headings (id `N`) and plan tasks reference `**Story:** Story 1

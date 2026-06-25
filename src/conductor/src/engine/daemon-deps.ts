@@ -32,9 +32,23 @@ export function makeFeatureRunnerDeps(cfg: RealDepsConfig): FeatureRunnerDeps {
     createWorktree: async (slug) => {
       const branch = `feat/daemon-${slug}`;
       const path = join(cfg.worktreeBase, slug);
-      await execa('git', ['worktree', 'add', '-b', branch, path, cfg.baseBranch], {
-        cwd: cfg.projectRoot,
-      });
+      const root = cfg.projectRoot;
+      // Idempotent so re-running the daemon after a kept (halted/errored)
+      // worktree resumes instead of aborting on "branch/worktree already
+      // exists". Three cases:
+      //   1. worktree already registered for this path → reuse it (resume).
+      //   2. branch exists but its worktree was removed → attach a worktree.
+      //   3. neither exists → fresh branch + worktree off the base branch.
+      if (await isRegisteredWorktree(root, path)) {
+        cfg.log?.(`reusing worktree ${path} (resume)`);
+      } else if (await branchExists(root, branch)) {
+        cfg.log?.(`attaching worktree to existing branch ${branch}`);
+        await execa('git', ['worktree', 'add', path, branch], { cwd: root });
+      } else {
+        await execa('git', ['worktree', 'add', '-b', branch, path, cfg.baseBranch], {
+          cwd: root,
+        });
+      }
       return { path, branch };
     },
 
@@ -72,6 +86,39 @@ export function makeFeatureRunnerDeps(cfg: RealDepsConfig): FeatureRunnerDeps {
       await writeFile(join(processedDir, slug), 'shipped\n', 'utf-8');
     },
   };
+}
+
+/** True if `path` is already a registered git worktree of `projectRoot`. */
+async function isRegisteredWorktree(projectRoot: string, path: string): Promise<boolean> {
+  try {
+    const { stdout } = await execa('git', ['worktree', 'list', '--porcelain'], {
+      cwd: projectRoot,
+    });
+    // Lines look like `worktree <abs-path>`. Match the exact path or its
+    // `.worktrees/<slug>` suffix (git may report a realpath-resolved form).
+    const suffix = path.slice(path.indexOf(join('.worktrees', basename(path))));
+    return stdout
+      .split('\n')
+      .filter((l) => l.startsWith('worktree '))
+      .some((l) => {
+        const wt = l.slice('worktree '.length);
+        return wt === path || wt.endsWith(suffix);
+      });
+  } catch {
+    return false;
+  }
+}
+
+/** True if a local branch named `branch` exists in `projectRoot`. */
+async function branchExists(projectRoot: string, branch: string): Promise<boolean> {
+  try {
+    await execa('git', ['show-ref', '--verify', '--quiet', `refs/heads/${branch}`], {
+      cwd: projectRoot,
+    });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** Has this slug already been shipped by the daemon? (for discoverBacklog). */

@@ -1,6 +1,7 @@
 import {
   readFile,
   writeFile,
+  mkdir,
   access as accessFile,
   unlink as unlinkFile,
 } from 'node:fs/promises';
@@ -668,6 +669,22 @@ export class Conductor {
             state[step.name] = 'skipped';
             continue;
           }
+          // Unattended hard failure on a gating/structural step. Write a HALT
+          // marker (not just return) so a supervising daemon classifies this as
+          // `halted` — worktree kept, NOT marked processed, retryable after a
+          // human looks — instead of "loop ended without DONE or HALT marker".
+          const reason = `step '${step.name}' failed in auto mode (retries exhausted)`;
+          await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(
+            () => {},
+          );
+          await writeFile(
+            join(this.projectRoot, LOOP_HALT_MARKER),
+            reason + '\n',
+            'utf-8',
+          ).catch(() => {
+            /* best-effort marker */
+          });
+          await this.events.emit({ type: 'loop_halt', reason });
           await writeState(this.stateFilePath, state);
           process.off('SIGINT', sigintHandler);
           return;
