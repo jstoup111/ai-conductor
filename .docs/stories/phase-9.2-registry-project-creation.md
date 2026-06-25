@@ -150,10 +150,17 @@ the brain) can start work immediately.
 #### Negative Paths
 - Given `--remote <url>`, when create runs, then it `git remote add` only — it does **not** push
   (no network side effects).
+- Given `create`, when it scaffolds, then it writes only a **minimal skeleton** (git init +
+  template CLAUDE.md + `.gitignore` + register) — it does **not** re-implement `/bootstrap`'s
+  stack detection or `.memory/`/`.docs/` onboarding (FR-6 × ST-026). Full onboarding is a
+  subsequent `/bootstrap` run, which (ST-026) skips-if-bootstrapped and fills gaps without
+  overwriting, and re-registers idempotently (FR-4/FR-8).
 
 ### Done When
-- [ ] `create` produces git repo + CLAUDE.md + `.gitignore` (3 ignores) + optional remote + a
-      `created` record.
+- [ ] `create` produces git repo + skeleton CLAUDE.md + `.gitignore` (3 ignores) + optional remote
+      + a `created` record (no stack detection — that's bootstrap's job).
+- [ ] A later `/bootstrap` on a `created` project does not clobber it and re-registers idempotently
+      (status provenance preserved or refined — decided at architecture).
 - [ ] Test: real temp dir → assert scaffolded files exist + record present; `--remote` → remote
       set, no push.
 
