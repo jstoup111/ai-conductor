@@ -1,7 +1,7 @@
 # ADR 003: Registry write mechanism + bootstrap integration
 
 **Date:** 2026-06-25
-**Status:** DRAFT
+**Status:** APPROVED
 **Deciders:** James (solo dev) + harness architecture-review
 **Feature:** Phase 9.2 — project registry + creation
 
