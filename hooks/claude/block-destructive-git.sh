@@ -29,6 +29,21 @@ if echo "$SCAN" | grep -qE 'git\s+reset\s+--hard'; then
   exit 2
 fi
 
+# Block ad-hoc rebases of a feature branch onto a base. A mid-build rebase onto an
+# advanced `main` rewrites history under active work and triggers surprise
+# conflicts (it bit two feature branches during Phase 9). The ONLY sanctioned
+# rebase is the daemon's finish-time rebase-on-latest, which runs via execa (not
+# this hook) with conflict→HALT + CHANGELOG auto-resolve. Resolving an
+# already-in-progress rebase (--continue/--abort/--skip/--edit-todo) is allowed.
+if echo "$SCAN" | grep -qE 'git\s+rebase\b'; then
+  if echo "$SCAN" | grep -qE 'git\s+rebase\s+(--continue|--abort|--skip|--edit-todo|--quit)\b'; then
+    : # finishing/aborting an in-progress rebase — allowed
+  else
+    echo "BLOCKED: ad-hoc 'git rebase' is blocked (mid-build rebase hazard). The only sanctioned rebase is the daemon's finish-time rebase-on-latest. To deliberately update a feature branch onto main, ask the user first. (--continue/--abort/--skip are allowed.)" >&2
+    exit 2
+  fi
+fi
+
 if echo "$SCAN" | grep -qE 'git\s+branch\s+-D\b'; then
   # Force-delete is dangerous only for UNMERGED branches. A squash- or
   # rebase-merged branch (the GitHub default) is NOT an ancestor of the default
