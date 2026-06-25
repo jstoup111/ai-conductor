@@ -332,6 +332,22 @@ unless the user explicitly declines. For API-only projects, MCP is optional.
 Verify the project works: database connects, test framework runs, app loads without errors.
 Report failures before proceeding — a broken foundation wastes all downstream effort.
 
+### 10b. Auto-Register in the Project Registry
+
+After onboarding completes, register this project in the harness project registry
+(`~/.ai-conductor/registry.json`) so daemons and cross-project tooling can discover it.
+Run the single-writer registry command — it is idempotent (canonical-path dedup) and
+preserves status provenance (a project previously scaffolded by `conduct create` keeps its
+`created` status rather than being downgraded to `registered`):
+
+```bash
+conduct register .
+```
+
+Honor `$AI_CONDUCTOR_REGISTRY` if set (tests and alternate installs point it elsewhere). A
+non-zero exit means the registry write failed — surface it; do not silently continue. Re-running
+bootstrap is safe: the same canonical path resolves to one record.
+
 ### 11. Recommend Next Steps
 
 | Mode | Recommendation |
@@ -361,5 +377,6 @@ Report failures before proceeding — a broken foundation wastes all downstream 
 - [ ] `.env` and `.env.local` added to `.gitignore`
 - [ ] Process manager detected (or noted as absent)
 - [ ] Smoke test passed
+- [ ] Project auto-registered via `conduct register .` (idempotent; honors `$AI_CONDUCTOR_REGISTRY`)
 - [ ] Architecture diagrams generated in `.docs/architecture/`
 - [ ] MCP integration offered
