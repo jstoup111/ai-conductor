@@ -49,6 +49,8 @@ export const STEP_ARTIFACT_GLOBS: Record<StepName, string[]> = {
   build: ['.pipeline/task-status.json'],
   manual_test: ['.docs/manual-test-results.md'],
   retro: ['.docs/retros/*.md'],
+  // Engine-native; its verdict is computed from git state, not a file artifact.
+  rebase: [],
   finish: [],
 };
 

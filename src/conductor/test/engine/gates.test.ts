@@ -70,12 +70,12 @@ describe('engine/gates', () => {
     });
 
     it('checks all prerequisites for finish', () => {
-      // finish requires retro
+      // finish requires rebase (which itself follows manual_test)
       const state: ConductState = {};
       const result = checkGate('finish', state);
       expect(result.passed).toBe(false);
       if (!result.passed) {
-        expect(result.reason).toContain('retro');
+        expect(result.reason).toContain('rebase');
       }
     });
   });

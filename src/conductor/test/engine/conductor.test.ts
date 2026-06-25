@@ -1295,6 +1295,7 @@ describe('engine/conductor', () => {
         build: 'done',
         manual_test: 'done',
         retro: 'done',
+        rebase: 'done',
         finish: 'done',
       };
       await writeState(statePath, completedState);

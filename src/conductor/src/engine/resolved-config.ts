@@ -33,6 +33,7 @@ export const DEFAULT_STEP_MODELS: Record<StepName, string> = {
   build: 'haiku',
   manual_test: 'sonnet',
   retro: 'sonnet',
+  rebase: 'haiku',         // engine-native; no Claude dispatch (mirrors complexity)
   finish: 'haiku',
 };
 
@@ -52,6 +53,7 @@ export const DEFAULT_STEP_EFFORT: Record<StepName, EffortLevel> = {
   build: 'low',            // dispatcher; intelligence is in per-task sub-sessions
   manual_test: 'medium',
   retro: 'medium',
+  rebase: 'low',           // deterministic git work, no reasoning
   finish: 'low',
 };
 
@@ -71,6 +73,7 @@ export const DEFAULT_STEP_RETRIES: Record<StepName, number> = {
   build: 5,
   manual_test: 3,
   retro: 3,
+  rebase: 1,
   finish: 1,
 };
 
@@ -90,6 +93,7 @@ export const DEFAULT_STEP_REVIEW: Record<StepName, ReviewMode> = {
   build: 'auto',
   manual_test: 'auto',
   retro: 'manual',
+  rebase: 'auto',
   finish: 'auto',
 };
 

@@ -74,8 +74,8 @@ describe('Integration: config flow', () => {
     expect(runner.calls).not.toContain('retro');
     expect(runner.calls).not.toContain('architecture_review');
 
-    // All other steps should have run: 14 total - 2 disabled - 2 engine-managed
-    // (complexity + worktree, not dispatched to runner.run) = 10.
+    // All other steps should have run: 15 total - 2 disabled - 3 engine-managed
+    // (complexity + worktree + rebase, not dispatched to runner.run) = 10.
     expect(runner.calls).toHaveLength(10);
 
     // Verify final state marks disabled steps as 'skipped'

@@ -32,6 +32,9 @@ const STEP_PROMPTS: Record<StepName, string> = {
   build: '/pipeline',
   manual_test: '/manual-test',
   retro: '/retro',
+  // Engine-native (like complexity) — never dispatched; present only to keep
+  // the Record<StepName, string> exhaustive.
+  rebase: '/conduct rebase',
   finish: '/finish',
 };
 
@@ -251,6 +254,11 @@ export class DefaultStepRunner implements StepRunner {
     if (step === 'complexity') {
       throw new Error(
         'complexity is handled by the engine via assessComplexity(); it must not be dispatched to run()',
+      );
+    }
+    if (step === 'rebase') {
+      throw new Error(
+        'rebase is handled by the engine (native git rebase-on-latest); it must not be dispatched to run()',
       );
     }
 

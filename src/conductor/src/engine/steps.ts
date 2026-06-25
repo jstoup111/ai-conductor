@@ -139,11 +139,25 @@ export const ALL_STEPS: StepDefinition[] = [
     loopGate: true,
   },
   {
+    // Engine-native loop gate (like `complexity`, no skillName): rebase the
+    // feature branch onto the discovered base before finish. Its objective
+    // verdict is "branch is current with base" — the conductor runs the rebase
+    // natively (see conductor.ts) rather than dispatching a Claude skill.
+    name: 'rebase',
+    label: 'Rebase',
+    phase: 'SHIP',
+    enforcement: 'structural',
+    prerequisites: ['manual_test'],
+    skippableForTiers: [],
+    isCheckpoint: false,
+    loopGate: true,
+  },
+  {
     name: 'finish',
     label: 'Finish',
     phase: 'SHIP',
     enforcement: 'gating',
-    prerequisites: ['retro'],
+    prerequisites: ['rebase'],
     skippableForTiers: [],
     isCheckpoint: false,
     skillName: 'finish',

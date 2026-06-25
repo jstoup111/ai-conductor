@@ -380,6 +380,15 @@ describe('DefaultStepRunner', () => {
       );
     });
 
+    it('refuses to run() the rebase step (engine-managed)', async () => {
+      const provider = createMockProvider();
+      const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project');
+
+      await expect(runner.run('rebase' as StepName, emptyState)).rejects.toThrow(
+        /engine/i,
+      );
+    });
+
     it('assessComplexity calls provider.invoke in print mode', async () => {
       const provider = createMockProvider();
       (provider.invoke as ReturnType<typeof vi.fn>).mockResolvedValue({
