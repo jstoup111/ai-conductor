@@ -54,9 +54,10 @@ export function launchDaemonDetached(
 ): void {
   const spawnFn = opts.spawn ?? (nodeSpawn as unknown as SpawnFn);
   const command = opts.command ?? 'npx';
-  const args = opts.args ?? ['conduct', 'daemon', '--project', project];
+  const args = opts.args ?? ['conduct', 'daemon'];
 
   const child = spawnFn(command, args, {
+    cwd: project,
     detached: true,
     stdio: 'ignore',
   });
