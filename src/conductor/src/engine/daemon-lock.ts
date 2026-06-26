@@ -350,8 +350,13 @@ export async function ensureRunning(
   repoPath: string,
   opts: EnsureRunningOpts = {},
 ): Promise<void> {
-  // opts.registryDaemonState is intentionally NOT consulted here — pidfile wins.
-  // (FR-23, C4) The parameter exists only so callers can pass it without error.
+  // NON-AUTHORITATIVE MIRROR GATE (FR-23, C4, ADR-010):
+  // opts.registryDaemonState is intentionally NEVER read for any liveness decision.
+  // The pidfile (.daemon/daemon.pid) is the SINGLE source of truth. A stale registry
+  // that claims "running" while the pidfile points at a dead pid is ignored — the
+  // pidfile liveness check wins. Explicitly void the registry view so it is clear
+  // no control path can accidentally read it.
+  void opts.registryDaemonState;
   // Liveness probing uses defaultKill (real process.kill) unconditionally —
   // opts.kill is a management-signal spy, not a liveness substitute.
 
