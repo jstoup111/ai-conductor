@@ -1,5 +1,11 @@
 // Test: LessonStore port + types (Task 10, FR-5, ADR-006)
-import { describe, it, expect } from 'vitest';
+// Task 11: createJsonlLessonStore default adapter
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { mkdtemp, writeFile, mkdir, readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { createBrainStoreReader } from '../../../src/engine/brain-store.js';
+import { createJsonlLessonStore } from '../../../src/engine/brain/lesson-store.js';
 import type {
   LessonStore,
   LessonRecord,
@@ -114,5 +120,224 @@ describe('LessonStore port + LessonQuery/RetrievedLesson types', () => {
     };
     expect(rec.score).toBeUndefined();
     expect(rec.validAt).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 11: createJsonlLessonStore — default keyword/recency adapter (FR-5)
+// ---------------------------------------------------------------------------
+
+/** Minimal valid BrainSignal JSON for test seeding. */
+function makeSignalLine(
+  project: string,
+  feature: string,
+  text: string,
+  ts: string,
+): string {
+  return JSON.stringify({
+    schemaVersion: 1,
+    ts,
+    project,
+    feature,
+    runId: `run-${project}-${feature}`,
+    outcome: 'done',
+    kickbacks: [],
+    halts: [],
+    retryHotspots: [],
+    tokens: { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 },
+    durationByStep: {},
+    // We embed a "narrative" as the feature name for keyword matching.
+    // The signal's feature field acts as the lesson text for ranking.
+  });
+}
+
+describe('createJsonlLessonStore — default JSONL adapter (Task 11, FR-5)', () => {
+  let brainDir: string;
+
+  beforeEach(async () => {
+    brainDir = await mkdtemp(join(tmpdir(), 'brain-test-'));
+    await mkdir(brainDir, { recursive: true });
+  });
+
+  afterEach(async () => {
+    // Cleanup is best-effort; temp dirs accumulate harmlessly in CI.
+  });
+
+  /**
+   * Seed signals.jsonl with signals across projA (2 entries) and projB (2 entries).
+   * Timestamps are spread to test recency ordering within each bucket.
+   */
+  async function seedSignals(): Promise<void> {
+    const lines = [
+      // projA signals (target project) — two distinct features
+      makeSignalLine('projA', 'auth-feature', 'auth login flow', '2026-06-25T10:00:00Z'),
+      makeSignalLine('projA', 'search-feature', 'search results pagination', '2026-06-25T11:00:00Z'),
+      // projB signals (cross-project) — two distinct features
+      makeSignalLine('projB', 'auth-module', 'auth token refresh', '2026-06-25T09:00:00Z'),
+      makeSignalLine('projB', 'checkout-feature', 'checkout payment flow', '2026-06-25T08:00:00Z'),
+    ];
+    await writeFile(join(brainDir, 'signals.jsonl'), lines.join('\n') + '\n', 'utf-8');
+  }
+
+  it('retrieve: target-project (projA) lessons come FIRST', async () => {
+    await seedSignals();
+    const reader = createBrainStoreReader({ brainDir });
+    const store = createJsonlLessonStore(reader);
+
+    const results = await store.retrieve({
+      text: 'auth',
+      namespace: 'projA:auth-feature',
+      topK: 10,
+    });
+
+    // First result must be from projA
+    expect(results.length).toBeGreaterThan(0);
+    expect(results[0]!.metadata['project']).toBe('projA');
+  });
+
+  it('retrieve: all projA results precede any projB results', async () => {
+    await seedSignals();
+    const reader = createBrainStoreReader({ brainDir });
+    const store = createJsonlLessonStore(reader);
+
+    const results = await store.retrieve({
+      text: 'feature',
+      namespace: 'projA:search-feature',
+      topK: 10,
+    });
+
+    // Find first projB result index; every projA must precede it.
+    const firstProjBIndex = results.findIndex(r => r.metadata['project'] === 'projB');
+    if (firstProjBIndex !== -1) {
+      const projAAfterProjB = results
+        .slice(firstProjBIndex)
+        .filter(r => r.metadata['project'] === 'projA');
+      expect(projAAfterProjB).toHaveLength(0);
+    }
+  });
+
+  it('retrieve: result length is bounded by topK', async () => {
+    await seedSignals();
+    const reader = createBrainStoreReader({ brainDir });
+    const store = createJsonlLessonStore(reader);
+
+    const topK = 2;
+    const results = await store.retrieve({
+      text: 'auth',
+      namespace: 'projA:auth-feature',
+      topK,
+    });
+
+    expect(results.length).toBeLessThanOrEqual(topK);
+  });
+
+  it('retrieve: topK=1 returns exactly one result (most relevant / target-project first)', async () => {
+    await seedSignals();
+    const reader = createBrainStoreReader({ brainDir });
+    const store = createJsonlLessonStore(reader);
+
+    const results = await store.retrieve({
+      text: 'auth',
+      namespace: 'projA:auth-feature',
+      topK: 1,
+    });
+
+    expect(results).toHaveLength(1);
+  });
+
+  it('retrieve: cross-project keyword matches appear after target-project results', async () => {
+    await seedSignals();
+    const reader = createBrainStoreReader({ brainDir });
+    const store = createJsonlLessonStore(reader);
+
+    // "auth" keyword matches both projA:auth-feature and projB:auth-module
+    const results = await store.retrieve({
+      text: 'auth',
+      namespace: 'projA:auth-feature',
+      topK: 10,
+    });
+
+    const projAResults = results.filter(r => r.metadata['project'] === 'projA');
+    const projBResults = results.filter(r => r.metadata['project'] === 'projB');
+
+    // projA results should be present
+    expect(projAResults.length).toBeGreaterThan(0);
+
+    // If projB results appear, they must all come AFTER projA results
+    if (projBResults.length > 0) {
+      const lastProjAIndex = results.map(r => r.metadata['project']).lastIndexOf('projA');
+      const firstProjBIndex = results.findIndex(r => r.metadata['project'] === 'projB');
+      expect(firstProjBIndex).toBeGreaterThan(lastProjAIndex);
+    }
+  });
+
+  it('retrieve: each result has required RetrievedLesson fields (id, text, metadata)', async () => {
+    await seedSignals();
+    const reader = createBrainStoreReader({ brainDir });
+    const store = createJsonlLessonStore(reader);
+
+    const results = await store.retrieve({
+      text: 'auth',
+      namespace: 'projA:auth-feature',
+      topK: 10,
+    });
+
+    for (const lesson of results) {
+      expect(typeof lesson.id).toBe('string');
+      expect(lesson.id.length).toBeGreaterThan(0);
+      expect(typeof lesson.text).toBe('string');
+      expect(lesson.text.length).toBeGreaterThan(0);
+      expect(typeof lesson.metadata).toBe('object');
+      expect(lesson.metadata).not.toBeNull();
+    }
+  });
+
+  it('record() is a no-op: does not throw and does not mutate signals.jsonl', async () => {
+    await seedSignals();
+    const reader = createBrainStoreReader({ brainDir });
+    const store = createJsonlLessonStore(reader);
+
+    const before = await readFile(join(brainDir, 'signals.jsonl'), 'utf-8');
+
+    // Calling record() must not throw
+    await expect(
+      store.record({
+        text: 'should not appear',
+        namespace: 'projA:test',
+        metadata: { injected: true },
+      }),
+    ).resolves.toBeUndefined();
+
+    // signals.jsonl must be unchanged
+    const after = await readFile(join(brainDir, 'signals.jsonl'), 'utf-8');
+    expect(after).toBe(before);
+  });
+
+  it('retrieve: empty store returns empty array (no crash on missing file)', async () => {
+    // Don't seed — brainDir exists but signals.jsonl does not
+    const reader = createBrainStoreReader({ brainDir });
+    const store = createJsonlLessonStore(reader);
+
+    const results = await store.retrieve({
+      text: 'auth',
+      namespace: 'projA:auth-feature',
+      topK: 5,
+    });
+
+    expect(results).toEqual([]);
+  });
+
+  it('retrieve: returns empty array when topK=0', async () => {
+    await seedSignals();
+    const reader = createBrainStoreReader({ brainDir });
+    const store = createJsonlLessonStore(reader);
+
+    const results = await store.retrieve({
+      text: 'auth',
+      namespace: 'projA:auth-feature',
+      topK: 0,
+    });
+
+    expect(results).toHaveLength(0);
   });
 });

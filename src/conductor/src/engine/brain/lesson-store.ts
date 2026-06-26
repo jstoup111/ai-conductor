@@ -1,12 +1,14 @@
 // LessonStore port + types (ADR-006, FR-5).
 //
 // This file defines the authoritative port interface for lesson retrieval and
-// recording. Only the interface contract lives here — adapters (JSONL default,
-// semantic, etc.) are defined in separate files (later tasks).
+// recording. The default JSONL adapter (createJsonlLessonStore) is also
+// defined here (Task 11). Semantic adapters live in separate files.
 //
 // The LESSON_STORE_VERSION sentinel is a module-level export that allows tests
 // and consumers to perform a runtime import (forcing module resolution) without
 // depending on any concrete adapter.
+
+import type { BrainStoreReader, BrainSignal } from '../brain-store.js';
 
 /** Sentinel string — exported so tests can verify the module resolves at runtime. */
 export const LESSON_STORE_VERSION = '1';
@@ -111,4 +113,113 @@ export interface LessonStore {
    * `score` is absent.
    */
   retrieve(query: LessonQuery): Promise<RetrievedLesson[]>;
+}
+
+// ---------------------------------------------------------------------------
+// Default adapter: keyword/recency over JSONL (Task 11, FR-5)
+// ---------------------------------------------------------------------------
+
+const DEFAULT_TOP_K = 10;
+
+/**
+ * Map a BrainSignal to a RetrievedLesson.
+ *
+ * Mapping strategy:
+ *   id       → "<project>:<feature>:<runId>" — unique per run
+ *   text     → "<feature>: <outcome>" — the most human-meaningful summary
+ *              available in a BrainSignal without a narrative. If a
+ *              narrativeRef is present it is noted; narrative body is not
+ *              read here (lesson-store is a retrieval layer, not an I/O layer).
+ *   score    → absent (rank-by-position per spec; no numeric score fabricated)
+ *   metadata → all BrainSignal scalar fields for downstream filtering
+ *   validAt  → signal's `ts` field (the moment the signal was assembled)
+ */
+function signalToLesson(sig: BrainSignal): RetrievedLesson {
+  const id = `${sig.project}:${sig.feature}:${sig.runId}`;
+  const text = sig.narrativeRef
+    ? `${sig.feature}: ${sig.outcome} (narrative: ${sig.narrativeRef})`
+    : `${sig.feature}: ${sig.outcome}`;
+  return {
+    id,
+    text,
+    // score intentionally absent — rank-by-position (insertion/recency order)
+    metadata: {
+      project: sig.project,
+      feature: sig.feature,
+      runId: sig.runId,
+      outcome: sig.outcome,
+      schemaVersion: sig.schemaVersion,
+      ...(sig.narrativeRef !== undefined ? { narrativeRef: sig.narrativeRef } : {}),
+    },
+    validAt: sig.ts,
+  };
+}
+
+/**
+ * Keyword match: return true if the query text overlaps with any word in the
+ * signal's project+feature+outcome text. Case-insensitive, word-boundary split.
+ * Treats the entire signal as a bag of words — good enough for the JSONL tier
+ * (a semantic adapter handles embeddings in a later task).
+ */
+function keywordMatches(sig: BrainSignal, queryText: string): boolean {
+  if (!queryText.trim()) return true; // empty query → match all
+  const haystack = `${sig.project} ${sig.feature} ${sig.outcome}`.toLowerCase();
+  const needles = queryText.toLowerCase().split(/\s+/).filter(Boolean);
+  return needles.some(needle => haystack.includes(needle));
+}
+
+/**
+ * Create a `LessonStore` backed by the provided `BrainStoreReader`.
+ *
+ * Ranking: target-project lessons FIRST (by recency — newest first within the
+ * bucket), then cross-project keyword/recency matches (newest first). Result
+ * is bounded to `topK` (defaults to 10 when absent or undefined).
+ *
+ * `record()` is a no-op pass-through — the JSONL store is the system of
+ * record; recording happens via `appendSignal` elsewhere.
+ */
+export function createJsonlLessonStore(reader: BrainStoreReader): LessonStore {
+  return {
+    // No-op: recording is owned by appendSignal in brain-store.ts (FR-5).
+    async record(_lesson: LessonRecord): Promise<void> {
+      // intentional no-op
+    },
+
+    async retrieve(query: LessonQuery): Promise<RetrievedLesson[]> {
+      const limit = query.topK ?? DEFAULT_TOP_K;
+      if (limit <= 0) return [];
+
+      // Parse the namespace to extract the target project name.
+      // namespace format: "project:feature" (adapter owns encoding per spec).
+      const colonIdx = query.namespace.indexOf(':');
+      const targetProject = colonIdx !== -1
+        ? query.namespace.slice(0, colonIdx)
+        : query.namespace;
+
+      // Read all signals — no filter, we bucket manually below.
+      const allSignals = await reader.readSignals();
+
+      // Bucket 1: target-project signals (all of them, regardless of keyword)
+      const targetSignals = allSignals.filter(s => s.project === targetProject);
+
+      // Bucket 2: cross-project signals matching the query keywords (recency)
+      // Excludes target-project signals to avoid duplication.
+      const crossSignals = allSignals.filter(
+        s => s.project !== targetProject && keywordMatches(s, query.text),
+      );
+
+      // Within each bucket sort newest-first (ts is ISO-8601, lexicographic sort works).
+      const byRecencyDesc = (a: BrainSignal, b: BrainSignal): number =>
+        b.ts.localeCompare(a.ts);
+
+      targetSignals.sort(byRecencyDesc);
+      crossSignals.sort(byRecencyDesc);
+
+      // Concatenate: target-project first, then cross-project matches.
+      const ranked = [...targetSignals, ...crossSignals];
+
+      // Bound to topK and map to RetrievedLesson.
+      return ranked.slice(0, limit).map(signalToLesson);
+    },
+  };
 }
