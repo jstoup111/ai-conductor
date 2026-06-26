@@ -422,12 +422,17 @@ export async function ensureRunning(
     // Step 2: fire-and-forget — spawn exactly once (FR-21).
     await Promise.resolve(launchFn(repoPath));
 
-    // Step 3: best-effort mirror write — NON-FATAL on any error (FR-23, C4).
+    // Step 3: DERIVED mirror write — NON-FATAL on any error (FR-23, C4).
+    // The `daemonState` field in the registry is a DERIVED read-only mirror for
+    // governor reporting. Its value is derived FROM the confirmed pidfile result,
+    // never the other way around. Failure here must not block the loop — the
+    // pidfile is authoritative and the daemon is already running.
     if (opts.writeDaemonState) {
       try {
         await opts.writeDaemonState();
       } catch {
         // Mirror write failure is intentionally swallowed — pidfile is authoritative.
+        // The registry view may be stale; the next ensureRunning probe will correct it.
       }
     }
   }
