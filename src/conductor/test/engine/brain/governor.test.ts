@@ -99,10 +99,10 @@ describe('governorReport — happy path (seeded store)', () => {
     const reader = createBrainStoreReader({ brainDir: tmpDir });
     const report = await governorReport(reader);
 
-    expect(report.tokens.input).toBe(600);
-    expect(report.tokens.output).toBe(300);
-    expect(report.tokens.cacheRead).toBe(60);
-    expect(report.tokens.cacheCreation).toBe(30);
+    expect(report.totalTokens.input).toBe(600);
+    expect(report.totalTokens.output).toBe(300);
+    expect(report.totalTokens.cacheRead).toBe(60);
+    expect(report.totalTokens.cacheCreation).toBe(30);
   });
 
   it('returns kickbackRate matching computeSignalRates over the same signals', async () => {
@@ -146,10 +146,10 @@ describe('governorReport — happy path (seeded store)', () => {
     const report: GovernorReport = await governorReport(reader);
 
     // Type-level: if GovernorReport is missing any field TypeScript rejects this.
-    expect(typeof report.tokens.input).toBe('number');
-    expect(typeof report.tokens.output).toBe('number');
-    expect(typeof report.tokens.cacheRead).toBe('number');
-    expect(typeof report.tokens.cacheCreation).toBe('number');
+    expect(typeof report.totalTokens.input).toBe('number');
+    expect(typeof report.totalTokens.output).toBe('number');
+    expect(typeof report.totalTokens.cacheRead).toBe('number');
+    expect(typeof report.totalTokens.cacheCreation).toBe('number');
     expect(typeof report.kickbackRate).toBe('number');
     expect(typeof report.haltRate).toBe('number');
     expect(typeof report.retryRate).toBe('number');
@@ -197,10 +197,10 @@ describe('governorReport — empty store (safe zeros, no NaN)', () => {
     const reader = createBrainStoreReader({ brainDir: tmpDir });
     const report = await governorReport(reader);
 
-    expect(report.tokens.input).toBe(0);
-    expect(report.tokens.output).toBe(0);
-    expect(report.tokens.cacheRead).toBe(0);
-    expect(report.tokens.cacheCreation).toBe(0);
+    expect(report.totalTokens.input).toBe(0);
+    expect(report.totalTokens.output).toBe(0);
+    expect(report.totalTokens.cacheRead).toBe(0);
+    expect(report.totalTokens.cacheCreation).toBe(0);
   });
 
   it('no rate field is NaN for empty store (composite guard)', async () => {
@@ -255,8 +255,8 @@ describe('governorReport — malformed lines skipped + counted', () => {
     // Only sig1 + sig2 are valid (totalSignals = 2)
     expect(report.totalSignals).toBe(2);
     // tokens from sig1 + sig2 only
-    expect(report.tokens.input).toBe(300); // 100 + 200
-    expect(report.tokens.output).toBe(150); // 50 + 100
+    expect(report.totalTokens.input).toBe(300); // 100 + 200
+    expect(report.totalTokens.output).toBe(150); // 50 + 100
   });
 
   it('skipped count does not inflate totalSignals', async () => {

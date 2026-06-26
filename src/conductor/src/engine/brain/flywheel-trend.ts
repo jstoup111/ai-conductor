@@ -37,7 +37,8 @@
  */
 
 import type { BrainStoreReader } from '../brain-store.js';
-import type { AuthoredKey } from './authored-ledger.js';
+import type { AuthoredKey, AuthoredLedgerOpts } from './authored-ledger.js';
+import { recordAuthoredKey, readAuthoredKeys } from './authored-ledger.js';
 import { computeSignalRates } from './rates.js';
 import type { SignalRates } from './rates.js';
 
@@ -59,14 +60,14 @@ export interface FeatureTrendEntry {
 /**
  * Successful trend result: >=2 brain-planned features with store signals.
  *
- * `features` is chronologically ordered (oldest earliestTs first).
- * `direction` compares `features[0].rates.kickbackRate` vs
- * `features[features.length - 1].rates.kickbackRate`.
+ * `series` is chronologically ordered (oldest earliestTs first).
+ * `direction` compares `series[0].rates.kickbackRate` vs
+ * `series[series.length - 1].rates.kickbackRate`.
  */
 export interface FlywheelTrend {
   kind: 'trend';
   /** Chronologically-ordered (earliest ts first) per-feature rate entries. */
-  features: FeatureTrendEntry[];
+  series: FeatureTrendEntry[];
   /** Trend direction driven by kickbackRate (first → last). */
   direction: TrendDirection;
 }
@@ -75,12 +76,12 @@ export interface FlywheelTrend {
  * Insufficient-data sentinel: fewer than 2 brain-planned features survived the
  * store ∩ ledger intersection. No trend direction can be derived.
  *
- * `direction` is always `"insufficient-data"` — never "improving"/"regressing".
+ * `direction` is always `"insufficient_data"` — never "improving"/"regressing".
  */
 export interface FlywheelTrendInsufficient {
   kind: 'insufficient-data';
-  /** Always "insufficient-data" — distinguishes from valid trend directions. */
-  direction: 'insufficient-data';
+  /** Always "insufficient_data" — distinguishes from valid trend directions. */
+  direction: 'insufficient_data';
   /** How many features did survive the intersection (0 or 1). */
   featuresFound: number;
 }
@@ -88,15 +89,61 @@ export interface FlywheelTrendInsufficient {
 /** Union of both possible return shapes. Callers must narrow on `kind`. */
 export type FlywheelTrendResult = FlywheelTrend | FlywheelTrendInsufficient;
 
+// ─── Authored-ledger object type ──────────────────────────────────────────────
+
+/**
+ * Durable ledger object returned by `createAuthoredLedger`.
+ *
+ * Exposes `record` (mutating, idempotent) and `read` (non-mutating) methods
+ * backed by the `authored-ledger.ts` file-based persistence layer.
+ */
+export interface AuthoredLedger {
+  /** Record a (project, feature) pair. Idempotent. */
+  record(project: string, feature: string): Promise<void>;
+  /** Read all recorded (project, feature) pairs. */
+  read(): Promise<AuthoredKey[]>;
+}
+
+// ─── Factory ──────────────────────────────────────────────────────────────────
+
+/**
+ * Create a durable authored-ledger object backed by `authored-ledger.ts`.
+ *
+ * `opts` is forwarded to `recordAuthoredKey`/`readAuthoredKeys` — it may
+ * include `brainDir` to override the default brain directory (driven by
+ * `$AI_CONDUCTOR_BRAIN_DIR` or a default path). When called with no args,
+ * the ledger resolves its directory from the environment at call time.
+ *
+ * @example
+ *   const ledger = createAuthoredLedger();
+ *   await ledger.record('my-project', 'feature-x');
+ *   const keys = await ledger.read();
+ */
+export function createAuthoredLedger(opts?: AuthoredLedgerOpts): AuthoredLedger {
+  return {
+    async record(project: string, feature: string): Promise<void> {
+      await recordAuthoredKey(project, feature, opts);
+    },
+    async read(): Promise<AuthoredKey[]> {
+      return readAuthoredKeys(opts);
+    },
+  };
+}
+
 // ─── Implementation ───────────────────────────────────────────────────────────
 
 /**
  * Compute the flywheel learning trend over `store signals ∩ authored-keys ledger`.
  *
  * @param reader  — A BrainStoreReader from `createBrainStoreReader()`.
- * @param ledger  — The authored-keys array from `readAuthoredKeys()` (or injected
- *                  in tests). The caller is responsible for reading / injecting the
- *                  ledger so this function stays pure and testable.
+ * @param ledger  — Either:
+ *                  (a) An `AuthoredKey[]` array (raw keys — backward-compatible
+ *                      with the original callers that pass `readAuthoredKeys()`
+ *                      output directly), OR
+ *                  (b) An `AuthoredLedger` object from `createAuthoredLedger()`
+ *                      (durable ledger with `record`/`read` methods).
+ *                  When an object is passed, its `read()` method is called to
+ *                  obtain the keys; when an array is passed, it is used directly.
  * @param _opts   — Reserved for future extension (currently unused).
  *
  * @returns `FlywheelTrend` when >=2 features are present in both store and ledger,
@@ -104,13 +151,16 @@ export type FlywheelTrendResult = FlywheelTrend | FlywheelTrendInsufficient;
  */
 export async function computeFlywheelTrend(
   reader: BrainStoreReader,
-  ledger: AuthoredKey[],
+  ledger: AuthoredKey[] | AuthoredLedger,
   _opts?: Record<string, unknown>,
 ): Promise<FlywheelTrendResult> {
+  // Normalize: resolve to AuthoredKey[] regardless of input form.
+  const keys: AuthoredKey[] = Array.isArray(ledger) ? ledger : await ledger.read();
+
   // Step 1: Build a set of authored keys for O(1) intersection lookup.
   // Key format: "project\x00feature" (null-byte separator, same as authored-ledger.ts).
   const ledgerSet = new Set<string>(
-    ledger.map(({ project, feature }) => `${project}\x00${feature}`),
+    keys.map(({ project, feature }) => `${project}\x00${feature}`),
   );
 
   // Step 2: Read ALL signals from the store (no filter — we intersect manually
@@ -155,7 +205,7 @@ export async function computeFlywheelTrend(
   if (entries.length < 2) {
     return {
       kind: 'insufficient-data',
-      direction: 'insufficient-data',
+      direction: 'insufficient_data',
       featuresFound: entries.length,
     };
   }
@@ -175,7 +225,7 @@ export async function computeFlywheelTrend(
 
   return {
     kind: 'trend',
-    features: entries,
+    series: entries,
     direction,
   };
 }

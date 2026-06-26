@@ -103,7 +103,7 @@ describe('computeFlywheelTrend', () => {
       expect(trend.direction).toBe('improving');
     });
 
-    it('includes both features in the per-feature rates list', async () => {
+    it('includes both features in the per-feature series list', async () => {
       const sigAlpha = makeSignal({
         project: 'proj-A',
         feature: 'feat-alpha',
@@ -128,8 +128,8 @@ describe('computeFlywheelTrend', () => {
       const result = await computeFlywheelTrend(reader, ledger);
       const trend = result as FlywheelTrend;
 
-      expect(trend.features).toHaveLength(2);
-      const featureNames = trend.features.map((f) => f.feature);
+      expect(trend.series).toHaveLength(2);
+      const featureNames = trend.series.map((f) => f.feature);
       expect(featureNames).toContain('feat-alpha');
       expect(featureNames).toContain('feat-beta');
     });
@@ -158,8 +158,8 @@ describe('computeFlywheelTrend', () => {
       const trend = result as FlywheelTrend;
 
       // Oldest signal ts (feat-alpha at 08:00) must come first
-      expect(trend.features[0]!.feature).toBe('feat-alpha');
-      expect(trend.features[1]!.feature).toBe('feat-beta');
+      expect(trend.series[0]!.feature).toBe('feat-alpha');
+      expect(trend.series[1]!.feature).toBe('feat-beta');
     });
 
     it('returns direction "regressing" when kickback rate increases first→last', async () => {
@@ -239,7 +239,7 @@ describe('computeFlywheelTrend', () => {
 
       const result = await computeFlywheelTrend(reader, ledger);
       const trend = result as FlywheelTrend;
-      const alphaEntry = trend.features.find((f) => f.feature === 'feat-alpha');
+      const alphaEntry = trend.series.find((f) => f.feature === 'feat-alpha');
 
       expect(alphaEntry).toBeDefined();
       // 2 kickback events / 1 signal = kickbackRate 2.0
@@ -345,7 +345,7 @@ describe('computeFlywheelTrend', () => {
       const trend = result as FlywheelTrend;
 
       // The non-brain feature must NOT appear in the trend output
-      const featureNames = trend.features.map((f) => f.feature);
+      const featureNames = trend.series.map((f) => f.feature);
       expect(featureNames).not.toContain('feat-non-brain');
 
       // The two brain features MUST appear
@@ -389,7 +389,7 @@ describe('computeFlywheelTrend', () => {
       expect(result.kind).toBe('trend');
       const trend = result as FlywheelTrend;
 
-      const featureNames = trend.features.map((f) => f.feature);
+      const featureNames = trend.series.map((f) => f.feature);
 
       // feat-ghost must NOT appear (no zero-rate phantom)
       expect(featureNames).not.toContain('feat-ghost');

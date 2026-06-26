@@ -88,8 +88,10 @@ export function computeSignalRates(signals: BrainSignal[]): SignalRates {
 
     // Kickback count — sum KickbackEntry.count fields (each entry records how
     // many times that from→to pair fired; assembled by aggregateKickbacks).
+    // Guard: treat missing/undefined count as 1 (one kickback event per entry)
+    // to remain correct when kickback entries omit the count field.
     for (const kb of sig.kickbacks) {
-      totalKickbacks += kb.count;
+      totalKickbacks += typeof (kb as any).count === 'number' ? (kb as any).count : 1;
     }
 
     // Halt count — one HaltEntry per loop_halt event (assembled by aggregateHalts).

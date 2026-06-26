@@ -31,7 +31,7 @@ export interface GovernorReport {
   /** Total number of valid signals read from the store. */
   totalSignals: number;
   /** Aggregate token spend across all valid signals. */
-  tokens: {
+  totalTokens: {
     input: number;
     output: number;
     cacheRead: number;
@@ -93,7 +93,7 @@ export async function governorReport(
 
   return {
     totalSignals: rates.totalSignals,
-    tokens: rates.tokens,
+    totalTokens: rates.tokens,
     kickbackRate: rates.kickbackRate,
     haltRate: rates.haltRate,
     retryRate: rates.retryRate,
