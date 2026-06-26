@@ -1,7 +1,11 @@
 # ADR 004: Engineer authoring model + cross-repo isolation
 
 **Date:** 2026-06-25
-**Status:** APPROVED
+**Status:** SUPERSEDED
+**Superseded by:** ADR-008 (agent-hosted loop + in-chat human-gated authoring; cross-repo isolation
+re-established via canonical-path resolution + path-prefix write guard instead of the OS process
+boundary). The canonical-path-resolution-with-no-cwd-fallback rule from this ADR is **retained** by
+ADR-008; only the subprocess substrate is removed.
 **Deciders:** James (solo dev) + harness architecture-review
 **Feature:** Phase 9.3 — supervisor/engineer (capstone)
 **Decision surfaces:** DS-1 (run DECIDE against another repo), DS-5 (cross-repo path safety, FR-11)

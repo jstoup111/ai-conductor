@@ -1,7 +1,11 @@
 # ADR 007: Interactive engineer loop — routing inference + spec-PR handoff
 
 **Date:** 2026-06-25
-**Status:** APPROVED
+**Status:** SUPERSEDED
+**Superseded by:** ADR-008 (agent-hosted, in-chat, human-gated loop with in-chat routing — no Node
+TTY REPL, no spawned `claude -p`). The **routing discriminated union** (`confirmed | redirected |
+create | declined`, exhaustive switch, type-enforced zero-writes-on-decline) and the **PR-machinery
+reuse** from this ADR are **retained** by ADR-008; only the REPL/subprocess substrate is removed.
 **Deciders:** James (solo dev) + harness architecture-review
 **Feature:** Phase 9.3 — supervisor/engineer (capstone)
 **Decision surfaces:** DS-2 (routing inference, FR-3/4), DS-4 (spec-PR opener, FR-7)
