@@ -5,7 +5,7 @@
 //   1. Load the project registry and open the engineer store.
 //   2. Print the project count.
 //   3. Enter the read-line loop: blank → re-prompt; exit/EOF → clean return.
-//   4. Non-blank, non-exit lines: route → confirmation gate → authorSpec → PR.
+//   4. Non-blank, non-exit lines: route → confirmation gate → runAuthoring → PR.
 //
 // Public contract:
 //   runEngineerMode(deps: EngineerDeps): Promise<EngineerSessionSummary>
@@ -22,8 +22,7 @@
 
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
-import { writeFile, mkdir } from 'node:fs/promises';
-import { join, basename } from 'node:path';
+import { basename } from 'node:path';
 import type { LLMProvider } from '../../execution/llm-provider.js';
 // FR-13/FR-1: depend on the intake PORT interface, never the concrete adapter.
 import type { IntakePort } from './intake/port.js';
@@ -32,7 +31,8 @@ import { createEngineerStoreReader } from '../engineer-store.js';
 import { routeIdea, createOnNoFit } from './routing.js';
 import { resolveTargetRepo } from './target.js';
 import { createJsonlLessonStore, selectLessons } from './lesson-store.js';
-import { buildAuthoringPrompt, authorSpec } from './authoring.js';
+import { buildAuthoringPrompt, runAuthoring } from './authoring.js';
+import type { DecideResult } from './authoring.js';
 import { openSpecPr } from './handoff.js';
 import { recordAuthoredKey } from './authored-ledger.js';
 import { runCreate } from '../registry-cli.js';
@@ -85,6 +85,16 @@ export interface EngineerDeps {
    * Injecting a spy here lets tests assert "was called" without spawning processes.
    */
   ensureRunningLaunch?: (repoPath: string) => void | Promise<void>;
+  /**
+   * Host-agent human-gated DECIDE seam. Called once per step.
+   * Absent → runAuthoring throws (fail-closed — no authoring without a seam).
+   */
+  decide?: (ctx: {
+    step: 'brainstorm' | 'stories' | 'plan';
+    idea: string;
+    project: string;
+    prompt: string;
+  }) => Promise<DecideResult>;
 }
 
 /**
@@ -120,7 +130,7 @@ const DECLINE_WORDS = new Set(['n', 'no']);
  *      - null/EOF    → break, return summary.
  *      - "exit"      → break, return summary.
  *      - blank line  → re-prompt (continue).
- *      - real idea   → route → gate → authorSpec → PR/handoff.
+ *      - real idea   → route → gate → runAuthoring → PR/handoff.
  *
  * Malformed registry: readRegistry() inside createRegistryReader throws
  * with a message containing "registry" — this propagates as a fast error.
@@ -280,7 +290,7 @@ async function processIdea(
         }
         // Perform the create: runCreate + git initial commit.
         // runCreate does git init + CLAUDE.md + .gitignore but leaves the repo
-        // uncommitted (no HEAD). We need an initial commit so authorSpec's
+        // uncommitted (no HEAD). We need an initial commit so runAuthoring's
         // dirty-guard and branch creation work correctly.
         const projectName = basename(path);
         await createOnNoFit(
@@ -387,59 +397,20 @@ async function processIdea(
   // 4b. Select lessons (flywheel).
   const digest = await selectLessons(idea, target.name, lessonStore);
 
-  // 4c. Build authoring provider that writes artifact files AND invokes the LLM.
-  // authorSpec will: checkout spec branch, invoke this provider, then
-  // git add .docs/specs .docs/stories .docs/plans + commit.
-  // We write files here so the git add step finds content in all three dirs.
-  const authoringProvider = {
-    invoke: async (opts: { cwd: string; idea: string; branch: string }): Promise<void> => {
-      // Build the prompt (embeds digest so the lesson marker is in the prompt).
-      const { prompt } = buildAuthoringPrompt(idea, target.name, digest);
+  // 4c. Build the authoring prompt (embeds digest so lessons are visible to the DECIDE seam).
+  const { prompt: authoringPrompt } = buildAuthoringPrompt(idea, target.name, digest);
 
-      // Invoke the LLM (acceptance test stub identifies authoring by presence of cwd).
-      const result = await deps.provider.invoke({ cwd: opts.cwd, prompt } as any);
-      const content = (result as any).output ?? '';
-
-      // Materialize spec artifacts under .docs/ in the target repo.
-      // authorSpec will `git add .docs/specs .docs/stories .docs/plans`, so all
-      // three dirs need ≥1 file. Scenario 4.4 asserts every committed path starts
-      // with `.docs/` — all files are under .docs/ here.
-      const slug = idea
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, '-')
-        .replace(/^-+|-+$/g, '')
-        .slice(0, 50);
-
-      const specsDir = join(opts.cwd, '.docs', 'specs');
-      const storiesDir = join(opts.cwd, '.docs', 'stories');
-      const plansDir = join(opts.cwd, '.docs', 'plans');
-
-      await mkdir(specsDir, { recursive: true });
-      await mkdir(storiesDir, { recursive: true });
-      await mkdir(plansDir, { recursive: true });
-
-      await writeFile(
-        join(specsDir, `${slug}.md`),
-        `# ${idea}\n\n${content}`,
-        'utf-8',
-      );
-      // Stories and plans use LLM content, not template placeholders.
-      // C2: placeholder stubs and DRAFT-status content are forbidden.
-      await writeFile(
-        join(storiesDir, `${slug}.md`),
-        `# Stories: ${idea}\n\n${content}`,
-        'utf-8',
-      );
-      await writeFile(
-        join(plansDir, `${slug}.md`),
-        `# Plan: ${idea}\n\n${content}`,
-        'utf-8',
-      );
-    },
-  };
-
-  // 4d. Author the spec (creates branch, writes + commits artifacts).
-  const { branch } = await authorSpec(target, idea, digest, authoringProvider);
+  // 4d. Author the spec via the gated runAuthoring seam (C2: no subprocess, no stub).
+  //     deps.decide is the host-agent DECIDE seam; absent → fail-closed.
+  if (!deps.decide) {
+    throw new Error(
+      'engineer: no DECIDE seam wired — cannot author (agent-hosted decide required)',
+    );
+  }
+  const decideFn = deps.decide;
+  const decide = (step: string) =>
+    decideFn({ step: step as 'brainstorm' | 'stories' | 'plan', idea, project: target.name, prompt: authoringPrompt });
+  const { branch } = await runAuthoring(target, idea, { decide });
 
   // 4e. PR / handoff, gated on remote presence.
   if (target.remote) {

@@ -55,8 +55,16 @@ export class AuthoringGuard {
    *   assumed by the caller — this constructor normalises internally).
    */
   constructor(canonicalPath: string) {
-    // Normalise: strip any trailing slash, resolve dot-segments.
-    this.prefix = normalize(canonicalPath);
+    // Normalise: resolve dot-segments, then strip any trailing slash(es) so
+    // that `prefix` never ends in `/` (except for the filesystem root `/`).
+    // Without this, a canonicalPath like `/home/p/` would normalise to
+    // `/home/p/`, and `normalised.startsWith(this.prefix + sep)` would never
+    // match because every child path starts with `/home/p/` (already has sep),
+    // causing assertWriteAllowed to reject ALL legitimate writes (fail-closed
+    // on a correctly-rooted path is a silent regression, not a safety win).
+    const normalised = normalize(canonicalPath);
+    // Strip trailing separator(s) unless the path is the root (`/`).
+    this.prefix = normalised.length > 1 ? normalised.replace(/\/+$/, '') : normalised;
   }
 
   /**

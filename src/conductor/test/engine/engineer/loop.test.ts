@@ -499,6 +499,33 @@ function makeTestGh(prUrl = 'https://example.invalid/x/pull/1') {
   return { gh, calls };
 }
 
+/**
+ * Approving DECIDE seam for loop tests that reach authoring.
+ * Returns real artifacts containing the required markers so runAuthoring
+ * can complete successfully: Status: Accepted in stories, ## Task Dependency
+ * Graph in plan.
+ */
+function makeTestDecide() {
+  return async (ctx: { step: 'brainstorm' | 'stories' | 'plan'; idea: string; project: string; prompt: string }) => {
+    if (ctx.step === 'brainstorm') {
+      return { approved: true, artifact: `# PRD: ${ctx.idea}\n\nApproved.\n` };
+    }
+    if (ctx.step === 'stories') {
+      return {
+        approved: true,
+        artifact: `# Stories: ${ctx.idea}\n\n**Status:** Accepted\n\n## Story: feature\n\n### AC\n- Given x, when y, then z.\n`,
+      };
+    }
+    if (ctx.step === 'plan') {
+      return {
+        approved: true,
+        artifact: `# Plan: ${ctx.idea}\n\n## Tasks\n\n### Task 1\n**Dependencies:** none\n\n## Task Dependency Graph\n\`\`\`\n1\n\`\`\`\n`,
+      };
+    }
+    return { approved: true, artifact: '' };
+  };
+}
+
 // ═════════════════════════════════════════════════════════════════════════════
 // Task 29 (FR-4): Multi-repo fan-out — independent authoring.
 // Test: idea spanning targets {A,B}, after human confirms, authors INDEPENDENT
@@ -530,6 +557,7 @@ describe('Task 29: multi-repo fan-out independent authoring (FR-4)', () => {
       gh,
       registryPath,
       engineerDir,
+      decide: makeTestDecide(),
     });
 
     // At least 1 idea processed (alpha confirmed)
@@ -555,6 +583,7 @@ describe('Task 29: multi-repo fan-out independent authoring (FR-4)', () => {
       gh,
       registryPath,
       engineerDir,
+      decide: makeTestDecide(),
     });
 
     // Every gh call must be pr create, never merge
@@ -581,6 +610,7 @@ describe('Task 29: multi-repo fan-out independent authoring (FR-4)', () => {
       gh,
       registryPath,
       engineerDir,
+      decide: makeTestDecide(),
     });
 
     expect(summary.ideasProcessed).toBe(2);
@@ -632,6 +662,7 @@ describe('Task 30: fan-out partial-failure isolation + deselect (FR-4)', () => {
       gh,
       registryPath,
       engineerDir,
+      decide: makeTestDecide(),
     });
 
     // Session must survive per-idea errors
@@ -706,7 +737,7 @@ describe('Task 36: spec PR opened, never merge/build (FR-7, FR-10)', () => {
     const { gh, calls } = makeTestGh(prUrl);
     const { io, text } = scriptedIo(['add csv export', 'y', 'exit']);
 
-    const summary = await runEngineerMode({ provider, io, gh, registryPath, engineerDir });
+    const summary = await runEngineerMode({ provider, io, gh, registryPath, engineerDir, decide: makeTestDecide() });
 
     // PR URL reported in output
     expect(text()).toMatch(/pull\/42/);
@@ -728,7 +759,7 @@ describe('Task 36: spec PR opened, never merge/build (FR-7, FR-10)', () => {
     const { gh, calls } = makeTestGh();
     const { io } = scriptedIo(['some idea', 'y', 'exit']);
 
-    const summary = await runEngineerMode({ provider, io, gh, registryPath, engineerDir });
+    const summary = await runEngineerMode({ provider, io, gh, registryPath, engineerDir, decide: makeTestDecide() });
 
     // Exhaustive check: no call may contain 'merge' in any arg position
     for (const callArgs of calls) {
@@ -747,7 +778,7 @@ describe('Task 36: spec PR opened, never merge/build (FR-7, FR-10)', () => {
     const { gh, calls } = makeTestGh();
     const { io, text } = scriptedIo(['offline idea', 'y', 'exit']);
 
-    const summary = await runEngineerMode({ provider, io, gh, registryPath, engineerDir });
+    const summary = await runEngineerMode({ provider, io, gh, registryPath, engineerDir, decide: makeTestDecide() });
 
     // Non-fatal exit
     expect(summary.exitCode ?? 0).toBe(0);
@@ -809,6 +840,7 @@ describe('Task 37: ensure-running wired after handoff (FR-21)', () => {
       registryPath,
       engineerDir,
       ensureRunningLaunch,
+      decide: makeTestDecide(),
     });
 
     // ensureRunning must have been called for the target repo
@@ -896,6 +928,7 @@ describe('Task 37: ensure-running wired after handoff (FR-21)', () => {
       registryPath,
       engineerDir,
       ensureRunningLaunch,
+      decide: makeTestDecide(),
     });
 
     expect(summary.ideasProcessed).toBe(2);

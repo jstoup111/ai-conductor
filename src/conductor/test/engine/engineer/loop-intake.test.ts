@@ -106,6 +106,33 @@ function makeGh(prUrl = 'https://example.invalid/x/pull/1') {
   return { gh, calls };
 }
 
+/**
+ * Approving DECIDE seam for tests that reach authoring.
+ * Returns real artifacts with the required markers so runAuthoring completes:
+ *   - stories: Status: Accepted
+ *   - plan: ## Task Dependency Graph
+ */
+function makeTestDecide() {
+  return async (ctx: { step: 'brainstorm' | 'stories' | 'plan'; idea: string; project: string; prompt: string }) => {
+    if (ctx.step === 'brainstorm') {
+      return { approved: true, artifact: `# PRD: ${ctx.idea}\n\nApproved.\n` };
+    }
+    if (ctx.step === 'stories') {
+      return {
+        approved: true,
+        artifact: `# Stories: ${ctx.idea}\n\n**Status:** Accepted\n\n## Story: main\n\n### AC\n- Given x, when y, then z.\n`,
+      };
+    }
+    if (ctx.step === 'plan') {
+      return {
+        approved: true,
+        artifact: `# Plan: ${ctx.idea}\n\n## Tasks\n\n### Task 1\n**Dependencies:** none\n\n## Task Dependency Graph\n\`\`\`\n1\n\`\`\`\n`,
+      };
+    }
+    return { approved: true, artifact: '' };
+  };
+}
+
 /** Initialize a git repo with at least one commit. */
 async function initRepo(dir: string, withRemote = true): Promise<void> {
   await mkdir(dir, { recursive: true });
@@ -176,7 +203,7 @@ describe('loop-intake: confirm path', () => {
     const { gh } = makeGh('https://example.invalid/alpha/pull/42');
     const { io } = scriptedIo(['add csv export', 'y', 'exit']);
 
-    const summary = await runEngineerMode({ provider, io, gh });
+    const summary = await runEngineerMode({ provider, io, gh, decide: makeTestDecide() });
 
     // Confirm path: ideasProcessed must be 1.
     expect(summary.ideasProcessed).toBe(1);
@@ -198,7 +225,7 @@ describe('loop-intake: confirm path', () => {
     const { gh } = makeGh();
     const { io } = scriptedIo(['add widget', 'y', 'exit']);
 
-    await runEngineerMode({ provider, io, gh });
+    await runEngineerMode({ provider, io, gh, decide: makeTestDecide() });
 
     const branches = (await exec('git', ['branch', '--list', 'spec/*'], { cwd: repo })).stdout;
     expect(branches).toMatch(/spec\//);
@@ -305,7 +332,7 @@ describe('loop-intake: redirect to unknown project', () => {
     // redirect unknown, then confirm valid target
     const { io, text } = scriptedIo(['some idea', 'redirect nonesuch', 'y', 'exit']);
 
-    const summary = await runEngineerMode({ provider, io, gh });
+    const summary = await runEngineerMode({ provider, io, gh, decide: makeTestDecide() });
 
     // After rejecting the unknown redirect, the gate re-prompts and accepts 'y'
     expect(text()).toMatch(/not (a )?registered|unknown project/i);
@@ -333,7 +360,7 @@ describe('loop-intake: per-idea failure isolation', () => {
     // idea1 will fail; idea2 will succeed with confirm
     const { io, text } = scriptedIo(['idea one', 'idea two', 'y', 'exit']);
 
-    const summary = await runEngineerMode({ provider, io, gh });
+    const summary = await runEngineerMode({ provider, io, gh, decide: makeTestDecide() });
 
     // Session must NOT throw — it must return a summary.
     expect(summary).toBeDefined();
@@ -370,7 +397,7 @@ describe('loop-intake: per-idea failure isolation', () => {
     //  the loop body catches per-idea and continues)
     let summary: any;
     try {
-      summary = await runEngineerMode({ provider, io, gh: throwingGh });
+      summary = await runEngineerMode({ provider, io, gh: throwingGh, decide: makeTestDecide() });
     } catch {
       // If the gh error propagated despite per-idea isolation, this test fails.
       throw new Error('runEngineerMode must not throw on per-idea gh failure');
@@ -400,7 +427,7 @@ describe('loop-intake: no-remote path records authored-keys ledger (FR-12)', () 
     const { gh } = makeGh(); // gh stub present but should never be called for no-remote
     const { io, text } = scriptedIo(['offline feature idea', 'y', 'exit']);
 
-    const summary = await runEngineerMode({ provider, io, gh, engineerDir });
+    const summary = await runEngineerMode({ provider, io, gh, engineerDir, decide: makeTestDecide() });
 
     // 1. Non-fatal exit with skip message still printed (regression guard).
     expect(summary.exitCode ?? 0).toBe(0);

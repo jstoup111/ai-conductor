@@ -1,14 +1,23 @@
-// Test: authorSpec — negative-path guards (Task 22, FR-6)
+// Test: runAuthoring — negative-path guards (migrated from authorSpec Task 22, FR-6)
 //
-// Covers two guard scenarios:
-//   1. DIRTY-TREE GUARD: authorSpec must fail fast with a clear error when the
+// All guards are now enforced by runAuthoring (authorSpec has been deleted).
+//
+// Covers three guard scenarios:
+//   1. DIRTY-TREE GUARD: runAuthoring must fail fast with a clear error when the
 //      target repo has uncommitted changes. It must NOT stash, clobber, or
 //      silently proceed. The uncommitted changes must still be present afterward
 //      (no data loss). Error message must contain 'dirty' or 'uncommitted'.
 //
-//   2. EXISTING-BRANCH GUARD: when spec/<slug> already exists, authorSpec must
+//   2. EXISTING-BRANCH GUARD: when spec/<slug> already exists, runAuthoring must
 //      NOT force-overwrite it. It must use a suffix (spec/<slug>-2, etc.) and
 //      leave the original branch's tip commit unchanged.
+//
+//   3. FAILED DECIDE substep — no PR, no impl output.
+//      When a DECIDE step returns { approved: false }, runAuthoring must:
+//        (a) Propagate an error (reject).
+//        (b) Leave NO impl/source files committed on any branch.
+//        (c) Leave NO misleading commit — spec/<slug> branch must not exist.
+//        (d) Not open any PR — runAuthoring aborts before any artifact commit.
 //
 // Both use REAL temporary git repos (same pattern as authoring.test.ts).
 // Clean up temp dirs in afterEach.
@@ -19,10 +28,7 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { execFile as execFileCb } from 'child_process';
 import { promisify } from 'util';
-import { authorSpec } from '../../../src/engine/engineer/authoring.js';
-import type { AuthoringProvider } from '../../../src/engine/engineer/authoring.js';
-import type { TargetRepo } from '../../../src/engine/engineer/target.js';
-import type { LessonDigest } from '../../../src/engine/engineer/lesson-store.js';
+import { runAuthoring } from '../../../src/engine/engineer/authoring.js';
 
 const execFile = promisify(execFileCb);
 
@@ -50,36 +56,34 @@ async function makeGitRepo(): Promise<{ repoPath: string; defaultBranch: string 
 }
 
 // ---------------------------------------------------------------------------
-// Helpers: emptyDigest, makeTarget, makeFakeProvider
+// Helpers: makeTarget, approvedDecide
 // ---------------------------------------------------------------------------
-function emptyDigest(): LessonDigest {
-  return { kickbacks: [], halts: [], retryHotspots: [], narrativeRefs: [] };
-}
-
-function makeTarget(repoPath: string): TargetRepo {
+function makeTarget(repoPath: string) {
   return { name: 'test-project', canonicalPath: repoPath };
 }
 
-function makeFakeProvider(repoPath: string): AuthoringProvider {
-  return {
-    async invoke(opts: { cwd: string; idea: string; branch: string }) {
-      const docsSpecs = join(opts.cwd, '.docs', 'specs');
-      const docsStories = join(opts.cwd, '.docs', 'stories');
-      const docsPlans = join(opts.cwd, '.docs', 'plans');
-      await mkdir(docsSpecs, { recursive: true });
-      await mkdir(docsStories, { recursive: true });
-      await mkdir(docsPlans, { recursive: true });
-      await writeFile(join(docsSpecs, 'spec.md'), `# Spec for ${opts.idea}\n`);
-      await writeFile(join(docsStories, 'stories.md'), `# Stories for ${opts.idea}\n`);
-      await writeFile(join(docsPlans, 'plan.md'), `# Plan for ${opts.idea}\n`);
-    },
+/** An approving DECIDE seam that returns real artifacts. */
+function approvedDecide() {
+  return async (step: string) => {
+    if (step === 'brainstorm') return { approved: true, artifact: '# PRD: idea\n\nApproved.\n' };
+    if (step === 'stories')
+      return {
+        approved: true,
+        artifact: '# Stories: idea\n\n**Status:** Accepted\n\n## Story: x\n\n### AC\n- Given x, when y, then z.\n',
+      };
+    if (step === 'plan')
+      return {
+        approved: true,
+        artifact: '# Plan: idea\n\n## Tasks\n\n### Task 1\n**Dependencies:** none\n\n## Task Dependency Graph\n```\n1\n```\n',
+      };
+    return { approved: true, artifact: '' };
   };
 }
 
 // ---------------------------------------------------------------------------
 // Guard 1: Dirty-tree guard
 // ---------------------------------------------------------------------------
-describe('authorSpec — dirty-tree guard (Task 22, FR-6)', () => {
+describe('runAuthoring — dirty-tree guard (migrated Task 22, FR-6)', () => {
   let repoPath: string;
 
   beforeEach(async () => {
@@ -93,12 +97,11 @@ describe('authorSpec — dirty-tree guard (Task 22, FR-6)', () => {
   it('throws with a clear error when the working tree has uncommitted changes', async () => {
     const target = makeTarget(repoPath);
     const idea = 'add analytics dashboard';
-    const provider = makeFakeProvider(repoPath);
 
     // Introduce an uncommitted change — modify a tracked file
     await writeFile(join(repoPath, 'README.md'), 'dirty uncommitted content\n');
 
-    await expect(authorSpec(target, idea, emptyDigest(), provider)).rejects.toThrow(
+    await expect(runAuthoring(target, idea, { decide: approvedDecide() })).rejects.toThrow(
       /dirty|uncommitted/i,
     );
   });
@@ -106,14 +109,13 @@ describe('authorSpec — dirty-tree guard (Task 22, FR-6)', () => {
   it('error message names at least one of the dirty files', async () => {
     const target = makeTarget(repoPath);
     const idea = 'add analytics dashboard';
-    const provider = makeFakeProvider(repoPath);
 
     // Introduce a dirty file
     await writeFile(join(repoPath, 'README.md'), 'dirty content\n');
 
     let errorMessage = '';
     try {
-      await authorSpec(target, idea, emptyDigest(), provider);
+      await runAuthoring(target, idea, { decide: approvedDecide() });
     } catch (e) {
       errorMessage = (e as Error).message;
     }
@@ -125,13 +127,12 @@ describe('authorSpec — dirty-tree guard (Task 22, FR-6)', () => {
   it('leaves uncommitted changes intact after the failure (no data loss)', async () => {
     const target = makeTarget(repoPath);
     const idea = 'add analytics dashboard';
-    const provider = makeFakeProvider(repoPath);
 
     const dirtyContent = 'important uncommitted work\n';
     await writeFile(join(repoPath, 'README.md'), dirtyContent);
 
-    // authorSpec should throw
-    await expect(authorSpec(target, idea, emptyDigest(), provider)).rejects.toThrow();
+    // runAuthoring should throw
+    await expect(runAuthoring(target, idea, { decide: approvedDecide() })).rejects.toThrow();
 
     // The dirty file must still be present and unchanged (no stash, no clobber)
     const { stdout } = await execFile('cat', [join(repoPath, 'README.md')]);
@@ -145,13 +146,12 @@ describe('authorSpec — dirty-tree guard (Task 22, FR-6)', () => {
   it('does NOT create an orphan spec branch when the dirty-tree check fires', async () => {
     const target = makeTarget(repoPath);
     const idea = 'add analytics dashboard';
-    const provider = makeFakeProvider(repoPath);
     const expectedSlug = 'add-analytics-dashboard';
 
     await writeFile(join(repoPath, 'README.md'), 'dirty content\n');
 
     // Should reject
-    await expect(authorSpec(target, idea, emptyDigest(), provider)).rejects.toThrow();
+    await expect(runAuthoring(target, idea, { decide: approvedDecide() })).rejects.toThrow();
 
     // No spec/<slug> branch should exist — the guard fired before branch creation
     const branchList = await git(['branch', '--list', `spec/${expectedSlug}`], repoPath);
@@ -161,10 +161,9 @@ describe('authorSpec — dirty-tree guard (Task 22, FR-6)', () => {
   it('succeeds when the working tree is clean (control: guard does not fire on clean repos)', async () => {
     const target = makeTarget(repoPath);
     const idea = 'add analytics dashboard';
-    const provider = makeFakeProvider(repoPath);
 
     // No dirty files — should succeed
-    const result = await authorSpec(target, idea, emptyDigest(), provider);
+    const result = await runAuthoring(target, idea, { decide: approvedDecide() });
     expect(result.branch).toMatch(/^spec\//);
     expect(result.project).toBe('test-project');
   });
@@ -172,21 +171,20 @@ describe('authorSpec — dirty-tree guard (Task 22, FR-6)', () => {
   it('throws on untracked files as well (untracked = dirty for authoring safety)', async () => {
     const target = makeTarget(repoPath);
     const idea = 'add analytics dashboard';
-    const provider = makeFakeProvider(repoPath);
 
     // Add an untracked file (not yet staged)
     await writeFile(join(repoPath, 'untracked-file.txt'), 'untracked content\n');
 
-    await expect(authorSpec(target, idea, emptyDigest(), provider)).rejects.toThrow(
+    await expect(runAuthoring(target, idea, { decide: approvedDecide() })).rejects.toThrow(
       /dirty|uncommitted/i,
     );
   });
 });
 
 // ---------------------------------------------------------------------------
-// Guard 2: Existing-branch guard
+// Guard 2: Existing-branch guard (suffix disambiguation)
 // ---------------------------------------------------------------------------
-describe('authorSpec — existing-branch guard (Task 22, FR-6)', () => {
+describe('runAuthoring — existing-branch guard (migrated Task 22, FR-6)', () => {
   let repoPath: string;
 
   beforeEach(async () => {
@@ -200,14 +198,17 @@ describe('authorSpec — existing-branch guard (Task 22, FR-6)', () => {
   it('uses a suffix branch name when spec/<slug> already exists', async () => {
     const target = makeTarget(repoPath);
     const idea = 'add search feature';
-    const provider = makeFakeProvider(repoPath);
 
     // First authoring run — creates spec/add-search-feature
-    const result1 = await authorSpec(target, idea, emptyDigest(), provider);
+    const result1 = await runAuthoring(target, idea, { decide: approvedDecide() });
     expect(result1.branch).toBe('spec/add-search-feature');
 
+    // runAuthoring leaves stories as untracked working-tree files — clean them
+    // before the next run so the dirty-tree guard doesn't reject us.
+    await execFile('git', ['clean', '-fd', '.docs'], { cwd: repoPath });
+
     // Second authoring run — spec/add-search-feature exists; must use a suffix
-    const result2 = await authorSpec(target, idea, emptyDigest(), makeFakeProvider(repoPath));
+    const result2 = await runAuthoring(target, idea, { decide: approvedDecide() });
     expect(result2.branch).toBe('spec/add-search-feature-2');
   });
 
@@ -216,11 +217,14 @@ describe('authorSpec — existing-branch guard (Task 22, FR-6)', () => {
     const idea = 'add search feature';
 
     // First run — record the resulting branch tip
-    const result1 = await authorSpec(target, idea, emptyDigest(), makeFakeProvider(repoPath));
+    const result1 = await runAuthoring(target, idea, { decide: approvedDecide() });
     const originalTip = await git(['rev-parse', result1.branch], repoPath);
 
+    // Clean untracked stories before second run
+    await execFile('git', ['clean', '-fd', '.docs'], { cwd: repoPath });
+
     // Second run with same idea — must NOT touch the first branch
-    const result2 = await authorSpec(target, idea, emptyDigest(), makeFakeProvider(repoPath));
+    const result2 = await runAuthoring(target, idea, { decide: approvedDecide() });
 
     // The original branch's tip must be unchanged
     const tipAfter = await git(['rev-parse', result1.branch], repoPath);
@@ -234,9 +238,11 @@ describe('authorSpec — existing-branch guard (Task 22, FR-6)', () => {
     const target = makeTarget(repoPath);
     const idea = 'add search feature';
 
-    const result1 = await authorSpec(target, idea, emptyDigest(), makeFakeProvider(repoPath));
-    const result2 = await authorSpec(target, idea, emptyDigest(), makeFakeProvider(repoPath));
-    const result3 = await authorSpec(target, idea, emptyDigest(), makeFakeProvider(repoPath));
+    const result1 = await runAuthoring(target, idea, { decide: approvedDecide() });
+    await execFile('git', ['clean', '-fd', '.docs'], { cwd: repoPath });
+    const result2 = await runAuthoring(target, idea, { decide: approvedDecide() });
+    await execFile('git', ['clean', '-fd', '.docs'], { cwd: repoPath });
+    const result3 = await runAuthoring(target, idea, { decide: approvedDecide() });
 
     expect(result1.branch).toBe('spec/add-search-feature');
     expect(result2.branch).toBe('spec/add-search-feature-2');
@@ -253,13 +259,17 @@ describe('authorSpec — existing-branch guard (Task 22, FR-6)', () => {
     const target = makeTarget(repoPath);
     const idea = 'add search feature';
 
-    const result1 = await authorSpec(target, idea, emptyDigest(), makeFakeProvider(repoPath));
+    const result1 = await runAuthoring(target, idea, { decide: approvedDecide() });
     const tip1 = await git(['rev-parse', result1.branch], repoPath);
 
-    const result2 = await authorSpec(target, idea, emptyDigest(), makeFakeProvider(repoPath));
+    await execFile('git', ['clean', '-fd', '.docs'], { cwd: repoPath });
+
+    const result2 = await runAuthoring(target, idea, { decide: approvedDecide() });
     const tip2 = await git(['rev-parse', result2.branch], repoPath);
 
-    await authorSpec(target, idea, emptyDigest(), makeFakeProvider(repoPath));
+    await execFile('git', ['clean', '-fd', '.docs'], { cwd: repoPath });
+
+    await runAuthoring(target, idea, { decide: approvedDecide() });
 
     // tip1 and tip2 must not have changed
     const tip1After = await git(['rev-parse', result1.branch], repoPath);
@@ -270,26 +280,16 @@ describe('authorSpec — existing-branch guard (Task 22, FR-6)', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Guard 3: Failed DECIDE substep — no PR, no impl output (Task 23, FR-6 negative paths)
+// Guard 3: Failed DECIDE gate — no PR, no impl output (migrated Task 23, FR-6)
 //
-// When the provider throws (simulating a DECIDE/stories-gate failure), authorSpec
-// must:
-//   (a) Propagate the error (reject) with the provider's error surfaced in the
-//       thrown value — the caller must be able to identify which step failed.
-//   (b) Leave NO impl/source files committed anywhere (no src/, lib/, app/).
-//   (c) Leave NO misleading "spec complete" commit — the spec/<slug> branch must
-//       be DELETED and HEAD must be RESTORED to the default branch (rollback).
-//   (d) Open NO PR — authorSpec does not open PRs but must abort BEFORE any
-//       artifact commit that would feed a PR handoff.
-//
-// CLEAN post-failure repo state (rollback contract):
-//   • The spec/<slug> branch is DELETED (branch -D) — no dangling branch remains.
-//   • HEAD is RESTORED to the default branch — deriveDefaultBranch() is correct
-//     on the next call (returns defaultBranch, not spec/<slug>).
-//   • No .docs/specs|stories|plans files are committed on any branch.
-//   • No impl/source files (src/, lib/, app/) exist on any branch.
+// When a DECIDE gate rejects, runAuthoring must:
+//   (a) Propagate the error.
+//   (b) Leave NO impl/source files committed anywhere.
+//   (c) Leave NO misleading commit — spec/<slug> branch must NOT exist.
+//   (d) Open NO PR (runAuthoring never opens PRs; aborting before artifact commit
+//       means nothing to hand off).
 // ---------------------------------------------------------------------------
-describe('authorSpec — failed DECIDE substep: no PR + spec-only output (Task 23, FR-6)', () => {
+describe('runAuthoring — failed DECIDE gate: no PR + spec-only output (migrated Task 23, FR-6)', () => {
   let repoPath: string;
   let defaultBranch: string;
 
@@ -302,92 +302,63 @@ describe('authorSpec — failed DECIDE substep: no PR + spec-only output (Task 2
   });
 
   // -------------------------------------------------------------------------
-  // (a) Error propagation — the provider's error surfaces with an identifying message
+  // (a) Error propagation — unapproved gate rejects with an error
   // -------------------------------------------------------------------------
-  it('rejects with the provider error when provider.invoke throws', async () => {
+  it('rejects with an error when brainstorm gate is not approved', async () => {
     const target = makeTarget(repoPath);
     const idea = 'add payment gateway';
 
-    const failingProvider: AuthoringProvider = {
-      async invoke(_opts) {
-        throw new Error('DECIDE_STORIES_GATE_FAILED: stories substep rejected by evaluator');
-      },
+    const blockingDecide = async (step: string) => {
+      if (step === 'brainstorm') return { approved: false, artifact: '' };
+      return { approved: true, artifact: '' };
     };
 
-    await expect(authorSpec(target, idea, emptyDigest(), failingProvider)).rejects.toThrow(
-      'DECIDE_STORIES_GATE_FAILED',
-    );
+    await expect(runAuthoring(target, idea, { decide: blockingDecide })).rejects.toThrow();
   });
 
-  it('propagated error message contains the provider-thrown error text verbatim', async () => {
+  it('rejects with an error when stories gate is not approved', async () => {
     const target = makeTarget(repoPath);
     const idea = 'add payment gateway';
-    const specificMsg = 'DECIDE_STORIES_GATE_FAILED: stories substep rejected by evaluator';
 
-    const failingProvider: AuthoringProvider = {
-      async invoke(_opts) {
-        throw new Error(specificMsg);
-      },
+    const blockingDecide = async (step: string) => {
+      if (step === 'brainstorm') return { approved: true, artifact: '# PRD\n' };
+      if (step === 'stories') return { approved: false, artifact: '' };
+      return { approved: true, artifact: '' };
     };
 
-    let caughtMessage = '';
-    try {
-      await authorSpec(target, idea, emptyDigest(), failingProvider);
-    } catch (e) {
-      caughtMessage = (e as Error).message;
-    }
-
-    // The exact provider error text must survive propagation unchanged
-    expect(caughtMessage).toContain(specificMsg);
+    await expect(runAuthoring(target, idea, { decide: blockingDecide })).rejects.toThrow();
   });
 
-  it('surfaces the failing step identity when provider uses a named step error', async () => {
+  it('rejects with an error when plan gate is not approved', async () => {
     const target = makeTarget(repoPath);
     const idea = 'add payment gateway';
+    const PLAN = '# Plan\n\n## Task Dependency Graph\n```\n1\n```\n';
 
-    const failingProvider: AuthoringProvider = {
-      async invoke(_opts) {
-        const err = new Error('stories gate failure');
-        err.name = 'StoriesGateError';
-        throw err;
-      },
+    const blockingDecide = async (step: string) => {
+      if (step === 'brainstorm') return { approved: true, artifact: '# PRD\n' };
+      if (step === 'stories') return { approved: true, artifact: '# Stories\n\n**Status:** Accepted\n' };
+      if (step === 'plan') return { approved: false, artifact: '' };
+      return { approved: true, artifact: PLAN };
     };
 
-    let caughtError: Error | undefined;
-    try {
-      await authorSpec(target, idea, emptyDigest(), failingProvider);
-    } catch (e) {
-      caughtError = e as Error;
-    }
-
-    expect(caughtError).toBeDefined();
-    // The error name must propagate — it identifies which substep failed
-    expect(caughtError!.name).toBe('StoriesGateError');
-    expect(caughtError!.message).toContain('stories gate failure');
+    await expect(runAuthoring(target, idea, { decide: blockingDecide })).rejects.toThrow();
   });
 
   // -------------------------------------------------------------------------
-  // (b) No impl/source files committed on any branch after provider failure
+  // (b) No impl/source files committed on any branch after gate rejection
   // -------------------------------------------------------------------------
-  it('commits no impl/source files on any branch after provider failure', async () => {
+  it('commits no impl/source files on any branch after gate rejection', async () => {
     const target = makeTarget(repoPath);
     const idea = 'add payment gateway';
 
-    // Provider throws after writing a partial src file (worst-case scenario)
-    const failingProvider: AuthoringProvider = {
-      async invoke(opts) {
-        // Simulate a provider that starts writing impl files before failing
-        const { mkdir: mkdirNode, writeFile: writeFileNode } = await import('fs/promises');
-        const srcDir = join(opts.cwd, 'src');
-        await mkdirNode(srcDir, { recursive: true });
-        await writeFileNode(join(srcDir, 'payment.ts'), 'export const pay = () => {};\n');
-        throw new Error('DECIDE_STORIES_GATE_FAILED: gate check failed');
-      },
+    // Blocking on stories so brainstorm passed, then gate blocks
+    const blockingDecide = async (step: string) => {
+      if (step === 'brainstorm') return { approved: true, artifact: '# PRD\n' };
+      if (step === 'stories') return { approved: false, artifact: '' };
+      return { approved: true, artifact: '' };
     };
 
-    await expect(authorSpec(target, idea, emptyDigest(), failingProvider)).rejects.toThrow(
-      'DECIDE_STORIES_GATE_FAILED',
-    );
+    await expect(runAuthoring(target, idea, { decide: blockingDecide })).rejects.toThrow();
 
     // Inspect all local branches for committed impl files
     const allBranches = await git(['branch', '--format=%(refname:short)'], repoPath);
@@ -406,44 +377,37 @@ describe('authorSpec — failed DECIDE substep: no PR + spec-only output (Task 2
   });
 
   // -------------------------------------------------------------------------
-  // (c) Rollback: spec/<slug> branch is DELETED and HEAD is restored to defaultBranch
+  // (c) No spec branch remains after gate rejection
   // -------------------------------------------------------------------------
-  it('deletes the spec branch on provider failure — no dangling branch remains', async () => {
+  it('no spec branch exists after brainstorm gate rejection (gate fires before branch creation)', async () => {
     const target = makeTarget(repoPath);
     const idea = 'add payment gateway';
-    const expectedSlug = 'add-payment-gateway';
 
-    const failingProvider: AuthoringProvider = {
-      async invoke(_opts) {
-        throw new Error('DECIDE_STORIES_GATE_FAILED: substep aborted');
-      },
+    const blockingDecide = async (step: string) => {
+      if (step === 'brainstorm') return { approved: false, artifact: '' };
+      return { approved: true, artifact: '' };
     };
 
-    await expect(authorSpec(target, idea, emptyDigest(), failingProvider)).rejects.toThrow(
-      'DECIDE_STORIES_GATE_FAILED',
-    );
+    await expect(runAuthoring(target, idea, { decide: blockingDecide })).rejects.toThrow();
 
-    // The spec/<slug> branch must NOT exist — it was deleted as part of rollback.
-    const branchList = await git(['branch', '--list', `spec/${expectedSlug}`], repoPath);
+    // The brainstorm gate fires BEFORE branch creation — so no spec branch was ever created.
+    const branchList = await git(['branch', '--list', 'spec/*'], repoPath);
     expect(branchList).toBe('');
   });
 
-  it('leaves no committed spec artifact after rollback (no branch to inspect, confirmed by ls-tree on default)', async () => {
+  it('leaves no committed spec artifact on default branch after gate rejection', async () => {
     const target = makeTarget(repoPath);
     const idea = 'add payment gateway';
 
-    const failingProvider: AuthoringProvider = {
-      async invoke(_opts) {
-        throw new Error('DECIDE_STORIES_GATE_FAILED: substep aborted');
-      },
+    const blockingDecide = async (step: string) => {
+      if (step === 'brainstorm') return { approved: true, artifact: '# PRD\n' };
+      if (step === 'stories') return { approved: false, artifact: '' };
+      return { approved: true, artifact: '' };
     };
 
-    await expect(authorSpec(target, idea, emptyDigest(), failingProvider)).rejects.toThrow(
-      'DECIDE_STORIES_GATE_FAILED',
-    );
+    await expect(runAuthoring(target, idea, { decide: blockingDecide })).rejects.toThrow();
 
-    // The default branch must have ZERO .docs files committed on it (rollback
-    // deletes the spec branch; the default branch was never touched)
+    // The default branch must have ZERO .docs files committed
     const tree = await git(['ls-tree', '-r', '--name-only', defaultBranch], repoPath);
     const committedFiles = tree.split('\n').filter(Boolean);
     const specFiles = committedFiles.filter((f) => f.startsWith('.docs/'));
@@ -451,95 +415,48 @@ describe('authorSpec — failed DECIDE substep: no PR + spec-only output (Task 2
   });
 
   // -------------------------------------------------------------------------
-  // (d) No PR handoff side effect — authorSpec aborts before any artifact commit
-  //     (confirmed indirectly: no commit means no branch tip to hand off to a PR opener)
+  // (d) No PR handoff — runAuthoring never returns on failure
   // -------------------------------------------------------------------------
-  it('produces no artifact commit that could feed a PR handoff', async () => {
+  it('produces no artifact commit that could feed a PR handoff (runAuthoring never returns on rejection)', async () => {
     const target = makeTarget(repoPath);
     const idea = 'add payment gateway';
 
-    const prOpenAttempts: string[] = [];
-
-    // Provider throws — simulates gate failure BEFORE any PR would be opened
-    const failingProvider: AuthoringProvider = {
-      async invoke(_opts) {
-        throw new Error('DECIDE_STORIES_GATE_FAILED: no artifacts produced');
-      },
+    const blockingDecide = async (step: string) => {
+      if (step === 'brainstorm') return { approved: false, artifact: '' };
+      return { approved: true, artifact: '' };
     };
 
-    // authorSpec must reject — no return value means no branch to hand to a PR opener
+    // runAuthoring must reject — no return value means nothing to pass to a PR opener
     let returnedResult: { branch: string; project: string } | undefined;
     try {
-      returnedResult = await authorSpec(target, idea, emptyDigest(), failingProvider);
+      returnedResult = await runAuthoring(target, idea, { decide: blockingDecide });
     } catch {
       // expected
     }
 
-    // authorSpec never returned — so nothing to pass to a PR creator
     expect(returnedResult).toBeUndefined();
-    // No PR-open side effects were recorded (prOpenAttempts remains empty)
-    expect(prOpenAttempts).toHaveLength(0);
   });
 
   // -------------------------------------------------------------------------
-  // (e) HEAD is RESTORED to defaultBranch after provider failure — rollback contract
-  //     (previously pinned the buggy dangling-HEAD behavior; now asserts the fix)
+  // HEAD state after gate rejection (when branch was created but gate fired after)
   // -------------------------------------------------------------------------
-  it('restores HEAD to the default branch after provider failure — no dangling HEAD', async () => {
+  it('restores HEAD to the default branch after mid-write failure — no dangling HEAD', async () => {
     const target = makeTarget(repoPath);
     const idea = 'add payment gateway';
 
-    const failingProvider: AuthoringProvider = {
-      async invoke(_opts) {
-        throw new Error('DECIDE_STORIES_GATE_FAILED: substep aborted');
-      },
+    // Gate fires at plan step — by then brainstorm and stories passed,
+    // but the branch may have been created. Rollback must restore HEAD.
+    const blockingDecide = async (step: string) => {
+      if (step === 'brainstorm') return { approved: true, artifact: '# PRD\n' };
+      if (step === 'stories') return { approved: true, artifact: '# Stories\n\n**Status:** Accepted\n' };
+      if (step === 'plan') return { approved: false, artifact: '' };
+      return { approved: true, artifact: '' };
     };
 
-    await expect(authorSpec(target, idea, emptyDigest(), failingProvider)).rejects.toThrow(
-      'DECIDE_STORIES_GATE_FAILED',
-    );
+    await expect(runAuthoring(target, idea, { decide: blockingDecide })).rejects.toThrow();
 
-    // HEAD must be restored to the default branch — the rollback checkout ran.
-    // deriveDefaultBranch() will now return the correct branch on the next call.
+    // HEAD must be on defaultBranch — the rollback ran.
     const currentHead = await git(['rev-parse', '--abbrev-ref', 'HEAD'], repoPath);
     expect(currentHead).toBe(defaultBranch);
-  });
-
-  // -------------------------------------------------------------------------
-  // (f) Provider failure with partial spec files written — no spec file is committed
-  // -------------------------------------------------------------------------
-  it('leaves no committed spec artifact even when provider wrote partial files before throwing', async () => {
-    const target = makeTarget(repoPath);
-    const idea = 'add payment gateway';
-    const expectedSlug = 'add-payment-gateway';
-
-    // Provider writes a partial spec file then fails (e.g. stories gate rejects)
-    const failingProvider: AuthoringProvider = {
-      async invoke(opts) {
-        const { mkdir: mkdirNode, writeFile: writeFileNode } = await import('fs/promises');
-        const docsSpecs = join(opts.cwd, '.docs', 'specs');
-        await mkdirNode(docsSpecs, { recursive: true });
-        await writeFileNode(join(docsSpecs, 'spec.md'), '# Partial spec\n');
-        // Throw before stories/plans are written — stories gate fails
-        throw new Error('DECIDE_STORIES_GATE_FAILED: partial spec written but stories gate failed');
-      },
-    };
-
-    await expect(authorSpec(target, idea, emptyDigest(), failingProvider)).rejects.toThrow(
-      'DECIDE_STORIES_GATE_FAILED',
-    );
-
-    // Rollback must have deleted the spec branch entirely — no dangling branch.
-    const specBranch = `spec/${expectedSlug}`;
-    const branchList = await git(['branch', '--list', specBranch], repoPath);
-    expect(branchList).toBe('');
-
-    // The default branch must also have no .docs files committed — it was never touched.
-    const defaultTree = await git(['ls-tree', '-r', '--name-only', defaultBranch], repoPath);
-    const committedFiles = defaultTree.split('\n').filter(Boolean);
-
-    // .docs/specs/spec.md must NOT appear in any committed tree entry on the default branch
-    expect(committedFiles).not.toContain('.docs/specs/spec.md');
-    expect(committedFiles.filter((f) => f.startsWith('.docs/'))).toEqual([]);
   });
 });

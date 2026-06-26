@@ -11,6 +11,25 @@ import { promisify } from 'node:util';
 import type { EngineerIO, EngineerDeps } from './engineer/loop.js';
 import { ClaudeProvider } from '../execution/claude-provider.js';
 
+/**
+ * Production DECIDE seam: gates each authoring step through the io surface.
+ * Presents the prompt and waits for the operator to provide the approved artifact.
+ * An empty response → rejected (blocks authoring). NO claude subprocess spawned.
+ */
+function makeProductionDecide(io: EngineerIO): NonNullable<EngineerDeps['decide']> {
+  return async ({ step, idea, project, prompt }) => {
+    io.print(`\n── DECIDE: ${step} — project "${project}" — idea: ${idea}`);
+    io.print(prompt);
+    io.print(
+      `Provide the approved ${step} artifact as your next response (empty = reject, blocks authoring):`,
+    );
+    const line = await io.prompt();
+    const artifact = line ?? '';
+    if (artifact.trim() === '') return { approved: false, artifact: '' };
+    return { approved: true, artifact };
+  };
+}
+
 const execFileP = promisify(execFileCb);
 
 // Dispatch descriptor — mirrors RegistryDispatch from registry-cli.ts.
@@ -55,7 +74,8 @@ export async function dispatchEngineer(_d: EngineerDispatch, deps?: { io?: Engin
 
   // ── Injected io path (tests / non-interactive callers) ───────────────────
   if (deps?.io) {
-    const result = await runEngineerMode({ io: deps.io, provider, gh });
+    const decide = makeProductionDecide(deps.io);
+    const result = await runEngineerMode({ io: deps.io, provider, gh, decide });
     return result?.exitCode ?? 0;
   }
 
@@ -72,7 +92,8 @@ export async function dispatchEngineer(_d: EngineerDispatch, deps?: { io?: Engin
       process.stdout.write(s + '\n');
     },
   };
-  const result = await runEngineerMode({ io, provider, gh });
+  const decide = makeProductionDecide(io);
+  const result = await runEngineerMode({ io, provider, gh, decide });
   rl.close();
   return result?.exitCode ?? 0;
 }

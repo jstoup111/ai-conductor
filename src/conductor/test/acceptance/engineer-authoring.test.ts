@@ -147,16 +147,25 @@ describe('engineer authoring → real accepted artifacts (FR-6, C2)', () => {
     await execFile('git', ['checkout', result.branch], { cwd: repoPath });
 
     // Locate the committed stories file and inspect it.
-    const storiesList = await git(
+    // `git show branch:.docs/stories` returns a tree listing like:
+    //   tree spec/slug:.docs/stories
+    //
+    //   csv-export.md
+    //
+    // Filter out the header line (starts with "tree ") and blank lines to get filenames.
+    const storiesTreeOutput = await git(
       ['show', `${result.branch}:.docs/stories`],
       repoPath,
     ).catch(async () =>
       // fallback: ls the working tree
       (await execFile('ls', [join(repoPath, '.docs', 'stories')])).stdout.trim(),
     );
-    expect(storiesList.length).toBeGreaterThan(0);
+    expect(storiesTreeOutput.length).toBeGreaterThan(0);
 
-    const storiesFile = storiesList.split('\n').map((s) => s.trim()).filter(Boolean)[0];
+    const storiesFile = storiesTreeOutput
+      .split('\n')
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0 && !s.startsWith('tree '))[0];
     const storiesText = await readFile(join(repoPath, '.docs', 'stories', storiesFile), 'utf8');
 
     // Regression guard on the exact shipped bug.

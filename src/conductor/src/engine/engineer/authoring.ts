@@ -1,14 +1,13 @@
-// authoring.ts — Prompt builder + subprocess authoring runner (Tasks 14 & 20, FR-5/FR-6).
+// authoring.ts — Prompt builder + gated authoring runner (Tasks 14 & 32/33, FR-5/FR-6).
 //
 // `buildAuthoringPrompt` (Task 14, FR-5):
 //   Embeds the LessonDigest into the prompt text so that a downstream reader
 //   (LLM or evaluator) can observe prior lessons directly in the prompt context
 //   without requiring a separate retrieval step.
 //
-// `authorSpec` (Task 20, FR-6):
-//   Runs the DECIDE authoring as a subprocess with the TARGET repo as cwd.
-//   - provider is INJECTABLE — tests supply a fake; production wraps a real
-//     conduct invocation.
+// `runAuthoring` (Tasks 32/33, FR-6, C2, ADR-008):
+//   Runs the DECIDE authoring via an AGENT-HOSTED seam (no subprocess).
+//   - deps.decide is INJECTABLE — called once per step (brainstorm/stories/plan).
 //   - Creates a spec/<slug> branch off the repo's DEFAULT branch. The default
 //     branch is derived via `git rev-parse --abbrev-ref HEAD` for local repos
 //     (no remote) — never hardcoded to 'main'.
@@ -32,7 +31,6 @@ import { mkdir, writeFile, access } from 'node:fs/promises';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import type { LessonDigest, RetrievedLesson } from './lesson-store.js';
-import type { TargetRepo } from './target.js';
 import { AuthoringGuard } from './authoring-guard.js';
 import { TargetPathMissingError } from './target.js';
 
@@ -57,43 +55,6 @@ export interface AuthoringPromptOpts {
  */
 export interface AuthoringPromptResult {
   prompt: string;
-}
-
-// ---------------------------------------------------------------------------
-// Types — authorSpec (Task 20)
-// ---------------------------------------------------------------------------
-
-/**
- * The argument shape passed to AuthoringProvider.invoke.
- * All fields are present — the provider never needs to infer cwd from globals.
- */
-export interface AuthoringInvokeOpts {
-  /** Absolute path to the target repo — must be used as cwd. */
-  cwd: string;
-  /** The raw idea text being authored. */
-  idea: string;
-  /** The spec/<slug> branch that was created for this authoring run. */
-  branch: string;
-}
-
-/**
- * Injectable provider for the subprocess DECIDE step.
- *
- * Production wraps a real `conduct` / LLM invocation.
- * Tests supply a fake that writes .docs/specs|stories|plans directly.
- */
-export interface AuthoringProvider {
-  invoke(opts: AuthoringInvokeOpts): Promise<void>;
-}
-
-/**
- * Return value of authorSpec.
- */
-export interface AuthoringResult {
-  /** The spec/<slug> branch created in the target repo. */
-  branch: string;
-  /** The target project name (from target.name). */
-  project: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -192,7 +153,7 @@ export function buildAuthoringPrompt(
 }
 
 // ---------------------------------------------------------------------------
-// Internal helpers — authorSpec (Task 20)
+// Internal helpers — branch derivation + naming (shared by runAuthoring)
 // ---------------------------------------------------------------------------
 
 /**
@@ -200,7 +161,7 @@ export function buildAuthoringPrompt(
  * Lowercases, replaces non-alphanumeric runs with hyphens, trims edge hyphens.
  * Truncated to 50 chars so branch names stay readable.
  */
-function slugify(idea: string): string {
+export function slugify(idea: string): string {
   return idea
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
@@ -213,7 +174,7 @@ function slugify(idea: string): string {
  * Works for local repos with no remote — never hardcodes 'main'.
  * Throws if the repo has no commits (HEAD is unborn/detached).
  */
-async function deriveDefaultBranch(repoPath: string): Promise<string> {
+export async function deriveDefaultBranch(repoPath: string): Promise<string> {
   try {
     const { stdout } = await execFile('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
       cwd: repoPath,
@@ -224,7 +185,7 @@ async function deriveDefaultBranch(repoPath: string): Promise<string> {
     // fall through to throw below
   }
   throw new Error(
-    `authorSpec: could not derive default branch for repo at "${repoPath}". ` +
+    `runAuthoring: could not derive default branch for repo at "${repoPath}". ` +
       'Ensure the repo has at least one commit and is not in a detached HEAD state.',
   );
 }
@@ -232,7 +193,7 @@ async function deriveDefaultBranch(repoPath: string): Promise<string> {
 /**
  * Check whether a local branch already exists in the repo.
  */
-async function branchExists(repoPath: string, branchName: string): Promise<boolean> {
+export async function branchExists(repoPath: string, branchName: string): Promise<boolean> {
   try {
     const { stdout } = await execFile('git', ['branch', '--list', branchName], {
       cwd: repoPath,
@@ -247,7 +208,7 @@ async function branchExists(repoPath: string, branchName: string): Promise<boole
  * Choose a unique branch name starting from `spec/<slug>`.
  * If that already exists, tries `spec/<slug>-2`, `spec/<slug>-3`, etc.
  */
-async function chooseBranchName(repoPath: string, slug: string): Promise<string> {
+export async function chooseBranchName(repoPath: string, slug: string): Promise<string> {
   const base = `spec/${slug}`;
   if (!(await branchExists(repoPath, base))) return base;
   for (let n = 2; n < 1000; n++) {
@@ -255,114 +216,12 @@ async function chooseBranchName(repoPath: string, slug: string): Promise<string>
     if (!(await branchExists(repoPath, candidate))) return candidate;
   }
   throw new Error(
-    `authorSpec: could not find a unique branch name after 1000 attempts for slug "${slug}"`,
+    `runAuthoring: could not find a unique branch name after 1000 attempts for slug "${slug}"`,
   );
 }
 
 // ---------------------------------------------------------------------------
-// Public API — authorSpec (Task 20, FR-6)
-// ---------------------------------------------------------------------------
-
-/**
- * authorSpec — subprocess DECIDE authoring runner (Task 20, FR-6).
- *
- * Creates a `spec/<slug>` branch in the target repo off the repo's actual
- * default branch (derived — never hardcoded), delegates artifact writing to
- * the injectable `provider`, commits the artifacts on that branch, and
- * returns `{ branch, project }` for the caller.
- *
- * @param target   The resolved TargetRepo (name + canonicalPath).
- * @param idea     The feature idea to author.
- * @param _digest  The LessonDigest (available to provider via prompt; not used
- *                 for branching logic here).
- * @param provider Injectable authoring provider — writes .docs/specs|stories|plans.
- * @returns        { branch, project } — the branch created and the project name.
- */
-export async function authorSpec(
-  target: TargetRepo,
-  idea: string,
-  _digest: LessonDigest,
-  provider: AuthoringProvider,
-): Promise<AuthoringResult> {
-  const repoPath = target.canonicalPath;
-
-  // 0. Guard: reject a dirty working tree before touching anything.
-  //    Uses `git status --porcelain` — any non-empty output means dirty.
-  //    We do NOT stash, force-checkout, or reset. Fail fast, leave the
-  //    tree exactly as found (no data loss, no orphan branches).
-  {
-    const { stdout: porcelain } = await execFile('git', ['status', '--porcelain'], {
-      cwd: repoPath,
-    });
-    if (porcelain.trim() !== '') {
-      const dirtyFiles = porcelain
-        .trim()
-        .split('\n')
-        .map((line) => line.trim())
-        .join(', ');
-      throw new Error(
-        `authorSpec: target repo at "${repoPath}" has uncommitted (dirty) changes: ${dirtyFiles}. ` +
-          'Commit or discard all changes before running authorSpec.',
-      );
-    }
-  }
-
-  // 1. Derive the default branch — never hardcode 'main'.
-  const defaultBranch = await deriveDefaultBranch(repoPath);
-
-  // 2. Compute slug and find a unique branch name.
-  const slug = slugify(idea);
-  const branch = await chooseBranchName(repoPath, slug);
-
-  // 3–5. Create the branch, invoke provider, commit artifacts.
-  //       Wrapped in try/catch: on any failure, restore HEAD to defaultBranch
-  //       and delete the dangling spec branch so deriveDefaultBranch() returns
-  //       the correct branch on the next call (not spec/<slug>).
-  try {
-    // 3. Create the spec/<slug> branch off the default branch.
-    await execFile('git', ['checkout', '-b', branch, defaultBranch], { cwd: repoPath });
-
-    // 4. Invoke the provider (fake in tests, real conduct in production).
-    //    The provider writes .docs/specs|stories|plans into repoPath.
-    await provider.invoke({ cwd: repoPath, idea, branch });
-
-    // 5. Stage the authored artifacts and commit on the spec branch.
-    //    Use specific paths — never `git add -A`.
-    await execFile('git', ['add', '.docs/specs', '.docs/stories', '.docs/plans'], {
-      cwd: repoPath,
-    });
-    await execFile(
-      'git',
-      ['commit', '-m', `spec: author artifacts for "${idea}" [engineer/authorSpec]`],
-      { cwd: repoPath },
-    );
-  } catch (err) {
-    // Best-effort: restore HEAD to defaultBranch so deriveDefaultBranch() is
-    // correct on the next call. Wrap in its own try/catch so a restore failure
-    // doesn't mask the original error.
-    try {
-      await execFile('git', ['checkout', defaultBranch], { cwd: repoPath });
-    } catch {
-      // restore failed — original error is still re-thrown below
-    }
-    // Best-effort: delete the dangling spec branch to prevent contamination.
-    try {
-      await execFile('git', ['branch', '-D', branch], { cwd: repoPath });
-    } catch {
-      // delete failed — original error is still re-thrown below
-    }
-    // Re-throw the original error verbatim (preserves message + name + stack).
-    throw err;
-  }
-
-  // 6. Return to the default branch so the repo is left in a clean state.
-  await execFile('git', ['checkout', defaultBranch], { cwd: repoPath });
-
-  return { branch, project: target.name };
-}
-
-// ---------------------------------------------------------------------------
-// runAuthoring — redesigned DECIDE seam (FR-6, C2, ADR-008, Task 32/33)
+// runAuthoring — gated DECIDE seam (FR-6, C2, ADR-008, Task 32/33)
 // ---------------------------------------------------------------------------
 
 /**
@@ -427,6 +286,27 @@ export async function runAuthoring(
     throw new TargetPathMissingError(repoPath);
   }
 
+  // 1b. Guard: reject a dirty working tree BEFORE running any DECIDE step.
+  //     Uses `git status --porcelain` — any non-empty output means dirty.
+  //     We do NOT stash, force-checkout, or reset. Fail fast, leave the
+  //     tree exactly as found (no data loss, no orphan branch).
+  {
+    const { stdout: porcelain } = await execFile('git', ['status', '--porcelain'], {
+      cwd: repoPath,
+    });
+    if (porcelain.trim() !== '') {
+      const dirtyFiles = porcelain
+        .trim()
+        .split('\n')
+        .map((line) => line.trim())
+        .join(', ');
+      throw new Error(
+        `runAuthoring: target repo at "${repoPath}" has uncommitted (dirty) changes: ${dirtyFiles}. ` +
+          'Commit or discard all changes before running runAuthoring.',
+      );
+    }
+  }
+
   // 2. Run DECIDE steps IN ORDER. Any unapproved gate throws immediately;
   //    nothing is written to the filesystem below that point.
   const brainstormResult = await deps.decide('brainstorm');
@@ -488,10 +368,6 @@ export async function runAuthoring(
     await mkdir(specsDir, { recursive: true });
 
     // Write stories verbatim from DECIDE (contains "Status: Accepted").
-    // Stories are written to disk but NOT git-added: they remain as an untracked
-    // working-tree file so that `git show branch:.docs/stories` (a tree-object
-    // lookup for a directory) fails, causing callers to fall back to a working-tree
-    // `ls`. discoverBacklog reads stories via readFile (disk), so this is safe.
     await writeFile(storiesFile, storiesResult.artifact, 'utf8');
 
     // Write plan verbatim from DECIDE (contains "## Task Dependency Graph").
@@ -500,12 +376,10 @@ export async function runAuthoring(
     // Write brainstorm/PRD as the spec artifact.
     await writeFile(specsFile, brainstormResult.artifact, 'utf8');
 
-    // 3c. Stage and commit plan + spec artifacts on the spec branch.
-    //     Stories are intentionally NOT committed — they remain as untracked
-    //     working-tree files so that `git show branch:.docs/stories` fails
-    //     (no tree object at that path), causing acceptance-test git-show
-    //     fallbacks to use the working-tree `ls` path instead.
-    await execFile('git', ['add', '.docs/plans', '.docs/specs'], {
+    // 3c. Stage and commit all spec artifacts on the spec branch.
+    //     All three dirs are committed so the repo returns to a clean state
+    //     after checkout back to defaultBranch (no untracked leftovers).
+    await execFile('git', ['add', '.docs/plans', '.docs/specs', '.docs/stories'], {
       cwd: repoPath,
     });
     await execFile(

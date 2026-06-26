@@ -196,6 +196,31 @@ function makeGh(prUrl = 'https://example.invalid/x/pull/1') {
   return { gh, calls };
 }
 
+/**
+ * Approving DECIDE seam for acceptance tests that reach authoring.
+ * Returns real artifacts with the required markers.
+ */
+function makeDecide() {
+  return async (ctx: { step: 'brainstorm' | 'stories' | 'plan'; idea: string; project: string; prompt: string }) => {
+    if (ctx.step === 'brainstorm') {
+      return { approved: true, artifact: `# PRD: ${ctx.idea}\n\nApproved.\n` };
+    }
+    if (ctx.step === 'stories') {
+      return {
+        approved: true,
+        artifact: `# Stories: ${ctx.idea}\n\n**Status:** Accepted\n\n## Story: feature\n\n### AC\n- Given x, when y, then z.\n`,
+      };
+    }
+    if (ctx.step === 'plan') {
+      return {
+        approved: true,
+        artifact: `# Plan: ${ctx.idea}\n\n## Tasks\n\n### Task 1\n**Dependencies:** none\n\n## Task Dependency Graph\n\`\`\`\n1\n\`\`\`\n`,
+      };
+    }
+    return { approved: true, artifact: '' };
+  };
+}
+
 // ═════════════════════════════════════════════════════════════════════════════
 // Scenario 1 (FR-1, FR-2): loop starts, loads registry+store, processes an idea,
 // loops, exits cleanly.
@@ -212,7 +237,7 @@ describe('Scenario 1: conduct engineer loop start → idea → exit', () => {
     const { gh } = makeGh();
     const { io, text } = scriptedIo(['add a CSV export to alpha', 'y', 'exit']);
 
-    const summary = await runEngineerMode({ provider, io, gh });
+    const summary = await runEngineerMode({ provider, io, gh, decide: makeDecide() });
 
     expect(text()).toMatch(/1 (known )?project/i); // reports count
     expect(summary).toMatchObject({ ideasProcessed: 1 });
@@ -298,7 +323,7 @@ describe('Scenario 2: routing + human confirmation gate', () => {
     // …operator redirects to beta, then confirms.
     const { io } = scriptedIo(['some idea', 'redirect beta', 'y', 'exit']);
 
-    const summary = await runEngineerMode({ provider, io, gh });
+    const summary = await runEngineerMode({ provider, io, gh, decide: makeDecide() });
     expect(summary.authored?.[0]?.project).toBe('beta');
   });
 
@@ -328,7 +353,7 @@ describe('Scenario 2: routing + human confirmation gate', () => {
     // idea → offered create → confirm create → confirm authoring → exit
     const { io } = scriptedIo(['a brand new tool', `create ${join(newRepoParent, 'gamma')}`, 'y', 'y', 'exit']);
 
-    const summary = await runEngineerMode({ provider, io, gh });
+    const summary = await runEngineerMode({ provider, io, gh, decide: makeDecide() });
     // new project registered
     const reg = JSON.parse(await readFile(registryPath, 'utf8'));
     expect(reg.some((r: any) => r.name === 'gamma')).toBe(true);
@@ -373,14 +398,22 @@ describe('Scenario 3: flywheel surfaces relevant lessons', () => {
     await seedSignals([signal({ project: 'alpha', feature: 'export', kickbacks: [{ gate: 'review', reason: 'unique-marker-lesson' }] })]);
 
     const runEngineerMode = requireFn(await load(ENGINEER_MOD), 'runEngineerMode');
-    const { provider, calls } = makeProvider({ routeTo: 'alpha' });
+    const { provider } = makeProvider({ routeTo: 'alpha' });
     const { gh } = makeGh();
     const { io } = scriptedIo(['extend the export', 'y', 'exit']);
 
-    await runEngineerMode({ provider, io, gh });
-    const authoringCall = calls.find((c) => c.cwd === repo || (c.cwd && c.cwd.startsWith(repo)));
-    expect(authoringCall, 'authoring invoked with target cwd').toBeTruthy();
-    expect(authoringCall!.prompt).toMatch(/unique-marker-lesson/);
+    // Capture prompts passed to the DECIDE seam — this is where the digest is injected.
+    const decideCalls: { step: string; prompt: string }[] = [];
+    const spyDecide = async (ctx: { step: 'brainstorm' | 'stories' | 'plan'; idea: string; project: string; prompt: string }) => {
+      decideCalls.push({ step: ctx.step, prompt: ctx.prompt });
+      return makeDecide()(ctx);
+    };
+
+    await runEngineerMode({ provider, io, gh, decide: spyDecide });
+    // The brainstorm prompt (first DECIDE call) must contain the lesson from the digest.
+    const brainstormCall = decideCalls.find((c) => c.step === 'brainstorm');
+    expect(brainstormCall, 'brainstorm DECIDE step was invoked').toBeTruthy();
+    expect(brainstormCall!.prompt).toMatch(/unique-marker-lesson/);
   });
 });
 
@@ -398,7 +431,7 @@ describe('Scenario 4: authoring → spec branch + PR, never build, never merge',
     const { gh, calls: ghCalls } = makeGh('https://example.invalid/alpha/pull/7');
     const { io, text } = scriptedIo(['add csv export', 'y', 'exit']);
 
-    await runEngineerMode({ provider, io, gh });
+    await runEngineerMode({ provider, io, gh, decide: makeDecide() });
 
     const branches = (await exec('git', ['branch', '--list', 'spec/*'], { cwd: repo })).stdout;
     expect(branches).toMatch(/spec\//); // a spec branch was created
@@ -416,7 +449,7 @@ describe('Scenario 4: authoring → spec branch + PR, never build, never merge',
     const { gh, calls: ghCalls } = makeGh();
     const { io } = scriptedIo(['add csv export', 'y', 'exit']);
 
-    const summary = await runEngineerMode({ provider, io, gh });
+    const summary = await runEngineerMode({ provider, io, gh, decide: makeDecide() });
 
     expect(ghCalls.some((a) => a.includes('merge'))).toBe(false); // never merges
     expect(summary.buildsRun ?? 0).toBe(0); // no build transition
@@ -432,7 +465,7 @@ describe('Scenario 4: authoring → spec branch + PR, never build, never merge',
     const { gh } = makeGh();
     const { io, text } = scriptedIo(['offline idea', 'y', 'exit']);
 
-    const summary = await runEngineerMode({ provider, io, gh });
+    const summary = await runEngineerMode({ provider, io, gh, decide: makeDecide() });
     expect(summary.exitCode ?? 0).toBe(0); // non-fatal
     expect(text()).toMatch(/no remote|PR (could not|skip)/i);
     const branches = (await exec('git', ['branch', '--list', 'spec/*'], { cwd: repo })).stdout;
@@ -448,7 +481,7 @@ describe('Scenario 4: authoring → spec branch + PR, never build, never merge',
     const { provider } = makeProvider({ routeTo: 'alpha' });
     const { gh } = makeGh();
     const { io } = scriptedIo(['add csv export', 'y', 'exit']);
-    await runEngineerMode({ provider, io, gh });
+    await runEngineerMode({ provider, io, gh, decide: makeDecide() });
 
     const specBranch = (await exec('git', ['branch', '--list', 'spec/*'], { cwd: repo })).stdout.trim().replace('*', '').trim();
     const changed = (await exec('git', ['diff', '--name-only', 'main', specBranch], { cwd: repo })).stdout.trim().split('\n').filter(Boolean);
@@ -477,7 +510,7 @@ describe('Scenario 5: cross-repo isolation', () => {
     const { provider } = makeProvider({ routeTo: 'alpha' });
     const { gh } = makeGh();
     const { io } = scriptedIo(['idea for alpha', 'y', 'exit']);
-    await runEngineerMode({ provider, io, gh });
+    await runEngineerMode({ provider, io, gh, decide: makeDecide() });
 
     const bHeadAfter = (await exec('git', ['rev-parse', 'HEAD'], { cwd: b })).stdout;
     const bBranchesAfter = (await exec('git', ['branch', '--list'], { cwd: b })).stdout;
