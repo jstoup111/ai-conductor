@@ -328,6 +328,10 @@ describe('Task 25: multi-idea loop via intake port (FR-2)', () => {
 
 // ═════════════════════════════════════════════════════════════════════════════
 // Task 26 (FR-2): Empty idea re-prompt; clean exit; no side effects.
+// Falsifiable invariants:
+//   - Empty/whitespace line → re-prompt, ideasProcessed stays 0.
+//   - Exit → exit code 0, NO leftover lock/temp files in engineerDir.
+//   - Engineer-cli dispatchEngineer returns exit code 0 on clean session.
 // ═════════════════════════════════════════════════════════════════════════════
 
 describe('Task 26: empty-idea re-prompt + clean exit (FR-2)', () => {
@@ -413,5 +417,27 @@ describe('Task 26: empty-idea re-prompt + clean exit (FR-2)', () => {
     const files = await readdir(engineerDir);
     const leftover = files.filter((f) => f.endsWith('.lock') || f.startsWith('.tmp'));
     expect(leftover).toHaveLength(0);
+  });
+
+  // CLI dispatch path: dispatchEngineer returns exit code 0 on clean session.
+  // This exercises the injected-io path in engineer-cli.ts (not the production readline path).
+  it('dispatchEngineer(injected-io) returns exit code 0 on clean EOF session', async () => {
+    await writeRegistry([]);
+
+    const { dispatchEngineer, detectEngineerCommand } = await import(
+      '../../../src/engine/engineer-cli.js'
+    );
+
+    // Detect the dispatch descriptor.
+    const dispatch = detectEngineerCommand(['node', 'conduct', 'engineer']);
+    expect(dispatch).toEqual({ kind: 'engineer' });
+
+    // Inject a scripted IO that EOFs immediately — clean exit.
+    const { io } = scriptedIo([]);
+
+    const exitCode = await dispatchEngineer(dispatch!, { io });
+
+    // Clean exit from the injected-io path must return 0.
+    expect(exitCode).toBe(0);
   });
 });
