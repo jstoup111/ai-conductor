@@ -354,6 +354,112 @@ describe('computeFlywheelTrend', () => {
     });
   });
 
+  // ── FR-12 (skipped count): malformed entries skipped, not fatal ──────────────
+
+  describe('FR-12: malformed JSONL entries are skipped (not fatal), skipped count surfaced', () => {
+    it('returns a valid trend with skipped > 0 when the store contains malformed lines', async () => {
+      // Seed: 2 valid signals + 2 malformed lines
+      // The valid signals produce a trend; the malformed lines are silently skipped.
+      const sig1 = makeSignal({
+        project: 'proj-M',
+        feature: 'feat-first',
+        ts: '2026-06-25T08:00:00.000Z',
+        kickbacks: [{ from: 'gate', to: 'step', count: 2 }],
+      });
+      const sig2 = makeSignal({
+        project: 'proj-M',
+        feature: 'feat-second',
+        ts: '2026-06-25T12:00:00.000Z',
+        kickbacks: [],
+      });
+
+      await mkdir(tempDir, { recursive: true });
+      // Interleave malformed lines among the valid ones
+      const lines = [
+        JSON.stringify(sig1),
+        'NOT_VALID_JSON',
+        JSON.stringify(sig2),
+        '{"truncated": true', // incomplete JSON
+      ].join('\n') + '\n';
+      await writeFile(join(tempDir, 'signals.jsonl'), lines, 'utf-8');
+
+      const reader = createEngineerStoreReader({ engineerDir: tempDir });
+      const ledger: AuthoredKey[] = [
+        { project: 'proj-M', feature: 'feat-first' },
+        { project: 'proj-M', feature: 'feat-second' },
+      ];
+
+      const result = await computeFlywheelTrend(reader, ledger);
+
+      // Must produce a trend (2 valid signals → 2 features → trend)
+      expect(result.kind).toBe('trend');
+
+      // Malformed lines must have been skipped (not fatal) and counted
+      expect(result.skipped).toBe(2);
+
+      // The trend direction is derived only from the valid signals
+      // sig1: 2 kickbacks / 1 signal = 2.0; sig2: 0 → improving
+      expect((result as import('../../../src/engine/engineer/flywheel-trend.js').FlywheelTrend).direction).toBe('improving');
+    });
+
+    it('insufficient-data sentinel also carries the skipped count', async () => {
+      // Only ONE valid signal + 3 malformed lines → insufficient data
+      const sig = makeSignal({
+        project: 'proj-N',
+        feature: 'feat-only',
+        ts: '2026-06-25T10:00:00.000Z',
+      });
+
+      await mkdir(tempDir, { recursive: true });
+      const lines = [
+        JSON.stringify(sig),
+        'BAD_LINE_1',
+        'BAD_LINE_2',
+        'BAD_LINE_3',
+      ].join('\n') + '\n';
+      await writeFile(join(tempDir, 'signals.jsonl'), lines, 'utf-8');
+
+      const reader = createEngineerStoreReader({ engineerDir: tempDir });
+      const ledger: AuthoredKey[] = [
+        { project: 'proj-N', feature: 'feat-only' },
+      ];
+
+      const result = await computeFlywheelTrend(reader, ledger);
+
+      expect(result.kind).toBe('insufficient-data');
+      // Skipped count must be surfaced even in the sentinel shape
+      expect(result.skipped).toBe(3);
+      // featuresFound = 1 (one valid engineer-planned feature survived)
+      expect((result as import('../../../src/engine/engineer/flywheel-trend.js').FlywheelTrendInsufficient).featuresFound).toBe(1);
+    });
+
+    it('skipped = 0 when all lines are valid (no false positives)', async () => {
+      const sig1 = makeSignal({
+        project: 'proj-O',
+        feature: 'feat-clean-a',
+        ts: '2026-06-25T08:00:00.000Z',
+      });
+      const sig2 = makeSignal({
+        project: 'proj-O',
+        feature: 'feat-clean-b',
+        ts: '2026-06-25T12:00:00.000Z',
+      });
+
+      await seedSignals(tempDir, [sig1, sig2]);
+
+      const reader = createEngineerStoreReader({ engineerDir: tempDir });
+      const ledger: AuthoredKey[] = [
+        { project: 'proj-O', feature: 'feat-clean-a' },
+        { project: 'proj-O', feature: 'feat-clean-b' },
+      ];
+
+      const result = await computeFlywheelTrend(reader, ledger);
+
+      expect(result.kind).toBe('trend');
+      expect(result.skipped).toBe(0);
+    });
+  });
+
   // ── Negative (c): ledger key with zero store signals → absent from trend ────
 
   describe('negative (c): engineer-planned feature with no store signals is absent from trend', () => {

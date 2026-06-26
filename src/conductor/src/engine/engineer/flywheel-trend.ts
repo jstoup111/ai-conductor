@@ -63,6 +63,8 @@ export interface FeatureTrendEntry {
  * `series` is chronologically ordered (oldest earliestTs first).
  * `direction` compares `series[0].rates.kickbackRate` vs
  * `series[series.length - 1].rates.kickbackRate`.
+ * `skipped` is the count of malformed / unparseable lines skipped when reading
+ * signals.jsonl (FR-12 skipped-count observability). Zero when all lines valid.
  */
 export interface FlywheelTrend {
   kind: 'trend';
@@ -70,6 +72,11 @@ export interface FlywheelTrend {
   series: FeatureTrendEntry[];
   /** Trend direction driven by kickbackRate (first → last). */
   direction: TrendDirection;
+  /**
+   * Count of malformed / unparseable lines skipped when reading signals.jsonl
+   * (FR-12 observability). Zero when no lines were malformed.
+   */
+  skipped: number;
 }
 
 /**
@@ -77,6 +84,7 @@ export interface FlywheelTrend {
  * store ∩ ledger intersection. No trend direction can be derived.
  *
  * `direction` is always `"insufficient_data"` — never "improving"/"regressing".
+ * `skipped` is the count of malformed lines skipped (FR-12 observability).
  */
 export interface FlywheelTrendInsufficient {
   kind: 'insufficient-data';
@@ -84,6 +92,11 @@ export interface FlywheelTrendInsufficient {
   direction: 'insufficient_data';
   /** How many features did survive the intersection (0 or 1). */
   featuresFound: number;
+  /**
+   * Count of malformed / unparseable lines skipped when reading signals.jsonl
+   * (FR-12 observability). Zero when no lines were malformed.
+   */
+  skipped: number;
 }
 
 /** Union of both possible return shapes. Callers must narrow on `kind`. */
@@ -165,7 +178,10 @@ export async function computeFlywheelTrend(
 
   // Step 2: Read ALL signals from the store (no filter — we intersect manually
   // so we pull once and group rather than making N per-feature reader calls).
-  const allSignals = await reader.readSignals();
+  // Use readSignalsWithStats so we can surface the skipped-malformed-lines count
+  // to callers (FR-12 observability). Malformed lines are silently skipped by
+  // the reader; the count is propagated in both result shapes.
+  const { signals: allSignals, skipped } = await reader.readSignalsWithStats();
 
   // Step 3: Group signals by (project, feature) and INTERSECT with the ledger.
   // Non-engineer signals (in store, not in ledger) are skipped here.
@@ -207,6 +223,7 @@ export async function computeFlywheelTrend(
       kind: 'insufficient-data',
       direction: 'insufficient_data',
       featuresFound: entries.length,
+      skipped,
     };
   }
 
@@ -227,5 +244,6 @@ export async function computeFlywheelTrend(
     kind: 'trend',
     series: entries,
     direction,
+    skipped,
   };
 }
