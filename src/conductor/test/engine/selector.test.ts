@@ -66,6 +66,8 @@ describe('engine/selector — selectNextGate', () => {
     const verdicts: Partial<Record<StepName, GateVerdict>> = {
       build: VSAT,
       manual_test: VSAT,
+      prd_audit: VSAT,
+      architecture_review_as_built: VSAT,
       retro: VSAT,
       rebase: VSAT,
       finish: VSAT,
@@ -74,11 +76,27 @@ describe('engine/selector — selectNextGate', () => {
     expect(d.kind).toBe('done');
   });
 
+  it('blocks at prd_audit when its verdict is unsatisfied (does not reach finish)', () => {
+    const verdicts: Partial<Record<StepName, GateVerdict>> = {
+      build: VSAT,
+      manual_test: VSAT,
+      prd_audit: { satisfied: false, checkedAt: 2, reason: 'FR-3 MISSING' },
+      architecture_review_as_built: VSAT,
+      retro: VSAT,
+      rebase: VSAT,
+      finish: VSAT,
+    };
+    const d = selectNextGate(input(frontDone(), verdicts));
+    expect(d).toMatchObject({ kind: 'run', step: 'prd_audit' });
+  });
+
   it('skips a tier-skipped step (retro on Small) and selects finish', () => {
     const state: ConductState = { ...frontDone(), complexity_tier: 'S' };
     const verdicts: Partial<Record<StepName, GateVerdict>> = {
       build: VSAT,
       manual_test: VSAT,
+      prd_audit: VSAT,
+      architecture_review_as_built: VSAT,
       rebase: VSAT,
       // retro has no verdict and is pending, but is skippable for Small
     };
@@ -93,7 +111,11 @@ describe('engine/selector — selectNextGate', () => {
       manual_test: 'skipped',
       retro: 'skipped',
     };
-    const verdicts: Partial<Record<StepName, GateVerdict>> = { rebase: VSAT };
+    const verdicts: Partial<Record<StepName, GateVerdict>> = {
+      prd_audit: VSAT,
+      architecture_review_as_built: VSAT,
+      rebase: VSAT,
+    };
     const d = selectNextGate(input(state, verdicts));
     expect(d).toMatchObject({ kind: 'run', step: 'finish' });
   });

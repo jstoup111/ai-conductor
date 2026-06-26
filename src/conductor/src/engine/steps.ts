@@ -128,11 +128,42 @@ export const ALL_STEPS: StepDefinition[] = [
     loopGate: true,
   },
   {
+    // SHIP-tail compliance gate: audits the shipped implementation against the
+    // PRD's functional requirements (FR-N). A non-ALIGNED FR blocks the gate
+    // and kicks back to BUILD (impl gap) or DECIDE (intended drift). loopGate
+    // so it joins the selector-driven tail; gating so a FAIL cannot advance.
+    name: 'prd_audit',
+    label: 'PRD Audit',
+    phase: 'SHIP',
+    enforcement: 'gating',
+    prerequisites: ['manual_test'],
+    skippableForTiers: [],
+    isCheckpoint: false,
+    skillName: 'prd-audit',
+    loopGate: true,
+  },
+  {
+    // SHIP-tail compliance gate: as-built drift sweep of shipped code vs the
+    // APPROVED ADRs / approved architecture. A BLOCKED verdict (code violates
+    // an APPROVED ADR) halts for a human — fix the code or supersede the ADR.
+    // Runs the architecture-review skill in --as-built mode (one skill, one
+    // model-table row); see STEP_PROMPTS in step-runners.ts.
+    name: 'architecture_review_as_built',
+    label: 'Architecture Review (as-built)',
+    phase: 'SHIP',
+    enforcement: 'gating',
+    prerequisites: ['prd_audit'],
+    skippableForTiers: [],
+    isCheckpoint: false,
+    skillName: 'architecture-review',
+    loopGate: true,
+  },
+  {
     name: 'retro',
     label: 'Retro',
     phase: 'SHIP',
     enforcement: 'advisory',
-    prerequisites: ['manual_test'],
+    prerequisites: ['architecture_review_as_built'],
     skippableForTiers: ['S'],
     isCheckpoint: false,
     skillName: 'retro',

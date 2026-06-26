@@ -276,6 +276,62 @@ mkdir -p .pipeline
 echo "verdict: APPROVED_WITH_CONDITIONS, new ADRs: 2" > .pipeline/review-required-architecture_review
 ```
 
+### 12. As-Built Compliance Gate (`--as-built` mode)
+
+Invoked at **SHIP**, after `/prd-audit` and before `/retro` and `/finish`, as
+`/architecture-review --as-built`. This is the final architectural drift sweep: it checks the
+**shipped code** against **APPROVED** ADRs and the approved architecture only. It is lightweight —
+it does **no** new design, creates no new feasibility/complexity assessment, and reuses the drift
+logic of §10 (Recurring Review) and the ADR lifecycle of §7b.
+
+**Scope (only this):**
+- Load only the **APPROVED** ADRs (`.docs/decisions/`, `Status: APPROVED`) and the approved
+  architecture diagrams (`.docs/architecture/`). DRAFT/SUPERSEDED ADRs are not authoritative and
+  are not gated against (per §7b).
+- Compare the as-shipped code to those approved decisions: were new patterns introduced without an
+  ADR? Are domain boundaries respected in the actual code? Do diagrams still match reality?
+- Do NOT re-run §2/§3/§5 (feasibility/complexity/domain pre-checks) — those belong to the DECIDE
+  pass. This is a code-vs-approved-design pattern match, deliberately cheap.
+
+**Verdict:**
+- **APPROVED** — shipped code matches the approved architecture. Proceed to retro/finish.
+- **APPROVED WITH DRIFT NOTES** — minor, non-violating drift (e.g. a diagram is now slightly stale,
+  a pattern was extended consistently). Record the drift; proceed. Note it for a follow-up ADR if
+  warranted, but it does not block.
+- **BLOCKED** — shipped code **violates an APPROVED ADR**. The loop HALTS. A human must resolve it:
+  either fix the code to comply, or supersede the ADR with a new, human-APPROVED ADR
+  (`Supersedes: <old>`, old → `Status: SUPERSEDED`). **Never silently downgrade** an APPROVED ADR
+  or auto-resolve the violation. After resolution, re-run the as-built gate.
+
+**Artifact:** write the result to
+`.docs/decisions/architecture-review-as-built-YYYY-MM-DD-<feature>.md`:
+
+```markdown
+# As-Built Architecture Review: <Feature Name>
+**Date:** YYYY-MM-DD
+**Mode:** as-built (SHIP compliance gate)
+**APPROVED ADRs checked:** [list]
+**Verdict:** APPROVED | APPROVED WITH DRIFT NOTES | BLOCKED
+
+## Drift Notes (if any)
+## Blocking Violations (if BLOCKED — which APPROVED ADR, where the code violates it, file:line)
+## Resolution (if BLOCKED — code fix OR superseding ADR; human-approved)
+```
+
+The conductor's objective gate reads the `Verdict:` line: a verdict of `BLOCKED` keeps the gate
+unsatisfied so the SHIP tail cannot reach finish; `APPROVED` and `APPROVED WITH DRIFT NOTES` pass.
+
+**Review marker:** review mode for this step is **conditional**. Write
+`.pipeline/review-required-architecture-as-built` (existence = signal) whenever the verdict is not a
+clean `APPROVED` — i.e. on `APPROVED WITH DRIFT NOTES` or `BLOCKED`, or when an ADR was superseded
+to resolve a violation. On a clean `APPROVED`, do NOT write the marker.
+
+```bash
+# Example: write the marker when the as-built sweep was not clean
+mkdir -p .pipeline
+echo "verdict: BLOCKED, violated ADR-007" > .pipeline/review-required-architecture-as-built
+```
+
 ## Verification
 
 - [ ] All stories assessed for feasibility
@@ -291,3 +347,9 @@ echo "verdict: APPROVED_WITH_CONDITIONS, new ADRs: 2" > .pipeline/review-require
 - [ ] `.pipeline/review-required-architecture_review` marker written IF
       verdict ≠ clean APPROVED, or any ADR was drafted/superseded, or any
       High-impact risk was registered (skip only on truly clean APPROVED)
+- [ ] **As-built mode:** at SHIP, shipped code checked against APPROVED ADRs only (no new design)
+- [ ] **As-built mode:** verdict written to `.docs/decisions/architecture-review-as-built-*.md`
+- [ ] **As-built mode:** BLOCKED on any APPROVED-ADR violation; resolved by code fix or
+      human-approved superseding ADR (never silent downgrade)
+- [ ] **As-built mode:** `.pipeline/review-required-architecture-as-built` marker written when the
+      verdict is not a clean APPROVED

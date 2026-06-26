@@ -21,11 +21,12 @@ describe('engine/steps', () => {
     const expectedOrder: StepName[] = [
       'worktree', 'memory', 'brainstorm', 'complexity', 'stories',
       'conflict_check', 'architecture_diagram', 'architecture_review', 'plan',
-      'acceptance_specs', 'build', 'manual_test', 'retro', 'rebase', 'finish',
+      'acceptance_specs', 'build', 'manual_test', 'prd_audit',
+      'architecture_review_as_built', 'retro', 'rebase', 'finish',
     ];
 
-    it('has exactly 15 steps', () => {
-      expect(ALL_STEPS).toHaveLength(15);
+    it('has exactly 17 steps', () => {
+      expect(ALL_STEPS).toHaveLength(17);
     });
 
     it('steps are in exact order', () => {
@@ -131,16 +132,41 @@ describe('engine/steps', () => {
       expect(s.isCheckpoint).toBe(true);
     });
 
-    it('retro is SHIP/advisory, skippable for S', () => {
+    it('prd_audit is SHIP/gating loopGate, after manual_test, not skippable', () => {
       const s = ALL_STEPS[12];
+      expect(s.name).toBe('prd_audit');
+      expect(s.phase).toBe('SHIP');
+      expect(s.enforcement).toBe('gating');
+      expect(s.prerequisites).toEqual(['manual_test']);
+      expect(s.skippableForTiers).toEqual([]);
+      expect(s.isCheckpoint).toBe(false);
+      expect(s.loopGate).toBe(true);
+      expect(s.skillName).toBe('prd-audit');
+    });
+
+    it('architecture_review_as_built is SHIP/gating loopGate, after prd_audit', () => {
+      const s = ALL_STEPS[13];
+      expect(s.name).toBe('architecture_review_as_built');
+      expect(s.phase).toBe('SHIP');
+      expect(s.enforcement).toBe('gating');
+      expect(s.prerequisites).toEqual(['prd_audit']);
+      expect(s.skippableForTiers).toEqual([]);
+      expect(s.isCheckpoint).toBe(false);
+      expect(s.loopGate).toBe(true);
+      // Runs the existing architecture-review skill in --as-built mode.
+      expect(s.skillName).toBe('architecture-review');
+    });
+
+    it('retro is SHIP/advisory, skippable for S', () => {
+      const s = ALL_STEPS[14];
       expect(s.name).toBe('retro');
       expect(s.enforcement).toBe('advisory');
-      expect(s.prerequisites).toEqual(['manual_test']);
+      expect(s.prerequisites).toEqual(['architecture_review_as_built']);
       expect(s.skippableForTiers).toEqual(['S']);
     });
 
     it('rebase is SHIP/structural loopGate, engine-native, before finish', () => {
-      const s = ALL_STEPS[13];
+      const s = ALL_STEPS[15];
       expect(s.name).toBe('rebase');
       expect(s.phase).toBe('SHIP');
       expect(s.enforcement).toBe('structural');
@@ -153,17 +179,39 @@ describe('engine/steps', () => {
     });
 
     it('finish is SHIP/gating with prereq rebase', () => {
-      const s = ALL_STEPS[14];
+      const s = ALL_STEPS[16];
       expect(s.name).toBe('finish');
       expect(s.enforcement).toBe('gating');
       expect(s.prerequisites).toEqual(['rebase']);
       expect(s.isCheckpoint).toBe(false);
     });
 
-    it('build → manual_test → retro → rebase → finish loop-tail topology', () => {
+    it('build → manual_test → prd_audit → architecture_review_as_built → retro → rebase → finish loop-tail topology', () => {
       const names = ALL_STEPS.map((s) => s.name);
       const tail = names.slice(names.indexOf('build'));
-      expect(tail).toEqual(['build', 'manual_test', 'retro', 'rebase', 'finish']);
+      expect(tail).toEqual([
+        'build', 'manual_test', 'prd_audit', 'architecture_review_as_built',
+        'retro', 'rebase', 'finish',
+      ]);
+    });
+
+    it('the two SHIP compliance gates are gating loop members between manual_test and retro', () => {
+      const names = ALL_STEPS.map((s) => s.name);
+      expect(names.indexOf('manual_test')).toBeLessThan(names.indexOf('prd_audit'));
+      expect(names.indexOf('prd_audit')).toBeLessThan(
+        names.indexOf('architecture_review_as_built'),
+      );
+      expect(names.indexOf('architecture_review_as_built')).toBeLessThan(
+        names.indexOf('retro'),
+      );
+      expect(names.indexOf('architecture_review_as_built')).toBeLessThan(
+        names.indexOf('finish'),
+      );
+      for (const n of ['prd_audit', 'architecture_review_as_built'] as StepName[]) {
+        const def = ALL_STEPS.find((s) => s.name === n)!;
+        expect(def.enforcement).toBe('gating');
+        expect(def.loopGate).toBe(true);
+      }
     });
   });
 
@@ -187,8 +235,8 @@ describe('engine/steps', () => {
       expect(getStepIndex('worktree')).toBe(0);
     });
 
-    it('returns 14 for finish', () => {
-      expect(getStepIndex('finish')).toBe(14);
+    it('returns 16 for finish', () => {
+      expect(getStepIndex('finish')).toBe(16);
     });
   });
 
@@ -197,12 +245,12 @@ describe('engine/steps', () => {
       expect(getStepByIndex(0).name).toBe('worktree');
     });
 
-    it('returns finish for index 14', () => {
-      expect(getStepByIndex(14).name).toBe('finish');
+    it('returns finish for index 16', () => {
+      expect(getStepByIndex(16).name).toBe('finish');
     });
 
     it('throws for out-of-range index', () => {
-      expect(() => getStepByIndex(15)).toThrow();
+      expect(() => getStepByIndex(17)).toThrow();
       expect(() => getStepByIndex(-1)).toThrow();
     });
   });

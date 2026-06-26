@@ -62,11 +62,12 @@ Then in the Claude Code session:
 ```
 
 The conductor checks artifact state, tells you what to run next, and blocks when gates aren't met.
-It walks you through all 16 steps:
+It walks you through all 18 steps:
 
 ```
 /bootstrap → /brainstorm → /stories → /conflict-check → /plan → /architecture-diagram
-→ /architecture-review → /writing-system-tests → /pipeline → /finish → /manual-test → /retro
+→ /architecture-review → /writing-system-tests → /pipeline → /manual-test
+→ /prd-audit → /architecture-review --as-built → /retro → /finish
 ```
 
 ### Automated
@@ -341,9 +342,9 @@ UNDERSTAND → DECIDE → BUILD → SHIP
 | UNDERSTAND | `/bootstrap`, `/memory`, `/assess` | Detect/scaffold project, load tech-context, recall prior decisions, codebase health assessment |
 | DECIDE | `/brainstorm` → `/stories` → `/conflict-check` → `/plan` → `/architecture-diagram` → `/architecture-review` | Design → stories → conflicts → tasks → diagrams → architecture gate |
 | BUILD | `/writing-system-tests` → `/pipeline` or `/tdd`, `/code-review`, `/debugging` | Acceptance specs → TDD → evaluator gates |
-| SHIP | `/finish` → `/manual-test` → `/retro`, `/pr` | Verification → curl/browser validation → dual retrospective → pull request |
+| SHIP | `/manual-test` → `/prd-audit` → `/architecture-review --as-built` → `/retro` → `/finish`, `/pr` | curl/browser validation → PRD compliance audit → as-built architecture sweep → dual retrospective → verification → pull request |
 
-### Skills (20 total)
+### Skills (21 total)
 
 | Skill | Enforcement | Model | Purpose |
 |-------|-------------|-------|---------|
@@ -355,7 +356,7 @@ UNDERSTAND → DECIDE → BUILD → SHIP
 | `/conflict-check` | Gating | opus | Detect contradictions (5 types), resolutions create ADRs |
 | `/plan` | Gating | sonnet | 2-5 min tasks, dependency graph, scope sanity check |
 | `/architecture-diagram` | Gating | sonnet | C4 architecture diagrams in Mermaid, maintained across SDLC |
-| `/architecture-review` | Gating | opus | Feasibility, alignment, domain integrity, risk register. BLOCKED = human required |
+| `/architecture-review` | Gating | opus | Feasibility, alignment, domain integrity, risk register. BLOCKED = human required. SHIP `--as-built` mode (sonnet): shipped code vs APPROVED ADRs |
 | `/writing-system-tests` | Gating | sonnet | Failing acceptance specs (integration for API, system for full-stack) |
 | `/tdd` | Structural | sonnet | RED → DOMAIN → GREEN → DOMAIN → COMMIT with subagent isolation |
 | `/simplify` | Gating | sonnet | Deduplication + complexity reduction at batch boundaries |
@@ -364,8 +365,9 @@ UNDERSTAND → DECIDE → BUILD → SHIP
 | `/debugging` | Gating | opus | 4-phase investigation before any fix |
 | `/finish` | Gating | haiku | Fresh verification, story coverage, merge/PR options |
 | `/manual-test` | Gating | sonnet | Validate stories via curl/browser, bug loop through /tdd |
+| `/prd-audit` | Gating | opus | Audit shipped impl vs PRD FRs; per-FR verdict + gap-class; kicks back to BUILD or DECIDE |
 | `/retro` | Advisory | opus | Dual analysis: harness + application, trend tracking |
-| `/conduct` | Gating | haiku | SDLC orchestrator: 14-step flow with gate enforcement |
+| `/conduct` | Gating | haiku | SDLC orchestrator: 17-step flow with gate enforcement |
 
 ### Agent Personas
 

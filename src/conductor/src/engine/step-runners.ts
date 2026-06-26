@@ -31,6 +31,9 @@ const STEP_PROMPTS: Record<StepName, string> = {
   acceptance_specs: '/writing-system-tests',
   build: '/pipeline',
   manual_test: '/manual-test',
+  prd_audit: '/prd-audit',
+  // Runs the architecture-review skill in its as-built compliance-gate mode.
+  architecture_review_as_built: '/architecture-review --as-built',
   retro: '/retro',
   // Engine-native (like complexity) — never dispatched; present only to keep
   // the Record<StepName, string> exhaustive.
