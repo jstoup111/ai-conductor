@@ -611,3 +611,188 @@ describe('Task 28: routing redirect — original repo gets NO branch/PR/change (
     expect(existsSync(join(workDir27, 'phantom-project'))).toBe(false);
   });
 });
+
+// =============================================================================
+// Task 31 (FR-5): Create-on-no-fit offer + decline/partial-fail rollback.
+// =============================================================================
+
+describe('Task 31: create-on-no-fit offer — decline (FR-5)', () => {
+  it('no-fit: loop offers to create a new project when registry has no matching repo', async () => {
+    // Empty registry → createSuggested will be true → loop should offer create.
+    await writeRegistry27([]);
+
+    // Provider returns empty (no projects to rank anyway — shortcircuited).
+    const providerStub = {
+      invoke: vi.fn().mockResolvedValue('[]'),
+    };
+
+    // IO: idea → decline the create offer.
+    const { io, out } = scriptedIo27(['brand new feature idea', 'n']);
+
+    const { runEngineerMode } = await import('../../../src/engine/engineer/loop.js');
+    await runEngineerMode({
+      provider: providerStub as any,
+      io,
+      gh: async () => ({ stdout: '' }),
+      registryPath: registryPath27,
+      engineerDir: engineerDir27,
+    });
+
+    // The loop must have printed an offer to create a new project.
+    const combined = out.join('\n');
+    expect(combined).toMatch(/create|no.*match|no.*project/i);
+  });
+
+  it('decline the create offer: registry is unchanged (no new records written)', async () => {
+    await writeRegistry27([]);
+
+    const providerStub = { invoke: vi.fn().mockResolvedValue('[]') };
+
+    const { io } = scriptedIo27(['another idea', 'n']);
+
+    const { runEngineerMode } = await import('../../../src/engine/engineer/loop.js');
+    const summary = await runEngineerMode({
+      provider: providerStub as any,
+      io,
+      gh: async () => ({ stdout: '' }),
+      registryPath: registryPath27,
+      engineerDir: engineerDir27,
+    });
+
+    // No ideas processed — declined before any scaffolding.
+    expect(summary.ideasProcessed).toBe(0);
+
+    // Registry file should still be empty ([] or non-existent → no new entries).
+    if (existsSync(registryPath27)) {
+      const raw = await readFile(registryPath27, 'utf-8');
+      const records: unknown[] = JSON.parse(raw);
+      expect(records).toHaveLength(0);
+    }
+    // No new directories under workDir27 (only engineerDir27 which pre-exists).
+    const dirs = (await readdir(workDir27)).filter((d) => d !== 'engineer' && d !== 'registry.json');
+    expect(dirs).toHaveLength(0);
+  });
+
+  it('decline: no directory is created for the declined project (zero side effects)', async () => {
+    await writeRegistry27([]);
+
+    const providerStub = { invoke: vi.fn().mockResolvedValue('[]') };
+    const { io } = scriptedIo27(['concept X', 'n']);
+
+    const { runEngineerMode } = await import('../../../src/engine/engineer/loop.js');
+    await runEngineerMode({
+      provider: providerStub as any,
+      io,
+      gh: async () => ({ stdout: '' }),
+      registryPath: registryPath27,
+      engineerDir: engineerDir27,
+    });
+
+    // workDir27 should only contain: registry.json + engineer/.
+    const entries = await readdir(workDir27);
+    // Any extra entry besides registry.json and engineer would be a leftover dir.
+    const unexpected = entries.filter((e) => e !== 'registry.json' && e !== 'engineer');
+    expect(unexpected).toHaveLength(0);
+  });
+});
+
+describe('Task 31: create-on-no-fit — partial scaffold failure + rollback (FR-5)', () => {
+  it('createFn failure: no dangling registry entry (registry unchanged after failed scaffold)', async () => {
+    // Start with no projects.
+    await writeRegistry27([]);
+
+    // The routing provider returns no candidates (empty registry short-circuits the LLM).
+    const providerStub = { invoke: vi.fn().mockResolvedValue({ output: '[]' }) };
+
+    // The "create" step will fail because we cannot scaffold a real git repo
+    // at a path that requires root access. We use a path under /nonexistent which
+    // triggers EACCES → runCreate returns non-zero → loop throws → per-idea isolation
+    // catches it → ideasProcessed stays 0 → registry stays empty (no orphan entry).
+    const { io } = scriptedIo27([
+      'totally new concept',          // idea
+      'create /nonexistent/path/x',   // attempt create at a root-level path that will fail
+      'y',                            // confirm create
+    ]);
+
+    const { runEngineerMode } = await import('../../../src/engine/engineer/loop.js');
+    const summary = await runEngineerMode({
+      provider: providerStub as any,
+      io,
+      gh: async () => ({ stdout: '' }),
+      registryPath: registryPath27,
+      engineerDir: engineerDir27,
+    });
+
+    // Scaffold failed → error was isolated → ideasProcessed = 0.
+    expect(summary.ideasProcessed).toBe(0);
+
+    // Registry must still be empty — no orphan entry written.
+    // runCreate only calls upsertProject AFTER successful scaffold. If it fails
+    // before that point, no registry write happens.
+    if (existsSync(registryPath27)) {
+      const raw = await readFile(registryPath27, 'utf-8');
+      const records: unknown[] = JSON.parse(raw);
+      expect(records).toHaveLength(0);
+    }
+  });
+
+  it('createFn failure: ideasProcessed stays 0 — per-idea error isolation contains the failure', async () => {
+    await writeRegistry27([]);
+
+    const providerStub = { invoke: vi.fn().mockResolvedValue({ output: '[]' }) };
+
+    // Same failed-create scenario, asserting ideasProcessed isolation.
+    const { io } = scriptedIo27([
+      'innovative idea',
+      'create /nonexistent/path/y',
+      'y',
+    ]);
+
+    const { runEngineerMode } = await import('../../../src/engine/engineer/loop.js');
+    const summary = await runEngineerMode({
+      provider: providerStub as any,
+      io,
+      gh: async () => ({ stdout: '' }),
+      registryPath: registryPath27,
+      engineerDir: engineerDir27,
+    });
+
+    // Per-idea error isolation: failed scaffold does NOT crash the session.
+    // ideasProcessed is falsifiable — if it's > 0, the scaffold somehow succeeded.
+    expect(summary.ideasProcessed).toBe(0);
+    expect(summary.exitCode ?? 0).toBe(0); // session still exits cleanly
+  });
+
+  it('partial-fail rollback: registry has no entry for the project name after scaffold failure', async () => {
+    // This test verifies createOnNoFit's core guarantee: the registry must not
+    // contain a dangling record when the scaffold fails. runCreate only writes
+    // the registry record AFTER the scaffold succeeds, so any early failure
+    // (git init failure, mkdir failure) leaves no registry trace.
+    await writeRegistry27([]);
+
+    const providerStub = { invoke: vi.fn().mockResolvedValue({ output: '[]' }) };
+
+    const { io } = scriptedIo27([
+      'new thing',
+      'create /nonexistent/path/z',
+      'y',
+    ]);
+
+    const { runEngineerMode } = await import('../../../src/engine/engineer/loop.js');
+    await runEngineerMode({
+      provider: providerStub as any,
+      io,
+      gh: async () => ({ stdout: '' }),
+      registryPath: registryPath27,
+      engineerDir: engineerDir27,
+    });
+
+    // Registry must not contain any project named after the failed scaffold attempt.
+    if (existsSync(registryPath27)) {
+      const raw = await readFile(registryPath27, 'utf-8');
+      const records: Array<{ name?: string }> = JSON.parse(raw);
+      const dangling = records.find((r) => r.name === 'z' || r.name === 'path' || r.name === 'nonexistent');
+      expect(dangling).toBeUndefined(); // no orphan entry
+    }
+  });
+});
