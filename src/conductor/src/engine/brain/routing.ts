@@ -15,6 +15,14 @@
 //   and returns a RoutingResult with ranked candidates + a create suggestion
 //   flag when confidence is low. The human confirm/redirect/decline gate (Task
 //   18) is NOT here — this is pure inference, no decision is committed.
+//
+// handleGateResponse (Task 18, FR-3) — confirm/redirect/decline gate:
+//   Pure function. Given a RoutingResult, an operator text response, and the
+//   full registered project list, returns a GateOutcome without any real I/O.
+//   Covers: confirm ('y'/'yes'), redirect to registered name, redirect to
+//   unknown name (reprompt), decline/empty (declined), and near-tie
+//   (needs-choice). onAuthor is an optional spy/callback; it is NEVER called
+//   on declined — verified structurally here and by tests.
 
 import type { ProjectRecord, RegistryReader } from '../registry.js';
 
@@ -23,6 +31,26 @@ export type RoutingOutcome =
   | { kind: 'redirected'; project: ProjectRecord }
   | { kind: 'create'; name: string }
   | { kind: 'declined' };
+
+// ---------------------------------------------------------------------------
+// GateOutcome — returned by handleGateResponse (Task 18, FR-3).
+//
+// Five variants:
+//   confirmed    — operator confirmed the proposed project.
+//   redirected   — operator named a different (registered) project.
+//   reprompt     — operator named an unregistered project; gate cannot
+//                  proceed — no project field, no path fabricated.
+//   declined     — operator declined or gave an empty response;
+//                  no project field — consumers cannot write to a project.
+//   needs-choice — two or more candidates are near-tied; gate refuses to
+//                  auto-pick; lists tied candidates for explicit selection.
+// ---------------------------------------------------------------------------
+export type GateOutcome =
+  | { kind: 'confirmed'; project: ProjectRecord }
+  | { kind: 'redirected'; project: ProjectRecord }
+  | { kind: 'reprompt'; unknownName: string }
+  | { kind: 'declined' }
+  | { kind: 'needs-choice'; candidates: RoutingCandidate[] };
 
 // Exhaustiveness helper. Place in the `default` branch of a switch over
 // RoutingOutcome. TypeScript will error at compile time if any variant is
@@ -202,4 +230,93 @@ export async function routeIdea(
   const createSuggested = bestScore < threshold;
 
   return { candidates, createSuggested };
+}
+
+// ---------------------------------------------------------------------------
+// handleGateResponse (Task 18, FR-3) — confirm/redirect/decline gate.
+//
+// Pure function — no real repo I/O, no disk reads/writes, no git/gh calls.
+// Maps a RoutingResult + operator text response → GateOutcome.
+//
+// Decision tree:
+//   1. decline/empty response           → 'declined' (onAuthor NEVER called)
+//   2. near-tie top candidates          → 'needs-choice' (refuses to auto-pick)
+//   3. confirm ('y'/'yes')              → 'confirmed' with top candidate project
+//   4. operator names registered proj   → 'redirected' with that project record
+//   5. operator names unknown proj      → 'reprompt' (no fabricated project)
+//
+// Near-tie definition: the top-two candidates' scores differ by less than
+// TIE_DELTA (0.05). This prevents silent auto-selection when the router is
+// uncertain.
+//
+// @param result          The RoutingResult from routeIdea.
+// @param response        The operator's raw text response (trimmed internally).
+// @param registered      Full list of registered projects (for redirect lookup).
+// @param onAuthor        Optional callback; injected as a spy in tests to
+//                        assert zero calls on declined paths.
+// ---------------------------------------------------------------------------
+
+/** Maximum score delta between the top two candidates to be considered a tie. */
+const TIE_DELTA = 0.05;
+
+/** Words that the operator can type to confirm the proposed routing. */
+const CONFIRM_WORDS = new Set(['y', 'yes']);
+
+/** Words that the operator can type to decline. */
+const DECLINE_WORDS = new Set(['n', 'no']);
+
+export function handleGateResponse(
+  result: RoutingResult,
+  response: string,
+  registered: ProjectRecord[],
+  onAuthor?: () => void,
+): GateOutcome {
+  const trimmed = response.trim().toLowerCase();
+
+  // ── 1. Decline / empty ─────────────────────────────────────────────────────
+  // Empty, whitespace-only, or explicit 'n'/'no' → declined immediately.
+  // onAuthor is deliberately NOT called here — callers can spy on this.
+  if (trimmed === '' || DECLINE_WORDS.has(trimmed)) {
+    return { kind: 'declined' };
+  }
+
+  // ── 2. Near-tie check (runs BEFORE confirm processing) ────────────────────
+  // If the top two candidates are within TIE_DELTA, surface 'needs-choice'
+  // even when the operator typed 'y'. Forcing an explicit selection prevents
+  // silent auto-routing when the brain is undecided.
+  if (result.candidates.length >= 2) {
+    const [first, second] = result.candidates;
+    if (first.score - second.score < TIE_DELTA) {
+      return { kind: 'needs-choice', candidates: result.candidates };
+    }
+  }
+
+  // ── 3. Confirm ─────────────────────────────────────────────────────────────
+  if (CONFIRM_WORDS.has(trimmed)) {
+    // Must have at least one candidate to confirm.
+    if (result.candidates.length === 0) {
+      // No candidates → cannot confirm; treat as declined.
+      return { kind: 'declined' };
+    }
+    const top = result.candidates[0];
+    onAuthor?.();
+    return { kind: 'confirmed', project: top.project };
+  }
+
+  // ── 4. Redirect lookup ─────────────────────────────────────────────────────
+  // Operator typed something other than y/yes/n/no — treat it as a project
+  // name. Look it up in the registered list (case-sensitive, exact match).
+  const registeredByName = new Map<string, ProjectRecord>(registered.map((p) => [p.name, p]));
+  const target = registeredByName.get(response.trim()); // original casing for exact match
+
+  if (target !== undefined) {
+    onAuthor?.();
+    return { kind: 'redirected', project: target };
+  }
+
+  // ── 5. Unknown project name → reprompt ────────────────────────────────────
+  // The operator named a project that does not exist in the registry.
+  // Return 'reprompt' carrying the unrecognised name for the UI to surface.
+  // No project path is invented or fabricated.
+  return { kind: 'reprompt', unknownName: response.trim() };
 }
