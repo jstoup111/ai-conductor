@@ -67,8 +67,13 @@ describe('dispatchBrain — routes to brain entry stub', () => {
     const mod = await import('../src/engine/brain-cli.js');
     // dispatchBrain must exist and be callable.
     expect(typeof mod.dispatchBrain).toBe('function');
-    // The stub must return a number (exit code) — 0 for success.
-    const code = await mod.dispatchBrain({ kind: 'brain' });
+    // Inject a scripted io that immediately returns EOF (null) so the brain
+    // loop exits cleanly without blocking on process.stdin.
+    const scriptedIo = {
+      prompt: (): Promise<string | null> => Promise.resolve(null),
+      print: (_s: string): void => { /* no-op */ },
+    };
+    const code = await mod.dispatchBrain({ kind: 'brain' }, { io: scriptedIo });
     expect(typeof code).toBe('number');
   });
 });

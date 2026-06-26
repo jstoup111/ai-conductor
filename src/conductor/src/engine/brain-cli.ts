@@ -8,6 +8,8 @@
 // the CLI routes to. The real `runBrainMode` lives in src/engine/brain/loop.ts
 // and will be imported dynamically once it exists.
 
+import type { BrainIO } from './brain/loop.js';
+
 // Dispatch descriptor — mirrors RegistryDispatch from registry-cli.ts.
 export type BrainDispatch = { kind: 'brain' };
 
@@ -30,16 +32,28 @@ export function detectBrainCommand(argv: string[]): BrainDispatch | null {
 // Dispatch to the brain entry. The real loop is imported dynamically so this
 // file has zero coupling to the not-yet-complete loop module. When loop.ts
 // does not exist yet (task-33 pending), the stub returns 0 and prints a message.
-export async function dispatchBrain(_d: BrainDispatch): Promise<number> {
+//
+// `deps.io` is an optional injectable BrainIO for non-interactive / test callers.
+// When omitted, the production path constructs a real readline interface from
+// process.stdin (unchanged behaviour).
+export async function dispatchBrain(_d: BrainDispatch, deps?: { io?: BrainIO }): Promise<number> {
   try {
     // Dynamic import: succeeds once task-33 lands src/engine/brain/loop.ts with
     // a `runBrainMode` export. Until then, the catch block below handles it.
     const { runBrainMode } = (await import('./brain/loop.js')) as {
       runBrainMode: (deps: Record<string, unknown>) => Promise<{ exitCode?: number }>;
     };
+
+    // ── Injected io path (tests / non-interactive callers) ───────────────────
+    if (deps?.io) {
+      const result = await runBrainMode({ io: deps.io });
+      return result?.exitCode ?? 0;
+    }
+
+    // ── Production path: build a real readline io from process.stdin ─────────
     const readline = await import('node:readline');
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-    const io = {
+    const io: BrainIO = {
       prompt: (): Promise<string | null> =>
         new Promise((resolve) => {
           rl.question('brain> ', (line) => resolve(line));
