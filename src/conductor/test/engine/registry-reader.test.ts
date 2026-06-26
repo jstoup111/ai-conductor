@@ -89,6 +89,20 @@ describe('createRegistryReader', () => {
     await expect(reader.listProjects()).rejects.toThrow(/registry/i);
   });
 
+  it('listProjects() throws an error that names the registry file path when JSON is malformed', async () => {
+    // A corrupt registry must produce a diagnosable error — the path of the
+    // offending file must appear in the message so the user knows which file
+    // to fix. This test uses a controlled registryPath so we can assert the
+    // exact filename appears in the thrown error.
+    await writeFile(registryPath, '{ this is: not: valid json !!!', 'utf-8');
+    process.env.AI_CONDUCTOR_REGISTRY = registryPath;
+
+    const mod = await loadRegistry();
+    const reader = mod.createRegistryReader();
+
+    await expect(reader.listProjects()).rejects.toThrow(registryPath);
+  });
+
   it('getProject(path) matches a record by canonical path', async () => {
     const projectDir = join(tmpDir, 'project-b');
     await mkdir(projectDir, { recursive: true });
