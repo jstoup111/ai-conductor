@@ -39,6 +39,25 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 ## [Unreleased]
 
 ### Added
+- conduct-ts: **`conduct brain` supervisor mode** (Phase 9.3). A new
+  non-autonomous, interactive REPL (`conduct brain`) that turns a free-form idea
+  into a routed, lesson-informed spec PR — and never builds or merges. Per idea it:
+  routes the idea against the project registry via the LLM provider, **requires
+  human confirmation** before any write (`y` confirm / `n` decline / `redirect
+  <name>` to retarget / `create <path>` when nothing fits → scaffolds + registers
+  a new repo via the 9.2 `create` path), selects relevant prior lessons from the
+  brain store (FR-5 flywheel) and injects them into the authoring prompt, authors
+  the spec on a `spec/<slug>` branch off the derived default branch (artifacts under
+  `.docs/` only — never source), and opens a spec **PR** (`gh pr create`). It
+  **never** triggers a build (`buildsRun` stays 0) and **never** merges. No-remote
+  targets are non-fatal: the spec is committed on the branch and the authored-keys
+  ledger is still recorded so the FR-12 flywheel trend counts the feature. Each
+  idea is isolated by a per-idea try/catch; a decline performs zero writes; a
+  redirect to an unknown name is re-prompted. Registry/store locations come from
+  `$AI_CONDUCTOR_REGISTRY` / `$AI_CONDUCTOR_BRAIN_DIR`. Read-only `governorReport`
+  (aggregate spend + kickback/halt/retry rates) and `computeFlywheelTrend`
+  (improving/insufficient_data over brain-planned features) ship as library
+  functions over the brain store.
 - conduct-ts daemon: **structured retro signal + brain memory store** (Phase 9.1).
   On daemon feature completion (`done`/`halted`) the runner emits a structured
   `BrainSignal` + a narrative to a cross-project store at `~/.ai-conductor/brain/`

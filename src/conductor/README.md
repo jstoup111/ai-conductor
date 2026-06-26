@@ -265,9 +265,46 @@ one place:
   `.daemon/`, `.worktrees/`) + `git remote add origin` when `--remote` is given (add-only, no
   push), upsert with `status: created`.
 
-Types-only `ProjectRecord` and `RegistryReader` are exported for the future read-side consumer
-(Phase 9.3); no runtime reader ships here. See `test/engine/registry.test.ts` and
+`ProjectRecord` and the registry **read-side** (`createRegistryReader`) are now consumed by the
+brain supervisor (Phase 9.3, below). See `test/engine/registry.test.ts` and
 `test/integration/registry-cli.test.ts`.
+
+### Brain supervisor mode (`conduct brain`)
+
+`conduct brain` (dispatched by `engine/brain-cli.ts` via `detectBrainCommand`, **before** the
+interactive pipeline boots) is a **non-autonomous** REPL that turns an idea into a routed,
+lesson-informed spec PR. It **never builds and never merges** — the structural guarantee is
+enforced by `test/engine/brain/non-autonomy.test.ts` (the brain source tree imports no
+build/pipeline entry point and issues no `gh pr merge`) and by `summary.buildsRun` staying `0`.
+The loop body lives in `engine/brain/loop.ts` (`runBrainMode(deps)`); `deps` injects the LLM
+`provider`, an `io` surface, and a `gh` runner, so the whole flow is testable headless.
+
+Per non-blank idea (each isolated by a per-idea `try/catch`):
+
+1. **Route** — `routeIdea` (`engine/brain/routing.ts`) ranks registry projects against the idea
+   via the provider and returns candidates (or `createSuggested` when nothing fits).
+2. **Confirmation gate** (human-in-the-loop, mandatory before any write) — `y`/`yes` confirms the
+   current target; `n`/`no`/blank declines with **zero writes** (no branch, no PR, no gh call);
+   `redirect <name>` retargets to another registered project (unknown name → re-prompted, no
+   invented path); `create <path>` (offered on no-fit) scaffolds + registers a new repo through
+   the 9.2 `create` path, then commits the scaffold so it is authorable.
+3. **Select lessons** — `selectLessons` (`engine/brain/lesson-store.ts`) pulls the prior lessons
+   relevant to the target from the brain store and `buildAuthoringPrompt` injects the digest into
+   the authoring prompt (no relevant lessons → an explicit empty digest, not unrelated padding).
+4. **Author** — `authorSpec` (`engine/brain/authoring.ts`) creates a `spec/<slug>` branch off the
+   **derived** default branch (never hardcoded `main`), writes artifacts under `.docs/` only, and
+   commits; a provider failure rolls back HEAD + deletes the dangling branch.
+5. **Handoff** — `openSpecPr` (`engine/brain/handoff.ts`) opens a spec **PR** (`gh pr create`,
+   never `merge`) and records the authored-keys ledger. A target with **no remote** is non-fatal:
+   the spec stays committed on the branch and the ledger is still recorded so the FR-12 flywheel
+   trend counts the feature.
+
+Read-only reporting over the brain store ships as library functions: `governorReport`
+(`engine/brain/governor.ts`) aggregates spend + kickback/halt/retry rates; `computeFlywheelTrend`
+(`engine/brain/flywheel-trend.ts`) reports `improving` / `insufficient_data` across
+brain-planned features (store ∩ authored-keys ledger). Registry/store paths come from
+`$AI_CONDUCTOR_REGISTRY` / `$AI_CONDUCTOR_BRAIN_DIR`. Acceptance scenarios live in
+`test/acceptance/brain.test.ts`.
 
 ## Testing pattern
 

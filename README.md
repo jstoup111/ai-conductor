@@ -122,6 +122,23 @@ keeps going.
 On failure, conduct sends a desktop notification and drops into an interactive Claude session
 to fix the issue. After you `/quit`, it rechecks artifacts and continues automatically.
 
+Brain supervisor mode (`conduct-ts` only) — a **non-autonomous** REPL that turns a free-form
+idea into a routed, lesson-informed **spec PR**. It never builds and never merges:
+
+```bash
+conduct brain
+# brain> add a CSV export to the reporting tool
+#   → routes the idea across your registered projects (conduct register / create)
+#   → asks you to confirm:  y | n | redirect <project> | create <path>
+#   → pulls relevant prior lessons from the brain store into the spec
+#   → authors a spec/<slug> branch (artifacts under .docs/ only) and opens a PR
+```
+
+Every write is gated on your confirmation (decline = zero writes); a no-remote target still
+commits the spec on a branch (PR step is a non-fatal skip). Registry/store locations come from
+`$AI_CONDUCTOR_REGISTRY` / `$AI_CONDUCTOR_BRAIN_DIR`. See `src/conductor/README.md` for the
+full flow.
+
 Handles API rate limits by waiting for reset and auto-retrying.
 
 ## Choosing a Conductor
