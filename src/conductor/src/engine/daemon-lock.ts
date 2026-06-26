@@ -384,7 +384,10 @@ export async function ensureRunning(
     // here because it is a management-signal spy only.
     const owner = acquireResult.owner;
     if (owner.pid > 0 && isLive(owner.pid, defaultKill)) {
-      // Live daemon found — strictly NO spawn, NO signal. (FR-21 negative)
+      // Live daemon found — strictly NO spawn, NO signal. (FR-21 negative, ADR-005)
+      // ADR-005: ensureRunning is LAUNCH-not-MANAGE. It never sends SIGTERM, SIGHUP,
+      // SIGKILL, or any other control signal. It has no lifecycle ownership over
+      // the running daemon — the daemon self-limits and self-terminates.
       return;
     }
     // Owner pid is dead — reclaim the stale lock (uses defaultKill internally).
