@@ -1,6 +1,7 @@
-// Unit tests for runEngineerMode — Task 23 (Phase 9.3, FR-1).
+// Unit tests for runEngineerMode — Tasks 23-24 (Phase 9.3, FR-1).
 //
 // Task 23 (FR-1): Loop startup loads registry + store; reports counts.
+// Task 24 (FR-1, C2): Degraded start — missing registry/store, no crash, no subprocess.
 // C2 REGRESSION INVARIANTS (static source analysis):
 //   - loop.ts does NOT spawn 'claude' or 'claude -p' (no execFile/spawn of claude binary).
 //   - loop.ts does NOT create a Node TTY readline REPL (no createInterface on stdin).
@@ -159,5 +160,78 @@ describe('Task 23: loop startup loads registry + store, reports counts (FR-1)', 
     expect(src).toMatch(/intake\/port(\.js)?['"]/);
     // And it must NOT import the concrete claude-session adapter directly.
     expect(src).not.toMatch(/from\s+['"][^'"]*intake\/claude-session(\.js)?['"]/);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Task 24 (FR-1, C2): Degraded start — missing registry/store, no crash, no subprocess.
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe('Task 24: degraded loop start without registry/store, no subprocess (FR-1, C2)', () => {
+  it('missing registry → degraded mode (0 projects), exit 0, no crash', async () => {
+    // registryPath intentionally not written — absent registry is degraded mode.
+    const { runEngineerMode } = await loadLoop();
+    const { io, text } = scriptedIo(['exit']);
+
+    // Must NOT throw — absent registry is not a fatal error.
+    const summary = await runEngineerMode({
+      provider: noopProvider,
+      io,
+      gh: noopGh,
+      registryPath,
+      engineerDir,
+    });
+
+    expect(text()).toMatch(/0 (known )?project/i);
+    expect(summary.exitCode ?? 0).toBe(0);
+    expect(summary.ideasProcessed).toBe(0);
+  });
+
+  it('missing store (no signals.jsonl in engineerDir) → no crash, still reports count', async () => {
+    // engineerDir exists but no signals.jsonl inside it.
+    await writeRegistry([]);
+
+    const { runEngineerMode } = await loadLoop();
+    const { io, text } = scriptedIo(['exit']);
+
+    const summary = await runEngineerMode({
+      provider: noopProvider,
+      io,
+      gh: noopGh,
+      registryPath,
+      engineerDir,
+    });
+
+    // Must not crash — absent signals.jsonl is a no-op (returns []).
+    expect(summary.exitCode ?? 0).toBe(0);
+    expect(text()).toMatch(/0 (known )?project/i);
+  });
+
+  it('missing registry degraded path: at least one line of output is produced', async () => {
+    // Verifies the startup sequence runs fully even in degraded mode.
+    const { runEngineerMode } = await loadLoop();
+    const { io, out } = scriptedIo(['exit']);
+
+    const summary = await runEngineerMode({
+      provider: noopProvider,
+      io,
+      gh: noopGh,
+      registryPath,
+      engineerDir,
+    });
+
+    // At least one output line (the project count line).
+    expect(out.length).toBeGreaterThan(0);
+    expect(summary.exitCode ?? 0).toBe(0);
+  });
+
+  // C2: The SAME static source invariants apply to the degraded path (same file, same code).
+  it('[C2 static] degraded-path: no claude spawn, no readline REPL in source', async () => {
+    const src = await readFile(loopSrcPath(), 'utf8');
+    // These patterns are forbidden regardless of which execution path runs.
+    expect(src).not.toMatch(/execFile\s*\(\s*['"]claude['"]/);
+    expect(src).not.toMatch(/spawn\s*\(\s*['"]claude['"]/);
+    expect(src).not.toMatch(/from\s+['"]node:readline['"]/);
+    expect(src).not.toMatch(/createInterface/);
   });
 });
