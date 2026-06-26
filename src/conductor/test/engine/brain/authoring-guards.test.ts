@@ -277,19 +277,15 @@ describe('authorSpec — existing-branch guard (Task 22, FR-6)', () => {
 //   (a) Propagate the error (reject) with the provider's error surfaced in the
 //       thrown value — the caller must be able to identify which step failed.
 //   (b) Leave NO impl/source files committed anywhere (no src/, lib/, app/).
-//   (c) Leave NO misleading "spec complete" commit — the spec branch may exist
-//       (created in step 3 before provider.invoke) but must have no spec commit
-//       on it (only the initial commit inherited from the default branch).
+//   (c) Leave NO misleading "spec complete" commit — the spec/<slug> branch must
+//       be DELETED and HEAD must be RESTORED to the default branch (rollback).
 //   (d) Open NO PR — authorSpec does not open PRs but must abort BEFORE any
 //       artifact commit that would feed a PR handoff.
 //
-// ACTUAL post-failure repo state (pinned from code inspection and test observation):
-//   • A spec/<slug> branch IS created (step 3: checkout -b runs before provider.invoke).
-//   • That branch has ZERO spec artifacts committed (step 5 never runs).
-//   • The repo's HEAD is left on spec/<slug> — NOT returned to the default branch
-//     (step 6: checkout <defaultBranch> never runs). This is a dangling-branch
-//     side effect noted for the orchestrator/evaluator — it is asserted here,
-//     NOT fixed (task-23 is test-only).
+// CLEAN post-failure repo state (rollback contract):
+//   • The spec/<slug> branch is DELETED (branch -D) — no dangling branch remains.
+//   • HEAD is RESTORED to the default branch — deriveDefaultBranch() is correct
+//     on the next call (returns defaultBranch, not spec/<slug>).
 //   • No .docs/specs|stories|plans files are committed on any branch.
 //   • No impl/source files (src/, lib/, app/) exist on any branch.
 // ---------------------------------------------------------------------------
@@ -410,9 +406,9 @@ describe('authorSpec — failed DECIDE substep: no PR + spec-only output (Task 2
   });
 
   // -------------------------------------------------------------------------
-  // (c) No spec commit on the dangling branch — the branch exists but is empty of spec artifacts
+  // (c) Rollback: spec/<slug> branch is DELETED and HEAD is restored to defaultBranch
   // -------------------------------------------------------------------------
-  it('creates the spec branch (step 3 runs before provider) but leaves it with no spec commit', async () => {
+  it('deletes the spec branch on provider failure — no dangling branch remains', async () => {
     const target = makeTarget(repoPath);
     const idea = 'add payment gateway';
     const expectedSlug = 'add-payment-gateway';
@@ -427,39 +423,31 @@ describe('authorSpec — failed DECIDE substep: no PR + spec-only output (Task 2
       'DECIDE_STORIES_GATE_FAILED',
     );
 
-    // The branch IS created — this is the current (pinned) behavior.
-    // Note: git branch --list may prefix with '* ' when HEAD is on that branch
-    // (which is the dangling-HEAD side effect pinned in the test below).
+    // The spec/<slug> branch must NOT exist — it was deleted as part of rollback.
     const branchList = await git(['branch', '--list', `spec/${expectedSlug}`], repoPath);
-    expect(branchList.replace(/^\*\s*/, '')).toBe(`spec/${expectedSlug}`);
+    expect(branchList).toBe('');
+  });
 
-    // But that branch has ZERO .docs files committed on it
-    const tree = await git(['ls-tree', '-r', '--name-only', `spec/${expectedSlug}`], repoPath);
+  it('leaves no committed spec artifact after rollback (no branch to inspect, confirmed by ls-tree on default)', async () => {
+    const target = makeTarget(repoPath);
+    const idea = 'add payment gateway';
+
+    const failingProvider: AuthoringProvider = {
+      async invoke(_opts) {
+        throw new Error('DECIDE_STORIES_GATE_FAILED: substep aborted');
+      },
+    };
+
+    await expect(authorSpec(target, idea, emptyDigest(), failingProvider)).rejects.toThrow(
+      'DECIDE_STORIES_GATE_FAILED',
+    );
+
+    // The default branch must have ZERO .docs files committed on it (rollback
+    // deletes the spec branch; the default branch was never touched)
+    const tree = await git(['ls-tree', '-r', '--name-only', defaultBranch], repoPath);
     const committedFiles = tree.split('\n').filter(Boolean);
     const specFiles = committedFiles.filter((f) => f.startsWith('.docs/'));
     expect(specFiles).toEqual([]);
-  });
-
-  it('the dangling spec branch has only the initial commit (no extra commits from provider)', async () => {
-    const target = makeTarget(repoPath);
-    const idea = 'add payment gateway';
-    const expectedSlug = 'add-payment-gateway';
-
-    const defaultTip = await git(['rev-parse', defaultBranch], repoPath);
-
-    const failingProvider: AuthoringProvider = {
-      async invoke(_opts) {
-        throw new Error('DECIDE_STORIES_GATE_FAILED: substep aborted');
-      },
-    };
-
-    await expect(authorSpec(target, idea, emptyDigest(), failingProvider)).rejects.toThrow(
-      'DECIDE_STORIES_GATE_FAILED',
-    );
-
-    // The dangling spec branch tip must equal the default branch tip (no extra commit added)
-    const specBranchTip = await git(['rev-parse', `spec/${expectedSlug}`], repoPath);
-    expect(specBranchTip).toBe(defaultTip);
   });
 
   // -------------------------------------------------------------------------
@@ -494,13 +482,12 @@ describe('authorSpec — failed DECIDE substep: no PR + spec-only output (Task 2
   });
 
   // -------------------------------------------------------------------------
-  // (e) HEAD is left on spec/<slug> after provider failure — dangling HEAD finding
-  //     (pinned assertion of current behavior; noted as a defect for the evaluator)
+  // (e) HEAD is RESTORED to defaultBranch after provider failure — rollback contract
+  //     (previously pinned the buggy dangling-HEAD behavior; now asserts the fix)
   // -------------------------------------------------------------------------
-  it('leaves HEAD on the spec branch (not returned to default) — dangling HEAD side effect', async () => {
+  it('restores HEAD to the default branch after provider failure — no dangling HEAD', async () => {
     const target = makeTarget(repoPath);
     const idea = 'add payment gateway';
-    const expectedSlug = 'add-payment-gateway';
 
     const failingProvider: AuthoringProvider = {
       async invoke(_opts) {
@@ -512,11 +499,10 @@ describe('authorSpec — failed DECIDE substep: no PR + spec-only output (Task 2
       'DECIDE_STORIES_GATE_FAILED',
     );
 
-    // HEAD is left on spec/<slug> because step 6 (checkout defaultBranch) never runs
-    // This is a side effect: the repo is not returned to a clean state.
-    // Asserting current behavior so regressions are caught if this is fixed.
+    // HEAD must be restored to the default branch — the rollback checkout ran.
+    // deriveDefaultBranch() will now return the correct branch on the next call.
     const currentHead = await git(['rev-parse', '--abbrev-ref', 'HEAD'], repoPath);
-    expect(currentHead).toBe(`spec/${expectedSlug}`);
+    expect(currentHead).toBe(defaultBranch);
   });
 
   // -------------------------------------------------------------------------
@@ -543,12 +529,16 @@ describe('authorSpec — failed DECIDE substep: no PR + spec-only output (Task 2
       'DECIDE_STORIES_GATE_FAILED',
     );
 
-    // The partial spec.md exists on disk (provider wrote it) but must NOT be committed
+    // Rollback must have deleted the spec branch entirely — no dangling branch.
     const specBranch = `spec/${expectedSlug}`;
-    const tree = await git(['ls-tree', '-r', '--name-only', specBranch], repoPath);
-    const committedFiles = tree.split('\n').filter(Boolean);
+    const branchList = await git(['branch', '--list', specBranch], repoPath);
+    expect(branchList).toBe('');
 
-    // .docs/specs/spec.md must NOT appear in any committed tree entry
+    // The default branch must also have no .docs files committed — it was never touched.
+    const defaultTree = await git(['ls-tree', '-r', '--name-only', defaultBranch], repoPath);
+    const committedFiles = defaultTree.split('\n').filter(Boolean);
+
+    // .docs/specs/spec.md must NOT appear in any committed tree entry on the default branch
     expect(committedFiles).not.toContain('.docs/specs/spec.md');
     expect(committedFiles.filter((f) => f.startsWith('.docs/'))).toEqual([]);
   });

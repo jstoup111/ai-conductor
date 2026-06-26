@@ -310,23 +310,46 @@ export async function authorSpec(
   const slug = slugify(idea);
   const branch = await chooseBranchName(repoPath, slug);
 
-  // 3. Create the spec/<slug> branch off the default branch.
-  await execFile('git', ['checkout', '-b', branch, defaultBranch], { cwd: repoPath });
+  // 3–5. Create the branch, invoke provider, commit artifacts.
+  //       Wrapped in try/catch: on any failure, restore HEAD to defaultBranch
+  //       and delete the dangling spec branch so deriveDefaultBranch() returns
+  //       the correct branch on the next call (not spec/<slug>).
+  try {
+    // 3. Create the spec/<slug> branch off the default branch.
+    await execFile('git', ['checkout', '-b', branch, defaultBranch], { cwd: repoPath });
 
-  // 4. Invoke the provider (fake in tests, real conduct in production).
-  //    The provider writes .docs/specs|stories|plans into repoPath.
-  await provider.invoke({ cwd: repoPath, idea, branch });
+    // 4. Invoke the provider (fake in tests, real conduct in production).
+    //    The provider writes .docs/specs|stories|plans into repoPath.
+    await provider.invoke({ cwd: repoPath, idea, branch });
 
-  // 5. Stage the authored artifacts and commit on the spec branch.
-  //    Use specific paths — never `git add -A`.
-  await execFile('git', ['add', '.docs/specs', '.docs/stories', '.docs/plans'], {
-    cwd: repoPath,
-  });
-  await execFile(
-    'git',
-    ['commit', '-m', `spec: author artifacts for "${idea}" [brain/authorSpec]`],
-    { cwd: repoPath },
-  );
+    // 5. Stage the authored artifacts and commit on the spec branch.
+    //    Use specific paths — never `git add -A`.
+    await execFile('git', ['add', '.docs/specs', '.docs/stories', '.docs/plans'], {
+      cwd: repoPath,
+    });
+    await execFile(
+      'git',
+      ['commit', '-m', `spec: author artifacts for "${idea}" [brain/authorSpec]`],
+      { cwd: repoPath },
+    );
+  } catch (err) {
+    // Best-effort: restore HEAD to defaultBranch so deriveDefaultBranch() is
+    // correct on the next call. Wrap in its own try/catch so a restore failure
+    // doesn't mask the original error.
+    try {
+      await execFile('git', ['checkout', defaultBranch], { cwd: repoPath });
+    } catch {
+      // restore failed — original error is still re-thrown below
+    }
+    // Best-effort: delete the dangling spec branch to prevent contamination.
+    try {
+      await execFile('git', ['branch', '-D', branch], { cwd: repoPath });
+    } catch {
+      // delete failed — original error is still re-thrown below
+    }
+    // Re-throw the original error verbatim (preserves message + name + stack).
+    throw err;
+  }
 
   // 6. Return to the default branch so the repo is left in a clean state.
   await execFile('git', ['checkout', defaultBranch], { cwd: repoPath });
