@@ -77,6 +77,66 @@ export interface BrainStoreReader {
   readSignals(filter?: { project?: string; feature?: string }): Promise<BrainSignal[]>;
 }
 
+/**
+ * Options for `createBrainStoreReader`. Both fields are optional; when omitted
+ * the reader falls back to `resolveBrainDir()` (which itself honours
+ * `$AI_CONDUCTOR_BRAIN_DIR` or the default `~/.ai-conductor/brain/`).
+ */
+export interface BrainStoreReaderOpts {
+  /** Direct path to the brain directory. Overrides env if provided. */
+  brainDir?: string;
+  /** Passed to `resolveBrainDir` when `brainDir` is not given. */
+  home?: string;
+  env?: NodeJS.ProcessEnv;
+}
+
+/**
+ * Create a `BrainStoreReader` that reads `signals.jsonl` from the brain
+ * directory resolved from `opts` (or env / home defaults). Implements
+ * FR-1 (open store) and FR-5 (flywheel source):
+ *
+ * - Reads signals.jsonl line by line.
+ * - Skips blank lines and malformed JSON lines (resilient — same convention as
+ *   `parseEvents` in report-renderer.ts, reused here so no parallel parser).
+ * - Applies project / feature filter when provided.
+ * - Returns [] when signals.jsonl does not exist (best-effort / no crash).
+ */
+export function createBrainStoreReader(opts: BrainStoreReaderOpts = {}): BrainStoreReader {
+  const dir = opts.brainDir ?? resolveBrainDir({ home: opts.home, env: opts.env });
+  return {
+    async readSignals(filter?: { project?: string; feature?: string }): Promise<BrainSignal[]> {
+      let raw: string;
+      try {
+        raw = await readFile(join(dir, SIGNALS_LOG), 'utf-8');
+      } catch {
+        // Missing or unreadable file → empty result (store not yet written to).
+        return [];
+      }
+
+      // Reuse the same resilient line-parse pattern as parseEvents() in
+      // report-renderer.ts: split on newlines, skip blank + malformed lines.
+      const signals: BrainSignal[] = [];
+      for (const line of raw.split('\n')) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(trimmed);
+        } catch {
+          // skip malformed lines
+          continue;
+        }
+        if (typeof parsed !== 'object' || parsed === null) continue;
+        const sig = parsed as BrainSignal;
+        if (filter?.project !== undefined && sig.project !== filter.project) continue;
+        if (filter?.feature !== undefined && sig.feature !== filter.feature) continue;
+        signals.push(sig);
+      }
+      return signals;
+    },
+  };
+}
+
 // ─── FR-2: location / override / creation ─────────────────────────────────────
 
 /**
