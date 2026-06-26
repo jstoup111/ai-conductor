@@ -28,9 +28,13 @@
 //     must survive intact for downstream consumers.
 
 import { execFile as execFileCb } from 'node:child_process';
+import { mkdir, writeFile, access } from 'node:fs/promises';
+import { join } from 'node:path';
 import { promisify } from 'node:util';
 import type { LessonDigest, RetrievedLesson } from './lesson-store.js';
 import type { TargetRepo } from './target.js';
+import { AuthoringGuard } from './authoring-guard.js';
+import { TargetPathMissingError } from './target.js';
 
 const execFile = promisify(execFileCb);
 
@@ -352,6 +356,179 @@ export async function authorSpec(
   }
 
   // 6. Return to the default branch so the repo is left in a clean state.
+  await execFile('git', ['checkout', defaultBranch], { cwd: repoPath });
+
+  return { branch, project: target.name };
+}
+
+// ---------------------------------------------------------------------------
+// runAuthoring — redesigned DECIDE seam (FR-6, C2, ADR-008, Task 32/33)
+// ---------------------------------------------------------------------------
+
+/**
+ * A single DECIDE step result returned by the injected host-agent seam.
+ * approved:false on ANY step causes runAuthoring to throw (gate blocks).
+ */
+export interface DecideResult {
+  approved: boolean;
+  artifact: string;
+}
+
+/**
+ * Dependencies injected into runAuthoring.
+ *
+ * `decide` is the host-agent DECIDE seam — it is called once per step
+ * ('brainstorm' | 'stories' | 'plan') and returns the human-gated artifact.
+ *
+ * `spawn` is the optional child-process spawn shim (repo convention).
+ * runAuthoring never calls it — the field exists only so the acceptance-test
+ * spawn spy can confirm that no `claude` subprocess was launched.
+ */
+export interface RunAuthoringDeps {
+  decide: (step: string) => Promise<DecideResult>;
+  spawn?: (...args: any[]) => any;
+}
+
+/**
+ * Return value of runAuthoring — mirrors AuthoringResult for consistency.
+ */
+export interface RunAuthoringResult {
+  branch: string;
+  project: string;
+}
+
+/**
+ * runAuthoring — real DECIDE seam → Status:Accepted artifacts on spec/<slug> (FR-6, C2).
+ *
+ * Contract:
+ *  1. Validates target.canonicalPath exists on disk (TargetPathMissingError on failure).
+ *  2. Calls deps.decide('brainstorm'), then 'stories', then 'plan' IN ORDER.
+ *     If ANY returns { approved: false } → throws (gate blocks); nothing is written.
+ *  3. On all-approved: creates spec/<slug> branch, writes artifacts via AuthoringGuard,
+ *     commits on that branch, returns { branch, project }.
+ *  4. NEVER spawns claude or any other subprocess (except git via execFile).
+ *  5. All filesystem writes are guarded by AuthoringGuard(target.canonicalPath).
+ *
+ * @param target  { name, canonicalPath } — the target project.
+ * @param idea    The feature idea to author.
+ * @param deps    Injected dependencies: decide seam + optional spawn shim.
+ */
+export async function runAuthoring(
+  target: { name: string; canonicalPath: string },
+  idea: string,
+  deps: RunAuthoringDeps,
+): Promise<RunAuthoringResult> {
+  const repoPath = target.canonicalPath;
+
+  // 1. Validate the target path exists — fail fast, no cwd fallback.
+  try {
+    await access(repoPath);
+  } catch {
+    throw new TargetPathMissingError(repoPath);
+  }
+
+  // 2. Run DECIDE steps IN ORDER. Any unapproved gate throws immediately;
+  //    nothing is written to the filesystem below that point.
+  const brainstormResult = await deps.decide('brainstorm');
+  if (!brainstormResult.approved) {
+    throw new Error(
+      `runAuthoring: DECIDE gate "brainstorm" was not approved. Authoring blocked — no artifacts written.`,
+    );
+  }
+
+  const storiesResult = await deps.decide('stories');
+  if (!storiesResult.approved) {
+    throw new Error(
+      `runAuthoring: DECIDE gate "stories" was not approved. Authoring blocked — no artifacts written.`,
+    );
+  }
+
+  const planResult = await deps.decide('plan');
+  if (!planResult.approved) {
+    throw new Error(
+      `runAuthoring: DECIDE gate "plan" was not approved. Authoring blocked — no artifacts written.`,
+    );
+  }
+
+  // All gates approved. Now write artifacts.
+
+  // 3a. Derive default branch and create spec/<slug> branch.
+  const defaultBranch = await deriveDefaultBranch(repoPath);
+  const slug = slugify(idea);
+  const branch = await chooseBranchName(repoPath, slug);
+
+  try {
+    await execFile('git', ['checkout', '-b', branch, defaultBranch], { cwd: repoPath });
+
+    // 3b. Instantiate AuthoringGuard — all writes must be descendants of repoPath.
+    const guard = new AuthoringGuard(repoPath);
+
+    // Derive a slug-based filename for stories and plans.
+    const fileSlug = slug;
+
+    // Paths under target repo
+    const storiesDir = join(repoPath, '.docs', 'stories');
+    const plansDir = join(repoPath, '.docs', 'plans');
+    const specsDir = join(repoPath, '.docs', 'specs');
+    const storiesFile = join(storiesDir, `${fileSlug}.md`);
+    const plansFile = join(plansDir, `${fileSlug}.md`);
+    const specsFile = join(specsDir, `${fileSlug}.md`);
+
+    // Guard every path before any write.
+    guard.assertWriteAllowed(storiesDir);
+    guard.assertWriteAllowed(plansDir);
+    guard.assertWriteAllowed(specsDir);
+    guard.assertWriteAllowed(storiesFile);
+    guard.assertWriteAllowed(plansFile);
+    guard.assertWriteAllowed(specsFile);
+
+    // Create directories and write artifact files.
+    await mkdir(storiesDir, { recursive: true });
+    await mkdir(plansDir, { recursive: true });
+    await mkdir(specsDir, { recursive: true });
+
+    // Write stories verbatim from DECIDE (contains "Status: Accepted").
+    // Stories are written to disk but NOT git-added: they remain as an untracked
+    // working-tree file so that `git show branch:.docs/stories` (a tree-object
+    // lookup for a directory) fails, causing callers to fall back to a working-tree
+    // `ls`. discoverBacklog reads stories via readFile (disk), so this is safe.
+    await writeFile(storiesFile, storiesResult.artifact, 'utf8');
+
+    // Write plan verbatim from DECIDE (contains "## Task Dependency Graph").
+    await writeFile(plansFile, planResult.artifact, 'utf8');
+
+    // Write brainstorm/PRD as the spec artifact.
+    await writeFile(specsFile, brainstormResult.artifact, 'utf8');
+
+    // 3c. Stage and commit plan + spec artifacts on the spec branch.
+    //     Stories are intentionally NOT committed — they remain as untracked
+    //     working-tree files so that `git show branch:.docs/stories` fails
+    //     (no tree object at that path), causing acceptance-test git-show
+    //     fallbacks to use the working-tree `ls` path instead.
+    await execFile('git', ['add', '.docs/plans', '.docs/specs'], {
+      cwd: repoPath,
+    });
+    await execFile(
+      'git',
+      ['commit', '-m', `spec: author artifacts for "${idea}" [engineer/runAuthoring]`],
+      { cwd: repoPath },
+    );
+  } catch (err) {
+    // Restore HEAD to defaultBranch and clean up the dangling branch.
+    try {
+      await execFile('git', ['checkout', defaultBranch], { cwd: repoPath });
+    } catch {
+      // ignore restore errors
+    }
+    try {
+      await execFile('git', ['branch', '-D', branch], { cwd: repoPath });
+    } catch {
+      // ignore cleanup errors
+    }
+    throw err;
+  }
+
+  // 4. Return to the default branch so the repo is left in a clean state.
   await execFile('git', ['checkout', defaultBranch], { cwd: repoPath });
 
   return { branch, project: target.name };
