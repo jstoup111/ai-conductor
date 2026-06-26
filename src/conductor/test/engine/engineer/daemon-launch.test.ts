@@ -250,3 +250,46 @@ describe('launch is not manage (FR-8 negative paths)', () => {
     expect(spawnSpy).toHaveBeenCalledTimes(1);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Phase 9.3 REDESIGN — FR-22: launch with cwd:repoPath, drop bogus --project
+//
+// The superseded implementation spawned `['conduct','daemon','--project',project]`
+// with NO cwd, which never worked (the daemon reads its working directory; there
+// is no --project flag). The redesign fixes the launch path to spawn with
+// `cwd: repoPath` and to NOT pass `--project`. These assertions are RED until the
+// fix lands.
+//
+// NOTE: this redesign reframes the first positional arg as the REPO PATH (the
+// daemon's intended cwd), not an opaque "project" token.
+// ---------------------------------------------------------------------------
+describe('launchDaemonDetached — FR-22 cwd fix (Phase 9.3 redesign)', () => {
+  const REPO = '/projects/alpha';
+
+  it('spawns with cwd:repoPath, detached:true, stdio:"ignore" (and unref)', () => {
+    const fakeChild = makeFakeChild();
+    const spawnSpy = vi.fn().mockReturnValue(fakeChild);
+
+    launchDaemonDetached(REPO, { spawn: spawnSpy });
+
+    const [, , opts] = spawnSpy.mock.calls[0] as [unknown, unknown, Record<string, unknown>];
+    // The daemon must be launched INSIDE the target repo so it binds to repoPath.
+    expect(opts['cwd']).toBe(REPO);
+    expect(opts).toMatchObject({ detached: true, stdio: 'ignore' });
+    expect(fakeChild.unref).toHaveBeenCalledOnce();
+  });
+
+  it('the spawn args array does NOT contain the non-existent --project flag', () => {
+    const fakeChild = makeFakeChild();
+    const spawnSpy = vi.fn().mockReturnValue(fakeChild);
+
+    launchDaemonDetached(REPO, { spawn: spawnSpy });
+
+    const [, args] = spawnSpy.mock.calls[0] as [unknown, string[], unknown];
+    expect(Array.isArray(args)).toBe(true);
+    // Regression assertion on the exact bug: no `--project`, and the repo path
+    // is NOT smuggled in as a positional arg (it belongs in opts.cwd).
+    expect(args).not.toContain('--project');
+    expect(args).not.toContain(REPO);
+  });
+});
