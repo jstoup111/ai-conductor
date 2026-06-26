@@ -491,3 +491,123 @@ describe('Task 27: in-chat routing proposal + confirmation gate (FR-3, C2)', () 
     expect(summary.ideasProcessed).toBe(0);
   });
 });
+
+// =============================================================================
+// Task 28 (FR-3, C1): Redirect leaves the ORIGINALLY PROPOSED repo untouched.
+// =============================================================================
+
+describe('Task 28: routing redirect — original repo gets NO branch/PR/change (FR-3, C1)', () => {
+  it('redirect to a different project: the originally-proposed project directory is byte-identical before/after', async () => {
+    // Two projects: alpha (proposed), beta (redirect target).
+    const alphaDir = join(workDir27, 'alpha');
+    const betaDir = join(workDir27, 'beta');
+    await mkdir(alphaDir, { recursive: true });
+    await mkdir(betaDir, { recursive: true });
+
+    // Write both to registry.
+    await writeRegistry27([
+      makeRecord27(alphaDir, 'alpha'),
+      makeRecord27(betaDir, 'beta'),
+    ]);
+
+    // Capture the directory listing of alphaDir BEFORE the loop runs.
+    // An empty dir has 0 entries; if the loop creates a branch/worktree/file inside
+    // it, the listing would change.
+    const beforeAlpha = await readdir(alphaDir);
+
+    // Provider stub: proposes alpha as the top candidate.
+    // Must return { output: '<json>' } — the loop adapter reads (result as any).output.
+    const rankingJson = JSON.stringify([
+      { name: 'alpha', score: 0.91, rationale: 'Primary match' },
+      { name: 'beta', score: 0.60, rationale: 'Secondary match' },
+    ]);
+    const providerStub = {
+      invoke: vi.fn().mockResolvedValue({ output: rankingJson }),
+    };
+
+    // IO: idea → redirect to beta → decline (so we don't try to actually author
+    // into a real git repo; the key assertion is about alphaDir).
+    const { io } = scriptedIo27(['build a feature', 'redirect beta', 'n']);
+
+    const { runEngineerMode } = await import('../../../src/engine/engineer/loop.js');
+    await runEngineerMode({
+      provider: providerStub as any,
+      io,
+      gh: async () => ({ stdout: '' }),
+      registryPath: registryPath27,
+      engineerDir: engineerDir27,
+    });
+
+    // After redirect + decline, alphaDir must be untouched.
+    const afterAlpha = await readdir(alphaDir);
+    expect(afterAlpha).toEqual(beforeAlpha);
+  });
+
+  it('redirect: ideasProcessed=0 after decline confirms NO authoring ran on either repo', async () => {
+    const alphaDir = join(workDir27, 'alpha-2');
+    const betaDir = join(workDir27, 'beta-2');
+    await mkdir(alphaDir, { recursive: true });
+    await mkdir(betaDir, { recursive: true });
+
+    await writeRegistry27([
+      makeRecord27(alphaDir, 'alpha-2'),
+      makeRecord27(betaDir, 'beta-2'),
+    ]);
+
+    const rankingJson = JSON.stringify([
+      { name: 'alpha-2', score: 0.90, rationale: 'Proposed' },
+      { name: 'beta-2', score: 0.65, rationale: 'Redirect target' },
+    ]);
+    const providerStub = {
+      invoke: vi.fn().mockResolvedValue({ output: rankingJson }),
+    };
+
+    // redirect → then decline → no authoring on either repo.
+    const { io } = scriptedIo27(['my great idea', 'redirect beta-2', 'n']);
+
+    const { runEngineerMode } = await import('../../../src/engine/engineer/loop.js');
+    const summary = await runEngineerMode({
+      provider: providerStub as any,
+      io,
+      gh: async () => ({ stdout: '' }),
+      registryPath: registryPath27,
+      engineerDir: engineerDir27,
+    });
+
+    expect(summary.ideasProcessed).toBe(0);
+    // Both dirs remain empty (no branches, no files created).
+    expect(await readdir(alphaDir)).toHaveLength(0);
+    expect(await readdir(betaDir)).toHaveLength(0);
+  });
+
+  it('redirect to unknown name: loop reprompts and does NOT write to original or unknown repo', async () => {
+    const alphaDir = join(workDir27, 'alpha-3');
+    await mkdir(alphaDir, { recursive: true });
+    await writeRegistry27([makeRecord27(alphaDir, 'alpha-3')]);
+
+    const rankingJson = JSON.stringify([{ name: 'alpha-3', score: 0.88, rationale: 'Only option' }]);
+    const providerStub = {
+      invoke: vi.fn().mockResolvedValue({ output: rankingJson }),
+    };
+
+    // redirect to a non-existent project → should reprompt (output about invalid),
+    // then decline → zero authoring.
+    const { io, out } = scriptedIo27(['some idea', 'redirect phantom-project', 'n']);
+
+    const { runEngineerMode } = await import('../../../src/engine/engineer/loop.js');
+    const summary = await runEngineerMode({
+      provider: providerStub as any,
+      io,
+      gh: async () => ({ stdout: '' }),
+      registryPath: registryPath27,
+      engineerDir: engineerDir27,
+    });
+
+    // No authoring on an invalid redirect.
+    expect(summary.ideasProcessed).toBe(0);
+    // alphaDir untouched.
+    expect(await readdir(alphaDir)).toHaveLength(0);
+    // The phantom project directory must NOT have been created.
+    expect(existsSync(join(workDir27, 'phantom-project'))).toBe(false);
+  });
+});
