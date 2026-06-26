@@ -587,3 +587,96 @@ describe('Task 29: multi-repo fan-out independent authoring (FR-4)', () => {
     expect(summary.buildsRun ?? 0).toBe(0);
   });
 });
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Task 30 (FR-4): Fan-out partial failure + deselect.
+// Test: if authoring A FAILS, B is unaffected; if human DESELECTS B, only A
+// authored (B untouched: no branch/PR).
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe('Task 30: fan-out partial-failure isolation + deselect (FR-4)', () => {
+  it('per-idea failure is isolated: one failed idea does not kill the session', async () => {
+    const dirA = join(workDir, 'alpha');
+    await initRepo(dirA);
+    await writeRegistry([makeRecord(dirA, 'alpha')]);
+
+    const { runEngineerMode } = await loadLoop();
+
+    // Provider that fails on the second idea's routing
+    let callCount = 0;
+    const provider = {
+      async invoke(o: any): Promise<any> {
+        callCount++;
+        const prompt = String(o.prompt ?? '');
+        if (/route|candidate|which project/i.test(prompt) && !o.cwd) {
+          // First idea: succeeds; second idea: fails
+          if (callCount > 2) {
+            throw new Error('Simulated authoring failure');
+          }
+          return { ok: true, output: JSON.stringify([{ name: 'alpha', score: 0.9, rationale: 'match' }]) };
+        }
+        if (o.cwd) {
+          return { ok: true, output: 'DECIDE complete' };
+        }
+        return { ok: true, output: '' };
+      },
+    };
+
+    const { gh } = makeTestGh();
+    // idea one: confirmed; idea two: routing fails; session continues
+    const { io } = scriptedIo(['idea one', 'y', 'idea two', 'n', 'exit']);
+
+    const summary = await runEngineerMode({
+      provider,
+      io,
+      gh,
+      registryPath,
+      engineerDir,
+    });
+
+    // Session must survive per-idea errors
+    expect(summary.exitCode ?? 0).toBe(0);
+    // No builds triggered on any path
+    expect(summary.buildsRun ?? 0).toBe(0);
+  });
+
+  it('deselect (n) on an idea → zero writes to the repo (no branch, no PR)', async () => {
+    const dirA = join(workDir, 'alpha');
+    await initRepo(dirA);
+    await writeRegistry([makeRecord(dirA, 'alpha')]);
+
+    const headBefore = (await execFile('git', ['rev-parse', 'HEAD'], { cwd: dirA })).stdout.trim();
+    const branchesBefore = (await execFile('git', ['branch', '--list'], { cwd: dirA })).stdout;
+
+    const { runEngineerMode } = await loadLoop();
+    const { provider } = makeTestProvider({ routeTo: 'alpha' });
+    const { gh, calls } = makeTestGh();
+    // User declines: 'n'
+    const { io } = scriptedIo(['some idea', 'n', 'exit']);
+
+    await runEngineerMode({ provider, io, gh, registryPath, engineerDir });
+
+    const headAfter = (await execFile('git', ['rev-parse', 'HEAD'], { cwd: dirA })).stdout.trim();
+    const branchesAfter = (await execFile('git', ['branch', '--list'], { cwd: dirA })).stdout;
+
+    // Zero writes: HEAD unmoved, no new branches, no gh calls
+    expect(headAfter).toBe(headBefore);
+    expect(branchesAfter).toBe(branchesBefore);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('declined idea increments NO ideasProcessed (isolation)', async () => {
+    const dirA = join(workDir, 'alpha');
+    await initRepo(dirA);
+    await writeRegistry([makeRecord(dirA, 'alpha')]);
+
+    const { runEngineerMode } = await loadLoop();
+    const { provider } = makeTestProvider({ routeTo: 'alpha' });
+    const { gh } = makeTestGh();
+    const { io } = scriptedIo(['some idea', 'n', 'exit']);
+
+    const summary = await runEngineerMode({ provider, io, gh, registryPath, engineerDir });
+    expect(summary.ideasProcessed).toBe(0);
+    expect(summary.buildsRun ?? 0).toBe(0);
+  });
+});
