@@ -1,11 +1,12 @@
 // Test: LessonStore port + types (Task 10, FR-5, ADR-006)
 // Task 11: createJsonlLessonStore default adapter
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+// FR-8: selectLessons — relevant surfaced, unrelated empty, corrupt-store safe
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, writeFile, mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createEngineerStoreReader } from '../../../src/engine/engineer-store.js';
-import { createJsonlLessonStore } from '../../../src/engine/engineer/lesson-store.js';
+import { createJsonlLessonStore, selectLessons } from '../../../src/engine/engineer/lesson-store.js';
 import type {
   LessonStore,
   LessonRecord,
@@ -383,5 +384,195 @@ describe('createJsonlLessonStore — default JSONL adapter (Task 11, FR-5)', () 
     });
 
     expect(results).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// FR-8: selectLessons — flywheel read (relevant/unrelated/corrupt-store-safe)
+// ---------------------------------------------------------------------------
+
+/**
+ * Build a minimal EngineerSignal JSONL line for seeding selectLessons fixtures.
+ * The signal's outcome, kickbacks, halts, retryHotspots, and narrativeRef fields
+ * determine which digest groups it lands in.
+ */
+function makeSignalForSelect(opts: {
+  project: string;
+  feature: string;
+  ts: string;
+  outcome?: string;
+  kickbacks?: unknown[];
+  halts?: unknown[];
+  retryHotspots?: unknown[];
+  narrativeRef?: string;
+}): string {
+  const sig: Record<string, unknown> = {
+    schemaVersion: 1,
+    ts: opts.ts,
+    project: opts.project,
+    feature: opts.feature,
+    runId: `run-${opts.project}-${opts.feature}`,
+    outcome: opts.outcome ?? 'done',
+    kickbacks: opts.kickbacks ?? [],
+    halts: opts.halts ?? [],
+    retryHotspots: opts.retryHotspots ?? [],
+    tokens: { input: 10, output: 5, cacheRead: 0, cacheCreation: 0 },
+    durationByStep: {},
+  };
+  if (opts.narrativeRef !== undefined) {
+    sig['narrativeRef'] = opts.narrativeRef;
+  }
+  return JSON.stringify(sig);
+}
+
+describe('selectLessons — FR-8 flywheel read', () => {
+  let engineerDir: string;
+
+  beforeEach(async () => {
+    engineerDir = await mkdtemp(join(tmpdir(), 'select-lessons-test-'));
+    await mkdir(engineerDir, { recursive: true });
+  });
+
+  // ── Happy path: relevant idea surfaces lessons ─────────────────────────────
+
+  it('surfaces lessons when the idea keyword matches stored signals (related idea)', async () => {
+    // Seed: one signal in "proj-auth" for "login-feature" — a kickback signal
+    const lines = [
+      makeSignalForSelect({
+        project: 'proj-auth',
+        feature: 'login-feature',
+        ts: '2026-06-25T10:00:00Z',
+        kickbacks: [{ from: 'gate', to: 'tdd', reason: 'test failure' }],
+      }),
+    ];
+    await writeFile(join(engineerDir, 'signals.jsonl'), lines.join('\n') + '\n', 'utf-8');
+
+    const reader = createEngineerStoreReader({ engineerDir });
+    const store = createJsonlLessonStore(reader);
+
+    // idea "login auth" is related to "login-feature" in "proj-auth"
+    const digest = await selectLessons('login auth', 'proj-auth', store);
+
+    // At least one group must be populated (kickback expanded lesson matches)
+    const totalLessons =
+      digest.kickbacks.length +
+      digest.halts.length +
+      digest.retryHotspots.length +
+      digest.narrativeRefs.length;
+    expect(totalLessons).toBeGreaterThan(0);
+    // isEmpty sentinel must be absent when lessons are found
+    expect(digest.isEmpty).toBeUndefined();
+    expect(digest.empty).toBeUndefined();
+  });
+
+  it('surfaces kickback lessons in the kickbacks group for a matching signal', async () => {
+    const lines = [
+      makeSignalForSelect({
+        project: 'proj-x',
+        feature: 'payment-feature',
+        ts: '2026-06-25T10:00:00Z',
+        kickbacks: [{ from: 'gate', to: 'tdd', reason: 'assertion failed' }],
+      }),
+    ];
+    await writeFile(join(engineerDir, 'signals.jsonl'), lines.join('\n') + '\n', 'utf-8');
+
+    const reader = createEngineerStoreReader({ engineerDir });
+    const store = createJsonlLessonStore(reader);
+
+    const digest = await selectLessons('payment checkout', 'proj-x', store);
+
+    // The kickback expanded lesson text starts with "kickback:" — must be categorised
+    expect(digest.kickbacks.length).toBeGreaterThan(0);
+  });
+
+  // ── Negative: UNRELATED idea surfaces NONE ────────────────────────────────
+
+  it('surfaces NO lessons when the idea is completely unrelated (isEmpty set)', async () => {
+    // Seed signal for "proj-auth" / "login-feature" — no cross-project keyword overlap
+    const lines = [
+      makeSignalForSelect({
+        project: 'proj-auth',
+        feature: 'login-feature',
+        ts: '2026-06-25T10:00:00Z',
+      }),
+    ];
+    await writeFile(join(engineerDir, 'signals.jsonl'), lines.join('\n') + '\n', 'utf-8');
+
+    const reader = createEngineerStoreReader({ engineerDir });
+    const store = createJsonlLessonStore(reader);
+
+    // Querying a completely different project with an unrelated idea
+    // proj-billing does not appear in the store, and idea "billing invoice"
+    // has NO keyword overlap with "login-feature" in the store.
+    const digest = await selectLessons('billing invoice xyz', 'proj-billing', store);
+
+    // All groups must be empty
+    expect(digest.kickbacks).toHaveLength(0);
+    expect(digest.halts).toHaveLength(0);
+    expect(digest.retryHotspots).toHaveLength(0);
+    expect(digest.narrativeRefs).toHaveLength(0);
+    // isEmpty sentinel must be set
+    expect(digest.isEmpty).toBe(true);
+    expect(digest.empty).toBe(true);
+  });
+
+  it('surfaces NONE when the store is completely empty (isEmpty set, no crash)', async () => {
+    // No signals.jsonl — reader returns empty array
+    const reader = createEngineerStoreReader({ engineerDir });
+    const store = createJsonlLessonStore(reader);
+
+    const digest = await selectLessons('any idea', 'any-project', store);
+
+    expect(digest.kickbacks).toHaveLength(0);
+    expect(digest.isEmpty).toBe(true);
+  });
+
+  // ── Negative: CORRUPT store → zero lessons + warning, no crash ────────────
+
+  it('returns zero lessons (isEmpty) and logs a warning when store.retrieve() throws (corrupt store)', async () => {
+    // Construct a store that always throws from retrieve() — simulates a
+    // corrupt or inaccessible backing store.
+    const corruptStore: LessonStore = {
+      async record(_lesson: LessonRecord): Promise<void> { /* no-op */ },
+      async retrieve(_query: LessonQuery): Promise<RetrievedLesson[]> {
+        throw new Error('CORRUPT: cannot read backing store');
+      },
+    };
+
+    const warnings: string[] = [];
+    const logSpy = (msg: string) => { warnings.push(msg); };
+
+    // Must NOT throw
+    const digest = await selectLessons('any idea', 'any-project', corruptStore, { log: logSpy });
+
+    // All groups empty — corrupt store → empty digest
+    expect(digest.kickbacks).toHaveLength(0);
+    expect(digest.halts).toHaveLength(0);
+    expect(digest.retryHotspots).toHaveLength(0);
+    expect(digest.narrativeRefs).toHaveLength(0);
+    expect(digest.isEmpty).toBe(true);
+    expect(digest.empty).toBe(true);
+
+    // A warning must have been logged (contains the error message)
+    const warningLogged = warnings.some(w => w.includes('CORRUPT'));
+    expect(warningLogged).toBe(true);
+  });
+
+  it('does not crash when store.retrieve() throws with a non-Error value (string thrown)', async () => {
+    // Adversarial: some callers throw raw strings, not Error instances.
+    const weirdStore: LessonStore = {
+      async record(_lesson: LessonRecord): Promise<void> { /* no-op */ },
+      async retrieve(_query: LessonQuery): Promise<RetrievedLesson[]> {
+        // eslint-disable-next-line @typescript-eslint/no-throw-literal
+        throw 'string error from store';
+      },
+    };
+
+    const warnings: string[] = [];
+    await expect(
+      selectLessons('idea', 'project', weirdStore, { log: (m) => { warnings.push(m); } }),
+    ).resolves.toMatchObject({ isEmpty: true });
+
+    expect(warnings.some(w => w.includes('string error from store'))).toBe(true);
   });
 });

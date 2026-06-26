@@ -222,7 +222,17 @@ export async function selectLessons(
   // The adapter owns the topK enforcement; we pass through the bound.
   // We also slice to `bound` here as a defence-in-depth cap so that stub
   // stores (used in tests) that don't honour topK cannot inflate the digest.
-  const retrieved = await store.retrieve({ text: idea, namespace: project, topK: bound });
+  //
+  // A corrupt or unavailable store MUST NOT crash the caller — we catch any
+  // error, log a warning, and return an empty digest (FR-8 corrupt-safe).
+  let retrieved: RetrievedLesson[];
+  try {
+    retrieved = await store.retrieve({ text: idea, namespace: project, topK: bound });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log(`selectLessons: store.retrieve() failed (corrupt store?) — returning empty digest. Error: ${msg}`);
+    return { kickbacks: [], halts: [], retryHotspots: [], narrativeRefs: [], isEmpty: true, empty: true };
+  }
   const raw = retrieved.slice(0, bound);
 
   // Dedupe by id across the entire result set before categorising.
