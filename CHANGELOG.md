@@ -38,6 +38,16 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ## [Unreleased]
 
+### Fixed
+- conduct-ts: the engine-native `rebase` loop step (Phase 9.0) could rebase the
+  **real** conductor worktree when driven by integration tests that constructed
+  a `Conductor` without an explicit `projectRoot` (it defaults to
+  `process.cwd()`). This was a silent no-op while the dev branch stayed current
+  with `origin/main`, but became a destructive `git rebase origin/main` once the
+  branch fell behind. `full-flow` and `plugin-end-to-end` now pass an isolated
+  throwaway `projectRoot` (matching `rebase-loop`), so the native rebase step can
+  never touch the live repo under test.
+
 ### Changed
 - **BREAKING (conduct-ts):** renamed the supervisor from **brain** to **engineer**.
   The CLI subcommand is now `conduct engineer` (was `conduct brain`); the
