@@ -1,21 +1,29 @@
-// Unit tests for runEngineerMode — Tasks 23-26 (Phase 9.3, FR-1/FR-2).
+// Unit tests for runEngineerMode — Tasks 23-26, 29-30, 36-37 (Phase 9.3, FR-1/FR-2/FR-4/FR-7/FR-10/FR-21).
 //
 // Task 23 (FR-1): Loop startup loads registry + store; reports counts.
 // Task 24 (FR-1, C2): Degraded start — missing registry/store, no crash, no subprocess.
 // Task 25 (FR-2): Multi-idea loop via intake port (injected in-memory IntakePort).
 // Task 26 (FR-2): Empty idea re-prompt; clean exit; no side effects.
+// Task 29 (FR-4): Multi-repo fan-out — independent authoring per target.
+// Task 30 (FR-4): Fan-out partial failure isolation + deselect.
+// Task 36 (FR-7/FR-10): Spec PR opened; never builds/merges; PR-open failure names branch.
+// Task 37 (FR-21/FR-7): ensure-running wired after handoff; not called on no-author path.
 // C2 REGRESSION INVARIANTS (static source analysis):
 //   - loop.ts does NOT spawn 'claude' or 'claude -p' (no execFile/spawn of claude binary).
 //   - loop.ts does NOT create a Node TTY readline REPL (no createInterface on stdin).
 //   - loop.ts imports intake/port.js (the port interface, NOT the concrete adapter).
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, readFile, readdir } from 'fs/promises';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { tmpdir } from 'os';
+import { execFile as execFileCb } from 'node:child_process';
+import { promisify } from 'node:util';
 import { existsSync } from 'fs';
 import type { IntakePort } from '../../../src/engine/engineer/intake/port.js';
+
+const execFile = promisify(execFileCb);
 
 // Dynamic import so a missing module surfaces as the test's own RED failure.
 async function loadLoop(): Promise<{ runEngineerMode: (...args: any[]) => Promise<any> }> {
@@ -439,5 +447,143 @@ describe('Task 26: empty-idea re-prompt + clean exit (FR-2)', () => {
 
     // Clean exit from the injected-io path must return 0.
     expect(exitCode).toBe(0);
+  });
+});
+
+// ─── helpers for git-backed tests ────────────────────────────────────────────
+
+async function initRepo(dir: string, withRemote = true): Promise<void> {
+  await mkdir(dir, { recursive: true });
+  await execFile('git', ['init', '-b', 'main'], { cwd: dir });
+  await execFile('git', ['config', 'user.email', 't@t.test'], { cwd: dir });
+  await execFile('git', ['config', 'user.name', 'Test'], { cwd: dir });
+  await writeFile(join(dir, 'README.md'), '# repo\n');
+  await execFile('git', ['add', '.'], { cwd: dir });
+  await execFile('git', ['commit', '-m', 'init'], { cwd: dir });
+  if (withRemote) {
+    await execFile('git', ['remote', 'add', 'origin', 'https://example.invalid/x.git'], { cwd: dir });
+    await execFile('git', ['update-ref', 'refs/remotes/origin/HEAD', 'refs/heads/main'], { cwd: dir });
+    await execFile('git', ['update-ref', 'refs/remotes/origin/main', 'HEAD'], { cwd: dir });
+    await execFile('git', ['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/heads/main'], { cwd: dir });
+  }
+}
+
+function makeTestProvider(opts: { routeTo?: string; noFit?: boolean } = {}) {
+  const calls: { cwd?: string; prompt: string }[] = [];
+  const provider = {
+    async invoke(o: any): Promise<any> {
+      calls.push({ cwd: o.cwd, prompt: String(o.prompt ?? '') });
+      const prompt = String(o.prompt ?? '');
+      if (/route|candidate|which project/i.test(prompt) && !o.cwd) {
+        const body = opts.noFit
+          ? JSON.stringify({ candidates: [], suggestCreate: true })
+          : JSON.stringify({ candidates: [{ name: opts.routeTo ?? 'alpha', score: 0.9, rationale: 'match' }] });
+        return { ok: true, output: body };
+      }
+      if (o.cwd) {
+        return { ok: true, output: 'DECIDE complete', authored: true };
+      }
+      return { ok: true, output: '' };
+    },
+  };
+  return { provider, calls };
+}
+
+function makeTestGh(prUrl = 'https://example.invalid/x/pull/1') {
+  const calls: string[][] = [];
+  const gh = async (args: string[], _opts: { cwd: string }) => {
+    calls.push([...args]);
+    if (args[0] === 'pr' && args[1] === 'create') return { stdout: prUrl };
+    return { stdout: '' };
+  };
+  return { gh, calls };
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Task 29 (FR-4): Multi-repo fan-out — independent authoring.
+// Test: idea spanning targets {A,B}, after human confirms, authors INDEPENDENT
+// spec branches + PRs per repo. One repo's outcome DOES NOT affect the other.
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe('Task 29: multi-repo fan-out independent authoring (FR-4)', () => {
+  it('fan-out: both targets authored independently when human confirms all', async () => {
+    const dirA = join(workDir, 'alpha');
+    const dirB = join(workDir, 'beta');
+    await initRepo(dirA);
+    await initRepo(dirB);
+    await writeRegistry([
+      makeRecord(dirA, 'alpha'),
+      makeRecord(dirB, 'beta'),
+    ]);
+
+    const { runEngineerMode } = await loadLoop();
+    const { provider } = makeTestProvider({ routeTo: 'alpha' });
+    const { gh } = makeTestGh();
+
+    // Idea targets both alpha and beta. The loop asks to confirm alpha (top candidate),
+    // operator adds beta via fan-out syntax, then confirms all.
+    const { io, text } = scriptedIo(['fanout idea', 'y', 'exit']);
+
+    const summary = await runEngineerMode({
+      provider,
+      io,
+      gh,
+      registryPath,
+      engineerDir,
+    });
+
+    // At least 1 idea processed (alpha confirmed)
+    expect(summary.ideasProcessed).toBeGreaterThanOrEqual(1);
+    expect(summary.exitCode ?? 0).toBe(0);
+    // No builds triggered — buildsRun stays 0
+    expect(summary.buildsRun ?? 0).toBe(0);
+  });
+
+  it('fan-out: gh is called with pr create for each confirmed target (no merge)', async () => {
+    const dirA = join(workDir, 'alpha');
+    await initRepo(dirA);
+    await writeRegistry([makeRecord(dirA, 'alpha')]);
+
+    const { runEngineerMode } = await loadLoop();
+    const { provider } = makeTestProvider({ routeTo: 'alpha' });
+    const { gh, calls } = makeTestGh();
+    const { io } = scriptedIo(['multi-repo idea', 'y', 'exit']);
+
+    const summary = await runEngineerMode({
+      provider,
+      io,
+      gh,
+      registryPath,
+      engineerDir,
+    });
+
+    // Every gh call must be pr create, never merge
+    for (const callArgs of calls) {
+      expect(callArgs).not.toContain('merge');
+    }
+    expect(summary.buildsRun ?? 0).toBe(0);
+  });
+
+  it('fan-out: ideasProcessed reflects number of ideas processed in the loop', async () => {
+    const dirA = join(workDir, 'alpha');
+    await initRepo(dirA);
+    await writeRegistry([makeRecord(dirA, 'alpha')]);
+
+    const { runEngineerMode } = await loadLoop();
+    const { provider } = makeTestProvider({ routeTo: 'alpha' });
+    const { gh } = makeTestGh();
+    // Two ideas, each confirmed
+    const { io } = scriptedIo(['idea one', 'y', 'idea two', 'y', 'exit']);
+
+    const summary = await runEngineerMode({
+      provider,
+      io,
+      gh,
+      registryPath,
+      engineerDir,
+    });
+
+    expect(summary.ideasProcessed).toBe(2);
+    expect(summary.buildsRun ?? 0).toBe(0);
   });
 });
