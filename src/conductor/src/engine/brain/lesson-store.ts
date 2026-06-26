@@ -116,6 +116,153 @@ export interface LessonStore {
 }
 
 // ---------------------------------------------------------------------------
+// selectLessons + LessonDigest (Task 12, FR-5)
+// ---------------------------------------------------------------------------
+
+/**
+ * A digested view of retrieved lessons, grouped by the type of signal they
+ * represent. Each group holds zero or more deduplicated RetrievedLesson objects
+ * so downstream callers can reason about patterns without re-scanning raw lists.
+ *
+ * Groups:
+ *   kickbacks     — lessons whose text mentions a kickback event (step forced
+ *                   back to a prior gate — keyword "kickback").
+ *   halts         — lessons where metadata.outcome === 'halted' (gate loop
+ *                   stopped before completion).
+ *   retryHotspots — lessons whose text mentions retry or hotspot patterns
+ *                   (keyword "retry" or "hotspot").
+ *   narrativeRefs — lessons that carry a narrative reference in metadata
+ *                   (metadata.narrativeRef is a non-empty string).
+ *
+ * A single lesson may appear in multiple groups (e.g. a halted run that also
+ * has a narrative). Deduplication within each group ensures no id repeats.
+ */
+export interface LessonDigest {
+  kickbacks: RetrievedLesson[];
+  halts: RetrievedLesson[];
+  retryHotspots: RetrievedLesson[];
+  narrativeRefs: RetrievedLesson[];
+}
+
+/**
+ * Options for `selectLessons`.
+ *
+ * `topK`  — maximum lessons to retrieve from the store. Defaults to 10 when
+ *            absent or undefined. Passed to `store.retrieve` as-is so the
+ *            adapter owns the cap enforcement.
+ * `log`   — injectable logger called once with a message that includes the
+ *            applied topK bound. Defaults to a no-op so callers that don't
+ *            need observability pay zero overhead. Tests inject a spy here to
+ *            assert the bound was logged.
+ */
+export interface SelectLessonsOpts {
+  topK?: number;
+  log?: (msg: string) => void;
+}
+
+const SELECT_DEFAULT_TOP_K = 10;
+
+/**
+ * Retrieve lessons for the given `idea` + `project` context, dedupe them, and
+ * assemble a `LessonDigest` whose groups reflect the type of signal each
+ * lesson represents.
+ *
+ * Categorisation logic (keyword scan on `.text` + metadata field checks):
+ *   kickbacks     — text contains "kickback" (case-insensitive)
+ *   halts         — metadata.outcome === 'halted'
+ *   retryHotspots — text contains "retry" or "hotspot" (case-insensitive)
+ *   narrativeRefs — metadata.narrativeRef is a non-empty string
+ *
+ * A lesson may match more than one group; deduplication is per-group so a
+ * lesson stored twice by the adapter (e.g. after an unfortunate re-read)
+ * appears at most once per group.
+ *
+ * The applied `topK` bound is always logged (once, before retrieval) via
+ * `opts.log` so the cap is observable in production without grep-ing source.
+ */
+export async function selectLessons(
+  idea: string,
+  project: string,
+  store: LessonStore,
+  opts: SelectLessonsOpts = {},
+): Promise<LessonDigest> {
+  const bound = opts.topK ?? SELECT_DEFAULT_TOP_K;
+  const log = opts.log ?? ((_msg: string) => { /* no-op */ });
+
+  // Log the applied bound BEFORE retrieval so it's observable even when
+  // retrieve() throws or the store is empty.
+  log(`selectLessons: applying topK bound of ${bound} for project="${project}" idea="${idea}"`);
+
+  // Short-circuit: a bound of 0 means no lessons are wanted.
+  if (bound <= 0) {
+    return { kickbacks: [], halts: [], retryHotspots: [], narrativeRefs: [] };
+  }
+
+  // Retrieve from the store using the namespace convention "project:*".
+  // The adapter owns the topK enforcement; we pass through the bound.
+  // We also slice to `bound` here as a defence-in-depth cap so that stub
+  // stores (used in tests) that don't honour topK cannot inflate the digest.
+  const retrieved = await store.retrieve({ text: idea, namespace: project, topK: bound });
+  const raw = retrieved.slice(0, bound);
+
+  // Dedupe by id across the entire result set before categorising.
+  // Strategy: first-occurrence wins (rank-by-position is preserved).
+  const seen = new Set<string>();
+  const deduped: RetrievedLesson[] = [];
+  for (const lesson of raw) {
+    if (!seen.has(lesson.id)) {
+      seen.add(lesson.id);
+      deduped.push(lesson);
+    }
+  }
+
+  // Per-group deduplication sets (a lesson can appear in multiple groups but
+  // never twice within the same group).
+  const kickbackIds = new Set<string>();
+  const haltIds = new Set<string>();
+  const retryIds = new Set<string>();
+  const narrativeIds = new Set<string>();
+
+  const digest: LessonDigest = {
+    kickbacks: [],
+    halts: [],
+    retryHotspots: [],
+    narrativeRefs: [],
+  };
+
+  for (const lesson of deduped) {
+    const textLower = lesson.text.toLowerCase();
+
+    // kickbacks: text contains "kickback"
+    if (textLower.includes('kickback') && !kickbackIds.has(lesson.id)) {
+      kickbackIds.add(lesson.id);
+      digest.kickbacks.push(lesson);
+    }
+
+    // halts: metadata.outcome is 'halted'
+    if (lesson.metadata['outcome'] === 'halted' && !haltIds.has(lesson.id)) {
+      haltIds.add(lesson.id);
+      digest.halts.push(lesson);
+    }
+
+    // retryHotspots: text contains "retry" or "hotspot"
+    if ((textLower.includes('retry') || textLower.includes('hotspot')) && !retryIds.has(lesson.id)) {
+      retryIds.add(lesson.id);
+      digest.retryHotspots.push(lesson);
+    }
+
+    // narrativeRefs: metadata.narrativeRef is a non-empty string
+    const narRef = lesson.metadata['narrativeRef'];
+    if (typeof narRef === 'string' && narRef.trim() !== '' && !narrativeIds.has(lesson.id)) {
+      narrativeIds.add(lesson.id);
+      digest.narrativeRefs.push(lesson);
+    }
+  }
+
+  return digest;
+}
+
+// ---------------------------------------------------------------------------
 // Default adapter: keyword/recency over JSONL (Task 11, FR-5)
 // ---------------------------------------------------------------------------
 
