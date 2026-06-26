@@ -4,7 +4,7 @@
 **Source PRD:** `.docs/specs/2026-06-25-phase-9.2-registry-project-creation.md`
 **Complexity tier:** M
 **Persona note:** "I" is the **operator** (runs `register`/`create`) or **`/bootstrap`** (which
-auto-registers). The future **brain** (9.3) is the eventual reader. Scenarios are expressed in
+auto-registers). The future **engineer** (9.3) is the eventual reader. Scenarios are expressed in
 terms of `~/.ai-conductor/registry.json`, project records, CLI exit codes/errors, and scaffolded
 files — there is no HTTP/UI surface.
 
@@ -13,7 +13,7 @@ files — there is no HTTP/UI surface.
 ## Story: Registry file location, override, creation
 
 **Requirement:** FR-1
-As the operator, I want the registry at a predictable cross-project path, so the brain can find it
+As the operator, I want the registry at a predictable cross-project path, so the engineer can find it
 and it never clutters a repo.
 
 ### Acceptance Criteria
@@ -38,7 +38,7 @@ and it never clutters a repo.
 ## Story: Project record schema
 
 **Requirement:** FR-2
-As the future brain, I want each project record well-formed and versioned, so I can read the
+As the future engineer, I want each project record well-formed and versioned, so I can read the
 registry reliably.
 
 ### Acceptance Criteria
@@ -63,7 +63,7 @@ registry reliably.
 ## Story: Register an existing project
 
 **Requirement:** FR-3
-As the operator, I want `register [path]` to add my project to the registry, so the brain knows it
+As the operator, I want `register [path]` to add my project to the registry, so the engineer knows it
 exists.
 
 ### Acceptance Criteria
@@ -75,7 +75,7 @@ exists.
 
 #### Negative Paths
 - Given a repo with a relative path argument, when registered, then the stored `path` is
-  **absolute** (resolved), so the brain has a stable key.
+  **absolute** (resolved), so the engineer has a stable key.
 
 ### Done When
 - [ ] `register` writes a correct record; relative path → stored absolute; exit 0 on success.
@@ -136,7 +136,7 @@ registry.
 
 **Requirement:** FR-6
 As the operator, I want `create <name>` to stand up a new project and register it, so I (and later
-the brain) can start work immediately.
+the engineer) can start work immediately.
 
 ### Acceptance Criteria
 #### Happy Path
@@ -225,7 +225,7 @@ I never silently lose a project.
 - Given N concurrent registrations, when all complete, then the registry is valid JSON containing
   all N records (no lost/torn writes).
 - Given the registry dir is **unwritable**, when a register/create runs, then it **reports the
-  error** (non-zero exit, clear message) — unlike the brain store, it does **not** silently swallow
+  error** (non-zero exit, clear message) — unlike the engineer store, it does **not** silently swallow
   (registration is a deliberate action).
 
 ### Done When
@@ -234,10 +234,10 @@ I never silently lose a project.
 
 ---
 
-## Story: Types-only reader interface for the brain (9.3)
+## Story: Types-only reader interface for the engineer (9.3)
 
 **Requirement:** FR-10
-As the future brain, I want a typed read contract for the registry, so 9.3 can consume it without
+As the future engineer, I want a typed read contract for the registry, so 9.3 can consume it without
 reshaping 9.2's data.
 
 ### Acceptance Criteria

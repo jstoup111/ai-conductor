@@ -1,8 +1,8 @@
-# Architecture Review: Phase 9.1 — Retro Signal + Brain Memory Store
+# Architecture Review: Phase 9.1 — Retro Signal + Engineer Memory Store
 
 **Date:** 2026-06-25
 **Mode:** Lightweight (Medium — feasibility + alignment)
-**Stories reviewed:** `.docs/stories/phase-9.1-retro-signal-brain-memory.md` (11, FR-1..FR-11)
+**Stories reviewed:** `.docs/stories/phase-9.1-retro-signal-engineer-memory.md` (11, FR-1..FR-11)
 **Verdict:** **APPROVED WITH CONDITIONS**
 
 ## Feasibility
@@ -10,8 +10,8 @@
 | Check | Assessment |
 |---|---|
 | Stack compatibility | ✅ Node fs + existing `events.jsonl`/`report-renderer`/`FeatureOutcome`. No new deps. |
-| Prerequisites | ✅ Builds on 9.0 signal sources; brain dir is a user-level path (`~/.ai-conductor/`). |
-| Integration surface | `daemon-runner.ts` (emission point), `report-renderer.ts` (reuse aggregation), the gate loop (daemon-conditional retro skip), a new `brain-store` module. Contained. |
+| Prerequisites | ✅ Builds on 9.0 signal sources; engineer dir is a user-level path (`~/.ai-conductor/`). |
+| Integration surface | `daemon-runner.ts` (emission point), `report-renderer.ts` (reuse aggregation), the gate loop (daemon-conditional retro skip), a new `engineer-store` module. Contained. |
 | Data implications | None (no DB). Append-only JSONL + narrative files in a user dir. |
 | Performance | One small append + (for `done`) one narrative generation per feature. Negligible vs a build. |
 | Concurrency | The daemon is one process + worker pool → concurrent emissions are async writes; atomic single-line `O_APPEND` append is sufficient (FR-11). |
@@ -19,7 +19,7 @@
 
 ## Alignment
 
-- **Pattern consistency:** ✅ Reuses `report-renderer` aggregation (no parallel re-impl); brain
+- **Pattern consistency:** ✅ Reuses `report-renderer` aggregation (no parallel re-impl); engineer
   store sits beside the existing `~/.ai-conductor/` user config. New pattern (daemon-conditional
   step skip) is justified by ADR-002.
 - **State management:** ✅ Outcome modeled from existing `FeatureOutcome`; `narrativeRef` optional
@@ -30,8 +30,8 @@
 
 ## Domain Integrity
 
-Per-cycle via the TDD domain reviewer. Note: the signal record and the brain-store path should be
-small typed values (a `BrainSignal` type + a `resolveBrainDir()` helper), not ad-hoc objects/strings.
+Per-cycle via the TDD domain reviewer. Note: the signal record and the engineer-store path should be
+small typed values (a `EngineerSignal` type + a `resolveEngineerDir()` helper), not ad-hoc objects/strings.
 
 ## Risks
 
@@ -43,7 +43,7 @@ small typed values (a `BrainSignal` type + a `resolveBrainDir()` helper), not ad
 
 ## ADRs Created
 
-- **ADR-002** (`adr-002-brain-store-and-retro-redirect.md`, **DRAFT**) — Option A (skip in-loop
+- **ADR-002** (`adr-002-engineer-store-and-retro-redirect.md`, **DRAFT**) — Option A (skip in-loop
   retro for daemon; emission owns the narrative) + store format/append/run-id/optional-narrativeRef.
   **Must be APPROVED before BUILD.**
 

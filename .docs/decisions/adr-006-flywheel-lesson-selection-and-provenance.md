@@ -1,27 +1,27 @@
-# ADR 006: Flywheel — lesson selection + brain-planned provenance
+# ADR 006: Flywheel — lesson selection + engineer-planned provenance
 
 **Date:** 2026-06-25
 **Status:** APPROVED
 **Deciders:** James (solo dev) + harness architecture-review
-**Feature:** Phase 9.3 — supervisor/brain (capstone)
-**Decision surfaces:** DS-3 (lesson selection, FR-5), DS-6 (brain-planned provenance, FR-12)
-**Source gap:** conflict report `2026-06-25-phase-9.3-supervisor-brain.md` (FR-12 × 9.1 schema)
+**Feature:** Phase 9.3 — supervisor/engineer (capstone)
+**Decision surfaces:** DS-3 (lesson selection, FR-5), DS-6 (engineer-planned provenance, FR-12)
+**Source gap:** conflict report `2026-06-25-phase-9.3-supervisor-engineer.md` (FR-12 × 9.1 schema)
 
 ## Context
 
-The flywheel is the whole point of the brain (PRD Key Decision #5): at plan time it must surface
+The flywheel is the whole point of the engineer (PRD Key Decision #5): at plan time it must surface
 the **relevant** prior lessons from the 9.1 store into DECIDE (FR-5), and it must be able to show
-that kickback/halt/retry rates **fall across successive brain-planned features** (FR-12) — so we can
+that kickback/halt/retry rates **fall across successive engineer-planned features** (FR-12) — so we can
 tell it is learning, not accumulating noise.
 
 Two forces:
 1. **Relevance, not volume.** Dumping every signal into planning is noise; selection must be scoped
    and bounded, or planning context blows out.
-2. **Provenance gap (from conflict-check).** 9.1's `BrainSignal` schema
+2. **Provenance gap (from conflict-check).** 9.1's `EngineerSignal` schema
    (`{project, feature, runId, outcome, kickbacks[], halts[], retryHotspots[], tokens, …}`) has
-   **no field** marking a signal as brain-planned. The daemon emits a signal for *every* feature it
-   builds, however planned. FR-12 must measure brain-planned features **specifically** and exclude
-   non-brain daemon work — with no data field to filter on.
+   **no field** marking a signal as engineer-planned. The daemon emits a signal for *every* feature it
+   builds, however planned. FR-12 must measure engineer-planned features **specifically** and exclude
+   non-engineer daemon work — with no data field to filter on.
 
 ## Options Considered
 
@@ -55,14 +55,14 @@ single read port is a faithful lowest-common-denominator. Three findings shape t
    can't break digest assembly. (Bi-temporal `validAt?` is likewise optional — only Zep/Graphiti
    populate it.)
 
-### Brain-planned provenance (DS-6)
-- **A authored-keys intersection — brain keeps its own record of `(project, feature)` it planned;
-  intersect with store signals.** *Pros:* no 9.1 schema change; self-contained in 9.3; the brain
+### Engineer-planned provenance (DS-6)
+- **A authored-keys intersection — engineer keeps its own record of `(project, feature)` it planned;
+  intersect with store signals.** *Pros:* no 9.1 schema change; self-contained in 9.3; the engineer
   already knows what it authored (FR-6/7). *Cons:* the ledger must persist across sessions to be
   durable.
 - **B add a `source`/`planner` field to the 9.1 signal schema.** *Pros:* provenance travels with the
   signal. *Cons:* cross-phase schema change to a merged component; the daemon would need to learn
-  whether a spec was brain-authored — coupling the producer to the brain.
+  whether a spec was engineer-authored — coupling the producer to the engineer.
 
 ## Decision
 
@@ -108,10 +108,10 @@ Provenance = Option A (authored-keys intersection), with B deferred.**
   present in the planning artifact, not just logged. No relevant signals → inject an explicit "no
   prior lessons" (never pad with unrelated noise). A malformed signal line is skipped (9.1
   resilient-parse convention), never aborting the read.
-- **Provenance (FR-12):** the brain maintains an **authored-keys ledger** of the `(project, feature)`
+- **Provenance (FR-12):** the engineer maintains an **authored-keys ledger** of the `(project, feature)`
   pairs it has planned (recorded at spec-PR open, FR-6/7) and computes the flywheel trend over
-  `store signals ∩ ledger` — **no 9.1 schema change**. Non-brain daemon work is excluded because it
-  is not in the ledger. A brain-planned feature with no emitted signal yet is simply absent (no
+  `store signals ∩ ledger` — **no 9.1 schema change**. Non-engineer daemon work is excluded because it
+  is not in the ledger. A engineer-planned feature with no emitted signal yet is simply absent (no
   fabricated zero). **9.1 schema `source` marker (Option B) is deferred**; the intersection is the
   source of truth until/unless it proves insufficient.
 - **Shared rate computation:** FR-9 (governor) and FR-12 (trend) use **one** rate-computation
@@ -125,14 +125,14 @@ Provenance = Option A (authored-keys intersection), with B deferred.**
   context stays lean; one rate function → no divergent numbers between report and trend.
 - The `LessonStore` port means adopting a memory framework later (Mem0 the most likely fit — only
   mature first-party TS SDK, self-hostable with local embeddings, namespaces that map to the
-  `project:feature` key) is a **localized adapter change**, not a planner rewrite. The brain becomes
+  `project:feature` key) is a **localized adapter change**, not a planner rewrite. The engineer becomes
   the first concrete consumer of `draft-memory-mcp-service.md` (its `memory.recall`/`memory.trends`
   map onto FR-5/FR-12) — convergence, not a parallel path.
 
 ### Negative
 - Keyword similarity may miss semantically-related lessons (escalation path: a semantic adapter
   behind the same port — Option B).
-- The authored-keys ledger needs durable storage to survive across brain sessions.
+- The authored-keys ledger needs durable storage to survive across engineer sessions.
 - The port adds one indirection now for a benefit realized only on adoption — accepted: the cost is
   an interface + one thin adapter, and it removes the rewrite risk the research flagged (async write,
   namespace shape, optional score).
@@ -144,6 +144,6 @@ Provenance = Option A (authored-keys intersection), with B deferred.**
       bound logged; digest injector. `selectLessons(idea, project, store)` convenience fn.
 - [ ] Authored-keys ledger (durable) written at spec-PR open; intersection for FR-12.
 - [ ] Single shared rate-computation (per 9.1 metric) used by FR-9 + FR-12.
-- [ ] Decide ledger storage location (brain session state vs a `ProjectRecord` field) at build.
+- [ ] Decide ledger storage location (engineer session state vs a `ProjectRecord` field) at build.
 - [ ] (Deferred) Semantic adapter behind the same port when store size justifies it; cross-reference
       `draft-memory-mcp-service.md`. Re-verify backend versions at integration (research is fast-moving).

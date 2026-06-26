@@ -1,14 +1,14 @@
-# ADR 007: Interactive brain loop — routing inference + spec-PR handoff
+# ADR 007: Interactive engineer loop — routing inference + spec-PR handoff
 
 **Date:** 2026-06-25
 **Status:** APPROVED
 **Deciders:** James (solo dev) + harness architecture-review
-**Feature:** Phase 9.3 — supervisor/brain (capstone)
+**Feature:** Phase 9.3 — supervisor/engineer (capstone)
 **Decision surfaces:** DS-2 (routing inference, FR-3/4), DS-4 (spec-PR opener, FR-7)
 
 ## Context
 
-`conduct brain` is a long-lived interactive loop (FR-1/2): for each free-text idea it must propose a
+`conduct engineer` is a long-lived interactive loop (FR-1/2): for each free-text idea it must propose a
 target project, get **human confirmation** before any authoring, and hand off a spec PR. Two
 external touchpoints need a decision: how routing is **inferred** (idea × registry), and how the
 **spec PR** is opened.
@@ -27,13 +27,13 @@ Forces:
   idea→project matching; rationale aids the human gate. *Cons:* non-deterministic; needs a no-fit
   threshold + tie handling.
 - **B keyword/string match only.** *Pros:* deterministic, cheap. *Cons:* brittle for natural-language
-  ideas; the brain's value is judgment.
+  ideas; the engineer's value is judgment.
 
 ### Spec-PR opener (DS-4)
 - **A reuse the existing `/pr` (finish/pr) machinery.** *Pros:* one PR path, consistent body/title,
   no second opener to maintain. *Cons:* must run it against the *target* repo (composes with ADR-004
   subprocess cwd).
-- **B brain-specific PR opener.** *Pros:* tailor the spec-PR body. *Cons:* duplicate PR logic; drift.
+- **B engineer-specific PR opener.** *Pros:* tailor the spec-PR body. *Cons:* duplicate PR logic; drift.
 
 ## Decision
 
@@ -63,7 +63,7 @@ machinery).**
 ## Consequences
 
 ### Positive
-- One PR path (reused), consistent with the rest of the harness; routing uses the brain's judgment
+- One PR path (reused), consistent with the rest of the harness; routing uses the engineer's judgment
   while the human stays the gate.
 
 ### Negative

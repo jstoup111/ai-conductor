@@ -1,11 +1,11 @@
-# Stories: Phase 9.1 — Structured Retro Signal + Brain Memory Store
+# Stories: Phase 9.1 — Structured Retro Signal + Engineer Memory Store
 
 **Status:** Accepted
-**Source PRD:** `.docs/specs/2026-06-25-phase-9.1-retro-signal-brain-memory.md`
+**Source PRD:** `.docs/specs/2026-06-25-phase-9.1-retro-signal-engineer-memory.md`
 **Complexity tier:** M
-**Persona note:** "I" is the **daemon** (the producer). The **operator** / future **brain** is
-the eventual reader of the store. Scenarios are expressed in terms of the brain store files
-(`~/.ai-conductor/brain/signals.jsonl`, `narratives/`), the feature's `events.jsonl`,
+**Persona note:** "I" is the **daemon** (the producer). The **operator** / future **engineer** is
+the eventual reader of the store. Scenarios are expressed in terms of the engineer store files
+(`~/.ai-conductor/engineer/signals.jsonl`, `narratives/`), the feature's `events.jsonl`,
 `FeatureOutcome`, and `.pipeline` — there is no HTTP/UI surface.
 
 ---
@@ -15,18 +15,18 @@ the eventual reader of the store. Scenarios are expressed in terms of the brain 
 **Requirement:** FR-1
 
 As the daemon, I want to emit exactly one structured signal when a feature finishes, so the
-brain has a per-feature record to learn from.
+engineer has a per-feature record to learn from.
 
 ### Acceptance Criteria
 #### Happy Path
 - Given a daemon feature completes with outcome `done`, when emission runs, then exactly one new
-  line is appended to the brain store's signals log for that feature.
+  line is appended to the engineer store's signals log for that feature.
 - Given a daemon feature completes with outcome `halted`, when emission runs, then exactly one
   signal line is appended (outcome=`halted`).
 
 #### Negative Paths
 - Given a feature is built via a **manual `/conduct`** run (not the daemon), when it completes,
-  then **no** signal is emitted to the brain store.
+  then **no** signal is emitted to the engineer store.
 - Given emission runs for a single completion, when it finishes, then it appends **exactly one**
   record (no duplicate line for the same completion).
 
@@ -36,27 +36,27 @@ brain has a per-feature record to learn from.
 
 ---
 
-## Story: Brain store location, override, and creation
+## Story: Engineer store location, override, and creation
 
 **Requirement:** FR-2
 
 As the operator, I want the store at the harness's user-config location (overridable), so it's
-predictable, outside any repo, and the future brain can find it.
+predictable, outside any repo, and the future engineer can find it.
 
 ### Acceptance Criteria
 #### Happy Path
 - Given no override is set, when the daemon emits, then it writes under
-  `~/.ai-conductor/brain/` (beside `~/.ai-conductor/config.yml`).
-- Given the override env/config (e.g. `$AI_CONDUCTOR_BRAIN_DIR`) is set, when the daemon emits,
+  `~/.ai-conductor/engineer/` (beside `~/.ai-conductor/config.yml`).
+- Given the override env/config (e.g. `$AI_CONDUCTOR_ENGINEER_DIR`) is set, when the daemon emits,
   then it writes under that path instead.
-- Given the brain dir does not exist yet, when the daemon emits, then it is created.
+- Given the engineer dir does not exist yet, when the daemon emits, then it is created.
 
 #### Negative Paths
 - Given any emission, when the target path is resolved, then it is **never** inside the feature's
   project repo / worktree (assert the resolved path is outside the project root).
 
 ### Done When
-- [ ] Default path `~/.ai-conductor/brain/`; override honored; dir auto-created.
+- [ ] Default path `~/.ai-conductor/engineer/`; override honored; dir auto-created.
 - [ ] Test: resolved store path is outside the project root in all cases.
 
 ---
@@ -65,7 +65,7 @@ predictable, outside any repo, and the future brain can find it.
 
 **Requirement:** FR-3
 
-As the future brain, I want each signal to be a versioned, well-formed JSON line, so the store is
+As the future engineer, I want each signal to be a versioned, well-formed JSON line, so the store is
 machine-aggregable.
 
 ### Acceptance Criteria
@@ -123,13 +123,13 @@ instrumentation.
 
 **Requirement:** FR-5
 
-As the future brain, I want the full retro narrative for a completed feature stored centrally
+As the future engineer, I want the full retro narrative for a completed feature stored centrally
 (not in the repo), so I can read the human-judgment interpretation later.
 
 ### Acceptance Criteria
 #### Happy Path
 - Given a daemon feature with outcome `done`, when emission runs, then the full retro narrative is
-  written to `~/.ai-conductor/brain/narratives/<project>/<feature>.md` and `narrativeRef` in the
+  written to `~/.ai-conductor/engineer/narratives/<project>/<feature>.md` and `narrativeRef` in the
   signal points to it.
 
 #### Negative Paths
@@ -153,7 +153,7 @@ As the future brain, I want the full retro narrative for a completed feature sto
 
 **Requirement:** FR-6
 
-As the future brain, I want a brief "why it halted" narrative for halted features, so I can learn
+As the future engineer, I want a brief "why it halted" narrative for halted features, so I can learn
 halt patterns.
 
 ### Acceptance Criteria
@@ -179,7 +179,7 @@ halt patterns.
 **Requirement:** FR-7
 
 As the operator, I want daemon-built features to leave the project repo free of retro clutter, so
-repos stay clean and the narrative lives in the brain's state.
+repos stay clean and the narrative lives in the engineer's state.
 
 ### Acceptance Criteria
 #### Happy Path
@@ -200,7 +200,7 @@ repos stay clean and the narrative lives in the brain's state.
 
 **Requirement:** FR-8
 
-As the future brain, I want a feature's re-runs preserved as distinct records, so I can see how a
+As the future engineer, I want a feature's re-runs preserved as distinct records, so I can see how a
 feature's signals changed across attempts.
 
 ### Acceptance Criteria
@@ -224,7 +224,7 @@ feature's signals changed across attempts.
 
 **Requirement:** FR-9
 
-As the future brain, I want the stored fields to be sufficient to compute kickback/halt/retry
+As the future engineer, I want the stored fields to be sufficient to compute kickback/halt/retry
 rates across features and projects, so we can tell whether the system is learning.
 
 ### Acceptance Criteria
@@ -256,7 +256,7 @@ the store is strictly additive value.
   feature completes/ships normally.
 
 #### Negative Paths
-- Given the brain dir is **unwritable** (permission/disk error), when emission runs, then the
+- Given the engineer dir is **unwritable** (permission/disk error), when emission runs, then the
   error is **logged and swallowed**, the daemon does **not** throw, and the feature still
   completes (PR for `done`, park for `halted`) — `FeatureOutcome` is unaffected.
 - Given narrative write fails but the signal line succeeds (or vice versa), when emission runs,

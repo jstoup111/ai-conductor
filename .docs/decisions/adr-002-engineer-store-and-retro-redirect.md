@@ -1,14 +1,14 @@
-# ADR 002: Brain store format + retro-redirect mechanism
+# ADR 002: Engineer store format + retro-redirect mechanism
 
 **Date:** 2026-06-25
 **Status:** APPROVED
 **Deciders:** James (solo dev) + harness architecture-review
-**Feature:** Phase 9.1 — structured retro signal + brain memory store
+**Feature:** Phase 9.1 — structured retro signal + engineer memory store
 
 ## Context
 
 On daemon feature completion (done/halted), 9.1 must persist a structured signal + a narrative to
-a cross-project brain store at `~/.ai-conductor/brain/`, keyed by project/feature, **without**
+a cross-project engineer store at `~/.ai-conductor/engineer/`, keyed by project/feature, **without**
 writing retros into the daemon's project repo, and without breaking a ship or corrupting the log
 under parallel workers (PRD FR-1..FR-11). Two design points need locking: (1) how the **narrative**
 is produced for daemon runs without landing in the repo, and (2) the **store format + write
@@ -28,7 +28,7 @@ Forces:
 ### Option A: skip the in-loop `retro` step for daemon runs; emission produces the narrative
 The gate loop omits `retro` under the daemon. After `readOutcome` (before teardown), the emission
 step generates the narrative — full retro for `done`, short halt narrative for `halted` — straight
-into the brain store.
+into the engineer store.
 - **Pros:** One place owns the narrative end-to-end; no repo write to undo; `done`/`halted`/
   tier-skip handled uniformly (no in-loop retro to special-case); the worktree context is still
   present pre-teardown.
@@ -36,9 +36,9 @@ into the brain store.
   work the in-loop retro would have done, relocated.
 
 ### Option B: keep the in-loop `retro` step; redirect its output to the store
-The `retro` step, when under the daemon, writes to the brain store instead of `.docs/retros/`.
+The `retro` step, when under the daemon, writes to the engineer store instead of `.docs/retros/`.
 - **Pros:** Reuses the existing retro step.
-- **Cons:** Couples the retro step to the brain-store concept and daemon-awareness; halted +
+- **Cons:** Couples the retro step to the engineer-store concept and daemon-awareness; halted +
   tier-skip features still need an emission-time narrative path, so narrative production is **split**
   across two mechanisms; the structured signal is assembled separately anyway.
 
@@ -52,8 +52,8 @@ because halted and tier-skipped features force an emission-time narrative path r
 ends up with two mechanisms where A has one.
 
 **Store format + mechanism (locked):**
-- `~/.ai-conductor/brain/signals.jsonl` — append-only, **one JSON line per feature-run**.
-- `~/.ai-conductor/brain/narratives/<project>/<feature>-<runId>.md` — narratives keyed by `runId`
+- `~/.ai-conductor/engineer/signals.jsonl` — append-only, **one JSON line per feature-run**.
+- `~/.ai-conductor/engineer/narratives/<project>/<feature>-<runId>.md` — narratives keyed by `runId`
   (FR-8: re-runs never overwrite).
 - Record schema (FR-3): `{schemaVersion, ts, project, feature, runId, outcome, kickbacks[],
   halts[], retryHotspots[], tokens{input,output,cacheRead,cacheCreation}, durationByStep{},
@@ -63,8 +63,8 @@ ends up with two mechanisms where A has one.
   live in separate files, never inline, so the line stays small.
 - **Best-effort (FR-10):** the entire emission is wrapped so any store error is logged and
   swallowed; `FeatureOutcome` and teardown/PR are unaffected.
-- Path override via `$AI_CONDUCTOR_BRAIN_DIR` / user config; dir auto-created (FR-2).
-- A **stub reader interface** (types only, no behavior) is exported so 9.3's brain consumes a
+- Path override via `$AI_CONDUCTOR_ENGINEER_DIR` / user config; dir auto-created (FR-2).
+- A **stub reader interface** (types only, no behavior) is exported so 9.3's engineer consumes a
   consumer-aware schema.
 
 ## Consequences
@@ -80,6 +80,6 @@ ends up with two mechanisms where A has one.
 ### Follow-up Actions
 - [ ] Daemon-conditional skip of the in-loop `retro` step (manual runs unchanged).
 - [ ] Emission module: assemble signal (reuse report-renderer), produce narrative, atomic append + narrative write, best-effort wrap.
-- [ ] Brain-store path resolution (`~/.ai-conductor/brain/` + override + auto-create).
+- [ ] Engineer-store path resolution (`~/.ai-conductor/engineer/` + override + auto-create).
 - [ ] `runId` scheme + narrative keying; `narrativeRef` optional.
 - [ ] Stub reader interface (types) for 9.3.
