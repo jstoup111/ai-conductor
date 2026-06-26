@@ -133,12 +133,30 @@ async function writePidfileExcl(repoPath: string): Promise<PidRecord> {
 }
 
 async function readPidRecord(repoPath: string): Promise<PidRecord | null> {
+  let parsed: unknown;
   try {
     const raw = await readFile(pidfilePath(repoPath), 'utf8');
-    return JSON.parse(raw) as PidRecord;
+    parsed = JSON.parse(raw);
   } catch {
+    // File absent or JSON parse failure — treat as absent so callers reclaim.
     return null;
   }
+
+  // Runtime shape guard: a malformed pidfile (non-numeric pid, missing uuid, etc.)
+  // must be treated as absent. Without this guard, `process.kill("notanumber", 0)`
+  // throws a TypeError (not an ESRCH errno), which the isLive catch block has no
+  // matching code for — it falls through to `return true` (conservatively alive).
+  // That would permanently refuse every future daemon for this repo (FR-19 violation).
+  if (
+    typeof (parsed as any)?.pid !== 'number' ||
+    !Number.isInteger((parsed as any).pid) ||
+    (parsed as any).pid <= 0 ||
+    typeof (parsed as any)?.uuid !== 'string'
+  ) {
+    return null;
+  }
+
+  return parsed as PidRecord;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

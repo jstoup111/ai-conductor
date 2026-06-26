@@ -186,3 +186,54 @@ describe('daemon-lock: stale-pidfile reclaim + recovery (FR-19)', () => {
     }
   });
 });
+
+// ═════════════════════════════════════════════════════════════════════════════
+// FR-19 (correctness): corrupt pidfile must NEVER permanently block reclaim.
+//
+// A pidfile whose pid field is non-numeric (e.g. written by a buggy tool) or
+// whose JSON is truncated/invalid must be treated as absent — i.e. reclaim()
+// must succeed (reclaimed===true) rather than returning a false "alive" signal
+// that permanently bars every future daemon for that repo.
+// ═════════════════════════════════════════════════════════════════════════════
+describe('daemon-lock: corrupt pidfile is reclaimable, never permanently refused (FR-19)', () => {
+  it('pidfile with non-numeric pid string → reclaim() recovers (reclaimed===true)', async () => {
+    const mod = await load(LOCK_MOD);
+    const reclaim = requireFn(mod, 'reclaim');
+
+    // Seed a pidfile whose pid is a string, not a number.
+    await mkdir(join(repoPath, '.daemon'), { recursive: true });
+    await writeFile(
+      join(repoPath, '.daemon', 'daemon.pid'),
+      JSON.stringify({ pid: 'notanumber', uuid: 'bad-uuid', startedAt: '2020-01-01T00:00:00.000Z' }),
+    );
+
+    const result = await reclaim(repoPath);
+
+    // Must recover — the corrupt pidfile is treated as absent (stale).
+    expect((result as any).reclaimed).toBe(true);
+    // The fresh pidfile must contain a valid numeric pid.
+    const record = await readPidfile();
+    expect(typeof record.pid).toBe('number');
+    expect((record.pid as number)).toBeGreaterThan(0);
+  });
+
+  it('pidfile with truncated / invalid JSON → reclaim() recovers (reclaimed===true)', async () => {
+    const mod = await load(LOCK_MOD);
+    const reclaim = requireFn(mod, 'reclaim');
+
+    // Seed a truncated JSON pidfile.
+    await mkdir(join(repoPath, '.daemon'), { recursive: true });
+    await writeFile(
+      join(repoPath, '.daemon', 'daemon.pid'),
+      '{"pid":12345,"uuid":"x","star', // truncated — invalid JSON
+    );
+
+    const result = await reclaim(repoPath);
+
+    // Must recover — parse failure is treated as absent (stale).
+    expect((result as any).reclaimed).toBe(true);
+    const record = await readPidfile();
+    expect(typeof record.pid).toBe('number');
+    expect((record.pid as number)).toBeGreaterThan(0);
+  });
+});
