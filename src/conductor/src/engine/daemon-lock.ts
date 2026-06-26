@@ -56,7 +56,13 @@ export interface AcquireSuccess {
   startedAt: string;
 }
 
-/** Returned when the pidfile already exists and the existing owner is still alive. */
+/**
+ * Returned when the pidfile already exists and the existing owner is still alive.
+ *
+ * Note: `owner.pid` may be -1 when the pidfile vanished between EEXIST and the read
+ * (phantom lock). Callers MUST guard with `owner.pid > 0` and treat pid===-1 as
+ * reclaimable — it is not a real process id and must never be passed to isLive().
+ */
 export interface AcquireOccupied {
   acquired: false;
   reason: 'occupied';
@@ -219,7 +225,10 @@ export async function acquire(
       if (owner) {
         return { acquired: false, reason: 'occupied', owner };
       }
-      // Pidfile vanished between the EEXIST and our read — treat as occupied.
+      // Pidfile vanished between the EEXIST and our read (phantom lock).
+      // owner.pid === -1 is the sentinel for this race window.
+      // Callers MUST guard with owner.pid > 0 and treat pid===-1 as reclaimable,
+      // not as a live owner (it is not a real process id).
       return {
         acquired: false,
         reason: 'occupied',
@@ -296,9 +305,10 @@ export async function reclaim(
 
 /**
  * Injectable launch function (default: launchDaemonDetached).
- * Receives only the repoPath — fire-and-forget, returns void.
+ * Receives only the repoPath — fire-and-forget.
+ * Errors thrown by the launch fn are not propagated (fire-and-forget).
  */
-export type LaunchFn = (repoPath: string) => void;
+export type LaunchFn = (repoPath: string) => void | Promise<void>;
 
 /**
  * Optional mirror writer called AFTER a successful liveness confirmation.
