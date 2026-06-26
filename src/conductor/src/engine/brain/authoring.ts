@@ -282,6 +282,27 @@ export async function authorSpec(
 ): Promise<AuthoringResult> {
   const repoPath = target.canonicalPath;
 
+  // 0. Guard: reject a dirty working tree before touching anything.
+  //    Uses `git status --porcelain` — any non-empty output means dirty.
+  //    We do NOT stash, force-checkout, or reset. Fail fast, leave the
+  //    tree exactly as found (no data loss, no orphan branches).
+  {
+    const { stdout: porcelain } = await execFile('git', ['status', '--porcelain'], {
+      cwd: repoPath,
+    });
+    if (porcelain.trim() !== '') {
+      const dirtyFiles = porcelain
+        .trim()
+        .split('\n')
+        .map((line) => line.trim())
+        .join(', ');
+      throw new Error(
+        `authorSpec: target repo at "${repoPath}" has uncommitted (dirty) changes: ${dirtyFiles}. ` +
+          'Commit or discard all changes before running authorSpec.',
+      );
+    }
+  }
+
   // 1. Derive the default branch — never hardcode 'main'.
   const defaultBranch = await deriveDefaultBranch(repoPath);
 
