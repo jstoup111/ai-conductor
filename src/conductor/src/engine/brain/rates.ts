@@ -101,6 +101,13 @@ export function computeSignalRates(signals: BrainSignal[]): SignalRates {
     }
   }
 
+  // Guard: when totalSignals === 0 (empty array), all rate denominators are
+  // zero. Return 0 rather than NaN so downstream consumers (governor report,
+  // flywheel trend) always receive a finite, safe value (FR-9, FR-12).
+  // Token spend sums are also 0 for an empty array — no special case needed
+  // there since summing over an empty loop already yields 0.
+  const safeTotal = totalSignals > 0 ? totalSignals : 1;
+
   return {
     totalSignals,
     tokens: {
@@ -109,8 +116,8 @@ export function computeSignalRates(signals: BrainSignal[]): SignalRates {
       cacheRead: totalCacheRead,
       cacheCreation: totalCacheCreation,
     },
-    kickbackRate: totalKickbacks / totalSignals,
-    haltRate: totalHalts / totalSignals,
-    retryRate: totalRetries / totalSignals,
+    kickbackRate: totalKickbacks / safeTotal,
+    haltRate: totalHalts / safeTotal,
+    retryRate: totalRetries / safeTotal,
   };
 }

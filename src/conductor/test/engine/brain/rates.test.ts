@@ -121,4 +121,78 @@ describe('computeSignalRates', () => {
     expect(typeof rates.retryRate).toBe('number');
     expect(typeof rates.totalSignals).toBe('number');
   });
+
+  // ─── Edge-case: empty array / zero-denominator (Task 9, FR-9 + FR-12 negatives) ───
+
+  describe('empty signals array (zero-denominator guard)', () => {
+    it('returns totalSignals = 0 for empty array', () => {
+      const rates = computeSignalRates([]);
+      expect(rates.totalSignals).toBe(0);
+    });
+
+    it('returns kickbackRate = 0 (not NaN) for empty array', () => {
+      const rates = computeSignalRates([]);
+      // Falsifiable: current 0/0 yields NaN — guard must clamp to 0.
+      expect(Number.isNaN(rates.kickbackRate)).toBe(false);
+      expect(rates.kickbackRate).toBe(0);
+    });
+
+    it('returns haltRate = 0 (not NaN) for empty array', () => {
+      const rates = computeSignalRates([]);
+      expect(Number.isNaN(rates.haltRate)).toBe(false);
+      expect(rates.haltRate).toBe(0);
+    });
+
+    it('returns retryRate = 0 (not NaN) for empty array', () => {
+      const rates = computeSignalRates([]);
+      expect(Number.isNaN(rates.retryRate)).toBe(false);
+      expect(rates.retryRate).toBe(0);
+    });
+
+    it('returns all token fields as 0 for empty array', () => {
+      const rates = computeSignalRates([]);
+      expect(rates.tokens.input).toBe(0);
+      expect(rates.tokens.output).toBe(0);
+      expect(rates.tokens.cacheRead).toBe(0);
+      expect(rates.tokens.cacheCreation).toBe(0);
+    });
+
+    it('no rate field is NaN for empty array (composite guard)', () => {
+      const rates = computeSignalRates([]);
+      // Belt-and-suspenders: all numeric rate fields must be finite numbers.
+      expect(Number.isNaN(rates.kickbackRate)).toBe(false);
+      expect(Number.isNaN(rates.haltRate)).toBe(false);
+      expect(Number.isNaN(rates.retryRate)).toBe(false);
+      expect(Number.isFinite(rates.kickbackRate)).toBe(true);
+      expect(Number.isFinite(rates.haltRate)).toBe(true);
+      expect(Number.isFinite(rates.retryRate)).toBe(true);
+    });
+  });
+
+  describe('zero-denominator: signal with all-zero counts (non-NaN path)', () => {
+    // All three rate denominators (kickbackRate, haltRate, retryRate) share
+    // `signals.length` as their sole denominator — there is no independent
+    // per-feature or per-metric secondary denominator. When the array is
+    // non-empty, totalSignals >= 1 so division is always safe. This test
+    // proves a single-signal with zero events yields 0.0 rates (not NaN),
+    // exercising the non-empty fast path so a future refactor introducing a
+    // second denominator would be caught by the empty-array tests above.
+    it('returns 0 rates (not NaN) for one signal with zero kickbacks/halts/retries', () => {
+      const zeroActivitySig = makeSignal({
+        runId: 'run-zero',
+        kickbacks: [],
+        halts: [],
+        retryHotspots: [],
+        tokens: { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 },
+      });
+      const rates = computeSignalRates([zeroActivitySig]);
+      expect(rates.totalSignals).toBe(1);
+      expect(Number.isNaN(rates.kickbackRate)).toBe(false);
+      expect(Number.isNaN(rates.haltRate)).toBe(false);
+      expect(Number.isNaN(rates.retryRate)).toBe(false);
+      expect(rates.kickbackRate).toBe(0);
+      expect(rates.haltRate).toBe(0);
+      expect(rates.retryRate).toBe(0);
+    });
+  });
 });
