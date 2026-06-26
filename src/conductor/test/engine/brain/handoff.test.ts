@@ -288,6 +288,36 @@ describe('openSpecPr — no-remote fallback (task-25, FR-7 negative path)', () =
       openSpecPr(target, 'spec/other-err', { runner, ledgerOpts: { brainDir: tempDir } }),
     ).rejects.toThrow('Connection timed out after 30s');
   });
+
+  it('re-throws (fatal) when git reports a 404 / Repository not found — must NOT return pr-skipped', async () => {
+    // gh reports this when the remote exists in config but the GitHub repo has
+    // been deleted or is private/inaccessible. The old /git: .*remote/i pattern
+    // would have matched "remote: Repository not found." and swallowed it as a
+    // non-fatal skip. That must never happen — caller must learn the repo is gone.
+    const target = makeTarget(tempDir, 'proj-404');
+    const { runner } = makeThrowingRunner(
+      'git: error: remote: Repository not found.',
+    );
+
+    await expect(
+      openSpecPr(target, 'spec/deleted-repo', { runner, ledgerOpts: { brainDir: tempDir } }),
+    ).rejects.toThrow(/Repository not found/);
+  });
+
+  it('re-throws (fatal) when git reports an auth error — must NOT return pr-skipped', async () => {
+    // Credential revocation / bad token triggers this message. The old
+    // /git: .*remote/i pattern matched "remote: Invalid username or password."
+    // and incorrectly silenced it as a no-remote skip. Re-throw is required so
+    // the caller learns credentials are invalid.
+    const target = makeTarget(tempDir, 'proj-auth-err');
+    const { runner } = makeThrowingRunner(
+      'git: error: remote: Invalid username or password.',
+    );
+
+    await expect(
+      openSpecPr(target, 'spec/auth-err', { runner, ledgerOpts: { brainDir: tempDir } }),
+    ).rejects.toThrow(/Invalid username or password/);
+  });
 });
 
 // ─── Task 26: assert-no-merge / assert-no-build across ALL handoff paths ─────

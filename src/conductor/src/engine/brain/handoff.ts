@@ -105,7 +105,6 @@ const NO_REMOTE_PATTERNS: RegExp[] = [
   /no remote/i,
   /does not have any remotes/i,
   /no configured remote/i,
-  /git: .*remote/i,
 ];
 
 /**
