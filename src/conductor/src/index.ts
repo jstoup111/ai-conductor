@@ -45,6 +45,7 @@ import { renderReport, ReportError } from './engine/report-renderer.js';
 import type { LLMProvider } from "./execution/llm-provider.js";
 import type { UISubscriber } from "./ui/types.js";
 import { detectRegistryCommand, dispatchRegistry } from './engine/registry-cli.js';
+import { detectBrainCommand, dispatchBrain } from './engine/brain-cli.js';
 
 // Harness VERSION lookup: probes a few candidate locations because the
 // installed layout can be a symlink chain (~/.local/bin/conduct-ts →
@@ -134,6 +135,15 @@ async function main(): Promise<void> {
   const registryCmd = detectRegistryCommand(process.argv);
   if (registryCmd) {
     const code = await dispatchRegistry(registryCmd);
+    process.exit(code);
+  }
+
+  // Brain subcommand (Phase 9.3) runs NON-INTERACTIVELY and exits — it routes
+  // ideas to registered projects, authors spec branches, and surfaces flywheel
+  // lessons. Dispatched before parseArgs, mirroring registry subcommand pattern.
+  const brainCmd = detectBrainCommand(process.argv);
+  if (brainCmd) {
+    const code = await dispatchBrain(brainCmd);
     process.exit(code);
   }
 

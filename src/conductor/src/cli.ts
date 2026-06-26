@@ -115,6 +115,12 @@ export function createProgram(): Command {
     .description('Scaffold a new project (git init + skeleton CLAUDE.md + .gitignore) and register it')
     .option('--remote <url>', 'Add an origin remote (add-only, no push)');
 
+  // Brain subcommand (Phase 9.3). NON-INTERACTIVE: dispatched by index.ts
+  // (detectBrainCommand) before the pipeline boots. Loop body wired in task-33/34.
+  program
+    .command('brain')
+    .description('Start the supervisor brain: route ideas to projects, author spec branches, and surface flywheel lessons');
+
   return program;
 }
 
