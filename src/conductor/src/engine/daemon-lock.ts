@@ -272,22 +272,155 @@ export async function reclaim(
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// ensureRunning — injectable options type (FR-21, FR-23).
+// ─────────────────────────────────────────────────────────────────────────────
+
 /**
- * ensureRunning — stub / scaffold for Task 18.
+ * Injectable launch function (default: launchDaemonDetached).
+ * Receives only the repoPath — fire-and-forget, returns void.
+ */
+export type LaunchFn = (repoPath: string) => void;
+
+/**
+ * Optional mirror writer called AFTER a successful liveness confirmation.
+ * Failure is NON-FATAL — the loop continues regardless (FR-23, C4).
+ */
+export type WriteDaemonStateFn = () => Promise<void>;
+
+export interface EnsureRunningOpts {
+  /**
+   * Injectable launch function (default: launchDaemonDetached). Called at most
+   * once when no live daemon is found. Never called when a live owner exists.
+   */
+  launch?: LaunchFn;
+  /**
+   * Injectable kill probe (default: process.kill). Passed through to isLive/reclaim.
+   */
+  kill?: KillProbe;
+  /**
+   * Callback invoked exactly once when a stale lock is reclaimed. Used by
+   * callers and tests to count reclaim events (FR-21 negative path).
+   */
+  onReclaim?: () => void;
+  /**
+   * Best-effort mirror writer. Called after a fresh spawn to record
+   * `daemonState` in the registry. Failure is non-fatal (FR-23, C4).
+   * The control path NEVER reads this value for a liveness decision.
+   */
+  writeDaemonState?: WriteDaemonStateFn;
+  /**
+   * A registry-level daemonState view, injected by callers (e.g., tests or
+   * the engineer). This value is NEVER consulted for any liveness decision —
+   * the pidfile is the single source of truth (FR-23, C4, ADR-010).
+   * Passing it here is intentional: it proves the implementation ignores it.
+   */
+  registryDaemonState?: Record<string, string>;
+}
+
+/**
+ * ensureRunning — probe the 1-per-repo lock; spawn once iff no live daemon.
  *
- * Task 18 (a later agent) implements the full body: probe the lock, and if
- * none/stale, spawn one detached daemon via launchDaemonDetached. This stub
- * exists ONLY so the Task-16 boundary test can assert the export exists.
+ * Algorithm (FR-21, ADR-010, C3/C4):
+ *   1. Attempt to acquire the lock (O_EXCL create of `.daemon/daemon.pid`).
+ *      a. Acquired → WE now own the lock (no prior daemon); fall through to spawn.
+ *      b. Occupied (EEXIST) → read the existing pidfile and check liveness with
+ *         the REAL process.kill (defaultKill — pidfile is authoritative):
+ *         - isLive → STOP. No spawn, no signal. (zero-management contract)
+ *         - dead  → reclaim the stale lock, call onReclaim(), fall through to spawn.
+ *   2. Spawn: call opts.launch(repoPath) (default: launchDaemonDetached) ONCE.
+ *   3. Best-effort mirror: call writeDaemonState() if provided; swallow any error.
  *
- * The Task-18 agent should replace this body with the real implementation.
- * The signature is locked:
- *   ensureRunning(repoPath: string, opts?: EnsureRunningOpts): Promise<void>
+ * The function NEVER:
+ *   - reads `registryDaemonState` for a liveness decision (pidfile wins).
+ *   - sends a non-zero kill signal to any pid.
+ *   - spawns more than once.
+ *   - retains any handle to the spawned process.
+ *
+ * Note on opts.kill: the injectable kill probe exists ONLY as a management-signal
+ * spy (so callers/tests can assert that NO non-zero signals were sent). Liveness
+ * probing always uses defaultKill (the real process.kill) because the pidfile
+ * must be the single authoritative source of truth — an injected probe cannot
+ * substitute for the real OS liveness check (FR-23, ADR-010).
  *
  * @param repoPath - Absolute path to the repository root.
+ * @param opts     - Injectable overrides for testing and integration.
  */
-export async function ensureRunning(repoPath: string): Promise<void> {
-  // Task 18 implementation goes here.
-  // Contract: probe acquire/isLive; alive → no-op; none/stale → launchDaemonDetached(repoPath).
-  void repoPath;
-  throw new Error('ensureRunning: not yet implemented (Task 18)');
+export async function ensureRunning(
+  repoPath: string,
+  opts: EnsureRunningOpts = {},
+): Promise<void> {
+  // opts.registryDaemonState is intentionally NOT consulted here — pidfile wins.
+  // (FR-23, C4) The parameter exists only so callers can pass it without error.
+  // Liveness probing uses defaultKill (real process.kill) unconditionally —
+  // opts.kill is a management-signal spy, not a liveness substitute.
+
+  const launchFn: LaunchFn =
+    opts.launch ??
+    (async (path: string) => {
+      // Default: import launchDaemonDetached lazily (avoids circular-dep issues).
+      const { launchDaemonDetached } = await import('./engineer/daemon-launch.js');
+      launchDaemonDetached(path);
+    });
+
+  let needsSpawn = false;
+
+  // Step 1: try to acquire the lock (O_EXCL atomic create).
+  // acquire() does not invoke kill — it reads the pidfile only.
+  const acquireResult = await acquire(repoPath);
+
+  if (acquireResult.acquired) {
+    // WE just created the pidfile — no prior daemon was running.
+    // Unlink our transient pidfile so the real daemon spawns fresh via O_EXCL.
+    try {
+      await unlink(pidfilePath(repoPath));
+    } catch {
+      // Already gone — fine.
+    }
+    needsSpawn = true;
+  } else if (acquireResult.reason === 'occupied') {
+    // A pidfile already exists — check liveness using the real OS kill (defaultKill).
+    // This is the authoritative liveness check; the injected kill probe is not used
+    // here because it is a management-signal spy only.
+    const owner = acquireResult.owner;
+    if (owner.pid > 0 && isLive(owner.pid, defaultKill)) {
+      // Live daemon found — strictly NO spawn, NO signal. (FR-21 negative)
+      return;
+    }
+    // Owner pid is dead — reclaim the stale lock (uses defaultKill internally).
+    const reclaimResult = await reclaim(repoPath, defaultKill);
+    if (reclaimResult.reclaimed) {
+      opts.onReclaim?.();
+      // Unlink the reclaimed pidfile so the daemon spawns fresh.
+      try {
+        await unlink(pidfilePath(repoPath));
+      } catch {
+        // Already gone — fine.
+      }
+      needsSpawn = true;
+    } else if (reclaimResult.reason === 'alive') {
+      // A concurrent reclaimer beat us AND the new owner is alive — no-op.
+      return;
+    } else {
+      // Reclaim errored — best-effort spawn attempt.
+      needsSpawn = true;
+    }
+  } else {
+    // acquire returned 'error' — best-effort spawn attempt.
+    needsSpawn = true;
+  }
+
+  if (needsSpawn) {
+    // Step 2: fire-and-forget — spawn exactly once (FR-21).
+    await Promise.resolve(launchFn(repoPath));
+
+    // Step 3: best-effort mirror write — NON-FATAL on any error (FR-23, C4).
+    if (opts.writeDaemonState) {
+      try {
+        await opts.writeDaemonState();
+      } catch {
+        // Mirror write failure is intentionally swallowed — pidfile is authoritative.
+      }
+    }
+  }
 }
