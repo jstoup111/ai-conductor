@@ -1,8 +1,21 @@
-// authoring.ts — Prompt builder for the brain's planning/authoring step (Task 14, FR-5).
+// authoring.ts — Prompt builder + subprocess authoring runner (Tasks 14 & 20, FR-5/FR-6).
 //
-// `buildAuthoringPrompt` embeds the LessonDigest into the prompt text so that
-// a downstream reader (LLM or evaluator) can observe prior lessons directly in
-// the prompt context without requiring a separate retrieval step.
+// `buildAuthoringPrompt` (Task 14, FR-5):
+//   Embeds the LessonDigest into the prompt text so that a downstream reader
+//   (LLM or evaluator) can observe prior lessons directly in the prompt context
+//   without requiring a separate retrieval step.
+//
+// `authorSpec` (Task 20, FR-6):
+//   Runs the DECIDE authoring as a subprocess with the TARGET repo as cwd.
+//   - provider is INJECTABLE — tests supply a fake; production wraps a real
+//     conduct invocation.
+//   - Creates a spec/<slug> branch off the repo's DEFAULT branch. The default
+//     branch is derived via `git rev-parse --abbrev-ref HEAD` for local repos
+//     (no remote) — never hardcoded to 'main'.
+//   - On branch-name collision, adds a numeric suffix disambiguator.
+//   - The authored artifacts (.docs/specs, .docs/stories, .docs/plans) are
+//     committed ON that spec/<slug> branch in the target repo.
+//   - Returns { branch, project } so the caller can open a PR or report back.
 //
 // Design decisions:
 //   • Returns a plain `string` for simplicity; callers can wrap in {prompt} if
@@ -14,10 +27,15 @@
 //   • Lesson texts are embedded verbatim; no escaping — special characters
 //     must survive intact for downstream consumers.
 
+import { execFile as execFileCb } from 'node:child_process';
+import { promisify } from 'node:util';
 import type { LessonDigest, RetrievedLesson } from './lesson-store.js';
+import type { TargetRepo } from './target.js';
+
+const execFile = promisify(execFileCb);
 
 // ---------------------------------------------------------------------------
-// Types
+// Types — buildAuthoringPrompt (Task 14)
 // ---------------------------------------------------------------------------
 
 /**
@@ -38,7 +56,44 @@ export interface AuthoringPromptResult {
 }
 
 // ---------------------------------------------------------------------------
-// Internal helpers
+// Types — authorSpec (Task 20)
+// ---------------------------------------------------------------------------
+
+/**
+ * The argument shape passed to AuthoringProvider.invoke.
+ * All fields are present — the provider never needs to infer cwd from globals.
+ */
+export interface AuthoringInvokeOpts {
+  /** Absolute path to the target repo — must be used as cwd. */
+  cwd: string;
+  /** The raw idea text being authored. */
+  idea: string;
+  /** The spec/<slug> branch that was created for this authoring run. */
+  branch: string;
+}
+
+/**
+ * Injectable provider for the subprocess DECIDE step.
+ *
+ * Production wraps a real `conduct` / LLM invocation.
+ * Tests supply a fake that writes .docs/specs|stories|plans directly.
+ */
+export interface AuthoringProvider {
+  invoke(opts: AuthoringInvokeOpts): Promise<void>;
+}
+
+/**
+ * Return value of authorSpec.
+ */
+export interface AuthoringResult {
+  /** The spec/<slug> branch created in the target repo. */
+  branch: string;
+  /** The target project name (from target.name). */
+  project: string;
+}
+
+// ---------------------------------------------------------------------------
+// Internal helpers — buildAuthoringPrompt (Task 14)
 // ---------------------------------------------------------------------------
 
 /**
@@ -130,4 +185,130 @@ export function buildAuthoringPrompt(
   ].join('\n');
 
   return { prompt };
+}
+
+// ---------------------------------------------------------------------------
+// Internal helpers — authorSpec (Task 20)
+// ---------------------------------------------------------------------------
+
+/**
+ * Slugify an idea string into a safe git branch name segment.
+ * Lowercases, replaces non-alphanumeric runs with hyphens, trims edge hyphens.
+ * Truncated to 50 chars so branch names stay readable.
+ */
+function slugify(idea: string): string {
+  return idea
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 50);
+}
+
+/**
+ * Derive the repo's current HEAD branch via `git rev-parse --abbrev-ref HEAD`.
+ * Works for local repos with no remote — never hardcodes 'main'.
+ * Throws if the repo has no commits (HEAD is unborn/detached).
+ */
+async function deriveDefaultBranch(repoPath: string): Promise<string> {
+  try {
+    const { stdout } = await execFile('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
+      cwd: repoPath,
+    });
+    const branch = stdout.trim();
+    if (branch && branch !== 'HEAD') return branch;
+  } catch {
+    // fall through to throw below
+  }
+  throw new Error(
+    `authorSpec: could not derive default branch for repo at "${repoPath}". ` +
+      'Ensure the repo has at least one commit and is not in a detached HEAD state.',
+  );
+}
+
+/**
+ * Check whether a local branch already exists in the repo.
+ */
+async function branchExists(repoPath: string, branchName: string): Promise<boolean> {
+  try {
+    const { stdout } = await execFile('git', ['branch', '--list', branchName], {
+      cwd: repoPath,
+    });
+    return stdout.trim() === branchName;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Choose a unique branch name starting from `spec/<slug>`.
+ * If that already exists, tries `spec/<slug>-2`, `spec/<slug>-3`, etc.
+ */
+async function chooseBranchName(repoPath: string, slug: string): Promise<string> {
+  const base = `spec/${slug}`;
+  if (!(await branchExists(repoPath, base))) return base;
+  for (let n = 2; n < 1000; n++) {
+    const candidate = `${base}-${n}`;
+    if (!(await branchExists(repoPath, candidate))) return candidate;
+  }
+  throw new Error(
+    `authorSpec: could not find a unique branch name after 1000 attempts for slug "${slug}"`,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Public API — authorSpec (Task 20, FR-6)
+// ---------------------------------------------------------------------------
+
+/**
+ * authorSpec — subprocess DECIDE authoring runner (Task 20, FR-6).
+ *
+ * Creates a `spec/<slug>` branch in the target repo off the repo's actual
+ * default branch (derived — never hardcoded), delegates artifact writing to
+ * the injectable `provider`, commits the artifacts on that branch, and
+ * returns `{ branch, project }` for the caller.
+ *
+ * @param target   The resolved TargetRepo (name + canonicalPath).
+ * @param idea     The feature idea to author.
+ * @param _digest  The LessonDigest (available to provider via prompt; not used
+ *                 for branching logic here).
+ * @param provider Injectable authoring provider — writes .docs/specs|stories|plans.
+ * @returns        { branch, project } — the branch created and the project name.
+ */
+export async function authorSpec(
+  target: TargetRepo,
+  idea: string,
+  _digest: LessonDigest,
+  provider: AuthoringProvider,
+): Promise<AuthoringResult> {
+  const repoPath = target.canonicalPath;
+
+  // 1. Derive the default branch — never hardcode 'main'.
+  const defaultBranch = await deriveDefaultBranch(repoPath);
+
+  // 2. Compute slug and find a unique branch name.
+  const slug = slugify(idea);
+  const branch = await chooseBranchName(repoPath, slug);
+
+  // 3. Create the spec/<slug> branch off the default branch.
+  await execFile('git', ['checkout', '-b', branch, defaultBranch], { cwd: repoPath });
+
+  // 4. Invoke the provider (fake in tests, real conduct in production).
+  //    The provider writes .docs/specs|stories|plans into repoPath.
+  await provider.invoke({ cwd: repoPath, idea, branch });
+
+  // 5. Stage the authored artifacts and commit on the spec branch.
+  //    Use specific paths — never `git add -A`.
+  await execFile('git', ['add', '.docs/specs', '.docs/stories', '.docs/plans'], {
+    cwd: repoPath,
+  });
+  await execFile(
+    'git',
+    ['commit', '-m', `spec: author artifacts for "${idea}" [brain/authorSpec]`],
+    { cwd: repoPath },
+  );
+
+  // 6. Return to the default branch so the repo is left in a clean state.
+  await execFile('git', ['checkout', defaultBranch], { cwd: repoPath });
+
+  return { branch, project: target.name };
 }
