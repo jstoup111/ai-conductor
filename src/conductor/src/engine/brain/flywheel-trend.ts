@@ -1,0 +1,181 @@
+/**
+ * FR-12 flywheel trend over store ∩ authored-keys ledger (Phase 9.3, ADR-006).
+ *
+ * `computeFlywheelTrend` computes the learning trajectory of the brain by
+ * computing per-feature metric rates over ONLY the features that:
+ *   1. appear in the brain signal store (have at least one BrainSignal), AND
+ *   2. appear in the authored-keys ledger (the brain actually planned them).
+ *
+ * Features in the store but NOT in the ledger (non-brain signals) are excluded.
+ * Features in the ledger but with ZERO store signals are absent from the output
+ * (no zero-rate phantom entries are fabricated).
+ *
+ * Design decisions (documented for callers):
+ *
+ * ORDERING RULE:
+ *   Features are ordered chronologically by their EARLIEST signal `ts` field
+ *   (oldest-first). This represents the order in which the brain first
+ *   encountered each feature, producing a natural timeline of learned
+ *   experience. When a feature has multiple runs, all signal ts values are
+ *   compared and the minimum is used as that feature's anchor timestamp.
+ *
+ * TREND RATE:
+ *   Trend direction is driven by `kickbackRate` (kickbacks per signal run).
+ *   Kickbacks represent the brain being corrected by a gate — a lower rate
+ *   means the brain is producing fewer corrections-needed, i.e. improving.
+ *   Direction is computed by comparing the FIRST feature's kickbackRate to
+ *   the LAST feature's kickbackRate (after chronological ordering):
+ *     - first > last  → "improving"  (kickbacks decreased over time)
+ *     - first < last  → "regressing" (kickbacks increased over time)
+ *     - first === last → "flat"       (no change)
+ *
+ * INSUFFICIENT DATA:
+ *   When fewer than 2 features survive the store ∩ ledger intersection (after
+ *   filtering out ledger-only keys with no signals), the function returns an
+ *   `FlywheelTrendInsufficient` sentinel with `kind: "insufficient-data"`.
+ *   Callers MUST check `result.kind` before treating the result as a trend.
+ */
+
+import type { BrainStoreReader } from '../brain-store.js';
+import type { AuthoredKey } from './authored-ledger.js';
+import { computeSignalRates } from './rates.js';
+import type { SignalRates } from './rates.js';
+
+// ─── Public types ─────────────────────────────────────────────────────────────
+
+/** Trend direction: kickbackRate first→last comparison. */
+export type TrendDirection = 'improving' | 'regressing' | 'flat';
+
+/** Per-feature entry in the trend output. */
+export interface FeatureTrendEntry {
+  project: string;
+  feature: string;
+  /** Earliest signal ts for this feature (ISO string; used as ordering anchor). */
+  earliestTs: string;
+  /** Aggregate rates over all signals for this (project, feature) pair. */
+  rates: SignalRates;
+}
+
+/**
+ * Successful trend result: >=2 brain-planned features with store signals.
+ *
+ * `features` is chronologically ordered (oldest earliestTs first).
+ * `direction` compares `features[0].rates.kickbackRate` vs
+ * `features[features.length - 1].rates.kickbackRate`.
+ */
+export interface FlywheelTrend {
+  kind: 'trend';
+  /** Chronologically-ordered (earliest ts first) per-feature rate entries. */
+  features: FeatureTrendEntry[];
+  /** Trend direction driven by kickbackRate (first → last). */
+  direction: TrendDirection;
+}
+
+/**
+ * Insufficient-data sentinel: fewer than 2 brain-planned features survived the
+ * store ∩ ledger intersection. No trend direction can be derived.
+ *
+ * `direction` is always `"insufficient-data"` — never "improving"/"regressing".
+ */
+export interface FlywheelTrendInsufficient {
+  kind: 'insufficient-data';
+  /** Always "insufficient-data" — distinguishes from valid trend directions. */
+  direction: 'insufficient-data';
+  /** How many features did survive the intersection (0 or 1). */
+  featuresFound: number;
+}
+
+/** Union of both possible return shapes. Callers must narrow on `kind`. */
+export type FlywheelTrendResult = FlywheelTrend | FlywheelTrendInsufficient;
+
+// ─── Implementation ───────────────────────────────────────────────────────────
+
+/**
+ * Compute the flywheel learning trend over `store signals ∩ authored-keys ledger`.
+ *
+ * @param reader  — A BrainStoreReader from `createBrainStoreReader()`.
+ * @param ledger  — The authored-keys array from `readAuthoredKeys()` (or injected
+ *                  in tests). The caller is responsible for reading / injecting the
+ *                  ledger so this function stays pure and testable.
+ * @param _opts   — Reserved for future extension (currently unused).
+ *
+ * @returns `FlywheelTrend` when >=2 features are present in both store and ledger,
+ *          `FlywheelTrendInsufficient` otherwise.
+ */
+export async function computeFlywheelTrend(
+  reader: BrainStoreReader,
+  ledger: AuthoredKey[],
+  _opts?: Record<string, unknown>,
+): Promise<FlywheelTrendResult> {
+  // Step 1: Build a set of authored keys for O(1) intersection lookup.
+  // Key format: "project\x00feature" (null-byte separator, same as authored-ledger.ts).
+  const ledgerSet = new Set<string>(
+    ledger.map(({ project, feature }) => `${project}\x00${feature}`),
+  );
+
+  // Step 2: Read ALL signals from the store (no filter — we intersect manually
+  // so we pull once and group rather than making N per-feature reader calls).
+  const allSignals = await reader.readSignals();
+
+  // Step 3: Group signals by (project, feature) and INTERSECT with the ledger.
+  // Non-brain signals (in store, not in ledger) are skipped here.
+  const grouped = new Map<string, { project: string; feature: string; signals: (typeof allSignals)[0][] }>();
+
+  for (const sig of allSignals) {
+    const key = `${sig.project}\x00${sig.feature}`;
+    // INTERSECTION: only include if the (project,feature) pair is in the ledger.
+    if (!ledgerSet.has(key)) continue;
+
+    if (!grouped.has(key)) {
+      grouped.set(key, { project: sig.project, feature: sig.feature, signals: [] });
+    }
+    grouped.get(key)!.signals.push(sig);
+  }
+
+  // Step 4: Build per-feature trend entries.
+  // Features in the ledger with ZERO store signals are absent (never added to
+  // `grouped` above), so they cannot produce phantom entries here.
+  const entries: FeatureTrendEntry[] = [];
+
+  for (const { project, feature, signals } of grouped.values()) {
+    // Earliest ts: minimum of all signal ts values for this feature.
+    const earliestTs = signals
+      .map((s) => s.ts)
+      .reduce((min, ts) => (ts < min ? ts : min));
+
+    const rates = computeSignalRates(signals);
+
+    entries.push({ project, feature, earliestTs, rates });
+  }
+
+  // Step 5: Order chronologically by earliestTs (oldest first).
+  entries.sort((a, b) => a.earliestTs.localeCompare(b.earliestTs));
+
+  // Step 6: Insufficient-data guard — need >=2 features to derive a trend.
+  if (entries.length < 2) {
+    return {
+      kind: 'insufficient-data',
+      direction: 'insufficient-data',
+      featuresFound: entries.length,
+    };
+  }
+
+  // Step 7: Compute trend direction from kickbackRate first→last.
+  const firstRate = entries[0]!.rates.kickbackRate;
+  const lastRate = entries[entries.length - 1]!.rates.kickbackRate;
+
+  let direction: TrendDirection;
+  if (firstRate > lastRate) {
+    direction = 'improving';
+  } else if (firstRate < lastRate) {
+    direction = 'regressing';
+  } else {
+    direction = 'flat';
+  }
+
+  return {
+    kind: 'trend',
+    features: entries,
+    direction,
+  };
+}
