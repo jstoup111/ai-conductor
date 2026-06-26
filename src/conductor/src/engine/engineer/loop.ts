@@ -25,6 +25,8 @@ import { promisify } from 'node:util';
 import { writeFile, mkdir } from 'node:fs/promises';
 import { join, basename } from 'node:path';
 import type { LLMProvider } from '../../execution/llm-provider.js';
+// FR-13/FR-1: depend on the intake PORT interface, never the concrete adapter.
+import type { IntakePort } from './intake/port.js';
 import { createRegistryReader } from '../registry.js';
 import { createEngineerStoreReader } from '../engineer-store.js';
 import { routeIdea, createOnNoFit } from './routing.js';
