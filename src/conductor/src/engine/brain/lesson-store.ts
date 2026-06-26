@@ -142,6 +142,9 @@ export interface LessonStore {
  * lessons were retrieved). Absent (undefined) when at least one group is
  * populated. Callers should treat `isEmpty === true` as "no prior lessons —
  * no flywheel signal available for this idea" rather than as a retrieval error.
+ *
+ * `empty` — alias for `isEmpty`; set alongside `isEmpty` for API consumers
+ * that check either property.
  */
 export interface LessonDigest {
   kickbacks: RetrievedLesson[];
@@ -154,6 +157,11 @@ export interface LessonDigest {
    * filler). Absent/undefined when at least one lesson was retrieved.
    */
   isEmpty?: true;
+  /**
+   * Alias for `isEmpty` — set alongside it so callers checking either field
+   * name get the same signal. Absent when at least one lesson was retrieved.
+   */
+  empty?: true;
 }
 
 /**
@@ -207,7 +215,7 @@ export async function selectLessons(
 
   // Short-circuit: a bound of 0 means no lessons are wanted.
   if (bound <= 0) {
-    return { kickbacks: [], halts: [], retryHotspots: [], narrativeRefs: [], isEmpty: true };
+    return { kickbacks: [], halts: [], retryHotspots: [], narrativeRefs: [], isEmpty: true, empty: true };
   }
 
   // Retrieve from the store using the namespace convention "project:*".
@@ -282,6 +290,7 @@ export async function selectLessons(
 
   if (allGroupsEmpty) {
     digest.isEmpty = true;
+    digest.empty = true;
   }
 
   return digest;
@@ -294,49 +303,115 @@ export async function selectLessons(
 const DEFAULT_TOP_K = 10;
 
 /**
- * Map a BrainSignal to a RetrievedLesson.
+ * Map a BrainSignal to one or more RetrievedLessons.
  *
  * Mapping strategy:
- *   id       → "<project>:<feature>:<runId>" — unique per run
- *   text     → "<feature>: <outcome>" — the most human-meaningful summary
- *              available in a BrainSignal without a narrative. If a
- *              narrativeRef is present it is noted; narrative body is not
- *              read here (lesson-store is a retrieval layer, not an I/O layer).
- *   score    → absent (rank-by-position per spec; no numeric score fabricated)
- *   metadata → all BrainSignal scalar fields for downstream filtering
- *   validAt  → signal's `ts` field (the moment the signal was assembled)
+ *   Base lesson (one per signal):
+ *     id   → "<project>:<feature>:<runId>"
+ *     text → "<feature>: <outcome>" (with narrativeRef noted when present)
+ *
+ *   Expanded lessons (one per kickback/halt/retryHotspot entry):
+ *     id   → "<project>:<feature>:<runId>:kickback:<index>" etc.
+ *     text → category keyword + reason so selectLessons categorisation catches
+ *             them (e.g. "kickback: n+1 query", "halt: conflict detected",
+ *             "retry hotspot: tdd (bad output)").
+ *
+ *   score  → absent (rank-by-position per spec; no numeric score fabricated)
+ *   metadata → BrainSignal scalar fields + outcome for downstream filtering
+ *   validAt  → signal's `ts` field
+ *
+ * Expanding into per-entry lessons ensures kickback reasons, halt reasons, and
+ * retry hotspot reasons surface in the digest text rather than being silently
+ * dropped (FR-5 flywheel correctness).
  */
-function signalToLesson(sig: BrainSignal): RetrievedLesson {
-  const id = `${sig.project}:${sig.feature}:${sig.runId}`;
-  const text = sig.narrativeRef
+function signalToLessons(sig: BrainSignal): RetrievedLesson[] {
+  const baseId = `${sig.project}:${sig.feature}:${sig.runId}`;
+  const baseText = sig.narrativeRef
     ? `${sig.feature}: ${sig.outcome} (narrative: ${sig.narrativeRef})`
     : `${sig.feature}: ${sig.outcome}`;
-  return {
-    id,
-    text,
-    // score intentionally absent — rank-by-position (insertion/recency order)
-    metadata: {
-      project: sig.project,
-      feature: sig.feature,
-      runId: sig.runId,
-      outcome: sig.outcome,
-      schemaVersion: sig.schemaVersion,
-      ...(sig.narrativeRef !== undefined ? { narrativeRef: sig.narrativeRef } : {}),
-    },
-    validAt: sig.ts,
+  const baseMetadata: Record<string, unknown> = {
+    project: sig.project,
+    feature: sig.feature,
+    runId: sig.runId,
+    outcome: sig.outcome,
+    schemaVersion: sig.schemaVersion,
+    ...(sig.narrativeRef !== undefined ? { narrativeRef: sig.narrativeRef } : {}),
   };
+
+  const lessons: RetrievedLesson[] = [
+    {
+      id: baseId,
+      text: baseText,
+      metadata: baseMetadata,
+      validAt: sig.ts,
+    },
+  ];
+
+  // Expand kickbacks — each entry gets its own lesson whose text starts with
+  // "kickback: <reason>" so selectLessons' text.includes('kickback') matches it.
+  // The kickback entry shape from on-disk JSON may carry a `reason` field
+  // (used by the brain acceptance test fixtures) or an `evidence` field
+  // (from KickbackEntry in report-renderer). Both are surfaced.
+  for (let i = 0; i < sig.kickbacks.length; i++) {
+    // Cast via unknown to handle on-disk JSON shapes that may differ from the
+    // KickbackEntry TypeScript type (e.g. brain acceptance fixtures use
+    // { gate, reason } rather than { from, to, count }).
+    const kb = sig.kickbacks[i] as unknown as Record<string, unknown>;
+    const reason =
+      typeof kb['reason'] === 'string' ? kb['reason']
+      : typeof kb['evidence'] === 'string' ? kb['evidence']
+      : `gate ${String(kb['from'] ?? '')}→${String(kb['to'] ?? '')}`;
+    lessons.push({
+      id: `${baseId}:kickback:${i}`,
+      text: `kickback: ${reason}`,
+      metadata: { ...baseMetadata, kickbackIndex: i },
+      validAt: sig.ts,
+    });
+  }
+
+  // Expand halts — HaltEntry has { reason: string }.
+  for (let i = 0; i < sig.halts.length; i++) {
+    const halt = sig.halts[i];
+    const reason = typeof halt.reason === 'string' ? halt.reason : 'unknown';
+    lessons.push({
+      id: `${baseId}:halt:${i}`,
+      text: `halt: ${reason}`,
+      metadata: { ...baseMetadata, outcome: 'halted', haltIndex: i },
+      validAt: sig.ts,
+    });
+  }
+
+  // Expand retryHotspots — RetryHotspot has { step, count, topReason }.
+  for (let i = 0; i < sig.retryHotspots.length; i++) {
+    const hs = sig.retryHotspots[i];
+    const step = typeof hs.step === 'string' ? hs.step : '';
+    const topReason = typeof hs.topReason === 'string' ? hs.topReason : '';
+    lessons.push({
+      id: `${baseId}:retry:${i}`,
+      text: `retry hotspot: ${step}${topReason ? ` (${topReason})` : ''}`,
+      metadata: { ...baseMetadata, retryHotspotIndex: i },
+      validAt: sig.ts,
+    });
+  }
+
+  return lessons;
 }
 
 /**
- * Keyword match: return true if the query text overlaps with any word in the
- * signal's project+feature+outcome text. Case-insensitive, word-boundary split.
+ * Keyword match: return true if the query text overlaps with any meaningful
+ * word in the signal's project+feature+outcome text. Case-insensitive,
+ * word-boundary split. Single-character tokens are skipped (stop-word filter)
+ * to avoid spurious matches on words like "a", "I", etc.
  * Treats the entire signal as a bag of words — good enough for the JSONL tier
  * (a semantic adapter handles embeddings in a later task).
  */
 function keywordMatches(sig: BrainSignal, queryText: string): boolean {
   if (!queryText.trim()) return true; // empty query → match all
   const haystack = `${sig.project} ${sig.feature} ${sig.outcome}`.toLowerCase();
-  const needles = queryText.toLowerCase().split(/\s+/).filter(Boolean);
+  // Filter out single-character tokens (common stop words like 'a', 'I')
+  // to prevent spurious cross-project inclusion.
+  const needles = queryText.toLowerCase().split(/\s+/).filter(t => t.length > 1);
+  if (needles.length === 0) return true; // all tokens were filtered — treat as match-all
   return needles.some(needle => haystack.includes(needle));
 }
 
@@ -399,8 +474,10 @@ export function createJsonlLessonStore(reader: BrainStoreReader): LessonStore {
       // Concatenate: target-project first, then cross-project matches.
       const ranked = [...targetSignals, ...crossSignals];
 
-      // Bound to topK and map to RetrievedLesson.
-      return ranked.slice(0, limit).map(signalToLesson);
+      // Expand each signal into one or more RetrievedLessons (base lesson +
+      // one per kickback/halt/retryHotspot), then bound to topK.
+      // Expansion is done after ranking so target-project ordering is preserved.
+      return ranked.flatMap(signalToLessons).slice(0, limit);
     },
   };
 }
