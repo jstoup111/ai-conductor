@@ -32,6 +32,7 @@ import { resolveTargetRepo } from './target.js';
 import { createJsonlLessonStore, selectLessons } from './lesson-store.js';
 import { buildAuthoringPrompt, authorSpec } from './authoring.js';
 import { openSpecPr } from './handoff.js';
+import { recordAuthoredKey } from './authored-ledger.js';
 import { runCreate } from '../registry-cli.js';
 
 const execFile = promisify(execFileCb);
@@ -444,6 +445,9 @@ async function processIdea(
     }
   } else {
     // No remote — spec is committed on the branch; work is preserved locally.
+    // Record the authored key so FR-12 flywheel trend counts this authoring event
+    // (mirrors openSpecPr's pr-skipped path which also records the ledger entry).
+    await recordAuthoredKey(target.name, branch, deps.brainDir ? { brainDir: deps.brainDir } : {});
     io.print(`No remote configured — PR could not be opened. Spec committed on branch "${branch}".`);
   }
 

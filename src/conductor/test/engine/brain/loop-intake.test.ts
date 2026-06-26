@@ -18,6 +18,7 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
+import { readAuthoredKeys } from '../../../src/engine/brain/authored-ledger.js';
 
 const exec = promisify(execFileCb);
 
@@ -378,5 +379,47 @@ describe('loop-intake: per-idea failure isolation', () => {
     expect(summary.exitCode ?? 0).toBe(0);
     // The idea must NOT be counted (gh failed, so authoring did not complete).
     expect(summary.ideasProcessed).toBe(0);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Test 5 (ADR-006 / FR-12 correctness): no-remote path records authored-keys ledger
+// Falsifiable: FAILS against current code (no ledger call on no-remote branch)
+//              PASSES after fix (recordAuthoredKey added to no-remote branch)
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe('loop-intake: no-remote path records authored-keys ledger (FR-12)', () => {
+  it('no-remote project → authored-keys ledger contains (project, branch) entry after run', async () => {
+    // Repo with NO remote — mirrors acceptance Scenario 4.3 / "local-only" project.
+    const repo = join(workDir, 'local-only');
+    await initRepo(repo, /* withRemote= */ false);
+    await writeRegistry([project(repo, 'local-only')]); // no remote field
+
+    const { runBrainMode } = await loadLoop();
+    const { provider } = makeProvider({ routeTo: 'local-only' });
+    const { gh } = makeGh(); // gh stub present but should never be called for no-remote
+    const { io, text } = scriptedIo(['offline feature idea', 'y', 'exit']);
+
+    const summary = await runBrainMode({ provider, io, gh, brainDir });
+
+    // 1. Non-fatal exit with skip message still printed (regression guard).
+    expect(summary.exitCode ?? 0).toBe(0);
+    expect(text()).toMatch(/no remote|PR (could not|skip)/i);
+
+    // 2. Counter incremented (work was done — regression guard).
+    expect(summary.ideasProcessed).toBe(1);
+    expect(summary.authored).toBeDefined();
+    expect(summary.authored!.length).toBe(1);
+    expect(summary.authored![0].project).toBe('local-only');
+
+    // 3. FALSIFIABLE: authored-keys ledger must contain the (project, branch) entry.
+    // Against current code this fails because the no-remote else-branch never calls
+    // recordAuthoredKey. After the fix (adding the call), this passes.
+    const ledgerEntries = await readAuthoredKeys({ brainDir });
+    expect(ledgerEntries.length).toBeGreaterThan(0);
+    const match = ledgerEntries.find((e) => e.project === 'local-only');
+    expect(match).toBeDefined();
+    // The feature key is the spec branch name (spec/<slug>) — assert it starts with 'spec/'.
+    expect(match!.feature).toMatch(/^spec\//);
   });
 });
