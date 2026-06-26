@@ -94,8 +94,16 @@ describe('ensureRunning: spawn-iff-not-alive, never manage (FR-21)', () => {
 
     await ensureRunning(repoPath, { launch: probe.launch, kill: probe.kill });
 
-    expect(probe.launches).toHaveLength(0); // running daemon picks it up on next poll
-    expect(probe.signals).toHaveLength(0); // never kill/restart/throttle/signal
+    // NOTE on opts.kill: ensureRunning uses the real process.kill (defaultKill) for
+    // liveness probing — opts.kill is a management-signal spy only and is intentionally
+    // bypassed for liveness. Therefore probe.signals===0 asserts the no-manage contract
+    // (ensureRunning never sends a non-zero control signal), not liveness behavior.
+    // The non-vacuous correctness assertion is probe.launches===0: if ensureRunning
+    // incorrectly treated the live owner as absent it would call probe.launch, which
+    // would be caught here. Zero spawns is the real signal that the live-owner path
+    // was taken.
+    expect(probe.launches).toHaveLength(0); // non-vacuous: live owner → no spawn attempted
+    expect(probe.signals).toHaveLength(0); // management-signal spy: zero control signals sent
   });
 
   it('a STALE lock (dead pid) → exactly one reclaim + one spawn', async () => {
