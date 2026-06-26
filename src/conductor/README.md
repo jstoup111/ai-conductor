@@ -269,35 +269,62 @@ one place:
 engineer supervisor (Phase 9.3, below). See `test/engine/registry.test.ts` and
 `test/integration/registry-cli.test.ts`.
 
-### Engineer supervisor mode (`conduct engineer`)
+### Engineer mode (agent-hosted, Phase 9.3)
 
-`conduct engineer` (dispatched by `engine/engineer-cli.ts` via `detectEngineerCommand`, **before** the
-interactive pipeline boots) is a **non-autonomous** REPL that turns an idea into a routed,
-lesson-informed spec PR. It **never builds and never merges** — the structural guarantee is
-enforced by `test/engine/engineer/non-autonomy.test.ts` (the engineer source tree imports no
-build/pipeline entry point and issues no `gh pr merge`) and by `summary.buildsRun` staying `0`.
-The loop body lives in `engine/engineer/loop.ts` (`runEngineerMode(deps)`); `deps` injects the LLM
-`provider`, an `io` surface, and a `gh` runner, so the whole flow is testable headless.
+The engineer turns a free-form idea into a routed, lesson-informed spec **PR**, and **never builds
+and never merges** — a merged spec PR is the only idea→build handoff. As of Phase 9.3 it is an
+**agent-hosted, in-chat, human-gated DECIDE loop**: the host agent drives routing and the real
+DECIDE skills directly. There is **no Node readline REPL** and **no spawned `claude -p`** — the
+TypeScript layer (`engine/engineer/`) supplies deterministic primitives (routing, authoring guard,
+intake parsing, liveness) that the host agent calls between human gates. The no-build/no-merge
+guarantee is enforced structurally by `test/engine/engineer/non-autonomy.test.ts` (the engineer
+source tree imports no build/pipeline entry point and issues no `gh pr merge`) and by
+`summary.buildsRun` staying `0`.
 
-Per non-blank idea (each isolated by a per-idea `try/catch`):
+Per idea (each isolated so one repo's failure never corrupts another):
 
-1. **Route** — `routeIdea` (`engine/engineer/routing.ts`) ranks registry projects against the idea
-   via the provider and returns candidates (or `createSuggested` when nothing fits).
-2. **Confirmation gate** (human-in-the-loop, mandatory before any write) — `y`/`yes` confirms the
-   current target; `n`/`no`/blank declines with **zero writes** (no branch, no PR, no gh call);
-   `redirect <name>` retargets to another registered project (unknown name → re-prompted, no
-   invented path); `create <path>` (offered on no-fit) scaffolds + registers a new repo through
-   the 9.2 `create` path, then commits the scaffold so it is authorable.
-3. **Select lessons** — `selectLessons` (`engine/engineer/lesson-store.ts`) pulls the prior lessons
-   relevant to the target from the engineer store and `buildAuthoringPrompt` injects the digest into
-   the authoring prompt (no relevant lessons → an explicit empty digest, not unrelated padding).
-4. **Author** — `authorSpec` (`engine/engineer/authoring.ts`) creates a `spec/<slug>` branch off the
-   **derived** default branch (never hardcoded `main`), writes artifacts under `.docs/` only, and
-   commits; a provider failure rolls back HEAD + deletes the dangling branch.
-5. **Handoff** — `openSpecPr` (`engine/engineer/handoff.ts`) opens a spec **PR** (`gh pr create`,
-   never `merge`) and records the authored-keys ledger. A target with **no remote** is non-fatal:
-   the spec stays committed on the branch and the ledger is still recorded so the FR-12 flywheel
-   trend counts the feature.
+1. **Intake (hexagonal port)** — ideas arrive as a parsed `Envelope`
+   (`{id, source, sourceRef, text, hintRepo?, status, receivedAt}`) through `engine/engineer/intake/`.
+   `parseEnvelope` is parse-don't-validate with **field-named** errors; empty/whitespace text is
+   **rejected** (`EmptyEnvelopeTextError`), never silently dropped. The `claude-session` adapter
+   ships this phase; `github-issues`/inbox/write-back are additive future adapters behind the same
+   port. Idempotency (`createIntakeIdempotency`) keys strictly on `(source, sourceRef)`, never on text.
+2. **Route** — `routeIdea` (`engine/engineer/routing.ts`) ranks registry projects against the idea
+   and returns candidates (or a create-suggestion when nothing fits).
+3. **Confirmation gate** (human-in-the-loop, mandatory before any write) — confirm the target;
+   decline with **zero writes** (no branch, no PR, no gh call); `redirect <name>` retargets to
+   another registered project (unknown name → re-prompted, no invented path); `create <path>`
+   (offered on no-fit) scaffolds + registers a new repo through the 9.2 `create` path. Multi-repo
+   **fan-out** authors each confirmed target independently; a deselected repo is left untouched.
+4. **Select lessons** — `selectLessons` (`engine/engineer/lesson-store.ts`) pulls prior lessons
+   relevant to the target from the engineer store and injects the digest into the authoring prompt
+   (no relevant lessons → an explicit empty digest, not unrelated padding).
+5. **Author (real DECIDE seam)** — `runAuthoring(target, idea, deps)` (`engine/engineer/authoring.ts`)
+   runs the DECIDE steps (brainstorm → stories → plan) behind a `decide` seam; any unapproved step
+   **throws and fabricates nothing**. On approval it writes `Status: Accepted` stories + a plan
+   dependency tree on a `spec/<slug>` branch off the **derived** default branch (never hardcoded
+   `main`), artifacts under `.docs/` only. It never emits the old `_Generated by engineer._` stub,
+   never a DRAFT story, and never spawns `claude` to author. All writes pass through
+   `AuthoringGuard.assertWriteAllowed` (`engine/engineer/authoring-guard.ts`), which rejects `..`,
+   absolute-sibling, and prefix-collision paths with `PathEscapeError` — authoring repo A leaves
+   sibling repo B byte-for-byte unchanged, and a stale/missing target path fails fast with
+   `TargetPathMissingError` (never a cwd fallback).
+6. **Handoff** — the loop opens a spec **PR** (`gh pr create`, never `merge`) and records the
+   authored-keys ledger. A target with **no remote** is non-fatal: the spec stays committed on the
+   branch and the ledger is still recorded so the FR-12 flywheel trend counts the feature. After the
+   spec lands, `ensureRunning` is wired (see below) to bring up the target's daemon.
+
+#### Daemon liveness (pidfile-lock)
+
+`engine/engineer/daemon-lock.ts` owns a **one-per-repo mutex**: `.daemon/daemon.pid` is created with
+`O_EXCL` so exactly one daemon wins under concurrent boots. Liveness is `process.kill(pid, 0)`
+(`ESRCH` → dead, `EPERM` → alive); a corrupt/malformed pidfile is treated as absent. Stale reclaim
+**never permanently refuses** — a `kill -9` leftover is reclaimed on the next boot.
+`ensureRunning(repoPath, deps)` spawns a detached daemon **iff** none is live or the pidfile is
+stale, no-ops if one is already alive, and **never manages** the lifecycle (fire-and-forget;
+ensure-not-manage). `launchDaemonDetached` launches with `cwd: repoPath` (was passing `--project`),
+so the pidfile and worktree land under the target repo's `.daemon/`. The registry `daemonState`
+mirror is **non-authoritative** — the pidfile wins; a mirror-write failure is non-fatal.
 
 Read-only reporting over the engineer store ships as library functions: `governorReport`
 (`engine/engineer/governor.ts`) aggregates spend + kickback/halt/retry rates; `computeFlywheelTrend`

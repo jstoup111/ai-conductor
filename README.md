@@ -122,22 +122,28 @@ keeps going.
 On failure, conduct sends a desktop notification and drops into an interactive Claude session
 to fix the issue. After you `/quit`, it rechecks artifacts and continues automatically.
 
-Engineer supervisor mode (`conduct-ts` only) — a **non-autonomous** REPL that turns a free-form
-idea into a routed, lesson-informed **spec PR**. It never builds and never merges:
+Engineer mode (`conduct-ts` only) — an **agent-hosted, human-gated** loop that turns a free-form
+idea into a routed, lesson-informed **spec PR**. It never builds and never merges (a merged spec PR
+is the only idea→build handoff). As of Phase 9.3 there is no Node REPL and no spawned `claude` — the
+host agent drives routing and the real DECIDE skills in-chat over deterministic TypeScript primitives:
 
-```bash
-conduct engineer
-# engineer> add a CSV export to the reporting tool
-#   → routes the idea across your registered projects (conduct register / create)
-#   → asks you to confirm:  y | n | redirect <project> | create <path>
-#   → pulls relevant prior lessons from the engineer store into the spec
-#   → authors a spec/<slug> branch (artifacts under .docs/ only) and opens a PR
+```text
+add a CSV export to the reporting tool
+  → intake parses the idea into an Envelope (empty text is rejected, not dropped)
+  → routes it across your registered projects (conduct register / create)
+  → asks you to confirm:  confirm | decline | redirect <project> | create <path>
+  → pulls relevant prior lessons from the engineer store into the spec
+  → runs DECIDE for real: Status: Accepted stories + plan on a spec/<slug> branch
+    (artifacts under .docs/ only; never a stub/DRAFT story, never a spawned claude)
+  → opens a spec PR, then ensure-running brings up the target's daemon
 ```
 
-Every write is gated on your confirmation (decline = zero writes); a no-remote target still
-commits the spec on a branch (PR step is a non-fatal skip). Registry/store locations come from
-`$AI_CONDUCTOR_REGISTRY` / `$AI_CONDUCTOR_ENGINEER_DIR`. See `src/conductor/README.md` for the
-full flow.
+Every write is gated on your confirmation (decline = zero writes); authoring is **cross-repo
+isolated** (repo A never touches sibling repo B; a stale target path fails fast) and multi-repo
+**fan-out** authors each confirmed target independently. A no-remote target still commits the spec on
+a branch (PR step is a non-fatal skip). Registry/store locations come from `$AI_CONDUCTOR_REGISTRY` /
+`$AI_CONDUCTOR_ENGINEER_DIR`. See `src/conductor/README.md` for the full flow and the pidfile-lock
+daemon liveness model (`ensureRunning`, one-per-repo `O_EXCL` mutex, stale-pid reclaim).
 
 Handles API rate limits by waiting for reset and auto-retrying.
 
