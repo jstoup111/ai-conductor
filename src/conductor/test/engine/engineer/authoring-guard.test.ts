@@ -40,6 +40,26 @@ describe('AuthoringGuard — happy paths (writes under canonical path pass)', ()
     const guard = new AuthoringGuard(CANONICAL);
     expect(() => guard.assertWriteAllowed(CANONICAL)).not.toThrow();
   });
+
+  it('accepts a descendant when constructed with a TRAILING-SLASH canonical path', () => {
+    // Regression: a trailing slash on the canonical path must not fail-closed.
+    // normalize() does NOT strip a trailing slash, so the constructor must.
+    // Without the fix, prefix '/home/project/alpha/' makes a legitimate child
+    // '/home/project/alpha/.docs/x.md' compute startsWith('/home/project/alpha//')
+    // and get REJECTED — denying all valid writes.
+    const guard = new AuthoringGuard(`${CANONICAL}/`);
+    expect(() =>
+      guard.assertWriteAllowed(`${CANONICAL}/.docs/stories/idea.md`),
+    ).not.toThrow();
+  });
+
+  it('still rejects a sibling when constructed with a TRAILING-SLASH canonical path', () => {
+    // The trailing-slash fix must not weaken the prefix-collision / sibling guard.
+    const guard = new AuthoringGuard(`${CANONICAL}/`);
+    expect(() =>
+      guard.assertWriteAllowed('/home/project/alphaX/file.md'),
+    ).toThrow(PathEscapeError);
+  });
 });
 
 describe('AuthoringGuard — negative paths (escaping writes are rejected)', () => {

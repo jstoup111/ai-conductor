@@ -137,7 +137,7 @@ describe('runAuthoring — cross-repo isolation (Task 21, FR-11)', () => {
       ['ls-tree', '-r', '--name-only', authoringResult.branch],
       repoA.repoPath,
     );
-    // runAuthoring commits plans + specs (stories are written to disk but not git-added)
+    // runAuthoring commits stories, plans, and specs on the spec branch.
     expect(tree).toMatch(/\.docs\//);
   });
 
