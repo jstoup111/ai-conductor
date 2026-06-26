@@ -229,3 +229,169 @@ describe('selectLessons — edge / adversarial', () => {
     expect(digest.halts.some(l => l.id === 'retry-only')).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// FR-5 flywheel relevance negative paths (Task 13)
+// Uses createJsonlLessonStore over real temp signals.jsonl files.
+// ---------------------------------------------------------------------------
+
+import { describe as describeNeg, it as itNeg, expect as expectNeg, vi as viNeg, beforeEach as beforeEachNeg, afterEach as afterEachNeg } from 'vitest';
+import { mkdtemp, writeFile, mkdir } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { createBrainStoreReader } from '../../../src/engine/brain-store.js';
+import { createJsonlLessonStore } from '../../../src/engine/brain/lesson-store.js';
+
+/** Build a minimal valid BrainSignal JSON line for a given project/feature. */
+function makeSignalLine(project: string, feature: string, outcome: string, ts: string): string {
+  return JSON.stringify({
+    schemaVersion: 1,
+    ts,
+    project,
+    feature,
+    runId: `run-${project}-${feature}-${ts.slice(11, 19).replace(/:/g, '')}`,
+    outcome,
+    kickbacks: [],
+    halts: [],
+    retryHotspots: [],
+    tokens: { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 },
+    durationByStep: {},
+  });
+}
+
+describeNeg('selectLessons — FR-5 flywheel relevance negatives (Task 13)', () => {
+  let brainDir: string;
+
+  beforeEachNeg(async () => {
+    brainDir = await mkdtemp(join(tmpdir(), 'brain-neg-test-'));
+    await mkdir(brainDir, { recursive: true });
+  });
+
+  afterEachNeg(async () => {
+    // temp dirs cleaned up by OS; best-effort
+  });
+
+  // -------------------------------------------------------------------------
+  // Negative 1 — NONE-RELEVANT
+  // Signals present in the store but NONE are relevant to the queried idea/project.
+  // selectLessons must NOT pad the digest with unrelated lessons.
+  // The digest must signal emptiness explicitly via isEmpty === true AND all
+  // groups must be empty arrays.
+  // Falsifiable: would fail if selectLessons includes signals from a different
+  // project or pads irrelevant lessons as fillers.
+  // -------------------------------------------------------------------------
+  itNeg('NONE-RELEVANT: signals exist but none match idea/project → digest isEmpty, all groups empty', async () => {
+    // Seed signals for "unrelated-proj" with features that don't mention "payment-flow"
+    const lines = [
+      makeSignalLine('unrelated-proj', 'analytics-dashboard', 'done', '2026-06-25T10:00:00Z'),
+      makeSignalLine('unrelated-proj', 'user-profile', 'done', '2026-06-25T11:00:00Z'),
+      makeSignalLine('other-proj', 'notifications-feature', 'halted', '2026-06-25T09:00:00Z'),
+    ];
+    await writeFile(join(brainDir, 'signals.jsonl'), lines.join('\n') + '\n', 'utf-8');
+
+    const reader = createBrainStoreReader({ brainDir });
+    const store = createJsonlLessonStore(reader);
+
+    // Query for "payment-flow" idea in "target-proj" — nothing in the store matches
+    const digest = await selectLessons('payment-flow checkout', 'target-proj', store);
+
+    // All groups must be empty — no padding with unrelated lessons
+    expectNeg(digest.kickbacks).toHaveLength(0);
+    expectNeg(digest.halts).toHaveLength(0);
+    expectNeg(digest.retryHotspots).toHaveLength(0);
+    expectNeg(digest.narrativeRefs).toHaveLength(0);
+
+    // The digest must explicitly signal "no prior lessons" via isEmpty
+    expectNeg(digest.isEmpty).toBe(true);
+  });
+
+  // -------------------------------------------------------------------------
+  // Negative 2 — OVER-CAP
+  // The store has more relevant lessons than the topK bound.
+  // selectLessons must bound the digest to topK AND log must receive the bound.
+  // Falsifiable: would fail if selection is unbounded (total lessons > topK).
+  // -------------------------------------------------------------------------
+  itNeg('OVER-CAP: more relevant lessons than bound → total in digest <= topK, bound logged', async () => {
+    // Seed 8 signals for "target-proj" with "auth" in the feature name (relevant)
+    const lines = Array.from({ length: 8 }, (_, i) =>
+      makeSignalLine(
+        'target-proj',
+        `auth-feature-${i}`,
+        'done',
+        `2026-06-25T${String(10 + i).padStart(2, '0')}:00:00Z`,
+      ),
+    );
+    await writeFile(join(brainDir, 'signals.jsonl'), lines.join('\n') + '\n', 'utf-8');
+
+    const reader = createBrainStoreReader({ brainDir });
+    const store = createJsonlLessonStore(reader);
+    const logSpy = viNeg.fn();
+
+    // Bound to 3 — the store has 8 relevant lessons
+    const digest = await selectLessons('auth login', 'target-proj', store, { topK: 3, log: logSpy });
+
+    // Total across all groups (a lesson can appear in multiple groups, but
+    // the distinct lesson count must be <= topK)
+    const allIds = new Set([
+      ...digest.kickbacks.map(l => l.id),
+      ...digest.halts.map(l => l.id),
+      ...digest.retryHotspots.map(l => l.id),
+      ...digest.narrativeRefs.map(l => l.id),
+    ]);
+    // The number of distinct lessons in the digest must not exceed the bound
+    expectNeg(allIds.size).toBeLessThanOrEqual(3);
+
+    // The log must have received the applied bound (3)
+    const logCalls = logSpy.mock.calls.map((args: unknown[]) => String(args[0]));
+    expectNeg(logCalls.some(msg => msg.includes('3'))).toBe(true);
+  });
+
+  // -------------------------------------------------------------------------
+  // Negative 3 — CORRUPT-LINE
+  // The underlying signals.jsonl has a malformed line mixed in with valid lines.
+  // The reader must skip the malformed line (resilient) and selection must still
+  // work over the valid lines — no throw, digest reflects only valid data.
+  // Falsifiable: would fail if a corrupt line causes a throw or is included in
+  // the digest as a pseudo-lesson.
+  // -------------------------------------------------------------------------
+  itNeg('CORRUPT-LINE: malformed JSONL line is skipped, valid lines still selected', async () => {
+    const validLine1 = makeSignalLine('target-proj', 'auth-feature', 'halted', '2026-06-25T10:00:00Z');
+    const validLine2 = makeSignalLine('target-proj', 'auth-retry', 'done', '2026-06-25T11:00:00Z');
+    const corruptLine = '{ this is not valid json :::';
+    const content = [validLine1, corruptLine, validLine2].join('\n') + '\n';
+    await writeFile(join(brainDir, 'signals.jsonl'), content, 'utf-8');
+
+    const reader = createBrainStoreReader({ brainDir });
+    const store = createJsonlLessonStore(reader);
+
+    // Must not throw even with a corrupt line present
+    let digest: Awaited<ReturnType<typeof selectLessons>>;
+    await expectNeg(
+      (async () => {
+        digest = await selectLessons('auth', 'target-proj', store);
+      })(),
+    ).resolves.toBeUndefined();
+
+    // The digest must reflect only the 2 valid lines — the halted signal lands
+    // in the halts group, the done signal lands in no group (no matching keyword)
+    // but crucially no corrupt pseudo-lesson appears
+    expectNeg(digest!.halts.length).toBeGreaterThanOrEqual(1);
+
+    // No lesson id should be undefined/null (which a corrupt parse might produce)
+    const allLessons = [
+      ...digest!.kickbacks,
+      ...digest!.halts,
+      ...digest!.retryHotspots,
+      ...digest!.narrativeRefs,
+    ];
+    for (const lesson of allLessons) {
+      expectNeg(typeof lesson.id).toBe('string');
+      expectNeg(lesson.id.length).toBeGreaterThan(0);
+    }
+
+    // The corrupt line count must not appear as a lesson in any group
+    // (i.e. digest total lesson ids must be <= 2, the number of valid lines)
+    const allIds = new Set(allLessons.map(l => l.id));
+    expectNeg(allIds.size).toBeLessThanOrEqual(2);
+  });
+});

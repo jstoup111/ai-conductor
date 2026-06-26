@@ -136,12 +136,24 @@ export interface LessonStore {
  *
  * A single lesson may appear in multiple groups (e.g. a halted run that also
  * has a narrative). Deduplication within each group ensures no id repeats.
+ *
+ * `isEmpty` — OPTIONAL sentinel set to `true` when the store had no lessons
+ * relevant to the queried idea/project (all groups are empty and no relevant
+ * lessons were retrieved). Absent (undefined) when at least one group is
+ * populated. Callers should treat `isEmpty === true` as "no prior lessons —
+ * no flywheel signal available for this idea" rather than as a retrieval error.
  */
 export interface LessonDigest {
   kickbacks: RetrievedLesson[];
   halts: RetrievedLesson[];
   retryHotspots: RetrievedLesson[];
   narrativeRefs: RetrievedLesson[];
+  /**
+   * Explicit "no prior lessons" sentinel. Set to `true` when no relevant
+   * lessons were found for the queried idea/project (all groups empty, no
+   * filler). Absent/undefined when at least one lesson was retrieved.
+   */
+  isEmpty?: true;
 }
 
 /**
@@ -195,7 +207,7 @@ export async function selectLessons(
 
   // Short-circuit: a bound of 0 means no lessons are wanted.
   if (bound <= 0) {
-    return { kickbacks: [], halts: [], retryHotspots: [], narrativeRefs: [] };
+    return { kickbacks: [], halts: [], retryHotspots: [], narrativeRefs: [], isEmpty: true };
   }
 
   // Retrieve from the store using the namespace convention "project:*".
@@ -257,6 +269,19 @@ export async function selectLessons(
       narrativeIds.add(lesson.id);
       digest.narrativeRefs.push(lesson);
     }
+  }
+
+  // If no lessons were retrieved OR no lesson matched any category group, mark
+  // the digest as explicitly empty so callers can distinguish "no prior lessons"
+  // from a retrieval error. This is the FR-5 "no prior lessons" sentinel.
+  const allGroupsEmpty =
+    digest.kickbacks.length === 0 &&
+    digest.halts.length === 0 &&
+    digest.retryHotspots.length === 0 &&
+    digest.narrativeRefs.length === 0;
+
+  if (allGroupsEmpty) {
+    digest.isEmpty = true;
   }
 
   return digest;
@@ -346,8 +371,13 @@ export function createJsonlLessonStore(reader: BrainStoreReader): LessonStore {
       // Read all signals — no filter, we bucket manually below.
       const allSignals = await reader.readSignals();
 
-      // Bucket 1: target-project signals (all of them, regardless of keyword)
-      const targetSignals = allSignals.filter(s => s.project === targetProject);
+      // Bucket 1: target-project signals that match the query keywords (relevance
+      // threshold — non-matching target-project signals are excluded rather than
+      // included as filler). An empty query text matches all target-project
+      // signals (consistent with keywordMatches behaviour).
+      const targetSignals = allSignals.filter(
+        s => s.project === targetProject && keywordMatches(s, query.text),
+      );
 
       // Bucket 2: cross-project signals matching the query keywords (recency)
       // Excludes target-project signals to avoid duplication.
