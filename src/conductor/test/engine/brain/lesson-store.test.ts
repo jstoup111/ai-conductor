@@ -271,6 +271,50 @@ describe('createJsonlLessonStore — default JSONL adapter (Task 11, FR-5)', () 
     }
   });
 
+  it('retrieve: target-project zero-keyword-overlap lesson ranks before cross-project keyword match', async () => {
+    // Falsifiable: under the dropped-target-bucket bug this test fails because
+    // the projA lesson is excluded (no keyword overlap with "auth") and projB
+    // ranks first instead.
+    //
+    // Seed:
+    //   projA / search-feature / outcome=pagination results (ts=newer, NO "auth" keyword)
+    //   projB / auth-module    / outcome=auth login          (ts=older, HAS "auth" keyword)
+    //
+    // Query: text='auth', namespace='projA:something'
+    // Expected: projA lesson is present AND appears before the projB lesson.
+    const authBrainDir = await mkdtemp(join(tmpdir(), 'brain-ordering-'));
+    await mkdir(authBrainDir, { recursive: true });
+
+    const lines = [
+      // Target-project signal with ZERO keyword overlap with "auth"
+      makeSignalLine('projA', 'search-feature', 'pagination results', '2026-06-25T12:00:00Z'),
+      // Cross-project signal that FULLY matches the "auth" keyword
+      makeSignalLine('projB', 'auth-module', 'auth login', '2026-06-25T08:00:00Z'),
+    ];
+    await writeFile(join(authBrainDir, 'signals.jsonl'), lines.join('\n') + '\n', 'utf-8');
+
+    const reader = createBrainStoreReader({ brainDir: authBrainDir });
+    const store = createJsonlLessonStore(reader);
+
+    const results = await store.retrieve({
+      text: 'auth',
+      namespace: 'projA:something',
+      topK: 10,
+    });
+
+    // The projA (zero-overlap) lesson must be present
+    const projAIndex = results.findIndex(r => r.metadata['project'] === 'projA');
+    expect(projAIndex).toBeGreaterThanOrEqual(0);
+
+    // The projA lesson must rank BEFORE the projB keyword-matching lesson
+    expect(results[0]!.metadata['project']).toBe('projA');
+
+    const projBIndex = results.findIndex(r => r.metadata['project'] === 'projB');
+    if (projBIndex !== -1) {
+      expect(projAIndex).toBeLessThan(projBIndex);
+    }
+  });
+
   it('retrieve: each result has required RetrievedLesson fields (id, text, metadata)', async () => {
     await seedSignals();
     const reader = createBrainStoreReader({ brainDir });

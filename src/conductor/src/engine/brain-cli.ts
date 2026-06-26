@@ -52,11 +52,19 @@ export async function dispatchBrain(_d: BrainDispatch): Promise<number> {
     const result = await runBrainMode({ io });
     rl.close();
     return result?.exitCode ?? 0;
-  } catch {
-    // Loop not yet implemented — print a placeholder and exit 0.
-    // This is intentional: the stub lets wiring tests assert dispatch without
-    // requiring the full loop implementation (task-33/34).
-    console.log('[brain] conduct brain mode — not yet implemented (task-33/34 pending)');
-    return 0;
+  } catch (err: unknown) {
+    // Narrow to module-not-found only. Once loop.ts exists, real runtime errors
+    // from runBrainMode must propagate rather than being silently swallowed —
+    // only a missing module file should fall back to the placeholder stub.
+    const code = (err as NodeJS.ErrnoException | null)?.code;
+    if (code === 'ERR_MODULE_NOT_FOUND' || code === 'MODULE_NOT_FOUND') {
+      // Loop not yet implemented — print a placeholder and exit 0.
+      // This is intentional: the stub lets wiring tests assert dispatch without
+      // requiring the full loop implementation (task-33/34).
+      console.log('[brain] conduct brain mode — not yet implemented (task-33/34 pending)');
+      return 0;
+    }
+    // Any other error (loop.ts exists but threw at runtime) must propagate.
+    throw err;
   }
 }

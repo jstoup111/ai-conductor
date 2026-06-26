@@ -123,6 +123,11 @@ function buildRankingPrompt(idea: string, projects: ProjectRecord[]): string {
     .map((p) => `- name: "${p.name}", path: "${p.path}"`)
     .join('\n');
 
+  // `idea` is user-supplied / untrusted input. It is embedded verbatim into the
+  // LLM prompt here. The defense against malformed or prompt-injected LLM
+  // responses is `parseProviderResponse`, which validates the response shape
+  // and yields empty candidates (→ createSuggested=true) on any parse failure.
+  // Project paths come from the registry (operator-controlled), not from users.
   return (
     `You are a project router. Given a feature idea and a list of existing projects, ` +
     `rank each project by how well it fits the idea.\n\n` +

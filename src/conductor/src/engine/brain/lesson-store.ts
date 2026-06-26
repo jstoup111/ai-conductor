@@ -343,9 +343,14 @@ function keywordMatches(sig: BrainSignal, queryText: string): boolean {
 /**
  * Create a `LessonStore` backed by the provided `BrainStoreReader`.
  *
- * Ranking: target-project lessons FIRST (by recency — newest first within the
- * bucket), then cross-project keyword/recency matches (newest first). Result
- * is bounded to `topK` (defaults to 10 when absent or undefined).
+ * Ranking: target-project lessons FIRST — ALL of them, regardless of keyword
+ * overlap (newest first within the bucket), then cross-project keyword/recency
+ * matches (newest first). Result is bounded to `topK` (defaults to 10 when
+ * absent or undefined).
+ *
+ * The target-first guarantee means a target-project signal that has zero
+ * keyword overlap with the query still outranks any cross-project keyword
+ * match. Keyword filtering governs cross-project inclusion only.
  *
  * `record()` is a no-op pass-through — the JSONL store is the system of
  * record; recording happens via `appendSignal` elsewhere.
@@ -371,15 +376,14 @@ export function createJsonlLessonStore(reader: BrainStoreReader): LessonStore {
       // Read all signals — no filter, we bucket manually below.
       const allSignals = await reader.readSignals();
 
-      // Bucket 1: target-project signals that match the query keywords (relevance
-      // threshold — non-matching target-project signals are excluded rather than
-      // included as filler). An empty query text matches all target-project
-      // signals (consistent with keywordMatches behaviour).
+      // Bucket 1: ALL target-project signals — no keyword filter. Target-project
+      // lessons always rank first regardless of query overlap (Task 11 contract).
+      // Relevance (keyword matching) only governs cross-project inclusion.
       const targetSignals = allSignals.filter(
-        s => s.project === targetProject && keywordMatches(s, query.text),
+        s => s.project === targetProject,
       );
 
-      // Bucket 2: cross-project signals matching the query keywords (recency)
+      // Bucket 2: cross-project signals matching the query keywords (recency).
       // Excludes target-project signals to avoid duplication.
       const crossSignals = allSignals.filter(
         s => s.project !== targetProject && keywordMatches(s, query.text),
