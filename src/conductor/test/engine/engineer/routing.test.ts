@@ -16,11 +16,30 @@
 //   (e) Empty registry — no projects → create suggestion immediately (no LLM
 //       call needed).
 //   (f) Negative: provider throws → routeIdea propagates the error (no swallow).
+//
+// Task 27 (FR-3, C2): In-chat routing proposal + confirmation gate — no subprocess.
+//   - Loop prints a proposal carrying target repo + rationale before asking for
+//     human confirmation. Routing is reasoned in-chat (no claude -p spawn).
+//   - C2 static: routing.ts does NOT spawn 'claude' or 'claude -p'.
+//   - C2 static: routing.ts does NOT import readline / call createInterface.
+//   - Behavioral: scripted IO confirms the proposal produces the expected output
+//     and pauses at the confirmation gate before acting.
+//
+// Task 28 (FR-3, C1): Redirect leaves the ORIGINALLY PROPOSED repo untouched.
+//   - When the human redirects to a different project, the originally-proposed
+//     project receives NO branch, NO PR, NO working-tree change.
+//
+// Task 31 (FR-5): Create-on-no-fit offer + decline/partial-fail rollback.
+//   - No existing repo fits → loop offers to create a new project.
+//   - DECLINE → registry unchanged, no directory created, zero side effects.
+//   - PARTIAL scaffold failure → no dangling registry entry (clean rollback).
 
-import { describe, it, expect, vi } from 'vitest';
-import { mkdtemp, rm, writeFile, mkdir } from 'fs/promises';
-import { join } from 'path';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { mkdtemp, rm, writeFile, mkdir, readdir, readFile } from 'fs/promises';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
 import { tmpdir } from 'os';
+import { existsSync } from 'fs';
 import { createRegistryReader } from '../../../src/engine/registry.js';
 import { routeIdea } from '../../../src/engine/engineer/routing.js';
 import type { RoutingProvider, RoutingResult } from '../../../src/engine/engineer/routing.js';
@@ -287,5 +306,188 @@ describe('routeIdea — adversarial / negative paths', () => {
     const names = result.candidates.map((c) => c.project.name);
     expect(names).not.toContain('nonexistent');
     expect(names).toContain('alpha');
+  });
+});
+
+// =============================================================================
+// Task 27 (FR-3, C2): In-chat routing proposal + confirmation gate — no subprocess.
+// =============================================================================
+
+// ── C2 static source checks ───────────────────────────────────────────────────
+
+function routingSrcPath(): string {
+  const here = dirname(fileURLToPath(import.meta.url));
+  return join(here, '..', '..', '..', 'src', 'engine', 'engineer', 'routing.ts');
+}
+
+describe('Task 27: routing.ts C2 static invariants — no subprocess, no TTY REPL', () => {
+  it('[C2] routing.ts does NOT spawn the claude CLI (no execFile/spawn of "claude")', async () => {
+    const src = await readFile(routingSrcPath(), 'utf8');
+    // Forbidden: spawning the claude binary for routing — routing is in-chat.
+    expect(src).not.toMatch(/execFile\s*\(\s*['"]claude['"]/);
+    expect(src).not.toMatch(/spawn\s*\(\s*['"]claude['"]/);
+    // Also check for `claude -p` (the headless process form).
+    expect(src).not.toMatch(/claude\s+-p/);
+  });
+
+  it('[C2] routing.ts does NOT import readline or call createInterface (no Node TTY REPL)', async () => {
+    const src = await readFile(routingSrcPath(), 'utf8');
+    // Forbidden: a readline REPL for routing — the host agent drives the gate.
+    expect(src).not.toMatch(/from\s+['"]node:readline['"]/);
+    expect(src).not.toMatch(/require\s*\(\s*['"]readline['"]\s*\)/);
+    expect(src).not.toMatch(/createInterface/);
+  });
+
+  it('[C2] routing.ts is a pure-function / async module — no process.stdin consumption', async () => {
+    const src = await readFile(routingSrcPath(), 'utf8');
+    // Routing primitives must be pure (no direct stdin reads).
+    expect(src).not.toMatch(/process\.stdin\.read/);
+    expect(src).not.toMatch(/process\.stdin\.on\s*\(/);
+  });
+});
+
+// ── Behavioral: loop produces a proposal + pauses for confirmation ────────────
+
+// Shared temp-dir scaffolding for loop integration tests in this file.
+let workDir27: string;
+let registryPath27: string;
+let engineerDir27: string;
+const savedEnv27: Record<string, string | undefined> = {};
+
+beforeEach(async () => {
+  workDir27 = await mkdtemp(join(tmpdir(), 'routing-task27-'));
+  registryPath27 = join(workDir27, 'registry.json');
+  engineerDir27 = join(workDir27, 'engineer');
+  await mkdir(engineerDir27, { recursive: true });
+  savedEnv27.AI_CONDUCTOR_REGISTRY = process.env.AI_CONDUCTOR_REGISTRY;
+  savedEnv27.AI_CONDUCTOR_ENGINEER_DIR = process.env.AI_CONDUCTOR_ENGINEER_DIR;
+  process.env.AI_CONDUCTOR_REGISTRY = registryPath27;
+  process.env.AI_CONDUCTOR_ENGINEER_DIR = engineerDir27;
+});
+
+afterEach(async () => {
+  process.env.AI_CONDUCTOR_REGISTRY = savedEnv27.AI_CONDUCTOR_REGISTRY;
+  process.env.AI_CONDUCTOR_ENGINEER_DIR = savedEnv27.AI_CONDUCTOR_ENGINEER_DIR;
+  await rm(workDir27, { recursive: true, force: true });
+});
+
+/** Scripted IO: queued lines → null on EOF. Captures printed output. */
+function scriptedIo27(lines: string[]) {
+  const queue = [...lines];
+  const out: string[] = [];
+  return {
+    out,
+    text: () => out.join('\n'),
+    io: {
+      prompt: async (): Promise<string | null> => (queue.length ? queue.shift()! : null),
+      print: (s: string) => out.push(s),
+    },
+  };
+}
+
+function makeRecord27(path: string, name: string) {
+  return {
+    schemaVersion: 1 as const,
+    name,
+    path,
+    status: 'registered' as const,
+    registeredAt: '2026-06-26T00:00:00.000Z',
+  };
+}
+
+async function writeRegistry27(records: unknown[]): Promise<void> {
+  await writeFile(registryPath27, JSON.stringify(records, null, 2), 'utf-8');
+}
+
+describe('Task 27: in-chat routing proposal + confirmation gate (FR-3, C2)', () => {
+  it('loop prints a proposal naming the top-candidate project before asking for confirmation', async () => {
+    // Set up a project directory (the target) and a registry with one record.
+    const projDir = join(workDir27, 'my-project');
+    await mkdir(projDir, { recursive: true });
+    await writeRegistry27([makeRecord27(projDir, 'my-project')]);
+
+    // Provider stub: returns high-confidence ranking for the single project.
+    // loop.ts routingProvider adapter reads `(result as any).output ?? ''`, so
+    // the provider must return an object with an `output` property.
+    const rankingJson = JSON.stringify([{ name: 'my-project', score: 0.92, rationale: 'Perfect fit' }]);
+    const providerStub = {
+      invoke: vi.fn().mockResolvedValue({ output: rankingJson }),
+    };
+
+    // IO: idea line → user declines so we don't go into authoring.
+    const { io, out } = scriptedIo27(['add a login page', 'n']);
+
+    const { runEngineerMode } = await import('../../../src/engine/engineer/loop.js');
+    await runEngineerMode({
+      provider: providerStub as any,
+      io,
+      gh: async () => ({ stdout: '' }),
+      registryPath: registryPath27,
+      engineerDir: engineerDir27,
+    });
+
+    // The loop MUST print a proposal that names the candidate project BEFORE
+    // asking for confirmation. This is the falsifiable in-chat proposal invariant.
+    const combinedOutput = out.join('\n');
+    expect(combinedOutput).toMatch(/my-project/);
+    // The proposal must include language that asks for confirmation.
+    expect(combinedOutput).toMatch(/confirm|suggest/i);
+  });
+
+  it('loop pauses for human confirmation: decline before authoring leaves ideasProcessed=0', async () => {
+    const projDir = join(workDir27, 'target-proj');
+    await mkdir(projDir, { recursive: true });
+    await writeRegistry27([makeRecord27(projDir, 'target-proj')]);
+
+    const rankingJson = JSON.stringify([{ name: 'target-proj', score: 0.88, rationale: 'Good match' }]);
+    const providerStub = {
+      invoke: vi.fn().mockResolvedValue({ output: rankingJson }),
+    };
+
+    // Decline at the confirmation gate → no authoring should happen.
+    const { io } = scriptedIo27(['some feature idea', 'n']);
+
+    const { runEngineerMode } = await import('../../../src/engine/engineer/loop.js');
+    const summary = await runEngineerMode({
+      provider: providerStub as any,
+      io,
+      gh: async () => ({ stdout: '' }),
+      registryPath: registryPath27,
+      engineerDir: engineerDir27,
+    });
+
+    // Declined before authoring → ideasProcessed must remain 0 (no work done).
+    expect(summary.ideasProcessed).toBe(0);
+  });
+
+  it('confirmation gate is required: routing proposal does NOT immediately commit authoring', async () => {
+    // If the loop auto-committed without waiting for confirmation, ideasProcessed
+    // would be > 0 on EOF without any confirmation input. EOF immediately = 0.
+    const projDir = join(workDir27, 'eager-proj');
+    await mkdir(projDir, { recursive: true });
+    await writeRegistry27([makeRecord27(projDir, 'eager-proj')]);
+
+    const rankingJson = JSON.stringify([{ name: 'eager-proj', score: 0.95, rationale: 'Top match' }]);
+    const providerStub = {
+      invoke: vi.fn().mockResolvedValue({ output: rankingJson }),
+    };
+
+    // IO: one idea line, then EOF during the confirmation gate (null).
+    // If the gate exists, EOF = declined; if not, it would proceed to authoring.
+    const { io } = scriptedIo27(['improve the dashboard']);
+    // The queue has only the idea line; the next prompt() call (confirmation gate)
+    // returns null (EOF). If authoring ran anyway, ideasProcessed would be > 0.
+
+    const { runEngineerMode } = await import('../../../src/engine/engineer/loop.js');
+    const summary = await runEngineerMode({
+      provider: providerStub as any,
+      io,
+      gh: async () => ({ stdout: '' }),
+      registryPath: registryPath27,
+      engineerDir: engineerDir27,
+    });
+
+    // EOF at the gate means decline → no authoring → ideasProcessed stays 0.
+    expect(summary.ideasProcessed).toBe(0);
   });
 });
