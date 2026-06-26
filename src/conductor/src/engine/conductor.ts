@@ -224,7 +224,7 @@ export interface ConductorOptions {
   /**
    * Daemon mode (Phase 9.1). When true, the in-loop `retro` step is skipped:
    * the daemon's emission step owns narrative production into the cross-project
-   * brain store instead of writing `.docs/retros/` into the feature repo (ADR-002
+   * engineer store instead of writing `.docs/retros/` into the feature repo (ADR-002
    * Option A). Manual `/conduct` runs leave this false and keep writing repo
    * retros unchanged. Default false.
    */
@@ -415,7 +415,7 @@ export class Conductor {
 
       // Phase 9.1 (ADR-002 Option A): under the daemon, skip the in-loop `retro`
       // step. The daemon's emission step owns narrative production into the
-      // cross-project brain store, so writing `.docs/retros/` into the feature
+      // cross-project engineer store, so writing `.docs/retros/` into the feature
       // repo here would be redundant clutter. Manual runs (daemon=false) are
       // unaffected and keep writing repo retros.
       if (this.daemon && step.name === 'retro') {

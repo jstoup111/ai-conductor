@@ -122,21 +122,21 @@ keeps going.
 On failure, conduct sends a desktop notification and drops into an interactive Claude session
 to fix the issue. After you `/quit`, it rechecks artifacts and continues automatically.
 
-Brain supervisor mode (`conduct-ts` only) — a **non-autonomous** REPL that turns a free-form
+Engineer supervisor mode (`conduct-ts` only) — a **non-autonomous** REPL that turns a free-form
 idea into a routed, lesson-informed **spec PR**. It never builds and never merges:
 
 ```bash
-conduct brain
-# brain> add a CSV export to the reporting tool
+conduct engineer
+# engineer> add a CSV export to the reporting tool
 #   → routes the idea across your registered projects (conduct register / create)
 #   → asks you to confirm:  y | n | redirect <project> | create <path>
-#   → pulls relevant prior lessons from the brain store into the spec
+#   → pulls relevant prior lessons from the engineer store into the spec
 #   → authors a spec/<slug> branch (artifacts under .docs/ only) and opens a PR
 ```
 
 Every write is gated on your confirmation (decline = zero writes); a no-remote target still
 commits the spec on a branch (PR step is a non-fatal skip). Registry/store locations come from
-`$AI_CONDUCTOR_REGISTRY` / `$AI_CONDUCTOR_BRAIN_DIR`. See `src/conductor/README.md` for the
+`$AI_CONDUCTOR_REGISTRY` / `$AI_CONDUCTOR_ENGINEER_DIR`. See `src/conductor/README.md` for the
 full flow.
 
 Handles API rate limits by waiting for reset and auto-retrying.
@@ -462,9 +462,9 @@ dedicated test coverage (950+ tests). See the feature comparison in
   stories **and** plans, running each in its own worktree (parallel via `--concurrency N`,
   bounded by `--max-items`), and opening a PR on finish. Per-feature failures are isolated;
   the pool keeps going.
-- **Brain memory store** (daemon only): on each feature completion the daemon emits a
+- **Engineer memory store** (daemon only): on each feature completion the daemon emits a
   structured learning signal + a narrative to a cross-project store at
-  `~/.ai-conductor/brain/` (override with `$AI_CONDUCTOR_BRAIN_DIR`). `signals.jsonl` holds
+  `~/.ai-conductor/engineer/` (override with `$AI_CONDUCTOR_ENGINEER_DIR`). `signals.jsonl` holds
   one append-only JSON line per feature-run (outcome, kickbacks, halts, retry hotspots,
   token spend, per-step durations); `narratives/<project>/<feature>-<runId>.md` holds the
   full retro (`done`) or a short halt note (`halted`). To keep daemon-built repos clean, the

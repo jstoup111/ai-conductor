@@ -38,15 +38,39 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ## [Unreleased]
 
+### Changed
+- **BREAKING (conduct-ts):** renamed the supervisor from **brain** to **engineer**.
+  The CLI subcommand is now `conduct engineer` (was `conduct brain`); the
+  cross-project memory store moved from `~/.ai-conductor/brain/` to
+  `~/.ai-conductor/engineer/`, and its env override from `$AI_CONDUCTOR_BRAIN_DIR`
+  to `$AI_CONDUCTOR_ENGINEER_DIR`. The signal type `BrainSignal` is now
+  `EngineerSignal` and `BrainStoreReader` is now `EngineerStoreReader`. No data
+  format changed — only names and paths. See Migration below.
+
+### Migration
+
+If a previous `conduct-ts` daemon run created a cross-project store under the old
+`brain` name, move it to the new `engineer` location and update any env override
+in your shell profile (`AI_CONDUCTOR_BRAIN_DIR` → `AI_CONDUCTOR_ENGINEER_DIR`).
+
+```bash migration
+# Move the cross-project store dir to its new name (no-op if absent or already moved)
+if [ -d "$HOME/.ai-conductor/brain" ] && [ ! -e "$HOME/.ai-conductor/engineer" ]; then
+  mv "$HOME/.ai-conductor/brain" "$HOME/.ai-conductor/engineer"
+  echo "moved ~/.ai-conductor/brain -> ~/.ai-conductor/engineer"
+fi
+# If you set AI_CONDUCTOR_BRAIN_DIR anywhere, rename it to AI_CONDUCTOR_ENGINEER_DIR.
+```
+
 ### Added
-- conduct-ts: **`conduct brain` supervisor mode** (Phase 9.3). A new
-  non-autonomous, interactive REPL (`conduct brain`) that turns a free-form idea
+- conduct-ts: **`conduct engineer` supervisor mode** (Phase 9.3). A new
+  non-autonomous, interactive REPL (`conduct engineer`) that turns a free-form idea
   into a routed, lesson-informed spec PR — and never builds or merges. Per idea it:
   routes the idea against the project registry via the LLM provider, **requires
   human confirmation** before any write (`y` confirm / `n` decline / `redirect
   <name>` to retarget / `create <path>` when nothing fits → scaffolds + registers
   a new repo via the 9.2 `create` path), selects relevant prior lessons from the
-  brain store (FR-5 flywheel) and injects them into the authoring prompt, authors
+  engineer store (FR-5 flywheel) and injects them into the authoring prompt, authors
   the spec on a `spec/<slug>` branch off the derived default branch (artifacts under
   `.docs/` only — never source), and opens a spec **PR** (`gh pr create`). It
   **never** triggers a build (`buildsRun` stays 0) and **never** merges. No-remote
@@ -54,14 +78,14 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   ledger is still recorded so the FR-12 flywheel trend counts the feature. Each
   idea is isolated by a per-idea try/catch; a decline performs zero writes; a
   redirect to an unknown name is re-prompted. Registry/store locations come from
-  `$AI_CONDUCTOR_REGISTRY` / `$AI_CONDUCTOR_BRAIN_DIR`. Read-only `governorReport`
+  `$AI_CONDUCTOR_REGISTRY` / `$AI_CONDUCTOR_ENGINEER_DIR`. Read-only `governorReport`
   (aggregate spend + kickback/halt/retry rates) and `computeFlywheelTrend`
-  (improving/insufficient_data over brain-planned features) ship as library
-  functions over the brain store.
-- conduct-ts daemon: **structured retro signal + brain memory store** (Phase 9.1).
+  (improving/insufficient_data over engineer-planned features) ship as library
+  functions over the engineer store.
+- conduct-ts daemon: **structured retro signal + engineer memory store** (Phase 9.1).
   On daemon feature completion (`done`/`halted`) the runner emits a structured
-  `BrainSignal` + a narrative to a cross-project store at `~/.ai-conductor/brain/`
-  (override `$AI_CONDUCTOR_BRAIN_DIR`, dir auto-created). `signals.jsonl` is
+  `EngineerSignal` + a narrative to a cross-project store at `~/.ai-conductor/engineer/`
+  (override `$AI_CONDUCTOR_ENGINEER_DIR`, dir auto-created). `signals.jsonl` is
   append-only, one atomic (`O_APPEND`, concurrency-safe) JSON line per
   feature-run: `{schemaVersion, ts, project, feature, runId, outcome, kickbacks[],
   halts[], retryHotspots[], tokens{...}, durationByStep{}, narrativeRef?}` —
@@ -74,7 +98,7 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   narrative, keeping repos free of `.docs/retros/` clutter); manual `/conduct`
   runs are unchanged. Emission is **best-effort** — any store error is logged and
   swallowed, so a learning-signal write can never break a ship. A types-only
-  `BrainStoreReader` interface is exported for the future brain (Phase 9.3).
+  `EngineerStoreReader` interface is exported for the future engineer (Phase 9.3).
 - conduct-ts: project registry + creation (Phase 9.2). A single-writer registry
   module (`src/conductor/src/engine/registry.ts`) owns
   `~/.ai-conductor/registry.json` (override via `$AI_CONDUCTOR_REGISTRY`): atomic

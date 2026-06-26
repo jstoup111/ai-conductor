@@ -152,7 +152,7 @@ and opening a PR on finish:
   a logged reason — the daemon pre-seeds the front half, so eligibility is the only place
   specs are vetted before autonomous build.
 - `engine/daemon-runner.ts` — per-feature discipline: done → mark + remove worktree + PR;
-  halted/error → keep the worktree for the human. On completion it also emits a brain
+  halted/error → keep the worktree for the human. On completion it also emits a engineer
   signal (see below).
 - `engine/daemon-deps.ts` — concrete git/fs primitives (worktree add/remove, spec
   materialization into the worktree, `.pipeline/DONE`/`HALT` outcome read).
@@ -160,15 +160,15 @@ and opening a PR on finish:
 The daemon consumes specs — it never authors them. `--continuous` idle-polls for new
 eligible features, bounded by the ceilings.
 
-### Brain memory store (Phase 9.1)
+### Engineer memory store (Phase 9.1)
 
 On **daemon** feature completion (`done`/`halted`), the runner emits a structured learning
-signal + a narrative to a cross-project store at `~/.ai-conductor/brain/` (override with
-`$AI_CONDUCTOR_BRAIN_DIR`; the dir is auto-created). The store lives outside any repo so
-daemon-built repos stay free of retro clutter. `engine/brain-store.ts` owns it:
+signal + a narrative to a cross-project store at `~/.ai-conductor/engineer/` (override with
+`$AI_CONDUCTOR_ENGINEER_DIR`; the dir is auto-created). The store lives outside any repo so
+daemon-built repos stay free of retro clutter. `engine/engineer-store.ts` owns it:
 
 - `signals.jsonl` — append-only, **one JSON line per feature-run**. Each line is a
-  `BrainSignal`:
+  `EngineerSignal`:
   `{schemaVersion, ts, project, feature, runId, outcome, kickbacks[], halts[],
   retryHotspots[], tokens{input,output,cacheRead,cacheCreation}, durationByStep{},
   narrativeRef?}`. Empty signal categories serialize as `[]`; `narrativeRef` is optional
@@ -180,7 +180,7 @@ daemon-built repos stay free of retro clutter. `engine/brain-store.ts` owns it:
   short halt note (gate + reason, no LLM call).
 
 **Daemon retro redirect (ADR-002 Option A):** under the daemon the in-loop `retro` step is
-**skipped** — the emission step owns narrative production into the brain store instead of
+**skipped** — the emission step owns narrative production into the engineer store instead of
 writing `.docs/retros/` into the feature repo. Manual `/conduct` runs are unaffected and
 still write repo retros. Emission is **best-effort**: every store error is logged and
 swallowed, and the append is a single atomic `O_APPEND` write so concurrent worker
@@ -250,7 +250,7 @@ one place:
 - **Credential redaction** — `redactRemote` strips `user:token@` from `https://`/`ssh://` URLs
   (scp-form `git@host:path` is left intact — it carries no secret) before any write.
 - **Reported failures** — register/create surface a registry write failure as a non-zero exit,
-  never swallowed (contrast the brain store's best-effort emission).
+  never swallowed (contrast the engineer store's best-effort emission).
 - **Malformed registry** — `readRegistry` returns `[]` for an absent file but **throws** on
   invalid JSON; a corrupt registry is surfaced, not masked as empty.
 
@@ -266,45 +266,45 @@ one place:
   push), upsert with `status: created`.
 
 `ProjectRecord` and the registry **read-side** (`createRegistryReader`) are now consumed by the
-brain supervisor (Phase 9.3, below). See `test/engine/registry.test.ts` and
+engineer supervisor (Phase 9.3, below). See `test/engine/registry.test.ts` and
 `test/integration/registry-cli.test.ts`.
 
-### Brain supervisor mode (`conduct brain`)
+### Engineer supervisor mode (`conduct engineer`)
 
-`conduct brain` (dispatched by `engine/brain-cli.ts` via `detectBrainCommand`, **before** the
+`conduct engineer` (dispatched by `engine/engineer-cli.ts` via `detectEngineerCommand`, **before** the
 interactive pipeline boots) is a **non-autonomous** REPL that turns an idea into a routed,
 lesson-informed spec PR. It **never builds and never merges** — the structural guarantee is
-enforced by `test/engine/brain/non-autonomy.test.ts` (the brain source tree imports no
+enforced by `test/engine/engineer/non-autonomy.test.ts` (the engineer source tree imports no
 build/pipeline entry point and issues no `gh pr merge`) and by `summary.buildsRun` staying `0`.
-The loop body lives in `engine/brain/loop.ts` (`runBrainMode(deps)`); `deps` injects the LLM
+The loop body lives in `engine/engineer/loop.ts` (`runEngineerMode(deps)`); `deps` injects the LLM
 `provider`, an `io` surface, and a `gh` runner, so the whole flow is testable headless.
 
 Per non-blank idea (each isolated by a per-idea `try/catch`):
 
-1. **Route** — `routeIdea` (`engine/brain/routing.ts`) ranks registry projects against the idea
+1. **Route** — `routeIdea` (`engine/engineer/routing.ts`) ranks registry projects against the idea
    via the provider and returns candidates (or `createSuggested` when nothing fits).
 2. **Confirmation gate** (human-in-the-loop, mandatory before any write) — `y`/`yes` confirms the
    current target; `n`/`no`/blank declines with **zero writes** (no branch, no PR, no gh call);
    `redirect <name>` retargets to another registered project (unknown name → re-prompted, no
    invented path); `create <path>` (offered on no-fit) scaffolds + registers a new repo through
    the 9.2 `create` path, then commits the scaffold so it is authorable.
-3. **Select lessons** — `selectLessons` (`engine/brain/lesson-store.ts`) pulls the prior lessons
-   relevant to the target from the brain store and `buildAuthoringPrompt` injects the digest into
+3. **Select lessons** — `selectLessons` (`engine/engineer/lesson-store.ts`) pulls the prior lessons
+   relevant to the target from the engineer store and `buildAuthoringPrompt` injects the digest into
    the authoring prompt (no relevant lessons → an explicit empty digest, not unrelated padding).
-4. **Author** — `authorSpec` (`engine/brain/authoring.ts`) creates a `spec/<slug>` branch off the
+4. **Author** — `authorSpec` (`engine/engineer/authoring.ts`) creates a `spec/<slug>` branch off the
    **derived** default branch (never hardcoded `main`), writes artifacts under `.docs/` only, and
    commits; a provider failure rolls back HEAD + deletes the dangling branch.
-5. **Handoff** — `openSpecPr` (`engine/brain/handoff.ts`) opens a spec **PR** (`gh pr create`,
+5. **Handoff** — `openSpecPr` (`engine/engineer/handoff.ts`) opens a spec **PR** (`gh pr create`,
    never `merge`) and records the authored-keys ledger. A target with **no remote** is non-fatal:
    the spec stays committed on the branch and the ledger is still recorded so the FR-12 flywheel
    trend counts the feature.
 
-Read-only reporting over the brain store ships as library functions: `governorReport`
-(`engine/brain/governor.ts`) aggregates spend + kickback/halt/retry rates; `computeFlywheelTrend`
-(`engine/brain/flywheel-trend.ts`) reports `improving` / `insufficient_data` across
-brain-planned features (store ∩ authored-keys ledger). Registry/store paths come from
-`$AI_CONDUCTOR_REGISTRY` / `$AI_CONDUCTOR_BRAIN_DIR`. Acceptance scenarios live in
-`test/acceptance/brain.test.ts`.
+Read-only reporting over the engineer store ships as library functions: `governorReport`
+(`engine/engineer/governor.ts`) aggregates spend + kickback/halt/retry rates; `computeFlywheelTrend`
+(`engine/engineer/flywheel-trend.ts`) reports `improving` / `insufficient_data` across
+engineer-planned features (store ∩ authored-keys ledger). Registry/store paths come from
+`$AI_CONDUCTOR_REGISTRY` / `$AI_CONDUCTOR_ENGINEER_DIR`. Acceptance scenarios live in
+`test/acceptance/engineer.test.ts`.
 
 ## Testing pattern
 

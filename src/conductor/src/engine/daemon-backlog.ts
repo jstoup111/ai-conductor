@@ -61,7 +61,7 @@ export async function discoverBacklog(
 /**
  * Approval signal for autonomous (daemon) work: the stories declare
  * `Status: Accepted` and are not DRAFT. Mirrors the stories gate's Accepted/
- * DRAFT convention (artifacts.ts). When the Phase 9 brain lands, its human
+ * DRAFT convention (artifacts.ts). When the Phase 9 engineer lands, its human
  * approval gate is what sets this marker.
  */
 function isStoriesApproved(content: string): boolean {

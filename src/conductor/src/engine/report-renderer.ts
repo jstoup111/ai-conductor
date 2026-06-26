@@ -30,7 +30,7 @@ export interface ParsedEvent {
 
 /**
  * Parse a raw events.jsonl string into events, skipping malformed lines
- * (resilient parse). Shared by `renderReport` and the brain-store's signal
+ * (resilient parse). Shared by `renderReport` and the engineer-store's signal
  * assembly so both read the log the same way (no parallel parser).
  */
 export function parseEvents(raw: string): ParsedEvent[] {
@@ -47,7 +47,7 @@ export function parseEvents(raw: string): ParsedEvent[] {
   return events;
 }
 
-// ─── Structured aggregates (shared with brain-store) ──────────────────────────
+// ─── Structured aggregates (shared with engineer-store) ──────────────────────────
 
 /** Per-step duration in ms (start→complete). Steps with no completion omitted. */
 export function aggregateDurations(events: ParsedEvent[]): Record<string, number> {
