@@ -75,6 +75,14 @@ export interface BrainSignal {
 export interface BrainStoreReader {
   /** Read all signal records (optionally scoped to a project/feature). */
   readSignals(filter?: { project?: string; feature?: string }): Promise<BrainSignal[]>;
+  /**
+   * Like `readSignals` but also reports the number of malformed / unparseable
+   * lines that were skipped (FR-5 skipped-count observability).
+   */
+  readSignalsWithStats(filter?: {
+    project?: string;
+    feature?: string;
+  }): Promise<{ signals: BrainSignal[]; skipped: number }>;
 }
 
 /**
@@ -103,36 +111,62 @@ export interface BrainStoreReaderOpts {
  */
 export function createBrainStoreReader(opts: BrainStoreReaderOpts = {}): BrainStoreReader {
   const dir = opts.brainDir ?? resolveBrainDir({ home: opts.home, env: opts.env });
+
+  /**
+   * Core parse helper: reads signals.jsonl and returns both the valid signals
+   * and the count of skipped malformed lines. Used by both `readSignals` and
+   * `readSignalsWithStats` to avoid duplication.
+   */
+  async function parseSignalsFile(filter?: {
+    project?: string;
+    feature?: string;
+  }): Promise<{ signals: BrainSignal[]; skipped: number }> {
+    let raw: string;
+    try {
+      raw = await readFile(join(dir, SIGNALS_LOG), 'utf-8');
+    } catch {
+      // Missing or unreadable file → empty result (store not yet written to).
+      return { signals: [], skipped: 0 };
+    }
+
+    // Reuse the same resilient line-parse pattern as parseEvents() in
+    // report-renderer.ts: split on newlines, skip blank + malformed lines.
+    const signals: BrainSignal[] = [];
+    let skipped = 0;
+    for (const line of raw.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(trimmed);
+      } catch {
+        // Count malformed lines for observability (FR-5 skipped-count).
+        skipped++;
+        continue;
+      }
+      if (typeof parsed !== 'object' || parsed === null) {
+        skipped++;
+        continue;
+      }
+      const sig = parsed as BrainSignal;
+      if (filter?.project !== undefined && sig.project !== filter.project) continue;
+      if (filter?.feature !== undefined && sig.feature !== filter.feature) continue;
+      signals.push(sig);
+    }
+    return { signals, skipped };
+  }
+
   return {
     async readSignals(filter?: { project?: string; feature?: string }): Promise<BrainSignal[]> {
-      let raw: string;
-      try {
-        raw = await readFile(join(dir, SIGNALS_LOG), 'utf-8');
-      } catch {
-        // Missing or unreadable file → empty result (store not yet written to).
-        return [];
-      }
-
-      // Reuse the same resilient line-parse pattern as parseEvents() in
-      // report-renderer.ts: split on newlines, skip blank + malformed lines.
-      const signals: BrainSignal[] = [];
-      for (const line of raw.split('\n')) {
-        const trimmed = line.trim();
-        if (!trimmed) continue;
-        let parsed: unknown;
-        try {
-          parsed = JSON.parse(trimmed);
-        } catch {
-          // skip malformed lines
-          continue;
-        }
-        if (typeof parsed !== 'object' || parsed === null) continue;
-        const sig = parsed as BrainSignal;
-        if (filter?.project !== undefined && sig.project !== filter.project) continue;
-        if (filter?.feature !== undefined && sig.feature !== filter.feature) continue;
-        signals.push(sig);
-      }
+      const { signals } = await parseSignalsFile(filter);
       return signals;
+    },
+
+    async readSignalsWithStats(filter?: {
+      project?: string;
+      feature?: string;
+    }): Promise<{ signals: BrainSignal[]; skipped: number }> {
+      return parseSignalsFile(filter);
     },
   };
 }

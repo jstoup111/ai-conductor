@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm } from 'fs/promises';
+import { mkdtemp, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import {
@@ -132,5 +132,44 @@ describe('createBrainStoreReader / readSignals', () => {
     } finally {
       await rm(altDir, { recursive: true, force: true });
     }
+  });
+
+  // ── Task 4: empty-file + skipped-count ───────────────────────────────────────
+
+  it('returns empty array when signals.jsonl exists but is empty (or whitespace-only)', async () => {
+    // Create an empty signals.jsonl (file exists but has no content)
+    await writeFile(join(brainDir, 'signals.jsonl'), '', 'utf-8');
+    const reader = createBrainStoreReader();
+    const results = await reader.readSignals();
+    expect(results).toEqual([]);
+
+    // Also verify whitespace-only file behaves the same
+    await writeFile(join(brainDir, 'signals.jsonl'), '   \n  \n', 'utf-8');
+    const results2 = await reader.readSignals();
+    expect(results2).toEqual([]);
+  });
+
+  it('readSignalsWithStats reports skipped count for malformed lines', async () => {
+    // Seed 2 valid signals and 3 malformed lines
+    const sig1 = makeSignal({ project: 'alpha', feature: 'feat-a', runId: 'rs1' });
+    const sig2 = makeSignal({ project: 'alpha', feature: 'feat-b', runId: 'rs2' });
+    await appendSignal(brainDir, sig1);
+    await writeFile(
+      join(brainDir, 'signals.jsonl'),
+      // Overwrite so we control exact content: 2 valid + 3 malformed lines
+      [
+        JSON.stringify(sig1),
+        'NOT VALID JSON',
+        '{broken:',
+        JSON.stringify(sig2),
+        'also bad',
+      ].join('\n') + '\n',
+      'utf-8',
+    );
+
+    const reader = createBrainStoreReader();
+    const { signals, skipped } = await reader.readSignalsWithStats();
+    expect(signals).toHaveLength(2);
+    expect(skipped).toBe(3);
   });
 });
