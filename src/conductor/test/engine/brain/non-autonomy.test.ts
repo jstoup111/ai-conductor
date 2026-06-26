@@ -365,6 +365,214 @@ describe('brain import graph: structural non-autonomy (FR-10, ADR-005)', () => {
   });
 });
 
+// ─── Test suite 1b: Self-edit propose-only path (FR-10 negative path) ────────
+//
+// The brain may target the harness repo itself (a "self-edit") in exactly the
+// same way it targets any other registry project:
+//   1. It opens a spec/* branch in the harness repo.
+//   2. It commits authored spec artifacts to that branch.
+//   3. It calls `gh pr create` (via handoff.ts) — PROPOSE ONLY.
+//   4. It NEVER calls `gh pr merge`, NEVER auto-applies a patch (git apply),
+//      NEVER force-writes into the harness working tree outside the spec
+//      branch commit, NEVER invokes the conductor/pipeline entry to build.
+//
+// The assertions below are structural scans of the actual brain source.  They
+// pass today (the invariant already holds) and will FAIL immediately if anyone
+// adds an auto-merge, auto-apply, or direct-write bypass for self-edit targets.
+//
+// SELF-EDIT FORBIDDEN PATTERNS
+// ─────────────────────────────
+// In addition to the existing FORBIDDEN_TOKEN_PATTERNS (which cover 'merge' as
+// a quoted argument and 'pr merge' as a shell-string form), the self-edit path
+// adds three extra categories:
+//
+//   A. `git apply` — applies a patch file directly to the working tree without
+//      going through a spec branch PR; forbidden in ALL brain sources.
+//   B. Inline `git checkout -- <path>` on harness paths — force-overwrites
+//      tracked files outside the spec branch commit; forbidden.
+//      We detect the form `checkout -- ` which always means "restore a file
+//      to its committed/index state" (destructive to working-tree files).
+//   C. A pipeline entry call (`conduct`, `pipeline`, `step-runners`) triggered
+//      for a self-edit target — any call that starts a build rather than just
+//      proposing a spec PR; covered by the existing FORBIDDEN_MODULE_SUFFIXES
+//      check (suite 1 already asserts those modules are unreachable), but
+//      explicitly re-stated here for the self-edit context.
+//
+// HARNESS-TARGET SPECIFIC FALSIFIABILITY
+// ───────────────────────────────────────
+// We add a targeted falsifiability check: a synthetic source that would represent
+// "someone added an auto-apply for harness targets" is confirmed to trigger the
+// new patterns, proving the scanner would catch a real regression.
+
+describe('brain self-edit: propose-only PR invariant (FR-10 negative path)', () => {
+  // Re-use the same reachable set seeded from BRAIN_ENTRY_ROOTS (computed once
+  // in the outer scope — replicated here to keep the describe self-contained).
+  const reachable = buildReachableSet(BRAIN_ENTRY_ROOTS);
+
+  /**
+   * Self-edit-specific forbidden patterns scanned against the brain reachable set.
+   *
+   * These are DISTINCT from FORBIDDEN_TOKEN_PATTERNS: they target auto-apply and
+   * force-write forms rather than the merge-command form already covered above.
+   */
+  const SELF_EDIT_FORBIDDEN_PATTERNS: Array<{ label: string; re: RegExp }> = [
+    {
+      label: "'git apply' — direct patch application to working tree (bypasses spec PR)",
+      // Matches both forms:
+      //   Array form:  ['git', 'apply', ...]   → git', 'apply
+      //   Shell form:  exec('git apply ...')   → 'git apply
+      // Uses two alternatives joined by |.
+      // Does NOT match pure comment lines (negative lookbehind for \s*// at line start).
+      re: /(?<!^\s*\/\/.*)(?:['"]git['"]\s*,\s*['"]apply|['"]git\s+apply)/m,
+    },
+    {
+      label: "'checkout -- ' — force-restore working-tree files outside spec branch commit",
+      // Matches 'checkout', '--' or "checkout -- " as a command token.
+      // The `-- ` form (checkout followed by --) is the git flag that switches
+      // from branch-name to file-restore mode — it force-writes tracked files.
+      // Does NOT match `checkout -b` (branch creation, which authoring.ts uses
+      // legitimately) because `-b` is not `--` followed by a space.
+      re: /(?<!^\s*\/\/.*)['"]checkout['"]\s*,\s*['"]--['"](?!\s*['"](?:-b|abbrev-ref|HEAD))/m,
+    },
+    {
+      label: "'pr merge' as array token — auto-merge via runner(['pr','merge',...])",
+      // Belt-and-suspenders for the self-edit path specifically: any runner call
+      // with 'merge' after 'pr' as separate array tokens.
+      // (This overlaps with FORBIDDEN_TOKEN_PATTERNS[0] intentionally — the
+      // self-edit describe block is meant to be independently readable.)
+      re: /(?<!^\s*\/\/.*)['"]pr['"]\s*,\s*['"]merge['"]/m,
+    },
+  ];
+
+  it('reachable set is non-empty (sanity: walk seeded correctly for self-edit suite)', () => {
+    expect(reachable.size).toBeGreaterThan(0);
+    // handoff.ts must be present — it is the ONLY sanctioned PR-opening path.
+    const handoffTs = join(CONDUCTOR_SRC, 'engine/brain/handoff.ts');
+    expect(reachable.has(handoffTs)).toBe(true);
+  });
+
+  it('no brain source auto-applies patches, force-restores files, or auto-merges PRs', () => {
+    // Scan every reachable brain source for auto-apply / force-write / auto-merge
+    // patterns. Collect ALL violations so the failure message is complete.
+    const violations: string[] = [];
+
+    for (const filePath of reachable) {
+      let source: string;
+      try {
+        source = readFileSync(filePath, 'utf-8');
+      } catch {
+        continue;
+      }
+
+      for (const { label, re } of SELF_EDIT_FORBIDDEN_PATTERNS) {
+        if (re.test(source)) {
+          const lines = source.split('\n');
+          const matchingLines = lines
+            .filter((line) => re.test(line))
+            .slice(0, 3)
+            .map((l) => l.trim());
+          violations.push(
+            `[${label}] in ${filePath.replace(CONDUCTOR_SRC + '/', '')}: ` +
+              matchingLines.join(' | '),
+          );
+        }
+      }
+    }
+
+    expect(
+      violations,
+      `Brain reachable graph contains self-edit auto-apply/auto-merge forbidden tokens:\n${violations.join('\n')}`,
+    ).toHaveLength(0);
+  });
+
+  it('handoff.ts uses only pr create — never pr merge — for ANY target including self', () => {
+    // Load handoff.ts directly (it is the ONLY sanctioned spec-PR-opening module).
+    // Assert that the ONLY gh subcommand token present is 'create', not 'merge'.
+    // This is the most targeted assertion: even if a self-edit code path were
+    // added to handoff.ts that called 'pr merge', this test fails.
+    const handoffTs = join(CONDUCTOR_SRC, 'engine/brain/handoff.ts');
+    const handoffSrc = readFileSync(handoffTs, 'utf-8');
+
+    // 'create' must appear as a runner arg token — it is the sanctioned operation.
+    expect(handoffSrc).toMatch(/['"]create['"]/);
+
+    // 'merge' must NOT appear as a runner arg token in handoff.ts.
+    // We use the same pattern as FORBIDDEN_TOKEN_PATTERNS[0] applied to this file.
+    const mergeAsToken = /['"]merge['"]/;
+    expect(
+      mergeAsToken.test(handoffSrc),
+      "handoff.ts must never contain 'merge' as a string token — self-edit PRs are propose-only",
+    ).toBe(false);
+  });
+
+  it('authoring.ts does not contain git-apply or force-checkout-restore forms', () => {
+    // authoring.ts does use `git checkout -b` (branch creation) and
+    // `git checkout <defaultBranch>` (restoring HEAD after authoring) — both
+    // are legitimate. But it must NOT use `git checkout -- <file>` (force-restore
+    // of working-tree files) or `git apply` (direct patch application).
+    const authoringTs = join(CONDUCTOR_SRC, 'engine/brain/authoring.ts');
+    const authoringSrc = readFileSync(authoringTs, 'utf-8');
+
+    // MUST NOT contain 'git apply' in any form.
+    const gitApplyPattern = /['"]git['"]\s*,\s*['"]apply['"]|['"]git\s+apply['"]/;
+    expect(
+      gitApplyPattern.test(authoringSrc),
+      "authoring.ts must not contain 'git apply' — patches must go through spec PR",
+    ).toBe(false);
+
+    // The checkout -- <file> form must not appear.
+    // Legitimate uses: ['checkout', '-b', ...], ['checkout', defaultBranch].
+    // Forbidden: ['checkout', '--', '<file>'] which force-restores working-tree files.
+    const checkoutRestorePattern = /['"]checkout['"]\s*,\s*['"]--['"]\s*,\s*['"]/;
+    expect(
+      checkoutRestorePattern.test(authoringSrc),
+      "authoring.ts must not use 'git checkout -- <file>' (force-restore) outside spec branch commit",
+    ).toBe(false);
+  });
+
+  it('brain does NOT import conductor.ts pipeline entry for self-edit targets (re-stated for self-edit context)', () => {
+    // Any self-edit path that called the pipeline entry would bypass the propose-only
+    // PR model entirely (it would RUN the build, not just propose the spec).
+    // This is a re-statement of the suite-1 import-graph check, scoped to the
+    // self-edit invariant so the failure message is unambiguous.
+    const conductorTs = join(CONDUCTOR_SRC, 'engine/conductor.ts');
+    expect(
+      reachable.has(conductorTs),
+      'VIOLATION (self-edit path): brain transitively imports engine/conductor.ts — ' +
+        'a self-edit must propose via PR, not run the pipeline',
+    ).toBe(false);
+  });
+
+  // ── Falsifiability: self-edit forbidden patterns fire on bad input ──────────
+
+  it('FALSIFIABILITY: self-edit forbidden patterns fire on known adversarial inputs', () => {
+    // Pattern 0: git apply — array form
+    const gitApplyArray = `await runner(['git', 'apply', patchFile], { cwd: harnessCwd });`;
+    expect(SELF_EDIT_FORBIDDEN_PATTERNS[0].re.test(gitApplyArray)).toBe(true);
+
+    // Pattern 0: git apply — shell-string form
+    const gitApplyShell = `exec('git apply --3way patch.diff', { cwd: harnessCwd });`;
+    // The shell-string form uses "git apply" as a single string — pattern 0 matches it.
+    expect(SELF_EDIT_FORBIDDEN_PATTERNS[0].re.test(gitApplyShell)).toBe(true);
+
+    // Pattern 1: checkout -- <file> — force-restore form
+    const checkoutRestore = `await runner(['git', 'checkout', '--', 'src/conductor.ts'], { cwd });`;
+    expect(SELF_EDIT_FORBIDDEN_PATTERNS[1].re.test(checkoutRestore)).toBe(true);
+
+    // Pattern 1: 'checkout -b' must NOT fire (legitimate branch creation).
+    const checkoutBranch = `await runner(['git', 'checkout', '-b', branch, defaultBranch], { cwd });`;
+    expect(SELF_EDIT_FORBIDDEN_PATTERNS[1].re.test(checkoutBranch)).toBe(false);
+
+    // Pattern 2: pr merge as separate array tokens
+    const prMergeArray = `await runner(['pr', 'merge', '--squash', prUrl], { cwd: harnessCwd });`;
+    expect(SELF_EDIT_FORBIDDEN_PATTERNS[2].re.test(prMergeArray)).toBe(true);
+
+    // pr create must NOT fire pattern 2 (it is the sanctioned output).
+    const prCreateArray = `await runner(['pr', 'create', '--fill', '--head', branch], { cwd });`;
+    expect(SELF_EDIT_FORBIDDEN_PATTERNS[2].re.test(prCreateArray)).toBe(false);
+  });
+});
+
 // ─── Test suite 2: Detached daemon spawn (FR-8, ADR-005 Condition 2) ─────────
 
 describe('brain daemon launch: detached spawn guarantees (FR-8)', () => {
