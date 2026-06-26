@@ -23,8 +23,19 @@
 //   unknown name (reprompt), decline/empty (declined), and near-tie
 //   (needs-choice). onAuthor is an optional spy/callback; it is NEVER called
 //   on declined — verified structurally here and by tests.
+//
+// createOnNoFit (Task 19, FR-4) — create-on-no-fit → 9.2 create + retarget:
+//   When routing yields no fit and the user confirms "create new project",
+//   invokes an injected CreateFn (scaffold + register a new project), then
+//   re-resolves the TargetRepo from the newly created registry record so
+//   subsequent authoring targets the new repo's canonical path.
+//
+//   Decision signal: empty/whitespace name → declined (no-op, no side effects).
+//   All I/O (create fn, registry reader) is injected so tests use fakes and
+//   assert call counts / non-invocation. No real git, no subprocess, no network.
 
 import type { ProjectRecord, RegistryReader } from '../registry.js';
+import type { TargetRepo } from './target.js';
 
 export type RoutingOutcome =
   | { kind: 'confirmed'; project: ProjectRecord }
@@ -319,4 +330,99 @@ export function handleGateResponse(
   // Return 'reprompt' carrying the unrecognised name for the UI to surface.
   // No project path is invented or fabricated.
   return { kind: 'reprompt', unknownName: response.trim() };
+}
+
+// ---------------------------------------------------------------------------
+// createOnNoFit (Task 19, FR-4) — create-and-retarget.
+//
+// When the routing gate yields no fit and the operator confirms a new project
+// name, this function:
+//   1. Guards against decline: an empty or whitespace-only name is treated as a
+//      decline (no-op). Returns { kind: 'declined' } immediately — createFn is
+//      NEVER called.
+//   2. Calls createFn(name) to scaffold + register the new project. Any error
+//      from createFn is propagated directly — no swallowing, no orphan state.
+//   3. Re-resolves the new project from the registry reader (by listing all
+//      projects and finding the exact name match). If the record is absent after
+//      create (wrong registry path, silent write failure) an explicit error is
+//      thrown rather than returning a fabricated or undefined target.
+//   4. Returns { kind: 'created', target: TargetRepo } with the canonical path
+//      from the registry record — NOT constructed from the name string.
+//
+// IMPORTANT: The registry reader is queried ONLY after a successful createFn
+// call. If createFn throws, the reader is never touched (no orphan lookup).
+// ---------------------------------------------------------------------------
+
+/**
+ * Injected create function (corresponds to the 9.2 `conduct create` path).
+ * Accepts the project name and resolves when scaffold + registry write succeed.
+ * Any failure must reject — the caller (createOnNoFit) propagates it.
+ */
+export type CreateFn = (name: string) => Promise<void>;
+
+/**
+ * Discriminated return type for createOnNoFit.
+ *   created  — scaffold succeeded; target carries the new project's canonical path.
+ *   declined — name was empty/whitespace; nothing was created; no authoring.
+ */
+export type CreateOnNoFitResult =
+  | { kind: 'created'; target: TargetRepo }
+  | { kind: 'declined' };
+
+/**
+ * createOnNoFit — FR-4 implementation.
+ *
+ * @param name           The project name supplied by the operator. Empty /
+ *                       whitespace signals a decline — nothing is created.
+ * @param createFn       Injected scaffold+register function (no real subprocess
+ *                       in tests).
+ * @param registryReader Injected reader used to re-resolve the new record after
+ *                       create. Must reflect the post-create registry state.
+ * @returns              CreateOnNoFitResult — { kind: 'created', target } on
+ *                       success, { kind: 'declined' } when name is blank.
+ * @throws               When createFn rejects (propagated verbatim), or when
+ *                       the newly created project cannot be found in the
+ *                       registry after a successful createFn call, or when the
+ *                       registry is corrupt/unreadable after the create.
+ */
+export async function createOnNoFit(
+  name: string,
+  createFn: CreateFn,
+  registryReader: RegistryReader,
+): Promise<CreateOnNoFitResult> {
+  // ── 1. Decline guard ───────────────────────────────────────────────────────
+  // Empty or whitespace-only name → treat as a user declining the create offer.
+  // createFn is NEVER invoked; the reader is NEVER touched; no side effects.
+  if (name.trim() === '') {
+    return { kind: 'declined' };
+  }
+
+  // ── 2. Scaffold + register via injected createFn ───────────────────────────
+  // Any error propagates directly — no swallowing, no retry. The reader is only
+  // queried AFTER a successful create so there are no orphan registry lookups.
+  await createFn(name);
+
+  // ── 3. Re-resolve from the registry ───────────────────────────────────────
+  // List all projects from the (now-updated) registry and find the new record
+  // by name. This may throw if the registry is corrupt/unreadable after create
+  // (error propagates directly — stops all further authoring).
+  const projects = await registryReader.listProjects();
+  const record = projects.find((p) => p.name === name);
+
+  if (record === undefined) {
+    throw new Error(
+      `createOnNoFit: project "${name}" not found in registry after create. ` +
+        'The registry write may have targeted the wrong path or failed silently.',
+    );
+  }
+
+  // ── 4. Build and return the TargetRepo from the canonical registry record ──
+  // canonicalPath comes from the record — never constructed from the name string.
+  const target: TargetRepo = {
+    name: record.name,
+    canonicalPath: record.path,
+    ...(record.remote !== undefined ? { remote: record.remote } : {}),
+  };
+
+  return { kind: 'created', target };
 }
