@@ -85,10 +85,9 @@ export async function recordAuthoredKey(
     throw new Error('recordAuthoredKey: feature must not be empty');
   }
 
-  const path = ledgerPath(opts);
-
-  // Ensure the brain dir exists before attempting a read.
+  // Resolve the brain dir once; derive both the mkdir target and file path from it.
   const dir = opts.brainDir ?? resolveBrainDir({ home: opts.home, env: opts.env });
+  const path = join(dir, LEDGER_FILE);
   await mkdir(dir, { recursive: true });
 
   // Read the existing ledger (or start from an empty set).
@@ -122,9 +121,18 @@ export async function readAuthoredKeys(
   let raw: string;
   try {
     raw = await readFile(path, 'utf-8');
-  } catch {
-    // ENOENT (or any read error) → treat as empty ledger.
-    return [];
+  } catch (err) {
+    // ENOENT → file genuinely absent, treat as empty ledger.
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      return [];
+    }
+    // Any other error (EACCES, EISDIR, ENOTDIR, …) → surface it so the
+    // caller learns the ledger is unreadable (consistent with the
+    // malformed-JSON branch that also names the file).
+    throw new Error(
+      `authored-keys.json at ${path} could not be read: ` +
+        `${err instanceof Error ? err.message : String(err)}`,
+    );
   }
 
   let parsed: unknown;

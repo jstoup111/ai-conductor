@@ -83,7 +83,7 @@ describe('resolveTargetRepo', () => {
     const reader = createRegistryReader({ registryPath });
     const unknownPath = join(tmpDir, 'unknown-project');
 
-    await expect(resolveTargetRepo(unknownPath, reader)).rejects.toThrow();
+    await expect(resolveTargetRepo(unknownPath, reader)).rejects.toThrow(unknownPath);
   });
 
   it('TargetRepo shape has name, canonicalPath, and optional remote', () => {

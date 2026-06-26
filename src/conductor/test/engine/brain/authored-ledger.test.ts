@@ -94,6 +94,17 @@ describe('authored-keys ledger', () => {
     await expect(readAuthoredKeys({ env })).rejects.toThrow(/authored-keys\.json/);
   });
 
+  // ── (f) non-ENOENT read error → surfaces rather than returning [] ─────────
+  it('throws (does not return []) when the ledger path is a directory (EISDIR)', async () => {
+    // Create the ledger path AS A DIRECTORY so readFile yields EISDIR (not ENOENT).
+    // This proves the ENOENT-only swallow: a genuinely-absent file still returns [],
+    // but any other read failure must surface so callers learn the ledger is broken.
+    const ledgerDir = join(tempDir, 'authored-keys.json');
+    await mkdir(ledgerDir, { recursive: true });
+
+    await expect(readAuthoredKeys({ env })).rejects.toThrow(/authored-keys\.json/);
+  });
+
   // ── adversarial: project/feature with special characters ─────────────────
   it('handles project and feature names containing colons and slashes', async () => {
     await recordAuthoredKey('org/repo', 'feat:v2/sub', { env });
