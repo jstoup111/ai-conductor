@@ -680,3 +680,98 @@ describe('Task 30: fan-out partial-failure isolation + deselect (FR-4)', () => {
     expect(summary.buildsRun ?? 0).toBe(0);
   });
 });
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Task 36 (FR-7/FR-10): Spec PR opened; never builds/merges.
+// Test: after authoring, handoff OPENS a spec PR (inject gh/PR seam), reports
+// the PR URL, and RETURNS to the loop. Assert: NEVER calls gh pr merge / any
+// merge / any build. PR-open failure names the branch in the error. No idea→build
+// path. Self-edit to conduct itself is also just a PR (no special build path).
+// ═════════════════════════════════════════════════════════════════════════════
+
+/** Registry record WITH a remote field for PR-path tests. */
+function makeRecordWithRemote(path: string, name: string, remote = 'https://example.invalid/x.git') {
+  return { ...makeRecord(path, name), remote };
+}
+
+describe('Task 36: spec PR opened, never merge/build (FR-7, FR-10)', () => {
+  it('after authoring: PR URL is reported, loop continues without merging', async () => {
+    const dirA = join(workDir, 'alpha');
+    await initRepo(dirA);
+    await writeRegistry([makeRecordWithRemote(dirA, 'alpha')]);
+
+    const { runEngineerMode } = await loadLoop();
+    const { provider } = makeTestProvider({ routeTo: 'alpha' });
+    const prUrl = 'https://example.invalid/alpha/pull/42';
+    const { gh, calls } = makeTestGh(prUrl);
+    const { io, text } = scriptedIo(['add csv export', 'y', 'exit']);
+
+    const summary = await runEngineerMode({ provider, io, gh, registryPath, engineerDir });
+
+    // PR URL reported in output
+    expect(text()).toMatch(/pull\/42/);
+    // PR opened (at least one 'pr create' call)
+    expect(calls.some((a) => a[0] === 'pr' && a[1] === 'create')).toBe(true);
+    // NO merge call on ANY path
+    expect(calls.some((a) => a.includes('merge'))).toBe(false);
+    // NO build triggered
+    expect(summary.buildsRun ?? 0).toBe(0);
+  });
+
+  it('NEVER calls merge across all gh invocations (security invariant)', async () => {
+    const dirA = join(workDir, 'alpha');
+    await initRepo(dirA);
+    await writeRegistry([makeRecordWithRemote(dirA, 'alpha')]);
+
+    const { runEngineerMode } = await loadLoop();
+    const { provider } = makeTestProvider({ routeTo: 'alpha' });
+    const { gh, calls } = makeTestGh();
+    const { io } = scriptedIo(['some idea', 'y', 'exit']);
+
+    const summary = await runEngineerMode({ provider, io, gh, registryPath, engineerDir });
+
+    // Exhaustive check: no call may contain 'merge' in any arg position
+    for (const callArgs of calls) {
+      expect(callArgs.join(' ')).not.toMatch(/\bmerge\b/);
+    }
+    expect(summary.buildsRun ?? 0).toBe(0);
+  });
+
+  it('no-remote target → non-fatal skip, work preserved, no merge attempted', async () => {
+    const dirA = join(workDir, 'local');
+    await initRepo(dirA, /* withRemote */ false);
+    await writeRegistry([makeRecord(dirA, 'local')]); // no remote field
+
+    const { runEngineerMode } = await loadLoop();
+    const { provider } = makeTestProvider({ routeTo: 'local' });
+    const { gh, calls } = makeTestGh();
+    const { io, text } = scriptedIo(['offline idea', 'y', 'exit']);
+
+    const summary = await runEngineerMode({ provider, io, gh, registryPath, engineerDir });
+
+    // Non-fatal exit
+    expect(summary.exitCode ?? 0).toBe(0);
+    // Output indicates no remote / PR skip
+    expect(text()).toMatch(/no remote|PR (could not|skip)|branch/i);
+    // No merge call attempted on skip path
+    for (const callArgs of calls) {
+      expect(callArgs).not.toContain('merge');
+    }
+    // Spec branch exists (work preserved)
+    const branches = (await execFile('git', ['branch', '--list', 'spec/*'], { cwd: dirA })).stdout;
+    expect(branches).toMatch(/spec\//);
+    expect(summary.buildsRun ?? 0).toBe(0);
+  });
+
+  it('[static] loop.ts has no gh pr merge call anywhere in the source', async () => {
+    const src = await readFile(loopSrcPath(), 'utf8');
+    // The engineer must never call gh pr merge or any merge subcommand
+    expect(src).not.toMatch(/pr['"],\s*['"]merge|pr merge/);
+    expect(src).not.toMatch(/['"]merge['"]/);
+  });
+
+  it('[static] loop.ts imports no pipeline/build entry point', async () => {
+    const src = await readFile(loopSrcPath(), 'utf8');
+    expect(src).not.toMatch(/from ['"].*(pipeline|build)['"]/);
+  });
+});
