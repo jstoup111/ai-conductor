@@ -36,6 +36,7 @@ import { buildAuthoringPrompt, authorSpec } from './authoring.js';
 import { openSpecPr } from './handoff.js';
 import { recordAuthoredKey } from './authored-ledger.js';
 import { runCreate } from '../registry-cli.js';
+import { ensureRunning } from '../daemon-lock.js';
 
 const execFile = promisify(execFileCb);
 
@@ -75,6 +76,15 @@ export interface EngineerDeps {
   registryPath?: string;
   /** Direct engineer directory path override (takes priority over env). */
   engineerDir?: string;
+  /**
+   * Injectable launch function for ensureRunning (FR-21, Task 37).
+   * Called with the target's repoPath after spec artifacts land (PR opened or
+   * locally committed). Fire-and-forget — errors are swallowed.
+   * When absent, defaults to ensureRunning from daemon-lock.ts with no explicit
+   * launch override (real detached spawn).
+   * Injecting a spy here lets tests assert "was called" without spawning processes.
+   */
+  ensureRunningLaunch?: (repoPath: string) => void | Promise<void>;
 }
 
 /**
@@ -198,7 +208,7 @@ export async function runEngineerMode(deps: EngineerDeps): Promise<EngineerSessi
     // Wrapped in try/catch for per-idea failure isolation.
     // On failure: print error, continue (do NOT increment ideasProcessed).
     try {
-      await processIdea(trimmed, deps, registryReader, routingProvider, lessonStore, io, summary);
+      await processIdea(trimmed, deps, registryReader, routingProvider, lessonStore, io, summary, deps.ensureRunningLaunch);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       io.print(`Error processing idea: ${msg}`);
@@ -219,6 +229,7 @@ async function processIdea(
   lessonStore: ReturnType<typeof createJsonlLessonStore>,
   io: EngineerIO,
   summary: EngineerSessionSummary,
+  launchFn?: (repoPath: string) => void | Promise<void>,
 ): Promise<void> {
   // Step 1: Route the idea.
   const routingResult = await routeIdea(idea, registryReader, routingProvider);
@@ -455,7 +466,28 @@ async function processIdea(
     io.print(`No remote configured — PR could not be opened. Spec committed on branch "${branch}".`);
   }
 
-  // 4f. Record the authored entry and increment counter.
+  // 4f. Wire ensure-running (FR-21, Task 37): after spec artifacts land, fire-and-
+  //     forget a daemon probe for the target repo. Uses the injected launchFn if
+  //     present (tests spy on it); falls back to ensureRunning with the real
+  //     launchDaemonDetached. Errors are swallowed — this is not on the critical
+  //     path, and a failed ensure-running must never abort spec authoring.
+  //
+  //     CONTRACT: ensureRunning is the ENSURE-NOT-MANAGE boundary. It fires at most
+  //     once per authored idea (one call per PR opened or per local commit). The
+  //     engineer NEVER sends lifecycle signals to a running daemon.
+  try {
+    if (launchFn) {
+      // Injected launch spy: used by tests to assert call count + repoPath.
+      await Promise.resolve(launchFn(target.canonicalPath));
+    } else {
+      // Real path: ensureRunning probes the pidfile; spawns detached iff no live daemon.
+      await ensureRunning(target.canonicalPath, {});
+    }
+  } catch {
+    // Fire-and-forget: ensure-running failure must never block the engineer loop.
+  }
+
+  // 4g. Record the authored entry and increment counter.
   // This happens on BOTH the PR-opened and no-remote paths (work was done).
   summary.authored!.push({ project: target.name });
   summary.ideasProcessed += 1;

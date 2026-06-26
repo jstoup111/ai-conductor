@@ -775,3 +775,133 @@ describe('Task 36: spec PR opened, never merge/build (FR-7, FR-10)', () => {
     expect(src).not.toMatch(/from ['"].*(pipeline|build)['"]/);
   });
 });
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Task 37 (FR-21/FR-7): ensure-running wired after handoff.
+// Test: after spec artifacts land (PR opened), the loop calls ensureRunning for
+// the TARGET repo (inject the launch seam; assert it is invoked with the target's
+// repoPath, exactly the ensure-not-manage contract).
+// On a path where nothing was authored, ensure-running is NOT spuriously called.
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe('Task 37: ensure-running wired after handoff (FR-21)', () => {
+  it('after PR opened: ensureRunning called with the target repoPath (injected launch spy)', async () => {
+    const dirA = join(workDir, 'alpha');
+    await initRepo(dirA);
+    await writeRegistry([makeRecordWithRemote(dirA, 'alpha')]);
+
+    const { runEngineerMode } = await loadLoop();
+    const { provider } = makeTestProvider({ routeTo: 'alpha' });
+    const { gh } = makeTestGh();
+
+    // Inject a launch spy into the engineer deps
+    const launchCalls: string[] = [];
+    const ensureRunningLaunch = (repoPath: string) => {
+      launchCalls.push(repoPath);
+    };
+
+    const { io } = scriptedIo(['add feature', 'y', 'exit']);
+
+    const summary = await runEngineerMode({
+      provider,
+      io,
+      gh,
+      registryPath,
+      engineerDir,
+      ensureRunningLaunch,
+    });
+
+    // ensureRunning must have been called for the target repo
+    expect(launchCalls).toHaveLength(1);
+    expect(launchCalls[0]).toBe(dirA);
+    expect(summary.buildsRun ?? 0).toBe(0);
+  });
+
+  it('on no-author path (declined): ensure-running NOT called spuriously', async () => {
+    const dirA = join(workDir, 'alpha');
+    await initRepo(dirA);
+    await writeRegistry([makeRecord(dirA, 'alpha')]);
+
+    const { runEngineerMode } = await loadLoop();
+    const { provider } = makeTestProvider({ routeTo: 'alpha' });
+    const { gh } = makeTestGh();
+
+    const launchCalls: string[] = [];
+    const ensureRunningLaunch = (repoPath: string) => {
+      launchCalls.push(repoPath);
+    };
+
+    const { io } = scriptedIo(['some idea', 'n', 'exit']);
+
+    await runEngineerMode({
+      provider,
+      io,
+      gh,
+      registryPath,
+      engineerDir,
+      ensureRunningLaunch,
+    });
+
+    // Nothing authored → ensure-running must NOT be called
+    expect(launchCalls).toHaveLength(0);
+  });
+
+  it('on no-author path (exit immediately): ensure-running NOT called', async () => {
+    await writeRegistry([]);
+
+    const { runEngineerMode } = await loadLoop();
+    const { provider } = makeTestProvider();
+    const { gh } = makeTestGh();
+
+    const launchCalls: string[] = [];
+    const ensureRunningLaunch = (repoPath: string) => {
+      launchCalls.push(repoPath);
+    };
+
+    const { io } = scriptedIo(['exit']);
+
+    await runEngineerMode({
+      provider,
+      io,
+      gh,
+      registryPath,
+      engineerDir,
+      ensureRunningLaunch,
+    });
+
+    expect(launchCalls).toHaveLength(0);
+  });
+
+  it('ensureRunning called for EACH authored target (one call per PR opened)', async () => {
+    const dirA = join(workDir, 'alpha');
+    await initRepo(dirA);
+    await writeRegistry([makeRecordWithRemote(dirA, 'alpha')]);
+
+    const { runEngineerMode } = await loadLoop();
+    const { provider } = makeTestProvider({ routeTo: 'alpha' });
+    const { gh } = makeTestGh();
+
+    const launchCalls: string[] = [];
+    const ensureRunningLaunch = (repoPath: string) => {
+      launchCalls.push(repoPath);
+    };
+
+    // Two ideas, both confirmed → two ensure-running calls
+    const { io } = scriptedIo(['idea one', 'y', 'idea two', 'y', 'exit']);
+
+    const summary = await runEngineerMode({
+      provider,
+      io,
+      gh,
+      registryPath,
+      engineerDir,
+      ensureRunningLaunch,
+    });
+
+    expect(summary.ideasProcessed).toBe(2);
+    expect(launchCalls).toHaveLength(2);
+    expect(launchCalls[0]).toBe(dirA);
+    expect(launchCalls[1]).toBe(dirA);
+    expect(summary.buildsRun ?? 0).toBe(0);
+  });
+});
