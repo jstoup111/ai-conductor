@@ -73,6 +73,18 @@ describe('integration/gate-loop', () => {
         join(dir, '.docs/manual-test-results.md'),
         '| Story | Result |\n|---|---|\n| foo | PASS |\n',
       );
+    } else if (step === 'prd_audit') {
+      await mkdir(join(dir, '.docs/audits'), { recursive: true });
+      await writeFile(
+        join(dir, '.docs/audits/add-foo-prd-audit.md'),
+        '| FR | Verdict | Evidence |\n|---|---|---|\n| FR-1 | ALIGNED | foo.ts:1 |\n',
+      );
+    } else if (step === 'architecture_review_as_built') {
+      await mkdir(join(dir, '.docs/decisions'), { recursive: true });
+      await writeFile(
+        join(dir, '.docs/decisions/architecture-review-as-built-add-foo.md'),
+        '# As-Built Review\n\nVerdict: APPROVED\n',
+      );
     } else if (step === 'finish') {
       await writeFile(join(dir, '.pipeline/finish-choice'), 'keep');
     }

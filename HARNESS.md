@@ -18,7 +18,7 @@ Claude MUST read and follow this file at the start of every session.
 Skills chain via artifacts in `.docs/`. No skill orchestrates another internally.
 
 ```
-UNDERSTAND → DECIDE → BUILD → ✓checkpoint → SHIP(manual-test) → ✓checkpoint → SHIP(retro, finish)
+UNDERSTAND → DECIDE → BUILD → ✓checkpoint → SHIP(manual-test) → ✓checkpoint → SHIP(prd-audit, architecture-review --as-built, retro, finish)
 ```
 
 | Phase | Skills | Artifacts |
@@ -28,7 +28,7 @@ UNDERSTAND → DECIDE → BUILD → ✓checkpoint → SHIP(manual-test) → ✓c
 | DECIDE | brainstorm (PRD) → stories → conflict-check → architecture-diagram → architecture-review → plan | .docs/specs/, .docs/stories/, .docs/conflicts/, .docs/architecture/, .docs/plans/ |
 | BUILD | writing-system-tests → tdd/pipeline, debugging, code-review | Acceptance specs, code, unit tests, .pipeline/ |
 | CHECKPOINT | User validation after build | Harness pause — continue, go back, or quit |
-| SHIP | manual-test, retro, finish/pr | .docs/retros/ |
+| SHIP | manual-test, prd-audit, architecture-review --as-built, retro, finish/pr | .docs/audits/, .docs/decisions/architecture-review-as-built-*.md, .docs/retros/ |
 | CHECKPOINT | User validation after manual-test | Harness pause — continue, go back, or quit |
 
 **Checkpoints** are harness-level pauses (no Claude session). The user reviews output and
@@ -51,6 +51,7 @@ Agent prompt templates are in `agents/`. Skills define *what* to do; agents defi
 
 - `generator.md` — Implements code via TDD
 - `evaluator.md` — Reviews with calibrated skepticism (fresh context, no shared state with generator)
+- `prd-auditor.md` — Audits shipped implementation against the PRD's functional requirements at SHIP (finding-authority, per-FR verdict + gap-class, no-fix)
 - `domain-reviewer.md` — Checks domain integrity, has veto authority
 - `planner.md` — Expands requirements into specs
 - `worktree-manager.md` — Manages git worktrees for feature isolation and parallel execution
@@ -77,7 +78,7 @@ standard implementation, Haiku for mechanical checks.
 | conflict-check | sonnet (S/M), opus (L) | Pairwise comparison is manageable for Sonnet with ≤15 stories; Large needs Opus for subtle contradictions |
 | plan | sonnet | Structured task breakdown from stories |
 | architecture-diagram | sonnet | Structured output generation from codebase scan — pattern-following |
-| architecture-review | opus | Feasibility, alignment, domain integrity — deep architectural reasoning |
+| architecture-review | opus | Feasibility, alignment, domain integrity — deep architectural reasoning. The SHIP `--as-built` compliance mode is lighter (code vs APPROVED ADRs) and runs on **sonnet**. |
 | writing-system-tests | sonnet | Generating specs from acceptance criteria — templated work |
 | tdd (RED phase) | sonnet | Writing one test at a time — focused, constrained |
 | tdd (GREEN phase) | sonnet | Writing minimal implementation — constrained scope |
@@ -89,6 +90,7 @@ standard implementation, Haiku for mechanical checks.
 | pipeline | haiku | State tracking, dispatch orchestration — purely mechanical |
 | finish | haiku | Mechanical checks — run tests, check git status, verify coverage |
 | manual-test | sonnet | Structured validation against stories — pattern-following |
+| prd-audit | opus | Cross-references PRD intent vs shipped implementation across two domains (spec + code) — deep reasoning |
 | retro | sonnet | Structured analysis from concrete data; Part C (context efficiency) is checklist-based |
 | pr | sonnet | Diff analysis and structured PR body — templated output |
 | bootstrap | sonnet | Detection and scaffolding — largely mechanical |

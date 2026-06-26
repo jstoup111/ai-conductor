@@ -74,9 +74,11 @@ describe('Integration: config flow', () => {
     expect(runner.calls).not.toContain('retro');
     expect(runner.calls).not.toContain('architecture_review');
 
-    // All other steps should have run: 15 total - 2 disabled - 3 engine-managed
-    // (complexity + worktree + rebase, not dispatched to runner.run) = 10.
-    expect(runner.calls).toHaveLength(10);
+    // All other steps should have run: 17 total - 2 disabled - 3 engine-managed
+    // (complexity + worktree + rebase, not dispatched to runner.run) = 12.
+    // The two SHIP compliance gates (prd_audit, architecture_review_as_built)
+    // are dispatched skills, so they count toward runner.calls.
+    expect(runner.calls).toHaveLength(12);
 
     // Verify final state marks disabled steps as 'skipped'
     const result = await readState(statePath);

@@ -76,7 +76,8 @@ loop never engages).
 
 ### Gate-driven loop
 
-Once `build` engages, `advanceTail()` drives `build → manual_test → retro → rebase → finish`
+Once `build` engages, `advanceTail()` drives
+`build → manual_test → prd_audit → architecture_review_as_built → retro → rebase → finish`
 by **gate verdicts** instead of a fixed order:
 
 - **Verdicts** — after a gate step runs, its objective verdict is recomputed from on-disk
@@ -99,6 +100,16 @@ by **gate verdicts** instead of a fixed order:
 The new gate-grade predicates (`plan` = per-path-type story coverage; `stories` = happy +
 negative path, no DRAFT) live in `GATE_ONLY_PREDICATES` (`engine/artifacts.ts`), separate
 from the linear conductor's completion predicates. See `.docs/decisions/gate-audit-*.md`.
+
+The two SHIP compliance gates — **`prd_audit`** (shipped impl vs the PRD's `FR-N` requirements)
+and **`architecture_review_as_built`** (shipped code vs APPROVED ADRs) — sit between
+`manual_test` and `retro`. Both are `loopGate: true`, so they inherit the verdict/selector/
+kickback machinery above for free. Their objective verdicts come from
+`CUSTOM_COMPLETION_PREDICATES`: `prd_audit` stays unsatisfied while any audit-table row carries a
+non-`ALIGNED`, un-`ACCEPTED` `FR-N`; `architecture_review_as_built` stays unsatisfied while its
+`Verdict:` is `BLOCKED`. An unsatisfied gate keeps the selector from reaching `finish`; the
+skill guidance drives where the rework lands (BUILD vs DECIDE for prd-audit; human fix vs
+superseding ADR for as-built).
 
 ### Rebase-on-latest (before finish)
 
