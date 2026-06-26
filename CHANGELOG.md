@@ -39,14 +39,19 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 ## [Unreleased]
 
 ### Fixed
-- conduct-ts: the engine-native `rebase` loop step (Phase 9.0) could rebase the
-  **real** conductor worktree when driven by integration tests that constructed
-  a `Conductor` without an explicit `projectRoot` (it defaults to
-  `process.cwd()`). This was a silent no-op while the dev branch stayed current
-  with `origin/main`, but became a destructive `git rebase origin/main` once the
-  branch fell behind. `full-flow` and `plugin-end-to-end` now pass an isolated
-  throwaway `projectRoot` (matching `rebase-loop`), so the native rebase step can
-  never touch the live repo under test.
+- conduct-ts: the engine-native `rebase` loop step (Phase 9.0) could run a
+  destructive `git rebase origin/<default>` against the **real** conductor
+  worktree whenever a test drove a `Conductor` whose `projectRoot` resolved to
+  the conductor's own checkout (the default is `process.cwd()`). It was a silent
+  no-op while the dev branch stayed current with `origin/main`, but became a
+  branch-corrupting rebase once `origin/main` advanced. Root-fixed by gating the
+  step on daemon mode: rebase-on-latest is a **daemon finish-time mechanism**, so
+  `runRebaseStep` now performs a clean no-op (gate still satisfied, loop topology
+  unchanged) in any non-daemon run — interactive `/conduct` and the entire test
+  suite. Only the daemon invokes git; humans rebase manually in interactive mode.
+  `rebase-loop` integration specs now construct the `Conductor` with `daemon:true`
+  (they exercise the real rebase against an isolated throwaway repo); `full-flow`
+  and `plugin-end-to-end` also pass an isolated `projectRoot` as defence-in-depth.
 
 ### Changed
 - **BREAKING (conduct-ts):** renamed the supervisor from **brain** to **engineer**.

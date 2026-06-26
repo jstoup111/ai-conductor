@@ -142,6 +142,11 @@ describe('integration/rebase-loop', () => {
       stepRunner: runner,
       events,
       projectRoot: dir,
+      // The native rebase-on-latest is a daemon finish-time mechanism; the
+      // engine only invokes git for it under the daemon. These specs exercise
+      // that real rebase against an isolated throwaway repo (`dir`), so they run
+      // in daemon mode. Non-daemon runs no-op the step (see runRebaseStep).
+      daemon: true,
       verifyArtifacts: true,
       mode: 'auto',
       fromStep: 'build',
