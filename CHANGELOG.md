@@ -123,6 +123,23 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- **Daemon poll loop now fetches origin and reads the remote-tracking ref so
+  merged specs are discovered immediately.** The daemon polled `.docs/plans` only
+  against the *local* default branch; a spec merged on GitHub (origin's main) was
+  invisible until an operator manually ran `git pull` — the daemon could lag
+  indefinitely. `resolveDiscoveryRef` (`engine/daemon-backlog.ts`) now runs on
+  every poll tick: it discovers the real default branch via
+  `git symbolic-ref refs/remotes/origin/HEAD` (no hardcoded `main`/`master`), does
+  a best-effort `git fetch origin <default>`, and returns `origin/<default>` as the
+  discovery ref. `gitTreeSource` reads `origin/<default>:.docs/plans` — the
+  remote-tracking ref that `git fetch` updates — so a merged spec is seen on the
+  very next tick without any local branch movement. Degrades gracefully: no origin
+  remote, unset origin/HEAD, or a failed fetch (offline) all fall back to the local
+  base ref and log a message; the poll loop never throws. Fetch + read happen only
+  in the main checkout dir — no `git checkout`, no `git reset`, no worktree touches.
+  Branch name is discovered dynamically; the hardcoded `'main'` default in
+  `daemon-cli.ts` and `discoverBacklog` is now only the last-resort fallback.
+
 - **`conduct-ts --help` is now a complete, recursive command reference.** Top-level `--help`/`-h`
   rendered the *base* program (bare-pipeline flags only), so `register`, `create`, `engineer`, and
   `daemon` were invisible and the run exited non-zero after leaking an `(outputHelp)` line. Root

@@ -3,6 +3,7 @@ import { basename, isAbsolute, join, relative } from 'node:path';
 import { promisify } from 'node:util';
 import type { BacklogItem } from './daemon.js';
 import { planHasDependencyTree } from './artifacts.js';
+import { makeGitRunner, originDefaultBranch, type GitRunner } from './rebase.js';
 
 const execFile = promisify(execFileCb);
 
@@ -59,6 +60,72 @@ export function gitTreeSource(projectRoot: string, baseBranch: string): BacklogT
       }
     },
   };
+}
+
+/**
+ * Resolve the git tree-ish ref to use for backlog discovery on each daemon
+ * poll tick. Strategy:
+ *
+ *   1. Discover origin's default branch via `git symbolic-ref
+ *      refs/remotes/origin/HEAD` (with a `git remote show origin` fallback).
+ *   2. Do a best-effort `git fetch origin <default>` so the remote-tracking ref
+ *      `origin/<default>` reflects the latest merged specs on GitHub/origin.
+ *   3. Return `origin/<default>` — `gitTreeSource` reads this ref, so a spec
+ *      merged on origin but not yet pulled locally IS discovered immediately.
+ *
+ * Degrades gracefully:
+ *   - No origin remote → returns `localBase` unchanged, no fetch.
+ *   - origin/HEAD unset and `remote show` fallback fails → returns `localBase`.
+ *   - Fetch fails (offline / unreachable) → logs a message and returns `localBase`
+ *     so discovery continues against whatever ref is available; NEVER throws.
+ *
+ * The `gitOverride` parameter allows tests to inject a fake git runner.
+ * The default uses `makeGitRunner(projectRoot)` (the main checkout dir, never
+ * a worktree) so the fetch is always safe: no checkout, no reset, no rebase.
+ */
+export async function resolveDiscoveryRef(
+  projectRoot: string,
+  localBase: string,
+  log: (msg: string) => void = () => {},
+  gitOverride?: GitRunner,
+): Promise<string> {
+  const git = gitOverride ?? makeGitRunner(projectRoot);
+
+  // Check if origin remote exists — local-only repos skip the fetch entirely.
+  const remotes = await git(['remote']);
+  if (remotes.exitCode !== 0) return localBase;
+  const hasOrigin = remotes.stdout
+    .split('\n')
+    .map((l) => l.trim())
+    .includes('origin');
+  if (!hasOrigin) return localBase;
+
+  // Discover default branch name (never hardcode 'main').
+  // Mirror resolveBase's two-step: symbolic-ref first, remote show fallback.
+  let defaultBranch: string | null = await originDefaultBranch(git);
+  if (!defaultBranch) {
+    const show = await git(['remote', 'show', 'origin']);
+    if (show.exitCode === 0) {
+      const m = show.stdout.match(/HEAD branch:\s*(\S+)/);
+      if (m && m[1] !== '(unknown)') defaultBranch = m[1];
+    }
+  }
+  if (!defaultBranch) {
+    // Discovery failed entirely — degrade to local base; do not assume 'main'.
+    return localBase;
+  }
+
+  // Best-effort fetch: a failed fetch (offline/unreachable) must NOT crash the
+  // poll loop — log it and continue scanning the last-known ref.
+  const fetched = await git(['fetch', 'origin', defaultBranch]);
+  if (fetched.exitCode !== 0) {
+    log(
+      `fetch origin ${defaultBranch} failed (offline?); scanning local ref ${localBase}`,
+    );
+    return localBase;
+  }
+
+  return `origin/${defaultBranch}`;
 }
 
 /** Options for discoverBacklog. */
