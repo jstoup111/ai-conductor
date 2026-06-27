@@ -62,6 +62,12 @@ export interface Ledger {
   ): Promise<void>;
   get(source: string, sourceRef: string): Promise<LedgerEntry | undefined>;
   forget(source: string, sourceRef: string): Promise<void>;
+  /**
+   * Make a previously-`done` entry re-eligible: reset status to 'pending' and
+   * increment `attempts` (the churn counter). Used by github-issues re-eligibility
+   * (FR-39/40) when a spec PR closes without merging. No-op if the entry is absent.
+   */
+  reopen(source: string, sourceRef: string): Promise<void>;
 }
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
@@ -161,6 +167,20 @@ export function createLedger(path: string): Ledger {
         delete store[key];
         await saveStore(path, store);
       }
+    },
+
+    async reopen(source: string, sourceRef: string): Promise<void> {
+      const store = await loadStore(path);
+      const key = makeKey(source, sourceRef);
+      const entry = store[key];
+      if (!entry) return; // nothing to reopen — no-op.
+      store[key] = {
+        ...entry,
+        status: 'pending',
+        attempts: (entry.attempts ?? 0) + 1,
+        lastSeenAt: new Date().toISOString(),
+      };
+      await saveStore(path, store);
     },
   };
 }
