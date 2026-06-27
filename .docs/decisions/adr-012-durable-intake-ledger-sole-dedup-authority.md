@@ -1,6 +1,7 @@
 ---
-status: DRAFT
+status: APPROVED
 date: 2026-06-27
+approved: 2026-06-27
 supersedes: none
 amends: adr-009-intake-adapter-port
 deciders: James Stoup
@@ -10,7 +11,7 @@ phase: 9.3b
 # ADR-012: Durable Intake Ledger as Sole Dedup Authority
 
 ## Status
-DRAFT — awaiting operator approval. Not authoritative until APPROVED.
+APPROVED (2026-06-27). Authoritative on 9.3b implementation.
 
 ## Context
 ADR-009's intake landed an **in-memory** idempotency guard (`intake/idempotency.ts`) keyed on

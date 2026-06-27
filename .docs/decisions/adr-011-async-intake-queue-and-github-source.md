@@ -1,6 +1,7 @@
 ---
-status: DRAFT
+status: APPROVED
 date: 2026-06-27
+approved: 2026-06-27
 supersedes: none
 extends: adr-009-intake-adapter-port
 deciders: James Stoup
@@ -10,7 +11,7 @@ phase: 9.3b
 # ADR-011: Async Intake Queue + GitHub-Issues Source
 
 ## Status
-DRAFT — awaiting operator approval. Not authoritative until APPROVED.
+APPROVED (2026-06-27). Authoritative on 9.3b implementation.
 
 ## Context
 ADR-009 locked an intake **port + Envelope** contract and wired only the synchronous
