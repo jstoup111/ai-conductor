@@ -31,6 +31,25 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   mode with `CONDUCT_ENGINEER_PERMISSION_MODE` (e.g. `acceptEdits`) — `plan` is
   rejected.
 
+### Changed
+
+- **Daemon mode is now a subcommand: `conduct-ts daemon …` (was `conduct-ts --daemon`).**
+  This makes the CLI verb-first and consistent with `engineer` / `register` / `create`
+  — every long-running or non-interactive mode is now a named subcommand rather than a
+  bare flag. All daemon options move onto the subcommand unchanged
+  (`--concurrency`, `--max-items`, `--continuous`, `--max-cost`, `--max-runtime`,
+  `--idle-poll`, `--max-idle-polls`), e.g. `conduct-ts daemon --concurrency 3 --max-items 10`.
+  Dispatch mirrors the engineer pattern: a lightweight `detectDaemonCommand`
+  (`src/conductor/src/engine/daemon-command.ts`) parses argv before the interactive
+  pipeline boots, and `runDaemonMode` is still imported lazily. The engineer's
+  `ensure-running` auto-launch (`daemon-launch.ts`) now spawns `conduct-ts daemon …`
+  accordingly. **Breaking CLI change** — see Migration below.
+
+### Removed
+
+- **The `--daemon` flag.** Replaced by the `conduct-ts daemon` subcommand (above).
+  `conduct-ts --daemon` now errors as an unknown flag.
+
 ### Fixed
 
 - **The build daemon now claims its pidfile on boot — liveness is finally observable
@@ -61,6 +80,22 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   (Bug Loop). A code path that violates or is superseded by an APPROVED ADR/PRD is
   a conformance finding (kickback/BLOCK), not work to do — building or hardening
   code slated for deletion is wasted effort.
+
+## Migration
+
+The daemon flag became a subcommand. Update any scripts, aliases, cron entries, or
+shell history that invoke `conduct-ts --daemon`:
+
+```bash
+# Rewrite `conduct-ts --daemon` → `conduct-ts daemon` in your own scripts.
+# (Adjust the path glob to wherever you keep daemon launch scripts.)
+grep -rl --null -- 'conduct-ts --daemon' . 2>/dev/null \
+  | xargs -0 -r sed -i 's/conduct-ts --daemon/conduct-ts daemon/g'
+```
+
+The daemon's options are unchanged — only the leading `--daemon` flag becomes the
+`daemon` subcommand token. The engineer's auto-launch path was updated in-tree, so no
+action is needed for `ensure-running`.
 
 ## [0.99.17] - 2026-05-02
 

@@ -38,7 +38,7 @@ src/conductor/
 │   │   ├── state.ts             # ConductState, BootstrapMode
 │   │   ├── events.ts            # ConductorEvent union
 │   │   └── config.ts            # HarnessConfig
-│   ├── daemon-cli.ts            # --daemon entry: assembles per-worktree Conductors
+│   ├── daemon-cli.ts            # `daemon` subcommand entry: assembles per-worktree Conductors
 │   └── index.ts                 # CLI entry (commander-based)
 ├── test/                        # vitest suites mirroring src/ layout
 ├── tsup.config.ts               # Bundle config (node20 target, ESM, dts)
@@ -149,7 +149,7 @@ a half-rebased branch.
 
 ### Daemon mode
 
-`conduct-ts --daemon` (`daemon-cli.ts`) drains a backlog of features that already have
+`conduct-ts daemon` (`daemon-cli.ts`) drains a backlog of features that already have
 human-authored stories **and** plans, running each in its own worktree via the gate loop
 and opening a PR on finish:
 
