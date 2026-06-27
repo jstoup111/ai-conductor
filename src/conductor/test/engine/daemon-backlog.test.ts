@@ -112,6 +112,43 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
     expect(logs.join('\n')).toMatch(/draft.*not approved/i);
   });
 
+  it('skips stories with NO status line (the silent-skip casualty)', async () => {
+    await writeFile(join(dir, '.docs/plans/nostatus.md'), planWithDeps());
+    // Real content, but no Status marker at all — must NOT be treated as approved.
+    await writeFile(
+      join(dir, '.docs/stories/nostatus.md'),
+      '# Stories\n\n## Story: Foo\nbody\n',
+    );
+    const logs: string[] = [];
+    const backlog = await discover(undefined, (m) => logs.push(m));
+    expect(backlog).toEqual([]);
+    expect(logs.join('\n')).toMatch(/nostatus.*not approved/i);
+  });
+
+  it('surfaces a persistently-unbuildable merged spec ONCE across scans', async () => {
+    await writeFile(join(dir, '.docs/plans/stuck.md'), planWithDeps());
+    await writeFile(join(dir, '.docs/stories/stuck.md'), '# Stories\n**Status:** DRAFT\n');
+
+    const warned = new Set<string>();
+    const opts = {
+      treeSource: fsTreeSource(dir),
+      hasWarned: async (slug: string) => warned.has(slug),
+      markWarned: async (slug: string) => {
+        warned.add(slug);
+      },
+    };
+    const logs: string[] = [];
+    const log = (m: string) => logs.push(m);
+
+    // Two consecutive scans (simulating poll ticks) — the skip is logged once.
+    await discoverBacklog(dir, undefined, log, opts);
+    await discoverBacklog(dir, undefined, log, opts);
+
+    const skipLines = logs.filter((l) => /stuck.*not approved/i.test(l));
+    expect(skipLines).toHaveLength(1);
+    expect(warned.has('stuck')).toBe(true);
+  });
+
   it('skips a plan with no dependency tree', async () => {
     await writeFile(
       join(dir, '.docs/plans/nodeps.md'),

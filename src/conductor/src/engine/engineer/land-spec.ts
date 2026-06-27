@@ -27,6 +27,7 @@ import { promisify } from 'node:util';
 import { TargetPathMissingError } from './target.js';
 import { AuthoringGuard } from './authoring-guard.js';
 import { deriveDefaultBranch, chooseBranchName, slugify } from './authoring.js';
+import { isStoriesApproved } from '../artifacts.js';
 
 const execFile = promisify(execFileCb);
 
@@ -138,6 +139,19 @@ export async function landSpec(
   validateArtifactContent('spec', specContent, idea);
   validateArtifactContent('stories', storiesContent, idea);
   validateArtifactContent('plan', planContent, idea);
+
+  // 4c. Stories MUST carry the canonical approval marker — not merely "not DRAFT".
+  // validateArtifactContent only rejects DRAFT/empty/stub, so a stories file with
+  // NO status line lands fine here yet is skipped FOREVER by the daemon (which
+  // requires "Status: Accepted"). Require the marker at land time so that
+  // mismatch can never reach a silently-skipping daemon. (Applied to stories
+  // only — the PRD/spec uses "Status: Approved" and the plan has no status.)
+  if (!isStoriesApproved(storiesContent)) {
+    throw new Error(
+      'landSpec: stories artifact is not approved — it must declare "Status: Accepted" ' +
+        '(and no "Status: DRAFT"). Run the /stories skill and approve before landing.',
+    );
+  }
 
   // 5. Branch, add, commit, return to default.
   const defaultBranch = await deriveDefaultBranch(repoPath);

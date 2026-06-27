@@ -2,7 +2,7 @@ import { execFile as execFileCb } from 'node:child_process';
 import { basename, isAbsolute, join, relative } from 'node:path';
 import { promisify } from 'node:util';
 import type { BacklogItem } from './daemon.js';
-import { planHasDependencyTree } from './artifacts.js';
+import { planHasDependencyTree, isStoriesApproved } from './artifacts.js';
 import { makeGitRunner, originDefaultBranch, type GitRunner } from './rebase.js';
 
 const execFile = promisify(execFileCb);
@@ -152,6 +152,18 @@ export interface DiscoverBacklogOpts {
   baseBranch?: string;
   /** Inject a tree source (tests); defaults to the git base-branch reader. */
   treeSource?: BacklogTreeSource;
+  /**
+   * One-time skip-warning dedup. Every skip here is for a MERGED spec (the tree
+   * source reads the committed base branch), so an un-buildable merged spec
+   * would otherwise re-log an identical skip on EVERY poll, forever. When these
+   * are wired (production: `.daemon/warned/<slug>` markers), the skip is
+   * surfaced once per slug and then suppressed until the spec is fixed (after
+   * which it becomes eligible, builds, and is marked processed — never
+   * re-entering the skip path). Unset (the default, e.g. in tests) → log every
+   * scan, preserving prior behavior.
+   */
+  hasWarned?: (slug: string) => Promise<boolean>;
+  markWarned?: (slug: string) => Promise<void>;
 }
 
 /**
@@ -180,6 +192,15 @@ export async function discoverBacklog(
   const baseBranch = opts.baseBranch ?? 'main';
   const tree = opts.treeSource ?? gitTreeSource(projectRoot, baseBranch);
 
+  // Surface a merged-but-unbuildable spec ONCE per slug rather than re-logging
+  // the identical skip on every poll. When the dedup hooks are unset, fall back
+  // to logging every scan (prior behavior).
+  const warnOnce = async (slug: string, msg: string): Promise<void> => {
+    if (opts.hasWarned && (await opts.hasWarned(slug))) return;
+    log(msg);
+    await opts.markWarned?.(slug);
+  };
+
   const planFiles = (await tree.listPlanFiles()).filter((f) => f.endsWith('.md'));
   if (planFiles.length === 0) return [];
 
@@ -203,12 +224,16 @@ export async function discoverBacklog(
     // dependency-tree-less plans rather than silently building them.
     const storiesContent = (await tree.readFile(storiesRel)) ?? '';
     if (!isStoriesApproved(storiesContent)) {
-      log(`skip ${slug}: stories not approved (need "Status: Accepted", no DRAFT)`);
+      await warnOnce(
+        slug,
+        `skip ${slug}: merged spec cannot build — stories not approved (need "Status: Accepted", no DRAFT). Fix the spec on the default branch; logged once.`,
+      );
       continue;
     }
     if (!planHasDependencyTree(planContent)) {
-      log(
-        `skip ${slug}: plan has no dependency tree ("## Task Dependency Graph" or "**Dependencies:**" lines)`,
+      await warnOnce(
+        slug,
+        `skip ${slug}: merged spec cannot build — plan has no dependency tree ("## Task Dependency Graph" or "**Dependencies:**" lines). Fix the spec on the default branch; logged once.`,
       );
       continue;
     }
@@ -223,18 +248,6 @@ export async function discoverBacklog(
     });
   }
   return items;
-}
-
-/**
- * Approval signal for autonomous (daemon) work: the stories declare
- * `Status: Accepted` and are not DRAFT. Mirrors the stories gate's Accepted/
- * DRAFT convention (artifacts.ts). When the Phase 9 engineer lands and the
- * operator merges the spec PR, this is what the daemon observes on the base
- * branch.
- */
-function isStoriesApproved(content: string): boolean {
-  if (/\bstatus\b[\s*:]*\bdraft\b/i.test(content)) return false;
-  return /\bstatus\b[\s*:]*\baccepted\b/i.test(content);
 }
 
 /**

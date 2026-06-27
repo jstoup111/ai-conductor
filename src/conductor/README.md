@@ -172,11 +172,17 @@ and opening a PR on finish:
   until it reaches the remote default branch. `resolveDiscoveryRef` degrades gracefully: no
   origin, unset `origin/HEAD`, a failed fetch (offline), or an unfetched ref all fall back to
   the local base ref; the poll loop never throws and never touches a worktree branch. On top of
-  feature must have stories **approved** (`Status: Accepted`, not DRAFT) + a plan that
-  declares a **dependency tree** (`## Task Dependency Graph` or per-task
-  `**Dependencies:**`), and not yet be processed. Ineligible features are skipped with a
-  logged reason — the daemon pre-seeds the front half, so eligibility is the only place
-  specs are vetted before autonomous build.
+  feature must have stories **approved** (`Status: Accepted`, not DRAFT — a stories file with
+  no status line counts as **not approved**) + a plan that declares a **dependency tree**
+  (`## Task Dependency Graph` or per-task `**Dependencies:**`), and not yet be processed.
+  The approval token is the single shared `isStoriesApproved` (`engine/artifacts.ts`), also
+  enforced at land time by the engineer (`land-spec.ts` / `authoring.ts` reject stories
+  lacking `Status: Accepted`) — so a spec can never land in a state the daemon then skips.
+  Ineligible features are skipped with a logged reason; because every skip here is for a
+  **merged** spec that can never build, the reason is surfaced **once per slug**
+  (`.daemon/warned/<slug>` markers) rather than re-logged on every poll tick — the daemon
+  pre-seeds the front half, so eligibility is the only place specs are vetted before
+  autonomous build.
 - `engine/daemon-runner.ts` — per-feature discipline: done → mark + remove worktree + PR;
   halted/error → keep the worktree for the human. On completion it also emits a engineer
   signal (see below).

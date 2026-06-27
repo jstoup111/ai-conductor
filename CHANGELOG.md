@@ -12,6 +12,15 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- **Daemon surfaces a persistently-unbuildable merged spec once, not forever.** When a
+  merged spec can never satisfy the backlog gate (stories not `Status: Accepted`, or no plan
+  dependency tree), `discoverBacklog` previously re-logged the identical `skip …` line on
+  **every** poll tick. It now emits the skip **once per slug** via `.daemon/warned/<slug>`
+  markers (`hasWarned`/`markWarned` in `engine/daemon-deps.ts`, wired through
+  `DiscoverBacklogOpts`), then suppresses repeats until the spec is fixed (after which it
+  becomes eligible, builds, and is marked processed). The approval-token logic is now a single
+  shared `isStoriesApproved` exported from `engine/artifacts.ts` and consumed by both the
+  daemon and the engineer land gate, so the chain can never disagree on the marker.
 - **Daemon log capture + `conduct-ts daemon status` / `daemon logs` observability.**
   The build daemon is spawned detached (`stdio:'ignore'`), so every log line — including
   the per-feature BUILD progress rendered by `renderDaemonEvent` — was discarded: you
@@ -54,6 +63,12 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Changed
 
+- **`/stories` stamps the canonical `Status: Accepted` approval marker.** The skill now
+  explicitly changes `**Status:** DRAFT` → `**Status:** Accepted` on operator approval (and
+  documents that a missing status line counts as **not approved**), reconciling the stories
+  chain on one token. The template carries a file-level `**Status:** Accepted` header and the
+  verification checklist asserts it. A new `test/test_harness_integrity.sh` check ties this
+  skill instruction to the code gate so the two cannot drift.
 - **The inline SDLC pipeline is now a subcommand: `conduct-ts inline "<feature>"` (was the
   bare `conduct-ts "<feature>"`).** Completing the verb-first CLI — the foreground pipeline is
   the explicit counterpart to the background `daemon`, so every mode is a named subcommand and
@@ -123,6 +138,15 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- **Stories without `Status: Accepted` are now rejected at land instead of silently skipped
+  at build.** A stories file with no status line passed the engineer land gate
+  (`land-spec.ts` only rejected `Status: DRAFT`/empty/stub) yet was then skipped **forever**
+  by the daemon backlog (which requires `Status: Accepted`) — a merged spec that could never
+  build, re-logging an identical skip on every scan. `landSpec` and `runAuthoring` now
+  **require** the canonical `Status: Accepted` marker on stories (via the shared
+  `isStoriesApproved`), failing loudly at land/author time so the mismatch can never reach a
+  silently-skipping daemon. Tests added at each seam (land-spec, authoring, daemon-backlog,
+  and the `isStoriesApproved` token contract).
 - **Daemon discovers specs merged on origin — but only fetches between work, never
   while a build is running.** The daemon scanned `.docs/plans` only against the
   *local* default branch, so a spec merged on GitHub (origin's main) was invisible
