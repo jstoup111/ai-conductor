@@ -248,6 +248,29 @@ describe('DefaultStepRunner', () => {
       expect(opts.resume).toBe(true);
     });
 
+    it('resetSession() overrides an inherited stale marker so the next step CREATES (no --resume)', async () => {
+      // Reproduces the daemon worktree-reuse bug: a KEPT worktree carries a
+      // stale `session-created` marker from the prior run, so a fresh runner's
+      // lazy-init would set sessionStarted=true and `--resume` a brand-new
+      // session id that was never created → "No conversation found" → "session
+      // unavailable (expired or in use)". The conductor calls resetSession()
+      // before each step under freshContextPerStep; it must win over the stale
+      // marker and force a create.
+      await writeFile(join(pipeDir, 'session-created'), '1', 'utf-8');
+      await writeFile(join(pipeDir, 'conduct-session-id'), 'stale-id', 'utf-8');
+
+      const provider = createMockProvider();
+      const runner = new DefaultStepRunner(provider, 'fresh-id', '/tmp/project', {
+        pipelineDir: pipeDir,
+      });
+
+      await runner.resetSession();
+      await runner.run('acceptance_specs', emptyState); // autonomous → invoke()
+
+      const opts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+      expect(opts.resume).toBe(false);
+    });
+
     it('persists session ID to conduct-session-id file', async () => {
       const provider = createMockProvider();
       const runner = new DefaultStepRunner(provider, 'my-session-id', '/tmp/project', {

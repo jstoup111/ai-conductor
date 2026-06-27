@@ -1,7 +1,7 @@
 import chalk from 'chalk';
 import { v4 as uuidv4 } from 'uuid';
 import { join } from 'node:path';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile, rm } from 'node:fs/promises';
 import type { LLMProvider } from './execution/llm-provider.js';
 import { PluginRegistry } from './engine/plugin-registry.js';
 import { registerBuiltins } from './engine/plugin-loader.js';
@@ -138,6 +138,18 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   const runConductorInWorktree = async (wt: FeatureWorktree, item: BacklogItem) => {
     const pipelineDir = join(wt.path, '.pipeline');
     await mkdir(pipelineDir, { recursive: true });
+
+    // Sweep stale session markers before constructing the runner. A KEPT
+    // worktree (reused on a later daemon cycle after a prior halt/error —
+    // createWorktree is idempotent) still carries the previous run's
+    // `session-created` / `conduct-session-id`. Without this sweep the new
+    // runner inherits `sessionStarted = true` (lazy-init reads the marker) and
+    // its FIRST step would `--resume` a brand-new session id that was never
+    // created → "No conversation found" → "session unavailable (expired or in
+    // use)" → the feature errors out. The conductor also resets per step
+    // (freshContextPerStep), but sweeping here guarantees a clean start.
+    await rm(join(pipelineDir, 'session-created'), { force: true });
+    await rm(join(pipelineDir, 'conduct-session-id'), { force: true });
 
     // Pre-seed: specs are authored; start the loop at BUILD.
     const seeded: ConductState = { complexity_tier: 'M', feature_desc: item.slug };
