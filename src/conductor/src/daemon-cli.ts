@@ -10,6 +10,7 @@ import { DefaultStepRunner } from './engine/step-runners.js';
 import { Conductor } from './engine/conductor.js';
 import { loadConfig } from './engine/config.js';
 import { holdLock } from './engine/daemon-lock.js';
+import { openDaemonLog, type DaemonLogSink } from './engine/daemon-log.js';
 import type { ConductState, ConductorEvent, StepName } from './types/index.js';
 import { runDaemon, type BacklogItem } from './engine/daemon.js';
 import { discoverBacklog } from './engine/daemon-backlog.js';
@@ -50,6 +51,15 @@ const PRESEEDED_DONE: StepName[] = [
   'architecture_review',
 ];
 
+// Strip ANSI SGR color codes (chalk, #88) so the persistent daemon.log is always
+// plain text. In the real detached daemon (non-TTY) chalk is already disabled, so
+// this is a no-op there; it only matters for a foreground/TTY `conduct daemon` run.
+// eslint-disable-next-line no-control-regex -- ESC (\x1b) is intrinsic to ANSI SGR
+const ANSI_SGR = /\x1b\[[0-9;]*m/g;
+function stripAnsi(s: string): string {
+  return s.replace(ANSI_SGR, '');
+}
+
 /**
  * Daemon entry (Phase 6). Drains the backlog of features with existing
  * stories+plan, running each in its own worktree via the gate loop
@@ -60,7 +70,17 @@ const PRESEEDED_DONE: StepName[] = [
 export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   const { projectRoot } = opts;
   const baseBranch = opts.baseBranch ?? 'main';
-  const log = (msg: string) => console.log(`${chalk.dim('[daemon]')} ${msg}`);
+  // Tee every daemon log line to a file so a detached `stdio:'ignore'` launch is
+  // still observable via `conduct daemon logs`. Console gets the colorized line
+  // (#88); the file gets ANSI-stripped plain text so the persistent log never
+  // carries escape codes — `daemon logs`/grep stay clean regardless of whether the
+  // run had color on. The sink is opened once we own the repo (below); until then
+  // `log` goes to the console only.
+  let logSink: DaemonLogSink | null = null;
+  const log = (msg: string) => {
+    console.log(`${chalk.dim('[daemon]')} ${msg}`);
+    logSink?.write(`[daemon] ${stripAnsi(msg)}`);
+  };
 
   // ADR-010: claim the 1-per-repo pidfile so this daemon's liveness is observable
   // (the pidfile under .daemon/ holds our pid) and a second daemon for the same repo
@@ -70,15 +90,22 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     log(`another daemon is already running for ${projectRoot}; exiting (1-per-repo).`);
     return;
   }
+  // We own the repo: open the activity log and start teeing. renderDaemonEvent and
+  // every feature start/finish line already route through `log`, so this single tee
+  // captures the full BUILD-phase narrative (per-step results, shipped/failed + PR).
+  logSink = await openDaemonLog(projectRoot);
   log(
     lock.owned
       ? `holding daemon lock (pid ${lock.pid}) for ${projectRoot}`
       : `WARNING: could not write pidfile for ${projectRoot}; liveness is not observable`,
   );
-  // Crash/signal backstop: best-effort sync unlink if the process exits abnormally
-  // (the normal path removes this and releases asynchronously below). A missed
-  // release is self-healing — the next daemon reclaims a dead-pid pidfile.
-  const releaseBackstop = (): void => lock.releaseSync();
+  // Crash/signal backstop: best-effort sync unlink + log flush if the process exits
+  // abnormally (the normal path removes this and releases asynchronously below). A
+  // missed release is self-healing — the next daemon reclaims a dead-pid pidfile.
+  const releaseBackstop = (): void => {
+    logSink?.closeSync();
+    lock.releaseSync();
+  };
   process.once('exit', releaseBackstop);
 
   const configResult = await loadConfig(projectRoot);
@@ -195,8 +222,10 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     );
   }
 
-  // Normal completion: drop the crash backstop and release the lock asynchronously.
+  // Normal completion: drop the crash backstop, flush+close the log, and release
+  // the lock asynchronously.
   process.off('exit', releaseBackstop);
+  await logSink.close();
   await lock.release();
 }
 

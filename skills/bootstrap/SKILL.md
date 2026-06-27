@@ -277,6 +277,7 @@ plans/, decisions/, retros/).
 
 Add to `.gitignore` (idempotent — don't duplicate):
 - `.pipeline/` — runtime state, not source
+- `.daemon/` — daemon pidfile + activity log (`daemon.log`), not source
 - `.worktrees/` — git worktrees for parallel feature development
 - `.env` — local environment (not committed; `.env.example` is the committed reference)
 - `.env.local` — worktree-specific environment overrides
@@ -374,7 +375,7 @@ bootstrap is safe: the same canonical path resolves to one record.
 - [ ] `.env.example` generated with shared/worktree-specific boundary sections
 - [ ] `.env` generated from `.env.example` with real defaults
 - [ ] `.env.local` generated with worktree-specific overrides
-- [ ] `.env` and `.env.local` added to `.gitignore`
+- [ ] `.pipeline/`, `.daemon/`, `.worktrees/`, `.env`, and `.env.local` added to `.gitignore`
 - [ ] Process manager detected (or noted as absent)
 - [ ] Smoke test passed
 - [ ] Project auto-registered via `conduct register .` (idempotent; honors `$AI_CONDUCTOR_REGISTRY`)

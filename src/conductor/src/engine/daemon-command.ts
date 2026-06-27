@@ -53,6 +53,10 @@ function intFlag(argv: string[], flag: string, fallback?: number): number | unde
  */
 export function detectDaemonCommand(argv: string[]): DaemonCommandOptions | null {
   if (argv[2] !== 'daemon') return null;
+  // `daemon status` / `daemon logs` are read-only observability sub-subcommands
+  // (detectDaemonObserveCommand in daemon-observe-cli.ts), NOT a daemon run.
+  // Yield so they are never dispatched as a launch.
+  if (argv[3] === 'status' || argv[3] === 'logs') return null;
 
   return {
     concurrency: intFlag(argv, '--concurrency', 1) ?? 1,

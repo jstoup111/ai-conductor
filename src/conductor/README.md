@@ -177,6 +177,37 @@ and opening a PR on finish:
 The daemon consumes specs — it never authors them. `--continuous` idle-polls for new
 eligible features, bounded by the ceilings.
 
+### Daemon observability (`status` / `logs`)
+
+The daemon is spawned **detached** (`engine/engineer/daemon-launch.ts`,
+`stdio:'ignore'`), so its console output is discarded. To keep *activity* visible — not
+just liveness — `runDaemonMode` tees its log sink into an append-only
+**`.daemon/daemon.log`** (`engine/daemon-log.ts`, opened once the per-repo pidfile lock is
+held). Because `renderDaemonEvent` and every feature start/finish line already route
+through that one sink, the file captures the full BUILD narrative: feature start, each
+gate-loop step result (`step_completed` / unsatisfied `gate_verdict` / `kickback` /
+`loop_halt`), and finish (`shipped`/`failed` + PR url). The log is size-capped (~1 MB,
+rotated once to `daemon.log.1`).
+
+Two **read-only** sub-subcommands of `daemon` (`engine/daemon-observe-cli.ts`,
+dispatched before the pipeline boots and **before** the `daemon` run command, so
+`status`/`logs` are never mistaken for a daemon launch — `detectDaemonCommand` in
+`daemon-command.ts` yields when argv[3] is `status`/`logs`) surface it:
+
+- **`conduct-ts daemon status`** — iterate the project registry and, for each repo,
+  report pidfile liveness via the `daemon-lock.ts` primitives (`readPidRecord` + `isLive`):
+  `running` (owner alive), `stale` (owner dead — reclaimable), `stopped` (no pidfile),
+  plus pid, start time, and the last log line. A registered path that no longer exists is
+  reported as `path missing`; a single bad repo never aborts the sweep.
+- **`conduct-ts daemon logs [--repo <path>] [--follow] [--all]`** — print (or `--follow`,
+  `tail -f` semantics) `.daemon/daemon.log` for one repo (default: cwd) or every registered
+  repo (`--all`). A missing log prints a friendly note rather than erroring.
+
+See `test/engine/daemon-log.test.ts` and `test/engine/daemon-observe-cli.test.ts`. The
+pidfile path and the O_EXCL create flag stay confined to `daemon-lock.ts`
+(`test/engine/daemon-lock-boundary.test.ts`); the log module reuses the exported
+`daemonDir()` and never re-encodes the pidfile.
+
 ### Engineer memory store (Phase 9.1)
 
 On **daemon** feature completion (`done`/`halted`), the runner emits a structured learning

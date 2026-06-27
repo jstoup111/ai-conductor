@@ -32,7 +32,10 @@ function pidfilePath(repoPath: string): string {
   return join(repoPath, DAEMON_DIR, PIDFILE_NAME);
 }
 
-function daemonDir(repoPath: string): string {
+// Exported so observability code (daemon-log.ts) can locate `.daemon/` without
+// re-encoding the directory literal — the pidfile name (`daemon.pid`) and O_EXCL
+// stay confined here (boundary test), but the dir itself is a shared anchor.
+export function daemonDir(repoPath: string): string {
   return join(repoPath, DAEMON_DIR);
 }
 
@@ -139,7 +142,9 @@ async function writePidfileExcl(repoPath: string): Promise<PidRecord> {
   return record;
 }
 
-async function readPidRecord(repoPath: string): Promise<PidRecord | null> {
+// Exported for read-only observability (`conduct daemon status`): callers get the
+// owner record (or null for absent/corrupt) without touching the pidfile path.
+export async function readPidRecord(repoPath: string): Promise<PidRecord | null> {
   let parsed: unknown;
   try {
     const raw = await readFile(pidfilePath(repoPath), 'utf8');

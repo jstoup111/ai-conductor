@@ -1,6 +1,10 @@
-# Project-local state (generated per target project, not part of harness)
+# Project-local state (generated per target project, not part of harness).
+# The conductor runs inside src/conductor/ and writes these there; the patterns
+# are unanchored so they also match the nested src/conductor/.daemon/ etc.
 .pipeline/
 .memory/
+.daemon/
+.worktrees/
 
 # Node / TypeScript conductor build artifacts
 node_modules/

@@ -120,6 +120,25 @@ already shipped. Ineligible features are skipped with a logged reason. A feature
 that can't converge is left in its worktree (`.pipeline/HALT`) for you; the pool
 keeps going.
 
+Because the daemon runs detached, its output goes to an append-only
+**`.daemon/daemon.log`** (size-capped, rotated once) rather than your terminal — so
+the full build narrative survives. Two read-only commands surface it:
+
+```bash
+# Liveness of every registered repo's daemon (running / stale / stopped) + last activity
+conduct-ts daemon status
+
+# View or tail a repo's daemon log (default: current dir)
+conduct-ts daemon logs
+conduct-ts daemon logs --follow            # tail -f
+conduct-ts daemon logs --repo /path/to/repo
+conduct-ts daemon logs --all               # every registered repo
+```
+
+(`daemon status` / `daemon logs` are read-only sub-subcommands of `daemon`; the bare
+`conduct-ts daemon` is what runs a daemon. `status`/`logs` are dispatched first, so
+they're never mistaken for a launch.)
+
 On failure, conduct sends a desktop notification and drops into an interactive Claude session
 to fix the issue. After you `/quit`, it rechecks artifacts and continues automatically.
 

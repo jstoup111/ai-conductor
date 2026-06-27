@@ -12,6 +12,27 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- **Daemon log capture + `conduct-ts daemon status` / `daemon logs` observability.**
+  The build daemon is spawned detached (`stdio:'ignore'`), so every log line — including
+  the per-feature BUILD progress rendered by `renderDaemonEvent` — was discarded: you
+  could see *that* a daemon was alive (via its pidfile) but not *what it was doing*. Now
+  `runDaemonMode` tees its log sink into an append-only **`.daemon/daemon.log`**
+  (`engine/daemon-log.ts`, opened once the per-repo pidfile lock is held; size-capped
+  ~1 MB with one-file rotation to `daemon.log.1`). Because the renderer and every feature
+  start/finish line already route through that one sink, the file captures the full build
+  narrative — feature start, each gate-loop step result (`step_completed` / unsatisfied
+  `gate_verdict` / `kickback` / `loop_halt`), and finish (`shipped`/`failed` + PR url) —
+  visible live via `daemon logs --follow`. Two read-only sub-subcommands of `daemon`
+  (`engine/daemon-observe-cli.ts`, dispatched before the pipeline boots and before the
+  `daemon` run command, so `status`/`logs` are never mistaken for a launch):
+  `daemon status` iterates the project registry and reports each repo's pidfile liveness
+  (`running` / `stale` / `stopped` / `path missing`) + pid, start time, and last activity,
+  reusing the `daemon-lock.ts` `readPidRecord`/`isLive` primitives; `daemon logs
+  [--repo <path>] [--follow] [--all]` prints or tails the log for one repo (default cwd)
+  or every registered repo. Negative paths covered (missing/corrupt log, dead pid,
+  unreadable `.daemon/`, stale registry path). The pidfile path and O_EXCL create flag
+  stay confined to `daemon-lock.ts` (boundary test); the log module reuses the newly
+  exported `daemonDir()` and never re-encodes the pidfile.
 - **`conduct-ts engineer` launches the interactive idea→spec loop.** Running the bare
   `conduct-ts engineer` command now drops the operator into an interactive
   `claude /engineer` session (stdio inherited, human-in-the-loop) instead of
@@ -101,6 +122,31 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   (Bug Loop). A code path that violates or is superseded by an APPROVED ADR/PRD is
   a conformance finding (kickback/BLOCK), not work to do — building or hardening
   code slated for deletion is wasted effort.
+- **Harness `.gitignore` now ignores `.daemon/` (and `.worktrees/`).** With the new
+  daemon log capture, a daemon run inside `src/conductor/` writes `.daemon/`
+  (pidfile + `daemon.log`); the root `.gitignore` previously ignored only
+  `.pipeline/`/`.memory/`, so those runtime files showed up as untracked. New
+  projects already get all three via the `conduct create` `GITIGNORE_SKELETON`
+  (`.pipeline/`, `.daemon/`, `.worktrees/`); the `bootstrap` skill's `.gitignore`
+  guidance + checklist now list `.daemon/` too, and existing projects pick it up
+  via the migration below.
+
+### Migration
+
+Existing conductor-managed projects should ignore the daemon's `.daemon/` directory
+(pidfile + `daemon.log`) now that the daemon writes a persistent log there. New
+projects scaffolded by `conduct create` already include it; this back-fills older
+ones. Idempotent — safe to re-run.
+
+```bash migration
+# Ensure the daemon state dir is gitignored (pidfile + daemon.log live here).
+if [ -f .gitignore ]; then
+  grep -qxF '.daemon/' .gitignore || printf '.daemon/\n' >> .gitignore
+else
+  printf '.daemon/\n' > .gitignore
+fi
+echo "ensured .daemon/ is in .gitignore"
+```
 
 ## Migration
 
