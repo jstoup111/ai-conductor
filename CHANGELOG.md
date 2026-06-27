@@ -134,6 +134,24 @@ fi
   Read-only `governorReport` (aggregate spend + kickback/halt/retry rates) and
   `computeFlywheelTrend` (improving / insufficient_data over engineer-planned
   features) remain library functions over the engineer store.
+- **Two SHIP-phase compliance gates** wired into the conduct-ts gate-driven tail, between
+  `manual_test` and `retro`:
+  - **`/prd-audit`** (new skill + `prd-auditor` agent) — audits the shipped implementation
+    against the approved PRD's functional requirements (`FR-N`). Per-FR verdict
+    `ALIGNED | PARTIAL | DIVERGED | MISSING` with `file:line` evidence and a gap-class
+    (`impl-gap` → kick back to BUILD; `intended-drift` → kick back to DECIDE to amend the PRD).
+    Loops until every FR is ALIGNED or human-ACCEPTED, with a 3-cycle rework budget then operator
+    escalation. Objective gate: blocks while any audit-table row is a non-ALIGNED, un-ACCEPTED FR.
+    Report at `.docs/audits/YYYY-MM-DD-<feature>-prd-audit.md`. Runs on opus.
+  - **`/architecture-review --as-built`** (new mode on the existing `architecture-review` skill) —
+    final drift sweep of shipped code vs **APPROVED** ADRs. Verdict
+    `APPROVED | APPROVED WITH DRIFT NOTES | BLOCKED`; `BLOCKED` (code violates an APPROVED ADR)
+    halts until a human fixes the code or supersedes the ADR. Report at
+    `.docs/decisions/architecture-review-as-built-YYYY-MM-DD-<feature>.md`. Runs on sonnet.
+  - conduct-ts step registry gains `prd_audit` and `architecture_review_as_built` (both
+    `enforcement: gating`, `loopGate: true`); they inherit the verdict/selector/kickback loop.
+    HARNESS.md model table, conduct skill flow/assess/gate-enforcement/skip tables, README,
+    and `src/conductor/README.md` updated to match.
 - conduct-ts daemon: **structured retro signal + engineer memory store** (Phase 9.1).
   On daemon feature completion (`done`/`halted`) the runner emits a structured
   `EngineerSignal` + a narrative to a cross-project store at `~/.ai-conductor/engineer/`

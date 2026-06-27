@@ -47,8 +47,10 @@ Step 11: /pipeline or /tdd      → BUILD (pipeline evaluator satisfies code-rev
        ── CHECKPOINT ──         → User reviews build output, can go back or continue
 Step 12: /manual-test           → SHIP (validate stories, bug loop via /tdd — auto-skip for non-endpoint features)
        ── CHECKPOINT ──         → User reviews test results, can go back or continue
-Step 13: /retro                 → SHIP
-Step 14: /finish                → SHIP (verify, review changes, present options — delegates to /pr if user chooses Push & PR)
+Step 13: /prd-audit             → SHIP (audit shipped impl vs PRD FRs; GATE — kicks back to BUILD or DECIDE on a gap)
+Step 14: /architecture-review --as-built → SHIP (shipped code vs APPROVED ADRs; GATE — BLOCKED on an ADR violation)
+Step 15: /retro                 → SHIP
+Step 16: /finish                → SHIP (verify, review changes, present options — delegates to /pr if user chooses Push & PR)
 ```
 
 > **Order note:** architecture (diagram + review) precedes `plan` so the technical
@@ -78,8 +80,10 @@ Check for these artifacts in order. The **first missing artifact** determines th
 | 10. writing-system-tests | Acceptance specs exist OR skipped (Small tier) | Glob `spec/integration/*_spec.rb` or `spec/system/*_spec.rb`, or check state is "skipped" |
 | 11. build | Implementation tasks completed with passing tests | Check `.pipeline/task-status.json` or test suite passes. Pipeline evaluator satisfies code-review gate. |
 | 12. manual-test | Manual test results exist with no FAILs, OR auto-skipped (non-endpoint feature) | Glob `.docs/manual-test-results.md` — if file contains FAIL rows, step is pending. **Auto-skip:** If no stories reference HTTP endpoints, API routes, or user-facing UI, skip `/manual-test` and log reason. For internal components (services, background jobs, mailers, CI config), suggest Rails console or script-based smoke test instead. |
-| 13. retro | Retro report exists in `.docs/retros/` OR skipped (Small tier) | Glob `.docs/retros/*.md` or check state is "skipped" |
-| 14. finish | User chose a completion option | Step is "done" in state (`pr_url` saved if Option 2 chosen) |
+| 13. prd-audit | Fresh PRD audit exists with every FR ALIGNED (or human-ACCEPTED) | Glob `.docs/audits/*-prd-audit.md` — if any verdict-table row carries an `FR-N` id with `MISSING`/`PARTIAL`/`DIVERGED` and is not `ACCEPTED`, step is pending. |
+| 14. architecture-review-as-built | Fresh as-built review exists with verdict not BLOCKED | Glob `.docs/decisions/architecture-review-as-built-*.md` — if the `Verdict:` line is `BLOCKED`, step is pending. |
+| 15. retro | Retro report exists in `.docs/retros/` OR skipped (Small tier) | Glob `.docs/retros/*.md` or check state is "skipped" |
+| 16. finish | User chose a completion option | Step is "done" in state (`pr_url` saved if Option 2 chosen) |
 
 **Feature completion:** After all steps finish and PR is created, `feature_status` is set to
 `"complete"` in `conduct-state.json`. Complete features are excluded from `--resume` menus.
@@ -219,11 +223,23 @@ Before suggesting the next step, verify that the previous step's **quality gates
 - Say: "DRAFT ADRs remain unapproved — [list files]. All ADRs must be APPROVED before BUILD."
 - Present DRAFT ADRs for review. Only APPROVED ADRs are binding on implementation.
 
-**After build (before suggesting finish):**
+**After build (before suggesting manual-test):**
 - Run the test suite and verify it passes
 - Check git status for uncommitted changes
 - If tests fail or tree is dirty, BLOCK
 - Say: "Build incomplete — [N] tests failing / uncommitted changes exist."
+
+**After prd-audit (before suggesting architecture-review --as-built):**
+- Open the audit report (`.docs/audits/*-prd-audit.md`) and check the per-FR verdict table
+- If any FR is non-ALIGNED and not human-ACCEPTED, BLOCK
+- Route by gap-class: `impl-gap` → back to BUILD to close the gap; `intended-drift` → back to
+  DECIDE to amend the PRD, then re-audit
+- Say: "PRD audit blocked — [FR-N] is [verdict] ([gap-class]). Return to [BUILD/DECIDE] and re-run `/prd-audit`."
+
+**After architecture-review --as-built (before suggesting retro):**
+- Open the as-built report (`.docs/decisions/architecture-review-as-built-*.md`)
+- If the verdict is BLOCKED (shipped code violates an APPROVED ADR), BLOCK
+- Say: "As-built review blocked — code violates [ADR-N]. Fix the code or supersede the ADR (human-approved), then re-run `/architecture-review --as-built`."
 
 **When pipeline reports task failure:** Verify by running tests before escalating or
 re-dispatching. JSON state can become stale — the actual test suite is the source of truth.
@@ -247,6 +263,8 @@ re-dispatching. JSON state can become stale — the actual test suite is the sou
 | writing-system-tests | Tier-dependent | Skip for Small (request specs in TDD suffice), required for Medium/Large |
 | build | No (structural) | This is the implementation |
 | code-review | Tier-dependent | Skip for Small (domain review suffices), required for Medium/Large |
+| prd-audit | No (gating) | Shipped impl must be verified against the PRD's FRs before ship |
+| architecture-review-as-built | No (gating) | Shipped code must be verified against APPROVED ADRs before ship |
 | finish | No (gating) | Fresh verification required |
 | retro | Tier-dependent | Skip for Small, recommended for Medium/Large |
 
@@ -291,7 +309,7 @@ Harness test complete. Review the retro for improvement findings.
 ## Verification
 
 - [ ] Correctly identifies current step from artifact state
-- [ ] Status dashboard shows all 15 steps with correct status
+- [ ] Status dashboard shows all 17 steps with correct status
 - [ ] Gate enforcement blocks progression when quality gates not met
 - [ ] Skippable vs non-skippable steps correctly enforced
 - [ ] Re-entry works (picks up from current state, doesn't restart)

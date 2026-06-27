@@ -13,6 +13,8 @@ export type StepName =
   | 'acceptance_specs'
   | 'build'
   | 'manual_test'
+  | 'prd_audit'
+  | 'architecture_review_as_built'
   | 'retro'
   | 'rebase'
   | 'finish';

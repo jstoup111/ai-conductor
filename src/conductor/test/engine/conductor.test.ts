@@ -1302,6 +1302,8 @@ describe('engine/conductor', () => {
         acceptance_specs: 'done',
         build: 'done',
         manual_test: 'done',
+        prd_audit: 'done',
+        architecture_review_as_built: 'done',
         retro: 'done',
         rebase: 'done',
         finish: 'done',
@@ -2487,6 +2489,18 @@ describe('engine/conductor', () => {
             await _wf(
               join(dir, '.docs/manual-test-results.md'),
               '# Results\n\n| Story | Result |\n|---|---|\n| story-a | PASS |\n',
+            );
+          } else if (step === 'prd_audit') {
+            await _mkdir(join(dir, '.docs/audits'), { recursive: true });
+            await _wf(
+              join(dir, '.docs/audits/add-foo-prd-audit.md'),
+              '# PRD Audit\n\n| FR | Verdict | Evidence |\n|---|---|---|\n| FR-1 | ALIGNED | foo.ts:1 |\n',
+            );
+          } else if (step === 'architecture_review_as_built') {
+            await _mkdir(join(dir, '.docs/decisions'), { recursive: true });
+            await _wf(
+              join(dir, '.docs/decisions/architecture-review-as-built-add-foo.md'),
+              '# As-Built Review\n\nVerdict: APPROVED\n',
             );
           } else if (step === 'retro') {
             await _mkdir(join(dir, '.docs/retros'), { recursive: true });

@@ -48,6 +48,11 @@ export const STEP_ARTIFACT_GLOBS: Record<StepName, string[]> = {
   ],
   build: ['.pipeline/task-status.json'],
   manual_test: ['.docs/manual-test-results.md'],
+  // SHIP-tail compliance gates (see CUSTOM_COMPLETION_PREDICATES below).
+  prd_audit: ['.docs/audits/*-prd-audit.md'],
+  architecture_review_as_built: [
+    '.docs/decisions/architecture-review-as-built-*.md',
+  ],
   retro: ['.docs/retros/*.md'],
   // Engine-native; its verdict is computed from git state, not a file artifact.
   rebase: [],
@@ -219,6 +224,81 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
         done: false,
         reason: '.docs/manual-test-results.md exists but is stale (mtime predates this conductor session); manual-test must re-run for the current feature',
       };
+    }
+    return { done: true };
+  },
+
+  // PRD-audit passes only when a fresh audit report for THIS session exists and
+  // every functional-requirement (FR-N) row is ALIGNED — or an un-ALIGNED row is
+  // explicitly marked ACCEPTED (a human-accepted intended divergence). A
+  // MISSING / PARTIAL / DIVERGED row that is not ACCEPTED blocks the gate, so the
+  // selector cannot advance to retro/finish until the gap is closed (BUILD) or
+  // the PRD is amended (DECIDE) and the audit re-run. Mirrors manual_test:
+  // presence + freshness + no blocking rows.
+  prd_audit: async (dir, ctx): Promise<CompletionResult> => {
+    const files = await findArtifactFiles(dir, 'prd_audit');
+    if (files.length === 0) {
+      return {
+        done: false,
+        reason: 'no .docs/audits/*-prd-audit.md present — the prd-audit skill must record a per-FR verdict table',
+      };
+    }
+    // Only consider reports written in this session; a stale audit left in the
+    // same worktree by a prior feature must not satisfy the gate.
+    const fresh: string[] = [];
+    for (const f of files) {
+      if (await fileIsFreshSinceSession(f, ctx.sessionStartedAt)) fresh.push(f);
+    }
+    if (fresh.length === 0) {
+      return {
+        done: false,
+        reason: 'prd-audit report exists but is stale (mtime predates this session) — re-run the prd-audit for the current feature',
+      };
+    }
+    for (const f of fresh) {
+      const blocking = findUnalignedFrRows(await readFile(f, 'utf-8'));
+      if (blocking.length > 0) {
+        const shown = blocking.slice(0, 3).join('; ');
+        const more = blocking.length > 3 ? ` (+${blocking.length - 3} more)` : '';
+        return {
+          done: false,
+          reason: `prd-audit found un-ALIGNED FRs: ${shown}${more} — close the gap (BUILD) or amend the PRD (DECIDE), then re-audit`,
+        };
+      }
+    }
+    return { done: true };
+  },
+
+  // As-built architecture gate passes when a fresh report exists for this
+  // session and its verdict is not BLOCKED. BLOCKED means shipped code violates
+  // an APPROVED ADR — a human must fix the code or supersede the ADR before the
+  // loop can reach finish. APPROVED / APPROVED WITH DRIFT NOTES pass.
+  architecture_review_as_built: async (dir, ctx): Promise<CompletionResult> => {
+    const files = await findArtifactFiles(dir, 'architecture_review_as_built');
+    if (files.length === 0) {
+      return {
+        done: false,
+        reason: 'no .docs/decisions/architecture-review-as-built-*.md present — the as-built review must record a verdict',
+      };
+    }
+    const fresh: string[] = [];
+    for (const f of files) {
+      if (await fileIsFreshSinceSession(f, ctx.sessionStartedAt)) fresh.push(f);
+    }
+    if (fresh.length === 0) {
+      return {
+        done: false,
+        reason: 'as-built architecture review exists but is stale (mtime predates this session) — re-run for the current feature',
+      };
+    }
+    for (const f of fresh) {
+      const content = await readFile(f, 'utf-8');
+      if (/^\s*(?:\*\*)?Verdict:?(?:\*\*)?\s*:?\s*BLOCKED\b/im.test(content)) {
+        return {
+          done: false,
+          reason: 'as-built review verdict is BLOCKED — shipped code violates an APPROVED ADR; fix the code or supersede the ADR (human-approved), then re-run',
+        };
+      }
     }
     return { done: true };
   },
@@ -441,6 +521,30 @@ export function planHasDependencyTree(planText: string): boolean {
     /^##\s+task\s+dependency\s+graph/im.test(planText) ||
     /\*\*dependencies:\*\*/i.test(planText)
   );
+}
+
+/**
+ * Scan a PRD-audit report for functional-requirement verdict rows that are not
+ * ALIGNED and not human-ACCEPTED. The audit table carries one row per FR with a
+ * verdict cell of ALIGNED | PARTIAL | DIVERGED | MISSING; an intended divergence
+ * the operator has signed off on is marked ACCEPTED in the same row. Returns the
+ * FR identifier (or a truncated row) of every still-blocking row.
+ *
+ * Header/separator/legend lines are ignored: a row is only considered when it
+ * carries a verdict keyword AND an `FR-<n>` identifier, which a header
+ * (`| FR | Verdict |`), separator (`|---|`), or prose legend never does.
+ */
+function findUnalignedFrRows(content: string): string[] {
+  const blocking: string[] = [];
+  for (const line of content.split('\n')) {
+    if (!/^\s*\|/.test(line)) continue; // table rows only
+    const fr = line.match(/\bFR-\d+[A-Za-z]?\b/i);
+    if (!fr) continue; // skip header/separator/legend rows (no FR id)
+    if (!/\b(MISSING|PARTIAL|DIVERGED)\b/i.test(line)) continue;
+    if (/\bACCEPTED\b/i.test(line)) continue; // human-accepted divergence
+    blocking.push(fr[0].toUpperCase());
+  }
+  return blocking;
 }
 
 // --- Story / plan structure parsing (shared by stories + plan predicates) ---

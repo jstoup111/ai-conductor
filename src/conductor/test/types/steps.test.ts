@@ -2,13 +2,14 @@ import { describe, it, expect } from 'vitest';
 import type { StepName, StepStatus, Phase, ComplexityTier } from '../../src/types/steps.js';
 
 describe('Step types', () => {
-  it('StepName union has 16 members', () => {
+  it('StepName union has 18 members', () => {
     const allSteps: StepName[] = [
       'bootstrap', 'memory', 'assess', 'brainstorm', 'complexity', 'stories',
       'conflict_check', 'plan', 'architecture_diagram', 'architecture_review',
-      'worktree', 'acceptance_specs', 'build', 'manual_test', 'retro', 'finish',
+      'worktree', 'acceptance_specs', 'build', 'manual_test', 'prd_audit',
+      'architecture_review_as_built', 'retro', 'finish',
     ];
-    expect(allSteps).toHaveLength(16);
+    expect(allSteps).toHaveLength(18);
   });
 
   it('StepStatus has 6 values', () => {

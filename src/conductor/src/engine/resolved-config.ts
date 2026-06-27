@@ -32,6 +32,8 @@ export const DEFAULT_STEP_MODELS: Record<StepName, string> = {
   acceptance_specs: 'sonnet',
   build: 'haiku',
   manual_test: 'sonnet',
+  prd_audit: 'opus',       // cross-reference PRD intent vs shipped implementation
+  architecture_review_as_built: 'sonnet', // pattern-match code vs approved design
   retro: 'sonnet',
   rebase: 'haiku',         // engine-native; no Claude dispatch (mirrors complexity)
   finish: 'haiku',
@@ -52,6 +54,8 @@ export const DEFAULT_STEP_EFFORT: Record<StepName, EffortLevel> = {
   acceptance_specs: 'medium',
   build: 'low',            // dispatcher; intelligence is in per-task sub-sessions
   manual_test: 'medium',
+  prd_audit: 'high',       // FR-by-FR intent vs implementation reasoning
+  architecture_review_as_built: 'medium',
   retro: 'medium',
   rebase: 'low',           // deterministic git work, no reasoning
   finish: 'low',
@@ -72,6 +76,8 @@ export const DEFAULT_STEP_RETRIES: Record<StepName, number> = {
   acceptance_specs: 3,
   build: 5,
   manual_test: 3,
+  prd_audit: 3,
+  architecture_review_as_built: 3,
   retro: 3,
   rebase: 1,
   finish: 1,
@@ -92,6 +98,8 @@ export const DEFAULT_STEP_REVIEW: Record<StepName, ReviewMode> = {
   acceptance_specs: 'auto',
   build: 'auto',
   manual_test: 'auto',
+  prd_audit: 'conditional',          // marker written only when an FR is non-ALIGNED
+  architecture_review_as_built: 'conditional', // marker written only on drift/BLOCKED
   retro: 'manual',
   rebase: 'auto',
   finish: 'auto',
