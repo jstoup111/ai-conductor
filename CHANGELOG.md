@@ -66,6 +66,21 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   before `parseArgs`; `inline` is listed in `--help`. **Breaking CLI change** — see Migration
   below.
 
+- **Harness gates hardened against the orphaned-primitive + path-guard escape classes
+  (Phase 9.3 retro H-1 / H-2 / C-2).** Two recurring Phase-9 escape classes — a
+  *replacement* whose new code ships orphaned (live path still calls the old symbol) and a
+  path/prefix guard with an untested boundary that fails closed/open — now have cheap
+  mechanical gates instead of relying solely on the fresh-context final evaluator:
+  `skills/writing-system-tests/SKILL.md` gains **§3b** (replacement tasks must include ≥1
+  acceptance test that drives the REAL production entry point and asserts the observable
+  artifact, not the new unit) and **§3c** (a mandatory boundary-value checklist —
+  trailing-slash / root / empty / sibling-prefix — for any path or prefix guard);
+  `skills/pipeline/SKILL.md` gains a **"Superseded-symbol check (step 5)"** that greps the
+  superseded symbol for zero non-test callers in `src/` before a replacement task is marked
+  complete, running *before* the expensive batch-evaluator dispatch so the orphaned-primitive
+  class fails fast. (The companion C-4 SHIP-phase "read the governing APPROVED ADR/PRD before
+  remediating" triage rule already shipped in `skills/manual-test/SKILL.md` §6.)
+
 - **Engineer post-authoring handoff extracted into a named step (Phase 9.3 cleanup,
   retro A-2/A-3).** The route→gate→author→PR→ensure-running god-chain inside
   `loop.ts` `processIdea` had grown to 473 LOC; the post-authoring tail (PR-open vs

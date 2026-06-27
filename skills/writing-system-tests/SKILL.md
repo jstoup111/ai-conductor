@@ -107,6 +107,46 @@ criteria. Only generate integration specs when at least one story genuinely cros
 
 This avoids generating integration specs that duplicate request specs for simple CRUD operations.
 
+### 3b. Replacement Tasks: Drive the REAL Entry Point
+
+When a task **replaces or supersedes existing behavior** (the plan says "replace X",
+"supersede Y", "swap the old path for the new"), the new code is only correct if the
+PRODUCTION entry point actually calls it. A unit test that invokes the new function
+*directly* passes even while the live path still calls the old one — the new primitive
+ships orphaned (zero production callers). This class escaped into ~5 consecutive Phase-9
+features; it is caught late by the fresh-context evaluator, not the suite.
+
+**Rule:** for any replacement task, generate **≥1 acceptance test that drives the real
+production entry point** (the command / handler / loop a user or caller actually invokes) —
+NOT the new unit under test — and asserts the **observable artifact** the replacement is
+supposed to produce (file written, PR opened, gate enforced, record persisted). The test
+must fail if the entry point is still wired to the OLD behavior.
+
+- Identify the real entry point from the story/plan ("when `runEngineerMode` processes an
+  idea…"), not the new symbol ("when `runAuthoring` is called…").
+- Assert the side effect, not the return value of the new unit.
+- Pair with the `/pipeline` batch gate that greps the superseded symbol for zero non-test
+  callers: the acceptance test proves the new path runs; the grep proves the old one is gone.
+
+### 3c. Boundary-Value Checklist for Path / Prefix Guards
+
+Any spec covering a **path, prefix, or canonical-root guard** (an allow/deny check on a
+filesystem path or string prefix) MUST include explicit boundary-value cases. Off-by-one
+normalization bugs in these guards fail *closed* (reject everything) or *open* (accept a
+sibling) and are invisible to happy-path tests — this exact gap shipped a fail-closed
+trailing-slash bug caught only by the evaluator.
+
+Generate a negative/boundary case for EACH row:
+
+| Boundary | Example input | Expected |
+|---|---|---|
+| Trailing slash | `<root>/repo/` vs canonical `<root>/repo` | normalized equal — write allowed |
+| Root path | filesystem root | guarded, never a wildcard |
+| Empty string | `""` | rejected, no crash |
+| Sibling-prefix | `<root>/repo-evil` vs allowed `<root>/repo` | rejected (prefix ≠ path segment) |
+
+A path-guard spec without these rows is incomplete — treat them as mandatory negative paths.
+
 ### 4. Read App Context
 
 For each story, read the relevant:
