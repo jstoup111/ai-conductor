@@ -39,6 +39,21 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 ## [Unreleased]
 
 ### Fixed
+- conduct-ts: the `engineer` routing adapter (Phase 9.3) built its provider call
+  as `provider.invoke({ prompt } as any)`, omitting the **required** `sessionId`
+  and `resume` fields of `InvokeOptions`. The `as any` cast hid the type error;
+  at runtime the real `ClaudeProvider` emitted `claude --session-id undefined`,
+  which the CLI rejects with *"Invalid session ID. Must be a valid UUID."* —
+  every idea failed to route and silently fell through to "No matching project
+  found. Would you like to create one?" even with a seeded registry. Fixed by
+  passing a fresh `uuidv4()` session with `resume: false` (routing is a
+  single-shot, stateless classification) and removing the `as any` cast so the
+  type checker enforces the contract. Regression test
+  (`test/acceptance/engineer-routing-session.test.ts`) drives the real
+  `runEngineerMode` entry point and asserts the adapter hands the provider a
+  valid-UUID `sessionId` — the seam no existing test exercised because every
+  routing fake ignored its argument (same class as retro H-1).
+
 - conduct-ts: the engine-native `rebase` loop step (Phase 9.0) could run a
   destructive `git rebase origin/<default>` against the **real** conductor
   worktree whenever a test drove a `Conductor` whose `projectRoot` resolved to

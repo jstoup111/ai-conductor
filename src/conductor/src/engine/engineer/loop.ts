@@ -23,6 +23,7 @@
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { basename } from 'node:path';
+import { v4 as uuidv4 } from 'uuid';
 import type { LLMProvider } from '../../execution/llm-provider.js';
 // FR-13/FR-1: depend on the intake PORT interface, never the concrete adapter.
 import type { IntakePort } from './intake/port.js';
@@ -166,8 +167,16 @@ export async function runEngineerMode(deps: EngineerDeps): Promise<EngineerSessi
   // or a wrapped object { candidates: [...] }. We normalise here.
   const routingProvider = {
     invoke: async (prompt: string): Promise<string> => {
-      const result = await deps.provider.invoke({ prompt } as any);
-      const raw = (result as any).output ?? '';
+      // Routing is a single-shot, stateless classification — a fresh session
+      // each call, never a resume. A valid UUID sessionId is REQUIRED: the real
+      // ClaudeProvider emits `claude --session-id <id>`, which the CLI rejects
+      // with "Invalid session ID. Must be a valid UUID." when the field is absent.
+      const result = await deps.provider.invoke({
+        prompt,
+        sessionId: uuidv4(),
+        resume: false,
+      });
+      const raw = result.output ?? '';
       // Normalise wrapped { candidates: [...] } → bare array JSON string.
       try {
         const parsed: unknown = JSON.parse(raw);
