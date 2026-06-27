@@ -22,7 +22,7 @@ import { DefaultStepRunner } from './engine/step-runners.js';
 import { ConductorEventEmitter } from './ui/events.js';
 import { loadConfig } from './engine/config.js';
 import { readState, writeState } from './engine/state.js';
-import { parseArgs, createProgram, detectInline, type CLIOptions } from './cli.js';
+import { parseArgs, renderFullHelp, detectInline, type CLIOptions } from './cli.js';
 import type { StepName } from './types/index.js';
 import { createRenderer } from './ui/create-renderer.js';
 import { ALL_STEPS } from './engine/steps.js';
@@ -180,7 +180,7 @@ async function main(): Promise<void> {
   // surface lives in createProgram(). Subcommand-specific help is already handled
   // by the dispatchers above, so any `--help` reaching here is top-level.
   if (process.argv.slice(2).some((a) => a === '--help' || a === '-h')) {
-    createProgram().outputHelp();
+    process.stdout.write(renderFullHelp());
     process.exit(0);
   }
 

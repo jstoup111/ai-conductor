@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseArgs, createProgram, detectInline } from '../../src/cli.js';
+import { parseArgs, createProgram, detectInline, renderFullHelp } from '../../src/cli.js';
 
 describe('CLI', () => {
   it('parses feature description as positional arg', () => {
@@ -120,6 +120,49 @@ describe('CLI', () => {
     for (const cmd of ['inline', 'register', 'create', 'engineer', 'daemon']) {
       expect(help).toContain(cmd);
     }
+  });
+
+  // Root --help is a full reference: renderFullHelp recurses through every command
+  // and sub-subcommand, documenting nested commands + their options in one document.
+  describe('renderFullHelp (root-level full reference)', () => {
+    const help = renderFullHelp();
+
+    it('documents every top-level command with a titled section', () => {
+      for (const path of [
+        'conduct inline',
+        'conduct register',
+        'conduct create',
+        'conduct engineer',
+        'conduct daemon',
+      ]) {
+        expect(help).toContain(path);
+      }
+    });
+
+    it('documents NESTED sub-subcommands (engineer + daemon trees)', () => {
+      for (const path of [
+        'conduct engineer projects',
+        'conduct engineer land',
+        'conduct engineer handoff',
+        'conduct daemon status',
+        'conduct daemon logs',
+      ]) {
+        expect(help).toContain(path);
+      }
+    });
+
+    it('documents nested-command OPTIONS, not just names', () => {
+      // create --remote, engineer land --project/--idea, daemon --concurrency,
+      // daemon logs --follow — each only appears if we recurse into the command.
+      for (const opt of ['--remote', '--idea', '--branch', '--concurrency', '--follow']) {
+        expect(help).toContain(opt);
+      }
+    });
+
+    it('omits the auto-generated `help [command]` as its own section', () => {
+      expect(help).not.toContain('conduct help');
+      expect(help).not.toContain('conduct engineer help');
+    });
   });
 
   // The inline pipeline now runs under an explicit `inline` subcommand; detectInline

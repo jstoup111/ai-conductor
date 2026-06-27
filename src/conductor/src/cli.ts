@@ -119,11 +119,27 @@ export function createProgram(): Command {
     .description('Scaffold a new project (git init + skeleton CLAUDE.md + .gitignore) and register it')
     .option('--remote <url>', 'Add an origin remote (add-only, no push)');
 
-  // Engineer subcommand (Phase 9.3). NON-INTERACTIVE: dispatched by index.ts
-  // (detectEngineerCommand) before the pipeline boots. Loop body wired in task-33/34.
-  program
+  // Engineer subcommands (Phase 9.3). NON-INTERACTIVE: dispatched by index.ts
+  // (detectEngineerCommand) before the pipeline boots. Bare `engineer` launches the
+  // interactive idea→spec loop; the rest are the deterministic primitives the
+  // /engineer skill calls. Declared with their options so the full --help reference
+  // documents them.
+  const engineer = program
     .command('engineer')
-    .description('Start the supervisor engineer: route ideas to projects, author spec branches, and surface flywheel lessons');
+    .description('Supervisor engineer: launch the interactive idea→spec loop (run bare), or call a primitive below');
+  engineer
+    .command('projects')
+    .description('List registered projects as JSON (name, path, description, tags)');
+  engineer
+    .command('land')
+    .description('Commit the already-authored .docs spec artifacts onto a spec/<slug> branch')
+    .option('--project <name>', 'Target project name (resolved from the registry)')
+    .option('--idea <idea>', 'The idea/spec being landed (slug + commit message)');
+  engineer
+    .command('handoff')
+    .description('Open the spec PR (local-commit fallback when no remote) and nudge the target daemon')
+    .option('--project <name>', 'Target project name (resolved from the registry)')
+    .option('--branch <branch>', 'The spec/<slug> branch produced by `engineer land`');
 
   // Daemon subcommand (Phase 6; promoted from the `--daemon` flag). NON-INTERACTIVE:
   // dispatched by index.ts before the pipeline boots. The bare `daemon` RUNS the
@@ -152,6 +168,30 @@ export function createProgram(): Command {
     .option('--all', 'Show logs for every registered repo');
 
   return program;
+}
+
+/**
+ * Render a SINGLE, root-level help document that recurses through every command
+ * and sub-subcommand — so `conduct --help` is a complete reference (each command's
+ * options + nested subcommands), not just a top-level name list. Commander only
+ * renders one level per `helpInformation()`; this walks the tree depth-first and
+ * appends a titled section per command (skipping the auto-generated `help`).
+ */
+export function renderFullHelp(program: Command = createProgram()): string {
+  const sections: string[] = [program.helpInformation().trimEnd()];
+  const rule = '─'.repeat(72);
+
+  const walk = (cmd: Command, path: string[]): void => {
+    for (const sub of cmd.commands) {
+      if (sub.name() === 'help') continue; // commander's auto `help [command]`
+      const fullPath = ['conduct', ...path, sub.name()].join(' ');
+      sections.push(`${rule}\n${fullPath}\n${rule}\n${sub.helpInformation().trimEnd()}`);
+      walk(sub, [...path, sub.name()]);
+    }
+  };
+  walk(program, []);
+
+  return sections.join('\n\n') + '\n';
 }
 
 export function parseArgs(argv: string[]): CLIOptions {
