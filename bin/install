@@ -437,6 +437,30 @@ install_dependencies() {
   else
     warn "Node.js not found — puppeteer MCP server not installed"
   fi
+
+  # Serena — optional LSP-backed semantic code toolkit (oraios/serena), used as an
+  # MCP server. Opt-in: heavyweight, so we prompt rather than auto-install like rtk.
+  # /bootstrap auto-registers it as a user-scope MCP server once it's on PATH.
+  if command -v serena &>/dev/null; then
+    ok "Serena already installed"
+  elif ! command -v uv &>/dev/null; then
+    warn "Serena not installed — needs uv (https://docs.astral.sh/uv/), then: uv tool install -p 3.13 serena-agent"
+  elif [ ! -t 0 ]; then
+    info "Serena available (oraios/serena) — install later with: uv tool install -p 3.13 serena-agent"
+  else
+    printf "  ${CYAN}→${NC} Install Serena semantic code toolkit (oraios/serena)? [y/N]: "
+    read -r serena_choice
+    if [[ "$serena_choice" =~ ^[Yy]$ ]]; then
+      info "Installing Serena via uv..."
+      if uv tool install -p 3.13 serena-agent 2>/dev/null; then
+        ok "Serena installed — /bootstrap will register it as an MCP server"
+      else
+        warn "Serena install failed — retry manually: uv tool install -p 3.13 serena-agent"
+      fi
+    else
+      info "Skipped — install later with: uv tool install -p 3.13 serena-agent"
+    fi
+  fi
 }
 
 # ─── Markdown viewer config ───────────────────────────────────────────────────

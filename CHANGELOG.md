@@ -12,6 +12,15 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- **Optional Serena semantic-code MCP integration.** `./bin/install` now offers an opt-in
+  install of [Serena](https://github.com/oraios/serena) (`oraios/serena`) when `uv` is
+  present — prompted, not auto-forced, since it's a heavyweight LSP-backed toolkit. Once
+  installed, `/bootstrap` auto-registers it as a **user-scope** MCP server
+  (`claude mcp add --scope user serena -- serena start-mcp-server --context claude-code
+  --project-from-cwd`) when it's on PATH and not already configured (idempotent via
+  `claude mcp get serena`). Graceful no-op when `uv`/Serena are absent; install skipped in
+  non-interactive shells. Documented in `README.md` and bootstrap §9a.
+
 - **Daemon surfaces a persistently-unbuildable merged spec once, not forever.** When a
   merged spec can never satisfy the backlog gate (stories not `Status: Accepted`, or no plan
   dependency tree), `discoverBacklog` previously re-logged the identical `skip …` line on
