@@ -44,15 +44,11 @@ export interface CLIOptions {
 // before the interactive pipeline boots — NOT a flag on the base program. See
 // DaemonCommandOptions there for the daemon's own options.
 
-// Base program: the bare-positional pipeline invocation (`conduct [feature]`)
-// plus all its flags. parseArgs uses THIS so a bare feature description is never
-// mistaken for an unknown subcommand. createProgram() layers the registry
-// subcommands on top for the discoverable CLI surface / --help.
-function createBaseProgram(): Command {
-  const program = new Command();
-  program
-    .name('conduct')
-    .description('Orchestrate SDLC pipeline')
+// The inline-pipeline option surface. Shared by the base program (used by
+// parseArgs) and the `inline` subcommand declaration (used for --help) so the two
+// never drift. A bare `[feature]` positional plus all pipeline flags.
+function applyPipelineOptions(cmd: Command): Command {
+  return cmd
     .argument('[feature]', 'Feature description')
     .option('--resume', 'Resume from last state')
     .option('--fresh', 'Start a new feature; skip auto-resume even if a worktree for this feature description already exists')
@@ -70,11 +66,45 @@ function createBaseProgram(): Command {
     .option('--interactive', 'Run every step in interactive Claude REPL mode (no -p flag)')
     .option('--diagnose', 'Diagnose conductor state (non-mutating); reports SHIP-phase evidence gaps and exits non-zero if state is marked complete but evidence is missing')
     .option('--report', 'Print run summary from .pipeline/events.jsonl (step durations, retry hotspots, token spend) and exit');
-  return program;
+}
+
+// Base program: parses the inline-pipeline args AFTER the `inline` subcommand
+// token has been stripped (see detectInline). It carries the flags but no
+// subcommands, so a feature description is never mistaken for an unknown command.
+function createBaseProgram(): Command {
+  const program = new Command();
+  program.name('conduct').description('Orchestrate SDLC pipeline');
+  return applyPipelineOptions(program);
+}
+
+/**
+ * The inline pipeline now runs under an explicit `inline` subcommand
+ * (`conduct inline "<feature>"`), not as a bare positional. detectInline strips
+ * that token so parseArgs sees just the feature + flags.
+ *
+ * @returns isInline=true and the argv with `inline` removed when argv[2] is
+ *   `inline`; otherwise isInline=false and argv unchanged.
+ */
+export function detectInline(argv: string[]): { isInline: boolean; rest: string[] } {
+  if (argv[2] === 'inline') {
+    return { isInline: true, rest: [argv[0], argv[1], ...argv.slice(3)] };
+  }
+  return { isInline: false, rest: argv };
 }
 
 export function createProgram(): Command {
   const program = createBaseProgram();
+
+  // Inline pipeline subcommand. This is the DEFAULT mode — running the SDLC
+  // pipeline in the foreground (`conduct inline "<feature>"`), the counterpart to
+  // the background `daemon`. Dispatched in index.ts (detectInline) before the
+  // pipeline boots; declared here with the full pipeline option surface so
+  // `--help` and `conduct inline --help` list it.
+  applyPipelineOptions(
+    program
+      .command('inline')
+      .description('Run the SDLC pipeline inline, in the foreground (the default mode)'),
+  );
 
   // Registry subcommands (Phase 9.2). These are NON-INTERACTIVE: they run to
   // completion and exit, rather than entering the interactive pipeline. The
@@ -89,11 +119,27 @@ export function createProgram(): Command {
     .description('Scaffold a new project (git init + skeleton CLAUDE.md + .gitignore) and register it')
     .option('--remote <url>', 'Add an origin remote (add-only, no push)');
 
-  // Engineer subcommand (Phase 9.3). NON-INTERACTIVE: dispatched by index.ts
-  // (detectEngineerCommand) before the pipeline boots. Loop body wired in task-33/34.
-  program
+  // Engineer subcommands (Phase 9.3). NON-INTERACTIVE: dispatched by index.ts
+  // (detectEngineerCommand) before the pipeline boots. Bare `engineer` launches the
+  // interactive idea→spec loop; the rest are the deterministic primitives the
+  // /engineer skill calls. Declared with their options so the full --help reference
+  // documents them.
+  const engineer = program
     .command('engineer')
-    .description('Start the supervisor engineer: route ideas to projects, author spec branches, and surface flywheel lessons');
+    .description('Supervisor engineer: launch the interactive idea→spec loop (run bare), or call a primitive below');
+  engineer
+    .command('projects')
+    .description('List registered projects as JSON (name, path, description, tags)');
+  engineer
+    .command('land')
+    .description('Commit the already-authored .docs spec artifacts onto a spec/<slug> branch')
+    .option('--project <name>', 'Target project name (resolved from the registry)')
+    .option('--idea <idea>', 'The idea/spec being landed (slug + commit message)');
+  engineer
+    .command('handoff')
+    .description('Open the spec PR (local-commit fallback when no remote) and nudge the target daemon')
+    .option('--project <name>', 'Target project name (resolved from the registry)')
+    .option('--branch <branch>', 'The spec/<slug> branch produced by `engineer land`');
 
   // Daemon subcommand (Phase 6; promoted from the `--daemon` flag). NON-INTERACTIVE:
   // dispatched by index.ts before the pipeline boots. The bare `daemon` RUNS the
@@ -122,6 +168,30 @@ export function createProgram(): Command {
     .option('--all', 'Show logs for every registered repo');
 
   return program;
+}
+
+/**
+ * Render a SINGLE, root-level help document that recurses through every command
+ * and sub-subcommand — so `conduct --help` is a complete reference (each command's
+ * options + nested subcommands), not just a top-level name list. Commander only
+ * renders one level per `helpInformation()`; this walks the tree depth-first and
+ * appends a titled section per command (skipping the auto-generated `help`).
+ */
+export function renderFullHelp(program: Command = createProgram()): string {
+  const sections: string[] = [program.helpInformation().trimEnd()];
+  const rule = '─'.repeat(72);
+
+  const walk = (cmd: Command, path: string[]): void => {
+    for (const sub of cmd.commands) {
+      if (sub.name() === 'help') continue; // commander's auto `help [command]`
+      const fullPath = ['conduct', ...path, sub.name()].join(' ');
+      sections.push(`${rule}\n${fullPath}\n${rule}\n${sub.helpInformation().trimEnd()}`);
+      walk(sub, [...path, sub.name()]);
+    }
+  };
+  walk(program, []);
+
+  return sections.join('\n\n') + '\n';
 }
 
 export function parseArgs(argv: string[]): CLIOptions {

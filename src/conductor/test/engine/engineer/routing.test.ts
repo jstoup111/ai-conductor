@@ -72,6 +72,18 @@ function stubReader(records: ProjectRecord[]): RegistryReader {
   };
 }
 
+/**
+ * Count records in the on-disk registry file (0 when absent). Used by the
+ * repo-untouched / registry-unchanged invariants (retro A-1) so a decline/redirect
+ * is asserted to write NOTHING, not merely that an offer string was printed.
+ */
+async function registryCount(registryPath: string): Promise<number> {
+  if (!existsSync(registryPath)) return 0;
+  const raw = await readFile(registryPath, 'utf-8');
+  const records: unknown[] = JSON.parse(raw);
+  return Array.isArray(records) ? records.length : 0;
+}
+
 // --------------------------------------------------------------------------
 // Canonical provider response format: JSON array of candidate objects.
 // Each object: { name: string; score: number; rationale: string }
@@ -510,10 +522,11 @@ describe('Task 28: routing redirect — original repo gets NO branch/PR/change (
       makeRecord27(betaDir, 'beta'),
     ]);
 
-    // Capture the directory listing of alphaDir BEFORE the loop runs.
-    // An empty dir has 0 entries; if the loop creates a branch/worktree/file inside
-    // it, the listing would change.
+    // Capture the directory listing of alphaDir AND the registry record count
+    // BEFORE the loop runs. If the loop creates a branch/worktree/file inside the
+    // proposed repo, or writes a registry record, one of these would change.
     const beforeAlpha = await readdir(alphaDir);
+    const beforeRegistry = await registryCount(registryPath27);
 
     // Route seam stub: proposes alpha as the top candidate.
     // Returns a raw JSON string — the loop reads `await deps.route.invoke(prompt)` directly.
@@ -538,9 +551,11 @@ describe('Task 28: routing redirect — original repo gets NO branch/PR/change (
       engineerDir: engineerDir27,
     });
 
-    // After redirect + decline, alphaDir must be untouched.
+    // After redirect + decline, alphaDir must be byte-for-byte untouched AND the
+    // registry must carry no new record (the redirect/decline wrote nothing).
     const afterAlpha = await readdir(alphaDir);
     expect(afterAlpha).toEqual(beforeAlpha);
+    expect(await registryCount(registryPath27)).toBe(beforeRegistry);
   });
 
   it('redirect: ideasProcessed=0 after decline confirms NO authoring ran on either repo', async () => {
@@ -617,7 +632,7 @@ describe('Task 28: routing redirect — original repo gets NO branch/PR/change (
 // =============================================================================
 
 describe('Task 31: create-on-no-fit offer — decline (FR-5)', () => {
-  it('no-fit: loop offers to create a new project when registry has no matching repo', async () => {
+  it('no-fit: loop offers to create a new project AND leaves the registry + workdir untouched on decline', async () => {
     // Empty registry → createSuggested will be true → loop should offer create.
     await writeRegistry27([]);
 
@@ -625,6 +640,13 @@ describe('Task 31: create-on-no-fit offer — decline (FR-5)', () => {
     const providerStub = {
       invoke: vi.fn().mockResolvedValue('[]'),
     };
+
+    // Capture the no-side-effect baseline BEFORE the loop: registry record count
+    // and the workdir directory listing (excluding the pre-existing engineer/registry).
+    const beforeRegistry = await registryCount(registryPath27);
+    const workdirDirs = async () =>
+      (await readdir(workDir27)).filter((d) => d !== 'engineer' && d !== 'registry.json').sort();
+    const beforeDirs = await workdirDirs();
 
     // IO: idea → decline the create offer.
     const { io, out } = scriptedIo27(['brand new feature idea', 'n']);
@@ -641,12 +663,25 @@ describe('Task 31: create-on-no-fit offer — decline (FR-5)', () => {
     // The loop must have printed an offer to create a new project.
     const combined = out.join('\n');
     expect(combined).toMatch(/create|no.*match|no.*project/i);
+
+    // …AND it must have written NOTHING: registry record count is byte-for-byte
+    // unchanged and no new project directory was scaffolded. This is the specific
+    // no-side-effect invariant (retro A-1) — not merely that a string was printed.
+    expect(await registryCount(registryPath27)).toBe(beforeRegistry);
+    expect(await workdirDirs()).toEqual(beforeDirs);
   });
 
-  it('decline the create offer: registry is unchanged (no new records written)', async () => {
+  it('decline the create offer: registry record count and workdir are byte-for-byte unchanged', async () => {
     await writeRegistry27([]);
 
     const providerStub = { invoke: vi.fn().mockResolvedValue('[]') };
+
+    // Capture the baseline BEFORE the loop so the assertion is an equality against
+    // the pre-loop state, not an absolute-zero check (falsifiable under any write).
+    const beforeRegistry = await registryCount(registryPath27);
+    const workdirDirs = async () =>
+      (await readdir(workDir27)).filter((d) => d !== 'engineer' && d !== 'registry.json').sort();
+    const beforeDirs = await workdirDirs();
 
     const { io } = scriptedIo27(['another idea', 'n']);
 
@@ -662,15 +697,10 @@ describe('Task 31: create-on-no-fit offer — decline (FR-5)', () => {
     // No ideas processed — declined before any scaffolding.
     expect(summary.ideasProcessed).toBe(0);
 
-    // Registry file should still be empty ([] or non-existent → no new entries).
-    if (existsSync(registryPath27)) {
-      const raw = await readFile(registryPath27, 'utf-8');
-      const records: unknown[] = JSON.parse(raw);
-      expect(records).toHaveLength(0);
-    }
-    // No new directories under workDir27 (only engineerDir27 which pre-exists).
-    const dirs = (await readdir(workDir27)).filter((d) => d !== 'engineer' && d !== 'registry.json');
-    expect(dirs).toHaveLength(0);
+    // Registry record count unchanged vs the pre-loop baseline (no new entries).
+    expect(await registryCount(registryPath27)).toBe(beforeRegistry);
+    // No new directories scaffolded under workDir27 — listing equals the baseline.
+    expect(await workdirDirs()).toEqual(beforeDirs);
   });
 
   it('decline: no directory is created for the declined project (zero side effects)', async () => {
