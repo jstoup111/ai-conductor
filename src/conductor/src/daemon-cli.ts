@@ -13,7 +13,7 @@ import { holdLock } from './engine/daemon-lock.js';
 import { openDaemonLog, type DaemonLogSink } from './engine/daemon-log.js';
 import type { ConductState, ConductorEvent, StepName } from './types/index.js';
 import { runDaemon, type BacklogItem } from './engine/daemon.js';
-import { discoverBacklog } from './engine/daemon-backlog.js';
+import { discoverBacklog, resolveDiscoveryRef } from './engine/daemon-backlog.js';
 import { makeRunFeature, type FeatureWorktree } from './engine/daemon-runner.js';
 import { isProcessed, makeFeatureRunnerDeps } from './engine/daemon-deps.js';
 
@@ -194,10 +194,15 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   );
   const result = await runDaemon(
     {
-      discoverBacklog: () =>
-        discoverBacklog(projectRoot, (slug) => isProcessed(projectRoot, slug), log, {
-          baseBranch,
-        }),
+      discoverBacklog: async () => {
+        // Per-poll best-effort fetch: refresh origin/<default> so specs merged
+        // onto the remote default branch since the last poll are visible.
+        // resolveDiscoveryRef degrades gracefully (offline, no origin, no HEAD).
+        const treeRef = await resolveDiscoveryRef(projectRoot, baseBranch, log);
+        return discoverBacklog(projectRoot, (slug) => isProcessed(projectRoot, slug), log, {
+          baseBranch: treeRef,
+        });
+      },
       runFeature,
       log,
     },
