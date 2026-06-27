@@ -27,6 +27,11 @@ import { ensureRunning } from '../daemon-lock.js';
 /** The authored-ledger entry returned for the session summary. */
 export interface HandoffEntry {
   project: string;
+  /**
+   * The spec PR URL when a PR was opened (absent on the no-remote / pr-skipped
+   * paths). Surfaced so the caller can drive intake write-back (FR-36 done report).
+   */
+  prUrl?: string;
 }
 
 /** Dependencies for runHandoff. All external I/O is injectable for testability. */
@@ -60,6 +65,8 @@ export async function runHandoff(
 ): Promise<HandoffEntry> {
   const ledgerOpts = deps.engineerDir ? { engineerDir: deps.engineerDir } : {};
 
+  let prUrl: string | undefined;
+
   // 4e. PR / handoff, gated on remote presence.
   if (target.remote) {
     // A-3: explicit gh-present guard — the remote branch is unreachable without a
@@ -78,6 +85,7 @@ export async function runHandoff(
     });
     if (handoffResult.kind === 'pr-opened') {
       deps.print(`Spec PR opened: ${handoffResult.url}`);
+      prUrl = handoffResult.url;
     } else {
       // pr-skipped (no remote detected at runtime by gh).
       deps.print(`PR skipped: ${handoffResult.reason}`);
@@ -110,5 +118,5 @@ export async function runHandoff(
   }
 
   // 4g. Return the authored entry (work was done on BOTH paths).
-  return { project: target.name };
+  return { project: target.name, ...(prUrl ? { prUrl } : {}) };
 }

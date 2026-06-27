@@ -179,6 +179,29 @@ describe('buildChatEnvelope — Task 6: empty sourceRef rejected (FR-14)', () =>
   });
 });
 
+// ─── T1 (FR-36): report() accepts optional meta argument ─────────────────────
+
+describe('createClaudeSessionAdapter — T1 (FR-36): report with meta', () => {
+  it('report() resolves when called with a full meta object', async () => {
+    const adapter: IntakePort = createClaudeSessionAdapter();
+    await expect(
+      adapter.report('turn-7', 'routed', { repo: 'alpha', prUrl: 'https://github.com/org/alpha/pull/1' }),
+    ).resolves.toBeUndefined();
+  });
+
+  it('report() resolves when called with a partial meta object (repo only)', async () => {
+    const adapter: IntakePort = createClaudeSessionAdapter();
+    await expect(
+      adapter.report('turn-7', 'done', { repo: 'beta' }),
+    ).resolves.toBeUndefined();
+  });
+
+  it('report() resolves when called without meta (backward-compatible)', async () => {
+    const adapter: IntakePort = createClaudeSessionAdapter();
+    await expect(adapter.report('turn-7', 'pending')).resolves.toBeUndefined();
+  });
+});
+
 // ─── Task 6: Static guard — no github polling / setInterval in intake/ ────────
 
 describe('intake source tree — Task 6: no github polling this phase (FR-14)', () => {

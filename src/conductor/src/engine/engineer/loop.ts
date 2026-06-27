@@ -29,8 +29,11 @@
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { basename } from 'node:path';
-// FR-13/FR-1: depend on the intake PORT interface, never the concrete adapter.
-import type { IntakePort } from './intake/port.js';
+// FR-13/FR-1: depend on the intake PORT/source interfaces, never a concrete adapter.
+import type { Envelope, IntakePort } from './intake/port.js';
+import type { IntakeSource } from './intake/source.js';
+import type { IntakeQueue } from './intake/queue.js';
+import type { Ledger } from './intake/ledger.js';
 import type { RoutingProvider } from './routing.js';
 import { createRegistryReader } from '../registry.js';
 import { createEngineerStoreReader } from '../engineer-store.js';
@@ -103,6 +106,21 @@ export interface EngineerDeps {
     project: string;
     prompt: string;
   }) => Promise<DecideResult>;
+  /**
+   * Async intake sources polled ONCE at launch (FR-31). Adapter-agnostic: the
+   * CLI constructs the concrete adapter (e.g. github-issues) and injects it here,
+   * so the loop never imports a concrete adapter (FR-13).
+   */
+  sources?: IntakeSource[];
+  /** Durable inbox buffering polled envelopes (FR-29/30). */
+  queue?: IntakeQueue;
+  /**
+   * Write-back sink for routed/done progress (FR-36). Typically the SAME instance
+   * as one of `sources` (the github adapter is both IntakeSource and IntakePort).
+   */
+  intakePort?: IntakePort;
+  /** Intake ledger for lifecycle transitions (FR-33); record-on-enqueue + routed/done. */
+  ledger?: Ledger;
 }
 
 /**
@@ -200,6 +218,59 @@ export async function runEngineerMode(deps: EngineerDeps): Promise<EngineerSessi
     buildsRun: 0,
   };
 
+  // ── 5.5 Intake: poll-on-launch → enqueue → process the oldest (FR-31) ───────
+  // Polls every injected source once, buffers what they surface (adapters dedup
+  // via the ledger), then claims and processes EXACTLY ONE envelope (the oldest).
+  // An empty inbox after polling falls through to the interactive chat loop below
+  // — no error, no idle hang. Processing failure releases the claim for re-delivery.
+  if (deps.sources?.length && deps.queue) {
+    const queue = deps.queue;
+    for (const source of deps.sources) {
+      let envs: Envelope[] = [];
+      try {
+        envs = await source.poll();
+      } catch (err: unknown) {
+        io.print(`Intake poll failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      for (const e of envs) {
+        try {
+          // record() is idempotent — guarantees a ledger entry for later routed/done
+          // transitions even when a source did not itself record (record is a no-op
+          // when the entry already exists, so the github adapter's own record is safe).
+          if (deps.ledger) await deps.ledger.record({ source: e.source, sourceRef: e.sourceRef });
+          await queue.enqueue(e);
+        } catch {
+          // A single malformed envelope must not abort the whole intake phase.
+        }
+      }
+    }
+
+    const claimed = await queue.claim();
+    if (claimed) {
+      try {
+        await processIdea(
+          claimed.text,
+          deps,
+          registryReader,
+          routingProvider,
+          lessonStore,
+          io,
+          summary,
+          deps.ensureRunningLaunch,
+          { envelope: claimed, port: deps.intakePort, ledger: deps.ledger },
+        );
+        await queue.ack(claimed);
+      } catch (err: unknown) {
+        io.print(`Error processing intake idea: ${err instanceof Error ? err.message : String(err)}`);
+        try {
+          await queue.release(claimed);
+        } catch {
+          // release best-effort — a stuck claim stays reclaimable by staleness.
+        }
+      }
+    }
+  }
+
   for (;;) {
     const line = await io.prompt();
 
@@ -246,6 +317,7 @@ async function processIdea(
   io: EngineerIO,
   summary: EngineerSessionSummary,
   launchFn?: (repoPath: string) => void | Promise<void>,
+  intake?: { envelope: Envelope; port?: IntakePort; ledger?: Ledger },
 ): Promise<void> {
   // Step 1: Route the idea.
   const routingResult = await routeIdea(idea, registryReader, routingProvider);
@@ -400,6 +472,23 @@ async function processIdea(
   }
   const target = await resolveTargetRepo(record.path, registryReader);
 
+  // Intake write-back: report routed (FR-36) + advance the ledger. Both are
+  // best-effort at this call site — write-back must never abort spec authoring.
+  if (intake) {
+    if (intake.port) {
+      try {
+        await intake.port.report(intake.envelope.sourceRef, 'routed', { repo: target.name });
+      } catch {
+        // write-back is advisory (FR-37) — a failed comment never blocks authoring.
+      }
+    }
+    try {
+      await intake.ledger?.transition(intake.envelope.source, intake.envelope.sourceRef, 'routed');
+    } catch {
+      // ledger entry absent (non-recording source) — transition is advisory.
+    }
+  }
+
   // 4b. Select lessons (flywheel).
   const digest = await selectLessons(idea, target.name, lessonStore);
 
@@ -427,6 +516,28 @@ async function processIdea(
     launchFn,
     print: (s) => io.print(s),
   });
-  summary.authored!.push(entry);
+  summary.authored!.push({ project: entry.project });
+
+  // Intake write-back: report done (FR-36) + final ledger transition once the spec
+  // PR is open (entry.prUrl present). Best-effort — the spec PR is the real artifact,
+  // so a failed comment/transition never reverts a delivered handoff (FR-37).
+  if (intake && entry.prUrl) {
+    if (intake.port) {
+      try {
+        await intake.port.report(intake.envelope.sourceRef, 'done', { prUrl: entry.prUrl });
+      } catch {
+        // FR-37: a failed done comment never reverts a delivered spec PR.
+      }
+    }
+    try {
+      await intake.ledger?.transition(intake.envelope.source, intake.envelope.sourceRef, 'done', {
+        prUrl: entry.prUrl,
+        branch,
+      });
+    } catch {
+      // advisory ledger transition.
+    }
+  }
+
   summary.ideasProcessed += 1;
 }
