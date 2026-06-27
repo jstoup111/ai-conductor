@@ -105,6 +105,10 @@ const NO_REMOTE_PATTERNS: RegExp[] = [
   /no remote/i,
   /does not have any remotes/i,
   /no configured remote/i,
+  // gh's actual message when the repo has zero remotes (e.g. `gh pr create`
+  // against a local-only repo). The phrase is "no git remotes" — note the
+  // intervening "git", which the broader /no remote/i above does NOT match.
+  /no git remotes? found/i,
 ];
 
 /**

@@ -238,6 +238,32 @@ describe('openSpecPr — no-remote fallback (task-25, FR-7 negative path)', () =
     }
   });
 
+  // Regression: gh's REAL message for a remote-less repo is "no git remotes found"
+  // (observed running `gh pr create` against a local-only target). The intervening
+  // "git" word meant /no remote/i did NOT match, so openSpecPr threw instead of
+  // returning pr-skipped — which made `conduct engineer handoff` skip BOTH the
+  // authored-ledger record and the ensureRunning daemon nudge while still exiting 0.
+  it('returns pr-skipped AND records the authored key when gh reports "no git remotes found"', async () => {
+    const target = makeTarget(tempDir, 'gh-no-remotes-proj');
+    const { runner } = makeThrowingRunner(
+      'Command failed: gh pr create --head spec/feat --fill\nno git remotes found',
+    );
+
+    const result = await openSpecPr(target, 'spec/feat', {
+      runner,
+      ledgerOpts: { engineerDir: tempDir },
+    });
+
+    expect(result.kind).toBe('pr-skipped');
+    if (result.kind === 'pr-skipped') {
+      expect(result.reason).toMatch(/no git remotes? found/i);
+    }
+
+    // The ledger MUST be recorded on this path — the prior bug skipped it.
+    const keys = await readAuthoredKeys({ engineerDir: tempDir });
+    expect(keys).toEqual([{ project: 'gh-no-remotes-proj', feature: 'spec/feat' }]);
+  });
+
   it('records the authored key on pr-skipped (authoring happened; flywheel counts it)', async () => {
     const target = makeTarget(tempDir, 'ledger-skip-proj');
     const { runner } = makeThrowingRunner(
