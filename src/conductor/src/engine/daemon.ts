@@ -13,6 +13,8 @@
  * and unit-testable.
  */
 
+import chalk from 'chalk';
+
 export interface BacklogItem {
   /** Stable feature identifier (also the worktree/branch slug). */
   slug: string;
@@ -115,7 +117,7 @@ export async function runDaemon(
 
   const dispatch = (item: BacklogItem): void => {
     started.add(item.slug);
-    log(`▶ start ${item.slug}`);
+    log(`${chalk.cyan('▶')} start ${chalk.bold(item.slug)}`);
     const tagged: Tagged = deps
       .runFeature(item)
       .then((outcome) => ({ slug: item.slug, outcome }))
@@ -135,7 +137,12 @@ export async function runDaemon(
     inFlight.delete(slug);
     processed.push(outcome);
     if (outcome.costTokens) totalCost += outcome.costTokens;
-    log(`■ done ${slug}: ${outcome.status}${outcome.prUrl ? ` ${outcome.prUrl}` : ''}`);
+    const ok = outcome.status === 'done';
+    const marker = ok ? chalk.green('■') : chalk.red('■');
+    const status = ok ? chalk.green(outcome.status) : chalk.red(outcome.status);
+    log(
+      `${marker} done ${chalk.bold(slug)}: ${status}${outcome.prUrl ? ` ${chalk.cyan(outcome.prUrl)}` : ''}`,
+    );
   };
 
   let stopReason: DaemonStopReason | null = null;
