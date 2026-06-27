@@ -130,6 +130,12 @@ start, and committing it from a prior run would defeat that.
 
 **Any FAIL result becomes a bug that loops back through `/tdd`:**
 
+**Before fixing, confirm the buggy code path is supposed to exist** (the `/debugging` Phase 4
+GATE). Manual-test surfaces defects on *shipped* code — read the governing APPROVED ADR/PRD for
+the affected component first. If the buggy path violates or is superseded by an approved
+decision, the fix is a **conformance finding (kickback), not a patch** — a bug on a condemned
+path is a removal signal. This cheap design check precedes the expensive RED→fix→suite cycle.
+
 1. For each bug, write a failing test that reproduces it (RED)
 2. Fix it (GREEN)
 3. Commit

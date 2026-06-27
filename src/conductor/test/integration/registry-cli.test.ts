@@ -191,7 +191,7 @@ describe('conduct register — real temp git repo (FR-3)', () => {
 
     const records = await readRegistryFile(registry);
     expect(records).toHaveLength(1);
-    // Stored path is the resolved absolute path, a stable key for the brain.
+    // Stored path is the resolved absolute path, a stable key for the engineer.
     expect(records[0].path).toBe(repo);
   });
 

@@ -6,7 +6,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 (see `.github/workflows/release.yml`). Every PR must add an entry under
-`## [Unreleased]
+`## [Unreleased]`.
+
+## [Unreleased]
+
+### Added
+
+- **`conduct-ts engineer` launches the interactive idea→spec loop.** Running the bare
+  `conduct-ts engineer` command now drops the operator into an interactive
+  `claude /engineer` session (stdio inherited, human-in-the-loop) instead of
+  printing a pointer and exiting. This is the agent-hosted front door (ADR-008):
+  the launched session runs the real `/engineer` skill — routing, DECIDE, spec PR —
+  in-chat. It is **not** the forbidden headless `claude -p` substrate (that did
+  autonomous routing/authoring and was removed); this is an operator-driven
+  entrypoint. When already inside a Claude Code session (`CLAUDECODE` set) it prints
+  a note to run `/engineer` directly rather than spawning a nested session, and
+  falls back to printing usage if the `claude` CLI is not on `PATH`. The
+  `projects` / `land` / `handoff` subcommands remain deterministic primitives the
+  skill calls (`src/conductor/src/engine/engineer-cli.ts`). The launcher is backed
+  by the new `/engineer` skill (`skills/engineer/SKILL.md`), now installed via the
+  installer fix below. The launched session is started with `--permission-mode
+  default` (never `plan`) so the engineer can author artifacts, branch, and run
+  `land`/`handoff` even when the user's global `defaultMode` is `plan`; override the
+  mode with `CONDUCT_ENGINEER_PERMISSION_MODE` (e.g. `acceptEdits`) — `plan` is
+  rejected.
+
+### Fixed
+
+- **The build daemon now claims its pidfile on boot — liveness is finally observable
+  (ADR-010).** The pidfile-lock primitive (`daemon-lock.ts`) was fully built and tested
+  but **never wired into the daemon's boot path**: `runDaemonMode` never wrote
+  `.daemon/`'s pidfile, so `process.kill(pid,0)` liveness had no pid to probe and the
+  1-per-repo mutex `ensureRunning` relies on never engaged (it would spawn duplicates).
+  New `holdLock(repoPath)` claims the pidfile with the daemon's real pid on boot
+  (refusing to start if a live daemon already owns it), and releases it on exit; a
+  dead-pid pidfile self-heals via reclaim. This is the engine-loop half of the
+  observability gap — capturing daemon **logs** to a file (today the detached spawn
+  uses `stdio:'ignore'`) plus `conduct daemon status`/`logs` land in a follow-up branch.
+
+- **`bin/install` now auto-discovers every skill instead of a hardcoded list.**
+  The `SKILLS` array was maintained by hand and had drifted: skills added under
+  `skills/` (e.g. `engineer`, `prd-audit`) were never symlinked into
+  `~/.claude/skills/`, so their `/slash-commands` silently failed to resolve. The
+  installer now enumerates every `skills/<name>/` directory containing a `SKILL.md`,
+  guaranteeing all skills link on install/`--update`.
+
+### Changed
+
+- **Design-conformance-before-effort control** baked into the harness as an
+  enforced gate, not just memory. New HARNESS.md Key Convention applies whenever
+  code is written, fixed, or hardened, at every phase; a BUILD-phase conformance
+  check added to `skills/pipeline/SKILL.md` per-task dispatch; SHIP/fix gates
+  added to `skills/debugging/SKILL.md` (Phase 4) and `skills/manual-test/SKILL.md`
+  (Bug Loop). A code path that violates or is superseded by an APPROVED ADR/PRD is
+  a conformance finding (kickback/BLOCK), not work to do — building or hardening
+  code slated for deletion is wasted effort.
 
 ## [0.99.17] - 2026-05-02
 
@@ -16,7 +70,7 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ## [0.99.14] - 2026-05-01
 
-## [0.99.13] - 2026-05-01`.
+## [0.99.13] - 2026-05-01
 
 ## [0.99.12] - 2026-04-30
 
@@ -38,7 +92,102 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ## [Unreleased]
 
+### Fixed
+- conduct-ts: the `engineer` routing adapter (Phase 9.3) built its provider call
+  as `provider.invoke({ prompt } as any)`, omitting the **required** `sessionId`
+  and `resume` fields of `InvokeOptions`. The `as any` cast hid the type error;
+  at runtime the real `ClaudeProvider` emitted `claude --session-id undefined`,
+  which the CLI rejects with *"Invalid session ID. Must be a valid UUID."* —
+  every idea failed to route and silently fell through to "No matching project
+  found. Would you like to create one?" even with a seeded registry. Fixed by
+  passing a fresh `uuidv4()` session with `resume: false` (routing is a
+  single-shot, stateless classification) and removing the `as any` cast so the
+  type checker enforces the contract. Regression test
+  (`test/acceptance/engineer-routing-session.test.ts`) drives the real
+  `runEngineerMode` entry point and asserts the adapter hands the provider a
+  valid-UUID `sessionId` — the seam no existing test exercised because every
+  routing fake ignored its argument (same class as retro H-1).
+
+- conduct-ts: the engine-native `rebase` loop step (Phase 9.0) could run a
+  destructive `git rebase origin/<default>` against the **real** conductor
+  worktree whenever a test drove a `Conductor` whose `projectRoot` resolved to
+  the conductor's own checkout (the default is `process.cwd()`). It was a silent
+  no-op while the dev branch stayed current with `origin/main`, but became a
+  branch-corrupting rebase once `origin/main` advanced. Root-fixed by gating the
+  step on daemon mode: rebase-on-latest is a **daemon finish-time mechanism**, so
+  `runRebaseStep` now performs a clean no-op (gate still satisfied, loop topology
+  unchanged) in any non-daemon run — interactive `/conduct` and the entire test
+  suite. Only the daemon invokes git; humans rebase manually in interactive mode.
+  `rebase-loop` integration specs now construct the `Conductor` with `daemon:true`
+  (they exercise the real rebase against an isolated throwaway repo); `full-flow`
+  and `plugin-end-to-end` also pass an isolated `projectRoot` as defence-in-depth.
+
+### Changed
+- **BREAKING (conduct-ts):** renamed the supervisor from **brain** to **engineer**.
+  The CLI subcommand is now `conduct-ts engineer` (was `conduct brain`); the
+  cross-project memory store moved from `~/.ai-conductor/brain/` to
+  `~/.ai-conductor/engineer/`, and its env override from `$AI_CONDUCTOR_BRAIN_DIR`
+  to `$AI_CONDUCTOR_ENGINEER_DIR`. The signal type `BrainSignal` is now
+  `EngineerSignal` and `BrainStoreReader` is now `EngineerStoreReader`. No data
+  format changed — only names and paths. See Migration below.
+
+### Migration
+
+If a previous `conduct-ts` daemon run created a cross-project store under the old
+`brain` name, move it to the new `engineer` location and update any env override
+in your shell profile (`AI_CONDUCTOR_BRAIN_DIR` → `AI_CONDUCTOR_ENGINEER_DIR`).
+
+```bash migration
+# Move the cross-project store dir to its new name (no-op if absent or already moved)
+if [ -d "$HOME/.ai-conductor/brain" ] && [ ! -e "$HOME/.ai-conductor/engineer" ]; then
+  mv "$HOME/.ai-conductor/brain" "$HOME/.ai-conductor/engineer"
+  echo "moved ~/.ai-conductor/brain -> ~/.ai-conductor/engineer"
+fi
+# If you set AI_CONDUCTOR_BRAIN_DIR anywhere, rename it to AI_CONDUCTOR_ENGINEER_DIR.
+```
+
 ### Added
+- conduct-ts: **agent-hosted `engineer` redesign** (Phase 9.3). The engineer is
+  reworked from a Node TTY REPL that spawned `claude -p` and wrote stub/DRAFT
+  stories into an **agent-hosted, in-chat, human-gated DECIDE loop**: the host
+  agent drives routing and the real DECIDE skills directly — no spawned `claude`,
+  no Node readline REPL, no stub stories. Per idea it routes against the project
+  registry, **requires human confirmation** before any write (confirm / decline /
+  `redirect <name>` / `create <path>` when nothing fits → scaffolds + registers a
+  new repo via the 9.2 `create` path), selects prior lessons from the engineer
+  store (FR-5 flywheel), runs the **real DECIDE seam** to author `Status: Accepted`
+  stories + a plan dependency tree on a `spec/<slug>` branch (artifacts under
+  `.docs/` only — never source), and opens a spec **PR** — it **never** builds
+  (`buildsRun` stays 0) and **never** merges (no `gh pr merge`); a merged spec PR
+  is the only idea→build handoff. Regression-guarded: authoring never emits the
+  old `_Generated by engineer._` stub, never a DRAFT story, and never spawns
+  `claude` to author; an unapproved DECIDE step throws and fabricates nothing.
+  New seams this phase:
+  - **Hexagonal intake port + `Envelope` contract** (`{id, source, sourceRef,
+    text, hintRepo?, status, receivedAt}`; parse-don't-validate with field-named
+    errors — empty/whitespace text is **rejected, not silently dropped**). The
+    `claude-session` adapter ships now; `github-issues`/inbox/write-back are
+    additive future adapters behind the same port. Intake **idempotency** keys
+    strictly on `(source, sourceRef)`, never on text.
+  - **Cross-repo isolation** — authoring writes pass through an `AuthoringGuard`
+    (`assertWriteAllowed` rejects `..`, absolute-sibling, and prefix-collision
+    paths with `PathEscapeError`); authoring repo A leaves sibling repo B
+    byte-for-byte unchanged, and a stale/missing target path fails fast with
+    `TargetPathMissingError` (never a cwd fallback). Multi-repo **fan-out** is
+    independent — one repo's failure never corrupts another, and a deselected
+    repo is left untouched.
+  - **pidfile-lock daemon liveness** — `.daemon/daemon.pid` created with `O_EXCL`
+    is the **one-per-repo mutex** (exactly one winner under concurrent boots);
+    `process.kill(pid, 0)` liveness with stale-pid reclaim that **never
+    permanently refuses** (a kill-9 leftover is reclaimed on the next boot).
+    `ensureRunning` spawns a detached daemon iff none/stale, no-ops if alive, and
+    never manages the lifecycle. The registry `daemonState` mirror is
+    non-authoritative — the pidfile wins.
+  - **`launchDaemonDetached` fix** — launches with `cwd: repoPath` (was passing
+    `--project`), so the pidfile and worktree land under the target repo.
+  Read-only `governorReport` (aggregate spend + kickback/halt/retry rates) and
+  `computeFlywheelTrend` (improving / insufficient_data over engineer-planned
+  features) remain library functions over the engineer store.
 - **Two SHIP-phase compliance gates** wired into the conduct-ts gate-driven tail, between
   `manual_test` and `retro`:
   - **`/prd-audit`** (new skill + `prd-auditor` agent) — audits the shipped implementation
@@ -57,10 +206,10 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
     `enforcement: gating`, `loopGate: true`); they inherit the verdict/selector/kickback loop.
     HARNESS.md model table, conduct skill flow/assess/gate-enforcement/skip tables, README,
     and `src/conductor/README.md` updated to match.
-- conduct-ts daemon: **structured retro signal + brain memory store** (Phase 9.1).
+- conduct-ts daemon: **structured retro signal + engineer memory store** (Phase 9.1).
   On daemon feature completion (`done`/`halted`) the runner emits a structured
-  `BrainSignal` + a narrative to a cross-project store at `~/.ai-conductor/brain/`
-  (override `$AI_CONDUCTOR_BRAIN_DIR`, dir auto-created). `signals.jsonl` is
+  `EngineerSignal` + a narrative to a cross-project store at `~/.ai-conductor/engineer/`
+  (override `$AI_CONDUCTOR_ENGINEER_DIR`, dir auto-created). `signals.jsonl` is
   append-only, one atomic (`O_APPEND`, concurrency-safe) JSON line per
   feature-run: `{schemaVersion, ts, project, feature, runId, outcome, kickbacks[],
   halts[], retryHotspots[], tokens{...}, durationByStep{}, narrativeRef?}` —
@@ -73,7 +222,7 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   narrative, keeping repos free of `.docs/retros/` clutter); manual `/conduct`
   runs are unchanged. Emission is **best-effort** — any store error is logged and
   swallowed, so a learning-signal write can never break a ship. A types-only
-  `BrainStoreReader` interface is exported for the future brain (Phase 9.3).
+  `EngineerStoreReader` interface is exported for the future engineer (Phase 9.3).
 - conduct-ts: project registry + creation (Phase 9.2). A single-writer registry
   module (`src/conductor/src/engine/registry.ts`) owns
   `~/.ai-conductor/registry.json` (override via `$AI_CONDUCTOR_REGISTRY`): atomic

@@ -73,6 +73,7 @@ standard implementation, Haiku for mechanical checks.
 
 | Skill/Agent | Recommended Model | Why |
 |---|---|---|
+| engineer | opus | Interactive idea→spec control plane: routing judgment over the registry + driving the real DECIDE skills requires deep reasoning |
 | brainstorm | opus | Design decisions, trade-off analysis require deep reasoning |
 | stories | sonnet | Pattern-following from design doc, structured output |
 | conflict-check | sonnet (S/M), opus (L) | Pairwise comparison is manageable for Sonnet with ≤15 stories; Large needs Opus for subtle contradictions |
@@ -268,6 +269,17 @@ project using this harness inherits the same channel.
 - Plans assume zero-context executor — all detail included
 - Negative path stories are mandatory, not optional
 - No implementation plan without clean conflict-check
+- **Design-conformance before effort.** Before investing work on any code path —
+  writing new code, fixing a bug, or hardening existing code — confirm the path
+  is sanctioned by the governing APPROVED decision (the relevant ADR in
+  `.docs/decisions/` and/or the FR in the approved PRD). This is the cheapest
+  check (one read) placed before the most expensive action (implement → test →
+  review → commit). A code path that violates or is superseded by an approved
+  decision is a **conformance finding (kickback / BLOCK), not work to do** —
+  building or hardening code slated for deletion is wasted effort. Applies at
+  every phase: BUILD (don't implement against a superseded design), and SHIP /
+  debugging / manual-test (a bug on a condemned path is a removal signal, not a
+  fix target).
 - Retro runs on both harness AND application after every feature
 - Tech-context is additive — never overrides generic skill behavior
 - **Docs track features.** Every feature that adds or changes user-facing

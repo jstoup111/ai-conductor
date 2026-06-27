@@ -137,6 +137,9 @@ export default {
       stateFilePath: statePath,
       stepRunner: runner,
       events,
+      // Isolate the engine-native `rebase` step to a throwaway dir (not a git
+      // repo → performRebase no-ops) so it can never rebase the real worktree.
+      projectRoot: tempDir,
       mode: 'auto',
     });
 

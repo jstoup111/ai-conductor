@@ -460,15 +460,13 @@ describe('engine/registry — RegistryReader / ProjectRecord type contract (FR-1
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     type _Assert = () => void;
     const _typeCheck: _Assert = () => {
-      // @ts-expect-error — RegistryReader/ProjectRecord do not exist yet, so
-      // this import-type reference fails to compile until FR-10 ships. When the
-      // types exist, REMOVE this ts-expect-error (it becomes unused → error),
-      // which is the GREEN signal that the contract is in place.
+      // The types now exist (FR-10 shipped): this block type-checks the
+      // contract directly. RegistryReader's methods are async, so the stub
+      // returns Promises — a sync stub would be a real type error here.
       const _r: import('../../src/engine/registry.js').RegistryReader = {
-        listProjects: () => [],
-        getProject: () => undefined,
+        listProjects: () => Promise.resolve([]),
+        getProject: () => Promise.resolve(undefined),
       };
-      // @ts-expect-error — ProjectRecord type not exported yet.
       const _rec: import('../../src/engine/registry.js').ProjectRecord = {
         schemaVersion: 1,
         name: 'x',

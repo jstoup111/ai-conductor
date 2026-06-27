@@ -48,7 +48,7 @@ describe('engine/daemon-deps', () => {
     });
   });
 
-  it('derives the brain-store project key from the projectRoot basename, not the worktree path (FR-9)', () => {
+  it('derives the engineer-store project key from the projectRoot basename, not the worktree path (FR-9)', () => {
     const d = makeFeatureRunnerDeps({
       projectRoot: '/home/user/code/my-project',
       worktreeBase: '/home/user/code/my-project/.worktrees',

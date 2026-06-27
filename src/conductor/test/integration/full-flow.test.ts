@@ -61,6 +61,9 @@ describe('Integration: full conductor flow', () => {
       stateFilePath: statePath,
       stepRunner: runner,
       events,
+      // Isolate the engine-native `rebase` step to a throwaway dir (not a git
+      // repo → performRebase no-ops) so it can never rebase the real worktree.
+      projectRoot: dir,
       mode: 'auto', // skip checkpoint prompts
     });
 
@@ -102,6 +105,8 @@ describe('Integration: full conductor flow', () => {
       stateFilePath: statePath,
       stepRunner: runner,
       events,
+      // Isolate the engine-native `rebase` step to a throwaway dir (see above).
+      projectRoot: dir,
       mode: 'auto',
     });
 
@@ -160,6 +165,8 @@ describe('Integration: full conductor flow', () => {
       stateFilePath: statePath,
       stepRunner: runner,
       events,
+      // Isolate the engine-native `rebase` step to a throwaway dir (see above).
+      projectRoot: dir,
       mode: 'auto',
     });
 
@@ -217,6 +224,8 @@ describe('Integration: full conductor flow', () => {
       stateFilePath: statePath,
       stepRunner: runner,
       events,
+      // Isolate the engine-native `rebase` step to a throwaway dir (see above).
+      projectRoot: dir,
       resume: true,
       mode: 'auto',
     });

@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import type { BacklogItem, FeatureOutcome } from './daemon.js';
 import type { LLMProvider } from '../execution/llm-provider.js';
-import { emitBrainSignal, resolveBrainDir } from './brain-store.js';
+import { emitEngineerSignal, resolveEngineerDir } from './engineer-store.js';
 
 /**
  * Outcome of running the gate loop inside a feature's worktree, read from the
@@ -42,15 +42,15 @@ export interface FeatureRunnerDeps {
   /** Persist that a slug shipped so discoverBacklog skips it next poll. */
   markProcessed: (slug: string) => Promise<void>;
   /**
-   * Daemon mode. When true, emit a structured brain signal + narrative to the
-   * cross-project brain store on completion (Phase 9.1). Manual `/conduct` runs
+   * Daemon mode. When true, emit a structured engineer signal + narrative to the
+   * cross-project engineer store on completion (Phase 9.1). Manual `/conduct` runs
    * pass false — they keep writing repo `.docs/retros/` and emit nothing.
    */
   daemon: boolean;
   /** LLM provider used to produce the `done`-feature retro narrative. */
   provider: LLMProvider;
   /**
-   * Project key for the brain store — the project's basename, derived from the
+   * Project key for the engineer store — the project's basename, derived from the
    * main checkout (`basename(projectRoot)`), NOT the worktree path. Worktrees
    * live at `<projectRoot>/.worktrees/<slug>`, so deriving from the worktree
    * would yield `.worktrees` for every project and collapse cross-project
@@ -82,10 +82,10 @@ export function makeRunFeature(
       const outcome = await deps.readOutcome(worktree);
 
       // Phase 9.1: on daemon completion, emit a structured signal + narrative to
-      // the cross-project brain store. Runs AFTER readOutcome and BEFORE any
+      // the cross-project engineer store. Runs AFTER readOutcome and BEFORE any
       // teardown (the worktree context is still present for the retro). Manual
       // runs (daemon=false) emit nothing and keep their repo `.docs/retros/`.
-      // Best-effort inside emitBrainSignal — never throws, so it cannot affect
+      // Best-effort inside emitEngineerSignal — never throws, so it cannot affect
       // the feature outcome or teardown discipline below.
       if (deps.daemon) {
         await emitDaemonSignal(deps, worktree, item, outcome);
@@ -134,11 +134,11 @@ export function makeRunFeature(
 }
 
 /**
- * Emit one brain signal for a completed daemon feature. Maps the worktree
- * outcome to a `FeatureOutcome`, resolves the brain dir from the environment
- * (`$AI_CONDUCTOR_BRAIN_DIR`), reads the worktree's `.pipeline/events.jsonl`,
+ * Emit one engineer signal for a completed daemon feature. Maps the worktree
+ * outcome to a `FeatureOutcome`, resolves the engineer dir from the environment
+ * (`$AI_CONDUCTOR_ENGINEER_DIR`), reads the worktree's `.pipeline/events.jsonl`,
  * derives a fresh runId, and detects whether the retro step was tier-skipped.
- * Best-effort: `emitBrainSignal` swallows all errors, so this never throws.
+ * Best-effort: `emitEngineerSignal` swallows all errors, so this never throws.
  */
 async function emitDaemonSignal(
   deps: FeatureRunnerDeps,
@@ -155,8 +155,8 @@ async function emitDaemonSignal(
   };
   const eventsPath = join(worktree.path, '.pipeline', 'events.jsonl');
   const tierSkippedRetro = await retroTierSkipped(eventsPath);
-  await emitBrainSignal({
-    brainDir: resolveBrainDir(),
+  await emitEngineerSignal({
+    engineerDir: resolveEngineerDir(),
     eventsPath,
     outcome: featureOutcome,
     project: deps.project,

@@ -13,7 +13,7 @@
 9.2 has **three** registry-write entry points — `conduct register`, `conduct create`, and
 `/bootstrap` (a Markdown skill executed by Claude). All must produce the same well-formed,
 deduplicated, atomically-written records (PRD FR-1..FR-11), and registry writes must **report**
-failures (registration is a deliberate user action), unlike the brain store's best-effort emission.
+failures (registration is a deliberate user action), unlike the engineer store's best-effort emission.
 
 Forces:
 - `/bootstrap` is not TypeScript — it can't import a TS module; it can only run a command or write
@@ -52,7 +52,7 @@ atomicity, dedup, schema, redaction, and error reporting; the three entry points
 - **Dedup:** by **canonicalized absolute path** (`realpath`), so symlinked/relative paths to the
   same repo are one record (FR-4).
 - **Error reporting:** register/create surface write failures as non-zero exit + message; **not**
-  swallowed (contrast the brain store).
+  swallowed (contrast the engineer store).
 - **`create` = skeleton:** git init + template CLAUDE.md + `.gitignore` (`.pipeline/`,`.daemon/`,
   `.worktrees/`) + register; no stack detection (that stays in `/bootstrap`). `--remote` →
   `git remote add` only (no push).

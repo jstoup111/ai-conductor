@@ -32,11 +32,50 @@ export interface ProjectRecord {
   lastSignalRef?: string;
 }
 
-// Types-only reader surface for the 9.3 consumer. No runtime implementation
-// ships here — the registry module is write-side; 9.3 owns the read side.
+// Reader surface for the 9.3 consumer. The factory (createRegistryReader) is
+// the runtime implementation; the interface is async because disk reads are
+// async (Phase 9.3, FR-1, FR-11).
 export interface RegistryReader {
-  listProjects(): ProjectRecord[];
-  getProject(path: string): ProjectRecord | undefined;
+  listProjects(): Promise<ProjectRecord[]>;
+  getProject(path: string): Promise<ProjectRecord | undefined>;
+}
+
+export interface RegistryReaderOpts {
+  /** Override the registry path directly (takes priority over env). */
+  registryPath?: string;
+  /** Override the home dir for resolveRegistryPath. */
+  home?: string;
+  /** Override process.env for resolveRegistryPath. */
+  env?: Record<string, string | undefined>;
+}
+
+/**
+ * Create a RegistryReader that reads from the registry file resolved via
+ * resolveRegistryPath (env AI_CONDUCTOR_REGISTRY override, else
+ * <home>/.ai-conductor/registry.json). `opts.registryPath` skips resolution
+ * entirely (useful in tests). Methods are async because disk I/O is async.
+ *
+ * - listProjects() → all records; absent file → []; malformed JSON → throws.
+ * - getProject(p)  → record whose canonical path matches p's canonical path,
+ *   or undefined if absent.
+ */
+export function createRegistryReader(opts: RegistryReaderOpts = {}): RegistryReader {
+  function resolvedPath(): string {
+    if (opts.registryPath) return opts.registryPath;
+    return resolveRegistryPath({ home: opts.home, env: opts.env });
+  }
+
+  return {
+    async listProjects(): Promise<ProjectRecord[]> {
+      return readRegistry(resolvedPath());
+    },
+
+    async getProject(p: string): Promise<ProjectRecord | undefined> {
+      const records = await readRegistry(resolvedPath());
+      const needle = await canonicalizePath(p);
+      return records.find((r) => r.path === needle);
+    },
+  };
 }
 
 export interface ResolveRegistryArgs {

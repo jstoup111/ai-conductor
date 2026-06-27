@@ -224,7 +224,7 @@ export interface ConductorOptions {
   /**
    * Daemon mode (Phase 9.1). When true, the in-loop `retro` step is skipped:
    * the daemon's emission step owns narrative production into the cross-project
-   * brain store instead of writing `.docs/retros/` into the feature repo (ADR-002
+   * engineer store instead of writing `.docs/retros/` into the feature repo (ADR-002
    * Option A). Manual `/conduct` runs leave this false and keep writing repo
    * retros unchanged. Default false.
    */
@@ -415,7 +415,7 @@ export class Conductor {
 
       // Phase 9.1 (ADR-002 Option A): under the daemon, skip the in-loop `retro`
       // step. The daemon's emission step owns narrative production into the
-      // cross-project brain store, so writing `.docs/retros/` into the feature
+      // cross-project engineer store, so writing `.docs/retros/` into the feature
       // repo here would be redundant clutter. Manual runs (daemon=false) are
       // unaffected and keep writing repo retros.
       if (this.daemon && step.name === 'retro') {
@@ -1267,6 +1267,23 @@ export class Conductor {
    * the verdict and so a HALT routes the loop to stop.
    */
   private async runRebaseStep(state: ConductState): Promise<StepRunResult> {
+    // Phase 9.0: the native rebase-on-latest is a DAEMON finish-time mechanism.
+    // In non-daemon runs (interactive `/conduct` and the entire test suite) we
+    // must NOT invoke git here: a real `git rebase origin/<default>` against the
+    // live worktree has repeatedly corrupted in-flight feature branches when a
+    // test drives a real Conductor whose projectRoot resolves to the conductor's
+    // own checkout. Treat it as a clean no-op so the rebase gate is still
+    // satisfied and the loop topology is unchanged — only the daemon auto-rebases
+    // (humans rebase manually in interactive mode).
+    if (!this.daemon) {
+      const outcome: RebaseOutcome = { kind: 'noop' };
+      this.lastRebaseOutcome = outcome;
+      const ranManualTest = getStepStatus(state, 'manual_test') !== 'skipped';
+      await applyRebaseVerdicts(this.projectRoot, outcome, ranManualTest);
+      await emitRebaseEvent(this.events, outcome);
+      return { success: true };
+    }
+
     const git = makeGitRunner(this.projectRoot);
     const localBase = await this.discoverLocalBase(git);
 

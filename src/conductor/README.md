@@ -163,7 +163,7 @@ and opening a PR on finish:
   a logged reason — the daemon pre-seeds the front half, so eligibility is the only place
   specs are vetted before autonomous build.
 - `engine/daemon-runner.ts` — per-feature discipline: done → mark + remove worktree + PR;
-  halted/error → keep the worktree for the human. On completion it also emits a brain
+  halted/error → keep the worktree for the human. On completion it also emits a engineer
   signal (see below).
 - `engine/daemon-deps.ts` — concrete git/fs primitives (worktree add/remove, spec
   materialization into the worktree, `.pipeline/DONE`/`HALT` outcome read).
@@ -171,15 +171,15 @@ and opening a PR on finish:
 The daemon consumes specs — it never authors them. `--continuous` idle-polls for new
 eligible features, bounded by the ceilings.
 
-### Brain memory store (Phase 9.1)
+### Engineer memory store (Phase 9.1)
 
 On **daemon** feature completion (`done`/`halted`), the runner emits a structured learning
-signal + a narrative to a cross-project store at `~/.ai-conductor/brain/` (override with
-`$AI_CONDUCTOR_BRAIN_DIR`; the dir is auto-created). The store lives outside any repo so
-daemon-built repos stay free of retro clutter. `engine/brain-store.ts` owns it:
+signal + a narrative to a cross-project store at `~/.ai-conductor/engineer/` (override with
+`$AI_CONDUCTOR_ENGINEER_DIR`; the dir is auto-created). The store lives outside any repo so
+daemon-built repos stay free of retro clutter. `engine/engineer-store.ts` owns it:
 
 - `signals.jsonl` — append-only, **one JSON line per feature-run**. Each line is a
-  `BrainSignal`:
+  `EngineerSignal`:
   `{schemaVersion, ts, project, feature, runId, outcome, kickbacks[], halts[],
   retryHotspots[], tokens{input,output,cacheRead,cacheCreation}, durationByStep{},
   narrativeRef?}`. Empty signal categories serialize as `[]`; `narrativeRef` is optional
@@ -191,7 +191,7 @@ daemon-built repos stay free of retro clutter. `engine/brain-store.ts` owns it:
   short halt note (gate + reason, no LLM call).
 
 **Daemon retro redirect (ADR-002 Option A):** under the daemon the in-loop `retro` step is
-**skipped** — the emission step owns narrative production into the brain store instead of
+**skipped** — the emission step owns narrative production into the engineer store instead of
 writing `.docs/retros/` into the feature repo. Manual `/conduct` runs are unaffected and
 still write repo retros. Emission is **best-effort**: every store error is logged and
 swallowed, and the append is a single atomic `O_APPEND` write so concurrent worker
@@ -249,7 +249,7 @@ shell default is older.
 `engine/registry.ts` is the **single writer** for the harness project registry at
 `~/.ai-conductor/registry.json` (override with `$AI_CONDUCTOR_REGISTRY`; `resolveRegistryPath`
 is injectable, mirroring `engine/user-config.ts`). Per ADR-003 all three entry points
-(`conduct register`, `conduct create`, `/bootstrap`) funnel through it so correctness lives in
+(`conduct-ts register`, `conduct-ts create`, `/bootstrap`) funnel through it so correctness lives in
 one place:
 
 - **Atomic writes** — serialize the whole registry to a unique temp sibling, then `rename` over
@@ -261,24 +261,100 @@ one place:
 - **Credential redaction** — `redactRemote` strips `user:token@` from `https://`/`ssh://` URLs
   (scp-form `git@host:path` is left intact — it carries no secret) before any write.
 - **Reported failures** — register/create surface a registry write failure as a non-zero exit,
-  never swallowed (contrast the brain store's best-effort emission).
+  never swallowed (contrast the engineer store's best-effort emission).
 - **Malformed registry** — `readRegistry` returns `[]` for an absent file but **throws** on
   invalid JSON; a corrupt registry is surfaced, not masked as empty.
 
 `engine/registry-cli.ts` holds the two non-interactive handlers, dispatched from `index.ts`
 (`detectRegistryCommand`) **before** the interactive pipeline boots:
 
-- `conduct register [path]` (default cwd) — validate the path is an existing git repo (else
+- `conduct-ts register [path]` (default cwd) — validate the path is an existing git repo (else
   non-zero exit + clear stderr, registry byte-unchanged), derive the record (name=basename,
   absolute path, redacted `git remote get-url origin` if present), upsert with `status: registered`.
-- `conduct create <name> [--remote <url>]` — no-clobber guard (a non-empty target writes nothing),
+- `conduct-ts create <name> [--remote <url>]` — no-clobber guard (a non-empty target writes nothing),
   else `git init` + skeleton `CLAUDE.md` (references HARNESS.md) + `.gitignore` (`.pipeline/`,
   `.daemon/`, `.worktrees/`) + `git remote add origin` when `--remote` is given (add-only, no
   push), upsert with `status: created`.
 
-Types-only `ProjectRecord` and `RegistryReader` are exported for the future read-side consumer
-(Phase 9.3); no runtime reader ships here. See `test/engine/registry.test.ts` and
+`ProjectRecord` and the registry **read-side** (`createRegistryReader`) are now consumed by the
+engineer supervisor (Phase 9.3, below). See `test/engine/registry.test.ts` and
 `test/integration/registry-cli.test.ts`.
+
+### Engineer mode (agent-hosted, Phase 9.3)
+
+The engineer turns a free-form idea into a routed, lesson-informed spec **PR**, and **never builds
+and never merges** — a merged spec PR is the only idea→build handoff. As of Phase 9.3 it is an
+**agent-hosted, in-chat, human-gated DECIDE loop**: the host agent drives routing and the real
+DECIDE skills directly. There is **no Node readline REPL** and **no spawned `claude -p`** — the
+TypeScript layer (`engine/engineer/`) supplies deterministic primitives (routing, authoring guard,
+intake parsing, liveness) that the host agent calls between human gates. The no-build/no-merge
+guarantee is enforced structurally by `test/engine/engineer/non-autonomy.test.ts` (the engineer
+source tree imports no build/pipeline entry point and issues no `gh pr merge`) and by
+`summary.buildsRun` staying `0`.
+
+**Starting it.** Run the bare **`conduct-ts engineer`** command: it launches an interactive
+`claude /engineer` session (stdio inherited) and drops you straight into the loop. This is the
+agent-hosted front door — an *operator-driven* interactive session, distinct from the removed
+headless `claude -p` automation. The session is launched with `--permission-mode default` (never
+`plan`) so the engineer can author DECIDE artifacts, create the spec branch, and run `land`/`handoff`
+even if your global `defaultMode` is `plan`; set `CONDUCT_ENGINEER_PERMISSION_MODE` (e.g.
+`acceptEdits`, `bypassPermissions`) to change it (`plan` is coerced back to `default`). Run from
+inside an existing Claude Code session, it instead tells you to invoke `/engineer` directly (no
+nested session); with `claude` not on `PATH` it prints usage.
+The `conduct-ts engineer projects | land | handoff` subcommands are the deterministic primitives the
+skill calls between human gates.
+
+Per idea (each isolated so one repo's failure never corrupts another):
+
+1. **Intake (hexagonal port)** — ideas arrive as a parsed `Envelope`
+   (`{id, source, sourceRef, text, hintRepo?, status, receivedAt}`) through `engine/engineer/intake/`.
+   `parseEnvelope` is parse-don't-validate with **field-named** errors; empty/whitespace text is
+   **rejected** (`EmptyEnvelopeTextError`), never silently dropped. The `claude-session` adapter
+   ships this phase; `github-issues`/inbox/write-back are additive future adapters behind the same
+   port. Idempotency (`createIntakeIdempotency`) keys strictly on `(source, sourceRef)`, never on text.
+2. **Route** — `routeIdea` (`engine/engineer/routing.ts`) ranks registry projects against the idea
+   and returns candidates (or a create-suggestion when nothing fits).
+3. **Confirmation gate** (human-in-the-loop, mandatory before any write) — confirm the target;
+   decline with **zero writes** (no branch, no PR, no gh call); `redirect <name>` retargets to
+   another registered project (unknown name → re-prompted, no invented path); `create <path>`
+   (offered on no-fit) scaffolds + registers a new repo through the 9.2 `create` path. Multi-repo
+   **fan-out** authors each confirmed target independently; a deselected repo is left untouched.
+4. **Select lessons** — `selectLessons` (`engine/engineer/lesson-store.ts`) pulls prior lessons
+   relevant to the target from the engineer store and injects the digest into the authoring prompt
+   (no relevant lessons → an explicit empty digest, not unrelated padding).
+5. **Author (real DECIDE seam)** — `runAuthoring(target, idea, deps)` (`engine/engineer/authoring.ts`)
+   runs the DECIDE steps (brainstorm → stories → plan) behind a `decide` seam; any unapproved step
+   **throws and fabricates nothing**. On approval it writes `Status: Accepted` stories + a plan
+   dependency tree on a `spec/<slug>` branch off the **derived** default branch (never hardcoded
+   `main`), artifacts under `.docs/` only. It never emits the old `_Generated by engineer._` stub,
+   never a DRAFT story, and never spawns `claude` to author. All writes pass through
+   `AuthoringGuard.assertWriteAllowed` (`engine/engineer/authoring-guard.ts`), which rejects `..`,
+   absolute-sibling, and prefix-collision paths with `PathEscapeError` — authoring repo A leaves
+   sibling repo B byte-for-byte unchanged, and a stale/missing target path fails fast with
+   `TargetPathMissingError` (never a cwd fallback).
+6. **Handoff** — the loop opens a spec **PR** (`gh pr create`, never `merge`) and records the
+   authored-keys ledger. A target with **no remote** is non-fatal: the spec stays committed on the
+   branch and the ledger is still recorded so the FR-12 flywheel trend counts the feature. After the
+   spec lands, `ensureRunning` is wired (see below) to bring up the target's daemon.
+
+#### Daemon liveness (pidfile-lock)
+
+`engine/engineer/daemon-lock.ts` owns a **one-per-repo mutex**: `.daemon/daemon.pid` is created with
+`O_EXCL` so exactly one daemon wins under concurrent boots. Liveness is `process.kill(pid, 0)`
+(`ESRCH` → dead, `EPERM` → alive); a corrupt/malformed pidfile is treated as absent. Stale reclaim
+**never permanently refuses** — a `kill -9` leftover is reclaimed on the next boot.
+`ensureRunning(repoPath, deps)` spawns a detached daemon **iff** none is live or the pidfile is
+stale, no-ops if one is already alive, and **never manages** the lifecycle (fire-and-forget;
+ensure-not-manage). `launchDaemonDetached` launches with `cwd: repoPath` (was passing `--project`),
+so the pidfile and worktree land under the target repo's `.daemon/`. The registry `daemonState`
+mirror is **non-authoritative** — the pidfile wins; a mirror-write failure is non-fatal.
+
+Read-only reporting over the engineer store ships as library functions: `governorReport`
+(`engine/engineer/governor.ts`) aggregates spend + kickback/halt/retry rates; `computeFlywheelTrend`
+(`engine/engineer/flywheel-trend.ts`) reports `improving` / `insufficient_data` across
+engineer-planned features (store ∩ authored-keys ledger). Registry/store paths come from
+`$AI_CONDUCTOR_REGISTRY` / `$AI_CONDUCTOR_ENGINEER_DIR`. Acceptance scenarios live in
+`test/acceptance/engineer.test.ts`.
 
 ## Testing pattern
 
