@@ -292,6 +292,18 @@ guarantee is enforced structurally by `test/engine/engineer/non-autonomy.test.ts
 source tree imports no build/pipeline entry point and issues no `gh pr merge`) and by
 `summary.buildsRun` staying `0`.
 
+**Starting it.** Run the bare **`conduct engineer`** command: it launches an interactive
+`claude /engineer` session (stdio inherited) and drops you straight into the loop. This is the
+agent-hosted front door — an *operator-driven* interactive session, distinct from the removed
+headless `claude -p` automation. The session is launched with `--permission-mode default` (never
+`plan`) so the engineer can author DECIDE artifacts, create the spec branch, and run `land`/`handoff`
+even if your global `defaultMode` is `plan`; set `CONDUCT_ENGINEER_PERMISSION_MODE` (e.g.
+`acceptEdits`, `bypassPermissions`) to change it (`plan` is coerced back to `default`). Run from
+inside an existing Claude Code session, it instead tells you to invoke `/engineer` directly (no
+nested session); with `claude` not on `PATH` it prints usage.
+The `conduct engineer projects | land | handoff` subcommands are the deterministic primitives the
+skill calls between human gates.
+
 Per idea (each isolated so one repo's failure never corrupts another):
 
 1. **Intake (hexagonal port)** — ideas arrive as a parsed `Envelope`

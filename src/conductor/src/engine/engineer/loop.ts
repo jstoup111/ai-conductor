@@ -1,6 +1,12 @@
 // Engineer mode loop — START sequence (Phase 9.3, Task 33) +
 // Per-idea loop body (Phase 9.3, Task 34).
 //
+// NOTE: runEngineerMode is the scripted/test orchestration harness driven by the
+// /engineer host-agent skill in a Claude Code session. The production entry is the
+// /engineer host-agent skill driving the deterministic CLI primitives below
+// (dispatchEngineer subcommands: projects, land, handoff, guide).
+// There is NO Node readline REPL and NO spawned routing subprocess in this module.
+//
 // Implements the full runEngineerMode:
 //   1. Load the project registry and open the engineer store.
 //   2. Print the project count.
@@ -23,10 +29,9 @@
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { basename } from 'node:path';
-import { v4 as uuidv4 } from 'uuid';
-import type { LLMProvider } from '../../execution/llm-provider.js';
 // FR-13/FR-1: depend on the intake PORT interface, never the concrete adapter.
 import type { IntakePort } from './intake/port.js';
+import type { RoutingProvider } from './routing.js';
 import { createRegistryReader } from '../registry.js';
 import { createEngineerStoreReader } from '../engineer-store.js';
 import { routeIdea, createOnNoFit } from './routing.js';
@@ -67,8 +72,12 @@ export type GhRunner = (
  * path derivation inside the respective reader factories.
  */
 export interface EngineerDeps {
-  /** LLM provider for routing/authoring. */
-  provider: LLMProvider;
+  /**
+   * In-chat routing seam (ADR-008 FR-3/4/5): the host agent's reasoning over the
+   * registry. invoke(prompt) returns the host agent's raw JSON routing response.
+   * No subprocess is spawned — this is the host agent answering in-chat.
+   */
+  route: RoutingProvider;
   /** Scripted or real I/O. */
   io: EngineerIO;
   /** GitHub runner for PR operations. */
@@ -160,23 +169,13 @@ export async function runEngineerMode(deps: EngineerDeps): Promise<EngineerSessi
   // ── 3. Print project count ────────────────────────────────────────────────
   io.print(`${projectCount} known project${projectCount === 1 ? '' : 's'}`);
 
-  // ── 4. Build routing provider adapter (reuse across ideas) ───────────────
-  // routeIdea expects RoutingProvider: invoke(prompt: string) → string.
-  // The acceptance provider returns { output: '<json>' } where json may be
-  // either a bare array [{ name, score, rationale }] (the routeIdea format)
-  // or a wrapped object { candidates: [...] }. We normalise here.
+  // ── 4. Build normalising routing wrapper (reuse across ideas) ───────────────
+  // deps.route is the host agent's in-chat RoutingProvider seam (ADR-008 FR-3/4/5).
+  // No subprocess is spawned. We normalise any wrapped { candidates: [...] } response
+  // to a bare array JSON string so routeIdea always receives the expected shape.
   const routingProvider = {
     invoke: async (prompt: string): Promise<string> => {
-      // Routing is a single-shot, stateless classification — a fresh session
-      // each call, never a resume. A valid UUID sessionId is REQUIRED: the real
-      // ClaudeProvider emits `claude --session-id <id>`, which the CLI rejects
-      // with "Invalid session ID. Must be a valid UUID." when the field is absent.
-      const result = await deps.provider.invoke({
-        prompt,
-        sessionId: uuidv4(),
-        resume: false,
-      });
-      const raw = result.output ?? '';
+      const raw = await deps.route.invoke(prompt);
       // Normalise wrapped { candidates: [...] } → bare array JSON string.
       try {
         const parsed: unknown = JSON.parse(raw);

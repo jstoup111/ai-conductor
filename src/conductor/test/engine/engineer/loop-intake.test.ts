@@ -45,54 +45,34 @@ function scriptedIo(lines: string[]) {
   };
 }
 
-/** Provider stub: routing returns a candidate, authoring returns success. */
+/** RoutingProvider stub: returns a candidate array for routing calls. */
 function makeProvider(opts: { routeTo?: string; throws?: boolean } = {}) {
-  const calls: { cwd?: string; prompt: string }[] = [];
-  const provider = {
-    async invoke(o: any): Promise<any> {
-      calls.push({ cwd: o.cwd, prompt: String(o.prompt ?? '') });
+  const calls: string[] = [];
+  const route = {
+    async invoke(prompt: string): Promise<string> {
+      calls.push(prompt);
       if (opts.throws) throw new Error('provider forced failure');
-      const prompt = String(o.prompt ?? '');
-      // Routing: no cwd, prompt matches routing pattern
-      if (/route|candidate|which project/i.test(prompt) && !o.cwd) {
-        const body = JSON.stringify([
-          { name: opts.routeTo ?? 'alpha', score: 0.9, rationale: 'match' },
-        ]);
-        return { ok: true, output: body };
-      }
-      // Authoring: has cwd
-      if (o.cwd) {
-        return { ok: true, output: 'DECIDE complete', authored: true };
-      }
-      return { ok: true, output: '' };
+      return JSON.stringify([
+        { name: opts.routeTo ?? 'alpha', score: 0.9, rationale: 'match' },
+      ]);
     },
-    async invokeInteractive() {},
   };
-  return { provider, calls };
+  return { provider: route, route, calls };
 }
 
-/** Provider stub that throws on first call then succeeds on subsequent calls. */
+/** RoutingProvider stub that throws on first call then succeeds on subsequent calls. */
 function makeFailFirstProvider(routeTo: string) {
   let callCount = 0;
-  const calls: { cwd?: string; prompt: string }[] = [];
-  const provider = {
-    async invoke(o: any): Promise<any> {
-      calls.push({ cwd: o.cwd, prompt: String(o.prompt ?? '') });
+  const calls: string[] = [];
+  const route = {
+    async invoke(prompt: string): Promise<string> {
+      calls.push(prompt);
       callCount++;
       if (callCount === 1) throw new Error('provider forced failure on idea 1');
-      const prompt = String(o.prompt ?? '');
-      if (/route|candidate|which project/i.test(prompt) && !o.cwd) {
-        const body = JSON.stringify([{ name: routeTo, score: 0.9, rationale: 'match' }]);
-        return { ok: true, output: body };
-      }
-      if (o.cwd) {
-        return { ok: true, output: 'DECIDE complete', authored: true };
-      }
-      return { ok: true, output: '' };
+      return JSON.stringify([{ name: routeTo, score: 0.9, rationale: 'match' }]);
     },
-    async invokeInteractive() {},
   };
-  return { provider, calls };
+  return { provider: route, route, calls };
 }
 
 /** gh stub: records all calls, returns a PR URL on `pr create`. */
@@ -199,11 +179,11 @@ describe('loop-intake: confirm path', () => {
     await writeRegistry([project(repo, 'alpha', 'https://example.invalid/alpha.git')]);
 
     const { runEngineerMode } = await loadLoop();
-    const { provider } = makeProvider({ routeTo: 'alpha' });
+    const { route } = makeProvider({ routeTo: 'alpha' });
     const { gh } = makeGh('https://example.invalid/alpha/pull/42');
     const { io } = scriptedIo(['add csv export', 'y', 'exit']);
 
-    const summary = await runEngineerMode({ provider, io, gh, decide: makeTestDecide() });
+    const summary = await runEngineerMode({ route, io, gh, decide: makeTestDecide() });
 
     // Confirm path: ideasProcessed must be 1.
     expect(summary.ideasProcessed).toBe(1);
@@ -221,11 +201,11 @@ describe('loop-intake: confirm path', () => {
     await writeRegistry([project(repo, 'alpha', 'https://example.invalid/alpha.git')]);
 
     const { runEngineerMode } = await loadLoop();
-    const { provider } = makeProvider({ routeTo: 'alpha' });
+    const { route } = makeProvider({ routeTo: 'alpha' });
     const { gh } = makeGh();
     const { io } = scriptedIo(['add widget', 'y', 'exit']);
 
-    await runEngineerMode({ provider, io, gh, decide: makeTestDecide() });
+    await runEngineerMode({ route, io, gh, decide: makeTestDecide() });
 
     const branches = (await exec('git', ['branch', '--list', 'spec/*'], { cwd: repo })).stdout;
     expect(branches).toMatch(/spec\//);
@@ -246,11 +226,11 @@ describe('loop-intake: decline path — zero writes', () => {
     const branchesBefore = (await exec('git', ['branch', '--list'], { cwd: repo })).stdout;
 
     const { runEngineerMode } = await loadLoop();
-    const { provider } = makeProvider({ routeTo: 'alpha' });
+    const { route } = makeProvider({ routeTo: 'alpha' });
     const { gh, calls: ghCalls } = makeGh();
     const { io } = scriptedIo(['add feature to alpha', 'n', 'exit']);
 
-    const summary = await runEngineerMode({ provider, io, gh });
+    const summary = await runEngineerMode({ route, io, gh });
 
     const headAfter = (await exec('git', ['rev-parse', 'HEAD'], { cwd: repo })).stdout.trim();
     const branchesAfter = (await exec('git', ['branch', '--list'], { cwd: repo })).stdout;
@@ -273,12 +253,12 @@ describe('loop-intake: decline path — zero writes', () => {
     const headBefore = (await exec('git', ['rev-parse', 'HEAD'], { cwd: repo })).stdout.trim();
 
     const { runEngineerMode } = await loadLoop();
-    const { provider } = makeProvider({ routeTo: 'alpha' });
+    const { route } = makeProvider({ routeTo: 'alpha' });
     const { gh, calls: ghCalls } = makeGh();
     // 'no' must also be treated as decline
     const { io } = scriptedIo(['another idea', 'no', 'exit']);
 
-    const summary = await runEngineerMode({ provider, io, gh });
+    const summary = await runEngineerMode({ route, io, gh });
 
     const headAfter = (await exec('git', ['rev-parse', 'HEAD'], { cwd: repo })).stdout.trim();
     expect(headAfter).toBe(headBefore);
@@ -301,12 +281,12 @@ describe('loop-intake: redirect to unknown project', () => {
     const headBefore = (await exec('git', ['rev-parse', 'HEAD'], { cwd: repo })).stdout.trim();
 
     const { runEngineerMode } = await loadLoop();
-    const { provider } = makeProvider({ routeTo: 'alpha' });
+    const { route } = makeProvider({ routeTo: 'alpha' });
     const { gh, calls: ghCalls } = makeGh();
     // redirect to unknown 'nonesuch', then decline to exit the gate
     const { io, text } = scriptedIo(['some idea', 'redirect nonesuch', 'n', 'exit']);
 
-    const summary = await runEngineerMode({ provider, io, gh });
+    const summary = await runEngineerMode({ route, io, gh });
 
     // Must print a message indicating 'nonesuch' is not registered.
     expect(text()).toMatch(/not (a )?registered|unknown project/i);
@@ -327,12 +307,12 @@ describe('loop-intake: redirect to unknown project', () => {
     await writeRegistry([project(repo, 'alpha', 'https://example.invalid/alpha.git')]);
 
     const { runEngineerMode } = await loadLoop();
-    const { provider } = makeProvider({ routeTo: 'alpha' });
+    const { route } = makeProvider({ routeTo: 'alpha' });
     const { gh } = makeGh('https://example.invalid/alpha/pull/1');
     // redirect unknown, then confirm valid target
     const { io, text } = scriptedIo(['some idea', 'redirect nonesuch', 'y', 'exit']);
 
-    const summary = await runEngineerMode({ provider, io, gh, decide: makeTestDecide() });
+    const summary = await runEngineerMode({ route, io, gh, decide: makeTestDecide() });
 
     // After rejecting the unknown redirect, the gate re-prompts and accepts 'y'
     expect(text()).toMatch(/not (a )?registered|unknown project/i);
@@ -355,12 +335,12 @@ describe('loop-intake: per-idea failure isolation', () => {
 
     const { runEngineerMode } = await loadLoop();
     // First provider call (routing for idea 1) throws; subsequent calls succeed
-    const { provider } = makeFailFirstProvider('alpha');
+    const { route } = makeFailFirstProvider('alpha');
     const { gh } = makeGh('https://example.invalid/alpha/pull/1');
     // idea1 will fail; idea2 will succeed with confirm
     const { io, text } = scriptedIo(['idea one', 'idea two', 'y', 'exit']);
 
-    const summary = await runEngineerMode({ provider, io, gh, decide: makeTestDecide() });
+    const summary = await runEngineerMode({ route, io, gh, decide: makeTestDecide() });
 
     // Session must NOT throw — it must return a summary.
     expect(summary).toBeDefined();
@@ -382,7 +362,7 @@ describe('loop-intake: per-idea failure isolation', () => {
     await writeRegistry([project(repo, 'alpha', 'https://example.invalid/alpha.git')]);
 
     const { runEngineerMode } = await loadLoop();
-    const { provider } = makeProvider({ routeTo: 'alpha' });
+    const { route } = makeProvider({ routeTo: 'alpha' });
 
     let ghCallCount = 0;
     const throwingGh = async (args: string[], _opts: { cwd: string }) => {
@@ -397,7 +377,7 @@ describe('loop-intake: per-idea failure isolation', () => {
     //  the loop body catches per-idea and continues)
     let summary: any;
     try {
-      summary = await runEngineerMode({ provider, io, gh: throwingGh, decide: makeTestDecide() });
+      summary = await runEngineerMode({ route, io, gh: throwingGh, decide: makeTestDecide() });
     } catch {
       // If the gh error propagated despite per-idea isolation, this test fails.
       throw new Error('runEngineerMode must not throw on per-idea gh failure');
@@ -423,11 +403,11 @@ describe('loop-intake: no-remote path records authored-keys ledger (FR-12)', () 
     await writeRegistry([project(repo, 'local-only')]); // no remote field
 
     const { runEngineerMode } = await loadLoop();
-    const { provider } = makeProvider({ routeTo: 'local-only' });
+    const { route } = makeProvider({ routeTo: 'local-only' });
     const { gh } = makeGh(); // gh stub present but should never be called for no-remote
     const { io, text } = scriptedIo(['offline feature idea', 'y', 'exit']);
 
-    const summary = await runEngineerMode({ provider, io, gh, engineerDir, decide: makeTestDecide() });
+    const summary = await runEngineerMode({ route, io, gh, engineerDir, decide: makeTestDecide() });
 
     // 1. Non-fatal exit with skip message still printed (regression guard).
     expect(summary.exitCode ?? 0).toBe(0);

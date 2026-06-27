@@ -48,10 +48,10 @@ function scriptedIo(lines: string[]) {
   };
 }
 
-/** Minimal no-op provider stub. */
+/** Minimal no-op route seam stub (RoutingProvider shape). */
 const noopProvider = {
-  invoke: async () => ({ success: false, output: '', exitCode: 0 }),
-  invokeInteractive: async () => {},
+  invoke: async (_prompt: string): Promise<string> =>
+    JSON.stringify([]),
 };
 
 /** Minimal gh stub. */
@@ -116,7 +116,7 @@ describe('Task 23: loop startup loads registry + store, reports counts (FR-1)', 
     const { runEngineerMode } = await loadLoop();
     const { io, text } = scriptedIo(['exit']);
     const summary = await runEngineerMode({
-      provider: noopProvider,
+      route: noopProvider,
       io,
       gh: noopGh,
       registryPath,
@@ -134,7 +134,7 @@ describe('Task 23: loop startup loads registry + store, reports counts (FR-1)', 
     const { runEngineerMode } = await loadLoop();
     const { io, text } = scriptedIo(['exit']);
     const summary = await runEngineerMode({
-      provider: noopProvider,
+      route: noopProvider,
       io,
       gh: noopGh,
       registryPath,
@@ -186,7 +186,7 @@ describe('Task 24: degraded loop start without registry/store, no subprocess (FR
 
     // Must NOT throw — absent registry is not a fatal error.
     const summary = await runEngineerMode({
-      provider: noopProvider,
+      route: noopProvider,
       io,
       gh: noopGh,
       registryPath,
@@ -206,7 +206,7 @@ describe('Task 24: degraded loop start without registry/store, no subprocess (FR
     const { io, text } = scriptedIo(['exit']);
 
     const summary = await runEngineerMode({
-      provider: noopProvider,
+      route: noopProvider,
       io,
       gh: noopGh,
       registryPath,
@@ -224,7 +224,7 @@ describe('Task 24: degraded loop start without registry/store, no subprocess (FR
     const { io, out } = scriptedIo(['exit']);
 
     const summary = await runEngineerMode({
-      provider: noopProvider,
+      route: noopProvider,
       io,
       gh: noopGh,
       registryPath,
@@ -284,11 +284,11 @@ describe('Task 25: multi-idea loop via intake port (FR-2)', () => {
 
     // First session.
     const { io: io1, text: text1 } = scriptedIo(['exit']);
-    const s1 = await runEngineerMode({ provider: noopProvider, io: io1, gh: noopGh, registryPath, engineerDir });
+    const s1 = await runEngineerMode({ route: noopProvider, io: io1, gh: noopGh, registryPath, engineerDir });
 
     // Second session — fresh IO, same registry/store paths.
     const { io: io2, text: text2 } = scriptedIo(['exit']);
-    const s2 = await runEngineerMode({ provider: noopProvider, io: io2, gh: noopGh, registryPath, engineerDir });
+    const s2 = await runEngineerMode({ route: noopProvider, io: io2, gh: noopGh, registryPath, engineerDir });
 
     expect(text1()).toMatch(/0 (known )?project/i);
     expect(text2()).toMatch(/0 (known )?project/i);
@@ -305,7 +305,7 @@ describe('Task 25: multi-idea loop via intake port (FR-2)', () => {
     const { io } = scriptedIo([]);
 
     const summary = await runEngineerMode({
-      provider: noopProvider,
+      route: noopProvider,
       io,
       gh: noopGh,
       registryPath,
@@ -352,7 +352,7 @@ describe('Task 26: empty-idea re-prompt + clean exit (FR-2)', () => {
     const { io } = scriptedIo(['', 'exit']);
 
     const summary = await runEngineerMode({
-      provider: noopProvider,
+      route: noopProvider,
       io,
       gh: noopGh,
       registryPath,
@@ -371,7 +371,7 @@ describe('Task 26: empty-idea re-prompt + clean exit (FR-2)', () => {
     const { io } = scriptedIo(['   ', '\t', 'exit']);
 
     const summary = await runEngineerMode({
-      provider: noopProvider,
+      route: noopProvider,
       io,
       gh: noopGh,
       registryPath,
@@ -389,7 +389,7 @@ describe('Task 26: empty-idea re-prompt + clean exit (FR-2)', () => {
     const { io } = scriptedIo(['exit']);
 
     const summary = await runEngineerMode({
-      provider: noopProvider,
+      route: noopProvider,
       io,
       gh: noopGh,
       registryPath,
@@ -411,7 +411,7 @@ describe('Task 26: empty-idea re-prompt + clean exit (FR-2)', () => {
     const { io } = scriptedIo(['', '', '']);
 
     const summary = await runEngineerMode({
-      provider: noopProvider,
+      route: noopProvider,
       io,
       gh: noopGh,
       registryPath,
@@ -427,26 +427,32 @@ describe('Task 26: empty-idea re-prompt + clean exit (FR-2)', () => {
     expect(leftover).toHaveLength(0);
   });
 
-  // CLI dispatch path: dispatchEngineer returns exit code 0 on clean session.
-  // This exercises the injected-io path in engineer-cli.ts (not the production readline path).
-  it('dispatchEngineer(injected-io) returns exit code 0 on clean EOF session', async () => {
+  // CLI entry path: bare `conduct engineer` → {kind:'launch'} → drops into the
+  // interactive /engineer loop. No readline REPL, no ClaudeProvider — the launched
+  // session is the agent-hosted host. Here we assert the launch is wired and exits 0
+  // without spawning a nested session (insideClaudeSession short-circuits the spawn).
+  it('bare "engineer" → {kind:"launch"} entry point returns exit code 0', async () => {
     await writeRegistry([]);
 
     const { dispatchEngineer, detectEngineerCommand } = await import(
       '../../../src/engine/engineer-cli.js'
     );
 
-    // Detect the dispatch descriptor.
+    // Detect the dispatch descriptor for bare 'engineer' subcommand.
     const dispatch = detectEngineerCommand(['node', 'conduct', 'engineer']);
-    expect(dispatch).toEqual({ kind: 'engineer' });
+    expect(dispatch).toMatchObject({ kind: 'launch' });
 
-    // Inject a scripted IO that EOFs immediately — clean exit.
-    const { io } = scriptedIo([]);
+    // Inject a print sink + the inside-session guard so no real claude spawns.
+    const out: string[] = [];
+    const exitCode = await dispatchEngineer(dispatch!, {
+      insideClaudeSession: true,
+      print: (s) => out.push(s),
+    });
 
-    const exitCode = await dispatchEngineer(dispatch!, { io });
-
-    // Clean exit from the injected-io path must return 0.
+    // Clean exit from the launch entry point must return 0.
     expect(exitCode).toBe(0);
+    // Must reference the /engineer loop the operator should run.
+    expect(out.join('\n')).toMatch(/\/engineer/i);
   });
 });
 
@@ -469,24 +475,19 @@ async function initRepo(dir: string, withRemote = true): Promise<void> {
 }
 
 function makeTestProvider(opts: { routeTo?: string; noFit?: boolean } = {}) {
-  const calls: { cwd?: string; prompt: string }[] = [];
+  const calls: string[] = [];
   const provider = {
-    async invoke(o: any): Promise<any> {
-      calls.push({ cwd: o.cwd, prompt: String(o.prompt ?? '') });
-      const prompt = String(o.prompt ?? '');
-      if (/route|candidate|which project/i.test(prompt) && !o.cwd) {
-        const body = opts.noFit
-          ? JSON.stringify({ candidates: [], suggestCreate: true })
-          : JSON.stringify({ candidates: [{ name: opts.routeTo ?? 'alpha', score: 0.9, rationale: 'match' }] });
-        return { ok: true, output: body };
+    async invoke(prompt: string): Promise<string> {
+      calls.push(prompt);
+      if (opts.noFit) {
+        return JSON.stringify({ candidates: [], suggestCreate: true });
       }
-      if (o.cwd) {
-        return { ok: true, output: 'DECIDE complete', authored: true };
-      }
-      return { ok: true, output: '' };
+      return JSON.stringify({
+        candidates: [{ name: opts.routeTo ?? 'alpha', score: 0.9, rationale: 'match' }],
+      });
     },
   };
-  return { provider, calls };
+  return { route: provider, provider, calls };
 }
 
 function makeTestGh(prUrl = 'https://example.invalid/x/pull/1') {
@@ -544,7 +545,7 @@ describe('Task 29: multi-repo fan-out independent authoring (FR-4)', () => {
     ]);
 
     const { runEngineerMode } = await loadLoop();
-    const { provider } = makeTestProvider({ routeTo: 'alpha' });
+    const { provider: route } = makeTestProvider({ routeTo: 'alpha' });
     const { gh } = makeTestGh();
 
     // Idea targets both alpha and beta. The loop asks to confirm alpha (top candidate),
@@ -552,7 +553,7 @@ describe('Task 29: multi-repo fan-out independent authoring (FR-4)', () => {
     const { io, text } = scriptedIo(['fanout idea', 'y', 'exit']);
 
     const summary = await runEngineerMode({
-      provider,
+      route,
       io,
       gh,
       registryPath,
@@ -573,12 +574,12 @@ describe('Task 29: multi-repo fan-out independent authoring (FR-4)', () => {
     await writeRegistry([makeRecord(dirA, 'alpha')]);
 
     const { runEngineerMode } = await loadLoop();
-    const { provider } = makeTestProvider({ routeTo: 'alpha' });
+    const { provider: route } = makeTestProvider({ routeTo: 'alpha' });
     const { gh, calls } = makeTestGh();
     const { io } = scriptedIo(['multi-repo idea', 'y', 'exit']);
 
     const summary = await runEngineerMode({
-      provider,
+      route,
       io,
       gh,
       registryPath,
@@ -599,13 +600,13 @@ describe('Task 29: multi-repo fan-out independent authoring (FR-4)', () => {
     await writeRegistry([makeRecord(dirA, 'alpha')]);
 
     const { runEngineerMode } = await loadLoop();
-    const { provider } = makeTestProvider({ routeTo: 'alpha' });
+    const { provider: route } = makeTestProvider({ routeTo: 'alpha' });
     const { gh } = makeTestGh();
     // Two ideas, each confirmed
     const { io } = scriptedIo(['idea one', 'y', 'idea two', 'y', 'exit']);
 
     const summary = await runEngineerMode({
-      provider,
+      route,
       io,
       gh,
       registryPath,
@@ -632,23 +633,16 @@ describe('Task 30: fan-out partial-failure isolation + deselect (FR-4)', () => {
 
     const { runEngineerMode } = await loadLoop();
 
-    // Provider that fails on the second idea's routing
+    // Route seam that fails on the second idea's routing call.
     let callCount = 0;
-    const provider = {
-      async invoke(o: any): Promise<any> {
+    const route = {
+      async invoke(_prompt: string): Promise<string> {
         callCount++;
-        const prompt = String(o.prompt ?? '');
-        if (/route|candidate|which project/i.test(prompt) && !o.cwd) {
-          // First idea: succeeds; second idea: fails
-          if (callCount > 2) {
-            throw new Error('Simulated authoring failure');
-          }
-          return { ok: true, output: JSON.stringify([{ name: 'alpha', score: 0.9, rationale: 'match' }]) };
+        // First idea: succeeds; second idea: throw (simulates routing failure).
+        if (callCount > 1) {
+          throw new Error('Simulated routing failure');
         }
-        if (o.cwd) {
-          return { ok: true, output: 'DECIDE complete' };
-        }
-        return { ok: true, output: '' };
+        return JSON.stringify([{ name: 'alpha', score: 0.9, rationale: 'match' }]);
       },
     };
 
@@ -657,7 +651,7 @@ describe('Task 30: fan-out partial-failure isolation + deselect (FR-4)', () => {
     const { io } = scriptedIo(['idea one', 'y', 'idea two', 'n', 'exit']);
 
     const summary = await runEngineerMode({
-      provider,
+      route,
       io,
       gh,
       registryPath,
@@ -680,12 +674,12 @@ describe('Task 30: fan-out partial-failure isolation + deselect (FR-4)', () => {
     const branchesBefore = (await execFile('git', ['branch', '--list'], { cwd: dirA })).stdout;
 
     const { runEngineerMode } = await loadLoop();
-    const { provider } = makeTestProvider({ routeTo: 'alpha' });
+    const { provider: route } = makeTestProvider({ routeTo: 'alpha' });
     const { gh, calls } = makeTestGh();
     // User declines: 'n'
     const { io } = scriptedIo(['some idea', 'n', 'exit']);
 
-    await runEngineerMode({ provider, io, gh, registryPath, engineerDir });
+    await runEngineerMode({ route, io, gh, registryPath, engineerDir });
 
     const headAfter = (await execFile('git', ['rev-parse', 'HEAD'], { cwd: dirA })).stdout.trim();
     const branchesAfter = (await execFile('git', ['branch', '--list'], { cwd: dirA })).stdout;
@@ -702,11 +696,11 @@ describe('Task 30: fan-out partial-failure isolation + deselect (FR-4)', () => {
     await writeRegistry([makeRecord(dirA, 'alpha')]);
 
     const { runEngineerMode } = await loadLoop();
-    const { provider } = makeTestProvider({ routeTo: 'alpha' });
+    const { provider: route } = makeTestProvider({ routeTo: 'alpha' });
     const { gh } = makeTestGh();
     const { io } = scriptedIo(['some idea', 'n', 'exit']);
 
-    const summary = await runEngineerMode({ provider, io, gh, registryPath, engineerDir });
+    const summary = await runEngineerMode({ route, io, gh, registryPath, engineerDir });
     expect(summary.ideasProcessed).toBe(0);
     expect(summary.buildsRun ?? 0).toBe(0);
   });
@@ -732,12 +726,12 @@ describe('Task 36: spec PR opened, never merge/build (FR-7, FR-10)', () => {
     await writeRegistry([makeRecordWithRemote(dirA, 'alpha')]);
 
     const { runEngineerMode } = await loadLoop();
-    const { provider } = makeTestProvider({ routeTo: 'alpha' });
+    const { provider: route } = makeTestProvider({ routeTo: 'alpha' });
     const prUrl = 'https://example.invalid/alpha/pull/42';
     const { gh, calls } = makeTestGh(prUrl);
     const { io, text } = scriptedIo(['add csv export', 'y', 'exit']);
 
-    const summary = await runEngineerMode({ provider, io, gh, registryPath, engineerDir, decide: makeTestDecide() });
+    const summary = await runEngineerMode({ route, io, gh, registryPath, engineerDir, decide: makeTestDecide() });
 
     // PR URL reported in output
     expect(text()).toMatch(/pull\/42/);
@@ -755,11 +749,11 @@ describe('Task 36: spec PR opened, never merge/build (FR-7, FR-10)', () => {
     await writeRegistry([makeRecordWithRemote(dirA, 'alpha')]);
 
     const { runEngineerMode } = await loadLoop();
-    const { provider } = makeTestProvider({ routeTo: 'alpha' });
+    const { provider: route } = makeTestProvider({ routeTo: 'alpha' });
     const { gh, calls } = makeTestGh();
     const { io } = scriptedIo(['some idea', 'y', 'exit']);
 
-    const summary = await runEngineerMode({ provider, io, gh, registryPath, engineerDir, decide: makeTestDecide() });
+    const summary = await runEngineerMode({ route, io, gh, registryPath, engineerDir, decide: makeTestDecide() });
 
     // Exhaustive check: no call may contain 'merge' in any arg position
     for (const callArgs of calls) {
@@ -774,11 +768,11 @@ describe('Task 36: spec PR opened, never merge/build (FR-7, FR-10)', () => {
     await writeRegistry([makeRecord(dirA, 'local')]); // no remote field
 
     const { runEngineerMode } = await loadLoop();
-    const { provider } = makeTestProvider({ routeTo: 'local' });
+    const { provider: route } = makeTestProvider({ routeTo: 'local' });
     const { gh, calls } = makeTestGh();
     const { io, text } = scriptedIo(['offline idea', 'y', 'exit']);
 
-    const summary = await runEngineerMode({ provider, io, gh, registryPath, engineerDir, decide: makeTestDecide() });
+    const summary = await runEngineerMode({ route, io, gh, registryPath, engineerDir, decide: makeTestDecide() });
 
     // Non-fatal exit
     expect(summary.exitCode ?? 0).toBe(0);
@@ -822,7 +816,7 @@ describe('Task 37: ensure-running wired after handoff (FR-21)', () => {
     await writeRegistry([makeRecordWithRemote(dirA, 'alpha')]);
 
     const { runEngineerMode } = await loadLoop();
-    const { provider } = makeTestProvider({ routeTo: 'alpha' });
+    const { provider: route } = makeTestProvider({ routeTo: 'alpha' });
     const { gh } = makeTestGh();
 
     // Inject a launch spy into the engineer deps
@@ -834,7 +828,7 @@ describe('Task 37: ensure-running wired after handoff (FR-21)', () => {
     const { io } = scriptedIo(['add feature', 'y', 'exit']);
 
     const summary = await runEngineerMode({
-      provider,
+      route,
       io,
       gh,
       registryPath,
@@ -855,7 +849,7 @@ describe('Task 37: ensure-running wired after handoff (FR-21)', () => {
     await writeRegistry([makeRecord(dirA, 'alpha')]);
 
     const { runEngineerMode } = await loadLoop();
-    const { provider } = makeTestProvider({ routeTo: 'alpha' });
+    const { provider: route } = makeTestProvider({ routeTo: 'alpha' });
     const { gh } = makeTestGh();
 
     const launchCalls: string[] = [];
@@ -866,7 +860,7 @@ describe('Task 37: ensure-running wired after handoff (FR-21)', () => {
     const { io } = scriptedIo(['some idea', 'n', 'exit']);
 
     await runEngineerMode({
-      provider,
+      route,
       io,
       gh,
       registryPath,
@@ -882,7 +876,7 @@ describe('Task 37: ensure-running wired after handoff (FR-21)', () => {
     await writeRegistry([]);
 
     const { runEngineerMode } = await loadLoop();
-    const { provider } = makeTestProvider();
+    const { provider: route } = makeTestProvider();
     const { gh } = makeTestGh();
 
     const launchCalls: string[] = [];
@@ -893,7 +887,7 @@ describe('Task 37: ensure-running wired after handoff (FR-21)', () => {
     const { io } = scriptedIo(['exit']);
 
     await runEngineerMode({
-      provider,
+      route,
       io,
       gh,
       registryPath,
@@ -910,7 +904,7 @@ describe('Task 37: ensure-running wired after handoff (FR-21)', () => {
     await writeRegistry([makeRecordWithRemote(dirA, 'alpha')]);
 
     const { runEngineerMode } = await loadLoop();
-    const { provider } = makeTestProvider({ routeTo: 'alpha' });
+    const { provider: route } = makeTestProvider({ routeTo: 'alpha' });
     const { gh } = makeTestGh();
 
     const launchCalls: string[] = [];
@@ -922,7 +916,7 @@ describe('Task 37: ensure-running wired after handoff (FR-21)', () => {
     const { io } = scriptedIo(['idea one', 'y', 'idea two', 'y', 'exit']);
 
     const summary = await runEngineerMode({
-      provider,
+      route,
       io,
       gh,
       registryPath,

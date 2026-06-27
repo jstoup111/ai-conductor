@@ -66,17 +66,16 @@ function scriptedIo(lines: string[]) {
 }
 
 /**
- * Registry provider stub: routes any idea to the named project.
+ * Route seam stub: routes any idea to the named project.
+ * Conforms to RoutingProvider: invoke(prompt) → Promise<string>.
  * The loop normalises the wrapped { candidates: [...] } form — use that.
  */
 function makeRoutingProvider(projectName: string) {
   return {
-    invoke: async () => ({
-      ok: true,
-      output: JSON.stringify({
+    invoke: async (_prompt: string): Promise<string> =>
+      JSON.stringify({
         candidates: [{ name: projectName, score: 0.9, rationale: 'match' }],
       }),
-    }),
   };
 }
 
@@ -176,7 +175,7 @@ describe('engineer live path — decide seam is wired (FR-6, Task 35)', () => {
     const { io } = scriptedIo(['add CSV export', 'y', 'exit']);
 
     const summary = await runEngineerMode({
-      provider: makeRoutingProvider('target-project'),
+      route: makeRoutingProvider('target-project'),
       io,
       gh: noopGh,
       registryPath,
@@ -197,7 +196,7 @@ describe('engineer live path — decide seam is wired (FR-6, Task 35)', () => {
     const { io } = scriptedIo(['add CSV export', 'y', 'exit']);
 
     await runEngineerMode({
-      provider: makeRoutingProvider('target-project'),
+      route: makeRoutingProvider('target-project'),
       io,
       gh: noopGh,
       registryPath,
@@ -217,7 +216,7 @@ describe('engineer live path — decide seam is wired (FR-6, Task 35)', () => {
     const { io } = scriptedIo(['add CSV export', 'y', 'exit']);
 
     await runEngineerMode({
-      provider: makeRoutingProvider('target-project'),
+      route: makeRoutingProvider('target-project'),
       io,
       gh: noopGh,
       registryPath,
@@ -240,7 +239,7 @@ describe('engineer live path — decide seam is wired (FR-6, Task 35)', () => {
     const { io } = scriptedIo(['add CSV export', 'y', 'exit']);
 
     await runEngineerMode({
-      provider: makeRoutingProvider('target-project'),
+      route: makeRoutingProvider('target-project'),
       io,
       gh: noopGh,
       registryPath,
@@ -262,7 +261,7 @@ describe('engineer live path — decide seam is wired (FR-6, Task 35)', () => {
     const { io } = scriptedIo(['add CSV export', 'y', 'exit']);
 
     const summary = await runEngineerMode({
-      provider: makeRoutingProvider('target-project'),
+      route: makeRoutingProvider('target-project'),
       io,
       gh: noopGh,
       registryPath,
@@ -284,7 +283,7 @@ describe('engineer live path — decide seam is wired (FR-6, Task 35)', () => {
     // The loop isolates per-idea errors, so we check ideasProcessed stays 0
     // OR we get an error. Either way, no silent authoring happens.
     const summary = await runEngineerMode({
-      provider: makeRoutingProvider('target-project'),
+      route: makeRoutingProvider('target-project'),
       io,
       gh: noopGh,
       registryPath,
@@ -307,7 +306,7 @@ describe('engineer live path — decide seam is wired (FR-6, Task 35)', () => {
     const { io } = scriptedIo(['add CSV export', 'y', 'exit']);
 
     const summary = await runEngineerMode({
-      provider: makeRoutingProvider('target-project'),
+      route: makeRoutingProvider('target-project'),
       io,
       gh: noopGh,
       registryPath,

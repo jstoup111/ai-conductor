@@ -6,7 +6,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 (see `.github/workflows/release.yml`). Every PR must add an entry under
-`## [Unreleased]
+`## [Unreleased]`.
+
+## [Unreleased]
+
+### Added
+
+- **`conduct engineer` launches the interactive idea→spec loop.** Running the bare
+  `conduct engineer` command now drops the operator into an interactive
+  `claude /engineer` session (stdio inherited, human-in-the-loop) instead of
+  printing a pointer and exiting. This is the agent-hosted front door (ADR-008):
+  the launched session runs the real `/engineer` skill — routing, DECIDE, spec PR —
+  in-chat. It is **not** the forbidden headless `claude -p` substrate (that did
+  autonomous routing/authoring and was removed); this is an operator-driven
+  entrypoint. When already inside a Claude Code session (`CLAUDECODE` set) it prints
+  a note to run `/engineer` directly rather than spawning a nested session, and
+  falls back to printing usage if the `claude` CLI is not on `PATH`. The
+  `projects` / `land` / `handoff` subcommands remain deterministic primitives the
+  skill calls (`src/conductor/src/engine/engineer-cli.ts`). The launcher is backed
+  by the new `/engineer` skill (`skills/engineer/SKILL.md`), now installed via the
+  installer fix below. The launched session is started with `--permission-mode
+  default` (never `plan`) so the engineer can author artifacts, branch, and run
+  `land`/`handoff` even when the user's global `defaultMode` is `plan`; override the
+  mode with `CONDUCT_ENGINEER_PERMISSION_MODE` (e.g. `acceptEdits`) — `plan` is
+  rejected.
+
+### Fixed
+
+- **The build daemon now claims its pidfile on boot — liveness is finally observable
+  (ADR-010).** The pidfile-lock primitive (`daemon-lock.ts`) was fully built and tested
+  but **never wired into the daemon's boot path**: `runDaemonMode` never wrote
+  `.daemon/`'s pidfile, so `process.kill(pid,0)` liveness had no pid to probe and the
+  1-per-repo mutex `ensureRunning` relies on never engaged (it would spawn duplicates).
+  New `holdLock(repoPath)` claims the pidfile with the daemon's real pid on boot
+  (refusing to start if a live daemon already owns it), and releases it on exit; a
+  dead-pid pidfile self-heals via reclaim. This is the engine-loop half of the
+  observability gap — capturing daemon **logs** to a file (today the detached spawn
+  uses `stdio:'ignore'`) plus `conduct daemon status`/`logs` land in a follow-up branch.
+
+- **`bin/install` now auto-discovers every skill instead of a hardcoded list.**
+  The `SKILLS` array was maintained by hand and had drifted: skills added under
+  `skills/` (e.g. `engineer`, `prd-audit`) were never symlinked into
+  `~/.claude/skills/`, so their `/slash-commands` silently failed to resolve. The
+  installer now enumerates every `skills/<name>/` directory containing a `SKILL.md`,
+  guaranteeing all skills link on install/`--update`.
+
+### Changed
+
+- **Design-conformance-before-effort control** baked into the harness as an
+  enforced gate, not just memory. New HARNESS.md Key Convention applies whenever
+  code is written, fixed, or hardened, at every phase; a BUILD-phase conformance
+  check added to `skills/pipeline/SKILL.md` per-task dispatch; SHIP/fix gates
+  added to `skills/debugging/SKILL.md` (Phase 4) and `skills/manual-test/SKILL.md`
+  (Bug Loop). A code path that violates or is superseded by an APPROVED ADR/PRD is
+  a conformance finding (kickback/BLOCK), not work to do — building or hardening
+  code slated for deletion is wasted effort.
 
 ## [0.99.17] - 2026-05-02
 
@@ -16,7 +70,7 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ## [0.99.14] - 2026-05-01
 
-## [0.99.13] - 2026-05-01`.
+## [0.99.13] - 2026-05-01
 
 ## [0.99.12] - 2026-04-30
 

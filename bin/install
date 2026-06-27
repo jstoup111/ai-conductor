@@ -30,7 +30,21 @@ fail() { echo -e "  ${RED}✗${NC} $*"; }
 warn() { echo -e "  ${YELLOW}⚠${NC} $*"; }
 info() { echo -e "  ${CYAN}→${NC} $*"; }
 
-SKILLS=(architecture-diagram architecture-review assess bootstrap brainstorm code-review conduct conflict-check debugging finish manual-test memory pipeline plan pr retro simplify stories tdd writing-system-tests)
+# Auto-discover every skill: any skills/<name>/ directory containing a SKILL.md.
+# Previously this was a hardcoded list that drifted out of sync — new skills
+# (engineer, prd-audit, …) were added to skills/ but forgotten here, so they were
+# never symlinked into ~/.claude/skills/. Enumerating the directory guarantees ALL
+# skills link. Glob results are alphabetically sorted by bash (deterministic order).
+SKILLS=()
+for _skill_dir in "${HARNESS_DIR}"/skills/*/; do
+  [ -f "${_skill_dir}SKILL.md" ] || continue
+  SKILLS+=("$(basename "$_skill_dir")")
+done
+unset _skill_dir
+if [ ${#SKILLS[@]} -eq 0 ]; then
+  fail "No skills found under ${HARNESS_DIR}/skills/ — is the harness checkout intact?"
+  exit 1
+fi
 
 # ─── Check Mode ───────────────────────────────────────────────────────────────
 

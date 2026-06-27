@@ -75,7 +75,7 @@ export function assertNever(x: never): never {
 //
 // Intentionally narrower than LLMProvider (which carries session/resume state
 // irrelevant to one-shot ranking). Consumers inject a stub in tests; the real
-// implementation wraps ClaudeProvider.invoke or any HTTP call.
+// implementation wraps any in-chat or HTTP invocation.
 //
 // invoke(prompt) → the raw text response from the LLM.
 // ---------------------------------------------------------------------------

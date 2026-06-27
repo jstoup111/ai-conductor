@@ -66,6 +66,24 @@ is attempted. Evidence-based diagnosis catches the real problem instead of treat
 
 ### Phase 4: Fix
 
+**GATE: Before any fix, confirm the buggy code path is supposed to exist.**
+
+This is the SHIP/fix instance of the harness-wide **design-conformance-before-effort**
+convention (HARNESS.md → Key Conventions): the same check applies whenever code is written,
+not only when it is fixed. A bug is only worth a fix cycle if the code that has it is sanctioned
+by the authoritative design. Before writing a test or touching code, read the governing APPROVED
+decision for the affected component — the relevant ADR in `.docs/decisions/` (Status: APPROVED) and/or the FR
+in the approved PRD (`.docs/specs/`). Ask: **is this code path supposed to exist at all?**
+
+- If the path **conforms** to the approved design → proceed to the fix below.
+- If the path **violates or is superseded by** an APPROVED ADR/PRD → **STOP.** The correct
+  output is a **conformance finding** (flag the gap; in pipeline/SHIP, that's a BLOCKED /
+  kickback, not a patch). A bug on a condemned path is a **removal signal, not a fix target** —
+  hardening code slated for deletion is wasted work.
+
+This is deliberately the cheapest check (one ADR/PRD read) placed *before* the most expensive
+action (RED test → implement → full suite → commit). Do the design check first, every time.
+
 11. **Write a failing test** that reproduces the bug (RED phase of TDD)
 
 12. **Implement a single fix** targeting the root cause (GREEN phase)
@@ -104,6 +122,9 @@ Skip if: the root cause was a simple typo, missing import, or other mechanical e
 - [ ] `.memory/gotchas/` and `.memory/patterns/` searched before investigating
 - [ ] Recent changes checked (git log, git diff)
 - [ ] Evidence gathered before forming hypothesis
+- [ ] Before fixing: confirmed the buggy code path conforms to the governing APPROVED ADR/PRD
+      (a path that violates/supersedes an approved decision is flagged as a conformance finding,
+      not patched)
 - [ ] Working example found and compared
 - [ ] Single hypothesis formed with supporting evidence
 - [ ] Hypothesis tested before implementing fix

@@ -406,12 +406,12 @@ describe('Task 27: in-chat routing proposal + confirmation gate (FR-3, C2)', () 
     await mkdir(projDir, { recursive: true });
     await writeRegistry27([makeRecord27(projDir, 'my-project')]);
 
-    // Provider stub: returns high-confidence ranking for the single project.
-    // loop.ts routingProvider adapter reads `(result as any).output ?? ''`, so
-    // the provider must return an object with an `output` property.
+    // Route seam stub: returns high-confidence ranking for the single project.
+    // loop.ts reads `await deps.route.invoke(prompt)` as a raw JSON string
+    // (the in-chat routing seam — no subprocess, no `{ output }` wrapper).
     const rankingJson = JSON.stringify([{ name: 'my-project', score: 0.92, rationale: 'Perfect fit' }]);
     const providerStub = {
-      invoke: vi.fn().mockResolvedValue({ output: rankingJson }),
+      invoke: vi.fn().mockResolvedValue(rankingJson),
     };
 
     // IO: idea line → user declines so we don't go into authoring.
@@ -419,7 +419,7 @@ describe('Task 27: in-chat routing proposal + confirmation gate (FR-3, C2)', () 
 
     const { runEngineerMode } = await import('../../../src/engine/engineer/loop.js');
     await runEngineerMode({
-      provider: providerStub as any,
+      route: providerStub as any,
       io,
       gh: async () => ({ stdout: '' }),
       registryPath: registryPath27,
@@ -441,7 +441,7 @@ describe('Task 27: in-chat routing proposal + confirmation gate (FR-3, C2)', () 
 
     const rankingJson = JSON.stringify([{ name: 'target-proj', score: 0.88, rationale: 'Good match' }]);
     const providerStub = {
-      invoke: vi.fn().mockResolvedValue({ output: rankingJson }),
+      invoke: vi.fn().mockResolvedValue(rankingJson),
     };
 
     // Decline at the confirmation gate → no authoring should happen.
@@ -449,7 +449,7 @@ describe('Task 27: in-chat routing proposal + confirmation gate (FR-3, C2)', () 
 
     const { runEngineerMode } = await import('../../../src/engine/engineer/loop.js');
     const summary = await runEngineerMode({
-      provider: providerStub as any,
+      route: providerStub as any,
       io,
       gh: async () => ({ stdout: '' }),
       registryPath: registryPath27,
@@ -469,7 +469,7 @@ describe('Task 27: in-chat routing proposal + confirmation gate (FR-3, C2)', () 
 
     const rankingJson = JSON.stringify([{ name: 'eager-proj', score: 0.95, rationale: 'Top match' }]);
     const providerStub = {
-      invoke: vi.fn().mockResolvedValue({ output: rankingJson }),
+      invoke: vi.fn().mockResolvedValue(rankingJson),
     };
 
     // IO: one idea line, then EOF during the confirmation gate (null).
@@ -480,7 +480,7 @@ describe('Task 27: in-chat routing proposal + confirmation gate (FR-3, C2)', () 
 
     const { runEngineerMode } = await import('../../../src/engine/engineer/loop.js');
     const summary = await runEngineerMode({
-      provider: providerStub as any,
+      route: providerStub as any,
       io,
       gh: async () => ({ stdout: '' }),
       registryPath: registryPath27,
@@ -515,14 +515,14 @@ describe('Task 28: routing redirect — original repo gets NO branch/PR/change (
     // it, the listing would change.
     const beforeAlpha = await readdir(alphaDir);
 
-    // Provider stub: proposes alpha as the top candidate.
-    // Must return { output: '<json>' } — the loop adapter reads (result as any).output.
+    // Route seam stub: proposes alpha as the top candidate.
+    // Returns a raw JSON string — the loop reads `await deps.route.invoke(prompt)` directly.
     const rankingJson = JSON.stringify([
       { name: 'alpha', score: 0.91, rationale: 'Primary match' },
       { name: 'beta', score: 0.60, rationale: 'Secondary match' },
     ]);
     const providerStub = {
-      invoke: vi.fn().mockResolvedValue({ output: rankingJson }),
+      invoke: vi.fn().mockResolvedValue(rankingJson),
     };
 
     // IO: idea → redirect to beta → decline (so we don't try to actually author
@@ -531,7 +531,7 @@ describe('Task 28: routing redirect — original repo gets NO branch/PR/change (
 
     const { runEngineerMode } = await import('../../../src/engine/engineer/loop.js');
     await runEngineerMode({
-      provider: providerStub as any,
+      route: providerStub as any,
       io,
       gh: async () => ({ stdout: '' }),
       registryPath: registryPath27,
@@ -559,7 +559,7 @@ describe('Task 28: routing redirect — original repo gets NO branch/PR/change (
       { name: 'beta-2', score: 0.65, rationale: 'Redirect target' },
     ]);
     const providerStub = {
-      invoke: vi.fn().mockResolvedValue({ output: rankingJson }),
+      invoke: vi.fn().mockResolvedValue(rankingJson),
     };
 
     // redirect → then decline → no authoring on either repo.
@@ -567,7 +567,7 @@ describe('Task 28: routing redirect — original repo gets NO branch/PR/change (
 
     const { runEngineerMode } = await import('../../../src/engine/engineer/loop.js');
     const summary = await runEngineerMode({
-      provider: providerStub as any,
+      route: providerStub as any,
       io,
       gh: async () => ({ stdout: '' }),
       registryPath: registryPath27,
@@ -587,7 +587,7 @@ describe('Task 28: routing redirect — original repo gets NO branch/PR/change (
 
     const rankingJson = JSON.stringify([{ name: 'alpha-3', score: 0.88, rationale: 'Only option' }]);
     const providerStub = {
-      invoke: vi.fn().mockResolvedValue({ output: rankingJson }),
+      invoke: vi.fn().mockResolvedValue(rankingJson),
     };
 
     // redirect to a non-existent project → should reprompt (output about invalid),
@@ -596,7 +596,7 @@ describe('Task 28: routing redirect — original repo gets NO branch/PR/change (
 
     const { runEngineerMode } = await import('../../../src/engine/engineer/loop.js');
     const summary = await runEngineerMode({
-      provider: providerStub as any,
+      route: providerStub as any,
       io,
       gh: async () => ({ stdout: '' }),
       registryPath: registryPath27,
@@ -631,7 +631,7 @@ describe('Task 31: create-on-no-fit offer — decline (FR-5)', () => {
 
     const { runEngineerMode } = await import('../../../src/engine/engineer/loop.js');
     await runEngineerMode({
-      provider: providerStub as any,
+      route: providerStub as any,
       io,
       gh: async () => ({ stdout: '' }),
       registryPath: registryPath27,
@@ -652,7 +652,7 @@ describe('Task 31: create-on-no-fit offer — decline (FR-5)', () => {
 
     const { runEngineerMode } = await import('../../../src/engine/engineer/loop.js');
     const summary = await runEngineerMode({
-      provider: providerStub as any,
+      route: providerStub as any,
       io,
       gh: async () => ({ stdout: '' }),
       registryPath: registryPath27,
@@ -681,7 +681,7 @@ describe('Task 31: create-on-no-fit offer — decline (FR-5)', () => {
 
     const { runEngineerMode } = await import('../../../src/engine/engineer/loop.js');
     await runEngineerMode({
-      provider: providerStub as any,
+      route: providerStub as any,
       io,
       gh: async () => ({ stdout: '' }),
       registryPath: registryPath27,
@@ -702,7 +702,7 @@ describe('Task 31: create-on-no-fit — partial scaffold failure + rollback (FR-
     await writeRegistry27([]);
 
     // The routing provider returns no candidates (empty registry short-circuits the LLM).
-    const providerStub = { invoke: vi.fn().mockResolvedValue({ output: '[]' }) };
+    const providerStub = { invoke: vi.fn().mockResolvedValue('[]') };
 
     // The "create" step will fail because we cannot scaffold a real git repo
     // at a path that requires root access. We use a path under /nonexistent which
@@ -716,7 +716,7 @@ describe('Task 31: create-on-no-fit — partial scaffold failure + rollback (FR-
 
     const { runEngineerMode } = await import('../../../src/engine/engineer/loop.js');
     const summary = await runEngineerMode({
-      provider: providerStub as any,
+      route: providerStub as any,
       io,
       gh: async () => ({ stdout: '' }),
       registryPath: registryPath27,
@@ -739,7 +739,7 @@ describe('Task 31: create-on-no-fit — partial scaffold failure + rollback (FR-
   it('createFn failure: ideasProcessed stays 0 — per-idea error isolation contains the failure', async () => {
     await writeRegistry27([]);
 
-    const providerStub = { invoke: vi.fn().mockResolvedValue({ output: '[]' }) };
+    const providerStub = { invoke: vi.fn().mockResolvedValue('[]') };
 
     // Same failed-create scenario, asserting ideasProcessed isolation.
     const { io } = scriptedIo27([
@@ -750,7 +750,7 @@ describe('Task 31: create-on-no-fit — partial scaffold failure + rollback (FR-
 
     const { runEngineerMode } = await import('../../../src/engine/engineer/loop.js');
     const summary = await runEngineerMode({
-      provider: providerStub as any,
+      route: providerStub as any,
       io,
       gh: async () => ({ stdout: '' }),
       registryPath: registryPath27,
@@ -770,7 +770,7 @@ describe('Task 31: create-on-no-fit — partial scaffold failure + rollback (FR-
     // (git init failure, mkdir failure) leaves no registry trace.
     await writeRegistry27([]);
 
-    const providerStub = { invoke: vi.fn().mockResolvedValue({ output: '[]' }) };
+    const providerStub = { invoke: vi.fn().mockResolvedValue('[]') };
 
     const { io } = scriptedIo27([
       'new thing',
@@ -780,7 +780,7 @@ describe('Task 31: create-on-no-fit — partial scaffold failure + rollback (FR-
 
     const { runEngineerMode } = await import('../../../src/engine/engineer/loop.js');
     await runEngineerMode({
-      provider: providerStub as any,
+      route: providerStub as any,
       io,
       gh: async () => ({ stdout: '' }),
       registryPath: registryPath27,

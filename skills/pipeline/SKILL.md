@@ -96,6 +96,15 @@ referencing the completing task.
 listed in the task's `**Dependencies:**` field are marked as completed in
 `.pipeline/task-status.json`. If a dependency is not met, report BLOCKED to the conductor.
 
+**Design-conformance check (step 1):** Before dispatching the subagent, confirm the task builds
+toward — not against — the governing APPROVED design (the relevant ADR in `.docs/decisions/`
+and the FR in the approved PRD). This is the BUILD-phase instance of the harness-wide
+**design-conformance-before-effort** convention (HARNESS.md → Key Conventions). If a task would
+implement or harden a code path that a current APPROVED ADR/PRD supersedes or forbids, do NOT
+dispatch it — report BLOCKED and escalate as a conformance finding. Writing code slated for
+deletion is wasted effort; the cheapest check (one ADR/PRD read) precedes the most expensive
+action (a full TDD subagent dispatch + review cycle).
+
 **Failure verification (step 4):** Before re-dispatching a failed task, run the test suite to
 confirm the failure is real. If tests pass and commits exist for the task, mark as completed —
 do not trust JSON state alone. JSON state can become stale after connection interruptions or

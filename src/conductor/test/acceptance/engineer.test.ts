@@ -4,7 +4,7 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import type { LLMProvider, InvokeResult } from '../../src/execution/llm-provider.js';
+import type { RoutingProvider } from '../../src/engine/engineer/routing.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RED acceptance specs for the NOT-YET-BUILT engineer mode (Phase 9.3, FR-1..FR-12).
@@ -156,33 +156,23 @@ function scriptedIo(lines: string[]) {
 }
 
 /**
- * Provider stub. Routing calls return a JSON candidate; authoring calls
- * (identified by cwd) simulate DECIDE by writing spec artifacts INTO cwd so the
- * engineer's real git branch/commit/PR steps have content to act on.
+ * Route seam stub. Returns a JSON candidate array for routing calls.
+ * The loop normalises wrapped { candidates: [...] } automatically.
  */
 function makeProvider(opts: { routeTo?: string; noFit?: boolean } = {}) {
-  const calls: { cwd?: string; prompt: string }[] = [];
-  const provider: LLMProvider = {
-    async invoke(o: any): Promise<InvokeResult> {
-      calls.push({ cwd: o.cwd, prompt: String(o.prompt ?? '') });
-      const prompt = String(o.prompt ?? '');
-      // Routing inference request → return ranked candidate(s) as JSON.
-      if (/route|candidate|which project/i.test(prompt) && !o.cwd) {
-        const body = opts.noFit
-          ? JSON.stringify({ candidates: [], suggestCreate: true })
-          : JSON.stringify({ candidates: [{ name: opts.routeTo ?? 'alpha', score: 0.9, rationale: 'match' }] });
-        return { ok: true, output: body } as unknown as InvokeResult;
+  const calls: string[] = [];
+  const route: RoutingProvider = {
+    async invoke(prompt: string): Promise<string> {
+      calls.push(prompt);
+      if (opts.noFit) {
+        return JSON.stringify({ candidates: [], suggestCreate: true });
       }
-      // Authoring request (has cwd) → simulate DECIDE writing artifacts in target.
-      if (o.cwd) {
-        const docs = join(o.cwd, '.docs');
-        // best-effort; engineer is expected to have created the branch already
-        return { ok: true, output: 'DECIDE complete', authored: true } as unknown as InvokeResult;
-      }
-      return { ok: true, output: '' } as unknown as InvokeResult;
+      return JSON.stringify({
+        candidates: [{ name: opts.routeTo ?? 'alpha', score: 0.9, rationale: 'match' }],
+      });
     },
-  } as unknown as LLMProvider;
-  return { provider, calls };
+  };
+  return { provider: route, route, calls };
 }
 
 /** gh stub: records every call so we can assert "PR opened" and "never merged". */
@@ -233,11 +223,11 @@ describe('Scenario 1: conduct engineer loop start → idea → exit', () => {
     await seedSignals([signal()]);
 
     const runEngineerMode = requireFn(await load(ENGINEER_MOD), 'runEngineerMode');
-    const { provider } = makeProvider({ routeTo: 'alpha' });
+    const { route } = makeProvider({ routeTo: 'alpha' });
     const { gh } = makeGh();
     const { io, text } = scriptedIo(['add a CSV export to alpha', 'y', 'exit']);
 
-    const summary = await runEngineerMode({ provider, io, gh, decide: makeDecide() });
+    const summary = await runEngineerMode({ route, io, gh, decide: makeDecide() });
 
     expect(text()).toMatch(/1 (known )?project/i); // reports count
     expect(summary).toMatchObject({ ideasProcessed: 1 });
@@ -247,11 +237,11 @@ describe('Scenario 1: conduct engineer loop start → idea → exit', () => {
   it('absent registry → 0 projects, no crash, and says so; absent store → flywheel no-op', async () => {
     // registryPath intentionally not written; engineerDir empty (no signals.jsonl).
     const runEngineerMode = requireFn(await load(ENGINEER_MOD), 'runEngineerMode');
-    const { provider } = makeProvider({ noFit: true });
+    const { route } = makeProvider({ noFit: true });
     const { gh } = makeGh();
     const { io, text } = scriptedIo(['exit']);
 
-    const summary = await runEngineerMode({ provider, io, gh });
+    const summary = await runEngineerMode({ route, io, gh });
 
     expect(text()).toMatch(/0 (known )?projects/i);
     expect(summary.exitCode ?? 0).toBe(0);
@@ -260,11 +250,11 @@ describe('Scenario 1: conduct engineer loop start → idea → exit', () => {
   it('malformed registry → fast clear error naming the file (not silently 0 projects)', async () => {
     await writeFile(registryPath, '{ not json');
     const runEngineerMode = requireFn(await load(ENGINEER_MOD), 'runEngineerMode');
-    const { provider } = makeProvider();
+    const { route } = makeProvider();
     const { gh } = makeGh();
     const { io } = scriptedIo(['exit']);
 
-    await expect(runEngineerMode({ provider, io, gh })).rejects.toThrow(/registry/i);
+    await expect(runEngineerMode({ route, io, gh })).rejects.toThrow(/registry/i);
   });
 
   it('blank idea re-prompts with no side effects; per-idea failure is isolated; EOF exits cleanly', async () => {
@@ -273,12 +263,12 @@ describe('Scenario 1: conduct engineer loop start → idea → exit', () => {
     await writeRegistry([project(repo, 'alpha')]);
 
     const runEngineerMode = requireFn(await load(ENGINEER_MOD), 'runEngineerMode');
-    const { provider } = makeProvider({ routeTo: 'alpha' });
+    const { route } = makeProvider({ routeTo: 'alpha' });
     const { gh } = makeGh();
     // blank line, then EOF (null) — no idea processed, clean exit.
     const { io } = scriptedIo(['']);
 
-    const summary = await runEngineerMode({ provider, io, gh });
+    const summary = await runEngineerMode({ route, io, gh });
     expect(summary.ideasProcessed).toBe(0);
     expect(summary.exitCode ?? 0).toBe(0);
   });
@@ -297,11 +287,11 @@ describe('Scenario 2: routing + human confirmation gate', () => {
     const branchesBefore = (await exec('git', ['branch', '--list'], { cwd: repo })).stdout;
 
     const runEngineerMode = requireFn(await load(ENGINEER_MOD), 'runEngineerMode');
-    const { provider } = makeProvider({ routeTo: 'alpha' });
+    const { route } = makeProvider({ routeTo: 'alpha' });
     const { gh, calls: ghCalls } = makeGh();
     const { io } = scriptedIo(['add export to alpha', 'n', 'exit']); // 'n' = decline
 
-    await runEngineerMode({ provider, io, gh });
+    await runEngineerMode({ route, io, gh });
 
     const after = await exec('git', ['rev-parse', 'HEAD'], { cwd: repo });
     const branchesAfter = (await exec('git', ['branch', '--list'], { cwd: repo })).stdout;
@@ -318,12 +308,12 @@ describe('Scenario 2: routing + human confirmation gate', () => {
     await writeRegistry([project(a, 'alpha'), project(b, 'beta')]);
 
     const runEngineerMode = requireFn(await load(ENGINEER_MOD), 'runEngineerMode');
-    const { provider } = makeProvider({ routeTo: 'alpha' }); // inference says alpha…
+    const { route } = makeProvider({ routeTo: 'alpha' }); // inference says alpha…
     const { gh } = makeGh();
     // …operator redirects to beta, then confirms.
     const { io } = scriptedIo(['some idea', 'redirect beta', 'y', 'exit']);
 
-    const summary = await runEngineerMode({ provider, io, gh, decide: makeDecide() });
+    const summary = await runEngineerMode({ route, io, gh, decide: makeDecide() });
     expect(summary.authored?.[0]?.project).toBe('beta');
   });
 
@@ -333,11 +323,11 @@ describe('Scenario 2: routing + human confirmation gate', () => {
     await writeRegistry([project(a, 'alpha')]);
 
     const runEngineerMode = requireFn(await load(ENGINEER_MOD), 'runEngineerMode');
-    const { provider } = makeProvider({ routeTo: 'alpha' });
+    const { route } = makeProvider({ routeTo: 'alpha' });
     const { gh, calls: ghCalls } = makeGh();
     const { io, text } = scriptedIo(['idea', 'redirect nonesuch', 'n', 'exit']);
 
-    await runEngineerMode({ provider, io, gh });
+    await runEngineerMode({ route, io, gh });
     expect(text()).toMatch(/not (a )?registered|unknown project/i);
     expect(ghCalls.length).toBe(0);
   });
@@ -346,14 +336,14 @@ describe('Scenario 2: routing + human confirmation gate', () => {
     // empty registry → nothing fits.
     await writeRegistry([]);
     const runEngineerMode = requireFn(await load(ENGINEER_MOD), 'runEngineerMode');
-    const { provider } = makeProvider({ noFit: true });
+    const { route } = makeProvider({ noFit: true });
     const { gh } = makeGh();
     const newRepoParent = join(workDir, 'created');
     await mkdir(newRepoParent, { recursive: true });
     // idea → offered create → confirm create → confirm authoring → exit
     const { io } = scriptedIo(['a brand new tool', `create ${join(newRepoParent, 'gamma')}`, 'y', 'y', 'exit']);
 
-    const summary = await runEngineerMode({ provider, io, gh, decide: makeDecide() });
+    const summary = await runEngineerMode({ route, io, gh, decide: makeDecide() });
     // new project registered
     const reg = JSON.parse(await readFile(registryPath, 'utf8'));
     expect(reg.some((r: any) => r.name === 'gamma')).toBe(true);
@@ -398,7 +388,7 @@ describe('Scenario 3: flywheel surfaces relevant lessons', () => {
     await seedSignals([signal({ project: 'alpha', feature: 'export', kickbacks: [{ gate: 'review', reason: 'unique-marker-lesson' }] })]);
 
     const runEngineerMode = requireFn(await load(ENGINEER_MOD), 'runEngineerMode');
-    const { provider } = makeProvider({ routeTo: 'alpha' });
+    const { route } = makeProvider({ routeTo: 'alpha' });
     const { gh } = makeGh();
     const { io } = scriptedIo(['extend the export', 'y', 'exit']);
 
@@ -409,7 +399,7 @@ describe('Scenario 3: flywheel surfaces relevant lessons', () => {
       return makeDecide()(ctx);
     };
 
-    await runEngineerMode({ provider, io, gh, decide: spyDecide });
+    await runEngineerMode({ route, io, gh, decide: spyDecide });
     // The brainstorm prompt (first DECIDE call) must contain the lesson from the digest.
     const brainstormCall = decideCalls.find((c) => c.step === 'brainstorm');
     expect(brainstormCall, 'brainstorm DECIDE step was invoked').toBeTruthy();
@@ -427,11 +417,11 @@ describe('Scenario 4: authoring → spec branch + PR, never build, never merge',
     await writeRegistry([project(repo, 'alpha', 'https://example.invalid/alpha.git')]);
 
     const runEngineerMode = requireFn(await load(ENGINEER_MOD), 'runEngineerMode');
-    const { provider } = makeProvider({ routeTo: 'alpha' });
+    const { route } = makeProvider({ routeTo: 'alpha' });
     const { gh, calls: ghCalls } = makeGh('https://example.invalid/alpha/pull/7');
     const { io, text } = scriptedIo(['add csv export', 'y', 'exit']);
 
-    await runEngineerMode({ provider, io, gh, decide: makeDecide() });
+    await runEngineerMode({ route, io, gh, decide: makeDecide() });
 
     const branches = (await exec('git', ['branch', '--list', 'spec/*'], { cwd: repo })).stdout;
     expect(branches).toMatch(/spec\//); // a spec branch was created
@@ -445,11 +435,11 @@ describe('Scenario 4: authoring → spec branch + PR, never build, never merge',
     await writeRegistry([project(repo, 'alpha', 'https://example.invalid/alpha.git')]);
 
     const runEngineerMode = requireFn(await load(ENGINEER_MOD), 'runEngineerMode');
-    const { provider } = makeProvider({ routeTo: 'alpha' });
+    const { route } = makeProvider({ routeTo: 'alpha' });
     const { gh, calls: ghCalls } = makeGh();
     const { io } = scriptedIo(['add csv export', 'y', 'exit']);
 
-    const summary = await runEngineerMode({ provider, io, gh, decide: makeDecide() });
+    const summary = await runEngineerMode({ route, io, gh, decide: makeDecide() });
 
     expect(ghCalls.some((a) => a.includes('merge'))).toBe(false); // never merges
     expect(summary.buildsRun ?? 0).toBe(0); // no build transition
@@ -461,11 +451,11 @@ describe('Scenario 4: authoring → spec branch + PR, never build, never merge',
     await writeRegistry([project(repo, 'local-only')]); // no remote field
 
     const runEngineerMode = requireFn(await load(ENGINEER_MOD), 'runEngineerMode');
-    const { provider } = makeProvider({ routeTo: 'local-only' });
+    const { route } = makeProvider({ routeTo: 'local-only' });
     const { gh } = makeGh();
     const { io, text } = scriptedIo(['offline idea', 'y', 'exit']);
 
-    const summary = await runEngineerMode({ provider, io, gh, decide: makeDecide() });
+    const summary = await runEngineerMode({ route, io, gh, decide: makeDecide() });
     expect(summary.exitCode ?? 0).toBe(0); // non-fatal
     expect(text()).toMatch(/no remote|PR (could not|skip)/i);
     const branches = (await exec('git', ['branch', '--list', 'spec/*'], { cwd: repo })).stdout;
@@ -478,10 +468,10 @@ describe('Scenario 4: authoring → spec branch + PR, never build, never merge',
     await writeRegistry([project(repo, 'alpha', 'https://example.invalid/alpha.git')]);
 
     const runEngineerMode = requireFn(await load(ENGINEER_MOD), 'runEngineerMode');
-    const { provider } = makeProvider({ routeTo: 'alpha' });
+    const { route } = makeProvider({ routeTo: 'alpha' });
     const { gh } = makeGh();
     const { io } = scriptedIo(['add csv export', 'y', 'exit']);
-    await runEngineerMode({ provider, io, gh, decide: makeDecide() });
+    await runEngineerMode({ route, io, gh, decide: makeDecide() });
 
     const specBranch = (await exec('git', ['branch', '--list', 'spec/*'], { cwd: repo })).stdout.trim().replace('*', '').trim();
     const changed = (await exec('git', ['diff', '--name-only', 'main', specBranch], { cwd: repo })).stdout.trim().split('\n').filter(Boolean);
@@ -507,10 +497,10 @@ describe('Scenario 5: cross-repo isolation', () => {
     const bBranchesBefore = (await exec('git', ['branch', '--list'], { cwd: b })).stdout;
 
     const runEngineerMode = requireFn(await load(ENGINEER_MOD), 'runEngineerMode');
-    const { provider } = makeProvider({ routeTo: 'alpha' });
+    const { route } = makeProvider({ routeTo: 'alpha' });
     const { gh } = makeGh();
     const { io } = scriptedIo(['idea for alpha', 'y', 'exit']);
-    await runEngineerMode({ provider, io, gh, decide: makeDecide() });
+    await runEngineerMode({ route, io, gh, decide: makeDecide() });
 
     const bHeadAfter = (await exec('git', ['rev-parse', 'HEAD'], { cwd: b })).stdout;
     const bBranchesAfter = (await exec('git', ['branch', '--list'], { cwd: b })).stdout;
