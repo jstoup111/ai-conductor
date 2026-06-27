@@ -1,38 +1,114 @@
-import { readdir, readFile, access } from 'node:fs/promises';
-import { basename, isAbsolute, join, resolve } from 'node:path';
+import { execFile as execFileCb } from 'node:child_process';
+import { basename, isAbsolute, join, relative } from 'node:path';
+import { promisify } from 'node:util';
 import type { BacklogItem } from './daemon.js';
 import { planHasDependencyTree } from './artifacts.js';
 
+const execFile = promisify(execFileCb);
+
 /**
- * Discover daemon-eligible features (Phase 6). The daemon consumes existing,
- * human-authored specs — it never authors them — so a feature is eligible only
- * when BOTH its stories and plan artifacts are present.
+ * Reads spec artifacts from a single, authoritative source — the daemon's
+ * committed default branch (`main`). The merge of a spec PR is what moves
+ * artifacts onto that branch, so reading the branch tree (NOT the working-tree
+ * filesystem) is exactly what makes "merged" the build-ready signal (FR-24).
  *
- * Source of truth is `.docs/plans/*.md`: each plan names its stories file via a
- * `**Stories:** <path>` line (repo convention). The slug is the plan filename
- * stem. A feature already marked processed (via `isProcessed`) is skipped so the
- * daemon doesn't re-run shipped work.
+ * `listPlanFiles()` → the `.md` basenames under `.docs/plans` on the base branch.
+ * `readFile(relPath)` → the content of a repo-relative path on the base branch,
+ *   or `null` when the path is absent from that tree.
+ */
+export interface BacklogTreeSource {
+  listPlanFiles(): Promise<string[]>;
+  readFile(relPath: string): Promise<string | null>;
+}
+
+/**
+ * Production tree source: reads the committed `baseBranch` tree of the repo at
+ * `projectRoot` via git. It deliberately never touches the working tree, so
+ * uncommitted artifacts (e.g. specs the engineer authored but has not landed)
+ * and artifacts that live only on an unmerged `spec/<slug>` branch are invisible
+ * — the daemon builds a spec only once its PR is merged onto `baseBranch`.
+ */
+export function gitTreeSource(projectRoot: string, baseBranch: string): BacklogTreeSource {
+  return {
+    async listPlanFiles() {
+      try {
+        const { stdout } = await execFile(
+          'git',
+          ['ls-tree', '--name-only', `${baseBranch}:.docs/plans`],
+          { cwd: projectRoot },
+        );
+        return stdout
+          .split('\n')
+          .map((l) => l.trim())
+          .filter((l) => l.endsWith('.md'))
+          // `git ls-tree <branch>:.docs/plans` already yields basenames; guard
+          // against any stray pathing by reducing to the basename.
+          .map((l) => basename(l));
+      } catch {
+        return []; // no such tree (no `.docs/plans` on base branch) → nothing to do
+      }
+    },
+    async readFile(relPath) {
+      try {
+        const { stdout } = await execFile('git', ['show', `${baseBranch}:${relPath}`], {
+          cwd: projectRoot,
+        });
+        return stdout;
+      } catch {
+        return null; // absent from the base-branch tree
+      }
+    },
+  };
+}
+
+/** Options for discoverBacklog. */
+export interface DiscoverBacklogOpts {
+  /** Branch whose committed tree is the build-ready source of truth (default 'main'). */
+  baseBranch?: string;
+  /** Inject a tree source (tests); defaults to the git base-branch reader. */
+  treeSource?: BacklogTreeSource;
+}
+
+/**
+ * Discover daemon-eligible features (Phase 6 / Phase 9.3 FR-24). The daemon
+ * consumes existing, human-authored specs — it never authors them — and builds
+ * a feature only once its spec PR is **merged onto the default branch**.
+ *
+ * Source of truth is `.docs/plans/*.md` **as committed on `baseBranch`** (NOT the
+ * working-tree filesystem, and NOT any `.worktrees/` copy). Reading the branch
+ * tree is what makes the human merge the build trigger: an engineer-authored spec
+ * sitting uncommitted in the working tree, or committed only on an unmerged
+ * `spec/<slug>` branch, is intentionally invisible here.
+ *
+ * Each plan names its stories file via a `**Stories:** <path>` line (repo
+ * convention) or shares the plan's stem. A feature is eligible only when BOTH its
+ * stories and plan are present on the base branch, the stories are
+ * `Status: Accepted` (not DRAFT), and the plan declares a dependency tree. A
+ * feature already marked processed (via `isProcessed`) is skipped.
  */
 export async function discoverBacklog(
   projectRoot: string,
   isProcessed: (slug: string) => Promise<boolean> = async () => false,
   log: (msg: string) => void = () => {},
+  opts: DiscoverBacklogOpts = {},
 ): Promise<BacklogItem[]> {
-  const plansDir = join(projectRoot, '.docs/plans');
-  let planFiles: string[];
-  try {
-    planFiles = (await readdir(plansDir)).filter((f) => f.endsWith('.md'));
-  } catch {
-    return []; // no plans dir → nothing to do
-  }
+  const baseBranch = opts.baseBranch ?? 'main';
+  const tree = opts.treeSource ?? gitTreeSource(projectRoot, baseBranch);
+
+  const planFiles = (await tree.listPlanFiles()).filter((f) => f.endsWith('.md'));
+  if (planFiles.length === 0) return [];
 
   const items: BacklogItem[] = [];
-  for (const file of planFiles.sort()) {
-    const planPath = join(plansDir, file);
+  for (const file of [...planFiles].sort()) {
     const slug = basename(file, '.md');
+    const planRel = `.docs/plans/${file}`;
 
-    const storiesPath = await resolveStoriesPath(projectRoot, planPath);
-    if (!storiesPath) continue; // no stories → not eligible (daemon doesn't author them)
+    // Read the plan FROM THE BASE-BRANCH TREE. Absent → not merged → skip.
+    const planContent = await tree.readFile(planRel);
+    if (planContent === null) continue;
+
+    const storiesRel = await resolveStoriesRef(projectRoot, tree, slug, planContent);
+    if (!storiesRel) continue; // no stories on the base branch → not eligible
 
     if (await isProcessed(slug)) continue;
 
@@ -40,12 +116,11 @@ export async function discoverBacklog(
     // (stories/plan = done) and never re-runs their gates, so this is the only
     // place specs are vetted before autonomous build. Reject unapproved or
     // dependency-tree-less plans rather than silently building them.
-    const storiesContent = await readFile(storiesPath, 'utf-8').catch(() => '');
+    const storiesContent = (await tree.readFile(storiesRel)) ?? '';
     if (!isStoriesApproved(storiesContent)) {
       log(`skip ${slug}: stories not approved (need "Status: Accepted", no DRAFT)`);
       continue;
     }
-    const planContent = await readFile(planPath, 'utf-8').catch(() => '');
     if (!planHasDependencyTree(planContent)) {
       log(
         `skip ${slug}: plan has no dependency tree ("## Task Dependency Graph" or "**Dependencies:**" lines)`,
@@ -53,7 +128,14 @@ export async function discoverBacklog(
       continue;
     }
 
-    items.push({ slug, storiesPath, planPath });
+    // BacklogItem paths are working-tree absolute paths (where materializeSpecs
+    // copies from). On the daemon's base-branch checkout these match the merged,
+    // committed content vetted above.
+    items.push({
+      slug,
+      storiesPath: join(projectRoot, storiesRel),
+      planPath: join(projectRoot, planRel),
+    });
   }
   return items;
 }
@@ -61,8 +143,9 @@ export async function discoverBacklog(
 /**
  * Approval signal for autonomous (daemon) work: the stories declare
  * `Status: Accepted` and are not DRAFT. Mirrors the stories gate's Accepted/
- * DRAFT convention (artifacts.ts). When the Phase 9 engineer lands, its human
- * approval gate is what sets this marker.
+ * DRAFT convention (artifacts.ts). When the Phase 9 engineer lands and the
+ * operator merges the spec PR, this is what the daemon observes on the base
+ * branch.
  */
 function isStoriesApproved(content: string): boolean {
   if (/\bstatus\b[\s*:]*\bdraft\b/i.test(content)) return false;
@@ -70,41 +153,41 @@ function isStoriesApproved(content: string): boolean {
 }
 
 /**
- * Resolve the stories file a plan depends on. Prefers the explicit
- * `**Stories:** <path>` line; falls back to a stories file whose stem matches
- * the plan's. Returns null if no existing stories file is found.
+ * Resolve the repo-relative stories path a plan depends on, validating it exists
+ * ON THE BASE-BRANCH TREE. Prefers the explicit `**Stories:** <path>` line; falls
+ * back to a stories file sharing the plan's stem. Returns null if neither is
+ * present on the base branch.
  */
-async function resolveStoriesPath(
+async function resolveStoriesRef(
   projectRoot: string,
-  planPath: string,
+  tree: BacklogTreeSource,
+  slug: string,
+  planContent: string,
 ): Promise<string | null> {
-  let content = '';
-  try {
-    content = await readFile(planPath, 'utf-8');
-  } catch {
-    return null;
-  }
-
-  const m = content.match(/^\s*\*\*Stories:\*\*\s*`?([^\s`]+)`?/im);
+  const m = planContent.match(/^\s*\*\*Stories:\*\*\s*`?([^\s`]+)`?/im);
   if (m) {
-    const ref = m[1];
-    const abs = isAbsolute(ref) ? ref : resolve(projectRoot, ref);
-    if (await fileExists(abs)) return abs;
+    const ref = toRepoRelative(projectRoot, m[1]);
+    if (ref && (await tree.readFile(ref)) !== null) return ref;
   }
 
   // Fallback: a stories file with the same stem as the plan.
-  const stem = basename(planPath, '.md');
-  const candidate = join(projectRoot, '.docs/stories', `${stem}.md`);
-  if (await fileExists(candidate)) return candidate;
+  const candidate = `.docs/stories/${slug}.md`;
+  if ((await tree.readFile(candidate)) !== null) return candidate;
 
   return null;
 }
 
-async function fileExists(p: string): Promise<boolean> {
-  try {
-    await access(p);
-    return true;
-  } catch {
-    return false;
+/**
+ * Normalize a `**Stories:**` reference to a repo-relative POSIX path suitable for
+ * `git show <branch>:<path>`. Absolute paths under projectRoot are made relative;
+ * absolute paths outside it are rejected (null). Relative paths pass through.
+ */
+function toRepoRelative(projectRoot: string, ref: string): string | null {
+  let rel = ref;
+  if (isAbsolute(ref)) {
+    const r = relative(projectRoot, ref);
+    if (r.startsWith('..')) return null; // outside the repo → not a base-branch path
+    rel = r;
   }
+  return rel.split('\\').join('/'); // git tree paths use forward slashes
 }

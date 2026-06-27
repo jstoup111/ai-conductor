@@ -157,10 +157,16 @@ and opening a PR on finish:
   ceilings (`--max-items`, `--max-cost`, `--max-runtime`), `once` vs `--continuous`
   idle-poll, and per-feature failure isolation (a thrown feature becomes an `error`
   outcome; the pool survives).
-- `engine/daemon-backlog.ts` — eligibility: stories **approved** (`Status: Accepted`,
-  not DRAFT) + plan declares a **dependency tree** (`## Task Dependency Graph` or
-  per-task `**Dependencies:**`), not yet processed. Ineligible features are skipped with
-  a logged reason — the daemon pre-seeds the front half, so eligibility is the only place
+- `engine/daemon-backlog.ts` — eligibility, sourced from the **committed default branch
+  only**: `discoverBacklog` reads `.docs/plans` + `.docs/stories` from `git show
+  <baseBranch>:…` (a `BacklogTreeSource`), **never the working tree** and never a
+  `.worktrees/` copy. This is what makes **merging the spec PR the build-ready trigger**
+  (FR-24): a spec the engineer authored but has not landed, or one committed only on an
+  unmerged `spec/<slug>` branch, is invisible until it reaches `<baseBranch>`. On top of
+  presence, a feature must have stories **approved** (`Status: Accepted`, not DRAFT) + a
+  plan that declares a **dependency tree** (`## Task Dependency Graph` or per-task
+  `**Dependencies:**`), and not yet be processed. Ineligible features are skipped with a
+  logged reason — the daemon pre-seeds the front half, so eligibility is the only place
   specs are vetted before autonomous build.
 - `engine/daemon-runner.ts` — per-feature discipline: done → mark + remove worktree + PR;
   halted/error → keep the worktree for the human. On completion it also emits a engineer

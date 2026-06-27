@@ -1,10 +1,40 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, mkdir, writeFile } from 'fs/promises';
+import { mkdtemp, rm, mkdir, writeFile, readFile as fsReadFile, readdir } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { discoverBacklog } from '../../src/engine/daemon-backlog.js';
+import { execFile as execFileCb } from 'node:child_process';
+import { promisify } from 'node:util';
+import {
+  discoverBacklog,
+  type BacklogTreeSource,
+} from '../../src/engine/daemon-backlog.js';
 
-describe('engine/daemon-backlog — discoverBacklog', () => {
+const execFile = promisify(execFileCb);
+
+// A working-tree-backed tree source: reads `.docs/` straight off the filesystem.
+// Used by the vetting-logic unit tests so they stay fast and git-free while
+// still exercising the real eligibility rules. The PRODUCTION default reads the
+// committed base-branch tree via git — see the FR-24 git tests below.
+function fsTreeSource(root: string): BacklogTreeSource {
+  return {
+    async listPlanFiles() {
+      try {
+        return (await readdir(join(root, '.docs/plans'))).filter((f) => f.endsWith('.md'));
+      } catch {
+        return [];
+      }
+    },
+    async readFile(relPath) {
+      try {
+        return await fsReadFile(join(root, relPath), 'utf-8');
+      } catch {
+        return null;
+      }
+    },
+  };
+}
+
+describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () => {
   let dir: string;
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'daemon-backlog-'));
@@ -15,17 +45,25 @@ describe('engine/daemon-backlog — discoverBacklog', () => {
     await rm(dir, { recursive: true, force: true });
   });
 
-  it('returns [] when there is no plans dir', async () => {
-    const empty = await mkdtemp(join(tmpdir(), 'empty-'));
-    expect(await discoverBacklog(empty)).toEqual([]);
-    await rm(empty, { recursive: true, force: true });
-  });
-
   // Eligible specs must be APPROVED (stories Status: Accepted) and well-formed
   // (plan declares a dependency tree). Helpers keep fixtures valid by default.
   const APPROVED_STORIES = '# Stories\n**Status:** Accepted\n';
   const planWithDeps = (storiesRef?: string) =>
     `# Plan\n${storiesRef ? `**Stories:** ${storiesRef}\n` : ''}\n### Task 1\n**Dependencies:** none\n`;
+
+  // Convenience: run discoverBacklog against the working tree (fs source).
+  const discover = (
+    isProcessed?: (slug: string) => Promise<boolean>,
+    log?: (m: string) => void,
+  ) => discoverBacklog(dir, isProcessed, log, { treeSource: fsTreeSource(dir) });
+
+  it('returns [] when there is no plans dir', async () => {
+    const empty = await mkdtemp(join(tmpdir(), 'empty-'));
+    expect(await discoverBacklog(empty, undefined, undefined, { treeSource: fsTreeSource(empty) })).toEqual(
+      [],
+    );
+    await rm(empty, { recursive: true, force: true });
+  });
 
   it('includes a feature whose plan + stories both exist (via **Stories:** ref)', async () => {
     await writeFile(
@@ -34,7 +72,7 @@ describe('engine/daemon-backlog — discoverBacklog', () => {
     );
     await writeFile(join(dir, '.docs/stories/feature-a.md'), APPROVED_STORIES);
 
-    const backlog = await discoverBacklog(dir);
+    const backlog = await discover();
     expect(backlog).toHaveLength(1);
     expect(backlog[0].slug).toBe('feature-a');
     expect(backlog[0].planPath).toContain('feature-a.md');
@@ -45,13 +83,13 @@ describe('engine/daemon-backlog — discoverBacklog', () => {
     await writeFile(join(dir, '.docs/plans/feature-b.md'), planWithDeps());
     await writeFile(join(dir, '.docs/stories/feature-b.md'), APPROVED_STORIES);
 
-    const backlog = await discoverBacklog(dir);
+    const backlog = await discover();
     expect(backlog.map((b) => b.slug)).toEqual(['feature-b']);
   });
 
   it('excludes a plan with no matching stories (daemon never authors specs)', async () => {
     await writeFile(join(dir, '.docs/plans/orphan.md'), '# Plan with no stories\n');
-    const backlog = await discoverBacklog(dir);
+    const backlog = await discover();
     expect(backlog).toEqual([]);
   });
 
@@ -61,18 +99,15 @@ describe('engine/daemon-backlog — discoverBacklog', () => {
       await writeFile(join(dir, `.docs/stories/${slug}.md`), APPROVED_STORIES);
     }
     const processed = new Set(['a']);
-    const backlog = await discoverBacklog(dir, async (slug) => processed.has(slug));
+    const backlog = await discover(async (slug) => processed.has(slug));
     expect(backlog.map((b) => b.slug)).toEqual(['b']);
   });
 
   it('skips an UNAPPROVED feature (stories not Accepted / DRAFT)', async () => {
     await writeFile(join(dir, '.docs/plans/draft.md'), planWithDeps());
-    await writeFile(
-      join(dir, '.docs/stories/draft.md'),
-      '# Stories\n**Status:** DRAFT\n',
-    );
+    await writeFile(join(dir, '.docs/stories/draft.md'), '# Stories\n**Status:** DRAFT\n');
     const logs: string[] = [];
-    const backlog = await discoverBacklog(dir, undefined, (m) => logs.push(m));
+    const backlog = await discover(undefined, (m) => logs.push(m));
     expect(backlog).toEqual([]);
     expect(logs.join('\n')).toMatch(/draft.*not approved/i);
   });
@@ -84,7 +119,7 @@ describe('engine/daemon-backlog — discoverBacklog', () => {
     );
     await writeFile(join(dir, '.docs/stories/nodeps.md'), APPROVED_STORIES);
     const logs: string[] = [];
-    const backlog = await discoverBacklog(dir, undefined, (m) => logs.push(m));
+    const backlog = await discover(undefined, (m) => logs.push(m));
     expect(backlog).toEqual([]);
     expect(logs.join('\n')).toMatch(/nodeps.*dependency tree/i);
   });
@@ -93,59 +128,110 @@ describe('engine/daemon-backlog — discoverBacklog', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 // Phase 9.3 REDESIGN — FR-24: merging the spec PR is the build-ready signal.
 //
-// The daemon builds only specs present on `main` (so the human merge is the
-// trigger), via the EXISTING build-ready predicate. These are coverage cases
-// written directly from the FR-24 story text (Group D, verify-only): they may
-// legitimately PASS, since the predicate already exists — that is acceptable.
-// The "unmerged PR" case is modeled the way the daemon observes it: the
-// artifacts are simply NOT on the scanned tree yet.
+// These exercise the REAL default (git) tree source against a REAL repo. The
+// invariant: the daemon builds a spec ONLY once it is committed on the base
+// branch (i.e. the spec PR is merged). Artifacts that exist only in the working
+// tree (engineer-authored, not yet landed) or only on an unmerged `spec/<slug>`
+// branch must NOT be discovered — that was the production gap a working-tree
+// scan silently allowed.
 // ─────────────────────────────────────────────────────────────────────────────
-describe('engine/daemon-backlog — FR-24 build-ready handoff invariant', () => {
+describe('engine/daemon-backlog — FR-24 merge is the build-ready trigger (git)', () => {
   let dir: string;
+  let baseBranch: string;
+
   const APPROVED_STORIES = '# Stories\n**Status:** Accepted\n';
   const planWithDeps = (storiesRef?: string) =>
     `# Plan\n${storiesRef ? `**Stories:** ${storiesRef}\n` : ''}\n### Task 1\n**Dependencies:** none\n`;
 
-  beforeEach(async () => {
-    dir = await mkdtemp(join(tmpdir(), 'daemon-backlog-fr24-'));
+  const git = async (args: string[]) => {
+    const { stdout } = await execFile('git', args, { cwd: dir });
+    return stdout.trim();
+  };
+
+  // Write a spec's plan + stories into the working tree (not committed).
+  async function writeSpec(slug: string, stories = APPROVED_STORIES): Promise<void> {
     await mkdir(join(dir, '.docs/plans'), { recursive: true });
     await mkdir(join(dir, '.docs/stories'), { recursive: true });
+    await writeFile(join(dir, `.docs/plans/${slug}.md`), planWithDeps(`.docs/stories/${slug}.md`));
+    await writeFile(join(dir, `.docs/stories/${slug}.md`), stories);
+  }
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'daemon-backlog-fr24-'));
+    await execFile('git', ['init', '-q'], { cwd: dir });
+    await execFile('git', ['config', 'user.email', 'test@test.com'], { cwd: dir });
+    await execFile('git', ['config', 'user.name', 'Test'], { cwd: dir });
+    await writeFile(join(dir, 'README.md'), 'init\n');
+    await execFile('git', ['add', 'README.md'], { cwd: dir });
+    await execFile('git', ['commit', '-q', '-m', 'init'], { cwd: dir });
+    baseBranch = await git(['rev-parse', '--abbrev-ref', 'HEAD']);
   });
   afterEach(async () => {
     await rm(dir, { recursive: true, force: true });
   });
 
-  it('MERGED spec (Accepted stories + dependency-tree plan + not processed) → build-ready', async () => {
-    await writeFile(join(dir, '.docs/plans/csv-export.md'), planWithDeps('.docs/stories/csv-export.md'));
-    await writeFile(join(dir, '.docs/stories/csv-export.md'), APPROVED_STORIES);
+  it('MERGED spec (committed on base branch) → build-ready', async () => {
+    await writeSpec('csv-export');
+    await git(['add', '.docs']);
+    await git(['commit', '-q', '-m', 'merge spec: csv-export']);
 
-    const backlog = await discoverBacklog(dir);
+    const backlog = await discoverBacklog(dir, undefined, undefined, { baseBranch });
     expect(backlog.map((b) => b.slug)).toEqual(['csv-export']);
   });
 
-  it('UNMERGED PR (artifacts absent from the scanned tree) → NOT build-ready (no build)', async () => {
-    // The spec PR is open but unmerged → its plan/stories are not on the tree
-    // the daemon scans. The predicate therefore finds nothing to build.
-    const backlog = await discoverBacklog(dir);
+  it('UNCOMMITTED working-tree spec (engineer authored, not landed) → NOT build-ready', async () => {
+    // The exact production bug: an Accepted, well-formed spec is sitting in the
+    // working tree but has not been committed/merged. A working-tree scan would
+    // build it; reading the base-branch tree must not.
+    await writeSpec('note-grouping');
+
+    const backlog = await discoverBacklog(dir, undefined, undefined, { baseBranch });
     expect(backlog).toEqual([]);
   });
 
-  it('MERGED spec whose stories are still Status: DRAFT → NOT build-ready (stub-regression guard)', async () => {
-    await writeFile(join(dir, '.docs/plans/draft-feat.md'), planWithDeps('.docs/stories/draft-feat.md'));
-    await writeFile(join(dir, '.docs/stories/draft-feat.md'), '# Stories\n**Status:** DRAFT\n');
+  it('spec committed only on an unmerged spec/<slug> branch → NOT build-ready', async () => {
+    await git(['checkout', '-q', '-b', 'spec/note-grouping']);
+    await writeSpec('note-grouping');
+    await git(['add', '.docs']);
+    await git(['commit', '-q', '-m', 'spec: note-grouping']);
+    await git(['checkout', '-q', baseBranch]); // base branch is clean of the spec
+
+    const backlog = await discoverBacklog(dir, undefined, undefined, { baseBranch });
+    expect(backlog).toEqual([]);
+  });
+
+  it('after the spec branch is MERGED into the base branch → build-ready', async () => {
+    await git(['checkout', '-q', '-b', 'spec/note-grouping']);
+    await writeSpec('note-grouping');
+    await git(['add', '.docs']);
+    await git(['commit', '-q', '-m', 'spec: note-grouping']);
+    await git(['checkout', '-q', baseBranch]);
+    await git(['merge', '-q', '--no-ff', '-m', 'merge spec', 'spec/note-grouping']);
+
+    const backlog = await discoverBacklog(dir, undefined, undefined, { baseBranch });
+    expect(backlog.map((b) => b.slug)).toEqual(['note-grouping']);
+  });
+
+  it('MERGED spec whose stories are still Status: DRAFT → NOT build-ready', async () => {
+    await writeSpec('draft-feat', '# Stories\n**Status:** DRAFT\n');
+    await git(['add', '.docs']);
+    await git(['commit', '-q', '-m', 'merge spec: draft-feat']);
 
     const logs: string[] = [];
-    const backlog = await discoverBacklog(dir, undefined, (m) => logs.push(m));
+    const backlog = await discoverBacklog(dir, undefined, (m) => logs.push(m), { baseBranch });
     expect(backlog).toEqual([]);
     expect(logs.join('\n')).toMatch(/draft-feat.*not approved/i);
   });
 
   it('a slug already in .daemon/processed/ is skipped (no rebuild)', async () => {
-    await writeFile(join(dir, '.docs/plans/shipped.md'), planWithDeps('.docs/stories/shipped.md'));
-    await writeFile(join(dir, '.docs/stories/shipped.md'), APPROVED_STORIES);
+    await writeSpec('shipped');
+    await git(['add', '.docs']);
+    await git(['commit', '-q', '-m', 'merge spec: shipped']);
 
     const processed = new Set(['shipped']);
-    const backlog = await discoverBacklog(dir, async (slug) => processed.has(slug));
+    const backlog = await discoverBacklog(dir, async (slug) => processed.has(slug), undefined, {
+      baseBranch,
+    });
     expect(backlog).toEqual([]);
   });
 });

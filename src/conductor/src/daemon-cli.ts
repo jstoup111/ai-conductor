@@ -167,7 +167,9 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   const result = await runDaemon(
     {
       discoverBacklog: () =>
-        discoverBacklog(projectRoot, (slug) => isProcessed(projectRoot, slug), log),
+        discoverBacklog(projectRoot, (slug) => isProcessed(projectRoot, slug), log, {
+          baseBranch,
+        }),
       runFeature,
       log,
     },
