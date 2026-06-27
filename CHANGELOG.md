@@ -33,6 +33,20 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Changed
 
+- **Engineer post-authoring handoff extracted into a named step (Phase 9.3 cleanup,
+  retro A-2/A-3).** The route→gate→author→PR→ensure-running god-chain inside
+  `loop.ts` `processIdea` had grown to 473 LOC; the post-authoring tail (PR-open vs
+  no-remote local commit, `ensure-running` fire-and-forget, authored-ledger entry) is
+  now `runHandoff(target, branch, deps)` in `engine/engineer/handoff-step.ts` with its
+  own focused unit test. `processIdea` calls it; `loop.ts` drops to 432 LOC. This keeps
+  the loop maintainable before 9.3b adds intake adapters. **No behavior change** — the
+  full engineer acceptance suite is unchanged. As part of the extraction the remote
+  branch's `deps.gh!` non-null assertion (A-3) is replaced by an explicit gh-present
+  guard, so a remote target with no wired `gh` runner throws a clear error instead of
+  relying on a type-hole. Engineer routing tests (A-1) now assert the *specific*
+  no-side-effect invariant on decline/redirect — the proposed repo's directory listing
+  AND registry record count are byte-for-byte unchanged (each shown falsifiable under an
+  injected mutation) rather than merely asserting an offer string was printed.
 - **Daemon mode is now a subcommand: `conduct-ts daemon …` (was `conduct-ts --daemon`).**
   This makes the CLI verb-first and consistent with `engineer` / `register` / `create`
   — every long-running or non-interactive mode is now a named subcommand rather than a
