@@ -8,6 +8,7 @@ import { ConductorEventEmitter } from './ui/events.js';
 import { DefaultStepRunner } from './engine/step-runners.js';
 import { Conductor } from './engine/conductor.js';
 import { loadConfig } from './engine/config.js';
+import { holdLock } from './engine/daemon-lock.js';
 import type { ConductState, ConductorEvent, StepName } from './types/index.js';
 import { runDaemon, type BacklogItem } from './engine/daemon.js';
 import { discoverBacklog } from './engine/daemon-backlog.js';
@@ -59,6 +60,25 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   const { projectRoot } = opts;
   const baseBranch = opts.baseBranch ?? 'main';
   const log = (msg: string) => console.log(`[daemon] ${msg}`);
+
+  // ADR-010: claim the 1-per-repo pidfile so this daemon's liveness is observable
+  // (the pidfile under .daemon/ holds our pid) and a second daemon for the same repo
+  // refuses to start. A live owner → exit now; we release the lock on completion below.
+  const lock = await holdLock(projectRoot);
+  if (lock === null) {
+    log(`another daemon is already running for ${projectRoot}; exiting (1-per-repo).`);
+    return;
+  }
+  log(
+    lock.owned
+      ? `holding daemon lock (pid ${lock.pid}) for ${projectRoot}`
+      : `WARNING: could not write pidfile for ${projectRoot}; liveness is not observable`,
+  );
+  // Crash/signal backstop: best-effort sync unlink if the process exits abnormally
+  // (the normal path removes this and releases asynchronously below). A missed
+  // release is self-healing — the next daemon reclaims a dead-pid pidfile.
+  const releaseBackstop = (): void => lock.releaseSync();
+  process.once('exit', releaseBackstop);
 
   const configResult = await loadConfig(projectRoot);
   const config = configResult.ok ? configResult.config : undefined;
@@ -171,6 +191,10 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       `  ${o.slug}: ${o.status}${o.prUrl ? ` ${o.prUrl}` : ''}${o.reason ? ` — ${o.reason}` : ''}`,
     );
   }
+
+  // Normal completion: drop the crash backstop and release the lock asynchronously.
+  process.off('exit', releaseBackstop);
+  await lock.release();
 }
 
 /**

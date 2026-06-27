@@ -18,6 +18,7 @@
 //     the single-winner model can change without rippling into routing/authoring.
 
 import { open, mkdir, unlink, readFile, writeFile } from 'node:fs/promises';
+import { unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
@@ -297,6 +298,86 @@ export async function reclaim(
   } catch (err: unknown) {
     return { reclaimed: false, acquired: false, reason: 'error', error: err as Error };
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// holdLock — the running daemon's OWN lifetime lock (ADR-010 liveness).
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Handle returned to a daemon that successfully claimed (or proceeded past) the lock. */
+export interface DaemonLockHandle {
+  /** The pid recorded in the pidfile (this process), or process.pid if unwritten. */
+  pid: number;
+  /** True when we own the pidfile and release() should unlink it. */
+  owned: boolean;
+  /** Async release — unlink our pidfile (best-effort). Call on normal exit. */
+  release: () => Promise<void>;
+  /** Sync release — unlink our pidfile (best-effort). Backstop for `process.exit`. */
+  releaseSync: () => void;
+}
+
+function makeLockHandle(repoPath: string, pid: number, owned: boolean): DaemonLockHandle {
+  return {
+    pid,
+    owned,
+    release: async () => {
+      if (!owned) return;
+      try {
+        await unlink(pidfilePath(repoPath));
+      } catch {
+        // Already gone — fine.
+      }
+    },
+    releaseSync: () => {
+      if (!owned) return;
+      try {
+        unlinkSync(pidfilePath(repoPath));
+      } catch {
+        // Already gone — fine.
+      }
+    },
+  };
+}
+
+/**
+ * holdLock — claim the 1-per-repo pidfile for THIS process and keep it for the
+ * daemon's lifetime, so liveness is observable (ADR-010) and a second daemon for
+ * the same repo refuses to start.
+ *
+ * Distinct from `ensureRunning`, which SPAWNS a fresh daemon. `holdLock` is what the
+ * spawned daemon calls on boot to actually write `.daemon/daemon.pid` with its own
+ * pid — the wiring that was missing, leaving liveness unobservable.
+ *
+ *   - acquired (no prior pidfile)        → own the lock, return a handle.
+ *   - occupied by a LIVE pid             → return null (caller must exit; 1-per-repo).
+ *   - occupied by a DEAD/phantom pid     → reclaim it, return a handle.
+ *   - reclaim lost to a concurrent daemon → return null.
+ *   - acquire/reclaim ERROR (e.g. EACCES) → return an unowned handle so the daemon
+ *     still builds; liveness just isn't observable (self-heals on the next claim).
+ */
+export async function holdLock(repoPath: string): Promise<DaemonLockHandle | null> {
+  const result = await acquire(repoPath);
+  if (result.acquired) {
+    return makeLockHandle(repoPath, result.pid, true);
+  }
+  if (result.reason === 'occupied') {
+    const owner = result.owner;
+    if (owner.pid > 0 && isLive(owner.pid)) {
+      return null; // a live daemon already owns the lock — 1-per-repo
+    }
+    // Stale (dead or phantom) → reclaim.
+    const r = await reclaim(repoPath, defaultKill);
+    if (r.reclaimed) {
+      return makeLockHandle(repoPath, r.pid, true);
+    }
+    if (r.reason === 'alive') {
+      return null; // a concurrent reclaimer won and is alive
+    }
+    // reclaim error → fall through to unowned handle (best-effort build).
+    return makeLockHandle(repoPath, process.pid, false);
+  }
+  // acquire error (permission, etc.) → run without an observable lock.
+  return makeLockHandle(repoPath, process.pid, false);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

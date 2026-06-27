@@ -237,3 +237,67 @@ describe('daemon-lock: corrupt pidfile is reclaimable, never permanently refused
     expect((record.pid as number)).toBeGreaterThan(0);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// holdLock — the running daemon's own lifetime lock (ADR-010 liveness wiring).
+// This is what `runDaemonMode` calls on boot; without it the pidfile was never
+// written, so liveness was unobservable and the 1-per-repo mutex never engaged.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('daemon-lock: holdLock — daemon lifetime lock (ADR-010)', () => {
+  const pidfile = (): string => join(repoPath, '.daemon', 'daemon.pid');
+
+  it('fresh repo → owns the lock, writes OUR pid; release() unlinks the pidfile', async () => {
+    const mod = await load(LOCK_MOD);
+    const holdLock = requireFn(mod, 'holdLock');
+
+    const handle = await holdLock(repoPath);
+    expect(handle).not.toBeNull();
+    expect(handle.owned).toBe(true);
+    expect(handle.pid).toBe(process.pid);
+
+    const rec = JSON.parse(await readFile(pidfile(), 'utf8'));
+    expect(rec.pid).toBe(process.pid);
+
+    await handle.release();
+    await expect(access(pidfile())).rejects.toThrow(); // pidfile gone
+  });
+
+  it('a LIVE owner already holds the lock → returns null (1-per-repo), pidfile untouched', async () => {
+    const mod = await load(LOCK_MOD);
+    const holdLock = requireFn(mod, 'holdLock');
+
+    // Seed a pidfile owned by THIS process — guaranteed alive.
+    await mkdir(join(repoPath, '.daemon'), { recursive: true });
+    const seeded = { pid: process.pid, uuid: 'live-owner', startedAt: new Date().toISOString() };
+    await writeFile(pidfile(), JSON.stringify(seeded));
+
+    const handle = await holdLock(repoPath);
+    expect(handle).toBeNull();
+
+    // The live owner's pidfile must be left byte-for-byte intact.
+    const rec = JSON.parse(await readFile(pidfile(), 'utf8'));
+    expect(rec).toEqual(seeded);
+  });
+
+  it('a STALE (dead-pid) pidfile → reclaims and owns the lock with our pid', async () => {
+    const mod = await load(LOCK_MOD);
+    const holdLock = requireFn(mod, 'holdLock');
+
+    await mkdir(join(repoPath, '.daemon'), { recursive: true });
+    // A pid that is (almost certainly) not running → isLive → ESRCH → reclaimable.
+    await writeFile(
+      pidfile(),
+      JSON.stringify({ pid: 2147483646, uuid: 'dead', startedAt: new Date(0).toISOString() }),
+    );
+
+    const handle = await holdLock(repoPath);
+    expect(handle).not.toBeNull();
+    expect(handle.owned).toBe(true);
+
+    const rec = JSON.parse(await readFile(pidfile(), 'utf8'));
+    expect(rec.pid).toBe(process.pid); // reclaimed with our pid
+
+    handle.releaseSync();
+    await expect(access(pidfile())).rejects.toThrow();
+  });
+});
