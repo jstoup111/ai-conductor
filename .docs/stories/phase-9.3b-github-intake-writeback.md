@@ -240,6 +240,12 @@ many times it is polled, even while it stays open and assigned.
 - [ ] Durable ledger file keyed `source+sourceRef` with lifecycle + metadata fields.
 - [ ] vitest: re-poll of a ledgered issue yields no new Envelope (across a fresh process).
 - [ ] vitest: cross-repo same-number and re-filed-new-number cases both capture (no false dedup).
+- [ ] **The ledger is the SOLE dedup authority:** the in-memory `intake/idempotency.ts` guard is
+      removed and every call site (incl. the claude-session sync path) repointed to the ledger.
+      grep confirms zero remaining references to the removed guard (no orphaned primitive).
+
+> **Conflict resolution (2026-06-27):** the durable ledger supersedes the 9.3 in-memory
+> idempotency guard. See `.docs/conflicts/2026-06-27-ledger-supersedes-idempotency-guard.md`.
 
 ---
 
