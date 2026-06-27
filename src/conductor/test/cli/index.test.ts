@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseArgs, createProgram } from '../../src/cli.js';
+import { parseArgs, createProgram, detectInline, renderFullHelp } from '../../src/cli.js';
 
 describe('CLI', () => {
   it('parses feature description as positional arg', () => {
@@ -108,5 +108,92 @@ describe('CLI', () => {
     const program = createProgram();
     const helpOutput = program.helpInformation();
     expect(helpOutput).toContain('--interactive');
+  });
+
+  // The discoverable command surface: top-level help must list every subcommand,
+  // not just the bare-pipeline flags. Regression — `--help` rendered the base
+  // program (no Commands section), so register/create/engineer/daemon were
+  // invisible. createProgram() is the program index.ts routes top-level help to.
+  it('--help lists all subcommands (inline, register, create, engineer, daemon)', () => {
+    const help = createProgram().helpInformation();
+    expect(help).toMatch(/^Commands:/m);
+    for (const cmd of ['inline', 'register', 'create', 'engineer', 'daemon']) {
+      expect(help).toContain(cmd);
+    }
+  });
+
+  // Root --help is a full reference: renderFullHelp recurses through every command
+  // and sub-subcommand, documenting nested commands + their options in one document.
+  describe('renderFullHelp (root-level full reference)', () => {
+    const help = renderFullHelp();
+
+    it('documents every top-level command with a titled section', () => {
+      for (const path of [
+        'conduct inline',
+        'conduct register',
+        'conduct create',
+        'conduct engineer',
+        'conduct daemon',
+      ]) {
+        expect(help).toContain(path);
+      }
+    });
+
+    it('documents NESTED sub-subcommands (engineer + daemon trees)', () => {
+      for (const path of [
+        'conduct engineer projects',
+        'conduct engineer land',
+        'conduct engineer handoff',
+        'conduct daemon status',
+        'conduct daemon logs',
+      ]) {
+        expect(help).toContain(path);
+      }
+    });
+
+    it('documents nested-command OPTIONS, not just names', () => {
+      // create --remote, engineer land --project/--idea, daemon --concurrency,
+      // daemon logs --follow — each only appears if we recurse into the command.
+      for (const opt of ['--remote', '--idea', '--branch', '--concurrency', '--follow']) {
+        expect(help).toContain(opt);
+      }
+    });
+
+    it('omits the auto-generated `help [command]` as its own section', () => {
+      expect(help).not.toContain('conduct help');
+      expect(help).not.toContain('conduct engineer help');
+    });
+  });
+
+  // The inline pipeline now runs under an explicit `inline` subcommand; detectInline
+  // strips that token so parseArgs sees just the feature + flags.
+  describe('detectInline', () => {
+    it('recognizes `inline` and strips it from argv', () => {
+      const { isInline, rest } = detectInline(['node', 'conduct', 'inline', 'URL shortener']);
+      expect(isInline).toBe(true);
+      expect(rest).toEqual(['node', 'conduct', 'URL shortener']);
+    });
+
+    it('keeps inline flags after stripping the subcommand', () => {
+      const { isInline, rest } = detectInline(['node', 'conduct', 'inline', '--status']);
+      expect(isInline).toBe(true);
+      expect(parseArgs(rest).status).toBe(true);
+    });
+
+    it('reports non-inline for a bare feature (the now-rejected form)', () => {
+      const { isInline, rest } = detectInline(['node', 'conduct', 'URL shortener']);
+      expect(isInline).toBe(false);
+      expect(rest).toEqual(['node', 'conduct', 'URL shortener']);
+    });
+
+    it('reports non-inline for a bare state flag', () => {
+      expect(detectInline(['node', 'conduct', '--status']).isInline).toBe(false);
+    });
+
+    it('does not treat a feature literally named after the token as the subcommand only', () => {
+      // `inline` as argv[2] is the subcommand; a following feature survives.
+      const { rest } = detectInline(['node', 'conduct', 'inline', 'inline notes']);
+      expect(parseArgs(rest).featureDesc).toBe('inline notes');
+    });
   });
 });

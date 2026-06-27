@@ -54,6 +54,18 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Changed
 
+- **The inline SDLC pipeline is now a subcommand: `conduct-ts inline "<feature>"` (was the
+  bare `conduct-ts "<feature>"`).** Completing the verb-first CLI — the foreground pipeline is
+  the explicit counterpart to the background `daemon`, so every mode is a named subcommand and
+  no invocation relies on a bare positional. All pipeline flags move onto it unchanged
+  (`--auto`, `--interactive`, `--resume`, `--status`, `--from`, `--step`, `--report`,
+  `--diagnose`, `--cleanup`, `--reset`, `--model`, `--view`, `--tail-lines`, …), e.g.
+  `conduct-ts inline --auto "URL shortener"` / `conduct-ts inline --status`. A bare
+  feature/flags invocation now errors with guidance instead of silently running. Dispatch
+  mirrors the other subcommands: `detectInline` (`src/conductor/src/cli.ts`) strips the token
+  before `parseArgs`; `inline` is listed in `--help`. **Breaking CLI change** — see Migration
+  below.
+
 - **Harness gates hardened against the orphaned-primitive + path-guard escape classes
   (Phase 9.3 retro H-1 / H-2 / C-2).** Two recurring Phase-9 escape classes — a
   *replacement* whose new code ships orphaned (live path still calls the old symbol) and a
@@ -83,6 +95,7 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   no-side-effect invariant on decline/redirect — the proposed repo's directory listing
   AND registry record count are byte-for-byte unchanged (each shown falsifiable under an
   injected mutation) rather than merely asserting an offer string was printed.
+
 - **Daemon mode is now a subcommand: `conduct-ts daemon …` (was `conduct-ts --daemon`).**
   This makes the CLI verb-first and consistent with `engineer` / `register` / `create`
   — every long-running or non-interactive mode is now a named subcommand rather than a
@@ -109,6 +122,17 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   `conduct-ts --daemon` now errors as an unknown flag.
 
 ### Fixed
+
+- **`conduct-ts --help` is now a complete, recursive command reference.** Top-level `--help`/`-h`
+  rendered the *base* program (bare-pipeline flags only), so `register`, `create`, `engineer`, and
+  `daemon` were invisible and the run exited non-zero after leaking an `(outputHelp)` line. Root
+  help now prints a single document that recurses through **every** command and sub-subcommand —
+  the top-level surface plus a titled section per command documenting its options and nested
+  commands (`engineer projects`/`land`/`handoff`, `daemon status`/`logs`). `renderFullHelp`
+  (`src/conductor/src/cli.ts`) walks the command tree depth-first; `index.ts` routes a top-level
+  help request to it (exit 0), after the subcommand dispatchers so `conduct-ts engineer --help`
+  (and the other subcommands) keep their own help. `parseArgs` still uses the base program so a
+  bare feature description is never mistaken for an unknown command.
 
 - **The build daemon now builds a spec only after its PR is merged (FR-24 gate enforced).**
   `discoverBacklog` (`engine/daemon-backlog.ts`) scanned the **working-tree** `.docs/plans`,
@@ -192,6 +216,23 @@ grep -rl --null -- 'conduct-ts --daemon' . 2>/dev/null \
 The daemon's options are unchanged — only the leading `--daemon` flag becomes the
 `daemon` subcommand token. The engineer's auto-launch path was updated in-tree, so no
 action is needed for `ensure-running`.
+
+The inline pipeline likewise became a subcommand. Update any scripts, aliases, cron
+entries, or shell history that invoke the bare pipeline form. Auto-rewriting is unsafe
+(`conduct-ts` is also followed by `daemon`/`engineer`/`register`/`create`/`inline`/flags),
+so flag candidates for manual review rather than blindly rewriting:
+
+```bash
+# The bare inline pipeline now requires the `inline` subcommand:
+#   conduct-ts "<feature>"   ->   conduct-ts inline "<feature>"
+# Read-only: list conduct-ts invocations that may be bare pipeline runs.
+grep -rnE 'conduct-ts +(["'\'']|[A-Za-z])' . 2>/dev/null \
+  | grep -vE 'conduct-ts +(inline|daemon|engineer|register|create|help|--)' \
+  || echo "No bare conduct-ts pipeline invocations found."
+```
+
+Pipeline flags are unchanged — they simply move after the `inline` token
+(`conduct-ts inline --auto "<feature>"`, `conduct-ts inline --status`, …).
 
 ## [0.99.17] - 2026-05-02
 
