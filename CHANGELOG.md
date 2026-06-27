@@ -44,6 +44,14 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   pipeline boots, and `runDaemonMode` is still imported lazily. The engineer's
   `ensure-running` auto-launch (`daemon-launch.ts`) now spawns `conduct-ts daemon …`
   accordingly. **Breaking CLI change** — see Migration below.
+- **The build daemon's console output is now colorized.** `[daemon] …` log lines
+  (step boundaries, failures/retries, unsatisfied gates, kickbacks, halts/convergence,
+  rate limits) and the worker-pool `▶ start` / `■ done` lines now use the same
+  color vocabulary as the interactive TTY dashboard (green ✓, cyan ▶, red ✗, yellow
+  warnings, dim chrome) so unattended runs are scannable at a glance. Color is
+  applied via `chalk`, which auto-disables under `NO_COLOR` or when stdout is not a
+  TTY — piped or redirected daemon logs stay byte-identical plain text
+  (`src/conductor/src/daemon-cli.ts`, `src/conductor/src/engine/daemon.ts`).
 
 ### Removed
 

@@ -1,3 +1,4 @@
+import chalk from 'chalk';
 import { v4 as uuidv4 } from 'uuid';
 import { join } from 'node:path';
 import { mkdir, writeFile } from 'node:fs/promises';
@@ -59,7 +60,7 @@ const PRESEEDED_DONE: StepName[] = [
 export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   const { projectRoot } = opts;
   const baseBranch = opts.baseBranch ?? 'main';
-  const log = (msg: string) => console.log(`[daemon] ${msg}`);
+  const log = (msg: string) => console.log(`${chalk.dim('[daemon]')} ${msg}`);
 
   // ADR-010: claim the 1-per-repo pidfile so this daemon's liveness is observable
   // (the pidfile under .daemon/ holds our pid) and a second daemon for the same repo
@@ -203,40 +204,48 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
  * halts/convergence, and rate limits — not the full event firehose.
  */
 export function renderDaemonEvent(event: ConductorEvent, log: (msg: string) => void): void {
+  // Colors mirror the TTY dashboard palette (ui/dashboard-text.ts): green ✓,
+  // cyan ▶, red ✗, yellow warnings, dim chrome. chalk auto-disables under
+  // NO_COLOR / non-TTY, so piped or redirected daemon logs stay plain text.
+  const dot = chalk.dim('·');
   switch (event.type) {
     case 'step_started':
-      log(`· ▶ ${event.step}`);
+      log(`${dot} ${chalk.cyan('▶')} ${event.step}`);
       break;
     case 'step_completed':
-      log(`·   ${event.step} ✓ ${event.status}`);
+      log(`${dot}   ${event.step} ${chalk.green('✓')} ${chalk.green(event.status)}`);
       break;
     case 'step_failed':
-      log(`· ✗ ${event.step} failed (try ${event.retryCount}): ${event.error}`);
+      log(
+        `${dot} ${chalk.red('✗')} ${chalk.red(`${event.step} failed (try ${event.retryCount}): ${event.error}`)}`,
+      );
       break;
     case 'step_retry':
-      log(`· ↻ ${event.step} retry`);
+      log(`${dot} ${chalk.yellow('↻')} ${event.step} ${chalk.yellow('retry')}`);
       break;
     case 'gate_verdict':
       if (!event.satisfied) {
-        log(`· gate ${event.step}: unsatisfied${event.reason ? ` — ${event.reason}` : ''}`);
+        log(
+          `${dot} ${chalk.yellow(`gate ${event.step}: unsatisfied`)}${event.reason ? chalk.dim(` — ${event.reason}`) : ''}`,
+        );
       }
       break;
     case 'kickback':
       log(
-        `· ↩ kickback: ${event.from} re-opened ${event.to}${event.evidence ? ` — ${event.evidence}` : ''} (×${event.count})`,
+        `${dot} ${chalk.yellow('↩')} kickback: ${event.from} re-opened ${event.to}${event.evidence ? ` — ${event.evidence}` : ''} ${chalk.dim(`(×${event.count})`)}`,
       );
       break;
     case 'loop_halt':
-      log(`· ✋ loop halted: ${event.reason}`);
+      log(`${dot} ${chalk.red('✋')} ${chalk.red(`loop halted: ${event.reason}`)}`);
       break;
     case 'loop_converged':
-      log(`· ✓ gate loop converged`);
+      log(`${dot} ${chalk.green('✓')} ${chalk.green('gate loop converged')}`);
       break;
     case 'rate_limit':
-      log(`· ⏳ rate limited: waiting ${event.waitSeconds}s`);
+      log(`${dot} ${chalk.yellow('⏳')} ${chalk.yellow(`rate limited: waiting ${event.waitSeconds}s`)}`);
       break;
     case 'session_reset':
-      log(`· session reset: ${event.reason}`);
+      log(`${dot} ${chalk.dim(`session reset: ${event.reason}`)}`);
       break;
     default:
       break;
