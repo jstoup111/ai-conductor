@@ -121,6 +121,22 @@ non-`ALIGNED`, un-`ACCEPTED` `FR-N`; `architecture_review_as_built` stays unsati
 skill guidance drives where the rework lands (BUILD vs DECIDE for prd-audit; human fix vs
 superseding ADR for as-built).
 
+**Daemon prd-audit routing (gap-class aware).** In an interactive run a blocking `prd_audit`
+escalates to the recovery menu, where the human picks where to route. In a **daemon** run
+(`mode: 'auto'`, `daemon: true`) there is no human, so the conductor routes by the audit's
+`Gap-class` column (`classifyPrdAuditGaps`, `engine/artifacts.ts`):
+
+- **Every blocking row is `impl-gap`** → the daemon owns BUILD, so it *self-heals*: emits a
+  `kickback` (`prd_audit → build`), `navigateBack`s to `build`, rebuilds, and re-audits. This is
+  bounded by `prdAuditSelfHeals` (cap `MAX_KICKBACKS_PER_GATE`); if the gap still isn't closed it
+  writes `.pipeline/HALT` (`impl-gap unresolved after N build attempts`).
+- **Any blocking row is a product/plan gap** (`intended-drift`, or an unclassifiable row)
+  → closing it needs a human DECIDE amendment the daemon can't run (DECIDE steps are pre-seeded
+  `done`), so it HALTs immediately (`product/plan gap needs human DECIDE`).
+
+Re-auditing unchanged code yields the same verdict, so the daemon skips the default per-step
+retries for a blocking `prd_audit` and routes straight away.
+
 ### Rebase-on-latest (before finish)
 
 The `rebase` step is an **engine-native** loopGate (like `complexity` — no Claude dispatch;

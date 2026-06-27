@@ -235,6 +235,10 @@ Before suggesting the next step, verify that the previous step's **quality gates
 - Route by gap-class: `impl-gap` → back to BUILD to close the gap; `intended-drift` → back to
   DECIDE to amend the PRD, then re-audit
 - Say: "PRD audit blocked — [FR-N] is [verdict] ([gap-class]). Return to [BUILD/DECIDE] and re-run `/prd-audit`."
+- **Daemon (auto) runs** route this automatically: an all-`impl-gap` audit self-heals back to
+  BUILD (bounded, then HALTs if unresolved); any product/plan gap (`intended-drift` or an
+  unclassifiable row) HALTs immediately for a human, since the DECIDE amendment can't be made
+  autonomously. See `src/conductor/README.md` → "Daemon prd-audit routing".
 
 **After architecture-review --as-built (before suggesting retro):**
 - Open the as-built report (`.docs/decisions/architecture-review-as-built-*.md`)
