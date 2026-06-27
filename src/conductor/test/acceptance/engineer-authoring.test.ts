@@ -124,7 +124,7 @@ function approvedDecide() {
 // never via a claude subprocess.
 // ═════════════════════════════════════════════════════════════════════════════
 describe('engineer authoring → real accepted artifacts (FR-6, C2)', () => {
-  it('commits stories Status:Accepted + plan with a dependency tree on spec/<slug> (daemon build-ready)', async () => {
+  it('commits Accepted stories + dependency-tree plan on spec/<slug>; build-ready only after MERGE (FR-24)', async () => {
     const runAuthoring = requireFn(await load(AUTHORING_MOD), 'runAuthoring');
 
     const result = await runAuthoring(makeTarget(), 'CSV export', { decide: approvedDecide() });
@@ -134,10 +134,24 @@ describe('engineer authoring → real accepted artifacts (FR-6, C2)', () => {
     expect(branches).toMatch(/spec\//);
     expect(result.branch).toMatch(/^spec\//);
 
-    // Checkout the spec branch and verify the predicate the DAEMON uses passes.
-    await execFile('git', ['checkout', result.branch], { cwd: repoPath });
-    const backlog = await discoverBacklog(repoPath);
-    expect(backlog.length).toBeGreaterThan(0); // Status:Accepted + dependency tree → build-ready
+    // FR-24: on the spec branch (unmerged), the daemon's predicate finds nothing
+    // — the operator's merge is the build-ready signal, not authoring alone.
+    const before = await discoverBacklog(repoPath, undefined, undefined, {
+      baseBranch: defaultBranch,
+    });
+    expect(before).toEqual([]);
+
+    // Merge the spec branch into the base branch (the operator's action).
+    await execFile('git', ['checkout', defaultBranch], { cwd: repoPath });
+    await execFile('git', ['merge', '--no-ff', '-m', 'merge spec', result.branch], {
+      cwd: repoPath,
+    });
+
+    // Now the predicate the DAEMON uses passes (Status:Accepted + dependency tree).
+    const after = await discoverBacklog(repoPath, undefined, undefined, {
+      baseBranch: defaultBranch,
+    });
+    expect(after.length).toBeGreaterThan(0);
   });
 
   it('produced stories are NEVER the stub string and NEVER Status: DRAFT', async () => {

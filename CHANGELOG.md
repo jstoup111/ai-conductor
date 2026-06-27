@@ -52,6 +52,19 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- **The build daemon now builds a spec only after its PR is merged (FR-24 gate enforced).**
+  `discoverBacklog` (`engine/daemon-backlog.ts`) scanned the **working-tree** `.docs/plans`,
+  so the instant the engineer authored an Accepted, well-formed spec into the target repo's
+  working tree — *before* `land`/`handoff` and well before any merge — a running
+  `--continuous` daemon picked it up and built it. The documented "a merged spec PR is the
+  only idea→build handoff" contract was unenforced (the FR-24 tests modeled "unmerged" as
+  "artifacts absent from the scanned dir", which never holds once the engineer writes them
+  in-tree). Discovery now reads artifacts from the **committed default branch** via a
+  `BacklogTreeSource` (`git show <baseBranch>:…`), never the working tree and never a
+  `.worktrees/` copy, so an unlanded spec or one living only on an unmerged `spec/<slug>`
+  branch is invisible until the operator merges it to `<baseBranch>`. New git-backed tests
+  reproduce the exact gap (working-tree-present-but-unmerged → not built; merged → built).
+
 - **The build daemon now claims its pidfile on boot — liveness is finally observable
   (ADR-010).** The pidfile-lock primitive (`daemon-lock.ts`) was fully built and tested
   but **never wired into the daemon's boot path**: `runDaemonMode` never wrote
