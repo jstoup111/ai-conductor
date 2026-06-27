@@ -20,7 +20,6 @@ import { fileURLToPath } from 'url';
 // ─────────────────────────────────────────────────────────────────────────────
 
 const PORT_MOD = '../../../src/engine/engineer/intake/port.js';
-const IDEMPOTENCY_MOD = '../../../src/engine/engineer/intake/idempotency.js';
 
 async function load(modPath: string): Promise<Record<string, unknown>> {
   return (await import(modPath)) as Record<string, unknown>;
@@ -84,50 +83,6 @@ describe('intake/port: parseEnvelope boundary validation (FR-13/FR-16, C5)', () 
       const env = parseEnvelope(validEnvelopeInput({ status }));
       expect(env.status).toBe(status);
     }
-  });
-});
-
-// ═════════════════════════════════════════════════════════════════════════════
-// FR-15: idempotency keyed on source+sourceRef (NOT text).
-// ═════════════════════════════════════════════════════════════════════════════
-describe('intake/idempotency: dedup on source+sourceRef (FR-15)', () => {
-  it('same (source, sourceRef) second submission is a duplicate no-op', async () => {
-    const mod = await load(IDEMPOTENCY_MOD);
-    const createIntakeIdempotency = requireFn(mod, 'createIntakeIdempotency');
-    const dedup = createIntakeIdempotency();
-
-    const first = await dedup.check({ source: 'claude-session', sourceRef: 'turn-1' });
-    const second = await dedup.check({ source: 'claude-session', sourceRef: 'turn-1' });
-
-    // First is fresh; second is a recognized duplicate (no second processing).
-    expect(first.duplicate ?? false).toBe(false);
-    expect(second.duplicate).toBe(true);
-  });
-
-  it('same text but DIFFERENT sourceRef → BOTH process (no false-positive on a re-stated idea)', async () => {
-    const mod = await load(IDEMPOTENCY_MOD);
-    const createIntakeIdempotency = requireFn(mod, 'createIntakeIdempotency');
-    const dedup = createIntakeIdempotency();
-
-    // Dedup key is (source, sourceRef), NOT text — same idea text, distinct refs.
-    const a = await dedup.check({ source: 'claude-session', sourceRef: 'turn-1', text: 'same idea' });
-    const b = await dedup.check({ source: 'claude-session', sourceRef: 'turn-2', text: 'same idea' });
-
-    expect(a.duplicate ?? false).toBe(false);
-    expect(b.duplicate ?? false).toBe(false); // both process — not blocked by matching text
-  });
-
-  it('a duplicate is reported (visible), not silently swallowed', async () => {
-    const mod = await load(IDEMPOTENCY_MOD);
-    const createIntakeIdempotency = requireFn(mod, 'createIntakeIdempotency');
-    const dedup = createIntakeIdempotency();
-
-    await dedup.check({ source: 'claude-session', sourceRef: 'turn-1' });
-    const second = await dedup.check({ source: 'claude-session', sourceRef: 'turn-1' });
-
-    // The dedup decision is surfaced (e.g. a reason/notice), not a silent drop.
-    expect(second.duplicate).toBe(true);
-    expect(second.reason ?? second.notice ?? '').toMatch(/duplicate/i);
   });
 });
 

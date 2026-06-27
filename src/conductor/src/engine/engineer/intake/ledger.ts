@@ -1,7 +1,13 @@
-// engineer/intake/ledger.ts — Ledger types, interface, and factory stub.
-// FR-33, ADR-012, T4.
-// Ledger is the SOLE dedup authority for intake (replaces in-memory idempotency guard).
-// Implementation provided by T5–T8.
+// engineer/intake/ledger.ts — Ledger types, interface, and file-backed factory.
+// FR-33, FR-34, ADR-012, T5-T8.
+// Ledger is the SOLE dedup authority for intake (replaces the in-memory dedup guard).
+// Dedup key: source + NUL + sourceRef — so cross-repo same number is distinct,
+// and a re-filed idea under a new reference is also distinct.
+
+import { readFile, writeFile, mkdir, rename } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { dirname } from 'node:path';
+import { randomBytes } from 'node:crypto';
 
 // ─── LedgerStatus ─────────────────────────────────────────────────────────────
 
@@ -38,7 +44,7 @@ export interface LedgerEntry {
  * Durable intake ledger.
  *
  * - known:      true if (source, sourceRef) has been seen before.
- * - record:     create a new entry with status 'unseen'.
+ * - record:     create a new entry with status 'pending' (attempts:0) if absent.
  * - transition: advance entry to a new status, optionally attaching metadata.
  * - get:        retrieve an entry by (source, sourceRef), or undefined.
  * - forget:     remove an entry (e.g. for testing / manual override).
@@ -58,35 +64,103 @@ export interface Ledger {
   forget(source: string, sourceRef: string): Promise<void>;
 }
 
+// ─── Internal helpers ─────────────────────────────────────────────────────────
+
+type LedgerStore = Record<string, LedgerEntry>;
+
+/** Composite dedup key: NUL-joined so source prefix cannot bleed into sourceRef. */
+function makeKey(source: string, sourceRef: string): string {
+  return `${source}\0${sourceRef}`;
+}
+
+/** Load ledger from disk; returns empty store if file is absent or unreadable. */
+async function loadStore(path: string): Promise<LedgerStore> {
+  try {
+    const raw = await readFile(path, 'utf8');
+    return JSON.parse(raw) as LedgerStore;
+  } catch {
+    return {};
+  }
+}
+
+/** Atomically write ledger to disk (tmp file + rename). Auto-creates parent dir. */
+async function saveStore(path: string, store: LedgerStore): Promise<void> {
+  await mkdir(dirname(path), { recursive: true });
+  const tmp = `${path}.tmp.${randomBytes(4).toString('hex')}`;
+  await writeFile(tmp, JSON.stringify(store, null, 2), 'utf8');
+  await rename(tmp, path);
+}
+
 // ─── createLedger ─────────────────────────────────────────────────────────────
 
 /**
  * Create a file-backed Ledger persisted at `path` (a JSON file).
  *
- * Stub — implementation provided by T5–T8.
- * All methods throw until the impl tasks fill them in.
+ * - Load tolerates a missing file (returns empty store).
+ * - Parent directory is created automatically on first write.
+ * - Writes are atomic: tmp-write + rename.
+ * - Dedup key is source\0sourceRef; cross-repo same-number issues are distinct.
  */
 export function createLedger(path: string): Ledger {
   return {
-    async known(_source: string, _sourceRef: string): Promise<boolean> {
-      throw new Error(`not implemented: T5/T6 (createLedger path=${path})`);
+    async known(source: string, sourceRef: string): Promise<boolean> {
+      const store = await loadStore(path);
+      return makeKey(source, sourceRef) in store;
     },
-    async record(_input: { source: string; sourceRef: string }): Promise<void> {
-      throw new Error(`not implemented: T5/T6 (createLedger path=${path})`);
+
+    async record({ source, sourceRef }: { source: string; sourceRef: string }): Promise<void> {
+      const store = await loadStore(path);
+      const key = makeKey(source, sourceRef);
+      if (!(key in store)) {
+        const now = new Date().toISOString();
+        store[key] = {
+          source,
+          sourceRef,
+          status: 'pending',
+          attempts: 0,
+          capturedAt: now,
+          lastSeenAt: now,
+        };
+        await saveStore(path, store);
+      }
     },
+
     async transition(
-      _source: string,
-      _sourceRef: string,
-      _status: LedgerStatus,
-      _meta?: { branch?: string; prUrl?: string },
+      source: string,
+      sourceRef: string,
+      status: LedgerStatus,
+      meta?: { branch?: string; prUrl?: string },
     ): Promise<void> {
-      throw new Error(`not implemented: T5/T6 (createLedger path=${path})`);
+      const store = await loadStore(path);
+      const key = makeKey(source, sourceRef);
+      const entry = store[key];
+      if (!entry) {
+        throw new Error(
+          `Ledger: no entry for (source="${source}", sourceRef="${sourceRef}") — call record() first`,
+        );
+      }
+      store[key] = {
+        ...entry,
+        status,
+        lastSeenAt: new Date().toISOString(),
+        ...(meta?.branch !== undefined ? { branch: meta.branch } : {}),
+        ...(meta?.prUrl !== undefined ? { prUrl: meta.prUrl } : {}),
+      };
+      await saveStore(path, store);
     },
-    async get(_source: string, _sourceRef: string): Promise<LedgerEntry | undefined> {
-      throw new Error(`not implemented: T5/T6 (createLedger path=${path})`);
+
+    async get(source: string, sourceRef: string): Promise<LedgerEntry | undefined> {
+      const store = await loadStore(path);
+      return store[makeKey(source, sourceRef)];
     },
-    async forget(_source: string, _sourceRef: string): Promise<void> {
-      throw new Error(`not implemented: T5/T6 (createLedger path=${path})`);
+
+    async forget(source: string, sourceRef: string): Promise<void> {
+      const store = await loadStore(path);
+      const key = makeKey(source, sourceRef);
+      if (key in store) {
+        delete store[key];
+        await saveStore(path, store);
+      }
     },
   };
 }
