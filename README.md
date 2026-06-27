@@ -11,6 +11,7 @@ No custom runtime. Claude Code is the execution engine.
 - [Claude Code](https://docs.anthropic.com/en/.docs/claude-code) v2.0+
 - Git
 - A project to work on (Rails+PostgreSQL has full tech-context support; other stacks work with generic skills)
+- Optional: [`uv`](https://docs.astral.sh/uv/) — enables the opt-in [Serena](https://github.com/oraios/serena) semantic-code MCP integration (see Install)
 
 ## Install
 
@@ -26,6 +27,12 @@ This symlinks all 20 skills into `~/.claude/skills/` and installs the conductor 
 `~/.local/bin/`. See [Choosing a Conductor](#choosing-a-conductor) below — both binaries
 coexist, `conduct` is the default, `conduct-ts` is opt-in and only symlinked if you've
 built the dist bundle.
+
+**Optional: Serena semantic code toolkit.** When [`uv`](https://docs.astral.sh/uv/) is
+present, `./bin/install` offers an opt-in install of [Serena](https://github.com/oraios/serena)
+(an LSP-backed semantic code-retrieval/editing toolkit). Once installed, `/bootstrap`
+auto-registers it as a user-scope MCP server so it's available across your projects. Decline
+the prompt (or install later with `uv tool install -p 3.13 serena-agent`) to skip it.
 
 Verify:
 
