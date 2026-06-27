@@ -122,6 +122,31 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   (Bug Loop). A code path that violates or is superseded by an APPROVED ADR/PRD is
   a conformance finding (kickback/BLOCK), not work to do — building or hardening
   code slated for deletion is wasted effort.
+- **Harness `.gitignore` now ignores `.daemon/` (and `.worktrees/`).** With the new
+  daemon log capture, a daemon run inside `src/conductor/` writes `.daemon/`
+  (pidfile + `daemon.log`); the root `.gitignore` previously ignored only
+  `.pipeline/`/`.memory/`, so those runtime files showed up as untracked. New
+  projects already get all three via the `conduct create` `GITIGNORE_SKELETON`
+  (`.pipeline/`, `.daemon/`, `.worktrees/`); the `bootstrap` skill's `.gitignore`
+  guidance + checklist now list `.daemon/` too, and existing projects pick it up
+  via the migration below.
+
+### Migration
+
+Existing conductor-managed projects should ignore the daemon's `.daemon/` directory
+(pidfile + `daemon.log`) now that the daemon writes a persistent log there. New
+projects scaffolded by `conduct create` already include it; this back-fills older
+ones. Idempotent — safe to re-run.
+
+```bash migration
+# Ensure the daemon state dir is gitignored (pidfile + daemon.log live here).
+if [ -f .gitignore ]; then
+  grep -qxF '.daemon/' .gitignore || printf '.daemon/\n' >> .gitignore
+else
+  printf '.daemon/\n' > .gitignore
+fi
+echo "ensured .daemon/ is in .gitignore"
+```
 
 ## Migration
 
