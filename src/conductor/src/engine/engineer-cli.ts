@@ -22,13 +22,20 @@
 
 import { execFile as execFileCb, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
+import { join } from 'node:path';
 import type { EngineerIO, EngineerDeps } from './engineer/loop.js';
 import { createRegistryReader } from './registry.js';
+import { resolveEngineerDir } from './engineer-store.js';
 import { resolveTargetRepo } from './engineer/target.js';
 import { landSpec } from './engineer/land-spec.js';
 import { openSpecPr } from './engineer/handoff.js';
 import { recordAuthoredKey } from './engineer/authored-ledger.js';
 import { ensureRunning } from './daemon-lock.js';
+// The CLI is the composition root for the github-issues intake adapter — the
+// engineer loop must NOT import a concrete adapter (FR-13), but the CLI must.
+import { createLedger } from './engineer/intake/ledger.js';
+import { createFileQueue } from './engineer/intake/queue.js';
+import { createGithubIssuesAdapter, GITHUB_ISSUES_SOURCE, HANDLED_LABEL } from './engineer/intake/github-issues.js';
 
 /**
  * Production DECIDE seam: gates each authoring step through the io surface.
@@ -58,7 +65,9 @@ export type EngineerDispatch =
   | { kind: 'guide' }
   | { kind: 'projects' }
   | { kind: 'land'; project: string; idea: string }
-  | { kind: 'handoff'; project: string; branch: string };
+  | { kind: 'handoff'; project: string; branch: string }
+  | { kind: 'poll' }
+  | { kind: 'forget'; sourceRef: string };
 
 // ── Subcommand detection ──────────────────────────────────────────────────────
 
@@ -106,6 +115,20 @@ export function detectEngineerCommand(argv: string[]): EngineerDispatch | null {
       return { kind: 'guide' };
     }
     return { kind: 'handoff', project, branch };
+  }
+
+  if (subCmd === 'poll') {
+    // `conduct-ts engineer poll` — poll intake sources and enqueue; no routing/process.
+    return { kind: 'poll' };
+  }
+
+  if (subCmd === 'forget') {
+    // `conduct-ts engineer forget <sourceRef>` — drop a ledger entry + strip the label.
+    const sourceRef = argv[4];
+    if (!sourceRef || sourceRef.startsWith('--')) {
+      return { kind: 'guide' };
+    }
+    return { kind: 'forget', sourceRef };
   }
 
   // Unknown subcommand — treat as guide.
@@ -227,7 +250,9 @@ function printGuide(print: (s: string) => void): void {
       '  conduct-ts engineer                                     — launch the interactive /engineer loop\n' +
       '  conduct-ts engineer projects                            — list registered projects\n' +
       '  conduct-ts engineer land --project <n> --idea "<i>"    — commit pre-written spec artifacts\n' +
-      '  conduct-ts engineer handoff --project <n> --branch <b> — open spec PR + nudge daemon\n',
+      '  conduct-ts engineer handoff --project <n> --branch <b> — open spec PR + nudge daemon\n' +
+      '  conduct-ts engineer poll                                — poll github issues → enqueue new ideas\n' +
+      '  conduct-ts engineer forget <owner/repo#N>               — drop an intake ledger entry + label\n',
   );
 }
 
@@ -415,6 +440,66 @@ export async function dispatchEngineer(
         // Swallow: ensure-running failure must never abort handoff.
       }
 
+      return 0;
+    }
+
+    // ── poll ────────────────────────────────────────────────────────────────────
+    // `conduct-ts engineer poll`: poll the github-issues source across registered
+    // repos and enqueue new envelopes into the durable inbox. NO routing, NO
+    // processing, NO setInterval/detached spawn — a single synchronous sweep. The
+    // ledger dedups, so a double-poll enqueues nothing new.
+    case 'poll': {
+      const reader = createRegistryReader(registryPath ? { registryPath } : {});
+      const engDir = engineerDir ?? resolveEngineerDir({});
+      const ledger = createLedger(join(engDir, 'ledger.json'));
+      const queue = createFileQueue(join(engDir, 'inbox'));
+      const adapter = createGithubIssuesAdapter({
+        gh,
+        registry: {
+          list: async () =>
+            (await reader.listProjects()).map((p) => ({ name: p.name, path: p.path })),
+        },
+        ledger,
+        log: (m: string) => printErr(m),
+      });
+
+      const envelopes = await adapter.poll();
+      for (const e of envelopes) {
+        await queue.enqueue(e);
+      }
+      print(JSON.stringify({ kind: 'poll', enqueued: envelopes.length, sourceRefs: envelopes.map((e) => e.sourceRef) }));
+      return 0;
+    }
+
+    // ── forget ──────────────────────────────────────────────────────────────────
+    // `conduct-ts engineer forget <sourceRef>`: drop the ledger entry so the issue
+    // is re-capturable, and strip the `engineer:handled` label so poll sees it again.
+    // An absent ref is reported (found:false) and is NOT an error.
+    case 'forget': {
+      const { sourceRef } = dispatch;
+      const engDir = engineerDir ?? resolveEngineerDir({});
+      const ledger = createLedger(join(engDir, 'ledger.json'));
+
+      const entry = await ledger.get(GITHUB_ISSUES_SOURCE, sourceRef);
+      if (!entry) {
+        print(JSON.stringify({ kind: 'forget', sourceRef, found: false }));
+        return 0;
+      }
+
+      await ledger.forget(GITHUB_ISSUES_SOURCE, sourceRef);
+
+      // Best-effort label strip; a gh failure must not fail `forget` (the ledger
+      // entry is already gone, which is the authoritative dedup state).
+      const m = sourceRef.match(/^(.+)#(\d+)$/);
+      if (m) {
+        try {
+          await gh(['issue', 'edit', m[2], '-R', m[1], '--remove-label', HANDLED_LABEL], { cwd: process.cwd() });
+        } catch (err: unknown) {
+          printErr(`engineer forget: label strip failed for ${sourceRef}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+
+      print(JSON.stringify({ kind: 'forget', sourceRef, found: true, removed: true }));
       return 0;
     }
   }
