@@ -12,6 +12,27 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- **GitHub-issues intake + bidirectional write-back for the engineer (Phase 9.3b).**
+  The engineer can now take work from GitHub issues, not just chat. A new `github-issues`
+  intake adapter (`engine/engineer/intake/github-issues.ts`, an `IntakeSource` + `IntakePort`)
+  captures open issues **assigned to you** across registered repos via an injected `gh` runner
+  (`conduct-ts engineer poll` — one synchronous sweep, no background timer), enqueuing each into a
+  durable file-backed **inbox** (`<engineer-dir>/inbox/`, atomic `O_EXCL`/rename claim, isolated
+  from the daemon lock). A durable **intake ledger** (`intake/ledger.ts`) keyed `(source, sourceRef)`
+  is the sole dedup authority (the old in-memory guard was removed): polling twice captures nothing
+  new, and cross-repo same-number / re-filed-new-number ideas stay distinct. Empty issues are
+  skipped and a failing repo is isolated from the rest. `runEngineerMode` gains **poll-on-launch**
+  wiring: it polls, enqueues, and processes exactly one (oldest) envelope through the existing gated
+  route→author→spec-PR loop, falling back to chat capture on an empty inbox. **Write-back** posts
+  `Routed to <repo>` and `Spec PR opened: <url>` comments back to the issue and applies (auto-creating)
+  an `engineer:handled` label on done — non-fatal (a `gh` outage never reverts a delivered spec PR)
+  and de-duplicated per `(sourceRef, status)`. A `done` issue whose spec PR **closes unmerged** is
+  re-emitted on the next poll (label stripped, attempts incremented); a merged PR is never reopened,
+  and past the churn cap the issue is parked `needs-manual` until `conduct-ts engineer forget
+  <owner/repo#N>` clears its ledger entry and label. Capture never writes to a registered repo's
+  working tree (cross-repo isolation verified end-to-end). FR-25→FR-40; ADR-011 (async intake queue +
+  github source) + ADR-012 (durable ledger sole dedup authority).
+
 - **Daemon log capture + `conduct-ts daemon status` / `daemon logs` observability.**
   The build daemon is spawned detached (`stdio:'ignore'`), so every log line — including
   the per-feature BUILD progress rendered by `renderDaemonEvent` — was discarded: you
