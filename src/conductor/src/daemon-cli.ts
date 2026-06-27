@@ -194,11 +194,13 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   );
   const result = await runDaemon(
     {
-      discoverBacklog: async () => {
-        // Per-poll best-effort fetch: refresh origin/<default> so specs merged
-        // onto the remote default branch since the last poll are visible.
+      discoverBacklog: async ({ refresh }) => {
+        // Refresh from origin ONLY between work (the pool sets refresh=true only
+        // when fully idle with no local work left): fetch origin/<default> so newly
+        // merged specs become visible. While builds run (refresh=false) there is NO
+        // fetch, so an in-flight build is never re-based onto specs that landed mid-run.
         // resolveDiscoveryRef degrades gracefully (offline, no origin, no HEAD).
-        const treeRef = await resolveDiscoveryRef(projectRoot, baseBranch, log);
+        const treeRef = await resolveDiscoveryRef(projectRoot, baseBranch, log, { refresh });
         return discoverBacklog(projectRoot, (slug) => isProcessed(projectRoot, slug), log, {
           baseBranch: treeRef,
         });

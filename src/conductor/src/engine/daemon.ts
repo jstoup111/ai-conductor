@@ -37,8 +37,16 @@ export interface FeatureOutcome {
 }
 
 export interface DaemonDeps {
-  /** Features eligible to run: stories + plan present, not yet at .pipeline/DONE. */
-  discoverBacklog: () => Promise<BacklogItem[]>;
+  /**
+   * Features eligible to run: stories + plan present, not yet at .pipeline/DONE.
+   *
+   * `refresh` requests a remote refresh (e.g. `git fetch origin <default>`) before
+   * discovery. The pool sets it ONLY when fully idle with no local work left to start
+   * — i.e. "between work, looking for more". While features are in flight (or local
+   * queued work remains), discovery runs with `refresh:false` so a build is never
+   * re-based onto specs that landed on origin mid-run.
+   */
+  discoverBacklog: (opts: { refresh: boolean }) => Promise<BacklogItem[]>;
   /** Run one feature to DONE/HALT in isolation. Must not throw for normal
    *  halts — return `{status:'halted'}` — but a thrown error is caught and
    *  recorded as `{status:'error'}` so the pool survives. */
@@ -153,8 +161,18 @@ export async function runDaemon(
 
     // Fill the pool while slots are free.
     if (inFlight.size < concurrency) {
-      const backlog = await deps.discoverBacklog();
-      const next = backlog.find((b) => !started.has(b.slug) && !inFlight.has(b.slug));
+      // Local-only discovery first (no remote fetch): cheap, and it keeps a build
+      // from being re-based onto specs that landed on origin while work is running.
+      let backlog = await deps.discoverBacklog({ refresh: false });
+      let next = backlog.find((b) => !started.has(b.slug) && !inFlight.has(b.slug));
+
+      // Only when fully idle (nothing running) AND nothing left locally do we reach
+      // out to origin for newly-merged specs — "drained, now find more".
+      if (!next && inFlight.size === 0) {
+        backlog = await deps.discoverBacklog({ refresh: true });
+        next = backlog.find((b) => !started.has(b.slug) && !inFlight.has(b.slug));
+      }
+
       if (next) {
         idlePolls = 0;
         dispatch(next);

@@ -169,4 +169,50 @@ describe('engine/daemon — runDaemon', () => {
     expect(res.stoppedReason).toBe('idle_timeout');
     expect(slept).toBe(3);
   });
+
+  // ── refresh gating: fetch only between work, never while a build runs ─────────
+
+  it('discovers local work WITHOUT requesting a remote refresh (local-first)', async () => {
+    const seq: Array<{ refresh: boolean; returned: number }> = [];
+    let started = false;
+    const deps: DaemonDeps = {
+      discoverBacklog: async ({ refresh }) => {
+        const out = started ? [] : items(1); // work is already local
+        seq.push({ refresh, returned: out.length });
+        return out;
+      },
+      runFeature: async (it) => {
+        started = true;
+        return { slug: it.slug, status: 'done' };
+      },
+    };
+    const res = await runDaemon(deps, { concurrency: 1, once: true });
+    expect(res.processed).toHaveLength(1);
+    // The dispatched item was found on a refresh:false call — the daemon does not
+    // fetch from origin to discover work that is already local.
+    const dispatchCall = seq.find((s) => s.returned > 0)!;
+    expect(dispatchCall.refresh).toBe(false);
+  });
+
+  it('reaches out to origin (refresh) only when idle with no local work, and still finds the merged spec', async () => {
+    const seq: boolean[] = [];
+    let started = false;
+    const deps: DaemonDeps = {
+      discoverBacklog: async ({ refresh }) => {
+        // Nothing is visible locally; the merged spec only appears after a refresh.
+        const out = refresh && !started ? items(1) : [];
+        seq.push(refresh);
+        return out;
+      },
+      runFeature: async (it) => {
+        started = true;
+        return { slug: it.slug, status: 'done' };
+      },
+    };
+    const res = await runDaemon(deps, { concurrency: 1, once: true });
+    // The remote-only spec WAS discovered — via the idle refresh, not a local scan.
+    expect(res.processed).toHaveLength(1);
+    expect(seq).toContain(false); // local-first was always attempted
+    expect(seq).toContain(true); // then an idle refresh found the merged spec
+  });
 });
