@@ -12,6 +12,13 @@ describe('detectDaemonCommand', () => {
     expect(detectDaemonCommand(argv())).toBeNull();
   });
 
+  it('yields (null) on the `daemon status` / `daemon logs` observability sub-subcommands', () => {
+    // These are handled by detectDaemonObserveCommand (daemon-observe-cli.ts), not a run.
+    expect(detectDaemonCommand(argv('daemon', 'status'))).toBeNull();
+    expect(detectDaemonCommand(argv('daemon', 'logs'))).toBeNull();
+    expect(detectDaemonCommand(argv('daemon', 'logs', '--follow'))).toBeNull();
+  });
+
   it('detects a bare `daemon` with defaults (concurrency 1, idle-poll 5, drain once)', () => {
     expect(detectDaemonCommand(argv('daemon'))).toEqual({
       concurrency: 1,

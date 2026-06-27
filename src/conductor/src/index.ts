@@ -47,6 +47,10 @@ import type { UISubscriber } from "./ui/types.js";
 import { detectRegistryCommand, dispatchRegistry } from './engine/registry-cli.js';
 import { detectEngineerCommand, dispatchEngineer } from './engine/engineer-cli.js';
 import { detectDaemonCommand } from './engine/daemon-command.js';
+import {
+  detectDaemonObserveCommand,
+  dispatchDaemonObserve,
+} from './engine/daemon-observe-cli.js';
 
 // Harness VERSION lookup: probes a few candidate locations because the
 // installed layout can be a symlink chain (~/.local/bin/conduct-ts →
@@ -145,6 +149,15 @@ async function main(): Promise<void> {
   const engineerCmd = detectEngineerCommand(process.argv);
   if (engineerCmd) {
     const code = await dispatchEngineer(engineerCmd);
+    process.exit(code);
+  }
+
+  // Read-only daemon observability sub-subcommands (`daemon status` / `daemon
+  // logs`) run NON-INTERACTIVELY and exit. Checked BEFORE the daemon run command
+  // so `daemon status`/`logs` are never mistaken for a daemon launch.
+  const daemonObserveCmd = detectDaemonObserveCommand(process.argv);
+  if (daemonObserveCmd) {
+    const code = await dispatchDaemonObserve(daemonObserveCmd);
     process.exit(code);
   }
 

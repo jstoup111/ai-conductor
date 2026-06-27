@@ -96,9 +96,11 @@ export function createProgram(): Command {
     .description('Start the supervisor engineer: route ideas to projects, author spec branches, and surface flywheel lessons');
 
   // Daemon subcommand (Phase 6; promoted from the `--daemon` flag). NON-INTERACTIVE:
-  // dispatched by index.ts (detectDaemonCommand) before the pipeline boots. Declared
-  // here only so `--help` lists it and its options alongside the other subcommands.
-  program
+  // dispatched by index.ts before the pipeline boots. The bare `daemon` RUNS the
+  // daemon (detectDaemonCommand); `daemon status` / `daemon logs` are read-only
+  // observability sub-subcommands (detectDaemonObserveCommand). Declared here so
+  // `--help` lists them and their options alongside the other subcommands.
+  const daemon = program
     .command('daemon')
     .description('Daemon mode: drain the backlog of features with existing stories+plan, each in its own worktree, opening a PR on finish')
     .option('--concurrency <n>', 'Parallel workers in daemon mode', '1')
@@ -108,6 +110,16 @@ export function createProgram(): Command {
     .option('--max-runtime <seconds>', 'Ceiling: stop starting features after this much wall-clock time')
     .option('--idle-poll <seconds>', 'Continuous mode: seconds to wait between polls when the backlog is empty', '5')
     .option('--max-idle-polls <n>', 'Continuous mode: stop after this many consecutive empty polls');
+  // Read-only observability sub-subcommands.
+  daemon
+    .command('status')
+    .description('Show each registered repo\'s daemon liveness (running/stale/stopped) and last activity');
+  daemon
+    .command('logs')
+    .description('Print or follow a repo\'s .daemon/daemon.log')
+    .option('--repo <path>', 'Target repo (default: current directory)')
+    .option('--follow', 'Stream new log lines (tail -f); single repo only')
+    .option('--all', 'Show logs for every registered repo');
 
   return program;
 }
