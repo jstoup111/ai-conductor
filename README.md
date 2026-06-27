@@ -75,14 +75,17 @@ It walks you through all 18 steps:
 ```bash
 cd your-project/
 
+# The inline pipeline runs under the `inline` subcommand (foreground; the
+# counterpart to the background `daemon`).
+
 # Fully automated — walk away and come back
-conduct --auto "URL shortener with click tracking"
+conduct inline --auto "URL shortener with click tracking"
 
 # Default — auto with interactive recovery on failure
-conduct "Add user authentication"
+conduct inline "Add user authentication"
 
 # Manual oversight — REPL mode for conversational steps (brainstorm, stories, plan, architecture_review, manual_test)
-conduct --interactive "Payment processing"
+conduct inline --interactive "Payment processing"
 ```
 
 ```bash

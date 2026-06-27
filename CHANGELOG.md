@@ -54,6 +54,18 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Changed
 
+- **The inline SDLC pipeline is now a subcommand: `conduct-ts inline "<feature>"` (was the
+  bare `conduct-ts "<feature>"`).** Completing the verb-first CLI — the foreground pipeline is
+  the explicit counterpart to the background `daemon`, so every mode is a named subcommand and
+  no invocation relies on a bare positional. All pipeline flags move onto it unchanged
+  (`--auto`, `--interactive`, `--resume`, `--status`, `--from`, `--step`, `--report`,
+  `--diagnose`, `--cleanup`, `--reset`, `--model`, `--view`, `--tail-lines`, …), e.g.
+  `conduct-ts inline --auto "URL shortener"` / `conduct-ts inline --status`. A bare
+  feature/flags invocation now errors with guidance instead of silently running. Dispatch
+  mirrors the other subcommands: `detectInline` (`src/conductor/src/cli.ts`) strips the token
+  before `parseArgs`; `inline` is listed in `--help`. **Breaking CLI change** — see Migration
+  below.
+
 - **Daemon mode is now a subcommand: `conduct-ts daemon …` (was `conduct-ts --daemon`).**
   This makes the CLI verb-first and consistent with `engineer` / `register` / `create`
   — every long-running or non-interactive mode is now a named subcommand rather than a
@@ -172,6 +184,23 @@ grep -rl --null -- 'conduct-ts --daemon' . 2>/dev/null \
 The daemon's options are unchanged — only the leading `--daemon` flag becomes the
 `daemon` subcommand token. The engineer's auto-launch path was updated in-tree, so no
 action is needed for `ensure-running`.
+
+The inline pipeline likewise became a subcommand. Update any scripts, aliases, cron
+entries, or shell history that invoke the bare pipeline form. Auto-rewriting is unsafe
+(`conduct-ts` is also followed by `daemon`/`engineer`/`register`/`create`/`inline`/flags),
+so flag candidates for manual review rather than blindly rewriting:
+
+```bash
+# The bare inline pipeline now requires the `inline` subcommand:
+#   conduct-ts "<feature>"   ->   conduct-ts inline "<feature>"
+# Read-only: list conduct-ts invocations that may be bare pipeline runs.
+grep -rnE 'conduct-ts +(["'\'']|[A-Za-z])' . 2>/dev/null \
+  | grep -vE 'conduct-ts +(inline|daemon|engineer|register|create|help|--)' \
+  || echo "No bare conduct-ts pipeline invocations found."
+```
+
+Pipeline flags are unchanged — they simply move after the `inline` token
+(`conduct-ts inline --auto "<feature>"`, `conduct-ts inline --status`, …).
 
 ## [0.99.17] - 2026-05-02
 

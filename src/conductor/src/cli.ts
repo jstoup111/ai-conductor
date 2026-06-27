@@ -44,15 +44,11 @@ export interface CLIOptions {
 // before the interactive pipeline boots — NOT a flag on the base program. See
 // DaemonCommandOptions there for the daemon's own options.
 
-// Base program: the bare-positional pipeline invocation (`conduct [feature]`)
-// plus all its flags. parseArgs uses THIS so a bare feature description is never
-// mistaken for an unknown subcommand. createProgram() layers the registry
-// subcommands on top for the discoverable CLI surface / --help.
-function createBaseProgram(): Command {
-  const program = new Command();
-  program
-    .name('conduct')
-    .description('Orchestrate SDLC pipeline')
+// The inline-pipeline option surface. Shared by the base program (used by
+// parseArgs) and the `inline` subcommand declaration (used for --help) so the two
+// never drift. A bare `[feature]` positional plus all pipeline flags.
+function applyPipelineOptions(cmd: Command): Command {
+  return cmd
     .argument('[feature]', 'Feature description')
     .option('--resume', 'Resume from last state')
     .option('--fresh', 'Start a new feature; skip auto-resume even if a worktree for this feature description already exists')
@@ -70,11 +66,45 @@ function createBaseProgram(): Command {
     .option('--interactive', 'Run every step in interactive Claude REPL mode (no -p flag)')
     .option('--diagnose', 'Diagnose conductor state (non-mutating); reports SHIP-phase evidence gaps and exits non-zero if state is marked complete but evidence is missing')
     .option('--report', 'Print run summary from .pipeline/events.jsonl (step durations, retry hotspots, token spend) and exit');
-  return program;
+}
+
+// Base program: parses the inline-pipeline args AFTER the `inline` subcommand
+// token has been stripped (see detectInline). It carries the flags but no
+// subcommands, so a feature description is never mistaken for an unknown command.
+function createBaseProgram(): Command {
+  const program = new Command();
+  program.name('conduct').description('Orchestrate SDLC pipeline');
+  return applyPipelineOptions(program);
+}
+
+/**
+ * The inline pipeline now runs under an explicit `inline` subcommand
+ * (`conduct inline "<feature>"`), not as a bare positional. detectInline strips
+ * that token so parseArgs sees just the feature + flags.
+ *
+ * @returns isInline=true and the argv with `inline` removed when argv[2] is
+ *   `inline`; otherwise isInline=false and argv unchanged.
+ */
+export function detectInline(argv: string[]): { isInline: boolean; rest: string[] } {
+  if (argv[2] === 'inline') {
+    return { isInline: true, rest: [argv[0], argv[1], ...argv.slice(3)] };
+  }
+  return { isInline: false, rest: argv };
 }
 
 export function createProgram(): Command {
   const program = createBaseProgram();
+
+  // Inline pipeline subcommand. This is the DEFAULT mode — running the SDLC
+  // pipeline in the foreground (`conduct inline "<feature>"`), the counterpart to
+  // the background `daemon`. Dispatched in index.ts (detectInline) before the
+  // pipeline boots; declared here with the full pipeline option surface so
+  // `--help` and `conduct inline --help` list it.
+  applyPipelineOptions(
+    program
+      .command('inline')
+      .description('Run the SDLC pipeline inline, in the foreground (the default mode)'),
+  );
 
   // Registry subcommands (Phase 9.2). These are NON-INTERACTIVE: they run to
   // completion and exit, rather than entering the interactive pipeline. The

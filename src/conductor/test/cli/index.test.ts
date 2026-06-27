@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseArgs, createProgram } from '../../src/cli.js';
+import { parseArgs, createProgram, detectInline } from '../../src/cli.js';
 
 describe('CLI', () => {
   it('parses feature description as positional arg', () => {
@@ -114,11 +114,43 @@ describe('CLI', () => {
   // not just the bare-pipeline flags. Regression — `--help` rendered the base
   // program (no Commands section), so register/create/engineer/daemon were
   // invisible. createProgram() is the program index.ts routes top-level help to.
-  it('--help lists all subcommands (register, create, engineer, daemon)', () => {
+  it('--help lists all subcommands (inline, register, create, engineer, daemon)', () => {
     const help = createProgram().helpInformation();
     expect(help).toMatch(/^Commands:/m);
-    for (const cmd of ['register', 'create', 'engineer', 'daemon']) {
+    for (const cmd of ['inline', 'register', 'create', 'engineer', 'daemon']) {
       expect(help).toContain(cmd);
     }
+  });
+
+  // The inline pipeline now runs under an explicit `inline` subcommand; detectInline
+  // strips that token so parseArgs sees just the feature + flags.
+  describe('detectInline', () => {
+    it('recognizes `inline` and strips it from argv', () => {
+      const { isInline, rest } = detectInline(['node', 'conduct', 'inline', 'URL shortener']);
+      expect(isInline).toBe(true);
+      expect(rest).toEqual(['node', 'conduct', 'URL shortener']);
+    });
+
+    it('keeps inline flags after stripping the subcommand', () => {
+      const { isInline, rest } = detectInline(['node', 'conduct', 'inline', '--status']);
+      expect(isInline).toBe(true);
+      expect(parseArgs(rest).status).toBe(true);
+    });
+
+    it('reports non-inline for a bare feature (the now-rejected form)', () => {
+      const { isInline, rest } = detectInline(['node', 'conduct', 'URL shortener']);
+      expect(isInline).toBe(false);
+      expect(rest).toEqual(['node', 'conduct', 'URL shortener']);
+    });
+
+    it('reports non-inline for a bare state flag', () => {
+      expect(detectInline(['node', 'conduct', '--status']).isInline).toBe(false);
+    });
+
+    it('does not treat a feature literally named after the token as the subcommand only', () => {
+      // `inline` as argv[2] is the subcommand; a following feature survives.
+      const { rest } = detectInline(['node', 'conduct', 'inline', 'inline notes']);
+      expect(parseArgs(rest).featureDesc).toBe('inline notes');
+    });
   });
 });

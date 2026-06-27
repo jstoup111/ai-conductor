@@ -22,7 +22,7 @@ import { DefaultStepRunner } from './engine/step-runners.js';
 import { ConductorEventEmitter } from './ui/events.js';
 import { loadConfig } from './engine/config.js';
 import { readState, writeState } from './engine/state.js';
-import { parseArgs, createProgram, type CLIOptions } from './cli.js';
+import { parseArgs, createProgram, detectInline, type CLIOptions } from './cli.js';
 import type { StepName } from './types/index.js';
 import { createRenderer } from './ui/create-renderer.js';
 import { ALL_STEPS } from './engine/steps.js';
@@ -184,9 +184,25 @@ async function main(): Promise<void> {
     process.exit(0);
   }
 
+  // The inline SDLC pipeline now requires an explicit `inline` subcommand
+  // (`conduct inline "<feature>"`) — the foreground counterpart to `daemon`. A
+  // bare feature/flags invocation is no longer accepted; reject it with guidance
+  // rather than silently doing nothing. (register/create/engineer/daemon and
+  // --help were all dispatched above, so anything here targets the pipeline.)
+  const { isInline, rest } = detectInline(process.argv);
+  if (!isInline) {
+    console.error(
+      'conduct: the inline SDLC pipeline now runs under the `inline` subcommand.\n' +
+        '  Run:        conduct inline "<feature description>"\n' +
+        '  State ops:  conduct inline --status | --resume | --report | --diagnose | …\n' +
+        '  All commands: conduct --help',
+    );
+    process.exit(1);
+  }
+
   let opts: CLIOptions;
   try {
-    opts = parseArgs(process.argv);
+    opts = parseArgs(rest);
   } catch (e: unknown) {
     console.error(e instanceof Error ? e.message : 'Failed to parse arguments');
     process.exit(1);
