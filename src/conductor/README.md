@@ -157,17 +157,21 @@ and opening a PR on finish:
   ceilings (`--max-items`, `--max-cost`, `--max-runtime`), `once` vs `--continuous`
   idle-poll, and per-feature failure isolation (a thrown feature becomes an `error`
   outcome; the pool survives).
-- `engine/daemon-backlog.ts` — eligibility, sourced from the **remote default branch**:
-  on every poll tick `resolveDiscoveryRef` does a best-effort `git fetch origin <default>`
-  (branch name discovered via `git symbolic-ref refs/remotes/origin/HEAD`, never hardcoded)
-  and returns `origin/<default>` as the tree ref. `discoverBacklog` then reads `.docs/plans`
-  + `.docs/stories` from `git show origin/<default>:…` (the remote-tracking ref updated by
-  the fetch), **never the working tree** and never a `.worktrees/` copy. This is what makes
-  **merging the spec PR the build-ready trigger** (FR-24): a spec the engineer authored but
-  has not landed, or one committed only on an unmerged `spec/<slug>` branch, is invisible
+- `engine/daemon-backlog.ts` — eligibility, sourced from the **remote default branch but
+  refreshed only between work**. Discovery is local-first: the pool calls `discoverBacklog`
+  with `refresh:false` (no fetch) while features are in flight or local queued work remains,
+  and only when it is **fully idle with nothing left locally** does it pass `refresh:true` —
+  "drained → find more". On that idle refresh, `resolveDiscoveryRef` does a best-effort
+  `git fetch origin <default>` (branch discovered via `git symbolic-ref refs/remotes/origin/HEAD`,
+  never hardcoded) and returns `origin/<default>`; between fetches it reuses that already-fetched
+  remote-tracking ref, so an in-flight build is never re-based onto specs that merged on origin
+  mid-run. `discoverBacklog` reads `.docs/plans` + `.docs/stories` from `git show
+  origin/<default>:…`, **never the working tree** and never a `.worktrees/` copy. This is what
+  makes **merging the spec PR the build-ready trigger** (FR-24): a spec the engineer authored
+  but has not landed, or one committed only on an unmerged `spec/<slug>` branch, is invisible
   until it reaches the remote default branch. `resolveDiscoveryRef` degrades gracefully: no
-  origin, unset `origin/HEAD`, or a failed fetch (offline) all fall back to the local base
-  ref; the poll loop never throws and never touches a worktree branch. On top of presence, a
+  origin, unset `origin/HEAD`, a failed fetch (offline), or an unfetched ref all fall back to
+  the local base ref; the poll loop never throws and never touches a worktree branch. On top of
   feature must have stories **approved** (`Status: Accepted`, not DRAFT) + a plan that
   declares a **dependency tree** (`## Task Dependency Graph` or per-task
   `**Dependencies:**`), and not yet be processed. Ineligible features are skipped with a

@@ -64,7 +64,7 @@ describe('daemon-backlog — resolveDiscoveryRef (per-poll remote refresh)', () 
       },
       { match: ['fetch', 'origin', 'main'], result: { exitCode: 0 } },
     ]);
-    const ref = await resolveDiscoveryRef('/fake/repo', 'main', () => {}, git);
+    const ref = await resolveDiscoveryRef('/fake/repo', 'main', () => {}, { refresh: true }, git);
     expect(ref).toBe('origin/main');
   });
 
@@ -77,7 +77,7 @@ describe('daemon-backlog — resolveDiscoveryRef (per-poll remote refresh)', () 
       },
       { match: ['fetch', 'origin', 'trunk'], result: { exitCode: 0 } },
     ]);
-    const ref = await resolveDiscoveryRef('/fake/repo', 'main', () => {}, git);
+    const ref = await resolveDiscoveryRef('/fake/repo', 'main', () => {}, { refresh: true }, git);
     expect(ref).toBe('origin/trunk');
   });
 
@@ -85,7 +85,7 @@ describe('daemon-backlog — resolveDiscoveryRef (per-poll remote refresh)', () 
     const { git, calls } = fakeGit([
       { match: ['remote'], result: { stdout: '' } },
     ]);
-    const ref = await resolveDiscoveryRef('/fake/repo', 'main', () => {}, git);
+    const ref = await resolveDiscoveryRef('/fake/repo', 'main', () => {}, { refresh: true }, git);
     expect(ref).toBe('main');
     expect(calls.some((c) => c[0] === 'fetch')).toBe(false);
   });
@@ -99,7 +99,7 @@ describe('daemon-backlog — resolveDiscoveryRef (per-poll remote refresh)', () 
       },
       { match: ['remote', 'show', 'origin'], result: { exitCode: 1, stdout: '' } },
     ]);
-    const ref = await resolveDiscoveryRef('/fake/repo', 'develop', () => {}, git);
+    const ref = await resolveDiscoveryRef('/fake/repo', 'develop', () => {}, { refresh: true }, git);
     expect(ref).toBe('develop');
   });
 
@@ -116,7 +116,7 @@ describe('daemon-backlog — resolveDiscoveryRef (per-poll remote refresh)', () 
     let threw = false;
     let ref: string;
     try {
-      ref = await resolveDiscoveryRef('/fake/repo', 'main', (msg) => logs.push(msg), git);
+      ref = await resolveDiscoveryRef('/fake/repo', 'main', (msg) => logs.push(msg), { refresh: true }, git);
     } catch {
       threw = true;
       ref = '';
@@ -135,7 +135,7 @@ describe('daemon-backlog — resolveDiscoveryRef (per-poll remote refresh)', () 
       },
       { match: ['fetch', 'origin', 'main'], result: { exitCode: 0 } },
     ]);
-    await resolveDiscoveryRef('/fake/repo', 'main', () => {}, git);
+    await resolveDiscoveryRef('/fake/repo', 'main', () => {}, { refresh: true }, git);
     expect(calls).toContainEqual(['fetch', 'origin', 'main']);
   });
 
@@ -148,10 +148,49 @@ describe('daemon-backlog — resolveDiscoveryRef (per-poll remote refresh)', () 
       },
       { match: ['fetch', 'origin', 'trunk'], result: { exitCode: 0 } },
     ]);
-    await resolveDiscoveryRef('/fake/repo', 'main', () => {}, git);
+    await resolveDiscoveryRef('/fake/repo', 'main', () => {}, { refresh: true }, git);
     // fetch uses 'trunk' (discovered), not 'main' (local base)
     expect(calls).toContainEqual(['fetch', 'origin', 'trunk']);
     expect(calls.some((c) => c[0] === 'fetch' && c[2] === 'main')).toBe(false);
+  });
+});
+
+// ── refresh:false — between-work, builds running: NEVER fetch ──────────────────
+
+describe('daemon-backlog — resolveDiscoveryRef (refresh:false, work in flight)', () => {
+  it('does NOT fetch and returns origin/<default> when the remote-tracking ref exists', async () => {
+    const { git, calls } = fakeGit([
+      { match: ['remote'], result: { stdout: 'origin\n' } },
+      {
+        match: ['symbolic-ref', 'refs/remotes/origin/HEAD'],
+        result: { stdout: 'refs/remotes/origin/main\n' },
+      },
+      {
+        match: ['rev-parse', '--verify', '--quiet', 'refs/remotes/origin/main'],
+        result: { exitCode: 0, stdout: 'deadbeef\n' },
+      },
+    ]);
+    const ref = await resolveDiscoveryRef('/fake/repo', 'main', () => {}, { refresh: false }, git);
+    expect(ref).toBe('origin/main');
+    // Crucially: no `git fetch` while builds run.
+    expect(calls.some((c) => c[0] === 'fetch')).toBe(false);
+  });
+
+  it('returns localBase (no fetch) when origin/<default> has not been fetched yet', async () => {
+    const { git, calls } = fakeGit([
+      { match: ['remote'], result: { stdout: 'origin\n' } },
+      {
+        match: ['symbolic-ref', 'refs/remotes/origin/HEAD'],
+        result: { stdout: 'refs/remotes/origin/main\n' },
+      },
+      {
+        match: ['rev-parse', '--verify', '--quiet', 'refs/remotes/origin/main'],
+        result: { exitCode: 1, stdout: '' },
+      },
+    ]);
+    const ref = await resolveDiscoveryRef('/fake/repo', 'main', () => {}, { refresh: false }, git);
+    expect(ref).toBe('main');
+    expect(calls.some((c) => c[0] === 'fetch')).toBe(false);
   });
 });
 
