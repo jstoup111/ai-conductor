@@ -109,4 +109,16 @@ describe('CLI', () => {
     const helpOutput = program.helpInformation();
     expect(helpOutput).toContain('--interactive');
   });
+
+  // The discoverable command surface: top-level help must list every subcommand,
+  // not just the bare-pipeline flags. Regression — `--help` rendered the base
+  // program (no Commands section), so register/create/engineer/daemon were
+  // invisible. createProgram() is the program index.ts routes top-level help to.
+  it('--help lists all subcommands (register, create, engineer, daemon)', () => {
+    const help = createProgram().helpInformation();
+    expect(help).toMatch(/^Commands:/m);
+    for (const cmd of ['register', 'create', 'engineer', 'daemon']) {
+      expect(help).toContain(cmd);
+    }
+  });
 });

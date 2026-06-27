@@ -22,7 +22,7 @@ import { DefaultStepRunner } from './engine/step-runners.js';
 import { ConductorEventEmitter } from './ui/events.js';
 import { loadConfig } from './engine/config.js';
 import { readState, writeState } from './engine/state.js';
-import { parseArgs, type CLIOptions } from './cli.js';
+import { parseArgs, createProgram, type CLIOptions } from './cli.js';
 import type { StepName } from './types/index.js';
 import { createRenderer } from './ui/create-renderer.js';
 import { ALL_STEPS } from './engine/steps.js';
@@ -170,6 +170,17 @@ async function main(): Promise<void> {
   if (daemonCmd) {
     const { runDaemonMode } = await import('./daemon-cli.js');
     await runDaemonMode({ projectRoot: process.cwd(), ...daemonCmd });
+    process.exit(0);
+  }
+
+  // Top-level `--help` / `-h`: print the FULL command surface — every subcommand
+  // (register/create/engineer/daemon) included — not just the bare-pipeline
+  // flags. parseArgs uses the base program (no subcommands, so a bare feature
+  // description is never mistaken for an unknown command); the discoverable
+  // surface lives in createProgram(). Subcommand-specific help is already handled
+  // by the dispatchers above, so any `--help` reaching here is top-level.
+  if (process.argv.slice(2).some((a) => a === '--help' || a === '-h')) {
+    createProgram().outputHelp();
     process.exit(0);
   }
 

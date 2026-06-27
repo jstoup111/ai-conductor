@@ -81,6 +81,15 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- **`conduct-ts --help` now lists every subcommand.** Top-level `--help`/`-h` rendered the
+  *base* program (bare-pipeline flags only), so `register`, `create`, `engineer`, and `daemon`
+  were invisible and the run exited non-zero after leaking an `(outputHelp)` line. The
+  discoverable command surface already lived in `createProgram()`; `index.ts` now routes a
+  top-level help request there (`createProgram().outputHelp()`, exit 0) — after the
+  subcommand dispatchers, so `conduct-ts engineer --help` (and the other subcommands) keep
+  their own help. `parseArgs` still uses the base program so a bare feature description is
+  never mistaken for an unknown command.
+
 - **The build daemon now builds a spec only after its PR is merged (FR-24 gate enforced).**
   `discoverBacklog` (`engine/daemon-backlog.ts`) scanned the **working-tree** `.docs/plans`,
   so the instant the engineer authored an Accepted, well-formed spec into the target repo's
