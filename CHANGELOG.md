@@ -21,6 +21,26 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   becomes eligible, builds, and is marked processed). The approval-token logic is now a single
   shared `isStoriesApproved` exported from `engine/artifacts.ts` and consumed by both the
   daemon and the engineer land gate, so the chain can never disagree on the marker.
+- **GitHub-issues intake + bidirectional write-back for the engineer (Phase 9.3b).**
+  The engineer can now take work from GitHub issues, not just chat. A new `github-issues`
+  intake adapter (`engine/engineer/intake/github-issues.ts`, an `IntakeSource` + `IntakePort`)
+  captures open issues **assigned to you** across registered repos via an injected `gh` runner
+  (`conduct-ts engineer poll` — one synchronous sweep, no background timer), enqueuing each into a
+  durable file-backed **inbox** (`<engineer-dir>/inbox/`, atomic `O_EXCL`/rename claim, isolated
+  from the daemon lock). A durable **intake ledger** (`intake/ledger.ts`) keyed `(source, sourceRef)`
+  is the sole dedup authority (the old in-memory guard was removed): polling twice captures nothing
+  new, and cross-repo same-number / re-filed-new-number ideas stay distinct. Empty issues are
+  skipped and a failing repo is isolated from the rest. `runEngineerMode` gains **poll-on-launch**
+  wiring: it polls, enqueues, and processes exactly one (oldest) envelope through the existing gated
+  route→author→spec-PR loop, falling back to chat capture on an empty inbox. **Write-back** posts
+  `Routed to <repo>` and `Spec PR opened: <url>` comments back to the issue and applies (auto-creating)
+  an `engineer:handled` label on done — non-fatal (a `gh` outage never reverts a delivered spec PR)
+  and de-duplicated per `(sourceRef, status)`. A `done` issue whose spec PR **closes unmerged** is
+  re-emitted on the next poll (label stripped, attempts incremented); a merged PR is never reopened,
+  and past the churn cap the issue is parked `needs-manual` until `conduct-ts engineer forget
+  <owner/repo#N>` clears its ledger entry and label. Capture never writes to a registered repo's
+  working tree (cross-repo isolation verified end-to-end). FR-25→FR-40; ADR-011 (async intake queue +
+  github source) + ADR-012 (durable ledger sole dedup authority).
 - **Daemon log capture + `conduct-ts daemon status` / `daemon logs` observability.**
   The build daemon is spawned detached (`stdio:'ignore'`), so every log line — including
   the per-feature BUILD progress rendered by `renderDaemonEvent` — was discarded: you
@@ -147,6 +167,24 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   `isStoriesApproved`), failing loudly at land/author time so the mismatch can never reach a
   silently-skipping daemon. Tests added at each seam (land-spec, authoring, daemon-backlog,
   and the `isStoriesApproved` token contract).
+- **The `acceptance_specs` completion gate no longer false-halts on monorepo layouts.**
+  Its built-in artifact globs (`STEP_ARTIFACT_GLOBS.acceptance_specs`, `engine/artifacts.ts`)
+  were all rooted at the repo root, so correctly-written RED specs that land one package deep
+  (`api/spec/integration/…`, `frontend/__tests__/screens/Foo.test.tsx`) matched nothing — the
+  daemon retried 3×, found "no spec files," and halted even though valid specs were committed
+  (observed: honeydew-or-handymando PR #39, 1,018 lines of RED specs). Three additive fixes:
+  (1) a new project-level **`acceptance_spec_globs`** config key lets a repo declare where its
+  specs live; those globs are *appended* to (never replace) the built-ins, so the gate can
+  only loosen and standard Rails/Node-at-root layouts are unaffected. It is threaded to the
+  check via `CompletionContext.config` (populated at every `conductor.ts` gate site, including
+  the daemon gate-loop's `computeAndWriteVerdict`). (2) The custom glob matcher now expands a
+  leading `*/` segment to each immediate subdirectory of the repo root (skipping
+  `node_modules`/dot-dirs, preserving the no-`node_modules` property), so a repo can declare
+  `*/spec/**` / `*/__tests__/**` without naming each package. (3) The built-in defaults gain
+  `.tsx`/`.jsx` test extensions (`*.test.tsx`, `*.spec.tsx`, …) for React/React-Native repos.
+  Regression-tested in `test/engine/artifacts.test.ts` (monorepo passes with config; zero
+  specs still fails; `*/` won't reach into `node_modules`) and `test/engine/config.test.ts`
+  (key validation + merge).
 - **Daemon discovers specs merged on origin — but only fetches between work, never
   while a build is running.** The daemon scanned `.docs/plans` only against the
   *local* default branch, so a spec merged on GitHub (origin's main) was invisible
@@ -177,6 +215,24 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   help request to it (exit 0), after the subcommand dispatchers so `conduct-ts engineer --help`
   (and the other subcommands) keep their own help. `parseArgs` still uses the base program so a
   bare feature description is never mistaken for an unknown command.
+
+- **The continuous daemon now re-attempts a halted feature after its HALT marker is cleared.**
+  When a feature halted, `runDaemon` (`engine/daemon.ts`) left its slug in the process-lifetime
+  `started` set forever, so the eligibility predicate
+  (`!started.has(slug) && !inFlight.has(slug)`) permanently hid a parked-then-unparked feature
+  from every later scan — the only recovery was to kill and restart the whole daemon. The
+  halted feature was still in `discoverBacklog` (halted ≠ processed) and `createWorktree`
+  already resumes a matching existing worktree, so the in-memory exclusion was the sole blocker.
+  Halted slugs are now tracked in a separate `parked` set and become re-eligible once their
+  `.pipeline/HALT` marker is gone, detected via a new injected `isHalted` dep (production wires
+  `isHalted(worktreeBase, slug)` in `engine/daemon-deps.ts` → `daemon-cli.ts`). The next scan
+  re-dispatches the feature, reuses the existing worktree, and resumes from the first non-done
+  step; while the marker is present the feature stays parked (no busy re-halt loop), and a
+  feature that halts again is re-parked until cleared. Double-dispatch protection for in-flight
+  and freshly-started features is preserved, and `done`/`error` outcomes are unchanged. Without
+  the `isHalted` dep (pure-core default) a parked feature stays parked for the run, exactly as
+  before. Three new daemon unit tests cover park-while-present, re-dispatch-after-clear, and
+  re-park-on-re-halt.
 
 - **The build daemon now builds a spec only after its PR is merged (FR-24 gate enforced).**
   `discoverBacklog` (`engine/daemon-backlog.ts`) scanned the **working-tree** `.docs/plans`,

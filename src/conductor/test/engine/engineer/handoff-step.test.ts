@@ -55,7 +55,8 @@ describe('runHandoff — remote path (PR opened)', () => {
       print,
     });
 
-    expect(entry).toEqual({ project: 'proj' });
+    // The entry surfaces the spec PR URL (FR-36 write-back hook); project recorded once.
+    expect(entry).toEqual({ project: 'proj', prUrl: PR_URL });
     expect(out.join('\n')).toContain(`Spec PR opened: ${PR_URL}`);
     // ensure-running fired exactly once with the canonical path.
     expect(launchCalls).toEqual([tempDir]);

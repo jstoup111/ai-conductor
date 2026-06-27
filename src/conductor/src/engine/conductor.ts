@@ -605,6 +605,7 @@ export class Conductor {
           let completion = await checkStepCompletion(this.projectRoot, step.name, {
             sessionStartedAt: state.session_started_at,
             featureDesc: state.feature_desc,
+            config: this.config,
           });
 
           // Auto-heal hook: before treating a build-gate miss as a failure,
@@ -632,6 +633,7 @@ export class Conductor {
               completion = await checkStepCompletion(this.projectRoot, step.name, {
                 sessionStartedAt: state.session_started_at,
                 featureDesc: state.feature_desc,
+                config: this.config,
               });
             }
           }
@@ -679,6 +681,7 @@ export class Conductor {
                 const recheck = await checkStepCompletion(this.projectRoot, step.name, {
                   sessionStartedAt: state.session_started_at,
                   featureDesc: state.feature_desc,
+                  config: this.config,
                 });
                 if (recheck.done) {
                   succeeded = true;
@@ -1030,6 +1033,7 @@ export class Conductor {
       const verdict = await computeAndWriteVerdict(this.projectRoot, step.name, {
         sessionStartedAt: state.session_started_at,
         featureDesc: state.feature_desc,
+        config: this.config,
       });
       await this.events.emit({
         type: 'gate_verdict',

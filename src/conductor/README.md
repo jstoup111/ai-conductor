@@ -74,6 +74,16 @@ hands off to the **gate-driven loop** (see below): the *selector*, not the index
 the next step. When `verifyArtifacts` is off the conductor stays fully linear (the gate
 loop never engages).
 
+The `acceptance_specs` gate verifies RED specs exist on disk by matching
+`STEP_ARTIFACT_GLOBS.acceptance_specs` (`engine/artifacts.ts`). The built-ins cover Rails,
+Node, and `backend/` layouts rooted at the repo root. A repo whose specs live elsewhere —
+most often a **monorepo** with specs one package deep (`api/spec/…`,
+`frontend/__tests__/…`) — declares extra globs via the project-level
+`acceptance_spec_globs` config key; they're *appended* to (never replace) the built-ins, so
+the gate can only loosen. A leading `*/` in a glob expands to each immediate subdirectory
+(skipping `node_modules`/dot-dirs), so package names need not be hard-coded. Config flows to
+the check via `CompletionContext.config`.
+
 ### Gate-driven loop
 
 Once `build` engages, `advanceTail()` drives
@@ -353,17 +363,21 @@ even if your global `defaultMode` is `plan`; set `CONDUCT_ENGINEER_PERMISSION_MO
 `acceptEdits`, `bypassPermissions`) to change it (`plan` is coerced back to `default`). Run from
 inside an existing Claude Code session, it instead tells you to invoke `/engineer` directly (no
 nested session); with `claude` not on `PATH` it prints usage.
-The `conduct-ts engineer projects | land | handoff` subcommands are the deterministic primitives the
-skill calls between human gates.
+The `conduct-ts engineer projects | land | handoff | poll | forget` subcommands are the
+deterministic primitives the skill calls between human gates (`poll`/`forget` drive the Phase 9.3b
+github-issues intake — see below).
 
 Per idea (each isolated so one repo's failure never corrupts another):
 
 1. **Intake (hexagonal port)** — ideas arrive as a parsed `Envelope`
    (`{id, source, sourceRef, text, hintRepo?, status, receivedAt}`) through `engine/engineer/intake/`.
    `parseEnvelope` is parse-don't-validate with **field-named** errors; empty/whitespace text is
-   **rejected** (`EmptyEnvelopeTextError`), never silently dropped. The `claude-session` adapter
-   ships this phase; `github-issues`/inbox/write-back are additive future adapters behind the same
-   port. Idempotency (`createIntakeIdempotency`) keys strictly on `(source, sourceRef)`, never on text.
+   **rejected** (`EmptyEnvelopeTextError`), never silently dropped. Two adapters ship behind the same
+   port: the synchronous `claude-session` adapter and the async **`github-issues`** adapter
+   (Phase 9.3b, below). Dedup is the durable **intake ledger** (`intake/ledger.ts`) keyed strictly on
+   `(source, sourceRef)`, never on text — it is the **sole** dedup authority (the old in-memory guard
+   was removed in 9.3b; cross-repo same-number issues and re-filed-under-a-new-number ideas are
+   correctly distinct).
 2. **Route** — `routeIdea` (`engine/engineer/routing.ts`) ranks registry projects against the idea
    and returns candidates (or a create-suggestion when nothing fits).
 3. **Confirmation gate** (human-in-the-loop, mandatory before any write) — confirm the target;
@@ -388,6 +402,34 @@ Per idea (each isolated so one repo's failure never corrupts another):
    authored-keys ledger. A target with **no remote** is non-fatal: the spec stays committed on the
    branch and the ledger is still recorded so the FR-12 flywheel trend counts the feature. After the
    spec lands, `ensureRunning` is wired (see below) to bring up the target's daemon.
+
+#### GitHub-issues intake + write-back (Phase 9.3b)
+
+The **`github-issues`** adapter (`intake/github-issues.ts`) turns assigned GitHub issues into the same
+`Envelope`s the chat path produces, then reports progress back to the issue. All GitHub access goes
+through an injected `gh` runner — it never touches a registered repo's working tree.
+
+- **Capture is assignee-based.** `conduct-ts engineer poll` sweeps every registered repo for open
+  issues assigned to the authenticated user (`gh issue list --assignee @me --state open`), enqueues
+  new ones into the durable inbox (`<engineer-dir>/inbox/`, one claimable `Envelope` per file), and
+  exits — **no routing, no processing, no background timer**. A failing repo (auth/availability) is
+  isolated and the rest still capture; an empty issue (no title and no body) is skipped. The ledger
+  dedups, so polling twice enqueues nothing new.
+- **The `engineer:handled` label is an output marker, not an intake filter.** It is applied on `done`
+  (auto-created if missing) and makes the issue a re-capture skip; capture itself stays assignee-based.
+- **Poll-on-launch.** When intake sources + an inbox are wired into `runEngineerMode`, a launch polls,
+  enqueues, then claims and processes **exactly one** envelope (the oldest); an empty inbox falls back
+  to interactive chat capture. A processing failure releases the claim for re-delivery.
+- **Write-back (`report()`)** posts `Routed to <repo>` at routing and `Spec PR opened: <url>` at
+  handoff, applying `engineer:handled` on done. It is **non-fatal** (a `gh` outage never reverts a
+  delivered spec PR) and **de-duplicated** per `(sourceRef, status)`.
+- **Re-eligibility + churn guard.** A `done` issue whose spec PR closes **without merging** is
+  re-emitted on the next poll (label stripped, `attempts++`); a **merged** PR is never reopened. Past
+  the reopen cap the issue is parked as `needs-manual` and stays out of the inbox until
+  `conduct-ts engineer forget <owner/repo#N>` drops its ledger entry and strips the label.
+
+State lives under the engineer dir (`$AI_CONDUCTOR_ENGINEER_DIR`, default `~/.ai-conductor/engineer/`):
+`ledger.json` (dedup + lifecycle) and `inbox/` (the claimable queue).
 
 #### Daemon liveness (pidfile-lock)
 

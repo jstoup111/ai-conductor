@@ -16,6 +16,7 @@ import { runDaemon, type BacklogItem } from './engine/daemon.js';
 import { discoverBacklog, resolveDiscoveryRef } from './engine/daemon-backlog.js';
 import { makeRunFeature, type FeatureWorktree } from './engine/daemon-runner.js';
 import {
+  isHalted,
   isProcessed,
   hasWarned,
   markWarned,
@@ -214,6 +215,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
           markWarned: (slug) => markWarned(projectRoot, slug),
         });
       },
+      isHalted: (slug) => isHalted(worktreeBase, slug),
       runFeature,
       log,
     },

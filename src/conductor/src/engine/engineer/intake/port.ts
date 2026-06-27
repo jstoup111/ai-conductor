@@ -115,6 +115,20 @@ export function parseEnvelope(input: Record<string, unknown>): Envelope {
   };
 }
 
+// ─── ReportMeta ───────────────────────────────────────────────────────────────
+
+/**
+ * Optional metadata passed to IntakePort.report() during 9.3b write-back.
+ * Carrying the resolved repo and the spec PR URL back to the originating source.
+ * FR-36: widened from the original 2-arg signature.
+ */
+export interface ReportMeta {
+  /** The target repository name that was resolved for this envelope. */
+  repo?: string;
+  /** The URL of the spec PR opened for this envelope. */
+  prUrl?: string;
+}
+
 // ─── IntakePort ───────────────────────────────────────────────────────────────
 
 /**
@@ -128,8 +142,10 @@ export function parseEnvelope(input: Record<string, unknown>): Envelope {
  */
 export interface IntakePort {
   /**
-   * Reserved for 9.3b write-back. Report status back to the originating source.
-   * No-op for the claude-session adapter this phase.
+   * Report status back to the originating source.
+   * The optional `meta` carries write-back context (resolved repo, PR URL).
+   * No-op for the claude-session adapter; future adapters (github-issues) will use it.
+   * FR-36: `meta` widens the original 2-arg signature — existing callers are unaffected.
    */
-  report(sourceRef: string, status: EnvelopeStatus): Promise<void>;
+  report(sourceRef: string, status: EnvelopeStatus, meta?: ReportMeta): Promise<void>;
 }
