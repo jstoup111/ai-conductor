@@ -154,6 +154,24 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   (and the other subcommands) keep their own help. `parseArgs` still uses the base program so a
   bare feature description is never mistaken for an unknown command.
 
+- **The continuous daemon now re-attempts a halted feature after its HALT marker is cleared.**
+  When a feature halted, `runDaemon` (`engine/daemon.ts`) left its slug in the process-lifetime
+  `started` set forever, so the eligibility predicate
+  (`!started.has(slug) && !inFlight.has(slug)`) permanently hid a parked-then-unparked feature
+  from every later scan — the only recovery was to kill and restart the whole daemon. The
+  halted feature was still in `discoverBacklog` (halted ≠ processed) and `createWorktree`
+  already resumes a matching existing worktree, so the in-memory exclusion was the sole blocker.
+  Halted slugs are now tracked in a separate `parked` set and become re-eligible once their
+  `.pipeline/HALT` marker is gone, detected via a new injected `isHalted` dep (production wires
+  `isHalted(worktreeBase, slug)` in `engine/daemon-deps.ts` → `daemon-cli.ts`). The next scan
+  re-dispatches the feature, reuses the existing worktree, and resumes from the first non-done
+  step; while the marker is present the feature stays parked (no busy re-halt loop), and a
+  feature that halts again is re-parked until cleared. Double-dispatch protection for in-flight
+  and freshly-started features is preserved, and `done`/`error` outcomes are unchanged. Without
+  the `isHalted` dep (pure-core default) a parked feature stays parked for the run, exactly as
+  before. Three new daemon unit tests cover park-while-present, re-dispatch-after-clear, and
+  re-park-on-re-halt.
+
 - **The build daemon now builds a spec only after its PR is merged (FR-24 gate enforced).**
   `discoverBacklog` (`engine/daemon-backlog.ts`) scanned the **working-tree** `.docs/plans`,
   so the instant the engineer authored an Accepted, well-formed spec into the target repo's
