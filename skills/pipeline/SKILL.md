@@ -110,6 +110,24 @@ confirm the failure is real. If tests pass and commits exist for the task, mark 
 do not trust JSON state alone. JSON state can become stale after connection interruptions or
 subagent context loss.
 
+**Superseded-symbol check (step 5 — replacement tasks):** Before marking a task `completed`
+whose plan says it **replaces or supersedes** an existing symbol/behavior ("replace X",
+"supersede Y", "swap the old path for the new"), grep that the superseded symbol has **zero
+non-test callers** in production source:
+
+```bash
+grep -rn 'oldSymbol' src/ | grep -vE '\.test\.|/test/|/__tests__/'
+```
+
+If any production caller remains, the new code shipped **orphaned** — the live path still runs
+the OLD behavior while green unit tests pass against the new function (the orphaned-primitive
+escape that recurred across ~5 consecutive Phase-9 features, each caught late by the
+fresh-context evaluator). Report the task FAIL with the surviving call sites; do NOT mark it
+complete. This is a cheap mechanical gate that runs **before** the expensive batch-evaluator
+dispatch, so the class fails fast. Pair it with the real-entry-point acceptance test required by
+`/writing-system-tests` (§3b): the acceptance test proves the new path runs; this grep proves
+the old one is gone.
+
 **Task status tracking is mandatory — write directly to `.pipeline/task-status.json`.**
 
 Do NOT rely on conversation-level task tools (TaskCreate/TaskUpdate) for persistence — those
