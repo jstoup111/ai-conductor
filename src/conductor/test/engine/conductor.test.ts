@@ -274,6 +274,169 @@ describe('engine/conductor', () => {
     expect(result.ok && result.value.feature_status).toBeUndefined();
   });
 
+  describe('daemon prd-audit gap-aware halting', () => {
+    const AUDIT_HEADER =
+      '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n';
+
+    // Seed every step before prd_audit as done so the loop can start at the
+    // SHIP tail; write the build + manual-test fixtures the predicates need.
+    async function seedToPrdAudit(): Promise<void> {
+      const res = await readState(statePath);
+      const state = (res.ok ? res.value : {}) as Record<string, unknown>;
+      for (const s of ALL_STEPS) {
+        if (s.name === 'prd_audit') break;
+        state[s.name] = 'done';
+      }
+      state.complexity_tier = 'L';
+      state.feature_desc = 'feat';
+      await writeState(statePath, state as unknown as ConductState);
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
+      );
+    }
+
+    // Runner that re-satisfies build + manual_test on re-run and writes the
+    // given prd-audit table body every time prd_audit runs.
+    function shipRunner(auditBody: string): { runner: StepRunner; calls: StepName[] } {
+      const calls: StepName[] = [];
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          calls.push(step);
+          if (step === 'build') {
+            await mkdir(join(dir, '.pipeline'), { recursive: true });
+            await writeFile(
+              join(dir, '.pipeline/task-status.json'),
+              JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
+            );
+          } else if (step === 'manual_test') {
+            await writeFile(
+              join(dir, '.docs/manual-test-results.md'),
+              '# Results\n\n| Story | Result |\n|--|--|\n| s | PASS |\n',
+            ).catch(async () => {
+              await mkdir(join(dir, '.docs'), { recursive: true });
+              await writeFile(
+                join(dir, '.docs/manual-test-results.md'),
+                '# Results\n\n| Story | Result |\n|--|--|\n| s | PASS |\n',
+              );
+            });
+          } else if (step === 'prd_audit') {
+            await mkdir(join(dir, '.docs/audits'), { recursive: true });
+            await writeFile(
+              join(dir, '.docs/audits/feat-prd-audit.md'),
+              '# PRD Audit\n\n' + AUDIT_HEADER + auditBody,
+            );
+          }
+          return { success: true };
+        }),
+      };
+      return { runner, calls };
+    }
+
+    it('self-heals an impl-gap audit back to BUILD, then HALTs at the cap', async () => {
+      await seedToPrdAudit();
+      // Perpetual impl-gap: every audit reports the same un-closed impl-gap, so
+      // the daemon routes back to BUILD until the self-heal cap, then HALTs.
+      const { runner, calls } = shipRunner('| FR-2 | MISSING | impl-gap | x | no |\n');
+      const kickbacks: Array<{ from: string; to: string }> = [];
+      events.on('kickback', (e) => {
+        if (e.type === 'kickback') kickbacks.push({ from: e.from, to: e.to });
+      });
+      let halted = false;
+      events.on('loop_halt', () => {
+        halted = true;
+      });
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        fromStep: 'prd_audit',
+      });
+
+      await conductor.run();
+
+      // Routed back to BUILD (kickback prd_audit→build) and rebuilt.
+      expect(kickbacks.filter((k) => k.from === 'prd_audit' && k.to === 'build').length).toBe(2);
+      expect(calls.filter((s) => s === 'build').length).toBe(2);
+      // Exhausted the self-heal budget → HALT (not an opaque crash).
+      expect(halted).toBe(true);
+      const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+      expect(halt).toMatch(/impl-gap unresolved after 2 build attempt/);
+    });
+
+    it('HALTs immediately on a product/plan gap (intended-drift) without rebuilding', async () => {
+      await seedToPrdAudit();
+      const { runner, calls } = shipRunner(
+        '| FR-3 | DIVERGED | intended-drift | baz.ts:88 | no |\n',
+      );
+      const kickbacks: string[] = [];
+      events.on('kickback', (e) => {
+        if (e.type === 'kickback') kickbacks.push(e.to);
+      });
+      let halted = false;
+      events.on('loop_halt', () => {
+        halted = true;
+      });
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        fromStep: 'prd_audit',
+      });
+
+      await conductor.run();
+
+      expect(halted).toBe(true);
+      const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+      expect(halt).toMatch(/product\/plan gap needs human DECIDE/);
+      expect(halt).toMatch(/FR-3 \(intended-drift\)/);
+      // No self-heal: never kicked back to build, never rebuilt.
+      expect(kickbacks).toHaveLength(0);
+      expect(calls.filter((s) => s === 'build')).toHaveLength(0);
+    });
+
+    it('does NOT auto-route in interactive (non-daemon) mode — uses the recovery menu', async () => {
+      await seedToPrdAudit();
+      const { runner, calls } = shipRunner('| FR-2 | MISSING | impl-gap | x | no |\n');
+      let halted = false;
+      events.on('loop_halt', () => {
+        halted = true;
+      });
+      const onRecovery = vi
+        .fn<[StepName, boolean], Promise<RecoveryOption>>()
+        .mockResolvedValue('quit');
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'default', // interactive — a human is present
+        daemon: false,
+        verifyArtifacts: true,
+        fromStep: 'prd_audit',
+        maxRetries: 1,
+        onRecovery,
+      });
+
+      await conductor.run();
+
+      // Human-driven path: recovery menu fires for prd_audit; no daemon HALT,
+      // no automatic kickback to build.
+      expect(onRecovery).toHaveBeenCalledWith('prd_audit', true, expect.anything());
+      expect(halted).toBe(false);
+      expect(calls.filter((s) => s === 'build')).toHaveLength(0);
+    });
+  });
+
   it('auto mode auto-skips an advisory-step failure and continues', async () => {
     // `memory` is advisory; it fails. In auto mode it auto-skips so the run isn't
     // blocked, and no recovery prompt is shown.

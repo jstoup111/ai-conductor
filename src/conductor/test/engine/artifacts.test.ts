@@ -9,6 +9,7 @@ import {
   getArtifactStatus,
   checkStepCompletion,
   isStoriesApproved,
+  classifyPrdAuditGaps,
   FINISH_CHOICE_MARKER,
   HALT_MARKER,
 } from '../../src/engine/artifacts.js';
@@ -412,6 +413,77 @@ describe('engine/artifacts', () => {
 
     it('rejects when DRAFT is present even if Accepted also appears', () => {
       expect(isStoriesApproved('**Status:** Accepted\n... was **Status:** DRAFT')).toBe(false);
+    });
+  });
+
+  describe('classifyPrdAuditGaps', () => {
+    const header = '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|----|----|----|----|----|\n';
+    async function writeAudit(body: string) {
+      // sessionStartedAt=undefined below treats any mtime as fresh.
+      await createFile('.docs/audits/feat-prd-audit.md', '# PRD Audit\n\n' + header + body);
+    }
+
+    it('returns clean when there is no audit report', async () => {
+      const c = await classifyPrdAuditGaps(dir, undefined);
+      expect(c.kind).toBe('clean');
+    });
+
+    it('returns clean when every FR is ALIGNED', async () => {
+      await writeAudit('| FR-1 | ALIGNED | n/a | foo.ts:1 | — |\n');
+      const c = await classifyPrdAuditGaps(dir, undefined);
+      expect(c.kind).toBe('clean');
+    });
+
+    it('returns impl-only when every blocking row is impl-gap', async () => {
+      await writeAudit(
+        '| FR-1 | ALIGNED | n/a | foo.ts:1 | — |\n' +
+          '| FR-2 | MISSING | impl-gap | (no handler) | no |\n' +
+          '| FR-3 | PARTIAL | impl-gap | bar.ts:9 | no |\n',
+      );
+      const c = await classifyPrdAuditGaps(dir, undefined);
+      expect(c.kind).toBe('impl-only');
+      expect(c.summary).toMatch(/FR-2 \(impl-gap\)/);
+      expect(c.summary).toMatch(/FR-3 \(impl-gap\)/);
+    });
+
+    it('returns needs-decide when any blocking row is intended-drift', async () => {
+      await writeAudit(
+        '| FR-2 | MISSING | impl-gap | (no handler) | no |\n' +
+          '| FR-3 | DIVERGED | intended-drift | baz.ts:88 | no |\n',
+      );
+      const c = await classifyPrdAuditGaps(dir, undefined);
+      expect(c.kind).toBe('needs-decide');
+      expect(c.summary).toMatch(/FR-3 \(intended-drift\)/);
+    });
+
+    it('treats a plan-gap row as needs-decide (forward-compat class)', async () => {
+      await writeAudit('| FR-4 | MISSING | plan-gap | (never planned) | no |\n');
+      const c = await classifyPrdAuditGaps(dir, undefined);
+      expect(c.kind).toBe('needs-decide');
+      expect(c.summary).toMatch(/FR-4 \(plan-gap\)/);
+    });
+
+    it('treats an unclassifiable blocking row as needs-decide', async () => {
+      // Blocking verdict but no recognizable gap-class cell.
+      await writeAudit('| FR-5 | MISSING | | (evidence) | no |\n');
+      const c = await classifyPrdAuditGaps(dir, undefined);
+      expect(c.kind).toBe('needs-decide');
+      expect(c.summary).toMatch(/FR-5 \(unknown\)/);
+    });
+
+    it('ignores ACCEPTED rows (human-approved divergence does not block)', async () => {
+      await writeAudit('| FR-3 | DIVERGED | intended-drift | baz.ts:88 | ACCEPTED |\n');
+      const c = await classifyPrdAuditGaps(dir, undefined);
+      expect(c.kind).toBe('clean');
+    });
+
+    it('ignores a stale report (mtime predates the session)', async () => {
+      await writeAudit('| FR-2 | MISSING | impl-gap | x | no |\n');
+      const past = new Date(2000, 0, 1);
+      await utimes(join(dir, '.docs/audits/feat-prd-audit.md'), past, past);
+      // Session started "now" → the 2000 file is stale and ignored.
+      const c = await classifyPrdAuditGaps(dir, Date.now());
+      expect(c.kind).toBe('clean');
     });
   });
 });

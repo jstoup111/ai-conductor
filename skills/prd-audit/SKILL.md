@@ -101,6 +101,13 @@ For each blocking FR, route by its gap-class:
   prd-audit. Only after the human confirms the divergence is intended may the row be marked
   `ACCEPTED`. Never self-accept a divergence — that defeats the gate.
 
+The `Gap-class` column is load-bearing under the **daemon** (autonomous, no human): the conductor
+routes a blocking audit by class automatically. An **all-`impl-gap`** audit self-heals — it routes
+back to BUILD, rebuilds, and re-audits (bounded; then HALTs if still unresolved). **Any** non-impl
+blocking row (`intended-drift`, or an unclassifiable one) HALTs the daemon for a human, because the
+DECIDE amendment it needs can't be made autonomously. So classify accurately — a mislabeled
+`impl-gap` makes the daemon churn BUILD on a gap only a human can close.
+
 **Rework budget:** allow **3 audit→rework cycles**. If the feature is still blocked after the third
 cycle, **escalate to the operator** with the full report and the list of still-blocking FRs — do
 not loop further. This respects the engine's anti-ping-pong caps (`MAX_GATE_SELECTIONS`); the

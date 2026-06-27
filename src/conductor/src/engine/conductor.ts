@@ -42,6 +42,7 @@ import {
   STEP_ARTIFACT_GLOBS,
   checkStepCompletion,
   CUSTOM_COMPLETION_PREDICATES,
+  classifyPrdAuditGaps,
 } from './artifacts.js';
 import { resolveStepConfig } from './resolved-config.js';
 import { selectNextGate } from './selector.js';
@@ -380,6 +381,10 @@ export class Conductor {
     // Per-gate count of consecutive selector re-selects without satisfaction,
     // for the stuck-gate HALT guard (see advanceTail).
     const stuckGate = new Map<StepName, number>();
+    // Daemon-only: how many times a blocking prd-audit (impl-gap only) has
+    // routed back to BUILD to self-heal. Bounded like MAX_KICKBACKS_PER_GATE so
+    // an impl-gap the daemon can't actually close eventually halts for a human.
+    let prdAuditSelfHeals = 0;
 
     for (let i = startIndex; i < steps.length; i++) {
       const step = steps[i];
@@ -642,6 +647,20 @@ export class Conductor {
             lastError = `Step '${step.name}' completed but completion check failed: ${completion.reason ?? 'unknown'}`;
             retryHint = buildRetryHint(step.name, completion.reason);
 
+            // prd-audit short-circuit (daemon only): re-auditing unchanged code
+            // yields the same verdict, so the default retries are pure waste
+            // once a fresh report with blocking rows exists. Stop retrying and
+            // drop into the failure path, where the gap-class routes the daemon
+            // back to BUILD (impl-gap) or halts (product/plan gap). A failure
+            // with no fresh report (skill never wrote one / stale) still retries.
+            if (this.daemon && step.name === 'prd_audit') {
+              const cls = await classifyPrdAuditGaps(
+                this.projectRoot,
+                state.session_started_at,
+              );
+              if (cls.kind !== 'clean') break;
+            }
+
             // Stall circuit breaker (build step only). If Claude ran but the
             // count of resolved tasks didn't move since the last attempt, or
             // the pipeline skill wrote .pipeline/halt-user-input-required,
@@ -732,6 +751,57 @@ export class Conductor {
             state[step.name] = 'skipped';
             continue;
           }
+
+          // prd-audit gap-aware routing (daemon only). A blocking audit halts
+          // today regardless of cause. Instead, distinguish WHO can close the
+          // gap: a pure implementation gap (impl-gap) is the daemon's to fix —
+          // route back to BUILD and re-audit (bounded by prdAuditSelfHeals so
+          // an impl-gap it can't actually close still halts). A product/plan
+          // gap (intended-drift, or an unclassifiable blocking row) needs a
+          // human DECIDE amendment the daemon can't run — halt for inspection.
+          if (this.daemon && step.name === 'prd_audit') {
+            const cls = await classifyPrdAuditGaps(
+              this.projectRoot,
+              state.session_started_at,
+            );
+            if (cls.kind === 'impl-only' && prdAuditSelfHeals < MAX_KICKBACKS_PER_GATE) {
+              prdAuditSelfHeals++;
+              await this.events.emit({
+                type: 'kickback',
+                from: 'prd_audit',
+                to: 'build',
+                evidence: cls.summary,
+                count: prdAuditSelfHeals,
+              });
+              const nav = navigateBack(state, 'build', steps);
+              state = nav.state;
+              // markDownstreamStale only restages `done` steps; prd_audit is
+              // `failed` here, so restage it explicitly to re-run on the tail.
+              (state as Record<string, unknown>).prd_audit = 'stale';
+              await writeState(this.stateFilePath, state);
+              i = nav.index - 1; // for-loop i++ lands on build
+              continue;
+            }
+            const reason =
+              cls.kind === 'impl-only'
+                ? `prd-audit impl-gap unresolved after ${prdAuditSelfHeals} build attempt(s) (cap ${MAX_KICKBACKS_PER_GATE}): ${cls.summary}`
+                : `prd-audit halted: product/plan gap needs human DECIDE — ${cls.summary}`;
+            await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(
+              () => {},
+            );
+            await writeFile(
+              join(this.projectRoot, LOOP_HALT_MARKER),
+              reason + '\n',
+              'utf-8',
+            ).catch(() => {
+              /* best-effort marker */
+            });
+            await this.events.emit({ type: 'loop_halt', reason });
+            await writeState(this.stateFilePath, state);
+            process.off('SIGINT', sigintHandler);
+            return;
+          }
+
           // Unattended hard failure on a gating/structural step. Write a HALT
           // marker (not just return) so a supervising daemon classifies this as
           // `halted` — worktree kept, NOT marked processed, retryable after a

@@ -92,6 +92,19 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Changed
 
+- **Daemon prd-audit halts only on product/plan gaps, self-heals implementation gaps.** A
+  blocking `prd_audit` in a daemon run (`mode: 'auto'`, `daemon: true`) is now routed by its
+  `Gap-class` column instead of always halting. An **all-`impl-gap`** audit routes back to BUILD
+  (`kickback` → `navigateBack('build')`), rebuilds, and re-audits, bounded by
+  `MAX_KICKBACKS_PER_GATE` (then HALTs `impl-gap unresolved after N build attempts`). **Any**
+  product/plan gap (`intended-drift`, or an unclassifiable blocking row) HALTs immediately
+  (`product/plan gap needs human DECIDE`) since the DECIDE amendment can't be made autonomously.
+  The daemon also skips the pointless per-step retries on a blocking audit (re-auditing unchanged
+  code yields the same verdict). New `classifyPrdAuditGaps` / `findUnalignedFrRowsWithClass` in
+  `engine/artifacts.ts`; routing in `Conductor.run`. Interactive `/conduct` is unchanged (human
+  recovery menu). Docs: `src/conductor/README.md`, `skills/prd-audit/SKILL.md`,
+  `skills/conduct/SKILL.md`.
+
 - **`/stories` stamps the canonical `Status: Accepted` approval marker.** The skill now
   explicitly changes `**Status:** DRAFT` → `**Status:** Accepted` on operator approval (and
   documents that a missing status line counts as **not approved**), reconciling the stories

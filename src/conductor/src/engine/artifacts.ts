@@ -600,6 +600,83 @@ function findUnalignedFrRows(content: string): string[] {
   return blocking;
 }
 
+/** A PRD-audit gap-class. `unknown` = a blocking row whose class cell we could
+ * not read; the daemon treats it conservatively (like a product/plan gap). */
+export type PrdGapClass = 'impl-gap' | 'intended-drift' | 'plan-gap' | 'unknown';
+
+export interface UnalignedFrRow {
+  fr: string;
+  gapClass: PrdGapClass;
+}
+
+/**
+ * Like {@link findUnalignedFrRows}, but also reads each blocking row's
+ * gap-class cell. The prd-audit table carries a `Gap-class` column with
+ * `impl-gap | intended-drift | n/a`; `plan-gap` is recognized defensively for
+ * forward-compat (the auditor does not emit it today). A row whose class cannot
+ * be read is reported as `unknown`.
+ */
+function findUnalignedFrRowsWithClass(content: string): UnalignedFrRow[] {
+  const rows: UnalignedFrRow[] = [];
+  for (const line of content.split('\n')) {
+    if (!/^\s*\|/.test(line)) continue; // table rows only
+    const fr = line.match(/\bFR-\d+[A-Za-z]?\b/i);
+    if (!fr) continue; // skip header/separator/legend rows (no FR id)
+    if (!/\b(MISSING|PARTIAL|DIVERGED)\b/i.test(line)) continue;
+    if (/\bACCEPTED\b/i.test(line)) continue; // human-accepted divergence
+    // Order matters: `plan-gap` and `intended-drift` are checked before
+    // `impl-gap` so a multi-word note can't be misread as impl-gap.
+    const gapClass: PrdGapClass = /\bplan-gap\b/i.test(line)
+      ? 'plan-gap'
+      : /\bintended-drift\b/i.test(line)
+        ? 'intended-drift'
+        : /\bimpl-gap\b/i.test(line)
+          ? 'impl-gap'
+          : 'unknown';
+    rows.push({ fr: fr[0].toUpperCase(), gapClass });
+  }
+  return rows;
+}
+
+export interface PrdGapClassification {
+  /** `clean` = no blocking rows; `impl-only` = every blocking row is impl-gap
+   * (daemon can self-heal via BUILD); `needs-decide` = at least one row is a
+   * product/plan gap or unclassifiable (needs a human DECIDE amendment). */
+  kind: 'clean' | 'impl-only' | 'needs-decide';
+  /** Human-readable FR/class list for the kickback or HALT reason. */
+  summary: string;
+}
+
+/**
+ * Classify the blocking rows of the fresh PRD-audit report(s) for this session
+ * so the daemon can decide whether to self-heal (impl-only → BUILD) or halt
+ * (any product/plan gap → human DECIDE). Only reports written this session are
+ * considered; a stale audit from a prior feature is ignored.
+ */
+export async function classifyPrdAuditGaps(
+  dir: string,
+  sessionStartedAt: number | undefined,
+): Promise<PrdGapClassification> {
+  const files = await findArtifactFiles(dir, 'prd_audit');
+  const blocking: UnalignedFrRow[] = [];
+  for (const f of files) {
+    if (!(await fileIsFreshSinceSession(f, sessionStartedAt))) continue;
+    blocking.push(...findUnalignedFrRowsWithClass(await readFile(f, 'utf-8')));
+  }
+  if (blocking.length === 0) return { kind: 'clean', summary: 'no blocking FRs' };
+
+  const summary = blocking
+    .slice(0, 5)
+    .map((r) => `${r.fr} (${r.gapClass})`)
+    .join('; ');
+  const more = blocking.length > 5 ? ` (+${blocking.length - 5} more)` : '';
+  const allImpl = blocking.every((r) => r.gapClass === 'impl-gap');
+  return {
+    kind: allImpl ? 'impl-only' : 'needs-decide',
+    summary: summary + more,
+  };
+}
+
 // --- Story / plan structure parsing (shared by stories + plan predicates) ---
 
 interface StoryBlock {
