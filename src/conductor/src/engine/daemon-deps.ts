@@ -141,6 +141,17 @@ export async function isProcessed(projectRoot: string, slug: string): Promise<bo
   }
 }
 
+/**
+ * True while a halted feature's worktree HALT marker is still present — the
+ * park-gate the daemon checks before re-dispatching (see daemon.ts `isHalted`).
+ * A human clears `.pipeline/HALT` to make the feature re-eligible. Takes the
+ * worktree base so it stays in lockstep with `createWorktree`'s path convention
+ * (`<worktreeBase>/<slug>`), not a re-derived `.worktrees`.
+ */
+export async function isHalted(worktreeBase: string, slug: string): Promise<boolean> {
+  return exists(join(worktreeBase, slug, '.pipeline/HALT'));
+}
+
 /** Read the loop outcome from a worktree's `.pipeline` markers. */
 export async function readWorktreeOutcome(worktreePath: string): Promise<WorktreeOutcome> {
   const done = await exists(join(worktreePath, '.pipeline/DONE'));

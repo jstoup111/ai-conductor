@@ -15,7 +15,7 @@ import type { ConductState, ConductorEvent, StepName } from './types/index.js';
 import { runDaemon, type BacklogItem } from './engine/daemon.js';
 import { discoverBacklog, resolveDiscoveryRef } from './engine/daemon-backlog.js';
 import { makeRunFeature, type FeatureWorktree } from './engine/daemon-runner.js';
-import { isProcessed, makeFeatureRunnerDeps } from './engine/daemon-deps.js';
+import { isHalted, isProcessed, makeFeatureRunnerDeps } from './engine/daemon-deps.js';
 
 export interface DaemonModeOptions {
   projectRoot: string;
@@ -205,6 +205,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
           baseBranch: treeRef,
         });
       },
+      isHalted: (slug) => isHalted(worktreeBase, slug),
       runFeature,
       log,
     },

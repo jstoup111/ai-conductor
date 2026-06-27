@@ -109,6 +109,75 @@ describe('engine/daemon — runDaemon', () => {
     expect(res.processed[0].reason).toBe('needs human');
   });
 
+  it('parks a halted feature: dispatched once, then skipped while HALT present', async () => {
+    // `halted` models the on-disk `.pipeline/HALT` markers a human would clear.
+    const halted = new Set<string>();
+    let dispatches = 0;
+    const deps: DaemonDeps = {
+      discoverBacklog: staticBacklog(items(1)), // f0 stays in the backlog (halted ≠ processed)
+      isHalted: async (slug) => halted.has(slug),
+      runFeature: async (it) => {
+        dispatches++;
+        halted.add(it.slug); // conductor wrote .pipeline/HALT
+        return { slug: it.slug, status: 'halted', reason: 'needs human' };
+      },
+      sleep: async () => {},
+    };
+    const res = await runDaemon(deps, { concurrency: 1, once: false, maxIdlePolls: 4 });
+    expect(dispatches).toBe(1); // never re-dispatched while the marker is present
+    expect(res.stoppedReason).toBe('idle_timeout');
+    expect(res.processed.filter((o) => o.status === 'halted')).toHaveLength(1);
+  });
+
+  it('re-dispatches a halted feature after its HALT marker is cleared', async () => {
+    const halted = new Set<string>();
+    let dispatches = 0;
+    let slept = 0;
+    const deps: DaemonDeps = {
+      discoverBacklog: staticBacklog(items(1)),
+      isHalted: async (slug) => halted.has(slug),
+      runFeature: async (it) => {
+        dispatches++;
+        if (dispatches === 1) {
+          halted.add(it.slug); // first attempt parks
+          return { slug: it.slug, status: 'halted', reason: 'needs human' };
+        }
+        return { slug: it.slug, status: 'done' }; // resumes and finishes on retry
+      },
+      sleep: async () => {
+        slept++;
+        if (slept === 2) halted.delete('f0'); // human removes .pipeline/HALT
+      },
+    };
+    const res = await runDaemon(deps, { concurrency: 1, once: false, maxIdlePolls: 6 });
+    expect(dispatches).toBe(2); // parked, then re-dispatched after the clear
+    expect(res.processed.filter((o) => o.slug === 'f0' && o.status === 'done')).toHaveLength(1);
+  });
+
+  it('re-parks a feature that halts again until cleared (no tight re-dispatch loop)', async () => {
+    const halted = new Set<string>();
+    let dispatches = 0;
+    let slept = 0;
+    const deps: DaemonDeps = {
+      discoverBacklog: staticBacklog(items(1)),
+      isHalted: async (slug) => halted.has(slug),
+      runFeature: async (it) => {
+        dispatches++;
+        halted.add(it.slug); // halts again, re-writing .pipeline/HALT each time
+        return { slug: it.slug, status: 'halted' };
+      },
+      sleep: async () => {
+        slept++;
+        if (slept === 2) halted.delete('f0'); // human clears exactly once
+      },
+    };
+    const res = await runDaemon(deps, { concurrency: 1, once: false, maxIdlePolls: 10 });
+    // Initial dispatch + exactly one retry after the single clear. If the marker
+    // gate were missing this would re-dispatch on every poll (≫ 2).
+    expect(dispatches).toBe(2);
+    expect(res.stoppedReason).toBe('idle_timeout');
+  });
+
   it('stops at the wall-clock ceiling (injected clock)', async () => {
     let clock = 0;
     const deps: DaemonDeps = {
