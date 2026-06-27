@@ -19,7 +19,7 @@ operator idea ─▶ [ENGINEER: route → DECIDE → spec PR → nudge]      (th
                  [DAEMON: build the merged spec]                    (separate, independent loop)
 ```
 
-**How it starts.** The operator runs `conduct engineer` (no subcommand) in a terminal; that launches
+**How it starts.** The operator runs `conduct-ts engineer` (no subcommand) in a terminal; that launches
 an interactive `claude /engineer` session and drops them here. Inside an existing session, the
 operator invokes `/engineer` directly. Either way, this skill is now driving.
 
@@ -46,7 +46,7 @@ and running the DECIDE skills directly in chat for the reasoning parts.
 
 ## The Loop
 
-**Handle exactly ONE idea per session, then end.** The launcher (`conduct engineer`) relaunches you
+**Handle exactly ONE idea per session, then end.** The launcher (`conduct-ts engineer`) relaunches you
 in a **fresh session with clean context** for the next idea — so do NOT loop over multiple ideas
 in-chat (that bloats and degrades context). Durable state (registry, lessons, processed markers)
 is file-backed, so the next fresh session picks up everything that matters. For this one idea:
@@ -55,13 +55,13 @@ is file-backed, so the next fresh session picks up everything that matters. For 
 Take the operator's raw idea from the chat. Empty/whitespace → re-prompt, do not proceed.
 
 ### 2. Route to a target repo
-Read the registry: `conduct engineer projects` (JSON: `{name, path, description, tags}` per project).
+Read the registry: `conduct-ts engineer projects` (JSON: `{name, path, description, tags}` per project).
 Reason **in chat** about the best-fit project — this is your own judgment over the registry, not a
 spawned `claude`. Present the proposed target and your rationale, then **confirm with the operator**.
 
 - **Redirect:** if the operator names a different project, switch to it. The originally-proposed
   repo is left byte-for-byte untouched.
-- **No fit:** offer to scaffold a new project (`conduct create <path>`). On decline, drop the idea
+- **No fit:** offer to scaffold a new project (`conduct-ts create <path>`). On decline, drop the idea
   with zero side effects. On accept, create it, then continue with it as the target.
 
 ### 3. Run the REAL DECIDE skills, in the target repo
@@ -77,7 +77,7 @@ hand-write stub stories, DRAFT artifacts, or shell out to `claude -p`. If the op
 step, loop within that skill until accepted or abandon the idea — never carry a DRAFT forward.
 
 ### 4. Land the already-authored spec on a branch in the target repo
-`conduct engineer land --project <name> --idea "<idea>"`. This is a **deterministic primitive** — it
+`conduct-ts engineer land --project <name> --idea "<idea>"`. This is a **deterministic primitive** — it
 does NOT author; the real DECIDE skills in step 3 already wrote the artifacts to the target's
 `.docs/`. `land`:
 - resolves the canonical target path from the registry (no cwd fallback),
@@ -89,7 +89,7 @@ It writes nothing outside the target repo and never touches a sibling repo. It p
 `{ slug, branch, repoPath }` — pass `branch` to step 5.
 
 ### 5. Open the spec PR + nudge the daemon
-`conduct engineer handoff --project <name> --branch <branch>` (the `branch` from step 4). This opens a
+`conduct-ts engineer handoff --project <name> --branch <branch>` (the `branch` from step 4). This opens a
 spec PR **to the target repo** (no-remote → local-commit fallback), records the authored-ledger entry,
 and calls `ensureRunning(repoPath)` fire-and-forget so that repo's daemon is alive to pick the spec up
 **after you merge it**. It never merges and never builds.

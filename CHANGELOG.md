@@ -12,8 +12,8 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
-- **`conduct engineer` launches the interactive idea→spec loop.** Running the bare
-  `conduct engineer` command now drops the operator into an interactive
+- **`conduct-ts engineer` launches the interactive idea→spec loop.** Running the bare
+  `conduct-ts engineer` command now drops the operator into an interactive
   `claude /engineer` session (stdio inherited, human-in-the-loop) instead of
   printing a pointer and exiting. This is the agent-hosted front door (ADR-008):
   the launched session runs the real `/engineer` skill — routing, DECIDE, spec PR —
@@ -124,7 +124,7 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Changed
 - **BREAKING (conduct-ts):** renamed the supervisor from **brain** to **engineer**.
-  The CLI subcommand is now `conduct engineer` (was `conduct brain`); the
+  The CLI subcommand is now `conduct-ts engineer` (was `conduct brain`); the
   cross-project memory store moved from `~/.ai-conductor/brain/` to
   `~/.ai-conductor/engineer/`, and its env override from `$AI_CONDUCTOR_BRAIN_DIR`
   to `$AI_CONDUCTOR_ENGINEER_DIR`. The signal type `BrainSignal` is now

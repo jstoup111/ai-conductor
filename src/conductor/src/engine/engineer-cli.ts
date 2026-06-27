@@ -1,8 +1,8 @@
-// `conduct engineer` command handler (Phase 9.3, ADR-008 conformance rework).
+// `conduct-ts engineer` command handler (Phase 9.3, ADR-008 conformance rework).
 //
 // AGENT-HOSTED EXECUTION MODEL (ADR-008):
 //   The engineer subsystem is driven by the /engineer host-agent skill in a Claude
-//   Code session. The bare `conduct engineer` command is the FRONT DOOR: it launches
+//   Code session. The bare `conduct-ts engineer` command is the FRONT DOOR: it launches
 //   an INTERACTIVE `claude /engineer` session (stdio inherited, operator present),
 //   dropping the operator into the human-in-the-loop idea→spec loop. This is NOT the
 //   forbidden `claude -p` substrate — that was a headless subprocess doing autonomous
@@ -14,10 +14,10 @@
 //   routing/authoring.
 //
 // Subcommands:
-//   conduct engineer               → {kind:'launch'}   — launch interactive `claude /engineer`
-//   conduct engineer projects      → {kind:'projects'} — list registry to stdout as JSON
-//   conduct engineer land          → {kind:'land'}     — commit pre-written artifacts to spec branch
-//   conduct engineer handoff       → {kind:'handoff'}  — open spec PR + ensureRunning
+//   conduct-ts engineer               → {kind:'launch'}   — launch interactive `claude /engineer`
+//   conduct-ts engineer projects      → {kind:'projects'} — list registry to stdout as JSON
+//   conduct-ts engineer land          → {kind:'land'}     — commit pre-written artifacts to spec branch
+//   conduct-ts engineer handoff       → {kind:'handoff'}  — open spec PR + ensureRunning
 //   (malformed subcommand / missing flags → {kind:'guide'} — print usage)
 
 import { execFile as execFileCb, spawn } from 'node:child_process';
@@ -81,7 +81,7 @@ export function detectEngineerCommand(argv: string[]): EngineerDispatch | null {
   const subCmd = argv[3];
 
   if (!subCmd || subCmd === '') {
-    // Bare `conduct engineer` → launch the interactive host-agent loop.
+    // Bare `conduct-ts engineer` → launch the interactive host-agent loop.
     return { kind: 'launch' };
   }
 
@@ -219,15 +219,15 @@ function promptAnother(): Promise<boolean> {
 /** Print the engineer usage/guide text (front door + deterministic primitives). */
 function printGuide(print: (s: string) => void): void {
   print(
-    'The engineer is the agent-hosted idea→spec loop. Run `conduct engineer` (no\n' +
+    'The engineer is the agent-hosted idea→spec loop. Run `conduct-ts engineer` (no\n' +
       'subcommand) to drop into an interactive `claude /engineer` session and drive it\n' +
       'with a human in the loop. The subcommands below are the deterministic primitives\n' +
       'the /engineer skill calls in-chat:\n' +
       '\n' +
-      '  conduct engineer                                     — launch the interactive /engineer loop\n' +
-      '  conduct engineer projects                            — list registered projects\n' +
-      '  conduct engineer land --project <n> --idea "<i>"    — commit pre-written spec artifacts\n' +
-      '  conduct engineer handoff --project <n> --branch <b> — open spec PR + nudge daemon\n',
+      '  conduct-ts engineer                                     — launch the interactive /engineer loop\n' +
+      '  conduct-ts engineer projects                            — list registered projects\n' +
+      '  conduct-ts engineer land --project <n> --idea "<i>"    — commit pre-written spec artifacts\n' +
+      '  conduct-ts engineer handoff --project <n> --branch <b> — open spec PR + nudge daemon\n',
   );
 }
 
@@ -261,7 +261,7 @@ export async function dispatchEngineer(
 
   switch (dispatch.kind) {
     // ── launch ──────────────────────────────────────────────────────────────────
-    // Bare `conduct engineer`: drop the operator into the interactive /engineer loop.
+    // Bare `conduct-ts engineer`: drop the operator into the interactive /engineer loop.
     case 'launch': {
       const launchOne = opts.launchInteractive ?? (() => launchClaudeEngineer(process.cwd()));
       const confirmAnother = opts.confirmAnother ?? promptAnother;

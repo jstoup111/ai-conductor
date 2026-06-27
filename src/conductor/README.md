@@ -249,7 +249,7 @@ shell default is older.
 `engine/registry.ts` is the **single writer** for the harness project registry at
 `~/.ai-conductor/registry.json` (override with `$AI_CONDUCTOR_REGISTRY`; `resolveRegistryPath`
 is injectable, mirroring `engine/user-config.ts`). Per ADR-003 all three entry points
-(`conduct register`, `conduct create`, `/bootstrap`) funnel through it so correctness lives in
+(`conduct-ts register`, `conduct-ts create`, `/bootstrap`) funnel through it so correctness lives in
 one place:
 
 - **Atomic writes** — serialize the whole registry to a unique temp sibling, then `rename` over
@@ -268,10 +268,10 @@ one place:
 `engine/registry-cli.ts` holds the two non-interactive handlers, dispatched from `index.ts`
 (`detectRegistryCommand`) **before** the interactive pipeline boots:
 
-- `conduct register [path]` (default cwd) — validate the path is an existing git repo (else
+- `conduct-ts register [path]` (default cwd) — validate the path is an existing git repo (else
   non-zero exit + clear stderr, registry byte-unchanged), derive the record (name=basename,
   absolute path, redacted `git remote get-url origin` if present), upsert with `status: registered`.
-- `conduct create <name> [--remote <url>]` — no-clobber guard (a non-empty target writes nothing),
+- `conduct-ts create <name> [--remote <url>]` — no-clobber guard (a non-empty target writes nothing),
   else `git init` + skeleton `CLAUDE.md` (references HARNESS.md) + `.gitignore` (`.pipeline/`,
   `.daemon/`, `.worktrees/`) + `git remote add origin` when `--remote` is given (add-only, no
   push), upsert with `status: created`.
@@ -292,7 +292,7 @@ guarantee is enforced structurally by `test/engine/engineer/non-autonomy.test.ts
 source tree imports no build/pipeline entry point and issues no `gh pr merge`) and by
 `summary.buildsRun` staying `0`.
 
-**Starting it.** Run the bare **`conduct engineer`** command: it launches an interactive
+**Starting it.** Run the bare **`conduct-ts engineer`** command: it launches an interactive
 `claude /engineer` session (stdio inherited) and drops you straight into the loop. This is the
 agent-hosted front door — an *operator-driven* interactive session, distinct from the removed
 headless `claude -p` automation. The session is launched with `--permission-mode default` (never
@@ -301,7 +301,7 @@ even if your global `defaultMode` is `plan`; set `CONDUCT_ENGINEER_PERMISSION_MO
 `acceptEdits`, `bypassPermissions`) to change it (`plan` is coerced back to `default`). Run from
 inside an existing Claude Code session, it instead tells you to invoke `/engineer` directly (no
 nested session); with `claude` not on `PATH` it prints usage.
-The `conduct engineer projects | land | handoff` subcommands are the deterministic primitives the
+The `conduct-ts engineer projects | land | handoff` subcommands are the deterministic primitives the
 skill calls between human gates.
 
 Per idea (each isolated so one repo's failure never corrupts another):
