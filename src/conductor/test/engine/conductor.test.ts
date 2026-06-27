@@ -274,6 +274,122 @@ describe('engine/conductor', () => {
     expect(result.ok && result.value.feature_status).toBeUndefined();
   });
 
+  describe('fresh session per step (freshContextPerStep)', () => {
+    // A runner that logs every session reset and every dispatch, so we can
+    // assert the interleaving (reset-then-run for every executed step).
+    function trackingRunner(): { runner: StepRunner; log: string[] } {
+      const log: string[] = [];
+      const runner: StepRunner = {
+        run: async (step: StepName) => {
+          log.push(`run:${step}`);
+          return { success: true };
+        },
+        resetSession: async () => {
+          log.push('reset');
+        },
+      };
+      return { runner, log };
+    }
+
+    it('resets the session before every dispatched step when on', async () => {
+      const { runner, log } = trackingRunner();
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        freshContextPerStep: true,
+      });
+
+      await conductor.run();
+
+      // Every runner dispatch is immediately preceded by a session reset, so no
+      // context is carried across the loop. (Engine-managed steps add extra
+      // resets with no dispatch — harmless; we only assert each run's predecessor.)
+      const runIdxs = log
+        .map((e, i) => (e.startsWith('run:') ? i : -1))
+        .filter((i) => i >= 0);
+      expect(runIdxs.length).toBeGreaterThan(0);
+      for (const i of runIdxs) expect(log[i - 1]).toBe('reset');
+    });
+
+    it('does NOT reset when off (interactive /conduct keeps its design session)', async () => {
+      const { runner, log } = trackingRunner();
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        freshContextPerStep: false,
+      });
+
+      await conductor.run();
+
+      expect(log.includes('reset')).toBe(false);
+    });
+
+    it('resets before the FIRST executed step — the daemon worktree-reuse fix', async () => {
+      // Mirror the daemon: front half pre-seeded done, loop starts at
+      // acceptance_specs. The reset BEFORE that first step is what discards a
+      // stale session inherited from a reused worktree.
+      const seed = (await readState(statePath)).ok
+        ? (await readState(statePath)).value
+        : ({} as ConductState);
+      for (const s of ALL_STEPS) {
+        if (s.name === 'acceptance_specs') break;
+        (seed as Record<string, unknown>)[s.name] = 'done';
+      }
+      await writeState(statePath, seed);
+
+      const { runner, log } = trackingRunner();
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        freshContextPerStep: true,
+        fromStep: 'acceptance_specs',
+      });
+
+      await conductor.run();
+
+      expect(log[0]).toBe('reset'); // first action is a reset, before any dispatch
+      expect(log.find((e) => e.startsWith('run:'))).toBe('run:acceptance_specs');
+    });
+  });
+
+  it('an unexpected throw inside the loop HALTs (state flushed) instead of crashing', async () => {
+    // A throw in the loop (e.g. a verdict-I/O failure in the SHIP tail) must not
+    // escape run() with no marker — that produced the daemon's opaque "loop
+    // ended without DONE or HALT" error and left state with SHIP entries
+    // missing. It must become a recoverable HALT with state flushed.
+    const runner: StepRunner = {
+      run: async (step: StepName) => {
+        if (step === 'stories') throw new Error('kaboom in stories');
+        return { success: true };
+      },
+    };
+    let halted = false;
+    events.on('loop_halt', () => {
+      halted = true;
+    });
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+    });
+
+    // Must NOT throw — the loop converts the error into a recoverable HALT.
+    await expect(conductor.run()).resolves.toBeUndefined();
+
+    expect(halted).toBe(true);
+    const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+    expect(halt).toMatch(/kaboom in stories|conductor error/);
+
+    // State flushed: a step before the throw is recorded, feature NOT complete.
+    const result = await readState(statePath);
+    expect(result.ok && result.value.brainstorm).toBe('done');
+    expect(result.ok && result.value.feature_status).toBeUndefined();
+  });
+
   describe('daemon prd-audit gap-aware halting', () => {
     const AUDIT_HEADER =
       '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n';

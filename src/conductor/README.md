@@ -101,11 +101,19 @@ by **gate verdicts** instead of a fixed order:
   `{satisfied:false, kickback.from}` for `plan`/`stories`. `advanceTail` detects it,
   `navigateBack`s (target → pending, downstream → stale), and the selector routes back.
   Capped per gate to prevent ping-pong.
-- **Stop** — `.pipeline/DONE` on convergence; `.pipeline/HALT` on the kickback cap or a
-  gate selected too many times without satisfying.
-- **Hybrid session** — with `freshContextPerStep`, the LLM session is reset before each new
-  tail step (Ralph-style; SHIP-phase context never bloats), while a step's own retries
-  resume. The front half keeps the persistent session.
+- **Stop** — `.pipeline/DONE` on convergence; `.pipeline/HALT` on the kickback cap, a
+  gate selected too many times without satisfying, or **any unexpected throw inside the
+  loop** (the error is flushed to state and converted to a HALT so a supervising daemon
+  classifies it as `halted` — worktree kept, retryable — never `error` with lost state).
+- **Fresh session per step** — with `freshContextPerStep` (daemon/auto only; interactive
+  `/conduct` leaves it off so the brainstorm→stories→plan design session keeps its
+  context), the LLM session is reset before **every** executed step in the loop
+  (Ralph-style; context never bloats across the loop), while a step's own retries resume
+  the same session. The reset also fires before the **first** step, which discards any
+  stale session inherited from a **reused worktree** — a kept worktree carries the prior
+  run's `session-created`/`conduct-session-id`, and without the reset the first step would
+  `--resume` a brand-new id that was never created → "session unavailable (expired or in
+  use)". `daemon-cli` additionally sweeps those markers on (re)entry as belt-and-suspenders.
 
 The new gate-grade predicates (`plan` = per-path-type story coverage; `stories` = happy +
 negative path, no DRAFT) live in `GATE_ONLY_PREDICATES` (`engine/artifacts.ts`), separate

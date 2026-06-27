@@ -180,6 +180,24 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- **Daemon: a reused worktree no longer inherits a stale Claude session, and a
+  mid-pipeline throw no longer loses state.** On a kept worktree (reused on a later daemon
+  cycle after a prior halt/error — `createWorktree` is idempotent), the prior run's
+  `.pipeline/session-created`/`conduct-session-id` markers survived, so the new runner's
+  lazy-init set `sessionStarted=true` and the first step (`acceptance_specs`, which sits
+  before the `build` index and so was NOT covered by `freshContextPerStep`) dispatched
+  `claude --resume <fresh-uuid>` for a conversation that never existed → "No conversation
+  found" → *"session unavailable (expired or in use) — resetting to a fresh session"*,
+  errored the feature out, and left `conduct-state.json` inconsistent (build done, SHIP
+  entries missing). Reproduced at `--concurrency 1`. Now: `freshContextPerStep` resets the
+  session before **every** executed step (no cross-step context retention — sessions are
+  fresh per step across the whole build→ship loop; retries within a step still resume), the
+  first reset discards the inherited stale session, and `daemon-cli` sweeps the stale
+  markers on (re)entry. Separately, any unexpected throw inside the conductor loop now
+  flushes state and writes a `.pipeline/HALT` marker (`loop_halt`), so a supervising daemon
+  classifies it as `halted` (worktree kept, parked, retryable) instead of `error` with lost
+  SHIP state. Tests added: runner stale-marker override, fresh-session-per-step
+  interleaving, first-step reset (daemon worktree-reuse), and halt-on-throw.
 - **Stories without `Status: Accepted` are now rejected at land instead of silently skipped
   at build.** A stories file with no status line passed the engineer land gate
   (`land-spec.ts` only rejected `Status: DRAFT`/empty/stub) yet was then skipped **forever**
