@@ -74,6 +74,16 @@ hands off to the **gate-driven loop** (see below): the *selector*, not the index
 the next step. When `verifyArtifacts` is off the conductor stays fully linear (the gate
 loop never engages).
 
+The `acceptance_specs` gate verifies RED specs exist on disk by matching
+`STEP_ARTIFACT_GLOBS.acceptance_specs` (`engine/artifacts.ts`). The built-ins cover Rails,
+Node, and `backend/` layouts rooted at the repo root. A repo whose specs live elsewhere —
+most often a **monorepo** with specs one package deep (`api/spec/…`,
+`frontend/__tests__/…`) — declares extra globs via the project-level
+`acceptance_spec_globs` config key; they're *appended* to (never replace) the built-ins, so
+the gate can only loosen. A leading `*/` in a glob expands to each immediate subdirectory
+(skipping `node_modules`/dot-dirs), so package names need not be hard-coded. Config flows to
+the check via `CompletionContext.config`.
+
 ### Gate-driven loop
 
 Once `build` engages, `advanceTail()` drives

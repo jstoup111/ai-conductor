@@ -144,6 +144,7 @@ export function validateConfig(
     'conductor',
     'markdown_viewer',
     'assess',
+    'acceptance_spec_globs',
   ]);
   for (const key of Object.keys(obj)) {
     if (!knownTopLevelKeys.has(key)) {
@@ -399,6 +400,16 @@ export function validateConfig(
   if (obj.assess !== undefined) {
     const err = validateAssessBlock(obj.assess);
     if (err) return { ok: false, error: err };
+  }
+
+  // acceptance_spec_globs — list of extra globs for the acceptance_specs gate.
+  if (obj.acceptance_spec_globs !== undefined) {
+    if (!Array.isArray(obj.acceptance_spec_globs)) {
+      return errVal('acceptance_spec_globs must be an array of strings');
+    }
+    if (!obj.acceptance_spec_globs.every((g) => typeof g === 'string')) {
+      return errVal('acceptance_spec_globs must contain only strings');
+    }
   }
 
   return { ok: true, config: obj as HarnessConfig, warnings };

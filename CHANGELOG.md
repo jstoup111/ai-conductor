@@ -144,6 +144,25 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- **The `acceptance_specs` completion gate no longer false-halts on monorepo layouts.**
+  Its built-in artifact globs (`STEP_ARTIFACT_GLOBS.acceptance_specs`, `engine/artifacts.ts`)
+  were all rooted at the repo root, so correctly-written RED specs that land one package deep
+  (`api/spec/integration/…`, `frontend/__tests__/screens/Foo.test.tsx`) matched nothing — the
+  daemon retried 3×, found "no spec files," and halted even though valid specs were committed
+  (observed: honeydew-or-handymando PR #39, 1,018 lines of RED specs). Three additive fixes:
+  (1) a new project-level **`acceptance_spec_globs`** config key lets a repo declare where its
+  specs live; those globs are *appended* to (never replace) the built-ins, so the gate can
+  only loosen and standard Rails/Node-at-root layouts are unaffected. It is threaded to the
+  check via `CompletionContext.config` (populated at every `conductor.ts` gate site, including
+  the daemon gate-loop's `computeAndWriteVerdict`). (2) The custom glob matcher now expands a
+  leading `*/` segment to each immediate subdirectory of the repo root (skipping
+  `node_modules`/dot-dirs, preserving the no-`node_modules` property), so a repo can declare
+  `*/spec/**` / `*/__tests__/**` without naming each package. (3) The built-in defaults gain
+  `.tsx`/`.jsx` test extensions (`*.test.tsx`, `*.spec.tsx`, …) for React/React-Native repos.
+  Regression-tested in `test/engine/artifacts.test.ts` (monorepo passes with config; zero
+  specs still fails; `*/` won't reach into `node_modules`) and `test/engine/config.test.ts`
+  (key validation + merge).
+
 - **Daemon discovers specs merged on origin — but only fetches between work, never
   while a build is running.** The daemon scanned `.docs/plans` only against the
   *local* default branch, so a spec merged on GitHub (origin's main) was invisible
