@@ -110,6 +110,13 @@ Check stories and plan against documented architecture:
 - Does the data model expose sensitive fields that should be filtered?
 - Are there new user inputs that need validation at the boundary?
 
+**Production DI defaults:**
+- Verify that production dependency injection defaults use persistent stores (PostgreSQL,
+  Redis, filesystem) — not in-memory implementations
+- Flag any `InMemory*`, `Fake*`, or `Stub*` class registered as a production default
+- **BLOCKED if production DI defaults use in-memory stores for stateful data** — this means
+  data loss on restart and test/prod divergence when acceptance tests override DI
+
 ### 5. Domain Integrity Pre-Check
 
 Before implementation begins, check the plan for domain modeling issues:
