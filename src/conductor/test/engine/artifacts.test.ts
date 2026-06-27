@@ -115,6 +115,61 @@ describe('engine/artifacts', () => {
       await createFile('app.test.js');
       expect(await stepHasArtifacts(dir, 'acceptance_specs')).toBe(true);
     });
+
+    it('recognizes a root-level *.test.tsx (React/RN) without any config', async () => {
+      expect(await stepHasArtifacts(dir, 'acceptance_specs')).toBe(false);
+      await createFile('App.test.tsx');
+      expect(await stepHasArtifacts(dir, 'acceptance_specs')).toBe(true);
+    });
+  });
+
+  describe('checkStepCompletion: acceptance_specs (monorepo + config globs)', () => {
+    // Mirrors the honeydew-or-handymando false-halt: correct RED specs committed
+    // under package subdirs (api/, frontend/) that no root-level default matches.
+    async function seedMonorepoSpecs() {
+      await createFile('api/spec/integration/household_invite_spec.rb', 'x');
+      await createFile('api/spec/jobs/notification_dispatcher_job_spec.rb', 'x');
+      await createFile('frontend/__tests__/screens/TabBar.test.tsx', 'x');
+    }
+
+    it('false-fails on a monorepo layout when no config globs are declared', async () => {
+      await seedMonorepoSpecs();
+      const result = await checkStepCompletion(dir, 'acceptance_specs');
+      expect(result.done).toBe(false);
+    });
+
+    it('passes once the project declares package-prefix globs via config', async () => {
+      await seedMonorepoSpecs();
+      const result = await checkStepCompletion(dir, 'acceptance_specs', {
+        config: { acceptance_spec_globs: ['*/spec/**/*', '*/__tests__/**/*'] },
+      });
+      expect(result).toEqual({ done: true });
+    });
+
+    it('honors a literal package prefix (no wildcard) in config globs too', async () => {
+      await seedMonorepoSpecs();
+      const result = await checkStepCompletion(dir, 'acceptance_specs', {
+        config: { acceptance_spec_globs: ['api/spec/**/*'] },
+      });
+      expect(result).toEqual({ done: true });
+    });
+
+    it('still fails with zero spec files even when config globs are declared', async () => {
+      const result = await checkStepCompletion(dir, 'acceptance_specs', {
+        config: { acceptance_spec_globs: ['*/spec/**/*', '*/__tests__/**/*'] },
+      });
+      expect(result.done).toBe(false);
+    });
+
+    it('does not expand `*/` into node_modules or dot-dirs', async () => {
+      // A spec-shaped path buried in node_modules / .git must NOT satisfy the gate.
+      await createFile('node_modules/somepkg/spec/x_spec.rb', 'x');
+      await createFile('.git/spec/x_spec.rb', 'x');
+      const result = await checkStepCompletion(dir, 'acceptance_specs', {
+        config: { acceptance_spec_globs: ['*/spec/**/*'] },
+      });
+      expect(result.done).toBe(false);
+    });
   });
 
   describe('checkStepCompletion: finish predicate', () => {

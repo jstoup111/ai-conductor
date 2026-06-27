@@ -1,6 +1,7 @@
 import { access, readdir, readFile, stat } from 'fs/promises';
 import { join, relative } from 'path';
 import type { StepName } from '../types/index.js';
+import type { HarnessConfig } from '../types/config.js';
 import { slugify } from './worktree.js';
 
 /**
@@ -33,6 +34,15 @@ export const STEP_ARTIFACT_GLOBS: Record<StepName, string[]> = {
   // project (e.g. a Node app whose tests are `app.test.js` at the root). The
   // patterns avoid recursing node_modules (root globs are non-recursive; the
   // `**` ones are scoped to test dirs).
+  //
+  // A monorepo with several packages (e.g. separate `api/` and `frontend/`)
+  // puts specs under arbitrary package prefixes that no fixed root pattern can
+  // anticipate. Rather than guess, a project declares its own locations via the
+  // `acceptance_spec_globs` config key — those globs are appended here at
+  // check time (see checkStepCompletion). They may use a leading `*/` to match
+  // any immediate subdirectory without naming each package (matchGlob skips
+  // node_modules / dot-dirs when expanding `*/`, preserving the no-node_modules
+  // property above).
   acceptance_specs: [
     'spec/acceptance/**/*',
     'spec/requests/**/*',
@@ -43,8 +53,12 @@ export const STEP_ARTIFACT_GLOBS: Record<StepName, string[]> = {
     '__tests__/**/*',
     '*.test.js',
     '*.test.ts',
+    '*.test.jsx',
+    '*.test.tsx',
     '*.spec.js',
     '*.spec.ts',
+    '*.spec.jsx',
+    '*.spec.tsx',
   ],
   build: ['.pipeline/task-status.json'],
   manual_test: ['.docs/manual-test-results.md'],
@@ -86,15 +100,32 @@ export async function fileIsFreshSinceSession(
 export const HALT_MARKER = '.pipeline/halt-user-input-required';
 
 /**
+ * Project-declared extra artifact globs for a step, drawn from config. Only the
+ * acceptance_specs step honors `config.acceptance_spec_globs` today; other steps
+ * have no consumer override and return []. Kept here so the gate and the
+ * dashboard resolve the same effective glob set.
+ */
+export function extraArtifactGlobs(
+  step: StepName,
+  config: HarnessConfig | undefined,
+): string[] {
+  if (step === 'acceptance_specs') return config?.acceptance_spec_globs ?? [];
+  return [];
+}
+
+/**
  * Returns the absolute paths of files matching a step's artifact globs, rooted at `dir`.
- * Supports literal filenames, `dir/*.ext`, `dir/**\/*.ext`, and `dir/**\/*`.
+ * Supports literal filenames, `dir/*.ext`, `dir/**\/*.ext`, `dir/**\/*`, and a
+ * leading `*\/` package-prefix wildcard. `extraGlobs` (project-declared) are
+ * appended to the step's built-in globs.
  */
 export async function findArtifactFiles(
   dir: string,
   step: StepName,
+  extraGlobs: string[] = [],
 ): Promise<string[]> {
-  const patterns = STEP_ARTIFACT_GLOBS[step];
-  if (!patterns || patterns.length === 0) return [];
+  const patterns = [...(STEP_ARTIFACT_GLOBS[step] ?? []), ...extraGlobs];
+  if (patterns.length === 0) return [];
 
   const files: string[] = [];
   for (const pattern of patterns) {
@@ -140,6 +171,12 @@ export interface CompletionContext {
   sessionStartedAt?: number;
   /** Used by the retro predicate to prefer slug-matched filenames. */
   featureDesc?: string;
+  /**
+   * Resolved project config. The acceptance_specs gate reads
+   * `config.acceptance_spec_globs` to extend its built-in artifact globs with
+   * project-declared (e.g. monorepo) spec locations. Absent → defaults only.
+   */
+  config?: HarnessConfig;
 }
 
 export const CUSTOM_COMPLETION_PREDICATES: Partial<
@@ -744,10 +781,11 @@ export async function checkStepCompletion(
   const predicate = CUSTOM_COMPLETION_PREDICATES[step];
   if (predicate) return predicate(dir, ctx);
 
-  const patterns = STEP_ARTIFACT_GLOBS[step];
-  if (!patterns || patterns.length === 0) return { done: true };
+  const extra = extraArtifactGlobs(step, ctx.config);
+  const patterns = [...(STEP_ARTIFACT_GLOBS[step] ?? []), ...extra];
+  if (patterns.length === 0) return { done: true };
 
-  const files = await findArtifactFiles(dir, step);
+  const files = await findArtifactFiles(dir, step, extra);
   if (files.length > 0) return { done: true };
   return {
     done: false,
@@ -790,6 +828,27 @@ export async function getArtifactStatus(
 async function matchGlob(root: string, pattern: string): Promise<string[]> {
   const parts = pattern.split('/');
   const files: string[] = [];
+
+  // Leading `*/` package-prefix wildcard: `*/rest` matches `rest` under each
+  // immediate subdirectory of `root`. Skip node_modules and dot-dirs so the
+  // expansion never walks dependencies or `.git` — preserving the
+  // no-node_modules property documented on STEP_ARTIFACT_GLOBS. One level deep;
+  // within each package the remaining pattern matches as usual.
+  if (parts.length > 1 && parts[0] === '*') {
+    const rest = parts.slice(1).join('/');
+    let entries;
+    try {
+      entries = await readdir(root, { withFileTypes: true });
+    } catch {
+      return files;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      if (entry.name === 'node_modules' || entry.name.startsWith('.')) continue;
+      files.push(...(await matchGlob(join(root, entry.name), rest)));
+    }
+    return files;
+  }
 
   const doubleStarIdx = parts.indexOf('**');
   if (doubleStarIdx >= 0) {

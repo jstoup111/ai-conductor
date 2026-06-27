@@ -207,6 +207,17 @@ export interface HarnessConfig {
   markdown_viewer?: MarkdownViewerConfig;
   /** Project-level assess staleness thresholds (optional). */
   assess?: AssessConfig;
+  /**
+   * Extra glob patterns the `acceptance_specs` completion check should accept,
+   * ADDED to (never replacing) the built-in defaults in
+   * `STEP_ARTIFACT_GLOBS.acceptance_specs`. Lets a repo declare where its specs
+   * actually live so the gate doesn't false-halt. Monorepos whose specs sit
+   * under package subdirectories use a leading `*\/` to match any immediate
+   * subdir without naming each package, e.g.
+   * `['*\/spec/**', '*\/__tests__/**']`. Literal prefixes (`api/spec/**`) work
+   * too. (The `\` above is only to keep this comment from closing early.)
+   */
+  acceptance_spec_globs?: string[];
   /** Plugin selection: which LLM provider to use (defaults to 'claude'). */
   llm_provider?: string;
   /** Plugin selection: which UI renderer to use (defaults to 'terminal'). */

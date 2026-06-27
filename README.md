@@ -293,6 +293,18 @@ assess:
   stale_after_days: 90         # Re-prompt if last assessment is older than this
   stale_after_commits: 500     # Re-prompt if this many commits since last assessment
 
+# ── Acceptance-spec locations (extends the built-in defaults; never replaces) ─
+# Where this repo's RED acceptance/system specs live, so the acceptance_specs
+# completion gate doesn't false-halt. The built-ins cover Rails (spec/…), Node
+# (test/, __tests__/, *.test.{js,ts,jsx,tsx}) and backend/ layouts at the repo
+# root. Declare extra globs for anything they don't anticipate — most often a
+# MONOREPO whose specs sit one package deep. A leading `*/` matches any
+# immediate subdirectory (node_modules and dot-dirs are skipped), so you don't
+# have to name each package; literal prefixes (api/spec/**) work too.
+acceptance_spec_globs:
+  - "*/spec/**"                 # e.g. api/spec/integration/…, api/spec/jobs/…
+  - "*/__tests__/**"            # e.g. frontend/__tests__/screens/Foo.test.tsx
+
 # ── Markdown viewer (for artifact review + changelog rendering) ───────────────
 markdown_viewer:
   preset: glow                 # Built-in presets: glow, bat, mdcat, less, cat
