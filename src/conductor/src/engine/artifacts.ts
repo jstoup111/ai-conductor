@@ -561,6 +561,22 @@ export function planHasDependencyTree(planText: string): boolean {
 }
 
 /**
+ * Canonical stories-approval signal shared by the land gate
+ * (engineer/land-spec) and the daemon backlog vetting. Stories are approved
+ * when they declare `Status: Accepted` and are NOT `Status: DRAFT`. A stories
+ * file with no status line at all is therefore NOT approved.
+ *
+ * Single source of truth so the engineer→land→daemon chain can never disagree
+ * on the token — the gap that previously let a no-status stories file land yet
+ * be skipped forever by the daemon (which already required `Status: Accepted`).
+ * Exported for daemon backlog eligibility and the land-time gate.
+ */
+export function isStoriesApproved(content: string): boolean {
+  if (/\bstatus\b[\s*:]*\bdraft\b/i.test(content)) return false;
+  return /\bstatus\b[\s*:]*\baccepted\b/i.test(content);
+}
+
+/**
  * Scan a PRD-audit report for functional-requirement verdict rows that are not
  * ALIGNED and not human-ACCEPTED. The audit table carries one row per FR with a
  * verdict cell of ALIGNED | PARTIAL | DIVERGED | MISSING; an intended divergence

@@ -25,7 +25,7 @@ on later.
 - Review existing stories in `.docs/stories/` for this feature area (avoid duplicates)
 - **Check for DRAFT stories from `/bootstrap`** — if stories have `Status: DRAFT`, review and
   complete them rather than generating from scratch. Fill in `TODO` negative paths, verify happy
-  paths match actual behavior, and mark as accepted when done.
+  paths match actual behavior, and change `**Status:** DRAFT` to `**Status:** Accepted` when done.
 - Recall relevant `.memory/` entries
 
 ### 2. Generate Stories
@@ -37,6 +37,8 @@ behaviors, so each story stays small and independently verifiable. Tag every sto
 at least one story.
 
 ```markdown
+**Status:** Accepted
+
 ## Story: [Descriptive Title]
 
 **Requirement:** FR-N
@@ -114,6 +116,14 @@ Save to `.docs/stories/<feature-name>.md` (one file per feature area).
 If stories already exist for this feature area, append new stories to the existing file.
 Note any stories that supersede or modify existing ones.
 
+**Stamp the canonical approval marker.** Every stories file MUST begin with a `**Status:**`
+line. Once the operator approves the stories, the file carries `**Status:** Accepted` — this is
+the single canonical approval token the downstream gates require. A file still pending review
+carries `**Status:** DRAFT`. This is non-negotiable: the engineer land gate
+(`landSpec`/`runAuthoring`) rejects stories lacking `Status: Accepted`, and the daemon backlog
+**skips a merged spec forever** unless its stories declare `Status: Accepted` (no DRAFT). A
+missing status line is treated as **not approved** — never leave it off.
+
 ### 6. Suggest Next Step
 
 After stories are written, suggest invoking the `conflict-check` skill to verify no conflicts
@@ -129,3 +139,4 @@ with existing stories.
 - [ ] Stack-specific negative paths included if tech-context loaded
 - [ ] Stories saved to `.docs/stories/<feature-name>.md`
 - [ ] No duplicate stories with existing content
+- [ ] Stories file carries the canonical `**Status:** Accepted` marker on approval (not DRAFT, not missing)

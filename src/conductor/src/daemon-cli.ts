@@ -15,7 +15,13 @@ import type { ConductState, ConductorEvent, StepName } from './types/index.js';
 import { runDaemon, type BacklogItem } from './engine/daemon.js';
 import { discoverBacklog, resolveDiscoveryRef } from './engine/daemon-backlog.js';
 import { makeRunFeature, type FeatureWorktree } from './engine/daemon-runner.js';
-import { isHalted, isProcessed, makeFeatureRunnerDeps } from './engine/daemon-deps.js';
+import {
+  isHalted,
+  isProcessed,
+  hasWarned,
+  markWarned,
+  makeFeatureRunnerDeps,
+} from './engine/daemon-deps.js';
 
 export interface DaemonModeOptions {
   projectRoot: string;
@@ -203,6 +209,10 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
         const treeRef = await resolveDiscoveryRef(projectRoot, baseBranch, log, { refresh });
         return discoverBacklog(projectRoot, (slug) => isProcessed(projectRoot, slug), log, {
           baseBranch: treeRef,
+          // Surface a merged-but-unbuildable spec ONCE (per .daemon/warned/<slug>)
+          // instead of re-logging the identical skip on every poll.
+          hasWarned: (slug) => hasWarned(projectRoot, slug),
+          markWarned: (slug) => markWarned(projectRoot, slug),
         });
       },
       isHalted: (slug) => isHalted(worktreeBase, slug),

@@ -8,6 +8,7 @@ import {
   stepHasArtifacts,
   getArtifactStatus,
   checkStepCompletion,
+  isStoriesApproved,
   FINISH_CHOICE_MARKER,
   HALT_MARKER,
 } from '../../src/engine/artifacts.js';
@@ -379,6 +380,38 @@ describe('engine/artifacts', () => {
       const reviewMatch = status.find((s) => s.pattern.includes('architecture-review-'));
       expect(adrMatch?.satisfied).toBe(true);
       expect(reviewMatch?.satisfied).toBe(false);
+    });
+  });
+
+  // The single canonical approval token shared by the engineer land gate and the
+  // daemon backlog. Locks the contract: ONLY "Status: Accepted" approves; DRAFT,
+  // a missing status line, and the PRD's "Approved" token are all unapproved.
+  describe('isStoriesApproved (canonical approval token)', () => {
+    it('approves a stories file declaring **Status:** Accepted', () => {
+      expect(isStoriesApproved('# Stories\n**Status:** Accepted\n')).toBe(true);
+    });
+
+    it('approves plain-YAML and case/whitespace variants of Status: Accepted', () => {
+      expect(isStoriesApproved('status: accepted')).toBe(true);
+      expect(isStoriesApproved('**Status:**   ACCEPTED')).toBe(true);
+      expect(isStoriesApproved('Status : Accepted')).toBe(true);
+    });
+
+    it('rejects DRAFT stories', () => {
+      expect(isStoriesApproved('# Stories\n**Status:** DRAFT\n')).toBe(false);
+    });
+
+    it('rejects a file with NO status line at all (the silent-skip casualty)', () => {
+      expect(isStoriesApproved('# Stories\n\n## Story: Foo\nbody\n')).toBe(false);
+      expect(isStoriesApproved('')).toBe(false);
+    });
+
+    it('rejects the PRD token "Status: Approved" (strict: stories use Accepted)', () => {
+      expect(isStoriesApproved('# Stories\n**Status:** Approved\n')).toBe(false);
+    });
+
+    it('rejects when DRAFT is present even if Accepted also appears', () => {
+      expect(isStoriesApproved('**Status:** Accepted\n... was **Status:** DRAFT')).toBe(false);
     });
   });
 });
