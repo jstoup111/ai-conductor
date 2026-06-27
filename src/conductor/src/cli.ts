@@ -37,30 +37,12 @@ export interface CLIOptions {
    * Read-only — does NOT start a Claude session.
    */
   report: boolean;
-  /**
-   * Daemon mode (Phase 6): drain the backlog of features with existing
-   * stories+plan, running each in its own worktree via the gate loop and
-   * opening a PR on finish. Runs unattended.
-   */
-  daemon: boolean;
-  /** Parallel worker count in daemon mode (default 1). */
-  concurrency: number;
-  /** Stop daemon after this many features (default: drain the backlog once). */
-  maxItems?: number;
-  /**
-   * Continuous mode: instead of draining the backlog once and exiting, keep
-   * idle-polling for new eligible features. Honors the ceilings below.
-   */
-  continuous: boolean;
-  /** Global output-token ceiling across all features (daemon stop). */
-  maxCostTokens?: number;
-  /** Wall-clock ceiling in seconds (daemon stop). */
-  maxRuntimeSeconds?: number;
-  /** Idle poll interval in seconds when the backlog is empty (continuous mode). */
-  idlePollSeconds?: number;
-  /** Stop after this many consecutive empty polls (continuous mode). */
-  maxIdlePolls?: number;
 }
+
+// Daemon mode (Phase 6) is its own subcommand (`conduct daemon …`), parsed by
+// detectDaemonCommand in engine/daemon-command.ts and dispatched from index.ts
+// before the interactive pipeline boots — NOT a flag on the base program. See
+// DaemonCommandOptions there for the daemon's own options.
 
 // Base program: the bare-positional pipeline invocation (`conduct [feature]`)
 // plus all its flags. parseArgs uses THIS so a bare feature description is never
@@ -87,15 +69,7 @@ function createBaseProgram(): Command {
     .option('--tail-lines <n>', 'Max lines to show in post-step tail pane (0 disables)', '20')
     .option('--interactive', 'Run every step in interactive Claude REPL mode (no -p flag)')
     .option('--diagnose', 'Diagnose conductor state (non-mutating); reports SHIP-phase evidence gaps and exits non-zero if state is marked complete but evidence is missing')
-    .option('--report', 'Print run summary from .pipeline/events.jsonl (step durations, retry hotspots, token spend) and exit')
-    .option('--daemon', 'Daemon mode: drain the backlog of features with existing stories+plan, each in its own worktree, opening a PR on finish')
-    .option('--concurrency <n>', 'Parallel workers in daemon mode', '1')
-    .option('--max-items <n>', 'Stop daemon after this many features (default: drain backlog once)')
-    .option('--continuous', 'Daemon: keep idle-polling for new features instead of draining once and exiting (honors --max-* ceilings)')
-    .option('--max-cost <tokens>', 'Daemon ceiling: stop starting features after this many total output tokens')
-    .option('--max-runtime <seconds>', 'Daemon ceiling: stop starting features after this much wall-clock time')
-    .option('--idle-poll <seconds>', 'Continuous mode: seconds to wait between polls when the backlog is empty', '5')
-    .option('--max-idle-polls <n>', 'Continuous mode: stop after this many consecutive empty polls');
+    .option('--report', 'Print run summary from .pipeline/events.jsonl (step durations, retry hotspots, token spend) and exit');
   return program;
 }
 
@@ -120,6 +94,20 @@ export function createProgram(): Command {
   program
     .command('engineer')
     .description('Start the supervisor engineer: route ideas to projects, author spec branches, and surface flywheel lessons');
+
+  // Daemon subcommand (Phase 6; promoted from the `--daemon` flag). NON-INTERACTIVE:
+  // dispatched by index.ts (detectDaemonCommand) before the pipeline boots. Declared
+  // here only so `--help` lists it and its options alongside the other subcommands.
+  program
+    .command('daemon')
+    .description('Daemon mode: drain the backlog of features with existing stories+plan, each in its own worktree, opening a PR on finish')
+    .option('--concurrency <n>', 'Parallel workers in daemon mode', '1')
+    .option('--max-items <n>', 'Stop daemon after this many features (default: drain backlog once)')
+    .option('--continuous', 'Keep idle-polling for new features instead of draining once and exiting (honors --max-* ceilings)')
+    .option('--max-cost <tokens>', 'Ceiling: stop starting features after this many total output tokens')
+    .option('--max-runtime <seconds>', 'Ceiling: stop starting features after this much wall-clock time')
+    .option('--idle-poll <seconds>', 'Continuous mode: seconds to wait between polls when the backlog is empty', '5')
+    .option('--max-idle-polls <n>', 'Continuous mode: stop after this many consecutive empty polls');
 
   return program;
 }
@@ -153,14 +141,6 @@ export function parseArgs(argv: string[]): CLIOptions {
     interactive: opts.interactive ?? false,
     diagnose: opts.diagnose ?? false,
     report: opts.report ?? false,
-    daemon: opts.daemon ?? false,
-    concurrency: parseInt(opts.concurrency ?? '1', 10),
-    maxItems: opts.maxItems != null ? parseInt(opts.maxItems, 10) : undefined,
-    continuous: opts.continuous ?? false,
-    maxCostTokens: opts.maxCost != null ? parseInt(opts.maxCost, 10) : undefined,
-    maxRuntimeSeconds: opts.maxRuntime != null ? parseInt(opts.maxRuntime, 10) : undefined,
-    idlePollSeconds: opts.idlePoll != null ? parseInt(opts.idlePoll, 10) : undefined,
-    maxIdlePolls: opts.maxIdlePolls != null ? parseInt(opts.maxIdlePolls, 10) : undefined,
   };
 
   const hasStateFlag =
@@ -170,7 +150,6 @@ export function parseArgs(argv: string[]): CLIOptions {
     result.reset ||
     result.diagnose ||
     result.report ||
-    result.daemon ||
     !!result.step ||
     !!result.from;
   if (!result.featureDesc && !hasStateFlag) {

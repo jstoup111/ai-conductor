@@ -18,19 +18,19 @@ import { spawn as nodeSpawn, type SpawnOptions } from 'node:child_process';
 
 /**
  * Default daemon launch command. `conduct-ts` is the conductor's own CLI wrapper
- * (resolves the pinned Node + dist/index.js); `--daemon` is the daemon FLAG (not a
- * subcommand). `--continuous` keeps the daemon idle-polling so it is still alive to
- * pick up the spec PR after the operator merges it, and `--max-idle-polls` is the
- * self-limit (Phase 9 per-daemon ceiling) that lets it exit after a sustained idle
- * stretch instead of polling forever.
+ * (resolves the pinned Node + dist/index.js); `daemon` is the daemon SUBCOMMAND
+ * (`conduct-ts daemon …`, promoted from the former `--daemon` flag). `--continuous`
+ * keeps the daemon idle-polling so it is still alive to pick up the spec PR after the
+ * operator merges it, and `--max-idle-polls` is the self-limit (Phase 9 per-daemon
+ * ceiling) that lets it exit after a sustained idle stretch instead of polling forever.
  *
- * NB: the previous default `npx conduct daemon` was WRONG on both counts — `npx
- * conduct` resolves an unrelated public npm package (a code-of-conduct generator),
- * and `daemon` is a flag, not a subcommand — so no real daemon ever started.
+ * NB: the original default `npx conduct daemon` was WRONG — `npx conduct` resolves an
+ * unrelated public npm package (a code-of-conduct generator). The command must be the
+ * `conduct-ts` wrapper, with `daemon` as its first subcommand token.
  */
 const DEFAULT_DAEMON_COMMAND = 'conduct-ts';
 const DEFAULT_MAX_IDLE_POLLS = 10;
-const DEFAULT_DAEMON_ARGS = ['--daemon', '--continuous', '--max-idle-polls', String(DEFAULT_MAX_IDLE_POLLS)];
+const DEFAULT_DAEMON_ARGS = ['daemon', '--continuous', '--max-idle-polls', String(DEFAULT_MAX_IDLE_POLLS)];
 
 /** Minimal spawn function type — matches child_process.spawn's signature. */
 export type SpawnFn = (
@@ -55,7 +55,7 @@ export interface LaunchDaemonOpts {
 /**
  * Launch a build daemon as a fully detached child process.
  *
- * The function spawns `command` (default: `conduct-ts --daemon --continuous`) with
+ * The function spawns `command` (default: `conduct-ts daemon --continuous`) with
  * `{ detached: true, stdio: 'ignore' }` and immediately calls `child.unref()`
  * so the parent can exit independently. No process handle is retained or
  * returned — this is a strict fire-and-forget boundary.

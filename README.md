@@ -98,13 +98,13 @@ own worktree, opening a PR on finish:
 
 ```bash
 # Drain the backlog once: every eligible feature, then exit
-conduct-ts --daemon
+conduct-ts daemon
 
 # Run 3 in parallel, cap at 10 features this pass
-conduct-ts --daemon --concurrency 3 --max-items 10
+conduct-ts daemon --concurrency 3 --max-items 10
 
 # Continuous: keep polling for new features, bounded by ceilings
-conduct-ts --daemon --continuous --max-runtime 3600 --max-cost 2000000
+conduct-ts daemon --continuous --max-runtime 3600 --max-cost 2000000
 ```
 
 Daemon flags: `--continuous` (idle-poll instead of draining once),
@@ -466,7 +466,7 @@ dedicated test coverage (950+ tests). See the feature comparison in
   entries kept, each once); any other / mixed conflict writes `.pipeline/HALT`, leaves the
   rebase **paused**, and opens no PR. Resume: resolve → `git rebase --continue` →
   `rm .pipeline/HALT` → re-queue.
-- **Daemon mode** (`conduct-ts --daemon`): drains a backlog of features that already have
+- **Daemon mode** (`conduct-ts daemon`): drains a backlog of features that already have
   stories **and** plans, running each in its own worktree (parallel via `--concurrency N`,
   bounded by `--max-items`), and opening a PR on finish. Per-feature failures are isolated;
   the pool keeps going.

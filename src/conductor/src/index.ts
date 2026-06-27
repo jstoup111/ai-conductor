@@ -46,6 +46,7 @@ import type { LLMProvider } from "./execution/llm-provider.js";
 import type { UISubscriber } from "./ui/types.js";
 import { detectRegistryCommand, dispatchRegistry } from './engine/registry-cli.js';
 import { detectEngineerCommand, dispatchEngineer } from './engine/engineer-cli.js';
+import { detectDaemonCommand } from './engine/daemon-command.js';
 
 // Harness VERSION lookup: probes a few candidate locations because the
 // installed layout can be a symlink chain (~/.local/bin/conduct-ts →
@@ -147,6 +148,18 @@ async function main(): Promise<void> {
     process.exit(code);
   }
 
+  // Daemon subcommand (Phase 6, promoted from the `--daemon` flag) runs
+  // unattended and exits — drain the backlog of features (each in its own
+  // worktree, gate loop, PR on finish). Dispatched before parseArgs, mirroring
+  // the registry/engineer subcommand pattern. runDaemonMode is imported lazily
+  // so the heavy daemon runtime only loads when actually running the daemon.
+  const daemonCmd = detectDaemonCommand(process.argv);
+  if (daemonCmd) {
+    const { runDaemonMode } = await import('./daemon-cli.js');
+    await runDaemonMode({ projectRoot: process.cwd(), ...daemonCmd });
+    process.exit(0);
+  }
+
   let opts: CLIOptions;
   try {
     opts = parseArgs(process.argv);
@@ -199,23 +212,6 @@ async function main(): Promise<void> {
       }
       throw err;
     }
-    process.exit(0);
-  }
-
-  // Handle --daemon: drain the backlog of features (each in its own worktree,
-  // gate loop, PR on finish) and exit. Unattended.
-  if (opts.daemon) {
-    const { runDaemonMode } = await import('./daemon-cli.js');
-    await runDaemonMode({
-      projectRoot,
-      concurrency: opts.concurrency,
-      maxItems: opts.maxItems,
-      continuous: opts.continuous,
-      maxCostTokens: opts.maxCostTokens,
-      maxRuntimeSeconds: opts.maxRuntimeSeconds,
-      idlePollSeconds: opts.idlePollSeconds,
-      maxIdlePolls: opts.maxIdlePolls,
-    });
     process.exit(0);
   }
 
