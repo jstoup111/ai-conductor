@@ -16,6 +16,22 @@
 
 import { spawn as nodeSpawn, type SpawnOptions } from 'node:child_process';
 
+/**
+ * Default daemon launch command. `conduct-ts` is the conductor's own CLI wrapper
+ * (resolves the pinned Node + dist/index.js); `--daemon` is the daemon FLAG (not a
+ * subcommand). `--continuous` keeps the daemon idle-polling so it is still alive to
+ * pick up the spec PR after the operator merges it, and `--max-idle-polls` is the
+ * self-limit (Phase 9 per-daemon ceiling) that lets it exit after a sustained idle
+ * stretch instead of polling forever.
+ *
+ * NB: the previous default `npx conduct daemon` was WRONG on both counts — `npx
+ * conduct` resolves an unrelated public npm package (a code-of-conduct generator),
+ * and `daemon` is a flag, not a subcommand — so no real daemon ever started.
+ */
+const DEFAULT_DAEMON_COMMAND = 'conduct-ts';
+const DEFAULT_MAX_IDLE_POLLS = 10;
+const DEFAULT_DAEMON_ARGS = ['--daemon', '--continuous', '--max-idle-polls', String(DEFAULT_MAX_IDLE_POLLS)];
+
 /** Minimal spawn function type — matches child_process.spawn's signature. */
 export type SpawnFn = (
   command: string,
@@ -30,16 +46,16 @@ export interface LaunchDaemonOpts {
    * Provide a test spy here to avoid spawning real child processes in tests.
    */
   spawn?: SpawnFn;
-  /** Arguments passed to the daemon command. Defaults to []. */
+  /** Arguments passed to the daemon command. Defaults to DEFAULT_DAEMON_ARGS. */
   args?: string[];
-  /** Command to run. Defaults to 'npx' with conduct-ts daemon sub-command. */
+  /** Command to run. Defaults to 'conduct-ts'. */
   command?: string;
 }
 
 /**
  * Launch a build daemon as a fully detached child process.
  *
- * The function spawns `command` (default: npx conduct-ts daemon) with
+ * The function spawns `command` (default: `conduct-ts --daemon --continuous`) with
  * `{ detached: true, stdio: 'ignore' }` and immediately calls `child.unref()`
  * so the parent can exit independently. No process handle is retained or
  * returned — this is a strict fire-and-forget boundary.
@@ -53,8 +69,8 @@ export function launchDaemonDetached(
   opts: LaunchDaemonOpts = {},
 ): void {
   const spawnFn = opts.spawn ?? (nodeSpawn as unknown as SpawnFn);
-  const command = opts.command ?? 'npx';
-  const args = opts.args ?? ['conduct', 'daemon'];
+  const command = opts.command ?? DEFAULT_DAEMON_COMMAND;
+  const args = opts.args ?? [...DEFAULT_DAEMON_ARGS];
 
   const child = spawnFn(command, args, {
     cwd: project,

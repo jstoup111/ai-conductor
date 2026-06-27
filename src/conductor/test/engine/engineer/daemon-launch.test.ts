@@ -39,6 +39,27 @@ describe('launchDaemonDetached', () => {
     expect(spawnOpts).toMatchObject({ detached: true, stdio: 'ignore' });
   });
 
+  it('spawns the real conduct-ts daemon (NOT `npx conduct daemon`)', () => {
+    // Regression: the prior default `npx conduct daemon` resolved an unrelated
+    // public npm package and `daemon` is a flag not a subcommand, so no daemon
+    // ever started. The default must invoke `conduct-ts --daemon --continuous`
+    // with a self-limit so it stays alive for the merge but does not poll forever.
+    const fakeChild = makeFakeChild();
+    const spawnSpy = vi.fn().mockReturnValue(fakeChild);
+
+    launchDaemonDetached('/projects/my-app', { spawn: spawnSpy });
+
+    const [command, args] = spawnSpy.mock.calls[0] as [string, string[], unknown];
+    expect(command).toBe('conduct-ts');
+    expect(command).not.toBe('npx');
+    expect(args).toContain('--daemon');
+    expect(args).toContain('--continuous');
+    expect(args).toContain('--max-idle-polls');
+    // `daemon` must NOT be passed as a bare subcommand token.
+    expect(args).not.toContain('daemon');
+    expect(args).not.toContain('conduct');
+  });
+
   it('calls child.unref() so the parent can exit independently', () => {
     const fakeChild = makeFakeChild();
     const spawnSpy = vi.fn().mockReturnValue(fakeChild);
