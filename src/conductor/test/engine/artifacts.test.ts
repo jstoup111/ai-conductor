@@ -434,6 +434,18 @@ describe('engine/artifacts', () => {
       expect(c.kind).toBe('clean');
     });
 
+    it('does not flag an ALIGNED row whose Evidence prose contains a verdict word', async () => {
+      // Regression: the verdict must be read from the Verdict CELL, not the whole
+      // row. This is the live FR-9 case — verdict ALIGNED, but the Evidence cell
+      // says "404 foreign/missing", which a whole-row scan mistook for a MISSING
+      // verdict and falsely blocked the SHIP gate.
+      await writeAudit(
+        '| FR-9 | ALIGNED | n/a | kids_controller.rb:193-200 (find_kid_for_parent → 404 foreign/missing); routes.rb:21 | — |\n',
+      );
+      const c = await classifyPrdAuditGaps(dir, undefined);
+      expect(c.kind).toBe('clean');
+    });
+
     it('returns impl-only when every blocking row is impl-gap', async () => {
       await writeAudit(
         '| FR-1 | ALIGNED | n/a | foo.ts:1 | — |\n' +

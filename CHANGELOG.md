@@ -82,6 +82,18 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- **PRD-audit completion gate no longer false-blocks an ALIGNED FR when its
+  Evidence prose contains a verdict word.** The gate's row parser scanned the
+  whole table row for `MISSING`/`PARTIAL`/`DIVERGED`, so an ALIGNED row whose
+  Evidence cell read e.g. `find_kid_for_parent → 404 foreign/missing` was flagged
+  as un-ALIGNED — failing the SHIP gate (`prd-audit found un-ALIGNED FRs: FR-9`)
+  on a clean PASS and looping the daemon. The parser now reads the **verdict
+  cell** (the first verdict-bearing cell to the right of the `FR-<n>` cell, where
+  the Verdict column sits ahead of Evidence) instead of the whole row, shared by
+  both the completion check and the daemon's gap classifier. ACCEPTED-override,
+  gap-class detection, header/separator skipping, and stale-report handling are
+  unchanged. Regression test covers the live FR-9 case.
+
 - **Autonomous `/remediate` no longer crashes the conductor with `Unknown step:
   remediate`.** The `remediate` SHIP sub-routine is dispatched out-of-band (only
   when a `prd_audit` blocks) and is deliberately absent from the linear

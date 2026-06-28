@@ -582,30 +582,6 @@ export function isStoriesApproved(content: string): boolean {
   return /\bstatus\b[\s*:]*\baccepted\b/i.test(content);
 }
 
-/**
- * Scan a PRD-audit report for functional-requirement verdict rows that are not
- * ALIGNED and not human-ACCEPTED. The audit table carries one row per FR with a
- * verdict cell of ALIGNED | PARTIAL | DIVERGED | MISSING; an intended divergence
- * the operator has signed off on is marked ACCEPTED in the same row. Returns the
- * FR identifier (or a truncated row) of every still-blocking row.
- *
- * Header/separator/legend lines are ignored: a row is only considered when it
- * carries a verdict keyword AND an `FR-<n>` identifier, which a header
- * (`| FR | Verdict |`), separator (`|---|`), or prose legend never does.
- */
-function findUnalignedFrRows(content: string): string[] {
-  const blocking: string[] = [];
-  for (const line of content.split('\n')) {
-    if (!/^\s*\|/.test(line)) continue; // table rows only
-    const fr = line.match(/\bFR-\d+[A-Za-z]?\b/i);
-    if (!fr) continue; // skip header/separator/legend rows (no FR id)
-    if (!/\b(MISSING|PARTIAL|DIVERGED)\b/i.test(line)) continue;
-    if (/\bACCEPTED\b/i.test(line)) continue; // human-accepted divergence
-    blocking.push(fr[0].toUpperCase());
-  }
-  return blocking;
-}
-
 /** A PRD-audit gap-class. `unknown` = a blocking row whose class cell we could
  * not read; the daemon treats it conservatively (like a product/plan gap). */
 export type PrdGapClass = 'impl-gap' | 'intended-drift' | 'plan-gap' | 'unknown';
@@ -615,31 +591,90 @@ export interface UnalignedFrRow {
   gapClass: PrdGapClass;
 }
 
+interface ParsedFrRow {
+  fr: string;
+  /** verdict is not ALIGNED and the row is not human-ACCEPTED. */
+  blocking: boolean;
+  gapClass: PrdGapClass;
+}
+
+const VERDICT_RE = /\b(ALIGNED|MISSING|PARTIAL|DIVERGED)\b/i;
+
+/**
+ * Parse one PRD-audit table row into its FR id, blocking status, and gap-class.
+ * Returns null for non-rows (no leading `|`) and rows with no `FR-<n>` id
+ * (headers, separators, prose legends).
+ *
+ * The verdict is read from the VERDICT CELL — the first `|`-delimited cell AFTER
+ * the FR cell that carries a verdict keyword — NOT from the row as a whole. The
+ * table is `| FR | Verdict | Gap-class | Evidence | Accepted? |`, and the
+ * Evidence cell routinely contains verdict words in prose (e.g. "404 for a
+ * missing record"). A whole-row scan mistook that "missing" for a MISSING
+ * verdict and falsely blocked an ALIGNED FR (observed live: FR-9 with evidence
+ * "find_kid_for_parent → 404 foreign/missing"). Scanning cells left-to-right the
+ * Verdict column precedes Evidence, so the first verdict-bearing post-FR cell is
+ * the real verdict; prose in later cells can't override it.
+ */
+function parseFrVerdictRow(line: string): ParsedFrRow | null {
+  if (!/^\s*\|/.test(line)) return null; // table rows only
+  const frCellIdx = line
+    .split('|')
+    .map((c) => c.trim())
+    .findIndex((c) => /\bFR-\d+[A-Za-z]?\b/i.test(c));
+  if (frCellIdx === -1) return null; // header/separator/legend — no FR id
+
+  const cells = line.split('|').map((c) => c.trim());
+  const frId = cells[frCellIdx].match(/\bFR-\d+[A-Za-z]?\b/i)![0].toUpperCase();
+
+  // Verdict = first verdict-bearing cell to the RIGHT of the FR cell, so neither
+  // the FR cell nor trailing Evidence prose can be mistaken for the verdict.
+  const verdictCell = cells.slice(frCellIdx + 1).find((c) => VERDICT_RE.test(c));
+  if (!verdictCell) return null; // no recognizable verdict → not a verdict row
+  const keyword = verdictCell.match(VERDICT_RE)![1].toUpperCase();
+
+  // A human-accepted divergence (ACCEPTED in the Accepted? column) never blocks.
+  const accepted = cells.some((c) => /\bACCEPTED\b/i.test(c));
+  const blocking = keyword !== 'ALIGNED' && !accepted;
+
+  // Gap-class is read from the cell that names one (the Gap-class column); order
+  // matters so a multi-word note can't be misread as impl-gap. A blocking row
+  // with no recognizable class cell is `unknown` (treated conservatively).
+  const gapCell = cells.find((c) => /\b(plan-gap|intended-drift|impl-gap)\b/i.test(c)) ?? '';
+  const gapClass: PrdGapClass = /\bplan-gap\b/i.test(gapCell)
+    ? 'plan-gap'
+    : /\bintended-drift\b/i.test(gapCell)
+      ? 'intended-drift'
+      : /\bimpl-gap\b/i.test(gapCell)
+        ? 'impl-gap'
+        : 'unknown';
+
+  return { fr: frId, blocking, gapClass };
+}
+
+/**
+ * Scan a PRD-audit report for functional-requirement verdict rows that are not
+ * ALIGNED and not human-ACCEPTED. Returns the FR identifier of every still-
+ * blocking row. Verdict is read per-cell (see {@link parseFrVerdictRow}).
+ */
+function findUnalignedFrRows(content: string): string[] {
+  const blocking: string[] = [];
+  for (const line of content.split('\n')) {
+    const row = parseFrVerdictRow(line);
+    if (row?.blocking) blocking.push(row.fr);
+  }
+  return blocking;
+}
+
 /**
  * Like {@link findUnalignedFrRows}, but also reads each blocking row's
- * gap-class cell. The prd-audit table carries a `Gap-class` column with
- * `impl-gap | intended-drift | n/a`; `plan-gap` is recognized defensively for
- * forward-compat (the auditor does not emit it today). A row whose class cannot
- * be read is reported as `unknown`.
+ * gap-class cell (`impl-gap | intended-drift | plan-gap`; `unknown` when the
+ * class cell can't be read). Used by the daemon to decide self-heal vs HALT.
  */
 function findUnalignedFrRowsWithClass(content: string): UnalignedFrRow[] {
   const rows: UnalignedFrRow[] = [];
   for (const line of content.split('\n')) {
-    if (!/^\s*\|/.test(line)) continue; // table rows only
-    const fr = line.match(/\bFR-\d+[A-Za-z]?\b/i);
-    if (!fr) continue; // skip header/separator/legend rows (no FR id)
-    if (!/\b(MISSING|PARTIAL|DIVERGED)\b/i.test(line)) continue;
-    if (/\bACCEPTED\b/i.test(line)) continue; // human-accepted divergence
-    // Order matters: `plan-gap` and `intended-drift` are checked before
-    // `impl-gap` so a multi-word note can't be misread as impl-gap.
-    const gapClass: PrdGapClass = /\bplan-gap\b/i.test(line)
-      ? 'plan-gap'
-      : /\bintended-drift\b/i.test(line)
-        ? 'intended-drift'
-        : /\bimpl-gap\b/i.test(line)
-          ? 'impl-gap'
-          : 'unknown';
-    rows.push({ fr: fr[0].toUpperCase(), gapClass });
+    const row = parseFrVerdictRow(line);
+    if (row?.blocking) rows.push({ fr: row.fr, gapClass: row.gapClass });
   }
   return rows;
 }
