@@ -14,7 +14,7 @@
 
 - [ ] Unit tests pass
 - [ ] Integration/acceptance tests pass
-- [ ] Manual testing complete (`.docs/manual-test-results.md`)
+- [ ] Manual testing complete (`.pipeline/manual-test-results.md`)
 
 ## Review Checklist
 

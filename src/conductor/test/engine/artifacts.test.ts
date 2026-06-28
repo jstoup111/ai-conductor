@@ -47,7 +47,7 @@ describe('engine/artifacts', () => {
     });
 
     it('declares manual_test results file', () => {
-      expect(STEP_ARTIFACT_GLOBS.manual_test).toEqual(['.docs/manual-test-results.md']);
+      expect(STEP_ARTIFACT_GLOBS.manual_test).toEqual(['.pipeline/manual-test-results.md']);
     });
   });
 
@@ -274,7 +274,7 @@ describe('engine/artifacts', () => {
   });
 
   describe('checkStepCompletion: manual_test predicate', () => {
-    const RESULTS = '.docs/manual-test-results.md';
+    const RESULTS = '.pipeline/manual-test-results.md';
 
     it('fails when manual-test-results.md is missing', async () => {
       const result = await checkStepCompletion(dir, 'manual_test');
@@ -420,7 +420,7 @@ describe('engine/artifacts', () => {
     const header = '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|----|----|----|----|----|\n';
     async function writeAudit(body: string) {
       // sessionStartedAt=undefined below treats any mtime as fresh.
-      await createFile('.docs/audits/feat-prd-audit.md', '# PRD Audit\n\n' + header + body);
+      await createFile('.pipeline/prd-audit.md', '# PRD Audit\n\n' + header + body);
     }
 
     it('returns clean when there is no audit report', async () => {
@@ -480,7 +480,7 @@ describe('engine/artifacts', () => {
     it('ignores a stale report (mtime predates the session)', async () => {
       await writeAudit('| FR-2 | MISSING | impl-gap | x | no |\n');
       const past = new Date(2000, 0, 1);
-      await utimes(join(dir, '.docs/audits/feat-prd-audit.md'), past, past);
+      await utimes(join(dir, '.pipeline/prd-audit.md'), past, past);
       // Session started "now" → the 2000 file is stale and ignored.
       const c = await classifyPrdAuditGaps(dir, Date.now());
       expect(c.kind).toBe('clean');

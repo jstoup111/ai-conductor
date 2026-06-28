@@ -64,7 +64,8 @@ report key on.
 
 ### 4. Aggregate Report
 
-Write the audit to `.docs/audits/YYYY-MM-DD-<feature>-prd-audit.md`:
+Write the audit to `.pipeline/prd-audit.md` (run evidence — gitignored, stable
+filename, overwritten each run; NOT a committed design artifact):
 
 ```markdown
 # PRD Audit: <Feature Name>
@@ -139,7 +140,7 @@ echo "non-aligned FRs: 2, accepted divergences: 1, PRD amended: yes" > .pipeline
 - [ ] Every FR enumerated and traced to implementing code (or its absence)
 - [ ] One `prd-auditor` dispatch per FR with scoped context
 - [ ] Each FR has a verdict, gap-class, and file:line evidence
-- [ ] Report written to `.docs/audits/YYYY-MM-DD-<feature>-prd-audit.md` with the verdict table
+- [ ] Report written to `.pipeline/prd-audit.md` with the verdict table
 - [ ] Every blocking FR routed by gap-class (impl-gap → BUILD, intended-drift → DECIDE)
 - [ ] Loop continues until all FRs ALIGNED or human-ACCEPTED; no row self-accepted
 - [ ] 3-cycle rework budget enforced, then escalate to operator (no infinite loop)

@@ -303,8 +303,10 @@ logic of §10 (Recurring Review) and the ADR lifecycle of §7b.
   (`Supersedes: <old>`, old → `Status: SUPERSEDED`). **Never silently downgrade** an APPROVED ADR
   or auto-resolve the violation. After resolution, re-run the as-built gate.
 
-**Artifact:** write the result to
-`.docs/decisions/architecture-review-as-built-YYYY-MM-DD-<feature>.md`:
+**Artifact:** write the result to `.pipeline/architecture-review-as-built.md`
+(run evidence — gitignored, stable filename, overwritten each run; NOT a
+committed design artifact. Durable ADRs and the design-time architecture
+review remain in `.docs/decisions/`):
 
 ```markdown
 # As-Built Architecture Review: <Feature Name>
@@ -348,7 +350,7 @@ echo "verdict: BLOCKED, violated ADR-007" > .pipeline/review-required-architectu
       verdict ≠ clean APPROVED, or any ADR was drafted/superseded, or any
       High-impact risk was registered (skip only on truly clean APPROVED)
 - [ ] **As-built mode:** at SHIP, shipped code checked against APPROVED ADRs only (no new design)
-- [ ] **As-built mode:** verdict written to `.docs/decisions/architecture-review-as-built-*.md`
+- [ ] **As-built mode:** verdict written to `.pipeline/architecture-review-as-built.md`
 - [ ] **As-built mode:** BLOCKED on any APPROVED-ADR violation; resolved by code fix or
       human-approved superseding ADR (never silent downgrade)
 - [ ] **As-built mode:** `.pipeline/review-required-architecture-as-built` marker written when the

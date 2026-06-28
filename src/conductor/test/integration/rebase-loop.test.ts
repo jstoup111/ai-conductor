@@ -165,19 +165,19 @@ describe('integration/rebase-loop', () => {
       );
     } else if (step === 'manual_test') {
       await writeFile(
-        join(dir, '.docs/manual-test-results.md'),
+        join(dir, '.pipeline/manual-test-results.md'),
         '| Story | Result |\n|---|---|\n| foo | PASS |\n',
       );
     } else if (step === 'prd_audit') {
-      await mkdir(join(dir, '.docs/audits'), { recursive: true });
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
       await writeFile(
-        join(dir, '.docs/audits/add-foo-prd-audit.md'),
+        join(dir, '.pipeline/prd-audit.md'),
         '| FR | Verdict | Evidence |\n|---|---|---|\n| FR-1 | ALIGNED | foo.ts:1 |\n',
       );
     } else if (step === 'architecture_review_as_built') {
       await mkdir(join(dir, '.docs/decisions'), { recursive: true });
       await writeFile(
-        join(dir, '.docs/decisions/architecture-review-as-built-add-foo.md'),
+        join(dir, '.pipeline/architecture-review-as-built.md'),
         '# As-Built Review\n\nVerdict: APPROVED\n',
       );
     } else if (step === 'finish') {

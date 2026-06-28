@@ -10,6 +10,29 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ## [Unreleased]
 
+### Changed
+
+- **Run-specific SHIP artifacts moved from tracked `.docs/` to gitignored
+  `.pipeline/` with stable filenames.** `manual_test`, `prd_audit`, and
+  `architecture_review_as_built` now write their evidence to
+  `.pipeline/manual-test-results.md`, `.pipeline/prd-audit.md`, and
+  `.pipeline/architecture-review-as-built.md` (a stable name, overwritten each
+  run) instead of date-stamped files under `.docs/`. These are run evidence, not
+  durable design records, and tracking them caused three recurring failures:
+  (a) the daemon's finish-time rebase precheck HALTed on the dirty/uncommitted
+  tree they left behind (`cannot rebase: you have unstaged/uncommitted
+  changes`), parking the feature for a human — this halted features twice in
+  practice; (b) a new date-stamped file accumulated every run (artifact sprawl)
+  and conflicted on rebase/merge; (c) the as-built freshness gate retried every
+  run because the prior session's date-stamped file was always stale. Durable
+  design docs (PRDs, stories, plans, ADRs, and the design-time architecture
+  review) remain tracked in `.docs/`. Gate completion checks now read the new
+  `.pipeline/` paths; their on-disk freshness logic is unchanged. Old tracked
+  copies left in existing repos (`.docs/audits/*-prd-audit.md`,
+  `.docs/decisions/architecture-review-as-built-*.md`,
+  `.docs/manual-test-results.md`) are now inert and may be removed with
+  `git rm`.
+
 ### Fixed
 
 - **Daemon restart no longer re-dispatches (and clobbers) human-parked halted features.**

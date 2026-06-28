@@ -79,9 +79,9 @@ Check for these artifacts in order. The **first missing artifact** determines th
 | 9. architecture-review | Review exists in `.docs/decisions/` OR skipped (Small tier). **All ADRs must be APPROVED** (no DRAFT ADRs remaining). | Glob `.docs/decisions/architecture-review-*.md` or check state is "skipped". Grep `.docs/decisions/adr-*.md` for `Status: DRAFT` — if any DRAFT ADRs exist, this step is pending. |
 | 10. writing-system-tests | Acceptance specs exist OR skipped (Small tier) | Glob `spec/integration/*_spec.rb` or `spec/system/*_spec.rb`, or check state is "skipped" |
 | 11. build | Implementation tasks completed with passing tests | Check `.pipeline/task-status.json` or test suite passes. Pipeline evaluator satisfies code-review gate. |
-| 12. manual-test | Manual test results exist with no FAILs, OR auto-skipped (non-endpoint feature) | Glob `.docs/manual-test-results.md` — if file contains FAIL rows, step is pending. **Auto-skip:** If no stories reference HTTP endpoints, API routes, or user-facing UI, skip `/manual-test` and log reason. For internal components (services, background jobs, mailers, CI config), suggest Rails console or script-based smoke test instead. |
-| 13. prd-audit | Fresh PRD audit exists with every FR ALIGNED (or human-ACCEPTED) | Glob `.docs/audits/*-prd-audit.md` — if any verdict-table row carries an `FR-N` id with `MISSING`/`PARTIAL`/`DIVERGED` and is not `ACCEPTED`, step is pending. |
-| 14. architecture-review-as-built | Fresh as-built review exists with verdict not BLOCKED | Glob `.docs/decisions/architecture-review-as-built-*.md` — if the `Verdict:` line is `BLOCKED`, step is pending. |
+| 12. manual-test | Manual test results exist with no FAILs, OR auto-skipped (non-endpoint feature) | Glob `.pipeline/manual-test-results.md` — if file contains FAIL rows, step is pending. **Auto-skip:** If no stories reference HTTP endpoints, API routes, or user-facing UI, skip `/manual-test` and log reason. For internal components (services, background jobs, mailers, CI config), suggest Rails console or script-based smoke test instead. |
+| 13. prd-audit | Fresh PRD audit exists with every FR ALIGNED (or human-ACCEPTED) | Glob `.pipeline/prd-audit.md` — if any verdict-table row carries an `FR-N` id with `MISSING`/`PARTIAL`/`DIVERGED` and is not `ACCEPTED`, step is pending. |
+| 14. architecture-review-as-built | Fresh as-built review exists with verdict not BLOCKED | Glob `.pipeline/architecture-review-as-built.md` — if the `Verdict:` line is `BLOCKED`, step is pending. |
 | 15. retro | Retro report exists in `.docs/retros/` OR skipped (Small tier) | Glob `.docs/retros/*.md` or check state is "skipped" |
 | 16. finish | User chose a completion option | Step is "done" in state (`pr_url` saved if Option 2 chosen) |
 
@@ -230,7 +230,7 @@ Before suggesting the next step, verify that the previous step's **quality gates
 - Say: "Build incomplete — [N] tests failing / uncommitted changes exist."
 
 **After prd-audit (before suggesting architecture-review --as-built):**
-- Open the audit report (`.docs/audits/*-prd-audit.md`) and check the per-FR verdict table
+- Open the audit report (`.pipeline/prd-audit.md`) and check the per-FR verdict table
 - If any FR is non-ALIGNED and not human-ACCEPTED, BLOCK
 - Route by gap-class: `impl-gap` → back to BUILD to close the gap; `intended-drift` → back to
   DECIDE to amend the PRD, then re-audit
@@ -241,7 +241,7 @@ Before suggesting the next step, verify that the previous step's **quality gates
   autonomously. See `src/conductor/README.md` → "Daemon prd-audit routing".
 
 **After architecture-review --as-built (before suggesting retro):**
-- Open the as-built report (`.docs/decisions/architecture-review-as-built-*.md`)
+- Open the as-built report (`.pipeline/architecture-review-as-built.md`)
 - If the verdict is BLOCKED (shipped code violates an APPROVED ADR), BLOCK
 - Say: "As-built review blocked — code violates [ADR-N]. Fix the code or supersede the ADR (human-approved), then re-run `/architecture-review --as-built`."
 
