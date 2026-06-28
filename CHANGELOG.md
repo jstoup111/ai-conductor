@@ -10,6 +10,14 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ## [Unreleased]
 
+### Fixed
+
+- **Daemon re-dispatch of halted features no longer wipes BUILD/SHIP progress.** When a
+  feature halts mid-BUILD or mid-SHIP and is re-queued (after clearing `.pipeline/HALT`),
+  the daemon now preserves prior step statuses in `conduct-state.json` instead of
+  unconditionally overwriting it. The run resumes from the first pending step after the
+  halt point rather than restarting from `acceptance_specs`.
+
 ### Added
 
 - **Optional Serena semantic-code MCP integration.** `./bin/install` now offers an opt-in
