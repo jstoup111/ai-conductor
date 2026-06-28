@@ -177,6 +177,11 @@ const STALE_SWEEP_STEPS: ReadonlySet<StepName> = new Set<StepName>([
  * fails honestly as "missing" — not a false "stale"/reuse loop). This is the
  * deterministic complement to the skill-prose instruction to always rewrite.
  *
+ * The conductor calls this ONLY when re-entering a step that previously failed or
+ * was reworked (kicked back) — never on a clean first run, which has no prior
+ * attempt to reuse. This function is policy-free: it sweeps stale artifacts for
+ * the gated step whenever called.
+ *
  * No-op for non-sweep steps, when `sessionStartedAt` is undefined (legacy state
  * / opt-out — fail open), and for artifacts already fresh this session (e.g. a
  * within-session retry must not lose attempt 1's output). Returns the paths

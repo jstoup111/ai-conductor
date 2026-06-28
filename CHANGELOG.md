@@ -83,16 +83,19 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 ### Fixed
 
 - **Conductor now deletes a stale prior-session `.pipeline/` artifact before
-  re-running a gated re-review step — reuse-loop HALTs are impossible by
-  construction.** This is the deterministic complement to the as-built skill-prose
-  fix: instead of trusting an unattended agent to rewrite, the conductor sweeps
-  the stale artifact for `manual_test` / `prd_audit` / `architecture_review_as_built`
-  before dispatch (`sweepStaleReviewArtifacts`), so the agent cannot satisfy the
-  freshness gate by reusing a prior-session artifact it declined to rewrite — it
-  must regenerate it this session, or the gate fails honestly as "missing". Scoped
-  to those three SHIP re-review steps; `build`'s cumulative `task-status.json` is
-  never swept; no-op when `session_started_at` is unset (legacy → fail open) or the
-  artifact is already fresh this session (within-session retries keep their output).
+  re-running a FAILED or REWORKED gated re-review step — reuse-loop HALTs are
+  impossible by construction.** This is the deterministic complement to the
+  as-built skill-prose fix: instead of trusting an unattended agent to rewrite, the
+  conductor sweeps the stale artifact for `manual_test` / `prd_audit` /
+  `architecture_review_as_built` (`sweepStaleReviewArtifacts`), so the agent cannot
+  satisfy the freshness gate by reusing a prior-session artifact it declined to
+  rewrite — it must regenerate it this session, or the gate fails honestly as
+  "missing". The sweep fires **only when re-entering a step whose prior status was
+  `failed` or `stale` (kicked back)** — never on a clean first run, which has no
+  prior attempt to reuse. Scoped to those three SHIP re-review steps; `build`'s
+  cumulative `task-status.json` is never swept; no-op when `session_started_at` is
+  unset (legacy → fail open) or the artifact is already fresh this session
+  (within-session retries keep their output).
 
 - **As-built architecture review now (over)writes its artifact on every run, so
   a resumed feature stops HALTing on a "stale" gate.** `session_started_at` is
