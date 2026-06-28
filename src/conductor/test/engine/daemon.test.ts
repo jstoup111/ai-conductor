@@ -129,6 +129,53 @@ describe('engine/daemon — runDaemon', () => {
     expect(res.processed.filter((o) => o.status === 'halted')).toHaveLength(1);
   });
 
+  it('does NOT re-dispatch a feature halted by a PRIOR run (restart honors the durable HALT marker)', async () => {
+    // Simulates a daemon restart: `parked`/`started` start empty (in-memory only),
+    // the feature's merged spec is still in the backlog (halted ≠ processed), and
+    // its worktree already carries a `.pipeline/HALT` marker a human hasn't cleared.
+    // The daemon must consult the durable marker at discovery — not just for slugs
+    // it parked in THIS process — or it re-enters the conductor over the kept
+    // worktree and clobbers its persisted state.
+    const halted = new Set<string>(['f0']); // marker present from before this run
+    let dispatches = 0;
+    const deps: DaemonDeps = {
+      discoverBacklog: staticBacklog(items(1)),
+      isHalted: async (slug) => halted.has(slug),
+      runFeature: async (it) => {
+        dispatches++;
+        return { slug: it.slug, status: 'done' };
+      },
+      sleep: async () => {},
+    };
+    const res = await runDaemon(deps, { concurrency: 1, once: false, maxIdlePolls: 4 });
+    expect(dispatches).toBe(0); // never dispatched — the durable HALT marker is honored
+    expect(res.processed).toHaveLength(0);
+    expect(res.stoppedReason).toBe('idle_timeout');
+  });
+
+  it('re-dispatches a prior-run halted feature once a human clears its marker (post-restart resume)', async () => {
+    // Same restart setup as above, but the human clears `.pipeline/HALT` mid-run.
+    // The feature must then become eligible and resume to completion.
+    const halted = new Set<string>(['f0']); // parked by a prior run
+    let dispatches = 0;
+    let slept = 0;
+    const deps: DaemonDeps = {
+      discoverBacklog: staticBacklog(items(1)),
+      isHalted: async (slug) => halted.has(slug),
+      runFeature: async (it) => {
+        dispatches++;
+        return { slug: it.slug, status: 'done' };
+      },
+      sleep: async () => {
+        slept++;
+        if (slept === 2) halted.delete('f0'); // human removes the marker
+      },
+    };
+    const res = await runDaemon(deps, { concurrency: 1, once: false, maxIdlePolls: 6 });
+    expect(dispatches).toBe(1); // dispatched exactly once, after the clear
+    expect(res.processed.filter((o) => o.slug === 'f0' && o.status === 'done')).toHaveLength(1);
+  });
+
   it('re-dispatches a halted feature after its HALT marker is cleared', async () => {
     const halted = new Set<string>();
     let dispatches = 0;
