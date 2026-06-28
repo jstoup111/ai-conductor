@@ -223,9 +223,50 @@ and opening a PR on finish:
 - `engine/daemon-deps.ts` — concrete git/fs primitives (worktree add/remove, spec
   materialization into the worktree, `.pipeline/DONE`/`HALT` outcome read).
 - `engine/worktree-prepare.ts` — writes `WORKTREE_NAMESPACE` + runs the project's `bin/setup` (see below).
+- `engine/daemon-dashboard.ts`, `engine/daemon-sha.ts`, `engine/daemon-rekick.ts` —
+  halt-reconciliation: startup dashboard, base-SHA tracking, main-advance re-kick (below).
 
 The daemon consumes specs — it never authors them. `--continuous` idle-polls for new
 eligible features, bounded by the ceilings.
+
+#### Halt-reconciliation: startup dashboard + main-advance re-kick (ADR-013)
+
+PR #109 made the durable `.pipeline/HALT` marker authoritative at discovery, so a parked
+feature stays parked across restarts until a human clears it. Halt-reconciliation adds two
+things on top of that, without a parallel dispatch path:
+
+- **Startup inherited-state dashboard (`daemon-dashboard.ts`).** Before any dispatch, the
+  daemon scans `.worktrees/*/` (`.pipeline/HALT`, `conduct-state.json`) and the
+  `.daemon/processed/` ledger and prints one grouped dashboard to **both** stdout and
+  `daemon.log` — four groups with precedence **HALTED > PROCESSED > IN-PROGRESS > ELIGIBLE**:
+  HALTED (slug + first line of the HALT reason), IN-PROGRESS (slug + last meaningful step
+  from `conduct-state`), ELIGIBLE (build-ready slugs this scan that are neither halted nor
+  processed), PROCESSED (count). Best-effort: an empty HALT → reason `unknown`, a malformed
+  `conduct-state` → step `unknown`, a per-worktree fs error is skipped — the scan never
+  aborts startup.
+
+- **Base-SHA tracking + re-kick (`daemon-sha.ts`, `daemon-rekick.ts`).** The daemon
+  `git rev-parse`s the discovery ref (`resolveDiscoveryRef` — `origin/<default>` or the local
+  base, never a hardcoded branch) and persists the last-seen value to **`.daemon/last-base-sha`**
+  (empty / garbage / non-40-hex / unreadable → treated as **absent**, never a spurious
+  advance). On a **genuine base-SHA advance** — observed live on an idle refresh, or at
+  startup versus the persisted value (a base that moved while the daemon was **down**) — it
+  runs a **re-kick sweep** over every halted worktree: log the reason → if a 9.0 rebase is
+  paused, `git rebase --abort` (a **failed** abort leaves the marker intact, no half-clear) →
+  rename `.pipeline/HALT` → **`.pipeline/HALT.cleared`** (reason preserved) → remove
+  `.pipeline/HALT` → drop a **`.pipeline/REKICK`** sentinel. The sweep issues **no dispatch**;
+  clearing the marker lets PR #109's un-park path re-dispatch the feature on the next poll. A
+  per-feature **last-rekick SHA** bounds it (a same-SHA re-halt is not re-kicked again; only a
+  further advance re-kicks). **First run** (no persisted SHA) initializes without re-kicking,
+  and a plain **restart with no advance** honors every marker exactly as PR #109 does.
+
+- **Resume rebase-first (FR-12).** On re-dispatch, `runConductorInWorktree` sees the
+  `.pipeline/REKICK` sentinel and runs 9.0's **rebase-onto-latest first** (reusing
+  `engine/rebase.ts`), then deletes the sentinel (one-shot), so the pending gate (e.g.
+  `prd_audit`) re-verifies against the **advanced base** rather than the stale one. If the
+  rebase re-conflicts on the new base, the feature re-parks via 9.0's existing HALT path
+  (bounded by the same last-rekick SHA); residual gaps route through the normal gate loop /
+  `/remediate`, not the re-kick code.
 
 #### Worktree preparation (`WORKTREE_NAMESPACE` + `bin/setup`)
 

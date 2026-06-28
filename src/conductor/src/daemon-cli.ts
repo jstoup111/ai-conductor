@@ -22,7 +22,24 @@ import {
   markWarned,
   makeFeatureRunnerDeps,
 } from './engine/daemon-deps.js';
-import { readState, writeState } from './engine/state.js';
+import { readState, writeState, getStepStatus } from './engine/state.js';
+import { makeGitRunner } from './engine/rebase.js';
+import {
+  readBaseSha,
+  readPersistedBaseSha,
+  writePersistedBaseSha,
+} from './engine/daemon-sha.js';
+import { scanInheritedState, renderDashboard } from './engine/daemon-dashboard.js';
+import {
+  rekickSweep,
+  resumeRebaseFirst,
+  listHaltedWorktrees,
+  readHaltReason,
+  hasRebaseInProgress,
+  abortRebase,
+  clearMarker,
+  type RekickSweepDeps,
+} from './engine/daemon-rekick.js';
 
 export interface DaemonModeOptions {
   projectRoot: string;
@@ -202,6 +219,22 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       // the narrative to the engineer store instead of the repo's .docs/retros/.
       daemon: true,
     });
+
+    // FR-12 (ADR-013): a re-kick dropped a `.pipeline/REKICK` sentinel. Integrate
+    // the advanced base FIRST — run 9.0's rebase-onto-latest BEFORE the conductor
+    // resumes the pending gate, so a gate halt (e.g. prd-audit) re-verifies on the
+    // new base instead of the stale one. One-shot (sentinel consumed). A
+    // re-conflict re-parks via 9.0's existing HALT path — skip `conductor.run()`.
+    const ranManualTest = getStepStatus(baseState, 'manual_test') !== 'skipped';
+    const resume = await resumeRebaseFirst({
+      worktreePath: wt.path,
+      localBase: baseBranch,
+      events,
+      ranManualTest,
+      log,
+    });
+    if (resume === 'halted') return; // re-parked: HALT re-written, do not resume the gate
+
     await conductor.run();
   };
 
@@ -232,26 +265,66 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   log(
     `scanning backlog (concurrency ${opts.concurrency}${continuous ? ', continuous' : ''})…`,
   );
+
+  // Shared backlog discovery — used both by the pool and the startup dashboard's
+  // ELIGIBLE group, so they stay in lockstep. `refresh` fetches origin only when
+  // the pool is fully idle (see resolveDiscoveryRef).
+  const discoverTick = async ({ refresh }: { refresh: boolean }): Promise<BacklogItem[]> => {
+    const treeRef = await resolveDiscoveryRef(projectRoot, baseBranch, log, { refresh });
+    return discoverBacklog(projectRoot, (slug) => isProcessed(projectRoot, slug), log, {
+      baseBranch: treeRef,
+      // Surface a merged-but-unbuildable spec ONCE (per .daemon/warned/<slug>)
+      // instead of re-logging the identical skip on every poll.
+      hasWarned: (slug) => hasWarned(projectRoot, slug),
+      markWarned: (slug) => markWarned(projectRoot, slug),
+    });
+  };
+
+  const processedDir = join(projectRoot, '.daemon/processed');
+
+  // ADR-013 re-kick sweep: per-feature last-rekick SHA (FR-9) persists across the
+  // startup + live sweeps of ONE run. Real fs/git primitives; clearing a marker
+  // is the ONLY side effect — re-dispatch flows through PR #109's un-park path.
+  const lastRekickSha = new Map<string, string>();
+  const rekickDeps: RekickSweepDeps = {
+    listHaltedWorktrees: () => listHaltedWorktrees(worktreeBase),
+    readHaltReason: (slug) => readHaltReason(worktreeBase, slug),
+    hasRebaseInProgress: (slug) => hasRebaseInProgress(join(worktreeBase, slug)),
+    abortRebase: (slug) => abortRebase(join(worktreeBase, slug)),
+    clearMarker: (slug) => clearMarker(join(worktreeBase, slug)),
+    lastRekickSha,
+    log,
+  };
+
   const result = await runDaemon(
     {
-      discoverBacklog: async ({ refresh }) => {
-        // Refresh from origin ONLY between work (the pool sets refresh=true only
-        // when fully idle with no local work left): fetch origin/<default> so newly
-        // merged specs become visible. While builds run (refresh=false) there is NO
-        // fetch, so an in-flight build is never re-based onto specs that landed mid-run.
-        // resolveDiscoveryRef degrades gracefully (offline, no origin, no HEAD).
-        const treeRef = await resolveDiscoveryRef(projectRoot, baseBranch, log, { refresh });
-        return discoverBacklog(projectRoot, (slug) => isProcessed(projectRoot, slug), log, {
-          baseBranch: treeRef,
-          // Surface a merged-but-unbuildable spec ONCE (per .daemon/warned/<slug>)
-          // instead of re-logging the identical skip on every poll.
-          hasWarned: (slug) => hasWarned(projectRoot, slug),
-          markWarned: (slug) => markWarned(projectRoot, slug),
-        });
-      },
+      discoverBacklog: discoverTick,
       isHalted: (slug) => isHalted(worktreeBase, slug),
       runFeature,
       log,
+      // ── Halt-reconciliation (ADR-013) real-I/O hooks ──────────────────────
+      // FR-1: scan inherited state and render the dashboard to both sinks
+      // (console + daemon.log via `log`) before any dispatch.
+      renderStartupDashboard: async () => {
+        const state = await scanInheritedState({
+          worktreeBase,
+          processedDir,
+          discover: () => discoverTick({ refresh: true }),
+          log,
+        });
+        log(`\n${renderDashboard(state)}`);
+      },
+      // FR-4: resolve the base-branch tip SHA from the SAME discovery ref the
+      // backlog uses (origin/<default> or local), never a hardcoded branch.
+      resolveBaseSha: async ({ refresh }) => {
+        const ref = await resolveDiscoveryRef(projectRoot, baseBranch, log, { refresh });
+        return readBaseSha(makeGitRunner(projectRoot), ref);
+      },
+      readPersistedBaseSha: () => readPersistedBaseSha(projectRoot),
+      writePersistedBaseSha: (sha) => writePersistedBaseSha(projectRoot, sha, log),
+      rekickSweep: async (sha) => {
+        await rekickSweep(rekickDeps, sha);
+      },
     },
     {
       concurrency: opts.concurrency,
