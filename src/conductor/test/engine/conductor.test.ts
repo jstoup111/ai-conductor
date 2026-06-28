@@ -428,19 +428,19 @@ describe('engine/conductor', () => {
             );
           } else if (step === 'manual_test') {
             await writeFile(
-              join(dir, '.docs/manual-test-results.md'),
+              join(dir, '.pipeline/manual-test-results.md'),
               '# Results\n\n| Story | Result |\n|--|--|\n| s | PASS |\n',
             ).catch(async () => {
               await mkdir(join(dir, '.docs'), { recursive: true });
               await writeFile(
-                join(dir, '.docs/manual-test-results.md'),
+                join(dir, '.pipeline/manual-test-results.md'),
                 '# Results\n\n| Story | Result |\n|--|--|\n| s | PASS |\n',
               );
             });
           } else if (step === 'prd_audit') {
-            await mkdir(join(dir, '.docs/audits'), { recursive: true });
+            await mkdir(join(dir, '.pipeline'), { recursive: true });
             await writeFile(
-              join(dir, '.docs/audits/feat-prd-audit.md'),
+              join(dir, '.pipeline/prd-audit.md'),
               '# PRD Audit\n\n' + AUDIT_HEADER + auditBody,
             );
           }
@@ -2766,19 +2766,19 @@ describe('engine/conductor', () => {
           // session_started_at (set on Conductor.run() entry).
           if (step === 'manual_test') {
             await _wf(
-              join(dir, '.docs/manual-test-results.md'),
+              join(dir, '.pipeline/manual-test-results.md'),
               '# Results\n\n| Story | Result |\n|---|---|\n| story-a | PASS |\n',
             );
           } else if (step === 'prd_audit') {
-            await _mkdir(join(dir, '.docs/audits'), { recursive: true });
+            await _mkdir(join(dir, '.pipeline'), { recursive: true });
             await _wf(
-              join(dir, '.docs/audits/add-foo-prd-audit.md'),
+              join(dir, '.pipeline/prd-audit.md'),
               '# PRD Audit\n\n| FR | Verdict | Evidence |\n|---|---|---|\n| FR-1 | ALIGNED | foo.ts:1 |\n',
             );
           } else if (step === 'architecture_review_as_built') {
             await _mkdir(join(dir, '.docs/decisions'), { recursive: true });
             await _wf(
-              join(dir, '.docs/decisions/architecture-review-as-built-add-foo.md'),
+              join(dir, '.pipeline/architecture-review-as-built.md'),
               '# As-Built Review\n\nVerdict: APPROVED\n',
             );
           } else if (step === 'retro') {

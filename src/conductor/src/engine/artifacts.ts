@@ -61,12 +61,15 @@ export const STEP_ARTIFACT_GLOBS: Record<StepName, string[]> = {
     '*.spec.tsx',
   ],
   build: ['.pipeline/task-status.json'],
-  manual_test: ['.docs/manual-test-results.md'],
+  // Run evidence (gitignored, stable filename, overwritten each run) — NOT
+  // committed. These are regenerated every run; tracking them caused date-stamp
+  // sprawl, rebase/merge conflicts, and dirty-tree HALTs at the finish-time
+  // rebase. `.pipeline/` is already gitignored in consumer repos, so the gate
+  // still finds them on disk while git never sees them.
+  manual_test: ['.pipeline/manual-test-results.md'],
   // SHIP-tail compliance gates (see CUSTOM_COMPLETION_PREDICATES below).
-  prd_audit: ['.docs/audits/*-prd-audit.md'],
-  architecture_review_as_built: [
-    '.docs/decisions/architecture-review-as-built-*.md',
-  ],
+  prd_audit: ['.pipeline/prd-audit.md'],
+  architecture_review_as_built: ['.pipeline/architecture-review-as-built.md'],
   retro: ['.docs/retros/*.md'],
   // Engine-native; its verdict is computed from git state, not a file artifact.
   rebase: [],
@@ -235,31 +238,32 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     return { done: true };
   },
 
-  // Manual-test passes only when .docs/manual-test-results.md exists, has
+  // Manual-test passes only when .pipeline/manual-test-results.md exists, has
   // no FAIL rows, and was written this session. Previously the step had no
   // gate at all (STEP_ARTIFACT_GLOBS['manual_test'] = []) — any clean REPL
-  // exit marked it done with zero proof of work.
+  // exit marked it done with zero proof of work. The results file is run
+  // evidence (gitignored) — it is NOT a committed design artifact.
   manual_test: async (dir, ctx): Promise<CompletionResult> => {
-    const file = join(dir, '.docs/manual-test-results.md');
+    const file = join(dir, '.pipeline/manual-test-results.md');
     let content: string;
     try {
       content = await readFile(file, 'utf-8');
     } catch {
       return {
         done: false,
-        reason: '.docs/manual-test-results.md is missing — the manual-test skill must record per-story PASS/FAIL results before exiting',
+        reason: '.pipeline/manual-test-results.md is missing — the manual-test skill must record per-story PASS/FAIL results before exiting',
       };
     }
     if (/\|\s*FAIL/i.test(content)) {
       return {
         done: false,
-        reason: '.docs/manual-test-results.md contains FAIL rows — fix the bugs and re-run manual-test',
+        reason: '.pipeline/manual-test-results.md contains FAIL rows — fix the bugs and re-run manual-test',
       };
     }
     if (!(await fileIsFreshSinceSession(file, ctx.sessionStartedAt))) {
       return {
         done: false,
-        reason: '.docs/manual-test-results.md exists but is stale (mtime predates this conductor session); manual-test must re-run for the current feature',
+        reason: '.pipeline/manual-test-results.md exists but is stale (mtime predates this conductor session); manual-test must re-run for the current feature',
       };
     }
     return { done: true };
@@ -277,7 +281,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     if (files.length === 0) {
       return {
         done: false,
-        reason: 'no .docs/audits/*-prd-audit.md present — the prd-audit skill must record a per-FR verdict table',
+        reason: 'no .pipeline/prd-audit.md present — the prd-audit skill must record a per-FR verdict table',
       };
     }
     // Only consider reports written in this session; a stale audit left in the
@@ -315,7 +319,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     if (files.length === 0) {
       return {
         done: false,
-        reason: 'no .docs/decisions/architecture-review-as-built-*.md present — the as-built review must record a verdict',
+        reason: 'no .pipeline/architecture-review-as-built.md present — the as-built review must record a verdict',
       };
     }
     const fresh: string[] = [];

@@ -965,7 +965,7 @@ else:
 }
 
 check_manual_test() {
-  local results="${PROJECT_DIR}/.docs/manual-test-results.md"
+  local results="${PROJECT_DIR}/.pipeline/manual-test-results.md"
   [ -f "$results" ] || return 1
   # Fail if any FAIL results remain
   if grep -qi "| FAIL" "$results" 2>/dev/null; then
@@ -1989,7 +1989,7 @@ run_manual_test() {
   # Automated — harness checkpoint after completion provides user review opportunity
   run_claude "Run the /manual-test skill. Start the application server, then test every story's acceptance criteria using curl (API) or browser (full-stack).
 
-Record results in .docs/manual-test-results.md. For any FAILs, write a failing test (RED), fix it (GREEN), commit, and re-test until all stories pass. Do NOT proceed with bugs remaining."
+Record results in .pipeline/manual-test-results.md. For any FAILs, write a failing test (RED), fix it (GREEN), commit, and re-test until all stories pass. Do NOT proceed with bugs remaining."
 
   check_manual_test && { ok "Manual tests all pass"; save_state "manual_test" "done"; return 0; }
   fail "Manual test has FAILs — bugs need fixing"; save_state "manual_test" "failed"; return 1
@@ -2155,7 +2155,7 @@ if ip > 0:
       [ -n "$result" ] && echo "$result"
       ;;
     manual_test)
-      local f="${PROJECT_DIR}/.docs/manual-test-results.md"
+      local f="${PROJECT_DIR}/.pipeline/manual-test-results.md"
       if [ -f "$f" ]; then
         local pass fail
         pass=$(grep -ci "| PASS" "$f" 2>/dev/null || echo 0)
@@ -2593,7 +2593,7 @@ recover() {
     build)
       recover_prompt="Continue the build. Check .pipeline/task-status.json for progress, run /tdd on the next incomplete task." ;;
     manual_test)
-      recover_prompt="Run /manual-test. Test every story's acceptance criteria. Record results in .docs/manual-test-results.md." ;;
+      recover_prompt="Run /manual-test. Test every story's acceptance criteria. Record results in .pipeline/manual-test-results.md." ;;
     retro)
       recover_prompt="Run /retro. Both parts: harness + application. Write to .docs/retros/." ;;
     finish)

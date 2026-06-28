@@ -34,7 +34,7 @@ describe('engine/complete-verifier', () => {
     });
     await mkdir(join(dir, '.docs/retros'), { recursive: true });
     await writeFile(
-      join(dir, '.docs/manual-test-results.md'),
+      join(dir, '.pipeline/manual-test-results.md'),
       '| Story | Result |\n|---|---|\n| foo | PASS |\n',
     );
     await writeFile(join(dir, '.docs/retros/2026-05-01-add-foo.md'), '# Retro\n');
@@ -69,7 +69,7 @@ describe('engine/complete-verifier', () => {
     });
     await mkdir(join(dir, '.docs/retros'), { recursive: true });
     await writeFile(
-      join(dir, '.docs/manual-test-results.md'),
+      join(dir, '.pipeline/manual-test-results.md'),
       '| Story | Result |\n|---|---|\n| foo | FAIL |\n',
     );
     await writeFile(join(dir, '.docs/retros/2026-05-01-add-foo.md'), '# Retro\n');
@@ -90,7 +90,7 @@ describe('engine/complete-verifier', () => {
     });
     await mkdir(join(dir, '.docs/retros'), { recursive: true });
     await writeFile(
-      join(dir, '.docs/manual-test-results.md'),
+      join(dir, '.pipeline/manual-test-results.md'),
       '| Story | Result |\n|---|---|\n| foo | PASS |\n',
     );
     await writeFile(join(dir, '.docs/retros/2026-05-01-add-foo.md'), '# Retro\n');

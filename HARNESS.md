@@ -28,7 +28,7 @@ UNDERSTAND → DECIDE → BUILD → ✓checkpoint → SHIP(manual-test) → ✓c
 | DECIDE | brainstorm (PRD) → stories → conflict-check → architecture-diagram → architecture-review → plan | .docs/specs/, .docs/stories/, .docs/conflicts/, .docs/architecture/, .docs/plans/ |
 | BUILD | writing-system-tests → tdd/pipeline, debugging, code-review | Acceptance specs, code, unit tests, .pipeline/ |
 | CHECKPOINT | User validation after build | Harness pause — continue, go back, or quit |
-| SHIP | manual-test, prd-audit, architecture-review --as-built, retro, finish/pr | .docs/audits/, .docs/decisions/architecture-review-as-built-*.md, .docs/retros/ |
+| SHIP | manual-test, prd-audit, architecture-review --as-built, retro, finish/pr | .pipeline/manual-test-results.md, .pipeline/prd-audit.md, .pipeline/architecture-review-as-built.md (run evidence, gitignored), .docs/retros/ |
 | CHECKPOINT | User validation after manual-test | Harness pause — continue, go back, or quit |
 
 **Checkpoints** are harness-level pauses (no Claude session). The user reviews output and
