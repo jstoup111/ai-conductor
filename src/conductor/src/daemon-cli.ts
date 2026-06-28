@@ -152,9 +152,10 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     await rm(join(pipelineDir, 'session-created'), { force: true });
     await rm(join(pipelineDir, 'conduct-session-id'), { force: true });
 
-    // Pre-seed: specs are authored; start the loop at BUILD.
-    // On re-dispatch of a halted feature, preserve any BUILD/SHIP progress
-    // already recorded in the existing state file.
+    // Pre-seed: specs are authored, so DECIDE is stamped done and the loop
+    // resumes at BUILD for a fresh feature. On re-dispatch of a halted feature,
+    // preserve any BUILD/SHIP progress already recorded in the existing state
+    // file so the resume picks up from the real next step (see `resume: true`).
     const stateFilePath = join(pipelineDir, 'conduct-state.json');
     const existingResult = await readState(stateFilePath);
     const baseState: ConductState =
@@ -188,7 +189,15 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       projectRoot: wt.path,
       verifyArtifacts: true,
       freshContextPerStep: true,
-      fromStep: 'acceptance_specs',
+      // Resume from the first unsatisfied step rather than hardcoding the entry
+      // point. With the DECIDE steps stamped done (PRESEEDED_DONE above), a
+      // FRESH feature resumes at `acceptance_specs` — the first pending step —
+      // exactly as before. A RE-DISPATCH of a feature with recorded BUILD/SHIP
+      // progress resumes at its real next step (e.g. prd_audit / finish) instead
+      // of re-entering at acceptance_specs every cycle. (`fromStep` forced
+      // acceptance_specs and, being `explicitlyTargeted`, re-ran it on every
+      // resume.)
+      resume: true,
       // Phase 9.1: daemon runs skip the in-loop retro; the emission step writes
       // the narrative to the engineer store instead of the repo's .docs/retros/.
       daemon: true,

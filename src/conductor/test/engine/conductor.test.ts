@@ -353,6 +353,64 @@ describe('engine/conductor', () => {
       expect(log[0]).toBe('reset'); // first action is a reset, before any dispatch
       expect(log.find((e) => e.startsWith('run:'))).toBe('run:acceptance_specs');
     });
+
+    it('daemon resume: a FRESH feature (DECIDE pre-seeded done) starts at acceptance_specs', async () => {
+      // The daemon stamps DECIDE done and uses `resume: true` (not a hardcoded
+      // fromStep). With only DECIDE done, findResumeIndex returns the first
+      // pending step — acceptance_specs — so a fresh feature still begins BUILD.
+      const seed = (await readState(statePath)).ok
+        ? (await readState(statePath)).value
+        : ({} as ConductState);
+      (seed as Record<string, unknown>).complexity_tier = 'M';
+      for (const s of ALL_STEPS) {
+        if (s.name === 'acceptance_specs') break;
+        (seed as Record<string, unknown>)[s.name] = 'done';
+      }
+      await writeState(statePath, seed);
+
+      const { runner, log } = trackingRunner();
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        freshContextPerStep: true,
+        resume: true,
+      });
+
+      await conductor.run();
+
+      expect(log.find((e) => e.startsWith('run:'))).toBe('run:acceptance_specs');
+    });
+
+    it('daemon resume: a feature with BUILD/SHIP progress resumes at its next step, not acceptance_specs', async () => {
+      // Regression: the daemon used `fromStep: 'acceptance_specs'`, which re-ran
+      // acceptance_specs on EVERY re-dispatch even when the feature was far past
+      // BUILD. With `resume: true`, a re-dispatch picks up at the real next
+      // pending step (here prd_audit), never re-entering at acceptance_specs.
+      const seed = (await readState(statePath)).ok
+        ? (await readState(statePath)).value
+        : ({} as ConductState);
+      (seed as Record<string, unknown>).complexity_tier = 'M';
+      for (const s of ALL_STEPS) {
+        if (s.name === 'prd_audit') break;
+        (seed as Record<string, unknown>)[s.name] = 'done';
+      }
+      await writeState(statePath, seed);
+
+      const { runner, log } = trackingRunner();
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        freshContextPerStep: true,
+        resume: true,
+      });
+
+      await conductor.run();
+
+      expect(log.find((e) => e.startsWith('run:'))).toBe('run:prd_audit');
+      expect(log).not.toContain('run:acceptance_specs');
+    });
   });
 
   it('an unexpected throw inside the loop HALTs (state flushed) instead of crashing', async () => {

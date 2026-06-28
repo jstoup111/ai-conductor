@@ -12,6 +12,15 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- **Daemon no longer re-enters every resumed feature at `acceptance_specs`.** The
+  daemon constructed the conductor with a hardcoded `fromStep: 'acceptance_specs'`,
+  which both set the loop's start index to the first BUILD step and marked it
+  `explicitlyTargeted` — so `acceptance_specs` was re-run on every re-dispatch,
+  even when the feature was already at `prd_audit` / `finish`. The daemon now
+  passes `resume: true`: with the DECIDE steps pre-seeded done, a fresh feature
+  still resumes at `acceptance_specs` (its first pending step), while a
+  re-dispatched feature with recorded BUILD/SHIP progress resumes at its real next
+  step instead of needlessly re-entering BUILD from the top each cycle.
 - **Daemon restart no longer re-dispatches (and clobbers) human-parked halted features.**
   The daemon tracked parked/halted features only in process memory and recorded only `done`
   features in the durable `.daemon/processed/` ledger. After a restart that memory was empty,
