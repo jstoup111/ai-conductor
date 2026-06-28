@@ -96,4 +96,53 @@ describe('engine/daemon-runner — makeRunFeature', () => {
     expect(out.status).toBe('error');
     expect(rec.teardownKeep).toBeUndefined(); // never created → nothing to tear down
   });
+
+  describe('preflight (opt-in infra hook)', () => {
+    function depsWithOrder(
+      order: string[],
+      opts: { preflightThrows?: boolean } = {},
+      rec: { teardownKeep?: boolean } = {},
+    ): FeatureRunnerDeps {
+      const base = deps({ done: true, halted: false, prUrl: 'http://pr/1' }, rec);
+      return {
+        ...base,
+        materializeSpecs: async () => {
+          order.push('materialize');
+        },
+        preflight: async () => {
+          order.push('preflight');
+          if (opts.preflightThrows) throw new Error('pg_isready timed out');
+        },
+        runConductor: async () => {
+          order.push('runConductor');
+        },
+      };
+    }
+
+    it('runs preflight after materializeSpecs and before runConductor', async () => {
+      const order: string[] = [];
+      const run = makeRunFeature(depsWithOrder(order));
+      await run(ITEM);
+      expect(order).toEqual(['materialize', 'preflight', 'runConductor']);
+    });
+
+    it('a preflight failure aborts before the build and keeps the worktree', async () => {
+      const order: string[] = [];
+      const rec: { teardownKeep?: boolean } = {};
+      const run = makeRunFeature(depsWithOrder(order, { preflightThrows: true }, rec));
+      const out = await run(ITEM);
+      expect(out.status).toBe('error');
+      expect(out.reason).toMatch(/pg_isready timed out/);
+      expect(order).toEqual(['materialize', 'preflight']); // runConductor never reached
+      expect(rec.teardownKeep).toBe(true); // worktree kept for inspection
+    });
+
+    it('a deps object without preflight builds normally (backward compatible)', async () => {
+      // The existing deps() helper ships no preflight — the feature must still
+      // build, proving the hook is genuinely opt-in.
+      const run = makeRunFeature(deps({ done: true, halted: false, prUrl: 'http://pr/1' }));
+      const out = await run(ITEM);
+      expect(out.status).toBe('done');
+    });
+  });
 });

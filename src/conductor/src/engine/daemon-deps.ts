@@ -8,6 +8,7 @@ import type {
   FeatureWorktree,
   WorktreeOutcome,
 } from './daemon-runner.js';
+import { runInfraPreflight } from './infra-preflight.js';
 
 export interface RealDepsConfig {
   /** The main checkout the daemon runs from. */
@@ -78,6 +79,11 @@ export function makeFeatureRunnerDeps(cfg: RealDepsConfig): FeatureRunnerDeps {
         /* nothing to commit (already tracked) — fine */
       });
     },
+
+    // Opt-in infra bring-up: runs the project's `bin/daemon-preflight` in the
+    // worktree if present (no-op otherwise). Keeps the daemon stack-agnostic
+    // while letting each project supply its own shared/namespaced infra setup.
+    preflight: (wt) => runInfraPreflight(wt.path, cfg.log),
 
     runConductor: (wt, item) => cfg.runConductorInWorktree(wt, item),
 

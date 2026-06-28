@@ -33,6 +33,15 @@ export interface FeatureRunnerDeps {
   /** Copy/commit the feature's stories+plan into the worktree (materialization)
    *  so the loop's inputs physically exist there, not just in the main checkout. */
   materializeSpecs: (worktree: FeatureWorktree, item: BacklogItem) => Promise<void>;
+  /**
+   * Optional, opt-in infrastructure bring-up run INSIDE the worktree after
+   * materialization and BEFORE the build. Concretely runs the project's
+   * conventional `bin/daemon-preflight` (docker compose up, readiness wait,
+   * per-worktree `DATABASE_URL`/namespace), no-op when the project ships no such
+   * script. Absent on manual `/conduct` runs. A throw aborts the feature (the
+   * worktree is kept) rather than building against infra that failed to come up.
+   */
+  preflight?: (worktree: FeatureWorktree) => Promise<void>;
   /** Run the conductor's gate loop in the worktree to DONE/HALT (finish=open PR). */
   runConductor: (worktree: FeatureWorktree, item: BacklogItem) => Promise<void>;
   /** Read the loop outcome from the worktree's markers. */
@@ -78,6 +87,11 @@ export function makeRunFeature(
     try {
       worktree = await deps.createWorktree(item.slug);
       await deps.materializeSpecs(worktree, item);
+      // Opt-in infra bring-up before the build. A project that ships no
+      // `bin/daemon-preflight` makes this a no-op; a failure throws and is
+      // handled like any other primitive throw (worktree kept, feature errored)
+      // so we never build against infra that failed to come up.
+      if (deps.preflight) await deps.preflight(worktree);
       await deps.runConductor(worktree, item);
       const outcome = await deps.readOutcome(worktree);
 

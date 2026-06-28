@@ -222,9 +222,41 @@ and opening a PR on finish:
   signal (see below).
 - `engine/daemon-deps.ts` — concrete git/fs primitives (worktree add/remove, spec
   materialization into the worktree, `.pipeline/DONE`/`HALT` outcome read).
+- `engine/infra-preflight.ts` — opt-in, stack-agnostic **infra bring-up hook** (see below).
 
 The daemon consumes specs — it never authors them. `--continuous` idle-polls for new
 eligible features, bounded by the ceilings.
+
+#### Infra preflight (`bin/daemon-preflight`)
+
+The daemon is **infra-agnostic**: it knows nothing about Docker, Postgres, or Redis. But an
+autonomous worktree build still needs its services up and a database it won't collide with
+when two worktrees run concurrently. The bridge is a single convention:
+
+> After materializing specs and **before** building, the runner runs the project's
+> executable `bin/daemon-preflight` inside the worktree, if one exists. No script → no-op.
+
+`makeRunFeature` calls `deps.preflight` between `materializeSpecs` and `runConductor`; the
+concrete dep (`infra-preflight.ts`) runs `bin/daemon-preflight` with the **worktree as cwd**,
+so the script can derive a per-worktree namespace from `basename "$PWD"`. A typical script:
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+docker compose -f infra/docker-compose.yml up -d           # SHARED, idempotent
+until pg_isready -h localhost -p 5432 -q; do sleep 1; done  # readiness wait
+NS=$(basename "$PWD")                                       # per-worktree namespace
+cat > .env.local <<EOF
+DATABASE_URL=postgres://postgres:postgres@localhost:5432/app_${NS}
+REDIS_NAMESPACE=${NS}
+EOF
+```
+
+Failure discipline: a non-zero exit (or a present-but-non-executable script) **throws**, which
+`makeRunFeature` treats like any primitive throw — worktree kept, feature reported `error` —
+so the daemon never builds against infra that failed to come up. Projects that need no infra
+(a static site, a pure library) simply ship no script and are untouched. This is what lets one
+daemon serve **any** project setup, including consumer projects that use the harness.
 
 ### Daemon observability (`status` / `logs`)
 

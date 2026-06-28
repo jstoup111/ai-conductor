@@ -20,6 +20,18 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- **Opt-in daemon infra preflight hook (`bin/daemon-preflight`).** The daemon now runs a
+  project's executable `bin/daemon-preflight` inside each feature worktree after spec
+  materialization and **before** the build, if the script exists (no-op otherwise). This is a
+  stack-agnostic bridge: the daemon still knows nothing about Docker/Postgres/Redis, but a
+  project can bring up **shared, namespaced** infra (idempotent `docker compose up -d`,
+  readiness wait, per-worktree `DATABASE_URL`/namespace derived from `basename "$PWD"`) so two
+  worktrees build concurrently without colliding. A non-zero exit (or a present-but-non-executable
+  script) throws and the feature is kept/errored rather than built against broken infra — fixing
+  the class of daemon halts caused by project-specific infra setup that was never brought up.
+  New `engine/infra-preflight.ts`; wired via the optional `preflight` dep on `FeatureRunnerDeps`.
+  Documented in `src/conductor/README.md`.
+
 - **Optional Serena semantic-code MCP integration.** `./bin/install` now offers an opt-in
   install of [Serena](https://github.com/oraios/serena) (`oraios/serena`) when `uv` is
   present — prompted, not auto-forced, since it's a heavyweight LSP-backed toolkit. Once
