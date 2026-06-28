@@ -308,6 +308,16 @@ logic of §10 (Recurring Review) and the ADR lifecycle of §7b.
 committed design artifact. Durable ADRs and the design-time architecture
 review remain in `.docs/decisions/`):
 
+> **(Over)writing this file is mandatory on EVERY invocation — make it the final
+> action of this step.** Even if a prior run's artifact is already present and you
+> judge it still accurate (same HEAD, unchanged tree, identical verdict), do NOT
+> keep it as-is and do NOT skip the write. The conductor's gate checks the file's
+> mtime against the *current session*: a prior-session artifact you decline to
+> rewrite reads as **stale**, fails the gate, and HALTs the SHIP tail — and every
+> retry repeats the same reuse decision, so it never clears. Re-emit the full
+> verdict every run. The write is unconditional; it is never satisfied by reusing
+> an existing artifact, however complete that artifact seems.
+
 ```markdown
 # As-Built Architecture Review: <Feature Name>
 **Date:** YYYY-MM-DD

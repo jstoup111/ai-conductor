@@ -82,6 +82,18 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- **As-built architecture review now (over)writes its artifact on every run, so
+  a resumed feature stops HALTing on a "stale" gate.** `session_started_at` is
+  reset on every conductor (re)start, and the as-built completion gate checks the
+  artifact's mtime against it. The `architecture-review --as-built` skill said the
+  artifact is "overwritten each run" only descriptively, so in unattended mode the
+  agent reused a prior-session artifact it judged "more complete" and never
+  rewrote it — the gate then read it as stale, failed, and (after retries) HALTed
+  the SHIP tail. Observed live on honeydew after the feature resumed across the
+  remediate/prd-audit fixes. The skill now makes the write an unconditional,
+  final-action imperative that explicitly preempts the reuse rationalization and
+  names the stale-gate consequence. (`skills/architecture-review/SKILL.md` §12.)
+
 - **PRD-audit completion gate no longer false-blocks an ALIGNED FR when its
   Evidence prose contains a verdict word.** The gate's row parser scanned the
   whole table row for `MISSING`/`PARTIAL`/`DIVERGED`, so an ALIGNED row whose
