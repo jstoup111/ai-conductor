@@ -43,6 +43,8 @@ import {
   checkStepCompletion,
   CUSTOM_COMPLETION_PREDICATES,
   classifyPrdAuditGaps,
+  readRemediationPlan,
+  type RemediationGap,
 } from './artifacts.js';
 import { resolveStepConfig } from './resolved-config.js';
 import { selectNextGate } from './selector.js';
@@ -385,6 +387,10 @@ export class Conductor {
     // routed back to BUILD to self-heal. Bounded like MAX_KICKBACKS_PER_GATE so
     // an impl-gap the daemon can't actually close eventually halts for a human.
     let prdAuditSelfHeals = 0;
+    // Daemon-only: how many times the /remediate planner has routed a blocking
+    // prd-audit back to a target step. Bounded like prdAuditSelfHeals so a gap the
+    // planner can't actually close still halts for a human.
+    let remediationRounds = 0;
     // Retry hints queued for a step that will be (re)entered via a kickback.
     // A prd_audit impl-gap routes back to BUILD and MUST tell the BUILD agent
     // which FRs to close — otherwise BUILD was dispatched with no context, saw a
@@ -777,6 +783,74 @@ export class Conductor {
             // gap (intended-drift, or an unclassifiable blocking row) needs a
             // human DECIDE amendment the daemon can't run — halt for inspection.
             if (this.daemon && step.name === 'prd_audit') {
+              // Agentic remediation (preferred): dispatch /remediate to plan how
+              // to close the blocking gaps, then route deterministically from its
+              // structured plan. HALT is reserved for architectural-clarity /
+              // product-scope gaps; everything else routes to the right step.
+              // Mixed gaps fix the autonomous ones first — the human gaps
+              // re-surface on the next audit and HALT then. Falls back to the
+              // deterministic classifyPrdAuditGaps routing when no usable plan is
+              // produced or the remediation budget is exhausted.
+              if (remediationRounds < MAX_KICKBACKS_PER_GATE) {
+                await this.stepRunner.run('remediate', state, {
+                  retryReason:
+                    'A blocking prd-audit is at .pipeline/prd-audit.md (an as-built ' +
+                    'review may be at .pipeline/architecture-review-as-built.md). Plan ' +
+                    'remediation per the /remediate skill and write ' +
+                    '.pipeline/remediation.json.',
+                });
+                const plan = await readRemediationPlan(
+                  this.projectRoot,
+                  state.session_started_at,
+                );
+                if (plan) {
+                  const fixes = plan.gaps.filter((g) => g.disposition !== 'halt');
+                  const halts = plan.gaps.filter((g) => g.disposition === 'halt');
+                  if (fixes.length > 0) {
+                    remediationRounds++;
+                    const target = earliestRemediationTarget(fixes, steps);
+                    await this.events.emit({
+                      type: 'kickback',
+                      from: 'prd_audit',
+                      to: target,
+                      evidence: fixes.map((g) => `${g.id}→${g.disposition}`).join('; '),
+                      count: remediationRounds,
+                    });
+                    pendingRetryHints.set(target, buildRemediationHint(fixes));
+                    const nav = navigateBack(state, target, steps);
+                    state = nav.state;
+                    (state as Record<string, unknown>).prd_audit = 'stale';
+                    await writeState(this.stateFilePath, state);
+                    i = nav.index - 1; // for-loop i++ lands on the target step
+                    continue;
+                  }
+                  if (halts.length > 0) {
+                    const reason =
+                      'prd-audit halted: needs human DECIDE — ' +
+                      halts
+                        .map((g) => `${g.id} (${g.category}: ${g.rationale})`)
+                        .join('; ');
+                    await mkdir(join(this.projectRoot, '.pipeline'), {
+                      recursive: true,
+                    }).catch(() => {});
+                    await writeFile(
+                      join(this.projectRoot, LOOP_HALT_MARKER),
+                      reason + '\n',
+                      'utf-8',
+                    ).catch(() => {
+                      /* best-effort marker */
+                    });
+                    await this.events.emit({ type: 'loop_halt', reason });
+                    await writeState(this.stateFilePath, state);
+                    process.off('SIGINT', sigintHandler);
+                    return;
+                  }
+                }
+                // No usable remediation plan → fall through to the fallback below.
+              }
+
+              // Fallback (no /remediate plan, or remediation budget exhausted):
+              // the deterministic classifyPrdAuditGaps routing.
               const cls = await classifyPrdAuditGaps(
                 this.projectRoot,
                 state.session_started_at,
@@ -1552,6 +1626,47 @@ export class Conductor {
     return lastDoneIndex + 1;
   }
 
+}
+
+/**
+ * The earliest target step among a set of remediation fixes. The loop
+ * navigateBacks here and re-runs forward, so picking the earliest re-runs every
+ * step a fix needs (e.g. an `architecture_review` fix + a `build` fix → start at
+ * `architecture_review`). Defaults to `build` if none resolve.
+ */
+export function earliestRemediationTarget(
+  fixes: RemediationGap[],
+  steps: StepDefinition[],
+): StepName {
+  let best: StepName = 'build';
+  let bestIdx = steps.length;
+  for (const g of fixes) {
+    const idx = steps.findIndex((s) => s.name === g.disposition);
+    if (idx >= 0 && idx < bestIdx) {
+      bestIdx = idx;
+      best = g.disposition as StepName;
+    }
+  }
+  return best;
+}
+
+/**
+ * The retryReason handed to the remediation target step — names each gap, its
+ * disposition, and its concrete tasks, and tells the agent to make the changes
+ * even though the task list may show complete (the as-built code is re-audited).
+ */
+export function buildRemediationHint(fixes: RemediationGap[]): string {
+  const lines = fixes.map((g) => {
+    const tasks = g.tasks.length ? ` Tasks: ${g.tasks.map((t) => t.title).join('; ')}` : '';
+    return `- ${g.id} [${g.disposition}]: ${g.rationale}.${tasks}`;
+  });
+  return (
+    'Remediating blocking prd-audit gaps (see .pipeline/remediation.json and ' +
+    '.pipeline/prd-audit.md). The task list may already show complete, but the ' +
+    'following are NOT satisfied — make the code/spec changes and commit them; ' +
+    'the as-built code is re-audited after this step:\n' +
+    lines.join('\n')
+  );
 }
 
 /**
