@@ -28,13 +28,12 @@ export interface FeatureWorktree {
  * Claude, or gh.
  */
 export interface FeatureRunnerDeps {
-  /** `git worktree add` a fresh branch+dir for the feature. */
+  /** `git worktree add` a fresh branch+dir for the feature, cut from the
+   *  fast-forwarded default branch — so the vetted stories+plan physically exist
+   *  in it already (no separate materialization/copy step). */
   createWorktree: (slug: string) => Promise<FeatureWorktree>;
-  /** Copy/commit the feature's stories+plan into the worktree (materialization)
-   *  so the loop's inputs physically exist there, not just in the main checkout. */
-  materializeSpecs: (worktree: FeatureWorktree, item: BacklogItem) => Promise<void>;
   /**
-   * Optional worktree preparation run after materialization and BEFORE the
+   * Optional worktree preparation run before the
    * build: write `WORKTREE_NAMESPACE` into the worktree's `.env` (so the
    * project's config can isolate this worktree's database) and run the
    * project's conventional `bin/setup` non-interactively. No-op when the
@@ -86,8 +85,9 @@ export function makeRunFeature(
   return async (item: BacklogItem): Promise<FeatureOutcome> => {
     let worktree: FeatureWorktree | null = null;
     try {
+      // The worktree is cut from the fast-forwarded default branch, so the vetted
+      // stories+plan are already committed in it — no materialization/copy needed.
       worktree = await deps.createWorktree(item.slug);
-      await deps.materializeSpecs(worktree, item);
       // Prepare the worktree before the build: write WORKTREE_NAMESPACE and run
       // the project's bin/setup. A project that ships no bin/setup still gets
       // the namespace written; a setup failure throws and is handled like any

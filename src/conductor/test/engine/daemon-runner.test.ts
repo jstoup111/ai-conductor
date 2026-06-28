@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { makeRunFeature, type FeatureRunnerDeps, type WorktreeOutcome } from '../../src/engine/daemon-runner.js';
 import type { BacklogItem } from '../../src/engine/daemon.js';
 
-const ITEM: BacklogItem = { slug: 'feat-x', storiesPath: 's', planPath: 'p' };
+const ITEM: BacklogItem = { slug: 'feat-x' };
 
 function deps(
   outcome: WorktreeOutcome,
@@ -19,9 +19,6 @@ function deps(
     createWorktree: async (slug) => {
       maybeThrow('createWorktree');
       return { path: `/wt/${slug}`, branch: `feat/${slug}` };
-    },
-    materializeSpecs: async () => {
-      maybeThrow('materializeSpecs');
     },
     runConductor: async () => {
       maybeThrow('runConductor');
@@ -109,8 +106,9 @@ describe('engine/daemon-runner — makeRunFeature', () => {
       const base = deps({ done: true, halted: false, prUrl: 'http://pr/1' }, rec);
       return {
         ...base,
-        materializeSpecs: async () => {
-          order.push('materialize');
+        createWorktree: async (slug) => {
+          order.push('createWorktree');
+          return { path: `/wt/${slug}`, branch: `feat/${slug}` };
         },
         prepareWorktree: async () => {
           order.push('prepareWorktree');
@@ -122,11 +120,11 @@ describe('engine/daemon-runner — makeRunFeature', () => {
       };
     }
 
-    it('runs prepareWorktree after materializeSpecs and before runConductor', async () => {
+    it('runs prepareWorktree after createWorktree and before runConductor', async () => {
       const order: string[] = [];
       const run = makeRunFeature(depsWithOrder(order));
       await run(ITEM);
-      expect(order).toEqual(['materialize', 'prepareWorktree', 'runConductor']);
+      expect(order).toEqual(['createWorktree', 'prepareWorktree', 'runConductor']);
     });
 
     it('a prepareWorktree failure aborts before the build and keeps the worktree', async () => {
@@ -136,7 +134,7 @@ describe('engine/daemon-runner — makeRunFeature', () => {
       const out = await run(ITEM);
       expect(out.status).toBe('error');
       expect(out.reason).toMatch(/bin\/setup failed/);
-      expect(order).toEqual(['materialize', 'prepareWorktree']); // runConductor never reached
+      expect(order).toEqual(['createWorktree', 'prepareWorktree']); // runConductor never reached
       expect(rec.teardownKeep).toBe(true); // worktree kept for inspection
     });
 
@@ -147,7 +145,6 @@ describe('engine/daemon-runner — makeRunFeature', () => {
         const run = makeRunFeature({
           ...base,
           createWorktree: async (slug) => ({ path: wt, branch: `feat/${slug}` }),
-          materializeSpecs: async () => {},
           prepareWorktree: async () => {
             throw new Error("bin/setup failed: UnknownAdapterError 'stub'");
           },

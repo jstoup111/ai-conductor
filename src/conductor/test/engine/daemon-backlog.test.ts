@@ -74,9 +74,9 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
 
     const backlog = await discover();
     expect(backlog).toHaveLength(1);
-    expect(backlog[0].slug).toBe('feature-a');
-    expect(backlog[0].planPath).toContain('feature-a.md');
-    expect(backlog[0].storiesPath).toContain('stories/feature-a.md');
+    // The item carries only the slug — the vetted plan+stories live on the
+    // (fast-forwarded) default branch the worktree is cut from, so no paths travel.
+    expect(backlog[0]).toEqual({ slug: 'feature-a' });
   });
 
   it('falls back to a same-stem stories file when no **Stories:** line', async () => {

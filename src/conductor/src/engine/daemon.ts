@@ -16,11 +16,10 @@
 import chalk from 'chalk';
 
 export interface BacklogItem {
-  /** Stable feature identifier (also the worktree/branch slug). */
+  /** Stable feature identifier (also the worktree/branch slug). The vetted
+   *  stories + plan live on the default branch each worktree is cut from, so the
+   *  item carries no paths — a fresh worktree already contains them. */
   slug: string;
-  /** Path(s) to the human-authored stories + plan that make it daemon-eligible. */
-  storiesPath: string;
-  planPath: string;
 }
 
 export type FeatureStatus = 'done' | 'halted' | 'error';
