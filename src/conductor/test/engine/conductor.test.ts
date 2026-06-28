@@ -543,6 +543,38 @@ describe('engine/conductor', () => {
       expect(halt).toMatch(/impl-gap unresolved after 2 build attempt/);
     });
 
+    it('hands the BUILD agent the failing FRs (kickback retryReason) — self-heal is not blind', async () => {
+      await seedToPrdAudit();
+      // Same perpetual impl-gap; we assert the handoff CONTENT, not just that a
+      // kickback happened. Each BUILD dispatch driven by the prd_audit kickback
+      // must carry the gap (the FR id + a pointer to .pipeline/prd-audit.md) in
+      // its retryReason — the bug was that BUILD was dispatched blind, saw a
+      // complete task list, and changed nothing (a no-op self-heal loop).
+      const { runner } = shipRunner('| FR-2 | MISSING | impl-gap | x | no |\n');
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        fromStep: 'prd_audit',
+      });
+
+      await conductor.run();
+
+      const buildReasons = vi
+        .mocked(runner.run)
+        .mock.calls.filter((c) => c[0] === 'build')
+        .map((c) => (c[2] as { retryReason?: string } | undefined)?.retryReason ?? '');
+      expect(buildReasons.length).toBeGreaterThan(0);
+      for (const r of buildReasons) {
+        expect(r).toContain('FR-2 (impl-gap)');
+        expect(r).toContain('.pipeline/prd-audit.md');
+      }
+    });
+
     it('HALTs immediately on a product/plan gap (intended-drift) without rebuilding', async () => {
       await seedToPrdAudit();
       const { runner, calls } = shipRunner(
