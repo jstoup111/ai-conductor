@@ -17,7 +17,12 @@ export type StepName =
   | 'architecture_review_as_built'
   | 'retro'
   | 'rebase'
-  | 'finish';
+  | 'finish'
+  // Conditional SHIP sub-routine — dispatched by the conductor when a blocking
+  // prd_audit / as-built review needs gap remediation. NOT part of the
+  // sequential ALL_STEPS; it routes each gap to the right step or HALTs
+  // (architectural-clarity / product-scope only).
+  | 'remediate';
 
 export type StepStatus = 'pending' | 'in_progress' | 'done' | 'failed' | 'skipped' | 'stale';
 

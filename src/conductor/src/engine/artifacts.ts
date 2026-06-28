@@ -74,6 +74,8 @@ export const STEP_ARTIFACT_GLOBS: Record<StepName, string[]> = {
   // Engine-native; its verdict is computed from git state, not a file artifact.
   rebase: [],
   finish: [],
+  // Conductor reads .pipeline/remediation.json directly to route; not a gate artifact.
+  remediate: [],
 };
 
 /**
