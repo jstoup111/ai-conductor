@@ -222,41 +222,42 @@ and opening a PR on finish:
   signal (see below).
 - `engine/daemon-deps.ts` — concrete git/fs primitives (worktree add/remove, spec
   materialization into the worktree, `.pipeline/DONE`/`HALT` outcome read).
-- `engine/infra-preflight.ts` — opt-in, stack-agnostic **infra bring-up hook** (see below).
+- `engine/worktree-prepare.ts` — writes `WORKTREE_NAMESPACE` + runs the project's `bin/setup` (see below).
 
 The daemon consumes specs — it never authors them. `--continuous` idle-polls for new
 eligible features, bounded by the ceilings.
 
-#### Infra preflight (`bin/daemon-preflight`)
+#### Worktree preparation (`WORKTREE_NAMESPACE` + `bin/setup`)
 
-The daemon is **infra-agnostic**: it knows nothing about Docker, Postgres, or Redis. But an
-autonomous worktree build still needs its services up and a database it won't collide with
-when two worktrees run concurrently. The bridge is a single convention:
+The daemon is **stack-agnostic**: it knows nothing about Docker, Postgres, or Redis. But an
+autonomous worktree build still needs its dependencies installed and a database it won't
+collide with when two worktrees run concurrently. Worktree creation is the daemon's job, so
+the per-worktree *identity* that flows from it is too — and the daemon establishes it in one
+place, then defers everything stack-specific to the project's standard setup script:
 
-> After materializing specs and **before** building, the runner runs the project's
-> executable `bin/daemon-preflight` inside the worktree, if one exists. No script → no-op.
+> After materializing specs and **before** building, the runner (1) writes
+> `WORKTREE_NAMESPACE=<worktree>` into the worktree's `.env`, then (2) runs the project's
+> conventional `bin/setup` with `CI=true` and `WORKTREE_NAMESPACE` exported, if one exists.
+> No `bin/setup` → the namespace is still written, then no-op.
 
-`makeRunFeature` calls `deps.preflight` between `materializeSpecs` and `runConductor`; the
-concrete dep (`infra-preflight.ts`) runs `bin/daemon-preflight` with the **worktree as cwd**,
-so the script can derive a per-worktree namespace from `basename "$PWD"`. A typical script:
+`makeRunFeature` calls `deps.prepareWorktree` between `materializeSpecs` and `runConductor`;
+the concrete dep (`worktree-prepare.ts`) runs `bin/setup` with the **worktree as cwd**. The
+project's normal config consumes `WORKTREE_NAMESPACE` — e.g. a Rails `database.yml` builds
+`app_<env>_<namespace>` and `bin/setup`'s `db:prepare` creates it; there is no second,
+daemon-only setup path to drift. `CI=true` lets setup scripts skip interactive steps such as
+starting a dev server (`bin/dev` belongs to the later manual-test phase, not the build).
 
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-docker compose -f infra/docker-compose.yml up -d           # SHARED, idempotent
-until pg_isready -h localhost -p 5432 -q; do sleep 1; done  # readiness wait
-NS=$(basename "$PWD")                                       # per-worktree namespace
-cat > .env.local <<EOF
-DATABASE_URL=postgres://postgres:postgres@localhost:5432/app_${NS}
-REDIS_NAMESPACE=${NS}
-EOF
-```
+Why reuse `bin/setup` rather than a bespoke daemon script: the daemon runs exactly what a
+human / CI runs, so dependency install + DB prepare stay in one idempotent place. A project
+that translates the namespace differently (Python, etc.) just does so inside its own
+`bin/setup`.
 
-Failure discipline: a non-zero exit (or a present-but-non-executable script) **throws**, which
-`makeRunFeature` treats like any primitive throw — worktree kept, feature reported `error` —
-so the daemon never builds against infra that failed to come up. Projects that need no infra
-(a static site, a pure library) simply ship no script and are untouched. This is what lets one
-daemon serve **any** project setup, including consumer projects that use the harness.
+Failure discipline: a non-zero exit from `bin/setup` (or a present-but-non-executable script)
+**throws**, which `makeRunFeature` treats like any primitive throw — worktree kept, feature
+reported `error` — so the daemon never builds against a half-prepared environment. Projects
+that need no setup (a static site, a pure library) simply ship no `bin/setup` and are
+untouched. This is what lets one daemon serve **any** project setup, including consumer
+projects that use the harness.
 
 ### Daemon observability (`status` / `logs`)
 

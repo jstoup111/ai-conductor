@@ -34,14 +34,15 @@ export interface FeatureRunnerDeps {
    *  so the loop's inputs physically exist there, not just in the main checkout. */
   materializeSpecs: (worktree: FeatureWorktree, item: BacklogItem) => Promise<void>;
   /**
-   * Optional, opt-in infrastructure bring-up run INSIDE the worktree after
-   * materialization and BEFORE the build. Concretely runs the project's
-   * conventional `bin/daemon-preflight` (docker compose up, readiness wait,
-   * per-worktree `DATABASE_URL`/namespace), no-op when the project ships no such
-   * script. Absent on manual `/conduct` runs. A throw aborts the feature (the
-   * worktree is kept) rather than building against infra that failed to come up.
+   * Optional worktree preparation run after materialization and BEFORE the
+   * build: write `WORKTREE_NAMESPACE` into the worktree's `.env` (so the
+   * project's config can isolate this worktree's database) and run the
+   * project's conventional `bin/setup` non-interactively. No-op when the
+   * project ships no `bin/setup`. Absent on manual `/conduct` runs. A throw
+   * aborts the feature (worktree kept) rather than building against a
+   * half-prepared environment.
    */
-  preflight?: (worktree: FeatureWorktree) => Promise<void>;
+  prepareWorktree?: (worktree: FeatureWorktree) => Promise<void>;
   /** Run the conductor's gate loop in the worktree to DONE/HALT (finish=open PR). */
   runConductor: (worktree: FeatureWorktree, item: BacklogItem) => Promise<void>;
   /** Read the loop outcome from the worktree's markers. */
@@ -87,11 +88,11 @@ export function makeRunFeature(
     try {
       worktree = await deps.createWorktree(item.slug);
       await deps.materializeSpecs(worktree, item);
-      // Opt-in infra bring-up before the build. A project that ships no
-      // `bin/daemon-preflight` makes this a no-op; a failure throws and is
-      // handled like any other primitive throw (worktree kept, feature errored)
-      // so we never build against infra that failed to come up.
-      if (deps.preflight) await deps.preflight(worktree);
+      // Prepare the worktree before the build: write WORKTREE_NAMESPACE and run
+      // the project's bin/setup. A project that ships no bin/setup still gets
+      // the namespace written; a setup failure throws and is handled like any
+      // other primitive throw (worktree kept, feature errored).
+      if (deps.prepareWorktree) await deps.prepareWorktree(worktree);
       await deps.runConductor(worktree, item);
       const outcome = await deps.readOutcome(worktree);
 
