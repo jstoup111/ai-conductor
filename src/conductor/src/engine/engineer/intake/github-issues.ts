@@ -21,7 +21,7 @@ export type GhRunner = (args: string[], opts: { cwd: string }) => Promise<{ stdo
 
 /** Minimal registry surface the adapter needs: the list of repos to poll. */
 export interface IntakeRepoRegistry {
-  list(): Promise<Array<{ name: string; path: string }>>;
+  list(): Promise<Array<{ name: string; path: string; ghRepo?: string }>>;
 }
 
 /** Dependencies for the github-issues adapter. All injectable for testability. */
@@ -113,6 +113,10 @@ export function createGithubIssuesAdapter(deps: GithubIssuesDeps): IntakeSource 
   // occur because the `engineer:handled` label gates re-entry on the next poll.
   const postedMarkers = new Set<string>();
 
+  // Map repo name to local path for use as working directory in report() gh calls.
+  // Populated during poll(); keyed by the ghRepo or name used in sourceRef.
+  const repoPaths = new Map<string, string>();
+
   // ── Re-eligibility (FR-39/40) ────────────────────────────────────────────────
   // A `done` issue still carrying the handled label is re-emitted iff its spec PR
   // closed without merging. Merged → never reopen; open/lookup-failure → unchanged.
@@ -150,7 +154,8 @@ export function createGithubIssuesAdapter(deps: GithubIssuesDeps): IntakeSource 
 
     // Strip the handled label so a human sees it is back in flight; non-fatal.
     try {
-      await gh(['issue', 'edit', String(issue.number), '-R', repo.name, '--remove-label', HANDLED_LABEL], {
+      const ghRepo = repo.ghRepo ?? repo.name;
+      await gh(['issue', 'edit', String(issue.number), '-R', ghRepo, '--remove-label', HANDLED_LABEL], {
         cwd: repo.path,
       });
     } catch {
@@ -176,22 +181,26 @@ export function createGithubIssuesAdapter(deps: GithubIssuesDeps): IntakeSource 
       const out: Envelope[] = [];
 
       for (const repo of repos) {
+        // Resolve the GitHub API target and local path for this repo.
+        const ghRepo = repo.ghRepo ?? repo.name;
+        repoPaths.set(ghRepo, repo.path);
+
         let issues: RawIssue[];
         try {
           const { stdout } = await gh(
-            ['issue', 'list', '--assignee', '@me', '--state', 'open', '--json', 'number,title,body,labels', '-R', repo.name],
+            ['issue', 'list', '--assignee', '@me', '--state', 'open', '--json', 'number,title,body,labels', '-R', ghRepo],
             { cwd: repo.path },
           );
           issues = JSON.parse(stdout || '[]') as RawIssue[];
         } catch (err: unknown) {
           // FR-27: a failing repo (auth/availability) is isolated — log and move on.
           const msg = err instanceof Error ? err.message : String(err);
-          log(`github-issues: poll failed for ${repo.name} — ${msg}`);
+          log(`github-issues: poll failed for ${ghRepo} — ${msg}`);
           continue;
         }
 
         for (const issue of issues) {
-          const sourceRef = `${repo.name}#${issue.number}`;
+          const sourceRef = `${ghRepo}#${issue.number}`;
 
           if (labelNames(issue).includes(HANDLED_LABEL)) {
             // FR-35: handled-labelled issues are skipped at capture, except for
@@ -216,7 +225,7 @@ export function createGithubIssuesAdapter(deps: GithubIssuesDeps): IntakeSource 
             source: GITHUB_ISSUES_SOURCE,
             sourceRef,
             text,
-            hintRepo: repo.name,
+            hintRepo: ghRepo,
             status: 'pending',
             receivedAt: now(),
           });
@@ -240,21 +249,22 @@ export function createGithubIssuesAdapter(deps: GithubIssuesDeps): IntakeSource 
         return;
       }
       const { repo, number } = parsed;
+      const repoPath = repoPaths.get(repo) ?? process.cwd();
 
       try {
         if (status === 'routed') {
           const body = `Routed to ${meta?.repo ?? '(unresolved)'}`;
-          await gh(['issue', 'comment', number, '-R', repo, '--body', body], { cwd: repo });
+          await gh(['issue', 'comment', number, '-R', repo, '--body', body], { cwd: repoPath });
         } else if (status === 'done') {
           const body = `Spec PR opened: ${meta?.prUrl ?? '(unknown)'}`;
-          await gh(['issue', 'comment', number, '-R', repo, '--body', body], { cwd: repo });
+          await gh(['issue', 'comment', number, '-R', repo, '--body', body], { cwd: repoPath });
           // Ensure the label exists before applying it (auto-create; ignore "already exists").
           try {
-            await gh(['label', 'create', HANDLED_LABEL, '-R', repo], { cwd: repo });
+            await gh(['label', 'create', HANDLED_LABEL, '-R', repo], { cwd: repoPath });
           } catch {
             // label already present — not an error.
           }
-          await gh(['issue', 'edit', number, '-R', repo, '--add-label', HANDLED_LABEL], { cwd: repo });
+          await gh(['issue', 'edit', number, '-R', repo, '--add-label', HANDLED_LABEL], { cwd: repoPath });
         } else {
           // No write-back marker for intermediate statuses (pending/deciding).
           return;

@@ -239,6 +239,14 @@ function promptAnother(): Promise<boolean> {
   });
 }
 
+/** Parse owner/repo from a remote URL (SSH or HTTPS). */
+function parseGhRepo(remote: string): string | null {
+  if (!remote) return null;
+  // Matches both git@github.com:owner/repo.git and https://github.com/owner/repo.git
+  const m = remote.match(/[:/]([^/:]+\/[^/]+?)(?:\.git)?$/);
+  return m ? m[1] : null;
+}
+
 /** Print the engineer usage/guide text (front door + deterministic primitives). */
 function printGuide(print: (s: string) => void): void {
   print(
@@ -457,7 +465,11 @@ export async function dispatchEngineer(
         gh,
         registry: {
           list: async () =>
-            (await reader.listProjects()).map((p) => ({ name: p.name, path: p.path })),
+            (await reader.listProjects()).map((p) => ({
+              name: p.remote ? parseGhRepo(p.remote) ?? p.name : p.name,
+              ghRepo: p.remote ? parseGhRepo(p.remote) ?? undefined : undefined,
+              path: p.path,
+            })),
         },
         ledger,
         log: (m: string) => printErr(m),

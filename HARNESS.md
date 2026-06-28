@@ -164,6 +164,14 @@ become part of the session context. Skills that need tech-context (stories, tdd,
 code-review, debugging, retro) should reference the already-loaded context rather than re-reading
 the files independently. This avoids redundant file reads across skill invocations.
 
+## MCP Servers (When Available)
+
+When context7 and/or serena MCP servers are installed, use them proactively:
+
+- **context7** — Library/framework documentation. Use for API syntax, config, version migration. Skip for business logic, refactoring, and general programming concepts.
+- **serena** — Code navigation and semantic refactoring. Use for finding declarations/usages, renaming safely, tracing calls. Call `initial_instructions` before coding tasks to read capabilities.
+- **Both installed** — understand requirement (context7) → explore codebase (serena) → implement with confidence (serena refactoring + context7 API correctness) → verify (serena traces).
+
 ## Enforcement Levels
 
 Each skill declares its enforcement level honestly:
