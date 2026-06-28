@@ -1,6 +1,6 @@
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import type { BacklogItem, FeatureOutcome } from './daemon.js';
 import type { LLMProvider } from '../execution/llm-provider.js';
 import { emitEngineerSignal, resolveEngineerDir } from './engineer-store.js';
@@ -130,22 +130,49 @@ export function makeRunFeature(
       }
 
       // Loop ended without DONE or HALT — treat as an error, keep the worktree.
+      const noMarkerReason = outcome.reason ?? 'loop ended without DONE or HALT marker';
+      await writeErrorHalt(worktree, noMarkerReason);
       await deps.teardownWorktree(worktree, true);
       return {
         slug: item.slug,
         status: 'error',
-        reason: outcome.reason ?? 'loop ended without DONE or HALT marker',
+        reason: noMarkerReason,
         costTokens: outcome.costTokens,
       };
     } catch (err) {
-      if (worktree) await deps.teardownWorktree(worktree, true).catch(() => {});
+      // Any thrown error (a step crash, or worktree-prep / bin/setup failing) —
+      // capture it into a diagnostic `.pipeline/HALT` so the operator can see WHY
+      // (the daemon log otherwise shows a bare `error`) and the feature parks for
+      // inspection instead of being silently excluded for the run's lifetime.
+      const reason = err instanceof Error ? err.message : String(err);
+      if (worktree) {
+        await writeErrorHalt(worktree, reason);
+        await deps.teardownWorktree(worktree, true).catch(() => {});
+      }
       return {
         slug: item.slug,
         status: 'error',
-        reason: err instanceof Error ? err.message : String(err),
+        reason,
       };
     }
   };
+}
+
+/**
+ * Write a diagnostic `.pipeline/HALT` into a worktree whose feature errored, so
+ * the failure is visible (the daemon log only shows `error`) and the feature
+ * parks for human inspection rather than being silently excluded. Best-effort:
+ * a write failure must never mask the original error.
+ */
+async function writeErrorHalt(worktree: FeatureWorktree, reason: string): Promise<void> {
+  const note =
+    `feature errored — parked for human inspection\n${reason}\n\n` +
+    `Resume procedure:\n` +
+    `  1. Fix the cause of the error above (project setup / config / environment / a crashed step).\n` +
+    `  2. rm .pipeline/HALT\n` +
+    `  3. Re-queue the feature (restart the daemon if it was excluded this run).\n`;
+  await mkdir(join(worktree.path, '.pipeline'), { recursive: true }).catch(() => {});
+  await writeFile(join(worktree.path, '.pipeline', 'HALT'), note, 'utf-8').catch(() => {});
 }
 
 /**

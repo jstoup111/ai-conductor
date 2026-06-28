@@ -1,4 +1,7 @@
 import { describe, it, expect } from 'vitest';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { makeRunFeature, type FeatureRunnerDeps, type WorktreeOutcome } from '../../src/engine/daemon-runner.js';
 import type { BacklogItem } from '../../src/engine/daemon.js';
 
@@ -135,6 +138,30 @@ describe('engine/daemon-runner — makeRunFeature', () => {
       expect(out.reason).toMatch(/bin\/setup failed/);
       expect(order).toEqual(['materialize', 'prepareWorktree']); // runConductor never reached
       expect(rec.teardownKeep).toBe(true); // worktree kept for inspection
+    });
+
+    it('writes a diagnostic .pipeline/HALT into the worktree on an error (so it is not opaque)', async () => {
+      const wt = await mkdtemp(join(tmpdir(), 'wt-err-'));
+      try {
+        const base = deps({ done: true, halted: false }, {});
+        const run = makeRunFeature({
+          ...base,
+          createWorktree: async (slug) => ({ path: wt, branch: `feat/${slug}` }),
+          materializeSpecs: async () => {},
+          prepareWorktree: async () => {
+            throw new Error("bin/setup failed: UnknownAdapterError 'stub'");
+          },
+          runConductor: async () => {},
+        });
+        const out = await run(ITEM);
+        expect(out.status).toBe('error');
+        // The captured reason is now persisted to .pipeline/HALT for the operator.
+        const halt = await readFile(join(wt, '.pipeline', 'HALT'), 'utf-8');
+        expect(halt).toMatch(/feature errored/);
+        expect(halt).toMatch(/UnknownAdapterError 'stub'/);
+      } finally {
+        await rm(wt, { recursive: true, force: true });
+      }
     });
 
     it('a deps object without prepareWorktree builds normally (backward compatible)', async () => {

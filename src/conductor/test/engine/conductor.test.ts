@@ -353,6 +353,64 @@ describe('engine/conductor', () => {
       expect(log[0]).toBe('reset'); // first action is a reset, before any dispatch
       expect(log.find((e) => e.startsWith('run:'))).toBe('run:acceptance_specs');
     });
+
+    it('daemon resume: a FRESH feature (DECIDE pre-seeded done) starts at acceptance_specs', async () => {
+      // The daemon stamps DECIDE done and uses `resume: true` (not a hardcoded
+      // fromStep). With only DECIDE done, findResumeIndex returns the first
+      // pending step — acceptance_specs — so a fresh feature still begins BUILD.
+      const seed = (await readState(statePath)).ok
+        ? (await readState(statePath)).value
+        : ({} as ConductState);
+      (seed as Record<string, unknown>).complexity_tier = 'M';
+      for (const s of ALL_STEPS) {
+        if (s.name === 'acceptance_specs') break;
+        (seed as Record<string, unknown>)[s.name] = 'done';
+      }
+      await writeState(statePath, seed);
+
+      const { runner, log } = trackingRunner();
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        freshContextPerStep: true,
+        resume: true,
+      });
+
+      await conductor.run();
+
+      expect(log.find((e) => e.startsWith('run:'))).toBe('run:acceptance_specs');
+    });
+
+    it('daemon resume: a feature with BUILD/SHIP progress resumes at its next step, not acceptance_specs', async () => {
+      // Regression: the daemon used `fromStep: 'acceptance_specs'`, which re-ran
+      // acceptance_specs on EVERY re-dispatch even when the feature was far past
+      // BUILD. With `resume: true`, a re-dispatch picks up at the real next
+      // pending step (here prd_audit), never re-entering at acceptance_specs.
+      const seed = (await readState(statePath)).ok
+        ? (await readState(statePath)).value
+        : ({} as ConductState);
+      (seed as Record<string, unknown>).complexity_tier = 'M';
+      for (const s of ALL_STEPS) {
+        if (s.name === 'prd_audit') break;
+        (seed as Record<string, unknown>)[s.name] = 'done';
+      }
+      await writeState(statePath, seed);
+
+      const { runner, log } = trackingRunner();
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        freshContextPerStep: true,
+        resume: true,
+      });
+
+      await conductor.run();
+
+      expect(log.find((e) => e.startsWith('run:'))).toBe('run:prd_audit');
+      expect(log).not.toContain('run:acceptance_specs');
+    });
   });
 
   it('an unexpected throw inside the loop HALTs (state flushed) instead of crashing', async () => {
@@ -450,6 +508,44 @@ describe('engine/conductor', () => {
       return { runner, calls };
     }
 
+    // Like shipRunner, but also writes .pipeline/remediation.json when the
+    // `remediate` step runs, so the conductor's /remediate routing engages.
+    function remediateRunner(
+      auditBody: string,
+      plan: unknown,
+    ): { runner: StepRunner; calls: StepName[] } {
+      const calls: StepName[] = [];
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          calls.push(step);
+          if (step === 'build' || step === 'prd_audit') {
+            await mkdir(join(dir, '.pipeline'), { recursive: true });
+            if (step === 'build') {
+              await writeFile(
+                join(dir, '.pipeline/task-status.json'),
+                JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
+              );
+            } else {
+              await writeFile(
+                join(dir, '.pipeline/prd-audit.md'),
+                '# PRD Audit\n\n' + AUDIT_HEADER + auditBody,
+              );
+            }
+          } else if (step === 'manual_test') {
+            await writeFile(
+              join(dir, '.pipeline/manual-test-results.md'),
+              '# Results\n\n| Story | Result |\n|--|--|\n| s | PASS |\n',
+            );
+          } else if (step === 'remediate') {
+            await mkdir(join(dir, '.pipeline'), { recursive: true });
+            await writeFile(join(dir, '.pipeline/remediation.json'), JSON.stringify(plan));
+          }
+          return { success: true };
+        }),
+      };
+      return { runner, calls };
+    }
+
     it('self-heals an impl-gap audit back to BUILD, then HALTs at the cap', async () => {
       await seedToPrdAudit();
       // Perpetual impl-gap: every audit reports the same un-closed impl-gap, so
@@ -485,6 +581,38 @@ describe('engine/conductor', () => {
       expect(halt).toMatch(/impl-gap unresolved after 2 build attempt/);
     });
 
+    it('hands the BUILD agent the failing FRs (kickback retryReason) — self-heal is not blind', async () => {
+      await seedToPrdAudit();
+      // Same perpetual impl-gap; we assert the handoff CONTENT, not just that a
+      // kickback happened. Each BUILD dispatch driven by the prd_audit kickback
+      // must carry the gap (the FR id + a pointer to .pipeline/prd-audit.md) in
+      // its retryReason — the bug was that BUILD was dispatched blind, saw a
+      // complete task list, and changed nothing (a no-op self-heal loop).
+      const { runner } = shipRunner('| FR-2 | MISSING | impl-gap | x | no |\n');
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        fromStep: 'prd_audit',
+      });
+
+      await conductor.run();
+
+      const buildReasons = vi
+        .mocked(runner.run)
+        .mock.calls.filter((c) => c[0] === 'build')
+        .map((c) => (c[2] as { retryReason?: string } | undefined)?.retryReason ?? '');
+      expect(buildReasons.length).toBeGreaterThan(0);
+      for (const r of buildReasons) {
+        expect(r).toContain('FR-2 (impl-gap)');
+        expect(r).toContain('.pipeline/prd-audit.md');
+      }
+    });
+
     it('HALTs immediately on a product/plan gap (intended-drift) without rebuilding', async () => {
       await seedToPrdAudit();
       const { runner, calls } = shipRunner(
@@ -517,6 +645,88 @@ describe('engine/conductor', () => {
       expect(halt).toMatch(/FR-3 \(intended-drift\)/);
       // No self-heal: never kicked back to build, never rebuilt.
       expect(kickbacks).toHaveLength(0);
+      expect(calls.filter((s) => s === 'build')).toHaveLength(0);
+    });
+
+    it('/remediate: routes an autonomous gap to its target step with the gap in the hint', async () => {
+      await seedToPrdAudit();
+      const { runner } = remediateRunner('| FR-2 | MISSING | impl-gap | x | no |\n', {
+        dispositions: [
+          {
+            id: 'FR-2',
+            disposition: 'build',
+            category: null,
+            rationale: 'read path wrong at x.ts:10',
+            tasks: [{ id: 'r1', title: 'fix x.ts:10 read path' }],
+          },
+        ],
+      });
+      const kickbacks: Array<{ from: string; to: string }> = [];
+      events.on('kickback', (e) => {
+        if (e.type === 'kickback') kickbacks.push({ from: e.from, to: e.to });
+      });
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        fromStep: 'prd_audit',
+      });
+
+      await conductor.run();
+
+      // The planner ran and routed prd_audit → build (the disposition's target).
+      expect(kickbacks.some((k) => k.from === 'prd_audit' && k.to === 'build')).toBe(true);
+      // BUILD received the gap (FR id + concrete task) in its retryReason.
+      const buildReasons = vi
+        .mocked(runner.run)
+        .mock.calls.filter((c) => c[0] === 'build')
+        .map((c) => (c[2] as { retryReason?: string } | undefined)?.retryReason ?? '');
+      expect(
+        buildReasons.some((r) => r.includes('FR-2') && r.includes('fix x.ts:10 read path')),
+      ).toBe(true);
+    });
+
+    it('/remediate: HALTs for an architectural-clarity gap (human DECIDE) without rebuilding', async () => {
+      await seedToPrdAudit();
+      const { runner, calls } = remediateRunner(
+        '| FR-3 | DIVERGED | intended-drift | y | no |\n',
+        {
+          dispositions: [
+            {
+              id: 'FR-3',
+              disposition: 'halt',
+              category: 'architectural-clarity',
+              rationale: 'ambiguous aggregate boundary',
+              tasks: [],
+            },
+          ],
+        },
+      );
+      let halted = false;
+      events.on('loop_halt', () => {
+        halted = true;
+      });
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        fromStep: 'prd_audit',
+      });
+
+      await conductor.run();
+
+      expect(halted).toBe(true);
+      const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+      expect(halt).toMatch(/needs human DECIDE/);
+      expect(halt).toMatch(/FR-3 \(architectural-clarity/);
       expect(calls.filter((s) => s === 'build')).toHaveLength(0);
     });
 

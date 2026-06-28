@@ -10,6 +10,43 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ## [Unreleased]
 
+### Added
+
+- **GitHub-issues intake now fires on the live `conduct-ts engineer` launch.**
+  Previously poll-on-launch lived only in the test-only `runEngineerMode` harness,
+  so bare `conduct-ts engineer` dropped straight into `claude /engineer` and never
+  ran intake (only the standalone `conduct-ts engineer poll` did). The launcher now
+  **pre-polls** github issues and enqueues new ones before spawning the session
+  (`Intake: N issue(s) queued.`), and a new **`conduct-ts engineer claim`**
+  subcommand lets the `/engineer` skill atomically dequeue the oldest idea at
+  step 1. An idea can now come from three sources — github intake, a CLI arg
+  (`conduct-ts engineer "<idea>"` / `--idea "<idea>"`, which skips the poll), or
+  direct chat. `land`/`handoff` gain an optional **`--source-ref <owner/repo#N>`**
+  that threads write-back (routed comment → done comment + `engineer:handled` label
+  + ledger transition) back to the originating issue via the new shared
+  `intake/writeback.ts` helper. Write-back stays advisory — a `gh` failure never
+  blocks a land or reverts a delivered spec PR. Updates `skills/engineer/SKILL.md`
+  (claim-first capture + `--source-ref` threading) and the conductor README.
+
+- **Autonomous gap remediation (`/remediate`) — a blocking `prd_audit` is routed,
+  not just halted.** When a daemon `prd_audit` blocks, the conductor now dispatches
+  the new `/remediate` SHIP sub-routine, which reasons over the per-FR gaps and
+  writes `.pipeline/remediation.json` assigning each a disposition: `build` /
+  `acceptance_specs` / `architecture_review` / `plan` (autonomous — routed back to
+  that step with the concrete gap + tasks in the kickback hint), or `halt` with a
+  category. **HALT is reserved for the two genuinely-human cases — `architectural-
+  clarity` and `product-scope`;** everything else is turned into routed work. Mixed
+  gaps fix the autonomous ones first (kick to the earliest target step, bounded by a
+  remediation cap), and the human gaps re-surface on the next audit and HALT then.
+  Routing stays deterministic (the conductor reads the structured plan); the
+  *judgment* is the agent's. Falls back to the deterministic `classifyPrdAuditGaps`
+  routing when no usable plan is produced or the budget is exhausted. Adds
+  `skills/remediate/SKILL.md` + `agents/remediation-planner.md`.
+
+  _Planned follow-up:_ extend the same machinery to **finish-time test/build
+  failures** — flake-check first, then route real failures back to `build` with
+  cleanup tasks instead of `/finish` parking the branch.
+
 ### Changed
 
 - **`.serena/` is now gitignored in scaffolded and onboarded projects.** Serena's
@@ -45,6 +82,35 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- **Daemon feature errors are now diagnosable (capture + HALT) instead of an
+  opaque `error`.** When a feature threw — a crashed step, or worktree-prep /
+  `bin/setup` failing — the daemon logged a bare `error`, dropped the captured
+  reason, and excluded the slug for the rest of the run with no on-disk trace
+  (the cause could only be found by re-running the failing command by hand). Now
+  any feature error writes a diagnostic `.pipeline/HALT` into the worktree with
+  the captured reason + a resume procedure, the daemon log surfaces the reason
+  on the outcome line, and the feature is parked (like a halt) so it re-dispatches
+  once the operator fixes the cause and clears the marker — rather than being
+  silently excluded.
+- **`prd_audit` impl-gap self-heal now actually reaches the BUILD agent (was a
+  no-op loop).** When a daemon `prd_audit` blocked on an implementation gap, the
+  conductor routed control back to BUILD but dispatched it with no context: the
+  failing-FR summary was emitted only as a dashboard event, and the build step
+  re-declared `retryHint = undefined` on entry, so `/pipeline` saw a complete
+  task list and changed nothing. The re-audit then failed the same FRs until the
+  self-heal cap and HALTed — never fixing anything. The kickback now queues a
+  `retryReason` for BUILD naming the un-ALIGNED FRs and pointing at
+  `.pipeline/prd-audit.md` for per-FR `file:line` evidence, instructing the agent
+  to make the code changes even though the task list shows complete. (#115)
+- **Daemon no longer re-enters every resumed feature at `acceptance_specs`.** The
+  daemon constructed the conductor with a hardcoded `fromStep: 'acceptance_specs'`,
+  which both set the loop's start index to the first BUILD step and marked it
+  `explicitlyTargeted` — so `acceptance_specs` was re-run on every re-dispatch,
+  even when the feature was already at `prd_audit` / `finish`. The daemon now
+  passes `resume: true`: with the DECIDE steps pre-seeded done, a fresh feature
+  still resumes at `acceptance_specs` (its first pending step), while a
+  re-dispatched feature with recorded BUILD/SHIP progress resumes at its real next
+  step instead of needlessly re-entering BUILD from the top each cycle.
 - **Daemon restart no longer re-dispatches (and clobbers) human-parked halted features.**
   The daemon tracked parked/halted features only in process memory and recorded only `done`
   features in the durable `.daemon/processed/` ledger. After a restart that memory was empty,

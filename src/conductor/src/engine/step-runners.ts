@@ -39,6 +39,8 @@ const STEP_PROMPTS: Record<StepName, string> = {
   // the Record<StepName, string> exhaustive.
   rebase: '/conduct rebase',
   finish: '/finish',
+  // Conditional SHIP sub-routine: plans remediation for a blocking audit.
+  remediate: '/remediate',
 };
 
 // Autonomous steps run in Claude's `-p` (print) mode with
@@ -54,6 +56,7 @@ const AUTONOMOUS_STEPS: Set<StepName> = new Set([
   'worktree',
   'acceptance_specs',
   'build',
+  'remediate', // conductor-dispatched gap-remediation planner — runs unattended
 ]);
 
 // Steps where the skill design requires a back-and-forth conversation (the

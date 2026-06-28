@@ -74,6 +74,8 @@ export const STEP_ARTIFACT_GLOBS: Record<StepName, string[]> = {
   // Engine-native; its verdict is computed from git state, not a file artifact.
   rebase: [],
   finish: [],
+  // Conductor reads .pipeline/remediation.json directly to route; not a gate artifact.
+  remediate: [],
 };
 
 /**
@@ -679,6 +681,90 @@ export async function classifyPrdAuditGaps(
     kind: allImpl ? 'impl-only' : 'needs-decide',
     summary: summary + more,
   };
+}
+
+// --- Remediation plan (the /remediate skill's structured output) -------------
+
+/** Steps a remediation gap may be routed back to (must be earlier than prd_audit). */
+export const REMEDIATION_TARGET_STEPS = [
+  'build',
+  'acceptance_specs',
+  'architecture_review',
+  'plan',
+] as const;
+export type RemediationTarget = (typeof REMEDIATION_TARGET_STEPS)[number];
+export type RemediationDisposition = RemediationTarget | 'halt';
+export type RemediationHaltCategory = 'architectural-clarity' | 'product-scope';
+
+export interface RemediationGap {
+  id: string;
+  disposition: RemediationDisposition;
+  /** Set only when disposition === 'halt'. */
+  category: RemediationHaltCategory | null;
+  rationale: string;
+  /** Concrete file-scoped tasks (for autonomous dispositions); informational. */
+  tasks: { id: string; title: string }[];
+}
+
+export interface RemediationPlan {
+  gaps: RemediationGap[];
+}
+
+/**
+ * Read + validate `.pipeline/remediation.json` (the /remediate skill's output).
+ * Returns null when the file is absent, stale (predates this session), malformed,
+ * or contains no recognizable gap — the caller then falls back to the
+ * deterministic `classifyPrdAuditGaps` routing. Tolerant of junk: unknown
+ * dispositions and non-object gaps are dropped rather than failing the whole plan.
+ */
+export async function readRemediationPlan(
+  dir: string,
+  sessionStartedAt: number | undefined,
+): Promise<RemediationPlan | null> {
+  const path = join(dir, '.pipeline/remediation.json');
+  if (!(await fileIsFreshSinceSession(path, sessionStartedAt))) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await readFile(path, 'utf-8'));
+  } catch {
+    return null;
+  }
+  const rawGaps = (parsed as { dispositions?: unknown })?.dispositions;
+  if (!Array.isArray(rawGaps)) return null;
+
+  const valid: RemediationDisposition[] = [...REMEDIATION_TARGET_STEPS, 'halt'];
+  const gaps: RemediationGap[] = [];
+  for (const g of rawGaps) {
+    if (!g || typeof g !== 'object') continue;
+    const o = g as Record<string, unknown>;
+    const disposition = o.disposition as RemediationDisposition;
+    if (!valid.includes(disposition)) continue;
+    const category =
+      o.category === 'architectural-clarity' || o.category === 'product-scope'
+        ? (o.category as RemediationHaltCategory)
+        : null;
+    // A 'halt' must name a category; an autonomous disposition must not be halt.
+    if (disposition === 'halt' && category === null) continue;
+    const tasks = Array.isArray(o.tasks)
+      ? o.tasks
+          .filter(
+            (t): t is { title: string } =>
+              !!t && typeof t === 'object' && typeof (t as { title?: unknown }).title === 'string',
+          )
+          .map((t) => ({
+            id: String((t as { id?: unknown }).id ?? ''),
+            title: String((t as { title: unknown }).title),
+          }))
+      : [];
+    gaps.push({
+      id: typeof o.id === 'string' ? o.id : '?',
+      disposition,
+      category,
+      rationale: typeof o.rationale === 'string' ? o.rationale : '',
+      tasks,
+    });
+  }
+  return gaps.length > 0 ? { gaps } : null;
 }
 
 // --- Story / plan structure parsing (shared by stories + plan predicates) ---

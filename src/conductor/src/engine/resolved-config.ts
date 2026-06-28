@@ -37,6 +37,7 @@ export const DEFAULT_STEP_MODELS: Record<StepName, string> = {
   retro: 'sonnet',
   rebase: 'haiku',         // engine-native; no Claude dispatch (mirrors complexity)
   finish: 'haiku',
+  remediate: 'opus',       // reasons over blocking audit gaps → dispositions + tasks
 };
 
 export const DEFAULT_STEP_EFFORT: Record<StepName, EffortLevel> = {
@@ -59,6 +60,7 @@ export const DEFAULT_STEP_EFFORT: Record<StepName, EffortLevel> = {
   retro: 'medium',
   rebase: 'low',           // deterministic git work, no reasoning
   finish: 'low',
+  remediate: 'high',       // gap reasoning + concrete task planning
 };
 
 export const DEFAULT_STEP_RETRIES: Record<StepName, number> = {
@@ -81,6 +83,7 @@ export const DEFAULT_STEP_RETRIES: Record<StepName, number> = {
   retro: 3,
   rebase: 1,
   finish: 1,
+  remediate: 3,
 };
 
 export const DEFAULT_STEP_REVIEW: Record<StepName, ReviewMode> = {
@@ -103,6 +106,7 @@ export const DEFAULT_STEP_REVIEW: Record<StepName, ReviewMode> = {
   retro: 'manual',
   rebase: 'auto',
   finish: 'auto',
+  remediate: 'auto',       // conductor routes deterministically from remediation.json
 };
 
 /**
