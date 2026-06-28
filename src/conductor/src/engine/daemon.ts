@@ -162,15 +162,20 @@ export async function runDaemon(
     inFlight.delete(slug);
     processed.push(outcome);
     if (outcome.costTokens) totalCost += outcome.costTokens;
-    // A halted feature is parked for a human, not finished. Mark it parked so a
-    // later scan can re-dispatch it once its `.pipeline/HALT` marker is cleared
-    // (gated by `isHalted` below). `done`/`error` are not parked → stay excluded.
-    if (outcome.status === 'halted') parked.add(slug);
+    // A halted OR errored feature is parked for a human, not finished. Both now
+    // leave a `.pipeline/HALT` marker (errors get a diagnostic one written in
+    // makeRunFeature), so a later scan can re-dispatch once the operator fixes
+    // the cause and clears the marker (gated by `isHalted` below). Only `done`
+    // stays permanently excluded.
+    if (outcome.status === 'halted' || outcome.status === 'error') parked.add(slug);
     const ok = outcome.status === 'done';
     const marker = ok ? chalk.green('■') : chalk.red('■');
     const status = ok ? chalk.green(outcome.status) : chalk.red(outcome.status);
+    // Surface the reason for non-done outcomes — without it the log showed a bare
+    // `error`/`halted` and the operator had to re-run by hand to find the cause.
+    const why = !ok && outcome.reason ? ` — ${outcome.reason.split('\n')[0]}` : '';
     log(
-      `${marker} done ${chalk.bold(slug)}: ${status}${outcome.prUrl ? ` ${chalk.cyan(outcome.prUrl)}` : ''}`,
+      `${marker} done ${chalk.bold(slug)}: ${status}${why}${outcome.prUrl ? ` ${chalk.cyan(outcome.prUrl)}` : ''}`,
     );
   };
 

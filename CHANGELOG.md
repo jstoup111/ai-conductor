@@ -45,6 +45,16 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- **Daemon feature errors are now diagnosable (capture + HALT) instead of an
+  opaque `error`.** When a feature threw — a crashed step, or worktree-prep /
+  `bin/setup` failing — the daemon logged a bare `error`, dropped the captured
+  reason, and excluded the slug for the rest of the run with no on-disk trace
+  (the cause could only be found by re-running the failing command by hand). Now
+  any feature error writes a diagnostic `.pipeline/HALT` into the worktree with
+  the captured reason + a resume procedure, the daemon log surfaces the reason
+  on the outcome line, and the feature is parked (like a halt) so it re-dispatches
+  once the operator fixes the cause and clears the marker — rather than being
+  silently excluded.
 - **`prd_audit` impl-gap self-heal now actually reaches the BUILD agent (was a
   no-op loop).** When a daemon `prd_audit` blocked on an implementation gap, the
   conductor routed control back to BUILD but dispatched it with no context: the
