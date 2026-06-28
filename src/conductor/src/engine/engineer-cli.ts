@@ -36,6 +36,7 @@ import { ensureRunning } from './daemon-lock.js';
 import { createLedger } from './engineer/intake/ledger.js';
 import { createFileQueue } from './engineer/intake/queue.js';
 import { createGithubIssuesAdapter, GITHUB_ISSUES_SOURCE, HANDLED_LABEL } from './engineer/intake/github-issues.js';
+import { reportRouted, reportDone } from './engineer/intake/writeback.js';
 
 /**
  * Production DECIDE seam: gates each authoring step through the io surface.
@@ -61,12 +62,13 @@ const execFileP = promisify(execFileCb);
 // ── Dispatch descriptor ───────────────────────────────────────────────────────
 
 export type EngineerDispatch =
-  | { kind: 'launch' }
+  | { kind: 'launch'; idea?: string }
   | { kind: 'guide' }
   | { kind: 'projects' }
-  | { kind: 'land'; project: string; idea: string }
-  | { kind: 'handoff'; project: string; branch: string }
+  | { kind: 'land'; project: string; idea: string; sourceRef?: string }
+  | { kind: 'handoff'; project: string; branch: string; sourceRef?: string }
   | { kind: 'poll' }
+  | { kind: 'claim' }
   | { kind: 'forget'; sourceRef: string };
 
 // ── Subcommand detection ──────────────────────────────────────────────────────
@@ -105,7 +107,10 @@ export function detectEngineerCommand(argv: string[]): EngineerDispatch | null {
       // Missing required flags — treat as guide.
       return { kind: 'guide' };
     }
-    return { kind: 'land', project, idea };
+    // Optional intake write-back anchor — present when the idea came from an
+    // intake envelope (github-issues). Absent for human-typed ideas.
+    const sourceRef = parseFlag(argv, '--source-ref') ?? undefined;
+    return { kind: 'land', project, idea, sourceRef };
   }
 
   if (subCmd === 'handoff') {
@@ -114,12 +119,18 @@ export function detectEngineerCommand(argv: string[]): EngineerDispatch | null {
     if (!project || !branch) {
       return { kind: 'guide' };
     }
-    return { kind: 'handoff', project, branch };
+    const sourceRef = parseFlag(argv, '--source-ref') ?? undefined;
+    return { kind: 'handoff', project, branch, sourceRef };
   }
 
   if (subCmd === 'poll') {
     // `conduct-ts engineer poll` — poll intake sources and enqueue; no routing/process.
     return { kind: 'poll' };
+  }
+
+  if (subCmd === 'claim') {
+    // `conduct-ts engineer claim` — atomically dequeue the oldest pending idea.
+    return { kind: 'claim' };
   }
 
   if (subCmd === 'forget') {
@@ -131,7 +142,22 @@ export function detectEngineerCommand(argv: string[]): EngineerDispatch | null {
     return { kind: 'forget', sourceRef };
   }
 
-  // Unknown subcommand — treat as guide.
+  // `conduct-ts engineer --idea "<text>"` — launch driving a specific idea.
+  if (subCmd === '--idea') {
+    const idea = parseFlag(argv, '--idea');
+    if (!idea) return { kind: 'guide' };
+    return { kind: 'launch', idea };
+  }
+
+  // A bare non-flag positional is free-text idea input:
+  //   `conduct-ts engineer add a /healthz endpoint`
+  // (Recognized subcommands are handled above, so this cannot shadow them.)
+  if (!subCmd.startsWith('--')) {
+    const idea = argv.slice(3).join(' ').trim();
+    if (idea) return { kind: 'launch', idea };
+  }
+
+  // Unknown flag-form / empty — treat as guide.
   return { kind: 'guide' };
 }
 
@@ -167,8 +193,17 @@ export interface DispatchEngineerOpts {
   /**
    * Injected interactive launcher (for tests). When provided, the 'launch' kind
    * calls this instead of spawning a real `claude` process and returns its exit code.
+   * Receives the resolved one-shot idea (CLI-supplied) for the first session, if any.
    */
-  launchInteractive?: () => number | Promise<number>;
+  launchInteractive?: (idea?: string) => number | Promise<number>;
+  /**
+   * Injected pre-poll hook (for tests). When provided, the 'launch' kind calls this
+   * before each fresh session (unless a CLI idea was supplied) to prime the intake
+   * inbox, and prints `Intake: N issue(s) queued.` for N>0. Defaults to a real
+   * github-issues sweep ONLY on the production spawn path (i.e. when launchInteractive
+   * is NOT injected), so tests that stub the launcher never hit the network.
+   */
+  prePoll?: () => number | Promise<number>;
   /**
    * Whether we are already inside a Claude Code session (default: reads CLAUDECODE).
    * When true, the 'launch' kind prints an in-session note instead of spawning a
@@ -194,10 +229,15 @@ export interface DispatchEngineerOpts {
  * lower-friction mode (`acceptEdits`, `bypassPermissions`, …). `plan` is rejected (it would
  * defeat the loop) and coerced back to `default`.
  */
-export function engineerLaunchArgs(env: NodeJS.ProcessEnv = process.env): string[] {
+export function engineerLaunchArgs(env: NodeJS.ProcessEnv = process.env, idea?: string): string[] {
   const requested = (env.CONDUCT_ENGINEER_PERMISSION_MODE || '').trim();
   const mode = requested && requested !== 'plan' ? requested : 'default';
-  return ['--permission-mode', mode, '/engineer'];
+  // The slash command is the initial prompt; a CLI-supplied idea is appended so
+  // the skill receives it directly instead of prompting in chat. With no idea the
+  // prompt is exactly `/engineer` (backward-compatible).
+  const trimmed = (idea ?? '').trim();
+  const prompt = trimmed ? `/engineer ${trimmed}` : '/engineer';
+  return ['--permission-mode', mode, prompt];
 }
 
 /**
@@ -205,9 +245,9 @@ export function engineerLaunchArgs(env: NodeJS.ProcessEnv = process.env): string
  * the terminal so the human drives the loop. Resolves with the child's exit code.
  * Rejects on spawn error (e.g. `claude` not on PATH) so the caller can fall back.
  */
-function launchClaudeEngineer(cwd: string): Promise<number> {
+function launchClaudeEngineer(cwd: string, idea?: string): Promise<number> {
   return new Promise((resolve, reject) => {
-    const child = spawn('claude', engineerLaunchArgs(), { stdio: 'inherit', cwd });
+    const child = spawn('claude', engineerLaunchArgs(process.env, idea), { stdio: 'inherit', cwd });
     child.on('error', reject);
     child.on('exit', (code) => resolve(code ?? 0));
   });
@@ -255,10 +295,12 @@ function printGuide(print: (s: string) => void): void {
       'with a human in the loop. The subcommands below are the deterministic primitives\n' +
       'the /engineer skill calls in-chat:\n' +
       '\n' +
-      '  conduct-ts engineer                                     — launch the interactive /engineer loop\n' +
+      '  conduct-ts engineer                                     — launch the interactive /engineer loop (pre-polls intake)\n' +
+      '  conduct-ts engineer --idea "<text>"                     — launch driving a specific idea (skips intake poll)\n' +
       '  conduct-ts engineer projects                            — list registered projects\n' +
-      '  conduct-ts engineer land --project <n> --idea "<i>"    — commit pre-written spec artifacts\n' +
-      '  conduct-ts engineer handoff --project <n> --branch <b> — open spec PR + nudge daemon\n' +
+      '  conduct-ts engineer claim                               — dequeue the oldest pending intake idea (JSON)\n' +
+      '  conduct-ts engineer land --project <n> --idea "<i>" [--source-ref <ref>]    — commit pre-written spec artifacts\n' +
+      '  conduct-ts engineer handoff --project <n> --branch <b> [--source-ref <ref>] — open spec PR + nudge daemon\n' +
       '  conduct-ts engineer poll                                — poll github issues → enqueue new ideas\n' +
       '  conduct-ts engineer forget <owner/repo#N>               — drop an intake ledger entry + label\n',
   );
@@ -270,6 +312,64 @@ function makeProductionGh(): NonNullable<DispatchEngineerOpts['gh']> {
     const result = await execFileP('gh', args, { cwd: opts.cwd });
     return { stdout: String(result.stdout) };
   };
+}
+
+/**
+ * Composition root for the github-issues intake: wires the registry reader, the
+ * durable ledger + file queue, and the adapter (IntakeSource + IntakePort) over an
+ * injected gh runner. The engineer loop must NOT import a concrete adapter (FR-13);
+ * the CLI is the only place that may. Shared by `poll`, `claim`, the launch pre-poll,
+ * and the `--source-ref` write-back on `land`/`handoff`.
+ */
+function buildIntake(deps: {
+  engineerDir: string;
+  registryPath?: string;
+  gh: NonNullable<DispatchEngineerOpts['gh']>;
+  printErr: (s: string) => void;
+}): {
+  reader: ReturnType<typeof createRegistryReader>;
+  ledger: ReturnType<typeof createLedger>;
+  queue: ReturnType<typeof createFileQueue>;
+  adapter: ReturnType<typeof createGithubIssuesAdapter>;
+} {
+  const reader = createRegistryReader(deps.registryPath ? { registryPath: deps.registryPath } : {});
+  const ledger = createLedger(join(deps.engineerDir, 'ledger.json'));
+  const queue = createFileQueue(join(deps.engineerDir, 'inbox'));
+  const adapter = createGithubIssuesAdapter({
+    gh: deps.gh,
+    registry: {
+      list: async () =>
+        (await reader.listProjects()).map((p) => ({
+          name: p.remote ? parseGhRepo(p.remote) ?? p.name : p.name,
+          ghRepo: p.remote ? parseGhRepo(p.remote) ?? undefined : undefined,
+          path: p.path,
+        })),
+    },
+    ledger,
+    log: (m: string) => deps.printErr(m),
+  });
+  return { reader, ledger, queue, adapter };
+}
+
+/**
+ * Pre-poll the github-issues source and enqueue new ideas into the durable inbox,
+ * returning the count enqueued. This is the launch-time half of intake: the bare
+ * `conduct-ts engineer` primes the inbox here so the spawned `claude /engineer`
+ * session can `claim` an idea instead of starting blank. Idempotent — the ledger
+ * dedups, so a re-poll enqueues nothing new. Exported for direct testing.
+ */
+export async function prePollIntake(deps: {
+  engineerDir: string;
+  registryPath?: string;
+  gh: NonNullable<DispatchEngineerOpts['gh']>;
+  printErr: (s: string) => void;
+}): Promise<number> {
+  const { queue, adapter } = buildIntake(deps);
+  const envelopes = await adapter.poll();
+  for (const e of envelopes) {
+    await queue.enqueue(e);
+  }
+  return envelopes.length;
 }
 
 // ── Main dispatch ─────────────────────────────────────────────────────────────
@@ -296,7 +396,8 @@ export async function dispatchEngineer(
     // ── launch ──────────────────────────────────────────────────────────────────
     // Bare `conduct-ts engineer`: drop the operator into the interactive /engineer loop.
     case 'launch': {
-      const launchOne = opts.launchInteractive ?? (() => launchClaudeEngineer(process.cwd()));
+      const launchOne =
+        opts.launchInteractive ?? ((idea?: string) => launchClaudeEngineer(process.cwd(), idea));
       const confirmAnother = opts.confirmAnother ?? promptAnother;
 
       // Real-spawn path only: if we're already inside a Claude Code session, don't
@@ -313,16 +414,49 @@ export async function dispatchEngineer(
         }
       }
 
+      // Intake pre-poll: prime the durable inbox before launching so the spawned
+      // /engineer session can `claim` a github-issue idea. Defaults to a real sweep
+      // only on the production spawn path (launchInteractive not injected) so tests
+      // that stub the launcher never hit the network. A CLI-supplied idea drives a
+      // specific idea and skips polling. Best-effort — a poll failure never blocks
+      // the launch.
+      const prePoll =
+        opts.prePoll ??
+        (opts.launchInteractive
+          ? undefined
+          : () =>
+              prePollIntake({
+                engineerDir: engineerDir ?? resolveEngineerDir({}),
+                registryPath,
+                gh,
+                printErr,
+              }));
+
       // Outer loop: ONE fresh `claude /engineer` session per idea, so each idea
       // starts with clean context. Durable state (registry, lessons, processed
       // markers) is file-backed, so a fresh process loses nothing. The skill delivers
       // a single idea's spec then asks the operator to `/quit`; on exit we offer to
       // launch the next idea in a brand-new session. (The model cannot self-`/quit`
       // an interactive session, so the operator presses `/quit` once per idea.)
+      //
+      // The CLI-supplied idea is one-shot: it drives only the FIRST session; later
+      // loop iterations fall back to intake/chat (pendingIdea cleared after use).
+      let pendingIdea = dispatch.idea;
       let lastCode = 0;
       for (;;) {
+        if (!pendingIdea && prePoll) {
+          try {
+            const n = await prePoll();
+            if (n > 0) print(`Intake: ${n} issue(s) queued.`);
+          } catch (err: unknown) {
+            // Best-effort: intake must never block the interactive loop.
+            printErr(
+              `engineer: intake pre-poll failed (${err instanceof Error ? err.message : String(err)}) — continuing.`,
+            );
+          }
+        }
         try {
-          lastCode = await launchOne();
+          lastCode = await launchOne(pendingIdea);
         } catch (err: unknown) {
           const msg = err instanceof Error ? err.message : String(err);
           printErr(
@@ -332,6 +466,7 @@ export async function dispatchEngineer(
           printGuide(print);
           return 1;
         }
+        pendingIdea = undefined; // CLI idea is one-shot — next session is intake/chat driven.
         if (!(await confirmAnother())) return lastCode;
         print(''); // visual spacer before the next fresh session
       }
@@ -353,7 +488,7 @@ export async function dispatchEngineer(
 
     // ── land ──────────────────────────────────────────────────────────────────
     case 'land': {
-      const { project: projectName, idea } = dispatch;
+      const { project: projectName, idea, sourceRef } = dispatch;
       const reader = createRegistryReader(registryPath ? { registryPath } : {});
       const allProjects = await reader.listProjects();
       const record = allProjects.find((p) => p.name === projectName);
@@ -380,13 +515,25 @@ export async function dispatchEngineer(
         return 1;
       }
 
+      // Intake write-back (FR-36): when this idea originated from a github issue,
+      // comment "Routed to <repo>" and advance the ledger to `routed`. Advisory —
+      // a gh failure never fails a successful land.
+      if (sourceRef) {
+        const engDir = engineerDir ?? resolveEngineerDir({});
+        const { ledger, adapter } = buildIntake({ engineerDir: engDir, registryPath, gh, printErr });
+        await reportRouted(
+          { source: GITHUB_ISSUES_SOURCE, sourceRef, port: adapter, ledger },
+          target.name,
+        );
+      }
+
       print(JSON.stringify(result));
       return 0;
     }
 
     // ── handoff ───────────────────────────────────────────────────────────────
     case 'handoff': {
-      const { project: projectName, branch } = dispatch;
+      const { project: projectName, branch, sourceRef } = dispatch;
       const reader = createRegistryReader(registryPath ? { registryPath } : {});
       const allProjects = await reader.listProjects();
       const record = allProjects.find((p) => p.name === projectName);
@@ -424,6 +571,19 @@ export async function dispatchEngineer(
 
       if (handoffResult.kind === 'pr-opened') {
         print(JSON.stringify({ kind: 'pr-opened', url: handoffResult.url }));
+        // Intake write-back (FR-36): a real spec PR was opened — comment its URL,
+        // apply `engineer:handled`, and advance the ledger to `done`. Advisory —
+        // a gh failure never reverts a delivered PR. Only on a PR (not local-commit,
+        // which has no URL to report).
+        if (sourceRef) {
+          const engDir = engineerDir ?? resolveEngineerDir({});
+          const { ledger, adapter } = buildIntake({ engineerDir: engDir, registryPath, gh, printErr });
+          await reportDone(
+            { source: GITHUB_ISSUES_SOURCE, sourceRef, port: adapter, ledger },
+            handoffResult.url,
+            branch,
+          );
+        }
       } else {
         // pr-skipped — record authored key manually (openSpecPr already records on skip).
         print(
@@ -457,29 +617,46 @@ export async function dispatchEngineer(
     // processing, NO setInterval/detached spawn — a single synchronous sweep. The
     // ledger dedups, so a double-poll enqueues nothing new.
     case 'poll': {
-      const reader = createRegistryReader(registryPath ? { registryPath } : {});
       const engDir = engineerDir ?? resolveEngineerDir({});
-      const ledger = createLedger(join(engDir, 'ledger.json'));
-      const queue = createFileQueue(join(engDir, 'inbox'));
-      const adapter = createGithubIssuesAdapter({
-        gh,
-        registry: {
-          list: async () =>
-            (await reader.listProjects()).map((p) => ({
-              name: p.remote ? parseGhRepo(p.remote) ?? p.name : p.name,
-              ghRepo: p.remote ? parseGhRepo(p.remote) ?? undefined : undefined,
-              path: p.path,
-            })),
-        },
-        ledger,
-        log: (m: string) => printErr(m),
-      });
+      const { queue, adapter } = buildIntake({ engineerDir: engDir, registryPath, gh, printErr });
 
       const envelopes = await adapter.poll();
       for (const e of envelopes) {
         await queue.enqueue(e);
       }
       print(JSON.stringify({ kind: 'poll', enqueued: envelopes.length, sourceRefs: envelopes.map((e) => e.sourceRef) }));
+      return 0;
+    }
+
+    // ── claim ─────────────────────────────────────────────────────────────────
+    // `conduct-ts engineer claim`: atomically dequeue the oldest pending idea so the
+    // /engineer skill can route it. claim+ack removes it from the inbox (the ledger
+    // is the durable record); the ledger advances to `claimed`. On an empty inbox,
+    // reports {empty:true} — the skill then falls back to a CLI idea arg or chat.
+    case 'claim': {
+      const engDir = engineerDir ?? resolveEngineerDir({});
+      const { ledger, queue } = buildIntake({ engineerDir: engDir, registryPath, gh, printErr });
+
+      const envelope = await queue.claim();
+      if (!envelope) {
+        print(JSON.stringify({ kind: 'claim', empty: true }));
+        return 0;
+      }
+      // Remove from the inbox now that we own it — the ledger carries lifecycle from here.
+      await queue.ack(envelope);
+      try {
+        await ledger.transition(envelope.source, envelope.sourceRef, 'claimed');
+      } catch {
+        // Entry may be absent for a non-recording source — advisory transition.
+      }
+      print(
+        JSON.stringify({
+          kind: 'claim',
+          text: envelope.text,
+          source: envelope.source,
+          sourceRef: envelope.sourceRef,
+        }),
+      );
       return 0;
     }
 

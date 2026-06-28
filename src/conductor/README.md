@@ -420,9 +420,12 @@ even if your global `defaultMode` is `plan`; set `CONDUCT_ENGINEER_PERMISSION_MO
 `acceptEdits`, `bypassPermissions`) to change it (`plan` is coerced back to `default`). Run from
 inside an existing Claude Code session, it instead tells you to invoke `/engineer` directly (no
 nested session); with `claude` not on `PATH` it prints usage.
-The `conduct-ts engineer projects | land | handoff | poll | forget` subcommands are the
-deterministic primitives the skill calls between human gates (`poll`/`forget` drive the Phase 9.3b
-github-issues intake — see below).
+The `conduct-ts engineer projects | claim | land | handoff | poll | forget` subcommands are the
+deterministic primitives the skill calls between human gates (`claim`/`poll`/`forget` drive the
+Phase 9.3b github-issues intake — see below). `land`/`handoff` accept an optional `--source-ref
+<owner/repo#N>` so an intake-originated idea reports back to its issue. The bare launcher also
+accepts an idea directly: `conduct-ts engineer "<idea>"` (or `--idea "<idea>"`) drives one specific
+idea and skips the intake poll.
 
 Per idea (each isolated so one repo's failure never corrupts another):
 
@@ -474,12 +477,20 @@ through an injected `gh` runner — it never touches a registered repo's working
   dedups, so polling twice enqueues nothing new.
 - **The `engineer:handled` label is an output marker, not an intake filter.** It is applied on `done`
   (auto-created if missing) and makes the issue a re-capture skip; capture itself stays assignee-based.
-- **Poll-on-launch.** When intake sources + an inbox are wired into `runEngineerMode`, a launch polls,
-  enqueues, then claims and processes **exactly one** envelope (the oldest); an empty inbox falls back
-  to interactive chat capture. A processing failure releases the claim for re-delivery.
+- **Poll-on-launch (live path).** The bare `conduct-ts engineer` launcher **pre-polls** github issues
+  and enqueues new ones into the inbox *before* spawning the interactive `claude /engineer` session
+  (printing `Intake: N issue(s) queued.`), then the session's step 1 runs `conduct-ts engineer claim`
+  to atomically dequeue the **oldest** idea (claim+ack removes it from the inbox; the ledger advances
+  to `claimed`). An empty inbox → the skill falls back to a CLI-supplied idea or chat capture. A
+  CLI-supplied idea skips the pre-poll for that session. The pre-poll is best-effort — a `gh` failure
+  never blocks the launch. (The legacy `runEngineerMode` loop in `intake/loop.ts` carries an
+  equivalent in-process poll→claim→process block, but it is a **test-only** scripted harness — the
+  live launch path is the pre-poll + `claim` seam described here.)
 - **Write-back (`report()`)** posts `Routed to <repo>` at routing and `Spec PR opened: <url>` at
-  handoff, applying `engineer:handled` on done. It is **non-fatal** (a `gh` outage never reverts a
-  delivered spec PR) and **de-duplicated** per `(sourceRef, status)`.
+  handoff, applying `engineer:handled` on done. The skill threads it through the `--source-ref` flag
+  on `land` (routed) and `handoff` (done); the shared `intake/writeback.ts` helper backs both the CLI
+  primitives and the test-only loop. It is **non-fatal** (a `gh` outage never reverts a delivered spec
+  PR) and **de-duplicated** per `(sourceRef, status)`.
 - **Re-eligibility + churn guard.** A `done` issue whose spec PR closes **without merging** is
   re-emitted on the next poll (label stripped, `attempts++`); a **merged** PR is never reopened. Past
   the reopen cap the issue is parked as `needs-manual` and stays out of the inbox until

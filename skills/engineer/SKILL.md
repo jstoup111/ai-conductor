@@ -52,7 +52,20 @@ in-chat (that bloats and degrades context). Durable state (registry, lessons, pr
 is file-backed, so the next fresh session picks up everything that matters. For this one idea:
 
 ### 1. Capture the idea
-Take the operator's raw idea from the chat. Empty/whitespace → re-prompt, do not proceed.
+The idea can arrive from **three** sources — resolve them in this order:
+
+1. **GitHub intake.** First run `conduct-ts engineer claim`. It dequeues the oldest pending intake
+   idea and prints JSON. On `{ "kind": "claim", "text": "...", "sourceRef": "owner/repo#N" }`, use
+   `text` as the idea and **carry `sourceRef`** — you'll pass it back in steps 4–5 so the originating
+   issue gets commented + labelled. On `{ "kind": "claim", "empty": true }`, fall through.
+2. **Launch argument / chat.** If the launch prompt already carried an idea (`conduct-ts engineer
+   "<idea>"` or `--idea "<idea>"`), use it. Otherwise take the operator's raw idea from the chat.
+
+Empty/whitespace from all three → re-prompt, do not proceed. There is **no `sourceRef`** for ideas
+that came from the CLI arg or chat — omit `--source-ref` in steps 4–5 for those.
+
+> The bare `conduct-ts engineer` launcher pre-polls GitHub issues before this session starts, so a
+> `claim` here returns work captured at launch. You do not poll yourself — just claim.
 
 ### 2. Route to a target repo
 Read the registry: `conduct-ts engineer projects` (JSON: `{name, path, description, tags}` per project).
@@ -77,7 +90,10 @@ hand-write stub stories, DRAFT artifacts, or shell out to `claude -p`. If the op
 step, loop within that skill until accepted or abandon the idea — never carry a DRAFT forward.
 
 ### 4. Land the already-authored spec on a branch in the target repo
-`conduct-ts engineer land --project <name> --idea "<idea>"`. This is a **deterministic primitive** — it
+`conduct-ts engineer land --project <name> --idea "<idea>"` (append `--source-ref <ref>` when the
+idea came from GitHub intake — this comments "Routed to `<repo>`" on the originating issue and
+advances the intake ledger; write-back is advisory and never blocks the land). This is a
+**deterministic primitive** — it
 does NOT author; the real DECIDE skills in step 3 already wrote the artifacts to the target's
 `.docs/`. `land`:
 - resolves the canonical target path from the registry (no cwd fallback),
@@ -89,10 +105,12 @@ It writes nothing outside the target repo and never touches a sibling repo. It p
 `{ slug, branch, repoPath }` — pass `branch` to step 5.
 
 ### 5. Open the spec PR + nudge the daemon
-`conduct-ts engineer handoff --project <name> --branch <branch>` (the `branch` from step 4). This opens a
-spec PR **to the target repo** (no-remote → local-commit fallback), records the authored-ledger entry,
-and calls `ensureRunning(repoPath)` fire-and-forget so that repo's daemon is alive to pick the spec up
-**after you merge it**. It never merges and never builds.
+`conduct-ts engineer handoff --project <name> --branch <branch>` (the `branch` from step 4; append
+`--source-ref <ref>` when the idea came from GitHub intake — on a real PR this comments the PR URL on
+the originating issue, applies the `engineer:handled` label, and advances the ledger to `done`).
+This opens a spec PR **to the target repo** (no-remote → local-commit fallback), records the
+authored-ledger entry, and calls `ensureRunning(repoPath)` fire-and-forget so that repo's daemon is
+alive to pick the spec up **after you merge it**. It never merges and never builds.
 
 ### 6. Deliver, then end the session
 The spec PR (or local-commit fallback) is the **final artifact**. Once step 5 reports it, tell the
@@ -112,7 +130,9 @@ launcher regains control when the operator quits and relaunches you clean for th
 
 ## Verification
 
+- [ ] Idea captured from the right source (`claim` first; CLI arg / chat fallback) — `sourceRef` carried only for intake ideas
 - [ ] Idea routed with explicit operator confirmation (redirect + no-fit + decline all handled)
+- [ ] For intake ideas: `--source-ref` threaded into `land` + `handoff` so the originating issue is commented + labelled
 - [ ] DECIDE ran the real `/brainstorm`→`/stories`→`/plan` skills (not stubs, not DRAFT, no `claude -p`)
 - [ ] All artifacts + the `spec/<slug>` branch landed inside the resolved target repo only
 - [ ] Spec PR opened to the target repo; nothing built, nothing merged
