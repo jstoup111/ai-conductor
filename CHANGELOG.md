@@ -82,6 +82,20 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- **Autonomous `/remediate` no longer crashes the conductor with `Unknown step:
+  remediate`.** The `remediate` SHIP sub-routine is dispatched out-of-band (only
+  when a `prd_audit` blocks) and is deliberately absent from the linear
+  `ALL_STEPS` sequence, but it was never registered anywhere the runner resolves
+  a step's phase/index/label. So the moment the conductor tried to dispatch it,
+  `phaseForStep` (via `resolveStepConfig`) and `getStepDefinition`/`getStepIndex`
+  (in `buildSystemPrompt`) threw `Unknown step: remediate` — which the daemon
+  caught and turned into a `.pipeline/HALT`, defeating the whole point of
+  autonomous remediation. Added an `OUT_OF_BAND_STEPS` registry that
+  `getStepDefinition`/`phaseForStep` fall back to (so out-of-band steps resolve a
+  label + `SHIP` phase without occupying a gate-loop slot), a non-throwing
+  `tryGetStepIndex`, and a labelled dispatch header for steps with no linear
+  position. A genuinely unknown step still throws.
+
 - **Daemon feature errors are now diagnosable (capture + HALT) instead of an
   opaque `error`.** When a feature threw — a crashed step, or worktree-prep /
   `bin/setup` failing — the daemon logged a bare `error`, dropped the captured

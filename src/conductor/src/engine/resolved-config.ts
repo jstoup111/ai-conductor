@@ -7,7 +7,7 @@ import type {
   PhaseConfig,
   TierOverride,
 } from '../types/config.js';
-import { ALL_STEPS } from './steps.js';
+import { getStepDefinition } from './steps.js';
 
 // ────────────────────────────────────────────────────────────────────────────
 // Built-in defaults
@@ -243,10 +243,11 @@ export function resolveStepConfig(
 }
 
 /**
- * Look up a step's phase from the hardcoded registry.
+ * Look up a step's phase from the registry. Delegates to `getStepDefinition`
+ * so it resolves out-of-band steps (e.g. `remediate`) too — those are
+ * dispatchable but absent from the linear `ALL_STEPS` sequence. A genuinely
+ * unknown step still throws.
  */
 export function phaseForStep(step: StepName): Phase {
-  const def = ALL_STEPS.find((s) => s.name === step);
-  if (!def) throw new Error(`Unknown step: ${step}`);
-  return def.phase;
+  return getStepDefinition(step).phase;
 }
