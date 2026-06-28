@@ -103,7 +103,7 @@ Run \`/bootstrap\` to detect the tech stack and generate full project config.
 `;
 }
 
-const GITIGNORE_SKELETON = ['.pipeline/', '.daemon/', '.worktrees/', ''].join('\n');
+const GITIGNORE_SKELETON = ['.pipeline/', '.daemon/', '.worktrees/', '.serena/', ''].join('\n');
 
 async function dirIsNonEmpty(dir: string): Promise<boolean> {
   if (!existsSync(dir)) return false;

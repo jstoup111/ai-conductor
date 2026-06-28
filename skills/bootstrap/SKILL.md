@@ -279,6 +279,7 @@ Add to `.gitignore` (idempotent — don't duplicate):
 - `.pipeline/` — runtime state, not source
 - `.daemon/` — daemon pidfile + activity log (`daemon.log`), not source
 - `.worktrees/` — git worktrees for parallel feature development
+- `.serena/` — Serena MCP semantic index + memories, regenerated locally (not source)
 - `.env` — local environment (not committed; `.env.example` is the committed reference)
 - `.env.local` — worktree-specific environment overrides
 

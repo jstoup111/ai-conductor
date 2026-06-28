@@ -283,7 +283,7 @@ describe('conduct create — scaffold + register (FR-6)', () => {
     await rm(sandbox, { recursive: true, force: true });
   });
 
-  it('scaffolds git repo + CLAUDE.md + .gitignore (3 ignores) + a `created` record', async () => {
+  it('scaffolds git repo + CLAUDE.md + .gitignore (4 ignores) + a `created` record', async () => {
     const res = await runCli(['create', 'fresh-proj'], {
       cwd: sandbox,
       registry,
@@ -296,11 +296,13 @@ describe('conduct create — scaffold + register (FR-6)', () => {
     expect(existsSync(join(proj, '.git'))).toBe(true);
     // Bootstrap CLAUDE.md.
     expect(existsSync(join(proj, 'CLAUDE.md'))).toBe(true);
-    // .gitignore seeded with the three required ignores.
+    // .gitignore seeded with the required ignores (incl. .serena/ — Serena MCP
+    // scaffolding is regenerated locally and must not be committed).
     const gitignore = await readFile(join(proj, '.gitignore'), 'utf-8');
     expect(gitignore).toContain('.pipeline/');
     expect(gitignore).toContain('.daemon/');
     expect(gitignore).toContain('.worktrees/');
+    expect(gitignore).toContain('.serena/');
 
     // A `created` record (status provenance).
     const records = await readRegistryFile(registry);

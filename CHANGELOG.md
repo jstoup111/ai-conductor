@@ -12,6 +12,16 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Changed
 
+- **`.serena/` is now gitignored in scaffolded and onboarded projects.** Serena's
+  MCP server writes a `.serena/` directory (semantic-symbol cache, `project.yml`,
+  and machine-written `memories/`) into whatever project it runs against. Since
+  the harness registers Serena at user scope, every consumer project picked up
+  this directory as untracked state. It's regenerated locally and not source, so
+  `conduct create` now seeds `.serena/` into the `.gitignore` skeleton
+  (`registry-cli.ts`) and `/bootstrap` adds it when onboarding an existing
+  project. The harness repo's own `.gitignore` ignores `.serena/` (and the
+  session-local `.handoffs/`) too.
+
 - **Run-specific SHIP artifacts moved from tracked `.docs/` to gitignored
   `.pipeline/` with stable filenames.** `manual_test`, `prd_audit`, and
   `architecture_review_as_built` now write their evidence to
