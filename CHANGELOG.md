@@ -12,6 +12,18 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- **Daemon restart no longer re-dispatches (and clobbers) human-parked halted features.**
+  The daemon tracked parked/halted features only in process memory and recorded only `done`
+  features in the durable `.daemon/processed/` ledger. After a restart that memory was empty,
+  so a feature halted for a human — whose merged spec is still on the base branch — looked
+  fresh, got re-dispatched, and re-entered the conductor over its kept worktree, regressing
+  `conduct-state.json` (e.g. `last_step` reset to `acceptance_specs` while later steps showed
+  `done`). The durable `.pipeline/HALT` marker was consulted only to *un-park* a slug already
+  in the in-memory set, never to *park* one at discovery. `pickEligible` now checks the
+  on-disk HALT marker for any candidate the current process never dispatched, making worktree
+  status — not the base branch plus lost memory — authoritative across restarts. This is the
+  root cause behind the recurring "restart wipes halted-project state" symptom that earlier
+  fixes addressed only downstream of the re-dispatch.
 - **Daemon re-dispatch of halted features no longer wipes BUILD/SHIP progress.** When a
   feature halts mid-BUILD or mid-SHIP and is re-queued (after clearing `.pipeline/HALT`),
   the daemon now preserves prior step statuses in `conduct-state.json` instead of

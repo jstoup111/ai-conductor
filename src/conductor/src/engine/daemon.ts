@@ -196,6 +196,17 @@ export async function runDaemon(
             // marker cleared → fall through as eligible (re-dispatch + resume)
           } else if (started.has(b.slug)) {
             continue; // done/error — permanently excluded this run
+          } else if (deps.isHalted && (await deps.isHalted(b.slug))) {
+            // A feature this process never dispatched but whose worktree carries a
+            // live `.pipeline/HALT` marker — parked for a human by a PRIOR run. The
+            // `parked`/`started` sets are in-memory only and are empty after a daemon
+            // restart, so without this the feature looks fresh (its merged spec is
+            // still on the base branch, and only `done` features are in the durable
+            // processed ledger) and gets re-dispatched, re-entering the conductor over
+            // the kept worktree and clobbering its persisted state. Honor the durable
+            // marker: park it so the un-park-on-clear path above governs re-dispatch.
+            parked.add(b.slug);
+            continue;
           }
           return b;
         }
