@@ -44,6 +44,7 @@ import {
   CUSTOM_COMPLETION_PREDICATES,
   classifyPrdAuditGaps,
   readRemediationPlan,
+  sweepStaleReviewArtifacts,
   type RemediationGap,
 } from './artifacts.js';
 import { resolveStepConfig } from './resolved-config.js';
@@ -536,6 +537,21 @@ export class Conductor {
         state[step.name] = 'in_progress';
 
         await this.events.emit({ type: 'step_started', step: step.name, index: i });
+
+        // Deterministic freshness guard — applied ONLY when re-entering a step
+        // that previously FAILED (`failed`) or was REWORKED (kicked back →
+        // `stale`), never on a clean first run. Such a step ran before, so a
+        // prior-session `.pipeline/` artifact may linger that an unattended agent
+        // could reuse instead of rewriting — looping the freshness gate to a HALT.
+        // Deleting it forces regeneration this session. A first run has no prior
+        // attempt and nothing to reuse, so it is left untouched.
+        if (currentStatus === 'failed' || currentStatus === 'stale') {
+          await sweepStaleReviewArtifacts(
+            this.projectRoot,
+            step.name,
+            state.session_started_at,
+          );
+        }
 
         // Fresh session per step (Phase 4 + daemon fix): when freshContextPerStep
         // is on (daemon/auto only — interactive `/conduct` leaves it false so the

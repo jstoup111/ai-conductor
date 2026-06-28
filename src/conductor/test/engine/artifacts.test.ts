@@ -10,6 +10,7 @@ import {
   checkStepCompletion,
   isStoriesApproved,
   classifyPrdAuditGaps,
+  sweepStaleReviewArtifacts,
   FINISH_CHOICE_MARKER,
   HALT_MARKER,
 } from '../../src/engine/artifacts.js';
@@ -496,6 +497,53 @@ describe('engine/artifacts', () => {
       // Session started "now" → the 2000 file is stale and ignored.
       const c = await classifyPrdAuditGaps(dir, Date.now());
       expect(c.kind).toBe('clean');
+    });
+  });
+
+  describe('sweepStaleReviewArtifacts', () => {
+    const SESSION = 1_000_000;
+    const stale = new Date(SESSION - 60_000); // mtime before session start
+    const freshTs = new Date(SESSION + 60_000); // mtime after session start
+
+    it("deletes a gated step's stale .pipeline artifact so it cannot be reused", async () => {
+      await createFile('.pipeline/architecture-review-as-built.md', 'prior-session verdict');
+      await utimes(join(dir, '.pipeline/architecture-review-as-built.md'), stale, stale);
+
+      const removed = await sweepStaleReviewArtifacts(dir, 'architecture_review_as_built', SESSION);
+
+      expect(removed).toHaveLength(1);
+      // Reuse is now impossible — the step must regenerate it this session.
+      expect(await findArtifactFiles(dir, 'architecture_review_as_built')).toHaveLength(0);
+    });
+
+    it('keeps an artifact already fresh this session (within-session retry is safe)', async () => {
+      await createFile('.pipeline/prd-audit.md', 'written this session');
+      await utimes(join(dir, '.pipeline/prd-audit.md'), freshTs, freshTs);
+
+      const removed = await sweepStaleReviewArtifacts(dir, 'prd_audit', SESSION);
+
+      expect(removed).toHaveLength(0);
+      expect(await findArtifactFiles(dir, 'prd_audit')).toHaveLength(1);
+    });
+
+    it('never sweeps build state (.pipeline/task-status.json is cumulative run state)', async () => {
+      await createFile('.pipeline/task-status.json', '{"tasks":[]}');
+      await utimes(join(dir, '.pipeline/task-status.json'), stale, stale);
+
+      const removed = await sweepStaleReviewArtifacts(dir, 'build', SESSION);
+
+      expect(removed).toHaveLength(0);
+      expect(await findArtifactFiles(dir, 'build')).toHaveLength(1);
+    });
+
+    it('is a no-op when sessionStartedAt is undefined (legacy state → fail open)', async () => {
+      await createFile('.pipeline/manual-test-results.md', 'old');
+      await utimes(join(dir, '.pipeline/manual-test-results.md'), stale, stale);
+
+      const removed = await sweepStaleReviewArtifacts(dir, 'manual_test', undefined);
+
+      expect(removed).toHaveLength(0);
+      expect(await findArtifactFiles(dir, 'manual_test')).toHaveLength(1);
     });
   });
 });

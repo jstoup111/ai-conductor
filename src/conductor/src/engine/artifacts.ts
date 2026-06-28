@@ -1,4 +1,4 @@
-import { access, readdir, readFile, stat } from 'fs/promises';
+import { access, readdir, readFile, rm, stat } from 'fs/promises';
 import { join, relative } from 'path';
 import type { StepName } from '../types/index.js';
 import type { HarnessConfig } from '../types/config.js';
@@ -151,6 +151,59 @@ export async function stepHasArtifacts(
   if (!patterns || patterns.length === 0) return true;
   const files = await findArtifactFiles(dir, step);
   return files.length > 0;
+}
+
+/**
+ * Freshness-gated SHIP re-review steps whose `.pipeline/` artifact must reflect
+ * THIS session. Their completion gates reject a stale (prior-session) artifact,
+ * but the gate is satisfiable only if the step's agent actually rewrites the
+ * file — and an unattended (print-mode) agent sometimes judges a prior-session
+ * artifact "good enough" and declines to rewrite, so the gate reads it as stale
+ * and loops to a HALT (observed on a resumed feature at
+ * `architecture_review_as_built`). `build` is excluded: its
+ * `.pipeline/task-status.json` is cumulative run STATE, not a re-review artifact.
+ */
+const STALE_SWEEP_STEPS: ReadonlySet<StepName> = new Set<StepName>([
+  'manual_test',
+  'prd_audit',
+  'architecture_review_as_built',
+]);
+
+/**
+ * Before a freshness-gated re-review step (re)runs, delete its `.pipeline/`
+ * run-evidence artifact(s) when they predate this session, so the step CANNOT be
+ * satisfied by reusing a stale artifact the agent declined to rewrite. With the
+ * file gone the agent must regenerate it (gate passes) or produce nothing (gate
+ * fails honestly as "missing" — not a false "stale"/reuse loop). This is the
+ * deterministic complement to the skill-prose instruction to always rewrite.
+ *
+ * The conductor calls this ONLY when re-entering a step that previously failed or
+ * was reworked (kicked back) — never on a clean first run, which has no prior
+ * attempt to reuse. This function is policy-free: it sweeps stale artifacts for
+ * the gated step whenever called.
+ *
+ * No-op for non-sweep steps, when `sessionStartedAt` is undefined (legacy state
+ * / opt-out — fail open), and for artifacts already fresh this session (e.g. a
+ * within-session retry must not lose attempt 1's output). Returns the paths
+ * removed, for logging. Best-effort: an unlink race is swallowed.
+ */
+export async function sweepStaleReviewArtifacts(
+  dir: string,
+  step: StepName,
+  sessionStartedAt: number | undefined,
+): Promise<string[]> {
+  if (!STALE_SWEEP_STEPS.has(step) || sessionStartedAt === undefined) return [];
+  const removed: string[] = [];
+  for (const f of await findArtifactFiles(dir, step)) {
+    if (await fileIsFreshSinceSession(f, sessionStartedAt)) continue; // fresh → keep
+    try {
+      await rm(f);
+      removed.push(f);
+    } catch {
+      /* best-effort: a concurrent unlink / permission error must not abort the step */
+    }
+  }
+  return removed;
 }
 
 export interface CompletionResult {
