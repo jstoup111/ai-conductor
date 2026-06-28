@@ -530,7 +530,8 @@ dedicated test coverage (950+ tests). See the feature comparison in
   `conduct register [path]` records an existing git repo (name=basename, absolute path, redacted
   origin remote); `conduct create <name> [--remote <url>]` scaffolds a fresh project (git init +
   skeleton CLAUDE.md referencing HARNESS.md + `.gitignore` ignoring `.pipeline/`, `.daemon/`,
-  `.worktrees/`; `--remote` is add-only, no push) and refuses to clobber a non-empty target.
+  `.worktrees/`, `.serena/`; `--remote` is add-only, no push) and refuses to clobber a non-empty
+  target.
   Both are **non-interactive** (run to completion and exit). `/bootstrap` auto-registers the
   project via `conduct register .` after onboarding (idempotent).
 - **Pinned Node**: `conduct-ts` reads `src/conductor/.tool-versions` and exports

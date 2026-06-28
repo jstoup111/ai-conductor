@@ -20,3 +20,7 @@ Thumbs.db
 *~
 .vscode/
 .idea/
+
+# Tool-local / session state (regenerated locally, not part of the harness)
+.serena/
+.handoffs/
