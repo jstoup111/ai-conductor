@@ -75,6 +75,25 @@ describe('DefaultStepRunner', () => {
     expect(opts.prompt).toMatch(/\/pipeline|\/tdd/);
   });
 
+  // Regression: `remediate` is dispatched out-of-band when a prd_audit blocks
+  // (conductor.ts). It's deliberately absent from the linear ALL_STEPS sequence,
+  // so resolving its config/index/label threw "Unknown step: remediate" — which
+  // the daemon caught and wrote to .pipeline/HALT, blocking autonomous SHIP
+  // remediation entirely. run() must dispatch it like any other autonomous step.
+  it('dispatches the out-of-band remediate step without throwing', async () => {
+    const provider = createMockProvider();
+    const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project');
+
+    const result = await runner.run('remediate', emptyState);
+
+    expect(result.success).toBe(true);
+    // Autonomous → invoke(), and the prompt carries the /remediate command.
+    const opts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    expect(opts.prompt).toContain('/remediate');
+    // No linear index → labelled header instead of "N/total".
+    expect(opts.systemPrompt).toContain('Remediate');
+  });
+
   it('autonomous steps use --dangerouslySkipPermissions', async () => {
     const provider = createMockProvider();
     const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project');

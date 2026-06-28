@@ -196,11 +196,35 @@ export const ALL_STEPS: StepDefinition[] = [
   },
 ];
 
+/**
+ * Steps that are dispatchable via the runner (so they appear in the `StepName`
+ * union, STEP_PROMPTS, and the DEFAULT_STEP_* config maps) but are deliberately
+ * NOT part of the linear `ALL_STEPS` gate-loop sequence. The conductor invokes
+ * them out-of-band — e.g. `remediate` runs only when a `prd_audit` blocks, so
+ * it must never occupy an ordered slot the main loop would dispatch
+ * unconditionally. They still need a `StepDefinition` so the runner can resolve
+ * a label, phase, and per-step config when dispatching them. Without this entry
+ * `getStepDefinition`/`phaseForStep` throw `Unknown step: remediate`, which the
+ * daemon catches and turns into a `.pipeline/HALT`.
+ */
+export const OUT_OF_BAND_STEPS: Record<string, StepDefinition> = {
+  remediate: {
+    name: 'remediate',
+    label: 'Remediate',
+    phase: 'SHIP',
+    enforcement: 'advisory',
+    prerequisites: ['prd_audit'],
+    skippableForTiers: [],
+    isCheckpoint: false,
+    skillName: 'remediate',
+  },
+};
+
 const stepMap = new Map(ALL_STEPS.map((s) => [s.name, s]));
 const stepIndexMap = new Map(ALL_STEPS.map((s, i) => [s.name, i]));
 
 export function getStepDefinition(name: StepName): StepDefinition {
-  const def = stepMap.get(name);
+  const def = stepMap.get(name) ?? OUT_OF_BAND_STEPS[name];
   if (!def) throw new Error(`Unknown step: ${name}`);
   return def;
 }
@@ -209,6 +233,16 @@ export function getStepIndex(name: StepName): number {
   const idx = stepIndexMap.get(name);
   if (idx === undefined) throw new Error(`Unknown step: ${name}`);
   return idx;
+}
+
+/**
+ * Like `getStepIndex` but returns `null` for steps with no position in the
+ * linear sequence (out-of-band steps such as `remediate`) instead of throwing.
+ * The caller decides how to present a step that has no "N/total" slot.
+ */
+export function tryGetStepIndex(name: StepName): number | null {
+  const idx = stepIndexMap.get(name);
+  return idx === undefined ? null : idx;
 }
 
 export function getStepByIndex(index: number): StepDefinition {
