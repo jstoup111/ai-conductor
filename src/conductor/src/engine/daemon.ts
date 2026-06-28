@@ -64,6 +64,30 @@ export interface DaemonDeps {
   sleep?: (ms: number) => Promise<void>;
   /** Injectable clock for the wall-clock ceiling (tests pass a fake). */
   now?: () => number;
+
+  // ── Halt-reconciliation hooks (ADR-013) — all OPTIONAL so the pure core
+  //    (and its no-git tests) run unchanged when they are absent. ──────────────
+  /**
+   * FR-1: scan inherited state and render the startup dashboard to both sinks.
+   * Invoked ONCE, before any dispatch.
+   */
+  renderStartupDashboard?: () => Promise<void>;
+  /**
+   * FR-4: resolve the current base-branch tip SHA from the discovery ref
+   * (`refresh` requests a remote fetch first). Returns `null` when the SHA
+   * cannot be resolved (offline / unset HEAD) — treated as "no advance".
+   */
+  resolveBaseSha?: (opts: { refresh: boolean }) => Promise<string | null>;
+  /** FR-5/FR-11: the persisted last-seen base SHA, or `null` when absent/corrupt. */
+  readPersistedBaseSha?: () => Promise<string | null>;
+  /** FR-4: persist the last-seen base SHA (best-effort; never throws). */
+  writePersistedBaseSha?: (sha: string) => Promise<void>;
+  /**
+   * FR-7: re-kick sweep over every halted worktree for a genuine base advance
+   * `sha`. Clears markers only — issues NO dispatch (FR-8). The per-feature
+   * FR-9 bound lives inside the wired impl.
+   */
+  rekickSweep?: (sha: string) => Promise<void>;
 }
 
 export interface DaemonOptions {
@@ -179,6 +203,48 @@ export async function runDaemon(
     );
   };
 
+  // ── Startup (ADR-013): dashboard before any dispatch, then base-SHA seed +
+  //    downtime-advance re-kick. All hooks are optional; absent → the pure
+  //    pre-fix behavior (PR #109 markers honored, no re-kick). ────────────────
+  await deps.renderStartupDashboard?.();
+
+  // Seed the last-seen SHA from the persisted value. A genuine advance is
+  // `current !== lastSeenSha` with `lastSeenSha != null`; a null seed (first
+  // run / corrupt file) initializes WITHOUT a sweep (FR-5 first-run path).
+  let lastSeenSha: string | null = deps.readPersistedBaseSha
+    ? await deps.readPersistedBaseSha()
+    : null;
+
+  /**
+   * Detect a base-SHA advance and, on a genuine one, run the re-kick sweep then
+   * persist the new SHA. Crash-safe (FR-10): an unresolved or throwing
+   * resolution is treated as "no advance" and never propagates out of the loop.
+   * A first observation (null seed) initializes without re-kicking (FR-5).
+   */
+  const maybeRekick = async (refresh: boolean): Promise<void> => {
+    if (!deps.resolveBaseSha) return;
+    let current: string | null = null;
+    try {
+      current = await deps.resolveBaseSha({ refresh });
+    } catch (err) {
+      log(`base-SHA resolution failed (${err instanceof Error ? err.message : String(err)}); treating as no advance`);
+      return;
+    }
+    if (!current) return; // unresolved → no advance this tick (FR-10)
+    if (current === lastSeenSha) return; // no advance (PR #109 invariant preserved)
+    // A genuine advance only re-kicks when there is a prior SHA to advance FROM;
+    // a null seed is first-run init (record, no sweep — FR-5).
+    if (lastSeenSha != null) {
+      await deps.rekickSweep?.(current);
+    }
+    lastSeenSha = current;
+    await deps.writePersistedBaseSha?.(current);
+  };
+
+  // Startup advance check: refresh so a base that moved on origin while the
+  // daemon was DOWN is caught (FR-5 downtime-advance path).
+  await maybeRekick(true);
+
   let stopReason: DaemonStopReason | null = null;
 
   while (true) {
@@ -225,7 +291,14 @@ export async function runDaemon(
       // Only when fully idle (nothing running) AND nothing left locally do we reach
       // out to origin for newly-merged specs — "drained, now find more".
       if (!next && inFlight.size === 0) {
-        next = await pickEligible(await deps.discoverBacklog({ refresh: true }));
+        const refreshed = await deps.discoverBacklog({ refresh: true });
+        // FR-6: the refresh above already fetched origin, so the discovery ref is
+        // current — re-read the base SHA WITHOUT a second fetch and, on a genuine
+        // advance, re-kick before consuming the backlog so a freshly-cleared
+        // marker is un-parked in THIS iteration (its dispatch still flows through
+        // the existing un-park path, FR-8 — the sweep issues none).
+        await maybeRekick(false);
+        next = await pickEligible(refreshed);
       }
 
       if (next) {

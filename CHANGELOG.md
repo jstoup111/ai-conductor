@@ -12,6 +12,27 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- **Daemon halt-reconciliation — startup dashboard + main-advance re-kick (ADR-013).**
+  On startup, before any dispatch, the daemon now scans `.worktrees/*/` and the
+  `.daemon/processed/` ledger and prints a four-group inherited-state dashboard
+  (HALTED / IN-PROGRESS / ELIGIBLE / PROCESSED, precedence in that order) to both
+  stdout and `daemon.log`. It also tracks the base-branch tip SHA, persisting the
+  last-seen value to **`.daemon/last-base-sha`** (corrupt/empty/non-40-hex →
+  treated as absent, never a spurious advance). On a genuine base-SHA advance —
+  observed live during an idle refresh, or at startup versus the persisted value
+  (a base that moved while the daemon was down) — the daemon **re-kicks every
+  halted feature**: it aborts any paused 9.0 rebase (a failed abort leaves the
+  marker intact), preserves the reason to **`.pipeline/HALT.cleared`**, removes
+  `.pipeline/HALT`, and drops a **`.pipeline/REKICK`** sentinel. Re-kick issues no
+  direct dispatch — clearing the marker lets PR #109's existing un-park path
+  re-dispatch the feature, which then resumes **rebase-first** (9.0's
+  rebase-onto-latest runs before the pending gate re-verifies, so an advanced base
+  is integrated first). The re-kick is bounded by a per-feature last-rekick SHA
+  (a same-SHA re-halt is not re-kicked again), and a plain restart with no advance
+  honors all markers exactly as PR #109 does. New modules: `engine/daemon-sha.ts`,
+  `engine/daemon-dashboard.ts`, `engine/daemon-rekick.ts`; new optional
+  `DaemonDeps` hooks wired in `daemon-cli.ts`.
+
 - **GitHub-issues intake now fires on the live `conduct-ts engineer` launch.**
   Previously poll-on-launch lived only in the test-only `runEngineerMode` harness,
   so bare `conduct-ts engineer` dropped straight into `claude /engineer` and never

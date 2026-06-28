@@ -130,6 +130,17 @@ already shipped. Ineligible features are skipped with a logged reason. A feature
 that can't converge is left in its worktree (`.pipeline/HALT`) for you; the pool
 keeps going.
 
+On startup, before any dispatch, the daemon prints a grouped **inherited-state
+dashboard** (HALTED / IN-PROGRESS / ELIGIBLE / PROCESSED) to both your terminal and
+`daemon.log`. It also tracks the base-branch tip SHA (`.daemon/last-base-sha`): when
+the base branch **actually advances** — live, or while the daemon was down — it
+**re-kicks every halted feature** (aborting any paused rebase, preserving the reason
+to `.pipeline/HALT.cleared`, clearing `.pipeline/HALT`) so parked work retries
+automatically on the event most likely to unblock it, resuming **rebase-first** so the
+advanced base is integrated before the failed gate re-checks. A plain restart with no
+advance leaves every marker intact. See
+[`src/conductor/README.md`](src/conductor/README.md#halt-reconciliation-startup-dashboard--main-advance-re-kick-adr-013).
+
 Because the daemon runs detached, its output goes to an append-only
 **`.daemon/daemon.log`** (size-capped, rotated once) rather than your terminal — so
 the full build narrative survives. Two read-only commands surface it:
