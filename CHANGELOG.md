@@ -10,6 +10,27 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ## [Unreleased]
 
+### Added
+
+- **Autonomous gap remediation (`/remediate`) — a blocking `prd_audit` is routed,
+  not just halted.** When a daemon `prd_audit` blocks, the conductor now dispatches
+  the new `/remediate` SHIP sub-routine, which reasons over the per-FR gaps and
+  writes `.pipeline/remediation.json` assigning each a disposition: `build` /
+  `acceptance_specs` / `architecture_review` / `plan` (autonomous — routed back to
+  that step with the concrete gap + tasks in the kickback hint), or `halt` with a
+  category. **HALT is reserved for the two genuinely-human cases — `architectural-
+  clarity` and `product-scope`;** everything else is turned into routed work. Mixed
+  gaps fix the autonomous ones first (kick to the earliest target step, bounded by a
+  remediation cap), and the human gaps re-surface on the next audit and HALT then.
+  Routing stays deterministic (the conductor reads the structured plan); the
+  *judgment* is the agent's. Falls back to the deterministic `classifyPrdAuditGaps`
+  routing when no usable plan is produced or the budget is exhausted. Adds
+  `skills/remediate/SKILL.md` + `agents/remediation-planner.md`.
+
+  _Planned follow-up:_ extend the same machinery to **finish-time test/build
+  failures** — flake-check first, then route real failures back to `build` with
+  cleanup tasks instead of `/finish` parking the branch.
+
 ### Changed
 
 - **`.serena/` is now gitignored in scaffolded and onboarded projects.** Serena's

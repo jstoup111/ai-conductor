@@ -508,6 +508,44 @@ describe('engine/conductor', () => {
       return { runner, calls };
     }
 
+    // Like shipRunner, but also writes .pipeline/remediation.json when the
+    // `remediate` step runs, so the conductor's /remediate routing engages.
+    function remediateRunner(
+      auditBody: string,
+      plan: unknown,
+    ): { runner: StepRunner; calls: StepName[] } {
+      const calls: StepName[] = [];
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          calls.push(step);
+          if (step === 'build' || step === 'prd_audit') {
+            await mkdir(join(dir, '.pipeline'), { recursive: true });
+            if (step === 'build') {
+              await writeFile(
+                join(dir, '.pipeline/task-status.json'),
+                JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
+              );
+            } else {
+              await writeFile(
+                join(dir, '.pipeline/prd-audit.md'),
+                '# PRD Audit\n\n' + AUDIT_HEADER + auditBody,
+              );
+            }
+          } else if (step === 'manual_test') {
+            await writeFile(
+              join(dir, '.pipeline/manual-test-results.md'),
+              '# Results\n\n| Story | Result |\n|--|--|\n| s | PASS |\n',
+            );
+          } else if (step === 'remediate') {
+            await mkdir(join(dir, '.pipeline'), { recursive: true });
+            await writeFile(join(dir, '.pipeline/remediation.json'), JSON.stringify(plan));
+          }
+          return { success: true };
+        }),
+      };
+      return { runner, calls };
+    }
+
     it('self-heals an impl-gap audit back to BUILD, then HALTs at the cap', async () => {
       await seedToPrdAudit();
       // Perpetual impl-gap: every audit reports the same un-closed impl-gap, so
@@ -607,6 +645,88 @@ describe('engine/conductor', () => {
       expect(halt).toMatch(/FR-3 \(intended-drift\)/);
       // No self-heal: never kicked back to build, never rebuilt.
       expect(kickbacks).toHaveLength(0);
+      expect(calls.filter((s) => s === 'build')).toHaveLength(0);
+    });
+
+    it('/remediate: routes an autonomous gap to its target step with the gap in the hint', async () => {
+      await seedToPrdAudit();
+      const { runner } = remediateRunner('| FR-2 | MISSING | impl-gap | x | no |\n', {
+        dispositions: [
+          {
+            id: 'FR-2',
+            disposition: 'build',
+            category: null,
+            rationale: 'read path wrong at x.ts:10',
+            tasks: [{ id: 'r1', title: 'fix x.ts:10 read path' }],
+          },
+        ],
+      });
+      const kickbacks: Array<{ from: string; to: string }> = [];
+      events.on('kickback', (e) => {
+        if (e.type === 'kickback') kickbacks.push({ from: e.from, to: e.to });
+      });
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        fromStep: 'prd_audit',
+      });
+
+      await conductor.run();
+
+      // The planner ran and routed prd_audit → build (the disposition's target).
+      expect(kickbacks.some((k) => k.from === 'prd_audit' && k.to === 'build')).toBe(true);
+      // BUILD received the gap (FR id + concrete task) in its retryReason.
+      const buildReasons = vi
+        .mocked(runner.run)
+        .mock.calls.filter((c) => c[0] === 'build')
+        .map((c) => (c[2] as { retryReason?: string } | undefined)?.retryReason ?? '');
+      expect(
+        buildReasons.some((r) => r.includes('FR-2') && r.includes('fix x.ts:10 read path')),
+      ).toBe(true);
+    });
+
+    it('/remediate: HALTs for an architectural-clarity gap (human DECIDE) without rebuilding', async () => {
+      await seedToPrdAudit();
+      const { runner, calls } = remediateRunner(
+        '| FR-3 | DIVERGED | intended-drift | y | no |\n',
+        {
+          dispositions: [
+            {
+              id: 'FR-3',
+              disposition: 'halt',
+              category: 'architectural-clarity',
+              rationale: 'ambiguous aggregate boundary',
+              tasks: [],
+            },
+          ],
+        },
+      );
+      let halted = false;
+      events.on('loop_halt', () => {
+        halted = true;
+      });
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        fromStep: 'prd_audit',
+      });
+
+      await conductor.run();
+
+      expect(halted).toBe(true);
+      const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+      expect(halt).toMatch(/needs human DECIDE/);
+      expect(halt).toMatch(/FR-3 \(architectural-clarity/);
       expect(calls.filter((s) => s === 'build')).toHaveLength(0);
     });
 

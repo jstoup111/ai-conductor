@@ -52,6 +52,7 @@ Agent prompt templates are in `agents/`. Skills define *what* to do; agents defi
 - `generator.md` — Implements code via TDD
 - `evaluator.md` — Reviews with calibrated skepticism (fresh context, no shared state with generator)
 - `prd-auditor.md` — Audits shipped implementation against the PRD's functional requirements at SHIP (finding-authority, per-FR verdict + gap-class, no-fix)
+- `remediation-planner.md` — Plans how to close a blocking audit's gaps: a disposition + concrete tasks per gap routed to the right step, or a HALT for architectural-clarity / product-scope (planning-authority, no-fix)
 - `domain-reviewer.md` — Checks domain integrity, has veto authority
 - `planner.md` — Expands requirements into specs
 - `worktree-manager.md` — Manages git worktrees for feature isolation and parallel execution
@@ -92,6 +93,7 @@ standard implementation, Haiku for mechanical checks.
 | finish | haiku | Mechanical checks — run tests, check git status, verify coverage |
 | manual-test | sonnet | Structured validation against stories — pattern-following |
 | prd-audit | opus | Cross-references PRD intent vs shipped implementation across two domains (spec + code) — deep reasoning |
+| remediate | opus | Reasons over blocking audit gaps to assign a disposition (build/specs/arch/plan) + concrete tasks, or HALT (architectural-clarity / product-scope) — judgment-heavy routing |
 | retro | sonnet | Structured analysis from concrete data; Part C (context efficiency) is checklist-based |
 | pr | sonnet | Diff analysis and structured PR body — templated output |
 | bootstrap | sonnet | Detection and scaffolding — largely mechanical |
