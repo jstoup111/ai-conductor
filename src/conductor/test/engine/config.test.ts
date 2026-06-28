@@ -360,6 +360,37 @@ complexity:
     });
   });
 
+  describe('acceptance_spec_globs validation', () => {
+    it('accepts an array of glob strings', () => {
+      const result = validateConfig({
+        acceptance_spec_globs: ['*/spec/**/*', 'api/spec/**/*'],
+      });
+      expect(result.ok).toBe(true);
+    });
+
+    it('rejects a non-array value', () => {
+      const result = validateConfig({ acceptance_spec_globs: 'spec/**/*' });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.message).toMatch(/array/);
+    });
+
+    it('rejects an array with a non-string entry', () => {
+      const result = validateConfig({ acceptance_spec_globs: ['ok', 42] });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.message).toMatch(/strings/);
+    });
+
+    it('lets a project array replace a user array via mergeConfigs', () => {
+      const merged = mergeConfigs(
+        { acceptance_spec_globs: ['tests/**/*'] },
+        { acceptance_spec_globs: ['*/spec/**/*'] },
+      );
+      expect(merged.acceptance_spec_globs).toEqual(['*/spec/**/*']);
+    });
+  });
+
   describe('mergeConfigs', () => {
     it('project scalars replace user scalars', () => {
       const merged = mergeConfigs(

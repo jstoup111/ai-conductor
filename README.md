@@ -11,6 +11,7 @@ No custom runtime. Claude Code is the execution engine.
 - [Claude Code](https://docs.anthropic.com/en/.docs/claude-code) v2.0+
 - Git
 - A project to work on (Rails+PostgreSQL has full tech-context support; other stacks work with generic skills)
+- Optional: [`uv`](https://docs.astral.sh/uv/) — enables the opt-in [Serena](https://github.com/oraios/serena) semantic-code MCP integration (see Install)
 
 ## Install
 
@@ -26,6 +27,12 @@ This symlinks all 20 skills into `~/.claude/skills/` and installs the conductor 
 `~/.local/bin/`. See [Choosing a Conductor](#choosing-a-conductor) below — both binaries
 coexist, `conduct` is the default, `conduct-ts` is opt-in and only symlinked if you've
 built the dist bundle.
+
+**Optional: Serena semantic code toolkit.** When [`uv`](https://docs.astral.sh/uv/) is
+present, `./bin/install` offers an opt-in install of [Serena](https://github.com/oraios/serena)
+(an LSP-backed semantic code-retrieval/editing toolkit). Once installed, `/bootstrap`
+auto-registers it as a user-scope MCP server so it's available across your projects. Decline
+the prompt (or install later with `uv tool install -p 3.13 serena-agent`) to skip it.
 
 Verify:
 
@@ -292,6 +299,18 @@ ui_renderer: terminal          # Which registered UI renderer to use (default: "
 assess:
   stale_after_days: 90         # Re-prompt if last assessment is older than this
   stale_after_commits: 500     # Re-prompt if this many commits since last assessment
+
+# ── Acceptance-spec locations (extends the built-in defaults; never replaces) ─
+# Where this repo's RED acceptance/system specs live, so the acceptance_specs
+# completion gate doesn't false-halt. The built-ins cover Rails (spec/…), Node
+# (test/, __tests__/, *.test.{js,ts,jsx,tsx}) and backend/ layouts at the repo
+# root. Declare extra globs for anything they don't anticipate — most often a
+# MONOREPO whose specs sit one package deep. A leading `*/` matches any
+# immediate subdirectory (node_modules and dot-dirs are skipped), so you don't
+# have to name each package; literal prefixes (api/spec/**) work too.
+acceptance_spec_globs:
+  - "*/spec/**"                 # e.g. api/spec/integration/…, api/spec/jobs/…
+  - "*/__tests__/**"            # e.g. frontend/__tests__/screens/Foo.test.tsx
 
 # ── Markdown viewer (for artifact review + changelog rendering) ───────────────
 markdown_viewer:

@@ -37,12 +37,27 @@ export interface FeatureOutcome {
 }
 
 export interface DaemonDeps {
-  /** Features eligible to run: stories + plan present, not yet at .pipeline/DONE. */
-  discoverBacklog: () => Promise<BacklogItem[]>;
+  /**
+   * Features eligible to run: stories + plan present, not yet at .pipeline/DONE.
+   *
+   * `refresh` requests a remote refresh (e.g. `git fetch origin <default>`) before
+   * discovery. The pool sets it ONLY when fully idle with no local work left to start
+   * — i.e. "between work, looking for more". While features are in flight (or local
+   * queued work remains), discovery runs with `refresh:false` so a build is never
+   * re-based onto specs that landed on origin mid-run.
+   */
+  discoverBacklog: (opts: { refresh: boolean }) => Promise<BacklogItem[]>;
   /** Run one feature to DONE/HALT in isolation. Must not throw for normal
    *  halts — return `{status:'halted'}` — but a thrown error is caught and
    *  recorded as `{status:'error'}` so the pool survives. */
   runFeature: (item: BacklogItem) => Promise<FeatureOutcome>;
+  /**
+   * True while a previously-halted feature's HALT marker is still present.
+   * Keeps a parked feature un-dispatched until a human clears it, then lets it
+   * be re-dispatched (reusing its worktree). Pure-core default: never halted —
+   * production wires the real `.pipeline/HALT` check (see daemon-deps.ts).
+   */
+  isHalted?: (slug: string) => Promise<boolean>;
   /** Optional progress line (narrator). */
   log?: (msg: string) => void;
   /** Injectable sleep (tests pass a no-op / fake clock). */
@@ -97,7 +112,15 @@ export async function runDaemon(
 
   const processed: FeatureOutcome[] = [];
   const inFlight = new Map<string, Tagged>();
-  const started = new Set<string>(); // slugs started this run (no double-dispatch)
+  // Slugs dispatched this run, to prevent double-dispatch. Stays populated for
+  // the run's lifetime; `done`/`error` slugs remain permanently excluded.
+  const started = new Set<string>();
+  // Slugs that halted this run and are parked for a human. A parked slug is the
+  // one exception to `started`'s permanent exclusion: it becomes eligible again
+  // once its `.pipeline/HALT` marker is cleared, detected via the injected
+  // `isHalted`. Without that dep (pure-core default) a parked feature stays
+  // parked for the run — exactly the pre-fix behavior.
+  const parked = new Set<string>();
   let totalCost = 0;
   let idlePolls = 0;
 
@@ -117,6 +140,8 @@ export async function runDaemon(
 
   const dispatch = (item: BacklogItem): void => {
     started.add(item.slug);
+    parked.delete(item.slug); // re-dispatching a cleared feature un-parks it
+
     log(`${chalk.cyan('▶')} start ${chalk.bold(item.slug)}`);
     const tagged: Tagged = deps
       .runFeature(item)
@@ -137,6 +162,10 @@ export async function runDaemon(
     inFlight.delete(slug);
     processed.push(outcome);
     if (outcome.costTokens) totalCost += outcome.costTokens;
+    // A halted feature is parked for a human, not finished. Mark it parked so a
+    // later scan can re-dispatch it once its `.pipeline/HALT` marker is cleared
+    // (gated by `isHalted` below). `done`/`error` are not parked → stay excluded.
+    if (outcome.status === 'halted') parked.add(slug);
     const ok = outcome.status === 'done';
     const marker = ok ? chalk.green('■') : chalk.red('■');
     const status = ok ? chalk.green(outcome.status) : chalk.red(outcome.status);
@@ -153,8 +182,36 @@ export async function runDaemon(
 
     // Fill the pool while slots are free.
     if (inFlight.size < concurrency) {
-      const backlog = await deps.discoverBacklog();
-      const next = backlog.find((b) => !started.has(b.slug) && !inFlight.has(b.slug));
+      // First-in-backlog-order eligible item. `inFlight`/`started` guard against
+      // double-dispatch. The one slug allowed back past `started` is a parked
+      // (halted) one — and only once its HALT marker is gone, detected by the
+      // injected `isHalted`. Without that dep a parked feature stays parked.
+      const pickEligible = async (
+        backlog: BacklogItem[],
+      ): Promise<BacklogItem | undefined> => {
+        for (const b of backlog) {
+          if (inFlight.has(b.slug)) continue;
+          if (parked.has(b.slug)) {
+            if (!deps.isHalted || (await deps.isHalted(b.slug))) continue; // still parked
+            // marker cleared → fall through as eligible (re-dispatch + resume)
+          } else if (started.has(b.slug)) {
+            continue; // done/error — permanently excluded this run
+          }
+          return b;
+        }
+        return undefined;
+      };
+
+      // Local-only discovery first (no remote fetch): cheap, and it keeps a build
+      // from being re-based onto specs that landed on origin while work is running.
+      let next = await pickEligible(await deps.discoverBacklog({ refresh: false }));
+
+      // Only when fully idle (nothing running) AND nothing left locally do we reach
+      // out to origin for newly-merged specs — "drained, now find more".
+      if (!next && inFlight.size === 0) {
+        next = await pickEligible(await deps.discoverBacklog({ refresh: true }));
+      }
+
       if (next) {
         idlePolls = 0;
         dispatch(next);

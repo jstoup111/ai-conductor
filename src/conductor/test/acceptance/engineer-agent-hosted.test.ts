@@ -604,6 +604,36 @@ describe('landSpec primitive (src/engine/engineer/land-spec.ts)', () => {
     ).rejects.toThrow(/stub|generated|invalid/i);
   });
 
+  it('stories with NO status line → throws (must require "Status: Accepted", not just reject DRAFT)', async () => {
+    const idea = 'no status line idea';
+    const slug = idea.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 50);
+    const specsDir = join(repoPath, '.docs', 'specs');
+    const storiesDir = join(repoPath, '.docs', 'stories');
+    const plansDir = join(repoPath, '.docs', 'plans');
+    await mkdir(specsDir, { recursive: true });
+    await mkdir(storiesDir, { recursive: true });
+    await mkdir(plansDir, { recursive: true });
+    await writeFile(join(specsDir, `${slug}.md`), `# PRD\n\nApproved spec content.\n`, 'utf-8');
+    // Real, non-stub, non-DRAFT stories — but NO Status marker at all. This is the
+    // exact gap that previously landed yet was skipped forever by the daemon.
+    await writeFile(
+      join(storiesDir, `${slug}.md`),
+      `# Stories: ${idea}\n\n## Story: main\n\n### AC\n- Given x, when y, then z.\n`,
+      'utf-8',
+    );
+    await writeFile(
+      join(plansDir, `${slug}.md`),
+      `# Plan\n\n### Task 1\n**Dependencies:** none\n`,
+      'utf-8',
+    );
+    // Do NOT commit — landSpec reads the untracked artifacts.
+
+    const { landSpec } = await import('../../src/engine/engineer/land-spec.js');
+    await expect(
+      landSpec({ name: 'target', canonicalPath: repoPath }, idea),
+    ).rejects.toThrow(/not approved|Status: Accepted/i);
+  });
+
   it('dirty working tree → throws before any write (C2 regression guard)', async () => {
     const idea = 'dirty tree idea';
     // Write valid artifacts (untracked — allowed by dirty-guard).

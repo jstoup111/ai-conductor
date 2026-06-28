@@ -10,7 +10,43 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ## [Unreleased]
 
+### Fixed
+
+- **Daemon re-dispatch of halted features no longer wipes BUILD/SHIP progress.** When a
+  feature halts mid-BUILD or mid-SHIP and is re-queued (after clearing `.pipeline/HALT`),
+  the daemon now preserves prior step statuses in `conduct-state.json` instead of
+  unconditionally overwriting it. The run resumes from the first pending step after the
+  halt point rather than restarting from `acceptance_specs`.
+
+- **GitHub Issues intake polling now derives owner/repo from project remote.** The adapter
+  previously failed silently when projects lacked explicit owner/repo format in the registry
+  (e.g., `honeydew-or-handymando` instead of `jstoup111/honeydew-or-handymando`), because
+  `gh -R` requires owner/repo and exits 1 when given a local name. The fix parses owner/repo
+  from the project's git remote URL and passes both `name` (local identifier) and `ghRepo`
+  (owner/repo for API calls) to the adapter. The adapter also now stores repo paths during
+  poll() so report() can use them as working directories for gh calls, instead of trying
+  to use the sourceRef string (owner/repo#number) as a cwd.
+
 ### Added
+
+- **Optional Serena semantic-code MCP integration.** `./bin/install` now offers an opt-in
+  install of [Serena](https://github.com/oraios/serena) (`oraios/serena`) when `uv` is
+  present — prompted, not auto-forced, since it's a heavyweight LSP-backed toolkit. Once
+  installed, `/bootstrap` auto-registers it as a **user-scope** MCP server
+  (`claude mcp add --scope user serena -- serena start-mcp-server --context claude-code
+  --project-from-cwd`) when it's on PATH and not already configured (idempotent via
+  `claude mcp get serena`). Graceful no-op when `uv`/Serena are absent; install skipped in
+  non-interactive shells. Documented in `README.md` and bootstrap §9a.
+
+- **Daemon surfaces a persistently-unbuildable merged spec once, not forever.** When a
+  merged spec can never satisfy the backlog gate (stories not `Status: Accepted`, or no plan
+  dependency tree), `discoverBacklog` previously re-logged the identical `skip …` line on
+  **every** poll tick. It now emits the skip **once per slug** via `.daemon/warned/<slug>`
+  markers (`hasWarned`/`markWarned` in `engine/daemon-deps.ts`, wired through
+  `DiscoverBacklogOpts`), then suppresses repeats until the spec is fixed (after which it
+  becomes eligible, builds, and is marked processed). The approval-token logic is now a single
+  shared `isStoriesApproved` exported from `engine/artifacts.ts` and consumed by both the
+  daemon and the engineer land gate, so the chain can never disagree on the marker.
 
 - **GitHub-issues intake + bidirectional write-back for the engineer (Phase 9.3b).**
   The engineer can now take work from GitHub issues, not just chat. A new `github-issues`

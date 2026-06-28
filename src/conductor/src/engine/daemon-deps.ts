@@ -24,6 +24,7 @@ export interface RealDepsConfig {
 }
 
 const PROCESSED_SUBDIR = '.daemon/processed';
+const WARNED_SUBDIR = '.daemon/warned';
 
 /** Concrete (git/fs) implementation of the feature-runner primitives. */
 export function makeFeatureRunnerDeps(cfg: RealDepsConfig): FeatureRunnerDeps {
@@ -139,6 +140,39 @@ export async function isProcessed(projectRoot: string, slug: string): Promise<bo
   } catch {
     return false;
   }
+}
+
+/**
+ * Has this slug's "merged spec cannot build" skip already been surfaced once?
+ * Mirrors `isProcessed` but for the `.daemon/warned/` markers — lets
+ * `discoverBacklog` log a persistently-unbuildable merged spec exactly once
+ * instead of on every poll tick.
+ */
+export async function hasWarned(projectRoot: string, slug: string): Promise<boolean> {
+  try {
+    await access(join(projectRoot, WARNED_SUBDIR, slug));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Record that this slug's skip has been surfaced, suppressing repeat skip logs. */
+export async function markWarned(projectRoot: string, slug: string): Promise<void> {
+  const warnedDir = join(projectRoot, WARNED_SUBDIR);
+  await mkdir(warnedDir, { recursive: true });
+  await writeFile(join(warnedDir, slug), 'warned\n', 'utf-8');
+}
+
+/**
+ * True while a halted feature's worktree HALT marker is still present — the
+ * park-gate the daemon checks before re-dispatching (see daemon.ts `isHalted`).
+ * A human clears `.pipeline/HALT` to make the feature re-eligible. Takes the
+ * worktree base so it stays in lockstep with `createWorktree`'s path convention
+ * (`<worktreeBase>/<slug>`), not a re-derived `.worktrees`.
+ */
+export async function isHalted(worktreeBase: string, slug: string): Promise<boolean> {
+  return exists(join(worktreeBase, slug, '.pipeline/HALT'));
 }
 
 /** Read the loop outcome from a worktree's `.pipeline` markers. */

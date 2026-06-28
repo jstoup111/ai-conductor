@@ -2,7 +2,7 @@ import { execFile as execFileCb } from 'node:child_process';
 import { basename, isAbsolute, join, relative } from 'node:path';
 import { promisify } from 'node:util';
 import type { BacklogItem } from './daemon.js';
-import { planHasDependencyTree } from './artifacts.js';
+import { planHasDependencyTree, isStoriesApproved } from './artifacts.js';
 import { makeGitRunner, originDefaultBranch, type GitRunner } from './rebase.js';
 
 const execFile = promisify(execFileCb);
@@ -63,32 +63,43 @@ export function gitTreeSource(projectRoot: string, baseBranch: string): BacklogT
 }
 
 /**
- * Resolve the git tree-ish ref to use for backlog discovery on each daemon
- * poll tick. Strategy:
+ * Resolve the git tree-ish ref to use for backlog discovery on a daemon poll tick.
  *
- *   1. Discover origin's default branch via `git symbolic-ref
- *      refs/remotes/origin/HEAD` (with a `git remote show origin` fallback).
- *   2. Do a best-effort `git fetch origin <default>` so the remote-tracking ref
- *      `origin/<default>` reflects the latest merged specs on GitHub/origin.
- *   3. Return `origin/<default>` — `gitTreeSource` reads this ref, so a spec
- *      merged on origin but not yet pulled locally IS discovered immediately.
+ * The daemon refreshes from origin ONLY between work — when it is idle with no
+ * local work left to start (`opts.refresh === true`). While features are in flight
+ * (or local queued work remains) it discovers with `refresh:false`, which never
+ * fetches, so an in-flight build is never re-based onto specs that merged on origin
+ * mid-run. Between fetches the `origin/<default>` remote-tracking ref is stable, so
+ * the whole batch captured by the last idle refresh stays discoverable for the
+ * concurrent slots without any new network access.
  *
- * Degrades gracefully:
- *   - No origin remote → returns `localBase` unchanged, no fetch.
- *   - origin/HEAD unset and `remote show` fallback fails → returns `localBase`.
- *   - Fetch fails (offline / unreachable) → logs a message and returns `localBase`
- *     so discovery continues against whatever ref is available; NEVER throws.
+ * Strategy:
+ *   1. Discover origin's default branch via `git symbolic-ref refs/remotes/origin/HEAD`
+ *      (with a `git remote show origin` fallback). Never hardcode `main`/`master`.
+ *   2. If `refresh` — best-effort `git fetch origin <default>` so `origin/<default>`
+ *      reflects the latest merged specs.
+ *   3. Return `origin/<default>` — `gitTreeSource` reads this ref, so a spec merged on
+ *      origin but not pulled locally IS discovered. When `refresh:false`, the ref is
+ *      verified to exist first (it normally does, having been fetched at the last idle).
  *
- * The `gitOverride` parameter allows tests to inject a fake git runner.
- * The default uses `makeGitRunner(projectRoot)` (the main checkout dir, never
- * a worktree) so the fetch is always safe: no checkout, no reset, no rebase.
+ * Degrades gracefully (NEVER throws):
+ *   - No origin remote → `localBase`, no fetch.
+ *   - origin/HEAD unset and `remote show` fallback fails → `localBase`.
+ *   - Fetch fails (offline / unreachable) → logs and returns `localBase`.
+ *   - `refresh:false` and `origin/<default>` not yet present → `localBase`.
+ *
+ * The `gitOverride` parameter allows tests to inject a fake git runner. The default
+ * uses `makeGitRunner(projectRoot)` (the main checkout dir, never a worktree) so a
+ * fetch is always safe: no checkout, no reset, no rebase.
  */
 export async function resolveDiscoveryRef(
   projectRoot: string,
   localBase: string,
   log: (msg: string) => void = () => {},
+  opts: { refresh?: boolean } = {},
   gitOverride?: GitRunner,
 ): Promise<string> {
+  const refresh = opts.refresh ?? true;
   const git = gitOverride ?? makeGitRunner(projectRoot);
 
   // Check if origin remote exists — local-only repos skip the fetch entirely.
@@ -115,8 +126,15 @@ export async function resolveDiscoveryRef(
     return localBase;
   }
 
-  // Best-effort fetch: a failed fetch (offline/unreachable) must NOT crash the
-  // poll loop — log it and continue scanning the last-known ref.
+  if (!refresh) {
+    // Between-work discovery while builds run: NO fetch. Use the last-fetched
+    // remote-tracking ref if it exists; otherwise fall back to the local base.
+    const verify = await git(['rev-parse', '--verify', '--quiet', `refs/remotes/origin/${defaultBranch}`]);
+    return verify.exitCode === 0 ? `origin/${defaultBranch}` : localBase;
+  }
+
+  // Idle refresh: best-effort fetch. A failed fetch (offline/unreachable) must NOT
+  // crash the poll loop — log it and continue scanning the last-known local ref.
   const fetched = await git(['fetch', 'origin', defaultBranch]);
   if (fetched.exitCode !== 0) {
     log(
@@ -134,6 +152,18 @@ export interface DiscoverBacklogOpts {
   baseBranch?: string;
   /** Inject a tree source (tests); defaults to the git base-branch reader. */
   treeSource?: BacklogTreeSource;
+  /**
+   * One-time skip-warning dedup. Every skip here is for a MERGED spec (the tree
+   * source reads the committed base branch), so an un-buildable merged spec
+   * would otherwise re-log an identical skip on EVERY poll, forever. When these
+   * are wired (production: `.daemon/warned/<slug>` markers), the skip is
+   * surfaced once per slug and then suppressed until the spec is fixed (after
+   * which it becomes eligible, builds, and is marked processed — never
+   * re-entering the skip path). Unset (the default, e.g. in tests) → log every
+   * scan, preserving prior behavior.
+   */
+  hasWarned?: (slug: string) => Promise<boolean>;
+  markWarned?: (slug: string) => Promise<void>;
 }
 
 /**
@@ -162,6 +192,15 @@ export async function discoverBacklog(
   const baseBranch = opts.baseBranch ?? 'main';
   const tree = opts.treeSource ?? gitTreeSource(projectRoot, baseBranch);
 
+  // Surface a merged-but-unbuildable spec ONCE per slug rather than re-logging
+  // the identical skip on every poll. When the dedup hooks are unset, fall back
+  // to logging every scan (prior behavior).
+  const warnOnce = async (slug: string, msg: string): Promise<void> => {
+    if (opts.hasWarned && (await opts.hasWarned(slug))) return;
+    log(msg);
+    await opts.markWarned?.(slug);
+  };
+
   const planFiles = (await tree.listPlanFiles()).filter((f) => f.endsWith('.md'));
   if (planFiles.length === 0) return [];
 
@@ -185,12 +224,16 @@ export async function discoverBacklog(
     // dependency-tree-less plans rather than silently building them.
     const storiesContent = (await tree.readFile(storiesRel)) ?? '';
     if (!isStoriesApproved(storiesContent)) {
-      log(`skip ${slug}: stories not approved (need "Status: Accepted", no DRAFT)`);
+      await warnOnce(
+        slug,
+        `skip ${slug}: merged spec cannot build — stories not approved (need "Status: Accepted", no DRAFT). Fix the spec on the default branch; logged once.`,
+      );
       continue;
     }
     if (!planHasDependencyTree(planContent)) {
-      log(
-        `skip ${slug}: plan has no dependency tree ("## Task Dependency Graph" or "**Dependencies:**" lines)`,
+      await warnOnce(
+        slug,
+        `skip ${slug}: merged spec cannot build — plan has no dependency tree ("## Task Dependency Graph" or "**Dependencies:**" lines). Fix the spec on the default branch; logged once.`,
       );
       continue;
     }
@@ -205,18 +248,6 @@ export async function discoverBacklog(
     });
   }
   return items;
-}
-
-/**
- * Approval signal for autonomous (daemon) work: the stories declare
- * `Status: Accepted` and are not DRAFT. Mirrors the stories gate's Accepted/
- * DRAFT convention (artifacts.ts). When the Phase 9 engineer lands and the
- * operator merges the spec PR, this is what the daemon observes on the base
- * branch.
- */
-function isStoriesApproved(content: string): boolean {
-  if (/\bstatus\b[\s*:]*\bdraft\b/i.test(content)) return false;
-  return /\bstatus\b[\s*:]*\baccepted\b/i.test(content);
 }
 
 /**

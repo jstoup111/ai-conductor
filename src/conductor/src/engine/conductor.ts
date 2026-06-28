@@ -42,6 +42,7 @@ import {
   STEP_ARTIFACT_GLOBS,
   checkStepCompletion,
   CUSTOM_COMPLETION_PREDICATES,
+  classifyPrdAuditGaps,
 } from './artifacts.js';
 import { resolveStepConfig } from './resolved-config.js';
 import { selectNextGate } from './selector.js';
@@ -380,588 +381,684 @@ export class Conductor {
     // Per-gate count of consecutive selector re-selects without satisfaction,
     // for the stuck-gate HALT guard (see advanceTail).
     const stuckGate = new Map<StepName, number>();
+    // Daemon-only: how many times a blocking prd-audit (impl-gap only) has
+    // routed back to BUILD to self-heal. Bounded like MAX_KICKBACKS_PER_GATE so
+    // an impl-gap the daemon can't actually close eventually halts for a human.
+    let prdAuditSelfHeals = 0;
 
-    for (let i = startIndex; i < steps.length; i++) {
-      const step = steps[i];
+    try {
+      for (let i = startIndex; i < steps.length; i++) {
+        const step = steps[i];
 
-      // Skip already-completed work. Without this, re-invoking the conductor
-      // against a project with existing `done` / `skipped` state (e.g. after
-      // a crash, a terminal close, or a fresh `conduct-ts` call without
-      // `--resume` / `--from`) re-dispatches every completed step from the
-      // top of ALL_STEPS. The `--from <step>` flag is the explicit opt-in to
-      // re-run a specific step regardless of its current status.
-      //
-      // `failed` is NOT short-circuited here — the conductor re-enters a
-      // failed step so it can run through the retry/recovery flow again.
-      const currentStatus = state[step.name];
-      const alreadyResolved = currentStatus === 'done' || currentStatus === 'skipped';
-      const explicitlyTargeted = this.fromStep === step.name;
-      if (alreadyResolved && !explicitlyTargeted) {
-        // No event — the step simply isn't re-dispatched. Dashboard renders
-        // the persisted status verbatim.
-        continue;
-      }
+        // Skip already-completed work. Without this, re-invoking the conductor
+        // against a project with existing `done` / `skipped` state (e.g. after
+        // a crash, a terminal close, or a fresh `conduct-ts` call without
+        // `--resume` / `--from`) re-dispatches every completed step from the
+        // top of ALL_STEPS. The `--from <step>` flag is the explicit opt-in to
+        // re-run a specific step regardless of its current status.
+        //
+        // `failed` is NOT short-circuited here — the conductor re-enters a
+        // failed step so it can run through the retry/recovery flow again.
+        const currentStatus = state[step.name];
+        const alreadyResolved = currentStatus === 'done' || currentStatus === 'skipped';
+        const explicitlyTargeted = this.fromStep === step.name;
+        if (alreadyResolved && !explicitlyTargeted) {
+          // No event — the step simply isn't re-dispatched. Dashboard renders
+          // the persisted status verbatim.
+          continue;
+        }
 
-      // Read complexity tier from state each iteration (may change after complexity step)
-      const tier = state.complexity_tier ?? 'L';
+        // Read complexity tier from state each iteration (may change after complexity step)
+        const tier = state.complexity_tier ?? 'L';
 
-      // Check if step should be skipped for this complexity tier
-      if (step.skippableForTiers.includes(tier)) {
-        await saveStepStatus(this.stateFilePath, step.name, 'skipped');
-        state[step.name] = 'skipped';
-        await this.events.emit({ type: 'tier_skip', step: step.name, tier });
-        continue;
-      }
+        // Check if step should be skipped for this complexity tier
+        if (step.skippableForTiers.includes(tier)) {
+          await saveStepStatus(this.stateFilePath, step.name, 'skipped');
+          state[step.name] = 'skipped';
+          await this.events.emit({ type: 'tier_skip', step: step.name, tier });
+          continue;
+        }
 
-      // Phase 9.1 (ADR-002 Option A): under the daemon, skip the in-loop `retro`
-      // step. The daemon's emission step owns narrative production into the
-      // cross-project engineer store, so writing `.docs/retros/` into the feature
-      // repo here would be redundant clutter. Manual runs (daemon=false) are
-      // unaffected and keep writing repo retros.
-      if (this.daemon && step.name === 'retro') {
-        await saveStepStatus(this.stateFilePath, step.name, 'skipped');
-        state[step.name] = 'skipped';
-        await this.events.emit({ type: 'config_skip', step: step.name });
-        continue;
-      }
+        // Phase 9.1 (ADR-002 Option A): under the daemon, skip the in-loop `retro`
+        // step. The daemon's emission step owns narrative production into the
+        // cross-project engineer store, so writing `.docs/retros/` into the feature
+        // repo here would be redundant clutter. Manual runs (daemon=false) are
+        // unaffected and keep writing repo retros.
+        if (this.daemon && step.name === 'retro') {
+          await saveStepStatus(this.stateFilePath, step.name, 'skipped');
+          state[step.name] = 'skipped';
+          await this.events.emit({ type: 'config_skip', step: step.name });
+          continue;
+        }
 
-      // Check if step should be skipped because bootstrap detected a 'new'
-      // project (nothing to assess on an empty-directory scaffold). This
-      // sits after the tier skip and before the gate check so the skipped
-      // step is still recorded in state but the skill never runs and the
-      // completion gate never fires against a missing artifact.
-      if (shouldSkipForBootstrapMode(step.name, state.bootstrap_mode)) {
-        await saveStepStatus(this.stateFilePath, step.name, 'skipped');
-        state[step.name] = 'skipped';
-        await this.events.emit({
-          type: 'mode_skip',
-          step: step.name,
-          mode: state.bootstrap_mode!,
-          reason: `bootstrap mode '${state.bootstrap_mode}' — no codebase to act on`,
-        });
-        continue;
-      }
-
-      // Resolve per-step config (model, effort, retries, review…). Tier is
-      // threaded in so `by_tier` overrides apply when the feature's complexity
-      // is known (post-complexity step).
-      const resolved = resolveStepConfig(step.name, step.phase, this.config, {
-        tier: state.complexity_tier,
-      });
-
-      // Check if step is disabled via config
-      if (resolved.disabled) {
-        await saveStepStatus(this.stateFilePath, step.name, 'skipped');
-        state[step.name] = 'skipped';
-        await this.events.emit({ type: 'config_skip', step: step.name });
-        continue;
-      }
-
-      // Evaluate when: expression (T9 — conditional step skip)
-      const stepCfg = this.config?.steps?.[step.name];
-      if (stepCfg?.when) {
-        const whenResult = evaluateWhen(stepCfg.when, state);
-        if (!whenResult.result) {
+        // Check if step should be skipped because bootstrap detected a 'new'
+        // project (nothing to assess on an empty-directory scaffold). This
+        // sits after the tier skip and before the gate check so the skipped
+        // step is still recorded in state but the skill never runs and the
+        // completion gate never fires against a missing artifact.
+        if (shouldSkipForBootstrapMode(step.name, state.bootstrap_mode)) {
           await saveStepStatus(this.stateFilePath, step.name, 'skipped');
           state[step.name] = 'skipped';
           await this.events.emit({
-            type: 'when_skip',
+            type: 'mode_skip',
             step: step.name,
-            expression: stepCfg.when,
-            undefinedKey: whenResult.undefinedKey,
+            mode: state.bootstrap_mode!,
+            reason: `bootstrap mode '${state.bootstrap_mode}' — no codebase to act on`,
           });
+          continue;
+        }
 
-          // T21: when: on a parallel group → set all synthetic keys to "skipped"
-          if (stepCfg.parallel) {
-            for (const branch of stepCfg.parallel) {
-              const syntheticKey = `${step.name}__${branch.name}`;
-              (state as Record<string, unknown>)[syntheticKey] = 'skipped';
+        // Resolve per-step config (model, effort, retries, review…). Tier is
+        // threaded in so `by_tier` overrides apply when the feature's complexity
+        // is known (post-complexity step).
+        const resolved = resolveStepConfig(step.name, step.phase, this.config, {
+          tier: state.complexity_tier,
+        });
+
+        // Check if step is disabled via config
+        if (resolved.disabled) {
+          await saveStepStatus(this.stateFilePath, step.name, 'skipped');
+          state[step.name] = 'skipped';
+          await this.events.emit({ type: 'config_skip', step: step.name });
+          continue;
+        }
+
+        // Evaluate when: expression (T9 — conditional step skip)
+        const stepCfg = this.config?.steps?.[step.name];
+        if (stepCfg?.when) {
+          const whenResult = evaluateWhen(stepCfg.when, state);
+          if (!whenResult.result) {
+            await saveStepStatus(this.stateFilePath, step.name, 'skipped');
+            state[step.name] = 'skipped';
+            await this.events.emit({
+              type: 'when_skip',
+              step: step.name,
+              expression: stepCfg.when,
+              undefinedKey: whenResult.undefinedKey,
+            });
+
+            // T21: when: on a parallel group → set all synthetic keys to "skipped"
+            if (stepCfg.parallel) {
+              for (const branch of stepCfg.parallel) {
+                const syntheticKey = `${step.name}__${branch.name}`;
+                (state as Record<string, unknown>)[syntheticKey] = 'skipped';
+              }
+              await writeState(this.stateFilePath, state);
             }
+            continue;
+          }
+        }
+
+        // Execute parallel group (T15 — Promise.all fan-out)
+        if (stepCfg?.parallel) {
+          await this.runParallelGroup(step.name, stepCfg.parallel, state);
+          // State keys are already written inside runParallelGroup.
+          // The step's own status is set to 'done' or 'failed' inside runParallelGroup.
+          // If it failed (gating branch), we stop here.
+          if (state[step.name] === 'failed') {
+            await this.events.emit({
+              type: 'step_failed',
+              step: step.name,
+              error: `Parallel group "${step.name}" had a gating branch failure`,
+              retryCount: 0,
+            });
             await writeState(this.stateFilePath, state);
+            process.off('SIGINT', sigintHandler);
+            return;
           }
           continue;
         }
-      }
 
-      // Execute parallel group (T15 — Promise.all fan-out)
-      if (stepCfg?.parallel) {
-        await this.runParallelGroup(step.name, stepCfg.parallel, state);
-        // State keys are already written inside runParallelGroup.
-        // The step's own status is set to 'done' or 'failed' inside runParallelGroup.
-        // If it failed (gating branch), we stop here.
-        if (state[step.name] === 'failed') {
-          await this.events.emit({
-            type: 'step_failed',
-            step: step.name,
-            error: `Parallel group "${step.name}" had a gating branch failure`,
-            retryCount: 0,
-          });
+        // Check gate: all prerequisites must be satisfied
+        const gate = checkGate(step, state);
+        if (!gate.passed) {
+          await this.events.emit({ type: 'gate_blocked', step: step.name, reason: gate.reason });
           await writeState(this.stateFilePath, state);
           process.off('SIGINT', sigintHandler);
           return;
         }
-        continue;
-      }
 
-      // Check gate: all prerequisites must be satisfied
-      const gate = checkGate(step, state);
-      if (!gate.passed) {
-        await this.events.emit({ type: 'gate_blocked', step: step.name, reason: gate.reason });
-        await writeState(this.stateFilePath, state);
-        process.off('SIGINT', sigintHandler);
-        return;
-      }
+        // Mark in_progress before running
+        await saveStepStatus(this.stateFilePath, step.name, 'in_progress');
+        state[step.name] = 'in_progress';
 
-      // Mark in_progress before running
-      await saveStepStatus(this.stateFilePath, step.name, 'in_progress');
-      state[step.name] = 'in_progress';
+        await this.events.emit({ type: 'step_started', step: step.name, index: i });
 
-      await this.events.emit({ type: 'step_started', step: step.name, index: i });
-
-      // Hybrid session (Phase 4): start each new step in the looped region on a
-      // fresh LLM session so context never bloats across build…finish. The
-      // retry loop below reuses this session (resume) for the step's own
-      // attempts. Front-half steps keep the persistent session.
-      if (
-        this.freshContextPerStep &&
-        this.stepRunner.resetSession &&
-        indexOf(step.name) >= indexOf('build')
-      ) {
-        await this.stepRunner.resetSession();
-      }
-
-      // Retry loop: auto-retry on step-runner failure OR completion-gate miss,
-      // up to `maxRetries` attempts total. Only after the budget is exhausted
-      // do we escalate to the recovery menu. Matches bash bin/conduct's
-      // max_retries=3 behavior.
-      let attempt = 0;
-      let lastError: string = '';
-      let succeeded = false;
-      let retryHint: string | undefined;
-      let successOutput: string | undefined;
-
-      const stepMaxRetries = resolved.max_retries;
-      // Snapshot of resolved-task count before the most recent build retry,
-      // so the circuit breaker can detect "Claude ran but completed zero
-      // additional tasks" = no point retrying further, hand off to REPL.
-      let resolvedTasksBefore = step.name === 'build'
-        ? await countResolvedTasks(this.projectRoot)
-        : 0;
-
-      while (attempt < stepMaxRetries) {
-        attempt++;
-
-        const result =
-          step.name === 'complexity'
-            ? await this.runComplexityStep(state)
-            : step.name === 'worktree'
-              ? await this.runWorktreeStep(state)
-              : step.name === 'rebase'
-                ? await this.runRebaseStep(state)
-                : await this.stepRunner.run(step.name, state, { retryReason: retryHint });
-
-        // Rate limit: wait deterministically, then retry WITHOUT burning the
-        // retry budget (matches bin/conduct:2248–2280 handle_rate_limit).
-        if (result.rateLimited) {
-          const waitSeconds = result.waitSeconds ?? 300;
-          await this.events.emit({ type: 'rate_limit', waitSeconds });
-          await this.sleep(waitSeconds * 1000);
-          attempt--;
-          continue;
+        // Fresh session per step (Phase 4 + daemon fix): when freshContextPerStep
+        // is on (daemon/auto only — interactive `/conduct` leaves it false so the
+        // brainstorm→stories→plan design session keeps its context), start EVERY
+        // executed step on a brand-new LLM session so context never accumulates
+        // across the loop. The retry loop below reuses this session (resume) for
+        // the step's OWN attempts only.
+        //
+        // This also resets before the FIRST executed step (`acceptance_specs` in a
+        // daemon run — the front half is pre-seeded `done` and skipped above). That
+        // matters on a REUSED worktree: resetSession() unlinks the stale
+        // `session-created` / rewrites `conduct-session-id`, so the step dispatches
+        // `claude --session-id <new>` (create) instead of `--resume <new>` against
+        // a conversation that never existed (which surfaced as "session
+        // unavailable (expired or in use)" and errored the feature out).
+        if (this.freshContextPerStep && this.stepRunner.resetSession) {
+          await this.stepRunner.resetSession();
         }
 
-        // Stale session: reset + retry without burning budget
-        // (matches bin/conduct:645–663 stale-session detection).
-        if (result.sessionExpired) {
-          await this.events.emit({
-            type: 'session_reset',
-            reason: 'session unavailable (expired or in use) — resetting to a fresh session',
-          });
-          if (this.stepRunner.resetSession) {
-            await this.stepRunner.resetSession();
-          }
-          attempt--;
-          continue;
-        }
+        // Retry loop: auto-retry on step-runner failure OR completion-gate miss,
+        // up to `maxRetries` attempts total. Only after the budget is exhausted
+        // do we escalate to the recovery menu. Matches bash bin/conduct's
+        // max_retries=3 behavior.
+        let attempt = 0;
+        let lastError: string = '';
+        let succeeded = false;
+        let retryHint: string | undefined;
+        let successOutput: string | undefined;
 
-        if (!result.success) {
-          lastError = result.output ?? `Step '${step.name}' session ended with error`;
-          retryHint = `Previous attempt failed: ${lastError}. Finish the work now.`;
-          if (attempt < stepMaxRetries) {
-            await this.events.emit({
-              type: 'step_retry',
-              step: step.name,
-              attempt: attempt + 1,
-              maxAttempts: stepMaxRetries,
-              reason: lastError,
-            });
+        const stepMaxRetries = resolved.max_retries;
+        // Snapshot of resolved-task count before the most recent build retry,
+        // so the circuit breaker can detect "Claude ran but completed zero
+        // additional tasks" = no point retrying further, hand off to REPL.
+        let resolvedTasksBefore = step.name === 'build'
+          ? await countResolvedTasks(this.projectRoot)
+          : 0;
+
+        while (attempt < stepMaxRetries) {
+          attempt++;
+
+          const result =
+            step.name === 'complexity'
+              ? await this.runComplexityStep(state)
+              : step.name === 'worktree'
+                ? await this.runWorktreeStep(state)
+                : step.name === 'rebase'
+                  ? await this.runRebaseStep(state)
+                  : await this.stepRunner.run(step.name, state, { retryReason: retryHint });
+
+          // Rate limit: wait deterministically, then retry WITHOUT burning the
+          // retry budget (matches bin/conduct:2248–2280 handle_rate_limit).
+          if (result.rateLimited) {
+            const waitSeconds = result.waitSeconds ?? 300;
+            await this.events.emit({ type: 'rate_limit', waitSeconds });
+            await this.sleep(waitSeconds * 1000);
+            attempt--;
             continue;
           }
-          break;
-        }
 
-        // Step runner returned success. Now verify real completion.
-        if (this.verifyArtifacts && stepHasCompletionCheck(step.name) && step.name !== 'complexity') {
-          let completion = await checkStepCompletion(this.projectRoot, step.name, {
-            sessionStartedAt: state.session_started_at,
-            featureDesc: state.feature_desc,
-          });
-
-          // Auto-heal hook: before treating a build-gate miss as a failure,
-          // reconcile .pipeline/task-status.json against git log. If the
-          // prior pipeline run committed work for tasks still marked
-          // "pending", mark them completed in-place and re-check the gate
-          // — the retry never has to fire.
-          if (
-            !completion.done &&
-            step.name === 'build' &&
-            !autoHealAttempted.has('build')
-          ) {
-            autoHealAttempted.add('build');
-            const heal = await attemptAutoHeal(this.projectRoot).catch(() => ({
-              healed: [],
-              skipped: [],
-            }));
+          // Stale session: reset + retry without burning budget
+          // (matches bin/conduct:645–663 stale-session detection).
+          if (result.sessionExpired) {
             await this.events.emit({
-              type: 'auto_heal',
-              step: 'build',
-              healed: heal.healed.length,
-              skipped: heal.skipped.length,
+              type: 'session_reset',
+              reason: 'session unavailable (expired or in use) — resetting to a fresh session',
             });
-            if (heal.healed.length > 0) {
-              completion = await checkStepCompletion(this.projectRoot, step.name, {
-                sessionStartedAt: state.session_started_at,
-                featureDesc: state.feature_desc,
-              });
+            if (this.stepRunner.resetSession) {
+              await this.stepRunner.resetSession();
             }
+            attempt--;
+            continue;
           }
 
-          if (!completion.done) {
-            lastError = `Step '${step.name}' completed but completion check failed: ${completion.reason ?? 'unknown'}`;
-            retryHint = buildRetryHint(step.name, completion.reason);
-
-            // Stall circuit breaker (build step only). If Claude ran but the
-            // count of resolved tasks didn't move since the last attempt, or
-            // the pipeline skill wrote .pipeline/halt-user-input-required,
-            // we stop retrying and hand off to an interactive REPL so the
-            // user can unblock whatever Claude couldn't decide on its own.
-            // This covers the failure mode where Claude burns output on
-            // "three options: ..." rhetorical questions that no automated
-            // retry will ever resolve.
-            let stalled: 'no_task_progress' | 'halt_marker' | null = null;
-            if (step.name === 'build') {
-              const resolvedTasksAfter = await countResolvedTasks(this.projectRoot);
-              const markerSet = await haltMarkerExists(this.projectRoot);
-              if (markerSet) {
-                stalled = 'halt_marker';
-              } else if (attempt >= 2 && resolvedTasksAfter <= resolvedTasksBefore) {
-                stalled = 'no_task_progress';
-              }
-              if (stalled) {
-                await this.events.emit({
-                  type: 'build_stall',
-                  step: step.name,
-                  reason: stalled,
-                  resolvedBefore: resolvedTasksBefore,
-                  resolvedAfter: resolvedTasksAfter,
-                });
-                await clearHaltMarker(this.projectRoot);
-
-                // Hand off: open an interactive Claude session so the user
-                // can break the stall. After the REPL exits, re-check
-                // completion one more time. If passing, the step succeeds;
-                // if still failing, fall into the normal recovery menu.
-                // Skipped in auto mode — there's no human to break the stall,
-                // so we fall straight through to the (auto) failure handling.
-                if (this.mode !== 'auto' && this.stepRunner.runInteractive) {
-                  await this.stepRunner.runInteractive(step.name);
-                }
-                const recheck = await checkStepCompletion(this.projectRoot, step.name, {
-                  sessionStartedAt: state.session_started_at,
-                  featureDesc: state.feature_desc,
-                });
-                if (recheck.done) {
-                  succeeded = true;
-                  successOutput = result.output;
-                }
-                break;
-              }
-              resolvedTasksBefore = resolvedTasksAfter;
-            }
-
+          if (!result.success) {
+            lastError = result.output ?? `Step '${step.name}' session ended with error`;
+            retryHint = `Previous attempt failed: ${lastError}. Finish the work now.`;
             if (attempt < stepMaxRetries) {
               await this.events.emit({
                 type: 'step_retry',
                 step: step.name,
                 attempt: attempt + 1,
                 maxAttempts: stepMaxRetries,
-                reason: completion.reason ?? 'completion check failed',
+                reason: lastError,
               });
               continue;
             }
             break;
           }
-        }
 
-        succeeded = true;
-        successOutput = result.output;
-        break;
-      }
-
-      if (!succeeded) {
-        // Exhausted retries — route through the recovery menu.
-        await saveStepStatus(this.stateFilePath, step.name, 'failed');
-        state[step.name] = 'failed';
-        await this.events.emit({
-          type: 'step_failed',
-          step: step.name,
-          error: lastError,
-          retryCount: attempt,
-        });
-
-        // Auto mode is unattended — NEVER prompt or open a REPL. An advisory
-        // step's failure auto-skips so it can't block the run; a gating or
-        // structural failure (e.g. plan, build) stops the run for a human to
-        // inspect. This must come before the interactive recovery menu below.
-        if (this.mode === 'auto') {
-          if (step.enforcement === 'advisory') {
-            await saveStepStatus(this.stateFilePath, step.name, 'skipped');
-            state[step.name] = 'skipped';
-            continue;
-          }
-          // Unattended hard failure on a gating/structural step. Write a HALT
-          // marker (not just return) so a supervising daemon classifies this as
-          // `halted` — worktree kept, NOT marked processed, retryable after a
-          // human looks — instead of "loop ended without DONE or HALT marker".
-          const reason = `step '${step.name}' failed in auto mode (retries exhausted)`;
-          await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(
-            () => {},
-          );
-          await writeFile(
-            join(this.projectRoot, LOOP_HALT_MARKER),
-            reason + '\n',
-            'utf-8',
-          ).catch(() => {
-            /* best-effort marker */
-          });
-          await this.events.emit({ type: 'loop_halt', reason });
-          await writeState(this.stateFilePath, state);
-          process.off('SIGINT', sigintHandler);
-          return;
-        }
-
-        if (this.onRecovery) {
-          const gating = step.enforcement === 'gating';
-          let action: RecoveryOption;
-          // Keep polling the UI until it returns something other than `retry`
-          // once retries are exhausted. Terminal-side prompt hosts should drop
-          // `retry` from the menu when `retriesExhausted` is set; if a caller
-          // ignores the context, this loop prevents an infinite retry storm.
-          while (true) {
-            const count = recoveryRetries.get(step.name) ?? 0;
-            const retriesExhausted = count >= MAX_RECOVERY_RETRIES;
-            action = await this.onRecovery(step.name, gating, {
-              recoveryCount: count,
-              retriesExhausted,
+          // Step runner returned success. Now verify real completion.
+          if (this.verifyArtifacts && stepHasCompletionCheck(step.name) && step.name !== 'complexity') {
+            let completion = await checkStepCompletion(this.projectRoot, step.name, {
+              sessionStartedAt: state.session_started_at,
+              featureDesc: state.feature_desc,
+              config: this.config,
             });
-            if (action === 'retry' && retriesExhausted) continue;
-            break;
-          }
-          if (action === 'retry') {
-            recoveryRetries.set(step.name, (recoveryRetries.get(step.name) ?? 0) + 1);
-            i--;
-            continue;
-          }
-          if (action === 'skip' && !gating) {
-            await saveStepStatus(this.stateFilePath, step.name, 'skipped');
-            state[step.name] = 'skipped';
-            continue;
-          }
-          if (action === 'back') {
-            const navigable = getNavigableSteps(state, steps);
-            const target = await this.onNavigate(navigable);
-            if (target) {
-              const nav = navigateBack(state, target, steps);
-              await this.events.emit({ type: 'navigation_back', from: step.name, to: target });
-              state = nav.state;
-              await writeState(this.stateFilePath, state);
-              i = nav.index - 1;
-              continue;
-            }
-          }
-          if (action === 'interactive') {
-            if (this.stepRunner.runInteractive) {
-              await this.stepRunner.runInteractive(step.name);
-            }
-            i--;
-            continue;
-          }
-        }
 
-        await writeState(this.stateFilePath, state);
-        process.off('SIGINT', sigintHandler);
-        return;
-      }
-
-      // Success path ------------------------------------------------------
-      {
-        // Artifact review gate. Runs for every step that declares artifact
-        // globs (STEP_ARTIFACT_GLOBS[step].length > 0). Behavior is driven by
-        // resolved.review:
-        //   - auto:        silently record approvals; no prompt
-        //   - manual:      always prompt the user
-        //   - conditional: auto-approve unless the skill wrote
-        //                  `.pipeline/review-required-<step>` (signalling it
-        //                  found issues worth human attention)
-        // Approved (path + sha256 match) files skip re-prompting across runs.
-        if (stepHasCompletionCheck(step.name) && this.mode !== 'auto') {
-          const allFiles = await findArtifactFilesForStep(this.projectRoot, step.name);
-          if (allFiles.length > 0) {
-            const unapproved = await filterUnapprovedArtifacts(
-              allFiles,
-              state.artifact_approvals ?? {},
-              this.projectRoot,
-            );
-            if (unapproved.length > 0) {
-              let reviewResult: ArtifactReviewResult = 'approved';
-              let shouldPrompt = false;
-
-              if (resolved.review === 'manual') {
-                shouldPrompt = true;
-              } else if (resolved.review === 'conditional') {
-                const markerPath = join(
-                  this.projectRoot,
-                  '.pipeline',
-                  `review-required-${step.name}`,
-                );
-                try {
-                  await accessFile(markerPath);
-                  shouldPrompt = true;
-                } catch {
-                  // No marker → auto-approve (skill reported no issues).
-                }
-              }
-              // review === 'auto' → shouldPrompt stays false.
-
-              if (shouldPrompt) {
-                reviewResult = await this.onReviewArtifacts(step.name, unapproved);
-              }
-
-              if (reviewResult === 'rejected') {
-                i--; // Re-run the step; user rejected artifacts
-                continue;
-              }
-
-              // Approved — record hashes for the reviewed files.
-              state.artifact_approvals = await recordApprovals(
-                state.artifact_approvals ?? {},
-                unapproved,
-                this.projectRoot,
-              );
-              await writeState(this.stateFilePath, state);
-
-              // Clean up the conditional marker, if any, so next run starts fresh.
-              if (resolved.review === 'conditional') {
-                const markerPath = join(
-                  this.projectRoot,
-                  '.pipeline',
-                  `review-required-${step.name}`,
-                );
-                await unlinkFile(markerPath).catch(() => {
-                  /* marker absent — nothing to clean up */
+            // Auto-heal hook: before treating a build-gate miss as a failure,
+            // reconcile .pipeline/task-status.json against git log. If the
+            // prior pipeline run committed work for tasks still marked
+            // "pending", mark them completed in-place and re-check the gate
+            // — the retry never has to fire.
+            if (
+              !completion.done &&
+              step.name === 'build' &&
+              !autoHealAttempted.has('build')
+            ) {
+              autoHealAttempted.add('build');
+              const heal = await attemptAutoHeal(this.projectRoot).catch(() => ({
+                healed: [],
+                skipped: [],
+              }));
+              await this.events.emit({
+                type: 'auto_heal',
+                step: 'build',
+                healed: heal.healed.length,
+                skipped: heal.skipped.length,
+              });
+              if (heal.healed.length > 0) {
+                completion = await checkStepCompletion(this.projectRoot, step.name, {
+                  sessionStartedAt: state.session_started_at,
+                  featureDesc: state.feature_desc,
+                  config: this.config,
                 });
               }
             }
-          }
-        }
 
-        // For complexity + worktree, 'done' (and tier / worktree fields) are
-        // written atomically in their engine handlers. For all other steps, here.
-        if (step.name !== 'complexity' && step.name !== 'worktree') {
-          await saveStepStatus(this.stateFilePath, step.name, 'done');
-        }
-        state[step.name] = 'done';
-        const tail = successOutput ? successOutput.split('\n').slice(-200) : undefined;
-        await this.events.emit({ type: 'step_completed', step: step.name, status: 'done', tail });
+            if (!completion.done) {
+              lastError = `Step '${step.name}' completed but completion check failed: ${completion.reason ?? 'unknown'}`;
+              retryHint = buildRetryHint(step.name, completion.reason);
 
-        // Store PR URL from finish step output. Prefer state-file write
-        // (skill-authored, survives recovery/interactive fixes), fall back to
-        // scraping the first URL out of the runner's stdout so the common
-        // path of `gh pr create` printing the URL just works.
-        if (step.name === 'finish') {
-          const current = await readState(this.stateFilePath);
-          if (current.ok && current.value.pr_url) {
-            state.pr_url = current.value.pr_url;
-          } else if (successOutput) {
-            const scraped = extractPrUrl(successOutput);
-            if (scraped) {
-              state.pr_url = scraped;
-              await savePrUrl(this.stateFilePath, scraped);
+              // prd-audit short-circuit (daemon only): re-auditing unchanged code
+              // yields the same verdict, so the default retries are pure waste
+              // once a fresh report with blocking rows exists. Stop retrying and
+              // drop into the failure path, where the gap-class routes the daemon
+              // back to BUILD (impl-gap) or halts (product/plan gap). A failure
+              // with no fresh report (skill never wrote one / stale) still retries.
+              if (this.daemon && step.name === 'prd_audit') {
+                const cls = await classifyPrdAuditGaps(
+                  this.projectRoot,
+                  state.session_started_at,
+                );
+                if (cls.kind !== 'clean') break;
+              }
+
+              // Stall circuit breaker (build step only). If Claude ran but the
+              // count of resolved tasks didn't move since the last attempt, or
+              // the pipeline skill wrote .pipeline/halt-user-input-required,
+              // we stop retrying and hand off to an interactive REPL so the
+              // user can unblock whatever Claude couldn't decide on its own.
+              // This covers the failure mode where Claude burns output on
+              // "three options: ..." rhetorical questions that no automated
+              // retry will ever resolve.
+              let stalled: 'no_task_progress' | 'halt_marker' | null = null;
+              if (step.name === 'build') {
+                const resolvedTasksAfter = await countResolvedTasks(this.projectRoot);
+                const markerSet = await haltMarkerExists(this.projectRoot);
+                if (markerSet) {
+                  stalled = 'halt_marker';
+                } else if (attempt >= 2 && resolvedTasksAfter <= resolvedTasksBefore) {
+                  stalled = 'no_task_progress';
+                }
+                if (stalled) {
+                  await this.events.emit({
+                    type: 'build_stall',
+                    step: step.name,
+                    reason: stalled,
+                    resolvedBefore: resolvedTasksBefore,
+                    resolvedAfter: resolvedTasksAfter,
+                  });
+                  await clearHaltMarker(this.projectRoot);
+
+                  // Hand off: open an interactive Claude session so the user
+                  // can break the stall. After the REPL exits, re-check
+                  // completion one more time. If passing, the step succeeds;
+                  // if still failing, fall into the normal recovery menu.
+                  // Skipped in auto mode — there's no human to break the stall,
+                  // so we fall straight through to the (auto) failure handling.
+                  if (this.mode !== 'auto' && this.stepRunner.runInteractive) {
+                    await this.stepRunner.runInteractive(step.name);
+                  }
+                  const recheck = await checkStepCompletion(this.projectRoot, step.name, {
+                    sessionStartedAt: state.session_started_at,
+                    featureDesc: state.feature_desc,
+                    config: this.config,
+                  });
+                  if (recheck.done) {
+                    succeeded = true;
+                    successOutput = result.output;
+                  }
+                  break;
+                }
+                resolvedTasksBefore = resolvedTasksAfter;
+              }
+
+              if (attempt < stepMaxRetries) {
+                await this.events.emit({
+                  type: 'step_retry',
+                  step: step.name,
+                  attempt: attempt + 1,
+                  maxAttempts: stepMaxRetries,
+                  reason: completion.reason ?? 'completion check failed',
+                });
+                continue;
+              }
+              break;
             }
           }
+
+          succeeded = true;
+          successOutput = result.output;
+          break;
         }
 
-        // Checkpoint handling
-        if (step.isCheckpoint && this.mode !== 'auto') {
-          await this.events.emit({ type: 'checkpoint_reached', step: step.name });
-          const response = await this.onCheckpoint(step.name);
-          if (response === 'quit') {
+        if (!succeeded) {
+          // Exhausted retries — route through the recovery menu.
+          await saveStepStatus(this.stateFilePath, step.name, 'failed');
+          state[step.name] = 'failed';
+          await this.events.emit({
+            type: 'step_failed',
+            step: step.name,
+            error: lastError,
+            retryCount: attempt,
+          });
+
+          // Auto mode is unattended — NEVER prompt or open a REPL. An advisory
+          // step's failure auto-skips so it can't block the run; a gating or
+          // structural failure (e.g. plan, build) stops the run for a human to
+          // inspect. This must come before the interactive recovery menu below.
+          if (this.mode === 'auto') {
+            if (step.enforcement === 'advisory') {
+              await saveStepStatus(this.stateFilePath, step.name, 'skipped');
+              state[step.name] = 'skipped';
+              continue;
+            }
+
+            // prd-audit gap-aware routing (daemon only). A blocking audit halts
+            // today regardless of cause. Instead, distinguish WHO can close the
+            // gap: a pure implementation gap (impl-gap) is the daemon's to fix —
+            // route back to BUILD and re-audit (bounded by prdAuditSelfHeals so
+            // an impl-gap it can't actually close still halts). A product/plan
+            // gap (intended-drift, or an unclassifiable blocking row) needs a
+            // human DECIDE amendment the daemon can't run — halt for inspection.
+            if (this.daemon && step.name === 'prd_audit') {
+              const cls = await classifyPrdAuditGaps(
+                this.projectRoot,
+                state.session_started_at,
+              );
+              if (cls.kind === 'impl-only' && prdAuditSelfHeals < MAX_KICKBACKS_PER_GATE) {
+                prdAuditSelfHeals++;
+                await this.events.emit({
+                  type: 'kickback',
+                  from: 'prd_audit',
+                  to: 'build',
+                  evidence: cls.summary,
+                  count: prdAuditSelfHeals,
+                });
+                const nav = navigateBack(state, 'build', steps);
+                state = nav.state;
+                // markDownstreamStale only restages `done` steps; prd_audit is
+                // `failed` here, so restage it explicitly to re-run on the tail.
+                (state as Record<string, unknown>).prd_audit = 'stale';
+                await writeState(this.stateFilePath, state);
+                i = nav.index - 1; // for-loop i++ lands on build
+                continue;
+              }
+              const reason =
+                cls.kind === 'impl-only'
+                  ? `prd-audit impl-gap unresolved after ${prdAuditSelfHeals} build attempt(s) (cap ${MAX_KICKBACKS_PER_GATE}): ${cls.summary}`
+                  : `prd-audit halted: product/plan gap needs human DECIDE — ${cls.summary}`;
+              await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(
+                () => {},
+              );
+              await writeFile(
+                join(this.projectRoot, LOOP_HALT_MARKER),
+                reason + '\n',
+                'utf-8',
+              ).catch(() => {
+                /* best-effort marker */
+              });
+              await this.events.emit({ type: 'loop_halt', reason });
+              await writeState(this.stateFilePath, state);
+              process.off('SIGINT', sigintHandler);
+              return;
+            }
+
+            // Unattended hard failure on a gating/structural step. Write a HALT
+            // marker (not just return) so a supervising daemon classifies this as
+            // `halted` — worktree kept, NOT marked processed, retryable after a
+            // human looks — instead of "loop ended without DONE or HALT marker".
+            const reason = `step '${step.name}' failed in auto mode (retries exhausted)`;
+            await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(
+              () => {},
+            );
+            await writeFile(
+              join(this.projectRoot, LOOP_HALT_MARKER),
+              reason + '\n',
+              'utf-8',
+            ).catch(() => {
+              /* best-effort marker */
+            });
+            await this.events.emit({ type: 'loop_halt', reason });
             await writeState(this.stateFilePath, state);
             process.off('SIGINT', sigintHandler);
             return;
           }
-          if (response === 'back') {
-            const navigable = getNavigableSteps(state, steps);
-            const target = await this.onNavigate(navigable);
-            if (target) {
-              const nav = navigateBack(state, target, steps);
-              await this.events.emit({ type: 'navigation_back', from: step.name, to: target });
-              state = nav.state;
-              await writeState(this.stateFilePath, state);
-              i = nav.index - 1; // for loop will i++
+
+          if (this.onRecovery) {
+            const gating = step.enforcement === 'gating';
+            let action: RecoveryOption;
+            // Keep polling the UI until it returns something other than `retry`
+            // once retries are exhausted. Terminal-side prompt hosts should drop
+            // `retry` from the menu when `retriesExhausted` is set; if a caller
+            // ignores the context, this loop prevents an infinite retry storm.
+            while (true) {
+              const count = recoveryRetries.get(step.name) ?? 0;
+              const retriesExhausted = count >= MAX_RECOVERY_RETRIES;
+              action = await this.onRecovery(step.name, gating, {
+                recoveryCount: count,
+                retriesExhausted,
+              });
+              if (action === 'retry' && retriesExhausted) continue;
+              break;
+            }
+            if (action === 'retry') {
+              recoveryRetries.set(step.name, (recoveryRetries.get(step.name) ?? 0) + 1);
+              i--;
+              continue;
+            }
+            if (action === 'skip' && !gating) {
+              await saveStepStatus(this.stateFilePath, step.name, 'skipped');
+              state[step.name] = 'skipped';
+              continue;
+            }
+            if (action === 'back') {
+              const navigable = getNavigableSteps(state, steps);
+              const target = await this.onNavigate(navigable);
+              if (target) {
+                const nav = navigateBack(state, target, steps);
+                await this.events.emit({ type: 'navigation_back', from: step.name, to: target });
+                state = nav.state;
+                await writeState(this.stateFilePath, state);
+                i = nav.index - 1;
+                continue;
+              }
+            }
+            if (action === 'interactive') {
+              if (this.stepRunner.runInteractive) {
+                await this.stepRunner.runInteractive(step.name);
+              }
+              i--;
               continue;
             }
           }
-          // 'continue' proceeds normally
-        }
 
-        // ── Gate-driven tail (Phase 3) ─────────────────────────────────
-        // Once `build` engages the loop, the SELECTOR (not i++) chooses the
-        // next step, and a step that re-opened an upstream gate (kickback)
-        // routes the loop back to plan/stories. Upstream of build → null →
-        // the for loop's normal linear i++ (front half untouched).
-        const advance = await this.advanceTail(
-          step,
-          state,
-          kickbackCounts,
-          stuckGate,
-          steps,
-          indexOf,
-        );
-        if (advance === 'halt') {
           await writeState(this.stateFilePath, state);
           process.off('SIGINT', sigintHandler);
           return;
         }
-        if (advance !== null) {
-          i = advance - 1; // the for loop's i++ lands on the selector's choice
-          continue;
+
+        // Success path ------------------------------------------------------
+        {
+          // Artifact review gate. Runs for every step that declares artifact
+          // globs (STEP_ARTIFACT_GLOBS[step].length > 0). Behavior is driven by
+          // resolved.review:
+          //   - auto:        silently record approvals; no prompt
+          //   - manual:      always prompt the user
+          //   - conditional: auto-approve unless the skill wrote
+          //                  `.pipeline/review-required-<step>` (signalling it
+          //                  found issues worth human attention)
+          // Approved (path + sha256 match) files skip re-prompting across runs.
+          if (stepHasCompletionCheck(step.name) && this.mode !== 'auto') {
+            const allFiles = await findArtifactFilesForStep(this.projectRoot, step.name);
+            if (allFiles.length > 0) {
+              const unapproved = await filterUnapprovedArtifacts(
+                allFiles,
+                state.artifact_approvals ?? {},
+                this.projectRoot,
+              );
+              if (unapproved.length > 0) {
+                let reviewResult: ArtifactReviewResult = 'approved';
+                let shouldPrompt = false;
+
+                if (resolved.review === 'manual') {
+                  shouldPrompt = true;
+                } else if (resolved.review === 'conditional') {
+                  const markerPath = join(
+                    this.projectRoot,
+                    '.pipeline',
+                    `review-required-${step.name}`,
+                  );
+                  try {
+                    await accessFile(markerPath);
+                    shouldPrompt = true;
+                  } catch {
+                    // No marker → auto-approve (skill reported no issues).
+                  }
+                }
+                // review === 'auto' → shouldPrompt stays false.
+
+                if (shouldPrompt) {
+                  reviewResult = await this.onReviewArtifacts(step.name, unapproved);
+                }
+
+                if (reviewResult === 'rejected') {
+                  i--; // Re-run the step; user rejected artifacts
+                  continue;
+                }
+
+                // Approved — record hashes for the reviewed files.
+                state.artifact_approvals = await recordApprovals(
+                  state.artifact_approvals ?? {},
+                  unapproved,
+                  this.projectRoot,
+                );
+                await writeState(this.stateFilePath, state);
+
+                // Clean up the conditional marker, if any, so next run starts fresh.
+                if (resolved.review === 'conditional') {
+                  const markerPath = join(
+                    this.projectRoot,
+                    '.pipeline',
+                    `review-required-${step.name}`,
+                  );
+                  await unlinkFile(markerPath).catch(() => {
+                    /* marker absent — nothing to clean up */
+                  });
+                }
+              }
+            }
+          }
+
+          // For complexity + worktree, 'done' (and tier / worktree fields) are
+          // written atomically in their engine handlers. For all other steps, here.
+          if (step.name !== 'complexity' && step.name !== 'worktree') {
+            await saveStepStatus(this.stateFilePath, step.name, 'done');
+          }
+          state[step.name] = 'done';
+          const tail = successOutput ? successOutput.split('\n').slice(-200) : undefined;
+          await this.events.emit({ type: 'step_completed', step: step.name, status: 'done', tail });
+
+          // Store PR URL from finish step output. Prefer state-file write
+          // (skill-authored, survives recovery/interactive fixes), fall back to
+          // scraping the first URL out of the runner's stdout so the common
+          // path of `gh pr create` printing the URL just works.
+          if (step.name === 'finish') {
+            const current = await readState(this.stateFilePath);
+            if (current.ok && current.value.pr_url) {
+              state.pr_url = current.value.pr_url;
+            } else if (successOutput) {
+              const scraped = extractPrUrl(successOutput);
+              if (scraped) {
+                state.pr_url = scraped;
+                await savePrUrl(this.stateFilePath, scraped);
+              }
+            }
+          }
+
+          // Checkpoint handling
+          if (step.isCheckpoint && this.mode !== 'auto') {
+            await this.events.emit({ type: 'checkpoint_reached', step: step.name });
+            const response = await this.onCheckpoint(step.name);
+            if (response === 'quit') {
+              await writeState(this.stateFilePath, state);
+              process.off('SIGINT', sigintHandler);
+              return;
+            }
+            if (response === 'back') {
+              const navigable = getNavigableSteps(state, steps);
+              const target = await this.onNavigate(navigable);
+              if (target) {
+                const nav = navigateBack(state, target, steps);
+                await this.events.emit({ type: 'navigation_back', from: step.name, to: target });
+                state = nav.state;
+                await writeState(this.stateFilePath, state);
+                i = nav.index - 1; // for loop will i++
+                continue;
+              }
+            }
+            // 'continue' proceeds normally
+          }
+
+          // ── Gate-driven tail (Phase 3) ─────────────────────────────────
+          // Once `build` engages the loop, the SELECTOR (not i++) chooses the
+          // next step, and a step that re-opened an upstream gate (kickback)
+          // routes the loop back to plan/stories. Upstream of build → null →
+          // the for loop's normal linear i++ (front half untouched).
+          const advance = await this.advanceTail(
+            step,
+            state,
+            kickbackCounts,
+            stuckGate,
+            steps,
+            indexOf,
+          );
+          if (advance === 'halt') {
+            await writeState(this.stateFilePath, state);
+            process.off('SIGINT', sigintHandler);
+            return;
+          }
+          if (advance !== null) {
+            i = advance - 1; // the for loop's i++ lands on the selector's choice
+            continue;
+          }
         }
       }
+
+      // Clean up SIGINT handler
+      process.off('SIGINT', sigintHandler);
+
+      // All steps completed successfully
+      await this.events.emit({
+        type: 'feature_complete',
+        prUrl: state.pr_url,
+        featureDesc: state.feature_desc,
+        sessionStartedAt: state.session_started_at,
+      });
+      state.feature_status = 'complete';
+      await writeState(this.stateFilePath, state);
+    } catch (err) {
+      // Any unexpected throw inside the loop (e.g. a verdict-I/O failure in
+      // the SHIP tail) must leave the feature recoverable, never silently
+      // lost. Flush the latest in-memory state and write a HALT marker so a
+      // supervising daemon classifies this as `halted` (worktree kept, parked,
+      // retryable) instead of "loop ended without DONE or HALT marker" (error
+      // + lost SHIP state). Mirrors the auto-mode hard-failure handler above.
+      const reason = `conductor error: ${err instanceof Error ? err.message : String(err)}`;
+      await writeState(this.stateFilePath, state).catch(() => {});
+      await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(() => {});
+      await writeFile(join(this.projectRoot, LOOP_HALT_MARKER), reason + '\n', 'utf-8').catch(
+        () => {},
+      );
+      await this.events.emit({ type: 'loop_halt', reason });
+    } finally {
+      process.off('SIGINT', sigintHandler);
     }
-
-    // Clean up SIGINT handler
-    process.off('SIGINT', sigintHandler);
-
-    // All steps completed successfully
-    await this.events.emit({
-      type: 'feature_complete',
-      prUrl: state.pr_url,
-      featureDesc: state.feature_desc,
-      sessionStartedAt: state.session_started_at,
-    });
-    state.feature_status = 'complete';
-    await writeState(this.stateFilePath, state);
   }
 
   /**
@@ -1030,6 +1127,7 @@ export class Conductor {
       const verdict = await computeAndWriteVerdict(this.projectRoot, step.name, {
         sessionStartedAt: state.session_started_at,
         featureDesc: state.feature_desc,
+        config: this.config,
       });
       await this.events.emit({
         type: 'gate_verdict',
@@ -1120,6 +1218,7 @@ export class Conductor {
     stuckGate.set(decision.step, sel);
     if (sel > MAX_GATE_SELECTIONS) {
       const reason = `gate '${decision.step}' selected ${sel} times without satisfying: ${decision.reason}`;
+      await writeState(this.stateFilePath, state).catch(() => {});
       await writeFile(join(this.projectRoot, LOOP_HALT_MARKER), reason + '\n', 'utf-8');
       await this.events.emit({ type: 'loop_halt', reason });
       return 'halt';

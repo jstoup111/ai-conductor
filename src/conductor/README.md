@@ -74,6 +74,16 @@ hands off to the **gate-driven loop** (see below): the *selector*, not the index
 the next step. When `verifyArtifacts` is off the conductor stays fully linear (the gate
 loop never engages).
 
+The `acceptance_specs` gate verifies RED specs exist on disk by matching
+`STEP_ARTIFACT_GLOBS.acceptance_specs` (`engine/artifacts.ts`). The built-ins cover Rails,
+Node, and `backend/` layouts rooted at the repo root. A repo whose specs live elsewhere —
+most often a **monorepo** with specs one package deep (`api/spec/…`,
+`frontend/__tests__/…`) — declares extra globs via the project-level
+`acceptance_spec_globs` config key; they're *appended* to (never replace) the built-ins, so
+the gate can only loosen. A leading `*/` in a glob expands to each immediate subdirectory
+(skipping `node_modules`/dot-dirs), so package names need not be hard-coded. Config flows to
+the check via `CompletionContext.config`.
+
 ### Gate-driven loop
 
 Once `build` engages, `advanceTail()` drives
@@ -91,11 +101,19 @@ by **gate verdicts** instead of a fixed order:
   `{satisfied:false, kickback.from}` for `plan`/`stories`. `advanceTail` detects it,
   `navigateBack`s (target → pending, downstream → stale), and the selector routes back.
   Capped per gate to prevent ping-pong.
-- **Stop** — `.pipeline/DONE` on convergence; `.pipeline/HALT` on the kickback cap or a
-  gate selected too many times without satisfying.
-- **Hybrid session** — with `freshContextPerStep`, the LLM session is reset before each new
-  tail step (Ralph-style; SHIP-phase context never bloats), while a step's own retries
-  resume. The front half keeps the persistent session.
+- **Stop** — `.pipeline/DONE` on convergence; `.pipeline/HALT` on the kickback cap, a
+  gate selected too many times without satisfying, or **any unexpected throw inside the
+  loop** (the error is flushed to state and converted to a HALT so a supervising daemon
+  classifies it as `halted` — worktree kept, retryable — never `error` with lost state).
+- **Fresh session per step** — with `freshContextPerStep` (daemon/auto only; interactive
+  `/conduct` leaves it off so the brainstorm→stories→plan design session keeps its
+  context), the LLM session is reset before **every** executed step in the loop
+  (Ralph-style; context never bloats across the loop), while a step's own retries resume
+  the same session. The reset also fires before the **first** step, which discards any
+  stale session inherited from a **reused worktree** — a kept worktree carries the prior
+  run's `session-created`/`conduct-session-id`, and without the reset the first step would
+  `--resume` a brand-new id that was never created → "session unavailable (expired or in
+  use)". `daemon-cli` additionally sweeps those markers on (re)entry as belt-and-suspenders.
 
 The new gate-grade predicates (`plan` = per-path-type story coverage; `stories` = happy +
 negative path, no DRAFT) live in `GATE_ONLY_PREDICATES` (`engine/artifacts.ts`), separate
@@ -110,6 +128,22 @@ non-`ALIGNED`, un-`ACCEPTED` `FR-N`; `architecture_review_as_built` stays unsati
 `Verdict:` is `BLOCKED`. An unsatisfied gate keeps the selector from reaching `finish`; the
 skill guidance drives where the rework lands (BUILD vs DECIDE for prd-audit; human fix vs
 superseding ADR for as-built).
+
+**Daemon prd-audit routing (gap-class aware).** In an interactive run a blocking `prd_audit`
+escalates to the recovery menu, where the human picks where to route. In a **daemon** run
+(`mode: 'auto'`, `daemon: true`) there is no human, so the conductor routes by the audit's
+`Gap-class` column (`classifyPrdAuditGaps`, `engine/artifacts.ts`):
+
+- **Every blocking row is `impl-gap`** → the daemon owns BUILD, so it *self-heals*: emits a
+  `kickback` (`prd_audit → build`), `navigateBack`s to `build`, rebuilds, and re-audits. This is
+  bounded by `prdAuditSelfHeals` (cap `MAX_KICKBACKS_PER_GATE`); if the gap still isn't closed it
+  writes `.pipeline/HALT` (`impl-gap unresolved after N build attempts`).
+- **Any blocking row is a product/plan gap** (`intended-drift`, or an unclassifiable row)
+  → closing it needs a human DECIDE amendment the daemon can't run (DECIDE steps are pre-seeded
+  `done`), so it HALTs immediately (`product/plan gap needs human DECIDE`).
+
+Re-auditing unchanged code yields the same verdict, so the daemon skips the default per-step
+retries for a blocking `prd_audit` and routes straight away.
 
 ### Rebase-on-latest (before finish)
 
@@ -157,22 +191,32 @@ and opening a PR on finish:
   ceilings (`--max-items`, `--max-cost`, `--max-runtime`), `once` vs `--continuous`
   idle-poll, and per-feature failure isolation (a thrown feature becomes an `error`
   outcome; the pool survives).
-- `engine/daemon-backlog.ts` — eligibility, sourced from the **remote default branch**:
-  on every poll tick `resolveDiscoveryRef` does a best-effort `git fetch origin <default>`
-  (branch name discovered via `git symbolic-ref refs/remotes/origin/HEAD`, never hardcoded)
-  and returns `origin/<default>` as the tree ref. `discoverBacklog` then reads `.docs/plans`
-  + `.docs/stories` from `git show origin/<default>:…` (the remote-tracking ref updated by
-  the fetch), **never the working tree** and never a `.worktrees/` copy. This is what makes
-  **merging the spec PR the build-ready trigger** (FR-24): a spec the engineer authored but
-  has not landed, or one committed only on an unmerged `spec/<slug>` branch, is invisible
+- `engine/daemon-backlog.ts` — eligibility, sourced from the **remote default branch but
+  refreshed only between work**. Discovery is local-first: the pool calls `discoverBacklog`
+  with `refresh:false` (no fetch) while features are in flight or local queued work remains,
+  and only when it is **fully idle with nothing left locally** does it pass `refresh:true` —
+  "drained → find more". On that idle refresh, `resolveDiscoveryRef` does a best-effort
+  `git fetch origin <default>` (branch discovered via `git symbolic-ref refs/remotes/origin/HEAD`,
+  never hardcoded) and returns `origin/<default>`; between fetches it reuses that already-fetched
+  remote-tracking ref, so an in-flight build is never re-based onto specs that merged on origin
+  mid-run. `discoverBacklog` reads `.docs/plans` + `.docs/stories` from `git show
+  origin/<default>:…`, **never the working tree** and never a `.worktrees/` copy. This is what
+  makes **merging the spec PR the build-ready trigger** (FR-24): a spec the engineer authored
+  but has not landed, or one committed only on an unmerged `spec/<slug>` branch, is invisible
   until it reaches the remote default branch. `resolveDiscoveryRef` degrades gracefully: no
-  origin, unset `origin/HEAD`, or a failed fetch (offline) all fall back to the local base
-  ref; the poll loop never throws and never touches a worktree branch. On top of presence, a
-  feature must have stories **approved** (`Status: Accepted`, not DRAFT) + a plan that
-  declares a **dependency tree** (`## Task Dependency Graph` or per-task
-  `**Dependencies:**`), and not yet be processed. Ineligible features are skipped with a
-  logged reason — the daemon pre-seeds the front half, so eligibility is the only place
-  specs are vetted before autonomous build.
+  origin, unset `origin/HEAD`, a failed fetch (offline), or an unfetched ref all fall back to
+  the local base ref; the poll loop never throws and never touches a worktree branch. On top of
+  feature must have stories **approved** (`Status: Accepted`, not DRAFT — a stories file with
+  no status line counts as **not approved**) + a plan that declares a **dependency tree**
+  (`## Task Dependency Graph` or per-task `**Dependencies:**`), and not yet be processed.
+  The approval token is the single shared `isStoriesApproved` (`engine/artifacts.ts`), also
+  enforced at land time by the engineer (`land-spec.ts` / `authoring.ts` reject stories
+  lacking `Status: Accepted`) — so a spec can never land in a state the daemon then skips.
+  Ineligible features are skipped with a logged reason; because every skip here is for a
+  **merged** spec that can never build, the reason is surfaced **once per slug**
+  (`.daemon/warned/<slug>` markers) rather than re-logged on every poll tick — the daemon
+  pre-seeds the front half, so eligibility is the only place specs are vetted before
+  autonomous build.
 - `engine/daemon-runner.ts` — per-feature discipline: done → mark + remove worktree + PR;
   halted/error → keep the worktree for the human. On completion it also emits a engineer
   signal (see below).

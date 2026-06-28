@@ -273,6 +273,34 @@ describe('runAuthoring — regression guards (Task 33, FR-6, C2)', () => {
     expect(planFiles.trim()).toBe('');
   });
 
+  it('stories approved by DECIDE but lacking "Status: Accepted" throws before any write/commit', async () => {
+    const target = { name: 'alpha', canonicalPath: repoPath };
+    // DECIDE reports approved=true, but the stories artifact carries NO status
+    // marker — the exact gap that would commit a spec the daemon skips forever.
+    const noStatusDecide = async (step: string) => {
+      if (step === 'brainstorm') return { approved: true, artifact: '# PRD\n\nApproved.\n' };
+      if (step === 'stories')
+        return {
+          approved: true,
+          artifact: '# Stories\n\n## Story: main\n\n### AC\n- Given x, when y, then z.\n',
+        };
+      return { approved: true, artifact: PLAN_WITH_DEPS_UNIT };
+    };
+
+    await expect(
+      runAuthoring(target, 'CSV export', { decide: noStatusDecide }),
+    ).rejects.toThrow(/not approved|Status: Accepted/i);
+
+    // No spec branch left dangling and no artifacts fabricated.
+    const branchList = await git(['branch', '--list', 'spec/*'], repoPath);
+    expect(branchList).toBe('');
+    const execFileFn = promisify(execFileCb);
+    const { stdout: storyFiles } = await execFileFn('ls', [
+      join(repoPath, '.docs', 'stories'),
+    ]).catch(() => ({ stdout: '' }));
+    expect(storyFiles.trim()).toBe('');
+  });
+
   it('an UNAPPROVED brainstorm step throws immediately', async () => {
     const target = { name: 'alpha', canonicalPath: repoPath };
     const blockingDecide = async (step: string) => {

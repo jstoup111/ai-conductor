@@ -275,6 +275,20 @@ if [ -f "$pipeline_skill" ]; then
   fi
 fi
 
+# 8e. skills/stories/SKILL.md must document stamping the canonical approval
+# token. The engineer land gate (land-spec.ts) and the daemon backlog both
+# REQUIRE stories to declare "Status: Accepted" — a no-status stories file is
+# silently skipped forever by the daemon. This check ties the skill instruction
+# to the code gate so the two can't drift (stories-approval-contract fix).
+stories_skill="${HARNESS_DIR}/skills/stories/SKILL.md"
+if [ -f "$stories_skill" ]; then
+  if grep -qE 'Status[^A-Za-z]*Accepted' "$stories_skill"; then
+    assert "skills/stories/SKILL.md stamps canonical 'Status: Accepted' marker" 0
+  else
+    assert "skills/stories/SKILL.md stamps canonical 'Status: Accepted' marker" 1
+  fi
+fi
+
 # 8c. Every vX.Y.Z tag has a matching ## [X.Y.Z] section in CHANGELOG.md.
 # Only run when we're inside the harness repo's own git dir AND CHANGELOG.md
 # exists (skips cleanly in shallow clones).

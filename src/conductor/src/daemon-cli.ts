@@ -1,7 +1,7 @@
 import chalk from 'chalk';
 import { v4 as uuidv4 } from 'uuid';
 import { join } from 'node:path';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, rm } from 'node:fs/promises';
 import type { LLMProvider } from './execution/llm-provider.js';
 import { PluginRegistry } from './engine/plugin-registry.js';
 import { registerBuiltins } from './engine/plugin-loader.js';
@@ -15,7 +15,14 @@ import type { ConductState, ConductorEvent, StepName } from './types/index.js';
 import { runDaemon, type BacklogItem } from './engine/daemon.js';
 import { discoverBacklog, resolveDiscoveryRef } from './engine/daemon-backlog.js';
 import { makeRunFeature, type FeatureWorktree } from './engine/daemon-runner.js';
-import { isProcessed, makeFeatureRunnerDeps } from './engine/daemon-deps.js';
+import {
+  isHalted,
+  isProcessed,
+  hasWarned,
+  markWarned,
+  makeFeatureRunnerDeps,
+} from './engine/daemon-deps.js';
+import { readState, writeState } from './engine/state.js';
 
 export interface DaemonModeOptions {
   projectRoot: string;
@@ -133,13 +140,37 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     const pipelineDir = join(wt.path, '.pipeline');
     await mkdir(pipelineDir, { recursive: true });
 
+    // Sweep stale session markers before constructing the runner. A KEPT
+    // worktree (reused on a later daemon cycle after a prior halt/error —
+    // createWorktree is idempotent) still carries the previous run's
+    // `session-created` / `conduct-session-id`. Without this sweep the new
+    // runner inherits `sessionStarted = true` (lazy-init reads the marker) and
+    // its FIRST step would `--resume` a brand-new session id that was never
+    // created → "No conversation found" → "session unavailable (expired or in
+    // use)" → the feature errors out. The conductor also resets per step
+    // (freshContextPerStep), but sweeping here guarantees a clean start.
+    await rm(join(pipelineDir, 'session-created'), { force: true });
+    await rm(join(pipelineDir, 'conduct-session-id'), { force: true });
+
     // Pre-seed: specs are authored; start the loop at BUILD.
-    const seeded: ConductState = { complexity_tier: 'M', feature_desc: item.slug };
-    for (const name of PRESEEDED_DONE) {
-      (seeded as Record<string, unknown>)[name] = 'done';
-    }
+    // On re-dispatch of a halted feature, preserve any BUILD/SHIP progress
+    // already recorded in the existing state file.
     const stateFilePath = join(pipelineDir, 'conduct-state.json');
-    await writeFile(stateFilePath, JSON.stringify(seeded, null, 2));
+    const existingResult = await readState(stateFilePath);
+    const baseState: ConductState =
+      existingResult.ok && Object.keys(existingResult.value).length > 0
+        ? existingResult.value
+        : { complexity_tier: 'M', feature_desc: item.slug };
+
+    // Always stamp DECIDE steps as done regardless of whether this is a fresh
+    // start or a resume — the human authored them and they never re-run.
+    for (const name of PRESEEDED_DONE) {
+      (baseState as Record<string, unknown>)[name] = 'done';
+    }
+    if (!baseState.complexity_tier) baseState.complexity_tier = 'M';
+    if (!baseState.feature_desc) baseState.feature_desc = item.slug;
+
+    await writeState(stateFilePath, baseState);
 
     const stepRunner = new DefaultStepRunner(provider, uuidv4(), wt.path, {
       featureDesc: item.slug,
@@ -194,15 +225,22 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   );
   const result = await runDaemon(
     {
-      discoverBacklog: async () => {
-        // Per-poll best-effort fetch: refresh origin/<default> so specs merged
-        // onto the remote default branch since the last poll are visible.
+      discoverBacklog: async ({ refresh }) => {
+        // Refresh from origin ONLY between work (the pool sets refresh=true only
+        // when fully idle with no local work left): fetch origin/<default> so newly
+        // merged specs become visible. While builds run (refresh=false) there is NO
+        // fetch, so an in-flight build is never re-based onto specs that landed mid-run.
         // resolveDiscoveryRef degrades gracefully (offline, no origin, no HEAD).
-        const treeRef = await resolveDiscoveryRef(projectRoot, baseBranch, log);
+        const treeRef = await resolveDiscoveryRef(projectRoot, baseBranch, log, { refresh });
         return discoverBacklog(projectRoot, (slug) => isProcessed(projectRoot, slug), log, {
           baseBranch: treeRef,
+          // Surface a merged-but-unbuildable spec ONCE (per .daemon/warned/<slug>)
+          // instead of re-logging the identical skip on every poll.
+          hasWarned: (slug) => hasWarned(projectRoot, slug),
+          markWarned: (slug) => markWarned(projectRoot, slug),
         });
       },
+      isHalted: (slug) => isHalted(worktreeBase, slug),
       runFeature,
       log,
     },

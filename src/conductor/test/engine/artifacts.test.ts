@@ -8,6 +8,8 @@ import {
   stepHasArtifacts,
   getArtifactStatus,
   checkStepCompletion,
+  isStoriesApproved,
+  classifyPrdAuditGaps,
   FINISH_CHOICE_MARKER,
   HALT_MARKER,
 } from '../../src/engine/artifacts.js';
@@ -114,6 +116,61 @@ describe('engine/artifacts', () => {
       // Node convention: a root-level *.test.js must satisfy the step.
       await createFile('app.test.js');
       expect(await stepHasArtifacts(dir, 'acceptance_specs')).toBe(true);
+    });
+
+    it('recognizes a root-level *.test.tsx (React/RN) without any config', async () => {
+      expect(await stepHasArtifacts(dir, 'acceptance_specs')).toBe(false);
+      await createFile('App.test.tsx');
+      expect(await stepHasArtifacts(dir, 'acceptance_specs')).toBe(true);
+    });
+  });
+
+  describe('checkStepCompletion: acceptance_specs (monorepo + config globs)', () => {
+    // Mirrors the honeydew-or-handymando false-halt: correct RED specs committed
+    // under package subdirs (api/, frontend/) that no root-level default matches.
+    async function seedMonorepoSpecs() {
+      await createFile('api/spec/integration/household_invite_spec.rb', 'x');
+      await createFile('api/spec/jobs/notification_dispatcher_job_spec.rb', 'x');
+      await createFile('frontend/__tests__/screens/TabBar.test.tsx', 'x');
+    }
+
+    it('false-fails on a monorepo layout when no config globs are declared', async () => {
+      await seedMonorepoSpecs();
+      const result = await checkStepCompletion(dir, 'acceptance_specs');
+      expect(result.done).toBe(false);
+    });
+
+    it('passes once the project declares package-prefix globs via config', async () => {
+      await seedMonorepoSpecs();
+      const result = await checkStepCompletion(dir, 'acceptance_specs', {
+        config: { acceptance_spec_globs: ['*/spec/**/*', '*/__tests__/**/*'] },
+      });
+      expect(result).toEqual({ done: true });
+    });
+
+    it('honors a literal package prefix (no wildcard) in config globs too', async () => {
+      await seedMonorepoSpecs();
+      const result = await checkStepCompletion(dir, 'acceptance_specs', {
+        config: { acceptance_spec_globs: ['api/spec/**/*'] },
+      });
+      expect(result).toEqual({ done: true });
+    });
+
+    it('still fails with zero spec files even when config globs are declared', async () => {
+      const result = await checkStepCompletion(dir, 'acceptance_specs', {
+        config: { acceptance_spec_globs: ['*/spec/**/*', '*/__tests__/**/*'] },
+      });
+      expect(result.done).toBe(false);
+    });
+
+    it('does not expand `*/` into node_modules or dot-dirs', async () => {
+      // A spec-shaped path buried in node_modules / .git must NOT satisfy the gate.
+      await createFile('node_modules/somepkg/spec/x_spec.rb', 'x');
+      await createFile('.git/spec/x_spec.rb', 'x');
+      const result = await checkStepCompletion(dir, 'acceptance_specs', {
+        config: { acceptance_spec_globs: ['*/spec/**/*'] },
+      });
+      expect(result.done).toBe(false);
     });
   });
 
@@ -324,6 +381,109 @@ describe('engine/artifacts', () => {
       const reviewMatch = status.find((s) => s.pattern.includes('architecture-review-'));
       expect(adrMatch?.satisfied).toBe(true);
       expect(reviewMatch?.satisfied).toBe(false);
+    });
+  });
+
+  // The single canonical approval token shared by the engineer land gate and the
+  // daemon backlog. Locks the contract: ONLY "Status: Accepted" approves; DRAFT,
+  // a missing status line, and the PRD's "Approved" token are all unapproved.
+  describe('isStoriesApproved (canonical approval token)', () => {
+    it('approves a stories file declaring **Status:** Accepted', () => {
+      expect(isStoriesApproved('# Stories\n**Status:** Accepted\n')).toBe(true);
+    });
+
+    it('approves plain-YAML and case/whitespace variants of Status: Accepted', () => {
+      expect(isStoriesApproved('status: accepted')).toBe(true);
+      expect(isStoriesApproved('**Status:**   ACCEPTED')).toBe(true);
+      expect(isStoriesApproved('Status : Accepted')).toBe(true);
+    });
+
+    it('rejects DRAFT stories', () => {
+      expect(isStoriesApproved('# Stories\n**Status:** DRAFT\n')).toBe(false);
+    });
+
+    it('rejects a file with NO status line at all (the silent-skip casualty)', () => {
+      expect(isStoriesApproved('# Stories\n\n## Story: Foo\nbody\n')).toBe(false);
+      expect(isStoriesApproved('')).toBe(false);
+    });
+
+    it('rejects the PRD token "Status: Approved" (strict: stories use Accepted)', () => {
+      expect(isStoriesApproved('# Stories\n**Status:** Approved\n')).toBe(false);
+    });
+
+    it('rejects when DRAFT is present even if Accepted also appears', () => {
+      expect(isStoriesApproved('**Status:** Accepted\n... was **Status:** DRAFT')).toBe(false);
+    });
+  });
+
+  describe('classifyPrdAuditGaps', () => {
+    const header = '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|----|----|----|----|----|\n';
+    async function writeAudit(body: string) {
+      // sessionStartedAt=undefined below treats any mtime as fresh.
+      await createFile('.docs/audits/feat-prd-audit.md', '# PRD Audit\n\n' + header + body);
+    }
+
+    it('returns clean when there is no audit report', async () => {
+      const c = await classifyPrdAuditGaps(dir, undefined);
+      expect(c.kind).toBe('clean');
+    });
+
+    it('returns clean when every FR is ALIGNED', async () => {
+      await writeAudit('| FR-1 | ALIGNED | n/a | foo.ts:1 | — |\n');
+      const c = await classifyPrdAuditGaps(dir, undefined);
+      expect(c.kind).toBe('clean');
+    });
+
+    it('returns impl-only when every blocking row is impl-gap', async () => {
+      await writeAudit(
+        '| FR-1 | ALIGNED | n/a | foo.ts:1 | — |\n' +
+          '| FR-2 | MISSING | impl-gap | (no handler) | no |\n' +
+          '| FR-3 | PARTIAL | impl-gap | bar.ts:9 | no |\n',
+      );
+      const c = await classifyPrdAuditGaps(dir, undefined);
+      expect(c.kind).toBe('impl-only');
+      expect(c.summary).toMatch(/FR-2 \(impl-gap\)/);
+      expect(c.summary).toMatch(/FR-3 \(impl-gap\)/);
+    });
+
+    it('returns needs-decide when any blocking row is intended-drift', async () => {
+      await writeAudit(
+        '| FR-2 | MISSING | impl-gap | (no handler) | no |\n' +
+          '| FR-3 | DIVERGED | intended-drift | baz.ts:88 | no |\n',
+      );
+      const c = await classifyPrdAuditGaps(dir, undefined);
+      expect(c.kind).toBe('needs-decide');
+      expect(c.summary).toMatch(/FR-3 \(intended-drift\)/);
+    });
+
+    it('treats a plan-gap row as needs-decide (forward-compat class)', async () => {
+      await writeAudit('| FR-4 | MISSING | plan-gap | (never planned) | no |\n');
+      const c = await classifyPrdAuditGaps(dir, undefined);
+      expect(c.kind).toBe('needs-decide');
+      expect(c.summary).toMatch(/FR-4 \(plan-gap\)/);
+    });
+
+    it('treats an unclassifiable blocking row as needs-decide', async () => {
+      // Blocking verdict but no recognizable gap-class cell.
+      await writeAudit('| FR-5 | MISSING | | (evidence) | no |\n');
+      const c = await classifyPrdAuditGaps(dir, undefined);
+      expect(c.kind).toBe('needs-decide');
+      expect(c.summary).toMatch(/FR-5 \(unknown\)/);
+    });
+
+    it('ignores ACCEPTED rows (human-approved divergence does not block)', async () => {
+      await writeAudit('| FR-3 | DIVERGED | intended-drift | baz.ts:88 | ACCEPTED |\n');
+      const c = await classifyPrdAuditGaps(dir, undefined);
+      expect(c.kind).toBe('clean');
+    });
+
+    it('ignores a stale report (mtime predates the session)', async () => {
+      await writeAudit('| FR-2 | MISSING | impl-gap | x | no |\n');
+      const past = new Date(2000, 0, 1);
+      await utimes(join(dir, '.docs/audits/feat-prd-audit.md'), past, past);
+      // Session started "now" → the 2000 file is stale and ignored.
+      const c = await classifyPrdAuditGaps(dir, Date.now());
+      expect(c.kind).toBe('clean');
     });
   });
 });

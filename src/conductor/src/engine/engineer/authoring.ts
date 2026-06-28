@@ -33,6 +33,7 @@ import { promisify } from 'node:util';
 import type { LessonDigest, RetrievedLesson } from './lesson-store.js';
 import { AuthoringGuard } from './authoring-guard.js';
 import { TargetPathMissingError } from './target.js';
+import { isStoriesApproved } from '../artifacts.js';
 
 const execFile = promisify(execFileCb);
 
@@ -366,6 +367,17 @@ export async function runAuthoring(
     await mkdir(storiesDir, { recursive: true });
     await mkdir(plansDir, { recursive: true });
     await mkdir(specsDir, { recursive: true });
+
+    // Stories from DECIDE MUST carry the canonical approval marker — the
+    // /stories skill stamps "Status: Accepted" on operator approval. Enforce the
+    // assumption rather than trusting it: a no-status (or DRAFT) artifact would
+    // commit a spec the daemon then skips forever. Fail before any write.
+    if (!isStoriesApproved(storiesResult.artifact)) {
+      throw new Error(
+        'runAuthoring: stories artifact from DECIDE is not approved — it must declare ' +
+          '"Status: Accepted" (and no "Status: DRAFT"). The /stories skill stamps this on approval.',
+      );
+    }
 
     // Write stories verbatim from DECIDE (contains "Status: Accepted").
     await writeFile(storiesFile, storiesResult.artifact, 'utf8');
