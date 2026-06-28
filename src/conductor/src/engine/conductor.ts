@@ -1218,6 +1218,7 @@ export class Conductor {
     stuckGate.set(decision.step, sel);
     if (sel > MAX_GATE_SELECTIONS) {
       const reason = `gate '${decision.step}' selected ${sel} times without satisfying: ${decision.reason}`;
+      await writeState(this.stateFilePath, state).catch(() => {});
       await writeFile(join(this.projectRoot, LOOP_HALT_MARKER), reason + '\n', 'utf-8');
       await this.events.emit({ type: 'loop_halt', reason });
       return 'halt';
