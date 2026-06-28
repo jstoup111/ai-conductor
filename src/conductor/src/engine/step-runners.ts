@@ -4,7 +4,7 @@ import type { LLMProvider } from '../execution/llm-provider.js';
 import type { StepName, ConductState, ComplexityTier, RunMode } from '../types/index.js';
 import type { HarnessConfig, EffortLevel } from '../types/config.js';
 import type { StepRunner, StepRunResult, StepRunOptions } from './conductor.js';
-import { ALL_STEPS, getStepIndex, getStepDefinition } from './steps.js';
+import { ALL_STEPS, getStepDefinition, tryGetStepIndex } from './steps.js';
 import {
   resolveStepConfig,
   phaseForStep,
@@ -484,11 +484,18 @@ export class DefaultStepRunner implements StepRunner {
   }
 
   private buildSystemPrompt(step: StepName, autonomous: boolean, retryReason?: string): string {
-    const stepIndex = getStepIndex(step) + 1; // 1-based for display
     const stepDef = getStepDefinition(step);
+    // Out-of-band steps (e.g. `remediate`) have no position in the linear
+    // sequence, so present them by label instead of an "N/total" index rather
+    // than throwing "Unknown step".
+    const stepIdx = tryGetStepIndex(step);
+    const header =
+      stepIdx !== null
+        ? `[Conduct step ${stepIdx + 1}/${this.totalSteps}]`
+        : `[Conduct: ${stepDef.label}]`;
     const featurePart = this.featureDesc ? ` Feature: ${this.featureDesc}` : '';
 
-    let prompt = `[Conduct step ${stepIndex}/${this.totalSteps}]${featurePart}`;
+    let prompt = `${header}${featurePart}`;
 
     if (!autonomous) {
       prompt = `You are running step: ${stepDef.label}. Complete ONLY this step, then stop and let the user /quit to return to the conductor.\n${prompt}`;

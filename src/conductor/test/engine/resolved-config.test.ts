@@ -74,6 +74,13 @@ describe('engine/resolved-config', () => {
     it('throws on unknown step', () => {
       expect(() => phaseForStep('nonexistent' as never)).toThrow(/Unknown step/);
     });
+
+    it('resolves out-of-band steps absent from the linear sequence', () => {
+      // `remediate` is dispatched only when a prd_audit blocks; it is not in
+      // ALL_STEPS but must still resolve a phase (regression: it threw
+      // "Unknown step: remediate", which the daemon turned into a HALT).
+      expect(phaseForStep('remediate')).toBe('SHIP');
+    });
   });
 
   describe('resolveStepConfig — no config', () => {
