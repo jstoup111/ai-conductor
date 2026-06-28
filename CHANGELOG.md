@@ -20,6 +20,22 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- **Daemon worktree preparation: `WORKTREE_NAMESPACE` + `bin/setup`.** Before building a
+  feature, the daemon now (1) writes `WORKTREE_NAMESPACE=<worktree>` into the worktree's `.env`
+  and (2) runs the project's conventional `bin/setup` non-interactively (`CI=true`, with
+  `WORKTREE_NAMESPACE` exported) if it exists — after spec materialization and **before** the
+  build. Worktree creation is the daemon's job, so it establishes the per-worktree identity in
+  one place; the project's standard config consumes it (e.g. a Rails `database.yml` builds
+  `app_<env>_<namespace>` and `bin/setup`'s `db:prepare` creates it), so concurrent worktrees
+  build against isolated databases inside one **shared** stack without colliding. Reusing the
+  standard `bin/setup` (rather than a bespoke daemon-only script) means the daemon runs exactly
+  what a human/CI runs — no second setup path to drift. A non-zero exit (or a
+  present-but-non-executable `bin/setup`) throws and the feature is kept/errored rather than
+  built against a half-prepared environment — fixing the class of daemon halts caused by
+  project infra/setup that was never run in the worktree. New `engine/worktree-prepare.ts`;
+  wired via the optional `prepareWorktree` dep on `FeatureRunnerDeps`. Documented in
+  `src/conductor/README.md`.
+
 - **Optional Serena semantic-code MCP integration.** `./bin/install` now offers an opt-in
   install of [Serena](https://github.com/oraios/serena) (`oraios/serena`) when `uv` is
   present — prompted, not auto-forced, since it's a heavyweight LSP-backed toolkit. Once

@@ -33,6 +33,16 @@ export interface FeatureRunnerDeps {
   /** Copy/commit the feature's stories+plan into the worktree (materialization)
    *  so the loop's inputs physically exist there, not just in the main checkout. */
   materializeSpecs: (worktree: FeatureWorktree, item: BacklogItem) => Promise<void>;
+  /**
+   * Optional worktree preparation run after materialization and BEFORE the
+   * build: write `WORKTREE_NAMESPACE` into the worktree's `.env` (so the
+   * project's config can isolate this worktree's database) and run the
+   * project's conventional `bin/setup` non-interactively. No-op when the
+   * project ships no `bin/setup`. Absent on manual `/conduct` runs. A throw
+   * aborts the feature (worktree kept) rather than building against a
+   * half-prepared environment.
+   */
+  prepareWorktree?: (worktree: FeatureWorktree) => Promise<void>;
   /** Run the conductor's gate loop in the worktree to DONE/HALT (finish=open PR). */
   runConductor: (worktree: FeatureWorktree, item: BacklogItem) => Promise<void>;
   /** Read the loop outcome from the worktree's markers. */
@@ -78,6 +88,11 @@ export function makeRunFeature(
     try {
       worktree = await deps.createWorktree(item.slug);
       await deps.materializeSpecs(worktree, item);
+      // Prepare the worktree before the build: write WORKTREE_NAMESPACE and run
+      // the project's bin/setup. A project that ships no bin/setup still gets
+      // the namespace written; a setup failure throws and is handled like any
+      // other primitive throw (worktree kept, feature errored).
+      if (deps.prepareWorktree) await deps.prepareWorktree(worktree);
       await deps.runConductor(worktree, item);
       const outcome = await deps.readOutcome(worktree);
 

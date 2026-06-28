@@ -96,4 +96,53 @@ describe('engine/daemon-runner — makeRunFeature', () => {
     expect(out.status).toBe('error');
     expect(rec.teardownKeep).toBeUndefined(); // never created → nothing to tear down
   });
+
+  describe('prepareWorktree (write namespace + run bin/setup)', () => {
+    function depsWithOrder(
+      order: string[],
+      opts: { prepareThrows?: boolean } = {},
+      rec: { teardownKeep?: boolean } = {},
+    ): FeatureRunnerDeps {
+      const base = deps({ done: true, halted: false, prUrl: 'http://pr/1' }, rec);
+      return {
+        ...base,
+        materializeSpecs: async () => {
+          order.push('materialize');
+        },
+        prepareWorktree: async () => {
+          order.push('prepareWorktree');
+          if (opts.prepareThrows) throw new Error('bin/setup failed: pg unreachable');
+        },
+        runConductor: async () => {
+          order.push('runConductor');
+        },
+      };
+    }
+
+    it('runs prepareWorktree after materializeSpecs and before runConductor', async () => {
+      const order: string[] = [];
+      const run = makeRunFeature(depsWithOrder(order));
+      await run(ITEM);
+      expect(order).toEqual(['materialize', 'prepareWorktree', 'runConductor']);
+    });
+
+    it('a prepareWorktree failure aborts before the build and keeps the worktree', async () => {
+      const order: string[] = [];
+      const rec: { teardownKeep?: boolean } = {};
+      const run = makeRunFeature(depsWithOrder(order, { prepareThrows: true }, rec));
+      const out = await run(ITEM);
+      expect(out.status).toBe('error');
+      expect(out.reason).toMatch(/bin\/setup failed/);
+      expect(order).toEqual(['materialize', 'prepareWorktree']); // runConductor never reached
+      expect(rec.teardownKeep).toBe(true); // worktree kept for inspection
+    });
+
+    it('a deps object without prepareWorktree builds normally (backward compatible)', async () => {
+      // The existing deps() helper ships no prepareWorktree — the feature must
+      // still build, proving the step is genuinely opt-in.
+      const run = makeRunFeature(deps({ done: true, halted: false, prUrl: 'http://pr/1' }));
+      const out = await run(ITEM);
+      expect(out.status).toBe('done');
+    });
+  });
 });

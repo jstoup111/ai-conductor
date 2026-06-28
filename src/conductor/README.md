@@ -222,9 +222,42 @@ and opening a PR on finish:
   signal (see below).
 - `engine/daemon-deps.ts` — concrete git/fs primitives (worktree add/remove, spec
   materialization into the worktree, `.pipeline/DONE`/`HALT` outcome read).
+- `engine/worktree-prepare.ts` — writes `WORKTREE_NAMESPACE` + runs the project's `bin/setup` (see below).
 
 The daemon consumes specs — it never authors them. `--continuous` idle-polls for new
 eligible features, bounded by the ceilings.
+
+#### Worktree preparation (`WORKTREE_NAMESPACE` + `bin/setup`)
+
+The daemon is **stack-agnostic**: it knows nothing about Docker, Postgres, or Redis. But an
+autonomous worktree build still needs its dependencies installed and a database it won't
+collide with when two worktrees run concurrently. Worktree creation is the daemon's job, so
+the per-worktree *identity* that flows from it is too — and the daemon establishes it in one
+place, then defers everything stack-specific to the project's standard setup script:
+
+> After materializing specs and **before** building, the runner (1) writes
+> `WORKTREE_NAMESPACE=<worktree>` into the worktree's `.env`, then (2) runs the project's
+> conventional `bin/setup` with `CI=true` and `WORKTREE_NAMESPACE` exported, if one exists.
+> No `bin/setup` → the namespace is still written, then no-op.
+
+`makeRunFeature` calls `deps.prepareWorktree` between `materializeSpecs` and `runConductor`;
+the concrete dep (`worktree-prepare.ts`) runs `bin/setup` with the **worktree as cwd**. The
+project's normal config consumes `WORKTREE_NAMESPACE` — e.g. a Rails `database.yml` builds
+`app_<env>_<namespace>` and `bin/setup`'s `db:prepare` creates it; there is no second,
+daemon-only setup path to drift. `CI=true` lets setup scripts skip interactive steps such as
+starting a dev server (`bin/dev` belongs to the later manual-test phase, not the build).
+
+Why reuse `bin/setup` rather than a bespoke daemon script: the daemon runs exactly what a
+human / CI runs, so dependency install + DB prepare stay in one idempotent place. A project
+that translates the namespace differently (Python, etc.) just does so inside its own
+`bin/setup`.
+
+Failure discipline: a non-zero exit from `bin/setup` (or a present-but-non-executable script)
+**throws**, which `makeRunFeature` treats like any primitive throw — worktree kept, feature
+reported `error` — so the daemon never builds against a half-prepared environment. Projects
+that need no setup (a static site, a pure library) simply ship no `bin/setup` and are
+untouched. This is what lets one daemon serve **any** project setup, including consumer
+projects that use the harness.
 
 ### Daemon observability (`status` / `logs`)
 

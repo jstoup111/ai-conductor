@@ -8,6 +8,7 @@ import type {
   FeatureWorktree,
   WorktreeOutcome,
 } from './daemon-runner.js';
+import { prepareWorktree } from './worktree-prepare.js';
 
 export interface RealDepsConfig {
   /** The main checkout the daemon runs from. */
@@ -78,6 +79,11 @@ export function makeFeatureRunnerDeps(cfg: RealDepsConfig): FeatureRunnerDeps {
         /* nothing to commit (already tracked) — fine */
       });
     },
+
+    // Write WORKTREE_NAMESPACE into the worktree .env and run the project's
+    // bin/setup (no-op if absent). Keeps the daemon stack-agnostic while letting
+    // each project translate the namespace into its own shared/namespaced infra.
+    prepareWorktree: (wt) => prepareWorktree(wt.path, cfg.log),
 
     runConductor: (wt, item) => cfg.runConductorInWorktree(wt, item),
 
