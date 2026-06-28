@@ -12,6 +12,22 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- **GitHub-issues intake now fires on the live `conduct-ts engineer` launch.**
+  Previously poll-on-launch lived only in the test-only `runEngineerMode` harness,
+  so bare `conduct-ts engineer` dropped straight into `claude /engineer` and never
+  ran intake (only the standalone `conduct-ts engineer poll` did). The launcher now
+  **pre-polls** github issues and enqueues new ones before spawning the session
+  (`Intake: N issue(s) queued.`), and a new **`conduct-ts engineer claim`**
+  subcommand lets the `/engineer` skill atomically dequeue the oldest idea at
+  step 1. An idea can now come from three sources — github intake, a CLI arg
+  (`conduct-ts engineer "<idea>"` / `--idea "<idea>"`, which skips the poll), or
+  direct chat. `land`/`handoff` gain an optional **`--source-ref <owner/repo#N>`**
+  that threads write-back (routed comment → done comment + `engineer:handled` label
+  + ledger transition) back to the originating issue via the new shared
+  `intake/writeback.ts` helper. Write-back stays advisory — a `gh` failure never
+  blocks a land or reverts a delivered spec PR. Updates `skills/engineer/SKILL.md`
+  (claim-first capture + `--source-ref` threading) and the conductor README.
+
 - **Autonomous gap remediation (`/remediate`) — a blocking `prd_audit` is routed,
   not just halted.** When a daemon `prd_audit` blocks, the conductor now dispatches
   the new `/remediate` SHIP sub-routine, which reasons over the per-FR gaps and

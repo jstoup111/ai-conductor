@@ -34,6 +34,7 @@ import type { Envelope, IntakePort } from './intake/port.js';
 import type { IntakeSource } from './intake/source.js';
 import type { IntakeQueue } from './intake/queue.js';
 import type { Ledger } from './intake/ledger.js';
+import { reportRouted, reportDone } from './intake/writeback.js';
 import type { RoutingProvider } from './routing.js';
 import { createRegistryReader } from '../registry.js';
 import { createEngineerStoreReader } from '../engineer-store.js';
@@ -472,21 +473,19 @@ async function processIdea(
   }
   const target = await resolveTargetRepo(record.path, registryReader);
 
-  // Intake write-back: report routed (FR-36) + advance the ledger. Both are
-  // best-effort at this call site — write-back must never abort spec authoring.
+  // Intake write-back: report routed (FR-36) + advance the ledger via the shared
+  // helper (one implementation, also used by `engineer land --source-ref`).
+  // Best-effort at this call site — write-back must never abort spec authoring.
   if (intake) {
-    if (intake.port) {
-      try {
-        await intake.port.report(intake.envelope.sourceRef, 'routed', { repo: target.name });
-      } catch {
-        // write-back is advisory (FR-37) — a failed comment never blocks authoring.
-      }
-    }
-    try {
-      await intake.ledger?.transition(intake.envelope.source, intake.envelope.sourceRef, 'routed');
-    } catch {
-      // ledger entry absent (non-recording source) — transition is advisory.
-    }
+    await reportRouted(
+      {
+        source: intake.envelope.source,
+        sourceRef: intake.envelope.sourceRef,
+        port: intake.port,
+        ledger: intake.ledger,
+      },
+      target.name,
+    );
   }
 
   // 4b. Select lessons (flywheel).
@@ -519,24 +518,20 @@ async function processIdea(
   summary.authored!.push({ project: entry.project });
 
   // Intake write-back: report done (FR-36) + final ledger transition once the spec
-  // PR is open (entry.prUrl present). Best-effort — the spec PR is the real artifact,
-  // so a failed comment/transition never reverts a delivered handoff (FR-37).
+  // PR is open (entry.prUrl present), via the shared helper (also used by
+  // `engineer handoff --source-ref`). Best-effort — the spec PR is the real
+  // artifact, so a failed comment/transition never reverts a delivered handoff.
   if (intake && entry.prUrl) {
-    if (intake.port) {
-      try {
-        await intake.port.report(intake.envelope.sourceRef, 'done', { prUrl: entry.prUrl });
-      } catch {
-        // FR-37: a failed done comment never reverts a delivered spec PR.
-      }
-    }
-    try {
-      await intake.ledger?.transition(intake.envelope.source, intake.envelope.sourceRef, 'done', {
-        prUrl: entry.prUrl,
-        branch,
-      });
-    } catch {
-      // advisory ledger transition.
-    }
+    await reportDone(
+      {
+        source: intake.envelope.source,
+        sourceRef: intake.envelope.sourceRef,
+        port: intake.port,
+        ledger: intake.ledger,
+      },
+      entry.prUrl,
+      branch,
+    );
   }
 
   summary.ideasProcessed += 1;
