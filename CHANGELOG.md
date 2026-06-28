@@ -45,6 +45,16 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- **`prd_audit` impl-gap self-heal now actually reaches the BUILD agent (was a
+  no-op loop).** When a daemon `prd_audit` blocked on an implementation gap, the
+  conductor routed control back to BUILD but dispatched it with no context: the
+  failing-FR summary was emitted only as a dashboard event, and the build step
+  re-declared `retryHint = undefined` on entry, so `/pipeline` saw a complete
+  task list and changed nothing. The re-audit then failed the same FRs until the
+  self-heal cap and HALTed — never fixing anything. The kickback now queues a
+  `retryReason` for BUILD naming the un-ALIGNED FRs and pointing at
+  `.pipeline/prd-audit.md` for per-FR `file:line` evidence, instructing the agent
+  to make the code changes even though the task list shows complete. (#115)
 - **Daemon no longer re-enters every resumed feature at `acceptance_specs`.** The
   daemon constructed the conductor with a hardcoded `fromStep: 'acceptance_specs'`,
   which both set the loop's start index to the first BUILD step and marked it
