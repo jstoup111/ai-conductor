@@ -11,7 +11,7 @@
 // delegation without spawning real tmux.
 
 import { describe, it, expect, vi } from 'vitest';
-import { launchDaemon } from '../../../src/engine/engineer/daemon-launch.js';
+import { launchDaemon, NO_AUTOLAUNCH_ENV } from '../../../src/engine/engineer/daemon-launch.js';
 import type { DaemonStarter } from '../../../src/engine/engineer/daemon-launch.js';
 import * as daemonLaunchModule from '../../../src/engine/engineer/daemon-launch.js';
 
@@ -25,6 +25,24 @@ function makeStarterSpy() {
   };
   return { supervisor, starts };
 }
+
+// The global test setup (test/setup.ts) sets AI_CONDUCTOR_NO_DAEMON_AUTOLAUNCH=1 so the
+// suite never spawns a real daemon. These tests assert that kill-switch contract.
+describe('launchDaemon — auto-launch kill-switch (NO_AUTOLAUNCH_ENV)', () => {
+  it('suppresses the REAL default launch when the kill-switch is on (no injected supervisor)', () => {
+    expect(process.env[NO_AUTOLAUNCH_ENV]).toBe('1'); // set globally by test/setup.ts
+    // No supervisor injected → with the switch on this must be a no-op (never reaches
+    // makeTmuxSupervisor, so no real `tmux new-session`); returns undefined.
+    expect(launchDaemon('/projects/kill-switch-test')).toBeUndefined();
+  });
+
+  it('an INJECTED supervisor is NEVER suppressed by the kill-switch (delegation contract holds)', () => {
+    const { supervisor, starts } = makeStarterSpy();
+    launchDaemon('/projects/kill-switch-test', { supervisor });
+    expect(supervisor.start).toHaveBeenCalledOnce();
+    expect(starts).toEqual(['/projects/kill-switch-test']);
+  });
+});
 
 describe('launchDaemon (ADR-014 mechanism: tmux Supervisor.start)', () => {
   it('delegates to supervisor.start(project) exactly once', () => {
