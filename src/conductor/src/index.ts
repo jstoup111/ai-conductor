@@ -20,7 +20,8 @@ import { v4 as uuidv4 } from 'uuid';
 import { Conductor } from './engine/conductor.js';
 import { DefaultStepRunner } from './engine/step-runners.js';
 import { ConductorEventEmitter } from './ui/events.js';
-import { loadConfig } from './engine/config.js';
+import { loadConfig, loadMergedConfig } from './engine/config.js';
+import { renderDiagramsForFile, defaultRenderDeps } from './engine/mermaid-renderer.js';
 import { readState, writeState } from './engine/state.js';
 import { parseArgs, renderFullHelp, detectInline, type CLIOptions } from './cli.js';
 import type { StepName } from './types/index.js';
@@ -298,7 +299,6 @@ async function main(): Promise<void> {
   // region around each readline prompt so dashboard and prompts don't fight
   // for the terminal.
   const liveRegion = createLiveRegion();
-  const promptHost = new TerminalPromptHost(liveRegion);
 
   // Load config (optional — conductor works without it)
   const configResult = await loadConfig(projectRoot);
@@ -312,6 +312,21 @@ async function main(): Promise<void> {
     console.error(`Config error: ${configResult.error.message}`);
     process.exit(1);
   }
+
+  // Resolve the Mermaid renderer from the MERGED config (the user-level
+  // ~/.ai-conductor/config.yml is where `install` writes the chosen preset).
+  // The host renders diagrams at the approval gate; best-effort, with a notice
+  // on any skip/failure so the human knows to fall back to the raw Markdown.
+  const mergedResult = await loadMergedConfig(projectRoot);
+  const mermaidCfg = mergedResult.ok ? mergedResult.config.mermaid_renderer : undefined;
+  const renderDeps = defaultRenderDeps((m) => console.error(m));
+  const promptHost = new TerminalPromptHost(liveRegion, {
+    renderDiagrams: async (file, content) => {
+      const result = await renderDiagramsForFile(file, content, mermaidCfg, renderDeps);
+      // Return the notice so the host logs it on its own channel (TUI-safe).
+      return result.notice;
+    },
+  });
 
   // Handle --report: render summary from events.jsonl and exit (read-only, no Claude session)
   if (opts.report) {
