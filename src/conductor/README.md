@@ -242,12 +242,16 @@ things on top of that, without a parallel dispatch path:
 - **Startup inherited-state dashboard (`daemon-dashboard.ts`).** Before any dispatch, the
   daemon scans `.worktrees/*/` (`.pipeline/HALT`, `conduct-state.json`) and the
   `.daemon/processed/` ledger and prints one grouped dashboard to **both** stdout and
-  `daemon.log` — four groups with precedence **HALTED > PROCESSED > IN-PROGRESS > ELIGIBLE**:
-  HALTED (slug + first line of the HALT reason), IN-PROGRESS (slug + last meaningful step
-  from `conduct-state`), ELIGIBLE (build-ready slugs this scan that are neither halted nor
-  processed), PROCESSED (count). Best-effort: an empty HALT → reason `unknown`, a malformed
-  `conduct-state` → step `unknown`, a per-worktree fs error is skipped — the scan never
-  aborts startup.
+  `daemon.log` — four groups with precedence **HALTED > PROCESSED > IN-PROGRESS > ELIGIBLE**.
+  Each row carries the bits an operator triages on, mined best-effort from the worktree's
+  `conduct-state.json` (and the ledger): HALTED (slug + complexity tier + the step it reached
+  + first line of the HALT reason + any open PR link), IN-PROGRESS (slug + tier + last
+  meaningful step + any open PR link), ELIGIBLE (build-ready slug + tier this scan, neither
+  halted nor processed), PROCESSED (count + each shipped slug with its PR link when one was
+  persisted). The ledger is JSON (`{ status, prUrl }`); legacy plain-text `shipped` entries
+  still parse (no PR). Best-effort: an empty HALT → reason `unknown`, a malformed
+  `conduct-state` → step `unknown` (no tier/PR enrichment), a per-worktree fs error is
+  skipped — the scan never aborts startup.
 
 - **Base-SHA tracking + re-kick (`daemon-sha.ts`, `daemon-rekick.ts`).** The daemon
   `git rev-parse`s the local default branch (fast-forwarded to origin on idle refresh by
