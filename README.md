@@ -337,6 +337,44 @@ conductor:
   auto_check: true             # Check for updates on startup
 ```
 
+### OpenTelemetry observability (`conduct-ts` only)
+
+The TypeScript conductor can export run/step traces and metrics to any OTel-compatible
+backend (Jaeger, Grafana Tempo, Honeycomb, etc.) or to a local JSONL file. Add an `otel:`
+block to your project config to opt in:
+
+```yaml
+# OTLP HTTP (default port 4318 — Jaeger, Grafana Tempo, Honeycomb, …):
+otel:
+  exporter: otlp
+  endpoint: http://localhost:4318
+
+# gRPC transport (port 4317):
+otel:
+  exporter: otlp
+  endpoint: http://localhost:4317
+  protocol: grpc
+
+# File — writes OTLP-JSON newline-delimited to .pipeline/otel.jsonl:
+otel:
+  exporter: file
+```
+
+**Default-off.** Absent `otel:` block → zero overhead. Coexists with `events.jsonl` and
+`--report`; event-emission sites are not modified.
+
+**What you get:**
+- One `conductor.run` trace per run, with one child span per step.
+- `conductor.step.duration` histogram, `conductor.step.retries` counter, and
+  `conductor.step.tokens` counter (only when token usage is present).
+- Resource attributes: `conductor.run.id`, `conductor.feature`, `conductor.project`,
+  `service.name=ai-conductor` on every span.
+- Incomplete spans (interrupted run) are force-closed ERROR with `conductor.incomplete=true`.
+- SIGINT/SIGTERM flush within the configured `exportTimeoutMillis` (default 5 s).
+
+See `src/conductor/README.md → OpenTelemetry exporter` for the full implementation
+reference.
+
 ### Plugins (`conduct-ts` only)
 
 The TypeScript conductor supports a plugin system for swapping the LLM provider or UI renderer
