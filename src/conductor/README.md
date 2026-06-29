@@ -335,6 +335,53 @@ pidfile path and the O_EXCL create flag stay confined to `daemon-lock.ts`
 (`test/engine/daemon-lock-boundary.test.ts`); the log module reuses the exported
 `daemonDir()` and never re-encodes the pidfile.
 
+### Pluggable memory provider (ADR-015/ADR-016/ADR-017)
+
+The `memory_provider` config field selects which provider backs `.memory/`.
+
+```yaml
+# .ai-conductor/config.yml
+memory_provider: local    # default — no install needed
+```
+
+**Built-in `local` provider:** The harness creates a durable, per-project canonical store at
+`~/.ai-conductor/memory/<key>/harness/` and symlinks `.memory/` in the project to it (ADR-017).
+The `<key>` is derived from the git origin URL (or common `.git` dir path), so all linked
+worktrees of the same project share one memory store and sibling-worktree writes are
+immediately visible across branches.
+
+**Store layout:**
+
+```
+~/.ai-conductor/memory/<key>/harness/
+  decisions/      # architectural decisions
+  patterns/       # discovered code patterns
+  gotchas/        # unexpected issues and gotchas
+  context/        # domain knowledge and context
+  index.md        # append-only recall entry point
+```
+
+`.memory/` in the project repo is a symlink to this directory.
+
+**Recall model (FR-3 invariant):** the harness contains NO embedding, vector-search,
+cosine-similarity, or relevance-ranking logic. Recall is always performed by the LLM
+agent reading `.memory/index.md` and the relevant category files, then judging relevance.
+This guarantees the memory subsystem works with zero services, zero network, zero credentials.
+
+**Bootstrap setup:** `bin/conduct` calls `conduct-ts memory setup <dir>` before any
+bootstrap Claude sub-step. If `.memory/` is a real directory (legacy), `migrateMemory`
+runs the copy-verify-swap (ADR-020); otherwise `ensureMemoryStore` creates the canonical
+store idempotently. Future non-default providers integrate as MCP servers queried directly
+by the agent — the harness wires the provider selection but never searches on the agent's
+behalf.
+
+Key modules:
+- `engine/memory-store.ts` — `projectKey`, `ensureMemoryStore`, `recordMemoryEntry`
+- `engine/memory-migrate.ts` — `migrateMemory` (safe copy-verify-swap)
+- `engine/local-memory-provider.ts` — `LocalMemoryProvider` plugin object
+- `engine/memory-cli.ts` — `conduct memory setup` subcommand
+- `engine/config.ts` → `resolveMemoryProvider` — run-start provider resolution (ADR-016)
+
 ### Engineer memory store (Phase 9.1)
 
 On **daemon** feature completion (`done`/`halted`), the runner emits a structured learning

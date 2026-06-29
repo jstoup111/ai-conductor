@@ -308,6 +308,7 @@ complexity:
 # ── Plugin selection (conduct-ts only) ───────────────────────────────────────
 llm_provider: claude           # Which registered LLM provider to use (default: "claude")
 ui_renderer: terminal          # Which registered UI renderer to use (default: "terminal")
+memory_provider: local         # Which memory provider to use (default: "local" — shared canonical store)
 
 # ── Assess staleness thresholds ──────────────────────────────────────────────
 assess:
@@ -437,6 +438,7 @@ echo "llm_provider: my-provider" >> .ai-conductor/config.yml
 |------|------|-------------|
 | `llm_provider` | `claude` | Default — invokes Claude CLI via `execa` |
 | `ui_renderer` | `terminal` | Default — ink-based live dashboard |
+| `memory_provider` | `local` | Default — shared canonical store at `~/.ai-conductor/memory/<key>/harness/` symlinked as `.memory/`; recall is agent-driven (no harness-side search) |
 
 **Plugin load rules:**
 
