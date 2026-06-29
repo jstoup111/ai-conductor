@@ -190,6 +190,74 @@ describe('engine/rebase — gated resolution loop (real git, fake resolver)', ()
     expect(calls).toBe(0);
     expect(outcome.kind).toBe('conflict_halt');
   });
+
+  it('FR-7: a negative cap also disables resolution (cap <= 0 guard)', async () => {
+    const { git, pre } = await intoConflict();
+    let calls = 0;
+    const resolver = async (): Promise<ResolutionAttempt> => {
+      calls++;
+      return { resolved: true };
+    };
+
+    const outcome = await resolveRebaseConflicts(git, repo, pre, resolver, -1);
+
+    expect(calls).toBe(0);
+    expect(outcome.kind).toBe('conflict_halt');
+  });
+
+});
+
+describe('engine/rebase — resolution reclassification: docs-only → noop', () => {
+  let repo: string;
+  const g = (args: string[]) => execFile('git', args, { cwd: repo });
+  const gc = (args: string[]) =>
+    execFile('git', ['-c', 'core.editor=true', ...args], { cwd: repo });
+
+  // A repo whose ONLY conflict is on a .md (docs) file.
+  beforeEach(async () => {
+    repo = await mkdtemp(join(tmpdir(), 'rebase-resolution-docs-'));
+    await execFile('git', ['init', '-q', '-b', 'main'], { cwd: repo });
+    await g(['config', 'user.email', 't@t.com']);
+    await g(['config', 'user.name', 'T']);
+    await writeFile(join(repo, 'notes.md'), 'base\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'init']);
+
+    await g(['checkout', '-q', '-b', 'feat']);
+    await writeFile(join(repo, 'notes.md'), 'feature notes\n');
+    await g(['commit', '-q', '-am', 'feat: notes']);
+
+    await g(['checkout', '-q', 'main']);
+    await writeFile(join(repo, 'notes.md'), 'main notes\n');
+    await g(['commit', '-q', '-am', 'main: notes']);
+
+    await g(['checkout', '-q', 'feat']);
+  });
+
+  afterEach(async () => {
+    await rm(repo, { recursive: true, force: true });
+  });
+
+  it('FR-2/FR-5: a docs-only resolution reclassifies as noop (no downstream re-verify)', async () => {
+    const git = makeGitRunner(repo);
+    const pre = await performRebase(git, repo, 'main');
+    expect(pre.kind).toBe('conflict_halt');
+
+    const resolver = async (): Promise<ResolutionAttempt> => {
+      await writeFile(join(repo, 'notes.md'), 'merged notes\n');
+      await g(['add', 'notes.md']);
+      await gc(['rebase', '--continue']);
+      return { resolved: true };
+    };
+
+    const outcome = await resolveRebaseConflicts(git, repo, pre, resolver, 3);
+
+    // notes.md is a docs path → noop (FR-5: docs never invalidate build/manual_test),
+    // even though the rebase completed and the branch is now current.
+    expect(outcome.kind).toBe('noop');
+    expect((await g(['rev-list', '--count', 'HEAD..main'])).stdout.trim()).toBe('0');
+    expect((await g(['log', '--format=%s', 'main..HEAD'])).stdout).toContain('feat: notes');
+  });
 });
 
 describe('engine/rebase — featureCommitsPreserved (real git)', () => {

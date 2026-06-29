@@ -590,7 +590,12 @@ export async function resolveRebaseConflicts(
       : await conflictedFiles(git);
 
   for (let attempt = 1; attempt <= cap; attempt++) {
-    const result = await resolver({ conflicts, projectRoot, baseRef: onto });
+    // Refresh the conflicted-file list each attempt: a multi-patch rebase can
+    // pause again on a DIFFERENT set of files after a partial `--continue`, so a
+    // retry must see the current conflicts, not the snapshot from conflict time.
+    const attemptConflicts = await conflictedFiles(git);
+    const ctxConflicts = attemptConflicts.length > 0 ? attemptConflicts : conflicts;
+    const result = await resolver({ conflicts: ctxConflicts, projectRoot, baseRef: onto });
 
     if (!result.resolved) {
       // FR-6: resolver gave up — short-circuit, no further attempts.
