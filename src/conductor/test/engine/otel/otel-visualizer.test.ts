@@ -207,3 +207,67 @@ describe('T17: hot-path guard — emit() does not await the transport', () => {
     vi.stubGlobal('__t17_vis_ref', vis); // keep vis alive for GC; not awaited
   });
 });
+
+// ── T19: bounded export timeout ────────────────────────────────────────────────
+
+describe('T19: bounded export timeout — stop() resolves within exportTimeoutMillis', () => {
+  /**
+   * Verifies that an export that never calls its resultCallback is abandoned
+   * after exportTimeoutMillis and stop() resolves rather than hanging forever.
+   *
+   * We inject a "hanging" span exporter (export() never calls the callback)
+   * and a very short exportTimeoutMillis so the test stays fast.
+   */
+  let t19TempDir: string;
+  let t19PipelineDir: string;
+  let t19MetricExporter: InMemoryMetricExporter;
+  let t19Emitter: ConductorEventEmitter;
+
+  beforeEach(async () => {
+    t19TempDir = await mkdtemp(join(tmpdir(), 'otel-vis-t19-'));
+    t19PipelineDir = join(t19TempDir, '.pipeline');
+    t19MetricExporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+    t19Emitter = new ConductorEventEmitter();
+  });
+
+  afterEach(async () => {
+    await rm(t19TempDir, { recursive: true, force: true });
+  });
+
+  it('stop() resolves within the export timeout even when the transport never responds', async () => {
+    // Span exporter that blocks forever — never calls the result callback.
+    const hangingExporter: SpanExporter = {
+      export(_spans: ReadableSpan[], _cb: (r: { code: number }) => void): void {
+        // Never calls _cb.
+      },
+      async shutdown(): Promise<void> {},
+    };
+
+    const TIMEOUT_MS = 200; // short bound for test speed
+    const resolved = resolveOtelConfig(
+      { otel: { exporter: 'otlp', endpoint: 'http://localhost:4318' } },
+      t19PipelineDir,
+    );
+    const vis = new OtelVisualizer(resolved, {
+      runId: 'test-t19',
+      feature: 'test-feature',
+      project: 'test-project',
+      spanExporter: hangingExporter,
+      metricExporter: t19MetricExporter,
+      exportTimeoutMillis: TIMEOUT_MS,
+    });
+    vis.start(t19Emitter);
+    await t19Emitter.emit({ type: 'step_started', step: 'bootstrap', index: 0 });
+    await t19Emitter.emit({ type: 'step_completed', step: 'bootstrap', status: 'done' });
+    await t19Emitter.emit({ type: 'feature_complete', featureDesc: 'test' });
+
+    // stop() must abandon the hung export and resolve within a reasonable multiple
+    // of TIMEOUT_MS (allowing for scheduling jitter).
+    const DEADLINE_MS = TIMEOUT_MS * 5;
+    const start = Date.now();
+    await expect(vis.stop()).resolves.toBeUndefined();
+    const elapsed = Date.now() - start;
+
+    expect(elapsed).toBeLessThan(DEADLINE_MS);
+  }, 10_000 /* test timeout: must complete well before 10 s */);
+});

@@ -139,10 +139,20 @@ export interface OtelVisualizerContext {
   metricExporter?: PushMetricExporter;
   /** Optional warning callback. Receives O(1) warning strings; never throws. */
   onWarning?: (msg: string) => void;
+  /**
+   * Timeout (ms) for a single export call. If an endpoint does not respond
+   * within this bound the export is abandoned and a warning is emitted.
+   * Defaults to EXPORT_TIMEOUT_MS (5 000 ms). Override in tests to keep
+   * test suite fast even with a hung/refused transport.
+   */
+  exportTimeoutMillis?: number;
 }
 
 /** Periodic export interval for metrics (long — actual flush is on stop()). */
 const METRIC_EXPORT_INTERVAL_MS = 60_000;
+/** Default export timeout (ms). An endpoint that does not respond within this
+ * bound is considered failed; the export is abandoned and warnOnce fires. */
+const EXPORT_TIMEOUT_MS = 5_000;
 
 /**
  * The OTel visualizer plugin. Attach to the event bus via start(); detach and
@@ -213,8 +223,13 @@ export class OtelVisualizer implements VisualizerPlugin {
     }
 
     // TracerProvider with BatchSpanProcessor (export is async/background; R1).
+    // exportTimeoutMillis bounds how long a single export call may run before
+    // being abandoned (T19). Default: EXPORT_TIMEOUT_MS (5 s).
+    const exportTimeoutMillis = ctx.exportTimeoutMillis ?? EXPORT_TIMEOUT_MS;
     this.tracerProvider = new BasicTracerProvider({ resource });
-    this.tracerProvider.addSpanProcessor(new BatchSpanProcessor(spanExporter));
+    this.tracerProvider.addSpanProcessor(
+      new BatchSpanProcessor(spanExporter, { exportTimeoutMillis }),
+    );
 
     // MeterProvider with PeriodicExportingMetricReader (export is async; R1).
     const reader = new PeriodicExportingMetricReader({
