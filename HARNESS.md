@@ -25,7 +25,7 @@ UNDERSTAND → DECIDE → BUILD → ✓checkpoint → SHIP(manual-test) → ✓c
 |-------|--------|-----------|
 | ALL | **conduct** (orchestrator) | Status dashboard, gate enforcement, checkpoints |
 | UNDERSTAND | bootstrap, memory, assess | CLAUDE.md, .memory/, .docs/decisions/technical-assessment-*.md |
-| DECIDE | brainstorm (PRD) → complexity → stories → conflict-check → architecture-diagram → architecture-review → plan | .docs/specs/, .docs/complexity/, .docs/stories/, .docs/conflicts/, .docs/architecture/, .docs/decisions/, .docs/plans/ |
+| DECIDE | explore (track) → complexity → prd (product track only) → architecture-diagram → architecture-review → stories → conflict-check → plan | .docs/track/, .docs/specs/, .docs/complexity/, .docs/architecture/, .docs/decisions/, .docs/stories/, .docs/conflicts/, .docs/plans/ |
 | BUILD | writing-system-tests → tdd/pipeline, debugging, code-review | Acceptance specs, code, unit tests, .pipeline/ |
 | CHECKPOINT | User validation after build | Harness pause — continue, go back, or quit |
 | SHIP | manual-test, prd-audit, architecture-review --as-built, retro, finish/pr | .pipeline/manual-test-results.md, .pipeline/prd-audit.md, .pipeline/architecture-review-as-built.md (run evidence, gitignored), .docs/retros/ |
@@ -75,7 +75,9 @@ standard implementation, Haiku for mechanical checks.
 | Skill/Agent | Recommended Model | Why |
 |---|---|---|
 | engineer | opus | Interactive idea→spec control plane: routing judgment over the registry + driving the real DECIDE skills requires deep reasoning |
-| brainstorm | opus | Design decisions, trade-off analysis require deep reasoning |
+| brainstorm | opus | Retained for back-compat only (split into explore + prd); not scheduled by the live DECIDE flow |
+| explore | sonnet | Interactive divergent Q&A + approach trade-offs + product/technical track decision — operator in the loop |
+| prd | opus | Product-only PRD authoring: requirements + FRs, deep trade-off reasoning |
 | stories | sonnet | Pattern-following from design doc, structured output |
 | conflict-check | sonnet (S/M), opus (L) | Pairwise comparison is manageable for Sonnet with ≤15 stories; Large needs Opus for subtle contradictions |
 | plan | sonnet | Structured task breakdown from stories |
@@ -276,6 +278,15 @@ project using this harness inherits the same channel.
 ## Key Conventions
 
 - One skill, one responsibility, one enforcement level
+- **PRDs are product-only.** A PRD (`prd` skill, product track) states goals and requirements
+  (the *what* and *why*); it must NOT name the *new internal mechanism* by which this feature is
+  built — commands/flags, file paths, config keys, function/class/type names, library/protocol
+  choices, schemas, ports. Requirements are capabilities and behaviors; the *how* is resolved in
+  `/architecture-review` (weighed as trade-offs, captured as ADRs) and appears in the PRD only as
+  Open Questions. **Carve-out:** pre-existing *external* constraints and dependencies (an existing
+  API the feature must use, "must run offline", a mandated datastore) MAY be named as requirements
+  under Dependencies / Non-Functional Requirements — those are product reality, not a leaked
+  internal mechanism. Technical-track features have no PRD (acceptance criteria live in stories).
 - Plans assume zero-context executor — all detail included
 - Negative path stories are mandatory, not optional
 - No implementation plan without clean conflict-check
