@@ -345,7 +345,11 @@ export class Conductor {
    * affect the HALT/return path (C1).
    */
   private async surfaceRemediationPr(reason: string): Promise<string | undefined> {
-    if (this.mode !== 'auto') return undefined;
+    // Daemon-only (FR-8). Gate on the real `daemon` flag, not merely `mode==='auto'`:
+    // the autonomous builder sets `daemon: true`, and that is the precise signal that a
+    // HALT here strands committed work a human must remediate. It also keeps the real
+    // git/gh side effects out of any non-daemon auto-mode run (e.g. unit tests).
+    if (!this.daemon) return undefined;
     try {
       const r = await this.escalateBuildFailure({
         projectRoot: this.projectRoot,

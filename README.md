@@ -130,9 +130,11 @@ already shipped. Ineligible features are skipped with a logged reason. A feature
 that can't converge is left in its worktree (`.pipeline/HALT`) for you; the pool
 keeps going.
 
-On an irrecoverable daemon build failure that has at least one commit on the branch, the
-daemon pushes the branch and opens a **draft PR** labeled `needs-remediation` with a comment
-explaining the failure — best-effort and non-blocking. PRs from successfully-shipped features
+On any irrecoverable daemon HALT that stranded committed work — a build/gating-step failure, a
+prd-audit gap needing human DECIDE, the kickback/stuck-gate caps, or an unexpected error (rebase
+conflicts excluded) — when the branch has at least one commit, the daemon pushes it and opens a
+**draft PR** labeled `needs-remediation` with a comment explaining the HALT reason — best-effort
+and non-blocking. PRs from successfully-shipped features
 are enrolled in a watch registry (`.daemon/mergeable-watch.jsonl`); a label sweep (on startup,
 after each feature, and each idle poll tick) keeps the `mergeable` label truthfully in sync with
 CI and conflict state, so you can filter the PR list by merge-readiness. Both labels are

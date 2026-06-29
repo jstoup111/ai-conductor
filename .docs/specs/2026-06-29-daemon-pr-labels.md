@@ -49,24 +49,32 @@ and let the engineer triage the PR list directly on GitHub.
 
 ### Failure surfacing (`needs-remediation`)
 
-- **FR-1:** When an unattended (daemon) run exhausts its retries on the BUILD phase and cannot
-  proceed, the run is treated as an irrecoverable build failure for the purposes of this feature.
-- **FR-2:** On an irrecoverable build failure **where the feature branch contains at least one
-  commit**, the daemon surfaces the work as a pull request labeled `needs-remediation`.
-- **FR-3:** That pull request carries a comment explaining **why** the build failed (the failure
-  reason and the relevant error), stating that manual remediation is required.
+- **FR-1:** When an unattended (daemon) run **irrecoverably HALTs** — i.e. it parks the feature for
+  a human rather than shipping — that HALT is treated as a remediation event for this feature. This
+  covers **every** auto-mode HALT that strands committed work: the BUILD step exhausting retries,
+  any gating/structural step exhausting retries, a prd-audit product/plan gap that needs human
+  DECIDE, the kickback-ping-pong and stuck-gate caps, and an unexpected conductor error. The
+  **rebase-conflict HALT is excluded** (the rebase is left paused mid-state, so pushing/PRing it is
+  unsafe; it keeps its existing resume-after-resolve flow).
+- **FR-2:** On an irrecoverable HALT **where the feature branch contains at least one commit**, the
+  daemon surfaces the work as a pull request labeled `needs-remediation`.
+- **FR-3:** That pull request carries a comment explaining **why** the run halted (the HALT reason —
+  which names the failing step/cause — and the relevant error), stating that manual remediation is
+  required.
 - **FR-4:** That pull request is opened as a **draft**, so it cannot be merged accidentally and
   reads as "not ready" independent of the label.
 - **FR-5:** If an eligible pull request already exists for the branch, it is reused — the failure
   comment and `needs-remediation` label are applied to the existing PR rather than creating a
   duplicate.
-- **FR-6:** On an irrecoverable build failure **with no commits on the branch**, no PR, comment, or
+- **FR-6:** On an irrecoverable HALT **with no commits on the branch**, no PR, comment, or
   label is produced; the existing local failure signal (HALT marker, daemon dashboard/logs) is the
   only surface, unchanged from today.
 - **FR-7:** The failure-surfacing side effects are **best-effort and non-blocking**: if any push,
   PR, comment, or label step fails, the run still parks/halts exactly as it does today and the
   failure is recorded. Surfacing the *reason* takes priority over surfacing the code.
-- **FR-8:** Failure surfacing applies **only in daemon/auto mode**. Interactive runs are unchanged.
+- **FR-8:** Failure surfacing applies **only in a real daemon run** (the autonomous builder, which
+  sets the `daemon` flag) — not merely any `auto`-mode invocation. Interactive runs, and any
+  non-daemon automated context, are unchanged and produce no GitHub side effects.
 
 ### Ready-to-merge surfacing (`mergeable`)
 

@@ -71,6 +71,7 @@ describe('conductor/build-escalation', () => {
       events,
       projectRoot: dir,
       mode: 'auto',
+      daemon: true,
       maxRetries: 1,
       escalateBuildFailure: throwingEscalation,
     });
@@ -110,6 +111,7 @@ describe('conductor/build-escalation', () => {
       events,
       projectRoot: dir,
       mode: 'auto',
+      daemon: true,
       maxRetries: 1,
       escalateBuildFailure: fakeEscalation,
     });
@@ -154,6 +156,31 @@ describe('conductor/build-escalation', () => {
     expect(fakeEscalation).not.toHaveBeenCalled();
   });
 
+  // ── FR-8 (daemon gate): auto mode but NOT a daemon run must not escalate ─────
+  // Regression guard: surfacing is gated on the `daemon` flag, not merely
+  // `mode==='auto'`. A non-daemon auto-mode run (e.g. a unit/integration harness)
+  // must never invoke the real git/gh escalation path.
+  it('FR-8: auto mode without daemon flag does NOT call escalateBuildFailure', async () => {
+    const fakeEscalation = vi.fn<FakeEscalation>().mockResolvedValue({
+      prUrl: 'https://github.com/test/repo/pull/3',
+    });
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: makeRunner('build'),
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      // daemon flag omitted → defaults to false
+      maxRetries: 1,
+      escalateBuildFailure: fakeEscalation,
+    });
+
+    await conductor.run();
+
+    expect(fakeEscalation).not.toHaveBeenCalled();
+  });
+
   // ── Guard: ALL gating steps trigger escalation in auto mode, not just build ─
 
   it('guard: auto mode failure on a non-build gating step DOES call escalateBuildFailure', async () => {
@@ -173,6 +200,7 @@ describe('conductor/build-escalation', () => {
       events,
       projectRoot: dir,
       mode: 'auto',
+      daemon: true,
       maxRetries: 1,
       escalateBuildFailure: fakeEscalation,
     });

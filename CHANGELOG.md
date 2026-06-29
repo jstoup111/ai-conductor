@@ -30,10 +30,13 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 ### Added
 
 - **Daemon PR labeling — `needs-remediation` draft PR + `mergeable` label sweep (daemon-only).**
-  On an irrecoverable BUILD failure in daemon/auto mode, when the feature branch has at least one
-  commit, the daemon pushes the branch and opens a **draft PR** labeled `needs-remediation` with a
-  comment explaining the failure reason; when there are zero commits, no GitHub artifacts are
-  produced (FR-6). An existing open PR for the branch is reused rather than duplicated (FR-5). PRs
+  On **any irrecoverable daemon HALT that strands committed work** — a build/gating-step failure
+  (retries exhausted), a prd-audit product/plan gap needing human DECIDE, the kickback-ping-pong or
+  stuck-gate caps, or an unexpected conductor error (the rebase-conflict HALT is excluded) — when
+  the feature branch has at least one commit, the daemon pushes the branch and opens a **draft PR**
+  labeled `needs-remediation` with a comment explaining the HALT reason (which names the failing
+  step); when there are zero commits, no GitHub artifacts are produced (FR-6). An existing open PR
+  for the branch is reused rather than duplicated (FR-5). PRs
   from features that reach `done` are enrolled in a per-repo watch registry
   (`.daemon/mergeable-watch.jsonl`); a best-effort sweep — on daemon startup, after each feature
   completes, and per idle poll tick — keeps the `mergeable` label in sync: added when the PR is

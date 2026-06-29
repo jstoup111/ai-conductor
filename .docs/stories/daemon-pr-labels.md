@@ -8,36 +8,41 @@ Persona: **the engineer** — the human operator who reviews the daemon's output
 
 ---
 
-## Story: Recognize an irrecoverable daemon build failure
+## Story: Recognize an irrecoverable daemon HALT
 
 **Requirement:** FR-1, FR-8
 
-As the engineer, I want the daemon to recognize when an autonomous build has irrecoverably
-failed so that the failure can be surfaced for me instead of silently parked.
+As the engineer, I want the daemon to recognize when an autonomous run has irrecoverably HALTed
+(parked the feature for a human) so that the failure can be surfaced for me instead of only sitting
+in a local marker — regardless of which step caused it.
 
 ### Acceptance Criteria
 
 #### Happy Path
-- Given the conductor is in daemon/auto mode, when the BUILD step exhausts its retries without
-  completing, then the run is classified as an irrecoverable build failure and the failure-
+- Given the conductor is in daemon/auto mode, when **any** of these auto-mode HALTs occurs — the
+  BUILD step exhausting retries, **any** gating/structural step exhausting retries, a prd-audit
+  product/plan gap needing human DECIDE, the kickback-ping-pong cap, the stuck-gate cap, or an
+  unexpected conductor error — then the run is classified as an irrecoverable HALT and the
   surfacing behavior is triggered.
-- Given an irrecoverable build failure, when surfacing runs, then the existing local HALT marker
-  is still written first and the run still parks exactly as it does today.
+- Given an irrecoverable HALT, when surfacing runs, then the existing local HALT marker is still
+  written first and the run still parks exactly as it does today.
 
 #### Negative Paths
-- Given the conductor is in **interactive** mode, when BUILD retries are exhausted, then the
-  failure-surfacing behavior does NOT run (no push/PR/comment/label) and the existing interactive
-  recovery path is used unchanged.
-- Given a daemon run where BUILD **succeeds** (or a non-build step fails), when the run proceeds,
-  then failure-surfacing is NOT triggered.
-- Given an irrecoverable build failure where the surfacing step itself throws, when the run
-  finishes handling the failure, then the HALT marker and run-state are still written and the run
-  returns cleanly (failure never escalates into a crash). [cross-ref FR-7]
+- Given the conductor is in **interactive** mode, when any step HALTs, then the surfacing behavior
+  does NOT run (no push/PR/comment/label) and the existing interactive recovery path is used.
+- Given a daemon run that **succeeds** (ships `done`), when the run proceeds, then failure-surfacing
+  is NOT triggered.
+- Given a **rebase-conflict HALT** (rebase left paused mid-state), when the run parks, then
+  surfacing is **NOT** triggered for it — the rebase keeps its existing resume-after-resolve flow.
+- Given an irrecoverable HALT where the surfacing step itself throws, when the run finishes handling
+  the HALT, then the HALT marker and run-state are still written and the run returns cleanly
+  (surfacing never escalates into a crash). [cross-ref FR-7]
 
 ### Done When
-- [ ] Surfacing is invoked only on the auto-mode BUILD retries-exhausted path, gated on `mode === 'auto'` and `step === 'build'`
+- [ ] Surfacing fires at every non-rebase auto-mode HALT site (build-retries, any gating/structural retries-exhausted, prd-audit DECIDE gap, kickback cap, stuck-gate cap, catch-all error), gated on `mode === 'auto'`
+- [ ] The rebase-conflict HALT path does NOT call surfacing (asserted/verified)
 - [ ] HALT marker + state write happen before/independent of surfacing; an exception in surfacing does not prevent them
-- [ ] An interactive-mode build failure produces zero GitHub side effects (asserted by test)
+- [ ] An interactive-mode HALT produces zero GitHub side effects (asserted by test)
 
 ---
 

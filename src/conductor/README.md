@@ -313,12 +313,15 @@ projects that use the harness.
 Two GitHub labels give a human operator an at-a-glance signal on the daemon's PRs without
 reading logs or opening worktrees.
 
-**`needs-remediation` draft PR (irrecoverable build failure)**
+**`needs-remediation` draft PR (irrecoverable daemon HALT)**
 
-When the gate loop writes `.pipeline/HALT` on an irrecoverable BUILD failure *and* the
-feature branch has at least one commit, the daemon (via `daemon-runner.ts`) pushes the
-branch and surfaces a **draft** PR labeled `needs-remediation` with a comment that includes
-the failure reason and the relevant error. The PR is draft so it cannot be merged accidentally.
+When the gate loop (`conductor.ts`, auto mode) writes `.pipeline/HALT` at **any non-rebase HALT
+site** that strands committed work — a build/gating-step failure (retries exhausted), a prd-audit
+product/plan gap needing human DECIDE, the kickback-ping-pong or stuck-gate caps, or an unexpected
+conductor error — *and* the feature branch has at least one commit, the conductor surfaces a
+**draft** PR labeled `needs-remediation` with a comment that includes the HALT reason (which names
+the failing step) and the relevant error. The **rebase-conflict HALT is excluded** (rebase is left
+paused mid-state). The PR is draft so it cannot be merged accidentally.
 If an open PR already exists for the branch it is reused (label + comment applied, no
 duplicate opened). When the branch has **zero commits** no PR, comment, or label is
 produced — the existing local HALT marker is the only surface, unchanged. All GitHub
