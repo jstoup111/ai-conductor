@@ -142,7 +142,7 @@ const NOTFOUND_SENTINEL: PrMergeState = {
 /** Patterns whose presence in an error message indicate a PR is genuinely gone. */
 const NOT_FOUND_PATTERNS = [
   'not found',
-  'could not resolve',
+  'could not resolve to', // gh GraphQL: "Could not resolve to a PullRequest with the number N"
   'no pull requests',
   '404',
   'no such',

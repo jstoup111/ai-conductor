@@ -285,6 +285,18 @@ describe('sweepMergeableLabels — FR-13: MERGED / CLOSED / not-found → pruned
     expect(await readWatch(tmpDir)).toHaveLength(0);
   });
 
+  it('keeps entry when gh throws a DNS transient error "could not resolve host" (NOT pruned)', async () => {
+    // "could not resolve host: github.com" is a network-level transient error,
+    // NOT a genuine not-found signal. The entry must be kept so the next sweep
+    // can retry — the PR has not been deleted.
+    const { gh } = makeFakeGh({ [PR_URL]: new Error('could not resolve host: github.com') });
+    await enrollWatch(tmpDir, entry());
+    await sweepMergeableLabels({ projectRoot: tmpDir, runGh: gh });
+    const remaining = await readWatch(tmpDir);
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0].prUrl).toBe(PR_URL);
+  });
+
   it('keeps entry and processes others when one PR throws a generic/transient error (FR-15)', async () => {
     // A transient error (e.g. network timeout) must NOT prune; the entry is kept
     // and the other entries in the registry must still be processed.

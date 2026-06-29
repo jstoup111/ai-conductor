@@ -296,6 +296,16 @@ describe('prMergeState + isMergeable', () => {
     expect(result.state).toBe('NOTFOUND');
   });
 
+  it('DNS transient error "could not resolve host" → UNKNOWN sentinel, NOT NOTFOUND (kept + retried)', async () => {
+    // "could not resolve host: github.com" is a transient connectivity error.
+    // It must NOT match the not-found patterns — the PR is still valid; keep it
+    // and retry on the next sweep pass.
+    const { gh } = fakeGh([new Error('could not resolve host: github.com')]);
+    const result = await prMergeState(gh, '/repo', TEST_PR_URL);
+    expect(result.state).toBe('UNKNOWN');
+    expect(isMergeable(result)).toBe(false);
+  });
+
   it('conclusion=TIMED_OUT → hasFailingOrPendingChecks true → isMergeable false', async () => {
     const { gh } = fakeGh([
       {
