@@ -304,6 +304,47 @@ that need no setup (a static site, a pure library) simply ship no `bin/setup` an
 untouched. This is what lets one daemon serve **any** project setup, including consumer
 projects that use the harness.
 
+#### PR labeling (`needs-remediation` + `mergeable`, daemon-only)
+
+Two GitHub labels give a human operator an at-a-glance signal on the daemon's PRs without
+reading logs or opening worktrees.
+
+**`needs-remediation` draft PR (irrecoverable build failure)**
+
+When the gate loop writes `.pipeline/HALT` on an irrecoverable BUILD failure *and* the
+feature branch has at least one commit, the daemon (via `daemon-runner.ts`) pushes the
+branch and surfaces a **draft** PR labeled `needs-remediation` with a comment that includes
+the failure reason and the relevant error. The PR is draft so it cannot be merged accidentally.
+If an open PR already exists for the branch it is reused (label + comment applied, no
+duplicate opened). When the branch has **zero commits** no PR, comment, or label is
+produced — the existing local HALT marker is the only surface, unchanged. All GitHub
+side-effects are **best-effort and non-blocking**: a push, PR-create, comment, or label
+failure is logged and swallowed; the HALT is still written regardless. This behavior is
+**distinct** from the engineer intake `needs-manual` ledger state, which tracks intake-issue
+re-eligibility and is unrelated to build-failure PR labeling.
+
+When a feature that previously produced a `needs-remediation` PR is later re-dispatched and
+reaches `done`, the daemon clears the stale signal: it removes the `needs-remediation` label
+and un-drafts the PR (best-effort) before enrolling it in the `mergeable` sweep (FR-16), so
+the now-clean PR is not permanently barred from `mergeable` and the label does not lie.
+
+**`mergeable` label sweep (fully-shipped PRs)**
+
+When a feature reaches `done`, its PR is enrolled in a per-repo watch registry
+(`.daemon/mergeable-watch.jsonl`). A best-effort sweep — run on daemon startup, after each
+feature completes, and on each idle poll tick — evaluates every enrolled PR and keeps the
+`mergeable` label in sync with reality:
+
+- **Added** when: the PR is open, has no merge conflicts, and CI is passing (a PR with no
+  required checks counts as passing).
+- **Removed** when: the PR becomes non-mergeable (new conflicts, CI breaks, or no longer open).
+- **Pruned** when: the PR is merged or closed (dropped from the registry, no further activity).
+
+A PR carrying `needs-remediation` is **never** labeled `mergeable`. The sweep is best-effort
+and non-blocking: a label-read or apply/remove failure is logged and does not disrupt feature
+processing. Because CI typically finishes after the PR is opened, the sweep re-checks over
+time rather than making a one-shot determination at PR creation.
+
 ### Daemon observability (`status` / `logs`)
 
 The daemon is spawned **detached** (`engine/engineer/daemon-launch.ts`,

@@ -130,6 +130,14 @@ already shipped. Ineligible features are skipped with a logged reason. A feature
 that can't converge is left in its worktree (`.pipeline/HALT`) for you; the pool
 keeps going.
 
+On an irrecoverable daemon build failure that has at least one commit on the branch, the
+daemon pushes the branch and opens a **draft PR** labeled `needs-remediation` with a comment
+explaining the failure — best-effort and non-blocking. PRs from successfully-shipped features
+are enrolled in a watch registry (`.daemon/mergeable-watch.jsonl`); a label sweep (on startup,
+after each feature, and each idle poll tick) keeps the `mergeable` label truthfully in sync with
+CI and conflict state, so you can filter the PR list by merge-readiness. Both labels are
+daemon-only; interactive runs are unchanged.
+
 On startup, before any dispatch, the daemon prints a grouped **inherited-state
 dashboard** (HALTED / IN-PROGRESS / ELIGIBLE / PROCESSED) to both your terminal and
 `daemon.log`. It also tracks the base-branch tip SHA (`.daemon/last-base-sha`): when
