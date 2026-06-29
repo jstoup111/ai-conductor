@@ -34,23 +34,24 @@ mid-feature. This prevents redundant cold starts that waste API calls and hit ra
 Step 1:  /bootstrap             → UNDERSTAND
 Step 2:  /memory                → UNDERSTAND
 Step 2.5: /assess               → UNDERSTAND (existing projects only — skipped for new)
-Step 3:  /brainstorm            → DECIDE
+Step 3:  /explore               → DECIDE (context, approaches, + decide product/technical TRACK)
 Step 4:  Complexity Assessment   → DECIDE (classify S/M/L, determines which steps run)
 Step 5:  Worktree setup          → DECIDE (create feature branch + worktree — all subsequent commits are isolated)
-Step 6:  /stories               → DECIDE
-Step 7:  /conflict-check        → DECIDE (skipped for Small)
-Step 8:  /architecture-diagram  → DECIDE (generate/update current-state diagrams; skipped for Small)
-Step 8b: /architecture-review    → DECIDE (skipped for Small, lightweight for Medium — consumes diagrams)
-Step 9:  /plan                  → DECIDE (technical implementation plan, grounded in the architecture)
-Step 10: /writing-system-tests  → BUILD (skipped for Small)
-Step 11: /pipeline or /tdd      → BUILD (pipeline evaluator satisfies code-review gate)
+Step 6:  /prd                   → DECIDE (product-only PRD; PRODUCT track only — skipped on technical)
+Step 7:  /architecture-diagram  → DECIDE (generate/update current-state diagrams; skipped for Small)
+Step 7b: /architecture-review    → DECIDE (skipped for Small, lightweight for Medium — produces ADRs; precedes stories)
+Step 8:  /stories               → DECIDE (from PRD FRs on product; technical stories on technical)
+Step 9:  /conflict-check        → DECIDE (skipped for Small; root-routes kickback → prd|architecture|stories)
+Step 10: /plan                  → DECIDE (technical implementation plan, grounded in the architecture + stories)
+Step 11: /writing-system-tests  → BUILD (skipped for Small)
+Step 12: /pipeline or /tdd      → BUILD (pipeline evaluator satisfies code-review gate)
        ── CHECKPOINT ──         → User reviews build output, can go back or continue
-Step 12: /manual-test           → SHIP (validate stories, bug loop via /tdd — auto-skip for non-endpoint features)
+Step 13: /manual-test           → SHIP (validate stories, bug loop via /tdd — auto-skip for non-endpoint features)
        ── CHECKPOINT ──         → User reviews test results, can go back or continue
-Step 13: /prd-audit             → SHIP (audit shipped impl vs PRD FRs; GATE — kicks back to BUILD or DECIDE on a gap)
-Step 14: /architecture-review --as-built → SHIP (shipped code vs APPROVED ADRs; GATE — BLOCKED on an ADR violation)
-Step 15: /retro                 → SHIP
-Step 16: /finish                → SHIP (verify, review changes, present options — delegates to /pr if user chooses Push & PR)
+Step 14: /prd-audit             → SHIP (PRODUCT track only — audit shipped impl vs PRD FRs; GATE; skipped on technical)
+Step 15: /architecture-review --as-built → SHIP (shipped code vs APPROVED ADRs; GATE — BLOCKED on an ADR violation)
+Step 16: /retro                 → SHIP
+Step 17: /finish                → SHIP (verify, review changes, present options — delegates to /pr if user chooses Push & PR)
 ```
 
 > **Order note:** architecture (diagram + review) precedes `plan` so the technical
@@ -69,7 +70,8 @@ Check for these artifacts in order. The **first missing artifact** determines th
 | 1. bootstrap | Project CLAUDE.md exists AND `.memory/` directory exists AND `.docs/` subdirectories exist | Glob for `CLAUDE.md` in project root, check `.memory/index.md`, check `.docs/specs/` exists |
 | 2. memory | `.memory/index.md` has been read this session | Memory recall happens automatically — if bootstrap is done, mark this as done |
 | 2.5. assess | Assessment report exists OR skipped (new project) | Glob `.docs/decisions/technical-assessment-*.md` or check state is "skipped" |
-| 3. brainstorm | At least one file exists in `.docs/specs/` (not SUPERSEDED) | Glob `.docs/specs/*.md` — exclude files prefixed with `SUPERSEDED-`. Before launching brainstorm, check for existing Draft specs on the same topic and pass them as context to avoid contradictory decisions. |
+| 3. explore | Track decided — `.docs/track/*.md` exists (or `state.track` set) | Glob `.docs/track/*.md` / check `state.track`. `explore` is advisory and always runs; it classifies the work product/technical. |
+| 3b. prd | PRODUCT track: a spec exists in `.docs/specs/` (not SUPERSEDED). TECHNICAL track: skipped. | If `track == product`: glob `.docs/specs/*.md` (exclude `SUPERSEDED-`). If `track == technical`: step is skipped. |
 | 4. complexity | Complexity tier set in `.pipeline/conduct-state.json` | Check `complexity_tier` key exists and is S, M, or L |
 | 5. worktree | Feature worktree created | Check `.pipeline/conduct-state.json` worktree state is "done" or "skipped" |
 | 6. stories | At least one **accepted** story exists in `.docs/stories/` (not just DRAFT) | Glob `.docs/stories/*.md` — if all stories contain `Status: DRAFT`, this step is pending |
@@ -167,7 +169,7 @@ The loop index jumps to the target and re-runs forward from there.
 Stale steps still satisfy gate requirements (via `step_satisfied()`) but will re-run when the
 loop reaches them. This preserves the record that work was done while ensuring it gets refreshed.
 
-### 2.5 Complexity Assessment (after brainstorm, before stories)
+### 2.5 Complexity Assessment (after explore, before prd/architecture)
 
 After the design doc is approved, classify the feature's complexity tier:
 
@@ -196,7 +198,7 @@ Store the tier in `.pipeline/conduct-state.json` as `"complexity_tier": "S"` (or
 | code-review | **Skip** (domain review in TDD suffices) | Run | Run |
 | retro | **Skip** | Run | Run |
 
-**Small flow:** brainstorm → stories → plan → direct /tdd → finish (skip retro)
+**Small flow:** explore → [prd if product] → stories → plan → direct /tdd → finish (skip retro)
 
 ### 3. Gate Enforcement
 
@@ -259,7 +261,8 @@ re-dispatching. JSON state can become stale — the actual test suite is the sou
 | bootstrap | No (gating) | Other skills need CLAUDE.md and directory structure |
 | memory | Yes (advisory) | Fresh project may have no memory |
 | assess | Yes (advisory) | Skipped for new projects; optional on-demand for existing |
-| brainstorm | Yes (advisory) | User may already have a clear design |
+| explore | Yes (advisory) | Always runs in practice (decides the track); lightweight when the user already knows what to build |
+| prd | Track-dependent | Runs on the product track; skipped on the technical track (no product requirements) |
 | stories | No (gating) | Negative paths are mandatory for TDD |
 | conflict-check | Tier-dependent | Skip for Small, required for Medium/Large |
 | plan | No (gating) | Tasks needed for build phase |
