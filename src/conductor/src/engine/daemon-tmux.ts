@@ -159,7 +159,11 @@ export async function capturePane(
   name: string,
   run: TmuxRunner = defaultTmuxRunner,
 ): Promise<string> {
-  const result = run(['capture-pane', '-p', '-t', `=${name}`], { inherit: false });
+  // Pane-targeting verbs need `=<session>:` (exact session match + active window/
+  // pane). A bare `=<session>` is a session target — accepted by has-session /
+  // kill-session / attach but REJECTED by capture-pane ("can't find pane") against
+  // real tmux. The trailing ':' resolves to the session's active pane.
+  const result = run(['capture-pane', '-p', '-t', `=${name}:`], { inherit: false });
   return result.code === 0 ? result.stdout : '';
 }
 
@@ -172,7 +176,8 @@ export async function sendKeys(
   command: string,
   run: TmuxRunner = defaultTmuxRunner,
 ): Promise<void> {
-  run(['send-keys', '-t', `=${name}`, command, 'Enter'], { inherit: false });
+  // Pane-targeting verb: `=<session>:` (active pane), not the bare session target.
+  run(['send-keys', '-t', `=${name}:`, command, 'Enter'], { inherit: false });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -220,12 +220,14 @@ describe('attachSession: argv, -r flag, and inherit:true', () => {
 // capturePane — exact argv; returns stdout on exit 0; empty string on non-zero
 // ─────────────────────────────────────────────────────────────────────────────
 describe('capturePane: argv and stdout return', () => {
-  it('calls capture-pane with -p and exact-match target', async () => {
+  it('calls capture-pane with -p and the exact-session active-PANE target (=name:)', async () => {
     const capturePane = requireFn(await load(), 'capturePane');
     const { run, calls } = spyRunner({ 'capture-pane': { code: 0, stdout: 'some output\n' } });
     await capturePane('cc-daemon-myapp-abc123', run);
     expect(calls).toHaveLength(1);
-    expect(calls[0].args).toEqual(['capture-pane', '-p', '-t', '=cc-daemon-myapp-abc123']);
+    // Pane verbs need `=<session>:` — a bare `=<session>` is rejected by real tmux
+    // capture-pane ("can't find pane"). The trailing ':' targets the active pane.
+    expect(calls[0].args).toEqual(['capture-pane', '-p', '-t', '=cc-daemon-myapp-abc123:']);
   });
 
   it('returns stdout when exit code is 0', async () => {
@@ -252,9 +254,10 @@ describe('sendKeys: argv', () => {
     const { run, calls } = spyRunner();
     await sendKeys('cc-daemon-myapp-abc123', 'conduct-ts status', run);
     expect(calls).toHaveLength(1);
+    // Pane-targeting verb: `=<session>:` (active pane), not the bare session target.
     expect(calls[0].args).toEqual([
       'send-keys',
-      '-t', '=cc-daemon-myapp-abc123',
+      '-t', '=cc-daemon-myapp-abc123:',
       'conduct-ts status',
       'Enter',
     ]);
