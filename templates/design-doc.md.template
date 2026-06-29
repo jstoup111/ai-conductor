@@ -3,6 +3,11 @@
 **Date:** YYYY-MM-DD
 **Status:** Draft | Approved
 
+> **Product-only.** State goals and requirements (the *what* and *why*). Do NOT name technical "hows" —
+> commands/flags, file paths, config keys, function/class/type names, library/protocol/mechanism
+> choices, schemas, ports. Name capabilities/behaviors instead; put any load-bearing technical choice
+> under **Open Questions** as a trade-off for architecture-review.
+
 ## Problem / Background
 [What problem this solves, who is affected, and why it matters now.]
 

@@ -23,11 +23,24 @@ Do NOT:
 - Create files in `.docs/plans/`, `.docs/stories/`, or elsewhere — those are downstream skills'
   outputs
 - Invoke `/plan`, `/stories`, or any other skill
-- Describe implementation details beyond what's needed to evaluate the design (pseudocode, file
-  layouts, function signatures are all out of scope)
+- Specify **how** anything is built. A PRD states product goals and requirements — the *what* and
+  *why* — only. The following are technical "hows" and MUST NOT appear in the design doc; they are
+  leaks no matter how convenient or obvious they seem:
+  - command names, subcommands, or CLI flags (e.g. `conduct memory install`)
+  - file paths, directory layouts, config-file names, or config keys (e.g. `memory.source`, `~/.x/…`)
+  - function / class / module / type names, signatures, or pseudocode
+  - library, protocol, service, or mechanism choices (e.g. "via an MCP server", "symlink", "SQLite",
+    "post-checkout hook", a named processor/algorithm)
+  - data schemas, table/column names, wire formats, ports
+  Name the **capability or behavior** ("the operator can adopt a platform in one deliberate action";
+  "memory survives worktree removal") — never the mechanism ("`conduct memory install`"; "a symlink to
+  `~/.x`"). A reader must not be able to tell *how* it will be built from the PRD.
 
-Implementation belongs to `/build`. Task breakdown belongs to `/plan`. Stories belong to
-`/stories`. Brainstorm is requirements + high-level design, period.
+**Where the "how" goes:** if a technical choice is genuinely load-bearing, record it as a one-line
+entry under **Open Questions**, framed as a trade-off for `/architecture-review` to weigh and capture
+as an ADR — never as a decided mechanism in the PRD. Implementation belongs to `/build`; task
+breakdown to `/plan`; the *how* and its trade-offs to `/architecture-review`. Brainstorm is product
+requirements + high-level design, period.
 
 After the design doc is saved and approved, **exit the session immediately**. Do not ask what's
 next — the conductor handles the handoff.
@@ -102,6 +115,14 @@ single verifiable capability.
 
 Save to `.docs/specs/YYYY-MM-DD-<topic>.md`
 
+**Product-only audit (GATE — before presenting for approval):** Re-read the draft and scan every
+section, especially Functional Requirements and Key Decisions, for the technical "hows" listed in
+Boundaries (command/flag names, file paths, config keys, function/class/type names, library /
+protocol / service / mechanism choices, schemas, ports). For each one found: either **restate it as a
+capability/behavior**, or **move it to Open Questions** as a trade-off for architecture-review. A PRD
+that names a mechanism has failed this gate — fix it before presenting. (If the operator says the PRD
+is leaking technical detail, this gate was skipped — re-run it.)
+
 **Post-write verification:** After writing the design doc, verify the file exists on disk with
 `ls`. If prior design docs exist for the same feature in `.docs/specs/`, archive them by
 prepending `SUPERSEDED-` to the filename. This prevents competing design docs with
@@ -169,6 +190,10 @@ Do NOT persist: the design doc contents (that is in `.docs/specs/`).
 - [ ] Questions asked one at a time (not batched)
 - [ ] 2-3 approaches presented with trade-offs
 - [ ] Design document written with all required sections
+- [ ] **Product-only audit passed — NO technical "hows" in the doc** (no command/flag names, file
+      paths, config keys, function/class/type names, library/protocol/mechanism choices, schemas);
+      every requirement is a capability/behavior, and any load-bearing technical choice is deferred to
+      architecture-review under Open Questions
 - [ ] Design document saved to `.docs/specs/`
 - [ ] **No files written outside `.docs/specs/`**
 - [ ] **No code, plans, stories, or migrations produced**

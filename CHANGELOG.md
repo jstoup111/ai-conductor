@@ -10,6 +10,18 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ## [Unreleased]
 
+### Changed
+
+- **Brainstorm enforces product-only PRDs (no technical leakage).** The `brainstorm` skill's
+  Boundaries now explicitly prohibit technical "hows" in a design doc — command/flag names, file
+  paths, config keys, function/class/type names, library/protocol/mechanism choices, schemas, ports —
+  and require requirements to be stated as capabilities/behaviors, with load-bearing technical choices
+  deferred to architecture-review under Open Questions. Adds a mandatory **product-only audit gate**
+  before a PRD is presented for approval, a Verification checkbox, a template reminder
+  (`design-doc.md.template`), and a new HARNESS.md Key Convention ("PRDs are product-only"). The prior
+  rule was a soft "no implementation details beyond what's needed" that allowed mechanism names to
+  slip in.
+
 ### Fixed
 
 - **Type error in the github-issues intake adapter (conduct-ts).** `maybeReopen` typed its `repo`

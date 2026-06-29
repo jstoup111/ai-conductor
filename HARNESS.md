@@ -276,6 +276,12 @@ project using this harness inherits the same channel.
 ## Key Conventions
 
 - One skill, one responsibility, one enforcement level
+- **PRDs are product-only.** A design doc states goals and requirements (the *what* and *why*); it
+  must NOT name technical "hows" — commands/flags, file paths, config keys, function/class/type
+  names, library/protocol/mechanism choices, schemas, ports. Requirements are capabilities and
+  behaviors; load-bearing technical choices are deferred to `/architecture-review` (weighed as
+  trade-offs, captured as ADRs), recorded in the PRD only as Open Questions. The *how* never lives in
+  the PRD.
 - Plans assume zero-context executor — all detail included
 - Negative path stories are mandatory, not optional
 - No implementation plan without clean conflict-check
