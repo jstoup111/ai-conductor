@@ -80,10 +80,14 @@ Key sub-decisions:
 
 2. **Operator-vs-automation authority split (preserves ADR-005/ADR-010).** Lifecycle verbs
    (`start`, `stop`, `restart`, `debug`) are a **human-operator** capability. The **engineer
-   automation path stays launch-only**: `ensureRunning` becomes `isUp? → start` (still
-   fire-and-forget, no restart/stop/health-management), and engineer non-interactive state checks
-   use `capturePane` (read) — **never `attach`** — so automation never steals an operator’s session
-   nor supervises lifecycle. ADR-005’s non-autonomy invariant therefore holds.
+   automation path stays launch-only**: `ensureRunning` delegates to the idempotent
+   `supervisor.start` (no-op when a session is live; still fire-and-forget, no
+   restart/stop/health-management). The engineer reads daemon state from the **pidfile lock**
+   (`acquire`/`isLive`, ADR-010) and **never `attach`es** — so automation never steals an
+   operator’s session nor supervises lifecycle. (`capturePane` is exposed on the port as
+   `logs` for a non-interactive snapshot read, available to future operator/automation tooling,
+   but the engineer's no-disturb path needs only the pidfile read.) ADR-005’s non-autonomy
+   invariant therefore holds.
 
 3. **Swappable supervisor port (forward-looking).** The same port admits a kubectl adapter
    (`start`→reconcile, `restart`→rollout restart, `stop`→scale 0, `attach` read-only→`logs -f`,
@@ -121,7 +125,7 @@ Key sub-decisions:
 - [ ] `daemon-tmux.ts`: Supervisor port + tmux adapter (injectable runner) + preflight.
 - [ ] Management verbs + routing; `bin/conduct` forwards `daemon <verb>` to `conduct-ts`.
 - [ ] Replace `launchDaemonDetached` with `supervisor.start`; `ensureRunning` → `isUp? → start`.
-- [ ] Engineer nudge → `start`; non-interactive checks → `capturePane` (never attach).
+- [ ] Engineer nudge → `start` (idempotent); state read via the pidfile lock, **never attach**.
 - [ ] Clamp concurrency to 1; inject the work-source seam.
 - [ ] Status augmented with session presence (stale detection).
 - [ ] Verify the engineer intake poll never gains a detached/session spawn (9.3b guard).

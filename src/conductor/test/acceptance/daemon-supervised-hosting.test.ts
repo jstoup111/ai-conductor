@@ -138,6 +138,18 @@ describe('Supervisor port behavior (ADR-014)', () => {
     await expect(makeSup(absent).start(REPO)).rejects.toThrow(/tmux/i);
   });
 
+  it('isUp returns false (never throws) when tmux is ABSENT — bare-run safe (FR-14)', async () => {
+    const mod = await load(TMUX_MOD);
+    const makeSup = requireFn(mod, 'makeTmuxSupervisor');
+    const NotInstalled = mod.TmuxNotInstalledError as new () => Error;
+    const absent = () => {
+      throw new NotInstalled();
+    };
+    // A read ("is it up?") must answer "no" on a tmux-less host, not throw — so it
+    // can never crash a caller on the bare-run path.
+    await expect(makeSup(absent).isUp(REPO)).resolves.toBe(false);
+  });
+
   it('stop kills the session; restart kills then recreates', async () => {
     const makeSup = requireFn(await load(TMUX_MOD), 'makeTmuxSupervisor');
     const stop = spyRunner({ '-V': { code: 0 } });

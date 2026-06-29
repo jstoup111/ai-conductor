@@ -246,8 +246,14 @@ export interface Supervisor {
 export function makeTmuxSupervisor(run: TmuxRunner = defaultTmuxRunner): Supervisor {
   return {
     async isUp(repo: string): Promise<boolean> {
-      const name = sessionNameForRepo(repo);
-      return hasSession(name, run);
+      // Crash-safe: a tmux-less host throws TmuxNotInstalledError from the runner.
+      // "no tmux ⇒ no session ⇒ not up" is the correct answer and must never throw
+      // out of a caller (bare-run invariant — isUp is a read, not a management verb).
+      try {
+        return await hasSession(sessionNameForRepo(repo), run);
+      } catch {
+        return false;
+      }
     },
 
     async start(repo: string): Promise<void> {
