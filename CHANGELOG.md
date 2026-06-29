@@ -45,6 +45,15 @@ fi
 
 ### Fixed
 
+- **`conduct-ts daemon --help` launched a daemon instead of printing help (conduct-ts).** The daemon
+  sub-verbs are intercepted before commander parses, so `--help`/`-h` after `daemon` fell through to
+  `detectDaemonCommand` and **started a real daemon run** (it would scan the backlog and could
+  re-kick/dispatch a feature) — a genuine footgun. `daemon --help`/`-h` now prints a daemon-scoped
+  help surface (`renderDaemonHelp`) and exits, and a typo'd sub-verb (`daemon strt`) prints that help
+  with a clear error + exit 1 instead of launching (`detectUnknownDaemonSubcommand`). The management
+  verbs (`start`/`stop`/`restart`/`connect`/`debug`) are now also **documented in `--help`** — they
+  were missing because only `status`/`logs` were registered on the commander `daemon` command.
+
 - **Daemon build worktrees now fork from `origin/<default>`, not local `<default>` (conduct-ts).**
   A fresh per-feature worktree was cut from the daemon's LOCAL default branch
   (`git worktree add -b <branch> <path> main`). But `fastForwardRoot` only advances

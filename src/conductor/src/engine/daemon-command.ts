@@ -69,6 +69,29 @@ export function detectDaemonSupervisorCommand(argv: string[]): DaemonSupervisorC
   return { verb: verb as DaemonSupervisorCommand['verb'] };
 }
 
+/**
+ * Every recognized `daemon` sub-verb: the read-only observability verbs plus the
+ * tmux management verbs. A bare `daemon` (no sub-verb) RUNS the daemon; these are
+ * the only non-flag tokens that legitimately follow `daemon`.
+ */
+const DAEMON_SUBVERBS = new Set(['status', 'logs', ...MANAGEMENT_VERBS]);
+
+/**
+ * Detect a typo'd / unknown `daemon` sub-verb so the CLI can surface help instead
+ * of silently LAUNCHING a daemon run. Returns the offending token when argv is
+ * `daemon <token>` and `<token>` is a non-flag word that is not a known sub-verb;
+ * otherwise null (a bare `daemon`, `daemon --flags`, or a known sub-verb — all of
+ * which are handled by their own dispatchers).
+ *
+ * argv is process.argv: [node, entry, 'daemon', token, ...rest].
+ */
+export function detectUnknownDaemonSubcommand(argv: string[]): string | null {
+  if (argv[2] !== 'daemon') return null;
+  const token = argv[3];
+  if (!token || token.startsWith('-')) return null; // bare run or a flag
+  return DAEMON_SUBVERBS.has(token) ? null : token;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // ADR-014 / FR-13 — serial pool enforcement
 // ─────────────────────────────────────────────────────────────────────────────
