@@ -229,6 +229,47 @@ describe('FR-11: migration unions into an existing shared store', () => {
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
+// FR-11 negative / A20: crash in the post-rm swap window (after .memory is
+// removed but before the temp link is renamed into place). A plain re-run
+// must complete the swap idempotently — no entries lost.
+// ═════════════════════════════════════════════════════════════════════════════
+describe('FR-11: post-rm swap-window crash is recoverable on re-run', () => {
+  it('a crash after .memory is removed but before rename completes — re-run recovers', async () => {
+    const repo = await makeRepo('alpha', 'https://example.com/alpha.git');
+    await seedRealMemory(repo, ['w1', 'w2']);
+    const migrateMemory = requireFn(await load(MIGRATE_MOD), 'migrateMemory');
+
+    // First attempt: crash mid-swap (after rm(.memory) but before rename of temp link).
+    await expect(
+      migrateMemory(repo, {
+        failDuringSwap: async () => {
+          throw new Error('crash in swap window');
+        },
+      }),
+    ).rejects.toThrow(/crash in swap window/);
+
+    // After the crash, .memory is absent — rm succeeded but rename did not.
+    const midStat = await lstat(join(repo, '.memory')).catch(() => null);
+    expect(midStat).toBeNull();
+
+    // Plain re-run completes the swap idempotently — the backup holds the data.
+    await migrateMemory(repo);
+
+    // .memory is now a symlink pointing to the canonical harness dir.
+    const finalStat = await lstat(join(repo, '.memory'));
+    expect(finalStat.isSymbolicLink()).toBe(true);
+
+    const harness = await canonicalHarnessDir(repo);
+    const decisions = await readdir(join(harness, 'decisions'));
+    expect(decisions.sort()).toEqual(['w1.md', 'w2.md']);
+
+    // Entries are accessible through the symlink.
+    const body = await readFile(join(repo, '.memory', 'decisions', 'w1.md'), 'utf8');
+    expect(body).toContain('body of w1');
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
 // FR-11: one-time reverse restores the pre-migration state.
 // ═════════════════════════════════════════════════════════════════════════════
 describe('FR-11: one-time reverse restores prior state', () => {

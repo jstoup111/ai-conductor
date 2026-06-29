@@ -26,10 +26,10 @@
  * index does not already contain that path reference.
  */
 
-import { appendFile, copyFile, lstat, mkdir, readdir, readFile, rm, symlink, unlink } from 'fs/promises';
+import { appendFile, copyFile, lstat, mkdir, readdir, readFile, rename, rm, symlink, unlink } from 'fs/promises';
 import { join } from 'path';
 import { homedir } from 'os';
-import { projectKey } from './memory-store.js';
+import { CATEGORIES, projectKey } from './memory-store.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Public types
@@ -49,6 +49,13 @@ export interface MigrateOptions {
    * the swap is skipped; `.memory/` remains a real dir; a plain re-run completes.
    */
   failBeforeSwap?: () => Promise<void>;
+
+  /**
+   * Injectable fault hook fired mid-swap: after the real .memory dir is
+   * removed but before the temp symlink is renamed into place. Simulates
+   * a crash in the post-rm window. Tests assert a plain re-run recovers.
+   */
+  failDuringSwap?: () => Promise<void>;
 
   /**
    * One-time reverse. Restore `.memory.pre-migrate.bak/` as a real in-tree
@@ -72,9 +79,6 @@ async function getCanonicalHarnessDir(repoPath: string): Promise<string> {
   const key = await projectKey(repoPath);
   return join(home, '.ai-conductor', 'memory', key, 'harness');
 }
-
-/** Category subdirs (mirrored from memory-store.ts to avoid coupling). */
-const CATEGORIES = ['decisions', 'patterns', 'gotchas', 'context'] as const;
 
 /**
  * Copy files from `srcDir` to `destDir`, SKIPPING any that already exist in
@@ -250,7 +254,23 @@ export async function migrateMemory(
   const memStat = await lstat(memPath).catch(() => null);
 
   if (!memStat) {
-    // No .memory/ at all → fresh project (FR-12). No-op.
+    // No .memory/ — check whether a backup exists to determine why.
+    const backupStat = await lstat(backupPath).catch(() => null);
+    if (backupStat) {
+      // Interrupted swap: .memory was removed but the symlink was never
+      // (re)created. Complete the swap idempotently: ensure canonical is
+      // populated from the backup, clean any stale temp link, then re-link.
+      const canonicalHarness = await getCanonicalHarnessDir(repoPath);
+      await mkdir(canonicalHarness, { recursive: true });
+      for (const cat of CATEGORIES) {
+        await copyMissing(join(backupPath, cat), join(canonicalHarness, cat));
+      }
+      const tmpLink = memPath + '.tmp-link';
+      await rm(tmpLink, { force: true, recursive: true }).catch(() => {});
+      await symlink(canonicalHarness, memPath);
+      return;
+    }
+    // Genuinely fresh project (no prior memory, no backup) → no-op.
     return;
   }
 
@@ -315,6 +335,17 @@ export async function migrateMemory(
   }
 
   // ── A18: Swap ──────────────────────────────────────────────────────────────
+  // Crash-safe swap: create the symlink under a temp name first, then remove
+  // the real .memory dir, then atomically rename the temp link into place.
+  // If a crash occurs between rm and rename, the recovery branch in A17 detect
+  // will complete the swap idempotently on the next run.
+  const tmpLink = memPath + '.tmp-link';
+  await rm(tmpLink, { force: true, recursive: true }).catch(() => {});
+  await symlink(canonicalHarness, tmpLink);
   await rm(memPath, { recursive: true, force: true });
-  await symlink(canonicalHarness, memPath);
+  // Injection point for crash-window test (after rm, before rename).
+  if (_opts.failDuringSwap) {
+    await _opts.failDuringSwap();
+  }
+  await rename(tmpLink, memPath);
 }

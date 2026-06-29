@@ -3,6 +3,7 @@
 # are unanchored so they also match the nested src/conductor/.daemon/ etc.
 .pipeline/
 .memory/
+.memory*.bak/
 .daemon/
 .worktrees/
 
