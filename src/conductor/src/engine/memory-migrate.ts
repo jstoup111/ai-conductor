@@ -177,6 +177,23 @@ async function mergeIndexLines(
 }
 
 /**
+ * Ensures `.gitignore` in the target repo contains a `.memory*.bak/` rule so
+ * the pre-migrate backup directory is never accidentally committed.
+ *
+ * Idempotent: appends the line only when it is not already present.
+ * Creates `.gitignore` if it does not exist (appendFile creates files on open).
+ */
+async function ensureBackupIgnored(repoPath: string): Promise<void> {
+  const giPath = join(repoPath, '.gitignore');
+  const existing = await readFile(giPath, 'utf8').catch(() => '');
+  const has = existing.split('\n').some((l) => l.trim() === '.memory*.bak/');
+  if (!has) {
+    const sep = existing && !existing.endsWith('\n') ? '\n' : '';
+    await appendFile(giPath, `${sep}.memory*.bak/\n`, 'utf8');
+  }
+}
+
+/**
  * Default verifier: confirms every source entry file is present in the
  * canonical store (per-file existence check).
  */
@@ -291,6 +308,8 @@ export async function migrateMemory(
   if (!backupExists) {
     await copyAll(memPath, backupPath);
   }
+  // Ensure the target repo's .gitignore ignores the backup dir (idempotent).
+  await ensureBackupIgnored(repoPath);
 
   // ── A18/A21: Copy into canonical store (union / no-overwrite) ─────────────
   const canonicalHarness = await getCanonicalHarnessDir(repoPath);

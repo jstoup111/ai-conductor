@@ -270,6 +270,51 @@ describe('FR-11: post-rm swap-window crash is recoverable on re-run', () => {
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
+// CRITICAL: migrateMemory protects the consumer's backup from git commits by
+// ensuring `.gitignore` in the target repo contains `.memory*.bak/`.
+// ═════════════════════════════════════════════════════════════════════════════
+describe('CRITICAL: migration ensures .memory*.bak/ is in the target repo .gitignore', () => {
+  it('adds .memory*.bak/ when only .memory/ appears in .gitignore', async () => {
+    const repo = await makeRepo('alpha', 'https://example.com/alpha.git');
+    await writeFile(join(repo, '.gitignore'), '.memory/\n');
+    await seedRealMemory(repo, ['g1']);
+    const migrateMemory = requireFn(await load(MIGRATE_MOD), 'migrateMemory');
+
+    await migrateMemory(repo);
+
+    const gi = await readFile(join(repo, '.gitignore'), 'utf8');
+    const lines = gi.split('\n').map((l) => l.trim());
+    expect(lines).toContain('.memory*.bak/');
+  });
+
+  it('does not duplicate the line when .memory*.bak/ is already present', async () => {
+    const repo = await makeRepo('alpha', 'https://example.com/alpha.git');
+    await writeFile(join(repo, '.gitignore'), '.memory/\n.memory*.bak/\n');
+    await seedRealMemory(repo, ['g1']);
+    const migrateMemory = requireFn(await load(MIGRATE_MOD), 'migrateMemory');
+
+    await migrateMemory(repo);
+
+    const gi = await readFile(join(repo, '.gitignore'), 'utf8');
+    const count = gi.split('\n').filter((l) => l.trim() === '.memory*.bak/').length;
+    expect(count).toBe(1);
+  });
+
+  it('creates .gitignore with .memory*.bak/ when no .gitignore exists', async () => {
+    const repo = await makeRepo('alpha', 'https://example.com/alpha.git');
+    // makeRepo creates a .gitignore via the git init; delete it to simulate absent.
+    await rm(join(repo, '.gitignore'), { force: true });
+    await seedRealMemory(repo, ['g1']);
+    const migrateMemory = requireFn(await load(MIGRATE_MOD), 'migrateMemory');
+
+    await migrateMemory(repo);
+
+    const gi = await readFile(join(repo, '.gitignore'), 'utf8');
+    expect(gi).toContain('.memory*.bak/');
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
 // FR-11: one-time reverse restores the pre-migration state.
 // ═════════════════════════════════════════════════════════════════════════════
 describe('FR-11: one-time reverse restores prior state', () => {
