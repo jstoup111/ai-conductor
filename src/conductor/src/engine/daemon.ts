@@ -93,6 +93,14 @@ export interface DaemonDeps {
    * FR-9 bound lives inside the wired impl.
    */
   rekickSweep?: (sha: string) => Promise<void>;
+  /**
+   * FR-14: sweep mergeable labels on startup (after reconciliation) and once per
+   * idle poll tick. The caller binds projectRoot + log when wiring production
+   * deps — this core accepts a pre-bound zero-arg function so it needs no
+   * knowledge of projectRoot. Best-effort: a throw is caught and logged by
+   * `runDaemon`; the daemon loop is never disrupted.
+   */
+  sweepMergeableLabels?: () => Promise<void>;
 }
 
 export interface DaemonOptions {
@@ -135,6 +143,15 @@ export async function runDaemon(
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const now = deps.now ?? (() => Date.now());
   const log = deps.log ?? (() => {});
+
+  /** FR-14: best-effort sweep; never throws, never disrupts the daemon loop. */
+  const sweepBestEffort = async (): Promise<void> => {
+    try {
+      await deps.sweepMergeableLabels?.();
+    } catch (err) {
+      log(`[daemon] sweepMergeableLabels error: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
   const idlePollMs = options.idlePollMs ?? 5000;
   const maxIdlePolls = options.maxIdlePolls ?? Infinity;
   const startedAt = now();
@@ -250,6 +267,9 @@ export async function runDaemon(
   // daemon was DOWN is caught (FR-5 downtime-advance path).
   await maybeRekick(true);
 
+  // FR-14: sweep mergeable labels on startup (after reconciliation).
+  await sweepBestEffort();
+
   let stopReason: DaemonStopReason | null = null;
 
   while (true) {
@@ -323,6 +343,8 @@ export async function runDaemon(
           break;
         }
         await sleep(idlePollMs);
+        // FR-14: sweep once per idle poll tick.
+        await sweepBestEffort();
         continue;
       }
       // Workers still running — wait for one, then re-evaluate.
