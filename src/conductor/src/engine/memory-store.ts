@@ -28,9 +28,15 @@ import { promisify } from 'util';
 const execFile = promisify(execFileCb);
 
 export interface MemoryEntry {
-  /** One of the standard category subdirs (decisions/patterns/gotchas/context). */
-  category: string;
-  /** Filename stem — the file will be written as `<category>/<name>.md`. */
+  /**
+   * One of the standard category subdirs: decisions | patterns | gotchas | context.
+   * Validated at runtime against CATEGORIES; throws if not a member.
+   */
+  category: CategoryName;
+  /**
+   * Filename stem — the file will be written as `<category>/<name>.md`.
+   * Must not contain `/`, `\\`, or `..`; throws on any path-separator character.
+   */
   name: string;
   /** Full Markdown body of the entry file. */
   body: string;
@@ -84,7 +90,10 @@ async function stableIdentity(repoPath: string): Promise<string> {
 }
 
 /** Category subdirectories that every harness store contains. */
-const CATEGORIES = ['decisions', 'patterns', 'gotchas', 'context'] as const;
+export const CATEGORIES = ['decisions', 'patterns', 'gotchas', 'context'] as const;
+
+/** Union of all valid category names (derived from CATEGORIES to stay in sync). */
+export type CategoryName = (typeof CATEGORIES)[number];
 
 /** Reads HOME from the environment so tests can redirect it to a temp dir. */
 function resolveHome(): string {
@@ -184,12 +193,74 @@ export async function ensureMemoryStore(repoPath: string): Promise<void> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Internal: input validation (path-traversal safety for recordMemoryEntry)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Set of valid category names for O(1) membership checks. */
+const CATEGORY_SET: ReadonlySet<string> = new Set<string>(CATEGORIES);
+
+/**
+ * Validates that `entry.category` and `entry.name` cannot be used to escape
+ * `harnessDir` via path traversal.
+ *
+ * Throws an `Error` with a clear message if:
+ *  - `category` is not one of the known CATEGORIES members.
+ *  - `name` contains `/`, `\\`, or `..` (or any path-separator / parent ref).
+ *
+ * Also performs a defence-in-depth check: the fully-resolved entry path must
+ * start with `harnessDir` — if any future code change accidentally allows a
+ * crafted value through, this backstop prevents writing outside the store.
+ */
+function validateEntry(harnessDir: string, entry: MemoryEntry): void {
+  // 1. Category whitelist check.
+  if (!CATEGORY_SET.has(entry.category)) {
+    throw new Error(
+      `Invalid category: "${entry.category}". ` +
+        `Must be one of: ${CATEGORIES.join(', ')}.`,
+    );
+  }
+
+  // 2. Name path-character check.
+  //    Reject any name that contains a forward slash, backslash, or the parent
+  //    directory reference `..` (as a standalone segment or embedded).
+  if (
+    entry.name.includes('/') ||
+    entry.name.includes('\\') ||
+    entry.name === '..' ||
+    entry.name.startsWith('../') ||
+    entry.name.includes('/../') ||
+    entry.name.endsWith('/..')
+  ) {
+    throw new Error(
+      `Invalid name: "${entry.name}". ` +
+        `Name must not contain path separators or parent-directory references ("..").`,
+    );
+  }
+
+  // 3. Defence-in-depth: verify the resolved entry path stays within harnessDir.
+  //    This is a backstop; the checks above should be sufficient.
+  const resolved = join(harnessDir, entry.category, `${entry.name}.md`);
+  if (!resolved.startsWith(harnessDir + '/') && resolved !== harnessDir) {
+    throw new Error(
+      `Resolved entry path "${resolved}" escapes the store directory "${harnessDir}". ` +
+        `Refusing to write.`,
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Public API — A13 (also satisfies A16's no-clobber protocol)
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
  * Writes a memory entry into the canonical store for `repoPath` and appends
  * `indexLine` to `index.md`.
+ *
+ * Input validation (path-traversal safety):
+ *  - `entry.category` must be one of the known CATEGORIES; throws otherwise.
+ *  - `entry.name` must not contain `/`, `\\`, or `..`; throws otherwise.
+ *  - A defence-in-depth resolved-path check confirms the final path stays
+ *    within `harnessDir`.
  *
  * Concurrent-write safety (A16 — no-clobber protocol):
  *  - Entry files use file-per-entry layout (each has a unique name), so two
@@ -198,6 +269,12 @@ export async function ensureMemoryStore(repoPath: string): Promise<void> {
  *  - `index.md` is updated via `appendFile` which uses O_APPEND, atomic for
  *    small writes on POSIX/Linux: both lines survive even when two worktrees
  *    call this simultaneously — neither write clobbers the other.
+ *
+ * Append-only index: the `index.md` line is always appended, never replaced.
+ * If the same `name` is written twice, the entry FILE is overwritten (last
+ * write wins) but the index grows by one line each call — the index is an
+ * append-only log.  Callers that want idempotent index behaviour should
+ * deduplicate before calling, or use unique names per logical entry.
  *
  * Writes go directly to the canonical store (not through the `.memory`
  * symlink) so they work even when a worktree's symlink has been removed.
@@ -209,6 +286,9 @@ export async function recordMemoryEntry(
   const home = resolveHome();
   const key = await projectKey(repoPath);
   const harnessDir = join(home, '.ai-conductor', 'memory', key, 'harness');
+
+  // Validate inputs before any file I/O.
+  validateEntry(harnessDir, entry);
 
   // Write the entry file (file-per-entry layout — concurrent safe, distinct paths).
   const entryPath = join(harnessDir, entry.category, `${entry.name}.md`);
