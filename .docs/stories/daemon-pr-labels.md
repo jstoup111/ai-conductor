@@ -341,6 +341,39 @@ and the daemon doesn't keep poking dead PRs.
 
 ---
 
+## Story: Clear the failure signal when a re-kicked feature succeeds
+
+**Requirement:** FR-16
+
+As the engineer, I want a feature that failed, got re-kicked, and then succeeded to drop its stale
+`needs-remediation` draft state so that it isn't permanently barred from `mergeable` and its PR
+doesn't lie about needing me.
+
+### Acceptance Criteria
+
+#### Happy Path
+- Given a feature whose PR carries `needs-remediation` and is a draft, when that feature later
+  reaches a `done` outcome on the same branch, then the daemon removes the `needs-remediation`
+  label and marks the PR ready-for-review (un-drafts) before/at mergeable enrollment.
+- Given that cleared PR, when the next sweep evaluates it and it is green + conflict-free, then it
+  is labeled `mergeable` normally (FR-12 no longer blocks it).
+
+#### Negative Paths
+- Given a `done` feature whose PR does **not** carry `needs-remediation` (never failed), when it is
+  enrolled, then no un-draft/label-removal is attempted unnecessarily (no-op, no error).
+- Given the label-removal or un-draft (`gh pr ready`) call fails, when enrollment runs, then the
+  failure is logged and swallowed — enrollment and teardown still proceed (best-effort). The next
+  sweep will still withhold `mergeable` (FR-12) until the label is actually gone, so the label never
+  lies in the failure direction.
+- Given a feature that ends `halted`/`error` (not `done`), when it completes, then the failure
+  signal is **not** cleared (only a genuine success clears it).
+
+### Done When
+- [ ] On `done` enrollment, a PR carrying `needs-remediation` has the label removed and is un-drafted (`gh pr ready`), best-effort
+- [ ] Clear-on-success is a no-op when the PR has no `needs-remediation` label
+- [ ] A failed clear is swallowed; FR-12 keeps `mergeable` withheld until the label is truly gone (no false "mergeable")
+- [ ] Only `done` (not halted/error) triggers the clear
+
 ## Coverage map
 
 | FR | Story |
@@ -360,3 +393,4 @@ and the daemon doesn't keep poking dead PRs.
 | FR-13 | Stop tracking merged/closed PRs |
 | FR-14 | Apply mergeable when ready (re-checked over time) |
 | FR-15 | Only fully-shipped PRs eligible (daemon-only, best-effort) |
+| FR-16 | Clear failure signal when a re-kicked feature succeeds |

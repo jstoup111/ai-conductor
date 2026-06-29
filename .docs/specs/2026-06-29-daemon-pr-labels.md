@@ -88,6 +88,13 @@ and let the engineer triage the PR list directly on GitHub.
 - **FR-15:** All `mergeable` labeling is **best-effort and non-blocking** and applies **only in
   daemon/auto mode**. A failure to read PR state or apply/remove a label never disrupts the daemon's
   feature processing.
+- **FR-16:** When a feature that previously surfaced a `needs-remediation` PR is later re-dispatched
+  and **completes successfully** (reaches `done`) on the same branch, the daemon **clears the stale
+  failure signal** on that PR: it removes the `needs-remediation` label and marks the PR
+  ready-for-review (un-drafts it), best-effort, as part of enrolling it for the `mergeable` sweep.
+  This keeps both labels truthful (a shipped feature is no longer flagged as needing remediation)
+  and unblocks FR-12 so the now-clean PR can be evaluated for `mergeable` normally. The exclusion in
+  FR-12 is unchanged — it still applies to any PR that genuinely still carries `needs-remediation`.
 
 ## Non-Functional Requirements
 
@@ -136,6 +143,11 @@ and let the engineer triage the PR list directly on GitHub.
   conflicts evolve.
 - **No GitHub surface when there are zero commits.** There is nothing to show; the existing local
   signal already covers it.
+- **Success clears the failure signal (FR-16).** A re-kicked feature that ultimately ships `done`
+  must not keep a stale `needs-remediation` draft PR — otherwise it would be permanently barred from
+  `mergeable` (FR-12) and the label would lie. Clearing on success is preferred over leaving it for a
+  human (it forces manual work on an auto-success) and over flipping FR-12's precedence (which risks
+  stripping the label off PRs that still need work).
 
 ## Dependencies
 
