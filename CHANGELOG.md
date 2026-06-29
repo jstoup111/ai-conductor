@@ -29,6 +29,12 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- **PRD: daemon PR labeling — `needs-remediation` + `mergeable` (DECIDE artifact).** Product-only
+  design doc (`.docs/specs/2026-06-29-daemon-pr-labels.md`) for two daemon-mode behaviors: surface
+  an irrecoverable build failure as a draft PR with a failure-reason comment + `needs-remediation`
+  label (when commits exist; best-effort, never blocks the HALT), and keep a `mergeable` label in
+  sync on PRs from fully-shipped features that are CI-green and conflict-free. 15 enumerated FRs
+  incl. negative paths. No behavior shipped yet — implementation follows the DECIDE chain.
 - **Engineer authors the full DECIDE phase (engineer).** The `/engineer` idea→spec loop now runs
   the complete, build-ready DECIDE set in canonical order —
   brainstorm → **complexity** → stories → **conflict-check** → **architecture-diagram** →
