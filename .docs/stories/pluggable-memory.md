@@ -295,12 +295,14 @@ failed save, never blocks the SDLC flow.
 - Given a misconfigured platform, when the harness runs, then it surfaces a warning and the run continues to completion.
 - Given the active platform is unavailable at recall time, when recall is attempted, then a warning is surfaced and the run continues.
 - Given the active platform cannot accept a write (unavailable at persist time), when persistence is attempted, then the entry is saved to the **default local store** instead and a warning is surfaced — the memory is **not lost** and the run continues (FR-13a).
+- Given fallback entries held in the default local store, when the active platform becomes available again, then those entries are reconciled into the active platform and thereafter recalled normally; until reconcile, they are not surfaced from the active platform (FR-13b).
 - Given repeated memory failures during a run, when they occur, then warnings are bounded (not flooding) and the run still completes.
 
 ### Done When
 - [ ] A misconfigured platform yields a warning and a completed run.
 - [ ] An unavailable platform at recall time yields a warning and a completed run.
 - [ ] A write that the active platform cannot accept is saved to the default local store (not lost), warns, and the run completes.
+- [ ] Once the active platform is available again, fallback entries are reconciled into it and recall normally.
 - [ ] Repeated failures stay bounded in warnings and never abort the run.
 
 ---

@@ -52,6 +52,10 @@ This affects every project that uses the harness, not just this repo.
   later phases; this phase establishes the model + the default platform.
 - **Serena's worktree-sharing** — separate effort, tracked in issue #141.
 - **The global assistant auto-memory** — a separate system, untouched.
+- **The engineer / retro-signal store** (Phase 9.1, `~/.ai-conductor/engineer/`) — a distinct,
+  daemon-written cross-project store consumed by planning/routing; it is **not** the `/memory` skill's
+  per-project memory and is **not** governed by this feature. This feature governs only the harness
+  `/memory` system. (They merely share the `~/.ai-conductor/` user-dir namespace.)
 
 ## Users / Personas
 - **Harness operator (James)** — wants to pick, per project, where memory lives (built-in now, a richer
@@ -110,8 +114,11 @@ This affects every project that uses the harness, not just this repo.
   warnings and **never abort** a harness run — memory is best-effort.
 - **FR-13a (no-loss on write failure):** When the active platform cannot accept a write, the entry is
   **saved to the default local store instead** (and a warning is surfaced) so the memory is not lost; the
-  run continues. *(Entries may then be split across stores until reconciled — reconciliation is not
-  required for the run to succeed.)*
+  run continues.
+- **FR-13b (reconcile on reconnect):** Fallback entries held in the default local store are
+  **reconciled into the active platform once it is available again**, after which they are recalled
+  normally. Until that reconcile happens, those fallback entries are **not surfaced from the active
+  platform** (a known, bounded gap — the entries are safe, just not yet visible via the active platform).
 
 ## Non-Functional Requirements
 - **LLM owns retrieval** (FR-3) — the architectural invariant the whole feature is shaped around.
