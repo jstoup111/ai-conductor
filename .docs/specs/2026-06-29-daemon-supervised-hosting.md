@@ -1,7 +1,7 @@
 # PRD: On-Demand Management of the Per-Repo Build Daemon
 
 **Date:** 2026-06-29
-**Status:** Draft
+**Status:** Approved
 
 ## Problem / Background
 
