@@ -524,7 +524,8 @@ export class DefaultStepRunner implements StepRunner {
    *
    * Uses a fresh session (never resumes the main conductor session) and runs
    * with cwd set to ctx.projectRoot so the skill operates in the right worktree.
-   * Model and effort are resolved from the `rebase` step config (default: haiku/low).
+   * Model and effort are resolved from the `rebase` step config (default: opus/high —
+   * conflict resolution is semantic merge judgment, not deterministic git work).
    *
    * Returns `{resolved: true}` when the skill signals success, or
    * `{resolved: false, reason}` on failure or when stdout contains no
