@@ -26,7 +26,7 @@
  * index does not already contain that path reference.
  */
 
-import { copyFile, lstat, mkdir, readdir, rm, symlink } from 'fs/promises';
+import { appendFile, copyFile, lstat, mkdir, readdir, readFile, rm, symlink } from 'fs/promises';
 import { join } from 'path';
 import { homedir } from 'os';
 import { projectKey } from './memory-store.js';
@@ -120,6 +120,59 @@ async function copyAll(srcDir: string, destDir: string): Promise<void> {
 }
 
 /**
+ * A21 — Merge index lines from the local `.memory/index.md` into the canonical
+ * `harness/index.md`, deduplicating by entry path.
+ *
+ * Only entries in `newlyAddedByCategory` (files actually copied this run) are
+ * considered. A line is appended only when the canonical index does not already
+ * contain that path reference (e.g. `decisions/mine.md`). This prevents
+ * duplicate index lines when a sibling worktree already migrated the same entry.
+ */
+async function mergeIndexLines(
+  localMemPath: string,
+  canonicalHarness: string,
+  newlyAddedByCategory: Record<string, string[]>,
+): Promise<void> {
+  const categories = Object.keys(newlyAddedByCategory);
+  if (categories.length === 0) return;
+
+  const canonicalIndexPath = join(canonicalHarness, 'index.md');
+  const localIndexPath = join(localMemPath, 'index.md');
+
+  const localContent = await readFile(localIndexPath, 'utf8').catch(() => '');
+  const canonicalContent = await readFile(canonicalIndexPath, 'utf8').catch(() => '');
+
+  const linesToAppend: string[] = [];
+
+  for (const category of categories) {
+    const names = newlyAddedByCategory[category] ?? [];
+    for (const name of names) {
+      const entryPath = `${category}/${name}`; // e.g. "decisions/mine.md"
+
+      // Dedup: skip if canonical index already references this path.
+      if (canonicalContent.includes(entryPath)) continue;
+
+      // Find the corresponding line in local index, or synthesise one.
+      const localLine = localContent
+        .split('\n')
+        .find((l) => l.includes(entryPath));
+
+      if (localLine && localLine.trim()) {
+        linesToAppend.push(localLine);
+      } else {
+        const stem = name.replace(/\.md$/, '');
+        linesToAppend.push(`- [${stem}](${entryPath})`);
+      }
+    }
+  }
+
+  if (linesToAppend.length > 0) {
+    // appendFile uses O_APPEND — concurrent-safe for small writes on POSIX.
+    await appendFile(canonicalIndexPath, linesToAppend.join('\n') + '\n', 'utf8');
+  }
+}
+
+/**
  * Default verifier: confirms every source entry file is present in the
  * canonical store (per-file existence check).
  */
@@ -197,15 +250,22 @@ export async function migrateMemory(
     await copyAll(memPath, backupPath);
   }
 
-  // ── A18: Copy into canonical store (union / no-overwrite) ──────────────────
+  // ── A18/A21: Copy into canonical store (union / no-overwrite) ─────────────
   const canonicalHarness = await getCanonicalHarnessDir(repoPath);
   await mkdir(canonicalHarness, { recursive: true });
 
+  const newlyAddedByCategory: Record<string, string[]> = {};
   for (const cat of CATEGORIES) {
     const srcDir = join(memPath, cat);
     const destDir = join(canonicalHarness, cat);
-    await copyMissing(srcDir, destDir);
+    const copied = await copyMissing(srcDir, destDir);
+    if (copied.length > 0) {
+      newlyAddedByCategory[cat] = copied;
+    }
   }
+
+  // A21: Update canonical index with lines for newly added entries (dedup).
+  await mergeIndexLines(memPath, canonicalHarness, newlyAddedByCategory);
 
   // ── A18/A19: Verify ────────────────────────────────────────────────────────
   // A19 (C5): an injected verifier returning false must abort non-destructively —
