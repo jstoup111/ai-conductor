@@ -1,5 +1,11 @@
 **Status:** Accepted
 
+> **Delivery split (2026-06-29).** Phase 1 is built and shipped as two independent slices for
+> smaller PRs (operator decision): **1a — Durable Default Memory**
+> (`pluggable-memory-1a-durable-default-memory.md`) and **1b — Provider Framework**
+> (`pluggable-memory-1b-provider-framework.md`). This umbrella file remains the authoritative full
+> FR set for the end-of-feature PRD audit. Each slice file carries the subset of stories it builds.
+
 # Stories: Pluggable Memory — Phase 1
 
 Source PRD: `.docs/specs/2026-06-29-pluggable-memory-source.md` (FR-1 … FR-13). Behavior-level —
