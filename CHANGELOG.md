@@ -29,6 +29,17 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- **Gated rebase-conflict resolution + attempt-cap config (conduct-ts).** The daemon's
+  finish-time `rebase` step now attempts skill-driven conflict resolution (via the new
+  `/rebase` skill) before HALTing on a non-CHANGELOG conflict. The number of attempts is
+  configurable via `rebase_resolution_attempts` (config key; default **3**; set to **0** to
+  restore the previous immediate-HALT behavior). A resolution is accepted only when the branch
+  is genuinely current with the base (FR-8) and no feature commits were dropped (FR-9);
+  a code-changing resolution kicks back to `build`/`manual_test` through the existing
+  kickback machinery. If all attempts are exhausted the engine falls through to the existing
+  HALT path. The gated resolution loop runs only in daemon mode; interactive `/conduct` runs
+  and the `/rebase` skill invoked manually by an operator are unchanged.
+
 - **Richer daemon startup dashboard — "state of everything" per repo (conduct-ts).** The
   inherited-state dashboard printed before any dispatch now carries the bits an operator
   actually triages on, mined best-effort from each worktree's `conduct-state.json` (and the

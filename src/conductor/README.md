@@ -168,12 +168,47 @@ stale base:
   feature's `[Unreleased]` lines (captured `base..HEAD` pre-rebase) exactly once, then
   `git rebase --continue`s. CHANGELOG conflicting alongside any other file, or outside
   `[Unreleased]`, takes the HALT path instead.
-- **Conflict → HALT (paused)** — any other / mixed conflict writes `.pipeline/HALT` listing
-  the conflicted files and the resume steps, leaves the rebase **paused** (no `--abort`,
-  conflict markers intact), does **not** mark the feature processed, and opens **no PR**.
+- **Conflict → gated resolution → HALT (paused)** — any other / mixed conflict first triggers
+  the **gated conflict-resolution loop** (see below); if the loop is exhausted or disabled,
+  the engine writes `.pipeline/HALT` listing the conflicted files and the resume steps, leaves
+  the rebase **paused** (no `--abort`, conflict markers intact), does **not** mark the feature
+  processed, and opens **no PR**.
 - **Events** — each outcome emits a typed event: `rebase_noop`, `rebase_changed`,
   `rebase_changelog_resolved`, `rebase_conflict_halt` (best-effort; emission failure never
   affects the rebase result).
+
+#### Gated conflict resolution
+
+Before HALTing on a non-CHANGELOG conflict, the daemon dispatches the `/rebase` resolution
+skill up to `rebase_resolution_attempts` times (config key; default **3**; set to **0** to
+disable and restore the previous immediate-HALT behavior). Each attempt lets the skill resolve
+the conflicted files and then runs `git rebase --continue`. A resolution is accepted only when
+**both** acceptance guards pass:
+
+- **FR-8 (current with base)** — the branch must be genuinely current with the base after the
+  rebase (zero commits in `HEAD..base`).
+- **FR-9 (commit preservation)** — no feature commits may have been dropped; the pre-rebase
+  feature commit list must be present in full after the rebase.
+
+If the resolved rebase **changed code or test paths**, the existing kickback machinery fires —
+the verdict is `{satisfied:false, kickback:{from:'rebase'}}` for `build` (and `manual_test` if
+it ran) and the selector routes back to `build`, exactly as a clean rebase would. A docs-only
+change does not invalidate.
+
+If all attempts are exhausted without an accepted resolution, the engine falls through to the
+existing HALT path: `.pipeline/HALT` is written, the rebase is left paused (conflict markers
+intact), and no PR is opened.
+
+**Daemon-only.** The gated resolution loop runs only in daemon (`mode: 'auto'`, `daemon: true`)
+mode. Interactive `/conduct` runs are unchanged — humans resolve conflicts by hand. The `/rebase`
+skill is also manually invokable by an operator (`/rebase`) for conflict resolution outside the
+automated loop.
+
+**Config key** (`pipeline.yml` / `.ai-conductor/config.yml`):
+
+```yaml
+rebase_resolution_attempts: 3   # default; 0 = disable (immediate HALT on any conflict)
+```
 
 **Resume a parked rebase:** resolve the conflict in the listed file(s) → `git rebase --continue`
 → `rm .pipeline/HALT` → re-queue. The daemon reuses the existing worktree, finds the rebase a

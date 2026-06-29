@@ -462,7 +462,7 @@ UNDERSTAND → DECIDE → BUILD → SHIP
 | BUILD | `/writing-system-tests` → `/pipeline` or `/tdd`, `/code-review`, `/debugging` | Acceptance specs → TDD → evaluator gates |
 | SHIP | `/manual-test` → `/prd-audit` → `/architecture-review --as-built` → `/retro` → `/finish`, `/pr` | curl/browser validation → PRD compliance audit → as-built architecture sweep → dual retrospective → verification → pull request |
 
-### Skills (21 total)
+### Skills (22 total)
 
 | Skill | Enforcement | Model | Purpose |
 |-------|-------------|-------|---------|
@@ -484,6 +484,7 @@ UNDERSTAND → DECIDE → BUILD → SHIP
 | `/finish` | Gating | haiku | Fresh verification, story coverage, merge/PR options |
 | `/manual-test` | Gating | sonnet | Validate stories via curl/browser, bug loop through /tdd |
 | `/prd-audit` | Gating | opus | Audit shipped impl vs PRD FRs; per-FR verdict + gap-class; kicks back to BUILD or DECIDE |
+| `/rebase` | Advisory | opus | Operator-invokable conflict resolver; also dispatched by the daemon's gated rebase-resolution loop (up to `rebase_resolution_attempts` attempts before HALT, daemon-only) |
 | `/retro` | Advisory | opus | Dual analysis: harness + application, trend tracking |
 | `/conduct` | Gating | haiku | SDLC orchestrator: 17-step flow with gate enforcement |
 
@@ -558,8 +559,14 @@ dedicated test coverage (950+ tests). See the feature comparison in
   on a stale base. Its verdict is *branch already current with base*, so a no-op goes straight
   to finish. A clean rebase that changed **code/test paths** kicks back to `build` to
   re-verify; a **CHANGELOG-only** `[Unreleased]` conflict is auto-resolved (both features'
-  entries kept, each once); any other / mixed conflict writes `.pipeline/HALT`, leaves the
-  rebase **paused**, and opens no PR. Resume: resolve → `git rebase --continue` →
+  entries kept, each once); any other / mixed conflict triggers the **gated resolution loop**
+  — the daemon dispatches the `/rebase` skill up to `rebase_resolution_attempts` times
+  (config key, default 3; set to 0 to disable) before HALTing. A resolution is accepted only
+  when the branch is genuinely current with the base (FR-8) and no feature commits were
+  dropped (FR-9); a code-changing resolution kicks back to `build`/`manual_test` as normal.
+  If the loop is exhausted, the engine writes `.pipeline/HALT`, leaves the rebase **paused**,
+  and opens no PR. The gated resolution loop is daemon-only; the `/rebase` skill is also
+  manually invokable by an operator. Resume: resolve → `git rebase --continue` →
   `rm .pipeline/HALT` → re-queue.
 - **Daemon mode** (`conduct-ts daemon`): drains a backlog of features that already have
   stories **and** plans, running each in its own worktree (parallel via `--concurrency N`,
