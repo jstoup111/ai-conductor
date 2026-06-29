@@ -189,6 +189,22 @@ export interface AssessConfig {
   stale_after_commits?: number;
 }
 
+/**
+ * OpenTelemetry exporter configuration. When present in HarnessConfig, the
+ * OTel visualizer plugin is constructed and attached to the event bus.
+ * Absent means disabled (FR-1 default-off).
+ */
+export interface OtelConfig {
+  /** Transport: 'otlp' pushes to an OTLP endpoint; 'file' writes OTLP-JSON lines. */
+  exporter: 'otlp' | 'file';
+  /** OTLP endpoint URL. Required when exporter='otlp'. */
+  endpoint?: string;
+  /** File path for file transport. Defaults to '.pipeline/otel.jsonl'. */
+  file?: string;
+  /** OTLP wire protocol. Defaults to 'http/protobuf' (port 4318). */
+  protocol?: 'http/protobuf' | 'grpc';
+}
+
 export interface HarnessConfig {
   harness_version?: string;
   defaults?: DefaultsConfig;
@@ -222,4 +238,6 @@ export interface HarnessConfig {
   llm_provider?: string;
   /** Plugin selection: which UI renderer to use (defaults to 'terminal'). */
   ui_renderer?: string;
+  /** OpenTelemetry exporter config. Absent = disabled (default off, FR-1). */
+  otel?: OtelConfig;
 }

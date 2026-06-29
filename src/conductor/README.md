@@ -376,6 +376,71 @@ subscriber serializes them generically.
 The contract is additive — new event types may be introduced without breaking existing
 subscribers. Subscribers receive only events they register for via `emitter.on(type, ...)`.
 
+### OpenTelemetry exporter (ADR-014)
+
+The conductor ships an optional OTel observability layer. When the `otel:` block is present
+in the project config, `OtelVisualizer` (`engine/otel/otel-visualizer.ts`) attaches to the
+event bus and exports traces and metrics to an OTel-compatible backend.
+
+#### Config (`pipeline.yml` / `harness-config.ts` `otel:` key)
+
+```yaml
+# OTLP HTTP export (default port 4318):
+otel:
+  exporter: otlp
+  endpoint: http://localhost:4318
+
+# OTLP gRPC export (port 4317):
+otel:
+  exporter: otlp
+  endpoint: http://localhost:4317
+  protocol: grpc
+
+# File export — writes OTLP-JSON newline-delimited to .pipeline/otel.jsonl:
+otel:
+  exporter: file
+  # file: .pipeline/otel.jsonl  # default; override if needed
+```
+
+Absent `otel:` block → disabled, zero overhead. The exporter coexists with `events.jsonl`
+and `--report`; no event-emission sites are modified.
+
+#### What is exported
+
+- **Traces** (`engine/otel/span-manager.ts`): one root span `conductor.run` per run, with
+  one child span per executed step. Steps carry `conductor.step`, `conductor.step.index`,
+  `conductor.step.status`, and `conductor.retry.count` attributes. Retries, gate verdicts, and
+  kickbacks are recorded as span events. Interrupted runs force-close open spans as ERROR
+  with `conductor.incomplete=true` (FR-9).
+- **Metrics** (`engine/otel/metrics.ts`):
+  - `conductor.step.duration` — Histogram (ms per step, always recorded)
+  - `conductor.step.retries` — Counter (only when retryCount > 0)
+  - `conductor.step.tokens` — Counter by kind (`input`/`output`/…; only when tokenUsage
+    present; no zero-fill for steps without usage)
+- **Resource attributes** (`engine/otel/resource.ts`): `conductor.run.id` (from
+  `.pipeline/conduct-session-id` or a fresh UUID), `conductor.feature`, `conductor.project`,
+  `service.name=ai-conductor`.
+
+#### Error isolation (FR-8)
+
+Export failures emit **at most one** warning via the `onWarning` callback and never affect
+the run. A non-responding endpoint is abandoned after `exportTimeoutMillis` (default 5 s).
+SIGINT/SIGTERM handlers trigger a best-effort flush within this bound.
+
+#### Implementation files
+
+| File | Responsibility |
+|---|---|
+| `engine/otel/otel-config.ts` | Parse + validate `otel:` config block |
+| `engine/otel/otel-visualizer.ts` | Root plugin: wires emitter → span/metric pipeline |
+| `engine/otel/span-manager.ts` | Run/step span lifecycle |
+| `engine/otel/metrics.ts` | Duration/retry/token metrics |
+| `engine/otel/transport.ts` | OTLP HTTP, gRPC, and file exporters |
+| `engine/otel/resource.ts` | OTel Resource with conductor attributes |
+
+Tests: `test/engine/otel/`, `test/integration/otel-observability.test.ts`,
+`test/integration/otel-exporter.test.ts`, `test/integration/otel-disabled-noop.test.ts`.
+
 ### Bootstrap-mode skip
 
 `state.bootstrap_mode` is set by the `bootstrap` skill to one of `new`, `fresh`,

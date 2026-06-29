@@ -29,6 +29,20 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- **OpenTelemetry exporter for conductor runs (Phase 1).** A new opt-in
+  `otel:` config block wires the conductor event bus to an OTel tracer/meter
+  pipeline (ADR-014). When enabled, each run produces one root trace span
+  (`conductor.run`) with a child span per step, plus `conductor.step.duration`
+  (histogram), `conductor.step.retries` (counter), and `conductor.step.tokens`
+  (counter, only when tokenUsage is present) metrics. Two transports: `exporter:
+  otlp` (HTTP/protobuf on port 4318 by default, gRPC/4317 via `protocol: grpc`)
+  and `exporter: file` (OTLP-JSON newline-delimited at `.pipeline/otel.jsonl`).
+  Feature is default-off (absent `otel:` block → zero overhead). Coexists with
+  `events.jsonl` and `--report` — event emission sites are unchanged. Export
+  failures emit at most one bounded warning via `onWarning` and never affect the
+  run (FR-8). Incomplete spans on abrupt termination are force-closed ERROR with
+  `conductor.incomplete=true` (FR-9). SIGINT/SIGTERM handlers trigger a
+  best-effort flush within the configured `exportTimeoutMillis` bound.
 - **Engineer authors the full DECIDE phase (engineer).** The `/engineer` idea→spec loop now runs
   the complete, build-ready DECIDE set in canonical order —
   brainstorm → **complexity** → stories → **conflict-check** → **architecture-diagram** →
