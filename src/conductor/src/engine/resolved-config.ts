@@ -35,7 +35,7 @@ export const DEFAULT_STEP_MODELS: Record<StepName, string> = {
   prd_audit: 'opus',       // cross-reference PRD intent vs shipped implementation
   architecture_review_as_built: 'sonnet', // pattern-match code vs approved design
   retro: 'sonnet',
-  rebase: 'haiku',         // engine-native; no Claude dispatch (mirrors complexity)
+  rebase: 'opus',          // gate is engine-native, but conflict RESOLUTION dispatches the rebase skill — semantic merge judgment
   finish: 'haiku',
   remediate: 'opus',       // reasons over blocking audit gaps → dispositions + tasks
 };
@@ -58,7 +58,7 @@ export const DEFAULT_STEP_EFFORT: Record<StepName, EffortLevel> = {
   prd_audit: 'high',       // FR-by-FR intent vs implementation reasoning
   architecture_review_as_built: 'medium',
   retro: 'medium',
-  rebase: 'low',           // deterministic git work, no reasoning
+  rebase: 'high',          // conflict resolution dispatch reasons over both sides of a hunk
   finish: 'low',
   remediate: 'high',       // gap reasoning + concrete task planning
 };
