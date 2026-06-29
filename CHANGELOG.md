@@ -168,6 +168,15 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Changed
 
+- **ADRs are no longer sequentially numbered — named `adr-YYYY-MM-DD-<kebab-slug>.md`.**
+  Sequential numbering (ADR-001, ADR-007, …) collides when parallel worktrees each grab
+  "the next number" for a concurrently-authored decision. ADRs now use a date plus a short
+  descriptive slug as both filename and identifier; supersession and verdict references cite
+  the filename stem instead of a number. Updated `templates/adr.md.template` (dropped the
+  `{{NUMBER}}` header) and the `/architecture-review`, `/conflict-check`, `/conduct`, and
+  `/remediate` skill docs. Applies to **newly created ADRs only** — existing numbered ADRs
+  keep their names (ADRs remain append-only).
+
 - **`.serena/` is now gitignored in scaffolded and onboarded projects.** Serena's
   MCP server writes a `.serena/` directory (semantic-symbol cache, `project.yml`,
   and machine-written `memories/`) into whatever project it runs against. Since
