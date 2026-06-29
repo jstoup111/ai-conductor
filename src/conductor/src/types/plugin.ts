@@ -5,7 +5,7 @@
 /**
  * Valid plugin kinds in the conductor plugin system.
  */
-export type PluginKind = 'llm_provider' | 'ui_renderer' | 'step' | 'hook' | 'visualizer';
+export type PluginKind = 'llm_provider' | 'ui_renderer' | 'step' | 'hook' | 'visualizer' | 'memory_provider';
 
 /**
  * Valid plugin kinds as a list for validation and error messages.
@@ -16,6 +16,7 @@ export const VALID_PLUGIN_KINDS: readonly PluginKind[] = [
   'step',
   'hook',
   'visualizer',
+  'memory_provider',
 ];
 
 /**
