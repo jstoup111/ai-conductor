@@ -1,7 +1,7 @@
 # ADR 014: Daemon supervisor port + attachable foreground hosting
 
 **Date:** 2026-06-29
-**Status:** DRAFT
+**Status:** APPROVED
 **Deciders:** James (solo dev) + harness architecture-review
 **Feature:** Daemon supervised hosting (PR #143)
 **Decision surfaces:** supervisor port seam (FR-1…FR-7), foreground-in-session host superseding

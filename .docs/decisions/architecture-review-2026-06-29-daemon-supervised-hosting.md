@@ -64,4 +64,5 @@ No High-impact risks.
   supervisor never re-encodes `.daemon/daemon.pid` (ADR-010 boundary).
 
 ## Gate
-ADR-014 is **DRAFT** — it must reach **APPROVED** (human review) before `/writing-system-tests`.
+ADR-014 is **APPROVED** (operator-ratified 2026-06-29). BUILD gate cleared —
+`/writing-system-tests` may begin.
