@@ -10,6 +10,15 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ## [Unreleased]
 
+### Added
+
+- **Design + ADRs for the DECIDE pipeline restructure (docs-only — no behavior change yet).** Lands
+  the design doc, technical stories, architecture diagram, and ADR-015–018 under `.docs/` for the
+  planned `brainstorm → explore + prd` split, operator-confirmed product/technical **tracks**
+  (conditional PRD), and **architecture-before-stories** reordering with convergent root-routed
+  kickbacks. Supersedes the approach in PR #142 (product-only PRD). Implementation lands in a
+  follow-up PR; nothing in the runtime flow changes from this PR alone.
+
 ### Fixed
 
 - **Type error in the github-issues intake adapter (conduct-ts).** `maybeReopen` typed its `repo`
