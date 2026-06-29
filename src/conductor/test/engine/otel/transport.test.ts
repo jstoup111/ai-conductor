@@ -1,14 +1,19 @@
 /**
  * T8: buildExporters(otelConfig) — transport factory.
- * FR-7: OTLP HTTP default (port 4318), file transport writes OTLP-JSON newline-delimited.
+ * FR-7: OTLP HTTP default (port 4318), gRPC (port 4317) selectable via config,
+ *       file transport writes OTLP-JSON newline-delimited.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, mkdir, readFile } from 'fs/promises';
+import { mkdtemp, rm, mkdir } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { buildExporters, type Exporters } from '../../../src/engine/otel/transport.js';
 import { resolveOtelConfig } from '../../../src/engine/otel/otel-config.js';
 import { InMemorySpanExporter } from '@opentelemetry/sdk-trace-base';
+import { OTLPTraceExporter as OTLPGrpcTraceExporter } from '@opentelemetry/exporter-trace-otlp-grpc';
+import { OTLPMetricExporter as OTLPGrpcMetricExporter } from '@opentelemetry/exporter-metrics-otlp-grpc';
+import { OTLPTraceExporter as OTLPHttpTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
+import { OTLPMetricExporter as OTLPHttpMetricExporter } from '@opentelemetry/exporter-metrics-otlp-http';
 
 describe('buildExporters', () => {
   let tempDir: string;
@@ -51,10 +56,38 @@ describe('buildExporters', () => {
         pipelineDir,
       );
       const exporters = buildExporters(resolved as Extract<typeof resolved, { enabled: true }>);
-      // OTLP HTTP exporter has a url property set at construction time
-      // We check it has the right class name via constructor
-      const ctorName = exporters.spanExporter.constructor.name;
-      expect(ctorName).toMatch(/OTLPTrace/i);
+      expect(exporters.spanExporter).toBeInstanceOf(OTLPHttpTraceExporter);
+      expect(exporters.metricExporter).toBeInstanceOf(OTLPHttpMetricExporter);
+    });
+
+    it('uses HTTP exporter when protocol is http/protobuf', () => {
+      const resolved = resolveOtelConfig(
+        { otel: { exporter: 'otlp', endpoint: 'http://localhost:4318', protocol: 'http/protobuf' } },
+        pipelineDir,
+      );
+      const exporters = buildExporters(resolved as Extract<typeof resolved, { enabled: true }>);
+      expect(exporters.spanExporter).toBeInstanceOf(OTLPHttpTraceExporter);
+      expect(exporters.metricExporter).toBeInstanceOf(OTLPHttpMetricExporter);
+    });
+
+    it('uses gRPC exporter when protocol is grpc', () => {
+      const resolved = resolveOtelConfig(
+        { otel: { exporter: 'otlp', endpoint: 'http://localhost:4317', protocol: 'grpc' } },
+        pipelineDir,
+      );
+      const exporters = buildExporters(resolved as Extract<typeof resolved, { enabled: true }>);
+      expect(exporters.spanExporter).toBeInstanceOf(OTLPGrpcTraceExporter);
+      expect(exporters.metricExporter).toBeInstanceOf(OTLPGrpcMetricExporter);
+    });
+
+    it('gRPC exporter is NOT an HTTP exporter instance', () => {
+      const resolved = resolveOtelConfig(
+        { otel: { exporter: 'otlp', endpoint: 'http://localhost:4317', protocol: 'grpc' } },
+        pipelineDir,
+      );
+      const exporters = buildExporters(resolved as Extract<typeof resolved, { enabled: true }>);
+      expect(exporters.spanExporter).not.toBeInstanceOf(OTLPHttpTraceExporter);
+      expect(exporters.metricExporter).not.toBeInstanceOf(OTLPHttpMetricExporter);
     });
   });
 

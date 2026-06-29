@@ -1,12 +1,13 @@
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { ExportResultCode } from '@opentelemetry/core';
-import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
-import { OTLPMetricExporter } from '@opentelemetry/exporter-metrics-otlp-http';
+import { OTLPTraceExporter as OTLPHttpTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
+import { OTLPMetricExporter as OTLPHttpMetricExporter } from '@opentelemetry/exporter-metrics-otlp-http';
+import { OTLPTraceExporter as OTLPGrpcTraceExporter } from '@opentelemetry/exporter-trace-otlp-grpc';
+import { OTLPMetricExporter as OTLPGrpcMetricExporter } from '@opentelemetry/exporter-metrics-otlp-grpc';
 import type { SpanExporter, ReadableSpan } from '@opentelemetry/sdk-trace-base';
 import type { PushMetricExporter, ResourceMetrics } from '@opentelemetry/sdk-metrics';
-import { JsonTraceSerializer } from '@opentelemetry/otlp-transformer';
-import { JsonMetricsSerializer } from '@opentelemetry/otlp-transformer';
+import { JsonTraceSerializer, JsonMetricsSerializer } from '@opentelemetry/otlp-transformer';
 import type { ResolvedOtelConfig } from './otel-config.js';
 
 export interface Exporters {
@@ -17,7 +18,8 @@ export interface Exporters {
 /**
  * Build OTel span + metric exporters for a resolved (enabled) config.
  *
- * - `exporter: 'otlp'` → OTLPTraceExporter + OTLPMetricExporter (HTTP/protobuf default)
+ * - `exporter: 'otlp'`, `protocol: 'grpc'` → gRPC exporters (default port 4317)
+ * - `exporter: 'otlp'`, `protocol: 'http/protobuf'` or absent → HTTP/protobuf exporters (default port 4318)
  * - `exporter: 'file'` → FileSpanExporter + FileMetricExporter (OTLP-JSON newline-delimited)
  *
  * Never throws.
@@ -27,9 +29,16 @@ export function buildExporters(
 ): Exporters {
   if (config.exporter === 'otlp') {
     const url = config.endpoint;
+    if (config.protocol === 'grpc') {
+      return {
+        spanExporter: new OTLPGrpcTraceExporter({ url }),
+        metricExporter: new OTLPGrpcMetricExporter({ url }),
+      };
+    }
+    // Default: HTTP/protobuf (port 4318)
     return {
-      spanExporter: new OTLPTraceExporter({ url: `${url.replace(/\/$/, '')}/v1/traces` }),
-      metricExporter: new OTLPMetricExporter({ url: `${url.replace(/\/$/, '')}/v1/metrics` }),
+      spanExporter: new OTLPHttpTraceExporter({ url: `${url.replace(/\/$/, '')}/v1/traces` }),
+      metricExporter: new OTLPHttpMetricExporter({ url: `${url.replace(/\/$/, '')}/v1/metrics` }),
     };
   }
 
