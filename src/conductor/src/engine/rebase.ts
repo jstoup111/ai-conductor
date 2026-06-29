@@ -158,7 +158,7 @@ export function isCodeOrTestPath(path: string): boolean {
   if (p.startsWith('.docs/')) return false;
   if (p.startsWith('docs/')) return false;
   if (/(^|\/)README(\.[A-Za-z]+)?$/i.test(p)) return false;
-  if (/\.(md|mdx|txt|rst)$/i.test(p)) return false;
+  if (/\.(md|mdx)$/i.test(p)) return false;
   // Everything else (src/**, test/**, lib/**, config, etc.) is code/test.
   return true;
 }
@@ -497,6 +497,152 @@ async function tryResolveChangelogConflict(
     return false;
   }
   return true;
+}
+
+// ── Resolution loop (feat/rebase-resolution-skill) ───────────────────────────
+
+export type ResolutionAttempt = { resolved: true } | { resolved: false; reason: string };
+export interface ResolutionContext { conflicts: string[]; projectRoot: string; baseRef: string }
+export type RebaseResolver = (ctx: ResolutionContext) => Promise<ResolutionAttempt>;
+
+/**
+ * Check whether every commit subject from before the rebase is still present in
+ * the current `baseRef..HEAD` range. Subject-set membership (not patch-id) lets
+ * a conflict resolution legitimately change a commit's diff while keeping its
+ * subject; a --skip'd commit loses its subject entirely and is caught here.
+ *
+ * Empty `subjectsBefore` → true (nothing to lose).
+ */
+export async function featureCommitsPreserved(
+  git: GitRunner,
+  baseRef: string,
+  subjectsBefore: string[],
+): Promise<boolean> {
+  if (subjectsBefore.length === 0) return true;
+  const r = await git(['log', '--format=%s', `${baseRef}..HEAD`]);
+  if (r.exitCode !== 0) return false;
+  const currentSubjects = new Set(
+    r.stdout.split('\n').map((l) => l.trim()).filter((l) => l.length > 0),
+  );
+  return subjectsBefore.every((s) => currentSubjects.has(s));
+}
+
+/**
+ * Bounded resolution loop: dispatch `resolver` up to `cap` times attempting to
+ * complete the paused rebase in `conflictOutcome`. Returns a reclassified
+ * outcome when the resolver succeeds cleanly, or a `conflict_halt` when it
+ * fails, gives up, or exhausts the cap.
+ *
+ * Acceptance guards (applied ONLY after the rebase completes, no retry):
+ *   FR-8 isBranchCurrent  — branch must be current with the base it rebased onto.
+ *   FR-9 featureCommitsPreserved — every pre-rebase feature commit subject must
+ *        survive (catches --skip drops; tolerates diff-changing resolutions).
+ *
+ * The helper is PURE and git-injected (no event emission, no writeHalt, no
+ * config reads). Callers wire those as needed.
+ */
+export async function resolveRebaseConflicts(
+  git: GitRunner,
+  projectRoot: string,
+  conflictOutcome: RebaseOutcome,
+  resolver: RebaseResolver,
+  cap: number,
+): Promise<RebaseOutcome> {
+  // FR-7: cap of 0 disables resolution entirely.
+  if (cap <= 0) return conflictOutcome;
+
+  // Capture rebase state BEFORE calling the resolver (the --continue that
+  // completes the rebase will remove the state directory).
+  let onto: string | null = null;
+  for (const name of ['rebase-merge/onto', 'rebase-apply/onto']) {
+    const r = await git(['rev-parse', '--git-path', name]);
+    if (r.exitCode !== 0) continue;
+    const filePath = r.stdout.trim();
+    if (!filePath) continue;
+    const absPath = isAbsolute(filePath) ? filePath : join(projectRoot, filePath);
+    try {
+      const content = await readFile(absPath, 'utf-8');
+      onto = content.trim();
+      break;
+    } catch {
+      // file does not exist yet — try the next state dir name
+    }
+  }
+
+  if (onto === null) {
+    // Not actually mid-rebase — nothing to do.
+    return conflictOutcome;
+  }
+
+  // Feature commit subjects that must survive: all commits in <onto>..ORIG_HEAD.
+  // ORIG_HEAD is the pre-rebase feature tip (set by git before it starts replaying).
+  const subjR = await git(['log', '--format=%s', `${onto}..ORIG_HEAD`]);
+  const subjectsBefore =
+    subjR.exitCode === 0
+      ? subjR.stdout.split('\n').map((l) => l.trim()).filter((l) => l.length > 0)
+      : [];
+
+  // Use the conflict list already captured in the outcome (avoids a redundant
+  // git call and is consistent with the snapshot at conflict time).
+  const conflicts =
+    conflictOutcome.kind === 'conflict_halt'
+      ? conflictOutcome.conflicts
+      : await conflictedFiles(git);
+
+  for (let attempt = 1; attempt <= cap; attempt++) {
+    const result = await resolver({ conflicts, projectRoot, baseRef: onto });
+
+    if (!result.resolved) {
+      // FR-6: resolver gave up — short-circuit, no further attempts.
+      return {
+        kind: 'conflict_halt',
+        conflicts,
+        reason: (result as { resolved: false; reason: string }).reason || 'resolver gave up',
+      };
+    }
+
+    // result.resolved === true — check whether the rebase actually finished.
+    const stillActive = await rebaseStateActive(git, projectRoot);
+    const currentConflicts = await conflictedFiles(git);
+    if (stillActive || currentConflicts.length > 0) {
+      // Rebase did NOT complete — count as a failed attempt and retry.
+      continue;
+    }
+
+    // Rebase completed. Run acceptance guards (NO retry on failure — a
+    // completed-but-bad rebase is a definitive rejection, not a transient error).
+
+    // FR-8: branch must be current with the base it rebased onto.
+    if (!(await isBranchCurrent(git, onto))) {
+      return {
+        kind: 'conflict_halt',
+        conflicts,
+        reason: 'rebase resolution left the branch not current with base',
+      };
+    }
+
+    // FR-9: every pre-rebase feature commit subject must still be present.
+    if (!(await featureCommitsPreserved(git, onto, subjectsBefore))) {
+      return {
+        kind: 'conflict_halt',
+        conflicts,
+        reason: 'rebase resolution dropped feature commit(s)',
+      };
+    }
+
+    // Both guards pass — reclassify by whether code/test paths changed.
+    const changed = filterCodeOrTestPaths(await changedPathsBetween(git, onto, 'HEAD'));
+    return changed.length > 0
+      ? { kind: 'changed', changedCodePaths: changed }
+      : { kind: 'noop' };
+  }
+
+  // All cap attempts consumed without the rebase completing.
+  return {
+    kind: 'conflict_halt',
+    conflicts,
+    reason: `rebase resolution failed after ${cap} attempt(s)`,
+  };
 }
 
 // ── Verdict + event wiring (consumed by the conductor) ───────────────────────
