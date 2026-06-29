@@ -1,5 +1,5 @@
 import { execa } from 'execa';
-import { mkdir, copyFile, writeFile, readFile, access, stat } from 'node:fs/promises';
+import { mkdir, writeFile, readFile, access, stat } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import type { BacklogItem } from './daemon.js';
 import type { LLMProvider } from '../execution/llm-provider.js';
@@ -62,22 +62,6 @@ export function makeFeatureRunnerDeps(cfg: RealDepsConfig): FeatureRunnerDeps {
         });
       }
       return { path, branch };
-    },
-
-    // Materialize the human-authored specs INTO the worktree (the gotcha: they
-    // may be uncommitted in the main checkout and thus invisible in a fresh
-    // worktree). Copy + commit so the loop's gates see committed inputs.
-    materializeSpecs: async (wt, item) => {
-      await mkdir(join(wt.path, '.docs/stories'), { recursive: true });
-      await mkdir(join(wt.path, '.docs/plans'), { recursive: true });
-      await copyFile(item.storiesPath, join(wt.path, '.docs/stories', basename(item.storiesPath)));
-      await copyFile(item.planPath, join(wt.path, '.docs/plans', basename(item.planPath)));
-      await execa('git', ['add', '.docs'], { cwd: wt.path });
-      await execa('git', ['commit', '-m', `daemon: materialize specs for ${item.slug}`], {
-        cwd: wt.path,
-      }).catch(() => {
-        /* nothing to commit (already tracked) — fine */
-      });
     },
 
     // Write WORKTREE_NAMESPACE into the worktree .env and run the project's

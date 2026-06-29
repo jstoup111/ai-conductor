@@ -13,7 +13,7 @@ import { holdLock } from './engine/daemon-lock.js';
 import { openDaemonLog, type DaemonLogSink } from './engine/daemon-log.js';
 import type { ConductState, ConductorEvent, StepName } from './types/index.js';
 import { runDaemon, type BacklogItem } from './engine/daemon.js';
-import { discoverBacklog, resolveDiscoveryRef } from './engine/daemon-backlog.js';
+import { discoverBacklog, fastForwardRoot } from './engine/daemon-backlog.js';
 import { makeRunFeature, type FeatureWorktree } from './engine/daemon-runner.js';
 import {
   isHalted,
@@ -23,7 +23,7 @@ import {
   makeFeatureRunnerDeps,
 } from './engine/daemon-deps.js';
 import { readState, writeState, getStepStatus } from './engine/state.js';
-import { makeGitRunner } from './engine/rebase.js';
+import { makeGitRunner, originDefaultBranch } from './engine/rebase.js';
 import {
   readBaseSha,
   readPersistedBaseSha,
@@ -93,7 +93,11 @@ function stripAnsi(s: string): string {
  */
 export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   const { projectRoot } = opts;
-  const baseBranch = opts.baseBranch ?? 'main';
+  // The local branch worktrees fork from and discovery reads. Resolve origin's
+  // real default (main/master/trunk) rather than hardcoding 'main'; the daemon
+  // fast-forwards this branch on each idle poll (see fastForwardRoot).
+  const baseBranch =
+    opts.baseBranch ?? (await originDefaultBranch(makeGitRunner(projectRoot))) ?? 'main';
   // Tee every daemon log line to a file so a detached `stdio:'ignore'` launch is
   // still observable via `conduct daemon logs`. Console gets the colorized line
   // (#88); the file gets ANSI-stripped plain text so the persistent log never
@@ -267,12 +271,15 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   );
 
   // Shared backlog discovery — used both by the pool and the startup dashboard's
-  // ELIGIBLE group, so they stay in lockstep. `refresh` fetches origin only when
-  // the pool is fully idle (see resolveDiscoveryRef).
+  // ELIGIBLE group, so they stay in lockstep. `refresh` is true only when the pool
+  // is fully idle: there we fast-forward the local default branch to origin so
+  // newly merged specs become present (and discoverable on the local tree). While
+  // builds are in flight (`refresh:false`) there is NO fetch/ff, so an in-flight
+  // build is never advanced onto specs that merged mid-run.
   const discoverTick = async ({ refresh }: { refresh: boolean }): Promise<BacklogItem[]> => {
-    const treeRef = await resolveDiscoveryRef(projectRoot, baseBranch, log, { refresh });
+    if (refresh) await fastForwardRoot(projectRoot, log);
     return discoverBacklog(projectRoot, (slug) => isProcessed(projectRoot, slug), log, {
-      baseBranch: treeRef,
+      baseBranch,
       // Surface a merged-but-unbuildable spec ONCE (per .daemon/warned/<slug>)
       // instead of re-logging the identical skip on every poll.
       hasWarned: (slug) => hasWarned(projectRoot, slug),
@@ -314,11 +321,12 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
         });
         log(`\n${renderDashboard(state)}`);
       },
-      // FR-4: resolve the base-branch tip SHA from the SAME discovery ref the
-      // backlog uses (origin/<default> or local), never a hardcoded branch.
+      // FR-4: resolve the base-branch tip SHA from the SAME local default branch
+      // the backlog reads. On idle refresh we fast-forward it first so the SHA
+      // reflects origin's latest (driving ADR-013 re-kick when main advances).
       resolveBaseSha: async ({ refresh }) => {
-        const ref = await resolveDiscoveryRef(projectRoot, baseBranch, log, { refresh });
-        return readBaseSha(makeGitRunner(projectRoot), ref);
+        if (refresh) await fastForwardRoot(projectRoot, log);
+        return readBaseSha(makeGitRunner(projectRoot), baseBranch);
       },
       readPersistedBaseSha: () => readPersistedBaseSha(projectRoot),
       writePersistedBaseSha: (sha) => writePersistedBaseSha(projectRoot, sha, log),

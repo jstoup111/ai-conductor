@@ -11,7 +11,7 @@ import {
 import type { BacklogItem } from '../../src/engine/daemon.js';
 
 function item(slug: string): BacklogItem {
-  return { slug, storiesPath: `${slug}.stories`, planPath: `${slug}.plan` };
+  return { slug };
 }
 
 describe('engine/daemon-dashboard — scanInheritedState (FR-2/FR-3)', () => {

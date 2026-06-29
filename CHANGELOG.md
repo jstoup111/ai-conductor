@@ -103,6 +103,23 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- **Daemon now fast-forwards its root checkout on each idle poll and cuts
+  worktrees from fresh `main` — eliminating spurious `ENOENT` HALTs when local
+  `main` lagged origin.** The daemon discovered/validated specs against the
+  `origin/<default>` remote-tracking tree but *materialized* them by `copyFile`-ing
+  from the local working tree, which it only ever `fetch`ed — never advanced. Once
+  a spec PR merged on origin while the local checkout sat behind (the steady
+  state), discovery found the spec yet the copy failed (`copyfile … .docs/stories/
+  <slug>.md`). Root-fixed by replacing the fetch-only discovery ref with
+  `fastForwardRoot`: on each idle poll the daemon does a **safe** `git merge
+  --ff-only origin/<default>` of its checkout (only when on the default branch with
+  a clean tree — otherwise it logs a warning and skips, never clobbering), then
+  discovers and cuts each worktree from that now-current branch. Because the
+  worktree forks from fresh `main`, the vetted stories+plan already exist in it, so
+  the brittle `materializeSpecs` copy step is **removed entirely** (`BacklogItem`
+  no longer carries working-tree paths). The fast-forward runs only between work
+  (never mid-build) and never touches in-flight worktree checkouts.
+
 - **Conductor now deletes a stale prior-session `.pipeline/` artifact before
   re-running a FAILED or REWORKED gated re-review step — reuse-loop HALTs are
   impossible by construction.** This is the deterministic complement to the
