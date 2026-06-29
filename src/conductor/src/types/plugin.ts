@@ -30,6 +30,26 @@ export interface PluginManifest {
 }
 
 /**
+ * A visualizer plugin subscribes to the ConductorEventEmitter as a listener
+ * (via .on(...)) and exports observations to an external system (e.g. OTel).
+ * It renders nothing to the terminal. Multiple visualizers may be active at once.
+ *
+ * Lifecycle mirrors EventPersister: start() registers listeners, stop() unregisters
+ * and flushes pending data.
+ */
+export interface VisualizerPlugin {
+  /** Unique plugin name, used as the registry key. */
+  readonly name: string;
+  /**
+   * Attach to the event emitter. Called once at run start.
+   * Implementations must only call emitter.on() — never modify emission sites.
+   */
+  start(emitter: import('../ui/events.js').ConductorEventEmitter): void;
+  /** Detach from the emitter and flush pending export data. Returns when flush completes. */
+  stop(): Promise<void>;
+}
+
+/**
  * Error thrown when plugin manifest validation fails.
  */
 export class PluginManifestError extends Error {
