@@ -66,6 +66,44 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
     await rm(empty, { recursive: true, force: true });
   });
 
+  describe('track propagation (ADR-015/017)', () => {
+    async function seedEligible(slug: string) {
+      await writeFile(join(dir, `.docs/plans/${slug}.md`), planWithDeps(`.docs/stories/${slug}.md`));
+      await writeFile(join(dir, `.docs/stories/${slug}.md`), APPROVED_STORIES);
+    }
+    async function seedTrack(slug: string, value: string) {
+      await mkdir(join(dir, '.docs/track'), { recursive: true });
+      await writeFile(join(dir, `.docs/track/${slug}.md`), `# Track\n\nTrack: ${value}\n`);
+    }
+
+    it('carries track=technical from the marker', async () => {
+      await seedEligible('feat-t');
+      await seedTrack('feat-t', 'technical');
+      const [item] = await discover();
+      expect(item.track).toBe('technical');
+    });
+
+    it('carries track=product from the marker', async () => {
+      await seedEligible('feat-p');
+      await seedTrack('feat-p', 'product');
+      const [item] = await discover();
+      expect(item.track).toBe('product');
+    });
+
+    it('leaves track undefined when no marker (daemon defaults product downstream)', async () => {
+      await seedEligible('feat-none');
+      const [item] = await discover();
+      expect(item.track).toBeUndefined();
+    });
+
+    it('leaves track undefined for a garbled marker', async () => {
+      await seedEligible('feat-bad');
+      await seedTrack('feat-bad', 'sideways');
+      const [item] = await discover();
+      expect(item.track).toBeUndefined();
+    });
+  });
+
   it('includes a feature whose plan + stories both exist (via **Stories:** ref)', async () => {
     await writeFile(
       join(dir, '.docs/plans/feature-a.md'),

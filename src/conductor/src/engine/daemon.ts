@@ -14,7 +14,7 @@
  */
 
 import chalk from 'chalk';
-import type { ComplexityTier } from '../types/index.js';
+import type { ComplexityTier, Track } from '../types/index.js';
 
 export interface BacklogItem {
   /** Stable feature identifier (also the worktree/branch slug). The vetted
@@ -31,6 +31,10 @@ export interface BacklogItem {
    *  the implementation PR to the issue with `Closes owner/repo#N` so it
    *  auto-closes on merge. Absent for hand-authored / non-intake specs. */
   sourceRef?: string;
+  /** Work track, parsed from `.docs/track/<slug>.md` on the base branch
+   *  (ADR-015/017). `technical` features skip the `prd` step + `prd-audit` at
+   *  SHIP. Absent → the daemon treats it as `product` (back-compat). */
+  track?: Track;
 }
 
 export type FeatureStatus = 'done' | 'halted' | 'error';

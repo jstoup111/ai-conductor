@@ -7,6 +7,7 @@ import {
   getStepIndex,
   getStepByIndex,
   shouldSkipForTier,
+  shouldSkipForTrack,
   shouldSkipForBootstrapMode,
   getSkippableSteps,
   isCheckpointStep,
@@ -301,6 +302,28 @@ describe('engine/steps', () => {
     it('Large tier skips nothing', () => {
       for (const step of ALL_STEPS) {
         expect(shouldSkipForTier(step.name, 'L')).toBe(false);
+      }
+    });
+  });
+
+  // --- shouldSkipForTrack ---
+
+  describe('shouldSkipForTrack', () => {
+    it('skips prd + prd_audit on the technical track', () => {
+      expect(shouldSkipForTrack('prd', 'technical')).toBe(true);
+      expect(shouldSkipForTrack('prd_audit', 'technical')).toBe(true);
+    });
+    it('does NOT skip prd / prd_audit on the product track', () => {
+      expect(shouldSkipForTrack('prd', 'product')).toBe(false);
+      expect(shouldSkipForTrack('prd_audit', 'product')).toBe(false);
+    });
+    it('missing track defaults to product (nothing track-skipped)', () => {
+      expect(shouldSkipForTrack('prd', undefined)).toBe(false);
+      expect(shouldSkipForTrack('prd_audit', undefined)).toBe(false);
+    });
+    it('non-track-gated steps are never track-skipped', () => {
+      for (const s of ['stories', 'plan', 'build', 'explore'] as StepName[]) {
+        expect(shouldSkipForTrack(s, 'technical')).toBe(false);
       }
     });
   });

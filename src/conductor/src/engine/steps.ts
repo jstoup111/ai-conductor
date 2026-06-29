@@ -159,6 +159,8 @@ export const ALL_STEPS: StepDefinition[] = [
     enforcement: 'gating',
     prerequisites: ['manual_test'],
     skippableForTiers: [],
+    // No PRD on the technical track → nothing to audit (ADR-015/017).
+    skippableForTracks: ['technical'],
     isCheckpoint: false,
     skillName: 'prd-audit',
     loopGate: true,

@@ -1272,10 +1272,12 @@ export class Conductor {
     // ever marking it.
     let markedSkip = false;
     const tier = state.complexity_tier ?? 'L';
+    const track = state.track ?? 'product';
     for (const s of steps) {
       if (
         getStepStatus(state, s.name) === 'pending' &&
         (s.skippableForTiers.includes(tier) ||
+          (s.skippableForTracks ?? []).includes(track) ||
           shouldSkipForBootstrapMode(s.name, state.bootstrap_mode))
       ) {
         (state as Record<string, unknown>)[s.name] = 'skipped';
