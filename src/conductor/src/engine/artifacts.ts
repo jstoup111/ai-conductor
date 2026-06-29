@@ -1,6 +1,6 @@
 import { access, readdir, readFile, rm, stat } from 'fs/promises';
 import { join, relative } from 'path';
-import type { StepName } from '../types/index.js';
+import type { StepName, ComplexityTier } from '../types/index.js';
 import type { HarnessConfig } from '../types/config.js';
 import { slugify } from './worktree.js';
 
@@ -633,6 +633,35 @@ export function planHasDependencyTree(planText: string): boolean {
 export function isStoriesApproved(content: string): boolean {
   if (/\bstatus\b[\s*:]*\bdraft\b/i.test(content)) return false;
   return /\bstatus\b[\s*:]*\baccepted\b/i.test(content);
+}
+
+/**
+ * True when an ADR (or any architecture-review artifact) still carries a DRAFT
+ * status. Mirrors the DRAFT regex used by the land gate (land-spec.ts) and the
+ * conduct architecture-review gate: matches "status" followed on the same line
+ * by "draft", tolerating YAML (`status: draft`), markdown bold (`**Status:**
+ * DRAFT`), and arbitrary punctuation/whitespace between them.
+ *
+ * Shared so the engineer authoring seam, the land-time gate, and any future
+ * caller agree on the single ADR-approval signal — no DRAFT ADR may reach a
+ * daemon that has already pre-seeded architecture_review as done.
+ */
+export function hasDraftAdr(content: string): boolean {
+  return /status[^:\n]*:\s*[\*_]*\s*draft/i.test(content);
+}
+
+/**
+ * Parse a complexity-tier marker file (`.docs/complexity/<slug>.md`) into its
+ * `ComplexityTier`. The marker carries a `Tier: <S|M|L>` line (case-insensitive);
+ * the rest of the file is free-form rationale. Returns `undefined` when the
+ * content is null/absent or carries no recognizable tier line — callers fall
+ * back to their own default (the daemon uses 'M', preserving legacy behavior).
+ */
+export function parseComplexityTier(content: string | null): ComplexityTier | undefined {
+  if (!content) return undefined;
+  const m = content.match(/\bTier:\s*([SML])\b/i);
+  if (!m) return undefined;
+  return m[1].toUpperCase() as ComplexityTier;
 }
 
 /** A PRD-audit gap-class. `unknown` = a blocking row whose class cell we could

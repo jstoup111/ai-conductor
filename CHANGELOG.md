@@ -10,6 +10,23 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ## [Unreleased]
 
+### Fixed
+
+- **Type error in the github-issues intake adapter (conduct-ts).** `maybeReopen` typed its `repo`
+  parameter as `{ name; path }`, omitting the `ghRepo?` field that `RepoLister.list()` actually
+  provides and that the function body reads (`repo.ghRepo ?? repo.name`). This produced a
+  `tsc --noEmit` error (TS2339). Widened the parameter type to `{ name; path; ghRepo? }` to match
+  the data the caller passes; `tsc` is now clean. No behavior change.
+- **Daemon finish HALT when cleanup `cd`s into the main repo (conduct-ts).** In auto/daemon
+  mode the finish step wrote its completion markers (`.pipeline/finish-choice` and the `pr_url`
+  in `.pipeline/conduct-state.json`) via relative paths, but the finish skill's branch/PR/worktree
+  cleanup `cd`s into the *main* repo — so the writes landed in the wrong repo while the completion
+  gate reads the *worktree's* `.pipeline`. A feature whose PR was genuinely created would HALT with
+  "`.pipeline/finish-choice` is missing". The auto-finish system prompt now directs the marker
+  writes to the **absolute worktree `.pipeline` paths** (from `pipelineDir`, with a relative
+  fallback when unset), instructs the session to write them **before** any merge/cleanup, and to
+  reuse an existing PR (`gh pr view`) instead of failing. Skill docs updated to match.
+
 ### Added
 
 - **OpenTelemetry exporter for conductor runs (Phase 1).** A new opt-in
@@ -26,6 +43,17 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   run (FR-8). Incomplete spans on abrupt termination are force-closed ERROR with
   `conductor.incomplete=true` (FR-9). SIGINT/SIGTERM handlers trigger a
   best-effort flush within the configured `exportTimeoutMillis` bound.
+- **Engineer authors the full DECIDE phase (engineer).** The `/engineer` idea→spec loop now runs
+  the complete, build-ready DECIDE set in canonical order —
+  brainstorm → **complexity** → stories → **conflict-check** → **architecture-diagram** →
+  **architecture-review** → plan — instead of only brainstorm→stories→plan. The operator-assessed
+  complexity tier is persisted to `.docs/complexity/<plan-stem>.md`, and conflict-check +
+  architecture steps are tier-skipped for Small (mirroring conduct's `skippableForTiers: ['S']`).
+  `engineer land` now commits the full `.docs` DECIDE set and **rejects** a DRAFT ADR or a
+  tier/artifact mismatch (non-Small with missing architecture artifacts). The daemon reads the tier
+  from `.docs/complexity/` (via `discoverBacklog` → `BacklogItem.tier`) and seeds the build's
+  `complexity_tier` from it, replacing the previously hardcoded `'M'`; specs with no marker fall
+  back to `'M'` (unchanged behavior). Shared `hasDraftAdr` / `parseComplexityTier` predicates added.
 - **Implementation subagents must not fetch/rebase/pull (pipeline).** Every per-task dispatch
   prompt now instructs the implementation subagent to NOT run `git fetch`/`pull`/`rebase` or switch
   branches — it commits only to the current feature branch. Prevents the mid-build auto-rebase onto

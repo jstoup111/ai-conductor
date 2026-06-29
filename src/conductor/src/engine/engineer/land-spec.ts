@@ -1,9 +1,12 @@
 // land-spec.ts — deterministic spec-branch landing primitive (Phase 9.3, ADR-008).
 //
 // PURPOSE:
-//   Commit the artifacts that the REAL /brainstorm, /stories, /plan skills already wrote
-//   into the target repo's .docs/ dirs, onto a spec/<slug> branch. This primitive does
-//   NOT author (no decide seam, no subprocess). It validates, guards, commits, and returns.
+//   Commit the full DECIDE artifact set the REAL skills already wrote into the target
+//   repo's .docs/ dirs, onto a spec/<slug> branch. The engineer authors the WHOLE DECIDE
+//   phase, so this lands brainstorm/stories/plan + the complexity marker, and (for a
+//   non-Small tier) conflict-check/architecture-diagram/architecture-review + ADRs.
+//   It validates (stories approved, tier-vs-artifacts consistent, no DRAFT ADR), guards,
+//   commits, and returns. It does NOT author (no decide seam, no subprocess).
 //
 // CONTRACT: landSpec(target, idea) → Promise<{slug, branch, repoPath}>
 //
@@ -27,7 +30,7 @@ import { promisify } from 'node:util';
 import { TargetPathMissingError } from './target.js';
 import { AuthoringGuard } from './authoring-guard.js';
 import { deriveDefaultBranch, chooseBranchName, slugify } from './authoring.js';
-import { isStoriesApproved } from '../artifacts.js';
+import { isStoriesApproved, hasDraftAdr, parseComplexityTier } from '../artifacts.js';
 
 const execFile = promisify(execFileCb);
 
@@ -153,6 +156,47 @@ export async function landSpec(
     );
   }
 
+  // 4d. Tier-conditional DECIDE completeness. The engineer authors the full
+  //     DECIDE phase; the daemon pre-seeds conflict_check + architecture_* as
+  //     done and reads the tier from `.docs/complexity/`. Enforce that what the
+  //     engineer CLAIMED (the tier) matches what it produced, so a non-Small
+  //     spec can never reach the daemon missing conflict-check or architecture.
+  const complexityDir = join(repoPath, '.docs', 'complexity');
+  const decisionsDir = join(repoPath, '.docs', 'decisions');
+  const complexityFile = await findNewestFile(complexityDir);
+  const tier = complexityFile
+    ? parseComplexityTier(await readFile(complexityFile, 'utf-8'))
+    : undefined;
+
+  if (tier && tier !== 'S') {
+    const conflictsFile = await findNewestFile(join(repoPath, '.docs', 'conflicts'));
+    const architectureFile = await findNewestFile(join(repoPath, '.docs', 'architecture'));
+    const reviewFile = await findNewestFile(decisionsDir);
+    const missing: string[] = [];
+    if (!conflictsFile) missing.push('conflicts');
+    if (!architectureFile) missing.push('architecture');
+    if (!reviewFile) missing.push('decisions (architecture-review/ADRs)');
+    if (missing.length > 0) {
+      throw new Error(
+        `landSpec: complexity tier is "${tier}" (non-Small) but required DECIDE artifact ` +
+          `${missing.join(', ')} ${missing.length === 1 ? 'is' : 'are'} missing in ".docs/". ` +
+          'Run /conflict-check, /architecture-diagram, and /architecture-review before landing.',
+      );
+    }
+  }
+
+  // 4e. ADR hard gate — no spec lands with a DRAFT ADR (mirrors the conduct
+  //     architecture-review gate). Scan every `.docs/decisions/adr-*.md`.
+  for (const adrFile of await listAdrFiles(decisionsDir)) {
+    const adrContent = await readFile(adrFile, 'utf-8');
+    if (hasDraftAdr(adrContent)) {
+      throw new Error(
+        `landSpec: ADR "${adrFile}" still carries "Status: DRAFT". All ADRs must be ` +
+          'APPROVED before landing. Approve the ADRs via /architecture-review, then land.',
+      );
+    }
+  }
+
   // 5. Branch, add, commit, return to default.
   const defaultBranch = await deriveDefaultBranch(repoPath);
   const slug = slugify(idea);
@@ -161,7 +205,11 @@ export async function landSpec(
   try {
     await execFile('git', ['checkout', '-b', branch, defaultBranch], { cwd: repoPath });
 
-    await execFile('git', ['add', '.docs/specs', '.docs/stories', '.docs/plans'], {
+    // Stage the whole `.docs` tree: the engineer authors specs/stories/plans +
+    // complexity + (non-Small) conflicts/architecture/decisions, and the
+    // dirty-tree guard above permits only `.docs/` untracked files — so this
+    // commits exactly the DECIDE artifacts and leaves a clean tree on checkout.
+    await execFile('git', ['add', '.docs'], {
       cwd: repoPath,
     });
     await execFile(
@@ -236,6 +284,27 @@ async function findNewestFile(dir: string): Promise<string | null> {
     }
   }
   return newest;
+}
+
+/**
+ * List `.docs/decisions/adr-*.md` files (absolute paths). Returns [] when the
+ * directory is absent or holds no ADR files.
+ */
+async function listAdrFiles(decisionsDir: string): Promise<string[]> {
+  try {
+    await access(decisionsDir);
+  } catch {
+    return [];
+  }
+  let entries;
+  try {
+    entries = await readdir(decisionsDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  return entries
+    .filter((e) => e.isFile() && /^adr-.*\.md$/i.test(String(e.name)))
+    .map((e) => join(decisionsDir, String(e.name)));
 }
 
 /** Known stub string fragments (the shipped bug). */

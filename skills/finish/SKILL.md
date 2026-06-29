@@ -78,10 +78,20 @@ describe the choice):
 - Otherwise (no remote, or `gh` unavailable/unauthenticated) → **Option 3: Keep
   as-is** — leave the work committed on the branch.
 
-In both cases write the corresponding value to `.pipeline/finish-choice` as your
-final action. The conductor's finish completion gate (artifacts.ts) requires a
-fresh `.pipeline/finish-choice` (and, for `pr`, `state.pr_url`); without it the
+In both cases write the corresponding value to `.pipeline/finish-choice`. The
+conductor's finish completion gate (artifacts.ts) requires a fresh
+`.pipeline/finish-choice` (and, for `pr`, `state.pr_url`); without it the
 feature is left "complete-but-unshipped" and the loop stalls.
+
+**Daemon mode — write markers to the worktree, before cleanup.** When the daemon
+runs finish, the feature's `.pipeline` lives in the *worktree*, but branch/PR/
+worktree cleanup (the worktree-manager agent) `cd`s into the *main* repo — so a
+relative `.pipeline/...` write can land in the wrong repo and the gate (which
+reads the worktree) never sees it. Write `finish-choice` and the `pr_url` in
+`conduct-state.json` to the **absolute worktree `.pipeline` path** (the conductor
+supplies it in the step's system prompt) and do so **before** any merge/cleanup
+step — never from inside a `cd`'d main checkout. If a PR for the branch already
+exists, reuse it (`gh pr view --json url -q .url`) rather than failing.
 
 ### 5. Execute Choice
 

@@ -121,7 +121,7 @@ export function createGithubIssuesAdapter(deps: GithubIssuesDeps): IntakeSource 
   // A `done` issue still carrying the handled label is re-emitted iff its spec PR
   // closed without merging. Merged → never reopen; open/lookup-failure → unchanged.
   async function maybeReopen(
-    repo: { name: string; path: string },
+    repo: { name: string; path: string; ghRepo?: string },
     issue: RawIssue,
     sourceRef: string,
   ): Promise<Envelope | null> {

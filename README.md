@@ -174,8 +174,11 @@ add a CSV export to the reporting tool
   → routes it across your registered projects (conduct register / create)
   → asks you to confirm:  confirm | decline | redirect <project> | create <path>
   → pulls relevant prior lessons from the engineer store into the spec
-  → runs DECIDE for real: Status: Accepted stories + plan on a spec/<slug> branch
-    (artifacts under .docs/ only; never a stub/DRAFT story, never a spawned claude)
+  → runs the FULL DECIDE phase for real, in canonical order: brainstorm → complexity →
+    stories → conflict-check → architecture-diagram → architecture-review → plan
+    (tier-aware: Small skips conflict-check + architecture); the assessed tier is
+    recorded at .docs/complexity/<slug>.md and consumed by the target's daemon
+    (artifacts under .docs/ only; never a stub/DRAFT story or DRAFT ADR, never a spawned claude)
   → opens a spec PR, then ensure-running brings up the target's daemon
 ```
 

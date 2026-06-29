@@ -2,7 +2,7 @@ import { execFile as execFileCb } from 'node:child_process';
 import { basename, isAbsolute, relative } from 'node:path';
 import { promisify } from 'node:util';
 import type { BacklogItem } from './daemon.js';
-import { planHasDependencyTree, isStoriesApproved } from './artifacts.js';
+import { planHasDependencyTree, isStoriesApproved, parseComplexityTier } from './artifacts.js';
 import { makeGitRunner, originDefaultBranch, type GitRunner } from './rebase.js';
 
 const execFile = promisify(execFileCb);
@@ -252,10 +252,17 @@ export async function discoverBacklog(
       continue;
     }
 
+    // Carry the engineer-assessed complexity tier so the daemon build honors it
+    // (Small skips acceptance_specs/retro). The marker is committed at
+    // `.docs/complexity/<plan-stem>.md` — the SAME stem as the plan — so it is
+    // resolvable here from the base-branch tree. Absent/garbled → undefined, and
+    // the daemon falls back to 'M' (legacy behavior, no breakage).
+    const tier = parseComplexityTier(await tree.readFile(`.docs/complexity/${slug}.md`));
+
     // A fresh worktree is cut from the (now fast-forwarded) default branch, so the
     // vetted stories/plan physically exist in it already — the item only needs to
-    // carry the slug; no working-tree paths to copy.
-    items.push({ slug });
+    // carry the slug (+ tier); no working-tree paths to copy.
+    items.push({ slug, tier });
   }
   return items;
 }
