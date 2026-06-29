@@ -415,6 +415,33 @@ describe('create fails → no label or comment attempted', () => {
   });
 });
 
+// ── FR-3: reverse independence — label errors must not suppress comment ───────
+
+describe('FR-3: comment is independent of label step (reverse independence)', () => {
+  it('posts comment even when ensureLabel and addLabel both throw', async () => {
+    // Label ops are best-effort; comment must run independently regardless.
+    const { git } = fakeGit(standardGitResps());
+    const { gh, calls: ghCalls } = fakeGh([
+      new Error('no PR'),               // pr view → no existing PR
+      { stdout: `${PR_URL}\n` },        // pr create → success
+      new Error('label create failed'), // ensureLabel throws
+      new Error('add-label failed'),    // addLabel throws
+      { stdout: '' },                   // pr comment → success
+    ]);
+
+    await escalateBuildFailure({
+      projectRoot: '/repo',
+      failureReason: 'tests failed',
+      runGit: git,
+      runGh: gh,
+    });
+
+    const commentCall = ghCalls.find((args) => args[0] === 'pr' && args[1] === 'comment');
+    expect(commentCall).toBeDefined();
+    expect(commentCall).toContain(PR_URL);
+  });
+});
+
 // ── FR-3: failure-reason comment ─────────────────────────────────────────────
 
 describe('FR-3: failure-reason comment', () => {

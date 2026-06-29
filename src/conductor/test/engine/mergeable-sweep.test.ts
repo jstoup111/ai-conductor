@@ -274,6 +274,37 @@ describe('sweepMergeableLabels — FR-13: MERGED / CLOSED / not-found → pruned
     expect(await readWatch(tmpDir)).toHaveLength(0);
   });
 
+  it('prunes a PR whose gh runner throws a not-found-style error (FR-13 NOTFOUND)', async () => {
+    // A genuinely deleted PR causes gh to throw with "not found" text.
+    // prMergeState classifies this as NOTFOUND; sweep must prune it.
+    const { gh } = makeFakeGh({
+      [PR_URL]: new Error('could not resolve to a PullRequest'),
+    });
+    await enrollWatch(tmpDir, entry());
+    await sweepMergeableLabels({ projectRoot: tmpDir, runGh: gh });
+    expect(await readWatch(tmpDir)).toHaveLength(0);
+  });
+
+  it('keeps entry and processes others when one PR throws a generic/transient error (FR-15)', async () => {
+    // A transient error (e.g. network timeout) must NOT prune; the entry is kept
+    // and the other entries in the registry must still be processed.
+    const logs: string[] = [];
+    const { gh, addLabelCalls } = makeFakeGh({
+      [PR_URL]: new Error('connection reset by peer'),
+      [PR_URL_2]: prViewJson('OPEN', 'MERGEABLE', [], []),
+    });
+    await enrollWatch(tmpDir, entry(PR_URL));
+    await enrollWatch(tmpDir, entry(PR_URL_2));
+    await expect(
+      sweepMergeableLabels({ projectRoot: tmpDir, runGh: gh, log: (m) => logs.push(m) }),
+    ).resolves.toBeUndefined();
+    const remaining = await readWatch(tmpDir);
+    // Transient-error entry must be kept
+    expect(remaining.some((e) => e.prUrl === PR_URL)).toBe(true);
+    // Other entry must be processed
+    expect(addLabelCalls.some((c) => c.prUrl === PR_URL_2 && c.label === 'mergeable')).toBe(true);
+  });
+
   it('keeps other entries when one is pruned', async () => {
     const { gh } = makeFakeGh({
       [PR_URL]: prViewJson('MERGED'),

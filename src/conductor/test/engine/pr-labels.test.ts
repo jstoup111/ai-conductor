@@ -252,8 +252,8 @@ describe('prMergeState + isMergeable', () => {
     expect(isMergeable(result)).toBe(false);
   });
 
-  it('runner error → safe sentinel (UNKNOWN/UNKNOWN/true), does not throw, isMergeable false', async () => {
-    const { gh } = fakeGh([new Error('gh: not found')]);
+  it('runner error (transient/generic) → UNKNOWN sentinel, does not throw, isMergeable false', async () => {
+    const { gh } = fakeGh([new Error('rate limited')]);
     let threw = false;
     let result: Awaited<ReturnType<typeof prMergeState>> | undefined;
     try {
@@ -269,6 +269,79 @@ describe('prMergeState + isMergeable', () => {
       labels: [],
     });
     expect(isMergeable(result!)).toBe(false);
+  });
+
+  it('not-found error → NOTFOUND sentinel, does not throw, isMergeable false', async () => {
+    const { gh } = fakeGh([new Error('could not resolve to a PullRequest')]);
+    let threw = false;
+    let result: Awaited<ReturnType<typeof prMergeState>> | undefined;
+    try {
+      result = await prMergeState(gh, '/repo', TEST_PR_URL);
+    } catch {
+      threw = true;
+    }
+    expect(threw).toBe(false);
+    expect(result).toMatchObject({
+      state: 'NOTFOUND',
+      mergeable: 'UNKNOWN',
+      hasFailingOrPendingChecks: true,
+      labels: [],
+    });
+    expect(isMergeable(result!)).toBe(false);
+  });
+
+  it('404 error text → NOTFOUND sentinel', async () => {
+    const { gh } = fakeGh([new Error('HTTP 404: no such pull request')]);
+    const result = await prMergeState(gh, '/repo', TEST_PR_URL);
+    expect(result.state).toBe('NOTFOUND');
+  });
+
+  it('conclusion=TIMED_OUT → hasFailingOrPendingChecks true → isMergeable false', async () => {
+    const { gh } = fakeGh([
+      {
+        stdout: JSON.stringify({
+          state: 'OPEN',
+          mergeable: 'MERGEABLE',
+          statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'TIMED_OUT' }],
+          labels: [],
+        }),
+      },
+    ]);
+    const result = await prMergeState(gh, '/repo', TEST_PR_URL);
+    expect(result.hasFailingOrPendingChecks).toBe(true);
+    expect(isMergeable(result)).toBe(false);
+  });
+
+  it('conclusion=ERROR → hasFailingOrPendingChecks true → isMergeable false', async () => {
+    const { gh } = fakeGh([
+      {
+        stdout: JSON.stringify({
+          state: 'OPEN',
+          mergeable: 'MERGEABLE',
+          statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'ERROR' }],
+          labels: [],
+        }),
+      },
+    ]);
+    const result = await prMergeState(gh, '/repo', TEST_PR_URL);
+    expect(result.hasFailingOrPendingChecks).toBe(true);
+    expect(isMergeable(result)).toBe(false);
+  });
+
+  it('statusCheckRollup key absent from JSON entirely → hasFailingOrPendingChecks false → isMergeable true', async () => {
+    const { gh } = fakeGh([
+      {
+        stdout: JSON.stringify({
+          state: 'OPEN',
+          mergeable: 'MERGEABLE',
+          labels: [],
+          // statusCheckRollup intentionally omitted
+        }),
+      },
+    ]);
+    const result = await prMergeState(gh, '/repo', TEST_PR_URL);
+    expect(result.hasFailingOrPendingChecks).toBe(false);
+    expect(isMergeable(result)).toBe(true);
   });
 
   it('parses the labels array into a string[]', async () => {

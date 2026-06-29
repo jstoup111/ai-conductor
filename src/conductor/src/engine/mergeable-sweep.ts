@@ -125,13 +125,20 @@ export async function sweepMergeableLabels({ projectRoot, log, runGh }: SweepOpt
       try {
         const state = await prMergeState(gh, entry.repoCwd, entry.prUrl, log);
 
-        // FR-13: MERGED / CLOSED → prune from registry.
-        if (state.state === 'MERGED' || state.state === 'CLOSED') {
+        // FR-13: MERGED / CLOSED / NOTFOUND → prune from registry.
+        // NOTFOUND means the PR is genuinely gone (404 / deleted); prune it so
+        // the watch registry does not grow without bound.
+        if (
+          state.state === 'MERGED' ||
+          state.state === 'CLOSED' ||
+          state.state === 'NOTFOUND'
+        ) {
           log?.(`[mergeable-sweep] pruning ${entry.prUrl} (state: ${state.state})`);
           continue; // not added to survivors
         }
 
-        // FR-15: UNKNOWN state (read/fetch error) → log + skip this iteration.
+        // FR-15: UNKNOWN state (transient read/fetch error) → log + skip this
+        // iteration; keep the entry so it is retried on the next sweep cycle.
         if (state.state === 'UNKNOWN') {
           log?.(`[mergeable-sweep] skipping ${entry.prUrl} (could not read state)`);
           survivors.push(entry);

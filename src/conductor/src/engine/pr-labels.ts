@@ -119,7 +119,7 @@ export interface PrMergeState {
   labels: string[];
 }
 
-/** Safe sentinel returned when the gh runner fails. */
+/** Safe sentinel returned when the gh runner fails with a transient/unknown error. */
 const ERROR_SENTINEL: PrMergeState = {
   state: 'UNKNOWN',
   mergeable: 'UNKNOWN',
@@ -127,8 +127,46 @@ const ERROR_SENTINEL: PrMergeState = {
   labels: [],
 };
 
-/** The set of status/conclusion values that indicate a check is failing or still pending. */
-const FAILING_OR_PENDING = new Set(['FAILURE', 'ERROR', 'PENDING']);
+/**
+ * Sentinel returned when the gh runner fails because the PR is genuinely gone
+ * (404 / deleted / "could not resolve"). Distinct from UNKNOWN so that the
+ * sweep can prune these entries (FR-13) without pruning on transient errors.
+ */
+const NOTFOUND_SENTINEL: PrMergeState = {
+  state: 'NOTFOUND',
+  mergeable: 'UNKNOWN',
+  hasFailingOrPendingChecks: true,
+  labels: [],
+};
+
+/** Patterns whose presence in an error message indicate a PR is genuinely gone. */
+const NOT_FOUND_PATTERNS = [
+  'not found',
+  'could not resolve',
+  'no pull requests',
+  '404',
+  'no such',
+];
+
+function isNotFoundError(err: unknown): boolean {
+  const msg = String(err instanceof Error ? err.message : err).toLowerCase();
+  return NOT_FOUND_PATTERNS.some((p) => msg.includes(p));
+}
+
+/**
+ * The set of status/conclusion values that indicate a check is failing or
+ * still pending (blocking merge). This includes terminal failure conclusions
+ * as well as in-progress/pending states.
+ */
+const FAILING_OR_PENDING = new Set([
+  'FAILURE',
+  'ERROR',
+  'PENDING',
+  'TIMED_OUT',
+  'ACTION_REQUIRED',
+  'STARTUP_FAILURE',
+  'CANCELLED',
+]);
 
 function isCheckFailingOrPending(c: {
   status?: string | null;
@@ -178,6 +216,12 @@ export async function prMergeState(
     return { state, mergeable, hasFailingOrPendingChecks, labels };
   } catch (err) {
     log?.(`[pr-labels] prMergeState(${prUrl}) error: ${err}`);
+    // Classify the error: a genuinely gone PR returns NOTFOUND so the sweep can
+    // prune it (FR-13). A transient/unknown error returns UNKNOWN so the sweep
+    // keeps the entry and retries next cycle (FR-15).
+    if (isNotFoundError(err)) {
+      return { ...NOTFOUND_SENTINEL };
+    }
     return { ...ERROR_SENTINEL };
   }
 }
