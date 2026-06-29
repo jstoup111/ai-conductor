@@ -393,7 +393,14 @@ export async function performRebase(
   const mergeBase = (await git(['merge-base', 'HEAD', base.ref])).stdout.trim();
   const featureAdditions = await captureFeatureChangelog(git, mergeBase || base.ref);
 
-  const rebase = await git(['rebase', base.ref]);
+  // `--autostash`: a daemon build/lint step can leave uncommitted changes in the
+  // worktree (e.g. a formatter dropping an unused import without committing).
+  // Plain `git rebase` refuses with "cannot rebase: You have unstaged changes",
+  // which surfaces below as a 0-conflict failure and gets mis-parked as a "rebase
+  // conflict" the operator can't resolve. Autostash stashes those changes, rebases,
+  // and reapplies them — so a clean rebase still succeeds with a dirty tree. (A
+  // genuine overlap makes the autostash pop conflict, still caught below.)
+  const rebase = await git(['rebase', '--autostash', base.ref]);
   if (rebase.exitCode === 0) {
     return classifyClean(git, preTree);
   }

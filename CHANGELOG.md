@@ -17,6 +17,13 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   branches — it commits only to the current feature branch. Prevents the mid-build auto-rebase onto
   a moved `origin/main` that stalled a feature branch in a CHANGELOG conflict. Reaffirms that the
   only sanctioned rebase is the daemon's finish-time, daemon-gated rebase-onto-latest.
+- **Type-check gate in the TDD DOMAIN/COMMIT phase.** The post-GREEN DOMAIN phase now runs the
+  project's type-checker (e.g. `tsc --noEmit` / `npm run typecheck`) as a mechanical pre-check
+  before the domain reviewer is dispatched — a type error returns straight to GREEN rather than
+  shipping to batch, PR, or CI. Re-confirmed at the COMMIT hard gate. Conditional on tech-context:
+  skipped silently for stacks with no compile step (e.g. Rails). Catches stale imports / renamed
+  properties / signature drift introduced by the GREEN agent at the cheapest point — the cycle
+  boundary — instead of at PR-creation time (`/pr`) as it does today.
 - **Negative-path category: invariant side-effect on alternate branches (stories).**
   Adds a mandatory negative-path category to `/stories`: when a happy path delegates a critical
   side effect (record/ledger write, cleanup, metric, cache invalidation) to a helper, every
@@ -124,6 +131,18 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   `git rm`.
 
 ### Fixed
+
+- **Daemon rebase step now uses `git rebase --autostash`, so a dirty worktree no
+  longer mis-parks as a "rebase conflict" the operator can't resolve.** A build or
+  lint step can leave uncommitted changes in the worktree (e.g. a formatter
+  dropping an unused import without committing). Plain `git rebase` refuses with
+  *"cannot rebase: You have unstaged changes"*; `performRebase` saw a non-zero exit
+  with **zero unmerged files** and HALTed it as a `conflict_halt` whose reason was
+  the unstaged-changes error — leaving the feature stuck in a re-kick loop that
+  could never succeed (the dirty tree blocked every retry). `--autostash` stashes
+  the stray changes, rebases, and reapplies them, so a clean (non-overlapping)
+  rebase succeeds with a dirty tree. A genuine overlapping conflict still HALTs
+  (covered by a new real-git test alongside the dirty-tree case).
 
 - **Daemon now fast-forwards its root checkout on each idle poll and cuts
   worktrees from fresh `main` — eliminating spurious `ENOENT` HALTs when local
