@@ -186,9 +186,16 @@ export async function migrateMemory(
 
   // `.memory/` is a real directory — proceed with migration.
 
-  // ── A18: Backup ────────────────────────────────────────────────────────────
+  // ── A18/A20: Backup ────────────────────────────────────────────────────────
   // Copy (not move) original to backup, retaining it for A22 reverse.
-  await copyAll(memPath, backupPath);
+  // A20 re-entrancy: if a backup already exists from a prior interrupted run,
+  // skip re-backup — the original content is still safe in the backup.
+  const backupExists = await lstat(backupPath)
+    .then(() => true)
+    .catch(() => false);
+  if (!backupExists) {
+    await copyAll(memPath, backupPath);
+  }
 
   // ── A18: Copy into canonical store (union / no-overwrite) ──────────────────
   const canonicalHarness = await getCanonicalHarnessDir(repoPath);
@@ -214,6 +221,15 @@ export async function migrateMemory(
       'Migration verification failed: not all entries could be confirmed in ' +
         'the canonical store. Original .memory/ is intact — no swap performed.',
     );
+  }
+
+  // ── A20: failBeforeSwap hook ────────────────────────────────────────────────
+  // Injectable interruption point. If it throws, the swap is skipped and .memory/
+  // remains a real dir. A subsequent plain re-run detects the real dir, skips the
+  // already-present backup, re-runs copy (union/no-overwrite, nothing new to add),
+  // re-verifies, and completes — losing no entry (A20 re-entrancy guarantee).
+  if (_opts.failBeforeSwap) {
+    await _opts.failBeforeSwap();
   }
 
   // ── A18: Swap ──────────────────────────────────────────────────────────────
