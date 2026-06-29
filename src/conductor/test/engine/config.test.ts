@@ -433,6 +433,35 @@ complexity:
     });
   });
 
+  // Task A4 (ADR-016): memory_provider config field
+  describe('memory_provider config field', () => {
+    it('accepts memory_provider: local and exposes it on the parsed config', () => {
+      const result = validateConfig({ memory_provider: 'local' });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.memory_provider).toBe('local');
+    });
+
+    it('accepts memory_provider alongside other plugin selections', () => {
+      const result = validateConfig({
+        llm_provider: 'claude',
+        ui_renderer: 'terminal',
+        memory_provider: 'local',
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.memory_provider).toBe('local');
+      expect(result.config.llm_provider).toBe('claude');
+    });
+
+    it('memory_provider: absent is fine — field is optional', () => {
+      const result = validateConfig({ harness_version: '>=1.0.0' });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.memory_provider).toBeUndefined();
+    });
+  });
+
   describe('adapters', () => {
     it('disabledStepNames returns names whose block has disable=true', () => {
       expect(

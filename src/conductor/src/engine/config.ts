@@ -145,6 +145,12 @@ export function validateConfig(
     'markdown_viewer',
     'assess',
     'acceptance_spec_globs',
+    // Plugin selections (ADR-015/016)
+    'llm_provider',
+    'ui_renderer',
+    'memory_provider',
+    // Observability
+    'otel',
   ]);
   for (const key of Object.keys(obj)) {
     if (!knownTopLevelKeys.has(key)) {
