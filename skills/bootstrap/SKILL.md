@@ -271,9 +271,15 @@ background jobs, key architecture-shaping libraries.
 
 ### 5. Set Up Project Directories
 
-Create if missing (idempotent): `.memory/` (decisions/, patterns/, gotchas/, context/,
-index.md), `.pipeline/` (audit-trail/), `.worktrees/`, `.docs/` (specs/, stories/, conflicts/,
-plans/, decisions/, retros/).
+**`.memory/` is set up by the harness, not by this skill.** `bin/conduct` calls
+`conduct-ts memory setup <dir>` before any bootstrap sub-step runs. This creates a canonical
+per-project store at `~/.ai-conductor/memory/<key>/harness/` and makes `.memory/` a symlink to
+it (ADR-017). If `.memory/` already exists as a real directory (legacy), it is migrated via
+copy-verify-swap before the symlink is created (ADR-020). **Do NOT create or mkdir `.memory/`
+yourself** — it will already be a symlink when this skill runs.
+
+Create if missing (idempotent): `.pipeline/` (audit-trail/), `.worktrees/`, `.docs/` (specs/,
+stories/, conflicts/, plans/, decisions/, retros/).
 
 Add to `.gitignore` (idempotent — don't duplicate):
 - `.pipeline/` — runtime state, not source

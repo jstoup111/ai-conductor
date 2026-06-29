@@ -47,6 +47,7 @@ import type { UISubscriber } from "./ui/types.js";
 import type { VisualizerPlugin } from './types/plugin.js';
 import { detectRegistryCommand, dispatchRegistry } from './engine/registry-cli.js';
 import { detectEngineerCommand, dispatchEngineer } from './engine/engineer-cli.js';
+import { detectMemoryCommand, dispatchMemorySetup } from './engine/memory-cli.js';
 import { detectDaemonCommand } from './engine/daemon-command.js';
 import {
   detectDaemonObserveCommand,
@@ -198,6 +199,16 @@ async function cleanupMergedWorktrees(
 // --- Main ---
 
 async function main(): Promise<void> {
+  // Memory setup subcommand (`conduct memory setup [dir]`, ADR-017) runs
+  // NON-INTERACTIVELY and exits — creates/migrates the canonical per-project
+  // store + .memory symlink. Dispatched first so bin/conduct can call it
+  // before the interactive pipeline or Claude sessions start.
+  const memoryCmd = detectMemoryCommand(process.argv);
+  if (memoryCmd) {
+    const code = await dispatchMemorySetup(memoryCmd);
+    process.exit(code);
+  }
+
   // Registry subcommands (Phase 9.2) run NON-INTERACTIVELY and exit — they must
   // not boot the interactive pipeline / live region. Dispatch them before
   // parseArgs (whose "feature description required" rule doesn't apply here).
