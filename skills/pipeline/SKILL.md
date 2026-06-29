@@ -143,6 +143,14 @@ are ephemeral and lost between sessions. Write to the JSON file at each task bou
 The subagent does NOT receive the full plan, all stories, or prior task history.
 The subagent handles the commit as part of the TDD COMMIT phase.
 
+**No branch hygiene by the subagent — stay on the branch as-is.** Every dispatch prompt MUST
+instruct the implementation subagent to NOT run `git fetch`, `git pull`, `git rebase`, or switch
+branches. It commits only to the current feature branch. Mid-build fetch/rebase is how a feature
+branch silently auto-rebased onto a moved `origin/main` and stalled in a CHANGELOG conflict that
+blocked the commit. The **only** sanctioned rebase is the daemon's finish-time rebase-onto-latest
+(9.0, with conflict → HALT + CHANGELOG auto-resolver); it is daemon-gated and runs outside the
+per-task loop. Implementation agents never integrate upstream themselves.
+
 **Context efficiency:** Do not inline file contents in subagent prompts. Provide: file path,
 line range of interest, and method signature. The subagent reads files as needed. For
 sequential tasks on the same files, reuse the existing subagent via SendMessage instead of

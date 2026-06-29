@@ -12,6 +12,11 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- **Implementation subagents must not fetch/rebase/pull (pipeline).** Every per-task dispatch
+  prompt now instructs the implementation subagent to NOT run `git fetch`/`pull`/`rebase` or switch
+  branches — it commits only to the current feature branch. Prevents the mid-build auto-rebase onto
+  a moved `origin/main` that stalled a feature branch in a CHANGELOG conflict. Reaffirms that the
+  only sanctioned rebase is the daemon's finish-time, daemon-gated rebase-onto-latest.
 - **Negative-path category: invariant side-effect on alternate branches (stories).**
   Adds a mandatory negative-path category to `/stories`: when a happy path delegates a critical
   side effect (record/ledger write, cleanup, metric, cache invalidation) to a helper, every
