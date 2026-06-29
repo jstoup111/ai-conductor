@@ -94,6 +94,7 @@ standard implementation, Haiku for mechanical checks.
 | manual-test | sonnet | Structured validation against stories — pattern-following |
 | prd-audit | opus | Cross-references PRD intent vs shipped implementation across two domains (spec + code) — deep reasoning |
 | remediate | opus | Reasons over blocking audit gaps to assign a disposition (build/specs/arch/plan) + concrete tasks, or HALT (architectural-clarity / product-scope) — judgment-heavy routing |
+| rebase | opus | Conflict resolution requires understanding both sides of a hunk and making a semantic merge judgment — reasoning-heavy |
 | retro | sonnet | Structured analysis from concrete data; Part C (context efficiency) is checklist-based |
 | pr | sonnet | Diff analysis and structured PR body — templated output |
 | bootstrap | sonnet | Detection and scaffolding — largely mechanical |

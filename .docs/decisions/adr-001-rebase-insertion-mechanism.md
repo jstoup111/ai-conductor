@@ -1,9 +1,15 @@
 # ADR 001: Rebase-on-latest insertion mechanism
 
 **Date:** 2026-06-25
-**Status:** APPROVED
+**Status:** APPROVED (amended in part by `adr-2026-06-29-rebase-conflict-resolution-dispatch`)
 **Deciders:** James (solo dev) + harness architecture-review
 **Feature:** Phase 9.0 — daemon rebase-on-latest + conflict→HALT
+
+> **Amendment (2026-06-29):** the "must not dispatch a prompt" constraint is narrowed by
+> `adr-2026-06-29-rebase-conflict-resolution-dispatch`. The rebase step may now dispatch a Claude
+> `rebase` skill **only** on the `conflict_halt` sub-path (bounded, configurable, `0`=disabled).
+> Detection and the satisfied predicate (this ADR's critical "never report a stale branch
+> satisfied" property) remain engine-native and unchanged.
 
 ## Context
 

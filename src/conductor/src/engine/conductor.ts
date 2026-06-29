@@ -47,7 +47,7 @@ import {
   sweepStaleReviewArtifacts,
   type RemediationGap,
 } from './artifacts.js';
-import { resolveStepConfig } from './resolved-config.js';
+import { resolveStepConfig, resolveRebaseResolutionAttempts } from './resolved-config.js';
 import { selectNextGate } from './selector.js';
 import { computeAndWriteVerdict, readAllVerdicts } from './gate-verdicts.js';
 import { WorktreeManager } from './worktree.js';
@@ -60,11 +60,15 @@ import {
 import {
   makeGitRunner,
   performRebase,
+  resolveRebaseConflicts,
   applyRebaseVerdicts,
   emitRebaseEvent,
   writeHalt,
   originDefaultBranch,
   type RebaseOutcome,
+  type ResolutionContext,
+  type ResolutionAttempt,
+  type RebaseResolver,
 } from './rebase.js';
 
 export type CheckpointResponse = 'continue' | 'back' | 'quit';
@@ -195,6 +199,23 @@ export interface StepRunner {
    * Called by the conductor when `sessionExpired` is reported.
    */
   resetSession?(): Promise<void>;
+  /**
+   * Attempt to resolve a paused rebase conflict in the feature worktree.
+   * Called by the conductor's engine-native rebase step (daemon only) when
+   * a `conflict_halt` outcome is produced and `rebase_resolution_attempts > 0`.
+   *
+   * The implementation MUST resolve the conflict files, stage them (`git add`),
+   * and run `git rebase --continue` so the rebase finishes. Returning
+   * `{ resolved: true }` when the rebase is NOT actually finished is treated as
+   * a failed attempt (counted toward the cap but retried). Returning
+   * `{ resolved: false, reason }` short-circuits all remaining attempts
+   * (the conductor HALTs immediately with `reason` in the HALT file).
+   *
+   * Errors thrown by this method are caught and converted to
+   * `{ resolved: false, reason: error.message }`, so an uncaught exception
+   * degrades gracefully to a conflict HALT.
+   */
+  resolveRebaseConflict?(ctx: ResolutionContext): Promise<ResolutionAttempt>;
 }
 
 export type ArtifactReviewResult = 'approved' | 'rejected' | 'skip';
@@ -1512,6 +1533,45 @@ export class Conductor {
         reason: err instanceof Error ? err.message : String(err),
       };
     }
+
+    // ── Gated conflict-resolution sub-loop (feat/rebase-resolution-skill) ────
+    // When a conflict_halt occurs and the StepRunner provides a resolver, attempt
+    // to resolve it up to `cap` times before falling back to the HALT path.
+    // cap === 0 (or no resolveRebaseConflict method) → immediate HALT, unchanged
+    // from pre-resolution behavior (FR-7).
+    if (outcome.kind === 'conflict_halt') {
+      const cap = resolveRebaseResolutionAttempts(this.config);
+      if (cap > 0 && this.stepRunner.resolveRebaseConflict) {
+        let attempt = 0;
+        const resolver: RebaseResolver = async (ctx: ResolutionContext) => {
+          attempt += 1;
+          try {
+            await this.events.emit({ type: 'rebase_resolution_attempt', index: attempt, cap });
+          } catch {
+            /* best-effort: event emission must not block resolution */
+          }
+          try {
+            return await this.stepRunner.resolveRebaseConflict!(ctx);
+          } catch (err) {
+            return {
+              resolved: false,
+              reason: err instanceof Error ? err.message : String(err),
+            } satisfies ResolutionAttempt;
+          }
+        };
+        outcome = await resolveRebaseConflicts(git, this.projectRoot, outcome, resolver, cap);
+        try {
+          await this.events.emit(
+            outcome.kind === 'conflict_halt'
+              ? { type: 'rebase_resolution_exhausted' }
+              : { type: 'rebase_resolution_succeeded' },
+          );
+        } catch {
+          /* best-effort */
+        }
+      }
+    }
+
     this.lastRebaseOutcome = outcome;
 
     // manual_test counts as "ran" when it isn't skipped for this feature.
