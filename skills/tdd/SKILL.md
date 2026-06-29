@@ -88,6 +88,14 @@ See `references/drill-down.md` for nested TDD cycle instructions.
 
 ### Phase 4: DOMAIN (Post-GREEN)
 
+**Mechanical pre-check (before dispatching the reviewer):** If tech-context defines a type-check
+command for a statically-typed stack (e.g. `tsc --noEmit` / `npm run typecheck` for TypeScript),
+run it now. A type error returns straight to GREEN — do NOT dispatch the domain reviewer (or
+advance to COMMIT) against code that does not type-check. This catches stale imports, renamed
+properties, and signature drift introduced by the GREEN agent at the cheapest point — the cycle
+boundary — instead of at batch, PR, or CI time. Skip silently for stacks with no compile step
+(e.g. Rails — the linter at COMMIT covers static checks there).
+
 **Agent:** Domain Reviewer (see `agents/domain-reviewer.md` for full criteria)
 **Goal:** Review the implementation for domain integrity — primitive obsession, leaky
 abstractions, missing domain types, naming, and **derivation-reached-at-every-call-site** (every
@@ -100,10 +108,12 @@ inputs without failing open or closed). Has veto authority to send back to GREEN
 
 1. Full test suite passes (not just the new test)
 2. Linter passes (if tech-context specifies one — e.g., `bundle exec standardrb` for Rails)
-3. Working tree is clean (no uncommitted changes outside this task)
-4. **Commit immediately** — do not defer commits to end of cycle or batch. Connection
+3. Type-check passes (if tech-context specifies a type-checker — e.g., `tsc --noEmit` /
+   `npm run typecheck` for TypeScript). Already run as the Phase 4 pre-check; re-confirm clean here.
+4. Working tree is clean (no uncommitted changes outside this task)
+5. **Commit immediately** — do not defer commits to end of cycle or batch. Connection
    interruptions lose uncommitted work. Commit as soon as GREEN passes and linter is clean.
-5. Commit with descriptive message referencing the behavior added
+6. Commit with descriptive message referencing the behavior added
 
 **After commit:** Return to RED for the next cycle, or stop if all criteria for the current
 task are covered.
@@ -205,6 +215,7 @@ No narration, no explanation of what just happened, no preview of what comes nex
 - [ ] Domain review ran after GREEN (implementation reviewed)
 - [ ] Full test suite passes before commit
 - [ ] Linter passes before commit
+- [ ] Type-check passes before commit (typed stacks — run as the Phase 4 pre-check; skipped for stacks with no compile step)
 - [ ] Working tree clean at commit
 - [ ] One behavior per cycle (not multiple changes lumped together)
 - [ ] Every `app/` file has a corresponding spec file (unit + request where applicable)
