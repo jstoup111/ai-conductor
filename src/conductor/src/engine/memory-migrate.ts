@@ -26,7 +26,7 @@
  * index does not already contain that path reference.
  */
 
-import { appendFile, copyFile, lstat, mkdir, readdir, readFile, rm, symlink } from 'fs/promises';
+import { appendFile, copyFile, lstat, mkdir, readdir, readFile, rm, symlink, unlink } from 'fs/promises';
 import { join } from 'path';
 import { homedir } from 'os';
 import { projectKey } from './memory-store.js';
@@ -219,9 +219,31 @@ export async function migrateMemory(
   const memPath = join(repoPath, '.memory');
   const backupPath = join(repoPath, '.memory.pre-migrate.bak');
 
-  // ── A22: Reverse (not yet implemented) ────────────────────────────────────
+  // ── A22: Reverse ───────────────────────────────────────────────────────────
+  // Restore `.memory.pre-migrate.bak/` as a real in-tree `.memory/`, returning
+  // the project to its pre-migration state (one-time rollback, FR-11).
   if (_opts.reverse) {
-    throw new Error('Reverse not yet implemented (A22).');
+    const backupStat = await lstat(backupPath).catch(() => null);
+    if (!backupStat) {
+      throw new Error(
+        'Cannot reverse: no backup found at .memory.pre-migrate.bak — ' +
+          'migration may not have been performed yet.',
+      );
+    }
+
+    // Remove current .memory (symlink or real dir).
+    const currentStat = await lstat(memPath).catch(() => null);
+    if (currentStat) {
+      if (currentStat.isSymbolicLink()) {
+        await unlink(memPath);
+      } else {
+        await rm(memPath, { recursive: true, force: true });
+      }
+    }
+
+    // Restore backup as a real directory.
+    await copyAll(backupPath, memPath);
+    return;
   }
 
   // ── A17: Detect ────────────────────────────────────────────────────────────
