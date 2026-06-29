@@ -618,7 +618,11 @@ export async function dispatchEngineer(
         );
       }
 
-      // Fire-and-forget ensureRunning. NEVER blocks on failure.
+      // Fire-and-forget ensureRunning. NEVER blocks on failure — but never silent:
+      // the ADR-014 launch path hosts the daemon in a tmux session, so a tmux-less
+      // host throws TmuxNotInstalledError here. Swallowing it would author the spec
+      // while launching no daemon (specs pile up unbuilt with no signal). Surface
+      // the reason on stderr; the handoff still succeeds.
       try {
         const launchFn = opts.ensureRunningLaunch;
         if (launchFn) {
@@ -626,8 +630,11 @@ export async function dispatchEngineer(
         } else {
           await ensureRunning(target.canonicalPath, {});
         }
-      } catch {
-        // Swallow: ensure-running failure must never abort handoff.
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        printErr(
+          `⚠ Spec authored, but the build daemon was not started for "${target.name}": ${reason}`,
+        );
       }
 
       return 0;

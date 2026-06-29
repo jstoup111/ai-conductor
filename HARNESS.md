@@ -274,6 +274,34 @@ conduct --update               # force an update check now
 The `updateChannel` setting is per-user (lives in `~/.claude/`), so every
 project using this harness inherits the same channel.
 
+## Daemon CLI
+
+The per-repo build daemon is driven by the **`conduct-ts`** binary. **Use `conduct-ts`,
+NOT the `conduct` bash wrapper, for daemon subcommands** — `conduct daemon status`
+mis-routes to a feature build; only `conduct-ts daemon …` reaches the daemon commands.
+
+The daemon is hosted as a **foreground process inside a per-repo tmux session**
+(`cc-daemon-<slug>`), so you can attach to, restart, and debug a *running* daemon on demand
+— in color. Management requires `tmux` on the host; the daemon itself still builds with no
+tmux present (management is purely additive).
+
+| Command | What it does |
+|---------|--------------|
+| `conduct-ts daemon start` | Start the repo's daemon in a tmux session. **Idempotent** — a no-op if one is already running (never a duplicate). |
+| `conduct-ts daemon stop` | Stop the repo's daemon (kills the session, releases the lock). Safe no-op if not running. |
+| `conduct-ts daemon restart` | Restart the daemon — fresh inner process, same session endpoint. |
+| `conduct-ts daemon connect` | Attach **read-only** to watch the live, full-color output. Detach with `Ctrl-b d`; the daemon keeps running. |
+| `conduct-ts daemon debug` | Attach **read/write** — `Ctrl-c` to pause the loop, inspect, then resume/restart. |
+| `conduct-ts daemon status` | Liveness of every registered repo's daemon (running / stale / stopped, pid, started-at, last activity, **session up/down**) |
+| `conduct-ts daemon logs [--follow] [--all] [--repo <path>]` | Tail `.daemon/daemon.log` (ANSI-stripped) for this repo, all registered repos, or a named one |
+| `conduct-ts daemon --continuous` | Run a daemon in the **foreground**, idle-polling forever (omit `--max-idle-polls` ⇒ Infinity). This is the process tmux hosts. |
+| `conduct-ts daemon` | Drain the current backlog once, then exit (add `--max-idle-polls N` to self-limit after N idle polls) |
+
+One daemon per repo, enforced by the pidfile lock at `.daemon/daemon.pid` (stale dead-pid
+locks self-reclaim) underneath the tmux session. The daemon runs **serially** (one feature at a
+time), so `connect` always shows exactly the feature currently building. A host reboot drops
+tmux sessions; the next `daemon start` (or engineer nudge) respawns.
+
 ## Key Conventions
 
 - One skill, one responsibility, one enforcement level

@@ -10,8 +10,37 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ## [Unreleased]
 
+## Migration
+
+The build daemon is now hosted inside a tmux session instead of a detached background process.
+Any daemon currently running as a detached process must be stopped once so the first
+tmux-hosted `daemon start` isn't blocked by the 1-per-repo pidfile lock. This kills only a live
+detached daemon for the current repo; a stale lock self-reclaims and needs nothing.
+
+```bash migration
+# Stop a currently-detached daemon for this repo (no-op if none / already stale).
+if [ -f .daemon/daemon.pid ]; then
+  pid=$(jq -r '.pid // empty' .daemon/daemon.pid 2>/dev/null || true)
+  if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+    kill "$pid" 2>/dev/null || true
+    echo "Stopped detached daemon (pid $pid). Start the tmux-hosted daemon with: conduct-ts daemon start"
+  else
+    echo "No live detached daemon (stale lock self-reclaims). Use: conduct-ts daemon start"
+  fi
+fi
+# Requires tmux on the host for the management verbs: e.g. `sudo apt-get install tmux`.
+```
+
 ### Fixed
 
+- **Silent daemon-launch failure on a tmux-less host (engineer).** The engineer's fire-and-forget
+  `ensureRunning` nudge is the only production path that starts a daemon, and under the
+  daemon-supervisor ADR it now routes through `supervisor.start` (tmux). On a host without tmux that throws
+  `TmuxNotInstalledError`, which the handoff caught and **silently swallowed** — authoring the spec
+  PR while launching no daemon, so specs would pile up unbuilt with no signal. Both handoff sites
+  (`engineer-cli.ts` claim path and `handoff-step.ts`) now keep the failure **non-blocking** (the
+  spec branch still lands) but **surface the reason** (`⚠ Spec authored, but the build daemon was not
+  started for "<repo>": <reason>`). No change on a tmux-present host.
 - **Type error in the github-issues intake adapter (conduct-ts).** `maybeReopen` typed its `repo`
   parameter as `{ name; path }`, omitting the `ghRepo?` field that `RepoLister.list()` actually
   provides and that the function body reads (`repo.ghRepo ?? repo.name`). This produced a
@@ -29,6 +58,28 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- **tmux-supervised daemons — start / stop / restart / connect / debug (conduct-ts).** The per-repo
+  build daemon is now hosted as a **foreground process inside a per-repo tmux session**
+  (`cc-daemon-<slug>`) behind a swappable **Supervisor port** (tmux adapter now; a kubectl adapter
+  later, no execution-core change). New operator verbs: `conduct-ts daemon start` (idempotent — never
+  a duplicate), `stop`, `restart`, `connect` (read-only live colored watch), `debug` (read/write
+  attach). `daemon status` now also reports tmux **session up/down** (so a stale pidfile with a live
+  orphaned session is distinguishable). The former detached `stdio:'ignore'` spawn (the launch helper,
+  renamed `launchDaemonDetached` → `launchDaemon`) now delegates to `supervisor.start`, so an
+  engineer-nudged daemon is also attachable — while the engineer stays **launch-only** (ADR-005
+  non-management intent preserved; the daemon-supervisor ADR supersedes only the spawn mechanism).
+  The daemon runs **serially** (concurrency clamped to 1; `--concurrency > 1`
+  is clamped with a logged note). The tmux-hosted daemon is **long-lived by design** — the session
+  command is `conduct-ts daemon --continuous` and deliberately drops the former engineer launch's
+  `--max-idle-polls` self-limit so an operator can attach to a running daemon at any time; its bound
+  is the operator `stop` verb (and reboot), not an idle timeout (daemon-supervisor ADR §7). The
+  intake/execute **work-source seam** is formalized (the run loop
+  consumes `BacklogItem`s from an injected source; local in-process adapter unchanged). The daemon
+  still builds with **no tmux present** (management is purely additive — bare-run invariant).
+  `bin/conduct` now forwards `daemon <verb>` to `conduct-ts` (previously `conduct daemon status`
+  mis-launched a feature build named "status"). See
+  `.docs/decisions/adr-2026-06-29-daemon-supervisor-port-and-attachable-hosting.md` and
+  `.docs/plans/2026-06-29-daemon-tmux-supervisor.md`.
 - **Gated rebase-conflict resolution + attempt-cap config (conduct-ts).** The daemon's
   finish-time `rebase` step now attempts skill-driven conflict resolution (via the new
   `/rebase` skill) before HALTing on a non-CHANGELOG conflict. The number of attempts is

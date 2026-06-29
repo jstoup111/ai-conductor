@@ -1,83 +1,57 @@
-// daemon-launch.ts — Fire-and-forget daemon spawn helper (FR-8, Task 27).
+// daemon-launch.ts — Fire-and-forget daemon launch helper (FR-8; ADR-005 intent,
+// ADR-014 mechanism).
 //
-// launchDaemonDetached spawns a build daemon process completely detached from
-// the parent. The parent retains NO handle, IPC channel, or supervision over
-// the child after this call returns.
+// launchDaemon starts a build daemon for a repo and retains NO handle,
+// IPC channel, or supervision over it. ADR-014 changes the MECHANISM (not the
+// non-management guarantee): instead of a detached `stdio:'ignore'` node spawn,
+// the daemon is hosted as a FOREGROUND process inside a per-repo tmux session
+// (via the Supervisor port's idempotent `start`). The session owns an attachable
+// PTY so an OPERATOR can connect/debug/restart it — but the engineer that calls
+// this helper still cannot: it gets no handle, no IPC, no control connection, and
+// writes no supervision state. "Launch ≠ manage" (ADR-005 FR-8) is preserved.
 //
 // Design decisions:
-//   - detached:true + stdio:'ignore' — child lives in its own session; the
-//     parent's file descriptors are not inherited, preventing fd leaks.
-//   - child.unref() — allows the parent Node process to exit without waiting
-//     for the child, making this a true fire-and-forget.
-//   - spawn is injectable via opts.spawn — avoids module-mock fragility;
-//     tests pass a spy; production falls back to node's child_process.spawn.
-//   - Return type is void — the caller receives no handle. Returning the
-//     ChildProcess object would be a contract violation (launch ≠ manage).
+//   - Delegates to the Supervisor port (tmux adapter) — all tmux argv + session
+//     naming live in daemon-tmux.ts; this helper never shells out to tmux.
+//   - `supervisor.start` is idempotent (no-op when a session already exists), so
+//     a duplicate nudge never spawns a second daemon.
+//   - Returns void/Promise<void> — the caller receives NO process handle. Returning
+//     a ChildProcess (or anything with kill/on) would be a contract violation
+//     (launch ≠ manage). The tmux session is owned by the tmux server, not us.
+//   - supervisor is injectable via opts.supervisor — tests pass a spy; production
+//     builds a tmux supervisor.
 
-import { spawn as nodeSpawn, type SpawnOptions } from 'node:child_process';
+import { makeTmuxSupervisor } from '../daemon-tmux.js';
 
-/**
- * Default daemon launch command. `conduct-ts` is the conductor's own CLI wrapper
- * (resolves the pinned Node + dist/index.js); `daemon` is the daemon SUBCOMMAND
- * (`conduct-ts daemon …`, promoted from the former `--daemon` flag). `--continuous`
- * keeps the daemon idle-polling so it is still alive to pick up the spec PR after the
- * operator merges it, and `--max-idle-polls` is the self-limit (Phase 9 per-daemon
- * ceiling) that lets it exit after a sustained idle stretch instead of polling forever.
- *
- * NB: the original default `npx conduct daemon` was WRONG — `npx conduct` resolves an
- * unrelated public npm package (a code-of-conduct generator). The command must be the
- * `conduct-ts` wrapper, with `daemon` as its first subcommand token.
- */
-const DEFAULT_DAEMON_COMMAND = 'conduct-ts';
-const DEFAULT_MAX_IDLE_POLLS = 10;
-const DEFAULT_DAEMON_ARGS = ['daemon', '--continuous', '--max-idle-polls', String(DEFAULT_MAX_IDLE_POLLS)];
+/** Minimal launch-only view of the Supervisor — start only, never manage. */
+export interface DaemonStarter {
+  start(repoPath: string): void | Promise<void>;
+}
 
-/** Minimal spawn function type — matches child_process.spawn's signature. */
-export type SpawnFn = (
-  command: string,
-  args: string[],
-  options: SpawnOptions,
-) => { pid?: number; unref: () => void };
-
-/** Options accepted by launchDaemonDetached. */
+/** Options accepted by launchDaemon. */
 export interface LaunchDaemonOpts {
   /**
-   * Injectable spawn function. Defaults to node's child_process.spawn.
-   * Provide a test spy here to avoid spawning real child processes in tests.
+   * Injectable launcher. Defaults to a tmux Supervisor. Provide a spy in tests to
+   * assert the launch delegates to `start(repoPath)` without spawning real tmux.
+   * Deliberately typed `start`-only so a test (or caller) can never reach a
+   * stop/restart/attach method through this seam (ADR-005 launch ≠ manage).
    */
-  spawn?: SpawnFn;
-  /** Arguments passed to the daemon command. Defaults to DEFAULT_DAEMON_ARGS. */
-  args?: string[];
-  /** Command to run. Defaults to 'conduct-ts'. */
-  command?: string;
+  supervisor?: DaemonStarter;
 }
 
 /**
- * Launch a build daemon as a fully detached child process.
+ * Launch a build daemon for `project`, fire-and-forget, hosted in an
+ * operator-attachable tmux session (ADR-014). Retains no handle/IPC/control over
+ * the daemon — strictly launch, never manage (ADR-005 FR-8).
  *
- * The function spawns `command` (default: `conduct-ts daemon --continuous`) with
- * `{ detached: true, stdio: 'ignore' }` and immediately calls `child.unref()`
- * so the parent can exit independently. No process handle is retained or
- * returned — this is a strict fire-and-forget boundary.
- *
- * @param project - Absolute path to the project root (passed as env/arg).
- * @param opts    - Optional overrides for command, args, and spawn injection.
- * @returns void  — intentionally returns nothing; no handle is retained.
+ * @param project - Absolute path to the project root (the daemon's repo + cwd).
+ * @param opts    - Optional supervisor injection (tests).
+ * @returns void / Promise<void> — intentionally no handle is retained or returned.
  */
-export function launchDaemonDetached(
-  project: string,
-  opts: LaunchDaemonOpts = {},
-): void {
-  const spawnFn = opts.spawn ?? (nodeSpawn as unknown as SpawnFn);
-  const command = opts.command ?? DEFAULT_DAEMON_COMMAND;
-  const args = opts.args ?? [...DEFAULT_DAEMON_ARGS];
-
-  const child = spawnFn(command, args, {
-    cwd: project,
-    detached: true,
-    stdio: 'ignore',
-  });
-
-  child.unref();
-  // Return nothing — caller must not receive any process handle.
+export function launchDaemon(project: string, opts: LaunchDaemonOpts = {}): void | Promise<void> {
+  const supervisor = opts.supervisor ?? makeTmuxSupervisor();
+  // Idempotent start: a live session ⇒ no-op (no duplicate daemon). We return the
+  // start() result (void/Promise) so the caller can await + swallow errors, but we
+  // never hand back a process handle.
+  return supervisor.start(project);
 }

@@ -141,9 +141,9 @@ describe('runHandoff — ensure-running is fire-and-forget', () => {
     await rm(tempDir, { recursive: true, force: true });
   });
 
-  it('swallows a launchFn failure and still returns the authored entry', async () => {
+  it('does not block on a launchFn failure but surfaces the reason (no silent swallow)', async () => {
     const target = makeTarget(tempDir, 'fnf-proj'); // no remote → no gh needed
-    const { print } = makePrint();
+    const { print, out } = makePrint();
     const entry = await runHandoff(target, 'spec/fnf', {
       engineerDir: tempDir,
       launchFn: () => {
@@ -151,6 +151,13 @@ describe('runHandoff — ensure-running is fire-and-forget', () => {
       },
       print,
     });
+    // Non-blocking: the authored entry is still returned (the spec branch lands).
     expect(entry).toEqual({ project: 'fnf-proj' });
+    // But NOT silent: the launch failure is surfaced with its reason so a tmux-less
+    // host doesn't author specs that no daemon ever builds.
+    const printed = out.join('\n');
+    expect(printed).toMatch(/build daemon was not started/i);
+    expect(printed).toContain('fnf-proj');
+    expect(printed).toContain('boom — daemon spawn failed');
   });
 });
