@@ -46,23 +46,23 @@ describe('engine/rebase — gated resolution loop (real git, fake resolver)', ()
   const gc = (args: string[]) =>
     execFile('git', ['-c', 'core.editor=true', ...args], { cwd: repo });
 
-  // Build a repo where rebasing `feat` onto `main` conflicts on a.txt, leaving a
+  // Build a repo where rebasing `feat` onto `main` conflicts on a.ts, leaving a
   // single feature commit ("feat: change a") to replay.
   beforeEach(async () => {
     repo = await mkdtemp(join(tmpdir(), 'rebase-resolution-'));
     await execFile('git', ['init', '-q', '-b', 'main'], { cwd: repo });
     await g(['config', 'user.email', 't@t.com']);
     await g(['config', 'user.name', 'T']);
-    await writeFile(join(repo, 'a.txt'), 'base\n');
+    await writeFile(join(repo, 'a.ts'), 'base\n');
     await g(['add', '.']);
     await g(['commit', '-q', '-m', 'init']);
 
     await g(['checkout', '-q', '-b', 'feat']);
-    await writeFile(join(repo, 'a.txt'), 'feature\n');
+    await writeFile(join(repo, 'a.ts'), 'feature\n');
     await g(['commit', '-q', '-am', 'feat: change a']);
 
     await g(['checkout', '-q', 'main']);
-    await writeFile(join(repo, 'a.txt'), 'mainchange\n');
+    await writeFile(join(repo, 'a.ts'), 'mainchange\n');
     await g(['commit', '-q', '-am', 'main: change a']);
 
     await g(['checkout', '-q', 'feat']);
@@ -85,8 +85,8 @@ describe('engine/rebase — gated resolution loop (real git, fake resolver)', ()
     let calls = 0;
     const resolver = async (): Promise<ResolutionAttempt> => {
       calls++;
-      await writeFile(join(repo, 'a.txt'), 'merged\n');
-      await g(['add', 'a.txt']);
+      await writeFile(join(repo, 'a.ts'), 'merged\n');
+      await g(['add', 'a.ts']);
       await gc(['rebase', '--continue']);
       return { resolved: true };
     };
@@ -94,7 +94,7 @@ describe('engine/rebase — gated resolution loop (real git, fake resolver)', ()
     const outcome = await resolveRebaseConflicts(git, repo, pre, resolver, 3);
 
     expect(calls).toBe(1);
-    expect(outcome.kind).toBe('changed'); // a.txt is a code/test path
+    expect(outcome.kind).toBe('changed'); // a.ts is a code/test path
     // rebase actually finished + branch current with base
     expect((await g(['rev-list', '--count', 'HEAD..main'])).stdout.trim()).toBe('0');
     // feature commit subject survived
@@ -201,7 +201,7 @@ describe('engine/rebase — featureCommitsPreserved (real git)', () => {
     await execFile('git', ['init', '-q', '-b', 'main'], { cwd: repo });
     await g(['config', 'user.email', 't@t.com']);
     await g(['config', 'user.name', 'T']);
-    await writeFile(join(repo, 'a.txt'), 'base\n');
+    await writeFile(join(repo, 'a.ts'), 'base\n');
     await g(['add', '.']);
     await g(['commit', '-q', '-m', 'init']);
   });
@@ -212,7 +212,7 @@ describe('engine/rebase — featureCommitsPreserved (real git)', () => {
 
   it('returns true when the feature commit subjects all survive (even if diffs changed)', async () => {
     await g(['checkout', '-q', '-b', 'feat']);
-    await writeFile(join(repo, 'a.txt'), 'feature\n');
+    await writeFile(join(repo, 'a.ts'), 'feature\n');
     await g(['commit', '-q', '-am', 'feat: change a']);
     const subjectsBefore = ['feat: change a'];
 
