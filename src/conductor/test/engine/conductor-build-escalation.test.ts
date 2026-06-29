@@ -1,11 +1,11 @@
 /**
- * Tests for the build-failure escalation wiring in Conductor.run().
+ * Tests for the daemon-halt escalation wiring in Conductor.run().
  *
- * Four cases:
- *   C1  — escalation that THROWS must not prevent HALT/state write or run() resolution.
+ * Cases:
+ *   C1    — escalation that THROWS must not prevent HALT/state write or run() resolution.
  *   Happy — escalation success; called with right args; prUrl threads into loop_halt event.
  *   FR-8  — non-auto mode build failure does NOT invoke escalation.
- *   Guard — auto mode non-build step failure does NOT invoke escalation.
+ *   Guard — auto mode failure on any gating step (not just build) DOES invoke escalation.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -154,15 +154,19 @@ describe('conductor/build-escalation', () => {
     expect(fakeEscalation).not.toHaveBeenCalled();
   });
 
-  // ── Guard: only the build step triggers escalation, not other auto halts ───
+  // ── Guard: ALL gating steps trigger escalation in auto mode, not just build ─
 
-  it('guard: auto mode failure on a non-build step does NOT call escalateBuildFailure', async () => {
-    const fakeEscalation = vi.fn<FakeEscalation>().mockResolvedValue({
-      prUrl: 'https://github.com/test/repo/pull/2',
+  it('guard: auto mode failure on a non-build gating step DOES call escalateBuildFailure', async () => {
+    const fakePrUrl = 'https://github.com/test/repo/pull/2';
+    const fakeEscalation = vi.fn<FakeEscalation>().mockResolvedValue({ prUrl: fakePrUrl });
+
+    const haltEvents: Array<{ reason: string; prUrl?: string }> = [];
+    events.on('loop_halt', (e) => {
+      if (e.type === 'loop_halt') haltEvents.push({ reason: e.reason, prUrl: e.prUrl });
     });
 
-    // 'plan' is gating — it falls into the same auto hard-failure block but is
-    // not 'build', so escalation must not fire.
+    // 'plan' is a gating step — it falls into the auto hard-failure block.
+    // With the build guard removed, escalation must fire for ALL gating steps.
     const conductor = new Conductor({
       stateFilePath: statePath,
       stepRunner: makeRunner('plan'),
@@ -175,12 +179,16 @@ describe('conductor/build-escalation', () => {
 
     await conductor.run();
 
-    // Escalation not called for non-build step.
-    expect(fakeEscalation).not.toHaveBeenCalled();
+    // Escalation MUST be called for non-build gating steps in auto mode.
+    expect(fakeEscalation).toHaveBeenCalledOnce();
 
     // HALT marker written (confirming the hard-failure path ran for plan).
     const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
     expect(halt).toMatch(/plan/);
     expect(halt).toMatch(/auto mode/);
+
+    // prUrl must thread into the loop_halt event.
+    expect(haltEvents).toHaveLength(1);
+    expect(haltEvents[0].prUrl).toBe(fakePrUrl);
   });
 });

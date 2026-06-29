@@ -101,9 +101,10 @@ export type ConductorEvent =
       type: 'loop_halt';
       reason: string;
       /**
-       * URL of the auto-opened needs-remediation draft PR, when the build step
-       * failed in auto mode and escalation succeeded (FR-8). Absent on all other
-       * halt paths or when escalation could not create a PR.
+       * URL of the auto-opened needs-remediation draft PR, when the conductor
+       * irrecoverably HALTs in auto mode and escalation succeeded. Absent when
+       * mode is not 'auto', on rebase-conflict halts, or when escalation could
+       * not create a PR (zero commits, push failure, gh error).
        */
       prUrl?: string;
     }

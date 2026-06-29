@@ -1,7 +1,8 @@
 /**
- * Build-failure escalation — opens a draft needs-remediation PR and posts a
- * comment with the failure reason when the conductor irrecoverably halts a
- * build step in auto/daemon mode.
+ * Daemon-halt escalation — opens a draft needs-remediation PR and posts a
+ * comment with the failure reason when the conductor irrecoverably HALTs a
+ * feature in auto/daemon mode (any cause except rebase conflicts, where
+ * pushing mid-rebase is unsafe).
  *
  * Design constraints (mirroring the pr-labels seam):
  *   - Every public function is dependency-injected (runner defaults to the
@@ -36,7 +37,7 @@ const COMMENT_MAX_LEN = 4000;
 export interface EscalateBuildFailureOpts {
   /** Absolute path to the project root (used as cwd for git/gh calls). */
   projectRoot: string;
-  /** Human-readable reason the build failed. May be long; will be trimmed. */
+  /** Human-readable reason for the halt (names the actual cause/step). May be long; will be trimmed. */
   failureReason: string;
   /** Optional log callback. All errors are logged here, never thrown. */
   log?: (msg: string) => void;
@@ -52,13 +53,16 @@ export interface EscalateBuildFailureResult {
 }
 
 /**
- * Called by the conductor after an irrecoverable build failure in auto mode.
+ * Called by the conductor after any irrecoverable daemon HALT in auto mode
+ * (prd-audit gaps, retries exhausted, catch-all exceptions, ping-pong/stuck-gate
+ * caps) that parks a feature with commits. Not called for rebase-conflict HALTs
+ * (pushing mid-rebase is unsafe).
  *
  * Steps (each best-effort/swallowed):
  *  1. Derive the current branch and the default base from origin/HEAD.
  *  2. Count commits on mergeBase..HEAD — zero commits ⇒ early exit (FR-6).
  *  3. Push the branch. Failure ⇒ early exit (FR-7).
- *  4. Find or create a draft PR titled `needs-remediation: build failed — <branch>`.
+ *  4. Find or create a draft PR titled `needs-remediation: <branch> — manual remediation required`.
  *  5. Ensure the `needs-remediation` label exists and add it to the PR.
  *  6. Post a comment with the (trimmed) failure reason and a manual-remediation note.
  *
@@ -149,9 +153,9 @@ export async function escalateBuildFailure(
       branch,
       base,
       draft: true,
-      title: `needs-remediation: build failed — ${branch}`,
+      title: `needs-remediation: ${branch} — manual remediation required`,
       body: [
-        'This PR was opened automatically after an irrecoverable build failure.',
+        'This PR was opened automatically after an irrecoverable daemon HALT.',
         '',
         'Manual remediation is required to unblock this feature.',
         'See the comment below for the failure reason.',
@@ -177,11 +181,11 @@ export async function escalateBuildFailure(
       : failureReason;
 
   const commentBody = [
-    '## Build failure',
+    '## Daemon halt',
     '',
     truncatedReason,
     '',
-    'Manual remediation is required to resolve this failure.',
+    'Manual remediation is required.',
   ].join('\n');
 
   await comment(runGh, cwd, prUrl, commentBody, log);
