@@ -33,6 +33,16 @@ fi
 
 ### Fixed
 
+- **Test suite leaked real build daemons; added an auto-launch kill-switch (conduct-ts).** Several
+  engineer tests exercise the real handoff `ensureRunning` without injecting a launch, so under
+  ADR-014 each run spawned a real `tmux new-session -d 'conduct-ts daemon --continuous'` daemon that
+  outlived the test's tmpdir (pre-ADR-014 it leaked detached node procs; the tmux host just made it
+  visible + persistent). Added an operational kill-switch env `AI_CONDUCTOR_NO_DAEMON_AUTOLAUNCH=1`
+  honored by `launchDaemon` — it suppresses the **default** (non-injected) real launch while leaving
+  an explicitly injected supervisor untouched (so the delegation unit tests still assert their
+  contract). A global vitest setup (`test/setup.ts`) sets it for the whole suite, so no test spawns a
+  real daemon and future tests can't re-introduce the leak. The flag also lets an operator who manages
+  daemons by hand disable the engineer's auto-launch.
 - **Silent daemon-launch failure on a tmux-less host (engineer).** The engineer's fire-and-forget
   `ensureRunning` nudge is the only production path that starts a daemon, and under the
   daemon-supervisor ADR it now routes through `supervisor.start` (tmux). On a host without tmux that throws

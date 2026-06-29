@@ -48,7 +48,18 @@ export interface LaunchDaemonOpts {
  * @param opts    - Optional supervisor injection (tests).
  * @returns void / Promise<void> — intentionally no handle is retained or returned.
  */
+/** Env kill-switch: when `'1'`, suppress the engineer's auto-launch of a REAL daemon. */
+export const NO_AUTOLAUNCH_ENV = 'AI_CONDUCTOR_NO_DAEMON_AUTOLAUNCH';
+
 export function launchDaemon(project: string, opts: LaunchDaemonOpts = {}): void | Promise<void> {
+  // Operational kill-switch (and test-isolation guard): `AI_CONDUCTOR_NO_DAEMON_AUTOLAUNCH=1`
+  // suppresses auto-launching a REAL daemon — for an operator who manages daemons by hand,
+  // and as the default in the test runner so the suite never spawns a real `tmux new-session
+  // -d 'conduct-ts daemon --continuous'` that would outlive the test's tmpdir. An EXPLICITLY
+  // injected supervisor (unit tests asserting the delegation contract) is never suppressed.
+  if (!opts.supervisor && process.env[NO_AUTOLAUNCH_ENV] === '1') {
+    return;
+  }
   const supervisor = opts.supervisor ?? makeTmuxSupervisor();
   // Idempotent start: a live session ⇒ no-op (no duplicate daemon). We return the
   // start() result (void/Promise) so the caller can await + swallow errors, but we
