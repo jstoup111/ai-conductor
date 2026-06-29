@@ -12,6 +12,11 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- **Type error in the github-issues intake adapter (conduct-ts).** `maybeReopen` typed its `repo`
+  parameter as `{ name; path }`, omitting the `ghRepo?` field that `RepoLister.list()` actually
+  provides and that the function body reads (`repo.ghRepo ?? repo.name`). This produced a
+  `tsc --noEmit` error (TS2339). Widened the parameter type to `{ name; path; ghRepo? }` to match
+  the data the caller passes; `tsc` is now clean. No behavior change.
 - **Daemon finish HALT when cleanup `cd`s into the main repo (conduct-ts).** In auto/daemon
   mode the finish step wrote its completion markers (`.pipeline/finish-choice` and the `pr_url`
   in `.pipeline/conduct-state.json`) via relative paths, but the finish skill's branch/PR/worktree
