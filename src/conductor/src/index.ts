@@ -23,7 +23,7 @@ import { ConductorEventEmitter } from './ui/events.js';
 import { loadConfig, loadMergedConfig } from './engine/config.js';
 import { renderDiagramsForFile, defaultRenderDeps } from './engine/mermaid-renderer.js';
 import { readState, writeState } from './engine/state.js';
-import { parseArgs, renderFullHelp, detectInline, type CLIOptions } from './cli.js';
+import { parseArgs, renderFullHelp, renderDaemonHelp, detectInline, type CLIOptions } from './cli.js';
 import type { StepName } from './types/index.js';
 import { createRenderer } from './ui/create-renderer.js';
 import { ALL_STEPS } from './engine/steps.js';
@@ -48,7 +48,11 @@ import type { UISubscriber } from "./ui/types.js";
 import type { VisualizerPlugin } from './types/plugin.js';
 import { detectRegistryCommand, dispatchRegistry } from './engine/registry-cli.js';
 import { detectEngineerCommand, dispatchEngineer } from './engine/engineer-cli.js';
-import { detectDaemonCommand, detectDaemonSupervisorCommand } from './engine/daemon-command.js';
+import {
+  detectDaemonCommand,
+  detectDaemonSupervisorCommand,
+  detectUnknownDaemonSubcommand,
+} from './engine/daemon-command.js';
 import { detectRenderCommand, dispatchRender } from './engine/render-cli.js';
 import {
   detectDaemonObserveCommand,
@@ -227,6 +231,18 @@ async function main(): Promise<void> {
     process.exit(code);
   }
 
+  // `daemon --help` / `daemon -h`: print the daemon command surface (run flags +
+  // status/logs + management verbs) and exit. MUST precede every daemon dispatcher
+  // below — otherwise detectDaemonCommand treats `--help` as an unknown flag and
+  // LAUNCHES a daemon run instead of showing help (a real footgun).
+  if (
+    process.argv[2] === 'daemon' &&
+    process.argv.slice(3).some((a) => a === '--help' || a === '-h')
+  ) {
+    process.stdout.write(renderDaemonHelp());
+    process.exit(0);
+  }
+
   // Read-only daemon observability sub-subcommands (`daemon status` / `daemon
   // logs`) run NON-INTERACTIVELY and exit. Checked BEFORE the daemon run command
   // so `daemon status`/`logs` are never mistaken for a daemon launch.
@@ -253,6 +269,18 @@ async function main(): Promise<void> {
   // worktree, gate loop, PR on finish). Dispatched before parseArgs, mirroring
   // the registry/engineer subcommand pattern. runDaemonMode is imported lazily
   // so the heavy daemon runtime only loads when actually running the daemon.
+  // Guard a typo'd / unknown daemon sub-verb (e.g. `daemon strt`): a bare non-flag
+  // token that is not a known sub-verb would otherwise fall through to
+  // detectDaemonCommand and LAUNCH a daemon run. Surface the daemon help + a clear
+  // error instead. Placed AFTER the observe/supervisor dispatchers consumed the
+  // valid verbs, so anything reaching here is genuinely unrecognized.
+  const unknownDaemonSub = detectUnknownDaemonSubcommand(process.argv);
+  if (unknownDaemonSub) {
+    console.error(`conduct daemon: unknown subcommand '${unknownDaemonSub}'.\n`);
+    process.stderr.write(renderDaemonHelp());
+    process.exit(1);
+  }
+
   const daemonCmd = detectDaemonCommand(process.argv);
   if (daemonCmd) {
     const { runDaemonMode } = await import('./daemon-cli.js');

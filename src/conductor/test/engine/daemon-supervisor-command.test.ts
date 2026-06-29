@@ -109,3 +109,36 @@ describe('detectDaemonCommand: yields null for management verbs (never launch a 
     });
   }
 });
+
+// ═════════════════════════════════════════════════════════════════════════════
+// detectUnknownDaemonSubcommand: catches a typo'd sub-verb so the CLI shows help
+// instead of LAUNCHING a daemon run (the `daemon --help` footgun class).
+// ═════════════════════════════════════════════════════════════════════════════
+describe('detectUnknownDaemonSubcommand', () => {
+  it('returns the token for an unknown non-flag sub-verb (typo)', async () => {
+    const detect = requireFn(await load(), 'detectUnknownDaemonSubcommand');
+    expect(detect(argv('daemon', 'strt'))).toBe('strt');
+    expect(detect(argv('daemon', 'bogus'))).toBe('bogus');
+  });
+
+  it('returns null for every known sub-verb (observe + management)', async () => {
+    const detect = requireFn(await load(), 'detectUnknownDaemonSubcommand');
+    for (const verb of ['status', 'logs', ...MANAGEMENT_VERBS]) {
+      expect(detect(argv('daemon', verb))).toBeNull();
+    }
+  });
+
+  it('returns null for bare "daemon" and flag forms (real run, not a typo)', async () => {
+    const detect = requireFn(await load(), 'detectUnknownDaemonSubcommand');
+    expect(detect(argv('daemon'))).toBeNull();
+    expect(detect(argv('daemon', '--continuous'))).toBeNull();
+    expect(detect(argv('daemon', '--help'))).toBeNull(); // help handled separately
+    expect(detect(argv('daemon', '-h'))).toBeNull();
+  });
+
+  it('returns null when argv[2] is not "daemon"', async () => {
+    const detect = requireFn(await load(), 'detectUnknownDaemonSubcommand');
+    expect(detect(argv('engineer', 'bogus'))).toBeNull();
+    expect(detect(argv())).toBeNull();
+  });
+});

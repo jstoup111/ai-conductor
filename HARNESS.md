@@ -196,6 +196,29 @@ Run whatever verification the project requires (tests, lint, type-check, etc.) l
 before pushing. The `/finish` skill presents the user with completion options and delegates
 to `/pr` when the user chooses Push & PR. The `/pr` skill enforces the pre-push gate.
 
+## Rebase Policy
+
+**Never rebase a feature branch mid-build.** Implementation agents must NOT run
+`git fetch`, `git pull`, `git rebase`, or switch branches during a build — they commit
+only to the current feature branch. A mid-build rebase onto a moved `origin/<default>`
+rewrites history under active work and surfaces surprise conflicts (it stalled two
+feature branches during Phase 9 in CHANGELOG conflicts).
+
+The **only** sanctioned rebases are:
+
+1. the daemon's finish-time **rebase-onto-latest** (runs outside the per-task loop,
+   with conflict → HALT + CHANGELOG auto-resolve), and
+2. the **`/rebase`** resolver, which advances an already-paused rebase to completion.
+
+An operator may also deliberately rebase a branch onto its base (e.g. to refresh a
+stale PR) — that is an explicit, human-initiated action, not a mid-build one.
+
+This rule is enforced primarily in the skill prompts (build/tdd/pipeline tell the
+implementation subagent never to integrate upstream itself). The `block-destructive-git`
+hook **no longer hard-blocks** ad-hoc `git rebase` — a hard block also rejected the
+legitimate operator and `/rebase` cases — so the discipline lives here and in the
+dispatch prompts, not in the hook.
+
 ## Autonomy Principle
 
 **Anything approved more than once is a candidate for automation.**

@@ -262,8 +262,14 @@ and opening a PR on finish:
   from `git show <default>:…` on that now-current local branch. This is what makes **merging the
   spec PR the build-ready trigger** (FR-24): a spec the engineer authored but has not landed, or
   one committed only on an unmerged `spec/<slug>` branch, is invisible until it reaches the
-  default branch. Each worktree is cut from this fresh branch, so the vetted stories+plan already
-  physically exist in it — there is **no separate spec-copy/materialization step**. `fastForwardRoot`
+  default branch. Each worktree is cut from **`origin/<default>`** (the remote-tracking tip; it
+  falls back to the local default branch only when `origin/<default>` is unresolvable — a
+  local-only repo never fetched), so a build always starts from the latest *fetched* origin even
+  when another process has left the root checkout on a different branch or a detached `HEAD` and
+  local `<default>` has gone stale. Because discovery reads the (ancestor-or-equal) local default
+  branch, every discovered spec is also present on `origin/<default>`, so the vetted stories+plan
+  already physically exist in the worktree — there is **no separate spec-copy/materialization
+  step**. `fastForwardRoot`
   degrades gracefully and never throws: no origin, unset `origin/HEAD`, a dirty tree, a failed
   fetch (offline), or a non-fast-forward (divergence) all leave the local branch as-is and the
   poll loop continues. On top of
