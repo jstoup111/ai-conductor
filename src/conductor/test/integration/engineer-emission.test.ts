@@ -23,7 +23,7 @@ import type { LLMProvider, InvokeResult } from '../../src/execution/llm-provider
 // still compiles; the production change makes the type explicit.
 // ───────────────────────────────────────────────────────────────────────────
 
-const ITEM: BacklogItem = { slug: 'feat-x', storiesPath: 's', planPath: 'p' };
+const ITEM: BacklogItem = { slug: 'feat-x' };
 const SIGNALS_LOG = 'signals.jsonl';
 
 function makeProvider(narrative = '# Full Retro\n\nDetailed.'): LLMProvider & { calls: number } {
@@ -92,7 +92,6 @@ describe('integration/engineer-emission — makeRunFeature emits on daemon compl
         await seedEvents(wt);
         return { path: wt, branch: `feat/${ITEM.slug}` } as FeatureWorktree;
       },
-      materializeSpecs: async () => {},
       runConductor: async () => {},
       readOutcome: async () => outcome,
       teardownWorktree: async () => {},

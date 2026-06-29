@@ -1,5 +1,5 @@
 import { execFile as execFileCb } from 'node:child_process';
-import { basename, isAbsolute, join, relative } from 'node:path';
+import { basename, isAbsolute, relative } from 'node:path';
 import { promisify } from 'node:util';
 import type { BacklogItem } from './daemon.js';
 import { planHasDependencyTree, isStoriesApproved } from './artifacts.js';
@@ -63,55 +63,48 @@ export function gitTreeSource(projectRoot: string, baseBranch: string): BacklogT
 }
 
 /**
- * Resolve the git tree-ish ref to use for backlog discovery on a daemon poll tick.
+ * Fast-forward `projectRoot`'s checkout to origin so newly merged specs become
+ * present in the working tree — and therefore in any worktree freshly cut from
+ * the default branch. This replaces the old fetch-only discovery ref: instead of
+ * reading specs off the `origin/<default>` remote-tracking tree and then copying
+ * from a possibly-stale working tree (which diverged whenever local lagged
+ * origin), the daemon keeps its local default branch current and builds from it.
  *
- * The daemon refreshes from origin ONLY between work — when it is idle with no
- * local work left to start (`opts.refresh === true`). While features are in flight
- * (or local queued work remains) it discovers with `refresh:false`, which never
- * fetches, so an in-flight build is never re-based onto specs that merged on origin
- * mid-run. Between fetches the `origin/<default>` remote-tracking ref is stable, so
- * the whole batch captured by the last idle refresh stays discoverable for the
- * concurrent slots without any new network access.
+ * Called on the daemon's idle poll ONLY (`refresh === true`) — never while
+ * features are in flight — so an in-flight build is never advanced mid-run. It
+ * also never touches worktree checkouts: those are separate working trees, so a
+ * fast-forward of the main checkout cannot disturb a running feature.
  *
- * Strategy:
- *   1. Discover origin's default branch via `git symbolic-ref refs/remotes/origin/HEAD`
- *      (with a `git remote show origin` fallback). Never hardcode `main`/`master`.
- *   2. If `refresh` — best-effort `git fetch origin <default>` so `origin/<default>`
- *      reflects the latest merged specs.
- *   3. Return `origin/<default>` — `gitTreeSource` reads this ref, so a spec merged on
- *      origin but not pulled locally IS discovered. When `refresh:false`, the ref is
- *      verified to exist first (it normally does, having been fetched at the last idle).
+ * SAFE by construction — side-effecting but it never clobbers operator state and
+ * NEVER throws:
+ *   - No origin remote → nothing to do.
+ *   - Default branch undiscoverable (no origin/HEAD, `remote show` fails) → skip.
+ *   - Root not on the default branch, or working tree dirty → log a warning and
+ *     SKIP (a fast-forward is not applicable / could clobber).
+ *   - `fetch` fails (offline) or the branches have truly diverged so a
+ *     `--ff-only` merge is impossible → log and continue on the local branch.
  *
- * Degrades gracefully (NEVER throws):
- *   - No origin remote → `localBase`, no fetch.
- *   - origin/HEAD unset and `remote show` fallback fails → `localBase`.
- *   - Fetch fails (offline / unreachable) → logs and returns `localBase`.
- *   - `refresh:false` and `origin/<default>` not yet present → `localBase`.
- *
- * The `gitOverride` parameter allows tests to inject a fake git runner. The default
- * uses `makeGitRunner(projectRoot)` (the main checkout dir, never a worktree) so a
- * fetch is always safe: no checkout, no reset, no rebase.
+ * The `gitOverride` parameter allows tests to inject a fake git runner. The
+ * default uses `makeGitRunner(projectRoot)` (the main checkout dir, never a
+ * worktree).
  */
-export async function resolveDiscoveryRef(
+export async function fastForwardRoot(
   projectRoot: string,
-  localBase: string,
   log: (msg: string) => void = () => {},
-  opts: { refresh?: boolean } = {},
   gitOverride?: GitRunner,
-): Promise<string> {
-  const refresh = opts.refresh ?? true;
+): Promise<void> {
   const git = gitOverride ?? makeGitRunner(projectRoot);
 
-  // Check if origin remote exists — local-only repos skip the fetch entirely.
+  // No origin → nothing to fast-forward from (local-only repo).
   const remotes = await git(['remote']);
-  if (remotes.exitCode !== 0) return localBase;
+  if (remotes.exitCode !== 0) return;
   const hasOrigin = remotes.stdout
     .split('\n')
     .map((l) => l.trim())
     .includes('origin');
-  if (!hasOrigin) return localBase;
+  if (!hasOrigin) return;
 
-  // Discover default branch name (never hardcode 'main').
+  // Discover the default branch name (never hardcode 'main').
   // Mirror resolveBase's two-step: symbolic-ref first, remote show fallback.
   let defaultBranch: string | null = await originDefaultBranch(git);
   if (!defaultBranch) {
@@ -121,29 +114,50 @@ export async function resolveDiscoveryRef(
       if (m && m[1] !== '(unknown)') defaultBranch = m[1];
     }
   }
-  if (!defaultBranch) {
-    // Discovery failed entirely — degrade to local base; do not assume 'main'.
-    return localBase;
+  if (!defaultBranch) return; // can't determine the branch → do nothing
+
+  // Only fast-forward when the root is actually ON the default branch: advancing
+  // some other checked-out branch is not what we want.
+  const head = await git(['rev-parse', '--abbrev-ref', 'HEAD']);
+  const current = head.stdout.trim();
+  if (head.exitCode !== 0 || current !== defaultBranch) {
+    log(
+      `skip fast-forward: root is on '${current || 'unknown'}', not the default branch ` +
+        `'${defaultBranch}'. Daemon discovers/builds against the local branch as-is.`,
+    );
+    return;
   }
 
-  if (!refresh) {
-    // Between-work discovery while builds run: NO fetch. Use the last-fetched
-    // remote-tracking ref if it exists; otherwise fall back to the local base.
-    const verify = await git(['rev-parse', '--verify', '--quiet', `refs/remotes/origin/${defaultBranch}`]);
-    return verify.exitCode === 0 ? `origin/${defaultBranch}` : localBase;
+  // Refuse to touch a dirty working tree — a `--ff-only` merge could fail or
+  // clobber uncommitted/untracked operator changes.
+  const status = await git(['status', '--porcelain']);
+  if (status.exitCode !== 0 || status.stdout.trim() !== '') {
+    log(
+      `skip fast-forward: working tree at ${projectRoot} is not clean. Commit/stash ` +
+        `changes so the daemon can track origin/${defaultBranch}.`,
+    );
+    return;
   }
 
-  // Idle refresh: best-effort fetch. A failed fetch (offline/unreachable) must NOT
-  // crash the poll loop — log it and continue scanning the last-known local ref.
+  // Best-effort fetch; offline/unreachable must NOT crash the poll loop.
   const fetched = await git(['fetch', 'origin', defaultBranch]);
   if (fetched.exitCode !== 0) {
     log(
-      `fetch origin ${defaultBranch} failed (offline?); scanning local ref ${localBase}`,
+      `fast-forward: fetch origin ${defaultBranch} failed (offline?); continuing on ` +
+        `local ${defaultBranch}.`,
     );
-    return localBase;
+    return;
   }
 
-  return `origin/${defaultBranch}`;
+  // Fast-forward only. A non-ff (local has diverged from origin) is left for a
+  // human rather than rewriting/merging the daemon's checkout.
+  const merged = await git(['merge', '--ff-only', `origin/${defaultBranch}`]);
+  if (merged.exitCode !== 0) {
+    log(
+      `fast-forward: local ${defaultBranch} has diverged from origin/${defaultBranch} ` +
+        `(non-fast-forward); continuing on local ${defaultBranch}.`,
+    );
+  }
 }
 
 /** Options for discoverBacklog. */
@@ -238,14 +252,10 @@ export async function discoverBacklog(
       continue;
     }
 
-    // BacklogItem paths are working-tree absolute paths (where materializeSpecs
-    // copies from). On the daemon's base-branch checkout these match the merged,
-    // committed content vetted above.
-    items.push({
-      slug,
-      storiesPath: join(projectRoot, storiesRel),
-      planPath: join(projectRoot, planRel),
-    });
+    // A fresh worktree is cut from the (now fast-forwarded) default branch, so the
+    // vetted stories/plan physically exist in it already — the item only needs to
+    // carry the slug; no working-tree paths to copy.
+    items.push({ slug });
   }
   return items;
 }

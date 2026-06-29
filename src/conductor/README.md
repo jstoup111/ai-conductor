@@ -191,21 +191,25 @@ and opening a PR on finish:
   ceilings (`--max-items`, `--max-cost`, `--max-runtime`), `once` vs `--continuous`
   idle-poll, and per-feature failure isolation (a thrown feature becomes an `error`
   outcome; the pool survives).
-- `engine/daemon-backlog.ts` — eligibility, sourced from the **remote default branch but
-  refreshed only between work**. Discovery is local-first: the pool calls `discoverBacklog`
+- `engine/daemon-backlog.ts` — eligibility, sourced from the **local default branch kept
+  current with origin between work**. Discovery is local-first: the pool calls `discoverBacklog`
   with `refresh:false` (no fetch) while features are in flight or local queued work remains,
   and only when it is **fully idle with nothing left locally** does it pass `refresh:true` —
-  "drained → find more". On that idle refresh, `resolveDiscoveryRef` does a best-effort
-  `git fetch origin <default>` (branch discovered via `git symbolic-ref refs/remotes/origin/HEAD`,
-  never hardcoded) and returns `origin/<default>`; between fetches it reuses that already-fetched
-  remote-tracking ref, so an in-flight build is never re-based onto specs that merged on origin
-  mid-run. `discoverBacklog` reads `.docs/plans` + `.docs/stories` from `git show
-  origin/<default>:…`, **never the working tree** and never a `.worktrees/` copy. This is what
-  makes **merging the spec PR the build-ready trigger** (FR-24): a spec the engineer authored
-  but has not landed, or one committed only on an unmerged `spec/<slug>` branch, is invisible
-  until it reaches the remote default branch. `resolveDiscoveryRef` degrades gracefully: no
-  origin, unset `origin/HEAD`, a failed fetch (offline), or an unfetched ref all fall back to
-  the local base ref; the poll loop never throws and never touches a worktree branch. On top of
+  "drained → find more". On that idle refresh, `fastForwardRoot` does a **safe**
+  `git merge --ff-only origin/<default>` of the daemon's root checkout (default branch discovered
+  via `git symbolic-ref refs/remotes/origin/HEAD`, never hardcoded) — only when the root is on
+  the default branch with a clean working tree; otherwise it logs a warning and **skips** (never
+  clobbering operator state). Because the fast-forward happens only between work, an in-flight
+  build is never advanced onto specs that merged on origin mid-run, and worktree checkouts (separate
+  working trees) are never touched. `discoverBacklog` then reads `.docs/plans` + `.docs/stories`
+  from `git show <default>:…` on that now-current local branch. This is what makes **merging the
+  spec PR the build-ready trigger** (FR-24): a spec the engineer authored but has not landed, or
+  one committed only on an unmerged `spec/<slug>` branch, is invisible until it reaches the
+  default branch. Each worktree is cut from this fresh branch, so the vetted stories+plan already
+  physically exist in it — there is **no separate spec-copy/materialization step**. `fastForwardRoot`
+  degrades gracefully and never throws: no origin, unset `origin/HEAD`, a dirty tree, a failed
+  fetch (offline), or a non-fast-forward (divergence) all leave the local branch as-is and the
+  poll loop continues. On top of
   feature must have stories **approved** (`Status: Accepted`, not DRAFT — a stories file with
   no status line counts as **not approved**) + a plan that declares a **dependency tree**
   (`## Task Dependency Graph` or per-task `**Dependencies:**`), and not yet be processed.
@@ -220,8 +224,8 @@ and opening a PR on finish:
 - `engine/daemon-runner.ts` — per-feature discipline: done → mark + remove worktree + PR;
   halted/error → keep the worktree for the human. On completion it also emits a engineer
   signal (see below).
-- `engine/daemon-deps.ts` — concrete git/fs primitives (worktree add/remove, spec
-  materialization into the worktree, `.pipeline/DONE`/`HALT` outcome read).
+- `engine/daemon-deps.ts` — concrete git/fs primitives (worktree add/remove off the
+  fast-forwarded default branch, `.pipeline/DONE`/`HALT` outcome read).
 - `engine/worktree-prepare.ts` — writes `WORKTREE_NAMESPACE` + runs the project's `bin/setup` (see below).
 - `engine/daemon-dashboard.ts`, `engine/daemon-sha.ts`, `engine/daemon-rekick.ts` —
   halt-reconciliation: startup dashboard, base-SHA tracking, main-advance re-kick (below).
@@ -246,8 +250,8 @@ things on top of that, without a parallel dispatch path:
   aborts startup.
 
 - **Base-SHA tracking + re-kick (`daemon-sha.ts`, `daemon-rekick.ts`).** The daemon
-  `git rev-parse`s the discovery ref (`resolveDiscoveryRef` — `origin/<default>` or the local
-  base, never a hardcoded branch) and persists the last-seen value to **`.daemon/last-base-sha`**
+  `git rev-parse`s the local default branch (fast-forwarded to origin on idle refresh by
+  `fastForwardRoot`, never a hardcoded branch) and persists the last-seen value to **`.daemon/last-base-sha`**
   (empty / garbage / non-40-hex / unreadable → treated as **absent**, never a spurious
   advance). On a **genuine base-SHA advance** — observed live on an idle refresh, or at
   startup versus the persisted value (a base that moved while the daemon was **down**) — it
@@ -276,12 +280,12 @@ collide with when two worktrees run concurrently. Worktree creation is the daemo
 the per-worktree *identity* that flows from it is too — and the daemon establishes it in one
 place, then defers everything stack-specific to the project's standard setup script:
 
-> After materializing specs and **before** building, the runner (1) writes
+> After cutting the worktree and **before** building, the runner (1) writes
 > `WORKTREE_NAMESPACE=<worktree>` into the worktree's `.env`, then (2) runs the project's
 > conventional `bin/setup` with `CI=true` and `WORKTREE_NAMESPACE` exported, if one exists.
 > No `bin/setup` → the namespace is still written, then no-op.
 
-`makeRunFeature` calls `deps.prepareWorktree` between `materializeSpecs` and `runConductor`;
+`makeRunFeature` calls `deps.prepareWorktree` between `createWorktree` and `runConductor`;
 the concrete dep (`worktree-prepare.ts`) runs `bin/setup` with the **worktree as cwd**. The
 project's normal config consumes `WORKTREE_NAMESPACE` — e.g. a Rails `database.yml` builds
 `app_<env>_<namespace>` and `bin/setup`'s `db:prepare` creates it; there is no second,

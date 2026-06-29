@@ -18,6 +18,17 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   alternate branch that can bypass that helper (error path, no-remote/offline, degraded mode,
   early return) needs its own scenario asserting the side effect still occurs. Closes the gap that
   shipped a no-remote authoring path silently skipping the authored-ledger write.
+- **Adversarial-derivation coverage gate (writing-system-tests §3d + domain reviewer).**
+  Generalizes the orphaned-primitive (§3b) and path-guard (§3c) rules to *all* security/correctness
+  derivations (redaction, auth/permission predicates, path/identity checks, state guards): the spec
+  generator must produce a failing test for **every production call site** of the derivation, fed
+  the **real adversarial input that site passes** (token-bearing URL, trailing-slash/sibling/
+  traversal path, dirty/stale state, empty/boundary), asserting the observable guarantee at that
+  site — not the helper's return value in isolation. The TDD domain reviewer gains matching veto
+  checks (call-site coverage after RED, derivation-reached-at-every-call-site after GREEN), and the
+  dispatcher now feeds the reviewer the derivation's call-site list. Closes the injected-stub blind
+  spot that shipped CRITICAL/HIGH bugs caught only by the fresh-context evaluator across three
+  consecutive phases.
 - **Daemon halt-reconciliation — startup dashboard + main-advance re-kick (ADR-013).**
   On startup, before any dispatch, the daemon now scans `.worktrees/*/` and the
   `.daemon/processed/` ledger and prints a four-group inherited-state dashboard
@@ -108,6 +119,23 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   `git rm`.
 
 ### Fixed
+
+- **Daemon now fast-forwards its root checkout on each idle poll and cuts
+  worktrees from fresh `main` — eliminating spurious `ENOENT` HALTs when local
+  `main` lagged origin.** The daemon discovered/validated specs against the
+  `origin/<default>` remote-tracking tree but *materialized* them by `copyFile`-ing
+  from the local working tree, which it only ever `fetch`ed — never advanced. Once
+  a spec PR merged on origin while the local checkout sat behind (the steady
+  state), discovery found the spec yet the copy failed (`copyfile … .docs/stories/
+  <slug>.md`). Root-fixed by replacing the fetch-only discovery ref with
+  `fastForwardRoot`: on each idle poll the daemon does a **safe** `git merge
+  --ff-only origin/<default>` of its checkout (only when on the default branch with
+  a clean tree — otherwise it logs a warning and skips, never clobbering), then
+  discovers and cuts each worktree from that now-current branch. Because the
+  worktree forks from fresh `main`, the vetted stories+plan already exist in it, so
+  the brittle `materializeSpecs` copy step is **removed entirely** (`BacklogItem`
+  no longer carries working-tree paths). The fast-forward runs only between work
+  (never mid-build) and never touches in-flight worktree checkouts.
 
 - **Conductor now deletes a stale prior-session `.pipeline/` artifact before
   re-running a FAILED or REWORKED gated re-review step — reuse-loop HALTs are

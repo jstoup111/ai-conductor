@@ -147,6 +147,34 @@ Generate a negative/boundary case for EACH row:
 
 A path-guard spec without these rows is incomplete — treat them as mandatory negative paths.
 
+### 3d. Adversarial Derivation Coverage: Every Call Site, Real Input
+
+§3b (replacement → real entry point) and §3c (path guards → boundary values) are two cases of a
+wider rule. For **any security- or correctness-critical derivation** — a redaction/sanitizer, an
+auth/permission predicate, an identity or path check, a state guard ("is the tree clean", "is this
+the right session", "has this been processed") — a unit test that exercises the derivation on
+**clean or hand-injected** input passes while the REAL production call site feeds it adversarial
+real-world input that is never tested. The bug lives in the *wiring between the call site and the
+derivation*, which the derivation's own unit test cannot reach. This class shipped CRITICAL/HIGH
+bugs in three consecutive phases — a token-in-URL redaction invoked at a sibling call site with a
+real token; a rebase predicate evaluated against a real in-progress tree instead of the clean
+injected one; an injected project name that masked the real derivation — each caught only by the
+fresh-context evaluator, never by the suite.
+
+**Rule:** for each such derivation, enumerate **EVERY production call site** that invokes it, and
+generate a failing spec **per call site** that:
+
+- feeds the **real adversarial input that site actually passes** — a URL carrying a real token, a
+  path with a trailing slash / sibling prefix / traversal segment, a dirty or stale tree state, an
+  empty or boundary value — **not** a clean fixture or a value injected directly into the helper, and
+- asserts the **observable guarantee at that site** — the token never appears in the emitted output,
+  the write is refused, the step HALTs, the duplicate is skipped — **not** the derivation's return
+  value in isolation.
+
+A derivation covered only by its own unit test is incomplete. List the call sites you found
+(`file:line`) in the spec file or the PR body so the domain reviewer (TDD) can confirm none were
+missed.
+
 ### 4. Read App Context
 
 For each story, read the relevant:

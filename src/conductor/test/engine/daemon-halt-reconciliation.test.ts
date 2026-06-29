@@ -11,8 +11,6 @@ const Y = 'b'.repeat(40);
 function items(n: number): BacklogItem[] {
   return Array.from({ length: n }, (_, i) => ({
     slug: `f${i}`,
-    storiesPath: `s${i}`,
-    planPath: `p${i}`,
   }));
 }
 

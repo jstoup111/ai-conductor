@@ -13,6 +13,9 @@ You will receive in your prompt:
 - A list of existing domain types in the project
 - The current task description
 - Any relevant prior decisions from `.memory/decisions/` (pre-gathered by the dispatcher)
+- **For any security/correctness derivation in scope** (redaction, auth/permission predicate,
+  path/identity check, state guard): the list of its **production call sites** (`file:line`),
+  pre-gathered by the dispatcher — you do not scan for them yourself.
 
 You will NOT need to:
 - Read `.memory/` files (the dispatcher checks decisions before dispatching you)
@@ -29,6 +32,13 @@ Check:
 2. **Invalid state in test fixtures** — Could the test setup represent an impossible business state?
 3. **Boundary violations** — Does the test reach across domain boundaries it shouldn't?
 4. **Domain language** — Does the test name use ubiquitous language from the business domain?
+5. **Adversarial derivation coverage** — For each security/correctness derivation in scope, is
+   there a failing spec for **every** production call site (from the call-site list in your prompt),
+   feeding the **real adversarial input that site passes** (token-bearing URL, trailing-slash /
+   sibling / traversal path, dirty or stale state, empty/boundary value) — not just a clean
+   unit test of the helper? A derivation tested only in isolation, or a call site with no spec,
+   is a VETO (see `/writing-system-tests` §3d). Missing the wiring between call site and
+   derivation is exactly where this class of bug ships.
 
 ### After GREEN Phase (Implementation Review)
 You receive: the new implementation code (inlined), the test it satisfies (inlined), and a list of domain types.
@@ -39,6 +49,12 @@ Check:
 3. **Missing domain types** — Should a new value object, entity, or enum be introduced?
 4. **Domain language in code** — Method/variable names use business terms, not technical jargon
 5. **Invalid state representability** — Can the new code create impossible combinations?
+6. **Derivation reached at every call site** — For a security/correctness derivation, does the
+   implementation actually route **every** call site (from the call-site list) through the
+   derivation, handling trailing-slash / root / empty / sibling-prefix and other real inputs
+   without failing open (accepting what it should reject) or closed (rejecting what it should
+   accept)? A call site that bypasses the derivation, or a guard that mishandles a boundary, is a
+   VETO — this is the orphaned-wiring failure §3b/§3c/§3d exist to prevent.
 
 ## Decision Framework
 
