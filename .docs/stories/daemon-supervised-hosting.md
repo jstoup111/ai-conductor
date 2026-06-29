@@ -1,6 +1,6 @@
 # Stories: On-Demand Management of the Per-Repo Build Daemon
 
-**Status:** DRAFT
+**Status:** Accepted
 
 Derived from `.docs/specs/2026-06-29-daemon-supervised-hosting.md`. Behavior (WHAT)
 only — mechanism lives in `.docs/plans/2026-06-29-daemon-tmux-supervisor.md`. The
