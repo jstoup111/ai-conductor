@@ -34,6 +34,16 @@ present, `./bin/install` offers an opt-in install of [Serena](https://github.com
 auto-registers it as a user-scope MCP server so it's available across your projects. Decline
 the prompt (or install later with `uv tool install -p 3.13 serena-agent`) to skip it.
 
+**Mermaid renderer.** `./bin/install` also offers a renderer for the architecture diagrams
+and ADRs the harness generates, so you review them as visuals (not raw Mermaid) at the
+approval gates. Pick a preset — `html` (default: a self-contained mermaid.js page opened in
+your browser; no Chromium, ideal on WSL2), `mmdc-png`/`mmdc-svg` (static images via
+[`@mermaid-js/mermaid-cli`](https://github.com/mermaid-js/mermaid-cli)), or `none`. The choice
+is stored as `mermaid_renderer` in `~/.ai-conductor/config.yml` and reused on every run; under
+`conduct-ts` diagrams render automatically when an artifact is presented for approval, or run
+`conduct render-diagrams <file.md>...` on demand. With no renderer configured, diagrams fall
+back to raw Markdown — never a blocker.
+
 Verify:
 
 ```bash
@@ -232,7 +242,7 @@ The harness reads two config files, merged in order (project overrides user):
 
 | File | Scope | Purpose |
 |------|-------|---------|
-| `~/.ai-conductor/config.yml` | User-level | Personal defaults, update channel, markdown viewer |
+| `~/.ai-conductor/config.yml` | User-level | Personal defaults, update channel, markdown viewer, mermaid renderer |
 | `.ai-conductor/config.yml` | Project-level | Per-project model/effort tuning, custom steps, plugin selection |
 
 Both files are optional. The conductor works with zero config.

@@ -29,6 +29,20 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- **Mermaid diagram renderer — visuals at the architecture approval gates (install + conduct-ts).**
+  Generated architecture diagrams and DRAFT ADRs (Mermaid-in-Markdown) can now be reviewed as
+  rendered visuals instead of raw Mermaid. `bin/install` offers a renderer choice mirroring the
+  markdown-viewer flow — presets `html` (default; self-contained mermaid.js page opened in the
+  browser, no Chromium, best for WSL2), `mmdc-png`/`mmdc-svg` (via `@mermaid-js/mermaid-cli`), and
+  `none` — persisting it as `mermaid_renderer.{preset,command,args,mode}` in
+  `~/.ai-conductor/config.yml`; `install --check` reports its status. At the conduct-ts approval
+  gate, `reviewArtifacts` renders a reviewed file's diagrams (after showing the raw Markdown as an
+  always-present fallback) via the merged-config preset; a new `conduct render-diagrams <file>...`
+  subcommand renders on demand. The renderer is best-effort by contract: it never throws, isolates
+  per-diagram failures, HTML-escapes diagram source, and always surfaces a notice on skip/failure
+  so the gate is never blocked. `README.md`, `src/conductor/README.md`, and the
+  architecture-diagram / architecture-review skill docs updated.
+
 - **Richer daemon startup dashboard — "state of everything" per repo (conduct-ts).** The
   inherited-state dashboard printed before any dispatch now carries the bits an operator
   actually triages on, mined best-effort from each worktree's `conduct-state.json` (and the
