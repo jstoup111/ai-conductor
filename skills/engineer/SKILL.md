@@ -101,8 +101,9 @@ step, loop within that skill until accepted or abandon the idea — never carry 
 
 ### 4. Land the already-authored spec on a branch in the target repo
 `conduct-ts engineer land --project <name> --idea "<idea>"` (append `--source-ref <ref>` when the
-idea came from GitHub intake — this comments "Routed to `<repo>`" on the originating issue and
-advances the intake ledger; write-back is advisory and never blocks the land). This is a
+idea came from GitHub intake — this comments "Routed to `<repo>`" on the originating issue, commits a
+`.docs/intake/<slug>.md` marker carrying `Source-Ref: <ref>` so the issue origin travels with the
+spec, and advances the intake ledger; write-back is advisory and never blocks the land). This is a
 **deterministic primitive** — it
 does NOT author; the real DECIDE skills in step 3 already wrote the artifacts to the target's
 `.docs/`. `land`:
@@ -120,7 +121,9 @@ It writes nothing outside the target repo and never touches a sibling repo. It p
 ### 5. Open the spec PR + nudge the daemon
 `conduct-ts engineer handoff --project <name> --branch <branch>` (the `branch` from step 4; append
 `--source-ref <ref>` when the idea came from GitHub intake — on a real PR this comments the PR URL on
-the originating issue, applies the `engineer:handled` label, and advances the ledger to `done`).
+the originating issue, adds a non-closing `Refs <ref>` to the spec PR body (links the issue without
+closing it; the daemon's implementation PR is what closes it on merge), applies the
+`engineer:handled` label, and advances the ledger to `done`).
 This opens a spec PR **to the target repo** (no-remote → local-commit fallback), records the
 authored-ledger entry, and calls `ensureRunning(repoPath)` fire-and-forget so that repo's daemon is
 alive to pick the spec up **after you merge it**. It never merges and never builds.
@@ -148,7 +151,7 @@ launcher regains control when the operator quits and relaunches you clean for th
 
 - [ ] Idea captured from the right source (`claim` first; CLI arg / chat fallback) — `sourceRef` carried only for intake ideas
 - [ ] Idea routed with explicit operator confirmation (redirect + no-fit + decline all handled)
-- [ ] For intake ideas: `--source-ref` threaded into `land` + `handoff` so the originating issue is commented + labelled
+- [ ] For intake ideas: `--source-ref` threaded into `land` + `handoff` so the originating issue is commented + labelled, the `.docs/intake/<slug>.md` marker is committed, and the spec PR is linked with `Refs <ref>` (the daemon adds `Closes <ref>` to the implementation PR, auto-closing the issue on merge)
 - [ ] DECIDE ran the real skills in canonical order — `/brainstorm` → complexity → `/stories` →
       `/conflict-check` → `/architecture-diagram` → `/architecture-review` → `/plan` (not stubs, not DRAFT, no `claude -p`)
 - [ ] Complexity tier recorded at `.docs/complexity/<plan-stem>.md`; for Small, conflict-check + architecture were skipped

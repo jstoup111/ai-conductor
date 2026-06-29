@@ -179,6 +179,20 @@ export interface MarkdownViewerConfig {
 }
 
 /**
+ * Preferred Mermaid renderer — turns the ```mermaid blocks inside generated
+ * `.md` artifacts (architecture diagrams, ADRs) into visuals at the approval
+ * gate. Parallels {@link MarkdownViewerConfig}. `command` is empty for the
+ * `html`/`none` presets (which need no external tool). `{file}` is substituted
+ * with the source path and `{out}` with the rendered output path at invocation.
+ */
+export interface MermaidRendererConfig {
+  preset?: string;
+  command: string;
+  args: string[];
+  mode: 'inline' | 'blocking' | 'external';
+}
+
+/**
  * Staleness thresholds for the project-level `assess` prelude step. Either
  * signal (time OR commit count) being exceeded makes an existing assessment
  * "stale"; the user is prompted before a re-run is triggered. Defaults live
@@ -187,6 +201,22 @@ export interface MarkdownViewerConfig {
 export interface AssessConfig {
   stale_after_days?: number;
   stale_after_commits?: number;
+}
+
+/**
+ * OpenTelemetry exporter configuration. When present in HarnessConfig, the
+ * OTel visualizer plugin is constructed and attached to the event bus.
+ * Absent means disabled (FR-1 default-off).
+ */
+export interface OtelConfig {
+  /** Transport: 'otlp' pushes to an OTLP endpoint; 'file' writes OTLP-JSON lines. */
+  exporter: 'otlp' | 'file';
+  /** OTLP endpoint URL. Required when exporter='otlp'. */
+  endpoint?: string;
+  /** File path for file transport. Defaults to '.pipeline/otel.jsonl'. */
+  file?: string;
+  /** OTLP wire protocol. Defaults to 'http/protobuf' (port 4318). */
+  protocol?: 'http/protobuf' | 'grpc';
 }
 
 export interface HarnessConfig {
@@ -205,6 +235,8 @@ export interface HarnessConfig {
   conductor?: ConductorConfig;
   /** Preferred markdown viewer — user-level default, project can override. */
   markdown_viewer?: MarkdownViewerConfig;
+  /** Preferred Mermaid renderer — user-level default, project can override. */
+  mermaid_renderer?: MermaidRendererConfig;
   /** Project-level assess staleness thresholds (optional). */
   assess?: AssessConfig;
   /**
@@ -222,4 +254,13 @@ export interface HarnessConfig {
   llm_provider?: string;
   /** Plugin selection: which UI renderer to use (defaults to 'terminal'). */
   ui_renderer?: string;
+  /** OpenTelemetry exporter config. Absent = disabled (default off, FR-1). */
+  otel?: OtelConfig;
+  /**
+   * Maximum number of Claude-assisted conflict-resolution attempts inside the
+   * rebase step before the engine halts for operator intervention.
+   * Default: 3. Set to 0 to disable automated resolution (conflict always
+   * halts immediately). Negative or non-numeric values fall back to 3.
+   */
+  rebase_resolution_attempts?: number;
 }

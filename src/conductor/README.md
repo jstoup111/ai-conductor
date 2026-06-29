@@ -145,6 +145,28 @@ escalates to the recovery menu, where the human picks where to route. In a **dae
 Re-auditing unchanged code yields the same verdict, so the daemon skips the default per-step
 retries for a blocking `prd_audit` and routes straight away.
 
+### Mermaid diagram rendering (approval gates)
+
+Generated architecture diagrams and DRAFT ADRs are Mermaid-in-Markdown. So the human approves
+a *visual* (not raw Mermaid), the artifact-review path renders them:
+
+- **Engine** (`engine/mermaid-renderer.ts`) — `renderDiagramsForFile(file, content, config, deps)`
+  extracts the ```mermaid blocks and dispatches on the configured **preset name**: `html`
+  (build a self-contained mermaid.js page), `mmdc-png`/`mmdc-svg` (shell out to
+  `@mermaid-js/mermaid-cli`), `none`/unknown/unconfigured (skip). Best-effort by contract: it
+  never throws, isolates per-diagram failures, HTML-escapes diagram source, and returns a
+  `notice` on any skip/failure. Presets + valid modes live in `engine/mermaid-renderer-presets.ts`
+  (parallel to `md-viewer-presets.ts`); the config block is `mermaid_renderer.{preset,command,
+  args,mode}`, validated in `engine/config.ts` like `markdown_viewer`.
+- **Gate** — `TerminalPromptHost.reviewArtifacts` shows the raw Markdown first (always-present
+  fallback), then, for a file containing a mermaid fence, calls an injected `renderDiagrams`
+  hook and logs any returned notice on the host's own channel (TUI-safe). `index.ts` wires the
+  hook from the **merged** config (the preset is set user-level by `bin/install`).
+- **CLI** — `conduct render-diagrams <file>...` (`engine/render-cli.ts`) renders on demand.
+- **Opener** — `detectOpenerCommand` resolves per platform (macOS `open`, Linux `xdg-open`,
+  WSL `wslview`/`explorer.exe`); `defaultRenderDeps` runs it with a bounded timeout so the
+  never-block contract rests on code, not opener behavior.
+
 ### Rebase-on-latest (before finish)
 
 The `rebase` step is an **engine-native** loopGate (like `complexity` — no Claude dispatch;
@@ -168,12 +190,47 @@ stale base:
   feature's `[Unreleased]` lines (captured `base..HEAD` pre-rebase) exactly once, then
   `git rebase --continue`s. CHANGELOG conflicting alongside any other file, or outside
   `[Unreleased]`, takes the HALT path instead.
-- **Conflict → HALT (paused)** — any other / mixed conflict writes `.pipeline/HALT` listing
-  the conflicted files and the resume steps, leaves the rebase **paused** (no `--abort`,
-  conflict markers intact), does **not** mark the feature processed, and opens **no PR**.
+- **Conflict → gated resolution → HALT (paused)** — any other / mixed conflict first triggers
+  the **gated conflict-resolution loop** (see below); if the loop is exhausted or disabled,
+  the engine writes `.pipeline/HALT` listing the conflicted files and the resume steps, leaves
+  the rebase **paused** (no `--abort`, conflict markers intact), does **not** mark the feature
+  processed, and opens **no PR**.
 - **Events** — each outcome emits a typed event: `rebase_noop`, `rebase_changed`,
   `rebase_changelog_resolved`, `rebase_conflict_halt` (best-effort; emission failure never
   affects the rebase result).
+
+#### Gated conflict resolution
+
+Before HALTing on a non-CHANGELOG conflict, the daemon dispatches the `/rebase` resolution
+skill up to `rebase_resolution_attempts` times (config key; default **3**; set to **0** to
+disable and restore the previous immediate-HALT behavior). Each attempt lets the skill resolve
+the conflicted files and then runs `git rebase --continue`. A resolution is accepted only when
+**both** acceptance guards pass:
+
+- **FR-8 (current with base)** — the branch must be genuinely current with the base after the
+  rebase (zero commits in `HEAD..base`).
+- **FR-9 (commit preservation)** — no feature commits may have been dropped; the pre-rebase
+  feature commit list must be present in full after the rebase.
+
+If the resolved rebase **changed code or test paths**, the existing kickback machinery fires —
+the verdict is `{satisfied:false, kickback:{from:'rebase'}}` for `build` (and `manual_test` if
+it ran) and the selector routes back to `build`, exactly as a clean rebase would. A docs-only
+change does not invalidate.
+
+If all attempts are exhausted without an accepted resolution, the engine falls through to the
+existing HALT path: `.pipeline/HALT` is written, the rebase is left paused (conflict markers
+intact), and no PR is opened.
+
+**Daemon-only.** The gated resolution loop runs only in daemon (`mode: 'auto'`, `daemon: true`)
+mode. Interactive `/conduct` runs are unchanged — humans resolve conflicts by hand. The `/rebase`
+skill is also manually invokable by an operator (`/rebase`) for conflict resolution outside the
+automated loop.
+
+**Config key** (`pipeline.yml` / `.ai-conductor/config.yml`):
+
+```yaml
+rebase_resolution_attempts: 3   # default; 0 = disable (immediate HALT on any conflict)
+```
 
 **Resume a parked rebase:** resolve the conflict in the listed file(s) → `git rebase --continue`
 → `rm .pipeline/HALT` → re-queue. The daemon reuses the existing worktree, finds the rebase a
@@ -242,12 +299,16 @@ things on top of that, without a parallel dispatch path:
 - **Startup inherited-state dashboard (`daemon-dashboard.ts`).** Before any dispatch, the
   daemon scans `.worktrees/*/` (`.pipeline/HALT`, `conduct-state.json`) and the
   `.daemon/processed/` ledger and prints one grouped dashboard to **both** stdout and
-  `daemon.log` — four groups with precedence **HALTED > PROCESSED > IN-PROGRESS > ELIGIBLE**:
-  HALTED (slug + first line of the HALT reason), IN-PROGRESS (slug + last meaningful step
-  from `conduct-state`), ELIGIBLE (build-ready slugs this scan that are neither halted nor
-  processed), PROCESSED (count). Best-effort: an empty HALT → reason `unknown`, a malformed
-  `conduct-state` → step `unknown`, a per-worktree fs error is skipped — the scan never
-  aborts startup.
+  `daemon.log` — four groups with precedence **HALTED > PROCESSED > IN-PROGRESS > ELIGIBLE**.
+  Each row carries the bits an operator triages on, mined best-effort from the worktree's
+  `conduct-state.json` (and the ledger): HALTED (slug + complexity tier + the step it reached
+  + first line of the HALT reason + any open PR link), IN-PROGRESS (slug + tier + last
+  meaningful step + any open PR link), ELIGIBLE (build-ready slug + tier this scan, neither
+  halted nor processed), PROCESSED (count + each shipped slug with its PR link when one was
+  persisted). The ledger is JSON (`{ status, prUrl }`); legacy plain-text `shipped` entries
+  still parse (no PR). Best-effort: an empty HALT → reason `unknown`, a malformed
+  `conduct-state` → step `unknown` (no tier/PR enrichment), a per-worktree fs error is
+  skipped — the scan never aborts startup.
 
 - **Base-SHA tracking + re-kick (`daemon-sha.ts`, `daemon-rekick.ts`).** The daemon
   `git rev-parse`s the local default branch (fast-forwarded to origin on idle refresh by
@@ -304,7 +365,7 @@ that need no setup (a static site, a pure library) simply ship no `bin/setup` an
 untouched. This is what lets one daemon serve **any** project setup, including consumer
 projects that use the harness.
 
-### Daemon hosting, management & observability (tmux Supervisor — ADR-014)
+### Daemon hosting, management & observability (tmux Supervisor — `adr-2026-06-29-daemon-supervisor-port-and-attachable-hosting`)
 
 The daemon is hosted as a **foreground process inside a per-repo tmux session**
 (`cc-daemon-<slug>`, `engine/daemon-tmux.ts`) behind a swappable **Supervisor port**
@@ -317,7 +378,7 @@ a run):
 
 - **`conduct-ts daemon start`** — idempotent: `hasSession?` no-op : `tmux new-session -d
   'conduct-ts daemon --continuous'`. Replaces the old detached `launchDaemonDetached` spawn
-  (ADR-014 supersedes ADR-005's spawn mechanism; non-management intent preserved).
+  (the daemon-supervisor ADR supersedes ADR-005's spawn mechanism; non-management intent preserved).
 - **`stop`** / **`restart`** — `kill-session` / kill-then-start.
 - **`connect`** — `attach -r` (read-only live colored watch); **`debug`** — full attach.
 
@@ -387,6 +448,71 @@ subscriber serializes them generically.
 
 The contract is additive — new event types may be introduced without breaking existing
 subscribers. Subscribers receive only events they register for via `emitter.on(type, ...)`.
+
+### OpenTelemetry exporter (ADR-014)
+
+The conductor ships an optional OTel observability layer. When the `otel:` block is present
+in the project config, `OtelVisualizer` (`engine/otel/otel-visualizer.ts`) attaches to the
+event bus and exports traces and metrics to an OTel-compatible backend.
+
+#### Config (`pipeline.yml` / `harness-config.ts` `otel:` key)
+
+```yaml
+# OTLP HTTP export (default port 4318):
+otel:
+  exporter: otlp
+  endpoint: http://localhost:4318
+
+# OTLP gRPC export (port 4317):
+otel:
+  exporter: otlp
+  endpoint: http://localhost:4317
+  protocol: grpc
+
+# File export — writes OTLP-JSON newline-delimited to .pipeline/otel.jsonl:
+otel:
+  exporter: file
+  # file: .pipeline/otel.jsonl  # default; override if needed
+```
+
+Absent `otel:` block → disabled, zero overhead. The exporter coexists with `events.jsonl`
+and `--report`; no event-emission sites are modified.
+
+#### What is exported
+
+- **Traces** (`engine/otel/span-manager.ts`): one root span `conductor.run` per run, with
+  one child span per executed step. Steps carry `conductor.step`, `conductor.step.index`,
+  `conductor.step.status`, and `conductor.retry.count` attributes. Retries, gate verdicts, and
+  kickbacks are recorded as span events. Interrupted runs force-close open spans as ERROR
+  with `conductor.incomplete=true` (FR-9).
+- **Metrics** (`engine/otel/metrics.ts`):
+  - `conductor.step.duration` — Histogram (ms per step, always recorded)
+  - `conductor.step.retries` — Counter (only when retryCount > 0)
+  - `conductor.step.tokens` — Counter by kind (`input`/`output`/…; only when tokenUsage
+    present; no zero-fill for steps without usage)
+- **Resource attributes** (`engine/otel/resource.ts`): `conductor.run.id` (from
+  `.pipeline/conduct-session-id` or a fresh UUID), `conductor.feature`, `conductor.project`,
+  `service.name=ai-conductor`.
+
+#### Error isolation (FR-8)
+
+Export failures emit **at most one** warning via the `onWarning` callback and never affect
+the run. A non-responding endpoint is abandoned after `exportTimeoutMillis` (default 5 s).
+SIGINT/SIGTERM handlers trigger a best-effort flush within this bound.
+
+#### Implementation files
+
+| File | Responsibility |
+|---|---|
+| `engine/otel/otel-config.ts` | Parse + validate `otel:` config block |
+| `engine/otel/otel-visualizer.ts` | Root plugin: wires emitter → span/metric pipeline |
+| `engine/otel/span-manager.ts` | Run/step span lifecycle |
+| `engine/otel/metrics.ts` | Duration/retry/token metrics |
+| `engine/otel/transport.ts` | OTLP HTTP, gRPC, and file exporters |
+| `engine/otel/resource.ts` | OTel Resource with conductor attributes |
+
+Tests: `test/engine/otel/`, `test/integration/otel-observability.test.ts`,
+`test/integration/otel-exporter.test.ts`, `test/integration/otel-disabled-noop.test.ts`.
 
 ### Bootstrap-mode skip
 
@@ -552,6 +678,17 @@ through an injected `gh` runner — it never touches a registered repo's working
   on `land` (routed) and `handoff` (done); the shared `intake/writeback.ts` helper backs both the CLI
   primitives and the test-only loop. It is **non-fatal** (a `gh` outage never reverts a delivered spec
   PR) and **de-duplicated** per `(sourceRef, status)`.
+- **Issue ↔ PR linkage + auto-close (on implementation merge).** Commenting is not linking: GitHub's
+  formal issue↔PR link and auto-close come from a closing keyword in a PR body. The issue reference
+  travels WITH the spec via a committed **`.docs/intake/<slug>.md`** marker (`Source-Ref: owner/repo#N`),
+  written by both authoring paths (`land --source-ref` and the autonomous `runAuthoring`) — so it
+  survives the spec-PR merge and reaches the daemon, which only reads the merged base-branch tree.
+  The **spec PR** gets a non-closing `Refs owner/repo#N` (links, but must NOT close — that would
+  defeat the re-eligibility guard below). The daemon parses the marker into `BacklogItem.sourceRef`
+  (`daemon-backlog.ts`) and, after the build, adds **`Closes owner/repo#N`** to the **implementation
+  PR** (`closeIssueOnImplementationMerge` in `engineer/issue-ref.ts`), so GitHub auto-closes the issue
+  when the real work merges to the default branch. Every step is gated on a parseable ref
+  (hand-authored / non-intake specs are unchanged), idempotent, and non-fatal.
 - **Re-eligibility + churn guard.** A `done` issue whose spec PR closes **without merging** is
   re-emitted on the next poll (label stripped, `attempts++`); a **merged** PR is never reopened. Past
   the reopen cap the issue is parked as `needs-manual` and stays out of the inbox until
@@ -569,7 +706,7 @@ State lives under the engineer dir (`$AI_CONDUCTOR_ENGINEER_DIR`, default `~/.ai
 `ensureRunning(repoPath, deps)` starts a daemon **iff** none is live or the pidfile is
 stale, no-ops if one is already alive, and **never manages** the lifecycle (fire-and-forget;
 ensure-not-manage). Its default launch now delegates to the tmux Supervisor's idempotent
-`start` (`launchDaemonDetached` → `supervisor.start`, ADR-014) — so an engineer-nudged daemon
+`start` (`launchDaemon` → `supervisor.start`, the daemon-supervisor ADR) — so an engineer-nudged daemon
 is hosted in a session and is operator-attachable, while the engineer still retains no
 handle/IPC/control (ADR-005 non-management intent preserved; only the spawn mechanism is
 superseded). The session runs with `cwd: repoPath`, so the pidfile and worktree land under the

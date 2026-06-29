@@ -1,8 +1,11 @@
-# ADR {{NUMBER}}: {{TITLE}}
+# ADR: {{TITLE}}
 
 **Date:** {{DATE}}
-**Status:** Proposed | Accepted | Superseded by ADR-{{N}}
+**Status:** Proposed | Accepted | Superseded by {{superseding-adr-slug}}
 **Deciders:** {{who made this decision}}
+
+<!-- Filename convention: adr-{{DATE}}-<kebab-slug>.md (no sequential numbers).
+     The ADR's identifier is its filename stem — cite that when superseding or referencing. -->
 
 ## Context
 

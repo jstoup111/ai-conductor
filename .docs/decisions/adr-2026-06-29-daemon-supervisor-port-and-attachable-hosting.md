@@ -1,4 +1,9 @@
-# ADR 014: Daemon supervisor port + attachable foreground hosting
+# ADR: Daemon supervisor port + attachable foreground hosting
+
+> Identifier (date+slug, no sequential number — see `skills/architecture-review`):
+> `adr-2026-06-29-daemon-supervisor-port-and-attachable-hosting`. Renamed from the
+> short-lived `adr-014-*` to avoid a parallel-branch number collision with the OTel
+> ADR `adr-014-otel-observability-exporter` (both grabbed "014" pre-rename).
 
 **Date:** 2026-06-29
 **Status:** APPROVED

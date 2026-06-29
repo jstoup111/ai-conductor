@@ -7,11 +7,13 @@ import type {
   StepConfig,
   EffortLevel,
   MarkdownViewerConfig,
+  MermaidRendererConfig,
 } from '../types/config.js';
 import type { StepName, EnforcementLevel } from '../types/index.js';
 import { ALL_STEPS } from './steps.js';
 import { readUserConfig } from './user-config.js';
 import { VALID_MARKDOWN_VIEWER_MODES } from './md-viewer-presets.js';
+import { VALID_MERMAID_RENDERER_MODES } from './mermaid-renderer-presets.js';
 import { validateWhenSyntax } from './when-expression.js';
 
 export type ConfigError = {
@@ -143,6 +145,7 @@ export function validateConfig(
     'complexity',
     'conductor',
     'markdown_viewer',
+    'mermaid_renderer',
     'assess',
     'acceptance_spec_globs',
   ]);
@@ -396,6 +399,12 @@ export function validateConfig(
     if (err) return { ok: false, error: err };
   }
 
+  // mermaid_renderer
+  if (obj.mermaid_renderer !== undefined) {
+    const err = validateMermaidRendererBlock(obj.mermaid_renderer);
+    if (err) return { ok: false, error: err };
+  }
+
   // assess
   if (obj.assess !== undefined) {
     const err = validateAssessBlock(obj.assess);
@@ -514,6 +523,52 @@ function validateMarkdownViewerBlock(raw: unknown): ConfigError | null {
     return {
       type: 'validation_error',
       message: 'markdown_viewer.mode must be inline|blocking|external',
+    };
+  }
+  return null;
+}
+
+function validateMermaidRendererBlock(raw: unknown): ConfigError | null {
+  if (!isPlainObject(raw)) {
+    return { type: 'validation_error', message: 'mermaid_renderer must be an object' };
+  }
+  const obj = raw as Record<string, unknown>;
+  const allowed = new Set(['preset', 'command', 'args', 'mode']);
+  for (const k of Object.keys(obj)) {
+    if (!allowed.has(k)) {
+      return {
+        type: 'validation_error',
+        message: `Unknown key in mermaid_renderer: "${k}"`,
+      };
+    }
+  }
+  if (obj.preset !== undefined && typeof obj.preset !== 'string') {
+    return { type: 'validation_error', message: 'mermaid_renderer.preset must be a string' };
+  }
+  if (obj.command !== undefined && typeof obj.command !== 'string') {
+    return { type: 'validation_error', message: 'mermaid_renderer.command must be a string' };
+  }
+  if (obj.args !== undefined) {
+    if (!Array.isArray(obj.args) || obj.args.some((a) => typeof a !== 'string')) {
+      return {
+        type: 'validation_error',
+        message: 'mermaid_renderer.args must be an array of strings',
+      };
+    }
+    if (!obj.args.includes('{file}')) {
+      return {
+        type: 'validation_error',
+        message: 'mermaid_renderer.args must include "{file}" placeholder',
+      };
+    }
+  }
+  if (
+    obj.mode !== undefined &&
+    !VALID_MERMAID_RENDERER_MODES.has(obj.mode as MermaidRendererConfig['mode'])
+  ) {
+    return {
+      type: 'validation_error',
+      message: 'mermaid_renderer.mode must be inline|blocking|external',
     };
   }
   return null;

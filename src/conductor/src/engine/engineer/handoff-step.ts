@@ -47,6 +47,12 @@ export interface RunHandoffDeps {
   launchFn?: (repoPath: string) => void | Promise<void>;
   /** Output sink for handoff notices. */
   print(s: string): void;
+  /**
+   * Originating intake reference (`owner/repo#N`). When present, the spec PR is
+   * linked to the issue with a non-closing `Refs` line (the daemon's
+   * implementation PR is what closes it on merge). Absent → no injection.
+   */
+  sourceRef?: string;
 }
 
 /**
@@ -82,6 +88,7 @@ export async function runHandoff(
         return { stdout: r.stdout, stderr: '' };
       },
       ledgerOpts,
+      sourceRef: deps.sourceRef,
     });
     if (handoffResult.kind === 'pr-opened') {
       deps.print(`Spec PR opened: ${handoffResult.url}`);

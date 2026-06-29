@@ -24,9 +24,10 @@
   **operator-only**. The engineer automation path stays launch-only (`ensureRunning` = `isUp? →
   start`, fire-and-forget; state checks via `capturePane`, never `attach`). The invariant holds.
 - **ADR-010 (pidfile single-owner) — preserved + superseded-in-part.** The pidfile lock stays the
-  source of truth for inner 1-per-repo ownership. ADR-010’s **launch mechanism** (`launchDaemonDetached`,
-  detached `stdio:'ignore'`, FR-22) is **superseded** by ADR-014’s foreground-in-session host. Recorded
-  in ADR-014; ADR-010’s lock/liveness decisions remain APPROVED and authoritative.
+  source of truth for inner 1-per-repo ownership. ADR-010’s **launch mechanism** (`launchDaemon`, the
+  former detached `stdio:'ignore'` spawn, FR-22) is **superseded** by the daemon-supervisor ADR’s
+  foreground-in-session host. Recorded in `adr-2026-06-29-daemon-supervisor-port-and-attachable-hosting`;
+  ADR-010’s lock/liveness decisions remain APPROVED and authoritative.
 - **9.3b “no detached spawn in the poll” guard — must hold.** Condition C1 below: the new session
   start must live only in the sanctioned handoff nudge, never the engineer intake poll.
 - **Pattern consistency.** Injectable-runner adapter matches the established `daemon-lock`/`daemon-launch`
@@ -51,8 +52,9 @@ value, not free input.
 No High-impact risks.
 
 ## ADRs Created
-- **ADR-014** (DRAFT) — Daemon supervisor port + attachable foreground hosting. Supersedes the
-  **launch mechanism** portion of ADR-010 (FR-22); preserves ADR-005 + ADR-010 lock/liveness.
+- **`adr-2026-06-29-daemon-supervisor-port-and-attachable-hosting`** (DRAFT) — Daemon supervisor port
+  + attachable foreground hosting. Supersedes the **launch mechanism** portion of ADR-010 (FR-22);
+  preserves ADR-005 + ADR-010 lock/liveness. (Date+slug identifier per the post-#150 convention.)
 
 ## Conditions (APPROVED WITH CONDITIONS)
 - **C1 — Engineer poll purity:** the new session `start` must appear **only** in the sanctioned
@@ -64,5 +66,5 @@ No High-impact risks.
   supervisor never re-encodes `.daemon/daemon.pid` (ADR-010 boundary).
 
 ## Gate
-ADR-014 is **APPROVED** (operator-ratified 2026-06-29). BUILD gate cleared —
+The daemon-supervisor ADR is **APPROVED** (operator-ratified 2026-06-29). BUILD gate cleared —
 `/writing-system-tests` may begin.

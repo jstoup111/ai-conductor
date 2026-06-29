@@ -34,8 +34,8 @@ fi
 ### Fixed
 
 - **Silent daemon-launch failure on a tmux-less host (engineer).** The engineer's fire-and-forget
-  `ensureRunning` nudge is the only production path that starts a daemon, and under ADR-014 it now
-  routes through `supervisor.start` (tmux). On a host without tmux that throws
+  `ensureRunning` nudge is the only production path that starts a daemon, and under the
+  daemon-supervisor ADR it now routes through `supervisor.start` (tmux). On a host without tmux that throws
   `TmuxNotInstalledError`, which the handoff caught and **silently swallowed** — authoring the spec
   PR while launching no daemon, so specs would pile up unbuilt with no signal. Both handoff sites
   (`engineer-cli.ts` claim path and `handoff-step.ts`) now keep the failure **non-blocking** (the
@@ -64,20 +64,87 @@ fi
   later, no execution-core change). New operator verbs: `conduct-ts daemon start` (idempotent — never
   a duplicate), `stop`, `restart`, `connect` (read-only live colored watch), `debug` (read/write
   attach). `daemon status` now also reports tmux **session up/down** (so a stale pidfile with a live
-  orphaned session is distinguishable). The detached `stdio:'ignore'` spawn (`launchDaemonDetached`)
-  is replaced by `supervisor.start`, so an engineer-nudged daemon is also attachable — while the
-  engineer stays **launch-only** (ADR-005 non-management intent preserved; ADR-014 supersedes only
-  the spawn mechanism). The daemon runs **serially** (concurrency clamped to 1; `--concurrency > 1`
+  orphaned session is distinguishable). The former detached `stdio:'ignore'` spawn (the launch helper,
+  renamed `launchDaemonDetached` → `launchDaemon`) now delegates to `supervisor.start`, so an
+  engineer-nudged daemon is also attachable — while the engineer stays **launch-only** (ADR-005
+  non-management intent preserved; the daemon-supervisor ADR supersedes only the spawn mechanism).
+  The daemon runs **serially** (concurrency clamped to 1; `--concurrency > 1`
   is clamped with a logged note). The tmux-hosted daemon is **long-lived by design** — the session
   command is `conduct-ts daemon --continuous` and deliberately drops the former engineer launch's
   `--max-idle-polls` self-limit so an operator can attach to a running daemon at any time; its bound
-  is the operator `stop` verb (and reboot), not an idle timeout (ADR-014 §7). The intake/execute
-  **work-source seam** is formalized (the run loop
+  is the operator `stop` verb (and reboot), not an idle timeout (daemon-supervisor ADR §7). The
+  intake/execute **work-source seam** is formalized (the run loop
   consumes `BacklogItem`s from an injected source; local in-process adapter unchanged). The daemon
   still builds with **no tmux present** (management is purely additive — bare-run invariant).
   `bin/conduct` now forwards `daemon <verb>` to `conduct-ts` (previously `conduct daemon status`
-  mis-launched a feature build named "status"). See `.docs/decisions/adr-014-*` and
+  mis-launched a feature build named "status"). See
+  `.docs/decisions/adr-2026-06-29-daemon-supervisor-port-and-attachable-hosting.md` and
   `.docs/plans/2026-06-29-daemon-tmux-supervisor.md`.
+- **Gated rebase-conflict resolution + attempt-cap config (conduct-ts).** The daemon's
+  finish-time `rebase` step now attempts skill-driven conflict resolution (via the new
+  `/rebase` skill) before HALTing on a non-CHANGELOG conflict. The number of attempts is
+  configurable via `rebase_resolution_attempts` (config key; default **3**; set to **0** to
+  restore the previous immediate-HALT behavior). A resolution is accepted only when the branch
+  is genuinely current with the base (FR-8) and no feature commits were dropped (FR-9);
+  a code-changing resolution kicks back to `build`/`manual_test` through the existing
+  kickback machinery. If all attempts are exhausted the engine falls through to the existing
+  HALT path. The gated resolution loop runs only in daemon mode; interactive `/conduct` runs
+  and the `/rebase` skill invoked manually by an operator are unchanged.
+- **Mermaid diagram renderer — visuals at the architecture approval gates (install + conduct-ts).**
+  Generated architecture diagrams and DRAFT ADRs (Mermaid-in-Markdown) can now be reviewed as
+  rendered visuals instead of raw Mermaid. `bin/install` offers a renderer choice mirroring the
+  markdown-viewer flow — presets `html` (default; self-contained mermaid.js page opened in the
+  default browser, no native dependencies, works anywhere), `mmdc-png`/`mmdc-svg` (via
+  `@mermaid-js/mermaid-cli`), and `none` — persisting it as
+  `mermaid_renderer.{preset,command,args,mode}` in
+  `~/.ai-conductor/config.yml`; `install --check` reports its status. At the conduct-ts approval
+  gate, `reviewArtifacts` renders a reviewed file's diagrams (after showing the raw Markdown as an
+  always-present fallback) via the merged-config preset; a new `conduct render-diagrams <file>...`
+  subcommand renders on demand. The renderer is best-effort by contract: it never throws, isolates
+  per-diagram failures, HTML-escapes diagram source, and always surfaces a notice on skip/failure
+  so the gate is never blocked. `README.md`, `src/conductor/README.md`, and the
+  architecture-diagram / architecture-review skill docs updated.
+
+- **Richer daemon startup dashboard — "state of everything" per repo (conduct-ts).** The
+  inherited-state dashboard printed before any dispatch now carries the bits an operator
+  actually triages on, mined best-effort from each worktree's `conduct-state.json` (and the
+  processed ledger): HALTED and IN-PROGRESS rows show the **complexity tier**, the **step** the
+  feature reached, and the **open PR link** if one exists; ELIGIBLE rows show the **tier** of
+  each queued feature; PROCESSED now **lists each shipped slug with its PR link** (not just a
+  count). To support the shipped-PR links, the `.daemon/processed/` ledger is now written as
+  JSON (`{ status, prUrl }`) — legacy plain-text `shipped` entries still parse (no PR), so this
+  is backward-compatible. All enrichment is best-effort: a malformed `conduct-state` still
+  appears (step `unknown`, no tier/PR), and a per-worktree fs error is skipped — the scan never
+  aborts startup. `README.md` and `src/conductor/README.md` updated.
+
+- **GitHub issue ↔ PR linkage + auto-close on implementation merge (conduct-ts).**
+  github-issues intake previously commented on an issue but never linked or closed it, so an
+  issue stayed open even after its spec PR and the daemon's implementation PR both merged. The
+  originating issue reference now travels WITH the spec via a committed `.docs/intake/<slug>.md`
+  marker (`Source-Ref: owner/repo#N`), written by both authoring paths (`engineer land
+  --source-ref` and the autonomous `runAuthoring`). The **spec PR** gets a non-closing
+  `Refs owner/repo#N` (links the issue without closing it); the daemon reads the marker from the
+  merged base-branch tree (`BacklogItem.sourceRef`) and adds `Closes owner/repo#N` to the
+  **implementation PR**, so GitHub auto-closes the issue when the real work merges. All injection
+  is gated on a parseable ref (hand-authored specs are unchanged), idempotent, and non-fatal (a
+  `gh` failure never affects a delivered PR or build). New shared helper
+  `engineer/issue-ref.ts` (`parseSourceRef` / `injectIssueRef` / `closeIssueOnImplementationMerge`)
+  is the single source for parsing + linking.
+
+- **OpenTelemetry exporter for conductor runs (Phase 1).** A new opt-in
+  `otel:` config block wires the conductor event bus to an OTel tracer/meter
+  pipeline (ADR-014). When enabled, each run produces one root trace span
+  (`conductor.run`) with a child span per step, plus `conductor.step.duration`
+  (histogram), `conductor.step.retries` (counter), and `conductor.step.tokens`
+  (counter, only when tokenUsage is present) metrics. Two transports: `exporter:
+  otlp` (HTTP/protobuf on port 4318 by default, gRPC/4317 via `protocol: grpc`)
+  and `exporter: file` (OTLP-JSON newline-delimited at `.pipeline/otel.jsonl`).
+  Feature is default-off (absent `otel:` block → zero overhead). Coexists with
+  `events.jsonl` and `--report` — event emission sites are unchanged. Export
+  failures emit at most one bounded warning via `onWarning` and never affect the
+  run (FR-8). Incomplete spans on abrupt termination are force-closed ERROR with
+  `conductor.incomplete=true` (FR-9). SIGINT/SIGTERM handlers trigger a
+  best-effort flush within the configured `exportTimeoutMillis` bound.
 
 - **Engineer authors the full DECIDE phase (engineer).** The `/engineer` idea→spec loop now runs
   the complete, build-ready DECIDE set in canonical order —
@@ -176,6 +243,15 @@ fi
   cleanup tasks instead of `/finish` parking the branch.
 
 ### Changed
+
+- **ADRs are no longer sequentially numbered — named `adr-YYYY-MM-DD-<kebab-slug>.md`.**
+  Sequential numbering (ADR-001, ADR-007, …) collides when parallel worktrees each grab
+  "the next number" for a concurrently-authored decision. ADRs now use a date plus a short
+  descriptive slug as both filename and identifier; supersession and verdict references cite
+  the filename stem instead of a number. Updated `templates/adr.md.template` (dropped the
+  `{{NUMBER}}` header) and the `/architecture-review`, `/conflict-check`, `/conduct`, and
+  `/remediate` skill docs. Applies to **newly created ADRs only** — existing numbered ADRs
+  keep their names (ADRs remain append-only).
 
 - **`.serena/` is now gitignored in scaffolded and onboarded projects.** Serena's
   MCP server writes a `.serena/` directory (semantic-symbol cache, `project.yml`,

@@ -34,6 +34,17 @@ present, `./bin/install` offers an opt-in install of [Serena](https://github.com
 auto-registers it as a user-scope MCP server so it's available across your projects. Decline
 the prompt (or install later with `uv tool install -p 3.13 serena-agent`) to skip it.
 
+**Mermaid renderer.** `./bin/install` also offers a renderer for the architecture diagrams
+and ADRs the harness generates, so you review them as visuals (not raw Mermaid) at the
+approval gates. Pick a preset — `html` (default: a self-contained mermaid.js page opened in
+your default browser; no native dependencies, works anywhere), `mmdc-png`/`mmdc-svg` (static
+images via [`@mermaid-js/mermaid-cli`](https://github.com/mermaid-js/mermaid-cli)), or `none`.
+The choice is stored as `mermaid_renderer` in `~/.ai-conductor/config.yml` and reused on every
+run; under `conduct-ts` diagrams render automatically when an artifact is presented for
+approval, or run `conduct render-diagrams <file.md>...` on demand. The opener is detected per
+platform (macOS `open`, Linux `xdg-open`, WSL `wslview`/`explorer.exe`). With no renderer
+configured, diagrams fall back to raw Markdown — never a blocker.
+
 Verify:
 
 ```bash
@@ -135,7 +146,9 @@ keeps going.
 
 On startup, before any dispatch, the daemon prints a grouped **inherited-state
 dashboard** (HALTED / IN-PROGRESS / ELIGIBLE / PROCESSED) to both your terminal and
-`daemon.log`. It also tracks the base-branch tip SHA (`.daemon/last-base-sha`): when
+`daemon.log`. Each row shows the bits you triage on — complexity tier, the step a
+feature reached, and the PR link once one is open (shipped features list their PR too).
+It also tracks the base-branch tip SHA (`.daemon/last-base-sha`): when
 the base branch **actually advances** — live, or while the daemon was down — it
 **re-kicks every halted feature** (aborting any paused rebase, preserving the reason
 to `.pipeline/HALT.cleared`, clearing `.pipeline/HALT`) so parked work retries
@@ -247,7 +260,7 @@ The harness reads two config files, merged in order (project overrides user):
 
 | File | Scope | Purpose |
 |------|-------|---------|
-| `~/.ai-conductor/config.yml` | User-level | Personal defaults, update channel, markdown viewer |
+| `~/.ai-conductor/config.yml` | User-level | Personal defaults, update channel, markdown viewer, mermaid renderer |
 | `.ai-conductor/config.yml` | Project-level | Per-project model/effort tuning, custom steps, plugin selection |
 
 Both files are optional. The conductor works with zero config.
@@ -357,6 +370,44 @@ conductor:
   auto_check: true             # Check for updates on startup
 ```
 
+### OpenTelemetry observability (`conduct-ts` only)
+
+The TypeScript conductor can export run/step traces and metrics to any OTel-compatible
+backend (Jaeger, Grafana Tempo, Honeycomb, etc.) or to a local JSONL file. Add an `otel:`
+block to your project config to opt in:
+
+```yaml
+# OTLP HTTP (default port 4318 — Jaeger, Grafana Tempo, Honeycomb, …):
+otel:
+  exporter: otlp
+  endpoint: http://localhost:4318
+
+# gRPC transport (port 4317):
+otel:
+  exporter: otlp
+  endpoint: http://localhost:4317
+  protocol: grpc
+
+# File — writes OTLP-JSON newline-delimited to .pipeline/otel.jsonl:
+otel:
+  exporter: file
+```
+
+**Default-off.** Absent `otel:` block → zero overhead. Coexists with `events.jsonl` and
+`--report`; event-emission sites are not modified.
+
+**What you get:**
+- One `conductor.run` trace per run, with one child span per step.
+- `conductor.step.duration` histogram, `conductor.step.retries` counter, and
+  `conductor.step.tokens` counter (only when token usage is present).
+- Resource attributes: `conductor.run.id`, `conductor.feature`, `conductor.project`,
+  `service.name=ai-conductor` on every span.
+- Incomplete spans (interrupted run) are force-closed ERROR with `conductor.incomplete=true`.
+- SIGINT/SIGTERM flush within the configured `exportTimeoutMillis` (default 5 s).
+
+See `src/conductor/README.md → OpenTelemetry exporter` for the full implementation
+reference.
+
 ### Plugins (`conduct-ts` only)
 
 The TypeScript conductor supports a plugin system for swapping the LLM provider or UI renderer
@@ -439,7 +490,7 @@ UNDERSTAND → DECIDE → BUILD → SHIP
 | BUILD | `/writing-system-tests` → `/pipeline` or `/tdd`, `/code-review`, `/debugging` | Acceptance specs → TDD → evaluator gates |
 | SHIP | `/manual-test` → `/prd-audit` → `/architecture-review --as-built` → `/retro` → `/finish`, `/pr` | curl/browser validation → PRD compliance audit → as-built architecture sweep → dual retrospective → verification → pull request |
 
-### Skills (21 total)
+### Skills (22 total)
 
 | Skill | Enforcement | Model | Purpose |
 |-------|-------------|-------|---------|
@@ -461,6 +512,7 @@ UNDERSTAND → DECIDE → BUILD → SHIP
 | `/finish` | Gating | haiku | Fresh verification, story coverage, merge/PR options |
 | `/manual-test` | Gating | sonnet | Validate stories via curl/browser, bug loop through /tdd |
 | `/prd-audit` | Gating | opus | Audit shipped impl vs PRD FRs; per-FR verdict + gap-class; kicks back to BUILD or DECIDE |
+| `/rebase` | Advisory | opus | Operator-invokable conflict resolver; also dispatched by the daemon's gated rebase-resolution loop (up to `rebase_resolution_attempts` attempts before HALT, daemon-only) |
 | `/retro` | Advisory | opus | Dual analysis: harness + application, trend tracking |
 | `/conduct` | Gating | haiku | SDLC orchestrator: 17-step flow with gate enforcement |
 
@@ -535,8 +587,14 @@ dedicated test coverage (950+ tests). See the feature comparison in
   on a stale base. Its verdict is *branch already current with base*, so a no-op goes straight
   to finish. A clean rebase that changed **code/test paths** kicks back to `build` to
   re-verify; a **CHANGELOG-only** `[Unreleased]` conflict is auto-resolved (both features'
-  entries kept, each once); any other / mixed conflict writes `.pipeline/HALT`, leaves the
-  rebase **paused**, and opens no PR. Resume: resolve → `git rebase --continue` →
+  entries kept, each once); any other / mixed conflict triggers the **gated resolution loop**
+  — the daemon dispatches the `/rebase` skill up to `rebase_resolution_attempts` times
+  (config key, default 3; set to 0 to disable) before HALTing. A resolution is accepted only
+  when the branch is genuinely current with the base (FR-8) and no feature commits were
+  dropped (FR-9); a code-changing resolution kicks back to `build`/`manual_test` as normal.
+  If the loop is exhausted, the engine writes `.pipeline/HALT`, leaves the rebase **paused**,
+  and opens no PR. The gated resolution loop is daemon-only; the `/rebase` skill is also
+  manually invokable by an operator. Resume: resolve → `git rebase --continue` →
   `rm .pipeline/HALT` → re-queue.
 - **Daemon mode** (`conduct-ts daemon`): drains a backlog of features that already have
   stories **and** plans, running each in its own worktree (parallel via `--concurrency N`,

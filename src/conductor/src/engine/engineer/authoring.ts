@@ -39,6 +39,7 @@ import type { LessonDigest, RetrievedLesson } from './lesson-store.js';
 import { AuthoringGuard } from './authoring-guard.js';
 import { TargetPathMissingError } from './target.js';
 import { isStoriesApproved, hasDraftAdr } from '../artifacts.js';
+import { writeIntakeMarker } from './intake-marker.js';
 import type { ComplexityTier } from '../../types/index.js';
 
 const execFile = promisify(execFileCb);
@@ -289,6 +290,13 @@ export interface RunAuthoringDeps {
    */
   assessComplexity?: (recommended: ComplexityTier | null) => Promise<AssessComplexityResult>;
   spawn?: (...args: any[]) => any;
+  /**
+   * Originating intake reference (`owner/repo#N`). When present and valid, a
+   * `.docs/intake/<slug>.md` marker is committed with the spec so the daemon can
+   * later link/close the issue. Absent/malformed → no marker (hand-authored
+   * specs are unchanged).
+   */
+  sourceRef?: string;
 }
 
 /**
@@ -502,6 +510,10 @@ export async function runAuthoring(
       await writeFile(architectureFile, architectureDiagramResult!.artifact, 'utf8');
       await writeFile(reviewFile, architectureReviewResult!.artifact, 'utf8');
     }
+
+    // Intake origin marker (no-op when no/invalid sourceRef): persists the
+    // originating issue ref WITH the spec so the daemon can close it on merge.
+    await writeIntakeMarker(repoPath, slug, deps.sourceRef, guard);
 
     // 3c. Stage and commit all spec artifacts on the spec branch. Staging the
     //     whole `.docs` tree commits exactly the artifacts written above (the

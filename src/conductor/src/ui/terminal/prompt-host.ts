@@ -36,6 +36,13 @@ export interface TerminalPromptHostOptions {
   output?: NodeJS.WritableStream;
   log?: (...args: unknown[]) => void;
   readFileFn?: (path: string) => Promise<string>;
+  /**
+   * Optional hook to render a reviewed artifact's diagrams (Mermaid) into a
+   * visual at the approval gate. Invoked only for files whose content contains
+   * a ```mermaid fence. Best-effort — the host swallows its failures so a
+   * broken renderer never blocks the gate.
+   */
+  renderDiagrams?: (file: string, content: string) => Promise<string | void>;
 }
 
 /**
@@ -50,6 +57,7 @@ export class TerminalPromptHost implements UIPromptHost {
   private output: NodeJS.WritableStream;
   private log: (...args: unknown[]) => void;
   private readFileFn: (path: string) => Promise<string>;
+  private renderDiagrams?: (file: string, content: string) => Promise<string | void>;
 
   constructor(region: LiveRegion, opts: TerminalPromptHostOptions = {}) {
     this.region = region;
@@ -57,6 +65,7 @@ export class TerminalPromptHost implements UIPromptHost {
     this.output = opts.output ?? process.stdout;
     this.log = opts.log ?? ((...args) => console.log(...args));
     this.readFileFn = opts.readFileFn ?? ((p) => readFile(p, 'utf-8'));
+    this.renderDiagrams = opts.renderDiagrams;
   }
 
   async ask(question: string): Promise<string> {
@@ -121,6 +130,22 @@ export class TerminalPromptHost implements UIPromptHost {
       try {
         const content = await this.readFileFn(file);
         this.log(content);
+        // If the artifact carries diagrams, render them to a visual so the
+        // human approves what they can actually see. Best-effort: a renderer
+        // failure must never block the gate.
+        // Pre-filter, not a parser: a false positive costs one no-op render
+        // call (handled gracefully); a false negative just keeps the raw
+        // Markdown already shown above.
+        if (this.renderDiagrams && content.includes('```mermaid')) {
+          try {
+            const notice = await this.renderDiagrams(file, content);
+            // Route the notice through the host's own channel — never a bare
+            // console write, which would corrupt the TUI at the approval prompt.
+            if (notice) this.log(`  ${notice}`);
+          } catch {
+            /* fall back to the raw Markdown already shown above */
+          }
+        }
       } catch {
         this.log(`  (could not read file: ${file})`);
       }

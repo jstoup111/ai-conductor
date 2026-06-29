@@ -2,6 +2,9 @@ import chalk from 'chalk';
 import { v4 as uuidv4 } from 'uuid';
 import { join } from 'node:path';
 import { mkdir, rm } from 'node:fs/promises';
+import { execFile as execFileCb } from 'node:child_process';
+import { promisify } from 'node:util';
+import { closeIssueOnImplementationMerge } from './engine/engineer/issue-ref.js';
 import type { LLMProvider } from './execution/llm-provider.js';
 import { PluginRegistry } from './engine/plugin-registry.js';
 import { registerBuiltins } from './engine/plugin-loader.js';
@@ -42,6 +45,8 @@ import {
   clearMarker,
   type RekickSweepDeps,
 } from './engine/daemon-rekick.js';
+
+const execFile = promisify(execFileCb);
 
 export interface DaemonModeOptions {
   projectRoot: string;
@@ -253,6 +258,24 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     if (resume === 'halted') return; // re-parked: HALT re-written, do not resume the gate
 
     await conductor.run();
+
+    // Link & close the originating issue (intake specs only): once the
+    // implementation PR exists, add `Closes owner/repo#N` to its body so GitHub
+    // auto-closes the issue when the PR merges to the default branch. Best-effort
+    // and idempotent — a gh failure or a halted build (no pr_url) never affects
+    // the feature outcome.
+    const finalState = await readState(stateFilePath);
+    await closeIssueOnImplementationMerge({
+      gh: async (args, opts) => {
+        const r = await execFile('gh', args, { cwd: opts.cwd });
+        return { stdout: String(r.stdout) };
+      },
+      sourceRef: item.sourceRef,
+      prUrl: finalState.ok ? finalState.value.pr_url : undefined,
+      cwd: wt.path,
+      slug: item.slug,
+      log,
+    });
   };
 
   const deps = makeFeatureRunnerDeps({

@@ -579,6 +579,9 @@ export async function dispatchEngineer(
             return { stdout: r.stdout, stderr: '' };
           },
           ledgerOpts: engineerDir ? { engineerDir } : {},
+          // Link the spec PR to its issue with a non-closing `Refs` (does not
+          // close — the daemon's implementation PR closes it on merge).
+          sourceRef,
         });
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
