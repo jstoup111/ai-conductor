@@ -13,6 +13,8 @@ Provides persistent, categorized memory across sessions. Ensures the agent start
 by recalling relevant context and persists significant learnings during work. Prevents repeated
 questions, lost decisions, and rediscovered gotchas.
 
+This skill is the retrieval and persistence guidance for the `local` memory provider (ADR-015/ADR-019). Recall is always performed by the agent reading `.memory/` files and judging relevance — the harness contains no search, ranking, or embedding logic (FR-3 invariant).
+
 ## Practices
 
 ### Recall Protocol (Session Start)
