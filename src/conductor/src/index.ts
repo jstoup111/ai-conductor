@@ -48,6 +48,7 @@ import type { VisualizerPlugin } from './types/plugin.js';
 import { detectRegistryCommand, dispatchRegistry } from './engine/registry-cli.js';
 import { detectEngineerCommand, dispatchEngineer } from './engine/engineer-cli.js';
 import { detectDaemonCommand } from './engine/daemon-command.js';
+import { detectRenderCommand, dispatchRender } from './engine/render-cli.js';
 import {
   detectDaemonObserveCommand,
   dispatchDaemonObserve,
@@ -213,6 +214,15 @@ async function main(): Promise<void> {
   const engineerCmd = detectEngineerCommand(process.argv);
   if (engineerCmd) {
     const code = await dispatchEngineer(engineerCmd);
+    process.exit(code);
+  }
+
+  // Render subcommand (`render-diagrams <file>...`) runs NON-INTERACTIVELY and
+  // exits — it renders the Mermaid blocks in the given Markdown via the
+  // configured mermaid_renderer preset. Best-effort; mirrors the dispatch pattern.
+  const renderCmd = detectRenderCommand(process.argv);
+  if (renderCmd) {
+    const code = await dispatchRender(renderCmd, process.cwd());
     process.exit(code);
   }
 

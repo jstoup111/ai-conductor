@@ -6,6 +6,11 @@
 // open/closed in a way that blocks the gate — on any problem it returns a result
 // carrying a human notice and lets the caller fall back to raw Markdown.
 
+import { execa } from 'execa';
+import { writeFile, mkdir } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { MermaidRendererConfig } from '../types/config.js';
 
 export type RenderStatus =
@@ -34,6 +39,27 @@ export interface RenderDeps {
   writeTemp: (name: string, content: string) => Promise<string>;
   /** Emit a human-facing line (notices, per-block failures). */
   log: (msg: string) => void;
+}
+
+/** Pick the command that opens a produced artifact in the OS default app.
+ *  WSL gets first-class treatment (open in the Windows browser/viewer). Returns
+ *  null when nothing suitable is found — the caller then prints the path. */
+export async function detectOpenerCommand(opts: {
+  platform: NodeJS.Platform;
+  isWsl: boolean;
+  hasTool: (cmd: string) => Promise<boolean>;
+}): Promise<string | null> {
+  const { platform, isWsl, hasTool } = opts;
+  if (isWsl) {
+    // Prefer opening on the Windows side so it lands in a real GUI app.
+    if (await hasTool('wslview')) return 'wslview';
+    if (await hasTool('explorer.exe')) return 'explorer.exe';
+    if (await hasTool('xdg-open')) return 'xdg-open';
+    return null;
+  }
+  if (platform === 'darwin') return 'open';
+  if (await hasTool('xdg-open')) return 'xdg-open';
+  return null;
 }
 
 /** Pull the source of every ```mermaid fenced block, in document order. */
@@ -189,4 +215,69 @@ export async function renderDiagramsForFile(
     safeLog(`  ⚠ diagram rendering failed: ${err instanceof Error ? err.message : String(err)}`);
     return { status: 'error', rendered: 0, failed: 0, outputs: [], notice: 'diagram rendering error — showing raw Markdown' };
   }
+}
+
+// --- Production wiring -------------------------------------------------------
+
+function isWsl(): boolean {
+  if (process.env.WSL_DISTRO_NAME) return true;
+  try {
+    return readFileSync('/proc/version', 'utf-8').toLowerCase().includes('microsoft');
+  } catch {
+    return false;
+  }
+}
+
+/** Real RenderDeps backed by execa + the OS temp dir. The opener is resolved
+ *  once and cached. `log` is injected so callers control where notices go. */
+export function defaultRenderDeps(log: (msg: string) => void): RenderDeps {
+  // `cmd` MUST be a trusted literal — it is interpolated into `sh -c`. All
+  // callers here pass hardcoded tool names ('mmdc'/'wslview'/'explorer.exe'/
+  // 'xdg-open'); never pass user- or file-derived input.
+  const hasTool = async (cmd: string): Promise<boolean> => {
+    try {
+      const r = await execa('sh', ['-c', `command -v ${cmd}`], { reject: false });
+      return r.exitCode === 0;
+    } catch {
+      return false;
+    }
+  };
+
+  let openerCache: string | null | undefined;
+  const resolveOpener = async (): Promise<string | null> => {
+    if (openerCache === undefined) {
+      openerCache = await detectOpenerCommand({ platform: process.platform, isWsl: isWsl(), hasTool });
+    }
+    return openerCache;
+  };
+
+  return {
+    hasTool,
+    runMmdc: async (inputFile, outputFile) => {
+      try {
+        const r = await execa('mmdc', ['-i', inputFile, '-o', outputFile], { reject: false });
+        return { ok: r.exitCode === 0, error: r.exitCode === 0 ? undefined : r.stderr || 'mmdc failed' };
+      } catch (e) {
+        return { ok: false, error: e instanceof Error ? e.message : String(e) };
+      }
+    },
+    open: async (path) => {
+      const opener = await resolveOpener();
+      if (!opener) {
+        log(`  diagram written to ${path} (no opener found — open it manually)`);
+        return;
+      }
+      // The known openers fork-and-return promptly; the bounded timeout keeps
+      // the never-block contract resting on code, not on opener behavior.
+      await execa(opener, [path], { reject: false, timeout: 10_000, stdio: 'ignore' });
+    },
+    writeTemp: async (name, content) => {
+      const dir = join(tmpdir(), 'conduct-mermaid');
+      await mkdir(dir, { recursive: true });
+      const path = join(dir, name);
+      await writeFile(path, content, 'utf-8');
+      return path;
+    },
+    log,
+  };
 }

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   extractMermaidBlocks,
   renderDiagramsForFile,
+  detectOpenerCommand,
   type RenderDeps,
 } from '../../src/engine/mermaid-renderer.js';
 import type { MermaidRendererConfig } from '../../src/types/config.js';
@@ -64,6 +65,36 @@ describe('extractMermaidBlocks', () => {
 
   it('returns empty for content with no mermaid fence', () => {
     expect(extractMermaidBlocks(NO_DIAGRAM_MD)).toEqual([]);
+  });
+});
+
+describe('detectOpenerCommand', () => {
+  const has = (...present: string[]) => async (c: string) => present.includes(c);
+
+  it('prefers wslview on WSL', async () => {
+    expect(
+      await detectOpenerCommand({ platform: 'linux', isWsl: true, hasTool: has('wslview', 'xdg-open') }),
+    ).toBe('wslview');
+  });
+
+  it('falls back to explorer.exe on WSL without wslview', async () => {
+    expect(
+      await detectOpenerCommand({ platform: 'linux', isWsl: true, hasTool: has('explorer.exe') }),
+    ).toBe('explorer.exe');
+  });
+
+  it('uses open on macOS', async () => {
+    expect(await detectOpenerCommand({ platform: 'darwin', isWsl: false, hasTool: has() })).toBe('open');
+  });
+
+  it('uses xdg-open on plain Linux', async () => {
+    expect(
+      await detectOpenerCommand({ platform: 'linux', isWsl: false, hasTool: has('xdg-open') }),
+    ).toBe('xdg-open');
+  });
+
+  it('returns null when no opener is available', async () => {
+    expect(await detectOpenerCommand({ platform: 'linux', isWsl: false, hasTool: has() })).toBeNull();
   });
 });
 
