@@ -21,6 +21,7 @@ projects can use different memory while each behaves consistently.
 - Given a project with no platform chosen, when the harness runs, then the default built-in platform is active.
 - Given a project where I have chosen an alternative platform, when the harness runs, then that platform is active for that project.
 - Given two projects with different choices, when each runs, then each uses its own chosen platform independently.
+- Given any project, when its platform is resolved, then exactly one platform is active (no per-category mixing); switching changes the whole project.
 
 #### Negative Paths
 - Given a project's platform choice, when an unrelated project runs, then the unrelated project's active platform is unchanged (no cross-project leakage).
@@ -109,6 +110,7 @@ worktree is available in the others and is not lost when a worktree is removed.
 #### Happy Path
 - Given memory written while working in worktree A, when I work in sibling worktree B of the same project, then that memory is available in B.
 - Given memory written in worktree A, when worktree A is removed, then the memory persists.
+- Given memory is one set per project (branch-independent), when I write it on any branch's worktree, then it is visible everywhere immediately (not gated on a merge) — accepting that memory from a later-abandoned branch also persists.
 
 #### Negative Paths
 - Given a worktree is removed, when the removal completes, then no shared project memory is deleted as a side effect.
@@ -249,7 +251,7 @@ be reversible, so adoption carries no risk of loss.
 - Given a migration where the existing entries cannot first be safely preserved, when migration is attempted, then NO destructive change is made (it aborts safely, leaving the project as it was).
 - Given a migration interrupted partway, when I re-run it, then no entries are lost and it completes (or remains safely reversible).
 - Given an already-migrated project, when I migrate again, then it is a clean no-op.
-- Given a migrated project, when I reverse the migration, then the project is restored to its prior state.
+- Given a migrated project, when I reverse the migration (a one-time rollback), then the project is restored to its pre-migration state; ongoing memory after migration accrues in the new model.
 
 ### Done When
 - [ ] After migration, every pre-existing memory entry is still present and recallable.
@@ -291,14 +293,14 @@ failed save, never blocks the SDLC flow.
 
 #### Negative Paths
 - Given a misconfigured platform, when the harness runs, then it surfaces a warning and the run continues to completion.
-- Given the active platform is unavailable at recall or persist time, when the operation is attempted, then a warning is surfaced and the run continues.
-- Given a persist that fails, when it fails, then a warning is surfaced, the run continues, and nothing crashes.
+- Given the active platform is unavailable at recall time, when recall is attempted, then a warning is surfaced and the run continues.
+- Given the active platform cannot accept a write (unavailable at persist time), when persistence is attempted, then the entry is saved to the **default local store** instead and a warning is surfaced — the memory is **not lost** and the run continues (FR-13a).
 - Given repeated memory failures during a run, when they occur, then warnings are bounded (not flooding) and the run still completes.
 
 ### Done When
 - [ ] A misconfigured platform yields a warning and a completed run.
-- [ ] An unavailable platform at read/write time yields a warning and a completed run.
-- [ ] A failed persist warns, does not crash, and the run completes.
+- [ ] An unavailable platform at recall time yields a warning and a completed run.
+- [ ] A write that the active platform cannot accept is saved to the default local store (not lost), warns, and the run completes.
 - [ ] Repeated failures stay bounded in warnings and never abort the run.
 
 ---

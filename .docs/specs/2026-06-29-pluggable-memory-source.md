@@ -63,19 +63,24 @@ This affects every project that uses the harness, not just this repo.
 
 ### Choosing a platform
 - **FR-1:** An operator can select the active memory platform **per project**; with no selection, a
-  default built-in platform is used.
+  default built-in platform is used. **Exactly one** platform is active per project at a time — there is
+  no per-category mixing; switching changes the platform for the whole project.
 - **FR-2:** Selecting an unknown or unavailable platform does not break a run — the harness reports it
   clearly and falls back to the default platform.
 
 ### Retrieval is the LLM's
-- **FR-3:** All memory retrieval is performed by the LLM against the active platform. The harness
-  contains no search, ranking, relevance, or embedding logic. *(Verifiable: no such logic exists.)*
+- **FR-3:** All memory retrieval is performed by the LLM against the active platform — **including the
+  default platform**, where recall is the agent reading and judging relevance (as today). The harness
+  contains no search, ranking, relevance, or embedding logic for any platform. *(Verifiable: no such
+  logic exists.)*
 - **FR-4:** Each non-default platform provides LLM-facing guidance for recalling and persisting memory,
   and that guidance is in effect when the platform is active.
 
 ### Durability across worktrees
 - **FR-5:** Harness memory written while working in one worktree is available in the project's other
-  worktrees and **persists after that worktree is removed**.
+  worktrees and **persists after that worktree is removed**. Sharing is **branch-independent**: memory
+  is one set per project, visible across all its worktrees immediately (not gated on a merge). Accepted
+  trade-off: memory written while exploring a later-abandoned branch still persists in the shared set.
 
 ### Adopting & removing platforms
 - **FR-6:** An operator can adopt a memory platform for a project in a single deliberate action that
@@ -86,20 +91,27 @@ This affects every project that uses the harness, not just this repo.
 - **FR-8:** The default platform requires no adoption step, no external service, and no credentials.
 
 ### Continuity & parity
-- **FR-9:** The default platform preserves today's memory experience — the same categories and recall
-  quality the operator has now.
+- **FR-9:** The default platform **is today's memory, behavior-identical** — the same categories and the
+  same agent-reads-and-judges recall the operator has now. Only where it is stored changes (to make it
+  durable and shared per FR-5); nothing about the memory experience changes.
 - **FR-10:** Existing harness behaviors that read or write memory (the memory step, design steps that
   recall prior decisions, project setup) work unchanged regardless of the active platform.
 
 ### Safe adoption for existing projects
 - **FR-11:** Moving an existing project to the new memory model **preserves all existing memory entries
-  and is reversible**. If the entries cannot first be safely preserved, the move makes **no destructive
-  change**.
+  and is reversible**. Reversibility is a **one-time rollback to the pre-migration state** (a safety net),
+  not a perpetual two-way sync: after a successful migration, ongoing memory accrues in the new model,
+  and "reverse" restores what existed before migrating. If the entries cannot first be safely preserved,
+  the move makes **no destructive change**.
 - **FR-12:** A newly set-up project uses the default platform and needs no migration.
 
 ### Resilience
 - **FR-13:** Memory problems (a misconfigured or unavailable platform, a failed persist) are surfaced as
   warnings and **never abort** a harness run — memory is best-effort.
+- **FR-13a (no-loss on write failure):** When the active platform cannot accept a write, the entry is
+  **saved to the default local store instead** (and a warning is surfaced) so the memory is not lost; the
+  run continues. *(Entries may then be split across stores until reconciled — reconciliation is not
+  required for the run to succeed.)*
 
 ## Non-Functional Requirements
 - **LLM owns retrieval** (FR-3) — the architectural invariant the whole feature is shaped around.
