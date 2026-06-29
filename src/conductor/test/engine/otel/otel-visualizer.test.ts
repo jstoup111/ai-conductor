@@ -271,3 +271,104 @@ describe('T19: bounded export timeout — stop() resolves within exportTimeoutMi
     expect(elapsed).toBeLessThan(DEADLINE_MS);
   }, 10_000 /* test timeout: must complete well before 10 s */);
 });
+
+// ── T21: flush on exit — SIGINT/SIGTERM handlers ──────────────────────────────
+
+describe('T21: flush on exit — idempotent stop() and signal handlers', () => {
+  let t21TempDir: string;
+  let t21PipelineDir: string;
+  let t21SpanExporter: InMemorySpanExporter;
+  let t21MetricExporter: InMemoryMetricExporter;
+  let t21Emitter: ConductorEventEmitter;
+
+  beforeEach(async () => {
+    t21TempDir = await mkdtemp(join(tmpdir(), 'otel-vis-t21-'));
+    t21PipelineDir = join(t21TempDir, '.pipeline');
+    t21SpanExporter = new InMemorySpanExporter();
+    t21MetricExporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+    t21Emitter = new ConductorEventEmitter();
+  });
+
+  afterEach(async () => {
+    await rm(t21TempDir, { recursive: true, force: true });
+  });
+
+  function makeVis(): OtelVisualizer {
+    const resolved = resolveOtelConfig(
+      { otel: { exporter: 'otlp', endpoint: 'http://localhost:4318' } },
+      t21PipelineDir,
+    );
+    return new OtelVisualizer(resolved, {
+      runId: 'test-t21',
+      feature: 'test-feature',
+      project: 'test-project',
+      spanExporter: t21SpanExporter,
+      metricExporter: t21MetricExporter,
+    });
+  }
+
+  it('calling stop() twice returns the same promise (no double-flush)', async () => {
+    const vis = makeVis();
+    vis.start(t21Emitter);
+    await t21Emitter.emit({ type: 'step_started', step: 'bootstrap', index: 0 });
+    await t21Emitter.emit({ type: 'step_completed', step: 'bootstrap', status: 'done' });
+    await t21Emitter.emit({ type: 'feature_complete', featureDesc: 'test' });
+
+    const p1 = vis.stop();
+    const p2 = vis.stop();
+    // Both must be the same promise object (idempotent).
+    expect(p1).toBe(p2);
+    await p1;
+    // Spans must appear exactly once (no duplicate flush).
+    const roots = t21SpanExporter.getFinishedSpans().filter((s) => !s.parentSpanId);
+    expect(roots).toHaveLength(1);
+  });
+
+  it('SIGINT triggers stop() and spans are flushed', async () => {
+    const vis = makeVis();
+    vis.start(t21Emitter);
+    await t21Emitter.emit({ type: 'step_started', step: 'bootstrap', index: 0 });
+    await t21Emitter.emit({ type: 'step_completed', step: 'bootstrap', status: 'done' });
+    await t21Emitter.emit({ type: 'feature_complete', featureDesc: 'test' });
+
+    // Simulate SIGINT — triggers the registered handler.
+    process.emit('SIGINT');
+
+    // Wait for the flush to complete by awaiting stop() directly.
+    // stop() is idempotent: calling it again after SIGINT triggered it returns
+    // the same promise that is already resolving.
+    await vis.stop();
+
+    expect(t21SpanExporter.getFinishedSpans().length).toBeGreaterThan(0);
+  });
+
+  it('SIGTERM triggers stop() and spans are flushed', async () => {
+    const vis = makeVis();
+    vis.start(t21Emitter);
+    await t21Emitter.emit({ type: 'step_started', step: 'plan', index: 2 });
+    await t21Emitter.emit({ type: 'step_completed', step: 'plan', status: 'done' });
+    await t21Emitter.emit({ type: 'feature_complete', featureDesc: 'test' });
+
+    process.emit('SIGTERM');
+    await vis.stop();
+
+    expect(t21SpanExporter.getFinishedSpans().length).toBeGreaterThan(0);
+  });
+
+  it('signal handler is removed after stop() — no listener leak', async () => {
+    const vis = makeVis();
+    vis.start(t21Emitter);
+
+    const sigintCountBefore = process.listenerCount('SIGINT');
+    await vis.stop();
+    // After stop, our handler must have been unregistered.
+    const sigintCountAfter = process.listenerCount('SIGINT');
+    expect(sigintCountAfter).toBe(sigintCountBefore - 1);
+  });
+
+  it('stop() without prior start() still resolves (no-op flush on empty state)', async () => {
+    const vis = makeVis();
+    // Never call start() — stop() should still resolve cleanly.
+    await expect(vis.stop()).resolves.toBeUndefined();
+  });
+});

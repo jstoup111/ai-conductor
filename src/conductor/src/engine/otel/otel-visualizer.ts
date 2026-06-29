@@ -175,6 +175,20 @@ export class OtelVisualizer implements VisualizerPlugin {
   /** Registered handlers, kept for potential off() cleanup (currently no off needed). */
   private emitter: ConductorEventEmitter | null = null;
 
+  // ── T21: idempotent stop + SIGINT/SIGTERM flush handlers ──────────────────
+
+  /**
+   * Promise from the first stop() call. Set on first invocation; all subsequent
+   * calls return the same promise (idempotent — no double-flush, no deadlock).
+   */
+  private stopPromise: Promise<void> | null = null;
+
+  /**
+   * Bound signal handler. Stored so it can be unregistered in stop() without
+   * leaking across OtelVisualizer instances or test runs.
+   */
+  private sigHandler: (() => void) | null = null;
+
   constructor(config: ResolvedOtelConfig, ctx: OtelVisualizerContext) {
 
     // Build the OTel resource from injected context (FR-6).
@@ -266,6 +280,9 @@ export class OtelVisualizer implements VisualizerPlugin {
   /**
    * Attach to the emitter. Called once at run start.
    * All handlers return void (synchronous) to keep emit() non-blocking (R1).
+   *
+   * Also registers SIGINT/SIGTERM handlers that call stop() on process termination
+   * (T21). Handlers are unregistered in stop() to prevent leaks across instances.
    */
   start(emitter: ConductorEventEmitter): void {
     this.emitter = emitter;
@@ -284,28 +301,59 @@ export class OtelVisualizer implements VisualizerPlugin {
         this.handleEvent(event);
       });
     }
+
+    // T21: register SIGINT/SIGTERM handlers so an abrupt process termination
+    // still triggers a best-effort flush. Both signals are handled by the same
+    // function. stop() is idempotent — a second signal during flush returns the
+    // existing stopPromise rather than starting a second flush.
+    this.sigHandler = (): void => {
+      void this.stop();
+    };
+    process.on('SIGINT', this.sigHandler);
+    process.on('SIGTERM', this.sigHandler);
   }
 
   /**
-   * Detach from the emitter (if any), force-close open spans (FR-9),
-   * flush the batch processors, and shut down providers.
+   * Force-close open spans (FR-9), flush the batch processors, and optionally
+   * shut down providers. Idempotent — safe to call from signal handlers or
+   * directly; subsequent calls return the same promise from the first invocation
+   * (not a new wrapper — callers can use reference equality to detect re-entry).
+   *
+   * NOTE: We intentionally call forceFlush() ONLY and NOT shutdown() here.
+   * BatchSpanProcessor.shutdown() calls exporter.shutdown() which clears
+   * InMemorySpanExporter._finishedSpans — making spans unreadable after stop().
+   * Callers (tests, acceptance spec) read spans AFTER stop(), so we must not
+   * clear the exporter. In production (OTLP / file), the process exits after
+   * stop() so the providers are GC'd naturally.
    */
-  async stop(): Promise<void> {
+  stop(): Promise<void> {
+    // Idempotent: if already stopping/stopped, return the existing promise.
+    // Not async so the returned Promise is the raw stored promise, not a wrapper.
+    if (this.stopPromise !== null) return this.stopPromise;
+
+    // Unregister signal handlers immediately so they don't fire again during flush
+    // and don't leak across OtelVisualizer instances (T21 no-leak contract).
+    if (this.sigHandler !== null) {
+      process.off('SIGINT', this.sigHandler);
+      process.off('SIGTERM', this.sigHandler);
+      this.sigHandler = null;
+    }
+
+    this.stopPromise = this._doStop();
+    return this.stopPromise;
+  }
+
+  /** Internal flush implementation. Only ever called once (guarded by stopPromise). */
+  private async _doStop(): Promise<void> {
     // Force-close any spans still open (e.g. interrupted run, FR-9).
     this.spanManager.forceCloseAll();
 
     // Flush providers (off the hot path — intentionally async).
     //
-    // NOTE: We intentionally call forceFlush() ONLY and NOT shutdown() here.
-    // BatchSpanProcessor.shutdown() calls exporter.shutdown() which clears
-    // InMemorySpanExporter._finishedSpans — making spans unreadable after stop().
-    // Callers (tests, acceptance spec) read spans AFTER stop(), so we must not
-    // clear the exporter. In production (OTLP / file), the process exits after
-    // stop() so the providers are GC'd naturally.
-    //
     // FR-8: export/flush errors are already intercepted at the exporter level
     // (WarnOnceSpanExporter / WarnOnceMetricExporter). We additionally wrap here
     // in case forceFlush() itself throws (rare but possible on SDK internals).
+    // T21: a dead transport still resolves within exportTimeoutMillis (T19 bound).
     try {
       await this.tracerProvider.forceFlush();
     } catch (err) {
