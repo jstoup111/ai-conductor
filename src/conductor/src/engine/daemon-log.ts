@@ -1,9 +1,10 @@
 // daemon-log.ts — Append-only daemon activity log + read/tail/follow primitives.
 //
-// The daemon is spawned detached with `stdio:'ignore'` (daemon-launch.ts), so its
+// The daemon runs in a tmux session you may not be attached to (ADR-014), so its
 // `console.log('[daemon] …')` lines — including the per-feature BUILD progress
-// rendered by `renderDaemonEvent` — are discarded. To make daemon *activity*
-// observable (not just liveness), `runDaemonMode` tees its `log()` sink into this
+// rendered by `renderDaemonEvent` — would otherwise be visible only while connected.
+// To make daemon *activity* observable (not just liveness) at any time and to keep a
+// durable record, `runDaemonMode` tees its `log()` sink into this
 // file, and `conduct daemon logs` reads it back.
 //
 // The pidfile name and the O_EXCL create flag are confined to daemon-lock.ts by a
@@ -38,8 +39,8 @@ export interface DaemonLogSink {
 /**
  * Open the daemon activity log for appending. Ensures `.daemon/` exists, performs
  * a simple one-file size-cap rotation (oversized log → `daemon.log.1`), then opens
- * the log in append mode. Independent of the process's stdio, so it survives the
- * detached `stdio:'ignore'` launch.
+ * the log in append mode. Independent of the process's stdio, so the activity record
+ * persists whether or not anyone is attached to the daemon's tmux session.
  */
 export async function openDaemonLog(repoPath: string): Promise<DaemonLogSink> {
   const dir = daemonDir(repoPath);

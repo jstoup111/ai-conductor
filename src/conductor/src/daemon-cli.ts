@@ -84,7 +84,7 @@ const PRESEEDED_DONE: StepName[] = [
 ];
 
 // Strip ANSI SGR color codes (chalk, #88) so the persistent daemon.log is always
-// plain text. In the real detached daemon (non-TTY) chalk is already disabled, so
+// plain text. When the daemon runs non-interactively (no attached TTY) chalk is already disabled, so
 // this is a no-op there; it only matters for a foreground/TTY `conduct daemon` run.
 // eslint-disable-next-line no-control-regex -- ESC (\x1b) is intrinsic to ANSI SGR
 const ANSI_SGR = /\x1b\[[0-9;]*m/g;
@@ -106,8 +106,9 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   // fast-forwards this branch on each idle poll (see fastForwardRoot).
   const baseBranch =
     opts.baseBranch ?? (await originDefaultBranch(makeGitRunner(projectRoot))) ?? 'main';
-  // Tee every daemon log line to a file so a detached `stdio:'ignore'` launch is
-  // still observable via `conduct daemon logs`. Console gets the colorized line
+  // Tee every daemon log line to a file so the daemon stays observable via
+  // `conduct daemon logs` even when no one is attached to its tmux session. Console
+  // (the session PTY) gets the colorized line
   // (#88); the file gets ANSI-stripped plain text so the persistent log never
   // carries escape codes — `daemon logs`/grep stay clean regardless of whether the
   // run had color on. The sink is opened once we own the repo (below); until then

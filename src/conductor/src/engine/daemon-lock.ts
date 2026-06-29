@@ -12,8 +12,9 @@
 //     success or EPERM = alive (never reclaimed — conservative).
 //   - Stale reclaim (FR-19): dead lock is reclaimed by unlink + re-create via
 //     O_EXCL. The reclaim itself races safely — only one reclaimer wins.
-//   - ensure-running (FR-21): probe lock; alive → no-op; none/stale → spawn one
-//     detached daemon (fire-and-forget, no lifecycle ownership).
+//   - ensure-running (FR-21): probe lock; alive → no-op; none/stale → launch one
+//     daemon (fire-and-forget, no lifecycle ownership). The launch is now hosted in
+//     a tmux session via supervisor.start (ADR-014); the engineer retains no handle.
 //   - Isolation (FR-20 caveat): this module is the single swappable boundary so
 //     the single-winner model can change without rippling into routing/authoring.
 
