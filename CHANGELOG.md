@@ -12,6 +12,11 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- **Implementation subagents must not fetch/rebase/pull (pipeline).** Every per-task dispatch
+  prompt now instructs the implementation subagent to NOT run `git fetch`/`pull`/`rebase` or switch
+  branches — it commits only to the current feature branch. Prevents the mid-build auto-rebase onto
+  a moved `origin/main` that stalled a feature branch in a CHANGELOG conflict. Reaffirms that the
+  only sanctioned rebase is the daemon's finish-time, daemon-gated rebase-onto-latest.
 - **Type-check gate in the TDD DOMAIN/COMMIT phase.** The post-GREEN DOMAIN phase now runs the
   project's type-checker (e.g. `tsc --noEmit` / `npm run typecheck`) as a mechanical pre-check
   before the domain reviewer is dispatched — a type error returns straight to GREEN rather than
