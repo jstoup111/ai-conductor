@@ -145,6 +145,28 @@ escalates to the recovery menu, where the human picks where to route. In a **dae
 Re-auditing unchanged code yields the same verdict, so the daemon skips the default per-step
 retries for a blocking `prd_audit` and routes straight away.
 
+### Mermaid diagram rendering (approval gates)
+
+Generated architecture diagrams and DRAFT ADRs are Mermaid-in-Markdown. So the human approves
+a *visual* (not raw Mermaid), the artifact-review path renders them:
+
+- **Engine** (`engine/mermaid-renderer.ts`) — `renderDiagramsForFile(file, content, config, deps)`
+  extracts the ```mermaid blocks and dispatches on the configured **preset name**: `html`
+  (build a self-contained mermaid.js page), `mmdc-png`/`mmdc-svg` (shell out to
+  `@mermaid-js/mermaid-cli`), `none`/unknown/unconfigured (skip). Best-effort by contract: it
+  never throws, isolates per-diagram failures, HTML-escapes diagram source, and returns a
+  `notice` on any skip/failure. Presets + valid modes live in `engine/mermaid-renderer-presets.ts`
+  (parallel to `md-viewer-presets.ts`); the config block is `mermaid_renderer.{preset,command,
+  args,mode}`, validated in `engine/config.ts` like `markdown_viewer`.
+- **Gate** — `TerminalPromptHost.reviewArtifacts` shows the raw Markdown first (always-present
+  fallback), then, for a file containing a mermaid fence, calls an injected `renderDiagrams`
+  hook and logs any returned notice on the host's own channel (TUI-safe). `index.ts` wires the
+  hook from the **merged** config (the preset is set user-level by `bin/install`).
+- **CLI** — `conduct render-diagrams <file>...` (`engine/render-cli.ts`) renders on demand.
+- **Opener** — `detectOpenerCommand` resolves per platform (macOS `open`, Linux `xdg-open`,
+  WSL `wslview`/`explorer.exe`); `defaultRenderDeps` runs it with a bounded timeout so the
+  never-block contract rests on code, not opener behavior.
+
 ### Rebase-on-latest (before finish)
 
 The `rebase` step is an **engine-native** loopGate (like `complexity` — no Claude dispatch;
