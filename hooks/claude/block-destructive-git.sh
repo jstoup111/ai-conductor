@@ -31,16 +31,18 @@ fi
 
 # Block ad-hoc rebases of a feature branch onto a base. A mid-build rebase onto an
 # advanced `main` rewrites history under active work and triggers surprise
-# conflicts (it bit two feature branches during Phase 9). The ONLY sanctioned
-# rebase is the daemon's finish-time rebase-on-latest, which runs via execa (not
-# this hook) with conflict→HALT + CHANGELOG auto-resolve. Resolving an
-# already-in-progress rebase (--continue/--abort/--skip/--edit-todo) is allowed.
+# conflicts (it bit two feature branches during Phase 9). That discipline now
+# lives in the skill prompts (build/tdd/pipeline) and HARNESS.md → Rebase Policy,
+# NOT in a hard block: a hard block also rejected the legitimate operator rebase
+# (refreshing a stale PR) and the /rebase resolver. So ad-hoc `git rebase` is
+# ALLOWED here; we emit a NON-blocking reminder so a manual rebase stays a
+# conscious choice. The daemon's finish-time rebase runs via execa (not this
+# hook). --continue/--abort/--skip/--edit-todo pass silently (no reminder).
 if echo "$SCAN" | grep -qE 'git\s+rebase\b'; then
   if echo "$SCAN" | grep -qE 'git\s+rebase\s+(--continue|--abort|--skip|--edit-todo|--quit)\b'; then
-    : # finishing/aborting an in-progress rebase — allowed
+    : # advancing/aborting an in-progress rebase — always fine, no note
   else
-    echo "BLOCKED: ad-hoc 'git rebase' is blocked (mid-build rebase hazard). The only sanctioned rebase is the daemon's finish-time rebase-on-latest. To deliberately update a feature branch onto main, ask the user first. (--continue/--abort/--skip are allowed.)" >&2
-    exit 2
+    echo "NOTE: 'git rebase' is allowed but should be rare — only the daemon finish-time rebase-on-latest and the /rebase resolver rebase feature branches; never rebase mid-build (HARNESS.md → Rebase Policy). Proceeding." >&2
   fi
 fi
 

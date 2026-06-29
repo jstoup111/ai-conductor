@@ -31,7 +31,33 @@ fi
 # Requires tmux on the host for the management verbs: e.g. `sudo apt-get install tmux`.
 ```
 
+### Changed
+
+- **Rebase discipline moved from the `block-destructive-git` hook into the skill prompts +
+  HARNESS.md.** The hook previously *hard-blocked* every ad-hoc `git rebase` (exit 2). That also
+  rejected the two legitimate cases — an operator deliberately refreshing a stale PR branch onto
+  its base, and the `/rebase` resolver — forcing awkward workarounds. The hook now **allows**
+  `git rebase` and emits a single non-blocking reminder instead; `--continue/--abort/--skip/
+  --edit-todo` pass silently. The "never rebase mid-build" rule is now stated canonically in a new
+  **HARNESS.md → Rebase Policy** section and reinforced in the build-loop skills (`tdd` COMMIT
+  phase step 7; `pipeline` already instructs the implementation subagent). Force-push,
+  `reset --hard`, unmerged `branch -D`, `clean -f`, and `checkout -- .` remain hard-blocked.
+
 ### Fixed
+
+- **Daemon build worktrees now fork from `origin/<default>`, not local `<default>` (conduct-ts).**
+  A fresh per-feature worktree was cut from the daemon's LOCAL default branch
+  (`git worktree add -b <branch> <path> main`). But `fastForwardRoot` only advances
+  local `main` while the root checkout is actually on it — so whenever another
+  process leaves the root on a different branch or a detached `HEAD` (e.g. an
+  in-progress rebase), local `main` silently goes stale and every new worktree
+  built against old code, even though `origin/main` had advanced. `createWorktree`
+  now resolves the build base via `resolveWorktreeBase`, preferring the
+  remote-tracking `origin/<default>` tip (falling back to local `<default>` only
+  when `origin/<default>` is unresolvable — a local-only repo never fetched). The
+  fast-forward path and backlog discovery are intentionally unchanged. Covered by
+  new `daemon-deps` tests (origin/<base> base + local fallback) and a real-binary
+  smoke of `git rev-parse --verify --quiet` + `git worktree add … origin/<default>`.
 
 - **Test suite leaked real build daemons; added an auto-launch kill-switch (conduct-ts).** Several
   engineer tests exercise the real handoff `ensureRunning` without injecting a launch, so under

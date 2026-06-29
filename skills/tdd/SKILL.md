@@ -114,6 +114,11 @@ inputs without failing open or closed). Has veto authority to send back to GREEN
 5. **Commit immediately** — do not defer commits to end of cycle or batch. Connection
    interruptions lose uncommitted work. Commit as soon as GREEN passes and linter is clean.
 6. Commit with descriptive message referencing the behavior added
+7. **Commit only to the current feature branch — never integrate upstream.** Do NOT run
+   `git fetch`, `git pull`, `git rebase`, or switch branches during the cycle. Mid-build
+   rebase onto a moved `origin/<default>` rewrites history under active work. The only
+   sanctioned rebases are the daemon's finish-time rebase-onto-latest and the `/rebase`
+   resolver — both outside this loop. See HARNESS.md → Rebase Policy.
 
 **After commit:** Return to RED for the next cycle, or stop if all criteria for the current
 task are covered.
