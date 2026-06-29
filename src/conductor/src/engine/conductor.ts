@@ -2,6 +2,7 @@ import {
   readFile,
   writeFile,
   mkdir,
+  readdir,
   access as accessFile,
   unlink as unlinkFile,
 } from 'node:fs/promises';
@@ -45,8 +46,10 @@ import {
   classifyPrdAuditGaps,
   readRemediationPlan,
   sweepStaleReviewArtifacts,
+  parseTrack,
   type RemediationGap,
 } from './artifacts.js';
+import type { Track } from '../types/index.js';
 import { resolveStepConfig } from './resolved-config.js';
 import { selectNextGate } from './selector.js';
 import { computeAndWriteVerdict, readAllVerdicts } from './gate-verdicts.js';
@@ -435,13 +438,17 @@ export class Conductor {
 
         // Check if step should be skipped for this work track (ADR-015/017).
         // `prd` is skipped on the technical track (no product requirements to
-        // spec). A missing track defaults to `product`, so PRD runs unless the
-        // feature was explicitly classified technical in `explore`.
-        if ((step.skippableForTracks ?? []).includes(state.track ?? 'product')) {
-          await saveStepStatus(this.stateFilePath, step.name, 'skipped');
-          state[step.name] = 'skipped';
-          await this.events.emit({ type: 'config_skip', step: step.name });
-          continue;
+        // spec). The track is resolved from `state.track` (daemon-seeded) or, in
+        // the interactive flow, from the committed `.docs/track/<slug>.md` marker
+        // that `/explore` wrote. A missing/unreadable track defaults to `product`.
+        if (step.skippableForTracks && step.skippableForTracks.length > 0) {
+          const track = await this.resolveTrack(state);
+          if (step.skippableForTracks.includes(track)) {
+            await saveStepStatus(this.stateFilePath, step.name, 'skipped');
+            state[step.name] = 'skipped';
+            await this.events.emit({ type: 'config_skip', step: step.name });
+            continue;
+          }
         }
 
         // Phase 9.1 (ADR-002 Option A): under the daemon, skip the in-loop `retro`
@@ -1272,7 +1279,9 @@ export class Conductor {
     // ever marking it.
     let markedSkip = false;
     const tier = state.complexity_tier ?? 'L';
-    const track = state.track ?? 'product';
+    // Resolve the track once (state-seeded, or the committed marker in the
+    // interactive flow) so a technical feature skips prd_audit in the SHIP loop.
+    const track = await this.resolveTrack(state);
     for (const s of steps) {
       if (
         getStepStatus(state, s.name) === 'pending' &&
@@ -1574,6 +1583,34 @@ export class Conductor {
    * 3. Write tier + step status atomically.
    * On callback error (e.g., Ctrl-C), leave the step pending — no stuck state.
    */
+  /**
+   * Resolve the work track (ADR-015/017). Prefers `state.track` (daemon-seeded);
+   * otherwise reads the committed `.docs/track/<slug>.md` marker that `/explore`
+   * wrote in the interactive flow (newest file wins — one feature per worktree),
+   * caches it into `state.track`, and persists. Defaults to `product` when no
+   * usable marker exists, so PRD / prd-audit run unless the work was explicitly
+   * classified `technical`. Best-effort: any fs error falls back to `product`.
+   */
+  private async resolveTrack(state: ConductState): Promise<Track> {
+    if (state.track) return state.track;
+    try {
+      const dir = join(this.projectRoot, '.docs', 'track');
+      const entries = (await readdir(dir)).filter((f) => f.endsWith('.md')).sort();
+      if (entries.length > 0) {
+        const content = await readFile(join(dir, entries[entries.length - 1]), 'utf-8');
+        const parsed = parseTrack(content);
+        if (parsed) {
+          state.track = parsed;
+          await writeState(this.stateFilePath, state);
+          return parsed;
+        }
+      }
+    } catch {
+      // No marker / unreadable → default product.
+    }
+    return 'product';
+  }
+
   private async runComplexityStep(state: ConductState): Promise<StepRunResult> {
     // Auto mode: take any existing tier, else default to L. No prompt, no Claude call.
     if (this.mode === 'auto') {

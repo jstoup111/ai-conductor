@@ -44,6 +44,50 @@ describe('engine/conductor', () => {
     await rm(dir, { recursive: true, force: true });
   });
 
+  describe('track resolution from the committed marker (ADR-015/017, interactive)', () => {
+    it('technical marker → prd is skipped even when state.track is unset', async () => {
+      // /explore wrote the marker; state has no `track` (interactive path).
+      await mkdir(join(dir, '.docs', 'track'), { recursive: true });
+      await writeFile(join(dir, '.docs', 'track', 'feat.md'), '# Track\n\nTrack: technical\n');
+      await writeState(statePath, {
+        worktree: 'done', memory: 'done', explore: 'done', complexity: 'done',
+        complexity_tier: 'M',
+      } as ConductState);
+
+      const stepsRun: StepName[] = [];
+      const runner: StepRunner = { run: async (s) => { stepsRun.push(s); return { success: true }; } };
+      const conductor = new Conductor({
+        stateFilePath: statePath, stepRunner: runner, events, projectRoot: dir, fromStep: 'prd',
+      });
+      await conductor.run();
+
+      expect(stepsRun).not.toContain('prd');
+      const r = await readState(statePath);
+      if (r.ok) {
+        expect(r.value.prd).toBe('skipped');
+        expect(r.value.track).toBe('technical'); // resolved from marker + persisted
+      }
+    });
+
+    it('product marker → prd runs', async () => {
+      await mkdir(join(dir, '.docs', 'track'), { recursive: true });
+      await writeFile(join(dir, '.docs', 'track', 'feat.md'), '# Track\n\nTrack: product\n');
+      await writeState(statePath, {
+        worktree: 'done', memory: 'done', explore: 'done', complexity: 'done',
+        complexity_tier: 'M',
+      } as ConductState);
+
+      const stepsRun: StepName[] = [];
+      const runner: StepRunner = { run: async (s) => { stepsRun.push(s); return { success: true }; } };
+      const conductor = new Conductor({
+        stateFilePath: statePath, stepRunner: runner, events, projectRoot: dir, fromStep: 'prd',
+      });
+      await conductor.run();
+
+      expect(stepsRun).toContain('prd');
+    });
+  });
+
   it('starts at step index 0 for new feature', async () => {
     const runner = createMockStepRunner();
     const conductor = new Conductor({ stateFilePath: statePath, stepRunner: runner, events });

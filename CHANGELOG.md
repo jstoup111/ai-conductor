@@ -716,6 +716,21 @@ grep -rnE 'conduct-ts +(["'\'']|[A-Za-z])' . 2>/dev/null \
 Pipeline flags are unchanged — they simply move after the `inline` token
 (`conduct-ts inline --auto "<feature>"`, `conduct-ts inline --status`, …).
 
+The `brainstorm` skill was split into `explore` + `prd` (DECIDE restructure). The
+`skills/brainstorm/` directory is removed and `skills/explore/` + `skills/prd/` are
+added, so installed skill symlinks need refreshing — re-running `./bin/install`
+re-links the new skills; the line below also prunes the now-dangling `brainstorm`
+symlink in case your installer doesn't:
+
+```bash
+# Remove the stale brainstorm skill symlink (if present), then refresh all skills.
+rm -f "${HOME}/.claude/skills/brainstorm"
+./bin/install
+```
+
+No project-level action is needed: persisted `conduct-state.json` is migrated
+automatically on read (a recorded `brainstorm` step maps to `explore` + `prd`).
+
 ## [0.99.17] - 2026-05-02
 
 ## [0.99.16] - 2026-05-02
