@@ -199,6 +199,9 @@ ADRs follow a three-phase lifecycle. No ADR becomes authoritative without human 
 **Phase 2: REVIEW**
 - All DRAFT ADRs created during architecture-review are presented to the user for approval
   via `review_artifacts` (clear screen, one at a time)
+- When an ADR contains a Mermaid diagram and a `mermaid_renderer` is configured
+  (`~/.ai-conductor/config.yml`), `review_artifacts` renders it to a visual so the user
+  approves what they can see; with no renderer it falls back to the raw Markdown (never blocks)
 - The user approves, rejects (launches interactive Claude to revise), or requests changes
 - On approval, status is updated to `Status: APPROVED` and the ADR becomes authoritative
 - On rejection, the ADR is revised in-place and re-presented until approved
