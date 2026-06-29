@@ -108,6 +108,15 @@ Key sub-decisions:
    absolute-path hash prevents two same-named repos colliding in tmux’s per-user-global namespace
    (FR-11).
 
+7. **Daemon lifetime: long-lived by design (no idle self-limit).** The foreground session command is
+   `conduct-ts daemon --continuous` — it deliberately **omits the `--max-idle-polls` self-limit** the
+   former `launchDaemonDetached` engineer launch carried (the Phase 9 per-daemon idle ceiling). A
+   tmux-hosted daemon is meant to **persist** so an operator can `connect`/`debug`/`restart` an
+   already-running daemon at any time; an idle self-exit would tear the attachable session out from
+   under that operator. The per-daemon bound is therefore the **operator `stop`** verb (and reboot,
+   which drops sessions), not an idle timeout. This is an accepted behavior change from the Phase 9
+   ceiling, ratified with the operator: in practice the daemon was already run `--continuous`.
+
 ## Consequences
 
 ### Positive

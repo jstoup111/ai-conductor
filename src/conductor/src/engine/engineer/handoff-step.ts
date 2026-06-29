@@ -113,8 +113,16 @@ export async function runHandoff(
     } else {
       await ensureRunning(target.canonicalPath, {});
     }
-  } catch {
-    // Fire-and-forget: ensure-running failure must never block the engineer loop.
+  } catch (err) {
+    // Fire-and-forget: ensure-running failure must never block the engineer loop —
+    // but it must NOT be silent. The ADR-014 launch path now hosts the daemon in a
+    // tmux session, so a tmux-less host throws TmuxNotInstalledError here; swallowing
+    // it would author the spec PR while silently launching no daemon (specs pile up
+    // unbuilt with no signal). Surface the reason; the spec branch still lands.
+    const reason = err instanceof Error ? err.message : String(err);
+    deps.print(
+      `⚠ Spec authored, but the build daemon was not started for "${target.name}": ${reason}`,
+    );
   }
 
   // 4g. Return the authored entry (work was done on BOTH paths).

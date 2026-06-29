@@ -33,6 +33,14 @@ fi
 
 ### Fixed
 
+- **Silent daemon-launch failure on a tmux-less host (engineer).** The engineer's fire-and-forget
+  `ensureRunning` nudge is the only production path that starts a daemon, and under ADR-014 it now
+  routes through `supervisor.start` (tmux). On a host without tmux that throws
+  `TmuxNotInstalledError`, which the handoff caught and **silently swallowed** — authoring the spec
+  PR while launching no daemon, so specs would pile up unbuilt with no signal. Both handoff sites
+  (`engineer-cli.ts` claim path and `handoff-step.ts`) now keep the failure **non-blocking** (the
+  spec branch still lands) but **surface the reason** (`⚠ Spec authored, but the build daemon was not
+  started for "<repo>": <reason>`). No change on a tmux-present host.
 - **Type error in the github-issues intake adapter (conduct-ts).** `maybeReopen` typed its `repo`
   parameter as `{ name; path }`, omitting the `ghRepo?` field that `RepoLister.list()` actually
   provides and that the function body reads (`repo.ghRepo ?? repo.name`). This produced a
@@ -60,7 +68,11 @@ fi
   is replaced by `supervisor.start`, so an engineer-nudged daemon is also attachable — while the
   engineer stays **launch-only** (ADR-005 non-management intent preserved; ADR-014 supersedes only
   the spawn mechanism). The daemon runs **serially** (concurrency clamped to 1; `--concurrency > 1`
-  is clamped with a logged note). The intake/execute **work-source seam** is formalized (the run loop
+  is clamped with a logged note). The tmux-hosted daemon is **long-lived by design** — the session
+  command is `conduct-ts daemon --continuous` and deliberately drops the former engineer launch's
+  `--max-idle-polls` self-limit so an operator can attach to a running daemon at any time; its bound
+  is the operator `stop` verb (and reboot), not an idle timeout (ADR-014 §7). The intake/execute
+  **work-source seam** is formalized (the run loop
   consumes `BacklogItem`s from an injected source; local in-process adapter unchanged). The daemon
   still builds with **no tmux present** (management is purely additive — bare-run invariant).
   `bin/conduct` now forwards `daemon <verb>` to `conduct-ts` (previously `conduct daemon status`
