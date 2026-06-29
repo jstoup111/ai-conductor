@@ -605,6 +605,17 @@ through an injected `gh` runner — it never touches a registered repo's working
   on `land` (routed) and `handoff` (done); the shared `intake/writeback.ts` helper backs both the CLI
   primitives and the test-only loop. It is **non-fatal** (a `gh` outage never reverts a delivered spec
   PR) and **de-duplicated** per `(sourceRef, status)`.
+- **Issue ↔ PR linkage + auto-close (on implementation merge).** Commenting is not linking: GitHub's
+  formal issue↔PR link and auto-close come from a closing keyword in a PR body. The issue reference
+  travels WITH the spec via a committed **`.docs/intake/<slug>.md`** marker (`Source-Ref: owner/repo#N`),
+  written by both authoring paths (`land --source-ref` and the autonomous `runAuthoring`) — so it
+  survives the spec-PR merge and reaches the daemon, which only reads the merged base-branch tree.
+  The **spec PR** gets a non-closing `Refs owner/repo#N` (links, but must NOT close — that would
+  defeat the re-eligibility guard below). The daemon parses the marker into `BacklogItem.sourceRef`
+  (`daemon-backlog.ts`) and, after the build, adds **`Closes owner/repo#N`** to the **implementation
+  PR** (`closeIssueOnImplementationMerge` in `engineer/issue-ref.ts`), so GitHub auto-closes the issue
+  when the real work merges to the default branch. Every step is gated on a parseable ref
+  (hand-authored / non-intake specs are unchanged), idempotent, and non-fatal.
 - **Re-eligibility + churn guard.** A `done` issue whose spec PR closes **without merging** is
   re-emitted on the next poll (label stripped, `attempts++`); a **merged** PR is never reopened. Past
   the reopen cap the issue is parked as `needs-manual` and stays out of the inbox until

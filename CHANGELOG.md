@@ -29,6 +29,20 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- **GitHub issue ↔ PR linkage + auto-close on implementation merge (conduct-ts).**
+  github-issues intake previously commented on an issue but never linked or closed it, so an
+  issue stayed open even after its spec PR and the daemon's implementation PR both merged. The
+  originating issue reference now travels WITH the spec via a committed `.docs/intake/<slug>.md`
+  marker (`Source-Ref: owner/repo#N`), written by both authoring paths (`engineer land
+  --source-ref` and the autonomous `runAuthoring`). The **spec PR** gets a non-closing
+  `Refs owner/repo#N` (links the issue without closing it); the daemon reads the marker from the
+  merged base-branch tree (`BacklogItem.sourceRef`) and adds `Closes owner/repo#N` to the
+  **implementation PR**, so GitHub auto-closes the issue when the real work merges. All injection
+  is gated on a parseable ref (hand-authored specs are unchanged), idempotent, and non-fatal (a
+  `gh` failure never affects a delivered PR or build). New shared helper
+  `engineer/issue-ref.ts` (`parseSourceRef` / `injectIssueRef` / `closeIssueOnImplementationMerge`)
+  is the single source for parsing + linking.
+
 - **OpenTelemetry exporter for conductor runs (Phase 1).** A new opt-in
   `otel:` config block wires the conductor event bus to an OTel tracer/meter
   pipeline (ADR-014). When enabled, each run produces one root trace span
@@ -43,6 +57,7 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   run (FR-8). Incomplete spans on abrupt termination are force-closed ERROR with
   `conductor.incomplete=true` (FR-9). SIGINT/SIGTERM handlers trigger a
   best-effort flush within the configured `exportTimeoutMillis` bound.
+
 - **Engineer authors the full DECIDE phase (engineer).** The `/engineer` idea→spec loop now runs
   the complete, build-ready DECIDE set in canonical order —
   brainstorm → **complexity** → stories → **conflict-check** → **architecture-diagram** →

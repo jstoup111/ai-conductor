@@ -27,6 +27,7 @@ import type { TargetRepo } from './target.js';
 import type { AuthoredLedgerOpts } from './authored-ledger.js';
 import { recordAuthoredKey } from './authored-ledger.js';
 import { extractPrUrl } from '../state.js';
+import { injectIssueRef } from './issue-ref.js';
 
 // ─── Public types ──────────────────────────────────────────────────────────────
 
@@ -62,6 +63,14 @@ export interface HandoffDeps {
   runner: CommandRunner;
   /** Options forwarded to recordAuthoredKey (e.g. engineerDir for temp-dir isolation). */
   ledgerOpts?: AuthoredLedgerOpts;
+  /**
+   * Originating intake reference (`owner/repo#N`). When present and valid, the
+   * opened spec PR gets a NON-CLOSING `Refs owner/repo#N` line (links the issue
+   * without closing it). Absent/malformed → no injection. Non-fatal.
+   */
+  sourceRef?: string;
+  /** Optional log sink for the (non-fatal) issue-ref injection. */
+  log?: (msg: string) => void;
 }
 
 // ─── Result types (discriminated union) ───────────────────────────────────────
@@ -182,6 +191,24 @@ export async function openSpecPr(
   //    The `feature` is the spec branch name — consistent with how the engineer's
   //    authored ledger identifies authoring events (one branch = one feature spec).
   await recordAuthoredKey(target.name, branch, ledgerOpts ?? {});
+
+  // 3b. Link the spec PR to the originating issue with a NON-CLOSING `Refs` line
+  //     (the issue must NOT close when the spec merges — only when the daemon's
+  //     implementation PR merges). Idempotent + non-fatal: a gh failure here
+  //     never discards the delivered PR.
+  if (deps.sourceRef) {
+    await injectIssueRef({
+      gh: async (args, opts) => {
+        const r = await runner(args, { cwd: opts.cwd });
+        return { stdout: r.stdout };
+      },
+      prUrl: url,
+      keyword: 'Refs',
+      sourceRef: deps.sourceRef,
+      cwd: target.canonicalPath,
+      log: deps.log,
+    });
+  }
 
   // 4. Return the URL wrapped in the discriminated result.
   return { kind: 'pr-opened', url };
