@@ -65,7 +65,7 @@ class WarnOnceSpanExporter implements SpanExporter {
     this.inner.export(spans, (result) => {
       if (result.code !== ExportResultCode.SUCCESS) {
         this.warnOnce(
-          `[otel] span export failed: ${result.error?.message ?? result.message ?? 'unknown error'}`,
+          `[otel] span export failed: ${result.error?.message ?? 'unknown error'}`,
         );
       }
       resultCallback(result);
@@ -105,7 +105,7 @@ class WarnOnceMetricExporter implements PushMetricExporter {
     this.inner.export(metrics, (result) => {
       if (result.code !== ExportResultCode.SUCCESS) {
         this.warnOnce(
-          `[otel] metric export failed: ${result.error?.message ?? result.message ?? 'unknown error'}`,
+          `[otel] metric export failed: ${result.error?.message ?? 'unknown error'}`,
         );
       }
       resultCallback(result);

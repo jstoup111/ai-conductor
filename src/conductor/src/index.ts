@@ -53,7 +53,8 @@ import {
   dispatchDaemonObserve,
 } from './engine/daemon-observe-cli.js';
 import { resolveOtelConfig } from './engine/otel/otel-config.js';
-import { OtelVisualizer } from './engine/otel/otel-visualizer.js';
+import { OtelVisualizer, type OtelVisualizerContext } from './engine/otel/otel-visualizer.js';
+import type { ResolvedOtelConfig } from './engine/otel/otel-config.js';
 
 // ── Visualizer lifecycle helpers (exported so tests can verify the wiring) ────
 
@@ -85,6 +86,34 @@ export async function stopVisualizers(visualizers: VisualizerPlugin[]): Promise<
       }),
     ),
   );
+}
+
+/**
+ * Construct an OtelVisualizer with production wiring (FR-8).
+ *
+ * Bridges `onWarning` to a `renderer_error` ConductorEvent on the shared bus so
+ * transport failures surface to the operator as structured events instead of
+ * silent drops. Constructor errors (e.g. disabled config passed by mistake) are
+ * caught, surfaced as `renderer_error`, and null is returned so the run proceeds
+ * with OTel disabled.
+ *
+ * Exported so integration tests can drive the exact production construction path
+ * and verify the onWarning wiring without invoking main().
+ */
+export function createOtelVisualizer(
+  resolved: ResolvedOtelConfig,
+  ctx: Omit<OtelVisualizerContext, 'onWarning'>,
+  events: ConductorEventEmitter,
+): OtelVisualizer | null {
+  const onWarning = (msg: string): void => {
+    void events.emit({ type: 'renderer_error', rendererName: 'otel', error: msg });
+  };
+  try {
+    return new OtelVisualizer(resolved, { ...ctx, onWarning });
+  } catch (err) {
+    onWarning(err instanceof Error ? err.message : String(err));
+    return null;
+  }
 }
 
 // Harness VERSION lookup: probes a few candidate locations because the
@@ -557,13 +586,18 @@ async function main(): Promise<void> {
   const visualizerList: VisualizerPlugin[] = [];
   const otelResolved = resolveOtelConfig(config ?? {}, pipelineDir);
   if (otelResolved.enabled) {
-    visualizerList.push(
-      new OtelVisualizer(otelResolved, {
+    const otelVis = createOtelVisualizer(
+      otelResolved,
+      {
         pipelineDir,
         feature: opts.featureDesc ?? 'unknown',
         project: projectRoot,
-      }),
+      },
+      events,
     );
+    if (otelVis) {
+      visualizerList.push(otelVis);
+    }
   }
   buildVisualizers(visualizerList, events);
 
