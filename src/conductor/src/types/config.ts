@@ -240,4 +240,11 @@ export interface HarnessConfig {
   ui_renderer?: string;
   /** OpenTelemetry exporter config. Absent = disabled (default off, FR-1). */
   otel?: OtelConfig;
+  /**
+   * Maximum number of Claude-assisted conflict-resolution attempts inside the
+   * rebase step before the engine halts for operator intervention.
+   * Default: 3. Set to 0 to disable automated resolution (conflict always
+   * halts immediately). Negative or non-numeric values fall back to 3.
+   */
+  rebase_resolution_attempts?: number;
 }

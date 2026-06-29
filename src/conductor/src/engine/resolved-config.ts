@@ -251,3 +251,37 @@ export function resolveStepConfig(
 export function phaseForStep(step: StepName): Phase {
   return getStepDefinition(step).phase;
 }
+
+// ────────────────────────────────────────────────────────────────────────────
+// Rebase resolution attempt cap
+// ────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Default maximum number of Claude-assisted conflict-resolution attempts
+ * inside the rebase step. Overridable via `rebase_resolution_attempts` in
+ * the top-level HarnessConfig. 0 is valid (disables auto-resolution).
+ * Negative or non-numeric values fall back to this default.
+ */
+export const DEFAULT_REBASE_RESOLUTION_ATTEMPTS = 3;
+
+/**
+ * Resolve the rebase-resolution attempt cap from HarnessConfig.
+ *
+ * Reads `config.rebase_resolution_attempts` (top-level HarnessConfig key).
+ *
+ * Resolution rules:
+ *   - undefined / absent → DEFAULT_REBASE_RESOLUTION_ATTEMPTS (3)
+ *   - integer >= 0       → use the value (0 = disabled, preserved as-is)
+ *   - negative integer   → DEFAULT_REBASE_RESOLUTION_ATTEMPTS (3)
+ *   - NaN or non-numeric → DEFAULT_REBASE_RESOLUTION_ATTEMPTS (3)
+ */
+export function resolveRebaseResolutionAttempts(config?: HarnessConfig): number {
+  const override = config?.rebase_resolution_attempts;
+  if (override === undefined || override === null) {
+    return DEFAULT_REBASE_RESOLUTION_ATTEMPTS;
+  }
+  if (typeof override !== 'number' || !Number.isFinite(override) || override < 0) {
+    return DEFAULT_REBASE_RESOLUTION_ATTEMPTS;
+  }
+  return override;
+}
