@@ -1,6 +1,6 @@
 import { access, readdir, readFile, rm, stat } from 'fs/promises';
 import { join, relative } from 'path';
-import type { StepName, ComplexityTier } from '../types/index.js';
+import type { StepName, ComplexityTier, Track } from '../types/index.js';
 import type { HarnessConfig } from '../types/config.js';
 import { slugify } from './worktree.js';
 import { parseSourceRef } from './engineer/issue-ref.js';
@@ -19,7 +19,13 @@ export const STEP_ARTIFACT_GLOBS: Record<StepName, string[]> = {
   bootstrap: [],
   memory: [],
   assess: ['.docs/decisions/technical-assessment-*.md'],
+  // `brainstorm` retained for back-compat (state migration); not scheduled.
   brainstorm: ['.docs/specs/*.md'],
+  // `explore` is advisory + ephemeral (notes → .pipeline/, decision → .memory/);
+  // it writes no committed .docs artifact, so it has no completion glob.
+  explore: [],
+  // `prd` writes the product-only design doc (product track only).
+  prd: ['.docs/specs/*.md'],
   complexity: [],
   stories: ['.docs/stories/**/*.md'],
   conflict_check: ['.docs/conflicts/*.md'],
@@ -680,6 +686,23 @@ export function parseIntakeSourceRef(content: string | null): string | undefined
   const m = content.match(/^\s*Source-Ref:\s*(\S+)/im);
   if (!m) return undefined;
   return parseSourceRef(m[1]) ? m[1] : undefined;
+}
+
+/**
+ * Parse a track marker file (`.docs/track/<slug>.md`) into its `Track`. The
+ * marker carries a `Track: product|technical` line (case-insensitive); the rest
+ * is free-form rationale. Mirrors `parseComplexityTier` / `parseIntakeSourceRef`.
+ *
+ * Returns `undefined` when the content is null/absent or carries no recognizable
+ * track line. Callers default a missing track to `product` (ADR-017): a spec
+ * authored before tracks existed is a product PRD, so it must keep `prd-audit`
+ * and never be silently treated as technical.
+ */
+export function parseTrack(content: string | null): Track | undefined {
+  if (!content) return undefined;
+  const m = content.match(/^\s*Track:\s*(product|technical)\b/im);
+  if (!m) return undefined;
+  return m[1].toLowerCase() as Track;
 }
 
 /** A PRD-audit gap-class. `unknown` = a blocking row whose class cell we could

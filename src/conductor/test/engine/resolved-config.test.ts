@@ -66,7 +66,7 @@ describe('engine/resolved-config', () => {
 
   describe('phaseForStep', () => {
     it('returns the hardcoded phase', () => {
-      expect(phaseForStep('brainstorm')).toBe('DECIDE');
+      expect(phaseForStep('explore')).toBe('DECIDE');
       expect(phaseForStep('build')).toBe('BUILD');
       expect(phaseForStep('retro')).toBe('SHIP');
     });

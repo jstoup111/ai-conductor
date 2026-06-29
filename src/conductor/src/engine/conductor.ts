@@ -433,6 +433,17 @@ export class Conductor {
           continue;
         }
 
+        // Check if step should be skipped for this work track (ADR-015/017).
+        // `prd` is skipped on the technical track (no product requirements to
+        // spec). A missing track defaults to `product`, so PRD runs unless the
+        // feature was explicitly classified technical in `explore`.
+        if ((step.skippableForTracks ?? []).includes(state.track ?? 'product')) {
+          await saveStepStatus(this.stateFilePath, step.name, 'skipped');
+          state[step.name] = 'skipped';
+          await this.events.emit({ type: 'config_skip', step: step.name });
+          continue;
+        }
+
         // Phase 9.1 (ADR-002 Option A): under the daemon, skip the in-loop `retro`
         // step. The daemon's emission step owns narrative production into the
         // cross-project engineer store, so writing `.docs/retros/` into the feature

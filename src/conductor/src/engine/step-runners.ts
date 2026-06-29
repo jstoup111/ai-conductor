@@ -20,7 +20,10 @@ const STEP_PROMPTS: Record<StepName, string> = {
   bootstrap: '/bootstrap',
   memory: '/memory',
   assess: '/assess',
+  // `brainstorm` retained for back-compat; not scheduled by the live flow.
   brainstorm: '/brainstorm',
+  explore: '/explore',
+  prd: '/prd',
   complexity: '/conduct complexity',
   stories: '/stories',
   conflict_check: '/conflict-check',
@@ -79,7 +82,8 @@ const AUTONOMOUS_STEPS: Set<StepName> = new Set([
 // context without needing user input, so print mode is the right dispatch
 // for them even outside auto mode.
 const INTERACTIVE_STEPS: Set<StepName> = new Set([
-  'brainstorm',
+  'explore', // divergent Q&A + approach selection + track confirmation
+  'prd', // product-only design doc with operator approval
   'stories',
   'plan',
   'architecture_review',

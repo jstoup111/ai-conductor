@@ -247,7 +247,11 @@ export interface DecideResult {
  * markdown artifact, and flows through the separate `assessComplexity` seam.
  */
 export type DecideStep =
+  // `brainstorm` retained for back-compat; the live authoring order uses
+  // `explore` + (product-track) `prd`.
   | 'brainstorm'
+  | 'explore'
+  | 'prd'
   | 'stories'
   | 'conflict_check'
   | 'architecture_diagram'

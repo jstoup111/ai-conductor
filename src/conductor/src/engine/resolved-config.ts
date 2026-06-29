@@ -21,7 +21,9 @@ export const DEFAULT_STEP_MODELS: Record<StepName, string> = {
   bootstrap: 'haiku',
   memory: 'haiku',
   assess: 'haiku',
-  brainstorm: 'opus',
+  brainstorm: 'opus',      // retained for back-compat; not scheduled
+  explore: 'sonnet',       // interactive Q&A + approaches (operator in the loop)
+  prd: 'opus',             // product-only PRD authoring — reasoning-heavy
   complexity: 'haiku',
   stories: 'sonnet',
   conflict_check: 'sonnet',
@@ -44,7 +46,9 @@ export const DEFAULT_STEP_EFFORT: Record<StepName, EffortLevel> = {
   bootstrap: 'low',
   memory: 'low',
   assess: 'high',          // orchestrator sets env var that cascades to subagents
-  brainstorm: 'xhigh',     // design exploration — reasoning-heavy
+  brainstorm: 'xhigh',     // retained for back-compat; not scheduled
+  explore: 'high',         // approach trade-offs + track classification
+  prd: 'xhigh',            // product-only PRD authoring — reasoning-heavy
   complexity: 'low',
   stories: 'medium',
   conflict_check: 'medium',
@@ -67,7 +71,9 @@ export const DEFAULT_STEP_RETRIES: Record<StepName, number> = {
   bootstrap: 1,
   memory: 1,
   assess: 3,
-  brainstorm: 5,
+  brainstorm: 5,           // retained for back-compat; not scheduled
+  explore: 5,
+  prd: 5,
   complexity: 1,
   stories: 3,
   conflict_check: 3,
@@ -90,7 +96,9 @@ export const DEFAULT_STEP_REVIEW: Record<StepName, ReviewMode> = {
   bootstrap: 'auto',
   memory: 'auto',
   assess: 'manual',
-  brainstorm: 'manual',
+  brainstorm: 'manual',    // retained for back-compat; not scheduled
+  explore: 'manual',
+  prd: 'manual',
   complexity: 'auto',
   stories: 'manual',
   conflict_check: 'conditional',
