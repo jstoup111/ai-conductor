@@ -304,28 +304,40 @@ that need no setup (a static site, a pure library) simply ship no `bin/setup` an
 untouched. This is what lets one daemon serve **any** project setup, including consumer
 projects that use the harness.
 
-### Daemon observability (`status` / `logs`)
+### Daemon hosting, management & observability (tmux Supervisor — ADR-014)
 
-The daemon is spawned **detached** (`engine/engineer/daemon-launch.ts`,
-`stdio:'ignore'`), so its console output is discarded. To keep *activity* visible — not
-just liveness — `runDaemonMode` tees its log sink into an append-only
-**`.daemon/daemon.log`** (`engine/daemon-log.ts`, opened once the per-repo pidfile lock is
-held). Because `renderDaemonEvent` and every feature start/finish line already route
-through that one sink, the file captures the full BUILD narrative: feature start, each
-gate-loop step result (`step_completed` / unsatisfied `gate_verdict` / `kickback` /
-`loop_halt`), and finish (`shipped`/`failed` + PR url). The log is size-capped (~1 MB,
-rotated once to `daemon.log.1`).
+The daemon is hosted as a **foreground process inside a per-repo tmux session**
+(`cc-daemon-<slug>`, `engine/daemon-tmux.ts`) behind a swappable **Supervisor port**
+(`start/stop/restart/attach/logs/exec/isUp`; tmux adapter now, a kubectl adapter later with
+no execution-core change). The session owns an attachable PTY, so a *running* daemon can be
+watched, debugged, and restarted on demand — in color. Management verbs
+(`engine/daemon-supervisor-cli.ts`, dispatched in `index.ts` **before** the `daemon` run
+command; `detectDaemonCommand` yields when argv[3] is a management verb so none mis-launches
+a run):
 
-Two **read-only** sub-subcommands of `daemon` (`engine/daemon-observe-cli.ts`,
-dispatched before the pipeline boots and **before** the `daemon` run command, so
-`status`/`logs` are never mistaken for a daemon launch — `detectDaemonCommand` in
-`daemon-command.ts` yields when argv[3] is `status`/`logs`) surface it:
+- **`conduct-ts daemon start`** — idempotent: `hasSession?` no-op : `tmux new-session -d
+  'conduct-ts daemon --continuous'`. Replaces the old detached `launchDaemonDetached` spawn
+  (ADR-014 supersedes ADR-005's spawn mechanism; non-management intent preserved).
+- **`stop`** / **`restart`** — `kill-session` / kill-then-start.
+- **`connect`** — `attach -r` (read-only live colored watch); **`debug`** — full attach.
+
+The daemon still tees its log sink into an append-only **`.daemon/daemon.log`**
+(`engine/daemon-log.ts`, opened once the per-repo pidfile lock is held) — so the full BUILD
+narrative (feature start, each gate-loop step result, finish + PR url) survives even when no
+one is attached. The log is size-capped (~1 MB, rotated once to `daemon.log.1`). The daemon
+runs **serially** (concurrency clamped to 1) and **bare-run**: the build path never imports
+the tmux layer, so it functions with no tmux present (management is purely additive).
+
+Two **read-only** observability sub-subcommands of `daemon` (`engine/daemon-observe-cli.ts`,
+dispatched before the pipeline boots) surface state without attaching:
 
 - **`conduct-ts daemon status`** — iterate the project registry and, for each repo,
   report pidfile liveness via the `daemon-lock.ts` primitives (`readPidRecord` + `isLive`):
   `running` (owner alive), `stale` (owner dead — reclaimable), `stopped` (no pidfile),
-  plus pid, start time, and the last log line. A registered path that no longer exists is
-  reported as `path missing`; a single bad repo never aborts the sweep.
+  plus pid, start time, the last log line, and **tmux session up/down** (via `hasSession`,
+  independent of pidfile liveness — so a stale pidfile with a live orphaned session is
+  distinguishable). A registered path that no longer exists is reported as `path missing`;
+  a single bad repo never aborts the sweep.
 - **`conduct-ts daemon logs [--repo <path>] [--follow] [--all]`** — print (or `--follow`,
   `tail -f` semantics) `.daemon/daemon.log` for one repo (default: cwd) or every registered
   repo (`--all`). A missing log prints a friendly note rather than erroring.
@@ -554,11 +566,15 @@ State lives under the engineer dir (`$AI_CONDUCTOR_ENGINEER_DIR`, default `~/.ai
 `O_EXCL` so exactly one daemon wins under concurrent boots. Liveness is `process.kill(pid, 0)`
 (`ESRCH` → dead, `EPERM` → alive); a corrupt/malformed pidfile is treated as absent. Stale reclaim
 **never permanently refuses** — a `kill -9` leftover is reclaimed on the next boot.
-`ensureRunning(repoPath, deps)` spawns a detached daemon **iff** none is live or the pidfile is
+`ensureRunning(repoPath, deps)` starts a daemon **iff** none is live or the pidfile is
 stale, no-ops if one is already alive, and **never manages** the lifecycle (fire-and-forget;
-ensure-not-manage). `launchDaemonDetached` launches with `cwd: repoPath` (was passing `--project`),
-so the pidfile and worktree land under the target repo's `.daemon/`. The registry `daemonState`
-mirror is **non-authoritative** — the pidfile wins; a mirror-write failure is non-fatal.
+ensure-not-manage). Its default launch now delegates to the tmux Supervisor's idempotent
+`start` (`launchDaemonDetached` → `supervisor.start`, ADR-014) — so an engineer-nudged daemon
+is hosted in a session and is operator-attachable, while the engineer still retains no
+handle/IPC/control (ADR-005 non-management intent preserved; only the spawn mechanism is
+superseded). The session runs with `cwd: repoPath`, so the pidfile and worktree land under the
+target repo's `.daemon/`. The registry `daemonState` mirror is **non-authoritative** — the
+pidfile wins; a mirror-write failure is non-fatal.
 
 Read-only reporting over the engineer store ships as library functions: `governorReport`
 (`engine/engineer/governor.ts`) aggregates spend + kickback/halt/retry rates; `computeFlywheelTrend`

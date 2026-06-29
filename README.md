@@ -110,8 +110,8 @@ own worktree, opening a PR on finish:
 # Drain the backlog once: every eligible feature, then exit
 conduct-ts daemon
 
-# Run 3 in parallel, cap at 10 features this pass
-conduct-ts daemon --concurrency 3 --max-items 10
+# Cap at 10 features this pass
+conduct-ts daemon --max-items 10
 
 # Continuous: keep polling for new features, bounded by ceilings
 conduct-ts daemon --continuous --max-runtime 3600 --max-cost 2000000
@@ -120,7 +120,10 @@ conduct-ts daemon --continuous --max-runtime 3600 --max-cost 2000000
 Daemon flags: `--continuous` (idle-poll instead of draining once),
 `--max-items <n>`, `--max-cost <tokens>`, `--max-runtime <seconds>`,
 `--idle-poll <seconds>`, `--max-idle-polls <n>`. Ceilings stop *starting* new
-features; in-flight work always drains.
+features; in-flight work always drains. The daemon runs **serially** (one feature
+at a time) so the live session shows exactly the feature building — `--concurrency`
+above 1 is clamped to 1 with a logged note (real concurrency is out of scope; see
+`.docs/plans/2026-06-29-daemon-tmux-supervisor.md`).
 
 The daemon consumes existing specs — it never authors them — and only picks up
 **eligible** features: a feature is eligible when its stories are approved
@@ -141,12 +144,25 @@ advanced base is integrated before the failed gate re-checks. A plain restart wi
 advance leaves every marker intact. See
 [`src/conductor/README.md`](src/conductor/README.md#halt-reconciliation-startup-dashboard--main-advance-re-kick-adr-013).
 
-Because the daemon runs detached, its output goes to an append-only
-**`.daemon/daemon.log`** (size-capped, rotated once) rather than your terminal — so
-the full build narrative survives. Two read-only commands surface it:
+The daemon is hosted as a **foreground process inside a per-repo tmux session**
+(`cc-daemon-<slug>`), so you can attach to a *running* daemon on demand — in full color
+— and restart or debug it without hunting for a pid. Its output is still teed to an
+append-only **`.daemon/daemon.log`** (size-capped, rotated once) so the full narrative
+survives. Management requires `tmux` on the host; the daemon still builds with no tmux
+present (management is purely additive).
 
 ```bash
-# Liveness of every registered repo's daemon (running / stale / stopped) + last activity
+conduct-ts daemon start      # start the daemon in a tmux session (idempotent — no duplicate)
+conduct-ts daemon connect    # attach READ-ONLY to watch live, in color (Ctrl-b d to detach)
+conduct-ts daemon debug      # attach read/write — Ctrl-c to pause the loop and inspect
+conduct-ts daemon restart    # fresh inner process, same session
+conduct-ts daemon stop       # stop the daemon, release the lock
+```
+
+Two read-only observability commands surface state without attaching:
+
+```bash
+# Liveness of every registered repo's daemon (running / stale / stopped, session up/down) + last activity
 conduct-ts daemon status
 
 # View or tail a repo's daemon log (default: current dir)
@@ -156,9 +172,10 @@ conduct-ts daemon logs --repo /path/to/repo
 conduct-ts daemon logs --all               # every registered repo
 ```
 
-(`daemon status` / `daemon logs` are read-only sub-subcommands of `daemon`; the bare
-`conduct-ts daemon` is what runs a daemon. `status`/`logs` are dispatched first, so
-they're never mistaken for a launch.)
+The management/observability verbs (`start`/`stop`/`restart`/`connect`/`debug`/`status`/
+`logs`) are dispatched before the bare `conduct-ts daemon` run, so they're never mistaken
+for a launch — and `conduct daemon <verb>` (the bash wrapper) now forwards to `conduct-ts`
+instead of starting a feature build named after the verb.
 
 On failure, conduct sends a desktop notification and drops into an interactive Claude session
 to fix the issue. After you `/quit`, it rechecks artifacts and continues automatically.

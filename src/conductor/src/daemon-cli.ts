@@ -14,6 +14,8 @@ import { openDaemonLog, type DaemonLogSink } from './engine/daemon-log.js';
 import type { ConductState, ConductorEvent, StepName } from './types/index.js';
 import { runDaemon, type BacklogItem } from './engine/daemon.js';
 import { discoverBacklog, fastForwardRoot } from './engine/daemon-backlog.js';
+import { localWorkSource, type WorkSource } from './engine/daemon-work-source.js';
+import { clampDaemonConcurrency } from './engine/daemon-command.js';
 import { makeRunFeature, type FeatureWorktree } from './engine/daemon-runner.js';
 import {
   isHalted,
@@ -59,6 +61,12 @@ export interface DaemonModeOptions {
   idlePollSeconds?: number;
   /** Stop after this many consecutive empty polls (continuous mode). */
   maxIdlePolls?: number;
+  /**
+   * Override the backlog discovery source (tests / alternative adapters).
+   * Defaults to the local git-backed adapter that reproduces the former
+   * discoverTick closure.
+   */
+  workSource?: WorkSource;
 }
 
 // Front-half steps the daemon treats as already done — the human authored the
@@ -280,16 +288,22 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   // newly merged specs become present (and discoverable on the local tree). While
   // builds are in flight (`refresh:false`) there is NO fetch/ff, so an in-flight
   // build is never advanced onto specs that merged mid-run.
-  const discoverTick = async ({ refresh }: { refresh: boolean }): Promise<BacklogItem[]> => {
-    if (refresh) await fastForwardRoot(projectRoot, log);
-    return discoverBacklog(projectRoot, (slug) => isProcessed(projectRoot, slug), log, {
+  //
+  // ADR-014: the discoverTick closure is now encapsulated in a WorkSource adapter
+  // so the run-loop is decoupled from direct fs/git I/O and tests can inject fakes.
+  const workSource =
+    opts.workSource ??
+    localWorkSource({
+      projectRoot,
       baseBranch,
-      // Surface a merged-but-unbuildable spec ONCE (per .daemon/warned/<slug>)
-      // instead of re-logging the identical skip on every poll.
+      log,
+      isProcessed: (slug) => isProcessed(projectRoot, slug),
       hasWarned: (slug) => hasWarned(projectRoot, slug),
       markWarned: (slug) => markWarned(projectRoot, slug),
+      fastForwardRoot,
+      discoverBacklog,
     });
-  };
+  const discoverTick = (o: { refresh: boolean }) => workSource.discover(o);
 
   const processedDir = join(projectRoot, '.daemon/processed');
 
@@ -339,7 +353,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       },
     },
     {
-      concurrency: opts.concurrency,
+      concurrency: clampDaemonConcurrency(opts.concurrency, log),
       maxItems: opts.maxItems,
       maxTotalCostTokens: opts.maxCostTokens,
       maxRuntimeMs:
