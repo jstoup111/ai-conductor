@@ -14,12 +14,18 @@
  */
 
 import chalk from 'chalk';
+import type { ComplexityTier } from '../types/index.js';
 
 export interface BacklogItem {
   /** Stable feature identifier (also the worktree/branch slug). The vetted
    *  stories + plan live on the default branch each worktree is cut from, so the
    *  item carries no paths — a fresh worktree already contains them. */
   slug: string;
+  /** Engineer-assessed complexity tier, parsed from `.docs/complexity/<slug>.md`
+   *  on the base branch (FR: tier propagation). Drives BUILD-phase step skipping
+   *  in the conductor (Small skips acceptance_specs/retro). Absent for legacy or
+   *  non-engineer specs → the daemon falls back to 'M' (unchanged behavior). */
+  tier?: ComplexityTier;
 }
 
 export type FeatureStatus = 'done' | 'halted' | 'error';

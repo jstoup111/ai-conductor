@@ -8,6 +8,7 @@ import {
   discoverBacklog,
   type BacklogTreeSource,
 } from '../../src/engine/daemon-backlog.js';
+import { parseComplexityTier } from '../../src/engine/artifacts.js';
 
 const execFile = promisify(execFileCb);
 
@@ -159,6 +160,40 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
     const backlog = await discover(undefined, (m) => logs.push(m));
     expect(backlog).toEqual([]);
     expect(logs.join('\n')).toMatch(/nodeps.*dependency tree/i);
+  });
+
+  it('carries the engineer-assessed tier from .docs/complexity/<slug>.md', async () => {
+    await writeFile(join(dir, '.docs/plans/big.md'), planWithDeps('.docs/stories/big.md'));
+    await writeFile(join(dir, '.docs/stories/big.md'), APPROVED_STORIES);
+    await mkdir(join(dir, '.docs/complexity'), { recursive: true });
+    await writeFile(join(dir, '.docs/complexity/big.md'), '# Complexity\n\nTier: L\n');
+
+    const backlog = await discover();
+    expect(backlog).toEqual([{ slug: 'big', tier: 'L' }]);
+  });
+
+  it('leaves tier undefined when no complexity marker is present', async () => {
+    await writeFile(join(dir, '.docs/plans/legacy.md'), planWithDeps('.docs/stories/legacy.md'));
+    await writeFile(join(dir, '.docs/stories/legacy.md'), APPROVED_STORIES);
+
+    const backlog = await discover();
+    expect(backlog).toHaveLength(1);
+    expect(backlog[0].tier).toBeUndefined();
+  });
+});
+
+describe('engine/artifacts — parseComplexityTier', () => {
+  it('parses S / M / L (case-insensitive)', () => {
+    expect(parseComplexityTier('Tier: S')).toBe('S');
+    expect(parseComplexityTier('# x\n\ntier: m\n')).toBe('M');
+    expect(parseComplexityTier('Tier:   L  ')).toBe('L');
+  });
+
+  it('returns undefined for null, empty, or unrecognized content', () => {
+    expect(parseComplexityTier(null)).toBeUndefined();
+    expect(parseComplexityTier('')).toBeUndefined();
+    expect(parseComplexityTier('no tier here')).toBeUndefined();
+    expect(parseComplexityTier('Tier: XL')).toBeUndefined();
   });
 });
 

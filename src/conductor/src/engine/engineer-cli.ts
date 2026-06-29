@@ -57,6 +57,25 @@ function makeProductionDecide(io: EngineerIO): NonNullable<EngineerDeps['decide'
   };
 }
 
+/**
+ * Production complexity-assessment seam: gates the tier through the io surface.
+ * Presents the prompt and waits for the operator to provide S/M/L. An empty or
+ * unparseable response → rejected (blocks authoring). NO claude subprocess.
+ */
+function makeProductionAssessComplexity(
+  io: EngineerIO,
+): NonNullable<EngineerDeps['assessComplexity']> {
+  return async ({ idea, project, recommended }) => {
+    io.print(`\n── DECIDE: complexity — project "${project}" — idea: ${idea}`);
+    if (recommended) io.print(`Recommended tier: ${recommended}`);
+    io.print('Provide the complexity tier (S, M, or L; empty = reject, blocks authoring):');
+    const line = await io.prompt();
+    const m = (line ?? '').trim().match(/^([SMLsml])/);
+    if (!m) return { approved: false, tier: recommended ?? 'M' };
+    return { approved: true, tier: m[1].toUpperCase() as 'S' | 'M' | 'L' };
+  };
+}
+
 const execFileP = promisify(execFileCb);
 
 // ── Dispatch descriptor ───────────────────────────────────────────────────────

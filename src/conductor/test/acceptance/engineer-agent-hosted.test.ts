@@ -681,6 +681,87 @@ describe('landSpec primitive (src/engine/engineer/land-spec.ts)', () => {
     const siblingHeadAfter = await git(['rev-parse', 'HEAD'], sibling);
     expect(siblingHeadAfter).toBe(siblingHeadBefore);
   });
+
+  // ── Full DECIDE set: complexity marker + tier-conditional architecture ──────
+  const slugOf = (idea: string) =>
+    idea.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 50);
+
+  /** Write the complexity marker + (when non-Small) conflict/architecture/ADR artifacts. */
+  async function writeDecideExtras(
+    repo: string,
+    idea: string,
+    tier: 'S' | 'M' | 'L',
+    opts: { adrStatus?: string; skipArchitecture?: boolean } = {},
+  ): Promise<void> {
+    const slug = slugOf(idea);
+    await mkdir(join(repo, '.docs', 'complexity'), { recursive: true });
+    await writeFile(join(repo, '.docs', 'complexity', `${slug}.md`), `# Complexity\n\nTier: ${tier}\n`);
+    if (tier === 'S' || opts.skipArchitecture) return;
+    await mkdir(join(repo, '.docs', 'conflicts'), { recursive: true });
+    await mkdir(join(repo, '.docs', 'architecture'), { recursive: true });
+    await mkdir(join(repo, '.docs', 'decisions'), { recursive: true });
+    await writeFile(join(repo, '.docs', 'conflicts', `2026-06-28-${slug}.md`), '# Conflicts\n\nNone.\n');
+    await writeFile(join(repo, '.docs', 'architecture', `${slug}.md`), '# Architecture\n\nDiagram.\n');
+    await writeFile(
+      join(repo, '.docs', 'decisions', 'adr-001-streaming.md'),
+      `# ADR-001\n\n**Status:** ${opts.adrStatus ?? 'APPROVED'}\n`,
+    );
+  }
+
+  it('non-Small: commits the full DECIDE set (complexity/conflicts/architecture/decisions)', async () => {
+    const idea = 'add reporting module';
+    await writeDocsArtifacts(repoPath, idea);
+    await writeDecideExtras(repoPath, idea, 'L');
+
+    const { landSpec } = await import('../../src/engine/engineer/land-spec.js');
+    const result = await landSpec({ name: 'target', canonicalPath: repoPath }, idea);
+
+    const tracked = await git(['ls-tree', '-r', '--name-only', result.branch], repoPath);
+    expect(tracked).toMatch(/\.docs\/complexity\//);
+    expect(tracked).toMatch(/\.docs\/conflicts\//);
+    expect(tracked).toMatch(/\.docs\/architecture\//);
+    expect(tracked).toMatch(/\.docs\/decisions\/adr-001-streaming\.md/);
+  });
+
+  it('Small: commits base artifacts + complexity, no architecture required', async () => {
+    const idea = 'tiny tweak';
+    await writeDocsArtifacts(repoPath, idea);
+    await writeDecideExtras(repoPath, idea, 'S');
+
+    const { landSpec } = await import('../../src/engine/engineer/land-spec.js');
+    const result = await landSpec({ name: 'target', canonicalPath: repoPath }, idea);
+
+    const tracked = await git(['ls-tree', '-r', '--name-only', result.branch], repoPath);
+    expect(tracked).toMatch(/\.docs\/complexity\//);
+    expect(tracked).not.toMatch(/\.docs\/architecture\//);
+    expect(tracked).not.toMatch(/\.docs\/decisions\//);
+  });
+
+  it('non-Small with a DRAFT ADR → throws before landing', async () => {
+    const idea = 'feature with draft adr';
+    await writeDocsArtifacts(repoPath, idea);
+    await writeDecideExtras(repoPath, idea, 'M', { adrStatus: 'DRAFT' });
+
+    const { landSpec } = await import('../../src/engine/engineer/land-spec.js');
+    await expect(
+      landSpec({ name: 'target', canonicalPath: repoPath }, idea),
+    ).rejects.toThrow(/DRAFT|APPROVED/i);
+
+    expect(await git(['branch', '--list', 'spec/*'], repoPath)).toBe('');
+  });
+
+  it('non-Small but missing architecture artifacts → throws (tier/artifact mismatch)', async () => {
+    const idea = 'medium feature no arch';
+    await writeDocsArtifacts(repoPath, idea);
+    await writeDecideExtras(repoPath, idea, 'M', { skipArchitecture: true });
+
+    const { landSpec } = await import('../../src/engine/engineer/land-spec.js');
+    await expect(
+      landSpec({ name: 'target', canonicalPath: repoPath }, idea),
+    ).rejects.toThrow(/non-Small|conflicts|architecture|decisions/i);
+
+    expect(await git(['branch', '--list', 'spec/*'], repoPath)).toBe('');
+  });
 });
 
 // ─── helpers ──────────────────────────────────────────────────────────────────

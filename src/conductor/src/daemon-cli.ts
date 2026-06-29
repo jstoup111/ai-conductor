@@ -179,17 +179,21 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     // file so the resume picks up from the real next step (see `resume: true`).
     const stateFilePath = join(pipelineDir, 'conduct-state.json');
     const existingResult = await readState(stateFilePath);
+    // Seed the complexity tier from the engineer-assessed value carried on the
+    // backlog item (parsed from `.docs/complexity/<slug>.md`). Fall back to 'M'
+    // for legacy/non-engineer specs that have no marker — that preserves the
+    // exact prior behavior (M and L are BUILD-identical; only Small skips steps).
     const baseState: ConductState =
       existingResult.ok && Object.keys(existingResult.value).length > 0
         ? existingResult.value
-        : { complexity_tier: 'M', feature_desc: item.slug };
+        : { complexity_tier: item.tier ?? 'M', feature_desc: item.slug };
 
     // Always stamp DECIDE steps as done regardless of whether this is a fresh
     // start or a resume — the human authored them and they never re-run.
     for (const name of PRESEEDED_DONE) {
       (baseState as Record<string, unknown>)[name] = 'done';
     }
-    if (!baseState.complexity_tier) baseState.complexity_tier = 'M';
+    if (!baseState.complexity_tier) baseState.complexity_tier = item.tier ?? 'M';
     if (!baseState.feature_desc) baseState.feature_desc = item.slug;
 
     await writeState(stateFilePath, baseState);
