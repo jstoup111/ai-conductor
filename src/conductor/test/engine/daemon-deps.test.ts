@@ -61,6 +61,20 @@ describe('engine/daemon-deps', () => {
     expect(d.project).not.toBe('.worktrees');
   });
 
+  it('wires projectRoot and runGh into the returned deps (FR-9/FR-16 orphaned-primitive guard)', () => {
+    // Regression guard: if either field is dropped, the entire enroll/sweep/clear
+    // code path silently no-ops in production (daemon-runner guards with `if
+    // (deps.projectRoot)`). This test must fail if someone removes those fields.
+    const d = makeFeatureRunnerDeps({
+      projectRoot: '/home/user/code/my-project',
+      worktreeBase: '/home/user/code/my-project/.worktrees',
+      baseBranch: 'main',
+      runConductorInWorktree: async () => {},
+    } as unknown as Parameters<typeof makeFeatureRunnerDeps>[0]);
+    expect(d.projectRoot).toBe('/home/user/code/my-project');
+    expect(typeof d.runGh).toBe('function');
+  });
+
   describe('createWorktree (idempotent retry)', () => {
     const mockExeca = vi.mocked(execa);
     const slug = 'feat-x';

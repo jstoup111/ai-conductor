@@ -40,6 +40,7 @@ import {
   clearMarker,
   type RekickSweepDeps,
 } from './engine/daemon-rekick.js';
+import { sweepMergeableLabels } from './engine/mergeable-sweep.js';
 
 export interface DaemonModeOptions {
   projectRoot: string;
@@ -336,6 +337,12 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       writePersistedBaseSha: (sha) => writePersistedBaseSha(projectRoot, sha, log),
       rekickSweep: async (sha) => {
         await rekickSweep(rekickDeps, sha);
+      },
+      // FR-14: wire the startup + per-idle-poll-tick mergeable label sweep.
+      // NOTE: this binding must stay wired — removing it silently no-ops all
+      // startup and idle-poll sweeps in production (daemon.ts guards with ?.()).
+      sweepMergeableLabels: async () => {
+        await sweepMergeableLabels({ projectRoot, log });
       },
     },
     {
