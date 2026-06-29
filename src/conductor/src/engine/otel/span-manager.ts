@@ -219,4 +219,10 @@ export class SpanManager {
       this.runSpan = null;
     }
   }
+
+  // ── Internal helpers ───────────────────────────────────────────────────────
+
+  private warn(msg: string): void {
+    this.onWarning?.(msg);
+  }
 }
