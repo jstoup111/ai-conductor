@@ -225,6 +225,42 @@ describe('DefaultStepRunner', () => {
     expect(opts.systemPrompt).not.toContain('Complete ONLY this step');
   });
 
+  // --- Auto-mode finish: completion markers use absolute worktree paths ---
+  // Regression: in daemon mode the finish skill `cd`s into the main repo during
+  // branch/PR/worktree cleanup, so relative `.pipeline/...` writes landed in the
+  // wrong repo while the gate read the worktree — HALTing a feature whose PR was
+  // genuinely created. The auto-finish prompt must direct writes to ABSOLUTE
+  // worktree paths derived from pipelineDir.
+
+  it('auto-mode finish prompt uses ABSOLUTE pipelineDir paths for the markers', async () => {
+    const provider = createMockProvider();
+    const runner = new DefaultStepRunner(provider, 'session-1', '/wt/feature-x', {
+      mode: 'auto',
+      pipelineDir: '/wt/feature-x/.pipeline',
+    });
+
+    await runner.run('finish', emptyState);
+
+    const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    expect(opts.systemPrompt).toContain('/wt/feature-x/.pipeline/finish-choice');
+    expect(opts.systemPrompt).toContain('/wt/feature-x/.pipeline/conduct-state.json');
+    // Must not push the marker write to after cleanup.
+    expect(opts.systemPrompt).not.toContain('must be your final action');
+  });
+
+  it('auto-mode finish prompt falls back to relative paths when pipelineDir is unset', async () => {
+    const provider = createMockProvider();
+    const runner = new DefaultStepRunner(provider, 'session-1', '/wt/feature-x', {
+      mode: 'auto',
+    });
+
+    await runner.run('finish', emptyState);
+
+    const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    expect(opts.systemPrompt).toContain('`.pipeline/finish-choice`');
+    expect(opts.systemPrompt).not.toContain('/.pipeline/finish-choice');
+  });
+
   // --- Feature 2: Session creation marker ---
 
   describe('session marker persistence', () => {

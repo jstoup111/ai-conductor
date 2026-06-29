@@ -10,6 +10,18 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ## [Unreleased]
 
+### Fixed
+
+- **Daemon finish HALT when cleanup `cd`s into the main repo (conduct-ts).** In auto/daemon
+  mode the finish step wrote its completion markers (`.pipeline/finish-choice` and the `pr_url`
+  in `.pipeline/conduct-state.json`) via relative paths, but the finish skill's branch/PR/worktree
+  cleanup `cd`s into the *main* repo — so the writes landed in the wrong repo while the completion
+  gate reads the *worktree's* `.pipeline`. A feature whose PR was genuinely created would HALT with
+  "`.pipeline/finish-choice` is missing". The auto-finish system prompt now directs the marker
+  writes to the **absolute worktree `.pipeline` paths** (from `pipelineDir`, with a relative
+  fallback when unset), instructs the session to write them **before** any merge/cleanup, and to
+  reuse an existing PR (`gh pr view`) instead of failing. Skill docs updated to match.
+
 ### Added
 
 - **Implementation subagents must not fetch/rebase/pull (pipeline).** Every per-task dispatch
