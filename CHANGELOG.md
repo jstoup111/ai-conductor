@@ -120,6 +120,18 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- **Daemon rebase step now uses `git rebase --autostash`, so a dirty worktree no
+  longer mis-parks as a "rebase conflict" the operator can't resolve.** A build or
+  lint step can leave uncommitted changes in the worktree (e.g. a formatter
+  dropping an unused import without committing). Plain `git rebase` refuses with
+  *"cannot rebase: You have unstaged changes"*; `performRebase` saw a non-zero exit
+  with **zero unmerged files** and HALTed it as a `conflict_halt` whose reason was
+  the unstaged-changes error — leaving the feature stuck in a re-kick loop that
+  could never succeed (the dirty tree blocked every retry). `--autostash` stashes
+  the stray changes, rebases, and reapplies them, so a clean (non-overlapping)
+  rebase succeeds with a dirty tree. A genuine overlapping conflict still HALTs
+  (covered by a new real-git test alongside the dirty-tree case).
+
 - **Daemon now fast-forwards its root checkout on each idle poll and cuts
   worktrees from fresh `main` — eliminating spurious `ENOENT` HALTs when local
   `main` lagged origin.** The daemon discovered/validated specs against the
