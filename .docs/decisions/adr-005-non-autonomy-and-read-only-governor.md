@@ -7,6 +7,13 @@
 **Decision surfaces:** DS-7 (non-autonomy enforcement, FR-10), FR-8 (engineer ≠ daemon parent),
 FR-9 (governor)
 **Relationship to prior design:** **Departs from** `supervisor-engineer-followup.md` §9.3.
+**Mechanism update:** the **spawn-mechanism detail** of FR-8 / Condition 2 (engineer launch as a
+`detached, stdio:'ignore'` node spawn) is superseded by **ADR-014** (engineer launch =
+`tmux new-session -d`, a foreground daemon in an operator-attachable session). This ADR's
+**non-management intent is unchanged and remains APPROVED** — the engineer still retains no
+handle/IPC/control and never stops/restarts/supervises a daemon; only the stdio sink changes from
+`/dev/null` to an attachable PTY. The read-only governor (FR-9) and non-autonomy-by-construction
+(FR-10) are untouched.
 
 ## Context
 

@@ -65,6 +65,19 @@ Key sub-decisions:
    inner foreground daemon still calls `holdLock`, so **ADR-010’s pidfile single-owner guarantee is
    unchanged** — the session layer is an *outer* idempotency check, not a replacement.
 
+   **Supersedes the spawn-MECHANISM detail of ADR-005 (FR-8 / Condition 2), not its intent.**
+   ADR-005 locked the engineer’s launch as a `detached, stdio:'ignore'` node spawn. That specific
+   mechanism is superseded here: the engineer’s launch becomes `supervisor.start` = `tmux
+   new-session -d`. ADR-005’s **non-management guarantee is fully preserved** — `tmux new-session
+   -d` returns immediately and the engineer retains **no handle, no IPC, no control connection, no
+   stop/restart/supervision, and writes no supervision state**; the daemon runs detached *from the
+   engineer* (in tmux’s own session). The only change is that the daemon’s stdio goes to an
+   **attachable PTY** (operator-managed) rather than `/dev/null`. The engineer still cannot manage
+   it. ADR-005’s read-only governor and non-autonomy-by-construction (FR-9/FR-10) are untouched and
+   remain APPROVED; only the `stdio:'ignore'` detail is restated. The structural “launch is
+   detached (no retained handle/IPC, no supervision-state write)” test remains true — it now asserts
+   that mechanism against `tmux new-session -d`.
+
 2. **Operator-vs-automation authority split (preserves ADR-005/ADR-010).** Lifecycle verbs
    (`start`, `stop`, `restart`, `debug`) are a **human-operator** capability. The **engineer
    automation path stays launch-only**: `ensureRunning` becomes `isUp? → start` (still

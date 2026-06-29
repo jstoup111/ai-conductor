@@ -4,8 +4,10 @@
 //   1. The engineer's transitive import graph does NOT include the pipeline/build
 //      entry (conductor.ts, step-runners.ts, daemon-runner.ts) NOR any source
 //      that issues a `gh pr merge` or merge-API call.
-//   2. Any daemon the engineer can launch is FULLY DETACHED: detached:true,
-//      stdio:'ignore', child.unref(), return-void — no retained handle, no IPC.
+//   2. Any daemon the engineer can launch is FULLY DETACHED FROM THE ENGINEER:
+//      it delegates to a start-only seam (ADR-014: tmux new-session -d) and
+//      retains no handle, no IPC, no stop/restart — launch ≠ manage (ADR-005 FR-8,
+//      mechanism updated by ADR-014).
 //
 // FORBIDDEN-TOKEN RATIONALE
 // ─────────────────────────
@@ -573,79 +575,67 @@ describe('engineer self-edit: propose-only PR invariant (FR-10 negative path)', 
   });
 });
 
-// ─── Test suite 2: Detached daemon spawn (FR-8, ADR-005 Condition 2) ─────────
+// ─── Test suite 2: Engineer daemon launch — non-management (FR-8) ────────────
+//
+// ADR-014 supersedes ADR-005's spawn-MECHANISM detail (detached stdio:'ignore'
+// node spawn → tmux Supervisor.start). The NON-MANAGEMENT guarantee is unchanged
+// and still asserted: the engineer launches via a start-ONLY seam, retains no
+// handle/IPC/control, the module exposes no stop/kill/restart, and nothing
+// launches implicitly or re-spawns.
 
-describe('engineer daemon launch: detached spawn guarantees (FR-8)', () => {
-  function makeFakeChild(pid = 77000) {
-    return { pid, unref: vi.fn() };
+describe('engineer daemon launch: non-management guarantees (FR-8)', () => {
+  function makeStarterSpy() {
+    const starts: string[] = [];
+    const supervisor = {
+      start: vi.fn((repo: string) => {
+        starts.push(repo);
+      }),
+    };
+    return { supervisor, starts };
   }
 
-  // ── 1. spawn options: detached:true + stdio:'ignore' ──────────────────────
+  // ── 1. Delegates to a start-ONLY supervisor (no management surface) ────────
 
-  it('launchDaemonDetached uses spawn with detached:true', () => {
-    const fakeChild = makeFakeChild();
-    const spawnSpy = vi.fn().mockReturnValue(fakeChild);
+  it('launchDaemonDetached delegates to supervisor.start exactly once', () => {
+    const { supervisor, starts } = makeStarterSpy();
 
-    launchDaemonDetached('/projects/non-autonomy-test', { spawn: spawnSpy });
+    launchDaemonDetached('/projects/non-autonomy-test', { supervisor });
 
-    expect(spawnSpy).toHaveBeenCalledOnce();
-    const [, , opts] = spawnSpy.mock.calls[0] as [unknown, unknown, Record<string, unknown>];
-    // detached:true — child runs in its own session; parent does not wait for it
-    expect(opts['detached']).toBe(true);
+    expect(supervisor.start).toHaveBeenCalledOnce();
+    expect(starts).toEqual(['/projects/non-autonomy-test']);
   });
 
-  it('launchDaemonDetached uses spawn with stdio:"ignore" — no IPC channel', () => {
-    const fakeChild = makeFakeChild();
-    const spawnSpy = vi.fn().mockReturnValue(fakeChild);
+  it('the injected seam exposes no stop/restart/attach — engineer cannot manage', () => {
+    const { supervisor } = makeStarterSpy();
 
-    launchDaemonDetached('/projects/non-autonomy-test', { spawn: spawnSpy });
+    launchDaemonDetached('/projects/non-autonomy-test', { supervisor });
 
-    const [, , opts] = spawnSpy.mock.calls[0] as [unknown, unknown, Record<string, unknown>];
-    // stdio:'ignore' — parent fd not inherited; no IPC pipe for supervision
-    expect(opts['stdio']).toBe('ignore');
-    // Explicitly assert it is NOT 'ipc' (any ipc value would open a control channel)
-    expect(opts['stdio']).not.toBe('ipc');
-    if (Array.isArray(opts['stdio'])) {
-      expect(opts['stdio']).not.toContain('ipc');
+    // start-only: no control connection / IPC / lifecycle method reachable.
+    expect((supervisor as Record<string, unknown>)['stop']).toBeUndefined();
+    expect((supervisor as Record<string, unknown>)['restart']).toBeUndefined();
+    expect((supervisor as Record<string, unknown>)['attach']).toBeUndefined();
+  });
+
+  // ── 2. Return value retains no manageable handle ──────────────────────────
+
+  it('launchDaemonDetached returns no process-control handle', () => {
+    const { supervisor } = makeStarterSpy();
+
+    const result = launchDaemonDetached('/projects/non-autonomy-test', { supervisor });
+
+    // start() returns void → undefined here; even a Promise<void> exposes no
+    // .kill()/.on() (no retained ChildProcess, no IPC).
+    if (result !== undefined) {
+      expect((result as Record<string, unknown>)['kill']).toBeUndefined();
+      expect((result as Record<string, unknown>)['on']).toBeUndefined();
     }
   });
 
-  // ── 2. child.unref() called — parent can exit independently ───────────────
-
-  it('launchDaemonDetached calls child.unref() for fire-and-forget independence', () => {
-    const fakeChild = makeFakeChild();
-    const spawnSpy = vi.fn().mockReturnValue(fakeChild);
-
-    launchDaemonDetached('/projects/non-autonomy-test', { spawn: spawnSpy });
-
-    // unref() allows the parent Node process to exit without waiting.
-    // Falsifiable: removing child.unref() from the impl makes this fail.
-    expect(fakeChild.unref).toHaveBeenCalledOnce();
-  });
-
-  // ── 3. Return value is void — no retained handle ───────────────────────────
-
-  it('launchDaemonDetached returns void — no process handle is retained', () => {
-    const fakeChild = makeFakeChild(88888);
-    const spawnSpy = vi.fn().mockReturnValue(fakeChild);
-
-    const result = launchDaemonDetached('/projects/non-autonomy-test', { spawn: spawnSpy });
-
-    // The function MUST return undefined (void).
-    // A non-undefined return would expose process control to the caller.
-    expect(result).toBeUndefined();
-
-    // Verify the return is NOT the ChildProcess itself — that would leak .kill(), .on(), etc.
-    expect(result).not.toBe(fakeChild);
-  });
-
-  // ── 4. No control-state methods exposed ──────────────────────────────────
+  // ── 3. No control-state methods exposed by the module ─────────────────────
 
   it('daemon-launch module exports no stop/kill/restart/manage/supervise function', () => {
-    // The module surface must be limited to launch-only exports.
-    // If anyone adds stopDaemon, killDaemon, etc., this fails immediately.
     const exportedKeys = Object.keys(daemonLaunchModule);
-    const forbiddenPatterns = [/stop/i, /kill/i, /restart/i, /manage/i, /supervise/i, /configure/i];
+    const forbiddenPatterns = [/stop/i, /kill/i, /restart/i, /manage/i, /supervise/i, /configure/i, /attach/i];
 
     for (const key of exportedKeys) {
       for (const pattern of forbiddenPatterns) {
@@ -656,44 +646,23 @@ describe('engineer daemon launch: detached spawn guarantees (FR-8)', () => {
       }
     }
 
-    // Explicit spot-checks:
     expect((daemonLaunchModule as Record<string, unknown>)['stopDaemon']).toBeUndefined();
     expect((daemonLaunchModule as Record<string, unknown>)['killDaemon']).toBeUndefined();
     expect((daemonLaunchModule as Record<string, unknown>)['restartDaemon']).toBeUndefined();
   });
 
-  // ── 5. No watcher callback registered on the child ────────────────────────
+  // ── 4. Exactly one launch, zero re-spawns, no implicit launch ─────────────
 
-  it('fake child with no .on() method — impl does not call child.on() to watch daemon', () => {
-    // The fake child has ONLY { pid, unref }. If the impl called child.on(...),
-    // it would TypeError (child.on undefined) and the test would fail with an
-    // uncaught error. The test passing proves no watcher was registered.
-    const fakeChild = makeFakeChild(); // no .on() property
-    const spawnSpy = vi.fn().mockReturnValue(fakeChild);
+  it('zero launches before the call, exactly one after, no supervision re-spawn', () => {
+    const { supervisor } = makeStarterSpy();
 
-    expect(() =>
-      launchDaemonDetached('/projects/non-autonomy-test', { spawn: spawnSpy }),
-    ).not.toThrow();
+    // Importing the module must not trigger a launch.
+    expect(supervisor.start).toHaveBeenCalledTimes(0);
 
-    // Belt-and-suspenders: confirm .on is absent from our fake
-    expect((fakeChild as Record<string, unknown>)['on']).toBeUndefined();
-  });
+    launchDaemonDetached('/projects/non-autonomy-test', { supervisor });
 
-  // ── 6. No IPC / supervision state written ────────────────────────────────
-
-  it('exactly one spawn call, zero supervision re-spawns, return is undefined', () => {
-    const fakeChild = makeFakeChild();
-    const spawnSpy = vi.fn().mockReturnValue(fakeChild);
-
-    // Before: no spawn (importing the module must not trigger spawn)
-    expect(spawnSpy).toHaveBeenCalledTimes(0);
-
-    const result = launchDaemonDetached('/projects/non-autonomy-test', { spawn: spawnSpy });
-
-    // After: exactly 1 spawn — no retry, no heartbeat, no re-spawn
-    expect(spawnSpy).toHaveBeenCalledTimes(1);
-    expect(result).toBeUndefined();
-    // No second spawn from any background mechanism
-    expect(spawnSpy).toHaveBeenCalledTimes(1);
+    // Exactly one — no retry, no heartbeat, no re-spawn loop.
+    expect(supervisor.start).toHaveBeenCalledTimes(1);
+    expect(supervisor.start).toHaveBeenCalledTimes(1);
   });
 });
