@@ -59,6 +59,7 @@ import {
 } from './task-progress.js';
 import {
   makeGitRunner,
+  rebaseStateActive,
   performRebase,
   resolveRebaseConflicts,
   applyRebaseVerdicts,
@@ -590,6 +591,44 @@ export class Conductor {
         // unavailable (expired or in use)" and errored the feature out).
         if (this.freshContextPerStep && this.stepRunner.resetSession) {
           await this.stepRunner.resetSession();
+        }
+
+        // Short-circuit a finish-on-mid-rebase. If the `rebase` step was marked
+        // done in state but the worktree is still physically mid-rebase (a paused
+        // conflict), dispatching `/finish` makes it spin for ~15 min on a
+        // detached, conflicted tree it can never push. Re-route to the `rebase`
+        // step so its resolver runs and the tree is made shippable — instead of a
+        // doomed finish. Daemon-only: interactive runs no-op the rebase step and a
+        // human is present to resolve manually.
+        //
+        // Guard against re-routing in a loop: only re-route when the rebase step
+        // hasn't ALREADY failed this run. A `conflict_halt` means the rebase just
+        // ran and could not be resolved — its HALT is written and (with
+        // verifyArtifacts) advanceTail already stops the loop; re-routing again
+        // would spin between rebase and finish.
+        if (
+          this.daemon &&
+          step.name === 'finish' &&
+          this.lastRebaseOutcome?.kind !== 'conflict_halt'
+        ) {
+          const git = makeGitRunner(this.projectRoot);
+          if (await rebaseStateActive(git, this.projectRoot)) {
+            const rebaseIdx = steps.findIndex((s) => s.name === 'rebase');
+            if (rebaseIdx >= 0) {
+              state.rebase = 'pending';
+              await saveStepStatus(this.stateFilePath, 'rebase', 'pending');
+              await this.events.emit({
+                type: 'step_retry',
+                step: 'rebase',
+                attempt: 1,
+                maxAttempts: 1,
+                reason:
+                  'finish reached with a rebase still in progress — re-routing to the rebase step to resolve it',
+              });
+              i = rebaseIdx - 1; // for-loop i++ lands on the rebase step
+              continue;
+            }
+          }
         }
 
         // Retry loop: auto-retry on step-runner failure OR completion-gate miss,

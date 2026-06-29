@@ -65,6 +65,17 @@ fi
   writes to the **absolute worktree `.pipeline` paths** (from `pipelineDir`, with a relative
   fallback when unset), instructs the session to write them **before** any merge/cleanup, and to
   reuse an existing PR (`gh pr view`) instead of failing. Skill docs updated to match.
+- **`/finish` spun ~15 min and opened a PR of an un-rebased branch when the tree was mid-rebase
+  (conduct-ts).** If `conduct-state.json` marked `rebase` done but the worktree was still physically
+  mid-rebase (a paused conflict — e.g. a prior run left it parked), the conductor skipped the rebase
+  step and dispatched `/finish` against a detached, conflicted tree it could never push. The finish
+  session ground for ~15 minutes and then created a **spurious PR of the original, un-rebased branch
+  tip**. The daemon conductor now short-circuits at the finish step: when a rebase is still in
+  progress (`rebaseStateActive`), it re-routes back to the `rebase` step so the resolver runs and the
+  tree is made shippable first — instead of a doomed finish. Guarded against a re-route loop: it only
+  re-routes when the rebase step hasn't already failed this run (`lastRebaseOutcome` isn't a
+  `conflict_halt`), so a genuinely unresolvable rebase still HALTs once for a human. Daemon-only;
+  interactive runs no-op the rebase step and a human resolves manually.
 
 ### Added
 
