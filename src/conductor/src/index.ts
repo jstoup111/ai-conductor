@@ -44,6 +44,7 @@ import { EventPersister } from './engine/event-persister.js';
 import { renderReport, ReportError } from './engine/report-renderer.js';
 import type { LLMProvider } from "./execution/llm-provider.js";
 import type { UISubscriber } from "./ui/types.js";
+import type { VisualizerPlugin } from './types/plugin.js';
 import { detectRegistryCommand, dispatchRegistry } from './engine/registry-cli.js';
 import { detectEngineerCommand, dispatchEngineer } from './engine/engineer-cli.js';
 import { detectDaemonCommand } from './engine/daemon-command.js';
@@ -51,6 +52,69 @@ import {
   detectDaemonObserveCommand,
   dispatchDaemonObserve,
 } from './engine/daemon-observe-cli.js';
+import { resolveOtelConfig } from './engine/otel/otel-config.js';
+import { OtelVisualizer, type OtelVisualizerContext } from './engine/otel/otel-visualizer.js';
+import type { ResolvedOtelConfig } from './engine/otel/otel-config.js';
+
+// ── Visualizer lifecycle helpers (exported so tests can verify the wiring) ────
+
+/**
+ * Start every visualizer plugin by calling `.start(emitter)`. Returns the same
+ * array (for chaining). Called immediately after EventPersister is started.
+ */
+export function buildVisualizers(
+  visualizers: VisualizerPlugin[],
+  emitter: ConductorEventEmitter,
+): VisualizerPlugin[] {
+  for (const vis of visualizers) {
+    vis.start(emitter);
+  }
+  return visualizers;
+}
+
+/**
+ * Stop every visualizer plugin, swallowing individual errors so one failing
+ * exporter cannot prevent the others from flushing.
+ */
+export async function stopVisualizers(visualizers: VisualizerPlugin[]): Promise<void> {
+  await Promise.all(
+    visualizers.map((vis) =>
+      vis.stop().catch((err: unknown) => {
+        console.warn(
+          `[otel] visualizer '${vis.name}' stop() error: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }),
+    ),
+  );
+}
+
+/**
+ * Construct an OtelVisualizer with production wiring (FR-8).
+ *
+ * Bridges `onWarning` to a `renderer_error` ConductorEvent on the shared bus so
+ * transport failures surface to the operator as structured events instead of
+ * silent drops. Constructor errors (e.g. disabled config passed by mistake) are
+ * caught, surfaced as `renderer_error`, and null is returned so the run proceeds
+ * with OTel disabled.
+ *
+ * Exported so integration tests can drive the exact production construction path
+ * and verify the onWarning wiring without invoking main().
+ */
+export function createOtelVisualizer(
+  resolved: ResolvedOtelConfig,
+  ctx: Omit<OtelVisualizerContext, 'onWarning'>,
+  events: ConductorEventEmitter,
+): OtelVisualizer | null {
+  const onWarning = (msg: string): void => {
+    void events.emit({ type: 'renderer_error', rendererName: 'otel', error: msg });
+  };
+  try {
+    return new OtelVisualizer(resolved, { ...ctx, onWarning });
+  } catch (err) {
+    onWarning(err instanceof Error ? err.message : String(err));
+    return null;
+  }
+}
 
 // Harness VERSION lookup: probes a few candidate locations because the
 // installed layout can be a symlink chain (~/.local/bin/conduct-ts →
@@ -518,6 +582,25 @@ async function main(): Promise<void> {
   const persister = new EventPersister(eventsLogPath, events);
   persister.start();
 
+  // Wire visualizer plugins (FR-1 gate: OTel visualizer only when enabled).
+  const visualizerList: VisualizerPlugin[] = [];
+  const otelResolved = resolveOtelConfig(config ?? {}, pipelineDir);
+  if (otelResolved.enabled) {
+    const otelVis = createOtelVisualizer(
+      otelResolved,
+      {
+        pipelineDir,
+        feature: opts.featureDesc ?? 'unknown',
+        project: projectRoot,
+      },
+      events,
+    );
+    if (otelVis) {
+      visualizerList.push(otelVis);
+    }
+  }
+  buildVisualizers(visualizerList, events);
+
   const stepRunner = new DefaultStepRunner(provider, sessionId, projectRoot, {
     featureDesc: opts.featureDesc,
     pipelineDir,
@@ -585,6 +668,7 @@ async function main(): Promise<void> {
   await conductor.run();
 
   persister.stop();
+  await stopVisualizers(visualizerList);
   subscriber.stop();
 }
 
