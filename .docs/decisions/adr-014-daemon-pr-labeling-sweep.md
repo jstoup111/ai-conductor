@@ -1,7 +1,7 @@
 # ADR 014: Daemon PR labeling — shared gh seam, tracked mergeable watch registry, best-effort sweep
 
 **Date:** 2026-06-29
-**Status:** DRAFT
+**Status:** APPROVED
 **Deciders:** James Stoup (operator), Claude (architecture-review)
 
 ## Context
