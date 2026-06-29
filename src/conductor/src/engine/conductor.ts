@@ -66,6 +66,11 @@ import {
   originDefaultBranch,
   type RebaseOutcome,
 } from './rebase.js';
+import {
+  escalateBuildFailure as defaultEscalateBuildFailure,
+  type EscalateBuildFailureOpts,
+  type EscalateBuildFailureResult,
+} from './build-failure-escalation.js';
 
 export type CheckpointResponse = 'continue' | 'back' | 'quit';
 
@@ -253,6 +258,14 @@ export interface ConductorOptions {
     context?: RecoveryContext,
   ) => Promise<RecoveryOption>;
   onComplexityAssessment?: (recommended: ComplexityTier | null) => Promise<ComplexityTier>;
+  /**
+   * Injectable escalation function called after an irrecoverable build failure
+   * in auto mode. Defaults to the real `escalateBuildFailure` which opens a
+   * draft needs-remediation PR. Tests inject a spy to avoid real gh/git calls.
+   * The conductor wraps every call in try/catch — a throwing escalation must
+   * never prevent the HALT marker or state from being written (C1).
+   */
+  escalateBuildFailure?: (opts: EscalateBuildFailureOpts) => Promise<EscalateBuildFailureResult>;
 }
 
 function stepHasCompletionCheck(step: StepName): boolean {
@@ -283,6 +296,8 @@ export class Conductor {
     context?: RecoveryContext,
   ) => Promise<RecoveryOption>;
   private onComplexityAssessment?: (recommended: ComplexityTier | null) => Promise<ComplexityTier>;
+  /** Escalation function — see ConductorOptions.escalateBuildFailure. */
+  private escalateBuildFailure: (opts: EscalateBuildFailureOpts) => Promise<EscalateBuildFailureResult>;
   /**
    * The most recent engine-native rebase outcome. The `rebase` step is special:
    * its gate verdict is computed by the native handler (not from a file
@@ -318,6 +333,7 @@ export class Conductor {
     this.onReviewArtifacts = opts.onReviewArtifacts ?? (async () => 'approved' as const);
     this.onRecovery = opts.onRecovery;
     this.onComplexityAssessment = opts.onComplexityAssessment;
+    this.escalateBuildFailure = opts.escalateBuildFailure ?? defaultEscalateBuildFailure;
   }
 
   async run(): Promise<void> {
@@ -938,8 +954,26 @@ export class Conductor {
             ).catch(() => {
               /* best-effort marker */
             });
-            await this.events.emit({ type: 'loop_halt', reason });
+            // Durable signals (HALT marker + state) are written BEFORE escalation
+            // so the daemon can classify the outcome even if escalation throws (C1).
             await writeState(this.stateFilePath, state);
+            // Build-only escalation: open a needs-remediation draft PR so a human
+            // can see the failure without hunting through daemon logs (FR-8).
+            // The try/catch is mandatory — a throwing escalation must never prevent
+            // the HALT path from returning cleanly (C1).
+            let prUrl: string | undefined;
+            if (step.name === 'build') {
+              try {
+                const r = await this.escalateBuildFailure({
+                  projectRoot: this.projectRoot,
+                  failureReason: `${reason}\n${lastError}`,
+                });
+                prUrl = r?.prUrl;
+              } catch {
+                /* C1: escalation failure must not prevent the HALT/return path */
+              }
+            }
+            await this.events.emit({ type: 'loop_halt', reason, prUrl });
             process.off('SIGINT', sigintHandler);
             return;
           }
