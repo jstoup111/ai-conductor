@@ -21,6 +21,12 @@ export interface RealDepsConfig {
   runConductorInWorktree: (worktree: FeatureWorktree, item: BacklogItem) => Promise<void>;
   /** LLM provider used for the Phase 9.1 `done`-feature retro narrative. */
   provider: LLMProvider;
+  /**
+   * The resolved active memory provider for this run (ADR-016). Computed at
+   * run start by `resolveMemoryProvider` and carried on context so every
+   * memory-using step sees the same single active provider (FR-10).
+   */
+  memoryProvider?: unknown;
   log?: (msg: string) => void;
 }
 
@@ -37,6 +43,8 @@ export function makeFeatureRunnerDeps(cfg: RealDepsConfig): FeatureRunnerDeps {
     // (Phase 9.1). Manual `/conduct` runs don't go through makeFeatureRunnerDeps.
     daemon: true,
     provider: cfg.provider,
+    // Thread the resolved active memory provider onto run context (ADR-016/FR-10).
+    memoryProvider: cfg.memoryProvider,
     // Project key for the engineer store = the main checkout's basename (NOT the
     // worktree path, which is always `<projectRoot>/.worktrees/<slug>`).
     project: basename(cfg.projectRoot),

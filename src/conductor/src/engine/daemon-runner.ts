@@ -59,6 +59,13 @@ export interface FeatureRunnerDeps {
   /** LLM provider used to produce the `done`-feature retro narrative. */
   provider: LLMProvider;
   /**
+   * The resolved active memory provider for this run (ADR-016).
+   * Computed once at run start via `resolveMemoryProvider` — all memory-using
+   * steps see the same provider (FR-10). Optional so existing test helpers
+   * that predate this field do not require updates.
+   */
+  memoryProvider?: unknown;
+  /**
    * Project key for the engineer store — the project's basename, derived from the
    * main checkout (`basename(projectRoot)`), NOT the worktree path. Worktrees
    * live at `<projectRoot>/.worktrees/<slug>`, so deriving from the worktree
