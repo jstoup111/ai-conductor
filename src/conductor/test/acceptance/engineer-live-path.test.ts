@@ -7,7 +7,7 @@
 //
 // Falsifiable invariants tested here:
 //   1. The decide seam IS called when a real idea + 'y' confirmation flows through.
-//   2. The seam receives all three steps: brainstorm, stories, plan (in order).
+//   2. The seam receives all three steps: explore, prd, stories, plan (in order).
 //   3. The seam receives the correct idea and project name.
 //   4. The spec branch exists in the target repo after a successful run.
 //   5. Without a decide seam, runEngineerMode throws fail-closed (no silent authoring).
@@ -138,12 +138,15 @@ afterEach(async () => {
 // Decide seam: real approved artifacts satisfying runAuthoring contract.
 // ---------------------------------------------------------------------------
 
-type DecideCtx = { step: 'brainstorm' | 'stories' | 'plan'; idea: string; project: string; prompt: string };
+type DecideCtx = { step: 'explore' | 'prd' | 'stories' | 'plan'; idea: string; project: string; prompt: string };
 
 function makeApprovedDecide(spy?: (ctx: DecideCtx) => void) {
   return async (ctx: DecideCtx) => {
     spy?.(ctx);
-    if (ctx.step === 'brainstorm') {
+    if (ctx.step === 'explore') {
+      return { approved: true, artifact: `# Explore: ${ctx.idea}\n\napproaches\n` };
+    }
+    if (ctx.step === 'prd') {
       return { approved: true, artifact: `# PRD: ${ctx.idea}\n\nApproved.\n` };
     }
     if (ctx.step === 'stories') {
@@ -188,7 +191,7 @@ describe('engineer live path — decide seam is wired (FR-6, Task 35)', () => {
     expect(summary.exitCode ?? 0).toBe(0);
   });
 
-  it('the decide seam receives all three steps: brainstorm, stories, plan', async () => {
+  it('the decide seam receives all three steps: explore, prd, stories, plan', async () => {
     const stepsReceived: string[] = [];
     const decide = makeApprovedDecide((ctx) => stepsReceived.push(ctx.step));
 
@@ -205,7 +208,7 @@ describe('engineer live path — decide seam is wired (FR-6, Task 35)', () => {
     });
 
     // All three authoring steps must flow through the seam (in order).
-    expect(stepsReceived).toEqual(['brainstorm', 'stories', 'plan']);
+    expect(stepsReceived).toEqual(['explore', 'prd', 'stories', 'plan']);
   });
 
   it('the decide seam receives the correct idea and project name', async () => {

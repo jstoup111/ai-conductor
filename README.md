@@ -92,7 +92,7 @@ conduct inline --auto "URL shortener with click tracking"
 # Default — auto with interactive recovery on failure
 conduct inline "Add user authentication"
 
-# Manual oversight — REPL mode for conversational steps (brainstorm, stories, plan, architecture_review, manual_test)
+# Manual oversight — REPL mode for conversational steps (explore, prd, stories, plan, architecture_review, manual_test)
 conduct inline --interactive "Payment processing"
 ```
 
@@ -175,10 +175,10 @@ add a CSV export to the reporting tool
   → routes it across your registered projects (conduct register / create)
   → asks you to confirm:  confirm | decline | redirect <project> | create <path>
   → pulls relevant prior lessons from the engineer store into the spec
-  → runs the FULL DECIDE phase for real, in canonical order: brainstorm → complexity →
-    stories → conflict-check → architecture-diagram → architecture-review → plan
-    (tier-aware: Small skips conflict-check + architecture); the assessed tier is
-    recorded at .docs/complexity/<slug>.md and consumed by the target's daemon
+  → runs the FULL DECIDE phase for real, in canonical order: explore (track) → complexity →
+    prd (product track) → architecture-diagram → architecture-review → stories →
+    conflict-check → plan (tier-aware: Small skips conflict-check + architecture); the
+    assessed tier is recorded at .docs/complexity/<slug>.md and consumed by the target's daemon
     (artifacts under .docs/ only; never a stub/DRAFT story or DRAFT ADR, never a spawned claude)
   → opens a spec PR, then ensure-running brings up the target's daemon
 ```
@@ -260,7 +260,7 @@ phases:
 # ── Per-step overrides ────────────────────────────────────────────────────────
 steps:
   # Override a built-in step
-  brainstorm:
+  prd:
     model: opus
     effort: max
     max_retries: 1
@@ -457,18 +457,19 @@ UNDERSTAND → DECIDE → BUILD → SHIP
 | Phase | Skills | What Happens |
 |-------|--------|-------------|
 | UNDERSTAND | `/bootstrap`, `/memory`, `/assess` | Detect/scaffold project, load tech-context, recall prior decisions, codebase health assessment |
-| DECIDE | `/brainstorm` → `/stories` → `/conflict-check` → `/plan` → `/architecture-diagram` → `/architecture-review` | Design → stories → conflicts → tasks → diagrams → architecture gate |
+| DECIDE | `/explore` (track) → `/prd` (product) → `/architecture-diagram` → `/architecture-review` → `/stories` → `/conflict-check` → `/plan` | Explore + track → product-only PRD → architecture (ADRs) → stories → conflicts → tasks |
 | BUILD | `/writing-system-tests` → `/pipeline` or `/tdd`, `/code-review`, `/debugging` | Acceptance specs → TDD → evaluator gates |
 | SHIP | `/manual-test` → `/prd-audit` → `/architecture-review --as-built` → `/retro` → `/finish`, `/pr` | curl/browser validation → PRD compliance audit → as-built architecture sweep → dual retrospective → verification → pull request |
 
-### Skills (21 total)
+### Skills (22 total)
 
 | Skill | Enforcement | Model | Purpose |
 |-------|-------------|-------|---------|
 | `/bootstrap` | Advisory | sonnet | Detect/scaffold project, .claudeignore, smoke test, MCP setup |
 | `/memory` | Gating | haiku | Recall/persist decisions, patterns, gotchas across sessions |
 | `/assess` | Gating | haiku | Dispatch 9 CTO specialists for codebase health assessment |
-| `/brainstorm` | Advisory | opus | Explore requirements, scope check, API contract, design doc |
+| `/explore` | Advisory | sonnet | Context + approaches + decide product/technical track (no design doc) |
+| `/prd` | Gating | opus | Product-only PRD with FRs (product track only); scope check, API contract |
 | `/stories` | Gating | sonnet | User stories with mandatory negative paths (10 categories) |
 | `/conflict-check` | Gating | opus | Detect contradictions (5 types), resolutions create ADRs |
 | `/plan` | Gating | sonnet | 2-5 min tasks, dependency graph, scope sanity check |
@@ -625,7 +626,8 @@ ai-conductor/
 │   ├── architecture-review/
 │   ├── assess/
 │   ├── bootstrap/
-│   ├── brainstorm/
+│   ├── explore/
+│   ├── prd/
 │   ├── code-review/
 │   ├── conduct/
 │   ├── conflict-check/
@@ -710,7 +712,7 @@ your-project/
 │       ├── batch-N/         # Evaluator verdicts (review.json per batch)
 │       └── autoheal-*.json  # Conductor auto-heal records (TS conductor only)
 ├── .docs/
-│   ├── specs/               # Design docs from /brainstorm
+│   ├── specs/               # Design docs from /prd
 │   ├── stories/             # User stories from /stories
 │   ├── conflicts/           # Conflict reports from /conflict-check
 │   ├── plans/               # Implementation plans from /plan

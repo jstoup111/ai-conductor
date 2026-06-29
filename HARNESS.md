@@ -75,7 +75,6 @@ standard implementation, Haiku for mechanical checks.
 | Skill/Agent | Recommended Model | Why |
 |---|---|---|
 | engineer | opus | Interactive idea→spec control plane: routing judgment over the registry + driving the real DECIDE skills requires deep reasoning |
-| brainstorm | opus | Retained for back-compat only (split into explore + prd); not scheduled by the live DECIDE flow |
 | explore | sonnet | Interactive divergent Q&A + approach trade-offs + product/technical track decision — operator in the loop |
 | prd | opus | Product-only PRD authoring: requirements + FRs, deep trade-off reasoning |
 | stories | sonnet | Pattern-following from design doc, structured output |

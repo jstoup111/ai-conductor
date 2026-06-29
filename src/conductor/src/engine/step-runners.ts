@@ -20,8 +20,6 @@ const STEP_PROMPTS: Record<StepName, string> = {
   bootstrap: '/bootstrap',
   memory: '/memory',
   assess: '/assess',
-  // `brainstorm` retained for back-compat; not scheduled by the live flow.
-  brainstorm: '/brainstorm',
   explore: '/explore',
   prd: '/prd',
   complexity: '/conduct complexity',
@@ -312,7 +310,7 @@ export class DefaultStepRunner implements StepRunner {
         cwd: this.projectDir,
         // In auto mode there is no human to approve permissions, and the spawned
         // `claude` would otherwise launch in the user's default permission mode
-        // (which may be `plan` → ALL writes blocked, so e.g. brainstorm can never
+        // (which may be `plan` → ALL writes blocked, so e.g. prd can never
         // save its `.docs/specs/` PRD and the step loops). Skip permissions so the
         // step can write, like autonomous steps. Interactive REPL mode (non-auto)
         // keeps prompts so the user approves.

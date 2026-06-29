@@ -559,10 +559,11 @@ Per idea (each isolated so one repo's failure never corrupts another):
    relevant to the target from the engineer store and injects the digest into the authoring prompt
    (no relevant lessons → an explicit empty digest, not unrelated padding).
 5. **Author (real DECIDE seam)** — `runAuthoring(target, idea, deps)` (`engine/engineer/authoring.ts`)
-   runs the **full DECIDE phase** in canonical order — brainstorm → complexity → stories →
-   conflict-check → architecture-diagram → architecture-review → plan — behind `decide` +
-   `assessComplexity` seams; any unapproved step (or a DRAFT ADR) **throws and fabricates nothing**.
-   The complexity tier gates the middle three (Small skips conflict-check + architecture) and is
+   runs the **full DECIDE phase** in canonical order — explore (track) → complexity → prd
+   (product track) → architecture-diagram → architecture-review → stories → conflict-check →
+   plan — behind `decide` + `assessComplexity` seams; any unapproved step (or a DRAFT ADR)
+   **throws and fabricates nothing**. The complexity tier gates architecture + conflict-check
+   (Small skips them), the track gates the PRD (technical skips it), and the result is
    persisted to `.docs/complexity/<slug>.md` so the daemon can consume it. On approval it writes
    `Status: Accepted` stories + a plan dependency tree on a `spec/<slug>` branch off the **derived**
    default branch (never hardcoded `main`), artifacts under `.docs/` only. It never emits the old

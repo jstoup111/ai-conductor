@@ -3,7 +3,7 @@
 // PURPOSE:
 //   Commit the full DECIDE artifact set the REAL skills already wrote into the target
 //   repo's .docs/ dirs, onto a spec/<slug> branch. The engineer authors the WHOLE DECIDE
-//   phase, so this lands brainstorm/stories/plan + the complexity marker, and (for a
+//   phase, so this lands the PRD/stories/plan + the complexity marker, and (for a
 //   non-Small tier) conflict-check/architecture-diagram/architecture-review + ADRs.
 //   It validates (stories approved, tier-vs-artifacts consistent, no DRAFT ADR), guards,
 //   commits, and returns. It does NOT author (no decide seam, no subprocess).
@@ -53,7 +53,7 @@ export interface LandSpecResult {
 /**
  * Land the pre-written spec artifacts from .docs/ onto a spec/<slug> branch.
  *
- * Does NOT author anything — the real /brainstorm, /stories, /plan skills must
+ * Does NOT author anything — the real /explore, /prd, /stories, /plan skills must
  * have already written the artifacts before this is called.
  */
 export async function landSpec(

@@ -2,10 +2,6 @@ export type StepName =
   | 'bootstrap'
   | 'memory'
   | 'assess'
-  // `brainstorm` is retained only for back-compat: state migration maps a
-  // persisted `brainstorm` step to `explore` (+ `prd`). The live DECIDE flow
-  // (ALL_STEPS) uses `explore` + `prd`; `brainstorm` is no longer scheduled.
-  | 'brainstorm'
   | 'explore'
   | 'prd'
   | 'complexity'

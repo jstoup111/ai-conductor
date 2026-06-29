@@ -566,7 +566,7 @@ export class Conductor {
 
         // Fresh session per step (Phase 4 + daemon fix): when freshContextPerStep
         // is on (daemon/auto only — interactive `/conduct` leaves it false so the
-        // brainstorm→stories→plan design session keeps its context), start EVERY
+        // explore→prd→…→plan design session keeps its context), start EVERY
         // executed step on a brand-new LLM session so context never accumulates
         // across the loop. The retry loop below reuses this session (resume) for
         // the step's OWN attempts only.
@@ -1448,9 +1448,9 @@ export class Conductor {
    * Handle the `worktree` step entirely in the engine via `WorktreeManager`
    * (deterministic `git worktree add -b`), instead of dispatching the
    * `/conduct worktree` skill to Claude. The skill path let Claude run a broad
-   * self-directed orchestration (skipping `brainstorm`, botching git so the main
+   * self-directed orchestration (skipping `explore`, botching git so the main
    * repo ended up on the feature branch). A direct call keeps main untouched and
-   * lets the per-step engine drive `brainstorm` etc. normally.
+   * lets the per-step engine drive `explore` etc. normally.
    *
    * With no feature description (e.g. tests, or a resume without one) it records
    * the step done without creating a worktree — nothing to isolate yet.

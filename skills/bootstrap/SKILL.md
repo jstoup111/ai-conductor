@@ -377,9 +377,9 @@ bootstrap is safe: the same canonical path resolves to one record.
 
 | Mode | Recommendation |
 |------|---------------|
-| Fresh | `/conduct → /brainstorm → /stories → normal flow` |
+| Fresh | `/conduct → /explore → /prd → /stories → normal flow` |
 | Existing (first harness setup) | `/stories (review drafts) → /conflict-check → normal flow` |
-| Existing (new feature) | `/brainstorm → /stories (new + review drafts) → normal flow` |
+| Existing (new feature) | `/explore → /prd → /stories (new + review drafts) → normal flow` |
 | Existing (improve coverage) | `/stories (fill TODOs) → /plan → /tdd → /finish` |
 | Existing (onboarding) | `/conduct --status` — read inventory and memory |
 

@@ -19,8 +19,6 @@ export const STEP_ARTIFACT_GLOBS: Record<StepName, string[]> = {
   bootstrap: [],
   memory: [],
   assess: ['.docs/decisions/technical-assessment-*.md'],
-  // `brainstorm` retained for back-compat (state migration); not scheduled.
-  brainstorm: ['.docs/specs/*.md'],
   // `explore` is advisory + ephemeral (notes → .pipeline/, decision → .memory/);
   // it writes no committed .docs artifact, so it has no completion glob.
   explore: [],

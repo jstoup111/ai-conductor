@@ -7,11 +7,12 @@
 //
 // `runAuthoring` (Tasks 32/33, FR-6, C2, ADR-008):
 //   Runs the FULL DECIDE phase via an AGENT-HOSTED seam (no subprocess), in
-//   canonical conduct order: brainstorm → complexity → stories → conflict_check
-//   → architecture_diagram → architecture_review → plan. The complexity tier
-//   gates the middle three (Small skips conflict-check + architecture).
+//   canonical conduct order: explore → complexity → prd → architecture_diagram →
+//   architecture_review → stories → conflict_check → plan. The complexity tier
+//   gates architecture + conflict-check (Small skips them); the track gates the
+//   PRD (technical skips it).
 //   - deps.decide is INJECTABLE — called once per markdown step.
-//   - deps.assessComplexity is INJECTABLE — called once after brainstorm; its
+//   - deps.assessComplexity is INJECTABLE — called once after explore; its
 //     tier is persisted to `.docs/complexity/<slug>.md` for the daemon.
 //   - Creates a spec/<slug> branch off the repo's DEFAULT branch. The default
 //     branch is derived via `git rev-parse --abbrev-ref HEAD` for local repos
@@ -248,9 +249,6 @@ export interface DecideResult {
  * markdown artifact, and flows through the separate `assessComplexity` seam.
  */
 export type DecideStep =
-  // `brainstorm` retained for back-compat; the live authoring order uses
-  // `explore` + (product-track) `prd`.
-  | 'brainstorm'
   | 'explore'
   | 'prd'
   | 'stories'
@@ -274,11 +272,11 @@ export interface AssessComplexityResult {
  * Dependencies injected into runAuthoring.
  *
  * `decide` is the host-agent DECIDE seam — it is called once per markdown step
- * (brainstorm → stories → conflict_check → architecture_diagram →
+ * (explore → prd → architecture_diagram →
  * architecture_review → plan) and returns the human-gated artifact.
  *
  * `assessComplexity` is the host-agent complexity seam — called once, after
- * brainstorm and before stories, returning the operator-approved tier.
+ * explore and before prd, returning the operator-approved tier.
  *
  * `spawn` is the optional child-process spawn shim (repo convention).
  * runAuthoring never calls it — the field exists only so the acceptance-test
@@ -289,7 +287,7 @@ export interface RunAuthoringDeps {
   /**
    * Complexity seam. OPTIONAL at this layer: when absent, runAuthoring defaults
    * to an approved Small assessment (which skips conflict-check + architecture),
-   * so a seam-less call behaves like the legacy brainstorm→stories→plan flow.
+   * so a seam-less call behaves like the lightweight explore→stories→plan flow.
    * Production NEVER relies on this default — `processIdea` (loop.ts) requires
    * the seam and fails closed if it is missing.
    */
@@ -322,7 +320,7 @@ export interface RunAuthoringResult {
  *
  * Contract:
  *  1. Validates target.canonicalPath exists on disk (TargetPathMissingError on failure).
- *  2. Runs the full DECIDE phase IN CANONICAL ORDER: decide('brainstorm') →
+ *  2. Runs the full DECIDE phase IN CANONICAL ORDER: decide('explore') →
  *     assessComplexity() → decide('stories') → (when tier !== 'S')
  *     decide('conflict_check') → decide('architecture_diagram') →
  *     decide('architecture_review') → decide('plan'). If ANY gate returns
@@ -387,10 +385,12 @@ export async function runAuthoring(
     return result;
   };
 
-  const brainstormResult = await gate('brainstorm');
+  // Divergent step — context + approaches; decides the track. Its output is not
+  // the spec (the PRD is authored by the `prd` gate on the product track).
+  await gate('explore');
 
   // Default (no seam): an approved Small tier — skips conflict-check + architecture,
-  // preserving the legacy brainstorm→stories→plan flow. Production supplies a real seam.
+  // preserving the lightweight explore→stories→plan flow. Production supplies a real seam.
   const assessComplexity =
     deps.assessComplexity ?? (async () => ({ approved: true, tier: 'S' as const }));
   const complexity = await assessComplexity(null);
@@ -400,23 +400,19 @@ export async function runAuthoring(
     );
   }
   const tier = complexity.tier;
+  const track = deps.track ?? 'product';
 
-  const storiesResult = await gate('stories');
-  // Enforce the stories-approval marker before any write (also re-checked at the
-  // write step below for defense in depth).
-  if (!isStoriesApproved(storiesResult.artifact)) {
-    throw new Error(
-      'runAuthoring: stories artifact from DECIDE is not approved — it must declare ' +
-        '"Status: Accepted" (and no "Status: DRAFT"). The /stories skill stamps this on approval.',
-    );
+  // PRD — product track only (ADR-015). The PRD artifact becomes the spec.
+  let prdResult: DecideResult | null = null;
+  if (track === 'product') {
+    prdResult = await gate('prd');
   }
 
-  // Tier-conditional steps: Small skips conflict-check + architecture entirely.
-  let conflictResult: DecideResult | null = null;
+  // Tier-conditional architecture — now BEFORE stories (ADR-016), so the design
+  // (and its ADRs) is settled before behavior is enumerated. Small skips it.
   let architectureDiagramResult: DecideResult | null = null;
   let architectureReviewResult: DecideResult | null = null;
   if (tier !== 'S') {
-    conflictResult = await gate('conflict_check');
     architectureDiagramResult = await gate('architecture_diagram');
     architectureReviewResult = await gate('architecture_review');
     // ADR hard gate: no spec lands with a DRAFT ADR (mirrors the conduct
@@ -427,6 +423,21 @@ export async function runAuthoring(
           'APPROVED before landing. Approve the ADRs and re-run architecture-review.',
       );
     }
+  }
+
+  // Stories follow architecture (the always-present acceptance-criteria artifact).
+  const storiesResult = await gate('stories');
+  if (!isStoriesApproved(storiesResult.artifact)) {
+    throw new Error(
+      'runAuthoring: stories artifact from DECIDE is not approved — it must declare ' +
+        '"Status: Accepted" (and no "Status: DRAFT"). The /stories skill stamps this on approval.',
+    );
+  }
+
+  // Conflict-check runs AFTER stories (it operates on them); Small skips it.
+  let conflictResult: DecideResult | null = null;
+  if (tier !== 'S') {
+    conflictResult = await gate('conflict_check');
   }
 
   const planResult = await gate('plan');
@@ -465,17 +476,14 @@ export async function runAuthoring(
     // Guard every path before any write.
     guard.assertWriteAllowed(storiesDir);
     guard.assertWriteAllowed(plansDir);
-    guard.assertWriteAllowed(specsDir);
     guard.assertWriteAllowed(complexityDir);
     guard.assertWriteAllowed(storiesFile);
     guard.assertWriteAllowed(plansFile);
-    guard.assertWriteAllowed(specsFile);
     guard.assertWriteAllowed(complexityFile);
 
     // Create directories and write artifact files.
     await mkdir(storiesDir, { recursive: true });
     await mkdir(plansDir, { recursive: true });
-    await mkdir(specsDir, { recursive: true });
     await mkdir(complexityDir, { recursive: true });
 
     // Write stories verbatim from DECIDE (contains "Status: Accepted"). The
@@ -485,8 +493,14 @@ export async function runAuthoring(
     // Write plan verbatim from DECIDE (contains "## Task Dependency Graph").
     await writeFile(plansFile, planResult.artifact, 'utf8');
 
-    // Write brainstorm/PRD as the spec artifact.
-    await writeFile(specsFile, brainstormResult.artifact, 'utf8');
+    // Write the PRD as the spec artifact — PRODUCT track only. On the technical
+    // track there is no PRD; acceptance criteria live in the stories.
+    if (prdResult) {
+      guard.assertWriteAllowed(specsDir);
+      guard.assertWriteAllowed(specsFile);
+      await mkdir(specsDir, { recursive: true });
+      await writeFile(specsFile, prdResult.artifact, 'utf8');
+    }
 
     // Write the complexity marker — keyed by the SAME stem as the plan so the
     // daemon resolves it deterministically (`.docs/complexity/<plan-stem>.md`).

@@ -105,7 +105,7 @@ Present a clear status dashboard:
 |-------|------|--------|----------|
 | UNDERSTAND | bootstrap | ✅ Done | CLAUDE.md, .memory/, .docs/ |
 | UNDERSTAND | memory | ✅ Done | .memory/index.md |
-| DECIDE | brainstorm | ✅ Done | .docs/specs/2026-03-28-task-board.md |
+| DECIDE | explore | ✅ Done | .docs/track/ |
 | DECIDE | stories | ✅ Done | .docs/stories/task-board.md |
 | DECIDE | conflict-check | ⏳ NEXT | — |
 | DECIDE | plan | ⬚ Pending | — |
@@ -153,7 +153,7 @@ Available at checkpoints and in the recovery menu (`b = go back`). Presents a nu
 
 ```
 Go back to which step?
-   1) brainstorm           [done]    DECIDE
+   1) explore              [done]    DECIDE
    2) stories              [done]    DECIDE
    3) plan                 [done]    DECIDE
    4) tdd/pipeline         [done]    BUILD
@@ -252,9 +252,9 @@ re-dispatching. JSON state can become stale — the actual test suite is the sou
 
 ### 4. Handle Edge Cases
 
-**Re-entry:** If the user runs `/conduct` mid-flow (e.g., after completing brainstorm), pick up from the current state. Don't restart.
+**Re-entry:** If the user runs `/conduct` mid-flow (e.g., after completing explore), pick up from the current state. Don't restart.
 
-**Skipping steps:** If the user wants to skip a step (e.g., skip brainstorm because they already know what to build), allow it ONLY for advisory-enforcement steps. Gating steps cannot be skipped.
+**Skipping steps:** If the user wants to skip a step (e.g., skip explore because they already know what to build), allow it ONLY for advisory-enforcement steps. Gating steps cannot be skipped.
 
 | Step | Can Skip? | Reason |
 |------|-----------|--------|
