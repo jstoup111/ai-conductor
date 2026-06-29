@@ -1,7 +1,7 @@
 // daemon-launch.ts — Fire-and-forget daemon launch helper (FR-8; ADR-005 intent,
 // ADR-014 mechanism).
 //
-// launchDaemonDetached starts a build daemon for a repo and retains NO handle,
+// launchDaemon starts a build daemon for a repo and retains NO handle,
 // IPC channel, or supervision over it. ADR-014 changes the MECHANISM (not the
 // non-management guarantee): instead of a detached `stdio:'ignore'` node spawn,
 // the daemon is hosted as a FOREGROUND process inside a per-repo tmux session
@@ -28,7 +28,7 @@ export interface DaemonStarter {
   start(repoPath: string): void | Promise<void>;
 }
 
-/** Options accepted by launchDaemonDetached. */
+/** Options accepted by launchDaemon. */
 export interface LaunchDaemonOpts {
   /**
    * Injectable launcher. Defaults to a tmux Supervisor. Provide a spy in tests to
@@ -48,7 +48,7 @@ export interface LaunchDaemonOpts {
  * @param opts    - Optional supervisor injection (tests).
  * @returns void / Promise<void> — intentionally no handle is retained or returned.
  */
-export function launchDaemonDetached(project: string, opts: LaunchDaemonOpts = {}): void | Promise<void> {
+export function launchDaemon(project: string, opts: LaunchDaemonOpts = {}): void | Promise<void> {
   const supervisor = opts.supervisor ?? makeTmuxSupervisor();
   // Idempotent start: a live session ⇒ no-op (no duplicate daemon). We return the
   // start() result (void/Promise) so the caller can await + swallow errors, but we

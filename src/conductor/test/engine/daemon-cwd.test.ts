@@ -9,11 +9,11 @@ import { tmpdir } from 'os';
 // Guarantee: when ensureRunning spawns a daemon, it binds the daemon to
 // `repoPath` — NOT the engineer's process cwd. Concretely:
 //   1. The injected `launch` receives `repoPath` as its argument (so the
-//      real launchDaemonDetached would set `cwd: repoPath`).
+//      real launchDaemon would set `cwd: repoPath`).
 //   2. The pidfile lives under `repoPath/.daemon/daemon.pid` — NOT under
 //      the engineer's current working directory.
 //
-// Uses injection to avoid spawning real child processes. launchDaemonDetached
+// Uses injection to avoid spawning real child processes. launchDaemon
 // itself passes `cwd: project` which is the same `repoPath` — verified below.
 // ─────────────────────────────────────────────────────────────────────────────
 

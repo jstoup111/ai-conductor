@@ -53,7 +53,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve, dirname, join } from 'node:path';
-import { launchDaemonDetached } from '../../../src/engine/engineer/daemon-launch.js';
+import { launchDaemon } from '../../../src/engine/engineer/daemon-launch.js';
 import type { LaunchDaemonOpts } from '../../../src/engine/engineer/daemon-launch.js';
 import * as daemonLaunchModule from '../../../src/engine/engineer/daemon-launch.js';
 
@@ -273,7 +273,7 @@ describe('engineer import graph: structural non-autonomy (FR-10, ADR-005)', () =
 
   it('engineer does NOT transitively import daemon-runner.ts (daemon orchestrator)', () => {
     // daemon-runner.ts orchestrates the full daemon feature-processing loop.
-    // The engineer launches daemons via launchDaemonDetached (fire-and-forget)
+    // The engineer launches daemons via launchDaemon (fire-and-forget)
     // and must never import the daemon orchestrator that would allow control.
     const daemonRunnerTs = join(CONDUCTOR_SRC, 'engine/daemon-runner.ts');
     expect(
@@ -596,10 +596,10 @@ describe('engineer daemon launch: non-management guarantees (FR-8)', () => {
 
   // ── 1. Delegates to a start-ONLY supervisor (no management surface) ────────
 
-  it('launchDaemonDetached delegates to supervisor.start exactly once', () => {
+  it('launchDaemon delegates to supervisor.start exactly once', () => {
     const { supervisor, starts } = makeStarterSpy();
 
-    launchDaemonDetached('/projects/non-autonomy-test', { supervisor });
+    launchDaemon('/projects/non-autonomy-test', { supervisor });
 
     expect(supervisor.start).toHaveBeenCalledOnce();
     expect(starts).toEqual(['/projects/non-autonomy-test']);
@@ -608,7 +608,7 @@ describe('engineer daemon launch: non-management guarantees (FR-8)', () => {
   it('the injected seam exposes no stop/restart/attach — engineer cannot manage', () => {
     const { supervisor } = makeStarterSpy();
 
-    launchDaemonDetached('/projects/non-autonomy-test', { supervisor });
+    launchDaemon('/projects/non-autonomy-test', { supervisor });
 
     // start-only: no control connection / IPC / lifecycle method reachable.
     expect((supervisor as Record<string, unknown>)['stop']).toBeUndefined();
@@ -618,10 +618,10 @@ describe('engineer daemon launch: non-management guarantees (FR-8)', () => {
 
   // ── 2. Return value retains no manageable handle ──────────────────────────
 
-  it('launchDaemonDetached returns no process-control handle', () => {
+  it('launchDaemon returns no process-control handle', () => {
     const { supervisor } = makeStarterSpy();
 
-    const result = launchDaemonDetached('/projects/non-autonomy-test', { supervisor });
+    const result = launchDaemon('/projects/non-autonomy-test', { supervisor });
 
     // start() returns void → undefined here; even a Promise<void> exposes no
     // .kill()/.on() (no retained ChildProcess, no IPC).
@@ -659,7 +659,7 @@ describe('engineer daemon launch: non-management guarantees (FR-8)', () => {
     // Importing the module must not trigger a launch.
     expect(supervisor.start).toHaveBeenCalledTimes(0);
 
-    launchDaemonDetached('/projects/non-autonomy-test', { supervisor });
+    launchDaemon('/projects/non-autonomy-test', { supervisor });
 
     // Exactly one — no retry, no heartbeat, no re-spawn loop.
     expect(supervisor.start).toHaveBeenCalledTimes(1);

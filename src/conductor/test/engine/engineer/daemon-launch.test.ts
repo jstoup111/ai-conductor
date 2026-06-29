@@ -1,6 +1,6 @@
 // Test: fire-and-forget daemon launch (FR-8; ADR-005 intent, ADR-014 mechanism).
 //
-// ADR-014 supersedes ADR-005's spawn-MECHANISM detail: launchDaemonDetached no
+// ADR-014 supersedes ADR-005's spawn-MECHANISM detail: launchDaemon no
 // longer does a detached `stdio:'ignore'` node spawn — it delegates to the tmux
 // Supervisor's idempotent `start(project)` so the daemon is hosted in an
 // operator-attachable session. The NON-MANAGEMENT guarantee (ADR-005 FR-8) is
@@ -11,7 +11,7 @@
 // delegation without spawning real tmux.
 
 import { describe, it, expect, vi } from 'vitest';
-import { launchDaemonDetached } from '../../../src/engine/engineer/daemon-launch.js';
+import { launchDaemon } from '../../../src/engine/engineer/daemon-launch.js';
 import type { DaemonStarter } from '../../../src/engine/engineer/daemon-launch.js';
 import * as daemonLaunchModule from '../../../src/engine/engineer/daemon-launch.js';
 
@@ -26,11 +26,11 @@ function makeStarterSpy() {
   return { supervisor, starts };
 }
 
-describe('launchDaemonDetached (ADR-014 mechanism: tmux Supervisor.start)', () => {
+describe('launchDaemon (ADR-014 mechanism: tmux Supervisor.start)', () => {
   it('delegates to supervisor.start(project) exactly once', () => {
     const { supervisor, starts } = makeStarterSpy();
 
-    launchDaemonDetached('/projects/my-app', { supervisor });
+    launchDaemon('/projects/my-app', { supervisor });
 
     expect(supervisor.start).toHaveBeenCalledOnce();
     expect(starts).toEqual(['/projects/my-app']);
@@ -39,7 +39,7 @@ describe('launchDaemonDetached (ADR-014 mechanism: tmux Supervisor.start)', () =
   it('passes the repo path through unchanged (daemon binds to repoPath — FR-22 intent)', () => {
     const { supervisor, starts } = makeStarterSpy();
 
-    launchDaemonDetached('/projects/alpha', { supervisor });
+    launchDaemon('/projects/alpha', { supervisor });
 
     // The repo path is the start() argument (the session is created with cwd=repo);
     // it is NOT smuggled as a positional CLI arg or dropped.
@@ -49,7 +49,7 @@ describe('launchDaemonDetached (ADR-014 mechanism: tmux Supervisor.start)', () =
   it('does NOT return a manageable handle (launch ≠ manage)', () => {
     const { supervisor } = makeStarterSpy();
 
-    const result = launchDaemonDetached('/projects/my-app', { supervisor });
+    const result = launchDaemon('/projects/my-app', { supervisor });
 
     // start() here returns void → result is undefined. Even if a Promise<void>
     // is returned by a real async supervisor, it must NEVER expose process-control
@@ -69,14 +69,14 @@ describe('launchDaemonDetached (ADR-014 mechanism: tmux Supervisor.start)', () =
 
     // The error surfaces to the caller (engineer handoff swallows it); the helper
     // never holds a handle to a daemon it failed to start.
-    expect(() => launchDaemonDetached('/projects/my-app', { supervisor })).toThrow(/tmux/i);
+    expect(() => launchDaemon('/projects/my-app', { supervisor })).toThrow(/tmux/i);
   });
 });
 
 // ---------------------------------------------------------------------------
 // "launch is not manage" — ADR-005 FR-8 non-management guarantees (PRESERVED).
 //
-// These assert that launchDaemonDetached is a strict fire-and-forget boundary:
+// These assert that launchDaemon is a strict fire-and-forget boundary:
 // the engineer launches a daemon but never supervises, stops, restarts, or
 // retains a handle to it. ADR-014 changes the mechanism (tmux session, not a
 // detached node spawn) but NOT these guarantees. The lifecycle verbs
@@ -94,7 +94,7 @@ describe('launch is not manage (FR-8 — ADR-005 intent preserved under ADR-014)
     expect((supervisor as Record<string, unknown>)['restart']).toBeUndefined();
     expect((supervisor as Record<string, unknown>)['attach']).toBeUndefined();
 
-    launchDaemonDetached('/projects/alpha', { supervisor });
+    launchDaemon('/projects/alpha', { supervisor });
     expect(supervisor.start).toHaveBeenCalledOnce();
   });
 
@@ -120,7 +120,7 @@ describe('launch is not manage (FR-8 — ADR-005 intent preserved under ADR-014)
     // Importing the module + building the spy must not trigger any start.
     expect(supervisor.start).toHaveBeenCalledTimes(0);
 
-    launchDaemonDetached('/projects/alpha', { supervisor });
+    launchDaemon('/projects/alpha', { supervisor });
     expect(supervisor.start).toHaveBeenCalledTimes(1);
 
     // Nothing else launches implicitly — count stays exactly 1.

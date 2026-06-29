@@ -11,7 +11,7 @@
 ## Part B: Application
 
 - **A-1 (Dead-ish surface):** `Supervisor.logs` (`capturePane`) and `Supervisor.exec` (`sendKeys`) have no production caller (`daemon-tmux.ts:286-296`); the port is complete ahead of use. Severity: low (intentional port completeness, ADR-noted). Fix → story: wire an operator `daemon logs --live` (capturePane) path or formally accept the YAGNI.
-- **A-2 (Misleading name):** `launchDaemonDetached` (`engineer/daemon-launch.ts`) no longer detaches via node spawn — it delegates to `supervisor.start` (`tmux new-session -d`). Severity: low. Fix → story: rename to `launchDaemon` (touches the symbol, the lazy import in `daemon-lock.ts:481`, and tests).
+- **A-2 (Misleading name) — RESOLVED this session:** `launchDaemonDetached` no longer detaches via node spawn (delegates to `supervisor.start` = `tmux new-session -d`). Renamed to `launchDaemon` across `engineer/daemon-launch.ts`, the lazy import in `daemon-lock.ts`, and 4 test files (0 residual references; typecheck + tests green).
 - **A-3 (Test quality):** The `capturePane`/`sendKeys` unit tests asserted the buggy `=<name>` argv and passed (they encoded the bug — see H-1). Self-referential argv assertions with no ground truth are fragile. Severity: medium. Fix: pane-target argv tests now corrected and backed by the real-tmux smoke; codify via H-1.
 - **A-4 (Pre-existing debt, not this feature):** `CHANGELOG.md` has three `## [Unreleased]` headers (lines 11/717/1260) — a release-workflow/integrity smell that the integrity check ("has an [Unreleased] section") does not catch. Severity: low. Fix → story: dedupe to one canonical `[Unreleased]`; tighten the integrity check to assert exactly one.
 
