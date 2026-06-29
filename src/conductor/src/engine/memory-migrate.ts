@@ -26,8 +26,10 @@
  * index does not already contain that path reference.
  */
 
-import { lstat } from 'fs/promises';
+import { copyFile, lstat, mkdir, readdir, rm, symlink } from 'fs/promises';
 import { join } from 'path';
+import { homedir } from 'os';
+import { projectKey } from './memory-store.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Public types
@@ -56,6 +58,90 @@ export interface MigrateOptions {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Internal helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Reads HOME from the environment so tests can redirect it to a temp dir. */
+function resolveHome(): string {
+  return process.env.HOME ?? process.env.USERPROFILE ?? homedir();
+}
+
+/** Returns the canonical harness directory for the project at `repoPath`. */
+async function getCanonicalHarnessDir(repoPath: string): Promise<string> {
+  const home = resolveHome();
+  const key = await projectKey(repoPath);
+  return join(home, '.ai-conductor', 'memory', key, 'harness');
+}
+
+/** Category subdirs (mirrored from memory-store.ts to avoid coupling). */
+const CATEGORIES = ['decisions', 'patterns', 'gotchas', 'context'] as const;
+
+/**
+ * Copy files from `srcDir` to `destDir`, SKIPPING any that already exist in
+ * `destDir` (union / no-overwrite semantics for A21 and A20 re-entrancy).
+ * Returns the list of basenames actually copied (newly added).
+ */
+async function copyMissing(srcDir: string, destDir: string): Promise<string[]> {
+  const entries = await readdir(srcDir, { withFileTypes: true }).catch(() => []);
+  const copied: string[] = [];
+  if (entries.length === 0) return copied;
+
+  await mkdir(destDir, { recursive: true });
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    const destFile = join(destDir, entry.name);
+    const exists = await lstat(destFile)
+      .then(() => true)
+      .catch(() => false);
+    if (!exists) {
+      await copyFile(join(srcDir, entry.name), destFile);
+      copied.push(entry.name);
+    }
+  }
+  return copied;
+}
+
+/**
+ * Recursively copy an entire directory tree from `srcDir` to `destDir`,
+ * overwriting any existing files (used for backup creation and A22 reverse).
+ */
+async function copyAll(srcDir: string, destDir: string): Promise<void> {
+  const entries = await readdir(srcDir, { withFileTypes: true }).catch(() => []);
+  await mkdir(destDir, { recursive: true });
+  for (const entry of entries) {
+    const src = join(srcDir, entry.name);
+    const dest = join(destDir, entry.name);
+    if (entry.isDirectory()) {
+      await copyAll(src, dest);
+    } else if (entry.isFile()) {
+      await copyFile(src, dest);
+    }
+  }
+}
+
+/**
+ * Default verifier: confirms every source entry file is present in the
+ * canonical store (per-file existence check).
+ */
+async function runDefaultVerify(
+  localMemPath: string,
+  canonicalHarness: string,
+): Promise<boolean> {
+  for (const cat of CATEGORIES) {
+    const srcDir = join(localMemPath, cat);
+    const destDir = join(canonicalHarness, cat);
+    const files = await readdir(srcDir).catch(() => []);
+    for (const f of files) {
+      const exists = await lstat(join(destDir, f))
+        .then(() => true)
+        .catch(() => false);
+      if (!exists) return false;
+    }
+  }
+  return true;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Public API
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -66,12 +152,24 @@ export interface MigrateOptions {
  * A17 — detect / skip:
  *   • `.memory/` absent → fresh project (FR-12). No-op.
  *   • `.memory/` is a symlink → already migrated. No-op.
+ *
+ * A18 — copy-verify-swap:
+ *   1. **Backup** — copy `.memory/` to `.memory.pre-migrate.bak/`.
+ *   2. **Copy** — union-copy each category dir into canonical store.
+ *   3. **Verify** — default verifier checks every source entry is present.
+ *   4. **Swap** — remove real `.memory/`, create symlink to canonical harness.
  */
 export async function migrateMemory(
   repoPath: string,
   _opts: MigrateOptions = {},
 ): Promise<void> {
   const memPath = join(repoPath, '.memory');
+  const backupPath = join(repoPath, '.memory.pre-migrate.bak');
+
+  // ── A22: Reverse (not yet implemented) ────────────────────────────────────
+  if (_opts.reverse) {
+    throw new Error('Reverse not yet implemented (A22).');
+  }
 
   // ── A17: Detect ────────────────────────────────────────────────────────────
   const memStat = await lstat(memPath).catch(() => null);
@@ -86,6 +184,34 @@ export async function migrateMemory(
     return;
   }
 
-  // Real directory — migration body will be added in A18.
-  throw new Error('Migration for real .memory/ directories not yet implemented (A18).');
+  // `.memory/` is a real directory — proceed with migration.
+
+  // ── A18: Backup ────────────────────────────────────────────────────────────
+  // Copy (not move) original to backup, retaining it for A22 reverse.
+  await copyAll(memPath, backupPath);
+
+  // ── A18: Copy into canonical store (union / no-overwrite) ──────────────────
+  const canonicalHarness = await getCanonicalHarnessDir(repoPath);
+  await mkdir(canonicalHarness, { recursive: true });
+
+  for (const cat of CATEGORIES) {
+    const srcDir = join(memPath, cat);
+    const destDir = join(canonicalHarness, cat);
+    await copyMissing(srcDir, destDir);
+  }
+
+  // ── A18: Verify (default only) ─────────────────────────────────────────────
+  const verified = await runDefaultVerify(memPath, canonicalHarness);
+
+  if (!verified) {
+    // C5: Abort without destructive change. Original .memory/ is still intact.
+    throw new Error(
+      'Migration verification failed: not all entries could be confirmed in ' +
+        'the canonical store. Original .memory/ is intact — no swap performed.',
+    );
+  }
+
+  // ── A18: Swap ──────────────────────────────────────────────────────────────
+  await rm(memPath, { recursive: true, force: true });
+  await symlink(canonicalHarness, memPath);
 }
