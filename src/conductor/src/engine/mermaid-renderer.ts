@@ -1,0 +1,192 @@
+// Renders the ```mermaid blocks inside a generated `.md` artifact (architecture
+// diagrams, ADRs) into something visual for the human approval gate. Dispatches
+// on the configured preset NAME (html / mmdc-png / mmdc-svg / none) rather than
+// the `command` field, so a tool-less preset is never confused with a missing
+// binary. Best-effort by contract: it NEVER throws to its caller and NEVER fails
+// open/closed in a way that blocks the gate — on any problem it returns a result
+// carrying a human notice and lets the caller fall back to raw Markdown.
+
+import type { MermaidRendererConfig } from '../types/config.js';
+
+export type RenderStatus =
+  | 'rendered' // the renderer engaged and opened at least one diagram
+  | 'no-diagrams' // file has no mermaid blocks — nothing to do
+  | 'disabled' // preset 'none', unknown, or no renderer configured
+  | 'tool-missing' // configured tool (mmdc) not on PATH
+  | 'error'; // the renderer tried and every attempt failed
+
+export interface RenderResult {
+  status: RenderStatus;
+  rendered: number;
+  failed: number;
+  outputs: string[];
+  notice?: string;
+}
+
+export interface RenderDeps {
+  /** True if the named CLI tool is resolvable on PATH. */
+  hasTool: (cmd: string) => Promise<boolean>;
+  /** Render one .mmd source file to an image; resolves ok:false on failure (never throws). */
+  runMmdc: (inputFile: string, outputFile: string) => Promise<{ ok: boolean; error?: string }>;
+  /** Open a produced artifact with the platform opener (browser/image viewer). */
+  open: (path: string) => Promise<void>;
+  /** Write transient render input/output; returns the absolute path written. */
+  writeTemp: (name: string, content: string) => Promise<string>;
+  /** Emit a human-facing line (notices, per-block failures). */
+  log: (msg: string) => void;
+}
+
+/** Pull the source of every ```mermaid fenced block, in document order. */
+export function extractMermaidBlocks(content: string): string[] {
+  const re = /```mermaid[^\n]*\n([\s\S]*?)```/g;
+  const blocks: string[] = [];
+  for (const m of content.matchAll(re)) {
+    blocks.push(m[1].replace(/\s+$/, ''));
+  }
+  return blocks;
+}
+
+/** Filesystem-safe stem from a source path: "a/b/containers.md" -> "containers". */
+function stem(file: string): string {
+  const base = file.split('/').pop() ?? file;
+  return base.replace(/\.[^.]+$/, '').replace(/[^A-Za-z0-9_-]/g, '_') || 'diagram';
+}
+
+/** Escape the HTML-significant characters so a diagram label can't break out of
+ *  its <pre> element (corrupting the render) or inject markup. Mermaid decodes
+ *  these entities itself when it reads the element's text. */
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function buildHtml(title: string, blocks: string[]): string {
+  // Self-contained preview: Mermaid renders the blocks client-side. The script
+  // is loaded from a pinned CDN — on WSL2 this opens in the Windows browser,
+  // which has network access. Block source is HTML-escaped before embedding;
+  // Mermaid decodes the entities back when it reads each node's text content.
+  const sections = blocks
+    .map((b) => `<pre class="mermaid">\n${escapeHtml(b)}\n</pre>`)
+    .join('\n');
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>${title}</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 2rem; background: #fff; }
+  h1 { font-size: 1.25rem; color: #333; }
+  pre.mermaid { background: #fafafa; padding: 1rem; border-radius: 6px; overflow: auto; }
+</style>
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+  mermaid.initialize({ startOnLoad: true, theme: 'default' });
+</script>
+</head>
+<body>
+<h1>${title}</h1>
+${sections}
+</body>
+</html>
+`;
+}
+
+export async function renderDiagramsForFile(
+  file: string,
+  content: string,
+  config: MermaidRendererConfig | undefined,
+  deps: RenderDeps,
+): Promise<RenderResult> {
+  const empty: RenderResult = { status: 'no-diagrams', rendered: 0, failed: 0, outputs: [] };
+  // Logging must never be able to break the never-throw contract.
+  const safeLog = (msg: string) => {
+    try {
+      deps.log(msg);
+    } catch {
+      /* a broken logger must not propagate to the approval gate */
+    }
+  };
+  try {
+    const blocks = extractMermaidBlocks(content);
+    if (blocks.length === 0) return empty;
+
+    const preset = config?.preset;
+    if (!config || !preset || preset === 'none') {
+      return {
+        status: 'disabled',
+        rendered: 0,
+        failed: 0,
+        outputs: [],
+        notice: 'diagram rendering disabled — showing raw Markdown (configure mermaid_renderer to enable)',
+      };
+    }
+
+    if (preset === 'html') {
+      const out = await deps.writeTemp(`${stem(file)}.html`, buildHtml(stem(file), blocks));
+      await deps.open(out);
+      return { status: 'rendered', rendered: 1, failed: 0, outputs: [out] };
+    }
+
+    if (preset === 'mmdc-png' || preset === 'mmdc-svg') {
+      if (!(await deps.hasTool('mmdc'))) {
+        return {
+          status: 'tool-missing',
+          rendered: 0,
+          failed: 0,
+          outputs: [],
+          notice:
+            "mermaid renderer 'mmdc' not found — showing raw Markdown (install @mermaid-js/mermaid-cli, or set mermaid_renderer.preset: html)",
+        };
+      }
+      const ext = preset === 'mmdc-svg' ? 'svg' : 'png';
+      let rendered = 0;
+      let failed = 0;
+      const outputs: string[] = [];
+      for (let i = 0; i < blocks.length; i++) {
+        // Each diagram is isolated: a writeTemp/runMmdc/open failure on one
+        // block must not lose the others (or the already-rendered outputs).
+        try {
+          const inPath = await deps.writeTemp(`${stem(file)}-${i + 1}.mmd`, blocks[i]);
+          const outPath = `${inPath.replace(/\.mmd$/, '')}.${ext}`;
+          const res = await deps.runMmdc(inPath, outPath);
+          if (!res.ok) throw new Error(res.error ?? 'render failed');
+          await deps.open(outPath);
+          outputs.push(outPath);
+          rendered += 1;
+        } catch (e) {
+          failed += 1;
+          safeLog(`  ⚠ could not render diagram ${i + 1} of ${stem(file)}: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
+      const total = blocks.length;
+      if (rendered === 0 && failed > 0) {
+        return {
+          status: 'error',
+          rendered,
+          failed,
+          outputs,
+          notice: `all ${total} diagram(s) failed to render — showing raw Markdown`,
+        };
+      }
+      return {
+        status: 'rendered',
+        rendered,
+        failed,
+        outputs,
+        notice: failed > 0 ? `${failed} of ${total} diagram(s) failed to render — showing raw Markdown for those` : undefined,
+      };
+    }
+
+    // Unknown preset name — treat as disabled rather than guessing.
+    return {
+      status: 'disabled',
+      rendered: 0,
+      failed: 0,
+      outputs: [],
+      notice: `unknown mermaid_renderer preset '${preset}' — showing raw Markdown`,
+    };
+  } catch (err) {
+    // Contract: never throw to the caller. Degrade to raw Markdown with a notice.
+    safeLog(`  ⚠ diagram rendering failed: ${err instanceof Error ? err.message : String(err)}`);
+    return { status: 'error', rendered: 0, failed: 0, outputs: [], notice: 'diagram rendering error — showing raw Markdown' };
+  }
+}
