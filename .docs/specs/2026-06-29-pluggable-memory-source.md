@@ -1,7 +1,7 @@
 # PRD: Pluggable Memory (per-project, LLM-driven retrieval)
 
 **Date:** 2026-06-29
-**Status:** Draft
+**Status:** Approved
 
 > **Product-only.** This document states goals and requirements — *what* and *why*. Implementation
 > choices (how platforms integrate, how they're installed, where memory is stored, how migration runs,
