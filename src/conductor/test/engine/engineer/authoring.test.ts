@@ -301,6 +301,17 @@ describe('runAuthoring — regression guards (Task 33, FR-6, C2)', () => {
     expect(storyFiles.trim()).toBe('');
   });
 
+  it('default (no assessComplexity seam) runs only brainstorm → stories → plan (Small)', async () => {
+    const target = { name: 'alpha', canonicalPath: repoPath };
+    const steps: string[] = [];
+    const trackingDecide = async (step: string) => {
+      steps.push(step);
+      return await approvedDecide()(step);
+    };
+    await runAuthoring(target, 'CSV export', { decide: trackingDecide });
+    expect(steps).toEqual(['brainstorm', 'stories', 'plan']);
+  });
+
   it('an UNAPPROVED brainstorm step throws immediately', async () => {
     const target = { name: 'alpha', canonicalPath: repoPath };
     const blockingDecide = async (step: string) => {
@@ -345,5 +356,176 @@ describe('runAuthoring — regression guards (Task 33, FR-6, C2)', () => {
     // No spec branch must have been created
     const branchList = await git(['branch', '--list', 'spec/*'], repoPath);
     expect(branchList).toBe('');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Full DECIDE phase: complexity assessment + tier-conditional conflict/architecture
+// ---------------------------------------------------------------------------
+
+const ACCEPTED_STORIES_FULL = ACCEPTED_STORIES_UNIT;
+const PLAN_WITH_DEPS_FULL = PLAN_WITH_DEPS_UNIT;
+const APPROVED_ADR = [
+  '# Architecture Review: CSV export',
+  '',
+  '## ADR-001: Use a streaming writer',
+  '**Status:** APPROVED',
+  '',
+  'Decision rationale.',
+  '',
+].join('\n');
+
+/** A decide seam that approves every DECIDE step with realistic artifacts. */
+function fullDecide(reviewArtifact: string = APPROVED_ADR) {
+  return async (step: string) => {
+    switch (step) {
+      case 'brainstorm':
+        return { approved: true, artifact: '# PRD: CSV export\n\nApproved.\n' };
+      case 'stories':
+        return { approved: true, artifact: ACCEPTED_STORIES_FULL };
+      case 'conflict_check':
+        return { approved: true, artifact: '# Conflict Check\n\nNo blocking conflicts.\n' };
+      case 'architecture_diagram':
+        return { approved: true, artifact: '# Architecture\n\n```mermaid\nflowchart TD\n```\n' };
+      case 'architecture_review':
+        return { approved: true, artifact: reviewArtifact };
+      case 'plan':
+        return { approved: true, artifact: PLAN_WITH_DEPS_FULL };
+      default:
+        return { approved: true, artifact: '' };
+    }
+  };
+}
+
+const approveTier = (tier: 'S' | 'M' | 'L') => async () => ({ approved: true, tier });
+
+describe('runAuthoring — full DECIDE phase (tier-aware)', () => {
+  let repoPath: string;
+  let defaultBranch: string;
+
+  beforeEach(async () => {
+    ({ repoPath, defaultBranch } = await makeGitRepo());
+  });
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await rm(repoPath, { recursive: true, force: true });
+  });
+
+  it('Medium tier runs all seven DECIDE steps in canonical order', async () => {
+    const target = { name: 'alpha', canonicalPath: repoPath };
+    const steps: string[] = [];
+    const trackingDecide = async (step: string) => {
+      steps.push(step);
+      return await fullDecide()(step);
+    };
+    await runAuthoring(target, 'CSV export', {
+      decide: trackingDecide,
+      assessComplexity: approveTier('M'),
+    });
+    expect(steps).toEqual([
+      'brainstorm',
+      'stories',
+      'conflict_check',
+      'architecture_diagram',
+      'architecture_review',
+      'plan',
+    ]);
+  });
+
+  it('Medium tier commits the full artifact set + a Tier: M marker', async () => {
+    const target = { name: 'alpha', canonicalPath: repoPath };
+    const result = await runAuthoring(target, 'CSV export', {
+      decide: fullDecide(),
+      assessComplexity: approveTier('M'),
+    });
+
+    await git(['checkout', result.branch], repoPath);
+    const read = (rel: string) => readFile(join(repoPath, rel), 'utf8');
+
+    // Complexity marker keyed by the plan stem (slug), carrying the tier.
+    const complexity = await read('.docs/complexity/csv-export.md');
+    expect(complexity).toMatch(/Tier:\s*M/);
+
+    // Tier-conditional dirs exist on the branch.
+    const { stdout: tracked } = await execFile('git', ['ls-files', '.docs'], { cwd: repoPath });
+    expect(tracked).toMatch(/\.docs\/conflicts\//);
+    expect(tracked).toMatch(/\.docs\/architecture\//);
+    expect(tracked).toMatch(/\.docs\/decisions\/architecture-review-/);
+    expect(tracked).toMatch(/\.docs\/specs\//);
+    expect(tracked).toMatch(/\.docs\/stories\//);
+    expect(tracked).toMatch(/\.docs\/plans\//);
+  });
+
+  it('Small tier skips conflict-check + architecture (only brainstorm/stories/plan run)', async () => {
+    const target = { name: 'alpha', canonicalPath: repoPath };
+    const steps: string[] = [];
+    const trackingDecide = async (step: string) => {
+      steps.push(step);
+      return await fullDecide()(step);
+    };
+    const result = await runAuthoring(target, 'CSV export', {
+      decide: trackingDecide,
+      assessComplexity: approveTier('S'),
+    });
+    expect(steps).toEqual(['brainstorm', 'stories', 'plan']);
+
+    await git(['checkout', result.branch], repoPath);
+    const { stdout: tracked } = await execFile('git', ['ls-files', '.docs'], { cwd: repoPath });
+    // The complexity marker is always written; the heavy DECIDE dirs are not.
+    expect(tracked).toMatch(/\.docs\/complexity\/csv-export\.md/);
+    expect(tracked).not.toMatch(/\.docs\/conflicts\//);
+    expect(tracked).not.toMatch(/\.docs\/architecture\//);
+    expect(tracked).not.toMatch(/\.docs\/decisions\//);
+  });
+
+  it('a DRAFT ADR in architecture-review throws and creates no spec branch', async () => {
+    const target = { name: 'alpha', canonicalPath: repoPath };
+    const draftReview = APPROVED_ADR.replace('**Status:** APPROVED', '**Status:** DRAFT');
+    await expect(
+      runAuthoring(target, 'CSV export', {
+        decide: fullDecide(draftReview),
+        assessComplexity: approveTier('M'),
+      }),
+    ).rejects.toThrow(/DRAFT ADR|APPROVED/i);
+
+    const branchList = await git(['branch', '--list', 'spec/*'], repoPath);
+    expect(branchList).toBe('');
+  });
+
+  it('an unapproved complexity assessment throws before any write', async () => {
+    const target = { name: 'alpha', canonicalPath: repoPath };
+    await expect(
+      runAuthoring(target, 'CSV export', {
+        decide: fullDecide(),
+        assessComplexity: async () => ({ approved: false, tier: 'M' }),
+      }),
+    ).rejects.toThrow(/complexity/i);
+
+    const branchList = await git(['branch', '--list', 'spec/*'], repoPath);
+    expect(branchList).toBe('');
+    const { stdout: storyFiles } = await execFile('ls', [join(repoPath, '.docs', 'stories')]).catch(
+      () => ({ stdout: '' }),
+    );
+    expect(storyFiles.trim()).toBe('');
+  });
+
+  it('the Medium-tier spec becomes daemon-build-ready with Tier: M after merge', async () => {
+    const target = { name: 'alpha', canonicalPath: repoPath };
+    const result = await runAuthoring(target, 'CSV export', {
+      decide: fullDecide(),
+      assessComplexity: approveTier('M'),
+    });
+
+    await execFile('git', ['checkout', defaultBranch], { cwd: repoPath });
+    await execFile('git', ['merge', '--no-ff', '-m', 'merge spec', result.branch], {
+      cwd: repoPath,
+    });
+
+    const after = await discoverBacklog(repoPath, undefined, undefined, {
+      baseBranch: defaultBranch,
+    });
+    expect(after.length).toBeGreaterThan(0);
+    expect(after[0].tier).toBe('M');
   });
 });

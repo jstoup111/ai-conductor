@@ -24,6 +24,17 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- **Engineer authors the full DECIDE phase (engineer).** The `/engineer` idea→spec loop now runs
+  the complete, build-ready DECIDE set in canonical order —
+  brainstorm → **complexity** → stories → **conflict-check** → **architecture-diagram** →
+  **architecture-review** → plan — instead of only brainstorm→stories→plan. The operator-assessed
+  complexity tier is persisted to `.docs/complexity/<plan-stem>.md`, and conflict-check +
+  architecture steps are tier-skipped for Small (mirroring conduct's `skippableForTiers: ['S']`).
+  `engineer land` now commits the full `.docs` DECIDE set and **rejects** a DRAFT ADR or a
+  tier/artifact mismatch (non-Small with missing architecture artifacts). The daemon reads the tier
+  from `.docs/complexity/` (via `discoverBacklog` → `BacklogItem.tier`) and seeds the build's
+  `complexity_tier` from it, replacing the previously hardcoded `'M'`; specs with no marker fall
+  back to `'M'` (unchanged behavior). Shared `hasDraftAdr` / `parseComplexityTier` predicates added.
 - **Implementation subagents must not fetch/rebase/pull (pipeline).** Every per-task dispatch
   prompt now instructs the implementation subagent to NOT run `git fetch`/`pull`/`rebase` or switch
   branches — it commits only to the current feature branch. Prevents the mid-build auto-rebase onto

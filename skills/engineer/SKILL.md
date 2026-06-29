@@ -1,6 +1,6 @@
 ---
 name: engineer
-description: "Interactive, phone-drivable idea→spec loop. The operator hands the host agent a raw idea; the agent routes it to the right repo, runs the REAL DECIDE skills (brainstorm→stories→plan) in that repo, opens a spec PR there, and nudges that repo's daemon. Runs independently of any build/execution loop. Use when capturing and routing new work, NOT when building inside one repo (that's plain conduct)."
+description: "Interactive, phone-drivable idea→spec loop. The operator hands the host agent a raw idea; the agent routes it to the right repo, runs the FULL DECIDE phase (brainstorm → complexity → stories → conflict-check → architecture-diagram → architecture-review → plan, tier-aware) in that repo, opens a spec PR there, and nudges that repo's daemon. Runs independently of any build/execution loop. Use when capturing and routing new work, NOT when building inside one repo (that's plain conduct)."
 enforcement: advisory
 phase: decide
 standalone: true
@@ -78,12 +78,22 @@ spawned `claude`. Present the proposed target and your rationale, then **confirm
   with zero side effects. On accept, create it, then continue with it as the target.
 
 ### 3. Run the REAL DECIDE skills, in the target repo
-With the target repo as the working directory, run the genuine skills in order, honoring each
-skill's own clarity loops and human gates:
+With the target repo as the working directory, run the genuine skills **in canonical conduct
+order**, honoring each skill's own clarity loops and human gates. The engineer owns the WHOLE
+DECIDE phase — the daemon only builds — so produce the complete, build-ready artifact set:
 
 1. `/brainstorm` → an approved PRD in the target's `.docs/specs/`
-2. `/stories`   → stories in the target's `.docs/stories/`
-3. `/plan`      → an implementation plan in the target's `.docs/plans/`
+2. **Complexity assessment** → classify the feature **S / M / L** (same signals conduct uses:
+   models, integrations, auth, state machines, story count). Write the tier to
+   `.docs/complexity/<plan-stem>.md` with a `Tier: <S|M|L>` line (plus rationale). The stem
+   **MUST** match the `.docs/plans/<stem>.md` filename so the daemon resolves it.
+3. `/stories`   → stories in the target's `.docs/stories/` (must end **Status: Accepted**)
+4. `/conflict-check`        → `.docs/conflicts/` — **skip for Small**
+5. `/architecture-diagram`  → `.docs/architecture/` — **skip for Small**
+6. `/architecture-review`   → `.docs/decisions/` (review report + ADRs) — **skip for Small;
+   lightweight for Medium; full for Large.** Every ADR must be **APPROVED** (no `Status: DRAFT`)
+   before landing.
+7. `/plan`      → an implementation plan in the target's `.docs/plans/`
 
 These produce **Status:Accepted** artifacts via your real harness (agents + hooks). Do NOT
 hand-write stub stories, DRAFT artifacts, or shell out to `claude -p`. If the operator rejects a
@@ -97,9 +107,12 @@ advances the intake ledger; write-back is advisory and never blocks the land). T
 does NOT author; the real DECIDE skills in step 3 already wrote the artifacts to the target's
 `.docs/`. `land`:
 - resolves the canonical target path from the registry (no cwd fallback),
-- asserts the `.docs/specs|stories|plans` artifacts exist **inside** the target prefix (`AuthoringGuard`)
-  and are real — **rejects** a stub string, any `Status: DRAFT` artifact, or empty content (C2 guard),
-- creates a `spec/<slug>` branch and commits exactly those artifacts.
+- asserts the `.docs/specs|stories|plans` artifacts (plus `.docs/complexity/` and, for a
+  non-Small tier, `.docs/conflicts|architecture|decisions`) exist **inside** the target prefix
+  (`AuthoringGuard`) and are real — **rejects** a stub string, any `Status: DRAFT` artifact, empty
+  content (C2 guard), a **DRAFT ADR**, or a **tier/artifact mismatch** (tier ≠ S but architecture
+  artifacts missing),
+- creates a `spec/<slug>` branch and commits the full `.docs` DECIDE set.
 
 It writes nothing outside the target repo and never touches a sibling repo. It prints JSON
 `{ slug, branch, repoPath }` — pass `branch` to step 5.
@@ -127,13 +140,19 @@ launcher regains control when the operator quits and relaunches you clean for th
 - No idea reaches a build without a **merged** spec PR — and only the operator merges.
 - Zero `claude -p` / authoring subprocess; zero Node readline REPL substrate; routing is in-chat.
 - Cross-repo isolation: authoring repo A never mutates repo B.
+- **No spec lands with a DRAFT ADR** — all ADRs must be APPROVED before `land`.
+- The **complexity tier is recorded** (`.docs/complexity/<plan-stem>.md`) and drives the daemon's
+  BUILD-phase step skipping; a non-Small spec must carry conflict-check + architecture artifacts.
 
 ## Verification
 
 - [ ] Idea captured from the right source (`claim` first; CLI arg / chat fallback) — `sourceRef` carried only for intake ideas
 - [ ] Idea routed with explicit operator confirmation (redirect + no-fit + decline all handled)
 - [ ] For intake ideas: `--source-ref` threaded into `land` + `handoff` so the originating issue is commented + labelled
-- [ ] DECIDE ran the real `/brainstorm`→`/stories`→`/plan` skills (not stubs, not DRAFT, no `claude -p`)
+- [ ] DECIDE ran the real skills in canonical order — `/brainstorm` → complexity → `/stories` →
+      `/conflict-check` → `/architecture-diagram` → `/architecture-review` → `/plan` (not stubs, not DRAFT, no `claude -p`)
+- [ ] Complexity tier recorded at `.docs/complexity/<plan-stem>.md`; for Small, conflict-check + architecture were skipped
+- [ ] All ADRs are APPROVED (no `Status: DRAFT`) before landing
 - [ ] All artifacts + the `spec/<slug>` branch landed inside the resolved target repo only
 - [ ] Spec PR opened to the target repo; nothing built, nothing merged
 - [ ] `ensureRunning` nudged the target daemon fire-and-forget (no lifecycle ownership)

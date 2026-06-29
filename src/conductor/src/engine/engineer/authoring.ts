@@ -6,8 +6,13 @@
 //   without requiring a separate retrieval step.
 //
 // `runAuthoring` (Tasks 32/33, FR-6, C2, ADR-008):
-//   Runs the DECIDE authoring via an AGENT-HOSTED seam (no subprocess).
-//   - deps.decide is INJECTABLE — called once per step (brainstorm/stories/plan).
+//   Runs the FULL DECIDE phase via an AGENT-HOSTED seam (no subprocess), in
+//   canonical conduct order: brainstorm → complexity → stories → conflict_check
+//   → architecture_diagram → architecture_review → plan. The complexity tier
+//   gates the middle three (Small skips conflict-check + architecture).
+//   - deps.decide is INJECTABLE — called once per markdown step.
+//   - deps.assessComplexity is INJECTABLE — called once after brainstorm; its
+//     tier is persisted to `.docs/complexity/<slug>.md` for the daemon.
 //   - Creates a spec/<slug> branch off the repo's DEFAULT branch. The default
 //     branch is derived via `git rev-parse --abbrev-ref HEAD` for local repos
 //     (no remote) — never hardcoded to 'main'.
@@ -33,7 +38,8 @@ import { promisify } from 'node:util';
 import type { LessonDigest, RetrievedLesson } from './lesson-store.js';
 import { AuthoringGuard } from './authoring-guard.js';
 import { TargetPathMissingError } from './target.js';
-import { isStoriesApproved } from '../artifacts.js';
+import { isStoriesApproved, hasDraftAdr } from '../artifacts.js';
+import type { ComplexityTier } from '../../types/index.js';
 
 const execFile = promisify(execFileCb);
 
@@ -235,17 +241,53 @@ export interface DecideResult {
 }
 
 /**
+ * The markdown-producing DECIDE steps the `decide` seam is called for, in
+ * canonical conduct order. `complexity` is NOT here — it produces a tier, not a
+ * markdown artifact, and flows through the separate `assessComplexity` seam.
+ */
+export type DecideStep =
+  | 'brainstorm'
+  | 'stories'
+  | 'conflict_check'
+  | 'architecture_diagram'
+  | 'architecture_review'
+  | 'plan';
+
+/**
+ * Result of the complexity-assessment seam. Unlike `decide` (which returns a
+ * markdown artifact), complexity yields a tier that gates which later DECIDE
+ * steps run (Small skips conflict-check + architecture) and is persisted to
+ * `.docs/complexity/<slug>.md` so the daemon can consume it at build time.
+ */
+export interface AssessComplexityResult {
+  approved: boolean;
+  tier: ComplexityTier;
+}
+
+/**
  * Dependencies injected into runAuthoring.
  *
- * `decide` is the host-agent DECIDE seam — it is called once per step
- * ('brainstorm' | 'stories' | 'plan') and returns the human-gated artifact.
+ * `decide` is the host-agent DECIDE seam — it is called once per markdown step
+ * (brainstorm → stories → conflict_check → architecture_diagram →
+ * architecture_review → plan) and returns the human-gated artifact.
+ *
+ * `assessComplexity` is the host-agent complexity seam — called once, after
+ * brainstorm and before stories, returning the operator-approved tier.
  *
  * `spawn` is the optional child-process spawn shim (repo convention).
  * runAuthoring never calls it — the field exists only so the acceptance-test
  * spawn spy can confirm that no `claude` subprocess was launched.
  */
 export interface RunAuthoringDeps {
-  decide: (step: string) => Promise<DecideResult>;
+  decide: (step: DecideStep) => Promise<DecideResult>;
+  /**
+   * Complexity seam. OPTIONAL at this layer: when absent, runAuthoring defaults
+   * to an approved Small assessment (which skips conflict-check + architecture),
+   * so a seam-less call behaves like the legacy brainstorm→stories→plan flow.
+   * Production NEVER relies on this default — `processIdea` (loop.ts) requires
+   * the seam and fails closed if it is missing.
+   */
+  assessComplexity?: (recommended: ComplexityTier | null) => Promise<AssessComplexityResult>;
   spawn?: (...args: any[]) => any;
 }
 
@@ -262,16 +304,20 @@ export interface RunAuthoringResult {
  *
  * Contract:
  *  1. Validates target.canonicalPath exists on disk (TargetPathMissingError on failure).
- *  2. Calls deps.decide('brainstorm'), then 'stories', then 'plan' IN ORDER.
- *     If ANY returns { approved: false } → throws (gate blocks); nothing is written.
- *  3. On all-approved: creates spec/<slug> branch, writes artifacts via AuthoringGuard,
- *     commits on that branch, returns { branch, project }.
+ *  2. Runs the full DECIDE phase IN CANONICAL ORDER: decide('brainstorm') →
+ *     assessComplexity() → decide('stories') → (when tier !== 'S')
+ *     decide('conflict_check') → decide('architecture_diagram') →
+ *     decide('architecture_review') → decide('plan'). If ANY gate returns
+ *     { approved: false } (or a DRAFT ADR is detected) → throws; nothing is written.
+ *  3. On all-approved: creates spec/<slug> branch, writes artifacts via AuthoringGuard
+ *     (always specs/stories/plans + `.docs/complexity/<slug>.md`; non-Small also
+ *     conflicts/architecture/decisions), commits on that branch, returns { branch, project }.
  *  4. NEVER spawns claude or any other subprocess (except git via execFile).
  *  5. All filesystem writes are guarded by AuthoringGuard(target.canonicalPath).
  *
  * @param target  { name, canonicalPath } — the target project.
  * @param idea    The feature idea to author.
- * @param deps    Injected dependencies: decide seam + optional spawn shim.
+ * @param deps    Injected dependencies: decide + assessComplexity seams + optional spawn shim.
  */
 export async function runAuthoring(
   target: { name: string; canonicalPath: string },
@@ -308,28 +354,64 @@ export async function runAuthoring(
     }
   }
 
-  // 2. Run DECIDE steps IN ORDER. Any unapproved gate throws immediately;
-  //    nothing is written to the filesystem below that point.
-  const brainstormResult = await deps.decide('brainstorm');
-  if (!brainstormResult.approved) {
+  // 2. Run the full DECIDE phase IN CANONICAL ORDER. Any unapproved gate throws
+  //    immediately; NOTHING is written to the filesystem below this block, so a
+  //    late rejection never leaves a half-authored spec. The tier (from the
+  //    complexity seam) gates whether conflict-check + architecture run — Small
+  //    skips them, exactly mirroring the conductor's `skippableForTiers: ['S']`.
+  const gate = async (step: DecideStep): Promise<DecideResult> => {
+    const result = await deps.decide(step);
+    if (!result.approved) {
+      throw new Error(
+        `runAuthoring: DECIDE gate "${step}" was not approved. Authoring blocked — no artifacts written.`,
+      );
+    }
+    return result;
+  };
+
+  const brainstormResult = await gate('brainstorm');
+
+  // Default (no seam): an approved Small tier — skips conflict-check + architecture,
+  // preserving the legacy brainstorm→stories→plan flow. Production supplies a real seam.
+  const assessComplexity =
+    deps.assessComplexity ?? (async () => ({ approved: true, tier: 'S' as const }));
+  const complexity = await assessComplexity(null);
+  if (!complexity.approved) {
     throw new Error(
-      `runAuthoring: DECIDE gate "brainstorm" was not approved. Authoring blocked — no artifacts written.`,
+      `runAuthoring: complexity assessment was not approved. Authoring blocked — no artifacts written.`,
+    );
+  }
+  const tier = complexity.tier;
+
+  const storiesResult = await gate('stories');
+  // Enforce the stories-approval marker before any write (also re-checked at the
+  // write step below for defense in depth).
+  if (!isStoriesApproved(storiesResult.artifact)) {
+    throw new Error(
+      'runAuthoring: stories artifact from DECIDE is not approved — it must declare ' +
+        '"Status: Accepted" (and no "Status: DRAFT"). The /stories skill stamps this on approval.',
     );
   }
 
-  const storiesResult = await deps.decide('stories');
-  if (!storiesResult.approved) {
-    throw new Error(
-      `runAuthoring: DECIDE gate "stories" was not approved. Authoring blocked — no artifacts written.`,
-    );
+  // Tier-conditional steps: Small skips conflict-check + architecture entirely.
+  let conflictResult: DecideResult | null = null;
+  let architectureDiagramResult: DecideResult | null = null;
+  let architectureReviewResult: DecideResult | null = null;
+  if (tier !== 'S') {
+    conflictResult = await gate('conflict_check');
+    architectureDiagramResult = await gate('architecture_diagram');
+    architectureReviewResult = await gate('architecture_review');
+    // ADR hard gate: no spec lands with a DRAFT ADR (mirrors the conduct
+    // architecture-review gate). The review artifact embeds the ADRs.
+    if (hasDraftAdr(architectureReviewResult.artifact)) {
+      throw new Error(
+        'runAuthoring: architecture-review artifact contains a DRAFT ADR — all ADRs must be ' +
+          'APPROVED before landing. Approve the ADRs and re-run architecture-review.',
+      );
+    }
   }
 
-  const planResult = await deps.decide('plan');
-  if (!planResult.approved) {
-    throw new Error(
-      `runAuthoring: DECIDE gate "plan" was not approved. Authoring blocked — no artifacts written.`,
-    );
-  }
+  const planResult = await gate('plan');
 
   // All gates approved. Now write artifacts.
 
@@ -347,39 +429,39 @@ export async function runAuthoring(
     // Derive a slug-based filename for stories and plans.
     const fileSlug = slug;
 
-    // Paths under target repo
+    // Date stamp for date-named artifacts (conflicts / architecture-review).
+    // `new Date()` is fine here — this is conductor TS, not a sandboxed workflow.
+    const date = new Date().toISOString().slice(0, 10);
+
+    // Paths under target repo. Always: specs/stories/plans + the complexity
+    // marker. Tier-conditional (non-Small): conflicts/architecture/decisions.
     const storiesDir = join(repoPath, '.docs', 'stories');
     const plansDir = join(repoPath, '.docs', 'plans');
     const specsDir = join(repoPath, '.docs', 'specs');
+    const complexityDir = join(repoPath, '.docs', 'complexity');
     const storiesFile = join(storiesDir, `${fileSlug}.md`);
     const plansFile = join(plansDir, `${fileSlug}.md`);
     const specsFile = join(specsDir, `${fileSlug}.md`);
+    const complexityFile = join(complexityDir, `${fileSlug}.md`);
 
     // Guard every path before any write.
     guard.assertWriteAllowed(storiesDir);
     guard.assertWriteAllowed(plansDir);
     guard.assertWriteAllowed(specsDir);
+    guard.assertWriteAllowed(complexityDir);
     guard.assertWriteAllowed(storiesFile);
     guard.assertWriteAllowed(plansFile);
     guard.assertWriteAllowed(specsFile);
+    guard.assertWriteAllowed(complexityFile);
 
     // Create directories and write artifact files.
     await mkdir(storiesDir, { recursive: true });
     await mkdir(plansDir, { recursive: true });
     await mkdir(specsDir, { recursive: true });
+    await mkdir(complexityDir, { recursive: true });
 
-    // Stories from DECIDE MUST carry the canonical approval marker — the
-    // /stories skill stamps "Status: Accepted" on operator approval. Enforce the
-    // assumption rather than trusting it: a no-status (or DRAFT) artifact would
-    // commit a spec the daemon then skips forever. Fail before any write.
-    if (!isStoriesApproved(storiesResult.artifact)) {
-      throw new Error(
-        'runAuthoring: stories artifact from DECIDE is not approved — it must declare ' +
-          '"Status: Accepted" (and no "Status: DRAFT"). The /stories skill stamps this on approval.',
-      );
-    }
-
-    // Write stories verbatim from DECIDE (contains "Status: Accepted").
+    // Write stories verbatim from DECIDE (contains "Status: Accepted"). The
+    // approval marker was already enforced in the gate block above.
     await writeFile(storiesFile, storiesResult.artifact, 'utf8');
 
     // Write plan verbatim from DECIDE (contains "## Task Dependency Graph").
@@ -388,10 +470,44 @@ export async function runAuthoring(
     // Write brainstorm/PRD as the spec artifact.
     await writeFile(specsFile, brainstormResult.artifact, 'utf8');
 
-    // 3c. Stage and commit all spec artifacts on the spec branch.
-    //     All three dirs are committed so the repo returns to a clean state
-    //     after checkout back to defaultBranch (no untracked leftovers).
-    await execFile('git', ['add', '.docs/plans', '.docs/specs', '.docs/stories'], {
+    // Write the complexity marker — keyed by the SAME stem as the plan so the
+    // daemon resolves it deterministically (`.docs/complexity/<plan-stem>.md`).
+    await writeFile(
+      complexityFile,
+      `# Complexity Assessment: ${idea}\n\nTier: ${tier}\n`,
+      'utf8',
+    );
+
+    // Tier-conditional artifacts (skipped for Small).
+    if (tier !== 'S') {
+      const conflictsDir = join(repoPath, '.docs', 'conflicts');
+      const architectureDir = join(repoPath, '.docs', 'architecture');
+      const decisionsDir = join(repoPath, '.docs', 'decisions');
+      const conflictsFile = join(conflictsDir, `${date}-${fileSlug}.md`);
+      const architectureFile = join(architectureDir, `${fileSlug}.md`);
+      const reviewFile = join(decisionsDir, `architecture-review-${date}-${fileSlug}.md`);
+
+      guard.assertWriteAllowed(conflictsDir);
+      guard.assertWriteAllowed(architectureDir);
+      guard.assertWriteAllowed(decisionsDir);
+      guard.assertWriteAllowed(conflictsFile);
+      guard.assertWriteAllowed(architectureFile);
+      guard.assertWriteAllowed(reviewFile);
+
+      await mkdir(conflictsDir, { recursive: true });
+      await mkdir(architectureDir, { recursive: true });
+      await mkdir(decisionsDir, { recursive: true });
+
+      await writeFile(conflictsFile, conflictResult!.artifact, 'utf8');
+      await writeFile(architectureFile, architectureDiagramResult!.artifact, 'utf8');
+      await writeFile(reviewFile, architectureReviewResult!.artifact, 'utf8');
+    }
+
+    // 3c. Stage and commit all spec artifacts on the spec branch. Staging the
+    //     whole `.docs` tree commits exactly the artifacts written above (the
+    //     dirty-tree guard at the top guarantees nothing else is uncommitted),
+    //     and returns the repo to a clean state after checkout back to default.
+    await execFile('git', ['add', '.docs'], {
       cwd: repoPath,
     });
     await execFile(

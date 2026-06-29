@@ -25,7 +25,7 @@ UNDERSTAND → DECIDE → BUILD → ✓checkpoint → SHIP(manual-test) → ✓c
 |-------|--------|-----------|
 | ALL | **conduct** (orchestrator) | Status dashboard, gate enforcement, checkpoints |
 | UNDERSTAND | bootstrap, memory, assess | CLAUDE.md, .memory/, .docs/decisions/technical-assessment-*.md |
-| DECIDE | brainstorm (PRD) → stories → conflict-check → architecture-diagram → architecture-review → plan | .docs/specs/, .docs/stories/, .docs/conflicts/, .docs/architecture/, .docs/plans/ |
+| DECIDE | brainstorm (PRD) → complexity → stories → conflict-check → architecture-diagram → architecture-review → plan | .docs/specs/, .docs/complexity/, .docs/stories/, .docs/conflicts/, .docs/architecture/, .docs/decisions/, .docs/plans/ |
 | BUILD | writing-system-tests → tdd/pipeline, debugging, code-review | Acceptance specs, code, unit tests, .pipeline/ |
 | CHECKPOINT | User validation after build | Harness pause — continue, go back, or quit |
 | SHIP | manual-test, prd-audit, architecture-review --as-built, retro, finish/pr | .pipeline/manual-test-results.md, .pipeline/prd-audit.md, .pipeline/architecture-review-as-built.md (run evidence, gitignored), .docs/retros/ |

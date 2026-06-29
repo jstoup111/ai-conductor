@@ -42,7 +42,8 @@ import { routeIdea, createOnNoFit } from './routing.js';
 import { resolveTargetRepo } from './target.js';
 import { createJsonlLessonStore, selectLessons } from './lesson-store.js';
 import { buildAuthoringPrompt, runAuthoring } from './authoring.js';
-import type { DecideResult } from './authoring.js';
+import type { DecideResult, DecideStep, AssessComplexityResult } from './authoring.js';
+import type { ComplexityTier } from '../../types/index.js';
 import { runHandoff } from './handoff-step.js';
 import { runCreate } from '../registry-cli.js';
 
@@ -98,15 +99,29 @@ export interface EngineerDeps {
    */
   ensureRunningLaunch?: (repoPath: string) => void | Promise<void>;
   /**
-   * Host-agent human-gated DECIDE seam. Called once per step.
-   * Absent → runAuthoring throws (fail-closed — no authoring without a seam).
+   * Host-agent human-gated DECIDE seam. Called once per markdown step in
+   * canonical order (brainstorm → stories → conflict_check →
+   * architecture_diagram → architecture_review → plan).
+   * Absent → processIdea throws (fail-closed — no authoring without a seam).
    */
   decide?: (ctx: {
-    step: 'brainstorm' | 'stories' | 'plan';
+    step: DecideStep;
     idea: string;
     project: string;
     prompt: string;
   }) => Promise<DecideResult>;
+  /**
+   * Host-agent complexity-assessment seam. Called once, after brainstorm and
+   * before stories — its tier gates which later DECIDE steps run (Small skips
+   * conflict-check + architecture) and is persisted to `.docs/complexity/`.
+   * Absent → processIdea throws (fail-closed — same contract as `decide`).
+   */
+  assessComplexity?: (ctx: {
+    recommended: ComplexityTier | null;
+    idea: string;
+    project: string;
+    prompt: string;
+  }) => Promise<AssessComplexityResult>;
   /**
    * Async intake sources polled ONCE at launch (FR-31). Adapter-agnostic: the
    * CLI constructs the concrete adapter (e.g. github-issues) and injects it here,
@@ -494,17 +509,26 @@ async function processIdea(
   // 4c. Build the authoring prompt (embeds digest so lessons are visible to the DECIDE seam).
   const { prompt: authoringPrompt } = buildAuthoringPrompt(idea, target.name, digest);
 
-  // 4d. Author the spec via the gated runAuthoring seam (C2: no subprocess, no stub).
-  //     deps.decide is the host-agent DECIDE seam; absent → fail-closed.
+  // 4d. Author the full DECIDE phase via the gated runAuthoring seam (C2: no
+  //     subprocess, no stub). The markdown DECIDE seam (`decide`) is required —
+  //     absent → fail-closed. The complexity seam (`assessComplexity`) is
+  //     optional: when wired it drives tier-conditional conflict-check +
+  //     architecture; when absent, runAuthoring defaults to Small (the legacy
+  //     brainstorm→stories→plan flow).
   if (!deps.decide) {
     throw new Error(
       'engineer: no DECIDE seam wired — cannot author (agent-hosted decide required)',
     );
   }
   const decideFn = deps.decide;
-  const decide = (step: string) =>
-    decideFn({ step: step as 'brainstorm' | 'stories' | 'plan', idea, project: target.name, prompt: authoringPrompt });
-  const { branch } = await runAuthoring(target, idea, { decide });
+  const assessComplexityFn = deps.assessComplexity;
+  const decide = (step: DecideStep) =>
+    decideFn({ step, idea, project: target.name, prompt: authoringPrompt });
+  const assessComplexity = assessComplexityFn
+    ? (recommended: ComplexityTier | null) =>
+        assessComplexityFn({ recommended, idea, project: target.name, prompt: authoringPrompt })
+    : undefined;
+  const { branch } = await runAuthoring(target, idea, { decide, assessComplexity });
 
   // 4e-4g. Post-authoring handoff (extracted — retro A-2): PR-open-vs-local-commit,
   //        ensure-running fire-and-forget, and the authored entry. runHandoff owns
