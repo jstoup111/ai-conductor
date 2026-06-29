@@ -242,12 +242,16 @@ things on top of that, without a parallel dispatch path:
 - **Startup inherited-state dashboard (`daemon-dashboard.ts`).** Before any dispatch, the
   daemon scans `.worktrees/*/` (`.pipeline/HALT`, `conduct-state.json`) and the
   `.daemon/processed/` ledger and prints one grouped dashboard to **both** stdout and
-  `daemon.log` — four groups with precedence **HALTED > PROCESSED > IN-PROGRESS > ELIGIBLE**:
-  HALTED (slug + first line of the HALT reason), IN-PROGRESS (slug + last meaningful step
-  from `conduct-state`), ELIGIBLE (build-ready slugs this scan that are neither halted nor
-  processed), PROCESSED (count). Best-effort: an empty HALT → reason `unknown`, a malformed
-  `conduct-state` → step `unknown`, a per-worktree fs error is skipped — the scan never
-  aborts startup.
+  `daemon.log` — four groups with precedence **HALTED > PROCESSED > IN-PROGRESS > ELIGIBLE**.
+  Each row carries the bits an operator triages on, mined best-effort from the worktree's
+  `conduct-state.json` (and the ledger): HALTED (slug + complexity tier + the step it reached
+  + first line of the HALT reason + any open PR link), IN-PROGRESS (slug + tier + last
+  meaningful step + any open PR link), ELIGIBLE (build-ready slug + tier this scan, neither
+  halted nor processed), PROCESSED (count + each shipped slug with its PR link when one was
+  persisted). The ledger is JSON (`{ status, prUrl }`); legacy plain-text `shipped` entries
+  still parse (no PR). Best-effort: an empty HALT → reason `unknown`, a malformed
+  `conduct-state` → step `unknown` (no tier/PR enrichment), a per-worktree fs error is
+  skipped — the scan never aborts startup.
 
 - **Base-SHA tracking + re-kick (`daemon-sha.ts`, `daemon-rekick.ts`).** The daemon
   `git rev-parse`s the local default branch (fast-forwarded to origin on idle refresh by
@@ -417,6 +421,71 @@ subscriber serializes them generically.
 The contract is additive — new event types may be introduced without breaking existing
 subscribers. Subscribers receive only events they register for via `emitter.on(type, ...)`.
 
+### OpenTelemetry exporter (ADR-014)
+
+The conductor ships an optional OTel observability layer. When the `otel:` block is present
+in the project config, `OtelVisualizer` (`engine/otel/otel-visualizer.ts`) attaches to the
+event bus and exports traces and metrics to an OTel-compatible backend.
+
+#### Config (`pipeline.yml` / `harness-config.ts` `otel:` key)
+
+```yaml
+# OTLP HTTP export (default port 4318):
+otel:
+  exporter: otlp
+  endpoint: http://localhost:4318
+
+# OTLP gRPC export (port 4317):
+otel:
+  exporter: otlp
+  endpoint: http://localhost:4317
+  protocol: grpc
+
+# File export — writes OTLP-JSON newline-delimited to .pipeline/otel.jsonl:
+otel:
+  exporter: file
+  # file: .pipeline/otel.jsonl  # default; override if needed
+```
+
+Absent `otel:` block → disabled, zero overhead. The exporter coexists with `events.jsonl`
+and `--report`; no event-emission sites are modified.
+
+#### What is exported
+
+- **Traces** (`engine/otel/span-manager.ts`): one root span `conductor.run` per run, with
+  one child span per executed step. Steps carry `conductor.step`, `conductor.step.index`,
+  `conductor.step.status`, and `conductor.retry.count` attributes. Retries, gate verdicts, and
+  kickbacks are recorded as span events. Interrupted runs force-close open spans as ERROR
+  with `conductor.incomplete=true` (FR-9).
+- **Metrics** (`engine/otel/metrics.ts`):
+  - `conductor.step.duration` — Histogram (ms per step, always recorded)
+  - `conductor.step.retries` — Counter (only when retryCount > 0)
+  - `conductor.step.tokens` — Counter by kind (`input`/`output`/…; only when tokenUsage
+    present; no zero-fill for steps without usage)
+- **Resource attributes** (`engine/otel/resource.ts`): `conductor.run.id` (from
+  `.pipeline/conduct-session-id` or a fresh UUID), `conductor.feature`, `conductor.project`,
+  `service.name=ai-conductor`.
+
+#### Error isolation (FR-8)
+
+Export failures emit **at most one** warning via the `onWarning` callback and never affect
+the run. A non-responding endpoint is abandoned after `exportTimeoutMillis` (default 5 s).
+SIGINT/SIGTERM handlers trigger a best-effort flush within this bound.
+
+#### Implementation files
+
+| File | Responsibility |
+|---|---|
+| `engine/otel/otel-config.ts` | Parse + validate `otel:` config block |
+| `engine/otel/otel-visualizer.ts` | Root plugin: wires emitter → span/metric pipeline |
+| `engine/otel/span-manager.ts` | Run/step span lifecycle |
+| `engine/otel/metrics.ts` | Duration/retry/token metrics |
+| `engine/otel/transport.ts` | OTLP HTTP, gRPC, and file exporters |
+| `engine/otel/resource.ts` | OTel Resource with conductor attributes |
+
+Tests: `test/engine/otel/`, `test/integration/otel-observability.test.ts`,
+`test/integration/otel-exporter.test.ts`, `test/integration/otel-disabled-noop.test.ts`.
+
 ### Bootstrap-mode skip
 
 `state.bootstrap_mode` is set by the `bootstrap` skill to one of `new`, `fresh`,
@@ -581,6 +650,17 @@ through an injected `gh` runner — it never touches a registered repo's working
   on `land` (routed) and `handoff` (done); the shared `intake/writeback.ts` helper backs both the CLI
   primitives and the test-only loop. It is **non-fatal** (a `gh` outage never reverts a delivered spec
   PR) and **de-duplicated** per `(sourceRef, status)`.
+- **Issue ↔ PR linkage + auto-close (on implementation merge).** Commenting is not linking: GitHub's
+  formal issue↔PR link and auto-close come from a closing keyword in a PR body. The issue reference
+  travels WITH the spec via a committed **`.docs/intake/<slug>.md`** marker (`Source-Ref: owner/repo#N`),
+  written by both authoring paths (`land --source-ref` and the autonomous `runAuthoring`) — so it
+  survives the spec-PR merge and reaches the daemon, which only reads the merged base-branch tree.
+  The **spec PR** gets a non-closing `Refs owner/repo#N` (links, but must NOT close — that would
+  defeat the re-eligibility guard below). The daemon parses the marker into `BacklogItem.sourceRef`
+  (`daemon-backlog.ts`) and, after the build, adds **`Closes owner/repo#N`** to the **implementation
+  PR** (`closeIssueOnImplementationMerge` in `engineer/issue-ref.ts`), so GitHub auto-closes the issue
+  when the real work merges to the default branch. Every step is gated on a parseable ref
+  (hand-authored / non-intake specs are unchanged), idempotent, and non-fatal.
 - **Re-eligibility + churn guard.** A `done` issue whose spec PR closes **without merging** is
   re-emitted on the next poll (label stripped, `attempts++`); a **merged** PR is never reopened. Past
   the reopen cap the issue is parked as `needs-manual` and stays out of the inbox until

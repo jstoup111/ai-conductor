@@ -13,6 +13,7 @@ import { parseEnvelope } from './port.js';
 import type { Envelope, EnvelopeStatus, IntakePort, ReportMeta } from './port.js';
 import type { IntakeSource } from './source.js';
 import type { Ledger } from './ledger.js';
+import { parseSourceRef } from '../issue-ref.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -78,15 +79,8 @@ function buildText(title: string | undefined, body: string | undefined): string 
   return [t, b].filter((s) => s !== '').join('\n\n');
 }
 
-/** Parse `owner/repo#123` into its repo + issue-number parts, or null if malformed. */
-function parseSourceRef(sourceRef: string): { repo: string; number: string } | null {
-  const hash = sourceRef.lastIndexOf('#');
-  if (hash <= 0 || hash === sourceRef.length - 1) return null;
-  const repo = sourceRef.slice(0, hash);
-  const number = sourceRef.slice(hash + 1);
-  if (!/^\d+$/.test(number)) return null;
-  return { repo, number };
-}
+// `parseSourceRef` is shared from ../issue-ref.js so the adapter and the
+// PR-linking helpers agree on a single parse contract.
 
 // ─── Factory ──────────────────────────────────────────────────────────────────
 

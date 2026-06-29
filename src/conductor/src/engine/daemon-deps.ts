@@ -88,9 +88,16 @@ export function makeFeatureRunnerDeps(cfg: RealDepsConfig): FeatureRunnerDeps {
       });
     },
 
-    markProcessed: async (slug) => {
+    markProcessed: async (slug, prUrl) => {
       await mkdir(processedDir, { recursive: true });
-      await writeFile(join(processedDir, slug), 'shipped\n', 'utf-8');
+      // Persist as JSON so the startup dashboard can surface the shipped PR link.
+      // Legacy ledgers held the plain text `shipped`; readProcessedEntries still
+      // parses those (no PR), so this is backward-compatible.
+      await writeFile(
+        join(processedDir, slug),
+        `${JSON.stringify({ status: 'shipped', prUrl: prUrl ?? null })}\n`,
+        'utf-8',
+      );
     },
   };
 }

@@ -3,7 +3,7 @@
 **Date:** 2026-06-29
 **Design:** .docs/specs/2026-06-29-daemon-pr-labels.md (FR-1…FR-16)
 **Stories:** .docs/stories/daemon-pr-labels.md
-**ADR:** .docs/decisions/adr-014-daemon-pr-labeling-sweep.md (APPROVED)
+**ADR:** .docs/decisions/adr-015-daemon-pr-labeling-sweep.md (APPROVED)
 **Conditions:** C1–C4 in .docs/decisions/architecture-review-2026-06-29-daemon-pr-labels.md
 **Conflict check:** Clean as of 2026-06-29 (one degrading conflict resolved → FR-16)
 
@@ -29,7 +29,7 @@ registry, three wiring sites, and docs.
   writes, guarded `mode==='auto' && step==='build'`, call escalation wrapped so it cannot throw (C1).
   (2) `daemon-runner.ts` done-branch (~109-119) — FR-16 clear-on-success + enroll, before teardown;
   call the sweep after each feature. (3) `daemon.ts` — call the sweep on startup reconciliation and
-  per poll tick (cadence per ADR-014).
+  per poll tick (cadence per ADR-015).
 - **Sequencing:** seam first (it's the dependency), then each behavior module against fake runners,
   then the wiring against the real conductor/daemon, then docs. The diagrams already reflect this
   design (built from the same breakdown) — no plan-update re-run needed; architecture-review is done.

@@ -1,0 +1,178 @@
+// Test: intake-origin marker end-to-end (FR-1, FR-3, FR-5).
+//
+// The originating GitHub issue ref must travel WITH the spec via a committed
+// `.docs/intake/<slug>.md` so the daemon — which only reads the merged base-branch
+// tree — can later put `Closes owner/repo#N` on the implementation PR.
+//
+// Covered:
+//   - writeIntakeMarker / parseIntakeSourceRef unit behavior (valid/absent/garbled)
+//   - runAuthoring (autonomous) commits the marker → discoverBacklog surfaces sourceRef
+//   - landSpec (live path) commits the marker
+//   - NO marker is written for a hand-authored spec (no sourceRef) or a garbled ref,
+//     and the feature is still discoverable (full backward compatibility)
+
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { execFile as execFileCb } from 'node:child_process';
+import { promisify } from 'node:util';
+import { runAuthoring } from '../../../src/engine/engineer/authoring.js';
+import { landSpec } from '../../../src/engine/engineer/land-spec.js';
+import { writeIntakeMarker } from '../../../src/engine/engineer/intake-marker.js';
+import { parseIntakeSourceRef } from '../../../src/engine/artifacts.js';
+import { discoverBacklog } from '../../../src/engine/daemon-backlog.js';
+
+const execFile = promisify(execFileCb);
+
+const ACCEPTED_STORIES = [
+  '# Stories: dep bump',
+  '',
+  '**Status:** Accepted',
+  '',
+  '## Story: bump',
+  '### Acceptance Criteria',
+  '- Given X, when Y, then Z.',
+  '',
+].join('\n');
+
+const PLAN_WITH_DEPS = [
+  '# Implementation Plan: dep bump',
+  '',
+  '**Stories:** .docs/stories/dep-bump.md',
+  '',
+  '## Task Dependency Graph',
+  '```',
+  '1 → 2',
+  '```',
+  '',
+].join('\n');
+
+function approvedDecide() {
+  return async (step: string) => {
+    if (step === 'brainstorm') return { approved: true, artifact: '# PRD: dep bump\n\nApproved.\n' };
+    if (step === 'stories') return { approved: true, artifact: ACCEPTED_STORIES };
+    if (step === 'plan') return { approved: true, artifact: PLAN_WITH_DEPS };
+    return { approved: true, artifact: '' };
+  };
+}
+
+let repoPath: string;
+let defaultBranch: string;
+
+async function git(args: string[], cwd = repoPath): Promise<string> {
+  const { stdout } = await execFile('git', args, { cwd });
+  return stdout.trim();
+}
+
+beforeEach(async () => {
+  repoPath = await mkdtemp(join(tmpdir(), 'intake-marker-'));
+  await git(['init', '-q']);
+  await git(['config', 'user.email', 'test@test.com']);
+  await git(['config', 'user.name', 'Test']);
+  await writeFile(join(repoPath, 'README.md'), '# repo\n');
+  await git(['add', 'README.md']);
+  await git(['commit', '-m', 'init']);
+  defaultBranch = await git(['rev-parse', '--abbrev-ref', 'HEAD']);
+});
+
+afterEach(async () => {
+  await rm(repoPath, { recursive: true, force: true });
+});
+
+function target() {
+  return { name: 'alpha', canonicalPath: repoPath };
+}
+
+/** Read a committed file from a branch tree, or null if absent. */
+async function showOnBranch(branch: string, relPath: string): Promise<string | null> {
+  try {
+    return await git(['show', `${branch}:${relPath}`]);
+  } catch {
+    return null;
+  }
+}
+
+describe('parseIntakeSourceRef', () => {
+  it('parses a valid Source-Ref line', () => {
+    expect(parseIntakeSourceRef('# x\n\nSource-Ref: acme/app#49\n')).toBe('acme/app#49');
+  });
+  it('returns undefined for absent / null', () => {
+    expect(parseIntakeSourceRef(null)).toBeUndefined();
+    expect(parseIntakeSourceRef('no marker here')).toBeUndefined();
+  });
+  it('returns undefined for a garbled ref', () => {
+    expect(parseIntakeSourceRef('Source-Ref: not-a-ref')).toBeUndefined();
+    expect(parseIntakeSourceRef('Source-Ref: acme/app#abc')).toBeUndefined();
+  });
+});
+
+describe('writeIntakeMarker', () => {
+  it('no-ops (returns null, writes nothing) without a valid sourceRef', async () => {
+    expect(await writeIntakeMarker(repoPath, 'slug', undefined)).toBeNull();
+    expect(await writeIntakeMarker(repoPath, 'slug', 'garbage')).toBeNull();
+    expect(await showOnBranch(defaultBranch, '.docs/intake/slug.md')).toBeNull();
+  });
+});
+
+describe('runAuthoring intake marker (FR-1, FR-3)', () => {
+  it('commits .docs/intake/<slug>.md and discoverBacklog surfaces sourceRef after merge', async () => {
+    const result = await runAuthoring(target(), 'dep bump', {
+      decide: approvedDecide(),
+      sourceRef: 'acme/app#49',
+    });
+
+    const marker = await showOnBranch(result.branch, `.docs/intake/${slugOf(result.branch)}.md`);
+    expect(marker).toContain('Source-Ref: acme/app#49');
+
+    await git(['checkout', defaultBranch]);
+    await git(['merge', '--no-ff', '-m', 'merge', result.branch]);
+
+    const items = await discoverBacklog(repoPath, undefined, undefined, { baseBranch: defaultBranch });
+    const item = items.find((i) => i.slug === slugOf(result.branch));
+    expect(item?.sourceRef).toBe('acme/app#49');
+  });
+
+  it('writes NO marker for a hand-authored spec (no sourceRef) — still discoverable', async () => {
+    const result = await runAuthoring(target(), 'dep bump', { decide: approvedDecide() });
+
+    expect(await showOnBranch(result.branch, `.docs/intake/${slugOf(result.branch)}.md`)).toBeNull();
+
+    await git(['checkout', defaultBranch]);
+    await git(['merge', '--no-ff', '-m', 'merge', result.branch]);
+    const items = await discoverBacklog(repoPath, undefined, undefined, { baseBranch: defaultBranch });
+    const item = items.find((i) => i.slug === slugOf(result.branch));
+    expect(item).toBeTruthy();
+    expect(item?.sourceRef).toBeUndefined();
+  });
+
+  it('writes NO marker for a garbled sourceRef', async () => {
+    const result = await runAuthoring(target(), 'dep bump', {
+      decide: approvedDecide(),
+      sourceRef: 'not-a-valid-ref',
+    });
+    expect(await showOnBranch(result.branch, `.docs/intake/${slugOf(result.branch)}.md`)).toBeNull();
+  });
+});
+
+describe('landSpec intake marker (FR-1)', () => {
+  it('commits .docs/intake/<slug>.md when given a sourceRef', async () => {
+    // The live path: skills already wrote the .docs artifacts; landSpec commits them.
+    await mkdir(join(repoPath, '.docs', 'specs'), { recursive: true });
+    await mkdir(join(repoPath, '.docs', 'stories'), { recursive: true });
+    await mkdir(join(repoPath, '.docs', 'plans'), { recursive: true });
+    await writeFile(join(repoPath, '.docs', 'specs', 'dep-bump.md'), '# PRD: dep bump\n\nApproved.\n');
+    await writeFile(join(repoPath, '.docs', 'stories', 'dep-bump.md'), ACCEPTED_STORIES);
+    await writeFile(join(repoPath, '.docs', 'plans', 'dep-bump.md'), PLAN_WITH_DEPS);
+
+    const result = await landSpec(target(), 'dep bump', 'acme/app#7');
+
+    const marker = await showOnBranch(result.branch, `.docs/intake/${result.slug}.md`);
+    expect(marker).toContain('Source-Ref: acme/app#7');
+  });
+});
+
+/** Extract the slug from a `spec/<slug>` branch name. */
+function slugOf(branch: string): string {
+  return branch.replace(/^spec\//, '');
+}

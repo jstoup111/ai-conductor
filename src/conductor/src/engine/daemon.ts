@@ -26,6 +26,11 @@ export interface BacklogItem {
    *  in the conductor (Small skips acceptance_specs/retro). Absent for legacy or
    *  non-engineer specs → the daemon falls back to 'M' (unchanged behavior). */
   tier?: ComplexityTier;
+  /** Originating GitHub issue reference (`owner/repo#N`), parsed from
+   *  `.docs/intake/<slug>.md` on the base branch. When present, the daemon links
+   *  the implementation PR to the issue with `Closes owner/repo#N` so it
+   *  auto-closes on merge. Absent for hand-authored / non-intake specs. */
+  sourceRef?: string;
 }
 
 export type FeatureStatus = 'done' | 'halted' | 'error';

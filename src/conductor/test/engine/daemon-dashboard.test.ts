@@ -9,9 +9,10 @@ import {
   type InheritedState,
 } from '../../src/engine/daemon-dashboard.js';
 import type { BacklogItem } from '../../src/engine/daemon.js';
+import type { ComplexityTier } from '../../src/types/index.js';
 
-function item(slug: string): BacklogItem {
-  return { slug };
+function item(slug: string, tier?: ComplexityTier): BacklogItem {
+  return tier ? { slug, tier } : { slug };
 }
 
 describe('engine/daemon-dashboard — scanInheritedState (FR-2/FR-3)', () => {
@@ -42,9 +43,19 @@ describe('engine/daemon-dashboard — scanInheritedState (FR-2/FR-3)', () => {
       'utf-8',
     );
   }
+  // Legacy ledger format (plain `shipped`).
   async function makeProcessed(slug: string): Promise<void> {
     await mkdir(processedDir, { recursive: true });
     await writeFile(join(processedDir, slug), 'shipped\n', 'utf-8');
+  }
+  // New ledger format (JSON with a PR url).
+  async function makeProcessedJson(slug: string, prUrl?: string): Promise<void> {
+    await mkdir(processedDir, { recursive: true });
+    await writeFile(
+      join(processedDir, slug),
+      `${JSON.stringify({ status: 'shipped', prUrl: prUrl ?? null })}\n`,
+      'utf-8',
+    );
   }
 
   it('classifies halted (reason = first line), in-progress (last step), eligible, processed count', async () => {
@@ -64,8 +75,69 @@ describe('engine/daemon-dashboard — scanInheritedState (FR-2/FR-3)', () => {
       'rebase conflict — parked',
     );
     expect(state.inProgress).toEqual([{ slug: 'ip1', step: 'build' }]);
-    expect(state.eligible.sort()).toEqual(['e1', 'e2']);
+    expect(state.eligible.map((e) => e.slug).sort()).toEqual(['e1', 'e2']);
     expect(state.processedCount).toBe(3);
+  });
+
+  it('enriches halted/in-progress with step, tier, and PR url from conduct-state', async () => {
+    await makeHalted('h', 'prd-audit gap');
+    await makeStateful('h', {
+      complexity_tier: 'L',
+      prd_audit: 'in_progress',
+      finish: 'done',
+      pr_url: 'https://github.com/o/r/pull/7',
+    });
+    await makeStateful('ip', {
+      complexity_tier: 'M',
+      build: 'in_progress',
+      pr_url: 'https://github.com/o/r/pull/8',
+    });
+
+    const state = await scanInheritedState({
+      worktreeBase,
+      processedDir,
+      discover: async () => [],
+    });
+
+    const h = state.halted.find((e) => e.slug === 'h');
+    expect(h).toMatchObject({
+      slug: 'h',
+      reason: 'prd-audit gap',
+      step: 'prd_audit',
+      tier: 'L',
+      prUrl: 'https://github.com/o/r/pull/7',
+    });
+    expect(state.inProgress).toEqual([
+      {
+        slug: 'ip',
+        step: 'build',
+        tier: 'M',
+        prUrl: 'https://github.com/o/r/pull/8',
+      },
+    ]);
+  });
+
+  it('eligible carries the backlog tier; processed carries the persisted PR url', async () => {
+    await makeProcessedJson('shipped-pr', 'https://github.com/o/r/pull/3');
+    await makeProcessed('shipped-legacy'); // legacy plain-text ledger → no PR
+
+    const state = await scanInheritedState({
+      worktreeBase,
+      processedDir,
+      discover: async () => [item('big', 'L'), item('small', 'S')],
+    });
+
+    expect(state.eligible.sort((a, b) => a.slug.localeCompare(b.slug))).toEqual([
+      { slug: 'big', tier: 'L' },
+      { slug: 'small', tier: 'S' },
+    ]);
+    expect(state.processedCount).toBe(2);
+    expect(state.processed.find((p) => p.slug === 'shipped-pr')?.prUrl).toBe(
+      'https://github.com/o/r/pull/3',
+    );
+    expect(
+      state.processed.find((p) => p.slug === 'shipped-legacy')?.prUrl,
+    ).toBeUndefined();
   });
 
   it('PROCESSED wins over IN-PROGRESS (a processed+stateful worktree is not in-progress)', async () => {
@@ -100,7 +172,7 @@ describe('engine/daemon-dashboard — scanInheritedState (FR-2/FR-3)', () => {
       processedDir,
       discover: async () => [item('h'), item('done1'), item('fresh')],
     });
-    expect(state.eligible).toEqual(['fresh']);
+    expect(state.eligible.map((e) => e.slug)).toEqual(['fresh']);
   });
 
   it('empty HALT → reason unknown', async () => {
@@ -163,21 +235,38 @@ describe('engine/daemon-dashboard — scanInheritedState (FR-2/FR-3)', () => {
 });
 
 describe('engine/daemon-dashboard — renderDashboard (FR-1/FR-2)', () => {
-  it('renders four groups with counts and member lines', () => {
+  it('renders four groups with counts and enriched member lines', () => {
     const state: InheritedState = {
-      halted: [{ slug: 'h1', reason: 'rebase conflict' }],
-      inProgress: [{ slug: 'ip1', step: 'build' }],
-      eligible: ['e1', 'e2', 'e3'],
-      processedCount: 9,
+      halted: [
+        {
+          slug: 'h1',
+          reason: 'rebase conflict',
+          step: 'prd_audit',
+          tier: 'L',
+          prUrl: 'https://github.com/o/r/pull/7',
+        },
+      ],
+      inProgress: [{ slug: 'ip1', step: 'build', tier: 'M' }],
+      eligible: [{ slug: 'e1', tier: 'S' }, { slug: 'e2' }],
+      processed: [
+        { slug: 'p1', prUrl: 'https://github.com/o/r/pull/3' },
+        { slug: 'p2' },
+      ],
+      processedCount: 2,
     };
     const out = renderDashboard(state);
     expect(out).toContain('HALTED (1)');
-    expect(out).toContain('h1 — rebase conflict');
+    expect(out).toContain(
+      'h1 [L] @prd_audit — rebase conflict  → https://github.com/o/r/pull/7',
+    );
     expect(out).toContain('IN-PROGRESS (1)');
-    expect(out).toContain('ip1 — build');
-    expect(out).toContain('ELIGIBLE (3)');
-    expect(out).toContain('e1, e2, e3');
-    expect(out).toContain('PROCESSED (9)');
+    expect(out).toContain('ip1 [M] @build');
+    expect(out).toContain('ELIGIBLE (2)');
+    expect(out).toContain('e1 [S]');
+    expect(out).toContain('e2');
+    expect(out).toContain('PROCESSED (2)');
+    expect(out).toContain('p1  → https://github.com/o/r/pull/3');
+    expect(out).toContain('p2');
   });
 
   it('zero-state renders all four groups at 0', () => {
@@ -185,6 +274,7 @@ describe('engine/daemon-dashboard — renderDashboard (FR-1/FR-2)', () => {
       halted: [],
       inProgress: [],
       eligible: [],
+      processed: [],
       processedCount: 0,
     });
     expect(out).toContain('HALTED (0)');

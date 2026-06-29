@@ -36,7 +36,7 @@
   future gh message change could mis-prune. Fix → new story: prefer `gh`'s structured error/exit-code
   signal (or `--json` error surface) over English substring matching.
 - **A-2 (LOW):** `.daemon/mergeable-watch.jsonl` has **no size/age cap** — unmerged `done` PRs accrue
-  until merged/closed (deferred in ADR-014). Fix → new story: add a max-age/size cap with logged drops.
+  until merged/closed (deferred in ADR-015). Fix → new story: add a max-age/size cap with logged drops.
 - **A-3 (LOW):** No end-to-end test actually shells `gh` against a scratch repo; all coverage uses fakes.
   Acceptable for unit confidence, but the orphaned-wiring class (H-1) is exactly what a thin e2e smoke
   would have caught. Fix → optional story: one gated smoke test that runs the daemon sweep against a

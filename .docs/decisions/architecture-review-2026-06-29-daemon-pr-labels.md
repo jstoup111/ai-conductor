@@ -28,7 +28,7 @@
 - **Label/state namespace** distinct from `needs-manual` (intake ledger, ADR-012) and
   `engineer:handled` (intake label). No collision. ✓
 - **New recurring daemon task + persisted state** is a novel architectural decision →
-  **ADR-014 (DRAFT)** records it (registry vs stateless scan; cadence; seam).
+  **ADR-015 (DRAFT)** records it (registry vs stateless scan; cadence; seam).
 
 ## Domain Integrity
 Deferred to the TDD domain reviewer per-cycle (Medium tier). Note for implementation: model
@@ -48,7 +48,7 @@ scattered booleans; the watch entry is a small typed record. Conservative on `UN
 No High-likelihood/High-impact risk remains after mitigation.
 
 ## ADRs Created
-- **ADR-014 — Daemon PR labeling: shared gh seam, tracked mergeable watch registry, best-effort
+- **ADR-015 — Daemon PR labeling: shared gh seam, tracked mergeable watch registry, best-effort
   sweep.** Status: **DRAFT** → must reach APPROVED before BUILD.
 
 ## Conditions (APPROVED WITH CONDITIONS)

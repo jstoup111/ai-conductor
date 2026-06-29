@@ -3,6 +3,7 @@ import { join, relative } from 'path';
 import type { StepName, ComplexityTier } from '../types/index.js';
 import type { HarnessConfig } from '../types/config.js';
 import { slugify } from './worktree.js';
+import { parseSourceRef } from './engineer/issue-ref.js';
 
 /**
  * Artifact glob patterns per step. Each pattern is `<dir>/*.md`, `<dir>/**\/*.md`,
@@ -662,6 +663,23 @@ export function parseComplexityTier(content: string | null): ComplexityTier | un
   const m = content.match(/\bTier:\s*([SML])\b/i);
   if (!m) return undefined;
   return m[1].toUpperCase() as ComplexityTier;
+}
+
+/**
+ * Parse an intake-origin marker file (`.docs/intake/<slug>.md`) into the
+ * originating GitHub issue reference (`owner/repo#N`). The marker carries a
+ * `Source-Ref: owner/repo#N` line (case-insensitive); the rest is free-form.
+ *
+ * Returns `undefined` when the content is null/absent or the ref is missing or
+ * malformed (validated via the shared `parseSourceRef`). Callers treat undefined
+ * as "no intake origin" and skip all issue-linking — preserving today's behavior
+ * for hand-authored specs.
+ */
+export function parseIntakeSourceRef(content: string | null): string | undefined {
+  if (!content) return undefined;
+  const m = content.match(/^\s*Source-Ref:\s*(\S+)/im);
+  if (!m) return undefined;
+  return parseSourceRef(m[1]) ? m[1] : undefined;
 }
 
 /** A PRD-audit gap-class. `unknown` = a blocking row whose class cell we could

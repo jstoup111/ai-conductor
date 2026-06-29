@@ -2,7 +2,12 @@ import { execFile as execFileCb } from 'node:child_process';
 import { basename, isAbsolute, relative } from 'node:path';
 import { promisify } from 'node:util';
 import type { BacklogItem } from './daemon.js';
-import { planHasDependencyTree, isStoriesApproved, parseComplexityTier } from './artifacts.js';
+import {
+  planHasDependencyTree,
+  isStoriesApproved,
+  parseComplexityTier,
+  parseIntakeSourceRef,
+} from './artifacts.js';
 import { makeGitRunner, originDefaultBranch, type GitRunner } from './rebase.js';
 
 const execFile = promisify(execFileCb);
@@ -259,10 +264,16 @@ export async function discoverBacklog(
     // the daemon falls back to 'M' (legacy behavior, no breakage).
     const tier = parseComplexityTier(await tree.readFile(`.docs/complexity/${slug}.md`));
 
+    // Carry the originating issue ref (if this spec came from github-issues
+    // intake) so the daemon can put `Closes owner/repo#N` on the implementation
+    // PR. The marker is committed at `.docs/intake/<plan-stem>.md` — the SAME
+    // stem as the plan. Absent/garbled → undefined (hand-authored specs unchanged).
+    const sourceRef = parseIntakeSourceRef(await tree.readFile(`.docs/intake/${slug}.md`));
+
     // A fresh worktree is cut from the (now fast-forwarded) default branch, so the
     // vetted stories/plan physically exist in it already — the item only needs to
-    // carry the slug (+ tier); no working-tree paths to copy.
-    items.push({ slug, tier });
+    // carry the slug (+ tier + sourceRef); no working-tree paths to copy.
+    items.push({ slug, tier, ...(sourceRef ? { sourceRef } : {}) });
   }
   return items;
 }

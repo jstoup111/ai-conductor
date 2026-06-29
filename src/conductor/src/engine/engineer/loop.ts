@@ -528,7 +528,8 @@ async function processIdea(
     ? (recommended: ComplexityTier | null) =>
         assessComplexityFn({ recommended, idea, project: target.name, prompt: authoringPrompt })
     : undefined;
-  const { branch } = await runAuthoring(target, idea, { decide, assessComplexity });
+  const sourceRef = intake?.envelope.sourceRef;
+  const { branch } = await runAuthoring(target, idea, { decide, assessComplexity, sourceRef });
 
   // 4e-4g. Post-authoring handoff (extracted — retro A-2): PR-open-vs-local-commit,
   //        ensure-running fire-and-forget, and the authored entry. runHandoff owns
@@ -538,6 +539,7 @@ async function processIdea(
     engineerDir: deps.engineerDir,
     launchFn,
     print: (s) => io.print(s),
+    sourceRef,
   });
   summary.authored!.push({ project: entry.project });
 

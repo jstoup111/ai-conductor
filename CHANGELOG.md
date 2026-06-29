@@ -44,6 +44,47 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   a GitHub step failure is logged and never disrupts the daemon's core processing (FR-7, FR-15).
   Daemon-only; interactive runs are unchanged (FR-8, FR-15). PRD:
   `.docs/specs/2026-06-29-daemon-pr-labels.md`.
+- **Richer daemon startup dashboard — "state of everything" per repo (conduct-ts).** The
+  inherited-state dashboard printed before any dispatch now carries the bits an operator
+  actually triages on, mined best-effort from each worktree's `conduct-state.json` (and the
+  processed ledger): HALTED and IN-PROGRESS rows show the **complexity tier**, the **step** the
+  feature reached, and the **open PR link** if one exists; ELIGIBLE rows show the **tier** of
+  each queued feature; PROCESSED now **lists each shipped slug with its PR link** (not just a
+  count). To support the shipped-PR links, the `.daemon/processed/` ledger is now written as
+  JSON (`{ status, prUrl }`) — legacy plain-text `shipped` entries still parse (no PR), so this
+  is backward-compatible. All enrichment is best-effort: a malformed `conduct-state` still
+  appears (step `unknown`, no tier/PR), and a per-worktree fs error is skipped — the scan never
+  aborts startup. `README.md` and `src/conductor/README.md` updated.
+
+- **GitHub issue ↔ PR linkage + auto-close on implementation merge (conduct-ts).**
+  github-issues intake previously commented on an issue but never linked or closed it, so an
+  issue stayed open even after its spec PR and the daemon's implementation PR both merged. The
+  originating issue reference now travels WITH the spec via a committed `.docs/intake/<slug>.md`
+  marker (`Source-Ref: owner/repo#N`), written by both authoring paths (`engineer land
+  --source-ref` and the autonomous `runAuthoring`). The **spec PR** gets a non-closing
+  `Refs owner/repo#N` (links the issue without closing it); the daemon reads the marker from the
+  merged base-branch tree (`BacklogItem.sourceRef`) and adds `Closes owner/repo#N` to the
+  **implementation PR**, so GitHub auto-closes the issue when the real work merges. All injection
+  is gated on a parseable ref (hand-authored specs are unchanged), idempotent, and non-fatal (a
+  `gh` failure never affects a delivered PR or build). New shared helper
+  `engineer/issue-ref.ts` (`parseSourceRef` / `injectIssueRef` / `closeIssueOnImplementationMerge`)
+  is the single source for parsing + linking.
+
+- **OpenTelemetry exporter for conductor runs (Phase 1).** A new opt-in
+  `otel:` config block wires the conductor event bus to an OTel tracer/meter
+  pipeline (ADR-014). When enabled, each run produces one root trace span
+  (`conductor.run`) with a child span per step, plus `conductor.step.duration`
+  (histogram), `conductor.step.retries` (counter), and `conductor.step.tokens`
+  (counter, only when tokenUsage is present) metrics. Two transports: `exporter:
+  otlp` (HTTP/protobuf on port 4318 by default, gRPC/4317 via `protocol: grpc`)
+  and `exporter: file` (OTLP-JSON newline-delimited at `.pipeline/otel.jsonl`).
+  Feature is default-off (absent `otel:` block → zero overhead). Coexists with
+  `events.jsonl` and `--report` — event emission sites are unchanged. Export
+  failures emit at most one bounded warning via `onWarning` and never affect the
+  run (FR-8). Incomplete spans on abrupt termination are force-closed ERROR with
+  `conductor.incomplete=true` (FR-9). SIGINT/SIGTERM handlers trigger a
+  best-effort flush within the configured `exportTimeoutMillis` bound.
+
 - **Engineer authors the full DECIDE phase (engineer).** The `/engineer` idea→spec loop now runs
   the complete, build-ready DECIDE set in canonical order —
   brainstorm → **complexity** → stories → **conflict-check** → **architecture-diagram** →
