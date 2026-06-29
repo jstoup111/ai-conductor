@@ -40,7 +40,8 @@ import { AuthoringGuard } from './authoring-guard.js';
 import { TargetPathMissingError } from './target.js';
 import { isStoriesApproved, hasDraftAdr } from '../artifacts.js';
 import { writeIntakeMarker } from './intake-marker.js';
-import type { ComplexityTier } from '../../types/index.js';
+import { writeTrackMarker } from './track-marker.js';
+import type { ComplexityTier, Track } from '../../types/index.js';
 
 const execFile = promisify(execFileCb);
 
@@ -301,6 +302,11 @@ export interface RunAuthoringDeps {
    * specs are unchanged).
    */
   sourceRef?: string;
+  /**
+   * Work track (ADR-015/017). When provided, a `.docs/track/<slug>.md` marker is
+   * committed with the spec. Defaults to `product` (preserves legacy behavior).
+   */
+  track?: Track;
 }
 
 /**
@@ -518,6 +524,11 @@ export async function runAuthoring(
     // Intake origin marker (no-op when no/invalid sourceRef): persists the
     // originating issue ref WITH the spec so the daemon can close it on merge.
     await writeIntakeMarker(repoPath, slug, deps.sourceRef, guard);
+
+    // Track marker (ADR-015/017): persists the product/technical classification
+    // WITH the spec so the daemon knows whether to expect a PRD / run prd-audit.
+    // Defaults to `product` (preserves the legacy PRD-authoring behavior).
+    await writeTrackMarker(repoPath, slug, deps.track ?? 'product', guard);
 
     // 3c. Stage and commit all spec artifacts on the spec branch. Staging the
     //     whole `.docs` tree commits exactly the artifacts written above (the
