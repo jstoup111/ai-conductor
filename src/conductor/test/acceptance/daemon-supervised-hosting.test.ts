@@ -102,18 +102,24 @@ describe('Supervisor port behavior (ADR-014)', () => {
     expect(newArgs!.join(' ')).toContain('conduct-ts daemon --continuous');
   });
 
-  it('connect attaches READ-ONLY (FR-5); debug attaches read/write (FR-6)', async () => {
-    const mod = await load(TMUX_MOD);
-    const attach = requireFn(mod, 'attachSession');
-    const ro = spyRunner();
-    attach('cc-daemon-x', { readOnly: true }, ro.run);
-    const roArgs = argvOf(ro.calls, 'attach-session');
-    expect(roArgs).toContain('-r'); // read-only watch
-    expect(ro.calls[0].inherit, 'attach must inherit stdio').toBe(true);
+  it('connect attaches READ-ONLY through the Supervisor port (FR-5)', async () => {
+    // Drive the PORT, not the helper — a port that drops/ignores readOnly must fail here.
+    const makeSup = requireFn(await load(TMUX_MOD), 'makeTmuxSupervisor');
+    const { run, calls } = spyRunner({ 'has-session': { code: 0 }, '-V': { code: 0 } });
+    await makeSup(run).attach(REPO, { readOnly: true });
+    const args = argvOf(calls, 'attach-session');
+    expect(args, 'must attach the running session').toBeTruthy();
+    expect(args).toContain('-r'); // read-only watch — cannot take control
+    expect(calls.find((c) => c.args[0] === 'attach-session')!.inherit).toBe(true);
+  });
 
-    const rw = spyRunner();
-    attach('cc-daemon-x', { readOnly: false }, rw.run);
-    expect(argvOf(rw.calls, 'attach-session')).not.toContain('-r');
+  it('debug attaches read/write through the Supervisor port — never read-only (FR-6)', async () => {
+    const makeSup = requireFn(await load(TMUX_MOD), 'makeTmuxSupervisor');
+    const { run, calls } = spyRunner({ 'has-session': { code: 0 }, '-V': { code: 0 } });
+    await makeSup(run).attach(REPO, { readOnly: false });
+    const args = argvOf(calls, 'attach-session');
+    expect(args, 'must attach the running session').toBeTruthy();
+    expect(args).not.toContain('-r'); // full interactive control
   });
 
   it('connect/debug on a NOT-running daemon errors with "start it first" (FR-9)', async () => {
