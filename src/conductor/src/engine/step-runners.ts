@@ -511,16 +511,34 @@ export class DefaultStepRunner implements StepRunner {
     // the loop stuck (the validation failure this addresses). Tell it to decide
     // deterministically and ACT, ending by writing the marker file.
     if (step === 'finish' && this.mode === 'auto') {
+      // Use ABSOLUTE worktree paths for the completion markers. In daemon mode
+      // the finish skill performs branch/PR/worktree cleanup that `cd`s into the
+      // main repo (see agents/worktree-manager.md), so relative `.pipeline/...`
+      // writes would land in the WRONG repo while the completion gate reads the
+      // worktree's `.pipeline` — leaving it unsatisfied and HALTing a feature
+      // whose PR was genuinely created. `this.pipelineDir` is the worktree's
+      // `.pipeline` (daemon-cli passes it); fall back to relative when unset.
+      const choicePath = this.pipelineDir
+        ? join(this.pipelineDir, 'finish-choice')
+        : '.pipeline/finish-choice';
+      const statePath = this.pipelineDir
+        ? join(this.pipelineDir, 'conduct-state.json')
+        : '.pipeline/conduct-state.json';
       prompt +=
         '\n\nUNATTENDED (auto) MODE — no user is present to choose a finish outcome, so do NOT prompt. ' +
         'Decide deterministically and ACT (do not merely describe):\n' +
-        '- If the repo has a configured git remote and `gh` is authenticated: push the branch, open a PR ' +
-        'with `gh pr create` (NEVER merge), record the resulting URL as the `pr_url` field in ' +
-        '`.pipeline/conduct-state.json`, then write the single word `pr` to `.pipeline/finish-choice`.\n' +
+        '- If the repo has a configured git remote and `gh` is authenticated: push the branch and open a ' +
+        'PR with `gh pr create` (NEVER merge). If a PR for this branch already exists, reuse it instead ' +
+        'of failing (`gh pr view --json url -q .url`). Record the PR URL as the `pr_url` field in ' +
+        `\`${statePath}\`, then write the single word \`pr\` to \`${choicePath}\`.\n` +
         '- Otherwise (no remote, or `gh` unavailable/unauthenticated): leave the work committed on the ' +
-        'branch and write the single word `keep` to `.pipeline/finish-choice`.\n' +
-        'The step is NOT complete until `.pipeline/finish-choice` exists with one of those exact values ' +
-        '(and, for `pr`, `pr_url` is set in state). Writing that marker file must be your final action.';
+        `branch and write the single word \`keep\` to \`${choicePath}\`.\n` +
+        `IMPORTANT: write these two files at the EXACT absolute paths shown above (\`${choicePath}\` and ` +
+        `\`${statePath}\`). Do NOT use relative paths and do NOT \`cd\` elsewhere first — branch/PR/` +
+        'worktree cleanup may change the working directory, and the completion gate only reads these ' +
+        'absolute worktree paths. Write the marker(s) BEFORE any merge/cleanup step. The step is NOT ' +
+        `complete until \`${choicePath}\` exists with one of those exact values (and, for \`pr\`, ` +
+        `\`pr_url\` is set in \`${statePath}\`).`;
     }
 
     if (retryReason) {
