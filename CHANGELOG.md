@@ -29,6 +29,18 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- **Richer daemon startup dashboard — "state of everything" per repo (conduct-ts).** The
+  inherited-state dashboard printed before any dispatch now carries the bits an operator
+  actually triages on, mined best-effort from each worktree's `conduct-state.json` (and the
+  processed ledger): HALTED and IN-PROGRESS rows show the **complexity tier**, the **step** the
+  feature reached, and the **open PR link** if one exists; ELIGIBLE rows show the **tier** of
+  each queued feature; PROCESSED now **lists each shipped slug with its PR link** (not just a
+  count). To support the shipped-PR links, the `.daemon/processed/` ledger is now written as
+  JSON (`{ status, prUrl }`) — legacy plain-text `shipped` entries still parse (no PR), so this
+  is backward-compatible. All enrichment is best-effort: a malformed `conduct-state` still
+  appears (step `unknown`, no tier/PR), and a per-worktree fs error is skipped — the scan never
+  aborts startup. `README.md` and `src/conductor/README.md` updated.
+
 - **GitHub issue ↔ PR linkage + auto-close on implementation merge (conduct-ts).**
   github-issues intake previously commented on an issue but never linked or closed it, so an
   issue stayed open even after its spec PR and the daemon's implementation PR both merged. The

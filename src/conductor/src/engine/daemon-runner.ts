@@ -48,8 +48,9 @@ export interface FeatureRunnerDeps {
   readOutcome: (worktree: FeatureWorktree) => Promise<WorktreeOutcome>;
   /** Remove the worktree (keep=true leaves it for inspection after halt/error). */
   teardownWorktree: (worktree: FeatureWorktree, keep: boolean) => Promise<void>;
-  /** Persist that a slug shipped so discoverBacklog skips it next poll. */
-  markProcessed: (slug: string) => Promise<void>;
+  /** Persist that a slug shipped (with its PR url, when opened) so
+   *  discoverBacklog skips it next poll and the startup dashboard can link it. */
+  markProcessed: (slug: string, prUrl?: string) => Promise<void>;
   /**
    * Daemon mode. When true, emit a structured engineer signal + narrative to the
    * cross-project engineer store on completion (Phase 9.1). Manual `/conduct` runs
@@ -107,7 +108,7 @@ export function makeRunFeature(
       }
 
       if (outcome.done) {
-        await deps.markProcessed(item.slug);
+        await deps.markProcessed(item.slug, outcome.prUrl);
         await deps.teardownWorktree(worktree, false);
         log(`✓ ${item.slug} shipped${outcome.prUrl ? ` → ${outcome.prUrl}` : ''}`);
         return {

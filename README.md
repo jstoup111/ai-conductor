@@ -132,7 +132,9 @@ keeps going.
 
 On startup, before any dispatch, the daemon prints a grouped **inherited-state
 dashboard** (HALTED / IN-PROGRESS / ELIGIBLE / PROCESSED) to both your terminal and
-`daemon.log`. It also tracks the base-branch tip SHA (`.daemon/last-base-sha`): when
+`daemon.log`. Each row shows the bits you triage on — complexity tier, the step a
+feature reached, and the PR link once one is open (shipped features list their PR too).
+It also tracks the base-branch tip SHA (`.daemon/last-base-sha`): when
 the base branch **actually advances** — live, or while the daemon was down — it
 **re-kicks every halted feature** (aborting any paused rebase, preserving the reason
 to `.pipeline/HALT.cleared`, clearing `.pipeline/HALT`) so parked work retries
