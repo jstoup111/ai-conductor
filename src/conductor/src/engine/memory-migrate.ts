@@ -200,11 +200,16 @@ export async function migrateMemory(
     await copyMissing(srcDir, destDir);
   }
 
-  // ── A18: Verify (default only) ─────────────────────────────────────────────
-  const verified = await runDefaultVerify(memPath, canonicalHarness);
+  // ── A18/A19: Verify ────────────────────────────────────────────────────────
+  // A19 (C5): an injected verifier returning false must abort non-destructively —
+  // the original `.memory/` real dir is left completely intact (no swap, no loss).
+  const verified = _opts.verify
+    ? await _opts.verify()
+    : await runDefaultVerify(memPath, canonicalHarness);
 
   if (!verified) {
-    // C5: Abort without destructive change. Original .memory/ is still intact.
+    // C5: Abort without destructive change. Original .memory/ is still intact
+    // (we only copied TO canonical; we never touched .memory/).
     throw new Error(
       'Migration verification failed: not all entries could be confirmed in ' +
         'the canonical store. Original .memory/ is intact — no swap performed.',
