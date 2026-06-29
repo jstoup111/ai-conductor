@@ -12,6 +12,13 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- **Type-check gate in the TDD DOMAIN/COMMIT phase.** The post-GREEN DOMAIN phase now runs the
+  project's type-checker (e.g. `tsc --noEmit` / `npm run typecheck`) as a mechanical pre-check
+  before the domain reviewer is dispatched — a type error returns straight to GREEN rather than
+  shipping to batch, PR, or CI. Re-confirmed at the COMMIT hard gate. Conditional on tech-context:
+  skipped silently for stacks with no compile step (e.g. Rails). Catches stale imports / renamed
+  properties / signature drift introduced by the GREEN agent at the cheapest point — the cycle
+  boundary — instead of at PR-creation time (`/pr`) as it does today.
 - **Negative-path category: invariant side-effect on alternate branches (stories).**
   Adds a mandatory negative-path category to `/stories`: when a happy path delegates a critical
   side effect (record/ledger write, cleanup, metric, cache invalidation) to a helper, every
