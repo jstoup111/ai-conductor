@@ -52,6 +52,8 @@ import {
   detectDaemonObserveCommand,
   dispatchDaemonObserve,
 } from './engine/daemon-observe-cli.js';
+import { resolveOtelConfig } from './engine/otel/otel-config.js';
+import { OtelVisualizer } from './engine/otel/otel-visualizer.js';
 
 // ── Visualizer lifecycle helpers (exported so tests can verify the wiring) ────
 
@@ -551,11 +553,18 @@ async function main(): Promise<void> {
   const persister = new EventPersister(eventsLogPath, events);
   persister.start();
 
-  // Wire visualizer plugins (e.g. OTel exporter). The OTel visualizer is
-  // constructed only when resolveOtelConfig().enabled (FR-1 gate). For now
-  // the list is empty — it will be populated in Task 5+/T5 once the
-  // OtelVisualizer exists. Generic lifecycle wiring is active from here.
+  // Wire visualizer plugins (FR-1 gate: OTel visualizer only when enabled).
   const visualizerList: VisualizerPlugin[] = [];
+  const otelResolved = resolveOtelConfig(config ?? {}, pipelineDir);
+  if (otelResolved.enabled) {
+    visualizerList.push(
+      new OtelVisualizer(otelResolved, {
+        pipelineDir,
+        feature: opts.featureDesc ?? 'unknown',
+        project: projectRoot,
+      }),
+    );
+  }
   buildVisualizers(visualizerList, events);
 
   const stepRunner = new DefaultStepRunner(provider, sessionId, projectRoot, {
