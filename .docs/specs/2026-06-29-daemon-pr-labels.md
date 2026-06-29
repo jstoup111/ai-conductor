@@ -1,7 +1,7 @@
 # PRD: Daemon PR Labeling — `needs-remediation` & `mergeable`
 
 **Date:** 2026-06-29
-**Status:** Draft
+**Status:** Approved
 
 ## Problem / Background
 
