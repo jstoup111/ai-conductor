@@ -273,6 +273,26 @@ conduct --update               # force an update check now
 The `updateChannel` setting is per-user (lives in `~/.claude/`), so every
 project using this harness inherits the same channel.
 
+## Daemon CLI
+
+The per-repo build daemon is driven by the **`conduct-ts`** binary. **Use `conduct-ts`,
+NOT the `conduct` bash wrapper, for daemon subcommands** — `conduct daemon status`
+mis-routes to a feature build; only `conduct-ts daemon …` reaches the daemon commands.
+
+| Command | What it does |
+|---------|--------------|
+| `conduct-ts daemon status` | Liveness of every registered repo's daemon (running / stale / stopped, pid, started-at, last activity) |
+| `conduct-ts daemon logs [--follow] [--all] [--repo <path>]` | Tail `.daemon/daemon.log` (ANSI-stripped) for this repo, all registered repos, or a named one |
+| `conduct-ts daemon --continuous` | Run a daemon in the **foreground**, idle-polling forever (omit `--max-idle-polls` ⇒ Infinity) |
+| `conduct-ts daemon` | Drain the current backlog once, then exit (add `--max-idle-polls N` to self-limit after N idle polls) |
+
+One daemon per repo, enforced by the pidfile lock at `.daemon/daemon.pid` (stale dead-pid
+locks self-reclaim). To restart by hand: `kill $(jq -r .pid .daemon/daemon.pid)` then
+`conduct-ts daemon --continuous`.
+
+> **Planned (PR #143):** tmux-supervised `start` / `restart` / `stop` / `connect` / `debug`
+> verbs — see `.docs/plans/2026-06-29-daemon-tmux-supervisor.md`. Update this table when they land.
+
 ## Key Conventions
 
 - One skill, one responsibility, one enforcement level

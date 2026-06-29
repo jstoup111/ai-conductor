@@ -130,7 +130,9 @@ The seam makes that split an *adapter swap, not a rewrite*. Only the seam is in 
 
 - Branch + PR; never commit to main; never `gh pr merge` without approval. Current VERSION `0.99.18`;
   present the bump before opening the PR (new CLI subcommands = MINOR per convention). CHANGELOG
-  `[Unreleased]` + docs (README + `src/conductor/README.md`) in the same PR.
+  `[Unreleased]` + docs in the same PR: README, `src/conductor/README.md`, and the **`HARNESS.md`
+  "Daemon CLI" table** (replace the "Planned (PR #143)" note with the shipped `start`/`restart`/`stop`/
+  `connect`/`debug` verbs) — HARNESS.md loads every session, so that's where operators find the CLI.
 - `test/test_harness_integrity.sh` must pass. Mandatory negative-path tests: tmux not installed, stale
   session (dead inner pid but session present), `start` when already running (idempotent no-op),
   `connect`/`debug` when no session, slug collision across two repos.
