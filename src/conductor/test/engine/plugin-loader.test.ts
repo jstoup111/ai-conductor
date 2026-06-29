@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { discoverPlugins } from '../../src/engine/plugin-loader.js';
+import { discoverPlugins, registerBuiltins } from '../../src/engine/plugin-loader.js';
 import { PluginRegistry } from '../../src/engine/plugin-registry.js';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -205,5 +206,38 @@ entrypoint: index.js`
       expect(registry.list('llm_provider')).toContain('global-provider');
       expect(registry.list('ui_renderer')).toContain('project-renderer');
     });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Task A3 (ADR-015 / C1): built-in memory_provider:local is registered as a
+// REAL provider object — never null, never undefined (condition C1).
+// ─────────────────────────────────────────────────────────────────────────────
+describe('registerBuiltins — memory_provider:local (ADR-015 / C1)', () => {
+  it('registers memory_provider:local as a real non-null provider object', () => {
+    const registry = new PluginRegistry();
+    const events = new ConductorEventEmitter();
+
+    registerBuiltins(registry, events, () => null);
+    registry.markInitialized();
+
+    const provider = registry.get('memory_provider', 'local');
+
+    expect(provider).toBeDefined();
+    expect(provider).not.toBeNull();
+    expect(typeof provider).toBe('object');
+  });
+
+  it('local provider exposes name and kind (consistent with acceptance spec shape)', () => {
+    const registry = new PluginRegistry();
+    const events = new ConductorEventEmitter();
+
+    registerBuiltins(registry, events, () => null);
+    registry.markInitialized();
+
+    const provider = registry.get<{ name: string; kind: string }>('memory_provider', 'local');
+
+    expect(provider.name).toBe('local');
+    expect(provider.kind).toBe('memory_provider');
   });
 });

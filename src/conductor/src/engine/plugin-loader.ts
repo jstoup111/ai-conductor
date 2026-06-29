@@ -6,6 +6,7 @@ import { PluginManifestError, PluginLoadError, PluginVersionError } from '../typ
 import { ClaudeProvider } from '../execution/claude-provider.js';
 import { TerminalSubscriber } from '../ui/subscriber.js';
 import { TerminalRenderer, type TerminalRendererOptions } from '../ui/terminal-renderer.js';
+import { LocalMemoryProvider } from './local-memory-provider.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
 import type { UIEventHandler } from '../ui/subscriber.js';
 
@@ -153,6 +154,9 @@ export function registerBuiltins(
     const terminalRenderer = new TerminalRenderer(rendererOpts);
     registry.register('ui_renderer', 'terminal_renderer', terminalRenderer);
   }
+
+  // ADR-015 / Task A3: Register built-in local memory provider (C1 — real provider, not null)
+  registry.register('memory_provider', 'local', LocalMemoryProvider);
 
   return subscriber;
 }
