@@ -424,3 +424,75 @@ describe('T14: span events for retries / gate verdicts / kickbacks', () => {
     expect(span.attributes['conductor.retry.count']).toBe(2);
   });
 });
+
+// ── T20: Incomplete-span close (unit-level coverage for FR-9) ─────────────────
+//
+// FR-9 passes at the acceptance level via OtelVisualizer.stop() → forceCloseAll().
+// These unit tests confirm the granular contract at the SpanManager level:
+// - Single open step at flush → ERROR status + conductor.incomplete=true
+// - Multiple open steps → all closed + all have conductor.incomplete=true
+// - Run span closed even when a child step is open (run span always ends OK)
+
+describe('T20: incomplete-span close (FR-9 unit coverage)', () => {
+  it('step open at flush is closed with ERROR status and conductor.incomplete=true', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+
+    await emitter.emit({ type: 'step_started', step: 'brainstorm', index: 1 });
+    // No step_completed / feature_complete — simulate abrupt stop
+    await vis.stop();
+
+    const span = spanExporter.getFinishedSpans().find((s) => s.name === 'brainstorm')!;
+    expect(span).toBeDefined();
+    expect(span.status.code).toBe(2 /* ERROR */);
+    expect(span.attributes['conductor.incomplete']).toBe(true);
+  });
+
+  it('multiple open steps at flush are all closed with conductor.incomplete=true', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+
+    await emitter.emit({ type: 'step_started', step: 'bootstrap', index: 0 });
+    await emitter.emit({ type: 'step_started', step: 'brainstorm', index: 1 });
+    await emitter.emit({ type: 'step_started', step: 'plan', index: 2 });
+    // All three left open — forceCloseAll must handle all
+    await vis.stop();
+
+    const spans = spanExporter.getFinishedSpans().filter((s) => s.parentSpanId);
+    const names = spans.map((s) => s.name).sort();
+    expect(names).toEqual(['bootstrap', 'brainstorm', 'plan'].sort());
+    for (const s of spans) {
+      expect(s.status.code).toBe(2 /* ERROR */);
+      expect(s.attributes['conductor.incomplete']).toBe(true);
+    }
+  });
+
+  it('run span is closed even when a child step is still open at flush', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+
+    await emitter.emit({ type: 'step_started', step: 'plan', index: 2 });
+    // plan is open; no feature_complete
+    await vis.stop();
+
+    const spans = spanExporter.getFinishedSpans();
+    const rootSpan = spans.find((s) => !s.parentSpanId);
+    expect(rootSpan).toBeDefined(); // run span must be closed
+    expect(rootSpan!.name).toBe('conductor.run');
+
+    const planSpan = spans.find((s) => s.name === 'plan');
+    expect(planSpan).toBeDefined();
+    expect(planSpan!.attributes['conductor.incomplete']).toBe(true);
+  });
+
+  it('incomplete step has conductor.step.status=incomplete attribute', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+
+    await emitter.emit({ type: 'step_started', step: 'stories', index: 3 });
+    await vis.stop();
+
+    const span = spanExporter.getFinishedSpans().find((s) => s.name === 'stories')!;
+    expect(span.attributes['conductor.step.status']).toBe('incomplete');
+  });
+});
