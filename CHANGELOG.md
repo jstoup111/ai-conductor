@@ -12,6 +12,12 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- **Negative-path category: invariant side-effect on alternate branches (stories).**
+  Adds a mandatory negative-path category to `/stories`: when a happy path delegates a critical
+  side effect (record/ledger write, cleanup, metric, cache invalidation) to a helper, every
+  alternate branch that can bypass that helper (error path, no-remote/offline, degraded mode,
+  early return) needs its own scenario asserting the side effect still occurs. Closes the gap that
+  shipped a no-remote authoring path silently skipping the authored-ledger write.
 - **Daemon halt-reconciliation — startup dashboard + main-advance re-kick (ADR-013).**
   On startup, before any dispatch, the daemon now scans `.worktrees/*/` and the
   `.daemon/processed/` ledger and prints a four-group inherited-state dashboard

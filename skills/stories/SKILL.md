@@ -87,6 +87,7 @@ explicitly evaluated and included when relevant:
 | **Model-level immutability** | Record should be read-only after creation | Audit log entry, completed transaction — enforce at model layer (readonly!, validation), not just by omitting API endpoints |
 | **Exception class hierarchy** | Code rescues/catches specific exception types | Verify rescue clauses match the actual exception tree — e.g., `Stripe::AuthenticationError` is NOT a subclass of `Stripe::CardError`. Test that the right exception type is caught, not a parent or sibling. |
 | **Dedup/idempotency key analysis** | Any idempotency or deduplication criterion | Verify the dedup key correctly identifies duplicates without false positives (blocking legitimate operations) or false negatives (allowing true duplicates through). Test with edits that should NOT trigger dedup. |
+| **Invariant side-effect on alternate branches** | A happy path delegates a critical side effect (record/ledger write, cleanup, metric, cache invalidation) to a helper, and an alternate branch (error path, no-remote/offline, degraded mode, early return) can bypass that helper | A no-remote authoring path returns before the helper that writes the authored-ledger entry → the ledger silently misses the key. Write a negative-path scenario asserting the side effect STILL occurs on each alternate branch — do not assume the happy-path test covers it. |
 
 **If tech-context is loaded**, also include stack-specific categories. For Rails:
 - N+1 queries on list endpoints
