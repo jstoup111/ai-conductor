@@ -53,7 +53,14 @@ See `references/red.md` for detailed RED phase guidance.
 
 **Agent:** Domain Reviewer (see `agents/domain-reviewer.md` for full criteria)
 **Goal:** Review the test for domain integrity — primitive obsession, invalid states, boundary
-violations, domain language. Has veto authority to send back to RED.
+violations, domain language, and **adversarial-derivation coverage** (a failing spec per
+production call site of any security/correctness derivation, with real adversarial input — see
+`/writing-system-tests` §3d). Has veto authority to send back to RED.
+
+> When the task touches a security/correctness derivation (redaction, auth/permission predicate,
+> path/identity check, state guard), the dispatcher MUST include the derivation's production
+> call-site list (`file:line`) in this reviewer's prompt — the reviewer is told not to scan, so
+> without the list it cannot check call-site coverage.
 
 ### Phase 3: GREEN
 
@@ -83,7 +90,9 @@ See `references/drill-down.md` for nested TDD cycle instructions.
 
 **Agent:** Domain Reviewer (see `agents/domain-reviewer.md` for full criteria)
 **Goal:** Review the implementation for domain integrity — primitive obsession, leaky
-abstractions, missing domain types, naming. Has veto authority to send back to GREEN.
+abstractions, missing domain types, naming, and **derivation-reached-at-every-call-site** (every
+call site actually routes through the security/correctness derivation, handling real boundary
+inputs without failing open or closed). Has veto authority to send back to GREEN.
 
 ### Phase 5: COMMIT
 
@@ -134,9 +143,9 @@ prompt** rather than giving broad file access. This keeps each dispatch focused 
 | Phase | Agent | Provide in Prompt | Do NOT Provide |
 |-------|-------|-------------------|----------------|
 | RED | Generator | Task description, acceptance criterion text, test dir path, factory file path | Implementation files, other stories, full plan |
-| DOMAIN (post-RED) | Domain Reviewer | New/changed test code (inline), list of existing domain types | Full file tree, `.memory/` files, other test files |
+| DOMAIN (post-RED) | Domain Reviewer | New/changed test code (inline), list of existing domain types, **call-site list (`file:line`) for any security/correctness derivation in scope** | Full file tree, `.memory/` files, other test files |
 | GREEN | Generator | Failing test output (inline), source dir path, 1-2 specific source files to modify | Test files, stories, plan |
-| DOMAIN (post-GREEN) | Domain Reviewer | New/changed implementation code (inline), the test it satisfies (inline) | Full file tree, `.memory/` files, other source files |
+| DOMAIN (post-GREEN) | Domain Reviewer | New/changed implementation code (inline), the test it satisfies (inline), **call-site list (`file:line`) for any security/correctness derivation in scope** | Full file tree, `.memory/` files, other source files |
 | COMMIT | (main agent) | Full context | All files |
 
 **Context budget rules:**

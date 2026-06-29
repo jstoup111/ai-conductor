@@ -12,6 +12,17 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- **Adversarial-derivation coverage gate (writing-system-tests §3d + domain reviewer).**
+  Generalizes the orphaned-primitive (§3b) and path-guard (§3c) rules to *all* security/correctness
+  derivations (redaction, auth/permission predicates, path/identity checks, state guards): the spec
+  generator must produce a failing test for **every production call site** of the derivation, fed
+  the **real adversarial input that site passes** (token-bearing URL, trailing-slash/sibling/
+  traversal path, dirty/stale state, empty/boundary), asserting the observable guarantee at that
+  site — not the helper's return value in isolation. The TDD domain reviewer gains matching veto
+  checks (call-site coverage after RED, derivation-reached-at-every-call-site after GREEN), and the
+  dispatcher now feeds the reviewer the derivation's call-site list. Closes the injected-stub blind
+  spot that shipped CRITICAL/HIGH bugs caught only by the fresh-context evaluator across three
+  consecutive phases.
 - **Daemon halt-reconciliation — startup dashboard + main-advance re-kick (ADR-013).**
   On startup, before any dispatch, the daemon now scans `.worktrees/*/` and the
   `.daemon/processed/` ledger and prints a four-group inherited-state dashboard
