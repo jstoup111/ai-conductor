@@ -1,7 +1,7 @@
 # ADR 017: Shared Memory Store Placement & Cross-Worktree Durability
 
 **Date:** 2026-06-29
-**Status:** DRAFT
+**Status:** APPROVED
 **Deciders:** James (operator), Claude (architecture-review)
 
 ## Context

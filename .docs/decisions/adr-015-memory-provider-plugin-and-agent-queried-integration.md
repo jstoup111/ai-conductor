@@ -1,7 +1,7 @@
 # ADR 015: Memory Provider Plugin Kind & Agent-Queried Integration
 
 **Date:** 2026-06-29
-**Status:** DRAFT
+**Status:** APPROVED
 **Deciders:** James (operator), Claude (architecture-review)
 
 ## Context

@@ -1,7 +1,7 @@
 # ADR 021: Memory Resilience — Best-Effort, Write-Fallback & Reconcile-on-Reconnect
 
 **Date:** 2026-06-29
-**Status:** DRAFT
+**Status:** APPROVED
 **Deciders:** James (operator), Claude (architecture-review)
 
 ## Context

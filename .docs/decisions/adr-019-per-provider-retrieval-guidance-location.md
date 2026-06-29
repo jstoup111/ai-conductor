@@ -1,17 +1,27 @@
 # ADR 019: Per-Provider Retrieval Guidance Location
 
 **Date:** 2026-06-29
-**Status:** DRAFT
+**Status:** APPROVED
 **Deciders:** James (operator), Claude (architecture-review)
+
+> **Model (operator decision, 2026-06-29):** a memory-guidance **skill exists for every provider —
+> including the default** — and the harness **selects the skill that matches the installed/active
+> provider**. This is a uniform per-provider-skill selection, not a "default base + non-default
+> override" split. The default provider's skill is today's `skills/memory/SKILL.md`.
 
 ## Context
 
 FR-4 requires each **non-default** platform to carry the LLM-facing guidance needed to recall from and
 persist to it, and that guidance to be **in effect when the platform is active**. FR-9 requires the
-default platform to keep today's behavior (its guidance is the existing `skills/memory/SKILL.md`, no
-separate guidance needed). Story FR-4 negative path: missing/incomplete non-default guidance must yield
-a **defined safe behavior**, not silent incorrect behavior. Open Question 5 asks *where per-platform
-retrieval guidance lives — bundled with each platform vs. a central, source-aware skill*.
+default platform to keep today's behavior (its guidance is the existing `skills/memory/SKILL.md`, which
+in this model is simply the **default provider's skill**). Story FR-4 negative path: missing/incomplete
+provider guidance must yield a **defined safe behavior**, not silent incorrect behavior. Open Question 5
+asks *where per-platform retrieval guidance lives — bundled with each platform vs. a central,
+source-aware skill*.
+
+The operator's answer: **every provider has its own memory-guidance skill (the default included), and
+the harness picks the skill matching the installed/active provider.** Selection — not a central skill
+that branches internally, and not a "default-is-special" asymmetry.
 
 Forces:
 - Guidance is **LLM-facing prose** (how to recall/persist on this platform), the same medium as
@@ -26,16 +36,21 @@ Forces:
 
 ## Options Considered
 
-### Option A: Guidance bundled with the provider plugin; activated via the skill-override mechanism
-- **How:** Each non-default `memory_provider` plugin ships a guidance document (referenced from its
-  `plugin.yml`, ADR-015). When that provider is the active one, the harness activates its guidance for
-  the `/memory` skill by routing through the existing skill-override resolution (the provider's
-  guidance overrides/augments the default `skills/memory/SKILL.md` body for recall/persist). The
-  **default** provider supplies **no** override — the base skill is its guidance (FR-9).
-- **Pros:** Provider is self-describing (PRD KD-3, FR-4); reuses the existing override mechanism rather
-  than inventing distribution; default path unchanged; guidance stays prose for the agent (FR-3-safe).
-- **Cons:** Depends on the skill-override mechanism (ST-060/061) being available; activation must be
-  keyed to the *resolved active provider* (ADR-016), not a static project override.
+### Option A (chosen): A memory-guidance skill per provider; the harness selects the one for the active/installed provider
+- **How:** Each `memory_provider` — **default and non-default alike** — has a corresponding
+  memory-guidance skill. The default provider's skill is today's `skills/memory/SKILL.md`; a non-default
+  provider ships its own skill (bundled with its plugin and present once installed, referenced from its
+  `plugin.yml`, ADR-015). At run start the harness **selects the skill matching the resolved active
+  provider** (ADR-016) and that skill's recall/persist guidance is what the `/memory` step uses.
+  Mechanically this is the existing skill-resolution/override path keyed on the active provider (project
+  `.harness/skills/` > harness `skills/`, ST-060/061), but the *model* is uniform selection: one skill
+  per provider, pick by installed provider.
+- **Pros:** Every provider is self-describing (PRD KD-3, FR-4); the default is not a special case — it
+  is just "the skill for `local`"; switching providers switches skills (FR-10); guidance stays prose
+  for the agent (FR-3-safe).
+- **Cons:** Depends on skill-resolution (ST-060/061) being able to key on the *runtime-resolved* active
+  provider, not a static project file (a small resolver extension); a provider that ships no skill must
+  degrade safely (below).
 
 ### Option B: One central, source-aware `/memory` skill with a per-provider section it self-selects
 - **How:** The single skill contains guidance blocks for every known provider and picks the active
@@ -51,30 +66,33 @@ Forces:
 
 ## Decision
 
-Adopt **Option A**: **per-provider guidance is bundled with the provider plugin and activated through
-the existing skill-override mechanism, keyed to the resolved active provider.**
+Adopt **Option A**: **a memory-guidance skill exists for every provider (default included), and the
+harness selects the skill matching the installed/active provider.**
 
-- The **default** provider ships no override; `skills/memory/SKILL.md` *is* its guidance, unchanged
-  (FR-9).
-- A **non-default** provider's `plugin.yml` references a guidance document; when that provider is
-  active (per ADR-016 resolution), its guidance is in effect for recall/persist (FR-4).
-- **Missing/incomplete guidance → defined safe degradation (FR-4 negative path):** if an active
-  non-default provider supplies no usable guidance, the harness surfaces a clear warning and the
-  `/memory` skill falls back to **default-platform recall/persist semantics** (read-and-judge against
-  the available store) rather than attempting unguided, possibly-incorrect provider operations. This is
-  a known, safe degradation — never silent misbehavior.
-- Activation keys on the **resolved active provider** (ADR-016), so switching providers switches
-  guidance for subsequent memory operations (FR-10 "switching does not break behaviors").
+- **Default = `local`'s skill:** today's `skills/memory/SKILL.md` is simply the skill selected when the
+  active provider is `local` — behavior-identical to today (FR-9), no special-casing.
+- **Non-default = the provider's own skill:** a non-default provider ships its memory-guidance skill
+  (bundled with its plugin, referenced from `plugin.yml`, present once installed). When that provider is
+  the resolved active one (ADR-016), its skill's recall/persist guidance is in effect (FR-4).
+- **Selection keys on the resolved active provider** (ADR-016), so switching providers switches the
+  selected skill for subsequent memory operations (FR-10 "switching does not break behaviors").
+- **Missing skill for an active provider → defined safe degradation (FR-4 negative path):** if the
+  active provider has no usable guidance skill, the harness surfaces a clear warning and the `/memory`
+  step falls back to **default (`local`) recall/persist semantics** (read-and-judge against the
+  available store) rather than attempting unguided, possibly-incorrect provider operations — a known,
+  safe degradation, never silent misbehavior.
 
-Why: it makes each provider a self-describing unit (PRD KD-3, FR-4) and reuses the harness's own
-skill-override path for varying guidance, while keeping the default and FR-3 invariant untouched.
+Why: a skill-per-provider with selection-by-active-provider makes every provider self-describing
+(PRD KD-3, FR-4), removes the default-is-special asymmetry, and reuses the harness's own
+skill-resolution path — while keeping the FR-3 invariant (guidance is prose for the agent, no harness
+retrieval logic) untouched.
 
 ## Consequences
 
 ### Positive
-- Providers are self-describing; adding one needs no edit to the core `/memory` skill (FR-4, KD-3).
-- Default behavior is literally unchanged (FR-9).
-- Missing-guidance degradation is explicit and safe (FR-4 negative path).
+- Every provider is self-describing; adding one ships its own skill, no edit to a central skill (FR-4, KD-3).
+- The default is not special — it is `local`'s skill, behavior unchanged (FR-9).
+- Missing-skill degradation is explicit and safe (FR-4 negative path).
 
 ### Negative
 - Depends on the skill-override mechanism (ST-060/061); if that isn't ready, a thin transport
@@ -83,9 +101,9 @@ skill-override path for varying guidance, while keeping the default and FR-3 inv
   a small extension to the override resolver (key on active provider).
 
 ### Follow-up Actions
-- [ ] Define the `plugin.yml` `guidance` reference for `memory_provider` plugins (ADR-015).
-- [ ] Extend skill-override resolution to key on the resolved active `memory_provider` (ADR-016),
-      or specify the conductor-injection transport (Option C) if override-by-active-provider isn't
-      available yet.
-- [ ] Specify the missing-guidance safe-degradation path in the `/memory` skill.
-- [ ] Confirm the default provider supplies no override and the base skill is unchanged (FR-9 parity).
+- [ ] Define how each `memory_provider` plugin ships its guidance skill (the `plugin.yml` reference, ADR-015).
+- [ ] Treat `skills/memory/SKILL.md` as the `local` provider's skill (no behavior change, FR-9).
+- [ ] Extend skill resolution to **select the skill matching the resolved active `memory_provider`**
+      (ADR-016), or specify the conductor-injection transport (Option C) if select-by-active-provider
+      isn't available yet.
+- [ ] Specify the missing-skill safe-degradation path (fall back to `local` semantics + warning).

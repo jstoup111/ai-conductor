@@ -1,7 +1,7 @@
 # ADR 020: Safe, Reversible Migration of Existing Memory
 
 **Date:** 2026-06-29
-**Status:** DRAFT
+**Status:** APPROVED
 **Deciders:** James (operator), Claude (architecture-review)
 
 ## Context

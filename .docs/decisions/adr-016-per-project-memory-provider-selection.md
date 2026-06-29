@@ -1,7 +1,7 @@
 # ADR 016: Per-Project Memory Provider Selection
 
 **Date:** 2026-06-29
-**Status:** DRAFT
+**Status:** APPROVED
 **Deciders:** James (operator), Claude (architecture-review)
 
 ## Context
@@ -39,8 +39,16 @@ Forces:
 
 ## Decision
 
-Add a single **`memory_provider`** field to `HarnessConfig`, set in `.ai-conductor/config.yml`,
-mirroring `llm_provider`/`ui_renderer`.
+Add a single **`memory_provider`** field to `HarnessConfig`, set in the project's **harness config
+YAML** (`.ai-conductor/config.yml`), mirroring `llm_provider`/`ui_renderer`.
+
+**The harness config YAML is guaranteed present in every project** *(operator decision, 2026-06-29)*.
+Rather than treating "no config file" as an implicit default, **bootstrap/project setup ensures the
+harness YAML exists in any project** and seeds it with at least the default `memory_provider`. So the
+memory choice always has an explicit, in-file home — discoverable and diffable — and the default is a
+written value, not the absence of a file. A genuinely absent or unreadable file still resolves safely
+to `local` (the resolution contract below is total regardless), but the normal state is that the YAML
+is there.
 
 Resolution contract (run start, total function):
 1. Read `memory_provider`. **Absent / empty / malformed → `local`** (the built-in default), with a
@@ -75,6 +83,8 @@ error handling.
 
 ### Follow-up Actions
 - [ ] Add `memory_provider?: string` to `HarnessConfig` with default resolution to `local`.
+- [ ] Bootstrap/project setup ensures the harness config YAML exists in any project and seeds an
+      explicit default `memory_provider` (so the choice always has an in-file home).
 - [ ] Implement the run-start resolver (the 4-step total function above), emitting at most one warning
       per run for a bad/unavailable selection (bounded per ADR-021).
 - [ ] Decide the surfacing mechanism for the active provider to skills (session-start hook vs.

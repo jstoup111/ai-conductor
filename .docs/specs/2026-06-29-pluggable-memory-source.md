@@ -8,9 +8,9 @@
 > the command/config surface) are deliberately **out** of the PRD; they are weighed as trade-offs in
 > architecture-review and recorded as ADRs.
 
-> **Earlier drafts superseded.** Two prior versions are archived (`SUPERSEDED-…worktree-shared-memory`,
-> `SUPERSEDED-…pluggable-memory-backend`): the first reduced the problem to a storage trick, the second
-> put retrieval logic in the harness. Both were wrong layers — see Key Decisions.
+> **Earlier drafts superseded.** Two prior approaches were rejected as wrong layers: one reduced the
+> problem to a storage trick, the other put retrieval logic in the harness. This PRD corrects both —
+> see Key Decisions.
 
 ## Problem / Background
 

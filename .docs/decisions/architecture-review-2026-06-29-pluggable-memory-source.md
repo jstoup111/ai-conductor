@@ -7,7 +7,8 @@
 (reconcile-on-reconnect, engineer-store Non-Goal); current-state diagrams
 `.docs/architecture/2026-06-29-memory-subsystem-current-state.md` and
 `.docs/architecture/sequences/memory-recall-persist.md`.
-**Verdict:** APPROVED WITH CONDITIONS
+**Verdict:** APPROVED WITH CONDITIONS — **all 7 ADRs APPROVED by operator 2026-06-29**
+(ADR-016, 018, 019 revised per operator feedback before approval; see notes in each ADR)
 
 ## Summary
 
@@ -89,10 +90,10 @@ by mandatory negative-path tests carried as conditions.
 | ADR | Open Q / FR | Decision |
 |---|---|---|
 | **015** | Q1 / FR-3,4,8 | `memory_provider` plugin kind; default=built-in local; non-default=agent-queried MCP; harness resolve-and-expose only. |
-| **016** | Q6 / FR-1,2 | `memory_provider` field in `.ai-conductor/config.yml`; total resolver; bad/unavailable → `local`. |
+| **016** | Q6 / FR-1,2 | `memory_provider` field in the **harness config YAML** (`.ai-conductor/config.yml`), **guaranteed present in every project** (bootstrap seeds it); total resolver; bad/unavailable → `local`. *(revised)* |
 | **017** | Q3 / FR-5,9,10 | Canonical `~/.ai-conductor/memory/<key>/harness/`; `.memory/` → symlink; branch-independent; file-per-entry. |
-| **018** | Q2 / FR-6,7,8 | `conduct memory adopt|remove|status`; idempotent via `claude mcp get` + targeted config write; creds non-committed. |
-| **019** | Q5 / FR-4,9 | Per-provider guidance bundled with plugin, activated via skill-override keyed to active provider; missing → safe degradation. |
+| **018** | Q2 / FR-6,7,8 | **`conduct memory add <provider> \| remove \| status`** (verb is `add`, not `adopt`); idempotent via `claude mcp get` + targeted config write; creds non-committed. *(revised)* |
+| **019** | Q5 / FR-4,9 | **A memory-guidance skill per provider (default included); harness selects the skill matching the installed/active provider**; missing skill → safe degradation to `local`. *(revised)* |
 | **020** | Q4 / FR-11,12 | Copy-verify-swap + one-time backup; non-destructive on failure; detect-and-skip; one-time reverse. |
 | **021** | — / FR-13,13a,13b | Default store as write-fallback sink; idempotent one-way reconcile; bounded warnings; never block. |
 
@@ -112,7 +113,7 @@ by mandatory negative-path tests carried as conditions.
 
 ## Next Step
 
-All seven ADRs are **DRAFT**. Per the ADR approval lifecycle (HARD GATE), they must be reviewed and
-APPROVED before `/plan` and `/writing-system-tests`. Present ADRs 015–021 for approval; on approval,
-flip each to `Status: APPROVED`, then proceed to `/plan` grounded in these decisions and carrying
-conditions C1–C8.
+All seven ADRs are **APPROVED** (operator, 2026-06-29) — the ADR approval hard gate is satisfied.
+ADR-016, ADR-018, and ADR-019 were revised per operator feedback before approval (harness-YAML-always-
+present; `add` verb; skill-per-provider selection). Proceed to **`/plan`**, grounded in ADRs 015–021
+and carrying conditions C1–C8 into the task plan.
