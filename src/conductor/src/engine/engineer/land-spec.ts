@@ -31,6 +31,7 @@ import { TargetPathMissingError } from './target.js';
 import { AuthoringGuard } from './authoring-guard.js';
 import { deriveDefaultBranch, chooseBranchName, slugify } from './authoring.js';
 import { isStoriesApproved, hasDraftAdr, parseComplexityTier } from '../artifacts.js';
+import { writeIntakeMarker } from './intake-marker.js';
 
 const execFile = promisify(execFileCb);
 
@@ -58,6 +59,7 @@ export interface LandSpecResult {
 export async function landSpec(
   target: LandSpecTarget,
   idea: string,
+  sourceRef?: string,
 ): Promise<LandSpecResult> {
   const repoPath = target.canonicalPath;
 
@@ -205,10 +207,15 @@ export async function landSpec(
   try {
     await execFile('git', ['checkout', '-b', branch, defaultBranch], { cwd: repoPath });
 
+    // Persist the intake origin alongside the spec so it survives the spec-PR
+    // merge and reaches the daemon. No-op for hand-authored specs (no sourceRef).
+    await writeIntakeMarker(repoPath, slug, sourceRef, guard);
+
     // Stage the whole `.docs` tree: the engineer authors specs/stories/plans +
-    // complexity + (non-Small) conflicts/architecture/decisions, and the
-    // dirty-tree guard above permits only `.docs/` untracked files — so this
-    // commits exactly the DECIDE artifacts and leaves a clean tree on checkout.
+    // complexity + (non-Small) conflicts/architecture/decisions + (intake) the
+    // origin marker, and the dirty-tree guard above permits only `.docs/`
+    // untracked files — so this commits exactly the DECIDE artifacts and leaves a
+    // clean tree on checkout.
     await execFile('git', ['add', '.docs'], {
       cwd: repoPath,
     });
