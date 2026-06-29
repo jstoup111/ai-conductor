@@ -163,8 +163,9 @@ a *visual* (not raw Mermaid), the artifact-review path renders them:
   hook and logs any returned notice on the host's own channel (TUI-safe). `index.ts` wires the
   hook from the **merged** config (the preset is set user-level by `bin/install`).
 - **CLI** — `conduct render-diagrams <file>...` (`engine/render-cli.ts`) renders on demand.
-- **Opener** — `detectOpenerCommand` picks `wslview` → `explorer.exe` → `xdg-open` → `open`;
-  `defaultRenderDeps` runs it with a bounded timeout so the never-block contract rests on code.
+- **Opener** — `detectOpenerCommand` resolves per platform (macOS `open`, Linux `xdg-open`,
+  WSL `wslview`/`explorer.exe`); `defaultRenderDeps` runs it with a bounded timeout so the
+  never-block contract rests on code, not opener behavior.
 
 ### Rebase-on-latest (before finish)
 

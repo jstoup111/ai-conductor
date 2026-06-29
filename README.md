@@ -37,12 +37,13 @@ the prompt (or install later with `uv tool install -p 3.13 serena-agent`) to ski
 **Mermaid renderer.** `./bin/install` also offers a renderer for the architecture diagrams
 and ADRs the harness generates, so you review them as visuals (not raw Mermaid) at the
 approval gates. Pick a preset — `html` (default: a self-contained mermaid.js page opened in
-your browser; no Chromium, ideal on WSL2), `mmdc-png`/`mmdc-svg` (static images via
-[`@mermaid-js/mermaid-cli`](https://github.com/mermaid-js/mermaid-cli)), or `none`. The choice
-is stored as `mermaid_renderer` in `~/.ai-conductor/config.yml` and reused on every run; under
-`conduct-ts` diagrams render automatically when an artifact is presented for approval, or run
-`conduct render-diagrams <file.md>...` on demand. With no renderer configured, diagrams fall
-back to raw Markdown — never a blocker.
+your default browser; no native dependencies, works anywhere), `mmdc-png`/`mmdc-svg` (static
+images via [`@mermaid-js/mermaid-cli`](https://github.com/mermaid-js/mermaid-cli)), or `none`.
+The choice is stored as `mermaid_renderer` in `~/.ai-conductor/config.yml` and reused on every
+run; under `conduct-ts` diagrams render automatically when an artifact is presented for
+approval, or run `conduct render-diagrams <file.md>...` on demand. The opener is detected per
+platform (macOS `open`, Linux `xdg-open`, WSL `wslview`/`explorer.exe`). With no renderer
+configured, diagrams fall back to raw Markdown — never a blocker.
 
 Verify:
 

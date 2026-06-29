@@ -33,8 +33,8 @@ Validated and typed exactly like `markdown_viewer`
 | `mmdc-svg` | SVG (mermaid-cli) | `mmdc` + Chromium | render each diagram → SVG, open | no |
 | `none` | disabled (raw Markdown) | none | skip — raw Markdown only | no |
 
-`html` is default: no native Chromium, opens in the Windows browser on WSL2 via
-`wslview`, zoomable. `mmdc-*` is opt-in and degrades gracefully (Story 5).
+`html` is default: no native dependencies, opens in the OS default browser on any
+platform, zoomable. `mmdc-*` is opt-in and degrades gracefully (Story 5).
 
 ### D3 — Platform opener (in TS)
 A helper detects, in order: `wslview` → `explorer.exe` (WSL) → `xdg-open` (Linux) →
@@ -124,7 +124,7 @@ the produced file path instead.
 - **F5.** `bin/install` covered by `test/test_harness_integrity.sh` `bash -n` sweep.
 
 ### Group G — Docs & release [FR-7]
-- **G1.** `README.md`: install section — renderer choice + presets; WSL2 `html` default.
+- **G1.** `README.md`: install section — renderer choice + presets; cross-platform `html` default.
 - **G2.** `src/conductor/README.md`: `render-diagrams` subcommand + `mermaid_renderer`
   config; cross-ref `md-viewer-presets.ts` parity.
 - **G3.** Skill docs: render-at-approval behavior in arch-diagram / arch-review.

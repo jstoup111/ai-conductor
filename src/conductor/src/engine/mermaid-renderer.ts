@@ -41,9 +41,10 @@ export interface RenderDeps {
   log: (msg: string) => void;
 }
 
-/** Pick the command that opens a produced artifact in the OS default app.
- *  WSL gets first-class treatment (open in the Windows browser/viewer). Returns
- *  null when nothing suitable is found — the caller then prints the path. */
+/** Pick the command that opens a produced artifact in the OS default app,
+ *  resolved per platform (macOS `open`, Linux `xdg-open`, WSL `wslview`/
+ *  `explorer.exe`). Returns null when nothing suitable is found — the caller
+ *  then prints the path. */
 export async function detectOpenerCommand(opts: {
   platform: NodeJS.Platform;
   isWsl: boolean;
@@ -87,9 +88,9 @@ function escapeHtml(s: string): string {
 
 function buildHtml(title: string, blocks: string[]): string {
   // Self-contained preview: Mermaid renders the blocks client-side. The script
-  // is loaded from a pinned CDN — on WSL2 this opens in the Windows browser,
-  // which has network access. Block source is HTML-escaped before embedding;
-  // Mermaid decodes the entities back when it reads each node's text content.
+  // is loaded from a pinned CDN, so the browser opening this page needs network
+  // access. Block source is HTML-escaped before embedding; Mermaid decodes the
+  // entities back when it reads each node's text content.
   const sections = blocks
     .map((b) => `<pre class="mermaid">\n${escapeHtml(b)}\n</pre>`)
     .join('\n');

@@ -4,8 +4,8 @@
 //
 // Render presets turn the Mermaid blocks inside a generated `.md` (architecture
 // diagrams, ADRs) into something visual for the human approval gate. `html` is
-// the default: it needs no native Chromium and opens in the OS browser (on WSL2,
-// via `wslview`), so it is the lowest-friction option for remote review. The
+// the default: it needs no native dependencies and opens in the OS default
+// browser on any platform, so it is the lowest-friction option everywhere. The
 // `mmdc-*` presets shell out to `@mermaid-js/mermaid-cli` and need Chromium.
 
 export type MermaidRendererMode = 'inline' | 'blocking' | 'external';
@@ -26,7 +26,7 @@ export const MERMAID_RENDERER_PRESETS: readonly MermaidRendererPreset[] = [
     args: ['{file}'],
     mode: 'external',
     label: 'HTML preview (browser)',
-    notes: 'Self-contained HTML rendered with mermaid.js, opened in the browser. No Chromium needed — best for WSL2/remote.',
+    notes: 'Self-contained HTML rendered with mermaid.js, opened in the default browser. No native dependencies — works on any platform.',
   },
   {
     name: 'mmdc-png',

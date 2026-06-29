@@ -33,8 +33,9 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   Generated architecture diagrams and DRAFT ADRs (Mermaid-in-Markdown) can now be reviewed as
   rendered visuals instead of raw Mermaid. `bin/install` offers a renderer choice mirroring the
   markdown-viewer flow — presets `html` (default; self-contained mermaid.js page opened in the
-  browser, no Chromium, best for WSL2), `mmdc-png`/`mmdc-svg` (via `@mermaid-js/mermaid-cli`), and
-  `none` — persisting it as `mermaid_renderer.{preset,command,args,mode}` in
+  default browser, no native dependencies, works anywhere), `mmdc-png`/`mmdc-svg` (via
+  `@mermaid-js/mermaid-cli`), and `none` — persisting it as
+  `mermaid_renderer.{preset,command,args,mode}` in
   `~/.ai-conductor/config.yml`; `install --check` reports its status. At the conduct-ts approval
   gate, `reviewArtifacts` renders a reviewed file's diagrams (after showing the raw Markdown as an
   always-present fallback) via the merged-config preset; a new `conduct render-diagrams <file>...`

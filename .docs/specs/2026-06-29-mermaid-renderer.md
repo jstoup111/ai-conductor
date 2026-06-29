@@ -32,10 +32,10 @@ and especially bad when driving remotely.
 
 ## Users
 
-- **Primary:** The harness operator (James) reviewing/approving architecture
-  artifacts at a gate — often remotely, on WSL2.
-- **Secondary:** Any harness user on macOS/Linux who wants rendered diagrams
-  during architecture approval.
+- **Primary:** Any harness operator reviewing/approving architecture artifacts
+  at a gate, on any platform (macOS, Linux, or WSL).
+- **Motivating case:** remote/WSL review, where there is no convenient way to see
+  a rendered diagram — but the feature is not WSL-specific.
 
 ## Goals
 

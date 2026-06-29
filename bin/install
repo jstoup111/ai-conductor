@@ -496,7 +496,7 @@ MD_VIEWER_PRESETS=(
 # src/conductor/src/engine/mermaid-renderer-presets.ts. Keep in sync.
 # Columns: key | label | command | args | mode  (command empty = no tool needed)
 MERMAID_RENDERER_PRESETS=(
-  "html|HTML preview (browser, no Chromium — best for WSL2)||{file}|external"
+  "html|HTML preview (browser, no native deps — works anywhere)||{file}|external"
   "mmdc-png|PNG images (mermaid-cli, needs Chromium)|mmdc|-i {file} -o {out}|external"
   "mmdc-svg|SVG images (mermaid-cli, needs Chromium)|mmdc|-i {file} -o {out}|external"
   "none|disabled (raw Markdown)||{file}|external"
