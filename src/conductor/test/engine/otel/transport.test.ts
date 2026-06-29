@@ -144,5 +144,29 @@ describe('buildExporters', () => {
       const e2 = buildExporters(r2 as Extract<typeof r2, { enabled: true }>);
       expect(e1.spanExporter).not.toBe(e2.spanExporter);
     });
+
+    it('FileMetricExporter early-exits on empty scopeMetrics without touching the filesystem', async () => {
+      const filePath = join(pipelineDir, 'should-not-exist.jsonl');
+      const resolved = resolveOtelConfig(
+        { otel: { exporter: 'file', file: filePath } },
+        pipelineDir,
+      );
+      const exporters = buildExporters(resolved as Extract<typeof resolved, { enabled: true }>);
+
+      // Build an empty ResourceMetrics (no scopeMetrics)
+      const emptyMetrics = {
+        resource: { attributes: {} } as unknown as import('@opentelemetry/sdk-metrics').ResourceMetrics['resource'],
+        scopeMetrics: [],
+      } satisfies import('@opentelemetry/sdk-metrics').ResourceMetrics;
+
+      const result = await new Promise<{ code: number; message?: string }>((resolve) => {
+        exporters.metricExporter.export(emptyMetrics, resolve);
+      });
+
+      expect(result.code).toBe(0); // ExportResultCode.SUCCESS
+      // The parent directory should NOT have been created (early exit skips ensureDir)
+      const { existsSync } = await import('fs');
+      expect(existsSync(filePath)).toBe(false);
+    });
   });
 });

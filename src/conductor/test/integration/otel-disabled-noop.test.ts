@@ -90,13 +90,9 @@ describe('FR-1: no-op when disabled', () => {
     expect(stripTs(withDisabled)).toEqual(stripTs(baseline));
   });
 
-  it('no OtelVisualizer is constructed when otel is absent (constructor spy)', async () => {
-    // Import OtelVisualizer — it doesn't exist yet in Batch 1; when it does,
-    // this test will spy on its constructor. For now we verify that disabled
-    // config correctly returns enabled=false, which is the gate in index.ts.
-    const resolved = resolveOtelConfig({}, '/pipeline');
-    expect(resolved.enabled).toBe(false);
-    // The wiring in index.ts checks `resolved.enabled` before constructing anything
-    // (asserted structurally by the wiring code in index.ts)
-  });
+  it.todo(
+    'no OtelVisualizer is constructed when otel is absent (constructor spy) — ' +
+    'lands in the batch that introduces OtelVisualizer; spy on its constructor ' +
+    'and assert call count is 0 when buildVisualizers() receives a disabled config',
+  );
 });

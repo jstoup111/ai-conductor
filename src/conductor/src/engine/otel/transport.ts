@@ -118,6 +118,10 @@ class FileMetricExporter implements PushMetricExporter {
     resultCallback: (result: { code: number; message?: string }) => void,
   ): void {
     try {
+      if (metrics.scopeMetrics.length === 0) {
+        resultCallback({ code: ExportResultCode.SUCCESS });
+        return;
+      }
       this.ensureDir();
       const bytes = JsonMetricsSerializer.serializeRequest(metrics);
       if (bytes) {
