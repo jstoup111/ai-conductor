@@ -72,9 +72,10 @@ The conductor checks artifact state, tells you what to run next, and blocks when
 It walks you through all 18 steps:
 
 ```
-/bootstrap → /brainstorm → /stories → /conflict-check → /plan → /architecture-diagram
-→ /architecture-review → /writing-system-tests → /pipeline → /manual-test
-→ /prd-audit → /architecture-review --as-built → /retro → /finish
+/bootstrap → /explore (track) → /prd (product track) → /architecture-diagram
+→ /architecture-review → /stories → /conflict-check → /plan
+→ /writing-system-tests → /pipeline → /manual-test
+→ /prd-audit (product track) → /architecture-review --as-built → /retro → /finish
 ```
 
 ### Automated

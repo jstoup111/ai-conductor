@@ -12,12 +12,21 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
-- **Design + ADRs for the DECIDE pipeline restructure (docs-only — no behavior change yet).** Lands
-  the design doc, technical stories, architecture diagram, and ADR-015–018 under `.docs/` for the
-  planned `brainstorm → explore + prd` split, operator-confirmed product/technical **tracks**
-  (conditional PRD), and **architecture-before-stories** reordering with convergent root-routed
-  kickbacks. Supersedes the approach in PR #142 (product-only PRD). Implementation lands in a
-  follow-up PR; nothing in the runtime flow changes from this PR alone.
+- **DECIDE pipeline restructure — `explore`/`prd` split, product/technical tracks, architecture
+  before stories (ADR-015–018).** `brainstorm` is split into **`explore`** (advisory, always-runs:
+  context + approaches + the operator-confirmed product/technical **track**, ephemeral notes →
+  `.pipeline/`, decision → `.memory/`) and **`prd`** (gating, product-only PRD with a product-only
+  audit gate + external-constraint carve-out — absorbs PR #142). The DECIDE order is now
+  **explore → complexity → prd → architecture-diagram → architecture-review → stories →
+  conflict-check → plan**: architecture precedes stories, so architecture-induced failure modes
+  become negative-path stories, and the PRD stays product-only (the *how* resolves in
+  architecture-review as ADRs). The **track** is persisted to `.docs/track/<slug>.md` (`parseTrack`,
+  default `product`): on the **technical** track `prd` *and* `prd-audit` are skipped and acceptance
+  criteria live in stories (Model X — stories are always present, so the BUILD/daemon path is
+  unchanged). `land-spec` requires a PRD only on the product track; the daemon reads the track into
+  `BacklogItem.track`. `conflict-check` root-routes a blocking conflict to its cause
+  (`prd` | `architecture` | `stories`); `architecture-review` re-opens in a bounded amendment mode.
+  Persisted state is migrated (`brainstorm` ⇒ `explore` + `prd`) idempotently. Supersedes PR #142.
 
 ### Fixed
 

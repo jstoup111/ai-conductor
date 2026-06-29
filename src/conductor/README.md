@@ -106,7 +106,7 @@ by **gate verdicts** instead of a fixed order:
   loop** (the error is flushed to state and converted to a HALT so a supervising daemon
   classifies it as `halted` — worktree kept, retryable — never `error` with lost state).
 - **Fresh session per step** — with `freshContextPerStep` (daemon/auto only; interactive
-  `/conduct` leaves it off so the brainstorm→stories→plan design session keeps its
+  `/conduct` leaves it off so the explore→prd→…→stories→plan design session keeps its
   context), the LLM session is reset before **every** executed step in the loop
   (Ralph-style; context never bloats across the loop), while a step's own retries resume
   the same session. The reset also fires before the **first** step, which discards any
