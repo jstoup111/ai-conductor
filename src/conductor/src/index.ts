@@ -46,7 +46,7 @@ import type { LLMProvider } from "./execution/llm-provider.js";
 import type { UISubscriber } from "./ui/types.js";
 import { detectRegistryCommand, dispatchRegistry } from './engine/registry-cli.js';
 import { detectEngineerCommand, dispatchEngineer } from './engine/engineer-cli.js';
-import { detectDaemonCommand } from './engine/daemon-command.js';
+import { detectDaemonCommand, detectDaemonSupervisorCommand } from './engine/daemon-command.js';
 import {
   detectDaemonObserveCommand,
   dispatchDaemonObserve,
@@ -158,6 +158,18 @@ async function main(): Promise<void> {
   const daemonObserveCmd = detectDaemonObserveCommand(process.argv);
   if (daemonObserveCmd) {
     const code = await dispatchDaemonObserve(daemonObserveCmd);
+    process.exit(code);
+  }
+
+  // Daemon management verbs (start / stop / restart / connect / debug) route to
+  // the Supervisor port, NOT to a daemon run. Dispatched after observability but
+  // BEFORE the daemon run command so management verbs are never mistaken for a
+  // launch. dispatchDaemonSupervisor is imported lazily to keep the daemon-tmux
+  // runtime (spawnSync, crypto) out of non-daemon invocations.
+  const daemonSupervisorCmd = detectDaemonSupervisorCommand(process.argv);
+  if (daemonSupervisorCmd) {
+    const { dispatchDaemonSupervisor } = await import('./engine/daemon-supervisor-cli.js');
+    const code = await dispatchDaemonSupervisor(daemonSupervisorCmd);
     process.exit(code);
   }
 
