@@ -200,3 +200,61 @@ describe('B8: memoryAdd idempotent', () => {
     expect(second.changed).toBe(false);
   });
 });
+
+// ═════════════════════════════════════════════════════════════════════════════
+// B9: memoryAdd missing credentials → notice, atomic (no half-config, no secret)
+// ═════════════════════════════════════════════════════════════════════════════
+describe('B9: memoryAdd missing credentials → notice + atomic', () => {
+  it('add without required credentials leaves config unchanged and wires no MCP', async () => {
+    await seedConfig(projectRoot);
+    const mcp = makeMcpStub();
+    const reg = makeRegistry({
+      name: 'secure',
+      requiredEnv: ['MEM_TEST_TOKEN'],
+      mcp: { name: 'memory-secure', command: 'sec-server', args: [] },
+    });
+    delete process.env.MEM_TEST_TOKEN;
+
+    const before = await readRaw(projectRoot);
+    const result = await memoryAdd({
+      projectRoot,
+      provider: 'secure',
+      registry: reg,
+      mcp: mcp.runner,
+      env: {},   // explicitly no credentials
+    });
+
+    expect(result.ok).toBe(false);
+    expect(String(result.notice ?? '')).toMatch(/credential/i);
+    // Atomic: config is byte-for-byte unchanged
+    const after = await readRaw(projectRoot);
+    expect(after).toBe(before);
+    const cfg = await readParsed(projectRoot);
+    expect(cfg.memory_provider ?? undefined).toBeUndefined();
+    // No MCP call attempted
+    expect(mcp.addCount('memory-secure')).toBe(0);
+  });
+
+  it('successful add with credentials never writes the secret value to config', async () => {
+    await seedConfig(projectRoot);
+    const mcp = makeMcpStub();
+    const reg = makeRegistry({
+      name: 'secure',
+      requiredEnv: ['MEM_TEST_TOKEN'],
+      mcp: { name: 'memory-secure', command: 'sec-server', args: [] },
+    });
+    const SECRET = 'tok-super-secret-9a3f';
+
+    const result = await memoryAdd({
+      projectRoot,
+      provider: 'secure',
+      registry: reg,
+      mcp: mcp.runner,
+      env: { MEM_TEST_TOKEN: SECRET },
+    });
+
+    expect(result.ok).toBe(true);
+    const raw = await readRaw(projectRoot);
+    expect(raw).not.toContain(SECRET);
+  });
+});
