@@ -12,6 +12,15 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- **`conduct render-diagrams --check <file>...` syntax-checks Mermaid blocks at authoring time.**
+  It parse-checks every diagram (rendering each with `mmdc` but not opening it) and **exits
+  non-zero on a syntax error**, printing the file, block index, and parse-error line. Unlike the
+  render path — which never-fails so a missing tool can't block the approval gate — the check
+  distinguishes an author error (fail) from a missing `mmdc` (skip, exit 0), so it's a real gate
+  that still no-ops on a browser-less CI box. The `architecture-diagram` skill now runs it before
+  the approval gate, and documents a **guillemet placeholder convention** (`«slug»`, not `<slug>`
+  / `&lt;slug&gt;` / `{slug}`) to avoid the angle-bracket trap that silently broke a sequence
+  diagram in a recent spec. New `checkDiagramsForFile` in `mermaid-renderer.ts`.
 - `/bootstrap` now sets up git end-to-end for **new/fresh** projects (new Step 10a, run after
   the smoke test). It forces the default branch to `main`, makes a single seed commit when there
   is no history yet, configures an `origin` remote (`gh repo create --private --source=.` when
@@ -23,6 +32,14 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- **Repaired 6 silently-broken Mermaid diagrams** across 5 architecture/sequence docs that the
+  new `--check` surfaced (they were falling back to raw text in review). Root causes: a `;`
+  inside `sequenceDiagram` message/`Note` labels (Mermaid reads it as a statement separator), raw
+  `<feature>` / `<slug>` angle-bracket placeholders in sequence labels (the `>` tokenizes as an
+  arrow), a dotted link whose `.`-containing label `-.9.3b.->` confused the link lexer (now
+  quoted), and a participant literally named `LOOP` that collided with the `loop` keyword (renamed
+  `ELoop`). Also fixed `extractMermaidBlocks` to require a fenced ` ```mermaid ` to **start a
+  line**, so a mid-sentence prose mention no longer feeds prose to the renderer as a fake diagram.
 - Daemon `needs-remediation` escalation now **upserts** its failure comment instead of
   appending a new one on every HALT (#159). The comment carries a hidden marker
   (`<!-- conductor:needs-remediation -->`); on a repeat HALT the existing comment is edited

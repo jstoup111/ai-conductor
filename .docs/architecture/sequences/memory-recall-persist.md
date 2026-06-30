@@ -21,9 +21,9 @@ sequenceDiagram
     Hook->>Store: read index.md and count entries
     Hook-->>Agent: inject index summary into context
     Note over Agent: Recall Protocol - hard gate
-    Note over Agent,Active: future - resolve active provider; if non-default, recall from it via MCP
+    Note over Agent,Active: future - resolve active provider, if non-default, recall from it via MCP
     Agent->>Store: read index.md
-    Agent->>Store: read relevant entries; agent judges relevance
+    Agent->>Store: read relevant entries, agent judges relevance
     Agent->>Agent: staleness check
     Agent-->>CC: surface Recalled and Stale
 ```
@@ -41,7 +41,7 @@ sequenceDiagram
     Agent->>Store: today - write categorized entry and update index.md
     Note over Agent,Active: future - write targets the active provider
     Active-->>Agent: future - write fails, platform unavailable
-    Agent->>Store: future FR-13a - save to default store and warn; not lost
+    Agent->>Store: future FR-13a - save to default store and warn, not lost
     Active-->>Store: future FR-13b - on reconnect, reconcile fallback into active
     Agent->>Hook: at Stop, reminder counts new entries
 ```

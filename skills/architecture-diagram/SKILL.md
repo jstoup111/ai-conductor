@@ -64,6 +64,15 @@ Use appropriate Mermaid diagram types:
 - Sequences → `sequenceDiagram`
 - ERD → `erDiagram`
 
+**Placeholder notation (avoids a silent render failure).** For a variable part of a
+label (a slug, branch, id), use **guillemets**: `spec/«slug»`, `«default»`. Do **not** use:
+- `<slug>` or the entities `&lt;slug&gt;` — the `>` is tokenized as an arrow and **breaks the
+  `sequenceDiagram` parser** (the whole diagram then fails to render and falls back to raw text).
+- `{slug}` — `{` starts a diamond **node** in `graph`/`flowchart`, so it breaks those.
+
+Guillemets `« »` render as plain text in every Mermaid diagram type, so they are the one safe,
+consistent choice across sequence and flowchart labels.
+
 ## Practices
 
 ### 1. Bootstrap Generation
@@ -96,6 +105,14 @@ diagrams. Use the inventory from bootstrap Step 4 — do not re-scan.
 
 For **new/fresh projects**, generate skeleton diagrams with placeholder components from the
 scaffold output. These populate as the design develops.
+
+**Before presenting, syntax-check every diagram.** Run
+`conduct render-diagrams --check <file.md>...` on each file you wrote or edited. It parse-checks
+every Mermaid block and **exits non-zero on a syntax error** (e.g. the angle-bracket trap above),
+printing the offending file, block, and parse-error line. Fix any reported error and re-run until
+it passes **before** showing the diagrams for approval — a diagram that fails to render is not
+done. (If `mmdc` isn't installed the check skips cleanly with exit 0; it never false-fails on an
+environment without a browser.)
 
 Present all diagrams to the engineer for validation before proceeding.
 
