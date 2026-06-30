@@ -7,7 +7,7 @@ import { promisify } from 'util';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RED acceptance specs for Slice 1a — Durable Default Memory: the canonical,
-// branch-independent shared store and the `.memory/` symlink (ADR-017,
+// branch-independent shared store and the `.memory/` symlink (adr-2026-06-29-shared-memory-store-placement-and-durability,
 // conditions C4 / C8).
 //
 // Stories (.docs/stories/pluggable-memory-1a-durable-default-memory.md):

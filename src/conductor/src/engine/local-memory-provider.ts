@@ -1,9 +1,9 @@
 /**
- * Built-in local memory provider (ADR-015, FR-8/FR-9).
+ * Built-in local memory provider (adr-2026-06-29-memory-provider-plugin-and-agent-queried-integration, FR-8/FR-9).
  *
  * The `local` provider is the default memory_provider: it backs memory with the
  * project-local `.memory/` directory (a symlink to the canonical shared store
- * after migration — ADR-017). It requires no MCP server, no service, and no
+ * after migration — adr-2026-06-29-shared-memory-store-placement-and-durability). It requires no MCP server, no service, and no
  * credentials (FR-8). Recall is performed by the agent reading the store and
  * judging relevance; the harness contains NO search, ranking, or relevance logic
  * for this provider (FR-3 invariant).

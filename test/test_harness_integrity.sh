@@ -227,7 +227,7 @@ for skill_file in "${HARNESS_DIR}"/skills/*/SKILL.md; do
 done
 
 # ── 8. FR-3 invariant — no harness-side memory retrieval logic ─────────────
-# ADR-015 / FR-3: recall is performed by the LLM reading the store and
+# adr-2026-06-29-memory-provider-plugin-and-agent-queried-integration / FR-3: recall is performed by the LLM reading the store and
 # judging relevance. The harness must contain NO embedding, cosine-similarity,
 # vector-search, or relevance/rank-scoring logic for the memory subsystem.
 # Patterns are stored in a variable so this file's own text is not matched.

@@ -83,10 +83,10 @@ ensure_pipeline_dir() {
   mkdir -p "${PIPELINE_DIR}"
 }
 
-# ── Memory store setup (ADR-017) ─────────────────────────────────────────────
+# ── Memory store setup (adr-2026-06-29-shared-memory-store-placement-and-durability) ─────────────────────────────────────────────
 # Invoke the canonical store setup via the conduct-ts CLI. This creates
 # ~/.ai-conductor/memory/<key>/harness/ and symlinks .memory/ to it, or
-# migrates an existing real .memory/ directory (ADR-020). Idempotent.
+# migrates an existing real .memory/ directory (adr-2026-06-29-safe-reversible-memory-migration). Idempotent.
 # Called once at bootstrap, before any Claude sessions touch .memory/.
 run_memory_store_setup() {
   local dir="${1:-${PROJECT_DIR}}"
@@ -1013,8 +1013,8 @@ run_bootstrap() {
   # (claude -p) to avoid context accumulation on large projects.
   # Handoff between steps is via file artifacts, not session context.
 
-  # Set up canonical memory store FIRST (ADR-017). If .memory/ is a real dir
-  # (legacy), migrateMemory runs copy-verify-swap (ADR-020). If absent or
+  # Set up canonical memory store FIRST (adr-2026-06-29-shared-memory-store-placement-and-durability). If .memory/ is a real dir
+  # (legacy), migrateMemory runs copy-verify-swap (adr-2026-06-29-safe-reversible-memory-migration). If absent or
   # already a symlink, ensureMemoryStore creates/confirms the canonical store.
   # This must happen before any Claude sub-step so they see a correct .memory/.
   run_memory_store_setup "${PROJECT_DIR}"

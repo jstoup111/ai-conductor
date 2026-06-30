@@ -414,7 +414,7 @@ pidfile path and the O_EXCL create flag stay confined to `daemon-lock.ts`
 (`test/engine/daemon-lock-boundary.test.ts`); the log module reuses the exported
 `daemonDir()` and never re-encodes the pidfile.
 
-### Pluggable memory provider (ADR-015/ADR-016/ADR-017)
+### Pluggable memory provider (adr-2026-06-29-memory-provider-plugin-and-agent-queried-integration/adr-2026-06-29-per-project-memory-provider-selection/adr-2026-06-29-shared-memory-store-placement-and-durability)
 
 The `memory_provider` config field selects which provider backs `.memory/`.
 
@@ -424,7 +424,7 @@ memory_provider: local    # default — no install needed
 ```
 
 **Built-in `local` provider:** The harness creates a durable, per-project canonical store at
-`~/.ai-conductor/memory/<key>/harness/` and symlinks `.memory/` in the project to it (ADR-017).
+`~/.ai-conductor/memory/<key>/harness/` and symlinks `.memory/` in the project to it (adr-2026-06-29-shared-memory-store-placement-and-durability).
 The `<key>` is derived from the git origin URL (or common `.git` dir path), so all linked
 worktrees of the same project share one memory store and sibling-worktree writes are
 immediately visible across branches.
@@ -449,7 +449,7 @@ This guarantees the memory subsystem works with zero services, zero network, zer
 
 **Bootstrap setup:** `bin/conduct` calls `conduct-ts memory setup <dir>` before any
 bootstrap Claude sub-step. If `.memory/` is a real directory (legacy), `migrateMemory`
-runs the copy-verify-swap (ADR-020); otherwise `ensureMemoryStore` creates the canonical
+runs the copy-verify-swap (adr-2026-06-29-safe-reversible-memory-migration); otherwise `ensureMemoryStore` creates the canonical
 store idempotently. Future non-default providers integrate as MCP servers queried directly
 by the agent — the harness wires the provider selection but never searches on the agent's
 behalf.
@@ -459,7 +459,7 @@ Key modules:
 - `engine/memory-migrate.ts` — `migrateMemory` (safe copy-verify-swap)
 - `engine/local-memory-provider.ts` — `LocalMemoryProvider` plugin object
 - `engine/memory-cli.ts` — `conduct memory setup` subcommand
-- `engine/config.ts` → `resolveMemoryProvider` — run-start provider resolution (ADR-016)
+- `engine/config.ts` → `resolveMemoryProvider` — run-start provider resolution (adr-2026-06-29-per-project-memory-provider-selection)
 
 ### Engineer memory store (Phase 9.1)
 

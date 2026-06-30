@@ -29,7 +29,7 @@ export interface PluginManifest {
   harness_version?: string;
   capabilities?: Record<string, unknown>;
   /**
-   * Optional skill reference for LLM-facing guidance (memory_provider manifests; ADR-019).
+   * Optional skill reference for LLM-facing guidance (memory_provider manifests; adr-2026-06-29-per-provider-retrieval-guidance-location).
    * When present, the harness surfaces this path so the agent can query it for context
    * on how to interact with the provider. The harness does NOT parse or index the file.
    */

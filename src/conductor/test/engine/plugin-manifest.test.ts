@@ -229,7 +229,7 @@ capabilities:
       }
     });
 
-    // Task A2: memory_provider manifest loading (ADR-015)
+    // Task A2: memory_provider manifest loading (adr-2026-06-29-memory-provider-plugin-and-agent-queried-integration)
     it('accepts a memory_provider manifest with entrypoint only', () => {
       const tmpFile = join(tmpdir(), `memory-provider-${Date.now()}.yml`);
       const yaml = `kind: memory_provider\nname: my-memory\nentrypoint: server.js`;

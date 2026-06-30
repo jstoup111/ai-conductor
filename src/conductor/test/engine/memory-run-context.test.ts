@@ -3,7 +3,7 @@
  *
  * The resolved provider must be computed at run start (parallel to `llm_provider`)
  * and carried on `FeatureRunnerDeps` so every memory-using step sees the same
- * single active provider (ADR-016, FR-10, FR-1: exactly one active).
+ * single active provider (adr-2026-06-29-per-project-memory-provider-selection, FR-10, FR-1: exactly one active).
  *
  * This test verifies:
  *   - `FeatureRunnerDeps` exposes a `memoryProvider` field.
@@ -36,7 +36,7 @@ function stubDeps(memoryProvider: unknown): FeatureRunnerDeps {
   };
 }
 
-describe('A9: active memory provider on run context (ADR-016 / FR-10)', () => {
+describe('A9: active memory provider on run context (adr-2026-06-29-per-project-memory-provider-selection / FR-10)', () => {
   it('FeatureRunnerDeps accepts and exposes a memoryProvider field', () => {
     const sentinel = { name: 'local', kind: 'memory_provider' };
     const deps = stubDeps(sentinel);

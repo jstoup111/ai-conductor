@@ -7,7 +7,7 @@ import { promisify } from 'util';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RED acceptance specs for Slice 1a — safe, reversible migration of an existing
-// in-tree `.memory/` into the canonical shared store (ADR-020, condition C5).
+// in-tree `.memory/` into the canonical shared store (adr-2026-06-29-safe-reversible-memory-migration, condition C5).
 //
 // Stories (.docs/stories/pluggable-memory-1a-durable-default-memory.md):
 //   FR-11 Migration preserves all entries; reversible (one-time); verify-failure

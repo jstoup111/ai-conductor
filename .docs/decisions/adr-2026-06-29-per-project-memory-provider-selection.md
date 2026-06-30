@@ -1,4 +1,4 @@
-# ADR 016: Per-Project Memory Provider Selection
+# ADR: Per-Project Memory Provider Selection
 
 **Date:** 2026-06-29
 **Status:** APPROVED
@@ -60,7 +60,7 @@ Resolution contract (run start, total function):
 
 The resolved active provider is surfaced to memory-using steps (the memory step, recall in design
 steps, project setup) so they all act against one provider (FR-10), and its guidance is activated
-(ADR-019).
+(adr-2026-06-29-per-provider-retrieval-guidance-location).
 
 Why: reuses the one config surface operators already use for plugin choice, keeps "exactly one active"
 trivially true, and makes the safe-fallback behavior a property of resolution rather than scattered
@@ -76,7 +76,7 @@ error handling.
 
 ### Negative
 - The active-provider value must be threaded to skills (via a session-start hook or conductor context
-  injection); that plumbing is new (see ADR-019 follow-ups).
+  injection); that plumbing is new (see adr-2026-06-29-per-provider-retrieval-guidance-location follow-ups).
 - A committed config means a provider choice is shared with anyone cloning the repo; an operator using
   a personal external platform may prefer the user-level `~/.ai-conductor/config.yml` — both are
   supported by precedence, project overrides user.
@@ -86,7 +86,7 @@ error handling.
 - [ ] Bootstrap/project setup ensures the harness config YAML exists in any project and seeds an
       explicit default `memory_provider` (so the choice always has an in-file home).
 - [ ] Implement the run-start resolver (the 4-step total function above), emitting at most one warning
-      per run for a bad/unavailable selection (bounded per ADR-021).
+      per run for a bad/unavailable selection (bounded per adr-2026-06-29-memory-resilience-write-fallback-and-reconcile).
 - [ ] Decide the surfacing mechanism for the active provider to skills (session-start hook vs.
-      conductor context) — track with ADR-019.
+      conductor context) — track with adr-2026-06-29-per-provider-retrieval-guidance-location.
 - [ ] Document the field in `README.md` and `src/conductor/README.md` (Docs-track-features).

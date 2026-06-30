@@ -483,7 +483,7 @@ complexity:
     });
   });
 
-  // Task A4 (ADR-016): memory_provider config field
+  // Task A4 (adr-2026-06-29-per-project-memory-provider-selection): memory_provider config field
   describe('memory_provider config field', () => {
     it('accepts memory_provider: local and exposes it on the parsed config', () => {
       const result = validateConfig({ memory_provider: 'local' });
@@ -512,7 +512,7 @@ complexity:
     });
   });
 
-  // Task A10 (ADR-016 FR-1 negative): provider selection is per-project; no leakage.
+  // Task A10 (adr-2026-06-29-per-project-memory-provider-selection FR-1 negative): provider selection is per-project; no leakage.
   describe('A10: resolveMemoryProvider — per-project isolation, no leakage', () => {
     function registryWithLocal(provider: object): PluginRegistry {
       const reg = new PluginRegistry();

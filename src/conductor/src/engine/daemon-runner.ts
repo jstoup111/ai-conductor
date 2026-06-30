@@ -60,7 +60,7 @@ export interface FeatureRunnerDeps {
   /** LLM provider used to produce the `done`-feature retro narrative. */
   provider: LLMProvider;
   /**
-   * The resolved active memory provider for this run (ADR-016).
+   * The resolved active memory provider for this run (adr-2026-06-29-per-project-memory-provider-selection).
    * Computed once at run start via `resolveMemoryProvider` — all memory-using
    * steps see the same provider (FR-10). Optional so existing test helpers
    * that predate this field do not require updates.

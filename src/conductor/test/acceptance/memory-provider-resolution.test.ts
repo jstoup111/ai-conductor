@@ -8,7 +8,7 @@ import { PluginRegistry } from '../../src/engine/plugin-registry.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RED acceptance specs for Slice 1a — total, run-start resolution of the active
-// memory provider, defaulting to the built-in `local` (ADR-016, conditions
+// memory provider, defaulting to the built-in `local` (adr-2026-06-29-per-project-memory-provider-selection, conditions
 // C1 / C3), plus default-store category parity (FR-9).
 //
 // Stories (.docs/stories/pluggable-memory-1a-durable-default-memory.md):

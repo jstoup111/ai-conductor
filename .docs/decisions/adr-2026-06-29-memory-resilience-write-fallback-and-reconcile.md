@@ -1,4 +1,4 @@
-# ADR 021: Memory Resilience — Best-Effort, Write-Fallback & Reconcile-on-Reconnect
+# ADR: Memory Resilience — Best-Effort, Write-Fallback & Reconcile-on-Reconnect
 
 **Date:** 2026-06-29
 **Status:** APPROVED
@@ -13,13 +13,13 @@ lost. FR-13b (reconcile on reconnect): fallback entries held in the default loca
 **reconciled into the active platform once it is available again**, after which they recall normally;
 until reconcile, they are **not surfaced from the active platform** — a known, bounded gap. This was
 the explicit subject of conflict-check (memory note: "FR-13b reconcile-on-reconnect"). This behavior
-cuts across ADR-015 (provider integration) and ADR-017 (the default local store), so it gets its own
+cuts across adr-2026-06-29-memory-provider-plugin-and-agent-queried-integration (provider integration) and adr-2026-06-29-shared-memory-store-placement-and-durability (the default local store), so it gets its own
 decision record.
 
 Forces:
 - Memory is a side-channel; nothing about it may block the SDLC flow (FR-13, also a Non-Functional
   Requirement).
-- The **default local store** (ADR-017) is always available (zero-dependency), making it the natural
+- The **default local store** (adr-2026-06-29-shared-memory-store-placement-and-durability) is always available (zero-dependency), making it the natural
   **fallback sink** for writes the active provider rejects.
 - Reconcile is **one-directional** (fallback → active) and **idempotent** (re-running must not
   duplicate already-reconciled entries).
@@ -32,7 +32,7 @@ Forces:
   - **Recall failure (active unavailable):** surface a bounded warning, continue the run; recall what
     is available (nothing, or the default store if that is the active one). Never block (FR-13).
   - **Write failure (active rejects/unavailable):** write the entry to the **default local store**
-    (ADR-017 canonical store), tag it as a **pending-reconcile fallback entry**, surface a bounded
+    (adr-2026-06-29-shared-memory-store-placement-and-durability canonical store), tag it as a **pending-reconcile fallback entry**, surface a bounded
     warning. The entry is safe and not lost (FR-13a).
   - **Reconcile (active back online):** on the next run where the active provider is available, the
     agent **moves pending fallback entries into the active platform** (provider persist), then clears
@@ -74,7 +74,7 @@ and the pending bookkeeping.
 
 Why: it is the only option among the three that simultaneously satisfies "never block" (FR-13),
 "never lose" (FR-13a), and "self-heal" (FR-13b), and it does so by reusing the always-available default
-store ADR-017 already establishes.
+store adr-2026-06-29-shared-memory-store-placement-and-durability already establishes.
 
 ## Consequences
 

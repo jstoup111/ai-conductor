@@ -1,4 +1,4 @@
-# ADR 019: Per-Provider Retrieval Guidance Location
+# ADR: Per-Provider Retrieval Guidance Location
 
 **Date:** 2026-06-29
 **Status:** APPROVED
@@ -40,8 +40,8 @@ Forces:
 - **How:** Each `memory_provider` — **default and non-default alike** — has a corresponding
   memory-guidance skill. The default provider's skill is today's `skills/memory/SKILL.md`; a non-default
   provider ships its own skill (bundled with its plugin and present once installed, referenced from its
-  `plugin.yml`, ADR-015). At run start the harness **selects the skill matching the resolved active
-  provider** (ADR-016) and that skill's recall/persist guidance is what the `/memory` step uses.
+  `plugin.yml`, adr-2026-06-29-memory-provider-plugin-and-agent-queried-integration). At run start the harness **selects the skill matching the resolved active
+  provider** (adr-2026-06-29-per-project-memory-provider-selection) and that skill's recall/persist guidance is what the `/memory` step uses.
   Mechanically this is the existing skill-resolution/override path keyed on the active provider (project
   `.harness/skills/` > harness `skills/`, ST-060/061), but the *model* is uniform selection: one skill
   per provider, pick by installed provider.
@@ -73,8 +73,8 @@ harness selects the skill matching the installed/active provider.**
   active provider is `local` — behavior-identical to today (FR-9), no special-casing.
 - **Non-default = the provider's own skill:** a non-default provider ships its memory-guidance skill
   (bundled with its plugin, referenced from `plugin.yml`, present once installed). When that provider is
-  the resolved active one (ADR-016), its skill's recall/persist guidance is in effect (FR-4).
-- **Selection keys on the resolved active provider** (ADR-016), so switching providers switches the
+  the resolved active one (adr-2026-06-29-per-project-memory-provider-selection), its skill's recall/persist guidance is in effect (FR-4).
+- **Selection keys on the resolved active provider** (adr-2026-06-29-per-project-memory-provider-selection), so switching providers switches the
   selected skill for subsequent memory operations (FR-10 "switching does not break behaviors").
 - **Missing skill for an active provider → defined safe degradation (FR-4 negative path):** if the
   active provider has no usable guidance skill, the harness surfaces a clear warning and the `/memory`
@@ -101,9 +101,9 @@ retrieval logic) untouched.
   a small extension to the override resolver (key on active provider).
 
 ### Follow-up Actions
-- [ ] Define how each `memory_provider` plugin ships its guidance skill (the `plugin.yml` reference, ADR-015).
+- [ ] Define how each `memory_provider` plugin ships its guidance skill (the `plugin.yml` reference, adr-2026-06-29-memory-provider-plugin-and-agent-queried-integration).
 - [ ] Treat `skills/memory/SKILL.md` as the `local` provider's skill (no behavior change, FR-9).
 - [ ] Extend skill resolution to **select the skill matching the resolved active `memory_provider`**
-      (ADR-016), or specify the conductor-injection transport (Option C) if select-by-active-provider
+      (adr-2026-06-29-per-project-memory-provider-selection), or specify the conductor-injection transport (Option C) if select-by-active-provider
       isn't available yet.
 - [ ] Specify the missing-skill safe-degradation path (fall back to `local` semantics + warning).

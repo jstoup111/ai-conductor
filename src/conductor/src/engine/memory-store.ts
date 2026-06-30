@@ -1,7 +1,7 @@
 /**
  * memory-store.ts
  *
- * Canonical per-project memory store (ADR-017).
+ * Canonical per-project memory store (adr-2026-06-29-shared-memory-store-placement-and-durability).
  *
  * A11 — projectKey: branch- and worktree-independent project identity key.
  * A13 — ensureMemoryStore: create canonical dir + category subdirs + index.md
@@ -132,7 +132,7 @@ export async function projectKey(repoPath: string): Promise<string> {
  *  - Calling a second time does NOT overwrite existing `index.md` content or
  *    any category-file content.
  *  - If `.memory` already exists as a **real directory** (pre-migration content),
- *    it is left alone — migration (ADR-020) handles that conversion separately.
+ *    it is left alone — migration (adr-2026-06-29-safe-reversible-memory-migration) handles that conversion separately.
  *  - If `.memory` is already a symlink pointing to this store, it is kept as-is.
  *
  * Removal safety (A15): this function only ever creates or replaces the

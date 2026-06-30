@@ -149,7 +149,7 @@ export function validateConfig(
     'mermaid_renderer',
     'assess',
     'acceptance_spec_globs',
-    // Plugin selections (ADR-015/016)
+    // Plugin selections (adr-2026-06-29-memory-provider-plugin-and-agent-queried-integration/adr-2026-06-29-per-project-memory-provider-selection)
     'llm_provider',
     'ui_renderer',
     'memory_provider',
@@ -789,7 +789,7 @@ export function customStepEntries(config: HarnessConfig): Array<{
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Memory provider resolution (ADR-016)
+// Memory provider resolution (adr-2026-06-29-per-project-memory-provider-selection)
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -805,7 +805,7 @@ export interface MemoryResolveCtx {
 }
 
 /**
- * Run-start resolver for the active memory provider (ADR-016).
+ * Run-start resolver for the active memory provider (adr-2026-06-29-per-project-memory-provider-selection).
  *
  * Contract (total — never throws, never returns undefined):
  *   C1  absent / empty / non-string  →  local  (no warning)

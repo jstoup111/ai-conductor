@@ -1,4 +1,4 @@
-# ADR 020: Safe, Reversible Migration of Existing Memory
+# ADR: Safe, Reversible Migration of Existing Memory
 
 **Date:** 2026-06-29
 **Status:** APPROVED
@@ -12,7 +12,7 @@ state** (a safety net), not a perpetual two-way sync. If entries cannot first be
 move must make **no destructive change**. FR-12 requires a brand-new project to need **no migration**.
 Open Question 4 asks *how an existing project's memory is migrated safely*.
 
-The concrete change being migrated (ADR-017): today's in-tree `.memory/` (real directory, gitignored)
+The concrete change being migrated (adr-2026-06-29-shared-memory-store-placement-and-durability): today's in-tree `.memory/` (real directory, gitignored)
 becomes a **symlink** to the canonical per-project store `~/.ai-conductor/memory/<key>/harness/`. The
 risk is that turning a real directory into a symlink could destroy entries if done naively.
 
@@ -62,7 +62,7 @@ Adopt **Option A**: **copy-verify-swap with a one-time pre-migration backup**, g
   the canonical copy is verified complete; a failed verify **aborts with no destructive change** and
   restores the original (FR-11).
 - **Merge, don't overwrite:** if the canonical store already holds entries (e.g. a sibling worktree
-  already migrated), the copy is a **union** — no entry is overwritten or lost (consistent with ADR-017
+  already migrated), the copy is a **union** — no entry is overwritten or lost (consistent with adr-2026-06-29-shared-memory-store-placement-and-durability
   shared store + FR-5).
 - **Reverse = one-time rollback:** restoring the pre-migration backup returns the project to its prior
   state; after a successful migration, ongoing memory accrues in the new model only (FR-11, explicitly
@@ -90,10 +90,10 @@ FR-12 and idempotency for free.
 
 ### Follow-up Actions
 - [ ] Implement detect → backup → copy → verify → swap, with abort-and-restore on verify failure.
-- [ ] Define the union/dedup rule when the canonical store already has entries (ADR-017 / FR-5).
+- [ ] Define the union/dedup rule when the canonical store already has entries (adr-2026-06-29-shared-memory-store-placement-and-durability / FR-5).
 - [ ] Provide the one-time `reverse` operation (restore backup) and document that post-migration memory
       accrues only in the new model.
 - [ ] Negative-path coverage: verify-failure makes no destructive change; interrupted re-run loses
       nothing; already-migrated is a no-op; fresh project performs no migration (FR-12).
 - [ ] Wire migration into adoption/bootstrap so it triggers when an existing real `.memory/` is found
-      (ADR-017, ADR-018), and document in `README.md`.
+      (adr-2026-06-29-shared-memory-store-placement-and-durability, adr-2026-06-29-platform-adoption-and-removal-surface), and document in `README.md`.

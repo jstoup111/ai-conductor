@@ -1,5 +1,5 @@
 /**
- * `conduct memory setup [dir]` CLI handler (ADR-017, A14).
+ * `conduct memory setup [dir]` CLI handler (adr-2026-06-29-shared-memory-store-placement-and-durability, A14).
  *
  * Non-interactive: runs to completion and the caller exits with the returned
  * exit code. Mirrors the registry/engineer/daemon subcommand pattern so the
@@ -49,7 +49,7 @@ export function detectMemoryCommand(argv: string[]): MemoryDispatch | null {
  * Logic:
  *   - Resolve `dir` (default: cwd).
  *   - If `.memory/` is a real directory → `migrateMemory` (copy-verify-swap,
- *     ADR-020). On failure, prints the error and returns exit code 1.
+ *     adr-2026-06-29-safe-reversible-memory-migration). On failure, prints the error and returns exit code 1.
  *   - Otherwise → `ensureMemoryStore` (create canonical dir + symlink,
  *     idempotent). On failure, prints the error and returns exit code 1.
  *

@@ -113,15 +113,15 @@ fi
 
 - **Pluggable memory provider — `local` built-in with canonical shared store.** The harness now
   selects the memory backend via a per-project `memory_provider:` key in `conduct.yml`
-  (ADR-015/ADR-016); the only built-in is `local`. The `local` provider stores all `.memory/`
+  (adr-2026-06-29-memory-provider-plugin-and-agent-queried-integration/adr-2026-06-29-per-project-memory-provider-selection); the only built-in is `local`. The `local` provider stores all `.memory/`
   content in a durable project-keyed canonical directory at
   `~/.ai-conductor/memory/<sha256-of-origin-url>/harness/` and places `.memory/` as a symlink
   to it — making the store branch-/worktree-independent and safe under concurrent builds
-  (ADR-017). On first `conduct` run `bin/conduct` calls `conduct-ts memory setup <dir>`, which
+  (adr-2026-06-29-shared-memory-store-placement-and-durability). On first `conduct` run `bin/conduct` calls `conduct-ts memory setup <dir>`, which
   creates the canonical store with the four standard categories (`decisions/`, `patterns/`,
   `gotchas/`, `context/`) plus `index.md`, then atomically symlinks `.memory/` to it. If `.memory/`
   already exists as a real directory (legacy project), `migrateMemory` copies its contents to the
-  canonical store, verifies, and swaps before creating the symlink (ADR-020); the migration is
+  canonical store, verifies, and swaps before creating the symlink (adr-2026-06-29-safe-reversible-memory-migration); the migration is
   idempotent and automatic (see Migration below). **FR-3 invariant:** the harness contains zero
   memory search, ranking, or embedding logic — recall is always the agent reading `.memory/` files
   and judging relevance. New modules: `engine/memory-store.ts`, `engine/memory-migrate.ts`,

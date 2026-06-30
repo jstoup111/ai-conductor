@@ -168,7 +168,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   subscriber.start();
   const provider = registry.get<LLMProvider>('llm_provider', config?.llm_provider ?? 'claude');
   // Resolve the active memory provider once at run start so all steps see the
-  // same single provider (ADR-016 / FR-10). Uses a per-run ctx so warnings are
+  // same single provider (adr-2026-06-29-per-project-memory-provider-selection / FR-10). Uses a per-run ctx so warnings are
   // bounded and no module-level state is mutated (resolver is pure over config).
   const memoryResolveCtx = { warnings: [] as string[] };
   const memoryProvider = await resolveMemoryProvider(config ?? {}, registry, memoryResolveCtx);

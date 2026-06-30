@@ -257,7 +257,7 @@ export interface HarnessConfig {
   /**
    * Plugin selection: which memory provider to use (defaults to 'local').
    * Set in `.ai-conductor/config.yml`; resolved once at run start so every
-   * memory-using step sees the same active provider (ADR-016).
+   * memory-using step sees the same active provider (adr-2026-06-29-per-project-memory-provider-selection).
    */
   memory_provider?: string;
   /** OpenTelemetry exporter config. Absent = disabled (default off, FR-1). */

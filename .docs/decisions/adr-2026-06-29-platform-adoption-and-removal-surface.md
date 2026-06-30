@@ -1,4 +1,4 @@
-# ADR 018: Platform Adoption & Removal Surface
+# ADR: Platform Adoption & Removal Surface
 
 **Date:** 2026-06-29
 **Status:** APPROVED
@@ -20,7 +20,7 @@ Forces:
 - The harness already adopts agent-queried tools via `claude mcp add --scope user <name> -- <entry>`
   (Serena precedent, `bootstrap/SKILL.md:342-347`) and detects prior registration with
   `claude mcp get` — a natural idempotency check.
-- Provider selection lives in `.ai-conductor/config.yml` (ADR-016); adoption must **write that
+- Provider selection lives in `.ai-conductor/config.yml` (adr-2026-06-29-per-project-memory-provider-selection); adoption must **write that
   selection** and **register the MCP server**, as two parts of one action.
 - The CLI surface for harness operations is `bin/conduct` (and the conductor); a memory subcommand
   fits there rather than a new entrypoint.

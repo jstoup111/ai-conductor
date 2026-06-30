@@ -2,7 +2,7 @@
  * memory-migrate.ts
  *
  * Safe, reversible migration of an existing in-tree `.memory/` directory into
- * the canonical shared store (ADR-020, condition C5).
+ * the canonical shared store (adr-2026-06-29-safe-reversible-memory-migration, condition C5).
  *
  * ─── BACKUP SCHEME ───────────────────────────────────────────────────────────
  * The original `.memory/` is COPIED (not moved) to `.memory.pre-migrate.bak/`
@@ -221,7 +221,7 @@ async function runDefaultVerify(
 
 /**
  * Safely migrates an existing in-tree `.memory/` real directory into the
- * canonical shared store, replacing it with a symlink (ADR-020, Option A).
+ * canonical shared store, replacing it with a symlink (adr-2026-06-29-safe-reversible-memory-migration, Option A).
  *
  * A17 — detect / skip:
  *   • `.memory/` absent → fresh project (FR-12). No-op.

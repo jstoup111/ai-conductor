@@ -8,7 +8,7 @@
 `.docs/architecture/2026-06-29-memory-subsystem-current-state.md` and
 `.docs/architecture/sequences/memory-recall-persist.md`.
 **Verdict:** APPROVED WITH CONDITIONS — **all 7 ADRs APPROVED by operator 2026-06-29**
-(ADR-016, 018, 019 revised per operator feedback before approval; see notes in each ADR)
+(adr-2026-06-29-per-project-memory-provider-selection, 018, 019 revised per operator feedback before approval; see notes in each ADR)
 
 ## Summary
 
@@ -24,17 +24,17 @@ BUILD; they are tracked into the plan and checked at code review / `/finish`.
 
 | Story / FR | Feasible? | Notes |
 |---|---|---|
-| FR-1 selection | Yes | `memory_provider` field in `.ai-conductor/config.yml`, mirrors `llm_provider`/`ui_renderer` (ADR-016). |
-| FR-2 bad/unavailable → default | Yes | Total resolver, fallback-to-`local` (ADR-016). |
-| FR-3 LLM owns retrieval | Yes (invariant) | Agent↔MCP integration; harness is resolve-and-expose only (ADR-015). Verifiable: grep shows no search/rank/embed. |
-| FR-4 per-platform guidance | Yes — **dep** | Skill-override mechanism (ST-060/061) carries it (ADR-019). Depends on that mechanism being available; transport fallback noted. |
-| FR-5 durable/shared | Yes | Canonical `~/.ai-conductor/memory/<key>/harness/`, `.memory/` symlink (ADR-017). `.memory/` already gitignored → low-risk. |
-| FR-6/7 adopt/remove | Yes | `conduct memory adopt|remove|status`, idempotent via `claude mcp get` + targeted config write (ADR-018). **Breaking CLI → Migration block.** |
-| FR-8 zero-dep default | Yes | `local` provider, no MCP/service/creds (ADR-015/017). |
+| FR-1 selection | Yes | `memory_provider` field in `.ai-conductor/config.yml`, mirrors `llm_provider`/`ui_renderer` (adr-2026-06-29-per-project-memory-provider-selection). |
+| FR-2 bad/unavailable → default | Yes | Total resolver, fallback-to-`local` (adr-2026-06-29-per-project-memory-provider-selection). |
+| FR-3 LLM owns retrieval | Yes (invariant) | Agent↔MCP integration; harness is resolve-and-expose only (adr-2026-06-29-memory-provider-plugin-and-agent-queried-integration). Verifiable: grep shows no search/rank/embed. |
+| FR-4 per-platform guidance | Yes — **dep** | Skill-override mechanism (ST-060/061) carries it (adr-2026-06-29-per-provider-retrieval-guidance-location). Depends on that mechanism being available; transport fallback noted. |
+| FR-5 durable/shared | Yes | Canonical `~/.ai-conductor/memory/<key>/harness/`, `.memory/` symlink (adr-2026-06-29-shared-memory-store-placement-and-durability). `.memory/` already gitignored → low-risk. |
+| FR-6/7 adopt/remove | Yes | `conduct memory adopt|remove|status`, idempotent via `claude mcp get` + targeted config write (adr-2026-06-29-platform-adoption-and-removal-surface). **Breaking CLI → Migration block.** |
+| FR-8 zero-dep default | Yes | `local` provider, no MCP/service/creds (adr-2026-06-29-memory-provider-plugin-and-agent-queried-integration/adr-2026-06-29-shared-memory-store-placement-and-durability). |
 | FR-9/10 parity | Yes | `.memory/` path preserved as symlink; base skill unchanged for default. |
-| FR-11 migration | Yes | Copy-verify-swap + one-time backup, non-destructive on failure (ADR-020). |
-| FR-12 new project no migration | Yes | Detect-and-skip (ADR-020). |
-| FR-13/13a/13b resilience | Yes | Default store as write-fallback sink; idempotent one-way reconcile (ADR-021). |
+| FR-11 migration | Yes | Copy-verify-swap + one-time backup, non-destructive on failure (adr-2026-06-29-safe-reversible-memory-migration). |
+| FR-12 new project no migration | Yes | Detect-and-skip (adr-2026-06-29-safe-reversible-memory-migration). |
+| FR-13/13a/13b resilience | Yes | Default store as write-fallback sink; idempotent one-way reconcile (adr-2026-06-29-memory-resilience-write-fallback-and-reconcile). |
 
 No new runtime stack is required for Phase 1 (default path is files + symlink). Non-default providers
 require an MCP server (Phase 2 platforms), which is the established Serena-style integration.
@@ -44,13 +44,13 @@ require an MCP server (Phase 2 platforms), which is the established Serena-style
 **High** (consistent with the L tier): touches config schema, bootstrap/`bin/conduct` memory setup,
 the `/memory` skill, a new CLI subcommand group, the plugin model, and a migration path — but each
 piece extends an existing mechanism rather than introducing a novel subsystem. No splitting required;
-sequence the work so the **default-provider durability + migration** (ADR-017/020) lands before the
-**non-default MCP provider** plumbing (ADR-015/018/019), since Phase 1's user-visible win is durable
+sequence the work so the **default-provider durability + migration** (adr-2026-06-29-shared-memory-store-placement-and-durability/adr-2026-06-29-safe-reversible-memory-migration) lands before the
+**non-default MCP provider** plumbing (adr-2026-06-29-memory-provider-plugin-and-agent-queried-integration/adr-2026-06-29-platform-adoption-and-removal-surface/adr-2026-06-29-per-provider-retrieval-guidance-location), since Phase 1's user-visible win is durable
 shared memory with parity.
 
 ## Architectural Alignment
 
-- **FR-3 invariant is structural, not disciplinary** (ADR-015): there is no harness code path that
+- **FR-3 invariant is structural, not disciplinary** (adr-2026-06-29-memory-provider-plugin-and-agent-queried-integration): there is no harness code path that
   ranks/searches; the agent queries the platform. A grep-based integrity check enforces it.
 - **Reuses existing seams:** plugin kinds + manifest (`memory_provider`), `claude mcp add`/`get`
   (adoption idempotency), `.ai-conductor/config.yml` selection, `~/.ai-conductor/memory/` convention
@@ -75,12 +75,12 @@ shared memory with parity.
 
 | Risk | Type | Likelihood | Impact | Mitigation |
 |---|---|---|---|---|
-| Project-key derivation keyed to branch/worktree → cross-project bleed or fragmentation | Data | Medium | **High** | Branch/worktree-independent key; negative-path tests for cross-project isolation (ADR-017). |
-| Migration turns real `.memory/` into symlink and loses entries | Data | Low | **High** | Copy-verify-swap; abort-and-restore on verify failure; one-time backup (ADR-020). |
-| Concurrent dual-worktree writes clobber shared `index.md` | Data | Medium | Medium | File-per-entry; read-modify-write or per-entry index fragments (ADR-017). |
-| FR-4 guidance depends on skill-override (ST-060/061) not yet shipped | Knowledge | Medium | Medium | Confirm mechanism availability; conductor-injection transport fallback (ADR-019). |
-| New `conduct memory` CLI is a breaking change without a Migration block | Integration | Low | Medium | CHANGELOG `## Migration` block; README + src/conductor/README updates (ADR-018, Release Gate #2). |
-| Recall during outage misses not-yet-reconciled fallback entries | Integration | Medium | Low | Accepted bounded gap (FR-13b); document for operators (ADR-021). |
+| Project-key derivation keyed to branch/worktree → cross-project bleed or fragmentation | Data | Medium | **High** | Branch/worktree-independent key; negative-path tests for cross-project isolation (adr-2026-06-29-shared-memory-store-placement-and-durability). |
+| Migration turns real `.memory/` into symlink and loses entries | Data | Low | **High** | Copy-verify-swap; abort-and-restore on verify failure; one-time backup (adr-2026-06-29-safe-reversible-memory-migration). |
+| Concurrent dual-worktree writes clobber shared `index.md` | Data | Medium | Medium | File-per-entry; read-modify-write or per-entry index fragments (adr-2026-06-29-shared-memory-store-placement-and-durability). |
+| FR-4 guidance depends on skill-override (ST-060/061) not yet shipped | Knowledge | Medium | Medium | Confirm mechanism availability; conductor-injection transport fallback (adr-2026-06-29-per-provider-retrieval-guidance-location). |
+| New `conduct memory` CLI is a breaking change without a Migration block | Integration | Low | Medium | CHANGELOG `## Migration` block; README + src/conductor/README updates (adr-2026-06-29-platform-adoption-and-removal-surface, Release Gate #2). |
+| Recall during outage misses not-yet-reconciled fallback entries | Integration | Medium | Low | Accepted bounded gap (FR-13b); document for operators (adr-2026-06-29-memory-resilience-write-fallback-and-reconcile). |
 
 Two **High-impact** data risks (project-key, migration) → review marker is written; both are mitigated
 by mandatory negative-path tests carried as conditions.
@@ -114,6 +114,6 @@ by mandatory negative-path tests carried as conditions.
 ## Next Step
 
 All seven ADRs are **APPROVED** (operator, 2026-06-29) — the ADR approval hard gate is satisfied.
-ADR-016, ADR-018, and ADR-019 were revised per operator feedback before approval (harness-YAML-always-
+adr-2026-06-29-per-project-memory-provider-selection, adr-2026-06-29-platform-adoption-and-removal-surface, and adr-2026-06-29-per-provider-retrieval-guidance-location were revised per operator feedback before approval (harness-YAML-always-
 present; `add` verb; skill-per-provider selection). Proceed to **`/plan`**, grounded in ADRs 015–021
 and carrying conditions C1–C8 into the task plan.

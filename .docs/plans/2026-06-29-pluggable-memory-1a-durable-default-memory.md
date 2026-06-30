@@ -18,24 +18,24 @@ own PR; slice 1b (provider framework) builds on this foundation.
 
 ## Technical Approach
 
-- **Model (ADR-015):** add `'memory_provider'` to `PluginKind`/`VALID_PLUGIN_KINDS`
+- **Model (adr-2026-06-29-memory-provider-plugin-and-agent-queried-integration):** add `'memory_provider'` to `PluginKind`/`VALID_PLUGIN_KINDS`
   (`src/conductor/src/types/plugin.ts:13-19`); register a built-in `memory_provider:local` in
   `registerBuiltins()` (`src/conductor/src/engine/plugin-loader.ts:138-149`), mirroring
   `llm_provider:claude`/`ui_renderer:terminal`. `local` is a **real provider object, never a null
   case** (condition **C1**).
-- **Selection — default path (ADR-016):** add `memory_provider?: string` to `HarnessConfig`
+- **Selection — default path (adr-2026-06-29-per-project-memory-provider-selection):** add `memory_provider?: string` to `HarnessConfig`
   (`src/conductor/src/types/config.ts:238-240`) and a **total** run-start resolver in
   `src/conductor/src/engine/config.ts`. In 1a the only installed provider is `local`, so the resolver
   exercises the **absent / empty / malformed / unknown-name → `local`** branches (explicit, no
   catch-all `else`; conditions **C1/C3**). The installed-but-unavailable branch is built minimally but
   fully exercised in 1b with the test-double. The resolved active provider is threaded onto run
   context at the existing provider-resolution point (`daemon-cli.ts:155`).
-- **Store (ADR-017):** a branch/worktree-independent **project key**, a canonical store at
+- **Store (adr-2026-06-29-shared-memory-store-placement-and-durability):** a branch/worktree-independent **project key**, a canonical store at
   `~/.ai-conductor/memory/<key>/harness/`, and `.memory/` as a **symlink** to it. `.memory/` stays
   gitignored (`.gitignore:5`); the session-start hook (`hooks/claude/session-start-context.sh`) and
   every existing reader keep working through the symlink unchanged. File-per-entry layout + a
   no-clobber `index.md` write protocol handle concurrent dual-worktree writes (conditions **C4/C8**).
-- **Migration (ADR-020):** a detect→backup→copy→verify→swap path that converts an existing real
+- **Migration (adr-2026-06-29-safe-reversible-memory-migration):** a detect→backup→copy→verify→swap path that converts an existing real
   `.memory/` into the symlink **non-destructively**, with union-into-existing-store and one-time
   reverse (condition **C5**). Fresh/empty/already-migrated → no-op (FR-12).
 - **FR-3 invariant (C6):** a grep-based check in `test/test_harness_integrity.sh` asserts no memory
@@ -53,27 +53,27 @@ lives alongside `config.ts`.
 ## Tasks
 
 ### Task A1: Add `memory_provider` to the plugin-kind union
-**Story:** FR-1/FR-3 model — ADR-015 · **Type:** infrastructure
+**Story:** FR-1/FR-3 model — adr-2026-06-29-memory-provider-plugin-and-agent-queried-integration · **Type:** infrastructure
 **Steps:** 1. Failing test: `VALID_PLUGIN_KINDS` includes `'memory_provider'`; `PluginKind` accepts it.
 2. RED. 3. Add to the union + `VALID_PLUGIN_KINDS`. 4. GREEN. 5. Commit "feat(memory): add memory_provider plugin kind".
 **Files:** `src/conductor/src/types/plugin.ts:13-19`; plugin type test. **Deps:** none.
 
 ### Task A2: A `memory_provider` plugin.yml validates and loads
-**Story:** FR-4 self-describing unit (manifest surface) — ADR-015 · **Type:** happy-path
+**Story:** FR-4 self-describing unit (manifest surface) — adr-2026-06-29-memory-provider-plugin-and-agent-queried-integration · **Type:** happy-path
 **Steps:** 1. Failing test: `loadManifestFromFile()` accepts `kind: memory_provider` with `entrypoint`
 + optional `guidance` skill ref. 2. RED. 3. `validateManifest()` accepts the kind + optional `guidance`.
 4. GREEN. 5. Commit "feat(memory): accept memory_provider manifests".
 **Files:** `src/conductor/src/engine/plugin-manifest.ts:31,91`; manifest test. **Deps:** A1.
 
 ### Task A3: Register built-in `memory_provider:local` (C1 — real provider)
-**Story:** FR-8/FR-9 — ADR-015 · **Type:** happy-path
+**Story:** FR-8/FR-9 — adr-2026-06-29-memory-provider-plugin-and-agent-queried-integration · **Type:** happy-path
 **Steps:** 1. Failing test: after `registerBuiltins()`, `registry.get('memory_provider','local')` returns
 a real provider (not null). 2. RED. 3. Register `memory_provider:local` (no MCP/service/creds).
 4. GREEN. 5. Commit "feat(memory): register built-in local memory provider".
 **Files:** `src/conductor/src/engine/plugin-loader.ts:138-149`; loader test. **Deps:** A1.
 
 ### Task A4: Add `memory_provider?: string` to HarnessConfig
-**Story:** FR-1 — ADR-016 · **Type:** infrastructure
+**Story:** FR-1 — adr-2026-06-29-per-project-memory-provider-selection · **Type:** infrastructure
 **Steps:** 1. Failing test: config YAML with `memory_provider: local` parses into the field. 2. RED.
 3. Add optional field mirroring `llm_provider`/`ui_renderer`. 4. GREEN. 5. Commit "feat(memory): add memory_provider config field".
 **Files:** `src/conductor/src/types/config.ts:238-240`; config-load test. **Deps:** none.
@@ -131,14 +131,14 @@ dirs. 2. RED. 3. Ensure derivation distinguishes projects. 4. GREEN. 5. Commit "
 **Files:** `memory-store.ts`; test. **Deps:** A11.
 
 ### Task A13: Ensure canonical store dir + `.memory/` symlink (fresh)
-**Story:** FR-5 happy; FR-8 — ADR-017 · **Type:** happy-path
+**Story:** FR-5 happy; FR-8 — adr-2026-06-29-shared-memory-store-placement-and-durability · **Type:** happy-path
 **Steps:** 1. Failing test: `ensureMemoryStore()` creates `~/.ai-conductor/memory/<key>/harness/`
 (category subdirs + `index.md`) and makes `.memory/` a symlink to it; idempotent. 2. RED. 3. Implement.
 4. GREEN. 5. Commit "feat(memory): canonical store + .memory symlink".
 **Files:** `memory-store.ts`; test (HOME→tmp). **Deps:** A11.
 
 ### Task A14: Bootstrap/`bin/conduct` memory setup uses the symlink path
-**Story:** FR-8/FR-10 — ADR-017 · **Type:** infrastructure
+**Story:** FR-8/FR-10 — adr-2026-06-29-shared-memory-store-placement-and-durability · **Type:** infrastructure
 **Steps:** 1. Failing test: bootstrap memory creation invokes `ensureMemoryStore` (symlink), not a
 plain in-tree dir; if real `.memory/` content exists, it defers to migration (A17) instead of creating.
 2. RED. 3. Update the bootstrap memory-setup path (`bin/conduct:1082` region + `skills/bootstrap/SKILL.md`).
@@ -186,7 +186,7 @@ loses no entry. 2. RED. 3. Ensure re-entrancy (backup persists; detect resumes).
 **Files:** `memory-migrate.ts`; test. **Deps:** A18.
 
 ### Task A21: Migration unions into an existing canonical store (FR-5/FR-11)
-**Story:** FR-11 happy under ADR-017 shared store (sibling already migrated) · **Type:** negative-path
+**Story:** FR-11 happy under adr-2026-06-29-shared-memory-store-placement-and-durability shared store (sibling already migrated) · **Type:** negative-path
 **Steps:** 1. Failing test: canonical store already holds sibling entries → migration **unions** (no
 overwrite, no duplicate index lines) by entry filename/content. 2. RED. 3. Implement union/dedup rule.
 4. GREEN. 5. Commit "feat(memory): migration unions into existing canonical store".
@@ -222,7 +222,7 @@ consume the symlinked store transparently. 4. GREEN. 5. Commit "test(memory): ex
 **Files:** `hooks/claude/session-start-context.sh` (only if surfacing provider name); test. **Deps:** A9, A13.
 
 ### Task A26: Docs + CHANGELOG (store relocation; config field)
-**Story:** Docs-track-features; ADR-016/017 · **Type:** infrastructure
+**Story:** Docs-track-features; adr-2026-06-29-per-project-memory-provider-selection/adr-2026-06-29-shared-memory-store-placement-and-durability · **Type:** infrastructure
 **Steps:** 1. Document the `memory_provider` config field and the canonical-store/symlink layout in
 `README.md` and `src/conductor/README.md`; add a `## [Unreleased]` CHANGELOG entry and a `## Migration`
 block (the `.memory/` relocation is an auto-applied migration for consumers — A17–A22). 2. Verify the

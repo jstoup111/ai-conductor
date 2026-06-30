@@ -1,4 +1,4 @@
-# ADR 017: Shared Memory Store Placement & Cross-Worktree Durability
+# ADR: Shared Memory Store Placement & Cross-Worktree Durability
 
 **Date:** 2026-06-29
 **Status:** APPROVED
@@ -24,7 +24,7 @@ Forces:
 - Branch-independence (FR-5) means the store must **not** be keyed by branch or worktree — it is keyed
   by **project identity**, shared across all that project's worktrees.
 - This default-provider placement is independent of non-default providers (an MCP platform stores its
-  own data); this ADR governs the **default/local provider** and the **fallback store** (ADR-021).
+  own data); this ADR governs the **default/local provider** and the **fallback store** (adr-2026-06-29-memory-resilience-write-fallback-and-reconcile).
 
 ## Options Considered
 
@@ -68,7 +68,7 @@ it.
   path: "no shared project memory deleted as a side effect").
 - Bootstrap/`bin/conduct` memory creation is updated to **ensure the canonical dir + symlink** instead
   of a plain in-tree directory; if `.memory/` already exists as real content, that is the **migration**
-  case (ADR-020), not fresh creation.
+  case (adr-2026-06-29-safe-reversible-memory-migration), not fresh creation.
 
 Why: it is the minimal change that makes memory project-scoped and durable while keeping the `.memory/`
 path every existing reader/writer already uses, and it reuses the `~/.ai-conductor/memory/` convention
@@ -95,5 +95,5 @@ already in the codebase.
       read-modify-write) so two worktrees never clobber each other (FR-5).
 - [ ] Negative-path coverage: cross-project isolation, worktree-removal-preserves-store, concurrent
       dual-worktree writes.
-- [ ] Coordinate with ADR-020 (existing `.memory/` content is migration, not fresh create) and ADR-021
+- [ ] Coordinate with adr-2026-06-29-safe-reversible-memory-migration (existing `.memory/` content is migration, not fresh create) and adr-2026-06-29-memory-resilience-write-fallback-and-reconcile
       (this canonical store is also the write-fallback sink).

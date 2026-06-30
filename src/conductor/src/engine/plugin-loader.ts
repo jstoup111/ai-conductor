@@ -155,7 +155,7 @@ export function registerBuiltins(
     registry.register('ui_renderer', 'terminal_renderer', terminalRenderer);
   }
 
-  // ADR-015 / Task A3: Register built-in local memory provider (C1 — real provider, not null)
+  // adr-2026-06-29-memory-provider-plugin-and-agent-queried-integration / Task A3: Register built-in local memory provider (C1 — real provider, not null)
   registry.register('memory_provider', 'local', LocalMemoryProvider);
 
   return subscriber;

@@ -1,4 +1,4 @@
-# ADR 015: Memory Provider Plugin Kind & Agent-Queried Integration
+# ADR: Memory Provider Plugin Kind & Agent-Queried Integration
 
 **Date:** 2026-06-29
 **Status:** APPROVED
@@ -66,8 +66,8 @@ Adopt **Option A**: a new **`memory_provider` plugin kind**.
   and judging relevance, exactly as today.
 - **Non-default providers** integrate as **MCP servers the agent queries directly**. The agent issues
   recall and persist against the provider; relevance is the agent's (and the platform's) judgment.
-- **The harness's role is strictly resolve-and-expose:** determine the active provider (ADR-016),
-  register/avail its MCP server (ADR-018), and surface its guidance (ADR-019). The harness adds **no**
+- **The harness's role is strictly resolve-and-expose:** determine the active provider (adr-2026-06-29-per-project-memory-provider-selection),
+  register/avail its MCP server (adr-2026-06-29-platform-adoption-and-removal-surface), and surface its guidance (adr-2026-06-29-per-provider-retrieval-guidance-location). The harness adds **no**
   search, ranking, relevance, or embedding logic for any provider — including the default. This is the
   testable form of FR-3: *grep the harness; no such logic exists.*
 
@@ -92,9 +92,9 @@ add`) instead of inventing new ones.
 
 ### Follow-up Actions
 - [ ] Define the `memory_provider` plugin kind and its `plugin.yml` fields (entrypoint = MCP server
-      launch; `guidance` reference per ADR-019; capability flags).
+      launch; `guidance` reference per adr-2026-06-29-per-provider-retrieval-guidance-location; capability flags).
 - [ ] Specify the built-in default provider as a first-class `memory_provider` (id e.g. `local`).
 - [ ] Add a harness integrity check (grep-based) asserting no memory search/ranking/relevance/embedding
       logic exists, wiring the FR-3 "verifiable: no such logic exists" criterion.
-- [ ] Cross-reference ADR-016 (selection), ADR-018 (adoption/MCP registration), ADR-019 (guidance),
-      ADR-021 (resilience).
+- [ ] Cross-reference adr-2026-06-29-per-project-memory-provider-selection (selection), adr-2026-06-29-platform-adoption-and-removal-surface (adoption/MCP registration), adr-2026-06-29-per-provider-retrieval-guidance-location (guidance),
+      adr-2026-06-29-memory-resilience-write-fallback-and-reconcile (resilience).

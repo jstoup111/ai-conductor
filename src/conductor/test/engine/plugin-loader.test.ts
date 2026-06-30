@@ -210,10 +210,10 @@ entrypoint: index.js`
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Task A3 (ADR-015 / C1): built-in memory_provider:local is registered as a
+// Task A3 (adr-2026-06-29-memory-provider-plugin-and-agent-queried-integration / C1): built-in memory_provider:local is registered as a
 // REAL provider object — never null, never undefined (condition C1).
 // ─────────────────────────────────────────────────────────────────────────────
-describe('registerBuiltins — memory_provider:local (ADR-015 / C1)', () => {
+describe('registerBuiltins — memory_provider:local (adr-2026-06-29-memory-provider-plugin-and-agent-queried-integration / C1)', () => {
   it('registers memory_provider:local as a real non-null provider object', () => {
     const registry = new PluginRegistry();
     const events = new ConductorEventEmitter();
