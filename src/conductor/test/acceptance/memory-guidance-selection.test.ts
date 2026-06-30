@@ -138,3 +138,69 @@ describe('FR-4: missing/incomplete provider guidance degrades safely', () => {
     expect(ctx.warnings.length).toBe(1);
   });
 });
+
+// ═════════════════════════════════════════════════════════════════════════════
+// FR-4 security: provider guidance path must be containment-checked against
+// projectRoot. An escaping path MUST degrade safely — never returned verbatim.
+// ═════════════════════════════════════════════════════════════════════════════
+describe('FR-4: provider guidance path is containment-checked', () => {
+  it('parent-traversal relative path degrades safely: ../../etc/passwd → default + one warning', async () => {
+    const resolveMemoryGuidanceSkill = requireFn(
+      await load(RESOLVER_MOD),
+      'resolveMemoryGuidanceSkill',
+    );
+    const ctx = { warnings: [] as string[] };
+    const provider = doubleWithGuidance('../../etc/passwd');
+
+    const resolved = await resolveMemoryGuidanceSkill({
+      provider,
+      config: {},
+      projectRoot,
+      ctx,
+    });
+
+    expect(resolved.path).toBe(DEFAULT_MEMORY_SKILL);
+    expect(ctx.warnings.length).toBe(1);
+    expect(ctx.warnings[0]).toMatch(/guidance|degrad|local|double/i);
+  });
+
+  it('absolute out-of-tree path degrades safely: /etc/passwd → default + one warning', async () => {
+    const resolveMemoryGuidanceSkill = requireFn(
+      await load(RESOLVER_MOD),
+      'resolveMemoryGuidanceSkill',
+    );
+    const ctx = { warnings: [] as string[] };
+    const provider = doubleWithGuidance('/etc/passwd');
+
+    const resolved = await resolveMemoryGuidanceSkill({
+      provider,
+      config: {},
+      projectRoot,
+      ctx,
+    });
+
+    expect(resolved.path).toBe(DEFAULT_MEMORY_SKILL);
+    expect(ctx.warnings.length).toBe(1);
+    expect(ctx.warnings[0]).toMatch(/guidance|degrad|local|double/i);
+  });
+
+  it('sibling-prefix escape degrades safely: ../sibling-evil/SKILL.md → default + one warning', async () => {
+    const resolveMemoryGuidanceSkill = requireFn(
+      await load(RESOLVER_MOD),
+      'resolveMemoryGuidanceSkill',
+    );
+    const ctx = { warnings: [] as string[] };
+    const provider = doubleWithGuidance('../sibling-evil/SKILL.md');
+
+    const resolved = await resolveMemoryGuidanceSkill({
+      provider,
+      config: {},
+      projectRoot,
+      ctx,
+    });
+
+    expect(resolved.path).toBe(DEFAULT_MEMORY_SKILL);
+    expect(ctx.warnings.length).toBe(1);
+    expect(ctx.warnings[0]).toMatch(/guidance|degrad|local|double/i);
+  });
+});

@@ -31,26 +31,51 @@ export interface GuidanceSkillResolution {
  * based on the active memory provider.
  *
  * Contract (FR-4, adr-2026-06-29-per-provider-retrieval-guidance-location):
- *   - `local` provider        → default `skills/memory/SKILL.md`, no warning.
- *   - non-local + guidance    → the declared guidance path, no warning.
- *   - non-local, no guidance  → default path + exactly ONE warning on ctx.warnings.
+ *   - `local` provider                     → default `skills/memory/SKILL.md`, no warning.
+ *   - non-local + contained guidance path  → the declared guidance path, no warning.
+ *   - non-local + escaping guidance path   → default path + exactly ONE warning.
+ *   - non-local, no guidance               → default path + exactly ONE warning on ctx.warnings.
  *
- * This function is total: it never throws.
+ * @param opts.config - Reserved for future provider-specific configuration; unused today.
+ *
+ * This function is total: it never throws (except on invalid arguments — see guard below).
  */
 export async function resolveMemoryGuidanceSkill(opts: {
   provider: MemoryProviderRef;
+  /** Reserved for future provider-specific configuration. */
   config: Record<string, unknown>;
   projectRoot: string;
   ctx: GuidanceResolutionCtx;
 }): Promise<GuidanceSkillResolution> {
-  const { provider, ctx } = opts;
+  // Contract expects typed callers; a null/undefined provider or non-array warnings
+  // would produce an obscure TypeError later — surface the failure explicitly.
+  if (!opts?.provider || !Array.isArray(opts?.ctx?.warnings)) {
+    throw new Error('resolveMemoryGuidanceSkill: invalid arguments');
+  }
+
+  const { provider, projectRoot, ctx } = opts;
 
   if (provider.name === 'local') {
     return { path: DEFAULT_MEMORY_SKILL };
   }
 
   if (provider.guidance) {
-    return { path: provider.guidance };
+    // Containment check: resolve both root and candidate to absolute paths,
+    // then verify the candidate stays inside root (use sep boundary to prevent
+    // sibling-prefix attacks like <root>-evil matching a naive startsWith(root)).
+    const root = path.resolve(projectRoot);
+    const abs = path.resolve(root, provider.guidance);
+    const contained = abs === root || abs.startsWith(root + path.sep);
+
+    if (contained) {
+      return { path: provider.guidance };
+    }
+
+    // Escaping path — degrade exactly like the missing-guidance branch.
+    ctx.warnings.push(
+      `Provider "${provider.name}" guidance path escapes projectRoot; degrading to local default (${DEFAULT_MEMORY_SKILL})`,
+    );
+    return { path: DEFAULT_MEMORY_SKILL };
   }
 
   // Non-local provider with absent or empty guidance — degrade safely.
