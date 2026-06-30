@@ -70,6 +70,11 @@ import {
   type ResolutionAttempt,
   type RebaseResolver,
 } from './rebase.js';
+import {
+  escalateBuildFailure as defaultEscalateBuildFailure,
+  type EscalateBuildFailureOpts,
+  type EscalateBuildFailureResult,
+} from './build-failure-escalation.js';
 
 export type CheckpointResponse = 'continue' | 'back' | 'quit';
 
@@ -274,6 +279,15 @@ export interface ConductorOptions {
     context?: RecoveryContext,
   ) => Promise<RecoveryOption>;
   onComplexityAssessment?: (recommended: ComplexityTier | null) => Promise<ComplexityTier>;
+  /**
+   * Injectable escalation function called after any irrecoverable daemon HALT
+   * in auto mode. Defaults to the real `escalateBuildFailure` which opens a
+   * draft needs-remediation PR. Tests inject a spy to avoid real gh/git calls.
+   * The conductor wraps every call in try/catch — a throwing escalation must
+   * never prevent the HALT marker or state from being written (C1).
+   * Not called for rebase-conflict HALTs (pushing mid-rebase is unsafe).
+   */
+  escalateBuildFailure?: (opts: EscalateBuildFailureOpts) => Promise<EscalateBuildFailureResult>;
 }
 
 function stepHasCompletionCheck(step: StepName): boolean {
@@ -304,6 +318,8 @@ export class Conductor {
     context?: RecoveryContext,
   ) => Promise<RecoveryOption>;
   private onComplexityAssessment?: (recommended: ComplexityTier | null) => Promise<ComplexityTier>;
+  /** Escalation function — see ConductorOptions.escalateBuildFailure. */
+  private escalateBuildFailure: (opts: EscalateBuildFailureOpts) => Promise<EscalateBuildFailureResult>;
   /**
    * The most recent engine-native rebase outcome. The `rebase` step is special:
    * its gate verdict is computed by the native handler (not from a file
@@ -339,6 +355,31 @@ export class Conductor {
     this.onReviewArtifacts = opts.onReviewArtifacts ?? (async () => 'approved' as const);
     this.onRecovery = opts.onRecovery;
     this.onComplexityAssessment = opts.onComplexityAssessment;
+    this.escalateBuildFailure = opts.escalateBuildFailure ?? defaultEscalateBuildFailure;
+  }
+
+  /**
+   * Best-effort wrapper around escalateBuildFailure. Returns the prUrl on
+   * success, or undefined on any error or when mode is not 'auto'. Called at
+   * every irrecoverable daemon HALT (except rebase-conflict HALTs where pushing
+   * mid-rebase is unsafe). Never throws — a failing escalation must never
+   * affect the HALT/return path (C1).
+   */
+  private async surfaceRemediationPr(reason: string): Promise<string | undefined> {
+    // Daemon-only (FR-8). Gate on the real `daemon` flag, not merely `mode==='auto'`:
+    // the autonomous builder sets `daemon: true`, and that is the precise signal that a
+    // HALT here strands committed work a human must remediate. It also keeps the real
+    // git/gh side effects out of any non-daemon auto-mode run (e.g. unit tests).
+    if (!this.daemon) return undefined;
+    try {
+      const r = await this.escalateBuildFailure({
+        projectRoot: this.projectRoot,
+        failureReason: reason,
+      });
+      return r?.prUrl;
+    } catch {
+      return undefined; // best-effort: must never affect the HALT/return path
+    }
   }
 
   async run(): Promise<void> {
@@ -877,8 +918,9 @@ export class Conductor {
                     ).catch(() => {
                       /* best-effort marker */
                     });
-                    await this.events.emit({ type: 'loop_halt', reason });
                     await writeState(this.stateFilePath, state);
+                    const prUrl = await this.surfaceRemediationPr(reason);
+                    await this.events.emit({ type: 'loop_halt', reason, prUrl });
                     process.off('SIGINT', sigintHandler);
                     return;
                   }
@@ -938,8 +980,9 @@ export class Conductor {
               ).catch(() => {
                 /* best-effort marker */
               });
-              await this.events.emit({ type: 'loop_halt', reason });
               await writeState(this.stateFilePath, state);
+              const prUrl = await this.surfaceRemediationPr(reason);
+              await this.events.emit({ type: 'loop_halt', reason, prUrl });
               process.off('SIGINT', sigintHandler);
               return;
             }
@@ -959,8 +1002,16 @@ export class Conductor {
             ).catch(() => {
               /* best-effort marker */
             });
-            await this.events.emit({ type: 'loop_halt', reason });
+            // Durable signals (HALT marker + state) are written BEFORE escalation
+            // so the daemon can classify the outcome even if escalation throws (C1).
             await writeState(this.stateFilePath, state);
+            // Escalate for all gating/structural steps (not just build): open a
+            // needs-remediation draft PR so a human can see the failure without
+            // hunting through daemon logs. surfaceRemediationPr is best-effort and
+            // wraps escalation in try/catch — a throwing escalation must never
+            // prevent the HALT path from returning cleanly (C1).
+            const prUrl = await this.surfaceRemediationPr(`${reason}\n${lastError}`);
+            await this.events.emit({ type: 'loop_halt', reason, prUrl });
             process.off('SIGINT', sigintHandler);
             return;
           }
@@ -1190,7 +1241,8 @@ export class Conductor {
       await writeFile(join(this.projectRoot, LOOP_HALT_MARKER), reason + '\n', 'utf-8').catch(
         () => {},
       );
-      await this.events.emit({ type: 'loop_halt', reason });
+      const prUrl = await this.surfaceRemediationPr(reason);
+      await this.events.emit({ type: 'loop_halt', reason, prUrl });
     } finally {
       process.off('SIGINT', sigintHandler);
     }
@@ -1319,7 +1371,9 @@ export class Conductor {
             reason + '\n',
             'utf-8',
           );
-          await this.events.emit({ type: 'loop_halt', reason });
+          await writeState(this.stateFilePath, state).catch(() => {});
+          const prUrl = await this.surfaceRemediationPr(reason);
+          await this.events.emit({ type: 'loop_halt', reason, prUrl });
           return 'halt';
         }
         const nav = navigateBack(state, target, steps);
@@ -1355,7 +1409,8 @@ export class Conductor {
       const reason = `gate '${decision.step}' selected ${sel} times without satisfying: ${decision.reason}`;
       await writeState(this.stateFilePath, state).catch(() => {});
       await writeFile(join(this.projectRoot, LOOP_HALT_MARKER), reason + '\n', 'utf-8');
-      await this.events.emit({ type: 'loop_halt', reason });
+      const prUrl = await this.surfaceRemediationPr(reason);
+      await this.events.emit({ type: 'loop_halt', reason, prUrl });
       return 'halt';
     }
 

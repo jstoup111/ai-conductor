@@ -9,6 +9,7 @@ import type {
   WorktreeOutcome,
 } from './daemon-runner.js';
 import { prepareWorktree } from './worktree-prepare.js';
+import { makeProductionGh } from './pr-labels.js';
 
 export interface RealDepsConfig {
   /** The main checkout the daemon runs from. */
@@ -48,6 +49,11 @@ export function makeFeatureRunnerDeps(cfg: RealDepsConfig): FeatureRunnerDeps {
     // Project key for the engineer store = the main checkout's basename (NOT the
     // worktree path, which is always `<projectRoot>/.worktrees/<slug>`).
     project: basename(cfg.projectRoot),
+    // FR-9: the MAIN checkout path — the watch registry lives here, and gh ops
+    // are issued from here after the worktree is torn down on ship.
+    projectRoot: cfg.projectRoot,
+    // FR-16: production gh runner for clear-on-success label ops.
+    runGh: makeProductionGh(),
 
     createWorktree: async (slug) => {
       const branch = `feat/daemon-${slug}`;

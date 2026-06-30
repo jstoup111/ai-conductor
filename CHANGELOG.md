@@ -53,6 +53,13 @@ fi
 
 ### Fixed
 
+- **Test kill-switch: the pr-labels `gh`/`git` seam cannot shell out during tests (conduct-ts).**
+  The `needs-remediation` escalation is gated on the daemon flag, but as a belt-and-suspenders guard
+  the production `makeProductionGh`/`makeProductionGit` runners now throw under
+  `AI_CONDUCTOR_NO_REAL_EXEC` (set by the vitest global `test/setup.ts`). This prevents a test that
+  reaches a real runner from mutating live GitHub — previously an auto-mode failure test reused a
+  live PR and added a `needs-remediation` label + comment. Scoped to this seam only; the real-`git`
+  integration tests (rebase / daemon-rekick) use their own execa paths and are unaffected.
 - **`conduct-ts daemon --help` launched a daemon instead of printing help (conduct-ts).** The daemon
   sub-verbs are intercepted before commander parses, so `--help`/`-h` after `daemon` fell through to
   `detectDaemonCommand` and **started a real daemon run** (it would scan the backlog and could
@@ -111,6 +118,24 @@ fi
 
 ### Added
 
+- **Daemon PR labeling — `needs-remediation` draft PR + `mergeable` label sweep (daemon-only).**
+  On **any irrecoverable daemon HALT that strands committed work** — a build/gating-step failure
+  (retries exhausted), a prd-audit product/plan gap needing human DECIDE, the kickback-ping-pong or
+  stuck-gate caps, or an unexpected conductor error (the rebase-conflict HALT is excluded) — when
+  the feature branch has at least one commit, the daemon pushes the branch and opens a **draft PR**
+  labeled `needs-remediation` with a comment explaining the HALT reason (which names the failing
+  step); when there are zero commits, no GitHub artifacts are produced (FR-6). An existing open PR
+  for the branch is reused rather than duplicated (FR-5). PRs
+  from features that reach `done` are enrolled in a per-repo watch registry
+  (`.daemon/mergeable-watch.jsonl`); a best-effort sweep — on daemon startup, after each feature
+  completes, and per idle poll tick — keeps the `mergeable` label in sync: added when the PR is
+  open + conflict-free + CI-green, removed when not, pruned when merged/closed (FR-10..FR-14). A
+  `needs-remediation` PR is never labeled `mergeable` (FR-12). When a failed feature is re-kicked
+  and completes successfully, the daemon clears the stale `needs-remediation` label and un-drafts
+  the PR before enrolling it in the sweep (FR-16). All labeling is best-effort and non-blocking —
+  a GitHub step failure is logged and never disrupts the daemon's core processing (FR-7, FR-15).
+  Daemon-only; interactive runs are unchanged (FR-8, FR-15). PRD:
+  `.docs/specs/2026-06-29-daemon-pr-labels.md`.
 - **Pluggable memory provider — `local` built-in with canonical shared store.** The harness now
   selects the memory backend via a per-project `memory_provider:` key in `conduct.yml`
   (adr-2026-06-29-memory-provider-plugin-and-agent-queried-integration/adr-2026-06-29-per-project-memory-provider-selection); the only built-in is `local`. The `local` provider stores all `.memory/`
