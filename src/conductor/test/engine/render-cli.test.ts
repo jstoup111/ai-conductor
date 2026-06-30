@@ -26,4 +26,22 @@ describe('detectRenderCommand', () => {
       files: ['a.md'],
     });
   });
+
+  it('returns a check dispatch when --check is present', () => {
+    expect(detectRenderCommand(argv('render-diagrams', '--check', 'a.md', 'b.md'))).toEqual({
+      kind: 'check',
+      files: ['a.md', 'b.md'],
+    });
+  });
+
+  it('--check position does not matter and is not collected as a file', () => {
+    expect(detectRenderCommand(argv('render-diagrams', 'a.md', '--check'))).toEqual({
+      kind: 'check',
+      files: ['a.md'],
+    });
+  });
+
+  it('--check with no files still shows the guide', () => {
+    expect(detectRenderCommand(argv('render-diagrams', '--check'))).toEqual({ kind: 'guide' });
+  });
 });

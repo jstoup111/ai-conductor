@@ -63,9 +63,15 @@ export async function detectOpenerCommand(opts: {
   return null;
 }
 
-/** Pull the source of every ```mermaid fenced block, in document order. */
+/**
+ * Pull the source of every ```mermaid fenced block, in document order. The
+ * opening and closing fences must START a line (optionally indented) — so a
+ * prose mention like "the fenced ```mermaid sources" mid-sentence is NOT
+ * treated as a block opener (which would feed prose to the renderer and report
+ * a spurious "UnknownDiagramError").
+ */
 export function extractMermaidBlocks(content: string): string[] {
-  const re = /```mermaid[^\n]*\n([\s\S]*?)```/g;
+  const re = /^[^\S\n]*```mermaid[^\n]*\n([\s\S]*?)^[^\S\n]*```/gm;
   const blocks: string[] = [];
   for (const m of content.matchAll(re)) {
     blocks.push(m[1].replace(/\s+$/, ''));
@@ -216,6 +222,60 @@ export async function renderDiagramsForFile(
     safeLog(`  ⚠ diagram rendering failed: ${err instanceof Error ? err.message : String(err)}`);
     return { status: 'error', rendered: 0, failed: 0, outputs: [], notice: 'diagram rendering error — showing raw Markdown' };
   }
+}
+
+// --- Validation (authoring-time syntax check) --------------------------------
+
+export type DiagramCheckStatus =
+  | 'ok' // every mermaid block parsed/rendered
+  | 'no-diagrams' // no mermaid blocks in the file
+  | 'tool-missing' // mmdc not on PATH — cannot validate here (SKIP, not fail)
+  | 'errors'; // at least one block failed to parse/render
+
+export interface DiagramCheckResult {
+  status: DiagramCheckStatus;
+  total: number;
+  /** 1-based block index + the renderer's error (mmdc stderr carries the parse line). */
+  failures: { index: number; error: string }[];
+}
+
+/**
+ * Parse-check every ```mermaid block in a file by actually rendering it with
+ * mmdc (to a throwaway output that is NOT opened). Unlike renderDiagramsForFile
+ * — whose contract is "never block the approval gate, degrade to raw Markdown"
+ * — this DISTINGUISHES an author error (a block that won't parse → `errors`,
+ * the caller should fail) from an environment limitation (`tool-missing` →
+ * the caller should SKIP, since a CI box without Chromium can't validate).
+ *
+ * Never throws: a thrown writeTemp/runMmdc is recorded as that block's failure.
+ */
+export async function checkDiagramsForFile(
+  content: string,
+  deps: Pick<RenderDeps, 'hasTool' | 'runMmdc' | 'writeTemp'>,
+  stemName = 'diagram',
+): Promise<DiagramCheckResult> {
+  const blocks = extractMermaidBlocks(content);
+  if (blocks.length === 0) return { status: 'no-diagrams', total: 0, failures: [] };
+  if (!(await deps.hasTool('mmdc'))) {
+    return { status: 'tool-missing', total: blocks.length, failures: [] };
+  }
+
+  const failures: { index: number; error: string }[] = [];
+  for (let i = 0; i < blocks.length; i++) {
+    try {
+      const inPath = await deps.writeTemp(`check-${stemName}-${i + 1}.mmd`, blocks[i]);
+      const outPath = `${inPath.replace(/\.mmd$/, '')}.svg`;
+      const res = await deps.runMmdc(inPath, outPath);
+      if (!res.ok) failures.push({ index: i + 1, error: res.error ?? 'render failed' });
+    } catch (e) {
+      failures.push({ index: i + 1, error: e instanceof Error ? e.message : String(e) });
+    }
+  }
+  return {
+    status: failures.length > 0 ? 'errors' : 'ok',
+    total: blocks.length,
+    failures,
+  };
 }
 
 // --- Production wiring -------------------------------------------------------
