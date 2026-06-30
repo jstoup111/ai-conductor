@@ -12,7 +12,7 @@ flowchart TD
   OP([Operator]) -->|/engineer idea| SK[engineer skill<br/>host agent]
   SK -->|"create per-idea worktree"| WT[shared worktree helper<br/>extracted from daemon-deps.createWorktree]
   SK -->|"run DECIDE in worktree cwd"| DEC[DECIDE skills<br/>brainstorm…plan]
-  DEC -->|".docs/* written under worktree"| WTREE[(per-idea worktree<br/>.worktrees/engineer-&lt;slug&gt;<br/>on spec/&lt;slug&gt;)]
+  DEC -->|".docs/* written under worktree"| WTREE[(per-idea worktree<br/>.worktrees/engineer-«slug»<br/>on spec/«slug»)]
   SK -->|"land --worktree"| LAND[land-spec.ts<br/>commit in worktree]
   LAND --> WTREE
   SK -->|"handoff --worktree"| HO[handoff.ts<br/>push + gh pr create in worktree]
@@ -44,20 +44,20 @@ sequenceDiagram
 
   OP->>SK: idea (slug derived)
   SK->>WH: createWorktree(slug)
-  WH->>G: git worktree add -b spec/&lt;slug&gt; .worktrees/engineer-&lt;slug&gt; &lt;default&gt;
+  WH->>G: git worktree add -b spec/«slug» .worktrees/engineer-«slug» «default»
   alt worktree add fails
     G-->>WH: error
     WH-->>SK: throw
     SK-->>OP: ABORT (FR-7) — primary tree untouched, zero writes
   else worktree ready
-    G-->>WH: worktree on spec/&lt;slug&gt;
+    G-->>WH: worktree on spec/«slug»
     WH-->>SK: { path, branch }
     SK->>DEC: run DECIDE with cwd = worktree path
     DEC->>G: write .docs/* INSIDE worktree only (FR-1/FR-2)
     SK->>LAND: land(worktree path)
-    LAND->>G: stage idea's .docs + commit on spec/&lt;slug&gt; (FR-3/FR-9)
+    LAND->>G: stage idea's .docs + commit on spec/«slug» (FR-3/FR-9)
     SK->>HO: handoff(worktree path, branch)
-    HO->>G: git push (if remote) + gh pr create --head spec/&lt;slug&gt; (cwd=worktree)
+    HO->>G: git push (if remote) + gh pr create --head spec/«slug» (cwd=worktree)
     HO-->>SK: { prUrl | local-commit } + ledger + ensureRunning nudge (FR-4)
     SK->>WH: teardown(keep=false)
     WH->>G: git worktree remove --force (branch + commit persist, FR-5)
@@ -81,4 +81,3 @@ sequenceDiagram
    `engineer`-scoped so a concurrent daemon worktree in the same repo never collides.
 5. **Primary tree never receives a `checkout`/`switch`** — the asserted invariant (FR-2) and the
    reason a running daemon is safe (FR-8).
-```
