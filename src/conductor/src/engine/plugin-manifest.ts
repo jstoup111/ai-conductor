@@ -44,8 +44,14 @@ export function validateManifest(raw: unknown): PluginManifest {
     throw new PluginManifestError('Manifest must have required field: name');
   }
 
-  if (!('entrypoint' in manifest)) {
-    throw new PluginManifestError('Manifest must have required field: entrypoint');
+  // `entrypoint` is required for all plugin kinds EXCEPT `memory_provider`
+  // manifests that declare an `mcp` server instead (B1 — MCP-backed provider).
+  const hasMcp = 'mcp' in manifest && manifest.mcp !== null && typeof manifest.mcp === 'object';
+  const isMemoryProvider = manifest.kind === 'memory_provider';
+  if (!hasMcp || !isMemoryProvider) {
+    if (!('entrypoint' in manifest)) {
+      throw new PluginManifestError('Manifest must have required field: entrypoint');
+    }
   }
 
   // Task 4: Validate kind enum

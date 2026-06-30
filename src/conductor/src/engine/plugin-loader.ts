@@ -3,6 +3,7 @@ import { join } from 'path';
 import { loadManifestFromFile } from './plugin-manifest.js';
 import { PluginRegistry } from './plugin-registry.js';
 import { PluginManifestError, PluginLoadError, PluginVersionError } from '../types/plugin.js';
+import type { PluginManifest, McpServerConfig } from '../types/plugin.js';
 import { ClaudeProvider } from '../execution/claude-provider.js';
 import { TerminalSubscriber } from '../ui/subscriber.js';
 import { TerminalRenderer, type TerminalRendererOptions } from '../ui/terminal-renderer.js';
@@ -11,14 +12,59 @@ import type { ConductorEventEmitter } from '../ui/events.js';
 import type { UIEventHandler } from '../ui/subscriber.js';
 
 /**
+ * An agent-queried, MCP-backed memory provider instance (B1).
+ *
+ * The harness only SELECTS, WIRES, and EXPOSES the MCP server declared in the
+ * manifest. It performs NO retrieval — the agent queries the MCP server directly
+ * (FR-3 invariant: adr-2026-06-29-memory-provider-plugin-and-agent-queried-integration).
+ */
+export interface McpBackedMemoryProvider {
+  readonly kind: 'memory_provider';
+  readonly name: string;
+  /** The MCP server configuration the harness will wire via `claude mcp add`. */
+  readonly mcp: McpServerConfig;
+  /** Optional guidance skill path declared in the manifest. */
+  readonly guidance?: string;
+  /** Availability probe — MCP-backed providers default to available until a probe says otherwise. */
+  isAvailable(): boolean;
+}
+
+/**
+ * Creates an MCP-backed memory provider from a `memory_provider` manifest.
+ * Used for non-default providers that declare an MCP server instead of a JS entrypoint.
+ *
+ * @param manifest  A validated `memory_provider` manifest with an `mcp` declaration.
+ * @returns An MCP-backed provider instance.
+ */
+export function createMcpBackedMemoryProvider(manifest: PluginManifest): McpBackedMemoryProvider {
+  const mcp = manifest.mcp as McpServerConfig;
+  return {
+    kind: 'memory_provider' as const,
+    name: manifest.name,
+    mcp,
+    guidance: manifest.guidance,
+    isAvailable(): boolean {
+      // MCP-backed providers are optimistically available at startup.
+      // Availability probing (e.g. health-check) is future work.
+      return true;
+    },
+  };
+}
+
+/**
  * Load and instantiate a plugin from its manifest and entrypoint.
  * Task 10: Validates the entrypoint file exists and the loaded module has
  * the required interface methods (e.g., invoke() for llm_provider).
  */
 async function loadPluginModule(
   pluginDir: string,
-  manifest: { kind: string; name: string; entrypoint: string }
+  manifest: { kind: string; name: string; entrypoint?: string }
 ): Promise<unknown> {
+  if (!manifest.entrypoint) {
+    throw new PluginLoadError(
+      `Plugin ${manifest.name} has no entrypoint. Did you mean to declare an mcp server?`
+    );
+  }
   const entrypointPath = join(pluginDir, manifest.entrypoint);
 
   try {
@@ -74,8 +120,14 @@ export async function discoverPlugins(
         const manifestPath = join(pluginPath, 'plugin.yml');
         try {
           const manifest = loadManifestFromFile(manifestPath);
-          // Task 10: Load the actual plugin module
-          const plugin = await loadPluginModule(pluginPath, manifest);
+          // B1: non-default memory_provider with mcp declaration → MCP-backed provider
+          let plugin: unknown;
+          if (manifest.kind === 'memory_provider' && manifest.mcp) {
+            plugin = createMcpBackedMemoryProvider(manifest);
+          } else {
+            // Task 10: Load the actual plugin module
+            plugin = await loadPluginModule(pluginPath, manifest);
+          }
           registry.register(manifest.kind, manifest.name, plugin);
         } catch (err) {
           if (err instanceof PluginManifestError) {
@@ -100,8 +152,14 @@ export async function discoverPlugins(
         const manifestPath = join(pluginPath, 'plugin.yml');
         try {
           const manifest = loadManifestFromFile(manifestPath);
-          // Task 10: Load the actual plugin module
-          const plugin = await loadPluginModule(pluginPath, manifest);
+          // B1: non-default memory_provider with mcp declaration → MCP-backed provider
+          let plugin: unknown;
+          if (manifest.kind === 'memory_provider' && manifest.mcp) {
+            plugin = createMcpBackedMemoryProvider(manifest);
+          } else {
+            // Task 10: Load the actual plugin module
+            plugin = await loadPluginModule(pluginPath, manifest);
+          }
 
           // Check if we're shadowing a global plugin
           const globalPlugins = registry.list(manifest.kind);

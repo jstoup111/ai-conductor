@@ -20,12 +20,31 @@ export const VALID_PLUGIN_KINDS: readonly PluginKind[] = [
 ];
 
 /**
+ * MCP server configuration declared in a `memory_provider` manifest.
+ * The harness selects, wires, and exposes this server — it performs NO retrieval.
+ * (adr-2026-06-29-memory-provider-plugin-and-agent-queried-integration)
+ */
+export interface McpServerConfig {
+  command: string;
+  args?: string[];
+  env?: Record<string, string>;
+}
+
+/**
  * Plugin manifest schema from plugin.yml.
+ *
+ * For `memory_provider` kind with an `mcp` declaration, `entrypoint` is
+ * optional — the MCP server config replaces the JS module load path.
+ * For all other plugin kinds, `entrypoint` is required (validated at runtime).
  */
 export interface PluginManifest {
   kind: PluginKind;
   name: string;
-  entrypoint: string;
+  /**
+   * Path to the JS entrypoint module. Required for all plugin kinds EXCEPT
+   * `memory_provider` manifests that declare an `mcp` server instead.
+   */
+  entrypoint?: string;
   harness_version?: string;
   capabilities?: Record<string, unknown>;
   /**
@@ -34,6 +53,12 @@ export interface PluginManifest {
    * on how to interact with the provider. The harness does NOT parse or index the file.
    */
   guidance?: string;
+  /**
+   * MCP server configuration for non-default `memory_provider` plugins.
+   * When present, the plugin is loaded as an agent-queried MCP-backed provider
+   * rather than a JS module. Mutually exclusive with `entrypoint` for memory providers.
+   */
+  mcp?: McpServerConfig;
 }
 
 /**
