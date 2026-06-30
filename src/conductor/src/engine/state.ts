@@ -39,7 +39,7 @@ export async function readState(path: string): Promise<StateResult<ConductState>
 }
 
 /**
- * Migrate a persisted state to the current schema (ADR-018). Idempotent and
+ * Migrate a persisted state to the current schema (adr-2026-06-29-brainstorm-rename-migration). Idempotent and
  * non-destructive — safe to run on every load.
  *
  * `brainstorm` was split into `explore` + `prd`. A pre-split state records only

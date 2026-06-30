@@ -95,6 +95,7 @@ standard implementation, Haiku for mechanical checks.
 | manual-test | sonnet | Structured validation against stories — pattern-following |
 | prd-audit | opus | Cross-references PRD intent vs shipped implementation across two domains (spec + code) — deep reasoning |
 | remediate | opus | Reasons over blocking audit gaps to assign a disposition (build/specs/arch/plan) + concrete tasks, or HALT (architectural-clarity / product-scope) — judgment-heavy routing |
+| rebase | opus | Conflict resolution requires understanding both sides of a hunk and making a semantic merge judgment — reasoning-heavy |
 | retro | sonnet | Structured analysis from concrete data; Part C (context efficiency) is checklist-based |
 | pr | sonnet | Diff analysis and structured PR body — templated output |
 | bootstrap | sonnet | Detection and scaffolding — largely mechanical |
@@ -196,6 +197,29 @@ Run whatever verification the project requires (tests, lint, type-check, etc.) l
 before pushing. The `/finish` skill presents the user with completion options and delegates
 to `/pr` when the user chooses Push & PR. The `/pr` skill enforces the pre-push gate.
 
+## Rebase Policy
+
+**Never rebase a feature branch mid-build.** Implementation agents must NOT run
+`git fetch`, `git pull`, `git rebase`, or switch branches during a build — they commit
+only to the current feature branch. A mid-build rebase onto a moved `origin/<default>`
+rewrites history under active work and surfaces surprise conflicts (it stalled two
+feature branches during Phase 9 in CHANGELOG conflicts).
+
+The **only** sanctioned rebases are:
+
+1. the daemon's finish-time **rebase-onto-latest** (runs outside the per-task loop,
+   with conflict → HALT + CHANGELOG auto-resolve), and
+2. the **`/rebase`** resolver, which advances an already-paused rebase to completion.
+
+An operator may also deliberately rebase a branch onto its base (e.g. to refresh a
+stale PR) — that is an explicit, human-initiated action, not a mid-build one.
+
+This rule is enforced primarily in the skill prompts (build/tdd/pipeline tell the
+implementation subagent never to integrate upstream itself). The `block-destructive-git`
+hook **no longer hard-blocks** ad-hoc `git rebase` — a hard block also rejected the
+legitimate operator and `/rebase` cases — so the discipline lives here and in the
+dispatch prompts, not in the hook.
+
 ## Autonomy Principle
 
 **Anything approved more than once is a candidate for automation.**
@@ -273,6 +297,34 @@ conduct --update               # force an update check now
 
 The `updateChannel` setting is per-user (lives in `~/.claude/`), so every
 project using this harness inherits the same channel.
+
+## Daemon CLI
+
+The per-repo build daemon is driven by the **`conduct-ts`** binary. **Use `conduct-ts`,
+NOT the `conduct` bash wrapper, for daemon subcommands** — `conduct daemon status`
+mis-routes to a feature build; only `conduct-ts daemon …` reaches the daemon commands.
+
+The daemon is hosted as a **foreground process inside a per-repo tmux session**
+(`cc-daemon-<slug>`), so you can attach to, restart, and debug a *running* daemon on demand
+— in color. Management requires `tmux` on the host; the daemon itself still builds with no
+tmux present (management is purely additive).
+
+| Command | What it does |
+|---------|--------------|
+| `conduct-ts daemon start` | Start the repo's daemon in a tmux session. **Idempotent** — a no-op if one is already running (never a duplicate). |
+| `conduct-ts daemon stop` | Stop the repo's daemon (kills the session, releases the lock). Safe no-op if not running. |
+| `conduct-ts daemon restart` | Restart the daemon — fresh inner process, same session endpoint. |
+| `conduct-ts daemon connect` | Attach **read-only** to watch the live, full-color output. Detach with `Ctrl-b d`; the daemon keeps running. |
+| `conduct-ts daemon debug` | Attach **read/write** — `Ctrl-c` to pause the loop, inspect, then resume/restart. |
+| `conduct-ts daemon status` | Liveness of every registered repo's daemon (running / stale / stopped, pid, started-at, last activity, **session up/down**) |
+| `conduct-ts daemon logs [--follow] [--all] [--repo <path>]` | Tail `.daemon/daemon.log` (ANSI-stripped) for this repo, all registered repos, or a named one |
+| `conduct-ts daemon --continuous` | Run a daemon in the **foreground**, idle-polling forever (omit `--max-idle-polls` ⇒ Infinity). This is the process tmux hosts. |
+| `conduct-ts daemon` | Drain the current backlog once, then exit (add `--max-idle-polls N` to self-limit after N idle polls) |
+
+One daemon per repo, enforced by the pidfile lock at `.daemon/daemon.pid` (stale dead-pid
+locks self-reclaim) underneath the tmux session. The daemon runs **serially** (one feature at a
+time), so `connect` always shows exactly the feature currently building. A host reboot drops
+tmux sessions; the next `daemon start` (or engineer nudge) respawns.
 
 ## Key Conventions
 

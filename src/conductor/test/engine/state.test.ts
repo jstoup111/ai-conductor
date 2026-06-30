@@ -316,7 +316,7 @@ describe('engine/state', () => {
     });
   });
 
-  describe('migrateState (ADR-018: brainstorm → explore + prd)', () => {
+  describe('migrateState (adr-2026-06-29-brainstorm-rename-migration: brainstorm → explore + prd)', () => {
     it('maps brainstorm:done to explore:done + prd:done on read', async () => {
       await writeFile(statePath, JSON.stringify({ brainstorm: 'done', complexity: 'done' }), 'utf-8');
       const r = await readState(statePath);

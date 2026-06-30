@@ -1,4 +1,4 @@
-// Test: work-track marker + track-aware landSpec (ADR-015/017, FR-2/13).
+// Test: work-track marker + track-aware landSpec (adr-2026-06-29-explore-prd-split-track-in-explore/adr-2026-06-29-track-marker-location, FR-2/13).
 //
 //   - parseTrack: valid / absent / garbled
 //   - writeTrackMarker: writes product/technical, no-op on invalid

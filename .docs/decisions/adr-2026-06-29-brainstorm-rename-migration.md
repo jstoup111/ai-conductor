@@ -1,4 +1,4 @@
-# ADR-018: Migration for `brainstorm → {explore, prd}`
+# ADR: Migration for `brainstorm → {explore, prd}`
 
 **Status:** APPROVED
 **Date:** 2026-06-29
@@ -17,11 +17,11 @@ features or already-merged specs.
   exists for the feature, else `prd = skipped`. Performed in the state loader so every entry point
   (conduct, daemon, engineer) inherits it.
 - **Daemon.** `PRESEEDED_DONE` replaces `brainstorm` with `explore` + `prd`. `discoverBacklog`
-  treats a **missing track marker as `product`** (ADR-017), so already-merged specs remain buildable
+  treats a **missing track marker as `product`** (adr-2026-06-29-track-marker-location), so already-merged specs remain buildable
   and keep `prd-audit`.
 - **No retroactive reordering.** A feature already mid-DECIDE under the old order
   (stories-before-architecture) completes on its **existing recorded step states**; the new ordering
-  (ADR-016) applies only to features that begin `explore` after this change. Migration renames keys;
+  (adr-2026-06-29-architecture-before-stories-convergent-kickback) applies only to features that begin `explore` after this change. Migration renames keys;
   it never reshuffles completed/in-progress steps.
 - **Type alias only at the boundary.** `StepName`/`DecideStep` drop `brainstorm`; a `brainstorm →
   explore` mapping exists solely in the state-migration shim, not in the live unions.

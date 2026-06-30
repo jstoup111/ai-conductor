@@ -692,7 +692,7 @@ export function parseIntakeSourceRef(content: string | null): string | undefined
  * is free-form rationale. Mirrors `parseComplexityTier` / `parseIntakeSourceRef`.
  *
  * Returns `undefined` when the content is null/absent or carries no recognizable
- * track line. Callers default a missing track to `product` (ADR-017): a spec
+ * track line. Callers default a missing track to `product` (adr-2026-06-29-track-marker-location): a spec
  * authored before tracks existed is a product PRD, so it must keep `prd-audit`
  * and never be silently treated as technical.
  */

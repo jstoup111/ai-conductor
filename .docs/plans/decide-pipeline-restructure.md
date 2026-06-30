@@ -2,7 +2,7 @@
 
 **Spec:** .docs/specs/2026-06-29-decide-pipeline-restructure.md
 **Stories:** .docs/stories/decide-pipeline-restructure.md
-**Architecture:** .docs/architecture/decide-pipeline-restructure.md + ADR-015–018
+**Architecture:** .docs/architecture/decide-pipeline-restructure.md + the four `adr-2026-06-29-*` DECIDE ADRs (explore-prd-split-track-in-explore, architecture-before-stories-convergent-kickback, track-marker-location, brainstorm-rename-migration)
 **Tier:** L
 
 ## Strategy

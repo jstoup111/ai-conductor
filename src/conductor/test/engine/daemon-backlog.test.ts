@@ -66,7 +66,7 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
     await rm(empty, { recursive: true, force: true });
   });
 
-  describe('track propagation (ADR-015/017)', () => {
+  describe('track propagation (adr-2026-06-29-explore-prd-split-track-in-explore/adr-2026-06-29-track-marker-location)', () => {
     async function seedEligible(slug: string) {
       await writeFile(join(dir, `.docs/plans/${slug}.md`), planWithDeps(`.docs/stories/${slug}.md`));
       await writeFile(join(dir, `.docs/stories/${slug}.md`), APPROVED_STORIES);

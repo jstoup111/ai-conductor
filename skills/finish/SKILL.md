@@ -16,6 +16,23 @@ Presents structured options for integrating the work and handles cleanup.
 
 ### 1. Fresh Verification
 
+**GATE 0 — Refuse to finish a tree that is mid-rebase or mid-merge.** This is the
+FIRST thing you do, before the test suite or anything else. Run `git status` and
+check for an in-progress rebase/merge:
+
+- `git status` reports `rebase in progress` / `You are currently rebasing` / `You
+  have unmerged paths`, **or**
+- a `git rev-parse --git-path rebase-merge` / `rebase-apply` directory exists, **or**
+- `git diff --name-only --diff-filter=U` is non-empty (unresolved conflicts).
+
+If ANY of these hold, **STOP immediately**: do NOT run the test suite, do NOT push,
+do NOT create a PR, and do NOT write `.pipeline/finish-choice`. Finishing here would
+push a detached, half-rebased branch (or grind for many minutes on a tree it can
+never ship). This is **not** a finishable state — the rebase must be completed/
+resolved first (the conductor's rebase step or `/rebase` does that). Report the
+blocker plainly and end. Leaving no `finish-choice` lets the conductor re-evaluate
+and HALT for resolution rather than ship broken work.
+
 **GATE: No completion claims without running verification commands NOW.**
 
 Do NOT trust:
@@ -146,6 +163,7 @@ After executing the chosen option:
 
 ## Verification
 
+- [ ] GATE 0: checked `git status` first — confirmed NO rebase/merge in progress and no unmerged paths (else stopped without pushing/PR/`finish-choice`)
 - [ ] Test suite ran fresh (not cached) — output read
 - [ ] Git status clean (no unexpected uncommitted changes)
 - [ ] All story acceptance criteria verified as covered

@@ -271,7 +271,7 @@ export async function discoverBacklog(
     // stem as the plan. Absent/garbled → undefined (hand-authored specs unchanged).
     const sourceRef = parseIntakeSourceRef(await tree.readFile(`.docs/intake/${slug}.md`));
 
-    // Work track (ADR-015/017) from `.docs/track/<plug-stem>.md`. Absent → the
+    // Work track (adr-2026-06-29-explore-prd-split-track-in-explore/adr-2026-06-29-track-marker-location) from `.docs/track/<plug-stem>.md`. Absent → the
     // daemon treats the feature as `product` (back-compat: pre-track specs are
     // PRDs), so `prd`/`prd-audit` still run. Carried only when explicitly set.
     const track = parseTrack(await tree.readFile(`.docs/track/${slug}.md`));

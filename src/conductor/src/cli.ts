@@ -166,6 +166,25 @@ export function createProgram(): Command {
     .option('--repo <path>', 'Target repo (default: current directory)')
     .option('--follow', 'Stream new log lines (tail -f); single repo only')
     .option('--all', 'Show logs for every registered repo');
+  // Management verbs — route to the tmux Supervisor port (detectDaemonSupervisorCommand),
+  // dispatched in index.ts before the pipeline boots. Declared here ONLY so `--help`
+  // documents them; commander never actually dispatches them.
+  daemon
+    .command('start')
+    .description('Start the tmux-supervised daemon for this repo; auto-attaches read-only unless -D')
+    .option('-D, --detach', 'Start detached: do not auto-attach to the tmux session (default attaches when interactive)');
+  daemon
+    .command('stop')
+    .description('Stop this repo\'s tmux-supervised daemon');
+  daemon
+    .command('restart')
+    .description('Restart this repo\'s tmux-supervised daemon');
+  daemon
+    .command('connect')
+    .description('Attach READ-ONLY to this repo\'s daemon tmux session (Ctrl-b d to detach)');
+  daemon
+    .command('debug')
+    .description('Attach READ-WRITE to this repo\'s daemon tmux session (Ctrl-b d to detach)');
 
   return program;
 }
@@ -191,6 +210,26 @@ export function renderFullHelp(program: Command = createProgram()): string {
   };
   walk(program, []);
 
+  return sections.join('\n\n') + '\n';
+}
+
+/**
+ * Render help for the `daemon` command subtree only — the run flags plus every
+ * sub-verb (status/logs + the tmux management verbs). Used by index.ts to answer
+ * `conduct daemon --help` WITHOUT falling through to detectDaemonCommand (which
+ * would treat `--help` as an unknown flag and LAUNCH a daemon run).
+ */
+export function renderDaemonHelp(program: Command = createProgram()): string {
+  const daemon = program.commands.find((c) => c.name() === 'daemon');
+  if (!daemon) return '';
+  const rule = '─'.repeat(72);
+  const sections = [daemon.helpInformation().trimEnd()];
+  for (const sub of daemon.commands) {
+    if (sub.name() === 'help') continue; // commander's auto `help [command]`
+    sections.push(
+      `${rule}\nconduct daemon ${sub.name()}\n${rule}\n${sub.helpInformation().trimEnd()}`,
+    );
+  }
   return sections.join('\n\n') + '\n';
 }
 

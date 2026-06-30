@@ -1,4 +1,4 @@
-# ADR-017: Track marker is a dedicated `.docs/track/<slug>.md`
+# ADR: Track marker is a dedicated `.docs/track/<slug>.md`
 
 **Status:** APPROVED
 **Date:** 2026-06-29

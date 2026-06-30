@@ -61,6 +61,10 @@ function requireFn(mod: Record<string, unknown>, name: string): (...args: any[])
   return fn as (...args: any[]) => any;
 }
 
+// Note: real-daemon spawning is globally disabled for the suite via test/setup.ts
+// (AI_CONDUCTOR_NO_DAEMON_AUTOLAUNCH=1), so the engineer handoff's ensureRunning runs
+// end-to-end here without leaking a tmux-hosted daemon.
+
 // ── temp env scaffolding ────────────────────────────────────────────────────
 
 let workDir: string;

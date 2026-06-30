@@ -114,6 +114,18 @@ check_installation() {
   else
     warn "markdown viewer not configured — run ./bin/install to select one"
   fi
+  if [ -f "$HARNESS_USER_CONFIG" ] && grep -q "^mermaid_renderer:" "$HARNESS_USER_CONFIG" 2>/dev/null; then
+    local mr_preset mr_cmd
+    mr_preset=$(python3 -c "import yaml; c=yaml.safe_load(open('$HARNESS_USER_CONFIG')) or {}; print((c.get('mermaid_renderer') or {}).get('preset',''))" 2>/dev/null)
+    mr_cmd=$(python3 -c "import yaml; c=yaml.safe_load(open('$HARNESS_USER_CONFIG')) or {}; print((c.get('mermaid_renderer') or {}).get('command',''))" 2>/dev/null)
+    if [ -z "$mr_cmd" ] || command -v "$mr_cmd" &>/dev/null; then
+      ok "mermaid renderer: ${mr_preset:-unset} (diagram approval gates)"
+    else
+      warn "mermaid renderer '${mr_preset}' configured but '${mr_cmd}' not on PATH — diagrams fall back to raw Markdown"
+    fi
+  else
+    warn "mermaid renderer not configured — run ./bin/install to select one"
+  fi
   if command -v node &>/dev/null && npm list -g @modelcontextprotocol/server-puppeteer &>/dev/null; then
     ok "puppeteer MCP server installed"
   else
@@ -130,14 +142,17 @@ check_installation() {
     warn "rtk not installed — token usage reduction unavailable"
   fi
 
-  # Summary
+  # Summary. Return non-zero on ANY drift so `--check` is scriptable — callers
+  # (e.g. the conduct-ts install-freshness guard) gate on the exit code.
   echo ""
   if [ "$missing" -eq 0 ] && [ "$stale" -eq 0 ] && $all_ok; then
     echo -e "${GREEN}${BOLD}All checks passed.${NC}"
+    return 0
   else
     [ "$missing" -gt 0 ] && echo -e "${RED}${missing} skill(s) missing.${NC}"
     [ "$stale" -gt 0 ] && echo -e "${YELLOW}${stale} skill(s) stale or misconfigured.${NC}"
     echo -e "Run ${BOLD}./bin/install${NC} to fix."
+    return 1
   fi
 }
 
@@ -480,6 +495,16 @@ MD_VIEWER_PRESETS=(
   "cat|cat        (universal fallback)|cat|{file}|inline"
 )
 
+# Mermaid renderer preset catalog — parallels MERMAID_RENDERER_PRESETS in
+# src/conductor/src/engine/mermaid-renderer-presets.ts. Keep in sync.
+# Columns: key | label | command | args | mode  (command empty = no tool needed)
+MERMAID_RENDERER_PRESETS=(
+  "html|HTML preview (browser, no native deps — works anywhere)||{file}|external"
+  "mmdc-png|PNG images (mermaid-cli, needs Chromium)|mmdc|-i {file} -o {out}|external"
+  "mmdc-svg|SVG images (mermaid-cli, needs Chromium)|mmdc|-i {file} -o {out}|external"
+  "none|disabled (raw Markdown)||{file}|external"
+)
+
 # Try to install one of the terminal viewers via common package managers.
 # Silent best-effort; returns 0 if installed or already present, 1 otherwise.
 install_md_viewer_tool() {
@@ -543,6 +568,28 @@ install_md_viewer_tool() {
 
 # Persist the chosen viewer to ~/.ai-conductor/config.yml. Uses Python+yaml
 # so existing keys (e.g. conductor.*) are preserved.
+# Install the tool a mermaid preset needs. html/none need no tool. mmdc-* need
+# @mermaid-js/mermaid-cli via npm (only if node is present). Silent best-effort;
+# returns 0 if present/installed or no tool needed, 1 otherwise.
+install_mermaid_tool() {
+  local key=$1
+  case "$key" in
+    html|none)
+      return 0
+      ;;
+    mmdc-png|mmdc-svg)
+      command -v mmdc &>/dev/null && return 0
+      if command -v npm &>/dev/null; then
+        npm install -g @mermaid-js/mermaid-cli &>/dev/null && return 0
+      fi
+      return 1
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 write_md_viewer_config() {
   local preset=$1 cmd=$2 args=$3 mode=$4
   mkdir -p "$(dirname "$HARNESS_USER_CONFIG")"
@@ -647,6 +694,90 @@ configure_md_viewer() {
 
   write_md_viewer_config "$key" "$cmd" "$args" "$mode"
   ok "Markdown viewer: ${key} (${mode})"
+}
+
+write_mermaid_renderer_config() {
+  local preset=$1 cmd=$2 args=$3 mode=$4
+  mkdir -p "$(dirname "$HARNESS_USER_CONFIG")"
+  CFG_PATH="$HARNESS_USER_CONFIG" PRESET="$preset" CMD="$cmd" ARGS="$args" MODE="$mode" python3 - <<'PY'
+import os, yaml
+from pathlib import Path
+p = Path(os.environ["CFG_PATH"])
+try:
+    cfg = yaml.safe_load(p.read_text()) if p.exists() else {}
+except Exception:
+    cfg = {}
+if cfg is None:
+    cfg = {}
+cfg["mermaid_renderer"] = {
+    "preset": os.environ["PRESET"],
+    "command": os.environ["CMD"],
+    "args": os.environ["ARGS"].split(),
+    "mode": os.environ["MODE"],
+}
+p.parent.mkdir(parents=True, exist_ok=True)
+p.write_text(yaml.safe_dump(cfg, sort_keys=False, default_flow_style=False))
+PY
+}
+
+# Prompt the user for a mermaid renderer preset, probe availability, optionally
+# install the chosen tool, and persist the selection. Parallels configure_md_viewer.
+# html/none need no tool (always available); mmdc-* need @mermaid-js/mermaid-cli.
+# Skipped in --update / non-interactive runs (leaves any existing selection alone).
+configure_mermaid_renderer() {
+  if [ "$UPDATE_MODE" = true ] || [ ! -t 0 ]; then
+    if ! grep -q "^mermaid_renderer:" "$HARNESS_USER_CONFIG" 2>/dev/null; then
+      info "mermaid renderer not configured — run bin/install (no flags) or edit $HARNESS_USER_CONFIG"
+    fi
+    return 0
+  fi
+
+  echo ""
+  info "Mermaid renderer — how should /conduct show diagrams at the architecture approval gates?"
+  echo "    [*] = available now (no tool needed, or tool on PATH)"
+  echo ""
+  local i=1
+  local -a preset_keys=()
+  local default_idx=""
+  local entry key label cmd args mode marker
+  for entry in "${MERMAID_RENDERER_PRESETS[@]}"; do
+    IFS='|' read -r key label cmd args mode <<< "$entry"
+    preset_keys+=("$entry")
+    # A preset is available when it needs no tool (empty command) or its tool is on PATH.
+    if [ -z "$cmd" ] || command -v "$cmd" &>/dev/null; then
+      marker=" [*]"
+      [ -z "$default_idx" ] && default_idx=$i
+    else
+      marker=""
+    fi
+    printf "    %d) %s%s\n" "$i" "$label" "$marker"
+    i=$((i + 1))
+  done
+  [ -z "$default_idx" ] && default_idx=1
+
+  local choice
+  read -r -p "  Choice [${default_idx}]: " choice
+  choice=${choice:-$default_idx}
+
+  if ! [[ "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -lt 1 ] || [ "$choice" -ge "$i" ]; then
+    warn "invalid choice '${choice}' — defaulting to preset ${default_idx}"
+    choice=$default_idx
+  fi
+
+  IFS='|' read -r key label cmd args mode <<< "${preset_keys[$((choice - 1))]}"
+
+  if [ -n "$cmd" ] && ! command -v "$cmd" &>/dev/null; then
+    info "Trying to install ${key} (${cmd})..."
+    if install_mermaid_tool "$key"; then
+      ok "${key} installed"
+    else
+      warn "${key} not installed automatically — diagrams will fall back to raw Markdown until you install it"
+      info "Install manually (npm install -g @mermaid-js/mermaid-cli), then re-run bin/install"
+    fi
+  fi
+
+  write_mermaid_renderer_config "$key" "$cmd" "$args" "$mode"
+  ok "Mermaid renderer: ${key} (${mode})"
 }
 
 # ─── AI Conductor config (channel, current version) ──────────────────────────
@@ -866,6 +997,7 @@ install() {
 
   # 6c. Prompt for a markdown viewer (skipped on --update)
   configure_md_viewer
+  configure_mermaid_renderer
 
   # 7. Check Claude Code
   if command -v claude &>/dev/null; then
@@ -924,7 +1056,7 @@ uninstall() {
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 case "${1:-}" in
-  --check)     check_installation ;;
+  --check)     check_installation; exit $? ;;
   --uninstall) uninstall ;;
   --update)    UPDATE_MODE=true; install ;;
   -h|--help)

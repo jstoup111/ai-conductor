@@ -1,4 +1,4 @@
-# ADR-016: Architecture before stories; convergent root-routed kickbacks
+# ADR: Architecture before stories; convergent root-routed kickbacks
 
 **Status:** APPROVED
 **Date:** 2026-06-29

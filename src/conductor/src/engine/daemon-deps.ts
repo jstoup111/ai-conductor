@@ -9,6 +9,7 @@ import type {
   WorktreeOutcome,
 } from './daemon-runner.js';
 import { prepareWorktree } from './worktree-prepare.js';
+import { makeProductionGh } from './pr-labels.js';
 
 export interface RealDepsConfig {
   /** The main checkout the daemon runs from. */
@@ -21,6 +22,12 @@ export interface RealDepsConfig {
   runConductorInWorktree: (worktree: FeatureWorktree, item: BacklogItem) => Promise<void>;
   /** LLM provider used for the Phase 9.1 `done`-feature retro narrative. */
   provider: LLMProvider;
+  /**
+   * The resolved active memory provider for this run (adr-2026-06-29-per-project-memory-provider-selection). Computed at
+   * run start by `resolveMemoryProvider` and carried on context so every
+   * memory-using step sees the same single active provider (FR-10).
+   */
+  memoryProvider?: unknown;
   log?: (msg: string) => void;
 }
 
@@ -37,9 +44,16 @@ export function makeFeatureRunnerDeps(cfg: RealDepsConfig): FeatureRunnerDeps {
     // (Phase 9.1). Manual `/conduct` runs don't go through makeFeatureRunnerDeps.
     daemon: true,
     provider: cfg.provider,
+    // Thread the resolved active memory provider onto run context (adr-2026-06-29-per-project-memory-provider-selection/FR-10).
+    memoryProvider: cfg.memoryProvider,
     // Project key for the engineer store = the main checkout's basename (NOT the
     // worktree path, which is always `<projectRoot>/.worktrees/<slug>`).
     project: basename(cfg.projectRoot),
+    // FR-9: the MAIN checkout path — the watch registry lives here, and gh ops
+    // are issued from here after the worktree is torn down on ship.
+    projectRoot: cfg.projectRoot,
+    // FR-16: production gh runner for clear-on-success label ops.
+    runGh: makeProductionGh(),
 
     createWorktree: async (slug) => {
       const branch = `feat/daemon-${slug}`;
@@ -50,14 +64,15 @@ export function makeFeatureRunnerDeps(cfg: RealDepsConfig): FeatureRunnerDeps {
       // exists". Three cases:
       //   1. worktree already registered for this path → reuse it (resume).
       //   2. branch exists but its worktree was removed → attach a worktree.
-      //   3. neither exists → fresh branch + worktree off the base branch.
+      //   3. neither exists → fresh branch + worktree off the build base.
       if (await isRegisteredWorktree(root, path)) {
         cfg.log?.(`reusing worktree ${path} (resume)`);
       } else if (await branchExists(root, branch)) {
         cfg.log?.(`attaching worktree to existing branch ${branch}`);
         await execa('git', ['worktree', 'add', path, branch], { cwd: root });
       } else {
-        await execa('git', ['worktree', 'add', '-b', branch, path, cfg.baseBranch], {
+        const base = await resolveWorktreeBase(root, cfg.baseBranch);
+        await execa('git', ['worktree', 'add', '-b', branch, path, base], {
           cwd: root,
         });
       }
@@ -82,11 +97,41 @@ export function makeFeatureRunnerDeps(cfg: RealDepsConfig): FeatureRunnerDeps {
       });
     },
 
-    markProcessed: async (slug) => {
+    markProcessed: async (slug, prUrl) => {
       await mkdir(processedDir, { recursive: true });
-      await writeFile(join(processedDir, slug), 'shipped\n', 'utf-8');
+      // Persist as JSON so the startup dashboard can surface the shipped PR link.
+      // Legacy ledgers held the plain text `shipped`; readProcessedEntries still
+      // parses those (no PR), so this is backward-compatible.
+      await writeFile(
+        join(processedDir, slug),
+        `${JSON.stringify({ status: 'shipped', prUrl: prUrl ?? null })}\n`,
+        'utf-8',
+      );
     },
   };
+}
+
+/**
+ * The ref a fresh feature worktree forks from. Prefer the remote-tracking
+ * `origin/<baseBranch>` so the build starts from the latest *fetched* origin tip
+ * rather than the LOCAL `<baseBranch>`, which can lag origin: `fastForwardRoot`
+ * only advances local `<baseBranch>` while the root checkout is actually on it,
+ * so whenever another process leaves the root on a different branch (or detached
+ * HEAD), local `<baseBranch>` goes stale and worktrees cut from it would build
+ * against old code.
+ *
+ * Falls back to the local `<baseBranch>` when `origin/<baseBranch>` cannot be
+ * resolved (local-only repo with no origin, or never fetched) — preserving the
+ * prior behavior for those repos.
+ */
+async function resolveWorktreeBase(projectRoot: string, baseBranch: string): Promise<string> {
+  const remote = `origin/${baseBranch}`;
+  try {
+    await execa('git', ['rev-parse', '--verify', '--quiet', remote], { cwd: projectRoot });
+    return remote;
+  } catch {
+    return baseBranch;
+  }
 }
 
 /** True if `path` is already a registered git worktree of `projectRoot`. */

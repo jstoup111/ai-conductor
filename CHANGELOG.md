@@ -13,7 +13,9 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 ### Added
 
 - **DECIDE pipeline restructure — `explore`/`prd` split, product/technical tracks, architecture
-  before stories (ADR-015–018).** `brainstorm` is split into **`explore`** (advisory, always-runs:
+  before stories (the four `adr-2026-06-29-*` DECIDE ADRs: explore-prd-split-track-in-explore,
+  architecture-before-stories-convergent-kickback, track-marker-location,
+  brainstorm-rename-migration).** `brainstorm` is split into **`explore`** (advisory, always-runs:
   context + approaches + the operator-confirmed product/technical **track**, ephemeral notes →
   `.pipeline/`, decision → `.memory/`) and **`prd`** (gating, product-only PRD with a product-only
   audit gate + external-constraint carve-out — absorbs PR #142). The DECIDE order is now
@@ -30,6 +32,128 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- Daemon `needs-remediation` escalation now **upserts** its failure comment instead of
+  appending a new one on every HALT (#159). The comment carries a hidden marker
+  (`<!-- conductor:needs-remediation -->`); on a repeat HALT the existing comment is edited
+  in place (the latest reason replaces the prior one) so a repeatedly-failing feature no
+  longer accumulates duplicate `## Daemon halt` comments on the same PR. New
+  `upsertComment()` seam in `pr-labels.ts`; best-effort/non-throwing (a PATCH failure leaves
+  the existing comment as-is, a missing/unparseable/unreachable comment falls back to create).
+
+### Changed
+
+- `writing-system-tests` skill is now language- and framework-agnostic. Replaced the
+  Rails/RSpec-only mechanics (hardcoded `spec/integration`/`spec/system` paths, `config/routes.rb`,
+  `bundle exec rspec`, Capybara/`SecureRandom` examples) with framework-neutral guidance that
+  defers concrete syntax, paths, runner, and fixtures to the project's detected test framework
+  (mirroring how `/tdd` defers to stack test conventions). All correctness principles are
+  preserved: §3b replacement-entry-point, §3c path-guard boundary values, §3d adversarial
+  derivation coverage, RED discipline, and the acceptance/request/unit layering philosophy.
+  README skill table updated to match.
+
+## Migration
+
+The build daemon is now hosted inside a tmux session instead of a detached background process.
+Any daemon currently running as a detached process must be stopped once so the first
+tmux-hosted `daemon start` isn't blocked by the 1-per-repo pidfile lock. This kills only a live
+detached daemon for the current repo; a stale lock self-reclaims and needs nothing.
+
+```bash migration
+# Stop a currently-detached daemon for this repo (no-op if none / already stale).
+if [ -f .daemon/daemon.pid ]; then
+  pid=$(jq -r '.pid // empty' .daemon/daemon.pid 2>/dev/null || true)
+  if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+    kill "$pid" 2>/dev/null || true
+    echo "Stopped detached daemon (pid $pid). Start the tmux-hosted daemon with: conduct-ts daemon start"
+  else
+    echo "No live detached daemon (stale lock self-reclaims). Use: conduct-ts daemon start"
+  fi
+fi
+# Requires tmux on the host for the management verbs: e.g. `sudo apt-get install tmux`.
+```
+
+### Changed
+
+- **`conduct-ts daemon start` now auto-attaches to the daemon's tmux session (conduct-ts).** After
+  starting, `start` hands the terminal to the live session read-only (like `daemon connect`) so the
+  operator lands in it instead of having to attach separately. Pass **`-D` / `--detach`** to keep the
+  old fire-and-forget behavior. The attach is suppressed automatically when there is no interactive
+  terminal (scripts, the engineer auto-launch) so `start` never blocks/fails on `tmux attach` —
+  it starts detached and prints how to attach. The engineer auto-launch is unaffected (it calls
+  `supervisor.start` directly, not the CLI verb).
+
+- **Rebase discipline moved from the `block-destructive-git` hook into the skill prompts +
+  HARNESS.md.** The hook previously *hard-blocked* every ad-hoc `git rebase` (exit 2). That also
+  rejected the two legitimate cases — an operator deliberately refreshing a stale PR branch onto
+  its base, and the `/rebase` resolver — forcing awkward workarounds. The hook now **allows**
+  `git rebase` and emits a single non-blocking reminder instead; `--continue/--abort/--skip/
+  --edit-todo` pass silently. The "never rebase mid-build" rule is now stated canonically in a new
+  **HARNESS.md → Rebase Policy** section and reinforced in the build-loop skills (`tdd` COMMIT
+  phase step 7; `pipeline` already instructs the implementation subagent). Force-push,
+  `reset --hard`, unmerged `branch -D`, `clean -f`, and `checkout -- .` remain hard-blocked.
+- **`bin/install --check` now exits non-zero on drift.** It previously printed missing/stale-skill
+  warnings but always exited 0 (the last statement was an `echo`), so it couldn't be scripted. It now
+  `return`s 1 when any skill is missing/stale (and the `--check` dispatcher propagates it via
+  `exit $?`), enabling the new install-freshness guard to gate on the exit code.
+
+### Fixed
+
+- **`/finish` now refuses a mid-rebase/mid-merge tree (skill GATE 0).** A `/finish` dispatched on a
+  worktree with a paused rebase (e.g. `conduct-state` marked `rebase` done but the tree was still
+  mid-conflict) would grind for ~15 minutes and then push a PR of a detached, half-rebased branch.
+  The skill's generic "check git status" step was too weak for a small model to enforce, so the
+  finish skill now has an explicit **GATE 0**: before anything else, refuse to proceed if `git status`
+  shows a rebase/merge in progress, a `rebase-merge`/`rebase-apply` dir exists, or
+  `git diff --diff-filter=U` is non-empty — STOP without running tests, pushing, opening a PR, or
+  writing `.pipeline/finish-choice`, so the conductor HALTs for resolution instead of shipping broken
+  work. Enforced in the skill itself rather than via an engine-side workaround.
+  The `needs-remediation` escalation is gated on the daemon flag, but as a belt-and-suspenders guard
+  the production `makeProductionGh`/`makeProductionGit` runners now throw under
+  `AI_CONDUCTOR_NO_REAL_EXEC` (set by the vitest global `test/setup.ts`). This prevents a test that
+  reaches a real runner from mutating live GitHub — previously an auto-mode failure test reused a
+  live PR and added a `needs-remediation` label + comment. Scoped to this seam only; the real-`git`
+  integration tests (rebase / daemon-rekick) use their own execa paths and are unaffected.
+- **`conduct-ts daemon --help` launched a daemon instead of printing help (conduct-ts).** The daemon
+  sub-verbs are intercepted before commander parses, so `--help`/`-h` after `daemon` fell through to
+  `detectDaemonCommand` and **started a real daemon run** (it would scan the backlog and could
+  re-kick/dispatch a feature) — a genuine footgun. `daemon --help`/`-h` now prints a daemon-scoped
+  help surface (`renderDaemonHelp`) and exits, and a typo'd sub-verb (`daemon strt`) prints that help
+  with a clear error + exit 1 instead of launching (`detectUnknownDaemonSubcommand`). The management
+  verbs (`start`/`stop`/`restart`/`connect`/`debug`) are now also **documented in `--help`** — they
+  were missing because only `status`/`logs` were registered on the commander `daemon` command.
+
+- **Daemon build worktrees now fork from `origin/<default>`, not local `<default>` (conduct-ts).**
+  A fresh per-feature worktree was cut from the daemon's LOCAL default branch
+  (`git worktree add -b <branch> <path> main`). But `fastForwardRoot` only advances
+  local `main` while the root checkout is actually on it — so whenever another
+  process leaves the root on a different branch or a detached `HEAD` (e.g. an
+  in-progress rebase), local `main` silently goes stale and every new worktree
+  built against old code, even though `origin/main` had advanced. `createWorktree`
+  now resolves the build base via `resolveWorktreeBase`, preferring the
+  remote-tracking `origin/<default>` tip (falling back to local `<default>` only
+  when `origin/<default>` is unresolvable — a local-only repo never fetched). The
+  fast-forward path and backlog discovery are intentionally unchanged. Covered by
+  new `daemon-deps` tests (origin/<base> base + local fallback) and a real-binary
+  smoke of `git rev-parse --verify --quiet` + `git worktree add … origin/<default>`.
+
+- **Test suite leaked real build daemons; added an auto-launch kill-switch (conduct-ts).** Several
+  engineer tests exercise the real handoff `ensureRunning` without injecting a launch, so under
+  ADR-014 each run spawned a real `tmux new-session -d 'conduct-ts daemon --continuous'` daemon that
+  outlived the test's tmpdir (pre-ADR-014 it leaked detached node procs; the tmux host just made it
+  visible + persistent). Added an operational kill-switch env `AI_CONDUCTOR_NO_DAEMON_AUTOLAUNCH=1`
+  honored by `launchDaemon` — it suppresses the **default** (non-injected) real launch while leaving
+  an explicitly injected supervisor untouched (so the delegation unit tests still assert their
+  contract). A global vitest setup (`test/setup.ts`) sets it for the whole suite, so no test spawns a
+  real daemon and future tests can't re-introduce the leak. The flag also lets an operator who manages
+  daemons by hand disable the engineer's auto-launch.
+- **Silent daemon-launch failure on a tmux-less host (engineer).** The engineer's fire-and-forget
+  `ensureRunning` nudge is the only production path that starts a daemon, and under the
+  daemon-supervisor ADR it now routes through `supervisor.start` (tmux). On a host without tmux that throws
+  `TmuxNotInstalledError`, which the handoff caught and **silently swallowed** — authoring the spec
+  PR while launching no daemon, so specs would pile up unbuilt with no signal. Both handoff sites
+  (`engineer-cli.ts` claim path and `handoff-step.ts`) now keep the failure **non-blocking** (the
+  spec branch still lands) but **surface the reason** (`⚠ Spec authored, but the build daemon was not
+  started for "<repo>": <reason>`). No change on a tmux-present host.
 - **Type error in the github-issues intake adapter (conduct-ts).** `maybeReopen` typed its `repo`
   parameter as `{ name; path }`, omitting the `ghRepo?` field that `RepoLister.list()` actually
   provides and that the function body reads (`repo.ghRepo ?? repo.name`). This produced a
@@ -46,6 +170,118 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   reuse an existing PR (`gh pr view`) instead of failing. Skill docs updated to match.
 
 ### Added
+
+- **Install-freshness guard — the daemon refuses to start on a stale harness install (conduct-ts).**
+  A harness update (git pull / merged PR) does NOT relink skills — that only happens when
+  `bin/install` runs — so a newly-added skill can exist in `skills/` but be missing from
+  `~/.claude/skills/`. A daemon-dispatched `claude -p '/<skill>'` then hits "Unknown command",
+  returns empty output, and the conductor HALTs with a cryptic `rebase skill returned no parseable
+  result` (this exact gap left the new `/rebase` resolver unrunnable on the daemon — every dispatch
+  silently no-op'd). A new guard (`install-freshness.ts`) runs `bin/install --check` at daemon entry:
+  on drift, `daemon start` **prompts** to run `bin/install --update` (decline ⇒ it refuses to start);
+  the continuous daemon run (and any non-interactive launch, e.g. the engineer handoff auto-launch)
+  **fails hard** with an actionable message rather than silently dispatching unregistered skills. If
+  the harness root can't be located the check is skipped (never blocks an otherwise-working install).
+- **Daemon PR labeling — `needs-remediation` draft PR + `mergeable` label sweep (daemon-only).**
+  On **any irrecoverable daemon HALT that strands committed work** — a build/gating-step failure
+  (retries exhausted), a prd-audit product/plan gap needing human DECIDE, the kickback-ping-pong or
+  stuck-gate caps, or an unexpected conductor error (the rebase-conflict HALT is excluded) — when
+  the feature branch has at least one commit, the daemon pushes the branch and opens a **draft PR**
+  labeled `needs-remediation` with a comment explaining the HALT reason (which names the failing
+  step); when there are zero commits, no GitHub artifacts are produced (FR-6). An existing open PR
+  for the branch is reused rather than duplicated (FR-5). PRs
+  from features that reach `done` are enrolled in a per-repo watch registry
+  (`.daemon/mergeable-watch.jsonl`); a best-effort sweep — on daemon startup, after each feature
+  completes, and per idle poll tick — keeps the `mergeable` label in sync: added when the PR is
+  open + conflict-free + CI-green, removed when not, pruned when merged/closed (FR-10..FR-14). A
+  `needs-remediation` PR is never labeled `mergeable` (FR-12). When a failed feature is re-kicked
+  and completes successfully, the daemon clears the stale `needs-remediation` label and un-drafts
+  the PR before enrolling it in the sweep (FR-16). All labeling is best-effort and non-blocking —
+  a GitHub step failure is logged and never disrupts the daemon's core processing (FR-7, FR-15).
+  Daemon-only; interactive runs are unchanged (FR-8, FR-15). PRD:
+  `.docs/specs/2026-06-29-daemon-pr-labels.md`.
+- **Pluggable memory provider — `local` built-in with canonical shared store.** The harness now
+  selects the memory backend via a per-project `memory_provider:` key in `conduct.yml`
+  (adr-2026-06-29-memory-provider-plugin-and-agent-queried-integration/adr-2026-06-29-per-project-memory-provider-selection); the only built-in is `local`. The `local` provider stores all `.memory/`
+  content in a durable project-keyed canonical directory at
+  `~/.ai-conductor/memory/<sha256-of-origin-url>/harness/` and places `.memory/` as a symlink
+  to it — making the store branch-/worktree-independent and safe under concurrent builds
+  (adr-2026-06-29-shared-memory-store-placement-and-durability). On first `conduct` run `bin/conduct` calls `conduct-ts memory setup <dir>`, which
+  creates the canonical store with the four standard categories (`decisions/`, `patterns/`,
+  `gotchas/`, `context/`) plus `index.md`, then atomically symlinks `.memory/` to it. If `.memory/`
+  already exists as a real directory (legacy project), `migrateMemory` copies its contents to the
+  canonical store, verifies, and swaps before creating the symlink (adr-2026-06-29-safe-reversible-memory-migration); the migration is
+  idempotent and automatic (see Migration below). **FR-3 invariant:** the harness contains zero
+  memory search, ranking, or embedding logic — recall is always the agent reading `.memory/` files
+  and judging relevance. New modules: `engine/memory-store.ts`, `engine/memory-migrate.ts`,
+  `engine/memory-cli.ts`; new config field `memory_provider` in `engine/config.ts`; `bin/conduct`
+  wires `run_memory_store_setup` at bootstrap entry (new `LocalMemoryProvider` in
+  `engine/config.ts`).
+
+- **FR-3 invariant check (integrity suite section 8).** `test/test_harness_integrity.sh` gains a
+  new section 8 that asserts no harness-side code in `src/conductor/src/`, `bin/`, `hooks/`, or
+  `skills/` contains memory-retrieval patterns (`embed(`, `cosineSimilarity`, `vectorSearch`,
+  `relevanceScore`, `rankScore`) — so the "recall is always the agent" contract cannot be silently
+  broken by a future PR. The engineer flywheel directory is excluded (`--exclude-dir=engineer`).
+  The previous version-integrity section is renumbered to 9.
+- **tmux-supervised daemons — start / stop / restart / connect / debug (conduct-ts).** The per-repo
+  build daemon is now hosted as a **foreground process inside a per-repo tmux session**
+  (`cc-daemon-<slug>`) behind a swappable **Supervisor port** (tmux adapter now; a kubectl adapter
+  later, no execution-core change). New operator verbs: `conduct-ts daemon start` (idempotent — never
+  a duplicate), `stop`, `restart`, `connect` (read-only live colored watch), `debug` (read/write
+  attach). `daemon status` now also reports tmux **session up/down** (so a stale pidfile with a live
+  orphaned session is distinguishable). The former detached `stdio:'ignore'` spawn (the launch helper,
+  renamed `launchDaemonDetached` → `launchDaemon`) now delegates to `supervisor.start`, so an
+  engineer-nudged daemon is also attachable — while the engineer stays **launch-only** (ADR-005
+  non-management intent preserved; the daemon-supervisor ADR supersedes only the spawn mechanism).
+  The daemon runs **serially** (concurrency clamped to 1; `--concurrency > 1`
+  is clamped with a logged note). The tmux-hosted daemon is **long-lived by design** — the session
+  command is `conduct-ts daemon --continuous` and deliberately drops the former engineer launch's
+  `--max-idle-polls` self-limit so an operator can attach to a running daemon at any time; its bound
+  is the operator `stop` verb (and reboot), not an idle timeout (daemon-supervisor ADR §7). The
+  intake/execute **work-source seam** is formalized (the run loop
+  consumes `BacklogItem`s from an injected source; local in-process adapter unchanged). The daemon
+  still builds with **no tmux present** (management is purely additive — bare-run invariant).
+  `bin/conduct` now forwards `daemon <verb>` to `conduct-ts` (previously `conduct daemon status`
+  mis-launched a feature build named "status"). See
+  `.docs/decisions/adr-2026-06-29-daemon-supervisor-port-and-attachable-hosting.md` and
+  `.docs/plans/2026-06-29-daemon-tmux-supervisor.md`.
+- **Gated rebase-conflict resolution + attempt-cap config (conduct-ts).** The daemon's
+  finish-time `rebase` step now attempts skill-driven conflict resolution (via the new
+  `/rebase` skill) before HALTing on a non-CHANGELOG conflict. The number of attempts is
+  configurable via `rebase_resolution_attempts` (config key; default **3**; set to **0** to
+  restore the previous immediate-HALT behavior). A resolution is accepted only when the branch
+  is genuinely current with the base (FR-8) and no feature commits were dropped (FR-9);
+  a code-changing resolution kicks back to `build`/`manual_test` through the existing
+  kickback machinery. If all attempts are exhausted the engine falls through to the existing
+  HALT path. The gated resolution loop runs only in daemon mode; interactive `/conduct` runs
+  and the `/rebase` skill invoked manually by an operator are unchanged.
+- **Mermaid diagram renderer — visuals at the architecture approval gates (install + conduct-ts).**
+  Generated architecture diagrams and DRAFT ADRs (Mermaid-in-Markdown) can now be reviewed as
+  rendered visuals instead of raw Mermaid. `bin/install` offers a renderer choice mirroring the
+  markdown-viewer flow — presets `html` (default; self-contained mermaid.js page opened in the
+  default browser, no native dependencies, works anywhere), `mmdc-png`/`mmdc-svg` (via
+  `@mermaid-js/mermaid-cli`), and `none` — persisting it as
+  `mermaid_renderer.{preset,command,args,mode}` in
+  `~/.ai-conductor/config.yml`; `install --check` reports its status. At the conduct-ts approval
+  gate, `reviewArtifacts` renders a reviewed file's diagrams (after showing the raw Markdown as an
+  always-present fallback) via the merged-config preset; a new `conduct render-diagrams <file>...`
+  subcommand renders on demand. The renderer is best-effort by contract: it never throws, isolates
+  per-diagram failures, HTML-escapes diagram source, and always surfaces a notice on skip/failure
+  so the gate is never blocked. `README.md`, `src/conductor/README.md`, and the
+  architecture-diagram / architecture-review skill docs updated.
+
+- **Richer daemon startup dashboard — "state of everything" per repo (conduct-ts).** The
+  inherited-state dashboard printed before any dispatch now carries the bits an operator
+  actually triages on, mined best-effort from each worktree's `conduct-state.json` (and the
+  processed ledger): HALTED and IN-PROGRESS rows show the **complexity tier**, the **step** the
+  feature reached, and the **open PR link** if one exists; ELIGIBLE rows show the **tier** of
+  each queued feature; PROCESSED now **lists each shipped slug with its PR link** (not just a
+  count). To support the shipped-PR links, the `.daemon/processed/` ledger is now written as
+  JSON (`{ status, prUrl }`) — legacy plain-text `shipped` entries still parse (no PR), so this
+  is backward-compatible. All enrichment is best-effort: a malformed `conduct-state` still
+  appears (step `unknown`, no tier/PR), and a per-worktree fs error is skipped — the scan never
+  aborts startup. `README.md` and `src/conductor/README.md` updated.
 
 - **GitHub issue ↔ PR linkage + auto-close on implementation merge (conduct-ts).**
   github-issues intake previously commented on an issue but never linked or closed it, so an
@@ -173,6 +409,22 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   cleanup tasks instead of `/finish` parking the branch.
 
 ### Changed
+
+- **`.memory/` is now a symlink to the shared canonical store, not a tracked in-project
+  directory.** `bin/conduct` sets up the canonical memory store via `conduct-ts memory setup`
+  before any bootstrap sub-step runs, so `.memory/` is always a symlink when the bootstrap skill
+  executes. The bootstrap skill's Step 5 `.memory/` creation instruction is removed — do not
+  `mkdir .memory/` in a project; the directory will already be a symlink. Existing real `.memory/`
+  directories in consumer projects are migrated automatically on the next `conduct` run (see
+  Migration below).
+- **ADRs are no longer sequentially numbered — named `adr-YYYY-MM-DD-<kebab-slug>.md`.**
+  Sequential numbering (ADR-001, ADR-007, …) collides when parallel worktrees each grab
+  "the next number" for a concurrently-authored decision. ADRs now use a date plus a short
+  descriptive slug as both filename and identifier; supersession and verdict references cite
+  the filename stem instead of a number. Updated `templates/adr.md.template` (dropped the
+  `{{NUMBER}}` header) and the `/architecture-review`, `/conflict-check`, `/conduct`, and
+  `/remediate` skill docs. Applies to **newly created ADRs only** — existing numbered ADRs
+  keep their names (ADRs remain append-only).
 
 - **`.serena/` is now gitignored in scaffolded and onboarded projects.** Serena's
   MCP server writes a `.serena/` directory (semantic-symbol cache, `project.yml`,
@@ -730,6 +982,34 @@ rm -f "${HOME}/.claude/skills/brainstorm"
 
 No project-level action is needed: persisted `conduct-state.json` is migrated
 automatically on read (a recorded `brainstorm` step maps to `explore` + `prd`).
+
+The `.memory/` directory has moved from an in-project directory to a durable shared canonical
+store keyed by project. New bootstraps and the next `conduct` run on any existing project apply
+the migration automatically via `conduct-ts memory setup`. If you need to migrate manually before
+the next `conduct` run (e.g. before pulling the harness update), run the block below from the
+project root. Idempotent — no-op if `.memory/` is already a symlink.
+
+```bash migration
+# Migrate .memory/ to the canonical shared store under ~/.ai-conductor/memory/.
+# No-op if .memory/ is already a symlink. Run from the project root.
+_dir="$(pwd)"
+_link="${_dir}/.memory"
+if [ -L "${_link}" ]; then
+  echo ".memory/ is already a symlink — no migration needed."
+elif [ -d "${_link}" ]; then
+  if command -v conduct-ts >/dev/null 2>&1; then
+    conduct-ts memory setup "${_dir}"
+  elif [ -x "${HARNESS_DIR:-}/bin/conduct-ts" ]; then
+    "${HARNESS_DIR}/bin/conduct-ts" memory setup "${_dir}"
+  else
+    echo "conduct-ts not found — please run 'conduct-ts memory setup ${_dir}' after updating." >&2
+    exit 1
+  fi
+  echo "Migration complete. .memory/ is now a symlink to the canonical store."
+else
+  echo ".memory/ does not exist — it will be created automatically on next 'conduct' run."
+fi
+```
 
 ## [0.99.17] - 2026-05-02
 

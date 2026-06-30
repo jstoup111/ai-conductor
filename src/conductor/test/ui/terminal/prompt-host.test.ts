@@ -157,6 +157,81 @@ describe('TerminalPromptHost.reviewArtifacts', () => {
   });
 });
 
+describe('TerminalPromptHost.reviewArtifacts diagram rendering', () => {
+  function makeRenderingHost(opts: {
+    inputs: string[];
+    content: string;
+    renderDiagrams?: (file: string, content: string) => Promise<string | void>;
+  }) {
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const logs: string[] = [];
+    const host = new TerminalPromptHost(stubRegion(), {
+      input,
+      output,
+      log: (...a) => logs.push(a.map(String).join(' ')),
+      readFileFn: async () => opts.content,
+      renderDiagrams: opts.renderDiagrams,
+    });
+    queueMicrotask(() => {
+      for (const a of opts.inputs) input.write(a + '\n');
+    });
+    return { host, logs };
+  }
+
+  const MERMAID = '# Containers\n\n```mermaid\ngraph TD\n  A --> B\n```\n';
+  const PLAIN = '# ADR\n\nJust prose, no diagrams.\n';
+
+  it('renders a file whose content contains a mermaid fence', async () => {
+    const calls: Array<[string, string]> = [];
+    const { host } = makeRenderingHost({
+      inputs: [''],
+      content: MERMAID,
+      renderDiagrams: async (f, c) => {
+        calls.push([f, c]);
+      },
+    });
+    await host.reviewArtifacts('architecture_diagram', ['/tmp/containers.md']);
+    expect(calls).toHaveLength(1);
+    expect(calls[0][0]).toBe('/tmp/containers.md');
+    expect(calls[0][1]).toContain('```mermaid');
+  });
+
+  it('does not render a file with no mermaid fence', async () => {
+    let called = 0;
+    const { host } = makeRenderingHost({
+      inputs: [''],
+      content: PLAIN,
+      renderDiagrams: async () => {
+        called += 1;
+      },
+    });
+    await host.reviewArtifacts('plan', ['/tmp/adr.md']);
+    expect(called).toBe(0);
+  });
+
+  it('survives a throwing renderDiagrams and still approves', async () => {
+    const { host } = makeRenderingHost({
+      inputs: [''],
+      content: MERMAID,
+      renderDiagrams: async () => {
+        throw new Error('render boom');
+      },
+    });
+    await expect(host.reviewArtifacts('architecture_diagram', ['/tmp/c.md'])).resolves.toBe('approved');
+  });
+
+  it('logs a returned notice through the host log channel (TUI-safe, not console)', async () => {
+    const { host, logs } = makeRenderingHost({
+      inputs: [''],
+      content: MERMAID,
+      renderDiagrams: async () => 'rendering disabled — showing raw Markdown',
+    });
+    await host.reviewArtifacts('architecture_diagram', ['/tmp/c.md']);
+    expect(logs.some((l) => l.includes('rendering disabled'))).toBe(true);
+  });
+});
+
 describe('TerminalPromptHost.ask', () => {
   it('suspends the region, closes readline on answer, resumes', async () => {
     let suspendCalls = 0;

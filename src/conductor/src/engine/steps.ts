@@ -71,7 +71,7 @@ export const ALL_STEPS: StepDefinition[] = [
     skillName: 'architecture-diagram',
   },
   {
-    // ADR-016: architecture precedes stories so stories derive from the approved
+    // adr-2026-06-29-architecture-before-stories-convergent-kickback: architecture precedes stories so stories derive from the approved
     // design (+ PRD when product) and architecture-induced failure modes become
     // negative-path stories. Re-openable as a targeted amendment (kickbackTarget).
     name: 'architecture_review',
@@ -159,7 +159,7 @@ export const ALL_STEPS: StepDefinition[] = [
     enforcement: 'gating',
     prerequisites: ['manual_test'],
     skippableForTiers: [],
-    // No PRD on the technical track → nothing to audit (ADR-015/017).
+    // No PRD on the technical track → nothing to audit (adr-2026-06-29-explore-prd-split-track-in-explore/adr-2026-06-29-track-marker-location).
     skippableForTracks: ['technical'],
     isCheckpoint: false,
     skillName: 'prd-audit',
@@ -281,7 +281,7 @@ export function shouldSkipForTier(step: StepName, tier: ComplexityTier): boolean
 }
 
 /**
- * True when `step` is skipped for the given work `track` (ADR-015/017). `prd`
+ * True when `step` is skipped for the given work `track` (adr-2026-06-29-explore-prd-split-track-in-explore/adr-2026-06-29-track-marker-location). `prd`
  * declares `skippableForTracks: ['technical']`, so a technical-only feature
  * skips PRD authoring. A missing track defaults to `product` (back-compat), so
  * nothing is track-skipped when the track is unknown.

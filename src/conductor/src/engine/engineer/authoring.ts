@@ -301,7 +301,7 @@ export interface RunAuthoringDeps {
    */
   sourceRef?: string;
   /**
-   * Work track (ADR-015/017). When provided, a `.docs/track/<slug>.md` marker is
+   * Work track (adr-2026-06-29-explore-prd-split-track-in-explore/adr-2026-06-29-track-marker-location). When provided, a `.docs/track/<slug>.md` marker is
    * committed with the spec. Defaults to `product` (preserves legacy behavior).
    */
   track?: Track;
@@ -402,13 +402,13 @@ export async function runAuthoring(
   const tier = complexity.tier;
   const track = deps.track ?? 'product';
 
-  // PRD — product track only (ADR-015). The PRD artifact becomes the spec.
+  // PRD — product track only (adr-2026-06-29-explore-prd-split-track-in-explore). The PRD artifact becomes the spec.
   let prdResult: DecideResult | null = null;
   if (track === 'product') {
     prdResult = await gate('prd');
   }
 
-  // Tier-conditional architecture — now BEFORE stories (ADR-016), so the design
+  // Tier-conditional architecture — now BEFORE stories (adr-2026-06-29-architecture-before-stories-convergent-kickback), so the design
   // (and its ADRs) is settled before behavior is enumerated. Small skips it.
   let architectureDiagramResult: DecideResult | null = null;
   let architectureReviewResult: DecideResult | null = null;
@@ -539,7 +539,7 @@ export async function runAuthoring(
     // originating issue ref WITH the spec so the daemon can close it on merge.
     await writeIntakeMarker(repoPath, slug, deps.sourceRef, guard);
 
-    // Track marker (ADR-015/017): persists the product/technical classification
+    // Track marker (adr-2026-06-29-explore-prd-split-track-in-explore/adr-2026-06-29-track-marker-location): persists the product/technical classification
     // WITH the spec so the daemon knows whether to expect a PRD / run prd-audit.
     // Defaults to `product` (preserves the legacy PRD-authoring behavior).
     await writeTrackMarker(repoPath, slug, deps.track ?? 'product', guard);

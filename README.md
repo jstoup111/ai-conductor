@@ -34,6 +34,17 @@ present, `./bin/install` offers an opt-in install of [Serena](https://github.com
 auto-registers it as a user-scope MCP server so it's available across your projects. Decline
 the prompt (or install later with `uv tool install -p 3.13 serena-agent`) to skip it.
 
+**Mermaid renderer.** `./bin/install` also offers a renderer for the architecture diagrams
+and ADRs the harness generates, so you review them as visuals (not raw Mermaid) at the
+approval gates. Pick a preset — `html` (default: a self-contained mermaid.js page opened in
+your default browser; no native dependencies, works anywhere), `mmdc-png`/`mmdc-svg` (static
+images via [`@mermaid-js/mermaid-cli`](https://github.com/mermaid-js/mermaid-cli)), or `none`.
+The choice is stored as `mermaid_renderer` in `~/.ai-conductor/config.yml` and reused on every
+run; under `conduct-ts` diagrams render automatically when an artifact is presented for
+approval, or run `conduct render-diagrams <file.md>...` on demand. The opener is detected per
+platform (macOS `open`, Linux `xdg-open`, WSL `wslview`/`explorer.exe`). With no renderer
+configured, diagrams fall back to raw Markdown — never a blocker.
+
 Verify:
 
 ```bash
@@ -111,8 +122,8 @@ own worktree, opening a PR on finish:
 # Drain the backlog once: every eligible feature, then exit
 conduct-ts daemon
 
-# Run 3 in parallel, cap at 10 features this pass
-conduct-ts daemon --concurrency 3 --max-items 10
+# Cap at 10 features this pass
+conduct-ts daemon --max-items 10
 
 # Continuous: keep polling for new features, bounded by ceilings
 conduct-ts daemon --continuous --max-runtime 3600 --max-cost 2000000
@@ -121,7 +132,10 @@ conduct-ts daemon --continuous --max-runtime 3600 --max-cost 2000000
 Daemon flags: `--continuous` (idle-poll instead of draining once),
 `--max-items <n>`, `--max-cost <tokens>`, `--max-runtime <seconds>`,
 `--idle-poll <seconds>`, `--max-idle-polls <n>`. Ceilings stop *starting* new
-features; in-flight work always drains.
+features; in-flight work always drains. The daemon runs **serially** (one feature
+at a time) so the live session shows exactly the feature building — `--concurrency`
+above 1 is clamped to 1 with a logged note (real concurrency is out of scope; see
+`.docs/plans/2026-06-29-daemon-tmux-supervisor.md`).
 
 The daemon consumes existing specs — it never authors them — and only picks up
 **eligible** features: a feature is eligible when its stories are approved
@@ -131,9 +145,21 @@ already shipped. Ineligible features are skipped with a logged reason. A feature
 that can't converge is left in its worktree (`.pipeline/HALT`) for you; the pool
 keeps going.
 
+On any irrecoverable daemon HALT that stranded committed work — a build/gating-step failure, a
+prd-audit gap needing human DECIDE, the kickback/stuck-gate caps, or an unexpected error (rebase
+conflicts excluded) — when the branch has at least one commit, the daemon pushes it and opens a
+**draft PR** labeled `needs-remediation` with a comment explaining the HALT reason — best-effort
+and non-blocking. PRs from successfully-shipped features
+are enrolled in a watch registry (`.daemon/mergeable-watch.jsonl`); a label sweep (on startup,
+after each feature, and each idle poll tick) keeps the `mergeable` label truthfully in sync with
+CI and conflict state, so you can filter the PR list by merge-readiness. Both labels are
+daemon-only; interactive runs are unchanged.
+
 On startup, before any dispatch, the daemon prints a grouped **inherited-state
 dashboard** (HALTED / IN-PROGRESS / ELIGIBLE / PROCESSED) to both your terminal and
-`daemon.log`. It also tracks the base-branch tip SHA (`.daemon/last-base-sha`): when
+`daemon.log`. Each row shows the bits you triage on — complexity tier, the step a
+feature reached, and the PR link once one is open (shipped features list their PR too).
+It also tracks the base-branch tip SHA (`.daemon/last-base-sha`): when
 the base branch **actually advances** — live, or while the daemon was down — it
 **re-kicks every halted feature** (aborting any paused rebase, preserving the reason
 to `.pipeline/HALT.cleared`, clearing `.pipeline/HALT`) so parked work retries
@@ -142,12 +168,25 @@ advanced base is integrated before the failed gate re-checks. A plain restart wi
 advance leaves every marker intact. See
 [`src/conductor/README.md`](src/conductor/README.md#halt-reconciliation-startup-dashboard--main-advance-re-kick-adr-013).
 
-Because the daemon runs detached, its output goes to an append-only
-**`.daemon/daemon.log`** (size-capped, rotated once) rather than your terminal — so
-the full build narrative survives. Two read-only commands surface it:
+The daemon is hosted as a **foreground process inside a per-repo tmux session**
+(`cc-daemon-<slug>`), so you can attach to a *running* daemon on demand — in full color
+— and restart or debug it without hunting for a pid. Its output is still teed to an
+append-only **`.daemon/daemon.log`** (size-capped, rotated once) so the full narrative
+survives. Management requires `tmux` on the host; the daemon still builds with no tmux
+present (management is purely additive).
 
 ```bash
-# Liveness of every registered repo's daemon (running / stale / stopped) + last activity
+conduct-ts daemon start      # start the daemon in a tmux session (idempotent — no duplicate)
+conduct-ts daemon connect    # attach READ-ONLY to watch live, in color (Ctrl-b d to detach)
+conduct-ts daemon debug      # attach read/write — Ctrl-c to pause the loop and inspect
+conduct-ts daemon restart    # fresh inner process, same session
+conduct-ts daemon stop       # stop the daemon, release the lock
+```
+
+Two read-only observability commands surface state without attaching:
+
+```bash
+# Liveness of every registered repo's daemon (running / stale / stopped, session up/down) + last activity
 conduct-ts daemon status
 
 # View or tail a repo's daemon log (default: current dir)
@@ -157,9 +196,10 @@ conduct-ts daemon logs --repo /path/to/repo
 conduct-ts daemon logs --all               # every registered repo
 ```
 
-(`daemon status` / `daemon logs` are read-only sub-subcommands of `daemon`; the bare
-`conduct-ts daemon` is what runs a daemon. `status`/`logs` are dispatched first, so
-they're never mistaken for a launch.)
+The management/observability verbs (`start`/`stop`/`restart`/`connect`/`debug`/`status`/
+`logs`) are dispatched before the bare `conduct-ts daemon` run, so they're never mistaken
+for a launch — and `conduct daemon <verb>` (the bash wrapper) now forwards to `conduct-ts`
+instead of starting a feature build named after the verb.
 
 On failure, conduct sends a desktop notification and drops into an interactive Claude session
 to fix the issue. After you `/quit`, it rechecks artifacts and continues automatically.
@@ -231,7 +271,7 @@ The harness reads two config files, merged in order (project overrides user):
 
 | File | Scope | Purpose |
 |------|-------|---------|
-| `~/.ai-conductor/config.yml` | User-level | Personal defaults, update channel, markdown viewer |
+| `~/.ai-conductor/config.yml` | User-level | Personal defaults, update channel, markdown viewer, mermaid renderer |
 | `.ai-conductor/config.yml` | Project-level | Per-project model/effort tuning, custom steps, plugin selection |
 
 Both files are optional. The conductor works with zero config.
@@ -309,6 +349,7 @@ complexity:
 # ── Plugin selection (conduct-ts only) ───────────────────────────────────────
 llm_provider: claude           # Which registered LLM provider to use (default: "claude")
 ui_renderer: terminal          # Which registered UI renderer to use (default: "terminal")
+memory_provider: local         # Which memory provider to use (default: "local" — shared canonical store)
 
 # ── Assess staleness thresholds ──────────────────────────────────────────────
 assess:
@@ -438,6 +479,7 @@ echo "llm_provider: my-provider" >> .ai-conductor/config.yml
 |------|------|-------------|
 | `llm_provider` | `claude` | Default — invokes Claude CLI via `execa` |
 | `ui_renderer` | `terminal` | Default — ink-based live dashboard |
+| `memory_provider` | `local` | Default — shared canonical store at `~/.ai-conductor/memory/<key>/harness/` symlinked as `.memory/`; recall is agent-driven (no harness-side search) |
 
 **Plugin load rules:**
 
@@ -475,7 +517,7 @@ UNDERSTAND → DECIDE → BUILD → SHIP
 | `/plan` | Gating | sonnet | 2-5 min tasks, dependency graph, scope sanity check |
 | `/architecture-diagram` | Gating | sonnet | C4 architecture diagrams in Mermaid, maintained across SDLC |
 | `/architecture-review` | Gating | opus | Feasibility, alignment, domain integrity, risk register. BLOCKED = human required. SHIP `--as-built` mode (sonnet): shipped code vs APPROVED ADRs |
-| `/writing-system-tests` | Gating | sonnet | Failing acceptance specs (integration for API, system for full-stack) |
+| `/writing-system-tests` | Gating | sonnet | Failing acceptance specs (HTTP-level for headless/API, E2E/UI for full-stack), in the project's own test framework |
 | `/tdd` | Structural | sonnet | RED → DOMAIN → GREEN → DOMAIN → COMMIT with subagent isolation |
 | `/simplify` | Gating | sonnet | Deduplication + complexity reduction at batch boundaries |
 | `/pipeline` | Structural | sonnet | Multi-task orchestration, quality gates, rework budgets, progress log |
@@ -484,6 +526,7 @@ UNDERSTAND → DECIDE → BUILD → SHIP
 | `/finish` | Gating | haiku | Fresh verification, story coverage, merge/PR options |
 | `/manual-test` | Gating | sonnet | Validate stories via curl/browser, bug loop through /tdd |
 | `/prd-audit` | Gating | opus | Audit shipped impl vs PRD FRs; per-FR verdict + gap-class; kicks back to BUILD or DECIDE |
+| `/rebase` | Advisory | opus | Operator-invokable conflict resolver; also dispatched by the daemon's gated rebase-resolution loop (up to `rebase_resolution_attempts` attempts before HALT, daemon-only) |
 | `/retro` | Advisory | opus | Dual analysis: harness + application, trend tracking |
 | `/conduct` | Gating | haiku | SDLC orchestrator: 17-step flow with gate enforcement |
 
@@ -558,8 +601,14 @@ dedicated test coverage (950+ tests). See the feature comparison in
   on a stale base. Its verdict is *branch already current with base*, so a no-op goes straight
   to finish. A clean rebase that changed **code/test paths** kicks back to `build` to
   re-verify; a **CHANGELOG-only** `[Unreleased]` conflict is auto-resolved (both features'
-  entries kept, each once); any other / mixed conflict writes `.pipeline/HALT`, leaves the
-  rebase **paused**, and opens no PR. Resume: resolve → `git rebase --continue` →
+  entries kept, each once); any other / mixed conflict triggers the **gated resolution loop**
+  — the daemon dispatches the `/rebase` skill up to `rebase_resolution_attempts` times
+  (config key, default 3; set to 0 to disable) before HALTing. A resolution is accepted only
+  when the branch is genuinely current with the base (FR-8) and no feature commits were
+  dropped (FR-9); a code-changing resolution kicks back to `build`/`manual_test` as normal.
+  If the loop is exhausted, the engine writes `.pipeline/HALT`, leaves the rebase **paused**,
+  and opens no PR. The gated resolution loop is daemon-only; the `/rebase` skill is also
+  manually invokable by an operator. Resume: resolve → `git rebase --continue` →
   `rm .pipeline/HALT` → re-queue.
 - **Daemon mode** (`conduct-ts daemon`): drains a backlog of features that already have
   stories **and** plans, running each in its own worktree (parallel via `--concurrency N`,

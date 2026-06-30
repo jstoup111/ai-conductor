@@ -4,6 +4,19 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import type { BacklogItem, FeatureOutcome } from './daemon.js';
 import type { LLMProvider } from '../execution/llm-provider.js';
 import { emitEngineerSignal, resolveEngineerDir } from './engineer-store.js';
+import {
+  enrollWatch as enrollWatchImpl,
+  sweepMergeableLabels as sweepMergeableLabelsImpl,
+  type WatchEntry,
+  type SweepOpts,
+} from './mergeable-sweep.js';
+import {
+  prMergeState,
+  removeLabel,
+  setReady,
+  makeProductionGh,
+  type GhRunner,
+} from './pr-labels.js';
 
 /**
  * Outcome of running the gate loop inside a feature's worktree, read from the
@@ -48,8 +61,9 @@ export interface FeatureRunnerDeps {
   readOutcome: (worktree: FeatureWorktree) => Promise<WorktreeOutcome>;
   /** Remove the worktree (keep=true leaves it for inspection after halt/error). */
   teardownWorktree: (worktree: FeatureWorktree, keep: boolean) => Promise<void>;
-  /** Persist that a slug shipped so discoverBacklog skips it next poll. */
-  markProcessed: (slug: string) => Promise<void>;
+  /** Persist that a slug shipped (with its PR url, when opened) so
+   *  discoverBacklog skips it next poll and the startup dashboard can link it. */
+  markProcessed: (slug: string, prUrl?: string) => Promise<void>;
   /**
    * Daemon mode. When true, emit a structured engineer signal + narrative to the
    * cross-project engineer store on completion (Phase 9.1). Manual `/conduct` runs
@@ -59,6 +73,13 @@ export interface FeatureRunnerDeps {
   /** LLM provider used to produce the `done`-feature retro narrative. */
   provider: LLMProvider;
   /**
+   * The resolved active memory provider for this run (adr-2026-06-29-per-project-memory-provider-selection).
+   * Computed once at run start via `resolveMemoryProvider` — all memory-using
+   * steps see the same provider (FR-10). Optional so existing test helpers
+   * that predate this field do not require updates.
+   */
+  memoryProvider?: unknown;
+  /**
    * Project key for the engineer store — the project's basename, derived from the
    * main checkout (`basename(projectRoot)`), NOT the worktree path. Worktrees
    * live at `<projectRoot>/.worktrees/<slug>`, so deriving from the worktree
@@ -67,6 +88,28 @@ export interface FeatureRunnerDeps {
    */
   project: string;
   log?: (msg: string) => void;
+  /**
+   * FR-9: project root of the main checkout — used as the watch registry location
+   * and as `repoCwd` for gh commands post-teardown. Absent → label ops are skipped.
+   */
+  projectRoot?: string;
+  /**
+   * FR-16: gh runner for clear-on-success label ops (removeLabel + setReady).
+   * Defaults to the production factory when absent.
+   */
+  runGh?: GhRunner;
+  /**
+   * FR-9: enroll a shipped PR in the mergeable watch registry.
+   * Defaults to the real enrollWatch; injected in tests to assert call order and
+   * verify failure isolation (teardown/markProcessed still run on throw).
+   */
+  enrollWatch?: (projectRoot: string, entry: WatchEntry) => Promise<void>;
+  /**
+   * FR-14: mergeable label sweep, invoked after each feature completes.
+   * Defaults to the real sweepMergeableLabels; injected in tests to assert cadence
+   * and verify throw-isolation (feature result unaffected by sweep errors).
+   */
+  sweepMergeableLabels?: (opts: SweepOpts) => Promise<void>;
 }
 
 /**
@@ -81,6 +124,19 @@ export function makeRunFeature(
   deps: FeatureRunnerDeps,
 ): (item: BacklogItem) => Promise<FeatureOutcome> {
   const log = deps.log ?? (() => {});
+  const gh = deps.runGh ?? makeProductionGh();
+  const enroll = deps.enrollWatch ?? enrollWatchImpl;
+  const sweep = deps.sweepMergeableLabels ?? sweepMergeableLabelsImpl;
+
+  /** FR-14: best-effort sweep; never throws, never disrupts feature processing. */
+  const maybeSweep = async (): Promise<void> => {
+    if (!deps.projectRoot) return;
+    try {
+      await sweep({ projectRoot: deps.projectRoot, log, runGh: deps.runGh });
+    } catch (err) {
+      log(`[daemon-runner] sweep error: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
 
   return async (item: BacklogItem): Promise<FeatureOutcome> => {
     let worktree: FeatureWorktree | null = null;
@@ -107,9 +163,42 @@ export function makeRunFeature(
       }
 
       if (outcome.done) {
-        await deps.markProcessed(item.slug);
+        // FR-16: clear-on-success — remove `needs-remediation` + mark ready when
+        // the label is present. Best-effort: a failure is logged and swallowed so
+        // enroll + teardown still run regardless.
+        if (outcome.prUrl && deps.projectRoot) {
+          try {
+            const state = await prMergeState(gh, deps.projectRoot, outcome.prUrl, log);
+            if (state.labels.includes('needs-remediation')) {
+              await removeLabel(gh, deps.projectRoot, outcome.prUrl, 'needs-remediation', log);
+              await setReady(gh, deps.projectRoot, outcome.prUrl, log);
+            }
+          } catch (err) {
+            log(`[daemon-runner] clear-on-success error: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
+
+        // FR-9: enroll the shipped PR in the mergeable watch registry BEFORE
+        // teardown (worktree path still valid for context). Best-effort: enroll
+        // internally swallows; the outer wrap logs any re-throw so teardown still
+        // runs.
+        if (outcome.prUrl && deps.projectRoot) {
+          try {
+            await enroll(deps.projectRoot, {
+              prUrl: outcome.prUrl,
+              slug: item.slug,
+              repoCwd: deps.projectRoot,
+            });
+          } catch (err) {
+            log(`[daemon-runner] enrollWatch error: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
+
+        await deps.markProcessed(item.slug, outcome.prUrl);
         await deps.teardownWorktree(worktree, false);
         log(`✓ ${item.slug} shipped${outcome.prUrl ? ` → ${outcome.prUrl}` : ''}`);
+        // FR-14: sweep mergeable labels after feature completes.
+        await maybeSweep();
         return {
           slug: item.slug,
           status: 'done',
@@ -121,6 +210,8 @@ export function makeRunFeature(
       if (outcome.halted) {
         await deps.teardownWorktree(worktree, true); // keep for the human
         log(`✋ ${item.slug} halted — worktree kept (${outcome.reason ?? 'see .pipeline/HALT'})`);
+        // FR-14: sweep mergeable labels after feature completes (halted).
+        await maybeSweep();
         return {
           slug: item.slug,
           status: 'halted',
@@ -133,6 +224,8 @@ export function makeRunFeature(
       const noMarkerReason = outcome.reason ?? 'loop ended without DONE or HALT marker';
       await writeErrorHalt(worktree, noMarkerReason);
       await deps.teardownWorktree(worktree, true);
+      // FR-14: sweep mergeable labels after feature completes (error/no-marker).
+      await maybeSweep();
       return {
         slug: item.slug,
         status: 'error',

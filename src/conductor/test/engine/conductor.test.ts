@@ -44,7 +44,7 @@ describe('engine/conductor', () => {
     await rm(dir, { recursive: true, force: true });
   });
 
-  describe('track resolution from the committed marker (ADR-015/017, interactive)', () => {
+  describe('track resolution from the committed marker (adr-2026-06-29-explore-prd-split-track-in-explore/adr-2026-06-29-track-marker-location, interactive)', () => {
     it('technical marker → prd is skipped even when state.track is unset', async () => {
       // /explore wrote the marker; state has no `track` (interactive path).
       await mkdir(join(dir, '.docs', 'track'), { recursive: true });

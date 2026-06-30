@@ -50,7 +50,7 @@ import {
   type RemediationGap,
 } from './artifacts.js';
 import type { Track } from '../types/index.js';
-import { resolveStepConfig } from './resolved-config.js';
+import { resolveStepConfig, resolveRebaseResolutionAttempts } from './resolved-config.js';
 import { selectNextGate } from './selector.js';
 import { computeAndWriteVerdict, readAllVerdicts } from './gate-verdicts.js';
 import { WorktreeManager } from './worktree.js';
@@ -63,12 +63,21 @@ import {
 import {
   makeGitRunner,
   performRebase,
+  resolveRebaseConflicts,
   applyRebaseVerdicts,
   emitRebaseEvent,
   writeHalt,
   originDefaultBranch,
   type RebaseOutcome,
+  type ResolutionContext,
+  type ResolutionAttempt,
+  type RebaseResolver,
 } from './rebase.js';
+import {
+  escalateBuildFailure as defaultEscalateBuildFailure,
+  type EscalateBuildFailureOpts,
+  type EscalateBuildFailureResult,
+} from './build-failure-escalation.js';
 
 export type CheckpointResponse = 'continue' | 'back' | 'quit';
 
@@ -198,6 +207,23 @@ export interface StepRunner {
    * Called by the conductor when `sessionExpired` is reported.
    */
   resetSession?(): Promise<void>;
+  /**
+   * Attempt to resolve a paused rebase conflict in the feature worktree.
+   * Called by the conductor's engine-native rebase step (daemon only) when
+   * a `conflict_halt` outcome is produced and `rebase_resolution_attempts > 0`.
+   *
+   * The implementation MUST resolve the conflict files, stage them (`git add`),
+   * and run `git rebase --continue` so the rebase finishes. Returning
+   * `{ resolved: true }` when the rebase is NOT actually finished is treated as
+   * a failed attempt (counted toward the cap but retried). Returning
+   * `{ resolved: false, reason }` short-circuits all remaining attempts
+   * (the conductor HALTs immediately with `reason` in the HALT file).
+   *
+   * Errors thrown by this method are caught and converted to
+   * `{ resolved: false, reason: error.message }`, so an uncaught exception
+   * degrades gracefully to a conflict HALT.
+   */
+  resolveRebaseConflict?(ctx: ResolutionContext): Promise<ResolutionAttempt>;
 }
 
 export type ArtifactReviewResult = 'approved' | 'rejected' | 'skip';
@@ -256,6 +282,15 @@ export interface ConductorOptions {
     context?: RecoveryContext,
   ) => Promise<RecoveryOption>;
   onComplexityAssessment?: (recommended: ComplexityTier | null) => Promise<ComplexityTier>;
+  /**
+   * Injectable escalation function called after any irrecoverable daemon HALT
+   * in auto mode. Defaults to the real `escalateBuildFailure` which opens a
+   * draft needs-remediation PR. Tests inject a spy to avoid real gh/git calls.
+   * The conductor wraps every call in try/catch — a throwing escalation must
+   * never prevent the HALT marker or state from being written (C1).
+   * Not called for rebase-conflict HALTs (pushing mid-rebase is unsafe).
+   */
+  escalateBuildFailure?: (opts: EscalateBuildFailureOpts) => Promise<EscalateBuildFailureResult>;
 }
 
 function stepHasCompletionCheck(step: StepName): boolean {
@@ -286,6 +321,8 @@ export class Conductor {
     context?: RecoveryContext,
   ) => Promise<RecoveryOption>;
   private onComplexityAssessment?: (recommended: ComplexityTier | null) => Promise<ComplexityTier>;
+  /** Escalation function — see ConductorOptions.escalateBuildFailure. */
+  private escalateBuildFailure: (opts: EscalateBuildFailureOpts) => Promise<EscalateBuildFailureResult>;
   /**
    * The most recent engine-native rebase outcome. The `rebase` step is special:
    * its gate verdict is computed by the native handler (not from a file
@@ -321,6 +358,31 @@ export class Conductor {
     this.onReviewArtifacts = opts.onReviewArtifacts ?? (async () => 'approved' as const);
     this.onRecovery = opts.onRecovery;
     this.onComplexityAssessment = opts.onComplexityAssessment;
+    this.escalateBuildFailure = opts.escalateBuildFailure ?? defaultEscalateBuildFailure;
+  }
+
+  /**
+   * Best-effort wrapper around escalateBuildFailure. Returns the prUrl on
+   * success, or undefined on any error or when mode is not 'auto'. Called at
+   * every irrecoverable daemon HALT (except rebase-conflict HALTs where pushing
+   * mid-rebase is unsafe). Never throws — a failing escalation must never
+   * affect the HALT/return path (C1).
+   */
+  private async surfaceRemediationPr(reason: string): Promise<string | undefined> {
+    // Daemon-only (FR-8). Gate on the real `daemon` flag, not merely `mode==='auto'`:
+    // the autonomous builder sets `daemon: true`, and that is the precise signal that a
+    // HALT here strands committed work a human must remediate. It also keeps the real
+    // git/gh side effects out of any non-daemon auto-mode run (e.g. unit tests).
+    if (!this.daemon) return undefined;
+    try {
+      const r = await this.escalateBuildFailure({
+        projectRoot: this.projectRoot,
+        failureReason: reason,
+      });
+      return r?.prUrl;
+    } catch {
+      return undefined; // best-effort: must never affect the HALT/return path
+    }
   }
 
   async run(): Promise<void> {
@@ -436,7 +498,7 @@ export class Conductor {
           continue;
         }
 
-        // Check if step should be skipped for this work track (ADR-015/017).
+        // Check if step should be skipped for this work track (adr-2026-06-29-explore-prd-split-track-in-explore/adr-2026-06-29-track-marker-location).
         // `prd` is skipped on the technical track (no product requirements to
         // spec). The track is resolved from `state.track` (daemon-seeded) or, in
         // the interactive flow, from the committed `.docs/track/<slug>.md` marker
@@ -874,8 +936,9 @@ export class Conductor {
                     ).catch(() => {
                       /* best-effort marker */
                     });
-                    await this.events.emit({ type: 'loop_halt', reason });
                     await writeState(this.stateFilePath, state);
+                    const prUrl = await this.surfaceRemediationPr(reason);
+                    await this.events.emit({ type: 'loop_halt', reason, prUrl });
                     process.off('SIGINT', sigintHandler);
                     return;
                   }
@@ -935,8 +998,9 @@ export class Conductor {
               ).catch(() => {
                 /* best-effort marker */
               });
-              await this.events.emit({ type: 'loop_halt', reason });
               await writeState(this.stateFilePath, state);
+              const prUrl = await this.surfaceRemediationPr(reason);
+              await this.events.emit({ type: 'loop_halt', reason, prUrl });
               process.off('SIGINT', sigintHandler);
               return;
             }
@@ -956,8 +1020,16 @@ export class Conductor {
             ).catch(() => {
               /* best-effort marker */
             });
-            await this.events.emit({ type: 'loop_halt', reason });
+            // Durable signals (HALT marker + state) are written BEFORE escalation
+            // so the daemon can classify the outcome even if escalation throws (C1).
             await writeState(this.stateFilePath, state);
+            // Escalate for all gating/structural steps (not just build): open a
+            // needs-remediation draft PR so a human can see the failure without
+            // hunting through daemon logs. surfaceRemediationPr is best-effort and
+            // wraps escalation in try/catch — a throwing escalation must never
+            // prevent the HALT path from returning cleanly (C1).
+            const prUrl = await this.surfaceRemediationPr(`${reason}\n${lastError}`);
+            await this.events.emit({ type: 'loop_halt', reason, prUrl });
             process.off('SIGINT', sigintHandler);
             return;
           }
@@ -1187,7 +1259,8 @@ export class Conductor {
       await writeFile(join(this.projectRoot, LOOP_HALT_MARKER), reason + '\n', 'utf-8').catch(
         () => {},
       );
-      await this.events.emit({ type: 'loop_halt', reason });
+      const prUrl = await this.surfaceRemediationPr(reason);
+      await this.events.emit({ type: 'loop_halt', reason, prUrl });
     } finally {
       process.off('SIGINT', sigintHandler);
     }
@@ -1320,7 +1393,9 @@ export class Conductor {
             reason + '\n',
             'utf-8',
           );
-          await this.events.emit({ type: 'loop_halt', reason });
+          await writeState(this.stateFilePath, state).catch(() => {});
+          const prUrl = await this.surfaceRemediationPr(reason);
+          await this.events.emit({ type: 'loop_halt', reason, prUrl });
           return 'halt';
         }
         const nav = navigateBack(state, target, steps);
@@ -1356,7 +1431,8 @@ export class Conductor {
       const reason = `gate '${decision.step}' selected ${sel} times without satisfying: ${decision.reason}`;
       await writeState(this.stateFilePath, state).catch(() => {});
       await writeFile(join(this.projectRoot, LOOP_HALT_MARKER), reason + '\n', 'utf-8');
-      await this.events.emit({ type: 'loop_halt', reason });
+      const prUrl = await this.surfaceRemediationPr(reason);
+      await this.events.emit({ type: 'loop_halt', reason, prUrl });
       return 'halt';
     }
 
@@ -1534,6 +1610,45 @@ export class Conductor {
         reason: err instanceof Error ? err.message : String(err),
       };
     }
+
+    // ── Gated conflict-resolution sub-loop (feat/rebase-resolution-skill) ────
+    // When a conflict_halt occurs and the StepRunner provides a resolver, attempt
+    // to resolve it up to `cap` times before falling back to the HALT path.
+    // cap === 0 (or no resolveRebaseConflict method) → immediate HALT, unchanged
+    // from pre-resolution behavior (FR-7).
+    if (outcome.kind === 'conflict_halt') {
+      const cap = resolveRebaseResolutionAttempts(this.config);
+      if (cap > 0 && this.stepRunner.resolveRebaseConflict) {
+        let attempt = 0;
+        const resolver: RebaseResolver = async (ctx: ResolutionContext) => {
+          attempt += 1;
+          try {
+            await this.events.emit({ type: 'rebase_resolution_attempt', index: attempt, cap });
+          } catch {
+            /* best-effort: event emission must not block resolution */
+          }
+          try {
+            return await this.stepRunner.resolveRebaseConflict!(ctx);
+          } catch (err) {
+            return {
+              resolved: false,
+              reason: err instanceof Error ? err.message : String(err),
+            } satisfies ResolutionAttempt;
+          }
+        };
+        outcome = await resolveRebaseConflicts(git, this.projectRoot, outcome, resolver, cap);
+        try {
+          await this.events.emit(
+            outcome.kind === 'conflict_halt'
+              ? { type: 'rebase_resolution_exhausted' }
+              : { type: 'rebase_resolution_succeeded' },
+          );
+        } catch {
+          /* best-effort */
+        }
+      }
+    }
+
     this.lastRebaseOutcome = outcome;
 
     // manual_test counts as "ran" when it isn't skipped for this feature.
@@ -1584,7 +1699,7 @@ export class Conductor {
    * On callback error (e.g., Ctrl-C), leave the step pending — no stuck state.
    */
   /**
-   * Resolve the work track (ADR-015/017). Prefers `state.track` (daemon-seeded);
+   * Resolve the work track (adr-2026-06-29-explore-prd-split-track-in-explore/adr-2026-06-29-track-marker-location). Prefers `state.track` (daemon-seeded);
    * otherwise reads the committed `.docs/track/<slug>.md` marker that `/explore`
    * wrote in the interactive flow (newest file wins — one feature per worktree),
    * caches it into `state.track`, and persists. Defaults to `product` when no

@@ -119,12 +119,14 @@ state — git has the history.
 
 **Conflict resolutions that change architectural decisions create new ADRs.** Never overwrite
 an existing ADR. Instead:
-1. Write a new ADR in `.docs/decisions/` that supersedes the old one
-2. Update the old ADR's status to `Superseded by ADR-NNN`
+1. Write a new ADR in `.docs/decisions/` (named `adr-YYYY-MM-DD-<kebab-slug>.md`, no
+   sequential numbers) that supersedes the old one
+2. Update the old ADR's status to `Superseded by <new-adr-slug>` (the new ADR's filename stem)
 3. The new ADR references the old one and explains why the decision changed
 
-Example: If conflict resolution changes the API authentication approach from ADR-005,
-create ADR-012 with the new approach and mark ADR-005 as superseded.
+Example: If conflict resolution changes the API authentication approach from
+`adr-2026-05-01-api-auth-strategy`, create `adr-2026-06-29-api-auth-token-exchange` with the new
+approach and mark the old one as superseded.
 
 ### 5. Re-Check
 

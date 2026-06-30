@@ -20,9 +20,10 @@ import { v4 as uuidv4 } from 'uuid';
 import { Conductor } from './engine/conductor.js';
 import { DefaultStepRunner } from './engine/step-runners.js';
 import { ConductorEventEmitter } from './ui/events.js';
-import { loadConfig } from './engine/config.js';
+import { loadConfig, loadMergedConfig } from './engine/config.js';
+import { renderDiagramsForFile, defaultRenderDeps } from './engine/mermaid-renderer.js';
 import { readState, writeState } from './engine/state.js';
-import { parseArgs, renderFullHelp, detectInline, type CLIOptions } from './cli.js';
+import { parseArgs, renderFullHelp, renderDaemonHelp, detectInline, type CLIOptions } from './cli.js';
 import type { StepName } from './types/index.js';
 import { createRenderer } from './ui/create-renderer.js';
 import { ALL_STEPS } from './engine/steps.js';
@@ -47,7 +48,13 @@ import type { UISubscriber } from "./ui/types.js";
 import type { VisualizerPlugin } from './types/plugin.js';
 import { detectRegistryCommand, dispatchRegistry } from './engine/registry-cli.js';
 import { detectEngineerCommand, dispatchEngineer } from './engine/engineer-cli.js';
-import { detectDaemonCommand } from './engine/daemon-command.js';
+import { detectMemoryCommand, dispatchMemorySetup } from './engine/memory-cli.js';
+import {
+  detectDaemonCommand,
+  detectDaemonSupervisorCommand,
+  detectUnknownDaemonSubcommand,
+} from './engine/daemon-command.js';
+import { detectRenderCommand, dispatchRender } from './engine/render-cli.js';
 import {
   detectDaemonObserveCommand,
   dispatchDaemonObserve,
@@ -198,6 +205,16 @@ async function cleanupMergedWorktrees(
 // --- Main ---
 
 async function main(): Promise<void> {
+  // Memory setup subcommand (`conduct memory setup [dir]`, adr-2026-06-29-shared-memory-store-placement-and-durability) runs
+  // NON-INTERACTIVELY and exits — creates/migrates the canonical per-project
+  // store + .memory symlink. Dispatched first so bin/conduct can call it
+  // before the interactive pipeline or Claude sessions start.
+  const memoryCmd = detectMemoryCommand(process.argv);
+  if (memoryCmd) {
+    const code = await dispatchMemorySetup(memoryCmd);
+    process.exit(code);
+  }
+
   // Registry subcommands (Phase 9.2) run NON-INTERACTIVELY and exit — they must
   // not boot the interactive pipeline / live region. Dispatch them before
   // parseArgs (whose "feature description required" rule doesn't apply here).
@@ -216,6 +233,27 @@ async function main(): Promise<void> {
     process.exit(code);
   }
 
+  // Render subcommand (`render-diagrams <file>...`) runs NON-INTERACTIVELY and
+  // exits — it renders the Mermaid blocks in the given Markdown via the
+  // configured mermaid_renderer preset. Best-effort; mirrors the dispatch pattern.
+  const renderCmd = detectRenderCommand(process.argv);
+  if (renderCmd) {
+    const code = await dispatchRender(renderCmd, process.cwd());
+    process.exit(code);
+  }
+
+  // `daemon --help` / `daemon -h`: print the daemon command surface (run flags +
+  // status/logs + management verbs) and exit. MUST precede every daemon dispatcher
+  // below — otherwise detectDaemonCommand treats `--help` as an unknown flag and
+  // LAUNCHES a daemon run instead of showing help (a real footgun).
+  if (
+    process.argv[2] === 'daemon' &&
+    process.argv.slice(3).some((a) => a === '--help' || a === '-h')
+  ) {
+    process.stdout.write(renderDaemonHelp());
+    process.exit(0);
+  }
+
   // Read-only daemon observability sub-subcommands (`daemon status` / `daemon
   // logs`) run NON-INTERACTIVELY and exit. Checked BEFORE the daemon run command
   // so `daemon status`/`logs` are never mistaken for a daemon launch.
@@ -225,11 +263,35 @@ async function main(): Promise<void> {
     process.exit(code);
   }
 
+  // Daemon management verbs (start / stop / restart / connect / debug) route to
+  // the Supervisor port, NOT to a daemon run. Dispatched after observability but
+  // BEFORE the daemon run command so management verbs are never mistaken for a
+  // launch. dispatchDaemonSupervisor is imported lazily to keep the daemon-tmux
+  // runtime (spawnSync, crypto) out of non-daemon invocations.
+  const daemonSupervisorCmd = detectDaemonSupervisorCommand(process.argv);
+  if (daemonSupervisorCmd) {
+    const { dispatchDaemonSupervisor } = await import('./engine/daemon-supervisor-cli.js');
+    const code = await dispatchDaemonSupervisor(daemonSupervisorCmd);
+    process.exit(code);
+  }
+
   // Daemon subcommand (Phase 6, promoted from the `--daemon` flag) runs
   // unattended and exits — drain the backlog of features (each in its own
   // worktree, gate loop, PR on finish). Dispatched before parseArgs, mirroring
   // the registry/engineer subcommand pattern. runDaemonMode is imported lazily
   // so the heavy daemon runtime only loads when actually running the daemon.
+  // Guard a typo'd / unknown daemon sub-verb (e.g. `daemon strt`): a bare non-flag
+  // token that is not a known sub-verb would otherwise fall through to
+  // detectDaemonCommand and LAUNCH a daemon run. Surface the daemon help + a clear
+  // error instead. Placed AFTER the observe/supervisor dispatchers consumed the
+  // valid verbs, so anything reaching here is genuinely unrecognized.
+  const unknownDaemonSub = detectUnknownDaemonSubcommand(process.argv);
+  if (unknownDaemonSub) {
+    console.error(`conduct daemon: unknown subcommand '${unknownDaemonSub}'.\n`);
+    process.stderr.write(renderDaemonHelp());
+    process.exit(1);
+  }
+
   const daemonCmd = detectDaemonCommand(process.argv);
   if (daemonCmd) {
     const { runDaemonMode } = await import('./daemon-cli.js');
@@ -288,7 +350,6 @@ async function main(): Promise<void> {
   // region around each readline prompt so dashboard and prompts don't fight
   // for the terminal.
   const liveRegion = createLiveRegion();
-  const promptHost = new TerminalPromptHost(liveRegion);
 
   // Load config (optional — conductor works without it)
   const configResult = await loadConfig(projectRoot);
@@ -302,6 +363,21 @@ async function main(): Promise<void> {
     console.error(`Config error: ${configResult.error.message}`);
     process.exit(1);
   }
+
+  // Resolve the Mermaid renderer from the MERGED config (the user-level
+  // ~/.ai-conductor/config.yml is where `install` writes the chosen preset).
+  // The host renders diagrams at the approval gate; best-effort, with a notice
+  // on any skip/failure so the human knows to fall back to the raw Markdown.
+  const mergedResult = await loadMergedConfig(projectRoot);
+  const mermaidCfg = mergedResult.ok ? mergedResult.config.mermaid_renderer : undefined;
+  const renderDeps = defaultRenderDeps((m) => console.error(m));
+  const promptHost = new TerminalPromptHost(liveRegion, {
+    renderDiagrams: async (file, content) => {
+      const result = await renderDiagramsForFile(file, content, mermaidCfg, renderDeps);
+      // Return the notice so the host logs it on its own channel (TUI-safe).
+      return result.notice;
+    },
+  });
 
   // Handle --report: render summary from events.jsonl and exit (read-only, no Claude session)
   if (opts.report) {

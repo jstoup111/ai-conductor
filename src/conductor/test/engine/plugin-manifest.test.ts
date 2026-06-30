@@ -228,5 +228,46 @@ capabilities:
         unlinkSync(tmpFile);
       }
     });
+
+    // Task A2: memory_provider manifest loading (adr-2026-06-29-memory-provider-plugin-and-agent-queried-integration)
+    it('accepts a memory_provider manifest with entrypoint only', () => {
+      const tmpFile = join(tmpdir(), `memory-provider-${Date.now()}.yml`);
+      const yaml = `kind: memory_provider\nname: my-memory\nentrypoint: server.js`;
+      writeFileSync(tmpFile, yaml, 'utf-8');
+      try {
+        const result = loadManifestFromFile(tmpFile);
+        expect(result.kind).toBe('memory_provider');
+        expect(result.name).toBe('my-memory');
+        expect(result.entrypoint).toBe('server.js');
+      } finally {
+        unlinkSync(tmpFile);
+      }
+    });
+
+    it('accepts a memory_provider manifest with optional guidance field', () => {
+      const tmpFile = join(tmpdir(), `memory-provider-guidance-${Date.now()}.yml`);
+      const yaml = `kind: memory_provider\nname: my-memory\nentrypoint: server.js\nguidance: skills/memory/SKILL.md`;
+      writeFileSync(tmpFile, yaml, 'utf-8');
+      try {
+        const result = loadManifestFromFile(tmpFile);
+        expect(result.kind).toBe('memory_provider');
+        expect(result.guidance).toBe('skills/memory/SKILL.md');
+      } finally {
+        unlinkSync(tmpFile);
+      }
+    });
+
+    it('accepts a memory_provider manifest without guidance (guidance is optional)', () => {
+      const tmpFile = join(tmpdir(), `memory-provider-no-guidance-${Date.now()}.yml`);
+      const yaml = `kind: memory_provider\nname: no-guidance\nentrypoint: server.js`;
+      writeFileSync(tmpFile, yaml, 'utf-8');
+      try {
+        const result = loadManifestFromFile(tmpFile);
+        expect(result.kind).toBe('memory_provider');
+        expect(result.guidance).toBeUndefined();
+      } finally {
+        unlinkSync(tmpFile);
+      }
+    });
   });
 });

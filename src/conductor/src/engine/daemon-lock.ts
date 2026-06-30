@@ -12,8 +12,9 @@
 //     success or EPERM = alive (never reclaimed — conservative).
 //   - Stale reclaim (FR-19): dead lock is reclaimed by unlink + re-create via
 //     O_EXCL. The reclaim itself races safely — only one reclaimer wins.
-//   - ensure-running (FR-21): probe lock; alive → no-op; none/stale → spawn one
-//     detached daemon (fire-and-forget, no lifecycle ownership).
+//   - ensure-running (FR-21): probe lock; alive → no-op; none/stale → launch one
+//     daemon (fire-and-forget, no lifecycle ownership). The launch is now hosted in
+//     a tmux session via supervisor.start (ADR-014); the engineer retains no handle.
 //   - Isolation (FR-20 caveat): this module is the single swappable boundary so
 //     the single-winner model can change without rippling into routing/authoring.
 
@@ -390,7 +391,7 @@ export async function holdLock(repoPath: string): Promise<DaemonLockHandle | nul
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Injectable launch function (default: launchDaemonDetached).
+ * Injectable launch function (default: launchDaemon).
  * Receives only the repoPath — fire-and-forget.
  * Errors thrown by the launch fn are not propagated (fire-and-forget).
  */
@@ -404,7 +405,7 @@ export type WriteDaemonStateFn = () => Promise<void>;
 
 export interface EnsureRunningOpts {
   /**
-   * Injectable launch function (default: launchDaemonDetached). Called at most
+   * Injectable launch function (default: launchDaemon). Called at most
    * once when no live daemon is found. Never called when a live owner exists.
    */
   launch?: LaunchFn;
@@ -442,7 +443,7 @@ export interface EnsureRunningOpts {
  *         the REAL process.kill (defaultKill — pidfile is authoritative):
  *         - isLive → STOP. No spawn, no signal. (zero-management contract)
  *         - dead  → reclaim the stale lock, call onReclaim(), fall through to spawn.
- *   2. Spawn: call opts.launch(repoPath) (default: launchDaemonDetached) ONCE.
+ *   2. Spawn: call opts.launch(repoPath) (default: launchDaemon) ONCE.
  *   3. Best-effort mirror: call writeDaemonState() if provided; swallow any error.
  *
  * The function NEVER:
@@ -477,9 +478,9 @@ export async function ensureRunning(
   const launchFn: LaunchFn =
     opts.launch ??
     (async (path: string) => {
-      // Default: import launchDaemonDetached lazily (avoids circular-dep issues).
-      const { launchDaemonDetached } = await import('./engineer/daemon-launch.js');
-      launchDaemonDetached(path);
+      // Default: import launchDaemon lazily (avoids circular-dep issues).
+      const { launchDaemon } = await import('./engineer/daemon-launch.js');
+      launchDaemon(path);
     });
 
   let needsSpawn = false;

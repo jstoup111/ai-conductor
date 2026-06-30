@@ -145,6 +145,28 @@ escalates to the recovery menu, where the human picks where to route. In a **dae
 Re-auditing unchanged code yields the same verdict, so the daemon skips the default per-step
 retries for a blocking `prd_audit` and routes straight away.
 
+### Mermaid diagram rendering (approval gates)
+
+Generated architecture diagrams and DRAFT ADRs are Mermaid-in-Markdown. So the human approves
+a *visual* (not raw Mermaid), the artifact-review path renders them:
+
+- **Engine** (`engine/mermaid-renderer.ts`) — `renderDiagramsForFile(file, content, config, deps)`
+  extracts the ```mermaid blocks and dispatches on the configured **preset name**: `html`
+  (build a self-contained mermaid.js page), `mmdc-png`/`mmdc-svg` (shell out to
+  `@mermaid-js/mermaid-cli`), `none`/unknown/unconfigured (skip). Best-effort by contract: it
+  never throws, isolates per-diagram failures, HTML-escapes diagram source, and returns a
+  `notice` on any skip/failure. Presets + valid modes live in `engine/mermaid-renderer-presets.ts`
+  (parallel to `md-viewer-presets.ts`); the config block is `mermaid_renderer.{preset,command,
+  args,mode}`, validated in `engine/config.ts` like `markdown_viewer`.
+- **Gate** — `TerminalPromptHost.reviewArtifacts` shows the raw Markdown first (always-present
+  fallback), then, for a file containing a mermaid fence, calls an injected `renderDiagrams`
+  hook and logs any returned notice on the host's own channel (TUI-safe). `index.ts` wires the
+  hook from the **merged** config (the preset is set user-level by `bin/install`).
+- **CLI** — `conduct render-diagrams <file>...` (`engine/render-cli.ts`) renders on demand.
+- **Opener** — `detectOpenerCommand` resolves per platform (macOS `open`, Linux `xdg-open`,
+  WSL `wslview`/`explorer.exe`); `defaultRenderDeps` runs it with a bounded timeout so the
+  never-block contract rests on code, not opener behavior.
+
 ### Rebase-on-latest (before finish)
 
 The `rebase` step is an **engine-native** loopGate (like `complexity` — no Claude dispatch;
@@ -168,12 +190,47 @@ stale base:
   feature's `[Unreleased]` lines (captured `base..HEAD` pre-rebase) exactly once, then
   `git rebase --continue`s. CHANGELOG conflicting alongside any other file, or outside
   `[Unreleased]`, takes the HALT path instead.
-- **Conflict → HALT (paused)** — any other / mixed conflict writes `.pipeline/HALT` listing
-  the conflicted files and the resume steps, leaves the rebase **paused** (no `--abort`,
-  conflict markers intact), does **not** mark the feature processed, and opens **no PR**.
+- **Conflict → gated resolution → HALT (paused)** — any other / mixed conflict first triggers
+  the **gated conflict-resolution loop** (see below); if the loop is exhausted or disabled,
+  the engine writes `.pipeline/HALT` listing the conflicted files and the resume steps, leaves
+  the rebase **paused** (no `--abort`, conflict markers intact), does **not** mark the feature
+  processed, and opens **no PR**.
 - **Events** — each outcome emits a typed event: `rebase_noop`, `rebase_changed`,
   `rebase_changelog_resolved`, `rebase_conflict_halt` (best-effort; emission failure never
   affects the rebase result).
+
+#### Gated conflict resolution
+
+Before HALTing on a non-CHANGELOG conflict, the daemon dispatches the `/rebase` resolution
+skill up to `rebase_resolution_attempts` times (config key; default **3**; set to **0** to
+disable and restore the previous immediate-HALT behavior). Each attempt lets the skill resolve
+the conflicted files and then runs `git rebase --continue`. A resolution is accepted only when
+**both** acceptance guards pass:
+
+- **FR-8 (current with base)** — the branch must be genuinely current with the base after the
+  rebase (zero commits in `HEAD..base`).
+- **FR-9 (commit preservation)** — no feature commits may have been dropped; the pre-rebase
+  feature commit list must be present in full after the rebase.
+
+If the resolved rebase **changed code or test paths**, the existing kickback machinery fires —
+the verdict is `{satisfied:false, kickback:{from:'rebase'}}` for `build` (and `manual_test` if
+it ran) and the selector routes back to `build`, exactly as a clean rebase would. A docs-only
+change does not invalidate.
+
+If all attempts are exhausted without an accepted resolution, the engine falls through to the
+existing HALT path: `.pipeline/HALT` is written, the rebase is left paused (conflict markers
+intact), and no PR is opened.
+
+**Daemon-only.** The gated resolution loop runs only in daemon (`mode: 'auto'`, `daemon: true`)
+mode. Interactive `/conduct` runs are unchanged — humans resolve conflicts by hand. The `/rebase`
+skill is also manually invokable by an operator (`/rebase`) for conflict resolution outside the
+automated loop.
+
+**Config key** (`pipeline.yml` / `.ai-conductor/config.yml`):
+
+```yaml
+rebase_resolution_attempts: 3   # default; 0 = disable (immediate HALT on any conflict)
+```
 
 **Resume a parked rebase:** resolve the conflict in the listed file(s) → `git rebase --continue`
 → `rm .pipeline/HALT` → re-queue. The daemon reuses the existing worktree, finds the rebase a
@@ -205,8 +262,14 @@ and opening a PR on finish:
   from `git show <default>:…` on that now-current local branch. This is what makes **merging the
   spec PR the build-ready trigger** (FR-24): a spec the engineer authored but has not landed, or
   one committed only on an unmerged `spec/<slug>` branch, is invisible until it reaches the
-  default branch. Each worktree is cut from this fresh branch, so the vetted stories+plan already
-  physically exist in it — there is **no separate spec-copy/materialization step**. `fastForwardRoot`
+  default branch. Each worktree is cut from **`origin/<default>`** (the remote-tracking tip; it
+  falls back to the local default branch only when `origin/<default>` is unresolvable — a
+  local-only repo never fetched), so a build always starts from the latest *fetched* origin even
+  when another process has left the root checkout on a different branch or a detached `HEAD` and
+  local `<default>` has gone stale. Because discovery reads the (ancestor-or-equal) local default
+  branch, every discovered spec is also present on `origin/<default>`, so the vetted stories+plan
+  already physically exist in the worktree — there is **no separate spec-copy/materialization
+  step**. `fastForwardRoot`
   degrades gracefully and never throws: no origin, unset `origin/HEAD`, a dirty tree, a failed
   fetch (offline), or a non-fast-forward (divergence) all leave the local branch as-is and the
   poll loop continues. On top of
@@ -242,12 +305,16 @@ things on top of that, without a parallel dispatch path:
 - **Startup inherited-state dashboard (`daemon-dashboard.ts`).** Before any dispatch, the
   daemon scans `.worktrees/*/` (`.pipeline/HALT`, `conduct-state.json`) and the
   `.daemon/processed/` ledger and prints one grouped dashboard to **both** stdout and
-  `daemon.log` — four groups with precedence **HALTED > PROCESSED > IN-PROGRESS > ELIGIBLE**:
-  HALTED (slug + first line of the HALT reason), IN-PROGRESS (slug + last meaningful step
-  from `conduct-state`), ELIGIBLE (build-ready slugs this scan that are neither halted nor
-  processed), PROCESSED (count). Best-effort: an empty HALT → reason `unknown`, a malformed
-  `conduct-state` → step `unknown`, a per-worktree fs error is skipped — the scan never
-  aborts startup.
+  `daemon.log` — four groups with precedence **HALTED > PROCESSED > IN-PROGRESS > ELIGIBLE**.
+  Each row carries the bits an operator triages on, mined best-effort from the worktree's
+  `conduct-state.json` (and the ledger): HALTED (slug + complexity tier + the step it reached
+  + first line of the HALT reason + any open PR link), IN-PROGRESS (slug + tier + last
+  meaningful step + any open PR link), ELIGIBLE (build-ready slug + tier this scan, neither
+  halted nor processed), PROCESSED (count + each shipped slug with its PR link when one was
+  persisted). The ledger is JSON (`{ status, prUrl }`); legacy plain-text `shipped` entries
+  still parse (no PR). Best-effort: an empty HALT → reason `unknown`, a malformed
+  `conduct-state` → step `unknown` (no tier/PR enrichment), a per-worktree fs error is
+  skipped — the scan never aborts startup.
 
 - **Base-SHA tracking + re-kick (`daemon-sha.ts`, `daemon-rekick.ts`).** The daemon
   `git rev-parse`s the local default branch (fast-forwarded to origin on idle refresh by
@@ -304,28 +371,87 @@ that need no setup (a static site, a pure library) simply ship no `bin/setup` an
 untouched. This is what lets one daemon serve **any** project setup, including consumer
 projects that use the harness.
 
-### Daemon observability (`status` / `logs`)
+#### PR labeling (`needs-remediation` + `mergeable`, daemon-only)
 
-The daemon is spawned **detached** (`engine/engineer/daemon-launch.ts`,
-`stdio:'ignore'`), so its console output is discarded. To keep *activity* visible — not
-just liveness — `runDaemonMode` tees its log sink into an append-only
-**`.daemon/daemon.log`** (`engine/daemon-log.ts`, opened once the per-repo pidfile lock is
-held). Because `renderDaemonEvent` and every feature start/finish line already route
-through that one sink, the file captures the full BUILD narrative: feature start, each
-gate-loop step result (`step_completed` / unsatisfied `gate_verdict` / `kickback` /
-`loop_halt`), and finish (`shipped`/`failed` + PR url). The log is size-capped (~1 MB,
-rotated once to `daemon.log.1`).
+Two GitHub labels give a human operator an at-a-glance signal on the daemon's PRs without
+reading logs or opening worktrees.
 
-Two **read-only** sub-subcommands of `daemon` (`engine/daemon-observe-cli.ts`,
-dispatched before the pipeline boots and **before** the `daemon` run command, so
-`status`/`logs` are never mistaken for a daemon launch — `detectDaemonCommand` in
-`daemon-command.ts` yields when argv[3] is `status`/`logs`) surface it:
+**`needs-remediation` draft PR (irrecoverable daemon HALT)**
+
+When the gate loop (`conductor.ts`, auto mode) writes `.pipeline/HALT` at **any non-rebase HALT
+site** that strands committed work — a build/gating-step failure (retries exhausted), a prd-audit
+product/plan gap needing human DECIDE, the kickback-ping-pong or stuck-gate caps, or an unexpected
+conductor error — *and* the feature branch has at least one commit, the conductor surfaces a
+**draft** PR labeled `needs-remediation` with a comment that includes the HALT reason (which names
+the failing step) and the relevant error. The **rebase-conflict HALT is excluded** (rebase is left
+paused mid-state). The PR is draft so it cannot be merged accidentally.
+If an open PR already exists for the branch it is reused (label + comment applied, no
+duplicate opened). The failure comment is **upserted, not appended**: it carries a hidden
+marker (`<!-- conductor:needs-remediation -->`) so a feature that HALTs repeatedly edits the
+**single** existing remediation comment in place (latest reason replaces the prior one)
+rather than piling up duplicates. When the branch has **zero commits** no PR, comment, or label is
+produced — the existing local HALT marker is the only surface, unchanged. All GitHub
+side-effects are **best-effort and non-blocking**: a push, PR-create, comment, or label
+failure is logged and swallowed; the HALT is still written regardless. This behavior is
+**distinct** from the engineer intake `needs-manual` ledger state, which tracks intake-issue
+re-eligibility and is unrelated to build-failure PR labeling.
+
+When a feature that previously produced a `needs-remediation` PR is later re-dispatched and
+reaches `done`, the daemon clears the stale signal: it removes the `needs-remediation` label
+and un-drafts the PR (best-effort) before enrolling it in the `mergeable` sweep (FR-16), so
+the now-clean PR is not permanently barred from `mergeable` and the label does not lie.
+
+**`mergeable` label sweep (fully-shipped PRs)**
+
+When a feature reaches `done`, its PR is enrolled in a per-repo watch registry
+(`.daemon/mergeable-watch.jsonl`). A best-effort sweep — run on daemon startup, after each
+feature completes, and on each idle poll tick — evaluates every enrolled PR and keeps the
+`mergeable` label in sync with reality:
+
+- **Added** when: the PR is open, has no merge conflicts, and CI is passing (a PR with no
+  required checks counts as passing).
+- **Removed** when: the PR becomes non-mergeable (new conflicts, CI breaks, or no longer open).
+- **Pruned** when: the PR is merged or closed (dropped from the registry, no further activity).
+
+A PR carrying `needs-remediation` is **never** labeled `mergeable`. The sweep is best-effort
+and non-blocking: a label-read or apply/remove failure is logged and does not disrupt feature
+processing. Because CI typically finishes after the PR is opened, the sweep re-checks over
+time rather than making a one-shot determination at PR creation.
+
+### Daemon hosting, management & observability (tmux Supervisor — `adr-2026-06-29-daemon-supervisor-port-and-attachable-hosting`)
+
+The daemon is hosted as a **foreground process inside a per-repo tmux session**
+(`cc-daemon-<slug>`, `engine/daemon-tmux.ts`) behind a swappable **Supervisor port**
+(`start/stop/restart/attach/logs/exec/isUp`; tmux adapter now, a kubectl adapter later with
+no execution-core change). The session owns an attachable PTY, so a *running* daemon can be
+watched, debugged, and restarted on demand — in color. Management verbs
+(`engine/daemon-supervisor-cli.ts`, dispatched in `index.ts` **before** the `daemon` run
+command; `detectDaemonCommand` yields when argv[3] is a management verb so none mis-launches
+a run):
+
+- **`conduct-ts daemon start`** — idempotent: `hasSession?` no-op : `tmux new-session -d
+  'conduct-ts daemon --continuous'`. Replaces the old detached `launchDaemonDetached` spawn
+  (the daemon-supervisor ADR supersedes ADR-005's spawn mechanism; non-management intent preserved).
+- **`stop`** / **`restart`** — `kill-session` / kill-then-start.
+- **`connect`** — `attach -r` (read-only live colored watch); **`debug`** — full attach.
+
+The daemon still tees its log sink into an append-only **`.daemon/daemon.log`**
+(`engine/daemon-log.ts`, opened once the per-repo pidfile lock is held) — so the full BUILD
+narrative (feature start, each gate-loop step result, finish + PR url) survives even when no
+one is attached. The log is size-capped (~1 MB, rotated once to `daemon.log.1`). The daemon
+runs **serially** (concurrency clamped to 1) and **bare-run**: the build path never imports
+the tmux layer, so it functions with no tmux present (management is purely additive).
+
+Two **read-only** observability sub-subcommands of `daemon` (`engine/daemon-observe-cli.ts`,
+dispatched before the pipeline boots) surface state without attaching:
 
 - **`conduct-ts daemon status`** — iterate the project registry and, for each repo,
   report pidfile liveness via the `daemon-lock.ts` primitives (`readPidRecord` + `isLive`):
   `running` (owner alive), `stale` (owner dead — reclaimable), `stopped` (no pidfile),
-  plus pid, start time, and the last log line. A registered path that no longer exists is
-  reported as `path missing`; a single bad repo never aborts the sweep.
+  plus pid, start time, the last log line, and **tmux session up/down** (via `hasSession`,
+  independent of pidfile liveness — so a stale pidfile with a live orphaned session is
+  distinguishable). A registered path that no longer exists is reported as `path missing`;
+  a single bad repo never aborts the sweep.
 - **`conduct-ts daemon logs [--repo <path>] [--follow] [--all]`** — print (or `--follow`,
   `tail -f` semantics) `.daemon/daemon.log` for one repo (default: cwd) or every registered
   repo (`--all`). A missing log prints a friendly note rather than erroring.
@@ -334,6 +460,53 @@ See `test/engine/daemon-log.test.ts` and `test/engine/daemon-observe-cli.test.ts
 pidfile path and the O_EXCL create flag stay confined to `daemon-lock.ts`
 (`test/engine/daemon-lock-boundary.test.ts`); the log module reuses the exported
 `daemonDir()` and never re-encodes the pidfile.
+
+### Pluggable memory provider (adr-2026-06-29-memory-provider-plugin-and-agent-queried-integration/adr-2026-06-29-per-project-memory-provider-selection/adr-2026-06-29-shared-memory-store-placement-and-durability)
+
+The `memory_provider` config field selects which provider backs `.memory/`.
+
+```yaml
+# .ai-conductor/config.yml
+memory_provider: local    # default — no install needed
+```
+
+**Built-in `local` provider:** The harness creates a durable, per-project canonical store at
+`~/.ai-conductor/memory/<key>/harness/` and symlinks `.memory/` in the project to it (adr-2026-06-29-shared-memory-store-placement-and-durability).
+The `<key>` is derived from the git origin URL (or common `.git` dir path), so all linked
+worktrees of the same project share one memory store and sibling-worktree writes are
+immediately visible across branches.
+
+**Store layout:**
+
+```
+~/.ai-conductor/memory/<key>/harness/
+  decisions/      # architectural decisions
+  patterns/       # discovered code patterns
+  gotchas/        # unexpected issues and gotchas
+  context/        # domain knowledge and context
+  index.md        # append-only recall entry point
+```
+
+`.memory/` in the project repo is a symlink to this directory.
+
+**Recall model (FR-3 invariant):** the harness contains NO embedding, vector-search,
+cosine-similarity, or relevance-ranking logic. Recall is always performed by the LLM
+agent reading `.memory/index.md` and the relevant category files, then judging relevance.
+This guarantees the memory subsystem works with zero services, zero network, zero credentials.
+
+**Bootstrap setup:** `bin/conduct` calls `conduct-ts memory setup <dir>` before any
+bootstrap Claude sub-step. If `.memory/` is a real directory (legacy), `migrateMemory`
+runs the copy-verify-swap (adr-2026-06-29-safe-reversible-memory-migration); otherwise `ensureMemoryStore` creates the canonical
+store idempotently. Future non-default providers integrate as MCP servers queried directly
+by the agent — the harness wires the provider selection but never searches on the agent's
+behalf.
+
+Key modules:
+- `engine/memory-store.ts` — `projectKey`, `ensureMemoryStore`, `recordMemoryEntry`
+- `engine/memory-migrate.ts` — `migrateMemory` (safe copy-verify-swap)
+- `engine/local-memory-provider.ts` — `LocalMemoryProvider` plugin object
+- `engine/memory-cli.ts` — `conduct memory setup` subcommand
+- `engine/config.ts` → `resolveMemoryProvider` — run-start provider resolution (adr-2026-06-29-per-project-memory-provider-selection)
 
 ### Engineer memory store (Phase 9.1)
 
@@ -631,11 +804,15 @@ State lives under the engineer dir (`$AI_CONDUCTOR_ENGINEER_DIR`, default `~/.ai
 `O_EXCL` so exactly one daemon wins under concurrent boots. Liveness is `process.kill(pid, 0)`
 (`ESRCH` → dead, `EPERM` → alive); a corrupt/malformed pidfile is treated as absent. Stale reclaim
 **never permanently refuses** — a `kill -9` leftover is reclaimed on the next boot.
-`ensureRunning(repoPath, deps)` spawns a detached daemon **iff** none is live or the pidfile is
+`ensureRunning(repoPath, deps)` starts a daemon **iff** none is live or the pidfile is
 stale, no-ops if one is already alive, and **never manages** the lifecycle (fire-and-forget;
-ensure-not-manage). `launchDaemonDetached` launches with `cwd: repoPath` (was passing `--project`),
-so the pidfile and worktree land under the target repo's `.daemon/`. The registry `daemonState`
-mirror is **non-authoritative** — the pidfile wins; a mirror-write failure is non-fatal.
+ensure-not-manage). Its default launch now delegates to the tmux Supervisor's idempotent
+`start` (`launchDaemon` → `supervisor.start`, the daemon-supervisor ADR) — so an engineer-nudged daemon
+is hosted in a session and is operator-attachable, while the engineer still retains no
+handle/IPC/control (ADR-005 non-management intent preserved; only the spawn mechanism is
+superseded). The session runs with `cwd: repoPath`, so the pidfile and worktree land under the
+target repo's `.daemon/`. The registry `daemonState` mirror is **non-authoritative** — the
+pidfile wins; a mirror-write failure is non-fatal.
 
 Read-only reporting over the engineer store ships as library functions: `governorReport`
 (`engine/engineer/governor.ts`) aggregates spend + kickback/halt/retry rates; `computeFlywheelTrend`

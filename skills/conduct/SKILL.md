@@ -245,10 +245,20 @@ Before suggesting the next step, verify that the previous step's **quality gates
 **After architecture-review --as-built (before suggesting retro):**
 - Open the as-built report (`.pipeline/architecture-review-as-built.md`)
 - If the verdict is BLOCKED (shipped code violates an APPROVED ADR), BLOCK
-- Say: "As-built review blocked — code violates [ADR-N]. Fix the code or supersede the ADR (human-approved), then re-run `/architecture-review --as-built`."
+- Say: "As-built review blocked — code violates [ADR slug]. Fix the code or supersede the ADR (human-approved), then re-run `/architecture-review --as-built`."
 
 **When pipeline reports task failure:** Verify by running tests before escalating or
 re-dispatching. JSON state can become stale — the actual test suite is the source of truth.
+
+**Daemon-only PR labeling (irrecoverable build failure / successful ship):**
+In daemon/auto mode, an irrecoverable build failure that has commits on the branch surfaces a
+`needs-remediation` **draft PR** with a failure comment (best-effort, never blocks the HALT;
+no GitHub artifacts when there are zero commits). PRs from features that ship `done` receive a
+kept-in-sync `mergeable` label (added when open + conflict-free + CI-green, removed when not,
+pruned on merge/close). A `needs-remediation` PR is never labeled `mergeable`. If a previously
+failed feature later succeeds on re-dispatch, the daemon clears the stale `needs-remediation`
+label and un-drafts the PR before enrolling it in the sweep. Interactive runs are unchanged.
+See `src/conductor/README.md` → "PR labeling".
 
 ### 4. Handle Edge Cases
 

@@ -115,7 +115,7 @@ export async function landSpec(
   guard.assertWriteAllowed(storiesDir);
   guard.assertWriteAllowed(plansDir);
 
-  // Resolve the work track (ADR-015/017): a PRD/spec is required only on the
+  // Resolve the work track (adr-2026-06-29-explore-prd-split-track-in-explore/adr-2026-06-29-track-marker-location): a PRD/spec is required only on the
   // PRODUCT track. Technical-only features carry acceptance criteria in stories
   // and have no PRD. Track is read from `.docs/track/<slug>.md` (written by
   // /explore); a missing marker defaults to `product` (back-compat).

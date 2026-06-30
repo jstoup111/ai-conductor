@@ -8,7 +8,9 @@ import {
   disabledStepNames,
   customStepEntries,
   mergeConfigs,
+  resolveMemoryProvider,
 } from '../../src/engine/config.js';
+import { PluginRegistry } from '../../src/engine/plugin-registry.js';
 
 describe('config', () => {
   let tmpDir: string;
@@ -339,6 +341,54 @@ complexity:
     });
   });
 
+  describe('mermaid_renderer validation', () => {
+    it('accepts a valid preset block', () => {
+      const result = validateConfig({
+        mermaid_renderer: {
+          preset: 'html',
+          command: '',
+          args: ['{file}'],
+          mode: 'external',
+        },
+      });
+      expect(result.ok).toBe(true);
+    });
+
+    it('accepts a block with no command (html/none presets need no tool)', () => {
+      const result = validateConfig({
+        mermaid_renderer: { preset: 'none', args: ['{file}'], mode: 'external' },
+      });
+      expect(result.ok).toBe(true);
+    });
+
+    it('rejects args without {file} placeholder', () => {
+      const result = validateConfig({
+        mermaid_renderer: { command: 'mmdc', args: ['-i'], mode: 'external' },
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.message).toMatch(/\{file\}/);
+    });
+
+    it('rejects invalid mode', () => {
+      const result = validateConfig({
+        mermaid_renderer: { command: 'mmdc', args: ['{file}'], mode: 'weird' },
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.message).toMatch(/inline\|blocking\|external/);
+    });
+
+    it('rejects unknown keys under mermaid_renderer', () => {
+      const result = validateConfig({
+        mermaid_renderer: { command: 'mmdc', args: ['{file}'], mode: 'external', bogus: 1 },
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.message).toMatch(/bogus/);
+    });
+  });
+
   describe('conductor block validation', () => {
     it('accepts tagged/main update_channel', () => {
       expect(validateConfig({ conductor: { update_channel: 'tagged' } }).ok).toBe(true);
@@ -430,6 +480,115 @@ complexity:
       );
       expect(merged.conductor?.update_channel).toBe('main');
       expect(merged.conductor?.current_version).toBe('1.0.0');
+    });
+  });
+
+  // Task A4 (adr-2026-06-29-per-project-memory-provider-selection): memory_provider config field
+  describe('memory_provider config field', () => {
+    it('accepts memory_provider: local and exposes it on the parsed config', () => {
+      const result = validateConfig({ memory_provider: 'local' });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.memory_provider).toBe('local');
+    });
+
+    it('accepts memory_provider alongside other plugin selections', () => {
+      const result = validateConfig({
+        llm_provider: 'claude',
+        ui_renderer: 'terminal',
+        memory_provider: 'local',
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.memory_provider).toBe('local');
+      expect(result.config.llm_provider).toBe('claude');
+    });
+
+    it('memory_provider: absent is fine — field is optional', () => {
+      const result = validateConfig({ harness_version: '>=1.0.0' });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.memory_provider).toBeUndefined();
+    });
+  });
+
+  // Task A10 (adr-2026-06-29-per-project-memory-provider-selection FR-1 negative): provider selection is per-project; no leakage.
+  describe('A10: resolveMemoryProvider — per-project isolation, no leakage', () => {
+    function registryWithLocal(provider: object): PluginRegistry {
+      const reg = new PluginRegistry();
+      reg.register('memory_provider' as any, 'local', provider);
+      return reg;
+    }
+
+    it('two configs with different memory_provider values resolve independently', async () => {
+      const LOCAL = { name: 'local', kind: 'memory_provider' };
+      const registry = registryWithLocal(LOCAL);
+
+      const ctxA = { warnings: [] as string[] };
+      const ctxB = { warnings: [] as string[] };
+
+      const a = await resolveMemoryProvider({ memory_provider: 'local' } as any, registry, ctxA);
+      const b = await resolveMemoryProvider({ memory_provider: 'unknown-b' } as any, registry, ctxB);
+
+      // A's valid resolution is correct.
+      expect(a).toBe(LOCAL);
+      expect(ctxA.warnings).toEqual([]);
+
+      // B's bad resolution falls back to local with one warning — independently.
+      expect(b).toBe(LOCAL);
+      expect(ctxB.warnings.length).toBe(1);
+    });
+
+    it('resolving one config does NOT mutate the other config object', async () => {
+      const LOCAL = { name: 'local', kind: 'memory_provider' };
+      const registry = registryWithLocal(LOCAL);
+
+      const configA = { memory_provider: 'local' };
+      const configB = { memory_provider: 'nope' };
+
+      await resolveMemoryProvider(configA as any, registry, { warnings: [] });
+      await resolveMemoryProvider(configB as any, registry, { warnings: [] });
+
+      // Neither config object was mutated.
+      expect(configA.memory_provider).toBe('local');
+      expect(configB.memory_provider).toBe('nope');
+    });
+
+    it('re-resolving config A after resolving config B still yields local (no shared state)', async () => {
+      const LOCAL = { name: 'local', kind: 'memory_provider' };
+      const registry = registryWithLocal(LOCAL);
+
+      const ctxB = { warnings: [] as string[] };
+      await resolveMemoryProvider({ memory_provider: 'unknown-b' } as any, registry, ctxB);
+
+      // A fresh ctx for config A should see no contamination from config B.
+      const ctxA = { warnings: [] as string[] };
+      const aAgain = await resolveMemoryProvider(
+        { memory_provider: 'local' } as any,
+        registry,
+        ctxA,
+      );
+      expect(aAgain).toBe(LOCAL);
+      expect(ctxA.warnings).toEqual([]);
+    });
+
+    it('purity: resolver has no module-level mutable state — repeated calls with fresh ctx are independent', async () => {
+      const LOCAL = { name: 'local', kind: 'memory_provider' };
+      const registry = registryWithLocal(LOCAL);
+
+      // Three independent resolutions of the same bad name, each with a fresh ctx.
+      const results = await Promise.all(
+        [1, 2, 3].map(() =>
+          resolveMemoryProvider(
+            { memory_provider: 'bad-name' } as any,
+            registry,
+            { warnings: [] },
+          ).then((p) => p),
+        ),
+      );
+
+      // All three degrade to local.
+      for (const r of results) expect(r).toBe(LOCAL);
     });
   });
 

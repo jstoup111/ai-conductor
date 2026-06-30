@@ -15,13 +15,13 @@ Catches technical infeasibility, hidden complexity, architectural drift, and dom
 early — when they're cheap to fix. This is where the *how* is resolved (so the PRD stays
 product-only) and captured as APPROVED ADRs.
 
-**Run after `/prd` (product track) or `/explore` (technical track), and BEFORE `/stories`** (ADR-016).
+**Run after `/prd` (product track) or `/explore` (technical track), and BEFORE `/stories`** (adr-2026-06-29-architecture-before-stories-convergent-kickback).
 The review's input is the PRD's functional requirements (product) or the explore output + technical
 intent (technical) — stories and the plan do not exist yet at this point.
 
 Also invocable at pipeline batch boundaries to verify implementation stays architecturally sound.
 
-### Full vs amendment mode (convergence — ADR-016)
+### Full vs amendment mode (convergence — adr-2026-06-29-architecture-before-stories-convergent-kickback)
 
 - **Full pass** — the pre-stories run above: full feasibility/alignment, produces APPROVED ADRs.
 - **Amendment pass** — when a later step (`stories` or `conflict-check`) re-opens architecture with a
@@ -182,7 +182,12 @@ no existing ADR covers it, one must be created before implementation proceeds.
 - CI/CD pipeline structural changes
 - Worktree isolation boundary changes (new shared services, new per-worktree resources)
 
-**ADR format:** Use `templates/adr.md.template`. Sequential numbering in `.docs/decisions/`.
+**ADR format:** Use `templates/adr.md.template`. Name each ADR
+`.docs/decisions/adr-YYYY-MM-DD-<kebab-slug>.md` — date plus a short descriptive slug.
+**Do NOT use sequential numbers** (ADR-001, ADR-007, …): parallel worktrees each grabbing
+"the next number" collide. The date+slug is the ADR's identifier; cite the filename stem when
+superseding or referencing one. If two ADRs land on the same date, the slug disambiguates.
+This applies to newly created ADRs only — existing numbered ADRs keep their names (append-only).
 ADRs are append-only — supersede, don't delete. Every claim about external dependency behavior
 must cite specific evidence (documentation, tested behavior, or source code).
 
@@ -200,13 +205,16 @@ ADRs follow a three-phase lifecycle. No ADR becomes authoritative without human 
 
 **Phase 1: DRAFT**
 - Architecture-review creates the ADR with `Status: DRAFT` in the frontmatter
-- DRAFT ADRs are written to `.docs/decisions/` with the standard naming convention
+- DRAFT ADRs are written to `.docs/decisions/` as `adr-YYYY-MM-DD-<kebab-slug>.md` (see §7)
 - DRAFT ADRs cannot be cited as justification in code review, evaluator verdicts, or
   implementation decisions — they are proposals, not decisions
 
 **Phase 2: REVIEW**
 - All DRAFT ADRs created during architecture-review are presented to the user for approval
   via `review_artifacts` (clear screen, one at a time)
+- When an ADR contains a Mermaid diagram and a `mermaid_renderer` is configured
+  (`~/.ai-conductor/config.yml`), `review_artifacts` renders it to a visual so the user
+  approves what they can see; with no renderer it falls back to the raw Markdown (never blocks)
 - The user approves, rejects (launches interactive Claude to revise), or requests changes
 - On approval, status is updated to `Status: APPROVED` and the ADR becomes authoritative
 - On rejection, the ADR is revised in-place and re-presented until approved
@@ -354,7 +362,7 @@ to resolve a violation. On a clean `APPROVED`, do NOT write the marker.
 ```bash
 # Example: write the marker when the as-built sweep was not clean
 mkdir -p .pipeline
-echo "verdict: BLOCKED, violated ADR-007" > .pipeline/review-required-architecture-as-built
+echo "verdict: BLOCKED, violated adr-2026-06-29-rate-limit-strategy" > .pipeline/review-required-architecture-as-built
 ```
 
 ## Verification

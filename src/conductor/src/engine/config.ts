@@ -7,12 +7,15 @@ import type {
   StepConfig,
   EffortLevel,
   MarkdownViewerConfig,
+  MermaidRendererConfig,
 } from '../types/config.js';
 import type { StepName, EnforcementLevel } from '../types/index.js';
 import { ALL_STEPS } from './steps.js';
 import { readUserConfig } from './user-config.js';
 import { VALID_MARKDOWN_VIEWER_MODES } from './md-viewer-presets.js';
+import { VALID_MERMAID_RENDERER_MODES } from './mermaid-renderer-presets.js';
 import { validateWhenSyntax } from './when-expression.js';
+import type { PluginRegistry } from './plugin-registry.js';
 
 export type ConfigError = {
   type: 'missing' | 'parse_error' | 'version_mismatch' | 'validation_error';
@@ -143,8 +146,15 @@ export function validateConfig(
     'complexity',
     'conductor',
     'markdown_viewer',
+    'mermaid_renderer',
     'assess',
     'acceptance_spec_globs',
+    // Plugin selections (adr-2026-06-29-memory-provider-plugin-and-agent-queried-integration/adr-2026-06-29-per-project-memory-provider-selection)
+    'llm_provider',
+    'ui_renderer',
+    'memory_provider',
+    // Observability
+    'otel',
   ]);
   for (const key of Object.keys(obj)) {
     if (!knownTopLevelKeys.has(key)) {
@@ -396,6 +406,12 @@ export function validateConfig(
     if (err) return { ok: false, error: err };
   }
 
+  // mermaid_renderer
+  if (obj.mermaid_renderer !== undefined) {
+    const err = validateMermaidRendererBlock(obj.mermaid_renderer);
+    if (err) return { ok: false, error: err };
+  }
+
   // assess
   if (obj.assess !== undefined) {
     const err = validateAssessBlock(obj.assess);
@@ -514,6 +530,52 @@ function validateMarkdownViewerBlock(raw: unknown): ConfigError | null {
     return {
       type: 'validation_error',
       message: 'markdown_viewer.mode must be inline|blocking|external',
+    };
+  }
+  return null;
+}
+
+function validateMermaidRendererBlock(raw: unknown): ConfigError | null {
+  if (!isPlainObject(raw)) {
+    return { type: 'validation_error', message: 'mermaid_renderer must be an object' };
+  }
+  const obj = raw as Record<string, unknown>;
+  const allowed = new Set(['preset', 'command', 'args', 'mode']);
+  for (const k of Object.keys(obj)) {
+    if (!allowed.has(k)) {
+      return {
+        type: 'validation_error',
+        message: `Unknown key in mermaid_renderer: "${k}"`,
+      };
+    }
+  }
+  if (obj.preset !== undefined && typeof obj.preset !== 'string') {
+    return { type: 'validation_error', message: 'mermaid_renderer.preset must be a string' };
+  }
+  if (obj.command !== undefined && typeof obj.command !== 'string') {
+    return { type: 'validation_error', message: 'mermaid_renderer.command must be a string' };
+  }
+  if (obj.args !== undefined) {
+    if (!Array.isArray(obj.args) || obj.args.some((a) => typeof a !== 'string')) {
+      return {
+        type: 'validation_error',
+        message: 'mermaid_renderer.args must be an array of strings',
+      };
+    }
+    if (!obj.args.includes('{file}')) {
+      return {
+        type: 'validation_error',
+        message: 'mermaid_renderer.args must include "{file}" placeholder',
+      };
+    }
+  }
+  if (
+    obj.mode !== undefined &&
+    !VALID_MERMAID_RENDERER_MODES.has(obj.mode as MermaidRendererConfig['mode'])
+  ) {
+    return {
+      type: 'validation_error',
+      message: 'mermaid_renderer.mode must be inline|blocking|external',
     };
   }
   return null;
@@ -724,4 +786,71 @@ export function customStepEntries(config: HarnessConfig): Array<{
     });
   }
   return out;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Memory provider resolution (adr-2026-06-29-per-project-memory-provider-selection)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Run-scoped accumulator passed to `resolveMemoryProvider`. Warnings pushed here
+ * are bounded (at most one per bad name per run — A8). Per-run de-dup state is
+ * stored on the ctx object itself so the resolver remains PURE over its config
+ * argument (A10: no module-level mutable state).
+ */
+export interface MemoryResolveCtx {
+  warnings: string[];
+  /** @internal populated lazily by resolveMemoryProvider for warning de-dup */
+  _seenBadMemoryProviders?: Set<string>;
+}
+
+/**
+ * Run-start resolver for the active memory provider (adr-2026-06-29-per-project-memory-provider-selection).
+ *
+ * Contract (total — never throws, never returns undefined):
+ *   C1  absent / empty / non-string  →  local  (no warning)
+ *   C2  valid name, installed        →  that provider  (no warning)
+ *   C3  valid name, NOT installed    →  local  (one warning per bad name per run)
+ *
+ * The resolver is PURE over `config`: all per-run state lives on `ctx`, so two
+ * separate calls with different configs do not interfere (A10).
+ *
+ * @param config  Project/user config object — only `memory_provider` is read.
+ * @param registry  Plugin registry (may or may not be initialized — uses `tryGet`).
+ * @param ctx  Optional run-scoped accumulator for warnings and de-dup state.
+ */
+export async function resolveMemoryProvider(
+  config: Pick<HarnessConfig, 'memory_provider'>,
+  registry: PluginRegistry,
+  ctx: MemoryResolveCtx = { warnings: [] },
+): Promise<unknown> {
+  const selection = (config as Record<string, unknown>).memory_provider;
+
+  // C1: absent, empty string, or non-string → return local without a warning.
+  // Explicit branch — no catch-all else (conditions C1/C3).
+  if (!selection || typeof selection !== 'string') {
+    return registry.tryGet('memory_provider', 'local');
+  }
+
+  // Named and a valid string — look it up.
+  const found = registry.tryGet('memory_provider', selection);
+
+  // C2: named and installed → use it, no warning.
+  if (found !== undefined) {
+    return found;
+  }
+
+  // C3: named but NOT installed → warn once per run, fall back to local.
+  // De-dup: initialise the seen-set on first warn (lives on ctx, not module scope).
+  if (!ctx._seenBadMemoryProviders) {
+    ctx._seenBadMemoryProviders = new Set<string>();
+  }
+  if (!ctx._seenBadMemoryProviders.has(selection)) {
+    ctx._seenBadMemoryProviders.add(selection);
+    ctx.warnings.push(
+      `memory_provider "${selection}" is not installed; falling back to local.`,
+    );
+  }
+
+  return registry.tryGet('memory_provider', 'local');
 }
