@@ -282,8 +282,28 @@ describe('FR-10: memory behaviors operate under an alternative active provider',
     // The harness's role is WRITE (persist); RECALL is the agent querying the
     // provider directly. The double's `.list()` is the agent-side recall
     // mechanism. The harness exports no retrieve function — FR-3 stays locked.
+    //
+    // Finding 3 (MINOR): use the RESOLVER-RETURNED provider as the persist
+    // target so this case exercises the full composed path (adopt → config →
+    // resolver → persist) rather than bypassing the resolver entirely.
+    const mod = await loadMod(ADOPT_MOD);
+    const memoryAdd = requireFn(mod, 'memoryAdd');
     const double = makeDouble('double');
+    const registry = registryWith(double);
+    const mcp = makeMcpStub();
+    await seedConfig(projectRoot);
+
+    // Adopt the provider; load the config it committed.
+    await memoryAdd({ projectRoot, provider: 'double', registry, mcp: mcp.runner });
+    const loaded = await loadConfig(projectRoot);
+    expect(loaded.ok).toBe(true);
+    if (!loaded.ok) return;
+
     const ctx = { warnings: [] as string[] };
+    // Obtain the active provider VIA THE RESOLVER — the real composed path.
+    const active = await resolveMemoryProvider(loaded.config, registry, ctx);
+    expect(active).toBe(double);
+
     const entry = {
       category: 'context' as const,
       name: 'recall-test',
@@ -291,7 +311,8 @@ describe('FR-10: memory behaviors operate under an alternative active provider',
       indexLine: '- [recall-test](context/recall-test.md)',
     };
 
-    await persistMemory({ repoPath: projectRoot, provider: double as any, entry, ctx });
+    // Pass the resolver-returned provider object, not the double directly.
+    await persistMemory({ repoPath: projectRoot, provider: active as any, entry, ctx });
 
     // The double holds the entry in its own state — the harness wrote to it.
     const stored = double.list();
@@ -299,16 +320,23 @@ describe('FR-10: memory behaviors operate under an alternative active provider',
     expect(stored[0].name).toBe('recall-test');
     expect(stored[0].body).toContain('Recall Test');
 
-    // No fallback: the write went to the platform.
+    // No fallback: the write went to the platform; resolver emitted no warnings.
     expect(ctx.warnings).toHaveLength(0);
 
-    // FR-3 assertion: the harness has no harness-side retrieval call.
-    // `double.list()` IS the agent's recall mechanism; there is no
-    // `retrieveMemory`, `pullFromProvider`, or equivalent export in
-    // memory-fallback.ts or config.ts that would aggregate from the provider.
-    // Asserting the double's state is sufficient proof — if the harness had
-    // retrieved the entry itself, double.list() would have been called from
-    // production code, not only from this test.
+    // Finding 1 (IMPORTANT) — FR-3 STRUCTURAL assertion: the fallback module
+    // must export NO retrieval-style names. This makes FR-3 machine-enforced:
+    // if someone ever adds a retrieve/pull/fetch/query/search/readMemory export
+    // to memory-fallback.ts, this assertion fails automatically.
+    //
+    // Real exports verified before writing this regex:
+    //   resetFallbackWarnings, persistMemory, listPendingReconcile, reconcilePending
+    // None of these match — confirm: "listPendingReconcile" contains neither
+    // retriev/pull/fetch/query/search nor "read...memory".
+    const fallbackMod = await import('../../src/engine/memory-fallback.js');
+    const retrievalNames = Object.keys(fallbackMod).filter(k =>
+      /retriev|pull|fetch|query|search|read.*memory/i.test(k)
+    );
+    expect(retrievalNames).toEqual([]);
   });
 });
 
@@ -321,7 +349,7 @@ describe('FR-10: memory behaviors operate under an alternative active provider',
 //   persist to A-era → switch to B → B.list() is clean (no cross-provider leakage)
 // ═════════════════════════════════════════════════════════════════════════════
 describe('FR-10: switching providers reads from the active source', () => {
-  it('resolver returns A after add A; local after remove (A MCP gone); B after add B (not A)', async () => {
+  it('resolver identity and MCP toggle under A->remove->B switch', async () => {
     const mod = await loadMod(ADOPT_MOD);
     const memoryAdd = requireFn(mod, 'memoryAdd');
     const memoryRemove = requireFn(mod, 'memoryRemove');
@@ -431,8 +459,31 @@ describe('FR-10: switching providers reads from the active source', () => {
     expect(resolvedB).toBe(doubleB);
     expect(resolvedB).not.toBe(doubleA);
 
-    // B holds no entries from A — no cross-provider leakage.
+    // B holds no entries from A — no cross-provider leakage before any B write.
     expect(doubleB.list()).toHaveLength(0);
+
+    // ── Finding 2 (IMPORTANT) — symmetric leakage: write through B then assert ──
+    // A is unchanged (no reverse leakage) and B holds exactly the beta entry.
+    const betaEntry = {
+      category: 'context' as const,
+      name: 'beta-era-entry',
+      body: '# Beta Era\n\nPersisted while B was the active source.',
+      indexLine: '- [beta-era-entry](context/beta-era-entry.md)',
+    };
+    const ctxB = { warnings: [] as string[] };
+    const resultB = await persistMemory({
+      repoPath: projectRoot,
+      provider: resolvedB as any,
+      entry: betaEntry,
+      ctx: ctxB,
+    });
+    expect(resultB.sink).toBe('platform');
+    expect(ctxB.warnings).toHaveLength(0);
+    // Symmetric: A holds only its own era's entry — no reverse leakage from B write.
+    expect(doubleA.list()).toHaveLength(1);
+    // B holds the beta entry — write landed on the correct provider.
+    expect(doubleB.list()).toHaveLength(1);
+    expect(doubleB.list()[0].name).toBe('beta-era-entry');
 
     // A's entry is isolated on A, not phantom-surfaced as B-platform data.
     expect(doubleA.list()).toHaveLength(1);
