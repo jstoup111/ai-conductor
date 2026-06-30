@@ -424,6 +424,8 @@ describe('CLI: default MCP runner argv shape', () => {
     // This is documented at the seam; the real-binary smoke is left for a future
     // Phase 1 integration test when a concrete MCP platform is available.
     //
+    // TODO(phase-2-mcp-smoke): upgrade this from a callable-shape assertion to a real-binary smoke (assert the actual execFile('claude', ['mcp', ...]) argv) once a concrete MCP platform is available. Argv-shape tests can pass against a wrong argv (prior harness bug).
+    //
     // Structural assertion: the factory is exported and callable, which gates that
     // the production wiring compiles and the seam is navigable.
   });

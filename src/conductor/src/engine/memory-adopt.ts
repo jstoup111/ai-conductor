@@ -191,6 +191,7 @@ export async function memoryRemove(opts: {
       await mcp(['remove', provider.mcp.name]);
     } catch {
       // Swallow: MCP unwiring failure must not prevent config cleanup.
+      console.warn('[memory] MCP unwiring failed; the MCP server may still be registered. Run `claude mcp remove <name>` manually if needed.');
     }
   }
 

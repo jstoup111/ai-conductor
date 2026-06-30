@@ -215,6 +215,7 @@ async function main(): Promise<void> {
     if (memoryCmd.kind === 'setup') {
       code = await dispatchMemorySetup(memoryCmd);
     } else {
+      // TODO(phase-2-providers): pass the discovered/populated registry via opts here — Phase 1 ships no concrete provider, so this dispatch sees only the empty default registry (conduct memory add against a real platform is a Phase 2 wiring step).
       code = await dispatchMemoryAdopt(memoryCmd);
     }
     process.exit(code);
