@@ -33,6 +33,14 @@ fi
 
 ### Changed
 
+- **`conduct-ts daemon start` now auto-attaches to the daemon's tmux session (conduct-ts).** After
+  starting, `start` hands the terminal to the live session read-only (like `daemon connect`) so the
+  operator lands in it instead of having to attach separately. Pass **`-D` / `--detach`** to keep the
+  old fire-and-forget behavior. The attach is suppressed automatically when there is no interactive
+  terminal (scripts, the engineer auto-launch) so `start` never blocks/fails on `tmux attach` —
+  it starts detached and prints how to attach. The engineer auto-launch is unaffected (it calls
+  `supervisor.start` directly, not the CLI verb).
+
 - **Rebase discipline moved from the `block-destructive-git` hook into the skill prompts +
   HARNESS.md.** The hook previously *hard-blocked* every ad-hoc `git rebase` (exit 2). That also
   rejected the two legitimate cases — an operator deliberately refreshing a stale PR branch onto
