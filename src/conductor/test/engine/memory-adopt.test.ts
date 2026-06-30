@@ -322,3 +322,38 @@ describe('B11: memoryRemove clears provider', () => {
     expect(status.source).toBe('default');
   });
 });
+
+// ═════════════════════════════════════════════════════════════════════════════
+// B12: memoryRemove idempotent — re-remove is a clean no-op
+// ═════════════════════════════════════════════════════════════════════════════
+describe('B12: memoryRemove idempotent', () => {
+  it('remove when already local is a no-op: ok:true, config byte-for-byte unchanged', async () => {
+    await seedConfig(projectRoot);  // no memory_provider → already local
+    const mcp = makeMcpStub();
+    const reg = makeRegistry();
+
+    const before = await readRaw(projectRoot);
+    const result = await memoryRemove({ projectRoot, registry: reg, mcp: mcp.runner });
+    expect(result.ok).toBe(true);
+    const after = await readRaw(projectRoot);
+    expect(after).toBe(before);
+  });
+
+  it('second remove after first is also a no-op', async () => {
+    await seedConfig(projectRoot, 'memory_provider: double\nllm_provider: claude\n');
+    const mcp = makeMcpStub();
+    mcp.registered.add('memory-double');
+    const reg = makeRegistry({
+      name: 'double',
+      mcp: { name: 'memory-double', command: 'mem-server', args: [] },
+    });
+
+    await memoryRemove({ projectRoot, registry: reg, mcp: mcp.runner });
+    const rawAfterFirst = await readRaw(projectRoot);
+
+    const result2 = await memoryRemove({ projectRoot, registry: reg, mcp: mcp.runner });
+    expect(result2.ok).toBe(true);
+    const rawAfterSecond = await readRaw(projectRoot);
+    expect(rawAfterSecond).toBe(rawAfterFirst);
+  });
+});
