@@ -98,6 +98,17 @@ fi
   Medium/Large; (2) the predicate is now **fail-closed** — it passes only on an explicit `APPROVED`
   / `APPROVED WITH DRIFT NOTES` verdict and stays unsatisfied (→ proper HALT) on `BLOCKED`, a
   missing `Verdict:` line, or any unrecognized verdict. Observed on `jstoup111/random-number-api`.
+- **Daemon runs always leave a terminal `DONE`/`HALT` marker now (no more stranded `error`
+  exits).** The daemon classifies a feature run solely by `.pipeline/DONE` vs `.pipeline/HALT`
+  (`daemon-deps.readWorktreeOutcome`), but a few early `return`s in `Conductor.run()` — a blocked
+  gate (prerequisites unsatisfied) and a parallel-group gating failure — exited without writing
+  either, so the daemon reported a bare `error` and stranded the worktree ("loop ended without DONE
+  or HALT marker"). Rather than patch each return site (fragile — a future return reintroduces the
+  gap), `run()` now enforces the invariant structurally: the success path writes `DONE` when
+  convergence didn't (e.g. a resume that ran no tail step), and a `finally` backstop writes a
+  diagnostic `HALT` if a daemon run reaches it with neither marker. Interactive runs (`daemon:false`)
+  are untouched. Follow-up to the as-built fix, which closed the specific path that first surfaced
+  this on `jstoup111/random-number-api`.
 - **`/finish` now refuses a mid-rebase/mid-merge tree (skill GATE 0).** A `/finish` dispatched on a
   worktree with a paused rebase (e.g. `conduct-state` marked `rebase` done but the tree was still
   mid-conflict) would grind for ~15 minutes and then push a PR of a detached, half-rebased branch.

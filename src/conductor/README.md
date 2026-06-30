@@ -108,6 +108,16 @@ by **gate verdicts** instead of a fixed order:
   gate selected too many times without satisfying, or **any unexpected throw inside the
   loop** (the error is flushed to state and converted to a HALT so a supervising daemon
   classifies it as `halted` — worktree kept, retryable — never `error` with lost state).
+  **Terminal-marker guarantee (daemon only):** the daemon classifies a run *solely* by
+  these two markers (`daemon-deps.readWorktreeOutcome`), so every daemon exit must leave
+  exactly one. A few early `return`s in the loop — a blocked gate (prerequisites
+  unsatisfied), a parallel-group gating failure — used to exit with neither, which the
+  daemon reported as a bare `error` with a stranded worktree ("loop ended without DONE or
+  HALT marker"). `run()` now enforces the invariant structurally rather than per-return:
+  the success path writes `DONE` if convergence didn't (e.g. a resume that ran no tail
+  step), and a `finally` backstop writes a diagnostic `HALT` if a daemon run reaches it
+  with neither marker. Interactive runs (`daemon:false`) are untouched — they legitimately
+  exit markerless and the daemon never reads their markers.
 - **Fresh session per step** — with `freshContextPerStep` (daemon/auto only; interactive
   `/conduct` leaves it off so the brainstorm→stories→plan design session keeps its
   context), the LLM session is reset before **every** executed step in the loop
