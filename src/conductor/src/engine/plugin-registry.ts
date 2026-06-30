@@ -53,6 +53,24 @@ export class PluginRegistry {
   }
 
   /**
+   * Retrieves a registered plugin by kind and name WITHOUT requiring the registry
+   * to be initialized. Returns `undefined` when the plugin is not found.
+   *
+   * This is the lookup used by total resolver functions (e.g. `resolveMemoryProvider`)
+   * that must return a safe default even when the registry is still being built.
+   * For normal consumption after initialization, use `get()` instead.
+   *
+   * @param kind The plugin kind
+   * @param name The plugin name
+   * @returns The registered plugin instance, or `undefined` if not found
+   */
+  tryGet<T = unknown>(kind: PluginKind, name: string): T | undefined {
+    const kindMap = this.plugins.get(kind);
+    if (!kindMap || !kindMap.has(name)) return undefined;
+    return kindMap.get(name) as T;
+  }
+
+  /**
    * Lists all registered plugin names for a given kind.
    *
    * @param kind The plugin kind

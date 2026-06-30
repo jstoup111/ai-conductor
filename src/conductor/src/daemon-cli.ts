@@ -11,7 +11,7 @@ import { registerBuiltins } from './engine/plugin-loader.js';
 import { ConductorEventEmitter } from './ui/events.js';
 import { DefaultStepRunner } from './engine/step-runners.js';
 import { Conductor } from './engine/conductor.js';
-import { loadConfig } from './engine/config.js';
+import { loadConfig, resolveMemoryProvider } from './engine/config.js';
 import { holdLock } from './engine/daemon-lock.js';
 import { openDaemonLog, type DaemonLogSink } from './engine/daemon-log.js';
 import type { ConductState, ConductorEvent, StepName } from './types/index.js';
@@ -168,6 +168,14 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   registry.markInitialized();
   subscriber.start();
   const provider = registry.get<LLMProvider>('llm_provider', config?.llm_provider ?? 'claude');
+  // Resolve the active memory provider once at run start so all steps see the
+  // same single provider (adr-2026-06-29-per-project-memory-provider-selection / FR-10). Uses a per-run ctx so warnings are
+  // bounded and no module-level state is mutated (resolver is pure over config).
+  const memoryResolveCtx = { warnings: [] as string[] };
+  const memoryProvider = await resolveMemoryProvider(config ?? {}, registry, memoryResolveCtx);
+  if (memoryResolveCtx.warnings.length > 0) {
+    for (const w of memoryResolveCtx.warnings) log(`WARNING: ${w}`);
+  }
 
   const worktreeBase = join(projectRoot, '.worktrees');
   await mkdir(worktreeBase, { recursive: true });
@@ -285,6 +293,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     baseBranch,
     runConductorInWorktree,
     provider,
+    memoryProvider,
     log,
   });
   const runFeature = makeRunFeature(deps);
