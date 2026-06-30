@@ -133,7 +133,7 @@ describe('engineer forget (T23, FR-40)', () => {
     expect(JSON.parse(out[0])).toMatchObject({ kind: 'forget', sourceRef: 'o/a#1', found: true });
 
     expect(await ledger.known('github-issues', 'o/a#1')).toBe(false);
-    expect(calls).toContainEqual(['issue', 'edit', '1', '-R', 'o/a', '--remove-label', 'engineer:handled']);
+    expect(calls).toContainEqual(['api', '--method', 'DELETE', 'repos/o/a/issues/1/labels/engineer%3Ahandled']);
   });
 
   it('reports found:false for an absent ref without crashing or calling gh', async () => {

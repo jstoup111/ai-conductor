@@ -78,6 +78,54 @@ export function makeProductionGit(): GitRunner {
 // ── Label management ──────────────────────────────────────────────────────────
 
 /**
+ * Parse a github.com PR or issue URL into the `owner/repo` slug and number used
+ * by the REST labels endpoint. Returns null for anything that isn't a
+ * recognizable github.com pull/issue URL.
+ */
+export function parseIssueRef(url: string): { repo: string; number: string } | null {
+  const m = url.match(/github\.com\/([^/]+\/[^/]+)\/(?:pull|issues)\/(\d+)/);
+  if (!m) return null;
+  return { repo: m[1], number: m[2] };
+}
+
+/**
+ * Build the `gh api` argv that ADDS a label via the REST endpoint
+ * (`POST /repos/{owner}/{repo}/issues/{number}/labels`).
+ *
+ * We deliberately avoid `gh pr edit --add-label` / `gh issue edit --add-label`:
+ * those commands first run a GraphQL query that pulls Projects (classic)
+ * metadata, which GitHub has sunset — so the whole command now errors out
+ * before the label is ever applied. The REST labels endpoint never touches
+ * Projects. `repo` is the `owner/repo` slug; `number` is the PR/issue number.
+ */
+export function restAddLabelArgs(repo: string, number: string, name: string): string[] {
+  return [
+    'api',
+    '--method',
+    'POST',
+    `repos/${repo}/issues/${number}/labels`,
+    '-f',
+    `labels[]=${name}`,
+  ];
+}
+
+/**
+ * Build the `gh api` argv that REMOVES a label via the REST endpoint
+ * (`DELETE /repos/{owner}/{repo}/issues/{number}/labels/{name}`). The label
+ * name is URL-encoded so names with special characters (e.g. `engineer:handled`)
+ * resolve correctly. See {@link restAddLabelArgs} for why we avoid `gh pr/issue
+ * edit`.
+ */
+export function restRemoveLabelArgs(repo: string, number: string, name: string): string[] {
+  return [
+    'api',
+    '--method',
+    'DELETE',
+    `repos/${repo}/issues/${number}/labels/${encodeURIComponent(name)}`,
+  ];
+}
+
+/**
  * Ensure a label exists in the repo (idempotent via --force).
  * Swallows all errors.
  */
@@ -96,8 +144,8 @@ export async function ensureLabel(
 }
 
 /**
- * Add a label to a PR by URL.
- * Swallows all errors.
+ * Add a label to a PR by URL via the REST endpoint (see {@link restAddLabelArgs}
+ * for why we don't use `gh pr edit`). Swallows all errors.
  */
 export async function addLabel(
   runGh: GhRunner = makeProductionGh(),
@@ -106,16 +154,21 @@ export async function addLabel(
   name: string,
   log?: (msg: string) => void,
 ): Promise<void> {
+  const ref = parseIssueRef(prUrl);
+  if (!ref) {
+    log?.(`[pr-labels] addLabel: unparseable PR URL "${prUrl}"`);
+    return;
+  }
   try {
-    await runGh(['pr', 'edit', prUrl, '--add-label', name], { cwd });
+    await runGh(restAddLabelArgs(ref.repo, ref.number, name), { cwd });
   } catch (err) {
     log?.(`[pr-labels] addLabel(${prUrl}, ${name}) error: ${err}`);
   }
 }
 
 /**
- * Remove a label from a PR by URL.
- * Swallows all errors.
+ * Remove a label from a PR by URL via the REST endpoint (see
+ * {@link restRemoveLabelArgs}). Swallows all errors.
  */
 export async function removeLabel(
   runGh: GhRunner = makeProductionGh(),
@@ -124,8 +177,13 @@ export async function removeLabel(
   name: string,
   log?: (msg: string) => void,
 ): Promise<void> {
+  const ref = parseIssueRef(prUrl);
+  if (!ref) {
+    log?.(`[pr-labels] removeLabel: unparseable PR URL "${prUrl}"`);
+    return;
+  }
   try {
-    await runGh(['pr', 'edit', prUrl, '--remove-label', name], { cwd });
+    await runGh(restRemoveLabelArgs(ref.repo, ref.number, name), { cwd });
   } catch (err) {
     log?.(`[pr-labels] removeLabel(${prUrl}, ${name}) error: ${err}`);
   }

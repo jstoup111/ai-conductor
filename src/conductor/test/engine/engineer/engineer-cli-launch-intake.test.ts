@@ -326,7 +326,7 @@ describe('write-back via --source-ref', () => {
     expect(code).toBe(0);
     // Done comment with the PR URL + label applied.
     expect(calls.some((a) => a[0] === 'issue' && a[1] === 'comment' && a.includes('target-repo') && a.some((s) => /pull\/42/.test(s)))).toBe(true);
-    expect(calls.some((a) => a[0] === 'issue' && a[1] === 'edit' && a.includes('--add-label') && a.includes('engineer:handled'))).toBe(true);
+    expect(calls.some((a) => a[0] === 'api' && a.includes('POST') && a.some((s) => /\/issues\/7\/labels$/.test(s)) && a.includes('labels[]=engineer:handled'))).toBe(true);
     const entry = await ledger.get('github-issues', 'target-repo#7');
     expect(entry?.status).toBe('done');
     expect(entry?.prUrl).toMatch(/pull\/42/);
