@@ -24,7 +24,7 @@ import { join, isAbsolute, resolve as resolvePath } from 'path';
 import { existsSync } from 'fs';
 import { ensureMemoryStore } from './memory-store.js';
 import { migrateMemory } from './memory-migrate.js';
-import { memoryStatus, type McpRunner } from './memory-adopt.js';
+import { memoryStatus, memoryAdd, type McpRunner } from './memory-adopt.js';
 import { PluginRegistry } from './plugin-registry.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -197,7 +197,18 @@ export async function dispatchMemoryAdopt(
       return 0;
     }
 
-    // add and remove are not yet implemented in this task slice.
+    if (d.kind === 'add') {
+      const mcp = opts.mcp ?? makeProductionMcp();
+      const result = await memoryAdd({ projectRoot, provider: d.provider, registry, mcp });
+      if (!result.ok) {
+        printErr(`conduct memory add: ${result.notice ?? 'failed'}`);
+        return 1;
+      }
+      print(`conduct memory add: ${d.provider} adopted${result.changed ? '' : ' (already active)'}`);
+      return 0;
+    }
+
+    // remove is not yet implemented in this task slice.
     printErr(`conduct memory ${d.kind}: not yet implemented`);
     return 1;
   } catch (e) {

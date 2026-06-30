@@ -153,6 +153,9 @@ export function createProgram(): Command {
   memory
     .command('status')
     .description('Report the active memory provider and whether it comes from config or the default');
+  memory
+    .command('add <provider>')
+    .description('Adopt a memory provider: write memory_provider to config and wire its MCP server');
 
   // Daemon subcommand (Phase 6; promoted from the `--daemon` flag). NON-INTERACTIVE:
   // dispatched by index.ts before the pipeline boots. The bare `daemon` RUNS the

@@ -12,9 +12,9 @@
  * (adr-2026-06-29-per-project-memory-provider-selection, FR-6/FR-7)
  */
 
-import { readFile } from 'fs/promises';
+import { readFile, writeFile, mkdir } from 'fs/promises';
 import { join } from 'path';
-import { load as loadYaml } from 'js-yaml';
+import { load as loadYaml, dump as dumpYaml } from 'js-yaml';
 import type { PluginRegistry } from './plugin-registry.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -30,6 +30,12 @@ import type { PluginRegistry } from './plugin-registry.js';
  * Non-zero exit codes and throws are mapped to { stdout, code } — never re-thrown.
  */
 export type McpRunner = (args: string[]) => Promise<{ stdout: string; code: number }>;
+
+interface MemoryProviderPlugin {
+  name: string;
+  requiredEnv?: string[];
+  mcp?: { name: string; command: string; args?: string[] };
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Internal config helpers
@@ -78,4 +84,71 @@ export async function memoryStatus(opts: {
     return { provider: sel, source: 'config' };
   }
   return { provider: 'local', source: 'default' };
+}
+
+/**
+ * Adopts a memory provider:
+ *   1. Checks required credentials (BEFORE any writes — atomic on failure).
+ *   2. Writes `memory_provider` to `.ai-conductor/config.yml` if needed.
+ *   3. Wires the provider's MCP server via `mcp(['add', …])`, guarded by a
+ *      prior `mcp(['get', …])` so the add is never duplicated.
+ *
+ * Idempotent: a re-`add` when config already names the provider AND MCP is
+ * already registered is a pure no-op (config bytes unchanged, no extra add call).
+ *
+ * Security: credential VALUES are NEVER written to the tracked config file.
+ */
+export async function memoryAdd(opts: {
+  projectRoot: string;
+  provider: string;
+  registry: PluginRegistry;
+  mcp: McpRunner;
+  env?: Record<string, string>;
+}): Promise<{ ok: boolean; changed?: boolean; notice?: string }> {
+  const { projectRoot, provider: providerName, registry, mcp, env } = opts;
+
+  // Look up provider in registry.
+  const provider = registry.tryGet<MemoryProviderPlugin>('memory_provider', providerName);
+  if (!provider) {
+    return { ok: false, notice: `Provider "${providerName}" is not registered` };
+  }
+
+  // SECURITY / ATOMICITY: check all required credentials BEFORE touching the config
+  // file. If any credential is absent, return a notice and leave the config unchanged.
+  const effectiveEnv = env ?? (process.env as Record<string, string>);
+  for (const key of provider.requiredEnv ?? []) {
+    if (!effectiveEnv[key]) {
+      return {
+        ok: false,
+        notice: `Missing required credential: ${key}. Set ${key} in your environment before adopting this provider.`,
+      };
+    }
+  }
+
+  // Read existing config (preserves all unrelated keys).
+  const raw = await readConfigRaw(projectRoot);
+  const config = raw ? parseConfig(raw) : {};
+
+  // Only write config when memory_provider isn't already this provider.
+  // This keeps the file byte-for-byte unchanged on a redundant re-add.
+  let changed = false;
+  if (config.memory_provider !== providerName) {
+    config.memory_provider = providerName;
+    await mkdir(join(projectRoot, CONFIG_DIR), { recursive: true });
+    await writeFile(configFilePath(projectRoot), dumpYaml(config), 'utf8');
+    changed = true;
+  }
+
+  // Wire MCP if declared, guarded by `get` to prevent duplicate add calls.
+  // Credential VALUES are NEVER passed to the tracked config — only to mcp runner.
+  if (provider.mcp) {
+    const mcpName = provider.mcp.name;
+    const getResult = await mcp(['get', mcpName]);
+    if (getResult.code !== 0) {
+      // Not yet wired — add now. Command + args come from the provider manifest.
+      await mcp(['add', mcpName, provider.mcp.command, ...(provider.mcp.args ?? [])]);
+    }
+  }
+
+  return { ok: true, changed };
 }

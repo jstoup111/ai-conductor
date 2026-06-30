@@ -14,7 +14,7 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { load as loadYaml } from 'js-yaml';
 import { PluginRegistry } from '../../src/engine/plugin-registry.js';
-import { memoryStatus } from '../../src/engine/memory-adopt.js';
+import { memoryStatus, memoryAdd } from '../../src/engine/memory-adopt.js';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -117,5 +117,50 @@ describe('B6: memoryStatus', () => {
     const result = await memoryStatus({ projectRoot, registry: reg });
     expect(result.provider).toBe('my-custom-provider');
     expect(result.source).toBe('config');
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// B7: memoryAdd happy path — writes config + wires MCP; unrelated keys intact
+// ═════════════════════════════════════════════════════════════════════════════
+describe('B7: memoryAdd happy path', () => {
+  it('writes memory_provider to config and wires MCP once', async () => {
+    await seedConfig(projectRoot);
+    const mcp = makeMcpStub();
+    const reg = makeRegistry({
+      name: 'double',
+      mcp: { name: 'memory-double', command: 'mem-server', args: ['--p', 'double'] },
+    });
+
+    const result = await memoryAdd({ projectRoot, provider: 'double', registry: reg, mcp: mcp.runner });
+
+    expect(result.ok).toBe(true);
+    const cfg = await readParsed(projectRoot);
+    expect(cfg.memory_provider).toBe('double');
+    expect(cfg.llm_provider).toBe('claude');          // unrelated key preserved
+    expect((cfg.defaults as Record<string, unknown>).model).toBe('opus');
+    expect(mcp.addCount('memory-double')).toBe(1);
+    expect(mcp.registered.has('memory-double')).toBe(true);
+  });
+
+  it('returns ok:true and changed:true on first add', async () => {
+    await seedConfig(projectRoot);
+    const mcp = makeMcpStub();
+    const reg = makeRegistry({
+      name: 'double',
+      mcp: { name: 'memory-double', command: 'mem-server', args: [] },
+    });
+    const result = await memoryAdd({ projectRoot, provider: 'double', registry: reg, mcp: mcp.runner });
+    expect(result.ok).toBe(true);
+    expect(result.changed).toBe(true);
+  });
+
+  it('returns ok:false with notice when provider is not in registry', async () => {
+    await seedConfig(projectRoot);
+    const mcp = makeMcpStub();
+    const reg = makeRegistry();
+    const result = await memoryAdd({ projectRoot, provider: 'unknown', registry: reg, mcp: mcp.runner });
+    expect(result.ok).toBe(false);
+    expect(result.notice).toBeTruthy();
   });
 });
