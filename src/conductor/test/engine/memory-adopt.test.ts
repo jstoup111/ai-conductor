@@ -164,3 +164,39 @@ describe('B7: memoryAdd happy path', () => {
     expect(result.notice).toBeTruthy();
   });
 });
+
+// ═════════════════════════════════════════════════════════════════════════════
+// B8: memoryAdd idempotent — second add is a pure no-op
+// ═════════════════════════════════════════════════════════════════════════════
+describe('B8: memoryAdd idempotent', () => {
+  it('second add leaves config byte-for-byte unchanged and wires MCP only once', async () => {
+    await seedConfig(projectRoot);
+    const mcp = makeMcpStub();
+    const reg = makeRegistry({
+      name: 'double',
+      mcp: { name: 'memory-double', command: 'mem-server', args: [] },
+    });
+
+    await memoryAdd({ projectRoot, provider: 'double', registry: reg, mcp: mcp.runner });
+    const rawAfterFirst = await readRaw(projectRoot);
+
+    await memoryAdd({ projectRoot, provider: 'double', registry: reg, mcp: mcp.runner });
+    const rawAfterSecond = await readRaw(projectRoot);
+
+    expect(mcp.addCount('memory-double')).toBe(1);         // MCP wired once only
+    expect(rawAfterSecond).toBe(rawAfterFirst);             // config byte-for-byte unchanged
+  });
+
+  it('second add returns ok:true and changed:false', async () => {
+    await seedConfig(projectRoot);
+    const mcp = makeMcpStub();
+    const reg = makeRegistry({
+      name: 'double',
+      mcp: { name: 'memory-double', command: 'mem-server', args: [] },
+    });
+    await memoryAdd({ projectRoot, provider: 'double', registry: reg, mcp: mcp.runner });
+    const second = await memoryAdd({ projectRoot, provider: 'double', registry: reg, mcp: mcp.runner });
+    expect(second.ok).toBe(true);
+    expect(second.changed).toBe(false);
+  });
+});
