@@ -279,7 +279,9 @@ copy-verify-swap before the symlink is created (adr-2026-06-29-safe-reversible-m
 yourself** — it will already be a symlink when this skill runs.
 
 Create if missing (idempotent): `.pipeline/` (audit-trail/), `.worktrees/`, `.docs/` (specs/,
-stories/, conflicts/, plans/, decisions/, retros/).
+complexity/, stories/, conflicts/, architecture/, decisions/, plans/, retros/, intake/). These
+are the full set of `.docs/` subdirectories the conductor and daemon read/write across the SDLC
+— keep this list in parity with them.
 
 Add to `.gitignore` (idempotent — don't duplicate):
 - `.pipeline/` — runtime state, not source

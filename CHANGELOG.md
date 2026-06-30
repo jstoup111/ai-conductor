@@ -29,6 +29,12 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   `~/.ai-conductor/puppeteer.json` override when present. Pure helpers `mmdcArgs` / `needsNoSandbox`
   are unit-tested; a real-binary render smoke confirms end-to-end output.
 
+- `/bootstrap` now scaffolds the **full** set of `.docs/` subdirectories the conductor and
+  daemon actually read/write — added the three it was missing (`complexity/`, `architecture/`,
+  `intake/`) alongside the existing `specs/`, `stories/`, `conflicts/`, `decisions/`, `plans/`,
+  and `retros/`. Previously a freshly-bootstrapped project lacked those three until a later step
+  happened to create them, leaving bootstrap's directory list out of parity with the engine.
+
 ### Changed
 
 - `writing-system-tests` skill is now language- and framework-agnostic. Replaced the
