@@ -383,6 +383,16 @@ export class Conductor {
     }
   }
 
+  /** True when a `.pipeline/` terminal marker (DONE / HALT) exists on disk. */
+  private async markerExists(relPath: string): Promise<boolean> {
+    try {
+      await accessFile(join(this.projectRoot, relPath));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   async run(): Promise<void> {
     const stateResult = await readState(this.stateFilePath);
     let state: ConductState = stateResult.ok ? stateResult.value : {};
@@ -1242,6 +1252,22 @@ export class Conductor {
       });
       state.feature_status = 'complete';
       await writeState(this.stateFilePath, state);
+
+      // Terminal-marker guarantee (success side). The daemon classifies a run
+      // solely by .pipeline/DONE vs .pipeline/HALT. advanceTail writes DONE on
+      // the converging step in the normal path, but reaching here with no DONE
+      // is possible on a resume where the loop body ran no tail step (every step
+      // already done/skipped → startIndex past the end). Without this, the
+      // finally backstop below would mis-park a genuinely-complete feature as a
+      // HALT. Daemon-only: interactive runs don't use these markers.
+      if (this.daemon && !(await this.markerExists(DONE_MARKER))) {
+        await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(() => {});
+        await writeFile(
+          join(this.projectRoot, DONE_MARKER),
+          'gate-driven loop converged\n',
+          'utf-8',
+        ).catch(() => {});
+      }
     } catch (err) {
       // Any unexpected throw inside the loop (e.g. a verdict-I/O failure in
       // the SHIP tail) must leave the feature recoverable, never silently
@@ -1259,6 +1285,35 @@ export class Conductor {
       await this.events.emit({ type: 'loop_halt', reason, prUrl });
     } finally {
       process.off('SIGINT', sigintHandler);
+
+      // Terminal-marker guarantee (failure side). A handful of early `return`s
+      // in the loop exit WITHOUT writing DONE or HALT — a blocked gate
+      // (prerequisites unsatisfied) and a parallel-group gating failure. The
+      // daemon, which classifies a run only by these markers, then reports a
+      // bare `error` and strands the worktree ("loop ended without DONE or HALT
+      // marker"). Rather than patch each return site (fragile — a future return
+      // reintroduces the gap), enforce the invariant in one place: if a daemon
+      // run reaches here with neither marker, write a diagnostic HALT so the
+      // outcome is always classifiable (halted: worktree kept, parked,
+      // retryable). The success path wrote DONE just above; every explicit HALT
+      // path and the catch wrote HALT — so this only fires for the unmarked
+      // early returns. Daemon-only: interactive runs legitimately exit markerless
+      // (checkpoint quit, recovery REPL) and the daemon never reads their markers.
+      if (
+        this.daemon &&
+        !(await this.markerExists(DONE_MARKER)) &&
+        !(await this.markerExists(LOOP_HALT_MARKER))
+      ) {
+        const reason = `loop exited without a terminal verdict (last step: ${
+          state.last_step ?? 'unknown'
+        }) — no DONE/HALT marker was written; parking for inspection`;
+        await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(() => {});
+        await writeFile(join(this.projectRoot, LOOP_HALT_MARKER), reason + '\n', 'utf-8').catch(
+          () => {},
+        );
+        const prUrl = await this.surfaceRemediationPr(reason);
+        await this.events.emit({ type: 'loop_halt', reason, prUrl });
+      }
     }
   }
 
