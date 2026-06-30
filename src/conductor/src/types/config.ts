@@ -254,6 +254,12 @@ export interface HarnessConfig {
   llm_provider?: string;
   /** Plugin selection: which UI renderer to use (defaults to 'terminal'). */
   ui_renderer?: string;
+  /**
+   * Plugin selection: which memory provider to use (defaults to 'local').
+   * Set in `.ai-conductor/config.yml`; resolved once at run start so every
+   * memory-using step sees the same active provider (adr-2026-06-29-per-project-memory-provider-selection).
+   */
+  memory_provider?: string;
   /** OpenTelemetry exporter config. Absent = disabled (default off, FR-1). */
   otel?: OtelConfig;
   /**

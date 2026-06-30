@@ -226,12 +226,34 @@ for skill_file in "${HARNESS_DIR}"/skills/*/SKILL.md; do
   fi
 done
 
-# ── 8. Release artifacts (VERSION, CHANGELOG, tag consistency) ──────────────
+# ── 8. FR-3 invariant — no harness-side memory retrieval logic ─────────────
+# adr-2026-06-29-memory-provider-plugin-and-agent-queried-integration / FR-3: recall is performed by the LLM reading the store and
+# judging relevance. The harness must contain NO embedding, cosine-similarity,
+# vector-search, or relevance/rank-scoring logic for the memory subsystem.
+# Patterns are stored in a variable so this file's own text is not matched.
 
 echo ""
-echo -e "${BOLD}8. Release artifacts${NC}"
+echo -e "${BOLD}8. FR-3 invariant — no harness-side memory retrieval logic${NC}"
 
-# 8a. VERSION file exists and is valid semver
+_fr3_pat='embed\(|cosineSimilarity|vectorSearch|relevanceScore[^A-Za-z]|rankScore[^A-Za-z]'
+# Use { grep ... || true; } so grep's "no match" exit-1 is swallowed before
+# reaching wc -l — required because the script runs with set -o pipefail.
+_fr3_hits=$({ grep -rEn "${_fr3_pat}" \
+  "${HARNESS_DIR}/src/conductor/src" \
+  "${HARNESS_DIR}/bin" \
+  "${HARNESS_DIR}/hooks" \
+  "${HARNESS_DIR}/skills" \
+  --exclude-dir=engineer \
+  2>/dev/null || true; } | wc -l)
+assert "no harness-side memory retrieval logic in implementation dirs (FR-3)" \
+  "$([ "${_fr3_hits}" -eq 0 ] && echo 0 || echo 1)"
+
+# ── 9. Release artifacts (VERSION, CHANGELOG, tag consistency) ──────────────
+
+echo ""
+echo -e "${BOLD}9. Release artifacts${NC}"
+
+# 9a. VERSION file exists and is valid semver
 version_file="${HARNESS_DIR}/VERSION"
 if [ ! -f "$version_file" ]; then
   assert "VERSION file exists" 1
@@ -244,7 +266,7 @@ else
   fi
 fi
 
-# 8b. CHANGELOG.md exists and has an [Unreleased] section
+# 9b. CHANGELOG.md exists and has an [Unreleased] section
 changelog="${HARNESS_DIR}/CHANGELOG.md"
 if [ ! -f "$changelog" ]; then
   assert "CHANGELOG.md exists" 1
@@ -257,7 +279,7 @@ else
   fi
 fi
 
-# 8d. skills/pipeline/SKILL.md must keep the "user-requested exit"
+# 9d. skills/pipeline/SKILL.md must keep the "user-requested exit"
 # contract: when the user asks to exit during a pipeline run, the skill
 # must write `.pipeline/halt-user-input-required` before exiting.
 # Without this contract, the conductor's build gate can't tell the
@@ -275,7 +297,7 @@ if [ -f "$pipeline_skill" ]; then
   fi
 fi
 
-# 8e. skills/stories/SKILL.md must document stamping the canonical approval
+# 9e. skills/stories/SKILL.md must document stamping the canonical approval
 # token. The engineer land gate (land-spec.ts) and the daemon backlog both
 # REQUIRE stories to declare "Status: Accepted" — a no-status stories file is
 # silently skipped forever by the daemon. This check ties the skill instruction
@@ -289,7 +311,7 @@ if [ -f "$stories_skill" ]; then
   fi
 fi
 
-# 8c. Every vX.Y.Z tag has a matching ## [X.Y.Z] section in CHANGELOG.md.
+# 9c. Every vX.Y.Z tag has a matching ## [X.Y.Z] section in CHANGELOG.md.
 # Only run when we're inside the harness repo's own git dir AND CHANGELOG.md
 # exists (skips cleanly in shallow clones).
 if [ -d "${HARNESS_DIR}/.git" ] && [ -f "$changelog" ]; then

@@ -5,7 +5,7 @@
 /**
  * Valid plugin kinds in the conductor plugin system.
  */
-export type PluginKind = 'llm_provider' | 'ui_renderer' | 'step' | 'hook' | 'visualizer';
+export type PluginKind = 'llm_provider' | 'ui_renderer' | 'step' | 'hook' | 'visualizer' | 'memory_provider';
 
 /**
  * Valid plugin kinds as a list for validation and error messages.
@@ -16,6 +16,7 @@ export const VALID_PLUGIN_KINDS: readonly PluginKind[] = [
   'step',
   'hook',
   'visualizer',
+  'memory_provider',
 ];
 
 /**
@@ -27,6 +28,12 @@ export interface PluginManifest {
   entrypoint: string;
   harness_version?: string;
   capabilities?: Record<string, unknown>;
+  /**
+   * Optional skill reference for LLM-facing guidance (memory_provider manifests; adr-2026-06-29-per-provider-retrieval-guidance-location).
+   * When present, the harness surfaces this path so the agent can query it for context
+   * on how to interact with the provider. The harness does NOT parse or index the file.
+   */
+  guidance?: string;
 }
 
 /**

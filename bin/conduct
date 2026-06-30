@@ -83,6 +83,29 @@ ensure_pipeline_dir() {
   mkdir -p "${PIPELINE_DIR}"
 }
 
+# ── Memory store setup (adr-2026-06-29-shared-memory-store-placement-and-durability) ─────────────────────────────────────────────
+# Invoke the canonical store setup via the conduct-ts CLI. This creates
+# ~/.ai-conductor/memory/<key>/harness/ and symlinks .memory/ to it, or
+# migrates an existing real .memory/ directory (adr-2026-06-29-safe-reversible-memory-migration). Idempotent.
+# Called once at bootstrap, before any Claude sessions touch .memory/.
+run_memory_store_setup() {
+  local dir="${1:-${PROJECT_DIR}}"
+  # Prefer the sibling conduct-ts in this harness; fall back to PATH install.
+  local _conduct_ts=""
+  if [ -x "${HARNESS_DIR}/bin/conduct-ts" ]; then
+    _conduct_ts="${HARNESS_DIR}/bin/conduct-ts"
+  elif command -v conduct-ts >/dev/null 2>&1; then
+    _conduct_ts="conduct-ts"
+  fi
+  if [ -z "${_conduct_ts}" ]; then
+    warn "conduct-ts not found — skipping canonical memory store setup (conduct-ts needs build)"
+    return 0
+  fi
+  "${_conduct_ts}" memory setup "${dir}" 2>&1 || {
+    warn "Memory store setup returned non-zero — continuing (legacy .memory/ may be used)"
+  }
+}
+
 CONDUCTOR_CONFIG="${HOME}/.claude/ai-conductor.config.json"
 HARNESS_USER_CONFIG="${HOME}/.ai-conductor/config.yml"
 
@@ -990,13 +1013,19 @@ run_bootstrap() {
   # (claude -p) to avoid context accumulation on large projects.
   # Handoff between steps is via file artifacts, not session context.
 
+  # Set up canonical memory store FIRST (adr-2026-06-29-shared-memory-store-placement-and-durability). If .memory/ is a real dir
+  # (legacy), migrateMemory runs copy-verify-swap (adr-2026-06-29-safe-reversible-memory-migration). If absent or
+  # already a symlink, ensureMemoryStore creates/confirms the canonical store.
+  # This must happen before any Claude sub-step so they see a correct .memory/.
+  run_memory_store_setup "${PROJECT_DIR}"
+
   local bs_state
 
   # Sub-step 1: Detect stack + scaffold directories
   bs_state=$(get_state "bootstrap_detect")
   if [ "$bs_state" != "done" ]; then
     log "Step 1/6: Detecting project stack and scaffolding directories..."
-    claude -p "Run /bootstrap Steps 1-3c ONLY. Detect project type and tech stack. Create directories (.memory/, .docs/, .pipeline/, .worktrees/) if missing. Generate .claudeignore from templates/claudeignore.template. Generate PR template from templates/pull_request_template.md to .github/pull_request_template.md (if not present). Load tech-context if matched.
+    claude -p "Run /bootstrap Steps 1-3c ONLY. Detect project type and tech stack. Create directories (.docs/, .pipeline/, .worktrees/) if missing (DO NOT create .memory/ — the harness sets it up via the canonical store). Generate .claudeignore from templates/claudeignore.template. Generate PR template from templates/pull_request_template.md to .github/pull_request_template.md (if not present). Load tech-context if matched.
 
 Add to .gitignore (idempotent): .pipeline/ and .worktrees/
 

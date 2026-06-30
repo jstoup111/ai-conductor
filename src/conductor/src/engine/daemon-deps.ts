@@ -9,6 +9,7 @@ import type {
   WorktreeOutcome,
 } from './daemon-runner.js';
 import { prepareWorktree } from './worktree-prepare.js';
+import { makeProductionGh } from './pr-labels.js';
 
 export interface RealDepsConfig {
   /** The main checkout the daemon runs from. */
@@ -21,6 +22,12 @@ export interface RealDepsConfig {
   runConductorInWorktree: (worktree: FeatureWorktree, item: BacklogItem) => Promise<void>;
   /** LLM provider used for the Phase 9.1 `done`-feature retro narrative. */
   provider: LLMProvider;
+  /**
+   * The resolved active memory provider for this run (adr-2026-06-29-per-project-memory-provider-selection). Computed at
+   * run start by `resolveMemoryProvider` and carried on context so every
+   * memory-using step sees the same single active provider (FR-10).
+   */
+  memoryProvider?: unknown;
   log?: (msg: string) => void;
 }
 
@@ -37,9 +44,16 @@ export function makeFeatureRunnerDeps(cfg: RealDepsConfig): FeatureRunnerDeps {
     // (Phase 9.1). Manual `/conduct` runs don't go through makeFeatureRunnerDeps.
     daemon: true,
     provider: cfg.provider,
+    // Thread the resolved active memory provider onto run context (adr-2026-06-29-per-project-memory-provider-selection/FR-10).
+    memoryProvider: cfg.memoryProvider,
     // Project key for the engineer store = the main checkout's basename (NOT the
     // worktree path, which is always `<projectRoot>/.worktrees/<slug>`).
     project: basename(cfg.projectRoot),
+    // FR-9: the MAIN checkout path — the watch registry lives here, and gh ops
+    // are issued from here after the worktree is torn down on ship.
+    projectRoot: cfg.projectRoot,
+    // FR-16: production gh runner for clear-on-success label ops.
+    runGh: makeProductionGh(),
 
     createWorktree: async (slug) => {
       const branch = `feat/daemon-${slug}`;

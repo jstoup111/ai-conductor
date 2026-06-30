@@ -12,7 +12,7 @@ import { ConductorEventEmitter } from './ui/events.js';
 import { DefaultStepRunner } from './engine/step-runners.js';
 import { ensureInstallFresh } from './engine/install-freshness.js';
 import { Conductor } from './engine/conductor.js';
-import { loadConfig } from './engine/config.js';
+import { loadConfig, resolveMemoryProvider } from './engine/config.js';
 import { holdLock } from './engine/daemon-lock.js';
 import { openDaemonLog, type DaemonLogSink } from './engine/daemon-log.js';
 import type { ConductState, ConductorEvent, StepName } from './types/index.js';
@@ -46,6 +46,7 @@ import {
   clearMarker,
   type RekickSweepDeps,
 } from './engine/daemon-rekick.js';
+import { sweepMergeableLabels } from './engine/mergeable-sweep.js';
 
 const execFile = promisify(execFileCb);
 
@@ -184,6 +185,14 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   registry.markInitialized();
   subscriber.start();
   const provider = registry.get<LLMProvider>('llm_provider', config?.llm_provider ?? 'claude');
+  // Resolve the active memory provider once at run start so all steps see the
+  // same single provider (adr-2026-06-29-per-project-memory-provider-selection / FR-10). Uses a per-run ctx so warnings are
+  // bounded and no module-level state is mutated (resolver is pure over config).
+  const memoryResolveCtx = { warnings: [] as string[] };
+  const memoryProvider = await resolveMemoryProvider(config ?? {}, registry, memoryResolveCtx);
+  if (memoryResolveCtx.warnings.length > 0) {
+    for (const w of memoryResolveCtx.warnings) log(`WARNING: ${w}`);
+  }
 
   const worktreeBase = join(projectRoot, '.worktrees');
   await mkdir(worktreeBase, { recursive: true });
@@ -301,6 +310,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     baseBranch,
     runConductorInWorktree,
     provider,
+    memoryProvider,
     log,
   });
   const runFeature = makeRunFeature(deps);
@@ -391,6 +401,12 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       writePersistedBaseSha: (sha) => writePersistedBaseSha(projectRoot, sha, log),
       rekickSweep: async (sha) => {
         await rekickSweep(rekickDeps, sha);
+      },
+      // FR-14: wire the startup + per-idle-poll-tick mergeable label sweep.
+      // NOTE: this binding must stay wired — removing it silently no-ops all
+      // startup and idle-poll sweeps in production (daemon.ts guards with ?.()).
+      sweepMergeableLabels: async () => {
+        await sweepMergeableLabels({ projectRoot, log });
       },
     },
     {

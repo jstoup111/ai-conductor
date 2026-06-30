@@ -100,6 +100,13 @@ export type ConductorEvent =
       /** The gate loop stopped without converging (kickback/stuck cap). */
       type: 'loop_halt';
       reason: string;
+      /**
+       * URL of the auto-opened needs-remediation draft PR, when the conductor
+       * irrecoverably HALTs in auto mode and escalation succeeded. Absent when
+       * mode is not 'auto', on rebase-conflict halts, or when escalation could
+       * not create a PR (zero commits, push failure, gh error).
+       */
+      prUrl?: string;
     }
   | {
       /** The gate loop reached a fully-satisfied state (.pipeline/DONE). */
