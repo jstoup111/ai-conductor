@@ -10,4 +10,4 @@
 // Scope: ONLY the pr-labels seam honors this flag. The real-`git` integration
 // tests (rebase, daemon-rekick "real primitives") use their own execa paths and
 // are intentionally unaffected.
-process.env.CONDUCTOR_NO_REAL_EXEC = '1';
+process.env.AI_CONDUCTOR_NO_REAL_EXEC = '1';
