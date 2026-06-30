@@ -31,6 +31,14 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   derivation coverage, RED discipline, and the acceptance/request/unit layering philosophy.
   README skill table updated to match.
 
+- `bin/install` now builds the `conduct-ts` bundle itself — it runs `npm install
+  && npm run build` in `src/conductor/` (in both first-run and `--update` mode)
+  before symlinking `conduct-ts`, so updates can never leave a stale bundle for
+  the install-freshness guard to reject. The build is non-fatal and idempotent:
+  if Node < 20.5 is active or `npm` is missing it's skipped with a warning and
+  `conduct` still installs. `bin/install --check` now reports whether the
+  `conduct-ts` bundle is built and on PATH.
+
 ## Migration
 
 The build daemon is now hosted inside a tmux session instead of a detached background process.

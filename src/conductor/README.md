@@ -56,8 +56,11 @@ npm run build      # tsup → dist/index.js (+ .d.ts + .map)
 npm test           # vitest run
 ```
 
-The bundle is committed-optional — the root `bin/install` gracefully skips the
-`conduct-ts` symlink if `dist/` is missing.
+The root `bin/install` runs these `npm install && npm run build` steps for you
+(in both first-run and `--update` mode) and then symlinks `conduct-ts`. The
+commands above are for building by hand. If Node < 20.5 is active or `npm` is
+missing, `bin/install` skips the build with a warning and leaves the
+`conduct-ts` symlink off until `dist/` exists.
 
 ## Key concepts
 
