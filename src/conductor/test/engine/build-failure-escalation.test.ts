@@ -8,6 +8,7 @@
 import { describe, it, expect } from 'vitest';
 import { escalateBuildFailure } from '../../src/engine/build-failure-escalation.js';
 import type { GhRunner, GitRunner } from '../../src/engine/pr-labels.js';
+import { NEEDS_REMEDIATION_MARKER } from '../../src/engine/pr-labels.js';
 
 // ── Fake runner factories ─────────────────────────────────────────────────────
 
@@ -76,15 +77,17 @@ function standardGitResps(
 
 /**
  * Standard happy-path gh responses after push:
- * view fails (no existing PR) → create succeeds → ensureLabel → addLabel → comment.
+ * view fails (no existing PR) → create succeeds → ensureLabel → addLabel →
+ * upsertComment lookup (no marked comment yet) → create comment.
  */
 function standardGhResps(prUrl = PR_URL): Array<{ stdout: string } | Error> {
   return [
-    new Error('no pull requests found'), // pr view
+    new Error('no pull requests found'), // pr view (findOrCreatePr)
     { stdout: `${prUrl}\n` },           // pr create
     { stdout: '' },                      // label create (ensureLabel)
     { stdout: '' },                      // pr edit --add-label (addLabel)
-    { stdout: '' },                      // pr comment (comment)
+    { stdout: JSON.stringify({ comments: [] }) }, // pr view --json comments (upsert lookup)
+    { stdout: '' },                      // pr comment (upsert fallback create)
   ];
 }
 
@@ -371,7 +374,8 @@ describe('FR-5: reuse existing OPEN PR', () => {
       { stdout: JSON.stringify({ url: existingUrl, state: 'OPEN' }) }, // pr view → existing
       { stdout: '' }, // ensureLabel
       { stdout: '' }, // addLabel
-      { stdout: '' }, // comment
+      { stdout: JSON.stringify({ comments: [] }) }, // upsert lookup → none
+      { stdout: '' }, // comment (upsert create)
     ]);
 
     const result = await escalateBuildFailure({
@@ -426,6 +430,7 @@ describe('FR-3: comment is independent of label step (reverse independence)', ()
       { stdout: `${PR_URL}\n` },        // pr create → success
       new Error('label create failed'), // ensureLabel throws
       new Error('add-label failed'),    // addLabel throws
+      { stdout: JSON.stringify({ comments: [] }) }, // upsert lookup → none
       { stdout: '' },                   // pr comment → success
     ]);
 
@@ -494,7 +499,8 @@ describe('FR-7: comment failure is swallowed, label step already ran', () => {
       { stdout: `${PR_URL}\n` },  // pr create
       { stdout: '' },              // ensureLabel
       { stdout: '' },              // addLabel
-      new Error('comment failed'), // comment fails — swallowed by pr-labels seam
+      { stdout: JSON.stringify({ comments: [] }) }, // upsert lookup → none
+      new Error('comment failed'), // create comment fails — swallowed by pr-labels seam
     ]);
 
     let threw = false;
@@ -562,5 +568,66 @@ describe('long failure reason is trimmed in comment body', () => {
     const body = commentCall![bodyIdx + 1];
 
     expect(body).toContain(shortReason);
+  });
+});
+
+// ── #159: the failure comment is idempotent across repeated HALTs ─────────────
+
+describe('#159: repeated HALTs upsert a single comment (one create + one PATCH)', () => {
+  it('first escalation creates a marked comment, the second edits it in place', async () => {
+    // Two runs share one scripted gh so we can assert across both.
+    const existingUrl = 'https://github.com/foo/bar/pull/42';
+    const markedCommentUrl = `${existingUrl}#issuecomment-555`;
+    const { git } = fakeGit([
+      ...standardGitResps(), // run 1
+      ...standardGitResps(), // run 2
+    ]);
+    const { gh, calls: ghCalls } = fakeGh([
+      // ── run 1: fresh PR, no marked comment yet → create ──
+      new Error('no pull requests found'),               // pr view (findOrCreatePr)
+      { stdout: `${existingUrl}\n` },                    // pr create
+      { stdout: '' },                                    // ensureLabel
+      { stdout: '' },                                    // addLabel
+      { stdout: JSON.stringify({ comments: [] }) },      // upsert lookup → none
+      { stdout: '' },                                    // pr comment (create)
+      // ── run 2: PR now exists, marked comment present → PATCH ──
+      { stdout: JSON.stringify({ url: existingUrl, state: 'OPEN' }) }, // pr view (reuse)
+      { stdout: '' },                                    // ensureLabel
+      { stdout: '' },                                    // addLabel
+      {
+        stdout: JSON.stringify({
+          comments: [{ body: `${NEEDS_REMEDIATION_MARKER}\nfirst halt`, url: markedCommentUrl }],
+        }),
+      },                                                 // upsert lookup → marked comment
+      { stdout: '' },                                    // api PATCH
+    ]);
+
+    await escalateBuildFailure({
+      projectRoot: '/repo',
+      failureReason: 'first halt',
+      runGit: git,
+      runGh: gh,
+    });
+    await escalateBuildFailure({
+      projectRoot: '/repo',
+      failureReason: 'second halt',
+      runGit: git,
+      runGh: gh,
+    });
+
+    const createCalls = ghCalls.filter((a) => a[0] === 'pr' && a[1] === 'comment');
+    const patchCalls = ghCalls.filter((a) => a[0] === 'api');
+    expect(createCalls).toHaveLength(1); // exactly one create across both HALTs
+    expect(patchCalls).toHaveLength(1); // second HALT edited in place
+
+    // The PATCH targets the existing comment id and carries the latest reason.
+    expect(patchCalls[0]).toEqual([
+      'api',
+      '--method',
+      'PATCH',
+      'repos/foo/bar/issues/comments/555',
+      '-f',
+      `body=${NEEDS_REMEDIATION_MARKER}\n## Daemon halt\n\nsecond halt\n\nManual remediation is required.`,
+    ]);
   });
 });

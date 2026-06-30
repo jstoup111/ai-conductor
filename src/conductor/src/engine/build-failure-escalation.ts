@@ -23,7 +23,8 @@ import {
   ensureLabel,
   addLabel,
   findOrCreatePr,
-  comment,
+  upsertComment,
+  NEEDS_REMEDIATION_MARKER,
 } from './pr-labels.js';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -175,6 +176,8 @@ export async function escalateBuildFailure(
 
   // ── Step 6: comment with failure reason (priority artifact, non-throwing) ─
   // Attempt this independently of whether the label step succeeded.
+  // Upsert (not append) so repeated HALTs edit a single marked comment in place
+  // rather than piling up duplicates (issue #159).
   const truncatedReason =
     failureReason.length > COMMENT_MAX_LEN
       ? failureReason.slice(0, COMMENT_MAX_LEN) + '\n…(truncated)'
@@ -188,7 +191,7 @@ export async function escalateBuildFailure(
     'Manual remediation is required.',
   ].join('\n');
 
-  await comment(runGh, cwd, prUrl, commentBody, log);
+  await upsertComment(runGh, cwd, prUrl, NEEDS_REMEDIATION_MARKER, commentBody, log);
 
   return { prUrl };
 }
