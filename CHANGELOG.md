@@ -12,6 +12,13 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- **Test kill-switch: the pr-labels `gh`/`git` seam cannot shell out during tests (conduct-ts).**
+  The `needs-remediation` escalation is gated on the daemon flag, but as a belt-and-suspenders guard
+  the production `makeProductionGh`/`makeProductionGit` runners now throw under
+  `CONDUCTOR_NO_REAL_EXEC` (set by the vitest global `test/setup.ts`). This prevents a test that
+  reaches a real runner from mutating live GitHub — previously an auto-mode failure test reused a
+  live PR and added a `needs-remediation` label + comment. Scoped to this seam only; the real-`git`
+  integration tests (rebase / daemon-rekick) use their own execa paths and are unaffected.
 - **Type error in the github-issues intake adapter (conduct-ts).** `maybeReopen` typed its `repo`
   parameter as `{ name; path }`, omitting the `ghRepo?` field that `RepoLister.list()` actually
   provides and that the function body reads (`repo.ghRepo ?? repo.name`). This produced a

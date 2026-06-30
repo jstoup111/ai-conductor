@@ -38,9 +38,29 @@ export type GitRunner = (
 
 // ── Production factories ──────────────────────────────────────────────────────
 
+/**
+ * Test kill-switch. When `CONDUCTOR_NO_REAL_EXEC` is set (the vitest global setup
+ * sets it — see `test/setup.ts`), the production `gh`/`git` runners refuse to
+ * shell out. This is a belt-and-suspenders guard: every test is supposed to inject
+ * a fake runner, but if one ever reaches a real runner (e.g. a daemon-mode test
+ * that forgets to stub escalation), this prevents it from mutating real GitHub —
+ * the exact failure mode that once labeled + commented on a live PR. The real-`git`
+ * integration tests (e.g. rebase / daemon-rekick) use their own execa paths, NOT
+ * this seam, so they are unaffected.
+ */
+function assertRealExecAllowed(bin: string): void {
+  if (process.env.CONDUCTOR_NO_REAL_EXEC) {
+    throw new Error(
+      `pr-labels: real '${bin}' exec blocked under CONDUCTOR_NO_REAL_EXEC (test env). ` +
+        `Inject a fake runner instead of using makeProduction${bin === 'gh' ? 'Gh' : 'Git'}().`,
+    );
+  }
+}
+
 /** Construct the real gh runner used in production. */
 export function makeProductionGh(): GhRunner {
   return async (args: string[], opts: { cwd: string }) => {
+    assertRealExecAllowed('gh');
     const result = await execFileP('gh', args, { cwd: opts.cwd });
     return { stdout: String(result.stdout) };
   };
@@ -49,6 +69,7 @@ export function makeProductionGh(): GhRunner {
 /** Construct the real git runner used in production. */
 export function makeProductionGit(): GitRunner {
   return async (args: string[], opts: { cwd: string }) => {
+    assertRealExecAllowed('git');
     const result = await execFileP('git', args, { cwd: opts.cwd });
     return { stdout: String(result.stdout) };
   };

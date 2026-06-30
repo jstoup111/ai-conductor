@@ -16,6 +16,8 @@ import {
   findOrCreatePr,
   comment,
   setReady,
+  makeProductionGh,
+  makeProductionGit,
 } from '../../src/engine/pr-labels.js';
 import type { GhRunner } from '../../src/engine/pr-labels.js';
 
@@ -501,5 +503,29 @@ describe('setReady', () => {
   it('swallows a rejecting runner without throwing', async () => {
     const { gh } = fakeGh([new Error('failed')]);
     await expect(setReady(gh, '/repo', TEST_PR_URL)).resolves.toBeUndefined();
+  });
+});
+
+// ── Kill-switch: production runners refuse to exec under CONDUCTOR_NO_REAL_EXEC ─
+// The vitest global setup (test/setup.ts) sets CONDUCTOR_NO_REAL_EXEC=1, so the
+// real gh/git runners must throw instead of shelling out. This guarantees no test
+// can mutate live GitHub via this seam (the bug that labeled+commented a live PR).
+describe('production runner kill-switch', () => {
+  it('CONDUCTOR_NO_REAL_EXEC is set by the global test setup', () => {
+    expect(process.env.CONDUCTOR_NO_REAL_EXEC).toBeTruthy();
+  });
+
+  it('makeProductionGh() refuses to exec real gh under the kill-switch', async () => {
+    const gh = makeProductionGh();
+    await expect(gh(['pr', 'view'], { cwd: '/repo' })).rejects.toThrow(
+      /real 'gh' exec blocked under CONDUCTOR_NO_REAL_EXEC/,
+    );
+  });
+
+  it('makeProductionGit() refuses to exec real git under the kill-switch', async () => {
+    const git = makeProductionGit();
+    await expect(git(['rev-parse', 'HEAD'], { cwd: '/repo' })).rejects.toThrow(
+      /real 'git' exec blocked under CONDUCTOR_NO_REAL_EXEC/,
+    );
   });
 });
