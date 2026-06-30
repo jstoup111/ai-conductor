@@ -3,6 +3,8 @@ import {
   extractMermaidBlocks,
   renderDiagramsForFile,
   detectOpenerCommand,
+  mmdcArgs,
+  needsNoSandbox,
   type RenderDeps,
 } from '../../src/engine/mermaid-renderer.js';
 import type { MermaidRendererConfig } from '../../src/types/config.js';
@@ -95,6 +97,41 @@ describe('detectOpenerCommand', () => {
 
   it('returns null when no opener is available', async () => {
     expect(await detectOpenerCommand({ platform: 'linux', isWsl: false, hasTool: has() })).toBeNull();
+  });
+});
+
+describe('needsNoSandbox', () => {
+  it('is true under WSL', () => {
+    expect(needsNoSandbox({ isWsl: true, uid: 1000 })).toBe(true);
+  });
+  it('is true for the root user (uid 0) even off WSL', () => {
+    expect(needsNoSandbox({ isWsl: false, uid: 0 })).toBe(true);
+  });
+  it('is false for a normal user off WSL', () => {
+    expect(needsNoSandbox({ isWsl: false, uid: 1000 })).toBe(false);
+  });
+  it('is false when uid is unknown (non-posix) off WSL', () => {
+    expect(needsNoSandbox({ isWsl: false, uid: undefined })).toBe(false);
+  });
+});
+
+describe('mmdcArgs', () => {
+  it('builds plain -i/-o args when no puppeteer config is given', () => {
+    expect(mmdcArgs('in.mmd', 'out.png')).toEqual(['-i', 'in.mmd', '-o', 'out.png']);
+  });
+  it('prepends -p <config> so Chromium launch flags take effect', () => {
+    expect(mmdcArgs('in.mmd', 'out.png', '/cfg/puppeteer.json')).toEqual([
+      '-p',
+      '/cfg/puppeteer.json',
+      '-i',
+      'in.mmd',
+      '-o',
+      'out.png',
+    ]);
+  });
+  it('treats null/empty puppeteer config as absent (no -p)', () => {
+    expect(mmdcArgs('in.mmd', 'out.png', null)).toEqual(['-i', 'in.mmd', '-o', 'out.png']);
+    expect(mmdcArgs('in.mmd', 'out.png', '')).toEqual(['-i', 'in.mmd', '-o', 'out.png']);
   });
 });
 

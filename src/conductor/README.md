@@ -178,7 +178,12 @@ a *visual* (not raw Mermaid), the artifact-review path renders them:
   never throws, isolates per-diagram failures, HTML-escapes diagram source, and returns a
   `notice` on any skip/failure. Presets + valid modes live in `engine/mermaid-renderer-presets.ts`
   (parallel to `md-viewer-presets.ts`); the config block is `mermaid_renderer.{preset,command,
-  args,mode}`, validated in `engine/config.ts` like `markdown_viewer`.
+  args,mode}`, validated in `engine/config.ts` like `markdown_viewer`. For `mmdc-*`, production
+  `runMmdc` resolves a Puppeteer config (`mmdcArgs`/`needsNoSandbox` are pure + unit-tested): an
+  operator-managed `~/.ai-conductor/puppeteer.json` wins, else in sandbox-hostile environments
+  (WSL/root/containers) it writes a transient `--no-sandbox` config (with a discovered Chrome
+  `executablePath`), else the default sandboxed launch — without this, Chromium fails to start on
+  WSL/containers and diagrams silently degrade to raw Markdown.
 - **Gate** — `TerminalPromptHost.reviewArtifacts` shows the raw Markdown first (always-present
   fallback), then, for a file containing a mermaid fence, calls an injected `renderDiagrams`
   hook and logs any returned notice on the host's own channel (TUI-safe). `index.ts` wires the
