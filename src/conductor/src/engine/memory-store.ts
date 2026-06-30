@@ -42,6 +42,14 @@ export interface MemoryEntry {
   body: string;
   /** Single line to append to `index.md` (a newline is appended if absent). */
   indexLine: string;
+  /**
+   * When `true`, this entry has not yet been pushed to the platform provider
+   * and is awaiting reconciliation.  Set by the fallback path in
+   * `memory-fallback.ts` on ledger entries so the pending state is explicit
+   * (FR-13a plan-B17).  Purely informational — behaviour is driven by ledger
+   * membership, not this flag.
+   */
+  pendingReconcile?: boolean;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

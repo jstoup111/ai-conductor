@@ -289,3 +289,163 @@ describe('FR-13b: repeated write failures emit bounded warnings and never abort'
     expect(ctx.warnings.length).toBeLessThanOrEqual(1);
   });
 });
+
+// ═════════════════════════════════════════════════════════════════════════════
+// FIX-1 (NEW): persistMemory is TOTAL — never throws even when the fallback
+// path itself fails internally (e.g. invalid category passed to recordMemoryEntry).
+// ═════════════════════════════════════════════════════════════════════════════
+describe('FIX-1: persistMemory never throws even when the local fallback write fails', () => {
+  it('returns {sink:local, pendingReconcile:false} and pushes a warning when recordMemoryEntry throws due to invalid category', async () => {
+    const persistMemory = requireFn(await load(FALLBACK_MOD), 'persistMemory');
+
+    // Provider rejects all writes → triggers the fallback path.
+    const double = makeDouble('double', { available: true, acceptsWrites: false });
+    const ctx = { warnings: [] as string[] };
+
+    // An entry with an invalid category will cause recordMemoryEntry to throw
+    // inside the fallback block.
+    const badEntry = {
+      category: 'nope' as any,
+      name: 'invalid-cat',
+      body: 'some body\n',
+      indexLine: '- invalid',
+    };
+
+    // Must NOT throw — the promise must resolve.
+    const result = await persistMemory({ repoPath: repo, provider: double, entry: badEntry, ctx });
+
+    expect(result).toBeDefined();
+    expect(result.sink).toBe('local');
+    expect(result.pendingReconcile).toBe(false);
+    expect(ctx.warnings.length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// FIX-2 (NEW): reconcilePending drains incrementally — partial failure removes
+// only the succeeded entries from the ledger so a retry never duplicates them.
+// ═════════════════════════════════════════════════════════════════════════════
+describe('FIX-2: reconcilePending incremental drain — exactly-once under partial failure', () => {
+  it('on partial failure: removes succeeded entries from ledger, keeps failed ones; second pass completes without duplicates', async () => {
+    const mod = await load(FALLBACK_MOD);
+    const persistMemory = requireFn(mod, 'persistMemory');
+    const listPendingReconcile = requireFn(mod, 'listPendingReconcile');
+    const reconcilePending = requireFn(mod, 'reconcilePending');
+
+    // Provider that throws ONLY for the entry named 'p2'.
+    const landed: any[] = [];
+    let rejectP2 = true;
+    const selectiveProvider = {
+      isAvailable: () => false as boolean, // start unavailable → both go to fallback
+      write(e: any) {
+        if (e.name === 'p2' && rejectP2) {
+          throw new Error('selective rejection of p2');
+        }
+        landed.push(e);
+      },
+    };
+
+    const ctx = { warnings: [] as string[] };
+
+    // Both writes fail (provider unavailable) → both go to the ledger.
+    await persistMemory({ repoPath: repo, provider: selectiveProvider, entry: entry('p1', 'one\n'), ctx });
+    await persistMemory({ repoPath: repo, provider: selectiveProvider, entry: entry('p2', 'two\n'), ctx });
+    expect((await listPendingReconcile(repo)).length).toBe(2);
+
+    // First reconcile — provider now reachable but p2 still rejects.
+    selectiveProvider.isAvailable = () => true;
+    const first = await reconcilePending({ repoPath: repo, provider: selectiveProvider, ctx });
+    expect(first.reconciled).toBe(1); // only p1 drained
+
+    // After first reconcile only p2 remains pending.
+    const afterFirst = await listPendingReconcile(repo);
+    expect(afterFirst.length).toBe(1);
+    expect(afterFirst[0].name).toBe('p2');
+
+    // p1 landed exactly once.
+    expect(landed.filter((x: any) => x.name === 'p1').length).toBe(1);
+
+    // Second reconcile — p2 now accepted.
+    rejectP2 = false;
+    const second = await reconcilePending({ repoPath: repo, provider: selectiveProvider, ctx });
+    expect(second.reconciled).toBe(1);
+
+    // No duplicates: p1 and p2 each appear exactly once on the platform.
+    expect(landed.filter((x: any) => x.name === 'p1').length).toBe(1);
+    expect(landed.filter((x: any) => x.name === 'p2').length).toBe(1);
+    expect(await listPendingReconcile(repo)).toEqual([]);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// FIX-3 (NEW): explicit pending-reconcile tag intrinsic to the stored artifact.
+// The local file carries a <!-- pending-reconcile --> marker; the platform copy
+// (written by reconcile) must be clean (no marker in body).
+// ═════════════════════════════════════════════════════════════════════════════
+describe('FIX-3: pending-reconcile marker embedded in local store; platform copy is clean', () => {
+  it('fallback writes carry an explicit pending-reconcile marker; reconcile does not leak the marker to the platform', async () => {
+    const mod = await load(FALLBACK_MOD);
+    const persistMemory = requireFn(mod, 'persistMemory');
+    const reconcilePending = requireFn(mod, 'reconcilePending');
+
+    const double = makeDouble('double', { available: true, acceptsWrites: false });
+    const ctx = { warnings: [] as string[] };
+    const e = entry('marker-test', 'marker body\n');
+
+    await persistMemory({ repoPath: repo, provider: double, entry: e, ctx });
+
+    // (a) Local store file physically contains the pending-reconcile marker.
+    expect(await treeContains(join(repo, '.memory'), 'pending-reconcile')).toBe(true);
+    // Original body text is still present after the marker.
+    expect(await treeContains(join(repo, '.memory'), 'marker body')).toBe(true);
+
+    // Reconcile to the now-accepting platform.
+    double.setAcceptsWrites(true);
+    await reconcilePending({ repoPath: repo, provider: double, ctx });
+
+    // (b) Platform entry body is clean — marker must NOT appear in the body.
+    expect(
+      double.list().some((x: any) => typeof x.body === 'string' && x.body.includes('pending-reconcile')),
+    ).toBe(false);
+    // But the actual content is present.
+    expect(
+      double.list().some((x: any) => typeof x.body === 'string' && x.body.includes('marker body')),
+    ).toBe(true);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// FIX-5 (NEW): readLedger validates the parsed shape before trusting it.
+// ═════════════════════════════════════════════════════════════════════════════
+describe('FIX-5: listPendingReconcile handles malformed ledger JSON gracefully', () => {
+  async function writeBadLedger(content: string): Promise<void> {
+    const storeMod = await load(STORE_MOD);
+    const projectKeyFn = requireFn(storeMod, 'projectKey');
+    const key = await projectKeyFn(repo);
+    const ledgerPath = join(
+      fakeHome,
+      '.ai-conductor',
+      'memory',
+      key,
+      'harness',
+      'pending-reconcile.json',
+    );
+    // Directory was created by ensureMemoryStore in beforeEach.
+    await writeFile(ledgerPath, content, 'utf8');
+  }
+
+  it('returns [] when the ledger root is an object (not an array)', async () => {
+    await writeBadLedger('{"not":"an array"}');
+    const listPendingReconcile = requireFn(await load(FALLBACK_MOD), 'listPendingReconcile');
+    const result = await listPendingReconcile(repo);
+    expect(result).toEqual([]);
+  });
+
+  it('filters out entries that are missing required MemoryEntry fields', async () => {
+    // Entry has only `name`; missing category, body, indexLine.
+    await writeBadLedger('[{"name":"x"}]');
+    const listPendingReconcile = requireFn(await load(FALLBACK_MOD), 'listPendingReconcile');
+    const result = await listPendingReconcile(repo);
+    expect(result).toEqual([]);
+  });
+});
