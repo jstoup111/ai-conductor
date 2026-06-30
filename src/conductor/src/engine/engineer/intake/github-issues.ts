@@ -14,6 +14,7 @@ import type { Envelope, EnvelopeStatus, IntakePort, ReportMeta } from './port.js
 import type { IntakeSource } from './source.js';
 import type { Ledger } from './ledger.js';
 import { parseSourceRef } from '../issue-ref.js';
+import { restAddLabelArgs, restRemoveLabelArgs } from '../../pr-labels.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -149,7 +150,7 @@ export function createGithubIssuesAdapter(deps: GithubIssuesDeps): IntakeSource 
     // Strip the handled label so a human sees it is back in flight; non-fatal.
     try {
       const ghRepo = repo.ghRepo ?? repo.name;
-      await gh(['issue', 'edit', String(issue.number), '-R', ghRepo, '--remove-label', HANDLED_LABEL], {
+      await gh(restRemoveLabelArgs(ghRepo, String(issue.number), HANDLED_LABEL), {
         cwd: repo.path,
       });
     } catch {
@@ -258,7 +259,7 @@ export function createGithubIssuesAdapter(deps: GithubIssuesDeps): IntakeSource 
           } catch {
             // label already present — not an error.
           }
-          await gh(['issue', 'edit', number, '-R', repo, '--add-label', HANDLED_LABEL], { cwd: repoPath });
+          await gh(restAddLabelArgs(repo, number, HANDLED_LABEL), { cwd: repoPath });
         } else {
           // No write-back marker for intermediate statuses (pending/deciding).
           return;

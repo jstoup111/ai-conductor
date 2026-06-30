@@ -85,7 +85,7 @@ function standardGhResps(prUrl = PR_URL): Array<{ stdout: string } | Error> {
     new Error('no pull requests found'), // pr view (findOrCreatePr)
     { stdout: `${prUrl}\n` },           // pr create
     { stdout: '' },                      // label create (ensureLabel)
-    { stdout: '' },                      // pr edit --add-label (addLabel)
+    { stdout: '' },                      // gh api POST .../labels (addLabel, REST)
     { stdout: JSON.stringify({ comments: [] }) }, // pr view --json comments (upsert lookup)
     { stdout: '' },                      // pr comment (upsert fallback create)
   ];
@@ -343,10 +343,12 @@ describe('FR-2/4: draft PR + needs-remediation label', () => {
       runGh: gh,
     });
 
-    const addCall = ghCalls.find((args) => args.includes('--add-label'));
+    const addCall = ghCalls.find(
+      (args) => args[0] === 'api' && args.includes('POST') && args.some((s) => /\/labels$/.test(s)),
+    );
     expect(addCall).toBeDefined();
-    expect(addCall).toContain('needs-remediation');
-    expect(addCall).toContain(PR_URL);
+    expect(addCall).toContain('labels[]=needs-remediation');
+    expect(addCall).toContain('repos/foo/bar/issues/42/labels');
   });
 
   it('returns the prUrl on success', async () => {
@@ -412,7 +414,9 @@ describe('create fails → no label or comment attempted', () => {
 
     expect(result).toEqual({});
 
-    const addLabelCall = ghCalls.find((args) => args.includes('--add-label'));
+    const addLabelCall = ghCalls.find(
+      (args) => args[0] === 'api' && args.some((s) => /\/labels$/.test(s)),
+    );
     const commentCall = ghCalls.find((args) => args[0] === 'pr' && args[1] === 'comment');
     expect(addLabelCall).toBeUndefined();
     expect(commentCall).toBeUndefined();
@@ -429,7 +433,7 @@ describe('FR-3: comment is independent of label step (reverse independence)', ()
       new Error('no PR'),               // pr view → no existing PR
       { stdout: `${PR_URL}\n` },        // pr create → success
       new Error('label create failed'), // ensureLabel throws
-      new Error('add-label failed'),    // addLabel throws
+      new Error('add-label failed'),    // addLabel (gh api POST .../labels) throws
       { stdout: JSON.stringify({ comments: [] }) }, // upsert lookup → none
       { stdout: '' },                   // pr comment → success
     ]);
@@ -520,7 +524,9 @@ describe('FR-7: comment failure is swallowed, label step already ran', () => {
     expect(result?.prUrl).toEqual(PR_URL);
 
     // Label step ran before the comment
-    const addLabelCall = ghCalls.find((args) => args.includes('--add-label'));
+    const addLabelCall = ghCalls.find(
+      (args) => args[0] === 'api' && args.some((s) => /\/labels$/.test(s)),
+    );
     expect(addLabelCall).toBeDefined();
   });
 });
@@ -616,7 +622,8 @@ describe('#159: repeated HALTs upsert a single comment (one create + one PATCH)'
     });
 
     const createCalls = ghCalls.filter((a) => a[0] === 'pr' && a[1] === 'comment');
-    const patchCalls = ghCalls.filter((a) => a[0] === 'api');
+    // Filter to the comment PATCH specifically — label add/remove now also use `gh api`.
+    const patchCalls = ghCalls.filter((a) => a[0] === 'api' && a.includes('PATCH'));
     expect(createCalls).toHaveLength(1); // exactly one create across both HALTs
     expect(patchCalls).toHaveLength(1); // second HALT edited in place
 

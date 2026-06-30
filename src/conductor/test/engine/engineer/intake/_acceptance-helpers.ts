@@ -44,16 +44,19 @@ export function makeFakeGh(state: FakeGhState) {
       state.comments.push({ ref: refFromArgs(args), body: bodyFromArgs(args) });
       return { stdout: '' };
     }
-    if (args[0] === 'issue' && args[1] === 'edit') {
-      // label add
-      const li = args.indexOf('--add-label');
-      if (li >= 0) state.appliedLabels.push({ ref: refFromArgs(args), label: args[li + 1] });
-      const lr = args.indexOf('--remove-label');
-      if (lr >= 0) {
-        const ref = refFromArgs(args);
-        const label = args[lr + 1];
-        const idx = state.appliedLabels.findIndex((a) => a.ref === ref && a.label === label);
-        if (idx >= 0) state.appliedLabels.splice(idx, 1);
+    // REST label mutations: `gh api --method POST|DELETE repos/<o>/<r>/issues/<n>/labels[/<name>]`
+    // (Projects-classic safe; replaces `gh issue edit --add/--remove-label`).
+    if (args[0] === 'api' && /\/issues\/\d+\/labels/.test(args[3] ?? '')) {
+      const op = restLabelOp(args);
+      if (op) {
+        if (op.method === 'POST') {
+          state.appliedLabels.push({ ref: op.ref, label: op.label });
+        } else if (op.method === 'DELETE') {
+          const idx = state.appliedLabels.findIndex(
+            (a) => a.ref === op.ref && a.label === op.label,
+          );
+          if (idx >= 0) state.appliedLabels.splice(idx, 1);
+        }
       }
       return { stdout: '' };
     }
@@ -93,6 +96,30 @@ function refFromArgs(args: string[]): string {
 function bodyFromArgs(args: string[]): string {
   const bi = args.indexOf('--body');
   return bi >= 0 ? args[bi + 1] : '';
+}
+/**
+ * Decode a REST label mutation (`gh api --method POST|DELETE
+ * repos/<o>/<r>/issues/<n>/labels[/<name>]`) into the ref + label the legacy
+ * `issue edit` form used to carry. Returns null if the argv isn't recognizable.
+ */
+function restLabelOp(
+  args: string[],
+): { method: string; ref: string; label: string } | null {
+  const mi = args.indexOf('--method');
+  const method = mi >= 0 ? args[mi + 1] : '';
+  const path = args[3] ?? '';
+  const m = path.match(/repos\/([^/]+\/[^/]+)\/issues\/(\d+)\/labels(?:\/(.+))?$/);
+  if (!m) return null;
+  const ref = `${m[1]}#${m[2]}`;
+  if (method === 'POST') {
+    const fi = args.indexOf('-f');
+    const label = fi >= 0 ? (args[fi + 1] ?? '').replace(/^labels\[\]=/, '') : '';
+    return { method, ref, label };
+  }
+  if (method === 'DELETE') {
+    return { method, ref, label: decodeURIComponent(m[3] ?? '') };
+  }
+  return null;
 }
 
 /** A registry reader stub returning the given repo descriptors. */

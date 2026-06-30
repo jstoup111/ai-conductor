@@ -23,6 +23,18 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- **PR/issue label mutations no longer fail on GitHub's Projects (classic) sunset.**
+  `gh pr edit --add-label/--remove-label` and `gh issue edit --add-label/--remove-label`
+  resolve label names against repo metadata via a GraphQL query that pulls Projects (classic)
+  fields — which GitHub has deprecated, so the whole command now errors out before the label
+  is ever applied. This broke the daemon's `mergeable` / `needs-remediation` labeling and the
+  mergeable sweep, plus the engineer intake's `engineer:handled` label add/remove. All label
+  add/remove operations now go through the REST labels endpoint (`gh api .../issues/<n>/labels`),
+  which never touches Projects. New `restAddLabelArgs` / `restRemoveLabelArgs` / `parseIssueRef`
+  helpers in `pr-labels.ts` are the single source of the REST contract (used by `addLabel` /
+  `removeLabel` and the engineer intake). PR-body/title edits (`gh pr edit --body/--title`) are
+  unaffected — they need no name resolution, so they never trigger the Projects query.
+
 - Daemon `needs-remediation` escalation now **upserts** its failure comment instead of
   appending a new one on every HALT (#159). The comment carries a hidden marker
   (`<!-- conductor:needs-remediation -->`); on a repeat HALT the existing comment is edited
