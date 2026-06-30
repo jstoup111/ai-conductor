@@ -52,6 +52,12 @@ function intFlag(argv: string[], flag: string, fallback?: number): number | unde
 /** Management verb dispatched to the Supervisor port (not a daemon run). */
 export interface DaemonSupervisorCommand {
   verb: 'start' | 'stop' | 'restart' | 'connect' | 'debug';
+  /**
+   * `start` only: when true (`-D` / `--detach`), start the daemon and return
+   * immediately instead of auto-attaching to its tmux session. Ignored for the
+   * other verbs.
+   */
+  detach?: boolean;
 }
 
 const MANAGEMENT_VERBS = new Set(['start', 'stop', 'restart', 'connect', 'debug']);
@@ -60,13 +66,19 @@ const MANAGEMENT_VERBS = new Set(['start', 'stop', 'restart', 'connect', 'debug'
  * Parse `process.argv` into a DaemonSupervisorCommand descriptor, or return
  * null when argv[2] is not `daemon` or argv[3] is not a management verb.
  *
+ * `-D` / `--detach` (anywhere after the verb) sets `detach` so `start` skips the
+ * auto-attach. The flag is harmless on the other verbs.
+ *
  * argv is process.argv: [node, entry, sub, verb, ...rest].
  */
 export function detectDaemonSupervisorCommand(argv: string[]): DaemonSupervisorCommand | null {
   if (argv[2] !== 'daemon') return null;
   const verb = argv[3];
   if (!verb || !MANAGEMENT_VERBS.has(verb)) return null;
-  return { verb: verb as DaemonSupervisorCommand['verb'] };
+  const detach = argv.slice(4).some((a) => a === '-D' || a === '--detach');
+  // Only attach the flag when set, so callers/tests comparing the bare
+  // `{ verb }` shape stay unaffected for the no-flag case.
+  return { verb: verb as DaemonSupervisorCommand['verb'], ...(detach ? { detach: true } : {}) };
 }
 
 /**
