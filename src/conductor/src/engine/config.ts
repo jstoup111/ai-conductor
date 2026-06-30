@@ -835,9 +835,27 @@ export async function resolveMemoryProvider(
   // Named and a valid string — look it up.
   const found = registry.tryGet('memory_provider', selection);
 
-  // C2: named and installed → use it, no warning.
-  if (found !== undefined) {
+  // C2a: named and installed and AVAILABLE → use it, no warning.
+  // Probe: isAvailable?.() === false means EXPLICITLY unavailable.
+  // No probe method (undefined !== false) → treat as available and return it.
+  if (found !== undefined && (found as { isAvailable?: () => boolean }).isAvailable?.() !== false) {
     return found;
+  }
+
+  // C2b: named and installed but UNAVAILABLE at run start → warn + fall back to local.
+  // Explicit branch — no catch-all else. B4 adds this branch (B3 wires the probe above).
+  if (found !== undefined) {
+    // found exists but isAvailable() returned false — unavailable provider.
+    if (!ctx._seenBadMemoryProviders) {
+      ctx._seenBadMemoryProviders = new Set<string>();
+    }
+    if (!ctx._seenBadMemoryProviders.has(selection)) {
+      ctx._seenBadMemoryProviders.add(selection);
+      ctx.warnings.push(
+        `memory_provider "${selection}" is unavailable; falling back to local.`,
+      );
+    }
+    return registry.tryGet('memory_provider', 'local');
   }
 
   // C3: named but NOT installed → warn once per run, fall back to local.
