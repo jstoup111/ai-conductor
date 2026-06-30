@@ -238,6 +238,21 @@ export interface CompletionContext {
   config?: HarnessConfig;
 }
 
+/**
+ * Pull the value off the `Verdict:` line of an as-built review report, e.g.
+ * `**Verdict:** APPROVED WITH DRIFT NOTES` → `APPROVED WITH DRIFT NOTES`.
+ * Tolerates optional bold markers and an accidental double colon. Returns null
+ * when there is no Verdict line (fail-closed: the gate treats that as not-done).
+ */
+export function parseAsBuiltVerdict(content: string): string | null {
+  const m = content.match(
+    /^[^\S\n]*\*{0,2}\s*Verdict\s*\*{0,2}\s*:+\s*\*{0,2}\s*(.+?)\s*\*{0,2}\s*$/im,
+  );
+  if (!m) return null;
+  const value = m[1].replace(/\*+/g, '').trim();
+  return value.length > 0 ? value : null;
+}
+
 export const CUSTOM_COMPLETION_PREDICATES: Partial<
   Record<StepName, (dir: string, ctx: CompletionContext) => Promise<CompletionResult>>
 > = {
@@ -366,10 +381,14 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     return { done: true };
   },
 
-  // As-built architecture gate passes when a fresh report exists for this
-  // session and its verdict is not BLOCKED. BLOCKED means shipped code violates
-  // an APPROVED ADR — a human must fix the code or supersede the ADR before the
-  // loop can reach finish. APPROVED / APPROVED WITH DRIFT NOTES pass.
+  // As-built architecture gate is FAIL-CLOSED: it passes only when a fresh
+  // report records an explicit clean approval — `APPROVED` or `APPROVED WITH
+  // DRIFT NOTES` (the as-built vocabulary; see skills/architecture-review).
+  // A `BLOCKED` verdict, a missing `Verdict:` line, or any unrecognized
+  // verdict keeps the gate UNSATISFIED so the SHIP tail HALTs loudly rather
+  // than silently shipping. This replaces the old fail-OPEN check (passed
+  // unless the literal word BLOCKED appeared), which let a no-ADR / garbled
+  // verdict slip through marked `done` and the loop end without DONE or HALT.
   architecture_review_as_built: async (dir, ctx): Promise<CompletionResult> => {
     const files = await findArtifactFiles(dir, 'architecture_review_as_built');
     if (files.length === 0) {
@@ -390,10 +409,20 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     }
     for (const f of fresh) {
       const content = await readFile(f, 'utf-8');
-      if (/^\s*(?:\*\*)?Verdict:?(?:\*\*)?\s*:?\s*BLOCKED\b/im.test(content)) {
+      const verdict = parseAsBuiltVerdict(content);
+      if (verdict === null) {
         return {
           done: false,
-          reason: 'as-built review verdict is BLOCKED — shipped code violates an APPROVED ADR; fix the code or supersede the ADR (human-approved), then re-run',
+          reason: 'as-built review has no parseable `Verdict:` line — expected APPROVED / APPROVED WITH DRIFT NOTES / BLOCKED; re-run the as-built review',
+        };
+      }
+      // Clean pass iff the verdict begins with APPROVED (covers both
+      // "APPROVED" and "APPROVED WITH DRIFT NOTES"). Everything else —
+      // BLOCKED or any other string — keeps the gate unsatisfied.
+      if (!/^APPROVED\b/i.test(verdict)) {
+        return {
+          done: false,
+          reason: `as-built review verdict is "${verdict}" — not a clean APPROVED (BLOCKED means shipped code violates an APPROVED ADR; an unrecognized verdict means the review may have found no ADRs to check). Fix the code or supersede the ADR (human-approved), then re-run`,
         };
       }
     }

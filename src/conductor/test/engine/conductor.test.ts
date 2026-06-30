@@ -1051,11 +1051,12 @@ describe('engine/conductor', () => {
 
     await conductor.run();
 
-    expect(tierSkipEvents.length).toBe(5);
+    expect(tierSkipEvents.length).toBe(6);
     expect(tierSkipEvents.map((e) => e.step)).toContain('conflict_check');
     expect(tierSkipEvents.map((e) => e.step)).toContain('architecture_diagram');
     expect(tierSkipEvents.map((e) => e.step)).toContain('architecture_review');
     expect(tierSkipEvents.map((e) => e.step)).toContain('acceptance_specs');
+    expect(tierSkipEvents.map((e) => e.step)).toContain('architecture_review_as_built');
     expect(tierSkipEvents.map((e) => e.step)).toContain('retro');
     // All events should have tier 'S'
     expect(tierSkipEvents.every((e) => e.tier === 'S')).toBe(true);

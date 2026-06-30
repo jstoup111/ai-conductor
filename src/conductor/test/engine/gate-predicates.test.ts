@@ -162,3 +162,62 @@ describe('engine/artifacts — plan predicate (per path-type coverage)', () => {
     expect(r.done).toBe(true);
   });
 });
+
+describe('engine/artifacts — architecture_review_as_built predicate (fail-closed)', () => {
+  let dir: string;
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'asbuilt-pred-'));
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  async function report(content: string) {
+    const full = join(dir, '.pipeline/architecture-review-as-built.md');
+    await mkdir(dirname(full), { recursive: true });
+    await writeFile(full, content);
+  }
+
+  const header = '# As-Built Architecture Review\n**Mode:** as-built\n';
+
+  it('fails when no report is present', async () => {
+    const r = await checkGateCompletion(dir, 'architecture_review_as_built');
+    expect(r.done).toBe(false);
+    expect(r.reason).toMatch(/no \.pipeline\/architecture-review-as-built\.md/);
+  });
+
+  it('passes on a clean APPROVED verdict', async () => {
+    await report(`${header}**Verdict:** APPROVED\n`);
+    const r = await checkGateCompletion(dir, 'architecture_review_as_built');
+    expect(r.done).toBe(true);
+  });
+
+  it('passes on APPROVED WITH DRIFT NOTES', async () => {
+    await report(`${header}**Verdict:** APPROVED WITH DRIFT NOTES\n## Drift\n- diagram stale\n`);
+    const r = await checkGateCompletion(dir, 'architecture_review_as_built');
+    expect(r.done).toBe(true);
+  });
+
+  it('fails on a BLOCKED verdict', async () => {
+    await report(`${header}**Verdict:** BLOCKED\n## Blocking Violations\n- violates adr-x\n`);
+    const r = await checkGateCompletion(dir, 'architecture_review_as_built');
+    expect(r.done).toBe(false);
+    expect(r.reason).toMatch(/BLOCKED/);
+  });
+
+  // The reported random-number-api bug: a non-clean, non-BLOCKED verdict was
+  // accepted as done by the old fail-OPEN predicate. Fail-closed rejects it.
+  it('fails on an unrecognized verdict (not a clean APPROVED)', async () => {
+    await report(`${header}**Verdict:** NEEDS REVIEW\n`);
+    const r = await checkGateCompletion(dir, 'architecture_review_as_built');
+    expect(r.done).toBe(false);
+    expect(r.reason).toMatch(/not a clean APPROVED|NEEDS REVIEW/);
+  });
+
+  it('fails when the report has no Verdict line at all', async () => {
+    await report(`${header}## Notes\nThere were no ADRs to check.\n`);
+    const r = await checkGateCompletion(dir, 'architecture_review_as_built');
+    expect(r.done).toBe(false);
+    expect(r.reason).toMatch(/no parseable .*Verdict|not a clean APPROVED/i);
+  });
+});

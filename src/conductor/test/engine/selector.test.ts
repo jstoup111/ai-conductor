@@ -120,6 +120,64 @@ describe('engine/selector — selectNextGate', () => {
     expect(d).toMatchObject({ kind: 'run', step: 'finish' });
   });
 
+  it('skips architecture_review_as_built on Small (tier-skipped) and selects finish', () => {
+    // Small tier skips the DECIDE-phase architecture_review (no ADRs), so the
+    // SHIP as-built review has nothing to audit and must skip too — otherwise
+    // it runs against APPROVED ADRs that never existed.
+    const state: ConductState = {
+      ...frontDone(),
+      complexity_tier: 'S',
+      architecture_diagram: 'skipped',
+      architecture_review: 'skipped',
+    };
+    const verdicts: Partial<Record<StepName, GateVerdict>> = {
+      build: VSAT,
+      manual_test: VSAT,
+      prd_audit: VSAT,
+      rebase: VSAT,
+      // no as-built verdict; it is pending but must be skipped
+    };
+    const d = selectNextGate(input(state, verdicts));
+    expect(d).toMatchObject({ kind: 'run', step: 'finish' });
+  });
+
+  it('skips architecture_review_as_built when architecture_review was skipped on Medium (config/when skip)', () => {
+    // Even on a tier where as-built is not tier-skipped, a skipped upstream
+    // architecture_review (config-disabled or when:-skipped) means no ADRs —
+    // skipWhenSkipped ties the as-built gate to the review.
+    const state: ConductState = {
+      ...frontDone(),
+      complexity_tier: 'M',
+      architecture_review: 'skipped',
+    };
+    const verdicts: Partial<Record<StepName, GateVerdict>> = {
+      build: VSAT,
+      manual_test: VSAT,
+      prd_audit: VSAT,
+      retro: VSAT,
+      rebase: VSAT,
+      // no as-built verdict; pending but tied to the skipped review
+    };
+    const d = selectNextGate(input(state, verdicts));
+    expect(d).toMatchObject({ kind: 'run', step: 'finish' });
+  });
+
+  it('runs architecture_review_as_built on Medium when architecture_review ran', () => {
+    const state: ConductState = {
+      ...frontDone(),
+      complexity_tier: 'M',
+      architecture_review: 'done',
+    };
+    const verdicts: Partial<Record<StepName, GateVerdict>> = {
+      build: VSAT,
+      manual_test: VSAT,
+      prd_audit: VSAT,
+      // as-built pending, review ran → as-built must run
+    };
+    const d = selectNextGate(input(state, verdicts));
+    expect(d).toMatchObject({ kind: 'run', step: 'architecture_review_as_built' });
+  });
+
   it('selects a stale step (no verdict) ahead of downstream work', () => {
     const state: ConductState = { ...frontDone(), plan: 'stale' };
     const d = selectNextGate(input(state));
