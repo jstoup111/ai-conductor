@@ -152,3 +152,51 @@ export async function memoryAdd(opts: {
 
   return { ok: true, changed };
 }
+
+/**
+ * Removes memory provider selection, returning the project to the `local` default.
+ *
+ * Idempotent: if `memory_provider` is already absent, the config file is left
+ * byte-for-byte unchanged and `{ ok: true }` is returned.
+ *
+ * Also unwires the provider's MCP server if it is in the registry and has an
+ * `mcp` descriptor. MCP unwiring errors are swallowed (best-effort).
+ */
+export async function memoryRemove(opts: {
+  projectRoot: string;
+  registry: PluginRegistry;
+  mcp: McpRunner;
+}): Promise<{ ok: boolean }> {
+  const { projectRoot, registry, mcp } = opts;
+
+  const raw = await readConfigRaw(projectRoot);
+  if (!raw) {
+    // No config file at all — already at default local, pure no-op.
+    return { ok: true };
+  }
+
+  const config = parseConfig(raw);
+
+  // Idempotent: already at local (no memory_provider key) → no file write.
+  if (!config.memory_provider) {
+    return { ok: true };
+  }
+
+  const activeProviderName = String(config.memory_provider);
+
+  // Best-effort MCP unwiring — never let this block the config removal.
+  const provider = registry.tryGet<MemoryProviderPlugin>('memory_provider', activeProviderName);
+  if (provider?.mcp) {
+    try {
+      await mcp(['remove', provider.mcp.name]);
+    } catch {
+      // Swallow: MCP unwiring failure must not prevent config cleanup.
+    }
+  }
+
+  // Remove the key and write the updated config.
+  delete config.memory_provider;
+  await writeFile(configFilePath(projectRoot), dumpYaml(config), 'utf8');
+
+  return { ok: true };
+}

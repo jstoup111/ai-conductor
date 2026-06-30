@@ -24,7 +24,7 @@ import { join, isAbsolute, resolve as resolvePath } from 'path';
 import { existsSync } from 'fs';
 import { ensureMemoryStore } from './memory-store.js';
 import { migrateMemory } from './memory-migrate.js';
-import { memoryStatus, memoryAdd, type McpRunner } from './memory-adopt.js';
+import { memoryStatus, memoryAdd, memoryRemove, type McpRunner } from './memory-adopt.js';
 import { PluginRegistry } from './plugin-registry.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -208,8 +208,18 @@ export async function dispatchMemoryAdopt(
       return 0;
     }
 
-    // remove is not yet implemented in this task slice.
-    printErr(`conduct memory ${d.kind}: not yet implemented`);
+    if (d.kind === 'remove') {
+      const mcp = opts.mcp ?? makeProductionMcp();
+      const result = await memoryRemove({ projectRoot, registry, mcp });
+      if (!result.ok) {
+        printErr(`conduct memory remove: failed`);
+        return 1;
+      }
+      print(`conduct memory remove: reset to local`);
+      return 0;
+    }
+
+    // TypeScript exhaustiveness — should never reach here at runtime.
     return 1;
   } catch (e) {
     printErr(`conduct memory: ${e instanceof Error ? e.message : String(e)}`);

@@ -14,7 +14,7 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { load as loadYaml } from 'js-yaml';
 import { PluginRegistry } from '../../src/engine/plugin-registry.js';
-import { memoryStatus, memoryAdd } from '../../src/engine/memory-adopt.js';
+import { memoryStatus, memoryAdd, memoryRemove } from '../../src/engine/memory-adopt.js';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -282,5 +282,43 @@ describe('B10: interrupted add re-runs cleanly', () => {
     const cfg = await readParsed(projectRoot);
     expect(cfg.memory_provider).toBe('double');
     expect(cfg.llm_provider).toBe('claude');  // unrelated key untouched
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// B11: memoryRemove — clears memory_provider; other config untouched
+// ═════════════════════════════════════════════════════════════════════════════
+describe('B11: memoryRemove clears provider', () => {
+  it('removes memory_provider from config; unrelated keys untouched', async () => {
+    await seedConfig(projectRoot, 'memory_provider: double\nllm_provider: claude\n');
+    const mcp = makeMcpStub();
+    mcp.registered.add('memory-double'); // pre-wire so the stub state is consistent
+    const reg = makeRegistry({
+      name: 'double',
+      mcp: { name: 'memory-double', command: 'mem-server', args: [] },
+    });
+
+    const result = await memoryRemove({ projectRoot, registry: reg, mcp: mcp.runner });
+
+    expect(result.ok).toBe(true);
+    const cfg = await readParsed(projectRoot);
+    expect(cfg.memory_provider ?? undefined).toBeUndefined();
+    expect(cfg.llm_provider).toBe('claude');   // other key intact
+  });
+
+  it('returns ok:true and memoryStatus returns local/default afterwards', async () => {
+    await seedConfig(projectRoot, 'memory_provider: double\nllm_provider: claude\n');
+    const mcp = makeMcpStub();
+    mcp.registered.add('memory-double');
+    const reg = makeRegistry({
+      name: 'double',
+      mcp: { name: 'memory-double', command: 'mem-server', args: [] },
+    });
+
+    await memoryRemove({ projectRoot, registry: reg, mcp: mcp.runner });
+
+    const status = await memoryStatus({ projectRoot, registry: reg });
+    expect(status.provider).toBe('local');
+    expect(status.source).toBe('default');
   });
 });
