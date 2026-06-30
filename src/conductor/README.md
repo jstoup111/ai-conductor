@@ -504,6 +504,38 @@ Key modules:
 - `engine/local-memory-provider.ts` — `LocalMemoryProvider` plugin object
 - `engine/memory-cli.ts` — `conduct memory setup` subcommand
 - `engine/config.ts` → `resolveMemoryProvider` — run-start provider resolution (adr-2026-06-29-per-project-memory-provider-selection)
+- `engine/memory-adopt.ts` — `adoptProvider`, `removeProvider` — adopt/remove flow: validates against plugin registry, cred/env check (atomic check-before-write; credentials never written to git-tracked config), MCP wiring via `claude mcp`
+- `engine/skill-resolver.ts` — `resolveMemoryGuidanceSkill` — selects provider-specific guidance `SKILL.md` or falls back to `skills/memory/SKILL.md` with a warning
+- `engine/memory-fallback.ts` — `persistMemory`, `listPendingReconcile`, `reconcilePending` — write-fallback to local store + pending-reconcile ledger
+
+#### Selecting / removing a non-default provider (Phase 1 — framework only)
+
+**`conduct memory add <provider>`** — adopts a provider: validates it against the plugin registry,
+writes `memory_provider: <provider>` to project config, and wires its MCP server via `claude mcp`.
+If the provider declares required credentials or environment variables that are missing, prints a
+clear notice and writes nothing (atomic check-before-write; credentials are never written to a
+git-tracked config file) (adr-2026-06-29-platform-adoption-and-removal-surface).
+
+**`conduct memory remove`** — clears the `memory_provider` selection and unwires the MCP server,
+returning the project to the `local` default.
+
+**`conduct memory status`** — reports the active provider and whether it came from project config
+or the built-in default.
+
+**Provider-specific guidance:** when a non-default provider is active and declares its own guidance
+skill, the harness resolves to that provider's `SKILL.md`; otherwise it falls back to
+`skills/memory/SKILL.md` with a single warning (`resolveMemoryGuidanceSkill` in
+`engine/skill-resolver.ts`) (adr-2026-06-29-memory-provider-plugin-and-agent-queried-integration).
+
+**Write-fallback + reconcile:** if the active platform is unavailable or rejects a write, the
+harness falls back to the local store, tags the entry `pending-reconcile` (never surfaced from
+the platform until reconciled), and a later `reconcilePending` drains the ledger to the platform
+exactly-once. Recall stays agent-driven — the harness never searches (`engine/memory-fallback.ts`).
+
+**Phase 1 caveat:** Phase 1 ships no concrete external provider. All validation runs against a
+test-double provider. In production, `conduct memory add <provider>` hits an empty default registry
+and returns "Provider not registered" until a future slice wires real providers. The `local` default
+is unchanged and needs no action.
 
 ### Engineer memory store (Phase 9.1)
 

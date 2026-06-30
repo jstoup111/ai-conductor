@@ -480,6 +480,11 @@ echo "llm_provider: my-provider" >> .ai-conductor/config.yml
 | `ui_renderer` | `terminal` | Default — ink-based live dashboard |
 | `memory_provider` | `local` | Default — shared canonical store at `~/.ai-conductor/memory/<key>/harness/` symlinked as `.memory/`; recall is agent-driven (no harness-side search) |
 
+Non-default providers are adopted with `conduct memory add <provider>` / removed with
+`conduct memory remove` / inspected with `conduct memory status`. Phase 1 ships no concrete
+external provider; the `local` default needs no action. See
+[`src/conductor/README.md`](src/conductor/README.md) for the full CLI and write-fallback details.
+
 **Plugin load rules:**
 
 - Manifest validation errors (invalid kind, bad name format) → plugin skipped with a warning; other plugins still load.

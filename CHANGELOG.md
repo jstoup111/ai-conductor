@@ -31,6 +31,16 @@ fi
 # Requires tmux on the host for the management verbs: e.g. `sudo apt-get install tmux`.
 ```
 
+The pluggable memory CLI (`conduct memory add|remove|status`) is purely additive and opt-in.
+The `local` default memory provider is unchanged and no action is required for existing projects.
+To confirm which provider is active on any project:
+
+```bash migration
+# No action required — the local default memory provider is unchanged.
+# Informational only: confirm the active provider on the current project.
+conduct-ts memory status
+```
+
 ### Changed
 
 - **`conduct-ts daemon start` now auto-attaches to the daemon's tmux session (conduct-ts).** After
@@ -117,6 +127,24 @@ fi
   reuse an existing PR (`gh pr view`) instead of failing. Skill docs updated to match.
 
 ### Added
+
+- **Pluggable memory — provider CLI surface (`conduct memory add|remove|status`).** Slice 1b adds
+  the selection layer on top of the `local` built-in: `conduct memory add <provider>` validates a
+  provider against the plugin registry, writes `memory_provider: <provider>` to project config, and
+  wires its MCP server via `claude mcp`; if required credentials/env are missing it prints a clear
+  notice and writes nothing (atomic check-before-write — credentials never touch a git-tracked config
+  file) (adr-2026-06-29-platform-adoption-and-removal-surface). `conduct memory remove` clears the
+  selection and unwires the MCP server. `conduct memory status` reports the active provider and its
+  source (config or built-in default). When a non-default provider is active and declares its own
+  guidance skill, the harness resolves to that provider's `SKILL.md`; otherwise it falls back to
+  `skills/memory/SKILL.md` with a single warning (`resolveMemoryGuidanceSkill` in
+  `engine/skill-resolver.ts`). Write-fallback + reconcile resilience: if the active platform is
+  unavailable or rejects a write, the harness falls back to the local store, tags the entry
+  `pending-reconcile`, and `reconcilePending` drains the ledger to the platform exactly-once later
+  (`engine/memory-fallback.ts`). **Phase 1 caveat:** no concrete external provider ships in this
+  slice — `conduct memory add <provider>` returns "Provider not registered" until a future slice
+  wires real providers; the `local` default is unchanged and requires no action.
+  (adr-2026-06-29-memory-provider-plugin-and-agent-queried-integration/adr-2026-06-29-per-project-memory-provider-selection)
 
 - **Daemon PR labeling — `needs-remediation` draft PR + `mergeable` label sweep (daemon-only).**
   On **any irrecoverable daemon HALT that strands committed work** — a build/gating-step failure
