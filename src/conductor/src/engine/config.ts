@@ -808,9 +808,10 @@ export interface MemoryResolveCtx {
  * Run-start resolver for the active memory provider (adr-2026-06-29-per-project-memory-provider-selection).
  *
  * Contract (total — never throws, never returns undefined):
- *   C1  absent / empty / non-string  →  local  (no warning)
- *   C2  valid name, installed        →  that provider  (no warning)
- *   C3  valid name, NOT installed    →  local  (one warning per bad name per run)
+ *   C1   absent / empty / non-string              →  local  (no warning)
+ *   C2a  valid name, installed, available          →  that provider  (no warning)
+ *   C2b  valid name, installed, unavailable/throw  →  local  (one warning per bad name per run)
+ *   C3   valid name, NOT installed                 →  local  (one warning per bad name per run)
  *
  * The resolver is PURE over `config`: all per-run state lives on `ctx`, so two
  * separate calls with different configs do not interfere (A10).
@@ -838,8 +839,18 @@ export async function resolveMemoryProvider(
   // C2a: named and installed and AVAILABLE → use it, no warning.
   // Probe: isAvailable?.() === false means EXPLICITLY unavailable.
   // No probe method (undefined !== false) → treat as available and return it.
-  if (found !== undefined && (found as { isAvailable?: () => boolean }).isAvailable?.() !== false) {
-    return found;
+  // A throwing probe is treated as unavailable (best-effort — contract: never throws).
+  if (found !== undefined) {
+    let probeResult: boolean | undefined;
+    try {
+      probeResult = (found as { isAvailable?: () => boolean }).isAvailable?.();
+    } catch {
+      // Throwing probe → treat as unavailable → fall through to C2b below.
+      probeResult = false;
+    }
+    if (probeResult !== false) {
+      return found;
+    }
   }
 
   // C2b: named and installed but UNAVAILABLE at run start → warn + fall back to local.

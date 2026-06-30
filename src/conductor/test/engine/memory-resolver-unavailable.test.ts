@@ -83,4 +83,29 @@ describe('B4: installed but unavailable at run start → warn + local, run conti
     expect(ctx.warnings[0]).toMatch(/unavailable/i);
     expect(ctx.warnings[0]).not.toMatch(/not installed/i);
   });
+
+  it('throwing isAvailable() does NOT crash the resolver — treated as unavailable (C2b)', async () => {
+    // A provider whose isAvailable() throws must be treated as unavailable:
+    // resolver must not propagate the exception (contract: total — never throws).
+    const throwingProvider = {
+      name: 'thrower',
+      isAvailable(): boolean {
+        throw new Error('probe exploded');
+      },
+    };
+    const registry = makeRegistry(throwingProvider as unknown as { name: string });
+    const ctx = { warnings: [] as string[] };
+
+    // Must resolve without throwing
+    const result = await resolveMemoryProvider(
+      { memory_provider: 'thrower' } as any,
+      registry,
+      ctx,
+    );
+
+    expect(result).toBe(LocalMemoryProvider);
+    // Exactly one warning: the throwing probe is treated as unavailable
+    expect(ctx.warnings).toHaveLength(1);
+    expect(ctx.warnings[0]).toMatch(/unavailable|local|fall/i);
+  });
 });

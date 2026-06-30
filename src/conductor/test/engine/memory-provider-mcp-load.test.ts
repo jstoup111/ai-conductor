@@ -48,7 +48,7 @@ mcp:
     // It is NOT the built-in local file store
     expect(provider).not.toBe(LocalMemoryProvider);
     // It carries the MCP server config the harness will wire
-    expect((provider as any).mcp).toMatchObject({ command: 'npx' });
+    expect(provider.mcp).toMatchObject({ command: 'npx' });
   });
 
   it('loads an MCP-backed provider with optional guidance field', () => {
@@ -69,7 +69,7 @@ guidance: skills/serena-memory/SKILL.md
 
     expect(provider.kind).toBe('memory_provider');
     expect(provider.name).toBe('serena-guided');
-    expect((provider as any).guidance).toBe('skills/serena-memory/SKILL.md');
+    expect(provider.guidance).toBe('skills/serena-memory/SKILL.md');
   });
 
   it('MCP-backed provider has isAvailable() defaulting to true', () => {
@@ -88,7 +88,7 @@ mcp:
     const provider = createMcpBackedMemoryProvider(manifest);
 
     // MCP-backed providers start as "available" until a probe says otherwise
-    expect(typeof (provider as any).isAvailable).toBe('function');
-    expect((provider as any).isAvailable()).toBe(true);
+    expect(typeof provider.isAvailable).toBe('function');
+    expect(provider.isAvailable()).toBe(true);
   });
 });
