@@ -5,6 +5,61 @@ import type { EnforcementLevel } from '../types/steps.js';
 import { getStepDefinition } from './steps.js';
 import type { StepName } from '../types/steps.js';
 
+// ─── Memory guidance skill resolution (FR-4) ──────────────────────────────────
+
+const DEFAULT_MEMORY_SKILL = 'skills/memory/SKILL.md';
+
+/** Minimal provider shape needed for guidance resolution. */
+interface MemoryProviderRef {
+  name: string;
+  kind: 'memory_provider';
+  guidance?: string;
+}
+
+/** Mutable context that accumulates non-fatal warnings during resolution. */
+export interface GuidanceResolutionCtx {
+  warnings: string[];
+}
+
+/** Result of resolving a memory guidance skill path. */
+export interface GuidanceSkillResolution {
+  path: string;
+}
+
+/**
+ * Resolve which guidance skill the memory step should surface to the agent,
+ * based on the active memory provider.
+ *
+ * Contract (FR-4, adr-2026-06-29-per-provider-retrieval-guidance-location):
+ *   - `local` provider        → default `skills/memory/SKILL.md`, no warning.
+ *   - non-local + guidance    → the declared guidance path, no warning.
+ *   - non-local, no guidance  → default path + exactly ONE warning on ctx.warnings.
+ *
+ * This function is total: it never throws.
+ */
+export async function resolveMemoryGuidanceSkill(opts: {
+  provider: MemoryProviderRef;
+  config: Record<string, unknown>;
+  projectRoot: string;
+  ctx: GuidanceResolutionCtx;
+}): Promise<GuidanceSkillResolution> {
+  const { provider, ctx } = opts;
+
+  if (provider.name === 'local') {
+    return { path: DEFAULT_MEMORY_SKILL };
+  }
+
+  if (provider.guidance) {
+    return { path: provider.guidance };
+  }
+
+  // Non-local provider with absent or empty guidance — degrade safely.
+  ctx.warnings.push(
+    `Provider "${provider.name}" declares no guidance skill; degrading to local default (${DEFAULT_MEMORY_SKILL})`,
+  );
+  return { path: DEFAULT_MEMORY_SKILL };
+}
+
 export interface ResolvedSkill {
   path: string;
   enforcement: EnforcementLevel;
