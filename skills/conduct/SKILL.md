@@ -81,7 +81,7 @@ Check for these artifacts in order. The **first missing artifact** determines th
 | 11. build | Implementation tasks completed with passing tests | Check `.pipeline/task-status.json` or test suite passes. Pipeline evaluator satisfies code-review gate. |
 | 12. manual-test | Manual test results exist with no FAILs, OR auto-skipped (non-endpoint feature) | Glob `.pipeline/manual-test-results.md` — if file contains FAIL rows, step is pending. **Auto-skip:** If no stories reference HTTP endpoints, API routes, or user-facing UI, skip `/manual-test` and log reason. For internal components (services, background jobs, mailers, CI config), suggest Rails console or script-based smoke test instead. |
 | 13. prd-audit | Fresh PRD audit exists with every FR ALIGNED (or human-ACCEPTED) | Glob `.pipeline/prd-audit.md` — if any verdict-table row carries an `FR-N` id with `MISSING`/`PARTIAL`/`DIVERGED` and is not `ACCEPTED`, step is pending. |
-| 14. architecture-review-as-built | Fresh as-built review exists with verdict not BLOCKED | Glob `.pipeline/architecture-review-as-built.md` — if the `Verdict:` line is `BLOCKED`, step is pending. |
+| 14. architecture-review-as-built | Fresh as-built review with a clean APPROVED verdict, OR skipped (Small tier / architecture_review skipped) | Glob `.pipeline/architecture-review-as-built.md` — **fail-closed**: step is satisfied only when the `Verdict:` line is `APPROVED` or `APPROVED WITH DRIFT NOTES`; `BLOCKED`, a missing verdict, or any unrecognized verdict means pending. Auto-skipped when `architecture_review` was skipped (no ADRs to audit). |
 | 15. retro | Retro report exists in `.docs/retros/` OR skipped (Small tier) | Glob `.docs/retros/*.md` or check state is "skipped" |
 | 16. finish | User chose a completion option | Step is "done" in state (`pr_url` saved if Option 2 chosen) |
 
@@ -241,9 +241,14 @@ Before suggesting the next step, verify that the previous step's **quality gates
   autonomously. See `src/conductor/README.md` → "Daemon prd-audit routing".
 
 **After architecture-review --as-built (before suggesting retro):**
-- Open the as-built report (`.pipeline/architecture-review-as-built.md`)
+- This gate is **skipped** when `architecture_review` was skipped (Small tier, or a config/`when:`
+  skip) — no APPROVED ADRs means nothing to audit. Don't run or block on it in that case.
+- Otherwise open the as-built report (`.pipeline/architecture-review-as-built.md`). The gate is
+  **fail-closed**: it passes ONLY on a clean `APPROVED` / `APPROVED WITH DRIFT NOTES` verdict.
 - If the verdict is BLOCKED (shipped code violates an APPROVED ADR), BLOCK
 - Say: "As-built review blocked — code violates [ADR slug]. Fix the code or supersede the ADR (human-approved), then re-run `/architecture-review --as-built`."
+- If the report has no recognizable `APPROVED`/`BLOCKED` verdict (e.g. a confused review with no
+  ADRs), BLOCK and re-run — never treat a missing/garbled verdict as a pass.
 
 **When pipeline reports task failure:** Verify by running tests before escalating or
 re-dispatching. JSON state can become stale — the actual test suite is the source of truth.
@@ -278,7 +283,7 @@ See `src/conductor/README.md` → "PR labeling".
 | build | No (structural) | This is the implementation |
 | code-review | Tier-dependent | Skip for Small (domain review suffices), required for Medium/Large |
 | prd-audit | No (gating) | Shipped impl must be verified against the PRD's FRs before ship |
-| architecture-review-as-built | No (gating) | Shipped code must be verified against APPROVED ADRs before ship |
+| architecture-review-as-built | Auto-skip only | Gating when it runs, but auto-skipped when `architecture_review` was skipped (Small tier / config / `when:`) — no APPROVED ADRs to audit. Cannot be skipped manually otherwise. |
 | finish | No (gating) | Fresh verification required |
 | retro | Tier-dependent | Skip for Small, recommended for Medium/Large |
 

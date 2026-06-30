@@ -86,6 +86,18 @@ fi
 
 ### Fixed
 
+- **The SHIP `architecture_review_as_built` gate no longer runs when architecture was skipped, and
+  is now fail-closed.** On a Small-tier feature the DECIDE-phase `architecture_diagram` +
+  `architecture_review` are skipped (no ADRs), but the as-built compliance gate still ran — auditing
+  shipped code against APPROVED ADRs that never existed. Its completion predicate was also
+  fail-**open**: it passed on any verdict that wasn't the literal word `BLOCKED`, so a confused
+  no-ADR review marked the step `done` and the daemon loop ended without a `DONE` or `HALT` marker
+  (classified `error`, worktree stranded). Two fixes: (1) `architecture_review_as_built` now skips
+  whenever `architecture_review` was skipped — `skippableForTiers: ['S']` plus a new declarative
+  `skipWhenSkipped: 'architecture_review'` that also covers config-disable / `when:` skips on
+  Medium/Large; (2) the predicate is now **fail-closed** — it passes only on an explicit `APPROVED`
+  / `APPROVED WITH DRIFT NOTES` verdict and stays unsatisfied (→ proper HALT) on `BLOCKED`, a
+  missing `Verdict:` line, or any unrecognized verdict. Observed on `jstoup111/random-number-api`.
 - **`/finish` now refuses a mid-rebase/mid-merge tree (skill GATE 0).** A `/finish` dispatched on a
   worktree with a paused rebase (e.g. `conduct-state` marked `rebase` done but the tree was still
   mid-conflict) would grind for ~15 minutes and then push a PR of a detached, half-rebased branch.

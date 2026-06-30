@@ -150,7 +150,11 @@ describe('engine/steps', () => {
       expect(s.phase).toBe('SHIP');
       expect(s.enforcement).toBe('gating');
       expect(s.prerequisites).toEqual(['prd_audit']);
-      expect(s.skippableForTiers).toEqual([]);
+      // Skipped for Small (no ADRs) and tied to the DECIDE-phase review: if
+      // architecture_review was skipped for any reason, there is nothing to
+      // audit, so the as-built sweep skips too.
+      expect(s.skippableForTiers).toEqual(['S']);
+      expect(s.skipWhenSkipped).toBe('architecture_review');
       expect(s.isCheckpoint).toBe(false);
       expect(s.loopGate).toBe(true);
       // Runs the existing architecture-review skill in --as-built mode.
@@ -295,11 +299,11 @@ describe('engine/steps', () => {
   // --- getSkippableSteps ---
 
   describe('getSkippableSteps', () => {
-    it('returns 5 steps for S tier', () => {
+    it('returns 6 steps for S tier', () => {
       const result = getSkippableSteps('S');
       expect(result).toEqual([
         'conflict_check', 'architecture_diagram', 'architecture_review',
-        'acceptance_specs', 'retro',
+        'acceptance_specs', 'architecture_review_as_built', 'retro',
       ]);
     });
 

@@ -35,6 +35,7 @@ import {
   ALL_STEPS,
   buildStepRegistry,
   shouldSkipForBootstrapMode,
+  shouldSkipForUpstreamSkip,
 } from './steps.js';
 import { checkGate } from './gates.js';
 import {
@@ -521,6 +522,19 @@ export class Conductor {
             mode: state.bootstrap_mode!,
             reason: `bootstrap mode '${state.bootstrap_mode}' — no codebase to act on`,
           });
+          continue;
+        }
+
+        // Skip a step whose declared upstream dependency was itself skipped —
+        // e.g. architecture_review_as_built when architecture_review (and its
+        // ADRs) were skipped, so the as-built compliance sweep has nothing to
+        // audit. Without this the as-built review ran against APPROVED ADRs
+        // that never existed and produced a non-clean verdict the loop could
+        // neither pass cleanly nor halt on.
+        if (shouldSkipForUpstreamSkip(step, state)) {
+          await saveStepStatus(this.stateFilePath, step.name, 'skipped');
+          state[step.name] = 'skipped';
+          await this.events.emit({ type: 'config_skip', step: step.name });
           continue;
         }
 
@@ -1334,11 +1348,15 @@ export class Conductor {
     // ever marking it.
     let markedSkip = false;
     const tier = state.complexity_tier ?? 'L';
+    // Steps are in topological order, so an upstream step's `skipped` mark is
+    // already in `state` before a step that depends on it via skipWhenSkipped
+    // is evaluated in this same pass (e.g. architecture_review → as_built).
     for (const s of steps) {
       if (
         getStepStatus(state, s.name) === 'pending' &&
         (s.skippableForTiers.includes(tier) ||
-          shouldSkipForBootstrapMode(s.name, state.bootstrap_mode))
+          shouldSkipForBootstrapMode(s.name, state.bootstrap_mode) ||
+          shouldSkipForUpstreamSkip(s, state))
       ) {
         (state as Record<string, unknown>)[s.name] = 'skipped';
         markedSkip = true;

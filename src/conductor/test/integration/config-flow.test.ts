@@ -73,12 +73,15 @@ describe('Integration: config flow', () => {
     // Disabled steps should not appear in runner calls
     expect(runner.calls).not.toContain('retro');
     expect(runner.calls).not.toContain('architecture_review');
+    // Disabling architecture_review also skips the as-built sweep (no ADRs to
+    // audit) via skipWhenSkipped — even on L tier where it isn't tier-skipped.
+    expect(runner.calls).not.toContain('architecture_review_as_built');
 
-    // All other steps should have run: 17 total - 2 disabled - 3 engine-managed
-    // (complexity + worktree + rebase, not dispatched to runner.run) = 12.
-    // The two SHIP compliance gates (prd_audit, architecture_review_as_built)
-    // are dispatched skills, so they count toward runner.calls.
-    expect(runner.calls).toHaveLength(12);
+    // All other steps should have run: 17 total - 2 disabled - 1 cascade-skipped
+    // (architecture_review_as_built) - 3 engine-managed (complexity + worktree +
+    // rebase, not dispatched to runner.run) = 11. prd_audit still runs (the PRD
+    // exists regardless of the architecture review).
+    expect(runner.calls).toHaveLength(11);
 
     // Verify final state marks disabled steps as 'skipped'
     const result = await readState(statePath);
@@ -87,18 +90,21 @@ describe('Integration: config flow', () => {
 
     expect(result.value.retro).toBe('skipped');
     expect(result.value.architecture_review).toBe('skipped');
+    expect(result.value.architecture_review_as_built).toBe('skipped');
 
     // Non-disabled steps should be 'done'
     expect(result.value.build).toBe('done');
     expect(result.value.finish).toBe('done');
     expect(result.value.feature_status).toBe('complete');
 
-    // config_skip events emitted for each disabled step
+    // config_skip events emitted for each disabled step, plus the cascade-skip
+    // of architecture_review_as_built (skipWhenSkipped → also a config_skip).
     const skipEvents = collectedEvents.filter((e) => e.type === 'config_skip');
-    expect(skipEvents).toHaveLength(2);
+    expect(skipEvents).toHaveLength(3);
     const skippedSteps = skipEvents.map((e) => (e as { step: string }).step);
     expect(skippedSteps).toContain('retro');
     expect(skippedSteps).toContain('architecture_review');
+    expect(skippedSteps).toContain('architecture_review_as_built');
   });
 
   it('Conductor with custom step executes it at correct position', () => {

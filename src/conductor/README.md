@@ -127,10 +127,18 @@ and **`architecture_review_as_built`** (shipped code vs APPROVED ADRs) — sit b
 `manual_test` and `retro`. Both are `loopGate: true`, so they inherit the verdict/selector/
 kickback machinery above for free. Their objective verdicts come from
 `CUSTOM_COMPLETION_PREDICATES`: `prd_audit` stays unsatisfied while any audit-table row carries a
-non-`ALIGNED`, un-`ACCEPTED` `FR-N`; `architecture_review_as_built` stays unsatisfied while its
-`Verdict:` is `BLOCKED`. An unsatisfied gate keeps the selector from reaching `finish`; the
-skill guidance drives where the rework lands (BUILD vs DECIDE for prd-audit; human fix vs
-superseding ADR for as-built).
+non-`ALIGNED`, un-`ACCEPTED` `FR-N`; `architecture_review_as_built` is **fail-closed** — it is
+satisfied only by an explicit clean `Verdict:` of `APPROVED` or `APPROVED WITH DRIFT NOTES`, and
+stays unsatisfied for `BLOCKED`, a missing `Verdict:` line, or any unrecognized verdict (so a
+no-ADR / garbled review can't slip through marked `done`). An unsatisfied gate keeps the selector
+from reaching `finish`; the skill guidance drives where the rework lands (BUILD vs DECIDE for
+prd-audit; human fix vs superseding ADR for as-built).
+
+`architecture_review_as_built` also **skips when `architecture_review` was skipped** — for the
+Small tier (both share `skippableForTiers: ['S']`) and, via `skipWhenSkipped: 'architecture_review'`,
+whenever the DECIDE-phase review was skipped for any reason (config-disable / `when:`). With no
+APPROVED ADRs there is nothing to audit, so running it would only produce a non-clean verdict the
+loop could neither pass cleanly nor halt on.
 
 **Daemon prd-audit routing (gap-class aware).** In an interactive run a blocking `prd_audit`
 escalates to the recovery menu, where the human picks where to route. In a **daemon** run
