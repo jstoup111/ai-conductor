@@ -20,6 +20,13 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   non-destructive: an existing repo, existing history, or a pre-configured remote is left
   untouched, and a rejected push (remote already has commits) stops for the user instead of
   forcing. When no remote is available the step is skipped with a note rather than blocking.
+- Approved DECIDE spec for **Engineer Worktree Isolation** (`.docs/specs/`, `stories/`, `plans/`,
+  `complexity/`, `conflicts/`, `architecture/`, plus `adr-2026-06-30-engineer-worktree-authoring-isolation.md`
+  and its architecture-review). Specifies moving the engineer's idea→spec authoring (DECIDE + `land`
+  + `handoff`) off the target repo's shared main checkout and into a per-idea git worktree — reusing
+  the daemon's worktree mechanism — so a running daemon or a second session on the same target repo
+  can't be corrupted by the engineer's branch-switch dance. Spec only; no engine code changed yet.
+  Amends ADR-008 (adopts its deferred Option B for same-repo concurrency).
 
 ### Fixed
 
