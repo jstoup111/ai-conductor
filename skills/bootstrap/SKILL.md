@@ -46,7 +46,10 @@ never breaks the flow.
 3. Install dependencies, add test framework if missing (rspec-rails, jest, pytest)
 4. Configure database — detect port conflicts before writing docker-compose.yml
 5. Set up .gitignore before first commit (vendor/bundle, node_modules, tmp, log)
-6. Initialize git if not already a repo
+6. Initialize git if not already a repo: `git init -b main` (force the default
+   branch to `main` even on older git that defaults to `master`). The seed
+   commit, remote wiring, and first push are handled later in Step 10a — after
+   the smoke test — so the initial commit captures a working scaffold.
 
 **Worktree Compatibility:** All infrastructure must support parallel worktrees sharing
 a single set of Docker services. See Step 1c for the `.env` boundary pattern that enforces this.
@@ -365,6 +368,63 @@ project from the current working directory. Idempotent — skip if already regis
 Verify the project works: database connects, test framework runs, app loads without errors.
 Report failures before proceeding — a broken foundation wastes all downstream effort.
 
+### 10a. Initialize Git, Configure Remote & First Push
+
+Applies to **new** and **fresh** projects. Skip for `partial`/`re-bootstrap` —
+those already have history and a remote. Run AFTER the smoke test (Step 10) so the
+seed commit captures a scaffold that actually boots.
+
+1. **Repo + default branch.** Confirm the repo exists
+   (`git rev-parse --is-inside-work-tree`); if not, `git init -b main`. Ensure the
+   current branch is the default name (`main`, unless the operator's
+   `init.defaultBranch` git config says otherwise) — on older git that started on
+   `master`, rename with `git branch -m main`.
+
+2. **Seed commit (only if there is no history yet).** If `git rev-parse HEAD`
+   fails (no commits), stage everything honoring `.gitignore` and make ONE initial
+   commit. Never amend, re-commit, or rewrite an existing history.
+   ```bash
+   git add -A
+   git commit -m "chore: initial project scaffold (harness bootstrap)"
+   ```
+   If a commit already exists (a `fresh` project that came with history), skip the
+   seed commit and keep its history intact.
+
+3. **Remote (`origin`).** Check `git remote get-url origin`:
+   - **Already set** — leave it untouched. Never rewrite a remote the user configured.
+   - **Missing, and `gh` is authenticated** (`gh auth status` exits 0) — offer to
+     create a GitHub repo and wire `origin` in one step. Confirm the repo name
+     (default: the project directory name) and visibility (**private** by default):
+     ```bash
+     gh repo create <name> --private --source=. --remote=origin
+     ```
+     `--source=.` attaches `origin` to this repo without pushing yet.
+   - **Missing, no `gh`** (or the user declines GitHub) — ask for a remote URL. If
+     given: `git remote add origin <url>`. If the user has no remote yet, skip the
+     remote and push, and note it — the repo is fully valid locally and a remote can
+     be added later. Do not block bootstrap on this.
+   - **Auto mode** — if `gh` is authenticated, create a **private** repo named after
+     the directory without prompting; otherwise skip remote + push (never block).
+
+4. **Push & set upstream** — only when an `origin` remote exists:
+   ```bash
+   git push -u origin main
+   ```
+   `-u` records the upstream so later `git push`/`git pull` and `gh pr create` work
+   without extra flags. If the push is **rejected** because the remote already has
+   commits (the user pointed `origin` at a non-empty repo), do NOT force — stop and
+   surface it for the user to reconcile.
+
+5. **Verify.** `git remote -v` lists `origin`,
+   `git rev-parse --abbrev-ref --symbolic-full-name @{u}` resolves to `origin/main`,
+   and `git status` is clean.
+
+**Branch-policy note:** this seed commit on `main` is the one sanctioned
+direct-to-`main` commit — a brand-new repo has no branch to PR into. From here on,
+all harness work happens on feature branches/worktrees and merges via PR (HARNESS.md
+branch policy). The pre-PR lint hook (Step 3d-ii) and a remote are now both in place,
+so the very first feature can open a PR end-to-end.
+
 ### 10b. Auto-Register in the Project Registry
 
 After onboarding completes, register this project in the harness project registry
@@ -410,6 +470,9 @@ bootstrap is safe: the same canonical path resolves to one record.
 - [ ] `.pipeline/`, `.daemon/`, `.worktrees/`, `.env`, and `.env.local` added to `.gitignore`
 - [ ] Process manager detected (or noted as absent)
 - [ ] Smoke test passed
+- [ ] Git initialized on `main` with a seed commit (new/fresh projects)
+- [ ] `origin` remote configured via `gh repo create` or a user-provided URL — or explicitly skipped with a note (new/fresh projects)
+- [ ] First push set upstream to `origin/main` when a remote exists (new/fresh projects)
 - [ ] Project auto-registered via `conduct register .` (idempotent; honors `$AI_CONDUCTOR_REGISTRY`)
 - [ ] Architecture diagrams generated in `.docs/architecture/`
 - [ ] MCP integration offered

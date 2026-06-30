@@ -10,6 +10,17 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ## [Unreleased]
 
+### Added
+
+- `/bootstrap` now sets up git end-to-end for **new/fresh** projects (new Step 10a, run after
+  the smoke test). It forces the default branch to `main`, makes a single seed commit when there
+  is no history yet, configures an `origin` remote (`gh repo create --private --source=.` when
+  `gh` is authenticated, or a user-provided URL otherwise), and pushes with `-u` to set the
+  upstream — so the first feature can open a PR end-to-end. Every action is idempotent and
+  non-destructive: an existing repo, existing history, or a pre-configured remote is left
+  untouched, and a rejected push (remote already has commits) stops for the user instead of
+  forcing. When no remote is available the step is skipped with a note rather than blocking.
+
 ### Fixed
 
 - Daemon `needs-remediation` escalation now **upserts** its failure comment instead of
