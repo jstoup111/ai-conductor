@@ -14,7 +14,7 @@ sequenceDiagram
   participant GH as GitHub (gh)
   participant LED as ledger (.engineer/ledger.json)
   participant Q as IntakeQueue (.engineer/inbox)
-  participant LOOP as engineer loop
+  participant ELoop as engineer loop
 
   Note over Op,GH: Capture (poll-on-launch OR `engineer poll`)
   Op->>CLI: launch (or cron: engineer poll)
@@ -29,20 +29,20 @@ sequenceDiagram
     GHA-->>CLI: skip (idempotent pull — captured exactly once)
   end
 
-  Note over CLI,LOOP: Process (interactive, one idea per session)
+  Note over CLI,ELoop: Process (interactive, one idea per session)
   CLI->>Q: claim() oldest
   Q-->>CLI: Envelope (claimed) -- or empty → fall back to chat
-  CLI->>LOOP: route → DECIDE → open spec PR
-  LOOP->>GHA: report(routed,{repo})
-  GHA->>GH: comment "Routed to <repo>"
-  LOOP->>GHA: report(done,{prUrl})
-  GHA->>GH: comment "Spec PR opened: <url>" + apply engineer:handled
-  LOOP->>Q: ack() → done
-  LOOP->>LED: mark done {prUrl}
+  CLI->>ELoop: route → DECIDE → open spec PR
+  ELoop->>GHA: report(routed,{repo})
+  GHA->>GH: comment "Routed to «repo»"
+  ELoop->>GHA: report(done,{prUrl})
+  GHA->>GH: comment "Spec PR opened: «url»" + apply engineer:handled
+  ELoop->>Q: ack() → done
+  ELoop->>LED: mark done {prUrl}
 
   Note over Op,LED: Re-eligibility (next poll)
   CLI->>GHA: poll() (later)
-  GHA->>GH: pr view <prUrl> --json state,mergedAt
+  GHA->>GH: pr view «prUrl» --json state,mergedAt
   alt spec PR CLOSED & not merged & attempts<2
     GHA->>GH: remove engineer:handled
     GHA->>LED: reset unseen, attempts++

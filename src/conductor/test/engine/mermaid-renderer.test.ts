@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   extractMermaidBlocks,
   renderDiagramsForFile,
+  checkDiagramsForFile,
   detectOpenerCommand,
   mmdcArgs,
   needsNoSandbox,
@@ -67,6 +68,76 @@ describe('extractMermaidBlocks', () => {
 
   it('returns empty for content with no mermaid fence', () => {
     expect(extractMermaidBlocks(NO_DIAGRAM_MD)).toEqual([]);
+  });
+
+  it('ignores a mid-sentence prose mention of ```mermaid (fence must start a line)', () => {
+    const prose =
+      'Reads the fenced ```mermaid sources. Empty → no-op.\n\n' +
+      'Later: if it contains a ```mermaid fence, render it.\n';
+    expect(extractMermaidBlocks(prose)).toEqual([]);
+  });
+
+  it('matches an indented fenced block (e.g. inside a list item)', () => {
+    const indented = '- item:\n  ```mermaid\n  graph TD\n    A --> B\n  ```\n';
+    expect(extractMermaidBlocks(indented)).toHaveLength(1);
+  });
+});
+
+describe('checkDiagramsForFile', () => {
+  type CheckDeps = Pick<RenderDeps, 'hasTool' | 'runMmdc' | 'writeTemp'>;
+  const baseDeps = (overrides: Partial<CheckDeps> = {}): CheckDeps => ({
+    hasTool: async () => true,
+    runMmdc: async () => ({ ok: true }),
+    writeTemp: async (name) => `/tmp/check/${name}`,
+    ...overrides,
+  });
+
+  it('returns no-diagrams when the file has no mermaid blocks', async () => {
+    const r = await checkDiagramsForFile(NO_DIAGRAM_MD, baseDeps());
+    expect(r.status).toBe('no-diagrams');
+    expect(r.total).toBe(0);
+  });
+
+  it('returns ok when every block renders', async () => {
+    const r = await checkDiagramsForFile(DIAGRAM_MD, baseDeps());
+    expect(r.status).toBe('ok');
+    expect(r.total).toBe(2);
+    expect(r.failures).toEqual([]);
+  });
+
+  it('returns tool-missing (skip, not fail) when mmdc is absent', async () => {
+    const r = await checkDiagramsForFile(DIAGRAM_MD, baseDeps({ hasTool: async () => false }));
+    expect(r.status).toBe('tool-missing');
+    // No blocks were run — nothing to report as a failure.
+    expect(r.failures).toEqual([]);
+  });
+
+  it('reports per-block failures with the renderer error (1-based index)', async () => {
+    const r = await checkDiagramsForFile(
+      DIAGRAM_MD,
+      baseDeps({
+        runMmdc: async (input) =>
+          input.includes('-2.mmd')
+            ? { ok: false, error: 'Parse error on line 2: bad token' }
+            : { ok: true },
+      }),
+    );
+    expect(r.status).toBe('errors');
+    expect(r.failures).toEqual([{ index: 2, error: 'Parse error on line 2: bad token' }]);
+  });
+
+  it('records a thrown writeTemp/runMmdc as that block\'s failure (never throws)', async () => {
+    const r = await checkDiagramsForFile(
+      DIAGRAM_MD,
+      baseDeps({
+        runMmdc: async () => {
+          throw new Error('boom');
+        },
+      }),
+    );
+    expect(r.status).toBe('errors');
+    expect(r.failures).toHaveLength(2);
+    expect(r.failures[0]).toMatchObject({ index: 1, error: 'boom' });
   });
 });
 

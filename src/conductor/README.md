@@ -189,6 +189,12 @@ a *visual* (not raw Mermaid), the artifact-review path renders them:
   hook and logs any returned notice on the host's own channel (TUI-safe). `index.ts` wires the
   hook from the **merged** config (the preset is set user-level by `bin/install`).
 - **CLI** — `conduct render-diagrams <file>...` (`engine/render-cli.ts`) renders on demand.
+- **Syntax check** — `conduct render-diagrams --check <file>...` parse-checks every Mermaid block
+  (via `checkDiagramsForFile`, without opening anything) and **exits non-zero on a syntax error**,
+  printing the file/block/parse-error line. Unlike the render path's never-fail approval-gate
+  contract, the check DISTINGUISHES an author error (`errors` → fail) from a missing tool
+  (`tool-missing` → skip, exit 0), so it's a real authoring-time gate that still no-ops on a
+  browser-less CI box. The `architecture-diagram` skill runs it before the approval gate.
 - **Opener** — `detectOpenerCommand` resolves per platform (macOS `open`, Linux `xdg-open`,
   WSL `wslview`/`explorer.exe`); `defaultRenderDeps` runs it with a bounded timeout so the
   never-block contract rests on code, not opener behavior.
