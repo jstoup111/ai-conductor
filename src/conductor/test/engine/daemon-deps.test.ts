@@ -88,7 +88,14 @@ describe('engine/daemon-deps', () => {
       });
     }
     // Route git subcommands; `addCalls` records every `worktree add`.
-    function routeGit(opts: { worktreeListed: boolean; branchExists: boolean }) {
+    // `originRefExists` controls whether `git rev-parse --verify origin/main`
+    // resolves — i.e. whether the remote-tracking base is available.
+    function routeGit(opts: {
+      worktreeListed: boolean;
+      branchExists: boolean;
+      originRefExists?: boolean;
+    }) {
+      const originRefExists = opts.originRefExists ?? true;
       const path = join(dir, '.worktrees', slug);
       const addCalls: string[][] = [];
       mockExeca.mockImplementation((async (...callArgs: unknown[]) => {
@@ -99,6 +106,11 @@ describe('engine/daemon-deps', () => {
         if (args[0] === 'show-ref') {
           if (opts.branchExists) return { stdout: '' };
           throw new Error('no ref');
+        }
+        if (args[0] === 'rev-parse') {
+          // resolveWorktreeBase: succeed only when origin/<base> is present.
+          if (originRefExists) return { stdout: 'deadbeef' };
+          throw new Error('fatal: Needed a single revision');
         }
         if (args[0] === 'worktree' && args[1] === 'add') {
           addCalls.push(args);
@@ -111,12 +123,29 @@ describe('engine/daemon-deps', () => {
 
     beforeEach(() => mockExeca.mockReset());
 
-    it('creates a fresh branch+worktree when neither exists', async () => {
+    it('creates a fresh branch+worktree off origin/<base> when neither exists', async () => {
       const { addCalls } = routeGit({ worktreeListed: false, branchExists: false });
       const wt = await deps(dir).createWorktree(slug);
       expect(wt.branch).toBe(`feat/daemon-${slug}`);
       expect(addCalls).toHaveLength(1);
-      expect(addCalls[0]).toContain('-b'); // fresh: -b <branch> <path> main
+      expect(addCalls[0]).toContain('-b'); // fresh: -b <branch> <path> origin/main
+      // Forks from the remote-tracking tip, NOT local main, so the build starts
+      // from the latest fetched origin even when the root drifted off main.
+      expect(addCalls[0]).toContain('origin/main');
+      expect(addCalls[0]).not.toContain('main'); // bare 'main' is never the base now
+    });
+
+    it('falls back to local <base> when origin/<base> is unresolvable (local-only repo)', async () => {
+      const { addCalls } = routeGit({
+        worktreeListed: false,
+        branchExists: false,
+        originRefExists: false,
+      });
+      await deps(dir).createWorktree(slug);
+      expect(addCalls).toHaveLength(1);
+      expect(addCalls[0]).toContain('-b');
+      expect(addCalls[0]).toContain('main'); // fell back to local main
+      expect(addCalls[0]).not.toContain('origin/main');
     });
 
     it('reuses an already-registered worktree (resume) without adding', async () => {

@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { parseArgs, createProgram, detectInline, renderFullHelp } from '../../src/cli.js';
+import {
+  parseArgs,
+  createProgram,
+  detectInline,
+  renderFullHelp,
+  renderDaemonHelp,
+} from '../../src/cli.js';
 
 describe('CLI', () => {
   it('parses feature description as positional arg', () => {
@@ -146,6 +152,11 @@ describe('CLI', () => {
         'conduct engineer handoff',
         'conduct daemon status',
         'conduct daemon logs',
+        'conduct daemon start',
+        'conduct daemon stop',
+        'conduct daemon restart',
+        'conduct daemon connect',
+        'conduct daemon debug',
       ]) {
         expect(help).toContain(path);
       }
@@ -162,6 +173,19 @@ describe('CLI', () => {
     it('omits the auto-generated `help [command]` as its own section', () => {
       expect(help).not.toContain('conduct help');
       expect(help).not.toContain('conduct engineer help');
+    });
+  });
+
+  // `conduct daemon --help` renders the daemon subtree only (run flags + every
+  // sub-verb), answered WITHOUT launching a daemon run.
+  describe('renderDaemonHelp (daemon subtree reference)', () => {
+    const help = renderDaemonHelp();
+
+    it('documents the run flags and all sub-verbs (status/logs + management)', () => {
+      expect(help).toContain('--concurrency');
+      for (const verb of ['status', 'logs', 'start', 'stop', 'restart', 'connect', 'debug']) {
+        expect(help).toContain(`conduct daemon ${verb}`);
+      }
     });
   });
 

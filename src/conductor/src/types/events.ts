@@ -131,4 +131,23 @@ export type ConductorEvent =
       type: 'rebase_conflict_halt';
       reason: string;
       conflicts: string[];
+    }
+  // ── Rebase auto-resolution lifecycle (Phase 9 / rebase-resolution) ──
+  | {
+      /** One attempt at auto-resolving a conflict; index is 1-based, cap is the total budget. */
+      type: 'rebase_resolution_attempt';
+      index: number;
+      cap: number;
+    }
+  | {
+      /** The conflict was successfully resolved by the auto-resolver. */
+      type: 'rebase_resolution_succeeded';
+    }
+  | {
+      /** A single resolution attempt failed; the engine may retry up to cap. */
+      type: 'rebase_resolution_failed';
+    }
+  | {
+      /** All resolution attempts exhausted without success — feature is halted. */
+      type: 'rebase_resolution_exhausted';
     };

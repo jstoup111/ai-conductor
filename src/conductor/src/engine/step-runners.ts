@@ -15,6 +15,7 @@ import {
   hasInsufficientInfo,
   type Signal,
 } from './complexity.js';
+import type { ResolutionContext, ResolutionAttempt } from './rebase.js';
 
 const STEP_PROMPTS: Record<StepName, string> = {
   bootstrap: '/bootstrap',
@@ -188,6 +189,49 @@ function assessTierPartial(
   );
   const order: Record<ComplexityTier, number> = { S: 0, M: 1, L: 2 };
   return candidates.reduce((a, b) => (order[b] > order[a] ? b : a));
+}
+
+/**
+ * Parse the last `{"resolved": ...}` JSON object from the rebase skill's
+ * stdout. The skill contract requires the final line of output to be one of:
+ *   {"resolved": true}
+ *   {"resolved": false, "reason": "..."}
+ *
+ * Scans lines from the end for the last parseable object with a boolean
+ * `resolved` field. Returns `{resolved: false, reason: '...'}` when no such
+ * object is found — NEVER returns `{resolved: true}` on garbage output.
+ */
+export function parseRebaseResolutionOutput(output: string): ResolutionAttempt {
+  if (!output || output.trim().length === 0) {
+    return { resolved: false, reason: 'rebase skill returned no parseable result' };
+  }
+  const lines = output.split('\n');
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i].trim();
+    if (!line.startsWith('{')) continue;
+    try {
+      const parsed: unknown = JSON.parse(line);
+      if (
+        parsed !== null &&
+        typeof parsed === 'object' &&
+        'resolved' in parsed &&
+        typeof (parsed as Record<string, unknown>).resolved === 'boolean'
+      ) {
+        const obj = parsed as Record<string, unknown>;
+        if (obj.resolved === true) {
+          return { resolved: true };
+        }
+        const reason =
+          typeof obj.reason === 'string' && obj.reason.length > 0
+            ? obj.reason
+            : 'unspecified';
+        return { resolved: false, reason };
+      }
+    } catch {
+      // Not valid JSON — try the previous line.
+    }
+  }
+  return { resolved: false, reason: 'rebase skill returned no parseable result' };
 }
 
 export interface StepRunnerOptions {
@@ -472,6 +516,57 @@ export class DefaultStepRunner implements StepRunner {
     const scored = scoreComplexityFromCounts(counts);
     if (scored) return scored;
     return parseTierFromOutput(result.output);
+  }
+
+  /**
+   * Dispatch the `rebase` skill in print mode to resolve a paused rebase
+   * conflict in the feature worktree and parse its structured JSON result.
+   *
+   * Uses a fresh session (never resumes the main conductor session) and runs
+   * with cwd set to ctx.projectRoot so the skill operates in the right worktree.
+   * Model and effort are resolved from the `rebase` step config (default: opus/high —
+   * conflict resolution is semantic merge judgment, not deterministic git work).
+   *
+   * Returns `{resolved: true}` when the skill signals success, or
+   * `{resolved: false, reason}` on failure or when stdout contains no
+   * parseable `{resolved:...}` JSON — NEVER returns `{resolved: true}` on
+   * garbage output (fail-safe).
+   */
+  async resolveRebaseConflict(ctx: ResolutionContext): Promise<ResolutionAttempt> {
+    const resolved = this.resolvedConfigFor('rebase');
+
+    const conflictList =
+      ctx.conflicts.length > 0
+        ? ctx.conflicts.join(', ')
+        : '(run `git diff --name-only --diff-filter=U` to discover)';
+
+    const systemPrompt =
+      'You are resolving a paused git rebase conflict. The rebase is stopped mid-flight.\n' +
+      `Project root: ${ctx.projectRoot}\n` +
+      `Base ref: ${ctx.baseRef}\n` +
+      `Conflicted files: ${conflictList}\n\n` +
+      'Resolve the conflicts, stage the fixes, and run `git rebase --continue` ' +
+      'until the rebase completes or you reach an unsafe hunk.\n' +
+      'Your FINAL output line MUST be exactly one of:\n' +
+      '{"resolved": true}\n' +
+      '{"resolved": false, "reason": "<explanation>"}';
+
+    // Use a fresh one-shot session — never contaminate the main conductor session.
+    const { v4: uuidv4 } = await import('uuid');
+    const sessionId = uuidv4();
+
+    const result = await this.provider.invoke({
+      prompt: '/rebase',
+      sessionId,
+      resume: false,
+      dangerouslySkipPermissions: true,
+      systemPrompt,
+      model: resolved.model,
+      effort: resolved.effort,
+      cwd: ctx.projectRoot,
+    });
+
+    return parseRebaseResolutionOutput(result.output);
   }
 
   private async fileExists(path: string): Promise<boolean> {

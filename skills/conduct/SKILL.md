@@ -243,7 +243,7 @@ Before suggesting the next step, verify that the previous step's **quality gates
 **After architecture-review --as-built (before suggesting retro):**
 - Open the as-built report (`.pipeline/architecture-review-as-built.md`)
 - If the verdict is BLOCKED (shipped code violates an APPROVED ADR), BLOCK
-- Say: "As-built review blocked — code violates [ADR-N]. Fix the code or supersede the ADR (human-approved), then re-run `/architecture-review --as-built`."
+- Say: "As-built review blocked — code violates [ADR slug]. Fix the code or supersede the ADR (human-approved), then re-run `/architecture-review --as-built`."
 
 **When pipeline reports task failure:** Verify by running tests before escalating or
 re-dispatching. JSON state can become stale — the actual test suite is the source of truth.

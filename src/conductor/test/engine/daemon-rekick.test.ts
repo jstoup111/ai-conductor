@@ -210,7 +210,7 @@ describe('engine/daemon-rekick — real primitives (isolated repo)', () => {
     expect(await fileExists(join(dir, HALT_MARKER))).toBe(false);
     expect(await fileExists(join(dir, REKICK_SENTINEL))).toBe(true);
     expect(await readFile(join(dir, HALT_CLEARED_MARKER), 'utf-8')).toContain('prd-audit gap');
-  });
+  }, 20000); // real-git/fs under parallel load; matches rebase-autostash.test.ts convention
 
   it('clearMarker overwrites a prior .cleared', async () => {
     const p = join(dir, '.pipeline');

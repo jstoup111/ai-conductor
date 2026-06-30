@@ -35,7 +35,7 @@ export const DEFAULT_STEP_MODELS: Record<StepName, string> = {
   prd_audit: 'opus',       // cross-reference PRD intent vs shipped implementation
   architecture_review_as_built: 'sonnet', // pattern-match code vs approved design
   retro: 'sonnet',
-  rebase: 'haiku',         // engine-native; no Claude dispatch (mirrors complexity)
+  rebase: 'opus',          // gate is engine-native, but conflict RESOLUTION dispatches the rebase skill — semantic merge judgment
   finish: 'haiku',
   remediate: 'opus',       // reasons over blocking audit gaps → dispositions + tasks
 };
@@ -58,7 +58,7 @@ export const DEFAULT_STEP_EFFORT: Record<StepName, EffortLevel> = {
   prd_audit: 'high',       // FR-by-FR intent vs implementation reasoning
   architecture_review_as_built: 'medium',
   retro: 'medium',
-  rebase: 'low',           // deterministic git work, no reasoning
+  rebase: 'high',          // conflict resolution dispatch reasons over both sides of a hunk
   finish: 'low',
   remediate: 'high',       // gap reasoning + concrete task planning
 };
@@ -250,4 +250,38 @@ export function resolveStepConfig(
  */
 export function phaseForStep(step: StepName): Phase {
   return getStepDefinition(step).phase;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Rebase resolution attempt cap
+// ────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Default maximum number of Claude-assisted conflict-resolution attempts
+ * inside the rebase step. Overridable via `rebase_resolution_attempts` in
+ * the top-level HarnessConfig. 0 is valid (disables auto-resolution).
+ * Negative or non-numeric values fall back to this default.
+ */
+export const DEFAULT_REBASE_RESOLUTION_ATTEMPTS = 3;
+
+/**
+ * Resolve the rebase-resolution attempt cap from HarnessConfig.
+ *
+ * Reads `config.rebase_resolution_attempts` (top-level HarnessConfig key).
+ *
+ * Resolution rules:
+ *   - undefined / absent → DEFAULT_REBASE_RESOLUTION_ATTEMPTS (3)
+ *   - integer >= 0       → use the value (0 = disabled, preserved as-is)
+ *   - negative integer   → DEFAULT_REBASE_RESOLUTION_ATTEMPTS (3)
+ *   - NaN or non-numeric → DEFAULT_REBASE_RESOLUTION_ATTEMPTS (3)
+ */
+export function resolveRebaseResolutionAttempts(config?: HarnessConfig): number {
+  const override = config?.rebase_resolution_attempts;
+  if (override === undefined || override === null) {
+    return DEFAULT_REBASE_RESOLUTION_ATTEMPTS;
+  }
+  if (typeof override !== 'number' || !Number.isFinite(override) || override < 0) {
+    return DEFAULT_REBASE_RESOLUTION_ATTEMPTS;
+  }
+  return override;
 }

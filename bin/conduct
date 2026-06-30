@@ -2770,6 +2770,11 @@ STEP_COOLDOWN=10          # seconds between steps (prevents rate limit bursts)
 STEP_COOLDOWN_ORIG=10     # original value for escalation math
 CLAUDE_CALL_COUNT=0       # cumulative calls this session
 
+# `conduct daemon <verb>` — forward all daemon subcommands to conduct-ts which
+# owns the Supervisor port (management verbs) and the daemon run/observe/status
+# paths. Avoids duplicating routing logic in both bash and TypeScript.
+if [ "$1" = "daemon" ]; then exec conduct-ts "$@"; fi
+
 while [[ $# -gt 0 ]]; do
   case $1 in
     --status)       show_status; exit 0 ;;
