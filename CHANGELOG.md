@@ -42,6 +42,10 @@ fi
   **HARNESS.md → Rebase Policy** section and reinforced in the build-loop skills (`tdd` COMMIT
   phase step 7; `pipeline` already instructs the implementation subagent). Force-push,
   `reset --hard`, unmerged `branch -D`, `clean -f`, and `checkout -- .` remain hard-blocked.
+- **`bin/install --check` now exits non-zero on drift.** It previously printed missing/stale-skill
+  warnings but always exited 0 (the last statement was an `echo`), so it couldn't be scripted. It now
+  `return`s 1 when any skill is missing/stale (and the `--check` dispatcher propagates it via
+  `exit $?`), enabling the new install-freshness guard to gate on the exit code.
 
 ### Fixed
 
@@ -103,6 +107,17 @@ fi
 
 ### Added
 
+- **Install-freshness guard — the daemon refuses to start on a stale harness install (conduct-ts).**
+  A harness update (git pull / merged PR) does NOT relink skills — that only happens when
+  `bin/install` runs — so a newly-added skill can exist in `skills/` but be missing from
+  `~/.claude/skills/`. A daemon-dispatched `claude -p '/<skill>'` then hits "Unknown command",
+  returns empty output, and the conductor HALTs with a cryptic `rebase skill returned no parseable
+  result` (this exact gap left the new `/rebase` resolver unrunnable on the daemon — every dispatch
+  silently no-op'd). A new guard (`install-freshness.ts`) runs `bin/install --check` at daemon entry:
+  on drift, `daemon start` **prompts** to run `bin/install --update` (decline ⇒ it refuses to start);
+  the continuous daemon run (and any non-interactive launch, e.g. the engineer handoff auto-launch)
+  **fails hard** with an actionable message rather than silently dispatching unregistered skills. If
+  the harness root can't be located the check is skipped (never blocks an otherwise-working install).
 - **tmux-supervised daemons — start / stop / restart / connect / debug (conduct-ts).** The per-repo
   build daemon is now hosted as a **foreground process inside a per-repo tmux session**
   (`cc-daemon-<slug>`) behind a swappable **Supervisor port** (tmux adapter now; a kubectl adapter

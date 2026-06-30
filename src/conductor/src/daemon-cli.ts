@@ -10,6 +10,7 @@ import { PluginRegistry } from './engine/plugin-registry.js';
 import { registerBuiltins } from './engine/plugin-loader.js';
 import { ConductorEventEmitter } from './ui/events.js';
 import { DefaultStepRunner } from './engine/step-runners.js';
+import { ensureInstallFresh } from './engine/install-freshness.js';
 import { Conductor } from './engine/conductor.js';
 import { loadConfig } from './engine/config.js';
 import { holdLock } from './engine/daemon-lock.js';
@@ -72,6 +73,15 @@ export interface DaemonModeOptions {
    * discoverTick closure.
    */
   workSource?: WorkSource;
+  /**
+   * Install-freshness backstop (tests inject a spy). Defaults to a
+   * NON-interactive ensureInstallFresh: every daemon launch path (daemon start,
+   * engineer handoff auto-launch, manual `daemon --continuous`) funnels through
+   * runDaemonMode, so a stale install crashes here with an actionable message
+   * rather than silently HALTing features on unregistered skills. The
+   * interactive prompt lives at `daemon start` (dispatchDaemonSupervisor).
+   */
+  ensureFresh?: () => Promise<void>;
 }
 
 // Front-half steps the daemon treats as already done — the human authored the
@@ -106,6 +116,13 @@ function stripAnsi(s: string): string {
  */
 export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   const { projectRoot } = opts;
+  // Backstop for every daemon launch path: refuse to run on a stale harness
+  // install (missing/stale skill symlinks) — non-interactively, so it throws an
+  // actionable error rather than silently dispatching unregistered skills (which
+  // surfaces as a cryptic "no parseable result" HALT). The interactive prompt to
+  // self-heal lives at `daemon start`.
+  const ensureFresh = opts.ensureFresh ?? (() => ensureInstallFresh({ interactive: false }));
+  await ensureFresh();
   // The local branch worktrees fork from and discovery reads. Resolve origin's
   // real default (main/master/trunk) rather than hardcoding 'main'; the daemon
   // fast-forwards this branch on each idle poll (see fastForwardRoot).

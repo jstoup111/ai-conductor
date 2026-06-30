@@ -78,7 +78,9 @@ describe('dispatchDaemonSupervisor: verb → supervisor method routing', () => {
 
     const code: number = await dispatch(
       { verb: 'start' },
-      { supervisor, cwd: CWD, out: (l: string) => out.push(l) },
+      // ensureFresh no-op: this test exercises verb→method routing, not the
+      // install-freshness gate (covered in install-freshness.test.ts).
+      { supervisor, cwd: CWD, out: (l: string) => out.push(l), ensureFresh: async () => {} },
     );
 
     expect(code).toBe(0);
@@ -168,7 +170,9 @@ describe('dispatchDaemonSupervisor: TmuxNotInstalledError handling', () => {
 
     const code: number = await dispatch(
       { verb: 'start' },
-      { supervisor, cwd: CWD, out: (l: string) => out.push(l) },
+      // ensureFresh no-op so the TmuxNotInstalledError path (not the freshness
+      // gate) is what this test exercises.
+      { supervisor, cwd: CWD, out: (l: string) => out.push(l), ensureFresh: async () => {} },
     );
 
     expect(code).toBe(1);
