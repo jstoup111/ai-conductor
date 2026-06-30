@@ -8,6 +8,7 @@
 
 import { makeTmuxSupervisor, TmuxNotInstalledError, type Supervisor } from './daemon-tmux.js';
 import type { DaemonSupervisorCommand } from './daemon-command.js';
+import { ensureInstallFresh } from './install-freshness.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Dependencies — all optional so callers can inject spies in tests.
@@ -20,6 +21,13 @@ export interface DaemonSupervisorDeps {
   cwd?: string;
   /** Output sink (tests capture lines; default: console.log). */
   out?: (line: string) => void;
+  /**
+   * Guard that ensures the harness install is fresh before a `start` launches a
+   * daemon (tests inject a spy; default: ensureInstallFresh). Throws
+   * InstallStaleError when the install is stale and not refreshed — the catch
+   * below surfaces it and returns 1, so a stale install never starts a daemon.
+   */
+  ensureFresh?: () => Promise<void>;
   /**
    * Whether there is an interactive terminal to attach to. Controls the `start`
    * auto-attach: only when interactive (and not detached) does `start` hand the
@@ -59,11 +67,15 @@ export async function dispatchDaemonSupervisor(
   const supervisor = deps.supervisor ?? makeTmuxSupervisor();
   const cwd = deps.cwd ?? process.cwd();
   const out = deps.out ?? ((l: string) => console.log(l));
+  const ensureFresh = deps.ensureFresh ?? (() => ensureInstallFresh({ log: out }));
   const isInteractive = deps.isInteractive ?? Boolean(process.stdin.isTTY);
 
   try {
     switch (cmd.verb) {
       case 'start':
+        // Refuse to launch a daemon on a stale install — otherwise newly-added
+        // skills are unregistered and daemon-dispatched skills fail silently.
+        await ensureFresh();
         await supervisor.start(cwd);
         // Auto-attach (read-only) so `start` drops the operator into the live
         // session. Skipped when detached (-D) or there's no TTY to attach to —

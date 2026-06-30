@@ -142,14 +142,17 @@ check_installation() {
     warn "rtk not installed — token usage reduction unavailable"
   fi
 
-  # Summary
+  # Summary. Return non-zero on ANY drift so `--check` is scriptable — callers
+  # (e.g. the conduct-ts install-freshness guard) gate on the exit code.
   echo ""
   if [ "$missing" -eq 0 ] && [ "$stale" -eq 0 ] && $all_ok; then
     echo -e "${GREEN}${BOLD}All checks passed.${NC}"
+    return 0
   else
     [ "$missing" -gt 0 ] && echo -e "${RED}${missing} skill(s) missing.${NC}"
     [ "$stale" -gt 0 ] && echo -e "${YELLOW}${stale} skill(s) stale or misconfigured.${NC}"
     echo -e "Run ${BOLD}./bin/install${NC} to fix."
+    return 1
   fi
 }
 
@@ -1053,7 +1056,7 @@ uninstall() {
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 case "${1:-}" in
-  --check)     check_installation ;;
+  --check)     check_installation; exit $? ;;
   --uninstall) uninstall ;;
   --update)    UPDATE_MODE=true; install ;;
   -h|--help)
