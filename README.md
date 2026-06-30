@@ -47,6 +47,13 @@ approval, or run `conduct render-diagrams <file.md>...` on demand. The opener is
 platform (macOS `open`, Linux `xdg-open`, WSL `wslview`/`explorer.exe`). With no renderer
 configured, diagrams fall back to raw Markdown — never a blocker.
 
+The `mmdc-*` presets need Chromium. On WSL, in containers, or when running as root — where
+Chromium's setuid sandbox can't initialize — the renderer automatically launches with
+`--no-sandbox` (and an explicit Chrome `executablePath` when a system Chrome is found). To take
+full control of how Chromium launches, drop a Puppeteer config at `~/.ai-conductor/puppeteer.json`
+(e.g. `{ "executablePath": "/usr/bin/google-chrome", "args": ["--no-sandbox"] }`); when present it
+overrides the auto-detection.
+
 Verify:
 
 ```bash

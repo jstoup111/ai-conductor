@@ -8,8 +8,8 @@
 
 import { execa } from 'execa';
 import { writeFile, mkdir } from 'node:fs/promises';
-import { readFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, existsSync } from 'node:fs';
+import { tmpdir, homedir } from 'node:os';
 import { join } from 'node:path';
 import type { MermaidRendererConfig } from '../types/config.js';
 
@@ -229,6 +229,38 @@ function isWsl(): boolean {
   }
 }
 
+/** Default path for an operator-managed puppeteer config (the escape hatch a
+ *  human can hand-write to fully control Chromium launch). */
+export const USER_PUPPETEER_CONFIG = join(homedir(), '.ai-conductor', 'puppeteer.json');
+
+/**
+ * Whether Chromium's setuid sandbox is unavailable, so mmdc must launch with
+ * `--no-sandbox`. True under WSL and for the root user (root cannot use the
+ * setuid sandbox). This is NOT a WSL-specific carve-out — it is the general
+ * "sandbox can't initialize here" predicate; containers/CI that run as root are
+ * covered too. Pure: all environment facts are injected.
+ */
+export function needsNoSandbox(env: { isWsl: boolean; uid: number | undefined }): boolean {
+  return env.isWsl || env.uid === 0;
+}
+
+/**
+ * Build the mmdc argument vector. When a puppeteer config path is provided it is
+ * passed via `-p` so its Chromium launch flags (e.g. `--no-sandbox`) and any
+ * explicit `executablePath` take effect; otherwise mmdc launches with defaults.
+ * Pure and order-stable for testing.
+ */
+export function mmdcArgs(
+  inputFile: string,
+  outputFile: string,
+  puppeteerConfigPath?: string | null,
+): string[] {
+  const args: string[] = [];
+  if (puppeteerConfigPath) args.push('-p', puppeteerConfigPath);
+  args.push('-i', inputFile, '-o', outputFile);
+  return args;
+}
+
 /** Real RenderDeps backed by execa + the OS temp dir. The opener is resolved
  *  once and cached. `log` is injected so callers control where notices go. */
 export function defaultRenderDeps(log: (msg: string) => void): RenderDeps {
@@ -252,11 +284,52 @@ export function defaultRenderDeps(log: (msg: string) => void): RenderDeps {
     return openerCache;
   };
 
+  // First Chromium-family binary resolvable on PATH, as an absolute path, or null.
+  const resolveChromePath = async (): Promise<string | null> => {
+    for (const bin of ['google-chrome', 'google-chrome-stable', 'chromium-browser', 'chromium']) {
+      const r = await execa('sh', ['-c', `command -v ${bin}`], { reject: false });
+      if (r.exitCode === 0 && r.stdout.trim()) return r.stdout.trim();
+    }
+    return null;
+  };
+
+  // Resolve (once) the puppeteer config mmdc should use. Order of precedence:
+  //   1. an operator-managed ~/.ai-conductor/puppeteer.json (full control), else
+  //   2. in sandbox-hostile environments (WSL / root / containers) a transient
+  //      config enabling --no-sandbox, plus an explicit Chrome executablePath
+  //      when one is found (covers a missing bundled Chromium), else
+  //   3. null — the default sandboxed launch is fine.
+  // Without this, `mmdc` fails to launch Chromium on WSL/containers and every
+  // diagram silently falls back to raw Markdown.
+  let puppeteerCfgCache: string | null | undefined;
+  const resolvePuppeteerConfig = async (): Promise<string | null> => {
+    if (puppeteerCfgCache !== undefined) return puppeteerCfgCache;
+    if (existsSync(USER_PUPPETEER_CONFIG)) {
+      puppeteerCfgCache = USER_PUPPETEER_CONFIG;
+      return puppeteerCfgCache;
+    }
+    const uid = typeof process.getuid === 'function' ? process.getuid() : undefined;
+    if (!needsNoSandbox({ isWsl: isWsl(), uid })) {
+      puppeteerCfgCache = null;
+      return puppeteerCfgCache;
+    }
+    const cfg: Record<string, unknown> = { args: ['--no-sandbox', '--disable-setuid-sandbox'] };
+    const chrome = await resolveChromePath();
+    if (chrome) cfg.executablePath = chrome;
+    const dir = join(tmpdir(), 'conduct-mermaid');
+    await mkdir(dir, { recursive: true });
+    const path = join(dir, 'puppeteer.json');
+    await writeFile(path, JSON.stringify(cfg), 'utf-8');
+    puppeteerCfgCache = path;
+    return puppeteerCfgCache;
+  };
+
   return {
     hasTool,
     runMmdc: async (inputFile, outputFile) => {
       try {
-        const r = await execa('mmdc', ['-i', inputFile, '-o', outputFile], { reject: false });
+        const puppeteerCfg = await resolvePuppeteerConfig();
+        const r = await execa('mmdc', mmdcArgs(inputFile, outputFile, puppeteerCfg), { reject: false });
         return { ok: r.exitCode === 0, error: r.exitCode === 0 ? undefined : r.stderr || 'mmdc failed' };
       } catch (e) {
         return { ok: false, error: e instanceof Error ? e.message : String(e) };

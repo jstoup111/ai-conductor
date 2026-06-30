@@ -20,6 +20,15 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   `upsertComment()` seam in `pr-labels.ts`; best-effort/non-throwing (a PATCH failure leaves
   the existing comment as-is, a missing/unparseable/unreachable comment falls back to create).
 
+- **Mermaid diagram rendering now works on WSL, containers, and as root.** The `mmdc-png` /
+  `mmdc-svg` presets launched Chromium with its setuid sandbox, which cannot initialize on WSL
+  or in most containers (or when running as root), so `conduct render-diagrams` and the
+  architecture-diagram approval gate silently fell back to raw Markdown. The renderer now passes a
+  Puppeteer config enabling `--no-sandbox` (plus an explicit Chrome `executablePath` when a system
+  Chrome is found) in those environments, and honors an operator-managed
+  `~/.ai-conductor/puppeteer.json` override when present. Pure helpers `mmdcArgs` / `needsNoSandbox`
+  are unit-tested; a real-binary render smoke confirms end-to-end output.
+
 ### Changed
 
 - `writing-system-tests` skill is now language- and framework-agnostic. Replaced the
