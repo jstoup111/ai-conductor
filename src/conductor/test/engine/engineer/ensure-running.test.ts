@@ -10,7 +10,7 @@ import { tmpdir } from 'os';
 //
 // Contract (defined by these specs):
 //   ensureRunning(repoPath, opts?): Promise<void>
-//     - no live daemon for repoPath → calls launchDaemonDetached EXACTLY ONCE
+//     - no live daemon for repoPath → calls launchDaemon EXACTLY ONCE
 //       (fire-and-forget) and returns. (FR-21 happy)
 //     - a LIVE daemon already owns repoPath → NO spawn, NO control signal of any
 //       kind (never kill/restart/throttle/manage). (FR-21 negative)
@@ -61,7 +61,7 @@ function makeProbe() {
   return {
     launches,
     signals,
-    // launchDaemonDetached injection point
+    // launchDaemon injection point
     launch: (target: string) => {
       launches.push(target);
     },
@@ -74,7 +74,7 @@ function makeProbe() {
 }
 
 describe('ensureRunning: spawn-iff-not-alive, never manage (FR-21)', () => {
-  it('no live daemon → calls launchDaemonDetached exactly once', async () => {
+  it('no live daemon → calls launchDaemon exactly once', async () => {
     const ensureRunning = requireFn(await load(LOCK_MOD), 'ensureRunning');
     const probe = makeProbe();
 

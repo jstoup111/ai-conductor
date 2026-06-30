@@ -2,6 +2,9 @@ import chalk from 'chalk';
 import { v4 as uuidv4 } from 'uuid';
 import { join } from 'node:path';
 import { mkdir, rm } from 'node:fs/promises';
+import { execFile as execFileCb } from 'node:child_process';
+import { promisify } from 'node:util';
+import { closeIssueOnImplementationMerge } from './engine/engineer/issue-ref.js';
 import type { LLMProvider } from './execution/llm-provider.js';
 import { PluginRegistry } from './engine/plugin-registry.js';
 import { registerBuiltins } from './engine/plugin-loader.js';
@@ -14,6 +17,8 @@ import { openDaemonLog, type DaemonLogSink } from './engine/daemon-log.js';
 import type { ConductState, ConductorEvent, StepName } from './types/index.js';
 import { runDaemon, type BacklogItem } from './engine/daemon.js';
 import { discoverBacklog, fastForwardRoot } from './engine/daemon-backlog.js';
+import { localWorkSource, type WorkSource } from './engine/daemon-work-source.js';
+import { clampDaemonConcurrency } from './engine/daemon-command.js';
 import { makeRunFeature, type FeatureWorktree } from './engine/daemon-runner.js';
 import {
   isHalted,
@@ -41,6 +46,8 @@ import {
   type RekickSweepDeps,
 } from './engine/daemon-rekick.js';
 
+const execFile = promisify(execFileCb);
+
 export interface DaemonModeOptions {
   projectRoot: string;
   /** Parallel workers (>= 1). */
@@ -59,6 +66,12 @@ export interface DaemonModeOptions {
   idlePollSeconds?: number;
   /** Stop after this many consecutive empty polls (continuous mode). */
   maxIdlePolls?: number;
+  /**
+   * Override the backlog discovery source (tests / alternative adapters).
+   * Defaults to the local git-backed adapter that reproduces the former
+   * discoverTick closure.
+   */
+  workSource?: WorkSource;
 }
 
 // Front-half steps the daemon treats as already done — the human authored the
@@ -76,7 +89,7 @@ const PRESEEDED_DONE: StepName[] = [
 ];
 
 // Strip ANSI SGR color codes (chalk, #88) so the persistent daemon.log is always
-// plain text. In the real detached daemon (non-TTY) chalk is already disabled, so
+// plain text. When the daemon runs non-interactively (no attached TTY) chalk is already disabled, so
 // this is a no-op there; it only matters for a foreground/TTY `conduct daemon` run.
 // eslint-disable-next-line no-control-regex -- ESC (\x1b) is intrinsic to ANSI SGR
 const ANSI_SGR = /\x1b\[[0-9;]*m/g;
@@ -98,8 +111,9 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   // fast-forwards this branch on each idle poll (see fastForwardRoot).
   const baseBranch =
     opts.baseBranch ?? (await originDefaultBranch(makeGitRunner(projectRoot))) ?? 'main';
-  // Tee every daemon log line to a file so a detached `stdio:'ignore'` launch is
-  // still observable via `conduct daemon logs`. Console gets the colorized line
+  // Tee every daemon log line to a file so the daemon stays observable via
+  // `conduct daemon logs` even when no one is attached to its tmux session. Console
+  // (the session PTY) gets the colorized line
   // (#88); the file gets ANSI-stripped plain text so the persistent log never
   // carries escape codes — `daemon logs`/grep stay clean regardless of whether the
   // run had color on. The sink is opened once we own the repo (below); until then
@@ -252,6 +266,24 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     if (resume === 'halted') return; // re-parked: HALT re-written, do not resume the gate
 
     await conductor.run();
+
+    // Link & close the originating issue (intake specs only): once the
+    // implementation PR exists, add `Closes owner/repo#N` to its body so GitHub
+    // auto-closes the issue when the PR merges to the default branch. Best-effort
+    // and idempotent — a gh failure or a halted build (no pr_url) never affects
+    // the feature outcome.
+    const finalState = await readState(stateFilePath);
+    await closeIssueOnImplementationMerge({
+      gh: async (args, opts) => {
+        const r = await execFile('gh', args, { cwd: opts.cwd });
+        return { stdout: String(r.stdout) };
+      },
+      sourceRef: item.sourceRef,
+      prUrl: finalState.ok ? finalState.value.pr_url : undefined,
+      cwd: wt.path,
+      slug: item.slug,
+      log,
+    });
   };
 
   const deps = makeFeatureRunnerDeps({
@@ -289,16 +321,22 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   // newly merged specs become present (and discoverable on the local tree). While
   // builds are in flight (`refresh:false`) there is NO fetch/ff, so an in-flight
   // build is never advanced onto specs that merged mid-run.
-  const discoverTick = async ({ refresh }: { refresh: boolean }): Promise<BacklogItem[]> => {
-    if (refresh) await fastForwardRoot(projectRoot, log);
-    return discoverBacklog(projectRoot, (slug) => isProcessed(projectRoot, slug), log, {
+  //
+  // ADR-014: the discoverTick closure is now encapsulated in a WorkSource adapter
+  // so the run-loop is decoupled from direct fs/git I/O and tests can inject fakes.
+  const workSource =
+    opts.workSource ??
+    localWorkSource({
+      projectRoot,
       baseBranch,
-      // Surface a merged-but-unbuildable spec ONCE (per .daemon/warned/<slug>)
-      // instead of re-logging the identical skip on every poll.
+      log,
+      isProcessed: (slug) => isProcessed(projectRoot, slug),
       hasWarned: (slug) => hasWarned(projectRoot, slug),
       markWarned: (slug) => markWarned(projectRoot, slug),
+      fastForwardRoot,
+      discoverBacklog,
     });
-  };
+  const discoverTick = (o: { refresh: boolean }) => workSource.discover(o);
 
   const processedDir = join(projectRoot, '.daemon/processed');
 
@@ -348,7 +386,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       },
     },
     {
-      concurrency: opts.concurrency,
+      concurrency: clampDaemonConcurrency(opts.concurrency, log),
       maxItems: opts.maxItems,
       maxTotalCostTokens: opts.maxCostTokens,
       maxRuntimeMs:

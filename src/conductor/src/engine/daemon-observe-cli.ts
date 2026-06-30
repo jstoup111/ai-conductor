@@ -15,6 +15,19 @@ import { stat } from 'node:fs/promises';
 import { isLive, readPidRecord, type KillProbe } from './daemon-lock.js';
 import { resolveRegistryPath, readRegistry, type ProjectRecord } from './registry.js';
 import { tailDaemonLog, followDaemonLog, daemonLogPath } from './daemon-log.js';
+import { hasSession, sessionNameForRepo } from './daemon-tmux.js';
+
+// Default session probe — routed through daemon-tmux's `hasSession` so ALL tmux
+// argv + session-name encoding stays inside daemon-tmux.ts (ADR-014 boundary).
+// Wrapped in try/catch: a missing tmux throws TmuxNotInstalledError, which must
+// surface as "no session" (false), never crash the status sweep or the bare-run path.
+async function defaultSessionProbe(repoPath: string): Promise<boolean> {
+  try {
+    return await hasSession(sessionNameForRepo(repoPath));
+  } catch {
+    return false;
+  }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // status
@@ -36,6 +49,8 @@ export interface DaemonStatusRow {
   lastActivity?: string;
   lastActivityAt?: string;
   detail?: string;
+  /** True when a tmux session for this repo is currently alive (FR-10). */
+  sessionPresent: boolean;
 }
 
 export interface DaemonStatusDeps {
@@ -47,11 +62,22 @@ export interface DaemonStatusDeps {
   out?: (line: string) => void;
 }
 
-/** Compute one status row for a registered project. Never throws. */
+/**
+ * Compute one status row for a registered project. Never throws.
+ *
+ * @param record          — project registry entry.
+ * @param kill            — injectable kill probe (forwarded to isLive; tests inject a spy).
+ * @param hasSessionProbe — injectable tmux session probe `(repoPath) => boolean`.
+ *                          Defaults to a spawnSync tmux has-session check.
+ *                          sessionPresent is INDEPENDENT of liveness — the probe is always
+ *                          called so stale+session and stale+no-session are distinguishable.
+ */
 export async function computeStatusRow(
   record: ProjectRecord,
   kill?: KillProbe,
+  hasSessionProbe?: (repoPath: string) => boolean | Promise<boolean>,
 ): Promise<DaemonStatusRow> {
+  const probe = hasSessionProbe ?? defaultSessionProbe;
   const base = { name: record.name, path: record.path };
   try {
     // The registry can outlive the repo it points at (deleted / moved).
@@ -59,8 +85,10 @@ export async function computeStatusRow(
       await stat(record.path);
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
-      if (code === 'ENOENT') return { ...base, liveness: 'path-missing' };
-      return { ...base, liveness: 'unreadable', detail: (err as Error).message };
+      if (code === 'ENOENT') {
+        return { ...base, liveness: 'path-missing', sessionPresent: false };
+      }
+      return { ...base, liveness: 'unreadable', detail: (err as Error).message, sessionPresent: false };
     }
 
     const rec = await readPidRecord(record.path);
@@ -77,7 +105,12 @@ export async function computeStatusRow(
       liveness = isLive(rec.pid, kill) ? 'running' : 'stale';
     }
 
-    const row: DaemonStatusRow = { ...base, liveness, pid, startedAt };
+    // sessionPresent is independent of liveness — probe always runs so that a
+    // stale pidfile with a live orphaned tmux session is distinguishable from
+    // a stale pidfile with no session (operator can inspect/adopt the former).
+    const sessionPresent = await probe(record.path);
+
+    const row: DaemonStatusRow = { ...base, liveness, pid, startedAt, sessionPresent };
     const tail = await tailDaemonLog(record.path, 1);
     if (tail.status === 'ok' && tail.lines.length > 0) {
       row.lastActivity = tail.lines[tail.lines.length - 1];
@@ -88,7 +121,7 @@ export async function computeStatusRow(
     return row;
   } catch (err) {
     // Defensive: a single bad repo must never crash the whole sweep.
-    return { ...base, liveness: 'unreadable', detail: (err as Error).message };
+    return { ...base, liveness: 'unreadable', detail: (err as Error).message, sessionPresent: false };
   }
 }
 
@@ -108,6 +141,7 @@ function formatStatusRow(row: DaemonStatusRow): string {
     const at = row.lastActivityAt ? ` (${row.lastActivityAt})` : '';
     parts.push(`  last${at}: ${row.lastActivity}`);
   }
+  parts.push(`  session:${row.sessionPresent ? 'up' : 'down'}`);
   if (row.detail) parts.push(`  — ${row.detail}`);
   return parts.join('');
 }

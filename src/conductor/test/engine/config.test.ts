@@ -341,6 +341,54 @@ complexity:
     });
   });
 
+  describe('mermaid_renderer validation', () => {
+    it('accepts a valid preset block', () => {
+      const result = validateConfig({
+        mermaid_renderer: {
+          preset: 'html',
+          command: '',
+          args: ['{file}'],
+          mode: 'external',
+        },
+      });
+      expect(result.ok).toBe(true);
+    });
+
+    it('accepts a block with no command (html/none presets need no tool)', () => {
+      const result = validateConfig({
+        mermaid_renderer: { preset: 'none', args: ['{file}'], mode: 'external' },
+      });
+      expect(result.ok).toBe(true);
+    });
+
+    it('rejects args without {file} placeholder', () => {
+      const result = validateConfig({
+        mermaid_renderer: { command: 'mmdc', args: ['-i'], mode: 'external' },
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.message).toMatch(/\{file\}/);
+    });
+
+    it('rejects invalid mode', () => {
+      const result = validateConfig({
+        mermaid_renderer: { command: 'mmdc', args: ['{file}'], mode: 'weird' },
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.message).toMatch(/inline\|blocking\|external/);
+    });
+
+    it('rejects unknown keys under mermaid_renderer', () => {
+      const result = validateConfig({
+        mermaid_renderer: { command: 'mmdc', args: ['{file}'], mode: 'external', bogus: 1 },
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.message).toMatch(/bogus/);
+    });
+  });
+
   describe('conductor block validation', () => {
     it('accepts tagged/main update_channel', () => {
       expect(validateConfig({ conductor: { update_channel: 'tagged' } }).ok).toBe(true);

@@ -109,7 +109,7 @@ The conductor reads this file to route, so the shape is exact:
 ```
 
 Field rules:
-- `id` — the blocking FR id (`FR-N`) or, for an as-built finding, the violated ADR id (e.g. `ADR-007`).
+- `id` — the blocking FR id (`FR-N`) or, for an as-built finding, the violated ADR id (its filename stem, e.g. `adr-2026-06-29-rate-limit-strategy`).
 - `disposition` — one of `build` | `acceptance_specs` | `architecture_review` | `plan` | `halt`.
 - `category` — **only** when `disposition == "halt"`: `architectural-clarity` | `product-scope`.
   Otherwise `null`.

@@ -58,14 +58,15 @@ export function makeFeatureRunnerDeps(cfg: RealDepsConfig): FeatureRunnerDeps {
       // exists". Three cases:
       //   1. worktree already registered for this path → reuse it (resume).
       //   2. branch exists but its worktree was removed → attach a worktree.
-      //   3. neither exists → fresh branch + worktree off the base branch.
+      //   3. neither exists → fresh branch + worktree off the build base.
       if (await isRegisteredWorktree(root, path)) {
         cfg.log?.(`reusing worktree ${path} (resume)`);
       } else if (await branchExists(root, branch)) {
         cfg.log?.(`attaching worktree to existing branch ${branch}`);
         await execa('git', ['worktree', 'add', path, branch], { cwd: root });
       } else {
-        await execa('git', ['worktree', 'add', '-b', branch, path, cfg.baseBranch], {
+        const base = await resolveWorktreeBase(root, cfg.baseBranch);
+        await execa('git', ['worktree', 'add', '-b', branch, path, base], {
           cwd: root,
         });
       }
@@ -90,11 +91,41 @@ export function makeFeatureRunnerDeps(cfg: RealDepsConfig): FeatureRunnerDeps {
       });
     },
 
-    markProcessed: async (slug) => {
+    markProcessed: async (slug, prUrl) => {
       await mkdir(processedDir, { recursive: true });
-      await writeFile(join(processedDir, slug), 'shipped\n', 'utf-8');
+      // Persist as JSON so the startup dashboard can surface the shipped PR link.
+      // Legacy ledgers held the plain text `shipped`; readProcessedEntries still
+      // parses those (no PR), so this is backward-compatible.
+      await writeFile(
+        join(processedDir, slug),
+        `${JSON.stringify({ status: 'shipped', prUrl: prUrl ?? null })}\n`,
+        'utf-8',
+      );
     },
   };
+}
+
+/**
+ * The ref a fresh feature worktree forks from. Prefer the remote-tracking
+ * `origin/<baseBranch>` so the build starts from the latest *fetched* origin tip
+ * rather than the LOCAL `<baseBranch>`, which can lag origin: `fastForwardRoot`
+ * only advances local `<baseBranch>` while the root checkout is actually on it,
+ * so whenever another process leaves the root on a different branch (or detached
+ * HEAD), local `<baseBranch>` goes stale and worktrees cut from it would build
+ * against old code.
+ *
+ * Falls back to the local `<baseBranch>` when `origin/<baseBranch>` cannot be
+ * resolved (local-only repo with no origin, or never fetched) — preserving the
+ * prior behavior for those repos.
+ */
+async function resolveWorktreeBase(projectRoot: string, baseBranch: string): Promise<string> {
+  const remote = `origin/${baseBranch}`;
+  try {
+    await execa('git', ['rev-parse', '--verify', '--quiet', remote], { cwd: projectRoot });
+    return remote;
+  } catch {
+    return baseBranch;
+  }
 }
 
 /** True if `path` is already a registered git worktree of `projectRoot`. */
