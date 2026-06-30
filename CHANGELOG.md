@@ -130,6 +130,13 @@ fi
 
 ### Added
 
+- **DECIDE spec for Background Auto-Intake on the Conduct Loop (planning artifacts only).** Lands the
+  approved PRD, stories (FR-1…FR-12), conflict report, architecture diagram, two APPROVED ADRs
+  (`adr-2026-06-30-background-intake-brain-loop`, `adr-2026-06-30-origin-seeded-intake-routing`), and
+  the implementation plan under `.docs/`. Designs a mechanical, zero-token brain/supervisor intake
+  loop that polls all registered repos, captures (ledger-deduped) + routes by origin + notifies, with
+  DECIDE staying human-gated. Implementation is built separately from the merged spec; no behavior
+  ships in this PR.
 - **Install-freshness guard — the daemon refuses to start on a stale harness install (conduct-ts).**
   A harness update (git pull / merged PR) does NOT relink skills — that only happens when
   `bin/install` runs — so a newly-added skill can exist in `skills/` but be missing from
