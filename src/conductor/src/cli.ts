@@ -141,6 +141,19 @@ export function createProgram(): Command {
     .option('--project <name>', 'Target project name (resolved from the registry)')
     .option('--branch <branch>', 'The spec/<slug> branch produced by `engineer land`');
 
+  // Memory subcommands (Slice 1b — provider adopt/remove/status, FR-6/FR-7).
+  // NON-INTERACTIVE: dispatched by index.ts (detectMemoryCommand) before the
+  // pipeline boots. Declared here so `--help` lists them.
+  const memory = program
+    .command('memory')
+    .description('Manage the project memory provider (select, adopt, remove)');
+  memory
+    .command('setup [dir]')
+    .description('Create or migrate the canonical .memory store for the project (idempotent)');
+  memory
+    .command('status')
+    .description('Report the active memory provider and whether it comes from config or the default');
+
   // Daemon subcommand (Phase 6; promoted from the `--daemon` flag). NON-INTERACTIVE:
   // dispatched by index.ts before the pipeline boots. The bare `daemon` RUNS the
   // daemon (detectDaemonCommand); `daemon status` / `daemon logs` are read-only

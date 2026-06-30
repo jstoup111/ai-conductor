@@ -48,7 +48,7 @@ import type { UISubscriber } from "./ui/types.js";
 import type { VisualizerPlugin } from './types/plugin.js';
 import { detectRegistryCommand, dispatchRegistry } from './engine/registry-cli.js';
 import { detectEngineerCommand, dispatchEngineer } from './engine/engineer-cli.js';
-import { detectMemoryCommand, dispatchMemorySetup } from './engine/memory-cli.js';
+import { detectMemoryCommand, dispatchMemorySetup, dispatchMemoryAdopt } from './engine/memory-cli.js';
 import {
   detectDaemonCommand,
   detectDaemonSupervisorCommand,
@@ -211,7 +211,12 @@ async function main(): Promise<void> {
   // before the interactive pipeline or Claude sessions start.
   const memoryCmd = detectMemoryCommand(process.argv);
   if (memoryCmd) {
-    const code = await dispatchMemorySetup(memoryCmd);
+    let code: number;
+    if (memoryCmd.kind === 'setup') {
+      code = await dispatchMemorySetup(memoryCmd);
+    } else {
+      code = await dispatchMemoryAdopt(memoryCmd);
+    }
     process.exit(code);
   }
 
