@@ -10,6 +10,17 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ## [Unreleased]
 
+### Changed
+
+- `writing-system-tests` skill is now language- and framework-agnostic. Replaced the
+  Rails/RSpec-only mechanics (hardcoded `spec/integration`/`spec/system` paths, `config/routes.rb`,
+  `bundle exec rspec`, Capybara/`SecureRandom` examples) with framework-neutral guidance that
+  defers concrete syntax, paths, runner, and fixtures to the project's detected test framework
+  (mirroring how `/tdd` defers to stack test conventions). All correctness principles are
+  preserved: §3b replacement-entry-point, §3c path-guard boundary values, §3d adversarial
+  derivation coverage, RED discipline, and the acceptance/request/unit layering philosophy.
+  README skill table updated to match.
+
 ## Migration
 
 The build daemon is now hosted inside a tmux session instead of a detached background process.

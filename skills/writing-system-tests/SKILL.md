@@ -1,6 +1,6 @@
 ---
 name: writing-system-tests
-description: "Use BEFORE implementing any feature that has stories in .docs/stories/ — generates failing acceptance specs from acceptance criteria as the RED phase of TDD. Generates integration request specs for API projects, system specs for full-stack projects."
+description: "Use BEFORE implementing any feature that has stories in .docs/stories/ — generates failing acceptance specs from acceptance criteria as the RED phase of TDD. Generates HTTP/request-level acceptance tests for headless/API projects, end-to-end UI tests for projects with a frontend, using the project's own test framework and directory conventions."
 enforcement: gating
 phase: build
 ---
@@ -13,12 +13,28 @@ Generate failing acceptance specs from user stories in `.docs/stories/*.md`. Eac
 criterion (happy AND negative paths) becomes a concrete test. Tests are generated BEFORE
 implementation — they are the RED phase of BDD.
 
-**Detects project type and generates the right kind of spec:**
+This skill is **language- and framework-agnostic.** It describes *what* acceptance tests to
+write and *why*; the concrete syntax, test runner, file layout, and fixture mechanism come
+from the project's own conventions. Detect those from the loaded tech-context (see
+`tech-context/`) or from the existing test suite, and follow them — exactly as the `/tdd` skill
+defers to "stack test conventions."
 
-| Project Type | Spec Type | Location | Tests With |
-|---|---|---|---|
-| API-only (no views) | Integration request specs | `spec/integration/` | HTTP requests, status codes, JSON responses |
-| Full-stack (views exist) | System specs | `spec/system/` | Capybara, browser, UI assertions |
+**Detect project shape and generate the right kind of acceptance test:**
+
+| Project Shape | Acceptance Test Type | Exercises |
+|---|---|---|
+| Headless / API (no UI) | HTTP / request-level acceptance tests | HTTP requests, status codes, serialized (JSON/XML/etc.) responses |
+| Has a frontend / full-stack | End-to-end (E2E) / UI tests | A real UI driver — browser, native, or TUI — navigation and user-visible assertions |
+
+**The test framework and paths are the project's, not this skill's.** Place and name specs per
+the project's conventions. Illustrative mappings (adapt to whatever the project actually uses):
+
+| Stack | HTTP-level acceptance | E2E / UI |
+|---|---|---|
+| Ruby + RSpec | `spec/integration/` (`type: :request`) | `spec/system/` (Capybara) |
+| Python + pytest | `tests/integration/` (httpx/requests) | `tests/e2e/` (Playwright/Selenium) |
+| JS/TS + Jest/Vitest | `test/integration/` (supertest) | `test/e2e/` (Playwright/Cypress) |
+| Go | `*_integration_test.go` (`net/http/httptest`) | `e2e/` (chromedp/rod) |
 
 ## When to Use
 
@@ -31,7 +47,7 @@ Run this **after `/plan` and before `/pipeline`** (or `/tdd`). The flow is:
 **Trigger when:**
 - About to implement a feature and stories exist without corresponding acceptance specs
 - New story files added to `.docs/stories/`
-- User asks for acceptance tests, integration tests, BDD tests, or system tests
+- User asks for acceptance tests, integration tests, BDD tests, E2E tests, or system tests
 
 **Skip when:**
 - Acceptance specs already exist for the stories
@@ -41,26 +57,32 @@ Run this **after `/plan` and before `/pipeline`** (or `/tdd`). The flow is:
 
 ### 1. Detect Project Type
 
-Check for views/frontend to determine spec type:
+First, determine the **test framework, runner, and directory layout** from the loaded
+tech-context or, if none, by inspecting the existing test suite (test directories, config files
+like `package.json`/`pyproject.toml`/`Gemfile`/`go.mod`, and how current tests are written).
+Match those conventions — do not impose a foreign layout.
 
-- `app/views/` with templates OR `app/javascript/` OR frontend framework → **Full-stack** → system specs
-- API-only controllers, no views → **API** → integration request specs
+Then determine **project shape** to pick the acceptance test type:
+
+- A frontend exists (server-rendered templates, an SPA, a mobile/desktop UI, or a TUI) →
+  **Full-stack** → end-to-end / UI tests driven through a real UI driver.
+- No UI; a service, API, library, or CLI only → **Headless** → HTTP/request-level acceptance
+  tests (or, for a library/CLI, public-interface / command-invocation acceptance tests).
 
 ### 2. Check for Missing Acceptance Specs
 
-**API projects:** Compare `.docs/stories/*.md` against `spec/integration/*_spec.rb`
-**Full-stack:** Compare `.docs/stories/*.md` against `spec/system/*_spec.rb`
-
-Generate specs for any story file that lacks a corresponding spec.
+Compare `.docs/stories/*.md` against the existing acceptance specs in the project's acceptance
+test directory (whatever the framework uses — see §1). Generate specs for any story file that
+lacks a corresponding spec.
 
 **Skip specs for already-tested behavior:** Before generating, grep the existing test suite
 for overlap. For each acceptance criterion, search test files for keywords from the criterion
-(e.g., method names, status codes, error messages). If a matching test already exists — unit
-test, request spec, or prior integration spec — do not generate a duplicate acceptance spec.
+(e.g., function/method names, status codes, error messages). If a matching test already exists —
+unit test, request/endpoint test, or prior acceptance spec — do not generate a duplicate.
 
-Concrete check: `grep -r "criterion keyword" tests/ spec/` across the existing test directories.
-If a test file already asserts the expected behavior, skip that criterion. Log skipped criteria
-so the retro can verify nothing was missed.
+Concrete check: `grep -rE "criterion keyword" <the project's test directories>`. If a test file
+already asserts the expected behavior, skip that criterion. Log skipped criteria so the retro
+can verify nothing was missed.
 
 **End-to-end, not mocked:** Acceptance specs test the real system. Do NOT mock internal
 infrastructure (database, queues, caches, background jobs). Only mock **third-party external
@@ -95,17 +117,20 @@ story's `request_payload`).
 
 Before generating specs, classify each story:
 
-- **Multi-endpoint flow** (2+ endpoints in the happy path): Generate an integration/acceptance spec.
-  Examples: "create a contact then assign tags", "search contacts filtered by tag"
-- **Single-endpoint operation** (1 endpoint CRUD): Mark as `request-spec-only` — this story will
-  be covered by TDD request specs during implementation. Do NOT generate an acceptance spec for it.
-  Examples: "create a contact", "delete a tag", "update a contact's email"
+- **Multi-step flow** (2+ endpoints/operations in the happy path): Generate an
+  integration/acceptance spec. Examples: "create a contact then assign tags", "search contacts
+  filtered by tag".
+- **Single-operation** (1 endpoint/operation CRUD): Mark as `unit-covered` — this story will be
+  covered by the lower-layer tests written during implementation (the framework's
+  request/endpoint or unit tests under `/tdd`). Do NOT generate an acceptance spec for it.
+  Examples: "create a contact", "delete a tag", "update a contact's email".
 
-**If ALL stories are single-endpoint (pure CRUD with no multi-step business logic), skip
-integration spec generation entirely.** Request specs from TDD will cover all acceptance
-criteria. Only generate integration specs when at least one story genuinely crosses 2+ endpoints.
+**If ALL stories are single-operation (pure CRUD with no multi-step business logic), skip
+acceptance spec generation entirely.** The lower-layer tests from TDD will cover all acceptance
+criteria. Only generate acceptance specs when at least one story genuinely crosses 2+
+endpoints/operations.
 
-This avoids generating integration specs that duplicate request specs for simple CRUD operations.
+This avoids generating acceptance specs that duplicate lower-layer tests for simple CRUD operations.
 
 ### 3b. Replacement Tasks: Drive the REAL Entry Point
 
@@ -117,9 +142,9 @@ ships orphaned (zero production callers). This class escaped into ~5 consecutive
 features; it is caught late by the fresh-context evaluator, not the suite.
 
 **Rule:** for any replacement task, generate **≥1 acceptance test that drives the real
-production entry point** (the command / handler / loop a user or caller actually invokes) —
-NOT the new unit under test — and asserts the **observable artifact** the replacement is
-supposed to produce (file written, PR opened, gate enforced, record persisted). The test
+production entry point** (the command / handler / route / loop a user or caller actually
+invokes) — NOT the new unit under test — and asserts the **observable artifact** the replacement
+is supposed to produce (file written, PR opened, gate enforced, record persisted). The test
 must fail if the entry point is still wired to the OLD behavior.
 
 - Identify the real entry point from the story/plan ("when `runEngineerMode` processes an
@@ -177,133 +202,136 @@ missed.
 
 ### 4. Read App Context
 
-For each story, read the relevant:
-- `config/routes.rb` — available routes and path helpers
-- Controllers — response formats, auth requirements, before_actions
-- Models — validations, associations, enums (for factory setup)
-- Existing factories in `spec/factories/` — reuse, don't duplicate
+For each story, read the project's equivalents of:
+- **Routing / endpoint definitions** — the route table, URL config, or handler registration that
+  lists available paths and their names.
+- **Request handlers / controllers** — response formats, auth requirements, middleware/filters.
+- **Data models / schema** — validations, relations, enums (for fixture/factory setup).
+- **Existing fixtures, factories, or test-data builders** — reuse them, don't duplicate.
 
-If routes/models don't exist yet (pre-implementation), write tests using the expected paths
-from the stories. Tests will fail with `RoutingError` or `ActiveRecord` errors — this is
-correct RED behavior.
+If routes/models don't exist yet (pre-implementation), write tests using the expected paths and
+names from the stories. Tests will fail with routing/handler-not-found, undefined-symbol, or
+missing-table errors — this is correct RED behavior.
 
-### 5a. Generate Integration Specs (API Projects)
+### 5a. Generate HTTP / Request-Level Acceptance Specs (Headless / API Projects)
 
-**File mapping:** `.docs/stories/links.md` → `spec/integration/links_spec.rb`
+**File mapping:** `.docs/stories/links.md` → the project's acceptance spec for that area
+(e.g. `spec/integration/links_spec.rb`, `tests/integration/test_links.py`,
+`test/integration/links.test.ts`).
 
-```ruby
-RSpec.describe "Link lifecycle", type: :request do
-  describe "Story: Create and use a short link" do
-    context "happy path" do
-      it "creates a link, redirects via short code, and records a click" do
-        post "/links", params: { link: { original_url: "https://example.com" } }, headers: auth_headers
-        short_code = json_body["link"]["short_code"]
-        get "/#{short_code}"
-        expect(response).to redirect_to("https://example.com")
-      end
-    end
-    context "negative: expired link" do
-      it "returns 410 Gone for an expired link" do
-        # create link, travel past expiry, assert :gone
-      end
-    end
-  end
-end
+Acceptance test of a multi-step flow, expressed as framework-neutral structure (write it in the
+project's actual framework and assertion style):
+
+```
+SUITE "Link lifecycle":
+  STORY "Create and use a short link":
+    HAPPY PATH "creates a link, redirects via short code, records a click":
+      POST /links  { original_url: "https://example.com" }   (with auth)
+      short_code ← response.body.link.short_code
+      GET /<short_code>
+      EXPECT redirect → "https://example.com"
+    NEGATIVE "expired link":
+      # create link, advance clock past expiry
+      GET /<short_code>  →  EXPECT 410 Gone
 ```
 
-**Key distinction: acceptance specs test FLOWS, not endpoints.**
+**Key distinction: acceptance specs test FLOWS, not endpoints/operations.**
 
-An acceptance spec that only hits one endpoint is a request spec wearing a costume. If the test
-doesn't cross at least 2 endpoints or verify a multi-step story, it belongs in `spec/requests/`
-instead.
+An acceptance spec that only hits one endpoint is a request/endpoint test wearing a costume. If
+the test doesn't cross at least 2 endpoints/operations or verify a multi-step story, it belongs
+in the lower request/endpoint layer instead.
 
-| Test hits one endpoint | → `spec/requests/` (request spec) |
-| Test hits 2+ endpoints in sequence | → `spec/integration/` (acceptance spec) |
-| Test verifies model logic directly | → `spec/models/` (unit spec) |
+| Test hits one endpoint/operation | → request/endpoint-level test (the framework's request test layer) |
+| Test hits 2+ endpoints/operations in sequence | → acceptance/integration test (this skill) |
+| Test verifies model/domain logic directly | → unit test |
 
-**This avoids duplication.** Request specs own individual endpoint behavior (status codes, error
-formats, params validation). Acceptance specs own the story flow (create → use → verify outcome).
-Neither duplicates the other.
+**This avoids duplication.** Request/endpoint tests own individual endpoint behavior (status
+codes, error formats, params validation). Acceptance specs own the story flow (create → use →
+verify outcome). Neither duplicates the other.
 
-**Rules for integration specs:**
+**Rules for acceptance specs:**
 - Test multi-step flows that map to stories, not individual endpoints
-- One `describe` per story, `context` per happy/negative path
-- Each test is independent — creates own data via factories
-- Assert outcomes, not intermediate HTTP details (request specs own those)
+- One group per story, one sub-group per happy/negative path (per the framework's grouping idiom)
+- Each test is independent — creates its own data via factories/fixtures
+- Assert outcomes, not intermediate transport details (request/endpoint tests own those)
 - Auth uses helper methods, not hardcoded tokens
-- No mocking external services in integration specs — test the real flow
+- No mocking external services in acceptance specs — test the real flow
 
-**Helpers to create if missing:** Create `spec/support/request_helpers.rb` with `json_body` and `auth_headers` helpers if missing.
+**Helpers:** Create shared request helpers (e.g. response-body parsing and auth-header
+construction) in the project's test-support location if they don't already exist.
 
-### 5b. Generate System Specs (Full-Stack Projects)
+### 5b. Generate End-to-End / UI Specs (Full-Stack Projects)
 
-**File mapping:** `.docs/stories/auth.md` → `spec/system/auth_spec.rb`
+**File mapping:** `.docs/stories/auth.md` → the project's E2E spec for that area
+(e.g. `spec/system/auth_spec.rb`, `tests/e2e/test_auth.py`, `test/e2e/auth.spec.ts`).
 
-```ruby
-RSpec.describe "Authentication", type: :system do
-  before { driven_by :selenium, using: :headless_chrome }
+E2E test of a user flow, expressed as framework-neutral structure (write it with the project's
+actual UI driver and assertion style):
 
-  describe "Story: User Registration" do
-    context "happy path" do
-      it "registers with valid email and password" do
-        visit new_registration_path
-        fill_in "Email", with: "user@example.com"
-        click_button "Sign Up"
-        expect(page).to have_text("Welcome")
-      end
-    end
-    context "negative: duplicate email" do
-      it "shows error for existing email" do
-        create(:user, email: "taken@example.com")
-        visit new_registration_path
-        fill_in "Email", with: "taken@example.com"
-        click_button "Sign Up"
-        expect(page).to have_text("already taken")
-      end
-    end
-  end
-end
+```
+SUITE "Authentication" (driven through a real UI driver):
+  STORY "User Registration":
+    HAPPY PATH "registers with valid email and password":
+      visit  <new registration screen>
+      fill   "Email" = "user@example.com",  set a valid password
+      submit the form
+      EXPECT visible text "Welcome"
+    NEGATIVE "duplicate email":
+      seed an existing user with "taken@example.com"
+      visit  <new registration screen>
+      fill   "Email" = "taken@example.com",  submit
+      EXPECT visible text "already taken"
 ```
 
-**Rules for system specs:**
-- Every criterion gets concrete Capybara code — no stubs, no `pending`
-- Each test is independent — creates own data, signs in if needed
+**Rules for E2E / UI specs:**
+- Every criterion gets concrete driver code — no stubs, no `pending`/skipped placeholders
+- Each test is independent — creates its own data, signs in if needed
 - No mocking — full stack exercise
-- Sign-in uses the actual login form, not a session backdoor
-- Use `have_text` for visible content, `have_current_path` for navigation
+- Sign-in uses the actual login UI, not a session backdoor
+- Assert on user-visible content and navigated location, not internal DOM/implementation details
 
 ### 6. Run and Verify RED
 
-```bash
-# API projects
-bundle exec rspec spec/integration/
+Run the acceptance suite using the project's test runner against its acceptance directory.
+Examples (use whatever the project actually uses):
 
-# Full-stack projects
-bundle exec rspec spec/system/
+```bash
+# Ruby + RSpec
+bundle exec rspec spec/integration/        # or spec/system/
+# Python + pytest
+pytest tests/integration/                  # or tests/e2e/
+# JS/TS
+npm test -- test/integration               # or test/e2e
+# Go
+go test ./... -run Integration
 ```
 
 Confirm tests fail for the **right reasons**. This is critical:
 
-**Acceptable pre-implementation failures:**
-- `RoutingError`, `NameError`, `UndefinedTable` — infrastructure doesn't exist yet
+**Acceptable pre-implementation failures** (the thing under test doesn't exist yet):
+- Routing/handler-not-found, undefined symbol/name, missing table/migration
 - `404 Not Found` — endpoint not implemented
 
 **Unacceptable failures (fix the spec):**
-- Test passes when it shouldn't, or fails with a wrong error (e.g., `can't be blank` when expecting `not found`)
+- Test passes when it shouldn't, or fails with a wrong error (e.g., a validation error like
+  "can't be blank" when the spec expects "not found")
 - Syntax errors or typos in the spec
 
 **A test that fails for the wrong reason is not RED — it's broken.**
 
 ### Stubbing Rules for Pre-Implementation Specs
 
-- Stub at system boundaries only: `SecureRandom`, `Time.zone.now`, external API clients, `ENV` values
-- Never stub internal methods (private callbacks, service internals) — they don't exist yet and coupling to them breaks on implementation
-- Example of correct boundary stub: `allow(SecureRandom).to receive(:alphanumeric).and_return("aaa")`
+- Stub at **system boundaries only**: randomness sources, the clock/current time, external API
+  clients, environment variables/config.
+- Never stub internal methods (private callbacks, service internals) — they don't exist yet and
+  coupling to them breaks on implementation.
+- Example of a correct boundary stub: freeze the clock, or pin the random generator to a known
+  value, using the framework's idiomatic stub/mock facility.
 
 ### 7. Commit the Failing Tests
 
 ```bash
-git add spec/integration/ spec/support/   # or spec/system/
+git add <acceptance test dir> <test support dir>   # paths per the project's layout
 git commit -m "test: add failing acceptance specs for [feature area]"
 ```
 
@@ -313,20 +341,19 @@ Implementation (via `/pipeline` or `/tdd`) makes them pass.
 ## How This Relates to Other Test Types
 
 ```
-Acceptance specs (this skill)      — Multi-step story flows across 2+ endpoints
+Acceptance specs (this skill)      — Multi-step story flows across 2+ endpoints/operations
   ↕ generated from .docs/stories/     "Create link → visit → verify click recorded"
-  ↕ NO single-endpoint tests here
+  ↕ NO single-operation tests here
 
-Request specs (TDD per-controller) — Single endpoint HTTP contract
+Request/endpoint tests (TDD)       — Single endpoint/operation contract
   ↕ generated during RED phase        "POST /links with blank URL returns 422"
   ↕ owns: status codes, error formats, params validation, headers
 
-Unit specs (TDD per-model)         — Model logic in isolation
-  ↕ generated during RED phase        "Link.generate_short_code returns 6 chars"
+Unit tests (TDD per-model/module)  — Domain/model logic in isolation
+  ↕ generated during RED phase        "generate_short_code returns 6 chars"
   ↕ owns: validations, callbacks, business methods
 ```
 
 **Each layer tests something the others don't.** If a test could live in a lower layer, it should.
 Acceptance specs are expensive — only use them for multi-step flows that can't be verified at a
 lower level. This skill handles the top layer. TDD handles the bottom two.
-
