@@ -522,20 +522,29 @@ returning the project to the `local` default.
 **`conduct memory status`** — reports the active provider and whether it came from project config
 or the built-in default.
 
-**Provider-specific guidance:** when a non-default provider is active and declares its own guidance
-skill, the harness resolves to that provider's `SKILL.md`; otherwise it falls back to
-`skills/memory/SKILL.md` with a single warning (`resolveMemoryGuidanceSkill` in
-`engine/skill-resolver.ts`) (adr-2026-06-29-memory-provider-plugin-and-agent-queried-integration).
+**Provider-specific guidance** (`resolveMemoryGuidanceSkill` in `engine/skill-resolver.ts`,
+adr-2026-06-29-memory-provider-plugin-and-agent-queried-integration): the intended behavior is that
+when a non-default provider is active and declares its own guidance skill, the harness resolves to
+that provider's `SKILL.md`; otherwise it falls back to `skills/memory/SKILL.md` with a single
+warning. **Phase 1: framework primitive, not yet wired into the live memory step** — `resolveSkill`
+still unconditionally returns `skills/memory/SKILL.md`; `resolveMemoryGuidanceSkill` is validated by
+tests and wired in when a concrete provider ships (`TODO(phase-2-wiring)`).
 
-**Write-fallback + reconcile:** if the active platform is unavailable or rejects a write, the
-harness falls back to the local store, tags the entry `pending-reconcile` (never surfaced from
-the platform until reconciled), and a later `reconcilePending` drains the ledger to the platform
-exactly-once. Recall stays agent-driven — the harness never searches (`engine/memory-fallback.ts`).
+**Write-fallback + reconcile** (`engine/memory-fallback.ts`): the intended behavior is that if the
+active platform is unavailable or rejects a write, the harness falls back to the local store, tags
+the entry `pending-reconcile` (never surfaced from the platform until reconciled), and a later
+`reconcilePending` drains the ledger to the platform exactly-once; recall stays agent-driven (the
+harness never searches). **Phase 1: framework primitives, not yet wired into the live memory step** —
+the live step-runner records via 1a's `recordMemoryEntry` directly; `persistMemory` /
+`reconcilePending` are validated by tests and wired in when a concrete provider ships
+(`TODO(phase-2-wiring)`).
 
 **Phase 1 caveat:** Phase 1 ships no concrete external provider. All validation runs against a
 test-double provider. In production, `conduct memory add <provider>` hits an empty default registry
-and returns "Provider not registered" until a future slice wires real providers. The `local` default
-is unchanged and needs no action.
+and returns "Provider not registered" until a future slice wires real providers. Provider-specific
+guidance selection and write-fallback/reconcile are **framework primitives validated by tests but
+not yet invoked by the live memory step** in Phase 1 (they cannot differ from `local` behavior while
+the registry is empty). The `local` default is unchanged and needs no action.
 
 ### Engineer memory store (Phase 9.1)
 

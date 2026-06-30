@@ -24,6 +24,14 @@
  *                    persisted and the function returns {reconciled:N} without
  *                    rethrowing — a retry never re-sends already-drained entries.
  * resetFallbackWarnings — removes `ctx` from the per-process dedup WeakSet.
+ *
+ * TODO(phase-2-wiring): framework primitives — `persistMemory`, `listPendingReconcile`, and
+ * `reconcilePending` are NOT yet invoked by the live memory step; they are exercised only by
+ * tests. The live step-runner records via 1a's `recordMemoryEntry` directly. Wire `persistMemory`
+ * into the memory-recording path (and schedule `reconcilePending` on provider reconnect) when a
+ * concrete non-default provider ships. In Phase 1 the registry is empty, so the active provider is
+ * always `local` and the fallback/reconcile paths cannot trigger differently from a direct local
+ * write at runtime.
  */
 
 import { join } from 'path';

@@ -58,6 +58,17 @@ New conductor modules: `src/conductor/src/engine/memory-adopt.ts` (CLI add/remov
 idempotent MCP wiring), `src/conductor/src/engine/memory-fallback.ts` (pending-reconcile tag + reconcile).
 Test fixture: a configurable **test-double memory provider** under `src/conductor/test/`.
 
+> **Phase-1 deferral note (added at build close, final-batch review):** the CLI surface
+> (`memory-adopt.ts`, dispatched live at `index.ts` → `dispatchMemoryAdopt`) is wired into the
+> running CLI. The two runtime framework primitives — `resolveMemoryGuidanceSkill`
+> (`skill-resolver.ts`) and the `persistMemory`/`reconcilePending`/`listPendingReconcile` trio
+> (`memory-fallback.ts`) — are **validated by tests but NOT yet invoked by the live memory step** in
+> Phase 1. `resolveSkill` still returns `skills/memory/SKILL.md` unconditionally and the live
+> step-runner records via 1a's `recordMemoryEntry` directly; these cannot differ from `local`
+> behavior while the registry ships empty. Intended Phase-2 connection points: `resolveSkill` (or the
+> memory-step runner) → `resolveMemoryGuidanceSkill`, and the memory-recording path → `persistMemory`
+> (+ `reconcilePending` on provider reconnect). Greppable as `TODO(phase-2-wiring)` at each definition.
+
 ## Prerequisites
 
 - **Rebase onto landed 1a first** (see build-order note). `tsc --noEmit` clean is a gate; harness

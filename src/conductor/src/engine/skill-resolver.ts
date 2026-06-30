@@ -39,6 +39,12 @@ export interface GuidanceSkillResolution {
  * @param opts.config - Reserved for future provider-specific configuration; unused today.
  *
  * This function is total: it never throws (except on invalid arguments — see guard below).
+ *
+ * TODO(phase-2-wiring): framework primitive — NOT yet invoked by the live memory step.
+ * `resolveSkill` still unconditionally returns `skills/memory/SKILL.md`; this resolver is
+ * exercised only by tests. Wire it in (connect `resolveSkill` / the memory-step runner to
+ * this function) when a concrete non-default provider ships. In Phase 1 the registry is empty,
+ * so the resolver always yields `local` and this path cannot differ from the default at runtime.
  */
 export async function resolveMemoryGuidanceSkill(opts: {
   provider: MemoryProviderRef;

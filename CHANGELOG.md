@@ -135,15 +135,18 @@ conduct-ts memory status
   notice and writes nothing (atomic check-before-write — credentials never touch a git-tracked config
   file) (adr-2026-06-29-platform-adoption-and-removal-surface). `conduct memory remove` clears the
   selection and unwires the MCP server. `conduct memory status` reports the active provider and its
-  source (config or built-in default). When a non-default provider is active and declares its own
-  guidance skill, the harness resolves to that provider's `SKILL.md`; otherwise it falls back to
-  `skills/memory/SKILL.md` with a single warning (`resolveMemoryGuidanceSkill` in
-  `engine/skill-resolver.ts`). Write-fallback + reconcile resilience: if the active platform is
-  unavailable or rejects a write, the harness falls back to the local store, tags the entry
-  `pending-reconcile`, and `reconcilePending` drains the ledger to the platform exactly-once later
+  source (config or built-in default). The slice also lands two **framework primitives** (validated
+  by tests, **not yet wired into the live memory step** in Phase 1): provider-specific guidance
+  selection — when a non-default provider declares its own guidance skill the harness would resolve
+  to that provider's `SKILL.md`, else fall back to `skills/memory/SKILL.md` with a single warning
+  (`resolveMemoryGuidanceSkill` in `engine/skill-resolver.ts`); and write-fallback + reconcile —
+  on platform unavailability/rejection the harness would fall back to the local store, tag the entry
+  `pending-reconcile`, and `reconcilePending` would drain the ledger exactly-once later
   (`engine/memory-fallback.ts`). **Phase 1 caveat:** no concrete external provider ships in this
   slice — `conduct memory add <provider>` returns "Provider not registered" until a future slice
-  wires real providers; the `local` default is unchanged and requires no action.
+  wires real providers; the guidance and fallback primitives are not yet invoked by the live step
+  (they cannot differ from `local` while the registry is empty; `TODO(phase-2-wiring)`); the `local`
+  default is unchanged and requires no action.
   (adr-2026-06-29-memory-provider-plugin-and-agent-queried-integration/adr-2026-06-29-per-project-memory-provider-selection)
 
 - **Daemon PR labeling — `needs-remediation` draft PR + `mergeable` label sweep (daemon-only).**
