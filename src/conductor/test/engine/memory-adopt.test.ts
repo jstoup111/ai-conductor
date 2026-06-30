@@ -258,3 +258,29 @@ describe('B9: memoryAdd missing credentials → notice + atomic', () => {
     expect(raw).not.toContain(SECRET);
   });
 });
+
+// ═════════════════════════════════════════════════════════════════════════════
+// B10: interrupted add re-runs cleanly
+// ═════════════════════════════════════════════════════════════════════════════
+describe('B10: interrupted add re-runs cleanly', () => {
+  it('config already names the provider but MCP unwired → re-run wires MCP once', async () => {
+    // Simulate interruption: config written, MCP NOT yet registered.
+    await seedConfig(projectRoot, 'memory_provider: double\nllm_provider: claude\n');
+    const mcp = makeMcpStub();
+    const reg = makeRegistry({
+      name: 'double',
+      mcp: { name: 'memory-double', command: 'mem-server', args: [] },
+    });
+    expect(mcp.registered.has('memory-double')).toBe(false);
+
+    const result = await memoryAdd({ projectRoot, provider: 'double', registry: reg, mcp: mcp.runner });
+
+    expect(result.ok).toBe(true);
+    // MCP wired exactly once; config still names the provider (unchanged).
+    expect(mcp.addCount('memory-double')).toBe(1);
+    expect(mcp.registered.has('memory-double')).toBe(true);
+    const cfg = await readParsed(projectRoot);
+    expect(cfg.memory_provider).toBe('double');
+    expect(cfg.llm_provider).toBe('claude');  // unrelated key untouched
+  });
+});
