@@ -111,6 +111,30 @@ fi
 
 ### Added
 
+- **Pluggable memory provider — `local` built-in with canonical shared store.** The harness now
+  selects the memory backend via a per-project `memory_provider:` key in `conduct.yml`
+  (adr-2026-06-29-memory-provider-plugin-and-agent-queried-integration/adr-2026-06-29-per-project-memory-provider-selection); the only built-in is `local`. The `local` provider stores all `.memory/`
+  content in a durable project-keyed canonical directory at
+  `~/.ai-conductor/memory/<sha256-of-origin-url>/harness/` and places `.memory/` as a symlink
+  to it — making the store branch-/worktree-independent and safe under concurrent builds
+  (adr-2026-06-29-shared-memory-store-placement-and-durability). On first `conduct` run `bin/conduct` calls `conduct-ts memory setup <dir>`, which
+  creates the canonical store with the four standard categories (`decisions/`, `patterns/`,
+  `gotchas/`, `context/`) plus `index.md`, then atomically symlinks `.memory/` to it. If `.memory/`
+  already exists as a real directory (legacy project), `migrateMemory` copies its contents to the
+  canonical store, verifies, and swaps before creating the symlink (adr-2026-06-29-safe-reversible-memory-migration); the migration is
+  idempotent and automatic (see Migration below). **FR-3 invariant:** the harness contains zero
+  memory search, ranking, or embedding logic — recall is always the agent reading `.memory/` files
+  and judging relevance. New modules: `engine/memory-store.ts`, `engine/memory-migrate.ts`,
+  `engine/memory-cli.ts`; new config field `memory_provider` in `engine/config.ts`; `bin/conduct`
+  wires `run_memory_store_setup` at bootstrap entry (new `LocalMemoryProvider` in
+  `engine/config.ts`).
+
+- **FR-3 invariant check (integrity suite section 8).** `test/test_harness_integrity.sh` gains a
+  new section 8 that asserts no harness-side code in `src/conductor/src/`, `bin/`, `hooks/`, or
+  `skills/` contains memory-retrieval patterns (`embed(`, `cosineSimilarity`, `vectorSearch`,
+  `relevanceScore`, `rankScore`) — so the "recall is always the agent" contract cannot be silently
+  broken by a future PR. The engineer flywheel directory is excluded (`--exclude-dir=engineer`).
+  The previous version-integrity section is renumbered to 9.
 - **tmux-supervised daemons — start / stop / restart / connect / debug (conduct-ts).** The per-repo
   build daemon is now hosted as a **foreground process inside a per-repo tmux session**
   (`cc-daemon-<slug>`) behind a swappable **Supervisor port** (tmux adapter now; a kubectl adapter
@@ -297,6 +321,13 @@ fi
 
 ### Changed
 
+- **`.memory/` is now a symlink to the shared canonical store, not a tracked in-project
+  directory.** `bin/conduct` sets up the canonical memory store via `conduct-ts memory setup`
+  before any bootstrap sub-step runs, so `.memory/` is always a symlink when the bootstrap skill
+  executes. The bootstrap skill's Step 5 `.memory/` creation instruction is removed — do not
+  `mkdir .memory/` in a project; the directory will already be a symlink. Existing real `.memory/`
+  directories in consumer projects are migrated automatically on the next `conduct` run (see
+  Migration below).
 - **ADRs are no longer sequentially numbered — named `adr-YYYY-MM-DD-<kebab-slug>.md`.**
   Sequential numbering (ADR-001, ADR-007, …) collides when parallel worktrees each grab
   "the next number" for a concurrently-authored decision. ADRs now use a date plus a short
@@ -847,6 +878,34 @@ grep -rnE 'conduct-ts +(["'\'']|[A-Za-z])' . 2>/dev/null \
 
 Pipeline flags are unchanged — they simply move after the `inline` token
 (`conduct-ts inline --auto "<feature>"`, `conduct-ts inline --status`, …).
+
+The `.memory/` directory has moved from an in-project directory to a durable shared canonical
+store keyed by project. New bootstraps and the next `conduct` run on any existing project apply
+the migration automatically via `conduct-ts memory setup`. If you need to migrate manually before
+the next `conduct` run (e.g. before pulling the harness update), run the block below from the
+project root. Idempotent — no-op if `.memory/` is already a symlink.
+
+```bash migration
+# Migrate .memory/ to the canonical shared store under ~/.ai-conductor/memory/.
+# No-op if .memory/ is already a symlink. Run from the project root.
+_dir="$(pwd)"
+_link="${_dir}/.memory"
+if [ -L "${_link}" ]; then
+  echo ".memory/ is already a symlink — no migration needed."
+elif [ -d "${_link}" ]; then
+  if command -v conduct-ts >/dev/null 2>&1; then
+    conduct-ts memory setup "${_dir}"
+  elif [ -x "${HARNESS_DIR:-}/bin/conduct-ts" ]; then
+    "${HARNESS_DIR}/bin/conduct-ts" memory setup "${_dir}"
+  else
+    echo "conduct-ts not found — please run 'conduct-ts memory setup ${_dir}' after updating." >&2
+    exit 1
+  fi
+  echo "Migration complete. .memory/ is now a symlink to the canonical store."
+else
+  echo ".memory/ does not exist — it will be created automatically on next 'conduct' run."
+fi
+```
 
 ## [0.99.17] - 2026-05-02
 
