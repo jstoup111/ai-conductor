@@ -57,7 +57,15 @@ fi
 
 ### Fixed
 
-- **Test kill-switch: the pr-labels `gh`/`git` seam cannot shell out during tests (conduct-ts).**
+- **`/finish` now refuses a mid-rebase/mid-merge tree (skill GATE 0).** A `/finish` dispatched on a
+  worktree with a paused rebase (e.g. `conduct-state` marked `rebase` done but the tree was still
+  mid-conflict) would grind for ~15 minutes and then push a PR of a detached, half-rebased branch.
+  The skill's generic "check git status" step was too weak for a small model to enforce, so the
+  finish skill now has an explicit **GATE 0**: before anything else, refuse to proceed if `git status`
+  shows a rebase/merge in progress, a `rebase-merge`/`rebase-apply` dir exists, or
+  `git diff --diff-filter=U` is non-empty — STOP without running tests, pushing, opening a PR, or
+  writing `.pipeline/finish-choice`, so the conductor HALTs for resolution instead of shipping broken
+  work. Enforced in the skill itself rather than via an engine-side workaround.
   The `needs-remediation` escalation is gated on the daemon flag, but as a belt-and-suspenders guard
   the production `makeProductionGh`/`makeProductionGit` runners now throw under
   `AI_CONDUCTOR_NO_REAL_EXEC` (set by the vitest global `test/setup.ts`). This prevents a test that
