@@ -504,7 +504,7 @@ Key modules:
 - `engine/local-memory-provider.ts` — `LocalMemoryProvider` plugin object
 - `engine/memory-cli.ts` — `conduct memory setup` subcommand
 - `engine/config.ts` → `resolveMemoryProvider` — run-start provider resolution (adr-2026-06-29-per-project-memory-provider-selection)
-- `engine/memory-adopt.ts` — `adoptProvider`, `removeProvider` — adopt/remove flow: validates against plugin registry, cred/env check (atomic check-before-write; credentials never written to git-tracked config), MCP wiring via `claude mcp`
+- `engine/memory-adopt.ts` — `memoryAdd`, `memoryRemove`, `memoryStatus` — adopt/remove/report flow: validates against plugin registry, cred/env check (atomic check-before-write; credentials never written to git-tracked config), MCP wiring via `claude mcp`
 - `engine/skill-resolver.ts` — `resolveMemoryGuidanceSkill` — selects provider-specific guidance `SKILL.md` or falls back to `skills/memory/SKILL.md` with a warning
 - `engine/memory-fallback.ts` — `persistMemory`, `listPendingReconcile`, `reconcilePending` — write-fallback to local store + pending-reconcile ledger
 
