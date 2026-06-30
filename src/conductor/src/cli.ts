@@ -171,7 +171,8 @@ export function createProgram(): Command {
   // documents them; commander never actually dispatches them.
   daemon
     .command('start')
-    .description('Start the tmux-supervised daemon for this repo (foreground-hosted in a tmux session)');
+    .description('Start the tmux-supervised daemon for this repo; auto-attaches read-only unless -D')
+    .option('-D, --detach', 'Start detached: do not auto-attach to the tmux session (default attaches when interactive)');
   daemon
     .command('stop')
     .description('Stop this repo\'s tmux-supervised daemon');

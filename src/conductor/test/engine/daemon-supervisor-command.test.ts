@@ -66,6 +66,27 @@ describe('detectDaemonSupervisorCommand: routes management verbs', () => {
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
+// detectDaemonSupervisorCommand — `-D`/`--detach` flag (start auto-attach opt-out)
+// ═════════════════════════════════════════════════════════════════════════════
+describe('detectDaemonSupervisorCommand: -D / --detach', () => {
+  it('sets detach:true for "daemon start -D"', async () => {
+    const detect = requireFn(await load(), 'detectDaemonSupervisorCommand');
+    expect(detect(argv('daemon', 'start', '-D'))).toEqual({ verb: 'start', detach: true });
+  });
+
+  it('sets detach:true for "daemon start --detach"', async () => {
+    const detect = requireFn(await load(), 'detectDaemonSupervisorCommand');
+    expect(detect(argv('daemon', 'start', '--detach'))).toEqual({ verb: 'start', detach: true });
+  });
+
+  it('omits detach (bare verb shape) when the flag is absent', async () => {
+    const detect = requireFn(await load(), 'detectDaemonSupervisorCommand');
+    expect(detect(argv('daemon', 'start'))).toEqual({ verb: 'start' });
+    expect(detect(argv('daemon', 'start'))).not.toHaveProperty('detach');
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
 // detectDaemonSupervisorCommand — null for non-management invocations
 // ═════════════════════════════════════════════════════════════════════════════
 describe('detectDaemonSupervisorCommand: returns null for non-management invocations', () => {

@@ -157,6 +157,59 @@ describe('dispatchDaemonSupervisor: verb → supervisor method routing', () => {
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
+// start auto-attach: interactive start drops into the session (read-only) unless
+// -D (detach) or no interactive terminal.
+// ═════════════════════════════════════════════════════════════════════════════
+describe('dispatchDaemonSupervisor: start auto-attach', () => {
+  it('interactive start (no detach) → start THEN attach({readOnly:true})', async () => {
+    const dispatch = requireFn(await load(), 'dispatchDaemonSupervisor');
+    const { calls, supervisor } = makeFakeSupervisor();
+    const out: string[] = [];
+
+    const code: number = await dispatch(
+      { verb: 'start' },
+      { supervisor, cwd: CWD, out: (l: string) => out.push(l), isInteractive: true, ensureFresh: async () => {} },
+    );
+
+    expect(code).toBe(0);
+    expect(calls.map((c) => c.method)).toEqual(['start', 'attach']);
+    expect(calls[0].args[0]).toBe(CWD);
+    expect(calls[1].args[0]).toBe(CWD);
+    expect(calls[1].args[1]).toMatchObject({ readOnly: true });
+  });
+
+  it('interactive start WITH detach (-D) → start only, notes how to attach', async () => {
+    const dispatch = requireFn(await load(), 'dispatchDaemonSupervisor');
+    const { calls, supervisor } = makeFakeSupervisor();
+    const out: string[] = [];
+
+    const code: number = await dispatch(
+      { verb: 'start', detach: true },
+      { supervisor, cwd: CWD, out: (l: string) => out.push(l), isInteractive: true, ensureFresh: async () => {} },
+    );
+
+    expect(code).toBe(0);
+    expect(calls.map((c) => c.method)).toEqual(['start']); // no attach
+    expect(out.join('\n')).toMatch(/detached|connect/i);
+  });
+
+  it('non-interactive start → start only (never blocks on tmux attach)', async () => {
+    const dispatch = requireFn(await load(), 'dispatchDaemonSupervisor');
+    const { calls, supervisor } = makeFakeSupervisor();
+    const out: string[] = [];
+
+    const code: number = await dispatch(
+      { verb: 'start' },
+      { supervisor, cwd: CWD, out: (l: string) => out.push(l), isInteractive: false, ensureFresh: async () => {} },
+    );
+
+    expect(code).toBe(0);
+    expect(calls.map((c) => c.method)).toEqual(['start']); // no attach
+    expect(out.join('\n')).toMatch(/connect/i);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
 // TmuxNotInstalledError handling — returns 1 + actionable /tmux/i message
 // ═════════════════════════════════════════════════════════════════════════════
 describe('dispatchDaemonSupervisor: TmuxNotInstalledError handling', () => {

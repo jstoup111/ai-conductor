@@ -28,6 +28,13 @@ export interface DaemonSupervisorDeps {
    * below surfaces it and returns 1, so a stale install never starts a daemon.
    */
   ensureFresh?: () => Promise<void>;
+  /**
+   * Whether there is an interactive terminal to attach to. Controls the `start`
+   * auto-attach: only when interactive (and not detached) does `start` hand the
+   * terminal to the daemon's tmux session. Defaults to `process.stdin.isTTY` so
+   * scripts / the engineer auto-launch (no TTY) never block on `tmux attach`.
+   */
+  isInteractive?: boolean;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -38,11 +45,16 @@ export interface DaemonSupervisorDeps {
  * Execute a management verb against the Supervisor port.
  *
  * Verb → method mapping:
- *   start   → supervisor.start(cwd)
+ *   start   → supervisor.start(cwd), then auto-attach read-only (see below)
  *   stop    → supervisor.stop(cwd)
  *   restart → supervisor.restart(cwd)
  *   connect → supervisor.attach(cwd, { readOnly: true })
  *   debug   → supervisor.attach(cwd, { readOnly: false })
+ *
+ * `start` auto-attaches the terminal (read-only) to the freshly-started session
+ * so the operator lands in the live daemon, UNLESS `-D`/`--detach` was passed or
+ * there is no interactive terminal (scripts / auto-launch) — in which case it
+ * starts detached and notes how to attach later.
  *
  * Returns 0 on success; writes an actionable message to `out` and returns 1 on
  * any error (TmuxNotInstalledError or any other Error) so the caller can
@@ -56,6 +68,7 @@ export async function dispatchDaemonSupervisor(
   const cwd = deps.cwd ?? process.cwd();
   const out = deps.out ?? ((l: string) => console.log(l));
   const ensureFresh = deps.ensureFresh ?? (() => ensureInstallFresh({ log: out }));
+  const isInteractive = deps.isInteractive ?? Boolean(process.stdin.isTTY);
 
   try {
     switch (cmd.verb) {
@@ -64,6 +77,19 @@ export async function dispatchDaemonSupervisor(
         // skills are unregistered and daemon-dispatched skills fail silently.
         await ensureFresh();
         await supervisor.start(cwd);
+        // Auto-attach (read-only) so `start` drops the operator into the live
+        // session. Skipped when detached (-D) or there's no TTY to attach to —
+        // `tmux attach` errors without a controlling terminal, which would turn
+        // a successful start into a non-zero exit for scripts.
+        if (cmd.detach) {
+          out("daemon started (detached). Attach with 'conduct daemon connect'.");
+        } else if (!isInteractive) {
+          out(
+            "daemon started (no interactive terminal to attach to). Attach with 'conduct daemon connect'.",
+          );
+        } else {
+          await supervisor.attach(cwd, { readOnly: true });
+        }
         break;
       case 'stop':
         await supervisor.stop(cwd);
