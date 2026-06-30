@@ -353,6 +353,109 @@ export async function comment(
 }
 
 /**
+ * Stable hidden marker identifying the single harness-authored remediation-status
+ * comment on a PR. Embedded in the comment body so subsequent HALTs can find and
+ * edit that comment in place instead of appending a new one (issue #159).
+ */
+export const NEEDS_REMEDIATION_MARKER = '<!-- conductor:needs-remediation -->';
+
+interface ParsedCommentRef {
+  owner: string;
+  repo: string;
+  commentId: string;
+}
+
+/**
+ * Extract `{owner, repo, commentId}` from a GitHub issue-comment URL of the shape
+ * `https://github.com/<owner>/<repo>/pull/<n>#issuecomment-<id>` (PR comments are
+ * issue comments). Returns null if the URL does not match — callers treat that as
+ * "can't edit, create instead".
+ */
+function parseCommentUrl(url: string): ParsedCommentRef | null {
+  const m = url.match(
+    /github\.com\/([^/]+)\/([^/]+)\/(?:pull|issues)\/\d+#issuecomment-(\d+)/,
+  );
+  if (!m) return null;
+  return { owner: m[1], repo: m[2], commentId: m[3] };
+}
+
+interface GhCommentJson {
+  comments?: Array<{ body?: string; url?: string }> | null;
+}
+
+/**
+ * Upsert a single marker-tagged comment on a PR (issue #159).
+ *
+ * Behaviour:
+ *  - The stored comment body is `<marker>\n<body>` so it can be located later.
+ *  - If a comment containing `marker` already exists and its URL is parseable, the
+ *    existing comment is **edited in place** (HTTP PATCH via `gh api`). A PATCH
+ *    failure is swallowed and leaves the existing comment as-is — it is NOT followed
+ *    by a fallback create (that would defeat the de-duplication this function exists
+ *    to provide).
+ *  - Otherwise (no marked comment, an unparseable URL, or a failed lookup) a new
+ *    marked comment is created via {@link comment}, so the next call can find it.
+ *
+ * Best-effort / non-throwing, consistent with the rest of this seam.
+ */
+export async function upsertComment(
+  runGh: GhRunner = makeProductionGh(),
+  cwd: string,
+  prUrl: string,
+  marker: string,
+  body: string,
+  log?: (msg: string) => void,
+): Promise<void> {
+  const taggedBody = `${marker}\n${body}`;
+
+  let matchedUrl: string | undefined;
+  try {
+    const { stdout } = await runGh(['pr', 'view', prUrl, '--json', 'comments'], { cwd });
+    const data: GhCommentJson = JSON.parse(stdout);
+    const matched = (data.comments ?? []).find(
+      (c) => typeof c?.body === 'string' && c.body.includes(marker),
+    );
+    matchedUrl = matched?.url;
+  } catch (err) {
+    log?.(`[pr-labels] upsertComment(${prUrl}) lookup failed: ${err} — creating new comment`);
+    await comment(runGh, cwd, prUrl, taggedBody, log);
+    return;
+  }
+
+  if (matchedUrl) {
+    const ref = parseCommentUrl(matchedUrl);
+    if (ref) {
+      // Edit the existing comment in place. A failure here is terminal (no fallback
+      // create) so a repeated HALT never piles up a second comment.
+      try {
+        await runGh(
+          [
+            'api',
+            '--method',
+            'PATCH',
+            `repos/${ref.owner}/${ref.repo}/issues/comments/${ref.commentId}`,
+            '-f',
+            `body=${taggedBody}`,
+          ],
+          { cwd },
+        );
+      } catch (err) {
+        log?.(
+          `[pr-labels] upsertComment(${prUrl}) PATCH failed: ${err} — leaving existing comment as-is`,
+        );
+      }
+      return;
+    }
+    log?.(
+      `[pr-labels] upsertComment(${prUrl}) marked comment url unparseable (${matchedUrl}) — creating new comment`,
+    );
+  }
+
+  // No editable marked comment — create one carrying the marker.
+  await comment(runGh, cwd, prUrl, taggedBody, log);
+}
+
+/**
  * Mark a draft PR as ready for review.
  * Swallows all errors.
  */

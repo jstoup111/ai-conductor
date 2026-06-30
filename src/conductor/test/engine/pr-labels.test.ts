@@ -15,6 +15,8 @@ import {
   isMergeable,
   findOrCreatePr,
   comment,
+  upsertComment,
+  NEEDS_REMEDIATION_MARKER,
   setReady,
   makeProductionGh,
   makeProductionGit,
@@ -488,6 +490,94 @@ describe('comment', () => {
   it('swallows a rejecting runner without throwing', async () => {
     const { gh } = fakeGh([new Error('failed')]);
     await expect(comment(gh, '/repo', TEST_PR_URL, 'hi')).resolves.toBeUndefined();
+  });
+});
+
+// ── upsertComment ─────────────────────────────────────────────────────────────
+
+describe('upsertComment', () => {
+  const MARKER = NEEDS_REMEDIATION_MARKER;
+  const markedUrl = 'https://github.com/foo/bar/pull/42#issuecomment-99887766';
+
+  it('creates a marked comment when the PR has no comments (S1 happy)', async () => {
+    const { gh, calls } = fakeGh([{ stdout: JSON.stringify({ comments: [] }) }]);
+    await upsertComment(gh, '/repo', TEST_PR_URL, MARKER, 'boom');
+
+    // 1) look up comments, 2) create
+    expect(calls[0]).toEqual(['pr', 'view', TEST_PR_URL, '--json', 'comments']);
+    const createCall = calls.find((a) => a[0] === 'pr' && a[1] === 'comment');
+    expect(createCall).toBeDefined();
+    const body = createCall![createCall!.indexOf('--body') + 1];
+    expect(body).toContain(MARKER);
+    expect(body).toContain('boom');
+    // No PATCH issued
+    expect(calls.find((a) => a[0] === 'api')).toBeUndefined();
+  });
+
+  it('creates when comments exist but none carry the marker (S1 negative)', async () => {
+    const { gh, calls } = fakeGh([
+      { stdout: JSON.stringify({ comments: [{ body: 'unrelated chatter', url: markedUrl }] }) },
+    ]);
+    await upsertComment(gh, '/repo', TEST_PR_URL, MARKER, 'boom');
+    expect(calls.find((a) => a[0] === 'pr' && a[1] === 'comment')).toBeDefined();
+    expect(calls.find((a) => a[0] === 'api')).toBeUndefined();
+  });
+
+  it('PATCHes the existing marked comment in place and creates nothing (S2 happy)', async () => {
+    const { gh, calls } = fakeGh([
+      {
+        stdout: JSON.stringify({
+          comments: [{ body: `${MARKER}\nold reason`, url: markedUrl }],
+        }),
+      },
+      { stdout: '' }, // PATCH succeeds
+    ]);
+    await upsertComment(gh, '/repo', TEST_PR_URL, MARKER, 'new reason');
+
+    const patchCall = calls.find((a) => a[0] === 'api');
+    expect(patchCall).toEqual([
+      'api',
+      '--method',
+      'PATCH',
+      'repos/foo/bar/issues/comments/99887766',
+      '-f',
+      `body=${MARKER}\nnew reason`,
+    ]);
+    // Crucially, no new comment is created
+    expect(calls.find((a) => a[0] === 'pr' && a[1] === 'comment')).toBeUndefined();
+  });
+
+  it('falls back to create when the marked comment url is unparseable (S2 negative)', async () => {
+    const { gh, calls } = fakeGh([
+      {
+        stdout: JSON.stringify({
+          comments: [{ body: `${MARKER}\nx`, url: 'https://example.com/not-a-pr' }],
+        }),
+      },
+    ]);
+    await upsertComment(gh, '/repo', TEST_PR_URL, MARKER, 'boom');
+    expect(calls.find((a) => a[0] === 'api')).toBeUndefined();
+    expect(calls.find((a) => a[0] === 'pr' && a[1] === 'comment')).toBeDefined();
+  });
+
+  it('falls back to create when the comments lookup throws (S3 negative)', async () => {
+    const { gh, calls } = fakeGh([new Error('rate limited'), { stdout: '' }]);
+    await expect(
+      upsertComment(gh, '/repo', TEST_PR_URL, MARKER, 'boom'),
+    ).resolves.toBeUndefined();
+    expect(calls.find((a) => a[0] === 'pr' && a[1] === 'comment')).toBeDefined();
+  });
+
+  it('swallows a PATCH failure WITHOUT creating a duplicate (S3 negative)', async () => {
+    const { gh, calls } = fakeGh([
+      { stdout: JSON.stringify({ comments: [{ body: `${MARKER}\nx`, url: markedUrl }] }) },
+      new Error('PATCH 500'), // edit fails
+    ]);
+    await expect(
+      upsertComment(gh, '/repo', TEST_PR_URL, MARKER, 'boom'),
+    ).resolves.toBeUndefined();
+    // Found-but-unpatchable comment is left as-is — no fallback create
+    expect(calls.find((a) => a[0] === 'pr' && a[1] === 'comment')).toBeUndefined();
   });
 });
 

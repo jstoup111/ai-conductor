@@ -386,7 +386,10 @@ conductor error — *and* the feature branch has at least one commit, the conduc
 the failing step) and the relevant error. The **rebase-conflict HALT is excluded** (rebase is left
 paused mid-state). The PR is draft so it cannot be merged accidentally.
 If an open PR already exists for the branch it is reused (label + comment applied, no
-duplicate opened). When the branch has **zero commits** no PR, comment, or label is
+duplicate opened). The failure comment is **upserted, not appended**: it carries a hidden
+marker (`<!-- conductor:needs-remediation -->`) so a feature that HALTs repeatedly edits the
+**single** existing remediation comment in place (latest reason replaces the prior one)
+rather than piling up duplicates. When the branch has **zero commits** no PR, comment, or label is
 produced — the existing local HALT marker is the only surface, unchanged. All GitHub
 side-effects are **best-effort and non-blocking**: a push, PR-create, comment, or label
 failure is logged and swallowed; the HALT is still written regardless. This behavior is

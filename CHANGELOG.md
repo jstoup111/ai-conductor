@@ -10,6 +10,16 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ## [Unreleased]
 
+### Fixed
+
+- Daemon `needs-remediation` escalation now **upserts** its failure comment instead of
+  appending a new one on every HALT (#159). The comment carries a hidden marker
+  (`<!-- conductor:needs-remediation -->`); on a repeat HALT the existing comment is edited
+  in place (the latest reason replaces the prior one) so a repeatedly-failing feature no
+  longer accumulates duplicate `## Daemon halt` comments on the same PR. New
+  `upsertComment()` seam in `pr-labels.ts`; best-effort/non-throwing (a PATCH failure leaves
+  the existing comment as-is, a missing/unparseable/unreachable comment falls back to create).
+
 ### Changed
 
 - `writing-system-tests` skill is now language- and framework-agnostic. Replaced the
