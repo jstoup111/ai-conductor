@@ -171,6 +171,13 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Changed
 
+- **Daemon activity log lines are now timestamped.** Every line the daemon tees into the
+  durable `.daemon/daemon.log` (read via `conduct-ts daemon logs [--follow]`) is prefixed
+  with a leading ISO-8601 UTC timestamp (e.g. `2026-07-01T14:23:05.123Z [daemon] …`) so
+  activity can be correlated and grepped by time long after the fact. The stamping is a
+  pure, clock-injected `formatDaemonLogLine` helper in `engine/daemon-log.ts`; the live
+  tmux console keeps its uncluttered colored line. (`src/engine/daemon-log.ts`,
+  `src/daemon-cli.ts`.)
 - **`.pipeline/HALT` marker path + best-effort writer consolidated into one module.** The marker
   literal was independently spelled in `conductor.ts`, `rebase.ts`, `daemon-deps.ts`,
   `daemon-dashboard.ts`, `daemon-rekick.ts`, and the new self-host `gate-halt.ts`, and the

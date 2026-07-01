@@ -7,6 +7,7 @@ import {
   tailDaemonLog,
   followDaemonLog,
   daemonLogPath,
+  formatDaemonLogLine,
 } from '../../src/engine/daemon-log.js';
 import { renderDaemonEvent } from '../../src/daemon-cli.js';
 
@@ -101,6 +102,22 @@ describe('engine/daemon-log', () => {
       if (res.status !== 'ok') throw new Error('expected ok');
       expect(res.lines).toContain('[daemon] · ▶ build');
       expect(res.lines).toContain('[daemon] ·   build ✓ done');
+    });
+  });
+
+  describe('formatDaemonLogLine (timestamps)', () => {
+    it('prefixes an ISO-8601 UTC timestamp before the [daemon] line', () => {
+      const at = new Date('2026-07-01T14:23:05.123Z');
+      expect(formatDaemonLogLine('[daemon] holding lock', at)).toBe(
+        '2026-07-01T14:23:05.123Z [daemon] holding lock',
+      );
+    });
+
+    it('produces a leading, sortable, greppable timestamp field', () => {
+      const line = formatDaemonLogLine('[daemon] shipped', new Date(0));
+      // First whitespace-delimited field parses back to the same instant.
+      const stamp = line.split(' ', 1)[0];
+      expect(new Date(stamp).getTime()).toBe(0);
     });
   });
 

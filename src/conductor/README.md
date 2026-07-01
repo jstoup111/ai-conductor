@@ -470,7 +470,10 @@ a run):
 The daemon still tees its log sink into an append-only **`.daemon/daemon.log`**
 (`engine/daemon-log.ts`, opened once the per-repo pidfile lock is held) — so the full BUILD
 narrative (feature start, each gate-loop step result, finish + PR url) survives even when no
-one is attached. The log is size-capped (~1 MB, rotated once to `daemon.log.1`). The daemon
+one is attached. Every persisted line is prefixed with an ISO-8601 UTC timestamp
+(`formatDaemonLogLine`) so the record is sortable and greppable by time; the live tmux
+console keeps the plain colored line. The log is size-capped (~1 MB, rotated once to
+`daemon.log.1`). The daemon
 runs **serially** (concurrency clamped to 1) and **bare-run**: the build path never imports
 the tmux layer, so it functions with no tmux present (management is purely additive).
 
