@@ -866,7 +866,8 @@ byte-for-byte unchanged (`FR/TR-13`). Configured by the `harness_self_host` bloc
 |--------|----------------|
 | `self-host/detector.ts` | `SelfHostDetector` interface + `PathSelfHostDetector` (realpath equality vs `resolveHarnessRoot()`); `classifySelfHost` layers the `activation` override. Identity by path, not name; positive-only activation. |
 | `install-freshness.ts` → `relinkSkillsForSelfBuild` | Relink harness skills (`bin/install --update`) before a self-build; non-zero exit / missing installer → `InstallStaleError`, no dispatch. |
-| `self-host/sandbox-build-env.ts` | Throwaway `CLAUDE_CONFIG_DIR` linked to the worktree; `withSandboxBuildEnv` guarantees teardown on pass/fail/crash; no-leak invariant (no sandbox link resolves to global config); `childEnv()` never mutates the parent env. |
+| `self-host/sandbox-build-env.ts` | Throwaway `CLAUDE_CONFIG_DIR`: `skills/`+`hooks/` symlinked to the worktree, with `.credentials.json` + a hook-retargeted `settings.json` **copied** in (auth + own-hooks; copies keep the no-global-symlink invariant). Fails closed on a missing worktree link target; `withSandboxBuildEnv` guarantees teardown on pass/fail/crash; `childEnv()` never mutates the parent env. |
+| `halt-marker.ts` | Canonical `.pipeline/HALT` marker path + best-effort `writeHaltMarker`; the rebase HALT and the self-host gate HALTs both write through it. |
 | `self-host/version-gate.ts` | `VersionApprovalGate` — HALT unless `.pipeline/version-approval` matches VERSION. |
 | `self-host/release-gate.ts` | `ReleaseArtifactGate` — integrity suite (bounded timeout) + CHANGELOG `[Unreleased]` + migration block; all fail-closed, distinct HALT reasons. |
 | `self-host/gate-halt.ts` | `writeSelfHostHalt` — `.pipeline/HALT` with a gate-specific reason + the ADR-005 resume procedure (re-install → `/verify` → operator merges). |

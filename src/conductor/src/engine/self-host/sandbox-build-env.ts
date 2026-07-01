@@ -8,18 +8,28 @@
 // the globals, expose live sessions to broken intermediate states.
 //
 // Fix: for a self-build only, run the build step with a THROWAWAY
-// CLAUDE_CONFIG_DIR whose skills/ + hooks/ symlink into the build worktree. The
-// build exercises its own edited harness; global ~/.claude is never touched. The
-// sandbox is torn down after the build (pass OR fail) under a try/finally
-// guarantee. Isolation is a contract, not a convention:
-//   - No sandbox link ever resolves to a global-config target (TR-6 invariant).
+// CLAUDE_CONFIG_DIR that:
+//   - symlinks skills/ + hooks/ into the build worktree (the edited harness);
+//   - COPIES the operator's `.credentials.json` so the headless `claude -p` build
+//     can authenticate — a fresh CLAUDE_CONFIG_DIR has no auth, and the daemon
+//     cannot re-auth interactively (auth is subscription creds, not an env key);
+//   - COPIES `settings.json` and RETARGETS every harness-checkout absolute path
+//     (hook commands, statusLine, …) to the worktree, so the build exercises its
+//     OWN edited hooks rather than the live checkout's. Personal `~/.claude/hooks`
+//     paths (outside the harness checkout) are left untouched.
+// The sandbox is torn down after the build (pass OR fail) under a try/finally
+// guarantee; global ~/.claude is never touched. Isolation is a contract:
+//   - Credentials/settings are COPIED, never symlinked — no sandbox symlink ever
+//     resolves to a global-config target (TR-6 invariant); the two symlinks
+//     (skills/hooks) resolve only into the worktree.
+//   - A missing worktree skills//hooks/ dir FAILS CLOSED (SandboxProvisionError) —
+//     a dangling-link sandbox is never launched (TR-5).
 //   - Teardown runs on the crash branch (withSandboxBuildEnv finally), asserted.
-//   - Provisioning failure removes the partial sandbox and never launches (TR-5).
 //   - childEnv() returns a COPY — the daemon's own env is never mutated (no bleed).
 
 import * as fsp from 'node:fs/promises';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { tmpdir, homedir } from 'node:os';
 
 /** Injectable filesystem seam so the adversarial branches are deterministic. */
 export interface SandboxFs {
@@ -27,6 +37,13 @@ export interface SandboxFs {
   symlink(target: string, path: string): Promise<void>;
   rm(path: string, opts: { recursive?: boolean; force?: boolean }): Promise<void>;
   realpath(path: string): Promise<string>;
+  /** True iff `path` exists (used to fail closed on a missing link target). */
+  pathExists(path: string): Promise<boolean>;
+  /** Read a file's text, or null when it does not exist. */
+  readFile(path: string): Promise<string | null>;
+  writeFile(path: string, data: string): Promise<void>;
+  /** Copy `src` → `dest`; callers guard with `pathExists` first. */
+  copyFile(src: string, dest: string): Promise<void>;
 }
 
 export const realSandboxFs: SandboxFs = {
@@ -34,6 +51,10 @@ export const realSandboxFs: SandboxFs = {
   symlink: (target, path) => fsp.symlink(target, path),
   rm: (path, opts) => fsp.rm(path, opts),
   realpath: (path) => fsp.realpath(path),
+  pathExists: (path) => fsp.access(path).then(() => true, () => false),
+  readFile: (path) => fsp.readFile(path, 'utf-8').then((t) => t, () => null),
+  writeFile: (path, data) => fsp.writeFile(path, data, 'utf-8'),
+  copyFile: (src, dest) => fsp.copyFile(src, dest),
 };
 
 /** Thrown when the sandbox cannot be provisioned; names the failed path. */
@@ -61,6 +82,18 @@ export interface SandboxBuildEnv {
 export interface ProvisionOptions {
   /** Build worktree root whose skills/ + hooks/ the sandbox links to. */
   worktreeRoot: string;
+  /**
+   * The harness MAIN checkout. Absolute paths under it in the copied
+   * settings.json (hook commands, statusLine) are retargeted to `worktreeRoot`
+   * so the self-build exercises its own edited hooks. For a real self-build this
+   * differs from `worktreeRoot`; when equal, the retarget is a no-op.
+   */
+  harnessRoot: string;
+  /**
+   * The operator's live config dir — the source of `.credentials.json` +
+   * `settings.json`. Defaults to `$CLAUDE_CONFIG_DIR` or `~/.claude`.
+   */
+  globalConfigDir?: string;
   /** Base dir for the throwaway config dir (defaults to the OS temp dir). */
   baseDir?: string;
   /** Parent env the child env is derived from (defaults to process.env). */
@@ -71,6 +104,9 @@ export interface ProvisionOptions {
 
 /** The two links a sandbox exposes into the worktree. */
 const LINKED_DIRS = ['skills', 'hooks'] as const;
+/** Config files copied (never symlinked) from the operator's global config. */
+const CREDENTIALS_FILE = '.credentials.json';
+const SETTINGS_FILE = 'settings.json';
 
 class ThrowawaySandbox implements SandboxBuildEnv {
   private tornDown = false;
@@ -94,27 +130,58 @@ class ThrowawaySandbox implements SandboxBuildEnv {
 }
 
 /**
- * Provision a throwaway CLAUDE_CONFIG_DIR whose skills/ + hooks/ link into the
- * build worktree. On ANY provisioning failure, removes the partial sandbox and
- * throws SandboxProvisionError — the caller must not launch a build against a
- * partially-built sandbox.
+ * Provision a throwaway CLAUDE_CONFIG_DIR: skills/ + hooks/ symlinked into the
+ * build worktree, with `.credentials.json` + a hook-retargeted `settings.json`
+ * copied in. On ANY provisioning failure (including a missing worktree
+ * skills//hooks/ dir), removes the partial sandbox and throws
+ * SandboxProvisionError — the caller must not launch a build against it.
  */
 export async function provisionSandboxBuildEnv(opts: ProvisionOptions): Promise<SandboxBuildEnv> {
   const fs = opts.fs ?? realSandboxFs;
   const base = opts.baseDir ?? tmpdir();
   const parentEnv = opts.parentEnv ?? process.env;
+  const globalConfigDir =
+    opts.globalConfigDir ?? parentEnv.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude');
 
   let configDir: string | null = null;
   try {
     configDir = await fs.mkdtemp(join(base, 'harness-selfbuild-'));
+
     for (const name of LINKED_DIRS) {
-      await fs.symlink(join(opts.worktreeRoot, name), join(configDir, name));
+      const target = join(opts.worktreeRoot, name);
+      // Fail closed on a missing target — never provision a dangling link (TR-5).
+      if (!(await fs.pathExists(target))) {
+        throw new SandboxProvisionError(
+          `Harness self-build worktree is missing '${name}/' (expected ${target}). ` +
+            'Refusing to provision a sandbox with a dangling link; the build was NOT launched.',
+        );
+      }
+      await fs.symlink(target, join(configDir, name));
     }
+
+    // Auth: copy the operator's credentials so the headless build authenticates.
+    // Copy (not symlink) keeps the TR-6 no-global-symlink invariant intact.
+    // Copy-if-present: an env-key auth (ANTHROPIC_API_KEY) needs no creds file.
+    await copyIfPresent(
+      fs,
+      join(globalConfigDir, CREDENTIALS_FILE),
+      join(configDir, CREDENTIALS_FILE),
+    );
+
+    // settings.json: copy + retarget harness-checkout paths to the worktree, so
+    // hooks declared by absolute path fire against the EDITED hooks.
+    await provisionSettings(fs, {
+      src: join(globalConfigDir, SETTINGS_FILE),
+      dest: join(configDir, SETTINGS_FILE),
+      harnessRoot: opts.harnessRoot,
+      worktreeRoot: opts.worktreeRoot,
+    });
   } catch (err) {
     // Remove any partial sandbox so a half-built dir is never launched (TR-5).
     if (configDir) {
       await fs.rm(configDir, { recursive: true, force: true }).catch(() => {});
     }
+    if (err instanceof SandboxProvisionError) throw err;
     const e = err as NodeJS.ErrnoException;
     const failedPath = e.path ? ` (failed at ${e.path})` : '';
     throw new SandboxProvisionError(
@@ -123,6 +190,51 @@ export async function provisionSandboxBuildEnv(opts: ProvisionOptions): Promise<
     );
   }
   return new ThrowawaySandbox(configDir, parentEnv, fs);
+}
+
+/** Copy `src` → `dest` only when `src` exists; a missing source is not an error. */
+async function copyIfPresent(fs: SandboxFs, src: string, dest: string): Promise<void> {
+  if (await fs.pathExists(src)) await fs.copyFile(src, dest);
+}
+
+/** Read the global settings.json, retarget harness-checkout paths, write the copy. */
+async function provisionSettings(
+  fs: SandboxFs,
+  args: { src: string; dest: string; harnessRoot: string; worktreeRoot: string },
+): Promise<void> {
+  const raw = await fs.readFile(args.src);
+  if (raw === null) return; // no global settings.json → nothing to provision
+  const rewritten = await retargetHarnessPaths(fs, raw, args.harnessRoot, args.worktreeRoot);
+  await fs.writeFile(args.dest, rewritten);
+}
+
+/**
+ * Replace every `<harnessRoot>/` prefix with `<worktreeRoot>/` in the settings
+ * text, so absolute harness-checkout paths (hook commands, statusLine) resolve
+ * into the worktree's edited copies. Both roots are realpath-canonicalized first
+ * (settings paths are canonical); the trailing `/` keeps a sibling like
+ * `<harnessRoot>-old/` from matching. A no-op when the roots are equal or
+ * either fails to resolve.
+ */
+async function retargetHarnessPaths(
+  fs: SandboxFs,
+  settingsText: string,
+  harnessRoot: string,
+  worktreeRoot: string,
+): Promise<string> {
+  const from = await canonicalize(fs, harnessRoot);
+  const to = await canonicalize(fs, worktreeRoot);
+  if (from === null || to === null || from === to) return settingsText;
+  return settingsText.split(`${from}/`).join(`${to}/`);
+}
+
+/** realpath a path, or null if it does not resolve (never throws). */
+async function canonicalize(fs: SandboxFs, p: string): Promise<string | null> {
+  try {
+    return await fs.realpath(p);
+  } catch {
+    return null;
+  }
 }
 
 /**

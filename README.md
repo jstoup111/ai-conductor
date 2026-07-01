@@ -459,8 +459,11 @@ detector boolean):
   self-build that adds or renames a skill never HALTs on "no parseable result" from a stale symlink.
 - **`SandboxBuildEnv`** — runs the self-build against a **throwaway `CLAUDE_CONFIG_DIR`** whose
   `skills/` + `hooks/` link into the build worktree, so it exercises its *own edited harness* without
-  ever mutating the global `~/.claude` the operator's live sessions read. Torn down on pass, fail, or
-  crash; no sandbox link ever resolves to a global-config target.
+  ever mutating the global `~/.claude` the operator's live sessions read. It also **copies** the
+  operator's `.credentials.json` (so the headless build authenticates) and a `settings.json` whose
+  harness-checkout hook paths are **retargeted to the worktree** (so the build fires its *own* edited
+  hooks). Copies — never symlinks — so no sandbox link resolves to a global-config target. Fails
+  closed if a worktree link target is missing; torn down on pass, fail, or crash.
 - **`VersionApprovalGate` + `ReleaseArtifactGate`** — HALT-based, fail-closed finish gates:
   VERSION-bump approval, `test/test_harness_integrity.sh`, a non-empty CHANGELOG `[Unreleased]`, and a
   `## Migration` block for breaking changes. In the daemon's unattended `auto` mode there is no prompt,

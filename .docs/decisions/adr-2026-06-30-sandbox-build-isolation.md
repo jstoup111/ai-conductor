@@ -27,12 +27,29 @@ exercises its own edited harness, while the global `~/.claude` the operator's se
 **never mutated**. The sandbox is torn down after the build (pass or fail) under a
 try/finally-style guarantee; the global symlinks are left byte-for-byte as found.
 
+A throwaway config dir with only `skills/` + `hooks/` is not launchable on its own: the headless
+`claude -p` build has **no authentication** (subscription credentials live in
+`<config-dir>/.credentials.json`, not an env key, and the daemon cannot re-auth interactively), and
+Claude Code fires hooks only via `settings.json` declarations — a bare `hooks/` symlink is never
+consulted. The sandbox therefore also:
+- **Copies** `.credentials.json` from the operator's live config dir so the build authenticates.
+- **Copies** `settings.json` and **retargets** every absolute path under the harness *main checkout*
+  (hook commands, statusLine) to the *worktree*, so hooks declared by absolute path fire against the
+  **edited** hooks. Personal `~/.claude/hooks` paths (outside the harness checkout) are left as-is.
+
+Both are **copies, never symlinks**, so the TR-6 no-global-symlink invariant holds: the only
+symlinks in the sandbox (`skills/`, `hooks/`) resolve exclusively into the worktree; a copied
+credential/settings file is inert data, not a live link back to global config.
+
 `CLAUDE_CONFIG_DIR` is not read anywhere in the codebase today; this feature introduces its use.
 The sandbox attaches at the existing build step (`engine/steps.ts` `DefaultStepRunner`).
 
 Isolation correctness is **safety-critical** and therefore a built primitive with an explicit
 contract, not a convention:
-- No sandbox symlink ever resolves to a global-config target (invariant, TR-6).
+- No sandbox **symlink** ever resolves to a global-config target (invariant, TR-6). Credentials and
+  settings are provisioned by **copy**, so they do not weaken this invariant.
+- A missing worktree `skills/` or `hooks/` dir **fails closed** (`SandboxProvisionError`) rather than
+  provisioning a dangling link (TR-5).
 - Teardown runs on the error/crash branch, asserted — not assumed from the happy path (TR-5).
 - Provisioning failure (EACCES/disk) never launches a partially-built sandbox; it fails/HALTs and
   removes the partial (TR-5).
