@@ -23,11 +23,19 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   resolved the gate is inactive (builds everything, one warn-once line per pass), so nothing regresses
   for an unconfigured solo setup. New `spec_owner` and `owner_gate_cutover` config fields — a
   malformed cutover is **rejected at config load** (never silently defaulted, so an un-owned spec is
-  never misclassified); a missing cutover means no grandfather window. The gate runs strictly after
+  never misclassified); a missing cutover means no grandfather window. When the gate is active but
+  **no `owner_gate_cutover` is set**, discovery emits one warn-once line per pass
+  (`owner-gate active but no owner_gate_cutover configured — un-owned specs will be skipped …`) so
+  the skip-default for pre-existing un-owned specs is discoverable. The gate runs strictly after
   the existing content filters and after `isProcessed`, so eligibility and idempotency are unchanged.
   Owner is a configured identity (the gh-login fallback is local-dev only); the identity/provenance
   seams keep it forward-compatible with a platform-provided (EKS) identity.
   (`src/engine/owner-gate/`, `.docs/specs/2026-06-30-daemon-owner-gate.md`, 3 ADRs.)
+  - **Write side wired end-to-end:** `conduct-ts engineer land` now loads the target repo's
+    HarnessConfig and threads `spec_owner` + the `gh` runner into `landSpec`, so a landed spec is
+    actually stamped `Owner: <configured spec_owner OR operator gh login>` (unresolved → the
+    `Owner:` line is omitted, never blank). Previously the caller passed no owner deps, so no spec
+    was ever stamped and every spec reached the daemon un-owned.
 - **`conduct render-diagrams --check <file>...` syntax-checks Mermaid blocks at authoring time.**
   It parse-checks every diagram (rendering each with `mmdc` but not opening it) and **exits
   non-zero on a syntax error**, printing the file, block index, and parse-error line. Unlike the

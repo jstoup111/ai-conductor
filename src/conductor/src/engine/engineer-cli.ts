@@ -28,6 +28,7 @@ import { createRegistryReader } from './registry.js';
 import { resolveEngineerDir } from './engineer-store.js';
 import { resolveTargetRepo } from './engineer/target.js';
 import { landSpec } from './engineer/land-spec.js';
+import { loadConfig } from './config.js';
 import { openSpecPr } from './engineer/handoff.js';
 import { recordAuthoredKey } from './engineer/authored-ledger.js';
 import { ensureRunning } from './daemon-lock.js';
@@ -526,9 +527,25 @@ export async function dispatchEngineer(
         return 1;
       }
 
+      // Owner-gate (adr-2026-06-30-*): the daemon that later builds this spec
+      // resolves ITS owner from the TARGET repo's HarnessConfig (`spec_owner`),
+      // so stamp the spec with the SAME source here. Load the target repo's
+      // config for `ownerConfig` and thread the in-scope `gh` runner for the
+      // login fallback; landSpec resolves configured spec_owner → gh login →
+      // un-owned (omits the `Owner:` line). A config-load failure degrades to an
+      // empty config (owner falls to gh login) and never crashes the land.
+      // ADR-1 naming: `ownerConfig`/`specOwner`, never a bare `owner`.
+      const targetConfigResult = await loadConfig(target.canonicalPath);
+      const ownerConfig = targetConfigResult.ok ? targetConfigResult.config : {};
+
       let result: Awaited<ReturnType<typeof landSpec>>;
       try {
-        result = await landSpec({ name: target.name, canonicalPath: target.canonicalPath }, idea);
+        result = await landSpec(
+          { name: target.name, canonicalPath: target.canonicalPath },
+          idea,
+          sourceRef,
+          { ownerConfig, gh },
+        );
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
         printErr(`engineer land: ${msg}`);
