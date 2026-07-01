@@ -141,6 +141,14 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Changed
 
+- **Daemon activity log lines are now timestamped.** Every line the daemon tees into the
+  durable `.daemon/daemon.log` (read via `conduct-ts daemon logs [--follow]`) is prefixed
+  with a leading ISO-8601 UTC timestamp (e.g. `2026-07-01T14:23:05.123Z [daemon] …`) so
+  activity can be correlated and grepped by time long after the fact. The stamping is a
+  pure, clock-injected `formatDaemonLogLine` helper in `engine/daemon-log.ts`; the live
+  tmux console keeps its uncluttered colored line. (`src/engine/daemon-log.ts`,
+  `src/daemon-cli.ts`.)
+
 - **Model selection right-sized at the front of the funnel.** `explore` now defaults to
   **opus / xhigh** (was sonnet / high), `bootstrap` and `complexity` to **sonnet** (were haiku),
   and `assess` to **sonnet** (was haiku; the `cto-orchestrator` synthesis stays opus). Rationale:

@@ -14,7 +14,11 @@ import { ensureInstallFresh } from './engine/install-freshness.js';
 import { Conductor } from './engine/conductor.js';
 import { loadConfig, resolveMemoryProvider } from './engine/config.js';
 import { holdLock } from './engine/daemon-lock.js';
-import { openDaemonLog, type DaemonLogSink } from './engine/daemon-log.js';
+import {
+  openDaemonLog,
+  formatDaemonLogLine,
+  type DaemonLogSink,
+} from './engine/daemon-log.js';
 import type { ConductState, ConductorEvent, StepName } from './types/index.js';
 import { runDaemon, type BacklogItem } from './engine/daemon.js';
 import { discoverBacklog, fastForwardRoot } from './engine/daemon-backlog.js';
@@ -143,7 +147,10 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   let logSink: DaemonLogSink | null = null;
   const log = (msg: string) => {
     console.log(`${chalk.dim('[daemon]')} ${msg}`);
-    logSink?.write(`[daemon] ${stripAnsi(msg)}`);
+    // The persisted record gets a leading ISO-8601 UTC timestamp so activity read
+    // back via `conduct daemon logs` can be correlated in time; the console stays
+    // uncluttered for live watching.
+    logSink?.write(formatDaemonLogLine(`[daemon] ${stripAnsi(msg)}`));
   };
 
   // ADR-010: claim the 1-per-repo pidfile so this daemon's liveness is observable

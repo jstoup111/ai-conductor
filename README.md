@@ -181,8 +181,10 @@ The daemon is hosted as a **foreground process inside a per-repo tmux session**
 (`cc-daemon-<slug>`), so you can attach to a *running* daemon on demand — in full color
 — and restart or debug it without hunting for a pid. Its output is still teed to an
 append-only **`.daemon/daemon.log`** (size-capped, rotated once) so the full narrative
-survives. Management requires `tmux` on the host; the daemon still builds with no tmux
-present (management is purely additive).
+survives. Each persisted line is prefixed with an ISO-8601 UTC timestamp so activity
+read back via `daemon logs` can be correlated in time (the live console stays
+uncluttered). Management requires `tmux` on the host; the daemon still builds with no
+tmux present (management is purely additive).
 
 ```bash
 conduct-ts daemon start      # start the daemon in a tmux session (idempotent — no duplicate)
