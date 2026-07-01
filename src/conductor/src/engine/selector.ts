@@ -5,7 +5,7 @@ import type {
 } from '../types/index.js';
 import type { GateVerdict } from './gate-verdicts.js';
 import { getStepStatus } from './state.js';
-import { shouldSkipForBootstrapMode } from './steps.js';
+import { shouldSkipForBootstrapMode, shouldSkipForUpstreamSkip } from './steps.js';
 
 /**
  * The gate-driven loop's next-step selector. Given the resolved step list,
@@ -65,6 +65,7 @@ function isSkipped(step: StepDefinition, state: ConductState): boolean {
     return true;
   }
   if (shouldSkipForBootstrapMode(step.name, state.bootstrap_mode)) return true;
+  if (shouldSkipForUpstreamSkip(step, state)) return true;
   return false;
 }
 

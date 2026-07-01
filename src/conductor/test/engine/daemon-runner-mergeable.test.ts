@@ -196,14 +196,13 @@ describe('FR-16: clear-on-success', () => {
 
     // prMergeState: pr view call
     expect(calls.some((a) => a[0] === 'pr' && a[1] === 'view')).toBe(true);
-    // removeLabel('needs-remediation'): pr edit --remove-label needs-remediation
+    // removeLabel('needs-remediation'): REST DELETE .../labels/needs-remediation
     expect(
       calls.some(
         (a) =>
-          a[0] === 'pr' &&
-          a[1] === 'edit' &&
-          a.includes('--remove-label') &&
-          a.includes('needs-remediation'),
+          a[0] === 'api' &&
+          a.includes('DELETE') &&
+          a.some((s) => /\/labels\/needs-remediation$/.test(s)),
       ),
     ).toBe(true);
     // setReady: pr ready
@@ -221,7 +220,9 @@ describe('FR-16: clear-on-success', () => {
       }),
     );
     await run(ITEM);
-    expect(calls.some((a) => a[0] === 'pr' && a[1] === 'edit' && a.includes('--remove-label'))).toBe(false);
+    expect(
+      calls.some((a) => a[0] === 'api' && a.includes('DELETE') && a.some((s) => /\/labels\//.test(s))),
+    ).toBe(false);
     expect(calls.some((a) => a[0] === 'pr' && a[1] === 'ready')).toBe(false);
   });
 
@@ -259,7 +260,7 @@ describe('FR-16: clear-on-success', () => {
     );
     await run(ITEM);
     expect(calls.some((a) => a[0] === 'pr' && a[1] === 'view')).toBe(false);
-    expect(calls.some((a) => a[0] === 'pr' && a[1] === 'edit')).toBe(false);
+    expect(calls.some((a) => a[0] === 'api' && a.some((s) => /\/labels\//.test(s)))).toBe(false);
     expect(calls.some((a) => a[0] === 'pr' && a[1] === 'ready')).toBe(false);
   });
 
@@ -288,7 +289,7 @@ describe('FR-16: clear-on-success', () => {
             order.push('prMergeState');
             return (await makeGhFake({ labels: ['needs-remediation'] }).runGh(args, opts));
           }
-          if (args[0] === 'pr' && args[1] === 'edit') order.push('removeLabel');
+          if (args[0] === 'api' && args.includes('DELETE')) order.push('removeLabel');
           if (args[0] === 'pr' && args[1] === 'ready') order.push('setReady');
           return { stdout: '' };
         },

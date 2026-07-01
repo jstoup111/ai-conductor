@@ -11,11 +11,93 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 ## [Unreleased]
 
 ### Added
-- Design spec (PRD) for **daemon owner-gating**: the autonomous spec-build daemon will build only
-  merged specs owned by the configured operator — skipping (and logging) specs owned by others,
-  with strict handling of un-owned specs and a grandfather cutover for pre-existing work. Owner is
-  a configured identity with a gh-login fallback. Implementation follows in this branch.
-  (`.docs/specs/2026-06-30-daemon-owner-gate.md`)
+
+- Design spec (PRD + full DECIDE set) for **daemon owner-gating**: the autonomous spec-build daemon
+  will build only merged specs owned by the configured operator — skipping (and logging) specs owned
+  by others, with strict handling of un-owned specs and a grandfather cutover for pre-existing work.
+  Owner is a configured identity (gh-login fallback is local-dev only); identity/provenance seams
+  keep it forward-compatible with a platform-provided (EKS) identity. Implementation follows in this
+  branch. (`.docs/specs/2026-06-30-daemon-owner-gate.md`, 3 ADRs, 19-task plan.)
+- **`conduct render-diagrams --check <file>...` syntax-checks Mermaid blocks at authoring time.**
+  It parse-checks every diagram (rendering each with `mmdc` but not opening it) and **exits
+  non-zero on a syntax error**, printing the file, block index, and parse-error line. Unlike the
+  render path — which never-fails so a missing tool can't block the approval gate — the check
+  distinguishes an author error (fail) from a missing `mmdc` (skip, exit 0), so it's a real gate
+  that still no-ops on a browser-less CI box. The `architecture-diagram` skill now runs it before
+  the approval gate, and documents a **guillemet placeholder convention** (`«slug»`, not `<slug>`
+  / `&lt;slug&gt;` / `{slug}`) to avoid the angle-bracket trap that silently broke a sequence
+  diagram in a recent spec. New `checkDiagramsForFile` in `mermaid-renderer.ts`.
+- `/bootstrap` now sets up git end-to-end for **new/fresh** projects (new Step 10a, run after
+  the smoke test). It forces the default branch to `main`, makes a single seed commit when there
+  is no history yet, configures an `origin` remote (`gh repo create --private --source=.` when
+  `gh` is authenticated, or a user-provided URL otherwise), and pushes with `-u` to set the
+  upstream — so the first feature can open a PR end-to-end. Every action is idempotent and
+  non-destructive: an existing repo, existing history, or a pre-configured remote is left
+  untouched, and a rejected push (remote already has commits) stops for the user instead of
+  forcing. When no remote is available the step is skipped with a note rather than blocking.
+
+### Fixed
+
+- **PR/issue label mutations no longer fail on GitHub's Projects (classic) sunset.**
+  `gh pr edit --add-label/--remove-label` and `gh issue edit --add-label/--remove-label`
+  resolve label names against repo metadata via a GraphQL query that pulls Projects (classic)
+  fields — which GitHub has deprecated, so the whole command now errors out before the label
+  is ever applied. This broke the daemon's `mergeable` / `needs-remediation` labeling and the
+  mergeable sweep, plus the engineer intake's `engineer:handled` label add/remove. All label
+  add/remove operations now go through the REST labels endpoint (`gh api .../issues/<n>/labels`),
+  which never touches Projects. New `restAddLabelArgs` / `restRemoveLabelArgs` / `parseIssueRef`
+  helpers in `pr-labels.ts` are the single source of the REST contract (used by `addLabel` /
+  `removeLabel` and the engineer intake). PR-body/title edits (`gh pr edit --body/--title`) are
+  unaffected — they need no name resolution, so they never trigger the Projects query.
+- **Repaired 6 silently-broken Mermaid diagrams** across 5 architecture/sequence docs that the
+  new `--check` surfaced (they were falling back to raw text in review). Root causes: a `;`
+  inside `sequenceDiagram` message/`Note` labels (Mermaid reads it as a statement separator), raw
+  `<feature>` / `<slug>` angle-bracket placeholders in sequence labels (the `>` tokenizes as an
+  arrow), a dotted link whose `.`-containing label `-.9.3b.->` confused the link lexer (now
+  quoted), and a participant literally named `LOOP` that collided with the `loop` keyword (renamed
+  `ELoop`). Also fixed `extractMermaidBlocks` to require a fenced ` ```mermaid ` to **start a
+  line**, so a mid-sentence prose mention no longer feeds prose to the renderer as a fake diagram.
+- Daemon `needs-remediation` escalation now **upserts** its failure comment instead of
+  appending a new one on every HALT (#159). The comment carries a hidden marker
+  (`<!-- conductor:needs-remediation -->`); on a repeat HALT the existing comment is edited
+  in place (the latest reason replaces the prior one) so a repeatedly-failing feature no
+  longer accumulates duplicate `## Daemon halt` comments on the same PR. New
+  `upsertComment()` seam in `pr-labels.ts`; best-effort/non-throwing (a PATCH failure leaves
+  the existing comment as-is, a missing/unparseable/unreachable comment falls back to create).
+
+- **Mermaid diagram rendering now works on WSL, containers, and as root.** The `mmdc-png` /
+  `mmdc-svg` presets launched Chromium with its setuid sandbox, which cannot initialize on WSL
+  or in most containers (or when running as root), so `conduct render-diagrams` and the
+  architecture-diagram approval gate silently fell back to raw Markdown. The renderer now passes a
+  Puppeteer config enabling `--no-sandbox` (plus an explicit Chrome `executablePath` when a system
+  Chrome is found) in those environments, and honors an operator-managed
+  `~/.ai-conductor/puppeteer.json` override when present. Pure helpers `mmdcArgs` / `needsNoSandbox`
+  are unit-tested; a real-binary render smoke confirms end-to-end output.
+
+- `/bootstrap` now scaffolds the **full** set of `.docs/` subdirectories the conductor and
+  daemon actually read/write — added the three it was missing (`complexity/`, `architecture/`,
+  `intake/`) alongside the existing `specs/`, `stories/`, `conflicts/`, `decisions/`, `plans/`,
+  and `retros/`. Previously a freshly-bootstrapped project lacked those three until a later step
+  happened to create them, leaving bootstrap's directory list out of parity with the engine.
+
+### Changed
+
+- `writing-system-tests` skill is now language- and framework-agnostic. Replaced the
+  Rails/RSpec-only mechanics (hardcoded `spec/integration`/`spec/system` paths, `config/routes.rb`,
+  `bundle exec rspec`, Capybara/`SecureRandom` examples) with framework-neutral guidance that
+  defers concrete syntax, paths, runner, and fixtures to the project's detected test framework
+  (mirroring how `/tdd` defers to stack test conventions). All correctness principles are
+  preserved: §3b replacement-entry-point, §3c path-guard boundary values, §3d adversarial
+  derivation coverage, RED discipline, and the acceptance/request/unit layering philosophy.
+  README skill table updated to match.
+
+- `bin/install` now builds the `conduct-ts` bundle itself — it runs `npm install
+  && npm run build` in `src/conductor/` (in both first-run and `--update` mode)
+  before symlinking `conduct-ts`, so updates can never leave a stale bundle for
+  the install-freshness guard to reject. The build is non-fatal and idempotent:
+  if Node < 20.5 is active or `npm` is missing it's skipped with a warning and
+  `conduct` still installs. `bin/install --check` now reports whether the
+  `conduct-ts` bundle is built and on PATH.
 
 ## Migration
 
@@ -64,6 +146,29 @@ fi
 
 ### Fixed
 
+- **The SHIP `architecture_review_as_built` gate no longer runs when architecture was skipped, and
+  is now fail-closed.** On a Small-tier feature the DECIDE-phase `architecture_diagram` +
+  `architecture_review` are skipped (no ADRs), but the as-built compliance gate still ran — auditing
+  shipped code against APPROVED ADRs that never existed. Its completion predicate was also
+  fail-**open**: it passed on any verdict that wasn't the literal word `BLOCKED`, so a confused
+  no-ADR review marked the step `done` and the daemon loop ended without a `DONE` or `HALT` marker
+  (classified `error`, worktree stranded). Two fixes: (1) `architecture_review_as_built` now skips
+  whenever `architecture_review` was skipped — `skippableForTiers: ['S']` plus a new declarative
+  `skipWhenSkipped: 'architecture_review'` that also covers config-disable / `when:` skips on
+  Medium/Large; (2) the predicate is now **fail-closed** — it passes only on an explicit `APPROVED`
+  / `APPROVED WITH DRIFT NOTES` verdict and stays unsatisfied (→ proper HALT) on `BLOCKED`, a
+  missing `Verdict:` line, or any unrecognized verdict. Observed on `jstoup111/random-number-api`.
+- **Daemon runs always leave a terminal `DONE`/`HALT` marker now (no more stranded `error`
+  exits).** The daemon classifies a feature run solely by `.pipeline/DONE` vs `.pipeline/HALT`
+  (`daemon-deps.readWorktreeOutcome`), but a few early `return`s in `Conductor.run()` — a blocked
+  gate (prerequisites unsatisfied) and a parallel-group gating failure — exited without writing
+  either, so the daemon reported a bare `error` and stranded the worktree ("loop ended without DONE
+  or HALT marker"). Rather than patch each return site (fragile — a future return reintroduces the
+  gap), `run()` now enforces the invariant structurally: the success path writes `DONE` when
+  convergence didn't (e.g. a resume that ran no tail step), and a `finally` backstop writes a
+  diagnostic `HALT` if a daemon run reaches it with neither marker. Interactive runs (`daemon:false`)
+  are untouched. Follow-up to the as-built fix, which closed the specific path that first surfaced
+  this on `jstoup111/random-number-api`.
 - **`/finish` now refuses a mid-rebase/mid-merge tree (skill GATE 0).** A `/finish` dispatched on a
   worktree with a paused rebase (e.g. `conduct-state` marked `rebase` done but the tree was still
   mid-conflict) would grind for ~15 minutes and then push a PR of a detached, half-rebased branch.

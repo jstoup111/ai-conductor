@@ -78,6 +78,54 @@ export function makeProductionGit(): GitRunner {
 // ── Label management ──────────────────────────────────────────────────────────
 
 /**
+ * Parse a github.com PR or issue URL into the `owner/repo` slug and number used
+ * by the REST labels endpoint. Returns null for anything that isn't a
+ * recognizable github.com pull/issue URL.
+ */
+export function parseIssueRef(url: string): { repo: string; number: string } | null {
+  const m = url.match(/github\.com\/([^/]+\/[^/]+)\/(?:pull|issues)\/(\d+)/);
+  if (!m) return null;
+  return { repo: m[1], number: m[2] };
+}
+
+/**
+ * Build the `gh api` argv that ADDS a label via the REST endpoint
+ * (`POST /repos/{owner}/{repo}/issues/{number}/labels`).
+ *
+ * We deliberately avoid `gh pr edit --add-label` / `gh issue edit --add-label`:
+ * those commands first run a GraphQL query that pulls Projects (classic)
+ * metadata, which GitHub has sunset — so the whole command now errors out
+ * before the label is ever applied. The REST labels endpoint never touches
+ * Projects. `repo` is the `owner/repo` slug; `number` is the PR/issue number.
+ */
+export function restAddLabelArgs(repo: string, number: string, name: string): string[] {
+  return [
+    'api',
+    '--method',
+    'POST',
+    `repos/${repo}/issues/${number}/labels`,
+    '-f',
+    `labels[]=${name}`,
+  ];
+}
+
+/**
+ * Build the `gh api` argv that REMOVES a label via the REST endpoint
+ * (`DELETE /repos/{owner}/{repo}/issues/{number}/labels/{name}`). The label
+ * name is URL-encoded so names with special characters (e.g. `engineer:handled`)
+ * resolve correctly. See {@link restAddLabelArgs} for why we avoid `gh pr/issue
+ * edit`.
+ */
+export function restRemoveLabelArgs(repo: string, number: string, name: string): string[] {
+  return [
+    'api',
+    '--method',
+    'DELETE',
+    `repos/${repo}/issues/${number}/labels/${encodeURIComponent(name)}`,
+  ];
+}
+
+/**
  * Ensure a label exists in the repo (idempotent via --force).
  * Swallows all errors.
  */
@@ -96,8 +144,8 @@ export async function ensureLabel(
 }
 
 /**
- * Add a label to a PR by URL.
- * Swallows all errors.
+ * Add a label to a PR by URL via the REST endpoint (see {@link restAddLabelArgs}
+ * for why we don't use `gh pr edit`). Swallows all errors.
  */
 export async function addLabel(
   runGh: GhRunner = makeProductionGh(),
@@ -106,16 +154,21 @@ export async function addLabel(
   name: string,
   log?: (msg: string) => void,
 ): Promise<void> {
+  const ref = parseIssueRef(prUrl);
+  if (!ref) {
+    log?.(`[pr-labels] addLabel: unparseable PR URL "${prUrl}"`);
+    return;
+  }
   try {
-    await runGh(['pr', 'edit', prUrl, '--add-label', name], { cwd });
+    await runGh(restAddLabelArgs(ref.repo, ref.number, name), { cwd });
   } catch (err) {
     log?.(`[pr-labels] addLabel(${prUrl}, ${name}) error: ${err}`);
   }
 }
 
 /**
- * Remove a label from a PR by URL.
- * Swallows all errors.
+ * Remove a label from a PR by URL via the REST endpoint (see
+ * {@link restRemoveLabelArgs}). Swallows all errors.
  */
 export async function removeLabel(
   runGh: GhRunner = makeProductionGh(),
@@ -124,8 +177,13 @@ export async function removeLabel(
   name: string,
   log?: (msg: string) => void,
 ): Promise<void> {
+  const ref = parseIssueRef(prUrl);
+  if (!ref) {
+    log?.(`[pr-labels] removeLabel: unparseable PR URL "${prUrl}"`);
+    return;
+  }
   try {
-    await runGh(['pr', 'edit', prUrl, '--remove-label', name], { cwd });
+    await runGh(restRemoveLabelArgs(ref.repo, ref.number, name), { cwd });
   } catch (err) {
     log?.(`[pr-labels] removeLabel(${prUrl}, ${name}) error: ${err}`);
   }
@@ -350,6 +408,109 @@ export async function comment(
   } catch (err) {
     log?.(`[pr-labels] comment(${prUrl}) error: ${err}`);
   }
+}
+
+/**
+ * Stable hidden marker identifying the single harness-authored remediation-status
+ * comment on a PR. Embedded in the comment body so subsequent HALTs can find and
+ * edit that comment in place instead of appending a new one (issue #159).
+ */
+export const NEEDS_REMEDIATION_MARKER = '<!-- conductor:needs-remediation -->';
+
+interface ParsedCommentRef {
+  owner: string;
+  repo: string;
+  commentId: string;
+}
+
+/**
+ * Extract `{owner, repo, commentId}` from a GitHub issue-comment URL of the shape
+ * `https://github.com/<owner>/<repo>/pull/<n>#issuecomment-<id>` (PR comments are
+ * issue comments). Returns null if the URL does not match — callers treat that as
+ * "can't edit, create instead".
+ */
+function parseCommentUrl(url: string): ParsedCommentRef | null {
+  const m = url.match(
+    /github\.com\/([^/]+)\/([^/]+)\/(?:pull|issues)\/\d+#issuecomment-(\d+)/,
+  );
+  if (!m) return null;
+  return { owner: m[1], repo: m[2], commentId: m[3] };
+}
+
+interface GhCommentJson {
+  comments?: Array<{ body?: string; url?: string }> | null;
+}
+
+/**
+ * Upsert a single marker-tagged comment on a PR (issue #159).
+ *
+ * Behaviour:
+ *  - The stored comment body is `<marker>\n<body>` so it can be located later.
+ *  - If a comment containing `marker` already exists and its URL is parseable, the
+ *    existing comment is **edited in place** (HTTP PATCH via `gh api`). A PATCH
+ *    failure is swallowed and leaves the existing comment as-is — it is NOT followed
+ *    by a fallback create (that would defeat the de-duplication this function exists
+ *    to provide).
+ *  - Otherwise (no marked comment, an unparseable URL, or a failed lookup) a new
+ *    marked comment is created via {@link comment}, so the next call can find it.
+ *
+ * Best-effort / non-throwing, consistent with the rest of this seam.
+ */
+export async function upsertComment(
+  runGh: GhRunner = makeProductionGh(),
+  cwd: string,
+  prUrl: string,
+  marker: string,
+  body: string,
+  log?: (msg: string) => void,
+): Promise<void> {
+  const taggedBody = `${marker}\n${body}`;
+
+  let matchedUrl: string | undefined;
+  try {
+    const { stdout } = await runGh(['pr', 'view', prUrl, '--json', 'comments'], { cwd });
+    const data: GhCommentJson = JSON.parse(stdout);
+    const matched = (data.comments ?? []).find(
+      (c) => typeof c?.body === 'string' && c.body.includes(marker),
+    );
+    matchedUrl = matched?.url;
+  } catch (err) {
+    log?.(`[pr-labels] upsertComment(${prUrl}) lookup failed: ${err} — creating new comment`);
+    await comment(runGh, cwd, prUrl, taggedBody, log);
+    return;
+  }
+
+  if (matchedUrl) {
+    const ref = parseCommentUrl(matchedUrl);
+    if (ref) {
+      // Edit the existing comment in place. A failure here is terminal (no fallback
+      // create) so a repeated HALT never piles up a second comment.
+      try {
+        await runGh(
+          [
+            'api',
+            '--method',
+            'PATCH',
+            `repos/${ref.owner}/${ref.repo}/issues/comments/${ref.commentId}`,
+            '-f',
+            `body=${taggedBody}`,
+          ],
+          { cwd },
+        );
+      } catch (err) {
+        log?.(
+          `[pr-labels] upsertComment(${prUrl}) PATCH failed: ${err} — leaving existing comment as-is`,
+        );
+      }
+      return;
+    }
+    log?.(
+      `[pr-labels] upsertComment(${prUrl}) marked comment url unparseable (${matchedUrl}) — creating new comment`,
+    );
+  }
+
+  // No editable marked comment — create one carrying the marker.
+  await comment(runGh, cwd, prUrl, taggedBody, log);
 }
 
 /**

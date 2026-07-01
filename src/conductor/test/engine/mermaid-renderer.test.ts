@@ -2,7 +2,10 @@ import { describe, it, expect } from 'vitest';
 import {
   extractMermaidBlocks,
   renderDiagramsForFile,
+  checkDiagramsForFile,
   detectOpenerCommand,
+  mmdcArgs,
+  needsNoSandbox,
   type RenderDeps,
 } from '../../src/engine/mermaid-renderer.js';
 import type { MermaidRendererConfig } from '../../src/types/config.js';
@@ -66,6 +69,76 @@ describe('extractMermaidBlocks', () => {
   it('returns empty for content with no mermaid fence', () => {
     expect(extractMermaidBlocks(NO_DIAGRAM_MD)).toEqual([]);
   });
+
+  it('ignores a mid-sentence prose mention of ```mermaid (fence must start a line)', () => {
+    const prose =
+      'Reads the fenced ```mermaid sources. Empty → no-op.\n\n' +
+      'Later: if it contains a ```mermaid fence, render it.\n';
+    expect(extractMermaidBlocks(prose)).toEqual([]);
+  });
+
+  it('matches an indented fenced block (e.g. inside a list item)', () => {
+    const indented = '- item:\n  ```mermaid\n  graph TD\n    A --> B\n  ```\n';
+    expect(extractMermaidBlocks(indented)).toHaveLength(1);
+  });
+});
+
+describe('checkDiagramsForFile', () => {
+  type CheckDeps = Pick<RenderDeps, 'hasTool' | 'runMmdc' | 'writeTemp'>;
+  const baseDeps = (overrides: Partial<CheckDeps> = {}): CheckDeps => ({
+    hasTool: async () => true,
+    runMmdc: async () => ({ ok: true }),
+    writeTemp: async (name) => `/tmp/check/${name}`,
+    ...overrides,
+  });
+
+  it('returns no-diagrams when the file has no mermaid blocks', async () => {
+    const r = await checkDiagramsForFile(NO_DIAGRAM_MD, baseDeps());
+    expect(r.status).toBe('no-diagrams');
+    expect(r.total).toBe(0);
+  });
+
+  it('returns ok when every block renders', async () => {
+    const r = await checkDiagramsForFile(DIAGRAM_MD, baseDeps());
+    expect(r.status).toBe('ok');
+    expect(r.total).toBe(2);
+    expect(r.failures).toEqual([]);
+  });
+
+  it('returns tool-missing (skip, not fail) when mmdc is absent', async () => {
+    const r = await checkDiagramsForFile(DIAGRAM_MD, baseDeps({ hasTool: async () => false }));
+    expect(r.status).toBe('tool-missing');
+    // No blocks were run — nothing to report as a failure.
+    expect(r.failures).toEqual([]);
+  });
+
+  it('reports per-block failures with the renderer error (1-based index)', async () => {
+    const r = await checkDiagramsForFile(
+      DIAGRAM_MD,
+      baseDeps({
+        runMmdc: async (input) =>
+          input.includes('-2.mmd')
+            ? { ok: false, error: 'Parse error on line 2: bad token' }
+            : { ok: true },
+      }),
+    );
+    expect(r.status).toBe('errors');
+    expect(r.failures).toEqual([{ index: 2, error: 'Parse error on line 2: bad token' }]);
+  });
+
+  it('records a thrown writeTemp/runMmdc as that block\'s failure (never throws)', async () => {
+    const r = await checkDiagramsForFile(
+      DIAGRAM_MD,
+      baseDeps({
+        runMmdc: async () => {
+          throw new Error('boom');
+        },
+      }),
+    );
+    expect(r.status).toBe('errors');
+    expect(r.failures).toHaveLength(2);
+    expect(r.failures[0]).toMatchObject({ index: 1, error: 'boom' });
+  });
 });
 
 describe('detectOpenerCommand', () => {
@@ -95,6 +168,41 @@ describe('detectOpenerCommand', () => {
 
   it('returns null when no opener is available', async () => {
     expect(await detectOpenerCommand({ platform: 'linux', isWsl: false, hasTool: has() })).toBeNull();
+  });
+});
+
+describe('needsNoSandbox', () => {
+  it('is true under WSL', () => {
+    expect(needsNoSandbox({ isWsl: true, uid: 1000 })).toBe(true);
+  });
+  it('is true for the root user (uid 0) even off WSL', () => {
+    expect(needsNoSandbox({ isWsl: false, uid: 0 })).toBe(true);
+  });
+  it('is false for a normal user off WSL', () => {
+    expect(needsNoSandbox({ isWsl: false, uid: 1000 })).toBe(false);
+  });
+  it('is false when uid is unknown (non-posix) off WSL', () => {
+    expect(needsNoSandbox({ isWsl: false, uid: undefined })).toBe(false);
+  });
+});
+
+describe('mmdcArgs', () => {
+  it('builds plain -i/-o args when no puppeteer config is given', () => {
+    expect(mmdcArgs('in.mmd', 'out.png')).toEqual(['-i', 'in.mmd', '-o', 'out.png']);
+  });
+  it('prepends -p <config> so Chromium launch flags take effect', () => {
+    expect(mmdcArgs('in.mmd', 'out.png', '/cfg/puppeteer.json')).toEqual([
+      '-p',
+      '/cfg/puppeteer.json',
+      '-i',
+      'in.mmd',
+      '-o',
+      'out.png',
+    ]);
+  });
+  it('treats null/empty puppeteer config as absent (no -p)', () => {
+    expect(mmdcArgs('in.mmd', 'out.png', null)).toEqual(['-i', 'in.mmd', '-o', 'out.png']);
+    expect(mmdcArgs('in.mmd', 'out.png', '')).toEqual(['-i', 'in.mmd', '-o', 'out.png']);
   });
 });
 

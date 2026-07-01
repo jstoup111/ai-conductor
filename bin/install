@@ -101,6 +101,18 @@ check_installation() {
     all_ok=false
   fi
 
+  # Check conduct-ts (TypeScript conductor). The bundle is built from
+  # src/conductor/ by bin/install; report whether it's built and on PATH.
+  if [ -f "${HARNESS_DIR}/src/conductor/dist/index.js" ]; then
+    if command -v conduct-ts &>/dev/null; then
+      ok "conduct-ts built and on PATH ($(which conduct-ts))"
+    else
+      warn "conduct-ts bundle built but not on PATH — run ./bin/install"
+    fi
+  else
+    warn "conduct-ts bundle not built — run ./bin/install (needs Node >=20.5)"
+  fi
+
   # Check dependencies
   echo ""
   if [ -f "$HARNESS_USER_CONFIG" ] && grep -q "^markdown_viewer:" "$HARNESS_USER_CONFIG" 2>/dev/null; then
@@ -863,6 +875,76 @@ p.write_text(json.dumps(cfg, indent=2) + "\n")
   fi
 }
 
+# ─── conduct-ts build ─────────────────────────────────────────────────────────
+
+# Return 0 if the active Node satisfies conduct-ts's >=20.5 requirement (execa
+# imports addAbortListener, added in Node 20.5). The repo pins 20.19.2 via
+# .tool-versions. Returns 1 if Node is absent or too old.
+node_supports_conduct_ts() {
+  local node_v="" major=0 minor=0 rest=""
+  node_v=$(node --version 2>/dev/null | sed 's/^v//') || true
+  [ -z "$node_v" ] && return 1
+  major=${node_v%%.*}
+  rest=${node_v#*.}
+  minor=${rest%%.*}
+  [ "$major" -gt 20 ] || { [ "$major" -eq 20 ] && [ "$minor" -ge 5 ]; }
+}
+
+# Build the conduct-ts bundle: npm install + npm run build in src/conductor/.
+# Runs in BOTH fresh-install and --update modes — the install-freshness guard
+# refuses to start a stale bundle, so an update that skipped the rebuild would
+# brick `conduct-ts`. Non-fatal: on any failure it warns and returns 1 so the
+# caller can continue (step 3b then reports the missing bundle). Idempotent —
+# npm install is a near no-op when dependencies are already satisfied.
+build_conduct_ts() {
+  local conductor_dir="${HARNESS_DIR}/src/conductor"
+  echo ""
+  echo -e "${BOLD}conduct-ts${NC}"
+
+  if [ ! -f "${conductor_dir}/package.json" ]; then
+    warn "src/conductor/package.json missing — skipping conduct-ts build"
+    return 0
+  fi
+
+  if ! command -v npm &>/dev/null; then
+    warn "npm not found — cannot build conduct-ts; skipping"
+    info "Install Node >=20.5 + npm, then re-run bin/install"
+    return 1
+  fi
+
+  if ! node_supports_conduct_ts; then
+    warn "Node >=20.5 not active (repo pins 20.19.2 via .tool-versions) — skipping conduct-ts build"
+    info "Install it (e.g. 'asdf install nodejs 20.19.2'), then re-run bin/install"
+    return 1
+  fi
+
+  local log
+  log=$(mktemp)
+
+  info "Installing conduct-ts dependencies (npm install)..."
+  if (cd "$conductor_dir" && npm install) >"$log" 2>&1; then
+    ok "conduct-ts dependencies installed"
+  else
+    fail "npm install failed in src/conductor/ — conduct-ts not built"
+    tail -n 20 "$log" | sed 's/^/      /'
+    rm -f "$log"
+    return 1
+  fi
+
+  info "Building conduct-ts bundle (npm run build)..."
+  if (cd "$conductor_dir" && npm run build) >"$log" 2>&1; then
+    ok "conduct-ts bundle built (src/conductor/dist/index.js)"
+  else
+    fail "npm run build failed in src/conductor/ — conduct-ts not built"
+    tail -n 20 "$log" | sed 's/^/      /'
+    rm -f "$log"
+    return 1
+  fi
+
+  rm -f "$log"
+  return 0
+}
+
 # ─── Install ──────────────────────────────────────────────────────────────────
 
 install() {
@@ -930,11 +1012,17 @@ install() {
     ok "Installed conduct script to ${conduct_target}"
   fi
 
+  # 3a. Build conduct-ts (npm install + npm run build) so the dist bundle is
+  # fresh before we symlink it. Runs in --update mode too — the install-freshness
+  # guard refuses a stale bundle. Non-fatal: a build failure (no npm, wrong Node)
+  # just leaves the bundle missing, and step 3b reports that.
+  build_conduct_ts || true
+
   # 3b. Symlink conduct-ts (TypeScript conductor) if the dist bundle exists.
   # conduct-ts is the engine-layer rewrite of conduct; users opt in today by
   # invoking `conduct-ts` explicitly. The bundle is produced by
-  # `npm run build` inside src/conductor/; skip the symlink if it's missing
-  # (fresh checkout without a build).
+  # `npm run build` inside src/conductor/ (step 3a above); skip the symlink if
+  # it's still missing (build skipped or failed).
   local conduct_ts_source="${HARNESS_DIR}/bin/conduct-ts"
   local conduct_ts_target="${LOCAL_BIN}/conduct-ts"
   local conduct_ts_dist="${HARNESS_DIR}/src/conductor/dist/index.js"
@@ -954,21 +1042,13 @@ install() {
       ok "Installed conduct-ts script to ${conduct_ts_target}"
     fi
   else
-    # conduct-ts needs Node >= 20.5 to build (execa imports addAbortListener).
-    # The repo pins Node 20.19.2 via the root .tool-versions, so a missing Node
-    # 20 yields a cryptic asdf error on `npm run build` — surface the real
-    # requirement here instead of letting the user trip over it.
-    local node_v="" node_major=0 node_minor=0 rest=""
-    node_v=$(node --version 2>/dev/null | sed 's/^v//') || true
-    if [ -n "$node_v" ]; then
-      node_major=${node_v%%.*}
-      rest=${node_v#*.}
-      node_minor=${rest%%.*}
-    fi
-    if [ -n "$node_v" ] && { [ "$node_major" -gt 20 ] || { [ "$node_major" -eq 20 ] && [ "$node_minor" -ge 5 ]; }; }; then
-      info "conduct-ts bundle not found — run 'npm install && npm run build' in src/conductor/ to enable it; skipping symlink"
+    # Build (step 3a) was skipped or failed, so the bundle is absent. Surface the
+    # real cause — conduct-ts needs Node >=20.5 (execa imports addAbortListener),
+    # and the repo pins 20.19.2 via .tool-versions.
+    if node_supports_conduct_ts; then
+      info "conduct-ts bundle not found — 'npm run build' in src/conductor/ failed or was skipped; see the conduct-ts section above"
     else
-      warn "conduct-ts bundle not found and Node >=20.5 is not active (the repo pins 20.19.2 via .tool-versions). Install it (e.g. 'asdf install nodejs 20.19.2'), then run 'npm install && npm run build' in src/conductor/."
+      warn "conduct-ts bundle not found and Node >=20.5 is not active (the repo pins 20.19.2 via .tool-versions). Install it (e.g. 'asdf install nodejs 20.19.2'), then re-run bin/install."
     fi
   fi
 
