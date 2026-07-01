@@ -12,6 +12,14 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- **Spec + plan: harness daemon self-host guardrails (DECIDE artifacts only; no code yet).** Design,
+  architecture diagrams, 3 APPROVED ADRs, 13 stories (TR-1..TR-13), a clean conflict-check, and a
+  Tier-L implementation plan for making the `james-stoup-agents` harness repo safe to
+  daemon-register: a unified self-host mode (single swappable `SelfHostDetector` seam) that activates
+  a skill-relink preflight, a throwaway-`CLAUDE_CONFIG_DIR` sandbox build (self-verifies edited
+  harness without mutating global `~/.claude`), and HALT-based fail-closed VERSION-approval +
+  CHANGELOG/migration/integrity release gates. Preserves ADR-005/ADR-010 (daemon never merges).
+  Implementation is tracked as a separate build over `.docs/plans/daemon-self-host-guardrails.md`.
 - **Daemon owner-gating: the autonomous spec-build daemon now builds only the merged specs it
   owns.** Each discovery pass resolves the daemon's operator identity (configured `spec_owner` wins,
   else the `gh` login, else unresolved → fail-open) and, for every content-eligible spec, reads the
