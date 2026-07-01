@@ -12,6 +12,7 @@ import { ConductorEventEmitter } from './ui/events.js';
 import { DefaultStepRunner } from './engine/step-runners.js';
 import { ensureInstallFresh } from './engine/install-freshness.js';
 import { Conductor } from './engine/conductor.js';
+import { classifySelfHost, defaultSelfHostDetector } from './engine/self-host/detector.js';
 import { loadConfig, resolveMemoryProvider } from './engine/config.js';
 import { holdLock } from './engine/daemon-lock.js';
 import {
@@ -182,6 +183,17 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   const configResult = await loadConfig(projectRoot);
   const config = configResult.ok ? configResult.config : undefined;
 
+  // Self-host classification (Phase 6). Decided ONCE per daemon against the MAIN
+  // repo root (`projectRoot`) — "is this daemon building the harness itself?" — not
+  // per-worktree (a worktree path never equals the harness root). Honors the
+  // config activation override (`auto`/`force_on`/`force_off`). Constant for every
+  // feature this daemon builds; threaded to each Conductor as `selfHost`. For any
+  // non-harness repo this is false and the build path is byte-for-byte unchanged.
+  const isSelfHost = await classifySelfHost(defaultSelfHostDetector(), config, projectRoot);
+  if (isSelfHost) {
+    log('self-host mode active — harness self-build guardrails enabled for this daemon.');
+  }
+
   // One shared provider + event bus across workers (rate limits are shared).
   const events = new ConductorEventEmitter();
   const registry = new PluginRegistry();
@@ -270,6 +282,11 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       mode: 'auto',
       config,
       projectRoot: wt.path,
+      // Self-host guardrails (Phase 6): activate the bundle only when this daemon
+      // is building the harness itself. `baseBranch` feeds the release-artifact
+      // migration classifier (`<base>...HEAD`).
+      selfHost: isSelfHost,
+      baseBranch,
       verifyArtifacts: true,
       freshContextPerStep: true,
       // Resume from the first unsatisfied step rather than hardcoding the entry

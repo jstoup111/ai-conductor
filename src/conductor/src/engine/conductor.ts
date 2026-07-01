@@ -52,7 +52,18 @@ import {
   type RemediationGap,
 } from './artifacts.js';
 import type { Track } from '../types/index.js';
-import { resolveStepConfig, resolveRebaseResolutionAttempts } from './resolved-config.js';
+import {
+  resolveStepConfig,
+  resolveRebaseResolutionAttempts,
+  resolveSelfHostConfig,
+} from './resolved-config.js';
+import {
+  defaultSelfHostGuardrails,
+  type SelfHostGuardrails,
+} from './self-host/wiring.js';
+import type { SandboxBuildEnv } from './self-host/sandbox-build-env.js';
+import type { ChangedFile } from './self-host/release-gate.js';
+import type { GateVerdict } from './self-host/gate-halt.js';
 import { selectNextGate } from './selector.js';
 import { computeAndWriteVerdict, readAllVerdicts } from './gate-verdicts.js';
 import { WorktreeManager } from './worktree.js';
@@ -265,6 +276,29 @@ export interface ConductorOptions {
    */
   daemon?: boolean;
   /**
+   * Harness self-host mode (Phase 6). True only when the daemon is building the
+   * harness repo ITSELF, as classified once at the daemon layer by
+   * `classifySelfHost` (path identity + config override). Combined with `daemon`
+   * it activates the self-host guardrail bundle (skill relink + sandboxed build
+   * env + VERSION/release finish gates) as one unit; for every other repo it is
+   * false and the build path is byte-for-byte unchanged. Default false.
+   */
+  selfHost?: boolean;
+  /**
+   * Base branch the self-build's changes are diffed against (`<base>...HEAD`) to
+   * classify breaking surfaces for the release-artifact migration gate (TR-10).
+   * Only consulted for a self-build; absent → the change set is undeterminable
+   * and the migration gate fails closed (requires a migration block). Default
+   * undefined.
+   */
+  baseBranch?: string;
+  /**
+   * Self-host guardrail collaborators (relink / sandbox / finish gates). Injected
+   * as one bundle so tests can drive the wired path hermetically. Defaults to the
+   * real primitives (`defaultSelfHostGuardrails`).
+   */
+  selfHostGuardrails?: SelfHostGuardrails;
+  /**
    * Maximum auto-retries before a failing step (including artifact miss)
    * escalates to the recovery menu. Matches `max_retries=3` in bin/conduct.
    * Default: 3.
@@ -300,6 +334,32 @@ function stepHasCompletionCheck(step: StepName): boolean {
   return (STEP_ARTIFACT_GLOBS[step] ?? []).length > 0;
 }
 
+/**
+ * Parse `git diff --name-status` output into `ChangedFile[]` for the self-host
+ * release-artifact migration classifier. Each line is `<status>\t<path>` for
+ * A/M/D, or `R<score>\t<old>\t<new>` / `C<score>\t<old>\t<new>` for a
+ * rename/copy — the origin path is preserved so a skill moved OUT of `skills/`
+ * (a breaking symlink-target change) is classified on its source side too.
+ * Malformed / blank lines are skipped.
+ */
+function parseNameStatus(stdout: string): ChangedFile[] {
+  const out: ChangedFile[] = [];
+  for (const line of stdout.split('\n')) {
+    if (line.trim() === '') continue;
+    const parts = line.split('\t');
+    const status = parts[0];
+    if (status.startsWith('R') || status.startsWith('C')) {
+      // R<score>\t<old>\t<new> — need both origin and destination paths.
+      if (parts.length < 3) continue;
+      out.push({ status, origPath: parts[1], path: parts[2] });
+    } else {
+      if (parts.length < 2 || parts[1] === '') continue;
+      out.push({ status, path: parts[1] });
+    }
+  }
+  return out;
+}
+
 export class Conductor {
   private stateFilePath: string;
   private stepRunner: StepRunner;
@@ -315,6 +375,16 @@ export class Conductor {
   private verifyArtifacts: boolean;
   private freshContextPerStep: boolean;
   private daemon: boolean;
+  private selfHost: boolean;
+  private baseBranch?: string;
+  private guardrails: SelfHostGuardrails;
+  /**
+   * The self-build's throwaway CLAUDE_CONFIG_DIR sandbox, provisioned lazily on
+   * the first `build` dispatch and torn down (idempotently) in `run()`'s finally.
+   */
+  private activeSandbox: SandboxBuildEnv | null = null;
+  /** Guards the one-time skill relink so it runs before the first build only. */
+  private relinkDone = false;
   private sleep: (ms: number) => Promise<void>;
   private onReviewArtifacts: (step: StepName, files: string[]) => Promise<ArtifactReviewResult>;
   private onRecovery?: (
@@ -346,6 +416,9 @@ export class Conductor {
     this.verifyArtifacts = opts.verifyArtifacts ?? false;
     this.freshContextPerStep = opts.freshContextPerStep ?? false;
     this.daemon = opts.daemon ?? false;
+    this.selfHost = opts.selfHost ?? false;
+    this.baseBranch = opts.baseBranch;
+    this.guardrails = opts.selfHostGuardrails ?? defaultSelfHostGuardrails;
     // Legacy maxRetries option: inject as defaults.max_retries on the config
     // so per-step resolution still works. Tests often pass this directly.
     if (opts.maxRetries !== undefined) {
@@ -395,6 +468,124 @@ export class Conductor {
     } catch {
       return false;
     }
+  }
+
+  /**
+   * True only for a harness SELF-BUILD: the autonomous builder (`daemon`) is
+   * building the harness repo itself (`selfHost`). This single decision gates the
+   * whole guardrail bundle — for any other repo, or any non-daemon run, it is
+   * false and the build path is byte-for-byte unchanged (TR-13).
+   */
+  private isSelfBuild(): boolean {
+    return this.daemon && this.selfHost;
+  }
+
+  /** Read a file's text, or null when it does not exist (gate readText seam). */
+  private readTextOrNull(path: string): Promise<string | null> {
+    return readFile(path, 'utf-8').then(
+      (t) => t,
+      () => null,
+    );
+  }
+
+  /**
+   * Dispatch the `build` step for a self-build under the guardrail bundle:
+   *   1. relink harness skills ONCE before the first build (TR-4) — a failure
+   *      throws InstallStaleError, which aborts the run before any child build;
+   *   2. provision a throwaway CLAUDE_CONFIG_DIR sandbox ONCE (TR-5/6) — a
+   *      provisioning failure throws SandboxProvisionError, aborting before build;
+   *   3. scope `process.env.CLAUDE_CONFIG_DIR` to the sandbox for EXACTLY this
+   *      child dispatch and restore it afterwards on BOTH the pass and throw
+   *      branches, so no env bleeds into later steps (e.g. finish).
+   * The sandbox is torn down in `run()`'s finally. Every throw propagates to
+   * `run()`'s catch, which writes `.pipeline/HALT` — the build never runs against
+   * a half-provisioned sandbox or stale skill links.
+   */
+  private async runSelfBuildDispatch(
+    name: StepName,
+    state: ConductState,
+    retryHint: string | undefined,
+  ): Promise<StepRunResult> {
+    const sh = resolveSelfHostConfig(this.config);
+
+    if (sh.skillRelinkPreflight && !this.relinkDone) {
+      this.relinkDone = true;
+      // Default harness root (the installed MAIN checkout), NOT the worktree:
+      // relink refreshes global ~/.claude against main so daemon-dispatched
+      // skills resolve; the worktree's edits are isolated by the sandbox below,
+      // never by repointing the operator's live globals.
+      await this.guardrails.relink({ log: (m) => console.error(m) });
+    }
+
+    if (!sh.sandboxBuildEnv) {
+      return this.stepRunner.run(name, state, { retryReason: retryHint });
+    }
+
+    if (!this.activeSandbox) {
+      const harnessRoot = (await this.guardrails.resolveHarnessRoot()) ?? this.projectRoot;
+      this.activeSandbox = await this.guardrails.provisionSandbox({
+        worktreeRoot: this.projectRoot,
+        harnessRoot,
+      });
+    }
+
+    const hadKey = 'CLAUDE_CONFIG_DIR' in process.env;
+    const prior = process.env.CLAUDE_CONFIG_DIR;
+    process.env.CLAUDE_CONFIG_DIR = this.activeSandbox.configDir;
+    try {
+      return await this.stepRunner.run(name, state, { retryReason: retryHint });
+    } finally {
+      if (hadKey) process.env.CLAUDE_CONFIG_DIR = prior;
+      else delete process.env.CLAUDE_CONFIG_DIR;
+    }
+  }
+
+  /**
+   * The self-host finish gates (TR-7/8/9/10), run BEFORE the `finish` step is
+   * dispatched because the auto-mode finish prompt opens the PR itself — a gate
+   * that fires after finish would be too late. On the first failure the gate
+   * primitive has already written `.pipeline/HALT`; this returns the verdict so
+   * the caller parks the feature without dispatching finish (no PR). Reads the
+   * VERSION/CHANGELOG/integrity artifacts of the build worktree (`projectRoot`),
+   * which IS the harness being shipped.
+   */
+  private async runSelfHostFinishGates(): Promise<GateVerdict> {
+    const sh = resolveSelfHostConfig(this.config);
+
+    if (sh.versionApprovalGate) {
+      const verdict = await this.guardrails.versionGate({
+        projectRoot: this.projectRoot,
+        harnessRoot: this.projectRoot,
+        readText: (p) => this.readTextOrNull(p),
+      });
+      if (!verdict.ok) return verdict;
+    }
+
+    if (sh.releaseArtifactGate) {
+      const verdict = await this.guardrails.releaseGate({
+        projectRoot: this.projectRoot,
+        harnessRoot: this.projectRoot,
+        readText: (p) => this.readTextOrNull(p),
+        changedFiles: () => this.selfBuildChangedFiles(),
+      });
+      if (!verdict.ok) return verdict;
+    }
+
+    return { ok: true };
+  }
+
+  /**
+   * The self-build's changed files as `git diff --name-status <base>...HEAD`,
+   * parsed for the migration-block classifier. Returns null (→ fail-closed:
+   * require a migration block) when the base branch is unknown or git fails, so
+   * an undeterminable change set never silently skips the gate.
+   */
+  private async selfBuildChangedFiles(): Promise<ChangedFile[] | null> {
+    if (!this.baseBranch) return null;
+    const git = makeGitRunner(this.projectRoot);
+    const r = await git(['diff', '--name-status', `${this.baseBranch}...HEAD`]);
+    if (r.exitCode !== 0) return null;
+    return parseNameStatus(r.stdout);
   }
 
   async run(): Promise<void> {
@@ -637,6 +828,23 @@ export class Conductor {
           return;
         }
 
+        // Self-host release gates (TR-7/8/9/10): a harness self-build must clear
+        // the VERSION-approval and release-artifact gates BEFORE `finish` runs,
+        // because the auto-mode finish prompt opens the PR itself. A failing gate
+        // has already written `.pipeline/HALT`; park the feature (no PR) instead
+        // of dispatching finish. The daemon never opens a PR with an unapproved
+        // bump or a failing integrity/CHANGELOG/migration state, and never merges.
+        if (this.isSelfBuild() && step.name === 'finish') {
+          const verdict = await this.runSelfHostFinishGates();
+          if (!verdict.ok) {
+            state[step.name] = 'stale';
+            await writeState(this.stateFilePath, state);
+            await this.events.emit({ type: 'loop_halt', reason: verdict.reason });
+            process.off('SIGINT', sigintHandler);
+            return;
+          }
+        }
+
         // Mark in_progress before running
         await saveStepStatus(this.stateFilePath, step.name, 'in_progress');
         state[step.name] = 'in_progress';
@@ -707,7 +915,9 @@ export class Conductor {
                 ? await this.runWorktreeStep(state)
                 : step.name === 'rebase'
                   ? await this.runRebaseStep(state)
-                  : await this.stepRunner.run(step.name, state, { retryReason: retryHint });
+                  : this.isSelfBuild() && step.name === 'build'
+                    ? await this.runSelfBuildDispatch(step.name, state, retryHint)
+                    : await this.stepRunner.run(step.name, state, { retryReason: retryHint });
 
           // Rate limit: wait deterministically, then retry WITHOUT burning the
           // retry budget (matches bin/conduct:2248–2280 handle_rate_limit).
@@ -1304,6 +1514,14 @@ export class Conductor {
       await this.events.emit({ type: 'loop_halt', reason, prUrl });
     } finally {
       process.off('SIGINT', sigintHandler);
+
+      // Self-build sandbox teardown (TR-5): the throwaway CLAUDE_CONFIG_DIR is
+      // removed on EVERY exit path — success, HALT, or a mid-build crash. teardown
+      // is idempotent, so this is safe even if a future path tears down earlier.
+      if (this.activeSandbox) {
+        await this.activeSandbox.teardown().catch(() => {});
+        this.activeSandbox = null;
+      }
 
       // Terminal-marker guarantee (failure side). A handful of early `return`s
       // in the loop exit WITHOUT writing DONE or HALT — a blocked gate
