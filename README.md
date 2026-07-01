@@ -18,15 +18,17 @@ No custom runtime. Claude Code is the execution engine.
 ```bash
 git clone git@github.com:jstoup111/ai-conductor.git
 cd ai-conductor
-# Optional: build the TypeScript conductor bundle if you want to try conduct-ts
-(cd src/conductor && npm install && npm run build)
 ./bin/install
 ```
 
 This symlinks all 20 skills into `~/.claude/skills/` and installs the conductor CLI(s) to
-`~/.local/bin/`. See [Choosing a Conductor](#choosing-a-conductor) below — both binaries
-coexist, `conduct` is the default, `conduct-ts` is opt-in and only symlinked if you've
-built the dist bundle.
+`~/.local/bin/`. `./bin/install` also builds the TypeScript conductor bundle for you —
+it runs `npm install && npm run build` in `src/conductor/` (in both first-run and
+`--update` mode) and symlinks `conduct-ts` once the bundle exists. The build needs
+Node >= 20.5 (the repo pins 20.19.2 via `.tool-versions`); if Node is too old or `npm`
+is missing, the build is skipped with a warning and `conduct` still installs. See
+[Choosing a Conductor](#choosing-a-conductor) below — both binaries coexist, `conduct`
+is the default, `conduct-ts` is opt-in.
 
 **Optional: Serena semantic code toolkit.** When [`uv`](https://docs.astral.sh/uv/) is
 present, `./bin/install` offers an opt-in install of [Serena](https://github.com/oraios/serena)
@@ -44,6 +46,13 @@ run; under `conduct-ts` diagrams render automatically when an artifact is presen
 approval, or run `conduct render-diagrams <file.md>...` on demand. The opener is detected per
 platform (macOS `open`, Linux `xdg-open`, WSL `wslview`/`explorer.exe`). With no renderer
 configured, diagrams fall back to raw Markdown — never a blocker.
+
+The `mmdc-*` presets need Chromium. On WSL, in containers, or when running as root — where
+Chromium's setuid sandbox can't initialize — the renderer automatically launches with
+`--no-sandbox` (and an explicit Chrome `executablePath` when a system Chrome is found). To take
+full control of how Chromium launches, drop a Puppeteer config at `~/.ai-conductor/puppeteer.json`
+(e.g. `{ "executablePath": "/usr/bin/google-chrome", "args": ["--no-sandbox"] }`); when present it
+overrides the auto-detection.
 
 Verify:
 
@@ -242,8 +251,8 @@ day-to-day, but the surface is still changing.
 |                              | `conduct` (bash, stable)                      | `conduct-ts` (TypeScript, opt-in)                                |
 |------------------------------|-----------------------------------------------|------------------------------------------------------------------|
 | **Status**                   | Reference implementation                      | Active rewrite — feature parity ongoing                          |
-| **Install**                  | Always symlinked by `bin/install`             | Symlinked only when `src/conductor/dist/` has been built         |
-| **Build step**               | None                                          | `cd src/conductor && npm install && npm run build`               |
+| **Install**                  | Always symlinked by `bin/install`             | Built + symlinked by `bin/install` when Node >= 20.5 is active   |
+| **Build step**               | None                                          | `bin/install` runs `npm install && npm run build` in src/conductor/ |
 | **CLI flags**                | Full surface (`--auto`, `--interactive`, …)   | Same flags **except `--interactive`** is not yet wired           |
 | **Dashboard**                | Terminal status log                           | Event-driven renderer with live-region updates and tail pane     |
 | **Completion gates**         | Artifact grep                                 | Typed events + structured gate-runner                            |

@@ -37,6 +37,7 @@ import { createLedger } from './engineer/intake/ledger.js';
 import { createFileQueue } from './engineer/intake/queue.js';
 import { createGithubIssuesAdapter, GITHUB_ISSUES_SOURCE, HANDLED_LABEL } from './engineer/intake/github-issues.js';
 import { reportRouted, reportDone } from './engineer/intake/writeback.js';
+import { restRemoveLabelArgs } from './pr-labels.js';
 
 /**
  * Production DECIDE seam: gates each authoring step through the io surface.
@@ -711,7 +712,7 @@ export async function dispatchEngineer(
       const m = sourceRef.match(/^(.+)#(\d+)$/);
       if (m) {
         try {
-          await gh(['issue', 'edit', m[2], '-R', m[1], '--remove-label', HANDLED_LABEL], { cwd: process.cwd() });
+          await gh(restRemoveLabelArgs(m[1], m[2], HANDLED_LABEL), { cwd: process.cwd() });
         } catch (err: unknown) {
           printErr(`engineer forget: label strip failed for ${sourceRef}: ${err instanceof Error ? err.message : String(err)}`);
         }

@@ -56,8 +56,11 @@ npm run build      # tsup → dist/index.js (+ .d.ts + .map)
 npm test           # vitest run
 ```
 
-The bundle is committed-optional — the root `bin/install` gracefully skips the
-`conduct-ts` symlink if `dist/` is missing.
+The root `bin/install` runs these `npm install && npm run build` steps for you
+(in both first-run and `--update` mode) and then symlinks `conduct-ts`. The
+commands above are for building by hand. If Node < 20.5 is active or `npm` is
+missing, `bin/install` skips the build with a warning and leaves the
+`conduct-ts` symlink off until `dist/` exists.
 
 ## Key concepts
 
@@ -105,6 +108,16 @@ by **gate verdicts** instead of a fixed order:
   gate selected too many times without satisfying, or **any unexpected throw inside the
   loop** (the error is flushed to state and converted to a HALT so a supervising daemon
   classifies it as `halted` — worktree kept, retryable — never `error` with lost state).
+  **Terminal-marker guarantee (daemon only):** the daemon classifies a run *solely* by
+  these two markers (`daemon-deps.readWorktreeOutcome`), so every daemon exit must leave
+  exactly one. A few early `return`s in the loop — a blocked gate (prerequisites
+  unsatisfied), a parallel-group gating failure — used to exit with neither, which the
+  daemon reported as a bare `error` with a stranded worktree ("loop ended without DONE or
+  HALT marker"). `run()` now enforces the invariant structurally rather than per-return:
+  the success path writes `DONE` if convergence didn't (e.g. a resume that ran no tail
+  step), and a `finally` backstop writes a diagnostic `HALT` if a daemon run reaches it
+  with neither marker. Interactive runs (`daemon:false`) are untouched — they legitimately
+  exit markerless and the daemon never reads their markers.
 - **Fresh session per step** — with `freshContextPerStep` (daemon/auto only; interactive
   `/conduct` leaves it off so the explore→prd→…→stories→plan design session keeps its
   context), the LLM session is reset before **every** executed step in the loop
@@ -124,10 +137,18 @@ and **`architecture_review_as_built`** (shipped code vs APPROVED ADRs) — sit b
 `manual_test` and `retro`. Both are `loopGate: true`, so they inherit the verdict/selector/
 kickback machinery above for free. Their objective verdicts come from
 `CUSTOM_COMPLETION_PREDICATES`: `prd_audit` stays unsatisfied while any audit-table row carries a
-non-`ALIGNED`, un-`ACCEPTED` `FR-N`; `architecture_review_as_built` stays unsatisfied while its
-`Verdict:` is `BLOCKED`. An unsatisfied gate keeps the selector from reaching `finish`; the
-skill guidance drives where the rework lands (BUILD vs DECIDE for prd-audit; human fix vs
-superseding ADR for as-built).
+non-`ALIGNED`, un-`ACCEPTED` `FR-N`; `architecture_review_as_built` is **fail-closed** — it is
+satisfied only by an explicit clean `Verdict:` of `APPROVED` or `APPROVED WITH DRIFT NOTES`, and
+stays unsatisfied for `BLOCKED`, a missing `Verdict:` line, or any unrecognized verdict (so a
+no-ADR / garbled review can't slip through marked `done`). An unsatisfied gate keeps the selector
+from reaching `finish`; the skill guidance drives where the rework lands (BUILD vs DECIDE for
+prd-audit; human fix vs superseding ADR for as-built).
+
+`architecture_review_as_built` also **skips when `architecture_review` was skipped** — for the
+Small tier (both share `skippableForTiers: ['S']`) and, via `skipWhenSkipped: 'architecture_review'`,
+whenever the DECIDE-phase review was skipped for any reason (config-disable / `when:`). With no
+APPROVED ADRs there is nothing to audit, so running it would only produce a non-clean verdict the
+loop could neither pass cleanly nor halt on.
 
 **Daemon prd-audit routing (gap-class aware).** In an interactive run a blocking `prd_audit`
 escalates to the recovery menu, where the human picks where to route. In a **daemon** run
@@ -157,12 +178,23 @@ a *visual* (not raw Mermaid), the artifact-review path renders them:
   never throws, isolates per-diagram failures, HTML-escapes diagram source, and returns a
   `notice` on any skip/failure. Presets + valid modes live in `engine/mermaid-renderer-presets.ts`
   (parallel to `md-viewer-presets.ts`); the config block is `mermaid_renderer.{preset,command,
-  args,mode}`, validated in `engine/config.ts` like `markdown_viewer`.
+  args,mode}`, validated in `engine/config.ts` like `markdown_viewer`. For `mmdc-*`, production
+  `runMmdc` resolves a Puppeteer config (`mmdcArgs`/`needsNoSandbox` are pure + unit-tested): an
+  operator-managed `~/.ai-conductor/puppeteer.json` wins, else in sandbox-hostile environments
+  (WSL/root/containers) it writes a transient `--no-sandbox` config (with a discovered Chrome
+  `executablePath`), else the default sandboxed launch — without this, Chromium fails to start on
+  WSL/containers and diagrams silently degrade to raw Markdown.
 - **Gate** — `TerminalPromptHost.reviewArtifacts` shows the raw Markdown first (always-present
   fallback), then, for a file containing a mermaid fence, calls an injected `renderDiagrams`
   hook and logs any returned notice on the host's own channel (TUI-safe). `index.ts` wires the
   hook from the **merged** config (the preset is set user-level by `bin/install`).
 - **CLI** — `conduct render-diagrams <file>...` (`engine/render-cli.ts`) renders on demand.
+- **Syntax check** — `conduct render-diagrams --check <file>...` parse-checks every Mermaid block
+  (via `checkDiagramsForFile`, without opening anything) and **exits non-zero on a syntax error**,
+  printing the file/block/parse-error line. Unlike the render path's never-fail approval-gate
+  contract, the check DISTINGUISHES an author error (`errors` → fail) from a missing tool
+  (`tool-missing` → skip, exit 0), so it's a real authoring-time gate that still no-ops on a
+  browser-less CI box. The `architecture-diagram` skill runs it before the approval gate.
 - **Opener** — `detectOpenerCommand` resolves per platform (macOS `open`, Linux `xdg-open`,
   WSL `wslview`/`explorer.exe`); `defaultRenderDeps` runs it with a bounded timeout so the
   never-block contract rests on code, not opener behavior.

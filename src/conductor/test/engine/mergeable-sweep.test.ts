@@ -48,9 +48,20 @@ function prViewJson(
  * state.  An Error value causes the call to throw (simulates network failure /
  * not-found error that prMergeState will catch internally).
  *
- * Label mutations (`--add-label`, `--remove-label`) are recorded and optionally
- * update `currentLabels` (per-URL) when `trackLabelMutations` is true.
+ * Label mutations (REST `gh api .../labels` add/remove) are recorded and
+ * optionally update `currentLabels` (per-URL) when `trackLabelMutations` is true.
  */
+
+/**
+ * Reconstruct the canonical PR URL from a REST labels path
+ * (`repos/<owner>/<repo>/issues/<n>/labels[/<name>]`) so label mutations key on
+ * the same URL the sweep used for `gh pr view`.
+ */
+function restPathToPrUrl(path: string): string {
+  const m = path.match(/repos\/([^/]+)\/([^/]+)\/issues\/(\d+)\/labels/);
+  if (!m) return path;
+  return `https://github.com/${m[1]}/${m[2]}/pull/${m[3]}`;
+}
 function makeFakeGh(
   prStates: Record<string, { stdout: string } | Error> = {},
   opts: { trackLabelMutations?: boolean } = {},
@@ -97,10 +108,11 @@ function makeFakeGh(
       return prViewJson('OPEN', 'MERGEABLE', [], labelState[prUrl] ?? []);
     }
 
-    // gh pr edit <url> --add-label <name>
-    if (args[0] === 'pr' && args[1] === 'edit' && args[3] === '--add-label') {
-      const prUrl = args[2];
-      const label = args[4];
+    // gh api --method POST repos/<o>/<r>/issues/<n>/labels -f labels[]=<name>
+    // (REST label-add — Projects-classic safe; replaces `gh pr edit --add-label`)
+    if (args[0] === 'api' && args[2] === 'POST' && /\/labels$/.test(args[3] ?? '')) {
+      const prUrl = restPathToPrUrl(args[3]);
+      const label = (args[5] ?? '').replace(/^labels\[\]=/, '');
       addLabelCalls.push({ prUrl, label });
       if (opts.trackLabelMutations) {
         if (!labelState[prUrl]) labelState[prUrl] = [];
@@ -109,10 +121,11 @@ function makeFakeGh(
       return { stdout: '' };
     }
 
-    // gh pr edit <url> --remove-label <name>
-    if (args[0] === 'pr' && args[1] === 'edit' && args[3] === '--remove-label') {
-      const prUrl = args[2];
-      const label = args[4];
+    // gh api --method DELETE repos/<o>/<r>/issues/<n>/labels/<name>
+    // (REST label-remove — Projects-classic safe; replaces `gh pr edit --remove-label`)
+    if (args[0] === 'api' && args[2] === 'DELETE' && /\/labels\//.test(args[3] ?? '')) {
+      const prUrl = restPathToPrUrl(args[3]);
+      const label = decodeURIComponent(args[3].replace(/^.*\/labels\//, ''));
       removeLabelCalls.push({ prUrl, label });
       if (opts.trackLabelMutations) {
         if (labelState[prUrl]) {

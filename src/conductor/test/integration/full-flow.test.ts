@@ -112,12 +112,15 @@ describe('Integration: full conductor flow', () => {
 
     await conductor.run();
 
-    // Steps that should be skipped for S tier
+    // Steps that should be skipped for S tier. architecture_review_as_built
+    // skips too: Small skips the DECIDE-phase architecture_review (no ADRs), so
+    // the SHIP as-built compliance sweep has nothing to audit.
     const expectedSkipped: StepName[] = [
       'conflict_check',
       'architecture_diagram',
       'architecture_review',
       'acceptance_specs',
+      'architecture_review_as_built',
       'retro',
     ];
 

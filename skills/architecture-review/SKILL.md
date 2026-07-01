@@ -351,8 +351,12 @@ review remain in `.docs/decisions/`):
 ## Resolution (if BLOCKED — code fix OR superseding ADR; human-approved)
 ```
 
-The conductor's objective gate reads the `Verdict:` line: a verdict of `BLOCKED` keeps the gate
-unsatisfied so the SHIP tail cannot reach finish; `APPROVED` and `APPROVED WITH DRIFT NOTES` pass.
+The conductor's objective gate reads the `Verdict:` line and is **fail-closed**: only an explicit
+`APPROVED` or `APPROVED WITH DRIFT NOTES` passes. `BLOCKED`, a missing `Verdict:` line, or any
+other verdict keeps the gate unsatisfied so the SHIP tail cannot reach finish — always write a
+clean, recognizable verdict. (The conductor also skips this gate entirely when the DECIDE-phase
+`architecture_review` was skipped — Small tier, or config/`when:` skip — since there are no
+APPROVED ADRs to audit.)
 
 **Review marker:** review mode for this step is **conditional**. Write
 `.pipeline/review-required-architecture-as-built` (existence = signal) whenever the verdict is not a

@@ -176,7 +176,12 @@ export const ALL_STEPS: StepDefinition[] = [
     phase: 'SHIP',
     enforcement: 'gating',
     prerequisites: ['prd_audit'],
-    skippableForTiers: [],
+    // Mirror the DECIDE-phase architecture_review's tier skip: Small features
+    // produce no ADRs, so there is nothing for the as-built sweep to audit.
+    skippableForTiers: ['S'],
+    // And skip on ANY skip of the review (config-disable / when: on M/L), not
+    // just the tier case — no APPROVED ADRs means no as-built compliance check.
+    skipWhenSkipped: 'architecture_review',
     isCheckpoint: false,
     skillName: 'architecture-review',
     loopGate: true,
@@ -312,6 +317,24 @@ export function shouldSkipForBootstrapMode(
 ): boolean {
   if (mode !== 'new') return false;
   return STEPS_SKIPPED_WHEN_NEW.has(step);
+}
+
+/**
+ * True when a step declares `skipWhenSkipped` and that upstream step is
+ * `skipped` in the current state — e.g. `architecture_review_as_built` skips
+ * when `architecture_review` was skipped (no ADRs to audit). Covers every skip
+ * reason (tier, config-disable, `when:`), not just the tier case.
+ */
+export function shouldSkipForUpstreamSkip(
+  step: StepDefinition,
+  state: import('../types/index.js').ConductState,
+): boolean {
+  // Takes the resolved StepDefinition (NOT a name) so it works for custom
+  // config steps that aren't in the static registry — getStepDefinition would
+  // throw on those.
+  const dep = step.skipWhenSkipped;
+  if (!dep) return false;
+  return state[dep] === 'skipped';
 }
 
 export function getSkippableSteps(tier: ComplexityTier): StepName[] {

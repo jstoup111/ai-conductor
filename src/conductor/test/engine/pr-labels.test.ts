@@ -63,10 +63,23 @@ describe('ensureLabel', () => {
 // ── addLabel ──────────────────────────────────────────────────────────────────
 
 describe('addLabel', () => {
-  it('calls gh pr edit --add-label with the PR URL and label name', async () => {
+  it('adds the label via the REST endpoint (gh api), NOT gh pr edit (Projects-classic safe)', async () => {
     const { gh, calls } = fakeGh([{ stdout: '' }]);
     await addLabel(gh, '/repo', TEST_PR_URL, 'in-progress');
-    expect(calls[0]).toEqual(['pr', 'edit', TEST_PR_URL, '--add-label', 'in-progress']);
+    expect(calls[0]).toEqual([
+      'api',
+      '--method',
+      'POST',
+      'repos/foo/bar/issues/42/labels',
+      '-f',
+      'labels[]=in-progress',
+    ]);
+  });
+
+  it('makes no gh call when the PR URL is unparseable', async () => {
+    const { gh, calls } = fakeGh([{ stdout: '' }]);
+    await addLabel(gh, '/repo', 'not-a-url', 'in-progress');
+    expect(calls).toHaveLength(0);
   });
 
   it('swallows a rejecting runner without throwing', async () => {
@@ -78,10 +91,32 @@ describe('addLabel', () => {
 // ── removeLabel ───────────────────────────────────────────────────────────────
 
 describe('removeLabel', () => {
-  it('calls gh pr edit --remove-label with the PR URL and label name', async () => {
+  it('removes the label via the REST endpoint (gh api), NOT gh pr edit (Projects-classic safe)', async () => {
     const { gh, calls } = fakeGh([{ stdout: '' }]);
     await removeLabel(gh, '/repo', TEST_PR_URL, 'in-progress');
-    expect(calls[0]).toEqual(['pr', 'edit', TEST_PR_URL, '--remove-label', 'in-progress']);
+    expect(calls[0]).toEqual([
+      'api',
+      '--method',
+      'DELETE',
+      'repos/foo/bar/issues/42/labels/in-progress',
+    ]);
+  });
+
+  it('URL-encodes label names with special characters', async () => {
+    const { gh, calls } = fakeGh([{ stdout: '' }]);
+    await removeLabel(gh, '/repo', TEST_PR_URL, 'engineer:handled');
+    expect(calls[0]).toEqual([
+      'api',
+      '--method',
+      'DELETE',
+      'repos/foo/bar/issues/42/labels/engineer%3Ahandled',
+    ]);
+  });
+
+  it('makes no gh call when the PR URL is unparseable', async () => {
+    const { gh, calls } = fakeGh([{ stdout: '' }]);
+    await removeLabel(gh, '/repo', 'not-a-url', 'in-progress');
+    expect(calls).toHaveLength(0);
   });
 
   it('swallows a rejecting runner without throwing', async () => {

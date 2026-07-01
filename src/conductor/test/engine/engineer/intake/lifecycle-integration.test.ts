@@ -59,14 +59,25 @@ function makeFullGh(state: GhState) {
       state.comments.push({ ref: ref(repo, args[2]), body: bi >= 0 ? args[bi + 1] : '' });
       return { stdout: '' };
     }
-    if (args[0] === 'issue' && args[1] === 'edit') {
-      const r = ref(repo, args[2]);
-      const set = state.appliedLabels.get(r) ?? new Set<string>();
-      const add = args.indexOf('--add-label');
-      if (add >= 0) set.add(args[add + 1]);
-      const remove = args.indexOf('--remove-label');
-      if (remove >= 0) set.delete(args[remove + 1]);
-      state.appliedLabels.set(r, set);
+    // REST label mutation: `gh api --method POST|DELETE repos/<repo>/issues/<n>/labels[/<name>]`
+    if (args[0] === 'api' && /\/issues\/\d+\/labels/.test(args[3] ?? '')) {
+      const pm = (args[3] ?? '').match(
+        /repos\/([^/]+\/[^/]+)\/issues\/(\d+)\/labels(?:\/(.+))?$/,
+      );
+      if (pm) {
+        const r = ref(pm[1], pm[2]);
+        const set = state.appliedLabels.get(r) ?? new Set<string>();
+        const mi = args.indexOf('--method');
+        const method = mi >= 0 ? args[mi + 1] : '';
+        if (method === 'POST') {
+          const fi = args.indexOf('-f');
+          const label = fi >= 0 ? (args[fi + 1] ?? '').replace(/^labels\[\]=/, '') : '';
+          if (label) set.add(label);
+        } else if (method === 'DELETE') {
+          set.delete(decodeURIComponent(pm[3] ?? ''));
+        }
+        state.appliedLabels.set(r, set);
+      }
       return { stdout: '' };
     }
     if (args[0] === 'label' && args[1] === 'create') return { stdout: '' };

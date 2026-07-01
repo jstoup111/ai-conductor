@@ -71,4 +71,13 @@ export interface StepDefinition {
    * Built-ins: stories, plan.
    */
   kickbackTarget?: boolean;
+  /**
+   * Skip this step whenever the named upstream step ended up `skipped`,
+   * regardless of why (tier, config-disable, `when:` skip). Expresses a
+   * data dependency: e.g. `architecture_review_as_built` audits shipped code
+   * against APPROVED ADRs, so if `architecture_review` was skipped there are no
+   * ADRs to audit and the as-built gate has nothing to do. Honored by the
+   * selector and by the conductor's linear + looped-region skip passes.
+   */
+  skipWhenSkipped?: StepName;
 }
