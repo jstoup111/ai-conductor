@@ -29,6 +29,19 @@ function createMockStepRunner(result: StepRunResult = { success: true }): StepRu
   };
 }
 
+// Valid RED execution-evidence for the acceptance_specs gate: the feature's own
+// specs ran and failed (not skipped/errored). Fixtures that pre-satisfy
+// acceptance_specs to reach a later step must seed this alongside the spec file.
+const RED_EVIDENCE_JSON = JSON.stringify({
+  command: 'bundle exec rspec spec/acceptance',
+  targetSpecs: ['spec/acceptance/feature_spec.rb'],
+  executed: 1,
+  passed: 0,
+  failed: 1,
+  skipped: 0,
+  errors: 0,
+});
+
 describe('engine/conductor', () => {
   let dir: string;
   let statePath: string;
@@ -2930,6 +2943,7 @@ describe('engine/conductor', () => {
 
       // Write a task-status.json with an INCOMPLETE task
       await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(join(dir, '.pipeline/acceptance-specs-red.json'), RED_EVIDENCE_JSON);
       await writeFile(
         join(dir, '.pipeline/task-status.json'),
         JSON.stringify({ tasks: [{ id: 't1', status: 'pending' }] }),
@@ -3007,6 +3021,7 @@ describe('engine/conductor', () => {
         ['.docs/architecture/2026-04-16-arch.md', 'test'],
         ['.docs/decisions/adr-001.md', 'test'],
         ['spec/acceptance/feature_spec.rb', 'test'],
+        ['.pipeline/acceptance-specs-red.json', RED_EVIDENCE_JSON],
         [
           '.pipeline/task-status.json',
           JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
@@ -3348,6 +3363,7 @@ describe('auto-heal', () => {
       ['.docs/architecture/2026-04-17-arch.md', 'test'],
       ['.docs/decisions/adr-001.md', 'test'],
       ['spec/acceptance/feature_spec.rb', 'test'],
+      ['.pipeline/acceptance-specs-red.json', RED_EVIDENCE_JSON],
       ['.docs/retros/2026-04-17-retro.md', 'test'],
     ];
     return Promise.all(
@@ -3791,6 +3807,7 @@ describe('build-step stall circuit breaker', () => {
       ['.docs/architecture/arch.md', 'x'],
       ['.docs/decisions/adr-001.md', 'x'],
       ['spec/acceptance/feature_spec.rb', 'x'],
+      ['.pipeline/acceptance-specs-red.json', RED_EVIDENCE_JSON],
       ['.docs/retros/2026-04-18-retro.md', 'x'],
     ];
     for (const [rel, content] of artifacts) {
@@ -4021,6 +4038,7 @@ describe('engine/conductor: pipeline-exit false-completion regression', () => {
       ['.docs/architecture/2026-04-16-arch.md', 'a'],
       ['.docs/decisions/adr-001.md', 'a'],
       ['spec/acceptance/feature_spec.rb', 'a'],
+      ['.pipeline/acceptance-specs-red.json', RED_EVIDENCE_JSON],
     ];
     for (const [rel, content] of preFixtures) {
       const full = join(dir, rel);

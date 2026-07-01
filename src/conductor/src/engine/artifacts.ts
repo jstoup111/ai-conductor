@@ -257,6 +257,96 @@ export function parseAsBuiltVerdict(content: string): string | null {
   return value.length > 0 ? value : null;
 }
 
+/**
+ * Run-evidence file written by the writing-system-tests skill after the RED
+ * run. It records the REAL result of executing the feature's freshly-generated
+ * acceptance specs so the conductor can verify they actually EXECUTED and
+ * FAILED — not merely that spec files exist on disk. Gitignored run evidence,
+ * not a committed design artifact.
+ */
+export const ACCEPTANCE_SPECS_RED_EVIDENCE = '.pipeline/acceptance-specs-red.json';
+
+export interface AcceptanceRedEvidence {
+  /** The exact test command run (for the audit trail / reason messages). */
+  command: string;
+  /** The feature's own spec files/nodeids that this run targeted. */
+  targetSpecs: string[];
+  /** Tests that actually ran (passed + failed); excludes skipped/errors. */
+  executed: number;
+  passed: number;
+  failed: number;
+  skipped: number;
+  errors: number;
+  /** Raw runner summary line, e.g. pytest's "5 failed in 12.3s". */
+  summary?: string;
+}
+
+/**
+ * Validate a parsed acceptance-specs RED evidence object. RED is only
+ * "established" when the feature's own specs actually executed and failed:
+ * a run that SKIPPED them (missing testcontainer/dependency, or a unit-only
+ * test scope), deselected them, or errored at collection does NOT count — that
+ * silent no-op is exactly how a daemon can declare GREEN and ship a feature
+ * whose own acceptance specs then fail in CI.
+ */
+export function validateAcceptanceRedEvidence(
+  ev: unknown,
+): { ok: true } | { ok: false; reason: string } {
+  if (typeof ev !== 'object' || ev === null) {
+    return { ok: false, reason: `${ACCEPTANCE_SPECS_RED_EVIDENCE} is not a JSON object` };
+  }
+  const e = ev as Record<string, unknown>;
+  const num = (k: string): number | null =>
+    typeof e[k] === 'number' && Number.isFinite(e[k]) ? (e[k] as number) : null;
+  const failed = num('failed');
+  const skipped = num('skipped');
+  const errors = num('errors');
+  const executed = num('executed');
+  if (failed === null || skipped === null || errors === null || executed === null) {
+    return {
+      ok: false,
+      reason: `${ACCEPTANCE_SPECS_RED_EVIDENCE} must record numeric executed/passed/failed/skipped/errors from the real RED run`,
+    };
+  }
+  if (typeof e.command !== 'string' || e.command.trim() === '') {
+    return {
+      ok: false,
+      reason: `${ACCEPTANCE_SPECS_RED_EVIDENCE} must record the test "command" that was run`,
+    };
+  }
+  if (!Array.isArray(e.targetSpecs) || e.targetSpecs.length === 0) {
+    return {
+      ok: false,
+      reason: `${ACCEPTANCE_SPECS_RED_EVIDENCE} must list the "targetSpecs" the RED run exercised`,
+    };
+  }
+  if (errors > 0) {
+    return {
+      ok: false,
+      reason: `acceptance specs errored at collection (${errors}) — they never ran; fix the specs so they execute (this is not RED)`,
+    };
+  }
+  if (skipped > 0) {
+    return {
+      ok: false,
+      reason: `${skipped} acceptance spec(s) were SKIPPED — a skipped spec does not establish RED (missing testcontainer/dependency, or a unit-only test scope?). Bring up the required infra and run the feature's specs so they actually execute`,
+    };
+  }
+  if (executed < 1) {
+    return {
+      ok: false,
+      reason: `acceptance-specs RED run executed 0 tests — the command did not select the feature's specs`,
+    };
+  }
+  if (failed < 1) {
+    return {
+      ok: false,
+      reason: `acceptance-specs RED run shows 0 failed — RED not established; the generated specs must FAIL before implementation`,
+    };
+  }
+  return { ok: true };
+}
+
 export const CUSTOM_COMPLETION_PREDICATES: Partial<
   Record<StepName, (dir: string, ctx: CompletionContext) => Promise<CompletionResult>>
 > = {
@@ -310,6 +400,49 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
         reason: `${incomplete.length}/${tasks.length} tasks not completed: ${names}${more}`,
       };
     }
+    return { done: true };
+  },
+
+  // Acceptance-specs is "done" only when (a) at least one spec file exists AND
+  // (b) a RED execution-evidence file proves the feature's own specs actually
+  // RAN and FAILED — not that they were skipped/deselected/collection-errored.
+  // The step previously had only a file-existence glob, so a generated spec that
+  // never executed (an integration spec `importorskip`-ed away for want of a
+  // testcontainer, or a suite scoped to a unit-only dir) satisfied the gate; the
+  // daemon then declared GREEN and opened a PR whose own acceptance specs failed
+  // in CI. Evidence is written by the writing-system-tests skill from the real
+  // RED run (gitignored run evidence, not a committed design artifact).
+  acceptance_specs: async (dir, ctx): Promise<CompletionResult> => {
+    const files = await findArtifactFiles(
+      dir,
+      'acceptance_specs',
+      extraArtifactGlobs('acceptance_specs', ctx.config),
+    );
+    if (files.length === 0) {
+      return {
+        done: false,
+        reason:
+          'no acceptance spec files present — the writing-system-tests skill must generate failing specs',
+      };
+    }
+    const evidencePath = join(dir, ACCEPTANCE_SPECS_RED_EVIDENCE);
+    let raw: string;
+    try {
+      raw = await readFile(evidencePath, 'utf-8');
+    } catch {
+      return {
+        done: false,
+        reason: `${ACCEPTANCE_SPECS_RED_EVIDENCE} is missing — the writing-system-tests skill must run the new specs and record the RED result (a spec that is never executed does not establish RED)`,
+      };
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return { done: false, reason: `invalid JSON in ${ACCEPTANCE_SPECS_RED_EVIDENCE}` };
+    }
+    const verdict = validateAcceptanceRedEvidence(parsed);
+    if (!verdict.ok) return { done: false, reason: verdict.reason };
     return { done: true };
   },
 

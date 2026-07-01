@@ -319,6 +319,42 @@ Confirm tests fail for the **right reasons**. This is critical:
 
 **A test that fails for the wrong reason is not RED — it's broken.**
 
+**A skipped, deselected, or collection-errored spec is not RED either.** If the runner reports your
+new specs as SKIPPED (e.g. a `pytest.importorskip` / `skipif` for a missing testcontainer, service,
+or dependency), DESELECTED, or ERRORING at import/collection, they never executed — a silent no-op,
+not a failing test. Two rules follow:
+
+- **Run the command that actually includes the new specs.** Never scope the RED run to a unit-only
+  subset (e.g. `pytest tests/` when the specs live under `spec/integration/`, or `npm test -- test/unit`).
+  Run against the directory the specs were written to.
+- **Bring up the infrastructure the specs need** (containers, DB, Redis, services, env) so they
+  execute and FAIL for the right reason. A spec that only runs in CI but is skipped locally/in the
+  daemon is a gate hole: the build will be declared GREEN while the specs never ran, and CI (which
+  has the infra) then fails.
+
+**Record the RED evidence (gating).** After the RED run, write `.pipeline/acceptance-specs-red.json`
+capturing the REAL result of running the feature's own specs, so the harness can verify they
+actually executed — not merely that spec files exist on disk:
+
+```json
+{
+  "command": "cd backend && pytest spec/integration/test_017_sec_edgar_acceptance.py",
+  "targetSpecs": ["spec/integration/test_017_sec_edgar_acceptance.py"],
+  "executed": 5,
+  "passed": 0,
+  "failed": 5,
+  "skipped": 0,
+  "errors": 0,
+  "summary": "5 failed in 12.3s"
+}
+```
+
+Counts are for the feature's own specs from the run above (`executed` = passed + failed). The
+`acceptance_specs` gate REJECTS the step unless this file shows `failed >= 1`, `skipped == 0`,
+`errors == 0`, and `executed >= 1`. A run where the new specs were skipped, deselected, or errored
+at collection does not establish RED and will not pass the gate. This is gitignored run evidence,
+not a committed design artifact.
+
 ### Stubbing Rules for Pre-Implementation Specs
 
 - Stub at **system boundaries only**: randomness sources, the clock/current time, external API

@@ -12,6 +12,20 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- **Acceptance-specs gate now verifies the specs actually RAN and FAILED, not just that spec files
+  exist.** Previously the `acceptance_specs` step's completion check was pure file-existence, so a
+  generated spec that never executed — an integration spec `importorskip`-ed away for want of a
+  testcontainer, or a suite scoped to a unit-only dir (`pytest tests/` when the specs live under
+  `spec/integration/`) — satisfied the gate; the daemon then declared GREEN and opened a PR whose
+  own acceptance specs failed in CI (observed on best-stock-picker's SEC-EDGAR adapter #72). The
+  `writing-system-tests` skill now (a) forbids scoping the RED run to a unit-only subset and requires
+  bringing up the infra the specs need so they actually execute, and (b) records
+  `.pipeline/acceptance-specs-red.json` from the real RED run. A new `acceptance_specs`
+  completion predicate rejects the step unless that evidence shows `failed >= 1`, `skipped == 0`,
+  `errors == 0`, and `executed >= 1` — a skipped/deselected/collection-errored spec no longer
+  establishes RED. Evidence is gitignored run evidence, not a committed artifact. Locked with new
+  unit tests for the predicate + validator and updated conductor fixtures.
+
 - **Daemon owner-gating: the autonomous spec-build daemon now builds only the merged specs it
   owns.** Each discovery pass resolves the daemon's operator identity (configured `spec_owner` wins,
   else the `gh` login, else unresolved → fail-open) and, for every content-eligible spec, reads the
