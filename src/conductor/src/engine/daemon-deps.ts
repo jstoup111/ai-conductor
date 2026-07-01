@@ -11,6 +11,7 @@ import type {
 } from './daemon-runner.js';
 import { prepareWorktree } from './worktree-prepare.js';
 import { makeProductionGh } from './pr-labels.js';
+import { ensureWorktree } from './worktree-shared.js';
 
 export interface RealDepsConfig {
   /** The main checkout the daemon runs from. */
@@ -60,24 +61,17 @@ export function makeFeatureRunnerDeps(cfg: RealDepsConfig): FeatureRunnerDeps {
       const branch = `feat/daemon-${slug}`;
       const path = join(cfg.worktreeBase, slug);
       const root = cfg.projectRoot;
-      // Idempotent so re-running the daemon after a kept (halted/errored)
-      // worktree resumes instead of aborting on "branch/worktree already
-      // exists". Three cases:
-      //   1. worktree already registered for this path → reuse it (resume).
-      //   2. branch exists but its worktree was removed → attach a worktree.
-      //   3. neither exists → fresh branch + worktree off the build base.
-      if (await isRegisteredWorktree(root, path)) {
-        cfg.log?.(`reusing worktree ${path} (resume)`);
-      } else if (await branchExists(root, branch)) {
-        cfg.log?.(`attaching worktree to existing branch ${branch}`);
-        await execa('git', ['worktree', 'add', path, branch], { cwd: root });
-      } else {
-        const base = await resolveWorktreeBase(root, cfg.baseBranch);
-        await execa('git', ['worktree', 'add', '-b', branch, path, base], {
-          cwd: root,
-        });
-      }
-      return { path, branch };
+      // Idempotent create/reconcile via the shared worktree mechanism (parity with
+      // the engineer). The base ref is resolved lazily — only when a fresh branch is
+      // cut — so the reuse/attach paths issue no extra git call.
+      const { path: p, branch: b } = await ensureWorktree({
+        root,
+        path,
+        branch,
+        resolveBase: () => resolveWorktreeBase(root, cfg.baseBranch),
+        log: cfg.log,
+      });
+      return { path: p, branch: b };
     },
 
     // Write WORKTREE_NAMESPACE into the worktree .env and run the project's
@@ -132,39 +126,6 @@ async function resolveWorktreeBase(projectRoot: string, baseBranch: string): Pro
     return remote;
   } catch {
     return baseBranch;
-  }
-}
-
-/** True if `path` is already a registered git worktree of `projectRoot`. */
-async function isRegisteredWorktree(projectRoot: string, path: string): Promise<boolean> {
-  try {
-    const { stdout } = await execa('git', ['worktree', 'list', '--porcelain'], {
-      cwd: projectRoot,
-    });
-    // Lines look like `worktree <abs-path>`. Match the exact path or its
-    // `.worktrees/<slug>` suffix (git may report a realpath-resolved form).
-    const suffix = path.slice(path.indexOf(join('.worktrees', basename(path))));
-    return stdout
-      .split('\n')
-      .filter((l) => l.startsWith('worktree '))
-      .some((l) => {
-        const wt = l.slice('worktree '.length);
-        return wt === path || wt.endsWith(suffix);
-      });
-  } catch {
-    return false;
-  }
-}
-
-/** True if a local branch named `branch` exists in `projectRoot`. */
-async function branchExists(projectRoot: string, branch: string): Promise<boolean> {
-  try {
-    await execa('git', ['show-ref', '--verify', '--quiet', `refs/heads/${branch}`], {
-      cwd: projectRoot,
-    });
-    return true;
-  } catch {
-    return false;
   }
 }
 
