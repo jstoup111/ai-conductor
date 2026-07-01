@@ -874,15 +874,28 @@ byte-for-byte unchanged (`FR/TR-13`). Configured by the `harness_self_host` bloc
 | `self-host/version-gate.ts` | `VersionApprovalGate` — HALT unless `.pipeline/version-approval` matches VERSION. |
 | `self-host/release-gate.ts` | `ReleaseArtifactGate` — integrity suite (bounded timeout) + CHANGELOG `[Unreleased]` + migration block; all fail-closed, distinct HALT reasons. |
 | `self-host/gate-halt.ts` | `writeSelfHostHalt` — `.pipeline/HALT` with a gate-specific reason + the ADR-005 resume procedure (re-install → `/verify` → operator merges). |
+| `self-host/wiring.ts` | `SelfHostGuardrails` — the injectable bundle (`relink`/`provisionSandbox`/`versionGate`/`releaseGate` + `resolveHarnessRoot`) the conductor calls the primitives through; `defaultSelfHostGuardrails` forwards to the real ones. One seam so the whole bundle activates (or is spied) as a unit. |
 
 **Non-autonomy (ADR-005/ADR-010):** no self-host module references a merge entry point
 (`test/engine/self-host/non-autonomy.test.ts` asserts this structurally). Every self-build ends at a
 HALT for the operator to merge.
 
-> **Not yet wired.** These modules are complete and unit-tested but the `conductor.run()` integration
-> (compute `isSelfHost` at discovery, run relink+sandbox before build, run the finish gates before the
-> PR opens) lands in a **follow-up PR**. Until then the guardrails are inert and the harness stays
-> daemon-unregistered.
+**Daemon-loop wiring (Phase 6).** `daemon-cli.ts` classifies `isSelfHost` **once** at startup against
+the main repo root (not a worktree — a worktree path never equals the harness root) and threads a
+`selfHost` flag to each `Conductor`. `conductor.run()` then, for a self-build only (`daemon &&
+selfHost`):
+- **before the first `build`** — relinks skills once (`InstallStaleError` → HALT, no build), then
+  provisions the sandbox once (`SandboxProvisionError` → HALT, no build);
+- **around the `build` dispatch** — sets `process.env.CLAUDE_CONFIG_DIR` to the sandbox and restores it
+  in a `finally` (pass **and** throw), so no config-dir bleeds into `finish`; the sandbox is torn down
+  in `run()`'s `finally` on every exit path;
+- **before the `finish` step** (which opens the PR) — runs `versionGate` then `releaseGate`; a `!ok`
+  verdict writes `.pipeline/HALT` and finish is not dispatched (no PR).
+
+Every guardrail is invoked through the injectable `SelfHostGuardrails` bundle (`self-host/wiring.ts`),
+so `test/engine/self-host/wiring.test.ts` drives the wired path with spies and asserts the bundle
+activates as one unit (and none of it for a non-self-build). The normal-repo path is byte-for-byte
+unchanged behind the single `selfHost` flag.
 
 ## Testing pattern
 

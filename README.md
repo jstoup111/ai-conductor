@@ -390,9 +390,8 @@ markdown_viewer:
 # ── Harness self-host guardrails (conduct-ts only; applies ONLY to a self-build ─
 #    of the james-stoup-agents harness repo — no effect on any other repo) ──────
 # Absent block = the safe default: auto-detect the harness self-build and run all
-# guardrails. See "Harness self-host guardrails" below. (Guardrail modules are
-# present in the engine but not yet wired into the daemon loop — a follow-up
-# change activates them.)
+# guardrails. See "Harness self-host guardrails" below. (Active for self-builds:
+# the daemon loop relinks + sandboxes the build and runs the finish gates.)
 harness_self_host:
   activation: auto             # "auto" (path-detect) | "force_on" | "force_off"
   # Per-gate toggles — omit to leave ENABLED (a partial block never disables a gate):
@@ -475,10 +474,17 @@ detector boolean):
 re-install, `/verify`, and merge. Config is safe-by-default — an absent or partial `harness_self_host`
 block auto-detects with all gates on.
 
-> **Status:** these guardrail modules ship in the engine (`src/conductor/src/engine/self-host/`) but
-> are **not yet wired into the daemon loop** — a follow-up change activates them at dispatch/finish.
-> The harness stays daemon-unregistered until then. See
-> `src/conductor/README.md → Harness self-host guardrails` for the module reference.
+**How it activates in the loop.** The daemon classifies self-host **once** at startup (against the
+main repo root, honoring the `activation` override) and threads a single `selfHost` flag to each
+build. For a self-build only: skills are relinked before the first `build`; the `build` step runs with
+`process.env.CLAUDE_CONFIG_DIR` scoped to the sandbox **for the duration of that step and restored
+afterward** (nothing bleeds into `finish`); and the VERSION + release gates run **before** the
+`finish` step opens the PR — a failing gate writes `.pipeline/HALT` so the PR never opens. Every part
+is gated behind that one flag, so any other repo's build path is byte-for-byte unchanged.
+
+> **Status:** active for self-builds. The guardrail bundle (`src/conductor/src/engine/self-host/`) is
+> wired into the daemon loop; the harness can be daemon-registered with self-host mode on. See
+> `src/conductor/README.md → Harness self-host guardrails` for the module + wiring reference.
 
 ### Plugins (`conduct-ts` only)
 

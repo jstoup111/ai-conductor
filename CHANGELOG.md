@@ -12,7 +12,22 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
-- **Harness self-host guardrail primitives (engine modules; NOT yet wired into the daemon loop).**
+- **Harness self-host guardrails wired into the daemon loop (Phase 6).** The `conductor` daemon now
+  activates the self-host guardrail bundle for a harness self-build. `daemon-cli` classifies
+  `isSelfHost` **once** at startup against the main repo root (honoring the `activation` override) and
+  threads a `selfHost` flag to each `Conductor`. In `conductor.run()`, for a self-build only
+  (`daemon && selfHost`): skills are relinked once before the first `build` (a relink `InstallStaleError`
+  aborts before any child build); the `build` step runs under a throwaway `CLAUDE_CONFIG_DIR` with
+  `process.env.CLAUDE_CONFIG_DIR` set to the sandbox for the duration of that step and **restored in a
+  `finally` on both the pass and throw branches** (no bleed into `finish`), with guaranteed sandbox
+  teardown on every exit path; and the VERSION-approval + release-artifact gates run **before** the
+  `finish` step opens the PR — a failing gate writes `.pipeline/HALT` so the PR never opens and the
+  daemon never merges (ADR-005/ADR-010). Every change is additive and gated behind the single
+  `selfHost` flag, so any non-harness repo's build path is byte-for-byte unchanged (TR-13); proven by
+  the full conductor suite plus a new wired-path integration + structural non-autonomy test
+  (`test/engine/self-host/wiring.test.ts`). The harness can now be daemon-registered with self-host
+  mode on.
+- **Harness self-host guardrail primitives (engine modules).**
   The `conductor` engine gains a `harness_self_host` config block plus six test-covered modules under
   `src/engine/self-host/` implementing the DECIDE spec (adr-2026-06-30-{self-host-detection-seam,
   sandbox-build-isolation, halt-based-release-gates}): `SelfHostDetector` (realpath-based self-build
@@ -27,9 +42,9 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   `VersionApprovalGate`
   + `ReleaseArtifactGate` (HALT-based, fail-closed VERSION-approval / integrity-suite / CHANGELOG
   `[Unreleased]` / migration-block gates). Config is safe-by-default: an absent/partial block
-  auto-detects with all gates ON. **These primitives are INERT until wired into `conductor.run()`** —
-  a follow-up PR does the daemon-loop integration, and the harness stays daemon-unregistered until
-  then. Includes a real-binary smoke for the relink and adversarial isolation tests for the sandbox.
+  auto-detects with all gates ON. These modules are the reusable primitives; the daemon-loop
+  integration that activates them ships in the same release (see the Phase 6 wiring entry above).
+  Includes a real-binary smoke for the relink and adversarial isolation tests for the sandbox.
 - **Spec + plan: harness daemon self-host guardrails (DECIDE artifacts only; no code yet).** Design,
   architecture diagrams, 3 APPROVED ADRs, 13 stories (TR-1..TR-13), a clean conflict-check, and a
   Tier-L implementation plan for making the `james-stoup-agents` harness repo safe to
