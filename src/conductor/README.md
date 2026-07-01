@@ -774,12 +774,25 @@ even if your global `defaultMode` is `plan`; set `CONDUCT_ENGINEER_PERMISSION_MO
 `acceptEdits`, `bypassPermissions`) to change it (`plan` is coerced back to `default`). Run from
 inside an existing Claude Code session, it instead tells you to invoke `/engineer` directly (no
 nested session); with `claude` not on `PATH` it prints usage.
-The `conduct-ts engineer projects | claim | land | handoff | poll | forget` subcommands are the
-deterministic primitives the skill calls between human gates (`claim`/`poll`/`forget` drive the
-Phase 9.3b github-issues intake — see below). `land`/`handoff` accept an optional `--source-ref
+The `conduct-ts engineer projects | claim | worktree | land | handoff | poll | forget` subcommands
+are the deterministic primitives the skill calls between human gates (`claim`/`poll`/`forget` drive
+the Phase 9.3b github-issues intake — see below). `land`/`handoff` accept an optional `--source-ref
 <owner/repo#N>` so an intake-originated idea reports back to its issue. The bare launcher also
 accepts an idea directly: `conduct-ts engineer "<idea>"` (or `--idea "<idea>"`) drives one specific
 idea and skips the intake poll.
+
+**Per-idea worktree isolation.** The engineer authors, lands, and hands off each idea inside a
+dedicated **git worktree** of the target repo — `conduct-ts engineer worktree --project <n> --idea
+"<i>"` creates `<target>/.worktrees/engineer-<slug>` on a fresh `spec/<slug>` branch (reusing the
+daemon's worktree mechanism, `engine/worktree-shared.ts`), and `land`/`handoff` take a required
+`--worktree <path>`. The target's **primary working tree is never mutated** (no `checkout` dance) so
+a concurrent daemon build or a second engineer session in the same repo can't collide. Creation
+**strict-aborts** (zero primary-tree mutation) if no worktree can be made — e.g. an unborn/detached
+HEAD with no derivable default branch — and never falls back to the shared checkout. On a successful
+handoff the worktree is **removed** (the `spec/<slug>` branch persists and stays reachable); a
+failure **keeps** it for inspection. `land` stages only `.docs` from the worktree, so each spec
+commit is strictly its own idea's set (no cross-idea bleed). This assumes the target repo gitignores
+`.worktrees/` (the same convention the daemon relies on).
 
 Per idea (each isolated so one repo's failure never corrupts another):
 

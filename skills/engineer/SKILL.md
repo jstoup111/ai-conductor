@@ -41,6 +41,10 @@ and running the DECIDE skills directly in chat for the reasoning parts.
   builds them. This skill MUST NOT run `/pipeline`, `/tdd`, `conduct` (build mode), or `gh pr merge`.
 - **Route artifacts to the target repo, never the engineer's cwd.** Every artifact and the spec
   branch land inside the resolved target repo, enforced by `AuthoringGuard`.
+- **Author in a per-idea worktree, never the primary checkout.** All authoring, `land`, and
+  `handoff` happen inside `<target>/.worktrees/engineer-<slug>`; the target's primary working tree
+  is never mutated. If the worktree can't be created, abort the idea — never fall back to the
+  shared checkout.
 - **One idea at a time, operator-gated at every fork** — routing target, create-on-no-fit, and the
   DECIDE step outputs all require explicit operator confirmation. Never assume.
 
@@ -77,10 +81,25 @@ spawned `claude`. Present the proposed target and your rationale, then **confirm
 - **No fit:** offer to scaffold a new project (`conduct-ts create <path>`). On decline, drop the idea
   with zero side effects. On accept, create it, then continue with it as the target.
 
-### 3. Run the REAL DECIDE skills, in the target repo
-With the target repo as the working directory, run the genuine skills **in canonical conduct
+### 3. Create the per-idea worktree, then run the REAL DECIDE skills inside it
+**Author in an isolated per-idea worktree — never the target's primary checkout.** First create it:
+
+`conduct-ts engineer worktree --project <name> --idea "<idea>"` → prints JSON
+`{ slug, branch, worktreePath, reconcile }`. This creates a dedicated worktree at
+`<target>/.worktrees/engineer-<slug>` checked out on a fresh `spec/<slug>` branch (based on the
+repo's derived default branch), disjoint from the daemon's own worktrees. **`worktreePath` is your
+working directory for all authoring, `land`, and `handoff`** for this idea.
+
+- **Strict abort (never fall back):** if the worktree cannot be created (e.g. a detached/unborn
+  HEAD with no derivable default branch), the command exits non-zero and makes **zero** changes to
+  the target's primary tree. Do **not** author in the primary checkout — surface the error and stop.
+- **reconcile** reports how a leftover from a prior failed run was resolved (`created` / `reused` /
+  `attached`); a **dirty** leftover is refused (recreate it). Report the decision to the operator.
+
+With **`worktreePath` as the working directory**, run the genuine skills **in canonical conduct
 order**, honoring each skill's own clarity loops and human gates. The engineer owns the WHOLE
-DECIDE phase — the daemon only builds — so produce the complete, build-ready artifact set:
+DECIDE phase — the daemon only builds — so produce the complete, build-ready artifact set (every
+`.docs/` artifact is written **inside the worktree**, never the primary checkout):
 
 1. `/explore` → context + approaches; decide + confirm the **track** (product/technical) →
    `.docs/track/<stem>.md`. Ephemeral notes only (no `.docs/` design doc).
@@ -102,34 +121,38 @@ These produce **Status:Accepted** artifacts via your real harness (agents + hook
 hand-write stub stories, DRAFT artifacts, or shell out to `claude -p`. If the operator rejects a
 step, loop within that skill until accepted or abandon the idea — never carry a DRAFT forward.
 
-### 4. Land the already-authored spec on a branch in the target repo
-`conduct-ts engineer land --project <name> --idea "<idea>"` (append `--source-ref <ref>` when the
-idea came from GitHub intake — this comments "Routed to `<repo>`" on the originating issue, commits a
-`.docs/intake/<slug>.md` marker carrying `Source-Ref: <ref>` so the issue origin travels with the
-spec, and advances the intake ledger; write-back is advisory and never blocks the land). This is a
-**deterministic primitive** — it
-does NOT author; the real DECIDE skills in step 3 already wrote the artifacts to the target's
+### 4. Land the already-authored spec — from within the worktree
+`conduct-ts engineer land --project <name> --idea "<idea>" --worktree <worktreePath>` (the
+`worktreePath` from step 3; append `--source-ref <ref>` when the idea came from GitHub intake — this
+comments "Routed to `<repo>`" on the originating issue, commits a `.docs/intake/<slug>.md` marker
+carrying `Source-Ref: <ref>` so the issue origin travels with the spec, and advances the intake
+ledger; write-back is advisory and never blocks the land). This is a **deterministic primitive** — it
+does NOT author; the real DECIDE skills in step 3 already wrote the artifacts into the worktree's
 `.docs/`. `land`:
-- resolves the canonical target path from the registry (no cwd fallback),
+- operates **entirely inside `--worktree`** — it commits in place on the worktree's `spec/<slug>`
+  branch and **never touches the target's primary working tree** (no `git checkout` there),
 - asserts the `.docs/specs|stories|plans` artifacts (plus `.docs/complexity/` and, for a
-  non-Small tier, `.docs/conflicts|architecture|decisions`) exist **inside** the target prefix
+  non-Small tier, `.docs/conflicts|architecture|decisions`) exist **inside** the worktree
   (`AuthoringGuard`) and are real — **rejects** a stub string, any `Status: DRAFT` artifact, empty
-  content (C2 guard), a **DRAFT ADR**, or a **tier/artifact mismatch** (tier ≠ S but architecture
-  artifacts missing),
-- creates a `spec/<slug>` branch and commits the full `.docs` DECIDE set.
+  content (C2 guard), a **DRAFT ADR**, a **tier/artifact mismatch** (tier ≠ S but architecture
+  artifacts missing), or a **dirty worktree**,
+- stages only `.docs` (no `add -A`) so the commit is strictly this idea's set — no cross-idea bleed.
 
-It writes nothing outside the target repo and never touches a sibling repo. It prints JSON
-`{ slug, branch, repoPath }` — pass `branch` to step 5.
+On failure it leaves the worktree in place for inspection (**keep-on-failure**). It prints JSON
+`{ slug, branch, repoPath }` — pass `branch` and the same `--worktree` to step 5.
 
-### 5. Open the spec PR + nudge the daemon
-`conduct-ts engineer handoff --project <name> --branch <branch>` (the `branch` from step 4; append
-`--source-ref <ref>` when the idea came from GitHub intake — on a real PR this comments the PR URL on
-the originating issue, adds a non-closing `Refs <ref>` to the spec PR body (links the issue without
-closing it; the daemon's implementation PR is what closes it on merge), applies the
-`engineer:handled` label, and advances the ledger to `done`).
-This opens a spec PR **to the target repo** (no-remote → local-commit fallback), records the
-authored-ledger entry, and calls `ensureRunning(repoPath)` fire-and-forget so that repo's daemon is
-alive to pick the spec up **after you merge it**. It never merges and never builds.
+### 5. Open the spec PR + nudge the daemon — remove the worktree on success
+`conduct-ts engineer handoff --project <name> --branch <branch> --worktree <worktreePath>` (the
+`branch` from step 4 and the same `worktreePath`; append `--source-ref <ref>` when the idea came from
+GitHub intake — on a real PR this comments the PR URL on the originating issue, adds a non-closing
+`Refs <ref>` to the spec PR body (links the issue without closing it; the daemon's implementation PR
+is what closes it on merge), applies the `engineer:handled` label, and advances the ledger to `done`).
+It runs `gh pr create` **from the worktree** (so the PR opens for `spec/<slug>`), opens a spec PR to
+the target repo (no-remote → local-commit fallback), records the authored-ledger entry, and calls
+`ensureRunning(repoPath)` fire-and-forget so that repo's daemon is alive to pick the spec up **after
+you merge it**. On success it **removes the per-idea worktree** (the `spec/<slug>` branch + commit
+persist and stay reachable); a removal failure is reported, not swallowed. It never merges and never
+builds.
 
 ### 6. Deliver, then end the session
 The spec PR (or local-commit fallback) is the **final artifact**. Once step 5 reports it, tell the
@@ -146,6 +169,9 @@ launcher regains control when the operator quits and relaunches you clean for th
 - No idea reaches a build without a **merged** spec PR — and only the operator merges.
 - Zero `claude -p` / authoring subprocess; zero Node readline REPL substrate; routing is in-chat.
 - Cross-repo isolation: authoring repo A never mutates repo B.
+- **Per-idea worktree isolation:** author/land/handoff run inside the per-idea worktree; the
+  target's primary tree is invariant (branch + cleanliness unchanged). Remove-on-success,
+  keep-on-failure, strict-abort if it can't be created.
 - **No spec lands with a DRAFT ADR** — all ADRs must be APPROVED before `land`.
 - The **complexity tier is recorded** (`.docs/complexity/<plan-stem>.md`) and drives the daemon's
   BUILD-phase step skipping; a non-Small spec must carry conflict-check + architecture artifacts.
@@ -159,7 +185,12 @@ launcher regains control when the operator quits and relaunches you clean for th
       `/architecture-diagram` → `/architecture-review` → `/stories` → `/conflict-check` → `/plan` (not stubs, not DRAFT, no `claude -p`)
 - [ ] Complexity tier recorded at `.docs/complexity/<plan-stem>.md`; for Small, conflict-check + architecture were skipped
 - [ ] All ADRs are APPROVED (no `Status: DRAFT`) before landing
+- [ ] Authoring + `land` + `handoff` ran inside the per-idea worktree (`--worktree`); the target's
+      primary tree was never checked out or dirtied
+- [ ] Worktree creation strict-aborted (no primary-tree mutation) if it could not be made
 - [ ] All artifacts + the `spec/<slug>` branch landed inside the resolved target repo only
 - [ ] Spec PR opened to the target repo; nothing built, nothing merged
+- [ ] On success the per-idea worktree was removed and `spec/<slug>` stayed reachable; on failure it
+      was kept for inspection
 - [ ] `ensureRunning` nudged the target daemon fire-and-forget (no lifecycle ownership)
 - [ ] Sibling repos left byte-for-byte unchanged
