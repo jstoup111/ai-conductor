@@ -263,6 +263,23 @@ export interface HarnessConfig {
   /** OpenTelemetry exporter config. Absent = disabled (default off, FR-1). */
   otel?: OtelConfig;
   /**
+   * Owner-gate (adr-2026-06-30-owner-gate-identity-resolution / FR-1): the
+   * configured operator identity the daemon builds specs for. Wins over the
+   * gh-login fallback. Absent/blank → fall through the resolution chain.
+   * Naming boundary (ADR-1): this is the OPERATOR concept — never conflated
+   * with `daemon-lock.ts`'s lock holder.
+   */
+  spec_owner?: string;
+  /**
+   * Owner-gate grandfather cutover (FR-10): the ISO-8601 instant before which
+   * un-owned specs are grandfathered (built) and on/after which they are
+   * skipped. Validated at load time — a malformed (unparseable) value is
+   * REJECTED rather than silently defaulted, so an un-owned spec is never
+   * misclassified. Absent → no grandfather window (un-owned specs are treated
+   * as indeterminate and skipped).
+   */
+  owner_gate_cutover?: string;
+  /**
    * Maximum number of Claude-assisted conflict-resolution attempts inside the
    * rebase step before the engine halts for operator intervention.
    * Default: 3. Set to 0 to disable automated resolution (conflict always

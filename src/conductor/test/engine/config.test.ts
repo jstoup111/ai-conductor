@@ -512,6 +512,51 @@ complexity:
     });
   });
 
+  // Task 17 (owner-gate, adr-2026-06-30-*): spec_owner + owner_gate_cutover.
+  describe('owner-gate config fields (spec_owner + owner_gate_cutover)', () => {
+    it('parses spec_owner and owner_gate_cutover and exposes them', () => {
+      const result = validateConfig({
+        spec_owner: 'alice',
+        owner_gate_cutover: '2026-06-30T00:00:00Z',
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.spec_owner).toBe('alice');
+      expect(result.config.owner_gate_cutover).toBe('2026-06-30T00:00:00Z');
+    });
+
+    it('both fields are optional — absent is fine (documented default applied at wiring)', () => {
+      const result = validateConfig({ harness_version: '>=1.0.0' });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.spec_owner).toBeUndefined();
+      expect(result.config.owner_gate_cutover).toBeUndefined();
+    });
+
+    it('REJECTS a malformed (unparseable) owner_gate_cutover with a clear error', () => {
+      const result = validateConfig({ owner_gate_cutover: 'not-a-date' });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.type).toBe('validation_error');
+      expect(result.error.message).toMatch(/owner_gate_cutover.*not.*parseable/i);
+      expect(result.error.message).toMatch(/not-a-date/);
+    });
+
+    it('rejects a non-string spec_owner', () => {
+      const result = validateConfig({ spec_owner: 42 });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.message).toMatch(/spec_owner must be a string/);
+    });
+
+    it('rejects a non-string owner_gate_cutover', () => {
+      const result = validateConfig({ owner_gate_cutover: 1234 });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.message).toMatch(/owner_gate_cutover must be an ISO-8601 date string/);
+    });
+  });
+
   // Task A10 (adr-2026-06-29-per-project-memory-provider-selection FR-1 negative): provider selection is per-project; no leakage.
   describe('A10: resolveMemoryProvider — per-project isolation, no leakage', () => {
     function registryWithLocal(provider: object): PluginRegistry {
