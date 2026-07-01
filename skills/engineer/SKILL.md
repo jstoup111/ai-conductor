@@ -1,6 +1,6 @@
 ---
 name: engineer
-description: "Interactive, phone-drivable idea→spec loop. The operator hands the host agent a raw idea; the agent routes it to the right repo, runs the FULL DECIDE phase (brainstorm → complexity → stories → conflict-check → architecture-diagram → architecture-review → plan, tier-aware) in that repo, opens a spec PR there, and nudges that repo's daemon. Runs independently of any build/execution loop. Use when capturing and routing new work, NOT when building inside one repo (that's plain conduct)."
+description: "Interactive, phone-drivable idea→spec loop. The operator hands the host agent a raw idea; the agent routes it to the right repo, runs the FULL DECIDE phase (explore [track] → complexity → prd [product track] → architecture-diagram → architecture-review → stories → conflict-check → plan, tier-aware) in that repo, opens a spec PR there, and nudges that repo's daemon. Runs independently of any build/execution loop. Use when capturing and routing new work, NOT when building inside one repo (that's plain conduct)."
 enforcement: advisory
 phase: decide
 standalone: true
@@ -29,7 +29,7 @@ the spec PR you merge plus a fire-and-forget `ensureRunning` nudge. The engineer
 waits on, or owns the daemon.
 
 **Why this is a host-agent skill and not a CLI REPL (ADR-008).** The loop must run your *real*
-skills, agent personas, and hooks (`/brainstorm`, `/stories`, `/plan` with their clarity loops).
+skills, agent personas, and hooks (`/explore`, `/prd`, `/stories`, `/plan` with their clarity loops).
 Those exist only inside a live Claude Code session. A Node REPL or a `claude -p` subprocess cannot
 run them interactively — so the engineer **is** the host agent, calling deterministic conduct-ts
 primitives for the mechanical parts (registry read, path-guarded commit, PR open, daemon nudge)
@@ -82,18 +82,21 @@ With the target repo as the working directory, run the genuine skills **in canon
 order**, honoring each skill's own clarity loops and human gates. The engineer owns the WHOLE
 DECIDE phase — the daemon only builds — so produce the complete, build-ready artifact set:
 
-1. `/brainstorm` → an approved PRD in the target's `.docs/specs/`
+1. `/explore` → context + approaches; decide + confirm the **track** (product/technical) →
+   `.docs/track/<stem>.md`. Ephemeral notes only (no `.docs/` design doc).
 2. **Complexity assessment** → classify the feature **S / M / L** (same signals conduct uses:
    models, integrations, auth, state machines, story count). Write the tier to
    `.docs/complexity/<plan-stem>.md` with a `Tier: <S|M|L>` line (plus rationale). The stem
    **MUST** match the `.docs/plans/<stem>.md` filename so the daemon resolves it.
-3. `/stories`   → stories in the target's `.docs/stories/` (must end **Status: Accepted**)
-4. `/conflict-check`        → `.docs/conflicts/` — **skip for Small**
-5. `/architecture-diagram`  → `.docs/architecture/` — **skip for Small**
-6. `/architecture-review`   → `.docs/decisions/` (review report + ADRs) — **skip for Small;
+3. `/prd`       → an approved product-only PRD in the target's `.docs/specs/` — **product track
+   only; skip on technical** (acceptance criteria live in stories there).
+4. `/architecture-diagram`  → `.docs/architecture/` — **skip for Small**
+5. `/architecture-review`   → `.docs/decisions/` (review report + ADRs) — **skip for Small;
    lightweight for Medium; full for Large.** Every ADR must be **APPROVED** (no `Status: DRAFT`)
-   before landing.
-7. `/plan`      → an implementation plan in the target's `.docs/plans/`
+   before landing. Runs **before** stories.
+6. `/stories`   → stories in the target's `.docs/stories/` (must end **Status: Accepted**)
+7. `/conflict-check`        → `.docs/conflicts/` — **skip for Small**
+8. `/plan`      → an implementation plan in the target's `.docs/plans/`
 
 These produce **Status:Accepted** artifacts via your real harness (agents + hooks). Do NOT
 hand-write stub stories, DRAFT artifacts, or shell out to `claude -p`. If the operator rejects a
@@ -152,8 +155,8 @@ launcher regains control when the operator quits and relaunches you clean for th
 - [ ] Idea captured from the right source (`claim` first; CLI arg / chat fallback) — `sourceRef` carried only for intake ideas
 - [ ] Idea routed with explicit operator confirmation (redirect + no-fit + decline all handled)
 - [ ] For intake ideas: `--source-ref` threaded into `land` + `handoff` so the originating issue is commented + labelled, the `.docs/intake/<slug>.md` marker is committed, and the spec PR is linked with `Refs <ref>` (the daemon adds `Closes <ref>` to the implementation PR, auto-closing the issue on merge)
-- [ ] DECIDE ran the real skills in canonical order — `/brainstorm` → complexity → `/stories` →
-      `/conflict-check` → `/architecture-diagram` → `/architecture-review` → `/plan` (not stubs, not DRAFT, no `claude -p`)
+- [ ] DECIDE ran the real skills in canonical order — `/explore` → complexity → `/prd` (product) →
+      `/architecture-diagram` → `/architecture-review` → `/stories` → `/conflict-check` → `/plan` (not stubs, not DRAFT, no `claude -p`)
 - [ ] Complexity tier recorded at `.docs/complexity/<plan-stem>.md`; for Small, conflict-check + architecture were skipped
 - [ ] All ADRs are APPROVED (no `Status: DRAFT`) before landing
 - [ ] All artifacts + the `spec/<slug>` branch landed inside the resolved target repo only

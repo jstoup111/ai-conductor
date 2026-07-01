@@ -56,14 +56,14 @@ describe('Integration: auto-resume by feature description', () => {
     await seedWorktree('my feature', {
       feature_desc: 'my feature',
       complexity_tier: 'L',
-      brainstorm: 'done',
-      last_step: 'brainstorm',
+      explore: 'done',
+      last_step: 'explore',
     });
 
     const result = await detectAutoResume(projectRoot, 'my feature');
     expect(result.kind).toBe('resume');
     if (result.kind === 'resume') {
-      expect(result.lastStep).toBe('brainstorm');
+      expect(result.lastStep).toBe('explore');
       expect(result.stepIndex).toBeGreaterThan(0);
       expect(result.featureDesc).toBe('my feature');
       expect(result.stateFilePath).toMatch(/\.pipeline\/conduct-state\.json$/);
@@ -75,8 +75,8 @@ describe('Integration: auto-resume by feature description', () => {
       'legacy feature',
       {
         feature_desc: 'legacy feature',
-        brainstorm: 'done',
-        last_step: 'brainstorm',
+        explore: 'done',
+        last_step: 'explore',
       },
       'legacy',
     );
@@ -121,8 +121,8 @@ describe('Integration: auto-resume by feature description', () => {
   it('same description maps deterministically to the same worktree', async () => {
     const wt1 = await seedWorktree('Feature Description', {
       feature_desc: 'Feature Description',
-      brainstorm: 'done',
-      last_step: 'brainstorm',
+      explore: 'done',
+      last_step: 'explore',
     });
 
     const res1 = await detectAutoResume(projectRoot, 'Feature Description');
@@ -140,16 +140,16 @@ describe('Integration: auto-resume by feature description', () => {
 
   it('stepIndex matches the position AFTER lastStep', async () => {
     const { ALL_STEPS } = await import('../../src/engine/steps.js');
-    const brainstormIdx = ALL_STEPS.findIndex((s) => s.name === 'brainstorm');
+    const exploreIdx = ALL_STEPS.findIndex((s) => s.name === 'explore');
     await seedWorktree('with index', {
       feature_desc: 'with index',
-      brainstorm: 'done',
-      last_step: 'brainstorm',
+      explore: 'done',
+      last_step: 'explore',
     });
 
     const result = await detectAutoResume(projectRoot, 'with index');
     if (result.kind === 'resume') {
-      expect(result.stepIndex).toBe(brainstormIdx + 1);
+      expect(result.stepIndex).toBe(exploreIdx + 1);
     }
   });
 
@@ -231,14 +231,14 @@ describe('Integration: auto-resume by feature description', () => {
         feature_desc: 'build a habit tracker API',
         bootstrap: 'done',
         memory: 'done',
-        brainstorm: 'done',
-        last_step: 'brainstorm',
+        explore: 'done',
+        last_step: 'explore',
       });
       const result = await detectAutoResume(projectRoot, 'build a habit tracker API');
       expect(result.kind).toBe('resume');
       if (result.kind === 'resume') {
         expect(result.worktreePath).toBe(projectRoot);
-        expect(result.lastStep).toBe('brainstorm');
+        expect(result.lastStep).toBe('explore');
       }
     });
 
@@ -330,14 +330,14 @@ describe('Integration: auto-resume by feature description', () => {
       await mkdir(join(wtPath, '.pipeline'), { recursive: true });
       await writeState(join(wtPath, '.pipeline', 'conduct-state.json'), {
         feature_desc: 'claude convention',
-        brainstorm: 'done',
-        last_step: 'brainstorm',
+        explore: 'done',
+        last_step: 'explore',
       });
       const result = await detectAutoResume(projectRoot, 'claude convention');
       expect(result.kind).toBe('resume');
       if (result.kind === 'resume') {
         expect(result.worktreePath).toBe(wtPath);
-        expect(result.lastStep).toBe('brainstorm');
+        expect(result.lastStep).toBe('explore');
       }
     });
   });

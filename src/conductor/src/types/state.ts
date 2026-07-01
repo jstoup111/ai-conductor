@@ -1,4 +1,4 @@
-import type { StepName, StepStatus, ComplexityTier } from './steps.js';
+import type { StepName, StepStatus, ComplexityTier, Track } from './steps.js';
 
 /**
  * Mode detected by the bootstrap skill when it first runs in a project.
@@ -27,6 +27,12 @@ export type ConductState = {
 } & {
   feature_desc?: string;
   complexity_tier?: ComplexityTier;
+  /**
+   * Work track decided in `explore` (adr-2026-06-29-explore-prd-split-track-in-explore/adr-2026-06-29-track-marker-location). `product` features author a
+   * PRD; `technical` features skip the `prd` step (and `prd-audit` at SHIP). A
+   * missing track defaults to `product` (back-compat: pre-track specs are PRDs).
+   */
+  track?: Track;
   bootstrap_mode?: BootstrapMode;
   run_started_at?: number;
   /**

@@ -77,11 +77,14 @@ describe('Integration: config flow', () => {
     // audit) via skipWhenSkipped — even on L tier where it isn't tier-skipped.
     expect(runner.calls).not.toContain('architecture_review_as_built');
 
-    // All other steps should have run: 17 total - 2 disabled - 1 cascade-skipped
-    // (architecture_review_as_built) - 3 engine-managed (complexity + worktree +
-    // rebase, not dispatched to runner.run) = 11. prd_audit still runs (the PRD
-    // exists regardless of the architecture review).
-    expect(runner.calls).toHaveLength(11);
+    // Dispatched to runner.run: everything except the 3 engine-managed steps
+    // (complexity + worktree + rebase), the 2 disabled steps (retro +
+    // architecture_review), and architecture_review_as_built (cascade-skipped
+    // via skipWhenSkipped because architecture_review is disabled). `prd` runs
+    // here because no track is set (defaults to product); `explore` + `prd`
+    // replace the former single `brainstorm` step, and prd_audit still runs
+    // (the PRD exists regardless of the architecture review).
+    expect(runner.calls).toHaveLength(12);
 
     // Verify final state marks disabled steps as 'skipped'
     const result = await readState(statePath);

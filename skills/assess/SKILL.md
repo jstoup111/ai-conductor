@@ -155,7 +155,7 @@ Save assessment metadata to `.pipeline/conduct-state.json`:
 | Verdict | Criteria | Implication |
 |---------|----------|-------------|
 | **HEALTHY** | No critical findings. Systemic patterns are minor. | Proceed to feature work. |
-| **NEEDS_WORK** | No critical findings, but systemic patterns need addressing. | Feature work can proceed with caution. Assessment feeds `/brainstorm`. |
+| **NEEDS_WORK** | No critical findings, but systemic patterns need addressing. | Feature work can proceed with caution. Assessment feeds `/explore`. |
 | **CRITICAL** | Critical findings exist OR 3+ systemic patterns at important+ severity. | Address findings before feature work. Assessment findings become the backlog. |
 
 ## Verification

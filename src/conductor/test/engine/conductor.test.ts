@@ -44,6 +44,50 @@ describe('engine/conductor', () => {
     await rm(dir, { recursive: true, force: true });
   });
 
+  describe('track resolution from the committed marker (adr-2026-06-29-explore-prd-split-track-in-explore/adr-2026-06-29-track-marker-location, interactive)', () => {
+    it('technical marker → prd is skipped even when state.track is unset', async () => {
+      // /explore wrote the marker; state has no `track` (interactive path).
+      await mkdir(join(dir, '.docs', 'track'), { recursive: true });
+      await writeFile(join(dir, '.docs', 'track', 'feat.md'), '# Track\n\nTrack: technical\n');
+      await writeState(statePath, {
+        worktree: 'done', memory: 'done', explore: 'done', complexity: 'done',
+        complexity_tier: 'M',
+      } as ConductState);
+
+      const stepsRun: StepName[] = [];
+      const runner: StepRunner = { run: async (s) => { stepsRun.push(s); return { success: true }; } };
+      const conductor = new Conductor({
+        stateFilePath: statePath, stepRunner: runner, events, projectRoot: dir, fromStep: 'prd',
+      });
+      await conductor.run();
+
+      expect(stepsRun).not.toContain('prd');
+      const r = await readState(statePath);
+      if (r.ok) {
+        expect(r.value.prd).toBe('skipped');
+        expect(r.value.track).toBe('technical'); // resolved from marker + persisted
+      }
+    });
+
+    it('product marker → prd runs', async () => {
+      await mkdir(join(dir, '.docs', 'track'), { recursive: true });
+      await writeFile(join(dir, '.docs', 'track', 'feat.md'), '# Track\n\nTrack: product\n');
+      await writeState(statePath, {
+        worktree: 'done', memory: 'done', explore: 'done', complexity: 'done',
+        complexity_tier: 'M',
+      } as ConductState);
+
+      const stepsRun: StepName[] = [];
+      const runner: StepRunner = { run: async (s) => { stepsRun.push(s); return { success: true }; } };
+      const conductor = new Conductor({
+        stateFilePath: statePath, stepRunner: runner, events, projectRoot: dir, fromStep: 'prd',
+      });
+      await conductor.run();
+
+      expect(stepsRun).toContain('prd');
+    });
+  });
+
   it('starts at step index 0 for new feature', async () => {
     const runner = createMockStepRunner();
     const conductor = new Conductor({ stateFilePath: statePath, stepRunner: runner, events });
@@ -80,7 +124,7 @@ describe('engine/conductor', () => {
     // Every runner-dispatched step should have been in_progress when called
     // (worktree is engine-managed, so check memory as the first dispatched step).
     expect(statusesDuringRun['memory']).toBe('in_progress');
-    expect(statusesDuringRun['brainstorm']).toBe('in_progress');
+    expect(statusesDuringRun['explore']).toBe('in_progress');
     expect(statusesDuringRun['finish']).toBe('in_progress');
   });
 
@@ -95,7 +139,7 @@ describe('engine/conductor', () => {
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.value['worktree']).toBe('done');
-      expect(result.value['brainstorm']).toBe('done');
+      expect(result.value['explore']).toBe('done');
       expect(result.value['finish']).toBe('done');
     }
   });
@@ -162,11 +206,11 @@ describe('engine/conductor', () => {
   });
 
   it('enters recovery flow when step returns failure', async () => {
-    // brainstorm (3rd step) permanently fails; maxRetries=0 so the first
+    // explore (3rd step) permanently fails; maxRetries=0 so the first
     // miss escalates immediately — the retry budget isn't the subject here.
     const runner: StepRunner = {
       run: vi.fn(async (step: StepName) => {
-        if (step === 'brainstorm') return { success: false, output: 'brainstorm failed' };
+        if (step === 'explore') return { success: false, output: 'explore failed' };
         return { success: true };
       }),
     };
@@ -186,10 +230,10 @@ describe('engine/conductor', () => {
 
     // step_failed should have been emitted
     expect(failedEvents.length).toBe(1);
-    expect(failedEvents[0].step).toBe('brainstorm');
+    expect(failedEvents[0].step).toBe('explore');
 
     // Should NOT have advanced past the failed step. worktree is engine-managed
-    // (not runner-dispatched), so the runner saw memory + brainstorm = 2 calls.
+    // (not runner-dispatched), so the runner saw memory + explore = 2 calls.
     expect(runner.run).toHaveBeenCalledTimes(2);
   });
 
@@ -198,7 +242,7 @@ describe('engine/conductor', () => {
     const runner: StepRunner = {
       run: async (step: StepName) => {
         stepsRun.push(step);
-        if (step === 'brainstorm') return { success: false, output: 'error' };
+        if (step === 'explore') return { success: false, output: 'error' };
         return { success: true };
       },
     };
@@ -211,9 +255,9 @@ describe('engine/conductor', () => {
 
     await conductor.run();
 
-    // worktree is engine-managed, so the runner sees memory → brainstorm, then stops.
-    expect(stepsRun).toEqual(['memory', 'brainstorm']);
-    // complexity (the step after brainstorm) should NOT have been called
+    // worktree is engine-managed, so the runner sees memory → explore, then stops.
+    expect(stepsRun).toEqual(['memory', 'explore']);
+    // complexity (the step after explore) should NOT have been called
     expect(stepsRun).not.toContain('complexity');
   });
 
@@ -444,7 +488,7 @@ describe('engine/conductor', () => {
 
     // State flushed: a step before the throw is recorded, feature NOT complete.
     const result = await readState(statePath);
-    expect(result.ok && result.value.brainstorm).toBe('done');
+    expect(result.ok && result.value.explore).toBe('done');
     expect(result.ok && result.value.feature_status).toBeUndefined();
   });
 
@@ -821,7 +865,7 @@ describe('engine/conductor', () => {
   it('marks failed step as failed in state', async () => {
     const runner: StepRunner = {
       run: async (step: StepName) => {
-        if (step === 'brainstorm') return { success: false };
+        if (step === 'explore') return { success: false };
         return { success: true };
       },
     };
@@ -837,16 +881,16 @@ describe('engine/conductor', () => {
     const result = await readState(statePath);
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.value['brainstorm']).toBe('failed');
+      expect(result.value['explore']).toBe('failed');
     }
   });
 
   it('with resume option starts at last in_progress step', async () => {
-    // Pre-populate state: worktree=done, memory=done, brainstorm=in_progress
+    // Pre-populate state: worktree=done, memory=done, explore=in_progress
     await writeState(statePath, {
       worktree: 'done',
       memory: 'done',
-      brainstorm: 'in_progress',
+      explore: 'in_progress',
     } as ConductState);
 
     const stepsRun: StepName[] = [];
@@ -860,14 +904,14 @@ describe('engine/conductor', () => {
 
     await conductor.run();
 
-    // Should start at brainstorm (the in_progress step), not worktree
-    expect(stepsRun[0]).toBe('brainstorm');
+    // Should start at explore (the in_progress step), not worktree
+    expect(stepsRun[0]).toBe('explore');
     expect(stepsRun).not.toContain('worktree');
     expect(stepsRun).not.toContain('memory');
   });
 
   it('with resume option starts at first pending after last done when no in_progress', async () => {
-    // Pre-populate state: worktree=done, memory=done, brainstorm=pending
+    // Pre-populate state: worktree=done, memory=done, explore=pending
     await writeState(statePath, {
       worktree: 'done',
       memory: 'done',
@@ -884,8 +928,8 @@ describe('engine/conductor', () => {
 
     await conductor.run();
 
-    // Should start at brainstorm (first pending after last done)
-    expect(stepsRun[0]).toBe('brainstorm');
+    // Should start at explore (first pending after last done)
+    expect(stepsRun[0]).toBe('explore');
     expect(stepsRun).not.toContain('worktree');
     expect(stepsRun).not.toContain('memory');
   });
@@ -895,7 +939,8 @@ describe('engine/conductor', () => {
     await writeState(statePath, {
       worktree: 'done',
       memory: 'done',
-      brainstorm: 'done',
+      explore: 'done',
+      architecture_review: 'done', // stories' direct prerequisite under the new order
     } as ConductState);
 
     const stepsRun: StepName[] = [];
@@ -912,7 +957,7 @@ describe('engine/conductor', () => {
     // Should start at stories
     expect(stepsRun[0]).toBe('stories');
     expect(stepsRun).not.toContain('worktree');
-    expect(stepsRun).not.toContain('brainstorm');
+    expect(stepsRun).not.toContain('explore');
   });
 
   it('emits step_failed event with correct payload on failure', async () => {
@@ -1093,7 +1138,7 @@ describe('engine/conductor', () => {
   });
 
   it('checks gate before running each step', async () => {
-    // stories requires brainstorm — set brainstorm='pending', start from stories
+    // stories requires explore — set explore='pending', start from stories
     await writeState(statePath, {} as ConductState);
 
     const stepsRun: StepName[] = [];
@@ -1112,12 +1157,12 @@ describe('engine/conductor', () => {
 
     await conductor.run();
 
-    // stories should NOT have been run because brainstorm is pending
+    // stories should NOT have been run because explore is pending
     expect(stepsRun).not.toContain('stories');
   });
 
   it('blocks and emits gate_blocked event when gate fails', async () => {
-    // stories requires brainstorm — leave brainstorm pending
+    // stories requires architecture_review — leave it pending
     await writeState(statePath, {} as ConductState);
 
     const runner = createMockStepRunner();
@@ -1140,12 +1185,12 @@ describe('engine/conductor', () => {
     expect(blockedEvents.length).toBe(1);
     expect(blockedEvents[0].type).toBe('gate_blocked');
     expect(blockedEvents[0].step).toBe('stories');
-    expect(blockedEvents[0].reason).toContain('brainstorm');
+    expect(blockedEvents[0].reason).toContain('architecture_review');
   });
 
   it('passes gate when prerequisite is done', async () => {
-    // brainstorm=done satisfies stories prerequisite
-    await writeState(statePath, { brainstorm: 'done' } as ConductState);
+    // architecture_review=done satisfies the stories prerequisite
+    await writeState(statePath, { architecture_review: 'done' } as ConductState);
 
     const stepsRun: StepName[] = [];
     const runner: StepRunner = {
@@ -1175,8 +1220,8 @@ describe('engine/conductor', () => {
   });
 
   it('passes gate when prerequisite is stale', async () => {
-    // brainstorm=stale should still satisfy the stories gate
-    await writeState(statePath, { brainstorm: 'stale' } as ConductState);
+    // architecture_review=stale should still satisfy the stories gate
+    await writeState(statePath, { architecture_review: 'stale' } as ConductState);
 
     const stepsRun: StepName[] = [];
     const runner: StepRunner = {
@@ -1209,7 +1254,7 @@ describe('engine/conductor', () => {
     await writeState(statePath, {
       worktree: 'done',
       memory: 'done',
-      brainstorm: 'done',
+      explore: 'done',
       complexity: 'done',
       stories: 'done',
       conflict_check: 'done',
@@ -1246,7 +1291,7 @@ describe('engine/conductor', () => {
     await writeState(statePath, {
       worktree: 'done',
       memory: 'done',
-      brainstorm: 'done',
+      explore: 'done',
       complexity: 'done',
       stories: 'done',
       conflict_check: 'done',
@@ -1279,7 +1324,7 @@ describe('engine/conductor', () => {
   });
 
   it('does NOT fire checkpoint for non-checkpoint steps', async () => {
-    // Run only brainstorm (non-checkpoint step)
+    // Run only explore (non-checkpoint step)
     await writeState(statePath, {
       worktree: 'done',
       memory: 'done',
@@ -1291,7 +1336,7 @@ describe('engine/conductor', () => {
       stateFilePath: statePath,
       stepRunner: runner,
       events,
-      fromStep: 'brainstorm',
+      fromStep: 'explore',
       onCheckpoint,
     });
 
@@ -1302,9 +1347,9 @@ describe('engine/conductor', () => {
 
     await conductor.run();
 
-    // brainstorm, stories, plan etc. are not checkpoint steps
+    // explore, stories, plan etc. are not checkpoint steps
     expect(checkpointEvents.filter((e) =>
-      e.step === 'brainstorm' || e.step === 'stories' || e.step === 'plan'
+      e.step === 'explore' || e.step === 'stories' || e.step === 'plan'
     )).toHaveLength(0);
     // onCheckpoint should only have been called for build and manual_test
     for (const call of onCheckpoint.mock.calls) {
@@ -1316,7 +1361,7 @@ describe('engine/conductor', () => {
     await writeState(statePath, {
       worktree: 'done',
       memory: 'done',
-      brainstorm: 'done',
+      explore: 'done',
       complexity: 'done',
       stories: 'done',
       conflict_check: 'done',
@@ -1354,7 +1399,7 @@ describe('engine/conductor', () => {
     await writeState(statePath, {
       worktree: 'done',
       memory: 'done',
-      brainstorm: 'done',
+      explore: 'done',
       complexity: 'done',
       stories: 'done',
       conflict_check: 'done',
@@ -1393,7 +1438,7 @@ describe('engine/conductor', () => {
     await writeState(statePath, {
       worktree: 'done',
       memory: 'done',
-      brainstorm: 'done',
+      explore: 'done',
       complexity: 'done',
       stories: 'done',
       conflict_check: 'done',
@@ -1492,7 +1537,7 @@ describe('engine/conductor', () => {
       const state: ConductState = {
         worktree: 'done',
         memory: 'done',
-        brainstorm: 'in_progress',
+        explore: 'in_progress',
         complexity: 'pending',
         stories: 'stale',
       };
@@ -1503,7 +1548,7 @@ describe('engine/conductor', () => {
       expect(names).toContain('worktree');
       expect(names).toContain('memory');
       expect(names).toContain('stories');
-      expect(names).not.toContain('brainstorm');
+      expect(names).not.toContain('explore');
       expect(names).not.toContain('complexity');
       // Each entry should have name, label, status, phase
       for (const step of navigable) {
@@ -1517,31 +1562,31 @@ describe('engine/conductor', () => {
       const state: ConductState = {
         worktree: 'done',
         memory: 'done',
-        brainstorm: 'done',
+        explore: 'done',
         complexity: 'done',
         stories: 'done',
       };
 
-      const result = navigateBack(state, 'brainstorm');
+      const result = navigateBack(state, 'explore');
 
-      expect(result.state['brainstorm']).toBe('pending');
+      expect(result.state['explore']).toBe('pending');
     });
 
     it('navigateBack marks all downstream done steps as stale', () => {
       const state: ConductState = {
         worktree: 'done',
         memory: 'done',
-        brainstorm: 'done',
+        explore: 'done',
         complexity: 'done',
         stories: 'done',
         conflict_check: 'skipped',
         plan: 'done',
       };
 
-      const result = navigateBack(state, 'brainstorm');
+      const result = navigateBack(state, 'explore');
 
-      // brainstorm itself is pending (not stale)
-      expect(result.state['brainstorm']).toBe('pending');
+      // explore itself is pending (not stale)
+      expect(result.state['explore']).toBe('pending');
       // Upstream steps remain done
       expect(result.state['worktree']).toBe('done');
       expect(result.state['memory']).toBe('done');
@@ -1557,14 +1602,14 @@ describe('engine/conductor', () => {
       const state: ConductState = {
         worktree: 'done',
         memory: 'done',
-        brainstorm: 'done',
+        explore: 'done',
         complexity: 'done',
       };
 
-      const result = navigateBack(state, 'brainstorm');
+      const result = navigateBack(state, 'explore');
 
-      // brainstorm is index 2 in ALL_STEPS
-      const expectedIndex = ALL_STEPS.findIndex((s) => s.name === 'brainstorm');
+      // explore is index 2 in ALL_STEPS
+      const expectedIndex = ALL_STEPS.findIndex((s) => s.name === 'explore');
       expect(result.index).toBe(expectedIndex);
     });
 
@@ -1573,7 +1618,7 @@ describe('engine/conductor', () => {
       await writeState(statePath, {
         worktree: 'done',
         memory: 'done',
-        brainstorm: 'done',
+        explore: 'done',
         complexity: 'done',
         stories: 'done',
         conflict_check: 'done',
@@ -1635,8 +1680,10 @@ describe('engine/conductor', () => {
       await writeState(statePath, {
         worktree: 'done',
         memory: 'done',
-        brainstorm: 'done',
+        explore: 'done',
         complexity: 'done',
+        architecture_diagram: 'done',
+        architecture_review: 'done',
         stories: 'stale',
       } as ConductState);
 
@@ -1672,7 +1719,7 @@ describe('engine/conductor', () => {
       await writeState(statePath, {
         worktree: 'done',
         memory: 'done',
-        brainstorm: 'done',
+        explore: 'done',
         complexity: 'done',
         stories: 'done',
         conflict_check: 'done',
@@ -1782,7 +1829,8 @@ describe('engine/conductor', () => {
         feature_status: 'complete',
         worktree: 'done',
         memory: 'done',
-        brainstorm: 'done',
+        explore: 'done',
+        prd: 'done',
         complexity: 'done',
         stories: 'done',
         conflict_check: 'done',
@@ -1873,7 +1921,7 @@ describe('engine/conductor', () => {
     it('calls onRecovery on step failure', async () => {
       const runner: StepRunner = {
         run: vi.fn(async (step: StepName) => {
-          if (step === 'brainstorm') return { success: false, output: 'brainstorm failed' };
+          if (step === 'explore') return { success: false, output: 'explore failed' };
           return { success: true };
         }),
       };
@@ -1888,17 +1936,17 @@ describe('engine/conductor', () => {
 
       await conductor.run();
 
-      // onRecovery(step, isGating, context). brainstorm is advisory.
-      expect(onRecovery).toHaveBeenCalledWith('brainstorm', false, expect.any(Object));
+      // onRecovery(step, isGating, context). explore is advisory.
+      expect(onRecovery).toHaveBeenCalledWith('explore', false, expect.any(Object));
     });
 
     it('retries step when recovery returns retry', async () => {
-      let brainstormCalls = 0;
+      let exploreCalls = 0;
       const runner: StepRunner = {
         run: vi.fn(async (step: StepName) => {
-          if (step === 'brainstorm') {
-            brainstormCalls++;
-            if (brainstormCalls === 1) return { success: false, output: 'failed first time' };
+          if (step === 'explore') {
+            exploreCalls++;
+            if (exploreCalls === 1) return { success: false, output: 'failed first time' };
             return { success: true };
           }
           return { success: true };
@@ -1914,8 +1962,8 @@ describe('engine/conductor', () => {
 
       await conductor.run();
 
-      // brainstorm should have been called twice (fail + retry)
-      expect(brainstormCalls).toBe(2);
+      // explore should have been called twice (fail + retry)
+      expect(exploreCalls).toBe(2);
       // All steps should have completed
       const result = await readState(statePath);
       expect(result.ok).toBe(true);
@@ -1925,10 +1973,10 @@ describe('engine/conductor', () => {
     });
 
     it('skips step when recovery returns skip (non-gating)', async () => {
-      // brainstorm is advisory (non-gating), so skip should work
+      // explore is advisory (non-gating), so skip should work
       const runner: StepRunner = {
         run: vi.fn(async (step: StepName) => {
-          if (step === 'brainstorm') return { success: false, output: 'brainstorm failed' };
+          if (step === 'explore') return { success: false, output: 'explore failed' };
           return { success: true };
         }),
       };
@@ -1943,12 +1991,12 @@ describe('engine/conductor', () => {
 
       await conductor.run();
 
-      // brainstorm should be marked skipped
+      // explore should be marked skipped
       const result = await readState(statePath);
       expect(result.ok).toBe(true);
       if (result.ok) {
-        expect(result.value['brainstorm']).toBe('skipped');
-        // Should have continued past brainstorm
+        expect(result.value['explore']).toBe('skipped');
+        // Should have continued past explore
         expect(result.value.feature_status).toBe('complete');
       }
     });
@@ -1956,7 +2004,7 @@ describe('engine/conductor', () => {
     it('quits when recovery returns quit', async () => {
       const runner: StepRunner = {
         run: vi.fn(async (step: StepName) => {
-          if (step === 'brainstorm') return { success: false, output: 'brainstorm failed' };
+          if (step === 'explore') return { success: false, output: 'explore failed' };
           return { success: true };
         }),
       };
@@ -1975,18 +2023,20 @@ describe('engine/conductor', () => {
       const result = await readState(statePath);
       expect(result.ok).toBe(true);
       if (result.ok) {
-        expect(result.value['brainstorm']).toBe('failed');
+        expect(result.value['explore']).toBe('failed');
         expect(result.value.feature_status).toBeUndefined();
       }
     });
 
     it('calls onRecovery with isGating=true for gating steps', async () => {
-      // stories is gating — set up prerequisites
+      // stories is gating — set up prerequisites (stories now follows architecture_review)
       await writeState(statePath, {
         worktree: 'done',
         memory: 'done',
-        brainstorm: 'done',
+        explore: 'done',
         complexity: 'done',
+        architecture_diagram: 'done',
+        architecture_review: 'done',
       } as ConductState);
 
       const runner: StepRunner = {
@@ -2014,12 +2064,14 @@ describe('engine/conductor', () => {
     });
 
     it('navigates back when recovery returns back', async () => {
-      // Set up prerequisites through brainstorm
+      // Set up prerequisites through architecture_review (stories' new prereq)
       await writeState(statePath, {
         worktree: 'done',
         memory: 'done',
-        brainstorm: 'done',
+        explore: 'done',
         complexity: 'done',
+        architecture_diagram: 'done',
+        architecture_review: 'done',
       } as ConductState);
 
       let storiesCalls = 0;
@@ -2034,7 +2086,7 @@ describe('engine/conductor', () => {
       };
 
       const onRecovery = vi.fn().mockResolvedValueOnce('back' as const);
-      const onNavigate = vi.fn().mockResolvedValue('brainstorm' as StepName);
+      const onNavigate = vi.fn().mockResolvedValue('explore' as StepName);
       const conductor = new Conductor({
         stateFilePath: statePath,
         stepRunner: runner,
@@ -2052,12 +2104,12 @@ describe('engine/conductor', () => {
     });
 
     it('calls runInteractive when recovery returns interactive', async () => {
-      let brainstormCalls = 0;
+      let exploreCalls = 0;
       const runner: StepRunner & { runInteractive?: ReturnType<typeof vi.fn> } = {
         run: vi.fn(async (step: StepName) => {
-          if (step === 'brainstorm') {
-            brainstormCalls++;
-            if (brainstormCalls === 1) return { success: false, output: 'brainstorm failed' };
+          if (step === 'explore') {
+            exploreCalls++;
+            if (exploreCalls === 1) return { success: false, output: 'explore failed' };
             return { success: true };
           }
           return { success: true };
@@ -2076,9 +2128,9 @@ describe('engine/conductor', () => {
       await conductor.run();
 
       // runInteractive should have been called with the failed step
-      expect(runner.runInteractive).toHaveBeenCalledWith('brainstorm');
+      expect(runner.runInteractive).toHaveBeenCalledWith('explore');
       // Then the step should have been retried
-      expect(brainstormCalls).toBe(2);
+      expect(exploreCalls).toBe(2);
     });
   });
 
@@ -2242,7 +2294,7 @@ describe('engine/conductor', () => {
       config: {
         steps: {
           memory: { disable: true },
-          brainstorm: { disable: true },
+          explore: { disable: true },
         },
       },
     });
@@ -2250,18 +2302,18 @@ describe('engine/conductor', () => {
     await conductor.run();
 
     expect(stepsRun).not.toContain('memory');
-    expect(stepsRun).not.toContain('brainstorm');
+    expect(stepsRun).not.toContain('explore');
 
     const result = await readState(statePath);
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.value['memory']).toBe('skipped');
-      expect(result.value['brainstorm']).toBe('skipped');
+      expect(result.value['explore']).toBe('skipped');
     }
   });
 
   it('disabled step satisfies downstream gate', async () => {
-    // Disable brainstorm, which is a prerequisite for stories
+    // Disable explore, which is a prerequisite for stories
     const stepsRun: StepName[] = [];
     const runner: StepRunner = {
       run: async (step: StepName) => {
@@ -2273,14 +2325,14 @@ describe('engine/conductor', () => {
       stateFilePath: statePath,
       stepRunner: runner,
       events,
-      config: { steps: { brainstorm: { disable: true } } },
+      config: { steps: { explore: { disable: true } } },
     });
 
     await conductor.run();
 
-    // stories depends on brainstorm — it should still run because
-    // brainstorm was skipped and stepSatisfied returns true for 'skipped'
-    expect(stepsRun).not.toContain('brainstorm');
+    // stories depends on explore — it should still run because
+    // explore was skipped and stepSatisfied returns true for 'skipped'
+    expect(stepsRun).not.toContain('explore');
     expect(stepsRun).toContain('stories');
   });
 
@@ -2361,7 +2413,7 @@ describe('engine/conductor', () => {
         },
       };
       await writeState(statePath, {
-        brainstorm: 'done',
+        explore: 'done',
         conflict_check: 'done',
         architecture_diagram: 'done',
         architecture_review: 'done',
@@ -2398,7 +2450,7 @@ describe('engine/conductor', () => {
         },
       };
       await writeState(statePath, {
-        brainstorm: 'done',
+        explore: 'done',
         conflict_check: 'done',
         architecture_diagram: 'done',
         architecture_review: 'done',
@@ -2427,7 +2479,7 @@ describe('engine/conductor', () => {
     it('persists approvals to state after a successful review', async () => {
       const planFile = await writeArtifact('.docs/plans/a.md', 'plan content');
       await writeState(statePath, {
-        brainstorm: 'done',
+        explore: 'done',
         conflict_check: 'done',
         architecture_diagram: 'done',
         architecture_review: 'done',
@@ -2461,7 +2513,7 @@ describe('engine/conductor', () => {
     it('does not persist approvals when user rejects', async () => {
       await writeArtifact('.docs/plans/a.md', 'plan');
       await writeState(statePath, {
-        brainstorm: 'done',
+        explore: 'done',
         conflict_check: 'done',
         architecture_diagram: 'done',
         architecture_review: 'done',
@@ -2620,7 +2672,7 @@ describe('engine/conductor', () => {
       await writeFile(join(projectRoot, '.docs/conflicts/c.md'), 'conflict report');
     }
 
-    async function seedBrainstormArtifact(projectRoot: string): Promise<void> {
+    async function seedPrdArtifact(projectRoot: string): Promise<void> {
       await mkdir(join(projectRoot, '.docs/specs'), { recursive: true });
       await writeFile(join(projectRoot, '.docs/specs/spec.md'), 'spec');
     }
@@ -2628,7 +2680,7 @@ describe('engine/conductor', () => {
     it('auto-approves conflict_check when no marker file exists', async () => {
       await seedConflictArtifact(dir);
       await writeState(statePath, {
-        bootstrap: 'done', memory: 'done', assess: 'done', brainstorm: 'done',
+        bootstrap: 'done', memory: 'done', assess: 'done', explore: 'done',
         stories: 'done', complexity_tier: 'M',
       } as ConductState);
 
@@ -2655,7 +2707,7 @@ describe('engine/conductor', () => {
       await mkdir(join(dir, '.pipeline'), { recursive: true });
       await writeFile(join(dir, '.pipeline/review-required-conflict_check'), '1');
       await writeState(statePath, {
-        bootstrap: 'done', memory: 'done', assess: 'done', brainstorm: 'done',
+        bootstrap: 'done', memory: 'done', assess: 'done', explore: 'done',
         stories: 'done', complexity_tier: 'M',
       } as ConductState);
 
@@ -2683,7 +2735,7 @@ describe('engine/conductor', () => {
       const markerPath = join(dir, '.pipeline/review-required-conflict_check');
       await writeFile(markerPath, '1');
       await writeState(statePath, {
-        bootstrap: 'done', memory: 'done', assess: 'done', brainstorm: 'done',
+        bootstrap: 'done', memory: 'done', assess: 'done', explore: 'done',
         stories: 'done', complexity_tier: 'M',
       } as ConductState);
 
@@ -2705,10 +2757,12 @@ describe('engine/conductor', () => {
       expect(exists).toBe(false);
     });
 
-    it('manual review (e.g. brainstorm) always prompts', async () => {
-      await seedBrainstormArtifact(dir);
+    it('manual review (e.g. prd) always prompts', async () => {
+      // prd is the manual-review DECIDE step that produces an artifact
+      // (.docs/specs); explore is advisory + artifact-less so it never prompts.
+      await seedPrdArtifact(dir);
       await writeState(statePath, {
-        bootstrap: 'done', memory: 'done', assess: 'done',
+        bootstrap: 'done', memory: 'done', assess: 'done', explore: 'done',
         complexity_tier: 'M',
       } as ConductState);
 
@@ -2720,14 +2774,14 @@ describe('engine/conductor', () => {
         events,
         projectRoot: dir,
         resume: true,
-        fromStep: 'brainstorm',
+        fromStep: 'prd',
         onReviewArtifacts,
       });
 
       await conductor.run();
 
-      const brainstormCalls = onReviewArtifacts.mock.calls.filter((c) => c[0] === 'brainstorm');
-      expect(brainstormCalls.length).toBe(1);
+      const prdCalls = onReviewArtifacts.mock.calls.filter((c) => c[0] === 'prd');
+      expect(prdCalls.length).toBe(1);
     });
   });
 
@@ -2814,8 +2868,8 @@ describe('engine/conductor', () => {
       expect(hintedRuns.length).toBeGreaterThan(0);
     });
 
-    it('honors per-step default retries (e.g. brainstorm → 5)', async () => {
-      // Pre-populate state so we start at brainstorm (DEFAULT_STEP_RETRIES.brainstorm=5).
+    it('honors per-step default retries (e.g. explore → 5)', async () => {
+      // Pre-populate state so we start at explore (DEFAULT_STEP_RETRIES.explore=5).
       await writeState(statePath, {
         bootstrap: 'done',
         memory: 'done',
@@ -2840,7 +2894,7 @@ describe('engine/conductor', () => {
 
       await conductor.run();
 
-      // brainstorm default is 5 retries
+      // explore default is 5 retries
       expect(attempts).toBe(5);
     });
   });
@@ -3049,10 +3103,9 @@ describe('engine/conductor', () => {
 
       await conductor.run();
 
-      // `brainstorm` (first step with artifacts) should have been retried once
-      // after the artifact-miss failure. (Previously asserted `assess` — which
-      // is now a project-level prelude step, not in ALL_STEPS.)
-      expect(runCallCount['brainstorm']).toBeGreaterThanOrEqual(2);
+      // `prd` (first step with artifacts — explore/complexity are artifact-less)
+      // should have been retried once after the artifact-miss failure.
+      expect(runCallCount['prd']).toBeGreaterThanOrEqual(2);
     });
 
     it('is a no-op when verifyArtifacts is false (default)', async () => {
@@ -3105,7 +3158,7 @@ describe('recovery retry budget', () => {
 
   it('passes RecoveryContext with recoveryCount=0 on first recovery entry', async () => {
     await writeState(statePath, {
-      worktree: 'done', memory: 'done', brainstorm: 'done', complexity: 'done', stories: 'done',
+      worktree: 'done', memory: 'done', explore: 'done', complexity: 'done', stories: 'done',
       conflict_check: 'done', plan: 'done', architecture_diagram: 'done',
       architecture_review: 'done', writing_system_tests: 'done',
     } as ConductState);
@@ -3131,7 +3184,7 @@ describe('recovery retry budget', () => {
 
   it('marks retriesExhausted after MAX_RECOVERY_RETRIES cycles', async () => {
     await writeState(statePath, {
-      worktree: 'done', memory: 'done', brainstorm: 'done', complexity: 'done', stories: 'done',
+      worktree: 'done', memory: 'done', explore: 'done', complexity: 'done', stories: 'done',
       conflict_check: 'done', plan: 'done', architecture_diagram: 'done',
       architecture_review: 'done', writing_system_tests: 'done',
     } as ConductState);
@@ -3165,7 +3218,7 @@ describe('recovery retry budget', () => {
 
   it('does not infinite-loop when a non-conforming onRecovery returns retry after exhaustion', async () => {
     await writeState(statePath, {
-      worktree: 'done', memory: 'done', brainstorm: 'done', complexity: 'done', stories: 'done',
+      worktree: 'done', memory: 'done', explore: 'done', complexity: 'done', stories: 'done',
       conflict_check: 'done', plan: 'done', architecture_diagram: 'done',
       architecture_review: 'done', writing_system_tests: 'done',
     } as ConductState);
@@ -3585,7 +3638,7 @@ describe('skip-already-resolved steps', () => {
     await writeState(statePath, {
       worktree: 'done',
       memory: 'done',
-      brainstorm: 'done',
+      explore: 'done',
       complexity: 'done',
       stories: 'done',
       conflict_check: 'done',
@@ -3609,7 +3662,7 @@ describe('skip-already-resolved steps', () => {
 
     // None of the `done` steps should have been re-dispatched.
     expect(calledSteps).not.toContain('worktree');
-    expect(calledSteps).not.toContain('brainstorm');
+    expect(calledSteps).not.toContain('explore');
     expect(calledSteps).not.toContain('plan');
     expect(calledSteps).not.toContain('acceptance_specs');
 
@@ -3622,7 +3675,7 @@ describe('skip-already-resolved steps', () => {
     await writeState(statePath, {
       worktree: 'done',
       memory: 'skipped',
-      brainstorm: 'done',
+      explore: 'done',
       complexity: 'done',
       complexity_tier: 'S',
       stories: 'done',
@@ -3649,7 +3702,7 @@ describe('skip-already-resolved steps', () => {
     await writeState(statePath, {
       worktree: 'done',
       memory: 'done',
-      brainstorm: 'done',
+      explore: 'done',
       complexity: 'done',
       complexity_tier: 'L',
       stories: 'done',
@@ -3682,7 +3735,7 @@ describe('skip-already-resolved steps', () => {
     await writeState(statePath, {
       worktree: 'done',
       memory: 'done',
-      brainstorm: 'done',
+      explore: 'done',
       complexity: 'done',
       complexity_tier: 'L',
       stories: 'done',

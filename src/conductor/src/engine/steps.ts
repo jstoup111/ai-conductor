@@ -1,4 +1,4 @@
-import type { StepDefinition, StepName, ComplexityTier, BootstrapMode } from '../types/index.js';
+import type { StepDefinition, StepName, ComplexityTier, BootstrapMode, Track } from '../types/index.js';
 import type { HarnessConfig } from '../types/config.js';
 
 export const ALL_STEPS: StepDefinition[] = [
@@ -23,30 +23,73 @@ export const ALL_STEPS: StepDefinition[] = [
     skillName: 'memory',
   },
   {
-    name: 'brainstorm',
-    label: 'Brainstorm',
+    // `explore` (divergent: context, questions, approaches) — always runs,
+    // advisory. Working notes are ephemeral (.pipeline/); the selected approach
+    // + rejected alternatives are promoted to .memory/decisions/. It emits the
+    // operator-confirmed Track (product|technical) → .docs/track/<slug>.md.
+    name: 'explore',
+    label: 'Explore',
     phase: 'DECIDE',
     enforcement: 'advisory',
     prerequisites: [],
     skippableForTiers: [],
     isCheckpoint: false,
-    skillName: 'brainstorm',
+    skillName: 'explore',
   },
   {
     name: 'complexity',
     label: 'Complexity',
     phase: 'DECIDE',
     enforcement: 'advisory',
-    prerequisites: ['brainstorm'],
+    prerequisites: ['explore'],
     skippableForTiers: [],
     isCheckpoint: false,
+  },
+  {
+    // `prd` (convergent: product-only design doc) — gating, PRODUCT track only.
+    // Skipped on the technical track (no product requirements to spec). A
+    // conflict rooted in contradictory FRs can re-open it (kickbackTarget).
+    name: 'prd',
+    label: 'PRD',
+    phase: 'DECIDE',
+    enforcement: 'gating',
+    prerequisites: ['explore'],
+    skippableForTiers: [],
+    skippableForTracks: ['technical'],
+    isCheckpoint: false,
+    skillName: 'prd',
+    kickbackTarget: true,
+  },
+  {
+    name: 'architecture_diagram',
+    label: 'Architecture Diagram',
+    phase: 'DECIDE',
+    enforcement: 'advisory',
+    prerequisites: ['complexity'],
+    skippableForTiers: ['S'],
+    isCheckpoint: false,
+    skillName: 'architecture-diagram',
+  },
+  {
+    // adr-2026-06-29-architecture-before-stories-convergent-kickback: architecture precedes stories so stories derive from the approved
+    // design (+ PRD when product) and architecture-induced failure modes become
+    // negative-path stories. Re-openable as a targeted amendment (kickbackTarget).
+    name: 'architecture_review',
+    label: 'Architecture Review',
+    phase: 'DECIDE',
+    enforcement: 'advisory',
+    prerequisites: ['architecture_diagram'],
+    skippableForTiers: ['S'],
+    isCheckpoint: false,
+    skillName: 'architecture-review',
+    kickbackTarget: true,
   },
   {
     name: 'stories',
     label: 'Stories',
     phase: 'DECIDE',
     enforcement: 'gating',
-    prerequisites: ['brainstorm'],
+    prerequisites: ['architecture_review'],
     skippableForTiers: [],
     isCheckpoint: false,
     skillName: 'stories',
@@ -63,33 +106,11 @@ export const ALL_STEPS: StepDefinition[] = [
     skillName: 'conflict-check',
   },
   {
-    name: 'architecture_diagram',
-    label: 'Architecture Diagram',
-    phase: 'DECIDE',
-    enforcement: 'advisory',
-    prerequisites: ['conflict_check'],
-    skippableForTiers: ['S'],
-    isCheckpoint: false,
-    skillName: 'architecture-diagram',
-  },
-  {
-    name: 'architecture_review',
-    label: 'Architecture Review',
-    phase: 'DECIDE',
-    enforcement: 'advisory',
-    prerequisites: ['architecture_diagram'],
-    skippableForTiers: ['S'],
-    isCheckpoint: false,
-    skillName: 'architecture-review',
-  },
-  {
-    // Architecture (system-level HOW) now precedes the plan (task-level HOW),
-    // so the technical implementation plan is grounded in the agreed design.
     name: 'plan',
     label: 'Plan',
     phase: 'DECIDE',
     enforcement: 'gating',
-    prerequisites: ['architecture_review'],
+    prerequisites: ['conflict_check'],
     skippableForTiers: [],
     isCheckpoint: false,
     skillName: 'plan',
@@ -138,6 +159,8 @@ export const ALL_STEPS: StepDefinition[] = [
     enforcement: 'gating',
     prerequisites: ['manual_test'],
     skippableForTiers: [],
+    // No PRD on the technical track → nothing to audit (adr-2026-06-29-explore-prd-split-track-in-explore/adr-2026-06-29-track-marker-location).
+    skippableForTracks: ['technical'],
     isCheckpoint: false,
     skillName: 'prd-audit',
     loopGate: true,
@@ -260,6 +283,17 @@ export function getStepByIndex(index: number): StepDefinition {
 export function shouldSkipForTier(step: StepName, tier: ComplexityTier): boolean {
   const def = getStepDefinition(step);
   return def.skippableForTiers.includes(tier);
+}
+
+/**
+ * True when `step` is skipped for the given work `track` (adr-2026-06-29-explore-prd-split-track-in-explore/adr-2026-06-29-track-marker-location). `prd`
+ * declares `skippableForTracks: ['technical']`, so a technical-only feature
+ * skips PRD authoring. A missing track defaults to `product` (back-compat), so
+ * nothing is track-skipped when the track is unknown.
+ */
+export function shouldSkipForTrack(step: StepName, track: Track | undefined): boolean {
+  const def = getStepDefinition(step);
+  return (def.skippableForTracks ?? []).includes(track ?? 'product');
 }
 
 /**

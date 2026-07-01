@@ -7,6 +7,7 @@ import {
   getStepIndex,
   getStepByIndex,
   shouldSkipForTier,
+  shouldSkipForTrack,
   shouldSkipForBootstrapMode,
   getSkippableSteps,
   isCheckpointStep,
@@ -19,14 +20,14 @@ describe('engine/steps', () => {
 
   describe('ALL_STEPS', () => {
     const expectedOrder: StepName[] = [
-      'worktree', 'memory', 'brainstorm', 'complexity', 'stories',
-      'conflict_check', 'architecture_diagram', 'architecture_review', 'plan',
+      'worktree', 'memory', 'explore', 'complexity', 'prd',
+      'architecture_diagram', 'architecture_review', 'stories', 'conflict_check', 'plan',
       'acceptance_specs', 'build', 'manual_test', 'prd_audit',
       'architecture_review_as_built', 'retro', 'rebase', 'finish',
     ];
 
-    it('has exactly 17 steps', () => {
-      expect(ALL_STEPS).toHaveLength(17);
+    it('has exactly 18 steps', () => {
+      expect(ALL_STEPS).toHaveLength(18);
     });
 
     it('steps are in exact order', () => {
@@ -51,63 +52,76 @@ describe('engine/steps', () => {
       expect(s.prerequisites).toEqual([]);
     });
 
-    it('brainstorm is DECIDE/advisory', () => {
+    it('explore is DECIDE/advisory, always runs, no prereqs', () => {
       const s = ALL_STEPS[2];
-      expect(s.name).toBe('brainstorm');
+      expect(s.name).toBe('explore');
       expect(s.phase).toBe('DECIDE');
       expect(s.enforcement).toBe('advisory');
       expect(s.prerequisites).toEqual([]);
+      expect(s.skippableForTiers).toEqual([]);
     });
 
-    it('complexity has prereq brainstorm', () => {
+    it('complexity has prereq explore', () => {
       const s = ALL_STEPS[3];
       expect(s.name).toBe('complexity');
       expect(s.phase).toBe('DECIDE');
       expect(s.enforcement).toBe('advisory');
-      expect(s.prerequisites).toEqual(['brainstorm']);
+      expect(s.prerequisites).toEqual(['explore']);
     });
 
-    it('stories is DECIDE/gating with prereq brainstorm', () => {
+    it('prd is DECIDE/gating, prereq explore, technical-track-skipped, kickback target', () => {
       const s = ALL_STEPS[4];
+      expect(s.name).toBe('prd');
+      expect(s.phase).toBe('DECIDE');
+      expect(s.enforcement).toBe('gating');
+      expect(s.prerequisites).toEqual(['explore']);
+      expect(s.skippableForTracks).toEqual(['technical']);
+      expect(s.kickbackTarget).toBe(true);
+    });
+
+    it('architecture_diagram is DECIDE/advisory, prereq complexity, skippable for S', () => {
+      const s = ALL_STEPS[5];
+      expect(s.name).toBe('architecture_diagram');
+      expect(s.enforcement).toBe('advisory');
+      expect(s.prerequisites).toEqual(['complexity']);
+      expect(s.skippableForTiers).toEqual(['S']);
+    });
+
+    it('architecture_review is DECIDE/advisory, skippable for S, kickback target (precedes stories)', () => {
+      const s = ALL_STEPS[6];
+      expect(s.name).toBe('architecture_review');
+      expect(s.enforcement).toBe('advisory');
+      expect(s.prerequisites).toEqual(['architecture_diagram']);
+      expect(s.skippableForTiers).toEqual(['S']);
+      expect(s.kickbackTarget).toBe(true);
+    });
+
+    it('stories is DECIDE/gating with prereq architecture_review', () => {
+      const s = ALL_STEPS[7];
       expect(s.name).toBe('stories');
       expect(s.phase).toBe('DECIDE');
       expect(s.enforcement).toBe('gating');
-      expect(s.prerequisites).toEqual(['brainstorm']);
+      expect(s.prerequisites).toEqual(['architecture_review']);
+      expect(s.kickbackTarget).toBe(true);
     });
 
-    it('conflict_check is DECIDE/gating, skippable for S', () => {
-      const s = ALL_STEPS[5];
+    it('conflict_check is DECIDE/gating, prereq stories, skippable for S', () => {
+      const s = ALL_STEPS[8];
       expect(s.name).toBe('conflict_check');
       expect(s.enforcement).toBe('gating');
       expect(s.prerequisites).toEqual(['stories']);
       expect(s.skippableForTiers).toEqual(['S']);
     });
 
-    it('architecture_diagram is DECIDE/advisory, skippable for S', () => {
-      const s = ALL_STEPS[6];
-      expect(s.name).toBe('architecture_diagram');
-      expect(s.enforcement).toBe('advisory');
-      expect(s.prerequisites).toEqual(['conflict_check']);
-      expect(s.skippableForTiers).toEqual(['S']);
-    });
-
-    it('architecture_review is DECIDE/advisory, skippable for S', () => {
-      const s = ALL_STEPS[7];
-      expect(s.name).toBe('architecture_review');
-      expect(s.enforcement).toBe('advisory');
-      expect(s.prerequisites).toEqual(['architecture_diagram']);
-      expect(s.skippableForTiers).toEqual(['S']);
-    });
-
-    it('plan is DECIDE/gating with prereq architecture_review', () => {
-      const s = ALL_STEPS[8];
+    it('plan is DECIDE/gating with prereq conflict_check', () => {
+      const s = ALL_STEPS[9];
       expect(s.name).toBe('plan');
       expect(s.enforcement).toBe('gating');
-      expect(s.prerequisites).toEqual(['architecture_review']);
+      expect(s.prerequisites).toEqual(['conflict_check']);
     });
 
     it('acceptance_specs is BUILD/gating, skippable for S', () => {
-      const s = ALL_STEPS[9];
+      const s = ALL_STEPS[10];
       expect(s.name).toBe('acceptance_specs');
       expect(s.enforcement).toBe('gating');
       expect(s.prerequisites).toEqual(['plan']);
@@ -115,7 +129,7 @@ describe('engine/steps', () => {
     });
 
     it('build is BUILD/structural, checkpoint, prereq plan', () => {
-      const s = ALL_STEPS[10];
+      const s = ALL_STEPS[11];
       expect(s.name).toBe('build');
       expect(s.phase).toBe('BUILD');
       expect(s.enforcement).toBe('structural');
@@ -124,7 +138,7 @@ describe('engine/steps', () => {
     });
 
     it('manual_test is SHIP/advisory, checkpoint, prereq build', () => {
-      const s = ALL_STEPS[11];
+      const s = ALL_STEPS[12];
       expect(s.name).toBe('manual_test');
       expect(s.phase).toBe('SHIP');
       expect(s.enforcement).toBe('advisory');
@@ -133,7 +147,7 @@ describe('engine/steps', () => {
     });
 
     it('prd_audit is SHIP/gating loopGate, after manual_test, not skippable', () => {
-      const s = ALL_STEPS[12];
+      const s = ALL_STEPS[13];
       expect(s.name).toBe('prd_audit');
       expect(s.phase).toBe('SHIP');
       expect(s.enforcement).toBe('gating');
@@ -145,7 +159,7 @@ describe('engine/steps', () => {
     });
 
     it('architecture_review_as_built is SHIP/gating loopGate, after prd_audit', () => {
-      const s = ALL_STEPS[13];
+      const s = ALL_STEPS[14];
       expect(s.name).toBe('architecture_review_as_built');
       expect(s.phase).toBe('SHIP');
       expect(s.enforcement).toBe('gating');
@@ -162,7 +176,7 @@ describe('engine/steps', () => {
     });
 
     it('retro is SHIP/advisory, skippable for S', () => {
-      const s = ALL_STEPS[14];
+      const s = ALL_STEPS[15];
       expect(s.name).toBe('retro');
       expect(s.enforcement).toBe('advisory');
       expect(s.prerequisites).toEqual(['architecture_review_as_built']);
@@ -170,7 +184,7 @@ describe('engine/steps', () => {
     });
 
     it('rebase is SHIP/structural loopGate, engine-native, before finish', () => {
-      const s = ALL_STEPS[15];
+      const s = ALL_STEPS[16];
       expect(s.name).toBe('rebase');
       expect(s.phase).toBe('SHIP');
       expect(s.enforcement).toBe('structural');
@@ -183,7 +197,7 @@ describe('engine/steps', () => {
     });
 
     it('finish is SHIP/gating with prereq rebase', () => {
-      const s = ALL_STEPS[16];
+      const s = ALL_STEPS[17];
       expect(s.name).toBe('finish');
       expect(s.enforcement).toBe('gating');
       expect(s.prerequisites).toEqual(['rebase']);
@@ -239,8 +253,8 @@ describe('engine/steps', () => {
       expect(getStepIndex('worktree')).toBe(0);
     });
 
-    it('returns 16 for finish', () => {
-      expect(getStepIndex('finish')).toBe(16);
+    it('returns 17 for finish', () => {
+      expect(getStepIndex('finish')).toBe(17);
     });
   });
 
@@ -249,12 +263,12 @@ describe('engine/steps', () => {
       expect(getStepByIndex(0).name).toBe('worktree');
     });
 
-    it('returns finish for index 16', () => {
-      expect(getStepByIndex(16).name).toBe('finish');
+    it('returns finish for index 17', () => {
+      expect(getStepByIndex(17).name).toBe('finish');
     });
 
     it('throws for out-of-range index', () => {
-      expect(() => getStepByIndex(17)).toThrow();
+      expect(() => getStepByIndex(18)).toThrow();
       expect(() => getStepByIndex(-1)).toThrow();
     });
   });
@@ -275,7 +289,7 @@ describe('engine/steps', () => {
 
     it('Small tier does not skip non-skippable steps', () => {
       const nonSkippable: StepName[] = [
-        'worktree', 'memory', 'brainstorm', 'complexity', 'stories',
+        'worktree', 'memory', 'explore', 'complexity', 'prd', 'stories',
         'plan', 'build', 'manual_test', 'finish',
       ];
       for (const step of nonSkippable) {
@@ -296,13 +310,36 @@ describe('engine/steps', () => {
     });
   });
 
+  // --- shouldSkipForTrack ---
+
+  describe('shouldSkipForTrack', () => {
+    it('skips prd + prd_audit on the technical track', () => {
+      expect(shouldSkipForTrack('prd', 'technical')).toBe(true);
+      expect(shouldSkipForTrack('prd_audit', 'technical')).toBe(true);
+    });
+    it('does NOT skip prd / prd_audit on the product track', () => {
+      expect(shouldSkipForTrack('prd', 'product')).toBe(false);
+      expect(shouldSkipForTrack('prd_audit', 'product')).toBe(false);
+    });
+    it('missing track defaults to product (nothing track-skipped)', () => {
+      expect(shouldSkipForTrack('prd', undefined)).toBe(false);
+      expect(shouldSkipForTrack('prd_audit', undefined)).toBe(false);
+    });
+    it('non-track-gated steps are never track-skipped', () => {
+      for (const s of ['stories', 'plan', 'build', 'explore'] as StepName[]) {
+        expect(shouldSkipForTrack(s, 'technical')).toBe(false);
+      }
+    });
+  });
+
   // --- getSkippableSteps ---
 
   describe('getSkippableSteps', () => {
     it('returns 6 steps for S tier', () => {
       const result = getSkippableSteps('S');
+      // Returned in ALL_STEPS order (architecture now precedes conflict_check).
       expect(result).toEqual([
-        'conflict_check', 'architecture_diagram', 'architecture_review',
+        'architecture_diagram', 'architecture_review', 'conflict_check',
         'acceptance_specs', 'architecture_review_as_built', 'retro',
       ]);
     });
@@ -329,7 +366,7 @@ describe('engine/steps', () => {
 
     it('other steps are not checkpoints', () => {
       const nonCheckpoint: StepName[] = [
-        'worktree', 'memory', 'brainstorm', 'complexity', 'stories',
+        'worktree', 'memory', 'explore', 'complexity', 'prd', 'stories',
         'conflict_check', 'plan', 'architecture_diagram', 'architecture_review',
         'acceptance_specs', 'retro', 'finish',
       ];
@@ -346,8 +383,8 @@ describe('engine/steps', () => {
       expect(getPrerequisites('worktree')).toEqual([]);
     });
 
-    it('complexity requires brainstorm', () => {
-      expect(getPrerequisites('complexity')).toEqual(['brainstorm']);
+    it('complexity requires explore', () => {
+      expect(getPrerequisites('complexity')).toEqual(['explore']);
     });
 
     it('build requires plan', () => {
@@ -505,7 +542,8 @@ describe('shouldSkipForBootstrapMode', () => {
   it("never skips non-assess steps even when mode is 'new'", () => {
     const nonAssessSteps: StepName[] = [
       'memory',
-      'brainstorm',
+      'explore',
+      'prd',
       'stories',
       'plan',
       'build',

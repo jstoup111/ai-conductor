@@ -82,7 +82,8 @@ const PLAN_WITH_DEPS_UNIT = [
 
 function approvedDecide() {
   return async (step: string) => {
-    if (step === 'brainstorm') return { approved: true, artifact: '# PRD: CSV export\n\nApproved.\n' };
+    if (step === 'explore') return { approved: true, artifact: '# Explore\n\napproaches\n' };
+    if (step === 'prd') return { approved: true, artifact: '# PRD: CSV export\n\nApproved.\n' };
     if (step === 'stories') return { approved: true, artifact: ACCEPTED_STORIES_UNIT };
     if (step === 'plan') return { approved: true, artifact: PLAN_WITH_DEPS_UNIT };
     return { approved: true, artifact: '' };
@@ -154,7 +155,7 @@ describe('runAuthoring — happy path (Task 32, FR-6)', () => {
     expect(after.length).toBeGreaterThan(0);
   });
 
-  it('calls decide in order: brainstorm → stories → plan', async () => {
+  it('calls decide in order: explore → prd → stories → plan', async () => {
     const target = { name: 'alpha', canonicalPath: repoPath };
     const steps: string[] = [];
     const trackingDecide = async (step: string) => {
@@ -163,7 +164,7 @@ describe('runAuthoring — happy path (Task 32, FR-6)', () => {
     };
 
     await runAuthoring(target, 'CSV export', { decide: trackingDecide });
-    expect(steps).toEqual(['brainstorm', 'stories', 'plan']);
+    expect(steps).toEqual(['explore', 'prd', 'stories', 'plan']);
   });
 
   it('creates the spec branch in the target repo', async () => {
@@ -254,7 +255,7 @@ describe('runAuthoring — regression guards (Task 33, FR-6, C2)', () => {
   it('an UNAPPROVED stories step throws and fabricates no plan file', async () => {
     const target = { name: 'alpha', canonicalPath: repoPath };
     const blockingDecide = async (step: string) => {
-      if (step === 'brainstorm') return { approved: true, artifact: '# PRD\n' };
+      if (step === 'explore') return { approved: true, artifact: '# Explore\n' };
       if (step === 'stories') return { approved: false, artifact: '' };
       // plan must never be reached
       return { approved: true, artifact: PLAN_WITH_DEPS_UNIT };
@@ -278,7 +279,7 @@ describe('runAuthoring — regression guards (Task 33, FR-6, C2)', () => {
     // DECIDE reports approved=true, but the stories artifact carries NO status
     // marker — the exact gap that would commit a spec the daemon skips forever.
     const noStatusDecide = async (step: string) => {
-      if (step === 'brainstorm') return { approved: true, artifact: '# PRD\n\nApproved.\n' };
+      if (step === 'explore') return { approved: true, artifact: '# Explore\n' };
       if (step === 'stories')
         return {
           approved: true,
@@ -301,7 +302,7 @@ describe('runAuthoring — regression guards (Task 33, FR-6, C2)', () => {
     expect(storyFiles.trim()).toBe('');
   });
 
-  it('default (no assessComplexity seam) runs only brainstorm → stories → plan (Small)', async () => {
+  it('default (no assessComplexity seam) runs only explore → prd → stories → plan (Small)', async () => {
     const target = { name: 'alpha', canonicalPath: repoPath };
     const steps: string[] = [];
     const trackingDecide = async (step: string) => {
@@ -309,13 +310,13 @@ describe('runAuthoring — regression guards (Task 33, FR-6, C2)', () => {
       return await approvedDecide()(step);
     };
     await runAuthoring(target, 'CSV export', { decide: trackingDecide });
-    expect(steps).toEqual(['brainstorm', 'stories', 'plan']);
+    expect(steps).toEqual(['explore', 'prd', 'stories', 'plan']);
   });
 
-  it('an UNAPPROVED brainstorm step throws immediately', async () => {
+  it('an UNAPPROVED explore step throws immediately', async () => {
     const target = { name: 'alpha', canonicalPath: repoPath };
     const blockingDecide = async (step: string) => {
-      if (step === 'brainstorm') return { approved: false, artifact: '' };
+      if (step === 'explore') return { approved: false, artifact: '' };
       return { approved: true, artifact: '' };
     };
 
@@ -379,7 +380,9 @@ const APPROVED_ADR = [
 function fullDecide(reviewArtifact: string = APPROVED_ADR) {
   return async (step: string) => {
     switch (step) {
-      case 'brainstorm':
+      case 'explore':
+        return { approved: true, artifact: '# Explore\n\napproaches\n' };
+      case 'prd':
         return { approved: true, artifact: '# PRD: CSV export\n\nApproved.\n' };
       case 'stories':
         return { approved: true, artifact: ACCEPTED_STORIES_FULL };
@@ -424,11 +427,12 @@ describe('runAuthoring — full DECIDE phase (tier-aware)', () => {
       assessComplexity: approveTier('M'),
     });
     expect(steps).toEqual([
-      'brainstorm',
-      'stories',
-      'conflict_check',
+      'explore',
+      'prd',
       'architecture_diagram',
       'architecture_review',
+      'stories',
+      'conflict_check',
       'plan',
     ]);
   });
@@ -457,7 +461,7 @@ describe('runAuthoring — full DECIDE phase (tier-aware)', () => {
     expect(tracked).toMatch(/\.docs\/plans\//);
   });
 
-  it('Small tier skips conflict-check + architecture (only brainstorm/stories/plan run)', async () => {
+  it('Small tier skips conflict-check + architecture (only explore/prd/stories/plan run)', async () => {
     const target = { name: 'alpha', canonicalPath: repoPath };
     const steps: string[] = [];
     const trackingDecide = async (step: string) => {
@@ -468,7 +472,7 @@ describe('runAuthoring — full DECIDE phase (tier-aware)', () => {
       decide: trackingDecide,
       assessComplexity: approveTier('S'),
     });
-    expect(steps).toEqual(['brainstorm', 'stories', 'plan']);
+    expect(steps).toEqual(['explore', 'prd', 'stories', 'plan']);
 
     await git(['checkout', result.branch], repoPath);
     const { stdout: tracked } = await execFile('git', ['ls-files', '.docs'], { cwd: repoPath });

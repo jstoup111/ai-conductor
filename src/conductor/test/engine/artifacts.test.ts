@@ -104,7 +104,7 @@ describe('engine/artifacts', () => {
 
     it('returns false when an artifact-producing step has no files', async () => {
       expect(await stepHasArtifacts(dir, 'plan')).toBe(false);
-      expect(await stepHasArtifacts(dir, 'brainstorm')).toBe(false);
+      expect(await stepHasArtifacts(dir, 'prd')).toBe(false);
     });
 
     it('returns true once the expected file exists', async () => {

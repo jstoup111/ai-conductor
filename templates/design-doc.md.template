@@ -3,6 +3,12 @@
 **Date:** YYYY-MM-DD
 **Status:** Draft | Approved
 
+> **Product-only.** State goals and requirements (the *what* and *why*). Do NOT name the *new
+> internal mechanism* for this feature — commands/flags, file paths, config keys, function/class/type
+> names, library/protocol/mechanism choices, schemas, ports. Name capabilities/behaviors instead, and
+> put any load-bearing technical choice under **Open Questions** for architecture-review. Pre-existing
+> *external* constraints/dependencies may be named under Dependencies / Non-Functional Requirements.
+
 ## Problem / Background
 [What problem this solves, who is affected, and why it matters now.]
 

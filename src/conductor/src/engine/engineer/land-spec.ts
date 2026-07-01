@@ -3,7 +3,7 @@
 // PURPOSE:
 //   Commit the full DECIDE artifact set the REAL skills already wrote into the target
 //   repo's .docs/ dirs, onto a spec/<slug> branch. The engineer authors the WHOLE DECIDE
-//   phase, so this lands brainstorm/stories/plan + the complexity marker, and (for a
+//   phase, so this lands the PRD/stories/plan + the complexity marker, and (for a
 //   non-Small tier) conflict-check/architecture-diagram/architecture-review + ADRs.
 //   It validates (stories approved, tier-vs-artifacts consistent, no DRAFT ADR), guards,
 //   commits, and returns. It does NOT author (no decide seam, no subprocess).
@@ -30,7 +30,7 @@ import { promisify } from 'node:util';
 import { TargetPathMissingError } from './target.js';
 import { AuthoringGuard } from './authoring-guard.js';
 import { deriveDefaultBranch, chooseBranchName, slugify } from './authoring.js';
-import { isStoriesApproved, hasDraftAdr, parseComplexityTier } from '../artifacts.js';
+import { isStoriesApproved, hasDraftAdr, parseComplexityTier, parseTrack } from '../artifacts.js';
 import { writeIntakeMarker } from './intake-marker.js';
 
 const execFile = promisify(execFileCb);
@@ -53,7 +53,7 @@ export interface LandSpecResult {
 /**
  * Land the pre-written spec artifacts from .docs/ onto a spec/<slug> branch.
  *
- * Does NOT author anything — the real /brainstorm, /stories, /plan skills must
+ * Does NOT author anything — the real /explore, /prd, /stories, /plan skills must
  * have already written the artifacts before this is called.
  */
 export async function landSpec(
@@ -115,33 +115,44 @@ export async function landSpec(
   guard.assertWriteAllowed(storiesDir);
   guard.assertWriteAllowed(plansDir);
 
-  // 4. C2: require at least one file in each artifact dir.
+  // Resolve the work track (adr-2026-06-29-explore-prd-split-track-in-explore/adr-2026-06-29-track-marker-location): a PRD/spec is required only on the
+  // PRODUCT track. Technical-only features carry acceptance criteria in stories
+  // and have no PRD. Track is read from `.docs/track/<slug>.md` (written by
+  // /explore); a missing marker defaults to `product` (back-compat).
+  const trackDir = join(repoPath, '.docs', 'track');
+  const trackFile = await findNewestFile(trackDir);
+  const track = parseTrack(trackFile ? await readFile(trackFile, 'utf-8') : null) ?? 'product';
+  const specRequired = track === 'product';
+
+  // 4. C2: require stories + plan always; spec only on the product track.
   const specFile = await findNewestFile(specsDir);
   const storiesFile = await findNewestFile(storiesDir);
   const planFile = await findNewestFile(plansDir);
 
-  if (!specFile || !storiesFile || !planFile) {
+  if ((specRequired && !specFile) || !storiesFile || !planFile) {
     const missing: string[] = [];
-    if (!specFile) missing.push('spec');
+    if (specRequired && !specFile) missing.push('spec (product track)');
     if (!storiesFile) missing.push('stories');
     if (!planFile) missing.push('plan');
     throw new Error(
       `landSpec: required artifact ${missing.join(', ')} ${missing.length === 1 ? 'file is' : 'files are'} missing ` +
-        `in ".docs/" under "${repoPath}". Run the /brainstorm, /stories, /plan skills first.`,
+        `in ".docs/" under "${repoPath}". Run the /explore, /prd (product track), /stories, /plan skills first.`,
     );
   }
 
-  // Guard the file paths (C1).
-  guard.assertWriteAllowed(specFile);
+  // Guard the file paths (C1). spec may be absent on the technical track.
+  if (specFile) guard.assertWriteAllowed(specFile);
   guard.assertWriteAllowed(storiesFile);
   guard.assertWriteAllowed(planFile);
 
-  // 4b. Read contents and validate.
-  const specContent = await readFile(specFile, 'utf-8');
+  // 4b. Read contents and validate. The spec is validated only when present
+  // (always present on product; absent on technical).
   const storiesContent = await readFile(storiesFile, 'utf-8');
   const planContent = await readFile(planFile, 'utf-8');
 
-  validateArtifactContent('spec', specContent, idea);
+  if (specFile) {
+    validateArtifactContent('spec', await readFile(specFile, 'utf-8'), idea);
+  }
   validateArtifactContent('stories', storiesContent, idea);
   validateArtifactContent('plan', planContent, idea);
 

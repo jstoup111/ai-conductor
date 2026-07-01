@@ -100,7 +100,7 @@ export interface EngineerDeps {
   ensureRunningLaunch?: (repoPath: string) => void | Promise<void>;
   /**
    * Host-agent human-gated DECIDE seam. Called once per markdown step in
-   * canonical order (brainstorm → stories → conflict_check →
+   * canonical order (explore → prd → architecture → stories → conflict_check →
    * architecture_diagram → architecture_review → plan).
    * Absent → processIdea throws (fail-closed — no authoring without a seam).
    */
@@ -111,7 +111,7 @@ export interface EngineerDeps {
     prompt: string;
   }) => Promise<DecideResult>;
   /**
-   * Host-agent complexity-assessment seam. Called once, after brainstorm and
+   * Host-agent complexity-assessment seam. Called once, after explore and
    * before stories — its tier gates which later DECIDE steps run (Small skips
    * conflict-check + architecture) and is persisted to `.docs/complexity/`.
    * Absent → processIdea throws (fail-closed — same contract as `decide`).
@@ -514,7 +514,7 @@ async function processIdea(
   //     absent → fail-closed. The complexity seam (`assessComplexity`) is
   //     optional: when wired it drives tier-conditional conflict-check +
   //     architecture; when absent, runAuthoring defaults to Small (the legacy
-  //     brainstorm→stories→plan flow).
+  //     explore→stories→plan flow).
   if (!deps.decide) {
     throw new Error(
       'engineer: no DECIDE seam wired — cannot author (agent-hosted decide required)',

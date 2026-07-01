@@ -136,6 +136,24 @@ After all resolutions are applied, re-run the full conflict check.
 
 Degrading conflicts may remain if the user explicitly accepts the compromise.
 
+### 5c. Route a Blocking Conflict by Root Cause (kickback)
+
+A story-vs-story conflict is usually a *symptom*; fix it where the contradiction is rooted, not
+always in the stories. Classify each blocking conflict's root and route the kickback to the right
+upstream gate (`prd` and `architecture_review` are kickback targets; the recovery/back-navigation
+menu lists them):
+
+- **Contradictory product requirements (FRs)** → kick back to **`prd`** (product track). The two
+  stories conflict because the PRD's FRs themselves conflict; the PRD must be reconciled first.
+- **Incompatible design / ADR** → kick back to **`architecture`** (architecture-review). The conflict
+  stems from the chosen design; architecture-review re-opens in *amendment* mode to resolve the
+  specific structural gap, then stories re-derive.
+- **Pure story-phrasing overlap** → resolve in **`stories`** (the default — Section 4).
+
+Only route up when the root genuinely lives upstream; a phrasing nit stays in stories. In an
+interactive run, surface the root + target and navigate back to it. In an unattended/daemon run a
+blocking conflict HALTs for a human (no silent pass).
+
 ### 6. Clean Pass
 
 When no blocking conflicts remain:
