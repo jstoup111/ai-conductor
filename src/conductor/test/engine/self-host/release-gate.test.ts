@@ -140,6 +140,24 @@ describe('classifyBreakingSurfaces + evaluateMigration (TR-10)', () => {
     ).toContain('skill symlink targets');
   });
 
+  it('skill renamed OUT of skills/ is caught via origPath even though the destination is not under skills/', () => {
+    // A rename records the destination in `path` and the source in `origPath`.
+    // `skills/foo → archive/foo` removes a skill from skills/ (breaking symlink
+    // targets); classification must inspect the source path, not just the dest.
+    const surfaces = classifyBreakingSurfaces([
+      { status: 'R100', path: 'archive/foo/SKILL.md', origPath: 'skills/foo/SKILL.md' },
+    ]);
+    expect(surfaces.surfaces).toContain('skill symlink targets');
+    expect(evaluateMigration({ surfaces, hasBlock: false }).ok).toBe(false);
+  });
+
+  it('rename INTO a breaking surface (bin/conduct) is caught via the destination path', () => {
+    const surfaces = classifyBreakingSurfaces([
+      { status: 'R100', path: 'bin/conduct', origPath: 'bin/conduct-old' },
+    ]);
+    expect(surfaces.surfaces).toContain('bin/conduct CLI');
+  });
+
   it('unknown changed-file list (null) → uncertain → require block (fail-closed)', () => {
     const surfaces = classifyBreakingSurfaces(null);
     expect(surfaces.uncertain).toBe(true);

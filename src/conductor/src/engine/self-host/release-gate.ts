@@ -119,7 +119,15 @@ function hasChangelogEntry(body: string): boolean {
  * missing section, an empty section, or subheaders-only all HALT (fail-closed).
  */
 export function evaluateChangelogUnreleased(changelog: string | null | undefined): GateVerdict {
-  const body = extractUnreleasedBody(changelog);
+  return changelogVerdictFromBody(extractUnreleasedBody(changelog));
+}
+
+/**
+ * The body-based core of the CHANGELOG gate. Takes an already-extracted
+ * `## [Unreleased]` body (or null) so the composed gate can extract once and
+ * feed the same body to both this check and the migration-block check.
+ */
+export function changelogVerdictFromBody(body: string | null): GateVerdict {
   if (body === null) {
     return {
       ok: false,
@@ -144,7 +152,15 @@ export function evaluateChangelogUnreleased(changelog: string | null | undefined
 export interface ChangedFile {
   /** git name-status code: A / M / D / R<score> / C<score>. */
   status: string;
+  /** Destination path (the new path for a rename/copy, else the only path). */
   path: string;
+  /**
+   * Source path for a rename/copy (`R<score>\told\tnew` / `C<score>\told\tnew`).
+   * A rename has TWO paths; without the origin a skill moved OUT of `skills/`
+   * (e.g. `skills/foo → archive/foo`, a breaking symlink-target change) would
+   * escape classification because only the destination is inspected.
+   */
+  origPath?: string;
 }
 
 export interface BreakingSurfaces {
@@ -164,13 +180,17 @@ export interface BreakingSurfaces {
 export function classifyBreakingSurfaces(changed: ChangedFile[] | null): BreakingSurfaces {
   if (changed === null) return { breaking: false, uncertain: true, surfaces: [] };
   const surfaces = new Set<string>();
-  for (const { status, path } of changed) {
+  for (const { status, path, origPath } of changed) {
     const removedOrRenamed = status.startsWith('D') || status.startsWith('R');
-    if (path === 'bin/conduct') surfaces.add('bin/conduct CLI');
-    if (path === 'bin/install') surfaces.add('skill symlink targets');
-    if (path.startsWith('hooks/') || path.includes('/hooks/')) surfaces.add('hook wiring');
-    if (/(^|\/)settings(\.local)?\.json$/.test(path)) surfaces.add('settings.json schema');
-    if (path.startsWith('skills/') && removedOrRenamed) surfaces.add('skill symlink targets');
+    // Inspect BOTH the destination and (for a rename/copy) the source path, so a
+    // move into OR out of a breaking surface is caught on either side.
+    for (const p of origPath ? [path, origPath] : [path]) {
+      if (p === 'bin/conduct') surfaces.add('bin/conduct CLI');
+      if (p === 'bin/install') surfaces.add('skill symlink targets');
+      if (p.startsWith('hooks/') || p.includes('/hooks/')) surfaces.add('hook wiring');
+      if (/(^|\/)settings(\.local)?\.json$/.test(p)) surfaces.add('settings.json schema');
+      if (p.startsWith('skills/') && removedOrRenamed) surfaces.add('skill symlink targets');
+    }
   }
   return { breaking: surfaces.size > 0, uncertain: false, surfaces: [...surfaces] };
 }
@@ -248,7 +268,10 @@ export async function runReleaseArtifactGate(opts: ReleaseGateOptions): Promise<
   }
 
   const changelog = await opts.readText(join(opts.harnessRoot, 'CHANGELOG.md'));
-  const changelogVerdict = evaluateChangelogUnreleased(changelog);
+  // Extract the [Unreleased] body ONCE; both the changelog verdict and the
+  // migration-block check consume the same parsed body.
+  const unreleasedBody = extractUnreleasedBody(changelog);
+  const changelogVerdict = changelogVerdictFromBody(unreleasedBody);
   if (!changelogVerdict.ok) {
     await writeHalt(opts.projectRoot, changelogVerdict.reason);
     return changelogVerdict;
@@ -257,7 +280,7 @@ export async function runReleaseArtifactGate(opts: ReleaseGateOptions): Promise<
   const surfaces = classifyBreakingSurfaces(await opts.changedFiles());
   const migration = evaluateMigration({
     surfaces,
-    hasBlock: hasRunnableMigrationBlock(extractUnreleasedBody(changelog)),
+    hasBlock: hasRunnableMigrationBlock(unreleasedBody),
   });
   if (!migration.ok) {
     await writeHalt(opts.projectRoot, migration.reason);
