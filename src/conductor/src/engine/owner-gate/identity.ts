@@ -75,7 +75,11 @@ export async function ghLoginOwner(gh: GhRunner, cwd: string): Promise<OwnerReso
   } catch {
     return { resolved: false };
   }
-  return login === null ? { resolved: false } : { resolved: true, id: login };
+  // `gh ... --jq .login` prints the LITERAL text "null" when the API returns a
+  // JSON null login (and "undefined" for an absent field). Guard both so a
+  // no-login payload degrades to unresolved rather than an owner id of "null".
+  if (login === null || login === 'null' || login === 'undefined') return { resolved: false };
+  return { resolved: true, id: login };
 }
 
 /**

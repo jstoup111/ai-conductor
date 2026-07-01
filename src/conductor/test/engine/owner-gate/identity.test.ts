@@ -73,6 +73,16 @@ describe('ghLoginOwner (FR-2)', () => {
     await expect(ghLoginOwner(ghReturning(''), '/repo')).resolves.toEqual({ resolved: false });
     await expect(ghLoginOwner(ghReturning('   \n'), '/repo')).resolves.toEqual({ resolved: false });
   });
+
+  it('degrades a literal JSON-null / "null" / "undefined" login to unresolved (not an id of "null")', async () => {
+    // `gh api user --jq .login` prints the literal text "null" for a JSON null
+    // login (and "undefined" for an absent field). These must NOT become owner ids.
+    await expect(ghLoginOwner(ghReturning('null\n'), '/repo')).resolves.toEqual({ resolved: false });
+    await expect(ghLoginOwner(ghReturning('NULL'), '/repo')).resolves.toEqual({ resolved: false });
+    await expect(ghLoginOwner(ghReturning('undefined\n'), '/repo')).resolves.toEqual({
+      resolved: false,
+    });
+  });
 });
 
 describe('resolveDaemonOwner chain (FR-1/2/3)', () => {
