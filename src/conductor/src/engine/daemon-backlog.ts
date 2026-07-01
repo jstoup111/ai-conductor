@@ -10,6 +10,9 @@ import {
   parseTrack,
 } from './artifacts.js';
 import { makeGitRunner, originDefaultBranch, type GitRunner } from './rebase.js';
+import type { OwnerResolution } from './owner-gate/identity.js';
+import type { OwnerStamp } from './owner-gate/provenance.js';
+import { decideSpecGate, type GateDecision } from './owner-gate/gate.js';
 
 const execFile = promisify(execFileCb);
 
@@ -184,6 +187,25 @@ export interface DiscoverBacklogOpts {
    */
   hasWarned?: (slug: string) => Promise<boolean>;
   markWarned?: (slug: string) => Promise<void>;
+  /**
+   * Owner-gate injectables (all optional → backward compatible). When the four
+   * are absent the discovery behaves EXACTLY as before: no gate, no gate logs.
+   *
+   * - `daemonOwner` — the once-per-pass resolved daemon owner. When `resolved:
+   *   true`, each content-eligible spec is put through `decideSpecGate`; when
+   *   `resolved: false` the gate is inactive (fail-open) and every content-
+   *   eligible spec builds, with a single warn-once "gate inactive" line per
+   *   pass. Absent entirely → the gate is skipped silently (legacy behavior).
+   * - `readStamp(slug)` — reads the spec's committed owner stamp; defaults to
+   *   "un-owned" when unset.
+   * - `readMergeTime(slug)` — the spec's first-appearance time for the un-owned
+   *   grandfather branch; defaults to null (indeterminate) when unset.
+   * - `cutover` — the configured grandfather cutover instant, or null.
+   */
+  daemonOwner?: OwnerResolution;
+  readStamp?: (slug: string) => Promise<OwnerStamp>;
+  readMergeTime?: (slug: string) => Promise<string | null>;
+  cutover?: string | null;
 }
 
 /**
@@ -219,6 +241,37 @@ export async function discoverBacklog(
     if (opts.hasWarned && (await opts.hasWarned(slug))) return;
     log(msg);
     await opts.markWarned?.(slug);
+  };
+
+  // Fail-open notice (FR-3): when a `daemonOwner` is supplied but UNRESOLVED, the
+  // gate is inactive and every content-eligible spec builds. Surface that exactly
+  // ONCE per pass (not per-spec) so the operator knows gating is off, without log
+  // spam. Pass-local (reset every discovery) and distinct from the per-slug
+  // content/ownership skip lines. An ABSENT `daemonOwner` stays silent (legacy).
+  let gateInactiveWarned = false;
+  const warnGateInactiveOnce = (): void => {
+    if (gateInactiveWarned) return;
+    gateInactiveWarned = true;
+    log(
+      'owner-gate inactive: daemon owner unresolved (no configured spec_owner and ' +
+        'no gh login) — building all content-eligible specs this pass (fail-open); logged once.',
+    );
+  };
+
+  // No-cutover notice (Observability NFR): when the gate is ACTIVE (a resolved
+  // daemon owner) but NO grandfather `owner_gate_cutover` is configured, every
+  // un-owned spec skips as indeterminate. That skip-default is operator-accepted
+  // but easy to miss, so surface it exactly ONCE per pass — distinct from the
+  // gate-inactive line and the per-slug ownership skips. Does NOT change any
+  // build/skip decision. Silent when a cutover IS set or the gate is inactive.
+  let gateNoCutoverWarned = false;
+  const warnGateNoCutoverOnce = (): void => {
+    if (gateNoCutoverWarned) return;
+    gateNoCutoverWarned = true;
+    log(
+      'owner-gate active but no owner_gate_cutover configured — un-owned specs will be ' +
+        'skipped; set owner_gate_cutover to grandfather pre-existing specs.',
+    );
   };
 
   const planFiles = (await tree.listPlanFiles()).filter((f) => f.endsWith('.md'));
@@ -271,6 +324,33 @@ export async function discoverBacklog(
     // stem as the plan. Absent/garbled → undefined (hand-authored specs unchanged).
     const sourceRef = parseIntakeSourceRef(await tree.readFile(`.docs/intake/${slug}.md`));
 
+    // Owner gate — runs ONLY after every content filter above has passed, so the
+    // gate never bypasses eligibility (a content-ineligible spec is already
+    // `continue`d before reaching here). The gate is consulted only for a
+    // RESOLVED daemon owner; an unresolved owner is fail-open (built), and an
+    // absent `daemonOwner` skips the gate entirely (legacy behavior).
+    const daemonOwner = opts.daemonOwner;
+    if (daemonOwner?.resolved) {
+      // Gate active — flag the operator-accepted skip-default once per pass when
+      // no grandfather cutover is set (observability only; no decision change).
+      if ((opts.cutover ?? null) === null) warnGateNoCutoverOnce();
+      const stamp = opts.readStamp ? await opts.readStamp(slug) : { present: false as const };
+      const mergeTime = opts.readMergeTime ? await opts.readMergeTime(slug) : null;
+      const decision = decideSpecGate({
+        daemonOwner: { id: daemonOwner.id },
+        stamp,
+        mergeTime,
+        cutover: opts.cutover ?? null,
+      });
+      if (!decision.build) {
+        await warnOnce(slug, ownershipSkipMessage(slug, decision));
+        continue;
+      }
+    } else if (daemonOwner) {
+      // Supplied but unresolved → fail-open: build all, warn once per pass.
+      warnGateInactiveOnce();
+    }
+
     // Work track (adr-2026-06-29-explore-prd-split-track-in-explore/adr-2026-06-29-track-marker-location) from `.docs/track/<plug-stem>.md`. Absent → the
     // daemon treats the feature as `product` (back-compat: pre-track specs are
     // PRDs), so `prd`/`prd-audit` still run. Carried only when explicitly set.
@@ -282,6 +362,27 @@ export async function discoverBacklog(
     items.push({ slug, tier, ...(sourceRef ? { sourceRef } : {}), ...(track ? { track } : {}) });
   }
   return items;
+}
+
+/**
+ * Compose the distinct owner-gate skip line for a gated-out spec (FR-11). These
+ * are deliberately worded apart from the content-skip lines ("… cannot build —
+ * stories not approved / no dependency tree") and the gate-inactive line, so an
+ * operator can tell an ownership skip from an eligibility skip in the logs.
+ */
+function ownershipSkipMessage(slug: string, decision: GateDecision): string {
+  if (decision.build) return ''; // never called on a build decision
+  if (decision.reason === 'other-owner') {
+    return (
+      `skip ${slug}: owner-gate — spec is owned by another operator ` +
+      `('${decision.other}'), not this daemon; logged once.`
+    );
+  }
+  const why =
+    decision.reason === 'unowned-post-cutover'
+      ? 'un-owned and merged on/after the grandfather cutover'
+      : 'un-owned with an indeterminate merge time';
+  return `skip ${slug}: owner-gate — spec is ${why}; logged once.`;
 }
 
 /**

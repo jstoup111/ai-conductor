@@ -41,6 +41,7 @@ import { AuthoringGuard } from './authoring-guard.js';
 import { TargetPathMissingError } from './target.js';
 import { isStoriesApproved, hasDraftAdr } from '../artifacts.js';
 import { writeIntakeMarker } from './intake-marker.js';
+import { resolveDaemonOwner, type OwnerConfig, type GhRunner } from '../owner-gate/identity.js';
 import { writeTrackMarker } from './track-marker.js';
 import type { ComplexityTier, Track } from '../../types/index.js';
 
@@ -301,6 +302,18 @@ export interface RunAuthoringDeps {
    */
   sourceRef?: string;
   /**
+   * Owner-resolution injectables (ADR-1 identity chain), mirroring landSpec
+   * (Task 16). Both are OPTIONAL so existing callers are unchanged; `processIdea`
+   * (loop.ts) threads the target repo's config + the in-scope gh runner. When
+   * neither resolves an owner, the spec is stamped un-owned (the `Owner:` line is
+   * omitted — NOT blank/falsely-owned).
+   *
+   * `ownerConfig` — config surface for owner resolution (reads `spec_owner`).
+   * `gh` — gh runner for the login fallback; injected in tests / by the caller.
+   */
+  ownerConfig?: OwnerConfig;
+  gh?: GhRunner;
+  /**
    * Work track (adr-2026-06-29-explore-prd-split-track-in-explore/adr-2026-06-29-track-marker-location). When provided, a `.docs/track/<slug>.md` marker is
    * committed with the spec. Defaults to `product` (preserves legacy behavior).
    */
@@ -535,9 +548,28 @@ export async function runAuthoring(
       await writeFile(reviewFile, architectureReviewResult!.artifact, 'utf8');
     }
 
-    // Intake origin marker (no-op when no/invalid sourceRef): persists the
-    // originating issue ref WITH the spec so the daemon can close it on merge.
-    await writeIntakeMarker(repoPath, slug, deps.sourceRef, guard);
+    // Resolve the authoring owner via the identity chain (configured → gh →
+    // unresolved), mirroring landSpec (Task 16). Unresolved yields a null owner →
+    // un-owned (the `Owner:` line is omitted, NOT blank/falsely-owned). A gh
+    // runner is required only for the login fallback; when none is injected, an
+    // unresolvable stub degrades to unresolved rather than throwing.
+    const unresolvableGh: GhRunner = async () => {
+      throw new Error('runAuthoring: no gh runner injected for owner resolution');
+    };
+    const ownerResolution = await resolveDaemonOwner(
+      deps.ownerConfig ?? {},
+      deps.gh ?? unresolvableGh,
+      repoPath,
+    );
+    const specOwner = ownerResolution.resolved ? ownerResolution.id : null;
+
+    // Intake origin marker: persists the originating issue ref AND the resolved
+    // owner WITH the spec so both survive the spec-PR merge and reach the daemon
+    // (which closes the issue on merge and gates the build by owner). The owner is
+    // stamped when resolved and the `Owner:` line is OMITTED when unresolved — a
+    // no-op only when NEITHER a valid sourceRef nor an owner is present
+    // (hand-authored, un-owned spec).
+    await writeIntakeMarker(repoPath, slug, deps.sourceRef, specOwner, guard);
 
     // Track marker (adr-2026-06-29-explore-prd-split-track-in-explore/adr-2026-06-29-track-marker-location): persists the product/technical classification
     // WITH the spec so the daemon knows whether to expect a PRD / run prd-audit.

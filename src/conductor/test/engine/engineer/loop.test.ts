@@ -932,3 +932,91 @@ describe('Task 37: ensure-running wired after handoff (FR-21)', () => {
     expect(summary.buildsRun ?? 0).toBe(0);
   });
 });
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Owner-gate caller-seam (retro A-1, adr-2026-06-30-*, FR-4 write side).
+// The autonomous authoring path (runEngineerMode → processIdea → runAuthoring)
+// MUST thread the target repo's `spec_owner` config + the in-scope gh runner into
+// runAuthoring so the committed intake marker is stamped `Owner: <id>`. This test
+// drives the REAL loop caller and asserts the COMMITTED marker on the spec branch.
+// It FAILS if the loop.ts wiring (ownerConfig/gh → runAuthoring) is reverted,
+// because runAuthoring would then default to a null owner and omit the line.
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe('Owner-gate: autonomous authoring threads owner deps into runAuthoring (retro A-1)', () => {
+  /** Commit `.ai-conductor/config.yml` so the tree stays clean for runAuthoring. */
+  async function commitConfig(dir: string, body: string): Promise<void> {
+    await mkdir(join(dir, '.ai-conductor'), { recursive: true });
+    await writeFile(join(dir, '.ai-conductor', 'config.yml'), body, 'utf-8');
+    await execFile('git', ['add', '.ai-conductor/config.yml'], { cwd: dir });
+    await execFile('git', ['commit', '-m', 'config'], { cwd: dir });
+  }
+
+  it('stamps Owner from the target repo spec_owner on the committed marker', async () => {
+    const dirA = join(workDir, 'alpha');
+    await initRepo(dirA);
+    await commitConfig(dirA, 'spec_owner: Carol\n');
+    await writeRegistry([makeRecord(dirA, 'alpha')]);
+
+    const { runEngineerMode } = await loadLoop();
+    const { provider: route } = makeTestProvider({ routeTo: 'alpha' });
+    // gh returns a login; a configured spec_owner must win over it, proving the
+    // CONFIG (not just gh) was threaded from the real caller.
+    const gh = async (args: string[], _opts: { cwd: string }) => {
+      if (args[0] === 'pr' && args[1] === 'create') return { stdout: 'https://example.invalid/x/pull/1' };
+      if (args[0] === 'api') return { stdout: 'ghlogin\n' };
+      return { stdout: '' };
+    };
+    const { io } = scriptedIo(['dep bump', 'y', 'exit']);
+
+    const summary = await runEngineerMode({
+      route,
+      io,
+      gh,
+      registryPath,
+      engineerDir,
+      decide: makeTestDecide(),
+    });
+
+    expect(summary.ideasProcessed).toBe(1);
+    const { stdout: marker } = await execFile(
+      'git',
+      ['show', 'spec/dep-bump:.docs/intake/dep-bump.md'],
+      { cwd: dirA },
+    );
+    expect(marker).toContain('Owner: carol'); // normalized; config won over gh login
+  });
+
+  it('stamps Owner from the gh login when the target repo has no spec_owner', async () => {
+    const dirA = join(workDir, 'alpha');
+    await initRepo(dirA);
+    await writeRegistry([makeRecord(dirA, 'alpha')]);
+
+    const { runEngineerMode } = await loadLoop();
+    const { provider: route } = makeTestProvider({ routeTo: 'alpha' });
+    // gh login fallback — proves the gh runner was threaded from the real caller.
+    const gh = async (args: string[], _opts: { cwd: string }) => {
+      if (args[0] === 'pr' && args[1] === 'create') return { stdout: 'https://example.invalid/x/pull/1' };
+      if (args[0] === 'api') return { stdout: 'dave\n' };
+      return { stdout: '' };
+    };
+    const { io } = scriptedIo(['dep bump', 'y', 'exit']);
+
+    const summary = await runEngineerMode({
+      route,
+      io,
+      gh,
+      registryPath,
+      engineerDir,
+      decide: makeTestDecide(),
+    });
+
+    expect(summary.ideasProcessed).toBe(1);
+    const { stdout: marker } = await execFile(
+      'git',
+      ['show', 'spec/dep-bump:.docs/intake/dep-bump.md'],
+      { cwd: dirA },
+    );
+    expect(marker).toContain('Owner: dave');
+  });
+});

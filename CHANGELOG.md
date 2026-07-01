@@ -12,6 +12,37 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- **Daemon owner-gating: the autonomous spec-build daemon now builds only the merged specs it
+  owns.** Each discovery pass resolves the daemon's operator identity (configured `spec_owner` wins,
+  else the `gh` login, else unresolved → fail-open) and, for every content-eligible spec, reads the
+  owner stamp committed in its intake marker (`.docs/intake/<slug>.md`, an `Owner:` line the
+  engineer `land` flow writes). A spec owned by another operator is **skipped and logged** with a
+  distinct ownership line; a spec matching the daemon owner builds. Un-owned (unstamped) specs are
+  gated by a **grandfather cutover** (`owner_gate_cutover`): merged strictly before the cutover →
+  grandfather-built, on/after (or an indeterminate merge time) → skipped. When the owner cannot be
+  resolved the gate is inactive (builds everything, one warn-once line per pass), so nothing regresses
+  for an unconfigured solo setup. New `spec_owner` and `owner_gate_cutover` config fields — a
+  malformed cutover is **rejected at config load** (never silently defaulted, so an un-owned spec is
+  never misclassified); a missing cutover means no grandfather window. When the gate is active but
+  **no `owner_gate_cutover` is set**, discovery emits one warn-once line per pass
+  (`owner-gate active but no owner_gate_cutover configured — un-owned specs will be skipped …`) so
+  the skip-default for pre-existing un-owned specs is discoverable. The gate runs strictly after
+  the existing content filters and after `isProcessed`, so eligibility and idempotency are unchanged.
+  Owner is a configured identity (the gh-login fallback is local-dev only); the identity/provenance
+  seams keep it forward-compatible with a platform-provided (EKS) identity.
+  (`src/engine/owner-gate/`, `.docs/specs/2026-06-30-daemon-owner-gate.md`, 3 ADRs.)
+  - **Write side wired end-to-end:** `conduct-ts engineer land` now loads the target repo's
+    HarnessConfig and threads `spec_owner` + the `gh` runner into `landSpec`, so a landed spec is
+    actually stamped `Owner: <configured spec_owner OR operator gh login>` (unresolved → the
+    `Owner:` line is omitted, never blank). Previously the caller passed no owner deps, so no spec
+    was ever stamped and every spec reached the daemon un-owned.
+  - **Autonomous authoring path now stamps the owner too (closes the ADR-2 "every land path" gap).**
+    `runAuthoring` (the engineer loop's autonomous DECIDE→spec seam) previously hard-coded a `null`
+    owner when writing the intake marker, so autonomously-authored specs carried no `Owner:` stamp
+    and would be skipped post-cutover. It now resolves the owner via the same identity chain as
+    `landSpec` (configured `spec_owner` → `gh` login → un-owned/omitted), and `processIdea`
+    (`loop.ts`) loads the target repo's HarnessConfig and threads `spec_owner` + the in-scope `gh`
+    runner into it. Both land paths now stamp `Owner:` identically.
 - **DECIDE pipeline restructure — `explore`/`prd` split, product/technical tracks, architecture
   before stories (the four `adr-2026-06-29-*` DECIDE ADRs: explore-prd-split-track-in-explore,
   architecture-before-stories-convergent-kickback, track-marker-location,

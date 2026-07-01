@@ -32,6 +32,7 @@ import { AuthoringGuard } from './authoring-guard.js';
 import { deriveDefaultBranch, chooseBranchName, slugify } from './authoring.js';
 import { isStoriesApproved, hasDraftAdr, parseComplexityTier, parseTrack } from '../artifacts.js';
 import { writeIntakeMarker } from './intake-marker.js';
+import { resolveDaemonOwner, type OwnerConfig, type GhRunner } from '../owner-gate/identity.js';
 
 const execFile = promisify(execFileCb);
 
@@ -40,6 +41,19 @@ const execFile = promisify(execFileCb);
 export interface LandSpecTarget {
   name: string;
   canonicalPath: string;
+}
+
+/**
+ * Owner-resolution injectables (ADR-1 identity chain). Both are optional so
+ * existing callers are unchanged; Task 17 threads real config + a gh runner from
+ * the CLI. When neither resolves an owner, the spec is stamped un-owned (the
+ * `Owner:` line is omitted — NOT blank/falsely-owned).
+ */
+export interface LandSpecOptions {
+  /** Config surface for owner resolution (reads `spec_owner`). */
+  ownerConfig?: OwnerConfig;
+  /** gh runner for the login fallback; injected in tests / by the CLI. */
+  gh?: GhRunner;
 }
 
 export interface LandSpecResult {
@@ -60,6 +74,7 @@ export async function landSpec(
   target: LandSpecTarget,
   idea: string,
   sourceRef?: string,
+  opts: LandSpecOptions = {},
 ): Promise<LandSpecResult> {
   const repoPath = target.canonicalPath;
 
@@ -218,9 +233,28 @@ export async function landSpec(
   try {
     await execFile('git', ['checkout', '-b', branch, defaultBranch], { cwd: repoPath });
 
-    // Persist the intake origin alongside the spec so it survives the spec-PR
-    // merge and reaches the daemon. No-op for hand-authored specs (no sourceRef).
-    await writeIntakeMarker(repoPath, slug, sourceRef, guard);
+    // Resolve the authoring owner via the identity chain (configured → gh →
+    // unresolved). Unresolved yields a null owner → un-owned (the `Owner:` line
+    // is omitted, NOT blank/falsely-owned). A gh runner is required only for the
+    // login fallback; when none is injected, an unresolvable stub degrades to
+    // unresolved rather than throwing.
+    const unresolvableGh: GhRunner = async () => {
+      throw new Error('landSpec: no gh runner injected for owner resolution');
+    };
+    const ownerResolution = await resolveDaemonOwner(
+      opts.ownerConfig ?? {},
+      opts.gh ?? unresolvableGh,
+      repoPath,
+    );
+    const specOwner = ownerResolution.resolved ? ownerResolution.id : null;
+
+    // Persist the intake origin + owner alongside the spec so both survive the
+    // spec-PR merge and reach the daemon. This is the ONLY land path — landSpec
+    // always commits LOCALLY (no push), so this no-remote/local-commit path
+    // unconditionally stamps the owner: there is no early return between the
+    // resolution above and this write. No-op only when neither sourceRef nor
+    // owner is present (hand-authored, un-owned spec).
+    await writeIntakeMarker(repoPath, slug, sourceRef, specOwner, guard);
 
     // Stage the whole `.docs` tree: the engineer authors specs/stories/plans +
     // complexity + (non-Small) conflicts/architecture/decisions + (intake) the

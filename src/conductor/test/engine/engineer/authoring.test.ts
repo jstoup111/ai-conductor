@@ -533,3 +533,84 @@ describe('runAuthoring — full DECIDE phase (tier-aware)', () => {
     expect(after[0].tier).toBe('M');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Owner-gate: runAuthoring stamps the resolved owner on the intake marker
+// (retro A-1, adr-2026-06-30-*, FR-4 write side). Mirrors landSpec (Task 16):
+// configured spec_owner → gh login → un-owned (Owner line OMITTED, not blank).
+// Assert against the COMMITTED marker on the spec branch, like the CLI test.
+// ---------------------------------------------------------------------------
+
+import type { GhRunner } from '../../../src/engine/owner-gate/identity.js';
+
+/** Read a committed file from a branch tree, or null if absent. */
+async function showOnBranch(
+  branch: string,
+  relPath: string,
+  cwd: string,
+): Promise<string | null> {
+  try {
+    return await git(['show', `${branch}:${relPath}`], cwd);
+  } catch {
+    return null;
+  }
+}
+
+describe('runAuthoring — owner-gate marker stamping (retro A-1, FR-4)', () => {
+  let repoPath: string;
+
+  beforeEach(async () => {
+    ({ repoPath } = await makeGitRepo());
+  });
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await rm(repoPath, { recursive: true, force: true });
+  });
+
+  it('stamps Owner from configured spec_owner (gh not consulted)', async () => {
+    const target = { name: 'alpha', canonicalPath: repoPath };
+    // A throwing gh proves the configured owner won without a login fallback.
+    const failingGh: GhRunner = async () => {
+      throw new Error('gh should not be consulted when spec_owner is configured');
+    };
+    const result = await runAuthoring(target, 'dep bump', {
+      decide: approvedDecide(),
+      ownerConfig: { spec_owner: 'Alice' },
+      gh: failingGh,
+    });
+
+    const marker = await showOnBranch(result.branch, `.docs/intake/dep-bump.md`, repoPath);
+    expect(marker).toContain('Owner: alice'); // normalized (trim + lowercase)
+  });
+
+  it('stamps Owner from gh login when spec_owner is absent', async () => {
+    const target = { name: 'alpha', canonicalPath: repoPath };
+    const gh: GhRunner = async () => ({ stdout: 'bob\n' });
+    const result = await runAuthoring(target, 'dep bump', {
+      decide: approvedDecide(),
+      gh,
+    });
+
+    const marker = await showOnBranch(result.branch, `.docs/intake/dep-bump.md`, repoPath);
+    expect(marker).toContain('Owner: bob');
+  });
+
+  it('OMITS the Owner line (un-owned, NOT blank) when neither config nor gh resolves', async () => {
+    const target = { name: 'alpha', canonicalPath: repoPath };
+    const failingGh: GhRunner = async () => {
+      throw new Error('gh unavailable');
+    };
+    // A valid sourceRef guarantees a marker is written so Owner's ABSENCE is
+    // observable (not merely that no marker exists).
+    const result = await runAuthoring(target, 'dep bump', {
+      decide: approvedDecide(),
+      sourceRef: 'acme/app#7',
+      gh: failingGh,
+    });
+
+    const marker = await showOnBranch(result.branch, `.docs/intake/dep-bump.md`, repoPath);
+    expect(marker).toContain('Source-Ref: acme/app#7');
+    expect(marker ?? '').not.toContain('Owner:');
+  });
+});

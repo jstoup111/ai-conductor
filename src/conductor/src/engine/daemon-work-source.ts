@@ -5,6 +5,9 @@
 // and tests can inject a fake WorkSource without wiring real I/O.
 
 import type { BacklogItem } from './daemon.js';
+import type { OwnerResolution } from './owner-gate/identity.js';
+import type { OwnerStamp } from './owner-gate/provenance.js';
+import type { DiscoverBacklogOpts } from './daemon-backlog.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Public interface
@@ -41,12 +44,23 @@ export interface LocalWorkSourceDeps {
     root: string,
     isProcessed: (slug: string) => Promise<boolean>,
     log: (m: string) => void,
-    opts: {
-      baseBranch: string;
-      hasWarned: (slug: string) => Promise<boolean>;
-      markWarned: (slug: string) => Promise<void>;
-    },
+    opts: DiscoverBacklogOpts,
   ) => Promise<BacklogItem[]>;
+  /**
+   * Owner-gate injectables (all optional → backward compatible; absent = no
+   * gate, discovery is byte-for-byte legacy). ADR-1 naming: these carry the
+   * OPERATOR concept (`daemonOwner`), never the lock holder.
+   *
+   * `resolveDaemonOwner` is a THUNK resolved FRESH on every `discover()` pass —
+   * there is deliberately no cross-pass caching of the resolved owner, so a
+   * reconfigured `spec_owner` (or a changed gh login) takes effect on the very
+   * next pass (FR-14). `readStamp` / `readMergeTime` back the gate with real git
+   * reads; `cutover` is the configured grandfather instant (or null default).
+   */
+  resolveDaemonOwner?: () => Promise<OwnerResolution>;
+  readStamp?: (slug: string) => Promise<OwnerStamp>;
+  readMergeTime?: (slug: string) => Promise<string | null>;
+  cutover?: string | null;
 }
 
 /**
@@ -61,6 +75,22 @@ export function localWorkSource(deps: LocalWorkSourceDeps): WorkSource {
   return {
     async discover({ refresh }) {
       if (refresh) await deps.fastForwardRoot(deps.projectRoot, deps.log);
+      // Resolve the daemon owner FRESH this pass (no cross-pass cache) so a
+      // reconfigured identity takes effect immediately (FR-14). Absent thunk →
+      // gate is unwired and discovery behaves exactly as before (legacy).
+      const daemonOwner = deps.resolveDaemonOwner
+        ? await deps.resolveDaemonOwner()
+        : undefined;
+      // Only attach the owner-gate opts when the gate is wired, so the legacy
+      // path passes an identical opts shape to before.
+      const gateOpts: Partial<DiscoverBacklogOpts> = daemonOwner
+        ? {
+            daemonOwner,
+            ...(deps.readStamp ? { readStamp: deps.readStamp } : {}),
+            ...(deps.readMergeTime ? { readMergeTime: deps.readMergeTime } : {}),
+            cutover: deps.cutover ?? null,
+          }
+        : {};
       return deps.discoverBacklog(
         deps.projectRoot,
         (slug) => deps.isProcessed(slug),
@@ -69,6 +99,7 @@ export function localWorkSource(deps: LocalWorkSourceDeps): WorkSource {
           baseBranch: deps.baseBranch,
           hasWarned: (slug) => deps.hasWarned(slug),
           markWarned: (slug) => deps.markWarned(slug),
+          ...gateOpts,
         },
       );
     },

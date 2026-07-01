@@ -198,3 +198,149 @@ describe('localWorkSource — discoverBacklog receives correct args + call-throu
     expect(markWarnedSpy).toHaveBeenCalledWith('feat-c');
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Owner-gate threading (Task 17): the daemonOwner / readStamp / readMergeTime /
+// cutover deps are threaded through into discoverBacklog opts. When the gate is
+// UNWIRED (no resolveDaemonOwner thunk) the opts stay legacy (no gate keys).
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('localWorkSource — owner-gate deps thread into discoverBacklog opts', () => {
+  function baseDeps(overrides: Record<string, unknown> = {}) {
+    let capturedOpts: Record<string, unknown> | undefined;
+    const deps = {
+      projectRoot: '/repo',
+      baseBranch: 'main',
+      log: vi.fn(),
+      isProcessed: vi.fn().mockResolvedValue(false),
+      hasWarned: vi.fn().mockResolvedValue(false),
+      markWarned: vi.fn().mockResolvedValue(undefined),
+      fastForwardRoot: vi.fn(async () => {}),
+      discoverBacklog: vi.fn(async (_r: string, _p: unknown, _l: unknown, opts: unknown) => {
+        capturedOpts = opts as Record<string, unknown>;
+        return [];
+      }),
+      ...overrides,
+    };
+    return { deps, getOpts: () => capturedOpts };
+  }
+
+  it('threads a RESOLVED daemonOwner + readStamp/readMergeTime/cutover into opts', async () => {
+    const mod = await load(WS_MOD);
+    const localWorkSource = requireFn(mod, 'localWorkSource');
+
+    const readStamp = vi.fn().mockResolvedValue({ present: true, id: 'alice' });
+    const readMergeTime = vi.fn().mockResolvedValue('2026-06-29T00:00:00Z');
+    const { deps, getOpts } = baseDeps({
+      resolveDaemonOwner: vi.fn().mockResolvedValue({ resolved: true, id: 'alice' }),
+      readStamp,
+      readMergeTime,
+      cutover: '2026-06-30T00:00:00Z',
+    });
+
+    await localWorkSource(deps).discover({ refresh: false });
+
+    const opts = getOpts()!;
+    expect(opts.daemonOwner).toEqual({ resolved: true, id: 'alice' });
+    expect(opts.readStamp).toBe(readStamp);
+    expect(opts.readMergeTime).toBe(readMergeTime);
+    expect(opts.cutover).toBe('2026-06-30T00:00:00Z');
+  });
+
+  it('threads an UNRESOLVED daemonOwner (fail-open) — the gate is still wired', async () => {
+    const mod = await load(WS_MOD);
+    const localWorkSource = requireFn(mod, 'localWorkSource');
+
+    const { deps, getOpts } = baseDeps({
+      resolveDaemonOwner: vi.fn().mockResolvedValue({ resolved: false }),
+      readStamp: vi.fn(),
+      readMergeTime: vi.fn(),
+      cutover: null,
+    });
+
+    await localWorkSource(deps).discover({ refresh: false });
+
+    const opts = getOpts()!;
+    // An explicit {resolved:false} must still reach discoverBacklog so it can
+    // fail-open + warn-once (not be silently dropped as "no gate").
+    expect(opts.daemonOwner).toEqual({ resolved: false });
+    expect(opts.cutover).toBeNull();
+  });
+
+  it('defaults a missing cutover to null (documented default) when the gate is wired', async () => {
+    const mod = await load(WS_MOD);
+    const localWorkSource = requireFn(mod, 'localWorkSource');
+
+    const { deps, getOpts } = baseDeps({
+      resolveDaemonOwner: vi.fn().mockResolvedValue({ resolved: true, id: 'alice' }),
+      readStamp: vi.fn(),
+      readMergeTime: vi.fn(),
+      // cutover omitted entirely
+    });
+
+    await localWorkSource(deps).discover({ refresh: false });
+    expect(getOpts()!.cutover).toBeNull();
+  });
+
+  it('UNWIRED gate (no resolveDaemonOwner) leaves opts legacy — no gate keys', async () => {
+    const mod = await load(WS_MOD);
+    const localWorkSource = requireFn(mod, 'localWorkSource');
+
+    const { deps, getOpts } = baseDeps();
+    await localWorkSource(deps).discover({ refresh: false });
+
+    const opts = getOpts()!;
+    expect('daemonOwner' in opts).toBe(false);
+    expect('cutover' in opts).toBe(false);
+    expect(opts).toMatchObject({ baseBranch: 'main' });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Fresh per-pass resolution (Task 18 / FR-14): the daemon owner is resolved on
+// EVERY discover() pass — there is no cross-pass cache. A reconfigured identity
+// takes effect on the next pass.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('localWorkSource — resolveDaemonOwner is called FRESH on every pass (no cache)', () => {
+  it('invokes the resolver once per discover() and forwards the current owner', async () => {
+    const mod = await load(WS_MOD);
+    const localWorkSource = requireFn(mod, 'localWorkSource');
+
+    let capturedOwner: unknown;
+    // Simulate a reconfiguration between passes: alice → alice2.
+    const owners = [
+      { resolved: true, id: 'alice' },
+      { resolved: true, id: 'alice2' },
+    ];
+    let pass = 0;
+    const resolveDaemonOwner = vi.fn(async () => owners[pass++]);
+
+    const deps = {
+      projectRoot: '/repo',
+      baseBranch: 'main',
+      log: vi.fn(),
+      isProcessed: vi.fn().mockResolvedValue(false),
+      hasWarned: vi.fn().mockResolvedValue(false),
+      markWarned: vi.fn().mockResolvedValue(undefined),
+      fastForwardRoot: vi.fn(async () => {}),
+      resolveDaemonOwner,
+      readStamp: vi.fn(),
+      readMergeTime: vi.fn(),
+      cutover: null,
+      discoverBacklog: vi.fn(async (_r: string, _p: unknown, _l: unknown, opts: unknown) => {
+        capturedOwner = (opts as Record<string, unknown>).daemonOwner;
+        return [];
+      }),
+    };
+
+    const source = localWorkSource(deps);
+    await source.discover({ refresh: false });
+    expect(capturedOwner).toEqual({ resolved: true, id: 'alice' });
+    await source.discover({ refresh: false });
+    expect(capturedOwner).toEqual({ resolved: true, id: 'alice2' });
+
+    // Called exactly once per pass — no memoization across passes.
+    expect(resolveDaemonOwner).toHaveBeenCalledTimes(2);
+  });
+});

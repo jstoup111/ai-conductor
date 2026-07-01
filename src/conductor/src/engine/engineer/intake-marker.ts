@@ -15,19 +15,38 @@ import { AuthoringGuard } from './authoring-guard.js';
 import { parseSourceRef } from './issue-ref.js';
 
 /**
- * Write `.docs/intake/<slug>.md` with `Source-Ref: <sourceRef>`.
+ * Write `.docs/intake/<slug>.md` with `Source-Ref: <sourceRef>` and, when an
+ * `ownerIdentity` is supplied, an `Owner: <id>` line (FR-4 write side).
  *
- * No-op (returns null) when `sourceRef` is absent or not a valid `owner/repo#N`
- * — the marker is never written for non-intake or malformed origins. The path is
- * guarded to stay inside `repoPath`. Returns the absolute marker path on write.
+ * FIELD-NAME COORDINATION (ADR-2 condition — adr-2026-06-30-owner-provenance-recording):
+ * the owner is recorded on THIS marker rather than a competing artifact, so the
+ * `Owner:` field name is shared with phase-9.3b (github-intake-writeback), which
+ * also reads/writes this marker. The daemon's provenance reader
+ * (`owner-gate/provenance.ts`) parses exactly `Owner:` — keep the two in lockstep.
+ *
+ * The owner is OMITTED entirely (never a blank `Owner:` line) when
+ * `ownerIdentity` is null/absent/whitespace — a blank stamp is the "un-owned"
+ * case (FR-12), not a false owner.
+ *
+ * No-op (returns null) only when there is NEITHER a valid `owner/repo#N`
+ * sourceRef NOR an owner — so an owner is stamped even on a hand-authored,
+ * non-intake spec (the marker then carries `Owner:` without `Source-Ref:`). The
+ * path is guarded to stay inside `repoPath`. Returns the absolute marker path on
+ * write.
  */
 export async function writeIntakeMarker(
   repoPath: string,
   slug: string,
   sourceRef: string | undefined | null,
+  ownerIdentity: string | undefined | null,
   guard: AuthoringGuard = new AuthoringGuard(repoPath),
 ): Promise<string | null> {
-  if (!parseSourceRef(sourceRef)) return null;
+  const hasSourceRef = parseSourceRef(sourceRef) !== null;
+  const owner = ownerIdentity == null ? '' : ownerIdentity.trim();
+  const hasOwner = owner !== '';
+
+  // Nothing to record → leave non-intake, un-owned specs byte-for-byte unchanged.
+  if (!hasSourceRef && !hasOwner) return null;
 
   const intakeDir = join(repoPath, '.docs', 'intake');
   const markerFile = join(intakeDir, `${slug}.md`);
@@ -35,7 +54,12 @@ export async function writeIntakeMarker(
   guard.assertWriteAllowed(intakeDir);
   guard.assertWriteAllowed(markerFile);
 
+  const lines = [`# Intake origin: ${slug}`, ''];
+  if (hasSourceRef) lines.push(`Source-Ref: ${sourceRef}`);
+  if (hasOwner) lines.push(`Owner: ${owner}`);
+  const body = `${lines.join('\n')}\n`;
+
   await mkdir(intakeDir, { recursive: true });
-  await writeFile(markerFile, `# Intake origin: ${slug}\n\nSource-Ref: ${sourceRef}\n`, 'utf8');
+  await writeFile(markerFile, body, 'utf8');
   return markerFile;
 }

@@ -155,6 +155,9 @@ export function validateConfig(
     'memory_provider',
     // Observability
     'otel',
+    // Owner-gate (adr-2026-06-30-*): operator identity + grandfather cutover.
+    'spec_owner',
+    'owner_gate_cutover',
   ]);
   for (const key of Object.keys(obj)) {
     if (!knownTopLevelKeys.has(key)) {
@@ -425,6 +428,30 @@ export function validateConfig(
     }
     if (!obj.acceptance_spec_globs.every((g) => typeof g === 'string')) {
       return errVal('acceptance_spec_globs must contain only strings');
+    }
+  }
+
+  // spec_owner — the configured daemon operator identity (owner-gate, FR-1).
+  // Naming boundary (ADR-1): the operator concept, never the lock holder.
+  if (obj.spec_owner !== undefined && typeof obj.spec_owner !== 'string') {
+    return errVal('spec_owner must be a string');
+  }
+
+  // owner_gate_cutover — the grandfather cutover instant (owner-gate, FR-10).
+  // CONTRACT: a malformed (unparseable) date is REJECTED with a clear error,
+  // never silently defaulted — an un-owned spec must never be misclassified as
+  // buildable/skippable because the operator fat-fingered the cutover. A MISSING
+  // cutover is allowed; the documented default (no grandfather window → un-owned
+  // specs are indeterminate and skipped) is applied at the daemon wiring site.
+  if (obj.owner_gate_cutover !== undefined) {
+    if (typeof obj.owner_gate_cutover !== 'string') {
+      return errVal('owner_gate_cutover must be an ISO-8601 date string');
+    }
+    if (Number.isNaN(Date.parse(obj.owner_gate_cutover))) {
+      return errVal(
+        `owner_gate_cutover is not a parseable date: "${obj.owner_gate_cutover}". ` +
+          'Use an ISO-8601 instant (e.g. 2026-06-30T00:00:00Z).',
+      );
     }
   }
 
