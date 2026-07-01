@@ -1,7 +1,7 @@
 # PRD: Daemon Owner-Gating for Autonomous Spec Builds
 
 **Date:** 2026-06-30
-**Status:** Draft
+**Status:** Approved
 
 ## Problem / Background
 
