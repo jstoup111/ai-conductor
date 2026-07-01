@@ -30,6 +30,10 @@ import { resolveTargetRepo } from './engineer/target.js';
 import { landSpec } from './engineer/land-spec.js';
 import { loadConfig } from './config.js';
 import { openSpecPr } from './engineer/handoff.js';
+import {
+  createEngineerWorktree,
+  removeEngineerWorktree,
+} from './engineer/worktree-authoring.js';
 import { recordAuthoredKey } from './engineer/authored-ledger.js';
 import { ensureRunning } from './daemon-lock.js';
 // The CLI is the composition root for the github-issues intake adapter — the
@@ -86,8 +90,9 @@ export type EngineerDispatch =
   | { kind: 'launch'; idea?: string }
   | { kind: 'guide' }
   | { kind: 'projects' }
-  | { kind: 'land'; project: string; idea: string; sourceRef?: string }
-  | { kind: 'handoff'; project: string; branch: string; sourceRef?: string }
+  | { kind: 'worktree'; project: string; idea: string }
+  | { kind: 'land'; project: string; idea: string; worktree: string; sourceRef?: string }
+  | { kind: 'handoff'; project: string; branch: string; worktree: string; sourceRef?: string }
   | { kind: 'poll' }
   | { kind: 'claim' }
   | { kind: 'forget'; sourceRef: string };
@@ -121,27 +126,41 @@ export function detectEngineerCommand(argv: string[]): EngineerDispatch | null {
     return { kind: 'projects' };
   }
 
-  if (subCmd === 'land') {
+  if (subCmd === 'worktree') {
+    // `conduct-ts engineer worktree --project <n> --idea "<i>"` — create the per-idea
+    // worktree for authoring; prints `{ slug, branch, worktreePath, reconcile }`.
     const project = parseFlag(argv, '--project');
     const idea = parseFlag(argv, '--idea');
     if (!project || !idea) {
-      // Missing required flags — treat as guide.
+      return { kind: 'guide' };
+    }
+    return { kind: 'worktree', project, idea };
+  }
+
+  if (subCmd === 'land') {
+    const project = parseFlag(argv, '--project');
+    const idea = parseFlag(argv, '--idea');
+    const worktree = parseFlag(argv, '--worktree');
+    if (!project || !idea || !worktree) {
+      // Missing required flags — treat as guide. `--worktree` is REQUIRED: landSpec
+      // never falls back to the primary checkout (strict isolation, FR-7).
       return { kind: 'guide' };
     }
     // Optional intake write-back anchor — present when the idea came from an
     // intake envelope (github-issues). Absent for human-typed ideas.
     const sourceRef = parseFlag(argv, '--source-ref') ?? undefined;
-    return { kind: 'land', project, idea, sourceRef };
+    return { kind: 'land', project, idea, worktree, sourceRef };
   }
 
   if (subCmd === 'handoff') {
     const project = parseFlag(argv, '--project');
     const branch = parseFlag(argv, '--branch');
-    if (!project || !branch) {
+    const worktree = parseFlag(argv, '--worktree');
+    if (!project || !branch || !worktree) {
       return { kind: 'guide' };
     }
     const sourceRef = parseFlag(argv, '--source-ref') ?? undefined;
-    return { kind: 'handoff', project, branch, sourceRef };
+    return { kind: 'handoff', project, branch, worktree, sourceRef };
   }
 
   if (subCmd === 'poll') {
@@ -320,8 +339,9 @@ function printGuide(print: (s: string) => void): void {
       '  conduct-ts engineer --idea "<text>"                     — launch driving a specific idea (skips intake poll)\n' +
       '  conduct-ts engineer projects                            — list registered projects\n' +
       '  conduct-ts engineer claim                               — dequeue the oldest pending intake idea (JSON)\n' +
-      '  conduct-ts engineer land --project <n> --idea "<i>" [--source-ref <ref>]    — commit pre-written spec artifacts\n' +
-      '  conduct-ts engineer handoff --project <n> --branch <b> [--source-ref <ref>] — open spec PR + nudge daemon\n' +
+      '  conduct-ts engineer worktree --project <n> --idea "<i>"                     — create the per-idea authoring worktree\n' +
+      '  conduct-ts engineer land --project <n> --idea "<i>" --worktree <p> [--source-ref <ref>]    — commit spec artifacts in the worktree\n' +
+      '  conduct-ts engineer handoff --project <n> --branch <b> --worktree <p> [--source-ref <ref>] — open spec PR + remove worktree + nudge daemon\n' +
       '  conduct-ts engineer poll                                — poll github issues → enqueue new ideas\n' +
       '  conduct-ts engineer forget <owner/repo#N>               — drop an intake ledger entry + label\n',
   );
@@ -507,9 +527,42 @@ export async function dispatchEngineer(
       return 0;
     }
 
+    // ── worktree ────────────────────────────────────────────────────────────────
+    // `conduct-ts engineer worktree --project <n> --idea "<i>"`: create the per-idea
+    // isolated worktree the skill authors + lands in. Strict-abort (FR-7): a failure
+    // makes zero mutation to the primary tree and returns exit 1. Prints
+    // `{ slug, branch, worktreePath, reconcile }` on success.
+    case 'worktree': {
+      const { project: projectName, idea } = dispatch;
+      const reader = createRegistryReader(registryPath ? { registryPath } : {});
+      const allProjects = await reader.listProjects();
+      const record = allProjects.find((p) => p.name === projectName);
+      if (!record) {
+        printErr(`engineer worktree: project "${projectName}" not found in registry.`);
+        return 1;
+      }
+
+      let target: Awaited<ReturnType<typeof resolveTargetRepo>>;
+      try {
+        target = await resolveTargetRepo(record.path, reader);
+      } catch (err: unknown) {
+        printErr(`engineer worktree: ${err instanceof Error ? err.message : String(err)}`);
+        return 1;
+      }
+
+      try {
+        const wt = await createEngineerWorktree(target.canonicalPath, idea, (m) => printErr(m));
+        print(JSON.stringify({ kind: 'worktree', ...wt }));
+        return 0;
+      } catch (err: unknown) {
+        printErr(`engineer worktree: ${err instanceof Error ? err.message : String(err)}`);
+        return 1;
+      }
+    }
+
     // ── land ──────────────────────────────────────────────────────────────────
     case 'land': {
-      const { project: projectName, idea, sourceRef } = dispatch;
+      const { project: projectName, idea, worktree, sourceRef } = dispatch;
       const reader = createRegistryReader(registryPath ? { registryPath } : {});
       const allProjects = await reader.listProjects();
       const record = allProjects.find((p) => p.name === projectName);
@@ -543,6 +596,7 @@ export async function dispatchEngineer(
         result = await landSpec(
           { name: target.name, canonicalPath: target.canonicalPath },
           idea,
+          worktree,
           sourceRef,
           { ownerConfig, gh },
         );
@@ -570,7 +624,7 @@ export async function dispatchEngineer(
 
     // ── handoff ───────────────────────────────────────────────────────────────
     case 'handoff': {
-      const { project: projectName, branch, sourceRef } = dispatch;
+      const { project: projectName, branch, worktree, sourceRef } = dispatch;
       const reader = createRegistryReader(registryPath ? { registryPath } : {});
       const allProjects = await reader.listProjects();
       const record = allProjects.find((p) => p.name === projectName);
@@ -592,10 +646,12 @@ export async function dispatchEngineer(
       try {
         handoffResult = await openSpecPr(target, branch, {
           runner: async (args, runnerOpts) => {
-            const cwd = runnerOpts?.cwd ?? target.canonicalPath;
+            const cwd = runnerOpts?.cwd ?? worktree;
             const r = await gh(args, { cwd });
             return { stdout: r.stdout, stderr: '' };
           },
+          // gh runs in the per-idea worktree (checked out on spec/<slug>) — FR-4.
+          worktreePath: worktree,
           ledgerOpts: engineerDir ? { engineerDir } : {},
           // Link the spec PR to its issue with a non-closing `Refs` (does not
           // close — the daemon's implementation PR closes it on merge).
@@ -604,9 +660,22 @@ export async function dispatchEngineer(
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
         printErr(`engineer handoff: PR open failed: ${msg}`);
-        // Non-fatal: fall through to local-commit result.
+        // Handoff FAILED (e.g. no PR URL parsed): keep the worktree for inspection
+        // (FR-6) — do NOT remove it. Work is preserved on the branch.
         print(JSON.stringify({ kind: 'local-commit', branch, repoPath: target.canonicalPath }));
         return 0;
+      }
+
+      // The PR opened (or was skipped on no-remote) — the cycle succeeded, so remove
+      // the per-idea worktree (FR-5). The spec/<slug> branch + commit persist; a
+      // removal failure is REPORTED, never swallowed (FR-5 negative).
+      try {
+        await removeEngineerWorktree(target.canonicalPath, worktree);
+      } catch (err: unknown) {
+        printErr(
+          `⚠ Spec delivered, but the per-idea worktree "${worktree}" could not be removed: ` +
+            `${err instanceof Error ? err.message : String(err)}. Remove it manually.`,
+        );
       }
 
       if (handoffResult.kind === 'pr-opened') {

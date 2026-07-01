@@ -20,6 +20,7 @@ import { promisify } from 'node:util';
 import { runAuthoring } from '../../../src/engine/engineer/authoring.js';
 import { landSpec } from '../../../src/engine/engineer/land-spec.js';
 import type { GhRunner } from '../../../src/engine/owner-gate/identity.js';
+import { createEngineerWorktree } from '../../../src/engine/engineer/worktree-authoring.js';
 import { writeIntakeMarker } from '../../../src/engine/engineer/intake-marker.js';
 import { parseIntakeSourceRef } from '../../../src/engine/artifacts.js';
 import { discoverBacklog } from '../../../src/engine/daemon-backlog.js';
@@ -183,16 +184,18 @@ describe('runAuthoring intake marker (FR-1, FR-3)', () => {
 });
 
 describe('landSpec intake marker (FR-1)', () => {
-  it('commits .docs/intake/<slug>.md when given a sourceRef', async () => {
-    // The live path: skills already wrote the .docs artifacts; landSpec commits them.
-    await mkdir(join(repoPath, '.docs', 'specs'), { recursive: true });
-    await mkdir(join(repoPath, '.docs', 'stories'), { recursive: true });
-    await mkdir(join(repoPath, '.docs', 'plans'), { recursive: true });
-    await writeFile(join(repoPath, '.docs', 'specs', 'dep-bump.md'), '# PRD: dep bump\n\nApproved.\n');
-    await writeFile(join(repoPath, '.docs', 'stories', 'dep-bump.md'), ACCEPTED_STORIES);
-    await writeFile(join(repoPath, '.docs', 'plans', 'dep-bump.md'), PLAN_WITH_DEPS);
+  it('commits .docs/intake/<slug>.md when given a sourceRef (from the per-idea worktree)', async () => {
+    // The live path: create the per-idea worktree, the skills write .docs INTO it,
+    // then landSpec commits them on spec/<slug> from within the worktree (FR-1/FR-3).
+    const wt = await createEngineerWorktree(repoPath, 'dep bump');
+    await mkdir(join(wt.worktreePath, '.docs', 'specs'), { recursive: true });
+    await mkdir(join(wt.worktreePath, '.docs', 'stories'), { recursive: true });
+    await mkdir(join(wt.worktreePath, '.docs', 'plans'), { recursive: true });
+    await writeFile(join(wt.worktreePath, '.docs', 'specs', 'dep-bump.md'), '# PRD: dep bump\n\nApproved.\n');
+    await writeFile(join(wt.worktreePath, '.docs', 'stories', 'dep-bump.md'), ACCEPTED_STORIES);
+    await writeFile(join(wt.worktreePath, '.docs', 'plans', 'dep-bump.md'), PLAN_WITH_DEPS);
 
-    const result = await landSpec(target(), 'dep bump', 'acme/app#7');
+    const result = await landSpec(target(), 'dep bump', wt.worktreePath, 'acme/app#7');
 
     const marker = await showOnBranch(result.branch, `.docs/intake/${result.slug}.md`);
     expect(marker).toContain('Source-Ref: acme/app#7');

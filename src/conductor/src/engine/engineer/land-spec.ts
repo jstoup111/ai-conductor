@@ -8,20 +8,29 @@
 //   It validates (stories approved, tier-vs-artifacts consistent, no DRAFT ADR), guards,
 //   commits, and returns. It does NOT author (no decide seam, no subprocess).
 //
-// CONTRACT: landSpec(target, idea) → Promise<{slug, branch, repoPath}>
+// CONTRACT: landSpec(target, idea, worktreePath, sourceRef?) → Promise<{slug, branch, repoPath}>
 //
-//   1. Validate target.canonicalPath exists (TargetPathMissingError on failure).
-//   2. Guard a clean working tree (fail fast on dirty, no stash/reset).
-//   3. Identify the newest file in each of .docs/specs, .docs/stories, .docs/plans.
-//      Use AuthoringGuard(target.canonicalPath).assertWriteAllowed(path) on each path (C1).
+//   WORKTREE ISOLATION (FR-1/2/9): landSpec operates ENTIRELY inside the per-idea
+//   worktree (`worktreePath`) the caller created on the idea's `spec/<slug>` branch.
+//   The target's PRIMARY working tree is never touched — no `git checkout` against it.
+//   The old `checkout -b <branch> <default>` → commit → `checkout <default>` dance in
+//   the shared checkout is GONE; the branch already exists as the worktree's branch, so
+//   `land` commits in place.
+//
+//   1. Validate worktreePath exists (the worktree primitive must have created it) and
+//      the registry canonicalPath exists (TargetPathMissingError on failure).
+//   2. Guard a clean worktree (fail fast on dirty tracked files; untracked .docs allowed).
+//   3. Identify the newest file in each of worktreePath/.docs/{specs,stories,plans}.
+//      Use AuthoringGuard(target.canonicalPath) on each path (C1 — worktree ⊂ target).
 //   4. C2 regression guards — reject if ANY of:
 //      - a required artifact dir/file is missing (at least one spec, one stories, one plan must exist)
 //      - any artifact's content is empty/whitespace
 //      - any artifact contains "Status: DRAFT" (case-insensitive)
 //      - the stories artifact equals the known stub string
-//   5. deriveDefaultBranch + chooseBranchName → git checkout -b <branch> <default>
-//      git add .docs/specs .docs/stories .docs/plans, commit, git checkout <default>.
-//   6. On any error: restore HEAD, delete the dangling branch, re-throw.
+//   5. Commit in place: write the intake marker, `git add .docs`, `git commit` — all with
+//      cwd = worktreePath. No branch creation, no checkout of the primary tree.
+//   6. On failure: leave the worktree in place (keep-on-failure, FR-6) and re-throw. The
+//      branch is the worktree's branch — never deleted here.
 
 import { access, readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -29,7 +38,7 @@ import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { TargetPathMissingError } from './target.js';
 import { AuthoringGuard } from './authoring-guard.js';
-import { deriveDefaultBranch, chooseBranchName, slugify } from './authoring.js';
+import { slugify } from './authoring.js';
 import { isStoriesApproved, hasDraftAdr, parseComplexityTier, parseTrack } from '../artifacts.js';
 import { writeIntakeMarker } from './intake-marker.js';
 import { resolveDaemonOwner, type OwnerConfig, type GhRunner } from '../owner-gate/identity.js';
@@ -65,38 +74,55 @@ export interface LandSpecResult {
 // ── Implementation ────────────────────────────────────────────────────────────
 
 /**
- * Land the pre-written spec artifacts from .docs/ onto a spec/<slug> branch.
+ * Land the pre-written spec artifacts from the per-idea worktree's .docs/ onto its
+ * `spec/<slug>` branch (in place — the branch already exists as the worktree branch).
  *
  * Does NOT author anything — the real /explore, /prd, /stories, /plan skills must
- * have already written the artifacts before this is called.
+ * have already written the artifacts into the worktree before this is called.
+ *
+ * @param worktreePath - The per-idea worktree (cwd for ALL git/fs ops). The target's
+ *   primary working tree is never touched (FR-2).
+ * @param opts - Owner-resolution injectables (owner-gate identity chain).
  */
 export async function landSpec(
   target: LandSpecTarget,
   idea: string,
+  worktreePath: string,
   sourceRef?: string,
   opts: LandSpecOptions = {},
 ): Promise<LandSpecResult> {
-  const repoPath = target.canonicalPath;
+  const canonical = target.canonicalPath;
 
-  // 1. Validate the target path exists.
+  // 1. Validate the worktree exists (the worktree primitive must have created it) and
+  //    the registry's canonical target path still exists.
   try {
-    await access(repoPath);
+    await access(worktreePath);
   } catch {
-    throw new TargetPathMissingError(repoPath);
+    throw new Error(
+      `landSpec: per-idea worktree "${worktreePath}" does not exist. ` +
+        'Create the worktree (conduct-ts engineer worktree) before landing — landSpec never ' +
+        'falls back to the primary checkout.',
+    );
+  }
+  try {
+    await access(canonical);
+  } catch {
+    throw new TargetPathMissingError(canonical);
   }
 
-  // 2. Guard against dirty tracked changes. No stash, no reset — fail fast.
+  // 2. Guard against dirty tracked changes IN THE WORKTREE. No stash, no reset — fail fast.
   //
-  //    We permit untracked files under .docs/ (these are the skills' output artifacts
-  //    that landSpec is about to commit). We reject any other uncommitted change to
-  //    tracked files — staged, modified, deleted, or renamed.
+  //    We permit untracked files under .docs/ (the skills' output artifacts that
+  //    landSpec is about to commit). We reject any other uncommitted change to
+  //    tracked files — staged, modified, deleted, or renamed — so a dirty leftover
+  //    worktree never yields a silent stale-artifact land (FR-11 negative).
   //
   //    Implementation: `git status --porcelain` prefixes:
   //      '??' = untracked   → allowed if path starts with .docs/
   //      Any other prefix   → dirty tracked change → fail
   {
     const { stdout: porcelain } = await execFile('git', ['status', '--porcelain'], {
-      cwd: repoPath,
+      cwd: worktreePath,
     });
     const lines = porcelain.trim() === '' ? [] : porcelain.trim().split('\n');
     const dirtyLines = lines.filter((line) => {
@@ -113,17 +139,20 @@ export async function landSpec(
     if (dirtyLines.length > 0) {
       const summary = dirtyLines.map((l) => l.trim()).join(', ');
       throw new Error(
-        `landSpec: target repo at "${repoPath}" has uncommitted (dirty) changes outside .docs/: ${summary}. ` +
-          'Commit or discard all tracked changes before running landSpec.',
+        `landSpec: per-idea worktree at "${worktreePath}" has uncommitted (dirty) changes outside .docs/: ${summary}. ` +
+          'Recreate the worktree or discard tracked changes before running landSpec.',
       );
     }
   }
 
-  // 3. Identify candidate artifacts.
-  const guard = new AuthoringGuard(repoPath);
-  const specsDir = join(repoPath, '.docs', 'specs');
-  const storiesDir = join(repoPath, '.docs', 'stories');
-  const plansDir = join(repoPath, '.docs', 'plans');
+  // 3. Identify candidate artifacts inside the worktree. The AuthoringGuard is rooted
+  //    at the registry canonical path (C1 cross-repo isolation, ADR-004); the worktree
+  //    is a descendant of it, so every worktree/.docs path passes the guard while any
+  //    path escaping the target repo is still rejected.
+  const guard = new AuthoringGuard(canonical);
+  const specsDir = join(worktreePath, '.docs', 'specs');
+  const storiesDir = join(worktreePath, '.docs', 'stories');
+  const plansDir = join(worktreePath, '.docs', 'plans');
 
   // Guard the dir paths (C1: must be inside target prefix).
   guard.assertWriteAllowed(specsDir);
@@ -134,7 +163,7 @@ export async function landSpec(
   // PRODUCT track. Technical-only features carry acceptance criteria in stories
   // and have no PRD. Track is read from `.docs/track/<slug>.md` (written by
   // /explore); a missing marker defaults to `product` (back-compat).
-  const trackDir = join(repoPath, '.docs', 'track');
+  const trackDir = join(worktreePath, '.docs', 'track');
   const trackFile = await findNewestFile(trackDir);
   const track = parseTrack(trackFile ? await readFile(trackFile, 'utf-8') : null) ?? 'product';
   const specRequired = track === 'product';
@@ -151,7 +180,7 @@ export async function landSpec(
     if (!planFile) missing.push('plan');
     throw new Error(
       `landSpec: required artifact ${missing.join(', ')} ${missing.length === 1 ? 'file is' : 'files are'} missing ` +
-        `in ".docs/" under "${repoPath}". Run the /explore, /prd (product track), /stories, /plan skills first.`,
+        `in ".docs/" under "${worktreePath}". Run the /explore, /prd (product track), /stories, /plan skills first.`,
     );
   }
 
@@ -189,16 +218,16 @@ export async function landSpec(
   //     done and reads the tier from `.docs/complexity/`. Enforce that what the
   //     engineer CLAIMED (the tier) matches what it produced, so a non-Small
   //     spec can never reach the daemon missing conflict-check or architecture.
-  const complexityDir = join(repoPath, '.docs', 'complexity');
-  const decisionsDir = join(repoPath, '.docs', 'decisions');
+  const complexityDir = join(worktreePath, '.docs', 'complexity');
+  const decisionsDir = join(worktreePath, '.docs', 'decisions');
   const complexityFile = await findNewestFile(complexityDir);
   const tier = complexityFile
     ? parseComplexityTier(await readFile(complexityFile, 'utf-8'))
     : undefined;
 
   if (tier && tier !== 'S') {
-    const conflictsFile = await findNewestFile(join(repoPath, '.docs', 'conflicts'));
-    const architectureFile = await findNewestFile(join(repoPath, '.docs', 'architecture'));
+    const conflictsFile = await findNewestFile(join(worktreePath, '.docs', 'conflicts'));
+    const architectureFile = await findNewestFile(join(worktreePath, '.docs', 'architecture'));
     const reviewFile = await findNewestFile(decisionsDir);
     const missing: string[] = [];
     if (!conflictsFile) missing.push('conflicts');
@@ -225,69 +254,48 @@ export async function landSpec(
     }
   }
 
-  // 5. Branch, add, commit, return to default.
-  const defaultBranch = await deriveDefaultBranch(repoPath);
+  // 5. Commit in place on the worktree's branch. The branch already exists (it is the
+  //    worktree's checked-out branch) — no `checkout -b`, no `checkout back`, and the
+  //    primary working tree is never touched (FR-2). On failure we leave the worktree
+  //    for inspection (FR-6) and never delete its branch.
   const slug = slugify(idea);
-  const branch = await chooseBranchName(repoPath, slug);
+  const { stdout: headRef } = await execFile('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
+    cwd: worktreePath,
+  });
+  const branch = headRef.trim();
 
-  try {
-    await execFile('git', ['checkout', '-b', branch, defaultBranch], { cwd: repoPath });
+  // Resolve the authoring owner via the identity chain (configured → gh → unresolved).
+  // Unresolved yields a null owner → un-owned (the `Owner:` line is omitted, NOT
+  // blank/falsely-owned). A gh runner is required only for the login fallback; when none
+  // is injected, an unresolvable stub degrades to unresolved rather than throwing.
+  // Owner is a property of the TARGET repo, so resolve against its canonical path.
+  const unresolvableGh: GhRunner = async () => {
+    throw new Error('landSpec: no gh runner injected for owner resolution');
+  };
+  const ownerResolution = await resolveDaemonOwner(
+    opts.ownerConfig ?? {},
+    opts.gh ?? unresolvableGh,
+    canonical,
+  );
+  const specOwner = ownerResolution.resolved ? ownerResolution.id : null;
 
-    // Resolve the authoring owner via the identity chain (configured → gh →
-    // unresolved). Unresolved yields a null owner → un-owned (the `Owner:` line
-    // is omitted, NOT blank/falsely-owned). A gh runner is required only for the
-    // login fallback; when none is injected, an unresolvable stub degrades to
-    // unresolved rather than throwing.
-    const unresolvableGh: GhRunner = async () => {
-      throw new Error('landSpec: no gh runner injected for owner resolution');
-    };
-    const ownerResolution = await resolveDaemonOwner(
-      opts.ownerConfig ?? {},
-      opts.gh ?? unresolvableGh,
-      repoPath,
-    );
-    const specOwner = ownerResolution.resolved ? ownerResolution.id : null;
+  // Persist the intake origin + owner alongside the spec (inside the worktree) so both
+  // survive the spec-PR merge and reach the daemon. No-op only when neither sourceRef
+  // nor owner is present (hand-authored, un-owned spec).
+  await writeIntakeMarker(worktreePath, slug, sourceRef, specOwner, guard);
 
-    // Persist the intake origin + owner alongside the spec so both survive the
-    // spec-PR merge and reach the daemon. This is the ONLY land path — landSpec
-    // always commits LOCALLY (no push), so this no-remote/local-commit path
-    // unconditionally stamps the owner: there is no early return between the
-    // resolution above and this write. No-op only when neither sourceRef nor
-    // owner is present (hand-authored, un-owned spec).
-    await writeIntakeMarker(repoPath, slug, sourceRef, specOwner, guard);
+  // Stage ONLY the `.docs` tree (never `add -A`): the per-idea worktree holds exactly
+  // this idea's artifacts, so the commit is idea-scoped and no foreign untracked file
+  // can bleed in (FR-9). Commit in place on the worktree's branch — no checkout of the
+  // primary tree (FR-2).
+  await execFile('git', ['add', '.docs'], { cwd: worktreePath });
+  await execFile(
+    'git',
+    ['commit', '-m', `spec: land authored artifacts for "${idea}" [engineer/land]`],
+    { cwd: worktreePath },
+  );
 
-    // Stage the whole `.docs` tree: the engineer authors specs/stories/plans +
-    // complexity + (non-Small) conflicts/architecture/decisions + (intake) the
-    // origin marker, and the dirty-tree guard above permits only `.docs/`
-    // untracked files — so this commits exactly the DECIDE artifacts and leaves a
-    // clean tree on checkout.
-    await execFile('git', ['add', '.docs'], {
-      cwd: repoPath,
-    });
-    await execFile(
-      'git',
-      ['commit', '-m', `spec: land authored artifacts for "${idea}" [engineer/land]`],
-      { cwd: repoPath },
-    );
-  } catch (err) {
-    // Restore HEAD and delete the dangling branch on failure.
-    try {
-      await execFile('git', ['checkout', defaultBranch], { cwd: repoPath });
-    } catch {
-      // ignore restore errors
-    }
-    try {
-      await execFile('git', ['branch', '-D', branch], { cwd: repoPath });
-    } catch {
-      // ignore cleanup errors
-    }
-    throw err;
-  }
-
-  // Leave the repo on the default branch.
-  await execFile('git', ['checkout', defaultBranch], { cwd: repoPath });
-
-  return { slug, branch, repoPath };
+  return { slug, branch, repoPath: worktreePath };
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
