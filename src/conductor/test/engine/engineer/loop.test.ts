@@ -952,7 +952,12 @@ describe('Owner-gate: autonomous authoring threads owner deps into runAuthoring 
     await execFile('git', ['commit', '-m', 'config'], { cwd: dir });
   }
 
-  it('stamps Owner from the target repo spec_owner on the committed marker', async () => {
+  it('does NOT honor a project-config spec_owner (D2 anti-leak) — falls through to gh login', async () => {
+    // D2 / Story 2: a `spec_owner` committed into the shared PROJECT config is
+    // now a hard config-load rejection — it must never source operator identity.
+    // The authoring caller swallows the rejected config to `{}` and falls through
+    // to the gh login, so the committed 'Carol' is IGNORED and gh wins. (Full
+    // authoring-side user-config sourcing + fail-closed refusal is Slice B.)
     const dirA = join(workDir, 'alpha');
     await initRepo(dirA);
     await commitConfig(dirA, 'spec_owner: Carol\n');
@@ -960,8 +965,6 @@ describe('Owner-gate: autonomous authoring threads owner deps into runAuthoring 
 
     const { runEngineerMode } = await loadLoop();
     const { provider: route } = makeTestProvider({ routeTo: 'alpha' });
-    // gh returns a login; a configured spec_owner must win over it, proving the
-    // CONFIG (not just gh) was threaded from the real caller.
     const gh = async (args: string[], _opts: { cwd: string }) => {
       if (args[0] === 'pr' && args[1] === 'create') return { stdout: 'https://example.invalid/x/pull/1' };
       if (args[0] === 'api') return { stdout: 'ghlogin\n' };
@@ -984,7 +987,8 @@ describe('Owner-gate: autonomous authoring threads owner deps into runAuthoring 
       ['show', 'spec/dep-bump:.docs/intake/dep-bump.md'],
       { cwd: dirA },
     );
-    expect(marker).toContain('Owner: carol'); // normalized; config won over gh login
+    expect(marker).toContain('Owner: ghlogin'); // gh login, NOT the committed 'carol'
+    expect(marker).not.toContain('carol'); // repo-committed identity is never used
   });
 
   it('stamps Owner from the gh login when the target repo has no spec_owner', async () => {

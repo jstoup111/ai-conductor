@@ -328,6 +328,42 @@ and opening a PR on finish:
 The daemon consumes specs — it never authors them. `--continuous` idle-polls for new
 eligible features, bounded by the ceilings.
 
+#### Owner gate: multi-operator identity partition (`adr-2026-07-01-machine-scoped-operator-identity`)
+
+When multiple operators run daemons on separate machines against **one** repo, each daemon
+must build only **its own** specs. The gate (`owner-gate/gate.ts`, `decideSpecGate`) decides
+build-vs-skip per merged spec by comparing the spec's committed `Owner:` stamp
+(`owner-gate/provenance.ts`) against the resolving daemon's identity. Identity resolution
+lives behind the `resolveDaemonOwner` seam (`owner-gate/identity.ts`); a future
+`PlatformIdentity` (EKS/OIDC) resolver slots in ahead of it without touching the gate.
+
+- **Machine-scoped identity (D1).** `daemon-cli.ts` resolves the owner via
+  `owner-gate/machine-identity.ts` (`makeMachineOwnerResolver`), which reads `spec_owner`
+  **only** from the user config (`~/.ai-conductor/config.yml`) → `gh` login → unresolved.
+  Project config is never consulted for identity, so a committed `spec_owner` cannot leak one
+  operator's identity onto everyone who pulls. Resolved **fresh each pass** (no caching) so a
+  reconfigured identity takes effect on the next poll.
+- **Anti-leak guard (D2).** `validateConfig(raw, projectRoot, { source: 'project' })`
+  **rejects** a `spec_owner` key present in a committed project config (blank or not) — a hard
+  config-load error naming the file and the fix. `loadConfig` passes `source: 'project'`;
+  `loadMergedConfig` passes `source: 'merged'` so a user-sourced `spec_owner` in the merged
+  view is allowed.
+- **Fail-closed on unresolved identity (D3).** In `daemon-backlog.ts`, a supplied-but-
+  unresolved `daemonOwner` short-circuits discovery: the daemon builds **nothing** and emits a
+  single loud, deduped "identity unresolved" notice (reversing the prior fail-open build-all).
+  An **absent** `daemonOwner` (gate unwired) still runs legacy discovery unchanged.
+- **Loud un-owned skips (D5).** An un-owned merged spec is skipped with a distinct, deduped
+  line (`.daemon/warned/<slug>`) that states it is un-owned **and** how to fix it — add an
+  `Owner:` marker on the default branch, or grandfather via `owner_gate_cutover`.
+- **Grandfather cutover (D6).** `owner_gate_cutover` (project config) builds un-owned specs
+  merged before the instant. It is a per-repo policy for repos with an unbuilt backlog and
+  **must not** be set on the harness self-host repo (all plans there are already merged, so the
+  window would rebuild everything). See the main README → "Operator identity & owner gate".
+
+> The **authoring** side (universal `Owner:` stamping across every DECIDE path and refusing to
+> land un-owned specs) is sequenced separately (gated on the engineer-worktree-isolation work);
+> this section documents the identity/config/daemon partition only.
+
 #### Halt-reconciliation: startup dashboard + main-advance re-kick (ADR-013)
 
 PR #109 made the durable `.pipeline/HALT` marker authoritative at discovery, so a parked

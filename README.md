@@ -406,6 +406,43 @@ conductor:
   auto_check: true             # Check for updates on startup
 ```
 
+### Operator identity & owner gate (multi-operator, `conduct-ts` only)
+
+When two or more operators run daemons on **separate machines against the same repo**, each
+daemon must build **only its own** specs — no duplication, no silent stalls. That partition
+is keyed on an **operator identity** (`spec_owner`).
+
+**Identity is machine-scoped — set it in your USER config, never the project config.**
+
+```yaml
+# ~/.ai-conductor/config.yml   (per machine — NOT committed)
+spec_owner: your-github-login
+```
+
+- **Resolution chain:** user-config `spec_owner` → `gh` login → unresolved. An explicit
+  `spec_owner` always wins over the ambient `gh` login (deterministic).
+- **Anti-leak (hard guard):** `spec_owner` committed into a **project** `.ai-conductor/config.yml`
+  is a config-load **rejection** — it would leak your identity to everyone who pulls the repo.
+  The error names the file and the fix (move it to `~/.ai-conductor/config.yml`).
+- **Fail-closed:** a daemon that can resolve **no** identity (no user-config `spec_owner`
+  and no `gh` login) builds **nothing** and logs a loud, once-per-pass notice — it never
+  falls back to building every operator's work.
+- **Un-owned specs are surfaced, never silently skipped:** a merged spec with no `Owner:`
+  marker is skipped with a distinct, deduped line telling you to add an `Owner:` marker on
+  the default branch (or grandfather it via `owner_gate_cutover`).
+
+**Grandfather cutover — a per-repo policy that MUST NOT be set on the harness self-host repo.**
+
+```yaml
+# <repo>/.ai-conductor/config.yml   (committed — per-repo policy)
+owner_gate_cutover: 2026-06-30T00:00:00Z   # build un-owned specs merged BEFORE this instant
+```
+
+`owner_gate_cutover` grandfathers pre-existing **un-owned** specs so a repo with an unbuilt
+backlog can adopt the owner gate without stranding that work. **Do not set it on the
+james-stoup-agents self-host repo:** every plan there is already built and merged, so the
+grandfather window would make the daemon rebuild all of them. Leave it unset on the harness.
+
 ### OpenTelemetry observability (`conduct-ts` only)
 
 The TypeScript conductor can export run/step traces and metrics to any OTel-compatible

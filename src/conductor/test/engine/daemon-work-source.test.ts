@@ -247,7 +247,7 @@ describe('localWorkSource — owner-gate deps thread into discoverBacklog opts',
     expect(opts.cutover).toBe('2026-06-30T00:00:00Z');
   });
 
-  it('threads an UNRESOLVED daemonOwner (fail-open) — the gate is still wired', async () => {
+  it('threads an UNRESOLVED daemonOwner (fail-closed downstream) — the gate is still wired', async () => {
     const mod = await load(WS_MOD);
     const localWorkSource = requireFn(mod, 'localWorkSource');
 
@@ -262,7 +262,7 @@ describe('localWorkSource — owner-gate deps thread into discoverBacklog opts',
 
     const opts = getOpts()!;
     // An explicit {resolved:false} must still reach discoverBacklog so it can
-    // fail-open + warn-once (not be silently dropped as "no gate").
+    // fail-CLOSED + warn-once (not be silently dropped as "no gate").
     expect(opts.daemonOwner).toEqual({ resolved: false });
     expect(opts.cutover).toBeNull();
   });

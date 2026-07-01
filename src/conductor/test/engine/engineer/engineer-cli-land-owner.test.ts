@@ -134,20 +134,24 @@ afterEach(async () => {
 });
 
 describe('engineer land — owner-gate wiring (CLI seam)', () => {
-  it('threads the target config spec_owner into landSpec → marker stamped Owner', async () => {
+  it('does NOT honor a project-config spec_owner (D2 anti-leak) — identity never comes from the repo', async () => {
+    // D2 / Story 2: a `spec_owner` committed into the shared PROJECT config is
+    // now a hard config-load rejection — it must never source operator identity
+    // (that would leak one operator's id to everyone who pulls). The authoring
+    // caller swallows the rejected config to `{}` and falls through the identity
+    // chain to gh, so the committed 'alice' is IGNORED and gh's login wins.
+    // (Full authoring-side user-config sourcing + fail-closed refusal is Slice B.)
     await writeConfig('spec_owner: Alice\n');
     await seedDocs();
-    // gh would win only if config were absent; a throwing gh proves config was used.
-    const failingGh: GhRunner = async () => {
-      throw new Error('gh should not be consulted when spec_owner is configured');
-    };
-    const { out, opts } = captureOpts({ gh: failingGh });
+    const gh: GhRunner = async () => ({ stdout: 'bob\n' });
+    const { out, opts } = captureOpts({ gh });
 
     const code = await dispatchEngineer({ kind: 'land', project: 'alpha', idea: 'dep bump' }, opts);
     expect(code).toBe(0);
     const result = JSON.parse(out[out.length - 1]) as { slug: string; branch: string };
     const marker = await showOnBranch(result.branch, `.docs/intake/${result.slug}.md`);
-    expect(marker).toContain('Owner: alice'); // normalized (trim + lowercase)
+    expect(marker).toContain('Owner: bob'); // gh login, NOT the committed 'alice'
+    expect(marker).not.toContain('alice'); // the repo-committed identity is never used
   });
 
   it('threads the gh runner into landSpec → Owner from gh login when config is absent', async () => {
