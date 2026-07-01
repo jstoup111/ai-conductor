@@ -497,6 +497,51 @@ describe('engine/daemon-backlog — owner-gate integration', () => {
     expect(logs.filter((l) => /gate inactive/i.test(l))).toHaveLength(0);
   });
 
+  // Observability NFR — warn-once when the gate is ACTIVE but no grandfather
+  // cutover is configured (the operator-accepted skip-default is easy to miss).
+  // Distinct from the gate-inactive line; changes NO build/skip decision.
+  it('warns exactly once per pass when the gate is active but no cutover is configured', async () => {
+    await writeSpec('one');
+    await writeSpec('two');
+    const logs: string[] = [];
+    const backlog = await discoverBacklog(dir, undefined, (m) => logs.push(m), {
+      treeSource: fsSource(dir),
+      daemonOwner: { resolved: true, id: 'alice' },
+      readStamp: async () => ({ present: true as const, id: 'alice' }),
+      readMergeTime: async () => null,
+      cutover: null, // no grandfather window
+    });
+    // The gate is ACTIVE — both owned specs still build (no decision change).
+    expect(backlog.map((b) => b.slug).sort()).toEqual(['one', 'two']);
+    const noCutover = logs.filter((l) => /no owner_gate_cutover configured/i.test(l));
+    expect(noCutover).toHaveLength(1); // once per pass, not per-spec
+    expect(noCutover[0]).not.toMatch(/gate inactive/i); // distinct line
+  });
+
+  it('is SILENT about the missing cutover when a cutover IS set', async () => {
+    await writeSpec('with-cutover');
+    const logs: string[] = [];
+    await discoverBacklog(dir, undefined, (m) => logs.push(m), {
+      treeSource: fsSource(dir),
+      daemonOwner: { resolved: true, id: 'alice' },
+      readStamp: async () => ({ present: true as const, id: 'alice' }),
+      readMergeTime: async () => null,
+      cutover: '2026-06-30T00:00:00Z',
+    });
+    expect(logs.filter((l) => /no owner_gate_cutover configured/i.test(l))).toHaveLength(0);
+  });
+
+  it('is SILENT about the missing cutover when the gate is inactive (unresolved owner)', async () => {
+    await writeSpec('inactive');
+    const logs: string[] = [];
+    await discoverBacklog(dir, undefined, (m) => logs.push(m), {
+      treeSource: fsSource(dir),
+      daemonOwner: { resolved: false },
+      cutover: null,
+    });
+    expect(logs.filter((l) => /no owner_gate_cutover configured/i.test(l))).toHaveLength(0);
+  });
+
   // Task 18 — ownership rotation (FR-13/14). Transfer is a RE-STAMP of the
   // committed marker; the daemon reads whatever owner the marker currently
   // carries each pass. There is no per-spec owner cache — the decision is a pure

@@ -257,6 +257,22 @@ export async function discoverBacklog(
     );
   };
 
+  // No-cutover notice (Observability NFR): when the gate is ACTIVE (a resolved
+  // daemon owner) but NO grandfather `owner_gate_cutover` is configured, every
+  // un-owned spec skips as indeterminate. That skip-default is operator-accepted
+  // but easy to miss, so surface it exactly ONCE per pass — distinct from the
+  // gate-inactive line and the per-slug ownership skips. Does NOT change any
+  // build/skip decision. Silent when a cutover IS set or the gate is inactive.
+  let gateNoCutoverWarned = false;
+  const warnGateNoCutoverOnce = (): void => {
+    if (gateNoCutoverWarned) return;
+    gateNoCutoverWarned = true;
+    log(
+      'owner-gate active but no owner_gate_cutover configured — un-owned specs will be ' +
+        'skipped; set owner_gate_cutover to grandfather pre-existing specs.',
+    );
+  };
+
   const planFiles = (await tree.listPlanFiles()).filter((f) => f.endsWith('.md'));
   if (planFiles.length === 0) return [];
 
@@ -314,6 +330,9 @@ export async function discoverBacklog(
     // absent `daemonOwner` skips the gate entirely (legacy behavior).
     const daemonOwner = opts.daemonOwner;
     if (daemonOwner?.resolved) {
+      // Gate active — flag the operator-accepted skip-default once per pass when
+      // no grandfather cutover is set (observability only; no decision change).
+      if ((opts.cutover ?? null) === null) warnGateNoCutoverOnce();
       const stamp = opts.readStamp ? await opts.readStamp(slug) : { present: false as const };
       const mergeTime = opts.readMergeTime ? await opts.readMergeTime(slug) : null;
       const decision = decideSpecGate({
