@@ -91,3 +91,22 @@ describe('resolveDaemonOwner chain (FR-1/2/3)', () => {
     expect(r).toEqual({ resolved: false });
   });
 });
+
+// Task 18 (FR-14): identity change. resolveDaemonOwner reads the CURRENT config
+// on every call — there is no memoization — so a reconfigured spec_owner takes
+// effect on the next pass. An invalid (blank) new id falls through the chain.
+describe('resolveDaemonOwner reads current config each pass (FR-14, no caching)', () => {
+  it('a reconfigured spec_owner is honored on the very next call', async () => {
+    const gh = ghReturning('bob');
+    const first = await resolveDaemonOwner({ spec_owner: 'alice' }, gh, '/repo');
+    expect(first).toEqual({ resolved: true, id: 'alice' });
+    // Operator reconfigures to alice2 — the next call must reflect it (no cache).
+    const second = await resolveDaemonOwner({ spec_owner: 'alice2' }, gh, '/repo');
+    expect(second).toEqual({ resolved: true, id: 'alice2' });
+  });
+
+  it('an invalid (blank) new spec_owner falls through to the gh login', async () => {
+    const r = await resolveDaemonOwner({ spec_owner: '   ' }, ghReturning('bob'), '/repo');
+    expect(r).toEqual({ resolved: true, id: 'bob' });
+  });
+});

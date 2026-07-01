@@ -496,4 +496,65 @@ describe('engine/daemon-backlog — owner-gate integration', () => {
     expect(backlog.map((b) => b.slug)).toEqual(['legacy-a']);
     expect(logs.filter((l) => /gate inactive/i.test(l))).toHaveLength(0);
   });
+
+  // Task 18 — ownership rotation (FR-13/14). Transfer is a RE-STAMP of the
+  // committed marker; the daemon reads whatever owner the marker currently
+  // carries each pass. There is no per-spec owner cache — the decision is a pure
+  // function of (this pass's daemonOwner, the current stamp).
+  const CUTOVER_18 = '2026-06-30T00:00:00Z';
+
+  it('Task 18: a re-stamped marker (alice→bob) builds under bob and skips under alice', async () => {
+    await writeSpec('transferred');
+    const runWith = (ownerId: string) =>
+      discoverBacklog(dir, undefined, undefined, {
+        treeSource: fsSource(dir),
+        daemonOwner: { resolved: true, id: ownerId },
+        // Marker now carries bob (the new owner) after the transfer re-stamp.
+        readStamp: async () => ({ present: true as const, id: 'bob' }),
+        readMergeTime: async () => null,
+        cutover: CUTOVER_18,
+      });
+
+    // The alice daemon no longer owns it → skip.
+    expect(await runWith('alice')).toEqual([]);
+    // The bob daemon now owns it → build.
+    expect((await runWith('bob')).map((b) => b.slug)).toEqual(['transferred']);
+  });
+
+  it('Task 18: a spec already processed under alice is NOT rebuilt after transfer to bob', async () => {
+    await writeSpec('done-then-transferred');
+    let stampCalls = 0;
+    // New owner is bob, marker is bob — but the spec is already processed. The
+    // gate sits AFTER isProcessed, so a transfer never triggers a rebuild.
+    const backlog = await discoverBacklog(dir, async () => true, undefined, {
+      treeSource: fsSource(dir),
+      daemonOwner: { resolved: true, id: 'bob' },
+      readStamp: async () => {
+        stampCalls += 1;
+        return { present: true as const, id: 'bob' };
+      },
+      readMergeTime: async () => null,
+      cutover: CUTOVER_18,
+    });
+    expect(backlog).toEqual([]);
+    expect(stampCalls).toBe(0); // isProcessed short-circuits before the gate
+  });
+
+  it('Task 18: transfer to BLANK (stamp cleared) takes the un-owned path, not other-owner', async () => {
+    await writeSpec('unstamped-again');
+    const logs: string[] = [];
+    // A blank re-stamp reads as un-owned (present:false). With a post-cutover
+    // merge time this is skipped via the UN-OWNED branch (not other-owner).
+    const backlog = await discoverBacklog(dir, undefined, (m) => logs.push(m), {
+      treeSource: fsSource(dir),
+      daemonOwner: { resolved: true, id: 'alice' },
+      readStamp: async () => ({ present: false as const }),
+      readMergeTime: async () => '2026-07-01T00:00:00Z', // after cutover
+      cutover: CUTOVER_18,
+    });
+    expect(backlog).toEqual([]);
+    const line = logs.find((l) => /unstamped-again/.test(l));
+    expect(line).toMatch(/un-owned/i); // un-owned branch, not "owned by another"
+    expect(line).not.toMatch(/another operator/i);
+  });
 });
