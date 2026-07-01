@@ -20,11 +20,11 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   distinct ownership line; a spec matching the daemon owner builds. Un-owned (unstamped) specs are
   gated by a **grandfather cutover** (`owner_gate_cutover`): merged strictly before the cutover →
   grandfather-built, on/after (or an indeterminate merge time) → skipped. When the owner cannot be
-  resolved the gate is inactive (builds everything, one warn-once line per pass), so nothing regresses
+  resolved the gate is inactive (builds everything, one warn-once line), so nothing regresses
   for an unconfigured solo setup. New `spec_owner` and `owner_gate_cutover` config fields — a
   malformed cutover is **rejected at config load** (never silently defaulted, so an un-owned spec is
   never misclassified); a missing cutover means no grandfather window. When the gate is active but
-  **no `owner_gate_cutover` is set**, discovery emits one warn-once line per pass
+  **no `owner_gate_cutover` is set**, discovery emits one warn-once line
   (`owner-gate active but no owner_gate_cutover configured — un-owned specs will be skipped …`) so
   the skip-default for pre-existing un-owned specs is discoverable. The gate runs strictly after
   the existing content filters and after `isProcessed`, so eligibility and idempotency are unchanged.
@@ -79,6 +79,15 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   forcing. When no remote is available the step is skipped with a note rather than blocking.
 
 ### Fixed
+
+- **Owner-gate observability notices no longer log on every poll tick.** The gate-inactive
+  (fail-open) and no-`owner_gate_cutover` notices were pass-local and re-logged on every daemon
+  discovery pass, spamming `.daemon/daemon.log` (and the console) once per idle poll forever. They
+  now route through the same `.daemon/warned/` marker dedup as the per-slug merged-spec skips
+  (reserved keys `__owner-gate-inactive__` / `__owner-gate-no-cutover__`), so each surfaces once and
+  is then suppressed across ticks. The per-pass local guard is retained so the legacy/tests path
+  (dedup hooks unset) still logs at most once per pass, never per-spec. No build/skip decision
+  changes. Locked with two cross-scan tests in `daemon-backlog.test.ts`.
 
 - **Hardcoded per-step tier overrides now affect `model`, not just `effort`/`max_retries`.**
   `DEFAULT_STEP_TIER_OVERRIDES` model bumps were silently ignored — the model resolution chain in
