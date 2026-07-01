@@ -36,6 +36,13 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
     actually stamped `Owner: <configured spec_owner OR operator gh login>` (unresolved → the
     `Owner:` line is omitted, never blank). Previously the caller passed no owner deps, so no spec
     was ever stamped and every spec reached the daemon un-owned.
+  - **Autonomous authoring path now stamps the owner too (closes the ADR-2 "every land path" gap).**
+    `runAuthoring` (the engineer loop's autonomous DECIDE→spec seam) previously hard-coded a `null`
+    owner when writing the intake marker, so autonomously-authored specs carried no `Owner:` stamp
+    and would be skipped post-cutover. It now resolves the owner via the same identity chain as
+    `landSpec` (configured `spec_owner` → `gh` login → un-owned/omitted), and `processIdea`
+    (`loop.ts`) loads the target repo's HarnessConfig and threads `spec_owner` + the in-scope `gh`
+    runner into it. Both land paths now stamp `Owner:` identically.
 - **`conduct render-diagrams --check <file>...` syntax-checks Mermaid blocks at authoring time.**
   It parse-checks every diagram (rendering each with `mmdc` but not opening it) and **exits
   non-zero on a syntax error**, printing the file, block index, and parse-error line. Unlike the
