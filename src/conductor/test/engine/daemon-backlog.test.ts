@@ -556,6 +556,55 @@ describe('engine/daemon-backlog — owner-gate integration', () => {
     expect(noCutover[0]).not.toMatch(/gate inactive/i); // distinct line
   });
 
+  it('surfaces the no-cutover notice ONCE across scans when the warned-marker hooks are wired', async () => {
+    await writeSpec('one');
+    await writeSpec('two');
+    const warned = new Set<string>();
+    const opts = {
+      treeSource: fsSource(dir),
+      daemonOwner: { resolved: true as const, id: 'alice' },
+      readStamp: async () => ({ present: true as const, id: 'alice' }),
+      readMergeTime: async () => null,
+      cutover: null, // no grandfather window
+      hasWarned: async (slug: string) => warned.has(slug),
+      markWarned: async (slug: string) => {
+        warned.add(slug);
+      },
+    };
+    const logs: string[] = [];
+    const log = (m: string) => logs.push(m);
+
+    // Three consecutive scans (simulating poll ticks) — the notice logs once, not
+    // once per tick, once the persistent marker is set.
+    await discoverBacklog(dir, undefined, log, opts);
+    await discoverBacklog(dir, undefined, log, opts);
+    await discoverBacklog(dir, undefined, log, opts);
+
+    expect(logs.filter((l) => /no owner_gate_cutover configured/i.test(l))).toHaveLength(1);
+  });
+
+  it('surfaces the gate-inactive notice ONCE across scans when the warned-marker hooks are wired', async () => {
+    await writeSpec('one');
+    const warned = new Set<string>();
+    const opts = {
+      treeSource: fsSource(dir),
+      daemonOwner: { resolved: false as const },
+      cutover: null,
+      hasWarned: async (slug: string) => warned.has(slug),
+      markWarned: async (slug: string) => {
+        warned.add(slug);
+      },
+    };
+    const logs: string[] = [];
+    const log = (m: string) => logs.push(m);
+
+    await discoverBacklog(dir, undefined, log, opts);
+    await discoverBacklog(dir, undefined, log, opts);
+    await discoverBacklog(dir, undefined, log, opts);
+
+    expect(logs.filter((l) => /gate inactive/i.test(l))).toHaveLength(1);
+  });
+
   it('is SILENT about the missing cutover when a cutover IS set', async () => {
     await writeSpec('with-cutover');
     const logs: string[] = [];
