@@ -5,7 +5,7 @@ enforcement: gating
 phase: understand
 standalone: true
 requires: []
-model: haiku
+model: sonnet
 ---
 
 ## Purpose

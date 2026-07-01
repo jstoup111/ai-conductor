@@ -83,6 +83,15 @@ production call site of any security/correctness derivation, with real adversari
 - Don't fix other things you notice. Note them for a future task.
 - If tech-context loaded: follow stack conventions (e.g., Rails model/controller patterns)
 
+**When GREEN won't go green — escalate to debugging, do not thrash.**
+The GREEN generator runs on Sonnet. If the target test still fails after a bounded attempt
+(≈2 edits), or step 4 shows the change broke other tests and the cause is not immediately
+obvious, STOP editing. A Sonnet generator guessing at a non-obvious failure burns tokens and
+risks masking the bug rather than fixing it. Dispatch the `/debugging` protocol in a fresh
+sub-session on **`model="opus"`** (root-cause analysis is reasoning-heavy — see the model
+table in HARNESS.md), handing it the failing test, the current diff, and the full failure
+output. Return to GREEN only once debugging has produced an evidence-backed root cause.
+
 See `references/green.md` for detailed GREEN phase guidance.
 See `references/drill-down.md` for nested TDD cycle instructions.
 

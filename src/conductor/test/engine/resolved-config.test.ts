@@ -178,9 +178,32 @@ describe('engine/resolved-config', () => {
       const rS = resolveStepConfig('plan', 'DECIDE', undefined, { tier: 'S' });
       expect(rS.effort).toBe('medium');
       expect(rS.max_retries).toBe(3);
-      // DEFAULT_STEP_TIER_OVERRIDES.plan.L → effort: xhigh
+      // DEFAULT_STEP_TIER_OVERRIDES.plan.L → effort: xhigh, model: opus
       const rL = resolveStepConfig('plan', 'DECIDE', undefined, { tier: 'L' });
       expect(rL.effort).toBe('xhigh');
+      expect(rL.model).toBe('opus');
+    });
+
+    it('conflict_check bumps to opus on Large, stays sonnet on S/M', () => {
+      // Regression: HARNESS.md promised "sonnet (S/M), opus (L)" but the engine
+      // never bumped the model — L ran on sonnet. Now enforced via tier override.
+      expect(resolveStepConfig('conflict_check', 'DECIDE', undefined, { tier: 'S' }).model).toBe(
+        'sonnet',
+      );
+      expect(resolveStepConfig('conflict_check', 'DECIDE', undefined, { tier: 'M' }).model).toBe(
+        'sonnet',
+      );
+      expect(resolveStepConfig('conflict_check', 'DECIDE', undefined, { tier: 'L' }).model).toBe(
+        'opus',
+      );
+    });
+
+    it('front-of-funnel discovery steps use reasoning-capable defaults', () => {
+      // Under-modeling here cascades into everything downstream.
+      expect(resolveStepConfig('explore', 'DECIDE').model).toBe('opus');
+      expect(resolveStepConfig('explore', 'DECIDE').effort).toBe('xhigh');
+      expect(resolveStepConfig('complexity', 'DECIDE').model).toBe('sonnet');
+      expect(resolveStepConfig('bootstrap', 'UNDERSTAND').model).toBe('sonnet');
     });
 
     it('user step.by_tier beats hardcoded tier override', () => {

@@ -18,12 +18,12 @@ import { getStepDefinition } from './steps.js';
 // ────────────────────────────────────────────────────────────────────────────
 
 export const DEFAULT_STEP_MODELS: Record<StepName, string> = {
-  bootstrap: 'haiku',
+  bootstrap: 'sonnet',     // authors the project CLAUDE.md every later step depends on
   memory: 'haiku',
-  assess: 'haiku',
-  explore: 'sonnet',       // interactive Q&A + approaches (operator in the loop)
+  assess: 'sonnet',        // dispatches 9 specialists + drives structure verification; synthesis is the opus cto-orchestrator agent
+  explore: 'opus',         // divergent discovery: approach trade-offs + product/technical track classification — mistakes here cascade downstream
   prd: 'opus',             // product-only PRD authoring — reasoning-heavy
-  complexity: 'haiku',
+  complexity: 'sonnet',    // assigns S/M/L, which gates every downstream model/effort decision — a wrong tier cascades
   stories: 'sonnet',
   conflict_check: 'sonnet',
   plan: 'sonnet',
@@ -45,7 +45,7 @@ export const DEFAULT_STEP_EFFORT: Record<StepName, EffortLevel> = {
   bootstrap: 'low',
   memory: 'low',
   assess: 'high',          // orchestrator sets env var that cascades to subagents
-  explore: 'high',         // approach trade-offs + track classification
+  explore: 'xhigh',        // divergent approach trade-offs + track classification — reasoning-heavy
   prd: 'xhigh',            // product-only PRD authoring — reasoning-heavy
   complexity: 'low',
   stories: 'medium',
@@ -127,7 +127,10 @@ export const DEFAULT_STEP_TIER_OVERRIDES: Partial<
   },
   plan: {
     S: { effort: 'medium', max_retries: 3 },
-    L: { effort: 'xhigh' },
+    L: { effort: 'xhigh', model: 'opus' }, // task sequencing/dependency reasoning at scale needs opus
+  },
+  conflict_check: {
+    L: { model: 'opus' }, // subtle cross-story contradictions at ≥15 stories need opus
   },
 };
 
@@ -203,6 +206,7 @@ export function resolveStepConfig(
     phaseTier?.model ??
     phaseCfg?.model ??
     defaultsCfg?.model ??
+    hardcodedStepTier?.model ??
     DEFAULT_STEP_MODELS[step] ??
     FALLBACK_MODEL;
 
