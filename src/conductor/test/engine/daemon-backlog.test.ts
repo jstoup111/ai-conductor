@@ -307,3 +307,61 @@ describe('engine/daemon-backlog — FR-24 merge is the build-ready trigger (git)
     expect(backlog).toEqual([]);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Owner-gate integration (Tasks 11–14). The gate runs AFTER the existing content
+// filters (never bypassing them) and only for a RESOLVED daemon owner. Unresolved
+// / absent → fail-open (build all). All deps are injected so these stay git-free.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('engine/daemon-backlog — owner-gate integration', () => {
+  let dir: string;
+  const APPROVED_STORIES = '# Stories\n**Status:** Accepted\n';
+  const planWithDeps = (storiesRef?: string) =>
+    `# Plan\n${storiesRef ? `**Stories:** ${storiesRef}\n` : ''}\n### Task 1\n**Dependencies:** none\n`;
+
+  const fsSource = (root: string): BacklogTreeSource => ({
+    async listPlanFiles() {
+      try {
+        return (await readdir(join(root, '.docs/plans'))).filter((f) => f.endsWith('.md'));
+      } catch {
+        return [];
+      }
+    },
+    async readFile(relPath) {
+      try {
+        return await fsReadFile(join(root, relPath), 'utf-8');
+      } catch {
+        return null;
+      }
+    },
+  });
+
+  // Author an eligible (Accepted + dep-tree) spec into the working tree.
+  async function writeSpec(slug: string, stories = APPROVED_STORIES): Promise<void> {
+    await writeFile(join(dir, `.docs/plans/${slug}.md`), planWithDeps(`.docs/stories/${slug}.md`));
+    await writeFile(join(dir, `.docs/stories/${slug}.md`), stories);
+  }
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'daemon-backlog-owner-'));
+    await mkdir(join(dir, '.docs/plans'), { recursive: true });
+    await mkdir(join(dir, '.docs/stories'), { recursive: true });
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  // Task 11 — baseline unchanged: passing the (unresolved) gate deps builds the
+  // same set as today. The four injectables compile as opts and are inert here.
+  it('Task 11: unresolved owner deps leave the baseline set unchanged', async () => {
+    await writeSpec('feature-a');
+    const backlog = await discoverBacklog(dir, undefined, undefined, {
+      treeSource: fsSource(dir),
+      daemonOwner: { resolved: false },
+      readStamp: async () => ({ present: false as const }),
+      readMergeTime: async () => null,
+      cutover: null,
+    });
+    expect(backlog).toEqual([{ slug: 'feature-a' }]);
+  });
+});

@@ -9,6 +9,9 @@ import {
   parseIntakeSourceRef,
 } from './artifacts.js';
 import { makeGitRunner, originDefaultBranch, type GitRunner } from './rebase.js';
+import type { OwnerResolution } from './owner-gate/identity.js';
+import type { OwnerStamp } from './owner-gate/provenance.js';
+import { decideSpecGate, type GateDecision } from './owner-gate/gate.js';
 
 const execFile = promisify(execFileCb);
 
@@ -183,6 +186,25 @@ export interface DiscoverBacklogOpts {
    */
   hasWarned?: (slug: string) => Promise<boolean>;
   markWarned?: (slug: string) => Promise<void>;
+  /**
+   * Owner-gate injectables (all optional → backward compatible). When the four
+   * are absent the discovery behaves EXACTLY as before: no gate, no gate logs.
+   *
+   * - `daemonOwner` — the once-per-pass resolved daemon owner. When `resolved:
+   *   true`, each content-eligible spec is put through `decideSpecGate`; when
+   *   `resolved: false` the gate is inactive (fail-open) and every content-
+   *   eligible spec builds, with a single warn-once "gate inactive" line per
+   *   pass. Absent entirely → the gate is skipped silently (legacy behavior).
+   * - `readStamp(slug)` — reads the spec's committed owner stamp; defaults to
+   *   "un-owned" when unset.
+   * - `readMergeTime(slug)` — the spec's first-appearance time for the un-owned
+   *   grandfather branch; defaults to null (indeterminate) when unset.
+   * - `cutover` — the configured grandfather cutover instant, or null.
+   */
+  daemonOwner?: OwnerResolution;
+  readStamp?: (slug: string) => Promise<OwnerStamp>;
+  readMergeTime?: (slug: string) => Promise<string | null>;
+  cutover?: string | null;
 }
 
 /**
