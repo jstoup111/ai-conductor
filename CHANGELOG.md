@@ -10,6 +10,13 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ## [Unreleased]
 
+### Added
+- Design spec (PRD) for **daemon owner-gating**: the autonomous spec-build daemon will build only
+  merged specs owned by the configured operator — skipping (and logging) specs owned by others,
+  with strict handling of un-owned specs and a grandfather cutover for pre-existing work. Owner is
+  a configured identity with a gh-login fallback. Implementation follows in this branch.
+  (`.docs/specs/2026-06-30-daemon-owner-gate.md`)
+
 ## Migration
 
 The build daemon is now hosted inside a tmux session instead of a detached background process.
