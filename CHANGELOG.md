@@ -19,9 +19,12 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   detection + `activation: auto|force_on|force_off` override + a swappable interface seam for a future
   platform identity), `SkillRelinkPreflight` (relink harness skills via `bin/install --update` before
   a self-build so a newly added/renamed skill never HALTs on "no parseable result"), `SandboxBuildEnv`
-  (a throwaway `CLAUDE_CONFIG_DIR` whose skills/+hooks/ link into the build worktree — the self-build
-  exercises its own edited harness without mutating the global `~/.claude` the operator's concurrent
-  sessions read; guaranteed teardown on pass/fail/crash, no-leak invariant), and `VersionApprovalGate`
+  (a throwaway `CLAUDE_CONFIG_DIR` whose skills/+hooks/ link into the build worktree, with the
+  operator's `.credentials.json` + a hook-retargeted `settings.json` COPIED in so the headless build
+  can authenticate and fire its OWN edited hooks — the self-build exercises its own edited harness
+  without mutating the global `~/.claude` the operator's concurrent sessions read; fails closed on a
+  missing worktree link target, guaranteed teardown on pass/fail/crash, no-leak invariant), and
+  `VersionApprovalGate`
   + `ReleaseArtifactGate` (HALT-based, fail-closed VERSION-approval / integrity-suite / CHANGELOG
   `[Unreleased]` / migration-block gates). Config is safe-by-default: an absent/partial block
   auto-detects with all gates ON. **These primitives are INERT until wired into `conductor.run()`** —
@@ -167,6 +170,13 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   happened to create them, leaving bootstrap's directory list out of parity with the engine.
 
 ### Changed
+
+- **`.pipeline/HALT` marker path + best-effort writer consolidated into one module.** The marker
+  literal was independently spelled in `conductor.ts`, `rebase.ts`, `daemon-deps.ts`,
+  `daemon-dashboard.ts`, `daemon-rekick.ts`, and the new self-host `gate-halt.ts`, and the
+  mkdir-then-write plumbing was duplicated between the rebase HALT and the self-host HALT. Both now
+  live in `engine/halt-marker.ts` (`HALT_MARKER` + `writeHaltMarker`), so a change to where the
+  daemon-stop marker lives or how it is written happens in exactly one place. No behavior change.
 
 - **Model selection right-sized at the front of the funnel.** `explore` now defaults to
   **opus / xhigh** (was sonnet / high), `bootstrap` and `complexity` to **sonnet** (were haiku),

@@ -8,6 +8,7 @@ import {
 } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { relative, join } from 'node:path';
+import { HALT_MARKER } from './halt-marker.js';
 import type { ConductState } from '../types/index.js';
 import type {
   StepName,
@@ -132,7 +133,7 @@ const MAX_KICKBACKS_PER_GATE = 2;
 // kickback oscillation. Generous enough to allow legitimate kickback re-walks.
 const MAX_GATE_SELECTIONS = 6;
 const DONE_MARKER = '.pipeline/DONE';
-const LOOP_HALT_MARKER = '.pipeline/HALT';
+const LOOP_HALT_MARKER = HALT_MARKER;
 
 export interface NavigableStep {
   name: StepName;

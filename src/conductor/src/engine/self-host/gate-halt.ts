@@ -9,23 +9,21 @@
 // build. ADR-005/ADR-010 invariant: the daemon never merges — every self-build
 // ends at a HALT for the operator to re-install, `/verify`, and merge.
 
-import { mkdir, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { HALT_MARKER, writeHaltMarker } from '../halt-marker.js';
 
-/** The park-for-human marker the daemon loop already treats as a stop. */
-export const HALT_MARKER = '.pipeline/HALT';
+/** Re-exported from the canonical marker module for existing importers. */
+export { HALT_MARKER };
 
 /** A gate outcome: pass, or fail with a distinct, operator-facing reason. */
 export type GateVerdict = { ok: true } | { ok: false; reason: string };
 
 /**
  * Park the self-build for the operator. `reason` becomes the first line (the
- * dashboard reason); a shared resume procedure follows. Best-effort writes
- * (mkdir/write failures are swallowed) mirror the rebase writeHalt contract —
- * the HALT is a signal, never itself a hard failure.
+ * dashboard reason); a shared resume procedure follows. Delegates the
+ * best-effort marker write to `writeHaltMarker` — the HALT is a signal, never
+ * itself a hard failure.
  */
 export async function writeSelfHostHalt(projectRoot: string, reason: string): Promise<void> {
-  await mkdir(join(projectRoot, '.pipeline'), { recursive: true }).catch(() => {});
   const body =
     `${reason}\n\n` +
     `Harness self-build gate HALT — the daemon never merges (ADR-005/ADR-010).\n` +
@@ -33,7 +31,7 @@ export async function writeSelfHostHalt(projectRoot: string, reason: string): Pr
     `  1. Address the gate reason above.\n` +
     `  2. Re-install the harness (bin/install --update) and run /verify.\n` +
     `  3. rm .pipeline/HALT, then merge the PR yourself.\n`;
-  await writeFile(join(projectRoot, HALT_MARKER), body, 'utf-8').catch(() => {});
+  await writeHaltMarker(projectRoot, body);
 }
 
 /** First non-empty, trimmed line of a text blob, or null when there is none. */
