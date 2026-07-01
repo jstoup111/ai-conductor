@@ -26,7 +26,7 @@ describe('engine/resolved-config', () => {
     });
 
     it('reasoning-heavy steps get high+ effort', () => {
-      expect(DEFAULT_STEP_EFFORT.brainstorm).toBe('xhigh');
+      expect(DEFAULT_STEP_EFFORT.prd).toBe('xhigh');
       expect(DEFAULT_STEP_EFFORT.plan).toBe('high');
       expect(DEFAULT_STEP_EFFORT.architecture_review).toBe('high');
       expect(DEFAULT_STEP_EFFORT.assess).toBe('high');
@@ -46,11 +46,11 @@ describe('engine/resolved-config', () => {
       expect(DEFAULT_STEP_REVIEW.architecture_diagram).toBe('auto');
       expect(DEFAULT_STEP_REVIEW.acceptance_specs).toBe('auto');
       expect(DEFAULT_STEP_REVIEW.build).toBe('auto');
-      expect(DEFAULT_STEP_REVIEW.brainstorm).toBe('manual');
+      expect(DEFAULT_STEP_REVIEW.prd).toBe('manual');
     });
 
     it('retry budgets scale with step criticality', () => {
-      expect(DEFAULT_STEP_RETRIES.brainstorm).toBe(5);
+      expect(DEFAULT_STEP_RETRIES.prd).toBe(5);
       expect(DEFAULT_STEP_RETRIES.plan).toBe(5);
       expect(DEFAULT_STEP_RETRIES.build).toBe(5);
       expect(DEFAULT_STEP_RETRIES.bootstrap).toBe(1);
@@ -66,7 +66,7 @@ describe('engine/resolved-config', () => {
 
   describe('phaseForStep', () => {
     it('returns the hardcoded phase', () => {
-      expect(phaseForStep('brainstorm')).toBe('DECIDE');
+      expect(phaseForStep('explore')).toBe('DECIDE');
       expect(phaseForStep('build')).toBe('BUILD');
       expect(phaseForStep('retro')).toBe('SHIP');
     });
@@ -85,11 +85,11 @@ describe('engine/resolved-config', () => {
 
   describe('resolveStepConfig — no config', () => {
     it('returns hardcoded per-step defaults', () => {
-      const r = resolveStepConfig('brainstorm', 'DECIDE');
-      expect(r.model).toBe(DEFAULT_STEP_MODELS.brainstorm);
-      expect(r.effort).toBe(DEFAULT_STEP_EFFORT.brainstorm);
-      expect(r.max_retries).toBe(DEFAULT_STEP_RETRIES.brainstorm);
-      expect(r.review).toBe(DEFAULT_STEP_REVIEW.brainstorm);
+      const r = resolveStepConfig('prd', 'DECIDE');
+      expect(r.model).toBe(DEFAULT_STEP_MODELS.prd);
+      expect(r.effort).toBe(DEFAULT_STEP_EFFORT.prd);
+      expect(r.max_retries).toBe(DEFAULT_STEP_RETRIES.prd);
+      expect(r.review).toBe(DEFAULT_STEP_REVIEW.prd);
       expect(r.disabled).toBe(false);
     });
   });
@@ -124,9 +124,9 @@ describe('engine/resolved-config', () => {
 
     it('CLI model override beats everything', () => {
       const config: HarnessConfig = {
-        steps: { brainstorm: { model: 'opus' } },
+        steps: { prd: { model: 'opus' } },
       };
-      const r = resolveStepConfig('brainstorm', 'DECIDE', config, {
+      const r = resolveStepConfig('prd', 'DECIDE', config, {
         modelCliOverride: 'haiku',
       });
       expect(r.model).toBe('haiku');
@@ -135,9 +135,9 @@ describe('engine/resolved-config', () => {
     it('CLI effort override beats everything', () => {
       const config: HarnessConfig = {
         defaults: { effort: 'high' },
-        steps: { brainstorm: { effort: 'xhigh' } },
+        steps: { prd: { effort: 'xhigh' } },
       };
-      const r = resolveStepConfig('brainstorm', 'DECIDE', config, {
+      const r = resolveStepConfig('prd', 'DECIDE', config, {
         effortCliOverride: 'low',
       });
       expect(r.effort).toBe('low');

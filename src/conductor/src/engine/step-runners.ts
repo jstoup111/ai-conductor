@@ -21,7 +21,8 @@ const STEP_PROMPTS: Record<StepName, string> = {
   bootstrap: '/bootstrap',
   memory: '/memory',
   assess: '/assess',
-  brainstorm: '/brainstorm',
+  explore: '/explore',
+  prd: '/prd',
   complexity: '/conduct complexity',
   stories: '/stories',
   conflict_check: '/conflict-check',
@@ -80,7 +81,8 @@ const AUTONOMOUS_STEPS: Set<StepName> = new Set([
 // context without needing user input, so print mode is the right dispatch
 // for them even outside auto mode.
 const INTERACTIVE_STEPS: Set<StepName> = new Set([
-  'brainstorm',
+  'explore', // divergent Q&A + approach selection + track confirmation
+  'prd', // product-only design doc with operator approval
   'stories',
   'plan',
   'architecture_review',
@@ -352,7 +354,7 @@ export class DefaultStepRunner implements StepRunner {
         cwd: this.projectDir,
         // In auto mode there is no human to approve permissions, and the spawned
         // `claude` would otherwise launch in the user's default permission mode
-        // (which may be `plan` → ALL writes blocked, so e.g. brainstorm can never
+        // (which may be `plan` → ALL writes blocked, so e.g. prd can never
         // save its `.docs/specs/` PRD and the step loops). Skip permissions so the
         // step can write, like autonomous steps. Interactive REPL mode (non-auto)
         // keeps prompts so the user approves.

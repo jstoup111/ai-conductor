@@ -77,12 +77,12 @@ describe('createRenderer', () => {
   });
 
   it('prints a transient step-started line but no full dashboard', async () => {
-    await renderer({ type: 'step_started', step: 'brainstorm', index: 2 });
+    await renderer({ type: 'step_started', step: 'explore', index: 2 });
     const output = stream.output();
     expect(output).not.toContain('Conductor: Add login');
-    // Renderer now resolves the step's display label (e.g. "Brainstorm")
+    // Renderer now resolves the step's display label (e.g. "Explore")
     // for the transient line, not the raw step name.
-    expect(output).toContain('▶ Brainstorm');
+    expect(output).toContain('▶ Explore');
   });
 
   it('renders dashboard_refresh even when no step event has fired', async () => {

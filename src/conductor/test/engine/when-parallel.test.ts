@@ -74,8 +74,8 @@ describe('when: conditional step skip (T9)', () => {
   });
 
   it('skips a step and emits when_skip when when: expression is false (T9)', async () => {
-    // Seed: all done except 'brainstorm'. brainstorm has when: tier == L, but state has tier S.
-    await seedAllDoneExcept(statePath, 'brainstorm');
+    // Seed: all done except 'explore'. explore has when: tier == L, but state has tier S.
+    await seedAllDoneExcept(statePath, 'explore');
     await writeState(statePath, {
       ...(await readStateValue(statePath)),
       complexity_tier: 'S',
@@ -88,7 +88,7 @@ describe('when: conditional step skip (T9)', () => {
       events,
       config: {
         steps: {
-          brainstorm: { when: 'tier == L' },
+          explore: { when: 'tier == L' },
         },
       },
       mode: 'auto',
@@ -100,25 +100,25 @@ describe('when: conditional step skip (T9)', () => {
       | Extract<ConductorEvent, { type: 'when_skip' }>
       | undefined;
     expect(skipEvt).toBeDefined();
-    expect(skipEvt?.step).toBe('brainstorm');
+    expect(skipEvt?.step).toBe('explore');
     expect(skipEvt?.expression).toBe('tier == L');
 
     // Step should be recorded as skipped in state
     const result = await readState(statePath);
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.value.brainstorm).toBe('skipped');
+      expect(result.value.explore).toBe('skipped');
     }
 
     // Runner should NOT have been called for the skipped step
     const runCalls = (runner.run as ReturnType<typeof vi.fn>).mock.calls.map(
       (c: unknown[]) => c[0],
     );
-    expect(runCalls).not.toContain('brainstorm');
+    expect(runCalls).not.toContain('explore');
   });
 
   it('does NOT skip a step when when: expression is true (T9)', async () => {
-    await seedAllDoneExcept(statePath, 'brainstorm');
+    await seedAllDoneExcept(statePath, 'explore');
     await writeState(statePath, {
       ...(await readStateValue(statePath)),
       complexity_tier: 'L',
@@ -129,7 +129,7 @@ describe('when: conditional step skip (T9)', () => {
       stateFilePath: statePath,
       stepRunner: runner,
       events,
-      config: { steps: { brainstorm: { when: 'tier == L' } } },
+      config: { steps: { explore: { when: 'tier == L' } } },
       mode: 'auto',
     });
 
@@ -141,12 +141,12 @@ describe('when: conditional step skip (T9)', () => {
     const result = await readState(statePath);
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.value.brainstorm).toBe('done');
+      expect(result.value.explore).toBe('done');
     }
   });
 
   it('emits undefinedKey in when_skip when state key is undefined (T9)', async () => {
-    await seedAllDoneExcept(statePath, 'brainstorm');
+    await seedAllDoneExcept(statePath, 'explore');
     // Do NOT set bootstrap_mode → it will be undefined
 
     const runner = mockRunner();
@@ -154,7 +154,7 @@ describe('when: conditional step skip (T9)', () => {
       stateFilePath: statePath,
       stepRunner: runner,
       events,
-      config: { steps: { brainstorm: { when: '${bootstrap_mode} == new' } } },
+      config: { steps: { explore: { when: '${bootstrap_mode} == new' } } },
       mode: 'auto',
     });
 
@@ -214,7 +214,7 @@ describe('parallel: group execution (T15-T22)', () => {
   });
 
   it('emits parallel_started and parallel_completed on success (T22)', async () => {
-    await seedAllDoneExcept(statePath, 'brainstorm');
+    await seedAllDoneExcept(statePath, 'explore');
 
     const runner = mockRunner({ success: true });
     const conductor = new Conductor({
@@ -223,10 +223,10 @@ describe('parallel: group execution (T15-T22)', () => {
       events,
       config: {
         steps: {
-          brainstorm: {
+          explore: {
             parallel: [
-              { name: 'frontend', skill: 'skills/brainstorm/SKILL.md' },
-              { name: 'backend', skill: 'skills/brainstorm/SKILL.md' },
+              { name: 'frontend', skill: 'skills/explore/SKILL.md' },
+              { name: 'backend', skill: 'skills/explore/SKILL.md' },
             ],
           },
         },
@@ -239,18 +239,18 @@ describe('parallel: group execution (T15-T22)', () => {
     const startedEvt = emitted.find((e) => e.type === 'parallel_started') as
       Extract<ConductorEvent, { type: 'parallel_started' }> | undefined;
     expect(startedEvt).toBeDefined();
-    expect(startedEvt?.step).toBe('brainstorm');
+    expect(startedEvt?.step).toBe('explore');
     expect(startedEvt?.branches).toContain('frontend');
     expect(startedEvt?.branches).toContain('backend');
 
     const completedEvt = emitted.find((e) => e.type === 'parallel_completed') as
       Extract<ConductorEvent, { type: 'parallel_completed' }> | undefined;
     expect(completedEvt).toBeDefined();
-    expect(completedEvt?.step).toBe('brainstorm');
+    expect(completedEvt?.step).toBe('explore');
   });
 
   it('writes synthetic state keys for each branch (T16)', async () => {
-    await seedAllDoneExcept(statePath, 'brainstorm');
+    await seedAllDoneExcept(statePath, 'explore');
 
     const runner = mockRunner({ success: true });
     const conductor = new Conductor({
@@ -259,7 +259,7 @@ describe('parallel: group execution (T15-T22)', () => {
       events,
       config: {
         steps: {
-          brainstorm: {
+          explore: {
             parallel: [
               { name: 'alpha' },
               { name: 'beta' },
@@ -276,13 +276,13 @@ describe('parallel: group execution (T15-T22)', () => {
     expect(result.ok).toBe(true);
     if (result.ok) {
       const raw = result.value as Record<string, unknown>;
-      expect(raw['brainstorm__alpha']).toBe('done');
-      expect(raw['brainstorm__beta']).toBe('done');
+      expect(raw['explore__alpha']).toBe('done');
+      expect(raw['explore__beta']).toBe('done');
     }
   });
 
   it('emits parallel_failure and fails group on gating branch failure (T18)', async () => {
-    await seedAllDoneExcept(statePath, 'brainstorm');
+    await seedAllDoneExcept(statePath, 'explore');
 
     const runner: StepRunner = {
       run: vi.fn()
@@ -296,7 +296,7 @@ describe('parallel: group execution (T15-T22)', () => {
       events,
       config: {
         steps: {
-          brainstorm: {
+          explore: {
             parallel: [
               { name: 'gating-branch' },   // advisory defaults to false → gating
               { name: 'other-branch' },
@@ -318,12 +318,12 @@ describe('parallel: group execution (T15-T22)', () => {
     const result = await readState(statePath);
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.value.brainstorm).toBe('failed');
+      expect(result.value.explore).toBe('failed');
     }
   });
 
   it('continues group on advisory branch failure (T19)', async () => {
-    await seedAllDoneExcept(statePath, 'brainstorm');
+    await seedAllDoneExcept(statePath, 'explore');
 
     const runner: StepRunner = {
       run: vi.fn()
@@ -337,7 +337,7 @@ describe('parallel: group execution (T15-T22)', () => {
       events,
       config: {
         steps: {
-          brainstorm: {
+          explore: {
             parallel: [
               { name: 'advisory-branch', advisory: true },
               { name: 'other-branch' },
@@ -360,15 +360,15 @@ describe('parallel: group execution (T15-T22)', () => {
     const result = await readState(statePath);
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.value.brainstorm).toBe('done');
+      expect(result.value.explore).toBe('done');
       const raw = result.value as Record<string, unknown>;
-      expect(raw['brainstorm__advisory-branch']).toBe('failed');
-      expect(raw['brainstorm__other-branch']).toBe('done');
+      expect(raw['explore__advisory-branch']).toBe('failed');
+      expect(raw['explore__other-branch']).toBe('done');
     }
   });
 
   it('sets all synthetic keys to skipped when when: false on a parallel group (T21)', async () => {
-    await seedAllDoneExcept(statePath, 'brainstorm');
+    await seedAllDoneExcept(statePath, 'explore');
     await writeState(statePath, {
       ...(await readStateValue(statePath)),
       complexity_tier: 'S',
@@ -381,7 +381,7 @@ describe('parallel: group execution (T15-T22)', () => {
       events,
       config: {
         steps: {
-          brainstorm: {
+          explore: {
             when: 'tier == L',
             parallel: [
               { name: 'branch-a' },
@@ -399,14 +399,14 @@ describe('parallel: group execution (T15-T22)', () => {
     expect(result.ok).toBe(true);
     if (result.ok) {
       const raw = result.value as Record<string, unknown>;
-      expect(result.value.brainstorm).toBe('skipped');
-      expect(raw['brainstorm__branch-a']).toBe('skipped');
-      expect(raw['brainstorm__branch-b']).toBe('skipped');
+      expect(result.value.explore).toBe('skipped');
+      expect(raw['explore__branch-a']).toBe('skipped');
+      expect(raw['explore__branch-b']).toBe('skipped');
     }
   });
 
   it('runs all branches concurrently (Promise.all fan-out — T15)', async () => {
-    await seedAllDoneExcept(statePath, 'brainstorm');
+    await seedAllDoneExcept(statePath, 'explore');
 
     const callOrder: string[] = [];
     const runner: StepRunner = {
@@ -422,7 +422,7 @@ describe('parallel: group execution (T15-T22)', () => {
       events,
       config: {
         steps: {
-          brainstorm: {
+          explore: {
             parallel: [
               { name: 'a' },
               { name: 'b' },
@@ -446,7 +446,7 @@ describe('config validation: when: and parallel: (T13)', () => {
     const { validateConfig } = await import('../../src/engine/config.js');
     const result = validateConfig({
       steps: {
-        brainstorm: { when: 'tier > L' },
+        explore: { when: 'tier > L' },
       },
     });
     expect(result.ok).toBe(false);
@@ -459,8 +459,8 @@ describe('config validation: when: and parallel: (T13)', () => {
     const { validateConfig } = await import('../../src/engine/config.js');
     const result = validateConfig({
       steps: {
-        brainstorm: {
-          skill: 'skills/brainstorm/SKILL.md',
+        explore: {
+          skill: 'skills/explore/SKILL.md',
           parallel: [{ name: 'a' }],
         },
       },
@@ -475,7 +475,7 @@ describe('config validation: when: and parallel: (T13)', () => {
     const { validateConfig } = await import('../../src/engine/config.js');
     const result = validateConfig({
       steps: {
-        brainstorm: { when: 'tier == L' },
+        explore: { when: 'tier == L' },
       },
     });
     expect(result.ok).toBe(true);
@@ -485,9 +485,9 @@ describe('config validation: when: and parallel: (T13)', () => {
     const { validateConfig } = await import('../../src/engine/config.js');
     const result = validateConfig({
       steps: {
-        brainstorm: {
+        explore: {
           parallel: [
-            { name: 'a', skill: 'skills/brainstorm/SKILL.md' },
+            { name: 'a', skill: 'skills/explore/SKILL.md' },
             { name: 'b', advisory: true },
           ],
         },
@@ -500,7 +500,7 @@ describe('config validation: when: and parallel: (T13)', () => {
     const { validateConfig } = await import('../../src/engine/config.js');
     const result = validateConfig({
       steps: {
-        brainstorm: {
+        explore: {
           parallel: [
             { name: 'dup' },
             { name: 'dup' },
@@ -518,7 +518,7 @@ describe('config validation: when: and parallel: (T13)', () => {
     const { validateConfig } = await import('../../src/engine/config.js');
     const result = validateConfig({
       steps: {
-        brainstorm: {
+        explore: {
           parallel: [{ skill: 'x' }],
         },
       },

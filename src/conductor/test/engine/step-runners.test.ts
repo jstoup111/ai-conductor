@@ -29,20 +29,20 @@ describe('DefaultStepRunner', () => {
     const provider = createMockProvider();
     const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project');
 
-    await runner.run('brainstorm', emptyState);
+    await runner.run('explore', emptyState);
 
     expect(provider.invokeInteractive).toHaveBeenCalledOnce();
     expect(provider.invoke).not.toHaveBeenCalled();
   });
 
-  it('passes correct prompt for brainstorm', async () => {
+  it('passes correct prompt for explore', async () => {
     const provider = createMockProvider();
     const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project');
 
-    await runner.run('brainstorm', emptyState);
+    await runner.run('explore', emptyState);
 
     const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
-    expect(opts.prompt).toContain('/brainstorm');
+    expect(opts.prompt).toContain('/explore');
   });
 
   // Worktree isolation: the spawned claude must run in the runner's projectDir,
@@ -51,7 +51,7 @@ describe('DefaultStepRunner', () => {
   it('passes projectDir as cwd to the provider (collaborative path)', async () => {
     const provider = createMockProvider();
     const runner = new DefaultStepRunner(provider, 'session-1', '/wt/feature-x');
-    await runner.run('brainstorm', emptyState);
+    await runner.run('explore', emptyState);
     const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
     expect(opts.cwd).toBe('/wt/feature-x');
   });
@@ -108,7 +108,7 @@ describe('DefaultStepRunner', () => {
     const provider = createMockProvider();
     const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project');
 
-    await runner.run('brainstorm', emptyState);
+    await runner.run('explore', emptyState);
 
     const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
     expect(opts.dangerouslySkipPermissions).toBe(false);
@@ -118,7 +118,7 @@ describe('DefaultStepRunner', () => {
     const provider = createMockProvider();
     const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', { mode: 'auto' });
 
-    await runner.run('brainstorm', emptyState);
+    await runner.run('explore', emptyState);
 
     const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
     // Otherwise the spawned claude launches in the user's default permission
@@ -151,7 +151,7 @@ describe('DefaultStepRunner', () => {
     const provider = createMockProvider();
     const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project');
 
-    const result = await runner.run('brainstorm', emptyState);
+    const result = await runner.run('explore', emptyState);
 
     expect(result.success).toBe(true);
   });
@@ -161,7 +161,7 @@ describe('DefaultStepRunner', () => {
     (provider.invokeInteractive as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('crash'));
     const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project');
 
-    const result = await runner.run('brainstorm', emptyState);
+    const result = await runner.run('explore', emptyState);
 
     expect(result.success).toBe(false);
   });
@@ -188,7 +188,7 @@ describe('DefaultStepRunner', () => {
       totalSteps: 14,
     });
 
-    await runner.run('brainstorm', emptyState);
+    await runner.run('explore', emptyState);
 
     const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
     expect(opts.systemPrompt).toContain('[Conduct step 3/14]');
@@ -202,12 +202,12 @@ describe('DefaultStepRunner', () => {
       totalSteps: 14,
     });
 
-    // brainstorm is collaborative (not autonomous)
-    await runner.run('brainstorm', emptyState);
+    // explore is collaborative (not autonomous)
+    await runner.run('explore', emptyState);
 
     const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
     expect(opts.systemPrompt).toContain('Complete ONLY this step');
-    expect(opts.systemPrompt).toContain('Brainstorm');
+    expect(opts.systemPrompt).toContain('Explore');
   });
 
   it('autonomous step system prompt does NOT include "Complete ONLY this step"', async () => {
@@ -297,7 +297,7 @@ describe('DefaultStepRunner', () => {
       });
 
       // First run should use resume=true because marker exists
-      await runner.run('brainstorm', emptyState);
+      await runner.run('explore', emptyState);
 
       const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
       expect(opts.resume).toBe(true);
@@ -416,7 +416,7 @@ describe('DefaultStepRunner', () => {
       // Run 11 steps (first has no cooldown, steps 2-10 use base, step 11 uses 2x).
       // complexity is engine-managed, so it is excluded from runner.run paths.
       const steps: StepName[] = [
-        'worktree', 'memory', 'brainstorm', 'stories', 'conflict_check',
+        'worktree', 'memory', 'explore', 'stories', 'conflict_check',
         'plan', 'architecture_diagram', 'architecture_review',
         'acceptance_specs', 'build', 'manual_test',
       ];
@@ -499,7 +499,7 @@ describe('DefaultStepRunner', () => {
       const provider = createMockProvider();
       (provider.invoke as ReturnType<typeof vi.fn>).mockResolvedValue({
         success: true,
-        output: 'I could not determine a clear tier from the brainstorm.',
+        output: 'I could not determine a clear tier from the design exploration.',
         exitCode: 0,
       });
       const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project');
@@ -804,7 +804,7 @@ TIER: M`,
 
   describe('interactive REPL dispatch for conversational steps', () => {
     const replSteps: StepName[] = [
-      'brainstorm',
+      'explore',
       'stories',
       'plan',
       'architecture_review',
@@ -862,7 +862,7 @@ TIER: M`,
       // No options → mode defaults to 'default'
       const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project');
 
-      await runner.run('brainstorm', emptyState);
+      await runner.run('explore', emptyState);
 
       const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
       expect(opts.interactive).toBe(true);

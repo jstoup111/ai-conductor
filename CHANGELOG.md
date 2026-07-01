@@ -43,6 +43,23 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
     `landSpec` (configured `spec_owner` → `gh` login → un-owned/omitted), and `processIdea`
     (`loop.ts`) loads the target repo's HarnessConfig and threads `spec_owner` + the in-scope `gh`
     runner into it. Both land paths now stamp `Owner:` identically.
+- **DECIDE pipeline restructure — `explore`/`prd` split, product/technical tracks, architecture
+  before stories (the four `adr-2026-06-29-*` DECIDE ADRs: explore-prd-split-track-in-explore,
+  architecture-before-stories-convergent-kickback, track-marker-location,
+  brainstorm-rename-migration).** `brainstorm` is split into **`explore`** (advisory, always-runs:
+  context + approaches + the operator-confirmed product/technical **track**, ephemeral notes →
+  `.pipeline/`, decision → `.memory/`) and **`prd`** (gating, product-only PRD with a product-only
+  audit gate + external-constraint carve-out — absorbs PR #142). The DECIDE order is now
+  **explore → complexity → prd → architecture-diagram → architecture-review → stories →
+  conflict-check → plan**: architecture precedes stories, so architecture-induced failure modes
+  become negative-path stories, and the PRD stays product-only (the *how* resolves in
+  architecture-review as ADRs). The **track** is persisted to `.docs/track/<slug>.md` (`parseTrack`,
+  default `product`): on the **technical** track `prd` *and* `prd-audit` are skipped and acceptance
+  criteria live in stories (Model X — stories are always present, so the BUILD/daemon path is
+  unchanged). `land-spec` requires a PRD only on the product track; the daemon reads the track into
+  `BacklogItem.track`. `conflict-check` root-routes a blocking conflict to its cause
+  (`prd` | `architecture` | `stories`); `architecture-review` re-opens in a bounded amendment mode.
+  Persisted state is migrated (`brainstorm` ⇒ `explore` + `prd`) idempotently. Supersedes PR #142.
 - **`conduct render-diagrams --check <file>...` syntax-checks Mermaid blocks at authoring time.**
   It parse-checks every diagram (rendering each with `mmdc` but not opening it) and **exits
   non-zero on a syntax error**, printing the file, block index, and parse-error line. Unlike the
@@ -1063,6 +1080,21 @@ grep -rnE 'conduct-ts +(["'\'']|[A-Za-z])' . 2>/dev/null \
 
 Pipeline flags are unchanged — they simply move after the `inline` token
 (`conduct-ts inline --auto "<feature>"`, `conduct-ts inline --status`, …).
+
+The `brainstorm` skill was split into `explore` + `prd` (DECIDE restructure). The
+`skills/brainstorm/` directory is removed and `skills/explore/` + `skills/prd/` are
+added, so installed skill symlinks need refreshing — re-running `./bin/install`
+re-links the new skills; the line below also prunes the now-dangling `brainstorm`
+symlink in case your installer doesn't:
+
+```bash
+# Remove the stale brainstorm skill symlink (if present), then refresh all skills.
+rm -f "${HOME}/.claude/skills/brainstorm"
+./bin/install
+```
+
+No project-level action is needed: persisted `conduct-state.json` is migrated
+automatically on read (a recorded `brainstorm` step maps to `explore` + `prd`).
 
 The `.memory/` directory has moved from an in-project directory to a durable shared canonical
 store keyed by project. New bootstraps and the next `conduct` run on any existing project apply

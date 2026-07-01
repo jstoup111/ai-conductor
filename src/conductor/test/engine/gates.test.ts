@@ -7,19 +7,19 @@ describe('engine/gates', () => {
 
   describe('checkGate', () => {
     it('passes when all prerequisites are done', () => {
-      const state: ConductState = { brainstorm: 'done' };
+      const state: ConductState = { architecture_review: 'done' };
       const result = checkGate('stories', state);
       expect(result.passed).toBe(true);
     });
 
     it('passes when prerequisites are skipped', () => {
-      const state: ConductState = { brainstorm: 'skipped' };
+      const state: ConductState = { architecture_review: 'skipped' };
       const result = checkGate('stories', state);
       expect(result.passed).toBe(true);
     });
 
     it('passes when prerequisites are stale (critical for gates)', () => {
-      const state: ConductState = { brainstorm: 'stale' };
+      const state: ConductState = { architecture_review: 'stale' };
       const result = checkGate('stories', state);
       expect(result.passed).toBe(true);
     });
@@ -29,18 +29,18 @@ describe('engine/gates', () => {
       const result = checkGate('stories', state);
       expect(result.passed).toBe(false);
       if (!result.passed) {
-        expect(result.reason).toContain('brainstorm');
+        expect(result.reason).toContain('architecture_review');
       }
     });
 
     it('fails when prerequisite is failed', () => {
-      const state: ConductState = { brainstorm: 'failed' };
+      const state: ConductState = { architecture_review: 'failed' };
       const result = checkGate('stories', state);
       expect(result.passed).toBe(false);
     });
 
     it('fails when prerequisite is in_progress', () => {
-      const state: ConductState = { brainstorm: 'in_progress' };
+      const state: ConductState = { architecture_review: 'in_progress' };
       const result = checkGate('stories', state);
       expect(result.passed).toBe(false);
     });
@@ -103,8 +103,8 @@ describe('engine/gates', () => {
       expect(isGatingStep('conflict_check')).toBe(true);
     });
 
-    it('brainstorm is not gating', () => {
-      expect(isGatingStep('brainstorm')).toBe(false);
+    it('explore is not gating', () => {
+      expect(isGatingStep('explore')).toBe(false);
     });
 
     it('build is structural, not gating', () => {
@@ -126,7 +126,7 @@ describe('engine/gates', () => {
     });
 
     it('non-gating steps can be skipped', () => {
-      expect(canSkipStep('brainstorm')).toBe(true);
+      expect(canSkipStep('explore')).toBe(true);
       expect(canSkipStep('memory')).toBe(true);
       expect(canSkipStep('retro')).toBe(true);
     });

@@ -195,8 +195,11 @@ function makeGh(prUrl = 'https://example.invalid/x/pull/1') {
  * Returns real artifacts with the required markers.
  */
 function makeDecide() {
-  return async (ctx: { step: 'brainstorm' | 'stories' | 'plan'; idea: string; project: string; prompt: string }) => {
-    if (ctx.step === 'brainstorm') {
+  return async (ctx: { step: 'explore' | 'prd' | 'stories' | 'plan'; idea: string; project: string; prompt: string }) => {
+    if (ctx.step === 'explore') {
+      return { approved: true, artifact: `# Explore: ${ctx.idea}\n\napproaches\n` };
+    }
+    if (ctx.step === 'prd') {
       return { approved: true, artifact: `# PRD: ${ctx.idea}\n\nApproved.\n` };
     }
     if (ctx.step === 'stories') {
@@ -398,16 +401,16 @@ describe('Scenario 3: flywheel surfaces relevant lessons', () => {
 
     // Capture prompts passed to the DECIDE seam — this is where the digest is injected.
     const decideCalls: { step: string; prompt: string }[] = [];
-    const spyDecide = async (ctx: { step: 'brainstorm' | 'stories' | 'plan'; idea: string; project: string; prompt: string }) => {
+    const spyDecide = async (ctx: { step: 'explore' | 'prd' | 'stories' | 'plan'; idea: string; project: string; prompt: string }) => {
       decideCalls.push({ step: ctx.step, prompt: ctx.prompt });
       return makeDecide()(ctx);
     };
 
     await runEngineerMode({ route, io, gh, decide: spyDecide });
-    // The brainstorm prompt (first DECIDE call) must contain the lesson from the digest.
-    const brainstormCall = decideCalls.find((c) => c.step === 'brainstorm');
-    expect(brainstormCall, 'brainstorm DECIDE step was invoked').toBeTruthy();
-    expect(brainstormCall!.prompt).toMatch(/unique-marker-lesson/);
+    // The explore prompt (first DECIDE call) must contain the lesson from the digest.
+    const exploreCall = decideCalls.find((c) => c.step === 'explore');
+    expect(exploreCall, 'explore DECIDE step was invoked').toBeTruthy();
+    expect(exploreCall!.prompt).toMatch(/unique-marker-lesson/);
   });
 });
 

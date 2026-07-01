@@ -2,6 +2,7 @@ import {
   readFile,
   writeFile,
   mkdir,
+  readdir,
   access as accessFile,
   unlink as unlinkFile,
 } from 'node:fs/promises';
@@ -46,8 +47,10 @@ import {
   classifyPrdAuditGaps,
   readRemediationPlan,
   sweepStaleReviewArtifacts,
+  parseTrack,
   type RemediationGap,
 } from './artifacts.js';
+import type { Track } from '../types/index.js';
 import { resolveStepConfig, resolveRebaseResolutionAttempts } from './resolved-config.js';
 import { selectNextGate } from './selector.js';
 import { computeAndWriteVerdict, readAllVerdicts } from './gate-verdicts.js';
@@ -506,6 +509,21 @@ export class Conductor {
           continue;
         }
 
+        // Check if step should be skipped for this work track (adr-2026-06-29-explore-prd-split-track-in-explore/adr-2026-06-29-track-marker-location).
+        // `prd` is skipped on the technical track (no product requirements to
+        // spec). The track is resolved from `state.track` (daemon-seeded) or, in
+        // the interactive flow, from the committed `.docs/track/<slug>.md` marker
+        // that `/explore` wrote. A missing/unreadable track defaults to `product`.
+        if (step.skippableForTracks && step.skippableForTracks.length > 0) {
+          const track = await this.resolveTrack(state);
+          if (step.skippableForTracks.includes(track)) {
+            await saveStepStatus(this.stateFilePath, step.name, 'skipped');
+            state[step.name] = 'skipped';
+            await this.events.emit({ type: 'config_skip', step: step.name });
+            continue;
+          }
+        }
+
         // Phase 9.1 (ADR-002 Option A): under the daemon, skip the in-loop `retro`
         // step. The daemon's emission step owns narrative production into the
         // cross-project engineer store, so writing `.docs/retros/` into the feature
@@ -641,7 +659,7 @@ export class Conductor {
 
         // Fresh session per step (Phase 4 + daemon fix): when freshContextPerStep
         // is on (daemon/auto only — interactive `/conduct` leaves it false so the
-        // brainstorm→stories→plan design session keeps its context), start EVERY
+        // explore→prd→…→plan design session keeps its context), start EVERY
         // executed step on a brand-new LLM session so context never accumulates
         // across the loop. The retry loop below reuses this session (resume) for
         // the step's OWN attempts only.
@@ -1403,6 +1421,9 @@ export class Conductor {
     // ever marking it.
     let markedSkip = false;
     const tier = state.complexity_tier ?? 'L';
+    // Resolve the track once (state-seeded, or the committed marker in the
+    // interactive flow) so a technical feature skips prd_audit in the SHIP loop.
+    const track = await this.resolveTrack(state);
     // Steps are in topological order, so an upstream step's `skipped` mark is
     // already in `state` before a step that depends on it via skipWhenSkipped
     // is evaluated in this same pass (e.g. architecture_review → as_built).
@@ -1410,6 +1431,7 @@ export class Conductor {
       if (
         getStepStatus(state, s.name) === 'pending' &&
         (s.skippableForTiers.includes(tier) ||
+          (s.skippableForTracks ?? []).includes(track) ||
           shouldSkipForBootstrapMode(s.name, state.bootstrap_mode) ||
           shouldSkipForUpstreamSkip(s, state))
       ) {
@@ -1584,9 +1606,9 @@ export class Conductor {
    * Handle the `worktree` step entirely in the engine via `WorktreeManager`
    * (deterministic `git worktree add -b`), instead of dispatching the
    * `/conduct worktree` skill to Claude. The skill path let Claude run a broad
-   * self-directed orchestration (skipping `brainstorm`, botching git so the main
+   * self-directed orchestration (skipping `explore`, botching git so the main
    * repo ended up on the feature branch). A direct call keeps main untouched and
-   * lets the per-step engine drive `brainstorm` etc. normally.
+   * lets the per-step engine drive `explore` etc. normally.
    *
    * With no feature description (e.g. tests, or a resume without one) it records
    * the step done without creating a worktree — nothing to isolate yet.
@@ -1749,6 +1771,34 @@ export class Conductor {
    * 3. Write tier + step status atomically.
    * On callback error (e.g., Ctrl-C), leave the step pending — no stuck state.
    */
+  /**
+   * Resolve the work track (adr-2026-06-29-explore-prd-split-track-in-explore/adr-2026-06-29-track-marker-location). Prefers `state.track` (daemon-seeded);
+   * otherwise reads the committed `.docs/track/<slug>.md` marker that `/explore`
+   * wrote in the interactive flow (newest file wins — one feature per worktree),
+   * caches it into `state.track`, and persists. Defaults to `product` when no
+   * usable marker exists, so PRD / prd-audit run unless the work was explicitly
+   * classified `technical`. Best-effort: any fs error falls back to `product`.
+   */
+  private async resolveTrack(state: ConductState): Promise<Track> {
+    if (state.track) return state.track;
+    try {
+      const dir = join(this.projectRoot, '.docs', 'track');
+      const entries = (await readdir(dir)).filter((f) => f.endsWith('.md')).sort();
+      if (entries.length > 0) {
+        const content = await readFile(join(dir, entries[entries.length - 1]), 'utf-8');
+        const parsed = parseTrack(content);
+        if (parsed) {
+          state.track = parsed;
+          await writeState(this.stateFilePath, state);
+          return parsed;
+        }
+      }
+    } catch {
+      // No marker / unreadable → default product.
+    }
+    return 'product';
+  }
+
   private async runComplexityStep(state: ConductState): Promise<StepRunResult> {
     // Auto mode: take any existing tier, else default to L. No prompt, no Claude call.
     if (this.mode === 'auto') {

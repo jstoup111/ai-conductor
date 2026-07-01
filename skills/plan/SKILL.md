@@ -38,7 +38,7 @@ If preconditions are not met, state which are missing and suggest the appropriat
 ### 2. Read All Stories
 
 **Skip redundant exploration:** If exploration was already performed in this session (e.g.,
-during brainstorm), use the existing exploration results. Do not re-explore the same scope —
+during explore), use the existing exploration results. Do not re-explore the same scope —
 pass the summary to the Plan agent instead of dispatching new Explore agents.
 
 Load every story for the feature from `.docs/stories/`. For each story, extract:

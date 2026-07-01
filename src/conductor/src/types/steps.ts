@@ -2,7 +2,8 @@ export type StepName =
   | 'bootstrap'
   | 'memory'
   | 'assess'
-  | 'brainstorm'
+  | 'explore'
+  | 'prd'
   | 'complexity'
   | 'stories'
   | 'conflict_check'
@@ -30,6 +31,9 @@ export type Phase = 'SETUP' | 'UNDERSTAND' | 'DECIDE' | 'BUILD' | 'SHIP';
 
 export type ComplexityTier = 'S' | 'M' | 'L';
 
+/** The work track decided in `explore`: a product feature vs technical-only work. */
+export type Track = 'product' | 'technical';
+
 export type EnforcementLevel = 'advisory' | 'gating' | 'structural' | 'mechanical';
 
 export type RunMode = 'default' | 'auto' | 'interactive';
@@ -43,6 +47,13 @@ export interface StepDefinition {
   enforcement: EnforcementLevel;
   prerequisites: StepName[];
   skippableForTiers: ComplexityTier[];
+  /**
+   * Tracks (product/technical) for which this step is skipped. `prd` is skipped
+   * on the `technical` track (no product requirements to spec). Empty/absent →
+   * runs on every track. The conductor resolves the track from state and treats
+   * a track-skipped step as satisfied (same as a tier-skip).
+   */
+  skippableForTracks?: Track[];
   isCheckpoint: boolean;
   skillName?: string;
   /**

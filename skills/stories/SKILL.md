@@ -1,6 +1,6 @@
 ---
 name: stories
-description: "Use after design doc approval or when adding stories to an existing system. Generates user stories with mandatory happy and negative paths as Given/When/Then scenarios."
+description: "Use after architecture-review, when the design is approved. Generates user stories with mandatory happy and negative paths as Given/When/Then scenarios — from the PRD's FRs (product track) or the technical intent (technical track)."
 enforcement: gating
 phase: decide
 standalone: true
@@ -9,18 +9,33 @@ requires: []
 
 ## Purpose
 
-Extracts granular user stories from the approved PRD's enumerated functional requirements
-(`FR-N`), with both happy and negative path scenarios. Stories describe **behavior (WHAT)** —
-the technical *how* is the plan's job. Negative paths are mandatory — they directly feed TDD
-RED phases as test cases, ensuring error handling and edge cases are tested first, not bolted
-on later.
+Generates granular stories with happy and negative path scenarios, and is the **always-present
+acceptance-criteria artifact** for both tracks:
+- **Product track** — extract stories from the approved PRD's enumerated functional requirements
+  (`FR-N`); each FR is a unit.
+- **Technical track** — no PRD; write *technical stories* (Given/When/Then against the technical
+  change) from the technical intent + the approved architecture.
+
+Stories run **after** architecture-review (the design is known), so they describe **behavior
+(WHAT)** grounded in the agreed design — but they state observable behavior/acceptance, NOT the
+mechanism (architecture *informs which scenarios exist*; it is not copied as mechanism into story
+text — the *how* is the plan's job). Negative paths are mandatory — they feed TDD RED phases.
+
+**Architecture-induced negatives (do not miss these):** because stories follow architecture, every
+failure mode a design decision introduces (an external call that times out, a queue that drops/dupes,
+a lock that contends) MUST appear as a negative-path story. These are exactly the cases that were
+missed when stories preceded the design.
+
+If writing stories reveals a genuine *structural* gap the design lacks (a missing component/seam), do
+not paper over it in story text — kick back to `architecture` (which re-opens in amendment mode).
 
 ## Practices
 
 ### 1. Load Input
 
-- Read the approved PRD from `.docs/specs/`; work through its **Functional Requirements
-  (`FR-N`)** — each FR is the unit you extract stories from
+- **Product track:** read the approved PRD from `.docs/specs/`; work through its **Functional
+  Requirements (`FR-N`)** — each FR is the unit you extract stories from. **Technical track** (no
+  PRD): derive acceptance criteria from the technical intent + the approved architecture/ADRs.
 - Reference tech-context from session if loaded (e.g., Rails-specific negative paths)
 - Review existing stories in `.docs/stories/` for this feature area (avoid duplicates)
 - **Check for DRAFT stories from `/bootstrap`** — if stories have `Status: DRAFT`, review and

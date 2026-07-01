@@ -315,4 +315,43 @@ describe('engine/state', () => {
       expect(result.stories).toBe('done');
     });
   });
+
+  describe('migrateState (adr-2026-06-29-brainstorm-rename-migration: brainstorm → explore + prd)', () => {
+    it('maps brainstorm:done to explore:done + prd:done on read', async () => {
+      await writeFile(statePath, JSON.stringify({ brainstorm: 'done', complexity: 'done' }), 'utf-8');
+      const r = await readState(statePath);
+      expect(r.ok).toBe(true);
+      if (!r.ok) return;
+      expect(r.value.explore).toBe('done');
+      expect(r.value.prd).toBe('done');
+    });
+
+    it('maps brainstorm:skipped to explore + prd skipped', async () => {
+      await writeFile(statePath, JSON.stringify({ brainstorm: 'skipped' }), 'utf-8');
+      const r = await readState(statePath);
+      if (!r.ok) return;
+      expect(r.value.explore).toBe('skipped');
+      expect(r.value.prd).toBe('skipped');
+    });
+
+    it('does NOT override explore/prd already present (idempotent)', async () => {
+      await writeFile(
+        statePath,
+        JSON.stringify({ brainstorm: 'done', explore: 'stale', prd: 'skipped' }),
+        'utf-8',
+      );
+      const r = await readState(statePath);
+      if (!r.ok) return;
+      expect(r.value.explore).toBe('stale');
+      expect(r.value.prd).toBe('skipped');
+    });
+
+    it('no-op when there is no brainstorm key', async () => {
+      await writeFile(statePath, JSON.stringify({ explore: 'done', prd: 'done' }), 'utf-8');
+      const r = await readState(statePath);
+      if (!r.ok) return;
+      expect(r.value.explore).toBe('done');
+      expect((r.value as Record<string, unknown>).brainstorm).toBeUndefined();
+    });
+  });
 });

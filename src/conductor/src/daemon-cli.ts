@@ -93,7 +93,8 @@ export interface DaemonModeOptions {
 const PRESEEDED_DONE: StepName[] = [
   'worktree',
   'memory',
-  'brainstorm',
+  'explore',
+  'prd',
   'complexity',
   'stories',
   'conflict_check',
@@ -229,7 +230,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     const baseState: ConductState =
       existingResult.ok && Object.keys(existingResult.value).length > 0
         ? existingResult.value
-        : { complexity_tier: item.tier ?? 'M', feature_desc: item.slug };
+        : { complexity_tier: item.tier ?? 'M', track: item.track ?? 'product', feature_desc: item.slug };
 
     // Always stamp DECIDE steps as done regardless of whether this is a fresh
     // start or a resume — the human authored them and they never re-run.
@@ -237,6 +238,13 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       (baseState as Record<string, unknown>)[name] = 'done';
     }
     if (!baseState.complexity_tier) baseState.complexity_tier = item.tier ?? 'M';
+    // Seed the work track (adr-2026-06-29-explore-prd-split-track-in-explore/adr-2026-06-29-track-marker-location) so the conductor's track-skip applies
+    // (prd + prd-audit skipped on technical). Default product (back-compat).
+    if (!baseState.track) baseState.track = item.track ?? 'product';
+    // On the technical track there is no PRD — record it as skipped, not done.
+    if (baseState.track === 'technical') {
+      (baseState as Record<string, unknown>)['prd'] = 'skipped';
+    }
     if (!baseState.feature_desc) baseState.feature_desc = item.slug;
 
     await writeState(stateFilePath, baseState);

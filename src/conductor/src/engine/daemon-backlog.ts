@@ -7,6 +7,7 @@ import {
   isStoriesApproved,
   parseComplexityTier,
   parseIntakeSourceRef,
+  parseTrack,
 } from './artifacts.js';
 import { makeGitRunner, originDefaultBranch, type GitRunner } from './rebase.js';
 import type { OwnerResolution } from './owner-gate/identity.js';
@@ -350,10 +351,15 @@ export async function discoverBacklog(
       warnGateInactiveOnce();
     }
 
+    // Work track (adr-2026-06-29-explore-prd-split-track-in-explore/adr-2026-06-29-track-marker-location) from `.docs/track/<plug-stem>.md`. Absent → the
+    // daemon treats the feature as `product` (back-compat: pre-track specs are
+    // PRDs), so `prd`/`prd-audit` still run. Carried only when explicitly set.
+    const track = parseTrack(await tree.readFile(`.docs/track/${slug}.md`));
+
     // A fresh worktree is cut from the (now fast-forwarded) default branch, so the
     // vetted stories/plan physically exist in it already — the item only needs to
-    // carry the slug (+ tier + sourceRef); no working-tree paths to copy.
-    items.push({ slug, tier, ...(sourceRef ? { sourceRef } : {}) });
+    // carry the slug (+ tier + sourceRef + track); no working-tree paths to copy.
+    items.push({ slug, tier, ...(sourceRef ? { sourceRef } : {}), ...(track ? { track } : {}) });
   }
   return items;
 }

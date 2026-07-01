@@ -86,10 +86,10 @@ describe('renderDashboardLines', () => {
   });
 
   it('renders running suffix for in_progress step', () => {
-    const state: ConductState = { brainstorm: 'in_progress' };
+    const state: ConductState = { explore: 'in_progress' };
     const lines = renderDashboardLines(state, ALL_STEPS, 'Test');
     const text = lines.join('\n');
-    expect(text).toContain('▶ Brainstorm — running...');
+    expect(text).toContain('▶ Explore — running...');
   });
 
   describe('artifact rendering', () => {
@@ -150,7 +150,7 @@ describe('formatDashboardSnapshot: view modes and overlays', () => {
     return {
       featureName: 'Add login',
       steps: [
-        { name: 'brainstorm', label: 'Brainstorm', phase: 'UNDERSTAND', status: 'done' },
+        { name: 'explore', label: 'Explore', phase: 'UNDERSTAND', status: 'done' },
         { name: 'plan', label: 'Plan', phase: 'DECIDE', status: 'in_progress' },
       ],
     };
@@ -158,14 +158,14 @@ describe('formatDashboardSnapshot: view modes and overlays', () => {
 
   it('full view shows the entire step list', () => {
     const text = formatDashboardSnapshot(baseSnap(), { viewMode: 'full' }).join('\n');
-    expect(text).toContain('Brainstorm');
+    expect(text).toContain('Explore');
     expect(text).toContain('Plan');
   });
 
   it('focus view hides the full step list', () => {
     const snap = { ...baseSnap(), currentStep: { name: 'plan' as const, label: 'Plan', startedAtMs: Date.now() } };
     const text = formatDashboardSnapshot(snap, { viewMode: 'focus' }).join('\n');
-    expect(text).not.toContain('Brainstorm');
+    expect(text).not.toContain('Explore');
     // Current-step banner still appears
     expect(text).toContain('Plan');
   });
@@ -173,7 +173,7 @@ describe('formatDashboardSnapshot: view modes and overlays', () => {
   it('log view renders only the tail pane', () => {
     const snap: DashboardSnapshot = {
       ...baseSnap(),
-      lastStepTail: { step: 'brainstorm', lines: ['one', 'two', 'three'] },
+      lastStepTail: { step: 'explore', lines: ['one', 'two', 'three'] },
     };
     const text = formatDashboardSnapshot(snap, { viewMode: 'log', tailLines: 5 }).join('\n');
     expect(text).not.toContain('Conductor: Add login');

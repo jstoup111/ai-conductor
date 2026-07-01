@@ -29,13 +29,36 @@ export async function readState(path: string): Promise<StateResult<ConductState>
 
   try {
     const parsed = JSON.parse(raw) as ConductState;
-    return { ok: true, value: parsed };
+    return { ok: true, value: migrateState(parsed) };
   } catch {
     return {
       ok: false,
       error: { type: 'corrupted', message: 'Invalid JSON in state file' },
     };
   }
+}
+
+/**
+ * Migrate a persisted state to the current schema (adr-2026-06-29-brainstorm-rename-migration). Idempotent and
+ * non-destructive — safe to run on every load.
+ *
+ * `brainstorm` was split into `explore` + `prd`. A pre-split state records only
+ * `brainstorm`; map it forward so an in-flight or completed feature does not
+ * re-run DECIDE work after the rename:
+ *   - `explore` := `brainstorm`'s status (the divergent half always ran).
+ *   - `prd`     := `brainstorm`'s status. A `done` brainstorm authored a PRD into
+ *     `.docs/specs`, so `prd` is `done`; a skipped brainstorm → `prd` skipped.
+ * The `brainstorm` key is left in place (harmless — it is no longer scheduled).
+ * Steps already carrying `explore`/`prd` are untouched (idempotent).
+ */
+function migrateState(state: ConductState): ConductState {
+  const brainstorm = (state as Record<string, StepStatus | undefined>)['brainstorm'];
+  if (!brainstorm) return state;
+  const migrated: ConductState = { ...state };
+  const m = migrated as Record<string, StepStatus>;
+  if (m['explore'] === undefined) m['explore'] = brainstorm;
+  if (m['prd'] === undefined) m['prd'] = brainstorm;
+  return migrated;
 }
 
 /**

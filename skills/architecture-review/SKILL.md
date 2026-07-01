@@ -10,13 +10,26 @@ model: opus
 
 ## Purpose
 
-Reviews stories and implementation plans through an architectural lens BEFORE code is written.
+Reviews the design through an architectural lens BEFORE stories are written and before any code.
 Catches technical infeasibility, hidden complexity, architectural drift, and domain violations
-early — when they're cheap to fix.
+early — when they're cheap to fix. This is where the *how* is resolved (so the PRD stays
+product-only) and captured as APPROVED ADRs.
 
-**Run after `/plan` and before `/writing-system-tests`.**
+**Run after `/prd` (product track) or `/explore` (technical track), and BEFORE `/stories`** (adr-2026-06-29-architecture-before-stories-convergent-kickback).
+The review's input is the PRD's functional requirements (product) or the explore output + technical
+intent (technical) — stories and the plan do not exist yet at this point.
 
 Also invocable at pipeline batch boundaries to verify implementation stays architecturally sound.
+
+### Full vs amendment mode (convergence — adr-2026-06-29-architecture-before-stories-convergent-kickback)
+
+- **Full pass** — the pre-stories run above: full feasibility/alignment, produces APPROVED ADRs.
+- **Amendment pass** — when a later step (`stories` or `conflict-check`) re-opens architecture with a
+  specific **structural** gap, address ONLY that gap; do not re-derive the design from scratch. This
+  is what makes the loop converge instead of oscillate.
+
+Only a genuine structural gap (a missing component/seam/boundary) may re-open architecture — never a
+story-phrasing nit or a coverage gap. The conductor caps re-openings and HALTs for a human on excess.
 
 ### Lightweight Mode (Medium Complexity Tier)
 
@@ -30,7 +43,7 @@ Skip:
 - Section 7 (mandatory ADR creation) — only create ADRs for genuinely novel architectural decisions
 
 **Explore agent limits for Medium tier:** Max 2 agents with non-overlapping scopes:
-- Agent 1: stories + plan files (`.docs/stories/`, `.docs/plans/`)
+- Agent 1: the PRD/spec (`.docs/specs/`) — its FRs are the review input (stories/plan don't exist yet)
 - Agent 2: relevant source files for the feature area
 - Do NOT dispatch agents to read `.memory/` (auto-loaded at session start)
 - Do NOT dispatch a third agent for decisions/ADRs (read `.docs/decisions/` directly if needed)
