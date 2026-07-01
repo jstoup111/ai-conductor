@@ -602,7 +602,10 @@ export async function dispatchEngineer(
         );
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
+        // Keep-on-failure (FR-6): the per-idea worktree is retained for inspection —
+        // report WHERE it is so retention is actionable, not silent clutter.
         printErr(`engineer land: ${msg}`);
+        printErr(`engineer land: worktree kept for inspection at "${worktree}".`);
         return 1;
       }
 
@@ -661,8 +664,17 @@ export async function dispatchEngineer(
         const msg = err instanceof Error ? err.message : String(err);
         printErr(`engineer handoff: PR open failed: ${msg}`);
         // Handoff FAILED (e.g. no PR URL parsed): keep the worktree for inspection
-        // (FR-6) — do NOT remove it. Work is preserved on the branch.
-        print(JSON.stringify({ kind: 'local-commit', branch, repoPath: target.canonicalPath }));
+        // (FR-6) — do NOT remove it. Work is preserved on the branch; report the
+        // retained worktree path so retention is actionable.
+        printErr(`engineer handoff: worktree kept for inspection at "${worktree}".`);
+        print(
+          JSON.stringify({
+            kind: 'local-commit',
+            branch,
+            repoPath: target.canonicalPath,
+            worktreePath: worktree,
+          }),
+        );
         return 0;
       }
 

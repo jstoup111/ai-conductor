@@ -194,6 +194,42 @@ describe('FR-8/FR-9 concurrent per-idea worktrees are idea-scoped', () => {
     expect(bFiles).toMatch(/idea-beta\.md/);
     expect(bFiles).not.toMatch(/idea-alpha\.md/);
   });
+
+  it('a coexisting DAEMON worktree survives a full engineer cycle untouched (FR-8 daemon path)', async () => {
+    const repo = await makeRepo('r');
+    // Stand up a daemon-style worktree exactly as daemon-deps.createWorktree would:
+    // `.worktrees/<slug>` on `feat/daemon-<slug>`, disjoint from the engineer's
+    // `.worktrees/engineer-<slug>`. Give it in-progress build state to detect any bleed.
+    const daemonPath = join(repo, '.worktrees', 'shipping-thing');
+    await git(['worktree', 'add', '-b', 'feat/daemon-shipping-thing', daemonPath, 'main'], repo);
+    await writeFile(join(daemonPath, 'build-artifact.txt'), 'daemon mid-build\n');
+    const daemonHeadBefore = await git(['rev-parse', 'HEAD'], daemonPath);
+    const daemonStatusBefore = await git(['status', '--porcelain'], daemonPath);
+    const primaryBefore = await snapshot(repo);
+
+    // Run a FULL engineer cycle for an unrelated idea in the SAME repo.
+    const wt = await createEngineerWorktree(repo, 'add feature');
+    await writeDocs(wt.worktreePath, 'add feature');
+    await landSpec(target(repo), 'add feature', wt.worktreePath);
+    await openSpecPr(target(repo), wt.branch, {
+      worktreePath: wt.worktreePath,
+      runner: async () => {
+        throw new Error('no git remotes found');
+      },
+      ledgerOpts: { engineerDir: join(workDir, 'eng') },
+    });
+    await removeEngineerWorktree(repo, wt.worktreePath);
+
+    // The daemon's worktree, its branch, and its in-progress build state are untouched.
+    expect(await pathExists(daemonPath)).toBe(true);
+    expect(await git(['rev-parse', 'HEAD'], daemonPath)).toBe(daemonHeadBefore);
+    expect(await git(['status', '--porcelain'], daemonPath)).toBe(daemonStatusBefore);
+    expect(await git(['rev-parse', '--abbrev-ref', 'HEAD'], daemonPath)).toBe('feat/daemon-shipping-thing');
+    // …and the primary tree is byte-equal.
+    const primaryAfter = await snapshot(repo);
+    expect(primaryAfter.head).toBe(primaryBefore.head);
+    expect(primaryAfter.status).toBe(primaryBefore.status);
+  });
 });
 
 // ── FR-10: sibling repos untouched ──────────────────────────────────────────────

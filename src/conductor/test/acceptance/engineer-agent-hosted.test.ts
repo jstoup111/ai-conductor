@@ -528,6 +528,37 @@ describe('dispatchEngineer({kind:"handoff"})', () => {
     expect(await git(['rev-parse', '--verify', branch], repoPath)).toMatch(/^[0-9a-f]{40}$/);
   });
 
+  it('handoff PR-open failure (no URL) KEEPS the worktree and reports its path (FR-6)', async () => {
+    const idea = 'kept idea';
+    await writeRegistry([makeRecord(repoPath, 'target-repo', 'https://example.invalid/repo.git')]);
+    const worktree = await worktreeWithDocs(repoPath, idea);
+
+    const { dispatchEngineer } = await import('../../src/engine/engineer-cli.js');
+    const landOut: string[] = [];
+    await dispatchEngineer(
+      { kind: 'land', project: 'target-repo', idea, worktree },
+      { registryPath, print: (s) => landOut.push(s) },
+    );
+    const branch = JSON.parse(landOut.join('')).branch;
+
+    // gh "succeeds" but returns NO PR URL → openSpecPr throws (not a no-remote skip),
+    // so the handoff fails: the worktree must be KEPT for inspection (FR-6).
+    const noUrlGh = async () => ({ stdout: 'created but no url here\n' });
+    const out: string[] = [];
+    const err: string[] = [];
+    const code = await dispatchEngineer(
+      { kind: 'handoff', project: 'target-repo', branch, worktree },
+      { registryPath, engineerDir, gh: noUrlGh, print: (s) => out.push(s), printErr: (s) => err.push(s) },
+    );
+    expect(code).toBe(0); // non-fatal: work preserved on the branch
+    const result = JSON.parse(out.join(''));
+    expect(result.kind).toBe('local-commit');
+    // Keep-on-failure: the worktree survives and its path is reported.
+    expect(await pathExists(worktree)).toBe(true);
+    expect(result.worktreePath).toBe(worktree);
+    expect(err.join('')).toMatch(/worktree kept for inspection/i);
+  });
+
   it('unknown project → prints error to stderr, returns 1', async () => {
     await writeFile(registryPath, JSON.stringify([]), 'utf-8');
     const { dispatchEngineer } = await import('../../src/engine/engineer-cli.js');
