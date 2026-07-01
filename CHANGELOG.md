@@ -12,12 +12,22 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
-- Design spec (PRD + full DECIDE set) for **daemon owner-gating**: the autonomous spec-build daemon
-  will build only merged specs owned by the configured operator — skipping (and logging) specs owned
-  by others, with strict handling of un-owned specs and a grandfather cutover for pre-existing work.
-  Owner is a configured identity (gh-login fallback is local-dev only); identity/provenance seams
-  keep it forward-compatible with a platform-provided (EKS) identity. Implementation follows in this
-  branch. (`.docs/specs/2026-06-30-daemon-owner-gate.md`, 3 ADRs, 19-task plan.)
+- **Daemon owner-gating: the autonomous spec-build daemon now builds only the merged specs it
+  owns.** Each discovery pass resolves the daemon's operator identity (configured `spec_owner` wins,
+  else the `gh` login, else unresolved → fail-open) and, for every content-eligible spec, reads the
+  owner stamp committed in its intake marker (`.docs/intake/<slug>.md`, an `Owner:` line the
+  engineer `land` flow writes). A spec owned by another operator is **skipped and logged** with a
+  distinct ownership line; a spec matching the daemon owner builds. Un-owned (unstamped) specs are
+  gated by a **grandfather cutover** (`owner_gate_cutover`): merged strictly before the cutover →
+  grandfather-built, on/after (or an indeterminate merge time) → skipped. When the owner cannot be
+  resolved the gate is inactive (builds everything, one warn-once line per pass), so nothing regresses
+  for an unconfigured solo setup. New `spec_owner` and `owner_gate_cutover` config fields — a
+  malformed cutover is **rejected at config load** (never silently defaulted, so an un-owned spec is
+  never misclassified); a missing cutover means no grandfather window. The gate runs strictly after
+  the existing content filters and after `isProcessed`, so eligibility and idempotency are unchanged.
+  Owner is a configured identity (the gh-login fallback is local-dev only); the identity/provenance
+  seams keep it forward-compatible with a platform-provided (EKS) identity.
+  (`src/engine/owner-gate/`, `.docs/specs/2026-06-30-daemon-owner-gate.md`, 3 ADRs.)
 - **`conduct render-diagrams --check <file>...` syntax-checks Mermaid blocks at authoring time.**
   It parse-checks every diagram (rendering each with `mmdc` but not opening it) and **exits
   non-zero on a syntax error**, printing the file, block index, and parse-error line. Unlike the
