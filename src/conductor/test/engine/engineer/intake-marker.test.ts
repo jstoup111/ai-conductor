@@ -203,18 +203,21 @@ describe('landSpec intake marker (FR-1)', () => {
 });
 
 describe('landSpec owner stamp (FR-4 — every land path, incl. no-remote/local-commit)', () => {
-  async function seedDocs() {
-    await mkdir(join(repoPath, '.docs', 'specs'), { recursive: true });
-    await mkdir(join(repoPath, '.docs', 'stories'), { recursive: true });
-    await mkdir(join(repoPath, '.docs', 'plans'), { recursive: true });
-    await writeFile(join(repoPath, '.docs', 'specs', 'dep-bump.md'), '# PRD: dep bump\n\nApproved.\n');
-    await writeFile(join(repoPath, '.docs', 'stories', 'dep-bump.md'), ACCEPTED_STORIES);
-    await writeFile(join(repoPath, '.docs', 'plans', 'dep-bump.md'), PLAN_WITH_DEPS);
+  /** Create the per-idea worktree and seed real .docs into it; returns worktreePath. */
+  async function seedWorktree(): Promise<string> {
+    const wt = await createEngineerWorktree(repoPath, 'dep bump');
+    await mkdir(join(wt.worktreePath, '.docs', 'specs'), { recursive: true });
+    await mkdir(join(wt.worktreePath, '.docs', 'stories'), { recursive: true });
+    await mkdir(join(wt.worktreePath, '.docs', 'plans'), { recursive: true });
+    await writeFile(join(wt.worktreePath, '.docs', 'specs', 'dep-bump.md'), '# PRD: dep bump\n\nApproved.\n');
+    await writeFile(join(wt.worktreePath, '.docs', 'stories', 'dep-bump.md'), ACCEPTED_STORIES);
+    await writeFile(join(wt.worktreePath, '.docs', 'plans', 'dep-bump.md'), PLAN_WITH_DEPS);
+    return wt.worktreePath;
   }
 
   it('stamps Owner from the configured spec_owner on the (local-commit / no-remote) land path', async () => {
-    await seedDocs();
-    const result = await landSpec(target(), 'dep bump', 'acme/app#7', {
+    const worktree = await seedWorktree();
+    const result = await landSpec(target(), 'dep bump', worktree, 'acme/app#7', {
       ownerConfig: { spec_owner: 'Alice' },
     });
     const marker = await showOnBranch(result.branch, `.docs/intake/${result.slug}.md`);
@@ -223,8 +226,8 @@ describe('landSpec owner stamp (FR-4 — every land path, incl. no-remote/local-
   });
 
   it('stamps Owner even without a sourceRef (owner-only marker still committed)', async () => {
-    await seedDocs();
-    const result = await landSpec(target(), 'dep bump', undefined, {
+    const worktree = await seedWorktree();
+    const result = await landSpec(target(), 'dep bump', worktree, undefined, {
       ownerConfig: { spec_owner: 'alice' },
     });
     const marker = await showOnBranch(result.branch, `.docs/intake/${result.slug}.md`);
@@ -233,19 +236,19 @@ describe('landSpec owner stamp (FR-4 — every land path, incl. no-remote/local-
   });
 
   it('resolves via gh login when spec_owner is unconfigured', async () => {
-    await seedDocs();
+    const worktree = await seedWorktree();
     const gh: GhRunner = async () => ({ stdout: 'bob\n' });
-    const result = await landSpec(target(), 'dep bump', 'acme/app#7', { gh });
+    const result = await landSpec(target(), 'dep bump', worktree, 'acme/app#7', { gh });
     const marker = await showOnBranch(result.branch, `.docs/intake/${result.slug}.md`);
     expect(marker).toContain('Owner: bob');
   });
 
   it('OMITS Owner (un-owned, NOT blank/false) when the owner is unresolved', async () => {
-    await seedDocs();
+    const worktree = await seedWorktree();
     const failingGh: GhRunner = async () => {
       throw new Error('gh unavailable');
     };
-    const result = await landSpec(target(), 'dep bump', 'acme/app#7', { gh: failingGh });
+    const result = await landSpec(target(), 'dep bump', worktree, 'acme/app#7', { gh: failingGh });
     const marker = await showOnBranch(result.branch, `.docs/intake/${result.slug}.md`);
     expect(marker).toContain('Source-Ref: acme/app#7');
     expect(marker ?? '').not.toContain('Owner:');
