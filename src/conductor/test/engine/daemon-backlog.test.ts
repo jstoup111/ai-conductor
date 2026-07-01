@@ -364,4 +364,58 @@ describe('engine/daemon-backlog — owner-gate integration', () => {
     });
     expect(backlog).toEqual([{ slug: 'feature-a' }]);
   });
+
+  // Task 12 — gate wired after content filters (FR-5/6/7).
+  it('Task 12: a spec stamped with the daemon owner is pushed', async () => {
+    await writeSpec('mine');
+    const backlog = await discoverBacklog(dir, undefined, undefined, {
+      treeSource: fsSource(dir),
+      daemonOwner: { resolved: true, id: 'alice' },
+      readStamp: async () => ({ present: true as const, id: 'alice' }),
+      readMergeTime: async () => null,
+      cutover: null,
+    });
+    expect(backlog.map((b) => b.slug)).toEqual(['mine']);
+  });
+
+  it('Task 12: an other-owner spec is NOT pushed and logs a distinct ownership skip', async () => {
+    await writeSpec('theirs');
+    const logs: string[] = [];
+    const backlog = await discoverBacklog(dir, undefined, (m) => logs.push(m), {
+      treeSource: fsSource(dir),
+      daemonOwner: { resolved: true, id: 'alice' },
+      readStamp: async () => ({ present: true as const, id: 'bob' }),
+      readMergeTime: async () => null,
+      cutover: null,
+    });
+    expect(backlog).toEqual([]);
+    // Distinct from content-skip wording ("cannot build — …") and gate-inactive.
+    const line = logs.find((l) => /theirs/.test(l));
+    expect(line).toBeDefined();
+    expect(line).toMatch(/bob/); // names the other owner
+    expect(line).toMatch(/owner/i);
+    expect(line).not.toMatch(/cannot build/);
+  });
+
+  it('Task 12: a content-ineligible spec is skipped for the content reason (gate never reached)', async () => {
+    // Stories are DRAFT → content filter rejects BEFORE the gate. Even though the
+    // stamp is other-owner, the log must cite the content reason, and readStamp is
+    // never consulted.
+    await writeSpec('draft-and-theirs', '# Stories\n**Status:** DRAFT\n');
+    const logs: string[] = [];
+    let stampCalls = 0;
+    const backlog = await discoverBacklog(dir, undefined, (m) => logs.push(m), {
+      treeSource: fsSource(dir),
+      daemonOwner: { resolved: true, id: 'alice' },
+      readStamp: async () => {
+        stampCalls += 1;
+        return { present: true as const, id: 'bob' };
+      },
+      readMergeTime: async () => null,
+      cutover: null,
+    });
+    expect(backlog).toEqual([]);
+    expect(stampCalls).toBe(0); // gate never reached
+    expect(logs.join('\n')).toMatch(/draft-and-theirs.*not approved/i);
+  });
 });
