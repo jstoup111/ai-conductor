@@ -466,4 +466,34 @@ describe('engine/daemon-backlog — owner-gate integration', () => {
     expect(backlog).toEqual([]);
     expect(stampCalls).toBe(0); // gate sits AFTER isProcessed
   });
+
+  // Task 14 — fail-open + warn-once (FR-3, FR-11).
+  it('Task 14: an unresolved owner builds every content-eligible spec (incl. other-owner) with exactly one gate-inactive warn', async () => {
+    await writeSpec('one');
+    await writeSpec('two');
+    const logs: string[] = [];
+    const backlog = await discoverBacklog(dir, undefined, (m) => logs.push(m), {
+      treeSource: fsSource(dir),
+      daemonOwner: { resolved: false },
+      // Even an other-owner stamp must NOT gate anything out when unresolved.
+      readStamp: async () => ({ present: true as const, id: 'bob' }),
+      readMergeTime: async () => null,
+      cutover: null,
+    });
+    expect(backlog.map((b) => b.slug).sort()).toEqual(['one', 'two']);
+    const inactive = logs.filter((l) => /gate inactive/i.test(l));
+    expect(inactive).toHaveLength(1); // warn-once per pass, not per-spec
+    // Distinct from content-skip and ownership-skip wording.
+    expect(inactive[0]).not.toMatch(/cannot build/);
+  });
+
+  it('Task 14: an absent daemonOwner emits NO gate log (legacy behavior)', async () => {
+    await writeSpec('legacy-a');
+    const logs: string[] = [];
+    const backlog = await discoverBacklog(dir, undefined, (m) => logs.push(m), {
+      treeSource: fsSource(dir),
+    });
+    expect(backlog.map((b) => b.slug)).toEqual(['legacy-a']);
+    expect(logs.filter((l) => /gate inactive/i.test(l))).toHaveLength(0);
+  });
 });

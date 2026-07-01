@@ -242,6 +242,21 @@ export async function discoverBacklog(
     await opts.markWarned?.(slug);
   };
 
+  // Fail-open notice (FR-3): when a `daemonOwner` is supplied but UNRESOLVED, the
+  // gate is inactive and every content-eligible spec builds. Surface that exactly
+  // ONCE per pass (not per-spec) so the operator knows gating is off, without log
+  // spam. Pass-local (reset every discovery) and distinct from the per-slug
+  // content/ownership skip lines. An ABSENT `daemonOwner` stays silent (legacy).
+  let gateInactiveWarned = false;
+  const warnGateInactiveOnce = (): void => {
+    if (gateInactiveWarned) return;
+    gateInactiveWarned = true;
+    log(
+      'owner-gate inactive: daemon owner unresolved (no configured spec_owner and ' +
+        'no gh login) — building all content-eligible specs this pass (fail-open); logged once.',
+    );
+  };
+
   const planFiles = (await tree.listPlanFiles()).filter((f) => f.endsWith('.md'));
   if (planFiles.length === 0) return [];
 
@@ -311,6 +326,9 @@ export async function discoverBacklog(
         await warnOnce(slug, ownershipSkipMessage(slug, decision));
         continue;
       }
+    } else if (daemonOwner) {
+      // Supplied but unresolved → fail-open: build all, warn once per pass.
+      warnGateInactiveOnce();
     }
 
     // A fresh worktree is cut from the (now fast-forwarded) default branch, so the
