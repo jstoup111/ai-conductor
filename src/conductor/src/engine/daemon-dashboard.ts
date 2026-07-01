@@ -1,5 +1,6 @@
 import { readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
+import { HALT_MARKER } from './halt-marker.js';
 import type { BacklogItem } from './daemon.js';
 import { ALL_STEPS } from './steps.js';
 import type { ComplexityTier, StepStatus } from '../types/index.js';
@@ -203,7 +204,7 @@ export async function scanInheritedState(
   for (const slug of slugs) {
     try {
       const wt = join(deps.worktreeBase, slug);
-      const haltPath = join(wt, '.pipeline/HALT');
+      const haltPath = join(wt, HALT_MARKER);
       let haltContent: string | null = null;
       try {
         haltContent = await readFile(haltPath, 'utf-8');
