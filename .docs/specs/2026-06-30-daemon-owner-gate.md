@@ -21,6 +21,15 @@ collaborator's specs for the collaborator's own daemon. This matters now because
 repo has moved from single-operator to multi-contributor, and the daemon currently has no way to
 tell the two apart.
 
+**Deployment context.** The daemon is intended to run in an **isolated, remote environment (e.g.
+EKS)**, not only on a trusted local machine. That shifts the trust root over time: today ownership
+can be a value the operator configures and specs carry as committed text, but in a remote
+multi-tenant deployment the authoritative identity is more likely **platform-provided** (a service
+identity / OIDC), and committed text is no longer something to trust blindly. This feature is scoped
+to the cooperative, single-operator-plus-collaborator case **now**, but its ownership model must be
+designed so a stronger, platform-provided identity can replace the trust root **later without
+reworking the gate**.
+
 ## Goals & Non-Goals
 
 **Goals**
@@ -31,11 +40,17 @@ tell the two apart.
   no coordination beyond each configuring their own identity.
 - Work already merged before this feature activates **keeps building** with no manual
   intervention (no flag day for in-flight work).
+- The ownership model is **forward-compatible with a platform-provided identity** for an isolated
+  (EKS) deployment — a stronger trust root can be substituted later without changing the gate's
+  observable build/skip behavior.
 
 **Non-Goals**
-- **Forgery resistance.** Ownership is a cooperative coordination signal, not an authentication
-  mechanism. A contributor who records the operator's identity onto their own spec will still be
-  built. Defending against a deliberately impersonated owner is out of scope.
+- **Forgery-resistant / cryptographic ownership is not built in this iteration.** Ownership starts
+  as a cooperative signal: a contributor who records the operator's identity onto their own spec
+  would still be built today. This is a **deferred capability, not a dismissed one** — the design
+  must keep the gate's behavior decoupled from *how* identity is proven so a platform-provided,
+  harder-to-forge identity (see NFRs / Open Questions) can supersede committed-text trust in the
+  EKS deployment. What is out of scope is *implementing* that cryptographic verification now.
 - **Changing the GitHub-issue intake queue.** Issue intake already filters to the operator
   (assignee-based) and is a separate surface; this feature does not touch it.
 - **Team / shared ownership.** Each daemon builds for exactly one owner identity. Group ownership,
@@ -78,6 +93,10 @@ tell the two apart.
   accepted."
 - **FR-12:** Owner comparison **tolerates trivial formatting differences** (case, surrounding
   whitespace) so an operator is never falsely locked out of their own spec by a cosmetic mismatch.
+- **FR-13:** Ownership of a spec can be **transferred** by re-recording its owner. After transfer,
+  the spec is eligible under the **new** owner's daemon and is skipped by the previous owner's.
+- **FR-14:** An operator can **change their daemon's configured owner identity**; subsequent
+  discovery passes gate against the current identity, not the one in effect when the daemon started.
 
 ## Non-Functional Requirements
 
@@ -88,6 +107,13 @@ tell the two apart.
   headless and cron runs** (it does not depend on ambient GitHub auth).
 - **Observability:** **Every** gating decision (build / skip-other-owner / skip-unowned /
   gate-inactive) is visible in the daemon log.
+- **Deployment target:** the gate must function in an **isolated, remote deployment (EKS)**, not
+  only on a trusted local machine. Assumptions about a trusted local filesystem or the operator's
+  ambient GitHub auth are **provisional**, not permanent trust roots.
+- **Forward-compatible identity & provenance:** owner *resolution* (who this daemon is) and the
+  *ownership signal* on a spec (who owns it) must be **replaceable by a stronger, platform-provided
+  identity** without changing the gate's observable behavior contract (its build/skip decisions).
+  Committed-text ownership is the initial cooperative implementation, not a permanent design choice.
 
 ## Acceptance Criteria / Success Metrics
 
@@ -107,12 +133,17 @@ tell the two apart.
 - Owner identity for a daemon (configured, with gh fallback).
 - Recording an owner onto specs authored via the engineer flow.
 - The gating decision inside the daemon's autonomous spec discovery, with grandfather cutover.
+- Ownership transfer by re-recording, and changing a daemon's configured identity (FR-13/FR-14).
 - Distinct, visible logging of every gating outcome.
+- A **behavior contract** for the gate that keeps identity *resolution* and *provenance* swappable,
+  so a platform-provided identity can be introduced later without changing build/skip semantics.
 
 ### Out of Scope
 - The GitHub-issue intake queue (already operator-filtered).
-- Any anti-forgery / cryptographic ownership.
+- *Building* anti-forgery / cryptographic ownership in this iteration (the seam for a
+  platform-provided identity is kept open — see NFRs; the verification itself is future work).
 - Team / multi-owner ownership.
+- Fully specifying rotation **mid-flight** semantics (captured as an Open Question).
 - Gating manual or interactive builds.
 - Retroactively stamping (backfilling) historical specs — the grandfather cutover replaces the
   need for a backfill.
@@ -131,9 +162,12 @@ tell the two apart.
 - **Grandfather a cutover, not a backfill.** Avoids a migration that rewrites historical specs;
   pre-cutover work is trusted as the operator's by construction, since before this feature there
   was only one operator.
-- **Coordination, not authentication.** The owner signal is committed text the contributor writes
-  honestly. This matches the actual threat ("don't accidentally build their real work"), not an
-  adversarial one, and keeps the design small.
+- **Cooperative now, forward-compatible later.** The owner signal starts as committed text the
+  contributor writes honestly — this matches the immediate threat ("don't accidentally build their
+  real work") and keeps the design small. Crucially, the gate's build/skip *behavior* is kept
+  decoupled from *how* identity is proven, so an isolated/EKS deployment can substitute a
+  platform-provided (harder-to-forge) identity as the trust root without reworking the gate. We
+  explicitly avoid building cryptographic ownership in this iteration, but avoid foreclosing it.
 
 ## Dependencies
 
@@ -152,3 +186,11 @@ tell the two apart.
   context? Current PRD assumes fail-open for backward compatibility — confirm acceptable.
 - **Where the owner is recorded** on a spec (reuse the existing per-spec intake marker vs. a
   dedicated field/artifact) is an implementation detail deferred to architecture-review.
+- **Ownership rotation mid-flight (FR-13/FR-14):** if a spec's owner (or the daemon's own configured
+  identity) changes **while that spec is partially built** — already in the processed set, or mid-run
+  — what is the correct behavior (leave built work alone / re-evaluate / hand off)? Edge case, needs
+  a decision before implementation.
+- **Isolated/EKS identity source (forward-compat NFR):** what is the authoritative operator identity
+  in a remote deployment (platform service identity, OIDC, etc.), and how does it supersede the
+  local configured/gh model without changing the gate's behavior contract? Belongs to
+  architecture-review; not implemented now, but the seam for it is a design requirement.
