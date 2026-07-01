@@ -72,14 +72,24 @@ Agent prompt templates are in `agents/`. Skills define *what* to do; agents defi
 Use the cheapest model that can do the job. Opus for reasoning-heavy work, Sonnet for
 standard implementation, Haiku for mechanical checks.
 
+**Two enforcement paths — keep them in sync:**
+- **Autonomous (daemon/conductor):** `DEFAULT_STEP_MODELS` / `DEFAULT_STEP_EFFORT` /
+  `DEFAULT_STEP_TIER_OVERRIDES` in `src/conductor/src/engine/resolved-config.ts` are the
+  source of truth. Tier-varying rows (e.g. `opus (L)`) live in `DEFAULT_STEP_TIER_OVERRIDES`.
+- **Interactive (Skill tool / phone):** opus-tier skills pin `model: opus` in their SKILL.md
+  frontmatter so a Sonnet/Haiku session still runs them on the right model. Sonnet/haiku and
+  tier-varying skills inherit from the engine or the session.
+
+This table is the human-readable mirror of both. When you change one, change all three.
+
 | Skill/Agent | Recommended Model | Why |
 |---|---|---|
 | engineer | opus | Interactive idea→spec control plane: routing judgment over the registry + driving the real DECIDE skills requires deep reasoning |
-| explore | sonnet | Interactive divergent Q&A + approach trade-offs + product/technical track decision — operator in the loop |
+| explore | opus | Divergent discovery: approach trade-offs + product/technical track classification. Front-of-funnel — a cheap model's mistake here cascades into every downstream phase |
 | prd | opus | Product-only PRD authoring: requirements + FRs, deep trade-off reasoning |
 | stories | sonnet | Pattern-following from design doc, structured output |
-| conflict-check | sonnet (S/M), opus (L) | Pairwise comparison is manageable for Sonnet with ≤15 stories; Large needs Opus for subtle contradictions |
-| plan | sonnet | Structured task breakdown from stories |
+| conflict-check | sonnet (S/M), opus (L) | Pairwise comparison is manageable for Sonnet with ≤15 stories; Large needs Opus for subtle contradictions. **Enforced** via `DEFAULT_STEP_TIER_OVERRIDES.conflict_check.L` |
+| plan | sonnet (S/M), opus (L) | Structured task breakdown from stories; Large plans need Opus for task sequencing/dependency reasoning at scale. **Enforced** via `DEFAULT_STEP_TIER_OVERRIDES.plan.L` |
 | architecture-diagram | sonnet | Structured output generation from codebase scan — pattern-following |
 | architecture-review | opus | Feasibility, alignment, domain integrity — deep architectural reasoning. The SHIP `--as-built` compliance mode is lighter (code vs APPROVED ADRs) and runs on **sonnet**. |
 | writing-system-tests | sonnet | Generating specs from acceptance criteria — templated work |
@@ -99,7 +109,7 @@ standard implementation, Haiku for mechanical checks.
 | retro | sonnet | Structured analysis from concrete data; Part C (context efficiency) is checklist-based |
 | pr | sonnet | Diff analysis and structured PR body — templated output |
 | bootstrap | sonnet | Detection and scaffolding — largely mechanical |
-| assess | haiku | Dispatches specialists then synthesizes — orchestration is mechanical |
+| assess | sonnet (dispatcher), opus (cto-orchestrator synthesis) | The assess skill dispatches 9 specialists and drives structure verification (sonnet); the final cross-referencing of all 9 reports is the `cto-orchestrator` agent on opus |
 | conduct | haiku | Artifact checking and status reporting — mechanical |
 | memory | haiku | Read/write files, update index — mechanical |
 | worktree-manager | haiku | Git operations — mechanical branch/worktree management |

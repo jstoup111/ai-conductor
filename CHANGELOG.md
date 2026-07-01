@@ -49,6 +49,14 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- **Hardcoded per-step tier overrides now affect `model`, not just `effort`/`max_retries`.**
+  `DEFAULT_STEP_TIER_OVERRIDES` model bumps were silently ignored — the model resolution chain in
+  `resolveStepConfig` omitted `hardcodedStepTier`. As a result HARNESS.md's promised
+  `conflict-check: sonnet (S/M), opus (L)` never took effect and Large projects ran conflict-check
+  on sonnet regardless. Added `hardcodedStepTier?.model` to the model chain and defined
+  `conflict_check.L → opus` and `plan.L → opus` (plan.L also keeps effort xhigh). Locked with
+  regression tests in `resolved-config.test.ts`.
+
 - **PR/issue label mutations no longer fail on GitHub's Projects (classic) sunset.**
   `gh pr edit --add-label/--remove-label` and `gh issue edit --add-label/--remove-label`
   resolve label names against repo metadata via a GraphQL query that pulls Projects (classic)
@@ -92,6 +100,24 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   happened to create them, leaving bootstrap's directory list out of parity with the engine.
 
 ### Changed
+
+- **Model selection right-sized at the front of the funnel.** `explore` now defaults to
+  **opus / xhigh** (was sonnet / high), `bootstrap` and `complexity` to **sonnet** (were haiku),
+  and `assess` to **sonnet** (was haiku; the `cto-orchestrator` synthesis stays opus). Rationale:
+  these steps sit upstream — a cheap model's mistake in divergent discovery (`explore`), tier
+  assignment (`complexity`), or the project `CLAUDE.md` (`bootstrap`) cascades into every
+  downstream phase. Defaults live in `DEFAULT_STEP_MODELS`/`DEFAULT_STEP_EFFORT`
+  (`src/conductor/src/engine/resolved-config.ts`).
+- **opus-tier skills now pin `model: opus` in SKILL.md frontmatter** (`explore`, `prd`,
+  `debugging`, `code-review`) so interactive/phone invocation on a Sonnet/Haiku session still runs
+  them on the right model — previously only the autonomous daemon path enforced the model. `assess`
+  frontmatter corrected haiku → sonnet.
+- **`tdd` GREEN escalates to `/debugging` on opus instead of thrashing.** When a test won't go
+  green after a bounded attempt (or the change breaks other tests with a non-obvious cause), the
+  Sonnet generator stops and dispatches the debugging protocol in a fresh opus sub-session with
+  the failing test, diff, and failure output.
+- HARNESS.md model table reconciled with the engine defaults, with a new note documenting the two
+  enforcement paths (autonomous engine defaults vs. interactive frontmatter) to prevent drift.
 
 - `writing-system-tests` skill is now language- and framework-agnostic. Replaced the
   Rails/RSpec-only mechanics (hardcoded `spec/integration`/`spec/system` paths, `config/routes.rb`,
