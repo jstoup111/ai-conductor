@@ -1,6 +1,7 @@
 import { execa } from 'execa';
 import { mkdir, writeFile, readFile, access, stat } from 'node:fs/promises';
 import { basename, join } from 'node:path';
+import { HALT_MARKER } from './halt-marker.js';
 import type { BacklogItem } from './daemon.js';
 import type { LLMProvider } from '../execution/llm-provider.js';
 import type {
@@ -207,13 +208,13 @@ export async function markWarned(projectRoot: string, slug: string): Promise<voi
  * (`<worktreeBase>/<slug>`), not a re-derived `.worktrees`.
  */
 export async function isHalted(worktreeBase: string, slug: string): Promise<boolean> {
-  return exists(join(worktreeBase, slug, '.pipeline/HALT'));
+  return exists(join(worktreeBase, slug, HALT_MARKER));
 }
 
 /** Read the loop outcome from a worktree's `.pipeline` markers. */
 export async function readWorktreeOutcome(worktreePath: string): Promise<WorktreeOutcome> {
   const done = await exists(join(worktreePath, '.pipeline/DONE'));
-  const haltPath = join(worktreePath, '.pipeline/HALT');
+  const haltPath = join(worktreePath, HALT_MARKER);
   const halted = await exists(haltPath);
 
   let reason: string | undefined;

@@ -158,6 +158,10 @@ export function validateConfig(
     // Owner-gate (adr-2026-06-30-*): operator identity + grandfather cutover.
     'spec_owner',
     'owner_gate_cutover',
+    // Rebase auto-resolution attempt cap (rebase-resolution-skill).
+    'rebase_resolution_attempts',
+    // Self-host guardrails (adr-2026-06-30-self-host-detection-seam).
+    'harness_self_host',
   ]);
   for (const key of Object.keys(obj)) {
     if (!knownTopLevelKeys.has(key)) {
@@ -455,7 +459,53 @@ export function validateConfig(
     }
   }
 
+  // harness_self_host — self-host guardrail activation override + per-gate
+  // toggles (adr-2026-06-30-self-host-detection-seam / TR-11). Absent → safe
+  // default (auto-detect, all gates on) applied by resolveSelfHostConfig.
+  if (obj.harness_self_host !== undefined) {
+    const err = validateSelfHostBlock(obj.harness_self_host);
+    if (err) return { ok: false, error: err };
+  }
+
   return { ok: true, config: obj as HarnessConfig, warnings };
+}
+
+const SELF_HOST_ACTIVATIONS = new Set(['auto', 'force_on', 'force_off']);
+const SELF_HOST_GATE_KEYS = [
+  'skill_relink_preflight',
+  'sandbox_build_env',
+  'version_approval_gate',
+  'release_artifact_gate',
+];
+
+function validateSelfHostBlock(raw: unknown): ConfigError | null {
+  if (!isPlainObject(raw)) {
+    return { type: 'validation_error', message: 'harness_self_host must be an object' };
+  }
+  const obj = raw as Record<string, unknown>;
+  const allowed = new Set(['activation', ...SELF_HOST_GATE_KEYS]);
+  for (const k of Object.keys(obj)) {
+    // Reject unknown keys so a typo'd gate name surfaces instead of silently
+    // leaving that gate at its (enabled) default — TR-11 negative path.
+    if (!allowed.has(k)) {
+      return { type: 'validation_error', message: `Unknown key in harness_self_host: "${k}"` };
+    }
+  }
+  if (obj.activation !== undefined && !SELF_HOST_ACTIVATIONS.has(obj.activation as string)) {
+    return {
+      type: 'validation_error',
+      message: 'harness_self_host.activation must be auto | force_on | force_off',
+    };
+  }
+  for (const k of SELF_HOST_GATE_KEYS) {
+    if (obj[k] !== undefined && typeof obj[k] !== 'boolean') {
+      return {
+        type: 'validation_error',
+        message: `harness_self_host.${k} must be a boolean`,
+      };
+    }
+  }
+  return null;
 }
 
 function validateConductorBlock(raw: unknown): ConfigError | null {

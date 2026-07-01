@@ -11,8 +11,12 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
+import { mkdtemp, rm, mkdir, writeFile, chmod } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import {
   ensureInstallFresh,
+  relinkSkillsForSelfBuild,
   InstallStaleError,
   type InstallRunner,
 } from '../../src/engine/install-freshness.js';
@@ -93,6 +97,72 @@ describe('ensureInstallFresh — staleness policy', () => {
       ensureInstallFresh({ harnessRoot: null, runner, interactive: false, log: () => {} }),
     ).resolves.toBeUndefined();
     expect(calls).toEqual([]); // runner never invoked
+  });
+});
+
+describe('relinkSkillsForSelfBuild — Phase 2 skill-relink preflight (TR-4)', () => {
+  it('self-build: relinks via `bin/install --update` and resolves (dispatch proceeds)', async () => {
+    const { runner, calls } = makeRunner({ check: 0, update: 0 });
+    await expect(
+      relinkSkillsForSelfBuild({ harnessRoot: HARNESS, runner, log: () => {} }),
+    ).resolves.toBeUndefined();
+    // Relink is a proactive --update (link the merged skill set), NOT a --check.
+    expect(calls).toEqual([['--update']]);
+  });
+
+  it('already fresh: --update is idempotent (still invoked, resolves)', async () => {
+    // bin/install --update re-links identical targets — a no-op when fresh.
+    const { runner, calls } = makeRunner({ check: 0, update: 0 });
+    await relinkSkillsForSelfBuild({ harnessRoot: HARNESS, runner, log: () => {} });
+    expect(calls).toEqual([['--update']]);
+  });
+
+  it('`bin/install --update` non-zero → InstallStaleError, build NOT dispatched', async () => {
+    const { runner } = makeRunner({ check: 0, update: 3 });
+    await expect(
+      relinkSkillsForSelfBuild({ harnessRoot: HARNESS, runner, log: () => {} }),
+    ).rejects.toBeInstanceOf(InstallStaleError);
+  });
+
+  it('null harness root → no relink attempt (runner never called), reports unresolved', async () => {
+    const { runner, calls } = makeRunner({ check: 0, update: 0 });
+    const logs: string[] = [];
+    await expect(
+      relinkSkillsForSelfBuild({ harnessRoot: null, runner, log: (m) => logs.push(m) }),
+    ).resolves.toBeUndefined();
+    expect(calls).toEqual([]); // never linked against a null root
+    expect(logs.join('\n')).toMatch(/unresolved|could not|skip/i);
+  });
+
+  it('missing bin/install → keyed error naming the installer path (not opaque spawn error)', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'relink-noinstaller-'));
+    try {
+      // No runner injected → the real installer-existence check runs.
+      const err = await relinkSkillsForSelfBuild({ harnessRoot: dir, log: () => {} }).catch(
+        (e) => e,
+      );
+      expect(err).toBeInstanceOf(InstallStaleError);
+      expect((err as Error).message).toContain(join(dir, 'bin', 'install'));
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('non-executable bin/install → keyed error naming the installer path', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'relink-noexec-'));
+    try {
+      await mkdir(join(dir, 'bin'), { recursive: true });
+      const installer = join(dir, 'bin', 'install');
+      await writeFile(installer, '#!/usr/bin/env bash\n');
+      await chmod(installer, 0o644); // present but not executable
+      const err = await relinkSkillsForSelfBuild({ harnessRoot: dir, log: () => {} }).catch(
+        (e) => e,
+      );
+      expect(err).toBeInstanceOf(InstallStaleError);
+      expect((err as Error).message).toContain(installer);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
 

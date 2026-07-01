@@ -12,6 +12,32 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- **Harness self-host guardrail primitives (engine modules; NOT yet wired into the daemon loop).**
+  The `conductor` engine gains a `harness_self_host` config block plus six test-covered modules under
+  `src/engine/self-host/` implementing the DECIDE spec (adr-2026-06-30-{self-host-detection-seam,
+  sandbox-build-isolation, halt-based-release-gates}): `SelfHostDetector` (realpath-based self-build
+  detection + `activation: auto|force_on|force_off` override + a swappable interface seam for a future
+  platform identity), `SkillRelinkPreflight` (relink harness skills via `bin/install --update` before
+  a self-build so a newly added/renamed skill never HALTs on "no parseable result"), `SandboxBuildEnv`
+  (a throwaway `CLAUDE_CONFIG_DIR` whose skills/+hooks/ link into the build worktree, with the
+  operator's `.credentials.json` + a hook-retargeted `settings.json` COPIED in so the headless build
+  can authenticate and fire its OWN edited hooks — the self-build exercises its own edited harness
+  without mutating the global `~/.claude` the operator's concurrent sessions read; fails closed on a
+  missing worktree link target, guaranteed teardown on pass/fail/crash, no-leak invariant), and
+  `VersionApprovalGate`
+  + `ReleaseArtifactGate` (HALT-based, fail-closed VERSION-approval / integrity-suite / CHANGELOG
+  `[Unreleased]` / migration-block gates). Config is safe-by-default: an absent/partial block
+  auto-detects with all gates ON. **These primitives are INERT until wired into `conductor.run()`** —
+  a follow-up PR does the daemon-loop integration, and the harness stays daemon-unregistered until
+  then. Includes a real-binary smoke for the relink and adversarial isolation tests for the sandbox.
+- **Spec + plan: harness daemon self-host guardrails (DECIDE artifacts only; no code yet).** Design,
+  architecture diagrams, 3 APPROVED ADRs, 13 stories (TR-1..TR-13), a clean conflict-check, and a
+  Tier-L implementation plan for making the `james-stoup-agents` harness repo safe to
+  daemon-register: a unified self-host mode (single swappable `SelfHostDetector` seam) that activates
+  a skill-relink preflight, a throwaway-`CLAUDE_CONFIG_DIR` sandbox build (self-verifies edited
+  harness without mutating global `~/.claude`), and HALT-based fail-closed VERSION-approval +
+  CHANGELOG/migration/integrity release gates. Preserves ADR-005/ADR-010 (daemon never merges).
+  Implementation is tracked as a separate build over `.docs/plans/daemon-self-host-guardrails.md`.
 - **Daemon owner-gating: the autonomous spec-build daemon now builds only the merged specs it
   owns.** Each discovery pass resolves the daemon's operator identity (configured `spec_owner` wins,
   else the `gh` login, else unresolved → fail-open) and, for every content-eligible spec, reads the
@@ -89,6 +115,10 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   (dedup hooks unset) still logs at most once per pass, never per-spec. No build/skip decision
   changes. Locked with two cross-scan tests in `daemon-backlog.test.ts`.
 
+- **`rebase_resolution_attempts` is now a recognized top-level config key.** It was present in the
+  `HarnessConfig` type and resolver but missing from `validateConfig`'s known-keys set, so setting it
+  in `config.yml` failed validation with "Unknown top-level key". Surfaced while adding the adjacent
+  `harness_self_host` key.
 - **Hardcoded per-step tier overrides now affect `model`, not just `effort`/`max_retries`.**
   `DEFAULT_STEP_TIER_OVERRIDES` model bumps were silently ignored — the model resolution chain in
   `resolveStepConfig` omitted `hardcodedStepTier`. As a result HARNESS.md's promised
@@ -140,6 +170,13 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   happened to create them, leaving bootstrap's directory list out of parity with the engine.
 
 ### Changed
+
+- **`.pipeline/HALT` marker path + best-effort writer consolidated into one module.** The marker
+  literal was independently spelled in `conductor.ts`, `rebase.ts`, `daemon-deps.ts`,
+  `daemon-dashboard.ts`, `daemon-rekick.ts`, and the new self-host `gate-halt.ts`, and the
+  mkdir-then-write plumbing was duplicated between the rebase HALT and the self-host HALT. Both now
+  live in `engine/halt-marker.ts` (`HALT_MARKER` + `writeHaltMarker`), so a change to where the
+  daemon-stop marker lives or how it is written happens in exactly one place. No behavior change.
 
 - **Model selection right-sized at the front of the funnel.** `explore` now defaults to
   **opus / xhigh** (was sonnet / high), `bootstrap` and `complexity` to **sonnet** (were haiku),

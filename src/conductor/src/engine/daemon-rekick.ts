@@ -1,5 +1,6 @@
 import { readdir, readFile, rename, rm, writeFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
+import { HALT_MARKER } from './halt-marker.js';
 import {
   makeGitRunner,
   rebaseStateActive,
@@ -28,7 +29,8 @@ import type { ConductorEventEmitter } from '../ui/events.js';
 // without git/network/worktree. The real fs/git impls below are wired by the
 // CLI.
 
-export const HALT_MARKER = '.pipeline/HALT';
+// Re-exported for existing importers (the marker's canonical home is halt-marker.ts).
+export { HALT_MARKER };
 export const HALT_CLEARED_MARKER = '.pipeline/HALT.cleared';
 export const REKICK_SENTINEL = '.pipeline/REKICK';
 

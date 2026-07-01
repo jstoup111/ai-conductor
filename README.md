@@ -385,6 +385,20 @@ markdown_viewer:
   # args: ["{file}"]
   # mode: inline               # "inline" | "blocking" | "external"
 
+# ── Harness self-host guardrails (conduct-ts only; applies ONLY to a self-build ─
+#    of the james-stoup-agents harness repo — no effect on any other repo) ──────
+# Absent block = the safe default: auto-detect the harness self-build and run all
+# guardrails. See "Harness self-host guardrails" below. (Guardrail modules are
+# present in the engine but not yet wired into the daemon loop — a follow-up
+# change activates them.)
+harness_self_host:
+  activation: auto             # "auto" (path-detect) | "force_on" | "force_off"
+  # Per-gate toggles — omit to leave ENABLED (a partial block never disables a gate):
+  # skill_relink_preflight: true
+  # sandbox_build_env: true
+  # version_approval_gate: true
+  # release_artifact_gate: true
+
 # ── User-level conductor state (lives in ~/.ai-conductor/config.yml) ─────────
 conductor:
   update_channel: tagged       # "tagged" | "main"
@@ -428,6 +442,41 @@ otel:
 
 See `src/conductor/README.md → OpenTelemetry exporter` for the full implementation
 reference.
+
+### Harness self-host guardrails (`conduct-ts` only)
+
+The harness is the one repo the daemon can't build the way it builds every other repo — a self-build
+edits the very skills/hooks it is executing, on a machine whose concurrent Claude sessions all read
+the global `~/.claude/skills`. To make the `james-stoup-agents` harness repo safe to daemon-register,
+a **self-host mode** (configured by the `harness_self_host` block above) activates a guardrail bundle
+**only** for a harness self-build — every other repo's path is unchanged (the only added cost is one
+detector boolean):
+
+- **`SelfHostDetector`** — recognizes a self-build by comparing the build repo's realpath to the
+  harness root (identity is by path, never repo name). `activation: force_on|force_off` overrides it;
+  the detector is a swappable interface, the replacement point for a future platform identity.
+- **`SkillRelinkPreflight`** — relinks harness skills (`bin/install --update`) before dispatch so a
+  self-build that adds or renames a skill never HALTs on "no parseable result" from a stale symlink.
+- **`SandboxBuildEnv`** — runs the self-build against a **throwaway `CLAUDE_CONFIG_DIR`** whose
+  `skills/` + `hooks/` link into the build worktree, so it exercises its *own edited harness* without
+  ever mutating the global `~/.claude` the operator's live sessions read. It also **copies** the
+  operator's `.credentials.json` (so the headless build authenticates) and a `settings.json` whose
+  harness-checkout hook paths are **retargeted to the worktree** (so the build fires its *own* edited
+  hooks). Copies — never symlinks — so no sandbox link resolves to a global-config target. Fails
+  closed if a worktree link target is missing; torn down on pass, fail, or crash.
+- **`VersionApprovalGate` + `ReleaseArtifactGate`** — HALT-based, fail-closed finish gates:
+  VERSION-bump approval, `test/test_harness_integrity.sh`, a non-empty CHANGELOG `[Unreleased]`, and a
+  `## Migration` block for breaking changes. In the daemon's unattended `auto` mode there is no prompt,
+  so any gate that can't self-satisfy writes `.pipeline/HALT` and the PR is not opened.
+
+**The daemon never merges** (ADR-005/ADR-010): every self-build ends at a HALT for the operator to
+re-install, `/verify`, and merge. Config is safe-by-default — an absent or partial `harness_self_host`
+block auto-detects with all gates on.
+
+> **Status:** these guardrail modules ship in the engine (`src/conductor/src/engine/self-host/`) but
+> are **not yet wired into the daemon loop** — a follow-up change activates them at dispatch/finish.
+> The harness stays daemon-unregistered until then. See
+> `src/conductor/README.md → Harness self-host guardrails` for the module reference.
 
 ### Plugins (`conduct-ts` only)
 
