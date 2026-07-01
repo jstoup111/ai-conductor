@@ -158,6 +158,8 @@ export function validateConfig(
     // Owner-gate (adr-2026-06-30-*): operator identity + grandfather cutover.
     'spec_owner',
     'owner_gate_cutover',
+    // Rebase auto-resolution attempt cap (rebase-resolution-skill).
+    'rebase_resolution_attempts',
     // Self-host guardrails (adr-2026-06-30-self-host-detection-seam).
     'harness_self_host',
   ]);

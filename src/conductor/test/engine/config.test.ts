@@ -122,6 +122,11 @@ complexity:
       expect(result.error.message).toContain('steps.memory');
     });
 
+    it('accepts rebase_resolution_attempts as a known top-level key', () => {
+      const result = validateConfig({ rebase_resolution_attempts: 5 });
+      expect(result.ok).toBe(true);
+    });
+
     it('rejects disabling a gating step', () => {
       const result = validateConfig({
         steps: { stories: { disable: true } },
