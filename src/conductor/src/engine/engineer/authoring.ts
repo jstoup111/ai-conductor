@@ -513,7 +513,9 @@ export async function runAuthoring(
 
     // Intake origin marker (no-op when no/invalid sourceRef): persists the
     // originating issue ref WITH the spec so the daemon can close it on merge.
-    await writeIntakeMarker(repoPath, slug, deps.sourceRef, guard);
+    // Owner stamping is landSpec's responsibility (Task 16); the autonomous
+    // authoring path records no owner (un-owned, not blank).
+    await writeIntakeMarker(repoPath, slug, deps.sourceRef, null, guard);
 
     // 3c. Stage and commit all spec artifacts on the spec branch. Staging the
     //     whole `.docs` tree commits exactly the artifacts written above (the

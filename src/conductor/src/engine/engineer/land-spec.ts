@@ -209,7 +209,7 @@ export async function landSpec(
 
     // Persist the intake origin alongside the spec so it survives the spec-PR
     // merge and reaches the daemon. No-op for hand-authored specs (no sourceRef).
-    await writeIntakeMarker(repoPath, slug, sourceRef, guard);
+    await writeIntakeMarker(repoPath, slug, sourceRef, null, guard);
 
     // Stage the whole `.docs` tree: the engineer authors specs/stories/plans +
     // complexity + (non-Small) conflicts/architecture/decisions + (intake) the

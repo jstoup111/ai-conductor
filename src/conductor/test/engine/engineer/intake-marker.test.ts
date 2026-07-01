@@ -12,7 +12,7 @@
 //     and the feature is still discoverable (full backward compatibility)
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, writeFile, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFile as execFileCb } from 'node:child_process';
@@ -108,10 +108,36 @@ describe('parseIntakeSourceRef', () => {
 });
 
 describe('writeIntakeMarker', () => {
-  it('no-ops (returns null, writes nothing) without a valid sourceRef', async () => {
+  it('no-ops (returns null, writes nothing) without a valid sourceRef or owner', async () => {
     expect(await writeIntakeMarker(repoPath, 'slug', undefined)).toBeNull();
     expect(await writeIntakeMarker(repoPath, 'slug', 'garbage')).toBeNull();
     expect(await showOnBranch(defaultBranch, '.docs/intake/slug.md')).toBeNull();
+  });
+
+  it('appends "Owner: <id>" to the marker body when ownerIdentity is present (FR-4)', async () => {
+    const marker = await writeIntakeMarker(repoPath, 'slug', 'acme/app#7', 'alice');
+    expect(marker).not.toBeNull();
+    const body = await readFile(join(repoPath, '.docs', 'intake', 'slug.md'), 'utf8');
+    expect(body).toContain('Source-Ref: acme/app#7');
+    expect(body).toContain('Owner: alice');
+  });
+
+  it('OMITS the Owner line entirely (never blank) when owner is null/blank (FR-12)', async () => {
+    await writeIntakeMarker(repoPath, 'slug', 'acme/app#7', null);
+    const body = await readFile(join(repoPath, '.docs', 'intake', 'slug.md'), 'utf8');
+    expect(body).not.toContain('Owner:');
+
+    await writeIntakeMarker(repoPath, 'slug2', 'acme/app#7', '   ');
+    const body2 = await readFile(join(repoPath, '.docs', 'intake', 'slug2.md'), 'utf8');
+    expect(body2).not.toContain('Owner:');
+  });
+
+  it('writes an owner-only marker when sourceRef is null but owner is present', async () => {
+    const marker = await writeIntakeMarker(repoPath, 'owner-only', null, 'alice');
+    expect(marker).not.toBeNull();
+    const body = await readFile(join(repoPath, '.docs', 'intake', 'owner-only.md'), 'utf8');
+    expect(body).toContain('Owner: alice');
+    expect(body).not.toContain('Source-Ref:');
   });
 });
 
