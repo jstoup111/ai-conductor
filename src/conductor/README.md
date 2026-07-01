@@ -853,6 +853,33 @@ engineer-planned features (store ∩ authored-keys ledger). Registry/store paths
 `$AI_CONDUCTOR_REGISTRY` / `$AI_CONDUCTOR_ENGINEER_DIR`. Acceptance scenarios live in
 `test/acceptance/engineer.test.ts`.
 
+### Harness self-host guardrails (`engine/self-host/`)
+
+The guardrail bundle that makes the `james-stoup-agents` harness repo safe to daemon-register
+(adr-2026-06-30-{self-host-detection-seam, sandbox-build-isolation, halt-based-release-gates}).
+Activated **only** for a harness self-build via a swappable detector; every other repo's path is
+byte-for-byte unchanged (`FR/TR-13`). Configured by the `harness_self_host` block in
+`types/config.ts` (validated in `engine/config.ts`; resolved by `resolveSelfHostConfig` in
+`engine/resolved-config.ts`, safe-by-default → auto-detect, all gates on).
+
+| Module | Responsibility |
+|--------|----------------|
+| `self-host/detector.ts` | `SelfHostDetector` interface + `PathSelfHostDetector` (realpath equality vs `resolveHarnessRoot()`); `classifySelfHost` layers the `activation` override. Identity by path, not name; positive-only activation. |
+| `install-freshness.ts` → `relinkSkillsForSelfBuild` | Relink harness skills (`bin/install --update`) before a self-build; non-zero exit / missing installer → `InstallStaleError`, no dispatch. |
+| `self-host/sandbox-build-env.ts` | Throwaway `CLAUDE_CONFIG_DIR` linked to the worktree; `withSandboxBuildEnv` guarantees teardown on pass/fail/crash; no-leak invariant (no sandbox link resolves to global config); `childEnv()` never mutates the parent env. |
+| `self-host/version-gate.ts` | `VersionApprovalGate` — HALT unless `.pipeline/version-approval` matches VERSION. |
+| `self-host/release-gate.ts` | `ReleaseArtifactGate` — integrity suite (bounded timeout) + CHANGELOG `[Unreleased]` + migration block; all fail-closed, distinct HALT reasons. |
+| `self-host/gate-halt.ts` | `writeSelfHostHalt` — `.pipeline/HALT` with a gate-specific reason + the ADR-005 resume procedure (re-install → `/verify` → operator merges). |
+
+**Non-autonomy (ADR-005/ADR-010):** no self-host module references a merge entry point
+(`test/engine/self-host/non-autonomy.test.ts` asserts this structurally). Every self-build ends at a
+HALT for the operator to merge.
+
+> **Not yet wired.** These modules are complete and unit-tested but the `conductor.run()` integration
+> (compute `isSelfHost` at discovery, run relink+sandbox before build, run the finish gates before the
+> PR opens) lands in a **follow-up PR**. Until then the guardrails are inert and the harness stays
+> daemon-unregistered.
+
 ## Testing pattern
 
 - **Unit tests** live next to the module under test (e.g. `test/engine/autoheal.test.ts`

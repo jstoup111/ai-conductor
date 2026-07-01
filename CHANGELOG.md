@@ -12,6 +12,21 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- **Harness self-host guardrail primitives (engine modules; NOT yet wired into the daemon loop).**
+  The `conductor` engine gains a `harness_self_host` config block plus six test-covered modules under
+  `src/engine/self-host/` implementing the DECIDE spec (adr-2026-06-30-{self-host-detection-seam,
+  sandbox-build-isolation, halt-based-release-gates}): `SelfHostDetector` (realpath-based self-build
+  detection + `activation: auto|force_on|force_off` override + a swappable interface seam for a future
+  platform identity), `SkillRelinkPreflight` (relink harness skills via `bin/install --update` before
+  a self-build so a newly added/renamed skill never HALTs on "no parseable result"), `SandboxBuildEnv`
+  (a throwaway `CLAUDE_CONFIG_DIR` whose skills/+hooks/ link into the build worktree — the self-build
+  exercises its own edited harness without mutating the global `~/.claude` the operator's concurrent
+  sessions read; guaranteed teardown on pass/fail/crash, no-leak invariant), and `VersionApprovalGate`
+  + `ReleaseArtifactGate` (HALT-based, fail-closed VERSION-approval / integrity-suite / CHANGELOG
+  `[Unreleased]` / migration-block gates). Config is safe-by-default: an absent/partial block
+  auto-detects with all gates ON. **These primitives are INERT until wired into `conductor.run()`** —
+  a follow-up PR does the daemon-loop integration, and the harness stays daemon-unregistered until
+  then. Includes a real-binary smoke for the relink and adversarial isolation tests for the sandbox.
 - **Spec + plan: harness daemon self-host guardrails (DECIDE artifacts only; no code yet).** Design,
   architecture diagrams, 3 APPROVED ADRs, 13 stories (TR-1..TR-13), a clean conflict-check, and a
   Tier-L implementation plan for making the `james-stoup-agents` harness repo safe to
@@ -97,6 +112,10 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   (dedup hooks unset) still logs at most once per pass, never per-spec. No build/skip decision
   changes. Locked with two cross-scan tests in `daemon-backlog.test.ts`.
 
+- **`rebase_resolution_attempts` is now a recognized top-level config key.** It was present in the
+  `HarnessConfig` type and resolver but missing from `validateConfig`'s known-keys set, so setting it
+  in `config.yml` failed validation with "Unknown top-level key". Surfaced while adding the adjacent
+  `harness_self_host` key.
 - **Hardcoded per-step tier overrides now affect `model`, not just `effort`/`max_retries`.**
   `DEFAULT_STEP_TIER_OVERRIDES` model bumps were silently ignored — the model resolution chain in
   `resolveStepConfig` omitted `hardcodedStepTier`. As a result HARNESS.md's promised
