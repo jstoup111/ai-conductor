@@ -61,6 +61,12 @@ export type CommandRunner = (args: string[], opts?: RunnerOpts) => Promise<Runne
 export interface HandoffDeps {
   /** Injectable gh/CLI runner. Tests supply a fake; production wraps execFile. */
   runner: CommandRunner;
+  /**
+   * The per-idea worktree path — cwd for `gh pr create` (and the issue-ref link).
+   * The worktree is checked out on `spec/<slug>`, so gh pushes THAT branch and opens
+   * the PR from it (FR-4). Absent → falls back to `target.canonicalPath` (legacy).
+   */
+  worktreePath?: string;
   /** Options forwarded to recordAuthoredKey (e.g. engineerDir for temp-dir isolation). */
   ledgerOpts?: AuthoredLedgerOpts;
   /**
@@ -151,15 +157,18 @@ export async function openSpecPr(
   deps: HandoffDeps,
 ): Promise<OpenSpecPrResult> {
   const { runner, ledgerOpts } = deps;
+  // cwd = the per-idea worktree (checked out on `spec/<slug>`) so gh pushes and opens
+  // the PR from that branch. Falls back to the canonical path for legacy callers.
+  const cwd = deps.worktreePath ?? target.canonicalPath;
 
-  // 1. Invoke `gh pr create` with the spec branch in the target repo's cwd.
+  // 1. Invoke `gh pr create` with the spec branch in the worktree's cwd.
   //    The `--head` flag names the branch to open a PR for; `--fill` uses the
   //    branch name + last commit message as the title/body so no interaction is
   //    required.
   let result: RunnerResult;
   try {
     result = await runner(['pr', 'create', '--head', branch, '--fill'], {
-      cwd: target.canonicalPath,
+      cwd,
     });
   } catch (err) {
     // 1a. Detect the no-remote condition: the runner rejected with an error whose
@@ -205,7 +214,7 @@ export async function openSpecPr(
       prUrl: url,
       keyword: 'Refs',
       sourceRef: deps.sourceRef,
-      cwd: target.canonicalPath,
+      cwd,
       log: deps.log,
     });
   }

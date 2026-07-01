@@ -23,6 +23,7 @@ import {
 import { createLedger } from '../../../src/engine/engineer/intake/ledger.js';
 import { createFileQueue } from '../../../src/engine/engineer/intake/queue.js';
 import { parseEnvelope } from '../../../src/engine/engineer/intake/port.js';
+import { createEngineerWorktree } from '../../../src/engine/engineer/worktree-authoring.js';
 
 const execFile = promisify(execFileCb);
 const argv = (...rest: string[]) => ['node', 'conduct-ts', 'engineer', ...rest];
@@ -146,18 +147,22 @@ describe('detectEngineerCommand: idea sources, claim, --source-ref', () => {
     expect(detectEngineerCommand(argv('projects'))).toEqual({ kind: 'projects' });
     expect(detectEngineerCommand(argv('poll'))).toEqual({ kind: 'poll' });
   });
-  it('land/handoff carry optional --source-ref', () => {
-    expect(detectEngineerCommand(argv('land', '--project', 'p', '--idea', 'i', '--source-ref', 'o/a#1'))).toEqual({
-      kind: 'land', project: 'p', idea: 'i', sourceRef: 'o/a#1',
+  it('land/handoff carry optional --source-ref (and required --worktree)', () => {
+    expect(detectEngineerCommand(argv('land', '--project', 'p', '--idea', 'i', '--worktree', '/w', '--source-ref', 'o/a#1'))).toEqual({
+      kind: 'land', project: 'p', idea: 'i', worktree: '/w', sourceRef: 'o/a#1',
     });
-    expect(detectEngineerCommand(argv('handoff', '--project', 'p', '--branch', 'spec/x', '--source-ref', 'o/a#1'))).toEqual({
-      kind: 'handoff', project: 'p', branch: 'spec/x', sourceRef: 'o/a#1',
+    expect(detectEngineerCommand(argv('handoff', '--project', 'p', '--branch', 'spec/x', '--worktree', '/w', '--source-ref', 'o/a#1'))).toEqual({
+      kind: 'handoff', project: 'p', branch: 'spec/x', worktree: '/w', sourceRef: 'o/a#1',
     });
   });
-  it('land/handoff without --source-ref leave it undefined', () => {
-    expect(detectEngineerCommand(argv('land', '--project', 'p', '--idea', 'i'))).toEqual({
-      kind: 'land', project: 'p', idea: 'i', sourceRef: undefined,
+  it('land without --source-ref leaves it undefined', () => {
+    expect(detectEngineerCommand(argv('land', '--project', 'p', '--idea', 'i', '--worktree', '/w'))).toEqual({
+      kind: 'land', project: 'p', idea: 'i', worktree: '/w', sourceRef: undefined,
     });
+  });
+  it('land/handoff without --worktree fall back to guide (strict isolation)', () => {
+    expect(detectEngineerCommand(argv('land', '--project', 'p', '--idea', 'i'))).toEqual({ kind: 'guide' });
+    expect(detectEngineerCommand(argv('handoff', '--project', 'p', '--branch', 'spec/x'))).toEqual({ kind: 'guide' });
   });
 });
 
@@ -291,13 +296,14 @@ describe('write-back via --source-ref', () => {
     const idea = 'add csv export';
     const repoPath = await makeGitRepo('target-repo', workDir);
     await writeRegistry([{ name: 'target-repo', path: repoPath }]);
-    await writeDocsArtifacts(repoPath, idea);
+    const wt = await createEngineerWorktree(repoPath, idea);
+    await writeDocsArtifacts(wt.worktreePath, idea);
     const ledger = createLedger(join(engineerDir, 'ledger.json'));
     await ledger.record({ source: 'github-issues', sourceRef: 'target-repo#7' });
 
     const { gh, calls } = makeGh();
     const code = await dispatchEngineer(
-      { kind: 'land', project: 'target-repo', idea, sourceRef: 'target-repo#7' },
+      { kind: 'land', project: 'target-repo', idea, worktree: wt.worktreePath, sourceRef: 'target-repo#7' },
       baseOpts({ gh }),
     );
     expect(code).toBe(0);
@@ -309,18 +315,22 @@ describe('write-back via --source-ref', () => {
     const idea = 'add csv export';
     const repoPath = await makeGitRepo('target-repo', workDir);
     await writeRegistry([{ name: 'target-repo', path: repoPath, remote: 'https://example.invalid/repo.git' }]);
-    await writeDocsArtifacts(repoPath, idea);
+    const wt = await createEngineerWorktree(repoPath, idea);
+    await writeDocsArtifacts(wt.worktreePath, idea);
     const ledger = createLedger(join(engineerDir, 'ledger.json'));
     await ledger.record({ source: 'github-issues', sourceRef: 'target-repo#7' });
 
-    // Land first to create the spec branch.
+    // Land first to create the spec branch (from the worktree).
     const { gh, calls } = makeGh();
     const landOut: string[] = [];
-    await dispatchEngineer({ kind: 'land', project: 'target-repo', idea }, baseOpts({ gh, print: (s) => landOut.push(s) }));
+    await dispatchEngineer(
+      { kind: 'land', project: 'target-repo', idea, worktree: wt.worktreePath },
+      baseOpts({ gh, print: (s) => landOut.push(s) }),
+    );
     const branch = JSON.parse(landOut.join('')).branch;
 
     const code = await dispatchEngineer(
-      { kind: 'handoff', project: 'target-repo', branch, sourceRef: 'target-repo#7' },
+      { kind: 'handoff', project: 'target-repo', branch, worktree: wt.worktreePath, sourceRef: 'target-repo#7' },
       baseOpts({ gh, ensureRunningLaunch: () => {} }),
     );
     expect(code).toBe(0);

@@ -126,6 +126,20 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   the approval gate, and documents a **guillemet placeholder convention** (`«slug»`, not `<slug>`
   / `&lt;slug&gt;` / `{slug}`) to avoid the angle-bracket trap that silently broke a sequence
   diagram in a recent spec. New `checkDiagramsForFile` in `mermaid-renderer.ts`.
+- **Engineer worktree isolation** (implements the DECIDE spec below). The engineer now authors,
+  `land`s, and `handoff`s each idea inside a dedicated per-idea git worktree of the target repo
+  (`<target>/.worktrees/engineer-<slug>` on `spec/<slug>`) instead of the shared main checkout —
+  so a concurrent daemon build or a second engineer session on the same repo can no longer be
+  corrupted by a branch-switch. New `conduct-ts engineer worktree --project <n> --idea "<i>"`
+  primitive creates it; `land`/`handoff` gain a **required `--worktree <path>`**. The
+  `checkout -b … / checkout back` dance in `landSpec` is deleted (it commits in place), `land`
+  stages only `.docs` (idea-scoped, no cross-idea bleed), `handoff` runs `gh` from the worktree
+  and **removes it on success** (branch persists) / **keeps it on failure**. Worktree creation
+  **strict-aborts** with zero primary-tree mutation when it can't be made (e.g. unborn/detached
+  HEAD). The daemon's worktree create/reconcile/teardown logic was extracted into a shared
+  `engine/worktree-shared.ts` used by both actors (one worktree story). Real-git smoke +
+  primary-tree-untouched / concurrent-actor / sibling-unchanged invariant tests included.
+  Assumes the target repo gitignores `.worktrees/` (the same convention the daemon relies on).
 - `/bootstrap` now sets up git end-to-end for **new/fresh** projects (new Step 10a, run after
   the smoke test). It forces the default branch to `main`, makes a single seed commit when there
   is no history yet, configures an `origin` remote (`gh repo create --private --source=.` when
@@ -134,6 +148,13 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   non-destructive: an existing repo, existing history, or a pre-configured remote is left
   untouched, and a rejected push (remote already has commits) stops for the user instead of
   forcing. When no remote is available the step is skipped with a note rather than blocking.
+- Approved DECIDE spec for **Engineer Worktree Isolation** (`.docs/specs/`, `stories/`, `plans/`,
+  `complexity/`, `conflicts/`, `architecture/`, plus `adr-2026-06-30-engineer-worktree-authoring-isolation.md`
+  and its architecture-review). Specifies moving the engineer's idea→spec authoring (DECIDE + `land`
+  + `handoff`) off the target repo's shared main checkout and into a per-idea git worktree — reusing
+  the daemon's worktree mechanism — so a running daemon or a second session on the same target repo
+  can't be corrupted by the engineer's branch-switch dance. Spec only; no engine code changed yet.
+  Amends ADR-008 (adopts its deferred Option B for same-repo concurrency).
 
 ### Fixed
 
