@@ -418,4 +418,52 @@ describe('engine/daemon-backlog — owner-gate integration', () => {
     expect(stampCalls).toBe(0); // gate never reached
     expect(logs.join('\n')).toMatch(/draft-and-theirs.*not approved/i);
   });
+
+  // Task 13 — un-owned grandfather cutover + idempotency (FR-8/9, FR-5 neg).
+  const CUTOVER = '2026-06-30T00:00:00Z';
+
+  it('Task 13: an un-owned spec merged BEFORE the cutover is grandfather-built', async () => {
+    await writeSpec('legacy');
+    const backlog = await discoverBacklog(dir, undefined, undefined, {
+      treeSource: fsSource(dir),
+      daemonOwner: { resolved: true, id: 'alice' },
+      readStamp: async () => ({ present: false as const }),
+      readMergeTime: async () => '2026-06-29T00:00:00Z', // before cutover
+      cutover: CUTOVER,
+    });
+    expect(backlog.map((b) => b.slug)).toEqual(['legacy']);
+  });
+
+  it('Task 13: an un-owned spec merged ON/AFTER the cutover is skipped and logged', async () => {
+    await writeSpec('newish');
+    const logs: string[] = [];
+    const backlog = await discoverBacklog(dir, undefined, (m) => logs.push(m), {
+      treeSource: fsSource(dir),
+      daemonOwner: { resolved: true, id: 'alice' },
+      readStamp: async () => ({ present: false as const }),
+      readMergeTime: async () => '2026-07-01T00:00:00Z', // after cutover
+      cutover: CUTOVER,
+    });
+    expect(backlog).toEqual([]);
+    const line = logs.find((l) => /newish/.test(l));
+    expect(line).toMatch(/owner/i);
+    expect(line).not.toMatch(/cannot build/);
+  });
+
+  it('Task 13: a matching spec already processed is NOT rebuilt (gate does not defeat isProcessed)', async () => {
+    await writeSpec('shipped');
+    let stampCalls = 0;
+    const backlog = await discoverBacklog(dir, async () => true, undefined, {
+      treeSource: fsSource(dir),
+      daemonOwner: { resolved: true, id: 'alice' },
+      readStamp: async () => {
+        stampCalls += 1;
+        return { present: true as const, id: 'alice' };
+      },
+      readMergeTime: async () => null,
+      cutover: CUTOVER,
+    });
+    expect(backlog).toEqual([]);
+    expect(stampCalls).toBe(0); // gate sits AFTER isProcessed
+  });
 });
