@@ -24,7 +24,8 @@ import type { ConductState, ConductorEvent, StepName } from './types/index.js';
 import { runDaemon, type BacklogItem } from './engine/daemon.js';
 import { discoverBacklog, fastForwardRoot } from './engine/daemon-backlog.js';
 import { localWorkSource, type WorkSource } from './engine/daemon-work-source.js';
-import { resolveDaemonOwner, type GhRunner } from './engine/owner-gate/identity.js';
+import { type GhRunner } from './engine/owner-gate/identity.js';
+import { makeMachineOwnerResolver } from './engine/owner-gate/machine-identity.js';
 import { readSpecOwnerStamp } from './engine/owner-gate/provenance.js';
 import { firstAppearanceTime } from './engine/owner-gate/merge-time.js';
 import { clampDaemonConcurrency } from './engine/daemon-command.js';
@@ -377,15 +378,22 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   //
   // ADR-014: the discoverTick closure is now encapsulated in a WorkSource adapter
   // so the run-loop is decoupled from direct fs/git I/O and tests can inject fakes.
-  // Owner-gate wiring (adr-2026-06-30-*): resolve the daemon owner FRESH each
-  // pass (no caching) so a reconfigured `spec_owner` / changed gh login takes
-  // effect next pass (FR-14); back the committed stamp + first-appearance
-  // readers with the real git runner (the main checkout, never a worktree). The
-  // grandfather cutover comes from validated config; MISSING → null, the
-  // documented default (no grandfather window → un-owned specs skip as
-  // indeterminate). When neither a configured owner nor a gh login resolves,
-  // resolveDaemonOwner returns `{ resolved: false }` → the gate is fail-open
-  // (build all, warn once). ADR-1 naming: `daemonOwner`, never a bare `owner`.
+  // Owner-gate wiring (adr-2026-06-30-* / adr-2026-07-01-machine-scoped-operator-identity):
+  // resolve the daemon owner FRESH each pass (no caching) so a reconfigured
+  // `spec_owner` / changed gh login takes effect next pass (FR-14); back the
+  // committed stamp + first-appearance readers with the real git runner (the main
+  // checkout, never a worktree). The grandfather cutover comes from validated
+  // config; MISSING → null, the documented default (un-owned specs skip as
+  // indeterminate).
+  //
+  // D1 (machine-scoped identity): the owner is resolved via
+  // `makeMachineOwnerResolver`, which reads `spec_owner` ONLY from the user config
+  // (~/.ai-conductor/config.yml) → `gh` login → unresolved. The PROJECT config
+  // (`config`, from loadConfig) is deliberately NOT consulted for identity, so a
+  // committed `spec_owner` can never leak one operator's identity onto everyone.
+  // D3 (fail-closed): when neither the user-config owner nor a gh login resolves,
+  // the resolver returns `{ resolved: false }` and discovery builds NOTHING.
+  // ADR-1 naming: `daemonOwner`, never a bare `owner`.
   const ownerGh: GhRunner = async (args, o) => {
     const { stdout } = await execFile('gh', args, { cwd: o.cwd });
     return { stdout: String(stdout) };
@@ -402,7 +410,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       markWarned: (slug) => markWarned(projectRoot, slug),
       fastForwardRoot,
       discoverBacklog,
-      resolveDaemonOwner: () => resolveDaemonOwner(config ?? {}, ownerGh, projectRoot),
+      resolveDaemonOwner: makeMachineOwnerResolver(ownerGh, projectRoot),
       readStamp: (slug) => readSpecOwnerStamp(ownerGit, baseBranch, slug),
       readMergeTime: (slug) =>
         firstAppearanceTime(ownerGit, baseBranch, `.docs/plans/${slug}.md`),

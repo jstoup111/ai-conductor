@@ -12,6 +12,22 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- **Machine-scoped operator identity + anti-leak guard (multi-operator ownership hardening,
+  Slice A).** The `conductor` daemon now resolves its `spec_owner` identity **only** from the
+  user config (`~/.ai-conductor/config.yml`) via `owner-gate/machine-identity.ts`
+  (`makeMachineOwnerResolver`: user-config `spec_owner` → `gh` login → unresolved, resolved
+  fresh each poll) — project config is never consulted for identity, so a committed `spec_owner`
+  can no longer leak one operator's identity onto everyone who pulls (D1). `validateConfig` gains
+  a `{ source: 'project' | 'merged' }` option and **rejects** a `spec_owner` key in a committed
+  project config (blank or not) with a config-load error naming the file and the fix
+  (`loadConfig` → `source: 'project'`; `loadMergedConfig` → `source: 'merged'`, so a
+  user-sourced value in the merged view is still allowed) (D2). An un-owned merged spec is now
+  skipped with a **distinct, deduped, actionable** log line telling the operator to add an
+  `Owner:` marker on the default branch (or grandfather via `owner_gate_cutover`) instead of a
+  bare skip (D5). Documented in `README.md` → "Operator identity & owner gate" and
+  `src/conductor/README.md` → "Owner gate: multi-operator identity partition"
+  (adr-2026-07-01-machine-scoped-operator-identity). The authoring-side universal stamping /
+  fail-closed land (Slice B) is sequenced separately and not included here.
 - **Harness self-host guardrails wired into the daemon loop (Phase 6).** The `conductor` daemon now
   activates the self-host guardrail bundle for a harness self-build. `daemon-cli` classifies
   `isSelfHost` **once** at startup against the main repo root (honoring the `activation` override) and
@@ -186,6 +202,15 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Changed
 
+- **Unresolved daemon identity now fails CLOSED (multi-operator ownership hardening, Slice A).**
+  A `conductor` daemon that can resolve no operator identity — no `spec_owner` in
+  `~/.ai-conductor/config.yml` **and** no `gh` login — now builds **nothing** and emits a single
+  loud, deduped "identity unresolved" notice, reversing the prior fail-open behavior where an
+  unidentified daemon would build *every* operator's specs (the exact multi-operator hazard). A
+  daemon with a resolvable identity (the common case: `gh` authenticated) is unaffected, and an
+  unwired gate (no `daemonOwner` supplied) still runs legacy discovery unchanged
+  (`engine/daemon-backlog.ts`, `daemon-cli.ts`; D3,
+  adr-2026-07-01-machine-scoped-operator-identity).
 - **Daemon activity log lines are now timestamped.** Every line the daemon tees into the
   durable `.daemon/daemon.log` (read via `conduct-ts daemon logs [--follow]`) is prefixed
   with a leading ISO-8601 UTC timestamp (e.g. `2026-07-01T14:23:05.123Z [daemon] …`) so

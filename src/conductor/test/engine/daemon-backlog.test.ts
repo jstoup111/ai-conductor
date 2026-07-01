@@ -389,18 +389,24 @@ describe('engine/daemon-backlog — owner-gate integration', () => {
     await rm(dir, { recursive: true, force: true });
   });
 
-  // Task 11 — baseline unchanged: passing the (unresolved) gate deps builds the
-  // same set as today. The four injectables compile as opts and are inert here.
-  it('Task 11: unresolved owner deps leave the baseline set unchanged', async () => {
+  // Task 11 (D3, reversed) — an UNRESOLVED daemon owner now FAIL-CLOSES: it
+  // builds NOTHING rather than falling open to build-all. The injectables are
+  // present but never consulted once identity is unresolved.
+  it('Task 11: an unresolved owner builds NOTHING (fail-closed)', async () => {
     await writeSpec('feature-a');
+    let stampCalls = 0;
     const backlog = await discoverBacklog(dir, undefined, undefined, {
       treeSource: fsSource(dir),
       daemonOwner: { resolved: false },
-      readStamp: async () => ({ present: false as const }),
+      readStamp: async () => {
+        stampCalls += 1;
+        return { present: false as const };
+      },
       readMergeTime: async () => null,
       cutover: null,
     });
-    expect(backlog).toEqual([{ slug: 'feature-a' }]);
+    expect(backlog).toEqual([]);
+    expect(stampCalls).toBe(0); // gate never reached — nothing is evaluated
   });
 
   // Task 12 — gate wired after content filters (FR-5/6/7).
@@ -505,34 +511,36 @@ describe('engine/daemon-backlog — owner-gate integration', () => {
     expect(stampCalls).toBe(0); // gate sits AFTER isProcessed
   });
 
-  // Task 14 — fail-open + warn-once (FR-3, FR-11).
-  it('Task 14: an unresolved owner builds every content-eligible spec (incl. other-owner) with exactly one gate-inactive warn', async () => {
+  // Task 14 (D3, reversed) — fail-closed + warn-once (Story 3).
+  it('Task 14: an unresolved owner builds NOTHING with exactly one loud identity-unresolved warn', async () => {
     await writeSpec('one');
     await writeSpec('two');
     const logs: string[] = [];
     const backlog = await discoverBacklog(dir, undefined, (m) => logs.push(m), {
       treeSource: fsSource(dir),
       daemonOwner: { resolved: false },
-      // Even an other-owner stamp must NOT gate anything out when unresolved.
+      // Even an owner-matching stamp must NOT build when identity is unresolved.
       readStamp: async () => ({ present: true as const, id: 'bob' }),
       readMergeTime: async () => null,
       cutover: null,
     });
-    expect(backlog.map((b) => b.slug).sort()).toEqual(['one', 'two']);
-    const inactive = logs.filter((l) => /gate inactive/i.test(l));
-    expect(inactive).toHaveLength(1); // warn-once per pass, not per-spec
-    // Distinct from content-skip and ownership-skip wording.
-    expect(inactive[0]).not.toMatch(/cannot build/);
+    expect(backlog).toEqual([]); // fail-closed: nothing builds
+    const unresolved = logs.filter((l) => /identity unresolved/i.test(l));
+    expect(unresolved).toHaveLength(1); // warn-once per pass, not per-spec
+    // Loud + actionable, and distinct from content-skip / ownership-skip wording.
+    expect(unresolved[0]).toMatch(/fail-closed/i);
+    expect(unresolved[0]).toMatch(/spec_owner|gh/i);
+    expect(unresolved[0]).not.toMatch(/cannot build/);
   });
 
-  it('Task 14: an absent daemonOwner emits NO gate log (legacy behavior)', async () => {
+  it('Task 14: an absent daemonOwner emits NO gate log and builds normally (legacy behavior)', async () => {
     await writeSpec('legacy-a');
     const logs: string[] = [];
     const backlog = await discoverBacklog(dir, undefined, (m) => logs.push(m), {
       treeSource: fsSource(dir),
     });
     expect(backlog.map((b) => b.slug)).toEqual(['legacy-a']);
-    expect(logs.filter((l) => /gate inactive/i.test(l))).toHaveLength(0);
+    expect(logs.filter((l) => /identity unresolved/i.test(l))).toHaveLength(0);
   });
 
   // Observability NFR — warn-once when the gate is ACTIVE but no grandfather
@@ -583,7 +591,7 @@ describe('engine/daemon-backlog — owner-gate integration', () => {
     expect(logs.filter((l) => /no owner_gate_cutover configured/i.test(l))).toHaveLength(1);
   });
 
-  it('surfaces the gate-inactive notice ONCE across scans when the warned-marker hooks are wired', async () => {
+  it('surfaces the identity-unresolved notice ONCE across scans when the warned-marker hooks are wired', async () => {
     await writeSpec('one');
     const warned = new Set<string>();
     const opts = {
@@ -602,7 +610,7 @@ describe('engine/daemon-backlog — owner-gate integration', () => {
     await discoverBacklog(dir, undefined, log, opts);
     await discoverBacklog(dir, undefined, log, opts);
 
-    expect(logs.filter((l) => /gate inactive/i.test(l))).toHaveLength(1);
+    expect(logs.filter((l) => /identity unresolved/i.test(l))).toHaveLength(1);
   });
 
   it('is SILENT about the missing cutover when a cutover IS set', async () => {
@@ -618,7 +626,7 @@ describe('engine/daemon-backlog — owner-gate integration', () => {
     expect(logs.filter((l) => /no owner_gate_cutover configured/i.test(l))).toHaveLength(0);
   });
 
-  it('is SILENT about the missing cutover when the gate is inactive (unresolved owner)', async () => {
+  it('is SILENT about the missing cutover when the owner is unresolved (fail-closed short-circuit)', async () => {
     await writeSpec('inactive');
     const logs: string[] = [];
     await discoverBacklog(dir, undefined, (m) => logs.push(m), {
@@ -627,6 +635,28 @@ describe('engine/daemon-backlog — owner-gate integration', () => {
       cutover: null,
     });
     expect(logs.filter((l) => /no owner_gate_cutover configured/i.test(l))).toHaveLength(0);
+  });
+
+  // A6 / Story 6 — an un-owned MERGED spec is surfaced LOUDLY and actionably
+  // (distinct, deduped), never a silent skip. The log states it is un-owned AND
+  // how to fix it: add an `Owner:` marker on the default branch.
+  it('A6: an un-owned merged spec logs a distinct, actionable skip (add Owner marker on default branch)', async () => {
+    await writeSpec('legacy-unowned');
+    const logs: string[] = [];
+    const backlog = await discoverBacklog(dir, undefined, (m) => logs.push(m), {
+      treeSource: fsSource(dir),
+      daemonOwner: { resolved: true, id: 'alice' },
+      readStamp: async () => ({ present: false as const }), // un-owned
+      readMergeTime: async () => '2026-07-01T00:00:00Z', // after cutover → skipped
+      cutover: '2026-06-30T00:00:00Z',
+    });
+    expect(backlog).toEqual([]);
+    const line = logs.find((l) => /legacy-unowned/.test(l));
+    expect(line).toBeDefined();
+    expect(line).toMatch(/un-owned/i);
+    expect(line).toMatch(/Owner/); // names the marker to add
+    expect(line).toMatch(/default branch/i); // and where to add it
+    expect(line).not.toMatch(/another operator/i); // not the other-owner wording
   });
 
   // Task 18 — ownership rotation (FR-13/14). Transfer is a RE-STAMP of the

@@ -102,7 +102,7 @@ export async function loadConfig(
     return { ok: false, error: { type: 'parse_error', message } };
   }
 
-  const validation = validateConfig(parsed, projectRoot);
+  const validation = validateConfig(parsed, projectRoot, { source: 'project' });
   if (!validation.ok) return validation;
 
   if (harnessVersion && validation.config.harness_version) {
@@ -120,9 +120,22 @@ export async function loadConfig(
   return validation;
 }
 
+/**
+ * `source` distinguishes WHERE the config being validated came from, which
+ * controls the anti-leak guard (D2). `'project'` — a raw committed
+ * `.ai-conductor/config.yml`: a present `spec_owner` is REJECTED (identity must
+ * never live in shared repo state). `'merged'` (default) — user config merged
+ * under project, or a standalone validation: `spec_owner` is allowed because it
+ * legitimately originates from the user's machine config.
+ */
+export interface ValidateConfigOpts {
+  source?: 'project' | 'merged';
+}
+
 export function validateConfig(
   raw: unknown,
   projectRoot?: string,
+  opts: ValidateConfigOpts = {},
 ): ConfigResult {
   if (raw === null || raw === undefined) {
     return { ok: true, config: {}, warnings: [] };
@@ -435,9 +448,26 @@ export function validateConfig(
     }
   }
 
-  // spec_owner — the configured daemon operator identity (owner-gate, FR-1).
-  // Naming boundary (ADR-1): the operator concept, never the lock holder.
-  if (obj.spec_owner !== undefined && typeof obj.spec_owner !== 'string') {
+  // spec_owner — the daemon operator identity (owner-gate, FR-1). Naming
+  // boundary (ADR-1): the operator concept, never the lock holder.
+  //
+  // Anti-leak guard (D2 / Story 2): operator identity is MACHINE-scoped — it may
+  // only live in the user config (~/.ai-conductor/config.yml). A `spec_owner`
+  // committed into a shared PROJECT config would leak one operator's identity to
+  // everyone who pulls (mergeConfigs gives project precedence). So on the
+  // project-source path a PRESENT key — blank or not — is a hard rejection that
+  // names the file and the fix. On the merged/user path spec_owner is legitimate
+  // (that is exactly where identity is sourced), so only the type is checked.
+  if (opts.source === 'project') {
+    if ('spec_owner' in obj) {
+      return errVal(
+        `spec_owner must not be set in a project config (${projectConfigPath(
+          projectRoot ?? '.',
+        )}): it would leak your operator identity to everyone who pulls the repo. ` +
+          'Move spec_owner to your user config at ~/.ai-conductor/config.yml.',
+      );
+    }
+  } else if (obj.spec_owner !== undefined && typeof obj.spec_owner !== 'string') {
     return errVal('spec_owner must be a string');
   }
 
@@ -794,7 +824,10 @@ export async function loadMergedConfig(
   }
 
   const merged = mergeConfigs(userResult.config, projectResult.config);
-  const validated = validateConfig(merged, projectRoot);
+  // 'merged' source: the anti-leak guard already fired on the raw project file
+  // inside loadConfig above. Here a spec_owner can only have come from the USER
+  // config, which is its legitimate home — so the guard must NOT reject it.
+  const validated = validateConfig(merged, projectRoot, { source: 'merged' });
   if (!validated.ok) return validated;
 
   return {
