@@ -157,6 +157,36 @@ describe('engine/resolved-config', () => {
       const r = resolveStepConfig('rebase', 'SHIP', config);
       expect(r.model).toBe('opus');
     });
+
+    it('user config override beats fable default for explore', () => {
+      // Regression: explore defaults to 'fable', but user config
+      // steps.explore.model should override it
+      const config: HarnessConfig = {
+        steps: { explore: { model: 'sonnet' } },
+      };
+      const r = resolveStepConfig('explore', 'DECIDE', config);
+      expect(r.model).toBe('sonnet');
+    });
+
+    it('user config override beats fable default for prd', () => {
+      // Regression: prd defaults to 'fable', but user config
+      // steps.prd.model should override it
+      const config: HarnessConfig = {
+        steps: { prd: { model: 'opus' } },
+      };
+      const r = resolveStepConfig('prd', 'DECIDE', config);
+      expect(r.model).toBe('opus');
+    });
+
+    it('user config override beats fable default for architecture_review', () => {
+      // Regression: architecture_review defaults to 'fable', but user config
+      // steps.architecture_review.model should override it
+      const config: HarnessConfig = {
+        steps: { architecture_review: { model: 'sonnet' } },
+      };
+      const r = resolveStepConfig('architecture_review', 'DECIDE', config);
+      expect(r.model).toBe('sonnet');
+    });
   });
 
   describe('resolveStepConfig — by_tier', () => {
