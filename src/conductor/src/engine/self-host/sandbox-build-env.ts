@@ -17,6 +17,13 @@
 //     (hook commands, statusLine, …) to the worktree, so the build exercises its
 //     OWN edited hooks rather than the live checkout's. Personal `~/.claude/hooks`
 //     paths (outside the harness checkout) are left untouched.
+//   - SEEDS a minimal `.claude.json` that PROPAGATES the operator's existing
+//     workspace trust. A fresh CLAUDE_CONFIG_DIR trusts no project, so the
+//     headless build ignored every `permissions.allow` entry in the repo's
+//     `.claude/settings.json` ("this workspace has not been trusted") and
+//     wedged on denied tools. Trust is copied from the operator's live state
+//     file ONLY when it already trusts the harness root — the sandbox never
+//     fabricates a trust grant the operator has not made.
 // The sandbox is torn down after the build (pass OR fail) under a try/finally
 // guarantee; global ~/.claude is never touched. Isolation is a contract:
 //   - Credentials/settings are COPIED, never symlinked — no sandbox symlink ever
@@ -100,6 +107,13 @@ export interface ProvisionOptions {
   parentEnv?: NodeJS.ProcessEnv;
   /** Filesystem seam (defaults to real fs). */
   fs?: SandboxFs;
+  /**
+   * The operator's live Claude state file — the SOURCE of workspace-trust
+   * propagation. Defaults to `$CLAUDE_CONFIG_DIR/.claude.json` when the parent
+   * env sets CLAUDE_CONFIG_DIR, else `~/.claude.json` (with the default
+   * `~/.claude` config dir, Claude Code keeps state BESIDE the dir, not in it).
+   */
+  globalStateFile?: string;
 }
 
 /** The two links a sandbox exposes into the worktree. */
@@ -107,6 +121,8 @@ const LINKED_DIRS = ['skills', 'hooks'] as const;
 /** Config files copied (never symlinked) from the operator's global config. */
 const CREDENTIALS_FILE = '.credentials.json';
 const SETTINGS_FILE = 'settings.json';
+/** Claude Code state file — holds per-project workspace-trust grants. */
+const STATE_FILE = '.claude.json';
 
 class ThrowawaySandbox implements SandboxBuildEnv {
   private tornDown = false;
@@ -176,6 +192,17 @@ export async function provisionSandboxBuildEnv(opts: ProvisionOptions): Promise<
       harnessRoot: opts.harnessRoot,
       worktreeRoot: opts.worktreeRoot,
     });
+
+    // .claude.json: propagate the operator's EXISTING workspace trust so the
+    // headless build honors the repo's `.claude/settings.json` permissions.
+    // Propagate-only — when the operator has not trusted the harness root,
+    // nothing is written and the build runs untrusted (fails safe, not open).
+    await provisionTrustState(fs, {
+      src: opts.globalStateFile ?? defaultGlobalStateFile(parentEnv),
+      dest: join(configDir, STATE_FILE),
+      harnessRoot: opts.harnessRoot,
+      worktreeRoot: opts.worktreeRoot,
+    });
   } catch (err) {
     // Remove any partial sandbox so a half-built dir is never launched (TR-5).
     if (configDir) {
@@ -235,6 +262,66 @@ async function canonicalize(fs: SandboxFs, p: string): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+/**
+ * Where the operator's live state file lives: inside CLAUDE_CONFIG_DIR when
+ * that is set, else at `~/.claude.json` (beside, not inside, `~/.claude`).
+ */
+function defaultGlobalStateFile(parentEnv: NodeJS.ProcessEnv): string {
+  return parentEnv.CLAUDE_CONFIG_DIR
+    ? join(parentEnv.CLAUDE_CONFIG_DIR, STATE_FILE)
+    : join(homedir(), STATE_FILE);
+}
+
+/**
+ * Seed the sandbox `.claude.json` by PROPAGATING the operator's existing
+ * workspace trust. Writes a minimal state file trusting the harness root and
+ * the build worktree (both as-passed and realpath-canonicalized — Claude Code
+ * may key trust by either) IFF the operator's live state file already trusts
+ * the harness root. Everything else — a missing state file, malformed JSON, or
+ * an untrusted harness root — writes NOTHING: the sandbox never fabricates a
+ * trust grant, it only re-homes one the operator already made. The seeded file
+ * is a fresh write (never a symlink), preserving the TR-6 no-global-symlink
+ * invariant; the operator's live state file is only ever read.
+ */
+async function provisionTrustState(
+  fs: SandboxFs,
+  args: { src: string; dest: string; harnessRoot: string; worktreeRoot: string },
+): Promise<void> {
+  const raw = await fs.readFile(args.src);
+  if (raw === null) return; // no operator state file → nothing to propagate
+  let state: unknown;
+  try {
+    state = JSON.parse(raw);
+  } catch {
+    return; // malformed operator state → propagate nothing (never guess trust)
+  }
+  const projects = (state as { projects?: unknown }).projects;
+  if (projects === null || typeof projects !== 'object') return;
+  const trustedByOperator = (p: string | null): boolean =>
+    p !== null &&
+    (projects as Record<string, { hasTrustDialogAccepted?: unknown }>)[p]
+      ?.hasTrustDialogAccepted === true;
+
+  const canonHarness = await canonicalize(fs, args.harnessRoot);
+  if (!trustedByOperator(args.harnessRoot) && !trustedByOperator(canonHarness)) return;
+
+  const canonWorktree = await canonicalize(fs, args.worktreeRoot);
+  const seeded: Record<string, { hasTrustDialogAccepted: true }> = {};
+  for (const p of [args.harnessRoot, canonHarness, args.worktreeRoot, canonWorktree]) {
+    if (p !== null) seeded[p] = { hasTrustDialogAccepted: true };
+  }
+  const onboarded =
+    (state as { hasCompletedOnboarding?: unknown }).hasCompletedOnboarding === true;
+  await fs.writeFile(
+    args.dest,
+    `${JSON.stringify(
+      { ...(onboarded ? { hasCompletedOnboarding: true } : {}), projects: seeded },
+      null,
+      2,
+    )}\n`,
+  );
 }
 
 /**

@@ -179,6 +179,22 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- **Self-host sandbox builds no longer run untrusted (wedged headless build).** The throwaway
+  `CLAUDE_CONFIG_DIR` a harness self-build runs against copied credentials and `settings.json`
+  but seeded no `.claude.json`, so the inner headless session saw an untrusted workspace,
+  ignored all `permissions.allow` entries in the repo's `.claude/settings.json`
+  ("Ignoring 11 permissions.allow entries … this workspace has not been trusted"), and the
+  build step wedged on denied tools (observed on the first registered self-build,
+  `multi-operator-ownership-hardening`, 2026-07-02). `provisionSandboxBuildEnv` now seeds a
+  minimal `.claude.json` that **propagates** the operator's existing workspace trust — written
+  IFF the operator's live state file (`~/.claude.json`, or `$CLAUDE_CONFIG_DIR/.claude.json`)
+  already trusts the harness root, covering the harness root + build worktree (as-passed and
+  realpath-canonicalized). A missing state file, malformed JSON, or an untrusted harness root
+  seeds nothing — the sandbox never fabricates a trust grant the operator has not made. The
+  seeded file is a fresh write (TR-6 no-global-symlink invariant holds) and the operator's
+  state file is only ever read. Adversarial specs cover the no-fabrication, explicit-false,
+  missing-file, malformed-JSON, and read-only branches.
+
 - **Owner-gate observability notices no longer log on every poll tick.** The gate-inactive
   (fail-open) and no-`owner_gate_cutover` notices were pass-local and re-logged on every daemon
   discovery pass, spamming `.daemon/daemon.log` (and the console) once per idle poll forever. They
