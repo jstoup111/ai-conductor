@@ -80,6 +80,25 @@ export function buildVisualizers(
 }
 
 /**
+ * Retrieve the configured ui_renderer subscriber from the registry and bind
+ * it to the live event bus before start() is called. Generic across all
+ * ui_renderer plugins — no subscriber-name checks — so a discovered plugin
+ * (which has no emitter at construction time) and a built-in subscriber
+ * (already constructed with one) share this one path.
+ */
+export function selectUISubscriber(
+  registry: PluginRegistry,
+  uiRendererName: string,
+  events: ConductorEventEmitter,
+): UISubscriber {
+  const subscriber = registry.get<UISubscriber>('ui_renderer', uiRendererName);
+  if (typeof subscriber.bind === 'function') {
+    subscriber.bind(events);
+  }
+  return subscriber;
+}
+
+/**
  * Stop every visualizer plugin, swallowing individual errors so one failing
  * exporter cannot prevent the others from flushing.
  */
@@ -645,11 +664,9 @@ async function main(): Promise<void> {
     config?.llm_provider ?? 'claude'
   );
 
-  // Select UI subscriber based on config (default: 'terminal')
-  const subscriber = registry.get<UISubscriber>(
-    'ui_renderer',
-    config?.ui_renderer ?? 'terminal'
-  );
+  // Select UI subscriber based on config (default: 'terminal') and bind it
+  // to the live event bus. Exported so tests can drive this exact wiring.
+  const subscriber = selectUISubscriber(registry, config?.ui_renderer ?? 'terminal', events);
 
   subscriber.start();
 

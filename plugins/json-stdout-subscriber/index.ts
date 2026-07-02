@@ -17,6 +17,14 @@ import type { ConductorEventEmitter, EventHandler } from '../../src/conductor/sr
  * and unsubscribe from all relevant event types on the real event bus (see
  * TerminalSubscriber for the same pattern). The emitter is optional so unit
  * tests can continue to drive handle() directly without a bus.
+ *
+ * Discovered plugin instances (the default export below) are constructed
+ * with no emitter — the loader has no bus to hand them at import time.
+ * index.ts binds the live emitter generically via bind() after discovery,
+ * right before start(). bind() is safe to call more than once (e.g. the
+ * module is cached across daemon runs in the same process): if already
+ * started, it detaches from the old emitter before attaching to the new
+ * one, so subscriptions never leak across runs.
  */
 const SUBSCRIBED_EVENT_TYPES: ConductorEvent['type'][] = [
   'step_started',
@@ -45,6 +53,25 @@ export class JsonStdoutSubscriber implements UISubscriber {
 
   constructor(eventEmitter?: ConductorEventEmitter) {
     this.eventEmitter = eventEmitter;
+  }
+
+  bind(events: ConductorEventEmitter): void {
+    if (this.started && this.eventEmitter) {
+      for (const { type, handler } of this.handlers) {
+        this.eventEmitter.off(type, handler);
+      }
+      this.handlers = [];
+    }
+
+    this.eventEmitter = events;
+
+    if (this.started) {
+      for (const type of SUBSCRIBED_EVENT_TYPES) {
+        const handler: EventHandler = (event) => this.handle(event);
+        this.handlers.push({ type, handler });
+        this.eventEmitter.on(type, handler);
+      }
+    }
   }
 
   start(): void {
