@@ -237,6 +237,108 @@ describe('SandboxBuildEnv (TR-5/TR-6)', () => {
     await sandbox.teardown();
     await expect(sandbox.teardown()).resolves.toBeUndefined();
   });
+
+  // ── Workspace-trust propagation (.claude.json) ─────────────────────────────
+  // A fresh CLAUDE_CONFIG_DIR trusts no project, so the headless build ignored
+  // the repo's `.claude/settings.json` permissions.allow entries and wedged.
+  // The sandbox seeds trust IFF the operator already trusts the harness root.
+
+  /** An operator state file trusting `root`, written into the global temp dir. */
+  const writeOperatorState = async (root: string | null) => {
+    const stateFile = join(globalConfig, '.claude.json');
+    const projects = root === null ? {} : { [root]: { hasTrustDialogAccepted: true } };
+    await writeFile(stateFile, JSON.stringify({ hasCompletedOnboarding: true, projects }));
+    return stateFile;
+  };
+
+  it('propagates operator trust: seeds sandbox .claude.json trusting the harness root AND the build worktree — as a real file, not a symlink (TR-6)', async () => {
+    const stateFile = await writeOperatorState(mainCheckout);
+    const sandbox = await provisionSandboxBuildEnv(
+      opts({ harnessRoot: mainCheckout, globalStateFile: stateFile }),
+    );
+    try {
+      const seededPath = join(sandbox.configDir, '.claude.json');
+      expect(existsSync(seededPath)).toBe(true);
+      expect((await lstat(seededPath)).isSymbolicLink()).toBe(false);
+      const seeded = JSON.parse(await readFile(seededPath, 'utf-8'));
+      expect(seeded.hasCompletedOnboarding).toBe(true);
+      // Both roots trusted, keyed as-passed and canonicalized (Claude Code may
+      // resolve the project key either way).
+      for (const p of [
+        mainCheckout,
+        await realpath(mainCheckout),
+        worktree,
+        await realpath(worktree),
+      ]) {
+        expect(seeded.projects[p]?.hasTrustDialogAccepted).toBe(true);
+      }
+    } finally {
+      await sandbox.teardown();
+    }
+  });
+
+  it('adversarial: operator has NOT trusted the harness root → no trust is fabricated (no .claude.json written)', async () => {
+    // State file exists and trusts an UNRELATED path — the harness root is absent.
+    const stateFile = await writeOperatorState(join(tmpdir(), 'some-other-project'));
+    const sandbox = await provisionSandboxBuildEnv(
+      opts({ harnessRoot: mainCheckout, globalStateFile: stateFile }),
+    );
+    try {
+      expect(existsSync(join(sandbox.configDir, '.claude.json'))).toBe(false);
+    } finally {
+      await sandbox.teardown();
+    }
+  });
+
+  it('adversarial: explicit hasTrustDialogAccepted:false is not trust (no seed)', async () => {
+    const stateFile = join(globalConfig, '.claude.json');
+    await writeFile(
+      stateFile,
+      JSON.stringify({ projects: { [mainCheckout]: { hasTrustDialogAccepted: false } } }),
+    );
+    const sandbox = await provisionSandboxBuildEnv(
+      opts({ harnessRoot: mainCheckout, globalStateFile: stateFile }),
+    );
+    try {
+      expect(existsSync(join(sandbox.configDir, '.claude.json'))).toBe(false);
+    } finally {
+      await sandbox.teardown();
+    }
+  });
+
+  it('missing operator state file → provision succeeds with no .claude.json (nothing to propagate)', async () => {
+    const sandbox = await provisionSandboxBuildEnv(
+      opts({ globalStateFile: join(globalConfig, '.claude.json') }), // never written
+    );
+    try {
+      expect(existsSync(join(sandbox.configDir, '.claude.json'))).toBe(false);
+    } finally {
+      await sandbox.teardown();
+    }
+  });
+
+  it('adversarial: malformed operator state JSON → provision succeeds, nothing seeded (never guess trust)', async () => {
+    const stateFile = join(globalConfig, '.claude.json');
+    await writeFile(stateFile, '{"projects": {  <-- not json');
+    const sandbox = await provisionSandboxBuildEnv(
+      opts({ harnessRoot: mainCheckout, globalStateFile: stateFile }),
+    );
+    try {
+      expect(existsSync(join(sandbox.configDir, '.claude.json'))).toBe(false);
+    } finally {
+      await sandbox.teardown();
+    }
+  });
+
+  it('operator state file is only READ — byte-for-byte unchanged after provision + teardown', async () => {
+    const stateFile = await writeOperatorState(mainCheckout);
+    const before = await readFile(stateFile, 'utf-8');
+    const sandbox = await provisionSandboxBuildEnv(
+      opts({ harnessRoot: mainCheckout, globalStateFile: stateFile }),
+    );
+    await sandbox.teardown();
+    expect(await readFile(stateFile, 'utf-8')).toBe(before);
+  });
 });
 
 /** A stable, order-independent snapshot of a directory tree's entries. */
