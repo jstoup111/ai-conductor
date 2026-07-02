@@ -12,6 +12,16 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- **Feature 3.2: JSON-stdout-subscriber plugin** — Emits every `ConductorEvent` as a
+  newline-delimited JSON line to stdout, with each line including all original event fields
+  plus a `ts` ISO 8601 timestamp. Selectable via `ui_renderer: json-stdout` in
+  `.ai-conductor/config.yml` (defaults to `terminal` renderer). Plugin is discoverable via
+  the Wave A plugin loader with no edits to `src/conductor/src/index.ts`. Proves the
+  visualizer abstraction by providing a second working UI implementation alongside the
+  built-in TerminalSubscriber. Includes full test coverage: unit tests for serialization and
+  lifecycle, integration tests for real event-bus wiring and config-driven selection, negative
+  tests for missing plugin and error isolation (Story 3.2-1, 3.2-2, 3.2-3, 3.2-4).
+
 - **Committed `.ai-conductor/config.yml` for the harness repo itself** — sets
   `owner_gate_cutover: 2026-07-02T11:00:00Z` so this repo's daemon (registered
   2026-07-02, issue #174) grandfather-builds specs already on `main` at
