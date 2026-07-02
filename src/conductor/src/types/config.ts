@@ -219,6 +219,33 @@ export interface OtelConfig {
   protocol?: 'http/protobuf' | 'grpc';
 }
 
+/**
+ * How harness self-host mode is decided (adr-2026-06-30-self-host-detection-seam):
+ *   - 'auto'      → path-based auto-detection (build repo root == harness root)
+ *   - 'force_on'  → treat ANY repo as the harness self-build (testing)
+ *   - 'force_off' → never self-host, even for the harness repo (escape hatch)
+ */
+export type SelfHostActivation = 'auto' | 'force_on' | 'force_off';
+
+/**
+ * Self-host guardrail configuration (sibling to `otel` / owner-gate keys).
+ * ABSENT means the safe default: auto-detect, all gates ON. Every field is
+ * optional; an omitted gate toggle defaults to ENABLED — a partial config can
+ * never silently disable a guardrail (TR-11). Validated in `validateConfig()`.
+ */
+export interface HarnessSelfHostConfig {
+  /** Activation strategy. Omitted → 'auto'. */
+  activation?: SelfHostActivation;
+  /** Relink harness skills before dispatch (TR-4). Omitted → true. */
+  skill_relink_preflight?: boolean;
+  /** Run the self-build under a throwaway CLAUDE_CONFIG_DIR (TR-5/6). Omitted → true. */
+  sandbox_build_env?: boolean;
+  /** HALT for operator VERSION-bump approval at finish (TR-7). Omitted → true. */
+  version_approval_gate?: boolean;
+  /** HALT on integrity/CHANGELOG/migration gate failure (TR-8/9/10). Omitted → true. */
+  release_artifact_gate?: boolean;
+}
+
 export interface HarnessConfig {
   harness_version?: string;
   defaults?: DefaultsConfig;
@@ -286,4 +313,10 @@ export interface HarnessConfig {
    * halts immediately). Negative or non-numeric values fall back to 3.
    */
   rebase_resolution_attempts?: number;
+  /**
+   * Harness self-host guardrails (adr-2026-06-30-self-host-detection-seam):
+   * activation override + per-gate toggles. Absent → auto-detect, all gates on
+   * (the safe default). Scoped to harness self-builds; no effect on other repos.
+   */
+  harness_self_host?: HarnessSelfHostConfig;
 }

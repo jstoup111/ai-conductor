@@ -122,6 +122,11 @@ complexity:
       expect(result.error.message).toContain('steps.memory');
     });
 
+    it('accepts rebase_resolution_attempts as a known top-level key', () => {
+      const result = validateConfig({ rebase_resolution_attempts: 5 });
+      expect(result.ok).toBe(true);
+    });
+
     it('rejects disabling a gating step', () => {
       const result = validateConfig({
         steps: { stories: { disable: true } },
@@ -554,6 +559,68 @@ complexity:
       expect(result.ok).toBe(false);
       if (result.ok) return;
       expect(result.error.message).toMatch(/owner_gate_cutover must be an ISO-8601 date string/);
+    });
+
+    // Anti-leak guard (A4 / D2 / Story 2): a `spec_owner` committed into a
+    // shared PROJECT config would leak one operator's identity to everyone who
+    // pulls. Loading a project config that carries the key is a hard rejection
+    // that names the file and the fix. Identity is user-config-only.
+    describe('anti-leak guard: spec_owner in a project config (D2)', () => {
+      it('REJECTS a project-source config that carries spec_owner, naming the file and the fix', () => {
+        const result = validateConfig({ spec_owner: 'jstoup111' }, '/repo', {
+          source: 'project',
+        });
+        expect(result.ok).toBe(false);
+        if (result.ok) return;
+        expect(result.error.type).toBe('validation_error');
+        // Names the committed file …
+        expect(result.error.message).toMatch(/\.ai-conductor\/config\.yml/);
+        // … and the fix: move it to the user config.
+        expect(result.error.message).toMatch(/~\/\.ai-conductor\/config\.yml/);
+        expect(result.error.message).toMatch(/spec_owner/);
+      });
+
+      it('REJECTS a blank/whitespace spec_owner in a project config (a present key is the leak)', () => {
+        const blank = validateConfig({ spec_owner: '   ' }, '/repo', { source: 'project' });
+        expect(blank.ok).toBe(false);
+        const empty = validateConfig({ spec_owner: '' }, '/repo', { source: 'project' });
+        expect(empty.ok).toBe(false);
+      });
+
+      it('ACCEPTS a project config with NO spec_owner (guard only triggers on the leak)', () => {
+        const result = validateConfig({ defaults: { model: 'sonnet' } }, '/repo', {
+          source: 'project',
+        });
+        expect(result.ok).toBe(true);
+      });
+
+      it('ACCEPTS spec_owner on the merged/user path (identity is legitimately user-config-sourced)', () => {
+        const result = validateConfig({ spec_owner: 'jstoup111' }, '/repo', {
+          source: 'merged',
+        });
+        expect(result.ok).toBe(true);
+      });
+
+      it('loadConfig REJECTS a committed project config that carries spec_owner', async () => {
+        await writeFile(
+          join(tmpDir, '.ai-conductor', 'config.yml'),
+          'spec_owner: jstoup111\n',
+        );
+        const result = await loadConfig(tmpDir);
+        expect(result.ok).toBe(false);
+        if (result.ok) return;
+        expect(result.error.message).toMatch(/spec_owner/);
+        expect(result.error.message).toMatch(/~\/\.ai-conductor\/config\.yml/);
+      });
+
+      it('loadConfig still succeeds for a project config with no spec_owner (no regression)', async () => {
+        await writeFile(
+          join(tmpDir, '.ai-conductor', 'config.yml'),
+          'defaults:\n  model: sonnet\n',
+        );
+        const result = await loadConfig(tmpDir);
+        expect(result.ok).toBe(true);
+      });
     });
   });
 

@@ -6,6 +6,7 @@ import type {
   StepConfig,
   PhaseConfig,
   TierOverride,
+  SelfHostActivation,
 } from '../types/config.js';
 import { getStepDefinition } from './steps.js';
 
@@ -292,4 +293,40 @@ export function resolveRebaseResolutionAttempts(config?: HarnessConfig): number 
     return DEFAULT_REBASE_RESOLUTION_ATTEMPTS;
   }
   return override;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Self-host guardrails (adr-2026-06-30-self-host-detection-seam / TR-11)
+//
+// The resolved shape every guardrail site reads. Resolution is SAFE-BY-DEFAULT:
+// an absent block, or any omitted field, yields auto-detection with every gate
+// ENABLED. A partial config can never silently disable a guardrail.
+// ────────────────────────────────────────────────────────────────────────────
+
+export const DEFAULT_SELF_HOST_ACTIVATION: SelfHostActivation = 'auto';
+
+/** Fully-resolved self-host guardrail settings (no optional fields). */
+export interface ResolvedSelfHostConfig {
+  activation: SelfHostActivation;
+  skillRelinkPreflight: boolean;
+  sandboxBuildEnv: boolean;
+  versionApprovalGate: boolean;
+  releaseArtifactGate: boolean;
+}
+
+/**
+ * Resolve the `harness_self_host` block to concrete settings. Absent block or
+ * omitted fields default to the safe posture (auto-detect, all gates on).
+ * Validation of the raw block happens in `validateConfig`; this resolver assumes
+ * a validated (or absent) block and only applies defaults.
+ */
+export function resolveSelfHostConfig(config?: HarnessConfig): ResolvedSelfHostConfig {
+  const block = config?.harness_self_host;
+  return {
+    activation: block?.activation ?? DEFAULT_SELF_HOST_ACTIVATION,
+    skillRelinkPreflight: block?.skill_relink_preflight ?? true,
+    sandboxBuildEnv: block?.sandbox_build_env ?? true,
+    versionApprovalGate: block?.version_approval_gate ?? true,
+    releaseArtifactGate: block?.release_artifact_gate ?? true,
+  };
 }

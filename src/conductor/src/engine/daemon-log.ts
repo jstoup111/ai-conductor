@@ -26,6 +26,16 @@ export function daemonLogPath(repoPath: string): string {
   return join(daemonDir(repoPath), DAEMON_LOG_NAME);
 }
 
+/**
+ * Stamp one already-prefixed daemon log line (`[daemon] …`) with a leading
+ * ISO-8601 UTC timestamp for the durable record read via `conduct daemon logs`.
+ * The clock is injected so the format is deterministic under test. Timestamps
+ * land only in the persisted log — the live tmux console stays uncluttered.
+ */
+export function formatDaemonLogLine(line: string, now: Date = new Date()): string {
+  return `${now.toISOString()} ${line}`;
+}
+
 /** Append-only sink returned by openDaemonLog. */
 export interface DaemonLogSink {
   /** Append a line (a trailing newline is added if absent). Buffered + ordered. */

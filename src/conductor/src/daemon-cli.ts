@@ -12,14 +12,20 @@ import { ConductorEventEmitter } from './ui/events.js';
 import { DefaultStepRunner } from './engine/step-runners.js';
 import { ensureInstallFresh } from './engine/install-freshness.js';
 import { Conductor } from './engine/conductor.js';
+import { classifySelfHost, defaultSelfHostDetector } from './engine/self-host/detector.js';
 import { loadConfig, resolveMemoryProvider } from './engine/config.js';
 import { holdLock } from './engine/daemon-lock.js';
-import { openDaemonLog, type DaemonLogSink } from './engine/daemon-log.js';
+import {
+  openDaemonLog,
+  formatDaemonLogLine,
+  type DaemonLogSink,
+} from './engine/daemon-log.js';
 import type { ConductState, ConductorEvent, StepName } from './types/index.js';
 import { runDaemon, type BacklogItem } from './engine/daemon.js';
 import { discoverBacklog, fastForwardRoot } from './engine/daemon-backlog.js';
 import { localWorkSource, type WorkSource } from './engine/daemon-work-source.js';
-import { resolveDaemonOwner, type GhRunner } from './engine/owner-gate/identity.js';
+import { type GhRunner } from './engine/owner-gate/identity.js';
+import { makeMachineOwnerResolver } from './engine/owner-gate/machine-identity.js';
 import { readSpecOwnerStamp } from './engine/owner-gate/provenance.js';
 import { firstAppearanceTime } from './engine/owner-gate/merge-time.js';
 import { clampDaemonConcurrency } from './engine/daemon-command.js';
@@ -143,7 +149,10 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   let logSink: DaemonLogSink | null = null;
   const log = (msg: string) => {
     console.log(`${chalk.dim('[daemon]')} ${msg}`);
-    logSink?.write(`[daemon] ${stripAnsi(msg)}`);
+    // The persisted record gets a leading ISO-8601 UTC timestamp so activity read
+    // back via `conduct daemon logs` can be correlated in time; the console stays
+    // uncluttered for live watching.
+    logSink?.write(formatDaemonLogLine(`[daemon] ${stripAnsi(msg)}`));
   };
 
   // ADR-010: claim the 1-per-repo pidfile so this daemon's liveness is observable
@@ -174,6 +183,17 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
 
   const configResult = await loadConfig(projectRoot);
   const config = configResult.ok ? configResult.config : undefined;
+
+  // Self-host classification (Phase 6). Decided ONCE per daemon against the MAIN
+  // repo root (`projectRoot`) — "is this daemon building the harness itself?" — not
+  // per-worktree (a worktree path never equals the harness root). Honors the
+  // config activation override (`auto`/`force_on`/`force_off`). Constant for every
+  // feature this daemon builds; threaded to each Conductor as `selfHost`. For any
+  // non-harness repo this is false and the build path is byte-for-byte unchanged.
+  const isSelfHost = await classifySelfHost(defaultSelfHostDetector(), config, projectRoot);
+  if (isSelfHost) {
+    log('self-host mode active — harness self-build guardrails enabled for this daemon.');
+  }
 
   // One shared provider + event bus across workers (rate limits are shared).
   const events = new ConductorEventEmitter();
@@ -263,6 +283,11 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       mode: 'auto',
       config,
       projectRoot: wt.path,
+      // Self-host guardrails (Phase 6): activate the bundle only when this daemon
+      // is building the harness itself. `baseBranch` feeds the release-artifact
+      // migration classifier (`<base>...HEAD`).
+      selfHost: isSelfHost,
+      baseBranch,
       verifyArtifacts: true,
       freshContextPerStep: true,
       // Resume from the first unsatisfied step rather than hardcoding the entry
@@ -353,15 +378,22 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   //
   // ADR-014: the discoverTick closure is now encapsulated in a WorkSource adapter
   // so the run-loop is decoupled from direct fs/git I/O and tests can inject fakes.
-  // Owner-gate wiring (adr-2026-06-30-*): resolve the daemon owner FRESH each
-  // pass (no caching) so a reconfigured `spec_owner` / changed gh login takes
-  // effect next pass (FR-14); back the committed stamp + first-appearance
-  // readers with the real git runner (the main checkout, never a worktree). The
-  // grandfather cutover comes from validated config; MISSING → null, the
-  // documented default (no grandfather window → un-owned specs skip as
-  // indeterminate). When neither a configured owner nor a gh login resolves,
-  // resolveDaemonOwner returns `{ resolved: false }` → the gate is fail-open
-  // (build all, warn once). ADR-1 naming: `daemonOwner`, never a bare `owner`.
+  // Owner-gate wiring (adr-2026-06-30-* / adr-2026-07-01-machine-scoped-operator-identity):
+  // resolve the daemon owner FRESH each pass (no caching) so a reconfigured
+  // `spec_owner` / changed gh login takes effect next pass (FR-14); back the
+  // committed stamp + first-appearance readers with the real git runner (the main
+  // checkout, never a worktree). The grandfather cutover comes from validated
+  // config; MISSING → null, the documented default (un-owned specs skip as
+  // indeterminate).
+  //
+  // D1 (machine-scoped identity): the owner is resolved via
+  // `makeMachineOwnerResolver`, which reads `spec_owner` ONLY from the user config
+  // (~/.ai-conductor/config.yml) → `gh` login → unresolved. The PROJECT config
+  // (`config`, from loadConfig) is deliberately NOT consulted for identity, so a
+  // committed `spec_owner` can never leak one operator's identity onto everyone.
+  // D3 (fail-closed): when neither the user-config owner nor a gh login resolves,
+  // the resolver returns `{ resolved: false }` and discovery builds NOTHING.
+  // ADR-1 naming: `daemonOwner`, never a bare `owner`.
   const ownerGh: GhRunner = async (args, o) => {
     const { stdout } = await execFile('gh', args, { cwd: o.cwd });
     return { stdout: String(stdout) };
@@ -378,7 +410,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       markWarned: (slug) => markWarned(projectRoot, slug),
       fastForwardRoot,
       discoverBacklog,
-      resolveDaemonOwner: () => resolveDaemonOwner(config ?? {}, ownerGh, projectRoot),
+      resolveDaemonOwner: makeMachineOwnerResolver(ownerGh, projectRoot),
       readStamp: (slug) => readSpecOwnerStamp(ownerGit, baseBranch, slug),
       readMergeTime: (slug) =>
         firstAppearanceTime(ownerGit, baseBranch, `.docs/plans/${slug}.md`),

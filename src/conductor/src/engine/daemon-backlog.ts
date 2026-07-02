@@ -193,9 +193,9 @@ export interface DiscoverBacklogOpts {
    *
    * - `daemonOwner` — the once-per-pass resolved daemon owner. When `resolved:
    *   true`, each content-eligible spec is put through `decideSpecGate`; when
-   *   `resolved: false` the gate is inactive (fail-open) and every content-
-   *   eligible spec builds, with a single warn-once "gate inactive" line per
-   *   pass. Absent entirely → the gate is skipped silently (legacy behavior).
+   *   `resolved: false` the daemon FAIL-CLOSES (D3) — it builds NOTHING and
+   *   surfaces a single warn-once "identity unresolved" line per pass. Absent
+   *   entirely → the gate is skipped silently (legacy behavior).
    * - `readStamp(slug)` — reads the spec's committed owner stamp; defaults to
    *   "un-owned" when unset.
    * - `readMergeTime(slug)` — the spec's first-appearance time for the un-owned
@@ -251,21 +251,25 @@ export async function discoverBacklog(
   // per-pass local guards below are retained so that when the dedup hooks are
   // unset (tests, legacy), each notice still logs at most once per pass (never
   // per-spec), preserving prior behavior.
-  const GATE_INACTIVE_WARN_KEY = '__owner-gate-inactive__';
+  const IDENTITY_UNRESOLVED_WARN_KEY = '__owner-gate-identity-unresolved__';
   const NO_CUTOVER_WARN_KEY = '__owner-gate-no-cutover__';
 
-  // Fail-open notice (FR-3): when a `daemonOwner` is supplied but UNRESOLVED, the
-  // gate is inactive and every content-eligible spec builds. Surface that once so
-  // the operator knows gating is off, without log spam. Distinct from the per-slug
-  // content/ownership skip lines. An ABSENT `daemonOwner` stays silent (legacy).
-  let gateInactiveWarned = false;
-  const warnGateInactiveOnce = async (): Promise<void> => {
-    if (gateInactiveWarned) return;
-    gateInactiveWarned = true;
+  // Fail-CLOSED notice (D3 / Story 3): when a `daemonOwner` is supplied but
+  // UNRESOLVED (no user-config spec_owner and no gh login), the daemon builds
+  // NOTHING — an unidentified daemon must never build another operator's specs.
+  // Surface that once, loudly and distinctly, so the operator knows why the
+  // backlog is empty and how to fix it. Distinct from the per-slug
+  // content/ownership skip lines. An ABSENT `daemonOwner` stays silent (legacy —
+  // the gate is simply unwired).
+  let identityUnresolvedWarned = false;
+  const warnIdentityUnresolvedOnce = async (): Promise<void> => {
+    if (identityUnresolvedWarned) return;
+    identityUnresolvedWarned = true;
     await warnOnce(
-      GATE_INACTIVE_WARN_KEY,
-      'owner-gate inactive: daemon owner unresolved (no configured spec_owner and ' +
-        'no gh login) — building all content-eligible specs (fail-open); logged once.',
+      IDENTITY_UNRESOLVED_WARN_KEY,
+      'daemon identity unresolved: no spec_owner in ~/.ai-conductor/config.yml and no ' +
+        'gh login — building NOTHING (fail-closed). Set spec_owner in ' +
+        '~/.ai-conductor/config.yml or authenticate gh; logged once.',
     );
   };
 
@@ -285,6 +289,19 @@ export async function discoverBacklog(
         'skipped; set owner_gate_cutover to grandfather pre-existing specs.',
     );
   };
+
+  // Fail-CLOSED gate (D3 / Story 3): a supplied-but-UNRESOLVED daemon owner
+  // builds NOTHING. This reverses the prior fail-open behavior (build all when
+  // identity is unknown) — the exact multi-operator hazard, where a
+  // misconfigured/unauthenticated daemon would build every operator's specs. We
+  // short-circuit BEFORE the per-spec scan so no content/ownership skip lines are
+  // emitted for work that could never build this pass; only the single loud
+  // identity-unresolved notice surfaces. An ABSENT `daemonOwner` (gate unwired)
+  // is untouched — legacy discovery runs normally.
+  if (opts.daemonOwner && !opts.daemonOwner.resolved) {
+    await warnIdentityUnresolvedOnce();
+    return [];
+  }
 
   const planFiles = (await tree.listPlanFiles()).filter((f) => f.endsWith('.md'));
   if (planFiles.length === 0) return [];
@@ -339,8 +356,9 @@ export async function discoverBacklog(
     // Owner gate — runs ONLY after every content filter above has passed, so the
     // gate never bypasses eligibility (a content-ineligible spec is already
     // `continue`d before reaching here). The gate is consulted only for a
-    // RESOLVED daemon owner; an unresolved owner is fail-open (built), and an
-    // absent `daemonOwner` skips the gate entirely (legacy behavior).
+    // RESOLVED daemon owner. An UNRESOLVED owner never reaches here — it
+    // fail-closes (builds nothing) at the top of the scan. An absent
+    // `daemonOwner` skips the gate entirely (legacy behavior).
     const daemonOwner = opts.daemonOwner;
     if (daemonOwner?.resolved) {
       // Gate active — flag the operator-accepted skip-default once per pass when
@@ -358,9 +376,6 @@ export async function discoverBacklog(
         await warnOnce(slug, ownershipSkipMessage(slug, decision));
         continue;
       }
-    } else if (daemonOwner) {
-      // Supplied but unresolved → fail-open: build all, warn once.
-      await warnGateInactiveOnce();
     }
 
     // Work track (adr-2026-06-29-explore-prd-split-track-in-explore/adr-2026-06-29-track-marker-location) from `.docs/track/<plug-stem>.md`. Absent → the
@@ -390,11 +405,19 @@ function ownershipSkipMessage(slug: string, decision: GateDecision): string {
       `('${decision.other}'), not this daemon; logged once.`
     );
   }
+  // Un-owned merged spec (D5 / Story 6): surface it LOUDLY and actionably, never
+  // a silent stall. The message states it is un-owned AND how to fix it — add an
+  // `Owner:` marker on the default branch — so legacy/pre-hardening work does not
+  // vanish into a black hole. Deduped once per slug by the caller's warnOnce.
   const why =
     decision.reason === 'unowned-post-cutover'
       ? 'un-owned and merged on/after the grandfather cutover'
       : 'un-owned with an indeterminate merge time';
-  return `skip ${slug}: owner-gate — spec is ${why}; logged once.`;
+  return (
+    `skip ${slug}: owner-gate — spec is ${why}. To build it, add an ` +
+    `'Owner:' marker to the spec on the default branch (or grandfather it via ` +
+    `owner_gate_cutover); logged once.`
+  );
 }
 
 /**

@@ -181,8 +181,10 @@ The daemon is hosted as a **foreground process inside a per-repo tmux session**
 (`cc-daemon-<slug>`), so you can attach to a *running* daemon on demand — in full color
 — and restart or debug it without hunting for a pid. Its output is still teed to an
 append-only **`.daemon/daemon.log`** (size-capped, rotated once) so the full narrative
-survives. Management requires `tmux` on the host; the daemon still builds with no tmux
-present (management is purely additive).
+survives. Each persisted line is prefixed with an ISO-8601 UTC timestamp so activity
+read back via `daemon logs` can be correlated in time (the live console stays
+uncluttered). Management requires `tmux` on the host; the daemon still builds with no
+tmux present (management is purely additive).
 
 ```bash
 conduct-ts daemon start      # start the daemon in a tmux session (idempotent — no duplicate)
@@ -385,11 +387,61 @@ markdown_viewer:
   # args: ["{file}"]
   # mode: inline               # "inline" | "blocking" | "external"
 
+# ── Harness self-host guardrails (conduct-ts only; applies ONLY to a self-build ─
+#    of the james-stoup-agents harness repo — no effect on any other repo) ──────
+# Absent block = the safe default: auto-detect the harness self-build and run all
+# guardrails. See "Harness self-host guardrails" below. (Active for self-builds:
+# the daemon loop relinks + sandboxes the build and runs the finish gates.)
+harness_self_host:
+  activation: auto             # "auto" (path-detect) | "force_on" | "force_off"
+  # Per-gate toggles — omit to leave ENABLED (a partial block never disables a gate):
+  # skill_relink_preflight: true
+  # sandbox_build_env: true
+  # version_approval_gate: true
+  # release_artifact_gate: true
+
 # ── User-level conductor state (lives in ~/.ai-conductor/config.yml) ─────────
 conductor:
   update_channel: tagged       # "tagged" | "main"
   auto_check: true             # Check for updates on startup
 ```
+
+### Operator identity & owner gate (multi-operator, `conduct-ts` only)
+
+When two or more operators run daemons on **separate machines against the same repo**, each
+daemon must build **only its own** specs — no duplication, no silent stalls. That partition
+is keyed on an **operator identity** (`spec_owner`).
+
+**Identity is machine-scoped — set it in your USER config, never the project config.**
+
+```yaml
+# ~/.ai-conductor/config.yml   (per machine — NOT committed)
+spec_owner: your-github-login
+```
+
+- **Resolution chain:** user-config `spec_owner` → `gh` login → unresolved. An explicit
+  `spec_owner` always wins over the ambient `gh` login (deterministic).
+- **Anti-leak (hard guard):** `spec_owner` committed into a **project** `.ai-conductor/config.yml`
+  is a config-load **rejection** — it would leak your identity to everyone who pulls the repo.
+  The error names the file and the fix (move it to `~/.ai-conductor/config.yml`).
+- **Fail-closed:** a daemon that can resolve **no** identity (no user-config `spec_owner`
+  and no `gh` login) builds **nothing** and logs a loud, once-per-pass notice — it never
+  falls back to building every operator's work.
+- **Un-owned specs are surfaced, never silently skipped:** a merged spec with no `Owner:`
+  marker is skipped with a distinct, deduped line telling you to add an `Owner:` marker on
+  the default branch (or grandfather it via `owner_gate_cutover`).
+
+**Grandfather cutover — a per-repo policy that MUST NOT be set on the harness self-host repo.**
+
+```yaml
+# <repo>/.ai-conductor/config.yml   (committed — per-repo policy)
+owner_gate_cutover: 2026-06-30T00:00:00Z   # build un-owned specs merged BEFORE this instant
+```
+
+`owner_gate_cutover` grandfathers pre-existing **un-owned** specs so a repo with an unbuilt
+backlog can adopt the owner gate without stranding that work. **Do not set it on the
+james-stoup-agents self-host repo:** every plan there is already built and merged, so the
+grandfather window would make the daemon rebuild all of them. Leave it unset on the harness.
 
 ### OpenTelemetry observability (`conduct-ts` only)
 
@@ -428,6 +480,48 @@ otel:
 
 See `src/conductor/README.md → OpenTelemetry exporter` for the full implementation
 reference.
+
+### Harness self-host guardrails (`conduct-ts` only)
+
+The harness is the one repo the daemon can't build the way it builds every other repo — a self-build
+edits the very skills/hooks it is executing, on a machine whose concurrent Claude sessions all read
+the global `~/.claude/skills`. To make the `james-stoup-agents` harness repo safe to daemon-register,
+a **self-host mode** (configured by the `harness_self_host` block above) activates a guardrail bundle
+**only** for a harness self-build — every other repo's path is unchanged (the only added cost is one
+detector boolean):
+
+- **`SelfHostDetector`** — recognizes a self-build by comparing the build repo's realpath to the
+  harness root (identity is by path, never repo name). `activation: force_on|force_off` overrides it;
+  the detector is a swappable interface, the replacement point for a future platform identity.
+- **`SkillRelinkPreflight`** — relinks harness skills (`bin/install --update`) before dispatch so a
+  self-build that adds or renames a skill never HALTs on "no parseable result" from a stale symlink.
+- **`SandboxBuildEnv`** — runs the self-build against a **throwaway `CLAUDE_CONFIG_DIR`** whose
+  `skills/` + `hooks/` link into the build worktree, so it exercises its *own edited harness* without
+  ever mutating the global `~/.claude` the operator's live sessions read. It also **copies** the
+  operator's `.credentials.json` (so the headless build authenticates) and a `settings.json` whose
+  harness-checkout hook paths are **retargeted to the worktree** (so the build fires its *own* edited
+  hooks). Copies — never symlinks — so no sandbox link resolves to a global-config target. Fails
+  closed if a worktree link target is missing; torn down on pass, fail, or crash.
+- **`VersionApprovalGate` + `ReleaseArtifactGate`** — HALT-based, fail-closed finish gates:
+  VERSION-bump approval, `test/test_harness_integrity.sh`, a non-empty CHANGELOG `[Unreleased]`, and a
+  `## Migration` block for breaking changes. In the daemon's unattended `auto` mode there is no prompt,
+  so any gate that can't self-satisfy writes `.pipeline/HALT` and the PR is not opened.
+
+**The daemon never merges** (ADR-005/ADR-010): every self-build ends at a HALT for the operator to
+re-install, `/verify`, and merge. Config is safe-by-default — an absent or partial `harness_self_host`
+block auto-detects with all gates on.
+
+**How it activates in the loop.** The daemon classifies self-host **once** at startup (against the
+main repo root, honoring the `activation` override) and threads a single `selfHost` flag to each
+build. For a self-build only: skills are relinked before the first `build`; the `build` step runs with
+`process.env.CLAUDE_CONFIG_DIR` scoped to the sandbox **for the duration of that step and restored
+afterward** (nothing bleeds into `finish`); and the VERSION + release gates run **before** the
+`finish` step opens the PR — a failing gate writes `.pipeline/HALT` so the PR never opens. Every part
+is gated behind that one flag, so any other repo's build path is byte-for-byte unchanged.
+
+> **Status:** active for self-builds. The guardrail bundle (`src/conductor/src/engine/self-host/`) is
+> wired into the daemon loop; the harness can be daemon-registered with self-host mode on. See
+> `src/conductor/README.md → Harness self-host guardrails` for the module + wiring reference.
 
 ### Plugins (`conduct-ts` only)
 

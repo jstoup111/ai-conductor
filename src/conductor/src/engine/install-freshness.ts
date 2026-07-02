@@ -16,7 +16,7 @@
 import { execa } from 'execa';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { access } from 'node:fs/promises';
+import { access, constants } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -128,6 +128,72 @@ export async function ensureInstallFresh(opts: EnsureFreshOptions = {}): Promise
     );
   }
   // Healed — resolve and let the caller proceed.
+}
+
+// ── Self-build skill-relink preflight (TR-4) ────────────────────────────────
+//
+// A harness SELF-BUILD may merge a spec that adds or renames a skill. `git pull`
+// alone does not relink `~/.claude/skills/`, so a dispatched `claude -p
+// '/<skill>'` would hit "Unknown command" → empty output → a "no parseable
+// result" HALT (the exact gap that left /rebase unrunnable). Before dispatching a
+// self-build we proactively relink via `bin/install --update` (relink only — it
+// skips deps + channel prompt, and does NOT git-pull). Scoped to self-builds:
+// callers gate this behind the SelfHostDetector, so a non-harness build never
+// reaches here and `ensureInstallFresh`'s normal-repo behavior is unchanged.
+
+export interface RelinkPreflightOptions {
+  /** Override harness-root discovery (tests). */
+  harnessRoot?: string | null;
+  /** Override the `bin/install` runner (tests). When set, the real installer-
+   *  existence check is skipped (the injected runner models install behavior). */
+  runner?: InstallRunner;
+  /** Diagnostic sink (defaults to stderr). */
+  log?: (message: string) => void;
+}
+
+/**
+ * Relink harness skills before a self-build dispatches. Resolves when the relink
+ * succeeds (or when there is no harness root to link against — reported, not a
+ * crash). Throws `InstallStaleError` when `bin/install --update` exits non-zero
+ * or the installer is missing / non-executable — the caller must NOT dispatch a
+ * self-build into a known stale-symlink state.
+ */
+export async function relinkSkillsForSelfBuild(opts: RelinkPreflightOptions = {}): Promise<void> {
+  const log = opts.log ?? ((m: string) => console.error(m));
+  const harnessRoot =
+    opts.harnessRoot !== undefined ? opts.harnessRoot : await resolveHarnessRoot();
+  if (!harnessRoot) {
+    // Nothing to link against — report and skip rather than crash (TR-4 negative).
+    log('skill-relink preflight: harness root unresolved; skipping the self-build relink.');
+    return;
+  }
+
+  // Production path (no injected runner): verify the real installer up front so a
+  // missing / non-executable `bin/install` surfaces a keyed error naming the
+  // path, not an opaque ENOENT/EACCES spawn error from execa (TR-4 negative).
+  if (!opts.runner) await assertInstallerRunnable(harnessRoot);
+
+  const runner = opts.runner ?? realInstallRunner;
+  const code = await runner(['--update'], harnessRoot);
+  if (code !== 0) {
+    throw new InstallStaleError(
+      `Skill relink failed for the harness self-build (\`bin/install --update\` exited ${code}). ` +
+        'Not dispatching into a stale-symlink state — a newly added or renamed skill would HALT ' +
+        'the build on "no parseable result".',
+    );
+  }
+}
+
+async function assertInstallerRunnable(harnessRoot: string): Promise<void> {
+  const installer = join(harnessRoot, 'bin', 'install');
+  try {
+    await access(installer, constants.X_OK);
+  } catch {
+    throw new InstallStaleError(
+      `Harness installer is missing or not executable: ${installer}. ` +
+        'Cannot relink skills for the self-build.',
+    );
+  }
 }
 
 async function defaultPrompt(question: string): Promise<boolean> {

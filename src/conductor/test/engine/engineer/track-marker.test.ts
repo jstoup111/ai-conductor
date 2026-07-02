@@ -14,6 +14,7 @@ import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { landSpec } from '../../../src/engine/engineer/land-spec.js';
 import { runAuthoring } from '../../../src/engine/engineer/authoring.js';
+import { createEngineerWorktree } from '../../../src/engine/engineer/worktree-authoring.js';
 import { writeTrackMarker } from '../../../src/engine/engineer/track-marker.js';
 import { parseTrack } from '../../../src/engine/artifacts.js';
 
@@ -44,19 +45,24 @@ beforeEach(async () => {
 });
 afterEach(async () => { await rm(repo, { recursive: true, force: true }); });
 
-async function seedDocs(opts: { spec?: boolean; track?: string }) {
-  await mkdir(join(repo, '.docs/stories'), { recursive: true });
-  await mkdir(join(repo, '.docs/plans'), { recursive: true });
-  await writeFile(join(repo, '.docs/stories/t.md'), ACCEPTED_STORIES);
-  await writeFile(join(repo, '.docs/plans/t.md'), PLAN);
+// Create the per-idea worktree and seed .docs into IT (the engineer authors in the
+// worktree, not the primary checkout); returns the worktree path for landSpec.
+async function seedWorktree(opts: { spec?: boolean; track?: string }): Promise<string> {
+  const wt = await createEngineerWorktree(repo, 'idea t');
+  const dir = wt.worktreePath;
+  await mkdir(join(dir, '.docs/stories'), { recursive: true });
+  await mkdir(join(dir, '.docs/plans'), { recursive: true });
+  await writeFile(join(dir, '.docs/stories/t.md'), ACCEPTED_STORIES);
+  await writeFile(join(dir, '.docs/plans/t.md'), PLAN);
   if (opts.spec) {
-    await mkdir(join(repo, '.docs/specs'), { recursive: true });
-    await writeFile(join(repo, '.docs/specs/t.md'), '# PRD: t\n\nApproved.\n');
+    await mkdir(join(dir, '.docs/specs'), { recursive: true });
+    await writeFile(join(dir, '.docs/specs/t.md'), '# PRD: t\n\nApproved.\n');
   }
   if (opts.track) {
-    await mkdir(join(repo, '.docs/track'), { recursive: true });
-    await writeFile(join(repo, '.docs/track/t.md'), `# Track\n\nTrack: ${opts.track}\n`);
+    await mkdir(join(dir, '.docs/track'), { recursive: true });
+    await writeFile(join(dir, '.docs/track/t.md'), `# Track\n\nTrack: ${opts.track}\n`);
   }
+  return dir;
 }
 
 describe('parseTrack', () => {
@@ -86,20 +92,20 @@ describe('writeTrackMarker', () => {
 
 describe('landSpec — track-aware required artifacts', () => {
   it('product track (default, no marker) REQUIRES a spec', async () => {
-    await seedDocs({ spec: false }); // no spec, no track marker → defaults product
-    await expect(landSpec({ name: 'a', canonicalPath: repo }, 'idea t')).rejects.toThrow(/spec \(product track\)/);
+    const worktree = await seedWorktree({ spec: false }); // no spec, no track marker → defaults product
+    await expect(landSpec({ name: 'a', canonicalPath: repo }, 'idea t', worktree)).rejects.toThrow(/spec \(product track\)/);
   });
 
   it('product track lands when the spec is present', async () => {
-    await seedDocs({ spec: true, track: 'product' });
-    const r = await landSpec({ name: 'a', canonicalPath: repo }, 'idea t');
+    const worktree = await seedWorktree({ spec: true, track: 'product' });
+    const r = await landSpec({ name: 'a', canonicalPath: repo }, 'idea t', worktree);
     expect(r.branch).toMatch(/^spec\//);
     expect(await show(r.branch, '.docs/specs/t.md')).toContain('PRD');
   });
 
   it('technical track lands WITHOUT a spec (stories carry acceptance criteria)', async () => {
-    await seedDocs({ spec: false, track: 'technical' });
-    const r = await landSpec({ name: 'a', canonicalPath: repo }, 'idea t');
+    const worktree = await seedWorktree({ spec: false, track: 'technical' });
+    const r = await landSpec({ name: 'a', canonicalPath: repo }, 'idea t', worktree);
     expect(r.branch).toMatch(/^spec\//);
     // stories + plan + track marker committed; no spec required.
     expect(await show(r.branch, '.docs/stories/t.md')).toContain('Accepted');

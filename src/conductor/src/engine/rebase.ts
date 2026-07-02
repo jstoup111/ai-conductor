@@ -1,8 +1,9 @@
 import { execa } from 'execa';
-import { mkdir, writeFile, readFile, access } from 'node:fs/promises';
+import { writeFile, readFile, access } from 'node:fs/promises';
 import { join, isAbsolute } from 'node:path';
 import type { StepName } from '../types/index.js';
 import { writeVerdict, type GateVerdict } from './gate-verdicts.js';
+import { writeHaltMarker } from './halt-marker.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
 
 // ── Engine-native `rebase` loopGate (Phase 9.0) ──────────────────────────────
@@ -14,8 +15,6 @@ import type { ConductorEventEmitter } from '../ui/events.js';
 // Design keystone (ADR-001 / FR-4): the gate verdict is SATISFIED iff the
 // branch is already current with the base. A genuinely stale branch must never
 // report satisfied — that is the critical correctness property.
-
-const LOOP_HALT_MARKER = '.pipeline/HALT';
 
 /** Minimal git runner — injected so the helpers are unit-testable without a repo. */
 export interface GitRunner {
@@ -318,7 +317,6 @@ export async function writeHalt(
   conflicts: string[],
   extraReason?: string,
 ): Promise<void> {
-  await mkdir(join(projectRoot, '.pipeline'), { recursive: true }).catch(() => {});
   const fileList = conflicts.length > 0 ? conflicts.join(', ') : '(unknown)';
   const note =
     `rebase conflict — parked for human resolution\n` +
@@ -329,7 +327,7 @@ export async function writeHalt(
     `  2. git rebase --continue\n` +
     `  3. rm .pipeline/HALT\n` +
     `  4. Re-queue the feature for the daemon.\n`;
-  await writeFile(join(projectRoot, LOOP_HALT_MARKER), note, 'utf-8').catch(() => {});
+  await writeHaltMarker(projectRoot, note);
 }
 
 // ── Outcome model ────────────────────────────────────────────────────────────

@@ -26,6 +26,63 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   establishes RED. Evidence is gitignored run evidence, not a committed artifact. Locked with new
   unit tests for the predicate + validator and updated conductor fixtures.
 
+- **Machine-scoped operator identity + anti-leak guard (multi-operator ownership hardening,
+  Slice A).** The `conductor` daemon now resolves its `spec_owner` identity **only** from the
+  user config (`~/.ai-conductor/config.yml`) via `owner-gate/machine-identity.ts`
+  (`makeMachineOwnerResolver`: user-config `spec_owner` → `gh` login → unresolved, resolved
+  fresh each poll) — project config is never consulted for identity, so a committed `spec_owner`
+  can no longer leak one operator's identity onto everyone who pulls (D1). `validateConfig` gains
+  a `{ source: 'project' | 'merged' }` option and **rejects** a `spec_owner` key in a committed
+  project config (blank or not) with a config-load error naming the file and the fix
+  (`loadConfig` → `source: 'project'`; `loadMergedConfig` → `source: 'merged'`, so a
+  user-sourced value in the merged view is still allowed) (D2). An un-owned merged spec is now
+  skipped with a **distinct, deduped, actionable** log line telling the operator to add an
+  `Owner:` marker on the default branch (or grandfather via `owner_gate_cutover`) instead of a
+  bare skip (D5). Documented in `README.md` → "Operator identity & owner gate" and
+  `src/conductor/README.md` → "Owner gate: multi-operator identity partition"
+  (adr-2026-07-01-machine-scoped-operator-identity). The authoring-side universal stamping /
+  fail-closed land (Slice B) is sequenced separately and not included here.
+- **Harness self-host guardrails wired into the daemon loop (Phase 6).** The `conductor` daemon now
+  activates the self-host guardrail bundle for a harness self-build. `daemon-cli` classifies
+  `isSelfHost` **once** at startup against the main repo root (honoring the `activation` override) and
+  threads a `selfHost` flag to each `Conductor`. In `conductor.run()`, for a self-build only
+  (`daemon && selfHost`): skills are relinked once before the first `build` (a relink `InstallStaleError`
+  aborts before any child build); the `build` step runs under a throwaway `CLAUDE_CONFIG_DIR` with
+  `process.env.CLAUDE_CONFIG_DIR` set to the sandbox for the duration of that step and **restored in a
+  `finally` on both the pass and throw branches** (no bleed into `finish`), with guaranteed sandbox
+  teardown on every exit path; and the VERSION-approval + release-artifact gates run **before** the
+  `finish` step opens the PR — a failing gate writes `.pipeline/HALT` so the PR never opens and the
+  daemon never merges (ADR-005/ADR-010). Every change is additive and gated behind the single
+  `selfHost` flag, so any non-harness repo's build path is byte-for-byte unchanged (TR-13); proven by
+  the full conductor suite plus a new wired-path integration + structural non-autonomy test
+  (`test/engine/self-host/wiring.test.ts`). The harness can now be daemon-registered with self-host
+  mode on.
+- **Harness self-host guardrail primitives (engine modules).**
+  The `conductor` engine gains a `harness_self_host` config block plus six test-covered modules under
+  `src/engine/self-host/` implementing the DECIDE spec (adr-2026-06-30-{self-host-detection-seam,
+  sandbox-build-isolation, halt-based-release-gates}): `SelfHostDetector` (realpath-based self-build
+  detection + `activation: auto|force_on|force_off` override + a swappable interface seam for a future
+  platform identity), `SkillRelinkPreflight` (relink harness skills via `bin/install --update` before
+  a self-build so a newly added/renamed skill never HALTs on "no parseable result"), `SandboxBuildEnv`
+  (a throwaway `CLAUDE_CONFIG_DIR` whose skills/+hooks/ link into the build worktree, with the
+  operator's `.credentials.json` + a hook-retargeted `settings.json` COPIED in so the headless build
+  can authenticate and fire its OWN edited hooks — the self-build exercises its own edited harness
+  without mutating the global `~/.claude` the operator's concurrent sessions read; fails closed on a
+  missing worktree link target, guaranteed teardown on pass/fail/crash, no-leak invariant), and
+  `VersionApprovalGate`
+  + `ReleaseArtifactGate` (HALT-based, fail-closed VERSION-approval / integrity-suite / CHANGELOG
+  `[Unreleased]` / migration-block gates). Config is safe-by-default: an absent/partial block
+  auto-detects with all gates ON. These modules are the reusable primitives; the daemon-loop
+  integration that activates them ships in the same release (see the Phase 6 wiring entry above).
+  Includes a real-binary smoke for the relink and adversarial isolation tests for the sandbox.
+- **Spec + plan: harness daemon self-host guardrails (DECIDE artifacts only; no code yet).** Design,
+  architecture diagrams, 3 APPROVED ADRs, 13 stories (TR-1..TR-13), a clean conflict-check, and a
+  Tier-L implementation plan for making the `james-stoup-agents` harness repo safe to
+  daemon-register: a unified self-host mode (single swappable `SelfHostDetector` seam) that activates
+  a skill-relink preflight, a throwaway-`CLAUDE_CONFIG_DIR` sandbox build (self-verifies edited
+  harness without mutating global `~/.claude`), and HALT-based fail-closed VERSION-approval +
+  CHANGELOG/migration/integrity release gates. Preserves ADR-005/ADR-010 (daemon never merges).
+  Implementation is tracked as a separate build over `.docs/plans/daemon-self-host-guardrails.md`.
 - **Daemon owner-gating: the autonomous spec-build daemon now builds only the merged specs it
   owns.** Each discovery pass resolves the daemon's operator identity (configured `spec_owner` wins,
   else the `gh` login, else unresolved → fail-open) and, for every content-eligible spec, reads the
@@ -83,6 +140,20 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   the approval gate, and documents a **guillemet placeholder convention** (`«slug»`, not `<slug>`
   / `&lt;slug&gt;` / `{slug}`) to avoid the angle-bracket trap that silently broke a sequence
   diagram in a recent spec. New `checkDiagramsForFile` in `mermaid-renderer.ts`.
+- **Engineer worktree isolation** (implements the DECIDE spec below). The engineer now authors,
+  `land`s, and `handoff`s each idea inside a dedicated per-idea git worktree of the target repo
+  (`<target>/.worktrees/engineer-<slug>` on `spec/<slug>`) instead of the shared main checkout —
+  so a concurrent daemon build or a second engineer session on the same repo can no longer be
+  corrupted by a branch-switch. New `conduct-ts engineer worktree --project <n> --idea "<i>"`
+  primitive creates it; `land`/`handoff` gain a **required `--worktree <path>`**. The
+  `checkout -b … / checkout back` dance in `landSpec` is deleted (it commits in place), `land`
+  stages only `.docs` (idea-scoped, no cross-idea bleed), `handoff` runs `gh` from the worktree
+  and **removes it on success** (branch persists) / **keeps it on failure**. Worktree creation
+  **strict-aborts** with zero primary-tree mutation when it can't be made (e.g. unborn/detached
+  HEAD). The daemon's worktree create/reconcile/teardown logic was extracted into a shared
+  `engine/worktree-shared.ts` used by both actors (one worktree story). Real-git smoke +
+  primary-tree-untouched / concurrent-actor / sibling-unchanged invariant tests included.
+  Assumes the target repo gitignores `.worktrees/` (the same convention the daemon relies on).
 - `/bootstrap` now sets up git end-to-end for **new/fresh** projects (new Step 10a, run after
   the smoke test). It forces the default branch to `main`, makes a single seed commit when there
   is no history yet, configures an `origin` remote (`gh repo create --private --source=.` when
@@ -91,6 +162,13 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   non-destructive: an existing repo, existing history, or a pre-configured remote is left
   untouched, and a rejected push (remote already has commits) stops for the user instead of
   forcing. When no remote is available the step is skipped with a note rather than blocking.
+- Approved DECIDE spec for **Engineer Worktree Isolation** (`.docs/specs/`, `stories/`, `plans/`,
+  `complexity/`, `conflicts/`, `architecture/`, plus `adr-2026-06-30-engineer-worktree-authoring-isolation.md`
+  and its architecture-review). Specifies moving the engineer's idea→spec authoring (DECIDE + `land`
+  + `handoff`) off the target repo's shared main checkout and into a per-idea git worktree — reusing
+  the daemon's worktree mechanism — so a running daemon or a second session on the same target repo
+  can't be corrupted by the engineer's branch-switch dance. Spec only; no engine code changed yet.
+  Amends ADR-008 (adopts its deferred Option B for same-repo concurrency).
 
 ### Fixed
 
@@ -103,6 +181,10 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   (dedup hooks unset) still logs at most once per pass, never per-spec. No build/skip decision
   changes. Locked with two cross-scan tests in `daemon-backlog.test.ts`.
 
+- **`rebase_resolution_attempts` is now a recognized top-level config key.** It was present in the
+  `HarnessConfig` type and resolver but missing from `validateConfig`'s known-keys set, so setting it
+  in `config.yml` failed validation with "Unknown top-level key". Surfaced while adding the adjacent
+  `harness_self_host` key.
 - **Hardcoded per-step tier overrides now affect `model`, not just `effort`/`max_retries`.**
   `DEFAULT_STEP_TIER_OVERRIDES` model bumps were silently ignored — the model resolution chain in
   `resolveStepConfig` omitted `hardcodedStepTier`. As a result HARNESS.md's promised
@@ -154,6 +236,29 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   happened to create them, leaving bootstrap's directory list out of parity with the engine.
 
 ### Changed
+
+- **Unresolved daemon identity now fails CLOSED (multi-operator ownership hardening, Slice A).**
+  A `conductor` daemon that can resolve no operator identity — no `spec_owner` in
+  `~/.ai-conductor/config.yml` **and** no `gh` login — now builds **nothing** and emits a single
+  loud, deduped "identity unresolved" notice, reversing the prior fail-open behavior where an
+  unidentified daemon would build *every* operator's specs (the exact multi-operator hazard). A
+  daemon with a resolvable identity (the common case: `gh` authenticated) is unaffected, and an
+  unwired gate (no `daemonOwner` supplied) still runs legacy discovery unchanged
+  (`engine/daemon-backlog.ts`, `daemon-cli.ts`; D3,
+  adr-2026-07-01-machine-scoped-operator-identity).
+- **Daemon activity log lines are now timestamped.** Every line the daemon tees into the
+  durable `.daemon/daemon.log` (read via `conduct-ts daemon logs [--follow]`) is prefixed
+  with a leading ISO-8601 UTC timestamp (e.g. `2026-07-01T14:23:05.123Z [daemon] …`) so
+  activity can be correlated and grepped by time long after the fact. The stamping is a
+  pure, clock-injected `formatDaemonLogLine` helper in `engine/daemon-log.ts`; the live
+  tmux console keeps its uncluttered colored line. (`src/engine/daemon-log.ts`,
+  `src/daemon-cli.ts`.)
+- **`.pipeline/HALT` marker path + best-effort writer consolidated into one module.** The marker
+  literal was independently spelled in `conductor.ts`, `rebase.ts`, `daemon-deps.ts`,
+  `daemon-dashboard.ts`, `daemon-rekick.ts`, and the new self-host `gate-halt.ts`, and the
+  mkdir-then-write plumbing was duplicated between the rebase HALT and the self-host HALT. Both now
+  live in `engine/halt-marker.ts` (`HALT_MARKER` + `writeHaltMarker`), so a change to where the
+  daemon-stop marker lives or how it is written happens in exactly one place. No behavior change.
 
 - **Model selection right-sized at the front of the funnel.** `explore` now defaults to
   **opus / xhigh** (was sonnet / high), `bootstrap` and `complexity` to **sonnet** (were haiku),

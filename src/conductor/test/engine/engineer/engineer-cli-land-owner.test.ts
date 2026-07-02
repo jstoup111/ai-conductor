@@ -17,6 +17,7 @@ import {
   dispatchEngineer,
   type DispatchEngineerOpts,
 } from '../../../src/engine/engineer-cli.js';
+import { createEngineerWorktree } from '../../../src/engine/engineer/worktree-authoring.js';
 import type { GhRunner } from '../../../src/engine/owner-gate/identity.js';
 
 const execFile = promisify(execFileCb);
@@ -64,14 +65,22 @@ async function showOnBranch(branch: string, relPath: string): Promise<string | n
   }
 }
 
-/** Seed the pre-written DECIDE artifacts landSpec expects (left untracked under .docs/). */
-async function seedDocs(): Promise<void> {
-  await mkdir(join(repoPath, '.docs', 'specs'), { recursive: true });
-  await mkdir(join(repoPath, '.docs', 'stories'), { recursive: true });
-  await mkdir(join(repoPath, '.docs', 'plans'), { recursive: true });
-  await writeFile(join(repoPath, '.docs', 'specs', 'dep-bump.md'), '# PRD: dep bump\n\nApproved.\n');
-  await writeFile(join(repoPath, '.docs', 'stories', 'dep-bump.md'), ACCEPTED_STORIES);
-  await writeFile(join(repoPath, '.docs', 'plans', 'dep-bump.md'), PLAN_WITH_DEPS);
+/**
+ * Create the per-idea worktree and seed the pre-written DECIDE artifacts landSpec
+ * expects INTO it (the engineer authors in the worktree). Returns the worktree path
+ * to pass as `--worktree`. Call AFTER any writeConfig so the worktree's base includes
+ * the committed config.
+ */
+async function seedWorktree(): Promise<string> {
+  const wt = await createEngineerWorktree(repoPath, 'dep bump');
+  const dir = wt.worktreePath;
+  await mkdir(join(dir, '.docs', 'specs'), { recursive: true });
+  await mkdir(join(dir, '.docs', 'stories'), { recursive: true });
+  await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+  await writeFile(join(dir, '.docs', 'specs', 'dep-bump.md'), '# PRD: dep bump\n\nApproved.\n');
+  await writeFile(join(dir, '.docs', 'stories', 'dep-bump.md'), ACCEPTED_STORIES);
+  await writeFile(join(dir, '.docs', 'plans', 'dep-bump.md'), PLAN_WITH_DEPS);
+  return dir;
 }
 
 /** Write + COMMIT `.ai-conductor/config.yml` (uncommitted config would dirty the tree). */
@@ -134,29 +143,33 @@ afterEach(async () => {
 });
 
 describe('engineer land — owner-gate wiring (CLI seam)', () => {
-  it('threads the target config spec_owner into landSpec → marker stamped Owner', async () => {
+  it('does NOT honor a project-config spec_owner (D2 anti-leak) — identity never comes from the repo', async () => {
+    // D2 / Story 2: a `spec_owner` committed into the shared PROJECT config is
+    // now a hard config-load rejection — it must never source operator identity
+    // (that would leak one operator's id to everyone who pulls). The authoring
+    // caller swallows the rejected config to `{}` and falls through the identity
+    // chain to gh, so the committed 'alice' is IGNORED and gh's login wins.
+    // (Full authoring-side user-config sourcing + fail-closed refusal is Slice B.)
     await writeConfig('spec_owner: Alice\n');
-    await seedDocs();
-    // gh would win only if config were absent; a throwing gh proves config was used.
-    const failingGh: GhRunner = async () => {
-      throw new Error('gh should not be consulted when spec_owner is configured');
-    };
-    const { out, opts } = captureOpts({ gh: failingGh });
+    const worktree = await seedWorktree();
+    const gh: GhRunner = async () => ({ stdout: 'bob\n' });
+    const { out, opts } = captureOpts({ gh });
 
-    const code = await dispatchEngineer({ kind: 'land', project: 'alpha', idea: 'dep bump' }, opts);
+    const code = await dispatchEngineer({ kind: 'land', project: 'alpha', idea: 'dep bump', worktree }, opts);
     expect(code).toBe(0);
     const result = JSON.parse(out[out.length - 1]) as { slug: string; branch: string };
     const marker = await showOnBranch(result.branch, `.docs/intake/${result.slug}.md`);
-    expect(marker).toContain('Owner: alice'); // normalized (trim + lowercase)
+    expect(marker).toContain('Owner: bob'); // gh login, NOT the committed 'alice'
+    expect(marker).not.toContain('alice'); // the repo-committed identity is never used
   });
 
   it('threads the gh runner into landSpec → Owner from gh login when config is absent', async () => {
     // No config file at all → loadConfig fails → empty ownerConfig → gh fallback.
-    await seedDocs();
+    const worktree = await seedWorktree();
     const gh: GhRunner = async () => ({ stdout: 'bob\n' });
     const { out, opts } = captureOpts({ gh });
 
-    const code = await dispatchEngineer({ kind: 'land', project: 'alpha', idea: 'dep bump' }, opts);
+    const code = await dispatchEngineer({ kind: 'land', project: 'alpha', idea: 'dep bump', worktree }, opts);
     expect(code).toBe(0);
     const result = JSON.parse(out[out.length - 1]) as { slug: string; branch: string };
     const marker = await showOnBranch(result.branch, `.docs/intake/${result.slug}.md`);
@@ -164,7 +177,7 @@ describe('engineer land — owner-gate wiring (CLI seam)', () => {
   });
 
   it('OMITS the Owner line (un-owned, NOT blank) when neither config nor gh resolves', async () => {
-    await seedDocs();
+    const worktree = await seedWorktree();
     const failingGh: GhRunner = async () => {
       throw new Error('gh unavailable');
     };
@@ -173,7 +186,7 @@ describe('engineer land — owner-gate wiring (CLI seam)', () => {
     // A valid sourceRef guarantees a marker is written so we can assert Owner is
     // absent (not merely that no marker exists).
     const code = await dispatchEngineer(
-      { kind: 'land', project: 'alpha', idea: 'dep bump', sourceRef: 'acme/app#7' },
+      { kind: 'land', project: 'alpha', idea: 'dep bump', worktree, sourceRef: 'acme/app#7' },
       opts,
     );
     expect(code).toBe(0);

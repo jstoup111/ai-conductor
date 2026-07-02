@@ -328,6 +328,42 @@ and opening a PR on finish:
 The daemon consumes specs — it never authors them. `--continuous` idle-polls for new
 eligible features, bounded by the ceilings.
 
+#### Owner gate: multi-operator identity partition (`adr-2026-07-01-machine-scoped-operator-identity`)
+
+When multiple operators run daemons on separate machines against **one** repo, each daemon
+must build only **its own** specs. The gate (`owner-gate/gate.ts`, `decideSpecGate`) decides
+build-vs-skip per merged spec by comparing the spec's committed `Owner:` stamp
+(`owner-gate/provenance.ts`) against the resolving daemon's identity. Identity resolution
+lives behind the `resolveDaemonOwner` seam (`owner-gate/identity.ts`); a future
+`PlatformIdentity` (EKS/OIDC) resolver slots in ahead of it without touching the gate.
+
+- **Machine-scoped identity (D1).** `daemon-cli.ts` resolves the owner via
+  `owner-gate/machine-identity.ts` (`makeMachineOwnerResolver`), which reads `spec_owner`
+  **only** from the user config (`~/.ai-conductor/config.yml`) → `gh` login → unresolved.
+  Project config is never consulted for identity, so a committed `spec_owner` cannot leak one
+  operator's identity onto everyone who pulls. Resolved **fresh each pass** (no caching) so a
+  reconfigured identity takes effect on the next poll.
+- **Anti-leak guard (D2).** `validateConfig(raw, projectRoot, { source: 'project' })`
+  **rejects** a `spec_owner` key present in a committed project config (blank or not) — a hard
+  config-load error naming the file and the fix. `loadConfig` passes `source: 'project'`;
+  `loadMergedConfig` passes `source: 'merged'` so a user-sourced `spec_owner` in the merged
+  view is allowed.
+- **Fail-closed on unresolved identity (D3).** In `daemon-backlog.ts`, a supplied-but-
+  unresolved `daemonOwner` short-circuits discovery: the daemon builds **nothing** and emits a
+  single loud, deduped "identity unresolved" notice (reversing the prior fail-open build-all).
+  An **absent** `daemonOwner` (gate unwired) still runs legacy discovery unchanged.
+- **Loud un-owned skips (D5).** An un-owned merged spec is skipped with a distinct, deduped
+  line (`.daemon/warned/<slug>`) that states it is un-owned **and** how to fix it — add an
+  `Owner:` marker on the default branch, or grandfather via `owner_gate_cutover`.
+- **Grandfather cutover (D6).** `owner_gate_cutover` (project config) builds un-owned specs
+  merged before the instant. It is a per-repo policy for repos with an unbuilt backlog and
+  **must not** be set on the harness self-host repo (all plans there are already merged, so the
+  window would rebuild everything). See the main README → "Operator identity & owner gate".
+
+> The **authoring** side (universal `Owner:` stamping across every DECIDE path and refusing to
+> land un-owned specs) is sequenced separately (gated on the engineer-worktree-isolation work);
+> this section documents the identity/config/daemon partition only.
+
 #### Halt-reconciliation: startup dashboard + main-advance re-kick (ADR-013)
 
 PR #109 made the durable `.pipeline/HALT` marker authoritative at discovery, so a parked
@@ -470,7 +506,10 @@ a run):
 The daemon still tees its log sink into an append-only **`.daemon/daemon.log`**
 (`engine/daemon-log.ts`, opened once the per-repo pidfile lock is held) — so the full BUILD
 narrative (feature start, each gate-loop step result, finish + PR url) survives even when no
-one is attached. The log is size-capped (~1 MB, rotated once to `daemon.log.1`). The daemon
+one is attached. Every persisted line is prefixed with an ISO-8601 UTC timestamp
+(`formatDaemonLogLine`) so the record is sortable and greppable by time; the live tmux
+console keeps the plain colored line. The log is size-capped (~1 MB, rotated once to
+`daemon.log.1`). The daemon
 runs **serially** (concurrency clamped to 1) and **bare-run**: the build path never imports
 the tmux layer, so it functions with no tmux present (management is purely additive).
 
@@ -735,12 +774,25 @@ even if your global `defaultMode` is `plan`; set `CONDUCT_ENGINEER_PERMISSION_MO
 `acceptEdits`, `bypassPermissions`) to change it (`plan` is coerced back to `default`). Run from
 inside an existing Claude Code session, it instead tells you to invoke `/engineer` directly (no
 nested session); with `claude` not on `PATH` it prints usage.
-The `conduct-ts engineer projects | claim | land | handoff | poll | forget` subcommands are the
-deterministic primitives the skill calls between human gates (`claim`/`poll`/`forget` drive the
-Phase 9.3b github-issues intake — see below). `land`/`handoff` accept an optional `--source-ref
+The `conduct-ts engineer projects | claim | worktree | land | handoff | poll | forget` subcommands
+are the deterministic primitives the skill calls between human gates (`claim`/`poll`/`forget` drive
+the Phase 9.3b github-issues intake — see below). `land`/`handoff` accept an optional `--source-ref
 <owner/repo#N>` so an intake-originated idea reports back to its issue. The bare launcher also
 accepts an idea directly: `conduct-ts engineer "<idea>"` (or `--idea "<idea>"`) drives one specific
 idea and skips the intake poll.
+
+**Per-idea worktree isolation.** The engineer authors, lands, and hands off each idea inside a
+dedicated **git worktree** of the target repo — `conduct-ts engineer worktree --project <n> --idea
+"<i>"` creates `<target>/.worktrees/engineer-<slug>` on a fresh `spec/<slug>` branch (reusing the
+daemon's worktree mechanism, `engine/worktree-shared.ts`), and `land`/`handoff` take a required
+`--worktree <path>`. The target's **primary working tree is never mutated** (no `checkout` dance) so
+a concurrent daemon build or a second engineer session in the same repo can't collide. Creation
+**strict-aborts** (zero primary-tree mutation) if no worktree can be made — e.g. an unborn/detached
+HEAD with no derivable default branch — and never falls back to the shared checkout. On a successful
+handoff the worktree is **removed** (the `spec/<slug>` branch persists and stays reachable); a
+failure **keeps** it for inspection. `land` stages only `.docs` from the worktree, so each spec
+commit is strictly its own idea's set (no cross-idea bleed). This assumes the target repo gitignores
+`.worktrees/` (the same convention the daemon relies on).
 
 Per idea (each isolated so one repo's failure never corrupts another):
 
@@ -852,6 +904,47 @@ Read-only reporting over the engineer store ships as library functions: `governo
 engineer-planned features (store ∩ authored-keys ledger). Registry/store paths come from
 `$AI_CONDUCTOR_REGISTRY` / `$AI_CONDUCTOR_ENGINEER_DIR`. Acceptance scenarios live in
 `test/acceptance/engineer.test.ts`.
+
+### Harness self-host guardrails (`engine/self-host/`)
+
+The guardrail bundle that makes the `james-stoup-agents` harness repo safe to daemon-register
+(adr-2026-06-30-{self-host-detection-seam, sandbox-build-isolation, halt-based-release-gates}).
+Activated **only** for a harness self-build via a swappable detector; every other repo's path is
+byte-for-byte unchanged (`FR/TR-13`). Configured by the `harness_self_host` block in
+`types/config.ts` (validated in `engine/config.ts`; resolved by `resolveSelfHostConfig` in
+`engine/resolved-config.ts`, safe-by-default → auto-detect, all gates on).
+
+| Module | Responsibility |
+|--------|----------------|
+| `self-host/detector.ts` | `SelfHostDetector` interface + `PathSelfHostDetector` (realpath equality vs `resolveHarnessRoot()`); `classifySelfHost` layers the `activation` override. Identity by path, not name; positive-only activation. |
+| `install-freshness.ts` → `relinkSkillsForSelfBuild` | Relink harness skills (`bin/install --update`) before a self-build; non-zero exit / missing installer → `InstallStaleError`, no dispatch. |
+| `self-host/sandbox-build-env.ts` | Throwaway `CLAUDE_CONFIG_DIR`: `skills/`+`hooks/` symlinked to the worktree, with `.credentials.json` + a hook-retargeted `settings.json` **copied** in (auth + own-hooks; copies keep the no-global-symlink invariant). Fails closed on a missing worktree link target; `withSandboxBuildEnv` guarantees teardown on pass/fail/crash; `childEnv()` never mutates the parent env. |
+| `halt-marker.ts` | Canonical `.pipeline/HALT` marker path + best-effort `writeHaltMarker`; the rebase HALT and the self-host gate HALTs both write through it. |
+| `self-host/version-gate.ts` | `VersionApprovalGate` — HALT unless `.pipeline/version-approval` matches VERSION. |
+| `self-host/release-gate.ts` | `ReleaseArtifactGate` — integrity suite (bounded timeout) + CHANGELOG `[Unreleased]` + migration block; all fail-closed, distinct HALT reasons. |
+| `self-host/gate-halt.ts` | `writeSelfHostHalt` — `.pipeline/HALT` with a gate-specific reason + the ADR-005 resume procedure (re-install → `/verify` → operator merges). |
+| `self-host/wiring.ts` | `SelfHostGuardrails` — the injectable bundle (`relink`/`provisionSandbox`/`versionGate`/`releaseGate` + `resolveHarnessRoot`) the conductor calls the primitives through; `defaultSelfHostGuardrails` forwards to the real ones. One seam so the whole bundle activates (or is spied) as a unit. |
+
+**Non-autonomy (ADR-005/ADR-010):** no self-host module references a merge entry point
+(`test/engine/self-host/non-autonomy.test.ts` asserts this structurally). Every self-build ends at a
+HALT for the operator to merge.
+
+**Daemon-loop wiring (Phase 6).** `daemon-cli.ts` classifies `isSelfHost` **once** at startup against
+the main repo root (not a worktree — a worktree path never equals the harness root) and threads a
+`selfHost` flag to each `Conductor`. `conductor.run()` then, for a self-build only (`daemon &&
+selfHost`):
+- **before the first `build`** — relinks skills once (`InstallStaleError` → HALT, no build), then
+  provisions the sandbox once (`SandboxProvisionError` → HALT, no build);
+- **around the `build` dispatch** — sets `process.env.CLAUDE_CONFIG_DIR` to the sandbox and restores it
+  in a `finally` (pass **and** throw), so no config-dir bleeds into `finish`; the sandbox is torn down
+  in `run()`'s `finally` on every exit path;
+- **before the `finish` step** (which opens the PR) — runs `versionGate` then `releaseGate`; a `!ok`
+  verdict writes `.pipeline/HALT` and finish is not dispatched (no PR).
+
+Every guardrail is invoked through the injectable `SelfHostGuardrails` bundle (`self-host/wiring.ts`),
+so `test/engine/self-host/wiring.test.ts` drives the wired path with spies and asserts the bundle
+activates as one unit (and none of it for a non-self-build). The normal-repo path is byte-for-byte
+unchanged behind the single `selfHost` flag.
 
 ## Testing pattern
 

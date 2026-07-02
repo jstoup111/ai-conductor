@@ -2,6 +2,11 @@
 
 **Date:** 2026-06-26
 **Status:** APPROVED
+**Amended by:** ADR 2026-06-30 (engineer worktree authoring isolation) — adopts this ADR's
+*deferred Option B* (author inside a dedicated worktree of the target) for the engineer, triggered
+by **same-repo concurrency** (a force not weighed here). The canonical-path-no-cwd-fallback rule and
+the path-prefix write guard from this ADR are **retained**; the worktree adds a second confinement
+layer, it does not replace them.
 **Deciders:** James (solo dev) + harness architecture-review
 **Feature:** Phase 9.3 (redesign) — engineer loop, intake port & daemon liveness
 **Supersedes:** ADR-004 (engineer authoring + cross-repo isolation), ADR-007 (interactive loop —
