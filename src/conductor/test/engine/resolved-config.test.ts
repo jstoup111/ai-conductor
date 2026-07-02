@@ -40,6 +40,13 @@ describe('engine/resolved-config', () => {
       expect(DEFAULT_STEP_EFFORT.build).toBe('low'); // dispatcher
     });
 
+    it('recovery steps (rebase, remediate) use fable with high+ effort', () => {
+      expect(DEFAULT_STEP_MODELS.rebase).toBe('fable');
+      expect(DEFAULT_STEP_EFFORT.rebase).toBe('max');
+      expect(DEFAULT_STEP_MODELS.remediate).toBe('fable');
+      expect(DEFAULT_STEP_EFFORT.remediate).toBe('high');
+    });
+
     it('review modes match the per-step design', () => {
       expect(DEFAULT_STEP_REVIEW.conflict_check).toBe('conditional');
       expect(DEFAULT_STEP_REVIEW.architecture_review).toBe('conditional');
