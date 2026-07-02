@@ -135,6 +135,23 @@ describe('engine/artifacts', () => {
       await createFile('frontend/__tests__/screens/TabBar.test.tsx', 'x');
     }
 
+    // The gate also requires RED execution evidence (the specs actually ran and
+    // failed). These glob tests assert file-discovery, so seed valid evidence.
+    async function seedRedEvidence() {
+      await createFile(
+        '.pipeline/acceptance-specs-red.json',
+        JSON.stringify({
+          command: 'bundle exec rspec api/spec && npm --prefix frontend test',
+          targetSpecs: ['api/spec/integration/household_invite_spec.rb'],
+          executed: 3,
+          passed: 0,
+          failed: 3,
+          skipped: 0,
+          errors: 0,
+        }),
+      );
+    }
+
     it('false-fails on a monorepo layout when no config globs are declared', async () => {
       await seedMonorepoSpecs();
       const result = await checkStepCompletion(dir, 'acceptance_specs');
@@ -143,6 +160,7 @@ describe('engine/artifacts', () => {
 
     it('passes once the project declares package-prefix globs via config', async () => {
       await seedMonorepoSpecs();
+      await seedRedEvidence();
       const result = await checkStepCompletion(dir, 'acceptance_specs', {
         config: { acceptance_spec_globs: ['*/spec/**/*', '*/__tests__/**/*'] },
       });
@@ -151,6 +169,7 @@ describe('engine/artifacts', () => {
 
     it('honors a literal package prefix (no wildcard) in config globs too', async () => {
       await seedMonorepoSpecs();
+      await seedRedEvidence();
       const result = await checkStepCompletion(dir, 'acceptance_specs', {
         config: { acceptance_spec_globs: ['api/spec/**/*'] },
       });
@@ -172,6 +191,74 @@ describe('engine/artifacts', () => {
         config: { acceptance_spec_globs: ['*/spec/**/*'] },
       });
       expect(result.done).toBe(false);
+    });
+  });
+
+  describe('checkStepCompletion: acceptance_specs (RED execution evidence)', () => {
+    // The feature's own acceptance specs must actually RUN and FAIL. A generated
+    // spec that is never executed — skipped for a missing testcontainer, or left
+    // out of a unit-only test scope — must NOT satisfy the gate (regression: a
+    // daemon-built PR whose own acceptance specs then failed in CI).
+    const EV = '.pipeline/acceptance-specs-red.json';
+    const validEvidence = {
+      command: 'pytest spec/integration/test_x.py',
+      targetSpecs: ['spec/integration/test_x.py'],
+      executed: 3,
+      passed: 0,
+      failed: 3,
+      skipped: 0,
+      errors: 0,
+    };
+
+    it('fails when spec files exist but no RED evidence was recorded', async () => {
+      await createFile('spec/acceptance/x_spec.rb', 'x');
+      const result = await checkStepCompletion(dir, 'acceptance_specs');
+      expect(result.done).toBe(false);
+      expect(result.reason).toMatch(/is missing/i);
+    });
+
+    it('passes when the specs actually ran and failed (valid RED evidence)', async () => {
+      await createFile('spec/acceptance/x_spec.rb', 'x');
+      await createFile(EV, JSON.stringify(validEvidence));
+      expect(await checkStepCompletion(dir, 'acceptance_specs')).toEqual({ done: true });
+    });
+
+    it('fails when the specs were SKIPPED (skipped > 0)', async () => {
+      await createFile('spec/acceptance/x_spec.rb', 'x');
+      await createFile(EV, JSON.stringify({ ...validEvidence, failed: 0, skipped: 3 }));
+      const result = await checkStepCompletion(dir, 'acceptance_specs');
+      expect(result.done).toBe(false);
+      expect(result.reason).toMatch(/SKIPPED/i);
+    });
+
+    it('fails when RED is not established (0 failed)', async () => {
+      await createFile('spec/acceptance/x_spec.rb', 'x');
+      await createFile(EV, JSON.stringify({ ...validEvidence, failed: 0, passed: 3 }));
+      const result = await checkStepCompletion(dir, 'acceptance_specs');
+      expect(result.done).toBe(false);
+      expect(result.reason).toMatch(/0 failed|RED not established/i);
+    });
+
+    it('fails when the specs errored at collection (errors > 0)', async () => {
+      await createFile('spec/acceptance/x_spec.rb', 'x');
+      await createFile(EV, JSON.stringify({ ...validEvidence, errors: 1 }));
+      const result = await checkStepCompletion(dir, 'acceptance_specs');
+      expect(result.done).toBe(false);
+      expect(result.reason).toMatch(/errored at collection/i);
+    });
+
+    it('fails when nothing executed (executed = 0)', async () => {
+      await createFile('spec/acceptance/x_spec.rb', 'x');
+      await createFile(EV, JSON.stringify({ ...validEvidence, executed: 0, failed: 0 }));
+      expect((await checkStepCompletion(dir, 'acceptance_specs')).done).toBe(false);
+    });
+
+    it('fails on malformed evidence JSON', async () => {
+      await createFile('spec/acceptance/x_spec.rb', 'x');
+      await createFile(EV, 'not json');
+      const result = await checkStepCompletion(dir, 'acceptance_specs');
+      expect(result.done).toBe(false);
+      expect(result.reason).toMatch(/invalid JSON/i);
     });
   });
 
