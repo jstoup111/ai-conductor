@@ -12,6 +12,13 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- **Committed `.ai-conductor/config.yml` for the harness repo itself** — sets
+  `owner_gate_cutover: 2026-07-02T11:00:00Z` so this repo's daemon (registered
+  2026-07-02, issue #174) grandfather-builds specs already on `main` at
+  registration time while gating newly-merged un-owned specs. No `spec_owner`
+  is committed: operator identity is machine-scoped and resolved only from
+  user config (Slice A, PR #183). Repo-local configuration only — no behavior
+  change for consumer projects.
 - **Acceptance-specs gate now verifies the specs actually RAN and FAILED, not just that spec files
   exist.** Previously the `acceptance_specs` step's completion check was pure file-existence, so a
   generated spec that never executed — an integration spec `importorskip`-ed away for want of a
