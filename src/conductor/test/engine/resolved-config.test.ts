@@ -215,8 +215,13 @@ describe('engine/resolved-config', () => {
 
     it('front-of-funnel discovery steps use reasoning-capable defaults', () => {
       // Under-modeling here cascades into everything downstream.
-      expect(resolveStepConfig('explore', 'DECIDE').model).toBe('opus');
+      expect(resolveStepConfig('explore', 'DECIDE').model).toBe('fable');
       expect(resolveStepConfig('explore', 'DECIDE').effort).toBe('xhigh');
+      expect(resolveStepConfig('prd', 'DECIDE').model).toBe('fable');
+      expect(resolveStepConfig('prd', 'DECIDE').effort).toBe('xhigh');
+      expect(resolveStepConfig('architecture_review', 'DECIDE').model).toBe('fable');
+      expect(resolveStepConfig('architecture_review', 'DECIDE').effort).toBe('high');
+      expect(resolveStepConfig('architecture_review_as_built', 'DECIDE').model).toBe('sonnet');
       expect(resolveStepConfig('complexity', 'DECIDE').model).toBe('sonnet');
       expect(resolveStepConfig('bootstrap', 'UNDERSTAND').model).toBe('sonnet');
     });
