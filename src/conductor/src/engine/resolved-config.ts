@@ -37,9 +37,9 @@ export const DEFAULT_STEP_MODELS: Record<StepName, string> = {
   prd_audit: 'opus',       // cross-reference PRD intent vs shipped implementation
   architecture_review_as_built: 'sonnet', // pattern-match code vs approved design
   retro: 'sonnet',
-  rebase: 'opus',          // gate is engine-native, but conflict RESOLUTION dispatches the rebase skill — semantic merge judgment
+  rebase: 'fable',         // Fable guards semantic merges; wrong merge silently reverts merged work
   finish: 'haiku',
-  remediate: 'opus',       // reasons over blocking audit gaps → dispositions + tasks
+  remediate: 'fable',      // Fable guards failure disposition; wrong disposition misroutes rework
 };
 
 export const DEFAULT_STEP_EFFORT: Record<StepName, EffortLevel> = {
@@ -61,7 +61,7 @@ export const DEFAULT_STEP_EFFORT: Record<StepName, EffortLevel> = {
   prd_audit: 'high',       // FR-by-FR intent vs implementation reasoning
   architecture_review_as_built: 'medium',
   retro: 'medium',
-  rebase: 'high',          // conflict resolution dispatch reasons over both sides of a hunk
+  rebase: 'max',           // conflict resolution dispatch reasons over both sides of a hunk
   finish: 'low',
   remediate: 'high',       // gap reasoning + concrete task planning
 };
