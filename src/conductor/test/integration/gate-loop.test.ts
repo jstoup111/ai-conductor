@@ -284,3 +284,124 @@ describe('integration/gate-loop', () => {
     expect(resetSession).toHaveBeenCalledTimes(3);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 9.1 / FR-7 (Task 8) — daemon-mode redirect of the in-loop `retro` step.
+//
+// Drives the REAL Conductor gate loop (not emitEngineerSignal/engineer-store in
+// isolation — those are covered end-to-end in test/integration/engineer-emission
+// .test.ts) at complexity tier M, where retro is NOT tier-skipped
+// (`skippableForTiers: ['S']` — see src/engine/steps.ts). Only the `daemon`
+// constructor flag decides whether retro is skipped here, so this is the one
+// entry point that can prove the ADR-002 redirect (src/engine/conductor.ts:724)
+// is actually wired into the loop, not just present as dead code (writing-
+// system-tests §3b: a replacement/redirect task ships orphaned unless the real
+// entry point — Conductor.run(), not a unit call — is driven).
+// ─────────────────────────────────────────────────────────────────────────────
+describe('integration/gate-loop — daemon-mode retro redirect (Phase 9.1, FR-7)', () => {
+  let dir: string;
+  let statePath: string;
+  let events: ConductorEventEmitter;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'gate-loop-retro-'));
+    statePath = join(dir, 'conduct-state.json');
+    events = new ConductorEventEmitter();
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await mkdir(join(dir, '.docs'), { recursive: true });
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  // Tier M: retro is NOT tier-skipped, so only `daemon` decides its fate.
+  const M_FRONT_DONE: ConductState = { ...FRONT_DONE, complexity_tier: 'M' };
+
+  async function satisfyTail(step: string): Promise<StepRunResult> {
+    if (step === 'build') {
+      await writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({ tasks: [{ id: 't1', status: 'completed' }] }),
+      );
+    } else if (step === 'manual_test') {
+      await writeFile(
+        join(dir, '.pipeline/manual-test-results.md'),
+        '| Story | Result |\n|---|---|\n| foo | PASS |\n',
+      );
+    } else if (step === 'prd_audit') {
+      await writeFile(
+        join(dir, '.pipeline/prd-audit.md'),
+        '| FR | Verdict | Evidence |\n|---|---|---|\n| FR-1 | ALIGNED | foo.ts:1 |\n',
+      );
+    } else if (step === 'architecture_review_as_built') {
+      await mkdir(join(dir, '.docs/decisions'), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline/architecture-review-as-built.md'),
+        '# As-Built Review\n\nVerdict: APPROVED\n',
+      );
+    } else if (step === 'finish') {
+      await writeFile(join(dir, '.pipeline/finish-choice'), 'keep');
+    }
+    return { success: true };
+  }
+
+  function conductorDaemon(runner: StepRunner, daemon: boolean): Conductor {
+    return new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      verifyArtifacts: true,
+      mode: 'auto',
+      fromStep: 'build',
+      maxRetries: 1,
+      daemon,
+    });
+  }
+
+  it('daemon run (M tier) SKIPS the in-loop retro step — never dispatched, config_skip emitted', async () => {
+    await writeState(statePath, { ...M_FRONT_DONE });
+    const ran: string[] = [];
+    const skippedSteps: string[] = [];
+    events.on('config_skip', (e) => {
+      if (e.type === 'config_skip') skippedSteps.push(e.step);
+    });
+    const runner: StepRunner = {
+      run: async (step) => {
+        ran.push(step);
+        return satisfyTail(step);
+      },
+    };
+
+    await conductorDaemon(runner, true).run();
+
+    // Control: retro would run at M tier absent the daemon redirect — proving
+    // the redirect (not tier-skip) is what suppressed it.
+    expect(ran).not.toContain('retro');
+    expect(skippedSteps).toContain('retro');
+    const finalState = JSON.parse(await readFile(statePath, 'utf-8'));
+    expect(finalState.retro).toBe('skipped');
+  });
+
+  it('manual run (daemon=false, M tier) still DISPATCHES retro and writes repo .docs/retros/', async () => {
+    await writeState(statePath, { ...M_FRONT_DONE });
+    const ran: string[] = [];
+    const runner: StepRunner = {
+      run: async (step) => {
+        ran.push(step);
+        if (step === 'retro') {
+          await mkdir(join(dir, '.docs/retros'), { recursive: true });
+          await writeFile(join(dir, '.docs/retros/feat.md'), '# Retro\n\nManual retro narrative.');
+        }
+        return satisfyTail(step);
+      },
+    };
+
+    await conductorDaemon(runner, false).run();
+
+    expect(ran).toContain('retro');
+    await expect(access(join(dir, '.docs/retros/feat.md'))).resolves.toBeUndefined();
+    const finalState = JSON.parse(await readFile(statePath, 'utf-8'));
+    expect(finalState.retro).toBe('done');
+  });
+});
