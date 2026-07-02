@@ -836,7 +836,66 @@ TIER: M`,
         const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
         expect(opts.interactive).toBe(false);
       });
+
+      it(`${step}: passes interactive: true when mode is 'interactive'`, async () => {
+        const provider = createMockProvider();
+        const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
+          mode: 'interactive',
+        });
+
+        await runner.run(step, emptyState);
+
+        const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+        expect(opts.interactive).toBe(true);
+      });
     }
+
+    // FR-1-2: Test conversational steps NOT in INTERACTIVE_STEPS (like prd_audit)
+    // should dispatch with interactive: true in mode='interactive' and
+    // interactive: false in mode='default'
+    it('prd_audit: passes interactive: false in mode default (not in INTERACTIVE_STEPS)', async () => {
+      const provider = createMockProvider();
+      const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
+        mode: 'default',
+      });
+
+      await runner.run('prd_audit', emptyState);
+
+      const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+      expect(opts.interactive).toBe(false);
+    });
+
+    it('prd_audit: passes interactive: true in mode interactive (conversational, not one-shot)', async () => {
+      const provider = createMockProvider();
+      const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
+        mode: 'interactive',
+      });
+
+      await runner.run('prd_audit', emptyState);
+
+      const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+      expect(opts.interactive).toBe(true);
+    });
+
+    // FR-2: Verify that steps in interactive mode continue to the next step normally
+    it('after a conversational step completes in mode interactive, run advances to next step with same flow', async () => {
+      const provider = createMockProvider();
+      const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
+        mode: 'interactive',
+      });
+
+      const result1 = await runner.run('explore', emptyState);
+      const result2 = await runner.run('stories', emptyState);
+
+      // Both steps should complete successfully
+      expect(result1.success).toBe(true);
+      expect(result2.success).toBe(true);
+      // Both should have been dispatched with interactive: true
+      const opts1 = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+      const opts2 = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[1][0] as InvokeOptions;
+      expect(opts1.interactive).toBe(true);
+      expect(opts2.interactive).toBe(true);
+    });
 
     it('complexity-adjacent one-shot steps stay print-mode even in default mode', async () => {
       const oneShotSteps: StepName[] = [
@@ -848,6 +907,26 @@ TIER: M`,
         const provider = createMockProvider();
         const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
           mode: 'default',
+        });
+
+        await runner.run(step, emptyState);
+
+        const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+        expect(opts.interactive).toBe(false);
+      }
+    });
+
+    // Verify that one-shot steps stay print-mode even in interactive mode
+    it('one-shot steps stay print-mode even in interactive mode', async () => {
+      const oneShotSteps: StepName[] = [
+        'conflict_check',
+        'architecture_diagram',
+        'retro',
+      ];
+      for (const step of oneShotSteps) {
+        const provider = createMockProvider();
+        const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
+          mode: 'interactive',
         });
 
         await runner.run(step, emptyState);
