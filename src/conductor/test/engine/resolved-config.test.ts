@@ -149,6 +149,14 @@ describe('engine/resolved-config', () => {
       });
       expect(r.effort).toBe('low');
     });
+
+    it('user step.model overrides fable default on rebase', () => {
+      const config: HarnessConfig = {
+        steps: { rebase: { model: 'opus' } },
+      };
+      const r = resolveStepConfig('rebase', 'SHIP', config);
+      expect(r.model).toBe('opus');
+    });
   });
 
   describe('resolveStepConfig — by_tier', () => {
