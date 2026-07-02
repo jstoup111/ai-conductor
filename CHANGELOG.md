@@ -179,6 +179,17 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- **Owner-stamped intake markers added under the build slugs for the Fable specs (#189/#190).**
+  The engineer `land` flow writes the intake marker as `.docs/intake/<idea-slug>.md`
+  (e.g. `adopt-fable-for-front-of-funnel-decide-steps-explo.md`), but the daemon's
+  owner-gate provenance read looks up `.docs/intake/<build-slug>.md` derived from the
+  spec/stories stem (`fable-front-of-funnel-decide`). The mismatch made both Fable specs
+  read as un-owned, and — merged after the `owner_gate_cutover` — they were skipped by the
+  daemon ("spec is un-owned and merged on/after the grandfather cutover"). This PR adds
+  markers under the build slugs (`fable-front-of-funnel-decide.md`, `fable-recovery-steps.md`)
+  carrying the same `Owner:`/`Source-Ref:` stamps so the daemon builds them. Repo-local data
+  fix only; the underlying slug-mismatch bug in the engineer land flow is tracked separately.
+
 - **Self-host sandbox builds no longer run untrusted (wedged headless build).** The throwaway
   `CLAUDE_CONFIG_DIR` a harness self-build runs against copied credentials and `settings.json`
   but seeded no `.claude.json`, so the inner headless session saw an untrusted workspace,
