@@ -22,7 +22,7 @@ function selectAndStart(
 ): UISubscriber {
   const registry = new PluginRegistry();
   registry.register('ui_renderer', 'terminal', new TerminalSubscriber(emitter, renderCallback));
-  registry.register('ui_renderer', 'json-stdout', new JsonStdoutSubscriber());
+  registry.register('ui_renderer', 'json-stdout', new JsonStdoutSubscriber(emitter));
   registry.markInitialized();
 
   const subscriber = registry.get<UISubscriber>('ui_renderer', uiRendererName);
