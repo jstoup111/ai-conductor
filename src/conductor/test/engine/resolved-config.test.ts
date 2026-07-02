@@ -254,4 +254,19 @@ describe('engine/resolved-config', () => {
       expect(r.disabled).toBe(true);
     });
   });
+
+  describe('resolveStepConfig — collateral-drift guard on untouched steps', () => {
+    it('finish and build resolve to pre-change models/efforts', () => {
+      // Regression guard: verify that changes to recovery/failure-response steps
+      // (rebase, remediate) do not inadvertently affect unrelated steps.
+      // finish and build should maintain their haiku/low baseline.
+      const rFinish = resolveStepConfig('finish', 'SHIP');
+      expect(rFinish.model).toBe('haiku');
+      expect(rFinish.effort).toBe('low');
+
+      const rBuild = resolveStepConfig('build', 'BUILD');
+      expect(rBuild.model).toBe('haiku');
+      expect(rBuild.effort).toBe('low');
+    });
+  });
 });
