@@ -884,7 +884,7 @@ TIER: M`,
         mode: 'interactive',
       });
 
-      const result1 = await runner.run('brainstorm', emptyState);
+      const result1 = await runner.run('explore', emptyState);
       const result2 = await runner.run('stories', emptyState);
 
       // Both steps should complete successfully
