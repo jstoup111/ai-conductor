@@ -1,0 +1,18 @@
+# ai-conductor project configuration
+# See the harness config schema (src/conductor/src/types/config.ts) for all keys.
+
+# Owner-gate grandfather cutover (harness owner-gate feature).
+#
+# The autonomous spec-build daemon gates un-owned (unstamped) specs by this
+# instant: an un-owned spec whose plan first appeared on the default branch
+# STRICTLY BEFORE the cutover is grandfather-built; one merged on/after it (or
+# with an indeterminate merge time) is skipped. Owner-stamped specs matching the
+# daemon owner build regardless.
+#
+# This repo was daemon-registered on 2026-07-02 (build-to-PR + human merge,
+# issue #174). The cutover grandfathers every spec already on main at
+# registration time, while newly-merged un-owned specs are gated. No
+# spec_owner is committed — operator identity resolves per machine via the
+# gh-login fallback (machine-scoped identity, PR #183), so a committed owner
+# would wrongly apply to every checkout.
+owner_gate_cutover: "2026-07-02T11:00:00Z"
