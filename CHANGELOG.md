@@ -16,6 +16,19 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- **Finish-time and as-built remediation (self-healing SHIP gates).** The daemon's
+  `/remediate` planner — previously wired only into the `prd_audit` blocking handler — now also
+  fires before the generic `failed in auto mode` HALT for a failed `finish` verification and a
+  BLOCKED `architecture_review_as_built` (the technical track skips `prd_audit`, so those gates
+  had no remediation entry point and dead-ended in a HALT even when the gap was routable). The
+  `/finish` skill now flake-checks a failing fresh suite (re-run the failing specs once;
+  transient infra ≠ real failure) and records real failures in `.pipeline/test-failures.md` for
+  the planner; `/remediate` reads it as a third gap source and directs collateral failures of an
+  intentional contract change at updating the tests — never weakening production code. Routing
+  stays bounded by the existing remediation-round cap, and `halt` dispositions
+  (architectural-clarity / product-scope) still stop for a human. Extracted
+  `Conductor.planRemediation` from the prd_audit handler; behavior there is unchanged.
+
 - **Committed `.ai-conductor/config.yml` for the harness repo itself** — sets
   `owner_gate_cutover: 2026-07-02T11:00:00Z` so this repo's daemon (registered
   2026-07-02, issue #174) grandfather-builds specs already on `main` at

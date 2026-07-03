@@ -48,6 +48,22 @@ Run these commands and read the full output:
 
 All must pass before proceeding.
 
+**When the fresh suite fails — flake-check, then record the evidence:**
+
+1. **Flake-check**: re-run JUST the failing specs once. A failure that passes on
+   re-run, or that is plainly transient infra (DB not up, port in use, network
+   timeout), is a flake — note it and proceed normally.
+2. **Real failures remain** → this is NOT a finishable state:
+   - Write **`.pipeline/test-failures.md`** (run evidence — overwrite any prior
+     one): one section per failing test file with the test names, a one-line
+     failure reason each, and your read on the cause — an implementation bug, or
+     tests lagging an intentional contract change (say which contract/commit).
+     This file is what the conductor hands `/remediate` to route the fix
+     autonomously; without it the daemon can only HALT blind.
+   - Do NOT push, do NOT create a PR, and do NOT write `.pipeline/finish-choice`
+     (the missing marker is how the conductor knows finish refused).
+   - Report the blocker plainly and end.
+
 ### 2. Verify Against Stories and ADRs
 
 Cross-reference the completed work against the stories in `.docs/stories/`:
@@ -165,6 +181,7 @@ After executing the chosen option:
 
 - [ ] GATE 0: checked `git status` first — confirmed NO rebase/merge in progress and no unmerged paths (else stopped without pushing/PR/`finish-choice`)
 - [ ] Test suite ran fresh (not cached) — output read
+- [ ] If the fresh suite failed: flake-check performed; real failures recorded in `.pipeline/test-failures.md`; NO `finish-choice` written
 - [ ] Git status clean (no unexpected uncommitted changes)
 - [ ] All story acceptance criteria verified as covered
 - [ ] Changes shown to user for review before options presented
