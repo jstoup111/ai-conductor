@@ -281,7 +281,8 @@ export function ghIssueLabelReader(runner: ExecRunner): IssueLabelReader {
         }
 
         const { owner, repo, number } = parsed;
-        const args = ['api', 'repos', owner, repo, 'issues', number];
+        // gh api accepts exactly ONE endpoint argument — path must be a single token
+        const args = ['api', `repos/${owner}/${repo}/issues/${number}`];
 
         const { stdout } = await runner(args, { cwd: '.' });
         const data = JSON.parse(stdout) as { labels?: Array<{ name: string }> | null };

@@ -1,41 +1,20 @@
 import { describe, it, expect } from 'vitest';
 import { ghIssueLabelReader, parsePriorityLabels, type ExecRunner } from '../src/engine/backlog-priority.js';
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 
 /**
- * Shell-based exec runner for testing with the real `gh` CLI.
- * Executes gh commands via shell and parses JSON output.
- *
- * For `gh api` commands, converts ['api', 'repos', owner, repo, 'issues', N] → 'gh api repos/owner/repo/issues/N'
- *
- * @returns ExecRunner that uses the real gh binary
+ * Real-binary exec runner: executes the PRODUCTION argv verbatim against the
+ * real `gh` binary. No rewriting/joining — any translation here would let the
+ * smoke pass while production ships a broken argv (the exact trap this test
+ * exists to catch).
  */
-function shellExecRunner(): ExecRunner {
+function realExecRunner(): ExecRunner {
   return async (argv: string[]) => {
-    try {
-      // Special handling for 'gh api' commands: join path segments with /
-      let command: string;
-      if (argv[0] === 'api') {
-        // Convert ['api', 'repos', owner, repo, 'issues', number] to 'gh api repos/owner/repo/issues/number'
-        const pathSegments = argv.slice(1).join('/');
-        command = `gh api ${pathSegments}`;
-      } else {
-        // For other gh commands, join with spaces
-        command = ['gh', ...argv].join(' ');
-      }
-
-      const stdout = execSync(command, {
-        encoding: 'utf-8',
-        stdio: ['pipe', 'pipe', 'pipe'], // Capture all output, suppress stderr to reduce noise
-      });
-      return { stdout };
-    } catch (error) {
-      // Re-throw with context
-      if (error instanceof Error) {
-        throw new Error(`gh command failed: ${error.message}`);
-      }
-      throw error;
-    }
+    const stdout = execFileSync('gh', argv, {
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    return { stdout };
   };
 }
 
@@ -54,7 +33,7 @@ describe.skipIf(!process.env.PRIORITY_GH_SMOKE)(
   'gh label reader smoke test (real gh binary)',
   () => {
     it('reads priority label from real issue jstoup111/ai-conductor#200', async () => {
-      const reader = ghIssueLabelReader(shellExecRunner());
+      const reader = ghIssueLabelReader(realExecRunner());
       const result = await reader(['jstoup111/ai-conductor#200']);
 
       // Verify result is defined
@@ -82,7 +61,7 @@ describe.skipIf(!process.env.PRIORITY_GH_SMOKE)(
     });
 
     it('handles real issue with multiple labels including priority', async () => {
-      const reader = ghIssueLabelReader(shellExecRunner());
+      const reader = ghIssueLabelReader(realExecRunner());
       const result = await reader(['jstoup111/ai-conductor#200']);
 
       const labels = result.get('jstoup111/ai-conductor#200');

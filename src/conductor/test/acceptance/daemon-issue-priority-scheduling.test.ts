@@ -613,9 +613,7 @@ describe('Flow F — ghIssueLabelReader resolves a cross-repo sourceRef via the 
     const reader = ghIssueLabelReader(runGh);
     const result = await reader(['other-org/other-repo#42']);
 
-    expect(calls[0]?.args).toEqual(
-      expect.arrayContaining(['api', 'repos', 'other-org', 'other-repo', 'issues', '42']),
-    );
+    expect(calls[0]?.args).toEqual(['api', 'repos/other-org/other-repo/issues/42']);
     expect(result.get('other-org/other-repo#42')).toEqual(['priority: high', 'bug']);
   });
 

@@ -1238,13 +1238,8 @@ describe('ghIssueLabelReader — GitHub issue label fetcher via gh REST API', ()
       await reader(['owner/repo#123']);
 
       expect(callLog).toHaveLength(1);
-      const args = callLog[0].args;
-      expect(args[0]).toBe('api');
-      expect(args).toContain('repos');
-      expect(args).toContain('owner');
-      expect(args).toContain('repo');
-      expect(args).toContain('issues');
-      expect(args).toContain('123');
+      // gh api takes exactly ONE endpoint argument — segments must be joined
+      expect(callLog[0].args).toEqual(['api', 'repos/owner/repo/issues/123']);
     });
   });
 
@@ -1254,7 +1249,7 @@ describe('ghIssueLabelReader — GitHub issue label fetcher via gh REST API', ()
       const runner: ExecRunner = async (args: string[], opts: { cwd: string }) => {
         callLog.push({ args });
         // Return response based on which issue is being queried
-        if (args.includes('456')) {
+        if (args.some((a) => a.endsWith('/456'))) {
           return { stdout: JSON.stringify({ labels: [{ name: 'priority: medium' }] }) };
         }
         return { stdout: JSON.stringify({ labels: [{ name: 'priority: high' }] }) };
@@ -1320,7 +1315,7 @@ describe('ghIssueLabelReader — GitHub issue label fetcher via gh REST API', ()
       let callCount = 0;
       const runner: ExecRunner = async (args: string[]) => {
         callCount++;
-        if (args.includes('999')) {
+        if (args.some((a) => a.endsWith('/999'))) {
           const err = new Error('HTTP 404: Not Found');
           (err as any).status = 404;
           throw err;
