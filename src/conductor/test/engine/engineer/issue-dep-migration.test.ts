@@ -10,7 +10,12 @@
 //   - writing the edges to the platform / confirm flow (Tasks 24-25)
 
 import { describe, it, expect } from 'vitest';
-import { parseDependencyEdges, parseDependencyProse } from '../../../src/engine/engineer/issue-dep-migration.js';
+import {
+  parseDependencyEdges,
+  parseDependencyProse,
+  createDependencyLinks,
+} from '../../../src/engine/engineer/issue-dep-migration.js';
+import type { DependencyEdge, GhRunner } from '../../../src/engine/engineer/issue-dep-migration.js';
 
 describe('parseDependencyEdges', () => {
   it('parses "Gated on #217" into a blocked_by edge', () => {
@@ -181,5 +186,103 @@ describe('parseDependencyProse (manual-review classification)', () => {
         excerpt: expect.stringContaining('Blocker for #226'),
       },
     ]);
+  });
+});
+
+// Task 24 (FR-10 confirm-negative / FR-11 happy): the writer is a
+// GET-before-POST, additive-only pattern — it never edits/closes/deletes,
+// and re-running it against edges that already exist is a no-op write-wise.
+describe('createDependencyLinks (writer)', () => {
+  interface Call {
+    args: string[];
+    cwd: string;
+  }
+
+  /** A fake gh: GET returns `existing` (per source repo/number key), records every call. */
+  function makeGh(existing: Record<string, { number: number; repository_url: string }[]>): {
+    gh: GhRunner;
+    calls: Call[];
+  } {
+    const calls: Call[] = [];
+    const gh: GhRunner = async (args, opts) => {
+      calls.push({ args: [...args], cwd: opts.cwd });
+      const path = args.find((a) => a.includes('/dependencies/blocked_by'));
+      if (args[1] !== '--method' && path) {
+        // GET
+        return { stdout: JSON.stringify(existing[path] ?? []) };
+      }
+      return { stdout: '' };
+    };
+    return { gh, calls };
+  }
+
+  const edge: DependencyEdge = {
+    source: 'acme/app#230',
+    target: 'acme/app#217',
+    kind: 'gated-on',
+    blocked_by: true,
+  };
+
+  it('dryRun=true (operator declines): GETs to check, but issues zero POST calls', async () => {
+    const { gh, calls } = makeGh({});
+    const results = await createDependencyLinks([edge], { gh, cwd: '/repo', dryRun: true });
+
+    expect(results).toEqual([{ edge, status: 'dry-run' }]);
+    expect(calls.every((c) => !c.args.includes('POST'))).toBe(true);
+    expect(calls.length).toBe(1); // exactly the GET, no writes
+  });
+
+  it('confirmed (dryRun=false): POSTs only the missing edge; existing links are reported already-present, not re-POSTed', async () => {
+    const already: DependencyEdge = {
+      source: 'acme/app#230',
+      target: 'acme/app#999',
+      kind: 'depends-on',
+      blocked_by: true,
+    };
+    const { gh, calls } = makeGh({
+      'repos/acme/app/issues/230/dependencies/blocked_by': [
+        { number: 999, repository_url: 'https://api.github.com/repos/acme/app' },
+      ],
+    });
+
+    const results = await createDependencyLinks([edge, already], { gh, cwd: '/repo' });
+
+    expect(results).toEqual([
+      { edge, status: 'created' },
+      { edge: already, status: 'already-present' },
+    ]);
+
+    const posts = calls.filter((c) => c.args.includes('POST'));
+    expect(posts.length).toBe(1);
+    expect(posts[0].args).toContain('repos/acme/app/issues/230/dependencies/blocked_by');
+    expect(posts[0].args).toContain('issue_number=217');
+  });
+
+  it('never issues an edit/close/label/delete mutation — the only write is create-link POST', async () => {
+    const { gh, calls } = makeGh({});
+    await createDependencyLinks([edge], { gh, cwd: '/repo' });
+
+    const mutating = calls.filter((c) => c.args.includes('--method'));
+    expect(mutating.length).toBe(1);
+    expect(mutating[0].args).toContain('POST');
+    expect(mutating[0].args).not.toContain('PATCH');
+    expect(mutating[0].args).not.toContain('DELETE');
+    // No edit/close/label verbs anywhere in any call this module ever issues.
+    for (const call of calls) {
+      expect(call.args.join(' ')).not.toMatch(/\b(edit|close|label|delete)\b/i);
+    }
+  });
+
+  it('re-running against a fully-existing graph performs zero POSTs (safe, idempotent)', async () => {
+    const { gh, calls } = makeGh({
+      'repos/acme/app/issues/230/dependencies/blocked_by': [
+        { number: 217, repository_url: 'https://api.github.com/repos/acme/app' },
+      ],
+    });
+
+    const results = await createDependencyLinks([edge], { gh, cwd: '/repo' });
+
+    expect(results).toEqual([{ edge, status: 'already-present' }]);
+    expect(calls.some((c) => c.args.includes('POST'))).toBe(false);
   });
 });

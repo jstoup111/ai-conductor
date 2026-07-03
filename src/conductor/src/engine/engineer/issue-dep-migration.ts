@@ -197,3 +197,152 @@ export function parseDependencyProse(input: DependencyProseInput): DependencyPro
 
   return { edges, manualReview };
 }
+
+// --- Task 24: writer (GET-before-POST, additive-only) ---------------------
+
+/** Shell runner for the `gh` CLI. Mirrors the other engineer adapters' GhRunner shape. */
+export type GhRunner = (args: string[], opts: { cwd: string }) => Promise<{ stdout: string }>;
+
+/** Parse `owner/repo#N` into its repo-slug + issue-number parts, or null if malformed. */
+function parseRef(ref: string): { repo: string; number: string } | null {
+  const hash = ref.lastIndexOf('#');
+  if (hash <= 0 || hash === ref.length - 1) return null;
+  const repo = ref.slice(0, hash);
+  const number = ref.slice(hash + 1);
+  if (!/^\d+$/.test(number)) return null;
+  return { repo, number };
+}
+
+/** Parse a GitHub API `repository_url` (e.g. `https://api.github.com/repos/acme/app`) into `owner/repo`. */
+function repoFromRepositoryUrl(repositoryUrl: string): string | null {
+  const m = repositoryUrl.match(/\/repos\/([^/]+\/[^/]+)$/);
+  return m ? m[1] : null;
+}
+
+/** One raw `blocked_by` entry as returned by the GitHub dependencies API. */
+interface RawBlockedByEntry {
+  number: number;
+  repository_url: string;
+}
+
+/** Per-edge outcome of {@link createDependencyLinks}. */
+export interface DependencyLinkResult {
+  edge: DependencyEdge;
+  /** 'created' — a new link was written. 'already-present' — GET found it, no write.
+   *  'dry-run' — dryRun mode; would-create but no write was attempted. */
+  status: 'created' | 'already-present' | 'dry-run';
+}
+
+/** Dependencies for {@link createDependencyLinks}. */
+export interface CreateDependencyLinksDeps {
+  gh: GhRunner;
+  cwd: string;
+  /**
+   * When true, GET-checks existing links and reports what WOULD be created,
+   * but issues no POST calls at all. Used for the operator confirmation
+   * proposal (declining = never call this without dryRun:false).
+   */
+  dryRun?: boolean;
+  log?: (msg: string) => void;
+}
+
+/**
+ * GET the existing `blocked_by` links for one source issue, returning them as
+ * a Set of `owner/repo#N` target refs for cheap membership checks.
+ */
+async function fetchExistingBlockedBy(
+  sourceRepo: string,
+  sourceNumber: string,
+  gh: GhRunner,
+  cwd: string,
+): Promise<Set<string>> {
+  const { stdout } = await gh(['api', `repos/${sourceRepo}/issues/${sourceNumber}/dependencies/blocked_by`], {
+    cwd,
+  });
+  let raw: RawBlockedByEntry[] = [];
+  try {
+    raw = JSON.parse(stdout || '[]') as RawBlockedByEntry[];
+  } catch {
+    raw = [];
+  }
+  const existing = new Set<string>();
+  for (const entry of raw) {
+    const repo = repoFromRepositoryUrl(entry.repository_url);
+    if (repo) existing.add(`${repo}#${entry.number}`);
+  }
+  return existing;
+}
+
+/**
+ * Write proposed dependency edges to GitHub via a GET-before-POST, additive-only
+ * pattern (FR-11 happy / FR-10 confirm-negative):
+ *
+ *   1. GET the existing `blocked_by` links for each distinct source issue
+ *      (one GET per source, not per edge).
+ *   2. For each proposed edge, skip it if it's already present — never
+ *      re-issue, edit, or otherwise touch an existing link.
+ *   3. Only missing edges get a POST — and only ever `POST .../dependencies/blocked_by`.
+ *      No edit/close/label/delete call is ever issued by this module.
+ *
+ * `dryRun: true` performs the GET-checks (so the operator can be shown what
+ * WOULD happen) but issues zero POST calls — this is the writer half of the
+ * confirm gate; the confirmation prompt itself lives in the CLI layer.
+ *
+ * Safe to re-run: edges already linked report `already-present` and are
+ * never mutated, so calling this twice with the same edges has no additional
+ * side effects on the graph.
+ */
+export async function createDependencyLinks(
+  edges: DependencyEdge[],
+  deps: CreateDependencyLinksDeps,
+): Promise<DependencyLinkResult[]> {
+  const { gh, cwd, dryRun = false } = deps;
+  const log = deps.log ?? (() => {});
+  const results: DependencyLinkResult[] = [];
+  const existingBySource = new Map<string, Set<string>>();
+
+  for (const edge of edges) {
+    const source = parseRef(edge.source);
+    const target = parseRef(edge.target);
+    if (!source || !target) {
+      log(`createDependencyLinks: skipping unparseable edge ${edge.source} -> ${edge.target}`);
+      continue;
+    }
+
+    let existing = existingBySource.get(edge.source);
+    if (!existing) {
+      existing = await fetchExistingBlockedBy(source.repo, source.number, gh, cwd);
+      existingBySource.set(edge.source, existing);
+    }
+
+    if (existing.has(edge.target)) {
+      results.push({ edge, status: 'already-present' });
+      continue;
+    }
+
+    if (dryRun) {
+      results.push({ edge, status: 'dry-run' });
+      continue;
+    }
+
+    await gh(
+      [
+        'api',
+        '--method',
+        'POST',
+        `repos/${source.repo}/issues/${source.number}/dependencies/blocked_by`,
+        '-f',
+        `owner=${target.repo.split('/')[0]}`,
+        '-f',
+        `repo=${target.repo.split('/')[1]}`,
+        '-f',
+        `issue_number=${target.number}`,
+      ],
+      { cwd },
+    );
+    existing.add(edge.target);
+    results.push({ edge, status: 'created' });
+  }
+
+  return results;
+}
