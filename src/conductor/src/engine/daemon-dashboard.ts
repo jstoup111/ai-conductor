@@ -313,12 +313,12 @@ function prSuffix(prUrl?: string): string {
 }
 
 /** `repo#number` formatting for a blocker/cycle-member ref. */
-function refLabel(ref: IssueRef): string {
+export function refLabel(ref: IssueRef): string {
   return `${ref.repo}#${ref.number}`;
 }
 
 /** Verdict-kind-specific detail suffix for a WAITING row. */
-function waitingDetail(verdict: BlockerVerdict): string {
+export function waitingDetail(verdict: BlockerVerdict): string {
   switch (verdict.kind) {
     case 'blocked':
       return `blocked by ${verdict.blockers.map(refLabel).join(', ')}`;

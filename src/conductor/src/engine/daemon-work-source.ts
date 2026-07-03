@@ -8,6 +8,7 @@ import type { BacklogItem } from './daemon.js';
 import type { OwnerResolution } from './owner-gate/identity.js';
 import type { OwnerStamp } from './owner-gate/provenance.js';
 import type { DiscoverBacklogOpts, WaitingItem } from './daemon-backlog.js';
+import { createWaitingAnnouncer } from './daemon-waiting-announce.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Public interface
@@ -72,6 +73,12 @@ export interface LocalWorkSourceDeps {
  * scanned. When `refresh` is false the fast-forward is skipped.
  */
 export function localWorkSource(deps: LocalWorkSourceDeps): WorkSource {
+  // Warn-once WAITING announcer (Task 18 / FR-6): one instance per
+  // localWorkSource() call (i.e. per daemon run), so its in-memory
+  // slug→verdict-hash map persists ACROSS discover() passes within a run
+  // (suppressing repeat logs for a stable wait) but is fresh on every daemon
+  // restart (re-announcing on the next run, by design — no durable marker).
+  const announceWaiting = createWaitingAnnouncer(deps.log);
   return {
     async discover({ refresh }) {
       if (refresh) await deps.fastForwardRoot(deps.projectRoot, deps.log);
@@ -91,7 +98,7 @@ export function localWorkSource(deps: LocalWorkSourceDeps): WorkSource {
             cutover: deps.cutover ?? null,
           }
         : {};
-      const { items } = await deps.discoverBacklog(
+      const { items, waiting } = await deps.discoverBacklog(
         deps.projectRoot,
         (slug) => deps.isProcessed(slug),
         deps.log,
@@ -102,6 +109,7 @@ export function localWorkSource(deps: LocalWorkSourceDeps): WorkSource {
           ...gateOpts,
         },
       );
+      announceWaiting(waiting);
       return items;
     },
   };
