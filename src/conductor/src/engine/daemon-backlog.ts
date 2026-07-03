@@ -15,7 +15,7 @@ import type { OwnerStamp } from './owner-gate/provenance.js';
 import { decideSpecGate, type GateDecision } from './owner-gate/gate.js';
 import type { BlockerResolver, BlockerVerdict } from './blocker-resolver.js';
 import { announceWaitingForRoot } from './daemon-waiting-announce.js';
-import { listShippedRecords, parseShippedRecord } from './shipped-record.js';
+import { listShippedRecords, parseShippedRecord, specHash } from './shipped-record.js';
 
 const execFile = promisify(execFileCb);
 
@@ -349,19 +349,6 @@ export async function discoverBacklog(
     );
   };
 
-  // Fail-CLOSED gate (D3 / Story 3): a supplied-but-UNRESOLVED daemon owner
-  // builds NOTHING. This reverses the prior fail-open behavior (build all when
-  // identity is unknown) — the exact multi-operator hazard, where a
-  // misconfigured/unauthenticated daemon would build every operator's specs. We
-  // short-circuit BEFORE the per-spec scan so no content/ownership skip lines are
-  // emitted for work that could never build this pass; only the single loud
-  // identity-unresolved notice surfaces. An ABSENT `daemonOwner` (gate unwired)
-  // is untouched — legacy discovery runs normally.
-  if (opts.daemonOwner && !opts.daemonOwner.resolved) {
-    await warnIdentityUnresolvedOnce();
-    return { items: [], waiting: [] };
-  }
-
   const planFiles = (await tree.listPlanFiles()).filter((f) => f.endsWith('.md'));
   if (planFiles.length === 0) return { items: [], waiting: [] };
 
@@ -436,6 +423,55 @@ export async function discoverBacklog(
       continue;
     }
 
+    // Content-hash dedup (Story 4/Task 6): catches a RENAMED spec — same plan
+    // + stories content as a shipped record, but under a different stem, so
+    // the stem-match above misses it. Computed AFTER the stem-match dedup
+    // (cheaper, so it runs first) and still BEFORE the owner gate (a renamed
+    // shipped spec is reported as shipped, not as owner-gated). The candidate
+    // digest is compared against every shipped record's `spec_hash`; a match
+    // means the implementation already shipped under the OLD stem, so the
+    // cache is repaired under the candidate's (NEW) slug, not the old one.
+    const candidateDigest = specHash(
+      Buffer.from(planContent, 'utf-8'),
+      Buffer.from(storiesContent, 'utf-8'),
+    ).digest;
+    const hashMatch = shippedRecords.find(
+      (r) => !('malformed' in r.record) && r.record.specHash === candidateDigest,
+    );
+    if (hashMatch) {
+      try {
+        await opts.repairProcessed?.(slug, hashMatch.record);
+      } catch (err) {
+        log(
+          `shipped dedup: ${slug} matches shipped content under '${hashMatch.stem}' but ` +
+            `repairing the local processed-cache failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        continue;
+      }
+      await warnOnce(
+        slug,
+        `skip ${slug}: shipped dedup — shipped under '${hashMatch.stem}', candidate ` +
+          `'${slug}' matches by content (spec_hash); not re-dispatching.`,
+      );
+      continue;
+    }
+
+    // Fail-CLOSED gate (D3 / Story 3): a supplied-but-UNRESOLVED daemon owner
+    // builds NOTHING. This reverses the prior fail-open behavior (build all when
+    // identity is unknown) — the exact multi-operator hazard, where a
+    // misconfigured/unauthenticated daemon would build every operator's specs.
+    // Runs AFTER both shipped-dedup checks above (Story 3/Task 5): a candidate
+    // whose implementation already merged (by stem or by content-hash) is
+    // reported as shipped even when this daemon's identity is unresolved — dedup
+    // takes precedence over identity, so an already-shipped spec is never
+    // mis-logged as "identity unresolved". Only a content-eligible, NOT-yet-
+    // shipped candidate reaches this fail-closed check. An ABSENT `daemonOwner`
+    // (gate unwired) is untouched — legacy discovery runs normally.
+    if (opts.daemonOwner && !opts.daemonOwner.resolved) {
+      await warnIdentityUnresolvedOnce();
+      continue;
+    }
+
     // Carry the engineer-assessed complexity tier so the daemon build honors it
     // (Small skips acceptance_specs/retro). The marker is committed at
     // `.docs/complexity/<plan-stem>.md` — the SAME stem as the plan — so it is
@@ -462,8 +498,9 @@ export async function discoverBacklog(
     // gate never bypasses eligibility (a content-ineligible spec is already
     // `continue`d before reaching here). The gate is consulted only for a
     // RESOLVED daemon owner. An UNRESOLVED owner never reaches here — it
-    // fail-closes (builds nothing) at the top of the scan. An absent
-    // `daemonOwner` skips the gate entirely (legacy behavior).
+    // fail-closes (builds nothing) earlier in this iteration, AFTER the
+    // shipped-dedup checks. An absent `daemonOwner` skips the gate entirely
+    // (legacy behavior).
     const daemonOwner = opts.daemonOwner;
     if (daemonOwner?.resolved) {
       // Gate active — flag the operator-accepted skip-default once per pass when
