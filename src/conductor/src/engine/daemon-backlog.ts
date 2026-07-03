@@ -330,6 +330,9 @@ export async function discoverBacklog(
   if (planFiles.length === 0) return { items: [], waiting: [] };
 
   const items: BacklogItem[] = [];
+  // slug -> raw (unparseable) Source-Ref text, for specs whose intake marker
+  // is present but malformed (see the dependency-gate loop below).
+  const malformedSourceRefs = new Map<string, string>();
   for (const file of [...planFiles].sort()) {
     const slug = basename(file, '.md');
     const planRel = `.docs/plans/${file}`;
@@ -373,8 +376,17 @@ export async function discoverBacklog(
     // Carry the originating issue ref (if this spec came from github-issues
     // intake) so the daemon can put `Closes owner/repo#N` on the implementation
     // PR. The marker is committed at `.docs/intake/<plan-stem>.md` — the SAME
-    // stem as the plan. Absent/garbled → undefined (hand-authored specs unchanged).
-    const sourceRef = parseIntakeSourceRef(await tree.readFile(`.docs/intake/${slug}.md`));
+    // stem as the plan. Absent → undefined (hand-authored specs unchanged). A
+    // marker that IS present but carries an unparseable ref is distinct from
+    // absence (FR-7): it must fail closed to `waiting` as `indeterminate`
+    // rather than silently dispatching like a spec with no marker at all, so
+    // it is tracked separately in `malformedSourceRefs` below.
+    const intakeMarker = await tree.readFile(`.docs/intake/${slug}.md`);
+    const sourceRef = parseIntakeSourceRef(intakeMarker);
+    const rawSourceRefLine = intakeMarker?.match(/^\s*Source-Ref:\s*(\S+)/im)?.[1];
+    if (rawSourceRefLine && !sourceRef) {
+      malformedSourceRefs.set(slug, rawSourceRefLine);
+    }
 
     // Owner gate — runs ONLY after every content filter above has passed, so the
     // gate never bypasses eligibility (a content-ineligible spec is already
@@ -427,6 +439,13 @@ export async function discoverBacklog(
   const waiting: WaitingItem[] = [];
   for (const item of items) {
     if (!item.sourceRef) {
+      const rawRef = malformedSourceRefs.get(item.slug);
+      if (rawRef !== undefined) {
+        // Marker present but unparseable — fail closed as indeterminate
+        // rather than dispatching as if there were no marker at all.
+        waiting.push({ slug: item.slug, verdict: { kind: 'indeterminate', detail: `unparseable Source-Ref: ${rawRef}` } });
+        continue;
+      }
       gated.push(item);
       continue;
     }

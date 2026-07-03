@@ -268,7 +268,7 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
       expect(resolver.calls).toBe(0);
     });
 
-    it('a spec with a malformed/unparseable Source-Ref stays in items with zero resolver calls, even under an always-throwing resolver', async () => {
+    it('a spec with a malformed/unparseable Source-Ref fails closed to waiting as indeterminate, with zero resolver calls, even under an always-throwing resolver', async () => {
       await writeFile(
         join(dir, '.docs/plans/malformed-ref-spec.md'),
         planWithDeps('.docs/stories/malformed-ref-spec.md'),
@@ -276,7 +276,10 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
       await writeFile(join(dir, '.docs/stories/malformed-ref-spec.md'), APPROVED_STORIES);
       await mkdir(join(dir, '.docs/intake'), { recursive: true });
       // Not a valid owner/repo#N form — parseIntakeSourceRef rejects it, so the
-      // item carries no sourceRef and the gate is never consulted.
+      // item carries no sourceRef. A malformed marker is distinct from an ABSENT
+      // one (FR-7): it fails closed as `indeterminate` rather than dispatching
+      // as if there were no marker at all, and the resolver — which has nothing
+      // parseable to consult — is never called.
       await writeFile(
         join(dir, '.docs/intake/malformed-ref-spec.md'),
         'Source-Ref: not-a-valid-ref\n',
@@ -289,8 +292,8 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
         resolver,
       });
 
-      expect(result.items.map((b) => b.slug)).toContain('malformed-ref-spec');
-      expect(result.waiting).toEqual([]);
+      expect(result.items.map((b) => b.slug)).not.toContain('malformed-ref-spec');
+      expect(result.waiting.find((w) => w.slug === 'malformed-ref-spec')?.verdict?.kind).toBe('indeterminate');
       expect(resolver.calls).toBe(0);
     });
   });
