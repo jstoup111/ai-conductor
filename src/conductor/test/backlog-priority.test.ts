@@ -339,6 +339,165 @@ describe('createPriorityResolver — stateful resolver with caching', () => {
   });
 
   describe('outage handling — fail-soft fallback + once-per-outage warning', () => {
+
+  describe('missing/malformed data — 404s and empty labels as data, not outage', () => {
+    it('not-found issue (404): reader returns not-found → item gets unlabeled band, others unchanged', async () => {
+      const warnLog: string[] = [];
+      const callLog: string[] = [];
+      const labelMap = new Map<string, string[] | 'not-found'>([
+        ['owner/repo#1', ['priority: high']],
+        ['owner/repo#2', 'not-found'], // 404: deleted issue
+        ['owner/repo#3', ['priority: low']],
+      ]);
+
+      const reader = async (refs: string[]) => {
+        callLog.push(`read:${refs.join(',')}`);
+        const result = new Map<string, string[] | 'not-found'>();
+        for (const ref of refs) {
+          if (labelMap.has(ref)) {
+            result.set(ref, labelMap.get(ref)!);
+          }
+        }
+        return result;
+      };
+
+      const resolver = createPriorityResolver(reader, (msg: string) => warnLog.push(msg));
+
+      const items: BacklogItem[] = [
+        { slug: 'feature-1', sourceRef: 'owner/repo#1' },
+        { slug: 'feature-2', sourceRef: 'owner/repo#2' }, // not-found
+        { slug: 'feature-3', sourceRef: 'owner/repo#3' },
+      ];
+
+      const result = await resolver.resolve(items, { refresh: true });
+
+      // Verify reader was called
+      expect(callLog).toEqual(['read:owner/repo#1,owner/repo#2,owner/repo#3']);
+
+      // Verify bands
+      expect(result.mode).toBe('banded');
+      expect(result.bands.get('owner/repo#1')).toBe('high');
+      expect(result.bands.get('owner/repo#2')).toBe('unlabeled'); // not-found → unlabeled (data, not outage)
+      expect(result.bands.get('owner/repo#3')).toBe('low');
+
+      // Verify zero outage warnings for per-item missing data
+      expect(warnLog).toEqual([]);
+    });
+
+    it('empty labels: reader returns empty array → item gets unlabeled band', async () => {
+      const warnLog: string[] = [];
+      const callLog: string[] = [];
+      const labelMap = new Map<string, string[]>([
+        ['owner/repo#1', []],  // no labels at all
+        ['owner/repo#2', ['priority: medium']],
+      ]);
+
+      const reader = async (refs: string[]) => {
+        callLog.push(`read:${refs.join(',')}`);
+        const result = new Map<string, string[] | 'not-found'>();
+        for (const ref of refs) {
+          if (labelMap.has(ref)) {
+            result.set(ref, labelMap.get(ref)!);
+          }
+        }
+        return result;
+      };
+
+      const resolver = createPriorityResolver(reader, (msg: string) => warnLog.push(msg));
+
+      const items: BacklogItem[] = [
+        { slug: 'feature-1', sourceRef: 'owner/repo#1' }, // empty labels
+        { slug: 'feature-2', sourceRef: 'owner/repo#2' },
+      ];
+
+      const result = await resolver.resolve(items, { refresh: true });
+
+      expect(callLog).toEqual(['read:owner/repo#1,owner/repo#2']);
+      expect(result.mode).toBe('banded');
+      expect(result.bands.get('owner/repo#1')).toBe('unlabeled'); // empty → unlabeled (no priority extracted)
+      expect(result.bands.get('owner/repo#2')).toBe('medium');
+
+      // No warnings for empty labels data
+      expect(warnLog).toEqual([]);
+    });
+
+    it('closed issue: reader returns labels from closed issue → honors labels, ignores state', async () => {
+      const warnLog: string[] = [];
+      const callLog: string[] = [];
+      const labelMap = new Map<string, string[]>([
+        ['owner/repo#1', ['priority: high', 'status: closed']], // closed issue, but has priority label
+        ['owner/repo#2', ['status: closed']], // closed with no priority
+      ]);
+
+      const reader = async (refs: string[]) => {
+        callLog.push(`read:${refs.join(',')}`);
+        const result = new Map<string, string[] | 'not-found'>();
+        for (const ref of refs) {
+          if (labelMap.has(ref)) {
+            result.set(ref, labelMap.get(ref)!);
+          }
+        }
+        return result;
+      };
+
+      const resolver = createPriorityResolver(reader, (msg: string) => warnLog.push(msg));
+
+      const items: BacklogItem[] = [
+        { slug: 'feature-1', sourceRef: 'owner/repo#1' }, // closed with priority
+        { slug: 'feature-2', sourceRef: 'owner/repo#2' }, // closed without priority
+      ];
+
+      const result = await resolver.resolve(items, { refresh: true });
+
+      expect(callLog).toEqual(['read:owner/repo#1,owner/repo#2']);
+      expect(result.mode).toBe('banded');
+      expect(result.bands.get('owner/repo#1')).toBe('high'); // honors labels despite closed state
+      expect(result.bands.get('owner/repo#2')).toBe('unlabeled'); // closed without priority → unlabeled
+
+      // No warnings for closed issues
+      expect(warnLog).toEqual([]);
+    });
+
+    it('malformed labels: reader returns non-priority labels → item gets unlabeled, no fallback triggered', async () => {
+      const warnLog: string[] = [];
+      const callLog: string[] = [];
+      const labelMap = new Map<string, string[]>([
+        ['owner/repo#1', ['bug', 'feature', 'documentation']], // labels but no priority
+        ['owner/repo#2', ['priority: urgent']], // malformed priority (not high/medium/low)
+        ['owner/repo#3', ['priority: high']],
+      ]);
+
+      const reader = async (refs: string[]) => {
+        callLog.push(`read:${refs.join(',')}`);
+        const result = new Map<string, string[] | 'not-found'>();
+        for (const ref of refs) {
+          if (labelMap.has(ref)) {
+            result.set(ref, labelMap.get(ref)!);
+          }
+        }
+        return result;
+      };
+
+      const resolver = createPriorityResolver(reader, (msg: string) => warnLog.push(msg));
+
+      const items: BacklogItem[] = [
+        { slug: 'feature-1', sourceRef: 'owner/repo#1' }, // non-priority labels
+        { slug: 'feature-2', sourceRef: 'owner/repo#2' }, // malformed priority
+        { slug: 'feature-3', sourceRef: 'owner/repo#3' }, // valid priority
+      ];
+
+      const result = await resolver.resolve(items, { refresh: true });
+
+      expect(callLog).toEqual(['read:owner/repo#1,owner/repo#2,owner/repo#3']);
+      expect(result.mode).toBe('banded'); // stays in banded mode, no fallback
+      expect(result.bands.get('owner/repo#1')).toBe('unlabeled'); // no priority label → unlabeled
+      expect(result.bands.get('owner/repo#2')).toBe('unlabeled'); // malformed priority → unlabeled
+      expect(result.bands.get('owner/repo#3')).toBe('high'); // valid priority honored
+
+      // No warnings for per-item malformed data
+      expect(warnLog).toEqual([]);
+    });
+  });
     it('reader throws → returns fallback, cache cleared, exactly one warn logged', async () => {
       const warnLog: string[] = [];
       const callLog: string[] = [];
