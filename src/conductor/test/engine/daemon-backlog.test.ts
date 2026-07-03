@@ -465,6 +465,125 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
   });
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Task 9 — land-authored specs key their intake marker by PLAN STEM (the plan
+// file's own basename), not by the original idea slug. Discovery resolves
+// owner/sourceRef by reading `.docs/intake/${planStem(planFile)}.md` — a marker
+// that lives at any other path (e.g. a pre-fix legacy idea-slug filename) is
+// simply invisible to the resolver, and the spec must NOT fall back to it.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('engine/daemon-backlog — land-authored intake marker keyed by plan stem (Task 9)', () => {
+  let dir: string;
+  const APPROVED_STORIES = '# Stories\n**Status:** Accepted\n';
+  const planWithDeps = (storiesRef?: string) =>
+    `# Plan\n${storiesRef ? `**Stories:** ${storiesRef}\n` : ''}\n### Task 1\n**Dependencies:** none\n`;
+
+  const fsSource = (root: string): BacklogTreeSource => ({
+    async listPlanFiles() {
+      try {
+        return (await readdir(join(root, '.docs/plans'))).filter((f) => f.endsWith('.md'));
+      } catch {
+        return [];
+      }
+    },
+    async listShippedFiles() {
+      try {
+        return (await readdir(join(root, '.docs/shipped'))).filter((f) => f.endsWith('.md'));
+      } catch {
+        return [];
+      }
+    },
+    async readFile(relPath) {
+      try {
+        return await fsReadFile(join(root, relPath), 'utf-8');
+      } catch {
+        return null;
+      }
+    },
+  });
+
+  // Mirrors production's readSpecOwnerStamp parsing, but reads from the injected
+  // tree source (by slug = planStem(planFile)) instead of `git show`. This lets
+  // the test prove the marker is (or is not) found at the plan-stem path without
+  // reimplementing git plumbing.
+  function stampFromTree(tree: BacklogTreeSource) {
+    return async (slug: string) => {
+      const content = await tree.readFile(`.docs/intake/${slug}.md`);
+      if (!content) return { present: false as const };
+      for (const line of content.split('\n')) {
+        const m = /^\s*Owner:\s*(.*)$/.exec(line);
+        if (!m) continue;
+        const id = m[1].trim();
+        return id ? { present: true as const, id } : { present: false as const };
+      }
+      return { present: false as const };
+    };
+  }
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'daemon-backlog-stem-'));
+    await mkdir(join(dir, '.docs/plans'), { recursive: true });
+    await mkdir(join(dir, '.docs/stories'), { recursive: true });
+    await mkdir(join(dir, '.docs/intake'), { recursive: true });
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('HAPPY PATH: a land-authored spec resolves owner + sourceRef from its plan-stem-keyed marker', async () => {
+    const stem = '2026-07-03-some-feature';
+    await writeFile(join(dir, `.docs/plans/${stem}.md`), planWithDeps(`.docs/stories/${stem}.md`));
+    await writeFile(join(dir, `.docs/stories/${stem}.md`), APPROVED_STORIES);
+    // Marker keyed by the PLAN STEM itself — not by any idea slug.
+    await writeFile(
+      join(dir, `.docs/intake/${stem}.md`),
+      'Source-Ref: owner/repo#1\nOwner: alice\n',
+    );
+
+    const tree = fsSource(dir);
+    const { items } = await discoverBacklog(dir, undefined, undefined, {
+      treeSource: tree,
+      daemonOwner: { resolved: true, id: 'alice' },
+      readStamp: stampFromTree(tree),
+      readMergeTime: async () => null,
+      cutover: null,
+    });
+
+    expect(items.map((b) => b.slug)).toContain(stem);
+    const item = items.find((b) => b.slug === stem);
+    expect(item?.sourceRef).toBe('owner/repo#1');
+  });
+
+  it('NEGATIVE PATH: a legacy idea-slug marker (not at the plan-stem path) stays un-owned, no fallback', async () => {
+    const stem = '2026-07-03-feature';
+    const legacyIdeaSlug = 'my-cool-old-idea-name';
+    await writeFile(join(dir, `.docs/plans/${stem}.md`), planWithDeps(`.docs/stories/${stem}.md`));
+    await writeFile(join(dir, `.docs/stories/${stem}.md`), APPROVED_STORIES);
+    // Simulates a pre-fix landed marker: keyed by the OLD idea slug, not the
+    // plan's own stem. This must be invisible to discovery — no fallback lookup.
+    await writeFile(
+      join(dir, `.docs/intake/${legacyIdeaSlug}.md`),
+      'Source-Ref: owner/repo#2\nOwner: alice\n',
+    );
+
+    const tree = fsSource(dir);
+    const logs: string[] = [];
+    const { items } = await discoverBacklog(dir, undefined, (m) => logs.push(m), {
+      treeSource: tree,
+      daemonOwner: { resolved: true, id: 'alice' },
+      readStamp: stampFromTree(tree),
+      readMergeTime: async () => '2026-07-01T00:00:00Z', // after cutover
+      cutover: '2026-06-30T00:00:00Z',
+    });
+
+    // Un-owned (marker at the plan-stem path is absent) → skipped, not built.
+    expect(items.map((b) => b.slug)).not.toContain(stem);
+    // sourceRef is never populated either — the mismatched marker is never read.
+    const line = logs.find((l) => l.includes(stem));
+    expect(line).toMatch(/un-owned/i);
+  });
+});
+
 describe('engine/artifacts — parseComplexityTier', () => {
   it('parses S / M / L (case-insensitive)', () => {
     expect(parseComplexityTier('Tier: S')).toBe('S');
