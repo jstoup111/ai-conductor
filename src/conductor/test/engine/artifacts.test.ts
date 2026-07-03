@@ -13,6 +13,7 @@ import {
   sweepStaleReviewArtifacts,
   FINISH_CHOICE_MARKER,
   HALT_MARKER,
+  planStem,
 } from '../../src/engine/artifacts.js';
 
 describe('engine/artifacts', () => {
@@ -584,6 +585,22 @@ describe('engine/artifacts', () => {
       // Session started "now" → the 2000 file is stale and ignored.
       const c = await classifyPrdAuditGaps(dir, Date.now());
       expect(c.kind).toBe('clean');
+    });
+  });
+
+  describe('planStem', () => {
+    it('strips the trailing .md extension from an absolute plan path', () => {
+      expect(planStem('/x/.docs/plans/phase-9.3b-intake.md')).toBe('phase-9.3b-intake');
+    });
+
+    it('strips the trailing .md extension from a relative plan path', () => {
+      expect(planStem('a/2026-07-03-foo.md')).toBe('2026-07-03-foo');
+    });
+
+    it('does not strip interior dots, only the .md extension', () => {
+      const stem = planStem('/x/.docs/plans/phase-9.3b-intake.md');
+      expect(stem).not.toBe('phase-9');
+      expect(stem).toContain('.');
     });
   });
 
