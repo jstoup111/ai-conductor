@@ -973,24 +973,19 @@ function makeFakePlatform(opts: { failing?: Set<string> } = {}) {
         ),
       };
     }
+    // Check if the issue being written to is in the failing set
     if (issueKey && failing.has(issueKey)) throw new Error('transient gh failure');
 
-    // Extract target ref from -f flags: owner=..., repo=..., issue_number=...
-    const ownerIdx = args.findIndex((a) => a.startsWith('owner='));
-    const repoIdx = args.findIndex((a) => a.startsWith('repo='));
-    const issueNumIdx = args.findIndex((a) => a.startsWith('issue_number='));
+    // Extract target dependency ref from -f issue=<ref> pattern
+    const fIdx = args.indexOf('-f');
+    const issueArg = fIdx >= 0 ? args[fIdx + 1] : null;
+    const targetRef = issueArg?.startsWith('issue=') ? issueArg.replace('issue=', '') : null;
 
-    if (ownerIdx >= 0 && repoIdx >= 0 && issueNumIdx >= 0) {
-      const owner = args[ownerIdx].replace(/^owner=/, '');
-      const repo = args[repoIdx].replace(/^repo=/, '');
-      const issueNum = args[issueNumIdx].replace(/^issue_number=/, '');
-      const addedRef = `${owner}/${repo}#${issueNum}`;
-
-      if (issueKey) {
-        const set = links.get(issueKey) ?? new Set();
-        set.add(addedRef);
-        links.set(issueKey, set);
-      }
+    // Track the link if we have both the source issue and target dependency
+    if (issueKey && targetRef) {
+      const set = links.get(issueKey) ?? new Set();
+      set.add(targetRef);
+      links.set(issueKey, set);
     }
     return { stdout: '{}' };
   };
