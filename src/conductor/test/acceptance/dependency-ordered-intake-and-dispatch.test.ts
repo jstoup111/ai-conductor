@@ -42,6 +42,8 @@ import { tmpdir } from 'os';
 
 import { discoverBacklog, type BacklogTreeSource } from '../../src/engine/daemon-backlog.js';
 import { scanInheritedState, renderDashboard } from '../../src/engine/daemon-dashboard.js';
+import { localWorkSource, type LocalWorkSourceDeps } from '../../src/engine/daemon-work-source.js';
+import { createBlockerResolver, type BlockerRunner } from '../../src/engine/blocker-resolver.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Shared fixture helpers
@@ -259,6 +261,160 @@ describe('Flow A — daemon dependency gate across scan cycles', () => {
       await discoverBacklog(dir, undefined, () => {}, { treeSource: fsTreeSource(dir), resolver } as any),
     );
     expect(tick2.items.map((i: any) => i.slug)).toContain('cycle-member');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Flow A2 — live path through localWorkSource().discover() (rem-fr4-3)
+//
+// Flow A above drives `discoverBacklog` directly with a hand-rolled fake
+// resolver. That never exercises the REAL production wiring: the daemon
+// run-loop only ever calls `localWorkSource(deps).discover({refresh})`
+// (daemon-work-source.ts), which on every pass constructs a FRESH resolver
+// via `deps.makeResolver()` (matching production's
+// `createBlockerResolver({run: createGhBlockerRunner()})`) and forwards it
+// into the real `discoverBacklog`. This flow drives that exact seam: a fake
+// `gh` runner stands in for the platform, `createBlockerResolver` is the
+// REAL resolver built from it, and `discover()` is called exactly as the
+// run-loop calls it. `waiting` never comes back from `discover()` itself
+// (its return type is `BacklogItem[]`) — it is surfaced by the warn-once
+// announcer, which logs via the same `waitingDetail()` helper renderDashboard
+// uses (daemon-dashboard.ts:345-381), so asserting on the log line is
+// asserting on the exact WaitingEntry-shaped detail the dashboard renders.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('Flow A2 — live path through localWorkSource().discover()', () => {
+  /** Fake `gh` runner: models `blocked_by` responses per issue key, mutable across calls. */
+  function createFakeGh(initialBlockedBy: Record<string, unknown[]> = {}): {
+    run: BlockerRunner;
+    setBlockedBy(key: string, entries: unknown[]): void;
+    throwFor: Set<string>;
+  } {
+    const table = new Map<string, unknown[]>(Object.entries(initialBlockedBy));
+    const throwFor = new Set<string>();
+    const run: BlockerRunner = async (args: string[]) => {
+      const target = args.find((a) => a.includes('/dependencies/blocked_by'));
+      const m = target?.match(/repos\/([^/]+\/[^/]+)\/issues\/(\d+)\/dependencies\/blocked_by/);
+      const key = m ? `${m[1]}#${m[2]}` : '';
+      if (throwFor.has(key)) throw new Error(`platform unreachable for ${key}`);
+      return { stdout: JSON.stringify(table.get(key) ?? []) };
+    };
+    return {
+      run,
+      setBlockedBy(key: string, entries: unknown[]) {
+        table.set(key, entries);
+      },
+      throwFor,
+    };
+  }
+
+  const openBlocker = (repo: string, number: number) => ({
+    number,
+    repository_url: `https://api.github.com/repos/${repo}`,
+    state: 'open',
+  });
+
+  /** Build LocalWorkSourceDeps wired to a real, fs-backed discoverBacklog + a live makeResolver factory. */
+  function makeDeps(
+    dir: string,
+    makeResolver: () => ReturnType<typeof createBlockerResolver>,
+    log: (m: string) => void,
+  ): LocalWorkSourceDeps {
+    return {
+      projectRoot: dir,
+      baseBranch: 'main',
+      log,
+      isProcessed: async () => false,
+      hasWarned: async () => false,
+      markWarned: async () => {},
+      fastForwardRoot: async () => {},
+      discoverBacklog: (root, isProcessed, innerLog, opts) =>
+        discoverBacklog(root, isProcessed, innerLog, { ...opts, treeSource: fsTreeSource(root) } as any),
+      makeResolver,
+    };
+  }
+
+  it('a spec with an open blocker (resolved via a fake gh runner + the real resolver factory) is held in waiting, not items, with dashboard-consumable blocker detail', async () => {
+    const dir = await freshDir();
+    await seedSpec(dir, 'gh-blocked-spec', { sourceRef: 'acme/app#40' });
+    const gh = createFakeGh({ 'acme/app#40': [openBlocker('acme/app', 41)] });
+    const logLines: string[] = [];
+    const ws = localWorkSource(
+      makeDeps(dir, () => createBlockerResolver({ run: gh.run }), (m) => logLines.push(m)),
+    );
+
+    const items = await ws.discover({ refresh: false });
+
+    expect(items.map((i: any) => i.slug), 'blocked spec must not dispatch').not.toContain('gh-blocked-spec');
+    const waitingLine = logLines.find((l) => l.includes('gh-blocked-spec'));
+    expect(waitingLine, 'a WAITING announcement must be logged for the blocked spec').toBeDefined();
+    // Same detail string renderDashboard would produce for this verdict (daemon-dashboard.ts:345-381).
+    expect(waitingLine).toContain('blocked by acme/app#41');
+  });
+
+  it('re-evaluation across scans: blocker closes between two discover() calls → the spec moves from waiting to items', async () => {
+    const dir = await freshDir();
+    await seedSpec(dir, 'gh-reeval-spec', { sourceRef: 'acme/app#42' });
+    const gh = createFakeGh({ 'acme/app#42': [openBlocker('acme/app', 43)] });
+    const logLines: string[] = [];
+    const ws = localWorkSource(
+      makeDeps(dir, () => createBlockerResolver({ run: gh.run }), (m) => logLines.push(m)),
+    );
+
+    const tick1 = await ws.discover({ refresh: false });
+    expect(tick1.map((i: any) => i.slug), 'tick 1: still blocked, must not dispatch').not.toContain(
+      'gh-reeval-spec',
+    );
+    expect(logLines.some((l) => l.includes('gh-reeval-spec') && l.includes('blocked by'))).toBe(true);
+
+    // Blocker closes on the platform between scans.
+    gh.setBlockedBy('acme/app#42', []);
+    const tick2 = await ws.discover({ refresh: false });
+    expect(tick2.map((i: any) => i.slug), 'tick 2: blocker closed, must dispatch').toContain('gh-reeval-spec');
+  });
+
+  it('indeterminate (gh runner throws, modeling a GitHub outage) fails closed to waiting with a visible indeterminate reason', async () => {
+    const dir = await freshDir();
+    await seedSpec(dir, 'gh-outage-spec', { sourceRef: 'acme/app#44' });
+    const gh = createFakeGh();
+    gh.throwFor.add('acme/app#44');
+    const logLines: string[] = [];
+    const ws = localWorkSource(
+      makeDeps(dir, () => createBlockerResolver({ run: gh.run }), (m) => logLines.push(m)),
+    );
+
+    const items = await ws.discover({ refresh: false });
+
+    expect(items.map((i: any) => i.slug), 'indeterminate must fail closed — never dispatch').not.toContain(
+      'gh-outage-spec',
+    );
+    const waitingLine = logLines.find((l) => l.includes('gh-outage-spec'));
+    expect(waitingLine, 'the indeterminate reason must be visible in the WAITING announcement').toBeDefined();
+    expect(waitingLine).toContain('indeterminate:');
+    expect(waitingLine).toContain('platform unreachable for acme/app#44');
+  });
+
+  it('a 2-node dependency cycle (via the real resolver + fake gh) surfaces as its own error state, never silently dispatched', async () => {
+    const dir = await freshDir();
+    await seedSpec(dir, 'gh-cycle-spec', { sourceRef: 'acme/app#50' });
+    const gh = createFakeGh({
+      'acme/app#50': [openBlocker('acme/app', 51)],
+      'acme/app#51': [openBlocker('acme/app', 50)],
+    });
+    const logLines: string[] = [];
+    const ws = localWorkSource(
+      makeDeps(dir, () => createBlockerResolver({ run: gh.run }), (m) => logLines.push(m)),
+    );
+
+    const items = await ws.discover({ refresh: false });
+
+    expect(items.map((i: any) => i.slug), 'a cyclic spec must never silently dispatch').not.toContain(
+      'gh-cycle-spec',
+    );
+    const waitingLine = logLines.find((l) => l.includes('gh-cycle-spec'));
+    expect(waitingLine, 'the cycle must be surfaced as a distinct waiting reason, not silently swallowed').toBeDefined();
+    expect(waitingLine).toContain('cycle:');
+    expect(waitingLine).toContain('acme/app#50');
+    expect(waitingLine).toContain('acme/app#51');
   });
 });
 
