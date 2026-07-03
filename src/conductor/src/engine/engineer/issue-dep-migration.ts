@@ -136,11 +136,11 @@ const REVERSE_DIRECTION_RE = /\bblocker for\b\s*:?\s*#(\d+)|\bblocks\b\s*:?\s*#(
 // resolve and write a link, so it's always manual.
 const CROSS_REPO_RE = /\b([\w.-]+\/[\w.-]+)#(\d+)\b/g;
 
-// "- [ ] Phase ..." — task-list line naming a phase. These are organizational
-// metadata (a checklist of work phases inside one issue), not dependencies on
-// other issues, so they're flagged with no target rather than turned into an
-// edge.
-const TASK_LIST_PHASE_RE = /^-\s*\[[ xX]\]\s*(Phase\b.*)$/gm;
+// "- [ ] Phase ..." or "- [ ] #N ..." — task-list lines naming a phase or
+// umbrella issue reference. These are organizational metadata (a checklist of
+// work phases inside one issue), not dependencies on other issues, so they're
+// flagged with no target rather than turned into an edge.
+const TASK_LIST_PHASE_RE = /^-\s*\[[ xX]\]\s*((?:Phase\b|#\d+\s).*)$/gm;
 
 /**
  * Parse a single issue's body prose into deterministic `blocked_by` edges
