@@ -64,6 +64,53 @@ All must pass before proceeding.
      (the missing marker is how the conductor knows finish refused).
    - Report the blocker plainly and end.
 
+### 1b. Push Direction — Canonical Is Proven, Not Assumed
+
+**GATE: Prove remote staleness before force-pushing — never `git pull` after a sanctioned rebase.**
+
+The daemon's finish-time rebase (ADR-001/9.0) creates a common scenario: your branch
+has been rebased on HEAD, but `origin/<branch>` still holds the pre-rebase commits.
+This causes `git status` to report "diverged from / behind origin/<branch>" — a normal,
+intended state, not a blocker.
+
+**Before pushing this state, you MUST prove that `origin/<branch>` is stale:**
+
+1. **Fast path — merge-base proof:** Run:
+   ```
+   git merge-base --is-ancestor origin/<branch> ORIG_HEAD
+   ```
+   If this exits 0 (true), `origin/<branch>` is an ancestor of your pre-rebase HEAD.
+   This proves the remote is behind and safe to overwrite.
+
+2. **Fallback — reflog proof:** If merge-base is unavailable or fails, check the reflog:
+   ```
+   git reflog | grep "rebase: finish"
+   ```
+   If you see a "rebase: finish" entry, the daemon rebased this branch as part of
+   completion. The pre-rebase state exists in ORIG_HEAD and the reflog. This proves
+   staleness.
+
+**Once proof is obtained, reconcile with force-with-lease:**
+
+```
+git push --force-with-lease origin <branch>
+```
+
+This is safe because `--force-with-lease` aborts if the remote has new commits you
+don't know about — you've already verified it only has pre-rebase ones.
+
+**Explicitly forbidden — never do these:**
+- `git pull` — pulls `origin/<branch>` and merges; creates conflicts or undoes the rebase
+- `git fetch && git rebase origin/<branch>` — same effect, undoing the rebase
+- `git merge origin/<branch>` — creates a merge commit that contradicts the rebase
+
+All three corrupt the finish-time rebase and break the feature's shipped state.
+
+**No new marker is introduced.** The `.pipeline/finish-choice` semantics are unchanged
+(still one of: `pr`, `merge-local`, `keep`, `discard`). This rule applies to all
+completion paths: whether you merge locally, push a PR, or keep the branch, the
+staleness proof and force-with-lease discipline must hold.
+
 ### 2. Verify Against Stories and ADRs
 
 Cross-reference the completed work against the stories in `.docs/stories/`:
