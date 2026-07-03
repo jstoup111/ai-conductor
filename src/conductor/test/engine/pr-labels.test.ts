@@ -22,8 +22,27 @@ import {
   setReady,
   makeProductionGh,
   makeProductionGit,
+  pushBranch,
+  isAheadOfBase,
 } from '../../src/engine/pr-labels.js';
-import type { GhRunner } from '../../src/engine/pr-labels.js';
+import type { GhRunner, GitRunner } from '../../src/engine/pr-labels.js';
+
+// ── Fake GitRunner factory ────────────────────────────────────────────────────
+
+function fakeGit(
+  responses: Array<{ stdout: string } | Error>,
+): { git: GitRunner; calls: string[][] } {
+  const calls: string[][] = [];
+  let index = 0;
+  const git: GitRunner = async (args, _opts) => {
+    calls.push([...args]);
+    const response = responses[index++];
+    if (response === undefined) return { stdout: '' };
+    if (response instanceof Error) throw response;
+    return response;
+  };
+  return { git, calls };
+}
 
 // ── Fake GhRunner factory ─────────────────────────────────────────────────────
 
@@ -718,6 +737,56 @@ describe('setReady', () => {
   it('swallows a rejecting runner without throwing', async () => {
     const { gh } = fakeGh([new Error('failed')]);
     await expect(setReady(gh, '/repo', TEST_PR_URL)).resolves.toBeUndefined();
+  });
+});
+
+// ── pushBranch ────────────────────────────────────────────────────────────────
+
+describe('pushBranch', () => {
+  it('pushes with -u origin <branch> by default', async () => {
+    const { git, calls } = fakeGit([{ stdout: '' }]);
+    await pushBranch(git, '/repo', 'feat/abc');
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toEqual(['push', '-u', 'origin', 'feat/abc']);
+  });
+
+  it('pushes with --force-with-lease when forceWithLease=true', async () => {
+    const { git, calls } = fakeGit([{ stdout: '' }]);
+    await pushBranch(git, '/repo', 'feat/abc', { forceWithLease: true });
+    expect(calls[0]).toEqual(['push', '--force-with-lease', 'origin', 'feat/abc']);
+  });
+
+  it('swallows a rejecting runner without throwing', async () => {
+    const { git } = fakeGit([new Error('push failed')]);
+    await expect(pushBranch(git, '/repo', 'feat/abc')).resolves.toBeUndefined();
+  });
+});
+
+// ── isAheadOfBase ─────────────────────────────────────────────────────────────
+
+describe('isAheadOfBase', () => {
+  it('calls git rev-list --count base..HEAD', async () => {
+    const { git, calls } = fakeGit([{ stdout: '3\n' }]);
+    await isAheadOfBase(git, '/repo', 'main');
+    expect(calls[0]).toEqual(['rev-list', '--count', 'main..HEAD']);
+  });
+
+  it('parses non-zero count when ahead of base', async () => {
+    const { git } = fakeGit([{ stdout: '5\n' }]);
+    const count = await isAheadOfBase(git, '/repo', 'main');
+    expect(count).toBe(5);
+  });
+
+  it('returns 0 when HEAD == base', async () => {
+    const { git } = fakeGit([{ stdout: '0\n' }]);
+    const count = await isAheadOfBase(git, '/repo', 'main');
+    expect(count).toBe(0);
+  });
+
+  it('returns 0 when the runner errors', async () => {
+    const { git } = fakeGit([new Error('git failed')]);
+    const count = await isAheadOfBase(git, '/repo', 'main');
+    expect(count).toBe(0);
   });
 });
 

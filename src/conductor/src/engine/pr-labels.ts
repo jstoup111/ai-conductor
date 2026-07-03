@@ -550,6 +550,50 @@ export async function upsertComment(
   await comment(runGh, cwd, prUrl, taggedBody, log);
 }
 
+// ── Git operation primitives ──────────────────────────────────────────────────
+
+/**
+ * Push the given branch to `origin`, optionally using `--force-with-lease`
+ * instead of the default `-u origin <branch>` push. Swallows all errors.
+ */
+export async function pushBranch(
+  runGit: GitRunner = makeProductionGit(),
+  cwd: string,
+  branch: string,
+  options?: { forceWithLease?: boolean },
+  log?: (msg: string) => void,
+): Promise<void> {
+  const args = options?.forceWithLease
+    ? ['push', '--force-with-lease', 'origin', branch]
+    : ['push', '-u', 'origin', branch];
+  try {
+    await runGit(args, { cwd });
+  } catch (err) {
+    log?.(`[pr-labels] pushBranch(${branch}) error: ${err}`);
+  }
+}
+
+/**
+ * Count the number of commits HEAD is ahead of `base` via
+ * `git rev-list --count base..HEAD`. Returns 0 on any runner error or
+ * unparseable output.
+ */
+export async function isAheadOfBase(
+  runGit: GitRunner = makeProductionGit(),
+  cwd: string,
+  base: string,
+  log?: (msg: string) => void,
+): Promise<number> {
+  try {
+    const { stdout } = await runGit(['rev-list', '--count', `${base}..HEAD`], { cwd });
+    const count = parseInt(stdout.trim(), 10);
+    return Number.isFinite(count) ? count : 0;
+  } catch (err) {
+    log?.(`[pr-labels] isAheadOfBase(${base}) error: ${err}`);
+    return 0;
+  }
+}
+
 /**
  * Post a comment on an issue (as opposed to a PR — see {@link comment}).
  * `issueUrl` must be a `github.com/.../issues/N` URL. Swallows all errors.
