@@ -12,6 +12,7 @@ import type {
 import { prepareWorktree } from './worktree-prepare.js';
 import { makeProductionGh } from './pr-labels.js';
 import { ensureWorktree } from './worktree-shared.js';
+import { FINISH_CHOICE_MARKER, FINISH_CHOICE_VALUES } from './artifacts.js';
 
 export interface RealDepsConfig {
   /** The main checkout the daemon runs from. */
@@ -103,6 +104,15 @@ export function makeFeatureRunnerDeps(cfg: RealDepsConfig): FeatureRunnerDeps {
         'utf-8',
       );
     },
+
+    // NOTE (#204/#205, as-built review): the shipped record is NOT written
+    // here. Per adr-2026-07-03-committed-shipped-record-dispatch-dedup
+    // Decision 1, `/finish` commits `.docs/shipped/<slug>.md` on the
+    // IMPLEMENTATION branch (via `conduct shipped-record`) before the final
+    // push, so the human merge lands code + shipped-fact atomically. A
+    // daemon-side write here would land on the main checkout's base branch —
+    // never pushed, and it permanently breaks fastForwardRoot's --ff-only
+    // advance once local main is ahead of origin.
   };
 }
 
@@ -137,6 +147,29 @@ export async function isProcessed(projectRoot: string, slug: string): Promise<bo
   } catch {
     return false;
   }
+}
+
+/**
+ * Cache repair (ADR Decisions 2b/2c): a discovery skip driven by a base-branch
+ * shipped record writes the missing `.daemon/processed/<slug>` marker so later
+ * polls take the ledger fast path instead of re-reading shipped records. Uses
+ * the same JSON shape `markProcessed` writes; a malformed record still repairs
+ * (the stem match alone proved the ship) with a null prUrl. Callers treat
+ * failures as best-effort — discoverBacklog already catches and logs.
+ */
+export async function repairProcessed(
+  projectRoot: string,
+  slug: string,
+  record: { pr?: string } | { malformed: true },
+): Promise<void> {
+  const processedDir = join(projectRoot, PROCESSED_SUBDIR);
+  await mkdir(processedDir, { recursive: true });
+  const prUrl = 'malformed' in record ? null : (record.pr ?? null);
+  await writeFile(
+    join(processedDir, slug),
+    `${JSON.stringify({ status: 'shipped', prUrl })}\n`,
+    'utf-8',
+  );
 }
 
 /**
@@ -193,7 +226,25 @@ export async function readWorktreeOutcome(worktreePath: string): Promise<Worktre
     /* no state / no pr_url */
   }
 
-  return { done, halted, reason, prUrl };
+  // Task 12 (#204, #205): read the finish skill's recorded outcome so the
+  // ship-record write can be skipped for `discard`/`keep` — the gate-driven
+  // loop converges (DONE) for every finish choice, so `done` alone can't
+  // distinguish a real ship from "the operator chose not to ship."
+  // Tolerant of a missing/malformed marker (undefined → treated as ship, the
+  // pre-Task-12 default for `pr`/`merge-local`).
+  let finishChoice: WorktreeOutcome['finishChoice'];
+  try {
+    const raw = (
+      await readFile(join(worktreePath, FINISH_CHOICE_MARKER), 'utf-8')
+    ).trim();
+    if ((FINISH_CHOICE_VALUES as readonly string[]).includes(raw)) {
+      finishChoice = raw as WorktreeOutcome['finishChoice'];
+    }
+  } catch {
+    /* no marker — leave undefined */
+  }
+
+  return { done, halted, reason, prUrl, finishChoice };
 }
 
 async function exists(p: string): Promise<boolean> {

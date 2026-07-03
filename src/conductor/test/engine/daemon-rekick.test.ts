@@ -38,12 +38,18 @@ function fakeDeps(opts: {
   abortFails?: Set<string>;
   clearFails?: Set<string>;
   lastRekickSha?: Map<string, string>;
+  isProcessed?: (slug: string) => Promise<boolean>;
+  warned?: Set<string>;
 }): { deps: RekickSweepDeps; trace: Trace } {
   const trace: Trace = { events: [], cleared: new Set() };
+  const warned = opts.warned ?? new Set<string>();
   const deps: RekickSweepDeps = {
     listHaltedWorktrees: async () => opts.halted,
     readHaltReason: async (slug) => `reason:${slug}`,
-    hasRebaseInProgress: async (slug) => opts.rebasing?.has(slug) ?? false,
+    hasRebaseInProgress: async (slug) => {
+      trace.events.push(`hasRebaseInProgress:${slug}`);
+      return opts.rebasing?.has(slug) ?? false;
+    },
     abortRebase: async (slug) => {
       trace.events.push(`abort:${slug}`);
       if (opts.abortFails?.has(slug)) throw new Error('abort failed');
@@ -55,6 +61,11 @@ function fakeDeps(opts: {
     },
     lastRekickSha: opts.lastRekickSha ?? new Map(),
     log: (m) => trace.events.push(`log:${m}`),
+    ...(opts.isProcessed ? { isProcessed: opts.isProcessed } : {}),
+    hasWarned: async (slug) => warned.has(slug),
+    markWarned: async (slug) => {
+      warned.add(slug);
+    },
   };
   return { deps, trace };
 }
@@ -123,6 +134,72 @@ describe('engine/daemon-rekick — rekickSweep (FR-7/FR-9)', () => {
     const res = await rekickSweep(deps, SHA_B);
     expect(res.cleared.sort()).toEqual(['a', 'c']);
     expect(res.skipped).toEqual(['bad']);
+  });
+
+  it('isProcessed=true → slug is skipped entirely, no abort/clear work, one-time skip log', async () => {
+    const { deps, trace } = fakeDeps({
+      halted: ['shipped-slug'],
+      isProcessed: async () => true,
+    });
+    const res = await rekickSweep(deps, SHA_B);
+    expect(res.skipped).toEqual(['shipped-slug']);
+    expect(res.cleared).toEqual([]);
+    expect(trace.events.some((e) => e.startsWith('hasRebaseInProgress:'))).toBe(false);
+    expect(trace.events.some((e) => e.startsWith('abort:'))).toBe(false);
+    expect(trace.events.some((e) => e.startsWith('clear:'))).toBe(false);
+    expect(
+      trace.events.some((e) => e.includes('skipping re-kick') && e.includes('shipped-slug')),
+    ).toBe(true);
+  });
+
+  it('isProcessed=false → behavior byte-identical to the no-isProcessed sweep', async () => {
+    const last = new Map<string, string>();
+    const { deps, trace } = fakeDeps({
+      halted: ['a', 'b'],
+      lastRekickSha: last,
+      isProcessed: async () => false,
+    });
+    const res = await rekickSweep(deps, SHA_B);
+    expect(res.cleared.sort()).toEqual(['a', 'b']);
+    expect(res.skipped).toEqual([]);
+    expect(trace.events.some((e) => e.startsWith('clear:'))).toBe(true);
+  });
+
+  it('isProcessed throws → treated as NOT processed (fail-open), error logged, sweep continues', async () => {
+    const last = new Map<string, string>();
+    const { deps, trace } = fakeDeps({
+      halted: ['a', 'boom'],
+      lastRekickSha: last,
+      isProcessed: async (slug) => {
+        if (slug === 'boom') throw new Error('isProcessed exploded');
+        return false;
+      },
+    });
+    const res = await rekickSweep(deps, SHA_B);
+    expect(res.cleared.sort()).toEqual(['a', 'boom']);
+    expect(res.skipped).toEqual([]);
+    expect(
+      trace.events.some((e) => e.includes('boom') && e.toLowerCase().includes('isprocessed')),
+    ).toBe(true);
+  });
+
+  it('warn-once: the skip log for the same slug does not repeat on a second poll at a different SHA', async () => {
+    const warned = new Set<string>();
+    const { deps: deps1, trace: trace1 } = fakeDeps({
+      halted: ['shipped'],
+      isProcessed: async () => true,
+      warned,
+    });
+    await rekickSweep(deps1, SHA_B);
+    expect(trace1.events.some((e) => e.includes('skipping re-kick'))).toBe(true);
+
+    const { deps: deps2, trace: trace2 } = fakeDeps({
+      halted: ['shipped'],
+      isProcessed: async () => true,
+      warned,
+    });
+    await rekickSweep(deps2, SHA_C);
+    expect(trace2.events.some((e) => e.includes('skipping re-kick'))).toBe(false);
   });
 });
 

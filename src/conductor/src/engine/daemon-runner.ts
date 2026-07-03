@@ -17,6 +17,7 @@ import {
   makeProductionGh,
   type GhRunner,
 } from './pr-labels.js';
+import type { FinishChoice } from './artifacts.js';
 
 /**
  * Outcome of running the gate loop inside a feature's worktree, read from the
@@ -28,6 +29,13 @@ export interface WorktreeOutcome {
   reason?: string;
   prUrl?: string;
   costTokens?: number;
+  /**
+   * The finish skill's recorded outcome (from `.pipeline/finish-choice`),
+   * when readable. `discard`/`keep` are no-ship outcomes even though the
+   * gate-driven loop still converges (writes DONE) for them; /finish itself
+   * skips the shipped-record commit for those choices (#204, #205).
+   */
+  finishChoice?: FinishChoice;
 }
 
 export interface FeatureWorktree {
@@ -195,6 +203,15 @@ export function makeRunFeature(
         }
 
         await deps.markProcessed(item.slug, outcome.prUrl);
+
+        // #204/#205: the durable `.docs/shipped/<slug>.md` record is NOT
+        // written here — `/finish` commits it on the IMPLEMENTATION branch
+        // (via `conduct shipped-record`) before the branch's final push, so
+        // the human merge lands code + shipped-fact atomically (ADR
+        // adr-2026-07-03-committed-shipped-record-dispatch-dedup, Decision 1).
+        // If the finish flow failed to write it, dedup degrades to the
+        // `.daemon/processed/` ledger marker written above.
+
         await deps.teardownWorktree(worktree, false);
         log(`✓ ${item.slug} shipped${outcome.prUrl ? ` → ${outcome.prUrl}` : ''}`);
         // FR-14: sweep mergeable labels after feature completes.

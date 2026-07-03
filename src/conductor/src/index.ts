@@ -56,6 +56,10 @@ import {
 } from './engine/daemon-command.js';
 import { detectRenderCommand, dispatchRender } from './engine/render-cli.js';
 import {
+  detectShippedRecordCommand,
+  dispatchShippedRecord,
+} from './engine/shipped-record-cli.js';
+import {
   detectDaemonObserveCommand,
   dispatchDaemonObserve,
 } from './engine/daemon-observe-cli.js';
@@ -239,6 +243,17 @@ async function main(): Promise<void> {
   const renderCmd = detectRenderCommand(process.argv);
   if (renderCmd) {
     const code = await dispatchRender(renderCmd, process.cwd());
+    process.exit(code);
+  }
+
+  // Shipped-record subcommand (`shipped-record --slug <s> --pr <url|local>`)
+  // runs NON-INTERACTIVELY and exits — commits the `.docs/shipped/<slug>.md`
+  // dedup record on the current branch (invoked by /finish on the impl branch
+  // before its final push). Degrades to exit 0 on failure by design; mirrors
+  // the render dispatch pattern.
+  const shippedRecordCmd = detectShippedRecordCommand(process.argv);
+  if (shippedRecordCmd) {
+    const code = await dispatchShippedRecord(shippedRecordCmd, process.cwd());
     process.exit(code);
   }
 

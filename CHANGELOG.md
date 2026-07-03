@@ -39,6 +39,12 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   machine-scoped with a `gh api user` login fallback; the project config is never consulted
   (anti-leak, D2). Owner stamping preserves `Source-Ref:` on intake markers.
 
+- **Content-aware shipped-work dedup** (#204, #205): committed `.docs/shipped/<stem>.md` records as durable dispatch-dedup authority (stem-primary, content-hash-secondary). Fresh clones and cache resets no longer replay shipped specs. Fixes replay bugs in PR #82, #124, #183.
+  - New `conduct shipped-record --slug <stem> --pr <url|local>` subcommand: `/finish` runs it on the implementation branch before the final push, so the record rides the PR and the human merge lands code + shipped-fact atomically (ADR Decision 1). Degrades (warn, exit 0) on any failure; never runs for `discard`/`keep`. The daemon never commits records on its main checkout (which would sit un-pushed on local base and wedge the `--ff-only` fast-forward).
+  - `discoverBacklog` skips candidates with base-branch shipped records (stem match + cache repair, wired via `localWorkSource.repairProcessed`).
+  - Content-hash matching detects renamed specs.
+  - `.daemon/processed/` demoted from authority to cache.
+  - `rekickSweep` skips processed slugs via the ledger-or-record `makeIsProcessed` resolver (rebuilt fresh per sweep), with warn-once skip logs — halting spurious re-kicks on dupes (#205).
 - **Committed `.ai-conductor/config.yml` for the harness repo itself** — sets
   `owner_gate_cutover: 2026-07-02T11:00:00Z` so this repo's daemon (registered
   2026-07-02, issue #174) grandfather-builds specs already on `main` at

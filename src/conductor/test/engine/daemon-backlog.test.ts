@@ -9,6 +9,12 @@ import {
   type BacklogTreeSource,
 } from '../../src/engine/daemon-backlog.js';
 import { parseComplexityTier } from '../../src/engine/artifacts.js';
+import {
+  renderShippedRecord,
+  parseShippedRecord,
+  specHash,
+  makeIsProcessed,
+} from '../../src/engine/shipped-record.js';
 
 const execFile = promisify(execFileCb);
 
@@ -21,6 +27,13 @@ function fsTreeSource(root: string): BacklogTreeSource {
     async listPlanFiles() {
       try {
         return (await readdir(join(root, '.docs/plans'))).filter((f) => f.endsWith('.md'));
+      } catch {
+        return [];
+      }
+    },
+    async listShippedFiles() {
+      try {
+        return (await readdir(join(root, '.docs/shipped'))).filter((f) => f.endsWith('.md'));
       } catch {
         return [];
       }
@@ -597,6 +610,13 @@ describe('engine/daemon-backlog — owner-gate integration', () => {
         return [];
       }
     },
+    async listShippedFiles() {
+      try {
+        return (await readdir(join(root, '.docs/shipped'))).filter((f) => f.endsWith('.md'));
+      } catch {
+        return [];
+      }
+    },
     async readFile(relPath) {
       try {
         return await fsReadFile(join(root, relPath), 'utf-8');
@@ -952,5 +972,346 @@ describe('engine/daemon-backlog — owner-gate integration', () => {
     const line = logs.find((l) => /unstamped-again/.test(l));
     expect(line).toMatch(/un-owned/i); // un-owned branch, not "owned by another"
     expect(line).not.toMatch(/another operator/i);
+  });
+});
+
+describe('engine/daemon-backlog — shipped-record dedup (Story 3/Task 4)', () => {
+  let dir: string;
+  const APPROVED_STORIES = '# Stories\n**Status:** Accepted\n';
+  const planWithDeps = (storiesRef?: string) =>
+    `# Plan\n${storiesRef ? `**Stories:** ${storiesRef}\n` : ''}\n### Task 1\n**Dependencies:** none\n`;
+
+  const fsSource = (root: string): BacklogTreeSource => ({
+    async listPlanFiles() {
+      try {
+        return (await readdir(join(root, '.docs/plans'))).filter((f) => f.endsWith('.md'));
+      } catch {
+        return [];
+      }
+    },
+    async listShippedFiles() {
+      try {
+        return (await readdir(join(root, '.docs/shipped'))).filter((f) => f.endsWith('.md'));
+      } catch {
+        return [];
+      }
+    },
+    async readFile(relPath) {
+      try {
+        return await fsReadFile(join(root, relPath), 'utf-8');
+      } catch {
+        return null;
+      }
+    },
+  });
+
+  async function writeSpec(slug: string, stories = APPROVED_STORIES): Promise<void> {
+    await writeFile(join(dir, `.docs/plans/${slug}.md`), planWithDeps(`.docs/stories/${slug}.md`));
+    await writeFile(join(dir, `.docs/stories/${slug}.md`), stories);
+  }
+
+  async function writeShipped(slug: string): Promise<void> {
+    await mkdir(join(dir, '.docs/shipped'), { recursive: true });
+    await writeFile(
+      join(dir, `.docs/shipped/${slug}.md`),
+      renderShippedRecord({ slug, specHash: 'deadbeef' }),
+    );
+  }
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'daemon-backlog-shipped-'));
+    await mkdir(join(dir, '.docs/plans'), { recursive: true });
+    await mkdir(join(dir, '.docs/stories'), { recursive: true });
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('a candidate with a base-branch shipped record and no local cache hit is skipped and repaired', async () => {
+    await writeSpec('already-shipped');
+    await writeShipped('already-shipped');
+    const logs: string[] = [];
+    const repaired: Array<{ slug: string; record: ReturnType<typeof parseShippedRecord> }> = [];
+    const { items: backlog } = await discoverBacklog(dir, async () => false, (m) => logs.push(m), {
+      treeSource: fsSource(dir),
+      repairProcessed: async (slug, record) => {
+        repaired.push({ slug, record });
+      },
+    });
+    expect(backlog).toEqual([]);
+    expect(repaired).toHaveLength(1);
+    expect(repaired[0].slug).toBe('already-shipped');
+    expect(repaired[0].record).toMatchObject({ slug: 'already-shipped', specHash: 'deadbeef' });
+    expect(logs.join('\n')).toMatch(/already-shipped.*shipped dedup/i);
+  });
+
+  it('a candidate already marked processed locally is skipped WITHOUT consulting shipped records', async () => {
+    await writeSpec('cache-hit');
+    // Deliberately do NOT write a shipped record — if the dedup path were
+    // consulted first it would find nothing; the point is that isProcessed
+    // short-circuits BEFORE shipped-record lookup even happens.
+    let repairCalls = 0;
+    const { items: backlog } = await discoverBacklog(dir, async () => true, undefined, {
+      treeSource: fsSource(dir),
+      repairProcessed: async () => {
+        repairCalls += 1;
+      },
+    });
+    expect(backlog).toEqual([]);
+    expect(repairCalls).toBe(0);
+  });
+
+  it('a candidate with no shipped record proceeds to the owner gate unchanged', async () => {
+    await writeSpec('not-shipped');
+    const { items: backlog } = await discoverBacklog(dir, async () => false, undefined, {
+      treeSource: fsSource(dir),
+      daemonOwner: { resolved: true, id: 'alice' },
+      readStamp: async () => ({ present: true as const, id: 'alice' }),
+      readMergeTime: async () => null,
+      cutover: null,
+    });
+    expect(backlog.map((b) => b.slug)).toEqual(['not-shipped']);
+  });
+
+  it('repairProcessed throwing still skips the candidate, logs the error, and discovery continues', async () => {
+    await writeSpec('repair-fails');
+    await writeShipped('repair-fails');
+    await writeSpec('unaffected');
+    const logs: string[] = [];
+    const { items: backlog } = await discoverBacklog(dir, async () => false, (m) => logs.push(m), {
+      treeSource: fsSource(dir),
+      repairProcessed: async (slug) => {
+        if (slug === 'repair-fails') {
+          throw new Error('disk full');
+        }
+      },
+    });
+    expect(backlog.map((b) => b.slug)).toEqual(['unaffected']);
+    expect(logs.join('\n')).toMatch(/repair-fails/);
+    expect(logs.join('\n')).toMatch(/disk full/);
+  });
+
+  it('multiple candidates: shipped ones are skipped, unshipped ones proceed', async () => {
+    await writeSpec('ship-1');
+    await writeSpec('ship-2');
+    await writeSpec('fresh-1');
+    await writeShipped('ship-1');
+    await writeShipped('ship-2');
+    const repaired: string[] = [];
+    const { items: backlog } = await discoverBacklog(dir, async () => false, undefined, {
+      treeSource: fsSource(dir),
+      repairProcessed: async (slug) => {
+        repaired.push(slug);
+      },
+    });
+    expect(backlog.map((b) => b.slug).sort()).toEqual(['fresh-1']);
+    expect(repaired.sort()).toEqual(['ship-1', 'ship-2']);
+  });
+
+  // Story 3 (Task 5) — gate-order assertions: dedup precedes the owner gate.
+  it('a shipped candidate with an UNRESOLVED daemon identity is skipped as SHIPPED, not identity-unresolved', async () => {
+    await writeSpec('shipped-unresolved');
+    await writeShipped('shipped-unresolved');
+    const logs: string[] = [];
+    const { items: backlog } = await discoverBacklog(dir, async () => false, (m) => logs.push(m), {
+      treeSource: fsSource(dir),
+      daemonOwner: { resolved: false },
+    });
+    expect(backlog).toEqual([]);
+    const joined = logs.join('\n');
+    expect(joined).toMatch(/shipped-unresolved.*shipped dedup/i);
+    expect(joined).not.toMatch(/identity unresolved/i);
+  });
+
+  it('a shipped candidate stamped for a FOREIGN owner is skipped as SHIPPED, not owner-gated', async () => {
+    await writeSpec('shipped-foreign-owner');
+    await writeShipped('shipped-foreign-owner');
+    const logs: string[] = [];
+    const { items: backlog } = await discoverBacklog(dir, async () => false, (m) => logs.push(m), {
+      treeSource: fsSource(dir),
+      daemonOwner: { resolved: true, id: 'alice' },
+      readStamp: async () => ({ present: true as const, id: 'bob' }),
+      readMergeTime: async () => null,
+      cutover: null,
+    });
+    expect(backlog).toEqual([]);
+    const joined = logs.join('\n');
+    expect(joined).toMatch(/shipped-foreign-owner.*shipped dedup/i);
+    expect(joined).not.toMatch(/owner-gate/i);
+    expect(joined).not.toMatch(/different operator/i);
+  });
+
+  it('an UNSHIPPED candidate with an unresolved identity still fails closed (hardening intact)', async () => {
+    await writeSpec('unshipped-unresolved');
+    // Deliberately NO shipped record for this candidate.
+    const logs: string[] = [];
+    const { items: backlog } = await discoverBacklog(dir, async () => false, (m) => logs.push(m), {
+      treeSource: fsSource(dir),
+      daemonOwner: { resolved: false },
+    });
+    expect(backlog).toEqual([]);
+    expect(logs.join('\n')).toMatch(/identity unresolved/i);
+  });
+
+  // Task 8: proves the shared makeIsProcessed resolver (ledger OR shipped
+  // record) works end-to-end with discovery, wired via the SAME
+  // `isProcessed` parameter production uses — not the injected `repairProcessed`
+  // mock the other tests in this block use to observe the dedup path directly.
+  it('Task 8: discovery wired with the shared makeIsProcessed resolver skips a base-branch-shipped candidate', async () => {
+    await writeSpec('resolver-shipped');
+    await writeShipped('resolver-shipped');
+    await writeSpec('resolver-fresh');
+    const processedDir = join(dir, '.daemon/processed');
+    await mkdir(processedDir, { recursive: true });
+
+    const isProcessed = makeIsProcessed(processedDir, fsSource(dir));
+    const { items: backlog } = await discoverBacklog(dir, isProcessed, undefined, {
+      treeSource: fsSource(dir),
+    });
+
+    expect(backlog.map((b) => b.slug)).toEqual(['resolver-fresh']);
+  });
+});
+
+describe('engine/daemon-backlog — content-hash match dedups renamed specs (Story 4/Task 6)', () => {
+  let dir: string;
+  const APPROVED_STORIES = '# Stories\n**Status:** Accepted\n';
+  const planWithDeps = (storiesRef?: string) =>
+    `# Plan\n${storiesRef ? `**Stories:** ${storiesRef}\n` : ''}\n### Task 1\n**Dependencies:** none\n`;
+
+  const fsSource = (root: string): BacklogTreeSource => ({
+    async listPlanFiles() {
+      try {
+        return (await readdir(join(root, '.docs/plans'))).filter((f) => f.endsWith('.md'));
+      } catch {
+        return [];
+      }
+    },
+    async listShippedFiles() {
+      try {
+        return (await readdir(join(root, '.docs/shipped'))).filter((f) => f.endsWith('.md'));
+      } catch {
+        return [];
+      }
+    },
+    async readFile(relPath) {
+      try {
+        return await fsReadFile(join(root, relPath), 'utf-8');
+      } catch {
+        return null;
+      }
+    },
+  });
+
+  // Deliberately NO explicit **Stories:** line — resolution falls back to the
+  // same-stem stories file (`resolveStoriesRef`). This keeps the PLAN BYTES
+  // identical across a rename (an explicit `**Stories:** .docs/stories/<slug>.md`
+  // line would itself change on rename, defeating the very "same content,
+  // different filename" scenario this dedup targets).
+  async function writeSpec(slug: string, stories = APPROVED_STORIES): Promise<void> {
+    await writeFile(join(dir, `.docs/plans/${slug}.md`), planWithDeps());
+    await writeFile(join(dir, `.docs/stories/${slug}.md`), stories);
+  }
+
+  async function writeShippedWithHash(oldSlug: string, hash: string): Promise<void> {
+    await mkdir(join(dir, '.docs/shipped'), { recursive: true });
+    await writeFile(
+      join(dir, `.docs/shipped/${oldSlug}.md`),
+      renderShippedRecord({ slug: oldSlug, specHash: hash }),
+    );
+  }
+
+  function hashOf(plan: string, stories: string): string {
+    return specHash(Buffer.from(plan, 'utf-8'), Buffer.from(stories, 'utf-8')).digest;
+  }
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'daemon-backlog-hash-dedup-'));
+    await mkdir(join(dir, '.docs/plans'), { recursive: true });
+    await mkdir(join(dir, '.docs/stories'), { recursive: true });
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('renamed spec (same content, different stem) is skipped, warn-once names both stems, repairProcessed called with the NEW slug', async () => {
+    // No plan/stories files exist under the old stem — only its shipped
+    // record does, which is the real-world post-rename state. The candidate
+    // ('new-name') has byte-identical plan+stories content, so it matches the
+    // shipped record's spec_hash even though no stem matches.
+    const hash = hashOf(planWithDeps(), APPROVED_STORIES);
+    await writeShippedWithHash('old-name', hash);
+    await writeSpec('new-name');
+
+    const logs: string[] = [];
+    const repaired: Array<{ slug: string; record: ReturnType<typeof parseShippedRecord> }> = [];
+    const { items: backlog } = await discoverBacklog(dir, async () => false, (m) => logs.push(m), {
+      treeSource: fsSource(dir),
+      repairProcessed: async (slug, record) => {
+        repaired.push({ slug, record });
+      },
+    });
+
+    expect(backlog).toEqual([]);
+    expect(repaired).toHaveLength(1);
+    expect(repaired[0].slug).toBe('new-name');
+    expect(logs.join('\n')).toMatch(/old-name/);
+    expect(logs.join('\n')).toMatch(/new-name/);
+  });
+
+  it('no hash match: candidate with different content proceeds to the owner gate (no false positive)', async () => {
+    await writeShippedWithHash('old-name', 'deadbeef-not-a-real-match');
+    await writeSpec('new-name', APPROVED_STORIES + 'extra content\n');
+
+    const { items: backlog } = await discoverBacklog(dir, async () => false, undefined, {
+      treeSource: fsSource(dir),
+      daemonOwner: { resolved: true, id: 'alice' },
+      readStamp: async () => ({ present: true as const, id: 'alice' }),
+      readMergeTime: async () => null,
+      cutover: null,
+    });
+
+    expect(backlog.map((b) => b.slug)).toEqual(['new-name']);
+  });
+
+  it('two specs with identical content (template copy-paste): the second to ship is skipped via hash match, warn-once names both stems', async () => {
+    // template-a already shipped (record under its OWN stem — caught by the
+    // stem-match dedup from Task 4). template-b is a separate candidate whose
+    // plan+stories are byte-identical to template-a's (a template copy-paste)
+    // and has NO shipped record of its own, so it is caught by the NEW
+    // hash-match dedup instead — the accepted residual this story documents.
+    await writeSpec('template-a');
+    const hash = hashOf(planWithDeps(), APPROVED_STORIES);
+    await writeShippedWithHash('template-a', hash);
+    await writeSpec('template-b');
+
+    const logs: string[] = [];
+    const repaired: string[] = [];
+    const { items: backlog } = await discoverBacklog(dir, async () => false, (m) => logs.push(m), {
+      treeSource: fsSource(dir),
+      repairProcessed: async (slug) => {
+        repaired.push(slug);
+      },
+    });
+
+    expect(backlog).toEqual([]);
+    expect(repaired.sort()).toEqual(['template-a', 'template-b']);
+    expect(logs.join('\n')).toMatch(/template-a/);
+    expect(logs.join('\n')).toMatch(/template-b/);
+  });
+
+  it('renamed AND edited: neither stem nor hash matches, proceeds to owner gate (documented gap)', async () => {
+    await writeShippedWithHash('old', 'some-hash-that-wont-match');
+    await writeSpec('old-v2', APPROVED_STORIES + 'edited content\n');
+
+    const { items: backlog } = await discoverBacklog(dir, async () => false, undefined, {
+      treeSource: fsSource(dir),
+      daemonOwner: { resolved: true, id: 'alice' },
+      readStamp: async () => ({ present: true as const, id: 'alice' }),
+      readMergeTime: async () => null,
+      cutover: null,
+    });
+
+    expect(backlog.map((b) => b.slug)).toEqual(['old-v2']);
   });
 });

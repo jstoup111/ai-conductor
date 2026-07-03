@@ -142,6 +142,12 @@ Without one of these, the conductor will treat the step as failed and re-run
 it, even if the skill itself reports success.
 
 **Option 1: Merge locally**
+- **Shipped record (before the merge):** on the feature branch, run
+  `conduct-ts shipped-record --slug <slug> --pr local` (where `<slug>` is the
+  plan-file stem, `.docs/plans/<slug>.md`). It commits `.docs/shipped/<slug>.md`
+  on the branch so the merge lands the code and the shipped-fact atomically.
+  The command NEVER blocks the ship: on any failure it warns and exits 0 —
+  continue regardless.
 - Determine the base branch (main, master, develop)
 - Merge the feature branch
 - Run tests again after merge to verify no merge issues
@@ -151,6 +157,12 @@ it, even if the skill itself reports success.
 **Option 2: Push & PR**
 - Run the `/pr` skill — it handles pre-push verification, title/body generation, push, and
   PR creation
+- **Shipped record (before handing the PR to the human):** on the feature
+  branch, run `conduct-ts shipped-record --slug <slug> --pr <PR_URL>` (where
+  `<slug>` is the plan-file stem, `.docs/plans/<slug>.md`), then `git push` so
+  the record commit rides the PR branch — the human merge lands the code and
+  the shipped-fact atomically. The command NEVER blocks the ship: on any
+  failure it warns and exits 0 — continue (dedup degrades to the local ledger).
 - Return the PR URL to the user
 - Write the PR URL to `.pipeline/conduct-state.json` (`pr_url` field)
 - Write `pr` to `.pipeline/finish-choice`
@@ -159,6 +171,8 @@ it, even if the skill itself reports success.
 - No action needed
 - Remind the user which branch they're on
 - Write `keep` to `.pipeline/finish-choice`
+- Never run `conduct-ts shipped-record` for `keep` (or `discard`) — nothing
+  ships, so no `.docs/shipped/` record may exist for the slug
 
 **Option 4: Discard**
 - Require explicit confirmation: "Are you sure? This deletes all work on this branch."
