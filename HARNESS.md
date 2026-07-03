@@ -80,7 +80,11 @@ standard implementation, Haiku for mechanical checks.
   frontmatter so a Sonnet/Haiku session still runs them on the right model. Sonnet/haiku and
   tier-varying skills inherit from the engine or the session.
 
-This table is the human-readable mirror of both. When you change one, change all three.
+This table is the human-readable mirror of both, and is generated — do not hand-edit the rows
+below. Edit `model-table-metadata.ts` (Why/complexity/as-built prose) and `resolved-config.ts`
+(model/effort/tier-override source of truth), then run `bin/generate-model-table` to regenerate
+this section. CI enforces both content drift (the table matches the source) and pins (opus-tier
+skills declare `model: opus` in their SKILL.md frontmatter).
 
 <!-- BEGIN GENERATED: model-selection-table -->
 | Skill/Agent | Model | Effort | Why |

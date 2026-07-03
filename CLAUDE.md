@@ -35,6 +35,11 @@ Run `test/test_harness_integrity.sh` — it checks all of the following:
 4. **Cross-skill references** — Every `/skill-name` reference in SKILL.md files points to an
    existing `skills/` directory.
 5. **HARNESS.md model table** — Every skill directory has an entry in the model selection table.
+5a. **Table content drift** — The generated HARNESS.md model-selection-table section matches
+    the output of `bin/generate-model-table` (source: `model-table-metadata.ts` +
+    `resolved-config.ts`); regenerate and commit if it drifts.
+5b. **SKILL.md pin agreement** — Every skill marked opus-tier in the model table pins
+    `model: opus` in its SKILL.md frontmatter, and vice versa.
 6. **Template references** — Every `templates/*.template` referenced in skills exists on disk.
 7. **Section numbering** — No duplicate section numbers within a SKILL.md file.
 

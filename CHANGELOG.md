@@ -512,6 +512,16 @@ Reverting is not supported: if you revert past this version, the `dist` symlink 
   close a gate is to `MAX_KICKBACKS_PER_GATE`.
 - **Front-half re-opens now enforce the same `MAX_KICKBACKS_PER_GATE` cap as tail kickbacks**,
   so a DECIDE-phase kickback loop halts instead of looping indefinitely.
+- **Generated model-selection table + integrity checks.** `bin/generate-model-table` now
+  generates the HARNESS.md model-selection-table section from `model-table-metadata.ts`
+  (Why/complexity/as-built prose) and `resolved-config.ts` (model/effort/tier-override source
+  of truth), replacing hand-maintained "keep three things in sync" prose. Validation suite
+  checks 5a (table content drift) and 5b (SKILL.md pin agreement) enforce that the generated
+  table matches its source and that opus-tier pins in SKILL.md frontmatter agree with the table.
+- **HARNESS.md model-selection table is now generated, not hand-edited.** The table gains an
+  explicit Effort column and explicit complexity/as-built rows (previously folded into prose or
+  omitted); regenerate via `bin/generate-model-table` after editing the source files, do not
+  edit the generated block directly.
 
 ## Migration
 
