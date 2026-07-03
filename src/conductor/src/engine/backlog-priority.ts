@@ -86,7 +86,7 @@ export function createPriorityResolver(
 
   return {
     async resolve(items: BacklogItem[], options: { refresh: boolean }): Promise<PriorityResolution> {
-      const result = new Map<string, PriorityBand>();
+      const bands = new Map<string, PriorityBand>();
 
       // Collect all sourceRefs that need resolution
       const sourceRefs = items.filter((item) => item.sourceRef).map((item) => item.sourceRef as string);
@@ -110,20 +110,93 @@ export function createPriorityResolver(
       for (const item of items) {
         if (!item.sourceRef) {
           // Item has no issue reference
-          result.set(item.slug, 'no-issue');
+          bands.set(item.slug, 'no-issue');
         } else {
           // Item has a sourceRef - look up in cache
           const labels = cache.get(item.sourceRef);
           if (labels) {
             const priority = parsePriorityLabels(labels);
-            result.set(item.sourceRef, priority || 'unlabeled');
+            bands.set(item.sourceRef, priority || 'unlabeled');
           } else {
-            result.set(item.sourceRef, 'unlabeled');
+            bands.set(item.sourceRef, 'unlabeled');
           }
         }
       }
 
-      return result;
+      return { mode: 'banded', bands };
     },
   };
+}
+
+/**
+ * Band rank for stable sorting. Lower rank comes first.
+ *
+ * no-issue: 0 (unlinked items, highest priority)
+ * high: 1
+ * medium: 2
+ * low: 3
+ * unlabeled: 4 (lowest priority)
+ */
+const BAND_RANK: Record<PriorityBand, number> = {
+  'no-issue': 0,
+  high: 1,
+  medium: 2,
+  low: 3,
+  unlabeled: 4,
+};
+
+/**
+ * Order backlog items by priority bands in a stable sort.
+ *
+ * Items are sorted into bands: no-issue → high → medium → low → unlabeled.
+ * Within each band, items maintain their input order (stable sort).
+ *
+ * For 'banded' mode: items are reordered by band and annotated with their band.
+ * For 'fallback' and 'off' modes: items are returned in input order.
+ *
+ * This is a pure function: it does not mutate the input array or items.
+ *
+ * @param items - Array of backlog items
+ * @param res - Priority resolution: either banded (with band map) or fallback/off
+ * @returns New array of items ordered by band, with band annotations (for banded mode)
+ */
+export function orderBacklog(items: BacklogItem[], res: PriorityResolution): BacklogItem[] {
+  // For fallback/off modes, return input order
+  if (res.mode === 'fallback' || res.mode === 'off') {
+    return items;
+  }
+
+  // Banded mode: reorder by band with stable sort
+  const { bands } = res;
+
+  // Map each item to (originalIndex, item, band)
+  const itemsWithBands = items.map((item, index) => {
+    let band: PriorityBand;
+
+    if (!item.sourceRef) {
+      // No sourceRef → no-issue band
+      band = 'no-issue';
+    } else {
+      // Has sourceRef → look up in bands map
+      band = bands.get(item.sourceRef) || 'unlabeled';
+    }
+
+    return { originalIndex: index, item, band };
+  });
+
+  // Sort by band rank, using original index as tie-breaker for stable sort
+  itemsWithBands.sort((a, b) => {
+    const rankDiff = BAND_RANK[a.band] - BAND_RANK[b.band];
+    if (rankDiff !== 0) {
+      return rankDiff;
+    }
+    // Same band: preserve input order
+    return a.originalIndex - b.originalIndex;
+  });
+
+  // Return sorted items with band annotation
+  return itemsWithBands.map(({ item, band }) => ({
+    ...item,
+    band,
+  }));
 }

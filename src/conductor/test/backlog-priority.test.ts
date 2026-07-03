@@ -156,8 +156,9 @@ describe('createPriorityResolver — stateful resolver with caching', () => {
       const result = await resolver.resolve(items, { refresh: true });
 
       expect(callLog).toEqual(['read:owner/repo#1,owner/repo#2']);
-      expect(result.get('owner/repo#1')).toBe('high');
-      expect(result.get('owner/repo#2')).toBe('low');
+      expect(result.mode).toBe('banded');
+      expect(result.bands.get('owner/repo#1')).toBe('high');
+      expect(result.bands.get('owner/repo#2')).toBe('low');
     });
 
     it('handles items with no sourceRef (no-issue band)', async () => {
@@ -177,8 +178,9 @@ describe('createPriorityResolver — stateful resolver with caching', () => {
       const result = await resolver.resolve(items, { refresh: true });
 
       expect(callLog).toEqual(['read:owner/repo#2']);
-      expect(result.get('feature-1')).toBe('no-issue');
-      expect(result.get('owner/repo#2')).toBe('unlabeled');
+      expect(result.mode).toBe('banded');
+      expect(result.bands.get('feature-1')).toBe('no-issue');
+      expect(result.bands.get('owner/repo#2')).toBe('unlabeled');
     });
   });
 
@@ -215,8 +217,9 @@ describe('createPriorityResolver — stateful resolver with caching', () => {
       const result = await resolver.resolve(items, { refresh: false });
 
       expect(callLog).toEqual([]); // no reader calls
-      expect(result.get('owner/repo#1')).toBe('high');
-      expect(result.get('owner/repo#2')).toBe('medium');
+      expect(result.mode).toBe('banded');
+      expect(result.bands.get('owner/repo#1')).toBe('high');
+      expect(result.bands.get('owner/repo#2')).toBe('medium');
     });
   });
 
@@ -244,7 +247,8 @@ describe('createPriorityResolver — stateful resolver with caching', () => {
 
       // First refresh: label is 'low'
       let result = await resolver.resolve(items, { refresh: true });
-      expect(result.get('owner/repo#1')).toBe('low');
+      expect(result.mode).toBe('banded');
+      expect(result.bands.get('owner/repo#1')).toBe('low');
       expect(callLog).toEqual(['read:owner/repo#1']);
 
       // Change the label in the fake reader
@@ -255,7 +259,8 @@ describe('createPriorityResolver — stateful resolver with caching', () => {
 
       // Second refresh: should re-fetch and get new label
       result = await resolver.resolve(items, { refresh: true });
-      expect(result.get('owner/repo#1')).toBe('high');
+      expect(result.mode).toBe('banded');
+      expect(result.bands.get('owner/repo#1')).toBe('high');
       expect(callLog).toEqual(['read:owner/repo#1']);
     });
   });
