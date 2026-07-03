@@ -8,6 +8,7 @@ import {
   parseComplexityTier,
   parseIntakeSourceRef,
   parseTrack,
+  planStem,
 } from './artifacts.js';
 import { makeGitRunner, originDefaultBranch, type GitRunner } from './rebase.js';
 import type { OwnerResolution } from './owner-gate/identity.js';
@@ -363,7 +364,7 @@ export async function discoverBacklog(
   // is present but malformed (see the dependency-gate loop below).
   const malformedSourceRefs = new Map<string, string>();
   for (const file of [...planFiles].sort()) {
-    const slug = basename(file, '.md');
+    const slug = planStem(file);
     const planRel = `.docs/plans/${file}`;
 
     // Read the plan FROM THE BASE-BRANCH TREE. Absent → not merged → skip.
