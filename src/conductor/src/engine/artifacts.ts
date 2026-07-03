@@ -1,5 +1,5 @@
 import { access, readdir, readFile, rm, stat } from 'fs/promises';
-import { join, relative } from 'path';
+import { basename, join, relative } from 'path';
 import type { StepName, ComplexityTier, Track } from '../types/index.js';
 import type { HarnessConfig } from '../types/config.js';
 import { slugify } from './worktree.js';
@@ -108,6 +108,17 @@ export async function fileIsFreshSinceSession(
 }
 
 export const HALT_MARKER = '.pipeline/halt-user-input-required';
+
+/**
+ * Single source of truth for deriving a plan-stem key from a plan file path.
+ * The daemon (daemon-backlog.ts), the conduct path (conductor.ts), and the
+ * land gate (land-spec.ts) must all key markers by the SAME stem — this
+ * helper strips only the trailing `.md` extension from the basename, leaving
+ * interior dots (e.g. `phase-9.3b-intake.md`) intact.
+ */
+export function planStem(planFilePath: string): string {
+  return basename(planFilePath, '.md');
+}
 
 /**
  * Project-declared extra artifact globs for a step, drawn from config. Only the
