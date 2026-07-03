@@ -10,6 +10,13 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ## [Unreleased]
 
+### Changed
+
+- **Declared `harness_self_host.version_freeze: "0.99.19"` in `.ai-conductor/config.yml`.**
+  The self-host VERSION approval gate (PR #262) now self-satisfies while VERSION stays at the
+  frozen value, ending the per-feature version-gate HALT + manual `.pipeline/version-approval`
+  round-trip. Read at daemon startup (restart to apply); update or remove at the 1.0 cut.
+
 ### Fixed
 
 - **`engineer migrate-issue-deps` now writes dependency links the live GitHub API accepts.**
