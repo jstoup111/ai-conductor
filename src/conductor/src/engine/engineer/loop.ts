@@ -549,7 +549,7 @@ async function processIdea(
   const identityResolution = await resolveDaemonOwner(
     ownerConfig,
     deps.gh || (async () => { throw new Error('gh: not available'); }),
-    target.repoPath,
+    target.canonicalPath,
   );
   if (!identityResolution.resolved) {
     throw new Error(

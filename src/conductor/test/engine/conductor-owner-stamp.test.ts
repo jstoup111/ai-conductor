@@ -159,6 +159,65 @@ describe('conduct DECIDE tail stamps the owner marker at plan-step completion (S
     await rm(fakeHome, { recursive: true, force: true });
   });
 
+  it('multi-plan repo: only the plan authored THIS run is stamped — historical plans and their markers are untouched', async () => {
+    // Seed historical plans that glob BEFORE the authored one (readdir order),
+    // plus an existing marker owned by ANOTHER operator. The stamping must key
+    // off the newly authored plan stem, never planFiles[0], and must never
+    // rewrite the other operator's marker.
+    await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+    await writeFile(
+      join(dir, '.docs', 'plans', '2026-01-01-ancient-feature.md'),
+      '# old plan\n',
+      'utf-8',
+    );
+    await writeFile(
+      join(dir, '.docs', 'plans', '2026-02-02-other-operators-feature.md'),
+      '# other plan\n',
+      'utf-8',
+    );
+    await mkdir(join(dir, '.docs', 'intake'), { recursive: true });
+    await writeFile(
+      join(dir, '.docs', 'intake', '2026-02-02-other-operators-feature.md'),
+      '# Intake origin: 2026-02-02-other-operators-feature\n\nOwner: alice\n',
+      'utf-8',
+    );
+
+    const fakeHome = await makeUserHome('spec_owner: bob\n');
+    await withHome(fakeHome, async () => {
+      await seedPlanReachableState();
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: makePlanWritingRunner(),
+        events,
+        projectRoot: dir,
+        fromStep: 'plan',
+      });
+
+      await conductor.run();
+
+      // The authored plan's marker exists and carries THIS operator's identity.
+      const authored = await readFile(
+        join(dir, '.docs', 'intake', `${PLAN_STEM}.md`),
+        'utf-8',
+      );
+      expect(authored).toContain('Owner: bob');
+
+      // The historical un-owned plan gained NO marker.
+      expect(
+        existsSync(join(dir, '.docs', 'intake', '2026-01-01-ancient-feature.md')),
+      ).toBe(false);
+
+      // The other operator's marker is byte-identical — never rewritten.
+      const other = await readFile(
+        join(dir, '.docs', 'intake', '2026-02-02-other-operators-feature.md'),
+        'utf-8',
+      );
+      expect(other).toContain('Owner: alice');
+      expect(other).not.toContain('Owner: bob');
+    });
+    await rm(fakeHome, { recursive: true, force: true });
+  });
+
   it('Task 13a: an existing Source-Ref: line survives owner stamping', async () => {
     // Pre-seed .docs/intake/<stem>.md with an engineer-intake-origin Source-Ref
     // BEFORE the plan-step completion fires (e.g. this spec started life as a

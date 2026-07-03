@@ -5,6 +5,7 @@ import {
   readdir,
   access as accessFile,
   unlink as unlinkFile,
+  stat,
 } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { relative, join, basename } from 'node:path';
@@ -338,6 +339,57 @@ export interface ConductorOptions {
    * operator identity for plan-step owner stamping (Slice B, D4).
    */
   gh?: GhRunner;
+}
+
+/**
+ * Snapshot mtimes of a step's artifact files, keyed by path. Taken BEFORE the
+ * step runs so the post-step pass can identify which artifacts the step
+ * actually authored (new or rewritten) vs pre-existing historical ones.
+ */
+async function snapshotArtifactMtimes(
+  projectRoot: string,
+  step: StepName,
+): Promise<Map<string, number>> {
+  const snapshot = new Map<string, number>();
+  // findArtifactFilesForStep returns absolute paths.
+  const files = await findArtifactFilesForStep(projectRoot, step);
+  for (const file of files) {
+    try {
+      const s = await stat(file);
+      snapshot.set(file, s.mtimeMs);
+    } catch {
+      // Raced deletion — treat as absent.
+    }
+  }
+  return snapshot;
+}
+
+/**
+ * Files from `files` that are new or modified relative to `snapshot`
+ * (pre-step). A file absent from the snapshot, or whose mtime changed, was
+ * authored by the step this run. Pre-existing untouched files are excluded —
+ * their markers (if any) were written by the run that authored them.
+ */
+async function selectChangedArtifacts(
+  files: string[],
+  snapshot: Map<string, number> | null,
+): Promise<string[]> {
+  if (snapshot === null) return files;
+  const changed: string[] = [];
+  for (const file of files) {
+    const before = snapshot.get(file);
+    if (before === undefined) {
+      changed.push(file);
+      continue;
+    }
+    try {
+      const s = await stat(file);
+      if (s.mtimeMs !== before) changed.push(file);
+    } catch {
+      // Deleted during the step — nothing to stamp.
+    }
+  }
+  return changed;
 }
 
 function stepHasCompletionCheck(step: StepName): boolean {
@@ -911,6 +963,16 @@ export class Conductor {
         pendingRetryHints.delete(step.name);
         let successOutput: string | undefined;
 
+        // D4 keying (Slice B): snapshot plan artifacts BEFORE the plan step runs
+        // so the DECIDE-tail owner stamping targets only the plan(s) authored in
+        // THIS run. `.docs/plans/` accumulates historical plans; stamping a
+        // glob-first file would leave the new spec un-owned and rewrite an
+        // unrelated spec's marker.
+        const planSnapshot: Map<string, number> | null =
+          step.name === 'plan'
+            ? await snapshotArtifactMtimes(this.projectRoot, 'plan')
+            : null;
+
         const stepMaxRetries = resolved.max_retries;
         // Snapshot of resolved-task count before the most recent build retry,
         // so the circuit breaker can detect "Claude ran but completed zero
@@ -1415,12 +1477,13 @@ export class Conductor {
           // machine-scoped identity resolution as the `/engineer` path.
           if (step.name === 'plan') {
             const planFiles = await findArtifactFilesForStep(this.projectRoot, 'plan');
-            if (planFiles.length > 0) {
-              // Extract the plan stem from the first plan file (e.g., "my-feature"
-              // from ".docs/plans/my-feature.md"). The daemon's backlog resolver uses
-              // the same basename(file, '.md') logic for keying.
-              const planStem = basename(planFiles[0], '.md');
-
+            // D4 keying: stamp ONLY the plan(s) authored in THIS run — files that
+            // are new or modified relative to the pre-step snapshot. `.docs/plans/`
+            // accumulates historical plans, so a glob-first pick would key the
+            // marker to the wrong stem (new spec un-owned; unrelated spec's marker
+            // rewritten with this operator's identity).
+            const authoredPlans = await selectChangedArtifacts(planFiles, planSnapshot);
+            if (authoredPlans.length > 0) {
               // Resolve machine-scoped owner identity (configured spec_owner or gh login).
               // Fail-closed: throw if unresolved (same error text as Story 2).
               const ownerConfig = await readMachineOwnerConfig();
@@ -1438,26 +1501,29 @@ export class Conductor {
                 );
               }
 
-              // Preserve any pre-existing Source-Ref from a prior engineer-path run
-              // (Task 13a: an existing Source-Ref: line survives owner stamping).
-              let sourceRef: string | undefined;
-              const markerPath = join(this.projectRoot, '.docs', 'intake', `${planStem}.md`);
-              try {
-                const existingMarker = await readFile(markerPath, 'utf-8');
-                sourceRef = parseIntakeSourceRef(existingMarker) ?? undefined;
-              } catch {
-                // Marker file doesn't exist yet — no pre-existing source-ref to preserve.
-                sourceRef = undefined;
-              }
+              for (const planFile of authoredPlans) {
+                // The daemon's backlog resolver keys markers by basename(file, '.md').
+                const planStem = basename(planFile, '.md');
 
-              // Write the intake marker with the resolved owner and (if present)
-              // preserved source-ref.
-              await writeIntakeMarker(
-                this.projectRoot,
-                planStem,
-                sourceRef,
-                ownerResolution.id,
-              );
+                // Preserve any pre-existing Source-Ref from a prior engineer-path run
+                // (Task 13a: an existing Source-Ref: line survives owner stamping).
+                let sourceRef: string | undefined;
+                const markerPath = join(this.projectRoot, '.docs', 'intake', `${planStem}.md`);
+                try {
+                  const existingMarker = await readFile(markerPath, 'utf-8');
+                  sourceRef = parseIntakeSourceRef(existingMarker) ?? undefined;
+                } catch {
+                  // Marker file doesn't exist yet — no pre-existing source-ref to preserve.
+                  sourceRef = undefined;
+                }
+
+                await writeIntakeMarker(
+                  this.projectRoot,
+                  planStem,
+                  sourceRef,
+                  ownerResolution.id,
+                );
+              }
             }
           }
 
