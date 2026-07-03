@@ -93,5 +93,31 @@ describe("ModelAvailability", () => {
       expect(invokeCalls.map((c) => c.model)).toEqual(["fable", "opus"]);
       expect(avail.dead.has("fable")).toBe(true);
     });
+
+    const ladder = DEFAULT_MODEL_FALLBACK_LADDER; // ["fable", "opus", "sonnet"]
+
+    it.each(ladder.slice(0, -1).map((_, p) => p))(
+      "walks the ladder to the first live model when positions 0..%d are unavailable",
+      async (p) => {
+        const avail = new ModelAvailability(ladder);
+        const resultsByModel: Record<string, Partial<InvokeResult>> = {};
+        for (let i = 0; i <= p; i++) {
+          resultsByModel[ladder[i]] = modelUnavailable();
+        }
+        resultsByModel[ladder[p + 1]] = { success: true, output: "done", exitCode: 0 };
+        const { provider, invokeCalls } = fakeProvider(resultsByModel);
+
+        const result = await avail.invokeWithLadder(provider, {
+          prompt: "hi",
+          sessionId: "s1",
+          resume: false,
+          model: ladder[0],
+        });
+
+        expect(result.success).toBe(true);
+        expect(invokeCalls.map((c) => c.model)).toEqual(ladder.slice(0, p + 2));
+        expect(invokeCalls).toHaveLength(p + 2);
+      }
+    );
   });
 });
