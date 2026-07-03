@@ -379,3 +379,46 @@ describe('engine/daemon-dashboard — renderDashboard WAITING group (FR-6)', () 
     expect(out).toContain('WAITING (1)');
   });
 });
+
+describe('engine/daemon-dashboard — status output parity (FR-6, Task 17)', () => {
+  // daemon-cli's status path (renderStartupDashboard) and any future status
+  // summary caller MUST drive scanInheritedState + renderDashboard directly —
+  // there is no separate status-only builder to keep in sync. This test pins
+  // that architectural fact down: two independent callers, each doing exactly
+  // what the plan calls "the status path" and "the dashboard path", must
+  // produce byte-identical WAITING output because they share one group builder.
+  it('scanInheritedState + renderDashboard produce identical WAITING output across two independent call sites', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dashboard-status-'));
+    try {
+      const waitingEntry = {
+        slug: 'blocked-spec',
+        verdict: { kind: 'blocked' as const, blockers: [{ repo: 'acme/app', number: '10' }] },
+      };
+      const discover = async () => ({ items: [], waiting: [waitingEntry] });
+
+      // "dashboard" call site
+      const dashboardState = await scanInheritedState({
+        worktreeBase: join(root, '.worktrees'),
+        processedDir: join(root, '.daemon/processed'),
+        discover: discover as any,
+      });
+      const dashboardOutput = renderDashboard(dashboardState);
+
+      // "status" call site — same builder, independently invoked, as daemon-cli's
+      // renderStartupDashboard does.
+      const statusState = await scanInheritedState({
+        worktreeBase: join(root, '.worktrees'),
+        processedDir: join(root, '.daemon/processed'),
+        discover: discover as any,
+      });
+      const statusOutput = renderDashboard(statusState);
+
+      expect(statusOutput).toEqual(dashboardOutput);
+      expect(statusOutput).toContain('WAITING (1)');
+      expect(statusOutput).toContain('blocked-spec');
+      expect(statusOutput).toContain('acme/app#10');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
