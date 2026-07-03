@@ -304,4 +304,17 @@ describe('engine/resolved-config', () => {
       expect(rBuild.effort).toBe('low');
     });
   });
+
+  describe('resolveStepConfig — BUILD-step models (regression guard)', () => {
+    it('BUILD steps did not drift after DECIDE→fable migration', () => {
+      // Regression: Task 2 changed DECIDE-step defaults (explore/prd/architecture_review→fable).
+      // This test verifies BUILD-step models remain locked at their original values:
+      // - build (dispatcher) → haiku
+      // - acceptance_specs (test generation) → sonnet
+      // - stories (feature tasks) → sonnet
+      expect(resolveStepConfig('build', 'BUILD').model).toBe('haiku');
+      expect(resolveStepConfig('acceptance_specs', 'BUILD').model).toBe('sonnet');
+      expect(resolveStepConfig('stories', 'DECIDE').model).toBe('sonnet');
+    });
+  });
 });
