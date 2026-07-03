@@ -60,6 +60,7 @@ import {
   type RekickSweepDeps,
 } from './engine/daemon-rekick.js';
 import { sweepMergeableLabels } from './engine/mergeable-sweep.js';
+import { createPriorityResolver, ghIssueLabelReader } from './engine/backlog-priority.js';
 
 const execFile = promisify(execFileCb);
 
@@ -403,6 +404,14 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     return { stdout: String(stdout) };
   };
   const ownerGit = makeGitRunner(projectRoot);
+
+  // Task 13: Construct ONE priority resolver per daemon run (process-local state,
+  // never persisted to disk). The resolver backs the REAL gh CLI runner so cross-repo
+  // issue refs are fetched from GitHub (ghIssueLabelReader wraps the runner in
+  // parseIssueRef → gh argv → JSON label extraction). Passed to localWorkSource for
+  // post-gate ordering and to the dashboard for fallback-mode display.
+  const priorityResolver = createPriorityResolver(ghIssueLabelReader(ownerGh), log);
+
   const workSource =
     opts.workSource ??
     localWorkSource({
@@ -428,6 +437,11 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       // real `gh` binary backs the runner in production, the only production
       // caller of createGhBlockerRunner().
       makeResolver: () => createBlockerResolver({ run: createGhBlockerRunner() }),
+      // Priority resolution (Task 13): post-gate ordering by issue priority bands.
+      // The resolver is constructed once per daemon run with process-local caching
+      // (no disk persistence). Passed to discover() for ordering and available to
+      // the dashboard for fallback-mode display.
+      priorityResolver,
     });
   const discoverTick = (o: { refresh: boolean }) => workSource.discover(o);
 
