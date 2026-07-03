@@ -31,6 +31,7 @@ export type ConfigResult =
 const VALID_PHASES = new Set(['SETUP', 'UNDERSTAND', 'DECIDE', 'BUILD', 'SHIP']);
 const VALID_EFFORTS = new Set<EffortLevel>(['low', 'medium', 'high', 'xhigh', 'max']);
 const VALID_ENFORCEMENTS = new Set<EnforcementLevel>(['structural', 'advisory', 'gating']);
+const VALID_PR_TIMINGS = new Set(['finish', 'early-draft']);
 
 export const PROJECT_CONFIG_DIR = '.ai-conductor';
 export const PROJECT_CONFIG_FILE = 'config.yml';
@@ -171,6 +172,8 @@ export function validateConfig(
     // Owner-gate (adr-2026-06-30-*): operator identity + grandfather cutover.
     'spec_owner',
     'owner_gate_cutover',
+    // Daemon build/push PR timing (adr-2026-07-03-pr-timing-config-key).
+    'pr_timing',
     // Rebase auto-resolution attempt cap (rebase-resolution-skill).
     'rebase_resolution_attempts',
     // Self-host guardrails (adr-2026-06-30-self-host-detection-seam).
@@ -497,6 +500,21 @@ export function validateConfig(
       return errVal(
         `owner_gate_cutover is not a parseable date: "${obj.owner_gate_cutover}". ` +
           'Use an ISO-8601 instant (e.g. 2026-06-30T00:00:00Z).',
+      );
+    }
+  }
+
+  // pr_timing — daemon build/push PR timing (adr-2026-07-03-pr-timing-config-key).
+  // CONTRACT: fail-closed. Any value other than the two documented literals
+  // is REJECTED with a clear error naming the key and the valid values —
+  // never silently coerced or defaulted, since a typo here would silently
+  // change PR-visibility semantics for the whole team. A MISSING key is
+  // allowed; the documented default ('finish', today's behavior) is applied
+  // at the daemon wiring site.
+  if (obj.pr_timing !== undefined) {
+    if (typeof obj.pr_timing !== 'string' || !VALID_PR_TIMINGS.has(obj.pr_timing)) {
+      return errVal(
+        `pr_timing must be one of "finish" | "early-draft"; got "${obj.pr_timing}".`,
       );
     }
   }

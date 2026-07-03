@@ -322,6 +322,16 @@ export interface HarnessConfig {
    */
   owner_gate_cutover?: string;
   /**
+   * Daemon build/push PR timing (adr-2026-07-03-pr-timing-config-key):
+   * controls when the daemon opens/pushes the PR for a spec relative to the
+   * BUILD lifecycle. `'finish'` (default when absent) preserves today's
+   * behavior — the PR is opened/pushed only at finish. `'early-draft'` opens
+   * a draft PR and pushes checkpoint commits earlier in the lifecycle.
+   * Validated fail-closed at load time — any value other than these two
+   * literals is REJECTED rather than silently ignored.
+   */
+  pr_timing?: 'finish' | 'early-draft';
+  /**
    * Maximum number of Claude-assisted conflict-resolution attempts inside the
    * rebase step before the engine halts for operator intervention.
    * Default: 3. Set to 0 to disable automated resolution (conflict always

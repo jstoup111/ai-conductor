@@ -550,6 +550,53 @@ complexity:
     });
   });
 
+  // Task 1 (pr_timing, adr-2026-07-03-pr-timing-config-key): fail-closed
+  // validation for the daemon build/push PR timing configuration key.
+  describe('pr_timing config field', () => {
+    it('accepts "finish" and exposes it', () => {
+      const result = validateConfig({ pr_timing: 'finish' });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.pr_timing).toBe('finish');
+    });
+
+    it('accepts "early-draft" and exposes it', () => {
+      const result = validateConfig({ pr_timing: 'early-draft' });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.pr_timing).toBe('early-draft');
+    });
+
+    it('is optional — absent is fine', () => {
+      const result = validateConfig({ harness_version: '>=1.0.0' });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.pr_timing).toBeUndefined();
+    });
+
+    it('REJECTS an invalid value (typo) with a clear error naming the key and valid values', () => {
+      const result = validateConfig({ pr_timing: 'eary-draft' });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.type).toBe('validation_error');
+      expect(result.error.message).toMatch(/pr_timing/);
+      expect(result.error.message).toMatch(/finish/);
+      expect(result.error.message).toMatch(/early-draft/);
+    });
+
+    it('rejects a non-string pr_timing (type error)', () => {
+      const result = validateConfig({ pr_timing: 3 });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.message).toMatch(/pr_timing/);
+    });
+
+    it('is accepted as a known top-level key (does not trigger "Unknown top-level key")', () => {
+      const result = validateConfig({ pr_timing: 'finish' });
+      expect(result.ok).toBe(true);
+    });
+  });
+
   // Task 17 (owner-gate, adr-2026-06-30-*): spec_owner + owner_gate_cutover.
   describe('owner-gate config fields (spec_owner + owner_gate_cutover)', () => {
     it('parses spec_owner and owner_gate_cutover and exposes them', () => {
