@@ -118,3 +118,4 @@ sequenceDiagram
 | Date | Change | Reason |
 |------|--------|--------|
 | 2026-06-30 | Initial generation | Created during /engineer DECIDE for harness self-host guardrails (Tier L) |
+| 2026-07-03 | VersionApprovalGate "no approval marker → HALT" is refined by semver escalation (PATCH auto-pass) | harness-daemon-profile #174 — see 2026-07-03-harness-daemon-profile.md |
