@@ -14,6 +14,7 @@ import type { OwnerResolution } from './owner-gate/identity.js';
 import type { OwnerStamp } from './owner-gate/provenance.js';
 import { decideSpecGate, type GateDecision } from './owner-gate/gate.js';
 import type { BlockerResolver, BlockerVerdict } from './blocker-resolver.js';
+import { announceWaitingForRoot } from './daemon-waiting-announce.js';
 
 const execFile = promisify(execFileCb);
 
@@ -467,6 +468,7 @@ export async function discoverBacklog(
     }
   }
 
+  announceWaitingForRoot(projectRoot, log, waiting);
   return { items: gated, waiting };
 }
 
