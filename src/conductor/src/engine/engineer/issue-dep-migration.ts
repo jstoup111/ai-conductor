@@ -222,7 +222,7 @@ function repoFromRepositoryUrl(repositoryUrl: string): string | null {
 /** One raw `blocked_by` entry as returned by the GitHub dependencies API. */
 interface RawBlockedByEntry {
   number: number;
-  repository_url: string;
+  repository_url?: string;
 }
 
 /** Per-edge outcome of {@link createDependencyLinks}. */
@@ -267,7 +267,8 @@ async function fetchExistingBlockedBy(
   }
   const existing = new Set<string>();
   for (const entry of raw) {
-    const repo = repoFromRepositoryUrl(entry.repository_url);
+    // Honor repository_url when present; default to sourceRepo if missing.
+    const repo = entry.repository_url ? repoFromRepositoryUrl(entry.repository_url) : sourceRepo;
     if (repo) existing.add(`${repo}#${entry.number}`);
   }
   return existing;
