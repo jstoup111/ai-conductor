@@ -46,7 +46,24 @@ export function createBlockerResolver(deps: BlockerResolverDeps): BlockerResolve
         return { kind: 'unblocked' };
       }
 
-      // Non-empty handling is out of scope for this skeleton task.
+      const openBlockers: IssueRef[] = [];
+      for (const item of blockedBy) {
+        const entry = item as { number?: unknown; repository_url?: unknown; state?: unknown };
+        if (entry.state === 'closed') continue;
+
+        const repositoryUrl = typeof entry.repository_url === 'string' ? entry.repository_url : '';
+        const match = repositoryUrl.match(/repos\/([^/]+\/[^/]+)$/);
+        const repo = match ? match[1] : repositoryUrl;
+        const number = String(entry.number ?? '');
+
+        openBlockers.push({ repo, number });
+      }
+
+      if (openBlockers.length > 0) {
+        return { kind: 'blocked', blockers: openBlockers };
+      }
+
+      // Mixed open/closed handling beyond "any open present" is out of scope here.
       return { kind: 'indeterminate', detail: 'non-empty blocked_by not yet handled' };
     },
   };

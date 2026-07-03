@@ -29,4 +29,24 @@ describe('createBlockerResolver', () => {
 
     expect(verdict).toEqual({ kind: 'unblocked' });
   });
+
+  it('returns blocked with the blocker ref when blocked_by has an open issue', async () => {
+    const { run } = makeRunner(
+      JSON.stringify([
+        {
+          number: 100,
+          repository_url: 'https://api.github.com/repos/owner/repo',
+          state: 'open',
+        },
+      ]),
+    );
+    const resolver = createBlockerResolver({ run });
+
+    const verdict = await resolver.resolve('owner/repo#5');
+
+    expect(verdict).toEqual({
+      kind: 'blocked',
+      blockers: [{ repo: 'owner/repo', number: '100' }],
+    });
+  });
 });
