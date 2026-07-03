@@ -1032,7 +1032,7 @@ describe('engine/daemon-backlog — shipped-record dedup (Story 3/Task 4)', () =
     await writeShipped('already-shipped');
     const logs: string[] = [];
     const repaired: Array<{ slug: string; record: ReturnType<typeof parseShippedRecord> }> = [];
-    const backlog = await discoverBacklog(dir, async () => false, (m) => logs.push(m), {
+    const { items: backlog } = await discoverBacklog(dir, async () => false, (m) => logs.push(m), {
       treeSource: fsSource(dir),
       repairProcessed: async (slug, record) => {
         repaired.push({ slug, record });
@@ -1051,7 +1051,7 @@ describe('engine/daemon-backlog — shipped-record dedup (Story 3/Task 4)', () =
     // consulted first it would find nothing; the point is that isProcessed
     // short-circuits BEFORE shipped-record lookup even happens.
     let repairCalls = 0;
-    const backlog = await discoverBacklog(dir, async () => true, undefined, {
+    const { items: backlog } = await discoverBacklog(dir, async () => true, undefined, {
       treeSource: fsSource(dir),
       repairProcessed: async () => {
         repairCalls += 1;
@@ -1063,7 +1063,7 @@ describe('engine/daemon-backlog — shipped-record dedup (Story 3/Task 4)', () =
 
   it('a candidate with no shipped record proceeds to the owner gate unchanged', async () => {
     await writeSpec('not-shipped');
-    const backlog = await discoverBacklog(dir, async () => false, undefined, {
+    const { items: backlog } = await discoverBacklog(dir, async () => false, undefined, {
       treeSource: fsSource(dir),
       daemonOwner: { resolved: true, id: 'alice' },
       readStamp: async () => ({ present: true as const, id: 'alice' }),
@@ -1078,7 +1078,7 @@ describe('engine/daemon-backlog — shipped-record dedup (Story 3/Task 4)', () =
     await writeShipped('repair-fails');
     await writeSpec('unaffected');
     const logs: string[] = [];
-    const backlog = await discoverBacklog(dir, async () => false, (m) => logs.push(m), {
+    const { items: backlog } = await discoverBacklog(dir, async () => false, (m) => logs.push(m), {
       treeSource: fsSource(dir),
       repairProcessed: async (slug) => {
         if (slug === 'repair-fails') {
@@ -1098,7 +1098,7 @@ describe('engine/daemon-backlog — shipped-record dedup (Story 3/Task 4)', () =
     await writeShipped('ship-1');
     await writeShipped('ship-2');
     const repaired: string[] = [];
-    const backlog = await discoverBacklog(dir, async () => false, undefined, {
+    const { items: backlog } = await discoverBacklog(dir, async () => false, undefined, {
       treeSource: fsSource(dir),
       repairProcessed: async (slug) => {
         repaired.push(slug);
@@ -1113,7 +1113,7 @@ describe('engine/daemon-backlog — shipped-record dedup (Story 3/Task 4)', () =
     await writeSpec('shipped-unresolved');
     await writeShipped('shipped-unresolved');
     const logs: string[] = [];
-    const backlog = await discoverBacklog(dir, async () => false, (m) => logs.push(m), {
+    const { items: backlog } = await discoverBacklog(dir, async () => false, (m) => logs.push(m), {
       treeSource: fsSource(dir),
       daemonOwner: { resolved: false },
     });
@@ -1127,7 +1127,7 @@ describe('engine/daemon-backlog — shipped-record dedup (Story 3/Task 4)', () =
     await writeSpec('shipped-foreign-owner');
     await writeShipped('shipped-foreign-owner');
     const logs: string[] = [];
-    const backlog = await discoverBacklog(dir, async () => false, (m) => logs.push(m), {
+    const { items: backlog } = await discoverBacklog(dir, async () => false, (m) => logs.push(m), {
       treeSource: fsSource(dir),
       daemonOwner: { resolved: true, id: 'alice' },
       readStamp: async () => ({ present: true as const, id: 'bob' }),
@@ -1145,7 +1145,7 @@ describe('engine/daemon-backlog — shipped-record dedup (Story 3/Task 4)', () =
     await writeSpec('unshipped-unresolved');
     // Deliberately NO shipped record for this candidate.
     const logs: string[] = [];
-    const backlog = await discoverBacklog(dir, async () => false, (m) => logs.push(m), {
+    const { items: backlog } = await discoverBacklog(dir, async () => false, (m) => logs.push(m), {
       treeSource: fsSource(dir),
       daemonOwner: { resolved: false },
     });
@@ -1165,7 +1165,7 @@ describe('engine/daemon-backlog — shipped-record dedup (Story 3/Task 4)', () =
     await mkdir(processedDir, { recursive: true });
 
     const isProcessed = makeIsProcessed(processedDir, fsSource(dir));
-    const backlog = await discoverBacklog(dir, isProcessed, undefined, {
+    const { items: backlog } = await discoverBacklog(dir, isProcessed, undefined, {
       treeSource: fsSource(dir),
     });
 
@@ -1245,7 +1245,7 @@ describe('engine/daemon-backlog — content-hash match dedups renamed specs (Sto
 
     const logs: string[] = [];
     const repaired: Array<{ slug: string; record: ReturnType<typeof parseShippedRecord> }> = [];
-    const backlog = await discoverBacklog(dir, async () => false, (m) => logs.push(m), {
+    const { items: backlog } = await discoverBacklog(dir, async () => false, (m) => logs.push(m), {
       treeSource: fsSource(dir),
       repairProcessed: async (slug, record) => {
         repaired.push({ slug, record });
@@ -1263,7 +1263,7 @@ describe('engine/daemon-backlog — content-hash match dedups renamed specs (Sto
     await writeShippedWithHash('old-name', 'deadbeef-not-a-real-match');
     await writeSpec('new-name', APPROVED_STORIES + 'extra content\n');
 
-    const backlog = await discoverBacklog(dir, async () => false, undefined, {
+    const { items: backlog } = await discoverBacklog(dir, async () => false, undefined, {
       treeSource: fsSource(dir),
       daemonOwner: { resolved: true, id: 'alice' },
       readStamp: async () => ({ present: true as const, id: 'alice' }),
@@ -1287,7 +1287,7 @@ describe('engine/daemon-backlog — content-hash match dedups renamed specs (Sto
 
     const logs: string[] = [];
     const repaired: string[] = [];
-    const backlog = await discoverBacklog(dir, async () => false, (m) => logs.push(m), {
+    const { items: backlog } = await discoverBacklog(dir, async () => false, (m) => logs.push(m), {
       treeSource: fsSource(dir),
       repairProcessed: async (slug) => {
         repaired.push(slug);
@@ -1304,7 +1304,7 @@ describe('engine/daemon-backlog — content-hash match dedups renamed specs (Sto
     await writeShippedWithHash('old', 'some-hash-that-wont-match');
     await writeSpec('old-v2', APPROVED_STORIES + 'edited content\n');
 
-    const backlog = await discoverBacklog(dir, async () => false, undefined, {
+    const { items: backlog } = await discoverBacklog(dir, async () => false, undefined, {
       treeSource: fsSource(dir),
       daemonOwner: { resolved: true, id: 'alice' },
       readStamp: async () => ({ present: true as const, id: 'alice' }),

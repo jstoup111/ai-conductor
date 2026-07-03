@@ -129,7 +129,7 @@ describe('shipped-work dedup acceptance (#204): committed record never re-dispat
     }));
 
     const repaired: string[] = [];
-    const backlog = await discoverBacklog(dir, emptyLedger, undefined, {
+    const { items: backlog } = await discoverBacklog(dir, emptyLedger, undefined, {
       baseBranch,
       repairProcessed: async (slug: string) => {
         repaired.push(slug);
@@ -151,7 +151,7 @@ describe('shipped-work dedup acceptance (#204): committed record never re-dispat
       { commit: false },
     );
 
-    const backlog = await discoverBacklog(dir, emptyLedger, undefined, { baseBranch });
+    const { items: backlog } = await discoverBacklog(dir, emptyLedger, undefined, { baseBranch });
     expect(backlog.map((b) => b.slug)).toEqual(['uncommitted-feat']);
   });
 
@@ -160,7 +160,7 @@ describe('shipped-work dedup acceptance (#204): committed record never re-dispat
     await commitShippedRecord('malformed-feat', '# Not a shipped record\n\njust prose.\n');
 
     const log: string[] = [];
-    const backlog = await discoverBacklog(dir, emptyLedger, (m) => log.push(m), { baseBranch });
+    const { items: backlog } = await discoverBacklog(dir, emptyLedger, (m) => log.push(m), { baseBranch });
 
     expect(backlog).toEqual([]);
     expect(log.some((l) => /malformed/i.test(l))).toBe(true);
@@ -172,7 +172,7 @@ describe('shipped-work dedup acceptance (#204): committed record never re-dispat
     await commitShippedRecord('ghost-feat', shippedRecordBody({ slug: 'ghost-feat', specHash: 'x' }));
     await commitSpec('other-feat');
 
-    const backlog = await discoverBacklog(dir, emptyLedger, undefined, { baseBranch });
+    const { items: backlog } = await discoverBacklog(dir, emptyLedger, undefined, { baseBranch });
     expect(backlog.map((b) => b.slug)).toEqual(['other-feat']);
   });
 });
@@ -201,7 +201,7 @@ describe('shipped-work dedup acceptance (#204, rename-proof): content-hash match
 
     const repaired: string[] = [];
     const log: string[] = [];
-    const backlog = await discoverBacklog(dir, emptyLedger, (m) => log.push(m), {
+    const { items: backlog } = await discoverBacklog(dir, emptyLedger, (m) => log.push(m), {
       baseBranch,
       repairProcessed: async (slug: string) => {
         repaired.push(slug);
@@ -221,7 +221,7 @@ describe('shipped-work dedup acceptance (#204, rename-proof): content-hash match
     // Distinct stem AND distinct content — must not be caught by stem or hash.
     await commitSpec('unrelated-feat', APPROVED_STORIES);
 
-    const backlog = await discoverBacklog(dir, emptyLedger, undefined, { baseBranch });
+    const { items: backlog } = await discoverBacklog(dir, emptyLedger, undefined, { baseBranch });
     expect(backlog.map((b) => b.slug)).toEqual(['unrelated-feat']);
   });
 
@@ -233,7 +233,7 @@ describe('shipped-work dedup acceptance (#204, rename-proof): content-hash match
     // Renamed AND edited: neither stem nor hash matches the shipped record.
     await commitSpec('orig-v2', '# Stories\n**Status:** Accepted\n\nEdited after shipping.\n');
 
-    const backlog = await discoverBacklog(dir, emptyLedger, undefined, { baseBranch });
+    const { items: backlog } = await discoverBacklog(dir, emptyLedger, undefined, { baseBranch });
     expect(backlog.map((b) => b.slug)).toEqual(['orig-v2']);
   });
 });

@@ -87,7 +87,7 @@ describe('empty-ledger replay guard (Task 14, final): 24 shipped specs, empty .d
 
     // The local ledger is EMPTY — no `.daemon/processed/` directory exists at
     // all, mirroring a fresh clone. `isProcessed` always resolves false.
-    const backlog = await discoverBacklog(dir, emptyLedger, undefined, { baseBranch });
+    const { items: backlog } = await discoverBacklog(dir, emptyLedger, undefined, { baseBranch });
 
     expect(backlog).toEqual([]);
   });
