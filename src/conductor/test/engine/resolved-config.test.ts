@@ -40,6 +40,13 @@ describe('engine/resolved-config', () => {
       expect(DEFAULT_STEP_EFFORT.build).toBe('low'); // dispatcher
     });
 
+    it('recovery steps (rebase, remediate) use fable with high+ effort', () => {
+      expect(DEFAULT_STEP_MODELS.rebase).toBe('fable');
+      expect(DEFAULT_STEP_EFFORT.rebase).toBe('max');
+      expect(DEFAULT_STEP_MODELS.remediate).toBe('fable');
+      expect(DEFAULT_STEP_EFFORT.remediate).toBe('high');
+    });
+
     it('review modes match the per-step design', () => {
       expect(DEFAULT_STEP_REVIEW.conflict_check).toBe('conditional');
       expect(DEFAULT_STEP_REVIEW.architecture_review).toBe('conditional');
@@ -142,6 +149,14 @@ describe('engine/resolved-config', () => {
       });
       expect(r.effort).toBe('low');
     });
+
+    it('user step.model overrides fable default on rebase', () => {
+      const config: HarnessConfig = {
+        steps: { rebase: { model: 'opus' } },
+      };
+      const r = resolveStepConfig('rebase', 'SHIP', config);
+      expect(r.model).toBe('opus');
+    });
   });
 
   describe('resolveStepConfig — by_tier', () => {
@@ -237,6 +252,21 @@ describe('engine/resolved-config', () => {
       expect(r.skill).toBe('.harness/skills/build/SKILL.md');
       expect(r.hooks).toEqual({ before: 'pre.sh', after: 'post.sh' });
       expect(r.disabled).toBe(true);
+    });
+  });
+
+  describe('resolveStepConfig — collateral-drift guard on untouched steps', () => {
+    it('finish and build resolve to pre-change models/efforts', () => {
+      // Regression guard: verify that changes to recovery/failure-response steps
+      // (rebase, remediate) do not inadvertently affect unrelated steps.
+      // finish and build should maintain their haiku/low baseline.
+      const rFinish = resolveStepConfig('finish', 'SHIP');
+      expect(rFinish.model).toBe('haiku');
+      expect(rFinish.effort).toBe('low');
+
+      const rBuild = resolveStepConfig('build', 'BUILD');
+      expect(rBuild.model).toBe('haiku');
+      expect(rBuild.effort).toBe('low');
     });
   });
 });

@@ -5,7 +5,7 @@ enforcement: gating
 phase: build
 standalone: true
 requires: []
-model: opus
+model: fable
 ---
 
 ## Purpose

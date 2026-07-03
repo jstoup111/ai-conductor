@@ -98,14 +98,14 @@ This table is the human-readable mirror of both. When you change one, change all
 | domain-reviewer | sonnet (<50-line diff), opus (≥50-line diff) | Right-sized by diff size: Sonnet for focused small diffs, Opus for large changes needing cross-boundary judgment |
 | evaluator | sonnet (value objects, pure functions, config, infra) / opus (concurrency, state mutation, security, auth, finance) | Right-sized by batch content |
 | code-review | opus | Multi-dimensional analysis (spec, quality, domain) |
-| debugging | opus | Root cause analysis requires reasoning chains |
+| debugging | fable | Fable guards root-cause analysis; wrong diagnosis produces band-aid fixes |
 | simplify | sonnet | Pattern matching for duplication and complexity — structured checklist work |
 | pipeline | haiku | State tracking, dispatch orchestration — purely mechanical |
 | finish | haiku | Mechanical checks — run tests, check git status, verify coverage |
 | manual-test | sonnet | Structured validation against stories — pattern-following |
 | prd-audit | opus | Cross-references PRD intent vs shipped implementation across two domains (spec + code) — deep reasoning |
-| remediate | opus | Reasons over blocking audit gaps to assign a disposition (build/specs/arch/plan) + concrete tasks, or HALT (architectural-clarity / product-scope) — judgment-heavy routing |
-| rebase | opus | Conflict resolution requires understanding both sides of a hunk and making a semantic merge judgment — reasoning-heavy |
+| remediate | fable | Fable guards failure disposition; false HALT wastes context, wrong routing misroutes rework |
+| rebase | fable | Fable guards semantic merges; wrong merge silently reverts merged work |
 | retro | sonnet | Structured analysis from concrete data; Part C (context efficiency) is checklist-based |
 | pr | sonnet | Diff analysis and structured PR body — templated output |
 | bootstrap | sonnet | Detection and scaffolding — largely mechanical |
@@ -123,6 +123,8 @@ This table is the human-readable mirror of both. When you change one, change all
 | cto-observability | sonnet | Error handling and logging pattern review — checklist-based |
 | cto-devex | sonnet | Documentation and tooling review — checklist-based |
 | cto-orchestrator | opus | Cross-referencing 9 reports and prioritizing requires deep reasoning |
+
+> **Interim fallback for premium pins:** These recovery-step rows (rebase, remediate, debugging) assume Fable availability; until the #186 availability ladder lands, override per-run with the `--model` CLI flag or a `steps.<step>.model` config entry.
 
 When dispatching subagents via the Agent tool, set the `model` parameter to match:
 ```

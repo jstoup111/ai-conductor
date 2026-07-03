@@ -5,7 +5,7 @@ enforcement: gating
 phase: ship
 standalone: true
 requires: []
-model: opus
+model: fable
 ---
 
 ## Purpose

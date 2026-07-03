@@ -177,6 +177,15 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   can't be corrupted by the engineer's branch-switch dance. Spec only; no engine code changed yet.
   Amends ADR-008 (adopts its deferred Option B for same-repo concurrency).
 
+### Changed
+
+- **recovery/failure-response steps (rebase, remediate, debugging) now default to fable** — Fable guards
+  root-cause analysis in `debugging` (wrong diagnosis produces band-aid fixes), guards failure disposition
+  in `remediate` (false HALT wastes context, wrong routing misroutes rework), and guards semantic merges
+  in `rebase` (wrong merge silently reverts merged work). Interim `--model` fallback documented pending
+  #186 availability ladder; override per-run with the `--model` CLI flag or a `steps.<step>.model`
+  config entry. Refs #189.
+
 ### Fixed
 
 - **Owner-stamped intake markers added under the build slugs for the Fable specs (#189/#190).**
