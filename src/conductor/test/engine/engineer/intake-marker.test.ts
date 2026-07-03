@@ -195,7 +195,9 @@ describe('landSpec intake marker (FR-1)', () => {
     await writeFile(join(wt.worktreePath, '.docs', 'stories', 'dep-bump.md'), ACCEPTED_STORIES);
     await writeFile(join(wt.worktreePath, '.docs', 'plans', 'dep-bump.md'), PLAN_WITH_DEPS);
 
-    const result = await landSpec(target(), 'dep bump', wt.worktreePath, 'acme/app#7');
+    const result = await landSpec(target(), 'dep bump', wt.worktreePath, 'acme/app#7', {
+      ownerConfig: { spec_owner: 'alice' },
+    });
 
     const marker = await showOnBranch(result.branch, `.docs/intake/${result.slug}.md`);
     expect(marker).toContain('Source-Ref: acme/app#7');
@@ -243,15 +245,14 @@ describe('landSpec owner stamp (FR-4 — every land path, incl. no-remote/local-
     expect(marker).toContain('Owner: bob');
   });
 
-  it('OMITS Owner (un-owned, NOT blank/false) when the owner is unresolved', async () => {
+  it('refuses fail-closed with no marker/commit when the owner is unresolved', async () => {
     const worktree = await seedWorktree();
     const failingGh: GhRunner = async () => {
       throw new Error('gh unavailable');
     };
-    const result = await landSpec(target(), 'dep bump', worktree, 'acme/app#7', { gh: failingGh });
-    const marker = await showOnBranch(result.branch, `.docs/intake/${result.slug}.md`);
-    expect(marker).toContain('Source-Ref: acme/app#7');
-    expect(marker ?? '').not.toContain('Owner:');
+    await expect(landSpec(target(), 'dep bump', worktree, 'acme/app#7', { gh: failingGh })).rejects.toThrow(
+      /identity is unresolved/,
+    );
   });
 });
 
