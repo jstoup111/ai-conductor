@@ -6,6 +6,8 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { readFile, writeFile } from 'node:fs/promises';
+import { dirname, resolve as resolvePath } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { StepName, ComplexityTier } from '../types/index.js';
 import {
   DEFAULT_STEP_MODELS,
@@ -674,4 +676,32 @@ export async function runGenerateModelTableCli(opts: CliOptions): Promise<CliRes
     await nodeIO.writeFile(opts.harnessMdPath, spliced);
   }
   return { exitCode: EXIT_OK };
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Direct-execution entry point — invoked by `bin/generate-model-table` via
+// `tsx` (Task 11). Resolves the repo-root HARNESS.md relative to this source
+// file's location (src/conductor/src/tools/ -> ../../../../HARNESS.md), runs
+// runGenerateModelTable against real filesystem IO, and exits with the
+// resulting code (0 ok, 1 drift, 2 environment/marker error).
+//
+// Guarded so importing this module (e.g. from tests) never triggers process
+// exit / stdio side effects — only running it directly does.
+// ────────────────────────────────────────────────────────────────────────────
+
+function defaultHarnessMdPath(): string {
+  const here = dirname(fileURLToPath(import.meta.url));
+  return resolvePath(here, '../../../../HARNESS.md');
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const harnessPath = process.env.GENERATE_MODEL_TABLE_HARNESS_MD ?? defaultHarnessMdPath();
+  runGenerateModelTable(process.argv.slice(2), nodeIO, harnessPath)
+    .then((code) => {
+      process.exit(code);
+    })
+    .catch((err) => {
+      console.error('generate-model-table: fatal:', err instanceof Error ? err.message : err);
+      process.exit(EXIT_ERROR);
+    });
 }
