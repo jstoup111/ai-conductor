@@ -959,6 +959,54 @@ through an injected `gh` runner — it never touches a registered repo's working
 State lives under the engineer dir (`$AI_CONDUCTOR_ENGINEER_DIR`, default `~/.ai-conductor/engineer/`):
 `ledger.json` (dedup + lifecycle) and `inbox/` (the claimable queue).
 
+### Priority scheduling for daemon backlog ordering
+
+The daemon can reorder eligible features by GitHub issue priority labels, honoring
+human-driven prioritization without changing the eligibility/deduplication logic.
+
+**Priority bands and label vocabulary:**
+- `priority: high` — highest-priority band (no-issue status escalated)
+- `priority: medium` — standard priority band
+- `priority: low` — lower-priority band
+- Unlabeled — chronological fallback order
+
+Each issue is read for the highest-ranking label; mixed/malformed labels are
+ignored (fail-open semantics). Label reads are **fresh per scan** and **cached
+within a scan** (one REST API call per issue).
+
+**Implementation (`engine/priority-resolver.ts`):**
+- `createPriorityResolver(deps)` — factory taking an `ExecRunner` (gh REST client)
+  and a `RefreshCadence` spec (cadence: `'refresh'` = fresh reads each scan)
+- `PriorityResolver.resolvePriority(backlog)` — returns a stable `BacklogOrdering`
+  permutation: eligible items grouped by band and ordered chronologically within each band
+- Process-local cache (cleared on error, reused within scan) — lost on daemon restart
+- `PriorityResolution.fallback` — true when reader error occurred, signals
+  chronological-only fallback; a single deduped warning is logged per outage
+
+**Fallback behavior:**
+On GitHub API failure (auth, outage, network), `resolvePriority` logs a warning once
+per outage and returns a chronological ordering. When the next scan succeeds,
+the warning counter resets. The fallback is transparent to the backlog selection
+logic — features remain eligible and dispatch, just in chronological order.
+
+**PostGate integration:**
+The daemon's `localWorkSource` (post-eligibility ordering) accepts the resolver.
+`orderBacklog` is a **deterministic stable permutation** — multiple calls with the
+same backlog and resolver state always produce the same output, so restart safety
+and audit-trail stability are preserved.
+
+**Dashboard integration (`daemon-dashboard.ts`):**
+`scanInheritedState` now carries `priorityResolution` result. `renderDashboard`
+displays a `[high]` / `[medium]` / `[low]` band suffix on ELIGIBLE items and a
+`[fallback]` marker on all ELIGIBLE when the resolver is in fallback mode.
+
+**Non-impact guarantees:**
+- Eligibility gate unchanged (priority is post-gate)
+- Deduplication unchanged (one build per slug, even if relabeled)
+- Owner gating unchanged (identity partition preserved)
+- Dependency resolution unchanged (blocker checks run before priority)
+- Park markers and halt reconciliation unchanged
+
 #### Dependency-ordered intake and dispatch
 
 Specs authored from a GitHub issue can declare a dependency on another issue via GitHub's

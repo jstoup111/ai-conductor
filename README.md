@@ -146,6 +146,44 @@ at a time) so the live session shows exactly the feature building — `--concurr
 above 1 is clamped to 1 with a logged note (real concurrency is out of scope; see
 `.docs/plans/2026-06-29-daemon-tmux-supervisor.md`).
 
+### Priority scheduling for issue-labeled backlog items
+
+When a GitHub issue is labeled with priority metadata, the daemon orders eligible
+features by priority band **after** passing the eligibility gate. This enables
+human-driven build prioritization without changing the gate logic.
+
+**Priority bands (highest to lowest):**
+- `priority: high` — highest priority (no-issue status escalated)
+- `priority: medium` — standard priority
+- `priority: low` — lower priority
+- Unlabeled (no priority label) — fallback chronological order
+
+**Label vocabulary:**
+The daemon reads GitHub issue labels via the REST API on each daemon scan.
+Label names are exact matches: `priority: high`, `priority: medium`, `priority: low`.
+If an issue has multiple priority labels, the highest-priority one wins.
+Mixed or malformed labels are ignored (safe-fail).
+
+**Refresh behavior:**
+Labels are fetched fresh on each daemon scan (no caching across runs).
+Within a single scan, results are cached (one network fetch per issue).
+On reader failure (GitHub API outage, auth error), the daemon gracefully
+degrades to chronological ordering and logs a single warning per outage.
+When GitHub recovers and the next scan succeeds, the warning resets.
+
+**Dashboard visibility:**
+In the startup inherited-state dashboard, ELIGIBLE items now show a `[band]`
+suffix indicating their priority band (e.g., `feature-name [high]`).
+When in fallback mode (reader failure), a `[fallback]` marker appears on
+all ELIGIBLE items, signaling that ordering is chronological.
+
+**Interaction with other gates:**
+Priority ordering is applied **post-gate**, after eligibility checks.
+It never overrides the eligibility gate, park markers, deduplication,
+owner gating, or dependency resolution — those gates remain unchanged.
+A feature ineligible for any reason stays out of ELIGIBLE regardless
+of its priority band.
+
 The daemon consumes existing specs — it never authors them — and only picks up
 **eligible** features: a feature is eligible when its stories are approved
 (`Status: Accepted`, not DRAFT) and its plan declares a task dependency tree
