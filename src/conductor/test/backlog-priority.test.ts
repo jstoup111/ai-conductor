@@ -264,6 +264,79 @@ describe('createPriorityResolver — stateful resolver with caching', () => {
       expect(callLog).toEqual(['read:owner/repo#1']);
     });
   });
+
+  describe('zero-lookup cases — never call reader when not needed', () => {
+    it('all-unlinked items: backlog with no sourceRef fields → zero reader calls', async () => {
+      const callLog: string[] = [];
+      const reader = async (refs: string[]) => {
+        callLog.push(`read:${refs.join(',')}`);
+        return new Map<string, string[]>();
+      };
+
+      const resolver = createPriorityResolver(reader, console.log);
+
+      const items: BacklogItem[] = [
+        { slug: 'feature-1' }, // no sourceRef
+        { slug: 'feature-2' }, // no sourceRef
+        { slug: 'feature-3' }, // no sourceRef
+      ];
+
+      const result = await resolver.resolve(items, { refresh: true });
+
+      // Verify zero reader calls
+      expect(callLog).toEqual([]);
+
+      // Verify all items get 'no-issue' band
+      expect(result.mode).toBe('banded');
+      expect(result.bands.get('feature-1')).toBe('no-issue');
+      expect(result.bands.get('feature-2')).toBe('no-issue');
+      expect(result.bands.get('feature-3')).toBe('no-issue');
+    });
+
+    it('empty backlog: empty items array → zero reader calls, empty resolution', async () => {
+      const callLog: string[] = [];
+      const reader = async (refs: string[]) => {
+        callLog.push(`read:${refs.join(',')}`);
+        return new Map<string, string[]>();
+      };
+
+      const resolver = createPriorityResolver(reader, console.log);
+
+      const items: BacklogItem[] = [];
+
+      const result = await resolver.resolve(items, { refresh: true });
+
+      // Verify zero reader calls
+      expect(callLog).toEqual([]);
+
+      // Verify empty resolution
+      expect(result.mode).toBe('banded');
+      expect(result.bands.size).toBe(0);
+    });
+
+    it('garbled marker (missing sourceRef): item without sourceRef treated as no-issue, reader never called', async () => {
+      const callLog: string[] = [];
+      const reader = async (refs: string[]) => {
+        callLog.push(`read:${refs.join(',')}`);
+        return new Map<string, string[]>();
+      };
+
+      const resolver = createPriorityResolver(reader, console.log);
+
+      const items: BacklogItem[] = [
+        { slug: 'garbled-item' }, // sourceRef field missing (upstream garbled the marker)
+      ];
+
+      const result = await resolver.resolve(items, { refresh: true });
+
+      // Verify reader never called (zero calls for the unlinked item)
+      expect(callLog).toEqual([]);
+
+      // Verify item treated as 'no-issue' (not 'unlabeled', not undefined)
+      expect(result.mode).toBe('banded');
+      expect(result.bands.get('garbled-item')).toBe('no-issue');
+    });
+  });
 });
 
 describe('orderBacklog — banded stable sort with priority resolution', () => {
