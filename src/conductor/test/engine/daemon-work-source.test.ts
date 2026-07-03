@@ -344,3 +344,167 @@ describe('localWorkSource — resolveDaemonOwner is called FRESH on every pass (
     expect(resolveDaemonOwner).toHaveBeenCalledTimes(2);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Priority resolver wiring (Task 11): the priorityResolver is called AFTER
+// discoverBacklog (post-gate) to order the backlog by priority bands. When the
+// resolver is UNWIRED the order stays legacy (no reordering).
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('localWorkSource — priority resolver wiring (post-gate ordering)', () => {
+  it('resolves items with resolver: returns banded order after gate', async () => {
+    const mod = await load(WS_MOD);
+    const localWorkSource = requireFn(mod, 'localWorkSource');
+
+    // Mock items from discoverBacklog in original order (with sourceRef for priority lookup)
+    const originalItems = [
+      { slug: 'low-item', sourceRef: 'owner/repo#1' },
+      { slug: 'high-item', sourceRef: 'owner/repo#2' },
+      { slug: 'med-item', sourceRef: 'owner/repo#3' },
+    ];
+
+    // Mock resolver that returns banded resolution (keyed by sourceRef)
+    const priorityResolver = {
+      resolve: vi.fn(async () => ({
+        mode: 'banded' as const,
+        bands: new Map([
+          ['owner/repo#1', 'low'],
+          ['owner/repo#2', 'high'],
+          ['owner/repo#3', 'medium'],
+        ]),
+      })),
+    };
+
+    const deps = {
+      projectRoot: '/repo',
+      baseBranch: 'main',
+      log: vi.fn(),
+      isProcessed: vi.fn().mockResolvedValue(false),
+      hasWarned: vi.fn().mockResolvedValue(false),
+      markWarned: vi.fn().mockResolvedValue(undefined),
+      fastForwardRoot: vi.fn(async () => {}),
+      discoverBacklog: vi.fn(async () => ({ items: originalItems, waiting: [] })),
+      priorityResolver,
+    };
+
+    const source = localWorkSource(deps);
+    const result = await source.discover({ refresh: true });
+
+    // Resolver should be called with refresh:true and the items from discoverBacklog
+    expect(priorityResolver.resolve).toHaveBeenCalledWith(originalItems, { refresh: true });
+
+    // Result should be reordered: high → medium → low
+    expect(result).toHaveLength(3);
+    expect(result[0].slug).toBe('high-item');
+    expect(result[1].slug).toBe('med-item');
+    expect(result[2].slug).toBe('low-item');
+  });
+
+  it('resolver called AFTER gate: empty backlog → zero reader calls (fail-closed)', async () => {
+    const mod = await load(WS_MOD);
+    const localWorkSource = requireFn(mod, 'localWorkSource');
+
+    // Simulate a gate that filters all items out
+    const callOrder: string[] = [];
+    const priorityResolver = {
+      resolve: vi.fn(async () => {
+        callOrder.push('resolver-called');
+        return { mode: 'fallback' as const };
+      }),
+    };
+
+    const deps = {
+      projectRoot: '/repo',
+      baseBranch: 'main',
+      log: vi.fn(),
+      isProcessed: vi.fn().mockResolvedValue(false),
+      hasWarned: vi.fn().mockResolvedValue(false),
+      markWarned: vi.fn().mockResolvedValue(undefined),
+      fastForwardRoot: vi.fn(async () => {
+        callOrder.push('ff');
+      }),
+      discoverBacklog: vi.fn(async () => {
+        callOrder.push('discover');
+        // Gate filters everything out
+        return { items: [], waiting: [] };
+      }),
+      priorityResolver,
+    };
+
+    const source = localWorkSource(deps);
+    const result = await source.discover({ refresh: true });
+
+    // Verify call order: ff → discover → resolver (even with empty backlog)
+    expect(callOrder).toEqual(['ff', 'discover', 'resolver-called']);
+    expect(result).toEqual([]);
+  });
+
+  it('without resolver (legacy): returns items byte-identical to before', async () => {
+    const mod = await load(WS_MOD);
+    const localWorkSource = requireFn(mod, 'localWorkSource');
+
+    const originalItems = [fakeItem('b'), fakeItem('a'), fakeItem('c')];
+
+    const deps = {
+      projectRoot: '/repo',
+      baseBranch: 'main',
+      log: vi.fn(),
+      isProcessed: vi.fn().mockResolvedValue(false),
+      hasWarned: vi.fn().mockResolvedValue(false),
+      markWarned: vi.fn().mockResolvedValue(undefined),
+      fastForwardRoot: vi.fn(async () => {}),
+      discoverBacklog: vi.fn(async () => ({ items: originalItems, waiting: [] })),
+      // NO priorityResolver
+    };
+
+    const source = localWorkSource(deps);
+    const result = await source.discover({ refresh: false });
+
+    // Without resolver, order should be IDENTICAL to what came from discoverBacklog
+    expect(result).toEqual(originalItems);
+    expect(result).toStrictEqual(originalItems);
+  });
+
+  it('eligibility set unchanged: resolver orders but does not change membership', async () => {
+    const mod = await load(WS_MOD);
+    const localWorkSource = requireFn(mod, 'localWorkSource');
+
+    const originalItems = [
+      { slug: 'a', sourceRef: 'owner/repo#1' },
+      { slug: 'b', sourceRef: 'owner/repo#2' },
+      { slug: 'c', sourceRef: 'owner/repo#3' },
+    ];
+
+    const priorityResolver = {
+      resolve: vi.fn(async () => ({
+        mode: 'banded' as const,
+        bands: new Map([
+          ['owner/repo#1', 'low'],
+          ['owner/repo#2', 'high'],
+          ['owner/repo#3', 'medium'],
+        ]),
+      })),
+    };
+
+    const deps = {
+      projectRoot: '/repo',
+      baseBranch: 'main',
+      log: vi.fn(),
+      isProcessed: vi.fn().mockResolvedValue(false),
+      hasWarned: vi.fn().mockResolvedValue(false),
+      markWarned: vi.fn().mockResolvedValue(undefined),
+      fastForwardRoot: vi.fn(async () => {}),
+      discoverBacklog: vi.fn(async () => ({ items: originalItems, waiting: [] })),
+      priorityResolver,
+    };
+
+    const source = localWorkSource(deps);
+    const result = await source.discover({ refresh: false });
+
+    // Eligibility set (count and members) must be identical
+    expect(result).toHaveLength(originalItems.length);
+    const originalSlugs = new Set(originalItems.map((i) => i.slug));
+    const resultSlugs = new Set(result.map((i) => i.slug));
+    expect(resultSlugs).toEqual(originalSlugs);
+  });
+});

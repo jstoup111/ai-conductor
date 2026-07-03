@@ -5,6 +5,7 @@ import type { BacklogItem } from './daemon.js';
 import { ALL_STEPS } from './steps.js';
 import type { ComplexityTier, StepStatus } from '../types/index.js';
 import type { BlockerVerdict, IssueRef } from './blocker-resolver.js';
+import type { PriorityBand, PriorityResolution } from './backlog-priority.js';
 
 // ── Startup inherited-state dashboard (ADR-013 / FR-1, FR-2, FR-3) ────────────
 //
@@ -49,6 +50,8 @@ export interface EligibleEntry {
   slug: string;
   /** Engineer-assessed tier carried on the backlog item, if present. */
   tier?: ComplexityTier;
+  /** Priority band assigned by the priority resolver (banded mode only). */
+  band?: PriorityBand;
 }
 
 export interface ProcessedEntry {
@@ -81,6 +84,13 @@ export interface InheritedState {
    * HALTED > PROCESSED > IN-PROGRESS > WAITING > ELIGIBLE.
    */
   waiting?: WaitingEntry[];
+  /**
+   * Priority resolution result from the resolver, if available. Used by the
+   * dashboard to render band annotations (banded mode) or fallback marker
+   * (fallback mode) on the ELIGIBLE section. Optional for backward compatibility
+   * with callers that don't have a resolver.
+   */
+  priorityResolution?: PriorityResolution;
 }
 
 export interface ScanInheritedStateDeps {
@@ -280,24 +290,42 @@ export async function scanInheritedState(
 
   // ELIGIBLE: build-ready items this scan that are neither halted nor processed,
   // carrying their tier so the operator sees the size of what's queued.
+  // Also carries the band field when assigned by the priority resolver (banded mode).
   // WAITING: specs held back by an unresolved dependency gate (FR-6) — a
   // bare-array `discover()` (pre-widened callers) yields no waiting items.
   let eligible: EligibleEntry[] = [];
   let waiting: WaitingEntry[] = [];
+  let priorityResolution: PriorityResolution | undefined;
   try {
     const result = await deps.discover();
     const backlog = Array.isArray(result) ? result : result.items;
     waiting = Array.isArray(result) ? [] : result.waiting;
-    eligible = backlog
-      .filter((b) => !haltedSlugs.has(b.slug) && !processedSlugs.has(b.slug))
-      .map((b) => ({ slug: b.slug, tier: b.tier }));
+    const backlogItems = backlog.filter((b) => !haltedSlugs.has(b.slug) && !processedSlugs.has(b.slug));
+    eligible = backlogItems.map((b) => ({
+      slug: b.slug,
+      tier: b.tier,
+      band: (b as BacklogItem & { band?: PriorityBand }).band,
+    }));
+
+    // Detect the priority resolution mode from the items (set by orderBacklog in the WorkSource):
+    // - If any eligible item has resolutionMode='banded', it's banded mode with band annotations
+    // - If any eligible item has resolutionMode='fallback', it's fallback mode (resolver threw)
+    // - Otherwise, no resolution mode is set (items are in discovery order)
+    const resolutionMode = backlogItems.find((b) => (b as BacklogItem & { resolutionMode?: string }).resolutionMode)?.['resolutionMode'];
+    if (resolutionMode === 'banded') {
+      // Items have band annotations → banded mode (resolver succeeded in WorkSource)
+      priorityResolution = { mode: 'banded', bands: new Map(eligible.filter((e) => e.band).map((e) => [e.slug, e.band!])) };
+    } else if (resolutionMode === 'fallback') {
+      // Resolver threw and fell back → fallback mode (no reordering, no band annotations)
+      priorityResolution = { mode: 'fallback' };
+    }
   } catch (err) {
     deps.log?.(
       `dashboard: backlog discovery failed (${err instanceof Error ? err.message : String(err)})`,
     );
   }
 
-  return { halted, inProgress, eligible, processed, processedCount: processed.length, waiting };
+  return { halted, inProgress, eligible, processed, processedCount: processed.length, waiting, priorityResolution };
 }
 
 // ── Render helpers ────────────────────────────────────────────────────────────
@@ -310,6 +338,11 @@ function tierTag(tier?: ComplexityTier): string {
 /** `  → <url>` PR suffix, or empty when no PR is open. */
 function prSuffix(prUrl?: string): string {
   return prUrl ? `  → ${prUrl}` : '';
+}
+
+/** ` [${band}]` band tag, or empty when no band is assigned. */
+function bandTag(band?: PriorityBand): string {
+  return band ? ` [${band}]` : '';
 }
 
 /** `repo#number` formatting for a blocker/cycle-member ref. */
@@ -341,8 +374,13 @@ export function waitingDetail(verdict: BlockerVerdict): string {
  * IN-PROGRESS and before ELIGIBLE (precedence HALTED > PROCESSED >
  * IN-PROGRESS > WAITING > ELIGIBLE). Omitted entirely when `waiting` is
  * absent or empty. Zero-state renders every present group at `0`.
+ *
+ * When `priorityResolution` is provided (either in state or as a parameter) in
+ * banded mode, ELIGIBLE lines gain band annotations (` [${band}]` suffix). When
+ * in fallback mode, a single marker line `(priority: chronological fallback)`
+ * is added to the ELIGIBLE section instead of per-line annotations.
  */
-export function renderDashboard(state: InheritedState): string {
+export function renderDashboard(state: InheritedState, priorityResolution?: PriorityResolution): string {
   const lines: string[] = [];
   lines.push('── inherited state ──────────────────────────────────────────');
 
@@ -371,7 +409,20 @@ export function renderDashboard(state: InheritedState): string {
   // WAITING > ELIGIBLE) — filter it out of ELIGIBLE rather than double-list it.
   const eligible = state.eligible.filter((e) => !waitingSlugs.has(e.slug));
   lines.push(`ELIGIBLE (${eligible.length})`);
-  for (const e of eligible) lines.push(`  • ${e.slug}${tierTag(e.tier)}`);
+
+  // Render band annotations or fallback mode marker
+  // Use parameter if provided, otherwise use state's resolution
+  const resolution = priorityResolution ?? state.priorityResolution;
+  const isInFallbackMode = resolution?.mode === 'fallback';
+  const isBandedMode = resolution?.mode === 'banded';
+  for (const e of eligible) {
+    // Only show band annotations in banded mode, not in fallback mode
+    const bandAnnotation = isBandedMode ? bandTag(e.band) : '';
+    lines.push(`  • ${e.slug}${tierTag(e.tier)}${bandAnnotation}`);
+  }
+  if (isInFallbackMode && eligible.length > 0) {
+    lines.push(`  (priority: chronological fallback)`);
+  }
 
   lines.push(`PROCESSED (${state.processedCount})`);
   for (const p of state.processed) lines.push(`  • ${p.slug}${prSuffix(p.prUrl)}`);

@@ -415,6 +415,20 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   - **`conduct-ts engineer migrate-issue-deps [--confirm]`** — one-time migration tool that
     converts prose dependency mentions on existing issues into real GitHub issue-dependency
     links so the resolver above can see them (dry-run by default).
+- **Daemon issue-priority scheduling.** The daemon now reorders eligible backlog items by
+  GitHub issue priority labels, enabling human-driven prioritization without changing the
+  eligibility or deduplication logic. Priority bands (`priority: high` / `medium` / `low`)
+  are read fresh from the GitHub REST API on each daemon scan (cached within-scan). Items
+  are grouped by band and ordered chronologically within each band — post-gate, so priority
+  never overrides eligibility, park markers, dedup, owner gating, or dependency resolution.
+  On GitHub API failure, the daemon gracefully degrades to chronological ordering and logs
+  a single deduped warning per outage (resets on recovery). Dashboard ELIGIBLE items display
+  `[band]` suffixes and a `[fallback]` marker when in fallback mode. Non-impact: eligibility
+  gate, dedup, owner gate, dependency resolution, and park markers stay unchanged.
+  Implementation: `PriorityResolver` in `engine/priority-resolver.ts`, wired into
+  `localWorkSource` post-gate ordering and `daemon-dashboard.ts` for visualization.
+  See `.docs/specs/2026-07-03-daemon-issue-priority-scheduling.md` and
+  `adr-2026-07-03-priority-labels-refresh-and-fallback-semanatics.md`.
 
 ## Migration
 
