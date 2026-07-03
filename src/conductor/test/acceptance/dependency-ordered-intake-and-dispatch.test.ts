@@ -44,6 +44,10 @@ import { discoverBacklog, type BacklogTreeSource } from '../../src/engine/daemon
 import { scanInheritedState, renderDashboard } from '../../src/engine/daemon-dashboard.js';
 import { localWorkSource, type LocalWorkSourceDeps } from '../../src/engine/daemon-work-source.js';
 import { createBlockerResolver, type BlockerRunner } from '../../src/engine/blocker-resolver.js';
+import { dispatchEngineer } from '../../src/engine/engineer-cli.js';
+import { createFileQueue } from '../../src/engine/engineer/intake/queue.js';
+import { createLedger } from '../../src/engine/engineer/intake/ledger.js';
+import { parseEnvelope } from '../../src/engine/engineer/intake/port.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Shared fixture helpers
@@ -763,6 +767,149 @@ describe('Flow C — engineer claim defers blocked intake entries', () => {
     expect(outcome.entries[0].verdict.kind).toBe('cycle');
     const stillPending = await queue.listPending();
     expect(stillPending.map((e: any) => e.sourceRef)).toContain('acme/app#1');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Flow C2 — live path through `conduct-ts engineer claim` (rem-fr8-2, rem-fr9-2)
+//
+// Flow C above drives `claimUnblocked` directly with a hand-rolled fake queue.
+// This flow drives the REAL production wiring end to end: dispatchEngineer({kind:
+// 'claim'}) → the real file-backed IntakeQueue + Ledger (rooted in a temp
+// engineerDir, mirroring engineer-cli-launch-intake.test.ts's `claim` coverage)
+// → the real createBlockerResolver, fed by an injected fake `gh` runner that
+// models per-issue blocked_by responses. No network, no branch/checkout calls —
+// the claim path is pure queue/ledger/API-verdict bookkeeping.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('Flow C2 — live path through the engineer CLI claim command', () => {
+  const openBlocker = (repo: string, number: number) => ({
+    number,
+    repository_url: `https://api.github.com/repos/${repo}`,
+    state: 'open',
+  });
+
+  /** Fake `gh` runner keyed by `owner/repo#N`, mirroring Flow A2's createFakeGh. */
+  function createFakeGh(blockedByTable: Record<string, unknown[]> = {}) {
+    const calls: string[][] = [];
+    const run = async (args: string[], _opts: { cwd: string }) => {
+      calls.push(args);
+      const target = args.find((a) => a.includes('/dependencies/blocked_by'));
+      const m = target?.match(/repos\/([^/]+\/[^/]+)\/issues\/(\d+)\/dependencies\/blocked_by/);
+      const key = m ? `${m[1]}#${m[2]}` : '';
+      return { stdout: JSON.stringify(blockedByTable[key] ?? []) };
+    };
+    return { run, calls };
+  }
+
+  async function seedInbox(
+    engineerDir: string,
+    entries: Array<{ sourceRef: string; receivedAt: string; text: string }>,
+  ): Promise<{ queue: ReturnType<typeof createFileQueue>; ledger: ReturnType<typeof createLedger> }> {
+    await mkdir(join(engineerDir, 'inbox'), { recursive: true });
+    const queue = createFileQueue(join(engineerDir, 'inbox'));
+    const ledger = createLedger(join(engineerDir, 'ledger.json'));
+    for (const entry of entries) {
+      await ledger.record({ source: 'github-issues', sourceRef: entry.sourceRef });
+      await queue.enqueue(
+        parseEnvelope({
+          id: entry.sourceRef,
+          source: 'github-issues',
+          sourceRef: entry.sourceRef,
+          text: entry.text,
+          status: 'pending',
+          receivedAt: entry.receivedAt,
+        }),
+      );
+    }
+    return { queue, ledger };
+  }
+
+  it('[blocked-older, unblocked-newer] → the unblocked idea is claimed (acked, ledger transitioned); the blocked idea is deferred (released, not acked); no branch switches', async () => {
+    const engineerDir = await freshDir();
+    const { ledger } = await seedInbox(engineerDir, [
+      { sourceRef: 'acme/app#1', receivedAt: '2026-07-01T00:00:00.000Z', text: 'older, blocked' },
+      { sourceRef: 'acme/app#2', receivedAt: '2026-07-02T00:00:00.000Z', text: 'newer, unblocked' },
+    ]);
+    const gh = createFakeGh({ 'acme/app#1': [openBlocker('acme/app', 9)] });
+
+    const out: string[] = [];
+    const code = await dispatchEngineer(
+      { kind: 'claim' },
+      { engineerDir, gh: gh.run, print: (s) => out.push(s), printErr: () => {} },
+    );
+
+    expect(code).toBe(0);
+    const result = JSON.parse(out.join(''));
+    // The unblocked-newer idea was claimed, NOT the blocked-older one.
+    expect(result).toMatchObject({ kind: 'claim', sourceRef: 'acme/app#2', text: 'newer, unblocked' });
+
+    // Claimed: acked (removed from the inbox) + ledger transitioned to 'claimed'.
+    expect((await ledger.get('github-issues', 'acme/app#2'))?.status).toBe('claimed');
+
+    // Deferred: released back to the queue (still pending), NOT acked, ledger
+    // status untouched (deferral is stateless — Flow C's "deferral is free").
+    const freshQueue = createFileQueue(join(engineerDir, 'inbox'));
+    const stillClaimable = await freshQueue.claim();
+    expect(stillClaimable?.sourceRef).toBe('acme/app#1');
+    expect((await ledger.get('github-issues', 'acme/app#1'))?.status).toBe('pending');
+
+    // No branch switches — the ONLY gh traffic on the claim path is the
+    // dependency lookup (`api .../dependencies/blocked_by`); no `checkout`,
+    // `branch`, or `switch` call is ever made.
+    expect(gh.calls.length).toBeGreaterThan(0);
+    for (const call of gh.calls) {
+      expect(call).not.toContain('checkout');
+      expect(call).not.toContain('switch');
+      expect(call[0]).not.toBe('branch');
+      expect(call[0]).toBe('api');
+    }
+  });
+
+  it('all-queued-ideas-blocked → the CLI emits the all-blocked shape with per-entry blockers, distinct from the empty-queue shape', async () => {
+    const engineerDir = await freshDir();
+    await seedInbox(engineerDir, [
+      { sourceRef: 'acme/app#3', receivedAt: '2026-07-03T00:00:00.000Z', text: 'idea 3' },
+      { sourceRef: 'acme/app#4', receivedAt: '2026-07-04T00:00:00.000Z', text: 'idea 4' },
+    ]);
+    const gh = createFakeGh({
+      'acme/app#3': [openBlocker('acme/app', 30)],
+      'acme/app#4': [openBlocker('acme/app', 40)],
+    });
+
+    const out: string[] = [];
+    const code = await dispatchEngineer(
+      { kind: 'claim' },
+      { engineerDir, gh: gh.run, print: (s) => out.push(s), printErr: () => {} },
+    );
+
+    expect(code).toBe(0);
+    const result = JSON.parse(out.join(''));
+    expect(result.kind).toBe('claim');
+    expect(result.allBlocked).toBe(true);
+    // Distinct shape from the empty-queue report — no `empty` flag at all, and
+    // `entries` carries per-entry verdict detail an empty report never has.
+    expect(result.empty).toBeUndefined();
+    expect(Array.isArray(result.entries)).toBe(true);
+    expect(result.entries).toHaveLength(2);
+    for (const entry of result.entries) {
+      expect(entry.sourceRef).toMatch(/^acme\/app#[34]$/);
+      expect(entry.verdict.kind).toBe('blocked');
+      expect(Array.isArray(entry.verdict.blockers)).toBe(true);
+      expect(entry.verdict.blockers.length).toBeGreaterThan(0);
+    }
+
+    // Contrast: an empty queue reports the OTHER {kind:'claim',empty:true} shape.
+    const emptyDir = await freshDir();
+    const emptyOut: string[] = [];
+    const emptyCode = await dispatchEngineer(
+      { kind: 'claim' },
+      { engineerDir: emptyDir, gh: gh.run, print: (s) => emptyOut.push(s), printErr: () => {} },
+    );
+    expect(emptyCode).toBe(0);
+    const emptyResult = JSON.parse(emptyOut.join(''));
+    expect(emptyResult).toEqual({ kind: 'claim', empty: true });
+    expect(emptyResult.allBlocked).toBeUndefined();
+    expect(emptyResult.entries).toBeUndefined();
   });
 });
 

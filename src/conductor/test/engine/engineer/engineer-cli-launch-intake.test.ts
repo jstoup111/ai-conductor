@@ -49,6 +49,10 @@ function makeGh(
     if (args[0] === 'pr' && args[1] === 'create') return { stdout: prUrl };
     // Owner-identity resolution (fail-closed slice B): resolve a login.
     if (args[0] === 'api' && args[1] === 'user') return { stdout: 'test-owner\n' };
+    // Dependency lookup (blocker-resolver): default to "no blockers" so
+    // callers that don't care about dependency ordering aren't tripped up
+    // by an empty-string response failing JSON.parse.
+    if (args[0] === 'api' && args[1]?.includes('/dependencies/blocked_by')) return { stdout: '[]' };
     return { stdout: '' };
   };
   return { gh, calls };
