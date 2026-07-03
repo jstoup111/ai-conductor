@@ -12,6 +12,14 @@ export interface InvokeResult {
   rateLimited?: boolean;
   sessionExpired?: boolean;
   tokenUsage?: TokenUsage;
+  /**
+   * Set when the provider detects that the requested model is unavailable
+   * (e.g. not entitled, deprecated, or rejected by the CLI/API). Consumed by
+   * the ModelAvailability cache to drive fallback-ladder decisions — marking
+   * the model unavailable so subsequent invocations fall back to the next
+   * model in the ladder instead of retrying the same one.
+   */
+  modelUnavailable?: boolean;
 }
 
 export interface InvokeOptions {
