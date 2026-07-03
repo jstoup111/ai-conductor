@@ -9,7 +9,7 @@
 // and runAuthoring (autonomous). No-op for hand-authored specs (no sourceRef),
 // so non-intake specs are byte-for-byte unchanged.
 
-import { writeFile, mkdir } from 'node:fs/promises';
+import { writeFile, mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { AuthoringGuard } from './authoring-guard.js';
 import { parseSourceRef } from './issue-ref.js';
@@ -33,6 +33,13 @@ import { parseSourceRef } from './issue-ref.js';
  * non-intake spec (the marker then carries `Owner:` without `Source-Ref:`). The
  * path is guarded to stay inside `repoPath`. Returns the absolute marker path on
  * write.
+ *
+ * MERGE LOGIC (Slice B, Task 13):
+ * When stamping an owner on the conduct path, pre-existing Source-Ref lines are
+ * preserved: if the marker file exists and contains `Source-Ref:`, that line is
+ * carried forward into the stamped marker. This handles the case where a spec was
+ * routed from /engineer (intake origin tracked), then continued on the plain
+ * /conduct path where the conduct owner stamping re-writes the marker to add Owner:.
  */
 export async function writeIntakeMarker(
   repoPath: string,
@@ -55,7 +62,27 @@ export async function writeIntakeMarker(
   guard.assertWriteAllowed(markerFile);
 
   const lines = [`# Intake origin: ${slug}`, ''];
-  if (hasSourceRef) lines.push(`Source-Ref: ${sourceRef}`);
+
+  // Preserve existing Source-Ref if present in an existing marker file.
+  // This handles the conduct-path stamping case where a pre-existing marker
+  // carries an intake origin that must survive when re-writing to add Owner:.
+  let existingSourceRef: string | null = null;
+  try {
+    const existing = await readFile(markerFile, 'utf-8');
+    const sourceRefMatch = existing.match(/^Source-Ref: (.+)$/m);
+    if (sourceRefMatch) {
+      existingSourceRef = sourceRefMatch[1];
+    }
+  } catch {
+    // File doesn't exist yet, continue normally
+  }
+
+  // Use provided sourceRef if valid, otherwise use existing
+  const finalSourceRef = hasSourceRef ? sourceRef : existingSourceRef;
+  if (finalSourceRef) {
+    lines.push(`Source-Ref: ${finalSourceRef}`);
+  }
+
   if (hasOwner) lines.push(`Owner: ${owner}`);
   const body = `${lines.join('\n')}\n`;
 

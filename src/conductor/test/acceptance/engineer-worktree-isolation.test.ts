@@ -29,6 +29,10 @@ import { openSpecPr } from '../../src/engine/engineer/handoff.js';
 
 const execFile = promisify(execFileCb);
 
+// Owner-identity opts for landSpec (fail-closed slice B): a configured owner so
+// the identity gate resolves and each test still exercises its own concern.
+const OWNER_OPTS = { ownerConfig: { spec_owner: 'test-owner' } };
+
 let workDir: string;
 
 beforeEach(async () => {
@@ -129,7 +133,7 @@ describe('FR-2 primary working tree is invariant', () => {
 
     const wt = await createEngineerWorktree(repo, 'add auth');
     await writeDocs(wt.worktreePath, 'add auth');
-    await landSpec(target(repo), 'add auth', wt.worktreePath);
+    await landSpec(target(repo), 'add auth', wt.worktreePath, undefined, OWNER_OPTS);
     // no-remote handoff (openSpecPr detects it) then remove-on-success.
     const res = await openSpecPr(target(repo), wt.branch, {
       worktreePath: wt.worktreePath,
@@ -155,7 +159,7 @@ describe('FR-2 primary working tree is invariant', () => {
     const repo = await makeRepo('r');
     const before = await snapshot(repo);
     const wt = await createEngineerWorktree(repo, 'bad idea'); // no docs authored
-    await expect(landSpec(target(repo), 'bad idea', wt.worktreePath)).rejects.toThrow();
+    await expect(landSpec(target(repo), 'bad idea', wt.worktreePath, undefined, OWNER_OPTS)).rejects.toThrow();
 
     const after = await snapshot(repo);
     expect(after.head).toBe(before.head);
@@ -183,8 +187,8 @@ describe('FR-8/FR-9 concurrent per-idea worktrees are idea-scoped', () => {
     await writeDocs(a.worktreePath, 'idea alpha');
     await writeDocs(b.worktreePath, 'idea beta');
 
-    await landSpec(target(repo), 'idea alpha', a.worktreePath);
-    await landSpec(target(repo), 'idea beta', b.worktreePath);
+    await landSpec(target(repo), 'idea alpha', a.worktreePath, undefined, OWNER_OPTS);
+    await landSpec(target(repo), 'idea beta', b.worktreePath, undefined, OWNER_OPTS);
 
     const aFiles = await git(['ls-tree', '-r', '--name-only', 'spec/idea-alpha'], repo);
     const bFiles = await git(['ls-tree', '-r', '--name-only', 'spec/idea-beta'], repo);
@@ -210,7 +214,7 @@ describe('FR-8/FR-9 concurrent per-idea worktrees are idea-scoped', () => {
     // Run a FULL engineer cycle for an unrelated idea in the SAME repo.
     const wt = await createEngineerWorktree(repo, 'add feature');
     await writeDocs(wt.worktreePath, 'add feature');
-    await landSpec(target(repo), 'add feature', wt.worktreePath);
+    await landSpec(target(repo), 'add feature', wt.worktreePath, undefined, OWNER_OPTS);
     await openSpecPr(target(repo), wt.branch, {
       worktreePath: wt.worktreePath,
       runner: async () => {
@@ -242,7 +246,7 @@ describe('FR-10 sibling repos are byte-for-byte unchanged', () => {
 
     const wt = await createEngineerWorktree(a, 'feature');
     await writeDocs(wt.worktreePath, 'feature');
-    await landSpec(target(a), 'feature', wt.worktreePath);
+    await landSpec(target(a), 'feature', wt.worktreePath, undefined, OWNER_OPTS);
     expect(await snapshot(b)).toEqual(bBefore);
 
     // The worktree path stays inside A.
@@ -299,7 +303,7 @@ describe('real-git smoke: create → land → handoff(no-remote) → remove', ()
 
     const wt = await createEngineerWorktree(repo, idea);
     await writeDocs(wt.worktreePath, idea);
-    const landed = await landSpec(target(repo), idea, wt.worktreePath);
+    const landed = await landSpec(target(repo), idea, wt.worktreePath, undefined, OWNER_OPTS);
     expect(landed.branch).toBe('spec/smoke-feature');
 
     const res = await openSpecPr(target(repo), wt.branch, {

@@ -93,19 +93,19 @@ describe('writeTrackMarker', () => {
 describe('landSpec — track-aware required artifacts', () => {
   it('product track (default, no marker) REQUIRES a spec', async () => {
     const worktree = await seedWorktree({ spec: false }); // no spec, no track marker → defaults product
-    await expect(landSpec({ name: 'a', canonicalPath: repo }, 'idea t', worktree)).rejects.toThrow(/spec \(product track\)/);
+    await expect(landSpec({ name: 'a', canonicalPath: repo }, 'idea t', worktree, undefined, { ownerConfig: { spec_owner: 'test-owner' } })).rejects.toThrow(/spec \(product track\)/);
   });
 
   it('product track lands when the spec is present', async () => {
     const worktree = await seedWorktree({ spec: true, track: 'product' });
-    const r = await landSpec({ name: 'a', canonicalPath: repo }, 'idea t', worktree);
+    const r = await landSpec({ name: 'a', canonicalPath: repo }, 'idea t', worktree, undefined, { ownerConfig: { spec_owner: 'test-owner' } });
     expect(r.branch).toMatch(/^spec\//);
     expect(await show(r.branch, '.docs/specs/t.md')).toContain('PRD');
   });
 
   it('technical track lands WITHOUT a spec (stories carry acceptance criteria)', async () => {
     const worktree = await seedWorktree({ spec: false, track: 'technical' });
-    const r = await landSpec({ name: 'a', canonicalPath: repo }, 'idea t', worktree);
+    const r = await landSpec({ name: 'a', canonicalPath: repo }, 'idea t', worktree, undefined, { ownerConfig: { spec_owner: 'test-owner' } });
     expect(r.branch).toMatch(/^spec\//);
     // stories + plan + track marker committed; no spec required.
     expect(await show(r.branch, '.docs/stories/t.md')).toContain('Accepted');

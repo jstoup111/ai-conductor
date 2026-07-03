@@ -59,6 +59,8 @@ function makeFullGh(state: GhState) {
       state.comments.push({ ref: ref(repo, args[2]), body: bi >= 0 ? args[bi + 1] : '' });
       return { stdout: '' };
     }
+    // Owner-identity resolution (fail-closed slice B): resolve a login.
+    if (args[0] === 'api' && args[1] === 'user') return { stdout: 'test-owner\n' };
     // REST label mutation: `gh api --method POST|DELETE repos/<repo>/issues/<n>/labels[/<name>]`
     if (args[0] === 'api' && /\/issues\/\d+\/labels/.test(args[3] ?? '')) {
       const pm = (args[3] ?? '').match(

@@ -5,9 +5,10 @@ import {
   readdir,
   access as accessFile,
   unlink as unlinkFile,
+  stat,
 } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
-import { relative, join } from 'node:path';
+import { relative, join, basename } from 'node:path';
 import { HALT_MARKER } from './halt-marker.js';
 import type { ConductState } from '../types/index.js';
 import type {
@@ -49,6 +50,7 @@ import {
   readRemediationPlan,
   sweepStaleReviewArtifacts,
   parseTrack,
+  parseIntakeSourceRef,
   type RemediationGap,
 } from './artifacts.js';
 import type { Track } from '../types/index.js';
@@ -91,6 +93,10 @@ import {
   type EscalateBuildFailureOpts,
   type EscalateBuildFailureResult,
 } from './build-failure-escalation.js';
+import { writeIntakeMarker } from './engineer/intake-marker.js';
+import { readMachineOwnerConfig } from './owner-gate/machine-identity.js';
+import { resolveDaemonOwner, type GhRunner } from './owner-gate/identity.js';
+import { makeProductionGh } from './pr-labels.js';
 
 export type CheckpointResponse = 'continue' | 'back' | 'quit';
 
@@ -327,6 +333,63 @@ export interface ConductorOptions {
    * Not called for rebase-conflict HALTs (pushing mid-rebase is unsafe).
    */
   escalateBuildFailure?: (opts: EscalateBuildFailureOpts) => Promise<EscalateBuildFailureResult>;
+  /**
+   * Shell runner for the `gh` CLI (owner identity resolution). Injected for
+   * tests; defaults to the real production gh. Used to resolve machine-scoped
+   * operator identity for plan-step owner stamping (Slice B, D4).
+   */
+  gh?: GhRunner;
+}
+
+/**
+ * Snapshot mtimes of a step's artifact files, keyed by path. Taken BEFORE the
+ * step runs so the post-step pass can identify which artifacts the step
+ * actually authored (new or rewritten) vs pre-existing historical ones.
+ */
+async function snapshotArtifactMtimes(
+  projectRoot: string,
+  step: StepName,
+): Promise<Map<string, number>> {
+  const snapshot = new Map<string, number>();
+  // findArtifactFilesForStep returns absolute paths.
+  const files = await findArtifactFilesForStep(projectRoot, step);
+  for (const file of files) {
+    try {
+      const s = await stat(file);
+      snapshot.set(file, s.mtimeMs);
+    } catch {
+      // Raced deletion — treat as absent.
+    }
+  }
+  return snapshot;
+}
+
+/**
+ * Files from `files` that are new or modified relative to `snapshot`
+ * (pre-step). A file absent from the snapshot, or whose mtime changed, was
+ * authored by the step this run. Pre-existing untouched files are excluded —
+ * their markers (if any) were written by the run that authored them.
+ */
+async function selectChangedArtifacts(
+  files: string[],
+  snapshot: Map<string, number> | null,
+): Promise<string[]> {
+  if (snapshot === null) return files;
+  const changed: string[] = [];
+  for (const file of files) {
+    const before = snapshot.get(file);
+    if (before === undefined) {
+      changed.push(file);
+      continue;
+    }
+    try {
+      const s = await stat(file);
+      if (s.mtimeMs !== before) changed.push(file);
+    } catch {
+      // Deleted during the step — nothing to stamp.
+    }
+  }
+  return changed;
 }
 
 function stepHasCompletionCheck(step: StepName): boolean {
@@ -395,6 +458,8 @@ export class Conductor {
   private onComplexityAssessment?: (recommended: ComplexityTier | null) => Promise<ComplexityTier>;
   /** Escalation function — see ConductorOptions.escalateBuildFailure. */
   private escalateBuildFailure: (opts: EscalateBuildFailureOpts) => Promise<EscalateBuildFailureResult>;
+  /** gh CLI runner for owner identity resolution (plan-step stamping, Slice B D4). */
+  private gh: GhRunner;
   /**
    * The most recent engine-native rebase outcome. The `rebase` step is special:
    * its gate verdict is computed by the native handler (not from a file
@@ -434,6 +499,7 @@ export class Conductor {
     this.onRecovery = opts.onRecovery;
     this.onComplexityAssessment = opts.onComplexityAssessment;
     this.escalateBuildFailure = opts.escalateBuildFailure ?? defaultEscalateBuildFailure;
+    this.gh = opts.gh ?? makeProductionGh();
   }
 
   /**
@@ -936,6 +1002,16 @@ export class Conductor {
         let retryHint: string | undefined = pendingRetryHints.get(step.name);
         pendingRetryHints.delete(step.name);
         let successOutput: string | undefined;
+
+        // D4 keying (Slice B): snapshot plan artifacts BEFORE the plan step runs
+        // so the DECIDE-tail owner stamping targets only the plan(s) authored in
+        // THIS run. `.docs/plans/` accumulates historical plans; stamping a
+        // glob-first file would leave the new spec un-owned and rewrite an
+        // unrelated spec's marker.
+        const planSnapshot: Map<string, number> | null =
+          step.name === 'plan'
+            ? await snapshotArtifactMtimes(this.projectRoot, 'plan')
+            : null;
 
         const stepMaxRetries = resolved.max_retries;
         // Snapshot of resolved-task count before the most recent build retry,
@@ -1491,6 +1567,63 @@ export class Conductor {
                     /* marker absent — nothing to clean up */
                   });
                 }
+              }
+            }
+          }
+
+          // Plan-step owner stamping (Slice B, Story 3, D4). After the artifact
+          // gate passes (all `.docs/plans/*.md` artifacts validated), stamp the
+          // `.docs/intake/<plan-stem>.md` owner marker so the operator identity
+          // travels with the spec onto the merged default branch. Use the same
+          // machine-scoped identity resolution as the `/engineer` path.
+          if (step.name === 'plan') {
+            const planFiles = await findArtifactFilesForStep(this.projectRoot, 'plan');
+            // D4 keying: stamp ONLY the plan(s) authored in THIS run — files that
+            // are new or modified relative to the pre-step snapshot. `.docs/plans/`
+            // accumulates historical plans, so a glob-first pick would key the
+            // marker to the wrong stem (new spec un-owned; unrelated spec's marker
+            // rewritten with this operator's identity).
+            const authoredPlans = await selectChangedArtifacts(planFiles, planSnapshot);
+            if (authoredPlans.length > 0) {
+              // Resolve machine-scoped owner identity (configured spec_owner or gh login).
+              // Fail-closed: throw if unresolved (same error text as Story 2).
+              const ownerConfig = await readMachineOwnerConfig();
+              const ownerResolution = await resolveDaemonOwner(
+                ownerConfig,
+                this.gh,
+                this.projectRoot,
+              );
+
+              if (!ownerResolution.resolved) {
+                throw new Error(
+                  'Unresolved operator identity — cannot stamp owner marker. ' +
+                  'Configure spec_owner in ~/.ai-conductor/config.yml, or run `gh auth login` ' +
+                  'to authenticate with GitHub.',
+                );
+              }
+
+              for (const planFile of authoredPlans) {
+                // The daemon's backlog resolver keys markers by basename(file, '.md').
+                const planStem = basename(planFile, '.md');
+
+                // Preserve any pre-existing Source-Ref from a prior engineer-path run
+                // (Task 13a: an existing Source-Ref: line survives owner stamping).
+                let sourceRef: string | undefined;
+                const markerPath = join(this.projectRoot, '.docs', 'intake', `${planStem}.md`);
+                try {
+                  const existingMarker = await readFile(markerPath, 'utf-8');
+                  sourceRef = parseIntakeSourceRef(existingMarker) ?? undefined;
+                } catch {
+                  // Marker file doesn't exist yet — no pre-existing source-ref to preserve.
+                  sourceRef = undefined;
+                }
+
+                await writeIntakeMarker(
+                  this.projectRoot,
+                  planStem,
+                  sourceRef,
+                  ownerResolution.id,
+                );
               }
             }
           }

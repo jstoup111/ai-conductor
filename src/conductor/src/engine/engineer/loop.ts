@@ -46,7 +46,8 @@ import type { DecideResult, DecideStep, AssessComplexityResult } from './authori
 import type { ComplexityTier } from '../../types/index.js';
 import { runHandoff } from './handoff-step.js';
 import { runCreate } from '../registry-cli.js';
-import { loadConfig } from '../config.js';
+import { readMachineOwnerConfig } from '../owner-gate/machine-identity.js';
+import { resolveDaemonOwner } from '../owner-gate/identity.js';
 
 const execFile = promisify(execFileCb);
 
@@ -532,15 +533,32 @@ async function processIdea(
   const sourceRef = intake?.envelope.sourceRef;
 
   // Owner-gate (adr-2026-06-30-*): the daemon that later builds this spec resolves
-  // ITS owner from the TARGET repo's HarnessConfig (`spec_owner`), so stamp the
-  // spec with the SAME source here — mirroring `engineer land`. Load the target
-  // repo's config for `ownerConfig` and thread the in-scope gh runner for the
-  // login fallback; runAuthoring resolves configured spec_owner → gh login →
-  // un-owned (omits the `Owner:` line). loadConfig NEVER throws — a config-load
-  // failure degrades to an empty config (owner falls to gh login).
-  // ADR-1 naming: `ownerConfig`/`specOwner`, never a bare `owner`.
-  const targetConfigResult = await loadConfig(target.canonicalPath);
-  const ownerConfig = targetConfigResult.ok ? targetConfigResult.config : {};
+  // ITS owner from the MACHINE config (~/.ai-conductor/config.yml), so stamp the
+  // spec with the SAME source here — mirroring `engineer land`. Read the machine
+  // (user) config for `ownerConfig` and thread the in-scope gh runner for the
+  // login fallback; runAuthoring resolves machine-scoped spec_owner → gh login →
+  // un-owned (omits the `Owner:` line). readMachineOwnerConfig NEVER throws — a
+  // config-load failure degrades to `{ spec_owner: null }` (owner falls to gh login).
+  // D1 naming: `ownerConfig`/`specOwner`, never a bare `owner`. Machine identity
+  // is never read from or influenced by the project config (D2 anti-leak).
+  const ownerConfig = await readMachineOwnerConfig();
+
+  // Fail-fast identity check at loop entry (Task 9): resolve the chain before
+  // authoring begins. If unresolved, throw with actionable remediation text
+  // (same error as landSpec enforcement point — Story 2).
+  const identityResolution = await resolveDaemonOwner(
+    ownerConfig,
+    deps.gh || (async () => { throw new Error('gh: not available'); }),
+    target.canonicalPath,
+  );
+  if (!identityResolution.resolved) {
+    throw new Error(
+      'Cannot land spec: identity unresolved. Resolve one of:\n' +
+      '  1. Set spec_owner in ~/.ai-conductor/config.yml\n' +
+      '  2. Authenticate via: gh auth login',
+    );
+  }
+
   const { branch } = await runAuthoring(target, idea, {
     decide,
     assessComplexity,

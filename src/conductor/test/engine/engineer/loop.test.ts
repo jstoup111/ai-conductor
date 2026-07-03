@@ -495,6 +495,8 @@ function makeTestGh(prUrl = 'https://example.invalid/x/pull/1') {
   const gh = async (args: string[], _opts: { cwd: string }) => {
     calls.push([...args]);
     if (args[0] === 'pr' && args[1] === 'create') return { stdout: prUrl };
+    // Identity resolution (Task 9): handle `gh api user --jq .login` call
+    if (args[0] === 'api' && args[1] === 'user') return { stdout: 'testuser\n' };
     return { stdout: '' };
   };
   return { gh, calls };
@@ -952,43 +954,130 @@ describe('Owner-gate: autonomous authoring threads owner deps into runAuthoring 
     await execFile('git', ['commit', '-m', 'config'], { cwd: dir });
   }
 
-  it('does NOT honor a project-config spec_owner (D2 anti-leak) — falls through to gh login', async () => {
-    // D2 / Story 2: a `spec_owner` committed into the shared PROJECT config is
-    // now a hard config-load rejection — it must never source operator identity.
-    // The authoring caller swallows the rejected config to `{}` and falls through
-    // to the gh login, so the committed 'Carol' is IGNORED and gh wins. (Full
-    // authoring-side user-config sourcing + fail-closed refusal is Slice B.)
+  /**
+   * Create an isolated fake $HOME directory carrying `~/.ai-conductor/config.yml`
+   * (or no config file at all when `body` is omitted) so tests can exercise
+   * `readMachineOwnerConfig()`'s real default (`readUserConfig()` → `homedir()`)
+   * WITHOUT ever touching the operator's actual home directory (Slice B D1 seam).
+   */
+  async function makeUserHome(body?: string): Promise<string> {
+    const home = await mkdtemp(join(tmpdir(), 'user-home-'));
+    if (body !== undefined) {
+      await mkdir(join(home, '.ai-conductor'), { recursive: true });
+      await writeFile(join(home, '.ai-conductor', 'config.yml'), body, 'utf-8');
+    }
+    return home;
+  }
+
+  /** Run `fn` with process.env.HOME pointed at `home`; always restores it. */
+  async function withHome<T>(home: string, fn: () => Promise<T>): Promise<T> {
+    const saved = process.env.HOME;
+    process.env.HOME = home;
+    try {
+      return await fn();
+    } finally {
+      process.env.HOME = saved;
+    }
+  }
+
+  it('does NOT honor a project-config spec_owner (D2 anti-leak) — resolves from user config (Story 1: project Carol + user bob → bob)', async () => {
+    // Slice B Story 1 (RED): project has spec_owner: Carol, user config has spec_owner: bob.
+    // Identity resolution MUST NOT read or use the project config (D2 anti-leak).
+    // MUST resolve to bob from user config, NOT carol from project config, NOT ghlogin.
+    // Current code reads project config → this test FAILS (RED) until loop.ts
+    // is updated to skip project config and read user config instead.
     const dirA = join(workDir, 'alpha');
     await initRepo(dirA);
     await commitConfig(dirA, 'spec_owner: Carol\n');
     await writeRegistry([makeRecord(dirA, 'alpha')]);
 
-    const { runEngineerMode } = await loadLoop();
-    const { provider: route } = makeTestProvider({ routeTo: 'alpha' });
-    const gh = async (args: string[], _opts: { cwd: string }) => {
-      if (args[0] === 'pr' && args[1] === 'create') return { stdout: 'https://example.invalid/x/pull/1' };
-      if (args[0] === 'api') return { stdout: 'ghlogin\n' };
-      return { stdout: '' };
-    };
-    const { io } = scriptedIo(['dep bump', 'y', 'exit']);
+    const fakeHome = await makeUserHome('spec_owner: bob\n');
+    await withHome(fakeHome, async () => {
+      const { runEngineerMode } = await loadLoop();
+      const { provider: route } = makeTestProvider({ routeTo: 'alpha' });
+      // gh ALSO resolves an id — user config must win over gh, not merely over
+      // the project config (D1 chain order: user-config > gh > project-config-NEVER).
+      const gh = async (args: string[], _opts: { cwd: string }) => {
+        if (args[0] === 'pr' && args[1] === 'create') return { stdout: 'https://example.invalid/x/pull/1' };
+        if (args[0] === 'api') return { stdout: 'ghlogin\n' };
+        return { stdout: '' };
+      };
+      const { io } = scriptedIo(['dep bump', 'y', 'exit']);
 
-    const summary = await runEngineerMode({
-      route,
-      io,
-      gh,
-      registryPath,
-      engineerDir,
-      decide: makeTestDecide(),
+      const summary = await runEngineerMode({
+        route,
+        io,
+        gh,
+        registryPath,
+        engineerDir,
+        decide: makeTestDecide(),
+      });
+
+      expect(summary.ideasProcessed).toBe(1);
+      const { stdout: marker } = await execFile(
+        'git',
+        ['show', 'spec/dep-bump:.docs/intake/dep-bump.md'],
+        { cwd: dirA },
+      );
+      // MUST carry Owner: bob from user config
+      expect(marker).toContain('Owner: bob');
+      // MUST NOT leak Carol from project config (D2 anti-leak)
+      expect(marker).not.toMatch(/carol/i);
+      // MUST NOT fall back to gh login when user config resolves
+      expect(marker).not.toContain('ghlogin');
     });
 
-    expect(summary.ideasProcessed).toBe(1);
-    const { stdout: marker } = await execFile(
-      'git',
-      ['show', 'spec/dep-bump:.docs/intake/dep-bump.md'],
-      { cwd: dirA },
-    );
-    expect(marker).toContain('Owner: ghlogin'); // gh login, NOT the committed 'carol'
-    expect(marker).not.toContain('carol'); // repo-committed identity is never used
+    await rm(fakeHome, { recursive: true, force: true });
+  });
+
+  it('unresolved identity (no user config, gh unauthenticated) refuses BEFORE DECIDE authoring begins (Slice B Story 1 fail-fast)', async () => {
+    const dirA = join(workDir, 'alpha');
+    await initRepo(dirA);
+    await writeRegistry([makeRecord(dirA, 'alpha')]);
+
+    // No `~/.ai-conductor/config.yml` at all → readMachineOwnerConfig() resolves
+    // to `{ spec_owner: null }`.
+    const fakeHome = await makeUserHome();
+    await withHome(fakeHome, async () => {
+      const { runEngineerMode } = await loadLoop();
+      const { provider: route } = makeTestProvider({ routeTo: 'alpha' });
+      // gh fails to resolve a login (unauthenticated) → chain fully unresolved.
+      const gh = async (args: string[], _opts: { cwd: string }) => {
+        if (args[0] === 'api') throw new Error('gh: not logged in');
+        return { stdout: '' };
+      };
+      const { io, text } = scriptedIo(['dep bump', 'y', 'exit']);
+
+      let decideCalls = 0;
+      const decideSpy = async (ctx: {
+        step: 'brainstorm' | 'stories' | 'plan';
+        idea: string;
+        project: string;
+        prompt: string;
+      }) => {
+        decideCalls++;
+        return makeTestDecide()(ctx);
+      };
+
+      const summary = await runEngineerMode({
+        route,
+        io,
+        gh,
+        registryPath,
+        engineerDir,
+        decide: decideSpy,
+      });
+
+      // No DECIDE authoring effort is wasted on a spec that cannot land.
+      expect(decideCalls).toBe(0);
+      expect(summary.ideasProcessed).toBe(0);
+      // Actionable remediation — both paths named verbatim (Story 2 error text).
+      const combined = text() + JSON.stringify(summary);
+      expect(combined).toMatch(/~\/\.ai-conductor\/config\.yml/);
+      expect(combined).toMatch(/gh auth login/);
+    });
+
+    await rm(fakeHome, { recursive: true, force: true });
   });
 
   it('stamps Owner from the gh login when the target repo has no spec_owner', async () => {
