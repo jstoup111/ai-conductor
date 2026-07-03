@@ -144,6 +144,98 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
     });
   });
 
+  describe('skip is per-cycle, no processed marker (Task 13)', () => {
+    async function seedWithSourceRef(slug: string, sourceRef: string) {
+      await writeFile(join(dir, `.docs/plans/${slug}.md`), planWithDeps(`.docs/stories/${slug}.md`));
+      await writeFile(join(dir, `.docs/stories/${slug}.md`), APPROVED_STORIES);
+      await mkdir(join(dir, '.docs/intake'), { recursive: true });
+      await writeFile(join(dir, `.docs/intake/${slug}.md`), `Source-Ref: ${sourceRef}\n`);
+    }
+
+    it('a spec blocked by the same blocker across 3 scans stays in waiting each time, never marked processed', async () => {
+      await seedWithSourceRef('sticky-blocked', 'acme/app#20');
+      const isProcessed = async () => false;
+      const resolver = {
+        resolve: async () => ({ kind: 'blocked' as const, blockers: [{ repo: 'acme/app', number: '20' }] }),
+      };
+
+      for (let scan = 0; scan < 3; scan++) {
+        const result = await discoverBacklog(dir, isProcessed, undefined, {
+          treeSource: fsTreeSource(dir),
+          resolver,
+        });
+        expect(result.items.map((b) => b.slug)).not.toContain('sticky-blocked');
+        expect(result.waiting).toEqual([
+          {
+            slug: 'sticky-blocked',
+            sourceRef: 'acme/app#20',
+            verdict: { kind: 'blocked', blockers: [{ repo: 'acme/app', number: '20' }] },
+          },
+        ]);
+      }
+    });
+
+    it('a spec in waiting moves to items once its blocker closes in a later scan', async () => {
+      await seedWithSourceRef('closes-later', 'acme/app#21');
+      let blocked = true;
+      const resolver = {
+        resolve: async () =>
+          blocked
+            ? { kind: 'blocked' as const, blockers: [{ repo: 'acme/app', number: '21' }] }
+            : { kind: 'unblocked' as const },
+      };
+
+      const scan1 = await discoverBacklog(dir, undefined, undefined, {
+        treeSource: fsTreeSource(dir),
+        resolver,
+      });
+      expect(scan1.items.map((b) => b.slug)).not.toContain('closes-later');
+      expect(scan1.waiting.map((w) => w.slug)).toContain('closes-later');
+
+      blocked = false; // blocker closes between scans
+
+      const scan2 = await discoverBacklog(dir, undefined, undefined, {
+        treeSource: fsTreeSource(dir),
+        resolver,
+      });
+      expect(scan2.items.map((b) => b.slug)).toContain('closes-later');
+      expect(scan2.waiting).toEqual([]);
+    });
+
+    it('a spec built as an item re-diverts to waiting once a new blocker link is added', async () => {
+      await seedWithSourceRef('newly-blocked', 'acme/app#22');
+      let hasBlocker = false;
+      const resolver = {
+        resolve: async () =>
+          hasBlocker
+            ? { kind: 'blocked' as const, blockers: [{ repo: 'acme/app', number: '99' }] }
+            : { kind: 'unblocked' as const },
+      };
+
+      const scan1 = await discoverBacklog(dir, undefined, undefined, {
+        treeSource: fsTreeSource(dir),
+        resolver,
+      });
+      expect(scan1.items.map((b) => b.slug)).toContain('newly-blocked');
+      expect(scan1.waiting).toEqual([]);
+
+      hasBlocker = true; // a new blocker link is added between scans
+
+      const scan2 = await discoverBacklog(dir, undefined, undefined, {
+        treeSource: fsTreeSource(dir),
+        resolver,
+      });
+      expect(scan2.items.map((b) => b.slug)).not.toContain('newly-blocked');
+      expect(scan2.waiting).toEqual([
+        {
+          slug: 'newly-blocked',
+          sourceRef: 'acme/app#22',
+          verdict: { kind: 'blocked', blockers: [{ repo: 'acme/app', number: '99' }] },
+        },
+      ]);
+    });
+  });
+
   describe('no Source-Ref ⇒ no gate; outage isolation (Task 12)', () => {
     function alwaysThrowingResolver(): { resolve: (ref: string) => Promise<never>; calls: number } {
       const state = {
