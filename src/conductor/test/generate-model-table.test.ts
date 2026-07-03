@@ -1,4 +1,7 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   spliceGeneratedRegion,
   assertNoDuplicateRowNames,
@@ -6,9 +9,14 @@ import {
   buildEngineRows,
   buildExtraRows,
   stepDisplayName,
+  runGenerateModelTable,
+  parseCliArgs,
   MarkerError,
   BEGIN_MARKER,
   END_MARKER,
+  EXIT_OK,
+  EXIT_ERROR,
+  type CliIO,
 } from '../src/tools/generate-model-table.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -229,5 +237,99 @@ describe('renderModelTable (TS-2 happy path 2)', () => {
     expect(() => renderModelTable()).not.toThrow();
     const names = [...buildEngineRows(), ...buildExtraRows()].map((r) => r.name);
     expect(new Set(names).size).toBe(names.length);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RED/GREEN specs for the CLI write mode + idempotency (.docs/stories/
+// generated-model-table.md, TS-2 happy paths 1 & 3, TS-2 negative path 1;
+// Task 8 of the implementation plan). The CLI is invoked in-process against
+// a real temp-dir HARNESS.md fixture via the injectable CliIO — no shelling
+// out to the bin/ wrapper (that real-binary smoke test is Task 11).
+// ─────────────────────────────────────────────────────────────────────────────
+
+const nodeIO: CliIO = {
+  readFile: (path: string) => readFile(path, 'utf8'),
+  writeFile: (path: string, data: string) => writeFile(path, data, 'utf8'),
+};
+
+describe('runGenerateModelTable — CLI write mode + idempotency', () => {
+  let dir: string;
+  let harnessPath: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'generate-model-table-'));
+    harnessPath = join(dir, 'HARNESS.md');
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('parseCliArgs: no flags -> write, --check -> check, --pins -> pins', () => {
+    expect(parseCliArgs([])).toBe('write');
+    expect(parseCliArgs(['--check'])).toBe('check');
+    expect(parseCliArgs(['--pins'])).toBe('pins');
+  });
+
+  it('write mode (default) rewrites the region and returns 0 (TS-2 happy path 1)', async () => {
+    await writeFile(harnessPath, fixture(STALE_TABLE), 'utf8');
+
+    const exitCode = await runGenerateModelTable([], nodeIO, harnessPath);
+    expect(exitCode).toBe(EXIT_OK);
+
+    const after = await readFile(harnessPath, 'utf8');
+    expect(after).toContain(renderModelTable());
+    expect(after).not.toContain('stale row from a previous run');
+    expect(after.startsWith(PROSE_BEFORE + BEGIN_MARKER + '\n')).toBe(true);
+    expect(after.endsWith(END_MARKER + PROSE_AFTER)).toBe(true);
+  });
+
+  it('write then check is idempotent: check exits 0 with no further changes (TS-2 happy path 3)', async () => {
+    await writeFile(harnessPath, fixture(STALE_TABLE), 'utf8');
+
+    const writeExit = await runGenerateModelTable([], nodeIO, harnessPath);
+    expect(writeExit).toBe(EXIT_OK);
+
+    const afterWrite = await readFile(harnessPath, 'utf8');
+
+    const checkExit = await runGenerateModelTable(['--check'], nodeIO, harnessPath);
+    expect(checkExit).toBe(EXIT_OK);
+
+    const afterCheck = await readFile(harnessPath, 'utf8');
+    expect(afterCheck).toBe(afterWrite);
+  });
+
+  it('on a marker error, exits 2 and leaves the fixture file byte-identical (TS-2 negative path 1)', async () => {
+    const brokenDoc = PROSE_BEFORE + 'no begin marker here\n' + END_MARKER + PROSE_AFTER;
+    await writeFile(harnessPath, brokenDoc, 'utf8');
+
+    const exitCode = await runGenerateModelTable([], nodeIO, harnessPath);
+    expect(exitCode).toBe(EXIT_ERROR);
+
+    const after = await readFile(harnessPath, 'utf8');
+    expect(after).toBe(brokenDoc);
+  });
+
+  it('on a marker error in --check mode, also exits 2 and leaves the file untouched', async () => {
+    const brokenDoc =
+      PROSE_BEFORE + END_MARKER + '\n' + STALE_TABLE + '\n' + BEGIN_MARKER + PROSE_AFTER;
+    await writeFile(harnessPath, brokenDoc, 'utf8');
+
+    const exitCode = await runGenerateModelTable(['--check'], nodeIO, harnessPath);
+    expect(exitCode).toBe(EXIT_ERROR);
+
+    const after = await readFile(harnessPath, 'utf8');
+    expect(after).toBe(brokenDoc);
+  });
+
+  it('write mode is a no-op write when the file already matches the generated output', async () => {
+    await writeFile(harnessPath, fixture(renderModelTable()), 'utf8');
+
+    const exitCode = await runGenerateModelTable([], nodeIO, harnessPath);
+    expect(exitCode).toBe(EXIT_OK);
+
+    const after = await readFile(harnessPath, 'utf8');
+    expect(after).toBe(fixture(renderModelTable()));
   });
 });

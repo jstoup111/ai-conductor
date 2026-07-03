@@ -5,6 +5,7 @@
 // splicer).
 // ─────────────────────────────────────────────────────────────────────────────
 
+import { readFile, writeFile } from 'node:fs/promises';
 import type { StepName, ComplexityTier } from '../types/index.js';
 import {
   DEFAULT_STEP_MODELS,
@@ -311,4 +312,103 @@ export function renderModelTable(): string {
 
   const lines = [TABLE_HEADER, TABLE_SEPARATOR, ...[...engineRows, ...extraRows].map(renderRow)];
   return lines.join('\n');
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// CLI — arg parsing + file IO (Task 8: write mode + idempotency)
+//
+// The CLI is split from its IO via an injectable `CliIO` so tests can run
+// in-process against temp-dir fixtures without shelling out to the real
+// `bin/generate-model-table` wrapper (that real-binary smoke test is
+// Task 11). Exit codes follow the ADR: 0 ok, 1 drift (check mode only),
+// 2 environment/marker error.
+// ────────────────────────────────────────────────────────────────────────────
+
+export type CliMode = 'write' | 'check' | 'pins';
+
+export const EXIT_OK = 0;
+export const EXIT_DRIFT = 1;
+export const EXIT_ERROR = 2;
+
+/** Minimal filesystem surface the CLI needs — injectable for tests. */
+export interface CliIO {
+  readFile: (path: string) => Promise<string>;
+  writeFile: (path: string, data: string) => Promise<void>;
+}
+
+/** Real filesystem IO, used by the bin/ wrapper entrypoint. */
+export const nodeIO: CliIO = {
+  readFile: (path: string) => readFile(path, 'utf8'),
+  writeFile: (path: string, data: string) => writeFile(path, data, 'utf8'),
+};
+
+/**
+ * Parse CLI args into a mode. `--check` and `--pins` are mutually exclusive;
+ * absence of both flags means "write" (the default, regenerating the file
+ * in place).
+ */
+export function parseCliArgs(argv: readonly string[]): CliMode {
+  if (argv.includes('--check')) return 'check';
+  if (argv.includes('--pins')) return 'pins';
+  return 'write';
+}
+
+/**
+ * Run the generator against `harnessPath` using the injected `io`.
+ *
+ * - `write` (default): splices the freshly rendered table into the region
+ *   between the markers and writes the result back, iff it differs from the
+ *   current contents (idempotent no-op write avoided). Returns EXIT_OK.
+ * - `check`: same splice, but never writes; returns EXIT_OK if the result
+ *   equals the current contents, EXIT_DRIFT otherwise.
+ * - `pins`: JSON pin-agreement emission — full implementation is Task 10;
+ *   for now emits an empty object and exits EXIT_OK.
+ *
+ * On any MarkerError (missing/malformed/duplicate marker) or read failure,
+ * the file is never written and the function returns EXIT_ERROR.
+ */
+export async function runGenerateModelTable(
+  argv: readonly string[],
+  io: CliIO,
+  harnessPath: string,
+): Promise<number> {
+  const mode = parseCliArgs(argv);
+
+  if (mode === 'pins') {
+    process.stdout.write('{}\n');
+    return EXIT_OK;
+  }
+
+  let doc: string;
+  try {
+    doc = await io.readFile(harnessPath);
+  } catch (err) {
+    process.stderr.write(
+      `generate-model-table: failed to read ${harnessPath}: ${(err as Error).message}\n`,
+    );
+    return EXIT_ERROR;
+  }
+
+  const table = renderModelTable();
+
+  let spliced: string;
+  try {
+    spliced = spliceGeneratedRegion(doc, table);
+  } catch (err) {
+    if (err instanceof MarkerError) {
+      process.stderr.write(`generate-model-table: ${err.message}\n`);
+      return EXIT_ERROR;
+    }
+    throw err;
+  }
+
+  if (mode === 'check') {
+    return spliced === doc ? EXIT_OK : EXIT_DRIFT;
+  }
+
+  // write mode
+  if (spliced !== doc) {
+    await io.writeFile(harnessPath, spliced);
+  }
+  return EXIT_OK;
 }
