@@ -84,6 +84,13 @@ export interface InheritedState {
    * HALTED > PROCESSED > IN-PROGRESS > WAITING > ELIGIBLE.
    */
   waiting?: WaitingEntry[];
+  /**
+   * Priority resolution result from the resolver, if available. Used by the
+   * dashboard to render band annotations (banded mode) or fallback marker
+   * (fallback mode) on the ELIGIBLE section. Optional for backward compatibility
+   * with callers that don't have a resolver.
+   */
+  priorityResolution?: PriorityResolution;
 }
 
 export interface ScanInheritedStateDeps {
@@ -100,6 +107,16 @@ export interface ScanInheritedStateDeps {
   discover: () => Promise<BacklogItem[] | { items: BacklogItem[]; waiting: WaitingEntry[] }>;
   /** Optional log sink for skipped-worktree diagnostics. */
   log?: (msg: string) => void;
+  /**
+   * Optional priority resolver. When provided, used to generate a resolution
+   * result that's included in the returned InheritedState for dashboard display
+   * (band annotations in banded mode, fallback marker in fallback mode).
+   * Absent → no priority resolution computed; resolved state renders items in
+   * discovery order without band annotations.
+   */
+  resolver?: {
+    resolve(items: BacklogItem[], options: { refresh: boolean }): Promise<PriorityResolution>;
+  };
 }
 
 /** List immediate subdirectory names of `dir`; `[]` when `dir` is absent. */
@@ -288,6 +305,7 @@ export async function scanInheritedState(
   // bare-array `discover()` (pre-widened callers) yields no waiting items.
   let eligible: EligibleEntry[] = [];
   let waiting: WaitingEntry[] = [];
+  let priorityResolution: PriorityResolution | undefined;
   try {
     const result = await deps.discover();
     const backlog = Array.isArray(result) ? result : result.items;
@@ -299,13 +317,26 @@ export async function scanInheritedState(
         tier: b.tier,
         band: (b as BacklogItem & { band?: PriorityBand }).band,
       }));
+
+    // Infer the priority resolution mode from the items:
+    // - If any eligible item has a band, it's banded mode
+    // - If resolver was provided and items came through it without bands, it's fallback mode
+    // This assumes the resolver (if wired in the WorkSource) already processed the items.
+    if (deps.resolver && eligible.some((e) => e.band)) {
+      // Items have band annotations → banded mode (resolver succeeded)
+      priorityResolution = { mode: 'banded', bands: new Map(eligible.filter((e) => e.band).map((e) => [e.slug, e.band!])) };
+    } else if (deps.resolver && eligible.length > 0) {
+      // Resolver was provided but items have no bands → fallback mode
+      // (this is a heuristic; ideally the resolver would return the mode explicitly)
+      priorityResolution = { mode: 'fallback' };
+    }
   } catch (err) {
     deps.log?.(
       `dashboard: backlog discovery failed (${err instanceof Error ? err.message : String(err)})`,
     );
   }
 
-  return { halted, inProgress, eligible, processed, processedCount: processed.length, waiting };
+  return { halted, inProgress, eligible, processed, processedCount: processed.length, waiting, priorityResolution };
 }
 
 // ── Render helpers ────────────────────────────────────────────────────────────
@@ -355,10 +386,10 @@ export function waitingDetail(verdict: BlockerVerdict): string {
  * IN-PROGRESS > WAITING > ELIGIBLE). Omitted entirely when `waiting` is
  * absent or empty. Zero-state renders every present group at `0`.
  *
- * When `priorityResolution` is provided in banded mode, ELIGIBLE lines gain
- * band annotations (` [${band}]` suffix). When in fallback mode, a single
- * marker line `(priority: chronological fallback)` is added to the ELIGIBLE
- * section instead of per-line annotations.
+ * When `priorityResolution` is provided (either in state or as a parameter) in
+ * banded mode, ELIGIBLE lines gain band annotations (` [${band}]` suffix). When
+ * in fallback mode, a single marker line `(priority: chronological fallback)`
+ * is added to the ELIGIBLE section instead of per-line annotations.
  */
 export function renderDashboard(state: InheritedState, priorityResolution?: PriorityResolution): string {
   const lines: string[] = [];
@@ -391,8 +422,10 @@ export function renderDashboard(state: InheritedState, priorityResolution?: Prio
   lines.push(`ELIGIBLE (${eligible.length})`);
 
   // Render band annotations or fallback mode marker
-  const isInFallbackMode = priorityResolution?.mode === 'fallback';
-  const isBandedMode = priorityResolution?.mode === 'banded';
+  // Use parameter if provided, otherwise use state's resolution
+  const resolution = priorityResolution ?? state.priorityResolution;
+  const isInFallbackMode = resolution?.mode === 'fallback';
+  const isBandedMode = resolution?.mode === 'banded';
   for (const e of eligible) {
     // Only show band annotations in banded mode, not in fallback mode
     const bandAnnotation = isBandedMode ? bandTag(e.band) : '';

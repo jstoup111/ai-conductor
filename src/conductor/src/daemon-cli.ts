@@ -410,7 +410,9 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   // issue refs are fetched from GitHub (ghIssueLabelReader wraps the runner in
   // parseIssueRef → gh argv → JSON label extraction). Passed to localWorkSource for
   // post-gate ordering and to the dashboard for fallback-mode display.
-  const priorityResolver = createPriorityResolver(ghIssueLabelReader(ownerGh), log);
+  // Wrap ownerGh (GhRunner) to match ExecRunner signature (args only, cwd implicit).
+  const execRunnerWrapper = (args: string[]) => ownerGh(args, { cwd: projectRoot });
+  const priorityResolver = createPriorityResolver(ghIssueLabelReader(execRunnerWrapper), log);
 
   const workSource =
     opts.workSource ??
@@ -479,13 +481,15 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       log,
       // ── Halt-reconciliation (ADR-013) real-I/O hooks ──────────────────────
       // FR-1: scan inherited state and render the dashboard to both sinks
-      // (console + daemon.log via `log`) before any dispatch.
+      // (console + daemon.log via `log`) before any dispatch. Pass the priority
+      // resolver so the dashboard can capture and display band annotations / fallback mode.
       renderStartupDashboard: async () => {
         const state = await scanInheritedState({
           worktreeBase,
           processedDir,
           discover: () => discoverTick({ refresh: true }),
           log,
+          resolver: priorityResolver, // Task 13: pass resolver to dashboard
         });
         log(`\n${renderDashboard(state)}`);
       },
