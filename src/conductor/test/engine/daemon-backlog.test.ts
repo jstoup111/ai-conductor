@@ -144,6 +144,65 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
     });
   });
 
+  describe('no Source-Ref ⇒ no gate; outage isolation (Task 12)', () => {
+    function alwaysThrowingResolver(): { resolve: (ref: string) => Promise<never>; calls: number } {
+      const state = {
+        calls: 0,
+        resolve: async (_ref: string): Promise<never> => {
+          state.calls += 1;
+          throw new Error('resolver outage (simulated)');
+        },
+      };
+      return state;
+    }
+
+    it('a spec with no Source-Ref marker at all stays in items with zero resolver calls, even under an always-throwing resolver', async () => {
+      await writeFile(
+        join(dir, '.docs/plans/no-marker-spec.md'),
+        planWithDeps('.docs/stories/no-marker-spec.md'),
+      );
+      await writeFile(join(dir, '.docs/stories/no-marker-spec.md'), APPROVED_STORIES);
+      // Deliberately no `.docs/intake/no-marker-spec.md` at all.
+
+      const resolver = alwaysThrowingResolver();
+
+      const result = await discoverBacklog(dir, undefined, undefined, {
+        treeSource: fsTreeSource(dir),
+        resolver,
+      });
+
+      expect(result.items.map((b) => b.slug)).toContain('no-marker-spec');
+      expect(result.waiting).toEqual([]);
+      expect(resolver.calls).toBe(0);
+    });
+
+    it('a spec with a malformed/unparseable Source-Ref stays in items with zero resolver calls, even under an always-throwing resolver', async () => {
+      await writeFile(
+        join(dir, '.docs/plans/malformed-ref-spec.md'),
+        planWithDeps('.docs/stories/malformed-ref-spec.md'),
+      );
+      await writeFile(join(dir, '.docs/stories/malformed-ref-spec.md'), APPROVED_STORIES);
+      await mkdir(join(dir, '.docs/intake'), { recursive: true });
+      // Not a valid owner/repo#N form — parseIntakeSourceRef rejects it, so the
+      // item carries no sourceRef and the gate is never consulted.
+      await writeFile(
+        join(dir, '.docs/intake/malformed-ref-spec.md'),
+        'Source-Ref: not-a-valid-ref\n',
+      );
+
+      const resolver = alwaysThrowingResolver();
+
+      const result = await discoverBacklog(dir, undefined, undefined, {
+        treeSource: fsTreeSource(dir),
+        resolver,
+      });
+
+      expect(result.items.map((b) => b.slug)).toContain('malformed-ref-spec');
+      expect(result.waiting).toEqual([]);
+      expect(resolver.calls).toBe(0);
+    });
+  });
+
   describe('track propagation (adr-2026-06-29-explore-prd-split-track-in-explore/adr-2026-06-29-track-marker-location)', () => {
     async function seedEligible(slug: string) {
       await writeFile(join(dir, `.docs/plans/${slug}.md`), planWithDeps(`.docs/stories/${slug}.md`));
