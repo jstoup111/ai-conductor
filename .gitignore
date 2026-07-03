@@ -25,3 +25,6 @@ Thumbs.db
 # Tool-local / session state (regenerated locally, not part of the harness)
 .serena/
 .handoffs/
+
+# Local environment (daemon per-worktree namespace, secrets)
+.env

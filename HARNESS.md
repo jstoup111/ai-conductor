@@ -84,14 +84,14 @@ This table is the human-readable mirror of both. When you change one, change all
 
 | Skill/Agent | Recommended Model | Why |
 |---|---|---|
-| engineer | opus | Interactive idea→spec control plane: routing judgment over the registry + driving the real DECIDE skills requires deep reasoning |
-| explore | opus | Divergent discovery: approach trade-offs + product/technical track classification. Front-of-funnel — a cheap model's mistake here cascades into every downstream phase |
-| prd | opus | Product-only PRD authoring: requirements + FRs, deep trade-off reasoning |
+| engineer | fable | Interactive idea→spec control plane: cheaper generation with interactive feedback loop — routes real DECIDE skills without the cost of opus for every iteration |
+| explore | fable | Divergent discovery: approach trade-offs + product/technical track classification. Front-of-funnel with high branching factor — mistake cost is localized; fable's cheaper generation wins |
+| prd | fable | Front-of-funnel PRD authoring: requirements + FRs. Fable handles product writing competently; speed over supreme depth in the early design phase |
 | stories | sonnet | Pattern-following from design doc, structured output |
-| conflict-check | sonnet (S/M), opus (L) | Pairwise comparison is manageable for Sonnet with ≤15 stories; Large needs Opus for subtle contradictions. **Enforced** via `DEFAULT_STEP_TIER_OVERRIDES.conflict_check.L` |
-| plan | sonnet (S/M), opus (L) | Structured task breakdown from stories; Large plans need Opus for task sequencing/dependency reasoning at scale. **Enforced** via `DEFAULT_STEP_TIER_OVERRIDES.plan.L` |
+| conflict-check | sonnet (S/M), fable (L) | Pairwise comparison is manageable for Sonnet with ≤15 stories; Large tier escalates to Fable for subtle contradiction detection. **Enforced** via `DEFAULT_STEP_TIER_OVERRIDES.conflict_check.L` |
+| plan | sonnet (S/M), fable (L) | Structured task breakdown from stories; Large tier escalates to Fable for task sequencing and dependency reasoning at scale. **Enforced** via `DEFAULT_STEP_TIER_OVERRIDES.plan.L` |
 | architecture-diagram | sonnet | Structured output generation from codebase scan — pattern-following |
-| architecture-review | opus | Feasibility, alignment, domain integrity — deep architectural reasoning. The SHIP `--as-built` compliance mode is lighter (code vs APPROVED ADRs) and runs on **sonnet**. |
+| architecture-review | fable | Pre-implementation design feasibility and alignment: fable provides sufficient reasoning for early-stage architecture reviews. The SHIP `--as-built` compliance mode is lighter (code vs APPROVED ADRs) and runs on **sonnet**. |
 | writing-system-tests | sonnet | Generating specs from acceptance criteria — templated work |
 | tdd (RED phase) | sonnet | Writing one test at a time — focused, constrained |
 | tdd (GREEN phase) | sonnet | Writing minimal implementation — constrained scope |

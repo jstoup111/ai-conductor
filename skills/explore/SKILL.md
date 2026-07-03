@@ -5,7 +5,7 @@ enforcement: advisory
 phase: decide
 standalone: true
 requires: []
-model: opus
+model: fable
 ---
 
 ## Purpose

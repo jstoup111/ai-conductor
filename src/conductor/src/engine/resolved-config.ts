@@ -22,14 +22,14 @@ export const DEFAULT_STEP_MODELS: Record<StepName, string> = {
   bootstrap: 'sonnet',     // authors the project CLAUDE.md every later step depends on
   memory: 'haiku',
   assess: 'sonnet',        // dispatches 9 specialists + drives structure verification; synthesis is the opus cto-orchestrator agent
-  explore: 'opus',         // divergent discovery: approach trade-offs + product/technical track classification — mistakes here cascade downstream
-  prd: 'opus',             // product-only PRD authoring — reasoning-heavy
+  explore: 'fable',        // divergent discovery via Fable: approach trade-offs + product/technical track classification — mistakes here cascade downstream
+  prd: 'fable',            // product-only PRD authoring via Fable — reasoning-heavy
   complexity: 'sonnet',    // assigns S/M/L, which gates every downstream model/effort decision — a wrong tier cascades
   stories: 'sonnet',
   conflict_check: 'sonnet',
   plan: 'sonnet',
   architecture_diagram: 'sonnet',
-  architecture_review: 'opus',
+  architecture_review: 'fable', // architectural design validation via Fable
   worktree: 'haiku',
   acceptance_specs: 'sonnet',
   build: 'haiku',
@@ -128,10 +128,10 @@ export const DEFAULT_STEP_TIER_OVERRIDES: Partial<
   },
   plan: {
     S: { effort: 'medium', max_retries: 3 },
-    L: { effort: 'xhigh', model: 'opus' }, // task sequencing/dependency reasoning at scale needs opus
+    L: { effort: 'xhigh', model: 'fable' }, // task sequencing/dependency reasoning at scale needs fable
   },
   conflict_check: {
-    L: { model: 'opus' }, // subtle cross-story contradictions at ≥15 stories need opus
+    L: { model: 'fable' }, // subtle cross-story contradictions at ≥15 stories need fable
   },
 };
 

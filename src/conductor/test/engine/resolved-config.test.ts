@@ -157,6 +157,36 @@ describe('engine/resolved-config', () => {
       const r = resolveStepConfig('rebase', 'SHIP', config);
       expect(r.model).toBe('opus');
     });
+
+    it('user config override beats fable default for explore', () => {
+      // Regression: explore defaults to 'fable', but user config
+      // steps.explore.model should override it
+      const config: HarnessConfig = {
+        steps: { explore: { model: 'sonnet' } },
+      };
+      const r = resolveStepConfig('explore', 'DECIDE', config);
+      expect(r.model).toBe('sonnet');
+    });
+
+    it('user config override beats fable default for prd', () => {
+      // Regression: prd defaults to 'fable', but user config
+      // steps.prd.model should override it
+      const config: HarnessConfig = {
+        steps: { prd: { model: 'opus' } },
+      };
+      const r = resolveStepConfig('prd', 'DECIDE', config);
+      expect(r.model).toBe('opus');
+    });
+
+    it('user config override beats fable default for architecture_review', () => {
+      // Regression: architecture_review defaults to 'fable', but user config
+      // steps.architecture_review.model should override it
+      const config: HarnessConfig = {
+        steps: { architecture_review: { model: 'sonnet' } },
+      };
+      const r = resolveStepConfig('architecture_review', 'DECIDE', config);
+      expect(r.model).toBe('sonnet');
+    });
   });
 
   describe('resolveStepConfig — by_tier', () => {
@@ -193,14 +223,14 @@ describe('engine/resolved-config', () => {
       const rS = resolveStepConfig('plan', 'DECIDE', undefined, { tier: 'S' });
       expect(rS.effort).toBe('medium');
       expect(rS.max_retries).toBe(3);
-      // DEFAULT_STEP_TIER_OVERRIDES.plan.L → effort: xhigh, model: opus
+      // DEFAULT_STEP_TIER_OVERRIDES.plan.L → effort: xhigh, model: fable
       const rL = resolveStepConfig('plan', 'DECIDE', undefined, { tier: 'L' });
       expect(rL.effort).toBe('xhigh');
-      expect(rL.model).toBe('opus');
+      expect(rL.model).toBe('fable');
     });
 
-    it('conflict_check bumps to opus on Large, stays sonnet on S/M', () => {
-      // Regression: HARNESS.md promised "sonnet (S/M), opus (L)" but the engine
+    it('conflict_check bumps to fable on Large, stays sonnet on S/M', () => {
+      // Regression: HARNESS.md promised "sonnet (S/M), fable (L)" but the engine
       // never bumped the model — L ran on sonnet. Now enforced via tier override.
       expect(resolveStepConfig('conflict_check', 'DECIDE', undefined, { tier: 'S' }).model).toBe(
         'sonnet',
@@ -209,14 +239,19 @@ describe('engine/resolved-config', () => {
         'sonnet',
       );
       expect(resolveStepConfig('conflict_check', 'DECIDE', undefined, { tier: 'L' }).model).toBe(
-        'opus',
+        'fable',
       );
     });
 
     it('front-of-funnel discovery steps use reasoning-capable defaults', () => {
       // Under-modeling here cascades into everything downstream.
-      expect(resolveStepConfig('explore', 'DECIDE').model).toBe('opus');
+      expect(resolveStepConfig('explore', 'DECIDE').model).toBe('fable');
       expect(resolveStepConfig('explore', 'DECIDE').effort).toBe('xhigh');
+      expect(resolveStepConfig('prd', 'DECIDE').model).toBe('fable');
+      expect(resolveStepConfig('prd', 'DECIDE').effort).toBe('xhigh');
+      expect(resolveStepConfig('architecture_review', 'DECIDE').model).toBe('fable');
+      expect(resolveStepConfig('architecture_review', 'DECIDE').effort).toBe('high');
+      expect(resolveStepConfig('architecture_review_as_built', 'DECIDE').model).toBe('sonnet');
       expect(resolveStepConfig('complexity', 'DECIDE').model).toBe('sonnet');
       expect(resolveStepConfig('bootstrap', 'UNDERSTAND').model).toBe('sonnet');
     });
@@ -267,6 +302,19 @@ describe('engine/resolved-config', () => {
       const rBuild = resolveStepConfig('build', 'BUILD');
       expect(rBuild.model).toBe('haiku');
       expect(rBuild.effort).toBe('low');
+    });
+  });
+
+  describe('resolveStepConfig — BUILD-step models (regression guard)', () => {
+    it('BUILD steps did not drift after DECIDE→fable migration', () => {
+      // Regression: Task 2 changed DECIDE-step defaults (explore/prd/architecture_review→fable).
+      // This test verifies BUILD-step models remain locked at their original values:
+      // - build (dispatcher) → haiku
+      // - acceptance_specs (test generation) → sonnet
+      // - stories (feature tasks) → sonnet
+      expect(resolveStepConfig('build', 'BUILD').model).toBe('haiku');
+      expect(resolveStepConfig('acceptance_specs', 'BUILD').model).toBe('sonnet');
+      expect(resolveStepConfig('stories', 'DECIDE').model).toBe('sonnet');
     });
   });
 });

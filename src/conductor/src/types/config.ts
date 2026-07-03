@@ -62,7 +62,7 @@ export interface ParallelBranch {
  * registry knows where and how to insert them.
  */
 export interface StepConfig {
-  /** Claude model: alias ("haiku"|"sonnet"|"opus") or full ID. */
+  /** Claude model: alias ("haiku"|"sonnet"|"opus"|"fable") or full ID. */
   model?: string;
 
   /** Claude `/effort` level — sets CLAUDE_CODE_EFFORT_LEVEL for this step. */
