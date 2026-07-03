@@ -79,8 +79,12 @@ function makeRoutingProvider(projectName: string) {
   };
 }
 
-/** A no-op gh stub (no real GitHub calls). */
-const noopGh = async (_args: string[], _opts: { cwd: string }) => ({ stdout: '' });
+/** A no-op gh stub (no real GitHub calls). Answers the owner-identity
+ * resolution call (fail-closed slice B) so authoring can proceed. */
+const noopGh = async (args: string[], _opts: { cwd: string }) => {
+  if (args[0] === 'api' && args[1] === 'user') return { stdout: 'test-owner\n' };
+  return { stdout: '' };
+};
 
 /** Registry record factory. */
 function makeRecord(path: string, name: string) {

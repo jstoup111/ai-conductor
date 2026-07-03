@@ -29,6 +29,8 @@ import { resolveEngineerDir } from './engineer-store.js';
 import { resolveTargetRepo } from './engineer/target.js';
 import { landSpec } from './engineer/land-spec.js';
 import { loadConfig } from './config.js';
+import { readMachineOwnerConfig } from './owner-gate/machine-identity.js';
+import { resolveDaemonOwner } from './owner-gate/identity.js';
 import { openSpecPr } from './engineer/handoff.js';
 import {
   createEngineerWorktree,
@@ -581,15 +583,27 @@ export async function dispatchEngineer(
       }
 
       // Owner-gate (adr-2026-06-30-*): the daemon that later builds this spec
-      // resolves ITS owner from the TARGET repo's HarnessConfig (`spec_owner`),
-      // so stamp the spec with the SAME source here. Load the target repo's
-      // config for `ownerConfig` and thread the in-scope `gh` runner for the
-      // login fallback; landSpec resolves configured spec_owner → gh login →
-      // un-owned (omits the `Owner:` line). A config-load failure degrades to an
-      // empty config (owner falls to gh login) and never crashes the land.
+      // resolves ITS owner from the machine config (`spec_owner`), so stamp the
+      // spec with the SAME source here. Read the machine config for `ownerConfig`
+      // (D1) and thread the in-scope `gh` runner for the login fallback; landSpec
+      // resolves configured spec_owner → gh login → un-owned (omits the `Owner:`
+      // line). Reading from the user config never crashes the land.
       // ADR-1 naming: `ownerConfig`/`specOwner`, never a bare `owner`.
-      const targetConfigResult = await loadConfig(target.canonicalPath);
-      const ownerConfig = targetConfigResult.ok ? targetConfigResult.config : {};
+      const ownerConfig = await readMachineOwnerConfig();
+
+      // Fail-fast identity check (Slice B Story 1): resolve the identity chain
+      // BEFORE entering landSpec. If unresolved, exit immediately with actionable
+      // error and do NOT proceed to landSpec (which would commit a spec with no
+      // owner stamping).
+      const identity = await resolveDaemonOwner(ownerConfig, gh, target.canonicalPath);
+      if (!identity.resolved) {
+        printErr(
+          'Cannot land spec: identity unresolved. Resolve one of:\n' +
+          '  1. Set spec_owner in ~/.ai-conductor/config.yml\n' +
+          '  2. Authenticate via: gh auth login',
+        );
+        return 1;
+      }
 
       let result: Awaited<ReturnType<typeof landSpec>>;
       try {

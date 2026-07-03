@@ -75,11 +75,14 @@ function makeFailFirstProvider(routeTo: string) {
   return { provider: route, route, calls };
 }
 
-/** gh stub: records all calls, returns a PR URL on `pr create`. */
+/** gh stub: records all calls, returns a PR URL on `pr create` and a login for
+ * the owner-identity resolution call (fail-closed slice B: unresolved identity
+ * aborts the idea before authoring). */
 function makeGh(prUrl = 'https://example.invalid/x/pull/1') {
   const calls: string[][] = [];
   const gh = async (args: string[], _opts: { cwd: string }) => {
     calls.push(args);
+    if (args[0] === 'api' && args[1] === 'user') return { stdout: 'test-owner\n' };
     if (args[0] === 'pr' && args[1] === 'create') return { stdout: prUrl };
     return { stdout: '' };
   };

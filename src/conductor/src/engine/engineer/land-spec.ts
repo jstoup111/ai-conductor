@@ -53,10 +53,10 @@ export interface LandSpecTarget {
 }
 
 /**
- * Owner-resolution injectables (ADR-1 identity chain). Both are optional so
- * existing callers are unchanged; Task 17 threads real config + a gh runner from
- * the CLI. When neither resolves an owner, the spec is stamped un-owned (the
- * `Owner:` line is omitted — NOT blank/falsely-owned).
+ * Owner-resolution injectables (ADR-1 identity chain). Both are optional at the
+ * type level; Task 17 threads real config + a gh runner from the CLI. When
+ * neither resolves an owner, landSpec FAILS CLOSED (slice B, D3): it throws
+ * before any write — a spec is never landed un-owned.
  */
 export interface LandSpecOptions {
   /** Config surface for owner resolution (reads `spec_owner`). */
@@ -144,6 +144,27 @@ export async function landSpec(
       );
     }
   }
+
+  // 2a. Identity resolution gate (fail-closed). The authoring owner must be resolvable
+  //     before any write (writeIntakeMarker / git add / commit). This runs early (before
+  //     artifact guards) so identity issues are surfaced first, and unresolved identity
+  //     never reaches any other validation check.
+  const unresolvableGh: GhRunner = async () => {
+    throw new Error('landSpec: no gh runner injected for owner resolution');
+  };
+  const ownerResolution = await resolveDaemonOwner(
+    opts.ownerConfig ?? {},
+    opts.gh ?? unresolvableGh,
+    canonical,
+  );
+  if (!ownerResolution.resolved) {
+    throw new Error(
+      'landSpec: identity is unresolved — spec cannot be authored without a known owner. ' +
+      'To resolve, either: (1) configure `spec_owner` in ~/.ai-conductor/config.yml, or ' +
+      '(2) run `gh auth login` to authenticate.',
+    );
+  }
+  const specOwner = ownerResolution.id;
 
   // 3. Identify candidate artifacts inside the worktree. The AuthoringGuard is rooted
   //    at the registry canonical path (C1 cross-repo isolation, ADR-004); the worktree
@@ -264,24 +285,9 @@ export async function landSpec(
   });
   const branch = headRef.trim();
 
-  // Resolve the authoring owner via the identity chain (configured → gh → unresolved).
-  // Unresolved yields a null owner → un-owned (the `Owner:` line is omitted, NOT
-  // blank/falsely-owned). A gh runner is required only for the login fallback; when none
-  // is injected, an unresolvable stub degrades to unresolved rather than throwing.
-  // Owner is a property of the TARGET repo, so resolve against its canonical path.
-  const unresolvableGh: GhRunner = async () => {
-    throw new Error('landSpec: no gh runner injected for owner resolution');
-  };
-  const ownerResolution = await resolveDaemonOwner(
-    opts.ownerConfig ?? {},
-    opts.gh ?? unresolvableGh,
-    canonical,
-  );
-  const specOwner = ownerResolution.resolved ? ownerResolution.id : null;
-
   // Persist the intake origin + owner alongside the spec (inside the worktree) so both
-  // survive the spec-PR merge and reach the daemon. No-op only when neither sourceRef
-  // nor owner is present (hand-authored, un-owned spec).
+  // survive the spec-PR merge and reach the daemon. The owner is already resolved above
+  // (fail-closed gate at step 2a), so specOwner is guaranteed to be non-null here.
   await writeIntakeMarker(worktreePath, slug, sourceRef, specOwner, guard);
 
   // Stage ONLY the `.docs` tree (never `add -A`): the per-idea worktree holds exactly
