@@ -96,3 +96,74 @@ describe('Task 19: dependency-claim — oldest-unblocked wins', () => {
     expect(stillPending).toContain('acme/app#1');
   });
 });
+
+describe('Task 20: dependency-claim — deferral is free; indeterminate defers; walk continues', () => {
+  it('deferred entry keeps status pending and attempts unchanged after deferral', async () => {
+    const { claimUnblocked } = await loadClaimModule();
+    const A = { ...makeEnvelope('acme/app#1', '2026-07-01T00:00:00.000Z'), attempts: 0 };
+    const B = makeEnvelope('acme/app#2', '2026-07-02T00:00:00.000Z');
+    const queue = makeFakeQueue([A, B]);
+    const resolveDependency = makeResolveDependency({
+      'acme/app#1': { kind: 'blocked', blockers: [{ repo: 'acme/app', number: '9' }] },
+      'acme/app#2': { kind: 'unblocked' },
+    });
+    let ledgerCalls = 0;
+    const ledger = {
+      async transition() {
+        ledgerCalls += 1;
+      },
+    };
+
+    const outcome = await claimUnblocked({ queue, resolveDependency, ledger });
+
+    expect(outcome.kind).toBe('claim');
+    const stillPending = await queue.listPending();
+    const deferred = stillPending.find((e: any) => e.sourceRef === 'acme/app#1');
+    expect(deferred.status).toBe('pending');
+    expect(deferred.attempts).toBe(0);
+    expect(ledgerCalls).toBe(0);
+  });
+
+  it('indeterminate verdict defers, same as blocked', async () => {
+    const { claimUnblocked } = await loadClaimModule();
+    const A = makeEnvelope('acme/app#1', '2026-07-01T00:00:00.000Z');
+    const B = makeEnvelope('acme/app#2', '2026-07-02T00:00:00.000Z');
+    const queue = makeFakeQueue([A, B]);
+    const resolveDependency = makeResolveDependency({
+      'acme/app#1': { kind: 'indeterminate', detail: 'unparseable sourceRef' },
+      'acme/app#2': { kind: 'unblocked' },
+    });
+
+    const outcome = await claimUnblocked({ queue, resolveDependency });
+
+    expect(outcome.kind).toBe('claim');
+    expect(outcome.envelope.sourceRef).toBe('acme/app#2');
+    const stillPending = (await queue.listPending()).map((e: any) => e.sourceRef);
+    expect(stillPending).toContain('acme/app#1');
+  });
+
+  it('[blocked, blocked, unblocked] → third entry returned; earlier two remain unchanged', async () => {
+    const { claimUnblocked } = await loadClaimModule();
+    const A = { ...makeEnvelope('acme/app#1', '2026-07-01T00:00:00.000Z'), attempts: 0 };
+    const B = { ...makeEnvelope('acme/app#2', '2026-07-02T00:00:00.000Z'), attempts: 0 };
+    const C = makeEnvelope('acme/app#3', '2026-07-03T00:00:00.000Z');
+    const queue = makeFakeQueue([A, B, C]);
+    const resolveDependency = makeResolveDependency({
+      'acme/app#1': { kind: 'blocked', blockers: [{ repo: 'acme/app', number: '9' }] },
+      'acme/app#2': { kind: 'indeterminate', detail: 'unparseable' },
+      'acme/app#3': { kind: 'unblocked' },
+    });
+
+    const outcome = await claimUnblocked({ queue, resolveDependency });
+
+    expect(outcome.kind).toBe('claim');
+    expect(outcome.envelope.sourceRef).toBe('acme/app#3');
+    const stillPending = await queue.listPending();
+    const a = stillPending.find((e: any) => e.sourceRef === 'acme/app#1');
+    const b = stillPending.find((e: any) => e.sourceRef === 'acme/app#2');
+    expect(a.status).toBe('pending');
+    expect(a.attempts).toBe(0);
+    expect(b.status).toBe('pending');
+    expect(b.attempts).toBe(0);
+  });
+});
