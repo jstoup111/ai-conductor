@@ -82,47 +82,51 @@ standard implementation, Haiku for mechanical checks.
 
 This table is the human-readable mirror of both. When you change one, change all three.
 
-| Skill/Agent | Recommended Model | Why |
-|---|---|---|
-| engineer | fable | Interactive idea→spec control plane: cheaper generation with interactive feedback loop — routes real DECIDE skills without the cost of opus for every iteration |
-| explore | fable | Divergent discovery: approach trade-offs + product/technical track classification. Front-of-funnel with high branching factor — mistake cost is localized; fable's cheaper generation wins |
-| prd | fable | Front-of-funnel PRD authoring: requirements + FRs. Fable handles product writing competently; speed over supreme depth in the early design phase |
-| stories | sonnet | Pattern-following from design doc, structured output |
-| conflict-check | sonnet (S/M), fable (L) | Pairwise comparison is manageable for Sonnet with ≤15 stories; Large tier escalates to Fable for subtle contradiction detection. **Enforced** via `DEFAULT_STEP_TIER_OVERRIDES.conflict_check.L` |
-| plan | sonnet (S/M), fable (L) | Structured task breakdown from stories; Large tier escalates to Fable for task sequencing and dependency reasoning at scale. **Enforced** via `DEFAULT_STEP_TIER_OVERRIDES.plan.L` |
-| architecture-diagram | sonnet | Structured output generation from codebase scan — pattern-following |
-| architecture-review | fable | Pre-implementation design feasibility and alignment: fable provides sufficient reasoning for early-stage architecture reviews. The SHIP `--as-built` compliance mode is lighter (code vs APPROVED ADRs) and runs on **sonnet**. |
-| writing-system-tests | sonnet | Generating specs from acceptance criteria — templated work |
-| tdd (RED phase) | sonnet | Writing one test at a time — focused, constrained |
-| tdd (GREEN phase) | sonnet | Writing minimal implementation — constrained scope |
-| domain-reviewer | sonnet (<50-line diff), opus (≥50-line diff) | Right-sized by diff size: Sonnet for focused small diffs, Opus for large changes needing cross-boundary judgment |
-| evaluator | sonnet (value objects, pure functions, config, infra) / opus (concurrency, state mutation, security, auth, finance) | Right-sized by batch content |
-| code-review | opus | Multi-dimensional analysis (spec, quality, domain) |
-| debugging | fable | Fable guards root-cause analysis; wrong diagnosis produces band-aid fixes |
-| simplify | sonnet | Pattern matching for duplication and complexity — structured checklist work |
-| pipeline | haiku | State tracking, dispatch orchestration — purely mechanical |
-| finish | haiku | Mechanical checks — run tests, check git status, verify coverage |
-| manual-test | sonnet | Structured validation against stories — pattern-following |
-| prd-audit | opus | Cross-references PRD intent vs shipped implementation across two domains (spec + code) — deep reasoning |
-| remediate | fable | Fable guards failure disposition; false HALT wastes context, wrong routing misroutes rework |
-| rebase | fable | Fable guards semantic merges; wrong merge silently reverts merged work |
-| retro | sonnet | Structured analysis from concrete data; Part C (context efficiency) is checklist-based |
-| pr | sonnet | Diff analysis and structured PR body — templated output |
-| bootstrap | sonnet | Detection and scaffolding — largely mechanical |
-| assess | sonnet (dispatcher), opus (cto-orchestrator synthesis) | The assess skill dispatches 9 specialists and drives structure verification (sonnet); the final cross-referencing of all 9 reports is the `cto-orchestrator` agent on opus |
-| conduct | haiku | Artifact checking and status reporting — mechanical |
-| memory | haiku | Read/write files, update index — mechanical |
-| worktree-manager | haiku | Git operations — mechanical branch/worktree management |
-| cto-security | opus | Deep security analysis requires reasoning about attack vectors |
-| cto-data-integrity | opus | Transaction and race condition analysis requires deep reasoning |
-| cto-dependencies | sonnet | Checklist-based package and license scanning |
-| cto-architecture | opus | Cross-module coherence and coupling analysis requires deep reasoning |
-| cto-duplication | sonnet | Pattern matching across modules — structured checklist work |
-| cto-testing | sonnet | Coverage gap analysis and test quality review — structured |
-| cto-infrastructure | sonnet | Infrastructure config review — checklist-based |
-| cto-observability | sonnet | Error handling and logging pattern review — checklist-based |
-| cto-devex | sonnet | Documentation and tooling review — checklist-based |
-| cto-orchestrator | opus | Cross-referencing 9 reports and prioritizing requires deep reasoning |
+<!-- BEGIN GENERATED: model-selection-table -->
+| Skill/Agent | Model | Effort | Why |
+|---|---|---|---|
+| bootstrap | sonnet | low | Detection and scaffolding — largely mechanical. Authors the project CLAUDE.md every later step depends on. |
+| memory | haiku | low | Read/write files, update index — mechanical. |
+| assess | sonnet | high | The assess skill dispatches 9 specialists and drives structure verification (sonnet); the final cross-referencing of all 9 reports is the cto-orchestrator agent on opus. The orchestrator also sets the env var that cascades effort to subagents. |
+| explore | fable | xhigh | Divergent discovery: approach trade-offs + product/technical track classification. Front-of-funnel with high branching factor — mistake cost is localized; Fable's cheaper generation wins, but mistakes here cascade downstream. |
+| prd | fable | xhigh | Front-of-funnel PRD authoring: requirements + FRs. Fable handles product writing competently; speed over supreme depth in the early design phase. |
+| complexity | sonnet | low | Assigns S/M/L, which gates every downstream model/effort decision — a wrong tier cascades, but the classification itself is low-effort pattern matching. |
+| stories | sonnet | low (S), medium (M), high (L) | Pattern-following from design doc, structured output. |
+| conflict-check | sonnet (S/M), fable (L) | medium | Pairwise comparison is manageable for Sonnet with <=15 stories; Large tier escalates to Fable for subtle contradiction detection. Enforced via DEFAULT_STEP_TIER_OVERRIDES.conflict_check.L. |
+| plan | sonnet (S/M), fable (L) | medium (S), high (M), xhigh (L) | Structured task breakdown from stories; Large tier escalates to Fable for task sequencing and dependency reasoning at scale. Enforced via DEFAULT_STEP_TIER_OVERRIDES.plan.L. |
+| architecture-diagram | sonnet | medium | Structured output generation from codebase scan — pattern-following. |
+| architecture-review | fable | high | Pre-implementation design feasibility and alignment: Fable provides sufficient reasoning for early-stage architecture reviews. |
+| worktree-manager | haiku | low | Git operations — mechanical branch/worktree management. |
+| writing-system-tests | sonnet | medium | Generating specs from acceptance criteria — templated work. |
+| pipeline | haiku | low | Dispatcher; intelligence is in per-task sub-sessions, so the dispatcher itself runs mechanically on the cheapest model. |
+| manual-test | sonnet | medium | Structured validation against stories — pattern-following. |
+| prd-audit | opus | high | Cross-references PRD intent vs shipped implementation across two domains (spec + code) — deep reasoning, FR-by-FR. |
+| architecture-review --as-built | sonnet | medium | The SHIP --as-built compliance mode is lighter than the pre-implementation review (code vs APPROVED ADRs) — pattern-match code vs approved design. |
+| retro | sonnet | medium | Structured analysis from concrete data; Part C (context efficiency) is checklist-based. |
+| rebase | fable | max | Fable guards semantic merges; wrong merge silently reverts merged work. Conflict resolution dispatch reasons over both sides of a hunk. |
+| finish | haiku | low | Mechanical checks — run tests, check git status, verify coverage. |
+| remediate | fable | high | Fable guards failure disposition; false HALT wastes context, wrong routing misroutes rework. Gap reasoning + concrete task planning. |
+| domain-reviewer | sonnet (<50-line diff), opus (≥50-line diff) |  | Right-sized by diff size: Sonnet for focused small diffs, Opus for large changes needing cross-boundary judgment. |
+| evaluator | sonnet (value objects, pure functions, config, infra) / opus (concurrency, state mutation, security, auth, finance) |  | Right-sized by batch content. |
+| code-review | opus |  | Multi-dimensional analysis (spec, quality, domain). |
+| debugging | fable |  | Fable guards root-cause analysis; wrong diagnosis produces band-aid fixes. |
+| simplify | sonnet |  | Pattern matching for duplication and complexity — structured checklist work. |
+| engineer | fable |  | Interactive idea→spec control plane: cheaper generation with interactive feedback loop — routes real DECIDE skills without the cost of opus for every iteration. |
+| conduct | haiku |  | Artifact checking and status reporting — mechanical. |
+| pr | sonnet |  | Diff analysis and structured PR body — templated output. |
+| tdd-red | sonnet |  | Writing one test at a time — focused, constrained. |
+| tdd-green | sonnet |  | Writing minimal implementation — constrained scope. |
+| cto-security | opus |  | Deep security analysis requires reasoning about attack vectors. |
+| cto-data-integrity | opus |  | Transaction and race condition analysis requires deep reasoning. |
+| cto-dependencies | sonnet |  | Checklist-based package and license scanning. |
+| cto-architecture | opus |  | Cross-module coherence and coupling analysis requires deep reasoning. |
+| cto-duplication | sonnet |  | Pattern matching across modules — structured checklist work. |
+| cto-testing | sonnet |  | Coverage gap analysis and test quality review — structured. |
+| cto-infrastructure | sonnet |  | Infrastructure config review — checklist-based. |
+| cto-observability | sonnet |  | Error handling and logging pattern review — checklist-based. |
+| cto-devex | sonnet |  | Documentation and tooling review — checklist-based. |
+| cto-orchestrator | opus |  | Cross-referencing 9 reports and prioritizing requires deep reasoning. |
+<!-- END GENERATED: model-selection-table -->
 
 > **Model availability fallback ladder (#186):** When a pinned model (e.g. Fable for
 > rebase/remediate/debugging) is detected unavailable, the daemon automatically retries
