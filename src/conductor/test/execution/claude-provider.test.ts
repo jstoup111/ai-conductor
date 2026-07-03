@@ -155,6 +155,33 @@ describe('ClaudeProvider', () => {
       expect(result.output).toMatch(/not found/i);
     });
 
+    it('detects model-unavailable from a not_found_error API response', async () => {
+      mockExeca.mockResolvedValue({
+        stdout: '',
+        stderr:
+          'API Error: 404 {"type":"error","error":{"type":"not_found_error","message":"model: claude-bogus"}}',
+        exitCode: 1,
+        failed: true,
+      } as any);
+
+      const result = await provider.invoke(baseOptions);
+      expect(result.modelUnavailable).toBe(true);
+      expect(result.success).toBe(false);
+    });
+
+    it('detects model-unavailable from an "Invalid model name" CLI message', async () => {
+      mockExeca.mockResolvedValue({
+        stdout: '',
+        stderr: 'Invalid model name: bogus',
+        exitCode: 1,
+        failed: true,
+      } as any);
+
+      const result = await provider.invoke(baseOptions);
+      expect(result.modelUnavailable).toBe(true);
+      expect(result.success).toBe(false);
+    });
+
     it('includes --name when sessionName provided', async () => {
       mockExeca.mockResolvedValue({
         stdout: 'ok',

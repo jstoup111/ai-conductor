@@ -7,6 +7,12 @@ const STALE_SESSION_RE = /No conversation found/i;
 // process"). Recovers the same way as a stale session — reset to a fresh
 // session id and retry — so it's folded into the sessionExpired signal.
 const SESSION_IN_USE_RE = /\balready in use\b|\b(session|conversation)\b[^\n]{0,60}\bin use\b/i;
+// Signatures indicating the requested model itself is unavailable — not
+// entitled, deprecated, or unrecognized by the CLI/API — as opposed to a
+// transient rate limit or session issue. Drives the fallback-ladder logic in
+// ModelAvailability.
+const MODEL_UNAVAILABLE_RE =
+  /not_found_error.{0,80}model|model not found|invalid model( name)?/i;
 
 /**
  * Scan stdout lines for a stream-json usage event and extract token counts.
@@ -81,6 +87,7 @@ export class ClaudeProvider implements LLMProvider {
     const rateLimited = RATE_LIMIT_RE.test(output);
     const sessionExpired =
       STALE_SESSION_RE.test(output) || SESSION_IN_USE_RE.test(output);
+    const modelUnavailable = MODEL_UNAVAILABLE_RE.test(output);
     const tokenUsage = parseTokenUsage(stdout);
 
     return {
@@ -89,6 +96,7 @@ export class ClaudeProvider implements LLMProvider {
       exitCode,
       rateLimited: rateLimited || undefined,
       sessionExpired: sessionExpired || undefined,
+      modelUnavailable: modelUnavailable || undefined,
       tokenUsage,
     };
   }
