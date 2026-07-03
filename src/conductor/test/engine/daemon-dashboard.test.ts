@@ -10,6 +10,7 @@ import {
 } from '../../src/engine/daemon-dashboard.js';
 import type { BacklogItem } from '../../src/engine/daemon.js';
 import type { ComplexityTier } from '../../src/types/index.js';
+import type { PriorityResolution } from '../../src/engine/backlog-priority.js';
 
 function item(slug: string, tier?: ComplexityTier): BacklogItem {
   return tier ? { slug, tier } : { slug };
@@ -420,5 +421,133 @@ describe('engine/daemon-dashboard — status output parity (FR-6, Task 17)', () 
     } finally {
       await rm(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe('engine/daemon-dashboard — band annotations and fallback marker (Task 14)', () => {
+  it('ELIGIBLE group band annotations: lines in ELIGIBLE section gain [band] suffixes from item band field', () => {
+    const state: InheritedState = {
+      halted: [],
+      inProgress: [],
+      eligible: [
+        { slug: 'e1', tier: 'S', band: 'high' },
+        { slug: 'e2', band: 'medium' },
+        { slug: 'e3', band: 'low' },
+        { slug: 'e4', band: 'unlabeled' },
+        { slug: 'e5', band: 'no-issue' },
+      ],
+      processed: [],
+      processedCount: 0,
+    };
+    const resolution: PriorityResolution = {
+      mode: 'banded',
+      bands: new Map([
+        ['e1', 'high'],
+        ['e2', 'medium'],
+        ['e3', 'low'],
+        ['e4', 'unlabeled'],
+        ['e5', 'no-issue'],
+      ]),
+    };
+    const out = renderDashboard(state, resolution);
+    expect(out).toContain('e1 [S] [high]');
+    expect(out).toContain('e2 [medium]');
+    expect(out).toContain('e3 [low]');
+    expect(out).toContain('e4 [unlabeled]');
+    expect(out).toContain('e5 [no-issue]');
+  });
+
+  it('Fallback mode marker: when priority resolver mode is fallback, dashboard adds one marker line instead of band suffixes', () => {
+    const state: InheritedState = {
+      halted: [],
+      inProgress: [],
+      eligible: [
+        { slug: 'e1', band: 'high' },
+        { slug: 'e2', band: 'medium' },
+      ],
+      processed: [],
+      processedCount: 0,
+    };
+    const resolution: PriorityResolution = { mode: 'fallback' };
+    const out = renderDashboard(state, resolution);
+    expect(out).toContain('(priority: chronological fallback)');
+    expect(out).toContain('• e1');
+    expect(out).toContain('• e2');
+    // Should NOT contain band annotations when in fallback mode
+    expect(out).not.toContain('[high]');
+    expect(out).not.toContain('[medium]');
+  });
+
+  it('Empty backlog: dashboard renders clean with no band annotations', () => {
+    const state: InheritedState = {
+      halted: [],
+      inProgress: [],
+      eligible: [],
+      processed: [],
+      processedCount: 0,
+    };
+    const resolution: PriorityResolution = {
+      mode: 'banded',
+      bands: new Map(),
+    };
+    const out = renderDashboard(state, resolution);
+    expect(out).toContain('ELIGIBLE (0)');
+    expect(out).toContain('HALTED (0)');
+    expect(out).toContain('IN-PROGRESS (0)');
+    expect(out).toContain('PROCESSED (0)');
+    // Should not contain any band markers or fallback marker
+    expect(out).not.toContain('[high]');
+    expect(out).not.toContain('[medium]');
+    expect(out).not.toContain('chronological fallback');
+  });
+
+  it('Four-group structure preserved: output maintains existing structure with band annotations', () => {
+    const state: InheritedState = {
+      halted: [{ slug: 'h1', reason: 'parked', tier: 'M' }],
+      inProgress: [{ slug: 'ip1', step: 'build', tier: 'S' }],
+      eligible: [{ slug: 'e1', band: 'high' }],
+      processed: [{ slug: 'p1' }],
+      processedCount: 1,
+    };
+    const resolution: PriorityResolution = {
+      mode: 'banded',
+      bands: new Map([['e1', 'high']]),
+    };
+    const out = renderDashboard(state, resolution);
+    // Check all four groups are present with correct structure
+    expect(out).toContain('HALTED (1)');
+    expect(out).toContain('h1');
+    expect(out).toContain('IN-PROGRESS (1)');
+    expect(out).toContain('ip1');
+    expect(out).toContain('ELIGIBLE (1)');
+    expect(out).toContain('e1 [high]');
+    expect(out).toContain('PROCESSED (1)');
+    expect(out).toContain('p1');
+  });
+
+  it('Fallback mode deactivates annotations: when in fallback mode, NO band suffixes shown', () => {
+    const state: InheritedState = {
+      halted: [],
+      inProgress: [],
+      eligible: [
+        { slug: 'e1', band: 'high' },
+        { slug: 'e2', band: 'medium' },
+        { slug: 'e3', band: 'low' },
+      ],
+      processed: [],
+      processedCount: 0,
+    };
+    const resolution: PriorityResolution = { mode: 'fallback' };
+    const out = renderDashboard(state, resolution);
+    // Lines should exist without band annotations
+    expect(out).toContain('• e1');
+    expect(out).toContain('• e2');
+    expect(out).toContain('• e3');
+    // Should have marker line
+    expect(out).toContain('(priority: chronological fallback)');
+    // Should NOT have any band suffixes
+    expect(out).not.toContain('[high]');
+    expect(out).not.toContain('[medium]');
+    expect(out).not.toContain('[low]');
   });
 });
