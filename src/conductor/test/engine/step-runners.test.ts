@@ -922,5 +922,31 @@ TIER: M`,
 
       expect(result.success).toBe(false);
     });
+
+    it('interactive dispatch substitutes a live model when the configured one is dead', async () => {
+      const invokeInteractive = vi.fn().mockResolvedValue(undefined);
+      const provider: LLMProvider = {
+        invoke: vi.fn().mockResolvedValue({ success: true, output: '', exitCode: 0 }),
+        invokeInteractive,
+      };
+      const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
+        modelOverride: 'fable',
+        mode: 'auto',
+      });
+      (runner as unknown as { modelAvailability: { markDead: (m: string) => void } })
+        .modelAvailability.markDead('fable');
+
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      // explore is collaborative (not in AUTONOMOUS_STEPS) → invokeInteractive()
+      await runner.run('explore', emptyState);
+
+      expect(invokeInteractive).toHaveBeenCalledOnce();
+      const opts = invokeInteractive.mock.calls[0][0] as InvokeOptions;
+      expect(opts.model).toBe('opus');
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Downgraded from fable to opus'),
+      );
+      warnSpy.mockRestore();
+    });
   });
 });

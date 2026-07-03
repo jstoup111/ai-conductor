@@ -350,6 +350,12 @@ export class DefaultStepRunner implements StepRunner {
     // advances). Otherwise dispatch print mode — Claude answers once and exits.
     const interactive = this.mode !== 'auto' && INTERACTIVE_STEPS.has(step);
 
+    // Consult the availability cache before dispatch so a model already
+    // known-dead (e.g. downgraded during an earlier autonomous step) isn't
+    // handed to the interactive REPL — effectiveModel() substitutes a live
+    // model and fires the substitution warning itself.
+    const { model: effectiveModel } = this.modelAvailability.effectiveModel(resolved.model);
+
     try {
       await this.provider.invokeInteractive({
         prompt,
@@ -365,7 +371,7 @@ export class DefaultStepRunner implements StepRunner {
         // keeps prompts so the user approves.
         dangerouslySkipPermissions: this.mode === 'auto',
         systemPrompt,
-        model: resolved.model,
+        model: effectiveModel,
         effort: resolved.effort,
       });
       this.sessionStarted = true;
