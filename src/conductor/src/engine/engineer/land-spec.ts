@@ -53,10 +53,10 @@ export interface LandSpecTarget {
 }
 
 /**
- * Owner-resolution injectables (ADR-1 identity chain). Both are optional so
- * existing callers are unchanged; Task 17 threads real config + a gh runner from
- * the CLI. When neither resolves an owner, the spec is stamped un-owned (the
- * `Owner:` line is omitted — NOT blank/falsely-owned).
+ * Owner-resolution injectables (ADR-1 identity chain). Both are optional at the
+ * type level; Task 17 threads real config + a gh runner from the CLI. When
+ * neither resolves an owner, landSpec FAILS CLOSED (slice B, D3): it throws
+ * before any write — a spec is never landed un-owned.
  */
 export interface LandSpecOptions {
   /** Config surface for owner resolution (reads `spec_owner`). */

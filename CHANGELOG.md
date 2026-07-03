@@ -16,6 +16,16 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- **Authoring-side owner stamping now fails closed on unresolved identity (multi-operator
+  ownership slice B, #184).** Every spec-authoring entry point — the engineer loop
+  (`processIdea`), the CLI `engineer land` path, and the `landSpec` primitive — now resolves
+  the operator identity up front and refuses to author when it cannot: no `spec_owner` in the
+  machine config (`~/.ai-conductor/config.yml`) and no `gh` login → the idea aborts with
+  actionable remediation text before any write. Specs are never landed un-owned, so the
+  daemon's owner gate can trust every conduct-authored intake marker. Identity is
+  machine-scoped with a `gh api user` login fallback; the project config is never consulted
+  (anti-leak, D2). Owner stamping preserves `Source-Ref:` on intake markers.
+
 - **Committed `.ai-conductor/config.yml` for the harness repo itself** — sets
   `owner_gate_cutover: 2026-07-02T11:00:00Z` so this repo's daemon (registered
   2026-07-02, issue #174) grandfather-builds specs already on `main` at
