@@ -310,24 +310,23 @@ export async function scanInheritedState(
     const result = await deps.discover();
     const backlog = Array.isArray(result) ? result : result.items;
     waiting = Array.isArray(result) ? [] : result.waiting;
-    eligible = backlog
-      .filter((b) => !haltedSlugs.has(b.slug) && !processedSlugs.has(b.slug))
-      .map((b) => ({
-        slug: b.slug,
-        tier: b.tier,
-        band: (b as BacklogItem & { band?: PriorityBand }).band,
-      }));
+    const backlogItems = backlog.filter((b) => !haltedSlugs.has(b.slug) && !processedSlugs.has(b.slug));
+    eligible = backlogItems.map((b) => ({
+      slug: b.slug,
+      tier: b.tier,
+      band: (b as BacklogItem & { band?: PriorityBand }).band,
+    }));
 
-    // Infer the priority resolution mode from the items:
-    // - If any eligible item has a band, it's banded mode
-    // - If resolver was provided and items came through it without bands, it's fallback mode
-    // This assumes the resolver (if wired in the WorkSource) already processed the items.
-    if (deps.resolver && eligible.some((e) => e.band)) {
-      // Items have band annotations → banded mode (resolver succeeded)
+    // Detect the priority resolution mode from the items (set by orderBacklog in the WorkSource):
+    // - If any eligible item has resolutionMode='banded', it's banded mode with band annotations
+    // - If any eligible item has resolutionMode='fallback', it's fallback mode (resolver threw)
+    // - Otherwise, no resolution mode is set (items are in discovery order)
+    const resolutionMode = backlogItems.find((b) => (b as BacklogItem & { resolutionMode?: string }).resolutionMode)?.['resolutionMode'];
+    if (resolutionMode === 'banded') {
+      // Items have band annotations → banded mode (resolver succeeded in WorkSource)
       priorityResolution = { mode: 'banded', bands: new Map(eligible.filter((e) => e.band).map((e) => [e.slug, e.band!])) };
-    } else if (deps.resolver && eligible.length > 0) {
-      // Resolver was provided but items have no bands → fallback mode
-      // (this is a heuristic; ideally the resolver would return the mode explicitly)
+    } else if (resolutionMode === 'fallback') {
+      // Resolver threw and fell back → fallback mode (no reordering, no band annotations)
       priorityResolution = { mode: 'fallback' };
     }
   } catch (err) {

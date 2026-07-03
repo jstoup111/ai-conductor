@@ -35,6 +35,14 @@ export interface BacklogItem {
    *  (adr-2026-06-29-explore-prd-split-track-in-explore/adr-2026-06-29-track-marker-location). `technical` features skip the `prd` step + `prd-audit` at
    *  SHIP. Absent → the daemon treats it as `product` (back-compat). */
   track?: Track;
+  /** Priority band assigned by the backlog-priority resolver (banded mode only).
+   *  When present, indicates the item was reordered by priority. Absent when
+   *  resolution was off or when the resolver threw (fallback mode). */
+  band?: string;
+  /** Resolution mode used for priority ordering. Indicates whether items were
+   *  reordered (banded), fell back due to resolver error (fallback), or were
+   *  not prioritized (off). Used by the dashboard to render band annotations. */
+  resolutionMode?: 'banded' | 'fallback' | 'off';
 }
 
 /**

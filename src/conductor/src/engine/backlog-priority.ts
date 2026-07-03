@@ -4,7 +4,7 @@ import type { BacklogItem } from './daemon.js';
  * Injectable runner for executing gh CLI commands.
  * Returns the stdout output or throws on failure.
  */
-export type ExecRunner = (args: string[]) => Promise<{ stdout: string }>;
+export type ExecRunner = (args: string[], opts: { cwd: string }) => Promise<{ stdout: string }>;
 
 /**
  * Priority band type for issue classification in daemon backlog scheduling.
@@ -190,9 +190,12 @@ const BAND_RANK: Record<PriorityBand, number> = {
  * @returns New array of items ordered by band, with band annotations (for banded mode)
  */
 export function orderBacklog(items: BacklogItem[], res: PriorityResolution): BacklogItem[] {
-  // For fallback/off modes, return input order
+  // For fallback/off modes, return input order with resolution mode marker
   if (res.mode === 'fallback' || res.mode === 'off') {
-    return items;
+    return items.map((item) => ({
+      ...item,
+      resolutionMode: res.mode,
+    }));
   }
 
   // Banded mode: reorder by band with stable sort
@@ -223,10 +226,11 @@ export function orderBacklog(items: BacklogItem[], res: PriorityResolution): Bac
     return a.originalIndex - b.originalIndex;
   });
 
-  // Return sorted items with band annotation
+  // Return sorted items with band annotation and resolution mode
   return itemsWithBands.map(({ item, band }) => ({
     ...item,
     band,
+    resolutionMode: 'banded',
   }));
 }
 
@@ -279,7 +283,7 @@ export function ghIssueLabelReader(runner: ExecRunner): IssueLabelReader {
         const { owner, repo, number } = parsed;
         const args = ['api', 'repos', owner, repo, 'issues', number];
 
-        const { stdout } = await runner(args);
+        const { stdout } = await runner(args, { cwd: '.' });
         const data = JSON.parse(stdout) as { labels?: Array<{ name: string }> | null };
         const labels = (data.labels ?? []).map((l) => l.name ?? '').filter(Boolean);
         result.set(ref, labels);
