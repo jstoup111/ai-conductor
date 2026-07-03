@@ -124,7 +124,15 @@ This table is the human-readable mirror of both. When you change one, change all
 | cto-devex | sonnet | Documentation and tooling review — checklist-based |
 | cto-orchestrator | opus | Cross-referencing 9 reports and prioritizing requires deep reasoning |
 
-> **Interim fallback for premium pins:** These recovery-step rows (rebase, remediate, debugging) assume Fable availability; until the #186 availability ladder lands, override per-run with the `--model` CLI flag or a `steps.<step>.model` config entry.
+> **Model availability fallback ladder (#186):** When a pinned model (e.g. Fable for
+> rebase/remediate/debugging) is detected unavailable, the daemon automatically retries
+> the next model in `model_fallback_ladder` (default `["fable", "opus", "sonnet"]`)
+> instead of failing the step. Downgrades are per-process — restarting the daemon clears
+> the "known unavailable" cache and retries the top of the ladder — and are logged as
+> `Downgraded from X to Y: reason`. Set `model_fallback_ladder: []` in
+> `.ai-conductor/config.yml` to disable fallback. The `--model` CLI flag and
+> `steps.<step>.model` config still take precedence as an explicit override, and the
+> override itself is checked for availability before use.
 
 When dispatching subagents via the Agent tool, set the `model` parameter to match:
 ```
