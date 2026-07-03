@@ -111,6 +111,54 @@ All three corrupt the finish-time rebase and break the feature's shipped state.
 completion paths: whether you merge locally, push a PR, or keep the branch, the
 staleness proof and force-with-lease discipline must hold.
 
+**Failed Staleness Proof — Foreign Commits Detected**
+
+If the staleness proof fails — i.e., `git merge-base --is-ancestor origin/<branch> ORIG_HEAD`
+exits non-zero AND no reflog "rebase: finish" entry exists — then another writer has pushed
+real commits to `origin/<branch>` after your pre-rebase HEAD. This means `origin/<branch>`
+is NOT an ancestor of your work; it has diverged.
+
+**GATE: STOP immediately — do NOT force-push.** Even if `--force-with-lease` would
+succeed (i.e., the remote head hasn't changed since the last fetch), a passing lease
+does NOT authorize the push when the staleness proof failed. The proof's failure is
+the blocking signal: real, authored work exists on the remote that you do not have.
+Forcing would lose that work.
+
+When this gate triggers:
+- Do NOT attempt any push (not even `--force`, `--force-with-lease`, or `push --set-upstream`)
+- Do NOT pull, rebase, or merge `origin/<branch>`
+- Do NOT create or update a PR
+- Do NOT write `.pipeline/finish-choice`
+- Report the foreign commits plainly to the user:
+  ```
+  git log HEAD..origin/<branch> --oneline
+  ```
+  This shows what work exists on the remote that you don't have.
+- End the skill — the conductor's failed-step handling will HALT for human decision.
+
+**Failed Lease — Remote Changed After Last Fetch**
+
+If `git push --force-with-lease` exits non-zero, the remote has moved. This can happen
+even if the staleness proof passed: the remote was behind at the time of the proof, but
+a concurrent writer pushed new commits between your proof check and your push attempt.
+
+**GATE: STOP immediately — do NOT retry with `--force`.** The lease failure is an
+explicit signal that the remote state changed. Pushing with `--force` (without lease)
+would overwrite the remote writer's work — the exact scenario force-with-lease is
+designed to prevent.
+
+When this gate triggers:
+- Do NOT attempt any push (not `--force`, not `push --set-upstream`)
+- Do NOT create or update a PR
+- Do NOT write `.pipeline/finish-choice`
+- Report the lease failure plainly to the user with the branch and the push command output:
+  ```
+  Branch: <branch>
+  Expected remote head: <expected-oid>
+  Actual remote head: <actual-oid> (obtained from `git ls-remote origin <branch>`)
+  ```
+- End the skill — the conductor's failed-step handling will HALT for human review and decision.
+
 ### 2. Verify Against Stories and ADRs
 
 Cross-reference the completed work against the stories in `.docs/stories/`:
