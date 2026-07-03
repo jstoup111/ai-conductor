@@ -346,3 +346,87 @@ export async function createDependencyLinks(
 
   return results;
 }
+
+// --- Task 25: orchestrator (proposal → confirm → write) ---------------------
+
+/**
+ * Composition of parseDependencyProse + createDependencyLinks with a confirmation gate.
+ *
+ * Steps:
+ *   1. Parse all issues to extract deterministic edges + manual-review prose
+ *   2. Call confirm() callback to ask operator approval
+ *   3. If declined, return proposal without writing any links
+ *   4. If approved, write only the proposed edges (never manual-review) per-edge
+ *      with per-edge error handling, continuing on failure so earlier successes
+ *      are not lost.
+ *   5. Return summary with counts: proposed, manual-review, created, already-present, failed.
+ *
+ * Safe to re-run: edges already linked report already-present and are never mutated.
+ */
+export async function runMigration(deps: {
+  gh: GhRunner;
+  issues: Array<{ ref: string; body: string }>;
+  confirm: () => Promise<boolean>;
+}): Promise<{
+  proposed: Array<{ issue: string; blockedBy: string }>;
+  manualReview: Array<{ issue: string; target: string | null; reason: ManualReviewReason; excerpt: string }>;
+  created: Array<{ issue: string; blockedBy: string }>;
+  alreadyPresent: Array<{ issue: string; blockedBy: string }>;
+  failed: Array<{ issue: string; error: string }>;
+}> {
+  const proposed: Array<{ issue: string; blockedBy: string }> = [];
+  const manualReview: Array<{ issue: string; target: string | null; reason: ManualReviewReason; excerpt: string }> = [];
+  const edges: DependencyEdge[] = [];
+  const created: Array<{ issue: string; blockedBy: string }> = [];
+  const alreadyPresent: Array<{ issue: string; blockedBy: string }> = [];
+  const failed: Array<{ issue: string; error: string }> = [];
+
+  // 1. Parse all issues into edges and manual-review items
+  for (const issue of deps.issues) {
+    const result = parseDependencyProse({ ref: issue.ref, body: issue.body });
+
+    // Collect proposed edges
+    for (const edge of result.edges) {
+      edges.push(edge);
+      proposed.push({ issue: edge.source, blockedBy: edge.target });
+    }
+
+    // Collect manual-review items
+    for (const item of result.manualReview) {
+      manualReview.push({
+        issue: item.source,
+        target: item.target,
+        reason: item.reason,
+        excerpt: item.excerpt,
+      });
+    }
+  }
+
+  // 2. Ask operator for confirmation
+  const confirmed = await deps.confirm();
+
+  // 3. If declined, return proposal without writing
+  if (!confirmed) {
+    return { proposed, manualReview, created, alreadyPresent, failed };
+  }
+
+  // 4. If approved, write each edge with per-edge error handling
+  const cwd = '.'; // Use current directory as default
+  for (const edge of edges) {
+    try {
+      const results = await createDependencyLinks([edge], { gh: deps.gh, cwd });
+      for (const result of results) {
+        if (result.status === 'created') {
+          created.push({ issue: result.edge.source, blockedBy: result.edge.target });
+        } else if (result.status === 'already-present') {
+          alreadyPresent.push({ issue: result.edge.source, blockedBy: result.edge.target });
+        }
+      }
+    } catch (error) {
+      failed.push({ issue: edge.source, error: String(error) });
+    }
+  }
+
+  // 5. Return summary
+  return { proposed, manualReview, created, alreadyPresent, failed };
+}

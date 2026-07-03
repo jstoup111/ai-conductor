@@ -941,7 +941,7 @@ const FIXTURE_ISSUES = [
   {
     ref: 'acme/app#228',
     body:
-      'Umbrella phase task list:\n- [ ] #217 wave A\n- [ ] #218 wave B\n- [ ] #219 wave C\n',
+      'Umbrella task list:\n- [ ] Phase A: #217 implementation\n- [ ] Phase B: #218 testing\n- [ ] Phase C: #219 rollout\n',
   },
   { ref: 'acme/app#236', body: 'Blocked by #999 (that issue happens to be closed).' },
 ];
@@ -956,23 +956,45 @@ function makeFakePlatform(opts: { failing?: Set<string> } = {}) {
     const target = args.find((a) => a.includes('/dependencies/blocked_by'));
     const m = target?.match(/repos\/([^/]+\/[^/]+)\/issues\/(\d+)\/dependencies\/blocked_by/);
     const issueKey = m ? `${m[1]}#${m[2]}` : null;
-    const isWrite = args.includes('-X') && args[args.indexOf('-X') + 1] !== 'GET';
+
+    // Detect write: either -X POST or --method POST
+    const hasXMethod = args.includes('-X') && args[args.indexOf('-X') + 1] === 'POST';
+    const hasMethodFlag = args.includes('--method') && args[args.indexOf('--method') + 1] === 'POST';
+    const isWrite = hasXMethod || hasMethodFlag;
+
     if (!isWrite) {
       const set = issueKey ? links.get(issueKey) ?? new Set() : new Set();
-      return { stdout: JSON.stringify([...set].map((ref) => ({ number: Number(ref.split('#')[1]) }))) };
+      return {
+        stdout: JSON.stringify(
+          [...set].map((ref) => {
+            const [repo, number] = ref.split('#');
+            return { number: Number(number), repository_url: `https://api.github.com/repos/${repo}` };
+          }),
+        ),
+      };
     }
     if (issueKey && failing.has(issueKey)) throw new Error('transient gh failure');
-    const fIdx = args.indexOf('-f');
-    const raw = fIdx >= 0 ? args[fIdx + 1] : '';
-    const addedRef = raw.replace(/^issue=/, '');
-    if (issueKey) {
-      const set = links.get(issueKey) ?? new Set();
-      set.add(addedRef);
-      links.set(issueKey, set);
+
+    // Extract target ref from -f flags: owner=..., repo=..., issue_number=...
+    const ownerIdx = args.findIndex((a) => a.startsWith('owner='));
+    const repoIdx = args.findIndex((a) => a.startsWith('repo='));
+    const issueNumIdx = args.findIndex((a) => a.startsWith('issue_number='));
+
+    if (ownerIdx >= 0 && repoIdx >= 0 && issueNumIdx >= 0) {
+      const owner = args[ownerIdx].replace(/^owner=/, '');
+      const repo = args[repoIdx].replace(/^repo=/, '');
+      const issueNum = args[issueNumIdx].replace(/^issue_number=/, '');
+      const addedRef = `${owner}/${repo}#${issueNum}`;
+
+      if (issueKey) {
+        const set = links.get(issueKey) ?? new Set();
+        set.add(addedRef);
+        links.set(issueKey, set);
+      }
     }
     return { stdout: '{}' };
   };
-  return { gh, calls, links };
+  return { gh, calls, links, failing };
 }
 
 /** Audit helper: every call must be a blocked_by GET or a blocked_by write — nothing else. */
