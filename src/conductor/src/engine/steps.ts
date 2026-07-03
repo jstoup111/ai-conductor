@@ -228,9 +228,10 @@ export const ALL_STEPS: StepDefinition[] = [
  * Steps that are dispatchable via the runner (so they appear in the `StepName`
  * union, STEP_PROMPTS, and the DEFAULT_STEP_* config maps) but are deliberately
  * NOT part of the linear `ALL_STEPS` gate-loop sequence. The conductor invokes
- * them out-of-band — e.g. `remediate` runs only when a `prd_audit` blocks, so
- * it must never occupy an ordered slot the main loop would dispatch
- * unconditionally. They still need a `StepDefinition` so the runner can resolve
+ * them out-of-band — e.g. `remediate` runs only when a SHIP gate blocks
+ * (`prd_audit`, a failed `finish` verification, or a BLOCKED
+ * `architecture_review_as_built`), so it must never occupy an ordered slot the
+ * main loop would dispatch unconditionally. They still need a `StepDefinition` so the runner can resolve
  * a label, phase, and per-step config when dispatching them. Without this entry
  * `getStepDefinition`/`phaseForStep` throw `Unknown step: remediate`, which the
  * daemon catches and turns into a `.pipeline/HALT`.

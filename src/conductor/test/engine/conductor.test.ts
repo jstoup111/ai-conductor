@@ -820,6 +820,269 @@ describe('engine/conductor', () => {
     });
   });
 
+  describe('daemon finish/as-built remediation', () => {
+    // Seed the SHIP tail in the technical-track shape (prd_audit skipped) —
+    // exactly the shape that had NO remediation entry point before the
+    // finish/as-built hook, because the /remediate dispatch lived only inside
+    // the prd_audit blocking handler. `rebase` is seeded skipped so the tail
+    // never invokes real git against the temp dir (rebase is engine-managed
+    // and daemon-gated).
+    async function seedShipTail(overrides: Record<string, string> = {}): Promise<void> {
+      const res = await readState(statePath);
+      const state = (res.ok ? res.value : {}) as Record<string, unknown>;
+      for (const s of ALL_STEPS) {
+        if (s.name === 'finish') break;
+        state[s.name] = 'done';
+      }
+      Object.assign(
+        state,
+        {
+          complexity_tier: 'L',
+          feature_desc: 'feat',
+          manual_test: 'skipped',
+          prd_audit: 'skipped',
+          retro: 'skipped',
+          architecture_review_as_built: 'skipped',
+          rebase: 'skipped',
+        },
+        overrides,
+      );
+      await writeState(statePath, state as unknown as ConductState);
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
+      );
+    }
+
+    function remediationPlanFile(plan: unknown): Promise<void> {
+      return writeFile(join(dir, '.pipeline/remediation.json'), JSON.stringify(plan));
+    }
+
+    it('finish verification failure routes to build via /remediate, then ships on the healed re-run', async () => {
+      await seedShipTail();
+      // First finish refuses (no finish-choice — the skill found real test
+      // failures). /remediate plans a build fix; after build re-runs, finish
+      // writes its choice and the feature ships without a HALT.
+      let buildFixed = false;
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          if (step === 'build') {
+            buildFixed = true;
+            await writeFile(
+              join(dir, '.pipeline/task-status.json'),
+              JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
+            );
+          } else if (step === 'remediate') {
+            await remediationPlanFile({
+              dispositions: [
+                {
+                  id: 'test:loop-intake',
+                  disposition: 'build',
+                  category: null,
+                  rationale: 'tests lag the fail-closed identity contract',
+                  tasks: [{ id: 'rem-1', title: 'update loop-intake.test.ts to inject ownerConfig' }],
+                },
+              ],
+            });
+          } else if (step === 'finish' && buildFixed) {
+            await writeFile(join(dir, '.pipeline/finish-choice'), 'keep\n');
+          }
+          return { success: true };
+        }),
+      };
+      const kickbacks: Array<{ from: string; to: string }> = [];
+      events.on('kickback', (e) => {
+        if (e.type === 'kickback') kickbacks.push({ from: e.from, to: e.to });
+      });
+      let halted = false;
+      events.on('loop_halt', () => {
+        halted = true;
+      });
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        fromStep: 'finish',
+        maxRetries: 1,
+        escalateBuildFailure: async () => ({}),
+      });
+
+      await conductor.run();
+
+      expect(kickbacks).toEqual([{ from: 'finish', to: 'build' }]);
+      // The remediate dispatch names the finish gap artifact.
+      const remediateReasons = vi
+        .mocked(runner.run)
+        .mock.calls.filter((c) => c[0] === 'remediate')
+        .map((c) => (c[2] as { retryReason?: string } | undefined)?.retryReason ?? '');
+      expect(remediateReasons.some((r) => r.includes('.pipeline/test-failures.md'))).toBe(true);
+      // BUILD received the concrete task + the finish-verification hint source.
+      const buildReasons = vi
+        .mocked(runner.run)
+        .mock.calls.filter((c) => c[0] === 'build')
+        .map((c) => (c[2] as { retryReason?: string } | undefined)?.retryReason ?? '');
+      expect(
+        buildReasons.some(
+          (r) =>
+            r.includes('update loop-intake.test.ts to inject ownerConfig') &&
+            r.includes('finish-verification') &&
+            r.includes('.pipeline/test-failures.md'),
+        ),
+      ).toBe(true);
+      expect(halted).toBe(false);
+      const result = await readState(statePath);
+      expect(result.ok && result.value.finish).toBe('done');
+    });
+
+    it('finish remediation HALTs for a human category without rebuilding', async () => {
+      await seedShipTail();
+      const calls: StepName[] = [];
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          calls.push(step);
+          if (step === 'remediate') {
+            await remediationPlanFile({
+              dispositions: [
+                {
+                  id: 'test:wallet-flows',
+                  disposition: 'halt',
+                  category: 'architectural-clarity',
+                  rationale: 'failure exposes an ambiguous aggregate boundary',
+                  tasks: [],
+                },
+              ],
+            });
+          }
+          return { success: true }; // finish never writes finish-choice
+        }),
+      };
+      let halted = false;
+      events.on('loop_halt', () => {
+        halted = true;
+      });
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        fromStep: 'finish',
+        maxRetries: 1,
+        escalateBuildFailure: async () => ({}),
+      });
+
+      await conductor.run();
+
+      expect(halted).toBe(true);
+      const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+      expect(halt).toMatch(/finish halted: needs human DECIDE/);
+      expect(halt).toMatch(/test:wallet-flows \(architectural-clarity/);
+      expect(calls.filter((s) => s === 'build')).toHaveLength(0);
+    });
+
+    it('as-built review failure routes via /remediate and HALTs at the remediation cap', async () => {
+      // A perpetually-BLOCKED as-built review: routed to build twice (the
+      // remediation budget), then the generic HALT — never an unbounded loop.
+      await seedShipTail({ architecture_review_as_built: 'pending' });
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          if (step === 'architecture_review_as_built') {
+            return { success: false, error: 'as-built review BLOCKED: ADR violated' };
+          }
+          if (step === 'build') {
+            await writeFile(
+              join(dir, '.pipeline/task-status.json'),
+              JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
+            );
+          } else if (step === 'remediate') {
+            await remediationPlanFile({
+              dispositions: [
+                {
+                  id: 'adr-2026-07-03-example',
+                  disposition: 'build',
+                  category: null,
+                  rationale: 'record written to the wrong branch',
+                  tasks: [{ id: 'rem-1', title: 'move the write into the finish flow' }],
+                },
+              ],
+            });
+          }
+          return { success: true };
+        }),
+      };
+      const kickbacks: Array<{ from: string; to: string }> = [];
+      events.on('kickback', (e) => {
+        if (e.type === 'kickback') kickbacks.push({ from: e.from, to: e.to });
+      });
+      let halted = false;
+      events.on('loop_halt', () => {
+        halted = true;
+      });
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        fromStep: 'architecture_review_as_built',
+        maxRetries: 1,
+        escalateBuildFailure: async () => ({}),
+      });
+
+      await conductor.run();
+
+      expect(
+        kickbacks.filter((k) => k.from === 'architecture_review_as_built' && k.to === 'build')
+          .length,
+      ).toBe(2);
+      expect(halted).toBe(true);
+      const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+      expect(halt).toMatch(/failed in auto mode \(retries exhausted\)/);
+    });
+
+    it('non-daemon auto mode does NOT dispatch /remediate on a finish failure', async () => {
+      await seedShipTail();
+      const calls: StepName[] = [];
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          calls.push(step);
+          return { success: true }; // finish never writes finish-choice
+        }),
+      };
+      let halted = false;
+      events.on('loop_halt', () => {
+        halted = true;
+      });
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: false,
+        verifyArtifacts: true,
+        fromStep: 'finish',
+        maxRetries: 1,
+      });
+
+      await conductor.run();
+
+      expect(calls).not.toContain('remediate');
+      expect(halted).toBe(true);
+      const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+      expect(halt).toMatch(/step 'finish' failed in auto mode/);
+    });
+  });
+
   it('auto mode auto-skips an advisory-step failure and continues', async () => {
     // `memory` is advisory; it fails. In auto mode it auto-skips so the run isn't
     // blocked, and no recovery prompt is shown.

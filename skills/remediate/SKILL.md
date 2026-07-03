@@ -1,6 +1,6 @@
 ---
 name: remediate
-description: "Use at SHIP when prd-audit (or the as-built architecture review) blocks. Reasons over the blocking gaps and emits per-gap remediation dispositions + concrete tasks, routing each to the right step (build/acceptance_specs/architecture_review/plan) — and HALTs only for architectural-clarity or product-scope gaps that need a human."
+description: "Use at SHIP when prd-audit, the as-built architecture review, or the finish verification blocks. Reasons over the blocking gaps and emits per-gap remediation dispositions + concrete tasks, routing each to the right step (build/acceptance_specs/architecture_review/plan) — and HALTs only for architectural-clarity or product-scope gaps that need a human."
 enforcement: gating
 phase: ship
 standalone: true
@@ -10,10 +10,10 @@ model: fable
 
 ## Purpose
 
-Turns a **blocking SHIP audit into action**. When `prd-audit` (or `architecture-review --as-built`)
-reports gaps the daemon would otherwise HALT on, this skill reasons over each blocking gap and
-decides *how the daemon should proceed* — autonomously where it can, human-in-the-loop only where it
-must.
+Turns a **blocking SHIP gate into action**. When `prd-audit`, `architecture-review --as-built`, or
+the `finish` verification reports gaps the daemon would otherwise HALT on, this skill reasons over
+each blocking gap and decides *how the daemon should proceed* — autonomously where it can,
+human-in-the-loop only where it must.
 
 The daemon should be autonomous. So the default is to **remediate**: translate each gap into
 concrete, file-scoped work and route it back to the right SDLC step. A **HALT** is reserved for the
@@ -34,12 +34,17 @@ kicks back to does that.
 
 ### 1. Load Input
 
-Read the blocking gaps and their per-gap evidence from whichever audit blocked:
+Read the blocking gaps and their per-gap evidence from whichever gate blocked (the conductor's
+dispatch context names it):
 - `.pipeline/prd-audit.md` — the per-FR verdict table + Per-FR Detail (verdict, gap-class,
   `file:line` evidence). Blocking rows are the `FR-N` rows that are `MISSING`/`PARTIAL`/`DIVERGED`
   and **not** `ACCEPTED`.
 - `.pipeline/architecture-review-as-built.md` — present when the as-built compliance gate blocked
   (verdict `BLOCKED`, with the violated APPROVED ADR(s) and evidence).
+- `.pipeline/test-failures.md` — present when the `finish` verification found real (non-flake)
+  test failures: per failing file, the tests, one-line reasons, and finish's read on the cause.
+  If finish left no artifact (older skill, or it crashed), fall back to running the failing part
+  of the suite yourself to gather the evidence.
 
 Consider **only the blocking gaps**. Each gap already carries `file:line` evidence — use it; do not
 re-audit from scratch.
@@ -72,6 +77,11 @@ Judgment rules:
   `build`.
 - A gap that is an `impl-gap` in the audit is almost always `build` (or `acceptance_specs` when the
   real miss is coverage).
+- **Finish test failures are almost always `build`.** Decide what the failure means first: a test
+  that lags an **intentional contract change** made on this branch gets tasks that update the
+  TEST to the new contract — never a task that weakens the production code to appease the old
+  test. A test that reveals a real implementation bug gets impl-fix tasks. Reserve `halt` for a
+  failure that evidences a genuine design ambiguity, not mere uncertainty about the fix.
 - An `intended-drift` is `halt: product-scope` **only** if it reflects unplanned product
   functionality; if it's a fixable code/ADR mismatch with a clear correct answer, it is `build` or
   `architecture_review`.
@@ -109,7 +119,7 @@ The conductor reads this file to route, so the shape is exact:
 ```
 
 Field rules:
-- `id` — the blocking FR id (`FR-N`) or, for an as-built finding, the violated ADR id (its filename stem, e.g. `adr-2026-06-29-rate-limit-strategy`).
+- `id` — the blocking FR id (`FR-N`); for an as-built finding, the violated ADR id (its filename stem, e.g. `adr-2026-06-29-rate-limit-strategy`); for a finish test failure, `test:<failing file stem>` (e.g. `test:loop-intake`).
 - `disposition` — one of `build` | `acceptance_specs` | `architecture_review` | `plan` | `halt`.
 - `category` — **only** when `disposition == "halt"`: `architectural-clarity` | `product-scope`.
   Otherwise `null`.

@@ -154,6 +154,13 @@ already shipped. Ineligible features are skipped with a logged reason. A feature
 that can't converge is left in its worktree (`.pipeline/HALT`) for you; the pool
 keeps going.
 
+A blocking SHIP gate tries to self-heal before it halts: the conductor dispatches the
+`/remediate` planner over the gate's gap artifact — a blocking prd-audit
+(`.pipeline/prd-audit.md`), a failed finish verification (`.pipeline/test-failures.md`), or a
+BLOCKED as-built architecture review (`.pipeline/architecture-review-as-built.md`) — and routes
+each fixable gap back to the right step with concrete tasks, reserving the HALT for gaps that
+genuinely need a human decision (architectural clarity or product scope).
+
 On any irrecoverable daemon HALT that stranded committed work — a build/gating-step failure, a
 prd-audit gap needing human DECIDE, the kickback/stuck-gate caps, or an unexpected error (rebase
 conflicts excluded) — when the branch has at least one commit, the daemon pushes it and opens a

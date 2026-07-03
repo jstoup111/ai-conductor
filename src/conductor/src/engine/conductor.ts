@@ -526,6 +526,46 @@ export class Conductor {
     }
   }
 
+  /**
+   * Dispatch the /remediate planner over a blocking SHIP gate and translate its
+   * structured plan into a loop decision. One planner serves every gate — only
+   * the dispatch context and the hint's gap-artifact pointer differ. Mixed
+   * plans route the autonomous fixes first (the human gaps re-surface on the
+   * next gate pass and halt then). A missing/stale/unusable plan is `none` —
+   * the caller falls through to its deterministic fallback or the generic HALT.
+   */
+  private async planRemediation(
+    state: ConductState,
+    steps: StepDefinition[],
+    dispatchContext: string,
+    hintSource: { source: string; evidenceFile: string },
+  ): Promise<
+    | { kind: 'route'; target: StepName; hint: string; evidence: string }
+    | { kind: 'halt'; detail: string }
+    | { kind: 'none' }
+  > {
+    await this.stepRunner.run('remediate', state, { retryReason: dispatchContext });
+    const plan = await readRemediationPlan(this.projectRoot, state.session_started_at);
+    if (!plan) return { kind: 'none' };
+    const fixes = plan.gaps.filter((g) => g.disposition !== 'halt');
+    const halts = plan.gaps.filter((g) => g.disposition === 'halt');
+    if (fixes.length > 0) {
+      return {
+        kind: 'route',
+        target: earliestRemediationTarget(fixes, steps),
+        hint: buildRemediationHint(fixes, hintSource.source, hintSource.evidenceFile),
+        evidence: fixes.map((g) => `${g.id}→${g.disposition}`).join('; '),
+      };
+    }
+    if (halts.length > 0) {
+      return {
+        kind: 'halt',
+        detail: halts.map((g) => `${g.id} (${g.category}: ${g.rationale})`).join('; '),
+      };
+    }
+    return { kind: 'none' };
+  }
+
   /** True when a `.pipeline/` terminal marker (DONE / HALT) exists on disk. */
   private async markerExists(relPath: string): Promise<boolean> {
     try {
@@ -1199,60 +1239,49 @@ export class Conductor {
               // deterministic classifyPrdAuditGaps routing when no usable plan is
               // produced or the remediation budget is exhausted.
               if (remediationRounds < MAX_KICKBACKS_PER_GATE) {
-                await this.stepRunner.run('remediate', state, {
-                  retryReason:
-                    'A blocking prd-audit is at .pipeline/prd-audit.md (an as-built ' +
+                const outcome = await this.planRemediation(
+                  state,
+                  steps,
+                  'A blocking prd-audit is at .pipeline/prd-audit.md (an as-built ' +
                     'review may be at .pipeline/architecture-review-as-built.md). Plan ' +
                     'remediation per the /remediate skill and write ' +
                     '.pipeline/remediation.json.',
-                });
-                const plan = await readRemediationPlan(
-                  this.projectRoot,
-                  state.session_started_at,
+                  { source: 'prd-audit', evidenceFile: '.pipeline/prd-audit.md' },
                 );
-                if (plan) {
-                  const fixes = plan.gaps.filter((g) => g.disposition !== 'halt');
-                  const halts = plan.gaps.filter((g) => g.disposition === 'halt');
-                  if (fixes.length > 0) {
-                    remediationRounds++;
-                    const target = earliestRemediationTarget(fixes, steps);
-                    await this.events.emit({
-                      type: 'kickback',
-                      from: 'prd_audit',
-                      to: target,
-                      evidence: fixes.map((g) => `${g.id}→${g.disposition}`).join('; '),
-                      count: remediationRounds,
-                    });
-                    pendingRetryHints.set(target, buildRemediationHint(fixes));
-                    const nav = navigateBack(state, target, steps);
-                    state = nav.state;
-                    (state as Record<string, unknown>).prd_audit = 'stale';
-                    await writeState(this.stateFilePath, state);
-                    i = nav.index - 1; // for-loop i++ lands on the target step
-                    continue;
-                  }
-                  if (halts.length > 0) {
-                    const reason =
-                      'prd-audit halted: needs human DECIDE — ' +
-                      halts
-                        .map((g) => `${g.id} (${g.category}: ${g.rationale})`)
-                        .join('; ');
-                    await mkdir(join(this.projectRoot, '.pipeline'), {
-                      recursive: true,
-                    }).catch(() => {});
-                    await writeFile(
-                      join(this.projectRoot, LOOP_HALT_MARKER),
-                      reason + '\n',
-                      'utf-8',
-                    ).catch(() => {
-                      /* best-effort marker */
-                    });
-                    await writeState(this.stateFilePath, state);
-                    const prUrl = await this.surfaceRemediationPr(reason);
-                    await this.events.emit({ type: 'loop_halt', reason, prUrl });
-                    process.off('SIGINT', sigintHandler);
-                    return;
-                  }
+                if (outcome.kind === 'route') {
+                  remediationRounds++;
+                  await this.events.emit({
+                    type: 'kickback',
+                    from: 'prd_audit',
+                    to: outcome.target,
+                    evidence: outcome.evidence,
+                    count: remediationRounds,
+                  });
+                  pendingRetryHints.set(outcome.target, outcome.hint);
+                  const nav = navigateBack(state, outcome.target, steps);
+                  state = nav.state;
+                  (state as Record<string, unknown>).prd_audit = 'stale';
+                  await writeState(this.stateFilePath, state);
+                  i = nav.index - 1; // for-loop i++ lands on the target step
+                  continue;
+                }
+                if (outcome.kind === 'halt') {
+                  const reason = 'prd-audit halted: needs human DECIDE — ' + outcome.detail;
+                  await mkdir(join(this.projectRoot, '.pipeline'), {
+                    recursive: true,
+                  }).catch(() => {});
+                  await writeFile(
+                    join(this.projectRoot, LOOP_HALT_MARKER),
+                    reason + '\n',
+                    'utf-8',
+                  ).catch(() => {
+                    /* best-effort marker */
+                  });
+                  await writeState(this.stateFilePath, state);
+                  const prUrl = await this.surfaceRemediationPr(reason);
+                  await this.events.emit({ type: 'loop_halt', reason, prUrl });
+                  process.off('SIGINT', sigintHandler);
+                  return;
                 }
                 // No usable remediation plan → fall through to the fallback below.
               }
@@ -1314,6 +1343,78 @@ export class Conductor {
               await this.events.emit({ type: 'loop_halt', reason, prUrl });
               process.off('SIGINT', sigintHandler);
               return;
+            }
+
+            // Finish/as-built remediation (daemon only): give the same /remediate
+            // planner that routes a blocking prd_audit a shot at a failed finish
+            // verification or a BLOCKED as-built review before the generic HALT.
+            // The technical track skips prd_audit entirely, so without this hook
+            // these gates dead-end in a HALT even when the gap is routable (e.g.
+            // collateral test failures after an intentional contract change).
+            if (
+              this.daemon &&
+              (step.name === 'finish' || step.name === 'architecture_review_as_built') &&
+              remediationRounds < MAX_KICKBACKS_PER_GATE
+            ) {
+              const finishGate = step.name === 'finish';
+              const outcome = await this.planRemediation(
+                state,
+                steps,
+                finishGate
+                  ? `The finish step's fresh verification failed: ${lastError}. ` +
+                      'Failing-test evidence, when the finish skill recorded it, is at ' +
+                      '.pipeline/test-failures.md. Plan remediation per the /remediate ' +
+                      'skill and write .pipeline/remediation.json.'
+                  : 'A blocking as-built architecture review is at ' +
+                      '.pipeline/architecture-review-as-built.md. Plan remediation per ' +
+                      'the /remediate skill and write .pipeline/remediation.json.',
+                finishGate
+                  ? { source: 'finish-verification', evidenceFile: '.pipeline/test-failures.md' }
+                  : {
+                      source: 'as-built architecture review',
+                      evidenceFile: '.pipeline/architecture-review-as-built.md',
+                    },
+              );
+              if (outcome.kind === 'route') {
+                remediationRounds++;
+                await this.events.emit({
+                  type: 'kickback',
+                  from: step.name,
+                  to: outcome.target,
+                  evidence: outcome.evidence,
+                  count: remediationRounds,
+                });
+                pendingRetryHints.set(outcome.target, outcome.hint);
+                const nav = navigateBack(state, outcome.target, steps);
+                state = nav.state;
+                // markDownstreamStale only restages `done` steps; this gate is
+                // `failed` here, so restage it explicitly to re-run on the tail.
+                (state as Record<string, unknown>)[step.name] = 'stale';
+                await writeState(this.stateFilePath, state);
+                i = nav.index - 1; // for-loop i++ lands on the target step
+                continue;
+              }
+              if (outcome.kind === 'halt') {
+                const reason =
+                  `${finishGate ? 'finish' : 'as-built architecture review'} halted: ` +
+                  `needs human DECIDE — ${outcome.detail}`;
+                await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(
+                  () => {},
+                );
+                await writeFile(
+                  join(this.projectRoot, LOOP_HALT_MARKER),
+                  reason + '\n',
+                  'utf-8',
+                ).catch(() => {
+                  /* best-effort marker */
+                });
+                await writeState(this.stateFilePath, state);
+                const prUrl = await this.surfaceRemediationPr(reason);
+                await this.events.emit({ type: 'loop_halt', reason, prUrl });
+                process.off('SIGINT', sigintHandler);
+                return;
+              }
+              // No usable remediation plan → fall through to the generic HALT below.
             }
 
             // Unattended hard failure on a gating/structural step. Write a HALT
@@ -2260,15 +2361,21 @@ export function earliestRemediationTarget(
  * The retryReason handed to the remediation target step — names each gap, its
  * disposition, and its concrete tasks, and tells the agent to make the changes
  * even though the task list may show complete (the as-built code is re-audited).
+ * `source`/`evidenceFile` name the gate that blocked and its gap artifact so the
+ * same hint serves prd-audit, finish-verification, and as-built remediation.
  */
-export function buildRemediationHint(fixes: RemediationGap[]): string {
+export function buildRemediationHint(
+  fixes: RemediationGap[],
+  source = 'prd-audit',
+  evidenceFile = '.pipeline/prd-audit.md',
+): string {
   const lines = fixes.map((g) => {
     const tasks = g.tasks.length ? ` Tasks: ${g.tasks.map((t) => t.title).join('; ')}` : '';
     return `- ${g.id} [${g.disposition}]: ${g.rationale}.${tasks}`;
   });
   return (
-    'Remediating blocking prd-audit gaps (see .pipeline/remediation.json and ' +
-    '.pipeline/prd-audit.md). The task list may already show complete, but the ' +
+    `Remediating blocking ${source} gaps (see .pipeline/remediation.json and ` +
+    `${evidenceFile}). The task list may already show complete, but the ` +
     'following are NOT satisfied — make the code/spec changes and commit them; ' +
     'the as-built code is re-audited after this step:\n' +
     lines.join('\n')

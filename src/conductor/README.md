@@ -150,10 +150,30 @@ whenever the DECIDE-phase review was skipped for any reason (config-disable / `w
 APPROVED ADRs there is nothing to audit, so running it would only produce a non-clean verdict the
 loop could neither pass cleanly nor halt on.
 
-**Daemon prd-audit routing (gap-class aware).** In an interactive run a blocking `prd_audit`
-escalates to the recovery menu, where the human picks where to route. In a **daemon** run
-(`mode: 'auto'`, `daemon: true`) there is no human, so the conductor routes by the audit's
-`Gap-class` column (`classifyPrdAuditGaps`, `engine/artifacts.ts`):
+**Agentic remediation (`/remediate`) — all three SHIP gates.** In a **daemon** run
+(`mode: 'auto'`, `daemon: true`) a blocking SHIP gate first dispatches the `/remediate`
+planner (`Conductor.planRemediation`), which reasons over the gate's gap artifact and writes
+`.pipeline/remediation.json` (one disposition per blocking gap). The conductor routes the
+autonomous dispositions to the earliest target step (`navigateBack` + a per-gap task hint in
+the step's `retryReason`) and HALTs only for `halt` dispositions (`architectural-clarity` /
+`product-scope` — the two genuinely-human categories). Rounds are bounded by
+`MAX_KICKBACKS_PER_GATE`; an unusable/absent plan falls through to the gate's deterministic
+fallback (prd_audit) or the generic HALT. The three entry points and their gap artifacts:
+
+- **`prd_audit`** — `.pipeline/prd-audit.md` (falls back to the gap-class routing below).
+- **`finish` verification failure** — `.pipeline/test-failures.md`, written by the finish
+  skill when a fresh suite has real (flake-checked) failures; the planner distinguishes
+  tests lagging an intentional contract change (update the tests) from real impl bugs.
+- **`architecture_review_as_built` BLOCKED** — `.pipeline/architecture-review-as-built.md`.
+
+The finish/as-built hooks matter most on the **technical track**, which skips `prd_audit`
+entirely — before them, those gates dead-ended in a `failed in auto mode` HALT even when the
+gap was routable.
+
+**Daemon prd-audit fallback routing (gap-class aware).** In an interactive run a blocking
+`prd_audit` escalates to the recovery menu, where the human picks where to route. In a daemon
+run with no usable `/remediate` plan (or an exhausted remediation budget), the conductor
+routes by the audit's `Gap-class` column (`classifyPrdAuditGaps`, `engine/artifacts.ts`):
 
 - **Every blocking row is `impl-gap`** → the daemon owns BUILD, so it *self-heals*: emits a
   `kickback` (`prd_audit → build`), `navigateBack`s to `build`, rebuilds, and re-audits. This is
