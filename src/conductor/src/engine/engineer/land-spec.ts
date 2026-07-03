@@ -39,7 +39,7 @@ import { promisify } from 'node:util';
 import { TargetPathMissingError } from './target.js';
 import { AuthoringGuard } from './authoring-guard.js';
 import { slugify } from './authoring.js';
-import { isStoriesApproved, hasDraftAdr, parseComplexityTier, parseTrack } from '../artifacts.js';
+import { isStoriesApproved, hasDraftAdr, parseComplexityTier, parseTrack, planStem } from '../artifacts.js';
 import { writeIntakeMarker } from './intake-marker.js';
 import { resolveDaemonOwner, type OwnerConfig, type GhRunner } from '../owner-gate/identity.js';
 
@@ -288,7 +288,8 @@ export async function landSpec(
   // Persist the intake origin + owner alongside the spec (inside the worktree) so both
   // survive the spec-PR merge and reach the daemon. The owner is already resolved above
   // (fail-closed gate at step 2a), so specOwner is guaranteed to be non-null here.
-  await writeIntakeMarker(worktreePath, slug, sourceRef, specOwner, guard);
+  const markerSlug = planStem(planFile);
+  await writeIntakeMarker(worktreePath, markerSlug, sourceRef, specOwner, guard);
 
   // Stage ONLY the `.docs` tree (never `add -A`): the per-idea worktree holds exactly
   // this idea's artifacts, so the commit is idea-scoped and no foreign untracked file
