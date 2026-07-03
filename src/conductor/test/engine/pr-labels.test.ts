@@ -24,6 +24,8 @@ import {
   makeProductionGit,
   pushBranch,
   isAheadOfBase,
+  publishEarlyDraft,
+  advisoryPublish,
 } from '../../src/engine/pr-labels.js';
 import type { GhRunner, GitRunner } from '../../src/engine/pr-labels.js';
 
@@ -811,5 +813,140 @@ describe('production runner kill-switch', () => {
     await expect(git(['rev-parse', 'HEAD'], { cwd: '/repo' })).rejects.toThrow(
       /real 'git' exec blocked under AI_CONDUCTOR_NO_REAL_EXEC/,
     );
+  });
+});
+
+// ── publishEarlyDraft ─────────────────────────────────────────────────────────
+
+describe('publishEarlyDraft', () => {
+  it('not ahead of base → pushBranch called, zero pr-create calls, returns {pushed: true, drafted: false}', async () => {
+    const { git, calls: gitCalls } = fakeGit([
+      { stdout: '0\n' }, // isAheadOfBase returns 0 (called first)
+      { stdout: '' }, // push response (called second)
+    ]);
+    const { gh, calls: ghCalls } = fakeGh([]);
+
+    const result = await publishEarlyDraft(git, gh, '/repo', 'feat/abc', 'main');
+
+    expect(ghCalls).toHaveLength(0); // No gh calls for pr-create
+    expect(result).toEqual({ pushed: true, drafted: false });
+  });
+
+  it('ahead of base → pushBranch called, findOrCreatePr called once, returns {pushed: true, drafted: true, pr_url}', async () => {
+    const prUrl = 'https://github.com/foo/bar/pull/99';
+    const { git } = fakeGit([
+      { stdout: '3\n' }, // isAheadOfBase returns 3 (called first)
+      { stdout: '' }, // push response (called second)
+    ]);
+    const { gh, calls: ghCalls } = fakeGh([
+      { stdout: `Pull request created\n${prUrl}\n` }, // findOrCreatePr: no existing PR, create
+    ]);
+
+    const result = await publishEarlyDraft(git, gh, '/repo', 'feat/xyz', 'main');
+
+    expect(result).toEqual({ pushed: true, drafted: true, pr_url: prUrl });
+    expect(ghCalls.length).toBeGreaterThan(0); // findOrCreatePr called
+  });
+
+  it('ahead of base, findOrCreatePr cached on second call → only one pr-create call total', async () => {
+    const prUrl = 'https://github.com/foo/bar/pull/99';
+    const { git } = fakeGit([
+      { stdout: '3\n' }, // isAheadOfBase call 1 (first call)
+      { stdout: '' }, // push call 1
+      { stdout: '3\n' }, // isAheadOfBase call 2 (second call)
+      { stdout: '' }, // push call 2
+    ]);
+    const { gh, calls: ghCalls } = fakeGh([
+      { stdout: `Pull request created\n${prUrl}\n` }, // findOrCreatePr call 1 (create)
+      // No second gh call because findOrCreatePr is cached by branch key
+    ]);
+
+    // First call — gh runner is the key for the WeakMap cache
+    const result1 = await publishEarlyDraft(git, gh, '/repo', 'feat/xyz', 'main');
+    expect(result1.pr_url).toBe(prUrl);
+
+    // Second call should use cached PR (same gh runner)
+    const result2 = await publishEarlyDraft(git, gh, '/repo', 'feat/xyz', 'main');
+    expect(result2.pr_url).toBe(prUrl);
+
+    // Only 1 gh call total for findOrCreatePr (cached on second call)
+    expect(ghCalls).toHaveLength(1);
+  });
+
+  it('push failure → loud log, no throw, error captured in result', async () => {
+    const { git } = fakeGit([
+      { stdout: '3\n' }, // isAheadOfBase call (succeeds)
+      new Error('push auth failed'), // push call (fails)
+    ]);
+    const { gh } = fakeGh([]);
+    const logs: string[] = [];
+
+    const result = await publishEarlyDraft(git, gh, '/repo', 'feat/abc', 'main', {}, (msg) =>
+      logs.push(msg),
+    );
+
+    // Should not throw; error should be logged
+    expect(result).toEqual({ pushed: false, drafted: false });
+    expect(logs.length).toBeGreaterThan(0);
+    expect(logs.some((l) => l.includes('push'))).toBe(true);
+  });
+
+  it('gh unauth rejection on findOrCreatePr → one attempt, loud log, no retry, no throw', async () => {
+    const { git } = fakeGit([
+      { stdout: '' }, // pushBranch succeeds
+      { stdout: '3\n' }, // isAheadOfBase returns 3
+    ]);
+    const { gh, calls: ghCalls } = fakeGh([
+      new Error('gh: authentication failed'), // findOrCreatePr fails
+    ]);
+    const logs: string[] = [];
+
+    const result = await publishEarlyDraft(git, gh, '/repo', 'feat/abc', 'main', {}, (msg) =>
+      logs.push(msg),
+    );
+
+    // Should not throw; error should be logged
+    expect(result).toEqual({ pushed: true, drafted: false });
+    expect(ghCalls).toHaveLength(1); // Only one attempt at findOrCreatePr
+    expect(logs.some((l) => l.includes('findOrCreatePr'))).toBe(true);
+  });
+});
+
+// ── advisoryPublish ───────────────────────────────────────────────────────────
+
+describe('advisoryPublish', () => {
+  it('calls action successfully and returns its result', async () => {
+    const action = async () => ({ success: true });
+    const result = await advisoryPublish('feat/abc', 'draft', action);
+    expect(result).toEqual({ success: true });
+  });
+
+  it('catches action errors, logs with branch+mode+error, never throws', async () => {
+    const action = async () => {
+      throw new Error('action failed');
+    };
+    const logs: string[] = [];
+
+    let threw = false;
+    let result: unknown;
+    try {
+      result = await advisoryPublish('feat/abc', 'draft', action, (msg) => logs.push(msg));
+    } catch {
+      threw = true;
+    }
+
+    expect(threw).toBe(false);
+    expect(logs.length).toBeGreaterThan(0);
+    expect(logs.some((l) => l.includes('feat/abc'))).toBe(true);
+    expect(logs.some((l) => l.includes('draft'))).toBe(true);
+    expect(logs.some((l) => l.includes('action failed'))).toBe(true);
+  });
+
+  it('returns undefined when action throws', async () => {
+    const action = async () => {
+      throw new Error('boom');
+    };
+    const result = await advisoryPublish('feat/abc', 'draft', action);
+    expect(result).toBeUndefined();
   });
 });

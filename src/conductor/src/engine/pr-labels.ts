@@ -688,3 +688,124 @@ export async function setReady(
     log?.(`[pr-labels] setReady(${prUrl}) error: ${err}`);
   }
 }
+
+// ── Early-draft publish seam ──────────────────────────────────────────────────
+
+export interface PublishEarlyDraftResult {
+  pushed: boolean;
+  drafted: boolean;
+  pr_url?: string;
+}
+
+// Global cache for draft PRs, keyed by gh runner reference + branch
+const draftPrCache = new WeakMap<GhRunner, Map<string, string>>();
+
+function getDraftPrCache(ghRunner: GhRunner): Map<string, string> {
+  if (!draftPrCache.has(ghRunner)) {
+    draftPrCache.set(ghRunner, new Map());
+  }
+  return draftPrCache.get(ghRunner)!;
+}
+
+/**
+ * Publish the branch early (draft PR + push) if ahead of base; otherwise push only.
+ *
+ * Behavior:
+ *  - Calls `isAheadOfBase(base)` to check if the branch has commits ahead.
+ *  - If not ahead (count === 0): pushes branch, returns {pushed: true, drafted: false}
+ *  - If ahead: pushes branch, then creates a draft PR with cached
+ *    memoization so the PR is reused on subsequent calls. Returns {pushed: true, drafted: true, pr_url}
+ *  - Push failures: logs loudly, returns {pushed: false, drafted: false}, never throws
+ *  - gh failures: logs, returns {pushed: true, drafted: false}, never throws
+ *
+ * This is the composite that wires push + lazy draft PR creation for early-draft mode.
+ */
+export async function publishEarlyDraft(
+  runGit: GitRunner = makeProductionGit(),
+  runGh: GhRunner = makeProductionGh(),
+  cwd: string,
+  branch: string,
+  base: string,
+  options?: Record<string, unknown>,
+  log?: (msg: string) => void,
+): Promise<PublishEarlyDraftResult> {
+  const cache = getDraftPrCache(runGh);
+
+  try {
+    // Step 1: Push the branch directly (required regardless of ahead status)
+    let pushSucceeded = false;
+    try {
+      const args = ['push', '-u', 'origin', branch];
+      await runGit(args, { cwd });
+      pushSucceeded = true;
+    } catch (err) {
+      log?.(`[pr-labels] publishEarlyDraft(${branch}) push error: ${err}`);
+    }
+
+    if (!pushSucceeded) {
+      return { pushed: false, drafted: false };
+    }
+
+    // Step 2: Check if we're ahead of base
+    const aheadCount = await isAheadOfBase(runGit, cwd, base, log);
+
+    if (aheadCount === 0) {
+      return { pushed: true, drafted: false };
+    }
+
+    // Step 3: Create or reuse draft PR if ahead (cached per branch)
+    let prUrl = cache.get(branch);
+    if (!prUrl) {
+      try {
+        const createArgs: string[] = [
+          'pr',
+          'create',
+          '--head',
+          branch,
+          '--base',
+          base,
+          '--title',
+          `[DRAFT] ${branch}`,
+          '--body',
+          'Auto-created draft PR for early checkpoint publish.',
+          '--draft',
+        ];
+        const { stdout: createOut } = await runGh(createArgs, { cwd });
+        prUrl = extractPrUrl(createOut);
+        if (prUrl) {
+          cache.set(branch, prUrl);
+        } else {
+          log?.(`[pr-labels] publishEarlyDraft(${branch}) failed to parse PR URL from: ${createOut}`);
+        }
+      } catch (err) {
+        log?.(`[pr-labels] publishEarlyDraft(${branch}) gh pr create error: ${err}`);
+      }
+    }
+
+    return { pushed: true, drafted: !!prUrl, pr_url: prUrl };
+  } catch (err) {
+    log?.(`[pr-labels] publishEarlyDraft(${branch}) unexpected error: ${err}`);
+    return { pushed: false, drafted: false };
+  }
+}
+
+/**
+ * Wrapper that calls an async action, catches errors, logs them, and never throws.
+ *
+ * Used for advisory publish operations (push/PR operations that should not halt
+ * the build if they fail). Always returns the action's result if successful, or
+ * undefined if the action throws.
+ */
+export async function advisoryPublish<T>(
+  branch: string,
+  mode: string,
+  action: () => Promise<T>,
+  log?: (msg: string) => void,
+): Promise<T | undefined> {
+  try {
+    return await action();
+  } catch (err) {
+    log?.(`[pr-labels] advisoryPublish(${branch} in ${mode} mode) error: ${err}`);
+    return undefined;
+  }
+}
