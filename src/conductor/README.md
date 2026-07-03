@@ -942,7 +942,8 @@ through an injected `gh` runner — it never touches a registered repo's working
   PR) and **de-duplicated** per `(sourceRef, status)`.
 - **Issue ↔ PR linkage + auto-close (on implementation merge).** Commenting is not linking: GitHub's
   formal issue↔PR link and auto-close come from a closing keyword in a PR body. The issue reference
-  travels WITH the spec via a committed **`.docs/intake/<slug>.md`** marker (`Source-Ref: owner/repo#N`),
+  travels WITH the spec via a committed **`.docs/intake/<plan-stem>.md`** marker (`Source-Ref: owner/repo#N`,
+  keyed by the plan file's basename minus its `.md` extension, not the idea slug),
   written by both authoring paths (`land --source-ref` and the autonomous `runAuthoring`) — so it
   survives the spec-PR merge and reaches the daemon, which only reads the merged base-branch tree.
   The **spec PR** gets a non-closing `Refs owner/repo#N` (links, but must NOT close — that would
