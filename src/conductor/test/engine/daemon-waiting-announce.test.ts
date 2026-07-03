@@ -139,3 +139,66 @@ describe('createWaitingAnnouncer — instance-scoped map', () => {
     expect(log2).toHaveBeenCalledTimes(1); // fresh instance, not suppressed by announcer1's state
   });
 });
+
+describe('announceWaitingForRoot — module-level per-root registry', () => {
+  it('3 identical-verdict calls for same root → exactly 1 log line', async () => {
+    const mod = await load();
+    const announceWaitingForRoot = requireFn(mod, 'announceWaitingForRoot');
+    const log = vi.fn();
+
+    const waiting = [blockedBy('feat-a', 'acme/repo', '1')];
+    announceWaitingForRoot('/project/test-1', log, waiting);
+    announceWaitingForRoot('/project/test-1', log, waiting);
+    announceWaitingForRoot('/project/test-1', log, waiting);
+
+    expect(log).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('announceWaitingForRoot — verdict change re-announces', () => {
+  it('#1 closes, new #2 added → exactly 1 more log line', async () => {
+    const mod = await load();
+    const announceWaitingForRoot = requireFn(mod, 'announceWaitingForRoot');
+    const log = vi.fn();
+
+    announceWaitingForRoot('/project/test-2', log, [blockedBy('feat-a', 'acme/repo', '1')]);
+    announceWaitingForRoot('/project/test-2', log, [blockedBy('feat-a', 'acme/repo', '1')]);
+    expect(log).toHaveBeenCalledTimes(1);
+
+    // blocker set changed: #1 closed, now blocked by #2 instead
+    announceWaitingForRoot('/project/test-2', log, [blockedBy('feat-a', 'acme/repo', '2')]);
+    expect(log).toHaveBeenCalledTimes(2);
+
+    // stable again on the new verdict
+    announceWaitingForRoot('/project/test-2', log, [blockedBy('feat-a', 'acme/repo', '2')]);
+    expect(log).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('announceWaitingForRoot — distinct projectRoots tracked independently', () => {
+  it('two roots maintain separate warn-once state', async () => {
+    const mod = await load();
+    const announceWaitingForRoot = requireFn(mod, 'announceWaitingForRoot');
+    const log = vi.fn();
+
+    const waiting = [blockedBy('feat-a', 'acme/repo', '1')];
+
+    // First root
+    announceWaitingForRoot('/project/test-3-root-a', log, waiting);
+    expect(log).toHaveBeenCalledTimes(1);
+    announceWaitingForRoot('/project/test-3-root-a', log, waiting);
+    expect(log).toHaveBeenCalledTimes(1); // stable, no new log
+
+    // Second root with same slug and verdict
+    announceWaitingForRoot('/project/test-3-root-b', log, waiting);
+    expect(log).toHaveBeenCalledTimes(2); // fresh root, logs even though root-a saw the same verdict
+
+    // Stable on root-b
+    announceWaitingForRoot('/project/test-3-root-b', log, waiting);
+    expect(log).toHaveBeenCalledTimes(2); // stable, no new log
+
+    // Back to root-a with change
+    announceWaitingForRoot('/project/test-3-root-a', log, [blockedBy('feat-a', 'acme/repo', '2')]);
+    expect(log).toHaveBeenCalledTimes(3); // root-a's verdict changed
+  });
+});
