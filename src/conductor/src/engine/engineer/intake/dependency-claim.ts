@@ -35,9 +35,16 @@ export interface DependencyClaimDeps {
   ledger?: DependencyClaimLedger;
 }
 
+/** A single deferred entry surfaced in an all-blocked report. */
+export interface AllBlockedEntry {
+  envelope: ClaimableEnvelope;
+  verdict: BlockerVerdict;
+}
+
 export type ClaimOutcome =
   | { kind: 'claim'; envelope: ClaimableEnvelope }
-  | { kind: 'empty' };
+  | { kind: 'empty' }
+  | { kind: 'all-blocked'; entries: AllBlockedEntry[] };
 
 /**
  * Walk pending intake entries oldest-first (via the queue's own atomic
@@ -46,19 +53,22 @@ export type ClaimOutcome =
  * no ledger write, no attempt increment.
  *
  * Returns the first `unblocked` entry as a claim. If the walk exhausts the
- * queue without finding one, returns `{ kind: 'empty' }` (Task 21 will
- * replace this branch with a distinct all-blocked outcome when there WERE
- * deferred entries).
+ * queue without finding one:
+ *  - `{ kind: 'empty' }` when the queue had no pending entries at all.
+ *  - `{ kind: 'all-blocked', entries }` when every pending entry was deferred
+ *    (blocked, indeterminate, or cycle) — distinct from empty, so operators
+ *    can see WHY the queue is stalled and by what.
  */
 export async function claimUnblocked(deps: DependencyClaimDeps): Promise<ClaimOutcome> {
   const { queue, resolveDependency } = deps;
   const held: ClaimableEnvelope[] = [];
+  const deferred: AllBlockedEntry[] = [];
 
   try {
     for (;;) {
       const envelope = await queue.claim();
       if (!envelope) {
-        return { kind: 'empty' };
+        return deferred.length > 0 ? { kind: 'all-blocked', entries: deferred } : { kind: 'empty' };
       }
 
       const verdict = await resolveDependency(envelope.sourceRef);
@@ -68,6 +78,7 @@ export async function claimUnblocked(deps: DependencyClaimDeps): Promise<ClaimOu
 
       // blocked / indeterminate / cycle — defer, stateless, keep walking.
       held.push(envelope);
+      deferred.push({ envelope, verdict });
     }
   } finally {
     // Release every deferred entry back to the queue, regardless of how the
