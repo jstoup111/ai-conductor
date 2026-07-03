@@ -446,6 +446,39 @@ complexity:
     });
   });
 
+  describe('model_fallback_ladder validation', () => {
+    it('accepts an array of non-empty model strings', () => {
+      const result = validateConfig({ model_fallback_ladder: ['fable', 'opus'] });
+      expect(result.ok).toBe(true);
+    });
+
+    it('accepts an empty array (no fallback)', () => {
+      const result = validateConfig({ model_fallback_ladder: [] });
+      expect(result.ok).toBe(true);
+    });
+
+    it('rejects a string value instead of an array', () => {
+      const result = validateConfig({ model_fallback_ladder: 'fable' });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.message).toMatch(/model_fallback_ladder/);
+    });
+
+    it('rejects an array containing a number', () => {
+      const result = validateConfig({ model_fallback_ladder: ['fable', 5] });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.message).toMatch(/model_fallback_ladder/);
+    });
+
+    it('rejects an array containing an empty string', () => {
+      const result = validateConfig({ model_fallback_ladder: ['fable', ''] });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.message).toMatch(/model_fallback_ladder/);
+    });
+  });
+
   describe('mergeConfigs', () => {
     it('project scalars replace user scalars', () => {
       const merged = mergeConfigs(
