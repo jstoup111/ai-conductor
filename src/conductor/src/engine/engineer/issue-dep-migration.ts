@@ -275,6 +275,28 @@ async function fetchExistingBlockedBy(
 }
 
 /**
+ * Resolve an issue's database id (`GET repos/<repo>/issues/<n>` → `.id`).
+ * The dependencies POST endpoint requires `issue_id=<database id>` — NOT the
+ * issue number (`-f issue=<n>` is rejected with a 422 by the live API; see
+ * jstoup111/ai-conductor#260, verified 2026-07-03). Returns null when the
+ * response carries no numeric `id`.
+ */
+async function resolveIssueDatabaseId(
+  repo: string,
+  number: string,
+  gh: GhRunner,
+  cwd: string,
+): Promise<number | null> {
+  const { stdout } = await gh(['api', `repos/${repo}/issues/${number}`], { cwd });
+  try {
+    const parsed = JSON.parse(stdout || '{}') as { id?: unknown };
+    return typeof parsed.id === 'number' && Number.isFinite(parsed.id) ? parsed.id : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Write proposed dependency edges to GitHub via a GET-before-POST, additive-only
  * pattern (FR-11 happy / FR-10 confirm-negative):
  *
@@ -301,6 +323,7 @@ export async function createDependencyLinks(
   const log = deps.log ?? (() => {});
   const results: DependencyLinkResult[] = [];
   const existingBySource = new Map<string, Set<string>>();
+  const targetIdByRef = new Map<string, number | null>();
 
   for (const edge of edges) {
     const source = parseRef(edge.source);
@@ -326,14 +349,27 @@ export async function createDependencyLinks(
       continue;
     }
 
+    // The live endpoint takes the BLOCKING issue's database id, not its number
+    // (#260) — resolve it first; an unresolvable id skips the edge (additive-only:
+    // never guess a write payload).
+    let targetId = targetIdByRef.get(edge.target);
+    if (targetId === undefined) {
+      targetId = await resolveIssueDatabaseId(target.repo, target.number, gh, cwd);
+      targetIdByRef.set(edge.target, targetId);
+    }
+    if (targetId === null) {
+      log(`createDependencyLinks: could not resolve issue id for ${edge.target}; skipping edge`);
+      continue;
+    }
+
     await gh(
       [
         'api',
         '-X',
         'POST',
         `repos/${source.repo}/issues/${source.number}/dependencies/blocked_by`,
-        '-f',
-        `issue=${edge.target}`,
+        '-F',
+        `issue_id=${targetId}`,
       ],
       { cwd },
     );

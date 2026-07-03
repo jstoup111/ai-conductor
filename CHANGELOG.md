@@ -10,6 +10,19 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ## [Unreleased]
 
+### Fixed
+
+- **`engineer migrate-issue-deps` now writes dependency links the live GitHub API accepts.**
+  The blocked_by POST sent `-f issue=<owner/repo#N>`, which the live dependencies endpoint
+  rejects with a 422 (`issue_id` required) — so `--confirm` could never create a link
+  (#260). The writer now resolves each blocking issue's database id
+  (`GET repos/<repo>/issues/<n>` → `.id`) and posts `-F issue_id=<id>`, with per-target id
+  caching and an additive-only skip (never guess a write payload) when the id can't be
+  resolved. The migrate-deps test fakes were remodeled on the live contract — the old fakes
+  encoded a third, never-real argv shape (`--method` + `issue_number=`), which is why the
+  idempotency test shipped red on main in #246 and failed every feature's full-suite VERIFY
+  (#251). Fixes #251, fixes #260.
+
 ### Changed
 
 - **Front-of-funnel DECIDE steps now default to `fable`.** The explore, prd, pre-implementation architecture-review, and engineer skills now run on Fable by default; plan.L and conflict_check.L tier overrides also escalate to Fable. S/M tiers and `--as-built` compliance mode remain unchanged. Graceful degradation when fable is unavailable arrives with #186 fallback ladder; refs #190.

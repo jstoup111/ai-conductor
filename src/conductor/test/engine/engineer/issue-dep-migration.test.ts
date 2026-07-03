@@ -198,7 +198,11 @@ describe('createDependencyLinks (writer)', () => {
     cwd: string;
   }
 
-  /** A fake gh: GET returns `existing` (per source repo/number key), records every call. */
+  /**
+   * A fake gh modeled on the live contract (#260): the blocked_by GET returns
+   * `existing` (per source repo/number key), a plain-issue GET returns a
+   * database id (1_000_000 + number), and every call is recorded.
+   */
   function makeGh(existing: Record<string, { number: number; repository_url: string }[]>): {
     gh: GhRunner;
     calls: Call[];
@@ -210,6 +214,11 @@ describe('createDependencyLinks (writer)', () => {
       if (!args.includes('-X') && path) {
         // GET
         return { stdout: JSON.stringify(existing[path] ?? []) };
+      }
+      const issuePath = args.find((a) => /^repos\/[^/]+\/[^/]+\/issues\/\d+$/.test(a));
+      if (issuePath && !args.includes('-X')) {
+        const n = Number(issuePath.split('/').pop());
+        return { stdout: JSON.stringify({ id: 1_000_000 + n, number: n }) };
       }
       return { stdout: '' };
     };
@@ -255,7 +264,9 @@ describe('createDependencyLinks (writer)', () => {
     const posts = calls.filter((c) => c.args.includes('POST'));
     expect(posts.length).toBe(1);
     expect(posts[0].args).toContain('repos/acme/app/issues/230/dependencies/blocked_by');
-    expect(posts[0].args).toContain('issue=acme/app#217');
+    // Live contract (#260): payload is the blocking issue's database id, not its ref/number.
+    expect(posts[0].args).toContain('issue_id=1000217');
+    expect(posts[0].args.some((a) => a.startsWith('issue='))).toBe(false);
   });
 
   it('never issues an edit/close/label/delete mutation — the only write is create-link POST', async () => {
@@ -311,13 +322,19 @@ describe('createDependencyLinks (writer)', () => {
           stdout: JSON.stringify(targets.map((t) => ({ number: Number(t.split('#')[1]), repository_url: 'https://api.github.com/repos/acme/app' }))),
         };
       }
+      // Plain-issue GET → database id (live contract, #260)
+      const issuePath = args.find((a) => /^repos\/[^/]+\/[^/]+\/issues\/\d+$/.test(a));
+      if (issuePath && !args.includes('-X')) {
+        const n = Number(issuePath.split('/').pop());
+        return { stdout: JSON.stringify({ id: 1_000_000 + n, number: n }) };
+      }
       // POST
       if (failNextPost) {
         failNextPost = false;
         throw new Error('simulated transient write failure');
       }
-      const issueArg = args.find((a) => a.startsWith('issue='));
-      const targetNumber = issueArg?.split('#')[1];
+      const idArg = args.find((a) => a.startsWith('issue_id='));
+      const targetNumber = Number(idArg?.split('=')[1]) - 1_000_000;
       const sourceMatch = path?.match(/issues\/(\d+)\/dependencies/);
       const sourceRef = `acme/app#${sourceMatch?.[1]}`;
       linked.add(`${sourceRef}->acme/app#${targetNumber}`);

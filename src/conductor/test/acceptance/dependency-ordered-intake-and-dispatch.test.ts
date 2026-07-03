@@ -953,11 +953,18 @@ const FIXTURE_ISSUES = [
   { ref: 'acme/app#236', body: 'Blocked by #999 (that issue happens to be closed).' },
 ];
 
-/** In-memory fake platform: tracks blocked_by links per issue and every gh call made. */
+/**
+ * In-memory fake platform modeled on the LIVE contract (#260): tracks blocked_by
+ * links per issue, serves plain-issue GETs with a database `id` (the write
+ * payload is `issue_id=<database id>`, not a number/ref), records every call.
+ */
 function makeFakePlatform(opts: { failing?: Set<string> } = {}) {
   const links = new Map<string, Set<string>>();
   const calls: { args: string[] }[] = [];
   const failing = opts.failing ?? new Set<string>();
+  const refToId = new Map<string, number>();
+  const idToRef = new Map<number, string>();
+  let nextId = 1_000_000;
   const gh = async (args: string[], _opts: { cwd: string }) => {
     calls.push({ args });
     const target = args.find((a) => a.includes('/dependencies/blocked_by'));
@@ -968,6 +975,20 @@ function makeFakePlatform(opts: { failing?: Set<string> } = {}) {
     const hasXMethod = args.includes('-X') && args[args.indexOf('-X') + 1] === 'POST';
     const hasMethodFlag = args.includes('--method') && args[args.indexOf('--method') + 1] === 'POST';
     const isWrite = hasXMethod || hasMethodFlag;
+
+    // Plain-issue GET (id resolution for the write payload, live contract #260).
+    const issuePath = args.find((a) => /^repos\/[^/]+\/[^/]+\/issues\/\d+$/.test(a));
+    if (issuePath && !isWrite) {
+      const im = issuePath.match(/^repos\/([^/]+\/[^/]+)\/issues\/(\d+)$/)!;
+      const ref = `${im[1]}#${im[2]}`;
+      let id = refToId.get(ref);
+      if (id === undefined) {
+        id = nextId++;
+        refToId.set(ref, id);
+        idToRef.set(id, ref);
+      }
+      return { stdout: JSON.stringify({ id, number: Number(im[2]) }) };
+    }
 
     if (!isWrite) {
       const set = issueKey ? links.get(issueKey) ?? new Set() : new Set();
@@ -983,10 +1004,11 @@ function makeFakePlatform(opts: { failing?: Set<string> } = {}) {
     // Check if the issue being written to is in the failing set
     if (issueKey && failing.has(issueKey)) throw new Error('transient gh failure');
 
-    // Extract target dependency ref from -f issue=<ref> pattern
-    const fIdx = args.indexOf('-f');
-    const issueArg = fIdx >= 0 ? args[fIdx + 1] : null;
-    const targetRef = issueArg?.startsWith('issue=') ? issueArg.replace('issue=', '') : null;
+    // Extract the target from the live `-F issue_id=<database id>` payload.
+    const fIdx = args.indexOf('-F');
+    const idArg = fIdx >= 0 ? args[fIdx + 1] : null;
+    const idValue = idArg?.startsWith('issue_id=') ? Number(idArg.split('=')[1]) : null;
+    const targetRef = idValue !== null ? idToRef.get(idValue) ?? null : null;
 
     // Track the link if we have both the source issue and target dependency
     if (issueKey && targetRef) {
@@ -999,9 +1021,17 @@ function makeFakePlatform(opts: { failing?: Set<string> } = {}) {
   return { gh, calls, links, failing };
 }
 
-/** Audit helper: every call must be a blocked_by GET or a blocked_by write — nothing else. */
+/**
+ * Audit helper: every call must be blocked_by link traffic (GET or create-POST)
+ * or the read-only plain-issue GET that resolves the write payload's database id
+ * (#260) — never any other mutation.
+ */
 function isOnlyLinkTraffic(calls: { args: string[] }[]): boolean {
-  return calls.every((c) => c.args.some((a) => a.includes('/dependencies/blocked_by')));
+  return calls.every(
+    (c) =>
+      c.args.some((a) => a.includes('/dependencies/blocked_by')) ||
+      (c.args.some((a) => /^repos\/[^/]+\/[^/]+\/issues\/\d+$/.test(a)) && !c.args.includes('POST')),
+  );
 }
 
 describe('Flow D — prose-to-link migration end-to-end', () => {
