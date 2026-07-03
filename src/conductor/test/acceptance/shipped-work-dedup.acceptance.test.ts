@@ -38,9 +38,9 @@ async function specHash(
   if (typeof fn !== 'function') {
     throw new Error('expected export "specHash" to be a function (not yet implemented)');
   }
-  return (fn as (p: string, s: string | null) => { digest: string; storiesIncluded: boolean })(
-    planBytes,
-    storiesBytes,
+  return (fn as (p: Buffer, s: Buffer | null) => { digest: string; storiesIncluded: boolean })(
+    Buffer.from(planBytes),
+    storiesBytes ? Buffer.from(storiesBytes) : null,
   );
 }
 
