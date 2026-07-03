@@ -178,4 +178,67 @@ describe('harness-daemon-profile — real version-gate composition (TR-3)', () =
     // No stale pass record — a HALT must never leave an audit file claiming a pass.
     expect(await exists(join(dir, '.pipeline/version-signal.json'))).toBe(false);
   });
+
+  it('config version_approval_gate: false → versionGate never called, no version-signal.json', async () => {
+    gitDiffOutput.current = 'M\tREADME.md\n';
+    await writeState(statePath, preBuildDoneState());
+
+    const versionGateSpy = vi.fn(async () => {
+      throw new Error('versionGate must not be called when gate is disabled');
+    });
+    const releaseGateSpy = vi.fn(async () => ({ ok: true as const }));
+
+    const seen: Array<{ step: StepName }> = [];
+    const runner: StepRunner = {
+      run: vi.fn(async (step: StepName) => {
+        seen.push({ step });
+        return { success: true };
+      }),
+    };
+    const guardrails: SelfHostGuardrails = {
+      resolveHarnessRoot: vi.fn(async () => dir),
+      relink: vi.fn(async () => {}),
+      provisionSandbox: vi.fn(async () => {
+        throw new Error('sandbox must not be provisioned — sandbox_build_env is disabled');
+      }),
+      versionGate: versionGateSpy,
+      releaseGate: releaseGateSpy,
+    };
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      selfHost: true,
+      baseBranch: 'main',
+      fromStep: 'build',
+      selfHostGuardrails: guardrails,
+      escalateBuildFailure: NOOP_ESCALATION,
+      config: {
+        harness_self_host: {
+          sandbox_build_env: false,
+          version_approval_gate: false, // Gate is disabled
+        },
+      },
+    } as ConstructorParameters<typeof Conductor>[0]);
+
+    await conductor.run();
+
+    // finish IS dispatched — the disabled gate is never consulted
+    expect(seen.some((s) => s.step === 'finish')).toBe(true);
+
+    // versionGate was never called
+    expect(versionGateSpy).not.toHaveBeenCalled();
+
+    // No HALT
+    expect(await exists(join(dir, '.pipeline/HALT'))).toBe(false);
+
+    // No version-signal.json — the gate never ran so no classification occurred
+    expect(await exists(join(dir, '.pipeline/version-signal.json'))).toBe(false);
+
+    // releaseGate still runs (it's independent)
+    expect(releaseGateSpy).toHaveBeenCalled();
+  });
 });
