@@ -179,6 +179,55 @@ for skill_name in "${known_skills[@]}"; do
   fi
 done
 
+# ── 5a. Model-table drift gate ───────────────────────────────────────────────
+# bin/generate-model-table --check validates that HARNESS.md's generated
+# model-selection table region matches what the TypeScript generator would
+# produce. The tool runs the TS source directly via the local tsx binary
+# (src/conductor/node_modules/.bin/tsx), so it's only runnable when
+# src/conductor/node_modules has been installed. When absent, this is a
+# warn (skip), not a suite-aborting failure — CI/dev environments without
+# an npm install in src/conductor/ should still be able to run the rest of
+# the suite.
+#
+# Exit codes (see bin/generate-model-table / generate-model-table.ts):
+#   0 - no drift (PASS)
+#   1 - drift detected (FAIL, remediation text on stderr/stdout)
+#   2 - environment error, e.g. missing tsx binary (FAIL, env error message)
+
+echo ""
+echo -e "${BOLD}5a. Model-table drift gate${NC}"
+
+conductor_node_modules="${HARNESS_DIR}/src/conductor/node_modules"
+if [ ! -d "$conductor_node_modules" ]; then
+  warn_check "src/conductor/node_modules absent — skipping model-table drift check" 1
+else
+  set +e
+  model_table_output=$("${HARNESS_DIR}/bin/generate-model-table" --check 2>&1)
+  model_table_exit=$?
+  set -e
+
+  case "$model_table_exit" in
+    0)
+      assert "bin/generate-model-table --check — HARNESS.md model table matches source (no drift)" 0
+      ;;
+    1)
+      echo -e "  ${RED}FAIL${NC} bin/generate-model-table --check — drift detected in HARNESS.md model table"
+      echo "$model_table_output" | sed 's/^/    /'
+      assert "bin/generate-model-table --check — drift detected in HARNESS.md model table (remediation: run 'bin/generate-model-table' to regenerate)" 1
+      ;;
+    2)
+      echo -e "  ${RED}FAIL${NC} bin/generate-model-table --check — environment error"
+      echo "$model_table_output" | sed 's/^/    /'
+      assert "bin/generate-model-table --check — environment error (exit 2)" 1
+      ;;
+    *)
+      echo -e "  ${RED}FAIL${NC} bin/generate-model-table --check — unexpected exit code ${model_table_exit}"
+      echo "$model_table_output" | sed 's/^/    /'
+      assert "bin/generate-model-table --check — unexpected exit code ${model_table_exit}" 1
+      ;;
+  esac
+fi
+
 # ── 6. Template references ──────────────────────────────────────────────────
 
 echo ""
