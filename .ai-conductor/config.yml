@@ -16,3 +16,15 @@
 # gh-login fallback (machine-scoped identity, PR #183), so a committed owner
 # would wrongly apply to every checkout.
 owner_gate_cutover: "2026-07-02T11:00:00Z"
+
+# Self-host guardrails: declared version freeze (PR #262).
+#
+# VERSION is frozen at 0.99.19 until the operator declares 1.0 (v1.0 cutover
+# program, issue #228). With the freeze declared here, the daemon's self-host
+# VERSION approval gate self-satisfies when the worktree VERSION still equals
+# the frozen value — no per-feature HALT + manual .pipeline/version-approval
+# round-trip. A feature that ACTUALLY bumps VERSION still halts for approval.
+# Read at daemon startup; restart the daemon to apply. Update or remove this
+# key when cutting 1.0.
+harness_self_host:
+  version_freeze: "0.99.19"
