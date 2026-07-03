@@ -40,7 +40,7 @@ export class ModelAvailability {
 
     for (const candidate of this.ladder) {
       if (!this.dead.has(candidate)) {
-        this.emitWarn(configured, candidate, `${configured} is not available`);
+        this.emitWarn(configured, candidate, `${configured} is not available (unavailable)`);
         return { model: candidate, downgraded: true };
       }
     }

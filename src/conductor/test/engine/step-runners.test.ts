@@ -868,4 +868,59 @@ TIER: M`,
       expect(opts.interactive).toBe(true);
     });
   });
+
+  describe('model fallback ladder (autonomous steps)', () => {
+    it('falls back to opus when fable is marked dead, one attempt total', async () => {
+      const invoke = vi.fn().mockResolvedValue({
+        success: true,
+        output: 'done',
+        exitCode: 0,
+      });
+      const provider: LLMProvider = {
+        invoke,
+        invokeInteractive: vi.fn().mockResolvedValue(undefined),
+      };
+      // Force the step's configured model to 'fable' so we can exercise the
+      // ladder's fallback-to-opus path deterministically.
+      const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
+        modelOverride: 'fable',
+      });
+      // Simulate fable already known-dead from a prior invocation in this process.
+      (runner as unknown as { modelAvailability: { markDead: (m: string) => void } })
+        .modelAvailability.markDead('fable');
+
+      const result = await runner.run('build', emptyState); // build is autonomous → invoke()
+
+      expect(result.success).toBe(true);
+      expect(invoke).toHaveBeenCalledOnce();
+      const opts = invoke.mock.calls[0][0] as InvokeOptions;
+      expect(opts.model).toBe('opus');
+    });
+
+    it('returns ordinary success:false when all ladder models are dead', async () => {
+      const invoke = vi.fn().mockResolvedValue({
+        success: false,
+        output: 'no models available',
+        exitCode: 1,
+        modelUnavailable: true,
+      });
+      const provider: LLMProvider = {
+        invoke,
+        invokeInteractive: vi.fn().mockResolvedValue(undefined),
+      };
+      const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
+        modelOverride: 'fable',
+      });
+      (runner as unknown as { modelAvailability: { markDead: (m: string) => void } })
+        .modelAvailability.markDead('fable');
+      (runner as unknown as { modelAvailability: { markDead: (m: string) => void } })
+        .modelAvailability.markDead('opus');
+      (runner as unknown as { modelAvailability: { markDead: (m: string) => void } })
+        .modelAvailability.markDead('sonnet');
+
+      const result = await runner.run('build', emptyState);
+
+      expect(result.success).toBe(false);
+    });
+  });
 });
