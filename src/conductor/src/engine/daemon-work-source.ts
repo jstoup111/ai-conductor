@@ -9,6 +9,8 @@ import type { OwnerResolution } from './owner-gate/identity.js';
 import type { OwnerStamp } from './owner-gate/provenance.js';
 import type { DiscoverBacklogOpts, WaitingItem } from './daemon-backlog.js';
 import type { BlockerResolver } from './blocker-resolver.js';
+import type { PriorityResolution } from './backlog-priority.js';
+import { orderBacklog } from './backlog-priority.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Public interface
@@ -81,6 +83,19 @@ export interface LocalWorkSourceDeps {
    * optionality pattern above).
    */
   makeResolver?: () => BlockerResolver;
+  /**
+   * Priority resolver for post-gate ordering (Task 11). Called FRESH on every
+   * `discover()` pass AFTER discoverBacklog returns (post-gate) to order items
+   * by priority band. Absent → no ordering applied, items returned in discovery
+   * order (legacy byte-for-byte behavior, matching optionality pattern of
+   * `resolveDaemonOwner` and `makeResolver` above).
+   *
+   * Fail-closed: if the backlog is empty (all items filtered by gates), the
+   * resolver is still called but with zero items, resulting in zero reader calls.
+   */
+  priorityResolver?: {
+    resolve(items: BacklogItem[], options: { refresh: boolean }): Promise<PriorityResolution>;
+  };
 }
 
 /**
@@ -114,7 +129,7 @@ export function localWorkSource(deps: LocalWorkSourceDeps): WorkSource {
       // Fresh resolver instance per pass (never cached across polls) — see
       // `makeResolver` doc above and daemon-backlog.ts:210-221.
       const resolver = deps.makeResolver?.();
-      const { items, waiting } = await deps.discoverBacklog(
+      let { items, waiting } = await deps.discoverBacklog(
         deps.projectRoot,
         (slug) => deps.isProcessed(slug),
         deps.log,
@@ -127,6 +142,15 @@ export function localWorkSource(deps: LocalWorkSourceDeps): WorkSource {
           ...gateOpts,
         },
       );
+
+      // Apply priority ordering AFTER the gate (post-gate). If the backlog is
+      // empty (all filtered by gates), the resolver is still called but with
+      // zero items, resulting in zero reader calls (fail-closed pattern).
+      if (deps.priorityResolver) {
+        const resolution = await deps.priorityResolver.resolve(items, { refresh });
+        items = orderBacklog(items, resolution);
+      }
+
       return items;
     },
   };
