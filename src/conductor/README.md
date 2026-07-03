@@ -449,10 +449,14 @@ on every base-SHA advance).
   ---
   ```
 
-  It is written by the **finish flow**, on the **impl branch**, before merge — so it lands
-  in the same commit/PR as the shipped code, not as a separate follow-up. Because it's
-  committed, it survives clones, resets, and cache wipes exactly like the code it documents.
-  A record-write failure degrades gracefully and never blocks shipping.
+  It is written by the **finish flow**, on the **impl branch**, before merge — `/finish`
+  runs `conduct shipped-record --slug <stem> --pr <url|local>` (a non-interactive
+  subcommand) on the feature branch before its final push, so the record lands in the same
+  PR/merge as the shipped code, not as a separate follow-up (and never as a daemon-side
+  commit on the main checkout, which would sit un-pushed on local base and wedge the
+  `--ff-only` fast-forward). Because it's committed, it survives clones, resets, and cache
+  wipes exactly like the code it documents. A record-write failure degrades gracefully
+  (single warn, exit 0) and never blocks shipping; `discard`/`keep` finishes never write one.
 
 - **Discovery dedup (`discoverBacklog`, `daemon-backlog.ts`).** Every poll lists
   `.docs/shipped/*.md` off the **base-branch tree** (one listing per poll, not one per

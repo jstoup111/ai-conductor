@@ -186,10 +186,16 @@ describe('shipped-work dedup acceptance (#204, rename-proof): content-hash match
     await commitShippedRecord('old-name', shippedRecordBody({ slug: 'old-name', specHash: digest }));
 
     // A DIFFERENT stem, but byte-identical plan+stories content → same hash.
+    // A pure `git mv` of the plan file does NOT rewrite its content, so the
+    // plan still references `.docs/stories/old-name.md` (which still exists) —
+    // discovery resolves the stories via that ref and hashes the exact bytes
+    // the shipped record hashed. A rename that ALSO rewrites internal refs is
+    // "renamed AND content-edited" — the ADR's documented residual, asserted
+    // separately below.
     await mkdir(join(dir, '.docs/plans'), { recursive: true });
     await mkdir(join(dir, '.docs/stories'), { recursive: true });
-    await writeFile(join(dir, '.docs/plans/new-name.md'), planWithDeps('.docs/stories/new-name.md'));
-    await writeFile(join(dir, '.docs/stories/new-name.md'), storiesBytes);
+    await writeFile(join(dir, '.docs/plans/new-name.md'), planBytes);
+    await writeFile(join(dir, '.docs/stories/old-name.md'), storiesBytes);
     await git(['add', '.docs']);
     await git(['commit', '-q', '-m', 'merge spec: new-name (renamed)']);
 

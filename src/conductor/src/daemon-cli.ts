@@ -22,7 +22,8 @@ import {
 } from './engine/daemon-log.js';
 import type { ConductState, ConductorEvent, StepName } from './types/index.js';
 import { runDaemon, type BacklogItem } from './engine/daemon.js';
-import { discoverBacklog, fastForwardRoot } from './engine/daemon-backlog.js';
+import { discoverBacklog, fastForwardRoot, gitTreeSource } from './engine/daemon-backlog.js';
+import { makeIsProcessed } from './engine/shipped-record.js';
 import { localWorkSource, type WorkSource } from './engine/daemon-work-source.js';
 import { type GhRunner } from './engine/owner-gate/identity.js';
 import { makeMachineOwnerResolver } from './engine/owner-gate/machine-identity.js';
@@ -37,6 +38,7 @@ import {
   isProcessed,
   hasWarned,
   markWarned,
+  repairProcessed,
   makeFeatureRunnerDeps,
 } from './engine/daemon-deps.js';
 import { readState, writeState, getStepStatus } from './engine/state.js';
@@ -410,6 +412,9 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       isProcessed: (slug) => isProcessed(projectRoot, slug),
       hasWarned: (slug) => hasWarned(projectRoot, slug),
       markWarned: (slug) => markWarned(projectRoot, slug),
+      // ADR Decisions 2b/2c: a shipped-record skip repairs the local ledger
+      // cache so later polls take the fast path (record → marker backfill).
+      repairProcessed: (slug, record) => repairProcessed(projectRoot, slug, record),
       fastForwardRoot,
       discoverBacklog,
       resolveDaemonOwner: makeMachineOwnerResolver(ownerGh, projectRoot),
@@ -432,6 +437,14 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   // startup + live sweeps of ONE run. Real fs/git primitives; clearing a marker
   // is the ONLY side effect — re-dispatch flows through PR #109's un-park path.
   const lastRekickSha = new Map<string, string>();
+  // Content-aware dedup (ADR Decision 3): the sweep consults the SHARED
+  // ledger-or-shipped-record resolver before re-kicking, so a shipped
+  // duplicate stays parked instead of burning an abort/clear/re-park cycle
+  // per base advance (#205). The resolver is rebuilt fresh per sweep (see the
+  // rekickSweep binding below): a sweep fires precisely because main advanced,
+  // which is exactly when a newly merged shipped record must become visible.
+  // Warn-once markers are the durable `.daemon/warned/` fs markers shared with
+  // discovery's skip logs.
   const rekickDeps: RekickSweepDeps = {
     listHaltedWorktrees: () => listHaltedWorktrees(worktreeBase),
     readHaltReason: (slug) => readHaltReason(worktreeBase, slug),
@@ -440,6 +453,8 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     clearMarker: (slug) => clearMarker(join(worktreeBase, slug)),
     lastRekickSha,
     log,
+    hasWarned: (slug) => hasWarned(projectRoot, slug),
+    markWarned: (slug) => markWarned(projectRoot, slug),
   };
 
   const result = await runDaemon(
@@ -470,7 +485,16 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       readPersistedBaseSha: () => readPersistedBaseSha(projectRoot),
       writePersistedBaseSha: (sha) => writePersistedBaseSha(projectRoot, sha, log),
       rekickSweep: async (sha) => {
-        await rekickSweep(rekickDeps, sha);
+        // Fresh resolver per sweep: makeIsProcessed caches the shipped-record
+        // listing per instance, and this sweep runs because the base branch
+        // just advanced — a run-long cache would miss records merged mid-run.
+        await rekickSweep(
+          {
+            ...rekickDeps,
+            isProcessed: makeIsProcessed(processedDir, gitTreeSource(projectRoot, baseBranch)),
+          },
+          sha,
+        );
       },
       // FR-14: wire the startup + per-idle-poll-tick mergeable label sweep.
       // NOTE: this binding must stay wired — removing it silently no-ops all

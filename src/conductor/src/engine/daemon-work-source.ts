@@ -40,6 +40,14 @@ export interface LocalWorkSourceDeps {
   isProcessed: (slug: string) => Promise<boolean>;
   hasWarned: (slug: string) => Promise<boolean>;
   markWarned: (slug: string) => Promise<void>;
+  /**
+   * Shipped-record cache repair (ADR Decisions 2b/2c): when discovery skips a
+   * candidate because a base-branch `.docs/shipped/` record matched (stem or
+   * content hash), write the missing `.daemon/processed/` marker so later
+   * polls take the ledger fast path. Optional → absent means no repair (the
+   * skip itself is still correct).
+   */
+  repairProcessed?: DiscoverBacklogOpts['repairProcessed'];
   fastForwardRoot: (root: string, log: (m: string) => void) => Promise<void>;
   discoverBacklog: (
     root: string,
@@ -115,6 +123,7 @@ export function localWorkSource(deps: LocalWorkSourceDeps): WorkSource {
           hasWarned: (slug) => deps.hasWarned(slug),
           markWarned: (slug) => deps.markWarned(slug),
           ...(resolver ? { resolver } : {}),
+          ...(deps.repairProcessed ? { repairProcessed: deps.repairProcessed } : {}),
           ...gateOpts,
         },
       );

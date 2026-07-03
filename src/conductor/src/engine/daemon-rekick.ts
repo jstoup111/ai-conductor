@@ -70,6 +70,13 @@ export interface RekickSweepResult {
   skipped: string[];
 }
 
+// Warn-once fallback for the "already shipped" skip when the optional
+// `hasWarned`/`markWarned` deps are absent: state is scoped to the deps
+// OBJECT (one per daemon run in daemon-cli.ts), so the skip is logged once
+// per run rather than on every base advance, without requiring durable
+// markers. Injected fns take precedence and make the warn durable.
+const warnedShippedByDeps = new WeakMap<RekickSweepDeps, Set<string>>();
+
 /**
  * Re-kick every live-HALT worktree at base SHA `sha`. Returns the slugs cleared
  * and the slugs skipped (FR-9 already-rekicked, failed abort, or a clear error).
@@ -107,10 +114,16 @@ export async function rekickSweep(
       }
       if (processed) {
         skipped.push(slug);
-        const alreadyWarned = deps.hasWarned ? await deps.hasWarned(slug) : false;
+        let fallback = warnedShippedByDeps.get(deps);
+        if (!fallback) {
+          fallback = new Set();
+          warnedShippedByDeps.set(deps, fallback);
+        }
+        const alreadyWarned = deps.hasWarned ? await deps.hasWarned(slug) : fallback.has(slug);
         if (!alreadyWarned) {
           log(`re-kick ${slug}: skipping re-kick: ${slug} already shipped`);
           if (deps.markWarned) await deps.markWarned(slug);
+          else fallback.add(slug);
         }
         continue;
       }

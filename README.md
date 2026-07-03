@@ -737,8 +737,10 @@ dedicated test coverage (950+ tests). See the feature comparison in
   the pool keeps going.
 - **Content-aware shipped-work dedup** (`.docs/shipped/<stem>.md`, #204, #205): the daemon's
   backlog discovery and its main-advance re-kick sweep both dedup against a **committed**
-  record — `slug`, `spec_hash`, `pr`, `shipped` frontmatter written to the base branch by the
-  finish flow before merge — not just the local `.daemon/processed/` ledger. That ledger is
+  record — `slug`, `spec_hash`, `pr`, `shipped` frontmatter committed **on the implementation
+  PR branch** by the finish flow (`conduct-ts shipped-record --slug <stem> --pr <url|local>`,
+  run by `/finish` before the branch's final push), so the human merge lands the code and the
+  shipped-fact atomically — not just the local `.daemon/processed/` ledger. That ledger is
   now a **cache**, repaired opportunistically from shipped records; it is no longer required
   for correctness. A fresh clone or a wiped `.daemon/` directory therefore never re-dispatches
   or re-kicks a spec whose implementation already merged, and a renamed-but-unchanged spec is

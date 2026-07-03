@@ -17,7 +17,6 @@ import {
   makeProductionGh,
   type GhRunner,
 } from './pr-labels.js';
-import { specHash as computeSpecHash } from './shipped-record.js';
 import type { FinishChoice } from './artifacts.js';
 
 /**
@@ -31,13 +30,10 @@ export interface WorktreeOutcome {
   prUrl?: string;
   costTokens?: number;
   /**
-   * Task 12 (#204, #205): the finish skill's recorded outcome (from
-   * `.pipeline/finish-choice`), when readable. Gates the shipped-record write —
-   * `discard`/`keep` are no-ship outcomes and must never produce a
-   * `.docs/shipped/<slug>.md` record, even though the gate-driven loop still
-   * converges (writes DONE) for them like any other finish choice. Optional so
-   * existing test doubles that predate this field default to the ship-record
-   * write firing (matches pre-Task-12 behavior for `pr`/`merge-local`).
+   * The finish skill's recorded outcome (from `.pipeline/finish-choice`),
+   * when readable. `discard`/`keep` are no-ship outcomes even though the
+   * gate-driven loop still converges (writes DONE) for them; /finish itself
+   * skips the shipped-record commit for those choices (#204, #205).
    */
   finishChoice?: FinishChoice;
 }
@@ -76,17 +72,6 @@ export interface FeatureRunnerDeps {
   /** Persist that a slug shipped (with its PR url, when opened) so
    *  discoverBacklog skips it next poll and the startup dashboard can link it. */
   markProcessed: (slug: string, prUrl?: string) => Promise<void>;
-  /**
-   * Task 11 (#204, #205): write + commit the `.docs/shipped/<slug>.md` record
-   * on the main checkout (base branch) once a feature ships, so future
-   * `discoverBacklog` polls can dedup by content even after a `.daemon/`
-   * ledger reset. Optional so existing test doubles that predate this field
-   * do not require updates. Best-effort at the call site: a throw here must
-   * never fail an otherwise-successful ship (see makeRunFeature's `done`
-   * branch, which wraps this call in try/catch and degrades to
-   * cache-only dedup on failure).
-   */
-  writeShippedRecord?: (params: { slug: string; specHash: string; pr: string }) => Promise<void>;
   /**
    * Daemon mode. When true, emit a structured engineer signal + narrative to the
    * cross-project engineer store on completion (Phase 9.1). Manual `/conduct` runs
@@ -219,52 +204,13 @@ export function makeRunFeature(
 
         await deps.markProcessed(item.slug, outcome.prUrl);
 
-        // Task 11 (#204, #205): write the shipped record before teardown, while
-        // the worktree's committed spec (plan+stories) is still readable. The
-        // pr field is the finish-flow's PR URL when opened, or the literal
-        // string 'local' for merge-local finishes (outcome.prUrl absent).
-        // Best-effort: never let a write/commit failure fail an otherwise
-        // successful ship — degrade to local-ledger-only dedup instead.
-        //
-        // Task 12 (#204, #205): `discard`/`keep` are no-ship outcomes — the
-        // gate-driven loop still converges (writes DONE) for them like any
-        // other finish choice, so `outcome.done` alone can't distinguish a
-        // real ship from "the operator chose not to ship." Skip the write
-        // entirely when the finish skill recorded one of those choices; no
-        // `.docs/shipped/<slug>.md` record must ever appear for them.
-        const isNoShipChoice =
-          outcome.finishChoice === 'discard' || outcome.finishChoice === 'keep';
-        if (deps.writeShippedRecord && !isNoShipChoice) {
-          try {
-            const planBytes = await readFile(
-              join(worktree.path, '.docs/plans', `${item.slug}.md`),
-            );
-            let storiesBytes: Buffer | null = null;
-            try {
-              storiesBytes = await readFile(
-                join(worktree.path, '.docs/stories', `${item.slug}.md`),
-              );
-            } catch {
-              storiesBytes = null;
-            }
-            const { digest } = computeSpecHash(planBytes, storiesBytes);
-            await deps.writeShippedRecord({
-              slug: item.slug,
-              specHash: digest,
-              pr: outcome.prUrl ?? 'local',
-            });
-          } catch (err) {
-            // Task 12 (#204, #205): a single warn, never a throw — the ship
-            // already completed (markProcessed above), so a write/commit
-            // failure here only means dedup falls back to the `.daemon/`
-            // ledger cache for this slug, not that the ship failed.
-            log(
-              `[daemon-runner] shipped-record write failed — dedup degraded to local cache for ${item.slug}: ${
-                err instanceof Error ? err.message : String(err)
-              }`,
-            );
-          }
-        }
+        // #204/#205: the durable `.docs/shipped/<slug>.md` record is NOT
+        // written here — `/finish` commits it on the IMPLEMENTATION branch
+        // (via `conduct shipped-record`) before the branch's final push, so
+        // the human merge lands code + shipped-fact atomically (ADR
+        // adr-2026-07-03-committed-shipped-record-dispatch-dedup, Decision 1).
+        // If the finish flow failed to write it, dedup degrades to the
+        // `.daemon/processed/` ledger marker written above.
 
         await deps.teardownWorktree(worktree, false);
         log(`✓ ${item.slug} shipped${outcome.prUrl ? ` → ${outcome.prUrl}` : ''}`);

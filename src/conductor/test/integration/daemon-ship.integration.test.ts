@@ -1,338 +1,230 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
+import {
+  detectShippedRecordCommand,
+  dispatchShippedRecord,
+} from '../../src/engine/shipped-record-cli.js';
 import { makeRunFeature, type FeatureRunnerDeps, type WorktreeOutcome } from '../../src/engine/daemon-runner.js';
 import type { BacklogItem } from '../../src/engine/daemon.js';
-import { makeFeatureRunnerDeps } from '../../src/engine/daemon-deps.js';
 import { specHash } from '../../src/engine/shipped-record.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Task 11 (#204, #205): finish-side record write on the ship path. These
-// integration specs exercise the REAL git-backed `writeShippedRecord` deps
-// factory (`makeFeatureRunnerDeps`) against a real temp git repo standing in
-// for the daemon's main checkout — not a fake in-memory double — so a passing
-// suite here actually proves the `.docs/shipped/<slug>.md` record gets
-// committed on the ship path, before the (already-happened) PR push, and that
-// failures degrade gracefully rather than failing the ship.
+// Story 2 (#204, #205) — the shipped record rides the IMPLEMENTATION branch.
+// Per adr-2026-07-03-committed-shipped-record-dispatch-dedup Decision 1, the
+// finish flow commits `.docs/shipped/<slug>.md` on the implementation PR
+// branch (via `conduct shipped-record`) BEFORE the branch's final push, so the
+// human merge lands code + shipped-fact atomically. These integration specs
+// drive the REAL subcommand (`dispatchShippedRecord`) against a real git repo
+// standing in for the feature worktree on its impl branch — a real-binary
+// smoke, not an injected fake — and pin that the daemon-side ship path writes
+// NO record at all (the as-built main-checkout write was an ADR violation:
+// never pushed, and it wedges fastForwardRoot's --ff-only advance).
 // ─────────────────────────────────────────────────────────────────────────────
 
 const execFile = promisify(execFileCb);
-const ITEM: BacklogItem = { slug: 'feat-x' };
+const SLUG = 'feat-x';
+const BRANCH = `feat/${SLUG}`;
 
 const APPROVED_STORIES = '# Stories\n**Status:** Accepted\n';
 const PLAN = '# Plan\n\n### Task 1\n**Dependencies:** none\n';
 
-let projectRoot: string;
-let worktreePath: string;
+let repo: string; // the feature worktree checkout, on its implementation branch
 
-const git = async (args: string[], cwd = projectRoot) => {
+const git = async (args: string[], cwd = repo) => {
   const { stdout } = await execFile('git', args, { cwd });
   return stdout.trim();
 };
 
-/** Write the plan+stories into a fake worktree dir (as if cut from base branch). */
-async function writeWorktreeSpec(slug: string): Promise<void> {
-  await mkdir(join(worktreePath, '.docs/plans'), { recursive: true });
-  await mkdir(join(worktreePath, '.docs/stories'), { recursive: true });
-  await writeFile(join(worktreePath, `.docs/plans/${slug}.md`), PLAN);
-  await writeFile(join(worktreePath, `.docs/stories/${slug}.md`), APPROVED_STORIES);
+async function writeSpec(slug: string): Promise<void> {
+  await mkdir(join(repo, '.docs/plans'), { recursive: true });
+  await mkdir(join(repo, '.docs/stories'), { recursive: true });
+  await writeFile(join(repo, `.docs/plans/${slug}.md`), PLAN);
+  await writeFile(join(repo, `.docs/stories/${slug}.md`), APPROVED_STORIES);
 }
 
-function baseDeps(
-  outcome: WorktreeOutcome,
-  writeShippedRecord: FeatureRunnerDeps['writeShippedRecord'],
-): FeatureRunnerDeps {
-  return {
-    createWorktree: async (slug) => ({ path: join(worktreePath), branch: `feat/${slug}` }),
-    runConductor: async () => {},
-    readOutcome: async () => outcome,
-    teardownWorktree: async () => {},
-    markProcessed: async () => {},
-    daemon: false,
-    provider: {
-      invoke: async () => ({ success: true, output: '' }),
-      invokeInteractive: async () => {},
-    },
-    project: 'test-project',
-    projectRoot,
-    writeShippedRecord,
-  };
+async function runShippedRecord(slug: string, pr: string): Promise<number> {
+  const cmd = detectShippedRecordCommand(['node', 'conduct', 'shipped-record', '--slug', slug, '--pr', pr]);
+  if (!cmd || cmd.kind !== 'write') throw new Error('detect failed for valid args');
+  return dispatchShippedRecord(cmd, repo);
 }
 
-describe('daemon ship path — shipped-record write (Task 11)', () => {
-  beforeEach(async () => {
-    projectRoot = await mkdtemp(join(tmpdir(), 'daemon-ship-main-'));
-    worktreePath = await mkdtemp(join(tmpdir(), 'daemon-ship-wt-'));
-    await git(['init', '-q']);
-    await git(['config', 'user.email', 'test@example.com']);
-    await git(['config', 'user.name', 'Test']);
-    await writeFile(join(projectRoot, 'README.md'), 'seed\n');
-    await git(['add', 'README.md']);
-    await git(['commit', '-q', '-m', 'seed']);
-    await writeWorktreeSpec(ITEM.slug);
-  });
+beforeEach(async () => {
+  repo = await mkdtemp(join(tmpdir(), 'daemon-ship-wt-'));
+  await git(['init', '-q', '-b', 'main']);
+  await git(['config', 'user.email', 'test@example.com']);
+  await git(['config', 'user.name', 'Test']);
+  await writeFile(join(repo, 'README.md'), 'seed\n');
+  await git(['add', 'README.md']);
+  await git(['commit', '-q', '-m', 'seed']);
+  // The implementation branch the finish flow runs on, with the spec committed
+  // (worktrees are cut from base with the vetted plan+stories already merged).
+  await git(['checkout', '-q', '-b', BRANCH]);
+  await writeSpec(SLUG);
+  await git(['add', '.docs']);
+  await git(['commit', '-q', '-m', `merge spec: ${SLUG}`]);
+});
 
-  afterEach(async () => {
-    await rm(projectRoot, { recursive: true, force: true });
-    await rm(worktreePath, { recursive: true, force: true });
-  });
+afterEach(async () => {
+  await rm(repo, { recursive: true, force: true });
+  vi.restoreAllMocks();
+});
 
-  it('PR finish: writes and commits the shipped record with the PR URL in frontmatter', async () => {
-    const realDeps = makeFeatureRunnerDeps({
-      projectRoot,
-      worktreeBase: tmpdir(),
-      baseBranch: 'main',
-      runConductorInWorktree: async () => {},
-      provider: { invoke: async () => ({ success: true, output: '' }), invokeInteractive: async () => {} },
-    });
+describe('conduct shipped-record — record committed on the implementation branch (Story 2)', () => {
+  it('PR finish: commits the record on the impl branch (not base) with all four frontmatter fields', async () => {
+    const code = await runShippedRecord(SLUG, 'https://github.com/acme/repo/pull/42');
+    expect(code).toBe(0);
 
-    const run = makeRunFeature(
-      baseDeps(
-        { done: true, halted: false, prUrl: 'https://github.com/acme/repo/pull/42' },
-        realDeps.writeShippedRecord,
-      ),
-    );
-
-    const out = await run(ITEM);
-    expect(out.status).toBe('done');
-
-    const recordPath = join(projectRoot, `.docs/shipped/${ITEM.slug}.md`);
-    const content = await readFile(recordPath, 'utf-8');
+    const content = await readFile(join(repo, `.docs/shipped/${SLUG}.md`), 'utf-8');
+    expect(content).toContain(`slug: ${SLUG}`);
     expect(content).toContain('pr: https://github.com/acme/repo/pull/42');
-    expect(content).toContain(`slug: ${ITEM.slug}`);
+    expect(content).toMatch(/spec_hash: \S+/);
+    expect(content).toMatch(/shipped: \d{4}-\d{2}-\d{2}/);
 
-    const log = await git(['log', '-1', '--format=%s']);
-    expect(log).toBe(`shipped record: ${ITEM.slug}`);
-
-    // The shipped record itself must be committed (not merely written) —
-    // unrelated daemon side effects (e.g. the mergeable-watch registry) may
-    // also touch untracked `.daemon/` files on this path, so scope the
-    // clean-tree assertion to the shipped-record path rather than the whole
-    // working tree.
-    const shippedStatus = await git(['status', '--porcelain', '--', '.docs/shipped']);
-    expect(shippedStatus).toBe('');
+    // Committed (not merely written), on the impl branch…
+    expect(await git(['log', '-1', '--format=%s'])).toBe(`shipped record: ${SLUG}`);
+    expect(await git(['status', '--porcelain', '--', '.docs/shipped'])).toBe('');
+    // …and NOT on the base branch: the record rides the PR, so an unmerged PR
+    // leaves base without a record (the ADR's risk-table property).
+    const onBase = await git(['ls-tree', '-r', '--name-only', 'main', '--', '.docs/shipped']);
+    expect(onBase).toBe('');
   });
 
-  it('merge-local finish: writes the shipped record with pr: local', async () => {
-    const realDeps = makeFeatureRunnerDeps({
-      projectRoot,
-      worktreeBase: tmpdir(),
-      baseBranch: 'main',
-      runConductorInWorktree: async () => {},
-      provider: { invoke: async () => ({ success: true, output: '' }), invokeInteractive: async () => {} },
+  it('hash parity: the record spec_hash matches what discovery computes for the same bytes', async () => {
+    await runShippedRecord(SLUG, 'https://github.com/acme/repo/pull/42');
+    const { digest } = specHash(Buffer.from(PLAN), Buffer.from(APPROVED_STORIES));
+    const content = await readFile(join(repo, `.docs/shipped/${SLUG}.md`), 'utf-8');
+    expect(content).toContain(`spec_hash: ${digest}`);
+  });
+
+  it('merge-local finish: the record (pr: local) is committed before the merge and lands in the merged commits', async () => {
+    const code = await runShippedRecord(SLUG, 'local');
+    expect(code).toBe(0);
+    expect(await readFile(join(repo, `.docs/shipped/${SLUG}.md`), 'utf-8')).toContain('pr: local');
+
+    // The finish flow then merges the branch — the record is part of the merge.
+    await git(['checkout', '-q', 'main']);
+    await git(['merge', '-q', '--no-edit', BRANCH]);
+    const onBase = await git(['ls-tree', '-r', '--name-only', 'main', '--', '.docs/shipped']);
+    expect(onBase).toBe(`.docs/shipped/${SLUG}.md`);
+  });
+
+  it('unreadable plan degrades: warns once with the canonical line, exits 0, commits nothing', async () => {
+    const warns: string[] = [];
+    vi.spyOn(console, 'error').mockImplementation((m: unknown) => {
+      warns.push(String(m));
     });
 
-    const run = makeRunFeature(
-      baseDeps({ done: true, halted: false, prUrl: undefined }, realDeps.writeShippedRecord),
-    );
+    const code = await runShippedRecord('no-such-slug', 'https://github.com/acme/repo/pull/1');
+    expect(code).toBe(0); // never blocks the ship
 
-    const out = await run(ITEM);
-    expect(out.status).toBe('done');
-
-    const recordPath = join(projectRoot, `.docs/shipped/${ITEM.slug}.md`);
-    const content = await readFile(recordPath, 'utf-8');
-    expect(content).toContain('pr: local');
-
-    const log = await git(['log', '-1', '--format=%s']);
-    expect(log).toBe(`shipped record: ${ITEM.slug}`);
-  });
-
-  it('write failure degrades gracefully: ship completes, no throw, no record written', async () => {
-    const failing: FeatureRunnerDeps['writeShippedRecord'] = async () => {
-      throw new Error('disk full');
-    };
-
-    const run = makeRunFeature(
-      baseDeps({ done: true, halted: false, prUrl: 'https://github.com/acme/repo/pull/1' }, failing),
-    );
-
-    const out = await run(ITEM);
-    // Ship still succeeds despite the write handler throwing.
-    expect(out.status).toBe('done');
-
-    const recordPath = join(projectRoot, `.docs/shipped/${ITEM.slug}.md`);
-    await expect(readFile(recordPath, 'utf-8')).rejects.toThrow();
-  });
-
-  // ───────────────────────────────────────────────────────────────────────────
-  // Task 12 (#204, #205): finish-side degrade + no-ship paths.
-  // ───────────────────────────────────────────────────────────────────────────
-
-  it('write failure degrades: warns exactly once, ship verdict unaffected', async () => {
-    const logs: string[] = [];
-    const failing: FeatureRunnerDeps['writeShippedRecord'] = async () => {
-      throw new Error('ENOSPC: disk full');
-    };
-
-    const run = makeRunFeature({
-      ...baseDeps(
-        { done: true, halted: false, prUrl: 'https://github.com/acme/repo/pull/7' },
-        failing,
-      ),
-      log: (msg) => logs.push(msg),
-    });
-
-    const out = await run(ITEM);
-
-    // Finish verdict unchanged — ship completes exactly as though the write
-    // never happened.
-    expect(out.status).toBe('done');
-    expect(out.prUrl).toBe('https://github.com/acme/repo/pull/7');
-
-    const recordPath = join(projectRoot, `.docs/shipped/${ITEM.slug}.md`);
-    await expect(readFile(recordPath, 'utf-8')).rejects.toThrow();
-
-    // Exactly one warn, matching the required phrasing, no retries.
-    const warnLines = logs.filter((l) => l.includes('shipped-record write failed'));
+    const warnLines = warns.filter((l) => l.includes('shipped-record write failed'));
     expect(warnLines).toHaveLength(1);
     expect(warnLines[0]).toContain(
-      `shipped-record write failed — dedup degraded to local cache for ${ITEM.slug}`,
+      'shipped-record write failed — dedup degraded to local cache for no-such-slug',
     );
+
+    await expect(readFile(join(repo, '.docs/shipped/no-such-slug.md'), 'utf-8')).rejects.toThrow();
+    expect(await git(['log', '--format=%s'])).not.toContain('shipped record: no-such-slug');
   });
 
-  it('commit failure degrades: warns exactly once, ship still completes, no record persists', async () => {
-    // Use the REAL git-backed deps factory, but force git writes (add/commit)
-    // to fail deterministically (independent of ambient global git config) by
-    // pre-seeding a stale `.git/index.lock` — every subsequent `git add`/`git
-    // commit` fails with "Unable to create ... File exists", exercising the
-    // same try/catch that guards the commit step regardless of exactly which
-    // git op inside it fails first.
-    await writeFile(join(projectRoot, '.git', 'index.lock'), '');
-
-    const logs: string[] = [];
-    const realDeps = makeFeatureRunnerDeps({
-      projectRoot,
-      worktreeBase: tmpdir(),
-      baseBranch: 'main',
-      runConductorInWorktree: async () => {},
-      provider: { invoke: async () => ({ success: true, output: '' }), invokeInteractive: async () => {} },
-      log: (msg) => logs.push(msg),
+  it('commit failure degrades: warns once, exits 0, no record commit lands', async () => {
+    // A stale index.lock makes every `git add`/`git commit` fail
+    // deterministically, exercising the same try/catch whichever git op
+    // inside it fails first.
+    await writeFile(join(repo, '.git', 'index.lock'), '');
+    const warns: string[] = [];
+    vi.spyOn(console, 'error').mockImplementation((m: unknown) => {
+      warns.push(String(m));
     });
 
-    const run = makeRunFeature({
-      ...baseDeps(
-        { done: true, halted: false, prUrl: 'https://github.com/acme/repo/pull/9' },
-        realDeps.writeShippedRecord,
-      ),
-      log: (msg) => logs.push(msg),
-    });
+    const code = await runShippedRecord(SLUG, 'https://github.com/acme/repo/pull/9');
+    expect(code).toBe(0);
 
-    const out = await run(ITEM);
-
-    // Ship still succeeds — the commit failure is caught and swallowed.
-    expect(out.status).toBe('done');
-
-    // No commit landed for the shipped record (git commit failed).
-    const log = await git(['log', '--format=%s']);
-    expect(log).not.toContain(`shipped record: ${ITEM.slug}`);
-
-    // Exactly one warn (from the daemon-deps handler), no throw surfaced.
-    const warnLines = logs.filter((l) => l.includes('shipped-record write failed'));
+    const warnLines = warns.filter((l) => l.includes('shipped-record write failed'));
     expect(warnLines).toHaveLength(1);
-    expect(warnLines[0]).toContain(
-      `shipped-record write failed — dedup degraded to local cache for ${ITEM.slug}`,
-    );
+
+    await rm(join(repo, '.git', 'index.lock'));
+    expect(await git(['log', '--format=%s'])).not.toContain(`shipped record: ${SLUG}`);
   });
 
-  it('discard outcome: no record written, no .docs/shipped/<slug>.md anywhere', async () => {
-    const realDeps = makeFeatureRunnerDeps({
-      projectRoot,
-      worktreeBase: tmpdir(),
-      baseBranch: 'main',
-      runConductorInWorktree: async () => {},
-      provider: { invoke: async () => ({ success: true, output: '' }), invokeInteractive: async () => {} },
-    });
+  it('idempotent re-run: identical content already committed produces no new commit and exits 0', async () => {
+    await runShippedRecord(SLUG, 'https://github.com/acme/repo/pull/42');
+    const firstHead = await git(['rev-parse', 'HEAD']);
+    const firstCount = await git(['rev-list', '--count', 'HEAD']);
 
-    const run = makeRunFeature(
-      baseDeps(
-        { done: true, halted: false, prUrl: undefined, finishChoice: 'discard' },
-        realDeps.writeShippedRecord,
-      ),
-    );
+    // Same slug, same plan/stories, same PR, same day → byte-identical record.
+    const code = await runShippedRecord(SLUG, 'https://github.com/acme/repo/pull/42');
+    expect(code).toBe(0);
 
-    const out = await run(ITEM);
-
-    // Finish flow unchanged — the loop still converges to 'done'.
-    expect(out.status).toBe('done');
-
-    const recordPath = join(projectRoot, `.docs/shipped/${ITEM.slug}.md`);
-    await expect(readFile(recordPath, 'utf-8')).rejects.toThrow();
-
-    const shippedStatus = await git(['status', '--porcelain', '--', '.docs/shipped']);
-    expect(shippedStatus).toBe('');
-    const log = await git(['log', '--format=%s']);
-    expect(log).not.toContain(`shipped record: ${ITEM.slug}`);
+    expect(await git(['rev-parse', 'HEAD'])).toBe(firstHead);
+    expect(await git(['rev-list', '--count', 'HEAD'])).toBe(firstCount);
   });
 
-  it('keep outcome: no record written, no .docs/shipped/<slug>.md anywhere', async () => {
-    const realDeps = makeFeatureRunnerDeps({
-      projectRoot,
-      worktreeBase: tmpdir(),
-      baseBranch: 'main',
-      runConductorInWorktree: async () => {},
-      provider: { invoke: async () => ({ success: true, output: '' }), invokeInteractive: async () => {} },
-    });
-
-    const run = makeRunFeature(
-      baseDeps(
-        { done: true, halted: false, prUrl: undefined, finishChoice: 'keep' },
-        realDeps.writeShippedRecord,
-      ),
-    );
-
-    const out = await run(ITEM);
-
-    expect(out.status).toBe('done');
-
-    const recordPath = join(projectRoot, `.docs/shipped/${ITEM.slug}.md`);
-    await expect(readFile(recordPath, 'utf-8')).rejects.toThrow();
-
-    const shippedStatus = await git(['status', '--porcelain', '--', '.docs/shipped']);
-    expect(shippedStatus).toBe('');
-    const log = await git(['log', '--format=%s']);
-    expect(log).not.toContain(`shipped record: ${ITEM.slug}`);
+  it('malformed args never fall through to the pipeline launcher: guide + exit 1', async () => {
+    const cmd = detectShippedRecordCommand(['node', 'conduct', 'shipped-record', '--slug', SLUG]);
+    expect(cmd).toEqual({ kind: 'guide' }); // recognized subcommand, misused — never null
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect(await dispatchShippedRecord(cmd!, repo)).toBe(1);
   });
+});
 
-  it('idempotent re-run: identical content already committed produces no new commit', async () => {
-    const realDeps = makeFeatureRunnerDeps({
-      projectRoot,
-      worktreeBase: tmpdir(),
-      baseBranch: 'main',
-      runConductorInWorktree: async () => {},
-      provider: { invoke: async () => ({ success: true, output: '' }), invokeInteractive: async () => {} },
-    });
+describe('daemon ship path — writes NO shipped record (ADR Decision 1 compliance)', () => {
+  it('a done ship marks the ledger but never writes/commits .docs/shipped/ on the daemon checkout', async () => {
+    // The daemon's main checkout: distinct from the worktree, sitting on base.
+    const mainCheckout = await mkdtemp(join(tmpdir(), 'daemon-ship-main-'));
+    await execFile('git', ['init', '-q', '-b', 'main'], { cwd: mainCheckout });
+    await execFile('git', ['config', 'user.email', 'test@example.com'], { cwd: mainCheckout });
+    await execFile('git', ['config', 'user.name', 'Test'], { cwd: mainCheckout });
+    await writeFile(join(mainCheckout, 'README.md'), 'seed\n');
+    await execFile('git', ['add', 'README.md'], { cwd: mainCheckout });
+    await execFile('git', ['commit', '-q', '-m', 'seed'], { cwd: mainCheckout });
 
+    const processed: string[] = [];
     const outcome: WorktreeOutcome = {
       done: true,
       halted: false,
       prUrl: 'https://github.com/acme/repo/pull/42',
     };
+    const deps: FeatureRunnerDeps = {
+      createWorktree: async () => ({ path: repo, branch: BRANCH }),
+      runConductor: async () => {},
+      readOutcome: async () => outcome,
+      teardownWorktree: async () => {},
+      markProcessed: async (slug) => {
+        processed.push(slug);
+      },
+      daemon: false,
+      provider: {
+        invoke: async () => ({ success: true, output: '' }),
+        invokeInteractive: async () => {},
+      },
+      project: 'test-project',
+      projectRoot: mainCheckout,
+    };
 
-    const run = makeRunFeature(baseDeps(outcome, realDeps.writeShippedRecord));
+    const item: BacklogItem = { slug: SLUG };
+    const out = await makeRunFeature(deps)(item);
+    expect(out.status).toBe('done');
+    expect(processed).toEqual([SLUG]);
 
-    await run(ITEM);
-    const firstLogHash = await git(['rev-parse', 'HEAD']);
-    const firstCount = await git(['rev-list', '--count', 'HEAD']);
+    // No record, no commit — local main stays even with its origin so
+    // fastForwardRoot's --ff-only advance keeps working after every ship.
+    await expect(
+      readFile(join(mainCheckout, `.docs/shipped/${SLUG}.md`), 'utf-8'),
+    ).rejects.toThrow();
+    const { stdout: logOut } = await execFile('git', ['log', '--format=%s'], {
+      cwd: mainCheckout,
+    });
+    expect(logOut).not.toContain('shipped record');
+    const { stdout: count } = await execFile('git', ['rev-list', '--count', 'HEAD'], {
+      cwd: mainCheckout,
+    });
+    expect(count.trim()).toBe('1'); // still just the seed commit
 
-    // Second run: same slug, same plan/stories (same specHash), same PR →
-    // identical rendered content except for the `shipped:` date field, which
-    // is stable within the same day, so content is byte-identical.
-    await writeWorktreeSpec(ITEM.slug); // re-write same content into the worktree
-    await run(ITEM);
-
-    const secondLogHash = await git(['rev-parse', 'HEAD']);
-    const secondCount = await git(['rev-list', '--count', 'HEAD']);
-
-    expect(secondLogHash).toBe(firstLogHash); // no new commit created
-    expect(secondCount).toBe(firstCount);
-
-    // Sanity: confirm the hash used is the one specHash would compute (guards
-    // against the test accidentally passing due to an unrelated no-op).
-    const { digest } = specHash(Buffer.from(PLAN), Buffer.from(APPROVED_STORIES));
-    const content = await readFile(join(projectRoot, `.docs/shipped/${ITEM.slug}.md`), 'utf-8');
-    expect(content).toContain(`spec_hash: ${digest}`);
+    await rm(mainCheckout, { recursive: true, force: true });
   });
 });
