@@ -207,7 +207,7 @@ describe('createDependencyLinks (writer)', () => {
     const gh: GhRunner = async (args, opts) => {
       calls.push({ args: [...args], cwd: opts.cwd });
       const path = args.find((a) => a.includes('/dependencies/blocked_by'));
-      if (args[1] !== '--method' && path) {
+      if (!args.includes('-X') && path) {
         // GET
         return { stdout: JSON.stringify(existing[path] ?? []) };
       }
@@ -255,14 +255,14 @@ describe('createDependencyLinks (writer)', () => {
     const posts = calls.filter((c) => c.args.includes('POST'));
     expect(posts.length).toBe(1);
     expect(posts[0].args).toContain('repos/acme/app/issues/230/dependencies/blocked_by');
-    expect(posts[0].args).toContain('issue_number=217');
+    expect(posts[0].args).toContain('issue=acme/app#217');
   });
 
   it('never issues an edit/close/label/delete mutation — the only write is create-link POST', async () => {
     const { gh, calls } = makeGh({});
     await createDependencyLinks([edge], { gh, cwd: '/repo' });
 
-    const mutating = calls.filter((c) => c.args.includes('--method'));
+    const mutating = calls.filter((c) => c.args.includes('-X'));
     expect(mutating.length).toBe(1);
     expect(mutating[0].args).toContain('POST');
     expect(mutating[0].args).not.toContain('PATCH');
@@ -301,7 +301,7 @@ describe('createDependencyLinks (writer)', () => {
     const gh: GhRunner = async (args) => {
       calls.push({ args: [...args] });
       const path = args.find((a) => a.includes('/dependencies/blocked_by'));
-      if (args[1] !== '--method' && path) {
+      if (!args.includes('-X') && path) {
         const sourceMatch = path.match(/issues\/(\d+)\/dependencies/);
         const sourceRef = `acme/app#${sourceMatch?.[1]}`;
         const targets = [...linked]
@@ -316,8 +316,8 @@ describe('createDependencyLinks (writer)', () => {
         failNextPost = false;
         throw new Error('simulated transient write failure');
       }
-      const issueNumberArg = args.find((a) => a.startsWith('issue_number='));
-      const targetNumber = issueNumberArg?.split('=')[1];
+      const issueArg = args.find((a) => a.startsWith('issue='));
+      const targetNumber = issueArg?.split('#')[1];
       const sourceMatch = path?.match(/issues\/(\d+)\/dependencies/);
       const sourceRef = `acme/app#${sourceMatch?.[1]}`;
       linked.add(`${sourceRef}->acme/app#${targetNumber}`);
