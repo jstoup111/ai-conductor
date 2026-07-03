@@ -7,7 +7,7 @@ import {
   unlink as unlinkFile,
 } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
-import { relative, join } from 'node:path';
+import { relative, join, basename } from 'node:path';
 import { HALT_MARKER } from './halt-marker.js';
 import type { ConductState } from '../types/index.js';
 import type {
@@ -49,6 +49,7 @@ import {
   readRemediationPlan,
   sweepStaleReviewArtifacts,
   parseTrack,
+  parseIntakeSourceRef,
   type RemediationGap,
 } from './artifacts.js';
 import type { Track } from '../types/index.js';
@@ -91,6 +92,10 @@ import {
   type EscalateBuildFailureOpts,
   type EscalateBuildFailureResult,
 } from './build-failure-escalation.js';
+import { writeIntakeMarker } from './engineer/intake-marker.js';
+import { readMachineOwnerConfig } from './owner-gate/machine-identity.js';
+import { resolveDaemonOwner, type GhRunner } from './owner-gate/identity.js';
+import { makeProductionGh } from './pr-labels.js';
 
 export type CheckpointResponse = 'continue' | 'back' | 'quit';
 
@@ -327,6 +332,12 @@ export interface ConductorOptions {
    * Not called for rebase-conflict HALTs (pushing mid-rebase is unsafe).
    */
   escalateBuildFailure?: (opts: EscalateBuildFailureOpts) => Promise<EscalateBuildFailureResult>;
+  /**
+   * Shell runner for the `gh` CLI (owner identity resolution). Injected for
+   * tests; defaults to the real production gh. Used to resolve machine-scoped
+   * operator identity for plan-step owner stamping (Slice B, D4).
+   */
+  gh?: GhRunner;
 }
 
 function stepHasCompletionCheck(step: StepName): boolean {
@@ -395,6 +406,8 @@ export class Conductor {
   private onComplexityAssessment?: (recommended: ComplexityTier | null) => Promise<ComplexityTier>;
   /** Escalation function — see ConductorOptions.escalateBuildFailure. */
   private escalateBuildFailure: (opts: EscalateBuildFailureOpts) => Promise<EscalateBuildFailureResult>;
+  /** gh CLI runner for owner identity resolution (plan-step stamping, Slice B D4). */
+  private gh: GhRunner;
   /**
    * The most recent engine-native rebase outcome. The `rebase` step is special:
    * its gate verdict is computed by the native handler (not from a file
@@ -434,6 +447,7 @@ export class Conductor {
     this.onRecovery = opts.onRecovery;
     this.onComplexityAssessment = opts.onComplexityAssessment;
     this.escalateBuildFailure = opts.escalateBuildFailure ?? defaultEscalateBuildFailure;
+    this.gh = opts.gh ?? makeProductionGh();
   }
 
   /**
@@ -1391,6 +1405,59 @@ export class Conductor {
                   });
                 }
               }
+            }
+          }
+
+          // Plan-step owner stamping (Slice B, Story 3, D4). After the artifact
+          // gate passes (all `.docs/plans/*.md` artifacts validated), stamp the
+          // `.docs/intake/<plan-stem>.md` owner marker so the operator identity
+          // travels with the spec onto the merged default branch. Use the same
+          // machine-scoped identity resolution as the `/engineer` path.
+          if (step.name === 'plan') {
+            const planFiles = await findArtifactFilesForStep(this.projectRoot, 'plan');
+            if (planFiles.length > 0) {
+              // Extract the plan stem from the first plan file (e.g., "my-feature"
+              // from ".docs/plans/my-feature.md"). The daemon's backlog resolver uses
+              // the same basename(file, '.md') logic for keying.
+              const planStem = basename(planFiles[0], '.md');
+
+              // Resolve machine-scoped owner identity (configured spec_owner or gh login).
+              // Fail-closed: throw if unresolved (same error text as Story 2).
+              const ownerConfig = await readMachineOwnerConfig();
+              const ownerResolution = await resolveDaemonOwner(
+                ownerConfig,
+                this.gh,
+                this.projectRoot,
+              );
+
+              if (!ownerResolution.resolved) {
+                throw new Error(
+                  'Unresolved operator identity — cannot stamp owner marker. ' +
+                  'Configure spec_owner in ~/.ai-conductor/config.yml, or run `gh auth login` ' +
+                  'to authenticate with GitHub.',
+                );
+              }
+
+              // Preserve any pre-existing Source-Ref from a prior engineer-path run
+              // (Task 13a: an existing Source-Ref: line survives owner stamping).
+              let sourceRef: string | undefined;
+              const markerPath = join(this.projectRoot, '.docs', 'intake', `${planStem}.md`);
+              try {
+                const existingMarker = await readFile(markerPath, 'utf-8');
+                sourceRef = parseIntakeSourceRef(existingMarker) ?? undefined;
+              } catch {
+                // Marker file doesn't exist yet — no pre-existing source-ref to preserve.
+                sourceRef = undefined;
+              }
+
+              // Write the intake marker with the resolved owner and (if present)
+              // preserved source-ref.
+              await writeIntakeMarker(
+                this.projectRoot,
+                planStem,
+                sourceRef,
+                ownerResolution.id,
+              );
             }
           }
 
