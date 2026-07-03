@@ -75,6 +75,13 @@ function fsTreeSource(root: string): BacklogTreeSource {
         return [];
       }
     },
+    async listShippedFiles() {
+      try {
+        return (await readdir(join(root, '.docs/shipped'))).filter((f) => f.endsWith('.md'));
+      } catch {
+        return [];
+      }
+    },
     async readFile(relPath: string) {
       try {
         return await fsReadFile(join(root, relPath), 'utf-8');
