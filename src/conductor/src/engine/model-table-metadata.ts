@@ -83,8 +83,14 @@ export const PIN_EXEMPT_SKILLS: readonly string[] = [
 // table still documents: domain-reviewer/evaluator (dispatched sub-agents),
 // code-review/debugging/simplify/engineer (skills with their own model pin
 // but no engine step), conduct/pr (orchestration skills), tdd-red/tdd-green
-// (TDD sub-phases), writing-system-tests, and the 10 cto-* assess specialists.
+// (TDD sub-phases), and the 10 cto-* assess specialists.
 // Rendered after the engine rows by the generator (Task 5).
+//
+// NOTE: "writing-system-tests" is deliberately NOT listed here — it is the
+// display name of the `acceptance_specs` engine step (see
+// DISPLAY_NAME_OVERRIDES in generate-model-table.ts), not a standalone extra
+// row. Listing it here too would collide with the renamed engine row and
+// trip assertNoDuplicateRowNames.
 // ────────────────────────────────────────────────────────────────────────────
 
 export interface ExtraModelTableRow {
@@ -151,11 +157,6 @@ export const EXTRA_MODEL_TABLE_ROWS: ExtraModelTableRow[] = [
     name: 'tdd-green',
     model: 'sonnet',
     rationale: 'Writing minimal implementation — constrained scope.',
-  },
-  {
-    name: 'writing-system-tests',
-    model: 'sonnet',
-    rationale: 'Generating specs from acceptance criteria — templated work.',
   },
   {
     name: 'cto-security',

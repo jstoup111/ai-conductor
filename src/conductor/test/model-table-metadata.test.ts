@@ -63,7 +63,6 @@ const EXPECTED_EXTRA_ROW_NAMES = [
   'pr',
   'tdd-red',
   'tdd-green',
-  'writing-system-tests',
   'cto-security',
   'cto-data-integrity',
   'cto-dependencies',

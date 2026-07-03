@@ -1,10 +1,17 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// Generated HARNESS.md model-selection table — splicer + (future) renderer/CLI.
+// Generated HARNESS.md model-selection table — splicer + renderer + (future) CLI.
 // See .docs/decisions/adr-2026-07-03-generated-model-table-single-source.md
-// and .docs/plans/generated-model-table.md (Task 6: pure splicer).
+// and .docs/plans/generated-model-table.md (Task 5: pure renderer; Task 6: pure
+// splicer).
 // ─────────────────────────────────────────────────────────────────────────────
 
-import type { StepName } from '../types/steps.js';
+import type { StepName, ComplexityTier } from '../types/index.js';
+import {
+  DEFAULT_STEP_MODELS,
+  DEFAULT_STEP_EFFORT,
+  DEFAULT_STEP_TIER_OVERRIDES,
+} from '../engine/resolved-config.js';
+import { STEP_RATIONALE, EXTRA_MODEL_TABLE_ROWS } from '../engine/model-table-metadata.js';
 
 export const BEGIN_MARKER = '<!-- BEGIN GENERATED: model-selection-table -->';
 export const END_MARKER = '<!-- END GENERATED: model-selection-table -->';
@@ -184,4 +191,124 @@ export function assertNoDuplicateRowNames(
   if (duplicates.length > 0) {
     throw new Error(`Duplicate model-table row name(s): ${duplicates.join(', ')}`);
   }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// renderModelTable
+//
+// Pure renderer: builds the full "| Skill/Agent | Model | Effort | Why |"
+// markdown table from the engine's typed defaults (DEFAULT_STEP_MODELS /
+// DEFAULT_STEP_EFFORT / DEFAULT_STEP_TIER_OVERRIDES, resolved-config.ts) plus
+// the STEP_RATIONALE / EXTRA_MODEL_TABLE_ROWS metadata. No filesystem access.
+//
+// Story TS-2 happy path 2 (.docs/stories/generated-model-table.md):
+//   - header row `| Skill/Agent | Model | Effort | Why |`
+//   - a step whose model/effort varies by complexity tier renders each
+//     distinct value once, suffixed with the tiers that share it, e.g.
+//     `sonnet (S/M), fable (L)`; a step whose value is tier-invariant renders
+//     plain (no suffix)
+//   - engine-derived rows are emitted first (STEP_RATIONALE key order, which
+//     covers all 21 StepName values), extra rows (EXTRA_MODEL_TABLE_ROWS)
+//     after
+// ────────────────────────────────────────────────────────────────────────────
+
+const TIERS: readonly ComplexityTier[] = ['S', 'M', 'L'];
+
+/**
+ * Display-name mapping from engine StepName to the table's "Skill/Agent"
+ * column text. Default: snake_case -> kebab-case. A handful of steps are
+ * dispatched under a different, more recognizable skill/agent name — those
+ * are listed explicitly here (ADR's naming mapping).
+ */
+const DISPLAY_NAME_OVERRIDES: Partial<Record<StepName, string>> = {
+  build: 'pipeline',
+  worktree: 'worktree-manager',
+  acceptance_specs: 'writing-system-tests',
+  architecture_review_as_built: 'architecture-review --as-built',
+  conflict_check: 'conflict-check',
+};
+
+export function stepDisplayName(step: StepName): string {
+  return DISPLAY_NAME_OVERRIDES[step] ?? step.replace(/_/g, '-');
+}
+
+function tierValue(step: StepName, tier: ComplexityTier, field: 'model' | 'effort'): string {
+  const override = DEFAULT_STEP_TIER_OVERRIDES[step]?.[tier]?.[field];
+  if (override !== undefined) return override;
+  return field === 'model' ? DEFAULT_STEP_MODELS[step] : DEFAULT_STEP_EFFORT[step];
+}
+
+/**
+ * Render a tier-varying field (model or effort) for a step. Groups the three
+ * tiers by identical resolved value, preserving S/M/L order both within a
+ * group's tier list and across groups (first tier at which a value appears
+ * determines the group's position). A step whose value is identical across
+ * all three tiers renders as the bare value with no tier suffix.
+ */
+export function renderTieredField(step: StepName, field: 'model' | 'effort'): string {
+  const groups: { value: string; tiers: ComplexityTier[] }[] = [];
+
+  for (const tier of TIERS) {
+    const value = tierValue(step, tier, field);
+    const existing = groups.find((g) => g.value === value);
+    if (existing) {
+      existing.tiers.push(tier);
+    } else {
+      groups.push({ value, tiers: [tier] });
+    }
+  }
+
+  if (groups.length === 1) {
+    return groups[0]!.value;
+  }
+
+  return groups.map((g) => `${g.value} (${g.tiers.join('/')})`).join(', ');
+}
+
+export interface ModelTableRow extends NamedRow {
+  model: string;
+  effort: string;
+  why: string;
+}
+
+/** All 21 engine-derived rows, in STEP_RATIONALE key order (bootstrap..remediate). */
+export function buildEngineRows(): ModelTableRow[] {
+  return (Object.keys(STEP_RATIONALE) as StepName[]).map((step) => ({
+    name: stepDisplayName(step),
+    model: renderTieredField(step, 'model'),
+    effort: renderTieredField(step, 'effort'),
+    why: STEP_RATIONALE[step],
+  }));
+}
+
+/** Rows for skills/agents with no corresponding engine step. */
+export function buildExtraRows(): ModelTableRow[] {
+  return EXTRA_MODEL_TABLE_ROWS.map((row) => ({
+    name: row.name,
+    model: row.model,
+    effort: '',
+    why: row.rationale,
+  }));
+}
+
+const TABLE_HEADER = '| Skill/Agent | Model | Effort | Why |';
+const TABLE_SEPARATOR = '|---|---|---|---|';
+
+function renderRow(row: ModelTableRow): string {
+  return `| ${row.name} | ${row.model} | ${row.effort} | ${row.why} |`;
+}
+
+/**
+ * Render the full generated model-selection table as markdown. Pure: reads
+ * only the imported typed metadata, no filesystem/network access, no
+ * randomness — same output every call.
+ */
+export function renderModelTable(): string {
+  const engineRows = buildEngineRows();
+  const extraRows = buildExtraRows();
+
+  assertNoDuplicateRowNames(engineRows, extraRows);
+
+  const lines = [TABLE_HEADER, TABLE_SEPARATOR, ...[...engineRows, ...extraRows].map(renderRow)];
+  return lines.join('\n');
 }

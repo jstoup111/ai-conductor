@@ -2,6 +2,10 @@ import { describe, it, expect } from 'vitest';
 import {
   spliceGeneratedRegion,
   assertNoDuplicateRowNames,
+  renderModelTable,
+  buildEngineRows,
+  buildExtraRows,
+  stepDisplayName,
   MarkerError,
   BEGIN_MARKER,
   END_MARKER,
@@ -150,5 +154,80 @@ describe('assertNoDuplicateRowNames (TS-1 negative path 3)', () => {
     const engineRows = [{ name: 'plan' }];
     const extraRows = [{ name: 'pr' }, { name: 'pr' }];
     expect(() => assertNoDuplicateRowNames(engineRows, extraRows)).toThrow(/pr/);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RED/GREEN specs for the pure renderer, renderModelTable() (.docs/stories/
+// generated-model-table.md, TS-2 happy path 2; Task 5 of the implementation
+// plan).
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('renderModelTable (TS-2 happy path 2)', () => {
+  it('outputs the header row', () => {
+    const table = renderModelTable();
+    expect(table).toContain('| Skill/Agent | Model | Effort | Why |');
+  });
+
+  it('renders the "plan" row model with tier suffixes: sonnet (S/M), fable (L)', () => {
+    const row = buildEngineRows().find((r) => r.name === 'plan');
+    expect(row).toBeDefined();
+    expect(row!.model).toBe('sonnet (S/M), fable (L)');
+  });
+
+  it('renders the "plan" row effort with tier suffixes: medium (S), high (M), xhigh (L)', () => {
+    const row = buildEngineRows().find((r) => r.name === 'plan');
+    expect(row).toBeDefined();
+    expect(row!.effort).toBe('medium (S), high (M), xhigh (L)');
+  });
+
+  it('renders "conflict-check" the same way as "plan": sonnet (S/M), fable (L)', () => {
+    const row = buildEngineRows().find((r) => r.name === 'conflict-check');
+    expect(row).toBeDefined();
+    expect(row!.model).toBe('sonnet (S/M), fable (L)');
+  });
+
+  it('renders a tier-invariant step (e.g. "complexity") without a tier suffix', () => {
+    const row = buildEngineRows().find((r) => r.name === 'complexity');
+    expect(row).toBeDefined();
+    expect(row!.model).toBe('sonnet');
+    expect(row!.effort).toBe('low');
+  });
+
+  it('includes explicit rows for "complexity" and "architecture-review --as-built"', () => {
+    const names = buildEngineRows().map((r) => r.name);
+    expect(names).toContain('complexity');
+    expect(names).toContain('architecture-review --as-built');
+  });
+
+  it('renders extra rows after all engine rows', () => {
+    const table = renderModelTable();
+    const lines = table.split('\n').slice(2); // skip header + separator
+    const engineNames = buildEngineRows().map((r) => r.name);
+    const extraNames = new Set(buildExtraRows().map((r) => r.name));
+
+    const firstExtraIndex = lines.findIndex((line) =>
+      [...extraNames].some((name) => line.startsWith(`| ${name} |`)),
+    );
+    expect(firstExtraIndex).toBeGreaterThan(-1);
+
+    // Every line before the first extra row must be an engine row.
+    for (let i = 0; i < firstExtraIndex; i++) {
+      const matchesEngineRow = engineNames.some((name) => lines[i]!.startsWith(`| ${name} |`));
+      expect(matchesEngineRow).toBe(true);
+    }
+  });
+
+  it('maps display names: snake_case -> kebab-case, build -> pipeline, worktree -> worktree-manager, acceptance_specs -> writing-system-tests', () => {
+    expect(stepDisplayName('architecture_diagram')).toBe('architecture-diagram');
+    expect(stepDisplayName('build')).toBe('pipeline');
+    expect(stepDisplayName('worktree')).toBe('worktree-manager');
+    expect(stepDisplayName('acceptance_specs')).toBe('writing-system-tests');
+  });
+
+  it('does not produce duplicate row names (e.g. acceptance_specs renamed to writing-system-tests)', () => {
+    expect(() => renderModelTable()).not.toThrow();
+    const names = [...buildEngineRows(), ...buildExtraRows()].map((r) => r.name);
+    expect(new Set(names).size).toBe(names.length);
   });
 });
