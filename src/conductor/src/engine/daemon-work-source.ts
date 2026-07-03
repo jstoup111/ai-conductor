@@ -9,6 +9,7 @@ import type { OwnerResolution } from './owner-gate/identity.js';
 import type { OwnerStamp } from './owner-gate/provenance.js';
 import type { DiscoverBacklogOpts, WaitingItem } from './daemon-backlog.js';
 import { createWaitingAnnouncer } from './daemon-waiting-announce.js';
+import type { BlockerResolver } from './blocker-resolver.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Public interface
@@ -62,6 +63,17 @@ export interface LocalWorkSourceDeps {
   readStamp?: (slug: string) => Promise<OwnerStamp>;
   readMergeTime?: (slug: string) => Promise<string | null>;
   cutover?: string | null;
+  /**
+   * Dependency-gate resolver factory (Task rem-fr4-1). Invoked FRESH on every
+   * `discover()` pass — never memoized across passes — because
+   * `createBlockerResolver()` builds a per-instance memo scoped to a single
+   * scan (daemon-backlog.ts:210-221). Reusing one resolver instance across
+   * polls would leak stale blocker verdicts into later scans. Absent →
+   * `resolver` is omitted from opts and the dependency gate is unwired
+   * (legacy byte-for-byte discovery, matching `resolveDaemonOwner`'s
+   * optionality pattern above).
+   */
+  makeResolver?: () => BlockerResolver;
 }
 
 /**
@@ -98,6 +110,9 @@ export function localWorkSource(deps: LocalWorkSourceDeps): WorkSource {
             cutover: deps.cutover ?? null,
           }
         : {};
+      // Fresh resolver instance per pass (never cached across polls) — see
+      // `makeResolver` doc above and daemon-backlog.ts:210-221.
+      const resolver = deps.makeResolver?.();
       const { items, waiting } = await deps.discoverBacklog(
         deps.projectRoot,
         (slug) => deps.isProcessed(slug),
@@ -106,6 +121,7 @@ export function localWorkSource(deps: LocalWorkSourceDeps): WorkSource {
           baseBranch: deps.baseBranch,
           hasWarned: (slug) => deps.hasWarned(slug),
           markWarned: (slug) => deps.markWarned(slug),
+          ...(resolver ? { resolver } : {}),
           ...gateOpts,
         },
       );
