@@ -337,6 +337,169 @@ describe('createPriorityResolver — stateful resolver with caching', () => {
       expect(result.bands.get('garbled-item')).toBe('no-issue');
     });
   });
+
+  describe('outage handling — fail-soft fallback + once-per-outage warning', () => {
+    it('reader throws → returns fallback, cache cleared, exactly one warn logged', async () => {
+      const warnLog: string[] = [];
+      const callLog: string[] = [];
+
+      const reader = async (refs: string[]) => {
+        callLog.push(`read:${refs.join(',')}`);
+        throw new Error('transport failure');
+      };
+
+      const resolver = createPriorityResolver(reader, (msg: string) => warnLog.push(msg));
+
+      const items: BacklogItem[] = [{ slug: 'feature-1', sourceRef: 'owner/repo#1' }];
+
+      // First call with reader throwing
+      const result = await resolver.resolve(items, { refresh: true });
+
+      expect(result.mode).toBe('fallback');
+      expect(warnLog.length).toBe(1);
+      expect(warnLog[0]).toContain('transport failure');
+    });
+
+    it('repeated failures → exactly one warning for entire outage', async () => {
+      const warnLog: string[] = [];
+      const callLog: string[] = [];
+
+      const reader = async (refs: string[]) => {
+        callLog.push(`read:${refs.join(',')}`);
+        throw new Error('transport failure');
+      };
+
+      const resolver = createPriorityResolver(reader, (msg: string) => warnLog.push(msg));
+
+      const items: BacklogItem[] = [{ slug: 'feature-1', sourceRef: 'owner/repo#1' }];
+
+      // First failing resolve call
+      let result = await resolver.resolve(items, { refresh: true });
+      expect(result.mode).toBe('fallback');
+      expect(warnLog.length).toBe(1);
+
+      // Second failing resolve call (same outage)
+      result = await resolver.resolve(items, { refresh: true });
+      expect(result.mode).toBe('fallback');
+      // Should still have exactly 1 warning (no new warning added)
+      expect(warnLog.length).toBe(1);
+    });
+
+    it('success resumes banded mode + resets warning flag', async () => {
+      const warnLog: string[] = [];
+      const callLog: string[] = [];
+      let shouldFail = true;
+      const labelMap = new Map<string, string[]>([['owner/repo#1', ['priority: high']]]);
+
+      const reader = async (refs: string[]) => {
+        callLog.push(`read:${refs.join(',')}`);
+        if (shouldFail) {
+          throw new Error('transport failure');
+        }
+        const result = new Map<string, string[] | 'not-found'>();
+        for (const ref of refs) {
+          result.set(ref, labelMap.get(ref) || 'not-found');
+        }
+        return result;
+      };
+
+      const resolver = createPriorityResolver(reader, (msg: string) => warnLog.push(msg));
+
+      const items: BacklogItem[] = [{ slug: 'feature-1', sourceRef: 'owner/repo#1' }];
+
+      // First call: fails
+      let result = await resolver.resolve(items, { refresh: true });
+      expect(result.mode).toBe('fallback');
+      expect(warnLog.length).toBe(1);
+
+      // Second call: succeeds (reader no longer throws)
+      shouldFail = false;
+      result = await resolver.resolve(items, { refresh: true });
+      expect(result.mode).toBe('banded');
+      expect(result.bands.get('owner/repo#1')).toBe('high');
+      // Warning count stays at 1 from the previous outage
+      expect(warnLog.length).toBe(1);
+    });
+
+    it('new failure after recovery → warns again (new outage)', async () => {
+      const warnLog: string[] = [];
+      const callLog: string[] = [];
+      let shouldFail = false;
+      const labelMap = new Map<string, string[]>([['owner/repo#1', ['priority: high']]]);
+
+      const reader = async (refs: string[]) => {
+        callLog.push(`read:${refs.join(',')}`);
+        if (shouldFail) {
+          throw new Error('transport failure');
+        }
+        const result = new Map<string, string[] | 'not-found'>();
+        for (const ref of refs) {
+          result.set(ref, labelMap.get(ref) || 'not-found');
+        }
+        return result;
+      };
+
+      const resolver = createPriorityResolver(reader, (msg: string) => warnLog.push(msg));
+
+      const items: BacklogItem[] = [{ slug: 'feature-1', sourceRef: 'owner/repo#1' }];
+
+      // First call: succeeds
+      let result = await resolver.resolve(items, { refresh: true });
+      expect(result.mode).toBe('banded');
+      expect(result.bands.get('owner/repo#1')).toBe('high');
+      expect(warnLog.length).toBe(0); // No warning on success
+
+      // Second call: fails (new outage)
+      shouldFail = true;
+      result = await resolver.resolve(items, { refresh: true });
+      expect(result.mode).toBe('fallback');
+      expect(warnLog.length).toBe(1); // New warning for new outage
+
+      // Third call: fails again (same outage)
+      result = await resolver.resolve(items, { refresh: true });
+      expect(result.mode).toBe('fallback');
+      expect(warnLog.length).toBe(1); // Still only 1 warning
+    });
+
+    it('mid-scan partial failure → whole-scan fallback, cache cleared, warn logged', async () => {
+      const warnLog: string[] = [];
+      const callLog: string[] = [];
+      let failOnSecondCall = false;
+
+      let callCount = 0;
+      const reader = async (refs: string[]) => {
+        callLog.push(`read:${refs.join(',')}`);
+        callCount++;
+        if (failOnSecondCall && callCount > 0) {
+          throw new Error('transport failure during scan');
+        }
+        const result = new Map<string, string[] | 'not-found'>();
+        for (const ref of refs) {
+          result.set(ref, []);
+        }
+        return result;
+      };
+
+      const resolver = createPriorityResolver(reader, (msg: string) => warnLog.push(msg));
+
+      const items: BacklogItem[] = [
+        { slug: 'feature-1', sourceRef: 'owner/repo#1' },
+        { slug: 'feature-2', sourceRef: 'owner/repo#2' },
+      ];
+
+      // First refresh: succeeds, populates cache
+      failOnSecondCall = false;
+      let result = await resolver.resolve(items, { refresh: true });
+      expect(result.mode).toBe('banded');
+      expect(warnLog.length).toBe(0);
+
+      // Second refresh: reader throws mid-scan
+      failOnSecondCall = true;
+      result = await resolver.resolve(items, { refresh: true });
+      expect(result.mode).toBe('fallback'); // Whole-scan fallback, not partial banded
+      expect(warnLog.length).toBe(1); // Exactly one warning
+    });
+  });
 });
 
 describe('orderBacklog — banded stable sort with priority resolution', () => {

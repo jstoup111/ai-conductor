@@ -67,12 +67,14 @@ export function parsePriorityLabels(labels: string[]): 'high' | 'medium' | 'low'
 /**
  * Creates a stateful priority resolver that caches issue labels between daemon scans.
  *
- * The resolver maintains an in-memory cache (process-local, never persisted to disk).
+ * The resolver maintains an in-memory cache (process-local, never persisted to disk) and
+ * handles transport failures gracefully:
  * - On `refresh: true`: fetches all linked refs via the reader, updates cache, returns bands
  * - On `refresh: false`: returns cached bands with zero reader calls (cache hit)
+ * - On reader throw: clears cache, returns fallback mode, logs exactly one warning per outage
  *
  * @param reader Function that fetches labels for issue references
- * @param log Function for logging resolver actions
+ * @param log Function for logging resolver actions (including warnings)
  * @returns Resolver object with a `resolve` method
  */
 export function createPriorityResolver(
@@ -83,6 +85,10 @@ export function createPriorityResolver(
 } {
   // In-memory cache: ref -> labels
   const cache = new Map<string, string[]>();
+  // Outage tracking: whether we're currently in a failed state
+  let inOutage = false;
+  // Warning flag: whether we've warned about the current outage
+  let hasWarnedThisOutage = false;
 
   return {
     async resolve(items: BacklogItem[], options: { refresh: boolean }): Promise<PriorityResolution> {
@@ -94,14 +100,31 @@ export function createPriorityResolver(
       if (options.refresh || sourceRefs.length === 0) {
         // On refresh: true, or if there are sourceRefs to fetch, call the reader
         if (sourceRefs.length > 0) {
-          const readerResult = await reader(sourceRefs);
-          // Update cache with reader results
-          for (const [ref, labels] of readerResult.entries()) {
-            if (labels !== 'not-found') {
-              cache.set(ref, labels);
-            } else {
-              cache.delete(ref);
+          try {
+            const readerResult = await reader(sourceRefs);
+            // Reader succeeded: reset outage state
+            inOutage = false;
+            hasWarnedThisOutage = false;
+            // Update cache with reader results
+            for (const [ref, labels] of readerResult.entries()) {
+              if (labels !== 'not-found') {
+                cache.set(ref, labels);
+              } else {
+                cache.delete(ref);
+              }
             }
+          } catch (error) {
+            // Reader threw: set outage state and clear cache
+            inOutage = true;
+            cache.clear();
+            // Warn exactly once per outage
+            if (!hasWarnedThisOutage) {
+              const errorMsg = error instanceof Error ? error.message : String(error);
+              log(`Priority resolution outage (reader failed): ${errorMsg}`);
+              hasWarnedThisOutage = true;
+            }
+            // Return fallback mode immediately
+            return { mode: 'fallback' };
           }
         }
       }
