@@ -347,6 +347,39 @@ export function resolveAuthParkTimeoutMinutes(config?: HarnessConfig): number {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// Daemon build/push PR timing (adr-2026-07-03-pr-timing-config-key)
+// ────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Default daemon build/push PR timing. Controls when the daemon opens/pushes
+ * the PR for a spec relative to the BUILD lifecycle. `'finish'` (default when
+ * absent) preserves today's behavior — the PR is opened/pushed only at finish.
+ * `'early-draft'` opens a draft PR and pushes checkpoint commits earlier in
+ * the lifecycle.
+ */
+export const DEFAULT_PR_TIMING = 'finish' as const;
+
+/**
+ * Resolve the daemon build/push PR timing from HarnessConfig.
+ *
+ * Reads `config.pr_timing` (top-level HarnessConfig key).
+ *
+ * Resolution rules:
+ *   - undefined / absent → DEFAULT_PR_TIMING ('finish')
+ *   - 'finish'           → use the value (today's behavior)
+ *   - 'early-draft'      → use the value (early publish mode)
+ *   - any other value    → DEFAULT_PR_TIMING (should not reach here if
+ *                          validation ran; this is a safety fallback)
+ */
+export function resolvePrTiming(config?: HarnessConfig): 'finish' | 'early-draft' {
+  const override = config?.pr_timing;
+  if (override === 'early-draft') {
+    return 'early-draft';
+  }
+  return DEFAULT_PR_TIMING;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // Self-host guardrails (adr-2026-06-30-self-host-detection-seam / TR-11)
 //
 // The resolved shape every guardrail site reads. Resolution is SAFE-BY-DEFAULT:
