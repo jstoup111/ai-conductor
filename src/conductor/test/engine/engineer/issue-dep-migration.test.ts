@@ -285,4 +285,74 @@ describe('createDependencyLinks (writer)', () => {
     expect(results).toEqual([{ edge, status: 'already-present' }]);
     expect(calls.some((c) => c.args.includes('POST'))).toBe(false);
   });
+
+  // Task 25 (FR-11 negatives): a mid-run failure must not corrupt or re-attempt
+  // work that already succeeded — a re-run creates EXACTLY the edges still missing.
+  it('partial failure mid-run: a re-run creates exactly the edges still missing, not the ones already written', async () => {
+    const e1: DependencyEdge = { source: 'acme/app#230', target: 'acme/app#217', kind: 'gated-on', blocked_by: true };
+    const e2: DependencyEdge = { source: 'acme/app#230', target: 'acme/app#218', kind: 'gated-on', blocked_by: true };
+    const e3: DependencyEdge = { source: 'acme/app#230', target: 'acme/app#219', kind: 'gated-on', blocked_by: true };
+
+    // Stateful fake: tracks which links actually "exist" server-side, and can be
+    // told to fail the next POST once (simulating one write failing mid-run).
+    const linked = new Set<string>(); // `source -> target` refs actually created
+    let failNextPost = false;
+    const calls: { args: string[] }[] = [];
+    const gh: GhRunner = async (args) => {
+      calls.push({ args: [...args] });
+      const path = args.find((a) => a.includes('/dependencies/blocked_by'));
+      if (args[1] !== '--method' && path) {
+        const sourceMatch = path.match(/issues\/(\d+)\/dependencies/);
+        const sourceRef = `acme/app#${sourceMatch?.[1]}`;
+        const targets = [...linked]
+          .filter((l) => l.startsWith(`${sourceRef}->`))
+          .map((l) => l.split('->')[1]);
+        return {
+          stdout: JSON.stringify(targets.map((t) => ({ number: Number(t.split('#')[1]), repository_url: 'https://api.github.com/repos/acme/app' }))),
+        };
+      }
+      // POST
+      if (failNextPost) {
+        failNextPost = false;
+        throw new Error('simulated transient write failure');
+      }
+      const issueNumberArg = args.find((a) => a.startsWith('issue_number='));
+      const targetNumber = issueNumberArg?.split('=')[1];
+      const sourceMatch = path?.match(/issues\/(\d+)\/dependencies/);
+      const sourceRef = `acme/app#${sourceMatch?.[1]}`;
+      linked.add(`${sourceRef}->acme/app#${targetNumber}`);
+      return { stdout: '' };
+    };
+
+    // Run 1: e1 succeeds, e2's POST fails and aborts the run — e3 never attempted.
+    failNextPost = false;
+    const run1Edges = [e1, e2, e3];
+    let run1Error: unknown;
+    const run1Results: unknown[] = [];
+    for (const e of run1Edges) {
+      if (e === e2) failNextPost = true;
+      try {
+        run1Results.push(...(await createDependencyLinks([e], { gh, cwd: '/repo' })));
+      } catch (err) {
+        run1Error = err;
+        break;
+      }
+    }
+    expect(run1Error).toBeInstanceOf(Error);
+    expect(run1Results).toEqual([{ edge: e1, status: 'created' }]);
+
+    calls.length = 0; // reset call log for the re-run assertion below
+
+    // Run 2 (re-run, all three edges again): e1 already-present (no POST), e2 and
+    // e3 (the ones still missing) get created.
+    const run2Results = await createDependencyLinks([e1, e2, e3], { gh, cwd: '/repo' });
+
+    expect(run2Results).toEqual([
+      { edge: e1, status: 'already-present' },
+      { edge: e2, status: 'created' },
+      { edge: e3, status: 'created' },
+    ]);
+    const posts = calls.filter((c) => c.args.includes('POST'));
+    expect(posts.length).toBe(2); // exactly the two still-missing edges — not e1 again
+  });
 });

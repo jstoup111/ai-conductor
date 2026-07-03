@@ -45,6 +45,7 @@ import { createFileQueue } from './engineer/intake/queue.js';
 import { createGithubIssuesAdapter, GITHUB_ISSUES_SOURCE, HANDLED_LABEL } from './engineer/intake/github-issues.js';
 import { reportRouted, reportDone } from './engineer/intake/writeback.js';
 import { restRemoveLabelArgs } from './pr-labels.js';
+import { parseDependencyProse, createDependencyLinks } from './engineer/issue-dep-migration.js';
 
 /**
  * Production DECIDE seam: gates each authoring step through the io surface.
@@ -97,7 +98,8 @@ export type EngineerDispatch =
   | { kind: 'handoff'; project: string; branch: string; worktree: string; sourceRef?: string }
   | { kind: 'poll' }
   | { kind: 'claim' }
-  | { kind: 'forget'; sourceRef: string };
+  | { kind: 'forget'; sourceRef: string }
+  | { kind: 'migrate-issue-deps'; confirm: boolean };
 
 // ── Subcommand detection ──────────────────────────────────────────────────────
 
@@ -182,6 +184,14 @@ export function detectEngineerCommand(argv: string[]): EngineerDispatch | null {
       return { kind: 'guide' };
     }
     return { kind: 'forget', sourceRef };
+  }
+
+  if (subCmd === 'migrate-issue-deps') {
+    // `conduct-ts engineer migrate-issue-deps [--confirm]` — one-time prose→link
+    // migration (Task 22-25). Dry-run by default (proposal only, zero writes);
+    // `--confirm` applies via the GET-before-POST writer.
+    const confirm = argv.includes('--confirm');
+    return { kind: 'migrate-issue-deps', confirm };
   }
 
   // `conduct-ts engineer --idea "<text>"` — launch driving a specific idea.
@@ -345,7 +355,9 @@ function printGuide(print: (s: string) => void): void {
       '  conduct-ts engineer land --project <n> --idea "<i>" --worktree <p> [--source-ref <ref>]    — commit spec artifacts in the worktree\n' +
       '  conduct-ts engineer handoff --project <n> --branch <b> --worktree <p> [--source-ref <ref>] — open spec PR + remove worktree + nudge daemon\n' +
       '  conduct-ts engineer poll                                — poll github issues → enqueue new ideas\n' +
-      '  conduct-ts engineer forget <owner/repo#N>               — drop an intake ledger entry + label\n',
+      '  conduct-ts engineer forget <owner/repo#N>               — drop an intake ledger entry + label\n' +
+      '  conduct-ts engineer migrate-issue-deps [--confirm]      — one-time prose→link dependency migration ' +
+      '(dry-run by default; --confirm writes)\n',
   );
 }
 
@@ -831,6 +843,70 @@ export async function dispatchEngineer(
       }
 
       print(JSON.stringify({ kind: 'forget', sourceRef, found: true, removed: true }));
+      return 0;
+    }
+
+    // ── migrate-issue-deps ────────────────────────────────────────────────────
+    // `conduct-ts engineer migrate-issue-deps [--confirm]`: one-time prose→link
+    // migration over the current repo's open issues. Scans, classifies prose
+    // into deterministic edges + manual-review items, prints the full proposal,
+    // and only WRITES anything when `--confirm` is passed — a bare run is a
+    // pure dry-run (GET-checks only, zero POSTs; see createDependencyLinks).
+    case 'migrate-issue-deps': {
+      const cwd = process.cwd();
+      let nameWithOwner: string;
+      try {
+        const { stdout } = await gh(['repo', 'view', '--json', 'nameWithOwner'], { cwd });
+        nameWithOwner = String((JSON.parse(stdout || '{}') as { nameWithOwner?: unknown }).nameWithOwner ?? '');
+      } catch (err: unknown) {
+        printErr(`engineer migrate-issue-deps: could not resolve repo (${err instanceof Error ? err.message : String(err)})`);
+        return 1;
+      }
+      if (!nameWithOwner) {
+        printErr('engineer migrate-issue-deps: could not resolve repo (no nameWithOwner)');
+        return 1;
+      }
+
+      let issues: Array<{ number: number; body: string }>;
+      try {
+        const { stdout } = await gh(['issue', 'list', '--state', 'open', '--json', 'number,body', '--limit', '500'], {
+          cwd,
+        });
+        issues = JSON.parse(stdout || '[]') as Array<{ number: number; body: string }>;
+      } catch (err: unknown) {
+        printErr(`engineer migrate-issue-deps: could not list issues (${err instanceof Error ? err.message : String(err)})`);
+        return 1;
+      }
+
+      const edges: ReturnType<typeof parseDependencyProse>['edges'] = [];
+      const manualReview: ReturnType<typeof parseDependencyProse>['manualReview'] = [];
+      for (const issue of issues) {
+        const ref = `${nameWithOwner}#${issue.number}`;
+        const result = parseDependencyProse({ ref, body: issue.body ?? '' });
+        edges.push(...result.edges);
+        manualReview.push(...result.manualReview);
+      }
+
+      print(`migrate-issue-deps: proposal over ${nameWithOwner} (${issues.length} open issue(s))`);
+      for (const edge of edges) {
+        print(`  ${edge.source} blocked_by ${edge.target}  [${edge.kind}]`);
+      }
+      if (manualReview.length > 0) {
+        print(`  ${manualReview.length} item(s) need manual review (not auto-proposed):`);
+        for (const item of manualReview) {
+          print(`    ${item.source} — ${item.reason}: ${item.excerpt}`);
+        }
+      }
+
+      if (!dispatch.confirm) {
+        print('Dry run — no links written. Re-run with --confirm to apply.');
+        return 0;
+      }
+
+      const results = await createDependencyLinks(edges, { gh, cwd });
+      const created = results.filter((r) => r.status === 'created').length;
+      const alreadyPresent = results.filter((r) => r.status === 'already-present').length;
+      print(`migrate-issue-deps: ${created} link(s) created, ${alreadyPresent} already present.`);
       return 0;
     }
   }
