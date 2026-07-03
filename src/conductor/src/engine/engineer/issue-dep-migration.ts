@@ -328,15 +328,11 @@ export async function createDependencyLinks(
     await gh(
       [
         'api',
-        '--method',
+        '-X',
         'POST',
         `repos/${source.repo}/issues/${source.number}/dependencies/blocked_by`,
         '-f',
-        `owner=${target.repo.split('/')[0]}`,
-        '-f',
-        `repo=${target.repo.split('/')[1]}`,
-        '-f',
-        `issue_number=${target.number}`,
+        `issue=${edge.target}`,
       ],
       { cwd },
     );
