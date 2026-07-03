@@ -582,7 +582,9 @@ describe('landSpec primitive (src/engine/engineer/land-spec.ts)', () => {
     const worktree = await worktreeWithDocs(repoPath, idea);
 
     const { landSpec } = await import('../../src/engine/engineer/land-spec.js');
-    const result = await landSpec({ name: 'target', canonicalPath: repoPath }, idea, worktree);
+    const result = await landSpec({ name: 'target', canonicalPath: repoPath }, idea, worktree, undefined, {
+      ownerConfig: { spec_owner: 'test-owner' },
+    });
 
     expect(result.slug).toBe('add-tag-filtering');
     expect(result.branch).toBe('spec/add-tag-filtering');
@@ -603,7 +605,9 @@ describe('landSpec primitive (src/engine/engineer/land-spec.ts)', () => {
     const wt = await createEngineerWorktree(repoPath, idea);
     const { landSpec } = await import('../../src/engine/engineer/land-spec.js');
     await expect(
-      landSpec({ name: 'target', canonicalPath: repoPath }, idea, wt.worktreePath),
+      landSpec({ name: 'target', canonicalPath: repoPath }, idea, wt.worktreePath, undefined, {
+        ownerConfig: { spec_owner: 'test-owner' },
+      }),
     ).rejects.toThrow(/artifact|missing|spec|stories|plan/i);
   });
 
@@ -620,7 +624,9 @@ describe('landSpec primitive (src/engine/engineer/land-spec.ts)', () => {
 
     const { landSpec } = await import('../../src/engine/engineer/land-spec.js');
     await expect(
-      landSpec({ name: 'target', canonicalPath: repoPath }, idea, wt.worktreePath),
+      landSpec({ name: 'target', canonicalPath: repoPath }, idea, wt.worktreePath, undefined, {
+        ownerConfig: { spec_owner: 'test-owner' },
+      }),
     ).rejects.toThrow(/empty|blank|whitespace|invalid/i);
   });
 
@@ -637,7 +643,9 @@ describe('landSpec primitive (src/engine/engineer/land-spec.ts)', () => {
 
     const { landSpec } = await import('../../src/engine/engineer/land-spec.js');
     await expect(
-      landSpec({ name: 'target', canonicalPath: repoPath }, idea, wt.worktreePath),
+      landSpec({ name: 'target', canonicalPath: repoPath }, idea, wt.worktreePath, undefined, {
+        ownerConfig: { spec_owner: 'test-owner' },
+      }),
     ).rejects.toThrow(/stub|generated|invalid/i);
   });
 
@@ -654,7 +662,9 @@ describe('landSpec primitive (src/engine/engineer/land-spec.ts)', () => {
 
     const { landSpec } = await import('../../src/engine/engineer/land-spec.js');
     await expect(
-      landSpec({ name: 'target', canonicalPath: repoPath }, idea, wt.worktreePath),
+      landSpec({ name: 'target', canonicalPath: repoPath }, idea, wt.worktreePath, undefined, {
+        ownerConfig: { spec_owner: 'test-owner' },
+      }),
     ).rejects.toThrow(/not approved|Status: Accepted/i);
   });
 
@@ -691,7 +701,9 @@ describe('landSpec primitive (src/engine/engineer/land-spec.ts)', () => {
     const siblingHeadBefore = await git(['rev-parse', 'HEAD'], sibling);
 
     const { landSpec } = await import('../../src/engine/engineer/land-spec.js');
-    const result = await landSpec({ name: 'target', canonicalPath: repoPath }, 'guarded idea', worktree);
+    const result = await landSpec({ name: 'target', canonicalPath: repoPath }, 'guarded idea', worktree, undefined, {
+      ownerConfig: { spec_owner: 'test-owner' },
+    });
     expect(result.repoPath).toBe(worktree);
 
     expect(await git(['rev-parse', 'HEAD'], sibling)).toBe(siblingHeadBefore);
@@ -726,7 +738,9 @@ describe('landSpec primitive (src/engine/engineer/land-spec.ts)', () => {
     await writeDecideExtras(worktree, idea, 'L');
 
     const { landSpec } = await import('../../src/engine/engineer/land-spec.js');
-    const result = await landSpec({ name: 'target', canonicalPath: repoPath }, idea, worktree);
+    const result = await landSpec({ name: 'target', canonicalPath: repoPath }, idea, worktree, undefined, {
+      ownerConfig: { spec_owner: 'test-owner' },
+    });
 
     const tracked = await git(['ls-tree', '-r', '--name-only', result.branch], repoPath);
     expect(tracked).toMatch(/\.docs\/complexity\//);
@@ -741,7 +755,9 @@ describe('landSpec primitive (src/engine/engineer/land-spec.ts)', () => {
     await writeDecideExtras(worktree, idea, 'S');
 
     const { landSpec } = await import('../../src/engine/engineer/land-spec.js');
-    const result = await landSpec({ name: 'target', canonicalPath: repoPath }, idea, worktree);
+    const result = await landSpec({ name: 'target', canonicalPath: repoPath }, idea, worktree, undefined, {
+      ownerConfig: { spec_owner: 'test-owner' },
+    });
 
     const tracked = await git(['ls-tree', '-r', '--name-only', result.branch], repoPath);
     expect(tracked).toMatch(/\.docs\/complexity\//);
@@ -756,7 +772,9 @@ describe('landSpec primitive (src/engine/engineer/land-spec.ts)', () => {
 
     const { landSpec } = await import('../../src/engine/engineer/land-spec.js');
     await expect(
-      landSpec({ name: 'target', canonicalPath: repoPath }, idea, worktree),
+      landSpec({ name: 'target', canonicalPath: repoPath }, idea, worktree, undefined, {
+        ownerConfig: { spec_owner: 'test-owner' },
+      }),
     ).rejects.toThrow(/DRAFT|APPROVED/i);
     expect(await git(['log', '--oneline', 'spec/feature-with-draft-adr'], repoPath)).not.toMatch(/engineer\/land/);
   });
@@ -768,7 +786,9 @@ describe('landSpec primitive (src/engine/engineer/land-spec.ts)', () => {
 
     const { landSpec } = await import('../../src/engine/engineer/land-spec.js');
     await expect(
-      landSpec({ name: 'target', canonicalPath: repoPath }, idea, worktree),
+      landSpec({ name: 'target', canonicalPath: repoPath }, idea, worktree, undefined, {
+        ownerConfig: { spec_owner: 'test-owner' },
+      }),
     ).rejects.toThrow(/non-Small|conflicts|architecture|decisions/i);
     expect(await git(['log', '--oneline', 'spec/medium-feature-no-arch'], repoPath)).not.toMatch(/engineer\/land/);
   });

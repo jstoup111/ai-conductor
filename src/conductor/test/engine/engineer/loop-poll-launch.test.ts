@@ -53,6 +53,8 @@ function makeGh(prUrl: string) {
   const calls: string[][] = [];
   const gh = async (args: string[], _opts: { cwd: string }) => {
     calls.push(args);
+    // Owner-identity resolution (fail-closed slice B): resolve a login.
+    if (args[0] === 'api' && args[1] === 'user') return { stdout: 'test-owner\n' };
     if (args[0] === 'pr' && args[1] === 'create') return { stdout: prUrl };
     return { stdout: '' };
   };
