@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -11,6 +11,7 @@ import {
   stepDisplayName,
   runGenerateModelTable,
   parseCliArgs,
+  buildPinsJson,
   MarkerError,
   BEGIN_MARKER,
   END_MARKER,
@@ -18,6 +19,8 @@ import {
   EXIT_ERROR,
   type CliIO,
 } from '../src/tools/generate-model-table.js';
+import { DEFAULT_STEP_MODELS } from '../src/engine/resolved-config.js';
+import { SKILL_STEP_MAP, PIN_EXEMPT_SKILLS } from '../src/engine/model-table-metadata.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RED/GREEN specs for the pure marker-region splicer (.docs/stories/
@@ -331,5 +334,72 @@ describe('runGenerateModelTable — CLI write mode + idempotency', () => {
 
     const after = await readFile(harnessPath, 'utf8');
     expect(after).toBe(fixture(renderModelTable()));
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// buildPinsJson (TS-4 happy path 1, Task 10): --pins mode's JSON emission.
+// Every mapped skill -> { expected: <untiered engine default> }; every exempt
+// skill -> { exempt: true }.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('buildPinsJson', () => {
+  it('emits an entry for every mapped skill with the untiered engine-default model', () => {
+    const pins = buildPinsJson();
+
+    for (const [skill, step] of Object.entries(SKILL_STEP_MAP)) {
+      expect(pins[skill]).toEqual({ expected: DEFAULT_STEP_MODELS[step] });
+    }
+  });
+
+  it('emits { exempt: true } for every exempt skill', () => {
+    const pins = buildPinsJson();
+
+    for (const skill of PIN_EXEMPT_SKILLS) {
+      expect(pins[skill]).toEqual({ exempt: true });
+    }
+  });
+
+  it('emits exactly one entry per mapped/exempt skill, no extras', () => {
+    const pins = buildPinsJson();
+    const expectedKeys = new Set([...Object.keys(SKILL_STEP_MAP), ...PIN_EXEMPT_SKILLS]);
+
+    expect(new Set(Object.keys(pins))).toEqual(expectedKeys);
+  });
+
+  it('a known mapped skill (rebase) resolves to its DEFAULT_STEP_MODELS value', () => {
+    const pins = buildPinsJson();
+    expect(pins['rebase']).toEqual({ expected: 'fable' });
+    expect(DEFAULT_STEP_MODELS.rebase).toBe('fable');
+  });
+
+  it('a known exempt skill (code-review) is marked exempt, not expected', () => {
+    const pins = buildPinsJson();
+    expect(pins['code-review']).toEqual({ exempt: true });
+  });
+});
+
+describe('runGenerateModelTable --pins mode', () => {
+  it('writes valid JSON matching buildPinsJson to stdout and exits 0', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'generate-model-table-pins-'));
+    const harnessPath = join(dir, 'HARNESS.md');
+    try {
+      let written = '';
+      const spy = vi
+        .spyOn(process.stdout, 'write')
+        .mockImplementation((chunk: unknown) => {
+          written += String(chunk);
+          return true;
+        });
+
+      const exitCode = await runGenerateModelTable(['--pins'], nodeIO, harnessPath);
+
+      spy.mockRestore();
+
+      expect(exitCode).toBe(EXIT_OK);
+      expect(JSON.parse(written)).toEqual(buildPinsJson());
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });

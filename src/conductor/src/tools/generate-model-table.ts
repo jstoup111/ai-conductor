@@ -12,7 +12,12 @@ import {
   DEFAULT_STEP_EFFORT,
   DEFAULT_STEP_TIER_OVERRIDES,
 } from '../engine/resolved-config.js';
-import { STEP_RATIONALE, EXTRA_MODEL_TABLE_ROWS } from '../engine/model-table-metadata.js';
+import {
+  STEP_RATIONALE,
+  EXTRA_MODEL_TABLE_ROWS,
+  SKILL_STEP_MAP,
+  PIN_EXEMPT_SKILLS,
+} from '../engine/model-table-metadata.js';
 
 export const BEGIN_MARKER = '<!-- BEGIN GENERATED: model-selection-table -->';
 export const END_MARKER = '<!-- END GENERATED: model-selection-table -->';
@@ -324,6 +329,32 @@ export function renderModelTable(): string {
 // 2 environment/marker error.
 // ────────────────────────────────────────────────────────────────────────────
 
+// ────────────────────────────────────────────────────────────────────────────
+// buildPinsJson
+//
+// Pure builder for `--pins` mode's JSON output (TS-4 happy path 1). Every
+// skill in SKILL_STEP_MAP gets an `{ "expected": "<model>" }` entry, where
+// "<model>" is the *untiered* engine default (DEFAULT_STEP_MODELS[step] — the
+// tier-override base value, not a tier-suffixed rendering). Every skill in
+// PIN_EXEMPT_SKILLS gets an `{ "exempt": true }` entry. No filesystem access.
+// ────────────────────────────────────────────────────────────────────────────
+
+export type PinsJson = Record<string, { expected: string } | { exempt: true }>;
+
+export function buildPinsJson(): PinsJson {
+  const result: PinsJson = {};
+
+  for (const [skill, step] of Object.entries(SKILL_STEP_MAP)) {
+    result[skill] = { expected: DEFAULT_STEP_MODELS[step] };
+  }
+
+  for (const skill of PIN_EXEMPT_SKILLS) {
+    result[skill] = { exempt: true };
+  }
+
+  return result;
+}
+
 export type CliMode = 'write' | 'check' | 'pins';
 
 export const EXIT_OK = 0;
@@ -361,8 +392,9 @@ export function parseCliArgs(argv: readonly string[]): CliMode {
  *   current contents (idempotent no-op write avoided). Returns EXIT_OK.
  * - `check`: same splice, but never writes; returns EXIT_OK if the result
  *   equals the current contents, EXIT_DRIFT otherwise.
- * - `pins`: JSON pin-agreement emission — full implementation is Task 10;
- *   for now emits an empty object and exits EXIT_OK.
+ * - `pins`: JSON pin-agreement emission (buildPinsJson) written to stdout;
+ *   always exits EXIT_OK (the pin-vs-engine-default comparison is done by
+ *   the consuming integrity check, not this CLI).
  *
  * On any MarkerError (missing/malformed/duplicate marker) or read failure,
  * the file is never written and the function returns EXIT_ERROR.
@@ -375,7 +407,7 @@ export async function runGenerateModelTable(
   const mode = parseCliArgs(argv);
 
   if (mode === 'pins') {
-    process.stdout.write('{}\n');
+    process.stdout.write(`${JSON.stringify(buildPinsJson(), null, 2)}\n`);
     return EXIT_OK;
   }
 
