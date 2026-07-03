@@ -10,6 +10,10 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ## [Unreleased]
 
+### Changed
+
+- **Front-of-funnel DECIDE steps now default to `fable`.** The explore, prd, pre-implementation architecture-review, and engineer skills now run on Fable by default; plan.L and conflict_check.L tier overrides also escalate to Fable. S/M tiers and `--as-built` compliance mode remain unchanged. Graceful degradation when fable is unavailable arrives with #186 fallback ladder; refs #190.
+
 ### Added
 
 - **Committed `.ai-conductor/config.yml` for the harness repo itself** — sets
