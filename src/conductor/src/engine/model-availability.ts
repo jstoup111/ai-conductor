@@ -17,14 +17,20 @@ export interface EffectiveModelResult {
  */
 export class ModelAvailability {
   private readonly ladder: string[];
+  private readonly warn?: (line: string) => void;
   readonly dead: Set<string> = new Set();
 
-  constructor(ladder?: string[]) {
-    this.ladder = ladder && ladder.length > 0 ? ladder : DEFAULT_MODEL_FALLBACK_LADDER;
+  constructor(ladder?: string[], warn?: (line: string) => void) {
+    this.ladder = ladder === undefined ? DEFAULT_MODEL_FALLBACK_LADDER : ladder;
+    this.warn = warn;
   }
 
   markDead(model: string): void {
     this.dead.add(model);
+  }
+
+  private emitWarn(configured: string, fallback: string, reason: string): void {
+    this.warn?.(`Downgraded from ${configured} to ${fallback}: ${reason}`);
   }
 
   effectiveModel(configured: string): EffectiveModelResult {
@@ -34,6 +40,7 @@ export class ModelAvailability {
 
     for (const candidate of this.ladder) {
       if (!this.dead.has(candidate)) {
+        this.emitWarn(configured, candidate, `${configured} is not available`);
         return { model: candidate, downgraded: true };
       }
     }
@@ -54,6 +61,11 @@ export class ModelAvailability {
     const result = await provider.invoke({ ...options, model: requested });
 
     if (!result.modelUnavailable) {
+      return result;
+    }
+
+    if (this.ladder.length === 0) {
+      // No fallback ladder configured; nothing to walk, nothing to mark dead.
       return result;
     }
 

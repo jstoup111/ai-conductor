@@ -203,4 +203,79 @@ describe("ModelAvailability", () => {
       expect(avail.dead.has("sonnet")).toBe(true);
     });
   });
+
+  describe("downgrade warnings", () => {
+    it("reactive downgrade via invokeWithLadder emits exactly one warn line with configured, fallback, and reason", async () => {
+      const warnLines: string[] = [];
+      const avail = new ModelAvailability(["fable", "opus", "sonnet"], (line) => warnLines.push(line));
+      const { provider } = fakeProvider({
+        fable: modelUnavailable(),
+        opus: { success: true, output: "done", exitCode: 0 },
+      });
+
+      const result = await avail.invokeWithLadder(provider, {
+        prompt: "hi",
+        sessionId: "s1",
+        resume: false,
+        model: "fable",
+      });
+
+      expect(result.success).toBe(true);
+      expect(warnLines).toHaveLength(1);
+      expect(warnLines[0]).toContain("fable");
+      expect(warnLines[0]).toContain("opus");
+      expect(warnLines[0]).toMatch(/is not available/);
+    });
+
+    it("effectiveModel substitution on a pre-marked-dead model emits warn line with same three-field format", () => {
+      const warnLines: string[] = [];
+      const avail = new ModelAvailability(["fable", "opus", "sonnet"], (line) => warnLines.push(line));
+      avail.markDead("fable");
+
+      const result = avail.effectiveModel("fable");
+
+      expect(result).toEqual({ model: "opus", downgraded: true });
+      expect(warnLines).toHaveLength(1);
+      expect(warnLines[0]).toContain("fable");
+      expect(warnLines[0]).toContain("opus");
+      expect(warnLines[0]).toMatch(/is not available/);
+    });
+
+    it("happy path with no downgrade emits zero warn lines", async () => {
+      const warnLines: string[] = [];
+      const avail = new ModelAvailability(["fable", "opus", "sonnet"], (line) => warnLines.push(line));
+      const { provider } = fakeProvider({});
+
+      const result = await avail.invokeWithLadder(provider, {
+        prompt: "hi",
+        sessionId: "s1",
+        resume: false,
+        model: "fable",
+      });
+
+      expect(result.success).toBe(true);
+      expect(warnLines).toHaveLength(0);
+    });
+
+    it("empty ladder with modelUnavailable returns failure unchanged, no warn, nothing marked dead, no walk", async () => {
+      const warnLines: string[] = [];
+      const avail = new ModelAvailability([], (line) => warnLines.push(line));
+      const { provider, invokeCalls } = fakeProvider({
+        fable: modelUnavailable(),
+      });
+
+      const result = await avail.invokeWithLadder(provider, {
+        prompt: "hi",
+        sessionId: "s1",
+        resume: false,
+        model: "fable",
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.modelUnavailable).toBe(true);
+      expect(invokeCalls.map((c) => c.model)).toEqual(["fable"]);
+      expect(warnLines).toHaveLength(0);
+      expect(avail.dead.has("fable")).toBe(false);
+    });
+  });
 });
