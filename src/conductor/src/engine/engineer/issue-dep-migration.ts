@@ -36,6 +36,34 @@ export interface DependencyEdge {
 export interface DependencyProseInput {
   ref: string;
   body: string;
+  /**
+   * Optional lifecycle status of the source issue. Accepted but intentionally
+   * unused by parsing: a closed issue's body is parsed identically to an open
+   * one — the dependency graph must stay complete, and satisfaction (whether
+   * a closed target actually unblocks its source) is checked at gate time,
+   * not here.
+   */
+  sourceStatus?: 'open' | 'closed';
+}
+
+/** Why a piece of prose could not be auto-converted into a `DependencyEdge`. */
+export type ManualReviewReason = 'reverse-direction' | 'cross-repo' | 'task-list-phase';
+
+/** One piece of prose flagged for a human to classify by hand. */
+export interface ManualReviewItem {
+  /** The issue whose body produced this flag. */
+  source: string;
+  /** The referenced issue, if one was identified; null for non-referential flags (e.g. task-list phases). */
+  target: string | null;
+  reason: ManualReviewReason;
+  /** The matched text, for human review context. */
+  excerpt: string;
+}
+
+/** Result of parsing one issue body: deterministic edges plus manual-review flags. */
+export interface DependencyProseResult {
+  edges: DependencyEdge[];
+  manualReview: ManualReviewItem[];
 }
 
 /** Extract the repo prefix (everything before the last `#`) from a source ref, or null. */
@@ -94,4 +122,78 @@ export function parseDependencyEdges(input: DependencyProseInput): DependencyEdg
     }
   }
   return edges;
+}
+
+// --- Task 23: manual-review classification -------------------------------
+
+// "Blocker for #226" / "Blocks #226" — stated from the BLOCKING issue's point
+// of view, i.e. reverse direction relative to every pattern above. Never
+// auto-converted: flipping source/target here would require re-deriving the
+// edge from the *other* issue's identity, which this parser doesn't have.
+const REVERSE_DIRECTION_RE = /\bblocker for\b\s*:?\s*#(\d+)|\bblocks\b\s*:?\s*#(\d+)/gi;
+
+// "owner/repo#N" — cross-repo reference. Requires repo context/permissions to
+// resolve and write a link, so it's always manual.
+const CROSS_REPO_RE = /\b([\w.-]+\/[\w.-]+)#(\d+)\b/g;
+
+// "- [ ] Phase ..." — task-list line naming a phase. These are organizational
+// metadata (a checklist of work phases inside one issue), not dependencies on
+// other issues, so they're flagged with no target rather than turned into an
+// edge.
+const TASK_LIST_PHASE_RE = /^-\s*\[[ xX]\]\s*(Phase\b.*)$/gm;
+
+/**
+ * Parse a single issue's body prose into deterministic `blocked_by` edges
+ * (see `parseDependencyEdges`) AND flag prose that is dependency-shaped but
+ * too ambiguous to auto-convert, for human review:
+ *
+ *   - reverse-direction phrasing ("Blocker for #N", "Blocks #N")
+ *   - cross-repo references ("owner/repo#N")
+ *   - task-list phase lines ("- [ ] Phase X ...")
+ *
+ * Lifecycle status of the source issue (open/closed) never affects parsing —
+ * the graph must stay complete regardless of status; satisfaction is a
+ * gate-time concern, not a parse-time one.
+ */
+export function parseDependencyProse(input: DependencyProseInput): DependencyProseResult {
+  const { ref, body } = input;
+  const edges = parseDependencyEdges(input);
+  const manualReview: ManualReviewItem[] = [];
+  if (!body) return { edges, manualReview };
+
+  const repoPrefix = repoPrefixOf(ref);
+
+  REVERSE_DIRECTION_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = REVERSE_DIRECTION_RE.exec(body)) !== null) {
+    const num = m[1] ?? m[2];
+    manualReview.push({
+      source: ref,
+      target: repoPrefix ? `${repoPrefix}#${num}` : null,
+      reason: 'reverse-direction',
+      excerpt: m[0],
+    });
+  }
+
+  CROSS_REPO_RE.lastIndex = 0;
+  while ((m = CROSS_REPO_RE.exec(body)) !== null) {
+    manualReview.push({
+      source: ref,
+      target: `${m[1]}#${m[2]}`,
+      reason: 'cross-repo',
+      excerpt: m[0],
+    });
+  }
+
+  TASK_LIST_PHASE_RE.lastIndex = 0;
+  while ((m = TASK_LIST_PHASE_RE.exec(body)) !== null) {
+    manualReview.push({
+      source: ref,
+      target: null,
+      reason: 'task-list-phase',
+      excerpt: m[1].trim(),
+    });
+  }
+
+  return { edges, manualReview };
 }

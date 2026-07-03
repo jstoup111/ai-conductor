@@ -10,7 +10,7 @@
 //   - writing the edges to the platform / confirm flow (Tasks 24-25)
 
 import { describe, it, expect } from 'vitest';
-import { parseDependencyEdges } from '../../../src/engine/engineer/issue-dep-migration.js';
+import { parseDependencyEdges, parseDependencyProse } from '../../../src/engine/engineer/issue-dep-migration.js';
 
 describe('parseDependencyEdges', () => {
   it('parses "Gated on #217" into a blocked_by edge', () => {
@@ -93,5 +93,93 @@ describe('parseDependencyEdges', () => {
 
   it('yields no edges for a body with no dependency prose at all', () => {
     expect(parseDependencyEdges({ ref: 'acme/app#299', body: 'Just a normal feature description.' })).toEqual([]);
+  });
+});
+
+// Task 23 (FR-10 negatives): prose that CANNOT be auto-converted into an edge
+// must be flagged for manual review instead of silently dropped.
+describe('parseDependencyProse (manual-review classification)', () => {
+  it('flags reverse-direction "Blocker for #N" as manual-review, not an edge', () => {
+    const result = parseDependencyProse({
+      ref: 'acme/app#233',
+      body: 'This issue is a Blocker for #226 (reverse direction).',
+    });
+    expect(result.edges).toEqual([]);
+    expect(result.manualReview).toEqual([
+      {
+        source: 'acme/app#233',
+        target: 'acme/app#226',
+        reason: 'reverse-direction',
+        excerpt: expect.stringContaining('Blocker for #226'),
+      },
+    ]);
+  });
+
+  it('flags cross-repo references as manual-review', () => {
+    const result = parseDependencyProse({
+      ref: 'acme/app#234',
+      body: 'Related work tracked at owner/other#5 (cross-repo).',
+    });
+    expect(result.edges).toEqual([]);
+    expect(result.manualReview).toEqual([
+      {
+        source: 'acme/app#234',
+        target: 'owner/other#5',
+        reason: 'cross-repo',
+        excerpt: expect.stringContaining('owner/other#5'),
+      },
+    ]);
+  });
+
+  it('flags task-list phase mentions as manual-review', () => {
+    const result = parseDependencyProse({
+      ref: 'acme/app#228',
+      body: 'Umbrella phase task list:\n- [ ] Phase A wave rollout\n- [ ] Phase B follow-up\n',
+    });
+    expect(result.edges).toEqual([]);
+    expect(result.manualReview).toEqual([
+      {
+        source: 'acme/app#228',
+        target: null,
+        reason: 'task-list-phase',
+        excerpt: expect.stringContaining('Phase A wave rollout'),
+      },
+      {
+        source: 'acme/app#228',
+        target: null,
+        reason: 'task-list-phase',
+        excerpt: expect.stringContaining('Phase B follow-up'),
+      },
+    ]);
+  });
+
+  it('still yields an edge for prose referencing a closed issue (status does not block parsing)', () => {
+    const result = parseDependencyProse({
+      ref: 'acme/app#232',
+      body: 'Blocked by #226 — do not start early.',
+      sourceStatus: 'closed',
+    });
+    expect(result.edges).toEqual([
+      { source: 'acme/app#232', target: 'acme/app#226', kind: 'blocked-by', blocked_by: true },
+    ]);
+    expect(result.manualReview).toEqual([]);
+  });
+
+  it('combines auto edges and manual-review items from the same body', () => {
+    const result = parseDependencyProse({
+      ref: 'acme/app#241',
+      body: ['Gated on #217 landing first.', 'This is a Blocker for #226 too.'].join('\n'),
+    });
+    expect(result.edges).toEqual([
+      { source: 'acme/app#241', target: 'acme/app#217', kind: 'gated-on', blocked_by: true },
+    ]);
+    expect(result.manualReview).toEqual([
+      {
+        source: 'acme/app#241',
+        target: 'acme/app#226',
+        reason: 'reverse-direction',
+        excerpt: expect.stringContaining('Blocker for #226'),
+      },
+    ]);
   });
 });
