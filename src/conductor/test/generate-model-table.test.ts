@@ -10,13 +10,17 @@ import {
   buildExtraRows,
   stepDisplayName,
   runGenerateModelTable,
+  runGenerateModelTableCli,
+  unifiedDiff,
   parseCliArgs,
   buildPinsJson,
   MarkerError,
   BEGIN_MARKER,
   END_MARKER,
   EXIT_OK,
+  EXIT_DRIFT,
   EXIT_ERROR,
+  REMEDIATION_COMMAND,
   type CliIO,
 } from '../src/tools/generate-model-table.js';
 import { DEFAULT_STEP_MODELS } from '../src/engine/resolved-config.js';
@@ -401,5 +405,174 @@ describe('runGenerateModelTable --pins mode', () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RED/GREEN specs for --check drift detection (.docs/stories/
+// generated-model-table.md, TS-3 all criteria; Task 9 of the implementation
+// plan). Every scenario also proves the before/after byte-identity invariant
+// (check mode never writes, including on the exit-1 branch).
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('runGenerateModelTable --check mode — drift detection (TS-3)', () => {
+  let dir: string;
+  let harnessPath: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'generate-model-table-check-'));
+    harnessPath = join(dir, 'HARNESS.md');
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('clean region (matches generated output) -> exit 0, file untouched', async () => {
+    const clean = fixture(renderModelTable());
+    await writeFile(harnessPath, clean, 'utf8');
+    const before = await readFile(harnessPath, 'utf8');
+
+    const exitCode = await runGenerateModelTable(['--check'], nodeIO, harnessPath);
+    expect(exitCode).toBe(EXIT_OK);
+
+    const after = await readFile(harnessPath, 'utf8');
+    expect(after).toBe(before);
+  });
+
+  it('in-region hand-edit (sonnet -> opus) -> exit 1, unified diff + remediation command printed, file untouched', async () => {
+    const clean = fixture(renderModelTable());
+    const handEdited = clean.replace('sonnet', 'opus');
+    // Sanity: the edit actually landed inside the generated region.
+    expect(handEdited).not.toBe(clean);
+    await writeFile(harnessPath, handEdited, 'utf8');
+    const before = await readFile(harnessPath, 'utf8');
+
+    let stderrOut = '';
+    const spy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk: unknown) => {
+      stderrOut += String(chunk);
+      return true;
+    });
+
+    const exitCode = await runGenerateModelTable(['--check'], nodeIO, harnessPath);
+
+    spy.mockRestore();
+
+    expect(exitCode).toBe(EXIT_DRIFT);
+    expect(stderrOut).toContain('-');
+    expect(stderrOut).toContain('+');
+    expect(stderrOut).toContain(REMEDIATION_COMMAND);
+
+    const after = await readFile(harnessPath, 'utf8');
+    expect(after).toBe(before);
+  });
+
+  it('changed engine default (e.g. stories model flipped) -> exit 1, diff shows the stale row, file untouched', async () => {
+    vi.resetModules();
+    vi.doMock('../src/engine/resolved-config.js', async () => {
+      const actual = await vi.importActual<typeof import('../src/engine/resolved-config.js')>(
+        '../src/engine/resolved-config.js',
+      );
+      return {
+        ...actual,
+        DEFAULT_STEP_MODELS: { ...actual.DEFAULT_STEP_MODELS, stories: 'fable' },
+      };
+    });
+
+    try {
+      const mod = await import('../src/tools/generate-model-table.js');
+      const cleanForOldDefaults = ((): string => {
+        // Build a fixture against the ORIGINAL (unmocked) renderer so the
+        // on-disk table reflects the pre-change engine defaults.
+        const original = renderModelTable();
+        return fixture(original);
+      })();
+
+      await writeFile(harnessPath, cleanForOldDefaults, 'utf8');
+      const before = await readFile(harnessPath, 'utf8');
+
+      const exitCode = await mod.runGenerateModelTable(['--check'], mod.nodeIO, harnessPath);
+      expect(exitCode).toBe(EXIT_DRIFT);
+
+      const after = await readFile(harnessPath, 'utf8');
+      expect(after).toBe(before);
+    } finally {
+      vi.doUnmock('../src/engine/resolved-config.js');
+      vi.resetModules();
+    }
+  });
+
+  it('trailing-whitespace corruption inside the region -> exit 1 (exact byte compare, not normalized)', async () => {
+    const clean = fixture(renderModelTable());
+    const corrupted = clean.replace(BEGIN_MARKER + '\n', BEGIN_MARKER + '\n' + '   \n');
+    // Insert a line of pure trailing whitespace right after BEGIN — this is
+    // still "inside the region" and must not be normalized away.
+    await writeFile(harnessPath, corrupted, 'utf8');
+    const before = await readFile(harnessPath, 'utf8');
+
+    const exitCode = await runGenerateModelTable(['--check'], nodeIO, harnessPath);
+    expect(exitCode).toBe(EXIT_DRIFT);
+
+    const after = await readFile(harnessPath, 'utf8');
+    expect(after).toBe(before);
+  });
+
+  it('CRLF corruption inside the region -> exit 1 (exact byte compare, not normalized)', async () => {
+    const clean = fixture(renderModelTable());
+    const beginIdx = clean.indexOf(BEGIN_MARKER);
+    const endIdx = clean.indexOf(END_MARKER);
+    const regionInner = clean.slice(beginIdx + BEGIN_MARKER.length, endIdx);
+    const crlfInner = regionInner.replace(/\n/g, '\r\n');
+    const corrupted =
+      clean.slice(0, beginIdx + BEGIN_MARKER.length) + crlfInner + clean.slice(endIdx);
+    await writeFile(harnessPath, corrupted, 'utf8');
+    const before = await readFile(harnessPath, 'utf8');
+
+    const exitCode = await runGenerateModelTable(['--check'], nodeIO, harnessPath);
+    expect(exitCode).toBe(EXIT_DRIFT);
+
+    const after = await readFile(harnessPath, 'utf8');
+    expect(after).toBe(before);
+  });
+
+  it('drift diff/message is also surfaced via runGenerateModelTableCli without writing', async () => {
+    const clean = fixture(renderModelTable());
+    const handEdited = clean.replace('sonnet', 'opus');
+    await writeFile(harnessPath, handEdited, 'utf8');
+    const before = await readFile(harnessPath, 'utf8');
+
+    const result = await runGenerateModelTableCli({ harnessMdPath: harnessPath, mode: 'check' });
+
+    expect(result.exitCode).toBe(EXIT_DRIFT);
+    expect(result.diff).toBeDefined();
+    expect(result.diff).toContain('-');
+    expect(result.diff).toContain('+');
+    expect(result.message).toContain(REMEDIATION_COMMAND);
+
+    const after = await readFile(harnessPath, 'utf8');
+    expect(after).toBe(before);
+  });
+
+  it('clean region via runGenerateModelTableCli -> exit 0, no diff', async () => {
+    const clean = fixture(renderModelTable());
+    await writeFile(harnessPath, clean, 'utf8');
+
+    const result = await runGenerateModelTableCli({ harnessMdPath: harnessPath, mode: 'check' });
+    expect(result.exitCode).toBe(EXIT_OK);
+    expect(result.diff).toBeUndefined();
+  });
+});
+
+describe('unifiedDiff', () => {
+  it('returns empty string for identical texts', () => {
+    expect(unifiedDiff('a\nb\nc', 'a\nb\nc')).toBe('');
+  });
+
+  it('produces a unified diff with -/+ markers for a single-line change', () => {
+    const diff = unifiedDiff('one\ntwo\nthree', 'one\nTWO\nthree');
+    expect(diff).toContain('--- a/HARNESS.md');
+    expect(diff).toContain('+++ b/HARNESS.md');
+    expect(diff).toContain('-two');
+    expect(diff).toContain('+TWO');
   });
 });

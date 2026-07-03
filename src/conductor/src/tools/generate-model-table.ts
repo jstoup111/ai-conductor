@@ -361,6 +361,153 @@ export const EXIT_OK = 0;
 export const EXIT_DRIFT = 1;
 export const EXIT_ERROR = 2;
 
+/** Remediation command surfaced whenever --check detects drift (Story TS-3). */
+export const REMEDIATION_COMMAND = 'bin/generate-model-table';
+
+// ────────────────────────────────────────────────────────────────────────────
+// unifiedDiff — minimal line-based unified diff, no external dependency.
+//
+// Uses a classic LCS dynamic-programming table to find the minimal edit
+// script between oldText and newText, then groups the resulting +/- ops into
+// unified-diff hunks with surrounding context lines. Comparison is exact
+// (no whitespace/line-ending normalization) so cosmetic corruption (trailing
+// spaces, CRLF) shows up as a real diff rather than being hidden — Story
+// TS-3 negative path 3.
+// ────────────────────────────────────────────────────────────────────────────
+
+type DiffOp = { type: 'equal' | 'del' | 'add'; line: string };
+
+function diffLineOps(oldLines: string[], newLines: string[]): DiffOp[] {
+  const n = oldLines.length;
+  const m = newLines.length;
+  const dp: number[][] = Array.from({ length: n + 1 }, () => new Array<number>(m + 1).fill(0));
+
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      dp[i]![j] =
+        oldLines[i] === newLines[j]
+          ? dp[i + 1]![j + 1]! + 1
+          : Math.max(dp[i + 1]![j]!, dp[i]![j + 1]!);
+    }
+  }
+
+  const ops: DiffOp[] = [];
+  let i = 0;
+  let j = 0;
+  while (i < n && j < m) {
+    if (oldLines[i] === newLines[j]) {
+      ops.push({ type: 'equal', line: oldLines[i]! });
+      i++;
+      j++;
+    } else if (dp[i + 1]![j]! >= dp[i]![j + 1]!) {
+      ops.push({ type: 'del', line: oldLines[i]! });
+      i++;
+    } else {
+      ops.push({ type: 'add', line: newLines[j]! });
+      j++;
+    }
+  }
+  while (i < n) {
+    ops.push({ type: 'del', line: oldLines[i]! });
+    i++;
+  }
+  while (j < m) {
+    ops.push({ type: 'add', line: newLines[j]! });
+    j++;
+  }
+  return ops;
+}
+
+interface Hunk {
+  oldStart: number;
+  oldLines: number;
+  newStart: number;
+  newLines: number;
+  ops: DiffOp[];
+}
+
+function buildHunks(ops: DiffOp[], context = 3): Hunk[] {
+  const withPos: (DiffOp & { oldIdx: number; newIdx: number })[] = [];
+  let oldIdx = 0;
+  let newIdx = 0;
+  for (const op of ops) {
+    withPos.push({ ...op, oldIdx, newIdx });
+    if (op.type === 'equal') {
+      oldIdx++;
+      newIdx++;
+    } else if (op.type === 'del') {
+      oldIdx++;
+    } else {
+      newIdx++;
+    }
+  }
+
+  const changeIndices = withPos
+    .map((op, idx) => (op.type === 'equal' ? -1 : idx))
+    .filter((idx) => idx !== -1);
+
+  if (changeIndices.length === 0) return [];
+
+  const hunks: Hunk[] = [];
+  let groupStart = changeIndices[0]!;
+  let groupEnd = changeIndices[0]!;
+
+  const flush = (start: number, end: number) => {
+    const from = Math.max(0, start - context);
+    const to = Math.min(withPos.length - 1, end + context);
+    const hunkOps = withPos.slice(from, to + 1);
+    const first = withPos[from]!;
+    const oldCount = hunkOps.filter((o) => o.type !== 'add').length;
+    const newCount = hunkOps.filter((o) => o.type !== 'del').length;
+    hunks.push({
+      oldStart: first.oldIdx + 1,
+      oldLines: oldCount,
+      newStart: first.newIdx + 1,
+      newLines: newCount,
+      ops: hunkOps.map(({ type, line }) => ({ type, line })),
+    });
+  };
+
+  for (let k = 1; k < changeIndices.length; k++) {
+    const idx = changeIndices[k]!;
+    if (idx - groupEnd <= context * 2) {
+      groupEnd = idx;
+    } else {
+      flush(groupStart, groupEnd);
+      groupStart = idx;
+      groupEnd = idx;
+    }
+  }
+  flush(groupStart, groupEnd);
+
+  return hunks;
+}
+
+/**
+ * Produce a unified diff between `oldText` and `newText`. Pure, exact
+ * (no normalization of whitespace or line endings) — used by --check to show
+ * drift between the committed HARNESS.md and the freshly rendered table.
+ * Returns '' when the texts are identical.
+ */
+export function unifiedDiff(oldText: string, newText: string, label = 'HARNESS.md'): string {
+  const oldLines = oldText.split('\n');
+  const newLines = newText.split('\n');
+  const ops = diffLineOps(oldLines, newLines);
+  const hunks = buildHunks(ops);
+
+  if (hunks.length === 0) return '';
+
+  const lines: string[] = [`--- a/${label}`, `+++ b/${label}`];
+  for (const hunk of hunks) {
+    lines.push(`@@ -${hunk.oldStart},${hunk.oldLines} +${hunk.newStart},${hunk.newLines} @@`);
+    for (const op of hunk.ops) {
+      const prefix = op.type === 'equal' ? ' ' : op.type === 'del' ? '-' : '+';
+      lines.push(`${prefix}${op.line}`);
+    }
+  }
+  return lines.join('\n');
+}
+
 /** Minimal filesystem surface the CLI needs — injectable for tests. */
 export interface CliIO {
   readFile: (path: string) => Promise<string>;
@@ -435,7 +582,15 @@ export async function runGenerateModelTable(
   }
 
   if (mode === 'check') {
-    return spliced === doc ? EXIT_OK : EXIT_DRIFT;
+    if (spliced === doc) {
+      return EXIT_OK;
+    }
+    const diff = unifiedDiff(doc, spliced, harnessPath);
+    process.stderr.write(
+      `generate-model-table: drift detected in ${harnessPath}\n\n${diff}\n\n` +
+        `Run \`${REMEDIATION_COMMAND}\` to regenerate the table.\n`,
+    );
+    return EXIT_DRIFT;
   }
 
   // write mode
@@ -443,4 +598,80 @@ export async function runGenerateModelTable(
     await io.writeFile(harnessPath, spliced);
   }
   return EXIT_OK;
+}
+
+/**
+ * Result shape returned by {@link runGenerateModelTableCli} — a richer,
+ * in-process-friendly variant of {@link runGenerateModelTable} that surfaces
+ * the diff/message directly instead of only writing to stderr, so acceptance
+ * tests (and future callers, e.g. an in-process integrity check) can assert
+ * on the content without capturing process streams.
+ */
+export interface CliResult {
+  exitCode: number;
+  diff?: string;
+  message?: string;
+}
+
+export interface CliOptions {
+  harnessMdPath: string;
+  mode: CliMode;
+}
+
+/**
+ * Public in-process CLI entry point used by `bin/generate-model-table` (via
+ * tsx) and by acceptance tests. Always uses real filesystem IO (`nodeIO`).
+ *
+ * Unlike {@link runGenerateModelTable}, this never writes to process.stderr
+ * itself — instead it returns `diff`/`message` on the result so callers
+ * decide how to surface them. `check` mode never writes to `harnessMdPath`
+ * on any exit path (pass or drift).
+ */
+export async function runGenerateModelTableCli(opts: CliOptions): Promise<CliResult> {
+  const argv = opts.mode === 'check' ? ['--check'] : opts.mode === 'pins' ? ['--pins'] : [];
+  const mode = parseCliArgs(argv);
+
+  if (mode === 'pins') {
+    const json = `${JSON.stringify(buildPinsJson(), null, 2)}\n`;
+    return { exitCode: EXIT_OK, message: json };
+  }
+
+  let doc: string;
+  try {
+    doc = await nodeIO.readFile(opts.harnessMdPath);
+  } catch (err) {
+    return {
+      exitCode: EXIT_ERROR,
+      message: `generate-model-table: failed to read ${opts.harnessMdPath}: ${(err as Error).message}`,
+    };
+  }
+
+  const table = renderModelTable();
+
+  let spliced: string;
+  try {
+    spliced = spliceGeneratedRegion(doc, table);
+  } catch (err) {
+    if (err instanceof MarkerError) {
+      return { exitCode: EXIT_ERROR, message: `generate-model-table: ${err.message}` };
+    }
+    throw err;
+  }
+
+  if (mode === 'check') {
+    if (spliced === doc) {
+      return { exitCode: EXIT_OK, message: 'generate-model-table --check: OK' };
+    }
+    const diff = unifiedDiff(doc, spliced, opts.harnessMdPath);
+    const message =
+      `generate-model-table: drift detected in ${opts.harnessMdPath}\n\n${diff}\n\n` +
+      `Run \`${REMEDIATION_COMMAND}\` to regenerate the table.`;
+    return { exitCode: EXIT_DRIFT, diff, message };
+  }
+
+  // write mode
+  if (spliced !== doc) {
+    await nodeIO.writeFile(opts.harnessMdPath, spliced);
+  }
+  return { exitCode: EXIT_OK };
 }
