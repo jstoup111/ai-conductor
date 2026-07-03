@@ -11,8 +11,23 @@ const SESSION_IN_USE_RE = /\balready in use\b|\b(session|conversation)\b[^\n]{0,
 // entitled, deprecated, or unrecognized by the CLI/API — as opposed to a
 // transient rate limit or session issue. Drives the fallback-ladder logic in
 // ModelAvailability.
-const MODEL_UNAVAILABLE_RE =
-  /not_found_error.{0,80}model|model not found|invalid model( name)?/i;
+//
+// Includes the real Claude CLI's actual wording as of 2026-07, confirmed via
+// a real-binary smoke test (claude-provider.smoke.ts): running
+// `claude --model definitely-not-a-model-xyz -p ping --print` produces:
+//   "There's an issue with the selected model (definitely-not-a-model-xyz).
+//    It may not exist or you may not have access to it. Run --model to pick
+//    a different model."
+// The original API-error-shaped patterns (not_found_error/"model not
+// found"/"invalid model") are kept for coverage of raw API responses that
+// may surface in other invocation paths.
+export const MODEL_UNAVAILABLE_RE =
+  /not_found_error.{0,80}model|model not found|invalid model( name)?|issue with the selected model|may not exist or you may not have access/i;
+
+/** Test helper: true if `output` matches the model-unavailable signature. */
+export function detectsModelUnavailable(output: string): boolean {
+  return MODEL_UNAVAILABLE_RE.test(output);
+}
 
 /**
  * Scan stdout lines for a stream-json usage event and extract token counts.
