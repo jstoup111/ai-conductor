@@ -244,6 +244,13 @@ export interface HarnessSelfHostConfig {
   version_approval_gate?: boolean;
   /** HALT on integrity/CHANGELOG/migration gate failure (TR-8/9/10). Omitted → true. */
   release_artifact_gate?: boolean;
+  /**
+   * Declared version freeze (#261): the operator's standing "current version,
+   * no bump" approval. While it matches the repo VERSION the approval gate
+   * self-satisfies (records the approval marker, no HALT); any other VERSION
+   * still halts — a freeze never approves an actual bump. Omitted → no freeze.
+   */
+  version_freeze?: string;
 }
 
 export interface HarnessConfig {

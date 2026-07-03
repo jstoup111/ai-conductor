@@ -513,13 +513,22 @@ function validateSelfHostBlock(raw: unknown): ConfigError | null {
     return { type: 'validation_error', message: 'harness_self_host must be an object' };
   }
   const obj = raw as Record<string, unknown>;
-  const allowed = new Set(['activation', ...SELF_HOST_GATE_KEYS]);
+  const allowed = new Set(['activation', 'version_freeze', ...SELF_HOST_GATE_KEYS]);
   for (const k of Object.keys(obj)) {
     // Reject unknown keys so a typo'd gate name surfaces instead of silently
     // leaving that gate at its (enabled) default — TR-11 negative path.
     if (!allowed.has(k)) {
       return { type: 'validation_error', message: `Unknown key in harness_self_host: "${k}"` };
     }
+  }
+  if (
+    obj.version_freeze !== undefined &&
+    (typeof obj.version_freeze !== 'string' || obj.version_freeze.trim() === '')
+  ) {
+    return {
+      type: 'validation_error',
+      message: 'harness_self_host.version_freeze must be a non-empty string (the frozen version)',
+    };
   }
   if (obj.activation !== undefined && !SELF_HOST_ACTIVATIONS.has(obj.activation as string)) {
     return {

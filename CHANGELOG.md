@@ -16,6 +16,16 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- **`harness_self_host.version_freeze` — self-satisfying version gate during a declared
+  freeze (#261).** During a version freeze the operator's approval decision is always the
+  same ("current version, no bump"), yet every self-host build halted at the VERSION-bump
+  approval gate for the operator to write it by hand. A committed
+  `version_freeze: "<version>"` in `.ai-conductor/config.yml` now records that standing
+  approval: while it matches the repo `VERSION` the gate writes
+  `.pipeline/version-approval` itself and proceeds — no HALT. An explicit marker still
+  wins, any `VERSION` differing from the freeze halts exactly as before (a freeze never
+  approves an actual bump), and the daemon still never merges (ADR-005/ADR-010).
+
 - **Finish-time and as-built remediation (self-healing SHIP gates).** The daemon's
   `/remediate` planner — previously wired only into the `prd_audit` blocking handler — now also
   fires before the generic `failed in auto mode` HALT for a failed `finish` verification and a

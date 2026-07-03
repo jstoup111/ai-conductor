@@ -312,6 +312,8 @@ export interface ResolvedSelfHostConfig {
   sandboxBuildEnv: boolean;
   versionApprovalGate: boolean;
   releaseArtifactGate: boolean;
+  /** Declared version freeze (#261); null = no freeze (gate halts as before). */
+  versionFreeze: string | null;
 }
 
 /**
@@ -328,5 +330,8 @@ export function resolveSelfHostConfig(config?: HarnessConfig): ResolvedSelfHostC
     sandboxBuildEnv: block?.sandbox_build_env ?? true,
     versionApprovalGate: block?.version_approval_gate ?? true,
     releaseArtifactGate: block?.release_artifact_gate ?? true,
+    // Blank/whitespace normalizes to null so a freeze can never "match" an
+    // empty VERSION read — safe-by-default like every other field here.
+    versionFreeze: block?.version_freeze?.trim() || null,
   };
 }
