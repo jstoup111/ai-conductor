@@ -215,6 +215,8 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- **Intake owner markers renamed to plan stems** — the owner gate reads `.docs/intake/<plan-stem>.md`, but three markers were committed under truncated idea-slug names, so their `Owner:` stamps were invisible and the daemon skipped `generated-model-table`, `harness-daemon-profile`, and `model-availability-fallback-ladder` as un-owned. Data fix only; the writer-side slug bug is tracked separately.
+
 - **Owner-stamped intake markers added under the build slugs for the Fable specs (#189/#190).**
   The engineer `land` flow writes the intake marker as `.docs/intake/<idea-slug>.md`
   (e.g. `adopt-fable-for-front-of-funnel-decide-steps-explo.md`), but the daemon's
