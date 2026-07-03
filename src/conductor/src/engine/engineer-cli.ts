@@ -45,6 +45,9 @@ import { createFileQueue } from './engineer/intake/queue.js';
 import { createGithubIssuesAdapter, GITHUB_ISSUES_SOURCE, HANDLED_LABEL } from './engineer/intake/github-issues.js';
 import { reportRouted, reportDone } from './engineer/intake/writeback.js';
 import { restRemoveLabelArgs } from './pr-labels.js';
+import { claimUnblocked, type DependencyClaimQueue } from './engineer/intake/dependency-claim.js';
+import type { Envelope } from './engineer/intake/port.js';
+import { createBlockerResolver } from './blocker-resolver.js';
 import { parseDependencyProse, createDependencyLinks } from './engineer/issue-dep-migration.js';
 
 /**
@@ -791,11 +794,42 @@ export async function dispatchEngineer(
       const engDir = engineerDir ?? resolveEngineerDir({});
       const { ledger, queue } = buildIntake({ engineerDir: engDir, registryPath, gh, printErr });
 
-      const envelope = await queue.claim();
-      if (!envelope) {
+      // Fresh resolver per claim call — createBlockerResolver()'s memo is scoped
+      // to a single walk, so reusing one across calls would leak stale verdicts
+      // (see daemon-backlog.ts:210-221 for the same rule on the daemon side).
+      const resolver = createBlockerResolver({ run: (args) => gh(args, { cwd: process.cwd() }) });
+      const outcome = await claimUnblocked({
+        queue: queue as unknown as DependencyClaimQueue,
+        resolveDependency: (sourceRef) => resolver.resolve(sourceRef ?? ''),
+      });
+
+      if (outcome.kind === 'empty') {
         print(JSON.stringify({ kind: 'claim', empty: true }));
         return 0;
       }
+      if (outcome.kind === 'all-blocked') {
+        print(
+          JSON.stringify({
+            kind: 'claim',
+            allBlocked: true,
+            entries: outcome.entries.map(({ envelope: e, verdict }) => {
+              const entryEnvelope = e as unknown as Envelope;
+              return {
+                text: entryEnvelope.text,
+                source: entryEnvelope.source,
+                sourceRef: entryEnvelope.sourceRef,
+                verdict,
+              };
+            }),
+          }),
+        );
+        return 0;
+      }
+
+      // claimUnblocked's ClaimableEnvelope is a structural subset of the real
+      // Envelope produced by the file queue — narrow back to the concrete type
+      // for ack()/ledger.transition() below.
+      const envelope = outcome.envelope as unknown as Envelope;
       // Remove from the inbox now that we own it — the ledger carries lifecycle from here.
       await queue.ack(envelope);
       try {
