@@ -821,8 +821,8 @@ describe('production runner kill-switch', () => {
 describe('publishEarlyDraft', () => {
   it('not ahead of base → pushBranch called, zero pr-create calls, returns {pushed: true, drafted: false}', async () => {
     const { git, calls: gitCalls } = fakeGit([
-      { stdout: '0\n' }, // isAheadOfBase returns 0 (called first)
-      { stdout: '' }, // push response (called second)
+      { stdout: '' }, // push response (called first)
+      { stdout: '0\n' }, // isAheadOfBase returns 0 (called second)
     ]);
     const { gh, calls: ghCalls } = fakeGh([]);
 
@@ -835,48 +835,47 @@ describe('publishEarlyDraft', () => {
   it('ahead of base → pushBranch called, findOrCreatePr called once, returns {pushed: true, drafted: true, pr_url}', async () => {
     const prUrl = 'https://github.com/foo/bar/pull/99';
     const { git } = fakeGit([
-      { stdout: '3\n' }, // isAheadOfBase returns 3 (called first)
-      { stdout: '' }, // push response (called second)
+      { stdout: '' }, // push response (called first)
+      { stdout: '3\n' }, // isAheadOfBase returns 3 (called second)
     ]);
     const { gh, calls: ghCalls } = fakeGh([
-      { stdout: `Pull request created\n${prUrl}\n` }, // findOrCreatePr: no existing PR, create
+      { stdout: `Pull request created\n${prUrl}\n` }, // gh pr create (succeeds)
     ]);
 
     const result = await publishEarlyDraft(git, gh, '/repo', 'feat/xyz', 'main');
 
     expect(result).toEqual({ pushed: true, drafted: true, pr_url: prUrl });
-    expect(ghCalls.length).toBeGreaterThan(0); // findOrCreatePr called
+    expect(ghCalls.length).toBe(1); // gh pr create called once
   });
 
   it('ahead of base, findOrCreatePr cached on second call → only one pr-create call total', async () => {
     const prUrl = 'https://github.com/foo/bar/pull/99';
     const { git } = fakeGit([
-      { stdout: '3\n' }, // isAheadOfBase call 1 (first call)
       { stdout: '' }, // push call 1
-      { stdout: '3\n' }, // isAheadOfBase call 2 (second call)
+      { stdout: '3\n' }, // isAheadOfBase call 1
       { stdout: '' }, // push call 2
+      { stdout: '3\n' }, // isAheadOfBase call 2
     ]);
     const { gh, calls: ghCalls } = fakeGh([
-      { stdout: `Pull request created\n${prUrl}\n` }, // findOrCreatePr call 1 (create)
-      // No second gh call because findOrCreatePr is cached by branch key
+      { stdout: `Pull request created\n${prUrl}\n` }, // gh pr create call 1
+      // No second gh call because result is cached by branch key
     ]);
 
     // First call — gh runner is the key for the WeakMap cache
     const result1 = await publishEarlyDraft(git, gh, '/repo', 'feat/xyz', 'main');
     expect(result1.pr_url).toBe(prUrl);
 
-    // Second call should use cached PR (same gh runner)
+    // Second call should use cached PR (same gh runner, same branch)
     const result2 = await publishEarlyDraft(git, gh, '/repo', 'feat/xyz', 'main');
     expect(result2.pr_url).toBe(prUrl);
 
-    // Only 1 gh call total for findOrCreatePr (cached on second call)
+    // Only 1 gh call total (cached on second call)
     expect(ghCalls).toHaveLength(1);
   });
 
   it('push failure → loud log, no throw, error captured in result', async () => {
     const { git } = fakeGit([
-      { stdout: '3\n' }, // isAheadOfBase call (succeeds)
-      new Error('push auth failed'), // push call (fails)
+      new Error('push auth failed'), // push call (fails) — called first
     ]);
     const { gh } = fakeGh([]);
     const logs: string[] = [];
@@ -893,11 +892,11 @@ describe('publishEarlyDraft', () => {
 
   it('gh unauth rejection on findOrCreatePr → one attempt, loud log, no retry, no throw', async () => {
     const { git } = fakeGit([
-      { stdout: '' }, // pushBranch succeeds
-      { stdout: '3\n' }, // isAheadOfBase returns 3
+      { stdout: '' }, // push succeeds (called first)
+      { stdout: '3\n' }, // isAheadOfBase returns 3 (called second)
     ]);
     const { gh, calls: ghCalls } = fakeGh([
-      new Error('gh: authentication failed'), // findOrCreatePr fails
+      new Error('gh: authentication failed'), // gh pr create fails (called once)
     ]);
     const logs: string[] = [];
 
@@ -907,8 +906,8 @@ describe('publishEarlyDraft', () => {
 
     // Should not throw; error should be logged
     expect(result).toEqual({ pushed: true, drafted: false });
-    expect(ghCalls).toHaveLength(1); // Only one attempt at findOrCreatePr
-    expect(logs.some((l) => l.includes('findOrCreatePr'))).toBe(true);
+    expect(ghCalls).toHaveLength(1); // Only one attempt at gh pr create
+    expect(logs.some((l) => l.includes('gh pr create error'))).toBe(true);
   });
 });
 
