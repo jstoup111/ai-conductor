@@ -47,6 +47,7 @@ import type { ComplexityTier } from '../../types/index.js';
 import { runHandoff } from './handoff-step.js';
 import { runCreate } from '../registry-cli.js';
 import { readMachineOwnerConfig } from '../owner-gate/machine-identity.js';
+import { resolveDaemonOwner } from '../owner-gate/identity.js';
 
 const execFile = promisify(execFileCb);
 
@@ -541,6 +542,23 @@ async function processIdea(
   // D1 naming: `ownerConfig`/`specOwner`, never a bare `owner`. Machine identity
   // is never read from or influenced by the project config (D2 anti-leak).
   const ownerConfig = await readMachineOwnerConfig();
+
+  // Fail-fast identity check at loop entry (Task 9): resolve the chain before
+  // authoring begins. If unresolved, throw with actionable remediation text
+  // (same error as landSpec enforcement point — Story 2).
+  const identityResolution = await resolveDaemonOwner(
+    ownerConfig,
+    deps.gh || (async () => { throw new Error('gh: not available'); }),
+    target.repoPath,
+  );
+  if (!identityResolution.resolved) {
+    throw new Error(
+      'Cannot land spec: identity unresolved. Resolve one of:\n' +
+      '  1. Set spec_owner in ~/.ai-conductor/config.yml\n' +
+      '  2. Authenticate via: gh auth login',
+    );
+  }
+
   const { branch } = await runAuthoring(target, idea, {
     decide,
     assessComplexity,

@@ -495,6 +495,8 @@ function makeTestGh(prUrl = 'https://example.invalid/x/pull/1') {
   const gh = async (args: string[], _opts: { cwd: string }) => {
     calls.push([...args]);
     if (args[0] === 'pr' && args[1] === 'create') return { stdout: prUrl };
+    // Identity resolution (Task 9): handle `gh api user --jq .login` call
+    if (args[0] === 'api' && args[1] === 'user') return { stdout: 'testuser\n' };
     return { stdout: '' };
   };
   return { gh, calls };
@@ -978,10 +980,12 @@ describe('Owner-gate: autonomous authoring threads owner deps into runAuthoring 
     }
   }
 
-  it('resolves identity from the USER config, never the committed project config (Slice B D1/D2) — and wins over gh too', async () => {
-    // Slice B final contract: the project's committed `spec_owner: Carol` must
-    // NEVER enter the identity chain (D2 anti-leak), and the MACHINE (user)
-    // config — not gh — is the authoritative source when both resolve (D1).
+  it('does NOT honor a project-config spec_owner (D2 anti-leak) — resolves from user config (Story 1: project Carol + user bob → bob)', async () => {
+    // Slice B Story 1 (RED): project has spec_owner: Carol, user config has spec_owner: bob.
+    // Identity resolution MUST NOT read or use the project config (D2 anti-leak).
+    // MUST resolve to bob from user config, NOT carol from project config, NOT ghlogin.
+    // Current code reads project config → this test FAILS (RED) until loop.ts
+    // is updated to skip project config and read user config instead.
     const dirA = join(workDir, 'alpha');
     await initRepo(dirA);
     await commitConfig(dirA, 'spec_owner: Carol\n');
@@ -992,7 +996,7 @@ describe('Owner-gate: autonomous authoring threads owner deps into runAuthoring 
       const { runEngineerMode } = await loadLoop();
       const { provider: route } = makeTestProvider({ routeTo: 'alpha' });
       // gh ALSO resolves an id — user config must win over gh, not merely over
-      // the project config (D1 chain order: user-config > gh).
+      // the project config (D1 chain order: user-config > gh > project-config-NEVER).
       const gh = async (args: string[], _opts: { cwd: string }) => {
         if (args[0] === 'pr' && args[1] === 'create') return { stdout: 'https://example.invalid/x/pull/1' };
         if (args[0] === 'api') return { stdout: 'ghlogin\n' };
@@ -1015,9 +1019,12 @@ describe('Owner-gate: autonomous authoring threads owner deps into runAuthoring 
         ['show', 'spec/dep-bump:.docs/intake/dep-bump.md'],
         { cwd: dirA },
       );
-      expect(marker).toContain('Owner: bob'); // USER config wins
-      expect(marker).not.toMatch(/carol/i); // project config never enters the identity chain
-      expect(marker).not.toContain('ghlogin'); // user config wins over gh too
+      // MUST carry Owner: bob from user config
+      expect(marker).toContain('Owner: bob');
+      // MUST NOT leak Carol from project config (D2 anti-leak)
+      expect(marker).not.toMatch(/carol/i);
+      // MUST NOT fall back to gh login when user config resolves
+      expect(marker).not.toContain('ghlogin');
     });
 
     await rm(fakeHome, { recursive: true, force: true });
