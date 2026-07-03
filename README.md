@@ -563,17 +563,26 @@ spec_owner: your-github-login
   marker is skipped with a distinct, deduped line telling you to add an `Owner:` marker on
   the default branch (or grandfather it via `owner_gate_cutover`).
 
-**Grandfather cutover — a per-repo policy that MUST NOT be set on the harness self-host repo.**
+**Daemon Profile & Version Gate (Self-Host)**
 
-```yaml
-# <repo>/.ai-conductor/config.yml   (committed — per-repo policy)
-owner_gate_cutover: 2026-06-30T00:00:00Z   # build un-owned specs merged BEFORE this instant
-```
+As of 2026-07-02T11:00:00Z, this harness repo is daemon-registered for build-to-PR automation
+(see adr-2026-07-03-harness-daemon-profile). The version_approval_gate is enabled and enforces
+semantic version classification:
 
-`owner_gate_cutover` grandfathers pre-existing **un-owned** specs so a repo with an unbuilt
-backlog can adopt the owner gate without stranding that work. **Do not set it on the
-james-stoup-agents self-host repo:** every plan there is already built and merged, so the
-grandfather window would make the daemon rebuild all of them. Leave it unset on the harness.
+| Change Type | Signal | Action |
+|---|---|---|
+| PATCH-safe only | PATCH | Auto-pass, audit recorded in .pipeline/version-signal.json |
+| New skills/hooks/gates | MINOR | HALT — requires manual .pipeline/version-approval marker |
+| Breaking surfaces | MAJOR | HALT — requires manual .pipeline/version-approval marker |
+| Unknown/ambiguous paths | undeterminable | HALT — requires investigation and manual marker |
+
+**Audit Record**: On PATCH auto-pass, the gate writes `.pipeline/version-signal.json` with
+classification details for audit and debugging.
+
+When opening a PR against main:
+- If the daemon detects a PATCH-safe change, it auto-passes the version gate
+- If MINOR/MAJOR/undeterminable, the PR HALTs; manually record the approved version in
+  `.pipeline/version-approval` to proceed
 
 ### OpenTelemetry observability (`conduct-ts` only)
 
