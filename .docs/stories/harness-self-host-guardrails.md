@@ -249,6 +249,10 @@ instead of silently skipped or guessed.
 - Given no approval marker exists, when the gate runs in `auto` mode, then it calls `writeHalt()`
   with a gate-specific reason (e.g. "VERSION-bump approval required — record approved bump, then
   resume") — distinct from a rebase HALT — and the PR is NOT opened.
+  > **Amended 2026-07-03** by adr-2026-07-03-version-gate-semver-escalation (#174): the
+  > no-marker path now classifies the change set first — a provably PATCH-class set auto-passes
+  > with an audit record; MINOR/MAJOR signals and undeterminable sets still HALT as described.
+  > See `.docs/stories/harness-daemon-profile.md` (TR-2/TR-3) for the governing scenarios.
 - Given the approval marker exists but records a VERSION that does not match the repo's `VERSION`
   file after the bump, when the gate runs, then it HALTs naming the mismatch rather than opening a
   PR with an unapproved version.
