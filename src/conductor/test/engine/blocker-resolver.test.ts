@@ -238,6 +238,78 @@ describe('createBlockerResolver', () => {
     expect(membersA).toEqual(['1', '2']);
     expect(membersB).toEqual(['1', '2']);
   });
+  it('does not report a deep chain (A->B->C, all open, C terminal) as a cycle', async () => {
+    const blockedByOf = (blocker: string) =>
+      JSON.stringify([
+        {
+          number: Number(blocker),
+          repository_url: 'https://api.github.com/repos/owner/repo',
+          state: 'open',
+        },
+      ]);
+
+    const run: BlockerRunner = async (args) => {
+      const path = args[1] ?? '';
+      if (path.includes('/issues/1/')) {
+        return { stdout: blockedByOf('2') }; // A blocked_by B
+      }
+      if (path.includes('/issues/2/')) {
+        return { stdout: blockedByOf('3') }; // B blocked_by C
+      }
+      // C has no blockers — chain terminates.
+      return { stdout: '[]' };
+    };
+    const resolver = createBlockerResolver({ run });
+
+    const verdict = await resolver.resolve('owner/repo#1');
+
+    expect(verdict).toEqual({
+      kind: 'blocked',
+      blockers: [{ repo: 'owner/repo', number: '2' }],
+    });
+  });
+
+  it('does not report a cycle when the return path is broken by a closed blocker', async () => {
+    // A blocked_by B (open); B blocked_by A, but that particular blocked_by
+    // entry for B->A is closed — so the path back to A is broken and this
+    // is not a cycle. Since B's only blocker (A) is closed, B itself is
+    // unblocked, which also means A has no *open* path back through B.
+    const run: BlockerRunner = async (args) => {
+      const path = args[1] ?? '';
+      if (path.includes('/issues/1/')) {
+        return {
+          stdout: JSON.stringify([
+            {
+              number: 2,
+              repository_url: 'https://api.github.com/repos/owner/repo',
+              state: 'open',
+            },
+          ]),
+        }; // A blocked_by B (open)
+      }
+      if (path.includes('/issues/2/')) {
+        return {
+          stdout: JSON.stringify([
+            {
+              number: 1,
+              repository_url: 'https://api.github.com/repos/owner/repo',
+              state: 'closed',
+              state_reason: 'completed',
+            },
+          ]),
+        }; // B blocked_by A, but that entry is closed
+      }
+      return { stdout: '[]' };
+    };
+    const resolver = createBlockerResolver({ run });
+
+    const verdict = await resolver.resolve('owner/repo#1');
+
+    expect(verdict).toEqual({
+      kind: 'blocked',
+      blockers: [{ repo: 'owner/repo', number: '2' }],
+    });
+  });
 });
 
 // Real-binary smoke test: exercises the actual `gh` CLI against a real
