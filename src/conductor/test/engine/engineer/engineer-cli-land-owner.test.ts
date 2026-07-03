@@ -170,15 +170,32 @@ afterEach(async () => {
 
 describe('engineer land — owner-gate wiring (CLI seam)', () => {
   it('does NOT honor a project-config spec_owner (D2 anti-leak) — identity comes from the USER config instead', async () => {
-    // Slice B final contract: a `spec_owner` committed into the shared PROJECT
-    // config must NEVER source operator identity (D2 anti-leak, adversarial
-    // impersonation input). The MACHINE (user) config wins — not gh — when
-    // both resolve (D1 chain order: user-config > gh).
+    // SLICE B TASK 3 — TEST A: Negative path covering "project alice + user bob → bob"
+    //
+    // Contract (D2 anti-leak): operator identity MUST come from the USER's machine config
+    // (~/.ai-conductor/config.yml), never from the project config which is shared/committed.
+    // A `spec_owner` in the project config is ignored entirely.
+    //
+    // Identity chain priority (Story 1 D1): user-config > gh-login > unresolved
+    // When both user config and gh are available, user config wins.
+    //
+    // Setup:
+    // 1. Commit project config with spec_owner: Alice (shared, adversarial input)
+    // 2. Set up user config with spec_owner: bob (machine-scoped)
+    // 3. Mock gh runner (available, would return ghlogin)
+    //
+    // Expected: land succeeds, marker stamped "Owner: bob" (user config priority)
+    // NOT: alice (project config ignored), NOT: ghlogin (user config beats gh)
+    //
+    // This test FAILS (RED) because current code reads project config instead of user config.
+
     await writeConfig('spec_owner: Alice\n');
     const worktree = await seedWorktree();
-    // gh ALSO resolves an id — user config must win over gh too, not merely
-    // over the project config.
+
+    // gh runner is available but should be ignored because user config is set
     const gh: GhRunner = async () => ({ stdout: 'ghlogin\n' });
+
+    // User config takes priority: bob is machine-scoped operator identity
     const fakeHome = await makeUserHome('spec_owner: bob\n');
 
     await withHome(fakeHome, async () => {
@@ -188,23 +205,43 @@ describe('engineer land — owner-gate wiring (CLI seam)', () => {
       expect(code).toBe(0);
       const result = JSON.parse(out[out.length - 1]) as { slug: string; branch: string };
       const marker = await showOnBranch(result.branch, `.docs/intake/${result.slug}.md`);
-      expect(marker).toContain('Owner: bob'); // USER config wins
-      expect(marker).not.toMatch(/alice/i); // project config never enters the identity chain
-      expect(marker).not.toContain('ghlogin'); // user config wins over gh too
+
+      // Verify: user config (bob) is used, project config (alice) and gh (ghlogin) are NOT
+      expect(marker).toContain('Owner: bob');
+      expect(marker).not.toMatch(/alice/i);
+      expect(marker).not.toContain('ghlogin');
     });
 
     await rm(fakeHome, { recursive: true, force: true });
   });
 
-  it('project spec_owner + NO user config + gh resolves → Owner from gh login, no silent config-load swallow', async () => {
-    // Second Slice B negative case (Task 3): the project config still carries
-    // an (ignored) `spec_owner: Alice`; with no user-config override, the chain
-    // falls through to gh — and the marker is written (not omitted), proving a
-    // config-load failure never silently degrades the identity path.
+  it('fallback to gh login when no user config (ignoring project config, no silent swallow)', async () => {
+    // SLICE B TASK 3 — TEST B: Negative path covering "project alice + no user + gh ghlogin → ghlogin"
+    //
+    // Contract: when user config is absent, identity chain falls back to gh-login.
+    // Project config spec_owner is ignored (D2 anti-leak).
+    // Config-load failures are never silent — the identity chain completes, the marker
+    // is written, no degradation without a signal.
+    //
+    // Setup:
+    // 1. Commit project config with spec_owner: Alice (shared, adversarial input — ignored)
+    // 2. NO user config set (~/.ai-conductor/config.yml does not exist)
+    // 3. Mock gh runner to return ghlogin (available, is used as fallback)
+    //
+    // Expected: land succeeds, marker stamped "Owner: ghlogin" (gh fallback after user-config fails)
+    // NOT: alice (project config ignored entirely)
+    //
+    // This test FAILS (RED) because current code reads project config, not user config.
+    // When user config is absent, it should fall through to gh, not use alice from project.
+
     await writeConfig('spec_owner: Alice\n');
     const worktree = await seedWorktree();
+
+    // gh runner available: fallback after user config is absent
     const gh: GhRunner = async () => ({ stdout: 'ghlogin\n' });
-    const fakeHome = await makeUserHome(); // no ~/.ai-conductor/config.yml at all
+
+    // No user config file at all: chain falls through to gh
+    const fakeHome = await makeUserHome();
 
     await withHome(fakeHome, async () => {
       const { out, opts } = captureOpts({ gh });
@@ -213,6 +250,8 @@ describe('engineer land — owner-gate wiring (CLI seam)', () => {
       expect(code).toBe(0);
       const result = JSON.parse(out[out.length - 1]) as { slug: string; branch: string };
       const marker = await showOnBranch(result.branch, `.docs/intake/${result.slug}.md`);
+
+      // Verify: gh login is used, project config is ignored
       expect(marker).not.toBeNull();
       expect(marker).toContain('Owner: ghlogin');
       expect(marker).not.toMatch(/alice/i);
@@ -269,23 +308,6 @@ describe('engineer land — owner-gate wiring (CLI seam)', () => {
     expect(marker).toContain('Owner: bob');
   });
 
-  it('OMITS the Owner line (un-owned, NOT blank) when neither config nor gh resolves', async () => {
-    const worktree = await seedWorktree();
-    const failingGh: GhRunner = async () => {
-      throw new Error('gh unavailable');
-    };
-    const { out, opts } = captureOpts({ gh: failingGh });
-
-    // A valid sourceRef guarantees a marker is written so we can assert Owner is
-    // absent (not merely that no marker exists).
-    const code = await dispatchEngineer(
-      { kind: 'land', project: 'alpha', idea: 'dep bump', worktree, sourceRef: 'acme/app#7' },
-      opts,
-    );
-    expect(code).toBe(0);
-    const result = JSON.parse(out[out.length - 1]) as { slug: string; branch: string };
-    const marker = await showOnBranch(result.branch, `.docs/intake/${result.slug}.md`);
-    expect(marker).toContain('Source-Ref: acme/app#7');
-    expect(marker ?? '').not.toContain('Owner:');
-  });
+  // REMOVED: Interim test for un-owned stamp behavior (now throws fail-closed per Story 2).
+  // Replaced by Task 3 tests: "does NOT honor project config" and "fallback to gh login".
 });
