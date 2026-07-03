@@ -221,6 +221,8 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- **Finish and pr skills now prove remote staleness before force-with-lease (#213).** After a sanctioned rebase, the branch diverges from `origin/<branch>`, which reports "behind" in `git status`. The old behavior would pull stale commits back in, undoing the rebase and creating GATE 0 halt loops. The new behavior proves `origin/<branch>` is a stale pre-rebase copy via staleness proof (ORIG_HEAD ancestry via `git merge-base` OR reflog "rebase: finish" entry), then safely force-with-lease pushes. Unproven staleness (foreign commits detected) or a failed lease (remote changed concurrently) now halts instead of forcing, preserving the remote work. Documented in the finish skill's §1b "Push Direction" gate and verified in the verification checklist.
+
 - **Intake owner markers renamed to plan stems** — the owner gate reads `.docs/intake/<plan-stem>.md`, but three markers were committed under truncated idea-slug names, so their `Owner:` stamps were invisible and the daemon skipped `generated-model-table`, `harness-daemon-profile`, and `model-availability-fallback-ladder` as un-owned. Data fix only; the writer-side slug bug is tracked separately.
 
 - **Owner-stamped intake markers added under the build slugs for the Fable specs (#189/#190).**
