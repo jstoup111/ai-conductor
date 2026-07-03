@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, readFile, writeFile, mkdir } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, writeFile, mkdir, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -289,5 +289,117 @@ describe('makeIsProcessed', () => {
     await isProcessed('billing-export');
 
     expect(tree.listShippedFilesCallCount).toBe(1);
+  });
+});
+
+describe('backfill (Story 6): one-time shipped-record generation', () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'shipped-backfill-'));
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  /**
+   * Mirrors the one-time backfill script's per-stem logic: read plan/stories
+   * bytes (or null if missing), compute specHash (or 'unknown' if the plan is
+   * gone), and write the record via the real production helpers.
+   */
+  async function backfillStem(
+    shippedDir: string,
+    stem: string,
+    opts: { planBytes: Buffer | null; storiesBytes?: Buffer | null; pr?: string; shipped?: string }
+  ): Promise<string> {
+    const hash =
+      opts.planBytes === null
+        ? 'unknown'
+        : specHash(opts.planBytes, opts.storiesBytes ?? null).digest;
+    const content = renderShippedRecord({
+      slug: stem,
+      specHash: hash,
+      pr: opts.pr,
+      shipped: opts.shipped,
+    });
+    const target = join(shippedDir, `${stem}.md`);
+    await writeShippedRecord(target, content);
+    return target;
+  }
+
+  it('generates a shipped record for every ledger entry (16-entry ledger fixture)', async () => {
+    const shippedDir = join(dir, '.docs/shipped');
+    const ledgerStems = Array.from({ length: 16 }, (_, i) => `ledger-spec-${i}`);
+
+    for (const stem of ledgerStems) {
+      await backfillStem(shippedDir, stem, {
+        planBytes: Buffer.from(`plan body for ${stem}`),
+        pr: 'https://github.com/acme/repo/pull/1',
+      });
+    }
+
+    const files = await readdir(shippedDir);
+    for (const stem of ledgerStems) {
+      expect(files).toContain(`${stem}.md`);
+    }
+  });
+
+  it('generates a shipped record for every known shipped-but-unmarked spec (the 7-spec ADR list)', async () => {
+    const shippedDir = join(dir, '.docs/shipped');
+    const knownSpecs = [
+      'technical-assessment',
+      'phase-2-language-evaluation',
+      'pluggable-harness-architecture',
+      'phase-9.3-engineer-redesign',
+      'mermaid-renderer',
+      'harness-self-host-guardrails',
+      'multi-operator-ownership-hardening',
+    ];
+
+    for (const stem of knownSpecs) {
+      await backfillStem(shippedDir, stem, { planBytes: Buffer.from(`plan for ${stem}`) });
+    }
+
+    const files = await readdir(shippedDir);
+    for (const stem of knownSpecs) {
+      expect(files).toContain(`${stem}.md`);
+    }
+  });
+
+  it('stem-match dedup still works even when a backfilled record\'s hash has drifted from current content', async () => {
+    const stem = 'drifted-spec';
+    const shippedDir = join(dir, '.docs/shipped');
+
+    // Backfilled at an older content snapshot.
+    await backfillStem(shippedDir, stem, { planBytes: Buffer.from('old plan content') });
+    const recordContent = await readFile(join(shippedDir, `${stem}.md`), 'utf8');
+    const recorded = parseShippedRecord(recordContent);
+    if ('malformed' in recorded) throw new Error('expected a parsed record');
+
+    // Current base-branch content has since changed (drifted).
+    const currentHash = specHash(Buffer.from('new plan content, changed since backfill'), null).digest;
+    expect(recorded.specHash).not.toBe(currentHash);
+
+    // isProcessed still resolves true by stem, ignoring the hash mismatch —
+    // dedup keys off stem, not content identity (Story 3).
+    const tree = fakeTreeSource({ [`${stem}.md`]: recordContent });
+    const isProcessed = makeIsProcessed(join(dir, '.daemon-ledger-unused'), tree);
+
+    expect(await isProcessed(stem)).toBe(true);
+  });
+
+  it('writes spec_hash: unknown when the ledger entry\'s plan no longer exists on the base branch', async () => {
+    const shippedDir = join(dir, '.docs/shipped');
+    const stem = 'deleted-plan-spec';
+
+    const target = await backfillStem(shippedDir, stem, { planBytes: null });
+
+    const written = await readFile(target, 'utf8');
+    const parsed = parseShippedRecord(written);
+    if ('malformed' in parsed) throw new Error('expected a parsed record');
+
+    expect(parsed.slug).toBe(stem);
+    expect(parsed.specHash).toBe('unknown');
   });
 });
