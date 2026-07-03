@@ -228,6 +228,63 @@ else
   esac
 fi
 
+# ── 5b. SKILL.md pin agreement ──────────────────────────────────────────────
+# Consumes `bin/generate-model-table --pins` JSON and compares each
+# skills/*/SKILL.md `model:` pin against the engine-expected value. Exempt
+# skills (PIN_EXEMPT_SKILLS) pass without comparison; skills with no `model:`
+# line are skipped silently (inheriting from session/engine is legal).
+# Degrades to WARN (not FAIL) when src/conductor/node_modules is absent, since
+# the generator can't run without a local npm install — this is an
+# environment-availability skip, not a real integrity failure.
+
+echo ""
+echo -e "${BOLD}5b. SKILL.md pin agreement${NC}"
+
+if [ ! -d "${HARNESS_DIR}/src/conductor/node_modules" ]; then
+  warn_check "model-table checks skipped — run npm install in src/conductor" 1
+elif ! command -v jq >/dev/null 2>&1; then
+  warn_check "model-table pin check skipped — jq not installed" 1
+else
+  pins_json=$("${HARNESS_DIR}/bin/generate-model-table" --pins 2>/dev/null)
+  pins_exit=$?
+
+  if [ "$pins_exit" -ne 0 ] || ! echo "$pins_json" | jq -e . >/dev/null 2>&1; then
+    assert "bin/generate-model-table --pins produced parseable JSON" 1
+  else
+    for skill_file in "${HARNESS_DIR}"/skills/*/SKILL.md; do
+      [ -f "$skill_file" ] || continue
+      skill_name=$(basename "$(dirname "$skill_file")")
+
+      frontmatter=$(sed -n '2,/^---$/p' "$skill_file" | head -n -1)
+      pinned=$({ echo "$frontmatter" | grep -E '^model:' || true; } | head -1 | sed -E 's/^model:[[:space:]]*//' | tr -d '[:space:]')
+
+      if [ -z "$pinned" ]; then
+        continue
+      fi
+
+      entry=$(echo "$pins_json" | jq -c --arg s "$skill_name" '.[$s] // empty')
+
+      if [ -z "$entry" ]; then
+        assert "${skill_name} — pinned '${pinned}' but not present in --pins output (unmapped)" 1
+        continue
+      fi
+
+      is_exempt=$(echo "$entry" | jq -r '.exempt // false')
+      if [ "$is_exempt" = "true" ]; then
+        assert "${skill_name} — exempt from pin check" 0
+        continue
+      fi
+
+      expected=$(echo "$entry" | jq -r '.expected // empty')
+      if [ "$pinned" = "$expected" ]; then
+        assert "${skill_name} — pin '${pinned}' agrees with expected '${expected}'" 0
+      else
+        assert "${skill_name} — pin/expected disagreement: pinned='${pinned}' expected='${expected}'" 1
+      fi
+    done
+  fi
+fi
+
 # ── 6. Template references ──────────────────────────────────────────────────
 
 echo ""
