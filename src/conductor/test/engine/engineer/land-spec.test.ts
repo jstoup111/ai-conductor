@@ -10,7 +10,7 @@
 // with valid Accepted DECIDE artifacts.
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, writeFile, utimes } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile as execFileCb } from 'node:child_process';
@@ -206,5 +206,132 @@ describe('landSpec fails closed on unresolved identity (Slice B Story 2, D3)', (
       { cwd: worktree },
     );
     expect(marker).toContain('Owner: bob');
+  });
+
+  it('Task 4: no-source-ref variant still owner-stamps the marker under the plan stem (not the idea slug)', async () => {
+    // Idea text slugifies to "dep-bump", but the plan artifact's filename stem
+    // is "2026-07-03-feature" — a chat/CLI idea whose slug diverges from the
+    // plan file name. planStem(planFile) must win regardless.
+    const idea = 'dep bump';
+    const worktree = await seedValidWorktree(idea);
+    await writeFile(join(worktree, '.docs', 'plans', 'dep-bump.md'), '');
+    await rm(join(worktree, '.docs', 'plans', 'dep-bump.md'), { force: true });
+    await writeFile(join(worktree, '.docs', 'plans', '2026-07-03-feature.md'), PLAN_WITH_DEPS);
+
+    const gh: GhRunner = async () => ({ stdout: 'carol\n' });
+
+    // sourceRef is explicitly undefined — the no-source-ref (chat/CLI idea) variant.
+    const result = await landSpec(target(), idea, worktree, undefined, { ownerConfig: {}, gh });
+
+    const { stdout: marker } = await execFile(
+      'git',
+      ['show', `${result.branch}:.docs/intake/2026-07-03-feature.md`],
+      { cwd: worktree },
+    );
+    expect(marker).toContain('Owner: carol');
+    expect(marker).not.toContain('Source-Ref:');
+  });
+
+  it('Task 7 (negative): multi-plan worktree keys the marker to the NEWEST resolved plan only', async () => {
+    // Two plans exist under .docs/plans/: an older one that must NOT win, and
+    // a newer one (backdated the older, not the newer) that findNewestFile()
+    // must select. planStem(planFile) then keys the marker to that newest
+    // plan's stem — proving the newest-plan resolution composes correctly
+    // even when another plan is present to create ambiguity.
+    const idea = 'this idea';
+    const worktree = await seedValidWorktree(idea);
+
+    // Replace the default same-named plan with two explicitly-dated plans.
+    // (seedValidWorktree always seeds specs/stories/plans under a fixed
+    // "dep-bump" filename regardless of the idea text.)
+    await rm(join(worktree, '.docs', 'plans', 'dep-bump.md'), { force: true });
+
+    const olderPlanPath = join(worktree, '.docs', 'plans', 'other-idea.md');
+    await writeFile(olderPlanPath, PLAN_WITH_DEPS);
+    const oldDate = new Date('2020-01-01T00:00:00Z');
+    await utimes(olderPlanPath, oldDate, oldDate);
+
+    const newerPlanPath = join(worktree, '.docs', 'plans', '2026-07-03-this-idea.md');
+    await writeFile(newerPlanPath, PLAN_WITH_DEPS);
+    const newDate = new Date();
+    await utimes(newerPlanPath, newDate, newDate);
+
+    const gh: GhRunner = async () => ({ stdout: 'dana\n' });
+
+    const result = await landSpec(target(), idea, worktree, 'acme/widgets#42', { ownerConfig: {}, gh });
+
+    // Marker lands ONLY at the newest plan's stem.
+    const { stdout: marker } = await execFile(
+      'git',
+      ['show', `${result.branch}:.docs/intake/2026-07-03-this-idea.md`],
+      { cwd: worktree },
+    );
+    expect(marker).toContain('Owner: dana');
+    expect(marker).toContain('Source-Ref: acme/widgets#42');
+
+    // The older plan's stem must NOT have a marker of its own.
+    await expect(
+      execFile('git', ['show', `${result.branch}:.docs/intake/other-idea.md`], { cwd: worktree }),
+    ).rejects.toThrow();
+  });
+
+  it('Task 5: retry preserves pre-existing Source-Ref under the new plan-stem key', async () => {
+    const worktree = await seedValidWorktree();
+    await mkdir(join(worktree, '.docs', 'intake'), { recursive: true });
+    await writeFile(
+      join(worktree, '.docs', 'intake', 'dep-bump.md'),
+      ['# Intake origin: dep-bump', '', 'Source-Ref: owner/repo#9', ''].join('\n'),
+    );
+    const gh: GhRunner = async () => ({ stdout: 'bob\n' });
+
+    const result = await landSpec(target(), 'dep bump', worktree, undefined, { ownerConfig: {}, gh });
+
+    const { stdout: marker } = await execFile(
+      'git',
+      ['show', `${result.branch}:.docs/intake/dep-bump.md`],
+      { cwd: worktree },
+    );
+    expect(marker).toContain('Source-Ref: owner/repo#9');
+    expect(marker).toContain('Owner: bob');
+  });
+
+  it('Task 6 (negative): no plan file → landSpec throws loudly and creates NO marker under any name', async () => {
+    // Seed a worktree with .docs/stories/ and .docs/specs/ but deliberately
+    // omit .docs/plans/ entirely (not even the directory exists) — the C2
+    // guard (line ~197) must reject before writeIntakeMarker() ever runs.
+    const idea = 'dep bump';
+    const worktree = await createEngineerWorktree(repoPath, idea);
+    const dir = worktree.worktreePath;
+    await mkdir(join(dir, '.docs', 'specs'), { recursive: true });
+    await mkdir(join(dir, '.docs', 'stories'), { recursive: true });
+    await writeFile(join(dir, '.docs', 'specs', 'dep-bump.md'), '# PRD: dep bump\n\nApproved.\n');
+    await writeFile(join(dir, '.docs', 'stories', 'dep-bump.md'), ACCEPTED_STORIES);
+    // No .docs/plans/ directory at all.
+
+    const headBefore = await git(['rev-parse', 'HEAD'], dir);
+    const logCountBefore = (await git(['log', '--oneline'], dir)).split('\n').filter(Boolean).length;
+    const gh: GhRunner = async () => ({ stdout: 'bob\n' });
+
+    let caught: Error | null = null;
+    try {
+      await landSpec(target(), idea, dir, undefined, { ownerConfig: {}, gh });
+    } catch (e) {
+      caught = e instanceof Error ? e : new Error(String(e));
+    }
+
+    // Fails loudly — throws, does not silently pass.
+    expect(caught).not.toBeNull();
+    expect(caught!.message.toLowerCase()).toContain('plan');
+
+    // No marker file under EITHER naming scheme (plan-stem or idea-slug).
+    const { existsSync } = await import('node:fs');
+    expect(existsSync(join(dir, '.docs', 'intake', 'dep-bump.md'))).toBe(false);
+    expect(existsSync(join(dir, '.docs', 'intake'))).toBe(false);
+
+    // No git commits created — fails before any write.
+    const headAfter = await git(['rev-parse', 'HEAD'], dir);
+    const logCountAfter = (await git(['log', '--oneline'], dir)).split('\n').filter(Boolean).length;
+    expect(headAfter).toBe(headBefore);
+    expect(logCountAfter).toBe(logCountBefore);
   });
 });
