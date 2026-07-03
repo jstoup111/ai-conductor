@@ -7,7 +7,7 @@
 import type { BacklogItem } from './daemon.js';
 import type { OwnerResolution } from './owner-gate/identity.js';
 import type { OwnerStamp } from './owner-gate/provenance.js';
-import type { DiscoverBacklogOpts } from './daemon-backlog.js';
+import type { DiscoverBacklogOpts, WaitingItem } from './daemon-backlog.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Public interface
@@ -45,7 +45,7 @@ export interface LocalWorkSourceDeps {
     isProcessed: (slug: string) => Promise<boolean>,
     log: (m: string) => void,
     opts: DiscoverBacklogOpts,
-  ) => Promise<BacklogItem[]>;
+  ) => Promise<{ items: BacklogItem[]; waiting: WaitingItem[] }>;
   /**
    * Owner-gate injectables (all optional → backward compatible; absent = no
    * gate, discovery is byte-for-byte legacy). ADR-1 naming: these carry the
@@ -91,7 +91,7 @@ export function localWorkSource(deps: LocalWorkSourceDeps): WorkSource {
             cutover: deps.cutover ?? null,
           }
         : {};
-      return deps.discoverBacklog(
+      const { items } = await deps.discoverBacklog(
         deps.projectRoot,
         (slug) => deps.isProcessed(slug),
         deps.log,
@@ -102,6 +102,7 @@ export function localWorkSource(deps: LocalWorkSourceDeps): WorkSource {
           ...gateOpts,
         },
       );
+      return items;
     },
   };
 }

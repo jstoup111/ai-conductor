@@ -137,7 +137,7 @@ describe('runAuthoring — happy path (Task 32, FR-6)', () => {
 
     // FR-24: authoring lands artifacts on spec/<slug>, NOT the base branch — so
     // the daemon must NOT see it yet (the operator's merge is the build signal).
-    const before = await discoverBacklog(repoPath, undefined, undefined, {
+    const { items: before } = await discoverBacklog(repoPath, undefined, undefined, {
       baseBranch: defaultBranch,
     });
     expect(before).toEqual([]);
@@ -149,7 +149,7 @@ describe('runAuthoring — happy path (Task 32, FR-6)', () => {
     });
 
     // Now (Status:Accepted + dependency tree, on the base branch) it is build-ready.
-    const after = await discoverBacklog(repoPath, undefined, undefined, {
+    const { items: after } = await discoverBacklog(repoPath, undefined, undefined, {
       baseBranch: defaultBranch,
     });
     expect(after.length).toBeGreaterThan(0);
@@ -526,7 +526,7 @@ describe('runAuthoring — full DECIDE phase (tier-aware)', () => {
       cwd: repoPath,
     });
 
-    const after = await discoverBacklog(repoPath, undefined, undefined, {
+    const { items: after } = await discoverBacklog(repoPath, undefined, undefined, {
       baseBranch: defaultBranch,
     });
     expect(after.length).toBeGreaterThan(0);

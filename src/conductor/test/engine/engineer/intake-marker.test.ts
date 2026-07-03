@@ -156,7 +156,7 @@ describe('runAuthoring intake marker (FR-1, FR-3)', () => {
     await git(['checkout', defaultBranch]);
     await git(['merge', '--no-ff', '-m', 'merge', result.branch]);
 
-    const items = await discoverBacklog(repoPath, undefined, undefined, { baseBranch: defaultBranch });
+    const { items } = await discoverBacklog(repoPath, undefined, undefined, { baseBranch: defaultBranch });
     const item = items.find((i) => i.slug === slugOf(result.branch));
     expect(item?.sourceRef).toBe('acme/app#49');
   });
@@ -168,7 +168,7 @@ describe('runAuthoring intake marker (FR-1, FR-3)', () => {
 
     await git(['checkout', defaultBranch]);
     await git(['merge', '--no-ff', '-m', 'merge', result.branch]);
-    const items = await discoverBacklog(repoPath, undefined, undefined, { baseBranch: defaultBranch });
+    const { items } = await discoverBacklog(repoPath, undefined, undefined, { baseBranch: defaultBranch });
     const item = items.find((i) => i.slug === slugOf(result.branch));
     expect(item).toBeTruthy();
     expect(item?.sourceRef).toBeUndefined();

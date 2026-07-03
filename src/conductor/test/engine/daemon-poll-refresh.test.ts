@@ -255,7 +255,7 @@ describe('daemon-backlog — fastForwardRoot (git integration)', () => {
 
     // Before the ff: local lacks the spec on disk and discovery finds nothing.
     await expect(access(join(repoDir, '.docs/plans/remote-only.md'))).rejects.toThrow();
-    const before = await discoverBacklog(repoDir, undefined, undefined, {
+    const { items: before } = await discoverBacklog(repoDir, undefined, undefined, {
       baseBranch: defaultBranch,
     });
     expect(before).toHaveLength(0);
@@ -266,7 +266,7 @@ describe('daemon-backlog — fastForwardRoot (git integration)', () => {
     // After the ff: the spec physically exists in the working tree (so a fresh
     // worktree cut from <default> contains it) and is discovered on LOCAL <default>.
     await expect(access(join(repoDir, '.docs/plans/remote-only.md'))).resolves.toBeUndefined();
-    const after = await discoverBacklog(repoDir, undefined, undefined, {
+    const { items: after } = await discoverBacklog(repoDir, undefined, undefined, {
       baseBranch: defaultBranch,
     });
     expect(after.map((b) => b.slug)).toEqual(['remote-only']);

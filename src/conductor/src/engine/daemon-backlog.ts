@@ -224,13 +224,24 @@ export interface DiscoverBacklogOpts {
  * stories and plan are present on the base branch, the stories are
  * `Status: Accepted` (not DRAFT), and the plan declares a dependency tree. A
  * feature already marked processed (via `isProcessed`) is skipped.
+ *
+ * Returns `{ items, waiting }`: `items` are the eligible-to-build features
+ * (unchanged shape/behavior). `waiting` is reserved for specs held back by an
+ * unresolved dependency gate — always `[]` today; a later task populates it.
  */
+export interface WaitingItem {
+  slug: string;
+  sourceRef?: string;
+  /** Placeholder shape; a later task fills in the real verdict payload. */
+  verdict: string;
+}
+
 export async function discoverBacklog(
   projectRoot: string,
   isProcessed: (slug: string) => Promise<boolean> = async () => false,
   log: (msg: string) => void = () => {},
   opts: DiscoverBacklogOpts = {},
-): Promise<BacklogItem[]> {
+): Promise<{ items: BacklogItem[]; waiting: WaitingItem[] }> {
   const baseBranch = opts.baseBranch ?? 'main';
   const tree = opts.treeSource ?? gitTreeSource(projectRoot, baseBranch);
 
@@ -300,11 +311,11 @@ export async function discoverBacklog(
   // is untouched — legacy discovery runs normally.
   if (opts.daemonOwner && !opts.daemonOwner.resolved) {
     await warnIdentityUnresolvedOnce();
-    return [];
+    return { items: [], waiting: [] };
   }
 
   const planFiles = (await tree.listPlanFiles()).filter((f) => f.endsWith('.md'));
-  if (planFiles.length === 0) return [];
+  if (planFiles.length === 0) return { items: [], waiting: [] };
 
   const items: BacklogItem[] = [];
   for (const file of [...planFiles].sort()) {
@@ -388,7 +399,7 @@ export async function discoverBacklog(
     // carry the slug (+ tier + sourceRef + track); no working-tree paths to copy.
     items.push({ slug, tier, ...(sourceRef ? { sourceRef } : {}), ...(track ? { track } : {}) });
   }
-  return items;
+  return { items, waiting: [] };
 }
 
 /**

@@ -53,17 +53,31 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
     `# Plan\n${storiesRef ? `**Stories:** ${storiesRef}\n` : ''}\n### Task 1\n**Dependencies:** none\n`;
 
   // Convenience: run discoverBacklog against the working tree (fs source).
-  const discover = (
+  const discover = async (
     isProcessed?: (slug: string) => Promise<boolean>,
     log?: (m: string) => void,
-  ) => discoverBacklog(dir, isProcessed, log, { treeSource: fsTreeSource(dir) });
+  ) => (await discoverBacklog(dir, isProcessed, log, { treeSource: fsTreeSource(dir) })).items;
 
   it('returns [] when there is no plans dir', async () => {
     const empty = await mkdtemp(join(tmpdir(), 'empty-'));
-    expect(await discoverBacklog(empty, undefined, undefined, { treeSource: fsTreeSource(empty) })).toEqual(
-      [],
-    );
+    expect(
+      await discoverBacklog(empty, undefined, undefined, { treeSource: fsTreeSource(empty) }),
+    ).toEqual({ items: [], waiting: [] });
     await rm(empty, { recursive: true, force: true });
+  });
+
+  it('returns waiting: [] alongside items (widened result shape, Task 10)', async () => {
+    await writeFile(
+      join(dir, '.docs/plans/feature-shape.md'),
+      planWithDeps('.docs/stories/feature-shape.md'),
+    );
+    await writeFile(join(dir, '.docs/stories/feature-shape.md'), APPROVED_STORIES);
+
+    const result = await discoverBacklog(dir, undefined, undefined, {
+      treeSource: fsTreeSource(dir),
+    });
+    expect(result.items.map((b) => b.slug)).toEqual(['feature-shape']);
+    expect(result.waiting).toEqual([]);
   });
 
   describe('track propagation (adr-2026-06-29-explore-prd-split-track-in-explore/adr-2026-06-29-track-marker-location)', () => {
@@ -285,7 +299,7 @@ describe('engine/daemon-backlog — FR-24 merge is the build-ready trigger (git)
     await git(['add', '.docs']);
     await git(['commit', '-q', '-m', 'merge spec: csv-export']);
 
-    const backlog = await discoverBacklog(dir, undefined, undefined, { baseBranch });
+    const { items: backlog } = await discoverBacklog(dir, undefined, undefined, { baseBranch });
     expect(backlog.map((b) => b.slug)).toEqual(['csv-export']);
   });
 
@@ -295,7 +309,7 @@ describe('engine/daemon-backlog — FR-24 merge is the build-ready trigger (git)
     // build it; reading the base-branch tree must not.
     await writeSpec('note-grouping');
 
-    const backlog = await discoverBacklog(dir, undefined, undefined, { baseBranch });
+    const { items: backlog } = await discoverBacklog(dir, undefined, undefined, { baseBranch });
     expect(backlog).toEqual([]);
   });
 
@@ -306,7 +320,7 @@ describe('engine/daemon-backlog — FR-24 merge is the build-ready trigger (git)
     await git(['commit', '-q', '-m', 'spec: note-grouping']);
     await git(['checkout', '-q', baseBranch]); // base branch is clean of the spec
 
-    const backlog = await discoverBacklog(dir, undefined, undefined, { baseBranch });
+    const { items: backlog } = await discoverBacklog(dir, undefined, undefined, { baseBranch });
     expect(backlog).toEqual([]);
   });
 
@@ -318,7 +332,7 @@ describe('engine/daemon-backlog — FR-24 merge is the build-ready trigger (git)
     await git(['checkout', '-q', baseBranch]);
     await git(['merge', '-q', '--no-ff', '-m', 'merge spec', 'spec/note-grouping']);
 
-    const backlog = await discoverBacklog(dir, undefined, undefined, { baseBranch });
+    const { items: backlog } = await discoverBacklog(dir, undefined, undefined, { baseBranch });
     expect(backlog.map((b) => b.slug)).toEqual(['note-grouping']);
   });
 
@@ -328,7 +342,7 @@ describe('engine/daemon-backlog — FR-24 merge is the build-ready trigger (git)
     await git(['commit', '-q', '-m', 'merge spec: draft-feat']);
 
     const logs: string[] = [];
-    const backlog = await discoverBacklog(dir, undefined, (m) => logs.push(m), { baseBranch });
+    const { items: backlog } = await discoverBacklog(dir, undefined, (m) => logs.push(m), { baseBranch });
     expect(backlog).toEqual([]);
     expect(logs.join('\n')).toMatch(/draft-feat.*not approved/i);
   });
@@ -339,7 +353,7 @@ describe('engine/daemon-backlog — FR-24 merge is the build-ready trigger (git)
     await git(['commit', '-q', '-m', 'merge spec: shipped']);
 
     const processed = new Set(['shipped']);
-    const backlog = await discoverBacklog(dir, async (slug) => processed.has(slug), undefined, {
+    const { items: backlog } = await discoverBacklog(dir, async (slug) => processed.has(slug), undefined, {
       baseBranch,
     });
     expect(backlog).toEqual([]);
@@ -395,7 +409,7 @@ describe('engine/daemon-backlog — owner-gate integration', () => {
   it('Task 11: an unresolved owner builds NOTHING (fail-closed)', async () => {
     await writeSpec('feature-a');
     let stampCalls = 0;
-    const backlog = await discoverBacklog(dir, undefined, undefined, {
+    const { items: backlog } = await discoverBacklog(dir, undefined, undefined, {
       treeSource: fsSource(dir),
       daemonOwner: { resolved: false },
       readStamp: async () => {
@@ -412,7 +426,7 @@ describe('engine/daemon-backlog — owner-gate integration', () => {
   // Task 12 — gate wired after content filters (FR-5/6/7).
   it('Task 12: a spec stamped with the daemon owner is pushed', async () => {
     await writeSpec('mine');
-    const backlog = await discoverBacklog(dir, undefined, undefined, {
+    const { items: backlog } = await discoverBacklog(dir, undefined, undefined, {
       treeSource: fsSource(dir),
       daemonOwner: { resolved: true, id: 'alice' },
       readStamp: async () => ({ present: true as const, id: 'alice' }),
@@ -425,7 +439,7 @@ describe('engine/daemon-backlog — owner-gate integration', () => {
   it('Task 12: an other-owner spec is NOT pushed and logs a distinct ownership skip', async () => {
     await writeSpec('theirs');
     const logs: string[] = [];
-    const backlog = await discoverBacklog(dir, undefined, (m) => logs.push(m), {
+    const { items: backlog } = await discoverBacklog(dir, undefined, (m) => logs.push(m), {
       treeSource: fsSource(dir),
       daemonOwner: { resolved: true, id: 'alice' },
       readStamp: async () => ({ present: true as const, id: 'bob' }),
@@ -448,7 +462,7 @@ describe('engine/daemon-backlog — owner-gate integration', () => {
     await writeSpec('draft-and-theirs', '# Stories\n**Status:** DRAFT\n');
     const logs: string[] = [];
     let stampCalls = 0;
-    const backlog = await discoverBacklog(dir, undefined, (m) => logs.push(m), {
+    const { items: backlog } = await discoverBacklog(dir, undefined, (m) => logs.push(m), {
       treeSource: fsSource(dir),
       daemonOwner: { resolved: true, id: 'alice' },
       readStamp: async () => {
@@ -468,7 +482,7 @@ describe('engine/daemon-backlog — owner-gate integration', () => {
 
   it('Task 13: an un-owned spec merged BEFORE the cutover is grandfather-built', async () => {
     await writeSpec('legacy');
-    const backlog = await discoverBacklog(dir, undefined, undefined, {
+    const { items: backlog } = await discoverBacklog(dir, undefined, undefined, {
       treeSource: fsSource(dir),
       daemonOwner: { resolved: true, id: 'alice' },
       readStamp: async () => ({ present: false as const }),
@@ -481,7 +495,7 @@ describe('engine/daemon-backlog — owner-gate integration', () => {
   it('Task 13: an un-owned spec merged ON/AFTER the cutover is skipped and logged', async () => {
     await writeSpec('newish');
     const logs: string[] = [];
-    const backlog = await discoverBacklog(dir, undefined, (m) => logs.push(m), {
+    const { items: backlog } = await discoverBacklog(dir, undefined, (m) => logs.push(m), {
       treeSource: fsSource(dir),
       daemonOwner: { resolved: true, id: 'alice' },
       readStamp: async () => ({ present: false as const }),
@@ -497,7 +511,7 @@ describe('engine/daemon-backlog — owner-gate integration', () => {
   it('Task 13: a matching spec already processed is NOT rebuilt (gate does not defeat isProcessed)', async () => {
     await writeSpec('shipped');
     let stampCalls = 0;
-    const backlog = await discoverBacklog(dir, async () => true, undefined, {
+    const { items: backlog } = await discoverBacklog(dir, async () => true, undefined, {
       treeSource: fsSource(dir),
       daemonOwner: { resolved: true, id: 'alice' },
       readStamp: async () => {
@@ -516,7 +530,7 @@ describe('engine/daemon-backlog — owner-gate integration', () => {
     await writeSpec('one');
     await writeSpec('two');
     const logs: string[] = [];
-    const backlog = await discoverBacklog(dir, undefined, (m) => logs.push(m), {
+    const { items: backlog } = await discoverBacklog(dir, undefined, (m) => logs.push(m), {
       treeSource: fsSource(dir),
       daemonOwner: { resolved: false },
       // Even an owner-matching stamp must NOT build when identity is unresolved.
@@ -536,7 +550,7 @@ describe('engine/daemon-backlog — owner-gate integration', () => {
   it('Task 14: an absent daemonOwner emits NO gate log and builds normally (legacy behavior)', async () => {
     await writeSpec('legacy-a');
     const logs: string[] = [];
-    const backlog = await discoverBacklog(dir, undefined, (m) => logs.push(m), {
+    const { items: backlog } = await discoverBacklog(dir, undefined, (m) => logs.push(m), {
       treeSource: fsSource(dir),
     });
     expect(backlog.map((b) => b.slug)).toEqual(['legacy-a']);
@@ -550,7 +564,7 @@ describe('engine/daemon-backlog — owner-gate integration', () => {
     await writeSpec('one');
     await writeSpec('two');
     const logs: string[] = [];
-    const backlog = await discoverBacklog(dir, undefined, (m) => logs.push(m), {
+    const { items: backlog } = await discoverBacklog(dir, undefined, (m) => logs.push(m), {
       treeSource: fsSource(dir),
       daemonOwner: { resolved: true, id: 'alice' },
       readStamp: async () => ({ present: true as const, id: 'alice' }),
@@ -643,7 +657,7 @@ describe('engine/daemon-backlog — owner-gate integration', () => {
   it('A6: an un-owned merged spec logs a distinct, actionable skip (add Owner marker on default branch)', async () => {
     await writeSpec('legacy-unowned');
     const logs: string[] = [];
-    const backlog = await discoverBacklog(dir, undefined, (m) => logs.push(m), {
+    const { items: backlog } = await discoverBacklog(dir, undefined, (m) => logs.push(m), {
       treeSource: fsSource(dir),
       daemonOwner: { resolved: true, id: 'alice' },
       readStamp: async () => ({ present: false as const }), // un-owned
@@ -667,15 +681,17 @@ describe('engine/daemon-backlog — owner-gate integration', () => {
 
   it('Task 18: a re-stamped marker (alice→bob) builds under bob and skips under alice', async () => {
     await writeSpec('transferred');
-    const runWith = (ownerId: string) =>
-      discoverBacklog(dir, undefined, undefined, {
-        treeSource: fsSource(dir),
-        daemonOwner: { resolved: true, id: ownerId },
-        // Marker now carries bob (the new owner) after the transfer re-stamp.
-        readStamp: async () => ({ present: true as const, id: 'bob' }),
-        readMergeTime: async () => null,
-        cutover: CUTOVER_18,
-      });
+    const runWith = async (ownerId: string) =>
+      (
+        await discoverBacklog(dir, undefined, undefined, {
+          treeSource: fsSource(dir),
+          daemonOwner: { resolved: true, id: ownerId },
+          // Marker now carries bob (the new owner) after the transfer re-stamp.
+          readStamp: async () => ({ present: true as const, id: 'bob' }),
+          readMergeTime: async () => null,
+          cutover: CUTOVER_18,
+        })
+      ).items;
 
     // The alice daemon no longer owns it → skip.
     expect(await runWith('alice')).toEqual([]);
@@ -688,7 +704,7 @@ describe('engine/daemon-backlog — owner-gate integration', () => {
     let stampCalls = 0;
     // New owner is bob, marker is bob — but the spec is already processed. The
     // gate sits AFTER isProcessed, so a transfer never triggers a rebuild.
-    const backlog = await discoverBacklog(dir, async () => true, undefined, {
+    const { items: backlog } = await discoverBacklog(dir, async () => true, undefined, {
       treeSource: fsSource(dir),
       daemonOwner: { resolved: true, id: 'bob' },
       readStamp: async () => {
@@ -707,7 +723,7 @@ describe('engine/daemon-backlog — owner-gate integration', () => {
     const logs: string[] = [];
     // A blank re-stamp reads as un-owned (present:false). With a post-cutover
     // merge time this is skipped via the UN-OWNED branch (not other-owner).
-    const backlog = await discoverBacklog(dir, undefined, (m) => logs.push(m), {
+    const { items: backlog } = await discoverBacklog(dir, undefined, (m) => logs.push(m), {
       treeSource: fsSource(dir),
       daemonOwner: { resolved: true, id: 'alice' },
       readStamp: async () => ({ present: false as const }),
