@@ -143,6 +143,8 @@ export interface VersionGateOptions {
   signal?: VersionSignal;
   /** Audit record writer for PATCH auto-pass (defaults to fs writeFile). */
   writeAudit?: (path: string, content: string) => Promise<void>;
+  /** The build's changed files (git name-status), or null if undeterminable (Task 13). */
+  changedFiles?: () => Promise<import('./release-gate.js').ChangedFile[] | null>;
 }
 
 /**
@@ -150,11 +152,19 @@ export interface VersionGateOptions {
  * the HALT (so the finish flow stops before opening a PR). When a freeze
  * auto-approves (marker absent, freeze === VERSION), the standing approval is
  * recorded to the marker best-effort — the audit trail of WHY the PR opened.
+ * When a PATCH signal auto-passes, writes an audit record to .pipeline/version-signal.json.
+ * If the audit write fails, the gate HALTs (audit is part of the pass contract).
  * Returns the verdict; the caller must NOT open a PR when `verdict.ok` is false.
+ *
+ * Task 12: Audit record write
+ * - PATCH auto-pass: write .pipeline/version-signal.json with verdict/level/files/classifiedAt
+ * - HALT verdict: do not write a pass record
+ * - Write failure: return HALT with error reason (audit failure is a gate failure)
  */
 export async function runVersionApprovalGate(opts: VersionGateOptions): Promise<GateVerdict> {
   const writeHalt = opts.writeHalt ?? writeSelfHostHalt;
   const writeText = opts.writeText ?? ((p: string, c: string) => writeFile(p, c, 'utf-8'));
+  const writeAudit = opts.writeAudit ?? ((p: string, c: string) => writeFile(p, c, 'utf-8'));
   const markerPath = join(opts.projectRoot, VERSION_APPROVAL_MARKER);
   const approvalMarker = await opts.readText(markerPath);
   const repoVersion = (await opts.readText(join(opts.harnessRoot, 'VERSION'))) ?? '';
@@ -162,11 +172,33 @@ export async function runVersionApprovalGate(opts: VersionGateOptions): Promise<
     approvalMarker,
     repoVersion,
     versionFreeze: opts.versionFreeze ?? null,
+    signal: opts.signal,
   });
   if (!verdict.ok) {
     await writeHalt(opts.projectRoot, verdict.reason);
     return verdict;
   }
+
+  // Task 12: On PATCH auto-pass, write audit record
+  if (opts.signal?.level === 'patch') {
+    const auditPath = join(opts.projectRoot, '.pipeline', 'version-signal.json');
+    const auditRecord = {
+      verdict: 'ok',
+      level: 'patch',
+      files: opts.signal.changedFiles ?? [],
+      classifiedAt: new Date().toISOString(),
+    };
+    try {
+      await writeAudit(auditPath, JSON.stringify(auditRecord, null, 2));
+    } catch (err) {
+      // Audit write failure is a gate failure — cannot claim a pass without proof
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      const haltReason = `Audit record write failed: ${errorMsg}`;
+      await writeHalt(opts.projectRoot, haltReason);
+      return { ok: false, reason: haltReason };
+    }
+  }
+
   if (firstNonEmptyLine(approvalMarker) === null) {
     // Freeze auto-approval: record the standing decision. Best-effort — the
     // marker is evidence, not a precondition the gate re-requires.

@@ -83,11 +83,11 @@ function detectMajorSurfaces(changed: ChangedFile[]): Array<{ kind: string; file
  * MINOR signals when new additive surfaces are introduced:
  * - Added skill definitions (A skills/[name]/SKILL.md)
  * - Added hooks (A hooks/claude/[name].sh, Task 7)
- * - Added engine gates (Task 7-8)
+ * - Added engine gates (Task 8)
  */
 function detectMinorSurfaces(changed: ChangedFile[]): Array<{ kind: string; files: string[] }> {
   const signals: Array<{ kind: string; files: string[] }> = [];
-  const adderFiles: Map<string, Set<string>> = new Map();
+  const additiveFiles: Map<string, Set<string>> = new Map();
 
   for (const { status, path } of changed) {
     // Only added (A status) files trigger MINOR signals
@@ -97,29 +97,81 @@ function detectMinorSurfaces(changed: ChangedFile[]): Array<{ kind: string; file
 
     // MINOR: Added skill definitions
     if (/^skills\/[^/]+\/SKILL\.md$/.test(path)) {
-      if (!adderFiles.has('new skill')) {
-        adderFiles.set('new skill', new Set());
+      if (!additiveFiles.has('new skill')) {
+        additiveFiles.set('new skill', new Set());
       }
-      adderFiles.get('new skill')!.add(path);
+      additiveFiles.get('new skill')!.add(path);
     }
 
-    // MINOR: Task 7 — Added hooks (A hooks/claude/[name].sh)
+    // MINOR: Task 7 — Added hooks (A hooks/claude/*.sh)
     if (/^hooks\/claude\/[^/]+\.sh$/.test(path)) {
-      if (!adderFiles.has('new hook')) {
-        adderFiles.set('new hook', new Set());
+      if (!additiveFiles.has('new hook')) {
+        additiveFiles.set('new hook', new Set());
       }
-      adderFiles.get('new hook')!.add(path);
+      additiveFiles.get('new hook')!.add(path);
     }
 
-    // TODO: Task 8 — Added engine gates
+    // MINOR: Task 8 — Added engine gates (A src/conductor/src/engine/self-host/new-gate.ts)
+    if (/^src\/conductor\/src\/engine\/self-host\/[^/]+\.ts$/.test(path)) {
+      if (!additiveFiles.has('new engine gate')) {
+        additiveFiles.set('new engine gate', new Set());
+      }
+      additiveFiles.get('new engine gate')!.add(path);
+    }
   }
 
   // Convert to signals array
-  for (const [kind, files] of adderFiles) {
+  for (const [kind, files] of additiveFiles) {
     signals.push({ kind, files: [...files] });
   }
 
   return signals;
+}
+
+/**
+ * Check if a path matches any glob pattern in PATCH_SAFE_GLOBS.
+ * Supports simple glob patterns:
+ * - Exact matches: README.md
+ * - Directory with /** suffix: .docs/**, test/**, src/conductor/src/**
+ */
+function pathMatchesPatchGlob(path: string, globs: string[]): boolean {
+  for (const glob of globs) {
+    if (glob.endsWith('/**')) {
+      // Directory pattern: match if path starts with the directory
+      const dir = glob.slice(0, -3); // Remove /**
+      if (path === dir || path.startsWith(dir + '/')) {
+        return true;
+      }
+    } else {
+      // Exact match
+      if (path === glob) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * Collect paths classified by MAJOR or MINOR rules.
+ */
+function getClassifiedPaths(majorSignals: Array<{ kind: string; files: string[] }>,
+                            minorSignals: Array<{ kind: string; files: string[] }>): Set<string> {
+  const classified = new Set<string>();
+
+  for (const signal of majorSignals) {
+    for (const file of signal.files) {
+      classified.add(file);
+    }
+  }
+
+  for (const signal of minorSignals) {
+    for (const file of signal.files) {
+      classified.add(file);
+    }
+  }
+
+  return classified;
 }
 
 /**
@@ -134,6 +186,14 @@ function detectMinorSurfaces(changed: ChangedFile[]): Array<{ kind: string; file
  * Task 6: Signal accumulation
  *   - Collects ALL signals (major + minor) for diagnostic purposes
  *   - Reports the max level (MAJOR > MINOR > PATCH)
+ *
+ * Task 8: MINOR near-misses
+ *   - HARNESS.md changes are undeterminable (additivity undecidable)
+ *   - Skills supporting files (non-SKILL.md) without SKILL.md are unclassified
+ *
+ * Task 9: PATCH fail-closed
+ *   - Every path must match PATCH_SAFE_GLOBS or be classified MAJOR/MINOR
+ *   - Any unclassified path triggers halt-undeterminable (fail-closed)
  */
 export function classifyVersionSignal(changed: ChangedFile[] | null): VersionSignal {
   // Fail-closed: null or empty is undeterminable, never patch-proof.
@@ -142,6 +202,17 @@ export function classifyVersionSignal(changed: ChangedFile[] | null): VersionSig
       level: 'halt-undeterminable',
       reason: 'change set is null or empty; cannot determine version bump',
     };
+  }
+
+  // Task 8 — HARNESS.md near-miss: any change to HARNESS.md is undeterminable
+  // because we can't reason about additivity at the whole-file level.
+  for (const { path } of changed) {
+    if (path === 'HARNESS.md') {
+      return {
+        level: 'halt-undeterminable',
+        reason: 'HARNESS.md changes; additivity is undecidable at the whole-file level',
+      };
+    }
   }
 
   // Task 6 — Signal accumulation: collect both MAJOR and MINOR
@@ -159,13 +230,26 @@ export function classifyVersionSignal(changed: ChangedFile[] | null): VersionSig
     return { level: 'minor', signals: minorSignals };
   }
 
-  // TODO: Task 7 — Additional MINOR detection and MINOR near-misses
-  // TODO: Task 8 — MINOR near-misses (HARNESS.md, supporting files without SKILL.md)
-  // TODO: Task 9 — PATCH allow-list matching (every path must match PATCH_SAFE_GLOBS)
+  // Task 9 — PATCH fail-closed: every path must be classifiable
+  // Collect all paths classified by MAJOR/MINOR rules
+  const classifiedPaths = getClassifiedPaths(majorSignals, minorSignals);
 
-  // Skeleton: return undeterminable for now (fail-closed by default).
-  return {
-    level: 'halt-undeterminable',
-    reason: 'classifier skeleton incomplete; classification deferred to later tasks',
-  };
+  // Check each path: must match PATCH_SAFE_GLOBS or be already classified
+  const unclassifiedPaths: string[] = [];
+  for (const { path } of changed) {
+    if (!classifiedPaths.has(path) && !pathMatchesPatchGlob(path, PATCH_SAFE_GLOBS)) {
+      unclassifiedPaths.push(path);
+    }
+  }
+
+  // Fail-closed: if ANY path is unclassified, halt
+  if (unclassifiedPaths.length > 0) {
+    return {
+      level: 'halt-undeterminable',
+      reason: `unclassified path(s) in change set: ${unclassifiedPaths.join(', ')}`,
+    };
+  }
+
+  // All paths classified: return PATCH (lowest priority)
+  return { level: 'patch' };
 }
