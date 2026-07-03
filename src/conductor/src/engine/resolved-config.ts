@@ -128,10 +128,10 @@ export const DEFAULT_STEP_TIER_OVERRIDES: Partial<
   },
   plan: {
     S: { effort: 'medium', max_retries: 3 },
-    L: { effort: 'xhigh', model: 'opus' }, // task sequencing/dependency reasoning at scale needs opus
+    L: { effort: 'xhigh', model: 'fable' }, // task sequencing/dependency reasoning at scale needs fable
   },
   conflict_check: {
-    L: { model: 'opus' }, // subtle cross-story contradictions at ≥15 stories need opus
+    L: { model: 'fable' }, // subtle cross-story contradictions at ≥15 stories need fable
   },
 };
 

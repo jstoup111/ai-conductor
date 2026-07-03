@@ -223,14 +223,14 @@ describe('engine/resolved-config', () => {
       const rS = resolveStepConfig('plan', 'DECIDE', undefined, { tier: 'S' });
       expect(rS.effort).toBe('medium');
       expect(rS.max_retries).toBe(3);
-      // DEFAULT_STEP_TIER_OVERRIDES.plan.L → effort: xhigh, model: opus
+      // DEFAULT_STEP_TIER_OVERRIDES.plan.L → effort: xhigh, model: fable
       const rL = resolveStepConfig('plan', 'DECIDE', undefined, { tier: 'L' });
       expect(rL.effort).toBe('xhigh');
-      expect(rL.model).toBe('opus');
+      expect(rL.model).toBe('fable');
     });
 
-    it('conflict_check bumps to opus on Large, stays sonnet on S/M', () => {
-      // Regression: HARNESS.md promised "sonnet (S/M), opus (L)" but the engine
+    it('conflict_check bumps to fable on Large, stays sonnet on S/M', () => {
+      // Regression: HARNESS.md promised "sonnet (S/M), fable (L)" but the engine
       // never bumped the model — L ran on sonnet. Now enforced via tier override.
       expect(resolveStepConfig('conflict_check', 'DECIDE', undefined, { tier: 'S' }).model).toBe(
         'sonnet',
@@ -239,7 +239,7 @@ describe('engine/resolved-config', () => {
         'sonnet',
       );
       expect(resolveStepConfig('conflict_check', 'DECIDE', undefined, { tier: 'L' }).model).toBe(
-        'opus',
+        'fable',
       );
     });
 
