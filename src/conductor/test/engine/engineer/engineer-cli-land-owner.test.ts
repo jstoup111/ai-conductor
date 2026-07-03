@@ -121,6 +121,32 @@ function captureOpts(extra: Partial<DispatchEngineerOpts>): {
   return { out, err, opts };
 }
 
+/**
+ * Create an isolated fake $HOME carrying `~/.ai-conductor/config.yml` (or no
+ * config file at all when `body` is omitted), so tests exercise
+ * `readMachineOwnerConfig()`'s real default (`readUserConfig()` → `homedir()`)
+ * WITHOUT ever touching the operator's actual home directory (Slice B D1 seam).
+ */
+async function makeUserHome(body?: string): Promise<string> {
+  const home = await mkdtemp(join(tmpdir(), 'user-home-'));
+  if (body !== undefined) {
+    await mkdir(join(home, '.ai-conductor'), { recursive: true });
+    await writeFile(join(home, '.ai-conductor', 'config.yml'), body, 'utf-8');
+  }
+  return home;
+}
+
+/** Run `fn` with process.env.HOME pointed at `home`; always restores it. */
+async function withHome<T>(home: string, fn: () => Promise<T>): Promise<T> {
+  const saved = process.env.HOME;
+  process.env.HOME = home;
+  try {
+    return await fn();
+  } finally {
+    process.env.HOME = saved;
+  }
+}
+
 beforeEach(async () => {
   workDir = await mkdtemp(join(tmpdir(), 'cli-land-owner-'));
   registryPath = join(workDir, 'registry.json');
@@ -143,24 +169,91 @@ afterEach(async () => {
 });
 
 describe('engineer land — owner-gate wiring (CLI seam)', () => {
-  it('does NOT honor a project-config spec_owner (D2 anti-leak) — identity never comes from the repo', async () => {
-    // D2 / Story 2: a `spec_owner` committed into the shared PROJECT config is
-    // now a hard config-load rejection — it must never source operator identity
-    // (that would leak one operator's id to everyone who pulls). The authoring
-    // caller swallows the rejected config to `{}` and falls through the identity
-    // chain to gh, so the committed 'alice' is IGNORED and gh's login wins.
-    // (Full authoring-side user-config sourcing + fail-closed refusal is Slice B.)
+  it('does NOT honor a project-config spec_owner (D2 anti-leak) — identity comes from the USER config instead', async () => {
+    // Slice B final contract: a `spec_owner` committed into the shared PROJECT
+    // config must NEVER source operator identity (D2 anti-leak, adversarial
+    // impersonation input). The MACHINE (user) config wins — not gh — when
+    // both resolve (D1 chain order: user-config > gh).
     await writeConfig('spec_owner: Alice\n');
     const worktree = await seedWorktree();
-    const gh: GhRunner = async () => ({ stdout: 'bob\n' });
-    const { out, opts } = captureOpts({ gh });
+    // gh ALSO resolves an id — user config must win over gh too, not merely
+    // over the project config.
+    const gh: GhRunner = async () => ({ stdout: 'ghlogin\n' });
+    const fakeHome = await makeUserHome('spec_owner: bob\n');
 
-    const code = await dispatchEngineer({ kind: 'land', project: 'alpha', idea: 'dep bump', worktree }, opts);
-    expect(code).toBe(0);
-    const result = JSON.parse(out[out.length - 1]) as { slug: string; branch: string };
-    const marker = await showOnBranch(result.branch, `.docs/intake/${result.slug}.md`);
-    expect(marker).toContain('Owner: bob'); // gh login, NOT the committed 'alice'
-    expect(marker).not.toContain('alice'); // the repo-committed identity is never used
+    await withHome(fakeHome, async () => {
+      const { out, opts } = captureOpts({ gh });
+
+      const code = await dispatchEngineer({ kind: 'land', project: 'alpha', idea: 'dep bump', worktree }, opts);
+      expect(code).toBe(0);
+      const result = JSON.parse(out[out.length - 1]) as { slug: string; branch: string };
+      const marker = await showOnBranch(result.branch, `.docs/intake/${result.slug}.md`);
+      expect(marker).toContain('Owner: bob'); // USER config wins
+      expect(marker).not.toMatch(/alice/i); // project config never enters the identity chain
+      expect(marker).not.toContain('ghlogin'); // user config wins over gh too
+    });
+
+    await rm(fakeHome, { recursive: true, force: true });
+  });
+
+  it('project spec_owner + NO user config + gh resolves → Owner from gh login, no silent config-load swallow', async () => {
+    // Second Slice B negative case (Task 3): the project config still carries
+    // an (ignored) `spec_owner: Alice`; with no user-config override, the chain
+    // falls through to gh — and the marker is written (not omitted), proving a
+    // config-load failure never silently degrades the identity path.
+    await writeConfig('spec_owner: Alice\n');
+    const worktree = await seedWorktree();
+    const gh: GhRunner = async () => ({ stdout: 'ghlogin\n' });
+    const fakeHome = await makeUserHome(); // no ~/.ai-conductor/config.yml at all
+
+    await withHome(fakeHome, async () => {
+      const { out, opts } = captureOpts({ gh });
+
+      const code = await dispatchEngineer({ kind: 'land', project: 'alpha', idea: 'dep bump', worktree }, opts);
+      expect(code).toBe(0);
+      const result = JSON.parse(out[out.length - 1]) as { slug: string; branch: string };
+      const marker = await showOnBranch(result.branch, `.docs/intake/${result.slug}.md`);
+      expect(marker).not.toBeNull();
+      expect(marker).toContain('Owner: ghlogin');
+      expect(marker).not.toMatch(/alice/i);
+    });
+
+    await rm(fakeHome, { recursive: true, force: true });
+  });
+
+  it('unresolved identity at the CLI land entry refuses BEFORE landSpec is entered (Slice B Story 1 fail-fast)', async () => {
+    // No user config, gh unauthenticated → identity chain fully unresolved.
+    // `dispatchEngineer` must exit non-zero BEFORE `landSpec` runs: no marker
+    // committed, no new commit on the worktree's branch.
+    const worktree = await seedWorktree();
+    const headBefore = await git(['rev-parse', 'HEAD'], worktree);
+    const failingGh: GhRunner = async (args: string[]) => {
+      if (args[0] === 'api') throw new Error('gh: not logged in');
+      return { stdout: '' };
+    };
+    const fakeHome = await makeUserHome(); // no ~/.ai-conductor/config.yml
+
+    await withHome(fakeHome, async () => {
+      const { out, err, opts } = captureOpts({ gh: failingGh });
+
+      const code = await dispatchEngineer(
+        { kind: 'land', project: 'alpha', idea: 'dep bump', worktree },
+        opts,
+      );
+
+      expect(code).not.toBe(0);
+      // No commit made in the worktree (landSpec never entered).
+      const headAfter = await git(['rev-parse', 'HEAD'], worktree);
+      expect(headAfter).toBe(headBefore);
+      // No JSON land result printed on stdout.
+      expect(out.join('\n')).not.toMatch(/"slug"/);
+      // Actionable remediation — both paths named verbatim (Story 2 error text).
+      const combined = out.join('\n') + err.join('\n');
+      expect(combined).toMatch(/~\/\.ai-conductor\/config\.yml/);
+      expect(combined).toMatch(/gh auth login/);
+    });
+
+    await rm(fakeHome, { recursive: true, force: true });
   });
 
   it('threads the gh runner into landSpec → Owner from gh login when config is absent', async () => {
