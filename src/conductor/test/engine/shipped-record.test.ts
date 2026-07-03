@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, readFile, mkdir } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -8,6 +8,7 @@ import {
   parseShippedRecord,
   writeShippedRecord,
   listShippedRecords,
+  makeIsProcessed,
 } from '../../src/engine/shipped-record.js';
 import type { BacklogTreeSource } from '../../src/engine/daemon-backlog.js';
 
@@ -224,5 +225,69 @@ describe('listShippedRecords', () => {
     const result = await listShippedRecords(trickyTree);
 
     expect(result).toEqual([]);
+  });
+});
+
+describe('makeIsProcessed', () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'shipped-record-is-processed-'));
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('returns true on a ledger hit (fast path), without needing a shipped record', async () => {
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, 'billing-export'), '');
+    const tree = fakeTreeSource({});
+
+    const isProcessed = makeIsProcessed(dir, tree);
+
+    expect(await isProcessed('billing-export')).toBe(true);
+  });
+
+  it('returns true on a shipped-record hit when the ledger has no entry', async () => {
+    const rendered = renderShippedRecord({ slug: 'billing-export', specHash: 'abc123' });
+    const tree = fakeTreeSource({ 'billing-export.md': rendered });
+
+    const isProcessed = makeIsProcessed(dir, tree);
+
+    expect(await isProcessed('billing-export')).toBe(true);
+  });
+
+  it('returns false when neither the ledger nor a shipped record has the slug', async () => {
+    const tree = fakeTreeSource({});
+
+    const isProcessed = makeIsProcessed(dir, tree);
+
+    expect(await isProcessed('never-shipped')).toBe(false);
+  });
+
+  it('falls back to the shipped-record check when the ledger read errors (no throw)', async () => {
+    // `dir` does not exist, so a ledger existence check will error (ENOENT on
+    // the containing directory) rather than simply resolving false.
+    const missingDir = join(dir, 'does', 'not', 'exist');
+    const rendered = renderShippedRecord({ slug: 'billing-export', specHash: 'abc123' });
+    const tree = fakeTreeSource({ 'billing-export.md': rendered });
+
+    const isProcessed = makeIsProcessed(missingDir, tree);
+
+    await expect(isProcessed('billing-export')).resolves.toBe(true);
+  });
+
+  it('caches the shipped-record list: multiple calls make only one listShippedFiles() call', async () => {
+    const rendered = renderShippedRecord({ slug: 'billing-export', specHash: 'abc123' });
+    const tree = fakeTreeSource({ 'billing-export.md': rendered });
+
+    const isProcessed = makeIsProcessed(dir, tree);
+
+    await isProcessed('billing-export');
+    await isProcessed('never-shipped');
+    await isProcessed('billing-export');
+
+    expect(tree.listShippedFilesCallCount).toBe(1);
   });
 });

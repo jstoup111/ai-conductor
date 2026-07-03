@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
-import { basename, dirname } from 'node:path';
+import { access, readFile, writeFile, mkdir } from 'node:fs/promises';
+import { basename, dirname, join } from 'node:path';
 import type { BacklogTreeSource } from './daemon-backlog.js';
 
 /**
@@ -229,4 +229,59 @@ export async function listShippedRecords(
   }
 
   return results;
+}
+
+/**
+ * makeIsProcessed builds the SHARED "already handled" resolver used by both
+ * discovery (dispatch dedup) and rekick (Story 3/5: one resolver, two call
+ * sites). It never throws, so it is always safe to pass directly as the
+ * `isProcessed` callback.
+ *
+ * Resolution order:
+ *   1. Local ledger (`<processedDir>/<slug>`) — a fast, existence-only check.
+ *      A hit here is authoritative and short-circuits before ever touching
+ *      the (slower, network/exec-bound) shipped-record lookup.
+ *   2. Base-branch shipped records (`listShippedRecords(treeSource)`) — the
+ *      durable source of truth. A stem match here means the slug's
+ *      implementation already merged even though the local ledger never
+ *      recorded it (e.g. a reset local cache), so it is still reported as
+ *      processed.
+ *   3. Neither → not processed.
+ *
+ * The shipped-record list is fetched at most ONCE per resolver instance and
+ * cached in closure: repeated calls to the returned function reuse the same
+ * list rather than re-invoking `treeSource.listShippedFiles()` on every slug
+ * (Story 4's one-listing-per-poll discipline, extended to this resolver).
+ */
+export function makeIsProcessed(
+  processedDir: string,
+  treeSource: BacklogTreeSource
+): (slug: string) => Promise<boolean> {
+  let cachedRecords: Promise<
+    Array<{ stem: string; record: ParsedShippedRecord | MalformedShippedRecord }>
+  > | null = null;
+
+  const getRecords = (): Promise<
+    Array<{ stem: string; record: ParsedShippedRecord | MalformedShippedRecord }>
+  > => {
+    if (!cachedRecords) {
+      cachedRecords = listShippedRecords(treeSource);
+    }
+    return cachedRecords;
+  };
+
+  return async (slug: string): Promise<boolean> => {
+    // Fast path: local ledger marker. Any error here (missing processedDir,
+    // permissions, etc.) falls through to the shipped-record check rather
+    // than throwing — the ledger is an optimization, not the source of truth.
+    try {
+      await access(join(processedDir, slug));
+      return true;
+    } catch {
+      // fall through
+    }
+
+    const records = await getRecords();
+    return records.some((r) => r.stem === slug);
+  };
 }
