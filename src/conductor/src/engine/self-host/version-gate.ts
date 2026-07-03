@@ -22,7 +22,7 @@
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { firstNonEmptyLine, writeSelfHostHalt, type GateVerdict } from './gate-halt.js';
-import type { VersionSignal } from './version-signal.js';
+import { classifyVersionSignal, type VersionSignal } from './version-signal.js';
 
 /** Where the operator records the approved VERSION bump for a self-build. */
 export const VERSION_APPROVAL_MARKER = '.pipeline/version-approval';
