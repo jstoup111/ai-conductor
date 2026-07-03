@@ -12,6 +12,7 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- engineer land keys the intake marker by the plan stem (was idea slug), so owner-gate and issue auto-close resolve land-authored specs (#207)
 - **`engineer migrate-issue-deps` now writes dependency links the live GitHub API accepts.**
   The blocked_by POST sent `-f issue=<owner/repo#N>`, which the live dependencies endpoint
   rejects with a 422 (`issue_id` required) — so `--confirm` could never create a link
