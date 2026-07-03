@@ -168,11 +168,24 @@ export async function runVersionApprovalGate(opts: VersionGateOptions): Promise<
   const markerPath = join(opts.projectRoot, VERSION_APPROVAL_MARKER);
   const approvalMarker = await opts.readText(markerPath);
   const repoVersion = (await opts.readText(join(opts.harnessRoot, 'VERSION'))) ?? '';
+
+  // Task 13: Classify changed files into a signal if changedFiles thunk is provided
+  // and no explicit signal is already supplied.
+  let signal = opts.signal;
+  if (!signal && opts.changedFiles) {
+    const changed = await opts.changedFiles();
+    signal = classifyVersionSignal(changed);
+    // Attach the changed files to the signal for audit purposes
+    if (signal.level === 'patch' && changed) {
+      signal.changedFiles = changed.map(f => f.path);
+    }
+  }
+
   const verdict = evaluateVersionApproval({
     approvalMarker,
     repoVersion,
     versionFreeze: opts.versionFreeze ?? null,
-    signal: opts.signal,
+    signal,
   });
   if (!verdict.ok) {
     await writeHalt(opts.projectRoot, verdict.reason);
@@ -180,12 +193,12 @@ export async function runVersionApprovalGate(opts: VersionGateOptions): Promise<
   }
 
   // Task 12: On PATCH auto-pass, write audit record
-  if (opts.signal?.level === 'patch') {
+  if (signal?.level === 'patch') {
     const auditPath = join(opts.projectRoot, '.pipeline', 'version-signal.json');
     const auditRecord = {
       verdict: 'ok',
       level: 'patch',
-      files: opts.signal.changedFiles ?? [],
+      files: signal.changedFiles ?? [],
       classifiedAt: new Date().toISOString(),
     };
     try {

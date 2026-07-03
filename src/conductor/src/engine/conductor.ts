@@ -788,6 +788,7 @@ export class Conductor {
         harnessRoot: this.projectRoot,
         readText: (p) => this.readTextOrNull(p),
         versionFreeze: sh.versionFreeze,
+        changedFiles: () => this.selfBuildChangedFiles(),
       });
       if (!verdict.ok) return verdict;
     }
