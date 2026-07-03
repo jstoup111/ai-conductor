@@ -154,4 +154,46 @@ describe('createBlockerResolver', () => {
       blockers: [{ repo: 'other-owner/other-repo', number: '300' }],
     });
   });
+
+  it('returns indeterminate when the runner throws (network/API failure)', async () => {
+    const run: BlockerRunner = async () => {
+      throw new Error('gh: connection reset');
+    };
+    const resolver = createBlockerResolver({ run });
+
+    const verdict = await resolver.resolve('owner/repo#5');
+
+    expect(verdict.kind).toBe('indeterminate');
+    expect((verdict as { detail: string }).detail).toContain('gh: connection reset');
+  });
+
+  it('returns indeterminate for an unparseable sourceRef without calling the runner', async () => {
+    const { run, calls } = makeRunner('[]');
+    const resolver = createBlockerResolver({ run });
+
+    const verdict = await resolver.resolve('garbage');
+
+    expect(verdict.kind).toBe('indeterminate');
+    expect((verdict as { detail: string }).detail).toContain('garbage');
+    expect(calls.length).toBe(0);
+  });
+
+  it('isolates errors per ref: one throwing ref does not affect another that succeeds', async () => {
+    const calls: string[] = [];
+    const run: BlockerRunner = async (args) => {
+      calls.push(args.join(' '));
+      if (args.some((a) => a.includes('repos/owner/repoA'))) {
+        throw new Error('boom for A');
+      }
+      return { stdout: '[]' };
+    };
+    const resolver = createBlockerResolver({ run });
+
+    const verdictA = await resolver.resolve('owner/repoA#1');
+    const verdictB = await resolver.resolve('owner/repoB#2');
+
+    expect(verdictA).toEqual({ kind: 'indeterminate', detail: expect.stringContaining('boom for A') });
+    expect(verdictB).toEqual({ kind: 'unblocked' });
+    expect(calls.length).toBe(2);
+  });
 });
