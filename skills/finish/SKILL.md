@@ -292,6 +292,9 @@ After executing the chosen option:
 - [ ] Test suite ran fresh (not cached) — output read
 - [ ] If the fresh suite failed: flake-check performed; real failures recorded in `.pipeline/test-failures.md`; NO `finish-choice` written
 - [ ] Git status clean (no unexpected uncommitted changes)
+- [ ] Diverged branch: staleness proven (ORIG_HEAD ancestry / reflog former-head) before `--force-with-lease` (never pulled)
+- [ ] On unproven staleness (foreign commits): stopped with no force of any kind
+- [ ] On lease failure: stopped with no plain `--force`, no pull, no `finish-choice`
 - [ ] All story acceptance criteria verified as covered
 - [ ] Changes shown to user for review before options presented
 - [ ] Option presented to user and their choice executed
