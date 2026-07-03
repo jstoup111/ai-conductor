@@ -8,7 +8,7 @@ import {
   stat,
 } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
-import { relative, join, basename } from 'node:path';
+import { relative, join } from 'node:path';
 import { HALT_MARKER } from './halt-marker.js';
 import type { ConductState } from '../types/index.js';
 import type {
@@ -51,6 +51,7 @@ import {
   sweepStaleReviewArtifacts,
   parseTrack,
   parseIntakeSourceRef,
+  planStem,
   type RemediationGap,
 } from './artifacts.js';
 import type { Track } from '../types/index.js';
@@ -1604,13 +1605,13 @@ export class Conductor {
               }
 
               for (const planFile of authoredPlans) {
-                // The daemon's backlog resolver keys markers by basename(file, '.md').
-                const planStem = basename(planFile, '.md');
+                // The daemon's backlog resolver keys markers by planStem(file).
+                const stem = planStem(planFile);
 
                 // Preserve any pre-existing Source-Ref from a prior engineer-path run
                 // (Task 13a: an existing Source-Ref: line survives owner stamping).
                 let sourceRef: string | undefined;
-                const markerPath = join(this.projectRoot, '.docs', 'intake', `${planStem}.md`);
+                const markerPath = join(this.projectRoot, '.docs', 'intake', `${stem}.md`);
                 try {
                   const existingMarker = await readFile(markerPath, 'utf-8');
                   sourceRef = parseIntakeSourceRef(existingMarker) ?? undefined;
@@ -1621,7 +1622,7 @@ export class Conductor {
 
                 await writeIntakeMarker(
                   this.projectRoot,
-                  planStem,
+                  stem,
                   sourceRef,
                   ownerResolution.id,
                 );
