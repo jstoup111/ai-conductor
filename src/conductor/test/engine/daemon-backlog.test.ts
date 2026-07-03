@@ -25,6 +25,13 @@ function fsTreeSource(root: string): BacklogTreeSource {
         return [];
       }
     },
+    async listShippedFiles() {
+      try {
+        return (await readdir(join(root, '.docs/shipped'))).filter((f) => f.endsWith('.md'));
+      } catch {
+        return [];
+      }
+    },
     async readFile(relPath) {
       try {
         return await fsReadFile(join(root, relPath), 'utf-8');
@@ -593,6 +600,13 @@ describe('engine/daemon-backlog — owner-gate integration', () => {
     async listPlanFiles() {
       try {
         return (await readdir(join(root, '.docs/plans'))).filter((f) => f.endsWith('.md'));
+      } catch {
+        return [];
+      }
+    },
+    async listShippedFiles() {
+      try {
+        return (await readdir(join(root, '.docs/shipped'))).filter((f) => f.endsWith('.md'));
       } catch {
         return [];
       }

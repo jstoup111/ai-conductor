@@ -25,11 +25,15 @@ const execFile = promisify(execFileCb);
  * filesystem) is exactly what makes "merged" the build-ready signal (FR-24).
  *
  * `listPlanFiles()` → the `.md` basenames under `.docs/plans` on the base branch.
+ * `listShippedFiles()` → the `.md` basenames under `.docs/shipped` on the base
+ *   branch, using the identical base-branch-only semantics as `listPlanFiles`
+ *   (see `listShippedRecords` in `shipped-record.ts`, Story 3/4).
  * `readFile(relPath)` → the content of a repo-relative path on the base branch,
  *   or `null` when the path is absent from that tree.
  */
 export interface BacklogTreeSource {
   listPlanFiles(): Promise<string[]>;
+  listShippedFiles(): Promise<string[]>;
   readFile(relPath: string): Promise<string | null>;
 }
 
@@ -58,6 +62,22 @@ export function gitTreeSource(projectRoot: string, baseBranch: string): BacklogT
           .map((l) => basename(l));
       } catch {
         return []; // no such tree (no `.docs/plans` on base branch) → nothing to do
+      }
+    },
+    async listShippedFiles() {
+      try {
+        const { stdout } = await execFile(
+          'git',
+          ['ls-tree', '--name-only', `${baseBranch}:.docs/shipped`],
+          { cwd: projectRoot },
+        );
+        return stdout
+          .split('\n')
+          .map((l) => l.trim())
+          .filter((l) => l.endsWith('.md'))
+          .map((l) => basename(l));
+      } catch {
+        return []; // no such tree (no `.docs/shipped` on base branch) → nothing to do
       }
     },
     async readFile(relPath) {

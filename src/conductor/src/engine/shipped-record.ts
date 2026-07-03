@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { basename, dirname } from 'node:path';
+import type { BacklogTreeSource } from './daemon-backlog.js';
 
 /**
  * Result of hashing a plan/stories pair into a canonical spec identity.
@@ -201,4 +202,31 @@ export async function writeShippedRecord(filePath: string, content: string): Pro
 
   await mkdir(dirname(filePath), { recursive: true });
   await writeFile(filePath, content, 'utf8');
+}
+
+/**
+ * listShippedRecords reads every committed shipped record off the base-branch
+ * tree via `treeSource`, in a single `listShippedFiles()` call (Story 4: one
+ * listing per poll, not one per candidate). Records that were listed but
+ * cannot be read back (working-tree-only, deleted between listing and read,
+ * etc.) are silently skipped — dedup only ever sees what is actually
+ * committed on the base branch (Story 3).
+ */
+export async function listShippedRecords(
+  treeSource: BacklogTreeSource
+): Promise<Array<{ stem: string; record: ParsedShippedRecord | MalformedShippedRecord }>> {
+  const files = await treeSource.listShippedFiles();
+  const results: Array<{ stem: string; record: ParsedShippedRecord | MalformedShippedRecord }> =
+    [];
+
+  for (const file of files) {
+    const content = await treeSource.readFile(`.docs/shipped/${file}`);
+    if (content === null) {
+      continue;
+    }
+    const stem = basename(file, '.md');
+    results.push({ stem, record: parseShippedRecord(content) });
+  }
+
+  return results;
 }

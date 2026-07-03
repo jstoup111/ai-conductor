@@ -7,7 +7,36 @@ import {
   renderShippedRecord,
   parseShippedRecord,
   writeShippedRecord,
+  listShippedRecords,
 } from '../../src/engine/shipped-record.js';
+import type { BacklogTreeSource } from '../../src/engine/daemon-backlog.js';
+
+/** Minimal fake tree source for exercising listShippedRecords in isolation. */
+function fakeTreeSource(files: Record<string, string>): BacklogTreeSource & {
+  listShippedFilesCallCount: number;
+} {
+  const state = {
+    listShippedFilesCallCount: 0,
+  };
+  return {
+    get listShippedFilesCallCount() {
+      return state.listShippedFilesCallCount;
+    },
+    async listPlanFiles() {
+      return [];
+    },
+    async listShippedFiles() {
+      state.listShippedFilesCallCount += 1;
+      return Object.keys(files);
+    },
+    async readFile(relPath: string) {
+      const basename = relPath.replace(/^\.docs\/shipped\//, '');
+      return Object.prototype.hasOwnProperty.call(files, basename)
+        ? files[basename]
+        : null;
+    },
+  };
+}
 
 describe('specHash', () => {
   it('is deterministic: same bytes produce identical digest', () => {
@@ -145,5 +174,55 @@ describe('writeShippedRecord', () => {
 
     const written = await readFile(target, 'utf8');
     expect(written).toBe(second);
+  });
+});
+
+describe('listShippedRecords', () => {
+  it('returns records from .docs/shipped/ via the injected tree source', async () => {
+    const rendered = renderShippedRecord({ slug: 'billing-export', specHash: 'abc123' });
+    const tree = fakeTreeSource({ 'billing-export.md': rendered });
+
+    const result = await listShippedRecords(tree);
+
+    expect(result).toEqual([
+      { stem: 'billing-export', record: parseShippedRecord(rendered) },
+    ]);
+  });
+
+  it('reports malformed records as {malformed: true} rather than skipping them', async () => {
+    const tree = fakeTreeSource({ 'bad-record.md': '# not frontmatter\n' });
+
+    const result = await listShippedRecords(tree);
+
+    expect(result).toEqual([{ stem: 'bad-record', record: { malformed: true } }]);
+  });
+
+  it('calls listShippedFiles exactly once, not once per file', async () => {
+    const rendered1 = renderShippedRecord({ slug: 'feat-a', specHash: 'hash-a' });
+    const rendered2 = renderShippedRecord({ slug: 'feat-b', specHash: 'hash-b' });
+    const tree = fakeTreeSource({
+      'feat-a.md': rendered1,
+      'feat-b.md': rendered2,
+    });
+
+    await listShippedRecords(tree);
+
+    expect(tree.listShippedFilesCallCount).toBe(1);
+  });
+
+  it('silently skips a basename whose file is missing from the tree source (working-tree-only records stay invisible)', async () => {
+    const tree = fakeTreeSource({});
+    // Simulate a basename listed but whose content vanished (readFile -> null)
+    // by overriding listShippedFiles to report a name readFile won't resolve.
+    const trickyTree: BacklogTreeSource = {
+      ...tree,
+      async listShippedFiles() {
+        return ['ghost.md'];
+      },
+    };
+
+    const result = await listShippedRecords(trickyTree);
+
+    expect(result).toEqual([]);
   });
 });
