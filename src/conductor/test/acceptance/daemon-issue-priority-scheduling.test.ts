@@ -400,6 +400,26 @@ describe('Flow C — outage fail-soft through the real WorkSource', () => {
     expect(log.filter((l) => /outage|unreachable|fallback/i.test(l))).toHaveLength(1);
   });
 
+  it('after an outage scan, refresh:false polls stay chronological (daemon poll path)', async () => {
+    const dir = await freshDir();
+    // Deliberately inverted: the OLDER spec is linked (would be priority:high if the
+    // source were reachable); the NEWER spec is unlinked. Pseudo-banding over the
+    // cleared cache puts the unlinked spec's no-issue band first — the exact
+    // inversion the FR-7 fallback exists to prevent.
+    await seedSpec(dir, '2026-06-05-linked-high', { sourceRef: 'acme/app#1' });
+    await seedSpec(dir, '2026-06-10-unlinked');
+    const log: string[] = [];
+    const reader = makeFakeReader({ 'acme/app#1': 'THROW' });
+    const deps = await buildDeps(dir, { reader, log: (m) => log.push(m) });
+
+    await orderedSlugs(dir, deps, true); // outage refresh scan (fallback, warns once)
+    // Mirrors the daemon poll path (daemon.ts local-only discovery: refresh:false)
+    const slugs = await orderedSlugs(dir, deps, false);
+
+    expect(slugs).toEqual(['2026-06-05-linked-high', '2026-06-10-unlinked']); // pure chronological
+    expect(log.filter((l) => /outage|unreachable|fallback/i.test(l))).toHaveLength(1); // across BOTH scans
+  });
+
   it('a persisting outage across many scans warns only once (suppressed while ongoing)', async () => {
     const dir = await freshDir();
     await seedSpec(dir, '2026-06-10-a', { sourceRef: 'acme/app#1' });
