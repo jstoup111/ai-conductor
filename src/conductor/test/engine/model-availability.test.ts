@@ -1,5 +1,27 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { ModelAvailability, DEFAULT_MODEL_FALLBACK_LADDER } from "../../src/engine/model-availability";
+import type { LLMProvider, InvokeOptions, InvokeResult } from "../../src/execution/llm-provider";
+
+/** Records every invoke() call's requested model and returns canned results keyed by model. */
+function fakeProvider(resultsByModel: Record<string, Partial<InvokeResult>>) {
+  const invokeCalls: InvokeOptions[] = [];
+  const provider: LLMProvider = {
+    invoke: vi.fn(async (opts: InvokeOptions): Promise<InvokeResult> => {
+      invokeCalls.push(opts);
+      const canned = (opts.model && resultsByModel[opts.model]) ?? { success: true, output: "done", exitCode: 0 };
+      return { success: true, output: "", exitCode: 0, ...canned };
+    }),
+    invokeInteractive: vi.fn(async (): Promise<void> => {}),
+  };
+  return { provider, invokeCalls };
+}
+
+const modelUnavailable = (): Partial<InvokeResult> => ({
+  success: false,
+  output: "API Error: 404 not_found_error: model: bogus",
+  exitCode: 1,
+  modelUnavailable: true,
+});
 
 describe("ModelAvailability", () => {
   it("fresh instance returns configured model as effective with downgraded=false", () => {
@@ -33,5 +55,43 @@ describe("ModelAvailability", () => {
 
   it("exposes the default fallback ladder", () => {
     expect(DEFAULT_MODEL_FALLBACK_LADDER).toEqual(["fable", "opus", "sonnet"]);
+  });
+
+  describe("invokeWithLadder", () => {
+    it("healthy configured model: exactly one invoke, success, no dead models", async () => {
+      const avail = new ModelAvailability(["fable", "opus", "sonnet"]);
+      const { provider, invokeCalls } = fakeProvider({});
+
+      const result = await avail.invokeWithLadder(provider, {
+        prompt: "hi",
+        sessionId: "s1",
+        resume: false,
+        model: "fable",
+      });
+
+      expect(result.success).toBe(true);
+      expect(invokeCalls).toHaveLength(1);
+      expect(invokeCalls[0].model).toBe("fable");
+      expect(avail.dead.has("fable")).toBe(false);
+    });
+
+    it("configured model unavailable: walks to next live ladder entry, marks it dead", async () => {
+      const avail = new ModelAvailability(["fable", "opus", "sonnet"]);
+      const { provider, invokeCalls } = fakeProvider({
+        fable: modelUnavailable(),
+        opus: { success: true, output: "done", exitCode: 0 },
+      });
+
+      const result = await avail.invokeWithLadder(provider, {
+        prompt: "hi",
+        sessionId: "s1",
+        resume: false,
+        model: "fable",
+      });
+
+      expect(result.success).toBe(true);
+      expect(invokeCalls.map((c) => c.model)).toEqual(["fable", "opus"]);
+      expect(avail.dead.has("fable")).toBe(true);
+    });
   });
 });
