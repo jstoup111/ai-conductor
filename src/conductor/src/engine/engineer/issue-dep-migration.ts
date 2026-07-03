@@ -368,13 +368,13 @@ export async function runMigration(deps: {
   issues: Array<{ ref: string; body: string }>;
   confirm: () => Promise<boolean>;
 }): Promise<{
-  proposed: Array<{ issue: string; blockedBy: string }>;
+  proposed: Array<{ issue: string; blockedBy: string; kind: DependencyEdge['kind'] }>;
   manualReview: Array<{ issue: string; target: string | null; reason: ManualReviewReason; excerpt: string }>;
   created: Array<{ issue: string; blockedBy: string }>;
   alreadyPresent: Array<{ issue: string; blockedBy: string }>;
   failed: Array<{ issue: string; error: string }>;
 }> {
-  const proposed: Array<{ issue: string; blockedBy: string }> = [];
+  const proposed: Array<{ issue: string; blockedBy: string; kind: DependencyEdge['kind'] }> = [];
   const manualReview: Array<{ issue: string; target: string | null; reason: ManualReviewReason; excerpt: string }> = [];
   const edges: DependencyEdge[] = [];
   const created: Array<{ issue: string; blockedBy: string }> = [];
@@ -388,7 +388,7 @@ export async function runMigration(deps: {
     // Collect proposed edges
     for (const edge of result.edges) {
       edges.push(edge);
-      proposed.push({ issue: edge.source, blockedBy: edge.target });
+      proposed.push({ issue: edge.source, blockedBy: edge.target, kind: edge.kind });
     }
 
     // Collect manual-review items

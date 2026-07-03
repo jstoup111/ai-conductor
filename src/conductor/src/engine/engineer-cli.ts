@@ -48,7 +48,7 @@ import { restRemoveLabelArgs } from './pr-labels.js';
 import { claimUnblocked, type DependencyClaimQueue } from './engineer/intake/dependency-claim.js';
 import type { Envelope } from './engineer/intake/port.js';
 import { createBlockerResolver } from './blocker-resolver.js';
-import { parseDependencyProse, createDependencyLinks } from './engineer/issue-dep-migration.js';
+import { parseDependencyProse, createDependencyLinks, runMigration } from './engineer/issue-dep-migration.js';
 
 /**
  * Production DECIDE seam: gates each authoring step through the io surface.
@@ -912,34 +912,39 @@ export async function dispatchEngineer(
         return 1;
       }
 
-      const edges: ReturnType<typeof parseDependencyProse>['edges'] = [];
-      const manualReview: ReturnType<typeof parseDependencyProse>['manualReview'] = [];
-      for (const issue of issues) {
-        const ref = `${nameWithOwner}#${issue.number}`;
-        const result = parseDependencyProse({ ref, body: issue.body ?? '' });
-        edges.push(...result.edges);
-        manualReview.push(...result.manualReview);
-      }
+      // Delegate to runMigration with formatted issues and confirmation callback
+      const formattedIssues = issues.map((issue) => ({
+        ref: `${nameWithOwner}#${issue.number}`,
+        body: issue.body ?? '',
+      }));
 
+      const result = await runMigration({
+        gh,
+        issues: formattedIssues,
+        confirm: async () => Promise.resolve(dispatch.confirm),
+      });
+
+      // Print the proposal (proposed edges + manual review items)
       print(`migrate-issue-deps: proposal over ${nameWithOwner} (${issues.length} open issue(s))`);
-      for (const edge of edges) {
-        print(`  ${edge.source} blocked_by ${edge.target}  [${edge.kind}]`);
+      for (const proposed of result.proposed) {
+        print(`  ${proposed.issue} blocked_by ${proposed.blockedBy}  [${proposed.kind}]`);
       }
-      if (manualReview.length > 0) {
-        print(`  ${manualReview.length} item(s) need manual review (not auto-proposed):`);
-        for (const item of manualReview) {
-          print(`    ${item.source} — ${item.reason}: ${item.excerpt}`);
+      if (result.manualReview.length > 0) {
+        print(`  ${result.manualReview.length} item(s) need manual review (not auto-proposed):`);
+        for (const item of result.manualReview) {
+          print(`    ${item.issue} — ${item.reason}: ${item.excerpt}`);
         }
       }
 
+      // If not confirmed, print dry-run message and return
       if (!dispatch.confirm) {
         print('Dry run — no links written. Re-run with --confirm to apply.');
         return 0;
       }
 
-      const results = await createDependencyLinks(edges, { gh, cwd });
-      const created = results.filter((r) => r.status === 'created').length;
-      const alreadyPresent = results.filter((r) => r.status === 'already-present').length;
+      // Print the results (created + already-present)
+      const created = result.created.length;
+      const alreadyPresent = result.alreadyPresent.length;
       print(`migrate-issue-deps: ${created} link(s) created, ${alreadyPresent} already present.`);
       return 0;
     }
