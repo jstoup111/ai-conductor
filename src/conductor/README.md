@@ -563,6 +563,34 @@ and non-blocking: a label-read or apply/remove failure is logged and does not di
 processing. Because CI typically finishes after the PR is opened, the sweep re-checks over
 time rather than making a one-shot determination at PR creation.
 
+### Model availability fallback ladder (`engine/model-availability.ts`, #186)
+
+Steps and skills are pinned to a preferred model (e.g. Fable for `rebase`, `remediate`,
+`debugging`). `step-runners.ts` resolves each step's model through a `ModelAvailability`
+instance before invoking the Claude provider; if the pinned/configured model is detected
+unavailable, `ModelAvailability` walks a fallback ladder and retries the next model down
+instead of failing the step outright.
+
+- **`DEFAULT_MODEL_FALLBACK_LADDER`** (`engine/model-availability.ts`):
+  `["fable", "opus", "sonnet"]`.
+- **Config:** `model_fallback_ladder` — an optional top-level array of model names in
+  `HarnessConfig` (`types/config.ts`), validated in `config.ts` (must be an array of
+  non-empty strings). Passed into `ModelAvailability`'s constructor by `step-runners.ts`;
+  `undefined` falls back to the default ladder, `[]` disables fallback.
+- **Matching:** exact string match against the configured/pinned model name — no fuzzy or
+  prefix matching.
+- **Caching / restart semantics:** "known unavailable" models are recorded in-memory for
+  the lifetime of the `ModelAvailability` instance (i.e. per daemon/conductor process).
+  Restarting the daemon clears this state, so the next run retries the top of the ladder
+  even for a model that was previously marked unavailable.
+- **Override interaction:** an explicit `--model` CLI flag or `steps.<step>.model` config
+  entry still takes precedence over the pinned default, but the override itself is passed
+  through the same availability check and falls back down the ladder if it, too, is
+  unavailable.
+- **Logging:** every downgrade is written via the runner's warn callback as
+  `Downgraded from <configured> to <fallback>: <reason>`, visible in conductor logs —
+  check there when a step unexpectedly ran on a different model than configured.
+
 ### Daemon hosting, management & observability (tmux Supervisor — `adr-2026-06-29-daemon-supervisor-port-and-attachable-hosting`)
 
 The daemon is hosted as a **foreground process inside a per-repo tmux session**

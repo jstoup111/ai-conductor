@@ -155,6 +155,72 @@ describe('ClaudeProvider', () => {
       expect(result.output).toMatch(/not found/i);
     });
 
+    it('detects model-unavailable from a not_found_error API response', async () => {
+      mockExeca.mockResolvedValue({
+        stdout: '',
+        stderr:
+          'API Error: 404 {"type":"error","error":{"type":"not_found_error","message":"model: claude-bogus"}}',
+        exitCode: 1,
+        failed: true,
+      } as any);
+
+      const result = await provider.invoke(baseOptions);
+      expect(result.modelUnavailable).toBe(true);
+      expect(result.success).toBe(false);
+    });
+
+    it('detects model-unavailable from an "Invalid model name" CLI message', async () => {
+      mockExeca.mockResolvedValue({
+        stdout: '',
+        stderr: 'Invalid model name: bogus',
+        exitCode: 1,
+        failed: true,
+      } as any);
+
+      const result = await provider.invoke(baseOptions);
+      expect(result.modelUnavailable).toBe(true);
+      expect(result.success).toBe(false);
+    });
+
+    it('does not flag modelUnavailable for "model" appearing in unrelated prose', async () => {
+      mockExeca.mockResolvedValue({
+        stdout: '',
+        stderr: 'error: model output truncated mid-stream',
+        exitCode: 1,
+        failed: true,
+      } as any);
+
+      const result = await provider.invoke(baseOptions);
+      expect(result.modelUnavailable).toBeUndefined();
+    });
+
+    it('flags rateLimited (not modelUnavailable) for a 429 overloaded response', async () => {
+      mockExeca.mockResolvedValue({
+        stdout: '',
+        stderr: 'Error: 429 overloaded, please retry later',
+        exitCode: 1,
+        failed: true,
+      } as any);
+
+      const result = await provider.invoke(baseOptions);
+      expect(result.rateLimited).toBe(true);
+      expect(result.modelUnavailable).toBeUndefined();
+    });
+
+    it('does not flag modelUnavailable when the binary is missing (exit 127/ENOENT)', async () => {
+      mockExeca.mockResolvedValue({
+        stdout: '',
+        stderr: 'ENOENT',
+        exitCode: 127,
+        failed: true,
+      } as any);
+
+      const result = await provider.invoke(baseOptions);
+      expect(result.success).toBe(false);
+      expect(result.output).toMatch(/not found/i);
+      expect(result.modelUnavailable).toBeUndefined();
+    });
+
     it('includes --name when sessionName provided', async () => {
       mockExeca.mockResolvedValue({
         stdout: 'ok',

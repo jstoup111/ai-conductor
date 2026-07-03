@@ -1,6 +1,7 @@
 import { writeFile, access } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { LLMProvider } from '../execution/llm-provider.js';
+import { ModelAvailability } from './model-availability.js';
 import type { StepName, ConductState, ComplexityTier, RunMode } from '../types/index.js';
 import type { HarnessConfig, EffortLevel } from '../types/config.js';
 import type { StepRunner, StepRunResult, StepRunOptions } from './conductor.js';
@@ -271,6 +272,7 @@ export class DefaultStepRunner implements StepRunner {
   private modelOverride?: string;
   private effortOverride?: EffortLevel;
   private mode: RunMode;
+  private modelAvailability: ModelAvailability;
   callCount = 0;
 
   constructor(
@@ -288,6 +290,9 @@ export class DefaultStepRunner implements StepRunner {
     this.modelOverride = options?.modelOverride;
     this.effortOverride = options?.effortOverride;
     this.mode = options?.mode ?? 'default';
+    this.modelAvailability = new ModelAvailability(this.config?.model_fallback_ladder, (line) =>
+      console.warn(line),
+    );
   }
 
   resolvedConfigFor(step: StepName, tier?: ComplexityTier): ResolvedStepConfig {
@@ -345,6 +350,12 @@ export class DefaultStepRunner implements StepRunner {
     // advances). Otherwise dispatch print mode — Claude answers once and exits.
     const interactive = this.mode !== 'auto' && INTERACTIVE_STEPS.has(step);
 
+    // Consult the availability cache before dispatch so a model already
+    // known-dead (e.g. downgraded during an earlier autonomous step) isn't
+    // handed to the interactive REPL — effectiveModel() substitutes a live
+    // model and fires the substitution warning itself.
+    const { model: effectiveModel } = this.modelAvailability.effectiveModel(resolved.model);
+
     try {
       await this.provider.invokeInteractive({
         prompt,
@@ -360,7 +371,7 @@ export class DefaultStepRunner implements StepRunner {
         // keeps prompts so the user approves.
         dangerouslySkipPermissions: this.mode === 'auto',
         systemPrompt,
-        model: resolved.model,
+        model: effectiveModel,
         effort: resolved.effort,
       });
       this.sessionStarted = true;
@@ -386,13 +397,30 @@ export class DefaultStepRunner implements StepRunner {
     systemPrompt: string,
     resolved: ResolvedStepConfig,
   ): Promise<StepRunResult> {
-    const result = await this.provider.invoke({
+    // Resolve to a live model up front (skipping any already known-dead
+    // model in this process) so a single ladder-covered invocation doesn't
+    // waste an attempt on a model we already know is unavailable.
+    const { model: effectiveModel } = this.modelAvailability.effectiveModel(resolved.model);
+
+    // Track every model attempted during the ladder walk so a full-ladder
+    // exhaustion failure names every model tried — diagnosable from
+    // daemon.log alone without re-deriving the walk from the dead-set.
+    const attemptedModels: string[] = [];
+    const trackingProvider: LLMProvider = {
+      invoke: (opts) => {
+        attemptedModels.push(opts.model ?? '');
+        return this.provider.invoke(opts);
+      },
+      invokeInteractive: (opts) => this.provider.invokeInteractive(opts),
+    };
+
+    const result = await this.modelAvailability.invokeWithLadder(trackingProvider, {
       prompt,
       sessionId: this.sessionId,
       resume,
       dangerouslySkipPermissions: true,
       systemPrompt,
-      model: resolved.model,
+      model: effectiveModel,
       effort: resolved.effort,
       cwd: this.projectDir,
     });
@@ -423,6 +451,16 @@ export class DefaultStepRunner implements StepRunner {
         await writeFile(join(this.pipelineDir, 'conduct-session-id'), this.sessionId, 'utf-8');
       }
       return { success: true, output: result.output };
+    }
+
+    // Full-ladder exhaustion: every attempted model reported unavailable.
+    // Name them all in the output so the eventual HALT (if the conductor's
+    // retry budget also exhausts) is diagnosable from daemon.log alone.
+    if (result.modelUnavailable && attemptedModels.length > 1) {
+      return {
+        success: false,
+        output: `${result.output} (model fallback ladder exhausted, tried: ${attemptedModels.join(', ')})`,
+      };
     }
 
     return { success: false, output: result.output };

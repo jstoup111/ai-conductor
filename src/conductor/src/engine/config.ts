@@ -175,6 +175,8 @@ export function validateConfig(
     'rebase_resolution_attempts',
     // Self-host guardrails (adr-2026-06-30-self-host-detection-seam).
     'harness_self_host',
+    // Model availability fallback ladder.
+    'model_fallback_ladder',
   ]);
   for (const key of Object.keys(obj)) {
     if (!knownTopLevelKeys.has(key)) {
@@ -495,6 +497,20 @@ export function validateConfig(
   if (obj.harness_self_host !== undefined) {
     const err = validateSelfHostBlock(obj.harness_self_host);
     if (err) return { ok: false, error: err };
+  }
+
+  // model_fallback_ladder — ordered fallback model list (model-availability-
+  // fallback-ladder). Must be an array of non-empty strings; empty array is
+  // valid (means no fallback).
+  if (obj.model_fallback_ladder !== undefined) {
+    if (!Array.isArray(obj.model_fallback_ladder)) {
+      return errVal('model_fallback_ladder must be an array of strings');
+    }
+    for (const entry of obj.model_fallback_ladder) {
+      if (typeof entry !== 'string' || entry === '') {
+        return errVal('model_fallback_ladder must contain only non-empty strings');
+      }
+    }
   }
 
   return { ok: true, config: obj as HarnessConfig, warnings };

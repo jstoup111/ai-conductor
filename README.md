@@ -409,6 +409,12 @@ steps:
         model: haiku
         max_retries: 2
 
+# ── Model availability fallback ladder ────────────────────────────────────────
+# When a configured/pinned model is detected unavailable, the daemon automatically
+# retries the next model in this list instead of failing the step. Omit to use the
+# default; set to `[]` to disable fallback entirely.
+model_fallback_ladder: ["fable", "opus", "sonnet"]   # default shown
+
 # ── Complexity tier ───────────────────────────────────────────────────────────
 complexity:
   default_tier: M              # "S" | "M" | "L" — used when /assess hasn't run yet
@@ -466,6 +472,29 @@ conductor:
   update_channel: tagged       # "tagged" | "main"
   auto_check: true             # Check for updates on startup
 ```
+
+### Model fallback ladder (`conduct-ts` only)
+
+Skills and daemon steps are pinned to a preferred model (e.g. Fable for `rebase`,
+`remediate`, `debugging` — see [Model Selection](HARNESS.md#model-selection)). If that
+model is ever detected unavailable, the daemon no longer fails the step — it walks the
+`model_fallback_ladder` and retries with the next model down until one succeeds.
+
+- **Config key:** `model_fallback_ladder` — an optional top-level array of model names
+  in `.ai-conductor/config.yml`.
+- **Default:** `["fable", "opus", "sonnet"]`.
+- **Disabling:** set `model_fallback_ladder: []` to turn off fallback (an unavailable
+  model then fails the step as before).
+- **Matching:** exact-string match against the configured/pinned model name.
+- **Restart semantics:** "known unavailable" models are cached per-process only.
+  Restarting the daemon clears the cache, so the next run retries from the top of the
+  ladder in case the model has recovered.
+- **Override:** the `--model` CLI flag and `steps.<step>.model` config still take
+  precedence as an explicit override — but the override is itself checked for
+  availability, and falls back down the ladder if it's unavailable too.
+- **Logging:** every downgrade is written to the conductor logs as
+  `Downgraded from <configured> to <fallback>: <reason>` — check there if a step ran on
+  an unexpected model.
 
 ### Operator identity & owner gate (multi-operator, `conduct-ts` only)
 

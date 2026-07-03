@@ -10,6 +10,10 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ## [Unreleased]
 
+### Added
+
+- Added model fallback ladder — reactive downgrade on unavailable models (#186)
+
 ### Changed
 
 - **Declared `harness_self_host.version_freeze: "0.99.19"` in `.ai-conductor/config.yml`.**

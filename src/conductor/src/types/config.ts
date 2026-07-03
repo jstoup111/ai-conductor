@@ -326,4 +326,10 @@ export interface HarnessConfig {
    * (the safe default). Scoped to harness self-builds; no effect on other repos.
    */
   harness_self_host?: HarnessSelfHostConfig;
+  /**
+   * Ordered list of model aliases/IDs to fall back through when the primary
+   * model is unavailable (model-availability-fallback-ladder). Absent/empty
+   * array → no fallback. Each entry must be a non-empty string.
+   */
+  model_fallback_ladder?: string[];
 }
