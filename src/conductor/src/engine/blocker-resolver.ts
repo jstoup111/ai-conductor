@@ -56,9 +56,24 @@ async function resolveUncached(sourceRef: string, deps: BlockerResolverDeps): Pr
   }
 
   const { repo, number } = parsed;
-  const { stdout } = await deps.run(['api', `repos/${repo}/issues/${number}/dependencies/blocked_by`]);
 
-  const blockedBy: unknown = JSON.parse(stdout);
+  let stdout: string;
+  try {
+    ({ stdout } = await deps.run(['api', `repos/${repo}/issues/${number}/dependencies/blocked_by`]));
+  } catch (err: unknown) {
+    // Network/API failure — isolated to this ref; never throw into the scan loop.
+    const detail = err instanceof Error ? err.message : String(err);
+    return { kind: 'indeterminate', detail };
+  }
+
+  let blockedBy: unknown;
+  try {
+    blockedBy = JSON.parse(stdout);
+  } catch (err: unknown) {
+    const detail = err instanceof Error ? err.message : String(err);
+    return { kind: 'indeterminate', detail: `unparseable blocked_by response: ${detail}` };
+  }
+
   if (!Array.isArray(blockedBy) || blockedBy.length === 0) {
     return { kind: 'unblocked' };
   }
