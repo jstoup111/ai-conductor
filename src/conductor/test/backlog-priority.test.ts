@@ -3,7 +3,9 @@ import {
   parsePriorityLabels,
   createPriorityResolver,
   orderBacklog,
+  ghIssueLabelReader,
   type PriorityResolution,
+  type ExecRunner,
 } from '../src/engine/backlog-priority.js';
 import type { BacklogItem } from '../src/engine/daemon.js';
 
@@ -1219,6 +1221,155 @@ describe('orderBacklog — permutation and determinism properties', () => {
       expect(isPermutation(extractSlugs(items), extractSlugs(result))).toBe(true);
       expect(result).toHaveLength(3);
       expect(result.every((item) => item.band === 'no-issue')).toBe(true);
+    });
+  });
+});
+
+describe('ghIssueLabelReader — GitHub issue label fetcher via gh REST API', () => {
+  describe('test 1: Build gh api command from sourceRef', () => {
+    it('parses owner/repo#N and builds correct gh api argv', async () => {
+      const callLog: Array<{ args: string[] }> = [];
+      const runner: ExecRunner = async (args: string[]) => {
+        callLog.push({ args });
+        return { stdout: JSON.stringify({ labels: [{ name: 'priority: high' }] }) };
+      };
+
+      const reader = ghIssueLabelReader(runner);
+      await reader(['owner/repo#123']);
+
+      expect(callLog).toHaveLength(1);
+      const args = callLog[0].args;
+      expect(args[0]).toBe('api');
+      expect(args).toContain('repos');
+      expect(args).toContain('owner');
+      expect(args).toContain('repo');
+      expect(args).toContain('issues');
+      expect(args).toContain('123');
+    });
+  });
+
+  describe('test 2: Cross-repo refs', () => {
+    it('handles multiple sourceRefs from different repos', async () => {
+      const callLog: Array<{ args: string[] }> = [];
+      const runner: ExecRunner = async (args: string[]) => {
+        callLog.push({ args });
+        // Return response based on which issue is being queried
+        if (args.includes('456')) {
+          return { stdout: JSON.stringify({ labels: [{ name: 'priority: medium' }] }) };
+        }
+        return { stdout: JSON.stringify({ labels: [{ name: 'priority: high' }] }) };
+      };
+
+      const reader = ghIssueLabelReader(runner);
+      const result = await reader(['owner1/repo1#123', 'owner2/repo2#456']);
+
+      expect(callLog).toHaveLength(2);
+      expect(result.size).toBe(2);
+      expect(result.get('owner1/repo1#123')).toEqual(['priority: high']);
+      expect(result.get('owner2/repo2#456')).toEqual(['priority: medium']);
+    });
+  });
+
+  describe('test 3: Label extraction', () => {
+    it('extracts label names from JSON response labels array', async () => {
+      const runner: ExecRunner = async () => {
+        return {
+          stdout: JSON.stringify({
+            labels: [
+              { name: 'priority: high' },
+              { name: 'bug' },
+              { name: 'feature' },
+            ],
+          }),
+        };
+      };
+
+      const reader = ghIssueLabelReader(runner);
+      const result = await reader(['owner/repo#1']);
+
+      expect(result.get('owner/repo#1')).toEqual(['priority: high', 'bug', 'feature']);
+    });
+
+    it('handles empty labels array', async () => {
+      const runner: ExecRunner = async () => {
+        return { stdout: JSON.stringify({ labels: [] }) };
+      };
+
+      const reader = ghIssueLabelReader(runner);
+      const result = await reader(['owner/repo#1']);
+
+      expect(result.get('owner/repo#1')).toEqual([]);
+    });
+  });
+
+  describe('test 4: HTTP 404 → not-found', () => {
+    it('non-existent issue returns not-found (404)', async () => {
+      const runner: ExecRunner = async () => {
+        const err = new Error('HTTP 404: Not Found');
+        (err as any).status = 404;
+        throw err;
+      };
+
+      const reader = ghIssueLabelReader(runner);
+      const result = await reader(['owner/repo#999']);
+
+      expect(result.get('owner/repo#999')).toBe('not-found');
+    });
+
+    it('multiple refs with one 404', async () => {
+      let callCount = 0;
+      const runner: ExecRunner = async (args: string[]) => {
+        callCount++;
+        if (args.includes('999')) {
+          const err = new Error('HTTP 404: Not Found');
+          (err as any).status = 404;
+          throw err;
+        }
+        return { stdout: JSON.stringify({ labels: [{ name: 'priority: high' }] }) };
+      };
+
+      const reader = ghIssueLabelReader(runner);
+      const result = await reader(['owner/repo#123', 'owner/repo#999', 'owner/repo#456']);
+
+      expect(result.get('owner/repo#123')).toEqual(['priority: high']);
+      expect(result.get('owner/repo#999')).toBe('not-found');
+      expect(result.get('owner/repo#456')).toEqual(['priority: high']);
+    });
+  });
+
+  describe('test 5: Transport failure/ENOENT → throw', () => {
+    it('non-404 transport error throws', async () => {
+      const runner: ExecRunner = async () => {
+        throw new Error('network timeout');
+      };
+
+      const reader = ghIssueLabelReader(runner);
+
+      await expect(reader(['owner/repo#1'])).rejects.toThrow('network timeout');
+    });
+
+    it('ENOENT error throws', async () => {
+      const runner: ExecRunner = async () => {
+        const err = new Error('ENOENT: no such file or directory');
+        (err as any).code = 'ENOENT';
+        throw err;
+      };
+
+      const reader = ghIssueLabelReader(runner);
+
+      await expect(reader(['owner/repo#1'])).rejects.toThrow('ENOENT');
+    });
+
+    it('500 error throws', async () => {
+      const runner: ExecRunner = async () => {
+        const err = new Error('HTTP 500: Internal Server Error');
+        (err as any).status = 500;
+        throw err;
+      };
+
+      const reader = ghIssueLabelReader(runner);
+
+      await expect(reader(['owner/repo#1'])).rejects.toThrow('HTTP 500');
     });
   });
 });

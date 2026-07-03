@@ -1,6 +1,12 @@
 import type { BacklogItem } from './daemon.js';
 
 /**
+ * Injectable runner for executing gh CLI commands.
+ * Returns the stdout output or throws on failure.
+ */
+export type ExecRunner = (args: string[]) => Promise<{ stdout: string }>;
+
+/**
  * Priority band type for issue classification in daemon backlog scheduling.
  *
  * - 'no-issue': No actual issue (placeholder)
@@ -222,4 +228,75 @@ export function orderBacklog(items: BacklogItem[], res: PriorityResolution): Bac
     ...item,
     band,
   }));
+}
+
+/**
+ * Parse `owner/repo#N` into owner, repo, and issue number.
+ * Returns null if the format is invalid.
+ *
+ * @param sourceRef - Reference in the form `owner/repo#N`
+ * @returns Parsed components or null if unparseable
+ */
+function parseIssueRef(sourceRef: string): { owner: string; repo: string; number: string } | null {
+  const hash = sourceRef.lastIndexOf('#');
+  if (hash <= 0 || hash === sourceRef.length - 1) return null;
+  const repo = sourceRef.slice(0, hash);
+  const number = sourceRef.slice(hash + 1);
+  if (!/^\d+$/.test(number)) return null;
+  // Split repo into owner and repo name
+  const slashIndex = repo.indexOf('/');
+  if (slashIndex <= 0 || slashIndex === repo.length - 1) return null;
+  const owner = repo.slice(0, slashIndex);
+  const repoName = repo.slice(slashIndex + 1);
+  return { owner, repo: repoName, number };
+}
+
+/**
+ * Create a GitHub issue label reader that fetches labels from issues via gh REST API.
+ *
+ * For each sourceRef (e.g., 'owner/repo#N'):
+ * - Parses the ref and builds `gh api repos/<owner>/<repo>/issues/<N>`
+ * - Extracts label names from the JSON response
+ * - Returns 'not-found' for 404 errors (issue doesn't exist)
+ * - Throws on transport errors (non-404)
+ *
+ * @param runner - Injected executor for gh commands
+ * @returns IssueLabelReader function that fetches labels for refs
+ */
+export function ghIssueLabelReader(runner: ExecRunner): IssueLabelReader {
+  return async (refs: string[]) => {
+    const result = new Map<string, string[] | 'not-found'>();
+
+    for (const ref of refs) {
+      try {
+        const parsed = parseIssueRef(ref);
+        if (!parsed) {
+          // Unparseable ref — treat as not found
+          result.set(ref, 'not-found');
+          continue;
+        }
+
+        const { owner, repo, number } = parsed;
+        const args = ['api', 'repos', owner, repo, 'issues', number];
+
+        const { stdout } = await runner(args);
+        const data = JSON.parse(stdout) as { labels?: Array<{ name: string }> | null };
+        const labels = (data.labels ?? []).map((l) => l.name ?? '').filter(Boolean);
+        result.set(ref, labels);
+      } catch (error) {
+        // Check if error is a 404
+        const is404 = (error as any)?.status === 404 ||
+          (error instanceof Error && error.message.includes('404'));
+
+        if (is404) {
+          result.set(ref, 'not-found');
+        } else {
+          // Non-404 error — re-throw as outage
+          throw error;
+        }
+      }
+    }
+
+    return result;
+  };
 }
