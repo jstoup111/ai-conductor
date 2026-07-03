@@ -94,6 +94,66 @@ describe("ModelAvailability", () => {
       expect(avail.dead.has("fable")).toBe(true);
     });
 
+    it("rate-limited result after modelUnavailable walk does not advance further: opus not marked dead, no walk to sonnet", async () => {
+      const avail = new ModelAvailability(["fable", "opus", "sonnet"]);
+      const { provider, invokeCalls } = fakeProvider({
+        fable: modelUnavailable(),
+        opus: { success: false, output: "rate limited", exitCode: 1, rateLimited: true, modelUnavailable: false },
+      });
+
+      const result = await avail.invokeWithLadder(provider, {
+        prompt: "hi",
+        sessionId: "s1",
+        resume: false,
+        model: "fable",
+      });
+
+      expect(result.rateLimited).toBe(true);
+      expect(result.modelUnavailable).not.toBe(true);
+      expect(invokeCalls.map((c) => c.model)).toEqual(["fable", "opus"]);
+      expect(avail.dead.has("fable")).toBe(true);
+      expect(avail.dead.has("opus")).toBe(false);
+    });
+
+    it("ordinary failure (not modelUnavailable) is returned as-is with no walk to opus", async () => {
+      const avail = new ModelAvailability(["fable", "opus", "sonnet"]);
+      const { provider, invokeCalls } = fakeProvider({
+        fable: { success: false, output: "some ordinary error", exitCode: 1, modelUnavailable: undefined },
+      });
+
+      const result = await avail.invokeWithLadder(provider, {
+        prompt: "hi",
+        sessionId: "s1",
+        resume: false,
+        model: "fable",
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.modelUnavailable).not.toBe(true);
+      expect(invokeCalls.map((c) => c.model)).toEqual(["fable"]);
+      expect(avail.dead.has("fable")).toBe(false);
+    });
+
+    it("off-ladder configured model unavailable: falls to ladder's first live entry", async () => {
+      const avail = new ModelAvailability(["fable", "opus", "sonnet"]);
+      const { provider, invokeCalls } = fakeProvider({
+        "claude-fable-5-custom": modelUnavailable(),
+        fable: { success: true, output: "done", exitCode: 0 },
+      });
+
+      const result = await avail.invokeWithLadder(provider, {
+        prompt: "hi",
+        sessionId: "s1",
+        resume: false,
+        model: "claude-fable-5-custom",
+      });
+
+      expect(result.success).toBe(true);
+      expect(invokeCalls.map((c) => c.model)).toEqual(["claude-fable-5-custom", "fable"]);
+      expect(avail.dead.has("claude-fable-5-custom")).toBe(true);
+      expect(avail.dead.has("fable")).toBe(false);
+    });
+
     const ladder = DEFAULT_MODEL_FALLBACK_LADDER; // ["fable", "opus", "sonnet"]
 
     it.each(ladder.slice(0, -1).map((_, p) => p))(
@@ -119,5 +179,28 @@ describe("ModelAvailability", () => {
         expect(invokeCalls).toHaveLength(p + 2);
       }
     );
+
+    it("all ladder models unavailable: returns last failure, no throw, one invoke per live model", async () => {
+      const avail = new ModelAvailability(["fable", "opus", "sonnet"]);
+      const { provider, invokeCalls } = fakeProvider({
+        fable: modelUnavailable(),
+        opus: modelUnavailable(),
+        sonnet: modelUnavailable(),
+      });
+
+      const result = await avail.invokeWithLadder(provider, {
+        prompt: "hi",
+        sessionId: "s1",
+        resume: false,
+        model: "fable",
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.modelUnavailable).toBe(true);
+      expect(invokeCalls.map((c) => c.model)).toEqual(["fable", "opus", "sonnet"]);
+      expect(avail.dead.has("fable")).toBe(true);
+      expect(avail.dead.has("opus")).toBe(true);
+      expect(avail.dead.has("sonnet")).toBe(true);
+    });
   });
 });
