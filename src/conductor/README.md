@@ -62,6 +62,17 @@ commands above are for building by hand. If Node < 20.5 is active or `npm` is
 missing, `bin/install` skips the build with a warning and leaves the
 `conduct-ts` symlink off until `dist/` exists.
 
+## Daemon Integration (Self-Hosting)
+
+This repository (the harness) is daemon-registered for build-to-PR on self-hosted instances.
+When this repo is deployed via the daemon:
+
+- The daemon runs full integration tests in feature-branch worktrees
+- `bin/setup` prepares these worktrees: runs `npm install` and `npm run build` in `src/conductor`
+- **Important**: `bin/setup` is worktree-local only—it does NOT rebuild the primary checkout.
+  If you manually run `bin/setup` in your primary checkout, you will trigger a rebuild.
+  For more details, see #215.
+
 ## Key concepts
 
 ### State machine
