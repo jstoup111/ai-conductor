@@ -11,10 +11,18 @@
 // by recording that standing approval instead of halting every self-build. A
 // freeze NEVER approves an actual bump: any VERSION differing from the frozen
 // value halts exactly as before.
+//
+// Marker invariance (Task 10): The presence and match status of the approval marker
+// is INDEPENDENT of change-set classification:
+// - marker == VERSION: approval is granted (short-circuit, classifier NEVER invoked)
+// - marker ≠ VERSION: mismatch is fatal (cannot be rescued by a good signal)
+// - marker absent: classification is consulted ONLY here (Task 11 implementation)
+// The marker path logic remains byte-identical to the original implementation.
 
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { firstNonEmptyLine, writeSelfHostHalt, type GateVerdict } from './gate-halt.js';
+import type { VersionSignal } from './version-signal.js';
 
 /** Where the operator records the approved VERSION bump for a self-build. */
 export const VERSION_APPROVAL_MARKER = '.pipeline/version-approval';
@@ -26,6 +34,10 @@ export interface VersionApprovalInput {
   repoVersion: string;
   /** Declared version freeze (`harness_self_host.version_freeze`), or null. */
   versionFreeze?: string | null;
+  /** Optional signal to escalate classification on absent marker (Task 11). */
+  signal?: VersionSignal;
+  /** Optional spy/mock classifier for testing (consulted only on absent marker). */
+  classifier?: (signal?: VersionSignal) => void;
 }
 
 /**
@@ -36,6 +48,12 @@ export interface VersionApprovalInput {
  * no matching freeze HALTs (approval required); a mismatch HALTs naming both
  * versions — never opens a PR with an unapproved bump. Each reason is distinct
  * from a rebase HALT.
+ *
+ * Task 11: When marker is absent and freeze does not apply, consult the
+ * optional signal parameter to classify the change set:
+ * - PATCH: auto-pass (verdict ok)
+ * - MINOR/MAJOR: HALT with informative reason (level, paths, resume procedure)
+ * - undeterminable: HALT with undeterminable message
  */
 export function evaluateVersionApproval(input: VersionApprovalInput): GateVerdict {
   const approved = firstNonEmptyLine(input.approvalMarker);
@@ -52,6 +70,46 @@ export function evaluateVersionApproval(input: VersionApprovalInput): GateVerdic
           `approved bump in ${VERSION_APPROVAL_MARKER} (or update the freeze), then resume.`,
       };
     }
+
+    // Task 11: No freeze; consult signal classification for no-marker escalation
+    if (input.signal) {
+      // Invoke classifier spy if provided (for testing marker invariance)
+      input.classifier?.(input.signal);
+
+      if (input.signal.level === 'patch') {
+        // PATCH auto-pass: all changes are safe
+        return { ok: true };
+      }
+
+      if (input.signal.level === 'minor' || input.signal.level === 'major') {
+        // MINOR/MAJOR: halt with informative reason
+        const signals = input.signal.signals ?? [];
+        const filesList = signals
+          .flatMap(s => s.files)
+          .map(f => `  - ${f}`)
+          .join('\n');
+        const levelName = input.signal.level.toUpperCase();
+        return {
+          ok: false,
+          reason:
+            `VERSION-bump approval escalated (self-host version gate) — change set signals ${levelName}:\n` +
+            (filesList ? `${filesList}\n` : '') +
+            `To approve this bump, record the new version in ${VERSION_APPROVAL_MARKER} and re-run the daemon.`,
+        };
+      }
+
+      if (input.signal.level === 'halt-undeterminable') {
+        // Undeterminable: cannot safely classify
+        return {
+          ok: false,
+          reason:
+            `VERSION-bump approval undeterminable (self-host version gate) — ${input.signal.reason} ` +
+            `To proceed, record the approved version in ${VERSION_APPROVAL_MARKER} and re-run the daemon.`,
+        };
+      }
+    }
+
+    // Fallback: no signal provided, no freeze, marker absent
     return {
       ok: false,
       reason:
@@ -81,6 +139,10 @@ export interface VersionGateOptions {
   writeHalt?: (projectRoot: string, reason: string) => Promise<void>;
   /** Marker writer for a freeze auto-approval (defaults to fs writeFile). */
   writeText?: (path: string, content: string) => Promise<void>;
+  /** Optional signal to escalate classification on absent marker (Task 11). */
+  signal?: VersionSignal;
+  /** Audit record writer for PATCH auto-pass (defaults to fs writeFile). */
+  writeAudit?: (path: string, content: string) => Promise<void>;
 }
 
 /**

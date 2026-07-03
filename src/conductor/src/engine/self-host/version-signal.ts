@@ -18,7 +18,7 @@ export const PATCH_SAFE_GLOBS = [
 ];
 
 export type VersionSignal =
-  | { level: 'patch' }
+  | { level: 'patch'; changedFiles?: string[] }
   | { level: 'minor' | 'major'; signals: Array<{ kind: string; files: string[] }> }
   | { level: 'halt-undeterminable'; reason: string };
 
@@ -79,6 +79,50 @@ function detectMajorSurfaces(changed: ChangedFile[]): Array<{ kind: string; file
 }
 
 /**
+ * Detect MINOR additive surfaces in a change set.
+ * MINOR signals when new additive surfaces are introduced:
+ * - Added skill definitions (A skills/[name]/SKILL.md)
+ * - Added hooks (A hooks/claude/[name].sh, Task 7)
+ * - Added engine gates (Task 7-8)
+ */
+function detectMinorSurfaces(changed: ChangedFile[]): Array<{ kind: string; files: string[] }> {
+  const signals: Array<{ kind: string; files: string[] }> = [];
+  const adderFiles: Map<string, Set<string>> = new Map();
+
+  for (const { status, path } of changed) {
+    // Only added (A status) files trigger MINOR signals
+    if (!status.startsWith('A')) {
+      continue;
+    }
+
+    // MINOR: Added skill definitions
+    if (/^skills\/[^/]+\/SKILL\.md$/.test(path)) {
+      if (!adderFiles.has('new skill')) {
+        adderFiles.set('new skill', new Set());
+      }
+      adderFiles.get('new skill')!.add(path);
+    }
+
+    // MINOR: Task 7 — Added hooks (A hooks/claude/[name].sh)
+    if (/^hooks\/claude\/[^/]+\.sh$/.test(path)) {
+      if (!adderFiles.has('new hook')) {
+        adderFiles.set('new hook', new Set());
+      }
+      adderFiles.get('new hook')!.add(path);
+    }
+
+    // TODO: Task 8 — Added engine gates
+  }
+
+  // Convert to signals array
+  for (const [kind, files] of adderFiles) {
+    signals.push({ kind, files: [...files] });
+  }
+
+  return signals;
+}
+
+/**
  * Classify a change set into a semantic version signal.
  * Returns PATCH when all files match PATCH_SAFE_GLOBS, MINOR/MAJOR when
  * specific surfaces are touched, or undeterminable (halt-worthy) when the
@@ -86,6 +130,10 @@ function detectMajorSurfaces(changed: ChangedFile[]): Array<{ kind: string; file
  *
  * Precedence:
  *   undeterminable > MAJOR > MINOR > PATCH
+ *
+ * Task 6: Signal accumulation
+ *   - Collects ALL signals (major + minor) for diagnostic purposes
+ *   - Reports the max level (MAJOR > MINOR > PATCH)
  */
 export function classifyVersionSignal(changed: ChangedFile[] | null): VersionSignal {
   // Fail-closed: null or empty is undeterminable, never patch-proof.
@@ -96,14 +144,22 @@ export function classifyVersionSignal(changed: ChangedFile[] | null): VersionSig
     };
   }
 
-  // Task 5 — MAJOR surface detection
+  // Task 6 — Signal accumulation: collect both MAJOR and MINOR
   const majorSignals = detectMajorSurfaces(changed);
+  const minorSignals = detectMinorSurfaces(changed);
+
+  // Precedence: MAJOR > MINOR > PATCH
   if (majorSignals.length > 0) {
-    return { level: 'major', signals: majorSignals };
+    // Combine all signals for diagnostics
+    const allSignals = [...majorSignals, ...minorSignals];
+    return { level: 'major', signals: allSignals };
   }
 
-  // TODO: Task 6 — mixed-signal precedence (collect all, report max level)
-  // TODO: Task 7 — MINOR signal detection (added SKILL.md, added hooks, added gates)
+  if (minorSignals.length > 0) {
+    return { level: 'minor', signals: minorSignals };
+  }
+
+  // TODO: Task 7 — Additional MINOR detection and MINOR near-misses
   // TODO: Task 8 — MINOR near-misses (HARNESS.md, supporting files without SKILL.md)
   // TODO: Task 9 — PATCH allow-list matching (every path must match PATCH_SAFE_GLOBS)
 
