@@ -52,6 +52,17 @@ export interface RekickSweepDeps {
    */
   lastRekickSha: Map<string, string>;
   log?: (msg: string) => void;
+  /**
+   * True when a slug's spec/implementation has already shipped (content-aware
+   * dedup). A processed slug skips the abort/clear/re-park cycle entirely —
+   * there is nothing left to re-kick. Absent → behavior is unchanged
+   * (backward-compatible). Throws → treated as NOT processed (fail-open).
+   */
+  isProcessed?: (slug: string) => Promise<boolean>;
+  /** Warn-once: has the "already shipped" skip already been logged for this slug? */
+  hasWarned?: (slug: string) => Promise<boolean>;
+  /** Warn-once: record that the "already shipped" skip was logged for this slug. */
+  markWarned?: (slug: string) => Promise<void>;
 }
 
 export interface RekickSweepResult {
@@ -82,6 +93,29 @@ export async function rekickSweep(
   }
 
   for (const slug of slugs) {
+    // Content-aware shipped-work dedup: a processed slug's spec/implementation
+    // already merged — skip the abort/clear/re-park cycle entirely. Fail-open:
+    // an isProcessed error is treated as NOT processed so the sweep proceeds
+    // as if dedup were absent.
+    if (deps.isProcessed) {
+      let processed = false;
+      try {
+        processed = await deps.isProcessed(slug);
+      } catch (err) {
+        log(`re-kick ${slug}: isProcessed check FAILED (${errMsg(err)}); treating as unprocessed`);
+        processed = false;
+      }
+      if (processed) {
+        skipped.push(slug);
+        const alreadyWarned = deps.hasWarned ? await deps.hasWarned(slug) : false;
+        if (!alreadyWarned) {
+          log(`re-kick ${slug}: skipping re-kick: ${slug} already shipped`);
+          if (deps.markWarned) await deps.markWarned(slug);
+        }
+        continue;
+      }
+    }
+
     // FR-9: bounded — already re-kicked at this SHA → leave parked.
     if (deps.lastRekickSha.get(slug) === sha) {
       skipped.push(slug);
