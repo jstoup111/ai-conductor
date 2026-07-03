@@ -735,6 +735,15 @@ dedicated test coverage (950+ tests). See the feature comparison in
   stories **and** plans, running each in its own worktree (parallel via `--concurrency N`,
   bounded by `--max-items`), and opening a PR on finish. Per-feature failures are isolated;
   the pool keeps going.
+- **Content-aware shipped-work dedup** (`.docs/shipped/<stem>.md`, #204, #205): the daemon's
+  backlog discovery and its main-advance re-kick sweep both dedup against a **committed**
+  record — `slug`, `spec_hash`, `pr`, `shipped` frontmatter written to the base branch by the
+  finish flow before merge — not just the local `.daemon/processed/` ledger. That ledger is
+  now a **cache**, repaired opportunistically from shipped records; it is no longer required
+  for correctness. A fresh clone or a wiped `.daemon/` directory therefore never re-dispatches
+  or re-kicks a spec whose implementation already merged, and a renamed-but-unchanged spec is
+  still caught by content-hash match. See
+  [`src/conductor/README.md`](src/conductor/README.md) for the full dedup contract.
 - **Engineer memory store** (daemon only): on each feature completion the daemon emits a
   structured learning signal + a narrative to a cross-project store at
   `~/.ai-conductor/engineer/` (override with `$AI_CONDUCTOR_ENGINEER_DIR`). `signals.jsonl` holds

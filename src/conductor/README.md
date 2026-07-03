@@ -429,6 +429,57 @@ things on top of that, without a parallel dispatch path:
   (bounded by the same last-rekick SHA); residual gaps route through the normal gate loop /
   `/remediate`, not the re-kick code.
 
+#### Content-aware shipped-work dedup (`.docs/shipped/<stem>.md`, #204, #205)
+
+Two bug reports (#204, #205) traced back to the same root cause: `.daemon/processed/` is a
+**local, uncommitted** ledger. A fresh clone, a wiped `.daemon/` cache, or a second machine
+building the same repo has no memory of what already shipped — so the daemon replayed
+already-merged specs (re-dispatching them at discovery, or re-kicking their halted worktrees
+on every base-SHA advance).
+
+- **`.docs/shipped/<stem>.md` — the durable dedup authority.** A committed, plain
+  frontmatter-only record written to the **base branch**, one per shipped spec:
+
+  ```
+  ---
+  slug: billing-export
+  spec_hash: 9f2c...  # sha256 of the plan (+ stories, if present)
+  pr: https://github.com/acme/repo/pull/152
+  shipped: 2026-07-01
+  ---
+  ```
+
+  It is written by the **finish flow**, on the **impl branch**, before merge — so it lands
+  in the same commit/PR as the shipped code, not as a separate follow-up. Because it's
+  committed, it survives clones, resets, and cache wipes exactly like the code it documents.
+  A record-write failure degrades gracefully and never blocks shipping.
+
+- **Discovery dedup (`discoverBacklog`, `daemon-backlog.ts`).** Every poll lists
+  `.docs/shipped/*.md` off the **base-branch tree** (one listing per poll, not one per
+  candidate) and skips any candidate whose stem matches a committed record. A candidate is
+  also skipped when its **content hash** (`specHash` — sha256 of the plan, and stories if
+  present, with only a trailing-newline run trimmed) matches a shipped record under a
+  **different** stem, catching specs that were renamed after shipping. A record that exists
+  only in the working tree (uncommitted) is ignored — only the base branch is authoritative,
+  matching the existing FR-24 plan/stories convention. A malformed record (unparseable
+  frontmatter) still dedups by stem and logs a warning rather than crashing discovery. A spec
+  that is both renamed **and** content-edited after shipping is not caught (documented
+  residual — neither stem nor hash matches) and is dispatched normally.
+
+- **Cache demotion: `.daemon/processed/` is now a cache, not the source of truth.** The
+  local ledger remains the **fast path** — a marker hit there short-circuits before ever
+  touching the shipped-record lookup — but it is no longer required for correctness. When a
+  shipped-record match resolves a candidate that has no local marker, the resolver opportunistically
+  **repairs** the cache (writes the marker) so the fast path is populated going forward. This
+  is what makes the fix survive a fresh clone: **zero** local ledger entries plus **any**
+  number of committed shipped records still yields zero re-dispatch.
+
+- **Rekick guard (`rekickSweep`, #205).** The main-advance re-kick sweep now checks the
+  same shared `isProcessed` resolver (ledger **or** shipped record) before re-kicking a
+  halted worktree. A feature whose spec already shipped is skipped — it no longer goes
+  through the abort-rebase / clear-marker / re-dispatch cycle on every subsequent base-SHA
+  advance, eliminating the spurious re-kicks #205 reported.
+
 #### Worktree preparation (`WORKTREE_NAMESPACE` + `bin/setup`)
 
 The daemon is **stack-agnostic**: it knows nothing about Docker, Postgres, or Redis. But an
