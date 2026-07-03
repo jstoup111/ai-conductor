@@ -417,6 +417,11 @@ harness_self_host:
   # sandbox_build_env: true
   # version_approval_gate: true
   # release_artifact_gate: true
+  # Declared version freeze (#261) — the operator's standing "current version, no
+  # bump" approval. While it matches the repo VERSION, the approval gate records
+  # .pipeline/version-approval itself instead of halting every self-build; any
+  # other VERSION still halts (a freeze never approves an actual bump).
+  # version_freeze: "0.99.19"
 
 # ── User-level conductor state (lives in ~/.ai-conductor/config.yml) ─────────
 conductor:

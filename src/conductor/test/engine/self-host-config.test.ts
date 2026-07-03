@@ -70,6 +70,22 @@ describe('config — harness_self_host validation (TR-11)', () => {
     if (result.ok) return;
     expect(result.error.message).toContain('harness_self_host');
   });
+
+  it('accepts a version_freeze string (#261)', () => {
+    const result = validateConfig({ harness_self_host: { version_freeze: '0.99.19' } });
+    expect(result.ok).toBe(true);
+  });
+
+  it('rejects a non-string or blank version_freeze with a keyed error (#261)', () => {
+    for (const bad of [true, 42, '   '] as const) {
+      const result = validateConfig({
+        harness_self_host: { version_freeze: bad as never },
+      });
+      expect(result.ok, `version_freeze=${String(bad)}`).toBe(false);
+      if (result.ok) continue;
+      expect(result.error.message).toContain('version_freeze');
+    }
+  });
 });
 
 describe('resolved-config — resolveSelfHostConfig (TR-11 safe defaults)', () => {
@@ -77,7 +93,7 @@ describe('resolved-config — resolveSelfHostConfig (TR-11 safe defaults)', () =
     expect(DEFAULT_SELF_HOST_ACTIVATION).toBe('auto');
   });
 
-  it('absent block → activation auto and ALL gates ON', () => {
+  it('absent block → activation auto, ALL gates ON, no freeze', () => {
     const resolved = resolveSelfHostConfig();
     expect(resolved).toEqual({
       activation: 'auto',
@@ -85,6 +101,7 @@ describe('resolved-config — resolveSelfHostConfig (TR-11 safe defaults)', () =
       sandboxBuildEnv: true,
       versionApprovalGate: true,
       releaseArtifactGate: true,
+      versionFreeze: null,
     });
   });
 
@@ -116,5 +133,15 @@ describe('resolved-config — resolveSelfHostConfig (TR-11 safe defaults)', () =
     expect(resolved.versionApprovalGate).toBe(false);
     expect(resolved.releaseArtifactGate).toBe(true);
     expect(resolved.sandboxBuildEnv).toBe(true);
+  });
+
+  it('version_freeze resolves trimmed; absent or blank → null (#261)', () => {
+    expect(
+      resolveSelfHostConfig({ harness_self_host: { version_freeze: ' 0.99.19\n' } }).versionFreeze,
+    ).toBe('0.99.19');
+    expect(resolveSelfHostConfig({ harness_self_host: {} }).versionFreeze).toBeNull();
+    expect(
+      resolveSelfHostConfig({ harness_self_host: { version_freeze: '   ' } }).versionFreeze,
+    ).toBeNull();
   });
 });

@@ -663,6 +663,7 @@ export class Conductor {
         projectRoot: this.projectRoot,
         harnessRoot: this.projectRoot,
         readText: (p) => this.readTextOrNull(p),
+        versionFreeze: sh.versionFreeze,
       });
       if (!verdict.ok) return verdict;
     }
