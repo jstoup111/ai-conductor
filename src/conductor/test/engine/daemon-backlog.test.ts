@@ -9,6 +9,7 @@ import {
   type BacklogTreeSource,
 } from '../../src/engine/daemon-backlog.js';
 import { parseComplexityTier } from '../../src/engine/artifacts.js';
+import { renderShippedRecord, parseShippedRecord } from '../../src/engine/shipped-record.js';
 
 const execFile = promisify(execFileCb);
 
@@ -966,5 +967,139 @@ describe('engine/daemon-backlog — owner-gate integration', () => {
     const line = logs.find((l) => /unstamped-again/.test(l));
     expect(line).toMatch(/un-owned/i); // un-owned branch, not "owned by another"
     expect(line).not.toMatch(/another operator/i);
+  });
+});
+
+describe('engine/daemon-backlog — shipped-record dedup (Story 3/Task 4)', () => {
+  let dir: string;
+  const APPROVED_STORIES = '# Stories\n**Status:** Accepted\n';
+  const planWithDeps = (storiesRef?: string) =>
+    `# Plan\n${storiesRef ? `**Stories:** ${storiesRef}\n` : ''}\n### Task 1\n**Dependencies:** none\n`;
+
+  const fsSource = (root: string): BacklogTreeSource => ({
+    async listPlanFiles() {
+      try {
+        return (await readdir(join(root, '.docs/plans'))).filter((f) => f.endsWith('.md'));
+      } catch {
+        return [];
+      }
+    },
+    async listShippedFiles() {
+      try {
+        return (await readdir(join(root, '.docs/shipped'))).filter((f) => f.endsWith('.md'));
+      } catch {
+        return [];
+      }
+    },
+    async readFile(relPath) {
+      try {
+        return await fsReadFile(join(root, relPath), 'utf-8');
+      } catch {
+        return null;
+      }
+    },
+  });
+
+  async function writeSpec(slug: string, stories = APPROVED_STORIES): Promise<void> {
+    await writeFile(join(dir, `.docs/plans/${slug}.md`), planWithDeps(`.docs/stories/${slug}.md`));
+    await writeFile(join(dir, `.docs/stories/${slug}.md`), stories);
+  }
+
+  async function writeShipped(slug: string): Promise<void> {
+    await mkdir(join(dir, '.docs/shipped'), { recursive: true });
+    await writeFile(
+      join(dir, `.docs/shipped/${slug}.md`),
+      renderShippedRecord({ slug, specHash: 'deadbeef' }),
+    );
+  }
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'daemon-backlog-shipped-'));
+    await mkdir(join(dir, '.docs/plans'), { recursive: true });
+    await mkdir(join(dir, '.docs/stories'), { recursive: true });
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('a candidate with a base-branch shipped record and no local cache hit is skipped and repaired', async () => {
+    await writeSpec('already-shipped');
+    await writeShipped('already-shipped');
+    const logs: string[] = [];
+    const repaired: Array<{ slug: string; record: ReturnType<typeof parseShippedRecord> }> = [];
+    const backlog = await discoverBacklog(dir, async () => false, (m) => logs.push(m), {
+      treeSource: fsSource(dir),
+      repairProcessed: async (slug, record) => {
+        repaired.push({ slug, record });
+      },
+    });
+    expect(backlog).toEqual([]);
+    expect(repaired).toHaveLength(1);
+    expect(repaired[0].slug).toBe('already-shipped');
+    expect(repaired[0].record).toMatchObject({ slug: 'already-shipped', specHash: 'deadbeef' });
+    expect(logs.join('\n')).toMatch(/already-shipped.*shipped dedup/i);
+  });
+
+  it('a candidate already marked processed locally is skipped WITHOUT consulting shipped records', async () => {
+    await writeSpec('cache-hit');
+    // Deliberately do NOT write a shipped record — if the dedup path were
+    // consulted first it would find nothing; the point is that isProcessed
+    // short-circuits BEFORE shipped-record lookup even happens.
+    let repairCalls = 0;
+    const backlog = await discoverBacklog(dir, async () => true, undefined, {
+      treeSource: fsSource(dir),
+      repairProcessed: async () => {
+        repairCalls += 1;
+      },
+    });
+    expect(backlog).toEqual([]);
+    expect(repairCalls).toBe(0);
+  });
+
+  it('a candidate with no shipped record proceeds to the owner gate unchanged', async () => {
+    await writeSpec('not-shipped');
+    const backlog = await discoverBacklog(dir, async () => false, undefined, {
+      treeSource: fsSource(dir),
+      daemonOwner: { resolved: true, id: 'alice' },
+      readStamp: async () => ({ present: true as const, id: 'alice' }),
+      readMergeTime: async () => null,
+      cutover: null,
+    });
+    expect(backlog.map((b) => b.slug)).toEqual(['not-shipped']);
+  });
+
+  it('repairProcessed throwing still skips the candidate, logs the error, and discovery continues', async () => {
+    await writeSpec('repair-fails');
+    await writeShipped('repair-fails');
+    await writeSpec('unaffected');
+    const logs: string[] = [];
+    const backlog = await discoverBacklog(dir, async () => false, (m) => logs.push(m), {
+      treeSource: fsSource(dir),
+      repairProcessed: async (slug) => {
+        if (slug === 'repair-fails') {
+          throw new Error('disk full');
+        }
+      },
+    });
+    expect(backlog.map((b) => b.slug)).toEqual(['unaffected']);
+    expect(logs.join('\n')).toMatch(/repair-fails/);
+    expect(logs.join('\n')).toMatch(/disk full/);
+  });
+
+  it('multiple candidates: shipped ones are skipped, unshipped ones proceed', async () => {
+    await writeSpec('ship-1');
+    await writeSpec('ship-2');
+    await writeSpec('fresh-1');
+    await writeShipped('ship-1');
+    await writeShipped('ship-2');
+    const repaired: string[] = [];
+    const backlog = await discoverBacklog(dir, async () => false, undefined, {
+      treeSource: fsSource(dir),
+      repairProcessed: async (slug) => {
+        repaired.push(slug);
+      },
+    });
+    expect(backlog.map((b) => b.slug).sort()).toEqual(['fresh-1']);
+    expect(repaired.sort()).toEqual(['ship-1', 'ship-2']);
   });
 });

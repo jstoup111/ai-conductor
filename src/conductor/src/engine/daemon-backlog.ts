@@ -15,6 +15,7 @@ import type { OwnerStamp } from './owner-gate/provenance.js';
 import { decideSpecGate, type GateDecision } from './owner-gate/gate.js';
 import type { BlockerResolver, BlockerVerdict } from './blocker-resolver.js';
 import { announceWaitingForRoot } from './daemon-waiting-announce.js';
+import { listShippedRecords, parseShippedRecord } from './shipped-record.js';
 
 const execFile = promisify(execFileCb);
 
@@ -240,6 +241,20 @@ export interface DiscoverBacklogOpts {
    * leaks stale verdicts between scans.
    */
   resolver?: BlockerResolver;
+  /**
+   * Content-aware shipped-work dedup (Story 3/Task 4). When a candidate's
+   * stem matches a shipped record committed on the base branch, the local
+   * `isProcessed` cache is out of sync with reality — the spec already
+   * shipped, but no local marker recorded it (e.g. the marker was never
+   * written, or the daemon's local state was reset). `repairProcessed` lets
+   * the caller repair that cache (write the missing marker) so the candidate
+   * is fast-path-skipped by `isProcessed` on every subsequent poll instead of
+   * being re-evaluated via shipped-record lookup every time. Optional — when
+   * unset, the dedup skip still happens but no repair is attempted. Errors
+   * thrown by `repairProcessed` are caught and logged; they never prevent the
+   * skip (correctness of the skip never depends on the repair succeeding).
+   */
+  repairProcessed?: (slug: string, record: ReturnType<typeof parseShippedRecord>) => Promise<void>;
 }
 
 /**
@@ -350,6 +365,12 @@ export async function discoverBacklog(
   const planFiles = (await tree.listPlanFiles()).filter((f) => f.endsWith('.md'));
   if (planFiles.length === 0) return { items: [], waiting: [] };
 
+  // Shipped-record dedup (Story 3/Task 4): read every committed shipped
+  // record from the base-branch tree ONCE per discovery run (not once per
+  // candidate — `listShippedRecords` already batches this via a single
+  // `listShippedFiles()` call), then match each candidate by stem below.
+  const shippedRecords = await listShippedRecords(tree);
+
   const items: BacklogItem[] = [];
   // slug -> raw (unparseable) Source-Ref text, for specs whose intake marker
   // is present but malformed (see the dependency-gate loop below).
@@ -383,6 +404,34 @@ export async function discoverBacklog(
       await warnOnce(
         slug,
         `skip ${slug}: merged spec cannot build — plan has no dependency tree ("## Task Dependency Graph" or "**Dependencies:**" lines). Fix the spec on the default branch; logged once.`,
+      );
+      continue;
+    }
+
+    // Shipped-work dedup (Story 3/Task 4): a content-eligible candidate whose
+    // stem matches a shipped record already committed on the base branch has
+    // already merged its implementation — never re-dispatch or re-kick it,
+    // even if the local `isProcessed` cache missed it (a stale/reset cache).
+    // Runs AFTER content filters (so a shipped spec is never mis-logged as
+    // "identity unresolved" or "owner gated") and BEFORE the owner gate (so a
+    // shipped spec with an unresolved identity or foreign owner stamp is still
+    // reported as shipped, not as an owner-gate skip).
+    const shippedMatch = shippedRecords.find((r) => r.stem === slug);
+    if (shippedMatch) {
+      try {
+        await opts.repairProcessed?.(slug, shippedMatch.record);
+      } catch (err) {
+        // Repair is best-effort only — correctness of the skip never depends
+        // on the local cache marker actually being written. Log and move on.
+        log(
+          `shipped dedup: ${slug} already shipped (base-branch record found) but repairing ` +
+            `the local processed-cache failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        continue;
+      }
+      await warnOnce(
+        slug,
+        `skip ${slug}: shipped dedup — implementation already merged (base-branch shipped record found); not re-dispatching.`,
       );
       continue;
     }
