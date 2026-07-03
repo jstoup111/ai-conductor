@@ -144,7 +144,57 @@ gh pr view --json number,url 2>&1
 
 ```bash
 git push -u origin HEAD
+```
 
+**Handle non-fast-forward rejection:**
+
+If `git push -u origin HEAD` is rejected as non-fast-forward (output contains "rejected"
+or "failed to push some refs"), your branch has been rebased on HEAD but
+`origin/<branch>` still holds pre-rebase commits. This is a normal, intended state
+after a sanctioned rebase — not a blocker.
+
+**Before force-pushing, prove `origin/<branch>` is stale:**
+
+1. **Fast path — merge-base proof:** Run:
+   ```
+   git merge-base --is-ancestor origin/<branch> ORIG_HEAD
+   ```
+   If this exits 0 (true), `origin/<branch>` is an ancestor of your pre-rebase HEAD.
+   This proves the remote is behind and safe to overwrite.
+
+2. **Fallback — reflog proof:** If merge-base fails, check the reflog:
+   ```
+   git reflog | grep "rebase: finish"
+   ```
+   If you see a "rebase: finish" entry, the branch was rebased as part of completion.
+   The pre-rebase state exists in ORIG_HEAD and the reflog. This proves staleness.
+
+**Once proof is obtained, reconcile with force-with-lease:**
+
+```bash
+git push --force-with-lease -u origin HEAD
+```
+
+This is safe because `--force-with-lease` aborts if the remote has new commits you
+don't know about — you've already verified it only has pre-rebase ones.
+
+**Explicitly forbidden — never do these:**
+- `git pull` — pulls `origin/<branch>` and merges; creates conflicts or undoes the rebase
+- `git fetch && git rebase origin/<branch>` — same effect, undoing the rebase
+- `git merge origin/<branch>` — creates a merge commit that contradicts the rebase
+
+All three corrupt the rebase and prevent the PR branch from reflecting the intended state.
+
+**Failure handling:**
+- **Staleness proof failed:** If merge-base exits non-zero and no "rebase: finish" reflog
+  entry is found, foreign commits exist on `origin/<branch>`. Stop, report the failure,
+  and do NOT push (manual resolution required).
+- **Lease failure:** If `--force-with-lease` fails with a rejection error, the remote
+  has moved past what was proven stale. Stop and report. Never use plain `--force`.
+
+**After successful push:**
+
+```bash
 gh pr create --title "<title>" --body "$(cat <<'EOF'
 <body>
 EOF
@@ -171,5 +221,8 @@ After creating/updating, output the PR URL.
 - [ ] No file-by-file listing in the body
 - [ ] No pasted planning artifacts or boilerplate
 - [ ] Testing section describes actual verification performed
+- [ ] If `git push -u origin HEAD` was rejected as non-fast-forward: staleness proof (merge-base or reflog) ran and passed
+- [ ] If proof passed and `--force-with-lease` was required: push succeeded and no plain `--force` was used
+- [ ] If staleness proof failed or `--force-with-lease` failed: push was not retried, failure was reported
 - [ ] PR was created/updated successfully
 - [ ] PR URL displayed to user
