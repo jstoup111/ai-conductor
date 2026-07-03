@@ -17,6 +17,7 @@ import {
   makeProductionGh,
   type GhRunner,
 } from './pr-labels.js';
+import { specHash as computeSpecHash } from './shipped-record.js';
 
 /**
  * Outcome of running the gate loop inside a feature's worktree, read from the
@@ -64,6 +65,17 @@ export interface FeatureRunnerDeps {
   /** Persist that a slug shipped (with its PR url, when opened) so
    *  discoverBacklog skips it next poll and the startup dashboard can link it. */
   markProcessed: (slug: string, prUrl?: string) => Promise<void>;
+  /**
+   * Task 11 (#204, #205): write + commit the `.docs/shipped/<slug>.md` record
+   * on the main checkout (base branch) once a feature ships, so future
+   * `discoverBacklog` polls can dedup by content even after a `.daemon/`
+   * ledger reset. Optional so existing test doubles that predate this field
+   * do not require updates. Best-effort at the call site: a throw here must
+   * never fail an otherwise-successful ship (see makeRunFeature's `done`
+   * branch, which wraps this call in try/catch and degrades to
+   * cache-only dedup on failure).
+   */
+  writeShippedRecord?: (params: { slug: string; specHash: string; pr: string }) => Promise<void>;
   /**
    * Daemon mode. When true, emit a structured engineer signal + narrative to the
    * cross-project engineer store on completion (Phase 9.1). Manual `/conduct` runs
@@ -195,6 +207,39 @@ export function makeRunFeature(
         }
 
         await deps.markProcessed(item.slug, outcome.prUrl);
+
+        // Task 11 (#204, #205): write the shipped record before teardown, while
+        // the worktree's committed spec (plan+stories) is still readable. The
+        // pr field is the finish-flow's PR URL when opened, or the literal
+        // string 'local' for merge-local finishes (outcome.prUrl absent).
+        // Best-effort: never let a write/commit failure fail an otherwise
+        // successful ship — degrade to local-ledger-only dedup instead.
+        if (deps.writeShippedRecord) {
+          try {
+            const planBytes = await readFile(
+              join(worktree.path, '.docs/plans', `${item.slug}.md`),
+            );
+            let storiesBytes: Buffer | null = null;
+            try {
+              storiesBytes = await readFile(
+                join(worktree.path, '.docs/stories', `${item.slug}.md`),
+              );
+            } catch {
+              storiesBytes = null;
+            }
+            const { digest } = computeSpecHash(planBytes, storiesBytes);
+            await deps.writeShippedRecord({
+              slug: item.slug,
+              specHash: digest,
+              pr: outcome.prUrl ?? 'local',
+            });
+          } catch (err) {
+            log(
+              `[daemon-runner] writeShippedRecord error: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
+        }
+
         await deps.teardownWorktree(worktree, false);
         log(`✓ ${item.slug} shipped${outcome.prUrl ? ` → ${outcome.prUrl}` : ''}`);
         // FR-14: sweep mergeable labels after feature completes.

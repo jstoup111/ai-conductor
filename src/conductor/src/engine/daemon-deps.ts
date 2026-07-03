@@ -12,6 +12,10 @@ import type {
 import { prepareWorktree } from './worktree-prepare.js';
 import { makeProductionGh } from './pr-labels.js';
 import { ensureWorktree } from './worktree-shared.js';
+import {
+  writeShippedRecord as persistShippedRecord,
+  renderShippedRecord,
+} from './shipped-record.js';
 
 export interface RealDepsConfig {
   /** The main checkout the daemon runs from. */
@@ -103,7 +107,49 @@ export function makeFeatureRunnerDeps(cfg: RealDepsConfig): FeatureRunnerDeps {
         'utf-8',
       );
     },
+
+    // Task 11 (#204, #205): write + commit `.docs/shipped/<slug>.md` on the
+    // MAIN checkout (which sits on the base branch) right after markProcessed,
+    // so content-aware dedup has a durable record even after a `.daemon/`
+    // ledger reset. Best-effort: any failure here (fs, git add, git commit)
+    // is logged once and swallowed — the caller (makeRunFeature) also wraps
+    // this call, but this handler must not throw on its own so a partial
+    // failure (e.g. write succeeds, git add fails) degrades to
+    // cache-only dedup rather than surfacing as a ship failure.
+    writeShippedRecord: async ({ slug, specHash, pr }) => {
+      const relPath = join('.docs', 'shipped', `${slug}.md`);
+      const filePath = join(cfg.projectRoot, relPath);
+      try {
+        await persistShippedRecord(
+          filePath,
+          renderShippedRecord({ slug, specHash, pr, shipped: todayIso() }),
+        );
+        await execa('git', ['add', relPath], { cwd: cfg.projectRoot });
+        // Only commit when the add actually staged a change — an idempotent
+        // re-run (identical content already committed) must not create a
+        // duplicate commit.
+        const staged = await execa('git', ['diff', '--cached', '--quiet', '--', relPath], {
+          cwd: cfg.projectRoot,
+          reject: false,
+        });
+        if (staged.exitCode !== 0) {
+          await execa('git', ['commit', '-m', `shipped record: ${slug}`, '--no-verify'], {
+            cwd: cfg.projectRoot,
+          });
+        }
+      } catch (err) {
+        cfg.log?.(
+          `[daemon-deps] writeShippedRecord failed for ${slug}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+    },
   };
+}
+
+function todayIso(): string {
+  return new Date().toISOString().slice(0, 10);
 }
 
 /**
