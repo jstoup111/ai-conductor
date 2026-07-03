@@ -705,3 +705,361 @@ describe('orderBacklog — banded stable sort with priority resolution', () => {
     expect(result[5].slug).toBe('a2');   // low (second)
   });
 });
+
+describe('orderBacklog — permutation and determinism properties', () => {
+  /**
+   * Helper: Simple seeded random number generator for reproducible test data.
+   * Uses linear congruential generator.
+   */
+  function seededRandom(seed: number): () => number {
+    return () => {
+      seed = (seed * 1103515245 + 12345) % 2147483648;
+      return seed / 2147483648;
+    };
+  }
+
+  /**
+   * Helper: Generate randomized backlog items with predictable seed.
+   */
+  function generateRandomBacklog(
+    count: number,
+    seed: number
+  ): BacklogItem[] {
+    const rng = seededRandom(seed);
+    const items: BacklogItem[] = [];
+
+    for (let i = 0; i < count; i++) {
+      const hasSourceRef = rng() > 0.3; // 70% have sourceRef
+      const item: BacklogItem = {
+        slug: `item-${i}`,
+        sourceRef: hasSourceRef ? `issue-${Math.floor(rng() * 10)}` : undefined,
+        createdAt: `2024-01-${(i % 28) + 1}`,
+      };
+      items.push(item);
+    }
+
+    return items;
+  }
+
+  /**
+   * Helper: Extract all slugs from backlog items for comparison.
+   */
+  function extractSlugs(items: BacklogItem[]): string[] {
+    return items.map((item) => item.slug);
+  }
+
+  /**
+   * Helper: Check if array a is a permutation of array b (same multiset).
+   */
+  function isPermutation<T>(a: T[], b: T[]): boolean {
+    if (a.length !== b.length) return false;
+    const aCopy = [...a].sort();
+    const bCopy = [...b].sort();
+    return aCopy.every((val, idx) => val === bCopy[idx]);
+  }
+
+  describe('permutation property — output is exact permutation of input', () => {
+    it('randomized input: verifies output is permutation (10 items, seeded)', () => {
+      const seed = 12345;
+      const items = generateRandomBacklog(10, seed);
+      const inputSlugs = extractSlugs(items);
+
+      const bands = new Map<string, PriorityResolution['bands'] extends Map<string, infer V> ? V : never>([
+        ['issue-0', 'high'],
+        ['issue-1', 'medium'],
+        ['issue-2', 'low'],
+      ]);
+      const res: PriorityResolution = { mode: 'banded', bands };
+
+      const result = orderBacklog(items, res);
+      const outputSlugs = extractSlugs(result);
+
+      // Verify permutation: same length, same multiset
+      expect(result).toHaveLength(items.length);
+      expect(isPermutation(inputSlugs, outputSlugs)).toBe(true);
+    });
+
+    it('randomized input: larger backlog (50 items, seeded)', () => {
+      const seed = 67890;
+      const items = generateRandomBacklog(50, seed);
+      const inputSlugs = extractSlugs(items);
+
+      // Create bands for all sourceRefs in the backlog
+      const bands = new Map<string, PriorityResolution['bands'] extends Map<string, infer V> ? V : never>();
+      for (let i = 0; i < 10; i++) {
+        const priorities: Array<PriorityResolution['bands'] extends Map<string, infer V> ? V : never> = ['high', 'medium', 'low'];
+        bands.set(`issue-${i}`, priorities[i % 3]);
+      }
+      const res: PriorityResolution = { mode: 'banded', bands };
+
+      const result = orderBacklog(items, res);
+      const outputSlugs = extractSlugs(result);
+
+      // Verify exact permutation
+      expect(result).toHaveLength(items.length);
+      expect(isPermutation(inputSlugs, outputSlugs)).toBe(true);
+    });
+
+    it('no items added or dropped from output', () => {
+      const items: BacklogItem[] = [
+        { slug: 'x', sourceRef: 'issue-1' },
+        { slug: 'y', sourceRef: 'issue-2' },
+        { slug: 'z' },
+      ];
+      const bands = new Map([
+        ['issue-1', 'high'],
+        ['issue-2', 'low'],
+      ]);
+      const res: PriorityResolution = { mode: 'banded', bands };
+
+      const result = orderBacklog(items, res);
+
+      // Length preserved
+      expect(result).toHaveLength(3);
+
+      // All input slugs present
+      const resultSlugs = new Set(result.map((item) => item.slug));
+      expect(resultSlugs.has('x')).toBe(true);
+      expect(resultSlugs.has('y')).toBe(true);
+      expect(resultSlugs.has('z')).toBe(true);
+
+      // No duplicates
+      expect(resultSlugs.size).toBe(3);
+    });
+
+    it('other fields (sourceRef, createdAt) are not mutated', () => {
+      const items: BacklogItem[] = [
+        { slug: 'item-1', sourceRef: 'issue-99', createdAt: '2024-06-15' },
+        { slug: 'item-2', sourceRef: 'issue-88', createdAt: '2024-07-20' },
+      ];
+      const bands = new Map([
+        ['issue-99', 'high'],
+        ['issue-88', 'medium'],
+      ]);
+      const res: PriorityResolution = { mode: 'banded', bands };
+
+      const result = orderBacklog(items, res);
+
+      // Find reordered items and verify fields preserved
+      const item1Result = result.find((item) => item.slug === 'item-1');
+      const item2Result = result.find((item) => item.slug === 'item-2');
+
+      expect(item1Result?.sourceRef).toBe('issue-99');
+      expect(item1Result?.createdAt).toBe('2024-06-15');
+      expect(item2Result?.sourceRef).toBe('issue-88');
+      expect(item2Result?.createdAt).toBe('2024-07-20');
+    });
+  });
+
+  describe('determinism property — repeated calls produce identical results', () => {
+    it('same input, called twice: output is identical', () => {
+      const items: BacklogItem[] = [
+        { slug: 'a', sourceRef: 'issue-x' },
+        { slug: 'b', sourceRef: 'issue-y' },
+        { slug: 'c' },
+      ];
+      const bands = new Map([
+        ['issue-x', 'low'],
+        ['issue-y', 'high'],
+      ]);
+      const res: PriorityResolution = { mode: 'banded', bands };
+
+      const result1 = orderBacklog(items, res);
+      const result2 = orderBacklog(items, res);
+
+      // Verify identical output
+      expect(result1).toEqual(result2);
+      expect(JSON.stringify(result1)).toBe(JSON.stringify(result2));
+    });
+
+    it('same input, called three times: all outputs identical', () => {
+      const items = generateRandomBacklog(20, 111);
+      const bands = new Map<string, PriorityResolution['bands'] extends Map<string, infer V> ? V : never>([
+        ['issue-0', 'high'],
+        ['issue-5', 'medium'],
+        ['issue-9', 'low'],
+      ]);
+      const res: PriorityResolution = { mode: 'banded', bands };
+
+      const result1 = orderBacklog(items, res);
+      const result2 = orderBacklog(items, res);
+      const result3 = orderBacklog(items, res);
+
+      expect(result1).toEqual(result2);
+      expect(result2).toEqual(result3);
+    });
+
+    it('different resolution but same items: order changes consistently', () => {
+      const items: BacklogItem[] = [
+        { slug: 'a', sourceRef: 'issue-1' },
+        { slug: 'b', sourceRef: 'issue-2' },
+      ];
+
+      // First resolution: issue-1 is high, issue-2 is low
+      const res1: PriorityResolution = {
+        mode: 'banded',
+        bands: new Map([
+          ['issue-1', 'high'],
+          ['issue-2', 'low'],
+        ]),
+      };
+
+      // Second resolution: issue-1 is low, issue-2 is high (reversed)
+      const res2: PriorityResolution = {
+        mode: 'banded',
+        bands: new Map([
+          ['issue-1', 'low'],
+          ['issue-2', 'high'],
+        ]),
+      };
+
+      const result1a = orderBacklog(items, res1);
+      const result1b = orderBacklog(items, res1);
+      const result2a = orderBacklog(items, res2);
+      const result2b = orderBacklog(items, res2);
+
+      // Each resolution is deterministic
+      expect(result1a).toEqual(result1b);
+      expect(result2a).toEqual(result2b);
+
+      // But different resolutions yield different orders
+      expect(result1a[0].slug).toBe('a'); // high comes first
+      expect(result2a[0].slug).toBe('b'); // high comes first (now issue-2)
+    });
+  });
+
+  describe('fallback/off modes — permutation property with mode preservation', () => {
+    it('fallback mode: output is permutation, returns input order', () => {
+      const items: BacklogItem[] = [
+        { slug: 'first', sourceRef: 'issue-a' },
+        { slug: 'second', sourceRef: 'issue-b' },
+        { slug: 'third' },
+      ];
+      const res: PriorityResolution = { mode: 'fallback' };
+
+      const result = orderBacklog(items, res);
+
+      // Verify permutation
+      expect(isPermutation(extractSlugs(items), extractSlugs(result))).toBe(true);
+
+      // Verify input order preserved
+      expect(result[0].slug).toBe('first');
+      expect(result[1].slug).toBe('second');
+      expect(result[2].slug).toBe('third');
+    });
+
+    it('fallback mode: deterministic (called twice)', () => {
+      const items = generateRandomBacklog(15, 222);
+      const res: PriorityResolution = { mode: 'fallback' };
+
+      const result1 = orderBacklog(items, res);
+      const result2 = orderBacklog(items, res);
+
+      expect(result1).toEqual(result2);
+    });
+
+    it('off mode: output is permutation, returns input order', () => {
+      const items: BacklogItem[] = [
+        { slug: 'a' },
+        { slug: 'b', sourceRef: 'issue-x' },
+        { slug: 'c' },
+      ];
+      const res: PriorityResolution = { mode: 'off' };
+
+      const result = orderBacklog(items, res);
+
+      // Verify permutation
+      expect(isPermutation(extractSlugs(items), extractSlugs(result))).toBe(true);
+
+      // Verify input order preserved
+      expect(result[0].slug).toBe('a');
+      expect(result[1].slug).toBe('b');
+      expect(result[2].slug).toBe('c');
+    });
+
+    it('off mode: deterministic (called twice)', () => {
+      const items = generateRandomBacklog(25, 333);
+      const res: PriorityResolution = { mode: 'off' };
+
+      const result1 = orderBacklog(items, res);
+      const result2 = orderBacklog(items, res);
+
+      expect(result1).toEqual(result2);
+    });
+
+    it('fallback and off modes both preserve input order identically', () => {
+      const items: BacklogItem[] = [
+        { slug: 'item-1', sourceRef: 'issue-1' },
+        { slug: 'item-2' },
+        { slug: 'item-3', sourceRef: 'issue-3' },
+      ];
+
+      const fallbackRes: PriorityResolution = { mode: 'fallback' };
+      const offRes: PriorityResolution = { mode: 'off' };
+
+      const fallbackResult = orderBacklog(items, fallbackRes);
+      const offResult = orderBacklog(items, offRes);
+
+      // Both should preserve input order
+      expect(extractSlugs(fallbackResult)).toEqual(['item-1', 'item-2', 'item-3']);
+      expect(extractSlugs(offResult)).toEqual(['item-1', 'item-2', 'item-3']);
+    });
+  });
+
+  describe('edge cases — permutation holds under edge conditions', () => {
+    it('single item: permutation trivially true', () => {
+      const items: BacklogItem[] = [{ slug: 'only' }];
+      const res: PriorityResolution = { mode: 'fallback' };
+
+      const result = orderBacklog(items, res);
+
+      expect(result).toHaveLength(1);
+      expect(result[0].slug).toBe('only');
+    });
+
+    it('empty input: returns empty output', () => {
+      const items: BacklogItem[] = [];
+      const res: PriorityResolution = { mode: 'banded', bands: new Map() };
+
+      const result = orderBacklog(items, res);
+
+      expect(result).toHaveLength(0);
+      expect(result).toEqual([]);
+    });
+
+    it('all items with same band: permutation holds with stable order', () => {
+      const items: BacklogItem[] = [
+        { slug: 'z', sourceRef: 'issue-1' },
+        { slug: 'a', sourceRef: 'issue-2' },
+        { slug: 'm', sourceRef: 'issue-3' },
+      ];
+      const bands = new Map([
+        ['issue-1', 'medium'],
+        ['issue-2', 'medium'],
+        ['issue-3', 'medium'],
+      ]);
+      const res: PriorityResolution = { mode: 'banded', bands };
+
+      const result = orderBacklog(items, res);
+
+      expect(isPermutation(extractSlugs(items), extractSlugs(result))).toBe(true);
+      // Should preserve input order when all in same band
+      expect(extractSlugs(result)).toEqual(['z', 'a', 'm']);
+    });
+
+    it('all items unlinked (no sourceRef): all in no-issue band, permutation holds', () => {
+      const items: BacklogItem[] = [
+        { slug: 'unlinked-1' },
+        { slug: 'unlinked-2' },
+        { slug: 'unlinked-3' },
+      ];
+      const res: PriorityResolution = { mode: 'banded', bands: new Map() };
+
+      const result = orderBacklog(items, res);
+
+      expect(isPermutation(extractSlugs(items), extractSlugs(result))).toBe(true);
+      expect(result).toHaveLength(3);
+      expect(result.every((item) => item.band === 'no-issue')).toBe(true);
+    });
+  });
+});
