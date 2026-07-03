@@ -157,6 +157,145 @@ describe('daemon ship path — shipped-record write (Task 11)', () => {
     await expect(readFile(recordPath, 'utf-8')).rejects.toThrow();
   });
 
+  // ───────────────────────────────────────────────────────────────────────────
+  // Task 12 (#204, #205): finish-side degrade + no-ship paths.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  it('write failure degrades: warns exactly once, ship verdict unaffected', async () => {
+    const logs: string[] = [];
+    const failing: FeatureRunnerDeps['writeShippedRecord'] = async () => {
+      throw new Error('ENOSPC: disk full');
+    };
+
+    const run = makeRunFeature({
+      ...baseDeps(
+        { done: true, halted: false, prUrl: 'https://github.com/acme/repo/pull/7' },
+        failing,
+      ),
+      log: (msg) => logs.push(msg),
+    });
+
+    const out = await run(ITEM);
+
+    // Finish verdict unchanged — ship completes exactly as though the write
+    // never happened.
+    expect(out.status).toBe('done');
+    expect(out.prUrl).toBe('https://github.com/acme/repo/pull/7');
+
+    const recordPath = join(projectRoot, `.docs/shipped/${ITEM.slug}.md`);
+    await expect(readFile(recordPath, 'utf-8')).rejects.toThrow();
+
+    // Exactly one warn, matching the required phrasing, no retries.
+    const warnLines = logs.filter((l) => l.includes('shipped-record write failed'));
+    expect(warnLines).toHaveLength(1);
+    expect(warnLines[0]).toContain(
+      `shipped-record write failed — dedup degraded to local cache for ${ITEM.slug}`,
+    );
+  });
+
+  it('commit failure degrades: warns exactly once, ship still completes, no record persists', async () => {
+    // Use the REAL git-backed deps factory, but force git writes (add/commit)
+    // to fail deterministically (independent of ambient global git config) by
+    // pre-seeding a stale `.git/index.lock` — every subsequent `git add`/`git
+    // commit` fails with "Unable to create ... File exists", exercising the
+    // same try/catch that guards the commit step regardless of exactly which
+    // git op inside it fails first.
+    await writeFile(join(projectRoot, '.git', 'index.lock'), '');
+
+    const logs: string[] = [];
+    const realDeps = makeFeatureRunnerDeps({
+      projectRoot,
+      worktreeBase: tmpdir(),
+      baseBranch: 'main',
+      runConductorInWorktree: async () => {},
+      provider: { invoke: async () => ({ success: true, output: '' }), invokeInteractive: async () => {} },
+      log: (msg) => logs.push(msg),
+    });
+
+    const run = makeRunFeature({
+      ...baseDeps(
+        { done: true, halted: false, prUrl: 'https://github.com/acme/repo/pull/9' },
+        realDeps.writeShippedRecord,
+      ),
+      log: (msg) => logs.push(msg),
+    });
+
+    const out = await run(ITEM);
+
+    // Ship still succeeds — the commit failure is caught and swallowed.
+    expect(out.status).toBe('done');
+
+    // No commit landed for the shipped record (git commit failed).
+    const log = await git(['log', '--format=%s']);
+    expect(log).not.toContain(`shipped record: ${ITEM.slug}`);
+
+    // Exactly one warn (from the daemon-deps handler), no throw surfaced.
+    const warnLines = logs.filter((l) => l.includes('shipped-record write failed'));
+    expect(warnLines).toHaveLength(1);
+    expect(warnLines[0]).toContain(
+      `shipped-record write failed — dedup degraded to local cache for ${ITEM.slug}`,
+    );
+  });
+
+  it('discard outcome: no record written, no .docs/shipped/<slug>.md anywhere', async () => {
+    const realDeps = makeFeatureRunnerDeps({
+      projectRoot,
+      worktreeBase: tmpdir(),
+      baseBranch: 'main',
+      runConductorInWorktree: async () => {},
+      provider: { invoke: async () => ({ success: true, output: '' }), invokeInteractive: async () => {} },
+    });
+
+    const run = makeRunFeature(
+      baseDeps(
+        { done: true, halted: false, prUrl: undefined, finishChoice: 'discard' },
+        realDeps.writeShippedRecord,
+      ),
+    );
+
+    const out = await run(ITEM);
+
+    // Finish flow unchanged — the loop still converges to 'done'.
+    expect(out.status).toBe('done');
+
+    const recordPath = join(projectRoot, `.docs/shipped/${ITEM.slug}.md`);
+    await expect(readFile(recordPath, 'utf-8')).rejects.toThrow();
+
+    const shippedStatus = await git(['status', '--porcelain', '--', '.docs/shipped']);
+    expect(shippedStatus).toBe('');
+    const log = await git(['log', '--format=%s']);
+    expect(log).not.toContain(`shipped record: ${ITEM.slug}`);
+  });
+
+  it('keep outcome: no record written, no .docs/shipped/<slug>.md anywhere', async () => {
+    const realDeps = makeFeatureRunnerDeps({
+      projectRoot,
+      worktreeBase: tmpdir(),
+      baseBranch: 'main',
+      runConductorInWorktree: async () => {},
+      provider: { invoke: async () => ({ success: true, output: '' }), invokeInteractive: async () => {} },
+    });
+
+    const run = makeRunFeature(
+      baseDeps(
+        { done: true, halted: false, prUrl: undefined, finishChoice: 'keep' },
+        realDeps.writeShippedRecord,
+      ),
+    );
+
+    const out = await run(ITEM);
+
+    expect(out.status).toBe('done');
+
+    const recordPath = join(projectRoot, `.docs/shipped/${ITEM.slug}.md`);
+    await expect(readFile(recordPath, 'utf-8')).rejects.toThrow();
+
+    const shippedStatus = await git(['status', '--porcelain', '--', '.docs/shipped']);
+    expect(shippedStatus).toBe('');
+    const log = await git(['log', '--format=%s']);
+    expect(log).not.toContain(`shipped record: ${ITEM.slug}`);
+  });
+
   it('idempotent re-run: identical content already committed produces no new commit', async () => {
     const realDeps = makeFeatureRunnerDeps({
       projectRoot,

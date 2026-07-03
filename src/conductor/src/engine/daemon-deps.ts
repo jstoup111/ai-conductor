@@ -16,6 +16,7 @@ import {
   writeShippedRecord as persistShippedRecord,
   renderShippedRecord,
 } from './shipped-record.js';
+import { FINISH_CHOICE_MARKER, FINISH_CHOICE_VALUES } from './artifacts.js';
 
 export interface RealDepsConfig {
   /** The main checkout the daemon runs from. */
@@ -138,8 +139,12 @@ export function makeFeatureRunnerDeps(cfg: RealDepsConfig): FeatureRunnerDeps {
           });
         }
       } catch (err) {
+        // Task 12 (#204, #205): fs write, `git add`, or `git commit` can each
+        // fail independently — any of them degrades dedup to the `.daemon/`
+        // ledger cache for this slug. A single warn, never a throw/retry: the
+        // ship itself already succeeded (markProcessed already ran).
         cfg.log?.(
-          `[daemon-deps] writeShippedRecord failed for ${slug}: ${
+          `[daemon-deps] shipped-record write failed — dedup degraded to local cache for ${slug}: ${
             err instanceof Error ? err.message : String(err)
           }`,
         );
@@ -239,7 +244,25 @@ export async function readWorktreeOutcome(worktreePath: string): Promise<Worktre
     /* no state / no pr_url */
   }
 
-  return { done, halted, reason, prUrl };
+  // Task 12 (#204, #205): read the finish skill's recorded outcome so the
+  // ship-record write can be skipped for `discard`/`keep` — the gate-driven
+  // loop converges (DONE) for every finish choice, so `done` alone can't
+  // distinguish a real ship from "the operator chose not to ship."
+  // Tolerant of a missing/malformed marker (undefined → treated as ship, the
+  // pre-Task-12 default for `pr`/`merge-local`).
+  let finishChoice: WorktreeOutcome['finishChoice'];
+  try {
+    const raw = (
+      await readFile(join(worktreePath, FINISH_CHOICE_MARKER), 'utf-8')
+    ).trim();
+    if ((FINISH_CHOICE_VALUES as readonly string[]).includes(raw)) {
+      finishChoice = raw as WorktreeOutcome['finishChoice'];
+    }
+  } catch {
+    /* no marker — leave undefined */
+  }
+
+  return { done, halted, reason, prUrl, finishChoice };
 }
 
 async function exists(p: string): Promise<boolean> {
