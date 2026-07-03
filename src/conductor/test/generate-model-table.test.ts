@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   spliceGeneratedRegion,
+  assertNoDuplicateRowNames,
   MarkerError,
   BEGIN_MARKER,
   END_MARKER,
@@ -123,5 +124,31 @@ describe('spliceGeneratedRegion (TS-2 happy path 1)', () => {
       const doc = PROSE_BEFORE + BEGIN_MARKER + '\n' + STALE_TABLE + '\n' + END_MARKER + ' trailing text' + PROSE_AFTER;
       expect(() => spliceGeneratedRegion(doc, NEW_TABLE)).toThrow(MarkerError);
     });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RED/GREEN specs for assertNoDuplicateRowNames (.docs/stories/
+// generated-model-table.md, TS-1 negative path 3; Task 3 of the
+// implementation plan).
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('assertNoDuplicateRowNames (TS-1 negative path 3)', () => {
+  it('does not throw when all engine and extra row names are unique', () => {
+    const engineRows = [{ name: 'plan' }, { name: 'stories' }];
+    const extraRows = [{ name: 'pr' }, { name: 'conduct' }];
+    expect(() => assertNoDuplicateRowNames(engineRows, extraRows)).not.toThrow();
+  });
+
+  it('throws when an extra row is named "plan", colliding with the engine row of the same name', () => {
+    const engineRows = [{ name: 'plan' }, { name: 'stories' }];
+    const extraRows = [{ name: 'plan' }, { name: 'conduct' }];
+    expect(() => assertNoDuplicateRowNames(engineRows, extraRows)).toThrow(/plan/);
+  });
+
+  it('throws when two extra rows share the same name', () => {
+    const engineRows = [{ name: 'plan' }];
+    const extraRows = [{ name: 'pr' }, { name: 'pr' }];
+    expect(() => assertNoDuplicateRowNames(engineRows, extraRows)).toThrow(/pr/);
   });
 });
