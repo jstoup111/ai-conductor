@@ -1095,14 +1095,20 @@ describe('Owner-gate: autonomous authoring threads owner deps into runAuthoring 
     };
     const { io } = scriptedIo(['dep bump', 'y', 'exit']);
 
-    const summary = await runEngineerMode({
-      route,
-      io,
-      gh,
-      registryPath,
-      engineerDir,
-      decide: makeTestDecide(),
-    });
+    // Hermetic HOME: the operator's real ~/.ai-conductor/config.yml (spec_owner)
+    // must not leak in and shadow the gh-login fallback under test.
+    const fakeHome = await makeUserHome();
+    const summary = await withHome(fakeHome, () =>
+      runEngineerMode({
+        route,
+        io,
+        gh,
+        registryPath,
+        engineerDir,
+        decide: makeTestDecide(),
+      }),
+    );
+    await rm(fakeHome, { recursive: true, force: true });
 
     expect(summary.ideasProcessed).toBe(1);
     const { stdout: marker } = await execFile(
