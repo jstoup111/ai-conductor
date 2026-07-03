@@ -1,4 +1,6 @@
 import { createHash } from 'node:crypto';
+import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { dirname } from 'node:path';
 
 /**
  * Result of hashing a plan/stories pair into a canonical spec identity.
@@ -72,4 +74,131 @@ function trimTrailingNewlines(bytes: Buffer): Buffer {
     end -= 1;
   }
   return bytes.subarray(0, end);
+}
+
+/**
+ * Fields required to render a committed shipped record's frontmatter.
+ */
+export interface ShippedRecordFields {
+  slug: string;
+  specHash: string;
+  pr?: string;
+  shipped?: string;
+}
+
+/**
+ * A shipped record successfully parsed from committed markdown.
+ */
+export interface ParsedShippedRecord {
+  slug: string;
+  specHash: string;
+  pr: string;
+  shipped: string;
+}
+
+/**
+ * Sentinel returned by parseShippedRecord when content does not match the
+ * expected frontmatter shape. `stem` is optional context the caller may
+ * attach (e.g. derived from the source filename) since malformed records
+ * still need to dedup by stem (see ADR 2026-07-03, Story 3).
+ */
+export interface MalformedShippedRecord {
+  malformed: true;
+  stem?: string;
+}
+
+const DEFAULT_PR = 'https://github.com/acme/repo/pull/0';
+
+function todayIso(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+/**
+ * renderShippedRecord serializes a shipped record's fields into the
+ * committed frontmatter-only markdown body persisted at
+ * `.docs/shipped/<stem>.md`. This is the write-side counterpart to
+ * parseShippedRecord; the two must stay round-trip compatible.
+ */
+export function renderShippedRecord(fields: ShippedRecordFields): string {
+  const pr = fields.pr ?? DEFAULT_PR;
+  const shipped = fields.shipped ?? todayIso();
+
+  return (
+    `---\n` +
+    `slug: ${fields.slug}\n` +
+    `spec_hash: ${fields.specHash}\n` +
+    `pr: ${pr}\n` +
+    `shipped: ${shipped}\n` +
+    `---\n`
+  );
+}
+
+const FRONTMATTER_LINE = /^([a-zA-Z_]+):\s*(.*)$/;
+
+/**
+ * parseShippedRecord reads back a committed shipped record. It never throws:
+ * malformed or unrecognized content yields `{ malformed: true }` so callers
+ * (discovery dedup) can still fall back to stem-based matching rather than
+ * crashing on a hand-edited or corrupted record (Story 3).
+ */
+export function parseShippedRecord(
+  content: string
+): ParsedShippedRecord | MalformedShippedRecord {
+  const lines = content.split('\n');
+  if (lines[0]?.trim() !== '---') {
+    return { malformed: true };
+  }
+
+  const fields: Record<string, string> = {};
+  let closed = false;
+  for (let i = 1; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (line.trim() === '---') {
+      closed = true;
+      break;
+    }
+    const match = FRONTMATTER_LINE.exec(line);
+    if (!match) {
+      continue;
+    }
+    fields[match[1]] = match[2].trim();
+  }
+
+  if (!closed) {
+    return { malformed: true };
+  }
+
+  const { slug, spec_hash: specHash, pr, shipped } = fields;
+  if (!slug || !specHash) {
+    return { malformed: true };
+  }
+
+  return {
+    slug,
+    specHash,
+    pr: pr ?? DEFAULT_PR,
+    shipped: shipped ?? todayIso(),
+  };
+}
+
+/**
+ * writeShippedRecord persists a shipped record's rendered body at filePath,
+ * creating parent directories as needed. Idempotent: if a file already
+ * exists at filePath with byte-identical content, this is a no-op (no
+ * unnecessary write, no error); differing content overwrites.
+ */
+export async function writeShippedRecord(filePath: string, content: string): Promise<void> {
+  let existing: string | undefined;
+  try {
+    existing = await readFile(filePath, 'utf8');
+  } catch {
+    existing = undefined;
+  }
+
+  if (existing === content) {
+    return;
+  }
+
+  await mkdir(dirname(filePath), { recursive: true });
+  await writeFile(filePath, content, 'utf8');
 }
