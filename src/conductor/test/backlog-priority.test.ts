@@ -660,6 +660,69 @@ describe('createPriorityResolver — stateful resolver with caching', () => {
       expect(result.mode).toBe('fallback'); // Whole-scan fallback, not partial banded
       expect(warnLog.length).toBe(1); // Exactly one warning
     });
+
+    it('outage persists across refresh:false resolves — fallback, no repeat warning', async () => {
+      const warnLog: string[] = [];
+      const reader = async (_refs: string[]): Promise<Map<string, string[] | 'not-found'>> => {
+        throw new Error('transport failure');
+      };
+
+      const resolver = createPriorityResolver(reader, (msg: string) => warnLog.push(msg));
+
+      const items: BacklogItem[] = [
+        { slug: 'feature-1', sourceRef: 'owner/repo#1' },
+        { slug: 'feature-2', sourceRef: 'owner/repo#2' },
+      ];
+
+      // Refresh scan fails: outage begins
+      let result = await resolver.resolve(items, { refresh: true });
+      expect(result.mode).toBe('fallback');
+      expect(warnLog.length).toBe(1);
+
+      // Non-refresh resolve during the outage (daemon poll path): still fallback,
+      // never pseudo-banded over the cleared cache, and no second warning
+      result = await resolver.resolve(items, { refresh: false });
+      expect(result.mode).toBe('fallback');
+      expect(warnLog.length).toBe(1);
+    });
+
+    it('after a successful refresh, refresh:false serves banded from the repopulated cache', async () => {
+      const warnLog: string[] = [];
+      const callLog: string[] = [];
+      let shouldFail = true;
+      const labelMap = new Map<string, string[]>([['owner/repo#1', ['priority: high']]]);
+
+      const reader = async (refs: string[]) => {
+        callLog.push(`read:${refs.join(',')}`);
+        if (shouldFail) {
+          throw new Error('transport failure');
+        }
+        const result = new Map<string, string[] | 'not-found'>();
+        for (const ref of refs) {
+          result.set(ref, labelMap.get(ref) || 'not-found');
+        }
+        return result;
+      };
+
+      const resolver = createPriorityResolver(reader, (msg: string) => warnLog.push(msg));
+
+      const items: BacklogItem[] = [{ slug: 'feature-1', sourceRef: 'owner/repo#1' }];
+
+      // Outage, then recovery on the next refresh scan
+      let result = await resolver.resolve(items, { refresh: true });
+      expect(result.mode).toBe('fallback');
+      shouldFail = false;
+      result = await resolver.resolve(items, { refresh: true });
+      expect(result.mode).toBe('banded');
+      const callsAfterRecovery = callLog.length;
+
+      // Non-refresh resolve after recovery: banded from the repopulated cache,
+      // with zero additional reader calls (cache-hit contract intact)
+      result = await resolver.resolve(items, { refresh: false });
+      expect(result.mode).toBe('banded');
+      expect(result.bands.get('owner/repo#1')).toBe('high');
+      expect(callLog.length).toBe(callsAfterRecovery);
+    });
   });
 });
 

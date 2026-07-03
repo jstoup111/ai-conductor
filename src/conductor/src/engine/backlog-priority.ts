@@ -78,6 +78,8 @@ export function parsePriorityLabels(labels: string[]): 'high' | 'medium' | 'low'
  * - On `refresh: true`: fetches all linked refs via the reader, updates cache, returns bands
  * - On `refresh: false`: returns cached bands with zero reader calls (cache hit)
  * - On reader throw: clears cache, returns fallback mode, logs exactly one warning per outage
+ * - Fallback persists across `refresh: false` resolves until a successful refresh resets the
+ *   outage state — a non-refresh resolve during an outage never pseudo-bands the empty cache
  *
  * @param reader Function that fetches labels for issue references
  * @param log Function for logging resolver actions (including warnings)
@@ -133,6 +135,15 @@ export function createPriorityResolver(
             return { mode: 'fallback' };
           }
         }
+      }
+
+      // During an active outage every resolve degrades to fallback — including
+      // refresh:false polls, which would otherwise pseudo-band the cleared cache
+      // and invert the priority contract. A successful refresh above has already
+      // reset the flag, so recovery resumes banding naturally. No logging here:
+      // the once-per-outage warning at the catch site stays the only warn site.
+      if (inOutage) {
+        return { mode: 'fallback' };
       }
 
       // Build resolution from cache
