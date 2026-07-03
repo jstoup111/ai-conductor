@@ -18,6 +18,7 @@ import {
   type GhRunner,
 } from './pr-labels.js';
 import { specHash as computeSpecHash } from './shipped-record.js';
+import type { FinishChoice } from './artifacts.js';
 
 /**
  * Outcome of running the gate loop inside a feature's worktree, read from the
@@ -29,6 +30,16 @@ export interface WorktreeOutcome {
   reason?: string;
   prUrl?: string;
   costTokens?: number;
+  /**
+   * Task 12 (#204, #205): the finish skill's recorded outcome (from
+   * `.pipeline/finish-choice`), when readable. Gates the shipped-record write —
+   * `discard`/`keep` are no-ship outcomes and must never produce a
+   * `.docs/shipped/<slug>.md` record, even though the gate-driven loop still
+   * converges (writes DONE) for them like any other finish choice. Optional so
+   * existing test doubles that predate this field default to the ship-record
+   * write firing (matches pre-Task-12 behavior for `pr`/`merge-local`).
+   */
+  finishChoice?: FinishChoice;
 }
 
 export interface FeatureWorktree {
@@ -214,7 +225,16 @@ export function makeRunFeature(
         // string 'local' for merge-local finishes (outcome.prUrl absent).
         // Best-effort: never let a write/commit failure fail an otherwise
         // successful ship — degrade to local-ledger-only dedup instead.
-        if (deps.writeShippedRecord) {
+        //
+        // Task 12 (#204, #205): `discard`/`keep` are no-ship outcomes — the
+        // gate-driven loop still converges (writes DONE) for them like any
+        // other finish choice, so `outcome.done` alone can't distinguish a
+        // real ship from "the operator chose not to ship." Skip the write
+        // entirely when the finish skill recorded one of those choices; no
+        // `.docs/shipped/<slug>.md` record must ever appear for them.
+        const isNoShipChoice =
+          outcome.finishChoice === 'discard' || outcome.finishChoice === 'keep';
+        if (deps.writeShippedRecord && !isNoShipChoice) {
           try {
             const planBytes = await readFile(
               join(worktree.path, '.docs/plans', `${item.slug}.md`),
@@ -234,8 +254,14 @@ export function makeRunFeature(
               pr: outcome.prUrl ?? 'local',
             });
           } catch (err) {
+            // Task 12 (#204, #205): a single warn, never a throw — the ship
+            // already completed (markProcessed above), so a write/commit
+            // failure here only means dedup falls back to the `.daemon/`
+            // ledger cache for this slug, not that the ship failed.
             log(
-              `[daemon-runner] writeShippedRecord error: ${err instanceof Error ? err.message : String(err)}`,
+              `[daemon-runner] shipped-record write failed — dedup degraded to local cache for ${item.slug}: ${
+                err instanceof Error ? err.message : String(err)
+              }`,
             );
           }
         }
