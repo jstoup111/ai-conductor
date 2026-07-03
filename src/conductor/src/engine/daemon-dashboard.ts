@@ -107,16 +107,6 @@ export interface ScanInheritedStateDeps {
   discover: () => Promise<BacklogItem[] | { items: BacklogItem[]; waiting: WaitingEntry[] }>;
   /** Optional log sink for skipped-worktree diagnostics. */
   log?: (msg: string) => void;
-  /**
-   * Optional priority resolver. When provided, used to generate a resolution
-   * result that's included in the returned InheritedState for dashboard display
-   * (band annotations in banded mode, fallback marker in fallback mode).
-   * Absent → no priority resolution computed; resolved state renders items in
-   * discovery order without band annotations.
-   */
-  resolver?: {
-    resolve(items: BacklogItem[], options: { refresh: boolean }): Promise<PriorityResolution>;
-  };
 }
 
 /** List immediate subdirectory names of `dir`; `[]` when `dir` is absent. */

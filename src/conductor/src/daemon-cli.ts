@@ -489,7 +489,6 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
           processedDir,
           discover: () => discoverTick({ refresh: true }),
           log,
-          resolver: priorityResolver, // Task 13: pass resolver to dashboard
         });
         log(`\n${renderDashboard(state)}`);
       },
