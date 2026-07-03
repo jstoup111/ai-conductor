@@ -30,6 +30,8 @@ import { readSpecOwnerStamp } from './engine/owner-gate/provenance.js';
 import { firstAppearanceTime } from './engine/owner-gate/merge-time.js';
 import { clampDaemonConcurrency } from './engine/daemon-command.js';
 import { makeRunFeature, type FeatureWorktree } from './engine/daemon-runner.js';
+import { createBlockerResolver } from './engine/blocker-resolver.js';
+import { createGhBlockerRunner } from './engine/gh-blocker-runner.js';
 import {
   isHalted,
   isProcessed,
@@ -415,6 +417,12 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       readMergeTime: (slug) =>
         firstAppearanceTime(ownerGit, baseBranch, `.docs/plans/${slug}.md`),
       cutover: config?.owner_gate_cutover ?? null,
+      // Dependency gate (rem-fr4-2): fresh BlockerResolver per discover() pass
+      // — see LocalWorkSourceDeps.makeResolver doc — so the per-pass memo in
+      // createBlockerResolver() never leaks stale verdicts across polls. The
+      // real `gh` binary backs the runner in production, the only production
+      // caller of createGhBlockerRunner().
+      makeResolver: () => createBlockerResolver({ run: createGhBlockerRunner() }),
     });
   const discoverTick = (o: { refresh: boolean }) => workSource.discover(o);
 

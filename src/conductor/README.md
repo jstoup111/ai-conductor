@@ -393,7 +393,9 @@ things on top of that, without a parallel dispatch path:
 - **Startup inherited-state dashboard (`daemon-dashboard.ts`).** Before any dispatch, the
   daemon scans `.worktrees/*/` (`.pipeline/HALT`, `conduct-state.json`) and the
   `.daemon/processed/` ledger and prints one grouped dashboard to **both** stdout and
-  `daemon.log` — four groups with precedence **HALTED > PROCESSED > IN-PROGRESS > ELIGIBLE**.
+  `daemon.log` — five groups with precedence
+  **HALTED > PROCESSED > IN-PROGRESS > WAITING > ELIGIBLE** (WAITING lists build-ready specs
+  held back by an unresolved dependency — see "Dependency-ordered intake and dispatch" below).
   Each row carries the bits an operator triages on, mined best-effort from the worktree's
   `conduct-state.json` (and the ledger): HALTED (slug + complexity tier + the step it reached
   + first line of the HALT reason + any open PR link), IN-PROGRESS (slug + tier + last
@@ -901,6 +903,56 @@ through an injected `gh` runner — it never touches a registered repo's working
 
 State lives under the engineer dir (`$AI_CONDUCTOR_ENGINEER_DIR`, default `~/.ai-conductor/engineer/`):
 `ledger.json` (dedup + lifecycle) and `inbox/` (the claimable queue).
+
+#### Dependency-ordered intake and dispatch
+
+Specs authored from a GitHub issue can declare a dependency on another issue via GitHub's
+native **issue-dependencies** API (`blocked_by`). Both the daemon's build gate and the
+engineer's intake claim walk honor that link, so a spec never dispatches or builds ahead of
+work it depends on.
+
+- **Blocker resolver (`engine/blocker-resolver.ts`, `createBlockerResolver`).** Given a
+  `Source-Ref: owner/repo#N` (see GitHub-issues intake above), resolves one of four verdicts:
+  `unblocked` (no open blockers), `blocked` (one or more open blockers, listed), `cycle` (a
+  dependency cycle detected via a DFS walk of the `blocked_by` chain — every cycle member gets
+  the same verdict so any one of them can be queried directly), or `indeterminate` (a `gh` API
+  error, an unparseable response, or an unparseable `sourceRef`). All GitHub access goes through
+  the injected `BlockerRunner` (`gh-blocker-runner.ts`), matching the DI pattern used elsewhere.
+  Verdicts are memoized per resolver instance (one scan pass) — never shared across instances.
+- **Daemon dependency gate (`daemon-backlog.ts` / `daemon-dashboard.ts`).** A build-ready spec
+  whose blocker verdict is not `unblocked` is held out of ELIGIBLE and instead reported in a
+  dedicated **WAITING** group in the startup dashboard (precedence
+  **HALTED > PROCESSED > IN-PROGRESS > WAITING > ELIGIBLE**) — never silently dropped, and never
+  double-listed in ELIGIBLE. Each WAITING row names the slug and a verdict-specific detail (the
+  open blocker(s), the cycle members, or the indeterminate error). `daemon-waiting-announce.ts`
+  warns **once** per slug per verdict — re-announcing only when the verdict's content actually
+  changes (a new/removed blocker, or a kind change) — so a spec parked on a slow-moving blocker
+  doesn't spam `daemon.log` on every poll tick; a spec that leaves and later re-enters WAITING is
+  treated as a fresh wait.
+- **Engineer intake claim deferral (`engineer/intake/dependency-claim.ts`,
+  `claimUnblocked`).** The claim walk pulls pending intake entries oldest-first via the
+  queue's own atomic `claim()`, resolving each entry's dependency verdict; any entry that isn't
+  `unblocked` is **deferred** — released back to the queue unchanged (no ledger write, no
+  attempt increment) — and the walk continues to the next-oldest entry. The first `unblocked`
+  entry found is claimed (oldest-unblocked-wins), even if older blocked entries were skipped
+  over.
+- **All-blocked outcome, distinct from empty.** If the walk exhausts the queue without finding
+  an unblocked entry, the outcome is `{ kind: 'all-blocked', entries }` — listing every deferred
+  entry and its verdict — rather than `{ kind: 'empty' }`. This lets an operator tell "nothing to
+  do" apart from "there's work, but it's all stuck on dependencies," and see exactly what it's
+  stuck on.
+- **`conduct-ts engineer migrate-issue-deps [--confirm]`.** A one-time migration tool for repos
+  whose existing issues describe dependencies as prose (e.g. "blocked by #12") rather than
+  GitHub's native issue-dependencies link. Dry-run by default (prints a proposal of the links it
+  would create); `--confirm` actually creates them via the GitHub API. Intended to be run once
+  per repo when adopting this feature, so pre-existing prose dependencies become resolvable by
+  the blocker resolver above.
+- **Fail-closed semantics.** Every failure mode here — a `gh` API error, an unparseable
+  `blocked_by` response, an unparseable `sourceRef`, a detected cycle — resolves to
+  `indeterminate` or `cycle`, never `unblocked`. An indeterminate or cyclic spec is held in
+  WAITING (daemon) or deferred (intake claim), not dispatched or built; a malformed or
+  unreadable dependency marker can only make a spec wait longer, never jump the queue or build
+  early.
 
 #### Daemon liveness (pidfile-lock)
 

@@ -172,9 +172,20 @@ CI and conflict state, so you can filter the PR list by merge-readiness. Both la
 daemon-only; interactive runs are unchanged.
 
 On startup, before any dispatch, the daemon prints a grouped **inherited-state
-dashboard** (HALTED / IN-PROGRESS / ELIGIBLE / PROCESSED) to both your terminal and
-`daemon.log`. Each row shows the bits you triage on — complexity tier, the step a
+dashboard** (HALTED / IN-PROGRESS / **WAITING** / ELIGIBLE / PROCESSED) to both your
+terminal and `daemon.log`. Each row shows the bits you triage on — complexity tier, the step a
 feature reached, and the PR link once one is open (shipped features list their PR too).
+**WAITING** lists build-ready specs held back by an unresolved GitHub issue dependency (a
+`Source-Ref:` marker linked via GitHub's issue-dependencies API): the gate resolves each spec's
+blocker chain and holds it out of ELIGIBLE until every blocker closes, distinguishing "blocked
+by another open issue," "blocked by a dependency cycle," and "indeterminate" (a `gh` API error
+or unparseable marker — fails closed, never dispatched). The engineer's intake claim similarly
+skips blocked ideas and claims the oldest **unblocked** one, reporting a distinct "all-blocked"
+outcome (never confused with an empty queue) when every pending idea is stuck. A one-time
+`conduct-ts engineer migrate-issue-deps [--confirm]` command migrates repos whose issues
+describe dependencies as prose into real GitHub issue-dependency links so the gate can see them.
+See [`src/conductor/README.md`](src/conductor/README.md#dependency-ordered-intake-and-dispatch)
+for details.
 It also tracks the base-branch tip SHA (`.daemon/last-base-sha`): when
 the base branch **actually advances** — live, or while the daemon was down — it
 **re-kicks every halted feature** (aborting any paused rebase, preserving the reason

@@ -4,6 +4,7 @@ import { HALT_MARKER } from './halt-marker.js';
 import type { BacklogItem } from './daemon.js';
 import { ALL_STEPS } from './steps.js';
 import type { ComplexityTier, StepStatus } from '../types/index.js';
+import type { BlockerVerdict, IssueRef } from './blocker-resolver.js';
 
 // ── Startup inherited-state dashboard (ADR-013 / FR-1, FR-2, FR-3) ────────────
 //
@@ -56,6 +57,16 @@ export interface ProcessedEntry {
   prUrl?: string;
 }
 
+/**
+ * A spec held back by an unresolved dependency gate (FR-6). Carries the
+ * closed `BlockerVerdict` union so the dashboard can render blockers, cycle
+ * members, or an indeterminate reason without re-deriving them.
+ */
+export interface WaitingEntry {
+  slug: string;
+  verdict: BlockerVerdict;
+}
+
 export interface InheritedState {
   halted: HaltedEntry[];
   inProgress: InProgressEntry[];
@@ -63,6 +74,13 @@ export interface InheritedState {
   processed: ProcessedEntry[];
   /** Convenience count of `processed` (kept for callers that only need the total). */
   processedCount: number;
+  /**
+   * Specs waiting on an unresolved dependency (FR-6). Optional for backward
+   * compatibility with callers built before this bucket existed; renders as a
+   * single WAITING group (not split by verdict kind), with precedence
+   * HALTED > PROCESSED > IN-PROGRESS > WAITING > ELIGIBLE.
+   */
+  waiting?: WaitingEntry[];
 }
 
 export interface ScanInheritedStateDeps {
@@ -70,8 +88,13 @@ export interface ScanInheritedStateDeps {
   worktreeBase: string;
   /** The `.daemon/processed/` ledger directory. */
   processedDir: string;
-  /** Backlog discovery (build-ready items this scan) — usually `discoverBacklog`. */
-  discover: () => Promise<BacklogItem[]>;
+  /**
+   * Backlog discovery — usually `discoverBacklog`. Returns build-ready
+   * `items` alongside `waiting` (specs held back by an unresolved dependency
+   * gate, FR-6). A bare-array return (pre-widened callers) is also accepted
+   * for backward compatibility and treated as `{ items, waiting: [] }`.
+   */
+  discover: () => Promise<BacklogItem[] | { items: BacklogItem[]; waiting: WaitingEntry[] }>;
   /** Optional log sink for skipped-worktree diagnostics. */
   log?: (msg: string) => void;
 }
@@ -257,9 +280,14 @@ export async function scanInheritedState(
 
   // ELIGIBLE: build-ready items this scan that are neither halted nor processed,
   // carrying their tier so the operator sees the size of what's queued.
+  // WAITING: specs held back by an unresolved dependency gate (FR-6) — a
+  // bare-array `discover()` (pre-widened callers) yields no waiting items.
   let eligible: EligibleEntry[] = [];
+  let waiting: WaitingEntry[] = [];
   try {
-    const backlog = await deps.discover();
+    const result = await deps.discover();
+    const backlog = Array.isArray(result) ? result : result.items;
+    waiting = Array.isArray(result) ? [] : result.waiting;
     eligible = backlog
       .filter((b) => !haltedSlugs.has(b.slug) && !processedSlugs.has(b.slug))
       .map((b) => ({ slug: b.slug, tier: b.tier }));
@@ -269,7 +297,7 @@ export async function scanInheritedState(
     );
   }
 
-  return { halted, inProgress, eligible, processed, processedCount: processed.length };
+  return { halted, inProgress, eligible, processed, processedCount: processed.length, waiting };
 }
 
 // ── Render helpers ────────────────────────────────────────────────────────────
@@ -284,11 +312,35 @@ function prSuffix(prUrl?: string): string {
   return prUrl ? `  → ${prUrl}` : '';
 }
 
+/** `repo#number` formatting for a blocker/cycle-member ref. */
+export function refLabel(ref: IssueRef): string {
+  return `${ref.repo}#${ref.number}`;
+}
+
+/** Verdict-kind-specific detail suffix for a WAITING row. */
+export function waitingDetail(verdict: BlockerVerdict): string {
+  switch (verdict.kind) {
+    case 'blocked':
+      return `blocked by ${verdict.blockers.map(refLabel).join(', ')}`;
+    case 'cycle':
+      return `cycle: ${verdict.members.map(refLabel).join(', ')}`;
+    case 'indeterminate':
+      return `indeterminate: ${verdict.detail}`;
+    case 'unblocked':
+      return 'unblocked';
+  }
+}
+
 /**
- * Render the four-group dashboard as a single plain-text block. Each group
+ * Render the five-group dashboard as a single plain-text block. Each group
  * carries a count and lists its members with the bits an operator triages on:
  * tier, step, PR link, halt reason. PROCESSED lists each shipped slug with its
- * PR link when one was persisted. Zero-state renders every group at `0`.
+ * PR link when one was persisted. WAITING lists each slug held back by an
+ * unresolved dependency gate with its blockers/cycle members/indeterminate
+ * reason (FR-6) — a single bucket, not split by verdict kind, rendered after
+ * IN-PROGRESS and before ELIGIBLE (precedence HALTED > PROCESSED >
+ * IN-PROGRESS > WAITING > ELIGIBLE). Omitted entirely when `waiting` is
+ * absent or empty. Zero-state renders every present group at `0`.
  */
 export function renderDashboard(state: InheritedState): string {
   const lines: string[] = [];
@@ -305,8 +357,21 @@ export function renderDashboard(state: InheritedState): string {
     lines.push(`  • ${p.slug}${tierTag(p.tier)} @${p.step}${prSuffix(p.prUrl)}`);
   }
 
-  lines.push(`ELIGIBLE (${state.eligible.length})`);
-  for (const e of state.eligible) lines.push(`  • ${e.slug}${tierTag(e.tier)}`);
+  const waiting = state.waiting ?? [];
+  const waitingSlugs = new Set(waiting.map((w) => w.slug));
+  if (waiting.length > 0) {
+    lines.push(`WAITING (${waiting.length})`);
+    for (const w of waiting) {
+      lines.push(`  • ${w.slug} — ${waitingDetail(w.verdict)}`);
+    }
+  }
+
+  // Defensive: a slug should never appear in both ELIGIBLE and WAITING, but
+  // if it does, WAITING wins (precedence HALTED > PROCESSED > IN-PROGRESS >
+  // WAITING > ELIGIBLE) — filter it out of ELIGIBLE rather than double-list it.
+  const eligible = state.eligible.filter((e) => !waitingSlugs.has(e.slug));
+  lines.push(`ELIGIBLE (${eligible.length})`);
+  for (const e of eligible) lines.push(`  • ${e.slug}${tierTag(e.tier)}`);
 
   lines.push(`PROCESSED (${state.processedCount})`);
   for (const p of state.processed) lines.push(`  • ${p.slug}${prSuffix(p.prUrl)}`);

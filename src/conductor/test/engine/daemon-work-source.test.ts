@@ -82,7 +82,7 @@ describe('localWorkSource — refresh:true calls fastForwardRoot BEFORE discover
       }),
       discoverBacklog: vi.fn(async () => {
         callOrder.push('discover');
-        return fakeItems;
+        return { items: fakeItems, waiting: [] };
       }),
     };
 
@@ -114,7 +114,7 @@ describe('localWorkSource — refresh:false skips fastForwardRoot', () => {
       hasWarned: vi.fn().mockResolvedValue(false),
       markWarned: vi.fn().mockResolvedValue(undefined),
       fastForwardRoot: vi.fn(async () => {}),
-      discoverBacklog: vi.fn(async () => [fakeItem('y')]),
+      discoverBacklog: vi.fn(async () => ({ items: [fakeItem('y')], waiting: [] })),
     };
 
     const source = localWorkSource(deps);
@@ -167,7 +167,7 @@ describe('localWorkSource — discoverBacklog receives correct args + call-throu
           capturedOpts = opts as Record<string, unknown>;
           // Invoke the wrapper so we can assert it delegates to the injected dep.
           await isProc('feat-a');
-          return [];
+          return { items: [], waiting: [] };
         },
       ),
     };
@@ -218,7 +218,7 @@ describe('localWorkSource — owner-gate deps thread into discoverBacklog opts',
       fastForwardRoot: vi.fn(async () => {}),
       discoverBacklog: vi.fn(async (_r: string, _p: unknown, _l: unknown, opts: unknown) => {
         capturedOpts = opts as Record<string, unknown>;
-        return [];
+        return { items: [], waiting: [] };
       }),
       ...overrides,
     };
@@ -330,7 +330,7 @@ describe('localWorkSource — resolveDaemonOwner is called FRESH on every pass (
       cutover: null,
       discoverBacklog: vi.fn(async (_r: string, _p: unknown, _l: unknown, opts: unknown) => {
         capturedOwner = (opts as Record<string, unknown>).daemonOwner;
-        return [];
+        return { items: [], waiting: [] };
       }),
     };
 

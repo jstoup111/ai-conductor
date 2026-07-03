@@ -37,6 +37,64 @@ export interface BacklogItem {
   track?: Track;
 }
 
+/**
+ * Backlog shape as consumed by `pickEligible` (Task 14 / FR-4 negative). Only
+ * `items` is ever read — `waiting` (dependency-gated specs, Task 11) is
+ * accepted for shape-compatibility with `discoverBacklog`'s widened return
+ * but deliberately never inspected, so a spec parked in `waiting` can never
+ * cause head-of-line blocking of a later, unblocked item in `items`.
+ */
+export interface PickEligibleBacklog {
+  items: BacklogItem[];
+  waiting?: unknown;
+}
+
+/** In-run dispatch bookkeeping `pickEligible` consults to skip ineligible slugs. */
+export interface PickEligibleCtx {
+  inFlight: { has(slug: string): boolean };
+  parked: Set<string>;
+  started: Set<string>;
+  isHalted?: (slug: string) => Promise<boolean>;
+}
+
+/**
+ * First-in-`items`-order eligible feature. `inFlight`/`started` guard against
+ * double-dispatch. The one slug allowed back past `started` is a parked
+ * (halted) one — and only once its HALT marker is gone, detected by the
+ * injected `isHalted`. Without that dep a parked feature stays parked.
+ *
+ * Consumes ONLY `backlog.items` — `backlog.waiting` is never read (FR-4
+ * negative, Task 14). A spec diverted to `waiting` by the dependency gate
+ * therefore never blocks dispatch of a later, unblocked item in `items`.
+ */
+export async function pickEligible(
+  backlog: PickEligibleBacklog,
+  ctx: PickEligibleCtx,
+): Promise<BacklogItem | undefined> {
+  for (const b of backlog.items) {
+    if (ctx.inFlight.has(b.slug)) continue;
+    if (ctx.parked.has(b.slug)) {
+      if (!ctx.isHalted || (await ctx.isHalted(b.slug))) continue; // still parked
+      // marker cleared → fall through as eligible (re-dispatch + resume)
+    } else if (ctx.started.has(b.slug)) {
+      continue; // done/error — permanently excluded this run
+    } else if (ctx.isHalted && (await ctx.isHalted(b.slug))) {
+      // A feature this process never dispatched but whose worktree carries a
+      // live `.pipeline/HALT` marker — parked for a human by a PRIOR run. The
+      // `parked`/`started` sets are in-memory only and are empty after a daemon
+      // restart, so without this the feature looks fresh (its merged spec is
+      // still on the base branch, and only `done` features are in the durable
+      // processed ledger) and gets re-dispatched, re-entering the conductor over
+      // the kept worktree and clobbering its persisted state. Honor the durable
+      // marker: park it so the un-park-on-clear path above governs re-dispatch.
+      ctx.parked.add(b.slug);
+      continue;
+    }
+    return b;
+  }
+  return undefined;
+}
+
 export type FeatureStatus = 'done' | 'halted' | 'error';
 
 export interface FeatureOutcome {
@@ -287,40 +345,14 @@ export async function runDaemon(
 
     // Fill the pool while slots are free.
     if (inFlight.size < concurrency) {
-      // First-in-backlog-order eligible item. `inFlight`/`started` guard against
-      // double-dispatch. The one slug allowed back past `started` is a parked
-      // (halted) one — and only once its HALT marker is gone, detected by the
-      // injected `isHalted`. Without that dep a parked feature stays parked.
-      const pickEligible = async (
-        backlog: BacklogItem[],
-      ): Promise<BacklogItem | undefined> => {
-        for (const b of backlog) {
-          if (inFlight.has(b.slug)) continue;
-          if (parked.has(b.slug)) {
-            if (!deps.isHalted || (await deps.isHalted(b.slug))) continue; // still parked
-            // marker cleared → fall through as eligible (re-dispatch + resume)
-          } else if (started.has(b.slug)) {
-            continue; // done/error — permanently excluded this run
-          } else if (deps.isHalted && (await deps.isHalted(b.slug))) {
-            // A feature this process never dispatched but whose worktree carries a
-            // live `.pipeline/HALT` marker — parked for a human by a PRIOR run. The
-            // `parked`/`started` sets are in-memory only and are empty after a daemon
-            // restart, so without this the feature looks fresh (its merged spec is
-            // still on the base branch, and only `done` features are in the durable
-            // processed ledger) and gets re-dispatched, re-entering the conductor over
-            // the kept worktree and clobbering its persisted state. Honor the durable
-            // marker: park it so the un-park-on-clear path above governs re-dispatch.
-            parked.add(b.slug);
-            continue;
-          }
-          return b;
-        }
-        return undefined;
-      };
+      // First-in-backlog-order eligible item (Task 14: `pickEligible` consumes
+      // only `items`, never `waiting`, so a dependency-gated spec never causes
+      // head-of-line blocking of a later, unblocked one).
+      const pickCtx: PickEligibleCtx = { inFlight, parked, started, isHalted: deps.isHalted };
 
       // Local-only discovery first (no remote fetch): cheap, and it keeps a build
       // from being re-based onto specs that landed on origin while work is running.
-      let next = await pickEligible(await deps.discoverBacklog({ refresh: false }));
+      let next = await pickEligible({ items: await deps.discoverBacklog({ refresh: false }) }, pickCtx);
 
       // Only when fully idle (nothing running) AND nothing left locally do we reach
       // out to origin for newly-merged specs — "drained, now find more".
@@ -332,7 +364,7 @@ export async function runDaemon(
         // marker is un-parked in THIS iteration (its dispatch still flows through
         // the existing un-park path, FR-8 — the sweep issues none).
         await maybeRekick(false);
-        next = await pickEligible(refreshed);
+        next = await pickEligible({ items: refreshed }, pickCtx);
       }
 
       if (next) {

@@ -136,7 +136,7 @@ describe('engineer authoring → real accepted artifacts (FR-6, C2)', () => {
 
     // FR-24: on the spec branch (unmerged), the daemon's predicate finds nothing
     // — the operator's merge is the build-ready signal, not authoring alone.
-    const before = await discoverBacklog(repoPath, undefined, undefined, {
+    const { items: before } = await discoverBacklog(repoPath, undefined, undefined, {
       baseBranch: defaultBranch,
     });
     expect(before).toEqual([]);
@@ -148,7 +148,7 @@ describe('engineer authoring → real accepted artifacts (FR-6, C2)', () => {
     });
 
     // Now the predicate the DAEMON uses passes (Status:Accepted + dependency tree).
-    const after = await discoverBacklog(repoPath, undefined, undefined, {
+    const { items: after } = await discoverBacklog(repoPath, undefined, undefined, {
       baseBranch: defaultBranch,
     });
     expect(after.length).toBeGreaterThan(0);

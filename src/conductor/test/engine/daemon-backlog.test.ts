@@ -53,17 +53,249 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
     `# Plan\n${storiesRef ? `**Stories:** ${storiesRef}\n` : ''}\n### Task 1\n**Dependencies:** none\n`;
 
   // Convenience: run discoverBacklog against the working tree (fs source).
-  const discover = (
+  const discover = async (
     isProcessed?: (slug: string) => Promise<boolean>,
     log?: (m: string) => void,
-  ) => discoverBacklog(dir, isProcessed, log, { treeSource: fsTreeSource(dir) });
+  ) => (await discoverBacklog(dir, isProcessed, log, { treeSource: fsTreeSource(dir) })).items;
 
   it('returns [] when there is no plans dir', async () => {
     const empty = await mkdtemp(join(tmpdir(), 'empty-'));
-    expect(await discoverBacklog(empty, undefined, undefined, { treeSource: fsTreeSource(empty) })).toEqual(
-      [],
-    );
+    expect(
+      await discoverBacklog(empty, undefined, undefined, { treeSource: fsTreeSource(empty) }),
+    ).toEqual({ items: [], waiting: [] });
     await rm(empty, { recursive: true, force: true });
+  });
+
+  it('returns waiting: [] alongside items (widened result shape, Task 10)', async () => {
+    await writeFile(
+      join(dir, '.docs/plans/feature-shape.md'),
+      planWithDeps('.docs/stories/feature-shape.md'),
+    );
+    await writeFile(join(dir, '.docs/stories/feature-shape.md'), APPROVED_STORIES);
+
+    const result = await discoverBacklog(dir, undefined, undefined, {
+      treeSource: fsTreeSource(dir),
+    });
+    expect(result.items.map((b) => b.slug)).toEqual(['feature-shape']);
+    expect(result.waiting).toEqual([]);
+  });
+
+  describe('dependency gate (Task 11)', () => {
+    async function seedWithSourceRef(slug: string, sourceRef: string) {
+      await writeFile(join(dir, `.docs/plans/${slug}.md`), planWithDeps(`.docs/stories/${slug}.md`));
+      await writeFile(join(dir, `.docs/stories/${slug}.md`), APPROVED_STORIES);
+      await mkdir(join(dir, '.docs/intake'), { recursive: true });
+      await writeFile(join(dir, `.docs/intake/${slug}.md`), `Source-Ref: ${sourceRef}\n`);
+    }
+
+    it('a spec with a blocked Source-Ref is diverted to waiting, absent from items', async () => {
+      await seedWithSourceRef('blocked-spec', 'acme/app#10');
+      const resolver = {
+        resolve: async () => ({ kind: 'blocked' as const, blockers: [{ repo: 'acme/app', number: '10' }] }),
+      };
+
+      const result = await discoverBacklog(dir, undefined, undefined, {
+        treeSource: fsTreeSource(dir),
+        resolver,
+      });
+
+      expect(result.items.map((b) => b.slug)).not.toContain('blocked-spec');
+      expect(result.waiting).toEqual([
+        {
+          slug: 'blocked-spec',
+          sourceRef: 'acme/app#10',
+          verdict: { kind: 'blocked', blockers: [{ repo: 'acme/app', number: '10' }] },
+        },
+      ]);
+    });
+
+    it('a spec with an unblocked Source-Ref stays in items, absent from waiting', async () => {
+      await seedWithSourceRef('clear-spec', 'acme/app#11');
+      const resolver = { resolve: async () => ({ kind: 'unblocked' as const }) };
+
+      const result = await discoverBacklog(dir, undefined, undefined, {
+        treeSource: fsTreeSource(dir),
+        resolver,
+      });
+
+      expect(result.items.map((b) => b.slug)).toContain('clear-spec');
+      expect(result.waiting).toEqual([]);
+    });
+
+    it('a spec with no Source-Ref is left in items without invoking the resolver', async () => {
+      await writeFile(join(dir, '.docs/plans/no-ref-spec.md'), planWithDeps('.docs/stories/no-ref-spec.md'));
+      await writeFile(join(dir, '.docs/stories/no-ref-spec.md'), APPROVED_STORIES);
+      let called = false;
+      const resolver = {
+        resolve: async () => {
+          called = true;
+          return { kind: 'unblocked' as const };
+        },
+      };
+
+      const result = await discoverBacklog(dir, undefined, undefined, {
+        treeSource: fsTreeSource(dir),
+        resolver,
+      });
+
+      expect(result.items.map((b) => b.slug)).toContain('no-ref-spec');
+      expect(result.waiting).toEqual([]);
+      expect(called).toBe(false);
+    });
+  });
+
+  describe('skip is per-cycle, no processed marker (Task 13)', () => {
+    async function seedWithSourceRef(slug: string, sourceRef: string) {
+      await writeFile(join(dir, `.docs/plans/${slug}.md`), planWithDeps(`.docs/stories/${slug}.md`));
+      await writeFile(join(dir, `.docs/stories/${slug}.md`), APPROVED_STORIES);
+      await mkdir(join(dir, '.docs/intake'), { recursive: true });
+      await writeFile(join(dir, `.docs/intake/${slug}.md`), `Source-Ref: ${sourceRef}\n`);
+    }
+
+    it('a spec blocked by the same blocker across 3 scans stays in waiting each time, never marked processed', async () => {
+      await seedWithSourceRef('sticky-blocked', 'acme/app#20');
+      const isProcessed = async () => false;
+      const resolver = {
+        resolve: async () => ({ kind: 'blocked' as const, blockers: [{ repo: 'acme/app', number: '20' }] }),
+      };
+
+      for (let scan = 0; scan < 3; scan++) {
+        const result = await discoverBacklog(dir, isProcessed, undefined, {
+          treeSource: fsTreeSource(dir),
+          resolver,
+        });
+        expect(result.items.map((b) => b.slug)).not.toContain('sticky-blocked');
+        expect(result.waiting).toEqual([
+          {
+            slug: 'sticky-blocked',
+            sourceRef: 'acme/app#20',
+            verdict: { kind: 'blocked', blockers: [{ repo: 'acme/app', number: '20' }] },
+          },
+        ]);
+      }
+    });
+
+    it('a spec in waiting moves to items once its blocker closes in a later scan', async () => {
+      await seedWithSourceRef('closes-later', 'acme/app#21');
+      let blocked = true;
+      const resolver = {
+        resolve: async () =>
+          blocked
+            ? { kind: 'blocked' as const, blockers: [{ repo: 'acme/app', number: '21' }] }
+            : { kind: 'unblocked' as const },
+      };
+
+      const scan1 = await discoverBacklog(dir, undefined, undefined, {
+        treeSource: fsTreeSource(dir),
+        resolver,
+      });
+      expect(scan1.items.map((b) => b.slug)).not.toContain('closes-later');
+      expect(scan1.waiting.map((w) => w.slug)).toContain('closes-later');
+
+      blocked = false; // blocker closes between scans
+
+      const scan2 = await discoverBacklog(dir, undefined, undefined, {
+        treeSource: fsTreeSource(dir),
+        resolver,
+      });
+      expect(scan2.items.map((b) => b.slug)).toContain('closes-later');
+      expect(scan2.waiting).toEqual([]);
+    });
+
+    it('a spec built as an item re-diverts to waiting once a new blocker link is added', async () => {
+      await seedWithSourceRef('newly-blocked', 'acme/app#22');
+      let hasBlocker = false;
+      const resolver = {
+        resolve: async () =>
+          hasBlocker
+            ? { kind: 'blocked' as const, blockers: [{ repo: 'acme/app', number: '99' }] }
+            : { kind: 'unblocked' as const },
+      };
+
+      const scan1 = await discoverBacklog(dir, undefined, undefined, {
+        treeSource: fsTreeSource(dir),
+        resolver,
+      });
+      expect(scan1.items.map((b) => b.slug)).toContain('newly-blocked');
+      expect(scan1.waiting).toEqual([]);
+
+      hasBlocker = true; // a new blocker link is added between scans
+
+      const scan2 = await discoverBacklog(dir, undefined, undefined, {
+        treeSource: fsTreeSource(dir),
+        resolver,
+      });
+      expect(scan2.items.map((b) => b.slug)).not.toContain('newly-blocked');
+      expect(scan2.waiting).toEqual([
+        {
+          slug: 'newly-blocked',
+          sourceRef: 'acme/app#22',
+          verdict: { kind: 'blocked', blockers: [{ repo: 'acme/app', number: '99' }] },
+        },
+      ]);
+    });
+  });
+
+  describe('no Source-Ref ⇒ no gate; outage isolation (Task 12)', () => {
+    function alwaysThrowingResolver(): { resolve: (ref: string) => Promise<never>; calls: number } {
+      const state = {
+        calls: 0,
+        resolve: async (_ref: string): Promise<never> => {
+          state.calls += 1;
+          throw new Error('resolver outage (simulated)');
+        },
+      };
+      return state;
+    }
+
+    it('a spec with no Source-Ref marker at all stays in items with zero resolver calls, even under an always-throwing resolver', async () => {
+      await writeFile(
+        join(dir, '.docs/plans/no-marker-spec.md'),
+        planWithDeps('.docs/stories/no-marker-spec.md'),
+      );
+      await writeFile(join(dir, '.docs/stories/no-marker-spec.md'), APPROVED_STORIES);
+      // Deliberately no `.docs/intake/no-marker-spec.md` at all.
+
+      const resolver = alwaysThrowingResolver();
+
+      const result = await discoverBacklog(dir, undefined, undefined, {
+        treeSource: fsTreeSource(dir),
+        resolver,
+      });
+
+      expect(result.items.map((b) => b.slug)).toContain('no-marker-spec');
+      expect(result.waiting).toEqual([]);
+      expect(resolver.calls).toBe(0);
+    });
+
+    it('a spec with a malformed/unparseable Source-Ref fails closed to waiting as indeterminate, with zero resolver calls, even under an always-throwing resolver', async () => {
+      await writeFile(
+        join(dir, '.docs/plans/malformed-ref-spec.md'),
+        planWithDeps('.docs/stories/malformed-ref-spec.md'),
+      );
+      await writeFile(join(dir, '.docs/stories/malformed-ref-spec.md'), APPROVED_STORIES);
+      await mkdir(join(dir, '.docs/intake'), { recursive: true });
+      // Not a valid owner/repo#N form — parseIntakeSourceRef rejects it, so the
+      // item carries no sourceRef. A malformed marker is distinct from an ABSENT
+      // one (FR-7): it fails closed as `indeterminate` rather than dispatching
+      // as if there were no marker at all, and the resolver — which has nothing
+      // parseable to consult — is never called.
+      await writeFile(
+        join(dir, '.docs/intake/malformed-ref-spec.md'),
+        'Source-Ref: not-a-valid-ref\n',
+      );
+
+      const resolver = alwaysThrowingResolver();
+
+      const result = await discoverBacklog(dir, undefined, undefined, {
+        treeSource: fsTreeSource(dir),
+        resolver,
+      });
+
+      expect(result.items.map((b) => b.slug)).not.toContain('malformed-ref-spec');
+      expect(result.waiting.find((w) => w.slug === 'malformed-ref-spec')?.verdict?.kind).toBe('indeterminate');
+      expect(resolver.calls).toBe(0);
+    });
   });
 
   describe('track propagation (adr-2026-06-29-explore-prd-split-track-in-explore/adr-2026-06-29-track-marker-location)', () => {
@@ -285,7 +517,7 @@ describe('engine/daemon-backlog — FR-24 merge is the build-ready trigger (git)
     await git(['add', '.docs']);
     await git(['commit', '-q', '-m', 'merge spec: csv-export']);
 
-    const backlog = await discoverBacklog(dir, undefined, undefined, { baseBranch });
+    const { items: backlog } = await discoverBacklog(dir, undefined, undefined, { baseBranch });
     expect(backlog.map((b) => b.slug)).toEqual(['csv-export']);
   });
 
@@ -295,7 +527,7 @@ describe('engine/daemon-backlog — FR-24 merge is the build-ready trigger (git)
     // build it; reading the base-branch tree must not.
     await writeSpec('note-grouping');
 
-    const backlog = await discoverBacklog(dir, undefined, undefined, { baseBranch });
+    const { items: backlog } = await discoverBacklog(dir, undefined, undefined, { baseBranch });
     expect(backlog).toEqual([]);
   });
 
@@ -306,7 +538,7 @@ describe('engine/daemon-backlog — FR-24 merge is the build-ready trigger (git)
     await git(['commit', '-q', '-m', 'spec: note-grouping']);
     await git(['checkout', '-q', baseBranch]); // base branch is clean of the spec
 
-    const backlog = await discoverBacklog(dir, undefined, undefined, { baseBranch });
+    const { items: backlog } = await discoverBacklog(dir, undefined, undefined, { baseBranch });
     expect(backlog).toEqual([]);
   });
 
@@ -318,7 +550,7 @@ describe('engine/daemon-backlog — FR-24 merge is the build-ready trigger (git)
     await git(['checkout', '-q', baseBranch]);
     await git(['merge', '-q', '--no-ff', '-m', 'merge spec', 'spec/note-grouping']);
 
-    const backlog = await discoverBacklog(dir, undefined, undefined, { baseBranch });
+    const { items: backlog } = await discoverBacklog(dir, undefined, undefined, { baseBranch });
     expect(backlog.map((b) => b.slug)).toEqual(['note-grouping']);
   });
 
@@ -328,7 +560,7 @@ describe('engine/daemon-backlog — FR-24 merge is the build-ready trigger (git)
     await git(['commit', '-q', '-m', 'merge spec: draft-feat']);
 
     const logs: string[] = [];
-    const backlog = await discoverBacklog(dir, undefined, (m) => logs.push(m), { baseBranch });
+    const { items: backlog } = await discoverBacklog(dir, undefined, (m) => logs.push(m), { baseBranch });
     expect(backlog).toEqual([]);
     expect(logs.join('\n')).toMatch(/draft-feat.*not approved/i);
   });
@@ -339,7 +571,7 @@ describe('engine/daemon-backlog — FR-24 merge is the build-ready trigger (git)
     await git(['commit', '-q', '-m', 'merge spec: shipped']);
 
     const processed = new Set(['shipped']);
-    const backlog = await discoverBacklog(dir, async (slug) => processed.has(slug), undefined, {
+    const { items: backlog } = await discoverBacklog(dir, async (slug) => processed.has(slug), undefined, {
       baseBranch,
     });
     expect(backlog).toEqual([]);
@@ -395,7 +627,7 @@ describe('engine/daemon-backlog — owner-gate integration', () => {
   it('Task 11: an unresolved owner builds NOTHING (fail-closed)', async () => {
     await writeSpec('feature-a');
     let stampCalls = 0;
-    const backlog = await discoverBacklog(dir, undefined, undefined, {
+    const { items: backlog } = await discoverBacklog(dir, undefined, undefined, {
       treeSource: fsSource(dir),
       daemonOwner: { resolved: false },
       readStamp: async () => {
@@ -412,7 +644,7 @@ describe('engine/daemon-backlog — owner-gate integration', () => {
   // Task 12 — gate wired after content filters (FR-5/6/7).
   it('Task 12: a spec stamped with the daemon owner is pushed', async () => {
     await writeSpec('mine');
-    const backlog = await discoverBacklog(dir, undefined, undefined, {
+    const { items: backlog } = await discoverBacklog(dir, undefined, undefined, {
       treeSource: fsSource(dir),
       daemonOwner: { resolved: true, id: 'alice' },
       readStamp: async () => ({ present: true as const, id: 'alice' }),
@@ -425,7 +657,7 @@ describe('engine/daemon-backlog — owner-gate integration', () => {
   it('Task 12: an other-owner spec is NOT pushed and logs a distinct ownership skip', async () => {
     await writeSpec('theirs');
     const logs: string[] = [];
-    const backlog = await discoverBacklog(dir, undefined, (m) => logs.push(m), {
+    const { items: backlog } = await discoverBacklog(dir, undefined, (m) => logs.push(m), {
       treeSource: fsSource(dir),
       daemonOwner: { resolved: true, id: 'alice' },
       readStamp: async () => ({ present: true as const, id: 'bob' }),
@@ -448,7 +680,7 @@ describe('engine/daemon-backlog — owner-gate integration', () => {
     await writeSpec('draft-and-theirs', '# Stories\n**Status:** DRAFT\n');
     const logs: string[] = [];
     let stampCalls = 0;
-    const backlog = await discoverBacklog(dir, undefined, (m) => logs.push(m), {
+    const { items: backlog } = await discoverBacklog(dir, undefined, (m) => logs.push(m), {
       treeSource: fsSource(dir),
       daemonOwner: { resolved: true, id: 'alice' },
       readStamp: async () => {
@@ -468,7 +700,7 @@ describe('engine/daemon-backlog — owner-gate integration', () => {
 
   it('Task 13: an un-owned spec merged BEFORE the cutover is grandfather-built', async () => {
     await writeSpec('legacy');
-    const backlog = await discoverBacklog(dir, undefined, undefined, {
+    const { items: backlog } = await discoverBacklog(dir, undefined, undefined, {
       treeSource: fsSource(dir),
       daemonOwner: { resolved: true, id: 'alice' },
       readStamp: async () => ({ present: false as const }),
@@ -481,7 +713,7 @@ describe('engine/daemon-backlog — owner-gate integration', () => {
   it('Task 13: an un-owned spec merged ON/AFTER the cutover is skipped and logged', async () => {
     await writeSpec('newish');
     const logs: string[] = [];
-    const backlog = await discoverBacklog(dir, undefined, (m) => logs.push(m), {
+    const { items: backlog } = await discoverBacklog(dir, undefined, (m) => logs.push(m), {
       treeSource: fsSource(dir),
       daemonOwner: { resolved: true, id: 'alice' },
       readStamp: async () => ({ present: false as const }),
@@ -497,7 +729,7 @@ describe('engine/daemon-backlog — owner-gate integration', () => {
   it('Task 13: a matching spec already processed is NOT rebuilt (gate does not defeat isProcessed)', async () => {
     await writeSpec('shipped');
     let stampCalls = 0;
-    const backlog = await discoverBacklog(dir, async () => true, undefined, {
+    const { items: backlog } = await discoverBacklog(dir, async () => true, undefined, {
       treeSource: fsSource(dir),
       daemonOwner: { resolved: true, id: 'alice' },
       readStamp: async () => {
@@ -516,7 +748,7 @@ describe('engine/daemon-backlog — owner-gate integration', () => {
     await writeSpec('one');
     await writeSpec('two');
     const logs: string[] = [];
-    const backlog = await discoverBacklog(dir, undefined, (m) => logs.push(m), {
+    const { items: backlog } = await discoverBacklog(dir, undefined, (m) => logs.push(m), {
       treeSource: fsSource(dir),
       daemonOwner: { resolved: false },
       // Even an owner-matching stamp must NOT build when identity is unresolved.
@@ -536,7 +768,7 @@ describe('engine/daemon-backlog — owner-gate integration', () => {
   it('Task 14: an absent daemonOwner emits NO gate log and builds normally (legacy behavior)', async () => {
     await writeSpec('legacy-a');
     const logs: string[] = [];
-    const backlog = await discoverBacklog(dir, undefined, (m) => logs.push(m), {
+    const { items: backlog } = await discoverBacklog(dir, undefined, (m) => logs.push(m), {
       treeSource: fsSource(dir),
     });
     expect(backlog.map((b) => b.slug)).toEqual(['legacy-a']);
@@ -550,7 +782,7 @@ describe('engine/daemon-backlog — owner-gate integration', () => {
     await writeSpec('one');
     await writeSpec('two');
     const logs: string[] = [];
-    const backlog = await discoverBacklog(dir, undefined, (m) => logs.push(m), {
+    const { items: backlog } = await discoverBacklog(dir, undefined, (m) => logs.push(m), {
       treeSource: fsSource(dir),
       daemonOwner: { resolved: true, id: 'alice' },
       readStamp: async () => ({ present: true as const, id: 'alice' }),
@@ -643,7 +875,7 @@ describe('engine/daemon-backlog — owner-gate integration', () => {
   it('A6: an un-owned merged spec logs a distinct, actionable skip (add Owner marker on default branch)', async () => {
     await writeSpec('legacy-unowned');
     const logs: string[] = [];
-    const backlog = await discoverBacklog(dir, undefined, (m) => logs.push(m), {
+    const { items: backlog } = await discoverBacklog(dir, undefined, (m) => logs.push(m), {
       treeSource: fsSource(dir),
       daemonOwner: { resolved: true, id: 'alice' },
       readStamp: async () => ({ present: false as const }), // un-owned
@@ -667,15 +899,17 @@ describe('engine/daemon-backlog — owner-gate integration', () => {
 
   it('Task 18: a re-stamped marker (alice→bob) builds under bob and skips under alice', async () => {
     await writeSpec('transferred');
-    const runWith = (ownerId: string) =>
-      discoverBacklog(dir, undefined, undefined, {
-        treeSource: fsSource(dir),
-        daemonOwner: { resolved: true, id: ownerId },
-        // Marker now carries bob (the new owner) after the transfer re-stamp.
-        readStamp: async () => ({ present: true as const, id: 'bob' }),
-        readMergeTime: async () => null,
-        cutover: CUTOVER_18,
-      });
+    const runWith = async (ownerId: string) =>
+      (
+        await discoverBacklog(dir, undefined, undefined, {
+          treeSource: fsSource(dir),
+          daemonOwner: { resolved: true, id: ownerId },
+          // Marker now carries bob (the new owner) after the transfer re-stamp.
+          readStamp: async () => ({ present: true as const, id: 'bob' }),
+          readMergeTime: async () => null,
+          cutover: CUTOVER_18,
+        })
+      ).items;
 
     // The alice daemon no longer owns it → skip.
     expect(await runWith('alice')).toEqual([]);
@@ -688,7 +922,7 @@ describe('engine/daemon-backlog — owner-gate integration', () => {
     let stampCalls = 0;
     // New owner is bob, marker is bob — but the spec is already processed. The
     // gate sits AFTER isProcessed, so a transfer never triggers a rebuild.
-    const backlog = await discoverBacklog(dir, async () => true, undefined, {
+    const { items: backlog } = await discoverBacklog(dir, async () => true, undefined, {
       treeSource: fsSource(dir),
       daemonOwner: { resolved: true, id: 'bob' },
       readStamp: async () => {
@@ -707,7 +941,7 @@ describe('engine/daemon-backlog — owner-gate integration', () => {
     const logs: string[] = [];
     // A blank re-stamp reads as un-owned (present:false). With a post-cutover
     // merge time this is skipped via the UN-OWNED branch (not other-owner).
-    const backlog = await discoverBacklog(dir, undefined, (m) => logs.push(m), {
+    const { items: backlog } = await discoverBacklog(dir, undefined, (m) => logs.push(m), {
       treeSource: fsSource(dir),
       daemonOwner: { resolved: true, id: 'alice' },
       readStamp: async () => ({ present: false as const }),

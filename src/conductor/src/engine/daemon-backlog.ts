@@ -13,6 +13,8 @@ import { makeGitRunner, originDefaultBranch, type GitRunner } from './rebase.js'
 import type { OwnerResolution } from './owner-gate/identity.js';
 import type { OwnerStamp } from './owner-gate/provenance.js';
 import { decideSpecGate, type GateDecision } from './owner-gate/gate.js';
+import type { BlockerResolver, BlockerVerdict } from './blocker-resolver.js';
+import { announceWaitingForRoot } from './daemon-waiting-announce.js';
 
 const execFile = promisify(execFileCb);
 
@@ -206,6 +208,18 @@ export interface DiscoverBacklogOpts {
   readStamp?: (slug: string) => Promise<OwnerStamp>;
   readMergeTime?: (slug: string) => Promise<string | null>;
   cutover?: string | null;
+  /**
+   * Dependency-gate resolver injectable. Mirrors the owner-gate injectables
+   * above: an ABSENT resolver skips the dependency gate entirely (legacy
+   * behavior — every content/owner-eligible spec dispatches unaffected,
+   * exactly as before this feature existed). When supplied, exactly one
+   * instance is used per `discoverBacklog()` call (per scan pass) — the
+   * production wiring is responsible for constructing a fresh
+   * `createBlockerResolver({ run: createGhBlockerRunner() })` on every poll
+   * rather than caching one across polls, so memo/cycle-detection state never
+   * leaks stale verdicts between scans.
+   */
+  resolver?: BlockerResolver;
 }
 
 /**
@@ -224,13 +238,23 @@ export interface DiscoverBacklogOpts {
  * stories and plan are present on the base branch, the stories are
  * `Status: Accepted` (not DRAFT), and the plan declares a dependency tree. A
  * feature already marked processed (via `isProcessed`) is skipped.
+ *
+ * Returns `{ items, waiting }`: `items` are the eligible-to-build features
+ * (unchanged shape/behavior). `waiting` is reserved for specs held back by an
+ * unresolved dependency gate — always `[]` today; a later task populates it.
  */
+export interface WaitingItem {
+  slug: string;
+  sourceRef?: string;
+  verdict: BlockerVerdict;
+}
+
 export async function discoverBacklog(
   projectRoot: string,
   isProcessed: (slug: string) => Promise<boolean> = async () => false,
   log: (msg: string) => void = () => {},
   opts: DiscoverBacklogOpts = {},
-): Promise<BacklogItem[]> {
+): Promise<{ items: BacklogItem[]; waiting: WaitingItem[] }> {
   const baseBranch = opts.baseBranch ?? 'main';
   const tree = opts.treeSource ?? gitTreeSource(projectRoot, baseBranch);
 
@@ -300,13 +324,16 @@ export async function discoverBacklog(
   // is untouched — legacy discovery runs normally.
   if (opts.daemonOwner && !opts.daemonOwner.resolved) {
     await warnIdentityUnresolvedOnce();
-    return [];
+    return { items: [], waiting: [] };
   }
 
   const planFiles = (await tree.listPlanFiles()).filter((f) => f.endsWith('.md'));
-  if (planFiles.length === 0) return [];
+  if (planFiles.length === 0) return { items: [], waiting: [] };
 
   const items: BacklogItem[] = [];
+  // slug -> raw (unparseable) Source-Ref text, for specs whose intake marker
+  // is present but malformed (see the dependency-gate loop below).
+  const malformedSourceRefs = new Map<string, string>();
   for (const file of [...planFiles].sort()) {
     const slug = basename(file, '.md');
     const planRel = `.docs/plans/${file}`;
@@ -350,8 +377,17 @@ export async function discoverBacklog(
     // Carry the originating issue ref (if this spec came from github-issues
     // intake) so the daemon can put `Closes owner/repo#N` on the implementation
     // PR. The marker is committed at `.docs/intake/<plan-stem>.md` — the SAME
-    // stem as the plan. Absent/garbled → undefined (hand-authored specs unchanged).
-    const sourceRef = parseIntakeSourceRef(await tree.readFile(`.docs/intake/${slug}.md`));
+    // stem as the plan. Absent → undefined (hand-authored specs unchanged). A
+    // marker that IS present but carries an unparseable ref is distinct from
+    // absence (FR-7): it must fail closed to `waiting` as `indeterminate`
+    // rather than silently dispatching like a spec with no marker at all, so
+    // it is tracked separately in `malformedSourceRefs` below.
+    const intakeMarker = await tree.readFile(`.docs/intake/${slug}.md`);
+    const sourceRef = parseIntakeSourceRef(intakeMarker);
+    const rawSourceRefLine = intakeMarker?.match(/^\s*Source-Ref:\s*(\S+)/im)?.[1];
+    if (rawSourceRefLine && !sourceRef) {
+      malformedSourceRefs.set(slug, rawSourceRefLine);
+    }
 
     // Owner gate — runs ONLY after every content filter above has passed, so the
     // gate never bypasses eligibility (a content-ineligible spec is already
@@ -388,7 +424,52 @@ export async function discoverBacklog(
     // carry the slug (+ tier + sourceRef + track); no working-tree paths to copy.
     items.push({ slug, tier, ...(sourceRef ? { sourceRef } : {}), ...(track ? { track } : {}) });
   }
-  return items;
+
+  // Dependency gate — the final gauntlet step, run AFTER content eligibility and
+  // the owner gate so it never bypasses either. An ABSENT resolver (legacy /
+  // not-yet-wired) skips the gate silently — identical to the owner-gate's
+  // absent-`daemonOwner` behavior above. Specs with no (or no parseable)
+  // Source-Ref never reach a supplied resolver either — they are
+  // content-eligible, non-intake specs and dispatch unaffected, preserving
+  // today's behavior for hand-authored work.
+  if (!opts.resolver) {
+    return { items, waiting: [] };
+  }
+  const resolver = opts.resolver;
+  const gated: BacklogItem[] = [];
+  const waiting: WaitingItem[] = [];
+  for (const item of items) {
+    if (!item.sourceRef) {
+      const rawRef = malformedSourceRefs.get(item.slug);
+      if (rawRef !== undefined) {
+        // Marker present but unparseable — fail closed as indeterminate
+        // rather than dispatching as if there were no marker at all.
+        waiting.push({ slug: item.slug, verdict: { kind: 'indeterminate', detail: `unparseable Source-Ref: ${rawRef}` } });
+        continue;
+      }
+      gated.push(item);
+      continue;
+    }
+    let verdict: BlockerVerdict;
+    try {
+      verdict = await resolver.resolve(item.sourceRef);
+    } catch (err: unknown) {
+      // The resolver contract never throws in production (blocker-resolver.ts
+      // already converts platform failures to `indeterminate`), but a fail-
+      // closed fallback here keeps a broken/injected resolver from crashing the
+      // scan loop or silently dispatching an unverified spec.
+      const detail = err instanceof Error ? err.message : String(err);
+      verdict = { kind: 'indeterminate', detail };
+    }
+    if (verdict.kind === 'unblocked') {
+      gated.push(item);
+    } else {
+      waiting.push({ slug: item.slug, sourceRef: item.sourceRef, verdict });
+    }
+  }
+
+  announceWaitingForRoot(projectRoot, log, waiting);
+  return { items: gated, waiting };
 }
 
 /**

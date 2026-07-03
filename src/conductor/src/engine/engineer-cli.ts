@@ -45,6 +45,10 @@ import { createFileQueue } from './engineer/intake/queue.js';
 import { createGithubIssuesAdapter, GITHUB_ISSUES_SOURCE, HANDLED_LABEL } from './engineer/intake/github-issues.js';
 import { reportRouted, reportDone } from './engineer/intake/writeback.js';
 import { restRemoveLabelArgs } from './pr-labels.js';
+import { claimUnblocked, type DependencyClaimQueue } from './engineer/intake/dependency-claim.js';
+import type { Envelope } from './engineer/intake/port.js';
+import { createBlockerResolver } from './blocker-resolver.js';
+import { parseDependencyProse, createDependencyLinks, runMigration } from './engineer/issue-dep-migration.js';
 
 /**
  * Production DECIDE seam: gates each authoring step through the io surface.
@@ -97,7 +101,8 @@ export type EngineerDispatch =
   | { kind: 'handoff'; project: string; branch: string; worktree: string; sourceRef?: string }
   | { kind: 'poll' }
   | { kind: 'claim' }
-  | { kind: 'forget'; sourceRef: string };
+  | { kind: 'forget'; sourceRef: string }
+  | { kind: 'migrate-issue-deps'; confirm: boolean };
 
 // ── Subcommand detection ──────────────────────────────────────────────────────
 
@@ -182,6 +187,14 @@ export function detectEngineerCommand(argv: string[]): EngineerDispatch | null {
       return { kind: 'guide' };
     }
     return { kind: 'forget', sourceRef };
+  }
+
+  if (subCmd === 'migrate-issue-deps') {
+    // `conduct-ts engineer migrate-issue-deps [--confirm]` — one-time prose→link
+    // migration (Task 22-25). Dry-run by default (proposal only, zero writes);
+    // `--confirm` applies via the GET-before-POST writer.
+    const confirm = argv.includes('--confirm');
+    return { kind: 'migrate-issue-deps', confirm };
   }
 
   // `conduct-ts engineer --idea "<text>"` — launch driving a specific idea.
@@ -345,7 +358,9 @@ function printGuide(print: (s: string) => void): void {
       '  conduct-ts engineer land --project <n> --idea "<i>" --worktree <p> [--source-ref <ref>]    — commit spec artifacts in the worktree\n' +
       '  conduct-ts engineer handoff --project <n> --branch <b> --worktree <p> [--source-ref <ref>] — open spec PR + remove worktree + nudge daemon\n' +
       '  conduct-ts engineer poll                                — poll github issues → enqueue new ideas\n' +
-      '  conduct-ts engineer forget <owner/repo#N>               — drop an intake ledger entry + label\n',
+      '  conduct-ts engineer forget <owner/repo#N>               — drop an intake ledger entry + label\n' +
+      '  conduct-ts engineer migrate-issue-deps [--confirm]      — one-time prose→link dependency migration ' +
+      '(dry-run by default; --confirm writes)\n',
   );
 }
 
@@ -779,11 +794,42 @@ export async function dispatchEngineer(
       const engDir = engineerDir ?? resolveEngineerDir({});
       const { ledger, queue } = buildIntake({ engineerDir: engDir, registryPath, gh, printErr });
 
-      const envelope = await queue.claim();
-      if (!envelope) {
+      // Fresh resolver per claim call — createBlockerResolver()'s memo is scoped
+      // to a single walk, so reusing one across calls would leak stale verdicts
+      // (see daemon-backlog.ts:210-221 for the same rule on the daemon side).
+      const resolver = createBlockerResolver({ run: (args) => gh(args, { cwd: process.cwd() }) });
+      const outcome = await claimUnblocked({
+        queue: queue as unknown as DependencyClaimQueue,
+        resolveDependency: (sourceRef) => resolver.resolve(sourceRef ?? ''),
+      });
+
+      if (outcome.kind === 'empty') {
         print(JSON.stringify({ kind: 'claim', empty: true }));
         return 0;
       }
+      if (outcome.kind === 'all-blocked') {
+        print(
+          JSON.stringify({
+            kind: 'claim',
+            allBlocked: true,
+            entries: outcome.entries.map(({ envelope: e, verdict }) => {
+              const entryEnvelope = e as unknown as Envelope;
+              return {
+                text: entryEnvelope.text,
+                source: entryEnvelope.source,
+                sourceRef: entryEnvelope.sourceRef,
+                verdict,
+              };
+            }),
+          }),
+        );
+        return 0;
+      }
+
+      // claimUnblocked's ClaimableEnvelope is a structural subset of the real
+      // Envelope produced by the file queue — narrow back to the concrete type
+      // for ack()/ledger.transition() below.
+      const envelope = outcome.envelope as unknown as Envelope;
       // Remove from the inbox now that we own it — the ledger carries lifecycle from here.
       await queue.ack(envelope);
       try {
@@ -831,6 +877,75 @@ export async function dispatchEngineer(
       }
 
       print(JSON.stringify({ kind: 'forget', sourceRef, found: true, removed: true }));
+      return 0;
+    }
+
+    // ── migrate-issue-deps ────────────────────────────────────────────────────
+    // `conduct-ts engineer migrate-issue-deps [--confirm]`: one-time prose→link
+    // migration over the current repo's open issues. Scans, classifies prose
+    // into deterministic edges + manual-review items, prints the full proposal,
+    // and only WRITES anything when `--confirm` is passed — a bare run is a
+    // pure dry-run (GET-checks only, zero POSTs; see createDependencyLinks).
+    case 'migrate-issue-deps': {
+      const cwd = process.cwd();
+      let nameWithOwner: string;
+      try {
+        const { stdout } = await gh(['repo', 'view', '--json', 'nameWithOwner'], { cwd });
+        nameWithOwner = String((JSON.parse(stdout || '{}') as { nameWithOwner?: unknown }).nameWithOwner ?? '');
+      } catch (err: unknown) {
+        printErr(`engineer migrate-issue-deps: could not resolve repo (${err instanceof Error ? err.message : String(err)})`);
+        return 1;
+      }
+      if (!nameWithOwner) {
+        printErr('engineer migrate-issue-deps: could not resolve repo (no nameWithOwner)');
+        return 1;
+      }
+
+      let issues: Array<{ number: number; body: string }>;
+      try {
+        const { stdout } = await gh(['issue', 'list', '--state', 'open', '--json', 'number,body', '--limit', '500'], {
+          cwd,
+        });
+        issues = JSON.parse(stdout || '[]') as Array<{ number: number; body: string }>;
+      } catch (err: unknown) {
+        printErr(`engineer migrate-issue-deps: could not list issues (${err instanceof Error ? err.message : String(err)})`);
+        return 1;
+      }
+
+      // Delegate to runMigration with formatted issues and confirmation callback
+      const formattedIssues = issues.map((issue) => ({
+        ref: `${nameWithOwner}#${issue.number}`,
+        body: issue.body ?? '',
+      }));
+
+      const result = await runMigration({
+        gh,
+        issues: formattedIssues,
+        confirm: async () => Promise.resolve(dispatch.confirm),
+      });
+
+      // Print the proposal (proposed edges + manual review items)
+      print(`migrate-issue-deps: proposal over ${nameWithOwner} (${issues.length} open issue(s))`);
+      for (const proposed of result.proposed) {
+        print(`  ${proposed.issue} blocked_by ${proposed.blockedBy}  [${proposed.kind}]`);
+      }
+      if (result.manualReview.length > 0) {
+        print(`  ${result.manualReview.length} item(s) need manual review (not auto-proposed):`);
+        for (const item of result.manualReview) {
+          print(`    ${item.issue} — ${item.reason}: ${item.excerpt}`);
+        }
+      }
+
+      // If not confirmed, print dry-run message and return
+      if (!dispatch.confirm) {
+        print('Dry run — no links written. Re-run with --confirm to apply.');
+        return 0;
+      }
+
+      // Print the results (created + already-present)
+      const created = result.created.length;
+      const alreadyPresent = result.alreadyPresent.length;
+      print(`migrate-issue-deps: ${created} link(s) created, ${alreadyPresent} already present.`);
       return 0;
     }
   }

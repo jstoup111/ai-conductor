@@ -364,6 +364,24 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   if Node < 20.5 is active or `npm` is missing it's skipped with a warning and
   `conduct` still installs. `bin/install --check` now reports whether the
   `conduct-ts` bundle is built and on PATH.
+- **Dependency-ordered intake and dispatch.** Specs whose GitHub issue declares a dependency
+  (via GitHub's native issue-dependencies `blocked_by` API, linked through the existing
+  `Source-Ref:` marker) are no longer dispatched or built ahead of the work they depend on.
+  - **Blocker resolver** (`engine/blocker-resolver.ts`, `createBlockerResolver`) resolves
+    `unblocked` / `blocked` / `cycle` / `indeterminate` verdicts, with cycle detection over the
+    `blocked_by` chain (every cycle member resolves identically) and fail-closed handling of
+    `gh` API errors and unparseable responses/markers (→ `indeterminate`, never `unblocked`).
+  - **Daemon dependency gate**: a new **WAITING** group in the startup inherited-state dashboard
+    (precedence HALTED > PROCESSED > IN-PROGRESS > WAITING > ELIGIBLE) surfaces build-ready
+    specs held back by an open blocker, a cycle, or an indeterminate verdict, with warn-once
+    (re-announce-on-change) logging so a slow-moving blocker doesn't spam `daemon.log`.
+  - **Engineer intake claim deferral**: the claim walk (`engineer/intake/dependency-claim.ts`)
+    skips blocked entries and claims the oldest **unblocked** one, releasing deferred entries
+    back to the queue unchanged; a new `all-blocked` outcome — distinct from `empty` — lists
+    every deferred entry and its verdict when the whole queue is stuck.
+  - **`conduct-ts engineer migrate-issue-deps [--confirm]`** — one-time migration tool that
+    converts prose dependency mentions on existing issues into real GitHub issue-dependency
+    links so the resolver above can see them (dry-run by default).
 
 ## Migration
 
