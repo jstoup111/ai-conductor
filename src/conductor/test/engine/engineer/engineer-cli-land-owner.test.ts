@@ -297,15 +297,22 @@ describe('engineer land — owner-gate wiring (CLI seam)', () => {
 
   it('threads the gh runner into landSpec → Owner from gh login when config is absent', async () => {
     // No config file at all → loadConfig fails → empty ownerConfig → gh fallback.
+    // Hermetic HOME: the operator's real ~/.ai-conductor/config.yml (spec_owner)
+    // must not leak in and shadow the injected gh fake.
     const worktree = await seedWorktree();
     const gh: GhRunner = async () => ({ stdout: 'bob\n' });
     const { out, opts } = captureOpts({ gh });
+    const fakeHome = await makeUserHome();
 
-    const code = await dispatchEngineer({ kind: 'land', project: 'alpha', idea: 'dep bump', worktree }, opts);
+    const code = await withHome(fakeHome, () =>
+      dispatchEngineer({ kind: 'land', project: 'alpha', idea: 'dep bump', worktree }, opts),
+    );
     expect(code).toBe(0);
     const result = JSON.parse(out[out.length - 1]) as { slug: string; branch: string };
     const marker = await showOnBranch(result.branch, `.docs/intake/${result.slug}.md`);
     expect(marker).toContain('Owner: bob');
+
+    await rm(fakeHome, { recursive: true, force: true });
   });
 
   // REMOVED: Interim test for un-owned stamp behavior (now throws fail-closed per Story 2).
