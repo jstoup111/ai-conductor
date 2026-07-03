@@ -283,3 +283,99 @@ describe('engine/daemon-dashboard — renderDashboard (FR-1/FR-2)', () => {
     expect(out).toContain('PROCESSED (0)');
   });
 });
+
+describe('engine/daemon-dashboard — renderDashboard WAITING group (FR-6)', () => {
+  it('renders a WAITING section with slug + blocker refs for a blocked verdict', () => {
+    const state: InheritedState = {
+      halted: [],
+      inProgress: [],
+      eligible: [{ slug: 'e1' }],
+      processed: [],
+      processedCount: 0,
+      waiting: [
+        {
+          slug: 'foo',
+          verdict: {
+            kind: 'blocked',
+            blockers: [
+              { repo: 'o/r', number: '10' },
+              { repo: 'o/r', number: '11' },
+            ],
+          },
+        },
+      ],
+    };
+    const out = renderDashboard(state);
+    expect(out).toContain('WAITING (1)');
+    expect(out).toContain('foo');
+    expect(out).toContain('o/r#10');
+    expect(out).toContain('o/r#11');
+  });
+
+  it('renders cycle members and indeterminate reason for other verdict kinds', () => {
+    const state: InheritedState = {
+      halted: [],
+      inProgress: [],
+      eligible: [],
+      processed: [],
+      processedCount: 0,
+      waiting: [
+        {
+          slug: 'cyc',
+          verdict: { kind: 'cycle', members: [{ repo: 'o/r', number: '1' }] },
+        },
+        {
+          slug: 'ind',
+          verdict: { kind: 'indeterminate', detail: 'gh unreachable' },
+        },
+      ],
+    };
+    const out = renderDashboard(state);
+    expect(out).toContain('WAITING (2)');
+    expect(out).toContain('cyc');
+    expect(out).toContain('o/r#1');
+    expect(out).toContain('ind');
+    expect(out).toContain('gh unreachable');
+  });
+
+  it('empty waiting list → no WAITING section rendered', () => {
+    const out = renderDashboard({
+      halted: [],
+      inProgress: [],
+      eligible: [],
+      processed: [],
+      processedCount: 0,
+      waiting: [],
+    });
+    expect(out).not.toContain('WAITING');
+  });
+
+  it('a missing waiting field renders no WAITING section', () => {
+    const out = renderDashboard({
+      halted: [],
+      inProgress: [],
+      eligible: [],
+      processed: [],
+      processedCount: 0,
+    });
+    expect(out).not.toContain('WAITING');
+  });
+
+  it('same slug present in both eligible items and waiting appears only in WAITING', () => {
+    const state: InheritedState = {
+      halted: [],
+      inProgress: [],
+      eligible: [{ slug: 'dup' }],
+      processed: [],
+      processedCount: 0,
+      waiting: [{ slug: 'dup', verdict: { kind: 'indeterminate', detail: 'x' } }],
+    };
+    const out = renderDashboard(state);
+    // ELIGIBLE section should not list dup as an eligible bullet.
+    const eligibleSectionStart = out.indexOf('ELIGIBLE');
+    const nextSectionStart = out.indexOf('PROCESSED');
+    const eligibleSection = out.slice(eligibleSectionStart, nextSectionStart);
+    expect(eligibleSection).not.toContain('• dup');
+    expect(out).toContain('WAITING (1)');
+  });
+});
