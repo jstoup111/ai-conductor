@@ -80,6 +80,70 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
     expect(result.waiting).toEqual([]);
   });
 
+  describe('dependency gate (Task 11)', () => {
+    async function seedWithSourceRef(slug: string, sourceRef: string) {
+      await writeFile(join(dir, `.docs/plans/${slug}.md`), planWithDeps(`.docs/stories/${slug}.md`));
+      await writeFile(join(dir, `.docs/stories/${slug}.md`), APPROVED_STORIES);
+      await mkdir(join(dir, '.docs/intake'), { recursive: true });
+      await writeFile(join(dir, `.docs/intake/${slug}.md`), `Source-Ref: ${sourceRef}\n`);
+    }
+
+    it('a spec with a blocked Source-Ref is diverted to waiting, absent from items', async () => {
+      await seedWithSourceRef('blocked-spec', 'acme/app#10');
+      const resolver = {
+        resolve: async () => ({ kind: 'blocked' as const, blockers: [{ repo: 'acme/app', number: '10' }] }),
+      };
+
+      const result = await discoverBacklog(dir, undefined, undefined, {
+        treeSource: fsTreeSource(dir),
+        resolver,
+      });
+
+      expect(result.items.map((b) => b.slug)).not.toContain('blocked-spec');
+      expect(result.waiting).toEqual([
+        {
+          slug: 'blocked-spec',
+          sourceRef: 'acme/app#10',
+          verdict: { kind: 'blocked', blockers: [{ repo: 'acme/app', number: '10' }] },
+        },
+      ]);
+    });
+
+    it('a spec with an unblocked Source-Ref stays in items, absent from waiting', async () => {
+      await seedWithSourceRef('clear-spec', 'acme/app#11');
+      const resolver = { resolve: async () => ({ kind: 'unblocked' as const }) };
+
+      const result = await discoverBacklog(dir, undefined, undefined, {
+        treeSource: fsTreeSource(dir),
+        resolver,
+      });
+
+      expect(result.items.map((b) => b.slug)).toContain('clear-spec');
+      expect(result.waiting).toEqual([]);
+    });
+
+    it('a spec with no Source-Ref is left in items without invoking the resolver', async () => {
+      await writeFile(join(dir, '.docs/plans/no-ref-spec.md'), planWithDeps('.docs/stories/no-ref-spec.md'));
+      await writeFile(join(dir, '.docs/stories/no-ref-spec.md'), APPROVED_STORIES);
+      let called = false;
+      const resolver = {
+        resolve: async () => {
+          called = true;
+          return { kind: 'unblocked' as const };
+        },
+      };
+
+      const result = await discoverBacklog(dir, undefined, undefined, {
+        treeSource: fsTreeSource(dir),
+        resolver,
+      });
+
+      expect(result.items.map((b) => b.slug)).toContain('no-ref-spec');
+      expect(result.waiting).toEqual([]);
+      expect(called).toBe(false);
+    });
+  });
+
   describe('track propagation (adr-2026-06-29-explore-prd-split-track-in-explore/adr-2026-06-29-track-marker-location)', () => {
     async function seedEligible(slug: string) {
       await writeFile(join(dir, `.docs/plans/${slug}.md`), planWithDeps(`.docs/stories/${slug}.md`));

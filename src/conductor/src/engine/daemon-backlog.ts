@@ -13,6 +13,7 @@ import { makeGitRunner, originDefaultBranch, type GitRunner } from './rebase.js'
 import type { OwnerResolution } from './owner-gate/identity.js';
 import type { OwnerStamp } from './owner-gate/provenance.js';
 import { decideSpecGate, type GateDecision } from './owner-gate/gate.js';
+import type { BlockerResolver, BlockerVerdict } from './blocker-resolver.js';
 
 const execFile = promisify(execFileCb);
 
@@ -206,6 +207,18 @@ export interface DiscoverBacklogOpts {
   readStamp?: (slug: string) => Promise<OwnerStamp>;
   readMergeTime?: (slug: string) => Promise<string | null>;
   cutover?: string | null;
+  /**
+   * Dependency-gate resolver injectable. Mirrors the owner-gate injectables
+   * above: an ABSENT resolver skips the dependency gate entirely (legacy
+   * behavior — every content/owner-eligible spec dispatches unaffected,
+   * exactly as before this feature existed). When supplied, exactly one
+   * instance is used per `discoverBacklog()` call (per scan pass) — the
+   * production wiring is responsible for constructing a fresh
+   * `createBlockerResolver({ run: createGhBlockerRunner() })` on every poll
+   * rather than caching one across polls, so memo/cycle-detection state never
+   * leaks stale verdicts between scans.
+   */
+  resolver?: BlockerResolver;
 }
 
 /**
@@ -232,8 +245,7 @@ export interface DiscoverBacklogOpts {
 export interface WaitingItem {
   slug: string;
   sourceRef?: string;
-  /** Placeholder shape; a later task fills in the real verdict payload. */
-  verdict: string;
+  verdict: BlockerVerdict;
 }
 
 export async function discoverBacklog(
@@ -399,7 +411,44 @@ export async function discoverBacklog(
     // carry the slug (+ tier + sourceRef + track); no working-tree paths to copy.
     items.push({ slug, tier, ...(sourceRef ? { sourceRef } : {}), ...(track ? { track } : {}) });
   }
-  return { items, waiting: [] };
+
+  // Dependency gate — the final gauntlet step, run AFTER content eligibility and
+  // the owner gate so it never bypasses either. An ABSENT resolver (legacy /
+  // not-yet-wired) skips the gate silently — identical to the owner-gate's
+  // absent-`daemonOwner` behavior above. Specs with no (or no parseable)
+  // Source-Ref never reach a supplied resolver either — they are
+  // content-eligible, non-intake specs and dispatch unaffected, preserving
+  // today's behavior for hand-authored work.
+  if (!opts.resolver) {
+    return { items, waiting: [] };
+  }
+  const resolver = opts.resolver;
+  const gated: BacklogItem[] = [];
+  const waiting: WaitingItem[] = [];
+  for (const item of items) {
+    if (!item.sourceRef) {
+      gated.push(item);
+      continue;
+    }
+    let verdict: BlockerVerdict;
+    try {
+      verdict = await resolver.resolve(item.sourceRef);
+    } catch (err: unknown) {
+      // The resolver contract never throws in production (blocker-resolver.ts
+      // already converts platform failures to `indeterminate`), but a fail-
+      // closed fallback here keeps a broken/injected resolver from crashing the
+      // scan loop or silently dispatching an unverified spec.
+      const detail = err instanceof Error ? err.message : String(err);
+      verdict = { kind: 'indeterminate', detail };
+    }
+    if (verdict.kind === 'unblocked') {
+      gated.push(item);
+    } else {
+      waiting.push({ slug: item.slug, sourceRef: item.sourceRef, verdict });
+    }
+  }
+
+  return { items: gated, waiting };
 }
 
 /**
