@@ -28,7 +28,8 @@ export function parsePriorityLabels(labels: string[]): 'high' | 'medium' | 'low'
 
   for (const label of labels) {
     // Match labels with the exact pattern 'priority: <band>'
-    const match = label.match(/^priority:\s*(high|medium|low)$/);
+    // Requires exactly one space after the colon, case-sensitive
+    const match = label.match(/^priority: (high|medium|low)$/);
     if (match) {
       const band = match[1] as 'high' | 'medium' | 'low';
       const rank = priorityRank[band];
