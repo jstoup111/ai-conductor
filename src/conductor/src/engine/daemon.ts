@@ -186,6 +186,22 @@ export interface DaemonDeps {
    * `runDaemon`; the daemon loop is never disrupted.
    */
   sweepMergeableLabels?: () => Promise<void>;
+
+  // ── Task T28: daemon self-restart at idle boundary ──────────────────────
+  /**
+   * Check whether a pending restart marker exists (e.g., `.daemon/RESTART-PENDING`).
+   * Called at each idle boundary to decide whether to fire the self-restart trigger.
+   * Returns true if the marker is present, false otherwise. Absent → no self-restart.
+   */
+  hasRestartPending?: () => Promise<boolean>;
+  /**
+   * Fire the self-restart callback when a restart marker is pending and the daemon
+   * reaches idle boundary with no in-flight work. This is the respawn hook injected
+   * from supervisor-cli or bare-run handler. Must handle async failures gracefully:
+   * a throw is logged and retried at the next idle boundary, never silent exit.
+   * Daemon continues running if trigger fails (no crash on failure).
+   */
+  triggerSelfRestart?: () => Promise<void>;
 }
 
 export interface DaemonOptions {
@@ -270,6 +286,9 @@ export async function runDaemon(
 
   const processed: FeatureOutcome[] = [];
   const inFlight = new Map<string, Tagged>();
+  // Task T28: track whether the restart trigger has been successfully called
+  // in this run. Once successful, don't retry (the respawn would exit the process).
+  let restartTriggeredSuccessfully = false;
   // Slugs dispatched this run, to prevent double-dispatch. Stays populated for
   // the run's lifetime; `done`/`error` slugs remain permanently excluded.
   const started = new Set<string>();
@@ -444,6 +463,37 @@ export async function runDaemon(
           stopReason = 'idle_timeout';
           break;
         }
+
+        // Task T28: at idle boundary, check for pending restart marker and fire trigger.
+        // This is the final action before normal idle sleep — if the respawn succeeds,
+        // the process exits; if it fails, we log and retry at the next idle boundary.
+        // The daemon continues normally if trigger fails (no crash on failure).
+        // Once the trigger succeeds, we never retry (the respawn would exit the process).
+        if (!restartTriggeredSuccessfully && deps.hasRestartPending && deps.triggerSelfRestart) {
+          try {
+            const hasRestart = await deps.hasRestartPending();
+            if (hasRestart) {
+              log('[daemon] self-restart marker found at idle boundary; firing trigger');
+              try {
+                await deps.triggerSelfRestart();
+                // If trigger succeeds, it respawns the process and we never reach here.
+                // But if it doesn't respawn immediately, track that we succeeded so we
+                // don't retry (in production, the process exits on respawn).
+                restartTriggeredSuccessfully = true;
+                log('[daemon] self-restart trigger completed (no respawn yet)');
+              } catch (err) {
+                log(
+                  `[daemon] self-restart trigger failed: ${err instanceof Error ? err.message : String(err)}; will retry at next idle boundary`,
+                );
+              }
+            }
+          } catch (err) {
+            log(
+              `[daemon] hasRestartPending check failed: ${err instanceof Error ? err.message : String(err)}; skipping restart check`,
+            );
+          }
+        }
+
         await sleep(idlePollMs);
         // FR-14: sweep once per idle poll tick.
         await sweepBestEffort();

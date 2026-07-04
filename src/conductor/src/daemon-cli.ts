@@ -63,6 +63,7 @@ import {
 import { sweepMergeableLabels } from './engine/mergeable-sweep.js';
 import { createPriorityResolver, ghIssueLabelReader } from './engine/backlog-priority.js';
 import { isPaused } from './engine/pause-marker.js';
+import { readRestartPending } from './engine/restart-marker.js';
 
 const execFile = promisify(execFileCb);
 
@@ -99,6 +100,13 @@ export interface DaemonModeOptions {
    * interactive prompt lives at `daemon start` (dispatchDaemonSupervisor).
    */
   ensureFresh?: () => Promise<void>;
+  /**
+   * Task T28: callback to fire when a restart marker is queued and the daemon
+   * reaches idle boundary. Injected from supervisor-cli or bare-run handler.
+   * Must handle async failures gracefully: a throw is logged and retried at
+   * the next idle boundary. Absent → no self-restart (default, for tests).
+   */
+  triggerSelfRestart?: () => Promise<void>;
 }
 
 // Front-half steps the daemon treats as already done — the human authored the
@@ -562,6 +570,13 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       sweepMergeableLabels: async () => {
         await sweepMergeableLabels({ projectRoot, log });
       },
+      // Task T28: check for pending restart marker at idle boundary.
+      hasRestartPending: async () => {
+        const intent = await readRestartPending(projectRoot);
+        return intent !== null;
+      },
+      // Task T28: trigger self-restart when marker is pending (injected from supervisor/bare-run).
+      triggerSelfRestart: opts.triggerSelfRestart,
     },
     {
       concurrency: clampDaemonConcurrency(opts.concurrency, log),
