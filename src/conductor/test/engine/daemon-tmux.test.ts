@@ -456,6 +456,60 @@ describe('makeTmuxSupervisor().restart: respawn-in-place', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// makeTmuxSupervisor().restart — respawn fallback on failure (FR-20 neg, Task 24)
+//
+// When the tmux tooling cannot respawn the daemon pane in place (respawn-pane
+// exits non-zero), restart() falls back to kill-session + new-session so the
+// daemon still ends up running — but this loses tmux scrollback/session
+// continuity, so the outcome must say so explicitly. The fallback must NEVER
+// fire when respawn-pane succeeds.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('makeTmuxSupervisor().restart: respawn fallback on failure (FR-20 neg)', () => {
+  it('falls back to kill-session + new-session when respawn-pane fails', async () => {
+    const makeTmuxSupervisor = requireFn(await load(), 'makeTmuxSupervisor');
+    const { run, calls } = spyRunner({ '-V': { code: 0 }, 'respawn-pane': { code: 1 } });
+    await makeTmuxSupervisor(run).restart('/home/alice/myapp');
+    const subs = calls.map((c) => c.args[0]);
+    expect(subs).toContain('respawn-pane');
+    expect(subs).toContain('kill-session');
+    expect(subs).toContain('new-session');
+  });
+
+  it('reports session-continuity loss in the outcome when the fallback is taken', async () => {
+    const makeTmuxSupervisor = requireFn(await load(), 'makeTmuxSupervisor');
+    const { run } = spyRunner({ '-V': { code: 0 }, 'respawn-pane': { code: 1 } });
+    const outcome = await makeTmuxSupervisor(run).restart('/home/alice/myapp');
+    expect(outcome).toBeDefined();
+    expect(outcome!.degraded).toBe(true);
+    expect(outcome!.message.toLowerCase()).toMatch(
+      /session.*(continuity|history|scrollback).*lost|lost.*session.*(continuity|history|scrollback)/,
+    );
+  });
+
+  it('does NOT take the fallback when respawn-pane succeeds', async () => {
+    const makeTmuxSupervisor = requireFn(await load(), 'makeTmuxSupervisor');
+    const { run, calls } = spyRunner({ '-V': { code: 0 } });
+    const outcome = await makeTmuxSupervisor(run).restart('/home/alice/myapp');
+    const subs = calls.map((c) => c.args[0]);
+    expect(subs).not.toContain('kill-session');
+    expect(subs).not.toContain('new-session');
+    expect(outcome?.degraded ?? false).toBe(false);
+  });
+
+  it('the recreated session after fallback uses the same session name and foreground command', async () => {
+    const makeTmuxSupervisor = requireFn(await load(), 'makeTmuxSupervisor');
+    const { run, calls } = spyRunner({ '-V': { code: 0 }, 'respawn-pane': { code: 1 } });
+    await makeTmuxSupervisor(run).restart('/home/alice/myapp');
+    const killCall = calls.find((c) => c.args[0] === 'kill-session')!;
+    const newCall = calls.find((c) => c.args[0] === 'new-session')!;
+    expect(killCall.args).toEqual(
+      expect.arrayContaining([expect.stringMatching(/^=cc-daemon-myapp-[0-9a-f]{6}$/)]),
+    );
+    expect(newCall.args).toContain('conduct-ts daemon --continuous');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // tmuxInstalled — calls [-V]; true/false; false (not throw) on TmuxNotInstalledError
 // ─────────────────────────────────────────────────────────────────────────────
 describe('tmuxInstalled: argv, boolean return, and throwing-runner false path', () => {

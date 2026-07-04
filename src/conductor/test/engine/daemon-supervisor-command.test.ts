@@ -33,7 +33,15 @@ function requireFn(mod: Record<string, unknown>, name: string): (...args: any[])
 // argv helper: [node, entry, ...rest]
 const argv = (...rest: string[]) => ['node', 'x', ...rest];
 
-const MANAGEMENT_VERBS = ['start', 'stop', 'restart', 'connect', 'debug'] as const;
+const MANAGEMENT_VERBS = [
+  'start',
+  'stop',
+  'restart',
+  'connect',
+  'debug',
+  'pause',
+  'resume',
+] as const;
 
 // ═════════════════════════════════════════════════════════════════════════════
 // detectDaemonSupervisorCommand — routes management verbs to {verb}
@@ -62,6 +70,16 @@ describe('detectDaemonSupervisorCommand: routes management verbs', () => {
   it('returns {verb:"debug"} for "daemon debug"', async () => {
     const detect = requireFn(await load(), 'detectDaemonSupervisorCommand');
     expect(detect(argv('daemon', 'debug'))).toEqual({ verb: 'debug' });
+  });
+
+  it('returns {verb:"pause"} for "daemon pause"', async () => {
+    const detect = requireFn(await load(), 'detectDaemonSupervisorCommand');
+    expect(detect(argv('daemon', 'pause'))).toEqual({ verb: 'pause' });
+  });
+
+  it('returns {verb:"resume"} for "daemon resume"', async () => {
+    const detect = requireFn(await load(), 'detectDaemonSupervisorCommand');
+    expect(detect(argv('daemon', 'resume'))).toEqual({ verb: 'resume' });
   });
 });
 

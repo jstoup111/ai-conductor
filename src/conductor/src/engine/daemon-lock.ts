@@ -386,6 +386,65 @@ export async function holdLock(repoPath: string): Promise<DaemonLockHandle | nul
   return makeLockHandle(repoPath, process.pid, false);
 }
 
+/**
+ * clearStaleLockForRestart — FR-8: hand off the 1-per-repo lock ahead of a
+ * `restart` verb's tmux-level respawn, built ENTIRELY from the existing
+ * acquire/reclaim primitives (no new lock semantics — plan Task 25 constraint).
+ *
+ *   - No prior pidfile    → acquire (O_EXCL) then immediately unlink our own
+ *     transient record. This still forces the O_EXCL race arbitration to run
+ *     BEFORE anything spawns, so a concurrent caller racing the same repo
+ *     (e.g. `ensureRunning`) cannot end up double-spawning (FR-8 race case).
+ *   - Prior owner is LIVE → left untouched. That live process is the one the
+ *     supervisor's respawn is about to kill; ADR-010 forbids reclaiming a
+ *     live lock — the freshly-booted daemon's own `holdLock()` reclaims once
+ *     the old process is actually dead.
+ *   - Prior owner is DEAD (or phantom) → reclaim() (the existing stale-reclaim
+ *     path), then unlink the transient record we just won so the freshly
+ *     spawned daemon claims a clean lock via O_EXCL on boot (new pid).
+ *
+ * Returns the previous owner's real pid (or null when there was none, or it
+ * was a phantom/-1 sentinel) — useful for "new holder pid !== old" assertions.
+ *
+ * @param repoPath - Absolute path to the repository root.
+ * @param kill     - Injectable kill probe (default: process.kill).
+ */
+export async function clearStaleLockForRestart(
+  repoPath: string,
+  kill: KillProbe = defaultKill,
+): Promise<number | null> {
+  const owner = await readPidRecord(repoPath);
+
+  if (!owner) {
+    // No prior lock on disk — still race-arbitrate via O_EXCL in case a
+    // concurrent caller (e.g. ensureRunning) is claiming the same repo now.
+    const result = await acquire(repoPath, kill);
+    if (result.acquired) {
+      try {
+        await unlink(pidfilePath(repoPath));
+      } catch {
+        // Already gone — fine.
+      }
+    }
+    return null;
+  }
+
+  if (owner.pid > 0 && isLive(owner.pid, kill)) {
+    return owner.pid; // live — leave it; the pane respawn will kill it
+  }
+
+  // Dead/phantom stale record — reclaim via the existing primitive.
+  const result = await reclaim(repoPath, kill);
+  if (result.reclaimed) {
+    try {
+      await unlink(pidfilePath(repoPath));
+    } catch {
+      // Already gone — fine.
+    }
+  }
+  return owner.pid > 0 ? owner.pid : null;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // ensureRunning — injectable options type (FR-21, FR-23).
 // ─────────────────────────────────────────────────────────────────────────────

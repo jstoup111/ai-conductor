@@ -51,7 +51,7 @@ function intFlag(argv: string[], flag: string, fallback?: number): number | unde
 
 /** Management verb dispatched to the Supervisor port (not a daemon run). */
 export interface DaemonSupervisorCommand {
-  verb: 'start' | 'stop' | 'restart' | 'connect' | 'debug';
+  verb: 'start' | 'stop' | 'restart' | 'connect' | 'debug' | 'pause' | 'resume';
   /**
    * `start` only: when true (`-D` / `--detach`), start the daemon and return
    * immediately instead of auto-attaching to its tmux session. Ignored for the
@@ -60,7 +60,15 @@ export interface DaemonSupervisorCommand {
   detach?: boolean;
 }
 
-const MANAGEMENT_VERBS = new Set(['start', 'stop', 'restart', 'connect', 'debug']);
+const MANAGEMENT_VERBS = new Set([
+  'start',
+  'stop',
+  'restart',
+  'connect',
+  'debug',
+  'pause',
+  'resume',
+]);
 
 /**
  * Parse `process.argv` into a DaemonSupervisorCommand descriptor, or return

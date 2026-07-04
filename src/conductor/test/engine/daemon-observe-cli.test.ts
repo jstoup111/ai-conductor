@@ -112,6 +112,107 @@ describe('engine/daemon-observe-cli', () => {
     });
   });
 
+  describe('computeStatusRow — state enum (FR-5)', () => {
+    async function writePauseMarker(
+      repo: string,
+      meta: { pausedAt?: string; pausedBy?: string } | string = {},
+    ): Promise<void> {
+      await mkdir(join(repo, '.daemon'), { recursive: true });
+      const body =
+        typeof meta === 'string'
+          ? meta
+          : JSON.stringify({ pausedAt: meta.pausedAt ?? '2026-07-04T00:00:00.000Z', ...meta });
+      await writeFile(join(repo, '.daemon', 'PAUSED'), body, 'utf8');
+    }
+
+    it('is "running" when live and not paused', async () => {
+      const repo = join(root, 'repo');
+      await mkdir(repo, { recursive: true });
+      await writePidfile(repo, { pid: 1 });
+      const row = await computeStatusRow(record('repo', repo), ALIVE);
+      expect(row.state).toBe('running');
+    });
+
+    it('is "stopped" when there is no pidfile and not paused', async () => {
+      const repo = join(root, 'repo');
+      await mkdir(repo, { recursive: true });
+      const row = await computeStatusRow(record('repo', repo), ALIVE);
+      expect(row.state).toBe('stopped');
+    });
+
+    it('is "stale" when the pidfile owner is dead and not paused', async () => {
+      const repo = join(root, 'repo');
+      await mkdir(repo, { recursive: true });
+      await writePidfile(repo, { pid: 1 });
+      const row = await computeStatusRow(record('repo', repo), DEAD);
+      expect(row.state).toBe('stale');
+    });
+
+    it('is "paused" when live and the pause marker is present, with pausedAt/by', async () => {
+      const repo = join(root, 'repo');
+      await mkdir(repo, { recursive: true });
+      await writePidfile(repo, { pid: 1 });
+      await writePauseMarker(repo, { pausedAt: '2026-07-04T01:00:00.000Z', pausedBy: 'james' });
+      const row = await computeStatusRow(record('repo', repo), ALIVE);
+      expect(row.state).toBe('paused');
+      expect(row.pausedAt).toBe('2026-07-04T01:00:00.000Z');
+      expect(row.pausedBy).toBe('james');
+    });
+
+    it('is "paused_dead" (composite) when paused and the pidfile owner is dead — shows both facts', async () => {
+      const repo = join(root, 'repo');
+      await mkdir(repo, { recursive: true });
+      await writePidfile(repo, { pid: 1 });
+      await writePauseMarker(repo, { pausedAt: '2026-07-04T01:00:00.000Z' });
+      const row = await computeStatusRow(record('repo', repo), DEAD);
+      expect(row.state).toBe('paused_dead');
+      expect(row.liveness).toBe('stale');
+      expect(row.pausedAt).toBe('2026-07-04T01:00:00.000Z');
+    });
+
+    it('treats corrupt pause-marker metadata as paused, without throwing', async () => {
+      const repo = join(root, 'repo');
+      await mkdir(repo, { recursive: true });
+      await writePidfile(repo, { pid: 1 });
+      await writePauseMarker(repo, '{ not json');
+      const row = await computeStatusRow(record('repo', repo), ALIVE);
+      expect(row.state).toBe('paused');
+      expect(row.pausedAt).toBeUndefined();
+    });
+
+    it('a four-state fleet renders each state distinctly', async () => {
+      const running = join(root, 'running');
+      const paused = join(root, 'paused');
+      const stopped = join(root, 'stopped');
+      const stale = join(root, 'stale');
+      await mkdir(running, { recursive: true });
+      await mkdir(paused, { recursive: true });
+      await mkdir(stopped, { recursive: true });
+      await mkdir(stale, { recursive: true });
+      await writePidfile(running, { pid: 1 });
+      await writePidfile(paused, { pid: 2 });
+      await writePauseMarker(paused);
+      await writePidfile(stale, { pid: 3 });
+
+      const kill: KillProbe = (pid) => {
+        if (pid === 3) {
+          const e = new Error('dead') as NodeJS.ErrnoException;
+          e.code = 'ESRCH';
+          throw e;
+        }
+      };
+
+      const rows = await Promise.all([
+        computeStatusRow(record('running', running), kill),
+        computeStatusRow(record('paused', paused), kill),
+        computeStatusRow(record('stopped', stopped), kill),
+        computeStatusRow(record('stale', stale), kill),
+      ]);
+      expect(rows.map((r) => r.state)).toEqual(['running', 'paused', 'stopped', 'stale']);
+      expect(new Set(rows.map((r) => r.state)).size).toBe(4);
+    });
+  });
+
   describe('runDaemonStatus', () => {
     async function registry(records: unknown[]): Promise<string> {
       const p = join(root, 'registry.json');

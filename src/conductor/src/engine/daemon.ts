@@ -138,6 +138,16 @@ export interface DaemonDeps {
    * production wires the real `.pipeline/HALT` check (see daemon-deps.ts).
    */
   isHalted?: (slug: string) => Promise<boolean>;
+  /**
+   * FR-1 (Task 11): true while dispatch is paused (`.daemon/PAUSED`). Gates the
+   * fill-pool block — no NEW feature is picked/dispatched while paused. Does
+   * NOT affect in-flight work: features already dispatched keep running to
+   * completion/park. Re-polled every loop iteration (including each idle
+   * tick), so lifting the pause mid-run resumes dispatch at the next boundary
+   * without a restart. Absent → never paused (pure-core default; production
+   * wires the real `isPaused` from `pause-marker.ts`).
+   */
+  isPaused?: () => Promise<boolean>;
   /** Optional progress line (narrator). */
   log?: (msg: string) => void;
   /** Injectable sleep (tests pass a no-op / fake clock). */
@@ -353,26 +363,35 @@ export async function runDaemon(
 
     // Fill the pool while slots are free.
     if (inFlight.size < concurrency) {
+      // FR-1 (Task 11): re-poll the pause predicate every iteration (including
+      // idle ticks) so a pause lifted mid-run resumes dispatch at the next
+      // boundary. Paused → no NEW item is picked this tick; in-flight work
+      // (handled below/at drain) is completely unaffected.
+      const paused = (await deps.isPaused?.()) ?? false;
+
       // First-in-backlog-order eligible item (Task 14: `pickEligible` consumes
       // only `items`, never `waiting`, so a dependency-gated spec never causes
       // head-of-line blocking of a later, unblocked one).
       const pickCtx: PickEligibleCtx = { inFlight, parked, started, isHalted: deps.isHalted };
 
-      // Local-only discovery first (no remote fetch): cheap, and it keeps a build
-      // from being re-based onto specs that landed on origin while work is running.
-      let next = await pickEligible({ items: await deps.discoverBacklog({ refresh: false }) }, pickCtx);
+      let next: BacklogItem | undefined;
+      if (!paused) {
+        // Local-only discovery first (no remote fetch): cheap, and it keeps a build
+        // from being re-based onto specs that landed on origin while work is running.
+        next = await pickEligible({ items: await deps.discoverBacklog({ refresh: false }) }, pickCtx);
 
-      // Only when fully idle (nothing running) AND nothing left locally do we reach
-      // out to origin for newly-merged specs — "drained, now find more".
-      if (!next && inFlight.size === 0) {
-        const refreshed = await deps.discoverBacklog({ refresh: true });
-        // FR-6: the refresh above already fetched origin, so the discovery ref is
-        // current — re-read the base SHA WITHOUT a second fetch and, on a genuine
-        // advance, re-kick before consuming the backlog so a freshly-cleared
-        // marker is un-parked in THIS iteration (its dispatch still flows through
-        // the existing un-park path, FR-8 — the sweep issues none).
-        await maybeRekick(false);
-        next = await pickEligible({ items: refreshed }, pickCtx);
+        // Only when fully idle (nothing running) AND nothing left locally do we reach
+        // out to origin for newly-merged specs — "drained, now find more".
+        if (!next && inFlight.size === 0) {
+          const refreshed = await deps.discoverBacklog({ refresh: true });
+          // FR-6: the refresh above already fetched origin, so the discovery ref is
+          // current — re-read the base SHA WITHOUT a second fetch and, on a genuine
+          // advance, re-kick before consuming the backlog so a freshly-cleared
+          // marker is un-parked in THIS iteration (its dispatch still flows through
+          // the existing un-park path, FR-8 — the sweep issues none).
+          await maybeRekick(false);
+          next = await pickEligible({ items: refreshed }, pickCtx);
+        }
       }
 
       if (next) {

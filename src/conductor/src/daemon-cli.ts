@@ -62,6 +62,7 @@ import {
 } from './engine/daemon-rekick.js';
 import { sweepMergeableLabels } from './engine/mergeable-sweep.js';
 import { createPriorityResolver, ghIssueLabelReader } from './engine/backlog-priority.js';
+import { isPaused } from './engine/pause-marker.js';
 
 const execFile = promisify(execFileCb);
 
@@ -497,6 +498,10 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     {
       discoverBacklog: discoverTick,
       isHalted: (slug) => isHalted(worktreeBase, slug),
+      // FR-1 (Task 11): gate dispatch on the durable `.daemon/PAUSED` marker,
+      // re-polled every loop iteration by runDaemon so a pause lifted mid-run
+      // resumes dispatch at the next boundary (no restart required).
+      isPaused: () => isPaused(projectRoot),
       runFeature,
       log,
       // ── Halt-reconciliation (ADR-013) real-I/O hooks ──────────────────────
