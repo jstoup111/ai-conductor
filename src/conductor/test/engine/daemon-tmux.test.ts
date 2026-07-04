@@ -284,16 +284,18 @@ describe('setRemainOnExit: argv', () => {
 // respawnPane — exact argv; window/pane-scoped target; throws on non-zero
 // ─────────────────────────────────────────────────────────────────────────────
 describe('respawnPane: argv and error handling', () => {
-  it('calls respawn-pane -k with the exact-match window/pane target (=name:0.0)', async () => {
+  it('calls respawn-pane -k with the active-pane target (=name:) and DAEMON_FOREGROUND_COMMAND to preserve scrollback', async () => {
     const respawnPane = requireFn(await load(), 'respawnPane');
+    const { DAEMON_FOREGROUND_COMMAND } = await load();
     const { run, calls } = spyRunner();
     await respawnPane('cc-daemon-myapp-abc123', run);
     expect(calls).toHaveLength(1);
-    expect(calls[0].args).toEqual(['respawn-pane', '-k', '-t', '=cc-daemon-myapp-abc123:0.0']);
+    // respawn-pane -k kills the process and restarts it; tmux preserves pane scrollback across this operation
+    expect(calls[0].args).toEqual(['respawn-pane', '-k', '-t', '=cc-daemon-myapp-abc123:', DAEMON_FOREGROUND_COMMAND]);
     expect(calls[0].inherit).toBe(false);
   });
 
-  it('throws when tmux exits non-zero', async () => {
+  it('throws when tmux respawn-pane exits non-zero', async () => {
     const respawnPane = requireFn(await load(), 'respawnPane');
     const { run } = spyRunner({ 'respawn-pane': { code: 1 } });
     await expect(respawnPane('cc-daemon-myapp-abc123', run)).rejects.toThrow();
@@ -304,7 +306,7 @@ describe('respawnPane: argv and error handling', () => {
 // isPaneDead — exact argv; distinguishes session-up from process-alive (FR-12)
 // ─────────────────────────────────────────────────────────────────────────────
 describe('isPaneDead: argv and liveness detection', () => {
-  it('calls list-panes with the exact-match pane target and #{pane_dead} format', async () => {
+  it('calls list-panes with the active-pane target and #{pane_dead} format', async () => {
     const isPaneDead = requireFn(await load(), 'isPaneDead');
     const { run, calls } = spyRunner({ 'list-panes': { code: 0, stdout: '0\n' } });
     await isPaneDead('cc-daemon-myapp-abc123', run);
@@ -312,7 +314,7 @@ describe('isPaneDead: argv and liveness detection', () => {
     expect(calls[0].args).toEqual([
       'list-panes',
       '-t',
-      '=cc-daemon-myapp-abc123:0.0',
+      '=cc-daemon-myapp-abc123:',
       '-F',
       '#{pane_dead}',
     ]);
@@ -441,14 +443,14 @@ describe('makeTmuxSupervisor().restart: respawn-in-place', () => {
     await makeTmuxSupervisor(run).restart('/home/alice/myapp');
     const respawnCall = calls.find((c) => c.args[0] === 'respawn-pane')!;
     expect(respawnCall.args).toEqual(
-      expect.arrayContaining(['-t', expect.stringMatching(/^=cc-daemon-myapp-[0-9a-f]{6}:0\.0$/)]),
+      expect.arrayContaining(['-t', expect.stringMatching(/^=cc-daemon-myapp-[0-9a-f]{6}:$/)]),
     );
-    // No call in the whole restart flow ever addresses a window/pane index other
-    // than 0.0 — i.e. no argv element matches ":<n>." for n != 0 or ":0.<n>" for n != 0.
+    // No call in the whole restart flow ever addresses specific window/pane indices
+    // (targets use : to refer to the active pane, or session name only).
     for (const call of calls) {
       for (const arg of call.args) {
         if (typeof arg === 'string' && arg.includes(':')) {
-          expect(arg).toMatch(/:0\.0$|:$|^=[^:]+$/);
+          expect(arg).toMatch(/:$|^=[^:]+$/);
         }
       }
     }

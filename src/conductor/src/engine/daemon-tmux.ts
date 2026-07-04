@@ -199,8 +199,9 @@ export async function isPaneDead(
   name: string,
   run: TmuxRunner = defaultTmuxRunner,
 ): Promise<boolean> {
+  // Use =${name}: to target the session's active pane (works regardless of base-index).
   const result = run(
-    ['list-panes', '-t', `=${name}:0.0`, '-F', '#{pane_dead}'],
+    ['list-panes', '-t', `=${name}:`, '-F', '#{pane_dead}'],
     { inherit: false },
   );
   return result.code === 0 && result.stdout.trim() === '1';
@@ -221,18 +222,25 @@ export async function setRemainOnExit(
 }
 
 /**
- * Respawns the daemon pane in place (kills the exited/foreground process and
+ * Respawns the daemon pane in place (terminates the foreground process and
  * relaunches DAEMON_FOREGROUND_COMMAND in the SAME pane) without touching the
- * session, window layout, or any other pane. Targets window 0 / pane 0 — the
- * single window+pane created by newDetachedSession — so operator windows
+ * session, window layout, or any other pane. Targets the session's active pane
+ * (which is the single pane created by newDetachedSession) so operator windows
  * opened later in the same session are never addressed.
+ *
+ * Uses respawn-pane -k to kill the existing process and re-run the command.
+ * The -k flag handles killing the process; remain-on-exit (already set)
+ * prevents the pane/window/session from closing.
+ *
  * Throws if tmux exits non-zero (e.g. the targeted pane no longer exists).
  */
 export async function respawnPane(
   name: string,
   run: TmuxRunner = defaultTmuxRunner,
+  cmd: string = DAEMON_FOREGROUND_COMMAND,
 ): Promise<void> {
-  const result = run(['respawn-pane', '-k', '-t', `=${name}:0.0`], { inherit: false });
+  // Use respawn-pane -k to immediately kill the existing process and re-run the command.
+  const result = run(['respawn-pane', '-k', '-t', `=${name}:`, cmd], { inherit: false });
   if (result.code !== 0) {
     throw new Error(`tmux respawn-pane exited with code ${result.code} for session "${name}"`);
   }
