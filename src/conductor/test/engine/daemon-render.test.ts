@@ -45,7 +45,13 @@ describe('renderDaemonEvent', () => {
   it('renders kickback with the ×N counter', () => {
     expect(
       lines({ type: 'kickback', from: 'build', to: 'plan', evidence: 'AC missing', count: 1 }),
-    ).toEqual(['· ↩ kickback: build re-opened plan — AC missing (×1)']);
+    ).toEqual(['↩ KICKBACK: build re-opened plan — AC missing (×1)']);
+  });
+
+  it('renders kickback with a ×N counter greater than one', () => {
+    expect(
+      lines({ type: 'kickback', from: 'build', to: 'plan', evidence: 'AC missing', count: 2 }),
+    ).toEqual(['↩ KICKBACK: build re-opened plan — AC missing (×2)']);
   });
 
   it('renders halt and convergence', () => {
@@ -76,5 +82,19 @@ describe('renderDaemonEvent coloring', () => {
     const [line] = lines({ type: 'step_failed', step: 'build', error: 'boom', retryCount: 2 });
     expect(line).not.toMatch(ANSI);
     expect(line).toBe('· ✗ build failed (try 2): boom');
+  });
+
+  it('emits ANSI color for kickback lines with text preserved underneath', () => {
+    chalk.level = 1;
+    const [line] = lines({
+      type: 'kickback',
+      from: 'build',
+      to: 'plan',
+      evidence: 'AC missing',
+      count: 1,
+    });
+    expect(line).toMatch(ANSI);
+    // eslint-disable-next-line no-control-regex
+    expect(line.replace(/\[[0-9;]*m/g, '')).toBe('↩ KICKBACK: build re-opened plan — AC missing (×1)');
   });
 });

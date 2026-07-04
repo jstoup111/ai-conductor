@@ -834,7 +834,7 @@ export function renderDaemonEvent(event: ConductorEvent, log: (msg: string) => v
       break;
     case 'kickback':
       log(
-        `${dot} ${chalk.yellow('↩')} kickback: ${event.from} re-opened ${event.to}${event.evidence ? ` — ${event.evidence}` : ''} ${chalk.dim(`(×${event.count})`)}`,
+        `${chalk.bold.yellow(`↩ KICKBACK: ${event.from} re-opened ${event.to}${event.evidence ? ` — ${event.evidence}` : ''}`)} (×${event.count})`,
       );
       break;
     case 'loop_halt':
