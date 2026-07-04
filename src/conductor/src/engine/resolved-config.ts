@@ -302,8 +302,11 @@ export function resolveRebaseResolutionAttempts(config?: HarnessConfig): number 
 /**
  * Default timeout in minutes for OAuth token park-and-poll recovery.
  * When the daemon detects an expired operator OAuth token, it parks the build
- * and polls for token refresh. This timeout caps the polling duration. 0 means
- * poll indefinitely; negative or non-numeric values fall back to 60.
+ * and polls for token refresh. This timeout caps the polling duration.
+ *
+ * Configuration semantics:
+ *   - 0 or negative → opt-out flag; auth failure HALTs immediately (no polling)
+ *   - positive      → polling timeout in minutes
  */
 export const DEFAULT_AUTH_PARK_TIMEOUT_MINUTES = 60;
 
@@ -313,19 +316,29 @@ export const DEFAULT_AUTH_PARK_TIMEOUT_MINUTES = 60;
  * Reads `config.auth_park_timeout_minutes` (top-level HarnessConfig key).
  *
  * Resolution rules:
- *   - undefined / absent → DEFAULT_AUTH_PARK_TIMEOUT_MINUTES (60)
- *   - integer >= 0       → use the value (0 = disabled, preserved as-is)
- *   - negative integer   → DEFAULT_AUTH_PARK_TIMEOUT_MINUTES (60)
- *   - NaN or non-numeric → DEFAULT_AUTH_PARK_TIMEOUT_MINUTES (60)
+ *   - undefined / absent     → DEFAULT_AUTH_PARK_TIMEOUT_MINUTES (60)
+ *   - finite number (any)    → use the value (0 and negatives signal opt-out at runtime)
+ *   - non-numeric (string)   → throw with clear error message
+ *   - NaN or Infinity        → throw with clear error message
+ *
+ * @throws Error if the value is non-numeric or non-finite (NaN, Infinity)
  */
 export function resolveAuthParkTimeoutMinutes(config?: HarnessConfig): number {
   const override = config?.auth_park_timeout_minutes;
   if (override === undefined || override === null) {
     return DEFAULT_AUTH_PARK_TIMEOUT_MINUTES;
   }
-  if (typeof override !== 'number' || !Number.isFinite(override) || override < 0) {
-    return DEFAULT_AUTH_PARK_TIMEOUT_MINUTES;
+  if (typeof override !== 'number') {
+    throw new Error(
+      `Invalid auth_park_timeout_minutes: expected a number, got ${typeof override} (${JSON.stringify(override)})`
+    );
   }
+  if (!Number.isFinite(override)) {
+    throw new Error(
+      `Invalid auth_park_timeout_minutes: must be a finite number, got ${override}`
+    );
+  }
+  // Preserve 0 and negative values as opt-out signals; positive values are timeout in minutes
   return override;
 }
 
