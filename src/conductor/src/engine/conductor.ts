@@ -104,7 +104,15 @@ import {
 import { writeIntakeMarker } from './engineer/intake-marker.js';
 import { readMachineOwnerConfig } from './owner-gate/machine-identity.js';
 import { resolveDaemonOwner, type GhRunner } from './owner-gate/identity.js';
-import { makeProductionGh, makeProductionGit, publishEarlyDraft, advisoryPublish } from './pr-labels.js';
+import {
+  makeProductionGh,
+  makeProductionGit,
+  publishEarlyDraft,
+  advisoryPublish,
+  pushBranch,
+  isAheadOfBase,
+  setReady,
+} from './pr-labels.js';
 
 export type CheckpointResponse = 'continue' | 'back' | 'quit';
 
@@ -854,6 +862,86 @@ export class Conductor {
       branch,
       'early-draft',
       () => publishEarlyDraft(this.gitForPublish, this.gh, this.projectRoot, branch, base, {}, undefined),
+      log,
+    );
+  }
+
+  /**
+   * Step-boundary refresh hook (T9 / adr-2026-07-03-pr-timing-config-key).
+   * Advisory post-step: after a loopGate step (build, manual-test, retro,
+   * finish, …) completes successfully, push any new commits accumulated
+   * during that step so the already-open early-draft PR stays current for
+   * reviewers watching it. A PLAIN push only — never `--force-with-lease`
+   * here; the lease-guarded refresh site is the post-rebase hook (T11).
+   *
+   * No-op (zero pushes) when the branch has no commits ahead of base since
+   * the step ran, matching TS-3's "refresh with commits; no-op without"
+   * happy path. Gated on `daemon && !selfHost && pr_timing === 'early-draft'`
+   * by the caller, same as the build-start hook. Requires
+   * `state.worktree_branch`; silent no-op without it. Wrapped in
+   * advisoryPublish so a defensive failure here can never block the loop.
+   */
+  private async runStepBoundaryRefreshHook(state: ConductState): Promise<void> {
+    const branch = state.worktree_branch;
+    if (!branch) return;
+
+    const gitRebase = makeGitRunner(this.projectRoot);
+    const base = this.baseBranch ?? (await originDefaultBranch(gitRebase)) ?? 'main';
+    const log = (m: string) => console.error(m);
+
+    await advisoryPublish(
+      branch,
+      'early-draft',
+      async () => {
+        const aheadCount = await isAheadOfBase(this.gitForPublish, this.projectRoot, base, log);
+        if (aheadCount > 0) {
+          await pushBranch(this.gitForPublish, this.projectRoot, branch, { forceWithLease: false }, log);
+        }
+      },
+      log,
+    );
+  }
+
+  /**
+   * Post-rebase force-with-lease publish hook (T11 / TS-4 /
+   * adr-2026-07-03-pr-timing-config-key).
+   * Advisory: after a real daemon rebase completes (not HALTed), if the
+   * rebase actually rewrote history (kind 'changed' or 'changelog_resolved')
+   * the already-published early-draft branch's remote tip is now stale
+   * relative to the rewritten local history, so it must be force-pushed. A
+   * plain push would be rejected by the remote (non-fast-forward); a bare
+   * `--force` risks clobbering a push the operator or another process made
+   * in between — `--force-with-lease` is the ONLY force-push site in this
+   * codebase (T13 grep invariant). A `noop` rebase (branch already current,
+   * nothing rewritten) is a silent no-op — there is nothing new to publish.
+   * Gated on `daemon && !selfHost && pr_timing === 'early-draft'` by the
+   * caller. Requires `state.worktree_branch`; silent no-op without it (no
+   * worktree branch → nothing to push, matching the other publish hooks).
+   * Wrapped in advisoryPublish so a defensive failure here can never block
+   * the loop from proceeding past the rebase step.
+   */
+  private async runRebasePublishHook(
+    state: ConductState,
+    outcome: RebaseOutcome,
+  ): Promise<void> {
+    const branch = state.worktree_branch;
+    if (!branch) return;
+    // Only a history-rewriting rebase invalidates the remote tip. A 'noop'
+    // outcome means the branch was already current — nothing to force-push.
+    if (outcome.kind === 'noop') return;
+
+    const log = (m: string) => console.error(m);
+    await advisoryPublish(
+      branch,
+      'post-rebase-force-with-lease',
+      () =>
+        pushBranch(
+          this.gitForPublish,
+          this.projectRoot,
+          branch,
+          { forceWithLease: true },
+          log,
+        ),
       log,
     );
   }
@@ -1933,6 +2021,18 @@ export class Conductor {
           const tail = successOutput ? successOutput.split('\n').slice(-200) : undefined;
           await this.events.emit({ type: 'step_completed', step: step.name, status: 'done', tail });
 
+          // Step-boundary refresh hook (T9 / adr-2026-07-03-pr-timing-config-key).
+          // After a loopGate step completes, push any new commits so the
+          // early-draft PR stays current. Same gating as the build-start hook.
+          if (
+            step.loopGate &&
+            this.daemon &&
+            !this.selfHost &&
+            resolvePrTiming(this.config) === 'early-draft'
+          ) {
+            await this.runStepBoundaryRefreshHook(state);
+          }
+
           // Store PR URL from finish step output. Prefer state-file write
           // (skill-authored, survives recovery/interactive fixes), fall back to
           // scraping the first URL out of the runner's stdout so the common
@@ -2525,6 +2625,15 @@ export class Conductor {
 
     if (outcome.kind === 'conflict_halt') {
       await writeHalt(this.projectRoot, outcome.conflicts, outcome.reason);
+    } else if (
+      !this.selfHost &&
+      resolvePrTiming(this.config) === 'early-draft'
+    ) {
+      // T11: history-rewriting rebase → force-with-lease republish of the
+      // already-open early-draft branch. Never runs on a conflict_halt (the
+      // branch is mid-rebase and unsafe to push); a 'noop' outcome is a
+      // silent no-op inside the hook itself.
+      await this.runRebasePublishHook(state, outcome);
     }
 
     // The step itself "succeeds" (it ran); advanceTail/the HALT signal decide
