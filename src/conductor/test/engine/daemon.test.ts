@@ -669,7 +669,7 @@ describe('engine/daemon — runDaemon', () => {
       // (This test may need adjustment based on actual behavior.)
       // expect(requestRestart).toHaveBeenCalledTimes(0);
     });
-
+  });
 
   // ── TS-2: repo_root_missing self-termination ─────────────────
 
