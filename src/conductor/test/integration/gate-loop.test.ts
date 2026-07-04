@@ -262,8 +262,16 @@ describe('integration/gate-loop', () => {
   // here). advanceTail must emit the `kickback` event for that detection even
   // though the front half stays linear (no navigateBack, i++ unchanged).
   describe('front-half amendment kickback (conflict_check → architecture_review)', () => {
+    // Tier 'M' (not 'S'): `conflict_check` is skippableForTiers: ['S'], so an
+    // 'S' tier would tier-skip it before the runner ever ran it — the runner
+    // callback (and this whole scenario) needs conflict_check to actually
+    // execute so it can write the kickback-shaped verdict onto
+    // architecture_review. `acceptance_specs` is pre-marked 'done' (rather
+    // than left pending) so it isn't re-dispatched under tier 'M' — this
+    // scenario is about the front-half conflict_check → architecture_review
+    // kickback, not acceptance-spec generation.
     const FRONT_TO_CONFLICT: ConductState = {
-      complexity_tier: 'S',
+      complexity_tier: 'M',
       feature_desc: 'add foo',
       worktree: 'done',
       memory: 'done',
@@ -273,6 +281,7 @@ describe('integration/gate-loop', () => {
       architecture_diagram: 'skipped',
       architecture_review: 'done',
       stories: 'done',
+      acceptance_specs: 'done',
     };
 
     function conductorFromConflictCheck(runner: StepRunner): Conductor {
@@ -319,18 +328,34 @@ describe('integration/gate-loop', () => {
 
     it('emits a kickback event when conflict_check re-opens architecture_review, without invoking navigateBack', async () => {
       await seedStoriesAndPlan();
+      await seedApprovedAdr();
       await writeState(statePath, { ...FRONT_TO_CONFLICT });
 
       const ran: string[] = [];
+      let conflictRuns = 0;
       const runner: StepRunner = {
         run: async (step) => {
           ran.push(step);
           if (step === 'conflict_check') {
-            await writeVerdict(dir, 'architecture_review', {
-              satisfied: false,
-              checkedAt: 1,
-              kickback: { from: 'conflict_check', evidence: 'incompatible ADR seam' },
-            });
+            conflictRuns++;
+            await mkdir(join(dir, '.docs/conflicts'), { recursive: true });
+            await writeFile(
+              join(dir, '.docs/conflicts/report.md'),
+              '# Conflict Check\n\nNo blocking conflicts.\n',
+            );
+            // Only the FIRST run detects the amendment kickback — `fromStep:
+            // 'conflict_check'` means this step re-executes every time the
+            // (front-half-linear) loop index reaches it again, e.g. right
+            // after the tail's selector re-opens and re-satisfies
+            // architecture_review. A real conflict-check skill wouldn't
+            // re-flag a gate it already amended and that's since resolved.
+            if (conflictRuns === 1) {
+              await writeVerdict(dir, 'architecture_review', {
+                satisfied: false,
+                checkedAt: 1,
+                kickback: { from: 'conflict_check', evidence: 'incompatible ADR seam' },
+              });
+            }
           }
           return satisfy(step);
         },
@@ -340,17 +365,19 @@ describe('integration/gate-loop', () => {
       events.on('feature_complete', () => {
         completed = true;
       });
-
       await conductorFromConflictCheck(runner).run();
 
       expect(kicks).toEqual([
         { from: 'conflict_check', to: 'architecture_review', count: 1 },
       ]);
-      // Linear advance unaffected: plan ran next (not a re-run of
-      // architecture_review), and architecture_review ran only once.
+      // Linear advance unaffected at detection time: plan ran immediately
+      // next (no navigateBack jump). The gate-driven tail's own selector
+      // — independently of the front-half detection — later re-opens
+      // architecture_review because its verdict is still unsatisfied on
+      // disk, exactly once, and the loop still converges.
       const conflictIdx = ran.indexOf('conflict_check');
       expect(ran[conflictIdx + 1]).toBe('plan');
-      expect(ran.filter((s) => s === 'architecture_review')).toHaveLength(0);
+      expect(ran.filter((s) => s === 'architecture_review')).toHaveLength(1);
       expect(completed).toBe(true);
 
       const finalState = JSON.parse(await readFile(statePath, 'utf-8'));

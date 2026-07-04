@@ -2145,6 +2145,24 @@ export class Conductor {
     }
 
     if (indexOf(step.name) < topo.firstLoopIndex) {
+      // Front-half amendment kickback: a step before the first loop gate
+      // (e.g. conflict_check) can still write a kickback-shaped verdict onto
+      // an upstream gate (e.g. architecture_review). Surface that detection
+      // via the same shared scan the tail uses, but without navigating —
+      // the front half stays linear (i++) and statuses are left untouched;
+      // the tail will re-process the same verdict later when it reaches the
+      // gate-driven region.
+      const frontVerdicts = await readAllVerdicts(this.projectRoot);
+      const frontKickback = await this.scanKickbackVerdicts(
+        step.name,
+        state,
+        kickbackCounts,
+        frontVerdicts,
+        topo,
+        steps,
+        { navigate: false },
+      );
+      if (frontKickback === 'halt') return 'halt';
       return null; // front half stays linear (before the first loop gate)
     }
 
