@@ -5,7 +5,8 @@
 // an operator refresh rather than burning a retry budget or HALTing.
 //
 // The imminent-expiry margin buffers for token rotation delays + time between
-// the pre-flight check and actual build invocation. We use 7 days.
+// the pre-flight check and actual build invocation. Real OAuth tokens live for
+// hours, so the margin must stay well under that or every dispatch parks.
 
 import { readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -14,7 +15,7 @@ import { join } from 'node:path';
  * Imminent-expiry margin in milliseconds.
  * Tokens expiring within this window are treated as expired.
  */
-const IMMINENT_EXPIRY_MARGIN_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+const IMMINENT_EXPIRY_MARGIN_MS = 5 * 60 * 1000; // 5 minutes
 
 /**
  * Reads the operator credentials file and classifies the OAuth token state.

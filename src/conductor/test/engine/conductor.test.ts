@@ -3148,11 +3148,14 @@ describe('engine/conductor', () => {
     });
 
     it('HALTs with credentials-specific reason when park timeout elapses', async () => {
+      const { waitForCredentialsChange } = await import(
+        '../../src/engine/self-host/operator-credentials.js'
+      );
       const credentialsPath = join(dir, '.credentials.json');
       const expiresAt = Date.now() - 1000; // expired
       await writeFile(credentialsPath, JSON.stringify({ claudeAiOauth: { expiresAt } }), 'utf-8');
 
-      const mockWaitForCredentialsChange = vi.fn().mockResolvedValue({
+      vi.mocked(waitForCredentialsChange).mockResolvedValue({
         type: 'timeout' as const,
         credentialsPath,
         credentialsState: 'expired' as const,
@@ -3184,9 +3187,6 @@ describe('engine/conductor', () => {
         selfHostGuardrails: mockGuardrails as any,
       });
 
-      // Patch the conductor to use our mock function
-      (conductor as any).waitForCredentialsChange = mockWaitForCredentialsChange;
-
       let halted = false;
       events.on('loop_halt', () => {
         halted = true;
@@ -3201,6 +3201,108 @@ describe('engine/conductor', () => {
       expect(halt).toContain(String(expiresAt));
       // Verify it's NOT the generic "retries exhausted" reason
       expect(halt).not.toMatch(/retries exhausted/i);
+    });
+
+    // ── TR-4 Task 15: Auth HALT distinguishable from build-defect HALT ─────
+
+    it('TR-4 Test B: auth-park timeout does not consume retry budget', async () => {
+      const { waitForCredentialsChange } = await import(
+        '../../src/engine/self-host/operator-credentials.js'
+      );
+      const credentialsPath = join(dir, '.credentials.json');
+      const expiresAt = Date.now() - 1000;
+      await writeFile(credentialsPath, JSON.stringify({ claudeAiOauth: { expiresAt } }), 'utf-8');
+
+      let buildAttempts = 0;
+
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName): Promise<StepRunResult> => {
+          if (step === 'build') {
+            buildAttempts++;
+            return { success: false, authFailure: true };
+          }
+          return { success: true };
+        }),
+      };
+
+      vi.mocked(waitForCredentialsChange).mockResolvedValue({
+        type: 'timeout' as const,
+        credentialsPath,
+        credentialsState: 'expired' as const,
+        expiresAt: String(expiresAt),
+      });
+
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        maxRetries: 2, // enough budget to retry if it were burned
+      });
+
+      await conductor.run();
+
+      // Test B: only one build attempt made (authFailure triggers park, timeout
+      // halts immediately without retrying — attempt counter stays at 1)
+      expect(buildAttempts).toBe(1);
+    });
+
+    it('TR-4 Test C: escalation PR body carries credentials-specific reason', async () => {
+      const { waitForCredentialsChange } = await import(
+        '../../src/engine/self-host/operator-credentials.js'
+      );
+      const credentialsPath = join(dir, '.credentials.json');
+      const expiresAt = Date.now() - 1000;
+      await writeFile(credentialsPath, JSON.stringify({ claudeAiOauth: { expiresAt } }), 'utf-8');
+
+      const fakePrUrl = 'https://github.com/test/repo/pull/999';
+      const capturedOpts: EscalateBuildFailureOpts[] = [];
+
+      const fakeEscalation = vi.fn<any>(async (opts: EscalateBuildFailureOpts) => {
+        capturedOpts.push(opts);
+        return { prUrl: fakePrUrl };
+      });
+
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName): Promise<StepRunResult> => {
+          if (step === 'build') return { success: false, authFailure: true };
+          return { success: true };
+        }),
+      };
+
+      vi.mocked(waitForCredentialsChange).mockResolvedValue({
+        type: 'timeout' as const,
+        credentialsPath,
+        credentialsState: 'expired' as const,
+        expiresAt: String(expiresAt),
+      });
+
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        maxRetries: 1,
+        escalateBuildFailure: fakeEscalation,
+      });
+
+      await conductor.run();
+
+      // Test C: escalation was called with credentials-specific reason
+      expect(fakeEscalation).toHaveBeenCalledOnce();
+      expect(capturedOpts).toHaveLength(1);
+
+      const failureReason = capturedOpts[0].failureReason;
+
+      // Verify the PR body reason is credentials-specific, not generic "retries exhausted"
+      expect(failureReason).not.toMatch(/retries exhausted/i);
+      expect(failureReason).toContain(credentialsPath);
+      expect(failureReason).toContain(String(expiresAt));
+      expect(failureReason).toContain('Operator credentials expired');
     });
   });
 

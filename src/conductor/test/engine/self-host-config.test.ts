@@ -102,6 +102,7 @@ describe('resolved-config — resolveSelfHostConfig (TR-11 safe defaults)', () =
       versionApprovalGate: true,
       releaseArtifactGate: true,
       versionFreeze: null,
+      authParkTimeoutMinutes: 60,
     });
   });
 

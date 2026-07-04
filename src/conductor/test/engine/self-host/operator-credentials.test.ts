@@ -47,8 +47,8 @@ describe('self-host/operator-credentials — readOperatorCredentialsState (TR-2)
     expect(result).toBe('fresh');
   });
 
-  it('expiresAt within the imminent-expiry margin (within 7 days) → expired', async () => {
-    const imminentTime = Date.now() + 3 * 24 * 60 * 60 * 1000; // 3 days from now
+  it('expiresAt within the imminent-expiry margin (within 5 minutes) → expired', async () => {
+    const imminentTime = Date.now() + 2 * 60 * 1000; // 2 minutes from now
     await writeFile(
       join(configDir, '.credentials.json'),
       JSON.stringify({ claudeAiOauth: { expiresAt: imminentTime } }),
@@ -118,7 +118,7 @@ describe('self-host/operator-credentials — readOperatorCredentialsState (TR-2)
       'utf-8',
     );
 
-    // When now=fixedNow, the token is 30 days away and beyond the 7-day margin → fresh
+    // When now=fixedNow, the token is 30 days away and beyond the 5-minute margin → fresh
     const result = await readOperatorCredentialsState(configDir, fixedNow);
     expect(result).toBe('fresh');
   });

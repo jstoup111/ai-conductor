@@ -68,6 +68,9 @@ describe('acceptance: sandbox auth-expiry park-and-poll (sandbox-auth-expiry-par
   let events: ConductorEventEmitter;
   let priorConfigDir: string | undefined;
   let provisionedDirs: string[];
+  // Sandbox teardown (TR-5) removes the config dir on every exit path, so the
+  // sandbox's credentials copy must be captured at teardown time to be asserted.
+  let sandboxCredsAtTeardown: string | null;
 
   function makeGuardrails(): SelfHostGuardrails {
     return {
@@ -85,6 +88,10 @@ describe('acceptance: sandbox auth-expiry park-and-poll (sandbox-auth-expiry-par
           configDir,
           childEnv: () => process.env,
           teardown: async () => {
+            sandboxCredsAtTeardown = await readFile(
+              join(configDir, '.credentials.json'),
+              'utf-8',
+            ).catch(() => null);
             await rm(configDir, { recursive: true, force: true });
           },
         };
@@ -100,6 +107,7 @@ describe('acceptance: sandbox auth-expiry park-and-poll (sandbox-auth-expiry-par
     statePath = join(dir, 'conduct-state.json');
     events = new ConductorEventEmitter();
     provisionedDirs = [];
+    sandboxCredsAtTeardown = null;
     priorConfigDir = process.env.CLAUDE_CONFIG_DIR;
     process.env.CLAUDE_CONFIG_DIR = operatorDir;
     await mkdir(join(dir, '.pipeline'), { recursive: true });
@@ -160,9 +168,8 @@ describe('acceptance: sandbox auth-expiry park-and-poll (sandbox-auth-expiry-par
     expect(await haltBody()).toBeNull(); // never parked-out to HALT
     expect(guardrails.provisionSandbox).toHaveBeenCalledTimes(1); // reused, not re-provisioned
 
-    const sandboxCreds = JSON.parse(
-      await readFile(join(provisionedDirs[0], '.credentials.json'), 'utf-8'),
-    );
+    expect(sandboxCredsAtTeardown).not.toBeNull();
+    const sandboxCreds = JSON.parse(sandboxCredsAtTeardown as string);
     const operatorCreds = JSON.parse(
       await readFile(join(operatorDir, '.credentials.json'), 'utf-8'),
     );
@@ -207,7 +214,10 @@ describe('acceptance: sandbox auth-expiry park-and-poll (sandbox-auth-expiry-par
     // The pre-flight must park BEFORE provisioning: exactly one provision, and
     // it happens only once the refresh has landed (never eagerly on an expired file).
     expect(guardrails.provisionSandbox).toHaveBeenCalledTimes(1);
-    expect((runner.run as ReturnType<typeof vi.fn>)).toHaveBeenCalledTimes(1);
+    const buildDispatches = (runner.run as ReturnType<typeof vi.fn>).mock.calls.filter(
+      ([step]) => step === 'build',
+    );
+    expect(buildDispatches).toHaveLength(1); // retry budget untouched — one dispatch
   });
 
   it.each([
