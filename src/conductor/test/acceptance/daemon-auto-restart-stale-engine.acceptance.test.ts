@@ -142,21 +142,21 @@ describe('acceptance: idle-boundary stale detection + restart request over the R
 
   it('happy path: stale verdict at idle boundary writes RESTART_PENDING (reason/identities/timestamp) and releases the real pidfile lock', async () => {
     await withLockedRepo(async (repoPath) => {
-      const { writeRestartPending, readRestartPending } = {
-        writeRestartPending: requireFn(await load(RESTART_MOD), 'writeRestartPending'),
-        readRestartPending: requireFn(await load(RESTART_MOD), 'readRestartPending'),
+      const { writeRestartMarker, readRestartMarkerWithStatus } = {
+        writeRestartMarker: requireFn(await load(RESTART_MOD), 'writeRestartMarker'),
+        readRestartMarkerWithStatus: requireFn(await load(RESTART_MOD), 'readRestartMarkerWithStatus'),
       };
       const lock = await holdLock(repoPath);
       expect(lock).not.toBeNull();
 
       const requestRestart = vi.fn(
         async (info: { fromIdentity: string; targetIdentity: string }) => {
-          await writeRestartPending(repoPath, {
+          await writeRestartMarker({
             reason: 'stale-engine',
             fromIdentity: info.fromIdentity,
             targetIdentity: info.targetIdentity,
-            at: new Date().toISOString(),
-          });
+            at: Date.now(),
+          }, repoPath);
           await lock!.release();
         },
       );
@@ -174,12 +174,13 @@ describe('acceptance: idle-boundary stale detection + restart request over the R
       await runDaemon(deps as DaemonDeps, { concurrency: 1, once: false, maxIdlePolls: 1 });
 
       expect(requestRestart).toHaveBeenCalledTimes(1);
-      const marker = await readRestartPending(repoPath);
-      expect(marker.status).toBe('present');
-      expect(marker.reason).toBe('stale-engine');
-      expect(marker.fromIdentity).toBeTruthy();
-      expect(marker.targetIdentity).toBeTruthy();
-      expect(marker.at).toBeTruthy();
+      const result = await readRestartMarkerWithStatus(repoPath);
+      expect(result.kind).toBe('present');
+      expect(result.marker).not.toBeNull();
+      expect(result.marker!.reason).toBe('stale-engine');
+      expect(result.marker!.fromIdentity).toBeTruthy();
+      expect(result.marker!.targetIdentity).toBeTruthy();
+      expect(result.marker!.at).toBeTruthy();
 
       // The lock this process held is released — the pidfile is gone.
       expect(existsSync(join(repoPath, '.daemon', 'daemon.pid'))).toBe(false);
@@ -191,28 +192,29 @@ describe('acceptance: idle-boundary stale detection + restart request over the R
       const identityMod = await load(IDENTITY_MOD);
       const captureEngineIdentity = requireFn(identityMod, 'captureEngineIdentity');
       const createStaleEngineChecker = requireFn(identityMod, 'createStaleEngineChecker');
-      const { readRestartPending } = { readRestartPending: requireFn(await load(RESTART_MOD), 'readRestartPending') };
+      const { readRestartMarkerWithStatus } = { readRestartMarkerWithStatus: requireFn(await load(RESTART_MOD), 'readRestartMarkerWithStatus') };
 
       const workDir = await mkdtemp(join(tmpdir(), 'stale-engine-identical-'));
       const distA = await buildFixtureDist(workDir, FIXTURE_V1);
       const captured = await captureEngineIdentity(distA);
       // Byte-identical rebuild — same source recompiled.
       const distA2 = await buildFixtureDist(workDir, FIXTURE_V1);
-      const checker = createStaleEngineChecker(captured);
+      const checker = createStaleEngineChecker(captured, distA2);
 
       const requestRestart = vi.fn(async () => {});
       const deps: DaemonDeps = {
         discoverBacklog: async () => [],
         runFeature: async () => ({ slug: 'never', status: 'done' }),
         sleep: async () => {},
-        checkStaleEngine: () => checker.check(distA2),
+        checkStaleEngine: () => checker.check(),
         requestRestart,
       } as DaemonDeps & { checkStaleEngine: () => Promise<string>; requestRestart: typeof requestRestart };
 
       await runDaemon(deps as DaemonDeps, { concurrency: 1, once: false, maxIdlePolls: 1 });
 
       expect(requestRestart).not.toHaveBeenCalled();
-      expect((await readRestartPending(repoPath)).status).toBe('absent');
+      const result = await readRestartMarkerWithStatus(repoPath);
+      expect(result.kind).toBe('absent');
       await rm(workDir, { recursive: true, force: true });
     });
   });
@@ -287,14 +289,14 @@ describe('acceptance: idle-boundary stale detection + restart request over the R
       await unlink(dist); // genuinely removed between capture and check (mid-rebuild ENOENT)
 
       const warn = vi.fn();
-      const checker = createStaleEngineChecker(captured, { warn });
+      const checker = createStaleEngineChecker(captured, dist, warn);
       const requestRestart = vi.fn(async () => {});
 
       const deps: DaemonDeps = {
         discoverBacklog: async () => [],
         runFeature: async () => ({ slug: 'never', status: 'done' }),
         sleep: async () => {},
-        checkStaleEngine: () => checker.check(dist),
+        checkStaleEngine: () => checker.check(),
         requestRestart,
       } as DaemonDeps & { checkStaleEngine: () => Promise<string>; requestRestart: typeof requestRestart };
 
@@ -337,7 +339,7 @@ describe('acceptance: startup restart handshake + suppression (Stories 3 & 4)', 
   it('marker present + converged identity: logs "restarted for engine refresh", removes the marker, stays armed', async () => {
     await withRepo(async (repoPath) => {
       const restartMod = await load(RESTART_MOD);
-      const writeRestartPending = requireFn(restartMod, 'writeRestartPending');
+      const writeRestartMarker = requireFn(restartMod, 'writeRestartMarker');
       const initStaleEngineState = requireFn(await load(INIT_MOD), 'initStaleEngineState');
 
       const identityMod = await load(IDENTITY_MOD);
@@ -346,12 +348,12 @@ describe('acceptance: startup restart handshake + suppression (Stories 3 & 4)', 
       const dist = await buildFixtureDist(workDir, FIXTURE_V2);
       const freshIdentity = await captureEngineIdentity(dist);
 
-      await writeRestartPending(repoPath, {
+      await writeRestartMarker({
         reason: 'stale-engine',
         fromIdentity: 'aaa',
         targetIdentity: freshIdentity,
-        at: new Date().toISOString(),
-      });
+        at: Date.now(),
+      }, repoPath);
 
       const log: string[] = [];
       const state = await initStaleEngineState({
@@ -364,9 +366,10 @@ describe('acceptance: startup restart handshake + suppression (Stories 3 & 4)', 
       expect(log.join('\n')).toMatch(/restarted for engine refresh/);
       expect(log.join('\n')).toContain('aaa');
       expect(state.armed).toBe(true);
-      expect((await load(RESTART_MOD)).readRestartPending).toBeDefined();
-      const { readRestartPending } = { readRestartPending: requireFn(restartMod, 'readRestartPending') };
-      expect((await readRestartPending(repoPath)).status).toBe('absent');
+      expect((await load(RESTART_MOD)).readRestartMarker).toBeDefined();
+      const { readRestartMarkerWithStatus } = { readRestartMarkerWithStatus: requireFn(restartMod, 'readRestartMarkerWithStatus') };
+      const result = await readRestartMarkerWithStatus(repoPath);
+      expect(result.kind).toBe('absent');
       await rm(workDir, { recursive: true, force: true });
     });
   });
@@ -425,7 +428,7 @@ describe('acceptance: startup restart handshake + suppression (Stories 3 & 4)', 
   it('non-convergence: fresh identity ≠ marker target ⇒ suppression recorded, one warning naming both identities', async () => {
     await withRepo(async (repoPath) => {
       const restartMod = await load(RESTART_MOD);
-      const writeRestartPending = requireFn(restartMod, 'writeRestartPending');
+      const writeRestartMarker = requireFn(restartMod, 'writeRestartMarker');
       const initStaleEngineState = requireFn(await load(INIT_MOD), 'initStaleEngineState');
       const identityMod = await load(IDENTITY_MOD);
       const captureEngineIdentity = requireFn(identityMod, 'captureEngineIdentity');
@@ -435,12 +438,12 @@ describe('acceptance: startup restart handshake + suppression (Stories 3 & 4)', 
       const freshIdentity = await captureEngineIdentity(dist);
 
       // Marker's target was a DIFFERENT identity we never actually reached.
-      await writeRestartPending(repoPath, {
+      await writeRestartMarker({
         reason: 'stale-engine',
         fromIdentity: 'zzz',
         targetIdentity: 'a-target-we-never-reached',
-        at: new Date().toISOString(),
-      });
+        at: Date.now(),
+      }, repoPath);
 
       const log: string[] = [];
       const state = await initStaleEngineState({
