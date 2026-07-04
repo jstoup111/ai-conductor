@@ -252,6 +252,11 @@ it, even if the skill itself reports success.
 **Option 2: Push & PR**
 - Run the `/pr` skill — it handles pre-push verification, title/body generation, push, and
   PR creation
+- **Halt-PR rehabilitation:** if the branch's existing PR is a reused halt PR
+  (title `needs-remediation:` or the `needs-remediation` label), `/pr` MUST
+  rewrite its title/body as for a fresh PR — the conductor's finish gate fails
+  while the recorded PR title still starts with `needs-remediation:`
+  (adr-2026-07-03-halt-pr-rehabilitation-at-finish)
 - **Shipped record (before handing the PR to the human):** on the feature
   branch, run `conduct-ts shipped-record --slug <slug> --pr <PR_URL>` (where
   `<slug>` is the plan-file stem, `.docs/plans/<slug>.md`), then `git push` so

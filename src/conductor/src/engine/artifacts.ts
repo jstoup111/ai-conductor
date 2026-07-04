@@ -4,6 +4,8 @@ import type { StepName, ComplexityTier, Track } from '../types/index.js';
 import type { HarnessConfig } from '../types/config.js';
 import { slugify } from './worktree.js';
 import { parseSourceRef } from './engineer/issue-ref.js';
+import { makeProductionGh } from './pr-labels.js';
+import { readStaleHaltTitle } from './halt-pr-rehabilitation.js';
 
 /**
  * Artifact glob patterns per step. Each pattern is `<dir>/*.md`, `<dir>/**\/*.md`,
@@ -653,6 +655,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       };
     }
     if (choice === 'pr') {
+      let prUrl: string | undefined;
       try {
         const raw = await readFile(join(dir, '.pipeline/conduct-state.json'), 'utf-8');
         const state = JSON.parse(raw) as { pr_url?: string };
@@ -662,11 +665,28 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
             reason: `${FINISH_CHOICE_MARKER}="pr" but no pr_url in state — the PR URL must be recorded`,
           };
         }
+        prUrl = state.pr_url;
       } catch {
         return {
           done: false,
           reason: 'cannot read state to confirm pr_url for finish-choice="pr"',
         };
+      }
+      // adr-2026-07-03-halt-pr-rehabilitation-at-finish (Decision 3): the gate
+      // fails while a SUCCESSFUL gh read shows the recorded PR still titled
+      // `needs-remediation:` — the skill must rewrite the reused halt PR's
+      // presentation. Fail-open on any gh error (readStaleHaltTitle returns
+      // null): network unavailability never blocks a ship.
+      try {
+        const staleTitle = await readStaleHaltTitle(makeProductionGh(), dir, prUrl);
+        if (staleTitle !== null) {
+          return {
+            done: false,
+            reason: `recorded PR ${prUrl} is still titled "${staleTitle}" — the finish/pr skill must rewrite the reused halt PR's title/body before completing`,
+          };
+        }
+      } catch {
+        // fail-open — presentation is not worth blocking a ship on gh failure
       }
     }
     return { done: true };
