@@ -516,6 +516,280 @@ test_missing_conduct_ts() {
 }
 test_missing_conduct_ts
 
+# ─── Test: Bare Word Rejection (TECH-3) ──────────────────────────────────
+#
+# These tests verify that bare single words (without quotes) are rejected.
+# They are likely typos for multi-word feature descriptions, and we want to
+# force users to quote them: conduct "add user authentication"
+#
+# Test cases:
+# 1. `conduct auth` — single word, should fail with "Unknown command: auth"
+# 2. `conduct rendr-diagrams` — single word typo, should fail similarly
+#
+# Both should:
+# - Exit with non-zero code
+# - Print "Unknown command: <word>" to stderr
+# - Print a hint about quoting to stderr
+# - NOT create any .pipeline/ state (no pipeline launch)
+#
+# Multi-word descriptions like `conduct "add login form"` should still work.
+
+echo ""
+echo -e "${BOLD}Test Suite: Bare Word Rejection (TECH-3)${NC}"
+echo ""
+
+test_bare_word_rejection_red() {
+  # Test 1: conduct auth (bare single word should be rejected)
+  local repo
+  repo=$(make_temp_repo "bare-word-auth-repo")
+
+  local stderr_file
+  stderr_file=$(mktemp)
+
+  local rc=0
+  (
+    cd "$repo"
+    CONDUCT_TEST_NO_CLAUDE=1 timeout 5 "$CONDUCT" auth >/dev/null 2>"$stderr_file"
+  ) || rc=$?
+
+  assert "conduct auth exits non-zero" \
+    "$([ "$rc" -ne 0 ] && echo 0 || echo 1)"
+
+  assert "stderr mentions 'Unknown command: auth'" \
+    "$(grep -q 'Unknown command: auth' "$stderr_file" && echo 0 || echo 1)"
+
+  assert "stderr mentions quoting hint" \
+    "$(grep -qiE 'must be quoted|quoting|Feature descriptions' "$stderr_file" && echo 0 || echo 1)"
+
+  assert "no pipeline state created for bare word 'auth'" \
+    "$(assert_no_pipeline_state "$repo" && echo 0 || echo 1)"
+
+  rm -f "$stderr_file"
+
+  # Test 2: conduct rendr-diagrams (typo, also bare single word)
+  local typo_repo
+  typo_repo=$(make_temp_repo "bare-word-typo-repo")
+
+  local typo_stderr
+  typo_stderr=$(mktemp)
+
+  rc=0
+  (
+    cd "$typo_repo"
+    CONDUCT_TEST_NO_CLAUDE=1 timeout 5 "$CONDUCT" rendr-diagrams >/dev/null 2>"$typo_stderr"
+  ) || rc=$?
+
+  assert "conduct rendr-diagrams exits non-zero" \
+    "$([ "$rc" -ne 0 ] && echo 0 || echo 1)"
+
+  assert "stderr mentions 'Unknown command: rendr-diagrams'" \
+    "$(grep -q 'Unknown command: rendr-diagrams' "$typo_stderr" && echo 0 || echo 1)"
+
+  assert "stderr contains quoting hint for typo" \
+    "$(grep -qiE 'must be quoted|quoting|Feature descriptions' "$typo_stderr" && echo 0 || echo 1)"
+
+  assert "no pipeline state created for typo 'rendr-diagrams'" \
+    "$(assert_no_pipeline_state "$typo_repo" && echo 0 || echo 1)"
+
+  rm -f "$typo_stderr"
+
+  # Test 3: Multi-word descriptions still work (quoted)
+  # This is a sanity check that the fix doesn't break valid usage.
+  local multi_repo
+  multi_repo=$(make_temp_repo "multi-word-description-repo")
+
+  local multi_stderr
+  multi_stderr=$(mktemp)
+
+  rc=0
+  (
+    cd "$multi_repo"
+    # This should NOT fail on the argument parsing level, even if it fails later
+    # (e.g. because claude isn't available). We're testing that the argument itself
+    # is accepted.
+    CONDUCT_TEST_NO_CLAUDE=1 timeout 5 "$CONDUCT" "add login form" >/dev/null 2>"$multi_stderr" || true
+  )
+
+  # For this test, we just verify the error is NOT "Unknown command"
+  assert "multi-word description is not rejected as unknown command" \
+    "$(! grep -q 'Unknown command: add' "$multi_stderr" && echo 0 || echo 1)"
+
+  rm -f "$multi_stderr"
+}
+test_bare_word_rejection_red
+
+# ─── Test: Characterization — Multi-word Descriptions & Flag Combos (TECH-4) ─
+#
+# These tests verify that the unknown-subcommand guard does NOT break existing
+# legitimate behaviors:
+#
+# 1. Multi-word feature descriptions with quoted strings still parse correctly:
+#    `conduct "add user login"` should set FEATURE_DESC and proceed
+#
+# 2. Flag + multi-word description combinations work:
+#    `conduct --auto "add user login"` should parse both flag and description
+#
+# 3. Dash-leading quoted strings are correctly rejected by the guard:
+#    `conduct "--weird feature name"` should fail (string starts with dash)
+#    This is a NEGATIVE test: we expect rejection.
+#
+# All should pass immediately against the TECH-4 implementation (the guard
+# is already in place). These are characterization tests — they verify that
+# existing behavior remains intact.
+
+echo ""
+echo -e "${BOLD}Test Suite: Characterization — Multi-word Descriptions & Flag Combos (TECH-4)${NC}"
+echo ""
+
+test_characterization_tech4() {
+  # Test 1: conduct "add user login" — multi-word description should parse OK
+  local repo stderr_file rc=0
+  repo=$(make_temp_repo "characterization-multiword-repo")
+  stderr_file=$(mktemp)
+  (
+    cd "$repo"
+    CONDUCT_TEST_NO_CLAUDE=1 timeout 5 "$CONDUCT" "add user login" >/dev/null 2>"$stderr_file"
+  ) || rc=$?
+
+  # Should NOT be rejected with the "Unknown command/option" error
+  # Exit code might be 124 (timeout) or 0 if it reaches pipeline, but NOT 1 (our rejection)
+  assert "conduct with multi-word quoted description parses successfully" \
+    "$([ "$rc" -ne 1 ] && echo 0 || echo 1)"
+
+  assert "no 'Unknown command' error for multi-word description" \
+    "$(! grep -q 'Unknown command' "$stderr_file" && echo 0 || echo 1)"
+
+  assert "no 'Unknown option' error for multi-word description" \
+    "$(! grep -q 'Unknown option' "$stderr_file" && echo 0 || echo 1)"
+
+  rm -f "$stderr_file"
+
+  # Test 2: conduct --auto "add user login" — flag + multi-word description
+  repo=$(make_temp_repo "characterization-auto-flag-repo")
+  stderr_file=$(mktemp)
+  rc=0
+  (
+    cd "$repo"
+    CONDUCT_TEST_NO_CLAUDE=1 timeout 5 "$CONDUCT" --auto "add user login" >/dev/null 2>"$stderr_file"
+  ) || rc=$?
+
+  assert "conduct with --auto flag + multi-word description parses successfully" \
+    "$([ "$rc" -ne 1 ] && echo 0 || echo 1)"
+
+  assert "no error for --auto flag combined with description" \
+    "$(! grep -qE 'Unknown (command|option)' "$stderr_file" && echo 0 || echo 1)"
+
+  rm -f "$stderr_file"
+
+  # Test 3: conduct "--weird feature name" — dash-leading quoted string SHOULD be rejected
+  repo=$(make_temp_repo "characterization-dash-leading-repo")
+  stderr_file=$(mktemp)
+  rc=0
+  (
+    cd "$repo"
+    CONDUCT_TEST_NO_CLAUDE=1 timeout 5 "$CONDUCT" "--weird feature name" >/dev/null 2>"$stderr_file"
+  ) || rc=$?
+
+  assert "dash-leading quoted string is rejected (exit non-zero)" \
+    "$([ "$rc" -ne 0 ] && echo 0 || echo 1)"
+
+  assert "dash-leading string triggers 'Unknown option' message" \
+    "$(grep -q 'Unknown option' "$stderr_file" && echo 0 || echo 1)"
+
+  assert "error points to --help for dash-leading string" \
+    "$(grep -q -- '--help' "$stderr_file" && echo 0 || echo 1)"
+
+  assert "no pipeline state from dash-leading quoted string rejection" \
+    "$(assert_no_pipeline_state "$repo" && echo 0 || echo 1)"
+
+  rm -f "$stderr_file"
+
+  # Test 4: Verify --auto alone (valid single flag) still works (does not trigger Unknown option)
+  repo=$(make_temp_repo "characterization-auto-alone-repo")
+  stderr_file=$(mktemp)
+  rc=0
+  (
+    cd "$repo"
+    CONDUCT_TEST_NO_CLAUDE=1 timeout 5 "$CONDUCT" --auto >/dev/null 2>"$stderr_file"
+  ) || rc=$?
+
+  # --auto without a feature description may fail, but NOT with "Unknown option: --auto"
+  assert "--auto flag alone does not trigger Unknown option error" \
+    "$(! grep -q 'Unknown option: --auto' "$stderr_file" && echo 0 || echo 1)"
+
+  rm -f "$stderr_file"
+}
+test_characterization_tech4
+
+# ─── Test: Help & Discoverability (TECH-3/TECH-4 Done When) ──────────────
+#
+# These tests verify that the --help output contains helpful hints about
+# the new unknown-command guard:
+# 1. Multi-word feature descriptions must be quoted
+# 2. Bare single words are rejected
+# 3. Conduct-TS forwarded verbs are documented
+#
+# This ensures users discover the constraints and understand the behavior
+# without needing to read error messages.
+
+echo ""
+echo -e "${BOLD}Test Suite: Help & Discoverability${NC}"
+echo ""
+
+test_help_contains_multi_word_hint() {
+  local help_output
+  help_output=$("$CONDUCT" --help)
+
+  assert "conduct --help contains 'multi-word' hint" \
+    "$(echo "$help_output" | grep -qi 'multi.word' && echo 0 || echo 1)"
+
+  assert "conduct --help shows quoted example (add user login)" \
+    "$(echo "$help_output" | grep -q 'add user login' && echo 0 || echo 1)"
+
+  assert "conduct --help shows rejected bare word example (auth)" \
+    "$(echo "$help_output" | grep -q 'conduct auth' && echo 0 || echo 1)"
+
+  assert "conduct --help explains feature descriptions must be quoted" \
+    "$(echo "$help_output" | grep -qi 'Feature descriptions.*quoted' && echo 0 || echo 1)"
+}
+test_help_contains_multi_word_hint
+
+test_help_lists_conduct_ts_verbs() {
+  local help_output
+  help_output=$("$CONDUCT" --help)
+
+  assert "conduct --help mentions conduct-ts forwarded verbs" \
+    "$(echo "$help_output" | grep -qi 'Conduct-TS.*Forwarded' && echo 0 || echo 1)"
+
+  assert "conduct --help lists 'daemon' verb" \
+    "$(echo "$help_output" | grep -q 'daemon' && echo 0 || echo 1)"
+
+  assert "conduct --help lists 'render-diagrams' verb" \
+    "$(echo "$help_output" | grep -q 'render-diagrams' && echo 0 || echo 1)"
+
+  assert "conduct --help lists 'engineer' verb" \
+    "$(echo "$help_output" | grep -q 'engineer' && echo 0 || echo 1)"
+
+  assert "conduct --help lists 'help' verb" \
+    "$(echo "$help_output" | grep -q '^\s*help\s' && echo 0 || echo 1)"
+}
+test_help_lists_conduct_ts_verbs
+
+test_help_references_unknown_command_guard() {
+  local help_output
+  help_output=$("$CONDUCT" --help)
+
+  assert "conduct --help mentions unknown-command guard" \
+    "$(echo "$help_output" | grep -qi 'unknown.*guard' && echo 0 || echo 1)"
+
+  assert "conduct --help mentions failure behavior" \
+    "$(echo "$help_output" | grep -qi 'fail loudly' && echo 0 || echo 1)"
+
+  assert "conduct --help contains GitHub documentation link" \
+    "$(echo "$help_output" | grep -q 'github.com.*ai-conductor.*unknown-command' && echo 0 || echo 1)"
+}
+test_help_references_unknown_command_guard
+
 # ─── Summary ─────────────────────────────────────────────────────────────
 
 echo ""
