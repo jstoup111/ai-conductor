@@ -4444,3 +4444,85 @@ describe('engine/conductor: pipeline-exit false-completion regression', () => {
     ).toBe(true);
   });
 });
+
+describe('projectRoot is required', () => {
+  let dir: string;
+  let statePath: string;
+  let events: ConductorEventEmitter;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'conductor-projectroot-test-'));
+    statePath = join(dir, 'conduct-state.json');
+    events = new ConductorEventEmitter();
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('throws when projectRoot is undefined', async () => {
+    const runner = createMockStepRunner();
+
+    // Verify .pipeline does not exist before construction attempt
+    let pipelineExistsBefore = false;
+    try {
+      const files = await readdir(join(dir, '.pipeline'));
+      pipelineExistsBefore = files.length > 0;
+    } catch {
+      pipelineExistsBefore = false;
+    }
+    expect(pipelineExistsBefore).toBe(false);
+
+    expect(() => {
+      new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: undefined as unknown as string,
+      });
+    }).toThrow(/projectRoot/i);
+
+    // Verify .pipeline was NOT created by failed construction
+    let pipelineExistsAfter = false;
+    try {
+      const files = await readdir(join(dir, '.pipeline'));
+      pipelineExistsAfter = files.length > 0;
+    } catch {
+      pipelineExistsAfter = false;
+    }
+    expect(pipelineExistsAfter).toBe(false);
+  });
+
+  it('throws when projectRoot is an empty string', async () => {
+    const runner = createMockStepRunner();
+
+    // Verify .pipeline does not exist before construction attempt
+    let pipelineExistsBefore = false;
+    try {
+      const files = await readdir(join(dir, '.pipeline'));
+      pipelineExistsBefore = files.length > 0;
+    } catch {
+      pipelineExistsBefore = false;
+    }
+    expect(pipelineExistsBefore).toBe(false);
+
+    expect(() => {
+      new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: '',
+      });
+    }).toThrow(/projectRoot/i);
+
+    // Verify .pipeline was NOT created by failed construction
+    let pipelineExistsAfter = false;
+    try {
+      const files = await readdir(join(dir, '.pipeline'));
+      pipelineExistsAfter = files.length > 0;
+    } catch {
+      pipelineExistsAfter = false;
+    }
+    expect(pipelineExistsAfter).toBe(false);
+  });
+});
