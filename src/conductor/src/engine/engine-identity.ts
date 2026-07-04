@@ -5,7 +5,7 @@
 // same hash, enabling identity comparison for engine freshness checks.
 
 import { createHash } from 'node:crypto';
-import { createReadStream } from 'node:fs';
+import { createReadStream, readFileSync } from 'node:fs';
 import { access, constants } from 'node:fs/promises';
 
 /**
@@ -64,21 +64,40 @@ export async function captureEngineIdentity(entryPath: string): Promise<string |
  * - Never accesses the filesystem
  * - Calls the warn callback exactly once at construction time
  *
- * When `captured` is a valid hash string, the checker is enabled and can perform
- * actual staleness checks (implementation in later tasks).
+ * When `captured` is a valid hash string, the checker is enabled and performs
+ * staleness checks by re-hashing the file and comparing to the captured identity.
+ *
+ * Overloaded signatures support two calling patterns:
+ * - createStaleEngineChecker(null, warn?) — disabled checker (for capture failure)
+ * - createStaleEngineChecker(hash, entryPath, warn?) — enabled checker with file monitoring
  *
  * @param captured - The captured engine identity (sha256 hash) or null if capture failed
- * @param warn - Optional callback to warn about capture failure
+ * @param entryPathOrWarn - Either entryPath (string) or warn callback (function), or omitted
+ * @param warn - Optional warn callback (when second param is entryPath)
  * @returns A StaleEngineChecker that can determine engine freshness
  */
 export function createStaleEngineChecker(
+  captured: null,
+  warn?: (msg: string) => void
+): StaleEngineChecker;
+
+export function createStaleEngineChecker(
+  captured: string,
+  entryPath: string,
+  warn?: (msg: string) => void
+): StaleEngineChecker;
+
+export function createStaleEngineChecker(
   captured: string | null,
+  entryPathOrWarn?: string | ((msg: string) => void),
   warn?: (msg: string) => void
 ): StaleEngineChecker {
   // When captured is null, the checker is disabled
   if (captured === null) {
-    if (warn) {
-      warn('Engine identity capture failed; stale-engine checker disabled');
+    // entryPathOrWarn could be the warn function
+    const warnFn = typeof entryPathOrWarn === 'function' ? entryPathOrWarn : undefined;
+    if (warnFn) {
+      warnFn('Engine identity capture failed; stale-engine checker disabled');
     }
 
     // Return a permanently disabled checker
@@ -90,10 +109,30 @@ export function createStaleEngineChecker(
   }
 
   // When captured is a valid hash, the checker is enabled
-  // Full implementation of staleness detection comes in later tasks
+  // entryPathOrWarn should be the entryPath (string)
+  const entryPath = typeof entryPathOrWarn === 'string' ? entryPathOrWarn : undefined;
+  const capturedHash = captured;
+
   return {
     check(): 'stale' | 'current' | 'indeterminate' {
-      return 'indeterminate';
+      // Re-hash the file and compare to the captured identity
+      if (!entryPath) {
+        return 'indeterminate';
+      }
+
+      try {
+        const fileContent = readFileSync(entryPath);
+        const currentHash = createHash('sha256').update(fileContent).digest('hex');
+
+        if (currentHash === capturedHash) {
+          return 'current';
+        } else {
+          return 'stale';
+        }
+      } catch {
+        // If we can't read the file, return indeterminate
+        return 'indeterminate';
+      }
     }
   };
 }
