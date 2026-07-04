@@ -42,6 +42,7 @@ import { join } from 'node:path';
 
 import { runDaemon, type DaemonDeps } from '../../src/engine/daemon.js';
 import { holdLock } from '../../src/engine/daemon-lock.js';
+import { PUBLISH_WRAPPER_ENV_VAR } from '../../scripts/publish-guard.mjs';
 
 const IDENTITY_MOD = '../../src/engine/engine-identity.js';
 const RESTART_MOD = '../../src/engine/restart-intent.js';
@@ -63,16 +64,30 @@ async function buildFixtureDist(workDir: string, source: string): Promise<string
   const entry = join(workDir, 'entry.ts');
   await writeFile(entry, source, 'utf-8');
   const outDir = join(workDir, 'dist');
-  await build({
-    entry: [entry],
-    outDir,
-    format: ['esm'],
-    clean: true,
-    silent: true,
-    dts: false,
-    sourcemap: false,
-    skipNodeModulesBundle: true,
-  });
+  // This fixture build is not the real engine `dist/` (it targets a scratch
+  // workDir), so it's exempt from the versioned dist-versions/<id> guard —
+  // tsup loads the repo's tsup.config.ts regardless of outDir, so the wrapper
+  // marker must be set for every direct build() call from a test.
+  const previous = process.env[PUBLISH_WRAPPER_ENV_VAR];
+  process.env[PUBLISH_WRAPPER_ENV_VAR] = '1';
+  try {
+    await build({
+      entry: [entry],
+      outDir,
+      format: ['esm'],
+      clean: true,
+      silent: true,
+      dts: false,
+      sourcemap: false,
+      skipNodeModulesBundle: true,
+    });
+  } finally {
+    if (previous === undefined) {
+      delete process.env[PUBLISH_WRAPPER_ENV_VAR];
+    } else {
+      process.env[PUBLISH_WRAPPER_ENV_VAR] = previous;
+    }
+  }
   return join(outDir, 'entry.js');
 }
 

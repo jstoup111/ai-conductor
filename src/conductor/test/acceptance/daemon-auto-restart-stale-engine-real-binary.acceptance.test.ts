@@ -19,6 +19,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { build } from 'tsup';
+import { PUBLISH_WRAPPER_ENV_VAR } from '../../scripts/publish-guard.mjs';
 import { execa } from 'execa';
 import { mkdtemp, rm, writeFile, readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -30,6 +31,12 @@ import { readFileSync } from 'node:fs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SRC_DIR = join(HERE, '..', '..', 'src');
+
+// Every build() call in this file targets a scratch workDir, never the real
+// engine `dist/`, but tsup loads the repo's tsup.config.ts regardless of
+// outDir — the wrapper marker must be set for direct build() calls from a
+// test. Scoped to this file only (not process-wide across the whole suite).
+process.env[PUBLISH_WRAPPER_ENV_VAR] = '1';
 
 // Fixture versions for testing
 const FIXTURE_V1 = 'export const version = "v1";\n';
