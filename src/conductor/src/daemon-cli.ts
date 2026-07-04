@@ -188,6 +188,16 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   };
   process.once('exit', releaseBackstop);
 
+  // FR-4/FR-7: honor a pause marker set BEFORE this daemon even booted (e.g. the
+  // daemon was stopped, `conduct daemon pause` ran, then the daemon was started
+  // again). isPaused is fail-closed (pause-marker.ts) — a corrupt marker still
+  // reads as paused, so ambiguity here never dispatches. Logged once at boot so
+  // `conduct daemon logs` makes the paused state visible immediately, in
+  // addition to the same isPaused() gate re-polled every loop iteration below.
+  if (await isPaused(projectRoot)) {
+    log('daemon is paused — booting with zero dispatch until resumed (see `conduct daemon resume`).');
+  }
+
   const configResult = await loadConfig(projectRoot);
   const config = configResult.ok ? configResult.config : undefined;
 

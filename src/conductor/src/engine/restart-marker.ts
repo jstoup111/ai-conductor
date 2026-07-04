@@ -49,6 +49,31 @@ export async function writeRestartPending(
 }
 
 /**
+ * Peek at the pending-restart marker under `projectRoot` WITHOUT consuming it
+ * — read-only, for observability (`conduct daemon status`, FR-9). Unlike
+ * `consumeOnBoot`, this never deletes the marker; it may be called any number
+ * of times while the intent is queued.
+ *
+ * Returns `null` when no marker is present. A present but corrupted
+ * (unparsable) marker still reports presence (with only `requestedAt` known)
+ * rather than throwing or being mistaken for "no restart queued".
+ */
+export async function readRestartPending(projectRoot: string): Promise<RestartIntent | null> {
+  let raw: string;
+  try {
+    raw = await readFile(join(projectRoot, RESTART_MARKER), 'utf-8');
+  } catch {
+    return null;
+  }
+
+  try {
+    return JSON.parse(raw) as RestartIntent;
+  } catch {
+    return { requestedAt: new Date().toISOString() };
+  }
+}
+
+/**
  * Consume the pending-restart marker under `projectRoot`: remove it and return
  * the intent it carried. A fresh boot IS the restart, so this is called once at
  * daemon startup regardless of whether that boot is the respawned replacement

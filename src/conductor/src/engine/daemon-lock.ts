@@ -20,7 +20,8 @@
 
 import { open, mkdir, unlink, readFile, writeFile } from 'node:fs/promises';
 import { unlinkSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -47,6 +48,15 @@ export interface PidRecord {
   pid: number;
   uuid: string;
   startedAt: string;
+  /**
+   * Additive (FR-14): the directory of the running engine build that wrote
+   * this pidfile — normally `dist-versions/<version-id>` (or `dist/` when
+   * running unpublished/dev code). Derived from THIS module's own resolved
+   * location so it always reflects the engine actually executing, never a
+   * caller-supplied value. Absent on records written before this field
+   * existed — readers must tolerate `undefined` (never throw).
+   */
+  engineDir?: string;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -123,6 +133,11 @@ const defaultKill: KillProbe = (pid, signal) => {
 // Internal helpers.
 // ─────────────────────────────────────────────────────────────────────────────
 
+// This module's own resolved directory — the "engine dir" for whichever build
+// is currently executing (dist-versions/<id>/engine, or a dev src/engine dir
+// under ts-node/tsx). Computed once; never derived from caller input.
+const OWN_ENGINE_DIR = dirname(fileURLToPath(import.meta.url));
+
 async function writePidfileExcl(repoPath: string): Promise<PidRecord> {
   await mkdir(daemonDir(repoPath), { recursive: true });
 
@@ -130,6 +145,7 @@ async function writePidfileExcl(repoPath: string): Promise<PidRecord> {
     pid: process.pid,
     uuid: randomUUID(),
     startedAt: new Date().toISOString(),
+    engineDir: OWN_ENGINE_DIR,
   };
 
   // O_EXCL: fails with EEXIST if the file already exists — the kernel-level mutex.

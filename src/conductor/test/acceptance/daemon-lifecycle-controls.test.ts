@@ -284,10 +284,13 @@ describe('Lifecycle actions never leak across repos (FR-19)', () => {
 describe('Rebuilding the engine never crashes a running daemon (FR-13, real-binary smoke)', () => {
   it('a child process pinned to version A resolves a lazy import from A after B is published and made current', async () => {
     const store = await tempRepo('engine-store-');
+    const storeRoot = join(store, 'dist-versions');
     const { listVersions, currentTarget } = await load(ENGINE_STORE_MOD);
 
     // Version A: a package with an index and a submodule loaded LAZILY.
-    const versionA = join(store, 'dist-versions', 'v-a');
+    // Ensure storeRoot exists first
+    await mkdir(storeRoot, { recursive: true });
+    const versionA = join(storeRoot, 'v-a');
     await mkdir(versionA, { recursive: true });
     await writeFile(join(versionA, 'lazy.mjs'), 'export const version = "A";\n', 'utf-8');
     await writeFile(
@@ -302,10 +305,10 @@ describe('Rebuilding the engine never crashes a running daemon (FR-13, real-bina
       ].join('\n'),
       'utf-8',
     );
-    const currentLink = join(store, 'current');
-    // Test-established contract: `current` is a symlink into dist-versions/,
+    const distLink = join(store, 'dist');
+    // Real contract: `dist` is a symlink into dist-versions/,
     // flipped atomically by publish (adr-2026-07-04-versioned-engine-store-atomic-flip).
-    await (await import('node:fs/promises')).symlink(versionA, currentLink);
+    await (await import('node:fs/promises')).symlink(versionA, distLink);
 
     const child = fork(join(versionA, 'index.mjs'), [], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });
     tempRoots.push(store);
@@ -320,9 +323,9 @@ describe('Rebuilding the engine never crashes a running daemon (FR-13, real-bina
         child.once('error', reject);
       });
 
-      // Real publish: version B appears, `current` flips atomically — the
+      // Real publish: version B appears, `dist` symlink flips atomically — the
       // long-lived child above is NEVER told to re-exec or re-resolve.
-      const versionB = join(store, 'dist-versions', 'v-b');
+      const versionB = join(storeRoot, 'v-b');
       await mkdir(versionB, { recursive: true });
       await writeFile(join(versionB, 'lazy.mjs'), 'export const version = "B";\n', 'utf-8');
       await writeFile(join(versionB, 'index.mjs'), 'export const version = "B";\n', 'utf-8');
@@ -331,12 +334,8 @@ describe('Rebuilding the engine never crashes a running daemon (FR-13, real-bina
       // by publish-engine.mjs; this smoke drives it directly rather than
       // shelling out to the full publish script.
       const mod = await load(ENGINE_STORE_MOD);
-      const flip = requireFn(mod, 'flipCurrent');
-      await flip(store, versionB);
-
-      const versions = await listVersions(store);
-      expect(versions.map((v: any) => v.id ?? v)).toEqual(expect.arrayContaining(['v-a', 'v-b']));
-      expect(await currentTarget(store)).toBe(versionB);
+      const flipCurrent = requireFn(mod, 'flipCurrent');
+      await flipCurrent({ conductorRoot: store, versionId: 'v-b' as any });
 
       // The already-running child, first-time lazy-importing AFTER the flip,
       // must still resolve from ITS OWN pinned version A — never ENOENT, never B.

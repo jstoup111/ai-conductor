@@ -58,6 +58,15 @@ export interface DaemonSupervisorCommand {
    * other verbs.
    */
   detach?: boolean;
+  /**
+   * `pause`/`resume`/`restart` fleet selectors (FR-3/FR-17/FR-18): named
+   * subset (bare positional tokens after the verb, e.g. `pause repoA repoB`).
+   * Absent when neither a name nor `--all` was given — dispatch then falls
+   * back to the single-repo cwd behavior (Task 16).
+   */
+  names?: string[];
+  /** `pause`/`resume`/`restart --all`: target every registered repo. */
+  all?: boolean;
 }
 
 const MANAGEMENT_VERBS = new Set([
@@ -83,10 +92,20 @@ export function detectDaemonSupervisorCommand(argv: string[]): DaemonSupervisorC
   if (argv[2] !== 'daemon') return null;
   const verb = argv[3];
   if (!verb || !MANAGEMENT_VERBS.has(verb)) return null;
-  const detach = argv.slice(4).some((a) => a === '-D' || a === '--detach');
-  // Only attach the flag when set, so callers/tests comparing the bare
-  // `{ verb }` shape stay unaffected for the no-flag case.
-  return { verb: verb as DaemonSupervisorCommand['verb'], ...(detach ? { detach: true } : {}) };
+  const rest = argv.slice(4);
+  const detach = rest.some((a) => a === '-D' || a === '--detach');
+  const all = rest.includes('--all');
+  // Fleet selectors (FR-3/FR-17/FR-18): bare positional tokens after the verb
+  // are named-repo targets; flags (anything starting with `-`) are excluded.
+  const names = rest.filter((a) => !a.startsWith('-'));
+  // Only attach optional fields when set, so callers/tests comparing the bare
+  // `{ verb }` shape stay unaffected for the no-flag, no-name case.
+  return {
+    verb: verb as DaemonSupervisorCommand['verb'],
+    ...(detach ? { detach: true } : {}),
+    ...(all ? { all: true } : {}),
+    ...(names.length > 0 ? { names } : {}),
+  };
 }
 
 /**

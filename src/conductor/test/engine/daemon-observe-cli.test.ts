@@ -213,6 +213,90 @@ describe('engine/daemon-observe-cli', () => {
     });
   });
 
+  describe('computeStatusRow — restart-pending + two-layer liveness (FR-9/FR-12, T33)', () => {
+    async function writeRestartMarker(
+      repo: string,
+      intent: { requestedAt?: string; requestedBy?: string; blockingSlug?: string } | string = {},
+    ): Promise<void> {
+      await mkdir(join(repo, '.daemon'), { recursive: true });
+      const body =
+        typeof intent === 'string'
+          ? intent
+          : JSON.stringify({ requestedAt: intent.requestedAt ?? '2026-07-04T00:00:00.000Z', ...intent });
+      await writeFile(join(repo, '.daemon', 'RESTART-PENDING'), body, 'utf8');
+    }
+
+    it('reports "restart-pending" state and surfaces the blocking slug while the marker is present', async () => {
+      const repo = join(root, 'repo');
+      await mkdir(repo, { recursive: true });
+      await writePidfile(repo, { pid: 1 });
+      await writeRestartMarker(repo, { blockingSlug: 'feat-widgets' });
+      const row = await computeStatusRow(record('repo', repo), ALIVE);
+      expect(row.state).toBe('restart-pending');
+      expect(row.restartPending?.blockingSlug).toBe('feat-widgets');
+    });
+
+    it('renders the literal "restart-pending (waiting on <slug>)" text via runDaemonStatus', async () => {
+      const repo = join(root, 'repo');
+      await mkdir(repo, { recursive: true });
+      await writePidfile(repo, { pid: 1 });
+      await writeRestartMarker(repo, { blockingSlug: 'feat-widgets' });
+      const registryPath = join(root, 'registry.json');
+      await writeFile(registryPath, JSON.stringify([record('repo', repo)]), 'utf8');
+
+      const out: string[] = [];
+      await runDaemonStatus({ registryPath, kill: ALIVE, out: (l) => out.push(l) });
+      expect(out.join('\n')).toContain('restart-pending (waiting on feat-widgets)');
+    });
+
+    it('does not consume the restart marker — it remains present across repeated status reads', async () => {
+      const repo = join(root, 'repo');
+      await mkdir(repo, { recursive: true });
+      await writePidfile(repo, { pid: 1 });
+      await writeRestartMarker(repo, { blockingSlug: 'feat-widgets' });
+      await computeStatusRow(record('repo', repo), ALIVE);
+      const row2 = await computeStatusRow(record('repo', repo), ALIVE);
+      expect(row2.state).toBe('restart-pending');
+    });
+
+    it('reports "dead-pane" when the tmux session is present but the pane has died', async () => {
+      const repo = join(root, 'repo');
+      await mkdir(repo, { recursive: true });
+      await writePidfile(repo, { pid: 1 });
+      const row = await computeStatusRow(
+        record('repo', repo),
+        ALIVE,
+        () => true, // session present
+        () => true, // pane dead
+      );
+      expect(row.state).toBe('dead-pane');
+      expect(row.sessionPresent).toBe(true);
+      expect(row.paneDead).toBe(true);
+    });
+
+    it('distinguishes dead-pane from plain running (session present, pane alive)', async () => {
+      const repo = join(root, 'repo');
+      await mkdir(repo, { recursive: true });
+      await writePidfile(repo, { pid: 1 });
+      const row = await computeStatusRow(
+        record('repo', repo),
+        ALIVE,
+        () => true, // session present
+        () => false, // pane alive
+      );
+      expect(row.state).toBe('running');
+      expect(row.paneDead).toBe(false);
+    });
+
+    it('distinguishes dead-pane from stopped (no pidfile, no session)', async () => {
+      const repo = join(root, 'repo');
+      await mkdir(repo, { recursive: true });
+      const row = await computeStatusRow(record('repo', repo), ALIVE, () => false, () => false);
+      expect(row.state).toBe('stopped');
+      expect(row.paneDead).toBe(false);
+    });
+  });
+
   describe('runDaemonStatus', () => {
     async function registry(records: unknown[]): Promise<string> {
       const p = join(root, 'registry.json');

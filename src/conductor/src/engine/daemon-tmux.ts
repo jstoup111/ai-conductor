@@ -289,6 +289,17 @@ export interface RestartOutcome {
 export interface Supervisor {
   /** Returns true when a session for this repo is currently alive. */
   isUp(repo: string): Promise<boolean>;
+  /**
+   * Returns true when a tmux session for this repo currently exists, WITHOUT
+   * regard to whether the pane inside it is alive (distinct from `isUp`,
+   * which also checks pane liveness). Used by orphan reconciliation (FR-21
+   * neg, Task 34) to detect "daemon process alive, tmux session gone" —
+   * a different case from the dead-pane revival handled by `start`/`isUp`
+   * (Task 23), where the session still exists but its pane does not.
+   * Throws TmuxNotInstalledError when tmux is unavailable, same as every
+   * other management verb — callers must not swallow that as "no session".
+   */
+  hasSession(repo: string): Promise<boolean>;
   /** Ensures a daemon session exists (idempotent — no-op when already running). */
   start(repo: string): Promise<void>;
   /** Kills the daemon session (no-op when not running). */
@@ -337,6 +348,12 @@ export function makeTmuxSupervisor(run: TmuxRunner = defaultTmuxRunner): Supervi
       } catch {
         return false;
       }
+    },
+
+    async hasSession(repo: string): Promise<boolean> {
+      await requireTmux(run);
+      const name = sessionNameForRepo(repo);
+      return hasSession(name, run);
     },
 
     async start(repo: string): Promise<void> {

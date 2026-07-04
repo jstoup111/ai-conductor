@@ -12,6 +12,8 @@ import { ensureInstallFresh } from './install-freshness.js';
 import { clearStaleLockForRestart } from './daemon-lock.js';
 import { isPaused, writePauseMarker, removePauseMarker } from './pause-marker.js';
 import { writeRestartPending } from './restart-marker.js';
+import { runFleetAction, type FleetSelection } from './daemon-fleet.js';
+import type { ProjectRecord } from './registry.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Dependencies — all optional so callers can inject spies in tests.
@@ -50,6 +52,12 @@ export interface DaemonSupervisorDeps {
    * `isPaused(cwd)` is true.
    */
   isBusy?: (cwd: string) => Promise<{ busy: boolean; blockingSlug?: string }>;
+  /**
+   * Registry path override (tests) for `pause`/`resume` fleet selectors
+   * (`names`/`all` on the command — FR-3/FR-17/FR-18). Forwarded to
+   * `runFleetAction`; unused for the single-repo (cwd) path.
+   */
+  registryPath?: string;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -85,6 +93,29 @@ export async function dispatchDaemonSupervisor(
   const ensureFresh = deps.ensureFresh ?? (() => ensureInstallFresh({ log: out }));
   const isInteractive = deps.isInteractive ?? Boolean(process.stdin.isTTY);
   const isBusy = deps.isBusy ?? (async () => ({ busy: false }));
+
+  // Fleet dispatch (FR-3/FR-17/FR-18): pause/resume accept a named subset or
+  // `--all` and iterate the registry instead of acting on `cwd` alone. This
+  // branch returns directly — it has its own per-repo try/catch inside
+  // runFleetAction, so failures there never escape as a thrown exception.
+  if ((cmd.verb === 'pause' || cmd.verb === 'resume') && (cmd.all || cmd.names)) {
+    const selection: FleetSelection = cmd.all ? { all: true } : { names: cmd.names ?? [] };
+    const action = async (record: ProjectRecord): Promise<string> => {
+      if (cmd.verb === 'pause') {
+        if (await isPaused(record.path)) return 'already paused';
+        await writePauseMarker(record.path);
+        return 'daemon paused';
+      }
+      if (!(await isPaused(record.path))) return 'not paused';
+      await removePauseMarker(record.path);
+      return 'daemon resumed';
+    };
+    const { code } = await runFleetAction(selection, action, {
+      registryPath: deps.registryPath,
+      out,
+    });
+    return code;
+  }
 
   try {
     switch (cmd.verb) {

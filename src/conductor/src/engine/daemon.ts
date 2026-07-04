@@ -237,6 +237,33 @@ export async function runDaemon(
       log(`[daemon] sweepMergeableLabels error: ${err instanceof Error ? err.message : String(err)}`);
     }
   };
+  // FR-1 (Task 13): `isPaused` is a caller-injected predicate — it can throw
+  // (unreadable marker, permissions, etc.), not just resolve. A throw must
+  // fail closed (treated as paused, zero dispatch) rather than crash the loop
+  // or silently resume dispatch. The warning is logged once per transition
+  // into/out of the error state, not on every poll, so a stuck unreadable
+  // marker doesn't spam the log every idle tick.
+  let pauseErrorActive = false;
+  const checkPaused = async (): Promise<boolean> => {
+    if (!deps.isPaused) return false;
+    try {
+      const result = await deps.isPaused();
+      if (pauseErrorActive) {
+        pauseErrorActive = false;
+        log('[daemon] isPaused predicate recovered — resuming normal pause polling');
+      }
+      return result;
+    } catch (err) {
+      if (!pauseErrorActive) {
+        pauseErrorActive = true;
+        log(
+          `[daemon] isPaused predicate threw (${err instanceof Error ? err.message : String(err)}); failing closed — treating as paused`,
+        );
+      }
+      return true; // fail-closed: an unreadable/erroring marker must never look "not paused"
+    }
+  };
+
   const idlePollMs = options.idlePollMs ?? 5000;
   const maxIdlePolls = options.maxIdlePolls ?? Infinity;
   const startedAt = now();
@@ -327,9 +354,16 @@ export async function runDaemon(
    * persist the new SHA. Crash-safe (FR-10): an unresolved or throwing
    * resolution is treated as "no advance" and never propagates out of the loop.
    * A first observation (null seed) initializes without re-kicking (FR-5).
+   *
+   * FR-1 (Task 12): gated on the pause predicate — while paused, a base-SHA
+   * advance is not observed/persisted and no re-kick sweep runs, so a
+   * HALT-parked feature stays parked (no re-kick dispatch) until resume.
+   * Re-evaluated at the same call sites as the fill-pool pause check, so
+   * lifting the pause mid-run makes re-kick eligible again at the next call.
    */
   const maybeRekick = async (refresh: boolean): Promise<void> => {
     if (!deps.resolveBaseSha) return;
+    if (await checkPaused()) return;
     let current: string | null = null;
     try {
       current = await deps.resolveBaseSha({ refresh });
@@ -367,7 +401,7 @@ export async function runDaemon(
       // idle ticks) so a pause lifted mid-run resumes dispatch at the next
       // boundary. Paused → no NEW item is picked this tick; in-flight work
       // (handled below/at drain) is completely unaffected.
-      const paused = (await deps.isPaused?.()) ?? false;
+      const paused = await checkPaused();
 
       // First-in-backlog-order eligible item (Task 14: `pickEligible` consumes
       // only `items`, never `waiting`, so a dependency-gated spec never causes
