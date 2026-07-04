@@ -110,10 +110,18 @@ export async function rekickSweep(
     // Operator-park: a human-placed halt must survive re-kick unconditionally.
     // Checked FIRST — ahead of isProcessed and the SHA guard — so a parked
     // worktree is never touched (no abort/clear/sentinel/lastRekickSha).
-    if (deps.isOperatorParked && (await deps.isOperatorParked(slug))) {
-      skipped.push(slug);
-      log(`re-kick ${slug}: skipped — operator-parked`);
-      continue;
+    if (deps.isOperatorParked) {
+      try {
+        if (await deps.isOperatorParked(slug)) {
+          skipped.push(slug);
+          log(`re-kick ${slug}: skipped — operator-parked`);
+          continue;
+        }
+      } catch (err) {
+        skipped.push(slug);
+        log(`re-kick ${slug}: anomaly checking parked state (${errMsg(err)}); skipped`);
+        continue;
+      }
     }
 
     // Content-aware shipped-work dedup: a processed slug's spec/implementation

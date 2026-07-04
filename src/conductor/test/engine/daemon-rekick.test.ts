@@ -267,6 +267,26 @@ describe('engine/daemon-rekick — rekickSweep (FR-7/FR-9)', () => {
     expect(trace.events.some((e) => e === 'clear:halted-b')).toBe(true);
     expect(trace.events.some((e) => e === 'clear:parked-a')).toBe(false);
   });
+
+  it('isOperatorParked throws for one slug → that slug is skipped with an anomaly log, sibling still cleared', async () => {
+    const { deps, trace } = fakeDeps({
+      halted: ['boom-slug', 'halted-b'],
+      isOperatorParked: async (slug) => {
+        if (slug === 'boom-slug') throw new Error('parked-check exploded');
+        return false;
+      },
+    });
+    const res = await rekickSweep(deps, SHA_B);
+    expect(res.skipped).toEqual(['boom-slug']);
+    expect(res.cleared).toEqual(['halted-b']);
+    expect(trace.events.some((e) => e === 'clear:halted-b')).toBe(true);
+    expect(trace.events.some((e) => e === 'clear:boom-slug')).toBe(false);
+    expect(
+      trace.events.some(
+        (e) => e.includes('boom-slug') && e.toLowerCase().includes('anomaly'),
+      ),
+    ).toBe(true);
+  });
 });
 
 // ── Real fs/git primitives (isolated repos) ───────────────────────────────────
