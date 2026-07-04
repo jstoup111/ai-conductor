@@ -200,6 +200,53 @@ A derivation covered only by its own unit test is incomplete. List the call site
 (`file:line`) in the spec file or the PR body so the domain reviewer (TDD) can confirm none were
 missed.
 
+### 3e. FR Coverage Mapping (Product Track)
+
+**Scope:** this section runs only when both are true — the work is on the **product track**
+and an **approved PRD** exists for the feature. If either condition is false (technical track,
+or no approved PRD), skip this section entirely.
+
+- **If technical track:** perform no FR-coverage work, emit no table, complete exactly as today
+  (§1–§7 unchanged). No error; the gate is skipped for non-product features.
+- **If no PRD in `.docs/specs/`:** perform no FR-coverage work, emit no table, complete as-is.
+  No error; the gate does not apply.
+- **If a PRD exists but `Status: Approved` is not in the file:** do NOT build a table from an
+  unapproved FR list — report the task as **FAILED** with the reason "PRD found but not
+  approved; cannot gate on incomplete FR list." This surfaces the missing approval as a
+  pipeline error rather than a silent no-op.
+
+Parse the PRD's enumerated functional requirements (the `FR-N` list). Build a coverage table
+with **exactly one row per FR** — every `FR-N` in the PRD must appear exactly once, and no row
+may reference an `FR-N` that isn't in the PRD. A table that omits an FR or invents one not
+present in the PRD is invalid and must be corrected before proceeding.
+
+For each FR row, assign exactly one disposition from the **closed set**:
+
+- **`already-tested`** — maps to the §2 overlap check. The FR's behavior is already asserted by
+  an existing test (unit, request/endpoint, or prior acceptance spec) found via the §2 grep-for-overlap
+  step.
+- **`unit-covered`** — maps to the §3a classification. The FR corresponds to a single-operation
+  (pure CRUD) story classified `unit-covered` under §3a, so it will be covered by the lower-layer
+  tests written during `/tdd`, not by an acceptance spec here.
+- **`spec-covered`** — the FR is covered by an acceptance spec generated in this pass (§5a/§5b).
+
+No disposition outside this closed set (`already-tested`, `unit-covered`, `spec-covered`) is
+permitted.
+
+**Citation requirement:** every row must cite the evidence for its disposition:
+- `already-tested` → cite the existing test file/line found by the §2 grep.
+- `unit-covered` → cite the story and the §3a classification reasoning.
+- `spec-covered` → cite the generated spec file (and test name) that covers it.
+
+**Unresolved rows are flagged as errors.** A row is unresolved — and must be flagged rather than
+silently accepted — if any of the following hold:
+- it has 2 or more dispositions assigned (ambiguous),
+- its disposition isn't one of the three closed-set values,
+- it has no citation.
+
+Unresolved rows block completion of this step; resolve them (re-classify, find the missing
+citation, or split the ambiguous row) before moving to §4.
+
 ### 4. Read App Context
 
 For each story, read the project's equivalents of:
@@ -256,6 +303,10 @@ verify outcome). Neither duplicates the other.
 - Assert outcomes, not intermediate transport details (request/endpoint tests own those)
 - Auth uses helper methods, not hardcoded tokens
 - No mocking external services in acceptance specs — test the real flow
+- On product track: every generated spec identifies the FR(s) it covers — either in the
+  top-level suite/describe name OR as a leading comment line `Covers: FR-N[, FR-M]`
+  (framework-agnostic; comma-separated for multiple FRs) — so `grep -rE "FR-[0-9]+"` over the
+  acceptance directory finds every FR's specs.
 
 **Helpers:** Create shared request helpers (e.g. response-body parsing and auth-header
 construction) in the project's test-support location if they don't already exist.
@@ -289,6 +340,10 @@ SUITE "Authentication" (driven through a real UI driver):
 - No mocking — full stack exercise
 - Sign-in uses the actual login UI, not a session backdoor
 - Assert on user-visible content and navigated location, not internal DOM/implementation details
+- On product track: every generated spec identifies the FR(s) it covers — either in the
+  top-level suite/describe name OR as a leading comment line `Covers: FR-N[, FR-M]`
+  (framework-agnostic; comma-separated for multiple FRs) — so `grep -rE "FR-[0-9]+"` over the
+  acceptance directory finds every FR's specs.
 
 ### 6. Run and Verify RED
 
@@ -355,6 +410,54 @@ Counts are for the feature's own specs from the run above (`executed` = passed +
 at collection does not establish RED and will not pass the gate. This is gitignored run evidence,
 not a committed design artifact.
 
+#### Record the FR coverage evidence (gating)
+
+**Scope:** this subsection runs only for product-track work with an approved PRD (the same
+condition as §3e). If the work is technical-track or no approved PRD exists, skip this
+subsection entirely — no evidence file is written, no error.
+
+**Finalize the §3e table.** Before writing the evidence file, verify every row is actually
+correct, not just internally consistent:
+- For each `already-tested` or `spec-covered` row, confirm the cited spec/test file **exists on
+  disk** and, for `spec-covered` rows, **contains the FR identifier** — run
+  `grep -E "FR-N"` (substituting the real FR number) against the cited file and confirm a match.
+- For each `unit-covered` row, confirm the cited **story exists** as a file under
+  `.docs/stories/`.
+- Re-check that every `FR-N` in the PRD has exactly one row, no invented rows exist, and every
+  disposition is one of the closed set (`already-tested`, `unit-covered`, `spec-covered`).
+
+**Write `.pipeline/fr-coverage.md`** with this format:
+
+```markdown
+# FR Coverage — <feature-stem>
+
+PRD: .docs/specs/<feature-stem>.md
+Date: <YYYY-MM-DD>
+
+| FR   | Disposition    | Evidence                                              |
+|------|----------------|--------------------------------------------------------|
+| FR-1 | spec-covered   | spec/integration/links_spec.rb — "expired link"        |
+| FR-2 | unit-covered   | .docs/stories/links.md — single-op CRUD, §3a           |
+| FR-3 | already-tested | spec/requests/links_spec.rb:42                          |
+
+Coverage: COMPLETE
+```
+
+The verdict line is the last line of the file:
+- **`Coverage: COMPLETE`** — every FR in the PRD has exactly one row, a valid disposition, a
+  citation, and the citation was verified to exist (and, where applicable, to contain the FR
+  identifier or match the story file).
+- **`Coverage: INCOMPLETE — unresolved: FR-N, FR-M...`** — list every FR that failed
+  verification, in ascending order, comma-separated.
+
+**GATE.** If any FR is unresolved (missing row, invented row, bad or duplicate disposition,
+missing or unverifiable citation) or `.pipeline/fr-coverage.md` cannot be written, the step MUST
+NOT report success — output the failure reason listing every unresolved FR with its cause and
+stop (a hard stop under the daemon, not a logged warning).
+
+On complete resolution, report the task as PASS with the evidence file written and the verdict
+"Coverage: COMPLETE".
+
 ### Stubbing Rules for Pre-Implementation Specs
 
 - Stub at **system boundaries only**: randomness sources, the clock/current time, external API
@@ -373,6 +476,13 @@ git commit -m "test: add failing acceptance specs for [feature area]"
 
 Failing tests get committed. They represent the acceptance criteria.
 Implementation (via `/pipeline` or `/tdd`) makes them pass.
+
+**Verification checklist before completing this skill:**
+- RED evidence written to `.pipeline/acceptance-specs-red.json` (§6)
+- Evidence file written to `.pipeline/fr-coverage.md` (only for product-track runs with an
+  approved PRD) with verdict "Coverage: COMPLETE" — otherwise the step is a hard stop per §6's
+  FR-coverage gate
+- Failing tests committed
 
 ## How This Relates to Other Test Types
 

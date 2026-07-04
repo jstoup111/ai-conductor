@@ -776,7 +776,7 @@ UNDERSTAND → DECIDE → BUILD → SHIP
 | `/plan` | Gating | sonnet | 2-5 min tasks, dependency graph, scope sanity check |
 | `/architecture-diagram` | Gating | sonnet | C4 architecture diagrams in Mermaid, maintained across SDLC |
 | `/architecture-review` | Gating | opus | Feasibility, alignment, domain integrity, risk register. BLOCKED = human required. SHIP `--as-built` mode (sonnet): shipped code vs APPROVED ADRs |
-| `/writing-system-tests` | Gating | sonnet | Failing acceptance specs (HTTP-level for headless/API, E2E/UI for full-stack), in the project's own test framework |
+| `/writing-system-tests` | Gating | sonnet | Failing acceptance specs (HTTP-level for headless/API, E2E/UI for full-stack), in the project's own test framework. Product-track: emits per-FR coverage table `.pipeline/fr-coverage.md`; gate refuses to complete while any FR is unresolved |
 | `/tdd` | Structural | sonnet | RED → DOMAIN → GREEN → DOMAIN → COMMIT with subagent isolation |
 | `/simplify` | Gating | sonnet | Deduplication + complexity reduction at batch boundaries |
 | `/pipeline` | Structural | sonnet | Multi-task orchestration, quality gates, rework budgets, progress log |
