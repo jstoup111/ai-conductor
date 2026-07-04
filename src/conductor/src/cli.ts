@@ -166,6 +166,16 @@ export function createProgram(): Command {
     .option('--repo <path>', 'Target repo (default: current directory)')
     .option('--follow', 'Stream new log lines (tail -f); single repo only')
     .option('--all', 'Show logs for every registered repo');
+  // Filesystem-direct, pre-boot park/unpark verbs (detectDaemonParkCommand) —
+  // no daemon/supervisor startup required. Declared here ONLY so `--help`
+  // documents them; commander never actually dispatches them (index.ts checks
+  // detectDaemonParkCommand before the pipeline boots).
+  daemon
+    .command('park <slug>')
+    .description('Halt this feature: it will not be dispatched or re-kicked until unparked');
+  daemon
+    .command('unpark <slug>')
+    .description('Resume dispatch and re-kick for this feature');
   // Management verbs — route to the tmux Supervisor port (detectDaemonSupervisorCommand),
   // dispatched in index.ts before the pipeline boots. Declared here ONLY so `--help`
   // documents them; commander never actually dispatches them.

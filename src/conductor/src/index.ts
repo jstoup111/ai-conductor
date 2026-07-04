@@ -65,6 +65,10 @@ import {
   detectDaemonObserveCommand,
   dispatchDaemonObserve,
 } from './engine/daemon-observe-cli.js';
+import {
+  detectDaemonParkCommand,
+  dispatchDaemonPark,
+} from './engine/daemon-park-cli.js';
 import { hasSession, sessionNameForRepo, respawnPane } from './engine/daemon-tmux.js';
 import { resolveOtelConfig } from './engine/otel/otel-config.js';
 import { OtelVisualizer, type OtelVisualizerContext } from './engine/otel/otel-visualizer.js';
@@ -314,6 +318,16 @@ async function main(): Promise<void> {
   const daemonObserveCmd = detectDaemonObserveCommand(process.argv);
   if (daemonObserveCmd) {
     const code = await dispatchDaemonObserve(daemonObserveCmd);
+    process.exit(code);
+  }
+
+  // Filesystem-direct, pre-boot park/unpark verbs (`daemon park <slug>` /
+  // `daemon unpark <slug>`) run NON-INTERACTIVELY and exit — no daemon/
+  // supervisor startup required. Checked BEFORE the daemon management verbs
+  // and the daemon run command so they are never mistaken for either.
+  const daemonParkCmd = detectDaemonParkCommand(process.argv);
+  if (daemonParkCmd) {
+    const code = await dispatchDaemonPark(daemonParkCmd, { cwd: process.cwd() });
     process.exit(code);
   }
 

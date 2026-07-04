@@ -113,7 +113,7 @@ export function detectDaemonSupervisorCommand(argv: string[]): DaemonSupervisorC
  * tmux management verbs. A bare `daemon` (no sub-verb) RUNS the daemon; these are
  * the only non-flag tokens that legitimately follow `daemon`.
  */
-const DAEMON_SUBVERBS = new Set(['status', 'logs', ...MANAGEMENT_VERBS]);
+const DAEMON_SUBVERBS = new Set(['status', 'logs', 'park', 'unpark', ...MANAGEMENT_VERBS]);
 
 /**
  * Detect a typo'd / unknown `daemon` sub-verb so the CLI can surface help instead
@@ -167,6 +167,7 @@ export function detectDaemonCommand(argv: string[]): DaemonCommandOptions | null
   // the Supervisor port (detectDaemonSupervisorCommand above), NOT a daemon run.
   // Yield so none of these are ever dispatched as a launch.
   if (argv[3] === 'status' || argv[3] === 'logs') return null;
+  if (argv[3] === 'park' || argv[3] === 'unpark') return null;
   if (MANAGEMENT_VERBS.has(argv[3])) return null;
 
   return {
