@@ -471,6 +471,51 @@ MERMAID
 }
 test_real_binary_smoke
 
+# ─── Test: conduct-ts missing from PATH (TECH-2 negative) ─────────────────
+#
+# These tests verify that when a conduct-ts-only verb (e.g. render-diagrams)
+# is invoked but conduct-ts is NOT available on PATH, conduct fails loudly:
+#   1. Exit code 127 (standard "command not found" code)
+#   2. Stderr mentions "conduct-ts" so user understands what's missing
+#   3. No pipeline state is created (conduct-ts forwarding never happens)
+
+echo ""
+echo -e "${BOLD}Test Suite: Conduct-TS Forwarding (Missing Binary)${NC}"
+echo ""
+
+test_missing_conduct_ts() {
+  local repo
+  repo=$(make_temp_repo "missing-conduct-ts-repo")
+
+  # Run conduct with a stripped PATH (no conduct-ts available)
+  local rc=0
+  (
+    cd "$repo"
+    # Remove any fake or real conduct-ts from PATH, use only system paths
+    PATH=/bin:/usr/bin:/usr/local/bin timeout 5 "$CONDUCT" render-diagrams --check file.md >/dev/null 2>&1
+  ) || rc=$?
+
+  assert "conduct render-diagrams without conduct-ts exits 127" \
+    "$([ "$rc" -eq 127 ] && echo 0 || echo 1)"
+
+  # Check for error message (optional but helpful)
+  local stderr_file
+  stderr_file=$(mktemp)
+  (
+    cd "$repo"
+    PATH=/bin:/usr/bin:/usr/local/bin timeout 5 "$CONDUCT" render-diagrams --check file.md 2>"$stderr_file"
+  ) || true
+
+  assert "stderr mentions 'conduct-ts' when missing" \
+    "$(grep -qi 'conduct-ts' "$stderr_file" && echo 0 || echo 1)"
+
+  assert "no pipeline state created when conduct-ts missing" \
+    "$(assert_no_pipeline_state "$repo" && echo 0 || echo 1)"
+
+  rm -f "$stderr_file"
+}
+test_missing_conduct_ts
+
 # ─── Summary ─────────────────────────────────────────────────────────────
 
 echo ""
@@ -485,13 +530,3 @@ else
   echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
   exit 0
 fi
-
-# ─── Test: conduct-ts missing from PATH (TECH-2 negative) ─────────────────
-#
-# These tests verify that when a conduct-ts-only verb (e.g. render-diagrams)
-# is invoked but conduct-ts is NOT available on PATH, conduct fails loudly:
-#   1. Exit code 127 (standard "command not found" code)
-#   2. Stderr mentions "conduct-ts" so user understands what's missing
-#   3. No pipeline state is created (conduct-ts forwarding never happens)
-
-# (Note: This is added after the Summary section, so we need to move it above)
