@@ -152,6 +152,18 @@ describe('engine/conductor — post-rebase force-with-lease publish (T11 / TS-4)
             join(dir, '.pipeline/manual-test-results.md'),
             '| Story | Result |\n|---|---|\n| foo | PASS |\n',
           );
+        } else if (step === 'prd_audit') {
+          await mkdir(join(dir, '.pipeline'), { recursive: true });
+          await writeFile(
+            join(dir, '.pipeline/prd-audit.md'),
+            '| FR | Verdict | Evidence |\n|---|---|---|\n| FR-1 | ALIGNED | foo.ts:1 |\n',
+          );
+        } else if (step === 'architecture_review_as_built') {
+          await mkdir(join(dir, '.docs/decisions'), { recursive: true });
+          await writeFile(
+            join(dir, '.pipeline/architecture-review-as-built.md'),
+            '# As-Built Review\n\nVerdict: APPROVED\n',
+          );
         } else if (step === 'finish') {
           await writeFile(join(dir, '.pipeline/finish-choice'), 'keep');
         }
@@ -193,6 +205,7 @@ describe('engine/conductor — post-rebase force-with-lease publish (T11 / TS-4)
 
     await conductor.run();
 
+    require('fs').writeFileSync('/tmp/t11-test-calls.json', JSON.stringify(calls, null, 2));
     const leaseCalls = forceWithLeaseCalls(calls);
     expect(leaseCalls).toHaveLength(1);
     expect(leaseCalls[0].args).toEqual(['push', '--force-with-lease', 'origin', FEATURE]);

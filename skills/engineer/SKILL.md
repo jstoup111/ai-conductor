@@ -122,6 +122,24 @@ These produce **Status:Accepted** artifacts via your real harness (agents + hook
 hand-write stub stories, DRAFT artifacts, or shell out to `claude -p`. If the operator rejects a
 step, loop within that skill until accepted or abandon the idea — never carry a DRAFT forward.
 
+**Checkpoint after each DECIDE skill (advisory, `pr_timing: early-draft` only).** After every one
+of the 8 sub-steps above completes and its artifact lands under `worktreePath/.docs/`, run:
+
+`conduct-ts engineer checkpoint --project <name> --worktree <worktreePath>`
+
+This commits ONLY the `.docs` content authored so far (never `-A`), pushes `spec/<slug>`, and — for
+a target repo configured with `pr_timing: early-draft` — lazily opens/reuses a draft spec PR once
+the branch is ahead of base, so reviewers can watch the spec accumulate in near-real-time instead of
+seeing it appear only at `land`/`handoff`. **Skip this call entirely for any other `pr_timing` mode**
+(e.g. `at-finish`) — checkpoint is exclusively an early-draft affordance.
+
+Checkpoint is **advisory and idempotent, never blocking**: like the daemon's build-start publish
+hook (T7), a checkpoint push/PR failure is logged and swallowed by the primitive itself — it never
+throws, never halts the DECIDE loop, and never aborts the idea. A repeat checkpoint with no new
+`.docs` content since the last call is a true no-op (nothing staged, nothing committed, nothing
+pushed again). If `checkpoint` reports a failure, note it for the operator and continue straight to
+the next DECIDE sub-step — do not retry, do not stop, do not treat it as a gate.
+
 ### 4. Land the already-authored spec — from within the worktree
 `conduct-ts engineer land --project <name> --idea "<idea>" --worktree <worktreePath>` (the
 `worktreePath` from step 3; append `--source-ref <ref>` when the idea came from GitHub intake — this
