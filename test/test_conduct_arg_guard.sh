@@ -232,6 +232,74 @@ test_unknown_option_rejected() {
 }
 test_unknown_option_rejected
 
+# ─── Test: negative paths (characterization) ──────────────────────────────
+#
+# These tests verify that existing legitimate options still work correctly,
+# and that unknown options appearing after valid feature descriptions are
+# also rejected. All should pass immediately against the task-3 implementation.
+
+echo ""
+echo -e "${BOLD}Test Suite: Unknown Option Guard (Negative Paths)${NC}"
+echo ""
+
+test_negative_paths() {
+  # Test 1: --help flag still works
+  local help_output stdout_file
+  stdout_file=$(mktemp)
+  local rc=0
+  (
+    "$CONDUCT" --help >"$stdout_file" 2>&1
+  ) || rc=$?
+
+  assert "conduct --help exits 0" \
+    "$([ "$rc" -eq 0 ] && echo 0 || echo 1)"
+
+  assert "conduct --help output contains usage information" \
+    "$(grep -iE 'usage:|conduct' "$stdout_file" >/dev/null 2>&1 && echo 0 || echo 1)"
+
+  rm -f "$stdout_file"
+
+  # Test 2: --status flag works in a temp repo
+  local status_repo status_stderr
+  status_repo=$(make_temp_repo "status-flag-repo")
+  status_stderr=$(mktemp)
+  rc=0
+  (
+    cd "$status_repo"
+    CONDUCT_TEST_NO_CLAUDE=1 timeout 5 "$CONDUCT" --status >/dev/null 2>"$status_stderr"
+  ) || rc=$?
+
+  assert "conduct --status exits 0 in valid repo" \
+    "$([ "$rc" -eq 0 ] && echo 0 || echo 1)"
+
+  rm -f "$status_stderr"
+
+  # Test 3: unknown option after valid feature description fails
+  local late_unknown_repo late_unknown_stderr
+  late_unknown_repo=$(make_temp_repo "late-unknown-repo")
+  late_unknown_stderr=$(mktemp)
+  rc=0
+  (
+    cd "$late_unknown_repo"
+    CONDUCT_TEST_NO_CLAUDE=1 timeout 5 "$CONDUCT" "add login form" --frobnicate >/dev/null 2>"$late_unknown_stderr"
+  ) || rc=$?
+
+  assert "conduct with valid description + unknown option exits non-zero" \
+    "$([ "$rc" -ne 0 ] && echo 0 || echo 1)"
+
+  assert "stderr mentions unknown option for late --frobnicate" \
+    "$(grep -q 'Unknown option: --frobnicate' "$late_unknown_stderr" && echo 0 || echo 1)"
+
+  assert "stderr points to --help for late unknown option" \
+    "$(grep -q -- '--help' "$late_unknown_stderr" && echo 0 || echo 1)"
+
+  assert "no pipeline state written for late unknown option" \
+    "$(assert_no_pipeline_state "$late_unknown_repo" && echo 0 || echo 1)"
+
+  rm -f "$late_unknown_stderr"
+}
+test_negative_paths
+
 # ─── Summary ─────────────────────────────────────────────────────────────
 
 echo ""
