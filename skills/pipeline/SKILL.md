@@ -178,6 +178,10 @@ full test suite to catch regressions from task interactions. Per-task VERIFY use
 keep iteration fast; only the batch boundary re-test with full coverage. Scoped VERIFY is an
 optimization within the batch; full-suite runs anchor quality at batch transitions.
 
+**REPORT requirement (step 6):** The task's step 6 REPORT must list the files included in the
+scoped test set (or, if a fallback trigger fired, state which trigger caused the full suite
+to run instead). This provides audit-trail visibility into the scoping decision.
+
 ### Quality Gates
 
 **HARD GATE: Evaluator dispatch is mandatory at required batch boundaries.**
