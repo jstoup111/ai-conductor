@@ -151,7 +151,6 @@ describe('daemon-tmux — real tmux smoke (FR-20, Task T36)', () => {
         await waitFor(() => {
           const scrollback = captureScrollback(name);
           const matches = [...scrollback.matchAll(/BOOT_(\d+)/g)];
-          // We may only see the new PID in scrollback since respawn-pane -k clears the buffer.
           // Key test: the new PID exists and differs from pre-restart PID.
           return matches.length >= 1 && matches[matches.length - 1][1] !== prePid;
         });
@@ -161,6 +160,20 @@ describe('daemon-tmux — real tmux smoke (FR-20, Task T36)', () => {
         expect(allMatches.length).toBeGreaterThanOrEqual(1);
         const postPid = allMatches[allMatches.length - 1][1];
         expect(postPid).not.toBe(prePid);
+
+        // Scrollback survival: respawn-pane -k natively clears history, so
+        // respawnPane's capture-and-re-emit wrapper (`cat <file>; rm -f
+        // <file>; exec <cmd>`) must have re-printed the pre-restart marker
+        // into the pane BEFORE the new process's boot output. Prove it here
+        // by asserting the old marker is present in the post-restart capture
+        // AND appears above (earlier in the buffer than) the new one — this
+        // is the real assertion the ADR's adversarial-review requirement
+        // calls for; a bare "new pid differs" check above cannot catch a
+        // regression that silently drops the re-emitted scrollback.
+        const preMarkerIndex = postRestartScrollback.indexOf(`BOOT_${prePid}`);
+        expect(preMarkerIndex).toBeGreaterThanOrEqual(0);
+        const postMarkerIndex = postRestartScrollback.indexOf(`BOOT_${postPid}`);
+        expect(postMarkerIndex).toBeGreaterThan(preMarkerIndex);
 
         // Window layout preserved: still exactly one window, one pane — the
         // in-place respawn never split/created windows, session name unchanged.
