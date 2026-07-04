@@ -79,7 +79,7 @@ DEPENDENCY ORDER — Dispatch tasks in topological order respecting declared dep
 1. DECOMPOSE    — Read task, identify files to touch, check dependencies met
 2. DISPATCH     — Send task to a TDD subagent via Agent tool with model="sonnet" (scoped context only)
                   Subagent runs full TDD cycle: RED → DOMAIN → GREEN → DOMAIN → COMMIT
-3. VERIFY       — Run the full test suite to confirm the subagent's work
+3. VERIFY       — Run the scoped affected-test set (see Scoped VERIFY below) to confirm the subagent's work
 4. FIX          — If tests fail, VERIFY failure first (see below), then dispatch subagent with error context
 5. UPDATE       — Mark task as "completed" in .pipeline/task-status.json
 6. REPORT       — Return PASS or FAIL with reason to the conductor
@@ -160,6 +160,23 @@ spawning a new agent — this preserves file cache and avoids redundant reads.
 Changes to unrelated code in the same file (e.g., changing a CI command while fixing a service
 definition, or "improving" a method signature while adding a validation) are scope violations.
 The evaluator should flag scope violations as IMPORTANT severity.
+
+**Scoped VERIFY (step 3):** Per-task VERIFY runs only the affected-test set, not the full suite.
+Scoping logic:
+1. Collect the task's diff (`git diff <pre-task-commit>..HEAD`) to identify new/modified production files.
+2. Build the scoped test set: (a) all new/modified test files in the diff, plus (b) existing test
+   files covering the modified production modules. Discover these by naming convention (e.g.,
+   `src/foo/bar.ts` → `test/foo/bar.test.ts`) and by grepping test files for imports of or
+   references to modified modules.
+3. Run the project's test runner with explicit file arguments targeting only the scoped set.
+4. **Batch boundaries are an exception:** At the end of a batch, run the FULL test suite before
+   starting the next batch (pre-batch verification, line 200). This ensures no test interdependencies
+   were missed across the task sequence.
+
+**Contrast with pre-batch verification:** Pre-batch verification (step 379 onward) runs the
+full test suite to catch regressions from task interactions. Per-task VERIFY uses scoping to
+keep iteration fast; only the batch boundary re-test with full coverage. Scoped VERIFY is an
+optimization within the batch; full-suite runs anchor quality at batch transitions.
 
 ### Quality Gates
 
