@@ -317,4 +317,83 @@ describe('engine/resolved-config', () => {
       expect(resolveStepConfig('stories', 'DECIDE').model).toBe('sonnet');
     });
   });
+
+  describe('resolveAuthParkTimeoutMinutes', () => {
+    it('defaults to 60 when auth_park_timeout_minutes is absent', async () => {
+      const { resolveAuthParkTimeoutMinutes } = await import(
+        '../../src/engine/resolved-config.js'
+      );
+      const result = resolveAuthParkTimeoutMinutes(undefined);
+      expect(result).toBe(60);
+    });
+
+    it('returns the configured value when explicitly set to a positive number', async () => {
+      const { resolveAuthParkTimeoutMinutes } = await import(
+        '../../src/engine/resolved-config.js'
+      );
+      const config: HarnessConfig = {
+        auth_park_timeout_minutes: 15,
+      };
+      const result = resolveAuthParkTimeoutMinutes(config);
+      expect(result).toBe(15);
+    });
+
+    it('preserves 0 as an opt-out signal', async () => {
+      const { resolveAuthParkTimeoutMinutes } = await import(
+        '../../src/engine/resolved-config.js'
+      );
+      const config: HarnessConfig = {
+        auth_park_timeout_minutes: 0,
+      };
+      const result = resolveAuthParkTimeoutMinutes(config);
+      expect(result).toBe(0);
+    });
+
+    it('preserves negative values as an opt-out signal', async () => {
+      const { resolveAuthParkTimeoutMinutes } = await import(
+        '../../src/engine/resolved-config.js'
+      );
+      const config: HarnessConfig = {
+        auth_park_timeout_minutes: -5,
+      };
+      const result = resolveAuthParkTimeoutMinutes(config);
+      expect(result).toBe(-5);
+    });
+
+    it('throws on non-numeric string values', async () => {
+      const { resolveAuthParkTimeoutMinutes } = await import(
+        '../../src/engine/resolved-config.js'
+      );
+      const config = {
+        auth_park_timeout_minutes: 'soon',
+      } as unknown as HarnessConfig;
+      expect(() => resolveAuthParkTimeoutMinutes(config)).toThrow(
+        /Invalid auth_park_timeout_minutes.*expected a number/
+      );
+    });
+
+    it('throws on NaN (non-finite number)', async () => {
+      const { resolveAuthParkTimeoutMinutes } = await import(
+        '../../src/engine/resolved-config.js'
+      );
+      const config: HarnessConfig = {
+        auth_park_timeout_minutes: NaN,
+      };
+      expect(() => resolveAuthParkTimeoutMinutes(config)).toThrow(
+        /Invalid auth_park_timeout_minutes.*finite/
+      );
+    });
+
+    it('throws on Infinity', async () => {
+      const { resolveAuthParkTimeoutMinutes } = await import(
+        '../../src/engine/resolved-config.js'
+      );
+      const config: HarnessConfig = {
+        auth_park_timeout_minutes: Infinity,
+      };
+      expect(() => resolveAuthParkTimeoutMinutes(config)).toThrow(
+        /Invalid auth_park_timeout_minutes.*finite/
+      );
+    });
+  });
 });

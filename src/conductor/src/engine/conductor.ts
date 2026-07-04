@@ -9,6 +9,7 @@ import {
 } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { relative, join } from 'node:path';
+import { homedir } from 'node:os';
 import { HALT_MARKER } from './halt-marker.js';
 import type { ConductState } from '../types/index.js';
 import type {
@@ -65,6 +66,8 @@ import {
   type SelfHostGuardrails,
 } from './self-host/wiring.js';
 import type { SandboxBuildEnv } from './self-host/sandbox-build-env.js';
+import { refreshSandboxCredentials } from './self-host/sandbox-build-env.js';
+import { waitForCredentialsChange, readOperatorCredentialsState } from './self-host/operator-credentials.js';
 import type { ChangedFile } from './self-host/release-gate.js';
 import type { GateVerdict } from './self-host/gate-halt.js';
 import { selectNextGate } from './selector.js';
@@ -207,6 +210,11 @@ export interface StepRunResult {
    * The conductor resets the session state and retries without burning budget.
    */
   sessionExpired?: boolean;
+  /**
+   * Set when the operator's OAuth token is expired or invalid.
+   * The conductor halts and reports the auth failure.
+   */
+  authFailure?: boolean;
 }
 
 export interface StepRunOptions {
@@ -529,6 +537,106 @@ export class Conductor {
   }
 
   /**
+   * Pre-flight credential expiry check (TR-2). Called before sandbox provisioning
+   * for self-host builds. If operator credentials are expired:
+   * - If auth_park_timeout_minutes <= 0: HALT immediately with credentials-specific reason
+   * - If > 0: Park and poll until credentials are refreshed or timeout elapses
+   * If credentials state is unknown (missing/malformed): fail-open, proceed normally.
+   * Returns a StepRunResult with success=false + a HALT reason if timeout occurs or
+   * opt-out is configured; otherwise returns undefined (caller proceeds normally).
+   */
+  private async preflightCredentialsCheck(
+    operatorConfigDir: string,
+  ): Promise<StepRunResult | undefined> {
+    const sh = resolveSelfHostConfig(this.config);
+    const now = Date.now();
+    const credState = await readOperatorCredentialsState(operatorConfigDir, now);
+
+    // Fail-open: unknown state (missing/malformed) proceeds normally
+    if (credState === 'unknown') {
+      return undefined;
+    }
+
+    // Fresh credentials: proceed normally
+    if (credState === 'fresh') {
+      return undefined;
+    }
+
+    // Credentials are expired (credState === 'expired')
+    const credPath = join(operatorConfigDir, '.credentials.json');
+
+    // Opt-out: timeout <= 0 → immediate credentials-specific HALT
+    if (sh.authParkTimeoutMinutes <= 0) {
+      // Read expiresAt for the HALT message
+      let expiresAtStr = '';
+      try {
+        const contents = await readFile(credPath, 'utf-8');
+        const creds = JSON.parse(contents);
+        if (creds.claudeAiOauth?.expiresAt !== undefined) {
+          expiresAtStr = String(creds.claudeAiOauth.expiresAt);
+        }
+      } catch {
+        // Couldn't read; proceed without expiresAt in the message
+      }
+
+      const haltReason = `Operator OAuth token is expired.\n\nCredentials file: ${credPath}\nExpires at: ${expiresAtStr}\n\nPlease refresh your credentials by running:\n\n  export CLAUDE_CONFIG_DIR=~/.claude && claude auth`;
+
+      // Only write the HALT marker if it doesn't already exist (avoid overwriting
+      // on retries). This preserves the credentials-specific reason instead of
+      // letting the retry loop's generic "retries exhausted" message overwrite it.
+      const haltPath = join(this.projectRoot, HALT_MARKER);
+      const haltExists = await accessFile(haltPath).then(() => true).catch(() => false);
+      if (!haltExists) {
+        await writeFile(haltPath, haltReason + '\n', 'utf-8').catch(() => {
+          // Best-effort HALT write; if it fails, still return the failure
+        });
+      }
+
+      return {
+        success: false,
+        output: haltReason,
+      };
+    }
+
+    // Park and poll: timeout > 0 → loop until credentials refresh or timeout
+    const timeoutMs = sh.authParkTimeoutMinutes * 60 * 1000;
+    while (true) {
+      const result = await waitForCredentialsChange({
+        initialState: credState,
+        credentialsPath: credPath,
+        globalConfigDir: operatorConfigDir,
+        timeoutMs,
+        sleep: this.sleep,
+        now: () => Date.now(),
+      });
+
+      if (result.type === 'refreshed') {
+        // Credentials are now fresh — proceed normally
+        return undefined;
+      }
+
+      // Timeout: write the credentials-specific HALT marker BEFORE returning so
+      // the retry loop's marker check exits immediately (no retry-budget burn,
+      // no re-park) and the final HALT reason names the auth-window condition —
+      // never the generic "retries exhausted" (adr-2026-07-04 §2/§3).
+      const expiresAtStr = result.expiresAt ?? 'unparseable';
+      const haltReason =
+        `Operator credentials expired and refresh timed out after ${sh.authParkTimeoutMinutes} minutes.\n` +
+        `Credentials file: ${result.credentialsPath}\n` +
+        `Expires at: ${expiresAtStr}\n` +
+        `Please refresh your OAuth token and re-queue this feature.`;
+      const haltPath = join(this.projectRoot, HALT_MARKER);
+      const haltExists = await accessFile(haltPath).then(() => true).catch(() => false);
+      if (!haltExists) {
+        await writeFile(haltPath, haltReason + '\n', 'utf-8').catch(() => {
+          // Best-effort HALT write; if it fails, still return the failure
+        });
+      }
+      return { success: false, output: haltReason };
+    }
+  }
+
+  /**
    * Dispatch the /remediate planner over a blocking SHIP gate and translate its
    * structured plan into a loop decision. One planner serves every gate — only
    * the dispatch context and the hint's gap-artifact pointer differ. Mixed
@@ -627,6 +735,16 @@ export class Conductor {
 
     if (!sh.sandboxBuildEnv) {
       return this.stepRunner.run(name, state, { retryReason: retryHint });
+    }
+
+    // Pre-flight credential expiry check (TR-2): BEFORE provisioning, check if
+    // the operator's credentials are expired. If so, park or HALT depending on
+    // the timeout configuration. Never consumes the retry budget.
+    const operatorConfigDir = process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude');
+    const preflight = await this.preflightCredentialsCheck(operatorConfigDir);
+    if (preflight !== undefined) {
+      // Either HALT (timeout <= 0) or parking timeout reached (Task 14)
+      return preflight;
     }
 
     if (!this.activeSandbox) {
@@ -1062,9 +1180,96 @@ export class Conductor {
             continue;
           }
 
+          // Auth failure: park and poll for credentials refresh, then retry without
+          // burning budget (TR-3: happy path is park→refresh→resume). The auth
+          // branch gates the retry budget: attempt stays the same across
+          // park-resume, so credentials expiry doesn't leak into the retry circuit.
+          if (result.authFailure) {
+            // Operator credentials resolve through the globalConfigDir seam
+            // ($CLAUDE_CONFIG_DIR → ~/.claude), same as the pre-flight — never
+            // the project root (adr-2026-07-04-auth-failure-park-and-poll §5).
+            const operatorConfigDir =
+              process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude');
+            const credPath = join(operatorConfigDir, '.credentials.json');
+            const credState = await readOperatorCredentialsState(
+              operatorConfigDir,
+              Date.now(),
+            );
+
+            await this.events.emit({
+              type: 'credentials_park',
+              reason: 'operator OAuth token expired or invalid — waiting for refresh',
+            });
+
+            const shPark = resolveSelfHostConfig(this.config);
+            const parkResult = await waitForCredentialsChange({
+              initialState: credState,
+              credentialsPath: credPath,
+              globalConfigDir: operatorConfigDir,
+              timeoutMs: shPark.authParkTimeoutMinutes * 60 * 1000,
+              sleep: this.sleep,
+              now: () => Date.now(),
+            });
+
+            if (parkResult.type === 'refreshed' && this.activeSandbox) {
+              // Re-copy credentials from operator config into the sandbox so the
+              // retried build gets fresh auth.
+              await refreshSandboxCredentials(operatorConfigDir, this.activeSandbox.configDir);
+            }
+
+            if (parkResult.type === 'timeout') {
+              // Task 14: Auth-park timeout → credentials-specific HALT.
+              // The reason includes the credentials path and observed expiresAt, making
+              // it credentials-specific (not generic "retries exhausted").
+              const expiresAtStr = parkResult.expiresAt ?? 'unparseable';
+              const credReason =
+                `Operator credentials expired and refresh timed out.\n` +
+                `Credentials file: ${parkResult.credentialsPath}\n` +
+                `Expires at: ${expiresAtStr}\n` +
+                `Please refresh your OAuth token and re-queue this feature.`;
+              await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(
+                () => {},
+              );
+              await writeFile(
+                join(this.projectRoot, LOOP_HALT_MARKER),
+                credReason + '\n',
+                'utf-8',
+              ).catch(() => {
+                /* best-effort marker */
+              });
+              // Durable signals (HALT marker + state) are written BEFORE escalation
+              // so the daemon can classify the outcome even if escalation throws (C1).
+              await writeState(this.stateFilePath, state);
+              // Escalate with the credentials-specific reason (not generic "retries exhausted").
+              const prUrl = await this.surfaceRemediationPr(credReason);
+              await this.events.emit({ type: 'loop_halt', reason: credReason, prUrl });
+              process.off('SIGINT', sigintHandler);
+              return;
+            }
+
+            // Park resolved (refreshed or timeout-then-park-anyway); loop back to
+            // retry without decrementing attempt (budget intact).
+            attempt--;
+            continue;
+          }
+
           if (!result.success) {
             lastError = result.output ?? `Step '${step.name}' session ended with error`;
             retryHint = `Previous attempt failed: ${lastError}. Finish the work now.`;
+
+            // Preflight opt-out halt (TR-16): if a HALT marker was written by the
+            // preflight credentials check, exit immediately without retrying. This
+            // preserves the credentials-specific HALT reason instead of allowing the
+            // retry loop to overwrite it with the generic "retries exhausted" message.
+            if (this.isSelfBuild() && step.name === 'build') {
+              const haltPath = join(this.projectRoot, HALT_MARKER);
+              const haltExists = await accessFile(haltPath).then(() => true).catch(() => false);
+              if (haltExists) {
+                // HALT marker was written by preflight check; exit immediately
+                break;
+              }
+            }
+
             if (attempt < stepMaxRetries) {
               await this.events.emit({
                 type: 'step_retry',
@@ -1424,7 +1629,17 @@ export class Conductor {
             // marker (not just return) so a supervising daemon classifies this as
             // `halted` — worktree kept, NOT marked processed, retryable after a
             // human looks — instead of "loop ended without DONE or HALT marker".
-            const reason = `step '${step.name}' failed in auto mode (retries exhausted)`;
+            // If a step already wrote a specific HALT reason (e.g. the pre-flight
+            // credentials check), preserve it — never overwrite with the generic
+            // "retries exhausted" message (adr-2026-07-04-auth-failure-park-and-poll).
+            const existingHalt = await readFile(
+              join(this.projectRoot, LOOP_HALT_MARKER),
+              'utf-8',
+            ).catch(() => null);
+            const reason =
+              existingHalt && existingHalt.trim().length > 0
+                ? existingHalt.trim()
+                : `step '${step.name}' failed in auto mode (retries exhausted)`;
             await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(
               () => {},
             );

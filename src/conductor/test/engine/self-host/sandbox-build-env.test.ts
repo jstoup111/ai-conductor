@@ -16,6 +16,7 @@ import {
   provisionSandboxBuildEnv,
   withSandboxBuildEnv,
   sandboxLinkTargets,
+  refreshSandboxCredentials,
   SandboxProvisionError,
   realSandboxFs,
   type SandboxFs,
@@ -338,6 +339,40 @@ describe('SandboxBuildEnv (TR-5/TR-6)', () => {
     );
     await sandbox.teardown();
     expect(await readFile(stateFile, 'utf-8')).toBe(before);
+  });
+
+  // ── Re-copy primitive (refreshSandboxCredentials) ──────────────────────────
+  // After provisioning a sandbox, the operator's credentials may be updated
+  // (e.g., token refresh). refreshSandboxCredentials re-copies the source
+  // .credentials.json into the sandbox, overwriting stale credentials.
+
+  it('refreshSandboxCredentials re-copies .credentials.json from source to sandbox, overwriting with new content', async () => {
+    // Initial credentials in global config.
+    const sourceCredsPath = join(globalConfig, '.credentials.json');
+    await writeFile(sourceCredsPath, '{"token":"old-token"}');
+
+    // Provision a sandbox with the initial credentials.
+    const sandbox = await provisionSandboxBuildEnv(opts());
+    try {
+      const sandboxCredsPath = join(sandbox.configDir, '.credentials.json');
+      expect(existsSync(sandboxCredsPath)).toBe(true);
+      expect(await readFile(sandboxCredsPath, 'utf-8')).toBe('{"token":"old-token"}');
+
+      // Mutate the source credentials (simulating an operator token refresh).
+      await writeFile(sourceCredsPath, '{"token":"new-token"}');
+
+      // Re-copy from source to sandbox.
+      await refreshSandboxCredentials(globalConfig, sandbox.configDir);
+
+      // Sandbox credentials are now updated to the new value.
+      expect(await readFile(sandboxCredsPath, 'utf-8')).toBe('{"token":"new-token"}');
+
+      // It is a regular file, not a symlink (TR-6).
+      expect((await lstat(sandboxCredsPath)).isSymbolicLink()).toBe(false);
+      expect((await lstat(sandboxCredsPath)).isFile()).toBe(true);
+    } finally {
+      await sandbox.teardown();
+    }
   });
 });
 

@@ -277,5 +277,41 @@ describe("ModelAvailability", () => {
       expect(warnLines).toHaveLength(0);
       expect(avail.dead.has("fable")).toBe(false);
     });
+
+    it("auth failure never poisons the ladder: dead set byte-identical, no advance, one invoke", async () => {
+      const avail = new ModelAvailability(["fable", "opus", "sonnet"]);
+      const deadSetBefore = new Set(avail.dead);
+      const { provider, invokeCalls } = fakeProvider({
+        // Simulate a result with both authFailure and modelUnavailable set:
+        // the auth check must prevent marking the model dead, even if
+        // modelUnavailable is also true.
+        fable: {
+          success: false,
+          output: "Not logged in",
+          exitCode: 1,
+          authFailure: true,
+          modelUnavailable: true,
+        },
+      });
+
+      const result = await avail.invokeWithLadder(provider, {
+        prompt: "hi",
+        sessionId: "s1",
+        resume: false,
+        model: "fable",
+      });
+
+      // Verify auth failure is propagated
+      expect(result.authFailure).toBe(true);
+      expect(result.success).toBe(false);
+      // Verify no ladder walk occurred (only one invoke)
+      expect(invokeCalls).toHaveLength(1);
+      expect(invokeCalls[0].model).toBe("fable");
+      // Verify dead set is unchanged (byte-identical)
+      expect(avail.dead.size).toBe(deadSetBefore.size);
+      expect(avail.dead.has("fable")).toBe(false);
+      expect(avail.dead.has("opus")).toBe(false);
+      expect(avail.dead.has("sonnet")).toBe(false);
+    });
   });
 });

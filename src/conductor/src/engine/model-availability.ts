@@ -55,10 +55,20 @@ export class ModelAvailability {
    * model is marked dead so subsequent invocations (in this process) skip it
    * via effectiveModel(). Any other result (success or ordinary failure, e.g.
    * rate-limited) is returned immediately without further ladder walking.
+   *
+   * Ordering: authFailure is checked first (transient auth issue, not a model problem)
+   * before modelUnavailable (model is permanently unavailable). This prevents auth
+   * failures from poisoning the ladder.
    */
   async invokeWithLadder(provider: LLMProvider, options: InvokeOptions): Promise<InvokeResult> {
     const requested = options.model ?? "";
     const result = await provider.invoke({ ...options, model: requested });
+
+    // Auth failure is transient (operator's OAuth token may be stale) — never poison
+    // the ladder. Return immediately without marking the model dead or walking.
+    if (result.authFailure) {
+      return result;
+    }
 
     if (!result.modelUnavailable) {
       return result;

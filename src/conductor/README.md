@@ -1109,6 +1109,90 @@ engineer-planned features (store ∩ authored-keys ledger). Registry/store paths
 `$AI_CONDUCTOR_REGISTRY` / `$AI_CONDUCTOR_ENGINEER_DIR`. Acceptance scenarios live in
 `test/acceptance/engineer.test.ts`.
 
+### Sandbox auth-expiry park-and-poll (self-host daemon builds)
+
+Headless/sandbox daemon builds run against an operator's credentials file (`~/.claude/.credentials.json`)
+that may expire mid-build. The conductor detects expiry and auth failures, and parks the feature to wait
+for the operator to refresh credentials rather than failing immediately.
+
+**Background (TR-1…TR-5):** The daemon runs unattended on the operator's machine, invoking Claude via
+the CLI. The CLI authenticates with the operator's cached OAuth token (`claudeAiOauth`) in
+`.credentials.json`. When that token expires, the CLI exits with "Not logged in" on every invocation.
+Without park-and-poll, the feature's retry budget burns out waiting for the token to naturally refresh,
+and the feature HALTs. With park-and-poll, the daemon parks after the first auth failure, polls for the
+operator to run `claude login` (which updates the `claudeAiOauth.expiresAt` timestamp and mtime), and
+resumes the feature with budget intact.
+
+**Detection (two entry points):**
+
+1. **Pre-flight expiry check** — before provisioning a sandbox build, the conductor calls
+   `readOperatorCredentialsState()` (from `src/conductor/src/engine/self-host/operator-credentials.ts`)
+   with the current time. The reader checks `~/.claude/.credentials.json` for `claudeAiOauth.expiresAt`:
+   - `future` (beyond imminent margin) → `fresh` (dispatch normally)
+   - `past` or within imminent margin → `expired` (park before provision; saves compute)
+   - `unknown` (file missing, malformed JSON, or no `claudeAiOauth` key) → fail-open (dispatch normally)
+   The reader is fail-open by design: it never throws, never blocks dispatch, and respects
+   `$CLAUDE_CONFIG_DIR` for sandbox isolation.
+
+2. **Step-level auth failure** — during the build, if a step fails with exit code non-zero and output
+   matching `AUTH_FAILURE_RE` (signatures: "Not logged in", "Please run /login", "Invalid API key"),
+   the executor (`src/conductor/src/execution/claude-provider.ts`) surfaces `authFailure: true` on the
+   result. The conductor's per-step retry loop detects this and enters park-and-poll (without consuming
+   a retry, preserving budget).
+
+**Park-and-poll behavior:**
+
+When credentials are detected as expired or auth failure occurs, the conductor invokes
+`waitForCredentialsChange()` (from `operator-credentials.ts`):
+
+- **Polls the credentials file** every few seconds for an mtime advance (indicating the operator ran
+  `claude login`).
+- **Checks freshness** — when mtime changes, re-reads the credentials and checks `expiresAt`:
+  - Still expired → keeps polling
+  - Fresh (unexpired) → proceeds to **refresh sandbox**
+- **Refreshes sandbox** — calls `refreshSandboxCredentials()` (`src/conductor/src/engine/self-host/sandbox-build-env.ts`),
+  which **copies** the operator's newly-refreshed `.credentials.json` into the sandbox `CLAUDE_CONFIG_DIR`
+  (never symlinks, maintaining isolation; see TR-6). The next attempt re-invokes the step with the
+  new credentials.
+- **Timeout** — configurable via `auth_park_timeout_minutes` (default **60 minutes**; `0` or negative =
+  opt-out, HALT immediately). When timeout elapses without a successful refresh, the conductor
+  `writeHaltMarker()` with a reason naming the credentials path + observed `expiresAt` (or "unparseable").
+- **Budget invariant** — parking consumes **zero retries**. The `attempt` counter is frozen across the
+  entire park-and-poll wait, so budget is available for post-park-resume retries and subsequent gates.
+
+**Configuration:**
+
+```yaml
+# .ai-conductor/config.yml (project level)
+auth_park_timeout_minutes: 60      # default: 60; 0/negative = opt-out (HALT immediately)
+```
+
+Set to a number of minutes the daemon should wait for the operator to refresh. Set to `0` or negative
+to disable park-and-poll entirely — on auth failure or expiry, HALTs immediately.
+
+**Remediation (standard HALT flow):**
+
+Park-and-poll HALTs follow the standard HALT remediation (no new process — see ADR-013):
+
+1. Operator is alerted (PR labeled `needs-remediation` with the auth reason, or daemon log tail).
+2. Operator runs `claude login` to refresh the credentials file (`expiresAt` advances, mtime updates).
+3. Alternatively, if the feature is still parked, the HALT window may exit on its own timeout.
+4. Once `.pipeline/HALT` is cleared, the feature re-kicks via the daemon's base-SHA advance logic or
+   manual dispatch, and resumes where it parked (the next step retry or post-park gate re-verification).
+
+**Implementation modules:**
+
+| Module | Responsibility |
+|--------|-----------------|
+| `engine/self-host/operator-credentials.ts` | Reader (`readOperatorCredentialsState`, fail-open classification), wait primitive (`waitForCredentialsChange` with injected clock/sleep for testability) |
+| `execution/claude-provider.ts` | Classifier (`AUTH_FAILURE_RE`, `authFailure` flag on invoke result) |
+| `engine/step-runners.ts` | Thread `authFailure` through `StepRunResult` |
+| `engine/conductor.ts` | Pre-flight check (before sandbox provision), per-step retry-loop branch (auth failure → park), resume credentials re-copy, timeout branch → HALT with credentials reason |
+| `engine/self-host/sandbox-build-env.ts` | `refreshSandboxCredentials` export (copy-based, not symlink) |
+| `engine/resolved-config.ts` | `auth_park_timeout_minutes` config field + validation (0/negative = opt-out) |
+
+See `.docs/plans/sandbox-auth-expiry-park.md` and `.docs/decisions/adr-2026-07-04-auth-failure-park-and-poll.md` for the full design.
+
 ### Harness self-host guardrails (`engine/self-host/`)
 
 The guardrail bundle that makes the `james-stoup-agents` harness repo safe to daemon-register

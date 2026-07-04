@@ -296,6 +296,53 @@ export function resolveRebaseResolutionAttempts(config?: HarnessConfig): number 
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// OAuth token park-and-poll timeout (TR-5)
+// ────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Default timeout in minutes for OAuth token park-and-poll recovery.
+ * When the daemon detects an expired operator OAuth token, it parks the build
+ * and polls for token refresh. This timeout caps the polling duration.
+ *
+ * Configuration semantics:
+ *   - 0 or negative → opt-out flag; auth failure HALTs immediately (no polling)
+ *   - positive      → polling timeout in minutes
+ */
+export const DEFAULT_AUTH_PARK_TIMEOUT_MINUTES = 60;
+
+/**
+ * Resolve the auth park timeout from HarnessConfig.
+ *
+ * Reads `config.auth_park_timeout_minutes` (top-level HarnessConfig key).
+ *
+ * Resolution rules:
+ *   - undefined / absent     → DEFAULT_AUTH_PARK_TIMEOUT_MINUTES (60)
+ *   - finite number (any)    → use the value (0 and negatives signal opt-out at runtime)
+ *   - non-numeric (string)   → throw with clear error message
+ *   - NaN or Infinity        → throw with clear error message
+ *
+ * @throws Error if the value is non-numeric or non-finite (NaN, Infinity)
+ */
+export function resolveAuthParkTimeoutMinutes(config?: HarnessConfig): number {
+  const override = config?.auth_park_timeout_minutes;
+  if (override === undefined || override === null) {
+    return DEFAULT_AUTH_PARK_TIMEOUT_MINUTES;
+  }
+  if (typeof override !== 'number') {
+    throw new Error(
+      `Invalid auth_park_timeout_minutes: expected a number, got ${typeof override} (${JSON.stringify(override)})`
+    );
+  }
+  if (!Number.isFinite(override)) {
+    throw new Error(
+      `Invalid auth_park_timeout_minutes: must be a finite number, got ${override}`
+    );
+  }
+  // Preserve 0 and negative values as opt-out signals; positive values are timeout in minutes
+  return override;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // Self-host guardrails (adr-2026-06-30-self-host-detection-seam / TR-11)
 //
 // The resolved shape every guardrail site reads. Resolution is SAFE-BY-DEFAULT:
@@ -314,6 +361,8 @@ export interface ResolvedSelfHostConfig {
   releaseArtifactGate: boolean;
   /** Declared version freeze (#261); null = no freeze (gate halts as before). */
   versionFreeze: string | null;
+  /** Timeout in minutes for credentials park-and-poll (TR-2/3/4/5). */
+  authParkTimeoutMinutes: number;
 }
 
 /**
@@ -324,6 +373,11 @@ export interface ResolvedSelfHostConfig {
  */
 export function resolveSelfHostConfig(config?: HarnessConfig): ResolvedSelfHostConfig {
   const block = config?.harness_self_host;
+  let timeoutMinutes = block?.auth_park_timeout_minutes ?? 60;
+  // Negative or non-numeric values fall back to 60
+  if (!Number.isInteger(timeoutMinutes) || timeoutMinutes < 0) {
+    timeoutMinutes = 60;
+  }
   return {
     activation: block?.activation ?? DEFAULT_SELF_HOST_ACTIVATION,
     skillRelinkPreflight: block?.skill_relink_preflight ?? true,
@@ -333,5 +387,6 @@ export function resolveSelfHostConfig(config?: HarnessConfig): ResolvedSelfHostC
     // Blank/whitespace normalizes to null so a freeze can never "match" an
     // empty VERSION read — safe-by-default like every other field here.
     versionFreeze: block?.version_freeze?.trim() || null,
+    authParkTimeoutMinutes: timeoutMinutes,
   };
 }

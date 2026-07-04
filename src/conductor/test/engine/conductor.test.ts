@@ -4,6 +4,16 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 
 vi.mock('execa', () => ({ execa: vi.fn() }));
+vi.mock('../../src/engine/self-host/operator-credentials.js', () => ({
+  readOperatorCredentialsState: vi.fn().mockResolvedValue('fresh'),
+  waitForCredentialsChange: vi.fn(),
+}));
+vi.mock('../../src/engine/self-host/sandbox-build-env.js', () => ({
+  refreshSandboxCredentials: vi.fn(),
+  provisionSandboxBuildEnv: vi.fn(),
+  realSandboxFs: {},
+  SandboxProvisionError: class SandboxProvisionError extends Error {},
+}));
 import { execa } from 'execa';
 import type { ConductState } from '../../src/types/index.js';
 import type { StepName, RecoveryOption } from '../../src/types/index.js';
@@ -2983,6 +2993,316 @@ describe('engine/conductor', () => {
 
       // Should not crash; step succeeded on the retry-after-session-expired.
       expect(attempt).toBeGreaterThanOrEqual(2);
+    });
+  });
+
+  describe('auth-failure handling', () => {
+    beforeEach(async () => {
+      const { waitForCredentialsChange } = await import(
+        '../../src/engine/self-host/operator-credentials.js'
+      );
+      const { refreshSandboxCredentials } = await import(
+        '../../src/engine/self-host/sandbox-build-env.js'
+      );
+      vi.clearAllMocks();
+    });
+
+    it('parks on authFailure without burning retry budget', async () => {
+      const { waitForCredentialsChange } = await import(
+        '../../src/engine/self-host/operator-credentials.js'
+      );
+
+      let attempt = 0;
+      const runner: StepRunner = {
+        run: vi.fn(async () => {
+          attempt++;
+          if (attempt === 1) return { success: false, authFailure: true };
+          return { success: true };
+        }),
+      };
+
+      vi.mocked(waitForCredentialsChange).mockResolvedValue({
+        type: 'refreshed' as const,
+        credentialsPath: '/.credentials.json',
+      });
+
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        maxRetries: 2,
+      });
+
+      await conductor.run();
+
+      // Runner should have been called at least twice on the first step (1 auth-failed + 1 success)
+      expect(attempt).toBeGreaterThanOrEqual(2);
+    });
+
+    it('refreshes sandbox credentials before re-attempt after authFailure', async () => {
+      const { waitForCredentialsChange } = await import(
+        '../../src/engine/self-host/operator-credentials.js'
+      );
+      const { refreshSandboxCredentials } = await import(
+        '../../src/engine/self-host/sandbox-build-env.js'
+      );
+
+      let attempt = 0;
+      const callOrder: string[] = [];
+      const mockSandbox = {
+        configDir: join(dir, '.sandbox'),
+        childEnv: () => process.env,
+        teardown: vi.fn().mockResolvedValue(undefined),
+      };
+
+      const runner: StepRunner = {
+        run: vi.fn(async () => {
+          attempt++;
+          callOrder.push(`runner-attempt-${attempt}`);
+          if (attempt === 1) return { success: false, authFailure: true };
+          return { success: true };
+        }),
+      };
+
+      vi.mocked(waitForCredentialsChange).mockImplementation(async () => {
+        callOrder.push('waitForCredentialsChange');
+        return { type: 'refreshed' as const, credentialsPath: '/.credentials.json' };
+      });
+
+      vi.mocked(refreshSandboxCredentials).mockImplementation(async () => {
+        callOrder.push('refreshSandboxCredentials');
+      });
+
+      const mockGuardrails = {
+        provisionSandbox: vi.fn().mockResolvedValue(mockSandbox),
+        resolveHarnessRoot: vi.fn().mockResolvedValue(null),
+        relink: vi.fn().mockResolvedValue(undefined),
+        versionGate: vi.fn().mockResolvedValue({ ok: true }),
+        releaseGate: vi.fn().mockResolvedValue({ ok: true }),
+      };
+
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        maxRetries: 2,
+        selfHostGuardrails: mockGuardrails as any,
+      });
+
+      // Set activeSandbox directly for testing purposes
+      (conductor as any).activeSandbox = mockSandbox;
+
+      await conductor.run();
+
+      // Verify the call order: auth-fail on attempt 1, then wait, then refresh, then retry
+      expect(callOrder).toContain('runner-attempt-1');
+      expect(callOrder).toContain('waitForCredentialsChange');
+      expect(callOrder).toContain('refreshSandboxCredentials');
+      expect(callOrder).toContain('runner-attempt-2');
+
+      // Refresh must come before the second attempt
+      const refreshIdx = callOrder.indexOf('refreshSandboxCredentials');
+      const attempt2Idx = callOrder.indexOf('runner-attempt-2');
+      expect(refreshIdx).toBeLessThan(attempt2Idx);
+    });
+
+    it('re-enters park on subsequent authFailure without budget burn', async () => {
+      const { waitForCredentialsChange } = await import(
+        '../../src/engine/self-host/operator-credentials.js'
+      );
+      const { refreshSandboxCredentials } = await import(
+        '../../src/engine/self-host/sandbox-build-env.js'
+      );
+
+      let attempt = 0;
+      const runner: StepRunner = {
+        run: vi.fn(async () => {
+          attempt++;
+          // Both attempts fail with authFailure
+          if (attempt <= 2) return { success: false, authFailure: true };
+          return { success: true };
+        }),
+      };
+
+      vi.mocked(waitForCredentialsChange).mockResolvedValue({
+        type: 'refreshed' as const,
+        credentialsPath: '/.credentials.json',
+      });
+
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        maxRetries: 2,
+      });
+
+      await conductor.run();
+
+      // Runner should have been called 3 times: attempt 1 (auth-fail), attempt 2 (auth-fail), attempt 3 (success)
+      // This verifies the budget was not burned (would be exhausted if park-resume consumed attempts)
+      expect(attempt).toBeGreaterThanOrEqual(3);
+      expect(vi.mocked(waitForCredentialsChange)).toHaveBeenCalledTimes(2);
+    });
+
+    it('HALTs with credentials-specific reason when park timeout elapses', async () => {
+      const { waitForCredentialsChange } = await import(
+        '../../src/engine/self-host/operator-credentials.js'
+      );
+      const credentialsPath = join(dir, '.credentials.json');
+      const expiresAt = Date.now() - 1000; // expired
+      await writeFile(credentialsPath, JSON.stringify({ claudeAiOauth: { expiresAt } }), 'utf-8');
+
+      vi.mocked(waitForCredentialsChange).mockResolvedValue({
+        type: 'timeout' as const,
+        credentialsPath,
+        credentialsState: 'expired' as const,
+        expiresAt: String(expiresAt),
+      });
+
+      const runner: StepRunner = {
+        run: vi.fn(async () => {
+          return { success: false, authFailure: true };
+        }),
+      };
+
+      const mockGuardrails = {
+        provisionSandbox: vi.fn(),
+        resolveHarnessRoot: vi.fn().mockResolvedValue(null),
+        relink: vi.fn(),
+        versionGate: vi.fn(),
+        releaseGate: vi.fn(),
+      };
+
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        maxRetries: 1,
+        mode: 'auto',
+        daemon: true,
+        selfHostGuardrails: mockGuardrails as any,
+      });
+
+      let halted = false;
+      events.on('loop_halt', () => {
+        halted = true;
+      });
+
+      await conductor.run();
+
+      expect(halted).toBe(true);
+      const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+      // The HALT reason must include the credentials path and the expiresAt
+      expect(halt).toContain(credentialsPath);
+      expect(halt).toContain(String(expiresAt));
+      // Verify it's NOT the generic "retries exhausted" reason
+      expect(halt).not.toMatch(/retries exhausted/i);
+    });
+
+    // ── TR-4 Task 15: Auth HALT distinguishable from build-defect HALT ─────
+
+    it('TR-4 Test B: auth-park timeout does not consume retry budget', async () => {
+      const { waitForCredentialsChange } = await import(
+        '../../src/engine/self-host/operator-credentials.js'
+      );
+      const credentialsPath = join(dir, '.credentials.json');
+      const expiresAt = Date.now() - 1000;
+      await writeFile(credentialsPath, JSON.stringify({ claudeAiOauth: { expiresAt } }), 'utf-8');
+
+      let buildAttempts = 0;
+
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName): Promise<StepRunResult> => {
+          if (step === 'build') {
+            buildAttempts++;
+            return { success: false, authFailure: true };
+          }
+          return { success: true };
+        }),
+      };
+
+      vi.mocked(waitForCredentialsChange).mockResolvedValue({
+        type: 'timeout' as const,
+        credentialsPath,
+        credentialsState: 'expired' as const,
+        expiresAt: String(expiresAt),
+      });
+
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        maxRetries: 2, // enough budget to retry if it were burned
+      });
+
+      await conductor.run();
+
+      // Test B: only one build attempt made (authFailure triggers park, timeout
+      // halts immediately without retrying — attempt counter stays at 1)
+      expect(buildAttempts).toBe(1);
+    });
+
+    it('TR-4 Test C: escalation PR body carries credentials-specific reason', async () => {
+      const { waitForCredentialsChange } = await import(
+        '../../src/engine/self-host/operator-credentials.js'
+      );
+      const credentialsPath = join(dir, '.credentials.json');
+      const expiresAt = Date.now() - 1000;
+      await writeFile(credentialsPath, JSON.stringify({ claudeAiOauth: { expiresAt } }), 'utf-8');
+
+      const fakePrUrl = 'https://github.com/test/repo/pull/999';
+      const capturedOpts: EscalateBuildFailureOpts[] = [];
+
+      const fakeEscalation = vi.fn<any>(async (opts: EscalateBuildFailureOpts) => {
+        capturedOpts.push(opts);
+        return { prUrl: fakePrUrl };
+      });
+
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName): Promise<StepRunResult> => {
+          if (step === 'build') return { success: false, authFailure: true };
+          return { success: true };
+        }),
+      };
+
+      vi.mocked(waitForCredentialsChange).mockResolvedValue({
+        type: 'timeout' as const,
+        credentialsPath,
+        credentialsState: 'expired' as const,
+        expiresAt: String(expiresAt),
+      });
+
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        maxRetries: 1,
+        escalateBuildFailure: fakeEscalation,
+      });
+
+      await conductor.run();
+
+      // Test C: escalation was called with credentials-specific reason
+      expect(fakeEscalation).toHaveBeenCalledOnce();
+      expect(capturedOpts).toHaveLength(1);
+
+      const failureReason = capturedOpts[0].failureReason;
+
+      // Verify the PR body reason is credentials-specific, not generic "retries exhausted"
+      expect(failureReason).not.toMatch(/retries exhausted/i);
+      expect(failureReason).toContain(credentialsPath);
+      expect(failureReason).toContain(String(expiresAt));
+      expect(failureReason).toContain('Operator credentials expired');
     });
   });
 

@@ -674,6 +674,33 @@ TIER: M`,
     });
   });
 
+  describe('auth-failure detection', () => {
+    let pipeDir: string;
+    beforeEach(async () => {
+      pipeDir = await mkdtemp(join(tmpdir(), 'runner-authfail-'));
+    });
+    afterEach(async () => {
+      await rm(pipeDir, { recursive: true, force: true });
+    });
+
+    it('surfaces authFailure=true when provider reports it', async () => {
+      const provider = createMockProvider();
+      (provider.invoke as ReturnType<typeof vi.fn>).mockResolvedValue({
+        success: false,
+        output: 'Not logged in — operator OAuth token is expired',
+        exitCode: 1,
+        authFailure: true,
+      });
+      const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
+        pipelineDir: pipeDir,
+      });
+
+      const result = await runner.run('worktree', emptyState);
+
+      expect(result.authFailure).toBe(true);
+    });
+  });
+
   describe('rate-limit detection', () => {
     let pipeDir: string;
     beforeEach(async () => {

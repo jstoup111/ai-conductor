@@ -587,6 +587,48 @@ otel:
 See `src/conductor/README.md → OpenTelemetry exporter` for the full implementation
 reference.
 
+### Sandbox auth-expiry park-and-poll
+
+When the daemon builds a feature in a headless (sandbox/self-hosted) environment, the operator's
+Claude API credentials may expire mid-build. The daemon detects auth failures and expired credentials
+via two entry points:
+
+1. **Pre-flight expiry check** — before provisioning a sandbox build, checks the operator's credentials
+   file (`~/.claude/.credentials.json`) for an expired `claudeAiOauth.expiresAt` timestamp. Expired
+   credentials immediately trigger a **park-and-poll** wait.
+2. **Step-level auth failure** — if a step fails with "Not logged in" or "Invalid API key" output,
+   the daemon treats it as an auth failure and enters the park-and-poll wait (see below).
+
+**Park-and-poll behavior:**
+When auth is blocked (expired or failed), instead of failing the feature immediately, the daemon
+**parks** the feature and waits for the operator to refresh their credentials:
+- Watches the operator's credentials file for an **mtime change** (indicating a refresh)
+- When the file changes AND the credentials are no longer expired, **resumes** the feature
+- Re-copies the refreshed credentials into the sandbox and retries the step with **budget intact**
+  (parking consumes zero retries)
+- Timeout (configurable, default **60 minutes**): if credentials are not refreshed within the window,
+  HALTs with a reason naming the credentials path and observed expiry time
+
+**Configuration:**
+```yaml
+# .ai-conductor/config.yml (project level)
+auth_park_timeout_minutes: 60      # default: 60 minutes; 0 or negative = opt-out (HALT immediately)
+```
+
+**Opt-out:** Set `auth_park_timeout_minutes: 0` or a negative value to disable park-and-poll.
+On auth failure or expiry, the feature HALTs immediately instead of waiting.
+
+**HALT reason:** When the park window times out, the HALT reason includes:
+- The credentials file path that was watched
+- The observed `expiresAt` timestamp (or "unparseable" if unreadable)
+
+**Remediation:** Standard HALT remediation applies (no new process):
+1. Operator refreshes credentials (login via `claude login`)
+2. Standard HALT recovery: clear `.pipeline/HALT`, observe `.pipeline/HALT.cleared` marker,
+   and re-queue the feature via the base-SHA advance re-kick logic (see ADR-013) or manual dispatch.
+
+See `src/conductor/README.md` → "Sandbox auth-expiry park-and-poll" for implementation details.
+
 ### Harness self-host guardrails (`conduct-ts` only)
 
 The harness is the one repo the daemon can't build the way it builds every other repo — a self-build

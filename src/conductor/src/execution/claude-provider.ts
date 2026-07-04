@@ -7,6 +7,17 @@ const STALE_SESSION_RE = /No conversation found/i;
 // process"). Recovers the same way as a stale session — reset to a fresh
 // session id and retry — so it's folded into the sessionExpired signal.
 const SESSION_IN_USE_RE = /\balready in use\b|\b(session|conversation)\b[^\n]{0,60}\bin use\b/i;
+// Signatures indicating authentication failure — the daemon's OAuth token is
+// missing, stale, or invalid. Distinct from model unavailability (entitled
+// but token expired) or rate limiting (entitled but quota hit). Drives the
+// token refresh / re-login flow in the recovery handler.
+//
+// Includes the Claude CLI's actual login-error wording as of 2026-07:
+// - "Not logged in" — no stored token
+// - "Invalid API key" — malformed or revoked token
+// - "Please run /login" — interactive prompt to re-authenticate
+export const AUTH_FAILURE_RE = /not logged in|invalid api key|please run \/login/i;
+
 // Signatures indicating the requested model itself is unavailable — not
 // entitled, deprecated, or unrecognized by the CLI/API — as opposed to a
 // transient rate limit or session issue. Drives the fallback-ladder logic in
@@ -23,6 +34,11 @@ const SESSION_IN_USE_RE = /\balready in use\b|\b(session|conversation)\b[^\n]{0,
 // may surface in other invocation paths.
 export const MODEL_UNAVAILABLE_RE =
   /not_found_error.{0,80}model|model not found|invalid model( name)?|issue with the selected model|may not exist or you may not have access/i;
+
+/** Test helper: true if `output` matches the auth-failure signature. */
+export function detectsAuthFailure(output: string): boolean {
+  return AUTH_FAILURE_RE.test(output);
+}
 
 /** Test helper: true if `output` matches the model-unavailable signature. */
 export function detectsModelUnavailable(output: string): boolean {
@@ -99,16 +115,21 @@ export class ClaudeProvider implements LLMProvider {
       };
     }
 
-    const rateLimited = RATE_LIMIT_RE.test(output);
+    // Check auth failure first (highest priority), gated on non-zero exit.
+    // Then model availability and rate limit — these are also only valid
+    // error states (exit !== 0).
+    const authFailure = exitCode !== 0 && AUTH_FAILURE_RE.test(output);
+    const modelUnavailable = exitCode !== 0 && MODEL_UNAVAILABLE_RE.test(output);
+    const rateLimited = exitCode !== 0 && RATE_LIMIT_RE.test(output);
     const sessionExpired =
       STALE_SESSION_RE.test(output) || SESSION_IN_USE_RE.test(output);
-    const modelUnavailable = MODEL_UNAVAILABLE_RE.test(output);
     const tokenUsage = parseTokenUsage(stdout);
 
     return {
       success: exitCode === 0,
       output,
       exitCode,
+      authFailure: authFailure || undefined,
       rateLimited: rateLimited || undefined,
       sessionExpired: sessionExpired || undefined,
       modelUnavailable: modelUnavailable || undefined,

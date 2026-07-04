@@ -355,3 +355,22 @@ export async function sandboxLinkTargets(
     hooks: join(sandbox.configDir, 'hooks'),
   };
 }
+
+/**
+ * Re-copy `.credentials.json` from source config dir to sandbox config dir,
+ * overwriting any existing sandbox credentials. Used when the operator's
+ * credentials are refreshed (e.g., token expiry) and the running sandbox
+ * build needs updated credentials without tearing down the sandbox.
+ *
+ * The copy is a regular file, never a symlink (TR-6 invariant). If the source
+ * file does not exist, this is a no-op (no error thrown — the caller is
+ * responsible for ensuring the source exists when needed).
+ */
+export async function refreshSandboxCredentials(
+  sourceConfigDir: string,
+  sandboxConfigDir: string,
+): Promise<void> {
+  const src = join(sourceConfigDir, CREDENTIALS_FILE);
+  const dest = join(sandboxConfigDir, CREDENTIALS_FILE);
+  await copyIfPresent(realSandboxFs, src, dest);
+}
