@@ -463,6 +463,17 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     // new base instead of the stale one. One-shot (sentinel consumed). A
     // re-conflict re-parks via 9.0's existing HALT path — skip `conductor.run()`.
     const ranManualTest = getStepStatus(baseState, 'manual_test') !== 'skipped';
+    // Task 8 (operator-park): a human-placed halt must survive re-kick sweeps
+    // unconditionally — that includes NOT consuming a pending `.pipeline/REKICK`
+    // sentinel. Checked BEFORE `resumeRebaseFirst` (which is one-shot: it
+    // deletes the sentinel up front regardless of outcome) so a parked
+    // worktree's sentinel is left completely untouched for a human to inspect
+    // or for the eventual un-park to resume normally.
+    const parked = await isOperatorParked(projectRoot, item.slug);
+    if (parked) {
+      log(`re-kick resume ${item.slug}: skipped — operator-parked (sentinel preserved)`);
+      return;
+    }
     const resume = await resumeRebaseFirst({
       worktreePath: wt.path,
       localBase: baseBranch,
