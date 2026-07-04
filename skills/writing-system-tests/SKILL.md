@@ -294,6 +294,10 @@ verify outcome). Neither duplicates the other.
 - Assert outcomes, not intermediate transport details (request/endpoint tests own those)
 - Auth uses helper methods, not hardcoded tokens
 - No mocking external services in acceptance specs — test the real flow
+- On product track: every generated spec identifies the FR(s) it covers — either in the
+  top-level suite/describe name OR as a leading comment line `Covers: FR-N[, FR-M]`
+  (framework-agnostic; comma-separated for multiple FRs) — so `grep -rE "FR-[0-9]+"` over the
+  acceptance directory finds every FR's specs.
 
 **Helpers:** Create shared request helpers (e.g. response-body parsing and auth-header
 construction) in the project's test-support location if they don't already exist.
@@ -327,6 +331,10 @@ SUITE "Authentication" (driven through a real UI driver):
 - No mocking — full stack exercise
 - Sign-in uses the actual login UI, not a session backdoor
 - Assert on user-visible content and navigated location, not internal DOM/implementation details
+- On product track: every generated spec identifies the FR(s) it covers — either in the
+  top-level suite/describe name OR as a leading comment line `Covers: FR-N[, FR-M]`
+  (framework-agnostic; comma-separated for multiple FRs) — so `grep -rE "FR-[0-9]+"` over the
+  acceptance directory finds every FR's specs.
 
 ### 6. Run and Verify RED
 
