@@ -410,6 +410,54 @@ Counts are for the feature's own specs from the run above (`executed` = passed +
 at collection does not establish RED and will not pass the gate. This is gitignored run evidence,
 not a committed design artifact.
 
+#### Record the FR coverage evidence (gating)
+
+**Scope:** this subsection runs only for product-track work with an approved PRD (the same
+condition as §3e). If the work is technical-track or no approved PRD exists, skip this
+subsection entirely — no evidence file is written, no error.
+
+**Finalize the §3e table.** Before writing the evidence file, verify every row is actually
+correct, not just internally consistent:
+- For each `already-tested` or `spec-covered` row, confirm the cited spec/test file **exists on
+  disk** and, for `spec-covered` rows, **contains the FR identifier** — run
+  `grep -E "FR-N"` (substituting the real FR number) against the cited file and confirm a match.
+- For each `unit-covered` row, confirm the cited **story exists** as a file under
+  `.docs/stories/`.
+- Re-check that every `FR-N` in the PRD has exactly one row, no invented rows exist, and every
+  disposition is one of the closed set (`already-tested`, `unit-covered`, `spec-covered`).
+
+**Write `.pipeline/fr-coverage.md`** with this format:
+
+```markdown
+# FR Coverage — <feature-stem>
+
+PRD: .docs/specs/<feature-stem>.md
+Date: <YYYY-MM-DD>
+
+| FR   | Disposition    | Evidence                                              |
+|------|----------------|--------------------------------------------------------|
+| FR-1 | spec-covered   | spec/integration/links_spec.rb — "expired link"        |
+| FR-2 | unit-covered   | .docs/stories/links.md — single-op CRUD, §3a           |
+| FR-3 | already-tested | spec/requests/links_spec.rb:42                          |
+
+Coverage: COMPLETE
+```
+
+The verdict line is the last line of the file:
+- **`Coverage: COMPLETE`** — every FR in the PRD has exactly one row, a valid disposition, a
+  citation, and the citation was verified to exist (and, where applicable, to contain the FR
+  identifier or match the story file).
+- **`Coverage: INCOMPLETE — unresolved: FR-N, FR-M...`** — list every FR that failed
+  verification, in ascending order, comma-separated.
+
+**GATE.** If any FR is unresolved (missing row, invented row, bad or duplicate disposition,
+missing or unverifiable citation) or `.pipeline/fr-coverage.md` cannot be written, the step MUST
+NOT report success — output the failure reason listing every unresolved FR with its cause and
+stop (a hard stop under the daemon, not a logged warning).
+
+On complete resolution, report the task as PASS with the evidence file written and the verdict
+"Coverage: COMPLETE".
+
 ### Stubbing Rules for Pre-Implementation Specs
 
 - Stub at **system boundaries only**: randomness sources, the clock/current time, external API
@@ -428,6 +476,13 @@ git commit -m "test: add failing acceptance specs for [feature area]"
 
 Failing tests get committed. They represent the acceptance criteria.
 Implementation (via `/pipeline` or `/tdd`) makes them pass.
+
+**Verification checklist before completing this skill:**
+- RED evidence written to `.pipeline/acceptance-specs-red.json` (§6)
+- Evidence file written to `.pipeline/fr-coverage.md` (only for product-track runs with an
+  approved PRD) with verdict "Coverage: COMPLETE" — otherwise the step is a hard stop per §6's
+  FR-coverage gate
+- Failing tests committed
 
 ## How This Relates to Other Test Types
 
