@@ -14,6 +14,7 @@ export function deriveMode(opts: { auto: boolean; interactive: boolean }): RunMo
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { mkdir, readFile } from 'node:fs/promises';
+import { realpathSync } from 'node:fs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 import { v4 as uuidv4 } from 'uuid';
@@ -808,9 +809,20 @@ async function main(): Promise<void> {
 // Without this guard, importing the module runs main(), which process.exit(1)s
 // in a non-CLI context and pollutes the parallel test run with an unhandled
 // rejection (flaky failures + non-zero exit).
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main().catch((err) => {
-    console.error('Fatal:', err.message ?? err);
-    process.exit(1);
-  });
+// argv[1] must be resolved through symlinks: with the versioned engine store,
+// `dist` is a symlink, so argv[1] (symlink path) and import.meta.url (Node's
+// realpath) differ for the same file — a plain compare would silently skip main().
+if (process.argv[1]) {
+  let same = false;
+  try {
+    same = realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1]);
+  } catch {
+    same = import.meta.url === pathToFileURL(process.argv[1]).href;
+  }
+  if (same) {
+    main().catch((err) => {
+      console.error('Fatal:', err.message ?? err);
+      process.exit(1);
+    });
+  }
 }
