@@ -1,13 +1,14 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, readFile } from 'fs/promises';
+import { mkdtemp, rm, readFile, stat, mkdir, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Acceptance specs for the park-marker module (Task 1, FR-1/FR-7). Sibling of
-// halt-marker.ts: `.daemon/parked/<slug>` is the single-source marker the
-// daemon loop and dashboard treat as a per-slug operator park. This task only
-// covers the happy path — idempotency and error isolation land in Task 2.
+// Acceptance specs for the park-marker module (Task 1/2, FR-1/FR-2/FR-7).
+// Sibling of halt-marker.ts: `.daemon/parked/<slug>` is the single-source
+// marker the daemon loop and dashboard treat as a per-slug operator park.
+// Task 2 adds idempotency (re-park is a no-op) and fail-toward-parked error
+// handling for isOperatorParked.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const MOD_PATH = '../src/engine/park-marker.js';
@@ -89,5 +90,88 @@ describe('park-marker', () => {
 
     await expect(isOperatorParked(repoPath, 'slug-a')).resolves.toBe(true);
     await expect(isOperatorParked(repoPath, 'slug-b')).resolves.toBe(false);
+  });
+
+  it('writeOperatorPark is idempotent — re-parking an existing marker leaves content and mtime unchanged', async () => {
+    const mod = await load();
+    const writeOperatorPark = requireFn(mod, 'writeOperatorPark');
+
+    await writeOperatorPark(repoPath, 'my-feature-slug');
+    const markerPath = join(repoPath, '.daemon', 'parked', 'my-feature-slug');
+    const firstContent = await readFile(markerPath, 'utf-8');
+    const firstStat = await stat(markerPath);
+
+    // Ensure any timestamp embedded in a rewrite would differ if a rewrite happened.
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    await expect(writeOperatorPark(repoPath, 'my-feature-slug')).resolves.toBeUndefined();
+
+    const secondContent = await readFile(markerPath, 'utf-8');
+    const secondStat = await stat(markerPath);
+
+    expect(secondContent).toBe(firstContent);
+    expect(secondStat.mtimeMs).toBe(firstStat.mtimeMs);
+  });
+
+  it('concurrent writeOperatorPark calls for the same slug leave exactly one intact marker', async () => {
+    const mod = await load();
+    const writeOperatorPark = requireFn(mod, 'writeOperatorPark');
+
+    const results = await Promise.allSettled(
+      Array.from({ length: 8 }, () => writeOperatorPark(repoPath, 'race-slug'))
+    );
+
+    // None of the racers should reject — idempotent create swallows the "already exists" case.
+    expect(results.every((r) => r.status === 'fulfilled')).toBe(true);
+
+    const markerPath = join(repoPath, '.daemon', 'parked', 'race-slug');
+    const raw = await readFile(markerPath, 'utf-8');
+    expect(raw).toContain('parked by operator');
+    const lines = raw.split('\n');
+    expect(Number.isNaN(Date.parse(lines[0]))).toBe(false);
+  });
+
+  it('isOperatorParked fails toward parked (true) for a zero-byte marker file', async () => {
+    const mod = await load();
+    const isOperatorParked = requireFn(mod, 'isOperatorParked');
+
+    const dir = join(repoPath, '.daemon', 'parked');
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, 'empty-slug'), '', 'utf-8');
+
+    await expect(isOperatorParked(repoPath, 'empty-slug')).resolves.toBe(true);
+  });
+
+  it('isOperatorParked fails toward parked (true) and invokes the log callback on a non-ENOENT read error', async () => {
+    const mod = await load();
+    const isOperatorParked = requireFn(mod, 'isOperatorParked');
+
+    // Make the "marker" path a directory instead of a file so reading it as a
+    // file fails with EISDIR — a read error that isn't a plain ENOENT.
+    const dir = join(repoPath, '.daemon', 'parked');
+    await mkdir(join(dir, 'weird-slug'), { recursive: true });
+
+    let loggedErr: Error | undefined;
+    await expect(
+      isOperatorParked(repoPath, 'weird-slug', (err: Error) => {
+        loggedErr = err;
+      })
+    ).resolves.toBe(true);
+
+    expect(loggedErr).toBeInstanceOf(Error);
+  });
+
+  it('isOperatorParked reports false with no callback invocation on plain ENOENT', async () => {
+    const mod = await load();
+    const isOperatorParked = requireFn(mod, 'isOperatorParked');
+
+    let called = false;
+    await expect(
+      isOperatorParked(repoPath, 'does-not-exist', () => {
+        called = true;
+      })
+    ).resolves.toBe(false);
+
+    expect(called).toBe(false);
   });
 });
