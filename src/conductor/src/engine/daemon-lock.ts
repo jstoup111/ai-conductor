@@ -20,7 +20,8 @@
 
 import { open, mkdir, unlink, readFile, writeFile } from 'node:fs/promises';
 import { unlinkSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -40,6 +41,13 @@ export function daemonDir(repoPath: string): string {
   return join(repoPath, DAEMON_DIR);
 }
 
+// Exported for engine-store GC to construct pidfile paths across the fleet
+// without hardcoding the pidfile path itself (boundary test requirement).
+// Keeps all pidfile path logic confined to this module.
+export function getPidfilePath(repoPath: string): string {
+  return pidfilePath(repoPath);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Pidfile record shape.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -47,6 +55,15 @@ export interface PidRecord {
   pid: number;
   uuid: string;
   startedAt: string;
+  /**
+   * Additive (FR-14): the directory of the running engine build that wrote
+   * this pidfile — normally `dist-versions/<version-id>` (or `dist/` when
+   * running unpublished/dev code). Derived from THIS module's own resolved
+   * location so it always reflects the engine actually executing, never a
+   * caller-supplied value. Absent on records written before this field
+   * existed — readers must tolerate `undefined` (never throw).
+   */
+  engineDir?: string;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -123,6 +140,11 @@ const defaultKill: KillProbe = (pid, signal) => {
 // Internal helpers.
 // ─────────────────────────────────────────────────────────────────────────────
 
+// This module's own resolved directory — the "engine dir" for whichever build
+// is currently executing (dist-versions/<id>/engine, or a dev src/engine dir
+// under ts-node/tsx). Computed once; never derived from caller input.
+const OWN_ENGINE_DIR = dirname(fileURLToPath(import.meta.url));
+
 async function writePidfileExcl(repoPath: string): Promise<PidRecord> {
   await mkdir(daemonDir(repoPath), { recursive: true });
 
@@ -130,6 +152,7 @@ async function writePidfileExcl(repoPath: string): Promise<PidRecord> {
     pid: process.pid,
     uuid: randomUUID(),
     startedAt: new Date().toISOString(),
+    engineDir: OWN_ENGINE_DIR,
   };
 
   // O_EXCL: fails with EEXIST if the file already exists — the kernel-level mutex.
@@ -170,6 +193,19 @@ export async function readPidRecord(repoPath: string): Promise<PidRecord | null>
   }
 
   return parsed as PidRecord;
+}
+
+/**
+ * TEST HELPER: writePidRecord — directly write a pidfile without O_EXCL.
+ * Used ONLY in tests to set up initial state (e.g., simulating an orphaned process).
+ * Production code must use acquire() or reclaim() to respect the O_EXCL mutex.
+ */
+export async function writePidRecord(
+  repoPath: string,
+  record: PidRecord,
+): Promise<void> {
+  await mkdir(daemonDir(repoPath), { recursive: true });
+  await writeFile(pidfilePath(repoPath), JSON.stringify(record), 'utf8');
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -384,6 +420,65 @@ export async function holdLock(repoPath: string): Promise<DaemonLockHandle | nul
   }
   // acquire error (permission, etc.) → run without an observable lock.
   return makeLockHandle(repoPath, process.pid, false);
+}
+
+/**
+ * clearStaleLockForRestart — FR-8: hand off the 1-per-repo lock ahead of a
+ * `restart` verb's tmux-level respawn, built ENTIRELY from the existing
+ * acquire/reclaim primitives (no new lock semantics — plan Task 25 constraint).
+ *
+ *   - No prior pidfile    → acquire (O_EXCL) then immediately unlink our own
+ *     transient record. This still forces the O_EXCL race arbitration to run
+ *     BEFORE anything spawns, so a concurrent caller racing the same repo
+ *     (e.g. `ensureRunning`) cannot end up double-spawning (FR-8 race case).
+ *   - Prior owner is LIVE → left untouched. That live process is the one the
+ *     supervisor's respawn is about to kill; ADR-010 forbids reclaiming a
+ *     live lock — the freshly-booted daemon's own `holdLock()` reclaims once
+ *     the old process is actually dead.
+ *   - Prior owner is DEAD (or phantom) → reclaim() (the existing stale-reclaim
+ *     path), then unlink the transient record we just won so the freshly
+ *     spawned daemon claims a clean lock via O_EXCL on boot (new pid).
+ *
+ * Returns the previous owner's real pid (or null when there was none, or it
+ * was a phantom/-1 sentinel) — useful for "new holder pid !== old" assertions.
+ *
+ * @param repoPath - Absolute path to the repository root.
+ * @param kill     - Injectable kill probe (default: process.kill).
+ */
+export async function clearStaleLockForRestart(
+  repoPath: string,
+  kill: KillProbe = defaultKill,
+): Promise<number | null> {
+  const owner = await readPidRecord(repoPath);
+
+  if (!owner) {
+    // No prior lock on disk — still race-arbitrate via O_EXCL in case a
+    // concurrent caller (e.g. ensureRunning) is claiming the same repo now.
+    const result = await acquire(repoPath, kill);
+    if (result.acquired) {
+      try {
+        await unlink(pidfilePath(repoPath));
+      } catch {
+        // Already gone — fine.
+      }
+    }
+    return null;
+  }
+
+  if (owner.pid > 0 && isLive(owner.pid, kill)) {
+    return owner.pid; // live — leave it; the pane respawn will kill it
+  }
+
+  // Dead/phantom stale record — reclaim via the existing primitive.
+  const result = await reclaim(repoPath, kill);
+  if (result.reclaimed) {
+    try {
+      await unlink(pidfilePath(repoPath));
+    } catch {
+      // Already gone — fine.
+    }
+  }
+  return owner.pid > 0 ? owner.pid : null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

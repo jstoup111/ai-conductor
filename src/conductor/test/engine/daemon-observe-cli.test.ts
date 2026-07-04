@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, chmod } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import type { KillProbe } from '../../src/engine/daemon-lock.js';
+import { acquire, readPidRecord, type KillProbe } from '../../src/engine/daemon-lock.js';
 import { openDaemonLog } from '../../src/engine/daemon-log.js';
 import {
   computeStatusRow,
@@ -23,7 +23,7 @@ const DEAD: KillProbe = () => {
 // directly — the boundary test only scans src/.
 async function writePidfile(
   repo: string,
-  rec: { pid: number; uuid?: string; startedAt?: string } | string,
+  rec: { pid: number; uuid?: string; startedAt?: string; engineDir?: string } | string,
 ): Promise<void> {
   await mkdir(join(repo, '.daemon'), { recursive: true });
   const body =
@@ -33,6 +33,7 @@ async function writePidfile(
           pid: rec.pid,
           uuid: rec.uuid ?? 'u-1',
           startedAt: rec.startedAt ?? '2026-06-27T00:00:00.000Z',
+          ...(rec.engineDir !== undefined ? { engineDir: rec.engineDir } : {}),
         });
   await writeFile(join(repo, '.daemon', 'daemon.pid'), body, 'utf8');
 }
@@ -57,6 +58,19 @@ describe('engine/daemon-observe-cli', () => {
       registeredAt: '2026-06-27T00:00:00.000Z',
     };
   }
+
+  describe('daemon-lock pidfile — engineDir (FR-14)', () => {
+    it('a pidfile written via acquire() (the real daemon-lock path) carries an engineDir field', async () => {
+      const repo = join(root, 'repo');
+      await mkdir(repo, { recursive: true });
+      const result = await acquire(repo, ALIVE);
+      expect(result.acquired).toBe(true);
+      const rec = await readPidRecord(repo);
+      expect(rec).not.toBeNull();
+      expect(typeof rec?.engineDir).toBe('string');
+      expect(rec?.engineDir?.length).toBeGreaterThan(0);
+    });
+  });
 
   describe('computeStatusRow', () => {
     it('classifies running when the pidfile owner is alive', async () => {
@@ -109,6 +123,218 @@ describe('engine/daemon-observe-cli', () => {
       const row = await computeStatusRow(record('repo', repo), ALIVE);
       expect(row.lastActivity).toBe('[daemon] · ✓ gate loop converged');
       expect(row.lastActivityAt).toBeDefined();
+    });
+
+    it('renders "version:<id>" when the pidfile engineDir contains a dist-versions/<id> segment (FR-14)', async () => {
+      const repo = join(root, 'repo');
+      await mkdir(repo, { recursive: true });
+      await writePidfile(repo, {
+        pid: 4242,
+        engineDir: '/opt/app/dist-versions/20260704T000000Z-abc123abc123',
+      });
+      const registryPath = join(root, 'registry.json');
+      await writeFile(registryPath, JSON.stringify([record('repo', repo)]), 'utf8');
+
+      const out: string[] = [];
+      await runDaemonStatus({ registryPath, kill: ALIVE, out: (l) => out.push(l) });
+      expect(out.join('\n')).toContain('version:20260704T000000Z-abc123abc123');
+    });
+
+    it('renders "version-unknown" when the pidfile has no engineDir (legacy record)', async () => {
+      const repo = join(root, 'repo');
+      await mkdir(repo, { recursive: true });
+      await writePidfile(repo, { pid: 4242 });
+      const registryPath = join(root, 'registry.json');
+      await writeFile(registryPath, JSON.stringify([record('repo', repo)]), 'utf8');
+
+      const out: string[] = [];
+      await runDaemonStatus({ registryPath, kill: ALIVE, out: (l) => out.push(l) });
+      expect(out.join('\n')).toContain('version:version-unknown');
+    });
+  });
+
+  describe('computeStatusRow — state enum (FR-5)', () => {
+    async function writePauseMarker(
+      repo: string,
+      meta: { pausedAt?: string; pausedBy?: string } | string = {},
+    ): Promise<void> {
+      await mkdir(join(repo, '.daemon'), { recursive: true });
+      const body =
+        typeof meta === 'string'
+          ? meta
+          : JSON.stringify({ pausedAt: meta.pausedAt ?? '2026-07-04T00:00:00.000Z', ...meta });
+      await writeFile(join(repo, '.daemon', 'PAUSED'), body, 'utf8');
+    }
+
+    it('is "running" when live and not paused', async () => {
+      const repo = join(root, 'repo');
+      await mkdir(repo, { recursive: true });
+      await writePidfile(repo, { pid: 1 });
+      const row = await computeStatusRow(record('repo', repo), ALIVE);
+      expect(row.state).toBe('running');
+    });
+
+    it('is "stopped" when there is no pidfile and not paused', async () => {
+      const repo = join(root, 'repo');
+      await mkdir(repo, { recursive: true });
+      const row = await computeStatusRow(record('repo', repo), ALIVE);
+      expect(row.state).toBe('stopped');
+    });
+
+    it('is "stale" when the pidfile owner is dead and not paused', async () => {
+      const repo = join(root, 'repo');
+      await mkdir(repo, { recursive: true });
+      await writePidfile(repo, { pid: 1 });
+      const row = await computeStatusRow(record('repo', repo), DEAD);
+      expect(row.state).toBe('stale');
+    });
+
+    it('is "paused" when live and the pause marker is present, with pausedAt/by', async () => {
+      const repo = join(root, 'repo');
+      await mkdir(repo, { recursive: true });
+      await writePidfile(repo, { pid: 1 });
+      await writePauseMarker(repo, { pausedAt: '2026-07-04T01:00:00.000Z', pausedBy: 'james' });
+      const row = await computeStatusRow(record('repo', repo), ALIVE);
+      expect(row.state).toBe('paused');
+      expect(row.pausedAt).toBe('2026-07-04T01:00:00.000Z');
+      expect(row.pausedBy).toBe('james');
+    });
+
+    it('is "paused_dead" (composite) when paused and the pidfile owner is dead — shows both facts', async () => {
+      const repo = join(root, 'repo');
+      await mkdir(repo, { recursive: true });
+      await writePidfile(repo, { pid: 1 });
+      await writePauseMarker(repo, { pausedAt: '2026-07-04T01:00:00.000Z' });
+      const row = await computeStatusRow(record('repo', repo), DEAD);
+      expect(row.state).toBe('paused_dead');
+      expect(row.liveness).toBe('stale');
+      expect(row.pausedAt).toBe('2026-07-04T01:00:00.000Z');
+    });
+
+    it('treats corrupt pause-marker metadata as paused, without throwing', async () => {
+      const repo = join(root, 'repo');
+      await mkdir(repo, { recursive: true });
+      await writePidfile(repo, { pid: 1 });
+      await writePauseMarker(repo, '{ not json');
+      const row = await computeStatusRow(record('repo', repo), ALIVE);
+      expect(row.state).toBe('paused');
+      expect(row.pausedAt).toBeUndefined();
+    });
+
+    it('a four-state fleet renders each state distinctly', async () => {
+      const running = join(root, 'running');
+      const paused = join(root, 'paused');
+      const stopped = join(root, 'stopped');
+      const stale = join(root, 'stale');
+      await mkdir(running, { recursive: true });
+      await mkdir(paused, { recursive: true });
+      await mkdir(stopped, { recursive: true });
+      await mkdir(stale, { recursive: true });
+      await writePidfile(running, { pid: 1 });
+      await writePidfile(paused, { pid: 2 });
+      await writePauseMarker(paused);
+      await writePidfile(stale, { pid: 3 });
+
+      const kill: KillProbe = (pid) => {
+        if (pid === 3) {
+          const e = new Error('dead') as NodeJS.ErrnoException;
+          e.code = 'ESRCH';
+          throw e;
+        }
+      };
+
+      const rows = await Promise.all([
+        computeStatusRow(record('running', running), kill),
+        computeStatusRow(record('paused', paused), kill),
+        computeStatusRow(record('stopped', stopped), kill),
+        computeStatusRow(record('stale', stale), kill),
+      ]);
+      expect(rows.map((r) => r.state)).toEqual(['running', 'paused', 'stopped', 'stale']);
+      expect(new Set(rows.map((r) => r.state)).size).toBe(4);
+    });
+  });
+
+  describe('computeStatusRow — restart-pending + two-layer liveness (FR-9/FR-12, T33)', () => {
+    async function writeRestartMarker(
+      repo: string,
+      intent: { requestedAt?: string; requestedBy?: string; blockingSlug?: string } | string = {},
+    ): Promise<void> {
+      await mkdir(join(repo, '.daemon'), { recursive: true });
+      const body =
+        typeof intent === 'string'
+          ? intent
+          : JSON.stringify({ requestedAt: intent.requestedAt ?? '2026-07-04T00:00:00.000Z', ...intent });
+      await writeFile(join(repo, '.daemon', 'RESTART-PENDING'), body, 'utf8');
+    }
+
+    it('reports "restart-pending" state and surfaces the blocking slug while the marker is present', async () => {
+      const repo = join(root, 'repo');
+      await mkdir(repo, { recursive: true });
+      await writePidfile(repo, { pid: 1 });
+      await writeRestartMarker(repo, { blockingSlug: 'feat-widgets' });
+      const row = await computeStatusRow(record('repo', repo), ALIVE);
+      expect(row.state).toBe('restart-pending');
+      expect(row.restartPending?.blockingSlug).toBe('feat-widgets');
+    });
+
+    it('renders the literal "restart-pending (waiting on <slug>)" text via runDaemonStatus', async () => {
+      const repo = join(root, 'repo');
+      await mkdir(repo, { recursive: true });
+      await writePidfile(repo, { pid: 1 });
+      await writeRestartMarker(repo, { blockingSlug: 'feat-widgets' });
+      const registryPath = join(root, 'registry.json');
+      await writeFile(registryPath, JSON.stringify([record('repo', repo)]), 'utf8');
+
+      const out: string[] = [];
+      await runDaemonStatus({ registryPath, kill: ALIVE, out: (l) => out.push(l) });
+      expect(out.join('\n')).toContain('restart-pending (waiting on feat-widgets)');
+    });
+
+    it('does not consume the restart marker — it remains present across repeated status reads', async () => {
+      const repo = join(root, 'repo');
+      await mkdir(repo, { recursive: true });
+      await writePidfile(repo, { pid: 1 });
+      await writeRestartMarker(repo, { blockingSlug: 'feat-widgets' });
+      await computeStatusRow(record('repo', repo), ALIVE);
+      const row2 = await computeStatusRow(record('repo', repo), ALIVE);
+      expect(row2.state).toBe('restart-pending');
+    });
+
+    it('reports "dead-pane" when the tmux session is present but the pane has died', async () => {
+      const repo = join(root, 'repo');
+      await mkdir(repo, { recursive: true });
+      await writePidfile(repo, { pid: 1 });
+      const row = await computeStatusRow(
+        record('repo', repo),
+        ALIVE,
+        () => true, // session present
+        () => true, // pane dead
+      );
+      expect(row.state).toBe('dead-pane');
+      expect(row.sessionPresent).toBe(true);
+      expect(row.paneDead).toBe(true);
+    });
+
+    it('distinguishes dead-pane from plain running (session present, pane alive)', async () => {
+      const repo = join(root, 'repo');
+      await mkdir(repo, { recursive: true });
+      await writePidfile(repo, { pid: 1 });
+      const row = await computeStatusRow(
+        record('repo', repo),
+        ALIVE,
+        () => true, // session present
+        () => false, // pane alive
+      );
+      expect(row.state).toBe('running');
+      expect(row.paneDead).toBe(false);
+    });
+
+    it('distinguishes dead-pane from stopped (no pidfile, no session)', async () => {
+      const repo = join(root, 'repo');
+      await mkdir(repo, { recursive: true });
+      const row = await computeStatusRow(record('repo', repo), ALIVE, () => false, () => false);
+      expect(row.state).toBe('stopped');
+      expect(row.paneDead).toBe(false);
     });
   });
 

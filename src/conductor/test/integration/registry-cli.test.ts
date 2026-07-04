@@ -123,9 +123,9 @@ let sandbox: string;
 
 beforeAll(async () => {
   // Rebuild the real entry from current source so the spawn exercises today's
-  // CLI (no stale dist). tsup only compiles what exists — it cannot conjure
-  // the unimplemented subcommands.
-  await execFileAsync('npx', ['tsup', '--no-dts'], { cwd: CONDUCTOR_DIR });
+  // CLI (no stale dist). npm run build now uses the publish wrapper to manage
+  // the versioned dist-versions/ layout.
+  await execFileAsync('npm', ['run', 'build'], { cwd: CONDUCTOR_DIR });
   expect(existsSync(DIST_ENTRY)).toBe(true);
 }, 60_000);
 

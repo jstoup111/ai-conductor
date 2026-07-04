@@ -265,6 +265,301 @@ describe('sendKeys: argv', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// setRemainOnExit — exact argv; session-scoped target
+// ─────────────────────────────────────────────────────────────────────────────
+describe('setRemainOnExit: argv', () => {
+  it('calls set-option with exact-match session target and remain-on-exit on', async () => {
+    const setRemainOnExit = requireFn(await load(), 'setRemainOnExit');
+    const { run, calls } = spyRunner();
+    await setRemainOnExit('cc-daemon-myapp-abc123', run);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].args).toEqual([
+      'set-option', '-t', '=cc-daemon-myapp-abc123', 'remain-on-exit', 'on',
+    ]);
+    expect(calls[0].inherit).toBe(false);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// respawnPane — exact argv; window/pane-scoped target; throws on non-zero
+// ─────────────────────────────────────────────────────────────────────────────
+describe('respawnPane: argv and error handling', () => {
+  it('captures pane history via capture-pane -S - -p before respawning', async () => {
+    const respawnPane = requireFn(await load(), 'respawnPane');
+    const { run, calls } = spyRunner({ 'capture-pane': { code: 0, stdout: 'old scrollback\n' } });
+    await respawnPane('cc-daemon-myapp-abc123', run);
+    const captureCall = calls.find((c) => c.args[0] === 'capture-pane')!;
+    expect(captureCall.args).toEqual(['capture-pane', '-S', '-', '-p', '-t', '=cc-daemon-myapp-abc123:']);
+    expect(captureCall.inherit).toBe(false);
+    // capture-pane must run BEFORE respawn-pane -k (which clears history).
+    const subs = calls.map((c) => c.args[0]);
+    expect(subs.indexOf('capture-pane')).toBeLessThan(subs.indexOf('respawn-pane'));
+  });
+
+  it('wraps the respawned command to re-emit captured scrollback then exec the daemon command, targeting the active pane', async () => {
+    const respawnPane = requireFn(await load(), 'respawnPane');
+    const { DAEMON_FOREGROUND_COMMAND } = await load();
+    const { run, calls } = spyRunner({ 'capture-pane': { code: 0, stdout: 'old scrollback\n' } });
+    await respawnPane('cc-daemon-myapp-abc123', run);
+    const respawnCall = calls.find((c) => c.args[0] === 'respawn-pane')!;
+    expect(respawnCall.args[0]).toBe('respawn-pane');
+    expect(respawnCall.args[1]).toBe('-k');
+    expect(respawnCall.args[2]).toBe('-t');
+    expect(respawnCall.args[3]).toBe('=cc-daemon-myapp-abc123:');
+    const wrapped = respawnCall.args[4];
+    expect(wrapped).toMatch(/^cat .+; rm -f .+; exec conduct-ts daemon --continuous$/);
+    expect(wrapped).toContain(DAEMON_FOREGROUND_COMMAND as string);
+    expect(respawnCall.inherit).toBe(false);
+  });
+
+  it('reports scrollbackPreserved:true when capture succeeds with content', async () => {
+    const respawnPane = requireFn(await load(), 'respawnPane');
+    const { run } = spyRunner({ 'capture-pane': { code: 0, stdout: 'old scrollback\n' } });
+    const outcome = await respawnPane('cc-daemon-myapp-abc123', run);
+    expect(outcome).toEqual({ scrollbackPreserved: true });
+  });
+
+  it('falls back to the bare command and reports scrollbackPreserved:false when capture-pane fails', async () => {
+    const respawnPane = requireFn(await load(), 'respawnPane');
+    const { DAEMON_FOREGROUND_COMMAND } = await load();
+    const { run, calls } = spyRunner({ 'capture-pane': { code: 1 } });
+    const outcome = await respawnPane('cc-daemon-myapp-abc123', run);
+    expect(outcome).toEqual({ scrollbackPreserved: false });
+    const respawnCall = calls.find((c) => c.args[0] === 'respawn-pane')!;
+    expect(respawnCall.args).toEqual([
+      'respawn-pane', '-k', '-t', '=cc-daemon-myapp-abc123:', DAEMON_FOREGROUND_COMMAND,
+    ]);
+  });
+
+  it('falls back to the bare command and reports scrollbackPreserved:false when capture-pane returns empty stdout', async () => {
+    const respawnPane = requireFn(await load(), 'respawnPane');
+    const { DAEMON_FOREGROUND_COMMAND } = await load();
+    const { run, calls } = spyRunner({ 'capture-pane': { code: 0, stdout: '' } });
+    const outcome = await respawnPane('cc-daemon-myapp-abc123', run);
+    expect(outcome).toEqual({ scrollbackPreserved: false });
+    const respawnCall = calls.find((c) => c.args[0] === 'respawn-pane')!;
+    expect(respawnCall.args).toEqual([
+      'respawn-pane', '-k', '-t', '=cc-daemon-myapp-abc123:', DAEMON_FOREGROUND_COMMAND,
+    ]);
+  });
+
+  it('throws when tmux respawn-pane exits non-zero', async () => {
+    const respawnPane = requireFn(await load(), 'respawnPane');
+    const { run } = spyRunner({ 'respawn-pane': { code: 1 } });
+    await expect(respawnPane('cc-daemon-myapp-abc123', run)).rejects.toThrow();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// isPaneDead — exact argv; distinguishes session-up from process-alive (FR-12)
+// ─────────────────────────────────────────────────────────────────────────────
+describe('isPaneDead: argv and liveness detection', () => {
+  it('calls list-panes with the active-pane target and #{pane_dead} format', async () => {
+    const isPaneDead = requireFn(await load(), 'isPaneDead');
+    const { run, calls } = spyRunner({ 'list-panes': { code: 0, stdout: '0\n' } });
+    await isPaneDead('cc-daemon-myapp-abc123', run);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].args).toEqual([
+      'list-panes',
+      '-t',
+      '=cc-daemon-myapp-abc123:',
+      '-F',
+      '#{pane_dead}',
+    ]);
+    expect(calls[0].inherit).toBe(false);
+  });
+
+  it('returns true when tmux reports pane_dead=1', async () => {
+    const isPaneDead = requireFn(await load(), 'isPaneDead');
+    const { run } = spyRunner({ 'list-panes': { code: 0, stdout: '1\n' } });
+    await expect(isPaneDead('cc-daemon-myapp-abc123', run)).resolves.toBe(true);
+  });
+
+  it('returns false when tmux reports pane_dead=0', async () => {
+    const isPaneDead = requireFn(await load(), 'isPaneDead');
+    const { run } = spyRunner({ 'list-panes': { code: 0, stdout: '0\n' } });
+    await expect(isPaneDead('cc-daemon-myapp-abc123', run)).resolves.toBe(false);
+  });
+
+  it('returns false (never throws) when list-panes exits non-zero', async () => {
+    const isPaneDead = requireFn(await load(), 'isPaneDead');
+    const { run } = spyRunner({ 'list-panes': { code: 1 } });
+    await expect(isPaneDead('cc-daemon-myapp-abc123', run)).resolves.toBe(false);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// makeTmuxSupervisor().start — dead-pane revival (FR-12, Task 23)
+// ─────────────────────────────────────────────────────────────────────────────
+describe('makeTmuxSupervisor().start: dead-pane revival', () => {
+  it('session up + pane dead → respawns in place (not new-session, not no-op)', async () => {
+    const makeTmuxSupervisor = requireFn(await load(), 'makeTmuxSupervisor');
+    const { run, calls } = spyRunner({
+      '-V': { code: 0 },
+      'has-session': { code: 0 },
+      'list-panes': { code: 0, stdout: '1\n' },
+    });
+    await makeTmuxSupervisor(run).start('/home/alice/myapp');
+    const subs = calls.map((c) => c.args[0]);
+    expect(subs).toContain('respawn-pane');
+    expect(subs).toContain('set-option');
+    expect(subs).not.toContain('new-session');
+    expect(subs).not.toContain('kill-session');
+  });
+
+  it('session up + pane alive → no-op (idempotent, no respawn or new-session)', async () => {
+    const makeTmuxSupervisor = requireFn(await load(), 'makeTmuxSupervisor');
+    const { run, calls } = spyRunner({
+      '-V': { code: 0 },
+      'has-session': { code: 0 },
+      'list-panes': { code: 0, stdout: '0\n' },
+    });
+    await makeTmuxSupervisor(run).start('/home/alice/myapp');
+    const subs = calls.map((c) => c.args[0]);
+    expect(subs).not.toContain('respawn-pane');
+    expect(subs).not.toContain('new-session');
+  });
+
+  it('session absent → new-session (existing behavior, no pane liveness probe needed)', async () => {
+    const makeTmuxSupervisor = requireFn(await load(), 'makeTmuxSupervisor');
+    const { run, calls } = spyRunner({
+      '-V': { code: 0 },
+      'has-session': { code: 1 },
+    });
+    await makeTmuxSupervisor(run).start('/home/alice/myapp');
+    const subs = calls.map((c) => c.args[0]);
+    expect(subs).toContain('new-session');
+    expect(subs).not.toContain('respawn-pane');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// makeTmuxSupervisor().isUp — distinguishes session-up from process-alive (FR-12)
+// ─────────────────────────────────────────────────────────────────────────────
+describe('makeTmuxSupervisor().isUp: session-up vs process-alive', () => {
+  it('returns true when session exists and pane is alive', async () => {
+    const makeTmuxSupervisor = requireFn(await load(), 'makeTmuxSupervisor');
+    const { run } = spyRunner({
+      'has-session': { code: 0 },
+      'list-panes': { code: 0, stdout: '0\n' },
+    });
+    await expect(makeTmuxSupervisor(run).isUp('/home/alice/myapp')).resolves.toBe(true);
+  });
+
+  it('returns false when session exists but pane is dead', async () => {
+    const makeTmuxSupervisor = requireFn(await load(), 'makeTmuxSupervisor');
+    const { run } = spyRunner({
+      'has-session': { code: 0 },
+      'list-panes': { code: 0, stdout: '1\n' },
+    });
+    await expect(makeTmuxSupervisor(run).isUp('/home/alice/myapp')).resolves.toBe(false);
+  });
+
+  it('returns false when session is absent', async () => {
+    const makeTmuxSupervisor = requireFn(await load(), 'makeTmuxSupervisor');
+    const { run } = spyRunner({ 'has-session': { code: 1 } });
+    await expect(makeTmuxSupervisor(run).isUp('/home/alice/myapp')).resolves.toBe(false);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// makeTmuxSupervisor().restart — respawn-in-place (ADR-014, FR-20)
+// ─────────────────────────────────────────────────────────────────────────────
+describe('makeTmuxSupervisor().restart: respawn-in-place', () => {
+  it('sets remain-on-exit then respawn-panes the daemon pane; NO kill-session', async () => {
+    const makeTmuxSupervisor = requireFn(await load(), 'makeTmuxSupervisor');
+    const { run, calls } = spyRunner({ '-V': { code: 0 } });
+    await makeTmuxSupervisor(run).restart('/home/alice/myapp');
+    const subs = calls.map((c) => c.args[0]);
+    expect(subs).toContain('set-option');
+    expect(subs).toContain('respawn-pane');
+    expect(subs).not.toContain('kill-session');
+    expect(subs).not.toContain('new-session');
+  });
+
+  it('set-option precedes respawn-pane', async () => {
+    const makeTmuxSupervisor = requireFn(await load(), 'makeTmuxSupervisor');
+    const { run, calls } = spyRunner({ '-V': { code: 0 } });
+    await makeTmuxSupervisor(run).restart('/home/alice/myapp');
+    const subs = calls.map((c) => c.args[0]);
+    expect(subs.indexOf('set-option')).toBeLessThan(subs.indexOf('respawn-pane'));
+  });
+
+  it('addresses only the daemon pane (window 0 / pane 0) — no argv targets any other window', async () => {
+    const makeTmuxSupervisor = requireFn(await load(), 'makeTmuxSupervisor');
+    const { run, calls } = spyRunner({ '-V': { code: 0 } });
+    await makeTmuxSupervisor(run).restart('/home/alice/myapp');
+    const respawnCall = calls.find((c) => c.args[0] === 'respawn-pane')!;
+    expect(respawnCall.args).toEqual(
+      expect.arrayContaining(['-t', expect.stringMatching(/^=cc-daemon-myapp-[0-9a-f]{6}:$/)]),
+    );
+    // No call in the whole restart flow ever addresses specific window/pane indices
+    // (targets use : to refer to the active pane, or session name only).
+    for (const call of calls) {
+      for (const arg of call.args) {
+        if (typeof arg === 'string' && arg.includes(':')) {
+          expect(arg).toMatch(/:$|^=[^:]+$/);
+        }
+      }
+    }
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// makeTmuxSupervisor().restart — respawn fallback on failure (FR-20 neg, Task 24)
+//
+// When the tmux tooling cannot respawn the daemon pane in place (respawn-pane
+// exits non-zero), restart() falls back to kill-session + new-session so the
+// daemon still ends up running — but this loses tmux scrollback/session
+// continuity, so the outcome must say so explicitly. The fallback must NEVER
+// fire when respawn-pane succeeds.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('makeTmuxSupervisor().restart: respawn fallback on failure (FR-20 neg)', () => {
+  it('falls back to kill-session + new-session when respawn-pane fails', async () => {
+    const makeTmuxSupervisor = requireFn(await load(), 'makeTmuxSupervisor');
+    const { run, calls } = spyRunner({ '-V': { code: 0 }, 'respawn-pane': { code: 1 } });
+    await makeTmuxSupervisor(run).restart('/home/alice/myapp');
+    const subs = calls.map((c) => c.args[0]);
+    expect(subs).toContain('respawn-pane');
+    expect(subs).toContain('kill-session');
+    expect(subs).toContain('new-session');
+  });
+
+  it('reports session-continuity loss in the outcome when the fallback is taken', async () => {
+    const makeTmuxSupervisor = requireFn(await load(), 'makeTmuxSupervisor');
+    const { run } = spyRunner({ '-V': { code: 0 }, 'respawn-pane': { code: 1 } });
+    const outcome = await makeTmuxSupervisor(run).restart('/home/alice/myapp');
+    expect(outcome).toBeDefined();
+    expect(outcome!.degraded).toBe(true);
+    expect(outcome!.message.toLowerCase()).toMatch(
+      /session.*(continuity|history|scrollback).*lost|lost.*session.*(continuity|history|scrollback)/,
+    );
+  });
+
+  it('does NOT take the fallback when respawn-pane succeeds', async () => {
+    const makeTmuxSupervisor = requireFn(await load(), 'makeTmuxSupervisor');
+    const { run, calls } = spyRunner({ '-V': { code: 0 } });
+    const outcome = await makeTmuxSupervisor(run).restart('/home/alice/myapp');
+    const subs = calls.map((c) => c.args[0]);
+    expect(subs).not.toContain('kill-session');
+    expect(subs).not.toContain('new-session');
+    expect(outcome?.degraded ?? false).toBe(false);
+  });
+
+  it('the recreated session after fallback uses the same session name and foreground command', async () => {
+    const makeTmuxSupervisor = requireFn(await load(), 'makeTmuxSupervisor');
+    const { run, calls } = spyRunner({ '-V': { code: 0 }, 'respawn-pane': { code: 1 } });
+    await makeTmuxSupervisor(run).restart('/home/alice/myapp');
+    const killCall = calls.find((c) => c.args[0] === 'kill-session')!;
+    const newCall = calls.find((c) => c.args[0] === 'new-session')!;
+    expect(killCall.args).toEqual(
+      expect.arrayContaining([expect.stringMatching(/^=cc-daemon-myapp-[0-9a-f]{6}$/)]),
+    );
+    expect(newCall.args).toContain('conduct-ts daemon --continuous');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // tmuxInstalled — calls [-V]; true/false; false (not throw) on TmuxNotInstalledError
 // ─────────────────────────────────────────────────────────────────────────────
 describe('tmuxInstalled: argv, boolean return, and throwing-runner false path', () => {

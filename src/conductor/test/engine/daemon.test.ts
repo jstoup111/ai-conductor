@@ -329,4 +329,110 @@ describe('engine/daemon — runDaemon', () => {
     expect(seq).toContain(false); // local-first was always attempted
     expect(seq).toContain(true); // then an idle refresh found the merged spec
   });
+
+  // ── Task T28: daemon self-fires queued restart at idle ─────────────────
+
+  it('at busy→idle transition with restart marker, calls triggerSelfRestart exactly once', async () => {
+    let triggerCalls = 0;
+    let slept = 0;
+    const deps: DaemonDeps = {
+      discoverBacklog: staticBacklog(items(1)),
+      runFeature: async (it) => ({ slug: it.slug, status: 'done' }),
+      // hasRestartPending returns true on first idle, false on second+
+      hasRestartPending: async () => slept === 0,
+      triggerSelfRestart: async () => {
+        triggerCalls++;
+      },
+      sleep: async () => {
+        slept++;
+      },
+    };
+    const res = await runDaemon(deps, {
+      concurrency: 1,
+      once: false,
+      maxIdlePolls: 3,
+    });
+    // Process the one feature, then hit idle boundary with marker → trigger called
+    expect(res.processed).toHaveLength(1);
+    expect(triggerCalls).toBe(1); // exactly once
+  });
+
+  it('at idle boundary without restart marker, does NOT call triggerSelfRestart', async () => {
+    let triggerCalls = 0;
+    const deps: DaemonDeps = {
+      discoverBacklog: staticBacklog(items(1)),
+      runFeature: async (it) => ({ slug: it.slug, status: 'done' }),
+      hasRestartPending: async () => false, // no marker
+      triggerSelfRestart: async () => {
+        triggerCalls++;
+      },
+      sleep: async () => {},
+    };
+    const res = await runDaemon(deps, {
+      concurrency: 1,
+      once: false,
+      maxIdlePolls: 2,
+    });
+    expect(res.processed).toHaveLength(1);
+    expect(triggerCalls).toBe(0); // never called
+  });
+
+  it('failed triggerSelfRestart is logged and retried at next idle boundary', async () => {
+    let triggerAttempts = 0;
+    let slept = 0;
+    const logs: string[] = [];
+    const deps: DaemonDeps = {
+      discoverBacklog: staticBacklog(items(1)),
+      runFeature: async (it) => ({ slug: it.slug, status: 'done' }),
+      hasRestartPending: async () => true, // marker present forever
+      triggerSelfRestart: async () => {
+        triggerAttempts++;
+        if (triggerAttempts === 1) throw new Error('restart failed');
+        // second attempt succeeds
+      },
+      sleep: async () => {
+        slept++;
+      },
+      log: (msg) => {
+        logs.push(msg);
+      },
+    };
+    const res = await runDaemon(deps, {
+      concurrency: 1,
+      once: false,
+      maxIdlePolls: 5,
+    });
+    // Feature done, then idle with restart marker → first trigger attempt fails
+    // → retry at next idle boundary → succeeds
+    expect(res.processed).toHaveLength(1);
+    expect(triggerAttempts).toBe(2); // first failed, second succeeded
+    expect(logs.some((m) => m.includes('self-restart'))).toBe(true);
+  });
+
+  it('daemon continues running after triggerSelfRestart failure (no crash)', async () => {
+    let triggerAttempts = 0;
+    let slept = 0;
+    const deps: DaemonDeps = {
+      discoverBacklog: staticBacklog(items(1)),
+      runFeature: async (it) => ({ slug: it.slug, status: 'done' }),
+      hasRestartPending: async () => true, // marker present
+      triggerSelfRestart: async () => {
+        triggerAttempts++;
+        throw new Error('restart system unavailable');
+      },
+      sleep: async () => {
+        slept++;
+      },
+    };
+    const res = await runDaemon(deps, {
+      concurrency: 1,
+      once: false,
+      maxIdlePolls: 2,
+    });
+    // Process the feature, then idle → trigger fails, but daemon continues idling
+    expect(res.processed).toHaveLength(1);
+    expect(res.stoppedReason).toBe('idle_timeout'); // hit max idle polls, didn't crash
+    expect(slept).toBe(2); // slept twice (two idle cycles)
+    expect(triggerAttempts).toBeGreaterThanOrEqual(1); // attempted at least once
+  });
 });

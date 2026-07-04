@@ -138,6 +138,16 @@ export interface DaemonDeps {
    * production wires the real `.pipeline/HALT` check (see daemon-deps.ts).
    */
   isHalted?: (slug: string) => Promise<boolean>;
+  /**
+   * FR-1 (Task 11): true while dispatch is paused (`.daemon/PAUSED`). Gates the
+   * fill-pool block — no NEW feature is picked/dispatched while paused. Does
+   * NOT affect in-flight work: features already dispatched keep running to
+   * completion/park. Re-polled every loop iteration (including each idle
+   * tick), so lifting the pause mid-run resumes dispatch at the next boundary
+   * without a restart. Absent → never paused (pure-core default; production
+   * wires the real `isPaused` from `pause-marker.ts`).
+   */
+  isPaused?: () => Promise<boolean>;
   /** Optional progress line (narrator). */
   log?: (msg: string) => void;
   /** Injectable sleep (tests pass a no-op / fake clock). */
@@ -176,6 +186,31 @@ export interface DaemonDeps {
    * `runDaemon`; the daemon loop is never disrupted.
    */
   sweepMergeableLabels?: () => Promise<void>;
+
+  // ── Task T28: daemon self-restart at idle boundary ──────────────────────
+  /**
+   * Check whether a pending restart marker exists (e.g., `.daemon/RESTART-PENDING`).
+   * Called at each idle boundary to decide whether to fire the self-restart trigger.
+   * Returns true if the marker is present, false otherwise. Absent → no self-restart.
+   */
+  hasRestartPending?: () => Promise<boolean>;
+  /**
+   * Fire the self-restart callback when a restart marker is pending and the daemon
+   * reaches idle boundary with no in-flight work. This is the respawn hook injected
+   * from supervisor-cli or bare-run handler. Must handle async failures gracefully:
+   * a throw is logged and retried at the next idle boundary, never silent exit.
+   * Daemon continues running if trigger fails (no crash on failure).
+   */
+  triggerSelfRestart?: () => Promise<void>;
+
+  // ── Task T30: bare-run restart pending consume ─────────────────────────
+  /**
+   * Consume (remove and return) the pending-restart marker under the project.
+   * Called at idle boundary in bare-run mode (when triggerSelfRestart is absent)
+   * to consume the marker and exit cleanly. Idempotent: absent marker returns null.
+   * Only used when bare-run is detected (triggerSelfRestart undefined).
+   */
+  consumeRestartPending?: () => Promise<unknown>;
 }
 
 export interface DaemonOptions {
@@ -227,12 +262,42 @@ export async function runDaemon(
       log(`[daemon] sweepMergeableLabels error: ${err instanceof Error ? err.message : String(err)}`);
     }
   };
+  // FR-1 (Task 13): `isPaused` is a caller-injected predicate — it can throw
+  // (unreadable marker, permissions, etc.), not just resolve. A throw must
+  // fail closed (treated as paused, zero dispatch) rather than crash the loop
+  // or silently resume dispatch. The warning is logged once per transition
+  // into/out of the error state, not on every poll, so a stuck unreadable
+  // marker doesn't spam the log every idle tick.
+  let pauseErrorActive = false;
+  const checkPaused = async (): Promise<boolean> => {
+    if (!deps.isPaused) return false;
+    try {
+      const result = await deps.isPaused();
+      if (pauseErrorActive) {
+        pauseErrorActive = false;
+        log('[daemon] isPaused predicate recovered — resuming normal pause polling');
+      }
+      return result;
+    } catch (err) {
+      if (!pauseErrorActive) {
+        pauseErrorActive = true;
+        log(
+          `[daemon] isPaused predicate threw (${err instanceof Error ? err.message : String(err)}); failing closed — treating as paused`,
+        );
+      }
+      return true; // fail-closed: an unreadable/erroring marker must never look "not paused"
+    }
+  };
+
   const idlePollMs = options.idlePollMs ?? 5000;
   const maxIdlePolls = options.maxIdlePolls ?? Infinity;
   const startedAt = now();
 
   const processed: FeatureOutcome[] = [];
   const inFlight = new Map<string, Tagged>();
+  // Task T28: track whether the restart trigger has been successfully called
+  // in this run. Once successful, don't retry (the respawn would exit the process).
+  let restartTriggeredSuccessfully = false;
   // Slugs dispatched this run, to prevent double-dispatch. Stays populated for
   // the run's lifetime; `done`/`error` slugs remain permanently excluded.
   const started = new Set<string>();
@@ -317,9 +382,16 @@ export async function runDaemon(
    * persist the new SHA. Crash-safe (FR-10): an unresolved or throwing
    * resolution is treated as "no advance" and never propagates out of the loop.
    * A first observation (null seed) initializes without re-kicking (FR-5).
+   *
+   * FR-1 (Task 12): gated on the pause predicate — while paused, a base-SHA
+   * advance is not observed/persisted and no re-kick sweep runs, so a
+   * HALT-parked feature stays parked (no re-kick dispatch) until resume.
+   * Re-evaluated at the same call sites as the fill-pool pause check, so
+   * lifting the pause mid-run makes re-kick eligible again at the next call.
    */
   const maybeRekick = async (refresh: boolean): Promise<void> => {
     if (!deps.resolveBaseSha) return;
+    if (await checkPaused()) return;
     let current: string | null = null;
     try {
       current = await deps.resolveBaseSha({ refresh });
@@ -353,26 +425,35 @@ export async function runDaemon(
 
     // Fill the pool while slots are free.
     if (inFlight.size < concurrency) {
+      // FR-1 (Task 11): re-poll the pause predicate every iteration (including
+      // idle ticks) so a pause lifted mid-run resumes dispatch at the next
+      // boundary. Paused → no NEW item is picked this tick; in-flight work
+      // (handled below/at drain) is completely unaffected.
+      const paused = await checkPaused();
+
       // First-in-backlog-order eligible item (Task 14: `pickEligible` consumes
       // only `items`, never `waiting`, so a dependency-gated spec never causes
       // head-of-line blocking of a later, unblocked one).
       const pickCtx: PickEligibleCtx = { inFlight, parked, started, isHalted: deps.isHalted };
 
-      // Local-only discovery first (no remote fetch): cheap, and it keeps a build
-      // from being re-based onto specs that landed on origin while work is running.
-      let next = await pickEligible({ items: await deps.discoverBacklog({ refresh: false }) }, pickCtx);
+      let next: BacklogItem | undefined;
+      if (!paused) {
+        // Local-only discovery first (no remote fetch): cheap, and it keeps a build
+        // from being re-based onto specs that landed on origin while work is running.
+        next = await pickEligible({ items: await deps.discoverBacklog({ refresh: false }) }, pickCtx);
 
-      // Only when fully idle (nothing running) AND nothing left locally do we reach
-      // out to origin for newly-merged specs — "drained, now find more".
-      if (!next && inFlight.size === 0) {
-        const refreshed = await deps.discoverBacklog({ refresh: true });
-        // FR-6: the refresh above already fetched origin, so the discovery ref is
-        // current — re-read the base SHA WITHOUT a second fetch and, on a genuine
-        // advance, re-kick before consuming the backlog so a freshly-cleared
-        // marker is un-parked in THIS iteration (its dispatch still flows through
-        // the existing un-park path, FR-8 — the sweep issues none).
-        await maybeRekick(false);
-        next = await pickEligible({ items: refreshed }, pickCtx);
+        // Only when fully idle (nothing running) AND nothing left locally do we reach
+        // out to origin for newly-merged specs — "drained, now find more".
+        if (!next && inFlight.size === 0) {
+          const refreshed = await deps.discoverBacklog({ refresh: true });
+          // FR-6: the refresh above already fetched origin, so the discovery ref is
+          // current — re-read the base SHA WITHOUT a second fetch and, on a genuine
+          // advance, re-kick before consuming the backlog so a freshly-cleared
+          // marker is un-parked in THIS iteration (its dispatch still flows through
+          // the existing un-park path, FR-8 — the sweep issues none).
+          await maybeRekick(false);
+          next = await pickEligible({ items: refreshed }, pickCtx);
+        }
       }
 
       if (next) {
@@ -382,6 +463,58 @@ export async function runDaemon(
       }
       // Nothing new to start.
       if (inFlight.size === 0) {
+        // Task T28/T30: at idle boundary, check for pending restart marker and either
+        // fire the supervisor trigger (T28) or consume in bare-run (T30).
+        // This check happens BEFORE the once/idle-timeout checks so restart is honored
+        // at the earliest idle boundary, even in once mode.
+        // - T28 (supervisor mode): triggerSelfRestart is injected, fire it to respawn
+        // - T30 (bare-run): triggerSelfRestart is absent, consume marker and exit cleanly
+        // The daemon continues normally if supervisor trigger fails (no crash on failure).
+        // Once the trigger succeeds, we never retry (the respawn would exit the process).
+        if (!restartTriggeredSuccessfully && deps.hasRestartPending) {
+          try {
+            const hasRestart = await deps.hasRestartPending();
+            if (hasRestart) {
+              // T28 path: supervisor mode — fire respawn trigger
+              if (deps.triggerSelfRestart) {
+                log('[daemon] self-restart marker found at idle boundary; firing trigger');
+                try {
+                  await deps.triggerSelfRestart();
+                  // If trigger succeeds, it respawns the process and we never reach here.
+                  // But if it doesn't respawn immediately, track that we succeeded so we
+                  // don't retry (in production, the process exits on respawn).
+                  restartTriggeredSuccessfully = true;
+                  log('[daemon] self-restart trigger completed (no respawn yet)');
+                } catch (err) {
+                  log(
+                    `[daemon] self-restart trigger failed: ${err instanceof Error ? err.message : String(err)}; will retry at next idle boundary`,
+                  );
+                }
+              }
+              // T30 path: bare-run mode — no supervisor, consume marker and exit cleanly
+              else if (deps.consumeRestartPending) {
+                log('[daemon] restart-pending honored (bare-run, no supervisor available)');
+                try {
+                  await deps.consumeRestartPending();
+                  log('[daemon] restart marker consumed; exiting cleanly');
+                  restartTriggeredSuccessfully = true;
+                  // Break from the loop to exit cleanly with the current processed results
+                  stopReason = 'backlog_drained';
+                  break;
+                } catch (err) {
+                  log(
+                    `[daemon] bare-run consume failed: ${err instanceof Error ? err.message : String(err)}; will retry at next idle boundary`,
+                  );
+                }
+              }
+            }
+          } catch (err) {
+            log(
+              `[daemon] hasRestartPending check failed: ${err instanceof Error ? err.message : String(err)}; skipping restart check`,
+            );
+          }
+        }
+
         if (options.once) {
           stopReason = 'backlog_drained';
           break;
@@ -391,6 +524,7 @@ export async function runDaemon(
           stopReason = 'idle_timeout';
           break;
         }
+
         await sleep(idlePollMs);
         // FR-14: sweep once per idle poll tick.
         await sweepBestEffort();

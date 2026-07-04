@@ -14,6 +14,7 @@ export function deriveMode(opts: { auto: boolean; interactive: boolean }): RunMo
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { mkdir, readFile } from 'node:fs/promises';
+import { realpathSync } from 'node:fs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 import { v4 as uuidv4 } from 'uuid';
@@ -53,6 +54,7 @@ import {
   detectDaemonCommand,
   detectDaemonSupervisorCommand,
   detectUnknownDaemonSubcommand,
+  type DaemonCommandOptions,
 } from './engine/daemon-command.js';
 import { detectRenderCommand, dispatchRender } from './engine/render-cli.js';
 import {
@@ -63,6 +65,7 @@ import {
   detectDaemonObserveCommand,
   dispatchDaemonObserve,
 } from './engine/daemon-observe-cli.js';
+import { hasSession, sessionNameForRepo, respawnPane } from './engine/daemon-tmux.js';
 import { resolveOtelConfig } from './engine/otel/otel-config.js';
 import { OtelVisualizer, type OtelVisualizerContext } from './engine/otel/otel-visualizer.js';
 import type { ResolvedOtelConfig } from './engine/otel/otel-config.js';
@@ -97,6 +100,42 @@ export async function stopVisualizers(visualizers: VisualizerPlugin[]): Promise<
       }),
     ),
   );
+}
+
+/**
+ * Build the options object passed into `runDaemonMode` for a `daemon` CLI
+ * invocation (FR-9 wiring). Wires the self-restart callback when this daemon
+ * is running under a tmux session (started via `daemon start`): at idle
+ * boundary a queued restart fires respawn-in-place instead of falling through
+ * to the T30 bare-run consume-and-exit path. No session (e.g. `conduct daemon`
+ * run directly in a foreground shell) → leave triggerSelfRestart undefined,
+ * preserving the bare-run behavior.
+ *
+ * Extracted as a pure(ish) function — with the tmux helpers as injectable deps
+ * — so tests can exercise the REAL dispatch logic (which fields end up in the
+ * options object under which `hasSession` outcome) without invoking main() or
+ * a real tmux binary.
+ */
+export async function buildDaemonModeOptions(
+  projectRoot: string,
+  daemonCmd: DaemonCommandOptions,
+  deps: {
+    sessionNameForRepo: typeof sessionNameForRepo;
+    hasSession: typeof hasSession;
+    respawnPane: typeof respawnPane;
+  } = { sessionNameForRepo, hasSession, respawnPane },
+): Promise<DaemonCommandOptions & { projectRoot: string; triggerSelfRestart?: () => Promise<void> }> {
+  const sessionName = deps.sessionNameForRepo(projectRoot);
+  const triggerSelfRestart = (await deps.hasSession(sessionName))
+    ? async () => {
+        await deps.respawnPane(sessionName);
+      }
+    : undefined;
+  return {
+    projectRoot,
+    ...daemonCmd,
+    ...(triggerSelfRestart ? { triggerSelfRestart } : {}),
+  };
 }
 
 /**
@@ -310,7 +349,9 @@ async function main(): Promise<void> {
   const daemonCmd = detectDaemonCommand(process.argv);
   if (daemonCmd) {
     const { runDaemonMode } = await import('./daemon-cli.js');
-    await runDaemonMode({ projectRoot: process.cwd(), ...daemonCmd });
+    const projectRoot = process.cwd();
+    const daemonModeOptions = await buildDaemonModeOptions(projectRoot, daemonCmd);
+    await runDaemonMode(daemonModeOptions);
     process.exit(0);
   }
 
@@ -768,9 +809,20 @@ async function main(): Promise<void> {
 // Without this guard, importing the module runs main(), which process.exit(1)s
 // in a non-CLI context and pollutes the parallel test run with an unhandled
 // rejection (flaky failures + non-zero exit).
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main().catch((err) => {
-    console.error('Fatal:', err.message ?? err);
-    process.exit(1);
-  });
+// argv[1] must be resolved through symlinks: with the versioned engine store,
+// `dist` is a symlink, so argv[1] (symlink path) and import.meta.url (Node's
+// realpath) differ for the same file — a plain compare would silently skip main().
+if (process.argv[1]) {
+  let same = false;
+  try {
+    same = realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1]);
+  } catch {
+    same = import.meta.url === pathToFileURL(process.argv[1]).href;
+  }
+  if (same) {
+    main().catch((err) => {
+      console.error('Fatal:', err.message ?? err);
+      process.exit(1);
+    });
+  }
 }

@@ -62,6 +62,8 @@ import {
 } from './engine/daemon-rekick.js';
 import { sweepMergeableLabels } from './engine/mergeable-sweep.js';
 import { createPriorityResolver, ghIssueLabelReader } from './engine/backlog-priority.js';
+import { isPaused } from './engine/pause-marker.js';
+import { readRestartPending, consumeOnBoot, type RestartIntent } from './engine/restart-marker.js';
 
 const execFile = promisify(execFileCb);
 
@@ -98,6 +100,13 @@ export interface DaemonModeOptions {
    * interactive prompt lives at `daemon start` (dispatchDaemonSupervisor).
    */
   ensureFresh?: () => Promise<void>;
+  /**
+   * Task T28: callback to fire when a restart marker is queued and the daemon
+   * reaches idle boundary. Injected from supervisor-cli or bare-run handler.
+   * Must handle async failures gracefully: a throw is logged and retried at
+   * the next idle boundary. Absent → no self-restart (default, for tests).
+   */
+  triggerSelfRestart?: () => Promise<void>;
 }
 
 // Front-half steps the daemon treats as already done — the human authored the
@@ -186,6 +195,33 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     lock.releaseSync();
   };
   process.once('exit', releaseBackstop);
+
+  // FR-4/FR-7: honor a pause marker set BEFORE this daemon even booted (e.g. the
+  // daemon was stopped, `conduct daemon pause` ran, then the daemon was started
+  // again). isPaused is fail-closed (pause-marker.ts) — a corrupt marker still
+  // reads as paused, so ambiguity here never dispatches. Logged once at boot so
+  // `conduct daemon logs` makes the paused state visible immediately, in
+  // addition to the same isPaused() gate re-polled every loop iteration below.
+  const pausedAtBoot = await isPaused(projectRoot);
+  if (pausedAtBoot) {
+    log('daemon is paused — booting with zero dispatch until resumed (see `conduct daemon resume`).');
+  }
+
+  // Task T29: consume the pending-restart marker at boot. A fresh boot IS the
+  // restart (whether self-spawned or manually started), so consume exactly once
+  // here and log the fulfilled intent for observability. consumeOnBoot is
+  // idempotent (absent marker returns null, no-op); multiple writes while busy
+  // produce one logical intent that fires once (latest payload) at boot.
+  const consumedRestartIntent = await consumeOnBoot(projectRoot);
+  if (consumedRestartIntent) {
+    const blockingSlug = consumedRestartIntent.blockingSlug
+      ? ` (was waiting behind ${consumedRestartIntent.blockingSlug})`
+      : '';
+    const requestedBy = consumedRestartIntent.requestedBy
+      ? ` by ${consumedRestartIntent.requestedBy}`
+      : '';
+    log(`restart marker consumed${blockingSlug}${requestedBy} at boot.`);
+  }
 
   const configResult = await loadConfig(projectRoot);
   const config = configResult.ok ? configResult.config : undefined;
@@ -497,6 +533,10 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     {
       discoverBacklog: discoverTick,
       isHalted: (slug) => isHalted(worktreeBase, slug),
+      // FR-1 (Task 11): gate dispatch on the durable `.daemon/PAUSED` marker,
+      // re-polled every loop iteration by runDaemon so a pause lifted mid-run
+      // resumes dispatch at the next boundary (no restart required).
+      isPaused: () => isPaused(projectRoot),
       runFeature,
       log,
       // ── Halt-reconciliation (ADR-013) real-I/O hooks ──────────────────────
@@ -504,6 +544,13 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       // (console + daemon.log via `log`) before any dispatch. Pass the priority
       // resolver so the dashboard can capture and display band annotations / fallback mode.
       renderStartupDashboard: async () => {
+        // Task 14 (FR-4/FR-7): a daemon booting paused must dispatch/discover
+        // NOTHING — including the informational startup dashboard's backlog
+        // scan, which would otherwise call discoverBacklog({refresh:true})
+        // unconditionally (before the pause-gated loop below ever runs). Skip
+        // the scan entirely when paused at boot; the boot-time log line above
+        // already told the operator why nothing is happening.
+        if (pausedAtBoot) return;
         const state = await scanInheritedState({
           worktreeBase,
           processedDir,
@@ -538,6 +585,17 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       // startup and idle-poll sweeps in production (daemon.ts guards with ?.()).
       sweepMergeableLabels: async () => {
         await sweepMergeableLabels({ projectRoot, log });
+      },
+      // Task T28: check for pending restart marker at idle boundary.
+      hasRestartPending: async () => {
+        const intent = await readRestartPending(projectRoot);
+        return intent !== null;
+      },
+      // Task T28: trigger self-restart when marker is pending (injected from supervisor/bare-run).
+      triggerSelfRestart: opts.triggerSelfRestart,
+      // Task T30: consume restart marker in bare-run mode (when triggerSelfRestart absent).
+      consumeRestartPending: async () => {
+        return await consumeOnBoot(projectRoot);
       },
     },
     {

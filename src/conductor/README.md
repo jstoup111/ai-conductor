@@ -637,6 +637,60 @@ pidfile path and the O_EXCL create flag stay confined to `daemon-lock.ts`
 (`test/engine/daemon-lock-boundary.test.ts`); the log module reuses the exported
 `daemonDir()` and never re-encodes the pidfile.
 
+### Daemon lifecycle controls: pause, resume, restart (adr-2026-07-04-durable-pause-marker / adr-2026-07-04-respawn-in-place-restart)
+
+**Pause/resume** (`engine/pause-marker.ts`, `engine/daemon.ts`) — operators can quiesce
+daemons before maintenance or upgrades without losing state. Pause writes a durable `.daemon/PAUSED`
+marker; the daemon's loop checks it before the dispatch boundary (`maybeDispatch`), so no new
+work starts while in-flight work finishes normally. Resume removes the marker. Both operations
+work per-repo or fleet-wide (`--all`) with per-repo outcome reporting. Pause is **reentrant**
+(pausing an already-paused repo is a no-op); resume does the same. Pause **persists across
+daemon restarts** — a stopped daemon starting up in a paused repo comes up paused. Automation
+(`ensureRunning`) never bypasses pause. The status surface (`daemon-observe-cli.ts`) shows
+pause state (running / paused / stopped / stale) and timestamp/operator who paused.
+
+**Restart** (`daemon-supervisor-cli.ts`, `engine/daemon-tmux.ts`) — safe in-place restart
+preserves the daemon's tmux **session**, **window layout**, and any **operator windows** the
+operator may have opened. Implementation: `setRemainOnExit` (so the pane survives when the
+daemon exits) + `respawn-pane -k` (kills the existing process, re-runs the daemon command in
+the same pane). Unlike the old kill-session + new-session, an operator watching a connected
+daemon stays connected through restart. Restart respects **pause state** — restarting a paused
+daemon queues the restart (writes a `.daemon/RESTART-PENDING` marker) and fires when the daemon
+next goes idle, keeping the daemon paused. Fleet restart (`--all`) reports per-repo outcome:
+restarted / queued / started / error.
+
+**Consume-once restart queuing** (`engine/restart-marker.ts`) — when a daemon starts up with
+a pending-restart marker, it consumes the marker (won't fire again) and, if idle, self-respawns
+as its final act (bare-run path: log + clean exit; supervisor path: supervisor sees the restart
+and respawns via the management interface). This **prevents restart storms** (multiple writes
+coalesce into one fire) and **survives daemon crashes** (a crash before fire doesn't lose the
+intent).
+
+**Engine version pinning and safe rebuilds** — each daemon pins its engine version at startup
+(stores the pinned `engineDir` in the pidfile). Rebuilding or upgrading the shared engine does
+**not crash running daemons** — they continue on their pinned version until restart. On restart,
+the daemon adopts the newest installed version. This closes issue #215 (rebuilding the shared
+engine while daemons run was hazardous). Versioned engine store (`engine/engine-store.ts`)
+manages versions durably: `dist-versions/<id>/` for each version, a `dist` symlink targeting
+current, and garbage collection (four-condition fail-closed: not current ∧ no live pidfile
+referencing it ∧ older than min-age ∧ outside keep-last-K, and any registry error stops **all**
+deletion). The status surface shows which version each daemon is running.
+
+**Build flow change** — `npm run build` now uses a wrapper (`scripts/publish-engine.mjs`)
+instead of raw `tsup`. The wrapper stages the build, finalizes to the store, atomically flips
+the `dist` symlink, and runs GC. Raw `tsup` invocations are guarded and refused (caught in the
+wrapper, which errors loudly with remediation guidance). First build post-upgrade migrates an
+existing `dist/` directory into the store (one-time, automatic). See the Migration section in
+`CHANGELOG.md` for upgrade instructions.
+
+Key modules:
+- `engine/pause-marker.ts` — `isPaused`, `writePauseMarker`, `removePauseMarker`
+- `engine/restart-marker.ts` — `readRestartPending`, `writeRestartPending`, `consumeOnBoot`
+- `engine/engine-store.ts` — `currentTarget`, `listVersions`, `flipCurrent`, `gcVersions`
+- `scripts/publish-engine.mjs` — build wrapper and store management
+- `test/engine/daemon-pause*.test.ts`, `daemon-restart*.test.ts`, `engine-store*.test.ts` —
+  integration tests verifying isolation, ordering, durability
+
 ### Pluggable memory provider (adr-2026-06-29-memory-provider-plugin-and-agent-queried-integration/adr-2026-06-29-per-project-memory-provider-selection/adr-2026-06-29-shared-memory-store-placement-and-durability)
 
 The `memory_provider` config field selects which provider backs `.memory/`.

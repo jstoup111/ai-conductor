@@ -12,6 +12,7 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- **Daemon lifecycle controls: pause/resume/restart with versioned engine store (issue #215).** Operators can now pause individual or all daemons (`conduct pause --all`), preventing new work dispatch while preserving state; resume mirrors pause. Safe in-place restart (`conduct restart --all`) preserves the daemon's tmux session, window layout, and scrollback — an operator watching a daemon stays connected. Restart respects pause state (restarted daemon remains paused). Rebuilding the shared engine no longer crashes running daemons (#215 fix): each daemon pins its engine version at startup and runs that version until restart; restarted daemons adopt the newest build. Versioned engine store (`src/engine/engine-store.ts`) manages versions durably with safe cleanup (four-condition GC: not current, not in-use by a live pidfile, older than min-age, outside keep-last-K). Status surface shows running/paused/stopped/stale state, pause timestamp/operator, and which engine version each daemon is running.
 - Added model fallback ladder — reactive downgrade on unavailable models (#186)
 - **Halt-PR rehabilitation at finish (#271).** When `finish` completes a feature whose
   recorded PR was born as a `needs-remediation` halt PR, a new engine step
@@ -24,10 +25,34 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Changed
 
+- **Daemon restart now preserves session and respects pause state.** The restart verb (`conduct restart`, formerly kill-session + new-session) is now respawn-in-place: uses tmux respawn-pane -k to remain in the same session with the same window layout. An operator watching a connected daemon stays connected through restart. Restart gating honors pause state — a paused daemon's restart is queued, not immediate. Follows adr-2026-07-04-respawn-in-place-restart.
+- **Engine versioning and publish flow.** `npm run build` is now a wrapper (`scripts/publish-engine.mjs`) that stages the build, finalizes it to the versioned store (`dist-versions/<version-id>/`), atomically flips the `dist` symlink, and runs garbage collection. Raw `tsup` invocation against the live `dist/` layout is guarded and refused. First build migrates an existing `dist/` into the store (one-time operation).
 - **Declared `harness_self_host.version_freeze: "0.99.19"` in `.ai-conductor/config.yml`.**
   The self-host VERSION approval gate (PR #262) now self-satisfies while VERSION stays at the
   frozen value, ending the per-feature version-gate HALT + manual `.pipeline/version-approval`
   round-trip. Read at daemon startup (restart to apply); update or remove at the 1.0 cut.
+
+### Migration
+
+**Engine store: one-time dist→store migration on first build.**
+
+The build flow has moved from building directly into `dist/` to a versioned store under `dist-versions/`. This is transparent to most operators: the first `npm run build` post-upgrade automatically migrates your existing `dist/` into the store.
+
+```bash
+# After upgrading, run this once:
+cd src/conductor
+npm run build
+
+# This migrates your current dist/ to dist-versions/<id>/ and creates the dist symlink.
+# No action needed; the new build process handles it.
+```
+
+If you have daemons running:
+- Daemons running on the old `dist/` continue to work as-is (they pin the version at startup)
+- After their first `conduct restart` or natural restart, they switch to the new versioned build
+- A short transition window exists where you may see one old-style restart (if a daemon restarts before the migration); this is normal and safe
+
+Reverting is not supported: if you revert past this version, the `dist` symlink structure will block the old build flow. Instead, keep forward and use `conduct pause --all` + `npm run build` + `conduct restart --all` for a controlled engine upgrade.
 
 ### Fixed
 

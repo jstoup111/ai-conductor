@@ -12,10 +12,29 @@
 // re-encode the pidfile path or write anything.
 
 import { stat } from 'node:fs/promises';
+import { basename } from 'node:path';
 import { isLive, readPidRecord, type KillProbe } from './daemon-lock.js';
 import { resolveRegistryPath, readRegistry, type ProjectRecord } from './registry.js';
 import { tailDaemonLog, followDaemonLog, daemonLogPath } from './daemon-log.js';
-import { hasSession, sessionNameForRepo } from './daemon-tmux.js';
+import { hasSession, isPaneDead, sessionNameForRepo } from './daemon-tmux.js';
+import { isPaused, readPauseMetadata } from './pause-marker.js';
+import { readRestartPending, type RestartIntent } from './restart-marker.js';
+import { isEngineVersionId } from './engine-store.js';
+
+/** Fallback label when a pidfile record has no `engineDir`, or its basename
+ * isn't a recognized version id (legacy record, dev/unpublished run, etc.). */
+const VERSION_UNKNOWN = 'version-unknown';
+
+/**
+ * Derive a version id label from a pidfile's `engineDir` (FR-14). Pure string
+ * inspection only — never stats/reads `engineDir` on disk, so a dangling
+ * engineDir (repo stopped, version GC'd) never errors here.
+ */
+function versionIdFromEngineDir(engineDir: string | undefined): string {
+  if (!engineDir) return VERSION_UNKNOWN;
+  const id = basename(engineDir);
+  return isEngineVersionId(id) ? id : VERSION_UNKNOWN;
+}
 
 // Default session probe — routed through daemon-tmux's `hasSession` so ALL tmux
 // argv + session-name encoding stays inside daemon-tmux.ts (ADR-014 boundary).
@@ -24,6 +43,21 @@ import { hasSession, sessionNameForRepo } from './daemon-tmux.js';
 async function defaultSessionProbe(repoPath: string): Promise<boolean> {
   try {
     return await hasSession(sessionNameForRepo(repoPath));
+  } catch {
+    return false;
+  }
+}
+
+// Default pane-liveness probe (FR-12/FR-21 two-layer liveness) — mirrors
+// `Supervisor.isUp`'s composition of hasSession + isPaneDead, but split out here
+// so status can render "session-up/process-dead" distinctly from both plain
+// running and plain stopped. Only meaningful (and only ever called) when the
+// session is already known present; wrapped in try/catch so a missing tmux (or
+// any probe failure) never crashes the status sweep — "not dead" is the safe
+// default when we can't tell.
+async function defaultPaneDeadProbe(repoPath: string): Promise<boolean> {
+  try {
+    return await isPaneDead(sessionNameForRepo(repoPath));
   } catch {
     return false;
   }
@@ -40,10 +74,52 @@ export type DaemonLiveness =
   | 'path-missing' // registered repo dir no longer exists
   | 'unreadable'; // could not inspect the repo (permission, etc.)
 
+/**
+ * Explicit fleet-state enum (FR-5). Derived from `DaemonLiveness` × the durable
+ * pause marker (`pause-marker.ts`). `paused_dead` is the composite: the marker
+ * is present AND the pidfile owner is dead (`stale`) — an operator needs to see
+ * BOTH facts (paused intent + a reclaimable pidfile), not just one.
+ */
+export type DaemonState =
+  | 'running'
+  | 'paused'
+  | 'paused_dead'
+  | 'stopped'
+  | 'stale'
+  | 'path-missing'
+  | 'unreadable'
+  /** FR-9: a restart is queued (`.daemon/RESTART-PENDING`), waiting on a busy slug. */
+  | 'restart-pending'
+  /** FR-12: tmux session exists but its pane has died — process is NOT up, even
+   *  though the session persists. Must never be confused with `running`. */
+  | 'dead-pane';
+
+/**
+ * Total, exhaustive mapping from liveness + pause flag to state. No `default`
+ * arm: if `DaemonLiveness` ever gains a member, this switch fails to compile
+ * until handled here (AC5).
+ */
+function computeState(liveness: DaemonLiveness, paused: boolean): DaemonState {
+  switch (liveness) {
+    case 'running':
+      return paused ? 'paused' : 'running';
+    case 'stale':
+      return paused ? 'paused_dead' : 'stale';
+    case 'stopped':
+      return paused ? 'paused' : 'stopped';
+    case 'path-missing':
+      return 'path-missing';
+    case 'unreadable':
+      return 'unreadable';
+  }
+}
+
 export interface DaemonStatusRow {
   name: string;
   path: string;
   liveness: DaemonLiveness;
+  /** Explicit fleet state (FR-5) — see `DaemonState`. */
+  state: DaemonState;
   pid?: number;
   startedAt?: string;
   lastActivity?: string;
@@ -51,6 +127,17 @@ export interface DaemonStatusRow {
   detail?: string;
   /** True when a tmux session for this repo is currently alive (FR-10). */
   sessionPresent: boolean;
+  /** True when the tmux session is present but its pane has died (FR-12). */
+  paneDead?: boolean;
+  /** Informational pause metadata (never authoritative — see pause-marker.ts). */
+  pausedAt?: string;
+  pausedBy?: string;
+  /** Present when `.daemon/RESTART-PENDING` is queued (FR-9); never consumed here. */
+  restartPending?: RestartIntent;
+  /** Engine version id derived from the pidfile's `engineDir` (FR-14). Always
+   *  set — "version-unknown" when absent/unrecognized (legacy record, no
+   *  pidfile, dangling engineDir). */
+  versionId: string;
 }
 
 export interface DaemonStatusDeps {
@@ -71,13 +158,18 @@ export interface DaemonStatusDeps {
  *                          Defaults to a spawnSync tmux has-session check.
  *                          sessionPresent is INDEPENDENT of liveness — the probe is always
  *                          called so stale+session and stale+no-session are distinguishable.
+ * @param paneDeadProbe    — injectable tmux pane-liveness probe `(repoPath) => boolean`
+ *                          (FR-12 two-layer liveness). Only consulted when the session
+ *                          is present — mirrors `Supervisor.isUp`'s composition.
  */
 export async function computeStatusRow(
   record: ProjectRecord,
   kill?: KillProbe,
   hasSessionProbe?: (repoPath: string) => boolean | Promise<boolean>,
+  paneDeadProbe?: (repoPath: string) => boolean | Promise<boolean>,
 ): Promise<DaemonStatusRow> {
   const probe = hasSessionProbe ?? defaultSessionProbe;
+  const paneDeadCheck = paneDeadProbe ?? defaultPaneDeadProbe;
   const base = { name: record.name, path: record.path };
   try {
     // The registry can outlive the repo it points at (deleted / moved).
@@ -86,15 +178,32 @@ export async function computeStatusRow(
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
       if (code === 'ENOENT') {
-        return { ...base, liveness: 'path-missing', sessionPresent: false };
+        return {
+          ...base,
+          liveness: 'path-missing',
+          state: computeState('path-missing', false),
+          sessionPresent: false,
+          versionId: VERSION_UNKNOWN,
+        };
       }
-      return { ...base, liveness: 'unreadable', detail: (err as Error).message, sessionPresent: false };
+      return {
+        ...base,
+        liveness: 'unreadable',
+        state: computeState('unreadable', false),
+        detail: (err as Error).message,
+        sessionPresent: false,
+        versionId: VERSION_UNKNOWN,
+      };
     }
 
     const rec = await readPidRecord(record.path);
     let liveness: DaemonLiveness;
     let pid: number | undefined;
     let startedAt: string | undefined;
+    // versionId is derived purely from the string value of engineDir (never
+    // stat'd/read from disk) — a dangling engineDir for a stopped repo is
+    // just a basename() call, never an fs error (AC3).
+    const versionId = versionIdFromEngineDir(rec?.engineDir);
     if (rec === null) {
       // No pidfile, or a corrupt one (readPidRecord shape-guards → null). Both
       // mean "no live daemon owns this repo" from an observer's standpoint.
@@ -109,8 +218,40 @@ export async function computeStatusRow(
     // stale pidfile with a live orphaned tmux session is distinguishable from
     // a stale pidfile with no session (operator can inspect/adopt the former).
     const sessionPresent = await probe(record.path);
+    // Pane-dead only means something when a session exists at all (mirrors
+    // Supervisor.isUp: hasSession && !isPaneDead) — skip the probe otherwise.
+    const paneDead = sessionPresent ? await paneDeadCheck(record.path) : false;
 
-    const row: DaemonStatusRow = { ...base, liveness, pid, startedAt, sessionPresent };
+    // Pause is read via the existence-authoritative `isPaused` (fail-closed —
+    // a corrupt/unreadable marker is still "paused", never mistaken for "not
+    // paused"). Metadata (pausedAt/by) is best-effort informational only —
+    // `readPauseMetadata` returns undefined on missing/corrupt content and
+    // must never throw or block the row.
+    const paused = await isPaused(record.path);
+    const pauseMeta = paused ? await readPauseMetadata(record.path) : undefined;
+
+    // Restart-pending (FR-9) and dead-pane (FR-12) are read-only overlays on
+    // top of the base pidfile/pause state — they take precedence in the
+    // rendered `state` because an operator needs to see them first, but the
+    // underlying liveness/pause facts are still carried on the row untouched.
+    const restartPending = (await readRestartPending(record.path)) ?? undefined;
+    let state = computeState(liveness, paused);
+    if (paneDead) state = 'dead-pane';
+    if (restartPending) state = 'restart-pending';
+
+    const row: DaemonStatusRow = {
+      ...base,
+      liveness,
+      state,
+      pid,
+      startedAt,
+      sessionPresent,
+      paneDead,
+      versionId,
+      ...(pauseMeta?.pausedAt !== undefined ? { pausedAt: pauseMeta.pausedAt } : {}),
+      ...(pauseMeta?.pausedBy !== undefined ? { pausedBy: pauseMeta.pausedBy } : {}),
+      ...(restartPending !== undefined ? { restartPending } : {}),
+    };
     const tail = await tailDaemonLog(record.path, 1);
     if (tail.status === 'ok' && tail.lines.length > 0) {
       row.lastActivity = tail.lines[tail.lines.length - 1];
@@ -121,22 +262,42 @@ export async function computeStatusRow(
     return row;
   } catch (err) {
     // Defensive: a single bad repo must never crash the whole sweep.
-    return { ...base, liveness: 'unreadable', detail: (err as Error).message, sessionPresent: false };
+    return {
+      ...base,
+      liveness: 'unreadable',
+      state: computeState('unreadable', false),
+      detail: (err as Error).message,
+      sessionPresent: false,
+      versionId: VERSION_UNKNOWN,
+    };
   }
 }
 
-const LIVENESS_BADGE: Record<DaemonLiveness, string> = {
+const STATE_BADGE: Record<DaemonState, string> = {
   running: '● running',
+  paused: '⏸ paused',
+  paused_dead: '⏸ paused (process dead)',
   stale: '○ stale',
   stopped: '· stopped',
   'path-missing': '✗ path missing',
   unreadable: '✗ unreadable',
+  'restart-pending': '⏳ restart-pending',
+  'dead-pane': '⚠ session-up/process-dead',
 };
 
 function formatStatusRow(row: DaemonStatusRow): string {
-  const parts = [`${LIVENESS_BADGE[row.liveness]}  ${row.name}`, `  ${row.path}`];
+  const badge =
+    row.state === 'restart-pending' && row.restartPending?.blockingSlug
+      ? `⏳ restart-pending (waiting on ${row.restartPending.blockingSlug})`
+      : STATE_BADGE[row.state];
+  const parts = [`${badge}  ${row.name}`, `  ${row.path}`];
   if (row.pid !== undefined) parts.push(`  pid ${row.pid}`);
   if (row.startedAt) parts.push(`  since ${row.startedAt}`);
+  parts.push(`  version:${row.versionId}`);
+  if (row.pausedAt) {
+    const by = row.pausedBy ? ` by ${row.pausedBy}` : '';
+    parts.push(`  paused ${row.pausedAt}${by}`);
+  }
   if (row.lastActivity) {
     const at = row.lastActivityAt ? ` (${row.lastActivityAt})` : '';
     parts.push(`  last${at}: ${row.lastActivity}`);

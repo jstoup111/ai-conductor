@@ -1,0 +1,244 @@
+import {
+  readRegistry,
+  resolveRegistryPath
+} from "./chunk-6DCTOB56.js";
+import {
+  makeTmuxSupervisor
+} from "./chunk-PDAYBQWC.js";
+import {
+  clearStaleLockForRestart,
+  ensureInstallFresh,
+  isLive,
+  isPaused,
+  readPidRecord,
+  reclaim,
+  removePauseMarker,
+  writePauseMarker,
+  writeRestartPending
+} from "./chunk-4JHATRZD.js";
+
+// src/engine/daemon-fleet.ts
+async function runFleetAction(selection, action, deps = {}) {
+  const out = deps.out ?? ((l) => console.log(l));
+  const registryPath = deps.registryPath ?? resolveRegistryPath();
+  const records = await readRegistry(registryPath);
+  let targets;
+  const unknownNames = [];
+  if (selection.all) {
+    targets = records;
+    if (targets.length === 0) {
+      out("no registered repos");
+      return { code: 0, outcomes: [], unknownNames: [] };
+    }
+  } else {
+    const requested = selection.names ?? [];
+    targets = [];
+    for (const name of requested) {
+      const record = records.find((r) => r.name === name);
+      if (record) {
+        targets.push(record);
+      } else {
+        unknownNames.push(name);
+      }
+    }
+    for (const name of unknownNames) {
+      out(`unknown repo: ${name}`);
+    }
+    if (targets.length === 0) {
+      return { code: unknownNames.length > 0 ? 1 : 0, outcomes: [], unknownNames };
+    }
+  }
+  const outcomes = [];
+  let anyFailed = false;
+  for (const record of targets) {
+    try {
+      const message = await action(record);
+      outcomes.push({ name: record.name, path: record.path, ok: true, message });
+      out(`${record.name}: ${message}`);
+    } catch (err) {
+      anyFailed = true;
+      const message = err.message;
+      outcomes.push({ name: record.name, path: record.path, ok: false, message });
+      out(`${record.name}: error: ${message}`);
+    }
+  }
+  const code = anyFailed || unknownNames.length > 0 ? 1 : 0;
+  return { code, outcomes, unknownNames };
+}
+
+// src/engine/daemon-supervisor-cli.ts
+var defaultKillForOrphan = (pid, signal) => {
+  process.kill(pid, signal);
+};
+async function reconcileOrphan(repoPath, supervisor, kill = defaultKillForOrphan) {
+  try {
+    const pidRecord = await readPidRecord(repoPath);
+    if (!pidRecord || pidRecord.pid <= 0) {
+      return null;
+    }
+    let hasSession;
+    try {
+      hasSession = await supervisor.hasSession(repoPath);
+    } catch (err) {
+      throw err;
+    }
+    if (hasSession) {
+      return null;
+    }
+    if (!isLive(pidRecord.pid, kill)) {
+      return null;
+    }
+    try {
+      kill(pidRecord.pid, "SIGTERM");
+      await new Promise((r) => setTimeout(r, 100));
+      if (isLive(pidRecord.pid, kill)) {
+        kill(pidRecord.pid, "SIGKILL");
+      }
+    } catch {
+    }
+    const reclaimResult = await reclaim(repoPath, kill);
+    if (reclaimResult.reclaimed) {
+      return pidRecord.pid;
+    }
+    return null;
+  } catch (err) {
+    throw err;
+  }
+}
+async function dispatchDaemonSupervisor(cmd, deps = {}) {
+  const bareRun = !deps.supervisor;
+  const supervisor = deps.supervisor ?? makeTmuxSupervisor();
+  const cwd = deps.cwd ?? process.cwd();
+  const out = deps.out ?? ((l) => console.log(l));
+  const ensureFresh = deps.ensureFresh ?? (() => ensureInstallFresh({ log: out }));
+  const isInteractive = deps.isInteractive ?? Boolean(process.stdin.isTTY);
+  const isBusy = deps.isBusy ?? (async () => ({ busy: false }));
+  const kill = deps.kill ?? defaultKillForOrphan;
+  if ((cmd.verb === "pause" || cmd.verb === "resume") && (cmd.all || cmd.names)) {
+    const selection = cmd.all ? { all: true } : { names: cmd.names ?? [] };
+    const action = async (record) => {
+      if (cmd.verb === "pause") {
+        if (await isPaused(record.path)) return "already paused";
+        await writePauseMarker(record.path);
+        return "daemon paused";
+      }
+      if (!await isPaused(record.path)) return "not paused";
+      await removePauseMarker(record.path);
+      return "daemon resumed";
+    };
+    const { code } = await runFleetAction(selection, action, {
+      registryPath: deps.registryPath,
+      out
+    });
+    return code;
+  }
+  if (cmd.verb === "restart" && (cmd.all || cmd.names)) {
+    const selection = cmd.all ? { all: true } : { names: cmd.names ?? [] };
+    const action = async (record) => {
+      const paused = await isPaused(record.path);
+      const busyCheck = paused ? { busy: false } : await isBusy(record.path);
+      if (busyCheck.busy) {
+        await writeRestartPending(record.path, { blockingSlug: busyCheck.blockingSlug });
+        return `restart queued: daemon is busy on ${busyCheck.blockingSlug ?? "(unknown feature)"}`;
+      }
+      await clearStaleLockForRestart(record.path, kill);
+      if (!bareRun) {
+        try {
+          const orphanPid = await reconcileOrphan(record.path, supervisor, kill);
+          if (orphanPid) {
+            out(`orphaned daemon process (pid ${orphanPid}) terminated; lock reclaimed.`);
+          }
+        } catch (err) {
+          throw err;
+        }
+      }
+      try {
+        const outcome = await supervisor.restart(record.path);
+        return outcome.message;
+      } catch (err) {
+        try {
+          await supervisor.start(record.path);
+          return "daemon started (was stopped)";
+        } catch (startErr) {
+          throw startErr;
+        }
+      }
+    };
+    const { code } = await runFleetAction(selection, action, {
+      registryPath: deps.registryPath,
+      out
+    });
+    return code;
+  }
+  try {
+    switch (cmd.verb) {
+      case "start":
+        await ensureFresh();
+        await supervisor.start(cwd);
+        if (cmd.detach) {
+          out("daemon started (detached). Attach with 'conduct daemon connect'.");
+        } else if (!isInteractive) {
+          out(
+            "daemon started (no interactive terminal to attach to). Attach with 'conduct daemon connect'."
+          );
+        } else {
+          await supervisor.attach(cwd, { readOnly: true });
+        }
+        break;
+      case "stop":
+        await supervisor.stop(cwd);
+        break;
+      case "restart": {
+        const paused = await isPaused(cwd);
+        const busyCheck = paused ? { busy: false } : await isBusy(cwd);
+        if (busyCheck.busy) {
+          await writeRestartPending(cwd, { blockingSlug: busyCheck.blockingSlug });
+          out(
+            `restart queued: daemon is busy on ${busyCheck.blockingSlug ?? "(unknown feature)"}; it will restart automatically once idle.`
+          );
+          break;
+        }
+        await clearStaleLockForRestart(cwd, kill);
+        if (!bareRun) {
+          const orphanPid = await reconcileOrphan(cwd, supervisor, kill);
+          if (orphanPid) {
+            out(`orphaned daemon process (pid ${orphanPid}) terminated; lock reclaimed.`);
+          }
+        }
+        const outcome = await supervisor.restart(cwd);
+        out(outcome.message);
+        break;
+      }
+      case "connect":
+        await supervisor.attach(cwd, { readOnly: true });
+        break;
+      case "debug":
+        await supervisor.attach(cwd, { readOnly: false });
+        break;
+      case "pause":
+        if (await isPaused(cwd)) {
+          out("already paused");
+        } else {
+          await writePauseMarker(cwd);
+          out("daemon paused");
+        }
+        break;
+      case "resume":
+        if (!await isPaused(cwd)) {
+          out("not paused");
+        } else {
+          await removePauseMarker(cwd);
+          out("daemon resumed");
+        }
+        break;
+    }
+    return 0;
+  } catch (err) {
+    out(err.message);
+    return 1;
+  }
+}
+export {
+  dispatchDaemonSupervisor
+};
+//# sourceMappingURL=daemon-supervisor-cli-HZTZCWGQ.js.map

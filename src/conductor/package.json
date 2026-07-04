@@ -7,7 +7,7 @@
     "node": ">=20.5.0"
   },
   "scripts": {
-    "build": "tsup",
+    "build": "node scripts/publish-engine.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"

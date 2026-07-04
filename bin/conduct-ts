@@ -6,11 +6,23 @@ set -e
 REAL_PATH="$(readlink -f "$0")"
 BIN_DIR="$(dirname "$REAL_PATH")"
 CONDUCTOR_DIR="${BIN_DIR}/../src/conductor"
-DIST="${CONDUCTOR_DIR}/dist/index.js"
+DIST_LINK="${CONDUCTOR_DIR}/dist"
+DIST="${DIST_LINK}/index.js"
 
-if [ ! -f "$DIST" ]; then
+if [ ! -e "$DIST_LINK" ] && [ ! -L "$DIST_LINK" ]; then
   echo "conduct-ts: missing ${DIST}" >&2
   echo "conduct-ts: run 'npm run build' in src/conductor/" >&2
+  exit 1
+fi
+
+# Resolve the `dist` symlink to its real path (dist-versions/<id>/index.js)
+# so every launched process pins to a specific version dir instead of the
+# floating `dist` symlink. This also catches dangling/broken symlinks left
+# behind by an incomplete build or publish.
+DIST_REAL="$(readlink -f "$DIST" 2>/dev/null || true)"
+if [ -z "$DIST_REAL" ] || [ ! -f "$DIST_REAL" ]; then
+  echo "conduct-ts: dist symlink is broken (${DIST_LINK})" >&2
+  echo "conduct-ts: run 'npm run build' to rebuild, or republish the engine, to fix it" >&2
   exit 1
 fi
 
@@ -26,4 +38,4 @@ if [ -f "$TOOL_VERSIONS" ] && command -v asdf >/dev/null 2>&1; then
   fi
 fi
 
-exec node "$DIST" "$@"
+exec node "$DIST_REAL" "$@"

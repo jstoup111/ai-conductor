@@ -1,5 +1,9 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { TmuxNotInstalledError } from '../../src/engine/daemon-tmux.js';
+import { isPaused } from '../../src/engine/pause-marker.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RED specs for the NOT-YET-BUILT module src/engine/daemon-supervisor-cli.ts
@@ -51,12 +55,19 @@ function makeFakeSupervisor(throwOn?: { method: string; error: Error }): {
       calls.push({ method, args });
       if (throwOn?.method === method) throw throwOn.error;
     };
+  // restart returns a RestartOutcome ({ degraded, message }) per the Supervisor
+  // port contract (FR-20 neg, Task 24) rather than void.
+  const restart = async (...args: unknown[]): Promise<{ degraded: boolean; message: string }> => {
+    calls.push({ method: 'restart', args });
+    if (throwOn?.method === 'restart') throw throwOn.error;
+    return { degraded: false, message: 'daemon restarted in place (session preserved).' };
+  };
   return {
     calls,
     supervisor: {
       start: makeMethod('start'),
       stop: makeMethod('stop'),
-      restart: makeMethod('restart'),
+      restart,
       attach: makeMethod('attach'),
       logs: makeMethod('logs'),
       exec: makeMethod('exec'),
@@ -271,5 +282,218 @@ describe('dispatchDaemonSupervisor: generic Error from attach forwards message (
 
     expect(code).not.toBe(0);
     expect(out.join('\n')).toMatch(/No daemon session/);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// pause / resume — write/remove the .daemon/PAUSED marker for the cwd repo
+// (FR-1/FR-2, Task 16). Not supervisor methods: no fake supervisor call expected.
+// ═════════════════════════════════════════════════════════════════════════════
+describe('dispatchDaemonSupervisor: pause/resume drive the pause marker, not the supervisor', () => {
+  const tempDirs: string[] = [];
+  afterEach(async () => {
+    await Promise.all(tempDirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
+  });
+  async function tempRepo(): Promise<string> {
+    const dir = await mkdtemp(join(tmpdir(), 'daemon-cli-pause-'));
+    tempDirs.push(dir);
+    return dir;
+  }
+
+  it('pause writes the pause marker and returns 0', async () => {
+    const dispatch = requireFn(await load(), 'dispatchDaemonSupervisor');
+    const repo = await tempRepo();
+    const { calls, supervisor } = makeFakeSupervisor();
+    const out: string[] = [];
+
+    const code: number = await dispatch(
+      { verb: 'pause' },
+      { supervisor, cwd: repo, out: (l: string) => out.push(l) },
+    );
+
+    expect(code).toBe(0);
+    expect(await isPaused(repo)).toBe(true);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('pause-when-already-paused is idempotent and reports "already paused"', async () => {
+    const dispatch = requireFn(await load(), 'dispatchDaemonSupervisor');
+    const repo = await tempRepo();
+    const { supervisor } = makeFakeSupervisor();
+    const out: string[] = [];
+
+    await dispatch({ verb: 'pause' }, { supervisor, cwd: repo, out: (l: string) => out.push(l) });
+    const code: number = await dispatch(
+      { verb: 'pause' },
+      { supervisor, cwd: repo, out: (l: string) => out.push(l) },
+    );
+
+    expect(code).toBe(0);
+    expect(await isPaused(repo)).toBe(true);
+    expect(out.join('\n')).toMatch(/already paused/);
+  });
+
+  it('resume removes the pause marker and returns 0', async () => {
+    const dispatch = requireFn(await load(), 'dispatchDaemonSupervisor');
+    const repo = await tempRepo();
+    const { calls, supervisor } = makeFakeSupervisor();
+    const out: string[] = [];
+
+    await dispatch({ verb: 'pause' }, { supervisor, cwd: repo, out: (l: string) => out.push(l) });
+    const code: number = await dispatch(
+      { verb: 'resume' },
+      { supervisor, cwd: repo, out: (l: string) => out.push(l) },
+    );
+
+    expect(code).toBe(0);
+    expect(await isPaused(repo)).toBe(false);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('resume-when-not-paused is idempotent and reports "not paused"', async () => {
+    const dispatch = requireFn(await load(), 'dispatchDaemonSupervisor');
+    const repo = await tempRepo();
+    const { supervisor } = makeFakeSupervisor();
+    const out: string[] = [];
+
+    const code: number = await dispatch(
+      { verb: 'resume' },
+      { supervisor, cwd: repo, out: (l: string) => out.push(l) },
+    );
+
+    expect(code).toBe(0);
+    expect(await isPaused(repo)).toBe(false);
+    expect(out.join('\n')).toMatch(/not paused/);
+  });
+
+  it('alternation converges: pause → resume → pause leaves the marker present', async () => {
+    const dispatch = requireFn(await load(), 'dispatchDaemonSupervisor');
+    const repo = await tempRepo();
+    const { supervisor } = makeFakeSupervisor();
+    const out: string[] = [];
+    const run = (verb: 'pause' | 'resume') =>
+      dispatch({ verb }, { supervisor, cwd: repo, out: (l: string) => out.push(l) });
+
+    expect(await run('pause')).toBe(0);
+    expect(await isPaused(repo)).toBe(true);
+
+    expect(await run('resume')).toBe(0);
+    expect(await isPaused(repo)).toBe(false);
+
+    expect(await run('pause')).toBe(0);
+    expect(await isPaused(repo)).toBe(true);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// restart — idle vs paused vs busy (FR-9, Task 27)
+//
+//   idle    → immediate respawn (unchanged: supervisor.restart(cwd) fires)
+//   paused  → immediate respawn (paused counts as idle, FR-11); pause marker
+//             itself is untouched by restart
+//   busy    → NEVER calls supervisor.restart; instead writes the durable
+//             `.daemon/RESTART-PENDING` marker (restart-marker.ts, Task 26)
+//             naming the blocking slug, exits 0 immediately, and the output
+//             names the blocking feature.
+// ═════════════════════════════════════════════════════════════════════════════
+describe('dispatchDaemonSupervisor: restart — immediate (idle/paused) vs queued (busy)', () => {
+  const tempDirs: string[] = [];
+  afterEach(async () => {
+    await Promise.all(tempDirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
+  });
+  async function tempRepo(): Promise<string> {
+    const dir = await mkdtemp(join(tmpdir(), 'daemon-cli-restart-'));
+    tempDirs.push(dir);
+    return dir;
+  }
+
+  it('idle → immediate respawn: supervisor.restart(cwd) is called, no marker written', async () => {
+    const dispatch = requireFn(await load(), 'dispatchDaemonSupervisor');
+    const { consumeOnBoot } = await import('../../src/engine/restart-marker.js');
+    const repo = await tempRepo();
+    const { calls, supervisor } = makeFakeSupervisor();
+    const out: string[] = [];
+
+    const code: number = await dispatch(
+      { verb: 'restart' },
+      { supervisor, cwd: repo, out: (l: string) => out.push(l) },
+    );
+
+    expect(code).toBe(0);
+    expect(calls.map((c) => c.method)).toEqual(['restart']);
+    expect(await (consumeOnBoot as (r: string) => Promise<unknown>)(repo)).toBeNull();
+  });
+
+  it('paused → immediate respawn (paused counts as idle); pause marker is left untouched', async () => {
+    const dispatch = requireFn(await load(), 'dispatchDaemonSupervisor');
+    const { writePauseMarker } = await import('../../src/engine/pause-marker.js');
+    const repo = await tempRepo();
+    await writePauseMarker(repo, { pausedBy: 'test-operator' });
+    const { calls, supervisor } = makeFakeSupervisor();
+    const out: string[] = [];
+
+    const code: number = await dispatch(
+      { verb: 'restart' },
+      { supervisor, cwd: repo, out: (l: string) => out.push(l) },
+    );
+
+    expect(code).toBe(0);
+    expect(calls.map((c) => c.method)).toEqual(['restart']);
+    expect(await isPaused(repo)).toBe(true); // untouched by restart
+  });
+
+  it('busy → marker written naming the blocking slug, exits 0, never calls supervisor.restart', async () => {
+    const dispatch = requireFn(await load(), 'dispatchDaemonSupervisor');
+    const { consumeOnBoot } = await import('../../src/engine/restart-marker.js');
+    const repo = await tempRepo();
+    const { calls, supervisor } = makeFakeSupervisor();
+    const out: string[] = [];
+
+    const code: number = await dispatch(
+      { verb: 'restart' },
+      {
+        supervisor,
+        cwd: repo,
+        out: (l: string) => out.push(l),
+        isBusy: async () => ({ busy: true, blockingSlug: 'feature-in-flight' }),
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(calls).toHaveLength(0); // no tmux respawn — the daemon fires it later
+    expect(out.join('\n')).toMatch(/feature-in-flight/);
+
+    const intent = await (consumeOnBoot as (r: string) => Promise<{ blockingSlug?: string } | null>)(
+      repo,
+    );
+    expect(intent).toBeTruthy();
+    expect(intent!.blockingSlug).toBe('feature-in-flight');
+  });
+
+  it('busy while paused is impossible per contract: paused short-circuits before isBusy is consulted', async () => {
+    const dispatch = requireFn(await load(), 'dispatchDaemonSupervisor');
+    const { writePauseMarker } = await import('../../src/engine/pause-marker.js');
+    const repo = await tempRepo();
+    await writePauseMarker(repo, { pausedBy: 'test-operator' });
+    const { calls, supervisor } = makeFakeSupervisor();
+    const out: string[] = [];
+    let isBusyCalled = false;
+
+    const code: number = await dispatch(
+      { verb: 'restart' },
+      {
+        supervisor,
+        cwd: repo,
+        out: (l: string) => out.push(l),
+        isBusy: async () => {
+          isBusyCalled = true;
+          return { busy: true, blockingSlug: 'should-never-surface' };
+        },
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(isBusyCalled).toBe(false);
+    expect(calls.map((c) => c.method)).toEqual(['restart']); // immediate, not queued
   });
 });
