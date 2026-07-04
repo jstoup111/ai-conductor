@@ -20,12 +20,53 @@
 // `--out-dir <stagingDir>` and must exit 0 on success.
 
 import { execa } from 'execa';
-import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { PUBLISH_WRAPPER_ENV_VAR, assertPublishWrapperEnv } from './publish-guard.mjs';
 
 const DEFAULT_TSUP_COMMAND = ['tsup'];
+
+// Re-exported so existing imports of `assertPublishWrapperEnv` from this
+// module (e.g. tests) keep working; the canonical implementation lives in
+// the shebang-free `publish-guard.mjs` (see that file for why).
+export { PUBLISH_WRAPPER_ENV_VAR, assertPublishWrapperEnv };
+
+/**
+ * If `<conductorRoot>/dist` exists and is a *real* directory (not a
+ * symlink), this is a legacy pre-versioning build output. Migrate it once:
+ * move its contents into `dist-versions/<migrated-id>/` and leave `dist`
+ * absent (the normal publish flow that runs immediately after will create
+ * the fresh version + flip the symlink). Idempotent: once `dist` is a
+ * symlink (or absent), this is a no-op.
+ *
+ * @param {{ conductorRoot: string, env: NodeJS.ProcessEnv, now?: Date,
+ *   resolveEngineStoreRoot: Function, computeVersionId: Function }} opts
+ */
+async function migrateLegacyDistIfNeeded(opts) {
+  const distPath = join(opts.conductorRoot, 'dist');
+
+  let stat;
+  try {
+    stat = await lstat(distPath);
+  } catch {
+    return; // No dist/ at all — nothing to migrate.
+  }
+
+  if (!stat.isDirectory() || stat.isSymbolicLink()) {
+    return; // Already a symlink (versioned layout) — nothing to do.
+  }
+
+  const storeRoot = opts.resolveEngineStoreRoot({ conductorRoot: opts.conductorRoot, env: opts.env });
+  const migratedVersionId = await opts.computeVersionId({ srcDir: distPath, now: opts.now });
+  await mkdir(storeRoot, { recursive: true });
+  const migratedDir = join(storeRoot, migratedVersionId);
+  await rename(distPath, migratedDir);
+  console.error(
+    `[publish-engine] migrated legacy dist/ -> dist-versions/${migratedVersionId}/`,
+  );
+}
 
 // This script runs as a plain Node process BEFORE the engine has ever been
 // built (chicken-and-egg: it IS the build), so it can't `import` the
@@ -106,6 +147,14 @@ export async function publish(opts) {
   const { resolveEngineStoreRoot, computeVersionId, flipCurrent } = await loadEngineStore();
   const storeRoot = resolveEngineStoreRoot({ conductorRoot, env });
 
+  await migrateLegacyDistIfNeeded({
+    conductorRoot,
+    env,
+    now: opts.now,
+    resolveEngineStoreRoot,
+    computeVersionId,
+  });
+
   const stagingParent = conductorRoot;
   const stagingDir = await mkdtemp(join(stagingParent, '.engine-staging-'));
 
@@ -113,7 +162,11 @@ export async function publish(opts) {
     opts.runCommand ??
     (async (cmd, execOpts) => {
       const [bin, ...args] = cmd;
-      await execa(bin, args, { cwd: execOpts.cwd, stdio: 'inherit' });
+      await execa(bin, args, {
+        cwd: execOpts.cwd,
+        stdio: 'inherit',
+        env: { ...process.env, [PUBLISH_WRAPPER_ENV_VAR]: '1' },
+      });
     });
 
   try {

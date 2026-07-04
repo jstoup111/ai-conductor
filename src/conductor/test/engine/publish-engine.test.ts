@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, writeFile, readdir, readFile, chmod } from 'fs/promises';
-import { join } from 'path';
+import { mkdtemp, rm, mkdir, writeFile, readdir, readFile, chmod, lstat, readlink } from 'fs/promises';
+import { join, resolve } from 'path';
 import { tmpdir } from 'os';
 import { execa } from 'execa';
+import { assertPublishWrapperEnv } from '../../scripts/publish-engine.mjs';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Tests for scripts/publish-engine.mjs (Task 2, Phase 1 — FR-13 happy:
@@ -124,5 +125,132 @@ describe('publish-engine.mjs', () => {
     } finally {
       await rm(customStore, { recursive: true, force: true });
     }
+  });
+
+  // ───────────────────────────────────────────────────────────────────────
+  // Task 4 (FR-13 neg): migration of a legacy real `dist/` dir + guard
+  // against invoking raw tsup against the live layout.
+  // ───────────────────────────────────────────────────────────────────────
+
+  it('migrates a real legacy dist/ dir to dist-versions/<id>/ + symlink before publishing', async () => {
+    // Simulate a pre-existing plain `dist/` directory (legacy, pre-versioning
+    // layout) with real build output in it.
+    const legacyDist = join(conductorRoot, 'dist');
+    await mkdir(legacyDist, { recursive: true });
+    await writeFile(join(legacyDist, 'index.js'), 'export const legacy = true;\n', 'utf-8');
+    await writeFile(join(legacyDist, 'index.d.ts'), 'export declare const legacy: boolean;\n', 'utf-8');
+
+    const preMigrationStat = await lstat(legacyDist);
+    expect(preMigrationStat.isSymbolicLink()).toBe(false);
+    expect(preMigrationStat.isDirectory()).toBe(true);
+
+    const result = await runPublish();
+    expect(result.exitCode).toBe(0);
+
+    // dist is now a symlink...
+    const distStat = await lstat(legacyDist);
+    expect(distStat.isSymbolicLink()).toBe(true);
+
+    // ...and the legacy content was preserved under dist-versions/<migrated-id>/
+    // (distinct from the new publish's version dir).
+    const versionsDir = join(conductorRoot, 'dist-versions');
+    const versionEntries = await readdir(versionsDir);
+    expect(versionEntries.length).toBeGreaterThanOrEqual(2);
+
+    let migratedDir: string | undefined;
+    for (const entry of versionEntries) {
+      const entryPath = join(versionsDir, entry);
+      const files = await readdir(entryPath);
+      if (files.includes('index.js')) {
+        const contents = await readFile(join(entryPath, 'index.js'), 'utf-8');
+        if (contents.includes('legacy = true')) {
+          migratedDir = entry;
+        }
+      }
+    }
+    expect(migratedDir).toBeDefined();
+
+    // The symlink now points at the *new* publish's version dir, not the
+    // migrated legacy one (the normal publish flow ran after migration).
+    const output = JSON.parse(result.stdout);
+    const target = await readlink(legacyDist);
+    expect(resolve(target)).toBe(resolve(output.dir));
+    expect(migratedDir).not.toBe(output.versionId);
+  });
+
+  it('is idempotent: migration only happens once, subsequent publishes do not re-migrate', async () => {
+    const legacyDist = join(conductorRoot, 'dist');
+    await mkdir(legacyDist, { recursive: true });
+    await writeFile(join(legacyDist, 'index.js'), 'export const legacy = true;\n', 'utf-8');
+
+    const first = await runPublish();
+    expect(first.exitCode).toBe(0);
+
+    const countLegacyDirs = async () => {
+      const versionsDir = join(conductorRoot, 'dist-versions');
+      const entries = await readdir(versionsDir);
+      let count = 0;
+      for (const entry of entries) {
+        const files = await readdir(join(versionsDir, entry));
+        if (!files.includes('index.js')) continue;
+        const contents = await readFile(join(versionsDir, entry, 'index.js'), 'utf-8');
+        if (contents.includes('legacy = true')) count += 1;
+      }
+      return count;
+    };
+
+    expect(await countLegacyDirs()).toBe(1);
+
+    // dist is now a symlink — a second publish must NOT treat it as a
+    // legacy plain directory again (no second migration of the same
+    // content). Use a stub with different output content so its version id
+    // doesn't collide with the first publish's (ids are content-addressed;
+    // identical content within the same second produces identical ids).
+    const stubPath2 = join(conductorRoot, 'stub-tsup-2.mjs');
+    await writeFile(
+      stubPath2,
+      [
+        'import { writeFile, mkdir } from "node:fs/promises";',
+        'const args = process.argv.slice(2);',
+        'const outDirIdx = args.indexOf("--out-dir");',
+        'const outDir = args[outDirIdx + 1];',
+        'await mkdir(outDir, { recursive: true });',
+        'await writeFile(`${outDir}/index.js`, "export const built = 2;\\n");',
+        '',
+      ].join('\n'),
+      'utf-8',
+    );
+    const second = await execa(
+      'node',
+      [
+        SCRIPT,
+        '--conductor-root',
+        conductorRoot,
+        '--tsup-cmd',
+        JSON.stringify(['node', stubPath2]),
+      ],
+      { reject: false },
+    );
+    expect(second.exitCode).toBe(0);
+
+    expect(await countLegacyDirs()).toBe(1);
+  });
+});
+
+describe('assertPublishWrapperEnv (raw tsup guard)', () => {
+  it('throws an actionable error when the wrapper marker env var is absent', () => {
+    expect(() => assertPublishWrapperEnv({})).toThrow(/npm run build/i);
+  });
+
+  it('does not throw when the wrapper marker env var is present', () => {
+    expect(() => assertPublishWrapperEnv({ AI_CONDUCTOR_PUBLISH_WRAPPER: '1' })).not.toThrow();
+  });
+});
+
+describe('package.json build script', () => {
+  it('points at the publish-engine.mjs wrapper, not raw tsup', async () => {
+    const pkgRaw = await readFile(join(process.cwd(), 'package.json'), 'utf-8');
+    const pkg = JSON.parse(pkgRaw);
+    expect(pkg.scripts.build).toMatch(/publish-engine\.mjs/);
   });
 });
