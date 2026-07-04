@@ -318,6 +318,32 @@ describe('integration/gate-loop', () => {
       );
     }
 
+    // A downstream architecture_review kickback cascade-stales acceptance_specs
+    // (pre-marked 'done' in FRONT_TO_CONFLICT). When the tail re-verifies a
+    // 'stale' step it re-checks the real completion predicate, so a scenario
+    // that re-opens architecture_review twice needs real spec + RED-evidence
+    // artifacts on disk for acceptance_specs to still pass on recheck.
+    async function seedAcceptanceSpecsRed(): Promise<void> {
+      await mkdir(join(dir, 'test/acceptance'), { recursive: true });
+      await writeFile(
+        join(dir, 'test/acceptance/foo.test.ts'),
+        "it('fails until implemented', () => { expect(true).toBe(false); });\n",
+      );
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline/acceptance-specs-red.json'),
+        JSON.stringify({
+          command: 'vitest run test/acceptance',
+          targetSpecs: ['test/acceptance/foo.test.ts'],
+          executed: 1,
+          passed: 0,
+          failed: 1,
+          skipped: 0,
+          errors: 0,
+        }),
+      );
+    }
+
     function trackKickbacks(): Array<{ from: string; to: string; count: number }> {
       const kicks: Array<{ from: string; to: string; count: number }> = [];
       events.on('kickback', (e) => {
@@ -435,16 +461,30 @@ describe('integration/gate-loop', () => {
 
     it('emits exactly one kickback event for a front-half-origin verdict (no duplicate once the tail runs)', async () => {
       await seedStoriesAndPlan();
+      await seedApprovedAdr();
       await writeState(statePath, { ...FRONT_TO_CONFLICT });
 
+      let conflictRuns = 0;
       const runner: StepRunner = {
         run: async (step) => {
           if (step === 'conflict_check') {
-            await writeVerdict(dir, 'architecture_review', {
-              satisfied: false,
-              checkedAt: 1,
-              kickback: { from: 'conflict_check', evidence: 'incompatible ADR seam' },
-            });
+            conflictRuns++;
+            await mkdir(join(dir, '.docs/conflicts'), { recursive: true });
+            await writeFile(
+              join(dir, '.docs/conflicts/report.md'),
+              '# Conflict Check\n\nNo blocking conflicts.\n',
+            );
+            // Only the FIRST run detects the amendment kickback — see the
+            // comment on the earlier "emits a kickback event..." test: a real
+            // conflict-check skill wouldn't re-flag a gate it already amended
+            // and that's since resolved by the front-half-linear re-walk.
+            if (conflictRuns === 1) {
+              await writeVerdict(dir, 'architecture_review', {
+                satisfied: false,
+                checkedAt: 1,
+                kickback: { from: 'conflict_check', evidence: 'incompatible ADR seam' },
+              });
+            }
           }
           return satisfy(step);
         },
@@ -468,13 +508,20 @@ describe('integration/gate-loop', () => {
     it('shares the per-gate kickback counter between a front-half detection and a later tail re-open', async () => {
       await seedStoriesAndPlan();
       await seedApprovedAdr();
+      await seedAcceptanceSpecsRed();
       await writeState(statePath, { ...FRONT_TO_CONFLICT });
 
       let conflictRuns = 0;
+      let buildRuns = 0;
       const runner: StepRunner = {
         run: async (step) => {
           if (step === 'conflict_check') {
             conflictRuns++;
+            await mkdir(join(dir, '.docs/conflicts'), { recursive: true });
+            await writeFile(
+              join(dir, '.docs/conflicts/report.md'),
+              '# Conflict Check\n\nNo blocking conflicts.\n',
+            );
             if (conflictRuns === 1) {
               await writeVerdict(dir, 'architecture_review', {
                 satisfied: false,
@@ -485,14 +532,19 @@ describe('integration/gate-loop', () => {
             return satisfy(step);
           }
           if (step === 'build') {
+            buildRuns++;
             await satisfy('build');
             // build independently detects the same gate needs re-opening —
-            // the tail scan's own kickback-target loop picks this up.
-            await writeVerdict(dir, 'architecture_review', {
-              satisfied: false,
-              checkedAt: 2,
-              kickback: { from: 'build', evidence: 'architecture drift found' },
-            });
+            // the tail scan's own kickback-target loop picks this up. Only
+            // the FIRST build run re-flags it; once architecture_review is
+            // re-satisfied and build re-runs, it must not loop forever.
+            if (buildRuns === 1) {
+              await writeVerdict(dir, 'architecture_review', {
+                satisfied: false,
+                checkedAt: 2,
+                kickback: { from: 'build', evidence: 'architecture drift found' },
+              });
+            }
             return { success: true };
           }
           return satisfy(step);
@@ -523,6 +575,11 @@ describe('integration/gate-loop', () => {
         run: async (step) => {
           if (step === 'conflict_check') {
             conflictRuns++;
+            await mkdir(join(dir, '.docs/conflicts'), { recursive: true });
+            await writeFile(
+              join(dir, '.docs/conflicts/report.md'),
+              '# Conflict Check\n\nNo blocking conflicts.\n',
+            );
             if (conflictRuns === 1) {
               await writeVerdict(dir, 'architecture_review', {
                 satisfied: false,
