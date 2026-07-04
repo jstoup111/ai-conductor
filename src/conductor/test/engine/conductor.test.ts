@@ -2606,6 +2606,7 @@ describe('engine/conductor', () => {
       },
     };
     const conductor = new Conductor({
+      projectRoot: dir,
       stateFilePath: statePath,
       stepRunner: runner,
       events,
@@ -2640,6 +2641,7 @@ describe('engine/conductor', () => {
       },
     };
     const conductor = new Conductor({
+      projectRoot: dir,
       stateFilePath: statePath,
       stepRunner: runner,
       events,
