@@ -34,6 +34,19 @@ export interface RestartMarker {
 }
 
 /**
+ * RestartMarkerStatus distinguishes between present, absent, and corrupt markers.
+ * Used by readRestartMarkerWithStatus to provide structured status information.
+ */
+export interface RestartMarkerStatus {
+  /** One of: 'present' (valid marker), 'absent' (missing), 'absent-corrupt' (unreadable). */
+  kind: 'present' | 'absent' | 'absent-corrupt';
+  /** The parsed marker if present; null otherwise. */
+  marker: RestartMarker | null;
+  /** Optional error description for debugging (only set for absent-corrupt). */
+  error?: string;
+}
+
+/**
  * Write a restart marker to `<dir>/.daemon/RESTART_PENDING`. Creates `.daemon/`
  * if needed. The marker is stored as JSON and includes all fields exactly as
  * provided (including null identities). A failed write is swallowed (logged if
@@ -88,5 +101,66 @@ export async function clearRestartMarker(
     log?.(
       `could not delete restart marker: ${err instanceof Error ? err.message : String(err)}`,
     );
+  }
+}
+
+/**
+ * Read the restart marker with structured status distinguishing absent vs corrupt.
+ * Returns a status object with kind and marker:
+ * - 'present': marker file exists and is valid JSON
+ * - 'absent': marker file does not exist (silent, no warning)
+ * - 'absent-corrupt': marker file exists but contains invalid JSON
+ *   → the corrupt file is automatically removed
+ *   → one warning is logged (if a logger is provided) naming the corruption
+ *
+ * Never throws; all errors are degraded gracefully.
+ */
+export async function readRestartMarkerWithStatus(
+  dir: string,
+  log?: (msg: string) => void,
+): Promise<RestartMarkerStatus> {
+  const filePath = join(dir, RESTART_MARKER_PATH);
+
+  try {
+    const raw = await readFile(filePath, 'utf-8');
+    const parsed = JSON.parse(raw) as RestartMarker;
+    return {
+      kind: 'present',
+      marker: parsed,
+    };
+  } catch (err) {
+    // Distinguish: file not found (absent) vs file exists but corrupt (absent-corrupt)
+    const isNotFound =
+      err instanceof Error && 'code' in err && err.code === 'ENOENT';
+
+    if (isNotFound) {
+      // File does not exist — silent return, no warning
+      return {
+        kind: 'absent',
+        marker: null,
+      };
+    }
+
+    // File exists but is corrupt (invalid JSON or other read error)
+    // Remove the corrupt file and log a warning
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    log?.(
+      `restart marker is corrupt and will be removed: ${errorMsg}`,
+    );
+
+    // Attempt to remove the corrupt file
+    try {
+      await rm(filePath, { force: true });
+    } catch (rmErr) {
+      log?.(
+        `could not remove corrupt restart marker: ${rmErr instanceof Error ? rmErr.message : String(rmErr)}`,
+      );
+    }
+
+    return {
+      kind: 'absent-corrupt',
+      marker: null,
+      error: errorMsg,
+    };
   }
 }

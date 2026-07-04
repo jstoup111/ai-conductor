@@ -1,14 +1,16 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, mkdir, readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { mkdtemp, rm, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import {
   writeRestartMarker,
   readRestartMarker,
   clearRestartMarker,
+  readRestartMarkerWithStatus,
   RESTART_MARKER_PATH,
   type RestartMarker,
+  type RestartMarkerStatus,
 } from '../../src/engine/restart-intent.js';
 
 describe('engine/restart-intent — marker schema round-trip', () => {
@@ -148,6 +150,76 @@ describe('engine/restart-intent — marker schema round-trip', () => {
     it('handles errors gracefully', async () => {
       // Call on an already-empty directory; should not throw
       await expect(clearRestartMarker(dir)).resolves.toBeUndefined();
+    });
+  });
+
+  describe('readRestartMarkerWithStatus — corrupt marker handling', () => {
+    it('detects corrupt marker and returns absent-corrupt', async () => {
+      const markerPath = join(dir, '.daemon', 'RESTART_PENDING');
+      await mkdir(dirname(markerPath), { recursive: true });
+      // Write garbage bytes that are not valid JSON
+      await writeFile(markerPath, 'garbage bytes not json {{{', 'utf-8');
+
+      const status = await readRestartMarkerWithStatus(dir);
+
+      expect(status.kind).toBe('absent-corrupt');
+      expect(status.marker).toBeNull();
+    });
+
+    it('removes the corrupt marker file after detection', async () => {
+      const markerPath = join(dir, '.daemon', 'RESTART_PENDING');
+      await mkdir(dirname(markerPath), { recursive: true });
+      await writeFile(markerPath, '{invalid json}', 'utf-8');
+
+      await readRestartMarkerWithStatus(dir);
+
+      // File should be deleted
+      const exists = await readFile(markerPath, 'utf-8')
+        .then(() => true)
+        .catch(() => false);
+      expect(exists).toBe(false);
+    });
+
+    it('logs one warning when corrupt marker is detected', async () => {
+      const markerPath = join(dir, '.daemon', 'RESTART_PENDING');
+      await mkdir(dirname(markerPath), { recursive: true });
+      await writeFile(markerPath, 'corrupt {data', 'utf-8');
+
+      const warnings: string[] = [];
+      const log = (msg: string) => warnings.push(msg);
+
+      await readRestartMarkerWithStatus(dir, log);
+
+      expect(warnings.length).toBe(1);
+      expect(warnings[0]).toContain('corrupt');
+    });
+
+    it('returns absent silently for missing marker in boot-style read', async () => {
+      const warnings: string[] = [];
+      const log = (msg: string) => warnings.push(msg);
+
+      const status = await readRestartMarkerWithStatus(dir, log);
+
+      expect(status.kind).toBe('absent');
+      expect(status.marker).toBeNull();
+      expect(warnings.length).toBe(0);
+    });
+
+    it('returns present with marker data for valid marker', async () => {
+      const marker: RestartMarker = {
+        reason: 'engine stalled',
+        fromIdentity: 'daemon-1',
+        targetIdentity: 'engine-1',
+        at: Date.now(),
+      };
+
+      await writeRestartMarker(marker, dir);
+
+      const status = await readRestartMarkerWithStatus(dir);
+
+      expect(status.kind).toBe('present');
+      expect(status.marker).not.toBeNull();
+      expect(status.marker?.reason).toBe(marker.reason);
     });
   });
 });
