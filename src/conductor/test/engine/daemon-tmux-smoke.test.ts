@@ -67,6 +67,15 @@ describe('daemon-tmux — real tmux smoke (FR-20, Task T36)', () => {
       // and re-execute from the beginning, generating new BOOT markers.
       const dummyDaemonCommand = 'bash -c "while true; do echo BOOT_$$; sleep 1; done"';
 
+      // This smoke test deliberately drives real cc-daemon-* tmux sessions to
+      // exercise the real binary (see file banner). The global test setup sets
+      // AI_CONDUCTOR_NO_REAL_EXEC=1 to keep every OTHER test from leaking real
+      // daemons via the deep-seam guard (daemon-tmux.ts); this single test is
+      // the intentional exception, so it lifts the kill-switch for its own
+      // duration only, restoring it in the finally block below.
+      const prevNoRealExec = process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+      delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+
       try {
         // 1. Real session + dummy daemon command → capture scrollback.
         await newDetachedSession(name, dummyDaemonCommand, cwd);
@@ -197,6 +206,11 @@ describe('daemon-tmux — real tmux smoke (FR-20, Task T36)', () => {
       } finally {
         await killSession(name);
         await rm(cwd, { recursive: true, force: true });
+        if (prevNoRealExec === undefined) {
+          delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+        } else {
+          process.env.AI_CONDUCTOR_NO_REAL_EXEC = prevNoRealExec;
+        }
       }
     },
     120_000,

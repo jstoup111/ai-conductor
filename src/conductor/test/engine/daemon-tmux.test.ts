@@ -626,6 +626,49 @@ describe('requireTmux: throws TmuxNotInstalledError when tmux is absent', () => 
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// defaultTmuxRunner — kill-switch guard: refuses to spawn real cc-daemon-*
+// tmux sessions when AI_CONDUCTOR_NO_REAL_EXEC=1 is set (test isolation guard
+// against real tmux daemons leaking out of the test suite and persisting).
+// ─────────────────────────────────────────────────────────────────────────────
+describe('defaultTmuxRunner: AI_CONDUCTOR_NO_REAL_EXEC kill-switch guards cc-daemon sessions', () => {
+  it('throws instead of creating a real cc-daemon-* session when the kill-switch is set', async () => {
+    const mod = await load();
+    const runner = requireFn(mod, 'defaultTmuxRunner');
+    const hasSessionFn = requireFn(mod, 'hasSession');
+    const killSessionFn = requireFn(mod, 'killSession');
+    const sessionName = 'cc-daemon-guardtest-abc123';
+    const prevFlag = process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+    process.env.AI_CONDUCTOR_NO_REAL_EXEC = '1';
+    try {
+      expect(() =>
+        runner(['new-session', '-d', '-s', sessionName, '-c', '/tmp', 'sleep 1'], { inherit: false }),
+      ).toThrow(Error);
+      let thrown: unknown;
+      try {
+        runner(['new-session', '-d', '-s', sessionName, '-c', '/tmp', 'sleep 1'], { inherit: false });
+      } catch (err) {
+        thrown = err;
+      }
+      expect(thrown).toBeInstanceOf(Error);
+      expect((thrown as Error).message).toContain('AI_CONDUCTOR_NO_REAL_EXEC');
+      expect((thrown as Error).message).toContain(sessionName);
+
+      // Verify via real tmux that no session was actually created.
+      const exists = await hasSessionFn(sessionName);
+      expect(exists).toBe(false);
+    } finally {
+      if (prevFlag === undefined) {
+        delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+      } else {
+        process.env.AI_CONDUCTOR_NO_REAL_EXEC = prevFlag;
+      }
+      // Clean up any accidentally created session.
+      await killSessionFn(sessionName);
+    }
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // TmuxNotInstalledError — exported Error subclass; message mentions 'tmux'
 // ─────────────────────────────────────────────────────────────────────────────
 describe('TmuxNotInstalledError: exported Error subclass with tmux message', () => {

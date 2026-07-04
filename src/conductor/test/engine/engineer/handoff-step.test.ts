@@ -18,6 +18,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runHandoff } from '../../../src/engine/engineer/handoff-step.js';
 import { readAuthoredKeys } from '../../../src/engine/engineer/authored-ledger.js';
+import { sessionNameForRepo, hasSession } from '../../../src/engine/daemon-tmux.js';
 import type { TargetRepo } from '../../../src/engine/engineer/target.js';
 
 /** Build a TargetRepo pointing at a temp dir; remote optional. */
@@ -159,5 +160,61 @@ describe('runHandoff — ensure-running is fire-and-forget', () => {
     expect(printed).toMatch(/build daemon was not started/i);
     expect(printed).toContain('fnf-proj');
     expect(printed).toContain('boom — daemon spawn failed');
+  });
+});
+
+describe('runHandoff — un-injected handoff path leaks zero sessions (deep guard)', () => {
+  let tempDir: string;
+  beforeEach(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), 'handoff-step-deep-guard-'));
+  });
+  afterEach(async () => {
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  it('runs without launchFn, hits the deep guard, produces zero sessions (un-injected path)', async () => {
+    // Save and delete NO_DAEMON_AUTOLAUNCH to let the flow reach the deep guard.
+    // The test setup globally sets this to '1' to prevent real daemons, but we need
+    // to temporarily remove it so launchDaemon attempts to spawn (and hits the
+    // NO_REAL_EXEC guard below).
+    const prevAutolaunch = process.env.AI_CONDUCTOR_NO_DAEMON_AUTOLAUNCH;
+    delete process.env.AI_CONDUCTOR_NO_DAEMON_AUTOLAUNCH;
+
+    try {
+      const target = makeTarget(tempDir, 'un-injected-proj');
+      const { print, out } = makePrint();
+
+      // Run with NO launchFn (undefined) to trigger real ensureRunning → launchDaemon.
+      // With AI_CONDUCTOR_NO_DAEMON_AUTOLAUNCH unset and NO supervisor injected,
+      // launchDaemon will call makeTmuxSupervisor. The supervisor will attempt
+      // newDetachedSession, which hits the deep guard: defaultTmuxRunner checks
+      // AI_CONDUCTOR_NO_REAL_EXEC=1 and throws before spawning a real tmux session.
+      // runHandoff catches this error and prints it as a warning (no blocking).
+      const entry = await runHandoff(target, 'spec/un-injected', {
+        engineerDir: tempDir,
+        // launchFn intentionally omitted
+        print,
+      });
+
+      // Assert handoff completed successfully (fire-and-forget; error was swallowed).
+      expect(entry).toEqual({ project: 'un-injected-proj' });
+
+      // Assert the output contains the daemon warning.
+      const printed = out.join('\n');
+      expect(printed).toMatch(/build daemon was not started/i);
+
+      // Assert no real session was created. The deep guard prevented any tmux call,
+      // so hasSession should return false (no session exists under this name).
+      const sessionName = sessionNameForRepo(tempDir);
+      const sessionExists = await hasSession(sessionName);
+      expect(sessionExists).toBe(false);
+    } finally {
+      // Restore the environment to the test setup's default.
+      if (prevAutolaunch === undefined) {
+        delete process.env.AI_CONDUCTOR_NO_DAEMON_AUTOLAUNCH;
+      } else {
+        process.env.AI_CONDUCTOR_NO_DAEMON_AUTOLAUNCH = prevAutolaunch;
+      }
+    }
   });
 });

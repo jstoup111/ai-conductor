@@ -575,7 +575,7 @@ export async function ensureRunning(
     (async (path: string) => {
       // Default: import launchDaemon lazily (avoids circular-dep issues).
       const { launchDaemon } = await import('./engineer/daemon-launch.js');
-      launchDaemon(path);
+      await launchDaemon(path);
     });
 
   let needsSpawn = false;
