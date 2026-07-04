@@ -17,14 +17,23 @@
 //     (never throws on a dangling/missing symlink — callers treat that as
 //     "no current version" rather than a hard failure).
 //
-// The publish/flip/GC machinery (staging build, atomic symlink flip, garbage
-// collection) is built on top of these primitives in later tasks — this
-// module intentionally has no knowledge of tsup, staging dirs, or the
-// registry.
+// The publish/flip machinery (staging build, atomic symlink flip) is built on
+// top of these primitives in earlier tasks. This module additionally owns
+// `gcVersions` (Task 7, FR-15): a safety-critical, fail-closed GC that only
+// ever deletes a version directory when ALL FOUR of the following hold —
+//   1. it is not the current (`dist`-linked) version,
+//   2. it is not referenced by any live daemon pidfile across the fleet
+//      (cross-checked against the project registry — see registry.ts),
+//   3. it is at least `minAgeMsecs` old, and
+//   4. it falls outside the newest `keepLastK` versions.
+// Any error enumerating the registry, or reading ANY fleet pidfile (other
+// than a plain "file absent"), aborts the entire GC pass with zero
+// deletions — prefer never deleting over deleting on incomplete information.
 
-import { readdir, lstat, readlink, readFile, symlink, rename, unlink } from 'node:fs/promises';
+import { readdir, lstat, readlink, readFile, symlink, rename, unlink, rm } from 'node:fs/promises';
 import { createHash, randomBytes } from 'node:crypto';
 import { join, basename } from 'node:path';
+import { readRegistry, resolveRegistryPath, type ProjectRecord } from './registry.js';
 
 /**
  * A branded string type for version ids so callers can't accidentally pass a
@@ -228,4 +237,177 @@ export async function flipCurrent(opts: FlipCurrentOpts): Promise<EngineVersionI
   }
 
   return opts.versionId;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// gcVersions — safety-critical, fail-closed version GC (Task 7, FR-15).
+// ─────────────────────────────────────────────────────────────────────────────
+
+const DEFAULT_MIN_AGE_MSECS = 24 * 60 * 60 * 1000; // 24 hours
+const DEFAULT_KEEP_LAST_K = 3;
+const PIDFILE_RELATIVE_PATH = join('.daemon', 'daemon.pid');
+
+export interface GcVersionsOpts {
+  /** The conductor package root (e.g. `src/conductor`). */
+  conductorRoot: string;
+  /** The currently-flipped version id — never a deletion candidate. */
+  currentVersionId: EngineVersionId;
+  /** Minimum age (ms) a version must have before it's GC-eligible. Default: 24h. */
+  minAgeMsecs?: number;
+  /** Number of newest versions (by id, which sorts chronologically) always kept. Default: 3. */
+  keepLastK?: number;
+  /** Override the project registry path (test seam). Defaults to `resolveRegistryPath()`. */
+  registryPath?: string;
+  /** Env to resolve the store root / registry path from. Defaults to `process.env`. */
+  env?: NodeJS.ProcessEnv;
+  /** Injectable clock for age comparisons (tests). Defaults to `new Date()`. */
+  now?: Date;
+  /** Warning sink (tests capture; default: console.warn). One line per warning. */
+  warn?: (message: string) => void;
+}
+
+export interface GcVersionsResult {
+  /** Version ids actually deleted this pass (possibly empty). */
+  deleted: EngineVersionId[];
+  /** `deleted.length` — convenience for callers that only want the count. */
+  deletedCount: number;
+}
+
+const NO_DELETIONS: Omit<GcVersionsResult, 'deleted'> & { deleted: EngineVersionId[] } = {
+  deleted: [],
+  deletedCount: 0,
+};
+
+/**
+ * Extract the `EngineVersionId` path segment embedded in a pidfile's
+ * `engineDir` (e.g. `.../dist-versions/<id>/engine`), or `undefined` if none
+ * of the path segments match the version-id format (e.g. a dev/unpublished
+ * `src/engine` run, which references no published version and therefore
+ * blocks nothing).
+ */
+function versionIdFromEngineDir(engineDir: string): EngineVersionId | undefined {
+  const segments = engineDir.split(/[\\/]/);
+  const match = segments.find((segment) => isEngineVersionId(segment));
+  return match as EngineVersionId | undefined;
+}
+
+/**
+ * Read the fleet-wide set of version ids currently referenced by a LIVE
+ * daemon pidfile, cross-checking every repo in the project registry.
+ *
+ * Fail-closed contract: this NEVER silently ignores an error.
+ *   - Registry enumeration failure (corrupt/unreadable registry.json) ->
+ *     throws; caller aborts the whole GC pass with zero deletions.
+ *   - A pidfile that's absent (ENOENT) for a given repo -> that repo simply
+ *     references nothing; not an error.
+ *   - A pidfile that exists but can't be read/parsed (permission denied,
+ *     corrupt JSON) -> throws; caller aborts the whole GC pass with zero
+ *     deletions. We cannot prove that version is unreferenced, so it (and
+ *     every other candidate) is protected this pass.
+ */
+async function readLiveReferencedVersionIds(
+  registryPath: string,
+): Promise<Set<EngineVersionId>> {
+  const records: ProjectRecord[] = await readRegistry(registryPath);
+
+  const referenced = new Set<EngineVersionId>();
+  for (const record of records) {
+    const pidfilePath = join(record.path, PIDFILE_RELATIVE_PATH);
+
+    let raw: string;
+    try {
+      raw = await readFile(pidfilePath, 'utf-8');
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') continue; // no pidfile: fine
+      throw new Error(
+        `gcVersions: cannot read pidfile at ${pidfilePath}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (err) {
+      throw new Error(
+        `gcVersions: pidfile at ${pidfilePath} is corrupt (invalid JSON): ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+
+    const engineDir = (parsed as { engineDir?: unknown })?.engineDir;
+    if (typeof engineDir !== 'string') continue; // older pidfile shape: references nothing knowable
+
+    const versionId = versionIdFromEngineDir(engineDir);
+    if (versionId) referenced.add(versionId);
+  }
+
+  return referenced;
+}
+
+/**
+ * GC old published versions under `dist-versions/`, per the four-condition
+ * fail-closed policy documented at the top of this section (FR-15). Deletes
+ * oldest-eligible-first; a single version's delete failing is logged and
+ * does NOT stop the remaining eligible versions from being attempted
+ * (best-effort on the delete step itself — the fail-closed guarantee is
+ * about never deleting on incomplete/erroring READS, not about one delete's
+ * failure blocking siblings).
+ */
+export async function gcVersions(opts: GcVersionsOpts): Promise<GcVersionsResult> {
+  const env = opts.env ?? process.env;
+  const warn = opts.warn ?? ((message: string) => console.warn(message));
+  const minAgeMsecs = opts.minAgeMsecs ?? DEFAULT_MIN_AGE_MSECS;
+  const keepLastK = opts.keepLastK ?? DEFAULT_KEEP_LAST_K;
+  const now = opts.now ?? new Date();
+
+  const storeRoot = resolveEngineStoreRoot({ conductorRoot: opts.conductorRoot, env });
+  const registryPath = opts.registryPath ?? resolveRegistryPath({ env });
+
+  let liveReferenced: Set<EngineVersionId>;
+  try {
+    liveReferenced = await readLiveReferencedVersionIds(registryPath);
+  } catch (err) {
+    warn(
+      `[gcVersions] aborting GC pass, zero deletions: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+    return { ...NO_DELETIONS };
+  }
+
+  const versions = await listVersions(storeRoot); // ascending: oldest first (id begins with timestamp)
+  const protectedByKeepK = new Set(versions.slice(Math.max(0, versions.length - keepLastK)));
+
+  const deleted: EngineVersionId[] = [];
+  for (const versionId of versions) {
+    if (versionId === opts.currentVersionId) continue; // condition 1: never delete current
+    if (liveReferenced.has(versionId)) continue; // condition 2: never delete live-referenced
+    if (protectedByKeepK.has(versionId)) continue; // condition 4: keep newest K regardless of age
+
+    const versionDir = join(storeRoot, versionId);
+    let versionStat;
+    try {
+      versionStat = await lstat(versionDir);
+    } catch {
+      continue; // vanished already (e.g. deleted out-of-band) — nothing to do
+    }
+    const ageMs = now.getTime() - versionStat.mtimeMs;
+    if (ageMs < minAgeMsecs) continue; // condition 3: too young
+
+    try {
+      await rm(versionDir, { recursive: true, force: true });
+      deleted.push(versionId);
+    } catch (err) {
+      warn(
+        `[gcVersions] failed to delete ${versionDir}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
+
+  return { deleted, deletedCount: deleted.length };
 }

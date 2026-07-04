@@ -20,7 +20,7 @@
 // `--out-dir <stagingDir>` and must exit 0 on success.
 
 import { execa } from 'execa';
-import { lstat, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -77,21 +77,27 @@ async function migrateLegacyDistIfNeeded(opts) {
 // that could drift from the real one, this loads the single source of
 // truth directly: transpile `src/engine/engine-store.ts` with esbuild (an
 // existing transitive dependency of `tsup`, already vendored in
-// node_modules) and import the result. No bundling, no type-checking — just
-// strip types from this one self-contained module (it only imports Node
-// builtins).
+// node_modules) and import the result. `engine-store.ts` now also imports
+// its sibling `registry.ts` (Task 7, GC cross-checks the project registry),
+// so this loader bundles rather than transforms-in-isolation — otherwise the
+// emitted `.mjs` would `import` a `registry.js` that doesn't exist next to
+// it. Bundling is still scoped to Node builtins only (no npm deps to
+// externalize): both source files are self-contained.
 async function loadEngineStore() {
   const scriptDir = dirname(fileURLToPath(import.meta.url));
   const sourcePath = join(scriptDir, '..', 'src', 'engine', 'engine-store.ts');
-  const source = await readFile(sourcePath, 'utf-8');
 
   const esbuild = await import('esbuild');
-  const { code } = await esbuild.transform(source, {
-    loader: 'ts',
+  const { outputFiles } = await esbuild.build({
+    entryPoints: [sourcePath],
+    bundle: true,
+    write: false,
+    platform: 'node',
     format: 'esm',
     target: 'node20',
-    sourcefile: 'engine-store.ts',
+    packages: 'external',
   });
+  const code = outputFiles[0].text;
 
   const tmpFile = join(await mkdtemp(join(tmpdir(), 'engine-store-loader-')), 'engine-store.mjs');
   await writeFile(tmpFile, code, 'utf-8');
@@ -144,7 +150,7 @@ function resolveTsupCommand(opts) {
 export async function publish(opts) {
   const env = opts.env ?? process.env;
   const conductorRoot = resolve(opts.conductorRoot);
-  const { resolveEngineStoreRoot, computeVersionId, flipCurrent } = await loadEngineStore();
+  const { resolveEngineStoreRoot, computeVersionId, flipCurrent, gcVersions } = await loadEngineStore();
   const storeRoot = resolveEngineStoreRoot({ conductorRoot, env });
 
   await migrateLegacyDistIfNeeded({
@@ -179,6 +185,25 @@ export async function publish(opts) {
     await rename(stagingDir, finalDir);
 
     await flipCurrent({ conductorRoot, versionId, env });
+
+    // GC old versions (Task 7, FR-15). Safety-critical + fail-closed by
+    // design: `gcVersions` itself never deletes on an erroring read (registry
+    // enumeration failure, an unreadable fleet pidfile) — it warns and
+    // returns zero deletions instead. Belt-and-braces: any *unexpected*
+    // throw out of `gcVersions` is also caught here so a GC hiccup never
+    // turns a successful publish into a failed one (exit 0 either way).
+    try {
+      const { deletedCount } = await gcVersions({ conductorRoot, currentVersionId: versionId, env });
+      if (deletedCount > 0) {
+        console.error(`[publish-engine] gc: deleted ${deletedCount} old version(s)`);
+      }
+    } catch (err) {
+      console.error(
+        `[publish-engine] gc: skipped (unexpected error): ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
 
     return { versionId, dir: finalDir };
   } catch (err) {
