@@ -36,6 +36,10 @@ import { createBlockerResolver } from './engine/blocker-resolver.js';
 import { createGhBlockerRunner } from './engine/gh-blocker-runner.js';
 import { captureEngineIdentity } from './engine/engine-identity.js';
 import {
+  readRestartMarkerWithStatus,
+  clearRestartMarker,
+} from './engine/restart-intent.js';
+import {
   isHalted,
   isProcessed,
   hasWarned,
@@ -245,6 +249,22 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   }
   const isArmed = (config?.auto_restart_on_stale_engine ?? false) && isSelfHost;
   log(`${isArmed ? 'ARMED' : 'DISARMED'} — stale-engine auto-restart`);
+
+  // Task 9: Startup handshake — check for restart marker and log if present
+  // If engineIdentity is null, the check was disabled (capture failed), so skip handshake.
+  if (engineIdentity !== null) {
+    const markerStatus = await readRestartMarkerWithStatus(projectRoot, log);
+
+    if (markerStatus.kind === 'present') {
+      const marker = markerStatus.marker!;
+      log(
+        `restarted for engine refresh — from ${marker.fromIdentity} to ${marker.targetIdentity}, fresh ${engineIdentity}`,
+      );
+      await clearRestartMarker(projectRoot);
+    }
+    // If absent or absent-corrupt: no handshake log.
+    // Task 6 (readRestartMarkerWithStatus) already logs + removes corrupt markers.
+  }
 
   // One shared provider + event bus across workers (rate limits are shared).
   const events = new ConductorEventEmitter();
