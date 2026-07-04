@@ -14,6 +14,14 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 - **Daemon lifecycle controls: pause/resume/restart with versioned engine store (issue #215).** Operators can now pause individual or all daemons (`conduct pause --all`), preventing new work dispatch while preserving state; resume mirrors pause. Safe in-place restart (`conduct restart --all`) preserves the daemon's tmux session, window layout, and scrollback — an operator watching a daemon stays connected. Restart respects pause state (restarted daemon remains paused). Rebuilding the shared engine no longer crashes running daemons (#215 fix): each daemon pins its engine version at startup and runs that version until restart; restarted daemons adopt the newest build. Versioned engine store (`src/engine/engine-store.ts`) manages versions durably with safe cleanup (four-condition GC: not current, not in-use by a live pidfile, older than min-age, outside keep-last-K). Status surface shows running/paused/stopped/stale state, pause timestamp/operator, and which engine version each daemon is running.
 - Added model fallback ladder — reactive downgrade on unavailable models (#186)
+- **Daemon auto-restart on stale engine (self-host only).** When enabled in self-host mode, the
+  daemon monitors the engine binary (`dist/index.js`) for stale code between idle passes. If stale
+  code is detected and no tasks are in-flight, the daemon writes a restart intent marker
+  (`.daemon/RESTART_PENDING`) and exits with code 0, allowing the configured respawn transport
+  (PR #215) to relaunch with fresh code. Enable with `auto_restart_on_stale_engine: true` in
+  project config; the feature is ignored in non-self-host environments and disabled in once-mode.
+  Configuration is read once at startup; on non-convergence (fresh identity ≠ target), suppression
+  prevents restart loops.
 - **Halt-PR rehabilitation at finish (#271).** When `finish` completes a feature whose
   recorded PR was born as a `needs-remediation` halt PR, a new engine step
   (`rehabilitateHaltPr`, run in the daemon's post-run tail) deterministically flips

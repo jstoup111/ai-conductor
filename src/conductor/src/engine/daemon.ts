@@ -155,6 +155,42 @@ export interface DaemonDeps {
   /** Injectable clock for the wall-clock ceiling (tests pass a fake). */
   now?: () => number;
 
+  // ── Stale-engine detection (Task 12+) ──────────────────────────────────────
+  /**
+   * Stale-engine checker: detects if the captured engine binary differs from the
+   * current on-disk binary. If capture failed, returns a disabled checker that
+   * always reports 'current' (conservative: assume fresh until proven otherwise).
+   * Optional for backward compatibility; tests inject this to simulate detection.
+   *
+   * Task 13: Extended to optionally provide identity methods for restart requests.
+   */
+  staleEngineChecker?: {
+    check(): 'stale' | 'current' | 'indeterminate';
+    /** Task 13: Optional method to retrieve the captured engine identity. */
+    capturedIdentity?: () => string | null;
+    /** Task 13: Optional method to retrieve the current (target) engine identity. */
+    targetIdentity?: () => string | null;
+  };
+  /**
+   * Called when a stale engine is detected AND all gates pass (continuous,
+   * self-host, flag enabled, checker armed, not suppressed). Implements the
+   * restart sequence: write marker → release lock → exit(0). Optional for
+   * backward compatibility; tests inject a no-op to verify gate behavior.
+   * Task 13 implements the real requester wiring in daemon-cli.ts.
+   */
+  requestRestart?: (opts: {
+    fromIdentity: string | null;
+    targetIdentity: string | null;
+  }) => Promise<void>;
+
+  /**
+   * Task 11: Check if the current engine identity is suppressed due to
+   * non-convergence at boot. Returns true if suppressed (hold restart),
+   * false if not suppressed (proceed with restart) or on error (re-arm).
+   * Optional for backward compatibility; tests inject to verify gate behavior.
+   */
+  isSuppressed?: (currentIdentity: string | null) => Promise<boolean>;
+
   // ── Halt-reconciliation hooks (ADR-013) — all OPTIONAL so the pure core
   //    (and its no-git tests) run unchanged when they are absent. ──────────────
   /**
@@ -228,6 +264,12 @@ export interface DaemonOptions {
   idlePollMs?: number;
   /** Stop after this many consecutive empty polls (default Infinity). */
   maxIdlePolls?: number;
+
+  // ── Stale-engine detection gate chain (Task 12+) ───────────────────────────
+  /** True when this daemon is building the harness itself (self-host mode). */
+  isSelfHost?: boolean;
+  /** Config flag: auto-restart on stale engine (default false). */
+  autoRestartOnStaleEngine?: boolean;
 }
 
 export type DaemonStopReason =
@@ -512,6 +554,56 @@ export async function runDaemon(
             log(
               `[daemon] hasRestartPending check failed: ${err instanceof Error ? err.message : String(err)}; skipping restart check`,
             );
+          }
+        }
+
+        // Task 12: stale-engine detection gate chain. Evaluate gates in order:
+        // 1. continuous mode (NOT once-mode)
+        // 2. self-host enabled
+        // 3. config flag enabled
+        // 4. checker armed (checker exists)
+        // 5. (Task 11 addition) not suppressed
+        // If all gates pass, call the checker. On 'stale' verdict, (Task 13) call
+        // requestRestart. If ANY gate fails, skip the check and continue idle behavior.
+        const isSharedMode = !options.once; // continuous mode = shared/not-once
+        const shouldCheckStale =
+          isSharedMode && // gate 1: continuous mode (not once)
+          options.isSelfHost === true && // gate 2: self-host enabled
+          options.autoRestartOnStaleEngine === true && // gate 3: flag enabled
+          deps.staleEngineChecker !== undefined; // gate 4: checker armed
+
+        if (shouldCheckStale && deps.staleEngineChecker) {
+          const verdict = deps.staleEngineChecker.check();
+
+          // Task 13: Handle stale verdict with in-flight re-verify
+          if (verdict === 'stale') {
+            // Task 11: Check if this identity is suppressed before proceeding.
+            // Suppressed identities hold (no restart request) and log once per session.
+            const targetIdentity = deps.staleEngineChecker.targetIdentity?.() ?? null;
+            const suppressed = deps.isSuppressed ? await deps.isSuppressed(targetIdentity) : false;
+
+            if (suppressed) {
+              // Restart suppressed for this identity: hold and don't request restart.
+              // The suppression check has already logged once per session.
+              // Fall through to idle behavior (sleep/sweep), don't request restart.
+            } else {
+              // Not suppressed: proceed with restart request (if gates still pass).
+              // Re-verify that inFlight is still empty before requesting restart.
+              // A task could have been added between the verdict check and now.
+              if (inFlight.size === 0) {
+                // All gates still pass, request restart with identities
+                const fromIdentity = deps.staleEngineChecker.capturedIdentity?.() ?? null;
+
+                if (deps.requestRestart) {
+                  await deps.requestRestart({
+                    fromIdentity,
+                    targetIdentity,
+                  });
+                }
+              }
+              // If inFlight not empty, someone added a task while we checked.
+              // Fall through to next iteration; will not enter idle branch again.
+            }
           }
         }
 

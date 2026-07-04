@@ -177,6 +177,8 @@ export function validateConfig(
     'harness_self_host',
     // Model availability fallback ladder.
     'model_fallback_ladder',
+    // Daemon auto-restart on stale engine.
+    'auto_restart_on_stale_engine',
   ]);
   for (const key of Object.keys(obj)) {
     if (!knownTopLevelKeys.has(key)) {
@@ -511,6 +513,27 @@ export function validateConfig(
         return errVal('model_fallback_ladder must contain only non-empty strings');
       }
     }
+  }
+
+  // auto_restart_on_stale_engine — daemon auto-restart on stale engine.
+  // Contract (total — never throws, never undefined):
+  //   C1  absent / null → false (no warning)
+  //   C2  true or false → that value (no warning)
+  //   C3  other value → false + one warning
+  if (obj.auto_restart_on_stale_engine !== undefined && obj.auto_restart_on_stale_engine !== null) {
+    if (typeof obj.auto_restart_on_stale_engine === 'boolean') {
+      // C2: valid boolean — accept as-is, no warning
+      // obj.auto_restart_on_stale_engine is already correct
+    } else {
+      // C3: invalid value — log warning and resolve to false
+      warnings.push(
+        `auto_restart_on_stale_engine has invalid value ${JSON.stringify(obj.auto_restart_on_stale_engine)}, falling back to false.`,
+      );
+      obj.auto_restart_on_stale_engine = false;
+    }
+  } else {
+    // C1: absent or null → false without warning
+    obj.auto_restart_on_stale_engine = false;
   }
 
   return { ok: true, config: obj as HarnessConfig, warnings };
