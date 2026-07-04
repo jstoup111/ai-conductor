@@ -31,6 +31,7 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- **Test suite now detects and fails on `.pipeline` leak into process cwd.** The conductor test suite leaked a real `.pipeline/HALT`/`gates/`/`DONE` into the process working directory, poisoning live daemon worktrees when tests ran concurrent to a build. `Conductor.projectRoot` is now required and the suite fails loudly on any cwd `.pipeline` leak (#252).
 - engineer land keys the intake marker by the plan stem (was idea slug), so owner-gate and issue auto-close resolve land-authored specs (#207)
 - **`engineer migrate-issue-deps` now writes dependency links the live GitHub API accepts.**
   The blocked_by POST sent `-f issue=<owner/repo#N>`, which the live dependencies endpoint

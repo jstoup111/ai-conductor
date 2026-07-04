@@ -1,6 +1,8 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import { execa } from 'execa';
 import { execFileSync } from 'node:child_process';
+import { rmSync } from 'node:fs';
+import { join } from 'node:path';
 import { detectsModelUnavailable } from '../../src/execution/claude-provider.js';
 
 /**
@@ -26,6 +28,15 @@ const killSwitchDisabled = process.env.MODEL_UNAVAILABLE_SMOKE === '0';
 const shouldRun = claudeBinaryAvailable() && !killSwitchDisabled;
 
 describe.skipIf(!shouldRun)('claude CLI model-unavailable signature (real binary)', () => {
+  afterEach(() => {
+    // Clean up any .pipeline state created by the Claude binary during the test.
+    // The Claude CLI may write memory-tracking files to .pipeline/ in the cwd;
+    // this guard ensures the test leaves no footprint for the global-setup guard
+    // to detect as a leak.
+    const pipelinePath = join(process.cwd(), '.pipeline');
+    rmSync(pipelinePath, { recursive: true, force: true });
+  });
+
   it(
     'matches MODEL_UNAVAILABLE_RE for a nonexistent --model value',
     async () => {

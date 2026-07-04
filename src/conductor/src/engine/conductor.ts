@@ -256,7 +256,7 @@ export interface ConductorOptions {
   fromStep?: StepName;
   mode?: RunMode;
   config?: HarnessConfig;
-  projectRoot?: string;
+  projectRoot: string;
   /** Feature description — used by the engine-run worktree step to name the
    *  worktree/branch when state.feature_desc isn't set yet. */
   featureDesc?: string;
@@ -477,7 +477,8 @@ export class Conductor {
     this.fromStep = opts.fromStep;
     this.mode = opts.mode ?? 'default';
     this.config = opts.config ?? {};
-    this.projectRoot = opts.projectRoot ?? process.cwd();
+    if (!opts.projectRoot) throw new Error('Conductor requires an explicit projectRoot — refusing to default to process.cwd()');
+    this.projectRoot = opts.projectRoot;
     this.featureDesc = opts.featureDesc;
     this.verifyArtifacts = opts.verifyArtifacts ?? false;
     this.freshContextPerStep = opts.freshContextPerStep ?? false;
