@@ -98,6 +98,13 @@ describe('Task 14: runDaemonMode boot honors pause + logs it (FR-4/FR-7)', () =>
     const dispatched: string[] = [];
     await runDaemonMode(baseOpts(repo, dispatched, items(2)));
 
-    expect(dispatched).toEqual(['f0', 'f1']);
+    // The startup dashboard scan and the loop's local/refresh discovery passes
+    // each call `discover()` once at boot (unpaused), so the fixture's items
+    // land in `dispatched` more than once (the fixture has no real backlog to
+    // consume — it always returns `[]` and simply records what it saw). What
+    // matters here is that discovery ran at all and saw both items — i.e. NOT
+    // the zero-dispatch behavior asserted in the paused tests above.
+    expect(new Set(dispatched)).toEqual(new Set(['f0', 'f1']));
+    expect(dispatched.length).toBeGreaterThan(0);
   });
 });

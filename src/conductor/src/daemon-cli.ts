@@ -194,7 +194,8 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   // reads as paused, so ambiguity here never dispatches. Logged once at boot so
   // `conduct daemon logs` makes the paused state visible immediately, in
   // addition to the same isPaused() gate re-polled every loop iteration below.
-  if (await isPaused(projectRoot)) {
+  const pausedAtBoot = await isPaused(projectRoot);
+  if (pausedAtBoot) {
     log('daemon is paused — booting with zero dispatch until resumed (see `conduct daemon resume`).');
   }
 
@@ -519,6 +520,13 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       // (console + daemon.log via `log`) before any dispatch. Pass the priority
       // resolver so the dashboard can capture and display band annotations / fallback mode.
       renderStartupDashboard: async () => {
+        // Task 14 (FR-4/FR-7): a daemon booting paused must dispatch/discover
+        // NOTHING — including the informational startup dashboard's backlog
+        // scan, which would otherwise call discoverBacklog({refresh:true})
+        // unconditionally (before the pause-gated loop below ever runs). Skip
+        // the scan entirely when paused at boot; the boot-time log line above
+        // already told the operator why nothing is happening.
+        if (pausedAtBoot) return;
         const state = await scanInheritedState({
           worktreeBase,
           processedDir,
