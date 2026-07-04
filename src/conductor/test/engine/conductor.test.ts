@@ -103,7 +103,7 @@ describe('engine/conductor', () => {
 
   it('starts at step index 0 for new feature', async () => {
     const runner = createMockStepRunner();
-    const conductor = new Conductor({ stateFilePath: statePath, stepRunner: runner, events });
+    const conductor = new Conductor({ projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events });
 
     await conductor.run();
 
@@ -130,7 +130,7 @@ describe('engine/conductor', () => {
         return { success: true };
       },
     };
-    const conductor = new Conductor({ stateFilePath: statePath, stepRunner: runner, events });
+    const conductor = new Conductor({ projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events });
 
     await conductor.run();
 
@@ -143,7 +143,7 @@ describe('engine/conductor', () => {
 
   it('marks step done after success', async () => {
     const runner = createMockStepRunner();
-    const conductor = new Conductor({ stateFilePath: statePath, stepRunner: runner, events });
+    const conductor = new Conductor({ projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events });
 
     await conductor.run();
 
@@ -165,7 +165,7 @@ describe('engine/conductor', () => {
         return { success: true };
       },
     };
-    const conductor = new Conductor({ stateFilePath: statePath, stepRunner: runner, events });
+    const conductor = new Conductor({ projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events });
 
     await conductor.run();
 
@@ -179,7 +179,7 @@ describe('engine/conductor', () => {
 
   it('sets feature_status=complete when all steps done', async () => {
     const runner = createMockStepRunner();
-    const conductor = new Conductor({ stateFilePath: statePath, stepRunner: runner, events });
+    const conductor = new Conductor({ projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events });
 
     await conductor.run();
 
@@ -192,7 +192,7 @@ describe('engine/conductor', () => {
 
   it('emits step_started and step_completed events', async () => {
     const runner = createMockStepRunner();
-    const conductor = new Conductor({ stateFilePath: statePath, stepRunner: runner, events });
+    const conductor = new Conductor({ projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events });
 
     const emitted: Array<{ type: string; step: string }> = [];
     events.on('step_started', (e) => {
@@ -228,6 +228,7 @@ describe('engine/conductor', () => {
       }),
     };
     const conductor = new Conductor({
+      projectRoot: dir,
       stateFilePath: statePath,
       stepRunner: runner,
       events,
@@ -260,6 +261,7 @@ describe('engine/conductor', () => {
       },
     };
     const conductor = new Conductor({
+      projectRoot: dir,
       stateFilePath: statePath,
       stepRunner: runner,
       events,
@@ -283,6 +285,7 @@ describe('engine/conductor', () => {
         step === 'stories' ? { success: false, output: 'boom' } : { success: true },
     };
     const conductor = new Conductor({
+      projectRoot: dir,
       stateFilePath: statePath,
       stepRunner: runner,
       events,
@@ -351,6 +354,7 @@ describe('engine/conductor', () => {
     it('resets the session before every dispatched step when on', async () => {
       const { runner, log } = trackingRunner();
       const conductor = new Conductor({
+        projectRoot: dir,
         stateFilePath: statePath,
         stepRunner: runner,
         events,
@@ -372,6 +376,7 @@ describe('engine/conductor', () => {
     it('does NOT reset when off (interactive /conduct keeps its design session)', async () => {
       const { runner, log } = trackingRunner();
       const conductor = new Conductor({
+        projectRoot: dir,
         stateFilePath: statePath,
         stepRunner: runner,
         events,
@@ -398,6 +403,7 @@ describe('engine/conductor', () => {
 
       const { runner, log } = trackingRunner();
       const conductor = new Conductor({
+        projectRoot: dir,
         stateFilePath: statePath,
         stepRunner: runner,
         events,
@@ -427,6 +433,7 @@ describe('engine/conductor', () => {
 
       const { runner, log } = trackingRunner();
       const conductor = new Conductor({
+        projectRoot: dir,
         stateFilePath: statePath,
         stepRunner: runner,
         events,
@@ -456,6 +463,7 @@ describe('engine/conductor', () => {
 
       const { runner, log } = trackingRunner();
       const conductor = new Conductor({
+        projectRoot: dir,
         stateFilePath: statePath,
         stepRunner: runner,
         events,
@@ -1092,6 +1100,7 @@ describe('engine/conductor', () => {
         step === 'memory' ? { success: false } : { success: true },
     };
     const conductor = new Conductor({
+      projectRoot: dir,
       stateFilePath: statePath,
       stepRunner: runner,
       events,
@@ -1123,6 +1132,7 @@ describe('engine/conductor', () => {
       },
     };
     const conductor = new Conductor({
+      projectRoot: dir,
       stateFilePath: statePath,
       stepRunner: runner,
       events,
@@ -1146,6 +1156,7 @@ describe('engine/conductor', () => {
       },
     };
     const conductor = new Conductor({
+      projectRoot: dir,
       stateFilePath: statePath,
       stepRunner: runner,
       events,
@@ -1176,7 +1187,7 @@ describe('engine/conductor', () => {
         return { success: true };
       },
     };
-    const conductor = new Conductor({ stateFilePath: statePath, stepRunner: runner, events, resume: true });
+    const conductor = new Conductor({ projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events, resume: true });
 
     await conductor.run();
 
@@ -1200,7 +1211,7 @@ describe('engine/conductor', () => {
         return { success: true };
       },
     };
-    const conductor = new Conductor({ stateFilePath: statePath, stepRunner: runner, events, resume: true });
+    const conductor = new Conductor({ projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events, resume: true });
 
     await conductor.run();
 
@@ -1226,7 +1237,7 @@ describe('engine/conductor', () => {
         return { success: true };
       },
     };
-    const conductor = new Conductor({ stateFilePath: statePath, stepRunner: runner, events, fromStep: 'stories' });
+    const conductor = new Conductor({ projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events, fromStep: 'stories' });
 
     await conductor.run();
 
@@ -1247,6 +1258,7 @@ describe('engine/conductor', () => {
       },
     };
     const conductor = new Conductor({
+      projectRoot: dir,
       stateFilePath: statePath,
       stepRunner: runner,
       events,
@@ -1279,7 +1291,7 @@ describe('engine/conductor', () => {
         return { success: true };
       },
     };
-    const conductor = new Conductor({ stateFilePath: statePath, stepRunner: runner, events });
+    const conductor = new Conductor({ projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events });
 
     await conductor.run();
 
@@ -1301,7 +1313,7 @@ describe('engine/conductor', () => {
         return { success: true };
       },
     };
-    const conductor = new Conductor({ stateFilePath: statePath, stepRunner: runner, events });
+    const conductor = new Conductor({ projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events });
 
     await conductor.run();
 
@@ -1323,7 +1335,7 @@ describe('engine/conductor', () => {
         return { success: true };
       },
     };
-    const conductor = new Conductor({ stateFilePath: statePath, stepRunner: runner, events });
+    const conductor = new Conductor({ projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events });
 
     await conductor.run();
 
@@ -1339,7 +1351,7 @@ describe('engine/conductor', () => {
     await writeState(statePath, { complexity_tier: 'S' } as ConductState);
 
     const runner = createMockStepRunner();
-    const conductor = new Conductor({ stateFilePath: statePath, stepRunner: runner, events });
+    const conductor = new Conductor({ projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events });
 
     await conductor.run();
 
@@ -1363,7 +1375,7 @@ describe('engine/conductor', () => {
     await writeState(statePath, { complexity_tier: 'S' } as ConductState);
 
     const runner = createMockStepRunner();
-    const conductor = new Conductor({ stateFilePath: statePath, stepRunner: runner, events });
+    const conductor = new Conductor({ projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events });
 
     const tierSkipEvents: Array<{ step: string; tier: string }> = [];
     events.on('tier_skip', (e) => {
@@ -1394,7 +1406,7 @@ describe('engine/conductor', () => {
         return { success: true };
       },
     };
-    const conductor = new Conductor({ stateFilePath: statePath, stepRunner: runner, events });
+    const conductor = new Conductor({ projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events });
 
     await conductor.run();
 
@@ -1425,6 +1437,7 @@ describe('engine/conductor', () => {
       },
     };
     const conductor = new Conductor({
+      projectRoot: dir,
       stateFilePath: statePath,
       stepRunner: runner,
       events,
@@ -1443,6 +1456,7 @@ describe('engine/conductor', () => {
 
     const runner = createMockStepRunner();
     const conductor = new Conductor({
+      projectRoot: dir,
       stateFilePath: statePath,
       stepRunner: runner,
       events,
@@ -1476,6 +1490,7 @@ describe('engine/conductor', () => {
       },
     };
     const conductor = new Conductor({
+      projectRoot: dir,
       stateFilePath: statePath,
       stepRunner: runner,
       events,
@@ -1507,6 +1522,7 @@ describe('engine/conductor', () => {
       },
     };
     const conductor = new Conductor({
+      projectRoot: dir,
       stateFilePath: statePath,
       stepRunner: runner,
       events,
@@ -1543,6 +1559,7 @@ describe('engine/conductor', () => {
     const runner = createMockStepRunner();
     const onCheckpoint = vi.fn().mockResolvedValue('continue' as const);
     const conductor = new Conductor({
+      projectRoot: dir,
       stateFilePath: statePath,
       stepRunner: runner,
       events,
@@ -1581,6 +1598,7 @@ describe('engine/conductor', () => {
     const runner = createMockStepRunner();
     const onCheckpoint = vi.fn().mockResolvedValue('continue' as const);
     const conductor = new Conductor({
+      projectRoot: dir,
       stateFilePath: statePath,
       stepRunner: runner,
       events,
@@ -1609,6 +1627,7 @@ describe('engine/conductor', () => {
     const runner = createMockStepRunner();
     const onCheckpoint = vi.fn().mockResolvedValue('continue' as const);
     const conductor = new Conductor({
+      projectRoot: dir,
       stateFilePath: statePath,
       stepRunner: runner,
       events,
@@ -1650,6 +1669,7 @@ describe('engine/conductor', () => {
     const runner = createMockStepRunner();
     const onCheckpoint = vi.fn().mockResolvedValue('continue' as const);
     const conductor = new Conductor({
+      projectRoot: dir,
       stateFilePath: statePath,
       stepRunner: runner,
       events,
@@ -1694,6 +1714,7 @@ describe('engine/conductor', () => {
     };
     const onCheckpoint = vi.fn().mockResolvedValue('continue' as const);
     const conductor = new Conductor({
+      projectRoot: dir,
       stateFilePath: statePath,
       stepRunner: runner,
       events,
@@ -1733,6 +1754,7 @@ describe('engine/conductor', () => {
     };
     const onCheckpoint = vi.fn().mockResolvedValue('quit' as const);
     const conductor = new Conductor({
+      projectRoot: dir,
       stateFilePath: statePath,
       stepRunner: runner,
       events,
@@ -1794,7 +1816,7 @@ describe('engine/conductor', () => {
       },
     };
 
-    const conductor = new Conductor({ stateFilePath: statePath, stepRunner: runner, events });
+    const conductor = new Conductor({ projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events });
     await conductor.run();
 
     // SIGINT handler should have been registered
@@ -1923,6 +1945,7 @@ describe('engine/conductor', () => {
       const onNavigate = vi.fn(async () => 'stories' as StepName);
 
       const conductor = new Conductor({
+        projectRoot: dir,
         stateFilePath: statePath,
         stepRunner: runner,
         events,
@@ -1972,6 +1995,7 @@ describe('engine/conductor', () => {
       };
       const onCheckpoint = vi.fn().mockResolvedValue('continue' as const);
       const conductor = new Conductor({
+        projectRoot: dir,
         stateFilePath: statePath,
         stepRunner: runner,
         events,
@@ -2025,6 +2049,7 @@ describe('engine/conductor', () => {
       const onNavigate = vi.fn(async () => null);
 
       const conductor = new Conductor({
+        projectRoot: dir,
         stateFilePath: statePath,
         stepRunner: runner,
         events,
@@ -2061,7 +2086,7 @@ describe('engine/conductor', () => {
   describe('feature completion', () => {
     it('emits feature_complete event when all steps done', async () => {
       const runner = createMockStepRunner();
-      const conductor = new Conductor({ stateFilePath: statePath, stepRunner: runner, events });
+      const conductor = new Conductor({ projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events });
 
       const completeEvents: Array<{ type: string; prUrl?: string }> = [];
       events.on('feature_complete', (e) => {
@@ -2081,7 +2106,7 @@ describe('engine/conductor', () => {
           return { success: true };
         },
       };
-      const conductor = new Conductor({ stateFilePath: statePath, stepRunner: runner, events });
+      const conductor = new Conductor({ projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events });
 
       const completeEvents: Array<{ prUrl?: string }> = [];
       events.on('feature_complete', (e) => {
@@ -2132,6 +2157,7 @@ describe('engine/conductor', () => {
         },
       };
       const conductor = new Conductor({
+        projectRoot: dir,
         stateFilePath: statePath,
         stepRunner: runner,
         events,
@@ -2159,6 +2185,7 @@ describe('engine/conductor', () => {
         },
       };
       const conductor = new Conductor({
+        projectRoot: dir,
         stateFilePath: statePath,
         stepRunner: runner,
         events,
@@ -2203,6 +2230,7 @@ describe('engine/conductor', () => {
       };
       const onRecovery = vi.fn().mockResolvedValue('quit' as const);
       const conductor = new Conductor({
+        projectRoot: dir,
         stateFilePath: statePath,
         stepRunner: runner,
         events,
@@ -2230,6 +2258,7 @@ describe('engine/conductor', () => {
       };
       const onRecovery = vi.fn().mockResolvedValueOnce('retry' as const);
       const conductor = new Conductor({
+        projectRoot: dir,
         stateFilePath: statePath,
         stepRunner: runner,
         events,
@@ -2258,6 +2287,7 @@ describe('engine/conductor', () => {
       };
       const onRecovery = vi.fn().mockResolvedValue('skip' as const);
       const conductor = new Conductor({
+        projectRoot: dir,
         stateFilePath: statePath,
         stepRunner: runner,
         events,
@@ -2286,6 +2316,7 @@ describe('engine/conductor', () => {
       };
       const onRecovery = vi.fn().mockResolvedValue('quit' as const);
       const conductor = new Conductor({
+        projectRoot: dir,
         stateFilePath: statePath,
         stepRunner: runner,
         events,
@@ -2323,6 +2354,7 @@ describe('engine/conductor', () => {
       };
       const onRecovery = vi.fn().mockResolvedValue('quit' as const);
       const conductor = new Conductor({
+        projectRoot: dir,
         stateFilePath: statePath,
         stepRunner: runner,
         events,
@@ -2364,6 +2396,7 @@ describe('engine/conductor', () => {
       const onRecovery = vi.fn().mockResolvedValueOnce('back' as const);
       const onNavigate = vi.fn().mockResolvedValue('explore' as StepName);
       const conductor = new Conductor({
+        projectRoot: dir,
         stateFilePath: statePath,
         stepRunner: runner,
         events,
@@ -2394,6 +2427,7 @@ describe('engine/conductor', () => {
       };
       const onRecovery = vi.fn().mockResolvedValueOnce('interactive' as const);
       const conductor = new Conductor({
+        projectRoot: dir,
         stateFilePath: statePath,
         stepRunner: runner,
         events,
@@ -2415,6 +2449,7 @@ describe('engine/conductor', () => {
       const runner = createMockStepRunner();
       const onComplexityAssessment = vi.fn().mockResolvedValue('M' as const);
       const conductor = new Conductor({
+        projectRoot: dir,
         stateFilePath: statePath,
         stepRunner: runner,
         events,
@@ -2429,6 +2464,7 @@ describe('engine/conductor', () => {
     it('does not dispatch complexity to stepRunner.run', async () => {
       const runner = createMockStepRunner();
       const conductor = new Conductor({
+        projectRoot: dir,
         stateFilePath: statePath,
         stepRunner: runner,
         events,
@@ -2446,6 +2482,7 @@ describe('engine/conductor', () => {
       const runner = createMockStepRunner();
       const onComplexityAssessment = vi.fn().mockResolvedValue('S' as const);
       const conductor = new Conductor({
+        projectRoot: dir,
         stateFilePath: statePath,
         stepRunner: runner,
         events,
@@ -2468,6 +2505,7 @@ describe('engine/conductor', () => {
       const runner = createMockStepRunner();
       const onComplexityAssessment = vi.fn().mockResolvedValue('L' as const);
       const conductor = new Conductor({
+        projectRoot: dir,
         stateFilePath: statePath,
         stepRunner: runner,
         events,
@@ -2486,6 +2524,7 @@ describe('engine/conductor', () => {
       };
       const onComplexityAssessment = vi.fn().mockResolvedValue('M' as const);
       const conductor = new Conductor({
+        projectRoot: dir,
         stateFilePath: statePath,
         stepRunner: runner,
         events,
@@ -2505,6 +2544,7 @@ describe('engine/conductor', () => {
       };
       const onComplexityAssessment = vi.fn().mockResolvedValue('L' as const);
       const conductor = new Conductor({
+        projectRoot: dir,
         stateFilePath: statePath,
         stepRunner: runner,
         events,
@@ -2520,6 +2560,7 @@ describe('engine/conductor', () => {
       const runner = createMockStepRunner();
       const onComplexityAssessment = vi.fn().mockResolvedValue('M' as const);
       const conductor = new Conductor({
+        projectRoot: dir,
         stateFilePath: statePath,
         stepRunner: runner,
         events,
@@ -2536,6 +2577,7 @@ describe('engine/conductor', () => {
       const runner = createMockStepRunner();
       const onComplexityAssessment = vi.fn().mockRejectedValue(new Error('user cancelled'));
       const conductor = new Conductor({
+        projectRoot: dir,
         stateFilePath: statePath,
         stepRunner: runner,
         events,
@@ -3443,6 +3485,7 @@ describe('recovery retry budget', () => {
     const { runner } = failThenSucceedRunner('build', Infinity);
     const onRecovery = vi.fn().mockResolvedValue('quit' as const);
     const conductor = new Conductor({
+      projectRoot: dir,
       stateFilePath: statePath,
       stepRunner: runner,
       events,
@@ -3479,6 +3522,7 @@ describe('recovery retry budget', () => {
     });
 
     const conductor = new Conductor({
+      projectRoot: dir,
       stateFilePath: statePath,
       stepRunner: runner,
       events,
@@ -3512,6 +3556,7 @@ describe('recovery retry budget', () => {
     });
 
     const conductor = new Conductor({
+      projectRoot: dir,
       stateFilePath: statePath,
       stepRunner: runner,
       events,
@@ -3936,7 +3981,7 @@ describe('skip-already-resolved steps', () => {
       }),
     };
 
-    const conductor = new Conductor({ stateFilePath: statePath, stepRunner: runner, events });
+    const conductor = new Conductor({ projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events });
     await conductor.run();
 
     // None of the `done` steps should have been re-dispatched.
@@ -3970,7 +4015,7 @@ describe('skip-already-resolved steps', () => {
       }),
     };
 
-    const conductor = new Conductor({ stateFilePath: statePath, stepRunner: runner, events });
+    const conductor = new Conductor({ projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events });
     await conductor.run();
 
     expect(calledSteps).not.toContain('memory');
@@ -4001,7 +4046,7 @@ describe('skip-already-resolved steps', () => {
       }),
     };
 
-    const conductor = new Conductor({ stateFilePath: statePath, stepRunner: runner, events });
+    const conductor = new Conductor({ projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events });
     await conductor.run();
 
     // failed build is re-entered; done steps before it are skipped.
@@ -4034,6 +4079,7 @@ describe('skip-already-resolved steps', () => {
 
     // --from explicitly asks to re-run `plan` regardless of its current status.
     const conductor = new Conductor({
+      projectRoot: dir,
       stateFilePath: statePath,
       stepRunner: runner,
       events,
