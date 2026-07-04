@@ -764,4 +764,117 @@ complexity:
       expect(byName.deploy.enforcement).toBe('advisory');
     });
   });
+
+  describe('auto_restart_on_stale_engine config field', () => {
+    it('resolves true to true without warning', () => {
+      const result = validateConfig({ auto_restart_on_stale_engine: true });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.auto_restart_on_stale_engine).toBe(true);
+      expect(result.warnings).toHaveLength(0);
+    });
+
+    it('resolves false to false without warning', () => {
+      const result = validateConfig({ auto_restart_on_stale_engine: false });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.auto_restart_on_stale_engine).toBe(false);
+      expect(result.warnings).toHaveLength(0);
+    });
+
+    it('resolves absent (missing key) to false silently', () => {
+      const result = validateConfig({ harness_version: '>=1.0.0' });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.auto_restart_on_stale_engine).toBe(false);
+      expect(result.warnings).toHaveLength(0);
+    });
+
+    it('resolves null to false silently', () => {
+      const result = validateConfig({ auto_restart_on_stale_engine: null });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.auto_restart_on_stale_engine).toBe(false);
+      expect(result.warnings).toHaveLength(0);
+    });
+
+    it('resolves invalid string value to false with one warning', () => {
+      const result = validateConfig({ auto_restart_on_stale_engine: 'banana' });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.auto_restart_on_stale_engine).toBe(false);
+      expect(result.warnings).toHaveLength(1);
+      expect(result.warnings[0]).toMatch(/auto_restart_on_stale_engine.*invalid/i);
+      expect(result.warnings[0]).toMatch(/banana/);
+    });
+
+    it('resolves invalid number value to false with one warning', () => {
+      const result = validateConfig({ auto_restart_on_stale_engine: 1 });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.auto_restart_on_stale_engine).toBe(false);
+      expect(result.warnings).toHaveLength(1);
+      expect(result.warnings[0]).toMatch(/auto_restart_on_stale_engine.*invalid/i);
+    });
+
+    it('resolves invalid object value to false with one warning', () => {
+      const result = validateConfig({ auto_restart_on_stale_engine: {} });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.auto_restart_on_stale_engine).toBe(false);
+      expect(result.warnings).toHaveLength(1);
+      expect(result.warnings[0]).toMatch(/auto_restart_on_stale_engine.*invalid/i);
+    });
+
+    it('never throws — always returns ok: true', () => {
+      const testCases = [
+        { auto_restart_on_stale_engine: true },
+        { auto_restart_on_stale_engine: false },
+        { auto_restart_on_stale_engine: 'yes' },
+        { auto_restart_on_stale_engine: 'no' },
+        { auto_restart_on_stale_engine: 1 },
+        { auto_restart_on_stale_engine: 0 },
+        { auto_restart_on_stale_engine: [] },
+        { auto_restart_on_stale_engine: {} },
+        { auto_restart_on_stale_engine: null },
+        {},
+      ];
+      for (const testCase of testCases) {
+        const result = validateConfig(testCase);
+        expect(result.ok).toBe(true);
+      }
+    });
+
+    it('emits only one warning per invalid value', () => {
+      const result1 = validateConfig({ auto_restart_on_stale_engine: 'invalid' });
+      expect(result1.ok).toBe(true);
+      if (!result1.ok) return;
+      expect(result1.warnings).toHaveLength(1);
+
+      const result2 = validateConfig({ auto_restart_on_stale_engine: 'invalid' });
+      expect(result2.ok).toBe(true);
+      if (!result2.ok) return;
+      expect(result2.warnings).toHaveLength(1);
+    });
+
+    it('default is false when config is empty', () => {
+      const result = validateConfig({});
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.auto_restart_on_stale_engine).toBe(false);
+    });
+
+    it('works with other config fields present', () => {
+      const result = validateConfig({
+        harness_version: '>=1.0.0',
+        auto_restart_on_stale_engine: true,
+        defaults: { model: 'sonnet' },
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.auto_restart_on_stale_engine).toBe(true);
+      expect(result.config.harness_version).toBe('>=1.0.0');
+      expect(result.config.defaults?.model).toBe('sonnet');
+    });
+  });
 });
