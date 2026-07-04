@@ -181,6 +181,32 @@ export async function sendKeys(
 }
 
 /**
+ * Returns true when the daemon's pane (window 0 / pane 0 — the single pane
+ * created by newDetachedSession) is dead, i.e. the tmux session still exists
+ * but the foreground process inside it has exited (and remain-on-exit kept
+ * the pane open instead of tearing down the session).
+ *
+ * Distinguishes "session up" from "process alive" (FR-12, FR-21): a session
+ * can be up with a dead pane, which callers must treat differently from both
+ * a fully-running daemon and a fully-absent session.
+ *
+ * Returns false — never throws — when the pane can't be queried (e.g. the
+ * session/pane doesn't exist); callers only invoke this after confirming
+ * hasSession is true, so a non-zero exit here is treated as "not dead" rather
+ * than surfacing a spurious error.
+ */
+export async function isPaneDead(
+  name: string,
+  run: TmuxRunner = defaultTmuxRunner,
+): Promise<boolean> {
+  const result = run(
+    ['list-panes', '-t', `=${name}:0.0`, '-F', '#{pane_dead}'],
+    { inherit: false },
+  );
+  return result.code === 0 && result.stdout.trim() === '1';
+}
+
+/**
  * Sets the `remain-on-exit` window option so the daemon pane survives after its
  * foreground process exits, instead of the window/session closing out from
  * under us. Session-scoped target (`=<name>`) — never touches other sessions.
@@ -247,6 +273,18 @@ export async function requireTmux(run: TmuxRunner = defaultTmuxRunner): Promise<
 // makeTmuxSupervisor returns an implementation backed by the injected runner.
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * Outcome of a `restart` call. `degraded: true` means the in-place respawn
+ * failed and the Supervisor fell back to kill-session + new-session — the
+ * daemon is running again, but tmux scrollback/session continuity was lost.
+ * `message` is a human-readable explanation, always present so callers can
+ * surface it verbatim regardless of `degraded`.
+ */
+export interface RestartOutcome {
+  degraded: boolean;
+  message: string;
+}
+
 /** High-level lifecycle port for managing a per-repo daemon tmux session. */
 export interface Supervisor {
   /** Returns true when a session for this repo is currently alive. */
@@ -255,8 +293,13 @@ export interface Supervisor {
   start(repo: string): Promise<void>;
   /** Kills the daemon session (no-op when not running). */
   stop(repo: string): Promise<void>;
-  /** Kills then re-creates the daemon session. */
-  restart(repo: string): Promise<void>;
+  /**
+   * Kills then re-creates the daemon session. Prefers an in-place pane
+   * respawn (preserves session/window and any operator panes); falls back to
+   * kill-session + new-session, with an explicit degraded outcome, when the
+   * respawn tooling fails.
+   */
+  restart(repo: string): Promise<RestartOutcome>;
   /** Attaches the terminal to the daemon session. Pass readOnly:true to watch. */
   attach(repo: string, opts?: { readOnly?: boolean }): Promise<void>;
   /** Returns a snapshot of the session's visible pane output (the daemon log). */
@@ -281,8 +324,16 @@ export function makeTmuxSupervisor(run: TmuxRunner = defaultTmuxRunner): Supervi
       // Crash-safe: a tmux-less host throws TmuxNotInstalledError from the runner.
       // "no tmux ⇒ no session ⇒ not up" is the correct answer and must never throw
       // out of a caller (bare-run invariant — isUp is a read, not a management verb).
+      //
+      // "Up" means the daemon process is actually alive, not merely that the
+      // tmux session exists (FR-12/FR-21): a session can persist with a dead
+      // pane after the foreground process exits, and that must read as down.
       try {
-        return await hasSession(sessionNameForRepo(repo), run);
+        const name = sessionNameForRepo(repo);
+        if (!(await hasSession(name, run))) {
+          return false;
+        }
+        return !(await isPaneDead(name, run));
       } catch {
         return false;
       }
@@ -292,7 +343,14 @@ export function makeTmuxSupervisor(run: TmuxRunner = defaultTmuxRunner): Supervi
       await requireTmux(run);
       const name = sessionNameForRepo(repo);
       if (await hasSession(name, run)) {
-        return; // already running — idempotent
+        // Session exists but the process inside it may have died while
+        // remain-on-exit kept the pane (and session) open. Revive in place
+        // rather than creating a second session or silently no-op'ing.
+        if (await isPaneDead(name, run)) {
+          await setRemainOnExit(name, run);
+          await respawnPane(name, run);
+        }
+        return; // already running (or just revived) — idempotent
       }
       await newDetachedSession(name, DAEMON_FOREGROUND_COMMAND, repo, run);
     },
@@ -303,16 +361,34 @@ export function makeTmuxSupervisor(run: TmuxRunner = defaultTmuxRunner): Supervi
       await killSession(name, run);
     },
 
-    async restart(repo: string): Promise<void> {
+    async restart(repo: string): Promise<RestartOutcome> {
       // Respawn-in-place (ADR-014, FR-20): the session and its window are left
       // alone — only the daemon's own pane is torn down and relaunched. This
       // preserves any operator windows/panes attached to the same session and
       // avoids the kill+recreate churn (and the brief window where the session
-      // does not exist) of the old implementation. NO kill-session here.
+      // does not exist) of the old implementation. NO kill-session in the
+      // happy path.
       await requireTmux(run);
       const name = sessionNameForRepo(repo);
       await setRemainOnExit(name, run);
-      await respawnPane(name, run);
+      try {
+        await respawnPane(name, run);
+        return { degraded: false, message: 'daemon restarted in place (session preserved).' };
+      } catch (err) {
+        // Respawn tooling failed (e.g. the pane/window tmux expected no longer
+        // exists). Fall back to a full kill+recreate so the daemon still ends
+        // up running — but this loses the old session's scrollback/history,
+        // so callers MUST be told explicitly (FR-20 neg, Task 24).
+        await killSession(name, run);
+        await newDetachedSession(name, DAEMON_FOREGROUND_COMMAND, repo, run);
+        const reason = err instanceof Error ? err.message : String(err);
+        return {
+          degraded: true,
+          message:
+            `daemon restarted via fallback (kill-session + new-session): session continuity ` +
+            `(scrollback/history) was lost because in-place respawn failed: ${reason}`,
+        };
+      }
     },
 
     async attach(repo: string, opts: { readOnly?: boolean } = {}): Promise<void> {
