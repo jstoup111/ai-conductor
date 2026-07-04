@@ -503,6 +503,15 @@ Reverting is not supported: if you revert past this version, the `dist` symlink 
   HALT never unparks a slug, and parking preserves the REKICK sentinel so re-dispatch resumes
   exactly where it left off once unparked. The status dashboard's PARKED group has absolute
   precedence over every other group (operator-park-a-human-placed-halt-must-survive-the).
+- **Front-half amendment kickback events.** DECIDE-phase re-opens (e.g. stories/plan sending
+  work back to explore/prd) now emit a `↩ KICKBACK` daemon log line, same as tail kickbacks.
+- **Operator back-navigation events (`↰ BACK` lines).** Manual operator navigation-back is now
+  logged distinctly from automatic kickbacks in the daemon log.
+- **Kickback line styling.** `↩ KICKBACK: <from> re-opened <to> (×<count>)` is now bold yellow
+  with no leading dim `·` chrome dot, and the `(×<count>)` suffix is never dimmed — matching how
+  close a gate is to `MAX_KICKBACKS_PER_GATE`.
+- **Front-half re-opens now enforce the same `MAX_KICKBACKS_PER_GATE` cap as tail kickbacks**,
+  so a DECIDE-phase kickback loop halts instead of looping indefinitely.
 
 ## Migration
 

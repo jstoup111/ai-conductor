@@ -632,6 +632,23 @@ dispatched before the pipeline boots) surface state without attaching:
   `tail -f` semantics) `.daemon/daemon.log` for one repo (default: cwd) or every registered
   repo (`--all`). A missing log prints a friendly note rather than erroring.
 
+**Kickback and operator-back lines (`renderDaemonEvent`, `daemon-cli.ts`).** Two step-loop
+events get their own prominent, non-dimmed line format so an operator scanning the log (live
+or persisted) can spot a re-open without reading every step line:
+
+- **`↩ KICKBACK: <from> re-opened <to>[ — <evidence>] (×<count>)`** — bold yellow, no leading
+  dim `·` chrome dot. Emitted whenever a downstream step re-opens an upstream gate — including
+  **front-half amendment kickbacks** (a DECIDE-phase re-open, e.g. stories/plan sending work
+  back to explore/prd), which now emit this line and count toward `<count>` just like tail
+  kickbacks. `KICKBACK` (uppercase) is a stable grep anchor —
+  `grep KICKBACK .daemon/daemon.log` finds every re-open regardless of which gate fired it.
+  The `(×<count>)` suffix is never dimmed, since it's the signal for how close a gate is to
+  `MAX_KICKBACKS_PER_GATE` (the loop halts once a gate is re-opened past the cap).
+- **`↰ BACK: <from> → <to> (operator)`** — yellow. Emitted when an operator manually navigates
+  a feature backward (`navigation_back`), as opposed to an automatic kickback.
+- **`✋ loop halted: <reason>`** — red, existing line — printed on `loop_halt`, e.g. once a
+  gate's kickback count exceeds the cap.
+
 See `test/engine/daemon-log.test.ts` and `test/engine/daemon-observe-cli.test.ts`. The
 pidfile path and the O_EXCL create flag stay confined to `daemon-lock.ts`
 (`test/engine/daemon-lock-boundary.test.ts`); the log module reuses the exported
