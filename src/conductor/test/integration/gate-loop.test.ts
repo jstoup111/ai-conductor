@@ -254,6 +254,303 @@ describe('integration/gate-loop', () => {
     expect(finalState.lint).toBe('done');
   });
 
+  // ── Front-half amendment kickback (Story: "Front-half amendment kickback
+  // emits one event at detection time") ─────────────────────────────────────
+  // conflict_check is a front-half step (before `build`, the first loopGate)
+  // that is not itself a kickbackTarget. It can still detect — and write, as
+  // an artifact — that it has re-opened an upstream gate (architecture_review
+  // here). advanceTail must emit the `kickback` event for that detection even
+  // though the front half stays linear (no navigateBack, i++ unchanged).
+  describe('front-half amendment kickback (conflict_check → architecture_review)', () => {
+    const FRONT_TO_CONFLICT: ConductState = {
+      complexity_tier: 'S',
+      feature_desc: 'add foo',
+      worktree: 'done',
+      memory: 'done',
+      explore: 'done',
+      prd: 'done',
+      complexity: 'done',
+      architecture_diagram: 'skipped',
+      architecture_review: 'done',
+      stories: 'done',
+    };
+
+    function conductorFromConflictCheck(runner: StepRunner): Conductor {
+      return new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        verifyArtifacts: true,
+        mode: 'auto',
+        fromStep: 'conflict_check',
+        maxRetries: 1,
+      });
+    }
+
+    async function seedStoriesAndPlan(): Promise<void> {
+      await mkdir(join(dir, '.docs/stories'), { recursive: true });
+      await writeFile(
+        join(dir, '.docs/stories/s.md'),
+        '**Status:** Accepted\n\n## Story 1-1: foo\n### Happy Path\n- Given x when y then z\n### Negative Paths\n- Given a when b then err\n',
+      );
+      await mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await writeFile(
+        join(dir, '.docs/plans/p.md'),
+        '### Task 1\n**Story:** 1-1 (happy path)\n**Dependencies:** none\n\n### Task 2\n**Story:** 1-1 (negative path)\n**Dependencies:** Task 1\n',
+      );
+    }
+
+    async function seedApprovedAdr(): Promise<void> {
+      await mkdir(join(dir, '.docs/decisions'), { recursive: true });
+      await writeFile(
+        join(dir, '.docs/decisions/adr-1.md'),
+        '# ADR 1\n\nStatus: APPROVED\n',
+      );
+    }
+
+    function trackKickbacks(): Array<{ from: string; to: string; count: number }> {
+      const kicks: Array<{ from: string; to: string; count: number }> = [];
+      events.on('kickback', (e) => {
+        if (e.type === 'kickback') kicks.push({ from: e.from, to: e.to, count: e.count });
+      });
+      return kicks;
+    }
+
+    it('emits a kickback event when conflict_check re-opens architecture_review, without invoking navigateBack', async () => {
+      await seedStoriesAndPlan();
+      await writeState(statePath, { ...FRONT_TO_CONFLICT });
+
+      const ran: string[] = [];
+      const runner: StepRunner = {
+        run: async (step) => {
+          ran.push(step);
+          if (step === 'conflict_check') {
+            await writeVerdict(dir, 'architecture_review', {
+              satisfied: false,
+              checkedAt: 1,
+              kickback: { from: 'conflict_check', evidence: 'incompatible ADR seam' },
+            });
+          }
+          return satisfy(step);
+        },
+      };
+      const kicks = trackKickbacks();
+      let completed = false;
+      events.on('feature_complete', () => {
+        completed = true;
+      });
+
+      await conductorFromConflictCheck(runner).run();
+
+      expect(kicks).toEqual([
+        { from: 'conflict_check', to: 'architecture_review', count: 1 },
+      ]);
+      // Linear advance unaffected: plan ran next (not a re-run of
+      // architecture_review), and architecture_review ran only once.
+      const conflictIdx = ran.indexOf('conflict_check');
+      expect(ran[conflictIdx + 1]).toBe('plan');
+      expect(ran.filter((s) => s === 'architecture_review')).toHaveLength(0);
+      expect(completed).toBe(true);
+
+      const finalState = JSON.parse(await readFile(statePath, 'utf-8'));
+      // Step statuses untouched by the front-half scan: architecture_review is
+      // still whatever it was before (never restaged to pending/stale).
+      expect(finalState.architecture_review).toBe('done');
+    });
+
+    it('emits no kickback event when the unsatisfied verdict carries no kickback provenance', async () => {
+      await seedStoriesAndPlan();
+      await writeState(statePath, { ...FRONT_TO_CONFLICT });
+
+      const runner: StepRunner = {
+        run: async (step) => {
+          if (step === 'conflict_check') {
+            await writeVerdict(dir, 'architecture_review', {
+              satisfied: false,
+              checkedAt: 1,
+              // No `kickback` field — plain unsatisfied, not a re-open.
+            });
+          }
+          return satisfy(step);
+        },
+      };
+      const kicks = trackKickbacks();
+
+      await conductorFromConflictCheck(runner).run();
+
+      expect(kicks).toEqual([]);
+    });
+
+    it('emits no kickback event when kickback.from does not match the completing step', async () => {
+      await seedStoriesAndPlan();
+      await writeState(statePath, { ...FRONT_TO_CONFLICT });
+
+      const runner: StepRunner = {
+        run: async (step) => {
+          if (step === 'conflict_check') {
+            await writeVerdict(dir, 'architecture_review', {
+              satisfied: false,
+              checkedAt: 1,
+              // Attributed to a different step than the one completing now.
+              kickback: { from: 'stories', evidence: 'unrelated re-open' },
+            });
+          }
+          return satisfy(step);
+        },
+      };
+      const kicks = trackKickbacks();
+
+      await conductorFromConflictCheck(runner).run();
+
+      expect(kicks).toEqual([]);
+    });
+
+    it('emits exactly one kickback event for a front-half-origin verdict (no duplicate once the tail runs)', async () => {
+      await seedStoriesAndPlan();
+      await writeState(statePath, { ...FRONT_TO_CONFLICT });
+
+      const runner: StepRunner = {
+        run: async (step) => {
+          if (step === 'conflict_check') {
+            await writeVerdict(dir, 'architecture_review', {
+              satisfied: false,
+              checkedAt: 1,
+              kickback: { from: 'conflict_check', evidence: 'incompatible ADR seam' },
+            });
+          }
+          return satisfy(step);
+        },
+      };
+      const kicks = trackKickbacks();
+      let completed = false;
+      events.on('feature_complete', () => {
+        completed = true;
+      });
+
+      await conductorFromConflictCheck(runner).run();
+
+      // build/manual_test/finish all complete afterward and each re-run
+      // advanceTail's tail scan; the stale architecture_review verdict
+      // (kickback.from: 'conflict_check') must never be re-attributed to a
+      // later step and re-emitted.
+      expect(kicks).toHaveLength(1);
+      expect(completed).toBe(true);
+    });
+
+    it('shares the per-gate kickback counter between a front-half detection and a later tail re-open', async () => {
+      await seedStoriesAndPlan();
+      await seedApprovedAdr();
+      await writeState(statePath, { ...FRONT_TO_CONFLICT });
+
+      let conflictRuns = 0;
+      const runner: StepRunner = {
+        run: async (step) => {
+          if (step === 'conflict_check') {
+            conflictRuns++;
+            if (conflictRuns === 1) {
+              await writeVerdict(dir, 'architecture_review', {
+                satisfied: false,
+                checkedAt: 1,
+                kickback: { from: 'conflict_check', evidence: 'incompatible ADR seam' },
+              });
+            }
+            return satisfy(step);
+          }
+          if (step === 'build') {
+            await satisfy('build');
+            // build independently detects the same gate needs re-opening —
+            // the tail scan's own kickback-target loop picks this up.
+            await writeVerdict(dir, 'architecture_review', {
+              satisfied: false,
+              checkedAt: 2,
+              kickback: { from: 'build', evidence: 'architecture drift found' },
+            });
+            return { success: true };
+          }
+          return satisfy(step);
+        },
+      };
+      const kicks = trackKickbacks();
+      let completed = false;
+      events.on('feature_complete', () => {
+        completed = true;
+      });
+
+      await conductorFromConflictCheck(runner).run();
+
+      expect(kicks).toEqual([
+        { from: 'conflict_check', to: 'architecture_review', count: 1 },
+        { from: 'build', to: 'architecture_review', count: 2 }, // shared counter, not a fresh 1
+      ]);
+      expect(completed).toBe(true);
+    });
+
+    it('HALTs via the tail scan\'s exact sequence when a front-half re-open pushes a shared gate count past the cap', async () => {
+      await seedStoriesAndPlan();
+      await seedApprovedAdr();
+      await writeState(statePath, { ...FRONT_TO_CONFLICT });
+
+      let conflictRuns = 0;
+      const runner: StepRunner = {
+        run: async (step) => {
+          if (step === 'conflict_check') {
+            conflictRuns++;
+            if (conflictRuns === 1) {
+              await writeVerdict(dir, 'architecture_review', {
+                satisfied: false,
+                checkedAt: 1,
+                kickback: { from: 'conflict_check', evidence: 'incompatible ADR seam #1' },
+              });
+            } else {
+              // Second amendment re-open of the SAME gate — combined with the
+              // build-triggered tail re-open below, this is the 3rd re-open
+              // of architecture_review (cap is 2).
+              await writeVerdict(dir, 'architecture_review', {
+                satisfied: false,
+                checkedAt: 3,
+                kickback: { from: 'conflict_check', evidence: 'incompatible ADR seam #2' },
+              });
+            }
+            return satisfy(step);
+          }
+          if (step === 'build') {
+            await satisfy('build');
+            await writeVerdict(dir, 'architecture_review', {
+              satisfied: false,
+              checkedAt: 2,
+              kickback: { from: 'build', evidence: 'architecture drift found' },
+            });
+            return { success: true };
+          }
+          return satisfy(step);
+        },
+      };
+      const kicks = trackKickbacks();
+      let halted = false;
+      let haltReason = '';
+      let completed = false;
+      events.on('loop_halt', (e) => {
+        if (e.type === 'loop_halt') {
+          halted = true;
+          haltReason = e.reason;
+        }
+      });
+      events.on('feature_complete', () => {
+        completed = true;
+      });
+
+      await conductorFromConflictCheck(runner).run();
+
+      expect(kicks.map((k) => k.count)).toEqual([1, 2, 3]);
+      expect(halted).toBe(true);
+      expect(completed).toBe(false);
+      expect(haltReason).toContain('architecture_review');
+      expect(haltReason).toContain('3');
+      await expect(access(join(dir, '.pipeline/HALT'))).resolves.toBeUndefined();
+    });
+  });
+
   it('freshContextPerStep resets the session before each tail step', async () => {
     // All front-half steps done; tail steps pending so they run. Start at build.
     const state: Record<string, string> = {};
