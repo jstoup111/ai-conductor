@@ -205,12 +205,13 @@ describe('engine/conductor — post-rebase force-with-lease publish (T11 / TS-4)
 
     await conductor.run();
 
-    require('fs').writeFileSync('/tmp/t11-test-calls.json', JSON.stringify(calls, null, 2));
     const leaseCalls = forceWithLeaseCalls(calls);
     expect(leaseCalls).toHaveLength(1);
     expect(leaseCalls[0].args).toEqual(['push', '--force-with-lease', 'origin', FEATURE]);
     // The lease-guarded push is the ONLY force-flagged push observed.
-    expect(calls.filter((c) => c.args.includes('--force'))).toHaveLength(1);
+    // No bare (non-lease) `--force` push anywhere — the lease-guarded push
+    // is the ONLY force-flagged push observed.
+    expect(calls.filter((c) => c.args.includes('--force') && !c.args.includes('--force-with-lease'))).toHaveLength(0);
   });
 
   it('rebase satisfied-as-no-op (branch already current) → zero force-with-lease pushes', async () => {

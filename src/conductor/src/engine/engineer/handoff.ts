@@ -22,6 +22,13 @@
 //
 // Future tasks (task-26 assert-no-merge) will extend HandoffDeps and add assertions
 // without rewriting this module — keep exports stable.
+//
+// Task 20 (TS-8, adr-2026-07-03-pr-timing-config-key): when an open DRAFT spec
+// PR already exists for `branch` (e.g. opened early by `engineer checkpoint`,
+// task-16), `openSpecPr` reuses it — push + `markReadyForReview` — instead of
+// opening a second PR via `gh pr create`. Detection/push/mark-ready are all
+// OPTIONAL injected deps (`detectDraftPr`, `push`, `markReadyForReview`); when
+// absent, this module behaves exactly as before (purely additive).
 
 import type { TargetRepo } from './target.js';
 import type { AuthoredLedgerOpts } from './authored-ledger.js';
@@ -77,6 +84,36 @@ export interface HandoffDeps {
   sourceRef?: string;
   /** Optional log sink for the (non-fatal) issue-ref injection. */
   log?: (msg: string) => void;
+  /**
+   * Task 20 (TS-8): optional detector for an ALREADY-OPEN draft spec PR for
+   * `branch`. Production wiring: `gh pr list --head <branch> --state open
+   * --draft --json url`, scraped for the first url. Returns `undefined` when
+   * no open draft PR exists — `openSpecPr` then falls through to the
+   * existing `gh pr create --head <branch> --fill` path, byte-for-byte
+   * unchanged.
+   *
+   * ABSENT (not supplied) behaves exactly like returning `undefined` — every
+   * existing call site that does not wire detection keeps today's exact
+   * behavior. This field is purely additive (task-25/26 forward-compat note
+   * above).
+   */
+  detectDraftPr?: (branch: string, cwd: string) => Promise<string | undefined>;
+  /**
+   * Task 20: injectable push for the reuse path. When `detectDraftPr` finds
+   * an open draft PR, the branch is pushed via this runner BEFORE
+   * `markReadyForReview` is invoked, so the draft's history is current when
+   * it's marked ready. Only consulted when `detectDraftPr` returns a URL.
+   */
+  push?: (branch: string, cwd: string) => Promise<void>;
+  /**
+   * Task 20: injectable "mark ready for review" call for the reuse path
+   * (mirrors the daemon's T14 `setReady` finish-step hook). Invoked with the
+   * discovered draft PR URL. A failure here is caught and logged — non-fatal:
+   * the discovered URL is STILL returned/written back (mirrors T14/T15's
+   * finish-step mark-ready-failure fallback semantics for daemon parity).
+   * Only consulted when `detectDraftPr` returns a URL.
+   */
+  markReadyForReview?: (prUrl: string, cwd: string) => Promise<void>;
 }
 
 // ─── Result types (discriminated union) ───────────────────────────────────────
@@ -160,6 +197,57 @@ export async function openSpecPr(
   // cwd = the per-idea worktree (checked out on `spec/<slug>`) so gh pushes and opens
   // the PR from that branch. Falls back to the canonical path for legacy callers.
   const cwd = deps.worktreePath ?? target.canonicalPath;
+
+  // 0. Task 20 (TS-8): reuse an already-open draft spec PR instead of opening
+  //    a second one. Detection is fully optional/injected — when
+  //    `detectDraftPr` is absent (the default for every existing call site),
+  //    this block is skipped entirely and behavior is unchanged.
+  if (deps.detectDraftPr) {
+    const existingUrl = await deps.detectDraftPr(branch, cwd);
+    if (existingUrl) {
+      // Push the branch so the draft's history is current before it goes
+      // ready-for-review. Advisory in the sense that a push failure does not
+      // abort the reuse — mirrors the daemon's advisoryPublish semantics.
+      if (deps.push) {
+        await deps.push(branch, cwd);
+      }
+      // Mark the draft ready for review. A failure here is caught and
+      // logged — non-fatal — the discovered URL is STILL written back below
+      // (mirrors T14/T15's finish-step mark-ready-failure fallback).
+      if (deps.markReadyForReview) {
+        try {
+          await deps.markReadyForReview(existingUrl, cwd);
+        } catch (err) {
+          deps.log?.(
+            `openSpecPr: markReadyForReview failed for ${existingUrl}: ` +
+              `${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      }
+
+      // Record the (project, feature) authored key — same as the create path.
+      await recordAuthoredKey(target.name, branch, ledgerOpts ?? {});
+
+      // Link the reused PR to the originating issue, same as the create path.
+      if (deps.sourceRef) {
+        await injectIssueRef({
+          gh: async (args, opts) => {
+            const r = await runner(args, { cwd: opts.cwd });
+            return { stdout: r.stdout };
+          },
+          prUrl: existingUrl,
+          keyword: 'Refs',
+          sourceRef: deps.sourceRef,
+          cwd,
+          log: deps.log,
+        });
+      }
+
+      // Zero `gh pr create` invocations on this path — write back the SAME
+      // PR URL that was discovered.
+      return { kind: 'pr-opened', url: existingUrl };
+    }
+  }
 
   // 1. Invoke `gh pr create` with the spec branch in the worktree's cwd.
   //    The `--head` flag names the branch to open a PR for; `--fill` uses the

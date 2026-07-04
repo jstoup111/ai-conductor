@@ -365,6 +365,41 @@ and opening a PR on finish:
 The daemon consumes specs — it never authors them. `--continuous` idle-polls for new
 eligible features, bounded by the ceilings.
 
+#### PR timing: build-start early draft vs. finish (`adr-2026-07-03-pr-timing-config-key`)
+
+The `pr_timing` config key (`pipeline.yml` / `.ai-conductor/config.yml`) controls **when**
+the daemon pushes the branch and opens the PR, relative to the BUILD lifecycle
+(`resolveDaemonOwner` and the owner gate above are unaffected — this only moves *when* the
+existing finish-time publish happens, never *whether* a spec builds):
+
+```yaml
+pr_timing: finish        # default; also the value used whenever the key is absent
+# pr_timing: early-draft # opens a draft PR + pushes checkpoint commits at build-start
+```
+
+- **`'finish'` (default)** — unchanged behavior: the branch is pushed and the PR opened only
+  at the `finish` step, once the full build/test cycle has completed. This is the value
+  `resolvePrTiming` (`engine/resolved-config.ts`) returns for an absent, `'finish'`, or any
+  invalid `pr_timing` value (safety fallback — never fails closed onto `early-draft`).
+- **`'early-draft'`** — before the `build` step dispatches, the **build-start publish hook**
+  (T7) pushes the branch and, once the branch is ahead of base, lazily opens (and memoizes)
+  a **draft** PR (`publishEarlyDraft`, `engine/pr-labels.ts`) — so reviewers can watch the
+  daemon work in real time instead of only seeing a PR once `finish` completes. The
+  **finish-step mark-ready hook** (T14) then transitions that same draft PR to
+  ready-for-review at `finish` (reusing `state.pr_url` — `finish` never opens a second PR).
+- **Self-host precedence.** On a self-hosted build (`daemon && selfHost`), `early-draft` is
+  always **downgraded to `finish`** regardless of config — the self-build owns its own
+  finish-step PR lifecycle, so the build-start/mark-ready hooks are skipped entirely and a
+  loud `[pr-timing] early-draft mode downgraded to finish mode (self-host detected)` message
+  is logged. Self-host detection wins outright; there is no config override to force
+  `early-draft` on a self-hosted build.
+- **Advisory only, never blocking.** Every early-draft publish operation (branch push, draft
+  PR create, mark-ready transition) runs through `advisoryPublish` (`engine/pr-labels.ts`),
+  which swallows and logs any error rather than throwing — a push failure, an unparsable
+  `gh pr create` response, or a mark-ready failure is reported but **never halts or fails the
+  pipeline**. Worst case on failure is simply no early PR (or a PR left in draft); the build
+  and the finish-step publish proceed unaffected.
+
 #### Owner gate: multi-operator identity partition (`adr-2026-07-01-machine-scoped-operator-identity`)
 
 When multiple operators run daemons on separate machines against **one** repo, each daemon
