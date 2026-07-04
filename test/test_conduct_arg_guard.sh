@@ -300,6 +300,124 @@ test_negative_paths() {
 }
 test_negative_paths
 
+# ─── Test: conduct-ts verb forwarding (RED) ──────────────────────────────
+#
+# These tests verify that conduct subcommands owned by conduct-ts are
+# forwarded with identical argv. Today, only `daemon` is forwarded:
+#   if [ "$1" = "daemon" ]; then exec conduct-ts "$@"; fi
+#
+# But several other verbs should also be forwarded:
+#   - render-diagrams, register, create, engineer, inline, help
+#
+# These tests use a fake conduct-ts shim to capture argv and verify
+# forwarding behavior. They will FAIL (RED) until the forwarding is
+# implemented in bin/conduct.
+
+echo ""
+echo -e "${BOLD}Test Suite: Conduct-TS Verb Forwarding (RED)${NC}"
+echo ""
+
+test_conduct_ts_forwarding_red() {
+  # Test 1: conduct render-diagrams --check X forwards argv correctly
+  local repo
+  repo=$(make_temp_repo "render-diagrams-repo")
+
+  local shim_info shim_path capture_path shim_dir
+  shim_info=$(make_conduct_ts_shim 0)
+  shim_path="${shim_info%%|*}"
+  capture_path="${shim_info##*|}"
+  shim_dir=$(dirname "$shim_path")
+
+  local rc=0
+  (
+    cd "$repo"
+    export PATH="${shim_dir}:$PATH"
+    CONDUCT_TEST_NO_CLAUDE=1 timeout 5 "$CONDUCT" render-diagrams --check myfile.md >/dev/null 2>&1
+  ) || rc=$?
+
+  assert "conduct render-diagrams --check X exits 0 when forwarded" \
+    "$([ "$rc" -eq 0 ] && echo 0 || echo 1)"
+
+  assert "conduct-ts shim captured argv for render-diagrams" \
+    "$([ -f "$capture_path" ] && echo 0 || echo 1)"
+
+  assert "captured argv contains 'render-diagrams'" \
+    "$([ -f "$capture_path" ] && grep -q '^render-diagrams$' "$capture_path" && echo 0 || echo 1)"
+
+  assert "captured argv contains '--check'" \
+    "$([ -f "$capture_path" ] && grep -q '^--check$' "$capture_path" && echo 0 || echo 1)"
+
+  assert "captured argv contains 'myfile.md'" \
+    "$([ -f "$capture_path" ] && grep -q '^myfile.md$' "$capture_path" && echo 0 || echo 1)"
+
+  # Test 1b: verify exit codes pass through for render-diagrams
+  shim_info=$(make_conduct_ts_shim 3)
+  shim_path="${shim_info%%|*}"
+  shim_dir=$(dirname "$shim_path")
+  rc=0
+  (
+    cd "$repo"
+    export PATH="${shim_dir}:$PATH"
+    CONDUCT_TEST_NO_CLAUDE=1 timeout 5 "$CONDUCT" render-diagrams --check other.md >/dev/null 2>&1
+  ) || rc=$?
+
+  assert "conduct render-diagrams forwards exit code 3" \
+    "$([ "$rc" -eq 3 ] && echo 0 || echo 1)"
+
+  # Test 2: conduct daemon status still forwards (regression check)
+  shim_info=$(make_conduct_ts_shim 0)
+  shim_path="${shim_info%%|*}"
+  capture_path="${shim_info##*|}"
+  shim_dir=$(dirname "$shim_path")
+  rc=0
+  (
+    cd "$repo"
+    export PATH="${shim_dir}:$PATH"
+    CONDUCT_TEST_NO_CLAUDE=1 timeout 5 "$CONDUCT" daemon status >/dev/null 2>&1
+  ) || rc=$?
+
+  assert "conduct daemon status exits 0 (regression)" \
+    "$([ "$rc" -eq 0 ] && echo 0 || echo 1)"
+
+  assert "daemon capture contains 'daemon'" \
+    "$([ -f "$capture_path" ] && grep -q '^daemon$' "$capture_path" && echo 0 || echo 1)"
+
+  assert "daemon capture contains 'status'" \
+    "$([ -f "$capture_path" ] && grep -q '^status$' "$capture_path" && echo 0 || echo 1)"
+
+  # Test 2b: daemon exit codes pass through
+  shim_info=$(make_conduct_ts_shim 7)
+  shim_path="${shim_info%%|*}"
+  shim_dir=$(dirname "$shim_path")
+  rc=0
+  (
+    cd "$repo"
+    export PATH="${shim_dir}:$PATH"
+    CONDUCT_TEST_NO_CLAUDE=1 timeout 5 "$CONDUCT" daemon stop >/dev/null 2>&1
+  ) || rc=$?
+
+  assert "conduct daemon forwards exit code 7" \
+    "$([ "$rc" -eq 7 ] && echo 0 || echo 1)"
+
+  # Test 3: No pipeline state created during forwarding
+  local fresh_repo
+  fresh_repo=$(make_temp_repo "no-pipeline-state-repo")
+
+  shim_info=$(make_conduct_ts_shim 0)
+  shim_path="${shim_info%%|*}"
+  shim_dir=$(dirname "$shim_path")
+  rc=0
+  (
+    cd "$fresh_repo"
+    export PATH="${shim_dir}:$PATH"
+    CONDUCT_TEST_NO_CLAUDE=1 timeout 5 "$CONDUCT" daemon status >/dev/null 2>&1
+  ) || rc=$?
+
+  assert "no .pipeline/ state created for daemon forwarding" \
+    "$(assert_no_pipeline_state "$fresh_repo" && echo 0 || echo 1)"
+}
+test_conduct_ts_forwarding_red
+
 # ─── Summary ─────────────────────────────────────────────────────────────
 
 echo ""
