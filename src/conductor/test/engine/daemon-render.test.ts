@@ -54,6 +54,12 @@ describe('renderDaemonEvent', () => {
     ).toEqual(['↩ KICKBACK: build re-opened plan — AC missing (×2)']);
   });
 
+  it('renders kickback without a dangling separator when evidence is missing', () => {
+    expect(
+      lines({ type: 'kickback', from: 'build', to: 'plan', evidence: undefined, count: 1 }),
+    ).toEqual(['↩ KICKBACK: build re-opened plan (×1)']);
+  });
+
   it('renders halt and convergence', () => {
     expect(lines({ type: 'loop_halt', reason: 'cap' })).toEqual(['· ✋ loop halted: cap']);
     expect(lines({ type: 'loop_converged' })).toEqual(['· ✓ gate loop converged']);
