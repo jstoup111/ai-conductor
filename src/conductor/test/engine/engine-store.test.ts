@@ -236,8 +236,10 @@ describe('flipCurrent', () => {
     const tmpEntries = entries.filter((name) => name.startsWith('.dist-tmp-'));
     expect(tmpEntries).toEqual([]);
 
+    // Target must be RELATIVE: `dist` may be committed, and an absolute target
+    // dangles in every other clone/checkout (see flipCurrent).
     const finalTarget = await readlink(distPath);
-    expect(finalTarget).toBe(join(tmpDir, 'dist-versions', versionIdB));
+    expect(finalTarget).toBe(join('dist-versions', versionIdB));
   });
 
   it('never rewrites published version dirs (mtime snapshot unchanged after flip)', async () => {

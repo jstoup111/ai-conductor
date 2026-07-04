@@ -32,7 +32,7 @@
 
 import { readdir, lstat, readlink, readFile, symlink, rename, unlink, rm } from 'node:fs/promises';
 import { createHash, randomBytes } from 'node:crypto';
-import { join, basename } from 'node:path';
+import { join, basename, dirname, relative } from 'node:path';
 import { readRegistry, resolveRegistryPath, type ProjectRecord } from './registry.js';
 import { getPidfilePath } from './daemon-lock.js';
 
@@ -228,7 +228,12 @@ export async function flipCurrent(opts: FlipCurrentOpts): Promise<EngineVersionI
   const distPath = join(opts.conductorRoot, DIST_SYMLINK);
   const tmpPath = join(opts.conductorRoot, `.dist-tmp-${randomBytes(6).toString('hex')}`);
 
-  await symlink(versionDir, tmpPath);
+  // The symlink target must be RELATIVE: `dist` may be committed to git, and
+  // an absolute target dangles in every other clone/checkout (and breaks the
+  // moment a worktree is moved or removed). Relative also survives the store
+  // living outside conductorRoot via env override (`../…` path).
+  const linkTarget = relative(dirname(distPath), versionDir);
+  await symlink(linkTarget, tmpPath);
   try {
     await rename(tmpPath, distPath);
   } catch (err) {
