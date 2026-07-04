@@ -119,7 +119,7 @@ export async function rekickSweep(
         }
       } catch (err) {
         skipped.push(slug);
-        log(`re-kick ${slug}: anomaly checking parked state (${errMsg(err)}); skipped`);
+        log(`re-kick ${slug}: operator-park check anomaly — FAILED (${errMsg(err)}); skipped`);
         continue;
       }
     }

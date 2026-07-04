@@ -59,12 +59,21 @@ describe('daemon-lock boundary: confine lock primitive (FR-20, C3)', () => {
     const allTs = collectTs(SRC_ROOT);
     const violators: string[] = [];
 
+    // engine/park-marker.ts is an explicit, documented exemption: it uses
+    // O_EXCL for its own idempotent `.daemon/parked/<slug>` marker create
+    // (operator-park, FR-3) — an unrelated concern from the daemon pidfile/
+    // lock boundary this test guards. It never references `daemon.pid` and
+    // does not bypass daemon-lock's single-winner semantics.
+    const EXEMPT_REL = ['engine/park-marker.ts'];
+
     for (const file of allTs) {
       if (file === DAEMON_LOCK_ABS) continue;
+      const rel = file.replace(SRC_ROOT + '/', '');
+      if (EXEMPT_REL.includes(rel)) continue;
       const content = readFileSync(file, 'utf8');
       // 'wx' is the Node fs open flag for O_EXCL (create, fail-if-exists).
       if (content.includes("'wx'") || content.includes('"wx"')) {
-        violators.push(file.replace(SRC_ROOT + '/', ''));
+        violators.push(rel);
       }
     }
 
