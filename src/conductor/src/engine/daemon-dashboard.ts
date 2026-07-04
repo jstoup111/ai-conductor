@@ -91,6 +91,16 @@ export interface InheritedState {
    * with callers that don't have a resolver.
    */
   priorityResolution?: PriorityResolution;
+  /**
+   * Slugs currently operator-parked (FR-6, `.daemon/parked/<slug>`). PARKED
+   * has ABSOLUTE precedence over every other group — a parked slug is
+   * excluded from HALTED, PROCESSED, IN-PROGRESS, WAITING, and ELIGIBLE, and
+   * rendered first. Populated by the caller (daemon-cli) by consulting
+   * `isOperatorParked` for every known slug — `scanInheritedState` itself has
+   * no opinion on parking. Optional for backward compatibility with callers
+   * built before parking existed.
+   */
+  parked?: string[];
 }
 
 export interface ScanInheritedStateDeps {
@@ -384,18 +394,29 @@ export function renderDashboard(state: InheritedState, priorityResolution?: Prio
   const lines: string[] = [];
   lines.push('── inherited state ──────────────────────────────────────────');
 
-  lines.push(`HALTED (${state.halted.length})`);
-  for (const h of state.halted) {
+  // PARKED (FR-6) has ABSOLUTE precedence over every other group: it renders
+  // FIRST, and a parked slug is excluded from HALTED, PROCESSED, IN-PROGRESS,
+  // WAITING, and ELIGIBLE below — a slug appears in exactly one group, and if
+  // it's parked, that group is PARKED. Sorted alphabetically for stability.
+  const parkedSlugs = [...(state.parked ?? [])].sort();
+  const parkedSet = new Set(parkedSlugs);
+  lines.push(`PARKED (${parkedSlugs.length})`);
+  for (const slug of parkedSlugs) lines.push(`  • ${slug}`);
+
+  const halted = state.halted.filter((h) => !parkedSet.has(h.slug));
+  lines.push(`HALTED (${halted.length})`);
+  for (const h of halted) {
     const step = h.step ? ` @${h.step}` : '';
     lines.push(`  • ${h.slug}${tierTag(h.tier)}${step} — ${h.reason}${prSuffix(h.prUrl)}`);
   }
 
-  lines.push(`IN-PROGRESS (${state.inProgress.length})`);
-  for (const p of state.inProgress) {
+  const inProgress = state.inProgress.filter((p) => !parkedSet.has(p.slug));
+  lines.push(`IN-PROGRESS (${inProgress.length})`);
+  for (const p of inProgress) {
     lines.push(`  • ${p.slug}${tierTag(p.tier)} @${p.step}${prSuffix(p.prUrl)}`);
   }
 
-  const waiting = state.waiting ?? [];
+  const waiting = (state.waiting ?? []).filter((w) => !parkedSet.has(w.slug));
   const waitingSlugs = new Set(waiting.map((w) => w.slug));
   if (waiting.length > 0) {
     lines.push(`WAITING (${waiting.length})`);
@@ -407,7 +428,7 @@ export function renderDashboard(state: InheritedState, priorityResolution?: Prio
   // Defensive: a slug should never appear in both ELIGIBLE and WAITING, but
   // if it does, WAITING wins (precedence HALTED > PROCESSED > IN-PROGRESS >
   // WAITING > ELIGIBLE) — filter it out of ELIGIBLE rather than double-list it.
-  const eligible = state.eligible.filter((e) => !waitingSlugs.has(e.slug));
+  const eligible = state.eligible.filter((e) => !waitingSlugs.has(e.slug) && !parkedSet.has(e.slug));
   lines.push(`ELIGIBLE (${eligible.length})`);
 
   // Render band annotations or fallback mode marker
@@ -424,8 +445,9 @@ export function renderDashboard(state: InheritedState, priorityResolution?: Prio
     lines.push(`  (priority: chronological fallback)`);
   }
 
-  lines.push(`PROCESSED (${state.processedCount})`);
-  for (const p of state.processed) lines.push(`  • ${p.slug}${prSuffix(p.prUrl)}`);
+  const processed = state.processed.filter((p) => !parkedSet.has(p.slug));
+  lines.push(`PROCESSED (${processed.length})`);
+  for (const p of processed) lines.push(`  • ${p.slug}${prSuffix(p.prUrl)}`);
 
   lines.push('─────────────────────────────────────────────────────────────');
   return lines.join('\n');

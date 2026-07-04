@@ -9,7 +9,7 @@
 // primitives are spelled once instead of being duplicated across the
 // conductor, the dashboard, and the daemon loop.
 
-import { mkdir, open, readFile, rm } from 'node:fs/promises';
+import { mkdir, open, readdir, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 
 /** Directory (relative to project root) that holds per-slug park markers. */
@@ -85,4 +85,21 @@ export async function isOperatorParked(
 /** Delete the `.daemon/parked/<slug>` marker for `slug` under `root`. */
 export async function removeOperatorPark(root: string, slug: string): Promise<void> {
   await rm(parkedMarkerPath(root, slug), { force: true });
+}
+
+/**
+ * List every slug with a live `.daemon/parked/<slug>` marker under `root`.
+ * Used by the dashboard (FR-6) to surface a STALE park — a marker left
+ * behind for a slug with no worktree and no backlog entry — which would
+ * otherwise be invisible to every other scan. `[]` when the directory is
+ * absent (no parks yet).
+ */
+export async function listOperatorParkedSlugs(root: string): Promise<string[]> {
+  const dir = join(root, '.daemon', OPERATOR_PARKED_SUBDIR);
+  try {
+    const entries = await readdir(dir, { withFileTypes: true });
+    return entries.filter((e) => e.isFile()).map((e) => e.name);
+  } catch {
+    return [];
+  }
 }

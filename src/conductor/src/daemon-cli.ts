@@ -52,6 +52,7 @@ import {
   makeFeatureRunnerDeps,
 } from './engine/daemon-deps.js';
 import { isOperatorParked } from './engine/park-marker.js';
+import { listOperatorParkedSlugs } from './engine/park-marker.js';
 import { readState, writeState, getStepStatus } from './engine/state.js';
 import { makeGitRunner, originDefaultBranch } from './engine/rebase.js';
 import {
@@ -702,7 +703,30 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
           discover: () => discoverTick({ refresh: true }),
           log,
         });
-        log(`\n${renderDashboard(state)}`);
+        // Task 11 (operator-park, FR-6): PARKED outranks every other group.
+        // `scanInheritedState` has no concept of parking, so compute the
+        // parked overlay here — every slug the scan surfaced, PLUS a listing
+        // of `.daemon/parked/` itself so a stale park (no worktree, no
+        // backlog entry) still renders instead of vanishing silently.
+        const candidateSlugs = new Set<string>([
+          ...state.halted.map((h) => h.slug),
+          ...state.inProgress.map((p) => p.slug),
+          ...state.eligible.map((e) => e.slug),
+          ...state.processed.map((p) => p.slug),
+          ...(state.waiting ?? []).map((w) => w.slug),
+        ]);
+        for (const slug of await listOperatorParkedSlugs(projectRoot)) {
+          candidateSlugs.add(slug);
+        }
+        const parked: string[] = [];
+        for (const slug of candidateSlugs) {
+          if (await isOperatorParked(projectRoot, slug, (err) =>
+            log(`anomaly checking if ${slug} is parked: ${err.message}`),
+          )) {
+            parked.push(slug);
+          }
+        }
+        log(`\n${renderDashboard({ ...state, parked })}`);
       },
       // FR-4: resolve the base-branch tip SHA from the SAME local default branch
       // the backlog reads. On idle refresh we fast-forward it first so the SHA
