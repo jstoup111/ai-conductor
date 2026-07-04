@@ -207,6 +207,11 @@ export interface StepRunResult {
    * The conductor resets the session state and retries without burning budget.
    */
   sessionExpired?: boolean;
+  /**
+   * Set when the operator's OAuth token is expired or invalid.
+   * The conductor halts and reports the auth failure.
+   */
+  authFailure?: boolean;
 }
 
 export interface StepRunOptions {

@@ -426,6 +426,12 @@ export class DefaultStepRunner implements StepRunner {
     });
     this.callCount++;
 
+    // Auth failure: operator's OAuth token is expired or invalid.
+    // Report it — the conductor will halt and report the auth failure.
+    if (result.authFailure) {
+      return { success: false, output: result.output, authFailure: true };
+    }
+
     // Rate limit: surface wait seconds (from marker file if present, else
     // default 300s — matches bin/conduct handle_rate_limit).
     if (result.rateLimited) {
