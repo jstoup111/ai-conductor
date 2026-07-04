@@ -181,6 +181,57 @@ test_self_test() {
 }
 test_self_test
 
+# ─── Test: unknown option is rejected (TECH-1 happy) ──────────────────────
+#
+# Today `bin/conduct`'s arg parser has a catch-all branch:
+#   *) FEATURE_DESC="$1" ;;
+# which means an unrecognized flag like `--frobnicate` silently becomes the
+# feature description and conduct proceeds to try to launch the SDLC
+# pipeline (invoking `claude` directly, prompting interactively, etc).
+#
+# These tests assert the desired behavior instead: unknown options must be
+# rejected loudly (non-zero exit, a clear "Unknown option" message that
+# points at --help) and must NEVER touch .pipeline/ state.
+#
+# CONDUCT_TEST_NO_CLAUDE=1 is a guard env var (not yet honored by
+# bin/conduct) intended to short-circuit any attempt to launch the real
+# `claude` binary during tests. We also wrap invocations in `timeout` so
+# that if the guard isn't honored (as today), the test fails fast instead
+# of hanging or actually spawning a pipeline.
+
+echo ""
+echo -e "${BOLD}Test Suite: Unknown Option Guard (RED)${NC}"
+echo ""
+
+test_unknown_option_rejected() {
+  local repo
+  repo=$(make_temp_repo "unknown-option-repo")
+
+  local stderr_file
+  stderr_file=$(mktemp)
+
+  local rc=0
+  (
+    cd "$repo"
+    CONDUCT_TEST_NO_CLAUDE=1 timeout 5 "$CONDUCT" --frobnicate >/dev/null 2>"$stderr_file"
+  ) || rc=$?
+
+  assert "conduct --frobnicate exits non-zero" \
+    "$([ "$rc" -ne 0 ] && echo 0 || echo 1)"
+
+  assert "stderr mentions 'Unknown option: --frobnicate'" \
+    "$(grep -q 'Unknown option: --frobnicate' "$stderr_file" && echo 0 || echo 1)"
+
+  assert "stderr mentions --help" \
+    "$(grep -q -- '--help' "$stderr_file" && echo 0 || echo 1)"
+
+  assert "no pipeline state was written for --frobnicate" \
+    "$(assert_no_pipeline_state "$repo" && echo 0 || echo 1)"
+
+  rm -f "$stderr_file"
+}
+test_unknown_option_rejected
+
 # ─── Summary ─────────────────────────────────────────────────────────────
 
 echo ""
