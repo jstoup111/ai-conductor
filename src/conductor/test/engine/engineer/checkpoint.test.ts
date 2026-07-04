@@ -200,6 +200,28 @@ describe('checkpointSpec', () => {
     expect(remoteExists).toBe(false);
   });
 
+  it('finish mode: no gh/PR activity — checkpoint publish is early-draft-only', async () => {
+    const worktree = await seedWorktree('dep bump');
+
+    const calls: string[][] = [];
+    const gh: GhRunner = async (args: string[]) => {
+      calls.push(args);
+      return { stdout: '' };
+    };
+
+    const result = await checkpointSpec({
+      worktreePath: worktree,
+      slug: 'dep-bump',
+      prTiming: 'finish',
+      identity: { resolved: true, id: 'operator@example.com' },
+      gh,
+    });
+
+    expect(calls).toHaveLength(0);
+    expect(result.drafted).toBe(false);
+    expect(result.prUrl).toBeUndefined();
+  });
+
   it('push failure (no remote): logs loudly, resolves without throwing', async () => {
     const wt = await createEngineerWorktree(repoPath, 'dep bump 2');
     const worktree = wt.worktreePath;
