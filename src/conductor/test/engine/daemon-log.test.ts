@@ -91,6 +91,36 @@ describe('engine/daemon-log', () => {
     });
   });
 
+  describe('size-cap rotation preserves KICKBACK lines', () => {
+    it('a KICKBACK line written just before rotation survives intact in daemon.log.1', async () => {
+      await mkdir(join(dir, '.daemon'), { recursive: true });
+      // Fill the log to just under the 1 MB rotation cap.
+      const filler = 'x'.repeat(999_990) + '\n';
+      const kickbackLine = formatDaemonLogLine(
+        '[daemon] KICKBACK: prd_audit re-opened build (1)',
+      );
+      await writeFile(
+        join(dir, '.daemon', 'daemon.log'),
+        filler + kickbackLine + '\n',
+        'utf8',
+      );
+
+      // Trigger rotation with a subsequent write (rotation happens on open,
+      // since the file now exceeds the cap).
+      const sink = await openDaemonLog(dir);
+      sink.write('fresh after rotation');
+      await sink.close();
+
+      const rotated = await readFile(join(dir, '.daemon', 'daemon.log.1'), 'utf8');
+      const rotatedLines = rotated.split('\n').filter((l) => l.length > 0);
+      const kickbackLines = rotatedLines.filter((l) => l.includes('KICKBACK'));
+
+      // The kickback line exists intact as a single, complete line.
+      expect(kickbackLines).toHaveLength(1);
+      expect(kickbackLines[0]).toBe(kickbackLine);
+    });
+  });
+
   describe('renderDaemonEvent → log file (handoff requirement)', () => {
     it('a completed step produces a corresponding line in .daemon/daemon.log', async () => {
       const sink = await openDaemonLog(dir);
