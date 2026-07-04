@@ -837,6 +837,9 @@ export function renderDaemonEvent(event: ConductorEvent, log: (msg: string) => v
         `${chalk.bold.yellow(`↩ KICKBACK: ${event.from} re-opened ${event.to}${event.evidence ? ` — ${event.evidence}` : ''}`)} (×${event.count})`,
       );
       break;
+    case 'navigation_back':
+      log(chalk.yellow(`↰ BACK: ${event.from} → ${event.to} (operator)`));
+      break;
     case 'loop_halt':
       log(`${dot} ${chalk.red('✋')} ${chalk.red(`loop halted: ${event.reason}`)}`);
       break;
