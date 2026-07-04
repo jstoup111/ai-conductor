@@ -39,6 +39,7 @@ import {
   readRestartMarkerWithStatus,
   clearRestartMarker,
   recordSuppression,
+  writeRestartMarker,
 } from './engine/restart-intent.js';
 import {
   isHalted,
@@ -72,6 +73,17 @@ import { isPaused } from './engine/pause-marker.js';
 import { readRestartPending, consumeOnBoot, type RestartIntent } from './engine/restart-marker.js';
 
 const execFile = promisify(execFileCb);
+
+/**
+ * RestartRequester is the injected dependency for restart sequence execution.
+ * Called when a stale engine is detected in the idle branch (Task 14+).
+ * Implements: write marker → release lock → exit(0).
+ * On error, the catch block ensures lock release + exit(1).
+ */
+export type RestartRequester = (opts: {
+  fromIdentity: string | null;
+  targetIdentity: string | null;
+}) => Promise<void>;
 
 export interface DaemonModeOptions {
   projectRoot: string;
@@ -137,6 +149,54 @@ const PRESEEDED_DONE: StepName[] = [
 const ANSI_SGR = /\x1b\[[0-9;]*m/g;
 function stripAnsi(s: string): string {
   return s.replace(ANSI_SGR, '');
+}
+
+/**
+ * Task 14: Create a RestartRequester that implements the restart sequence:
+ * 1. Write a restart marker with identity metadata
+ * 2. Release the lock
+ * 3. Exit with code 0
+ *
+ * On error during marker write, a catch block ensures the lock is released and exit(1) is called.
+ *
+ * @param daemonDir - project root directory
+ * @param log - logging function
+ * @param lock - lock object with releaseSync method
+ * @param process - Node process object (injected for testability)
+ * @returns RestartRequester function
+ */
+export function createRestartRequester(
+  daemonDir: string,
+  log: (msg: string) => void,
+  lock: { releaseSync(): void },
+  process: NodeJS.Process,
+): RestartRequester {
+  return async (opts: { fromIdentity: string | null; targetIdentity: string | null }) => {
+    try {
+      // Step 1: Write marker (can fail)
+      await writeRestartMarker(
+        {
+          reason: 'stale-engine',
+          fromIdentity: opts.fromIdentity,
+          targetIdentity: opts.targetIdentity,
+          at: Date.now(),
+        },
+        daemonDir,
+        log,
+      );
+    } catch (err) {
+      // Backstop: ensure lock is released even if marker write fails
+      lock.releaseSync();
+      process.exit(1);
+      return; // Never reached in production, but clarifies intent
+    }
+
+    // Step 2: Release lock (marker write succeeded)
+    lock.releaseSync();
+
+    // Step 3: Exit with 0 (marker and lock release succeeded)
+    process.exit(0);
+  };
 }
 
 /**
@@ -570,6 +630,13 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     markWarned: (slug) => markWarned(projectRoot, slug),
   };
 
+  // Task 14: Create the real restart requester with injected lock + process
+  const requestRestart = createRestartRequester(projectRoot, log, lock, process);
+
+  // Task 11: Create the suppression check wrapper that binds projectRoot
+  const suppressionChecker = (currentIdentity: string | null) =>
+    isSuppressed(currentIdentity, projectRoot, log);
+
   const result = await runDaemon(
     {
       discoverBacklog: discoverTick,
@@ -580,6 +647,8 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       isPaused: () => isPaused(projectRoot),
       runFeature,
       log,
+      requestRestart,
+      isSuppressed: suppressionChecker,
       // ── Halt-reconciliation (ADR-013) real-I/O hooks ──────────────────────
       // FR-1: scan inherited state and render the dashboard to both sinks
       // (console + daemon.log via `log`) before any dispatch. Pass the priority
@@ -649,6 +718,9 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       idlePollMs:
         opts.idlePollSeconds != null ? opts.idlePollSeconds * 1000 : undefined,
       maxIdlePolls: opts.maxIdlePolls,
+      // Task 12: wire stale-engine detection gate inputs
+      isSelfHost,
+      autoRestartOnStaleEngine: config?.auto_restart_on_stale_engine ?? false,
     },
   );
 

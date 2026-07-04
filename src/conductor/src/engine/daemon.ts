@@ -183,6 +183,14 @@ export interface DaemonDeps {
     targetIdentity: string | null;
   }) => Promise<void>;
 
+  /**
+   * Task 11: Check if the current engine identity is suppressed due to
+   * non-convergence at boot. Returns true if suppressed (hold restart),
+   * false if not suppressed (proceed with restart) or on error (re-arm).
+   * Optional for backward compatibility; tests inject to verify gate behavior.
+   */
+  isSuppressed?: (currentIdentity: string | null) => Promise<boolean>;
+
   // ── Halt-reconciliation hooks (ADR-013) — all OPTIONAL so the pure core
   //    (and its no-git tests) run unchanged when they are absent. ──────────────
   /**
@@ -569,22 +577,33 @@ export async function runDaemon(
 
           // Task 13: Handle stale verdict with in-flight re-verify
           if (verdict === 'stale') {
-            // Re-verify that inFlight is still empty before requesting restart.
-            // A task could have been added between the verdict check and now.
-            if (inFlight.size === 0) {
-              // All gates still pass, request restart with identities
-              const fromIdentity = deps.staleEngineChecker.capturedIdentity?.() ?? null;
-              const targetIdentity = deps.staleEngineChecker.targetIdentity?.() ?? null;
+            // Task 11: Check if this identity is suppressed before proceeding.
+            // Suppressed identities hold (no restart request) and log once per session.
+            const targetIdentity = deps.staleEngineChecker.targetIdentity?.() ?? null;
+            const suppressed = deps.isSuppressed ? await deps.isSuppressed(targetIdentity) : false;
 
-              if (deps.requestRestart) {
-                await deps.requestRestart({
-                  fromIdentity,
-                  targetIdentity,
-                });
+            if (suppressed) {
+              // Restart suppressed for this identity: hold and don't request restart.
+              // The suppression check has already logged once per session.
+              // Fall through to idle behavior (sleep/sweep), don't request restart.
+            } else {
+              // Not suppressed: proceed with restart request (if gates still pass).
+              // Re-verify that inFlight is still empty before requesting restart.
+              // A task could have been added between the verdict check and now.
+              if (inFlight.size === 0) {
+                // All gates still pass, request restart with identities
+                const fromIdentity = deps.staleEngineChecker.capturedIdentity?.() ?? null;
+
+                if (deps.requestRestart) {
+                  await deps.requestRestart({
+                    fromIdentity,
+                    targetIdentity,
+                  });
+                }
               }
+              // If inFlight not empty, someone added a task while we checked.
+              // Fall through to next iteration; will not enter idle branch again.
             }
-            // If inFlight not empty, someone added a task while we checked.
-            // Fall through to next iteration; will not enter idle branch again.
           }
         }
 

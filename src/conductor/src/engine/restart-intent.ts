@@ -230,3 +230,86 @@ export async function getSuppression(dir: string): Promise<SuppressionRecord | n
     return null; // absent / unreadable / corrupt JSON → null
   }
 }
+
+// ─ Warn-once tracking for isSuppressed (Task 11) ──────────────────────────────
+// Track which (dir, suppressedTarget) pairs we've already warned about in this
+// session. Keyed by a string representation of (dir, suppressedTarget) to support
+// warn-once-per-session semantics across multiple idle passes within the daemon loop.
+const warnedSuppressions = new Set<string>();
+const warnedCorruptions = new Set<string>();
+
+/**
+ * Check if the given engine identity is currently suppressed.
+ *
+ * Returns true if:
+ * - The suppression record exists and is valid
+ * - currentIdentity matches suppressedTarget (including null-to-null match)
+ *
+ * Returns false if:
+ * - No suppression record exists (re-arm scenario)
+ * - Suppression record is corrupt (treat as absent, re-arm)
+ * - currentIdentity differs from suppressedTarget
+ *
+ * Logs once per session (via warn-once tracking) when:
+ * - Suppression is active (currentIdentity matches suppressedTarget)
+ * - Suppression record is corrupt (treated as re-arm, logged as corruption warning)
+ *
+ * Never throws; all errors are degraded gracefully.
+ */
+export async function isSuppressed(
+  currentIdentity: string | null,
+  dir: string,
+  log?: (msg: string) => void,
+): Promise<boolean> {
+  const filePath = join(dir, SUPPRESSION_PATH);
+
+  try {
+    const raw = await readFile(filePath, 'utf-8');
+    const suppression = JSON.parse(raw) as SuppressionRecord;
+
+    // Suppression record exists: check if identity matches
+    const isMatch = suppression.suppressedTarget === currentIdentity;
+
+    if (isMatch) {
+      // Warn once per session for this (dir, suppressedTarget) combination
+      const warnKey = `${dir}::${currentIdentity}`;
+      if (!warnedSuppressions.has(warnKey)) {
+        warnedSuppressions.add(warnKey);
+        log?.(`Restart suppressed for engine identity: ${currentIdentity ?? 'null'}`);
+      }
+    }
+
+    return isMatch;
+  } catch (err) {
+    // Distinguish: file not found (absent) vs file exists but corrupt
+    const isNotFound =
+      err instanceof Error && 'code' in err && err.code === 'ENOENT';
+
+    if (!isNotFound) {
+      // File exists but is corrupt (invalid JSON or other read error)
+      const warnKey = `${dir}::corrupt`;
+      if (!warnedCorruptions.has(warnKey)) {
+        warnedCorruptions.add(warnKey);
+        log?.(`Suppression record is corrupt and will be re-derived at next boot`);
+      }
+    }
+
+    // Corrupt or missing suppression → treat as absent, return false (re-arm)
+    return false;
+  }
+}
+
+/**
+ * Delete the suppression record at `<dir>/.daemon/RESTART_PENDING.suppression`.
+ * A failed delete is swallowed (logged if a logger is provided) so cleanup failure
+ * degrades gracefully. Never throws.
+ */
+export async function clearSuppression(dir: string, log?: (msg: string) => void): Promise<void> {
+  try {
+    await rm(join(dir, SUPPRESSION_PATH), { force: true });
+  } catch (err) {
+    log?.(
+      `could not delete suppression record: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+}

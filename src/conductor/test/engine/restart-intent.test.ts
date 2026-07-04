@@ -11,6 +11,8 @@ import {
   readRestartMarkerWithStatus,
   recordSuppression,
   getSuppression,
+  isSuppressed,
+  clearSuppression,
   RESTART_MARKER_PATH,
   type RestartMarker,
   type RestartMarkerStatus,
@@ -326,6 +328,142 @@ describe('engine/restart-intent — marker schema round-trip', () => {
 
       expect(suppression1?.suppressedTarget).toBe('identity-1');
       expect(suppression2?.suppressedTarget).toBe('identity-2');
+    });
+  });
+
+  describe('isSuppressed + clearSuppression — hold, re-arm, log-once', () => {
+    it('returns true when currentIdentity matches suppressedTarget', async () => {
+      const suppressedIdentity = 'engine-suppressed-123';
+      await recordSuppression(suppressedIdentity, dir);
+
+      const result = await isSuppressed(suppressedIdentity, dir);
+
+      expect(result).toBe(true);
+    });
+
+    it('returns false when currentIdentity differs from suppressedTarget', async () => {
+      const suppressedIdentity = 'engine-suppressed-123';
+      await recordSuppression(suppressedIdentity, dir);
+
+      const result = await isSuppressed('engine-different-456', dir);
+
+      expect(result).toBe(false);
+    });
+
+    it('returns false when suppression record does not exist (re-arm)', async () => {
+      const result = await isSuppressed('engine-any-identity', dir);
+
+      expect(result).toBe(false);
+    });
+
+    it('returns false when suppression record is corrupt (treat as absent, re-arm)', async () => {
+      const suppressionPath = join(dir, '.daemon', 'RESTART_PENDING.suppression');
+      await mkdir(dirname(suppressionPath), { recursive: true });
+      await writeFile(suppressionPath, 'garbage {{{', 'utf-8');
+
+      const result = await isSuppressed('engine-any-identity', dir);
+
+      expect(result).toBe(false);
+    });
+
+    it('logs once per session when identity is suppressed', async () => {
+      const suppressedIdentity = 'engine-suppressed-123';
+      await recordSuppression(suppressedIdentity, dir);
+
+      const warnings: string[] = [];
+      const log = (msg: string) => warnings.push(msg);
+
+      // First call should log
+      await isSuppressed(suppressedIdentity, dir, log);
+      expect(warnings.length).toBe(1);
+
+      // Subsequent calls with same identity should not log again
+      await isSuppressed(suppressedIdentity, dir, log);
+      await isSuppressed(suppressedIdentity, dir, log);
+      expect(warnings.length).toBe(1);
+    });
+
+    it('logs once when suppression record is corrupt', async () => {
+      const suppressionPath = join(dir, '.daemon', 'RESTART_PENDING.suppression');
+      await mkdir(dirname(suppressionPath), { recursive: true });
+      await writeFile(suppressionPath, 'corrupt data', 'utf-8');
+
+      const warnings: string[] = [];
+      const log = (msg: string) => warnings.push(msg);
+
+      // First call should log
+      await isSuppressed('engine-any', dir, log);
+      expect(warnings.length).toBe(1);
+
+      // Subsequent calls should not log again (same corruption state)
+      await isSuppressed('engine-any', dir, log);
+      expect(warnings.length).toBe(1);
+    });
+
+    it('does not log when suppression record is absent', async () => {
+      const warnings: string[] = [];
+      const log = (msg: string) => warnings.push(msg);
+
+      await isSuppressed('engine-any', dir, log);
+
+      expect(warnings.length).toBe(0);
+    });
+
+    it('clears suppression when identity moves to new value', async () => {
+      const suppressedIdentity = 'engine-old-123';
+      await recordSuppression(suppressedIdentity, dir);
+
+      // Old identity is suppressed
+      expect(await isSuppressed(suppressedIdentity, dir)).toBe(true);
+
+      // New identity is not suppressed (identity moved)
+      expect(await isSuppressed('engine-new-456', dir)).toBe(false);
+
+      // Suppression record should still exist (only cleared when we call clearSuppression)
+      const suppression = await getSuppression(dir);
+      expect(suppression?.suppressedTarget).toBe(suppressedIdentity);
+    });
+
+    it('clearSuppression deletes the suppression record', async () => {
+      const suppressedIdentity = 'engine-to-clear-123';
+      await recordSuppression(suppressedIdentity, dir);
+
+      // Verify suppression exists
+      expect(await getSuppression(dir)).not.toBeNull();
+
+      // Clear suppression
+      await clearSuppression(dir);
+
+      // Verify suppression is gone
+      expect(await getSuppression(dir)).toBeNull();
+    });
+
+    it('clearSuppression does not throw when suppression does not exist', async () => {
+      await expect(clearSuppression(dir)).resolves.toBeUndefined();
+    });
+
+    it('isSuppressed returns true for null currentIdentity matching null suppressedTarget', async () => {
+      await recordSuppression(null, dir);
+
+      const result = await isSuppressed(null, dir);
+
+      expect(result).toBe(true);
+    });
+
+    it('isSuppressed returns false when currentIdentity is null but suppressedTarget is not', async () => {
+      await recordSuppression('engine-123', dir);
+
+      const result = await isSuppressed(null, dir);
+
+      expect(result).toBe(false);
+    });
+
+    it('isSuppressed returns false when currentIdentity is not null but suppressedTarget is', async () => {
+      await recordSuppression(null, dir);
+
+      const result = await isSuppressed('engine-123', dir);
+
+      expect(result).toBe(false);
     });
   });
 });
