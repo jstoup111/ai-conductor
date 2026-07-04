@@ -28,9 +28,11 @@ import { createRegistryReader } from './registry.js';
 import { resolveEngineerDir } from './engineer-store.js';
 import { resolveTargetRepo } from './engineer/target.js';
 import { landSpec } from './engineer/land-spec.js';
+import { checkpointSpec } from './engineer/checkpoint.js';
 import { loadConfig } from './config.js';
 import { readMachineOwnerConfig } from './owner-gate/machine-identity.js';
 import { resolveDaemonOwner } from './owner-gate/identity.js';
+import { resolvePrTiming } from './resolved-config.js';
 import { openSpecPr } from './engineer/handoff.js';
 import {
   createEngineerWorktree,
@@ -99,6 +101,7 @@ export type EngineerDispatch =
   | { kind: 'projects' }
   | { kind: 'worktree'; project: string; idea: string }
   | { kind: 'land'; project: string; idea: string; worktree: string; sourceRef?: string }
+  | { kind: 'checkpoint'; project: string; worktree: string; slug: string }
   | { kind: 'handoff'; project: string; branch: string; worktree: string; sourceRef?: string }
   | { kind: 'poll' }
   | { kind: 'claim' }
@@ -159,6 +162,19 @@ export function detectEngineerCommand(argv: string[]): EngineerDispatch | null {
     // intake envelope (github-issues). Absent for human-typed ideas.
     const sourceRef = parseFlag(argv, '--source-ref') ?? undefined;
     return { kind: 'land', project, idea, worktree, sourceRef };
+  }
+
+  if (subCmd === 'checkpoint') {
+    // `conduct-ts engineer checkpoint --project <n> --worktree <p> --slug <s>` — commit
+    // + publish whatever `.docs` content has accumulated so far in the per-idea
+    // worktree (identity-gated, `.docs`-scoped). Mirrors `land`'s required-flags shape.
+    const project = parseFlag(argv, '--project');
+    const worktree = parseFlag(argv, '--worktree');
+    const slug = parseFlag(argv, '--slug');
+    if (!project || !worktree || !slug) {
+      return { kind: 'guide' };
+    }
+    return { kind: 'checkpoint', project, worktree, slug };
   }
 
   if (subCmd === 'handoff') {
@@ -385,6 +401,7 @@ function printGuide(print: (s: string) => void): void {
       '  conduct-ts engineer claim                               — dequeue the oldest pending intake idea (JSON)\n' +
       '  conduct-ts engineer worktree --project <n> --idea "<i>"                     — create the per-idea authoring worktree\n' +
       '  conduct-ts engineer land --project <n> --idea "<i>" --worktree <p> [--source-ref <ref>]    — commit spec artifacts in the worktree\n' +
+      '  conduct-ts engineer checkpoint --project <n> --worktree <p> --slug <s>  — commit + publish in-progress .docs artifacts\n' +
       '  conduct-ts engineer handoff --project <n> --branch <b> --worktree <p> [--source-ref <ref>] — open spec PR + remove worktree + nudge daemon\n' +
       '  conduct-ts engineer resolve <ref> --pr-url <url> [--branch <b>]              — mark a claimed entry as delivered (recovery from write-back failure)\n' +
       '  conduct-ts engineer poll                                — poll github issues → enqueue new ideas\n' +
@@ -681,6 +698,54 @@ export async function dispatchEngineer(
       }
 
       print(JSON.stringify(result));
+      return 0;
+    }
+
+    // ── checkpoint ────────────────────────────────────────────────────────────
+    // `conduct-ts engineer checkpoint --project <n> --worktree <p> --slug <s>`:
+    // commit + publish whatever `.docs` content has accumulated so far. Identity
+    // is resolved (fail-closed, same chain as `land`) BEFORE any git operation —
+    // an unresolved identity makes checkpointSpec a strict no-op.
+    case 'checkpoint': {
+      const { project: projectName, worktree, slug } = dispatch;
+      const reader = createRegistryReader(registryPath ? { registryPath } : {});
+      const allProjects = await reader.listProjects();
+      const record = allProjects.find((p) => p.name === projectName);
+      if (!record) {
+        printErr(`engineer checkpoint: project "${projectName}" not found in registry.`);
+        return 1;
+      }
+
+      let target: Awaited<ReturnType<typeof resolveTargetRepo>>;
+      try {
+        target = await resolveTargetRepo(record.path, reader);
+      } catch (err: unknown) {
+        printErr(`engineer checkpoint: ${err instanceof Error ? err.message : String(err)}`);
+        return 1;
+      }
+
+      const configResult = await loadConfig(target.canonicalPath);
+      const prTiming = resolvePrTiming(configResult.ok ? configResult.config : undefined);
+
+      const ownerConfig = await readMachineOwnerConfig();
+      const identity = await resolveDaemonOwner(ownerConfig, gh, target.canonicalPath);
+
+      let result: Awaited<ReturnType<typeof checkpointSpec>>;
+      try {
+        result = await checkpointSpec({
+          worktreePath: worktree,
+          slug,
+          prTiming,
+          identity,
+          gh,
+          log: printErr,
+        });
+      } catch (err: unknown) {
+        printErr(`engineer checkpoint: ${err instanceof Error ? err.message : String(err)}`);
+        return 1;
+      }
+
+      print(JSON.stringify({ kind: 'checkpoint', ...result }));
       return 0;
     }
 
