@@ -57,6 +57,7 @@ async function spawnAndReapDeadPid(): Promise<number> {
 function makeFakeSupervisor(overrides: Partial<Supervisor> = {}): Supervisor {
   return {
     isUp: async () => true,
+    hasSession: async () => true,
     start: async () => {},
     stop: async () => {},
     restart: async () => ({ message: 'daemon restarted' }) as any,
