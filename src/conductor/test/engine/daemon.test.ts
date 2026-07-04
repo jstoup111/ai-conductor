@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   runDaemon,
   type BacklogItem,
@@ -670,5 +670,46 @@ describe('engine/daemon — runDaemon', () => {
       // expect(requestRestart).toHaveBeenCalledTimes(0);
     });
 
+
+  // ── TS-2: repo_root_missing self-termination ─────────────────
+
+  it('stops immediately with repo_root_missing when the repo root is gone; never dispatches', async () => {
+    const logs: string[] = [];
+    const runFeature = vi.fn(async (it: BacklogItem) => ({ slug: it.slug, status: 'done' as const }));
+    const deps: DaemonDeps = {
+      discoverBacklog: staticBacklog(items(1)),
+      runFeature,
+      repoRootMissing: () => '/gone/repo',
+      log: (msg) => {
+        logs.push(msg);
+      },
+    };
+    const res = await runDaemon(deps, { concurrency: 1, once: true });
+    expect(res).toEqual({ processed: [], stoppedReason: 'repo_root_missing' });
+    expect(runFeature).not.toHaveBeenCalled();
+    expect(
+      logs.filter((m) => m.includes('repo root missing') && m.includes('/gone/repo'))
+    ).toHaveLength(1);
+  });
+
+  it('does NOT false-positive when the repo root exists throughout (repoRootMissing returns null)', async () => {
+    const logs: string[] = [];
+    const runFeature = vi.fn(async (it: BacklogItem) => ({ slug: it.slug, status: 'done' as const }));
+    const deps: DaemonDeps = {
+      discoverBacklog: staticBacklog(items(1)),
+      runFeature,
+      repoRootMissing: () => null, // root exists
+      log: (msg) => {
+        logs.push(msg);
+      },
+    };
+    const res = await runDaemon(deps, { concurrency: 1, once: true });
+    // Verify daemon drains the backlog without false-positiving on root missing
+    expect(res.processed).toHaveLength(1);
+    expect(res.stoppedReason).toBe('backlog_drained');
+    expect(runFeature).toHaveBeenCalledOnce();
+    expect(
+      logs.filter((m) => m.includes('repo root missing'))
+    ).toHaveLength(0);
   });
 });
