@@ -8,6 +8,8 @@
 // no heavy imports in the detector) so index.ts can decide whether to
 // dispatch before the pipeline boots.
 
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { writeOperatorPark, removeOperatorPark } from './park-marker.js';
 
 export type DaemonParkDispatch =
@@ -28,6 +30,19 @@ export function detectDaemonParkCommand(argv: string[]): DaemonParkDispatch | nu
   const slug = args[2];
   if (!slug) return null;
   return { kind: sub, slug };
+}
+
+/**
+ * Validate that `slug` refers to a real unit of work before we let `park`
+ * write a marker for it. A slug is considered known if either its plan file
+ * (`.docs/plans/<slug>.md`) or its worktree directory (`.worktrees/<slug>`)
+ * exists — either one alone is sufficient. This guards against typo'd or
+ * stale slugs silently parking nothing.
+ */
+export function validateSlug(slug: string, cwd: string = process.cwd()): boolean {
+  const planPath = join(cwd, '.docs', 'plans', `${slug}.md`);
+  const worktreePath = join(cwd, '.worktrees', slug);
+  return existsSync(planPath) || existsSync(worktreePath);
 }
 
 export interface DaemonParkDeps {
@@ -54,6 +69,10 @@ export async function dispatchDaemonPark(
 
   try {
     if (cmd.kind === 'park') {
+      if (!validateSlug(cmd.slug, cwd)) {
+        out(`error: slug '${cmd.slug}' not found in plans/ or worktrees/`);
+        return 1;
+      }
       await writeOperatorPark(cwd, cmd.slug);
       out(
         `Parked '${cmd.slug}' — it will not be dispatched or re-kicked until unparked.`,

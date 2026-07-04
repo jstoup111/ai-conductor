@@ -5,11 +5,16 @@ import { tmpdir } from 'node:os';
 import {
   detectDaemonParkCommand,
   dispatchDaemonPark,
+  validateSlug,
 } from '../../src/engine/daemon-park-cli.js';
 import { isOperatorParked } from '../../src/engine/park-marker.js';
 
 describe('engine/daemon-park-cli', () => {
   let root: string;
+
+  const makeWorktree = async (r: string, slug: string) => {
+    await mkdir(join(r, '.worktrees', slug), { recursive: true });
+  };
 
   beforeEach(async () => {
     root = await mkdtemp(join(tmpdir(), 'daemon-park-cli-'));
@@ -52,6 +57,7 @@ describe('engine/daemon-park-cli', () => {
 
   describe('dispatchDaemonPark', () => {
     it('park writes the marker and prints a confirmation naming the slug', async () => {
+      await makeWorktree(root, 'feat-widgets');
       const out: string[] = [];
       const code = await dispatchDaemonPark(
         { kind: 'park', slug: 'feat-widgets' },
@@ -67,6 +73,7 @@ describe('engine/daemon-park-cli', () => {
     });
 
     it('park is idempotent — re-parking an already-parked slug does not throw', async () => {
+      await makeWorktree(root, 'feat-widgets');
       const out: string[] = [];
       await dispatchDaemonPark({ kind: 'park', slug: 'feat-widgets' }, { cwd: root, out: () => {} });
       const code = await dispatchDaemonPark(
@@ -78,6 +85,7 @@ describe('engine/daemon-park-cli', () => {
     });
 
     it('unpark removes the marker and prints a confirmation', async () => {
+      await makeWorktree(root, 'feat-widgets');
       await dispatchDaemonPark({ kind: 'park', slug: 'feat-widgets' }, { cwd: root, out: () => {} });
       const out: string[] = [];
       const code = await dispatchDaemonPark(
@@ -115,6 +123,71 @@ describe('engine/daemon-park-cli', () => {
       );
       expect(code).toBe(1);
       expect(out.join('\n').length).toBeGreaterThan(0);
+    });
+
+    it('rejects an unknown slug (no plan, no worktree) — exit 1, no marker written', async () => {
+      const out: string[] = [];
+      const code = await dispatchDaemonPark(
+        { kind: 'park', slug: 'totally-unknown-slug' },
+        { cwd: root, out: (l) => out.push(l) },
+      );
+      expect(code).toBe(1);
+      expect(out.join('\n')).toContain('not found in plans/ or worktrees/');
+      expect(await isOperatorParked(root, 'totally-unknown-slug')).toBe(false);
+    });
+
+    it('parks successfully when known by plan file only (no worktree)', async () => {
+      await mkdir(join(root, '.docs', 'plans'), { recursive: true });
+      const { writeFile } = await import('node:fs/promises');
+      await writeFile(join(root, '.docs', 'plans', 'plan-only-slug.md'), '# plan\n');
+      const out: string[] = [];
+      const code = await dispatchDaemonPark(
+        { kind: 'park', slug: 'plan-only-slug' },
+        { cwd: root, out: (l) => out.push(l) },
+      );
+      expect(code).toBe(0);
+      expect(await isOperatorParked(root, 'plan-only-slug')).toBe(true);
+    });
+
+    it('parks successfully when known by worktree dir only (no plan)', async () => {
+      await makeWorktree(root, 'worktree-only-slug');
+      const out: string[] = [];
+      const code = await dispatchDaemonPark(
+        { kind: 'park', slug: 'worktree-only-slug' },
+        { cwd: root, out: (l) => out.push(l) },
+      );
+      expect(code).toBe(0);
+      expect(await isOperatorParked(root, 'worktree-only-slug')).toBe(true);
+    });
+
+    it('parks successfully on a fresh checkout with no .daemon/ dir yet', async () => {
+      await makeWorktree(root, 'fresh-checkout-slug');
+      // no .daemon/ directory has been created in this repo root
+      const out: string[] = [];
+      const code = await dispatchDaemonPark(
+        { kind: 'park', slug: 'fresh-checkout-slug' },
+        { cwd: root, out: (l) => out.push(l) },
+      );
+      expect(code).toBe(0);
+      expect(await isOperatorParked(root, 'fresh-checkout-slug')).toBe(true);
+    });
+  });
+
+  describe('validateSlug', () => {
+    it('returns false when neither plan nor worktree exists', () => {
+      expect(validateSlug('nope', root)).toBe(false);
+    });
+
+    it('returns true when only the plan file exists', async () => {
+      await mkdir(join(root, '.docs', 'plans'), { recursive: true });
+      const { writeFile } = await import('node:fs/promises');
+      await writeFile(join(root, '.docs', 'plans', 'p.md'), '# p\n');
+      expect(validateSlug('p', root)).toBe(true);
+    });
+
+    it('returns true when only the worktree dir exists', async () => {
+      await makeWorktree(root, 'w');
+      expect(validateSlug('w', root)).toBe(true);
     });
   });
 });
