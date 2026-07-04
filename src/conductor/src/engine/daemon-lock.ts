@@ -41,6 +41,13 @@ export function daemonDir(repoPath: string): string {
   return join(repoPath, DAEMON_DIR);
 }
 
+// Exported for engine-store GC to construct pidfile paths across the fleet
+// without hardcoding the pidfile path itself (boundary test requirement).
+// Keeps all pidfile path logic confined to this module.
+export function getPidfilePath(repoPath: string): string {
+  return pidfilePath(repoPath);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Pidfile record shape.
 // ─────────────────────────────────────────────────────────────────────────────

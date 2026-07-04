@@ -34,6 +34,7 @@ import { readdir, lstat, readlink, readFile, symlink, rename, unlink, rm } from 
 import { createHash, randomBytes } from 'node:crypto';
 import { join, basename } from 'node:path';
 import { readRegistry, resolveRegistryPath, type ProjectRecord } from './registry.js';
+import { getPidfilePath } from './daemon-lock.js';
 
 /**
  * A branded string type for version ids so callers can't accidentally pass a
@@ -245,7 +246,6 @@ export async function flipCurrent(opts: FlipCurrentOpts): Promise<EngineVersionI
 
 const DEFAULT_MIN_AGE_MSECS = 24 * 60 * 60 * 1000; // 24 hours
 const DEFAULT_KEEP_LAST_K = 3;
-const PIDFILE_RELATIVE_PATH = join('.daemon', 'daemon.pid');
 
 export interface GcVersionsOpts {
   /** The conductor package root (e.g. `src/conductor`). */
@@ -312,7 +312,7 @@ async function readLiveReferencedVersionIds(
 
   const referenced = new Set<EngineVersionId>();
   for (const record of records) {
-    const pidfilePath = join(record.path, PIDFILE_RELATIVE_PATH);
+    const pidfilePath = getPidfilePath(record.path);
 
     let raw: string;
     try {

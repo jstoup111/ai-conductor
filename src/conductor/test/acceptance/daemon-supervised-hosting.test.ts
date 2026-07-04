@@ -150,7 +150,7 @@ describe('Supervisor port behavior (ADR-014)', () => {
     await expect(makeSup(absent).isUp(REPO)).resolves.toBe(false);
   });
 
-  it('stop kills the session; restart kills then recreates', async () => {
+  it('stop kills the session; restart respawns-in-place (preserves session)', async () => {
     const makeSup = requireFn(await load(TMUX_MOD), 'makeTmuxSupervisor');
     const stop = spyRunner({ '-V': { code: 0 } });
     await makeSup(stop.run).stop(REPO);
@@ -159,9 +159,11 @@ describe('Supervisor port behavior (ADR-014)', () => {
     const restart = spyRunner({ '-V': { code: 0 } });
     await makeSup(restart.run).restart(REPO);
     const subs = restart.calls.map((c) => c.args[0]);
-    expect(subs).toContain('kill-session');
-    expect(subs).toContain('new-session');
-    expect(subs.indexOf('kill-session')).toBeLessThan(subs.indexOf('new-session'));
+    // Respawn-in-place (ADR-014): set-option (remain-on-exit) + respawn-pane,
+    // NOT kill-session + new-session (which would lose scrollback).
+    expect(subs).toContain('set-option');
+    expect(subs).toContain('respawn-pane');
+    expect(subs.indexOf('set-option')).toBeLessThan(subs.indexOf('respawn-pane'));
   });
 });
 

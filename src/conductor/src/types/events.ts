@@ -40,6 +40,7 @@ export type ConductorEvent =
   | { type: 'navigation_back'; from: StepName; to: StepName }
   | { type: 'rate_limit'; waitSeconds: number }
   | { type: 'session_reset'; reason: string }
+  | { type: 'credentials_park'; reason: string }
   | { type: 'feature_complete'; prUrl?: string; featureDesc?: string; sessionStartedAt?: number }
   | { type: 'dashboard_refresh' }
   | { type: 'auto_heal'; step: StepName; healed: number; skipped: number }
