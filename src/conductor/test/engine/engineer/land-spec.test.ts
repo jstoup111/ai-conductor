@@ -410,3 +410,120 @@ describe('landSpec fails closed on unresolved identity (Slice B Story 2, D3)', (
     expect(marker).toContain('Owner: bob');
   });
 });
+
+// ── Task 19 (Story TS-7 negatives) ────────────────────────────────────────────
+//
+// T16 introduced `checkpointSpec`, which may pre-commit the `.docs` tree inside
+// the per-idea worktree BEFORE landSpec ever runs (mid-authoring checkpoints,
+// early-draft publish), and T18 taught landSpec to land idempotently on top of
+// such a checkpoint. This suite proves that a prior checkpoint commit does NOT
+// weaken landSpec's OTHER guards: DRAFT ADR, stories-approval, and the
+// dirty-non-.docs rejection all still fire exactly as they do against an
+// uncommitted (untracked) `.docs` tree. It also re-runs a happy-path land as a
+// stand-in for "finish" pr_timing — landSpec has no `prTiming` parameter, so
+// its guard behavior is identical regardless of the configured pr_timing mode.
+describe('landSpec guards are unaffected by prior checkpoint commits (Task 19, TS-7 negatives)', () => {
+  const workingGh: GhRunner = async () => ({ stdout: 'bob\n' });
+
+  /** Simulate a T16 checkpoint: commit whatever is under .docs/ in place. */
+  async function simulateCheckpointCommit(worktree: string): Promise<void> {
+    await git(['add', '.docs'], worktree);
+    await git(['commit', '-m', 'checkpoint: pre-commit .docs [engineer/checkpoint]'], worktree);
+  }
+
+  it('DRAFT ADR + fully-committed artifacts still fails with the DRAFT-ADR error', async () => {
+    const worktree = await seedWorktreeWithDraftAdr();
+    await simulateCheckpointCommit(worktree);
+
+    // Sanity: the checkpoint left nothing untracked/dirty — landSpec's own dirty
+    // guard should not be the thing that fires here.
+    const porcelain = await git(['status', '--porcelain'], worktree);
+    expect(porcelain.trim()).toBe('');
+
+    let caught: Error | null = null;
+    try {
+      await landSpec(target(), 'dep bump', worktree, undefined, { ownerConfig: {}, gh: workingGh });
+    } catch (e) {
+      caught = e instanceof Error ? e : new Error(String(e));
+    }
+
+    expect(caught).not.toBeNull();
+    expect(caught!.message).toContain('DRAFT');
+    expect(caught!.message.toLowerCase()).toContain('adr');
+  });
+
+  it('committed-but-unaccepted stories still fails with the acceptance error', async () => {
+    const worktree = await seedValidWorktree();
+    // Not DRAFT, but never marked Accepted either — must still be rejected.
+    await writeFile(
+      join(worktree, '.docs', 'stories', 'dep-bump.md'),
+      ['# Stories: dep bump', '', '**Status:** In Review', '', '## Story: bump', ''].join('\n'),
+    );
+    await simulateCheckpointCommit(worktree);
+
+    const porcelain = await git(['status', '--porcelain'], worktree);
+    expect(porcelain.trim()).toBe('');
+
+    let caught: Error | null = null;
+    try {
+      await landSpec(target(), 'dep bump', worktree, undefined, { ownerConfig: {}, gh: workingGh });
+    } catch (e) {
+      caught = e instanceof Error ? e : new Error(String(e));
+    }
+
+    expect(caught).not.toBeNull();
+    expect(caught!.message).toContain('approved');
+    expect(caught!.message).toContain('Status: Accepted');
+  });
+
+  it('regression: a dirty non-.docs file still triggers the existing dirty-worktree rejection', async () => {
+    const worktree = await seedValidWorktree();
+    await simulateCheckpointCommit(worktree);
+
+    // Dirty a TRACKED, non-.docs file (README.md, committed as part of worktree
+    // creation) — must still be rejected regardless of the .docs checkpoint.
+    await writeFile(join(worktree, 'README.md'), '# repo\n\nlocal edit\n');
+
+    let caught: Error | null = null;
+    try {
+      await landSpec(target(), 'dep bump', worktree, undefined, { ownerConfig: {}, gh: workingGh });
+    } catch (e) {
+      caught = e instanceof Error ? e : new Error(String(e));
+    }
+
+    expect(caught).not.toBeNull();
+    expect(caught!.message).toContain('dirty');
+    expect(caught!.message).toContain('README.md');
+  });
+
+  it('full happy-path land still succeeds after a prior checkpoint commit (pr_timing="finish" changes nothing here)', async () => {
+    // landSpec has no prTiming parameter — its guards behave identically no
+    // matter which pr_timing mode the daemon is configured with. This exercises
+    // the "finish" (default) mode's land call: checkpoint already committed the
+    // specs/stories/plan artifacts, and the subsequent land must still succeed,
+    // committing the remaining intake marker cleanly.
+    const worktree = await seedValidWorktree();
+    await simulateCheckpointCommit(worktree);
+
+    const headBeforeLand = await git(['rev-parse', 'HEAD'], worktree);
+
+    const result = await landSpec(target(), 'dep bump', worktree, undefined, {
+      ownerConfig: {},
+      gh: workingGh,
+    });
+
+    const { stdout: marker } = await execFile(
+      'git',
+      ['show', `${result.branch}:.docs/intake/dep-bump.md`],
+      { cwd: worktree },
+    );
+    expect(marker).toContain('Owner: bob');
+
+    const headAfterLand = await git(['rev-parse', 'HEAD'], worktree);
+    expect(headAfterLand).not.toBe(headBeforeLand);
+
+    // No dirty/staged changes remain after landing.
+    const porcelain = await git(['status', '--porcelain'], worktree);
+    expect(porcelain.trim()).toBe('');
+  });
+});
