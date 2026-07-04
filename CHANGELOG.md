@@ -36,22 +36,6 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   (#251). Fixes #251, fixes #260.
 - Unknown `bin/conduct` subcommands/options now fail loudly (or forward to conduct-ts) instead of silently launching the SDLC pipeline (#178).
 
-### Migration
-
-When upgrading to this release, note the following breaking change to `bin/conduct`:
-
-````bash
-# Previously-silent invocations now fail or forward
-# Unknown commands like `conduct render-diagrams` now either:
-# 1. Forward to conduct-ts (if installed)
-# 2. Error with exit 127 if conduct-ts is missing
-# 3. Fail with "Unknown option" or "Unknown command" for typos
-
-# Single-word feature descriptions must now be quoted multi-word strings
-conduct auth              # ✗ Rejected: bare word
-conduct "add user auth"   # ✓ Correct: quoted multi-word
-````
-
 ### Changed
 
 - **Front-of-funnel DECIDE steps now default to `fable`.** The explore, prd, pre-implementation architecture-review, and engineer skills now run on Fable by default; plan.L and conflict_check.L tier overrides also escalate to Fable. S/M tiers and `--as-built` compliance mode remain unchanged. Graceful degradation when fable is unavailable arrives with #186 fallback ladder; refs #190.
@@ -478,6 +462,25 @@ if [ -f .daemon/daemon.pid ]; then
   fi
 fi
 # Requires tmux on the host for the management verbs: e.g. `sudo apt-get install tmux`.
+```
+
+`bin/conduct` no longer treats unknown subcommands/options as a feature description: unknown
+options and bare single-word tokens are rejected with a hint, and conduct-ts verbs (e.g.
+`render-diagrams`) are forwarded to `conduct-ts` — which must be on PATH, else the forward
+exits 127 (#178).
+
+```bash migration
+# bin/conduct now rejects unknown commands instead of silently launching the
+# SDLC pipeline, and forwards conduct-ts verbs to conduct-ts. Verify conduct-ts
+# is installed so forwarding works:
+if command -v conduct-ts >/dev/null 2>&1; then
+  echo "conduct-ts found: bin/conduct verb forwarding will work."
+else
+  echo "WARNING: conduct-ts not on PATH — forwarded verbs will exit 127."
+  echo "Re-run bin/install to build and link conduct-ts."
+fi
+# Reminder: bare single-word feature descriptions are now rejected — quote
+# multi-word descriptions instead, e.g.:  conduct "add user auth"
 ```
 
 ### Changed
