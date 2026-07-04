@@ -2799,10 +2799,25 @@ STEP_COOLDOWN=10          # seconds between steps (prevents rate limit bursts)
 STEP_COOLDOWN_ORIG=10     # original value for escalation math
 CLAUDE_CALL_COUNT=0       # cumulative calls this session
 
-# `conduct daemon <verb>` — forward all daemon subcommands to conduct-ts which
-# owns the Supervisor port (management verbs) and the daemon run/observe/status
-# paths. Avoids duplicating routing logic in both bash and TypeScript.
-if [ "$1" = "daemon" ]; then exec conduct-ts "$@"; fi
+# Forward conduct-ts-owned subcommands to conduct-ts which handles:
+# - daemon: Supervisor port (management verbs) and daemon run/observe/status paths
+# - render-diagrams: Architecture diagram rendering
+# - register: Daemon registration
+# - create: Resource creation
+# - engineer: Feature engineering commands
+# - inline: Inline operations
+# - help: Help command
+# Avoids duplicating routing logic in both bash and TypeScript.
+case "$1" in
+  daemon|render-diagrams|register|create|engineer|inline|help)
+    if command -v conduct-ts >/dev/null 2>&1; then
+      exec conduct-ts "$@"
+    else
+      echo "Error: conduct-ts not found. The '$1' command requires conduct-ts." >&2
+      exit 127
+    fi
+    ;;
+esac
 
 while [[ $# -gt 0 ]]; do
   case $1 in
