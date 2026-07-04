@@ -66,6 +66,7 @@ describe('Integration: config flow', () => {
       events,
       mode: 'auto',
       config,
+      projectRoot: dir,
     });
 
     await conductor.run();
