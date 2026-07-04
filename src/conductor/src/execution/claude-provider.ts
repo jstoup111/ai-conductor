@@ -7,6 +7,17 @@ const STALE_SESSION_RE = /No conversation found/i;
 // process"). Recovers the same way as a stale session — reset to a fresh
 // session id and retry — so it's folded into the sessionExpired signal.
 const SESSION_IN_USE_RE = /\balready in use\b|\b(session|conversation)\b[^\n]{0,60}\bin use\b/i;
+// Signatures indicating authentication failure — the daemon's OAuth token is
+// missing, stale, or invalid. Distinct from model unavailability (entitled
+// but token expired) or rate limiting (entitled but quota hit). Drives the
+// token refresh / re-login flow in the recovery handler.
+//
+// Includes the Claude CLI's actual login-error wording as of 2026-07:
+// - "Not logged in" — no stored token
+// - "Invalid API key" — malformed or revoked token
+// - "Please run /login" — interactive prompt to re-authenticate
+export const AUTH_FAILURE_RE = /not logged in|invalid api key|please run \/login/i;
+
 // Signatures indicating the requested model itself is unavailable — not
 // entitled, deprecated, or unrecognized by the CLI/API — as opposed to a
 // transient rate limit or session issue. Drives the fallback-ladder logic in
@@ -99,6 +110,7 @@ export class ClaudeProvider implements LLMProvider {
       };
     }
 
+    const authFailure = exitCode !== 0 && AUTH_FAILURE_RE.test(output);
     const rateLimited = RATE_LIMIT_RE.test(output);
     const sessionExpired =
       STALE_SESSION_RE.test(output) || SESSION_IN_USE_RE.test(output);
@@ -109,6 +121,7 @@ export class ClaudeProvider implements LLMProvider {
       success: exitCode === 0,
       output,
       exitCode,
+      authFailure: authFailure || undefined,
       rateLimited: rateLimited || undefined,
       sessionExpired: sessionExpired || undefined,
       modelUnavailable: modelUnavailable || undefined,

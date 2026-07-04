@@ -221,6 +221,42 @@ describe('ClaudeProvider', () => {
       expect(result.modelUnavailable).toBeUndefined();
     });
 
+    it('detects auth failure from "Not logged in" message', async () => {
+      mockExeca.mockResolvedValue({
+        stdout: 'Error: Not logged in',
+        exitCode: 1,
+        failed: true,
+      } as any);
+
+      const result = await provider.invoke(baseOptions);
+      expect(result.authFailure).toBe(true);
+      expect(result.success).toBe(false);
+    });
+
+    it('detects auth failure from "Please run /login" message', async () => {
+      mockExeca.mockResolvedValue({
+        stdout: 'Please run /login to authenticate',
+        exitCode: 1,
+        failed: true,
+      } as any);
+
+      const result = await provider.invoke(baseOptions);
+      expect(result.authFailure).toBe(true);
+      expect(result.success).toBe(false);
+    });
+
+    it('detects auth failure from "Invalid API key" message', async () => {
+      mockExeca.mockResolvedValue({
+        stdout: 'Invalid API key',
+        exitCode: 1,
+        failed: true,
+      } as any);
+
+      const result = await provider.invoke(baseOptions);
+      expect(result.authFailure).toBe(true);
+      expect(result.success).toBe(false);
+    });
+
     it('includes --name when sessionName provided', async () => {
       mockExeca.mockResolvedValue({
         stdout: 'ok',

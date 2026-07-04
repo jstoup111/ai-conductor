@@ -20,6 +20,12 @@ export interface InvokeResult {
    * model in the ladder instead of retrying the same one.
    */
   modelUnavailable?: boolean;
+  /**
+   * Set when the provider detects that the invocation failed due to
+   * authentication issues (e.g. "Not logged in", "Invalid API key").
+   * Indicates the daemon's OAuth token may be stale or missing.
+   */
+  authFailure?: boolean;
 }
 
 export interface InvokeOptions {
