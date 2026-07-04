@@ -105,7 +105,7 @@ describe('acceptance: engine identity capture over a REAL rebuilt dist fixture (
     30_000,
   );
 
-  it('capture of an unreadable entry disables the checker: always "current", zero fs reads, one warning', async () => {
+  it('capture of an unreadable entry disables the checker: always "current", one warning at construction', async () => {
     const mod = await load(IDENTITY_MOD);
     const captureEngineIdentity = requireFn(mod, 'captureEngineIdentity');
     const createStaleEngineChecker = requireFn(mod, 'createStaleEngineChecker');
@@ -114,19 +114,16 @@ describe('acceptance: engine identity capture over a REAL rebuilt dist fixture (
     const captured = await captureEngineIdentity(missing);
     expect(captured).toBeNull();
 
+    // As-built contract (adr §1): capture failure ⇒ permanently disabled checker
+    // that warns exactly once at construction and never touches the filesystem.
     const warn = vi.fn();
-    const checker = createStaleEngineChecker(captured, { warn });
-    // Feed the disabled checker a path that DOES exist — proves it takes zero fs
-    // reads rather than merely happening to fail the same way as `missing`.
-    const workDir = await mkdtemp(join(tmpdir(), 'engine-identity-disabled-'));
-    try {
-      const realDist = await buildFixtureDist(workDir, FIXTURE_V1);
-      expect(await checker.check(realDist)).toBe('current');
-      expect(await checker.check(realDist)).toBe('current'); // sticky across calls
-      expect(warn).toHaveBeenCalledTimes(1);
-    } finally {
-      await rm(workDir, { recursive: true, force: true });
-    }
+    const checker = createStaleEngineChecker(captured, warn);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(checker.check()).toBe('current');
+    expect(checker.check()).toBe('current'); // sticky across calls
+    expect(checker.capturedIdentity()).toBeNull();
+    expect(checker.targetIdentity()).toBeNull();
+    expect(warn).toHaveBeenCalledTimes(1); // no further warnings on checks
   });
 });
 
@@ -146,11 +143,22 @@ describe('acceptance: idle-boundary stale detection + restart request over the R
         writeRestartMarker: requireFn(await load(RESTART_MOD), 'writeRestartMarker'),
         readRestartMarkerWithStatus: requireFn(await load(RESTART_MOD), 'readRestartMarkerWithStatus'),
       };
+      const identityMod = await load(IDENTITY_MOD);
+      const captureEngineIdentity = requireFn(identityMod, 'captureEngineIdentity');
+      const createStaleEngineChecker = requireFn(identityMod, 'createStaleEngineChecker');
       const lock = await holdLock(repoPath);
       expect(lock).not.toBeNull();
 
+      // REAL staleness: capture V1's identity, then genuinely rebuild the same
+      // entry with a source change — the checker must derive 'stale' from content.
+      const workDir = await mkdtemp(join(tmpdir(), 'stale-engine-happy-'));
+      const dist = await buildFixtureDist(workDir, FIXTURE_V1);
+      const captured = await captureEngineIdentity(dist);
+      await buildFixtureDist(workDir, FIXTURE_V2); // same dist path, real change
+      const checker = createStaleEngineChecker(captured, dist);
+
       const requestRestart = vi.fn(
-        async (info: { fromIdentity: string; targetIdentity: string }) => {
+        async (info: { fromIdentity: string | null; targetIdentity: string | null }) => {
           await writeRestartMarker({
             reason: 'stale-engine',
             fromIdentity: info.fromIdentity,
@@ -167,13 +175,20 @@ describe('acceptance: idle-boundary stale detection + restart request over the R
           throw new Error('must never dispatch a feature in this scenario');
         },
         sleep: async () => {},
-        checkStaleEngine: async () => 'stale',
+        staleEngineChecker: checker,
         requestRestart,
-      } as DaemonDeps & { checkStaleEngine: () => Promise<string>; requestRestart: typeof requestRestart };
+      };
 
-      await runDaemon(deps as DaemonDeps, { concurrency: 1, once: false, maxIdlePolls: 1 });
+      await runDaemon(deps, {
+        concurrency: 1,
+        once: false,
+        maxIdlePolls: 0,
+        isSelfHost: true,
+        autoRestartOnStaleEngine: true,
+      });
 
       expect(requestRestart).toHaveBeenCalledTimes(1);
+      await rm(workDir, { recursive: true, force: true });
       const result = await readRestartMarkerWithStatus(repoPath);
       expect(result.kind).toBe('present');
       expect(result.marker).not.toBeNull();
@@ -206,11 +221,17 @@ describe('acceptance: idle-boundary stale detection + restart request over the R
         discoverBacklog: async () => [],
         runFeature: async () => ({ slug: 'never', status: 'done' }),
         sleep: async () => {},
-        checkStaleEngine: () => checker.check(),
+        staleEngineChecker: checker,
         requestRestart,
-      } as DaemonDeps & { checkStaleEngine: () => Promise<string>; requestRestart: typeof requestRestart };
+      };
 
-      await runDaemon(deps as DaemonDeps, { concurrency: 1, once: false, maxIdlePolls: 1 });
+      await runDaemon(deps, {
+        concurrency: 1,
+        once: false,
+        maxIdlePolls: 1,
+        isSelfHost: true,
+        autoRestartOnStaleEngine: true,
+      });
 
       expect(requestRestart).not.toHaveBeenCalled();
       const result = await readRestartMarkerWithStatus(repoPath);
@@ -220,9 +241,13 @@ describe('acceptance: idle-boundary stale detection + restart request over the R
   });
 
   it('negative: a stale verdict during in-flight work never requests a restart this pass, but the SAME checker fires once truly idle (control)', async () => {
-    await withLockedRepo(async (repoPath) => {
-      const requestRestart = vi.fn(async () => {});
+    await withLockedRepo(async () => {
       let backlogDrained = false;
+      const requestRestart = vi.fn(async () => {
+        // The restart request must only ever fire once the backlog has genuinely
+        // drained — never while `busy` is in flight.
+        expect(backlogDrained).toBe(true);
+      });
 
       const deps: DaemonDeps = {
         discoverBacklog: async () => (backlogDrained ? [] : [{ slug: 'busy' }]),
@@ -235,30 +260,50 @@ describe('acceptance: idle-boundary stale detection + restart request over the R
           return { slug: item.slug, status: 'done' };
         },
         sleep: async () => {},
-        checkStaleEngine: async () => 'stale',
+        staleEngineChecker: {
+          check: () => 'stale' as const,
+          capturedIdentity: () => 'captured-hash',
+          targetIdentity: () => 'target-hash',
+        },
         requestRestart,
-      } as DaemonDeps & { checkStaleEngine: () => Promise<string>; requestRestart: typeof requestRestart };
+      };
 
-      // Two idle-poll budget: one pass while `busy` is still in flight (must NOT
-      // request), one pass once it has drained and the pool is truly idle (MUST
-      // request exactly once). Without this control the negative half would pass
+      // One idle-poll budget: the pass while `busy` is in flight never reaches the
+      // idle branch (must NOT request); the single pass once it has drained MUST
+      // request exactly once. Without this control the negative half would pass
       // vacuously against an unimplemented gate chain that never calls
       // `requestRestart` in ANY scenario.
-      await runDaemon(deps as DaemonDeps, { concurrency: 1, once: false, maxIdlePolls: 2 });
+      await runDaemon(deps, {
+        concurrency: 1,
+        once: false,
+        maxIdlePolls: 0,
+        isSelfHost: true,
+        autoRestartOnStaleEngine: true,
+      });
       expect(requestRestart).toHaveBeenCalledTimes(1);
     });
   });
 
   it('negative: non-continuous ("once") mode never requests a restart, even with a stale verdict and an empty backlog (control: continuous mode DOES)', async () => {
+    const staleChecker = {
+      check: () => 'stale' as const,
+      capturedIdentity: () => 'captured-hash',
+      targetIdentity: () => 'target-hash',
+    };
     const onceRequestRestart = vi.fn(async () => {});
     const onceDeps: DaemonDeps = {
       discoverBacklog: async () => [],
       runFeature: async () => ({ slug: 'never', status: 'done' }),
-      checkStaleEngine: async () => 'stale',
+      staleEngineChecker: staleChecker,
       requestRestart: onceRequestRestart,
-    } as DaemonDeps & { checkStaleEngine: () => Promise<string>; requestRestart: typeof onceRequestRestart };
+    };
 
-    const res = await runDaemon(onceDeps as DaemonDeps, { concurrency: 1, once: true });
+    const res = await runDaemon(onceDeps, {
+      concurrency: 1,
+      once: true,
+      isSelfHost: true,
+      autoRestartOnStaleEngine: true,
+    });
     expect(res.stoppedReason).toBe('backlog_drained');
     expect(onceRequestRestart).not.toHaveBeenCalled();
 
@@ -270,10 +315,16 @@ describe('acceptance: idle-boundary stale detection + restart request over the R
       discoverBacklog: async () => [],
       runFeature: async () => ({ slug: 'never', status: 'done' }),
       sleep: async () => {},
-      checkStaleEngine: async () => 'stale',
+      staleEngineChecker: staleChecker,
       requestRestart: continuousRequestRestart,
-    } as DaemonDeps & { checkStaleEngine: () => Promise<string>; requestRestart: typeof continuousRequestRestart };
-    await runDaemon(continuousDeps as DaemonDeps, { concurrency: 1, once: false, maxIdlePolls: 1 });
+    };
+    await runDaemon(continuousDeps, {
+      concurrency: 1,
+      once: false,
+      maxIdlePolls: 0,
+      isSelfHost: true,
+      autoRestartOnStaleEngine: true,
+    });
     expect(continuousRequestRestart).toHaveBeenCalledTimes(1);
   });
 
@@ -296,12 +347,18 @@ describe('acceptance: idle-boundary stale detection + restart request over the R
         discoverBacklog: async () => [],
         runFeature: async () => ({ slug: 'never', status: 'done' }),
         sleep: async () => {},
-        checkStaleEngine: () => checker.check(),
+        staleEngineChecker: checker,
         requestRestart,
-      } as DaemonDeps & { checkStaleEngine: () => Promise<string>; requestRestart: typeof requestRestart };
+      };
 
       // Two idle ticks see the SAME repeated failure — one warning, not two.
-      await runDaemon(deps as DaemonDeps, { concurrency: 1, once: false, maxIdlePolls: 2 });
+      await runDaemon(deps, {
+        concurrency: 1,
+        once: false,
+        maxIdlePolls: 1,
+        isSelfHost: true,
+        autoRestartOnStaleEngine: true,
+      });
 
       expect(requestRestart).not.toHaveBeenCalled();
       expect(warn).toHaveBeenCalledTimes(1);
@@ -356,7 +413,7 @@ describe('acceptance: startup restart handshake + suppression (Stories 3 & 4)', 
       }, repoPath);
 
       const log: string[] = [];
-      const state = await initStaleEngineState({
+      const identity = await initStaleEngineState({
         repoPath,
         entryPath: dist,
         flag: true,
@@ -365,8 +422,12 @@ describe('acceptance: startup restart handshake + suppression (Stories 3 & 4)', 
 
       expect(log.join('\n')).toMatch(/restarted for engine refresh/);
       expect(log.join('\n')).toContain('aaa');
-      expect(state.armed).toBe(true);
-      expect((await load(RESTART_MOD)).readRestartMarker).toBeDefined();
+      // Stays armed: capture succeeded (identity returned) and the flag is on.
+      expect(identity).toBe(freshIdentity);
+      expect(log.join('\n')).toMatch(/\bARMED\b/);
+      // Converged (fresh === target): NO suppression state is created.
+      const getSuppression = requireFn(restartMod, 'getSuppression');
+      expect(await getSuppression(repoPath)).toBeNull();
       const { readRestartMarkerWithStatus } = { readRestartMarkerWithStatus: requireFn(restartMod, 'readRestartMarkerWithStatus') };
       const result = await readRestartMarkerWithStatus(repoPath);
       expect(result.kind).toBe('absent');
@@ -403,23 +464,28 @@ describe('acceptance: startup restart handshake + suppression (Stories 3 & 4)', 
       await writeFile(join(repoPath, '.daemon', 'RESTART_PENDING'), '{not json', 'utf-8');
 
       const initStaleEngineState = requireFn(await load(INIT_MOD), 'initStaleEngineState');
+      const restartMod = await load(RESTART_MOD);
       const identityMod = await load(IDENTITY_MOD);
       const captureEngineIdentity = requireFn(identityMod, 'captureEngineIdentity');
       const workDir = await mkdtemp(join(tmpdir(), 'stale-engine-corrupt-'));
       const dist = await buildFixtureDist(workDir, FIXTURE_V1);
-      await captureEngineIdentity(dist);
+      const expectedIdentity = await captureEngineIdentity(dist);
 
       const log: string[] = [];
-      const state = await initStaleEngineState({
+      const identity = await initStaleEngineState({
         repoPath,
         entryPath: dist,
         flag: true,
         log: (msg: string) => log.push(msg),
       });
 
-      expect(log.filter((l) => /warn/i.test(l))).toHaveLength(1);
-      expect(state.armed).toBe(true);
-      expect(state.suppressed).toBeFalsy();
+      // Exactly one corruption warning, marker removed, boot proceeds armed.
+      expect(log.filter((l) => /corrupt/i.test(l))).toHaveLength(1);
+      expect(identity).toBe(expectedIdentity);
+      expect(log.join('\n')).toMatch(/\bARMED\b/);
+      // No suppression state derives from a corrupt marker.
+      const getSuppression = requireFn(restartMod, 'getSuppression');
+      expect(await getSuppression(repoPath)).toBeNull();
       expect(existsSync(join(repoPath, '.daemon', 'RESTART_PENDING'))).toBe(false);
       await rm(workDir, { recursive: true, force: true });
     });
@@ -446,14 +512,18 @@ describe('acceptance: startup restart handshake + suppression (Stories 3 & 4)', 
       }, repoPath);
 
       const log: string[] = [];
-      const state = await initStaleEngineState({
+      await initStaleEngineState({
         repoPath,
         entryPath: dist,
         flag: true,
         log: (msg: string) => log.push(msg),
       });
 
-      expect(state.suppressed).toBe(true);
+      // Suppression recorded against the identity we actually came back on.
+      const getSuppression = requireFn(restartMod, 'getSuppression');
+      const suppression = await getSuppression(repoPath);
+      expect(suppression).not.toBeNull();
+      expect(suppression!.suppressedTarget).toBe(freshIdentity);
       expect(log.filter((l) => /suppress/i.test(l))).toHaveLength(1);
       expect(log.join('\n')).toContain('a-target-we-never-reached');
       expect(log.join('\n')).toContain(freshIdentity);

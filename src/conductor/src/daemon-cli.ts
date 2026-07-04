@@ -34,10 +34,11 @@ import { clampDaemonConcurrency } from './engine/daemon-command.js';
 import { makeRunFeature, type FeatureWorktree } from './engine/daemon-runner.js';
 import { createBlockerResolver } from './engine/blocker-resolver.js';
 import { createGhBlockerRunner } from './engine/gh-blocker-runner.js';
-import { captureEngineIdentity } from './engine/engine-identity.js';
+import { captureEngineIdentity, createStaleEngineChecker } from './engine/engine-identity.js';
 import {
   readRestartMarkerWithStatus,
   clearRestartMarker,
+  isSuppressed,
   recordSuppression,
   writeRestartMarker,
 } from './engine/restart-intent.js';
@@ -304,10 +305,17 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   }
 
   // Task 8: Capture engine identity at startup and log ARMED/DISARMED status
-  const engineIdentity = await captureEngineIdentity(join(projectRoot, 'dist', 'index.js'));
+  const engineEntryPath = join(projectRoot, 'dist', 'index.js');
+  const engineIdentity = await captureEngineIdentity(engineEntryPath);
   if (engineIdentity) {
     log(`daemon identity: ${engineIdentity}`);
   }
+  // Production stale-engine checker (adr-2026-07-03-daemon-auto-restart-stale-engine §1-2):
+  // capture failure ⇒ permanently disabled checker (always 'current', warns once).
+  const staleEngineChecker =
+    engineIdentity !== null
+      ? createStaleEngineChecker(engineIdentity, engineEntryPath, log)
+      : createStaleEngineChecker(null, log);
   const isArmed = (config?.auto_restart_on_stale_engine ?? false) && isSelfHost;
   log(`${isArmed ? 'ARMED' : 'DISARMED'} — stale-engine auto-restart`);
 
@@ -647,6 +655,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       isPaused: () => isPaused(projectRoot),
       runFeature,
       log,
+      staleEngineChecker,
       requestRestart,
       isSuppressed: suppressionChecker,
       // ── Halt-reconciliation (ADR-013) real-I/O hooks ──────────────────────

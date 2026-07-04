@@ -14,6 +14,10 @@ import { access, constants } from 'node:fs/promises';
  */
 export interface StaleEngineChecker {
   check(): 'stale' | 'current' | 'indeterminate';
+  /** The identity captured at startup (null when capture failed / checker disabled). */
+  capturedIdentity(): string | null;
+  /** The on-disk identity observed by the most recent check (null before the first successful check). */
+  targetIdentity(): string | null;
 }
 
 /**
@@ -104,7 +108,13 @@ export function createStaleEngineChecker(
     return {
       check(): 'stale' | 'current' | 'indeterminate' {
         return 'current';
-      }
+      },
+      capturedIdentity(): string | null {
+        return null;
+      },
+      targetIdentity(): string | null {
+        return null;
+      },
     };
   }
 
@@ -115,6 +125,8 @@ export function createStaleEngineChecker(
 
   // Track warn state across calls for warn-once semantics
   let warned = false;
+  // The on-disk identity observed by the most recent successful check.
+  let lastObserved: string | null = null;
 
   return {
     check(): 'stale' | 'current' | 'indeterminate' {
@@ -126,6 +138,7 @@ export function createStaleEngineChecker(
       try {
         const fileContent = readFileSync(entryPath);
         const currentHash = createHash('sha256').update(fileContent).digest('hex');
+        lastObserved = currentHash;
 
         if (currentHash === capturedHash) {
           return 'current';
@@ -140,6 +153,12 @@ export function createStaleEngineChecker(
         }
         return 'indeterminate';
       }
-    }
+    },
+    capturedIdentity(): string | null {
+      return capturedHash;
+    },
+    targetIdentity(): string | null {
+      return lastObserved;
+    },
   };
 }
