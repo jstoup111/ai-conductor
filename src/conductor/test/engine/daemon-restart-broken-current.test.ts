@@ -109,6 +109,13 @@ describe('Task T35 — daemon restart into broken current (FR-16 negative path)'
       if (cmd === 'respawn-pane') {
         // In real scenario: respawn-pane launches the command, which exits 1
         // We simulate this by capturing a fake "scrollback" showing the error
+        //
+        // These hand-fed strings are not invented — they are anchored to the
+        // REAL bin/conduct-ts binary's actual stderr output, verified by the
+        // real-binary smoke test in conduct-ts-smoke.test.ts (injected-runner
+        // needs real-binary smoke convention). If bin/conduct-ts's wording
+        // ever changes, that smoke test catches it; this mock is a fixture,
+        // not the source of truth.
         scrollbackLog.push('conduct-ts: dist symlink is broken (./dist)');
         scrollbackLog.push('conduct-ts: run \'npm run build\' to rebuild, or republish the engine, to fix it');
         scrollbackLog.push('[Process exited with code 1]');
@@ -254,6 +261,8 @@ describe('Task T35 — daemon restart into broken current (FR-16 negative path)'
     await makeFakeBrokenRepo(repoPath);
 
     const tmuxCalls: string[] = [];
+    // Hand-fed scrollback string; verified against the real launcher's
+    // actual output by conduct-ts-smoke.test.ts (real-binary smoke).
     const scrollbackContent = 'previous output\nconduct-ts: dist symlink is broken\n[Process exited with code 1]';
 
     const mockRunner: TmuxRunner = (args, opts) => {
@@ -330,6 +339,9 @@ describe('Task T35 — daemon restart into broken current (FR-16 negative path)'
       if (cmd === 'has-session') return { code: 0, stdout: '' };
       if (cmd === 'set-option') return { code: 0, stdout: '' };
       if (cmd === 'capture-pane') {
+        // Hand-fed pane output; anchored to the real launcher's actual
+        // stderr, verified by conduct-ts-smoke.test.ts (real-binary smoke,
+        // injected-runner-needs-real-binary-smoke convention).
         return { code: 0, stdout: 'conduct-ts: dist symlink is broken\n[Process exited with code 1]' };
       }
 

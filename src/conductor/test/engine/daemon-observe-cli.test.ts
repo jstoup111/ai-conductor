@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, chmod } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import type { KillProbe } from '../../src/engine/daemon-lock.js';
+import { acquire, readPidRecord, type KillProbe } from '../../src/engine/daemon-lock.js';
 import { openDaemonLog } from '../../src/engine/daemon-log.js';
 import {
   computeStatusRow,
@@ -23,7 +23,7 @@ const DEAD: KillProbe = () => {
 // directly — the boundary test only scans src/.
 async function writePidfile(
   repo: string,
-  rec: { pid: number; uuid?: string; startedAt?: string } | string,
+  rec: { pid: number; uuid?: string; startedAt?: string; engineDir?: string } | string,
 ): Promise<void> {
   await mkdir(join(repo, '.daemon'), { recursive: true });
   const body =
@@ -33,6 +33,7 @@ async function writePidfile(
           pid: rec.pid,
           uuid: rec.uuid ?? 'u-1',
           startedAt: rec.startedAt ?? '2026-06-27T00:00:00.000Z',
+          ...(rec.engineDir !== undefined ? { engineDir: rec.engineDir } : {}),
         });
   await writeFile(join(repo, '.daemon', 'daemon.pid'), body, 'utf8');
 }
@@ -57,6 +58,19 @@ describe('engine/daemon-observe-cli', () => {
       registeredAt: '2026-06-27T00:00:00.000Z',
     };
   }
+
+  describe('daemon-lock pidfile — engineDir (FR-14)', () => {
+    it('a pidfile written via acquire() (the real daemon-lock path) carries an engineDir field', async () => {
+      const repo = join(root, 'repo');
+      await mkdir(repo, { recursive: true });
+      const result = await acquire(repo, ALIVE);
+      expect(result.acquired).toBe(true);
+      const rec = await readPidRecord(repo);
+      expect(rec).not.toBeNull();
+      expect(typeof rec?.engineDir).toBe('string');
+      expect(rec?.engineDir?.length).toBeGreaterThan(0);
+    });
+  });
 
   describe('computeStatusRow', () => {
     it('classifies running when the pidfile owner is alive', async () => {
@@ -109,6 +123,33 @@ describe('engine/daemon-observe-cli', () => {
       const row = await computeStatusRow(record('repo', repo), ALIVE);
       expect(row.lastActivity).toBe('[daemon] · ✓ gate loop converged');
       expect(row.lastActivityAt).toBeDefined();
+    });
+
+    it('renders "version:<id>" when the pidfile engineDir contains a dist-versions/<id> segment (FR-14)', async () => {
+      const repo = join(root, 'repo');
+      await mkdir(repo, { recursive: true });
+      await writePidfile(repo, {
+        pid: 4242,
+        engineDir: '/opt/app/dist-versions/20260704T000000Z-abc123abc123',
+      });
+      const registryPath = join(root, 'registry.json');
+      await writeFile(registryPath, JSON.stringify([record('repo', repo)]), 'utf8');
+
+      const out: string[] = [];
+      await runDaemonStatus({ registryPath, kill: ALIVE, out: (l) => out.push(l) });
+      expect(out.join('\n')).toContain('version:20260704T000000Z-abc123abc123');
+    });
+
+    it('renders "version-unknown" when the pidfile has no engineDir (legacy record)', async () => {
+      const repo = join(root, 'repo');
+      await mkdir(repo, { recursive: true });
+      await writePidfile(repo, { pid: 4242 });
+      const registryPath = join(root, 'registry.json');
+      await writeFile(registryPath, JSON.stringify([record('repo', repo)]), 'utf8');
+
+      const out: string[] = [];
+      await runDaemonStatus({ registryPath, kill: ALIVE, out: (l) => out.push(l) });
+      expect(out.join('\n')).toContain('version:version-unknown');
     });
   });
 
