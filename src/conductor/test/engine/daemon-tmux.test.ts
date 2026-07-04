@@ -284,15 +284,63 @@ describe('setRemainOnExit: argv', () => {
 // respawnPane — exact argv; window/pane-scoped target; throws on non-zero
 // ─────────────────────────────────────────────────────────────────────────────
 describe('respawnPane: argv and error handling', () => {
-  it('calls respawn-pane -k with the active-pane target (=name:) and DAEMON_FOREGROUND_COMMAND to preserve scrollback', async () => {
+  it('captures pane history via capture-pane -S - -p before respawning', async () => {
+    const respawnPane = requireFn(await load(), 'respawnPane');
+    const { run, calls } = spyRunner({ 'capture-pane': { code: 0, stdout: 'old scrollback\n' } });
+    await respawnPane('cc-daemon-myapp-abc123', run);
+    const captureCall = calls.find((c) => c.args[0] === 'capture-pane')!;
+    expect(captureCall.args).toEqual(['capture-pane', '-S', '-', '-p', '-t', '=cc-daemon-myapp-abc123:']);
+    expect(captureCall.inherit).toBe(false);
+    // capture-pane must run BEFORE respawn-pane -k (which clears history).
+    const subs = calls.map((c) => c.args[0]);
+    expect(subs.indexOf('capture-pane')).toBeLessThan(subs.indexOf('respawn-pane'));
+  });
+
+  it('wraps the respawned command to re-emit captured scrollback then exec the daemon command, targeting the active pane', async () => {
     const respawnPane = requireFn(await load(), 'respawnPane');
     const { DAEMON_FOREGROUND_COMMAND } = await load();
-    const { run, calls } = spyRunner();
+    const { run, calls } = spyRunner({ 'capture-pane': { code: 0, stdout: 'old scrollback\n' } });
     await respawnPane('cc-daemon-myapp-abc123', run);
-    expect(calls).toHaveLength(1);
-    // respawn-pane -k kills the process and restarts it; tmux preserves pane scrollback across this operation
-    expect(calls[0].args).toEqual(['respawn-pane', '-k', '-t', '=cc-daemon-myapp-abc123:', DAEMON_FOREGROUND_COMMAND]);
-    expect(calls[0].inherit).toBe(false);
+    const respawnCall = calls.find((c) => c.args[0] === 'respawn-pane')!;
+    expect(respawnCall.args[0]).toBe('respawn-pane');
+    expect(respawnCall.args[1]).toBe('-k');
+    expect(respawnCall.args[2]).toBe('-t');
+    expect(respawnCall.args[3]).toBe('=cc-daemon-myapp-abc123:');
+    const wrapped = respawnCall.args[4];
+    expect(wrapped).toMatch(/^cat .+; rm -f .+; exec conduct-ts daemon --continuous$/);
+    expect(wrapped).toContain(DAEMON_FOREGROUND_COMMAND as string);
+    expect(respawnCall.inherit).toBe(false);
+  });
+
+  it('reports scrollbackPreserved:true when capture succeeds with content', async () => {
+    const respawnPane = requireFn(await load(), 'respawnPane');
+    const { run } = spyRunner({ 'capture-pane': { code: 0, stdout: 'old scrollback\n' } });
+    const outcome = await respawnPane('cc-daemon-myapp-abc123', run);
+    expect(outcome).toEqual({ scrollbackPreserved: true });
+  });
+
+  it('falls back to the bare command and reports scrollbackPreserved:false when capture-pane fails', async () => {
+    const respawnPane = requireFn(await load(), 'respawnPane');
+    const { DAEMON_FOREGROUND_COMMAND } = await load();
+    const { run, calls } = spyRunner({ 'capture-pane': { code: 1 } });
+    const outcome = await respawnPane('cc-daemon-myapp-abc123', run);
+    expect(outcome).toEqual({ scrollbackPreserved: false });
+    const respawnCall = calls.find((c) => c.args[0] === 'respawn-pane')!;
+    expect(respawnCall.args).toEqual([
+      'respawn-pane', '-k', '-t', '=cc-daemon-myapp-abc123:', DAEMON_FOREGROUND_COMMAND,
+    ]);
+  });
+
+  it('falls back to the bare command and reports scrollbackPreserved:false when capture-pane returns empty stdout', async () => {
+    const respawnPane = requireFn(await load(), 'respawnPane');
+    const { DAEMON_FOREGROUND_COMMAND } = await load();
+    const { run, calls } = spyRunner({ 'capture-pane': { code: 0, stdout: '' } });
+    const outcome = await respawnPane('cc-daemon-myapp-abc123', run);
+    expect(outcome).toEqual({ scrollbackPreserved: false });
+    const respawnCall = calls.find((c) => c.args[0] === 'respawn-pane')!;
+    expect(respawnCall.args).toEqual([
+      'respawn-pane', '-k', '-t', '=cc-daemon-myapp-abc123:', DAEMON_FOREGROUND_COMMAND,
+    ]);
   });
 
   it('throws when tmux respawn-pane exits non-zero', async () => {

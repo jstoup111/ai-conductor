@@ -13,8 +13,10 @@
 //   - makeTmuxSupervisor — factory returning a Supervisor port over the injected runner.
 
 import { spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
-import { basename, resolve } from 'node:path';
+import { createHash, randomBytes } from 'node:crypto';
+import { unlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { basename, join, resolve } from 'node:path';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants — only place that encodes the session prefix and foreground command.
@@ -222,28 +224,93 @@ export async function setRemainOnExit(
 }
 
 /**
+ * Result of a respawnPane call. `scrollbackPreserved` is true when the prior
+ * pane history was successfully captured and will be re-emitted above the
+ * relaunched daemon's boot output; false when capture failed (or returned
+ * nothing) and the pane was respawned bare — callers must not claim
+ * scrollback preservation in that case (FR-20).
+ */
+export interface RespawnOutcome {
+  scrollbackPreserved: boolean;
+}
+
+/**
  * Respawns the daemon pane in place (terminates the foreground process and
- * relaunches DAEMON_FOREGROUND_COMMAND in the SAME pane) without touching the
- * session, window layout, or any other pane. Targets the session's active pane
- * (which is the single pane created by newDetachedSession) so operator windows
- * opened later in the same session are never addressed.
+ * relaunches `cmd` in the SAME pane) without touching the session, window
+ * layout, or any other pane. Targets the session's active pane (which is the
+ * single pane created by newDetachedSession) so operator windows opened
+ * later in the same session are never addressed.
  *
  * Uses respawn-pane -k to kill the existing process and re-run the command.
  * The -k flag handles killing the process; remain-on-exit (already set)
  * prevents the pane/window/session from closing.
  *
- * Throws if tmux exits non-zero (e.g. the targeted pane no longer exists).
+ * `respawn-pane -k` clears the pane's terminal scrollback (ADR-2026-07-04).
+ * To preserve continuity, the pane's current history is captured via
+ * `capture-pane -S - -p` into a temp file BEFORE respawning, and the
+ * respawned command is wrapped so it re-emits that file's contents (then
+ * deletes it) before exec'ing the real daemon command. This keeps the prior
+ * output visible above the new process's boot messages. If capture fails for
+ * any reason (tmux error, fs write error, empty scrollback), the pane is
+ * respawned with the bare `cmd` — never a crash, but the caller is told via
+ * the returned `scrollbackPreserved: false` so it can report the degradation
+ * honestly instead of claiming scrollback was kept.
+ *
+ * Throws if the respawn-pane call itself exits non-zero (e.g. the targeted
+ * pane no longer exists) — that is a real restart failure, distinct from a
+ * scrollback-capture failure, which only degrades the outcome.
  */
 export async function respawnPane(
   name: string,
   run: TmuxRunner = defaultTmuxRunner,
   cmd: string = DAEMON_FOREGROUND_COMMAND,
-): Promise<void> {
-  // Use respawn-pane -k to immediately kill the existing process and re-run the command.
-  const result = run(['respawn-pane', '-k', '-t', `=${name}:`, cmd], { inherit: false });
+): Promise<RespawnOutcome> {
+  let wrappedCmd = cmd;
+  let scrollbackPreserved = false;
+  let scrollbackFile: string | undefined;
+
+  try {
+    const capture = run(['capture-pane', '-S', '-', '-p', '-t', `=${name}:`], { inherit: false });
+    if (capture.code === 0 && capture.stdout.length > 0) {
+      scrollbackFile = join(
+        tmpdir(),
+        `cc-daemon-scrollback-${name}-${randomBytes(6).toString('hex')}.txt`,
+      );
+      writeFileSync(scrollbackFile, capture.stdout, 'utf-8');
+      // Re-emit the captured history, remove the temp file, then exec the
+      // real daemon command — all inside the respawned pane's own process,
+      // so cleanup happens regardless of how the daemon itself behaves.
+      wrappedCmd = `cat ${scrollbackFile}; rm -f ${scrollbackFile}; exec ${cmd}`;
+      scrollbackPreserved = true;
+    }
+  } catch {
+    // Capture or temp-file write failed — degrade gracefully to a bare
+    // respawn rather than aborting the restart over a non-essential step.
+    scrollbackPreserved = false;
+    wrappedCmd = cmd;
+    if (scrollbackFile) {
+      try {
+        unlinkSync(scrollbackFile);
+      } catch {
+        // best-effort cleanup only
+      }
+    }
+  }
+
+  const result = run(['respawn-pane', '-k', '-t', `=${name}:`, wrappedCmd], { inherit: false });
   if (result.code !== 0) {
+    // The wrapped command never ran, so its inline `rm` never fired — clean
+    // up here instead of leaking the temp file.
+    if (scrollbackFile) {
+      try {
+        unlinkSync(scrollbackFile);
+      } catch {
+        // best-effort cleanup only
+      }
+    }
     throw new Error(`tmux respawn-pane exited with code ${result.code} for session "${name}"`);
   }
+  return { scrollbackPreserved };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -397,8 +464,14 @@ export function makeTmuxSupervisor(run: TmuxRunner = defaultTmuxRunner): Supervi
       const name = sessionNameForRepo(repo);
       await setRemainOnExit(name, run);
       try {
-        await respawnPane(name, run);
-        return { degraded: false, message: 'daemon restarted in place (session preserved).' };
+        const { scrollbackPreserved } = await respawnPane(name, run);
+        return {
+          degraded: false,
+          message: scrollbackPreserved
+            ? 'daemon restarted in place (session preserved, scrollback preserved).'
+            : 'daemon restarted in place (session preserved); scrollback unavailable ' +
+              '(history capture failed, prior pane output was not carried forward).',
+        };
       } catch (err) {
         // Respawn tooling failed (e.g. the pane/window tmux expected no longer
         // exists). Fall back to a full kill+recreate so the daemon still ends

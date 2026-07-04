@@ -126,7 +126,9 @@ export async function buildDaemonModeOptions(
 ): Promise<DaemonCommandOptions & { projectRoot: string; triggerSelfRestart?: () => Promise<void> }> {
   const sessionName = deps.sessionNameForRepo(projectRoot);
   const triggerSelfRestart = (await deps.hasSession(sessionName))
-    ? () => deps.respawnPane(sessionName)
+    ? async () => {
+        await deps.respawnPane(sessionName);
+      }
     : undefined;
   return {
     projectRoot,
