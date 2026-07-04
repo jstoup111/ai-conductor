@@ -2,8 +2,10 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { execa } from 'execa';
 import { execFileSync } from 'node:child_process';
 import { rmSync } from 'node:fs';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { detectsModelUnavailable } from '../../src/execution/claude-provider.js';
+import { detectsModelUnavailable, detectsAuthFailure } from '../../src/execution/claude-provider.js';
 
 /**
  * Real-binary smoke test for TS-1 Done-When 3: prove the real Claude CLI's
@@ -24,10 +26,13 @@ function claudeBinaryAvailable(): boolean {
   }
 }
 
-const killSwitchDisabled = process.env.MODEL_UNAVAILABLE_SMOKE === '0';
-const shouldRun = claudeBinaryAvailable() && !killSwitchDisabled;
+const modelUnavailableKillSwitch = process.env.MODEL_UNAVAILABLE_SMOKE === '0';
+const authFailureKillSwitch = process.env.AUTH_FAILURE_SMOKE === '0';
+const binaryAvailable = claudeBinaryAvailable();
+const shouldRunModelTest = binaryAvailable && !modelUnavailableKillSwitch;
+const shouldRunAuthTest = binaryAvailable && !authFailureKillSwitch;
 
-describe.skipIf(!shouldRun)('claude CLI model-unavailable signature (real binary)', () => {
+describe.skipIf(!shouldRunModelTest)('claude CLI model-unavailable signature (real binary)', () => {
   afterEach(() => {
     // Clean up any .pipeline state created by the Claude binary during the test.
     // The Claude CLI may write memory-tracking files to .pipeline/ in the cwd;
@@ -58,6 +63,35 @@ describe.skipIf(!shouldRun)('claude CLI model-unavailable signature (real binary
       // "model not found" / "invalid model") — this smoke caught that gap
       // and the regex was broadened in claude-provider.ts accordingly.
       expect(detectsModelUnavailable(output)).toBe(true);
+    },
+    30_000,
+  );
+});
+
+describe.skipIf(!shouldRunAuthTest)('claude CLI auth-failure signature (real binary)', () => {
+  it(
+    'matches AUTH_FAILURE_RE when no credentials are available',
+    async () => {
+      // Create a temporary empty config directory so the CLI has no stored credentials.
+      const emptyConfigDir = await mkdtemp(join(tmpdir(), 'claude-empty-config-'));
+      try {
+        const result = await execa('claude', ['-p', 'ping', '--print'], {
+          reject: false,
+          env: { ...process.env, CLAUDE_CONFIG_DIR: emptyConfigDir },
+        });
+
+        // Combine stdout + stderr, same as ClaudeProvider.invoke does.
+        const output = [result.stdout, result.stderr].filter(Boolean).join('\n');
+
+        // Expected outputs from the real CLI when no credentials exist:
+        //   - "Not logged in"
+        //   - "Please run /login to authenticate"
+        //   - "Invalid API key" (if a malformed/expired token is present)
+        // All are covered by AUTH_FAILURE_RE.
+        expect(detectsAuthFailure(output)).toBe(true);
+      } finally {
+        await rm(emptyConfigDir, { recursive: true, force: true });
+      }
     },
     30_000,
   );
