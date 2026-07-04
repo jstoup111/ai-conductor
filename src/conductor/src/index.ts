@@ -53,6 +53,7 @@ import {
   detectDaemonCommand,
   detectDaemonSupervisorCommand,
   detectUnknownDaemonSubcommand,
+  type DaemonCommandOptions,
 } from './engine/daemon-command.js';
 import { detectRenderCommand, dispatchRender } from './engine/render-cli.js';
 import {
@@ -63,6 +64,7 @@ import {
   detectDaemonObserveCommand,
   dispatchDaemonObserve,
 } from './engine/daemon-observe-cli.js';
+import { hasSession, sessionNameForRepo, respawnPane } from './engine/daemon-tmux.js';
 import { resolveOtelConfig } from './engine/otel/otel-config.js';
 import { OtelVisualizer, type OtelVisualizerContext } from './engine/otel/otel-visualizer.js';
 import type { ResolvedOtelConfig } from './engine/otel/otel-config.js';
@@ -97,6 +99,40 @@ export async function stopVisualizers(visualizers: VisualizerPlugin[]): Promise<
       }),
     ),
   );
+}
+
+/**
+ * Build the options object passed into `runDaemonMode` for a `daemon` CLI
+ * invocation (FR-9 wiring). Wires the self-restart callback when this daemon
+ * is running under a tmux session (started via `daemon start`): at idle
+ * boundary a queued restart fires respawn-in-place instead of falling through
+ * to the T30 bare-run consume-and-exit path. No session (e.g. `conduct daemon`
+ * run directly in a foreground shell) → leave triggerSelfRestart undefined,
+ * preserving the bare-run behavior.
+ *
+ * Extracted as a pure(ish) function — with the tmux helpers as injectable deps
+ * — so tests can exercise the REAL dispatch logic (which fields end up in the
+ * options object under which `hasSession` outcome) without invoking main() or
+ * a real tmux binary.
+ */
+export async function buildDaemonModeOptions(
+  projectRoot: string,
+  daemonCmd: DaemonCommandOptions,
+  deps: {
+    sessionNameForRepo: typeof sessionNameForRepo;
+    hasSession: typeof hasSession;
+    respawnPane: typeof respawnPane;
+  } = { sessionNameForRepo, hasSession, respawnPane },
+): Promise<DaemonCommandOptions & { projectRoot: string; triggerSelfRestart?: () => Promise<void> }> {
+  const sessionName = deps.sessionNameForRepo(projectRoot);
+  const triggerSelfRestart = (await deps.hasSession(sessionName))
+    ? () => deps.respawnPane(sessionName)
+    : undefined;
+  return {
+    projectRoot,
+    ...daemonCmd,
+    ...(triggerSelfRestart ? { triggerSelfRestart } : {}),
+  };
 }
 
 /**
@@ -310,7 +346,9 @@ async function main(): Promise<void> {
   const daemonCmd = detectDaemonCommand(process.argv);
   if (daemonCmd) {
     const { runDaemonMode } = await import('./daemon-cli.js');
-    await runDaemonMode({ projectRoot: process.cwd(), ...daemonCmd });
+    const projectRoot = process.cwd();
+    const daemonModeOptions = await buildDaemonModeOptions(projectRoot, daemonCmd);
+    await runDaemonMode(daemonModeOptions);
     process.exit(0);
   }
 
