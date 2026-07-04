@@ -34,6 +34,23 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   encoded a third, never-real argv shape (`--method` + `issue_number=`), which is why the
   idempotency test shipped red on main in #246 and failed every feature's full-suite VERIFY
   (#251). Fixes #251, fixes #260.
+- Unknown `bin/conduct` subcommands/options now fail loudly (or forward to conduct-ts) instead of silently launching the SDLC pipeline (#178).
+
+### Migration
+
+When upgrading to this release, note the following breaking change to `bin/conduct`:
+
+````bash
+# Previously-silent invocations now fail or forward
+# Unknown commands like `conduct render-diagrams` now either:
+# 1. Forward to conduct-ts (if installed)
+# 2. Error with exit 127 if conduct-ts is missing
+# 3. Fail with "Unknown option" or "Unknown command" for typos
+
+# Single-word feature descriptions must now be quoted multi-word strings
+conduct auth              # ✗ Rejected: bare word
+conduct "add user auth"   # ✓ Correct: quoted multi-word
+````
 
 ### Changed
 

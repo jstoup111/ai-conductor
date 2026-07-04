@@ -325,6 +325,22 @@ day-to-day, but the surface is still changing.
 test the rewrite. Drop-in replace the binary name in any command; if a flag isn't
 supported yet, commander will tell you.
 
+### Command syntax and unknown-command guard
+
+Both conductors validate command-line arguments strictly. Unknown options and bare single-word
+commands are now rejected loudly with helpful error messages instead of silently launching the
+pipeline. This prevents accidental typos and makes the CLI more discoverable:
+
+- **Feature descriptions must be quoted multi-word strings:** `conduct "add user login"` (correct) 
+  vs `conduct auth` (rejected — bare word).
+- **Unknown options fail early:** `conduct --frobnicate` now prints "Unknown option: --frobnicate" 
+  and suggests `--help` instead of silently treating it as a feature description.
+- **Conduct-TS forwarded verbs are documented:** Verbs like `daemon`, `render-diagrams`, 
+  `engineer`, etc. are forwarded to conduct-ts if it's available on PATH. Run `conduct --help` 
+  to see the full list.
+
+For details, see [Unknown-Command Guard](https://github.com/anthropics/ai-conductor#unknown-command-guard).
+
 Both binaries read `~/.ai-conductor/config.yml` (user-level) and the project's
 `.ai-conductor/config.yml` if present. Legacy `~/.claude/ai-conductor.config.json` is
 read as a fallback for installs that predate the YAML migration.
