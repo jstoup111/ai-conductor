@@ -2,6 +2,7 @@
 
 **Date:** 2026-07-03
 **Status:** APPROVED
+**Amended by:** adr-2026-07-03-daemon-auto-restart-stale-engine (narrow: gated stale-engine auto-restart at an idle boundary may also bring new code live, in addition to `bin/install`)
 **Deciders:** James Stoup (operator), engineer session for jstoup111/ai-conductor#174
 
 ## Context
