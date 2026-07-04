@@ -435,4 +435,155 @@ describe('engine/daemon — runDaemon', () => {
     expect(slept).toBe(2); // slept twice (two idle cycles)
     expect(triggerAttempts).toBeGreaterThanOrEqual(1); // attempted at least once
   });
+
+  // ── Stale-engine detection gate chain (Task 12) ─────────────────────────────────
+
+  describe('stale-engine detection gate chain (idle branch)', () => {
+    it('once-mode (not continuous): gate fails, checker never called', async () => {
+      let checkerCalled = false;
+      const deps: DaemonDeps = {
+        discoverBacklog: staticBacklog([]), // empty backlog → enters idle branch
+        runFeature: async (it) => ({ slug: it.slug, status: 'done' }),
+        staleEngineChecker: {
+          check: () => {
+            checkerCalled = true;
+            return 'stale';
+          },
+        },
+        sleep: async () => {}, // prevent actual idle sleep
+      };
+      const res = await runDaemon(deps, {
+        concurrency: 1,
+        once: true, // once-mode = NOT continuous
+        isSelfHost: true,
+        autoRestartOnStaleEngine: true,
+      });
+      expect(checkerCalled).toBe(false); // gate fails for once-mode
+      expect(res.stoppedReason).toBe('backlog_drained');
+    });
+
+    it('selfHost=false: gate fails, checker not invoked', async () => {
+      let checkerCalled = false;
+      const deps: DaemonDeps = {
+        discoverBacklog: staticBacklog([]),
+        runFeature: async (it) => ({ slug: it.slug, status: 'done' }),
+        staleEngineChecker: {
+          check: () => {
+            checkerCalled = true;
+            return 'stale';
+          },
+        },
+        sleep: async () => {},
+      };
+      const res = await runDaemon(deps, {
+        concurrency: 1,
+        once: false, // continuous mode
+        isSelfHost: false, // NOT self-host
+        autoRestartOnStaleEngine: true,
+        maxIdlePolls: 1, // prevent infinite idle loop
+      });
+      expect(checkerCalled).toBe(false); // gate fails for non-self-host
+      expect(res.stoppedReason).toBe('idle_timeout');
+    });
+
+    it('autoRestartOnStaleEngine=false: gate fails, checker not invoked', async () => {
+      let checkerCalled = false;
+      const deps: DaemonDeps = {
+        discoverBacklog: staticBacklog([]),
+        runFeature: async (it) => ({ slug: it.slug, status: 'done' }),
+        staleEngineChecker: {
+          check: () => {
+            checkerCalled = true;
+            return 'stale';
+          },
+        },
+        sleep: async () => {},
+      };
+      const res = await runDaemon(deps, {
+        concurrency: 1,
+        once: false,
+        isSelfHost: true,
+        autoRestartOnStaleEngine: false, // flag is OFF
+        maxIdlePolls: 1,
+      });
+      expect(checkerCalled).toBe(false); // gate fails because flag is false
+      expect(res.stoppedReason).toBe('idle_timeout');
+    });
+
+    it('all gates pass: checker is called on every idle poll until maxIdlePolls', async () => {
+      let checkerCallCount = 0;
+      const deps: DaemonDeps = {
+        discoverBacklog: staticBacklog([]),
+        runFeature: async (it) => ({ slug: it.slug, status: 'done' }),
+        staleEngineChecker: {
+          check: () => {
+            checkerCallCount++;
+            return 'current'; // returns current, not stale
+          },
+        },
+        sleep: async () => {},
+      };
+      const res = await runDaemon(deps, {
+        concurrency: 1,
+        once: false,
+        isSelfHost: true,
+        autoRestartOnStaleEngine: true,
+        maxIdlePolls: 2,
+      });
+      // When all gates pass, checker is called starting at idlePolls 0, 1, 2
+      // (then idlePolls becomes 3, check 3 > 2 is true, exit)
+      expect(checkerCallCount).toBe(3); // called at idlePolls 0, 1, 2
+      expect(res.stoppedReason).toBe('idle_timeout');
+    });
+
+    it('disabled checker (capture failed): returns "current", gate passes but stale not detected', async () => {
+      let checkerCalled = false;
+      const deps: DaemonDeps = {
+        discoverBacklog: staticBacklog([]),
+        runFeature: async (it) => ({ slug: it.slug, status: 'done' }),
+        staleEngineChecker: {
+          check: () => {
+            checkerCalled = true;
+            return 'current'; // disabled checker always returns 'current'
+          },
+        },
+        sleep: async () => {},
+      };
+      const res = await runDaemon(deps, {
+        concurrency: 1,
+        once: false,
+        isSelfHost: true,
+        autoRestartOnStaleEngine: true,
+        maxIdlePolls: 1,
+      });
+      // Gate passes, checker is called, but verdict is 'current' so no stale action
+      expect(checkerCalled).toBe(true);
+      expect(res.stoppedReason).toBe('idle_timeout');
+    });
+
+    it('stale verdict with all gates passing: checker detects stale', async () => {
+      let staleDetected = false;
+      const deps: DaemonDeps = {
+        discoverBacklog: staticBacklog([]),
+        runFeature: async (it) => ({ slug: it.slug, status: 'done' }),
+        staleEngineChecker: {
+          check: () => {
+            staleDetected = true;
+            return 'stale'; // returns stale verdict
+          },
+        },
+        sleep: async () => {},
+      };
+      const res = await runDaemon(deps, {
+        concurrency: 1,
+        once: false,
+        isSelfHost: true,
+        autoRestartOnStaleEngine: true,
+        maxIdlePolls: 1,
+      });
+      // Stale verdict detected (Task 13 will handle the requestRestart call)
+      expect(staleDetected).toBe(true);
+      expect(res.stoppedReason).toBe('idle_timeout');
+    });
+  });
 });

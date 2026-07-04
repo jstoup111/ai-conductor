@@ -155,6 +155,28 @@ export interface DaemonDeps {
   /** Injectable clock for the wall-clock ceiling (tests pass a fake). */
   now?: () => number;
 
+  // ── Stale-engine detection (Task 12+) ──────────────────────────────────────
+  /**
+   * Stale-engine checker: detects if the captured engine binary differs from the
+   * current on-disk binary. If capture failed, returns a disabled checker that
+   * always reports 'current' (conservative: assume fresh until proven otherwise).
+   * Optional for backward compatibility; tests inject this to simulate detection.
+   */
+  staleEngineChecker?: {
+    check(): 'stale' | 'current' | 'indeterminate';
+  };
+  /**
+   * Called when a stale engine is detected AND all gates pass (continuous,
+   * self-host, flag enabled, checker armed, not suppressed). Implements the
+   * restart sequence: write marker → release lock → exit(0). Optional for
+   * backward compatibility; tests inject a no-op to verify gate behavior.
+   * Task 13 implements the real requester wiring in daemon-cli.ts.
+   */
+  requestRestart?: (opts: {
+    fromIdentity: string | null;
+    targetIdentity: string | null;
+  }) => Promise<void>;
+
   // ── Halt-reconciliation hooks (ADR-013) — all OPTIONAL so the pure core
   //    (and its no-git tests) run unchanged when they are absent. ──────────────
   /**
@@ -228,6 +250,12 @@ export interface DaemonOptions {
   idlePollMs?: number;
   /** Stop after this many consecutive empty polls (default Infinity). */
   maxIdlePolls?: number;
+
+  // ── Stale-engine detection gate chain (Task 12+) ───────────────────────────
+  /** True when this daemon is building the harness itself (self-host mode). */
+  isSelfHost?: boolean;
+  /** Config flag: auto-restart on stale engine (default false). */
+  autoRestartOnStaleEngine?: boolean;
 }
 
 export type DaemonStopReason =
@@ -512,6 +540,31 @@ export async function runDaemon(
             log(
               `[daemon] hasRestartPending check failed: ${err instanceof Error ? err.message : String(err)}; skipping restart check`,
             );
+          }
+        }
+
+        // Task 12: stale-engine detection gate chain. Evaluate gates in order:
+        // 1. continuous mode (NOT once-mode)
+        // 2. self-host enabled
+        // 3. config flag enabled
+        // 4. checker armed (checker exists)
+        // 5. (Task 11 addition) not suppressed
+        // If all gates pass, call the checker. On 'stale' verdict, (Task 13) call
+        // requestRestart. If ANY gate fails, skip the check and continue idle behavior.
+        const isSharedMode = !options.once; // continuous mode = shared/not-once
+        const shouldCheckStale =
+          isSharedMode && // gate 1: continuous mode (not once)
+          options.isSelfHost === true && // gate 2: self-host enabled
+          options.autoRestartOnStaleEngine === true && // gate 3: flag enabled
+          deps.staleEngineChecker !== undefined; // gate 4: checker armed
+
+        if (shouldCheckStale && deps.staleEngineChecker) {
+          const verdict = deps.staleEngineChecker.check();
+          // Task 13: will add the requestRestart call when stale is detected.
+          // Task 12 (this) only evaluates the gate chain and calls the checker.
+          // The verdict is checked but no action is taken until Task 13.
+          if (verdict === 'stale') {
+            // Placeholder for Task 13: will call requestRestart here
           }
         }
 
