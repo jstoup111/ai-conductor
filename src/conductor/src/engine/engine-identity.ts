@@ -9,6 +9,14 @@ import { createReadStream } from 'node:fs';
 import { access, constants } from 'node:fs/promises';
 
 /**
+ * Represents a checker that determines if the current engine is stale,
+ * current, or indeterminate based on identity comparison.
+ */
+export interface StaleEngineChecker {
+  check(): 'stale' | 'current' | 'indeterminate';
+}
+
+/**
  * Capture the sha256 hash of a file's bytes. Returns a 64-character hex string
  * representing the sha256 digest, or null if the file cannot be read or does
  * not exist.
@@ -46,4 +54,46 @@ export async function captureEngineIdentity(entryPath: string): Promise<string |
       resolve(null);
     });
   });
+}
+
+/**
+ * Create a checker that compares engine identities to detect staleness.
+ *
+ * When `captured` is null (indicating capture failed), the checker is disabled:
+ * - Always returns 'current' (conservative: assume the engine is fresh)
+ * - Never accesses the filesystem
+ * - Calls the warn callback exactly once at construction time
+ *
+ * When `captured` is a valid hash string, the checker is enabled and can perform
+ * actual staleness checks (implementation in later tasks).
+ *
+ * @param captured - The captured engine identity (sha256 hash) or null if capture failed
+ * @param warn - Optional callback to warn about capture failure
+ * @returns A StaleEngineChecker that can determine engine freshness
+ */
+export function createStaleEngineChecker(
+  captured: string | null,
+  warn?: (msg: string) => void
+): StaleEngineChecker {
+  // When captured is null, the checker is disabled
+  if (captured === null) {
+    if (warn) {
+      warn('Engine identity capture failed; stale-engine checker disabled');
+    }
+
+    // Return a permanently disabled checker
+    return {
+      check(): 'stale' | 'current' | 'indeterminate' {
+        return 'current';
+      }
+    };
+  }
+
+  // When captured is a valid hash, the checker is enabled
+  // Full implementation of staleness detection comes in later tasks
+  return {
+    check(): 'stale' | 'current' | 'indeterminate' {
+      return 'indeterminate';
+    }
+  };
 }

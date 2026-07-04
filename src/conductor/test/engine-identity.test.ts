@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { captureEngineIdentity } from '../src/engine/engine-identity.js';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { captureEngineIdentity, createStaleEngineChecker } from '../src/engine/engine-identity.js';
 import { writeFile, mkdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -142,6 +142,161 @@ describe('captureEngineIdentity — sha256 hash capture', () => {
 
       expect(identity).toBeDefined();
       expect(identity).toHaveLength(64);
+    });
+  });
+});
+
+describe('createStaleEngineChecker — disabled checker on capture failure', () => {
+  describe('null capture disables checker', () => {
+    it('null capture returns a checker that always returns current', () => {
+      const checker = createStaleEngineChecker(null);
+
+      expect(checker.check()).toBe('current');
+      expect(checker.check()).toBe('current');
+      expect(checker.check()).toBe('current');
+    });
+
+    it('check method executes synchronously with no I/O when disabled', () => {
+      const checker = createStaleEngineChecker(null);
+
+      // Call check() multiple times - should return immediately without any I/O
+      const start = Date.now();
+      for (let i = 0; i < 1000; i++) {
+        const result = checker.check();
+        expect(result).toBe('current');
+      }
+      const elapsed = Date.now() - start;
+
+      // Should be very fast (< 50ms) since there's no I/O involved
+      expect(elapsed).toBeLessThan(50);
+    });
+
+    it('warn callback fires exactly once on disabled checker construction', () => {
+      const warn = vi.fn();
+
+      createStaleEngineChecker(null, warn);
+
+      expect(warn).toHaveBeenCalledTimes(1);
+    });
+
+    it('warn callback is not called when not provided', () => {
+      // Should not throw when warn is undefined
+      const checker = createStaleEngineChecker(null);
+      expect(checker).toBeDefined();
+    });
+  });
+
+  describe('valid capture enables checker', () => {
+    it('accepts a valid sha256 hash', () => {
+      const validHash = 'a'.repeat(64); // Valid sha256 format
+      const checker = createStaleEngineChecker(validHash);
+
+      expect(checker).toBeDefined();
+      expect(typeof checker.check).toBe('function');
+    });
+
+    it('does not call warn when capture is valid', () => {
+      const warn = vi.fn();
+      const validHash = 'b'.repeat(64);
+
+      createStaleEngineChecker(validHash, warn);
+
+      expect(warn).not.toHaveBeenCalled();
+    });
+  });
+});
+
+describe('createStaleEngineChecker — stale vs current verdicts', () => {
+  let tempDir: string;
+
+  beforeEach(async () => {
+    tempDir = join(tmpdir(), `stale-checker-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    await mkdir(tempDir, { recursive: true });
+  });
+
+  afterEach(async () => {
+    try {
+      await rm(tempDir, { recursive: true, force: true });
+    } catch {
+      // Ignore cleanup errors
+    }
+  });
+
+  describe('happy path — stale vs current detection', () => {
+    it('returns stale when captured hash differs from current', async () => {
+      const filePath = join(tempDir, 'engine.bin');
+      const currentContent = 'current content';
+      await writeFile(filePath, currentContent);
+
+      // Capture a different hash (from a different file)
+      const otherPath = join(tempDir, 'other.bin');
+      await writeFile(otherPath, 'other content');
+      const differentHash = await captureEngineIdentity(otherPath);
+
+      const checker = createStaleEngineChecker(differentHash, filePath);
+      const result = checker.check();
+
+      expect(result).toBe('stale');
+    });
+
+    it('returns current when hash matches', async () => {
+      const filePath = join(tempDir, 'engine.bin');
+      const content = 'stable content';
+      await writeFile(filePath, content);
+
+      const capturedHash = await captureEngineIdentity(filePath);
+      const checker = createStaleEngineChecker(capturedHash, filePath);
+      const result = checker.check();
+
+      expect(result).toBe('current');
+    });
+
+    it('returns current for byte-identical rebuild', async () => {
+      const filePath = join(tempDir, 'engine.bin');
+      const content = 'rebuilt content';
+      await writeFile(filePath, content);
+
+      // Capture original
+      const capturedHash = await captureEngineIdentity(filePath);
+
+      // Simulate rebuild: remove and recreate with identical content
+      await rm(filePath);
+      await writeFile(filePath, content);
+
+      const checker = createStaleEngineChecker(capturedHash, filePath);
+      const result = checker.check();
+
+      expect(result).toBe('current');
+    });
+
+    it('returns stale when file is modified after capture', async () => {
+      const filePath = join(tempDir, 'engine.bin');
+      const originalContent = 'original content';
+      const modifiedContent = 'modified content';
+
+      await writeFile(filePath, originalContent);
+      const capturedHash = await captureEngineIdentity(filePath);
+
+      // Modify the file
+      await writeFile(filePath, modifiedContent);
+
+      const checker = createStaleEngineChecker(capturedHash, filePath);
+      const result = checker.check();
+
+      expect(result).toBe('stale');
+    });
+
+    it('works with valid captured identity', async () => {
+      const filePath = join(tempDir, 'engine.bin');
+      const content = 'test content';
+      await writeFile(filePath, content);
+
+      const validHash = await captureEngineIdentity(filePath);
+      expect(validHash).toBeTruthy();
+      expect(validHash).toHaveLength(64);
+
+      const checker = createStaleEngineChecker(validHash, filePath);
+      expect(checker.check()).toBe('current');
     });
   });
 });
