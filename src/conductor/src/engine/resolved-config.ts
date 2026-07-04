@@ -361,6 +361,8 @@ export interface ResolvedSelfHostConfig {
   releaseArtifactGate: boolean;
   /** Declared version freeze (#261); null = no freeze (gate halts as before). */
   versionFreeze: string | null;
+  /** Timeout in minutes for credentials park-and-poll (TR-2/3/4/5). */
+  authParkTimeoutMinutes: number;
 }
 
 /**
@@ -371,6 +373,11 @@ export interface ResolvedSelfHostConfig {
  */
 export function resolveSelfHostConfig(config?: HarnessConfig): ResolvedSelfHostConfig {
   const block = config?.harness_self_host;
+  let timeoutMinutes = block?.auth_park_timeout_minutes ?? 60;
+  // Negative or non-numeric values fall back to 60
+  if (!Number.isInteger(timeoutMinutes) || timeoutMinutes < 0) {
+    timeoutMinutes = 60;
+  }
   return {
     activation: block?.activation ?? DEFAULT_SELF_HOST_ACTIVATION,
     skillRelinkPreflight: block?.skill_relink_preflight ?? true,
@@ -380,5 +387,6 @@ export function resolveSelfHostConfig(config?: HarnessConfig): ResolvedSelfHostC
     // Blank/whitespace normalizes to null so a freeze can never "match" an
     // empty VERSION read — safe-by-default like every other field here.
     versionFreeze: block?.version_freeze?.trim() || null,
+    authParkTimeoutMinutes: timeoutMinutes,
   };
 }
