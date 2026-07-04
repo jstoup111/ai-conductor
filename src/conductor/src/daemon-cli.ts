@@ -34,6 +34,7 @@ import { clampDaemonConcurrency } from './engine/daemon-command.js';
 import { makeRunFeature, type FeatureWorktree } from './engine/daemon-runner.js';
 import { createBlockerResolver } from './engine/blocker-resolver.js';
 import { createGhBlockerRunner } from './engine/gh-blocker-runner.js';
+import { captureEngineIdentity } from './engine/engine-identity.js';
 import {
   isHalted,
   isProcessed,
@@ -236,6 +237,14 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   if (isSelfHost) {
     log('self-host mode active — harness self-build guardrails enabled for this daemon.');
   }
+
+  // Task 8: Capture engine identity at startup and log ARMED/DISARMED status
+  const engineIdentity = await captureEngineIdentity(join(projectRoot, 'dist', 'index.js'));
+  if (engineIdentity) {
+    log(`daemon identity: ${engineIdentity}`);
+  }
+  const isArmed = (config?.auto_restart_on_stale_engine ?? false) && isSelfHost;
+  log(`${isArmed ? 'ARMED' : 'DISARMED'} — stale-engine auto-restart`);
 
   // One shared provider + event bus across workers (rate limits are shared).
   const events = new ConductorEventEmitter();
