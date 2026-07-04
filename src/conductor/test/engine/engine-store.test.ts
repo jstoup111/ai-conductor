@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, mkdir, writeFile, symlink } from 'fs/promises';
+import { mkdtemp, rm, mkdir, writeFile, symlink, lstat, readlink } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
@@ -170,5 +170,97 @@ describe('currentTarget', () => {
     await symlink(missingTarget, join(tmpDir, 'dist'));
 
     await expect(currentTarget(tmpDir)).resolves.toBeUndefined();
+  });
+});
+
+describe('flipCurrent', () => {
+  async function makeVersionDir(versionId: string): Promise<string> {
+    const versionDir = join(tmpDir, 'dist-versions', versionId);
+    await mkdir(versionDir, { recursive: true });
+    await writeFile(join(versionDir, 'index.js'), 'console.log(1);\n');
+    return versionDir;
+  }
+
+  it('flips dist to a symlink pointing at the new version dir', async () => {
+    const { flipCurrent, currentTarget } = await loadEngineStore();
+    const versionId = '20260704T120000Z-aaaaaaaaaaaa' as Awaited<
+      ReturnType<typeof flipCurrent>
+    >;
+    await makeVersionDir(versionId);
+
+    const result = await flipCurrent({ conductorRoot: tmpDir, versionId });
+
+    expect(result).toBe(versionId);
+    const distPath = join(tmpDir, 'dist');
+    const stat = await lstat(distPath);
+    expect(stat.isSymbolicLink()).toBe(true);
+    expect(await currentTarget(tmpDir)).toBe(versionId);
+  });
+
+  it('flips via symlink-tmp + rename (no lingering tmp entries, dist never absent)', async () => {
+    const { flipCurrent } = await loadEngineStore();
+    const versionIdA = '20260704T110000Z-aaaaaaaaaaaa' as Awaited<
+      ReturnType<typeof flipCurrent>
+    >;
+    const versionIdB = '20260704T120000Z-bbbbbbbbbbbb' as Awaited<
+      ReturnType<typeof flipCurrent>
+    >;
+    await makeVersionDir(versionIdA);
+    await makeVersionDir(versionIdB);
+
+    await flipCurrent({ conductorRoot: tmpDir, versionId: versionIdA });
+    const distPath = join(tmpDir, 'dist');
+
+    // Race a second flip against repeated existence checks on `dist`: at no
+    // observed point should `dist` be missing (rename is atomic, so a poll
+    // loop can never catch it absent).
+    let sawMissing = false;
+    const poll = (async () => {
+      for (let i = 0; i < 200; i += 1) {
+        try {
+          await lstat(distPath);
+        } catch {
+          sawMissing = true;
+          break;
+        }
+      }
+    })();
+
+    await Promise.all([poll, flipCurrent({ conductorRoot: tmpDir, versionId: versionIdB })]);
+
+    expect(sawMissing).toBe(false);
+
+    // No stray tmp symlinks left behind under conductorRoot.
+    const { readdir } = await import('fs/promises');
+    const entries = await readdir(tmpDir);
+    const tmpEntries = entries.filter((name) => name.startsWith('.dist-tmp-'));
+    expect(tmpEntries).toEqual([]);
+
+    const finalTarget = await readlink(distPath);
+    expect(finalTarget).toBe(join(tmpDir, 'dist-versions', versionIdB));
+  });
+
+  it('never rewrites published version dirs (mtime snapshot unchanged after flip)', async () => {
+    const { flipCurrent } = await loadEngineStore();
+    const versionId = '20260704T120000Z-cccccccccccc' as Awaited<
+      ReturnType<typeof flipCurrent>
+    >;
+    const versionDir = await makeVersionDir(versionId);
+    const beforeStat = await lstat(versionDir);
+
+    await flipCurrent({ conductorRoot: tmpDir, versionId });
+
+    const afterStat = await lstat(versionDir);
+    expect(afterStat.mtimeMs).toBe(beforeStat.mtimeMs);
+    expect(afterStat.ctimeMs).toBe(beforeStat.ctimeMs);
+  });
+
+  it('throws when the target version id has not been published', async () => {
+    const { flipCurrent } = await loadEngineStore();
+    const versionId = '20260704T120000Z-dddddddddddd' as Awaited<
+      ReturnType<typeof flipCurrent>
+    >;
+
+    await expect(flipCurrent({ conductorRoot: tmpDir, versionId })).rejects.toThrow();
   });
 });

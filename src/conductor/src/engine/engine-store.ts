@@ -22,8 +22,8 @@
 // module intentionally has no knowledge of tsup, staging dirs, or the
 // registry.
 
-import { readdir, lstat, readlink, readFile } from 'node:fs/promises';
-import { createHash } from 'node:crypto';
+import { readdir, lstat, readlink, readFile, symlink, rename, unlink } from 'node:fs/promises';
+import { createHash, randomBytes } from 'node:crypto';
 import { join, basename } from 'node:path';
 
 /**
@@ -41,7 +41,7 @@ const DIST_SYMLINK = 'dist';
 /** Format: `<YYYYMMDDTHHMMSSZ>-<12 hex chars of content hash>`. */
 const VERSION_ID_PATTERN = /^\d{8}T\d{6}Z-[0-9a-f]{12}$/;
 
-function isEngineVersionId(name: string): name is EngineVersionId {
+export function isEngineVersionId(name: string): name is EngineVersionId {
   return VERSION_ID_PATTERN.test(name);
 }
 
@@ -175,4 +175,57 @@ export async function currentTarget(conductorRoot: string): Promise<EngineVersio
   const versionId = basename(target);
   if (!isEngineVersionId(versionId)) return undefined;
   return versionId;
+}
+
+export interface FlipCurrentOpts {
+  /** The conductor package root (e.g. `src/conductor`). */
+  conductorRoot: string;
+  /** The already-published version id to flip `dist` to point at. */
+  versionId: EngineVersionId;
+  /** Env to resolve the store root from. Defaults to `process.env`. */
+  env?: NodeJS.ProcessEnv;
+}
+
+/**
+ * Atomically flip the `dist` symlink to point at `dist-versions/<versionId>`.
+ *
+ * Never done in-place: a fresh symlink is created at a private tmp path
+ * (`.dist-tmp-<random>` alongside `dist`) pointing at the target version
+ * dir, then `rename()`d on top of `dist`. `rename` on the same filesystem is
+ * atomic — there is no window in which `dist` is absent or points at a
+ * half-written target: it's either the old symlink or the new one.
+ *
+ * The published version directory itself is never touched (no writes, no
+ * mtime changes) — only the `dist` symlink (and a transient tmp symlink) are
+ * created/renamed.
+ *
+ * Throws if `dist-versions/<versionId>` does not exist (refuses to flip to a
+ * version that hasn't been published).
+ *
+ * @returns the same `versionId`, once the flip has completed.
+ */
+export async function flipCurrent(opts: FlipCurrentOpts): Promise<EngineVersionId> {
+  const env = opts.env ?? process.env;
+  const storeRoot = resolveEngineStoreRoot({ conductorRoot: opts.conductorRoot, env });
+  const versionDir = join(storeRoot, opts.versionId);
+
+  // Fail fast if the target version hasn't actually been published.
+  const versionStat = await lstat(versionDir);
+  if (!versionStat.isDirectory()) {
+    throw new Error(`flipCurrent: ${versionDir} is not a directory`);
+  }
+
+  const distPath = join(opts.conductorRoot, DIST_SYMLINK);
+  const tmpPath = join(opts.conductorRoot, `.dist-tmp-${randomBytes(6).toString('hex')}`);
+
+  await symlink(versionDir, tmpPath);
+  try {
+    await rename(tmpPath, distPath);
+  } catch (err) {
+    // Best-effort cleanup of the tmp symlink if the rename itself failed.
+    await unlink(tmpPath).catch(() => {});
+    throw err;
+  }
+
+  return opts.versionId;
 }

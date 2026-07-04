@@ -1,12 +1,13 @@
 #!/usr/bin/env node
-// Publish the engine: build into a STAGING dir, then finalize the staging
-// dir as an immutable `dist-versions/<version-id>/` directory.
+// Publish the engine: build into a STAGING dir, finalize the staging dir as
+// an immutable `dist-versions/<version-id>/` directory, then atomically flip
+// the `dist` symlink to point at it.
 //
 // Plan ref: .docs/plans/daemon-lifecycle-controls.md Phase 1 / Task 2 (FR-13
-// happy: "publish flow is staging -> finalize"). This task intentionally
-// does NOT flip the `dist` symlink (that's Task 3, `flipCurrent` in
-// engine-store.ts) — publish here only produces a finalized, immutable
-// version directory under the store root.
+// happy: "publish flow is staging -> finalize") and Task 3 ("atomic current
+// flip — never in-place"). The flip itself is `flipCurrent` in
+// engine-store.ts — this script only orchestrates staging, finalize, and the
+// flip call.
 //
 // Test seam: the real `tsup` build is never invoked by tests. The command
 // used to "build" is resolvable via (in priority order):
@@ -102,7 +103,7 @@ function resolveTsupCommand(opts) {
 export async function publish(opts) {
   const env = opts.env ?? process.env;
   const conductorRoot = resolve(opts.conductorRoot);
-  const { resolveEngineStoreRoot, computeVersionId } = await loadEngineStore();
+  const { resolveEngineStoreRoot, computeVersionId, flipCurrent } = await loadEngineStore();
   const storeRoot = resolveEngineStoreRoot({ conductorRoot, env });
 
   const stagingParent = conductorRoot;
@@ -123,6 +124,8 @@ export async function publish(opts) {
     await mkdir(storeRoot, { recursive: true });
     const finalDir = join(storeRoot, versionId);
     await rename(stagingDir, finalDir);
+
+    await flipCurrent({ conductorRoot, versionId, env });
 
     return { versionId, dir: finalDir };
   } catch (err) {
