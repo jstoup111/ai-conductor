@@ -858,10 +858,48 @@ export class Conductor {
     const base = this.baseBranch ?? (await originDefaultBranch(gitRebase)) ?? 'main';
     const log = (m: string) => console.error(m);
 
-    await advisoryPublish(
+    const result = await advisoryPublish(
       branch,
       'early-draft',
       () => publishEarlyDraft(this.gitForPublish, this.gh, this.projectRoot, branch, base, {}, undefined),
+      log,
+    );
+
+    // Persist the draft PR URL to state so the finish-step mark-ready hook
+    // (T14) can find and reuse it instead of creating a second PR.
+    if (result?.pr_url && !state.pr_url) {
+      state.pr_url = result.pr_url;
+      await savePrUrl(this.stateFilePath, result.pr_url);
+    }
+  }
+
+  /**
+   * Finish-step mark-ready hook (T14 / adr-2026-07-03-pr-timing-config-key).
+   * Advisory pre-step: when a `daemon && !selfHost` run is configured for
+   * `pr_timing: 'early-draft'` AND a draft PR was already opened by the
+   * build-start hook (T7 — recorded as `state.pr_url`), transition that draft
+   * to ready-for-review BEFORE the `finish` step dispatches. This reuses the
+   * SAME PR the daemon has been publishing to all along — `finish` never
+   * needs to (and, under this gate, never does) create a second PR; it just
+   * finds the now-ready PR already open and proceeds with its normal work
+   * (review, merge prep, etc.) against it.
+   *
+   * Self-host is excluded because the self-build owns its own PR lifecycle at
+   * finish (see runSelfHostFinishGates) and never publishes an early draft in
+   * the first place. Wrapped in advisoryPublish so a defensive failure here
+   * (e.g. the draft PR was closed out-of-band) can never block `finish` from
+   * dispatching.
+   */
+  private async runFinishMarkReadyHook(state: ConductState): Promise<void> {
+    const prUrl = state.pr_url;
+    if (!prUrl) return;
+
+    const log = (m: string) => console.error(m);
+
+    await advisoryPublish(
+      prUrl,
+      'early-draft',
+      () => setReady(this.gh, this.projectRoot, prUrl, log),
       log,
     );
   }
@@ -1306,6 +1344,21 @@ export class Conductor {
             `Configured pr_timing: 'early-draft', but the self-build owns its own PR lifecycle. ` +
             `PR will be created at finish step only.`,
           );
+        }
+
+        // Finish-step mark-ready hook (T14 / adr-2026-07-03-pr-timing-config-key).
+        // Advisory: transition the already-open early-draft PR to ready-for-review
+        // BEFORE the `finish` step dispatches, so `finish` reuses the SAME PR
+        // (`state.pr_url`) instead of creating a second one. Gated identically to
+        // the build-start hook (daemon, not self-host, pr_timing: early-draft) and
+        // additionally requires a draft PR to already exist in state.
+        if (
+          step.name === 'finish' &&
+          this.daemon &&
+          !this.selfHost &&
+          resolvePrTiming(this.config) === 'early-draft'
+        ) {
+          await this.runFinishMarkReadyHook(state);
         }
 
         while (attempt < stepMaxRetries) {
