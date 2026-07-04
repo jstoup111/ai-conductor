@@ -185,4 +185,36 @@ describe('closeIssueOnImplementationMerge (FR-4, FR-5, FR-7)', () => {
     });
     expect(outcome).toBe('attempted');
   });
+
+  // Task 15: Closes-ref parity — injectIssueRef/closeIssueOnImplementationMerge
+  // take `prUrl` as a plain parameter with no awareness of pr_timing mode. The
+  // SAME auto-close path fires whether that URL was freshly created at finish
+  // (pr_timing: 'finish', today's default) or is a draft PR reused across the
+  // whole build (pr_timing: 'early-draft', T7/T14) — the daemon's mark-ready
+  // hook (T14) and this Closes-ref injection are fully independent seams that
+  // both simply operate on whatever `state.pr_url` holds at finish time.
+  it('injects Closes against a reused early-draft PR URL exactly the same as a freshly-created one (mode-independent)', async () => {
+    // A PR URL that was opened early by the build-start hook (T7) and has
+    // been transitioned ready-for-review by the finish-step mark-ready hook
+    // (T14) by the time `finish` reaches the Closes-ref injection step — from
+    // this function's point of view it is indistinguishable from a PR
+    // `gh pr create`'d fresh at finish under pr_timing: 'finish'.
+    const reusedDraftUrl = 'https://github.com/acme/app/pull/91';
+    const { gh, calls } = makeGh('## What changed\n\nEarly-draft checkpoint body.');
+
+    const outcome = await closeIssueOnImplementationMerge({
+      gh,
+      sourceRef: 'acme/app#49',
+      prUrl: reusedDraftUrl,
+      cwd,
+    });
+
+    expect(outcome).toBe('attempted');
+    const edit = calls.find((c) => c.args[1] === 'edit');
+    expect(edit).toBeTruthy();
+    // The injection targets the reused draft's URL directly — no branching
+    // on how the PR came to exist.
+    expect(edit!.args).toContain(reusedDraftUrl);
+    expect(edit!.args[edit!.args.indexOf('--body') + 1]).toContain('Closes acme/app#49');
+  });
 });

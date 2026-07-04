@@ -45,6 +45,35 @@ import { resolveDaemonOwner, type OwnerConfig, type GhRunner } from '../owner-ga
 
 const execFile = promisify(execFileCb);
 
+/**
+ * Run a command whose exit code is meaningful (not an error condition), e.g.
+ * `git diff --cached --quiet` (0 = no staged diff, 1 = staged diff present).
+ * The promisified execFile rejects on any nonzero exit; this wrapper instead
+ * resolves with the exit code so callers can branch on it directly.
+ */
+function execFileAllowFailure(
+  command: string,
+  args: string[],
+  options: { cwd: string },
+): Promise<{ code: number }> {
+  return new Promise((resolve, reject) => {
+    execFileCb(command, args, options, (error: (Error & { code?: number }) | null) => {
+      if (error) {
+        // A numeric `code` is a normal nonzero exit (e.g. `--quiet` signaling a diff
+        // exists) — resolve with it. Anything else (spawn failure, signal kill) is a
+        // real error and must propagate.
+        if (typeof error.code === 'number') {
+          resolve({ code: error.code });
+        } else {
+          reject(error);
+        }
+        return;
+      }
+      resolve({ code: 0 });
+    });
+  });
+}
+
 // ── Public types ──────────────────────────────────────────────────────────────
 
 export interface LandSpecTarget {
@@ -296,11 +325,25 @@ export async function landSpec(
   // can bleed in (FR-9). Commit in place on the worktree's branch — no checkout of the
   // primary tree (FR-2).
   await execFile('git', ['add', '.docs'], { cwd: worktreePath });
-  await execFile(
-    'git',
-    ['commit', '-m', `spec: land authored artifacts for "${idea}" [engineer/land]`],
-    { cwd: worktreePath },
-  );
+
+  // Idempotent commit (T18): a prior checkpoint (T16) may have already committed some
+  // or all of these artifacts onto this same branch. `git add` above is a no-op for
+  // anything already committed and unchanged, so only commit if `git add` actually
+  // staged something. Without this check, re-running land on an already-fully-landed
+  // worktree would fail with git's "nothing to commit" error instead of completing
+  // idempotently.
+  const { code: diffCode } = await execFileAllowFailure('git', ['diff', '--cached', '--quiet'], {
+    cwd: worktreePath,
+  });
+  const hasStagedChanges = diffCode !== 0;
+
+  if (hasStagedChanges) {
+    await execFile(
+      'git',
+      ['commit', '-m', `spec: land authored artifacts for "${idea}" [engineer/land]`],
+      { cwd: worktreePath },
+    );
+  }
 
   return { slug, branch, repoPath: worktreePath };
 }

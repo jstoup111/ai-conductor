@@ -334,4 +334,79 @@ describe('landSpec fails closed on unresolved identity (Slice B Story 2, D3)', (
     expect(headAfter).toBe(headBefore);
     expect(logCountAfter).toBe(logCountBefore);
   });
+
+  it('T18: all artifacts already checkpoint-committed → land succeeds idempotently with no new commit', async () => {
+    const worktree = await seedValidWorktree();
+    const gh: GhRunner = async () => ({ stdout: 'bob\n' });
+
+    // Simulate the T16 checkpoint having already committed the full .docs tree
+    // (including the intake marker land would otherwise write) onto this branch.
+    const { writeIntakeMarker } = await import('../../../src/engine/engineer/intake-marker.js');
+    const { AuthoringGuard } = await import('../../../src/engine/engineer/authoring-guard.js');
+    const guard = new AuthoringGuard(repoPath);
+    await writeIntakeMarker(worktree, 'dep-bump', undefined, 'bob', guard);
+    await git(['add', '.docs'], worktree);
+    await git(['commit', '-m', 'checkpoint: T16 pre-commit .docs artifacts'], worktree);
+
+    const headBefore = await git(['rev-parse', 'HEAD'], worktree);
+    const logCountBefore = (await git(['log', '--oneline'], worktree)).split('\n').filter(Boolean).length;
+
+    const result = await landSpec(target(), 'dep bump', worktree, undefined, { ownerConfig: {}, gh });
+
+    const headAfter = await git(['rev-parse', 'HEAD'], worktree);
+    const logCountAfter = (await git(['log', '--oneline'], worktree)).split('\n').filter(Boolean).length;
+
+    // No new commit was created — land detected everything was already staged/committed.
+    expect(headAfter).toBe(headBefore);
+    expect(logCountAfter).toBe(logCountBefore);
+
+    // The result is still the same well-formed JSON shape as a fresh land.
+    expect(result.slug).toBe('dep-bump');
+    expect(result.repoPath).toBe(worktree);
+
+    const { stdout: marker } = await execFile(
+      'git',
+      ['show', `${result.branch}:.docs/intake/dep-bump.md`],
+      { cwd: worktree },
+    );
+    expect(marker).toContain('Owner: bob');
+  });
+
+  it('T18: partial checkpoint → land commits exactly the remainder', async () => {
+    const worktree = await seedValidWorktree();
+    const gh: GhRunner = async () => ({ stdout: 'bob\n' });
+
+    // Simulate T16 having checkpoint-committed only the specs/stories artifacts,
+    // leaving the plan artifact (and the intake marker) to be committed by land.
+    await git(['add', '.docs/specs', '.docs/stories'], worktree);
+    await git(['commit', '-m', 'checkpoint: T16 pre-commit specs+stories'], worktree);
+
+    const logCountBefore = (await git(['log', '--oneline'], worktree)).split('\n').filter(Boolean).length;
+
+    const result = await landSpec(target(), 'dep bump', worktree, undefined, { ownerConfig: {}, gh });
+
+    const logCountAfter = (await git(['log', '--oneline'], worktree)).split('\n').filter(Boolean).length;
+
+    // Exactly one new commit lands the remainder (plan + intake marker).
+    expect(logCountAfter).toBe(logCountBefore + 1);
+
+    // No dirty/staged changes remain after landing.
+    const porcelain = await git(['status', '--porcelain'], worktree);
+    expect(porcelain.trim()).toBe('');
+
+    // The plan and the marker are both present at HEAD on the landed branch.
+    const { stdout: plan } = await execFile(
+      'git',
+      ['show', `${result.branch}:.docs/plans/dep-bump.md`],
+      { cwd: worktree },
+    );
+    expect(plan).toContain('Implementation Plan: dep bump');
+
+    const { stdout: marker } = await execFile(
+      'git',
+      ['show', `${result.branch}:.docs/intake/dep-bump.md`],
+      { cwd: worktree },
+    );
+    expect(marker).toContain('Owner: bob');
+  });
 });
