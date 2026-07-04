@@ -638,6 +638,15 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     log,
     hasWarned: (slug) => hasWarned(projectRoot, slug),
     markWarned: (slug) => markWarned(projectRoot, slug),
+    // Task 6 (operator-park): the same real `park-marker.ts` primitive backing
+    // the dispatch-eligibility `isParked` dep above, threaded into the re-kick
+    // sweep so a human-placed halt survives sweeps across daemon restarts
+    // (FR-2). Read errors are logged as anomalies rather than thrown — the
+    // sweep already fails toward parked on error (see daemon-rekick.ts).
+    isOperatorParked: (slug) =>
+      isOperatorParked(projectRoot, slug, (err) =>
+        log(`anomaly checking if ${slug} is parked: ${err.message}`),
+      ),
   };
 
   // Task 14: Create the real restart requester with injected lock + process
