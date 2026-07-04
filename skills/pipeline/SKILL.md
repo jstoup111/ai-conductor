@@ -173,6 +173,16 @@ Scoping logic:
    starting the next batch (pre-batch verification, line 200). This ensures no test interdependencies
    were missed across the task sequence.
 
+**Fallback to full suite:**
+- Trigger (a): Diff touches a shared/core module imported/required by 3+ other production modules
+- Trigger (b): Diff touches config, migrations, dependency manifests, or test infrastructure (helpers, fixtures, global setup)
+- Trigger (c): The scoped set is empty
+- Trigger (d): The module→test mapping cannot be made confidently
+
+Uncertainty always resolves toward the FULL suite — scoping is an optimization, never a gate change.
+
+When a trigger fires, the task REPORT names it.
+
 **Contrast with pre-batch verification:** Pre-batch verification (step 379 onward) runs the
 full test suite to catch regressions from task interactions. Per-task VERIFY uses scoping to
 keep iteration fast; only the batch boundary re-test with full coverage. Scoped VERIFY is an
