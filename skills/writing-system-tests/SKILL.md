@@ -206,6 +206,15 @@ missed.
 and an **approved PRD** exists for the feature. If either condition is false (technical track,
 or no approved PRD), skip this section entirely.
 
+- **If technical track:** perform no FR-coverage work, emit no table, complete exactly as today
+  (§1–§7 unchanged). No error; the gate is skipped for non-product features.
+- **If no PRD in `.docs/specs/`:** perform no FR-coverage work, emit no table, complete as-is.
+  No error; the gate does not apply.
+- **If a PRD exists but `Status: Approved` is not in the file:** do NOT build a table from an
+  unapproved FR list — report the task as **FAILED** with the reason "PRD found but not
+  approved; cannot gate on incomplete FR list." This surfaces the missing approval as a
+  pipeline error rather than a silent no-op.
+
 Parse the PRD's enumerated functional requirements (the `FR-N` list). Build a coverage table
 with **exactly one row per FR** — every `FR-N` in the PRD must appear exactly once, and no row
 may reference an `FR-N` that isn't in the PRD. A table that omits an FR or invents one not
