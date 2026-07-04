@@ -94,7 +94,7 @@ export async function dispatchDaemonSupervisor(
   const isInteractive = deps.isInteractive ?? Boolean(process.stdin.isTTY);
   const isBusy = deps.isBusy ?? (async () => ({ busy: false }));
 
-  // Fleet dispatch (FR-3/FR-17/FR-18): pause/resume accept a named subset or
+  // Fleet dispatch (FR-3/FR-17/FR-18): pause/resume/restart accept a named subset or
   // `--all` and iterate the registry instead of acting on `cwd` alone. This
   // branch returns directly — it has its own per-repo try/catch inside
   // runFleetAction, so failures there never escape as a thrown exception.
@@ -109,6 +109,52 @@ export async function dispatchDaemonSupervisor(
       if (!(await isPaused(record.path))) return 'not paused';
       await removePauseMarker(record.path);
       return 'daemon resumed';
+    };
+    const { code } = await runFleetAction(selection, action, {
+      registryPath: deps.registryPath,
+      out,
+    });
+    return code;
+  }
+
+  // Fleet dispatch for restart (FR-3/FR-17/FR-18, Task T32): restart accept a named subset or
+  // `--all` and iterate the registry. Each repo can have a different outcome:
+  // - paused → immediate respawn (paused counts as idle)
+  // - idle → immediate respawn via supervisor.restart
+  // - busy → queue restart with writeRestartPending, return immediately
+  // - stopped (no session) → supervisor.start instead, report as "started"
+  // - error → report error and continue with other repos
+  if (cmd.verb === 'restart' && (cmd.all || cmd.names)) {
+    const selection: FleetSelection = cmd.all ? { all: true } : { names: cmd.names ?? [] };
+    const action = async (record: ProjectRecord): Promise<string> => {
+      const paused = await isPaused(record.path);
+      const busyCheck = paused ? { busy: false as const } : await isBusy(record.path);
+
+      if (busyCheck.busy) {
+        await writeRestartPending(record.path, { blockingSlug: busyCheck.blockingSlug });
+        return `restart queued: daemon is busy on ${busyCheck.blockingSlug ?? '(unknown feature)'}`;
+      }
+
+      // Handoff (FR-8): proactively clear any stale (dead-pid) or absent
+      // lock BEFORE the tmux-level respawn, using ONLY the existing
+      // acquire/reclaim primitives (daemon-lock.ts, no new lock semantics).
+      await clearStaleLockForRestart(record.path);
+
+      try {
+        const outcome = await supervisor.restart(record.path);
+        return outcome.message;
+      } catch (err) {
+        // Restart failed — likely "no session". Try starting instead.
+        // This handles the case where the daemon was stopped.
+        try {
+          await supervisor.start(record.path);
+          return 'daemon started (was stopped)';
+        } catch (startErr) {
+          // Both restart and start failed — propagate the error so
+          // runFleetAction catches it and reports per-repo.
+          throw startErr;
+        }
+      }
     };
     const { code } = await runFleetAction(selection, action, {
       registryPath: deps.registryPath,
