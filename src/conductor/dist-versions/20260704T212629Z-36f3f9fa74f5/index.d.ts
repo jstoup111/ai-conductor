@@ -628,6 +628,12 @@ interface HarnessConfig {
      * non-numeric values fall back to 60.
      */
     auth_park_timeout_minutes?: number;
+    /**
+     * When true, the daemon automatically restarts when the engine becomes stale.
+     * When false or absent, manual restart is required. Invalid values resolve to
+     * false with a single warning. Default: false. Never throws.
+     */
+    auto_restart_on_stale_engine?: boolean;
 }
 
 /**

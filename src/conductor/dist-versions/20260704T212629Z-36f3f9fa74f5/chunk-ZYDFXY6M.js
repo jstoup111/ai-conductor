@@ -6094,7 +6094,9 @@ function validateConfig(raw, projectRoot, opts = {}) {
     // Self-host guardrails (adr-2026-06-30-self-host-detection-seam).
     "harness_self_host",
     // Model availability fallback ladder.
-    "model_fallback_ladder"
+    "model_fallback_ladder",
+    // Daemon auto-restart on stale engine.
+    "auto_restart_on_stale_engine"
   ]);
   for (const key of Object.keys(obj)) {
     if (!knownTopLevelKeys.has(key)) {
@@ -6363,6 +6365,17 @@ function validateConfig(raw, projectRoot, opts = {}) {
         return errVal("model_fallback_ladder must contain only non-empty strings");
       }
     }
+  }
+  if (obj.auto_restart_on_stale_engine !== void 0 && obj.auto_restart_on_stale_engine !== null) {
+    if (typeof obj.auto_restart_on_stale_engine === "boolean") {
+    } else {
+      warnings.push(
+        `auto_restart_on_stale_engine has invalid value ${JSON.stringify(obj.auto_restart_on_stale_engine)}, falling back to false.`
+      );
+      obj.auto_restart_on_stale_engine = false;
+    }
+  } else {
+    obj.auto_restart_on_stale_engine = false;
   }
   return { ok: true, config: obj, warnings };
 }
@@ -8512,4 +8525,4 @@ export {
   tailDaemonLog,
   followDaemonLog
 };
-//# sourceMappingURL=chunk-7RT77NQ7.js.map
+//# sourceMappingURL=chunk-ZYDFXY6M.js.map

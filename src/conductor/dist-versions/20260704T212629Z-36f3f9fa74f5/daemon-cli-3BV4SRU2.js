@@ -48,7 +48,7 @@ import {
   specHash,
   writeHalt,
   writeState
-} from "./chunk-7RT77NQ7.js";
+} from "./chunk-ZYDFXY6M.js";
 import {
   consumeOnBoot,
   ensureInstallFresh,
@@ -61,8 +61,8 @@ import {
 // src/daemon-cli.ts
 import chalk2 from "chalk";
 import { v4 as uuidv4 } from "uuid";
-import { join as join8 } from "path";
-import { mkdir as mkdir5, rm as rm2 } from "fs/promises";
+import { join as join9 } from "path";
+import { mkdir as mkdir6, rm as rm3 } from "fs/promises";
 import { execFile as execFileCb3 } from "child_process";
 import { promisify as promisify3 } from "util";
 
@@ -283,6 +283,30 @@ async function runDaemon(deps, options) {
             log(
               `[daemon] hasRestartPending check failed: ${err instanceof Error ? err.message : String(err)}; skipping restart check`
             );
+          }
+        }
+        const isSharedMode = !options.once;
+        const shouldCheckStale = isSharedMode && // gate 1: continuous mode (not once)
+        options.isSelfHost === true && // gate 2: self-host enabled
+        options.autoRestartOnStaleEngine === true && // gate 3: flag enabled
+        deps.staleEngineChecker !== void 0;
+        if (shouldCheckStale && deps.staleEngineChecker) {
+          const verdict = deps.staleEngineChecker.check();
+          if (verdict === "stale") {
+            const targetIdentity = deps.staleEngineChecker.targetIdentity?.() ?? null;
+            const suppressed = deps.isSuppressed ? await deps.isSuppressed(targetIdentity) : false;
+            if (suppressed) {
+            } else {
+              if (inFlight.size === 0) {
+                const fromIdentity = deps.staleEngineChecker.capturedIdentity?.() ?? null;
+                if (deps.requestRestart) {
+                  await deps.requestRestart({
+                    fromIdentity,
+                    targetIdentity
+                  });
+                }
+              }
+            }
           }
         }
         if (options.once) {
@@ -1305,16 +1329,198 @@ function createGhBlockerRunner() {
   };
 }
 
+// src/engine/engine-identity.ts
+import { createHash } from "crypto";
+import { createReadStream, readFileSync } from "fs";
+import { access, constants } from "fs/promises";
+async function captureEngineIdentity(entryPath) {
+  try {
+    await access(entryPath, constants.R_OK);
+  } catch {
+    return null;
+  }
+  return new Promise((resolve) => {
+    const hash = createHash("sha256");
+    const stream = createReadStream(entryPath);
+    stream.on("data", (chunk) => {
+      hash.update(chunk);
+    });
+    stream.on("end", () => {
+      const digest = hash.digest("hex");
+      resolve(digest);
+    });
+    stream.on("error", () => {
+      resolve(null);
+    });
+  });
+}
+function createStaleEngineChecker(captured, entryPathOrWarn, warn) {
+  if (captured === null) {
+    const warnFn = typeof entryPathOrWarn === "function" ? entryPathOrWarn : void 0;
+    if (warnFn) {
+      warnFn("Engine identity capture failed; stale-engine checker disabled");
+    }
+    return {
+      check() {
+        return "current";
+      },
+      capturedIdentity() {
+        return null;
+      },
+      targetIdentity() {
+        return null;
+      }
+    };
+  }
+  const entryPath = typeof entryPathOrWarn === "string" ? entryPathOrWarn : void 0;
+  const capturedHash = captured;
+  let warned = false;
+  let lastObserved = null;
+  return {
+    check() {
+      if (!entryPath) {
+        return "indeterminate";
+      }
+      try {
+        const fileContent = readFileSync(entryPath);
+        const currentHash = createHash("sha256").update(fileContent).digest("hex");
+        lastObserved = currentHash;
+        if (currentHash === capturedHash) {
+          return "current";
+        } else {
+          return "stale";
+        }
+      } catch {
+        if (!warned && warn) {
+          warned = true;
+          warn(`Engine identity check failed for ${entryPath}; engine status is indeterminate`);
+        }
+        return "indeterminate";
+      }
+    },
+    capturedIdentity() {
+      return capturedHash;
+    },
+    targetIdentity() {
+      return lastObserved;
+    }
+  };
+}
+
+// src/engine/restart-intent.ts
+import { mkdir as mkdir3, readFile as readFile4, writeFile as writeFile3, rm } from "fs/promises";
+import { dirname, join as join4 } from "path";
+var RESTART_MARKER_PATH = ".daemon/RESTART_PENDING";
+var SUPPRESSION_PATH = ".daemon/RESTART_PENDING.suppression";
+async function writeRestartMarker(marker, dir, log) {
+  const target = join4(dir, RESTART_MARKER_PATH);
+  try {
+    await mkdir3(dirname(target), { recursive: true });
+    await writeFile3(target, JSON.stringify(marker, null, 2), "utf-8");
+  } catch (err) {
+    log?.(
+      `could not persist restart marker: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+}
+async function clearRestartMarker(dir, log) {
+  try {
+    await rm(join4(dir, RESTART_MARKER_PATH), { force: true });
+  } catch (err) {
+    log?.(
+      `could not delete restart marker: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+}
+async function readRestartMarkerWithStatus(dir, log) {
+  const filePath = join4(dir, RESTART_MARKER_PATH);
+  try {
+    const raw = await readFile4(filePath, "utf-8");
+    const parsed = JSON.parse(raw);
+    return {
+      kind: "present",
+      marker: parsed
+    };
+  } catch (err) {
+    const isNotFound = err instanceof Error && "code" in err && err.code === "ENOENT";
+    if (isNotFound) {
+      return {
+        kind: "absent",
+        marker: null
+      };
+    }
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    log?.(
+      `restart marker is corrupt and will be removed: ${errorMsg}`
+    );
+    try {
+      await rm(filePath, { force: true });
+    } catch (rmErr) {
+      log?.(
+        `could not remove corrupt restart marker: ${rmErr instanceof Error ? rmErr.message : String(rmErr)}`
+      );
+    }
+    return {
+      kind: "absent-corrupt",
+      marker: null,
+      error: errorMsg
+    };
+  }
+}
+async function recordSuppression(suppressedTarget, dir, log) {
+  const target = join4(dir, SUPPRESSION_PATH);
+  const record = {
+    suppressedTarget,
+    at: Date.now()
+  };
+  try {
+    await mkdir3(dirname(target), { recursive: true });
+    await writeFile3(target, JSON.stringify(record, null, 2), "utf-8");
+  } catch (err) {
+    log?.(
+      `could not persist suppression record: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+}
+var warnedSuppressions = /* @__PURE__ */ new Set();
+var warnedCorruptions = /* @__PURE__ */ new Set();
+async function isSuppressed(currentIdentity, dir, log) {
+  const filePath = join4(dir, SUPPRESSION_PATH);
+  try {
+    const raw = await readFile4(filePath, "utf-8");
+    const suppression = JSON.parse(raw);
+    const isMatch = suppression.suppressedTarget === currentIdentity;
+    if (isMatch) {
+      const warnKey = `${dir}::${currentIdentity}`;
+      if (!warnedSuppressions.has(warnKey)) {
+        warnedSuppressions.add(warnKey);
+        log?.(`Restart suppressed for engine identity: ${currentIdentity ?? "null"}`);
+      }
+    }
+    return isMatch;
+  } catch (err) {
+    const isNotFound = err instanceof Error && "code" in err && err.code === "ENOENT";
+    if (!isNotFound) {
+      const warnKey = `${dir}::corrupt`;
+      if (!warnedCorruptions.has(warnKey)) {
+        warnedCorruptions.add(warnKey);
+        log?.(`Suppression record is corrupt and will be re-derived at next boot`);
+      }
+    }
+    return false;
+  }
+}
+
 // src/engine/daemon-deps.ts
 import { execa as execa2 } from "execa";
-import { mkdir as mkdir3, writeFile as writeFile4, readFile as readFile5, access as access2, stat } from "fs/promises";
-import { basename as basename3, join as join5 } from "path";
+import { mkdir as mkdir4, writeFile as writeFile5, readFile as readFile6, access as access3, stat } from "fs/promises";
+import { basename as basename3, join as join6 } from "path";
 
 // src/engine/worktree-prepare.ts
 import { execa } from "execa";
-import { access, readFile as readFile4, writeFile as writeFile3 } from "fs/promises";
-import { basename as basename2, join as join4 } from "path";
-var SETUP_SCRIPT = join4("bin", "setup");
+import { access as access2, readFile as readFile5, writeFile as writeFile4 } from "fs/promises";
+import { basename as basename2, join as join5 } from "path";
+var SETUP_SCRIPT = join5("bin", "setup");
 var NAMESPACE_VAR = "WORKTREE_NAMESPACE";
 async function prepareWorktree(worktreePath, log) {
   const namespace = sanitizeNamespace(basename2(worktreePath));
@@ -1325,22 +1531,22 @@ function sanitizeNamespace(raw) {
   return raw.replace(/[^A-Za-z0-9_]/g, "_");
 }
 async function writeNamespaceEnv(worktreePath, namespace, log) {
-  const envPath = join4(worktreePath, ".env");
+  const envPath = join5(worktreePath, ".env");
   let existing = "";
   try {
-    existing = await readFile4(envPath, "utf-8");
+    existing = await readFile5(envPath, "utf-8");
   } catch {
   }
   const kept = existing.split("\n").filter((l) => !l.startsWith(`${NAMESPACE_VAR}=`));
   while (kept.length && kept[kept.length - 1].trim() === "") kept.pop();
   kept.push(`${NAMESPACE_VAR}=${namespace}`, "");
-  await writeFile3(envPath, kept.join("\n"), "utf-8");
+  await writeFile4(envPath, kept.join("\n"), "utf-8");
   log?.(`worktree env: ${NAMESPACE_VAR}=${namespace}`);
 }
 async function runProjectSetup(worktreePath, namespace, log) {
-  const script = join4(worktreePath, SETUP_SCRIPT);
+  const script = join5(worktreePath, SETUP_SCRIPT);
   try {
-    await access(script);
+    await access2(script);
   } catch {
     log?.("no bin/setup \u2014 skipping project setup");
     return;
@@ -1366,7 +1572,7 @@ async function runProjectSetup(worktreePath, namespace, log) {
 var PROCESSED_SUBDIR = ".daemon/processed";
 var WARNED_SUBDIR = ".daemon/warned";
 function makeFeatureRunnerDeps(cfg) {
-  const processedDir = join5(cfg.projectRoot, PROCESSED_SUBDIR);
+  const processedDir = join6(cfg.projectRoot, PROCESSED_SUBDIR);
   return {
     log: cfg.log,
     // The real daemon path always emits to the engineer store on completion
@@ -1385,7 +1591,7 @@ function makeFeatureRunnerDeps(cfg) {
     runGh: makeProductionGh(),
     createWorktree: async (slug) => {
       const branch = `feat/daemon-${slug}`;
-      const path = join5(cfg.worktreeBase, slug);
+      const path = join6(cfg.worktreeBase, slug);
       const root = cfg.projectRoot;
       const { path: p, branch: b } = await ensureWorktree({
         root,
@@ -1410,9 +1616,9 @@ function makeFeatureRunnerDeps(cfg) {
       });
     },
     markProcessed: async (slug, prUrl) => {
-      await mkdir3(processedDir, { recursive: true });
-      await writeFile4(
-        join5(processedDir, slug),
+      await mkdir4(processedDir, { recursive: true });
+      await writeFile5(
+        join6(processedDir, slug),
         `${JSON.stringify({ status: "shipped", prUrl: prUrl ?? null })}
 `,
         "utf-8"
@@ -1439,18 +1645,18 @@ async function resolveWorktreeBase(projectRoot, baseBranch) {
 }
 async function isProcessed(projectRoot, slug) {
   try {
-    await access2(join5(projectRoot, PROCESSED_SUBDIR, slug));
+    await access3(join6(projectRoot, PROCESSED_SUBDIR, slug));
     return true;
   } catch {
     return false;
   }
 }
 async function repairProcessed(projectRoot, slug, record) {
-  const processedDir = join5(projectRoot, PROCESSED_SUBDIR);
-  await mkdir3(processedDir, { recursive: true });
+  const processedDir = join6(projectRoot, PROCESSED_SUBDIR);
+  await mkdir4(processedDir, { recursive: true });
   const prUrl = "malformed" in record ? null : record.pr ?? null;
-  await writeFile4(
-    join5(processedDir, slug),
+  await writeFile5(
+    join6(processedDir, slug),
     `${JSON.stringify({ status: "shipped", prUrl })}
 `,
     "utf-8"
@@ -1458,39 +1664,39 @@ async function repairProcessed(projectRoot, slug, record) {
 }
 async function hasWarned(projectRoot, slug) {
   try {
-    await access2(join5(projectRoot, WARNED_SUBDIR, slug));
+    await access3(join6(projectRoot, WARNED_SUBDIR, slug));
     return true;
   } catch {
     return false;
   }
 }
 async function markWarned(projectRoot, slug) {
-  const warnedDir = join5(projectRoot, WARNED_SUBDIR);
-  await mkdir3(warnedDir, { recursive: true });
-  await writeFile4(join5(warnedDir, slug), "warned\n", "utf-8");
+  const warnedDir = join6(projectRoot, WARNED_SUBDIR);
+  await mkdir4(warnedDir, { recursive: true });
+  await writeFile5(join6(warnedDir, slug), "warned\n", "utf-8");
 }
 async function isHalted(worktreeBase, slug) {
-  return exists(join5(worktreeBase, slug, HALT_MARKER));
+  return exists(join6(worktreeBase, slug, HALT_MARKER));
 }
 async function readWorktreeOutcome(worktreePath) {
-  const done = await exists(join5(worktreePath, ".pipeline/DONE"));
-  const haltPath = join5(worktreePath, HALT_MARKER);
+  const done = await exists(join6(worktreePath, ".pipeline/DONE"));
+  const haltPath = join6(worktreePath, HALT_MARKER);
   const halted = await exists(haltPath);
   let reason;
   if (halted) {
-    reason = (await readFile5(haltPath, "utf-8").catch(() => "")).trim() || void 0;
+    reason = (await readFile6(haltPath, "utf-8").catch(() => "")).trim() || void 0;
   }
   let prUrl;
   try {
     const state = JSON.parse(
-      await readFile5(join5(worktreePath, ".pipeline/conduct-state.json"), "utf-8")
+      await readFile6(join6(worktreePath, ".pipeline/conduct-state.json"), "utf-8")
     );
     prUrl = state.pr_url;
   } catch {
   }
   let finishChoice;
   try {
-    const raw = (await readFile5(join5(worktreePath, FINISH_CHOICE_MARKER), "utf-8")).trim();
+    const raw = (await readFile6(join6(worktreePath, FINISH_CHOICE_MARKER), "utf-8")).trim();
     if (FINISH_CHOICE_VALUES.includes(raw)) {
       finishChoice = raw;
     }
@@ -1508,8 +1714,8 @@ async function exists(p) {
 }
 
 // src/engine/daemon-sha.ts
-import { mkdir as mkdir4, readFile as readFile6, writeFile as writeFile5 } from "fs/promises";
-import { dirname, join as join6 } from "path";
+import { mkdir as mkdir5, readFile as readFile7, writeFile as writeFile6 } from "fs/promises";
+import { dirname as dirname2, join as join7 } from "path";
 var LAST_BASE_SHA_PATH = ".daemon/last-base-sha";
 var SHA40 = /^[0-9a-f]{40}$/;
 function parseSha(raw) {
@@ -1524,17 +1730,17 @@ async function readBaseSha(git, ref) {
 }
 async function readPersistedBaseSha(dir) {
   try {
-    const raw = await readFile6(join6(dir, LAST_BASE_SHA_PATH), "utf-8");
+    const raw = await readFile7(join7(dir, LAST_BASE_SHA_PATH), "utf-8");
     return parseSha(raw);
   } catch {
     return null;
   }
 }
 async function writePersistedBaseSha(dir, sha, log) {
-  const target = join6(dir, LAST_BASE_SHA_PATH);
+  const target = join7(dir, LAST_BASE_SHA_PATH);
   try {
-    await mkdir4(dirname(target), { recursive: true });
-    await writeFile5(target, `${sha}
+    await mkdir5(dirname2(target), { recursive: true });
+    await writeFile6(target, `${sha}
 `, "utf-8");
   } catch (err) {
     log?.(`could not persist last-base-sha: ${err instanceof Error ? err.message : String(err)}`);
@@ -1542,8 +1748,8 @@ async function writePersistedBaseSha(dir, sha, log) {
 }
 
 // src/engine/daemon-rekick.ts
-import { readdir as readdir2, readFile as readFile7, rename, rm, writeFile as writeFile6, stat as stat2 } from "fs/promises";
-import { join as join7 } from "path";
+import { readdir as readdir2, readFile as readFile8, rename, rm as rm2, writeFile as writeFile7, stat as stat2 } from "fs/promises";
+import { join as join8 } from "path";
 var HALT_CLEARED_MARKER = ".pipeline/HALT.cleared";
 var REKICK_SENTINEL = ".pipeline/REKICK";
 var warnedShippedByDeps = /* @__PURE__ */ new WeakMap();
@@ -1637,13 +1843,13 @@ async function listHaltedWorktrees(worktreeBase) {
   const out = [];
   for (const e of entries) {
     if (!e.isDirectory()) continue;
-    if (await exists2(join7(worktreeBase, e.name, HALT_MARKER))) out.push(e.name);
+    if (await exists2(join8(worktreeBase, e.name, HALT_MARKER))) out.push(e.name);
   }
   return out;
 }
 async function readHaltReason(worktreeBase, slug) {
   try {
-    const content = await readFile7(join7(worktreeBase, slug, HALT_MARKER), "utf-8");
+    const content = await readFile8(join8(worktreeBase, slug, HALT_MARKER), "utf-8");
     for (const line of content.split("\n")) {
       const t = line.trim();
       if (t.length > 0) return t;
@@ -1663,18 +1869,18 @@ async function abortRebase(worktreePath) {
   }
 }
 async function clearMarker(worktreePath) {
-  const halt = join7(worktreePath, HALT_MARKER);
-  const cleared = join7(worktreePath, HALT_CLEARED_MARKER);
+  const halt = join8(worktreePath, HALT_MARKER);
+  const cleared = join8(worktreePath, HALT_CLEARED_MARKER);
   await rename(halt, cleared).catch(async () => {
   });
-  await rm(halt, { force: true });
-  await writeFile6(join7(worktreePath, REKICK_SENTINEL), `rekick
+  await rm2(halt, { force: true });
+  await writeFile7(join8(worktreePath, REKICK_SENTINEL), `rekick
 `, "utf-8");
 }
 async function resumeRebaseFirst(opts) {
-  const sentinel = join7(opts.worktreePath, REKICK_SENTINEL);
+  const sentinel = join8(opts.worktreePath, REKICK_SENTINEL);
   if (!await exists2(sentinel)) return "skipped";
-  await rm(sentinel, { force: true });
+  await rm2(sentinel, { force: true });
   const git = makeGitRunner(opts.worktreePath);
   let outcome;
   try {
@@ -1719,6 +1925,28 @@ var ANSI_SGR = /\x1b\[[0-9;]*m/g;
 function stripAnsi(s) {
   return s.replace(ANSI_SGR, "");
 }
+function createRestartRequester(daemonDir, log, lock, process2) {
+  return async (opts) => {
+    try {
+      await writeRestartMarker(
+        {
+          reason: "stale-engine",
+          fromIdentity: opts.fromIdentity,
+          targetIdentity: opts.targetIdentity,
+          at: Date.now()
+        },
+        daemonDir,
+        log
+      );
+    } catch (err) {
+      lock.releaseSync();
+      process2.exit(1);
+      return;
+    }
+    lock.releaseSync();
+    process2.exit(0);
+  };
+}
 async function runDaemonMode(opts) {
   const { projectRoot } = opts;
   const ensureFresh = opts.ensureFresh ?? (() => ensureInstallFresh({ interactive: false }));
@@ -1759,6 +1987,30 @@ async function runDaemonMode(opts) {
   if (isSelfHost) {
     log("self-host mode active \u2014 harness self-build guardrails enabled for this daemon.");
   }
+  const engineEntryPath = join9(projectRoot, "dist", "index.js");
+  const engineIdentity = await captureEngineIdentity(engineEntryPath);
+  if (engineIdentity) {
+    log(`daemon identity: ${engineIdentity}`);
+  }
+  const staleEngineChecker = engineIdentity !== null ? createStaleEngineChecker(engineIdentity, engineEntryPath, log) : createStaleEngineChecker(null, log);
+  const isArmed = (config?.auto_restart_on_stale_engine ?? false) && isSelfHost;
+  log(`${isArmed ? "ARMED" : "DISARMED"} \u2014 stale-engine auto-restart`);
+  if (engineIdentity !== null) {
+    const markerStatus = await readRestartMarkerWithStatus(projectRoot, log);
+    if (markerStatus.kind === "present") {
+      const marker = markerStatus.marker;
+      log(
+        `restarted for engine refresh \u2014 from ${marker.fromIdentity} to ${marker.targetIdentity}, fresh ${engineIdentity}`
+      );
+      if (engineIdentity !== marker.targetIdentity) {
+        log(
+          `suppressing restart loop \u2014 target was ${marker.targetIdentity}, now ${engineIdentity}`
+        );
+        await recordSuppression(engineIdentity, projectRoot, log);
+      }
+      await clearRestartMarker(projectRoot);
+    }
+  }
   const events = new ConductorEventEmitter();
   const registry2 = new PluginRegistry();
   const subscriber = registerBuiltins(
@@ -1774,14 +2026,14 @@ async function runDaemonMode(opts) {
   if (memoryResolveCtx.warnings.length > 0) {
     for (const w of memoryResolveCtx.warnings) log(`WARNING: ${w}`);
   }
-  const worktreeBase = join8(projectRoot, ".worktrees");
-  await mkdir5(worktreeBase, { recursive: true });
+  const worktreeBase = join9(projectRoot, ".worktrees");
+  await mkdir6(worktreeBase, { recursive: true });
   const runConductorInWorktree = async (wt, item) => {
-    const pipelineDir = join8(wt.path, ".pipeline");
-    await mkdir5(pipelineDir, { recursive: true });
-    await rm2(join8(pipelineDir, "session-created"), { force: true });
-    await rm2(join8(pipelineDir, "conduct-session-id"), { force: true });
-    const stateFilePath = join8(pipelineDir, "conduct-state.json");
+    const pipelineDir = join9(wt.path, ".pipeline");
+    await mkdir6(pipelineDir, { recursive: true });
+    await rm3(join9(pipelineDir, "session-created"), { force: true });
+    await rm3(join9(pipelineDir, "conduct-session-id"), { force: true });
+    const stateFilePath = join9(pipelineDir, "conduct-state.json");
     const existingResult = await readState(stateFilePath);
     const baseState = existingResult.ok && Object.keys(existingResult.value).length > 0 ? existingResult.value : { complexity_tier: item.tier ?? "M", track: item.track ?? "product", feature_desc: item.slug };
     for (const name of PRESEEDED_DONE) {
@@ -1920,19 +2172,21 @@ async function runDaemonMode(opts) {
     priorityResolver
   });
   const discoverTick = (o) => workSource.discover(o);
-  const processedDir = join8(projectRoot, ".daemon/processed");
+  const processedDir = join9(projectRoot, ".daemon/processed");
   const lastRekickSha = /* @__PURE__ */ new Map();
   const rekickDeps = {
     listHaltedWorktrees: () => listHaltedWorktrees(worktreeBase),
     readHaltReason: (slug) => readHaltReason(worktreeBase, slug),
-    hasRebaseInProgress: (slug) => hasRebaseInProgress(join8(worktreeBase, slug)),
-    abortRebase: (slug) => abortRebase(join8(worktreeBase, slug)),
-    clearMarker: (slug) => clearMarker(join8(worktreeBase, slug)),
+    hasRebaseInProgress: (slug) => hasRebaseInProgress(join9(worktreeBase, slug)),
+    abortRebase: (slug) => abortRebase(join9(worktreeBase, slug)),
+    clearMarker: (slug) => clearMarker(join9(worktreeBase, slug)),
     lastRekickSha,
     log,
     hasWarned: (slug) => hasWarned(projectRoot, slug),
     markWarned: (slug) => markWarned(projectRoot, slug)
   };
+  const requestRestart = createRestartRequester(projectRoot, log, lock, process);
+  const suppressionChecker = (currentIdentity) => isSuppressed(currentIdentity, projectRoot, log);
   const result = await runDaemon(
     {
       discoverBacklog: discoverTick,
@@ -1943,6 +2197,9 @@ async function runDaemonMode(opts) {
       isPaused: () => isPaused(projectRoot),
       runFeature,
       log,
+      staleEngineChecker,
+      requestRestart,
+      isSuppressed: suppressionChecker,
       // ── Halt-reconciliation (ADR-013) real-I/O hooks ──────────────────────
       // FR-1: scan inherited state and render the dashboard to both sinks
       // (console + daemon.log via `log`) before any dispatch. Pass the priority
@@ -2001,7 +2258,10 @@ ${renderDashboard(state)}`);
       maxRuntimeMs: opts.maxRuntimeSeconds != null ? opts.maxRuntimeSeconds * 1e3 : void 0,
       once: !continuous,
       idlePollMs: opts.idlePollSeconds != null ? opts.idlePollSeconds * 1e3 : void 0,
-      maxIdlePolls: opts.maxIdlePolls
+      maxIdlePolls: opts.maxIdlePolls,
+      // Task 12: wire stale-engine detection gate inputs
+      isSelfHost,
+      autoRestartOnStaleEngine: config?.auto_restart_on_stale_engine ?? false
     }
   );
   subscriber.stop();
@@ -2061,7 +2321,8 @@ function renderDaemonEvent(event, log) {
   }
 }
 export {
+  createRestartRequester,
   renderDaemonEvent,
   runDaemonMode
 };
-//# sourceMappingURL=daemon-cli-4DVYBX5P.js.map
+//# sourceMappingURL=daemon-cli-3BV4SRU2.js.map
