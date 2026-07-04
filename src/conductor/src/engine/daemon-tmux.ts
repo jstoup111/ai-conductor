@@ -180,6 +180,38 @@ export async function sendKeys(
   run(['send-keys', '-t', `=${name}:`, command, 'Enter'], { inherit: false });
 }
 
+/**
+ * Sets the `remain-on-exit` window option so the daemon pane survives after its
+ * foreground process exits, instead of the window/session closing out from
+ * under us. Session-scoped target (`=<name>`) — never touches other sessions.
+ */
+export async function setRemainOnExit(
+  name: string,
+  run: TmuxRunner = defaultTmuxRunner,
+): Promise<void> {
+  run(['set-option', '-t', `=${name}`, 'remain-on-exit', 'on'], { inherit: false });
+  // Non-zero exit is not fatal here — remain-on-exit is best-effort hardening;
+  // the respawn-pane call below is the operation that must succeed or throw.
+}
+
+/**
+ * Respawns the daemon pane in place (kills the exited/foreground process and
+ * relaunches DAEMON_FOREGROUND_COMMAND in the SAME pane) without touching the
+ * session, window layout, or any other pane. Targets window 0 / pane 0 — the
+ * single window+pane created by newDetachedSession — so operator windows
+ * opened later in the same session are never addressed.
+ * Throws if tmux exits non-zero (e.g. the targeted pane no longer exists).
+ */
+export async function respawnPane(
+  name: string,
+  run: TmuxRunner = defaultTmuxRunner,
+): Promise<void> {
+  const result = run(['respawn-pane', '-k', '-t', `=${name}:0.0`], { inherit: false });
+  if (result.code !== 0) {
+    throw new Error(`tmux respawn-pane exited with code ${result.code} for session "${name}"`);
+  }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // tmuxInstalled / requireTmux — availability probes.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -272,10 +304,15 @@ export function makeTmuxSupervisor(run: TmuxRunner = defaultTmuxRunner): Supervi
     },
 
     async restart(repo: string): Promise<void> {
+      // Respawn-in-place (ADR-014, FR-20): the session and its window are left
+      // alone — only the daemon's own pane is torn down and relaunched. This
+      // preserves any operator windows/panes attached to the same session and
+      // avoids the kill+recreate churn (and the brief window where the session
+      // does not exist) of the old implementation. NO kill-session here.
       await requireTmux(run);
       const name = sessionNameForRepo(repo);
-      await killSession(name, run);
-      await newDetachedSession(name, DAEMON_FOREGROUND_COMMAND, repo, run);
+      await setRemainOnExit(name, run);
+      await respawnPane(name, run);
     },
 
     async attach(repo: string, opts: { readOnly?: boolean } = {}): Promise<void> {

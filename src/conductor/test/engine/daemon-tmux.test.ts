@@ -265,6 +265,85 @@ describe('sendKeys: argv', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// setRemainOnExit — exact argv; session-scoped target
+// ─────────────────────────────────────────────────────────────────────────────
+describe('setRemainOnExit: argv', () => {
+  it('calls set-option with exact-match session target and remain-on-exit on', async () => {
+    const setRemainOnExit = requireFn(await load(), 'setRemainOnExit');
+    const { run, calls } = spyRunner();
+    await setRemainOnExit('cc-daemon-myapp-abc123', run);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].args).toEqual([
+      'set-option', '-t', '=cc-daemon-myapp-abc123', 'remain-on-exit', 'on',
+    ]);
+    expect(calls[0].inherit).toBe(false);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// respawnPane — exact argv; window/pane-scoped target; throws on non-zero
+// ─────────────────────────────────────────────────────────────────────────────
+describe('respawnPane: argv and error handling', () => {
+  it('calls respawn-pane -k with the exact-match window/pane target (=name:0.0)', async () => {
+    const respawnPane = requireFn(await load(), 'respawnPane');
+    const { run, calls } = spyRunner();
+    await respawnPane('cc-daemon-myapp-abc123', run);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].args).toEqual(['respawn-pane', '-k', '-t', '=cc-daemon-myapp-abc123:0.0']);
+    expect(calls[0].inherit).toBe(false);
+  });
+
+  it('throws when tmux exits non-zero', async () => {
+    const respawnPane = requireFn(await load(), 'respawnPane');
+    const { run } = spyRunner({ 'respawn-pane': { code: 1 } });
+    await expect(respawnPane('cc-daemon-myapp-abc123', run)).rejects.toThrow();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// makeTmuxSupervisor().restart — respawn-in-place (ADR-014, FR-20)
+// ─────────────────────────────────────────────────────────────────────────────
+describe('makeTmuxSupervisor().restart: respawn-in-place', () => {
+  it('sets remain-on-exit then respawn-panes the daemon pane; NO kill-session', async () => {
+    const makeTmuxSupervisor = requireFn(await load(), 'makeTmuxSupervisor');
+    const { run, calls } = spyRunner({ '-V': { code: 0 } });
+    await makeTmuxSupervisor(run).restart('/home/alice/myapp');
+    const subs = calls.map((c) => c.args[0]);
+    expect(subs).toContain('set-option');
+    expect(subs).toContain('respawn-pane');
+    expect(subs).not.toContain('kill-session');
+    expect(subs).not.toContain('new-session');
+  });
+
+  it('set-option precedes respawn-pane', async () => {
+    const makeTmuxSupervisor = requireFn(await load(), 'makeTmuxSupervisor');
+    const { run, calls } = spyRunner({ '-V': { code: 0 } });
+    await makeTmuxSupervisor(run).restart('/home/alice/myapp');
+    const subs = calls.map((c) => c.args[0]);
+    expect(subs.indexOf('set-option')).toBeLessThan(subs.indexOf('respawn-pane'));
+  });
+
+  it('addresses only the daemon pane (window 0 / pane 0) — no argv targets any other window', async () => {
+    const makeTmuxSupervisor = requireFn(await load(), 'makeTmuxSupervisor');
+    const { run, calls } = spyRunner({ '-V': { code: 0 } });
+    await makeTmuxSupervisor(run).restart('/home/alice/myapp');
+    const respawnCall = calls.find((c) => c.args[0] === 'respawn-pane')!;
+    expect(respawnCall.args).toEqual(
+      expect.arrayContaining(['-t', expect.stringMatching(/^=cc-daemon-myapp-[0-9a-f]{6}:0\.0$/)]),
+    );
+    // No call in the whole restart flow ever addresses a window/pane index other
+    // than 0.0 — i.e. no argv element matches ":<n>." for n != 0 or ":0.<n>" for n != 0.
+    for (const call of calls) {
+      for (const arg of call.args) {
+        if (typeof arg === 'string' && arg.includes(':')) {
+          expect(arg).toMatch(/:0\.0$|:$|^=[^:]+$/);
+        }
+      }
+    }
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // tmuxInstalled — calls [-V]; true/false; false (not throw) on TmuxNotInstalledError
 // ─────────────────────────────────────────────────────────────────────────────
 describe('tmuxInstalled: argv, boolean return, and throwing-runner false path', () => {
