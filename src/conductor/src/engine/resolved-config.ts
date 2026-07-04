@@ -296,6 +296,40 @@ export function resolveRebaseResolutionAttempts(config?: HarnessConfig): number 
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// OAuth token park-and-poll timeout (TR-5)
+// ────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Default timeout in minutes for OAuth token park-and-poll recovery.
+ * When the daemon detects an expired operator OAuth token, it parks the build
+ * and polls for token refresh. This timeout caps the polling duration. 0 means
+ * poll indefinitely; negative or non-numeric values fall back to 60.
+ */
+export const DEFAULT_AUTH_PARK_TIMEOUT_MINUTES = 60;
+
+/**
+ * Resolve the auth park timeout from HarnessConfig.
+ *
+ * Reads `config.auth_park_timeout_minutes` (top-level HarnessConfig key).
+ *
+ * Resolution rules:
+ *   - undefined / absent → DEFAULT_AUTH_PARK_TIMEOUT_MINUTES (60)
+ *   - integer >= 0       → use the value (0 = disabled, preserved as-is)
+ *   - negative integer   → DEFAULT_AUTH_PARK_TIMEOUT_MINUTES (60)
+ *   - NaN or non-numeric → DEFAULT_AUTH_PARK_TIMEOUT_MINUTES (60)
+ */
+export function resolveAuthParkTimeoutMinutes(config?: HarnessConfig): number {
+  const override = config?.auth_park_timeout_minutes;
+  if (override === undefined || override === null) {
+    return DEFAULT_AUTH_PARK_TIMEOUT_MINUTES;
+  }
+  if (typeof override !== 'number' || !Number.isFinite(override) || override < 0) {
+    return DEFAULT_AUTH_PARK_TIMEOUT_MINUTES;
+  }
+  return override;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // Self-host guardrails (adr-2026-06-30-self-host-detection-seam / TR-11)
 //
 // The resolved shape every guardrail site reads. Resolution is SAFE-BY-DEFAULT:

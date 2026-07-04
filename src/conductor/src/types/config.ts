@@ -332,4 +332,12 @@ export interface HarnessConfig {
    * array → no fallback. Each entry must be a non-empty string.
    */
   model_fallback_ladder?: string[];
+  /**
+   * Timeout in minutes for OAuth token park-and-poll recovery (TR-5).
+   * Default: 60 (one hour). When the daemon detects an expired operator
+   * OAuth token, it parks the build and polls for token refresh until this
+   * timeout elapses. 0 disables the timeout (polls indefinitely). Negative or
+   * non-numeric values fall back to 60.
+   */
+  auth_park_timeout_minutes?: number;
 }

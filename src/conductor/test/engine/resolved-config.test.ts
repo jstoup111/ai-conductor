@@ -317,4 +317,58 @@ describe('engine/resolved-config', () => {
       expect(resolveStepConfig('stories', 'DECIDE').model).toBe('sonnet');
     });
   });
+
+  describe('resolveAuthParkTimeoutMinutes', () => {
+    it('defaults to 60 when auth_park_timeout_minutes is absent', async () => {
+      const { resolveAuthParkTimeoutMinutes } = await import(
+        '../../src/engine/resolved-config.js'
+      );
+      const result = resolveAuthParkTimeoutMinutes(undefined);
+      expect(result).toBe(60);
+    });
+
+    it('returns the configured value when explicitly set', async () => {
+      const { resolveAuthParkTimeoutMinutes } = await import(
+        '../../src/engine/resolved-config.js'
+      );
+      const config: HarnessConfig = {
+        auth_park_timeout_minutes: 15,
+      };
+      const result = resolveAuthParkTimeoutMinutes(config);
+      expect(result).toBe(15);
+    });
+
+    it('returns the configured value when set to 0', async () => {
+      const { resolveAuthParkTimeoutMinutes } = await import(
+        '../../src/engine/resolved-config.js'
+      );
+      const config: HarnessConfig = {
+        auth_park_timeout_minutes: 0,
+      };
+      const result = resolveAuthParkTimeoutMinutes(config);
+      expect(result).toBe(0);
+    });
+
+    it('falls back to default for negative values', async () => {
+      const { resolveAuthParkTimeoutMinutes } = await import(
+        '../../src/engine/resolved-config.js'
+      );
+      const config: HarnessConfig = {
+        auth_park_timeout_minutes: -10,
+      };
+      const result = resolveAuthParkTimeoutMinutes(config);
+      expect(result).toBe(60);
+    });
+
+    it('falls back to default for non-numeric values', async () => {
+      const { resolveAuthParkTimeoutMinutes } = await import(
+        '../../src/engine/resolved-config.js'
+      );
+      const config: HarnessConfig = {
+        auth_park_timeout_minutes: NaN,
+      };
+      const result = resolveAuthParkTimeoutMinutes(config);
+      expect(result).toBe(60);
+    });
+  });
 });
