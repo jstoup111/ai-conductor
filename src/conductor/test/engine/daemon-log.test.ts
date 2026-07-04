@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, readFile, stat, chmod } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import chalk from 'chalk';
 import {
   openDaemonLog,
   tailDaemonLog,
@@ -9,7 +10,8 @@ import {
   daemonLogPath,
   formatDaemonLogLine,
 } from '../../src/engine/daemon-log.js';
-import { renderDaemonEvent } from '../../src/daemon-cli.js';
+import { renderDaemonEvent, stripAnsi } from '../../src/daemon-cli.js';
+import type { ConductorEvent } from '../../src/types/index.js';
 
 describe('engine/daemon-log', () => {
   let dir: string;
@@ -102,6 +104,79 @@ describe('engine/daemon-log', () => {
       if (res.status !== 'ok') throw new Error('expected ok');
       expect(res.lines).toContain('[daemon] · ▶ build');
       expect(res.lines).toContain('[daemon] ·   build ✓ done');
+    });
+  });
+
+  describe('KICKBACK lines are ANSI-free and greppable (file-log parity)', () => {
+    let priorLevel: number;
+
+    beforeEach(() => {
+      // Force chalk on, as if run from an attached TTY, so the real rendering
+      // path emits ANSI SGR codes for renderDaemonEvent to strip.
+      priorLevel = chalk.level;
+      chalk.level = 1;
+    });
+
+    afterEach(() => {
+      chalk.level = priorLevel;
+    });
+
+    it('a kickback event, pushed through the real sink composition, lands as a timestamped, ANSI-free KICKBACK line in daemon.log', async () => {
+      const sink = await openDaemonLog(dir);
+      // Mirror runDaemonMode's real tee: renderDaemonEvent -> strip-ANSI -> timestamp -> file.
+      const tee = (msg: string) => sink.write(formatDaemonLogLine(`[daemon] ${stripAnsi(msg)}`));
+      const event: ConductorEvent = {
+        type: 'kickback',
+        from: 'prd_audit',
+        to: 'build',
+        count: 1,
+      };
+      renderDaemonEvent(event, tee);
+      await sink.close();
+
+      const res = await tailDaemonLog(dir, 0);
+      if (res.status !== 'ok') throw new Error('expected ok');
+      expect(res.lines).toHaveLength(1);
+      const line = res.lines[0];
+
+      // Timestamped: leading field parses as a valid instant.
+      const stamp = line.split(' ', 1)[0];
+      expect(Number.isNaN(new Date(stamp).getTime())).toBe(false);
+
+      // Greppable anchor text, nested bold+yellow styles stripped clean.
+      expect(line).toContain('KICKBACK: prd_audit re-opened build');
+
+      // Zero ANSI bytes (ESC \x1b) anywhere in the persisted line.
+      // eslint-disable-next-line no-control-regex -- asserting absence of ESC
+      expect(/\x1b/.test(line)).toBe(false);
+    });
+
+    it('only the kickback line contains the KICKBACK anchor across every rendered event variant', async () => {
+      const events: ConductorEvent[] = [
+        { type: 'step_started', step: 'build', index: 0 },
+        { type: 'step_completed', step: 'build', status: 'done' },
+        { type: 'step_failed', step: 'build', error: 'boom', retryCount: 1 },
+        { type: 'step_retry', step: 'build', attempt: 1, maxAttempts: 3, reason: 'retry' },
+        { type: 'gate_verdict', step: 'build', satisfied: false, reason: 'unsatisfied' },
+        { type: 'kickback', from: 'prd_audit', to: 'build', count: 1 },
+        { type: 'loop_halt', reason: 'stuck' },
+        { type: 'loop_converged' },
+        { type: 'rate_limit', waitSeconds: 30 },
+        { type: 'session_reset', reason: 'context refresh' },
+      ];
+
+      const sink = await openDaemonLog(dir);
+      const tee = (msg: string) => sink.write(formatDaemonLogLine(`[daemon] ${stripAnsi(msg)}`));
+      for (const event of events) {
+        renderDaemonEvent(event, tee);
+      }
+      await sink.close();
+
+      const res = await tailDaemonLog(dir, 0);
+      if (res.status !== 'ok') throw new Error('expected ok');
+      const kickbackLines = res.lines.filter((l) => l.includes('KICKBACK'));
+      expect(kickbackLines).toHaveLength(1);
+      expect(kickbackLines[0]).toContain('KICKBACK: prd_audit re-opened build');
     });
   });
 
