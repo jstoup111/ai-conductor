@@ -1247,6 +1247,41 @@ Park-and-poll HALTs follow the standard HALT remediation (no new process — see
 
 See `.docs/plans/sandbox-auth-expiry-park.md` and `.docs/decisions/adr-2026-07-04-auth-failure-park-and-poll.md` for the full design.
 
+### Daemon auto-restart on stale engine (self-host only)
+
+When enabled in self-host mode, the daemon monitors the engine binary (`dist/index.js`) for
+stale code between idle passes. If stale code is detected and no tasks are in-flight, the daemon
+writes a restart intent marker (`.daemon/RESTART_PENDING`) and exits with code 0, allowing the
+configured respawn transport (PR #215) to relaunch with fresh code.
+
+**Configuration:**
+
+```yaml
+# .ai-conductor/config.yml (project level)
+auto_restart_on_stale_engine: true    # default: false; self-host only, ignored in non-self-host environments
+```
+
+**Key behavior:**
+
+- **Configuration is read once at startup** — changes to the flag require restarting the daemon
+- **Self-host-only** — non-self-host environments ignore the flag regardless of setting
+- **Disabled in once-mode** — the daemon runs a single batch (`conduct daemon` without `--continuous`),
+  so auto-restart has no effect (no idle passes to check staleness on)
+- **RESTART_PENDING marker** — when stale code is detected between idle passes with no in-flight tasks,
+  the daemon writes `.daemon/RESTART_PENDING` and exits cleanly (code 0) rather than continuing with
+  stale code
+- **No-op suppression** — on non-convergence (fresh identity ≠ target), restart detection is suppressed
+  to prevent restart loops
+- **Requires PR #215 respawn transport** — without an external respawn mechanism, the daemon exits but
+  is not automatically relaunched with fresh code
+
+**Detection:** The daemon computes the build artifact's SHA on each idle pass (when eligible-feature
+queue is empty) and compares it against the prior pass's SHA. A mismatch indicates stale code has been
+replaced. The feature branch identity must also converge (fresh == target); mismatches suppress restart
+to avoid thrashing.
+
+See `.docs/plans/2026-07-03-daemon-auto-restart-stale-engine.md` for the full design.
+
 ### Harness self-host guardrails (`engine/self-host/`)
 
 The guardrail bundle that makes the `james-stoup-agents` harness repo safe to daemon-register

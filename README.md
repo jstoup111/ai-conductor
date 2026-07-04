@@ -268,6 +268,14 @@ The management/observability verbs (`start`/`stop`/`restart`/`connect`/`debug`/`
 for a launch — and `conduct daemon <verb>` (the bash wrapper) now forwards to `conduct-ts`
 instead of starting a feature build named after the verb.
 
+**Auto-restart on stale engine (self-host only).** In self-host mode, the daemon can detect when
+the engine binary (`dist/index.js`) has been updated between idle passes. When stale code is
+detected and no tasks are in-flight, the daemon writes a `.daemon/RESTART_PENDING` marker and
+exits cleanly, allowing an external respawn transport to relaunch with fresh code. Enable with
+`auto_restart_on_stale_engine: true` in your project config; the feature is ignored in
+non-self-host environments and disabled in once-mode runs. Requires PR #215 respawn transport
+for deployment.
+
 On failure, conduct sends a desktop notification and drops into an interactive Claude session
 to fix the issue. After you `/quit`, it rechecks artifacts and continues automatically.
 
