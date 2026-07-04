@@ -5,7 +5,6 @@ enforcement: advisory
 phase: ship
 standalone: true
 requires: []
-model: fable
 ---
 
 ## Purpose

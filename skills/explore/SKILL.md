@@ -5,7 +5,6 @@ enforcement: advisory
 phase: decide
 standalone: true
 requires: []
-model: fable
 ---
 
 ## Purpose
