@@ -43,6 +43,7 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   The self-host VERSION approval gate (PR #262) now self-satisfies while VERSION stays at the
   frozen value, ending the per-feature version-gate HALT + manual `.pipeline/version-approval`
   round-trip. Read at daemon startup (restart to apply); update or remove at the 1.0 cut.
+- **pipeline: per-task VERIFY now runs the scoped affected-test set with fallback-to-full-suite triggers; batch-boundary full suite unchanged (#245).** Implementation subagents now scope each task's VERIFY step to the test files affected by that task's code changes, reducing feedback latency and test noise. Fallback triggers (delta magnitude, commit count, new test file) revert to full suite when a task's scope is indeterminate. Batch-boundary verification continues to run the full test suite. Scoped sets are reported per-task and visible in the pipeline dispatch output.
 
 ### Migration
 
