@@ -83,6 +83,7 @@ describe('when: conditional step skip (T9)', () => {
 
     const runner = mockRunner();
     const conductor = new Conductor({
+      projectRoot: dir,
       stateFilePath: statePath,
       stepRunner: runner,
       events,
@@ -126,6 +127,7 @@ describe('when: conditional step skip (T9)', () => {
 
     const runner = mockRunner();
     const conductor = new Conductor({
+      projectRoot: dir,
       stateFilePath: statePath,
       stepRunner: runner,
       events,
@@ -151,6 +153,7 @@ describe('when: conditional step skip (T9)', () => {
 
     const runner = mockRunner();
     const conductor = new Conductor({
+      projectRoot: dir,
       stateFilePath: statePath,
       stepRunner: runner,
       events,
@@ -179,6 +182,7 @@ describe('when: conditional step skip (T9)', () => {
 
     const runner = mockRunner();
     const conductor = new Conductor({
+      projectRoot: dir,
       stateFilePath: statePath,
       stepRunner: runner,
       events,
@@ -218,6 +222,7 @@ describe('parallel: group execution (T15-T22)', () => {
 
     const runner = mockRunner({ success: true });
     const conductor = new Conductor({
+      projectRoot: dir,
       stateFilePath: statePath,
       stepRunner: runner,
       events,
@@ -254,6 +259,7 @@ describe('parallel: group execution (T15-T22)', () => {
 
     const runner = mockRunner({ success: true });
     const conductor = new Conductor({
+      projectRoot: dir,
       stateFilePath: statePath,
       stepRunner: runner,
       events,
@@ -291,6 +297,7 @@ describe('parallel: group execution (T15-T22)', () => {
     };
 
     const conductor = new Conductor({
+      projectRoot: dir,
       stateFilePath: statePath,
       stepRunner: runner,
       events,
@@ -332,6 +339,7 @@ describe('parallel: group execution (T15-T22)', () => {
     };
 
     const conductor = new Conductor({
+      projectRoot: dir,
       stateFilePath: statePath,
       stepRunner: runner,
       events,
@@ -376,6 +384,7 @@ describe('parallel: group execution (T15-T22)', () => {
 
     const runner = mockRunner();
     const conductor = new Conductor({
+      projectRoot: dir,
       stateFilePath: statePath,
       stepRunner: runner,
       events,
@@ -417,6 +426,7 @@ describe('parallel: group execution (T15-T22)', () => {
     };
 
     const conductor = new Conductor({
+      projectRoot: dir,
       stateFilePath: statePath,
       stepRunner: runner,
       events,
