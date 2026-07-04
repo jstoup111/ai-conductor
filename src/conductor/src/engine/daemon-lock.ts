@@ -195,6 +195,19 @@ export async function readPidRecord(repoPath: string): Promise<PidRecord | null>
   return parsed as PidRecord;
 }
 
+/**
+ * TEST HELPER: writePidRecord — directly write a pidfile without O_EXCL.
+ * Used ONLY in tests to set up initial state (e.g., simulating an orphaned process).
+ * Production code must use acquire() or reclaim() to respect the O_EXCL mutex.
+ */
+export async function writePidRecord(
+  repoPath: string,
+  record: PidRecord,
+): Promise<void> {
+  await mkdir(daemonDir(repoPath), { recursive: true });
+  await writeFile(pidfilePath(repoPath), JSON.stringify(record), 'utf8');
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Public API
 // ─────────────────────────────────────────────────────────────────────────────
