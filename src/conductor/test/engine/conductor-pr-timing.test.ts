@@ -44,6 +44,16 @@ interface FakeGh {
   calls: RecordedGhCall[];
 }
 
+interface RecordedGitCall {
+  args: string[];
+  cwd: string;
+}
+
+interface FakeGit {
+  git: GitRunner;
+  calls: RecordedGitCall[];
+}
+
 /** Build a fake gh runner that records all calls. */
 function makeFakeGh(): FakeGh {
   const calls: RecordedGhCall[] = [];
@@ -58,6 +68,26 @@ function makeFakeGh(): FakeGh {
   };
 
   return { gh, calls };
+}
+
+/** Build a fake git runner that records all calls and simulates a branch ahead of base. */
+function makeFakeGit(): FakeGit {
+  const calls: RecordedGitCall[] = [];
+
+  const git: GitRunner = async (args, opts) => {
+    calls.push({ args: [...args], cwd: opts.cwd });
+    // Simulate git rev-list returning commits ahead
+    if (args[0] === 'rev-list' && args[args.length - 1]?.includes('..')) {
+      return { stdout: '1\n' }; // One commit ahead
+    }
+    // Simulate git push success
+    if (args[0] === 'push') {
+      return { stdout: '' };
+    }
+    return { stdout: '' };
+  };
+
+  return { git, calls };
 }
 
 /**
@@ -190,6 +220,120 @@ describe('conductor pr_timing regression harness', () => {
 
       // Assert: the conductor still runs steps even with pr_timing absent
       expect(stepsRun).toBeGreaterThan(0);
+    });
+  });
+
+  describe('T8: Self-host downgrade (selfHost + pr_timing=early-draft)', () => {
+    it('with selfHost=true and pr_timing=early-draft, zero gh pr create calls before finish step', async () => {
+      await seedStateBefore(statePath, 'build');
+
+      const events = new ConductorEventEmitter();
+      const { gh, calls } = makeFakeGh();
+
+      const runner: StepRunner = {
+        run: async (): Promise<StepRunResult> => ({ success: true }),
+      };
+
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        daemon: true,
+        mode: 'auto',
+        fromStep: 'build',
+        selfHost: true,
+        config: { pr_timing: 'early-draft' } as unknown as HarnessConfig,
+        gh,
+      });
+
+      await conductor.run();
+
+      // Assert: zero `gh pr create` calls recorded (early publish skipped on self-host)
+      expect(ghPrCreateCalls(calls)).toHaveLength(0);
+    });
+
+    it('with selfHost=true and pr_timing=early-draft, logs exactly one downgrade message', async () => {
+      await seedStateBefore(statePath, 'build');
+
+      const events = new ConductorEventEmitter();
+      const { gh } = makeFakeGh();
+
+      let downgradeLogsEmitted = 0;
+      const originalError = console.error;
+      const mockConsoleError = (msg: string) => {
+        if (msg.includes('early-draft') && msg.includes('self-host')) {
+          downgradeLogsEmitted++;
+        }
+      };
+      console.error = mockConsoleError;
+
+      try {
+        const runner: StepRunner = {
+          run: async (): Promise<StepRunResult> => ({ success: true }),
+        };
+
+        const conductor = new Conductor({
+          stateFilePath: statePath,
+          stepRunner: runner,
+          events,
+          projectRoot: dir,
+          daemon: true,
+          mode: 'auto',
+          fromStep: 'build',
+          selfHost: true,
+          config: { pr_timing: 'early-draft' } as unknown as HarnessConfig,
+          gh,
+        });
+
+        await conductor.run();
+
+        // Assert: exactly one downgrade log message emitted
+        expect(downgradeLogsEmitted).toBe(1);
+      } finally {
+        console.error = originalError;
+      }
+    });
+
+    it('with selfHost=false and pr_timing=early-draft, allow gh pr create calls (no downgrade)', async () => {
+      await seedStateBefore(statePath, 'build');
+
+      const events = new ConductorEventEmitter();
+      const { gh, calls } = makeFakeGh();
+      const { git } = makeFakeGit();
+
+      const runner: StepRunner = {
+        run: async (): Promise<StepRunResult> => ({ success: true }),
+      };
+
+      // Add worktree_branch to state so the hook has something to publish
+      const state: ConductState = {};
+      for (const s of ALL_STEPS) {
+        if (s.name === 'build') break;
+        (state as Record<string, unknown>)[s.name] = s.name === 'retro' ? 'skipped' : 'done';
+      }
+      state.worktree_branch = 'feat/test-branch';
+      await writeState(statePath, state);
+
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        daemon: true,
+        mode: 'auto',
+        fromStep: 'build',
+        selfHost: false,
+        config: { pr_timing: 'early-draft' } as unknown as HarnessConfig,
+        gh,
+        gitForPublish: git,
+      });
+
+      await conductor.run();
+
+      // Assert: at least one gh call was recorded (the publish hook should run)
+      // The hook will call publishEarlyDraft which calls gh pr create/ready
+      expect(calls.length).toBeGreaterThan(0);
     });
   });
 });

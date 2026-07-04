@@ -771,7 +771,7 @@ export async function publishEarlyDraft(
           '--draft',
         ];
         const { stdout: createOut } = await runGh(createArgs, { cwd });
-        prUrl = extractPrUrl(createOut);
+        prUrl = extractPrUrl(createOut) ?? undefined;
         if (prUrl) {
           cache.set(branch, prUrl);
         } else {

@@ -104,7 +104,7 @@ import {
 import { writeIntakeMarker } from './engineer/intake-marker.js';
 import { readMachineOwnerConfig } from './owner-gate/machine-identity.js';
 import { resolveDaemonOwner, type GhRunner } from './owner-gate/identity.js';
-import { makeProductionGh, publishEarlyDraft, advisoryPublish } from './pr-labels.js';
+import { makeProductionGh, makeProductionGit, publishEarlyDraft, advisoryPublish } from './pr-labels.js';
 
 export type CheckpointResponse = 'continue' | 'back' | 'quit';
 
@@ -352,6 +352,12 @@ export interface ConductorOptions {
    * operator identity for plan-step owner stamping (Slice B, D4).
    */
   gh?: GhRunner;
+  /**
+   * Shell runner for the `git` CLI (pr-labels publish seam). Injected for
+   * tests; defaults to the real production git. Tests can inject a fake
+   * runner to simulate git operations without a real repository.
+   */
+  gitForPublish?: any; // GitRunner from pr-labels.ts
 }
 
 /**
@@ -473,6 +479,8 @@ export class Conductor {
   private escalateBuildFailure: (opts: EscalateBuildFailureOpts) => Promise<EscalateBuildFailureResult>;
   /** gh CLI runner for owner identity resolution (plan-step stamping, Slice B D4). */
   private gh: GhRunner;
+  /** git CLI runner for pr-labels publish seam (push/lazy PR creation). */
+  private gitForPublish: any; // GitRunner from pr-labels.ts
   /**
    * The most recent engine-native rebase outcome. The `rebase` step is special:
    * its gate verdict is computed by the native handler (not from a file
@@ -514,6 +522,7 @@ export class Conductor {
     this.onComplexityAssessment = opts.onComplexityAssessment;
     this.escalateBuildFailure = opts.escalateBuildFailure ?? defaultEscalateBuildFailure;
     this.gh = opts.gh ?? makeProductionGh();
+    this.gitForPublish = opts.gitForPublish ?? makeProductionGit();
   }
 
   /**
@@ -836,14 +845,15 @@ export class Conductor {
     const branch = state.worktree_branch;
     if (!branch) return;
 
-    const git = makeGitRunner(this.projectRoot);
-    const base = this.baseBranch ?? (await originDefaultBranch(git)) ?? 'main';
+    // originDefaultBranch expects the rebase-style git runner (exitCode + stdout).
+    const gitRebase = makeGitRunner(this.projectRoot);
+    const base = this.baseBranch ?? (await originDefaultBranch(gitRebase)) ?? 'main';
     const log = (m: string) => console.error(m);
 
     await advisoryPublish(
       branch,
       'early-draft',
-      () => publishEarlyDraft(git, this.gh, this.projectRoot, branch, base, {}, undefined),
+      () => publishEarlyDraft(this.gitForPublish, this.gh, this.projectRoot, branch, base, {}, undefined),
       log,
     );
   }
@@ -1190,6 +1200,24 @@ export class Conductor {
           resolvePrTiming(this.config) === 'early-draft'
         ) {
           await this.runBuildStartPublishHook(state);
+        }
+
+        // T8 negative-path: self-host downgrade (TS-1).
+        // When self-hosting the harness and pr_timing: early-draft is configured,
+        // log a loud downgrade message and proceed with the build. The self-build
+        // owns its own finish-step PR lifecycle; early-draft publish is advisory
+        // and skipped entirely for self-hosted builds.
+        if (
+          step.name === 'build' &&
+          this.daemon &&
+          this.selfHost &&
+          resolvePrTiming(this.config) === 'early-draft'
+        ) {
+          console.error(
+            `[pr-timing] early-draft mode downgraded to finish mode (self-host detected). ` +
+            `Configured pr_timing: 'early-draft', but the self-build owns its own PR lifecycle. ` +
+            `PR will be created at finish step only.`,
+          );
         }
 
         while (attempt < stepMaxRetries) {
