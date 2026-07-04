@@ -63,6 +63,13 @@ export interface RekickSweepDeps {
   hasWarned?: (slug: string) => Promise<boolean>;
   /** Warn-once: record that the "already shipped" skip was logged for this slug. */
   markWarned?: (slug: string) => Promise<void>;
+  /**
+   * True when a slug's worktree carries an operator-placed park marker. Checked
+   * FIRST in the per-slug loop, ahead of `isProcessed` and the SHA guard: a
+   * human-placed halt must survive re-kick sweeps unconditionally. Absent →
+   * behavior is unchanged (backward-compatible).
+   */
+  isOperatorParked?: (slug: string) => Promise<boolean>;
 }
 
 export interface RekickSweepResult {
@@ -100,6 +107,15 @@ export async function rekickSweep(
   }
 
   for (const slug of slugs) {
+    // Operator-park: a human-placed halt must survive re-kick unconditionally.
+    // Checked FIRST — ahead of isProcessed and the SHA guard — so a parked
+    // worktree is never touched (no abort/clear/sentinel/lastRekickSha).
+    if (deps.isOperatorParked && (await deps.isOperatorParked(slug))) {
+      skipped.push(slug);
+      log(`re-kick ${slug}: skipped — operator-parked`);
+      continue;
+    }
+
     // Content-aware shipped-work dedup: a processed slug's spec/implementation
     // already merged — skip the abort/clear/re-park cycle entirely. Fail-open:
     // an isProcessed error is treated as NOT processed so the sweep proceeds

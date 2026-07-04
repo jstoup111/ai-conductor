@@ -40,6 +40,7 @@ function fakeDeps(opts: {
   lastRekickSha?: Map<string, string>;
   isProcessed?: (slug: string) => Promise<boolean>;
   warned?: Set<string>;
+  isOperatorParked?: (slug: string) => Promise<boolean>;
 }): { deps: RekickSweepDeps; trace: Trace } {
   const trace: Trace = { events: [], cleared: new Set() };
   const warned = opts.warned ?? new Set<string>();
@@ -61,7 +62,15 @@ function fakeDeps(opts: {
     },
     lastRekickSha: opts.lastRekickSha ?? new Map(),
     log: (m) => trace.events.push(`log:${m}`),
-    ...(opts.isProcessed ? { isProcessed: opts.isProcessed } : {}),
+    ...(opts.isProcessed
+      ? {
+          isProcessed: async (slug: string) => {
+            trace.events.push(`isProcessed:${slug}`);
+            return opts.isProcessed!(slug);
+          },
+        }
+      : {}),
+    ...(opts.isOperatorParked ? { isOperatorParked: opts.isOperatorParked } : {}),
     hasWarned: async (slug) => warned.has(slug),
     markWarned: async (slug) => {
       warned.add(slug);
@@ -200,6 +209,63 @@ describe('engine/daemon-rekick — rekickSweep (FR-7/FR-9)', () => {
     });
     await rekickSweep(deps2, SHA_C);
     expect(trace2.events.some((e) => e.includes('skipping re-kick'))).toBe(false);
+  });
+
+  // ── operator-park: skip ordered FIRST, ahead of isProcessed and SHA guard ──
+
+  it('operator-parked slug → skipped, no abort/clear/sentinel, log line present', async () => {
+    const { deps, trace } = fakeDeps({
+      halted: ['parked-slug'],
+      isOperatorParked: async () => true,
+    });
+    const res = await rekickSweep(deps, SHA_B);
+    expect(res.skipped).toEqual(['parked-slug']);
+    expect(res.cleared).toEqual([]);
+    expect(trace.events.some((e) => e.startsWith('hasRebaseInProgress:'))).toBe(false);
+    expect(trace.events.some((e) => e.startsWith('abort:'))).toBe(false);
+    expect(trace.events.some((e) => e.startsWith('clear:'))).toBe(false);
+    expect(
+      trace.events.some((e) => e === 'log:re-kick parked-slug: skipped — operator-parked'),
+    ).toBe(true);
+  });
+
+  it('operator-parked slug with isProcessed also true → isProcessed is never called (ordering)', async () => {
+    const { deps, trace } = fakeDeps({
+      halted: ['parked-slug'],
+      isOperatorParked: async () => true,
+      isProcessed: async () => true,
+    });
+    const res = await rekickSweep(deps, SHA_B);
+    expect(res.skipped).toEqual(['parked-slug']);
+    expect(trace.events.some((e) => e.startsWith('isProcessed:'))).toBe(false);
+  });
+
+  it('operator-parked slug is skipped across multiple sweeps at different SHAs; no lastRekickSha set', async () => {
+    const last = new Map<string, string>();
+    const { deps } = fakeDeps({
+      halted: ['parked-slug'],
+      lastRekickSha: last,
+      isOperatorParked: async () => true,
+    });
+    const res1 = await rekickSweep(deps, SHA_B);
+    expect(res1.skipped).toEqual(['parked-slug']);
+    expect(last.has('parked-slug')).toBe(false);
+
+    const res2 = await rekickSweep(deps, SHA_C);
+    expect(res2.skipped).toEqual(['parked-slug']);
+    expect(last.has('parked-slug')).toBe(false);
+  });
+
+  it('one slug parked + one slug halted → parked slug skipped, halted slug cleared, in one sweep', async () => {
+    const { deps, trace } = fakeDeps({
+      halted: ['parked-a', 'halted-b'],
+      isOperatorParked: async (slug) => slug === 'parked-a',
+    });
+    const res = await rekickSweep(deps, SHA_B);
+    expect(res.skipped).toEqual(['parked-a']);
+    expect(res.cleared).toEqual(['halted-b']);
+    expect(trace.events.some((e) => e === 'clear:halted-b')).toBe(true);
+    expect(trace.events.some((e) => e === 'clear:parked-a')).toBe(false);
   });
 });
 
