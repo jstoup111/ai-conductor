@@ -13,6 +13,14 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 ### Added
 
 - Added model fallback ladder — reactive downgrade on unavailable models (#186)
+- **Halt-PR rehabilitation at finish (#271).** When `finish` completes a feature whose
+  recorded PR was born as a `needs-remediation` halt PR, a new engine step
+  (`rehabilitateHaltPr`, run in the daemon's post-run tail) deterministically flips
+  draft→ready, clears the `needs-remediation` label (REST), and injects the `Closes`
+  ref exactly once — all warn-only. The `/finish`/`/pr` skills now explicitly rewrite
+  the reused PR's title/body, and the finish completion gate fails (fail-open on gh
+  read errors) while the recorded PR title still starts with `needs-remediation:`
+  (adr-2026-07-03-halt-pr-rehabilitation-at-finish).
 
 ### Changed
 

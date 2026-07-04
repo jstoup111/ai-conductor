@@ -5,6 +5,7 @@ import { mkdir, rm } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { closeIssueOnImplementationMerge } from './engine/engineer/issue-ref.js';
+import { rehabilitateHaltPr } from './engine/halt-pr-rehabilitation.js';
 import type { LLMProvider } from './execution/llm-provider.js';
 import { PluginRegistry } from './engine/plugin-registry.js';
 import { registerBuiltins } from './engine/plugin-loader.js';
@@ -332,17 +333,36 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     // and idempotent — a gh failure or a halted build (no pr_url) never affects
     // the feature outcome.
     const finalState = await readState(stateFilePath);
+    const ghRunner = async (args: string[], opts: { cwd: string }) => {
+      const r = await execFile('gh', args, { cwd: opts.cwd });
+      return { stdout: String(r.stdout) };
+    };
     await closeIssueOnImplementationMerge({
-      gh: async (args, opts) => {
-        const r = await execFile('gh', args, { cwd: opts.cwd });
-        return { stdout: String(r.stdout) };
-      },
+      gh: ghRunner,
       sourceRef: item.sourceRef,
       prUrl: finalState.ok ? finalState.value.pr_url : undefined,
       cwd: wt.path,
       slug: item.slug,
       log,
     });
+
+    // Halt-PR rehabilitation (adr-2026-07-03-halt-pr-rehabilitation-at-finish):
+    // if the recorded PR was born as a needs-remediation halt PR, flip it ready,
+    // clear the label, and ensure the Closes ref — warn-only, never affects the
+    // feature outcome.
+    const finalPrUrl = finalState.ok ? finalState.value.pr_url : undefined;
+    if (finalPrUrl) {
+      const outcome = await rehabilitateHaltPr({
+        gh: ghRunner,
+        cwd: wt.path,
+        prUrl: finalPrUrl,
+        sourceRef: item.sourceRef,
+        log,
+      });
+      if (outcome !== 'not-halt-pr') {
+        log(`[${item.slug}] halt-pr rehabilitation: ${outcome} (${finalPrUrl})`);
+      }
+    }
   };
 
   const deps = makeFeatureRunnerDeps({
