@@ -84,6 +84,26 @@ describe('engine/daemon-park-cli', () => {
       expect(await isOperatorParked(root, 'feat-widgets')).toBe(true);
     });
 
+    it('re-park reports the existing park and preserves the original marker (mtime unchanged)', async () => {
+      await makeWorktree(root, 'feat-widgets');
+      await dispatchDaemonPark({ kind: 'park', slug: 'feat-widgets' }, { cwd: root, out: () => {} });
+      const { stat } = await import('node:fs/promises');
+      const markerPath = join(root, '.daemon', 'parked', 'feat-widgets');
+      const before = await stat(markerPath);
+
+      const out: string[] = [];
+      const code = await dispatchDaemonPark(
+        { kind: 'park', slug: 'feat-widgets' },
+        { cwd: root, out: (l) => out.push(l) },
+      );
+      const after = await stat(markerPath);
+
+      expect(code).toBe(0);
+      expect(after.mtimeMs).toBe(before.mtimeMs);
+      const joined = out.join('\n').toLowerCase();
+      expect(joined).toContain('already parked');
+    });
+
     it('unpark removes the marker and prints a confirmation', async () => {
       await makeWorktree(root, 'feat-widgets');
       await dispatchDaemonPark({ kind: 'park', slug: 'feat-widgets' }, { cwd: root, out: () => {} });
@@ -105,6 +125,18 @@ describe('engine/daemon-park-cli', () => {
       );
       expect(code).toBe(0);
       expect(await isOperatorParked(root, 'never-parked')).toBe(false);
+      expect(out.join('\n')).toContain('was not operator-parked');
+    });
+
+    it('unpark on an entirely unknown slug (no plan, no worktree) is still a graceful no-op', async () => {
+      const out: string[] = [];
+      const code = await dispatchDaemonPark(
+        { kind: 'unpark', slug: 'totally-unknown-slug' },
+        { cwd: root, out: (l) => out.push(l) },
+      );
+      expect(code).toBe(0);
+      expect(out.join('\n')).toContain('was not operator-parked');
+      expect(await isOperatorParked(root, 'totally-unknown-slug')).toBe(false);
     });
 
     it('reports an error gracefully instead of throwing (e.g. unreadable/missing repo root)', async () => {

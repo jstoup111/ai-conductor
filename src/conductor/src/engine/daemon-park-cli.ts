@@ -9,8 +9,9 @@
 // dispatch before the pipeline boots.
 
 import { existsSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { writeOperatorPark, removeOperatorPark } from './park-marker.js';
+import { writeOperatorPark, removeOperatorPark, isOperatorParked } from './park-marker.js';
 
 export type DaemonParkDispatch =
   | { kind: 'park'; slug: string }
@@ -73,11 +74,31 @@ export async function dispatchDaemonPark(
         out(`error: slug '${cmd.slug}' not found in plans/ or worktrees/`);
         return 1;
       }
+      const alreadyParked = await isOperatorParked(cwd, cmd.slug);
       await writeOperatorPark(cwd, cmd.slug);
-      out(
-        `Parked '${cmd.slug}' — it will not be dispatched or re-kicked until unparked.`,
-      );
+      if (alreadyParked) {
+        const markerPath = join(cwd, '.daemon', 'parked', cmd.slug);
+        let since = '';
+        try {
+          const body = await readFile(markerPath, 'utf-8');
+          const firstLine = body.split('\n')[0]?.trim();
+          if (firstLine) since = ` (originally parked at ${firstLine})`;
+        } catch {
+          // Best-effort — marker is present (we just confirmed via
+          // isOperatorParked), but if it can't be read, omit the timestamp.
+        }
+        out(`'${cmd.slug}' is already parked${since} — no change.`);
+      } else {
+        out(
+          `Parked '${cmd.slug}' — it will not be dispatched or re-kicked until unparked.`,
+        );
+      }
     } else {
+      const wasParked = await isOperatorParked(cwd, cmd.slug);
+      if (!wasParked) {
+        out(`'${cmd.slug}' was not operator-parked — nothing to do.`);
+        return 0;
+      }
       await removeOperatorPark(cwd, cmd.slug);
       out(`Unparked '${cmd.slug}' — normal dispatch and re-kick resume.`);
     }
