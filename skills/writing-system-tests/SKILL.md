@@ -200,6 +200,44 @@ A derivation covered only by its own unit test is incomplete. List the call site
 (`file:line`) in the spec file or the PR body so the domain reviewer (TDD) can confirm none were
 missed.
 
+### 3e. FR Coverage Mapping (Product Track)
+
+**Scope:** this section runs only when both are true — the work is on the **product track**
+and an **approved PRD** exists for the feature. If either condition is false (technical track,
+or no approved PRD), skip this section entirely.
+
+Parse the PRD's enumerated functional requirements (the `FR-N` list). Build a coverage table
+with **exactly one row per FR** — every `FR-N` in the PRD must appear exactly once, and no row
+may reference an `FR-N` that isn't in the PRD. A table that omits an FR or invents one not
+present in the PRD is invalid and must be corrected before proceeding.
+
+For each FR row, assign exactly one disposition from the **closed set**:
+
+- **`already-tested`** — maps to the §2 overlap check. The FR's behavior is already asserted by
+  an existing test (unit, request/endpoint, or prior acceptance spec) found via the §2 grep-for-overlap
+  step.
+- **`unit-covered`** — maps to the §3a classification. The FR corresponds to a single-operation
+  (pure CRUD) story classified `unit-covered` under §3a, so it will be covered by the lower-layer
+  tests written during `/tdd`, not by an acceptance spec here.
+- **`spec-covered`** — the FR is covered by an acceptance spec generated in this pass (§5a/§5b).
+
+No disposition outside this closed set (`already-tested`, `unit-covered`, `spec-covered`) is
+permitted.
+
+**Citation requirement:** every row must cite the evidence for its disposition:
+- `already-tested` → cite the existing test file/line found by the §2 grep.
+- `unit-covered` → cite the story and the §3a classification reasoning.
+- `spec-covered` → cite the generated spec file (and test name) that covers it.
+
+**Unresolved rows are flagged as errors.** A row is unresolved — and must be flagged rather than
+silently accepted — if any of the following hold:
+- it has 2 or more dispositions assigned (ambiguous),
+- its disposition isn't one of the three closed-set values,
+- it has no citation.
+
+Unresolved rows block completion of this step; resolve them (re-classify, find the missing
+citation, or split the ambiguous row) before moving to §4.
+
 ### 4. Read App Context
 
 For each story, read the project's equivalents of:
