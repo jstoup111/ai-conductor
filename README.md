@@ -268,6 +268,24 @@ The management/observability verbs (`start`/`stop`/`restart`/`connect`/`debug`/`
 for a launch — and `conduct daemon <verb>` (the bash wrapper) now forwards to `conduct-ts`
 instead of starting a feature build named after the verb.
 
+**Operator park.** Prevent a worktree from being re-kicked or re-dispatched without stopping the
+daemon:
+
+```bash
+conduct daemon park <slug>    # Parks the worktree; will not re-kick or dispatch until unparked
+conduct daemon unpark <slug>  # Resumes normal re-kick and dispatch
+```
+
+The park state is stored in `.daemon/parked/<slug>`, validated against a known plan
+(`.docs/plans/<slug>.md`) or worktree (`.worktrees/<slug>`) before writing. **Operator-parked is
+not the same as HALTed:** a HALT (`.pipeline/HALT`) is written by the pipeline itself and cleared
+automatically by re-kick; an operator-park is placed by a human and survives both — clearing a
+HALT does not unpark a slug. Unlike a HALT, an operator-parked worktree preserves its REKICK
+sentinel and resumes re-dispatch right where it left off once unparked. The status dashboard's
+PARKED group takes absolute precedence over every other group (HALTED, ELIGIBLE, etc.) — a parked
+slug always shows there and nowhere else. See
+[`src/conductor/README.md`](src/conductor/README.md#operator-park--unpark) for details.
+
 **Auto-restart on stale engine (self-host only).** In self-host mode, the daemon can detect when
 the engine binary (`dist/index.js`) has been updated between idle passes. When stale code is
 detected and no tasks are in-flight, the daemon writes a `.daemon/RESTART_PENDING` marker and

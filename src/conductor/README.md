@@ -707,6 +707,34 @@ Key modules:
 - `test/engine/daemon-pause*.test.ts`, `daemon-restart*.test.ts`, `engine-store*.test.ts` —
   integration tests verifying isolation, ordering, durability
 
+### Operator park / unpark
+
+**`conduct daemon park <slug>`** / **`conduct daemon unpark <slug>`** (`engine/daemon-park-cli.ts`,
+`engine/park-marker.ts`) — a human-placed halt an operator can apply to a single slug without
+stopping the daemon. Parking writes `.daemon/parked/<slug>` (idempotent — parking an
+already-parked slug reports "already parked" and leaves the marker untouched); unparking removes
+it. Both verbs act directly on the filesystem before the pipeline/daemon boots, mirroring
+`daemon-observe-cli.ts`'s detect/dispatch pattern.
+
+`daemon park <slug>` validates the slug against known units of work first: it requires either
+`.docs/plans/<slug>.md` or `.worktrees/<slug>` to exist, so a typo'd or stale slug fails loudly
+(`error: slug '<slug>' not found in plans/ or worktrees/`) instead of silently parking nothing.
+
+**Operator-parked vs. HALTed — these are different states.** A HALT (`.pipeline/HALT`) is written
+by the pipeline itself on a kickback cap, an unresolvable gate, or an unexpected throw — it's a
+pipeline-detected stop that the daemon reports as `halted` and retries automatically. An
+operator-park is placed *by a human*, independent of pipeline state, and is never cleared by the
+pipeline or by resolving a HALT: clearing a HALT does not unpark a slug, and parking a slug does
+not touch its HALT marker. While parked, the daemon treats the slug as ineligible for both
+**dispatch** (no new BUILD/SHIP work starts) and **re-kick** (a parked slug's REKICK sentinel is
+preserved untouched, so unparking resumes re-dispatch exactly where re-kick would have left it).
+
+The status dashboard's **PARKED** group (`engine/daemon-dashboard.ts`) has **absolute precedence**
+over every other group: it renders first, and any slug present there is excluded from HALTED,
+IN-PROGRESS, PROCESSED, WAITING, and ELIGIBLE — even if the slug would otherwise qualify for one
+of those groups. `listOperatorParkedSlugs` also surfaces a *stale* park (a marker left for a slug
+with no worktree and no backlog entry) that would otherwise be invisible to every other scan.
+
 ### Pluggable memory provider (adr-2026-06-29-memory-provider-plugin-and-agent-queried-integration/adr-2026-06-29-per-project-memory-provider-selection/adr-2026-06-29-shared-memory-store-placement-and-durability)
 
 The `memory_provider` config field selects which provider backs `.memory/`.
