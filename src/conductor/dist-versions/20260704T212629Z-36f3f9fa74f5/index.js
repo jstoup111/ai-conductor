@@ -69,7 +69,7 @@ import {
   writeIntakeMarker,
   writeShippedRecord,
   writeState
-} from "./chunk-7RT77NQ7.js";
+} from "./chunk-ZYDFXY6M.js";
 import {
   ensureRunning,
   isLive,
@@ -4666,7 +4666,7 @@ async function main() {
   }
   const daemonCmd = detectDaemonCommand(process.argv);
   if (daemonCmd) {
-    const { runDaemonMode } = await import("./daemon-cli-4DVYBX5P.js");
+    const { runDaemonMode } = await import("./daemon-cli-3BV4SRU2.js");
     const projectRoot2 = process.cwd();
     const daemonModeOptions = await buildDaemonModeOptions(projectRoot2, daemonCmd);
     await runDaemonMode(daemonModeOptions);
