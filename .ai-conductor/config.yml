@@ -28,3 +28,10 @@ owner_gate_cutover: "2026-07-02T11:00:00Z"
 # key when cutting 1.0.
 harness_self_host:
   version_freeze: "0.99.19"
+
+# Stale-engine auto-restart (issue #256, PR #307). When the idle daemon detects
+# that dist points at a newer engine than the one it is running (after a local
+# rebuild — bin/install or npm run build), it respawns in place: restart marker
+# → lock release → same-tmux-session respawn. Default-inert engine-side; armed
+# here. Read at daemon startup; restart once to apply.
+auto_restart_on_stale_engine: true

@@ -33,6 +33,8 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Changed
 
+- Armed `auto_restart_on_stale_engine: true` in this repo's committed `.ai-conductor/config.yml` — the idle daemon now respawns in place when a local rebuild makes its running engine stale (#256/PR #307 feature, default-inert until armed).
+
 - **Daemon restart now preserves session and respects pause state.** The restart verb (`conduct restart`, formerly kill-session + new-session) is now respawn-in-place: uses tmux respawn-pane -k to remain in the same session with the same window layout. An operator watching a connected daemon stays connected through restart. Restart gating honors pause state — a paused daemon's restart is queued, not immediate. Follows adr-2026-07-04-respawn-in-place-restart.
 - **Engine versioning and publish flow.** `npm run build` is now a wrapper (`scripts/publish-engine.mjs`) that stages the build, finalizes it to the versioned store (`dist-versions/<version-id>/`), atomically flips the `dist` symlink, and runs garbage collection. Raw `tsup` invocation against the live `dist/` layout is guarded and refused. First build migrates an existing `dist/` into the store (one-time operation).
 - **Declared `harness_self_host.version_freeze: "0.99.19"` in `.ai-conductor/config.yml`.**
