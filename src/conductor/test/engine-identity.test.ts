@@ -300,3 +300,173 @@ describe('createStaleEngineChecker — stale vs current verdicts', () => {
     });
   });
 });
+
+describe('createStaleEngineChecker — indeterminate verdict and warn-once', () => {
+  let tempDir: string;
+
+  beforeEach(async () => {
+    tempDir = join(tmpdir(), `indeterminate-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    await mkdir(tempDir, { recursive: true });
+  });
+
+  afterEach(async () => {
+    try {
+      await rm(tempDir, { recursive: true, force: true });
+    } catch {
+      // Ignore cleanup errors
+    }
+  });
+
+  describe('negative path — indeterminate when entry missing or unreadable', () => {
+    it('returns indeterminate when entry is removed between capture and check', async () => {
+      const filePath = join(tempDir, 'engine.bin');
+      await writeFile(filePath, 'original content');
+
+      const capturedHash = await captureEngineIdentity(filePath);
+      expect(capturedHash).toBeTruthy();
+
+      // Remove the file after capture
+      await rm(filePath);
+
+      const checker = createStaleEngineChecker(capturedHash, filePath);
+      const result = checker.check();
+
+      expect(result).toBe('indeterminate');
+    });
+
+    it('never returns stale on read error', async () => {
+      const filePath = join(tempDir, 'engine.bin');
+      await writeFile(filePath, 'original content');
+
+      const capturedHash = await captureEngineIdentity(filePath);
+
+      // Remove file to cause read error
+      await rm(filePath);
+
+      const checker = createStaleEngineChecker(capturedHash, filePath);
+      const result = checker.check();
+
+      // Should never return 'stale' on error, must return 'indeterminate'
+      expect(result).not.toBe('stale');
+      expect(result).toBe('indeterminate');
+    });
+
+    it('returns indeterminate when file cannot be read', async () => {
+      const filePath = join(tempDir, 'engine.bin');
+      await writeFile(filePath, 'original content');
+
+      const capturedHash = await captureEngineIdentity(filePath);
+
+      // Use a path that doesn't exist to simulate read failure
+      const nonexistentPath = join(tempDir, 'nonexistent.bin');
+
+      const checker = createStaleEngineChecker(capturedHash, nonexistentPath);
+      const result = checker.check();
+
+      expect(result).toBe('indeterminate');
+    });
+  });
+
+  describe('warn-once semantics', () => {
+    it('calls warn callback exactly once on first read error', async () => {
+      const filePath = join(tempDir, 'engine.bin');
+      await writeFile(filePath, 'original content');
+
+      const capturedHash = await captureEngineIdentity(filePath);
+      const warn = vi.fn();
+
+      // Remove file to cause read error
+      await rm(filePath);
+
+      const checker = createStaleEngineChecker(capturedHash, filePath, warn);
+
+      // First check triggers warning
+      checker.check();
+      expect(warn).toHaveBeenCalledTimes(1);
+
+      // Subsequent checks do not trigger additional warnings
+      checker.check();
+      checker.check();
+      expect(warn).toHaveBeenCalledTimes(1);
+    });
+
+    it('two consecutive identical read failures produce only one warning', async () => {
+      const filePath = join(tempDir, 'engine.bin');
+      await writeFile(filePath, 'original content');
+
+      const capturedHash = await captureEngineIdentity(filePath);
+      const warn = vi.fn();
+
+      // Remove file to cause read error
+      await rm(filePath);
+
+      const checker = createStaleEngineChecker(capturedHash, filePath, warn);
+
+      // Multiple failures should only warn once
+      const result1 = checker.check();
+      const result2 = checker.check();
+
+      expect(result1).toBe('indeterminate');
+      expect(result2).toBe('indeterminate');
+      expect(warn).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not warn when warn callback is not provided', async () => {
+      const filePath = join(tempDir, 'engine.bin');
+      await writeFile(filePath, 'original content');
+
+      const capturedHash = await captureEngineIdentity(filePath);
+
+      // Remove file
+      await rm(filePath);
+
+      // Should not throw even without warn callback
+      const checker = createStaleEngineChecker(capturedHash, filePath);
+      const result = checker.check();
+
+      expect(result).toBe('indeterminate');
+    });
+
+    it('missing file on check does not log multiple warnings across multiple calls', async () => {
+      const filePath = join(tempDir, 'engine.bin');
+      await writeFile(filePath, 'original content');
+
+      const capturedHash = await captureEngineIdentity(filePath);
+      const warn = vi.fn();
+
+      // Remove file
+      await rm(filePath);
+
+      const checker = createStaleEngineChecker(capturedHash, filePath, warn);
+
+      // Call check() multiple times with the file missing
+      for (let i = 0; i < 5; i++) {
+        const result = checker.check();
+        expect(result).toBe('indeterminate');
+      }
+
+      // Warn should only be called once
+      expect(warn).toHaveBeenCalledTimes(1);
+    });
+
+    it('warn callback receives appropriate error message', async () => {
+      const filePath = join(tempDir, 'engine.bin');
+      await writeFile(filePath, 'original content');
+
+      const capturedHash = await captureEngineIdentity(filePath);
+      const warn = vi.fn();
+
+      // Remove file
+      await rm(filePath);
+
+      const checker = createStaleEngineChecker(capturedHash, filePath, warn);
+      checker.check();
+
+      // Verify warn was called with a message
+      expect(warn).toHaveBeenCalledTimes(1);
+      const message = warn.mock.calls[0][0];
+      expect(typeof message).toBe('string');
+      expect(message.length).toBeGreaterThan(0);
+    });
+  });
+});

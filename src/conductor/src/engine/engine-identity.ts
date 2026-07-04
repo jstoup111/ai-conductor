@@ -113,6 +113,9 @@ export function createStaleEngineChecker(
   const entryPath = typeof entryPathOrWarn === 'string' ? entryPathOrWarn : undefined;
   const capturedHash = captured;
 
+  // Track warn state across calls for warn-once semantics
+  let warned = false;
+
   return {
     check(): 'stale' | 'current' | 'indeterminate' {
       // Re-hash the file and compare to the captured identity
@@ -130,7 +133,11 @@ export function createStaleEngineChecker(
           return 'stale';
         }
       } catch {
-        // If we can't read the file, return indeterminate
+        // If we can't read the file, warn once and return indeterminate
+        if (!warned && warn) {
+          warned = true;
+          warn(`Engine identity check failed for ${entryPath}; engine status is indeterminate`);
+        }
         return 'indeterminate';
       }
     }
