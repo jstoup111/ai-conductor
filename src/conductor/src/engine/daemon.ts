@@ -202,6 +202,15 @@ export interface DaemonDeps {
    * Daemon continues running if trigger fails (no crash on failure).
    */
   triggerSelfRestart?: () => Promise<void>;
+
+  // ── Task T30: bare-run restart pending consume ─────────────────────────
+  /**
+   * Consume (remove and return) the pending-restart marker under the project.
+   * Called at idle boundary in bare-run mode (when triggerSelfRestart is absent)
+   * to consume the marker and exit cleanly. Idempotent: absent marker returns null.
+   * Only used when bare-run is detected (triggerSelfRestart undefined).
+   */
+  consumeRestartPending?: () => Promise<unknown>;
 }
 
 export interface DaemonOptions {
@@ -454,6 +463,58 @@ export async function runDaemon(
       }
       // Nothing new to start.
       if (inFlight.size === 0) {
+        // Task T28/T30: at idle boundary, check for pending restart marker and either
+        // fire the supervisor trigger (T28) or consume in bare-run (T30).
+        // This check happens BEFORE the once/idle-timeout checks so restart is honored
+        // at the earliest idle boundary, even in once mode.
+        // - T28 (supervisor mode): triggerSelfRestart is injected, fire it to respawn
+        // - T30 (bare-run): triggerSelfRestart is absent, consume marker and exit cleanly
+        // The daemon continues normally if supervisor trigger fails (no crash on failure).
+        // Once the trigger succeeds, we never retry (the respawn would exit the process).
+        if (!restartTriggeredSuccessfully && deps.hasRestartPending) {
+          try {
+            const hasRestart = await deps.hasRestartPending();
+            if (hasRestart) {
+              // T28 path: supervisor mode — fire respawn trigger
+              if (deps.triggerSelfRestart) {
+                log('[daemon] self-restart marker found at idle boundary; firing trigger');
+                try {
+                  await deps.triggerSelfRestart();
+                  // If trigger succeeds, it respawns the process and we never reach here.
+                  // But if it doesn't respawn immediately, track that we succeeded so we
+                  // don't retry (in production, the process exits on respawn).
+                  restartTriggeredSuccessfully = true;
+                  log('[daemon] self-restart trigger completed (no respawn yet)');
+                } catch (err) {
+                  log(
+                    `[daemon] self-restart trigger failed: ${err instanceof Error ? err.message : String(err)}; will retry at next idle boundary`,
+                  );
+                }
+              }
+              // T30 path: bare-run mode — no supervisor, consume marker and exit cleanly
+              else if (deps.consumeRestartPending) {
+                log('[daemon] restart-pending honored (bare-run, no supervisor available)');
+                try {
+                  await deps.consumeRestartPending();
+                  log('[daemon] restart marker consumed; exiting cleanly');
+                  restartTriggeredSuccessfully = true;
+                  // Break from the loop to exit cleanly with the current processed results
+                  stopReason = 'backlog_drained';
+                  break;
+                } catch (err) {
+                  log(
+                    `[daemon] bare-run consume failed: ${err instanceof Error ? err.message : String(err)}; will retry at next idle boundary`,
+                  );
+                }
+              }
+            }
+          } catch (err) {
+            log(
+              `[daemon] hasRestartPending check failed: ${err instanceof Error ? err.message : String(err)}; skipping restart check`,
+            );
+          }
+        }
+
         if (options.once) {
           stopReason = 'backlog_drained';
           break;
@@ -462,36 +523,6 @@ export async function runDaemon(
         if (idlePolls > maxIdlePolls) {
           stopReason = 'idle_timeout';
           break;
-        }
-
-        // Task T28: at idle boundary, check for pending restart marker and fire trigger.
-        // This is the final action before normal idle sleep — if the respawn succeeds,
-        // the process exits; if it fails, we log and retry at the next idle boundary.
-        // The daemon continues normally if trigger fails (no crash on failure).
-        // Once the trigger succeeds, we never retry (the respawn would exit the process).
-        if (!restartTriggeredSuccessfully && deps.hasRestartPending && deps.triggerSelfRestart) {
-          try {
-            const hasRestart = await deps.hasRestartPending();
-            if (hasRestart) {
-              log('[daemon] self-restart marker found at idle boundary; firing trigger');
-              try {
-                await deps.triggerSelfRestart();
-                // If trigger succeeds, it respawns the process and we never reach here.
-                // But if it doesn't respawn immediately, track that we succeeded so we
-                // don't retry (in production, the process exits on respawn).
-                restartTriggeredSuccessfully = true;
-                log('[daemon] self-restart trigger completed (no respawn yet)');
-              } catch (err) {
-                log(
-                  `[daemon] self-restart trigger failed: ${err instanceof Error ? err.message : String(err)}; will retry at next idle boundary`,
-                );
-              }
-            }
-          } catch (err) {
-            log(
-              `[daemon] hasRestartPending check failed: ${err instanceof Error ? err.message : String(err)}; skipping restart check`,
-            );
-          }
         }
 
         await sleep(idlePollMs);

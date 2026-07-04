@@ -63,7 +63,7 @@ import {
 import { sweepMergeableLabels } from './engine/mergeable-sweep.js';
 import { createPriorityResolver, ghIssueLabelReader } from './engine/backlog-priority.js';
 import { isPaused } from './engine/pause-marker.js';
-import { readRestartPending, consumeOnBoot } from './engine/restart-marker.js';
+import { readRestartPending, consumeOnBoot, type RestartIntent } from './engine/restart-marker.js';
 
 const execFile = promisify(execFileCb);
 
@@ -593,6 +593,10 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       },
       // Task T28: trigger self-restart when marker is pending (injected from supervisor/bare-run).
       triggerSelfRestart: opts.triggerSelfRestart,
+      // Task T30: consume restart marker in bare-run mode (when triggerSelfRestart absent).
+      consumeRestartPending: async () => {
+        return await consumeOnBoot(projectRoot);
+      },
     },
     {
       concurrency: clampDaemonConcurrency(opts.concurrency, log),
