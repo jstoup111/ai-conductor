@@ -60,6 +60,7 @@ import {
   resolveStepConfig,
   resolveRebaseResolutionAttempts,
   resolveSelfHostConfig,
+  resolvePrTiming,
 } from './resolved-config.js';
 import {
   defaultSelfHostGuardrails,
@@ -103,7 +104,7 @@ import {
 import { writeIntakeMarker } from './engineer/intake-marker.js';
 import { readMachineOwnerConfig } from './owner-gate/machine-identity.js';
 import { resolveDaemonOwner, type GhRunner } from './owner-gate/identity.js';
-import { makeProductionGh } from './pr-labels.js';
+import { makeProductionGh, publishEarlyDraft, advisoryPublish } from './pr-labels.js';
 
 export type CheckpointResponse = 'continue' | 'back' | 'quit';
 
@@ -819,6 +820,34 @@ export class Conductor {
     return parseNameStatus(r.stdout);
   }
 
+  /**
+   * Build-start publish hook (T7 / adr-2026-07-03-pr-timing-config-key).
+   * Advisory pre-step: pushes the feature branch (and lazily opens/reuses a
+   * draft PR once ahead of base) before the `build` step dispatches, wired
+   * ONLY when `daemon && !selfHost && pr_timing === 'early-draft'` (checked by
+   * the caller). Requires `state.worktree_branch` — a manual/interactive run
+   * or a daemon run that hasn't created a worktree yet has no branch to
+   * publish, so the hook is a silent no-op in that case (nothing to push).
+   * Never throws: publishEarlyDraft itself never throws, and the whole call is
+   * additionally wrapped in advisoryPublish so a defensive failure here can
+   * never block the build step from dispatching.
+   */
+  private async runBuildStartPublishHook(state: ConductState): Promise<void> {
+    const branch = state.worktree_branch;
+    if (!branch) return;
+
+    const git = makeGitRunner(this.projectRoot);
+    const base = this.baseBranch ?? (await originDefaultBranch(git)) ?? 'main';
+    const log = (m: string) => console.error(m);
+
+    await advisoryPublish(
+      branch,
+      'early-draft',
+      () => publishEarlyDraft(git, this.gh, this.projectRoot, branch, base, {}, undefined),
+      log,
+    );
+  }
+
   async run(): Promise<void> {
     const stateResult = await readState(this.stateFilePath);
     let state: ConductState = stateResult.ok ? stateResult.value : {};
@@ -1145,6 +1174,23 @@ export class Conductor {
         let resolvedTasksBefore = step.name === 'build'
           ? await countResolvedTasks(this.projectRoot)
           : 0;
+
+        // Build-start publish hook (T7 / adr-2026-07-03-pr-timing-config-key).
+        // Advisory: push the branch (and lazily open a draft PR once ahead of
+        // base) BEFORE the build step dispatches, so an early-draft PR exists
+        // for reviewers to watch while the daemon works. Gated on daemon mode
+        // (no worktree/branch outside the daemon), NOT self-host (the self-build
+        // finish gates own the harness repo's own PR lifecycle), and only when
+        // `pr_timing: early-draft` is configured. Failures never block build —
+        // wrapped in advisoryPublish, which swallows all errors.
+        if (
+          step.name === 'build' &&
+          this.daemon &&
+          !this.selfHost &&
+          resolvePrTiming(this.config) === 'early-draft'
+        ) {
+          await this.runBuildStartPublishHook(state);
+        }
 
         while (attempt < stepMaxRetries) {
           attempt++;

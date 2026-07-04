@@ -8,6 +8,13 @@
  * before the finish step. Today, this is trivially true because no
  * early-draft publish hooks are wired yet; this test ensures the default
  * remains inert once Task 4+ implements the feature.
+ *
+ * Task 7: Build-start publish hook (TS-2, positive path)
+ *
+ * Purpose: Pin the invariant that with `pr_timing: 'early-draft'` configured
+ * and the branch NOT ahead of base (zero commits), the build-start hook
+ * pushes the branch but makes zero `gh pr create` calls (publishEarlyDraft's
+ * documented zero-commits-ahead behavior).
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -21,7 +28,7 @@ import { Conductor } from '../../src/engine/conductor.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { writeState } from '../../src/engine/state.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
-import type { GhRunner } from '../../src/engine/pr-labels.js';
+import type { GhRunner, GitRunner } from '../../src/engine/pr-labels.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Test helpers
