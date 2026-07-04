@@ -230,4 +230,169 @@ describe('engine/conductor — post-rebase force-with-lease publish (T11 / TS-4)
 
     expect(forceWithLeaseCalls(calls)).toHaveLength(0);
   });
+
+  // Task 12: rebase-HALT and lease-rejection negatives (TS-4 negatives).
+
+  it('rebase-conflict HALT (real conflict, same file edited on both sides) → zero push argv of any kind while paused', async () => {
+    // Same source file modified differently on both base and feature branch
+    // (matches the conflict setup in test/integration/rebase-loop.test.ts) —
+    // performRebase produces a real `conflict_halt`, which must NEVER reach
+    // the T11 publish hook: pushing a branch that is mid-rebase (unmerged
+    // paths on disk) would publish a half-resolved, conflict-marker-laden
+    // tree to the remote.
+    await execFileAsync('git', ['init', '-b', BASE, dir]);
+    await git('config', 'user.email', 'test@example.com');
+    await git('config', 'user.name', 'Test');
+    await git('config', 'commit.gpgsign', 'false');
+    await mkdir(join(dir, 'src'), { recursive: true });
+    await writeFile(join(dir, 'src/feature.ts'), 'export const v = 0;\n');
+    await git('add', '.');
+    await git('commit', '-m', 'initial feature file');
+
+    await git('checkout', '-b', FEATURE);
+    await writeFile(join(dir, 'src/feature.ts'), 'export const v = 1; // branch\n');
+    await git('add', '.');
+    await git('commit', '-m', 'branch edits feature');
+
+    await git('checkout', BASE);
+    await writeFile(join(dir, 'src/feature.ts'), 'export const v = 2; // base\n');
+    await git('add', '.');
+    await git('commit', '-m', 'base edits feature');
+    await git('checkout', FEATURE);
+
+    await writeState(statePath, { ...FRONT_DONE, worktree_branch: FEATURE });
+    const { gh } = makeFakeGh();
+    const { git: gitForPublish, calls } = makeFakeGitForPublish();
+    const ran: string[] = [];
+    let halted = false;
+    events.on('loop_halt', () => {
+      halted = true;
+    });
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: passthroughRunner(ran),
+      events,
+      projectRoot: dir,
+      daemon: true,
+      selfHost: false,
+      verifyArtifacts: true,
+      mode: 'auto',
+      fromStep: 'build',
+      maxRetries: 1,
+      config: { pr_timing: 'early-draft' } as unknown as HarnessConfig,
+      gh,
+      gitForPublish,
+    });
+
+    await conductor.run();
+
+    expect(halted).toBe(true);
+    expect(ran).not.toContain('finish');
+    // Zero pushes of ANY kind (plain or force-with-lease) via the publish
+    // seam while the rebase is paused mid-conflict.
+    expect(calls.filter((c) => c.args[0] === 'push')).toHaveLength(0);
+  });
+
+  it('lease rejection (--force-with-lease push fails) → loud log, NO bare --force retry, build continues to finish', async () => {
+    await initRepoOnFeatureBranch();
+    await advanceBaseNonConflicting();
+
+    await writeState(statePath, { ...FRONT_DONE, worktree_branch: FEATURE });
+    const { gh } = makeFakeGh();
+
+    // gitForPublish: the initial (build-start) plain push succeeds; the
+    // post-rebase --force-with-lease republish is rejected — simulating the
+    // remote tip having moved again in between (the exact scenario
+    // --force-with-lease exists to guard against).
+    const calls: RecordedCall[] = [];
+    const gitForPublish: GitRunner = async (args, opts) => {
+      calls.push({ args: [...args], cwd: opts.cwd });
+      if (args[0] === 'rev-list' && args[args.length - 1]?.includes('..')) {
+        return { stdout: '1\n' };
+      }
+      if (args[0] === 'push' && args.includes('--force-with-lease')) {
+        throw new Error('stale info; fetch first (rejected --force-with-lease)');
+      }
+      return { stdout: '' };
+    };
+
+    let leaseRejectionLogsEmitted = 0;
+    const originalError = console.error;
+    console.error = (msg: string) => {
+      if (
+        typeof msg === 'string' &&
+        msg.includes('pushBranch') &&
+        msg.includes('force-with-lease')
+      ) {
+        leaseRejectionLogsEmitted++;
+      }
+    };
+
+    const ran: string[] = [];
+    let completed = false;
+    events.on('feature_complete', () => {
+      completed = true;
+    });
+
+    try {
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: passthroughRunner(ran),
+        events,
+        projectRoot: dir,
+        daemon: true,
+        selfHost: false,
+        verifyArtifacts: true,
+        mode: 'auto',
+        fromStep: 'build',
+        maxRetries: 1,
+        config: { pr_timing: 'early-draft' } as unknown as HarnessConfig,
+        gh,
+        gitForPublish,
+      });
+
+      await conductor.run();
+    } finally {
+      console.error = originalError;
+    }
+
+    expect(leaseRejectionLogsEmitted).toBeGreaterThanOrEqual(1);
+    // No bare `--force` retry anywhere: the lease guard fails advisory, not
+    // escalating to a more dangerous unconditional force push.
+    expect(calls.filter((c) => c.args.includes('--force') && !c.args.includes('--force-with-lease'))).toHaveLength(0);
+    // The build continues to finish despite the failed republish.
+    expect(ran).toContain('finish');
+    expect(completed).toBe(true);
+  });
+
+  it('finish mode (pr_timing: finish) → zero pushes at the post-rebase publish site', async () => {
+    await initRepoOnFeatureBranch();
+    await advanceBaseNonConflicting();
+
+    await writeState(statePath, { ...FRONT_DONE, worktree_branch: FEATURE });
+    const { gh } = makeFakeGh();
+    const { git: gitForPublish, calls } = makeFakeGitForPublish();
+    const ran: string[] = [];
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: passthroughRunner(ran),
+      events,
+      projectRoot: dir,
+      daemon: true,
+      selfHost: false,
+      verifyArtifacts: true,
+      mode: 'auto',
+      fromStep: 'build',
+      maxRetries: 1,
+      config: { pr_timing: 'finish' } as unknown as HarnessConfig,
+      gh,
+      gitForPublish,
+    });
+
+    await conductor.run();
+
+    expect(calls.filter((c) => c.args[0] === 'push')).toHaveLength(0);
+  });
 });

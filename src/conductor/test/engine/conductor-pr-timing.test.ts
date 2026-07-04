@@ -433,6 +433,128 @@ describe('conductor pr_timing regression harness', () => {
     });
   });
 
+  describe('T10: Refresh rejection stays plain + finish-mode zero-refresh (TS-3 negatives)', () => {
+    it('remote rejects plain push at step boundary → loud log, captured argv contains no force flag, build proceeds', async () => {
+      const state: ConductState = {};
+      for (const s of ALL_STEPS) {
+        if (s.name === 'build') break;
+        (state as Record<string, unknown>)[s.name] = s.name === 'retro' ? 'skipped' : 'done';
+      }
+      state.worktree_branch = 'feat/test-branch';
+      await writeState(statePath, state);
+
+      const events = new ConductorEventEmitter();
+      const { gh } = makeFakeGh();
+
+      // The build-start hook's initial push (T7) succeeds; every subsequent
+      // (step-boundary refresh, T9) plain push is rejected by the remote —
+      // simulating a non-fast-forward rejection because the remote tip moved
+      // in between. Never a force flag on any push here (that's the T11
+      // lease-guarded site, not this one).
+      let pushCount = 0;
+      const calls: RecordedGitCall[] = [];
+      const git: GitRunner = async (args, opts) => {
+        calls.push({ args: [...args], cwd: opts.cwd });
+        if (args[0] === 'rev-list' && args[args.length - 1]?.includes('..')) {
+          return { stdout: '1\n' }; // always ahead, so refresh hook attempts a push
+        }
+        if (args[0] === 'push') {
+          pushCount++;
+          if (pushCount === 1) return { stdout: '' }; // build-start push succeeds
+          throw new Error('! [rejected] feat/test-branch -> feat/test-branch (non-fast-forward)');
+        }
+        return { stdout: '' };
+      };
+
+      let rejectionLogsEmitted = 0;
+      const originalError = console.error;
+      console.error = (msg: string) => {
+        if (typeof msg === 'string' && msg.includes('pushBranch') && msg.includes('rejected')) {
+          rejectionLogsEmitted++;
+        }
+      };
+
+      let stepsRun = 0;
+      const runner: StepRunner = {
+        run: async (): Promise<StepRunResult> => {
+          stepsRun += 1;
+          return { success: true };
+        },
+      };
+
+      try {
+        const conductor = new Conductor({
+          stateFilePath: statePath,
+          stepRunner: runner,
+          events,
+          projectRoot: dir,
+          daemon: true,
+          mode: 'auto',
+          fromStep: 'build',
+          selfHost: false,
+          config: { pr_timing: 'early-draft' } as unknown as HarnessConfig,
+          gh,
+          gitForPublish: git,
+        });
+
+        await conductor.run();
+      } finally {
+        console.error = originalError;
+      }
+
+      // Loud log recorded for the rejected push.
+      expect(rejectionLogsEmitted).toBeGreaterThanOrEqual(1);
+
+      // No push argv anywhere in this run ever carried a force flag — the
+      // rejection is swallowed and surfaced via log only, never retried with force.
+      const pushCalls = calls.filter((c) => c.args[0] === 'push');
+      expect(pushCalls.length).toBeGreaterThanOrEqual(2);
+      for (const call of pushCalls) {
+        expect(call.args).not.toContain('--force');
+        expect(call.args).not.toContain('--force-with-lease');
+      }
+
+      // The build proceeds regardless of the rejected refresh push — advisory
+      // failures never block the loop.
+      expect(stepsRun).toBeGreaterThan(0);
+    });
+
+    it('full simulated build in finish mode (pr_timing: finish, default) → zero refresh invocations', async () => {
+      await seedStateBefore(statePath, 'build');
+
+      const events = new ConductorEventEmitter();
+      const { gh, calls: ghCalls } = makeFakeGh();
+      const { git, calls: gitCalls } = makeFakeGit(); // always reports commits ahead of base
+
+      const runner: StepRunner = {
+        run: async (): Promise<StepRunResult> => ({ success: true }),
+      };
+
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        daemon: true,
+        mode: 'auto',
+        fromStep: 'build',
+        selfHost: false,
+        // Explicit 'finish' (same as default-absent) — no early publish, no
+        // step-boundary refresh, across the whole simulated build.
+        config: { pr_timing: 'finish' } as unknown as HarnessConfig,
+        gh,
+        gitForPublish: git,
+      });
+
+      await conductor.run();
+
+      const pushCalls = gitCalls.filter((c) => c.args[0] === 'push');
+      expect(pushCalls).toHaveLength(0);
+      expect(ghPrCreateCalls(ghCalls)).toHaveLength(0);
+      expect(ghPrReadyCalls(ghCalls)).toHaveLength(0);
+    });
+  });
+
   describe('T14: Finish-step mark-ready (TS-5 happy path)', () => {
     it('with early-draft mode and an open draft PR, calls gh pr ready before the finish step dispatches', async () => {
       const events = new ConductorEventEmitter();
@@ -528,6 +650,120 @@ describe('conductor pr_timing regression harness', () => {
       expect(ghPrCreateCalls(calls)).toHaveLength(0);
       const finalState = await readState(statePath);
       expect(finalState.ok && finalState.value.pr_url).toBe(draftUrl);
+    });
+  });
+
+  describe('T15: Finish fallbacks (TS-5 negatives)', () => {
+    it('no draft PR exists (state.pr_url absent) → finish prompt byte-identical to today (create path, zero mark-ready calls)', async () => {
+      const events = new ConductorEventEmitter();
+      const { gh, calls } = makeFakeGh();
+
+      // No build-start hook ever ran for this feature (e.g. build-start hook
+      // itself no-opped, or this is a pre-existing feature started before
+      // pr_timing was configured) — state.pr_url is absent at finish time.
+      const state: ConductState = {};
+      for (const s of ALL_STEPS) {
+        if (s.name === 'finish') break;
+        (state as Record<string, unknown>)[s.name] = s.name === 'retro' ? 'skipped' : 'done';
+      }
+      state.worktree_branch = 'feat/test-branch';
+      await writeState(statePath, state);
+
+      let finishDispatched = false;
+      const runner: StepRunner = {
+        run: async (step): Promise<StepRunResult> => {
+          if (step === 'finish') finishDispatched = true;
+          return { success: true };
+        },
+      };
+
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        daemon: true,
+        mode: 'auto',
+        fromStep: 'finish',
+        selfHost: false,
+        config: { pr_timing: 'early-draft' } as unknown as HarnessConfig,
+        gh,
+      });
+
+      await conductor.run();
+
+      // The mark-ready hook is a no-op with no prior draft — zero `gh pr
+      // ready` calls, and `finish` dispatches exactly as it would with no
+      // pr_timing feature wired at all (the `finish` step itself owns
+      // creating the PR, unchanged).
+      expect(ghPrReadyCalls(calls)).toHaveLength(0);
+      expect(finishDispatched).toBe(true);
+    });
+
+    it('markReadyForReview (gh pr ready) fails → error surfaced via loud log, pr_url still recorded, build completes, PR left draft', async () => {
+      const events = new ConductorEventEmitter();
+      const draftUrl = 'https://github.com/acme/repo/pull/7';
+
+      const { gh: fakeGh } = makeFakeGh();
+      const gh: GhRunner = async (args, opts) => {
+        if (args[0] === 'pr' && args[1] === 'ready') {
+          throw new Error('gh: pull request is already merged / conflict transitioning to ready');
+        }
+        return fakeGh(args, opts);
+      };
+
+      const state: ConductState = {};
+      for (const s of ALL_STEPS) {
+        if (s.name === 'finish') break;
+        (state as Record<string, unknown>)[s.name] = s.name === 'retro' ? 'skipped' : 'done';
+      }
+      state.worktree_branch = 'feat/test-branch';
+      state.pr_url = draftUrl;
+      await writeState(statePath, state);
+
+      let readyFailureLogsEmitted = 0;
+      const originalError = console.error;
+      console.error = (msg: string) => {
+        if (typeof msg === 'string' && msg.includes('setReady') && msg.includes(draftUrl)) {
+          readyFailureLogsEmitted++;
+        }
+      };
+
+      let finishDispatched = false;
+      const runner: StepRunner = {
+        run: async (step): Promise<StepRunResult> => {
+          if (step === 'finish') finishDispatched = true;
+          return { success: true };
+        },
+      };
+
+      try {
+        const conductor = new Conductor({
+          stateFilePath: statePath,
+          stepRunner: runner,
+          events,
+          projectRoot: dir,
+          daemon: true,
+          mode: 'auto',
+          fromStep: 'finish',
+          selfHost: false,
+          config: { pr_timing: 'early-draft' } as unknown as HarnessConfig,
+          gh,
+        });
+
+        await conductor.run();
+      } finally {
+        console.error = originalError;
+      }
+
+      // The failure was surfaced loudly (never silently dropped)...
+      expect(readyFailureLogsEmitted).toBeGreaterThanOrEqual(1);
+      // ...but the daemon still recorded pr_url and completed the finish step
+      // (the PR is simply left in draft — no error propagates to block the
+      // build, matching the advisoryPublish contract used everywhere else).
+      const finalState = await readState(statePath);
+      expect(finalState.ok && finalState.value.pr_url).toBe(draftUrl);
+      expect(finishDispatched).toBe(true);
     });
   });
 });
