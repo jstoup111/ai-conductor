@@ -1,8 +1,11 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { readOperatorCredentialsState } from '../../../src/engine/self-host/operator-credentials.js';
+import {
+  readOperatorCredentialsState,
+  waitForCredentialsChange,
+} from '../../../src/engine/self-host/operator-credentials.js';
 
 // Phase 2 (TR-2): operator-credentials reader — fresh/expired classification.
 // The pre-flight must identify expired or imminent-expiry credentials so the
@@ -118,5 +121,191 @@ describe('self-host/operator-credentials — readOperatorCredentialsState (TR-2)
     // When now=fixedNow, the token is 30 days away and beyond the 7-day margin → fresh
     const result = await readOperatorCredentialsState(configDir, fixedNow);
     expect(result).toBe('fresh');
+  });
+});
+
+// Phase 3 (TR-3 & TR-4): park-and-poll wait primitive.
+// The conductor parks on expired credentials, then polls for the file to be updated.
+// Polling stops when credentials become fresh (TR-3 happy) or timeout elapses (TR-4).
+// Fail-open: file deletion keeps polling (no crash).
+
+describe('self-host/operator-credentials — waitForCredentialsChange (TR-3 & TR-4)', () => {
+  let configDir: string;
+
+  beforeEach(async () => {
+    configDir = await mkdtemp(join(tmpdir(), 'op-creds-'));
+    vi.useFakeTimers();
+  });
+
+  afterEach(async () => {
+    await rm(configDir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  it('Scenario A: mtime advances with unexpired expiresAt → resolves with refreshed state', async () => {
+    const baseTime = 1000000000000;
+    const credPath = join(configDir, '.credentials.json');
+
+    // Start with expired credentials
+    const expiredExpiresAt = baseTime - 1000;
+    await writeFile(
+      credPath,
+      JSON.stringify({ claudeAiOauth: { expiresAt: expiredExpiresAt } }),
+      'utf-8',
+    );
+
+    const nowRef = { value: baseTime };
+    let sleepCallCount = 0;
+
+    const result = waitForCredentialsChange({
+      initialState: 'expired',
+      credentialsPath: credPath,
+      globalConfigDir: configDir,
+      timeoutMs: 10000,
+      pollIntervalMs: 100,
+      sleep: async (ms) => {
+        sleepCallCount++;
+        // On first sleep, update the file with unexpired credentials
+        if (sleepCallCount === 1) {
+          nowRef.value += ms;
+          const freshExpiresAt = baseTime + 30 * 24 * 60 * 60 * 1000;
+          await writeFile(
+            credPath,
+            JSON.stringify({ claudeAiOauth: { expiresAt: freshExpiresAt } }),
+            'utf-8',
+          );
+        }
+      },
+      now: () => nowRef.value,
+    });
+
+    const outcome = await result;
+    expect(outcome.type).toBe('refreshed');
+    expect(outcome.credentialsPath).toBe(credPath);
+    expect(outcome.credentialsState).toBe('fresh');
+  });
+
+  it('Scenario B: mtime advances but content still expired, then eventually becomes fresh', async () => {
+    const baseTime = 1000000000000;
+    const credPath = join(configDir, '.credentials.json');
+
+    // Start with expired credentials
+    const expiredExpiresAt = baseTime - 1000;
+    await writeFile(
+      credPath,
+      JSON.stringify({ claudeAiOauth: { expiresAt: expiredExpiresAt } }),
+      'utf-8',
+    );
+
+    const nowRef = { value: baseTime };
+    let sleepCallCount = 0;
+
+    const result = waitForCredentialsChange({
+      initialState: 'expired',
+      credentialsPath: credPath,
+      globalConfigDir: configDir,
+      timeoutMs: 20000,
+      pollIntervalMs: 100,
+      sleep: async (ms) => {
+        sleepCallCount++;
+        nowRef.value += ms;
+        // First update: still expired
+        if (sleepCallCount === 1) {
+          const stillExpiredExpiresAt = baseTime + 1000;
+          await writeFile(
+            credPath,
+            JSON.stringify({ claudeAiOauth: { expiresAt: stillExpiredExpiresAt } }),
+            'utf-8',
+          );
+        }
+        // Second update: now fresh
+        else if (sleepCallCount === 2) {
+          const freshExpiresAt = baseTime + 30 * 24 * 60 * 60 * 1000;
+          await writeFile(
+            credPath,
+            JSON.stringify({ claudeAiOauth: { expiresAt: freshExpiresAt } }),
+            'utf-8',
+          );
+        }
+      },
+      now: () => nowRef.value,
+    });
+
+    const outcome = await result;
+    expect(outcome.type).toBe('refreshed');
+    expect(outcome.credentialsState).toBe('fresh');
+  });
+
+  it('Scenario C: file deleted mid-park keeps polling toward timeout', async () => {
+    const baseTime = 1000000000000;
+    const credPath = join(configDir, '.credentials.json');
+
+    // Start with expired credentials
+    const expiredExpiresAt = baseTime - 1000;
+    await writeFile(
+      credPath,
+      JSON.stringify({ claudeAiOauth: { expiresAt: expiredExpiresAt } }),
+      'utf-8',
+    );
+
+    const nowRef = { value: baseTime };
+    let sleepCallCount = 0;
+
+    const result = waitForCredentialsChange({
+      initialState: 'expired',
+      credentialsPath: credPath,
+      globalConfigDir: configDir,
+      timeoutMs: 1000,
+      pollIntervalMs: 100,
+      sleep: async (ms) => {
+        sleepCallCount++;
+        nowRef.value += ms;
+        // On first sleep, delete the file
+        if (sleepCallCount === 1) {
+          await rm(credPath, { force: true });
+        }
+        // Continue advancing time without restoring the file
+      },
+      now: () => nowRef.value,
+    });
+
+    const outcome = await result;
+    expect(outcome.type).toBe('timeout');
+    expect(outcome.credentialsPath).toBe(credPath);
+    // expiresAt should be the last observed value (expired)
+    expect(outcome.expiresAt).toBe(String(expiredExpiresAt));
+  });
+
+  it('Scenario D: timeout elapses without update', async () => {
+    const baseTime = 1000000000000;
+    const credPath = join(configDir, '.credentials.json');
+
+    // Start with expired credentials
+    const expiredExpiresAt = baseTime - 1000;
+    await writeFile(
+      credPath,
+      JSON.stringify({ claudeAiOauth: { expiresAt: expiredExpiresAt } }),
+      'utf-8',
+    );
+
+    const nowRef = { value: baseTime };
+
+    const result = waitForCredentialsChange({
+      initialState: 'expired',
+      credentialsPath: credPath,
+      globalConfigDir: configDir,
+      timeoutMs: 1000,
+      pollIntervalMs: 100,
+      sleep: async (ms) => {
+        nowRef.value += ms;
+        // Don't update the file; just advance time
+      },
+      now: () => nowRef.value,
+    });
+
+    const outcome = await result;
+    expect(outcome.type).toBe('timeout');
+    expect(outcome.credentialsPath).toBe(credPath);
+    expect(outcome.expiresAt).toBe(String(expiredExpiresAt));
   });
 });
