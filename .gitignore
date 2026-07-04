@@ -9,7 +9,8 @@
 
 # Node / TypeScript conductor build artifacts
 node_modules/
-src/conductor/dist/
+src/conductor/dist
+src/conductor/dist-versions/
 
 # OS
 .DS_Store

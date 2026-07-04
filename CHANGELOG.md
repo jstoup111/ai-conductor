@@ -64,6 +64,7 @@ Reverting is not supported: if you revert past this version, the `dist` symlink 
 
 ### Fixed
 
+- **Engine build artifacts are no longer committed (#303).** `src/conductor/dist` (symlink) and `dist-versions/` snapshots are untracked and gitignored. They were never meant to be in git — `.gitignore` always ignored `src/conductor/dist/`, but the trailing-slash (directory-only) pattern stopped matching once the lifecycle feature made `dist` a symlink, and builds began committing it plus snapshots. Committed artifacts guaranteed merge conflicts on every engine-touching PR and version drift between committed snapshot and `src/`. Fresh checkouts build locally: `bin/install` runs `npm install + npm run build` in `src/conductor`, and `bin/conduct-ts` fails loudly with a rebuild hint when `dist` is absent. Supersedes the committed-snapshot sync in PR #308.
 - Committed engine snapshot synced to post-#307 source: `dist` now points at `dist-versions/20260704T212629Z-36f3f9fa74f5` (contains the stale-engine auto-restart code) and the superseded pre-#307 snapshot is dropped — fresh clones no longer run an engine older than `src/` (#303).
 - **Engine publish is now idempotent — unchanged content no longer mints a snapshot or flips `dist` (#303).** Every `conduct-ts` entry that runs `npm run build` (daemon start, `bin/install`, test suites) re-published a byte-identical engine, creating a duplicate `dist-versions/<ts>-<hash>/` snapshot and re-pointing the `dist` symlink each time. On a main checkout that churn showed up as `M src/conductor/dist` + untracked snapshots, which made the daemon **skip origin fast-forward tracking** ("working tree not clean") — silently freezing base-advance re-kicks. `publish()` now compares the freshly-built content hash against the current `dist` target and cleanly no-ops when identical (staging removed, current versionId returned); a dangling or incomplete current target still publishes to heal itself. Also repairs the `resolve(readlink(dist))` sites in `publish-engine`/`publish-interrupted` tests, which resolved the now-relative symlink target against process cwd and were latently red since the relative-symlink fix in PR #296.
 - **Test suite now detects and fails on `.pipeline` leak into process cwd.** The conductor test suite leaked a real `.pipeline/HALT`/`gates/`/`DONE` into the process working directory, poisoning live daemon worktrees when tests ran concurrent to a build. `Conductor.projectRoot` is now required and the suite fails loudly on any cwd `.pipeline` leak (#252).
@@ -507,6 +508,16 @@ if [ -f .daemon/daemon.pid ]; then
   fi
 fi
 # Requires tmux on the host for the management verbs: e.g. `sudo apt-get install tmux`.
+```
+
+The built engine is no longer committed. Updating past this version removes the tracked
+`src/conductor/dist` symlink and `dist-versions/` snapshot from your working tree — rebuild locally:
+
+```bash migration
+# Rebuild the conductor engine (dist is no longer shipped in git).
+cd "$(git rev-parse --show-toplevel)/src/conductor" \
+  && npm install --no-audit --no-fund \
+  && npm run build
 ```
 
 `bin/conduct` no longer treats unknown subcommands/options as a feature description: unknown
