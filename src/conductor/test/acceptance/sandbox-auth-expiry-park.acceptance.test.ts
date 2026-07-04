@@ -257,6 +257,56 @@ describe('acceptance: sandbox auth-expiry park-and-poll (sandbox-auth-expiry-par
     expect(await haltBody()).toBeNull();
   });
 
+  it('TR-4: pre-flight park timeout HALTs with credentials-specific reason — path + expiresAt, never "retries exhausted", zero dispatch/budget burn', async () => {
+    const realNow = Date.now();
+    const expiresAt = realNow - 1000;
+    await writeOperatorCreds(operatorDir, expiresAt);
+
+    // The park loop reads wall-clock via Date.now(); advance it through the
+    // injected sleep so the 1-minute timeout elapses without real waiting.
+    let clockOffset = 0;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => realNow + clockOffset);
+    const sleepFn = vi.fn(async () => {
+      clockOffset += 120_000; // operator never refreshes; time just passes
+    });
+
+    try {
+      const runner: StepRunner = {
+        run: vi.fn(async (): Promise<StepRunResult> => ({ success: true })),
+      };
+      const guardrails = makeGuardrails();
+
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        fromStep: 'build',
+        mode: 'auto',
+        daemon: true,
+        selfHost: true,
+        maxRetries: 2, // a re-parking retry loop would multiply the wait — must exit after ONE park
+        sleepFn,
+        selfHostGuardrails: guardrails,
+        config: { harness_self_host: { auth_park_timeout_minutes: 1 } } as never,
+      });
+
+      await conductor.run();
+
+      expect(guardrails.provisionSandbox).not.toHaveBeenCalled(); // parked pre-provision, never dispatched
+      expect(runner.run).not.toHaveBeenCalled(); // retry budget untouched — no build attempt ever spawned
+      expect(sleepFn).toHaveBeenCalledTimes(1); // ONE park window, never re-parked by a retry
+
+      const body = await haltBody();
+      expect(body).not.toBeNull();
+      expect(body).not.toMatch(/retries exhausted/i);
+      expect(body).toContain(join(operatorDir, '.credentials.json'));
+      expect(body).toContain(String(expiresAt));
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it('TR-4 + TR-5 negative: auth_park_timeout_minutes <= 0 opts out — immediate credentials-specific HALT, no poll loop, reason is never "retries exhausted"', async () => {
     const expiresAt = Date.now() - 1000;
     await writeOperatorCreds(operatorDir, expiresAt);

@@ -615,14 +615,24 @@ export class Conductor {
         return undefined;
       }
 
-      // Timeout occurred
-      // Task 14 will handle HALT on timeout; for now, break the loop
-      // (The acceptance test expects the loop to exit here, and Task 14
-      // will manage the timeout HALT separately.)
-      return {
-        success: false,
-        output: `Credentials park timeout after ${sh.authParkTimeoutMinutes} minutes. Credentials file: ${credPath}`,
-      };
+      // Timeout: write the credentials-specific HALT marker BEFORE returning so
+      // the retry loop's marker check exits immediately (no retry-budget burn,
+      // no re-park) and the final HALT reason names the auth-window condition —
+      // never the generic "retries exhausted" (adr-2026-07-04 §2/§3).
+      const expiresAtStr = result.expiresAt ?? 'unparseable';
+      const haltReason =
+        `Operator credentials expired and refresh timed out after ${sh.authParkTimeoutMinutes} minutes.\n` +
+        `Credentials file: ${result.credentialsPath}\n` +
+        `Expires at: ${expiresAtStr}\n` +
+        `Please refresh your OAuth token and re-queue this feature.`;
+      const haltPath = join(this.projectRoot, HALT_MARKER);
+      const haltExists = await accessFile(haltPath).then(() => true).catch(() => false);
+      if (!haltExists) {
+        await writeFile(haltPath, haltReason + '\n', 'utf-8').catch(() => {
+          // Best-effort HALT write; if it fails, still return the failure
+        });
+      }
+      return { success: false, output: haltReason };
     }
   }
 
