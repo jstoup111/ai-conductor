@@ -2820,6 +2820,7 @@ while [[ $# -gt 0 ]]; do
     --update)       log "Forcing harness update check..."; check_harness_update; exit 0 ;;
     --set-channel)  set_update_channel "$2"; shift ;;
     -h|--help)      usage; exit 0 ;;
+    -*)             echo "Unknown option: $1" >&2; echo "Use --help for usage information." >&2; exit 1 ;;
     *)              FEATURE_DESC="$1" ;;
   esac
   shift
