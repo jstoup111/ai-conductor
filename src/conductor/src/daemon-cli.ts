@@ -51,6 +51,7 @@ import {
   repairProcessed,
   makeFeatureRunnerDeps,
 } from './engine/daemon-deps.js';
+import { isOperatorParked } from './engine/park-marker.js';
 import { readState, writeState, getStepStatus } from './engine/state.js';
 import { makeGitRunner, originDefaultBranch } from './engine/rebase.js';
 import {
@@ -650,6 +651,10 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     {
       discoverBacklog: discoverTick,
       isHalted: (slug) => isHalted(worktreeBase, slug),
+      // Task 7 (operator-park): consulted alongside `isHalted` — a
+      // `.daemon/parked/<slug>` marker is durable across restarts and is
+      // never lifted by clearing the HALT marker (halt-clear resume, PR-#109).
+      isParked: (slug) => isOperatorParked(projectRoot, slug),
       // FR-1 (Task 11): gate dispatch on the durable `.daemon/PAUSED` marker,
       // re-polled every loop iteration by runDaemon so a pause lifted mid-run
       // resumes dispatch at the next boundary (no restart required).
