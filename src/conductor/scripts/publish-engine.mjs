@@ -20,13 +20,26 @@
 // `--out-dir <stagingDir>` and must exit 0 on success.
 
 import { execa } from 'execa';
-import { lstat, mkdir, mkdtemp, rename, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { PUBLISH_WRAPPER_ENV_VAR, assertPublishWrapperEnv } from './publish-guard.mjs';
 
 const DEFAULT_TSUP_COMMAND = ['tsup'];
+
+// Sentinel file written into `dist-versions/<id>/` immediately after a
+// staging dir is renamed into place (finalized) and removed again once the
+// `dist` symlink has actually been flipped to point at it. Its presence
+// therefore marks "finalized but never flipped" — the signature left behind
+// by a publish that was killed (SIGKILL, crash, power loss) in the narrow
+// window between finalize and flip. There is no `catch` block that can run
+// in that window (an in-process throw is caught below and would clean up
+// normally; it's the un-catchable hard-kill case this sentinel exists for),
+// so recovery instead happens lazily: the next `publish()` invocation scans
+// for and removes any directory still carrying this sentinel before doing
+// anything else. Best-effort/non-fatal — see `cleanupOrphanedStaging`.
+const INCOMPLETE_SENTINEL = '.publish-incomplete';
 
 // Re-exported so existing imports of `assertPublishWrapperEnv` from this
 // module (e.g. tests) keep working; the canonical implementation lives in
@@ -109,6 +122,48 @@ async function loadEngineStore() {
 }
 
 /**
+ * Best-effort recovery from a previously-interrupted publish: scan
+ * `storeRoot` for version directories still carrying `INCOMPLETE_SENTINEL`
+ * (finalized but never flipped — see comment above) and remove them. Never
+ * throws: a single directory's stat/rm failing is logged and skipped so one
+ * bad entry can't block the rest of the cleanup, and cleanup as a whole
+ * never fails the publish it's running ahead of.
+ *
+ * @param {{ storeRoot: string }} opts
+ */
+async function cleanupOrphanedStaging(opts) {
+  let entries;
+  try {
+    entries = await readdir(opts.storeRoot, { withFileTypes: true });
+  } catch {
+    return; // No store root yet — nothing to clean up.
+  }
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const versionDir = join(opts.storeRoot, entry.name);
+    try {
+      await lstat(join(versionDir, INCOMPLETE_SENTINEL));
+    } catch {
+      continue; // No sentinel: a normal, fully-published version. Leave it.
+    }
+
+    try {
+      await rm(versionDir, { recursive: true, force: true });
+      console.error(
+        `[publish-engine] cleaned up orphaned staging from an interrupted publish: ${versionDir}`,
+      );
+    } catch (err) {
+      console.error(
+        `[publish-engine] failed to clean up orphaned staging at ${versionDir} (non-fatal): ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
+}
+
+/**
  * @typedef {object} PublishOpts
  * @property {string} conductorRoot - the `src/conductor` package root.
  * @property {NodeJS.ProcessEnv} [env] - defaults to `process.env`.
@@ -116,6 +171,13 @@ async function loadEngineStore() {
  * @property {Date} [now] - injectable build timestamp for `computeVersionId`.
  * @property {(cmd: string[], opts: { cwd: string }) => Promise<unknown>} [runCommand]
  *   - test seam replacing the underlying `execa` call entirely.
+ * @property {() => Promise<void>} [simulateCrashAfterFinalize] - test seam
+ *   only. If provided, is awaited immediately after the staging dir has been
+ *   finalized (renamed into `dist-versions/<id>/`, sentinel written) but
+ *   before `flipCurrent` runs. Throwing from it models an un-catchable
+ *   process kill in that exact window, leaving the finalized dir orphaned
+ *   (sentinel still present, `dist` untouched) — see
+ *   `test/engine/publish-interrupted.test.ts`.
  */
 
 /**
@@ -161,6 +223,10 @@ export async function publish(opts) {
     computeVersionId,
   });
 
+  // Recover from any previous publish that was killed between finalize and
+  // flip before doing anything else (Task 9, FR-13 neg).
+  await cleanupOrphanedStaging({ storeRoot });
+
   const stagingParent = conductorRoot;
   const stagingDir = await mkdtemp(join(stagingParent, '.engine-staging-'));
 
@@ -183,8 +249,14 @@ export async function publish(opts) {
     await mkdir(storeRoot, { recursive: true });
     const finalDir = join(storeRoot, versionId);
     await rename(stagingDir, finalDir);
+    await writeFile(join(finalDir, INCOMPLETE_SENTINEL), '', 'utf-8');
+
+    if (opts.simulateCrashAfterFinalize) {
+      await opts.simulateCrashAfterFinalize();
+    }
 
     await flipCurrent({ conductorRoot, versionId, env });
+    await rm(join(finalDir, INCOMPLETE_SENTINEL), { force: true });
 
     // GC old versions (Task 7, FR-15). Safety-critical + fail-closed by
     // design: `gcVersions` itself never deletes on an erroring read (registry
