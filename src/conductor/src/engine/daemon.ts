@@ -161,9 +161,15 @@ export interface DaemonDeps {
    * current on-disk binary. If capture failed, returns a disabled checker that
    * always reports 'current' (conservative: assume fresh until proven otherwise).
    * Optional for backward compatibility; tests inject this to simulate detection.
+   *
+   * Task 13: Extended to optionally provide identity methods for restart requests.
    */
   staleEngineChecker?: {
     check(): 'stale' | 'current' | 'indeterminate';
+    /** Task 13: Optional method to retrieve the captured engine identity. */
+    capturedIdentity?: () => string | null;
+    /** Task 13: Optional method to retrieve the current (target) engine identity. */
+    targetIdentity?: () => string | null;
   };
   /**
    * Called when a stale engine is detected AND all gates pass (continuous,
@@ -560,11 +566,25 @@ export async function runDaemon(
 
         if (shouldCheckStale && deps.staleEngineChecker) {
           const verdict = deps.staleEngineChecker.check();
-          // Task 13: will add the requestRestart call when stale is detected.
-          // Task 12 (this) only evaluates the gate chain and calls the checker.
-          // The verdict is checked but no action is taken until Task 13.
+
+          // Task 13: Handle stale verdict with in-flight re-verify
           if (verdict === 'stale') {
-            // Placeholder for Task 13: will call requestRestart here
+            // Re-verify that inFlight is still empty before requesting restart.
+            // A task could have been added between the verdict check and now.
+            if (inFlight.size === 0) {
+              // All gates still pass, request restart with identities
+              const fromIdentity = deps.staleEngineChecker.capturedIdentity?.() ?? null;
+              const targetIdentity = deps.staleEngineChecker.targetIdentity?.() ?? null;
+
+              if (deps.requestRestart) {
+                await deps.requestRestart({
+                  fromIdentity,
+                  targetIdentity,
+                });
+              }
+            }
+            // If inFlight not empty, someone added a task while we checked.
+            // Fall through to next iteration; will not enter idle branch again.
           }
         }
 

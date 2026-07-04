@@ -38,6 +38,7 @@ import { captureEngineIdentity } from './engine/engine-identity.js';
 import {
   readRestartMarkerWithStatus,
   clearRestartMarker,
+  recordSuppression,
 } from './engine/restart-intent.js';
 import {
   isHalted,
@@ -260,6 +261,17 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       log(
         `restarted for engine refresh — from ${marker.fromIdentity} to ${marker.targetIdentity}, fresh ${engineIdentity}`,
       );
+
+      // Task 10: Suppression — record when fresh identity differs from target
+      // (non-convergence at boot). This prevents restart loops when the engine
+      // identity hasn't reached the target yet.
+      if (engineIdentity !== marker.targetIdentity) {
+        log(
+          `suppressing restart loop — target was ${marker.targetIdentity}, now ${engineIdentity}`,
+        );
+        await recordSuppression(engineIdentity, projectRoot, log);
+      }
+
       await clearRestartMarker(projectRoot);
     }
     // If absent or absent-corrupt: no handshake log.

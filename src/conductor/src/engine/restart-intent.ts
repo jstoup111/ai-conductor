@@ -17,6 +17,9 @@ import { dirname, join } from 'node:path';
 /** Relative path (under the project root) of the restart-pending marker. */
 export const RESTART_MARKER_PATH = '.daemon/RESTART_PENDING';
 
+/** Relative path (under the project root) of the restart suppression record. */
+export const SUPPRESSION_PATH = '.daemon/RESTART_PENDING.suppression';
+
 /**
  * RestartMarker captures the structured metadata for a pending engine restart.
  * All fields are required (though identities may be null) and round-trip
@@ -44,6 +47,19 @@ export interface RestartMarkerStatus {
   marker: RestartMarker | null;
   /** Optional error description for debugging (only set for absent-corrupt). */
   error?: string;
+}
+
+/**
+ * SuppressionRecord tracks when a restart loop was suppressed due to non-convergence.
+ * When the daemon detects that the engine identity differs from the marker's target
+ * identity at boot, it records the current (fresh) identity to prevent repeated
+ * restart attempts for that same identity.
+ */
+export interface SuppressionRecord {
+  /** The identity being suppressed (null if suppression could not be determined). */
+  suppressedTarget: string | null;
+  /** Timestamp when suppression was recorded (Date.getTime() or ISO ms). */
+  at: number;
 }
 
 /**
@@ -162,5 +178,55 @@ export async function readRestartMarkerWithStatus(
       marker: null,
       error: errorMsg,
     };
+  }
+}
+
+/**
+ * Record a suppression for a non-convergent identity at boot.
+ *
+ * When the daemon detects that the fresh engine identity differs from the marker's
+ * target identity, it records the current on-disk identity to suppress repeated
+ * restart attempts for that identity. The suppression persists alongside the marker
+ * at `<dir>/.daemon/RESTART_PENDING.suppression` and prevents re-triggering until
+ * the identity moves to a new value.
+ *
+ * A failed write is swallowed (logged if a logger is provided) so persistence failure
+ * degrades gracefully without crashing. Never throws.
+ */
+export async function recordSuppression(
+  suppressedTarget: string | null,
+  dir: string,
+  log?: (msg: string) => void,
+): Promise<void> {
+  const target = join(dir, SUPPRESSION_PATH);
+  const record: SuppressionRecord = {
+    suppressedTarget,
+    at: Date.now(),
+  };
+
+  try {
+    await mkdir(dirname(target), { recursive: true });
+    await writeFile(target, JSON.stringify(record, null, 2), 'utf-8');
+  } catch (err) {
+    log?.(
+      `could not persist suppression record: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+}
+
+/**
+ * Read the suppression record from `<dir>/.daemon/RESTART_PENDING.suppression`.
+ * Returns the parsed suppression record with all fields preserved exactly as written
+ * (including null suppressedTarget and the exact timestamp). Returns `null` if the
+ * file does not exist or cannot be read. Returns `null` if the file content is not
+ * valid JSON (corrupt suppression). Never throws.
+ */
+export async function getSuppression(dir: string): Promise<SuppressionRecord | null> {
+  try {
+    const raw = await readFile(join(dir, SUPPRESSION_PATH), 'utf-8');
+    const parsed = JSON.parse(raw) as SuppressionRecord;
+    return parsed;
+  } catch {
+    return null; // absent / unreadable / corrupt JSON → null
   }
 }

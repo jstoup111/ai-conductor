@@ -2,12 +2,15 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
+import { existsSync } from 'node:fs';
 
 import {
   writeRestartMarker,
   readRestartMarker,
   clearRestartMarker,
   readRestartMarkerWithStatus,
+  recordSuppression,
+  getSuppression,
   RESTART_MARKER_PATH,
   type RestartMarker,
   type RestartMarkerStatus,
@@ -220,6 +223,109 @@ describe('engine/restart-intent — marker schema round-trip', () => {
       expect(status.kind).toBe('present');
       expect(status.marker).not.toBeNull();
       expect(status.marker?.reason).toBe(marker.reason);
+    });
+  });
+
+  describe('recordSuppression + getSuppression — non-convergence at boot', () => {
+    it('records suppression for a fresh identity when marker target differs', async () => {
+      // Marker was written with old target
+      const marker: RestartMarker = {
+        reason: 'engine stalled',
+        fromIdentity: 'daemon-old',
+        targetIdentity: 'engine-old-123',
+        at: Date.now(),
+      };
+      await writeRestartMarker(marker, dir);
+
+      // Fresh identity differs from target
+      const freshIdentity = 'engine-fresh-456';
+
+      // Record suppression for the fresh identity
+      await recordSuppression(freshIdentity, dir);
+
+      // Verify suppression was recorded
+      const suppression = await getSuppression(dir);
+      expect(suppression).not.toBeNull();
+      expect(suppression?.suppressedTarget).toBe(freshIdentity);
+      expect(typeof suppression?.at).toBe('number');
+    });
+
+    it('suppression record persists alongside marker', async () => {
+      const marker: RestartMarker = {
+        reason: 'engine stalled',
+        fromIdentity: 'daemon-1',
+        targetIdentity: 'engine-old',
+        at: Date.now(),
+      };
+      await writeRestartMarker(marker, dir);
+
+      const freshIdentity = 'engine-fresh';
+      await recordSuppression(freshIdentity, dir);
+
+      // Both files should exist
+      const markerPath = join(dir, RESTART_MARKER_PATH);
+      const suppressionPath = join(dir, '.daemon', 'RESTART_PENDING.suppression');
+
+      expect(existsSync(markerPath)).toBe(true);
+      expect(existsSync(suppressionPath)).toBe(true);
+
+      // Both should be readable
+      const markerData = await readRestartMarker(dir);
+      const suppressionData = await getSuppression(dir);
+
+      expect(markerData).not.toBeNull();
+      expect(suppressionData).not.toBeNull();
+      expect(suppressionData?.suppressedTarget).toBe(freshIdentity);
+    });
+
+    it('getSuppression returns null when suppression file does not exist', async () => {
+      const suppression = await getSuppression(dir);
+      expect(suppression).toBeNull();
+    });
+
+    it('getSuppression returns null for corrupt suppression file', async () => {
+      const suppressionPath = join(dir, '.daemon', 'RESTART_PENDING.suppression');
+      await mkdir(dirname(suppressionPath), { recursive: true });
+      // Write corrupt JSON
+      await writeFile(suppressionPath, 'garbage {{{', 'utf-8');
+
+      const suppression = await getSuppression(dir);
+      expect(suppression).toBeNull();
+    });
+
+    it('recordSuppression handles null suppressedTarget', async () => {
+      await recordSuppression(null, dir);
+
+      const suppression = await getSuppression(dir);
+      expect(suppression).not.toBeNull();
+      expect(suppression?.suppressedTarget).toBeNull();
+    });
+
+    it('suppression file contains suppressedTarget and timestamp', async () => {
+      const freshIdentity = 'engine-abc-123';
+      const before = Date.now();
+      await recordSuppression(freshIdentity, dir);
+      const after = Date.now();
+
+      const suppressionPath = join(dir, '.daemon', 'RESTART_PENDING.suppression');
+      const rawContent = await readFile(suppressionPath, 'utf-8');
+      const parsed = JSON.parse(rawContent);
+
+      expect(parsed.suppressedTarget).toBe(freshIdentity);
+      expect(typeof parsed.at).toBe('number');
+      expect(parsed.at).toBeGreaterThanOrEqual(before);
+      expect(parsed.at).toBeLessThanOrEqual(after);
+    });
+
+    it('recordSuppression overwrites prior suppression record', async () => {
+      await recordSuppression('identity-1', dir);
+      const suppression1 = await getSuppression(dir);
+
+      await recordSuppression('identity-2', dir);
+      const suppression2 = await getSuppression(dir);
+
+      expect(suppression1?.suppressedTarget).toBe('identity-1');
+      expect(suppression2?.suppressedTarget).toBe('identity-2');
     });
   });
 });

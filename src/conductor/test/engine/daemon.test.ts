@@ -586,4 +586,92 @@ describe('engine/daemon — runDaemon', () => {
       expect(res.stoppedReason).toBe('idle_timeout');
     });
   });
+
+  // ── Idle-branch happy path + in-flight re-verify (Task 13) ──────────────────
+
+  describe('stale-engine restart request + in-flight re-verify (Task 13)', () => {
+    it('happy path: stale verdict + all gates pass + empty inFlight → requestRestart called once with both identities', async () => {
+      const { vi } = await import('vitest');
+      const requestRestart = vi.fn(async () => {});
+
+      const deps: DaemonDeps = {
+        discoverBacklog: staticBacklog([]),
+        runFeature: async (it) => ({ slug: it.slug, status: 'done' }),
+        staleEngineChecker: {
+          check: () => 'stale',
+          capturedIdentity: () => 'captured-v1-hash',
+          targetIdentity: () => 'current-v2-hash',
+        },
+        sleep: async () => {},
+        requestRestart,
+      };
+
+      const res = await runDaemon(deps, {
+        concurrency: 1,
+        once: false,
+        isSelfHost: true,
+        autoRestartOnStaleEngine: true,
+        maxIdlePolls: 1,
+      });
+
+      expect(requestRestart).toHaveBeenCalledTimes(1);
+      expect(requestRestart).toHaveBeenCalledWith({
+        fromIdentity: 'captured-v1-hash',
+        targetIdentity: 'current-v2-hash',
+      });
+    });
+
+    it('negative: stale verdict, but a Tagged is added to inFlight between verdict and request → requestRestart NOT called', async () => {
+      const { vi } = await import('vitest');
+      const requestRestart = vi.fn(async () => {});
+      let checkCount = 0;
+
+      const deps: DaemonDeps = {
+        discoverBacklog: staticBacklog([]),
+        runFeature: async (it) => {
+          // This will be added to inFlight on the second idle poll
+          await new Promise((r) => setTimeout(r, 5));
+          return { slug: it.slug, status: 'done' };
+        },
+        staleEngineChecker: {
+          check: () => {
+            checkCount++;
+            // First check: idle poll 1 — report stale with empty inFlight
+            // This will try to request, but we'll have added a feature by then
+            return 'stale';
+          },
+          capturedIdentity: () => 'captured-v1-hash',
+          targetIdentity: () => 'current-v2-hash',
+        },
+        sleep: async () => {},
+        requestRestart,
+      };
+
+      // Create a checker that adds a feature on the second idle poll
+      let idleCount = 0;
+      const originalDiscover = deps.discoverBacklog;
+      deps.discoverBacklog = async () => {
+        idleCount++;
+        // On second idle poll (after first one found nothing and tried to check stale),
+        // return a feature so it gets added to inFlight
+        if (idleCount === 2) {
+          return [{ slug: 'test-feature' }];
+        }
+        return [];
+      };
+
+      const res = await runDaemon(deps, {
+        concurrency: 1,
+        once: false,
+        isSelfHost: true,
+        autoRestartOnStaleEngine: true,
+        maxIdlePolls: 3,
+      });
+
+      // requestRestart should NOT have been called because inFlight was non-empty
+      // when we re-verified before requesting
+      expect(requestRestart).not.toHaveBeenCalled();
+    });
+
+  });
 });
