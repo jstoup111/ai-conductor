@@ -247,6 +247,17 @@ export interface DaemonDeps {
    * Only used when bare-run is detected (triggerSelfRestart undefined).
    */
   consumeRestartPending?: () => Promise<unknown>;
+
+  // ── TS-2: repo-root vanished self-termination ──────────────────────────
+  /**
+   * Check whether the repo root the daemon is operating on has been removed
+   * (e.g. worktree deleted out from under the daemon). Called at the top of
+   * every loop iteration. Must be DEFINITIVE ABSENCE ONLY — return `null` on
+   * doubt/transient errors (permission issues, flaky FS, etc.) so a spurious
+   * error never self-terminates a healthy daemon. Returns the missing path
+   * when confirmed gone, `null` otherwise. Absent → never checked.
+   */
+  repoRootMissing?: () => string | null;
 }
 
 export interface DaemonOptions {
@@ -277,7 +288,8 @@ export type DaemonStopReason =
   | 'max_items'
   | 'cost_ceiling'
   | 'time_ceiling'
-  | 'idle_timeout';
+  | 'idle_timeout'
+  | 'repo_root_missing';
 
 export interface DaemonResult {
   processed: FeatureOutcome[];
@@ -462,6 +474,13 @@ export async function runDaemon(
   let stopReason: DaemonStopReason | null = null;
 
   while (true) {
+    const missingRoot = deps.repoRootMissing?.();
+    if (missingRoot != null) {
+      log(`[daemon] repo root missing: ${missingRoot} — stopping`);
+      stopReason = 'repo_root_missing';
+      break;
+    }
+
     stopReason = ceilingHit();
     if (stopReason) break;
 
