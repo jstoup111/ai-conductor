@@ -270,6 +270,47 @@ describe('ClaudeProvider', () => {
       expect(args).toContain('--name');
       expect(args).toContain('my-feature');
     });
+
+    // Negative cases: auth failure should NOT match in these scenarios
+    it('does not flag authFailure on exit code 0 even if output mentions "Not logged in"', async () => {
+      mockExeca.mockResolvedValue({
+        stdout: 'Success: Not logged in message mentioned but exit is 0',
+        exitCode: 0,
+        failed: false,
+      } as any);
+
+      const result = await provider.invoke(baseOptions);
+      expect(result.success).toBe(true);
+      expect(result.authFailure).toBeUndefined();
+    });
+
+    it('does not flag authFailure when MODEL_UNAVAILABLE_RE matches', async () => {
+      mockExeca.mockResolvedValue({
+        stdout: '',
+        stderr: 'Invalid model name: claude-bogus',
+        exitCode: 1,
+        failed: true,
+      } as any);
+
+      const result = await provider.invoke(baseOptions);
+      expect(result.modelUnavailable).toBe(true);
+      expect(result.authFailure).toBeUndefined();
+      expect(result.success).toBe(false);
+    });
+
+    it('does not flag authFailure when rate-limit is detected', async () => {
+      mockExeca.mockResolvedValue({
+        stdout: '',
+        stderr: 'Error: rate limit exceeded, please retry later',
+        exitCode: 1,
+        failed: true,
+      } as any);
+
+      const result = await provider.invoke(baseOptions);
+      expect(result.rateLimited).toBe(true);
+      expect(result.authFailure).toBeUndefined();
+      expect(result.success).toBe(false);
+    });
   });
 
   describe('effort env var', () => {

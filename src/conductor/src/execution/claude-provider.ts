@@ -35,6 +35,11 @@ export const AUTH_FAILURE_RE = /not logged in|invalid api key|please run \/login
 export const MODEL_UNAVAILABLE_RE =
   /not_found_error.{0,80}model|model not found|invalid model( name)?|issue with the selected model|may not exist or you may not have access/i;
 
+/** Test helper: true if `output` matches the auth-failure signature. */
+export function detectsAuthFailure(output: string): boolean {
+  return AUTH_FAILURE_RE.test(output);
+}
+
 /** Test helper: true if `output` matches the model-unavailable signature. */
 export function detectsModelUnavailable(output: string): boolean {
   return MODEL_UNAVAILABLE_RE.test(output);
@@ -110,11 +115,14 @@ export class ClaudeProvider implements LLMProvider {
       };
     }
 
+    // Check auth failure first (highest priority), gated on non-zero exit.
+    // Then model availability and rate limit — these are also only valid
+    // error states (exit !== 0).
     const authFailure = exitCode !== 0 && AUTH_FAILURE_RE.test(output);
-    const rateLimited = RATE_LIMIT_RE.test(output);
+    const modelUnavailable = exitCode !== 0 && MODEL_UNAVAILABLE_RE.test(output);
+    const rateLimited = exitCode !== 0 && RATE_LIMIT_RE.test(output);
     const sessionExpired =
       STALE_SESSION_RE.test(output) || SESSION_IN_USE_RE.test(output);
-    const modelUnavailable = MODEL_UNAVAILABLE_RE.test(output);
     const tokenUsage = parseTokenUsage(stdout);
 
     return {
