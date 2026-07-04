@@ -212,7 +212,8 @@ function resolveTsupCommand(opts) {
 export async function publish(opts) {
   const env = opts.env ?? process.env;
   const conductorRoot = resolve(opts.conductorRoot);
-  const { resolveEngineStoreRoot, computeVersionId, flipCurrent, gcVersions } = await loadEngineStore();
+  const { resolveEngineStoreRoot, computeVersionId, flipCurrent, gcVersions, currentTarget } =
+    await loadEngineStore();
   const storeRoot = resolveEngineStoreRoot({ conductorRoot, env });
 
   await migrateLegacyDistIfNeeded({
@@ -246,6 +247,31 @@ export async function publish(opts) {
     await runCommand([...tsupCommand, '--out-dir', stagingDir], { cwd: conductorRoot });
 
     const versionId = await computeVersionId({ srcDir: stagingDir, now: opts.now });
+
+    // Idempotence guard (#303): when the freshly-built content is identical to
+    // what `dist` already points at, re-publishing would only mint a duplicate
+    // snapshot and flip the symlink — dirtying the checkout (`M dist` +
+    // untracked snapshot) on every `daemon start`/`bin/install` and freezing
+    // the daemon's fast-forward tracking. Same content hash + intact current
+    // snapshot → clean no-op.
+    const contentHash = versionId.slice(versionId.lastIndexOf('-') + 1);
+    const current = await currentTarget(conductorRoot);
+    if (current && current.slice(current.lastIndexOf('-') + 1) === contentHash) {
+      const currentDir = join(storeRoot, current);
+      const intact = await lstat(currentDir).then(
+        (s) => s.isDirectory(),
+        () => false,
+      );
+      if (intact) {
+        await rm(stagingDir, { recursive: true, force: true });
+        console.error(
+          `[publish-engine] content unchanged (${contentHash}) — publish skipped, dist stays at ${current}`,
+        );
+        return { versionId: current, dir: currentDir };
+      }
+      // Dangling/incomplete current target: fall through and publish to heal it.
+    }
+
     await mkdir(storeRoot, { recursive: true });
     const finalDir = join(storeRoot, versionId);
     await rename(stagingDir, finalDir);
