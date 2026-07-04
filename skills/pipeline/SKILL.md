@@ -105,10 +105,7 @@ dispatch it — report BLOCKED and escalate as a conformance finding. Writing co
 deletion is wasted effort; the cheapest check (one ADR/PRD read) precedes the most expensive
 action (a full TDD subagent dispatch + review cycle).
 
-**Failure verification (step 4):** Before re-dispatching a failed task, run the test suite to
-confirm the failure is real. If tests pass and commits exist for the task, mark as completed —
-do not trust JSON state alone. JSON state can become stale after connection interruptions or
-subagent context loss.
+**Failure verification (step 4):** Before re-dispatching a failed task, run the **task's scoped set** (the same set used in step 3 VERIFY, or the full suite if a fallback trigger fired in step 3) to confirm the failure is real. Running the same scope ensures comparable signal — same false-positive/false-negative risk. If tests pass and commits exist for the task, mark as completed — do not trust JSON state alone. JSON state can become stale after connection interruptions or subagent context loss.
 
 **Superseded-symbol check (step 5 — replacement tasks):** Before marking a task `completed`
 whose plan says it **replaces or supersedes** an existing symbol/behavior ("replace X",
