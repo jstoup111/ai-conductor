@@ -63,7 +63,7 @@ import {
 import { sweepMergeableLabels } from './engine/mergeable-sweep.js';
 import { createPriorityResolver, ghIssueLabelReader } from './engine/backlog-priority.js';
 import { isPaused } from './engine/pause-marker.js';
-import { readRestartPending } from './engine/restart-marker.js';
+import { readRestartPending, consumeOnBoot } from './engine/restart-marker.js';
 
 const execFile = promisify(execFileCb);
 
@@ -205,6 +205,22 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   const pausedAtBoot = await isPaused(projectRoot);
   if (pausedAtBoot) {
     log('daemon is paused — booting with zero dispatch until resumed (see `conduct daemon resume`).');
+  }
+
+  // Task T29: consume the pending-restart marker at boot. A fresh boot IS the
+  // restart (whether self-spawned or manually started), so consume exactly once
+  // here and log the fulfilled intent for observability. consumeOnBoot is
+  // idempotent (absent marker returns null, no-op); multiple writes while busy
+  // produce one logical intent that fires once (latest payload) at boot.
+  const consumedRestartIntent = await consumeOnBoot(projectRoot);
+  if (consumedRestartIntent) {
+    const blockingSlug = consumedRestartIntent.blockingSlug
+      ? ` (was waiting behind ${consumedRestartIntent.blockingSlug})`
+      : '';
+    const requestedBy = consumedRestartIntent.requestedBy
+      ? ` by ${consumedRestartIntent.requestedBy}`
+      : '';
+    log(`restart marker consumed${blockingSlug}${requestedBy} at boot.`);
   }
 
   const configResult = await loadConfig(projectRoot);
