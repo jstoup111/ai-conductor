@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   runDaemon,
   type BacklogItem,
@@ -669,6 +669,134 @@ describe('engine/daemon — runDaemon', () => {
       // (This test may need adjustment based on actual behavior.)
       // expect(requestRestart).toHaveBeenCalledTimes(0);
     });
+  });
 
+  // ── TS-2: repo_root_missing self-termination ─────────────────
+
+  it('stops immediately with repo_root_missing when the repo root is gone; never dispatches', async () => {
+    const logs: string[] = [];
+    const runFeature = vi.fn(async (it: BacklogItem) => ({ slug: it.slug, status: 'done' as const }));
+    const deps: DaemonDeps = {
+      discoverBacklog: staticBacklog(items(1)),
+      runFeature,
+      repoRootMissing: () => '/gone/repo',
+      log: (msg) => {
+        logs.push(msg);
+      },
+    };
+    const res = await runDaemon(deps, { concurrency: 1, once: true });
+    expect(res).toEqual({ processed: [], stoppedReason: 'repo_root_missing' });
+    expect(runFeature).not.toHaveBeenCalled();
+    expect(
+      logs.filter((m) => m.includes('repo root missing') && m.includes('/gone/repo'))
+    ).toHaveLength(1);
+  });
+
+  it('idle/identity-parked daemon: stops with repo_root_missing (not idle_timeout) when repo vanishes mid-poll', async () => {
+    // Task 9: negative path 2
+    // An idle daemon with no work (identity-fail-closed backlog) polling for more
+    // detects the repo root disappearance and self-terminates with repo_root_missing
+    // before hitting idle_timeout, even with maxIdlePolls set high.
+    let callCount = 0;
+    let slept = 0;
+    const logs: string[] = [];
+    const deps: DaemonDeps = {
+      discoverBacklog: async () => [], // identity-fail-closed: always empty
+      runFeature: vi.fn(async (it: BacklogItem) => ({ slug: it.slug, status: 'done' })),
+      repoRootMissing: () => {
+        callCount++;
+        // Return null for first 2 calls (initial poll + first idle poll)
+        // Then return missing path on 3rd call (during 2nd idle poll)
+        return callCount > 2 ? '/gone/repo' : null;
+      },
+      sleep: async () => {
+        slept++;
+      },
+      log: (msg) => {
+        logs.push(msg);
+      },
+    };
+    const res = await runDaemon(deps, {
+      concurrency: 1,
+      once: false,
+      idlePollMs: 1,
+      maxIdlePolls: 10, // would hit idle_timeout if repo check didn't fire
+    });
+    expect(res.stoppedReason).toBe('repo_root_missing');
+    expect(res.processed).toHaveLength(0); // no work dispatched
+    expect(slept).toBeGreaterThan(0); // did sleep during idle polling
+    expect(slept).toBeLessThan(10); // but not maxIdlePolls times (stopped early)
+    expect(
+      logs.filter((m) => m.includes('repo root missing') && m.includes('/gone/repo'))
+    ).toHaveLength(1);
+  });
+
+  it('in-flight drain: collects in-flight outcome after repo_root_missing detected', async () => {
+    // Task 9: negative path 3
+    // Dispatch one slow feature that stays in flight. While it's running,
+    // repoRootMissing flips to return a path. The daemon detects this on the
+    // next loop iteration and breaks — then drains the in-flight work,
+    // collecting its outcome before returning repo_root_missing.
+    let dispatches = 0;
+    let repoCheckCount = 0;
+    let resolveWorker: ((value: FeatureOutcome) => void) | undefined;
+    const workerPromise = new Promise<FeatureOutcome>((resolve) => {
+      resolveWorker = resolve;
+    });
+    const deps: DaemonDeps = {
+      discoverBacklog: staticBacklog(items(1)),
+      runFeature: async (it: BacklogItem) => {
+        dispatches++;
+        // Return the pending promise — blocks until test code resolves it
+        return workerPromise;
+      },
+      repoRootMissing: () => {
+        repoCheckCount++;
+        // After dispatch but while feature is in-flight, the repo vanishes.
+        // Return null on first check (initial discovery), then missing path
+        // on second check (main loop iter when dispatch starts).
+        return repoCheckCount > 1 ? '/gone/repo' : null;
+      },
+      sleep: async () => {},
+      log: () => {},
+    };
+    // Start the daemon; it will dispatch the feature and detect the missing repo
+    // while it's in flight. We do NOT await yet — we want to control timing.
+    const daemonPromise = runDaemon(deps, {
+      concurrency: 1,
+      once: true,
+    });
+    // Yield to let the daemon dispatch and detect the missing repo
+    await new Promise((r) => setTimeout(r, 10));
+    // Now resolve the worker with a done outcome
+    resolveWorker?.({ slug: 'f0', status: 'done' });
+    // Now collect the result
+    const res = await daemonPromise;
+    expect(res.stoppedReason).toBe('repo_root_missing');
+    expect(dispatches).toBe(1); // dispatched exactly once before detecting missing repo
+    expect(res.processed).toHaveLength(1); // the in-flight outcome was collected
+    expect(res.processed[0].slug).toBe('f0');
+    expect(res.processed[0].status).toBe('done');
+  });
+
+  it('does NOT false-positive when the repo root exists throughout (repoRootMissing returns null)', async () => {
+    const logs: string[] = [];
+    const runFeature = vi.fn(async (it: BacklogItem) => ({ slug: it.slug, status: 'done' as const }));
+    const deps: DaemonDeps = {
+      discoverBacklog: staticBacklog(items(1)),
+      runFeature,
+      repoRootMissing: () => null, // root exists
+      log: (msg) => {
+        logs.push(msg);
+      },
+    };
+    const res = await runDaemon(deps, { concurrency: 1, once: true });
+    // Verify daemon drains the backlog without false-positiving on root missing
+    expect(res.processed).toHaveLength(1);
+    expect(res.stoppedReason).toBe('backlog_drained');
+    expect(runFeature).toHaveBeenCalledOnce();
+    expect(
+      logs.filter((m) => m.includes('repo root missing'))
+    ).toHaveLength(0);
   });
 });

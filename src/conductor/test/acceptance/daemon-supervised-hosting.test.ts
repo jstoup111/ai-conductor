@@ -181,3 +181,36 @@ describe('Session isolation (FR-11)', () => {
     expect(a).not.toContain(':'); // tmux target separator must never appear
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TS-1 negative path 3 — injected-runner delegation unaffected by the guard (Task 5 / #257)
+//
+// The kill-switch guard lives ONLY in defaultTmuxRunner, so injected runners
+// (spy runners in tests) bypass it by construction. This test verifies that
+// makeTmuxSupervisor(spyRunner) still forwards new-session argv to the spy
+// even when AI_CONDUCTOR_NO_REAL_EXEC=1 is set — proving guard isolation.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('Guard isolation: injected runners bypass kill-switch (TS-1 neg 3, #257)', () => {
+  it('under kill-switch, makeTmuxSupervisor(spyRunner).start() still delegates new-session to injected spy', async () => {
+    const makeSup = requireFn(await load(TMUX_MOD), 'makeTmuxSupervisor');
+    const prevFlag = process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+    process.env.AI_CONDUCTOR_NO_REAL_EXEC = '1';
+    try {
+      // Injected spy runner (not defaultTmuxRunner) must receive every call unguarded.
+      const { run, calls } = spyRunner({ 'has-session': { code: 1 }, '-V': { code: 0 } });
+      await makeSup(run).start('/tmp/test-daemon-repo');
+
+      // Verify that new-session WAS forwarded to the spy (not blocked by guard).
+      const newSessionCall = argvOf(calls, 'new-session');
+      expect(newSessionCall, 'spy runner must receive new-session (guard does NOT block injected runners)').toBeTruthy();
+      expect(newSessionCall).toContain('-d');
+      expect(newSessionCall!.join(' ')).toContain('conduct-ts daemon --continuous');
+    } finally {
+      if (prevFlag === undefined) {
+        delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+      } else {
+        process.env.AI_CONDUCTOR_NO_REAL_EXEC = prevFlag;
+      }
+    }
+  });
+});

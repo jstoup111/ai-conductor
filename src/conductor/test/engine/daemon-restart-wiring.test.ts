@@ -93,7 +93,7 @@ describe('FR-9 — queued restart fires against a real tmux session', () => {
 
       const projectRoot = await freshDir();
       const suffix = randomBytes(4).toString('hex');
-      const name = `cc-daemon-wiring-${suffix}`;
+      const name = `test-wiring-${suffix}`;
       const dummyCommand = 'bash -c "while true; do echo BOOT_$$; sleep 1; done"';
 
       try {

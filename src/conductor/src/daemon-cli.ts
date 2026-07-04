@@ -1,6 +1,7 @@
 import chalk from 'chalk';
 import { v4 as uuidv4 } from 'uuid';
 import { join } from 'node:path';
+import { existsSync } from 'node:fs';
 import { mkdir, rm } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -716,6 +717,8 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       consumeRestartPending: async () => {
         return await consumeOnBoot(projectRoot);
       },
+      // TS-2: repo-root vanished self-termination
+      repoRootMissing: () => (existsSync(projectRoot) ? null : projectRoot),
     },
     {
       concurrency: clampDaemonConcurrency(opts.concurrency, log),

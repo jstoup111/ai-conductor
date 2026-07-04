@@ -51,6 +51,15 @@ export class TmuxNotInstalledError extends Error {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const defaultTmuxRunner: TmuxRunner = (args, opts) => {
+  if (process.env.AI_CONDUCTOR_NO_REAL_EXEC === '1' && args[0] === 'new-session') {
+    const sIndex = args.indexOf('-s');
+    const sessionName = sIndex >= 0 ? args[sIndex + 1] : undefined;
+    if (sessionName && sessionName.startsWith(SESSION_PREFIX)) {
+      throw new Error(
+        `Refusing to create real tmux session "${sessionName}": AI_CONDUCTOR_NO_REAL_EXEC=1 kill-switch is set.`
+      );
+    }
+  }
   const result = spawnSync('tmux', args, {
     stdio: opts.inherit ? 'inherit' : ['ignore', 'pipe', 'pipe'],
     encoding: 'utf-8',

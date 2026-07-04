@@ -683,6 +683,22 @@ wrapper, which errors loudly with remediation guidance). First build post-upgrad
 existing `dist/` directory into the store (one-time, automatic). See the Migration section in
 `CHANGELOG.md` for upgrade instructions.
 
+**Daemon self-termination on missing repo root** (`engine/daemon.ts`) — the daemon checks at the 
+start of each loop iteration whether its repo root has been deleted (e.g., a worktree removed out 
+from under it). On definitive absence (`repoRootMissing()` predicate confirms the path is gone), 
+the daemon logs the missing path, sets the stop reason to `repo_root_missing`, and cleanly exits 
+after draining any in-flight workers to completion. This enables safe cleanup when the underlying 
+repository has been removed without leaving the daemon process orphaned. See `engine/daemon-deps.ts` 
+for the concrete implementation.
+
+**Deep-seam tmux guard** (`engine/daemon-tmux.ts`, `defaultTmuxRunner`) — during testing, the 
+default tmux runner checks the `AI_CONDUCTOR_NO_REAL_EXEC` kill-switch environment variable before 
+creating a real tmux daemon session. When the kill-switch is set and a `new-session` call targets 
+a daemon session name (starts with `SESSION_PREFIX`), the runner throws an error instead of 
+executing the command. This prevents tests from leaking real tmux daemon sessions into the system 
+that outlive the test suite. The kill-switch is set globally by the vitest setup for all conductor 
+tests, ensuring test isolation without requiring custom injection in every test.
+
 Key modules:
 - `engine/pause-marker.ts` — `isPaused`, `writePauseMarker`, `removePauseMarker`
 - `engine/restart-marker.ts` — `readRestartPending`, `writeRestartPending`, `consumeOnBoot`
