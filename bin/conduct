@@ -2779,10 +2779,29 @@ usage() {
   echo ""
   echo "Project-level (run once, not per-feature): bootstrap, assess"
   echo ""
+  echo "Conduct-TS Forwarded Verbs (require conduct-ts in PATH):"
+  echo "  daemon              Manage conductor daemon (status, start, stop, etc.)"
+  echo "  render-diagrams     Render architecture diagrams from Markdown"
+  echo "  register            Register with conductor daemon"
+  echo "  create              Create resources"
+  echo "  engineer            Feature engineering commands"
+  echo "  inline              Inline operations"
+  echo "  help                Help information"
+  echo ""
+  echo "Important: Feature descriptions must be quoted multi-word strings."
+  echo "  conduct \"add user login\"            # Correct: quoted multi-word"
+  echo "  conduct auth                        # Rejected: bare single word"
+  echo "  conduct \"--weird feature name\"      # Rejected: dash-leading string"
+  echo ""
+  echo "Unknown options and unknown commands fail loudly with helpful errors."
+  echo "See https://github.com/anthropics/ai-conductor#unknown-command-guard for details."
+  echo ""
   echo "Examples:"
   echo "  conduct --auto \"URL shortener with click tracking\"    # Fully automated"
   echo "  conduct --interactive \"User auth system\"              # Manual oversight"
   echo "  conduct \"Payment processing\"                          # Default: auto with prompts on failure"
+  echo "  conduct daemon status                                  # Check daemon status"
+  echo "  conduct render-diagrams architecture.md                # Render diagrams"
   echo ""
   echo "Also available: conduct-ts — TypeScript rewrite with a richer dashboard,"
   echo "  typed completion gates, and auto-heal for stale pipeline state. Same CLI"
@@ -2799,10 +2818,25 @@ STEP_COOLDOWN=10          # seconds between steps (prevents rate limit bursts)
 STEP_COOLDOWN_ORIG=10     # original value for escalation math
 CLAUDE_CALL_COUNT=0       # cumulative calls this session
 
-# `conduct daemon <verb>` — forward all daemon subcommands to conduct-ts which
-# owns the Supervisor port (management verbs) and the daemon run/observe/status
-# paths. Avoids duplicating routing logic in both bash and TypeScript.
-if [ "$1" = "daemon" ]; then exec conduct-ts "$@"; fi
+# Forward conduct-ts-owned subcommands to conduct-ts which handles:
+# - daemon: Supervisor port (management verbs) and daemon run/observe/status paths
+# - render-diagrams: Architecture diagram rendering
+# - register: Daemon registration
+# - create: Resource creation
+# - engineer: Feature engineering commands
+# - inline: Inline operations
+# - help: Help command
+# Avoids duplicating routing logic in both bash and TypeScript.
+case "$1" in
+  daemon|render-diagrams|register|create|engineer|inline|help)
+    if command -v conduct-ts >/dev/null 2>&1; then
+      exec conduct-ts "$@"
+    else
+      echo "Error: conduct-ts not found. The '$1' command requires conduct-ts." >&2
+      exit 127
+    fi
+    ;;
+esac
 
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -2820,7 +2854,20 @@ while [[ $# -gt 0 ]]; do
     --update)       log "Forcing harness update check..."; check_harness_update; exit 0 ;;
     --set-channel)  set_update_channel "$2"; shift ;;
     -h|--help)      usage; exit 0 ;;
-    *)              FEATURE_DESC="$1" ;;
+    -*)             echo "Unknown option: $1" >&2; echo "Use --help for usage information." >&2; exit 1 ;;
+    *)              # Feature description (must be quoted multi-word) or unknown command
+                    # Check if $1 contains whitespace
+                    case "$1" in
+                      *[[:space:]]*)  # Multi-word with spaces = valid feature description
+                        FEATURE_DESC="$1"
+                        ;;
+                      *)  # Single bare word = likely a typo
+                        echo "Unknown command: $1" >&2
+                        echo 'Feature descriptions must be quoted multi-word strings, e.g. conduct "add user login"' >&2
+                        exit 1
+                        ;;
+                    esac
+                    ;;
   esac
   shift
 done

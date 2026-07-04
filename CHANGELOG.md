@@ -34,6 +34,7 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   encoded a third, never-real argv shape (`--method` + `issue_number=`), which is why the
   idempotency test shipped red on main in #246 and failed every feature's full-suite VERIFY
   (#251). Fixes #251, fixes #260.
+- Unknown `bin/conduct` subcommands/options now fail loudly (or forward to conduct-ts) instead of silently launching the SDLC pipeline (#178).
 
 ### Changed
 
@@ -461,6 +462,25 @@ if [ -f .daemon/daemon.pid ]; then
   fi
 fi
 # Requires tmux on the host for the management verbs: e.g. `sudo apt-get install tmux`.
+```
+
+`bin/conduct` no longer treats unknown subcommands/options as a feature description: unknown
+options and bare single-word tokens are rejected with a hint, and conduct-ts verbs (e.g.
+`render-diagrams`) are forwarded to `conduct-ts` — which must be on PATH, else the forward
+exits 127 (#178).
+
+```bash migration
+# bin/conduct now rejects unknown commands instead of silently launching the
+# SDLC pipeline, and forwards conduct-ts verbs to conduct-ts. Verify conduct-ts
+# is installed so forwarding works:
+if command -v conduct-ts >/dev/null 2>&1; then
+  echo "conduct-ts found: bin/conduct verb forwarding will work."
+else
+  echo "WARNING: conduct-ts not on PATH — forwarded verbs will exit 127."
+  echo "Re-run bin/install to build and link conduct-ts."
+fi
+# Reminder: bare single-word feature descriptions are now rejected — quote
+# multi-word descriptions instead, e.g.:  conduct "add user auth"
 ```
 
 ### Changed
