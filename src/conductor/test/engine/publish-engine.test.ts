@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, readdir, readFile, chmod, lstat, readlink } from 'fs/promises';
-import { join, resolve } from 'path';
+import { join, resolve, dirname } from 'path';
 import { tmpdir } from 'os';
 import { execa } from 'execa';
 import { assertPublishWrapperEnv } from '../../scripts/publish-engine.mjs';
@@ -78,6 +78,51 @@ describe('publish-engine.mjs', () => {
     const rootEntries = await readdir(conductorRoot);
     const stagingLeftovers = rootEntries.filter((name) => name.startsWith('.engine-staging-'));
     expect(stagingLeftovers).toEqual([]);
+  });
+
+  it('re-publishing identical content is a no-op: same versionId, one snapshot, dist untouched (#303)', async () => {
+    const first = await runPublish();
+    expect(first.exitCode).toBe(0);
+    const v1 = JSON.parse(first.stdout).versionId;
+
+    const second = await runPublish();
+    expect(second.exitCode).toBe(0);
+    expect(JSON.parse(second.stdout).versionId).toBe(v1);
+    expect(second.stderr).toContain('publish skipped');
+
+    // Exactly one snapshot on disk; dist still points at it (relative target).
+    expect(await readdir(join(conductorRoot, 'dist-versions'))).toEqual([v1]);
+    expect(await readlink(join(conductorRoot, 'dist'))).toBe(join('dist-versions', v1));
+
+    // No staging leftovers from the skipped publish.
+    const rootEntries = await readdir(conductorRoot);
+    expect(rootEntries.filter((name) => name.startsWith('.engine-staging-'))).toEqual([]);
+  });
+
+  it('changed content still publishes: new snapshot minted and dist flipped (negative path for the no-op guard)', async () => {
+    const first = await runPublish();
+    expect(first.exitCode).toBe(0);
+    const v1 = JSON.parse(first.stdout).versionId;
+
+    // Change what the "build" emits — content hash must differ.
+    await writeFile(
+      stubPath,
+      [
+        'import { writeFile, mkdir } from "node:fs/promises";',
+        'const args = process.argv.slice(2);',
+        'const outDir = args[args.indexOf("--out-dir") + 1];',
+        'await mkdir(outDir, { recursive: true });',
+        'await writeFile(`${outDir}/index.js`, "export const built = 2;\\n");',
+        '',
+      ].join('\n'),
+      'utf-8',
+    );
+
+    const second = await runPublish();
+    expect(second.exitCode).toBe(0);
+    const v2 = JSON.parse(second.stdout).versionId;
+    expect(v2).not.toBe(v1);
+    expect(await readlink(join(conductorRoot, 'dist'))).toBe(join('dist-versions', v2));
   });
 
   it('removes the staging dir and exits non-zero when the build command fails', async () => {
@@ -174,7 +219,7 @@ describe('publish-engine.mjs', () => {
     // migrated legacy one (the normal publish flow ran after migration).
     const output = JSON.parse(result.stdout);
     const target = await readlink(legacyDist);
-    expect(resolve(target)).toBe(resolve(output.dir));
+    expect(resolve(dirname(legacyDist), target)).toBe(resolve(output.dir));
     expect(migratedDir).not.toBe(output.versionId);
   });
 

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, readdir, readlink, lstat, access } from 'fs/promises';
-import { join, resolve } from 'path';
+import { join, resolve, dirname } from 'path';
 import { tmpdir } from 'os';
 import { execa } from 'execa';
 import { publish } from '../../scripts/publish-engine.mjs';
@@ -55,7 +55,7 @@ describe('interrupted publish recovery', () => {
     const first = await publish({ conductorRoot, tsupCommand: ['node', stub1] });
 
     const distPath = join(conductorRoot, 'dist');
-    const targetBefore = resolve(await readlink(distPath));
+    const targetBefore = resolve(dirname(distPath), await readlink(distPath));
     expect(targetBefore).toBe(resolve(first.dir));
 
     // Second publish: interrupted right after finalize, before flip.
@@ -74,7 +74,7 @@ describe('interrupted publish recovery', () => {
     ).rejects.toThrow(/simulated kill/);
 
     // `current` (`dist`) must be untouched — still points at the first publish.
-    const targetAfter = resolve(await readlink(distPath));
+    const targetAfter = resolve(dirname(distPath), await readlink(distPath));
     expect(targetAfter).toBe(resolve(first.dir));
 
     // The second build's finalized dir exists under dist-versions/ but was
@@ -128,7 +128,7 @@ describe('interrupted publish recovery', () => {
     expect(entriesAfter).toContain(third.versionId);
 
     const distPath = join(conductorRoot, 'dist');
-    const target = resolve(await readlink(distPath));
+    const target = resolve(dirname(distPath), await readlink(distPath));
     expect(target).toBe(resolve(third.dir));
 
     // No leftover `.publish-incomplete` sentinels anywhere under the store.
