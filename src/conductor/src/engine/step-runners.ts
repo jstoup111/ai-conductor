@@ -543,13 +543,15 @@ export class DefaultStepRunner implements StepRunner {
       'TIER: <S|M|L>   # your best letter judgement, used only as a fallback';
 
     const resolved = this.resolvedConfigFor('complexity');
-    const result = await this.provider.invoke({
+    // Walk the fallback ladder so a dead/out-of-credits configured model
+    // (e.g. fable) degrades to the next available one instead of failing.
+    const result = await this.modelAvailability.invokeWithLadder(this.provider, {
       prompt: '/conduct complexity',
       sessionId: this.sessionId,
       resume: this.sessionStarted,
       dangerouslySkipPermissions: true,
       systemPrompt,
-      model: resolved.model,
+      model: this.modelAvailability.effectiveModel(resolved.model).model,
       effort: resolved.effort,
       cwd: this.projectDir,
     });
@@ -601,13 +603,16 @@ export class DefaultStepRunner implements StepRunner {
     const { v4: uuidv4 } = await import('uuid');
     const sessionId = uuidv4();
 
-    const result = await this.provider.invoke({
+    // Walk the fallback ladder so a dead/out-of-credits configured model
+    // (rebase defaults to fable) degrades to the next available one — the
+    // rebase resolver must not be blocked by one model's credit exhaustion.
+    const result = await this.modelAvailability.invokeWithLadder(this.provider, {
       prompt: '/rebase',
       sessionId,
       resume: false,
       dangerouslySkipPermissions: true,
       systemPrompt,
-      model: resolved.model,
+      model: this.modelAvailability.effectiveModel(resolved.model).model,
       effort: resolved.effort,
       cwd: ctx.projectRoot,
     });

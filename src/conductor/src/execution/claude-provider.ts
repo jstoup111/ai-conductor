@@ -35,6 +35,22 @@ export const AUTH_FAILURE_RE = /not logged in|invalid api key|please run \/login
 export const MODEL_UNAVAILABLE_RE =
   /not_found_error.{0,80}model|model not found|invalid model( name)?|issue with the selected model|may not exist or you may not have access/i;
 
+// Signature indicating the requested model has no usage credits / balance left
+// on this account. Unlike MODEL_UNAVAILABLE_RE, the CLI prints this on a
+// **zero exit code** (it's a soft notice, not a hard error) — e.g.
+//   "You're out of usage credits. Run /usage-credits to keep using Fable 5 or
+//    /model to switch models."
+// Treated as model-unavailable so ModelAvailability ladders to the next model
+// with credits (a different model on the same account is unaffected), instead
+// of the step silently "completing" with no artifact and halting.
+export const OUT_OF_CREDITS_RE =
+  /out of usage credits|out of credits|run \/usage-credits/i;
+
+/** Test helper: true if `output` matches the out-of-credits signature. */
+export function detectsOutOfCredits(output: string): boolean {
+  return OUT_OF_CREDITS_RE.test(output);
+}
+
 /** Test helper: true if `output` matches the auth-failure signature. */
 export function detectsAuthFailure(output: string): boolean {
   return AUTH_FAILURE_RE.test(output);
@@ -119,14 +135,23 @@ export class ClaudeProvider implements LLMProvider {
     // Then model availability and rate limit — these are also only valid
     // error states (exit !== 0).
     const authFailure = exitCode !== 0 && AUTH_FAILURE_RE.test(output);
-    const modelUnavailable = exitCode !== 0 && MODEL_UNAVAILABLE_RE.test(output);
+    // Out-of-credits is a soft notice on a ZERO exit code, so it is NOT gated on
+    // exitCode !== 0 (unlike the hard model-unavailable error). It still means
+    // "this model can't run" → fold into modelUnavailable so the ladder walks to
+    // a model with credits.
+    const outOfCredits = OUT_OF_CREDITS_RE.test(output);
+    const modelUnavailable =
+      outOfCredits || (exitCode !== 0 && MODEL_UNAVAILABLE_RE.test(output));
     const rateLimited = exitCode !== 0 && RATE_LIMIT_RE.test(output);
     const sessionExpired =
       STALE_SESSION_RE.test(output) || SESSION_IN_USE_RE.test(output);
     const tokenUsage = parseTokenUsage(stdout);
 
     return {
-      success: exitCode === 0,
+      // An out-of-credits notice rides on exit 0 but is not a real success —
+      // no work was done and no artifact written. Never report it as success,
+      // or the step's completion check reads a confusing "no artifact" halt.
+      success: exitCode === 0 && !outOfCredits,
       output,
       exitCode,
       authFailure: authFailure || undefined,

@@ -182,6 +182,22 @@ describe('ClaudeProvider', () => {
       expect(result.success).toBe(false);
     });
 
+    it('treats "out of usage credits" (on a ZERO exit code) as modelUnavailable and NOT success', async () => {
+      mockExeca.mockResolvedValue({
+        stdout:
+          "You're out of usage credits. Run /usage-credits to keep using Fable 5 or /model to switch models.",
+        stderr: '',
+        exitCode: 0,
+        failed: false,
+      } as any);
+
+      const result = await provider.invoke(baseOptions);
+      // Soft notice rides exit 0, but the model can't run → ladder must engage.
+      expect(result.modelUnavailable).toBe(true);
+      // And it is NOT a real success — no work was done, no artifact written.
+      expect(result.success).toBe(false);
+    });
+
     it('does not flag modelUnavailable for "model" appearing in unrelated prose', async () => {
       mockExeca.mockResolvedValue({
         stdout: '',
