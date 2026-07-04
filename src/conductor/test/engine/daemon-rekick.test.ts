@@ -287,6 +287,68 @@ describe('engine/daemon-rekick — rekickSweep (FR-7/FR-9)', () => {
       ),
     ).toBe(true);
   });
+
+  // ── FR-5 regression: operator-park must never weaken existing guards ──────
+
+  it('FR-5 regression: mixed sweep — parked sibling untouched, un-parked sibling clears normally in one pass', async () => {
+    const last = new Map<string, string>();
+    const { deps, trace } = fakeDeps({
+      halted: ['parked-a', 'halted-b'],
+      lastRekickSha: last,
+      isOperatorParked: async (slug) => slug === 'parked-a',
+    });
+    const res = await rekickSweep(deps, SHA_B);
+    expect(res.skipped).toEqual(['parked-a']);
+    expect(res.cleared).toEqual(['halted-b']);
+    expect(trace.cleared.has('parked-a')).toBe(false);
+    expect(trace.cleared.has('halted-b')).toBe(true);
+    expect(last.has('parked-a')).toBe(false);
+    expect(last.get('halted-b')).toBe(SHA_B);
+  });
+
+  it('FR-5 regression: no parked slugs — sweep output is byte-identical to the pre-park sweep', async () => {
+    const last = new Map<string, string>();
+    const { deps, trace } = fakeDeps({
+      halted: ['a', 'b', 'c'],
+      lastRekickSha: last,
+      isOperatorParked: async () => false,
+    });
+    const res = await rekickSweep(deps, SHA_B);
+    expect(res.cleared.sort()).toEqual(['a', 'b', 'c']);
+    expect(res.skipped).toEqual([]);
+    expect([...trace.cleared].sort()).toEqual(['a', 'b', 'c']);
+    expect(last.get('a')).toBe(SHA_B);
+    expect(last.get('b')).toBe(SHA_B);
+    expect(last.get('c')).toBe(SHA_B);
+  });
+
+  it('FR-5 regression: SHA guard still applies to an un-parked slug already re-kicked at this SHA', async () => {
+    const last = new Map<string, string>([['b', SHA_B]]);
+    const { deps, trace } = fakeDeps({
+      halted: ['a', 'b'],
+      lastRekickSha: last,
+      isOperatorParked: async () => false,
+    });
+    const res = await rekickSweep(deps, SHA_B);
+    // 'a' is not yet recorded at SHA_B, so it clears; 'b' was already re-kicked
+    // at SHA_B and the SHA guard skips it — the parked check does not bypass this.
+    expect(res.cleared).toEqual(['a']);
+    expect(res.skipped).toEqual(['b']);
+    expect(trace.cleared.has('b')).toBe(false);
+  });
+
+  it('FR-5 regression: isOperatorParked undefined behaves identically to today (backward-compat)', async () => {
+    const last = new Map<string, string>([['b', SHA_B]]);
+    const { deps, trace } = fakeDeps({
+      halted: ['a', 'b'],
+      lastRekickSha: last,
+      // no isOperatorParked at all
+    });
+    const res = await rekickSweep(deps, SHA_B);
+    expect(res.cleared).toEqual(['a']);
+    expect(res.skipped).toEqual(['b']);
+    expect(trace.cleared.has('b')).toBe(false);
+  });
 });
 
 // ── Real fs/git primitives (isolated repos) ───────────────────────────────────
