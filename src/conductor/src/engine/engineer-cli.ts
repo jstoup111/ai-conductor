@@ -697,6 +697,29 @@ export async function dispatchEngineer(
         // (FR-6) — do NOT remove it. Work is preserved on the branch; report the
         // retained worktree path so retention is actionable.
         printErr(`engineer handoff: worktree kept for inspection at "${worktree}".`);
+
+        // Task 9: Record branch evidence in the ledger if sourceRef is present.
+        // This enables the operator to retry via `engineer resolve` if the write-back
+        // fails. Non-fatal: if the ledger write fails, continue with exit 0.
+        if (sourceRef) {
+          try {
+            const engDir = engineerDir ?? resolveEngineerDir({});
+            const ledger = createLedger(join(engDir, 'ledger.json'));
+            const entry = await ledger.get(GITHUB_ISSUES_SOURCE, sourceRef);
+            if (entry) {
+              await ledger.transition(GITHUB_ISSUES_SOURCE, sourceRef, entry.status, {
+                branch,
+                ...(entry.prUrl ? { prUrl: entry.prUrl } : {}),
+              });
+            }
+          } catch (e: unknown) {
+            printErr(
+              `Failed to record branch evidence: ${e instanceof Error ? e.message : String(e)}`,
+            );
+            // Continue — handoff still succeeds
+          }
+        }
+
         print(
           JSON.stringify({
             kind: 'local-commit',
@@ -737,6 +760,26 @@ export async function dispatchEngineer(
         }
       } else {
         // pr-skipped — record authored key manually (openSpecPr already records on skip).
+        // Task 9: Also record branch evidence in the ledger if sourceRef is present.
+        if (sourceRef) {
+          try {
+            const engDir = engineerDir ?? resolveEngineerDir({});
+            const ledger = createLedger(join(engDir, 'ledger.json'));
+            const entry = await ledger.get(GITHUB_ISSUES_SOURCE, sourceRef);
+            if (entry) {
+              await ledger.transition(GITHUB_ISSUES_SOURCE, sourceRef, entry.status, {
+                branch,
+                ...(entry.prUrl ? { prUrl: entry.prUrl } : {}),
+              });
+            }
+          } catch (e: unknown) {
+            printErr(
+              `Failed to record branch evidence: ${e instanceof Error ? e.message : String(e)}`,
+            );
+            // Continue — handoff still succeeds
+          }
+        }
+
         print(
           JSON.stringify({
             kind: 'local-commit',
