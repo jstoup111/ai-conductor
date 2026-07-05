@@ -138,13 +138,22 @@ would defeat that).
 
 **Any FAIL result becomes a bug that loops back through `/tdd`:**
 
-**Before fixing, confirm the buggy code path is supposed to exist** (the `/debugging` Phase 4
+**Step A — Confirm the buggy code path is supposed to exist** (the `/debugging` Phase 4
 GATE). Manual-test surfaces defects on *shipped* code — read the governing APPROVED ADR/PRD for
 the affected component first. If the buggy path violates or is superseded by an approved
 decision, the fix is a **conformance finding (kickback), not a patch** — a bug on a condemned
 path is a removal signal. This cheap design check precedes the expensive RED→fix→suite cycle.
 
-1. For each bug, write a failing test that reproduces it (RED)
+**Step B — If the cause is not obvious, discover it before fixing.** A manual FAIL gives you the
+*symptom* (e.g. "500 instead of 422"), not the *cause*. When you cannot point to the root cause
+with confidence from the failure alone, do NOT guess a fix or a reproducing test — dispatch the
+`/debugging` protocol (root cause before fix; no fixes without evidence) in a fresh sub-session,
+handing it the failing story, the observed-vs-expected result, and any server output/logs. Come
+back with an evidence-backed root cause, then proceed. Skip this step only when the cause is
+genuinely self-evident from the failure.
+
+**Step C — Fix via TDD, now that the cause is known:**
+1. Write a failing test that reproduces the bug at the right layer (RED)
 2. Fix it (GREEN)
 3. Commit
 4. Re-run the manual test for that story to verify
@@ -152,7 +161,7 @@ path is a removal signal. This cheap design check precedes the expensive RED→f
 **Do NOT proceed to `/retro` with known bugs.** The manual test gate must be clean.
 
 ```
-/finish → /manual-test → bugs found? → /tdd (fix each bug) → /manual-test (re-verify) → /retro
+/finish → /manual-test → bugs found? → /debugging (discover cause, if not obvious) → /tdd (fix each bug) → /manual-test (re-verify) → /retro
 ```
 
 The loop continues until all stories pass manual testing.
