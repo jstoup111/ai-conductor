@@ -146,6 +146,14 @@ at a time) so the live session shows exactly the feature building — `--concurr
 above 1 is clamped to 1 with a logged note (real concurrency is out of scope; see
 `.docs/plans/2026-06-29-daemon-tmux-supervisor.md`).
 
+**Configuration key `pr_timing`** controls when the daemon opens the PR, relative to the
+build lifecycle: `pr_timing: 'finish'` (default) publishes the PR only after the full
+build/test cycle completes; `pr_timing: 'early-draft'` opens a draft PR at build-start so
+reviewers can watch the daemon work in real time. Self-host detection automatically downgrades
+`early-draft` to `finish`. All publish operations are advisory — failures never block the
+build. Set in `pipeline.yml` or `.ai-conductor/config.yml`; see `src/conductor/README.md`
+for full details and self-host interaction.
+
 ### Priority scheduling for issue-labeled backlog items
 
 When a GitHub issue is labeled with priority metadata, the daemon orders eligible

@@ -117,6 +117,7 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   the reused PR's title/body, and the finish completion gate fails (fail-open on gh
   read errors) while the recorded PR title still starts with `needs-remediation:`
   (adr-2026-07-03-halt-pr-rehabilitation-at-finish).
+- `pr_timing` configuration key (`'finish' | 'early-draft'`) for configurable daemon build-to-PR timing. Early-draft mode publishes draft PRs at build-start, post-step, and post-rebase; finish mode publishes only at the finish step (default). Self-host detection automatically downgrades early-draft to finish. All publish operations are advisory — failures never block the build.
 
 ### Changed
 
