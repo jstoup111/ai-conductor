@@ -1577,10 +1577,6 @@ fi
 ## [Unreleased]
 
 ### Fixed
-- CI: the `publish-interrupted` `bin/setup` worktree-symlink smoke test used
-  vitest's 5s default timeout, but the real `git worktree add` + `bin/setup` +
-  teardown it performs runs ~5.4s under CI load and tipped over intermittently
-  (#322). Raised its per-test timeout to 30s for stable headroom.
 - CI: the `engineer-agent-hosted` acceptance suite failed under the new PR
   workflow (#322) because `dispatchEngineer({kind:'land'})` resolves a
   machine-scoped owner-gate identity from `~/.ai-conductor/config.yml` (where
