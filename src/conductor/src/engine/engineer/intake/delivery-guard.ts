@@ -116,7 +116,14 @@ export function createDeliveryGuardedQueue(
   return {
     async claim(): Promise<GuardedEnvelope | null> {
       const candidate = await queue.claim();
-      if (!candidate) return null;
+      if (!candidate) {
+        // Before returning null, release all held candidates
+        for (const c of held) {
+          await queue.release(c);
+        }
+        held.length = 0;
+        return null;
+      }
 
       const source = String(candidate.source ?? '');
       const sourceRef = String(candidate.sourceRef ?? '');
@@ -130,20 +137,56 @@ export function createDeliveryGuardedQueue(
         return candidate;
       }
 
-      // Task 3: Check if entry can be auto-healed (has prUrl and PR is open/merged)
+      // Task 3 & 4: Check if entry can be auto-healed (has prUrl and PR is open/merged)
       if (entry.prUrl) {
         const prState = await verifyPrState(deps.gh, entry.prUrl);
 
         if (prState === 'open' || prState === 'merged') {
           // PR is delivered — heal the entry to 'done' with metadata preserved
           const priorStatus = entry.status;
-          await ledger.transition(source, sourceRef, 'done', {
-            prUrl: entry.prUrl,
-            branch: entry.branch,
-          });
 
-          // Ack the intake envelope (remove it from queue)
-          await queue.release(candidate);
+          // Task 4: Wrap ledger.transition in try/catch
+          try {
+            await ledger.transition(source, sourceRef, 'done', {
+              prUrl: entry.prUrl,
+              branch: entry.branch,
+            });
+          } catch (err) {
+            // Ledger write failed — candidate cannot be served
+            // Log error to stderr for operator visibility
+            process.stderr.write(
+              `[delivery-guard] Failed to heal entry ${sourceRef}: ${err instanceof Error ? err.message : String(err)}\n`,
+            );
+            // Add candidate to held list (not yet served)
+            held.push(candidate);
+            // Continue scanning for the next candidate
+            return this.claim();
+          }
+
+          // Task 4: Wrap queue.release in try/catch for ENOENT handling
+          try {
+            // Ack the intake envelope (remove it from queue)
+            await queue.release(candidate);
+          } catch (err) {
+            // Check if error is ENOENT (benign race — file was already deleted)
+            const isEnoent =
+              err instanceof Error &&
+              (('code' in err && (err as any).code === 'ENOENT') ||
+                err.message.includes('ENOENT'));
+
+            if (!isEnoent) {
+              // Non-ENOENT error — treat as a real failure, hold the candidate
+              process.stderr.write(
+                `[delivery-guard] Failed to release ack for ${sourceRef}: ${err instanceof Error ? err.message : String(err)}\n`,
+              );
+              held.push(candidate);
+              // Continue scanning for the next candidate
+              return this.claim();
+            }
+            // ENOENT is benign — file was already deleted by concurrent process
+            // Log at debug level and continue
+            logger.info(`Benign race: failed to ack ${sourceRef} (file already deleted)`);
+          }
 
           // Log audit trail
           logger.info(`Healed stale entry ${sourceRef}: ${priorStatus} → done`);
