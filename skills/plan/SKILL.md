@@ -4,7 +4,7 @@ description: "Use after stories are written and conflict-check has passed clean.
 enforcement: gating
 phase: decide
 standalone: false
-requires: [".docs/stories/ with both paths", ".docs/conflicts/ clean pass or no blocking conflicts"]
+requires: [".docs/stories/ with both paths", ".docs/conflicts/ clean pass or no blocking conflicts", verify-claims]
 ---
 
 ## Purpose

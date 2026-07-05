@@ -4,7 +4,7 @@ description: "Use after writing stories, before creating an implementation plan,
 enforcement: gating
 phase: decide
 standalone: true
-requires: []
+requires: [verify-claims]
 ---
 
 ## Purpose

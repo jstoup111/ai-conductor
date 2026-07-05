@@ -4,7 +4,7 @@ description: "Use after implementing a task, before merging, or when requesting 
 enforcement: gating
 phase: build
 standalone: true
-requires: []
+requires: [verify-claims]
 model: opus
 ---
 

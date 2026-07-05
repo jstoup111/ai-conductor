@@ -4,7 +4,7 @@ description: "Use after architecture-review, when the design is approved. Genera
 enforcement: gating
 phase: decide
 standalone: true
-requires: []
+requires: [verify-claims]
 ---
 
 ## Purpose

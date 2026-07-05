@@ -3,6 +3,7 @@ name: writing-system-tests
 description: "Use BEFORE implementing any feature that has stories in .docs/stories/ — generates failing acceptance specs from acceptance criteria as the RED phase of TDD. Generates HTTP/request-level acceptance tests for headless/API projects, end-to-end UI tests for projects with a frontend, using the project's own test framework and directory conventions."
 enforcement: gating
 phase: build
+requires: [verify-claims]
 ---
 
 # Writing Acceptance Tests

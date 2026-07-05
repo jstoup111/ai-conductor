@@ -4,7 +4,7 @@ description: "Use on the PRODUCT track after /explore, when a feature has user-f
 enforcement: gating
 phase: decide
 standalone: true
-requires: []
+requires: [verify-claims]
 ---
 
 ## Purpose

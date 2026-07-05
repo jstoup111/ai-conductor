@@ -4,7 +4,7 @@ description: "Use at SHIP, after manual-test and before retro/finish. Audits shi
 enforcement: gating
 phase: ship
 standalone: true
-requires: []
+requires: [verify-claims]
 model: opus
 ---
 

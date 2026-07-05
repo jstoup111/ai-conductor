@@ -4,7 +4,7 @@ description: "Use after /finish to validate stories via curl (API) or browser (f
 enforcement: gating
 phase: ship
 standalone: false
-requires: [finish]
+requires: [finish, verify-claims]
 ---
 
 ## Purpose

@@ -4,7 +4,7 @@ description: "Use before implementation to review stories through a technical fe
 enforcement: gating
 phase: decide
 standalone: true
-requires: []
+requires: [verify-claims]
 ---
 
 ## Purpose

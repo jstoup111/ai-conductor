@@ -4,7 +4,7 @@ description: "Use when encountering any bug, test failure, or unexpected behavio
 enforcement: gating
 phase: build
 standalone: true
-requires: []
+requires: [verify-claims]
 model: fable
 ---
 

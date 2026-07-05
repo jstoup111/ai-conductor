@@ -4,7 +4,7 @@ description: "Use at SHIP when prd-audit, the as-built architecture review, or t
 enforcement: gating
 phase: ship
 standalone: true
-requires: []
+requires: [verify-claims]
 ---
 
 ## Purpose

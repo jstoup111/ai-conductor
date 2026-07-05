@@ -4,7 +4,7 @@ description: "Use for codebase health assessment. Dispatches 9 specialist agents
 enforcement: gating
 phase: understand
 standalone: true
-requires: []
+requires: [verify-claims]
 model: sonnet
 ---
 

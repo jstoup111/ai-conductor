@@ -4,7 +4,7 @@ description: "Use at the start of any new feature or change. Explores context, a
 enforcement: advisory
 phase: decide
 standalone: true
-requires: []
+requires: [verify-claims]
 ---
 
 ## Purpose
