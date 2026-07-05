@@ -120,6 +120,63 @@ describe('daemon-cli discover-path gated snapshot wiring (Task 12)', () => {
     );
   });
 
+  it('Task 13: a snapshot write failure (unwritable .daemon/) is advisory — discover() still resolves with the full item list and never throws', async () => {
+    const blockerFile = join(root, 'blocker-file');
+    await (await import('node:fs/promises')).writeFile(blockerFile, 'x');
+    // Point the snapshot sink at a directory whose parent is a plain file, so
+    // `mkdir(daemonDir, { recursive: true })` inside writeGatedSnapshot can
+    // never succeed — mirrors the real "unwritable .daemon/" negative path.
+    const unwritableDaemonDir = join(blockerFile, 'nested', '.daemon');
+
+    const deps = baseDeps({
+      onGatedDiscovered: (gated) => writeGatedSnapshot(unwritableDaemonDir, { gated }),
+      discoverBacklog: vi.fn().mockResolvedValue({
+        items: [{ slug: 'buildable' } satisfies BacklogItem],
+        waiting: [],
+        gated: [
+          { kind: 'spec', slug: 'foo', reason: 'other-owner', otherOwner: 'alice', remedy: 'declare owner' },
+        ],
+      }),
+    });
+
+    const source = localWorkSource(deps);
+    const items = await source.discover({ refresh: false });
+
+    // Discovery/dispatch is entirely unaffected by the snapshot failure: the
+    // scan result (and thus dashboard/dispatch consumption of it) proceeds
+    // exactly as if the sink were unwired.
+    expect(items).toEqual([{ slug: 'buildable' }]);
+  });
+
+  it('Task 13: concurrent writes never produce a torn/partial gated.json — the file always parses as one complete snapshot from either pass', async () => {
+    const deps = baseDeps();
+    // Fire two overlapping discover() passes against the SAME daemonDir; the
+    // atomic temp+rename write in gated-snapshot.ts must ensure a concurrent
+    // reader can only ever observe one complete file, never an interleaving
+    // of both writers' bytes.
+    (deps.discoverBacklog as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce({
+        items: [],
+        waiting: [],
+        gated: [{ kind: 'spec', slug: 'from-pass-a', reason: 'other-owner', otherOwner: 'a', remedy: 'r' }],
+      })
+      .mockResolvedValueOnce({
+        items: [],
+        waiting: [],
+        gated: [{ kind: 'spec', slug: 'from-pass-b', reason: 'other-owner', otherOwner: 'b', remedy: 'r' }],
+      });
+    const source = localWorkSource(deps);
+
+    const passA = source.discover({ refresh: false });
+    const passB = source.discover({ refresh: false });
+    await Promise.all([passA, passB]);
+
+    const raw = await readFile(join(daemonDir, 'gated.json'), 'utf-8');
+    const parsed = JSON.parse(raw); // throws (fails the test) on any torn/partial content
+    expect(parsed.gated).toHaveLength(1);
+    expect(['from-pass-a', 'from-pass-b']).toContain(parsed.gated[0].slug);
+  });
+
   it('daemon-cli.ts wires onGatedDiscovered to writeGatedSnapshot at a single call site in localWorkSource construction', () => {
     // Static wiring check: guards against the call site being silently
     // dropped/duplicated in a future refactor of daemon-cli.ts.

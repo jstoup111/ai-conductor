@@ -103,6 +103,24 @@ describe('writeGatedSnapshot', () => {
     expect(threw).toBe(false);
   });
 
+  it('logs the failure reason once via the injected log sink (Task 13: advisory failure is observable, not silent)', async () => {
+    const blockerFile = join(root, 'blocker-2');
+    await (await import('node:fs/promises')).writeFile(blockerFile, 'x');
+    const impossibleDir = join(blockerFile, 'cant-make-this');
+
+    const log = vi.fn();
+    let threw = false;
+    try {
+      await writeGatedSnapshot(impossibleDir, { gated: [] }, FIXED_CLOCK, log);
+    } catch {
+      threw = true;
+    }
+
+    expect(threw).toBe(false);
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(log.mock.calls[0][0]).toContain('writeGatedSnapshot');
+  });
+
   it('uses temp+rename, not a direct write to the final path (mocked-fs assertion)', async () => {
     const finalPath = join(daemonDir, 'gated.json');
     const writeFileMock = fsPromises.writeFile as unknown as ReturnType<typeof vi.fn>;

@@ -58,13 +58,17 @@ function snapshotPath(daemonDir: string): string {
  * in sync.
  *
  * Advisory: a write failure (e.g. `.daemon/` itself does not exist and
- * cannot be created) is swallowed, not thrown — a snapshot write must never
- * abort or block the discovery pass that produced it.
+ * cannot be created) is logged (once per call, via `log`) and swallowed, not
+ * thrown — a snapshot write must never abort or block the discovery pass
+ * that produced it. Dispatch/dashboard rendering for that pass proceeds
+ * exactly as if the snapshot sink did not exist; only the on-disk
+ * `gated.json` is left stale until a later pass succeeds.
  */
 export async function writeGatedSnapshot(
   daemonDir: string,
   state: { gated: GatedItem[] },
   clock: Clock = () => new Date(),
+  log: (message: string) => void = (m) => console.error(m),
 ): Promise<void> {
   const gated: GatedSpecItem[] = [];
   const repoWarnings: GatedRepoItem[] = [];
@@ -88,9 +92,12 @@ export async function writeGatedSnapshot(
     await mkdir(daemonDir, { recursive: true });
     await writeFile(tmpPath, JSON.stringify(snapshot, null, 2), 'utf-8');
     await rename(tmpPath, snapshotPath(daemonDir));
-  } catch {
+  } catch (err) {
     // Advisory: never throw — a snapshot write must not block the caller's
-    // discovery pass. Best-effort cleanup of a dangling temp file.
+    // discovery pass. Log once so the failure is observable, then best-effort
+    // clean up a dangling temp file.
+    const reason = err instanceof Error ? err.message : String(err);
+    log(`writeGatedSnapshot: failed to write ${snapshotPath(daemonDir)}: ${reason}`);
     await unlink(tmpPath).catch(() => {});
   }
 }
