@@ -38,6 +38,8 @@ import {
   featureCommitsPreserved,
   type ResolutionAttempt,
   type RebaseOutcome,
+  runTier1,
+  conflictedFiles,
 } from '../../src/engine/rebase.js';
 
 const execFile = promisify(execFileCb);
@@ -906,5 +908,352 @@ describe('engine/rebase — .docs keep-both resolver (negative scope cases)', ()
       // The src/code.ts conflict should still be listed
       expect(outcome.conflicts).toContain('src/code.ts');
     }
+  });
+});
+
+describe('engine/rebase — runTier1 driver (CHANGELOG + .docs keep-both resolvers)', () => {
+  let repo: string;
+  const g = (args: string[]) => execFile('git', args, { cwd: repo });
+  const gc = (args: string[]) =>
+    execFile('git', ['-c', 'core.editor=true', ...args], { cwd: repo });
+
+  afterEach(async () => {
+    await rm(repo, { recursive: true, force: true });
+  });
+
+  /**
+   * Mixed: CHANGELOG + code conflict.
+   * runTier1 should resolve the CHANGELOG, leaving only the code conflict.
+   * Returns {resolved: ['CHANGELOG.md'], remaining: ['src/code.ts']}
+   */
+  it('CHANGELOG + code conflict: CHANGELOG resolved, code remains', async () => {
+    repo = await mkdtemp(join(tmpdir(), 'rebase-tier1-changelog-code-'));
+    await execFile('git', ['init', '-q', '-b', 'main'], { cwd: repo });
+    await g(['config', 'user.email', 't@t.com']);
+    await g(['config', 'user.name', 'T']);
+
+    // Base: CHANGELOG + code file
+    const baseChangelog = `# Changelog
+
+## [Unreleased]
+
+## [1.0.0]
+- Initial release
+`;
+    await execFile('mkdir', ['-p', join(repo, 'src')], {});
+    await writeFile(join(repo, 'CHANGELOG.md'), baseChangelog);
+    await writeFile(join(repo, 'src/code.ts'), 'base\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'init']);
+
+    // Feature: add to CHANGELOG [Unreleased] + edit code
+    await g(['checkout', '-q', '-b', 'feat']);
+    const featureChangelog = `# Changelog
+
+## [Unreleased]
+
+### Added
+- Feature X
+
+## [1.0.0]
+- Initial release
+`;
+    await writeFile(join(repo, 'CHANGELOG.md'), featureChangelog);
+    await writeFile(join(repo, 'src/code.ts'), 'feature\n');
+    await g(['commit', '-q', '-am', 'feat: add X and change code']);
+
+    // Main: also adds to CHANGELOG [Unreleased] + edit code differently (both conflict)
+    await g(['checkout', '-q', 'main']);
+    const mainChangelog = `# Changelog
+
+## [Unreleased]
+
+### Fixed
+- Bug Y
+
+## [1.0.0]
+- Initial release
+`;
+    await writeFile(join(repo, 'CHANGELOG.md'), mainChangelog);
+    await writeFile(join(repo, 'src/code.ts'), 'main\n');
+    await g(['commit', '-q', '-am', 'main: fix Y and change code']);
+
+    // Back to feat, manually trigger rebase (catch the error)
+    await g(['checkout', '-q', 'feat']);
+    const git = makeGitRunner(repo);
+    try {
+      await g(['rebase', 'main']);
+    } catch {
+      // Expected: rebase fails due to conflicts
+    }
+
+    // Now we should have both CHANGELOG and src/code.ts in conflicts
+    const conflicted = await conflictedFiles(git);
+    expect(conflicted.length).toBeGreaterThan(0);
+    expect(conflicted).toContain('CHANGELOG.md');
+    expect(conflicted).toContain('src/code.ts');
+
+    // Run tier1 resolver
+    const result = await runTier1(git, repo);
+
+    // CHANGELOG should be resolved
+    expect(result.resolved).toContain('CHANGELOG.md');
+    // But code conflict remains
+    expect(result.remaining).toContain('src/code.ts');
+  });
+
+  /**
+   * CHANGELOG-only conflict (no code conflicts): should be fully resolved.
+   * Returns {resolved: ['CHANGELOG.md'], remaining: []}
+   */
+  it('CHANGELOG-only conflict: fully resolved', async () => {
+    repo = await mkdtemp(join(tmpdir(), 'rebase-tier1-changelog-only-'));
+    await execFile('git', ['init', '-q', '-b', 'main'], { cwd: repo });
+    await g(['config', 'user.email', 't@t.com']);
+    await g(['config', 'user.name', 'T']);
+
+    // Base: CHANGELOG with [Unreleased]
+    const baseChangelog = `# Changelog
+
+## [Unreleased]
+
+## [1.0.0]
+- Initial release
+`;
+    await writeFile(join(repo, 'CHANGELOG.md'), baseChangelog);
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'init']);
+
+    // Feature: add to [Unreleased]
+    await g(['checkout', '-q', '-b', 'feat']);
+    const featureChangelog = `# Changelog
+
+## [Unreleased]
+
+### Added
+- Feature X
+
+## [1.0.0]
+- Initial release
+`;
+    await writeFile(join(repo, 'CHANGELOG.md'), featureChangelog);
+    await g(['commit', '-q', '-am', 'feat: add X']);
+
+    // Main: add different entry to [Unreleased]
+    await g(['checkout', '-q', 'main']);
+    const mainChangelog = `# Changelog
+
+## [Unreleased]
+
+### Fixed
+- Bug Y
+
+## [1.0.0]
+- Initial release
+`;
+    await writeFile(join(repo, 'CHANGELOG.md'), mainChangelog);
+    await g(['commit', '-q', '-am', 'main: fix Y']);
+
+    // Back to feat, manually trigger rebase (catch the error)
+    await g(['checkout', '-q', 'feat']);
+    const git = makeGitRunner(repo);
+    try {
+      await g(['rebase', 'main']);
+    } catch {
+      // Expected: rebase fails due to CHANGELOG conflict
+    }
+
+    // Verify CHANGELOG conflict
+    const conflicted = await conflictedFiles(git);
+    expect(conflicted).toContain('CHANGELOG.md');
+
+    // Now test runTier1
+    const result = await runTier1(git, repo);
+    expect(result.resolved).toContain('CHANGELOG.md');
+    expect(result.remaining.length).toBe(0);
+    // Rebase should be complete and current
+    expect((await g(['rev-list', '--count', 'HEAD..main'])).stdout.trim()).toBe('0');
+  });
+
+  /**
+   * .docs/-only add/add conflict: resolved by keep-both resolver.
+   * Returns {resolved: ['.docs/...'], remaining: []}
+   */
+  it('.docs/-only add/add conflict: resolved by keep-both', async () => {
+    repo = await mkdtemp(join(tmpdir(), 'rebase-tier1-docs-addadd-'));
+    await execFile('git', ['init', '-q', '-b', 'main'], { cwd: repo });
+    await g(['config', 'user.email', 't@t.com']);
+    await g(['config', 'user.name', 'T']);
+
+    // Base: no .docs file
+    await writeFile(join(repo, 'README.md'), 'base\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'init']);
+
+    // Feature: adds .docs/design.md
+    await g(['checkout', '-q', '-b', 'feat']);
+    await execFile('mkdir', ['-p', join(repo, '.docs')], {});
+    await writeFile(join(repo, '.docs/design.md'), 'feature design\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'feat: add design']);
+
+    // Main: adds same .docs/design.md with different content (add/add conflict)
+    await g(['checkout', '-q', 'main']);
+    await execFile('mkdir', ['-p', join(repo, '.docs')], {});
+    await writeFile(join(repo, '.docs/design.md'), 'main design\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'main: add design']);
+
+    // Back to feat, manually trigger rebase to pause
+    await g(['checkout', '-q', 'feat']);
+    const git = makeGitRunner(repo);
+    try {
+      await g(['rebase', 'main']);
+    } catch {
+      // Expected: rebase fails due to .docs conflict
+    }
+
+    // Verify conflict
+    const conflicted = await conflictedFiles(git);
+    expect(conflicted).toContain('.docs/design.md');
+
+    // Run tier1 resolver
+    const result = await runTier1(git, repo);
+
+    expect(result.resolved.some((f) => f.includes('.docs/design'))).toBe(true);
+    expect(result.remaining).not.toContain('.docs/design.md');
+    // Rebase complete, both versions kept
+    expect((await g(['rev-list', '--count', 'HEAD..main'])).stdout.trim()).toBe('0');
+  });
+
+  /**
+   * Mixed CHANGELOG + .docs/ conflicts: both resolved by their respective resolvers.
+   * Returns {resolved: ['CHANGELOG.md', '.docs/...'], remaining: []}
+   */
+  it('mixed CHANGELOG + .docs/ conflicts: both resolved', async () => {
+    repo = await mkdtemp(join(tmpdir(), 'rebase-tier1-mixed-'));
+    await execFile('git', ['init', '-q', '-b', 'main'], { cwd: repo });
+    await g(['config', 'user.email', 't@t.com']);
+    await g(['config', 'user.name', 'T']);
+
+    // Base: CHANGELOG + .docs exists
+    const baseChangelog = `# Changelog
+
+## [Unreleased]
+
+## [1.0.0]
+- Initial
+`;
+    await execFile('mkdir', ['-p', join(repo, '.docs')], {});
+    await writeFile(join(repo, 'CHANGELOG.md'), baseChangelog);
+    await writeFile(join(repo, '.docs/design.md'), 'base design\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'init']);
+
+    // Feature: add to CHANGELOG [Unreleased] + add .docs/spec.md
+    await g(['checkout', '-q', '-b', 'feat']);
+    const featureChangelog = `# Changelog
+
+## [Unreleased]
+
+### Added
+- Feature X
+
+## [1.0.0]
+- Initial
+`;
+    await writeFile(join(repo, 'CHANGELOG.md'), featureChangelog);
+    await writeFile(join(repo, '.docs/spec.md'), 'feature spec\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'feat: add X and spec']);
+
+    // Main: also adds to CHANGELOG + add .docs/spec.md (both add/add)
+    await g(['checkout', '-q', 'main']);
+    const mainChangelog = `# Changelog
+
+## [Unreleased]
+
+### Fixed
+- Bug Y
+
+## [1.0.0]
+- Initial
+`;
+    await writeFile(join(repo, 'CHANGELOG.md'), mainChangelog);
+    await writeFile(join(repo, '.docs/spec.md'), 'main spec\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'main: fix Y and add spec']);
+
+    // Back to feat, manually trigger rebase (catch error)
+    await g(['checkout', '-q', 'feat']);
+    const git = makeGitRunner(repo);
+    try {
+      await g(['rebase', 'main']);
+    } catch {
+      // Expected: rebase fails due to conflicts
+    }
+
+    // Verify both conflicts
+    const conflicted = await conflictedFiles(git);
+    expect(conflicted.length).toBe(2);
+    expect(conflicted).toContain('CHANGELOG.md');
+    expect(conflicted.some((f) => f.includes('.docs/spec'))).toBe(true);
+
+    // Run tier1 resolver
+    const result = await runTier1(git, repo);
+
+    // Both should be resolved
+    expect(result.resolved).toContain('CHANGELOG.md');
+    expect(result.resolved.some((f) => f.includes('.docs/spec'))).toBe(true);
+    expect(result.remaining.length).toBe(0);
+    // Rebase complete and current
+    expect((await g(['rev-list', '--count', 'HEAD..main'])).stdout.trim()).toBe('0');
+  });
+
+  /**
+   * Conflict on non-.docs/, non-CHANGELOG file: should remain unresolved.
+   * Returns {resolved: [], remaining: ['src/code.ts']}
+   */
+  it('non-.docs/ non-CHANGELOG conflict: remains unresolved', async () => {
+    repo = await mkdtemp(join(tmpdir(), 'rebase-tier1-other-'));
+    await execFile('git', ['init', '-q', '-b', 'main'], { cwd: repo });
+    await g(['config', 'user.email', 't@t.com']);
+    await g(['config', 'user.name', 'T']);
+
+    // Base: source file
+    await execFile('mkdir', ['-p', join(repo, 'src')], {});
+    await writeFile(join(repo, 'src/code.ts'), 'base\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'init']);
+
+    // Feature: edit src/code.ts
+    await g(['checkout', '-q', '-b', 'feat']);
+    await writeFile(join(repo, 'src/code.ts'), 'feature\n');
+    await g(['commit', '-q', '-am', 'feat: change code']);
+
+    // Main: edit src/code.ts differently (conflict)
+    await g(['checkout', '-q', 'main']);
+    await writeFile(join(repo, 'src/code.ts'), 'main\n');
+    await g(['commit', '-q', '-am', 'main: change code']);
+
+    // Back to feat, manually trigger rebase to pause (catch error)
+    await g(['checkout', '-q', 'feat']);
+    const git = makeGitRunner(repo);
+    try {
+      await g(['rebase', 'main']);
+    } catch {
+      // Expected: rebase fails due to conflicts
+    }
+
+    // Verify conflict
+    const conflicted = await conflictedFiles(git);
+    expect(conflicted).toContain('src/code.ts');
+
+    // Run tier1 resolver
+    const result = await runTier1(git, repo);
+
+    // Should remain unresolved
+    expect(result.resolved).not.toContain('src/code.ts');
+    expect(result.remaining).toContain('src/code.ts');
   });
 });

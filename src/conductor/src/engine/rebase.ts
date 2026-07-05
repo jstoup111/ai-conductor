@@ -1017,3 +1017,143 @@ function parsePath(path: string): { dir: string; name: string; ext: string } {
 
   return { dir, name, ext };
 }
+
+// ── Tier 1 resolver driver ──────────────────────────────────────────────────
+
+/**
+ * Tier 1 deterministic resolution driver: compose the CHANGELOG resolver +
+ * keep-both resolver for .docs/ conflicts on a paused rebase.
+ *
+ * Returns {resolved: string[], remaining: string[]} tracking which conflicted
+ * files were resolved and which remain. A file is considered resolved if:
+ *   - It was in the original conflict list AND
+ *   - A resolver successfully handled it (staged the resolution)
+ *
+ * Strategy: Stage all resolvable conflicts, then attempt ONE rebase --continue.
+ * If it succeeds, all staged files are considered resolved. If it fails
+ * (due to unresolvable conflicts), we keep the staging and report what was
+ * attempted. The rebase remains paused with a mix of staged + unstaged conflicts.
+ *
+ * Operates in one pass:
+ *   1. Identify CHANGELOG conflicts and attempt resolution (stage only, no continue)
+ *   2. Identify .docs/ conflicts and attempt resolution (stage only, no continue)
+ *   3. Attempt ONE rebase --continue
+ *   4. Check what conflicts remain
+ */
+export async function runTier1(
+  git: GitRunner,
+  projectRoot: string,
+): Promise<{ resolved: string[]; remaining: string[] }> {
+  const originalConflicts = await conflictedFiles(git);
+
+  // If no conflicts, nothing to do.
+  if (originalConflicts.length === 0) {
+    return { resolved: [], remaining: [] };
+  }
+
+  const staged: string[] = [];
+
+  // Attempt to stage CHANGELOG resolution if CHANGELOG.md is in conflicts.
+  if (originalConflicts.includes(CHANGELOG)) {
+    const changelogStaged = await tier1StageChangelog(git, projectRoot);
+    if (changelogStaged) {
+      staged.push(CHANGELOG);
+    }
+  }
+
+  // Attempt to stage .docs/ resolutions for .docs/ conflicts.
+  const docsConflicts = originalConflicts.filter((f) => f.startsWith('.docs/'));
+  if (docsConflicts.length > 0) {
+    const docsStaged = await tier1StageDocsKeepBoth(git, projectRoot, docsConflicts);
+    if (docsStaged) {
+      staged.push(...docsConflicts);
+    }
+  }
+
+  // If nothing was staged, nothing was resolved.
+  if (staged.length === 0) {
+    return { resolved: [], remaining: originalConflicts };
+  }
+
+  // Attempt to continue the rebase with staged resolutions.
+  const cont = await git(['-c', 'core.editor=true', 'rebase', '--continue']);
+  const continueSucceeded = cont.exitCode === 0;
+
+  // If --continue succeeded, the rebase advanced (either completed or paused on new conflicts).
+  // All staged files are considered resolved.
+  if (continueSucceeded) {
+    const remaining = await conflictedFiles(git);
+    return { resolved: staged, remaining };
+  }
+
+  // If --continue failed (e.g., new conflicts surfaced), the staged files are still staged
+  // but the rebase didn't advance. Report them as attempted (staged) but not fully resolved.
+  const finalConflicts = await conflictedFiles(git);
+  return { resolved: staged, remaining: finalConflicts };
+}
+
+/**
+ * Attempt to stage a CHANGELOG.md conflict resolution using the existing auto-resolver.
+ * During a paused rebase, extracts feature additions from the conflict stages
+ * (`:3:` is the feature version), builds the resolved version, and stages it.
+ * Does NOT run rebase --continue.
+ *
+ * Returns true if staged, false if the resolver could not safely apply.
+ */
+async function tier1StageChangelog(
+  git: GitRunner,
+  projectRoot: string,
+): Promise<boolean> {
+  // Get the base/upstream version (`:2:` during rebase is ours/the base).
+  const baseSide = await git(['show', `:2:${CHANGELOG}`]);
+  if (baseSide.exitCode !== 0) return false;
+
+  // Get the feature version (`:3:` during rebase is theirs/the feature).
+  const featureSide = await git(['show', `:3:${CHANGELOG}`]);
+  if (featureSide.exitCode !== 0) return false;
+
+  // Extract feature additions by comparing feature side with base side.
+  const featureAdditions = unreleasedAdditions(baseSide.stdout, featureSide.stdout);
+
+  // Try the auto-resolve (same logic as performRebase).
+  const resolved = buildResolvedChangelog(baseSide.stdout, featureAdditions);
+  if (resolved === null) return false;
+
+  await writeFile(join(projectRoot, CHANGELOG), resolved, 'utf-8');
+  const add = await git(['add', CHANGELOG]);
+  if (add.exitCode !== 0) return false;
+
+  return true;
+}
+
+/**
+ * Attempt to stage .docs/ conflict resolutions using the keep-both resolver.
+ * Resolves all .docs/ conflicts at once by keeping both sides of add/add
+ * and rename/rename conflicts, and stages the results.
+ * Does NOT run rebase --continue.
+ *
+ * Returns true if all .docs/ conflicts were staged, false if any conflict
+ * is out of scope.
+ */
+async function tier1StageDocsKeepBoth(
+  git: GitRunner,
+  projectRoot: string,
+  docsConflicts: string[],
+): Promise<boolean> {
+  try {
+    // Resolve each .docs/ conflict.
+    for (const conflictedFile of docsConflicts) {
+      await resolveDocsConflictKeepBoth(git, projectRoot, conflictedFile);
+    }
+
+    // Stage all changes in .docs/.
+    const stageResult = await git(['add', '-A', '.docs/']);
+    if (stageResult.exitCode !== 0) return false;
+
+    return true;
+  } catch {
+    // Any error (edit conflict, unexpected state) → resolver cannot proceed.
+    return false;
+  }
+}
+
