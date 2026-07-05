@@ -591,6 +591,9 @@ Reverting is not supported: if you revert past this version, the `dist` symlink 
   explicit Effort column and explicit complexity/as-built rows (previously folded into prose or
   omitted); regenerate via `bin/generate-model-table` after editing the source files, do not
   edit the generated block directly.
+- Documented the `mergeable_autoresolve` config block and behavior (detection, Tier-1/Tier-2
+  resolution, acceptance guards, fail-closed suite gate, lease-protected push, and
+  `needs-remediation` escalation) in `README.md` and `src/conductor/README.md`.
 
 ## Migration
 
