@@ -19,6 +19,21 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   (`engine/engineer/issue-ref.ts`). Independent of the existing PR announcement path — a
   failure on one surface never affects the other, and repo-level warnings never trigger a
   GitHub write for the issue step (Task 20).
+- Wired gate write-back into the daemon's discovery tick: `daemon-cli.ts`'s single
+  `onGatedDiscovered` call site now announces every owner-gated spec via
+  `announceGatedPr`/`announceGatedIssue` (src/conductor/src/engine/gate-writeback.ts),
+  right after writing `.daemon/gated.json`. The spec's implementation PR URL (when a prior
+  build attempt already opened one) is read from its per-slug `.pipeline/conduct-state.json`
+  in `.worktrees/<slug>/`; its `Source-Ref` is threaded through the new optional
+  `GatedSpecItem.sourceRef` field (`daemon-backlog.ts`). Both announcements are best-effort —
+  a `gh` failure never blocks or aborts the discovery pass (Task 21).
+- The `GATED` dashboard group (`daemon-dashboard.ts`) now always renders explicitly —
+  including `GATED (0)` — whenever a `gated` list is present (even empty), instead of being
+  omitted for a zero count; a `kind: 'repo'` warning row now reads "building NOTHING —
+  identity unresolved" / "un-owned specs skipped — no owner_gate_cutover configured" rather
+  than the raw `warning` enum value; and a gated spec slug already covered by the PROCESSED
+  group (stale-ledger dedup) is excluded from GATED, matching the existing HALTED/PROCESSED
+  precedence contract.
 
 ### Fixed
 

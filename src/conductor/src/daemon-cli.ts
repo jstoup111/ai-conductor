@@ -64,6 +64,7 @@ import {
 } from './engine/daemon-sha.js';
 import { scanInheritedState, renderDashboard } from './engine/daemon-dashboard.js';
 import { writeGatedSnapshot } from './engine/gated-snapshot.js';
+import { announceGatedPr, announceGatedIssue } from './engine/gate-writeback.js';
 import {
   rekickSweep,
   resumeRebaseFirst,
@@ -643,6 +644,32 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   // early-return's repo-warning-only list alike).
   const daemonDir = join(projectRoot, '.daemon');
 
+  // Task 21 (adr-2026-07-03-gate-writeback-daemon-tick, Tasks 17-20): announce
+  // each owner-gated spec on its implementation PR (if one was already opened
+  // by an earlier build attempt, e.g. a halted worktree whose ownership later
+  // changed) and on its originating Source-Ref issue (intake specs only).
+  // Both `announceGatedPr`/`announceGatedIssue` are fire-and-forget/
+  // never-throw (see gate-writeback.ts), so a `gh` failure here never blocks
+  // or aborts the discovery pass that produced the gated list. Runs AFTER the
+  // snapshot write (Task 12) so `.daemon/gated.json` is never delayed behind
+  // network calls to GitHub.
+  const gatedWritebackDeps = { cwd: projectRoot, log };
+  const announceGated = async (gated: Awaited<ReturnType<typeof discoverBacklog>>['gated']) => {
+    for (const entry of gated) {
+      if (entry.kind !== 'spec') continue;
+      // The spec's implementation PR, if a prior build attempt already opened
+      // one (e.g. halted mid-build before ownership changed underneath it).
+      // A spec that has never been dispatched has no worktree/state on disk
+      // — `readState` on a missing file resolves not-ok and `prUrl` stays
+      // undefined, which `announceGatedPr` treats as "skip, no PR yet".
+      const perSlugStateFile = join(worktreeBase, entry.slug, '.pipeline', 'conduct-state.json');
+      const slugState = await readState(perSlugStateFile);
+      const prUrl = slugState.ok ? slugState.value.pr_url : undefined;
+      await announceGatedPr(entry, prUrl as string, gatedWritebackDeps);
+      await announceGatedIssue(entry, entry.sourceRef, gatedWritebackDeps);
+    }
+  };
+
   const workSource =
     opts.workSource ??
     localWorkSource({
@@ -677,7 +704,10 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       // on EVERY discover() pass this WorkSource drives. `writeGatedSnapshot`
       // is itself advisory (never throws, see gated-snapshot.ts), so a write
       // failure never blocks or aborts the discovery pass that produced it.
-      onGatedDiscovered: (gated) => writeGatedSnapshot(daemonDir, { gated }),
+      onGatedDiscovered: async (gated) => {
+        await writeGatedSnapshot(daemonDir, { gated });
+        await announceGated(gated);
+      },
     });
   const discoverTick = (o: { refresh: boolean }) => workSource.discover(o);
 

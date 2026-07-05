@@ -185,4 +185,42 @@ describe('daemon-cli discover-path gated snapshot wiring (Task 12)', () => {
     expect(matches).toHaveLength(1);
     expect(src).toContain('writeGatedSnapshot(daemonDir, { gated })');
   });
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // Task 21 (adr-2026-07-03-gate-writeback-daemon-tick): the daemon tick must
+  // also announce every owner-gated spec on its implementation PR (Task 17-19)
+  // and its originating Source-Ref issue (Task 20) — not just snapshot the
+  // gated list. Static wiring check mirroring the Task 12 guard above: real
+  // end-to-end coverage of the underlying `gh` calls already lives in
+  // gate-writeback.test.ts / owner-gate-pr-writeback.acceptance.test.ts /
+  // owner-gate-issue-writeback.acceptance.test.ts — this only pins the
+  // single call site in daemon-cli.ts so a future refactor can't silently
+  // drop the wiring.
+  // ───────────────────────────────────────────────────────────────────────────
+  it('daemon-cli.ts wires announceGatedPr and announceGatedIssue exactly once each, imported from gate-writeback.js', () => {
+    const src = readFileSync(join(__dirname, '../../src/daemon-cli.ts'), 'utf-8');
+    expect(src).toContain("import { announceGatedPr, announceGatedIssue } from './engine/gate-writeback.js';");
+    expect(src.match(/announceGatedPr\(/g) ?? []).toHaveLength(1);
+    expect(src.match(/announceGatedIssue\(/g) ?? []).toHaveLength(1);
+  });
+
+  it('the gated write-back announcer skips specs cleanly when no PR/state exists on disk (never throws, never calls gh)', async () => {
+    const { announceGatedPr, announceGatedIssue } = await import('../../src/engine/gate-writeback.js');
+    const logs: string[] = [];
+    const entry = {
+      kind: 'spec' as const,
+      slug: 'never-built-slug',
+      reason: 'other-owner' as const,
+      otherOwner: 'alice',
+      remedy: 'declare an owner',
+    };
+    // No prUrl (never dispatched) and no sourceRef (hand-authored spec) — both
+    // orchestrator calls must no-op without ever invoking `gh`.
+    await expect(
+      announceGatedPr(entry, undefined as unknown as string, { cwd: '/repo', log: (m) => logs.push(m) }),
+    ).resolves.toBeUndefined();
+    await expect(
+      announceGatedIssue(entry, undefined, { cwd: '/repo', log: (m) => logs.push(m) }),
+    ).resolves.toBeUndefined();
+  });
 });

@@ -307,6 +307,11 @@ export interface GatedSpecItem {
   reason: 'other-owner' | 'unowned-post-cutover' | 'unowned-indeterminate';
   otherOwner?: string;
   remedy: string;
+  // Task 21: the spec's originating `Source-Ref: owner/repo#N` intake marker,
+  // when present — carried through so the gate write-back orchestrator
+  // (gate-writeback.ts) can announce on the originating issue, exactly the
+  // same `sourceRef` already resolved above for the dependency-gate loop.
+  sourceRef?: string;
 }
 export interface GatedRepoItem {
   kind: 'repo';
@@ -578,6 +583,7 @@ export async function discoverBacklog(
             reason: 'other-owner',
             otherOwner: decision.other,
             remedy: `declare an Owner: ${daemonOwner.id} or the daemon's own owner for this spec`,
+            sourceRef,
           });
         } else {
           gatedItems.push({
@@ -585,6 +591,7 @@ export async function discoverBacklog(
             slug,
             reason: decision.reason,
             remedy: gateRemedy(decision),
+            sourceRef,
           });
         }
         if (

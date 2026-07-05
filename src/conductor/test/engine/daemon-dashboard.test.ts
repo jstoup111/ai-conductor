@@ -463,11 +463,11 @@ describe('engine/daemon-dashboard — renderDashboard GATED group (FR-7/FR-11, T
     };
     const out = renderDashboard(state);
     expect(out).toContain('GATED (1)');
-    expect(out).toContain('no-cutover');
+    expect(out.toLowerCase()).toContain('un-owned');
     expect(out).toContain('configure a grandfather cutover date');
   });
 
-  it('empty gated list → no GATED section rendered (matches WAITING empty convention)', () => {
+  it('empty gated list → an explicit GATED (0) header is still rendered (never a silently missing section)', () => {
     const out = renderDashboard({
       halted: [],
       inProgress: [],
@@ -476,7 +476,7 @@ describe('engine/daemon-dashboard — renderDashboard GATED group (FR-7/FR-11, T
       processedCount: 0,
       gated: [],
     });
-    expect(out).not.toContain('GATED');
+    expect(out).toContain('GATED (0)');
   });
 
   it('a missing gated field renders no GATED section (discovery-failure fallback, mirrors ELIGIBLE)', () => {

@@ -404,7 +404,11 @@ function gatedSpecLine(g: GatedItem & { kind: 'spec' }): string {
 
 /** Section-level warning line for a `kind: 'repo'` GATED entry (no slug). */
 function gatedRepoLine(g: GatedItem & { kind: 'repo' }): string {
-  return `  ⚠ ${g.warning} — ${g.remedy}`;
+  const label =
+    g.warning === 'identity-unresolved'
+      ? 'building NOTHING — identity unresolved'
+      : 'un-owned specs skipped — no owner_gate_cutover configured';
+  return `  ⚠ ${label} — ${g.remedy}`;
 }
 
 /** Verdict-kind-specific detail suffix for a WAITING row. */
@@ -480,11 +484,14 @@ export function renderDashboard(state: InheritedState, priorityResolution?: Prio
   // empty, matching the WAITING empty convention (and the ELIGIBLE
   // discovery-failure fallback, which likewise degrades to an empty list
   // rather than rendering a distinct failure line).
-  const gated = (state.gated ?? []).filter((g) => g.kind !== 'spec' || !parkedSet.has(g.slug));
+  const processedSlugsSet = new Set(state.processed.map((p) => p.slug));
+  const gated = (state.gated ?? []).filter(
+    (g) => g.kind !== 'spec' || (!parkedSet.has(g.slug) && !processedSlugsSet.has(g.slug)),
+  );
   const gatedSlugs = new Set(
     gated.filter((g): g is GatedItem & { kind: 'spec' } => g.kind === 'spec').map((g) => g.slug),
   );
-  if (gated.length > 0) {
+  if (state.gated !== undefined) {
     lines.push(`GATED (${gated.length})`);
     for (const g of gated) {
       lines.push(g.kind === 'spec' ? gatedSpecLine(g) : gatedRepoLine(g));

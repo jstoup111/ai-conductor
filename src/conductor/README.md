@@ -401,6 +401,37 @@ lives behind the `resolveDaemonOwner` seam (`owner-gate/identity.ts`); a future
 > land un-owned specs) is sequenced separately (gated on the engineer-worktree-isolation work);
 > this section documents the identity/config/daemon partition only.
 
+#### Gate write-back: owner-gated PR/issue announcement (Tasks 17-21)
+
+An owner-gate skip (D5 above) is loud in the daemon log and the GATED dashboard group, but
+neither surfaces on GitHub itself — an operator (or the reporter of an intake issue) who only
+watches the PR/issue never learns their spec is gated. `gate-writeback.ts` closes that gap:
+every `discover()` pass, for each `kind: 'spec'` `GatedItem`, the daemon (via the single
+`onGatedDiscovered` call site in `daemon-cli.ts`) attempts two independent, best-effort
+announcements:
+
+- **`announceGatedPr(spec, prUrl, deps)`** — when the spec already has an implementation PR
+  open (a prior build attempt that halted before ownership changed underneath it; a spec
+  never yet dispatched has no PR and this is a silent no-op), applies the `owner-gated` label
+  (creating it repo-wide on first use) and upserts a single marker comment carrying the
+  reason, remedy, and other-owner name (when known). The marker comment is located purely by
+  the stable `OWNER_GATED_MARKER` string (never by body content), so repeated passes PATCH the
+  same comment in place — including across reason transitions (e.g.
+  `unowned-indeterminate` → `other-owner`) — rather than ever posting a duplicate. A terminal
+  PR state (`MERGED`/`CLOSED`/not found) skips the write-back entirely.
+- **`announceGatedIssue(spec, sourceRef, deps)`** — when the spec carries a
+  `Source-Ref: owner/repo#N` intake marker, applies the same `owner-gated` label + upserted
+  marker comment to the **originating issue**, independent of the PR path (a failure/success
+  on one has no bearing on the other). A missing or unparseable `sourceRef` (hand-authored
+  spec, or a malformed marker) is a silent no-op — no `gh` call is made.
+
+Both functions are dependency-injected (`runGh` defaults to the production `gh` wrapper) and
+never throw: every `gh` failure is caught, optionally logged via `deps.log`, and swallowed —
+a write-back failure never blocks or aborts the discovery pass that produced the gated list,
+mirroring the `pr-labels.ts`/`build-failure-escalation.ts` seam contract. See
+`src/engine/gate-writeback.ts`, `test/engine/gate-writeback.test.ts`, and
+`test/acceptance/owner-gate-{pr,issue}-writeback.acceptance.test.ts`.
+
 #### Halt-reconciliation: startup dashboard + main-advance re-kick (ADR-013)
 
 PR #109 made the durable `.pipeline/HALT` marker authoritative at discovery, so a parked
