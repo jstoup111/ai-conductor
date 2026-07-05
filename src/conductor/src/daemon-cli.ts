@@ -151,7 +151,7 @@ const PRESEEDED_DONE: StepName[] = [
 // this is a no-op there; it only matters for a foreground/TTY `conduct daemon` run.
 // eslint-disable-next-line no-control-regex -- ESC (\x1b) is intrinsic to ANSI SGR
 const ANSI_SGR = /\x1b\[[0-9;]*m/g;
-function stripAnsi(s: string): string {
+export function stripAnsi(s: string): string {
   return s.replace(ANSI_SGR, '');
 }
 
@@ -834,8 +834,11 @@ export function renderDaemonEvent(event: ConductorEvent, log: (msg: string) => v
       break;
     case 'kickback':
       log(
-        `${dot} ${chalk.yellow('↩')} kickback: ${event.from} re-opened ${event.to}${event.evidence ? ` — ${event.evidence}` : ''} ${chalk.dim(`(×${event.count})`)}`,
+        `${chalk.bold.yellow(`↩ KICKBACK: ${event.from} re-opened ${event.to}${event.evidence ? ` — ${event.evidence}` : ''}`)} (×${event.count})`,
       );
+      break;
+    case 'navigation_back':
+      log(chalk.yellow(`↰ BACK: ${event.from} → ${event.to} (operator)`));
       break;
     case 'loop_halt':
       log(`${dot} ${chalk.red('✋')} ${chalk.red(`loop halted: ${event.reason}`)}`);

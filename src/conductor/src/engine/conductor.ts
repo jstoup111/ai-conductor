@@ -71,7 +71,11 @@ import { waitForCredentialsChange, readOperatorCredentialsState } from './self-h
 import type { ChangedFile } from './self-host/release-gate.js';
 import type { GateVerdict } from './self-host/gate-halt.js';
 import { selectNextGate } from './selector.js';
-import { computeAndWriteVerdict, readAllVerdicts } from './gate-verdicts.js';
+import {
+  computeAndWriteVerdict,
+  readAllVerdicts,
+  type GateVerdict as GateObjectiveVerdict,
+} from './gate-verdicts.js';
 import { WorktreeManager } from './worktree.js';
 import { attemptAutoHeal } from './autoheal.js';
 import {
@@ -2007,6 +2011,64 @@ export class Conductor {
   }
 
   /**
+   * Shared kickback-verdict scan. Walks `topo.kickbackTargets` looking for a
+   * gate that the given step re-opened (verdict is {satisfied:false,
+   * kickback.from === stepName}). Increments the shared `kickbackCounts`
+   * counter, emits the `kickback` event, and — when `navigate` is true —
+   * re-opens the target gate via navigateBack (cascade-staling its
+   * downstream). HALTs (writes the marker + surfaces a remediation PR) if a
+   * gate has been re-opened past MAX_KICKBACKS_PER_GATE.
+   *
+   * `navigate: false` is for front-half callers: they observe/record the
+   * kickback (count + event) without mutating state, since the front half
+   * stays linear and the tail will re-process the same verdict later.
+   */
+  private async scanKickbackVerdicts(
+    stepName: StepName,
+    state: ConductState,
+    kickbackCounts: Map<StepName, number>,
+    verdicts: Partial<Record<StepName, GateObjectiveVerdict>>,
+    topo: GateTopology,
+    steps: StepDefinition[],
+    { navigate }: { navigate: boolean },
+  ): Promise<'halt' | 'kicked' | null> {
+    let result: 'halt' | 'kicked' | null = null;
+    for (const target of topo.kickbackTargets) {
+      const v = verdicts[target];
+      if (v && v.satisfied === false && v.kickback?.from === stepName) {
+        const count = (kickbackCounts.get(target) ?? 0) + 1;
+        kickbackCounts.set(target, count);
+        await this.events.emit({
+          type: 'kickback',
+          from: stepName,
+          to: target,
+          evidence: v.kickback?.evidence,
+          count,
+        });
+        if (count > MAX_KICKBACKS_PER_GATE) {
+          const reason = `kickback ping-pong: ${target} re-opened ${count} times (cap ${MAX_KICKBACKS_PER_GATE})`;
+          await writeFile(
+            join(this.projectRoot, LOOP_HALT_MARKER),
+            reason + '\n',
+            'utf-8',
+          );
+          await writeState(this.stateFilePath, state).catch(() => {});
+          const prUrl = await this.surfaceRemediationPr(reason);
+          await this.events.emit({ type: 'loop_halt', reason, prUrl });
+          return 'halt';
+        }
+        if (navigate) {
+          const nav = navigateBack(state, target, steps);
+          Object.assign(state, nav.state);
+          await writeState(this.stateFilePath, state);
+        }
+        result = 'kicked';
+      }
+    }
+    return result;
+  }
+
+  /**
    * Gate-driven tail advance (Phase 3). Called after a step succeeds to decide
    * the next index:
    *   - Front half (before `build`): returns null → caller does linear i++.
@@ -2083,6 +2145,24 @@ export class Conductor {
     }
 
     if (indexOf(step.name) < topo.firstLoopIndex) {
+      // Front-half amendment kickback: a step before the first loop gate
+      // (e.g. conflict_check) can still write a kickback-shaped verdict onto
+      // an upstream gate (e.g. architecture_review). Surface that detection
+      // via the same shared scan the tail uses, but without navigating —
+      // the front half stays linear (i++) and statuses are left untouched;
+      // the tail will re-process the same verdict later when it reaches the
+      // gate-driven region.
+      const frontVerdicts = await readAllVerdicts(this.projectRoot);
+      const frontKickback = await this.scanKickbackVerdicts(
+        step.name,
+        state,
+        kickbackCounts,
+        frontVerdicts,
+        topo,
+        steps,
+        { navigate: false },
+      );
+      if (frontKickback === 'halt') return 'halt';
       return null; // front half stays linear (before the first loop gate)
     }
 
@@ -2118,35 +2198,16 @@ export class Conductor {
     // {satisfied:false, kickback.from === this step}). Re-open that gate
     // (pending) + cascade-stale its downstream so they re-run; HALT if a gate
     // has been re-opened past the cap.
-    for (const target of topo.kickbackTargets) {
-      const v = verdicts[target];
-      if (v && v.satisfied === false && v.kickback?.from === step.name) {
-        const count = (kickbackCounts.get(target) ?? 0) + 1;
-        kickbackCounts.set(target, count);
-        await this.events.emit({
-          type: 'kickback',
-          from: step.name,
-          to: target,
-          evidence: v.kickback?.evidence,
-          count,
-        });
-        if (count > MAX_KICKBACKS_PER_GATE) {
-          const reason = `kickback ping-pong: ${target} re-opened ${count} times (cap ${MAX_KICKBACKS_PER_GATE})`;
-          await writeFile(
-            join(this.projectRoot, LOOP_HALT_MARKER),
-            reason + '\n',
-            'utf-8',
-          );
-          await writeState(this.stateFilePath, state).catch(() => {});
-          const prUrl = await this.surfaceRemediationPr(reason);
-          await this.events.emit({ type: 'loop_halt', reason, prUrl });
-          return 'halt';
-        }
-        const nav = navigateBack(state, target, steps);
-        Object.assign(state, nav.state);
-        await writeState(this.stateFilePath, state);
-      }
-    }
+    const kickbackVerdict = await this.scanKickbackVerdicts(
+      step.name,
+      state,
+      kickbackCounts,
+      verdicts,
+      topo,
+      steps,
+      { navigate: true },
+    );
+    if (kickbackVerdict === 'halt') return 'halt';
 
     const decision = selectNextGate({
       steps,
