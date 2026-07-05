@@ -46,6 +46,20 @@ export const MODEL_UNAVAILABLE_RE =
 export const OUT_OF_CREDITS_RE =
   /out of usage credits|out of credits|run \/usage-credits/i;
 
+/**
+ * Parse rate limit wait time from output.
+ * Extracts seconds from patterns like "retry after 450 seconds", "retry in 120 seconds",
+ * or "try again after 60 seconds".
+ * Returns the parsed integer seconds value.
+ */
+export function parseRateLimitWaitSeconds(output: string): number {
+  const match = output.match(/(?:retry|try).*(after|in)\s*([0-9]+)/i);
+  if (match && match[2]) {
+    return parseInt(match[2], 10);
+  }
+  return 0;
+}
+
 /** Test helper: true if `output` matches the out-of-credits signature. */
 export function detectsOutOfCredits(output: string): boolean {
   return OUT_OF_CREDITS_RE.test(output);
