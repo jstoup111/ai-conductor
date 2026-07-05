@@ -988,7 +988,7 @@ export async function dispatchEngineer(
       // Attempt to get the entry; if absent, return found:false (soft failure).
       const entry = await ledger.get(GITHUB_ISSUES_SOURCE, sourceRef);
       if (!entry) {
-        print(JSON.stringify({ kind: 'resolve', found: false }));
+        print(JSON.stringify({ kind: 'resolve', sourceRef, found: false }));
         return 0;
       }
 
