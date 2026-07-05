@@ -166,6 +166,102 @@ describe('owner-gate Source-Ref issue write-back acceptance (Covers: FR-9, FR-10
     ).resolves.toBeUndefined();
   });
 
+  it('the same gated issue still gated on 10 subsequent passes still carries exactly ONE marker comment (upsert edits in place, mirrors PR path)', async () => {
+    const mod = await loadGateWriteback();
+    const markedUrl = 'https://github.com/acme/repo/issues/42#issuecomment-8001';
+    const markerBody = `${mod.OWNER_GATED_MARKER}\nold reason`;
+
+    let commentCreateCount = 0;
+    let patchCount = 0;
+    const gh: GhRunner = async (args) => {
+      if (args[0] === 'issue' && args[1] === 'view') {
+        return {
+          stdout: JSON.stringify({
+            comments: [{ body: markerBody, url: markedUrl }],
+          }),
+        };
+      }
+      if (args[0] === 'issue' && args[1] === 'comment') {
+        commentCreateCount++;
+        return { stdout: '' };
+      }
+      if (args[0] === 'api' && args.includes('--method') && args.includes('PATCH')) {
+        patchCount++;
+        return { stdout: '' };
+      }
+      return { stdout: '' };
+    };
+
+    for (let i = 0; i < 10; i++) {
+      await mod.announceGatedIssue(INDETERMINATE_ENTRY, 'acme/repo#42', { runGh: gh, cwd: '/repo' });
+    }
+
+    expect(commentCreateCount).toBe(0);
+    expect(patchCount).toBe(10);
+  });
+
+  it('a reason transition (unowned-indeterminate → other-owner) on the issue updates the SAME existing comment in place, no new create', async () => {
+    const mod = await loadGateWriteback();
+    const markedUrl = 'https://github.com/acme/repo/issues/9#issuecomment-8002';
+    const patchBodies: string[] = [];
+    let commentCreateCount = 0;
+    const gh: GhRunner = async (args) => {
+      if (args[0] === 'issue' && args[1] === 'view') {
+        return {
+          stdout: JSON.stringify({
+            comments: [{ body: `${mod.OWNER_GATED_MARKER}\nold reason`, url: markedUrl }],
+          }),
+        };
+      }
+      if (args[0] === 'api' && args.includes('--method') && args.includes('PATCH')) {
+        const bodyArg = args.find((a) => a.startsWith('body='));
+        if (bodyArg) patchBodies.push(bodyArg);
+        return { stdout: '' };
+      }
+      if (args[0] === 'issue' && args[1] === 'comment') {
+        commentCreateCount++;
+      }
+      return { stdout: '' };
+    };
+
+    const transitioned: GatedSpecEntry = {
+      ...INDETERMINATE_ENTRY,
+      reason: 'other-owner',
+      otherOwner: 'bob',
+    };
+    await mod.announceGatedIssue(transitioned, 'acme/repo#9', { runGh: gh, cwd: '/repo' });
+
+    expect(patchBodies.length).toBe(1);
+    expect(patchBodies[0]).toContain('bob');
+    expect(commentCreateCount).toBe(0);
+  });
+
+  it('the marker-comment lookup succeeds but the in-place PATCH fails on the issue: NO fallback create is attempted (terminal PATCH semantics)', async () => {
+    const mod = await loadGateWriteback();
+    const markedUrl = 'https://github.com/acme/repo/issues/11#issuecomment-8003';
+    let createCommentCalls = 0;
+    const gh: GhRunner = async (args) => {
+      if (args[0] === 'issue' && args[1] === 'view') {
+        return {
+          stdout: JSON.stringify({
+            comments: [{ body: `${mod.OWNER_GATED_MARKER}\nold`, url: markedUrl }],
+          }),
+        };
+      }
+      if (args[0] === 'api' && args.includes('PATCH')) {
+        throw new Error('PATCH failed');
+      }
+      if (args[0] === 'issue' && args[1] === 'comment') {
+        createCommentCalls++;
+      }
+      return { stdout: '' };
+    };
+
+    await mod.announceGatedIssue(INDETERMINATE_ENTRY, 'acme/repo#11', { runGh: gh, cwd: '/repo' });
+
+    expect(createCommentCalls).toBe(0);
+  });
+
   it('repo-level warnings (identity unresolved / no cutover) never trigger a GitHub write for the issue step (dashboard/status-only)', async () => {
     const mod = await loadGateWriteback();
     let ghCalled = false;

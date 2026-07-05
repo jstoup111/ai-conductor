@@ -16,6 +16,7 @@ import {
   findOrCreatePr,
   comment,
   upsertComment,
+  upsertIssueComment,
   NEEDS_REMEDIATION_MARKER,
   setReady,
   makeProductionGh,
@@ -613,6 +614,51 @@ describe('upsertComment', () => {
     ).resolves.toBeUndefined();
     // Found-but-unpatchable comment is left as-is — no fallback create
     expect(calls.find((a) => a[0] === 'pr' && a[1] === 'comment')).toBeUndefined();
+  });
+});
+
+// ── upsertIssueComment ────────────────────────────────────────────────────────
+
+describe('upsertIssueComment', () => {
+  const MARKER = NEEDS_REMEDIATION_MARKER;
+  const TEST_ISSUE_URL = 'https://github.com/foo/bar/issues/42';
+  const markedIssueUrl = 'https://github.com/foo/bar/issues/42#issuecomment-99887766';
+
+  it('PATCHes the existing marked comment in place and creates nothing (marker found)', async () => {
+    const { gh, calls } = fakeGh([
+      {
+        stdout: JSON.stringify({
+          comments: [{ body: `${MARKER}\nold reason`, url: markedIssueUrl }],
+        }),
+      },
+      { stdout: '' }, // PATCH succeeds
+    ]);
+    await upsertIssueComment(gh, '/repo', TEST_ISSUE_URL, MARKER, 'new reason');
+
+    expect(calls[0]).toEqual(['issue', 'view', TEST_ISSUE_URL, '--json', 'comments']);
+    const patchCall = calls.find((a) => a[0] === 'api');
+    expect(patchCall).toEqual([
+      'api',
+      '--method',
+      'PATCH',
+      'repos/foo/bar/issues/comments/99887766',
+      '-f',
+      `body=${MARKER}\nnew reason`,
+    ]);
+    // Crucially, no new comment is created
+    expect(calls.find((a) => a[0] === 'issue' && a[1] === 'comment')).toBeUndefined();
+  });
+
+  it('swallows a PATCH failure WITHOUT creating a duplicate (found-comment PATCH failure)', async () => {
+    const { gh, calls } = fakeGh([
+      { stdout: JSON.stringify({ comments: [{ body: `${MARKER}\nx`, url: markedIssueUrl }] }) },
+      new Error('PATCH 500'), // edit fails
+    ]);
+    await expect(
+      upsertIssueComment(gh, '/repo', TEST_ISSUE_URL, MARKER, 'boom'),
+    ).resolves.toBeUndefined();
+    // Found-but-unpatchable comment is left as-is — no fallback create
+    expect(calls.find((a) => a[0] === 'issue' && a[1] === 'comment')).toBeUndefined();
   });
 });
 
