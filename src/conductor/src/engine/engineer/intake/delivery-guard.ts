@@ -142,6 +142,43 @@ export function createDeliveryGuardedQueue(
         return candidate;
       }
 
+      // Task 7: In-flight duplicate envelope detection
+      // If entry is claimed but has no prUrl yet, it means work is in progress
+      // but hasn't been handed off to a PR. A duplicate envelope should be
+      // dropped without mutating the ledger entry.
+      if (entry.status === 'claimed' && !entry.prUrl) {
+        // This is an in-flight duplicate — drop it
+        try {
+          await queue.release(candidate);
+        } catch (err) {
+          // Check if error is ENOENT (benign race — file was already deleted)
+          const isEnoent =
+            err instanceof Error &&
+            (('code' in err && (err as any).code === 'ENOENT') ||
+              err.message.includes('ENOENT'));
+
+          if (!isEnoent) {
+            // Non-ENOENT error — treat as a real failure, hold the candidate
+            process.stderr.write(
+              `[delivery-guard] Failed to release ack for ${sourceRef}: ${err instanceof Error ? err.message : String(err)}\n`,
+            );
+            held.push(candidate);
+            // Continue scanning for the next candidate
+            return this.claim();
+          }
+          // ENOENT is benign — file was already deleted by concurrent process
+          logger.info(`Benign race: failed to ack ${sourceRef} (file already deleted)`);
+        }
+
+        // Log the duplicate drop with recovery path
+        logger.info(
+          `Duplicate envelope for in-flight entry ${sourceRef}, dropping (recovery: engineer forget ${sourceRef})`,
+        );
+
+        // Continue scanning for the next candidate
+        return this.claim();
+      }
+
       // Task 3 & 4: Check if entry can be auto-healed (has prUrl and PR is open/merged)
       if (entry.prUrl) {
         const prState = await verifyPrState(deps.gh, entry.prUrl);
