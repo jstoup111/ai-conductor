@@ -729,15 +729,15 @@ TIER: M`,
       expect(result.waitSeconds).toBe(300);
     });
 
-    it('reads wait seconds from line 2 of the rate-limit-hit marker', async () => {
+    it('sources wait seconds from provider result', async () => {
       const provider = createMockProvider();
       (provider.invoke as ReturnType<typeof vi.fn>).mockResolvedValue({
         success: false,
         output: 'rate limited',
         exitCode: 1,
         rateLimited: true,
+        waitSeconds: 450,
       });
-      await writeFile(join(pipeDir, 'rate-limit-hit'), 'timestamp\n450\n', 'utf-8');
       const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
         pipelineDir: pipeDir,
       });
@@ -745,6 +745,24 @@ TIER: M`,
       const result = await runner.run('worktree', emptyState);
 
       expect(result.waitSeconds).toBe(450);
+    });
+
+    it('falls back to 300 seconds when provider omits waitSeconds', async () => {
+      const provider = createMockProvider();
+      (provider.invoke as ReturnType<typeof vi.fn>).mockResolvedValue({
+        success: false,
+        output: 'rate limited',
+        exitCode: 1,
+        rateLimited: true,
+        // waitSeconds: undefined
+      });
+      const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
+        pipelineDir: pipeDir,
+      });
+
+      const result = await runner.run('worktree', emptyState);
+
+      expect(result.waitSeconds).toBe(300);
     });
 
     it('surfaces sessionExpired=true when provider reports it', async () => {

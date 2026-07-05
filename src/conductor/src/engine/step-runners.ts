@@ -432,10 +432,9 @@ export class DefaultStepRunner implements StepRunner {
       return { success: false, output: result.output, authFailure: true };
     }
 
-    // Rate limit: surface wait seconds (from marker file if present, else
-    // default 300s — matches bin/conduct handle_rate_limit).
+    // Rate limit: surface wait seconds (from provider result, else fallback 300s).
     if (result.rateLimited) {
-      const waitSeconds = await this.readRateLimitWait();
+      const waitSeconds = result.waitSeconds ?? 300;
       return {
         success: false,
         output: result.output,
@@ -470,25 +469,6 @@ export class DefaultStepRunner implements StepRunner {
     }
 
     return { success: false, output: result.output };
-  }
-
-  /**
-   * Read a pending rate-limit wait-seconds value. Mirrors bin/conduct:2252–2258:
-   * `${PIPELINE_DIR}/rate-limit-hit` has the wait seconds on line 2. Returns
-   * 300 (the bash default) when the marker is absent or unparseable.
-   */
-  private async readRateLimitWait(): Promise<number> {
-    const DEFAULT = 300;
-    if (!this.pipelineDir) return DEFAULT;
-    try {
-      const { readFile } = await import('node:fs/promises');
-      const raw = await readFile(join(this.pipelineDir, 'rate-limit-hit'), 'utf-8');
-      const line2 = raw.split('\n')[1]?.trim();
-      const n = Number.parseInt(line2 ?? '', 10);
-      return Number.isFinite(n) && n > 0 ? n : DEFAULT;
-    } catch {
-      return DEFAULT;
-    }
   }
 
   async resetSession(): Promise<void> {

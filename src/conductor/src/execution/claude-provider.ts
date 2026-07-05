@@ -46,6 +46,107 @@ export const MODEL_UNAVAILABLE_RE =
 export const OUT_OF_CREDITS_RE =
   /out of usage credits|out of credits|run \/usage-credits/i;
 
+/**
+ * Parse rate limit wait time from output.
+ * Handles two patterns:
+ * 1. Duration-based: "retry after 450 seconds", "retry in 120 seconds", "try again after 60 seconds"
+ *    - Applies a minutes heuristic: if extracted value < 60, treats it as minutes and converts to seconds.
+ * 2. Time-based: "resets at 23:00", "resets 11pm", "resets 3am"
+ *    - Calculates wait time as the delta from "now" to the reset time
+ *    - Handles next-day rollover: if the parsed time is in the past, adds 86400 seconds (one day)
+ *
+ * @param output The error message to parse
+ * @param now Optional Date object for deterministic testing (defaults to current time)
+ * @returns The parsed integer seconds value, or 300 if no pattern matches or value is invalid/unparseable
+ */
+export function parseRateLimitWaitSeconds(output: string, now?: Date): number {
+  try {
+    // Try duration-based patterns first: "retry after N seconds", "retry in N seconds", etc.
+    const durationMatch = output.match(/(?:retry|try).*(after|in)\s*([0-9]+)/i);
+    if (durationMatch && durationMatch[2]) {
+      const value = parseInt(durationMatch[2], 10);
+      // Check for NaN or non-positive values — default to 300
+      if (isNaN(value) || value <= 0) {
+        return 300;
+      }
+      // Apply minutes heuristic: if value < 60, treat as minutes and convert to seconds
+      if (value < 60) {
+        return value * 60;
+      }
+      return value;
+    }
+
+    // Try time-based patterns: "resets at 23:00", "resets 11pm", etc.
+    if (/resets?(?:\s+at)?\s+[0-9a-z]/i.test(output)) {
+      const currentTime = now || new Date();
+
+      // Try HH:MM format first (e.g., "23:00", "11:30", with optional am/pm)
+      let resetTime = output.match(/(\d{1,2}):(\d{2})\s*(?:(am|pm))?/i);
+      if (resetTime) {
+        const resetHour = parseResetHour(parseInt(resetTime[1], 10), resetTime[3]);
+        const resetMinute = parseInt(resetTime[2], 10);
+        return calculateWaitSeconds(resetHour, resetMinute, currentTime);
+      }
+
+      // Try bare hour with am/pm (e.g., "11pm", "3am")
+      resetTime = output.match(/\b(\d{1,2})\s*(am|pm)\b/i);
+      if (resetTime) {
+        const resetHour = parseResetHour(parseInt(resetTime[1], 10), resetTime[2]);
+        return calculateWaitSeconds(resetHour, 0, currentTime);
+      }
+    }
+
+    return 300;
+  } catch {
+    return 300;
+  }
+}
+
+/**
+ * Parse the reset hour, accounting for am/pm modifier.
+ * @param hour The hour (1-12 for 12-hour format, 0-23 for 24-hour format)
+ * @param ampm Optional am/pm modifier
+ * @returns The hour in 24-hour format (0-23)
+ */
+function parseResetHour(hour: number, ampm?: string): number {
+  if (!ampm) {
+    // No am/pm specified, assume 24-hour format
+    return hour;
+  }
+
+  const lowerAmpm = ampm.toLowerCase();
+  if (lowerAmpm === 'pm' && hour !== 12) {
+    return hour + 12; // 1pm -> 13, 11pm -> 23
+  } else if (lowerAmpm === 'am' && hour === 12) {
+    return 0; // 12am -> 0 (midnight)
+  }
+  return hour; // 12pm -> 12, other am times unchanged
+}
+
+/**
+ * Calculate wait seconds from now to the reset time.
+ * Handles next-day rollover if the reset time is in the past.
+ * @param resetHour Hour in 24-hour format (0-23)
+ * @param resetMinute Minute (0-59)
+ * @param now Current time
+ * @returns Wait time in seconds
+ */
+function calculateWaitSeconds(resetHour: number, resetMinute: number, now: Date): number {
+  // Create a Date for the reset time today
+  const resetToday = new Date(now);
+  resetToday.setUTCHours(resetHour, resetMinute, 0, 0);
+
+  // If reset time is in the future, return the delta
+  if (resetToday > now) {
+    return Math.ceil((resetToday.getTime() - now.getTime()) / 1000);
+  }
+
+  // If reset time is in the past, assume it's tomorrow
+  const resetTomorrow = new Date(resetToday);
+  resetTomorrow.setUTCDate(resetTomorrow.getUTCDate() + 1);
+  return Math.ceil((resetTomorrow.getTime() - now.getTime()) / 1000);
+}
+
 /** Test helper: true if `output` matches the out-of-credits signature. */
 export function detectsOutOfCredits(output: string): boolean {
   return OUT_OF_CREDITS_RE.test(output);
@@ -159,6 +260,7 @@ export class ClaudeProvider implements LLMProvider {
       sessionExpired: sessionExpired || undefined,
       modelUnavailable: modelUnavailable || undefined,
       tokenUsage,
+      waitSeconds: rateLimited ? parseRateLimitWaitSeconds(output) : undefined,
     };
   }
 
