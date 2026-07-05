@@ -17,6 +17,17 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   parking for a human, instead of hard-HALTing on the first conflict. Extracted the shared
   `runGatedRebaseResolution` helper so both `conductor.ts:runRebaseStep` and
   `daemon-rekick.ts:resumeRebaseFirst` resolve identically (#300)
+- gitignore `.engine-staging-*/` so an orphaned publish-engine scratch dir can no
+  longer dirty the working tree. `publish-engine` stages the built engine into a
+  `.engine-staging-<rand>/` temp dir and renames it into place; an interrupted or
+  crashed publish leaves one behind. Because the pattern was unignored, that orphan
+  made `git status` report the tree dirty, and the daemon's fast-forward guard then
+  permanently logged `skip fast-forward: working tree not clean` — the checkout fell
+  ~20 commits behind `origin/main`, the engine was never rebuilt, and a stale engine
+  ran for hours (root cause of #338; downstream halt #336). Ignoring the scratch
+  pattern stops a single orphan from wedging the daemon into staleness. Deeper
+  cleanup (publish-engine self-sweep on crash + fast-forward guard ignoring
+  daemon-owned build scratch) tracked in #338.
 - Prevent re-dispatch of delivered and stranded intake entries via claim-time delivery guard (#243)
 - CI: skipped the `publish-interrupted` `bin/setup worktree compatibility` smoke
   pending #334. It was authored to self-skip until `bin/setup` existed; `bin/setup`
