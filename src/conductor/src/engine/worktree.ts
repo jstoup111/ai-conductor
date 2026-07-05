@@ -137,12 +137,22 @@ export class WorktreeManager {
       const branch = `feature/${name}`;
 
       let featureStatus: string | undefined;
+      let isCorrupt = false;
       try {
         const stateRaw = await readFile(join(wtPath, 'conduct-state.json'), 'utf-8');
         const state = JSON.parse(stateRaw);
         featureStatus = state.feature_status;
-      } catch {
-        // no state file — that's fine
+      } catch (err: any) {
+        // If file doesn't exist, that's fine (no state yet)
+        // If file exists but is corrupt (parse error), mark as corrupt
+        if (err.code !== 'ENOENT') {
+          isCorrupt = true;
+        }
+      }
+
+      // Skip worktrees with corrupt state files
+      if (isCorrupt) {
+        continue;
       }
 
       if (featureStatus !== 'complete') {

@@ -101,6 +101,24 @@ describe('engine/worktree', () => {
         expect(list).toHaveLength(1);
         expect(list[0].name).toBe('feature-alpha');
       });
+
+      it('skips corrupt conduct-state.json and keeps valid worktrees', async () => {
+        // Create two worktrees
+        await manager.create('valid feature');
+        await manager.create('corrupt feature');
+
+        // Write corrupt JSON to one worktree's conduct-state.json
+        const corruptPath = join(tempDir, '.worktrees', 'corrupt-feature');
+        await writeFile(
+          join(corruptPath, 'conduct-state.json'),
+          '{invalid json syntax: ',
+        );
+
+        // Scan should return only the valid worktree, not throw
+        const list = await manager.scan();
+        expect(list).toHaveLength(1);
+        expect(list[0].name).toBe('valid-feature');
+      });
     });
 
     describe('create (edge cases)', () => {
