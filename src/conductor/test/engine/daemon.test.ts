@@ -671,6 +671,143 @@ describe('engine/daemon — runDaemon', () => {
     });
   });
 
+  // ── Dispatch-boundary rebuild + restart (Gap A/B: fire before next task) ────
+
+  describe('stale-engine rebuild + restart at the dispatch boundary', () => {
+    it('stale after rebuild: rebuilds, requests restart with identities, and does NOT dispatch the pending feature', async () => {
+      const rebuildEngine = vi.fn(async () => {});
+      const requestRestart = vi.fn(async () => {});
+      const runFeature = vi.fn(async (it: BacklogItem) => ({ slug: it.slug, status: 'done' as const }));
+      const deps: DaemonDeps = {
+        discoverBacklog: staticBacklog(items(2)), // non-empty → dispatch branch, never idles
+        runFeature,
+        rebuildEngine,
+        requestRestart,
+        staleEngineChecker: {
+          check: () => 'stale',
+          capturedIdentity: () => 'old-hash',
+          targetIdentity: () => 'new-hash',
+        },
+        sleep: async () => {},
+      };
+      const res = await runDaemon(deps, {
+        concurrency: 1,
+        once: false,
+        isSelfHost: true,
+        autoRestartOnStaleEngine: true,
+      });
+      expect(rebuildEngine).toHaveBeenCalledTimes(1);
+      expect(requestRestart).toHaveBeenCalledTimes(1);
+      expect(requestRestart).toHaveBeenCalledWith({ fromIdentity: 'old-hash', targetIdentity: 'new-hash' });
+      expect(runFeature).not.toHaveBeenCalled(); // restarted BEFORE dispatching anything
+      expect(res.stoppedReason).toBe('engine_restart');
+    });
+
+    it('current after rebuild: rebuilds before each dispatch, dispatches every feature, never restarts', async () => {
+      const rebuildEngine = vi.fn(async () => {});
+      const requestRestart = vi.fn(async () => {});
+      const runFeature = vi.fn(async (it: BacklogItem) => ({ slug: it.slug, status: 'done' as const }));
+      const deps: DaemonDeps = {
+        discoverBacklog: staticBacklog(items(2)),
+        runFeature,
+        rebuildEngine,
+        requestRestart,
+        staleEngineChecker: { check: () => 'current' },
+        sleep: async () => {},
+      };
+      const res = await runDaemon(deps, {
+        concurrency: 1,
+        once: false,
+        isSelfHost: true,
+        autoRestartOnStaleEngine: true,
+        maxIdlePolls: 1,
+      });
+      expect(rebuildEngine).toHaveBeenCalledTimes(2); // once per dispatch, not on idle polls
+      expect(requestRestart).not.toHaveBeenCalled();
+      expect(runFeature).toHaveBeenCalledTimes(2);
+      expect(res.processed.map((o) => o.slug).sort()).toEqual(['f0', 'f1']);
+    });
+
+    it('rebuild failure is swallowed: logs, still evaluates the checker, and dispatches when current', async () => {
+      const logs: string[] = [];
+      const rebuildEngine = vi.fn(async () => {
+        throw new Error('tsup boom');
+      });
+      const requestRestart = vi.fn(async () => {});
+      const runFeature = vi.fn(async (it: BacklogItem) => ({ slug: it.slug, status: 'done' as const }));
+      const deps: DaemonDeps = {
+        discoverBacklog: staticBacklog(items(1)),
+        runFeature,
+        rebuildEngine,
+        requestRestart,
+        staleEngineChecker: { check: () => 'current' },
+        sleep: async () => {},
+        log: (m) => logs.push(m),
+      };
+      const res = await runDaemon(deps, {
+        concurrency: 1,
+        once: false,
+        isSelfHost: true,
+        autoRestartOnStaleEngine: true,
+        maxIdlePolls: 0,
+      });
+      expect(rebuildEngine).toHaveBeenCalled();
+      expect(runFeature).toHaveBeenCalledTimes(1); // degraded to current engine, dispatched
+      expect(requestRestart).not.toHaveBeenCalled();
+      expect(logs.some((m) => m.includes('engine rebuild failed'))).toBe(true);
+    });
+
+    it('gate off (not self-host): rebuildEngine is never called and dispatch proceeds normally', async () => {
+      const rebuildEngine = vi.fn(async () => {});
+      const runFeature = vi.fn(async (it: BacklogItem) => ({ slug: it.slug, status: 'done' as const }));
+      const deps: DaemonDeps = {
+        discoverBacklog: staticBacklog(items(1)),
+        runFeature,
+        rebuildEngine,
+        staleEngineChecker: { check: () => 'stale' },
+        sleep: async () => {},
+      };
+      const res = await runDaemon(deps, {
+        concurrency: 1,
+        once: false,
+        isSelfHost: false, // gate 2 fails → no rebuild, no restart
+        autoRestartOnStaleEngine: true,
+        maxIdlePolls: 1,
+      });
+      expect(rebuildEngine).not.toHaveBeenCalled();
+      expect(runFeature).toHaveBeenCalledTimes(1);
+    });
+
+    it('suppressed identity: stale after rebuild but suppressed → no restart, feature dispatches', async () => {
+      const rebuildEngine = vi.fn(async () => {});
+      const requestRestart = vi.fn(async () => {});
+      const runFeature = vi.fn(async (it: BacklogItem) => ({ slug: it.slug, status: 'done' as const }));
+      const deps: DaemonDeps = {
+        discoverBacklog: staticBacklog(items(1)),
+        runFeature,
+        rebuildEngine,
+        requestRestart,
+        staleEngineChecker: {
+          check: () => 'stale',
+          capturedIdentity: () => 'a',
+          targetIdentity: () => 'b',
+        },
+        isSuppressed: async () => true, // held: identity hasn't converged
+        sleep: async () => {},
+      };
+      const res = await runDaemon(deps, {
+        concurrency: 1,
+        once: false,
+        isSelfHost: true,
+        autoRestartOnStaleEngine: true,
+        maxIdlePolls: 1,
+      });
+      expect(rebuildEngine).toHaveBeenCalled();
+      expect(requestRestart).not.toHaveBeenCalled();
+      expect(runFeature).toHaveBeenCalledTimes(1); // suppressed → dispatched normally
+    });
+  });
+
   // ── TS-2: repo_root_missing self-termination ─────────────────
 
   it('stops immediately with repo_root_missing when the repo root is gone; never dispatches', async () => {

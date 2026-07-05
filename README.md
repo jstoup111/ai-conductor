@@ -286,12 +286,16 @@ PARKED group takes absolute precedence over every other group (HALTED, ELIGIBLE,
 slug always shows there and nowhere else. See
 [`src/conductor/README.md`](src/conductor/README.md#operator-park--unpark) for details.
 
-**Auto-restart on stale engine (self-host only).** In self-host mode, the daemon can detect when
-the engine binary (`dist/index.js`) has been updated between idle passes. When stale code is
-detected and no tasks are in-flight, the daemon writes a `.daemon/RESTART_PENDING` marker and
-exits cleanly, allowing an external respawn transport to relaunch with fresh code. Enable with
-`auto_restart_on_stale_engine: true` in your project config; the feature is ignored in
-non-self-host environments and disabled in once-mode runs. Requires PR #215 respawn transport
+**Auto-restart on stale engine (self-host only).** In self-host mode, before starting each feature
+(and at idle) the daemon rebuilds its engine from the fast-forwarded source (content-addressed —
+a no-op when unchanged, an atomic `dist` flip otherwise) and checks whether the running engine has
+gone stale. When it has and no tasks are in-flight, the daemon writes a `.daemon/RESTART_PENDING`
+marker and exits cleanly, allowing an external respawn transport to relaunch with fresh code so the
+next feature builds on it. Firing at the dispatch boundary — not only when the backlog drains —
+ensures freshly-merged specs are never built on stale engine code (the rebuild is required because
+build artifacts are untracked, so a merge alone never moves `dist`). It never interrupts an
+in-flight build. Enable with `auto_restart_on_stale_engine: true` in your project config; ignored
+in non-self-host environments and disabled in once-mode runs. Requires PR #215 respawn transport
 for deployment.
 
 On failure, conduct sends a desktop notification and drops into an interactive Claude session

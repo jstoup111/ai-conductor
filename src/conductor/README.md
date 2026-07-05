@@ -1310,10 +1310,19 @@ See `.docs/plans/sandbox-auth-expiry-park.md` and `.docs/decisions/adr-2026-07-0
 
 ### Daemon auto-restart on stale engine (self-host only)
 
-When enabled in self-host mode, the daemon monitors the engine binary (`dist/index.js`) for
-stale code between idle passes. If stale code is detected and no tasks are in-flight, the daemon
-writes a restart intent marker (`.daemon/RESTART_PENDING`) and exits with code 0, allowing the
-configured respawn transport (PR #215) to relaunch with fresh code.
+When enabled in self-host mode, the daemon keeps its running engine in sync with merged source.
+**Before starting each feature** (and at idle) it rebuilds the engine from the fast-forwarded
+source — a content-addressed `npm run build` that no-ops when unchanged and atomically flips the
+`dist` symlink otherwise, leaving the running pinned `dist-versions/<id>` untouched — then hashes
+`dist/index.js`. If the running engine is now stale and no tasks are in-flight, it writes a restart
+intent marker (`.daemon/RESTART_PENDING`) and exits with code 0, allowing the configured respawn
+transport (PR #215) to relaunch with fresh code so the next feature is built by that fresh code.
+
+The rebuild step exists because engine build artifacts are untracked (#309): a merge advances
+`src/` but never the local `dist` artifact, so without a rebuild the staleness check would never
+observe merge-driven drift. Firing at the **dispatch boundary** (not only when the backlog fully
+drains) matters because a merge that lands new specs takes the dispatch path and skips the
+drained-idle branch — so an idle-only check would build freshly-merged specs on stale engine code.
 
 **Configuration:**
 
@@ -1327,19 +1336,22 @@ auto_restart_on_stale_engine: true    # default: false; self-host only, ignored 
 - **Configuration is read once at startup** — changes to the flag require restarting the daemon
 - **Self-host-only** — non-self-host environments ignore the flag regardless of setting
 - **Disabled in once-mode** — the daemon runs a single batch (`conduct daemon` without `--continuous`),
-  so auto-restart has no effect (no idle passes to check staleness on)
-- **RESTART_PENDING marker** — when stale code is detected between idle passes with no in-flight tasks,
-  the daemon writes `.daemon/RESTART_PENDING` and exits cleanly (code 0) rather than continuing with
-  stale code
+  so auto-restart has no effect
+- **RESTART_PENDING marker** — when the running engine is stale (after a rebuild) with no in-flight
+  tasks, the daemon writes `.daemon/RESTART_PENDING` and exits cleanly (code 0) rather than
+  continuing with stale code
+- **Fires before the next feature, never mid-build** — the rebuild + staleness check run at the
+  dispatch boundary and at idle, but only when the in-flight pool is empty, so a running build is
+  never interrupted; a failed rebuild is logged and degrades to the current engine
 - **No-op suppression** — on non-convergence (fresh identity ≠ target), restart detection is suppressed
   to prevent restart loops
 - **Requires PR #215 respawn transport** — without an external respawn mechanism, the daemon exits but
   is not automatically relaunched with fresh code
 
-**Detection:** The daemon computes the build artifact's SHA on each idle pass (when eligible-feature
-queue is empty) and compares it against the prior pass's SHA. A mismatch indicates stale code has been
-replaced. The feature branch identity must also converge (fresh == target); mismatches suppress restart
-to avoid thrashing.
+**Detection:** The daemon captures the sha256 of `dist/index.js` at startup and, before each
+dispatch (and at idle), rebuilds from source and re-hashes. A mismatch means the running engine no
+longer matches the freshly-built source. On non-convergence at boot (fresh identity ≠ the restart's
+target) restart is suppressed to avoid thrashing.
 
 See `.docs/plans/2026-07-03-daemon-auto-restart-stale-engine.md` for the full design.
 
