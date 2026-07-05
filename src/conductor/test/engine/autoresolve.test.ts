@@ -484,3 +484,87 @@ describe('engine/autoresolve — suite gate (green path)', () => {
     expect(logs.some((l) => l.includes('done'))).toBe(true);
   });
 });
+
+describe('engine/autoresolve — suite gate (fail-closed negative paths)', () => {
+  let worktree: string;
+
+  beforeEach(async () => {
+    worktree = await mkdtemp(join(tmpdir(), 'suite-gate-fail-'));
+  });
+
+  afterEach(async () => {
+    await rm(worktree, { recursive: true, force: true });
+  });
+
+  it('non-zero exit code → failure with exit code in reason', async () => {
+    const logs: string[] = [];
+    const logger = (msg: string) => logs.push(msg);
+
+    const result = await runSuiteGate('exit 13', worktree, logger);
+
+    expect(result.ok).toBe(false);
+    expect(result.exitCode).toBe(13);
+    expect(result.reason).toBeDefined();
+    expect(result.reason).toContain('13'); // exit code in reason
+  });
+
+  it('command not found (ENOENT) → failure with error reason', async () => {
+    const logs: string[] = [];
+    const logger = (msg: string) => logs.push(msg);
+
+    const result = await runSuiteGate('/nonexistent/command/that/does/not/exist', worktree, logger);
+
+    expect(result.ok).toBe(false);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.reason).toBeDefined();
+    // Should indicate it couldn't find the command
+    expect(result.reason?.toLowerCase()).toMatch(/command|not found|enoent/i);
+  });
+
+  it('timeout elapsed → kill process and return timeout failure', async () => {
+    const logs: string[] = [];
+    const logger = (msg: string) => logs.push(msg);
+
+    // Create a command that would run indefinitely
+    const result = await runSuiteGate(
+      'sleep 10',
+      worktree,
+      logger,
+      { timeoutMs: 50 }, // 50ms timeout (should kill the sleep command)
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBeDefined();
+    expect(result.reason?.toLowerCase()).toMatch(/timeout|timed out/);
+    // Duration should be around the timeout value, not 10 seconds
+    expect(result.duration).toBeLessThan(2000); // definitely less than 10 seconds
+  });
+
+  it('suite stderr is captured in failure reason', async () => {
+    const logs: string[] = [];
+    const logger = (msg: string) => logs.push(msg);
+
+    const result = await runSuiteGate(
+      'echo "error message" >&2 && exit 1',
+      worktree,
+      logger,
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.exitCode).toBe(1);
+    const logOutput = logs.join('\n');
+    expect(logOutput).toContain('error message');
+  });
+
+  it('empty suite command string with enabled config → treated as no command', async () => {
+    const logs: string[] = [];
+    const logger = (msg: string) => logs.push(msg);
+
+    // Empty string should be treated as no command configured
+    const result = await runSuiteGate('   ', worktree, logger);
+
+    expect(result.ok).toBe(true);
+    expect(result.exitCode).toBe(0);
+    expect(logs.some((l) => l.toLowerCase().includes('no command'))).toBe(true);
+  });
+});

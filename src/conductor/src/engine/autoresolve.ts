@@ -362,9 +362,21 @@ export type SuiteGateResult =
   | { ok: false; exitCode: number; duration: number; reason?: string };
 
 /**
+ * Options for running the suite gate.
+ */
+export interface SuiteGateOptions {
+  /**
+   * Timeout in milliseconds. If the command takes longer than this,
+   * it will be killed and the result will be a timeout failure.
+   * If undefined, no timeout is enforced.
+   */
+  timeoutMs?: number;
+}
+
+/**
  * Runs a user-configured test suite command in the resolution worktree.
  *
- * Story: "Full suite must pass before anything publishes" (happy path)
+ * Story: "Full suite must pass before anything publishes" (fail-closed)
  *
  * Execution:
  *   - If `suiteCommand` is undefined/empty, returns success (noop)
@@ -373,17 +385,22 @@ export type SuiteGateResult =
  *   - Measures execution duration
  *   - Exit code 0 → success, other codes → failure
  *   - Logs exit code, duration, and command output
+ *   - Timeout: if exceeded, kills the process and returns timeout failure
+ *   - ENOENT or any spawn error: treated as a suite failure with clear reason
  *
  * @param suiteCommand The shell command to run (e.g., `npm test`, `./verify.sh`)
  *                     If undefined/empty, returns success (no suite configured)
  * @param worktreePath The worktree directory where the command executes
  * @param logger       Optional logging function (default: console.log)
- * @returns            SuiteGateResult: { ok: true, ... } or { ok: false, exitCode, duration, ... }
+ * @param options      Optional execution options (timeout, etc.)
+ * @returns            SuiteGateResult: { ok: true, ... } or { ok: false, exitCode, duration, reason }
+ *                     All failures include a clear reason for escalation
  */
 export async function runSuiteGate(
   suiteCommand: string | undefined,
   worktreePath: string,
   logger?: (msg: string) => void,
+  options?: SuiteGateOptions,
 ): Promise<SuiteGateResult> {
   const log = logger ?? console.log;
 
@@ -396,12 +413,24 @@ export async function runSuiteGate(
   // Measure duration
   const startMs = Date.now();
 
+  // Set up timeout if specified
+  let timeoutHandle: NodeJS.Timeout | undefined;
+  const controller = new AbortController();
+
   try {
+    // If a timeout is specified, set up a timer to abort
+    if (options?.timeoutMs !== undefined && options.timeoutMs > 0) {
+      timeoutHandle = setTimeout(() => {
+        controller.abort();
+      }, options.timeoutMs);
+    }
+
     // Run the command in the worktree directory using sh -c
     // This allows complex shell commands with pipes, redirects, etc.
     const result = await execFile('sh', ['-c', suiteCommand], {
       cwd: worktreePath,
       encoding: 'utf-8',
+      signal: controller.signal,
     });
 
     const durationMs = Date.now() - startMs;
@@ -415,11 +444,33 @@ export async function runSuiteGate(
     return { ok: true, exitCode: 0, duration: durationMs };
   } catch (err: any) {
     const durationMs = Date.now() - startMs;
+
+    // Handle abort (timeout) specially
+    if (err.name === 'AbortError' || controller.signal.aborted) {
+      log(`suite gate timed out after ${durationMs}ms`);
+      return {
+        ok: false,
+        exitCode: 1,
+        duration: durationMs,
+        reason: `suite command timed out after ${durationMs}ms`,
+      };
+    }
+
+    // Handle other errors (ENOENT, permission denied, etc.)
     const exitCode = err.code ?? err.status ?? 1;
     const stdout = err.stdout ? String(err.stdout).trim() : '';
     const stderr = err.stderr ? String(err.stderr).trim() : '';
 
-    // Exit code non-zero = failure
+    // Build failure reason with context
+    let reason = `suite command failed`;
+    if (err.code === 'ENOENT') {
+      reason = `suite command not found or not executable`;
+    } else if (exitCode !== 1) {
+      reason = `suite command exited with code ${exitCode}`;
+    } else if (stderr) {
+      reason = `suite command failed: ${stderr}`;
+    }
+
     log(`suite gate failed: exit code ${exitCode}, duration ${durationMs}ms`);
     if (stdout) {
       log(`suite stdout: ${stdout}`);
@@ -432,7 +483,12 @@ export async function runSuiteGate(
       ok: false,
       exitCode,
       duration: durationMs,
-      reason: `suite command exited with code ${exitCode}`,
+      reason,
     };
+  } finally {
+    // Clean up the timeout if it's still pending
+    if (timeoutHandle !== undefined) {
+      clearTimeout(timeoutHandle);
+    }
   }
 }
