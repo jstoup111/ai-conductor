@@ -50,12 +50,18 @@ export const OUT_OF_CREDITS_RE =
  * Parse rate limit wait time from output.
  * Extracts seconds from patterns like "retry after 450 seconds", "retry in 120 seconds",
  * or "try again after 60 seconds".
+ * Applies a minutes heuristic: if extracted value < 60, treats it as minutes and converts to seconds.
  * Returns the parsed integer seconds value.
  */
 export function parseRateLimitWaitSeconds(output: string): number {
   const match = output.match(/(?:retry|try).*(after|in)\s*([0-9]+)/i);
   if (match && match[2]) {
-    return parseInt(match[2], 10);
+    const value = parseInt(match[2], 10);
+    // Apply minutes heuristic: if value < 60, treat as minutes and convert to seconds
+    if (value < 60) {
+      return value * 60;
+    }
+    return value;
   }
   return 0;
 }
