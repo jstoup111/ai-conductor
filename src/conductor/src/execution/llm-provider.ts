@@ -10,6 +10,7 @@ export interface InvokeResult {
   output: string;
   exitCode: number;
   rateLimited?: boolean;
+  waitSeconds?: number;
   sessionExpired?: boolean;
   tokenUsage?: TokenUsage;
   /**
