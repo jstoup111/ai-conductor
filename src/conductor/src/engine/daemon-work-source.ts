@@ -7,7 +7,7 @@
 import type { BacklogItem } from './daemon.js';
 import type { OwnerResolution } from './owner-gate/identity.js';
 import type { OwnerStamp } from './owner-gate/provenance.js';
-import type { DiscoverBacklogOpts, WaitingItem } from './daemon-backlog.js';
+import type { DiscoverBacklogOpts, WaitingItem, GatedItem } from './daemon-backlog.js';
 import type { BlockerResolver } from './blocker-resolver.js';
 import type { PriorityResolution } from './backlog-priority.js';
 import { orderBacklog } from './backlog-priority.js';
@@ -56,7 +56,7 @@ export interface LocalWorkSourceDeps {
     isProcessed: (slug: string) => Promise<boolean>,
     log: (m: string) => void,
     opts: DiscoverBacklogOpts,
-  ) => Promise<{ items: BacklogItem[]; waiting: WaitingItem[] }>;
+  ) => Promise<{ items: BacklogItem[]; waiting: WaitingItem[]; gated: GatedItem[] }>;
   /**
    * Owner-gate injectables (all optional → backward compatible; absent = no
    * gate, discovery is byte-for-byte legacy). ADR-1 naming: these carry the
@@ -129,7 +129,9 @@ export function localWorkSource(deps: LocalWorkSourceDeps): WorkSource {
       // Fresh resolver instance per pass (never cached across polls) — see
       // `makeResolver` doc above and daemon-backlog.ts:210-221.
       const resolver = deps.makeResolver?.();
-      let { items, waiting } = await deps.discoverBacklog(
+      // `gated` is not yet surfaced by WorkSource.discover() (unused as yet,
+      // Task 1) — a later task wires it through to the dashboard.
+      let { items, waiting, gated } = await deps.discoverBacklog(
         deps.projectRoot,
         (slug) => deps.isProcessed(slug),
         deps.log,

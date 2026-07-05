@@ -285,12 +285,42 @@ export interface WaitingItem {
   verdict: BlockerVerdict;
 }
 
+/**
+ * An owner-gate skip surfaced to the operator (FR-7/FR-11). Distinct from
+ * `WaitingItem` (dependency gate): `GatedItem` covers specs (and repo-scoped
+ * conditions) held back by the OWNERSHIP gate, not the dependency gate.
+ *
+ * - `kind: 'spec'` — a single merged spec skipped by the owner gate, carrying
+ *   the reason (`other-owner` | `unowned-post-cutover` | `unowned-indeterminate`),
+ *   the other operator's id when known (`other-owner` only), and an
+ *   operator-actionable remedy hint.
+ * - `kind: 'repo'` — a repo-scoped (non-slug) owner-gate condition: either the
+ *   daemon's own identity is unresolved (fail-closed, nothing scanned this
+ *   pass) or the gate is active with no grandfather cutover configured.
+ *
+ * Populated by later tasks in this plan; `discoverBacklog` returns `gated: []`
+ * unconditionally until then (this task only introduces the type + shape).
+ */
+export interface GatedSpecItem {
+  kind: 'spec';
+  slug: string;
+  reason: 'other-owner' | 'unowned-post-cutover' | 'unowned-indeterminate';
+  otherOwner?: string;
+  remedy: string;
+}
+export interface GatedRepoItem {
+  kind: 'repo';
+  warning: 'identity-unresolved' | 'no-cutover';
+  remedy: string;
+}
+export type GatedItem = GatedSpecItem | GatedRepoItem;
+
 export async function discoverBacklog(
   projectRoot: string,
   isProcessed: (slug: string) => Promise<boolean> = async () => false,
   log: (msg: string) => void = () => {},
   opts: DiscoverBacklogOpts = {},
-): Promise<{ items: BacklogItem[]; waiting: WaitingItem[] }> {
+): Promise<{ items: BacklogItem[]; waiting: WaitingItem[]; gated: GatedItem[] }> {
   const baseBranch = opts.baseBranch ?? 'main';
   const tree = opts.treeSource ?? gitTreeSource(projectRoot, baseBranch);
 
@@ -351,7 +381,7 @@ export async function discoverBacklog(
   };
 
   const planFiles = (await tree.listPlanFiles()).filter((f) => f.endsWith('.md'));
-  if (planFiles.length === 0) return { items: [], waiting: [] };
+  if (planFiles.length === 0) return { items: [], waiting: [], gated: [] };
 
   // Shipped-record dedup (Story 3/Task 4): read every committed shipped
   // record from the base-branch tree ONCE per discovery run (not once per
@@ -540,7 +570,7 @@ export async function discoverBacklog(
   // content-eligible, non-intake specs and dispatch unaffected, preserving
   // today's behavior for hand-authored work.
   if (!opts.resolver) {
-    return { items, waiting: [] };
+    return { items, waiting: [], gated: [] };
   }
   const resolver = opts.resolver;
   const gated: BacklogItem[] = [];
@@ -576,7 +606,7 @@ export async function discoverBacklog(
   }
 
   announceWaitingForRoot(projectRoot, log, waiting);
-  return { items: gated, waiting };
+  return { items: gated, waiting, gated: [] };
 }
 
 /**

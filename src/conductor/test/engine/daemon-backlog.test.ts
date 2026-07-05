@@ -75,7 +75,16 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
     const empty = await mkdtemp(join(tmpdir(), 'empty-'));
     expect(
       await discoverBacklog(empty, undefined, undefined, { treeSource: fsTreeSource(empty) }),
-    ).toEqual({ items: [], waiting: [] });
+    ).toEqual({ items: [], waiting: [], gated: [] });
+    await rm(empty, { recursive: true, force: true });
+  });
+
+  it('returns gated: [] on a no-spec fixture (widened result shape, Task 1)', async () => {
+    const empty = await mkdtemp(join(tmpdir(), 'empty-'));
+    const result = await discoverBacklog(empty, undefined, undefined, {
+      treeSource: fsTreeSource(empty),
+    });
+    expect(result.gated).toEqual([]);
     await rm(empty, { recursive: true, force: true });
   });
 
@@ -91,6 +100,7 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
     });
     expect(result.items.map((b) => b.slug)).toEqual(['feature-shape']);
     expect(result.waiting).toEqual([]);
+    expect(result.gated).toEqual([]);
   });
 
   describe('dependency gate (Task 11)', () => {

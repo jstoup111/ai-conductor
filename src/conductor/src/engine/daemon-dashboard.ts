@@ -6,6 +6,7 @@ import { ALL_STEPS } from './steps.js';
 import type { ComplexityTier, StepStatus } from '../types/index.js';
 import type { BlockerVerdict, IssueRef } from './blocker-resolver.js';
 import type { PriorityBand, PriorityResolution } from './backlog-priority.js';
+import type { GatedItem } from './daemon-backlog.js';
 
 // ── Startup inherited-state dashboard (ADR-013 / FR-1, FR-2, FR-3) ────────────
 //
@@ -114,7 +115,10 @@ export interface ScanInheritedStateDeps {
    * gate, FR-6). A bare-array return (pre-widened callers) is also accepted
    * for backward compatibility and treated as `{ items, waiting: [] }`.
    */
-  discover: () => Promise<BacklogItem[] | { items: BacklogItem[]; waiting: WaitingEntry[] }>;
+  discover: () => Promise<
+    | BacklogItem[]
+    | { items: BacklogItem[]; waiting: WaitingEntry[]; gated?: GatedItem[] }
+  >;
   /** Optional log sink for skipped-worktree diagnostics. */
   log?: (msg: string) => void;
 }
