@@ -936,4 +936,209 @@ describe('engine/daemon — runDaemon', () => {
       logs.filter((m) => m.includes('repo root missing'))
     ).toHaveLength(0);
   });
+
+  // ── Task T5: Event-driven re-dispatch on HALT clear ───────────────────────
+
+  describe('event-driven re-dispatch on HALT clear (watchHaltCleared)', () => {
+    it('parked feature: watchHaltCleared callback is wired when feature halts', async () => {
+      // Happy path: park a feature, verify watchHaltCleared is called with its slug.
+      // The callback fires onCleared, triggering event-driven re-dispatch WITHOUT
+      // waiting for the next idle poll's sleep.
+
+      const halted = new Set<string>();
+      let dispatches = 0;
+      const watchCalls: Array<{ slug: string; onCleared: () => void }> = [];
+
+      const deps: DaemonDeps = {
+        discoverBacklog: staticBacklog(items(1)), // f0 stays in backlog
+        isHalted: async (slug) => halted.has(slug),
+        runFeature: async (it) => {
+          dispatches++;
+          if (dispatches === 1) {
+            // First dispatch: park the feature
+            halted.add(it.slug);
+            return { slug: it.slug, status: 'halted', reason: 'needs human' };
+          }
+          // On re-dispatch (after clear), complete successfully
+          return { slug: it.slug, status: 'done' };
+        },
+        watchHaltCleared: (slug, onCleared) => {
+          // Capture the callback per slug
+          watchCalls.push({ slug, onCleared });
+          return () => {};
+        },
+        sleep: async () => {
+          // Never-resolving sleep: if the daemon waits for this after parking,
+          // the test times out. Event-driven re-dispatch should bypass this.
+          await new Promise(() => {});
+        },
+      };
+
+      const daemonPromise = runDaemon(deps, {
+        concurrency: 1,
+        once: false,
+        maxIdlePolls: 1,
+      });
+
+      // Yield to let daemon park and register the watch
+      await new Promise((r) => setTimeout(r, 10));
+
+      // Verify watchHaltCleared was called with the halted feature
+      expect(watchCalls).toHaveLength(1);
+      expect(watchCalls[0].slug).toBe('f0');
+
+      // Fire the callback to simulate HALT marker cleared event
+      halted.delete('f0');
+      watchCalls[0].onCleared();
+
+      // Yield to allow re-dispatch to happen
+      await new Promise((r) => setTimeout(r, 10));
+
+      // Daemon should complete without hitting the never-resolving sleep
+      const res = await Promise.race([
+        daemonPromise,
+        new Promise<any>((_, reject) =>
+          setTimeout(() => reject(new Error('daemon timeout')), 500)
+        ),
+      ]);
+
+      // Verify the happy path: parked once, then re-dispatched after clear
+      expect(dispatches).toBe(2);
+      expect(res.processed.filter((o) => o.slug === 'f0' && o.status === 'done')).toHaveLength(1);
+    });
+
+    it('parked feature: onCleared callback re-dispatches WITHOUT waiting for sleep tick', async () => {
+      // Verify that when onCleared fires, the feature is picked and dispatched
+      // again IMMEDIATELY, not after the next sleep poll. Track dispatch vs sleep order.
+
+      const halted = new Set<string>();
+      const events: string[] = [];
+
+      const deps: DaemonDeps = {
+        discoverBacklog: staticBacklog(items(1)),
+        isHalted: async (slug) => halted.has(slug),
+        runFeature: async (it) => {
+          if (events.length === 0) {
+            // First dispatch
+            halted.add(it.slug);
+            events.push('dispatch:1');
+            return { slug: it.slug, status: 'halted' };
+          }
+          // Second dispatch (should come BEFORE first sleep completes)
+          events.push('dispatch:2');
+          return { slug: it.slug, status: 'done' };
+        },
+        watchHaltCleared: (slug, onCleared) => {
+          // Trigger clear immediately (simulating file watch)
+          setTimeout(() => {
+            events.push('onCleared:fired');
+            halted.delete(slug);
+            onCleared();
+          }, 5);
+          return () => {};
+        },
+        sleep: async () => {
+          // This should NOT be called before dispatch:2 happens (event-driven path)
+          events.push('sleep:started');
+          await new Promise(() => {});
+        },
+      };
+
+      const daemonPromise = runDaemon(deps, {
+        concurrency: 1,
+        once: false,
+        maxIdlePolls: 1,
+      });
+
+      const res = await Promise.race([
+        daemonPromise,
+        new Promise<any>((_, reject) =>
+          setTimeout(() => reject(new Error('daemon timeout')), 500)
+        ),
+      ]);
+
+      // Verify event order: dispatch 1 → onCleared fired → dispatch 2 (NO sleep before dispatch:2)
+      const dispatchIdx = events.indexOf('dispatch:1');
+      const clearIdx = events.indexOf('onCleared:fired');
+      const sleepIdx = events.indexOf('sleep:started');
+      const dispatch2Idx = events.indexOf('dispatch:2');
+
+      expect(dispatchIdx).toBeGreaterThanOrEqual(0);
+      expect(clearIdx).toBeGreaterThan(dispatchIdx); // clear fires after first dispatch
+      expect(dispatch2Idx).toBeGreaterThan(clearIdx); // re-dispatch fires after clear
+      // Critical: re-dispatch must happen WITHOUT sleep blocking
+      expect(dispatch2Idx).toBeLessThan(sleepIdx); // dispatch:2 before sleep:started
+    });
+
+    it('multiple halted features: each gets its own watchHaltCleared watcher', async () => {
+      // When multiple features halt concurrently, each gets a separate watch.
+      const halted = new Set<string>();
+      const watchedSlugs: string[] = [];
+
+      const deps: DaemonDeps = {
+        discoverBacklog: staticBacklog(items(2)), // f0, f1
+        isHalted: async (slug) => halted.has(slug),
+        runFeature: async (it) => {
+          halted.add(it.slug);
+          return { slug: it.slug, status: 'halted' };
+        },
+        watchHaltCleared: (slug, onCleared) => {
+          watchedSlugs.push(slug);
+          return () => {};
+        },
+        sleep: async () => {
+          await new Promise(() => {});
+        },
+      };
+
+      const daemonPromise = runDaemon(deps, {
+        concurrency: 2,
+        once: false,
+        maxIdlePolls: 1,
+      });
+
+      // Yield to let both features dispatch and register watches
+      await new Promise((r) => setTimeout(r, 20));
+
+      // Both features should be watched
+      expect(watchedSlugs).toContain('f0');
+      expect(watchedSlugs).toContain('f1');
+    });
+
+    it('watchHaltCleared is NOT called for done features', async () => {
+      // Verify the callback is only registered when a feature halts, not when done.
+      const watchCalls: string[] = [];
+
+      const deps: DaemonDeps = {
+        discoverBacklog: staticBacklog(items(1)),
+        runFeature: async (it) => {
+          // Completes without halting
+          return { slug: it.slug, status: 'done' };
+        },
+        watchHaltCleared: (slug, onCleared) => {
+          watchCalls.push(slug);
+          return () => {};
+        },
+        sleep: async () => {
+          await new Promise(() => {});
+        },
+      };
+
+      const daemonPromise = runDaemon(deps, {
+        concurrency: 1,
+        once: true,
+      });
+
+      const res = await Promise.race([
+        daemonPromise,
+        new Promise<any>((_, reject) =>
+          setTimeout(() => reject(new Error('daemon timeout')), 500)
+        ),
+      ]);
+
+      // No halt, so no watch
+      expect(watchCalls).toHaveLength(0);
+      expect(res.processed[0].status).toBe('done');
+    });
+  });
 });
