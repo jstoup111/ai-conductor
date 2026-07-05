@@ -51,6 +51,8 @@ import {
   repairProcessed,
   makeFeatureRunnerDeps,
 } from './engine/daemon-deps.js';
+import { isOperatorParked } from './engine/park-marker.js';
+import { listOperatorParkedSlugs } from './engine/park-marker.js';
 import { readState, writeState, getStepStatus } from './engine/state.js';
 import { makeGitRunner, originDefaultBranch } from './engine/rebase.js';
 import {
@@ -462,6 +464,17 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     // new base instead of the stale one. One-shot (sentinel consumed). A
     // re-conflict re-parks via 9.0's existing HALT path — skip `conductor.run()`.
     const ranManualTest = getStepStatus(baseState, 'manual_test') !== 'skipped';
+    // Task 8 (operator-park): a human-placed halt must survive re-kick sweeps
+    // unconditionally — that includes NOT consuming a pending `.pipeline/REKICK`
+    // sentinel. Checked BEFORE `resumeRebaseFirst` (which is one-shot: it
+    // deletes the sentinel up front regardless of outcome) so a parked
+    // worktree's sentinel is left completely untouched for a human to inspect
+    // or for the eventual un-park to resume normally.
+    const parked = await isOperatorParked(projectRoot, item.slug);
+    if (parked) {
+      log(`re-kick resume ${item.slug}: skipped — operator-parked (sentinel preserved)`);
+      return;
+    }
     const resume = await resumeRebaseFirst({
       worktreePath: wt.path,
       localBase: baseBranch,
@@ -637,6 +650,15 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     log,
     hasWarned: (slug) => hasWarned(projectRoot, slug),
     markWarned: (slug) => markWarned(projectRoot, slug),
+    // Task 6 (operator-park): the same real `park-marker.ts` primitive backing
+    // the dispatch-eligibility `isParked` dep above, threaded into the re-kick
+    // sweep so a human-placed halt survives sweeps across daemon restarts
+    // (FR-2). Read errors are logged as anomalies rather than thrown — the
+    // sweep already fails toward parked on error (see daemon-rekick.ts).
+    isOperatorParked: (slug) =>
+      isOperatorParked(projectRoot, slug, (err) =>
+        log(`anomaly checking if ${slug} is parked: ${err.message}`),
+      ),
   };
 
   // Task 14: Create the real restart requester with injected lock + process
@@ -650,6 +672,10 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     {
       discoverBacklog: discoverTick,
       isHalted: (slug) => isHalted(worktreeBase, slug),
+      // Task 7 (operator-park): consulted alongside `isHalted` — a
+      // `.daemon/parked/<slug>` marker is durable across restarts and is
+      // never lifted by clearing the HALT marker (halt-clear resume, PR-#109).
+      isParked: (slug) => isOperatorParked(projectRoot, slug),
       // FR-1 (Task 11): gate dispatch on the durable `.daemon/PAUSED` marker,
       // re-polled every loop iteration by runDaemon so a pause lifted mid-run
       // resumes dispatch at the next boundary (no restart required).
@@ -677,7 +703,30 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
           discover: () => discoverTick({ refresh: true }),
           log,
         });
-        log(`\n${renderDashboard(state)}`);
+        // Task 11 (operator-park, FR-6): PARKED outranks every other group.
+        // `scanInheritedState` has no concept of parking, so compute the
+        // parked overlay here — every slug the scan surfaced, PLUS a listing
+        // of `.daemon/parked/` itself so a stale park (no worktree, no
+        // backlog entry) still renders instead of vanishing silently.
+        const candidateSlugs = new Set<string>([
+          ...state.halted.map((h) => h.slug),
+          ...state.inProgress.map((p) => p.slug),
+          ...state.eligible.map((e) => e.slug),
+          ...state.processed.map((p) => p.slug),
+          ...(state.waiting ?? []).map((w) => w.slug),
+        ]);
+        for (const slug of await listOperatorParkedSlugs(projectRoot)) {
+          candidateSlugs.add(slug);
+        }
+        const parked: string[] = [];
+        for (const slug of candidateSlugs) {
+          if (await isOperatorParked(projectRoot, slug, (err) =>
+            log(`anomaly checking if ${slug} is parked: ${err.message}`),
+          )) {
+            parked.push(slug);
+          }
+        }
+        log(`\n${renderDashboard({ ...state, parked })}`);
       },
       // FR-4: resolve the base-branch tip SHA from the SAME local default branch
       // the backlog reads. On idle refresh we fast-forward it first so the SHA

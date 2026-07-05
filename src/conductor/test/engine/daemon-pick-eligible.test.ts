@@ -47,3 +47,60 @@ describe('pickEligible — no head-of-line blocking (FR-4 negative)', () => {
     expect(result?.slug).toBe('free-spec');
   });
 });
+
+// Task 7 (operator-park) — dispatch eligibility: a `.daemon/parked/<slug>`
+// operator-park marker sits beside the `isHalted` consult and makes the slug
+// permanently ineligible for dispatch — independent of the in-run
+// `parked`/`started` bookkeeping and independent of the HALT marker state.
+describe('pickEligible — operator-parked slugs are ineligible for dispatch (FR-2 happy)', () => {
+  it('does not dispatch a parked backlog slug on a normal tick', async () => {
+    const items: BacklogItem[] = [{ slug: 'parked-spec' }, { slug: 'free-spec' }];
+    const result = await pickEligible(
+      { items },
+      {
+        inFlight: new Set(),
+        parked: new Set(),
+        started: new Set(),
+        isParked: async (slug) => slug === 'parked-spec',
+      },
+    );
+    expect(result?.slug).toBe('free-spec');
+  });
+
+  it('still refuses a parked slug whose HALT marker was removed (halt-clear resume, PR-#109)', async () => {
+    // isHalted reports false (marker cleared) but isOperatorParked still reports
+    // true — the operator park is a separate, durable stop that HALT-clearing
+    // must not lift.
+    const items: BacklogItem[] = [{ slug: 'parked-spec' }];
+    const result = await pickEligible(
+      { items },
+      {
+        inFlight: new Set(),
+        parked: new Set(['parked-spec']),
+        started: new Set(),
+        isHalted: async () => false,
+        isParked: async (slug) => slug === 'parked-spec',
+      },
+    );
+    expect(result).toBeUndefined();
+  });
+
+  it('remains ineligible across a restart simulation (fresh in-run state, same fs)', async () => {
+    // Simulates a fresh daemon process: `inFlight`/`parked`/`started` are all
+    // empty (in-memory state does not survive a restart) but the durable
+    // `.daemon/parked/<slug>` marker (modeled here via `isParked`) still exists
+    // on disk, so the slug must still be skipped.
+    const items: BacklogItem[] = [{ slug: 'parked-spec' }, { slug: 'free-spec' }];
+    const result = await pickEligible(
+      { items },
+      {
+        inFlight: new Set(),
+        parked: new Set(),
+        started: new Set(),
+        isHalted: async () => false,
+        isParked: async (slug) => slug === 'parked-spec',
+      },
+    );
+    expect(result?.slug).toBe('free-spec');
+  });
+});

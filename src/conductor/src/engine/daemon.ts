@@ -63,6 +63,14 @@ export interface PickEligibleCtx {
   parked: Set<string>;
   started: Set<string>;
   isHalted?: (slug: string) => Promise<boolean>;
+  /**
+   * True while `slug` carries a durable `.daemon/parked/<slug>` operator-park
+   * marker (Task 7, operator-park). Unlike `isHalted`, an operator park is
+   * never lifted by clearing `.pipeline/HALT` — only an explicit un-park
+   * (Task 8+) makes the slug eligible again. Consulted alongside `isHalted`,
+   * at the same eligibility-guard layer.
+   */
+  isParked?: (slug: string) => Promise<boolean>;
 }
 
 /**
@@ -81,6 +89,10 @@ export async function pickEligible(
 ): Promise<BacklogItem | undefined> {
   for (const b of backlog.items) {
     if (ctx.inFlight.has(b.slug)) continue;
+    // Operator-park (Task 7): a durable, HALT-independent stop. Checked
+    // alongside `isHalted` below, but never lifted by a cleared HALT marker —
+    // only an explicit un-park makes the slug eligible again.
+    if (ctx.isParked && (await ctx.isParked(b.slug))) continue;
     if (ctx.parked.has(b.slug)) {
       if (!ctx.isHalted || (await ctx.isHalted(b.slug))) continue; // still parked
       // marker cleared → fall through as eligible (re-dispatch + resume)
@@ -138,6 +150,14 @@ export interface DaemonDeps {
    * production wires the real `.pipeline/HALT` check (see daemon-deps.ts).
    */
   isHalted?: (slug: string) => Promise<boolean>;
+  /**
+   * True while `slug` carries a durable `.daemon/parked/<slug>` operator-park
+   * marker (Task 7, operator-park). Consulted alongside `isHalted` in
+   * `pickEligible` — but never lifted by clearing HALT; only an explicit
+   * un-park makes the slug eligible again. Pure-core default: never parked —
+   * production wires `isOperatorParked` (see park-marker.ts / daemon-deps.ts).
+   */
+  isParked?: (slug: string) => Promise<boolean>;
   /**
    * FR-1 (Task 11): true while dispatch is paused (`.daemon/PAUSED`). Gates the
    * fill-pool block — no NEW feature is picked/dispatched while paused. Does
@@ -495,7 +515,13 @@ export async function runDaemon(
       // First-in-backlog-order eligible item (Task 14: `pickEligible` consumes
       // only `items`, never `waiting`, so a dependency-gated spec never causes
       // head-of-line blocking of a later, unblocked one).
-      const pickCtx: PickEligibleCtx = { inFlight, parked, started, isHalted: deps.isHalted };
+      const pickCtx: PickEligibleCtx = {
+        inFlight,
+        parked,
+        started,
+        isHalted: deps.isHalted,
+        isParked: deps.isParked,
+      };
 
       let next: BacklogItem | undefined;
       if (!paused) {

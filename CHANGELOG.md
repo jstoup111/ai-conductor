@@ -494,6 +494,14 @@ Reverting is not supported: if you revert past this version, the `dist` symlink 
   `localWorkSource` post-gate ordering and `daemon-dashboard.ts` for visualization.
   See `.docs/specs/2026-07-03-daemon-issue-priority-scheduling.md` and
   `adr-2026-07-03-priority-labels-refresh-and-fallback-semanatics.md`.
+- **Operator park/unpark: human-placed halt that survives re-kick.** `conduct daemon park <slug>`
+  and `conduct daemon unpark <slug>` let an operator mark a single worktree ineligible for
+  dispatch and re-kick without stopping the daemon. The state is a `.daemon/parked/<slug>`
+  marker (`engine/park-marker.ts`), validated against `.docs/plans/<slug>.md` or
+  `.worktrees/<slug>` before writing. Operator-parked is distinct from HALTed: clearing a
+  HALT never unparks a slug, and parking preserves the REKICK sentinel so re-dispatch resumes
+  exactly where it left off once unparked. The status dashboard's PARKED group has absolute
+  precedence over every other group (operator-park-a-human-placed-halt-must-survive-the).
 
 ## Migration
 
