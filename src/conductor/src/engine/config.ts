@@ -179,6 +179,8 @@ export function validateConfig(
     'model_fallback_ladder',
     // Daemon auto-restart on stale engine.
     'auto_restart_on_stale_engine',
+    // Auto-resolve merge conflicts on open PRs.
+    'mergeable_autoresolve',
   ]);
   for (const key of Object.keys(obj)) {
     if (!knownTopLevelKeys.has(key)) {
@@ -442,6 +444,12 @@ export function validateConfig(
     if (err) return { ok: false, error: err };
   }
 
+  // mergeable_autoresolve
+  if (obj.mergeable_autoresolve !== undefined) {
+    const err = validateMergeableAutoresolveBlock(obj.mergeable_autoresolve);
+    if (err) return { ok: false, error: err };
+  }
+
   // acceptance_spec_globs — list of extra globs for the acceptance_specs gate.
   if (obj.acceptance_spec_globs !== undefined) {
     if (!Array.isArray(obj.acceptance_spec_globs)) {
@@ -534,6 +542,20 @@ export function validateConfig(
   } else {
     // C1: absent or null → false without warning
     obj.auto_restart_on_stale_engine = false;
+  }
+
+  // mergeable_autoresolve — auto-resolve merge conflicts on open PRs.
+  // Apply defaults: enabled defaults to false, cooldownMinutes defaults to 60,
+  // suiteCommand remains undefined if not provided.
+  if (obj.mergeable_autoresolve !== undefined && isPlainObject(obj.mergeable_autoresolve)) {
+    const block = obj.mergeable_autoresolve as Record<string, unknown>;
+    if (block.enabled === undefined) {
+      block.enabled = false;
+    }
+    if (block.cooldownMinutes === undefined) {
+      block.cooldownMinutes = 60;
+    }
+    // suiteCommand is optional and remains undefined if not provided
   }
 
   return { ok: true, config: obj as HarnessConfig, warnings };
@@ -643,6 +665,46 @@ function validateAssessBlock(raw: unknown): ConfigError | null {
         };
       }
     }
+  }
+  return null;
+}
+
+function validateMergeableAutoresolveBlock(raw: unknown): ConfigError | null {
+  if (!isPlainObject(raw)) {
+    return { type: 'validation_error', message: 'mergeable_autoresolve must be an object' };
+  }
+  const obj = raw as Record<string, unknown>;
+  const allowed = new Set(['enabled', 'cooldownMinutes', 'suiteCommand']);
+  for (const k of Object.keys(obj)) {
+    if (!allowed.has(k)) {
+      return { type: 'validation_error', message: `Unknown key in mergeable_autoresolve: "${k}"` };
+    }
+  }
+  if (obj.enabled !== undefined && typeof obj.enabled !== 'boolean') {
+    return {
+      type: 'validation_error',
+      message: 'mergeable_autoresolve.enabled must be a boolean',
+    };
+  }
+  if (obj.cooldownMinutes !== undefined) {
+    if (typeof obj.cooldownMinutes !== 'number' || !Number.isFinite(obj.cooldownMinutes)) {
+      return {
+        type: 'validation_error',
+        message: 'mergeable_autoresolve.cooldownMinutes must be a number',
+      };
+    }
+    if (obj.cooldownMinutes < 0) {
+      return {
+        type: 'validation_error',
+        message: 'mergeable_autoresolve.cooldownMinutes must be non-negative',
+      };
+    }
+  }
+  if (obj.suiteCommand !== undefined && typeof obj.suiteCommand !== 'string') {
+    return {
+      type: 'validation_error',
+      message: 'mergeable_autoresolve.suiteCommand must be a string',
+    };
   }
   return null;
 }

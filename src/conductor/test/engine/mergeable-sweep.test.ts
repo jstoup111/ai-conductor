@@ -153,7 +153,7 @@ const PR_URL = 'https://github.com/foo/bar/pull/42';
 const PR_URL_2 = 'https://github.com/foo/bar/pull/43';
 
 function entry(prUrl = PR_URL): WatchEntry {
-  return { prUrl, slug: 'test-feature', repoCwd: '/fake/repo' };
+  return { prUrl, slug: 'test-feature', repoCwd: '/fake/repo', resolveAttempts: 0 };
 }
 
 // ── Temp dir lifecycle ────────────────────────────────────────────────────────
@@ -234,6 +234,42 @@ describe('readWatch', () => {
     const result = await readWatch(tmpDir);
     expect(result).toHaveLength(1);
     expect(result[0]).toEqual(entry());
+  });
+
+  it('parses a legacy entry (without resolution state fields) with zero-defaults', async () => {
+    await mkdir(join(tmpDir, '.daemon'), { recursive: true });
+    // Legacy entry: only prUrl, slug, repoCwd
+    const legacyEntry = { prUrl: PR_URL, slug: 'test-feature', repoCwd: '/fake/repo' };
+    await writeFile(
+      join(tmpDir, '.daemon', 'mergeable-watch.jsonl'),
+      JSON.stringify(legacyEntry) + '\n',
+    );
+    const result = await readWatch(tmpDir);
+    expect(result).toHaveLength(1);
+    // Legacy entries should have resolveAttempts = 0 and lastResolveAt = undefined
+    expect(result[0].prUrl).toBe(PR_URL);
+    expect(result[0].slug).toBe('test-feature');
+    expect(result[0].repoCwd).toBe('/fake/repo');
+    expect(result[0].resolveAttempts).toBe(0);
+    expect(result[0].lastResolveAt).toBeUndefined();
+  });
+
+  it('round-trips an extended entry with resolution state fields unchanged', async () => {
+    const extendedEntry = {
+      prUrl: PR_URL,
+      slug: 'test-feature',
+      repoCwd: '/fake/repo',
+      resolveAttempts: 3,
+      lastResolveAt: '2026-07-04T10:30:00Z',
+    };
+    await mkdir(join(tmpDir, '.daemon'), { recursive: true });
+    await writeFile(
+      join(tmpDir, '.daemon', 'mergeable-watch.jsonl'),
+      JSON.stringify(extendedEntry) + '\n',
+    );
+    const result = await readWatch(tmpDir);
+    expect(result).toHaveLength(1);
+    expect(result[0]).toEqual(extendedEntry);
   });
 });
 

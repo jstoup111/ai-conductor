@@ -394,3 +394,32 @@ export function resolveSelfHostConfig(config?: HarnessConfig): ResolvedSelfHostC
     authParkTimeoutMinutes: timeoutMinutes,
   };
 }
+
+// ────────────────────────────────────────────────────────────────────────────
+// Mergeable autoresolve configuration (auto-resolve merge conflicts on open PRs)
+// ────────────────────────────────────────────────────────────────────────────
+
+export const DEFAULT_MERGEABLE_AUTORESOLVE_ENABLED = false;
+export const DEFAULT_MERGEABLE_AUTORESOLVE_COOLDOWN_MINUTES = 60;
+
+/** Fully-resolved mergeable autoresolve settings (no optional fields). */
+export interface ResolvedMergeableAutoresolveConfig {
+  enabled: boolean;
+  cooldownMinutes: number;
+  suiteCommand: string | undefined;
+}
+
+/**
+ * Resolve the `mergeable_autoresolve` block to concrete settings.
+ * Absent block defaults to disabled (safe-by-default).
+ * Validation of the raw block happens in `validateConfig`; this resolver
+ * assumes a validated (or absent) block and only applies defaults.
+ */
+export function resolveMergeableAutoresolve(config?: HarnessConfig): ResolvedMergeableAutoresolveConfig {
+  const block = config?.mergeable_autoresolve;
+  return {
+    enabled: block?.enabled ?? DEFAULT_MERGEABLE_AUTORESOLVE_ENABLED,
+    cooldownMinutes: block?.cooldownMinutes ?? DEFAULT_MERGEABLE_AUTORESOLVE_COOLDOWN_MINUTES,
+    suiteCommand: block?.suiteCommand,
+  };
+}

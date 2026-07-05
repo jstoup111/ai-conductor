@@ -815,3 +815,345 @@ export async function readChangelogIfPresent(
     return null;
   }
 }
+
+// ── .docs keep-both resolver ────────────────────────────────────────────────
+
+/**
+ * Deterministic resolver for .docs/ conflicts: keep both sides of add/add or
+ * rename/rename conflicts by preserving both versions with distinct names,
+ * then stage and continue the rebase.
+ *
+ * STRICT SCOPE: Only processes add/add and rename/rename conflicts within .docs/.
+ * Rejects:
+ *   - Any conflict outside .docs/
+ *   - Edit conflicts (content collision on same file)
+ *   - Mixed scenarios (some .docs/, some non-.docs/)
+ *
+ * Returns {resolved: true} when all .docs/ conflicts are kept-both resolved
+ * and the rebase --continue succeeds. Returns {resolved: false, reason} if
+ * any conflict is out of scope or if rebase --continue fails.
+ */
+export const docsKeepBothResolver: RebaseResolver = async (ctx) => {
+  const { conflicts, projectRoot, baseRef } = ctx;
+
+  // Only resolve .docs/ conflicts; anything else is not our domain.
+  if (!conflicts.every((f) => f.startsWith('.docs/'))) {
+    return { resolved: false, reason: 'non-.docs/ conflicts cannot be keep-both resolved' };
+  }
+
+  const git = makeGitRunner(projectRoot);
+
+  try {
+    // Resolve each .docs/ conflict by keeping both sides.
+    // For rename/rename conflicts, multiple paths might be in the conflicts list but belong
+    // to the same conflict (original file + both renamed versions). We process them and then
+    // use git add -A to stage everything in .docs/.
+    for (const conflictedFile of conflicts) {
+      await resolveDocsConflictKeepBoth(git, projectRoot, conflictedFile);
+    }
+
+    // Stage all changes in .docs/ directory (covers add/add and rename/rename resolutions).
+    const stageResult = await git(['add', '-A', '.docs/']);
+    if (stageResult.exitCode !== 0) {
+      return { resolved: false, reason: 'failed to stage resolved .docs/ files' };
+    }
+
+    // Continue the rebase.
+    const cont = await git(['-c', 'core.editor=true', 'rebase', '--continue']);
+    if (cont.exitCode !== 0) {
+      return { resolved: false, reason: 'rebase --continue failed after .docs keep-both resolution' };
+    }
+
+    return { resolved: true };
+  } catch (e) {
+    const errorMsg = e instanceof Error ? e.message : String(e);
+    // Distinguish between scope rejections (edit conflicts) and unexpected errors.
+    if (errorMsg.includes('edit conflict')) {
+      return {
+        resolved: false,
+        reason: `${errorMsg} — not in keep-both scope`,
+      };
+    }
+    return { resolved: false, reason: `unexpected error during .docs resolution: ${errorMsg}` };
+  }
+};
+
+/**
+ * Resolve a single .docs/ conflict by keeping both versions. Handles ONLY:
+ *   - add/add: write both stage 2 and stage 3 to distinct filenames
+ *   - rename/rename: both renamed versions already distinct, just keep both
+ *
+ * REJECTS:
+ *   - edit conflicts: same file with common ancestor, both sides edited content
+ *   - delete/edit or other asymmetric conflicts
+ *
+ * Throws an error if the conflict is not add/add or rename/rename.
+ * Returns the paths of resolved files to be staged (for valid conflicts only).
+ */
+async function resolveDocsConflictKeepBoth(
+  git: GitRunner,
+  projectRoot: string,
+  conflictedFile: string,
+): Promise<string[]> {
+  const resolvedPaths: string[] = [];
+
+  // Get the unmerged status to determine conflict type.
+  const statusR = await git(['ls-files', '--stage', conflictedFile]);
+  const stages = statusR.stdout
+    .trim()
+    .split('\n')
+    .filter((l) => l.length > 0);
+
+  if (stages.length === 0) {
+    // File not in index — shouldn't happen, but no-op.
+    return resolvedPaths;
+  }
+
+  // Parse stages: each line is "mode hash stage\tpath"
+  // Stages: 1 = common ancestor, 2 = ours (base), 3 = theirs (feature).
+  const stageMap = new Map<number, string>();
+  for (const line of stages) {
+    const m = line.match(/^(\d+)\s+[0-9a-f]+\s+(\d+)\t(.+)$/);
+    if (m) {
+      const stage = parseInt(m[2], 10);
+      const path = m[3];
+      stageMap.set(stage, path);
+    }
+  }
+
+  // Determine the conflict type by which stages are present.
+  const hasStage1 = stageMap.has(1);
+  const hasStage2 = stageMap.has(2);
+  const hasStage3 = stageMap.has(3);
+
+  if (!hasStage2 || !hasStage3) {
+    // Not a typical conflict with both sides — shouldn't happen.
+    return resolvedPaths;
+  }
+
+  if (!hasStage1) {
+    // add/add conflict: both sides added the file, no common ancestor.
+    // Write both versions with suffixes to distinguish them.
+    const { dir, name, ext } = parsePath(conflictedFile);
+    const base2 = await git(['show', `:2:${conflictedFile}`]);
+    const base3 = await git(['show', `:3:${conflictedFile}`]);
+
+    if (base2.exitCode === 0 && base3.exitCode === 0) {
+      const path2 = join(dir, `${name}~ours${ext}`);
+      const path3 = join(dir, `${name}~theirs${ext}`);
+      await writeFile(join(projectRoot, path2), base2.stdout, 'utf-8');
+      await writeFile(join(projectRoot, path3), base3.stdout, 'utf-8');
+      resolvedPaths.push(path2, path3);
+      // Remove the conflicted entry itself from the index.
+      await git(['rm', conflictedFile]);
+    }
+  } else {
+    // hasStage1 = true: either edit conflict or rename/rename.
+    // Distinguish: rename/rename has stage2Path !== stage3Path; edit conflict has them equal.
+    const stage2Path = stageMap.get(2);
+    const stage3Path = stageMap.get(3);
+
+    // If stage 2 and stage 3 point to the same path, it's an edit conflict → reject.
+    if (stage2Path === stage3Path) {
+      throw new Error(
+        `edit conflict (content divergence) in ${conflictedFile} — keep-both can only resolve add/add or rename/rename`,
+      );
+    }
+
+    // rename/rename conflict: both sides renamed the same file differently.
+    if (stage2Path && stage3Path) {
+      // Extract the content from both stages.
+      const stage2Content = await git(['show', `:2:${conflictedFile}`]);
+      const stage3Content = await git(['show', `:3:${conflictedFile}`]);
+
+      // If the git show commands fail, try using the renamed paths directly.
+      let content2: string = '';
+      let content3: string = '';
+
+      if (stage2Content.exitCode === 0) {
+        content2 = stage2Content.stdout;
+      } else {
+        // Fallback: try to read from the renamed path in the index
+        const fallback2 = await git(['show', `:2:${stage2Path}`]);
+        if (fallback2.exitCode === 0) content2 = fallback2.stdout;
+      }
+
+      if (stage3Content.exitCode === 0) {
+        content3 = stage3Content.stdout;
+      } else {
+        // Fallback: try to read from the renamed path in the index
+        const fallback3 = await git(['show', `:3:${stage3Path}`]);
+        if (fallback3.exitCode === 0) content3 = fallback3.stdout;
+      }
+
+      // Write both versions to their renamed paths if we have content.
+      if (content2 || content3) {
+        if (content2) {
+          await writeFile(join(projectRoot, stage2Path), content2, 'utf-8');
+          resolvedPaths.push(stage2Path);
+        }
+        if (content3) {
+          await writeFile(join(projectRoot, stage3Path), content3, 'utf-8');
+          resolvedPaths.push(stage3Path);
+        }
+        // Remove the original conflicted file from the index.
+        await git(['rm', '--cached', conflictedFile]);
+      }
+    }
+  }
+
+  return resolvedPaths;
+}
+
+/** Parse a path into {dir, name, ext} for suffix manipulation. */
+function parsePath(path: string): { dir: string; name: string; ext: string } {
+  const lastSlash = path.lastIndexOf('/');
+  const dir = lastSlash >= 0 ? path.slice(0, lastSlash) : '.';
+  const file = lastSlash >= 0 ? path.slice(lastSlash + 1) : path;
+
+  const lastDot = file.lastIndexOf('.');
+  const name = lastDot >= 0 ? file.slice(0, lastDot) : file;
+  const ext = lastDot >= 0 ? file.slice(lastDot) : '';
+
+  return { dir, name, ext };
+}
+
+// ── Tier 1 resolver driver ──────────────────────────────────────────────────
+
+/**
+ * Tier 1 deterministic resolution driver: compose the CHANGELOG resolver +
+ * keep-both resolver for .docs/ conflicts on a paused rebase.
+ *
+ * Returns {resolved: string[], remaining: string[]} tracking which conflicted
+ * files were resolved and which remain. A file is considered resolved if:
+ *   - It was in the original conflict list AND
+ *   - A resolver successfully handled it (staged the resolution)
+ *
+ * Strategy: Stage all resolvable conflicts, then attempt ONE rebase --continue.
+ * If it succeeds, all staged files are considered resolved. If it fails
+ * (due to unresolvable conflicts), we keep the staging and report what was
+ * attempted. The rebase remains paused with a mix of staged + unstaged conflicts.
+ *
+ * Operates in one pass:
+ *   1. Identify CHANGELOG conflicts and attempt resolution (stage only, no continue)
+ *   2. Identify .docs/ conflicts and attempt resolution (stage only, no continue)
+ *   3. Attempt ONE rebase --continue
+ *   4. Check what conflicts remain
+ */
+export async function runTier1(
+  git: GitRunner,
+  projectRoot: string,
+): Promise<{ resolved: string[]; remaining: string[] }> {
+  const originalConflicts = await conflictedFiles(git);
+
+  // If no conflicts, nothing to do.
+  if (originalConflicts.length === 0) {
+    return { resolved: [], remaining: [] };
+  }
+
+  const staged: string[] = [];
+
+  // Attempt to stage CHANGELOG resolution if CHANGELOG.md is in conflicts.
+  if (originalConflicts.includes(CHANGELOG)) {
+    const changelogStaged = await tier1StageChangelog(git, projectRoot);
+    if (changelogStaged) {
+      staged.push(CHANGELOG);
+    }
+  }
+
+  // Attempt to stage .docs/ resolutions for .docs/ conflicts.
+  const docsConflicts = originalConflicts.filter((f) => f.startsWith('.docs/'));
+  if (docsConflicts.length > 0) {
+    const docsStaged = await tier1StageDocsKeepBoth(git, projectRoot, docsConflicts);
+    if (docsStaged) {
+      staged.push(...docsConflicts);
+    }
+  }
+
+  // If nothing was staged, nothing was resolved.
+  if (staged.length === 0) {
+    return { resolved: [], remaining: originalConflicts };
+  }
+
+  // Attempt to continue the rebase with staged resolutions.
+  const cont = await git(['-c', 'core.editor=true', 'rebase', '--continue']);
+  const continueSucceeded = cont.exitCode === 0;
+
+  // If --continue succeeded, the rebase advanced (either completed or paused on new conflicts).
+  // All staged files are considered resolved.
+  if (continueSucceeded) {
+    const remaining = await conflictedFiles(git);
+    return { resolved: staged, remaining };
+  }
+
+  // If --continue failed (e.g., new conflicts surfaced), the staged files are still staged
+  // but the rebase didn't advance. Report them as attempted (staged) but not fully resolved.
+  const finalConflicts = await conflictedFiles(git);
+  return { resolved: staged, remaining: finalConflicts };
+}
+
+/**
+ * Attempt to stage a CHANGELOG.md conflict resolution using the existing auto-resolver.
+ * During a paused rebase, extracts feature additions from the conflict stages
+ * (`:3:` is the feature version), builds the resolved version, and stages it.
+ * Does NOT run rebase --continue.
+ *
+ * Returns true if staged, false if the resolver could not safely apply.
+ */
+async function tier1StageChangelog(
+  git: GitRunner,
+  projectRoot: string,
+): Promise<boolean> {
+  // Get the base/upstream version (`:2:` during rebase is ours/the base).
+  const baseSide = await git(['show', `:2:${CHANGELOG}`]);
+  if (baseSide.exitCode !== 0) return false;
+
+  // Get the feature version (`:3:` during rebase is theirs/the feature).
+  const featureSide = await git(['show', `:3:${CHANGELOG}`]);
+  if (featureSide.exitCode !== 0) return false;
+
+  // Extract feature additions by comparing feature side with base side.
+  const featureAdditions = unreleasedAdditions(baseSide.stdout, featureSide.stdout);
+
+  // Try the auto-resolve (same logic as performRebase).
+  const resolved = buildResolvedChangelog(baseSide.stdout, featureAdditions);
+  if (resolved === null) return false;
+
+  await writeFile(join(projectRoot, CHANGELOG), resolved, 'utf-8');
+  const add = await git(['add', CHANGELOG]);
+  if (add.exitCode !== 0) return false;
+
+  return true;
+}
+
+/**
+ * Attempt to stage .docs/ conflict resolutions using the keep-both resolver.
+ * Resolves all .docs/ conflicts at once by keeping both sides of add/add
+ * and rename/rename conflicts, and stages the results.
+ * Does NOT run rebase --continue.
+ *
+ * Returns true if all .docs/ conflicts were staged, false if any conflict
+ * is out of scope.
+ */
+async function tier1StageDocsKeepBoth(
+  git: GitRunner,
+  projectRoot: string,
+  docsConflicts: string[],
+): Promise<boolean> {
+  try {
+    // Resolve each .docs/ conflict.
+    for (const conflictedFile of docsConflicts) {
+      await resolveDocsConflictKeepBoth(git, projectRoot, conflictedFile);
+    }
+
+    // Stage all changes in .docs/.
+    const stageResult = await git(['add', '-A', '.docs/']);
+    if (stageResult.exitCode !== 0) return false;
+
+    return true;
+  } catch {
+    // Any error (edit conflict, unexpected state) → resolver cannot proceed.
+    return false;
+  }
+}
+

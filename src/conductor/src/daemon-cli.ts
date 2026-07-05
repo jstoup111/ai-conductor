@@ -7,6 +7,8 @@ import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { closeIssueOnImplementationMerge } from './engine/engineer/issue-ref.js';
 import { rehabilitateHaltPr } from './engine/halt-pr-rehabilitation.js';
+import { isEligibleForResolve, resolveConflictingPr } from './engine/autoresolve.js';
+import { resolveRebaseResolutionAttempts } from './engine/resolved-config.js';
 import type { LLMProvider } from './execution/llm-provider.js';
 import { PluginRegistry } from './engine/plugin-registry.js';
 import { registerBuiltins } from './engine/plugin-loader.js';
@@ -54,8 +56,7 @@ import {
 import { isOperatorParked } from './engine/park-marker.js';
 import { listOperatorParkedSlugs } from './engine/park-marker.js';
 import { readState, writeState, getStepStatus } from './engine/state.js';
-import { makeGitRunner, originDefaultBranch } from './engine/rebase.js';
-import { resolveRebaseResolutionAttempts } from './engine/resolved-config.js';
+import { makeGitRunner, originDefaultBranch, type RebaseResolver } from './engine/rebase.js';
 import {
   readBaseSha,
   readPersistedBaseSha,
@@ -801,7 +802,125 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       // NOTE: this binding must stay wired — removing it silently no-ops all
       // startup and idle-poll sweeps in production (daemon.ts guards with ?.()).
       sweepMergeableLabels: async () => {
-        await sweepMergeableLabels({ projectRoot, log });
+        await sweepMergeableLabels({
+          projectRoot,
+          log,
+          // Task 17: dispatch autoresolve for the first eligible CONFLICTING
+          // PR after the label pass, gated on `mergeable_autoresolve.enabled`
+          // so a disabled/absent config leaves the sweep unchanged (AC4).
+          autoresolve: {
+            enabled: config?.mergeable_autoresolve?.enabled ?? false,
+            isEligible: (entry, state) =>
+              isEligibleForResolve(
+                entry,
+                state,
+                config,
+                new Date(),
+                { worktreeExists: async (p) => existsSync(join(projectRoot, p)) },
+                log,
+              ),
+            dispatch: async (entry) => {
+              log(`[mergeable-sweep] autoresolve dispatch: ${entry.prUrl} (attempt ${entry.resolveAttempts})`);
+
+              try {
+                // Fetch the branch name from the PR
+                const prViewResult = await execFile('sh', [
+                  '-c',
+                  `gh pr view "${entry.prUrl}" --json headRefName --jq '.headRefName'`,
+                ], { cwd: entry.repoCwd });
+
+                const branch = (prViewResult.stdout || '').toString().trim();
+                if (!branch) {
+                  log(`[autoresolve] empty branch name for ${entry.prUrl}`);
+                  return { kind: 'escalated' };
+                }
+
+                // Create a gh runner (wrapper around gh commands)
+                const ghRunner = async (args: string[]) => {
+                  const result = await execFile('gh', args, {
+                    cwd: entry.repoCwd,
+                    encoding: 'utf-8',
+                  });
+                  return { stdout: result.stdout || '' };
+                };
+
+                // Create a suite runner (executes the suite command in the worktree)
+                const runSuite = async (projectRoot: string) => {
+                  const cmd = config?.mergeable_autoresolve?.suiteCommand;
+                  if (!cmd) {
+                    return { exitCode: 0, durationMs: 0, configured: false };
+                  }
+
+                  const startMs = Date.now();
+                  try {
+                    await execFile('sh', ['-c', cmd], {
+                      cwd: projectRoot,
+                      encoding: 'utf-8',
+                    });
+                    return {
+                      exitCode: 0,
+                      durationMs: Date.now() - startMs,
+                      configured: true,
+                    };
+                  } catch (err: any) {
+                    return {
+                      exitCode: err.code === 'ERR_CHILD_PROCESS_EXIT' ? (err.status || 1) : 1,
+                      durationMs: Date.now() - startMs,
+                      configured: true,
+                    };
+                  }
+                };
+
+                // Create a real Tier-2 resolver that dispatches to the /rebase skill
+                // FR-7: wire stepRunner and events for rebase resolution dispatch
+                let attempt = 0;
+                const attemptCap = resolveRebaseResolutionAttempts(config);
+                const resolver: RebaseResolver = async (ctx) => {
+                  attempt += 1;
+                  try {
+                    await events.emit({ type: 'rebase_resolution_attempt', index: attempt, cap: attemptCap });
+                  } catch {
+                    /* best-effort: event emission must not block resolution */
+                  }
+                  try {
+                    // Create a fresh step runner for this rebase resolution attempt
+                    const sessionId = uuidv4();
+                    const stepRunner = new DefaultStepRunner(provider, sessionId, ctx.projectRoot, {
+                      featureDesc: `rebase-resolution-${entry.slug}`,
+                      config,
+                      mode: 'auto',
+                    });
+                    return await stepRunner.resolveRebaseConflict(ctx);
+                  } catch (err) {
+                    return {
+                      resolved: false,
+                      reason: err instanceof Error ? err.message : String(err),
+                    };
+                  }
+                };
+
+                // Run the full resolution pipeline
+                const outcome = await resolveConflictingPr(
+                  entry,
+                  branch,
+                  {
+                    enabled: config?.mergeable_autoresolve?.enabled ?? false,
+                    suiteCommand: config?.mergeable_autoresolve?.suiteCommand ?? '',
+                    cooldownMinutes: config?.mergeable_autoresolve?.cooldownMinutes ?? 60,
+                    attemptCap,
+                  },
+                  { runGh: ghRunner, runSuite, resolver, log },
+                );
+
+                log(`[autoresolve] outcome for ${entry.prUrl}: ${outcome.kind}`);
+                return { kind: outcome.kind };
+              } catch (err: any) {
+                log(`[autoresolve] error resolving ${entry.prUrl}: ${err?.message || err}`);
+                return { kind: 'escalated' };
+              }
+            },
+          },
+        });
       },
       // Task T28: check for pending restart marker at idle boundary.
       hasRestartPending: async () => {

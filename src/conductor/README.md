@@ -580,6 +580,76 @@ and non-blocking: a label-read or apply/remove failure is logged and does not di
 processing. Because CI typically finishes after the PR is opened, the sweep re-checks over
 time rather than making a one-shot determination at PR creation.
 
+#### Auto-resolve conflicts on open watched PRs (`mergeable_autoresolve`)
+
+The `mergeable` sweep (above) only ever *labels* a PR — it never touches its branch. Once a
+watched PR drifts from `mergeable` to `CONFLICTING` (the base advanced underneath it), a human
+still has to rebase it by hand. `mergeable_autoresolve` closes that gap: it extends the
+gated rebase-resolution machinery (`engine/rebase.ts`, used at finish-time — see
+"Rebase-on-latest" above) to run against already-shipped, still-open PRs during the same
+sweep tick, entirely opt-in and fail-closed at every stage.
+
+**Config** (`MergeableAutoresolveConfig`, `types/config.ts`, validated in `engine/config.ts` →
+`validateMergeableAutoresolveBlock`):
+
+```yaml
+# pipeline.yml / .ai-conductor/config.yml
+mergeable_autoresolve:
+  enabled: false          # default: false — opt-in, safe by default
+  cooldownMinutes: 60     # default: 60 — minimum gap between resolve attempts per PR
+  suiteCommand: ""        # default: unset — no command means the suite gate is a no-op pass
+```
+
+Every key is optional; an absent `mergeable_autoresolve` block leaves the feature fully
+disabled with zero behavior change to the existing `mergeable` sweep.
+
+**Pipeline** — `sweepMergeableLabels` (`engine/mergeable-sweep.ts`) already re-checks
+`mergeable` state (`prMergeState`, `engine/pr-labels.ts`, via `gh pr view --json
+state,mergeable,statusCheckRollup,labels`) on daemon startup, after every feature completes,
+and on each idle-poll tick. When `mergeable_autoresolve.enabled` is true and a watched PR is
+`CONFLICTING`, the sweep dispatches a resolution attempt (`autoresolve.ts`) instead of merely
+flipping the label, gated by `cooldownMinutes` so a PR is never re-attempted more often than
+configured:
+
+1. **Tier 1 — deterministic resolvers** (`engine/rebase.ts`): narrow, purpose-built resolvers
+   for conflict shapes that are safe to resolve mechanically — the CHANGELOG
+   `[Unreleased]`-section resolver and a `.docs` keep-both resolver (add/add and rename/rename
+   conflicts confined to `.docs/`). These run first because they need no LLM dispatch.
+2. **Tier 2 — gated `/rebase` dispatch**: unresolved conflicts fall through to the same
+   `/rebase` resolution skill the finish-time gate uses, capped by
+   `rebase_resolution_attempts` (default 3, shared with the finish-time gate — see
+   "Gated conflict resolution" above). This reuses one resolution engine and one attempt cap
+   for both entry points rather than maintaining a second implementation
+   (`.docs/decisions/adr-2026-07-04-widen-rebase-resolution-dispatch-to-sweep.md`).
+3. **Acceptance guards** — before any resolution is accepted, it must pass, in order: the
+   rebase state is inactive (no conflict markers / paused rebase left behind), the branch is
+   current with its base (zero commits in `HEAD..base`), and every pre-resolution feature
+   commit is still present (no dropped commits). Any guard failure escalates immediately —
+   no partial or unverified resolution is ever pushed.
+4. **Suite gate (fail-closed)** — if `suiteCommand` is configured, it runs via `sh -c` against
+   the resolved worktree; a nonzero exit, timeout, or spawn error fails the resolution
+   (fail-closed). An unset `suiteCommand` is a no-op pass — the gate never blocks a repo that
+   hasn't opted into a verification command.
+5. **Lease-protected push + finalization** — only after guards and the suite gate pass does
+   the sweep push, using a single `git push --force-with-lease` (no fallback to a plain
+   `--force`), so a resolution can never silently clobber someone else's concurrent push to
+   the same branch. On a successful push the resolve-attempt counter resets, the last-resolved
+   timestamp updates, and the watch registry is rewritten. A process-wide in-flight guard
+   serializes resolutions so two ticks can never race the same worktree.
+
+**Escalation.** If any stage fails — guards, the suite gate, or the lease push itself — the
+sweep escalates rather than retrying silently: it removes the `mergeable` label, applies a
+sticky `needs-remediation` label, and upserts a marker-tagged PR comment naming the stage and
+reason. `needs-remediation` blocks further autoresolve attempts on that PR until a human
+clears it, mirroring the existing HALT-escalation contract used elsewhere in the daemon (see
+"PR labeling" above).
+
+**Safety guarantees:** disabled by default; deterministic resolvers before any LLM dispatch;
+capped Tier-2 attempts; three independent acceptance guards; a fail-closed suite gate with no
+silent pass-through on error; a lease-protected push that cannot overwrite a concurrent
+change; and best-effort, non-blocking escalation on any failure so a bad resolution never
+reaches `main` unlabeled.
+
 ### Model availability fallback ladder (`engine/model-availability.ts`, #186)
 
 Steps and skills are pinned to a preferred model (e.g. Fable for `rebase`, `remediate`,

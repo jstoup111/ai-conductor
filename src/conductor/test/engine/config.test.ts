@@ -877,4 +877,136 @@ complexity:
       expect(result.config.defaults?.model).toBe('sonnet');
     });
   });
+
+  describe('mergeable_autoresolve config block (Task 2)', () => {
+    it('absent block → {enabled:false, cooldownMinutes:60, suiteCommand:undefined}', () => {
+      const result = validateConfig({});
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.mergeable_autoresolve).toBeUndefined();
+    });
+
+    it('full block parses correctly with all fields', () => {
+      const result = validateConfig({
+        mergeable_autoresolve: {
+          enabled: true,
+          cooldownMinutes: 30,
+          suiteCommand: 'npm run test',
+        },
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.mergeable_autoresolve).toEqual({
+        enabled: true,
+        cooldownMinutes: 30,
+        suiteCommand: 'npm run test',
+      });
+    });
+
+    it('partial block with only enabled gets appropriate defaults', () => {
+      const result = validateConfig({
+        mergeable_autoresolve: {
+          enabled: true,
+        },
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.mergeable_autoresolve).toEqual({
+        enabled: true,
+        cooldownMinutes: 60,
+        suiteCommand: undefined,
+      });
+    });
+
+    it('partial block with enabled and cooldownMinutes gets appropriate defaults', () => {
+      const result = validateConfig({
+        mergeable_autoresolve: {
+          enabled: false,
+          cooldownMinutes: 120,
+        },
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.mergeable_autoresolve).toEqual({
+        enabled: false,
+        cooldownMinutes: 120,
+        suiteCommand: undefined,
+      });
+    });
+
+    it('rejects non-boolean enabled value', () => {
+      const result = validateConfig({
+        mergeable_autoresolve: {
+          enabled: 'yes',
+        },
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.message).toMatch(/mergeable_autoresolve.*enabled.*boolean/i);
+    });
+
+    it('rejects non-number cooldownMinutes value', () => {
+      const result = validateConfig({
+        mergeable_autoresolve: {
+          enabled: true,
+          cooldownMinutes: 'thirty',
+        },
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.message).toMatch(/mergeable_autoresolve.*cooldownMinutes.*number/i);
+    });
+
+    it('rejects negative cooldownMinutes value', () => {
+      const result = validateConfig({
+        mergeable_autoresolve: {
+          enabled: true,
+          cooldownMinutes: -5,
+        },
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.message).toMatch(/mergeable_autoresolve.*cooldownMinutes/i);
+    });
+
+    it('rejects non-string suiteCommand value', () => {
+      const result = validateConfig({
+        mergeable_autoresolve: {
+          enabled: true,
+          suiteCommand: 123,
+        },
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.message).toMatch(/mergeable_autoresolve.*suiteCommand.*string/i);
+    });
+
+    it('rejects unknown keys under mergeable_autoresolve', () => {
+      const result = validateConfig({
+        mergeable_autoresolve: {
+          enabled: true,
+          unknownKey: 'value',
+        },
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.message).toMatch(/unknownKey/);
+    });
+
+    it('accepts mergeable_autoresolve alongside other config fields', () => {
+      const result = validateConfig({
+        harness_version: '>=1.0.0',
+        defaults: { model: 'sonnet' },
+        mergeable_autoresolve: {
+          enabled: true,
+          cooldownMinutes: 45,
+          suiteCommand: 'npm test',
+        },
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.mergeable_autoresolve?.enabled).toBe(true);
+      expect(result.config.mergeable_autoresolve?.cooldownMinutes).toBe(45);
+    });
+  });
 });

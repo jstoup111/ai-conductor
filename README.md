@@ -209,6 +209,17 @@ after each feature, and each idle poll tick) keeps the `mergeable` label truthfu
 CI and conflict state, so you can filter the PR list by merge-readiness. Both labels are
 daemon-only; interactive runs are unchanged.
 
+Opt-in via `mergeable_autoresolve: { enabled: true, cooldownMinutes: 60, suiteCommand: "..." }`
+in your project config, the daemon can go further and **auto-resolve** conflicts on watched PRs
+that drift to `CONFLICTING` instead of just labeling them: deterministic Tier-1 resolvers
+(CHANGELOG, `.docs`) run first, unresolved conflicts fall through to the same gated `/rebase`
+dispatch used at finish time (capped by `rebase_resolution_attempts`), and an accepted
+resolution must pass acceptance guards (rebase clean, branch current, no dropped commits) and,
+if configured, a fail-closed `suiteCommand` before a lease-protected
+`git push --force-with-lease`. Any failure at any stage escalates to `needs-remediation`
+instead of retrying blindly. See `src/conductor/README.md` → "Auto-resolve conflicts on open
+watched PRs" for the full pipeline.
+
 On startup, before any dispatch, the daemon prints a grouped **inherited-state
 dashboard** (HALTED / IN-PROGRESS / **WAITING** / ELIGIBLE / PROCESSED) to both your
 terminal and `daemon.log`. Each row shows the bits you triage on — complexity tier, the step a

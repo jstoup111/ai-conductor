@@ -27,6 +27,7 @@ import {
   removeLabel,
   prMergeState,
   isMergeable,
+  type PrMergeState,
 } from './pr-labels.js';
 
 // ── Watch entry ───────────────────────────────────────────────────────────────
@@ -35,6 +36,8 @@ export interface WatchEntry {
   prUrl: string;
   slug: string;
   repoCwd: string;
+  resolveAttempts?: number;
+  lastResolveAt?: string;
 }
 
 const WATCH_FILE = '.daemon/mergeable-watch.jsonl';
@@ -57,6 +60,7 @@ export async function enrollWatch(projectRoot: string, entry: WatchEntry): Promi
 /**
  * Read all valid entries from the watch registry.
  * Tolerates a missing file (returns []) and skips malformed lines.
+ * Normalizes legacy entries: resolveAttempts defaults to 0 if missing.
  */
 export async function readWatch(projectRoot: string): Promise<WatchEntry[]> {
   try {
@@ -77,7 +81,17 @@ export async function readWatch(projectRoot: string): Promise<WatchEntry[]> {
             typeof (obj as Record<string, unknown>).slug === 'string' &&
             typeof (obj as Record<string, unknown>).repoCwd === 'string'
           ) {
-            return [obj as WatchEntry];
+            const raw = obj as Record<string, unknown>;
+            const entry: WatchEntry = {
+              prUrl: raw.prUrl as string,
+              slug: raw.slug as string,
+              repoCwd: raw.repoCwd as string,
+              // Zero-default normalization for legacy entries
+              resolveAttempts: typeof raw.resolveAttempts === 'number' ? raw.resolveAttempts : 0,
+              // lastResolveAt is optional; only include if present
+              ...(typeof raw.lastResolveAt === 'string' && { lastResolveAt: raw.lastResolveAt }),
+            };
+            return [entry];
           }
           return [];
         } catch {
@@ -105,21 +119,64 @@ export async function rewriteWatch(projectRoot: string, entries: WatchEntry[]): 
 
 // ── Sweep ─────────────────────────────────────────────────────────────────────
 
+/**
+ * Task 17: sweep-driven autoresolve dispatch, injected so the sweep can pick
+ * the first eligible CONFLICTING PR after the label pass and hand it off to
+ * the resolution pipeline — without the sweep needing to know how that
+ * pipeline works (worktree prep, rebase, guards, etc. live elsewhere).
+ *
+ * `enabled` is read by the caller from `mergeable_autoresolve.enabled` so the
+ * sweep stays byte-identical to today when the feature is off (AC4).
+ */
+export interface AutoresolveDispatchOpts {
+  /** Config gate — when false, the sweep runs exactly as before (no new work). */
+  enabled: boolean;
+  /**
+   * Eligibility check for a single entry (cooldown, attempt cap, sticky
+   * labels, etc. — see `autoresolve.ts#isEligibleForResolve`). Injected so
+   * this module never imports the resolution pipeline directly.
+   */
+  isEligible: (
+    entry: WatchEntry,
+    state: PrMergeState,
+  ) => Promise<{ eligible: boolean; reason?: string }>;
+  /**
+   * Dispatch resolution for the chosen entry. Called with the entry AFTER
+   * its attempt counter has already been bumped and `lastResolveAt` set
+   * (AC3) — the git work itself happens inside this callback.
+   * Returns the outcome kind so the sweep can reset the counter on success.
+   */
+  dispatch: (entry: WatchEntry) => Promise<{ kind: 'refreshed' | 'escalated' } | void>;
+  /** Clock override for tests; defaults to `new Date()`. */
+  now?: () => Date;
+}
+
 export interface SweepOpts {
   projectRoot: string;
   log?: (msg: string) => void;
   runGh?: GhRunner;
+  /** Task 17: optional autoresolve dispatch, run once per tick after the label pass. */
+  autoresolve?: AutoresolveDispatchOpts;
 }
 
 /**
  * For each tracked PR: evaluate merge state then update the `mergeable` label
  * according to the decision tree; prune closed/merged PRs. Never throws (FR-15).
  */
-export async function sweepMergeableLabels({ projectRoot, log, runGh }: SweepOpts): Promise<void> {
+export async function sweepMergeableLabels({
+  projectRoot,
+  log,
+  runGh,
+  autoresolve,
+}: SweepOpts): Promise<void> {
   const gh = runGh ?? makeProductionGh();
   try {
     const entries = await readWatch(projectRoot);
     const survivors: WatchEntry[] = [];
+    // Task 17 (AC1/AC2): PRs whose `mergeable` field is CONFLICTING, gathered
+    // during the label pass so the autoresolve dispatch below never re-fetches
+    // PR state. Only populated/consulted when autoresolve is configured.
+    const conflictingCandidates: Array<{ entry: WatchEntry; state: PrMergeState }> = [];
 
     for (const entry of entries) {
       try {
@@ -148,6 +205,14 @@ export async function sweepMergeableLabels({ projectRoot, log, runGh }: SweepOpt
         // Entry is live — keep it in the registry.
         survivors.push(entry);
 
+        // Task 17 (AC1): track CONFLICTING PRs for the post-label-pass
+        // autoresolve dispatch below. Collected unconditionally (cheap) but
+        // only ever consulted when `autoresolve` is configured, so a disabled
+        // config leaves the sweep's observable behavior unchanged (AC4).
+        if (state.mergeable === 'CONFLICTING') {
+          conflictingCandidates.push({ entry, state });
+        }
+
         // FR-12: if the PR carries `needs-remediation`, ensure `mergeable` is absent.
         if (state.labels.includes('needs-remediation')) {
           if (state.labels.includes('mergeable')) {
@@ -173,6 +238,40 @@ export async function sweepMergeableLabels({ projectRoot, log, runGh }: SweepOpt
         // Per-PR exception: log + skip, continue with other entries (FR-15).
         log?.(`[mergeable-sweep] error processing ${entry.prUrl}: ${err}`);
         survivors.push(entry);
+      }
+    }
+
+    // Task 17: after the label pass, dispatch resolution for the first
+    // eligible CONFLICTING PR this tick; any further eligible PR is deferred
+    // (AC2). Attempt counter + lastResolveAt are bumped on the survivor entry
+    // BEFORE dispatch runs any git work (AC3). Entirely skipped when
+    // autoresolve is absent or disabled, so the sweep stays byte-identical to
+    // today (AC4).
+    if (autoresolve?.enabled) {
+      let dispatched = false;
+      for (const { entry, state } of conflictingCandidates) {
+        const elig = await autoresolve.isEligible(entry, state);
+        if (!elig.eligible) continue;
+
+        if (dispatched) {
+          log?.(`[mergeable-sweep] deferring ${entry.prUrl} (skip reason: in-flight)`);
+          continue;
+        }
+
+        dispatched = true;
+        const now = autoresolve.now ? autoresolve.now() : new Date();
+        const updated: WatchEntry = {
+          ...entry,
+          resolveAttempts: (entry.resolveAttempts ?? 0) + 1,
+          lastResolveAt: now.toISOString(),
+        };
+        const idx = survivors.findIndex((s) => s.prUrl === entry.prUrl);
+        if (idx >= 0) survivors[idx] = updated;
+
+        const dispatchResult = await autoresolve.dispatch(updated);
+        if (dispatchResult?.kind === 'refreshed') {
+          survivors[idx] = { ...updated, resolveAttempts: 0 };
+        }
       }
     }
 
