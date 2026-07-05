@@ -648,6 +648,68 @@ export async function resolveRebaseConflicts(
   };
 }
 
+/**
+ * Gated wrapper around {@link resolveRebaseConflicts}. This is the piece of the
+ * daemon's rebase mechanism that BOTH `conductor.ts`'s finish-time `runRebaseStep`
+ * and `daemon-rekick.ts`'s FR-12 play-forward `resumeRebaseFirst` must share so a
+ * conflict reached on EITHER path gets the same bounded automated `/rebase`
+ * resolution before a human HALT (#300 — the play-forward path previously wrote a
+ * bare HALT on the first conflict).
+ *
+ *   - A non-`conflict_halt` outcome passes through untouched.
+ *   - `cap <= 0` or no `resolve` fn → the conflict is returned unchanged (FR-7);
+ *     the caller writes the HALT, exactly the pre-resolution behavior.
+ *   - Otherwise `resolve` is dispatched up to `cap` times; a throwing `resolve`
+ *     degrades to a failed attempt (→ eventual HALT) and never propagates.
+ *
+ * Event emission stays at the call site via the optional `onAttempt` / `onSettled`
+ * callbacks so this helper preserves `rebase.ts`'s "pure, git-injected, no event
+ * coupling" contract. A throwing callback is swallowed (best-effort observability
+ * must never block resolution).
+ */
+export async function runGatedRebaseResolution(opts: {
+  git: GitRunner;
+  projectRoot: string;
+  outcome: RebaseOutcome;
+  cap: number;
+  resolve?: RebaseResolver;
+  /** Fired before each resolver dispatch with the 1-based attempt index + cap. */
+  onAttempt?: (index: number, cap: number) => void | Promise<void>;
+  /** Fired once after the loop settles: `succeeded` (rebase completed) or `exhausted`. */
+  onSettled?: (kind: 'succeeded' | 'exhausted') => void | Promise<void>;
+}): Promise<RebaseOutcome> {
+  const { git, projectRoot, outcome, cap, resolve, onAttempt, onSettled } = opts;
+  if (outcome.kind !== 'conflict_halt') return outcome;
+  if (cap <= 0 || !resolve) return outcome;
+
+  let attempt = 0;
+  const countingResolver: RebaseResolver = async (ctx) => {
+    attempt += 1;
+    if (onAttempt) {
+      try {
+        await onAttempt(attempt, cap);
+      } catch {
+        /* best-effort: observability must not block resolution */
+      }
+    }
+    try {
+      return await resolve(ctx);
+    } catch (err) {
+      return { resolved: false, reason: err instanceof Error ? err.message : String(err) };
+    }
+  };
+
+  const resolved = await resolveRebaseConflicts(git, projectRoot, outcome, countingResolver, cap);
+  if (onSettled) {
+    try {
+      await onSettled(resolved.kind === 'conflict_halt' ? 'exhausted' : 'succeeded');
+    } catch {
+      /* best-effort */
+    }
+  }
+  return resolved;
+}
+
 // ── Verdict + event wiring (consumed by the conductor) ───────────────────────
 
 /**

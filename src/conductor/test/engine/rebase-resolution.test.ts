@@ -34,8 +34,10 @@ import {
   performRebase,
   makeGitRunner,
   resolveRebaseConflicts,
+  runGatedRebaseResolution,
   featureCommitsPreserved,
   type ResolutionAttempt,
+  type RebaseOutcome,
 } from '../../src/engine/rebase.js';
 
 const execFile = promisify(execFileCb);
@@ -257,6 +259,176 @@ describe('engine/rebase — resolution reclassification: docs-only → noop', ()
     expect(outcome.kind).toBe('noop');
     expect((await g(['rev-list', '--count', 'HEAD..main'])).stdout.trim()).toBe('0');
     expect((await g(['log', '--format=%s', 'main..HEAD'])).stdout).toContain('feat: notes');
+  });
+});
+
+// ── Shared gate wrapper both call sites use (#300) ────────────────────────────
+
+describe('engine/rebase — runGatedRebaseResolution (shared gate, real git)', () => {
+  let repo: string;
+  const g = (args: string[]) => execFile('git', args, { cwd: repo });
+  const gc = (args: string[]) =>
+    execFile('git', ['-c', 'core.editor=true', ...args], { cwd: repo });
+
+  beforeEach(async () => {
+    repo = await mkdtemp(join(tmpdir(), 'gated-resolution-'));
+    await execFile('git', ['init', '-q', '-b', 'main'], { cwd: repo });
+    await g(['config', 'user.email', 't@t.com']);
+    await g(['config', 'user.name', 'T']);
+    await writeFile(join(repo, 'a.ts'), 'base\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'init']);
+
+    await g(['checkout', '-q', '-b', 'feat']);
+    await writeFile(join(repo, 'a.ts'), 'feature\n');
+    await g(['commit', '-q', '-am', 'feat: change a']);
+
+    await g(['checkout', '-q', 'main']);
+    await writeFile(join(repo, 'a.ts'), 'mainchange\n');
+    await g(['commit', '-q', '-am', 'main: change a']);
+
+    await g(['checkout', '-q', 'feat']);
+  });
+
+  afterEach(async () => {
+    await rm(repo, { recursive: true, force: true });
+  });
+
+  async function intoConflict() {
+    const git = makeGitRunner(repo);
+    const pre = await performRebase(git, repo, 'main');
+    expect(pre.kind).toBe('conflict_halt');
+    return { git, pre };
+  }
+
+  it('passes a non-conflict outcome straight through (no resolver, no callbacks)', async () => {
+    const git = makeGitRunner(repo);
+    let calls = 0;
+    let settled: string | null = null;
+    const noop: RebaseOutcome = { kind: 'noop' };
+    const out = await runGatedRebaseResolution({
+      git,
+      projectRoot: repo,
+      outcome: noop,
+      cap: 3,
+      resolve: async () => {
+        calls++;
+        return { resolved: true };
+      },
+      onSettled: (k) => {
+        settled = k;
+      },
+    });
+    expect(out).toBe(noop);
+    expect(calls).toBe(0);
+    expect(settled).toBeNull();
+  });
+
+  it('cap 0 → resolver never called, conflict returned unchanged (FR-7 parity)', async () => {
+    const { git, pre } = await intoConflict();
+    let calls = 0;
+    const out = await runGatedRebaseResolution({
+      git,
+      projectRoot: repo,
+      outcome: pre,
+      cap: 0,
+      resolve: async () => {
+        calls++;
+        return { resolved: true };
+      },
+    });
+    expect(calls).toBe(0);
+    expect(out.kind).toBe('conflict_halt');
+  });
+
+  it('no resolver wired → conflict returned unchanged (default play-forward behavior)', async () => {
+    const { git, pre } = await intoConflict();
+    const out = await runGatedRebaseResolution({
+      git,
+      projectRoot: repo,
+      outcome: pre,
+      cap: 3,
+      // resolve omitted
+    });
+    expect(out.kind).toBe('conflict_halt');
+  });
+
+  it('resolver resolves → reclassified, onAttempt(1,3) fired, onSettled(succeeded)', async () => {
+    const { git, pre } = await intoConflict();
+    const attempts: Array<{ index: number; cap: number }> = [];
+    let settled: string | null = null;
+    const out = await runGatedRebaseResolution({
+      git,
+      projectRoot: repo,
+      outcome: pre,
+      cap: 3,
+      resolve: async (): Promise<ResolutionAttempt> => {
+        await writeFile(join(repo, 'a.ts'), 'merged\n');
+        await g(['add', 'a.ts']);
+        await gc(['rebase', '--continue']);
+        return { resolved: true };
+      },
+      onAttempt: (index, cap) => {
+        attempts.push({ index, cap });
+      },
+      onSettled: (k) => {
+        settled = k;
+      },
+    });
+    expect(out.kind).toBe('changed');
+    expect(attempts[0]).toEqual({ index: 1, cap: 3 });
+    expect(settled).toBe('succeeded');
+  });
+
+  it('resolver throws → caught as {resolved:false}, short-circuits to HALT, onSettled(exhausted)', async () => {
+    const { git, pre } = await intoConflict();
+    const attempts: number[] = [];
+    let settled: string | null = null;
+    const out = await runGatedRebaseResolution({
+      git,
+      projectRoot: repo,
+      outcome: pre,
+      cap: 3,
+      resolve: async () => {
+        throw new Error('resolver session expired');
+      },
+      onAttempt: (index) => {
+        attempts.push(index);
+      },
+      onSettled: (k) => {
+        settled = k;
+      },
+    });
+    expect(out.kind).toBe('conflict_halt');
+    // A throw degrades to {resolved:false} → FR-6 short-circuit (no further attempts).
+    expect(attempts).toEqual([1]);
+    expect(settled).toBe('exhausted');
+    if (out.kind === 'conflict_halt') {
+      expect(out.reason).toContain('resolver session expired');
+    }
+  });
+
+  it('throwing observability callbacks never break resolution (best-effort)', async () => {
+    const { git, pre } = await intoConflict();
+    const out = await runGatedRebaseResolution({
+      git,
+      projectRoot: repo,
+      outcome: pre,
+      cap: 3,
+      resolve: async (): Promise<ResolutionAttempt> => {
+        await writeFile(join(repo, 'a.ts'), 'merged\n');
+        await g(['add', 'a.ts']);
+        await gc(['rebase', '--continue']);
+        return { resolved: true };
+      },
+      onAttempt: () => {
+        throw new Error('telemetry down');
+      },
+      onSettled: () => {
+        throw new Error('telemetry down');
+      },
+    });
+    expect(out.kind).toBe('changed');
   });
 });
 

@@ -284,6 +284,12 @@ If all attempts are exhausted without an accepted resolution, the engine falls t
 existing HALT path: `.pipeline/HALT` is written, the rebase is left paused (conflict markers
 intact), and no PR is opened.
 
+The **same** gated loop backs the main-advance re-kick *play-forward* rebase
+(`resumeRebaseFirst`, FR-12): when a re-kicked feature re-conflicts while rebasing onto the
+advanced base, the daemon runs the bounded `/rebase` attempts before parking for a human —
+identical to the finish-time step. Previously this path took a single bare rebase attempt and
+hard-HALTed on the first conflict (#300).
+
 **Daemon-only.** The gated resolution loop runs only in daemon (`mode: 'auto'`, `daemon: true`)
 mode. Interactive `/conduct` runs are unchanged — humans resolve conflicts by hand. The `/rebase`
 skill is also manually invokable by an operator (`/rebase`) for conflict resolution outside the
