@@ -35,6 +35,8 @@ export interface WatchEntry {
   prUrl: string;
   slug: string;
   repoCwd: string;
+  resolveAttempts?: number;
+  lastResolveAt?: string;
 }
 
 const WATCH_FILE = '.daemon/mergeable-watch.jsonl';
@@ -57,6 +59,7 @@ export async function enrollWatch(projectRoot: string, entry: WatchEntry): Promi
 /**
  * Read all valid entries from the watch registry.
  * Tolerates a missing file (returns []) and skips malformed lines.
+ * Normalizes legacy entries: resolveAttempts defaults to 0 if missing.
  */
 export async function readWatch(projectRoot: string): Promise<WatchEntry[]> {
   try {
@@ -77,7 +80,17 @@ export async function readWatch(projectRoot: string): Promise<WatchEntry[]> {
             typeof (obj as Record<string, unknown>).slug === 'string' &&
             typeof (obj as Record<string, unknown>).repoCwd === 'string'
           ) {
-            return [obj as WatchEntry];
+            const raw = obj as Record<string, unknown>;
+            const entry: WatchEntry = {
+              prUrl: raw.prUrl as string,
+              slug: raw.slug as string,
+              repoCwd: raw.repoCwd as string,
+              // Zero-default normalization for legacy entries
+              resolveAttempts: typeof raw.resolveAttempts === 'number' ? raw.resolveAttempts : 0,
+              // lastResolveAt is optional; only include if present
+              ...(typeof raw.lastResolveAt === 'string' && { lastResolveAt: raw.lastResolveAt }),
+            };
+            return [entry];
           }
           return [];
         } catch {
