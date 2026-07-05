@@ -1577,6 +1577,16 @@ fi
 ## [Unreleased]
 
 ### Fixed
+- CI: the `engineer-agent-hosted` acceptance suite failed under the new PR
+  workflow (#322) because `dispatchEngineer({kind:'land'})` resolves a
+  machine-scoped owner-gate identity from `~/.ai-conductor/config.yml` (where
+  `spec_owner` wins over the `gh` fallback). With no `spec_owner` and no `gh`
+  auth on the CI runner the land path exited *"identity unresolved"* before
+  reaching the behavior under test — six tests green locally (dev is gh-authed)
+  but red in CI. Fixed by pointing `HOME` at a hermetic fake home carrying
+  `spec_owner` in the suite's `beforeEach` (the same pattern the sibling
+  `engineer-cli-land-owner` and `conductor-owner-stamp` suites already use),
+  so identity resolves deterministically and independently of ambient gh auth.
 - conduct-ts: the `engineer` routing adapter (Phase 9.3) built its provider call
   as `provider.invoke({ prompt } as any)`, omitting the **required** `sessionId`
   and `resume` fields of `InvokeOptions`. The `as any` cast hid the type error;
