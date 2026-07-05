@@ -20,10 +20,20 @@ import {
   ensureLabel,
   addLabel,
   upsertComment,
+  prMergeState,
   OWNER_GATED_MARKER,
 } from './pr-labels.js';
 
 export { OWNER_GATED_MARKER };
+
+/**
+ * PR states for which write-back is a no-op: the PR has already left the
+ * "open" lifecycle, so there is nothing left to label/comment on. A PR that
+ * merged was presumably already announced while open; a closed PR is dead.
+ * `NOTFOUND` (deleted/inaccessible) is treated the same way — see
+ * {@link announceGatedPr}.
+ */
+const TERMINAL_PR_STATES = new Set(['MERGED', 'CLOSED', 'NOTFOUND']);
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -110,10 +120,19 @@ export async function upsertGatedMarkerComment(
  *
  * If no PR is known for the spec (`prUrl` falsy), the write-back is skipped
  * entirely — no `gh` call is made — since there is nothing to label/comment
- * on yet.
+ * on yet. Zero git side effects either way: this module never shells out to
+ * `git`, only `gh`.
  *
- * Both steps are independently best-effort/non-throwing; a failure in one
- * does not prevent the other from being attempted.
+ * If the PR is already MERGED, CLOSED, or genuinely gone (404/NOTFOUND), the
+ * write-back is also skipped: a merged PR was presumably already announced
+ * while it was open, and there is nothing useful to label/comment on a dead
+ * PR. This one `pr view` lookup is the only extra `gh` call added for this
+ * check — no retries are attempted regardless of its outcome.
+ *
+ * Both steps (label, comment) are independently best-effort/non-throwing; a
+ * failure in one (e.g. a label-add race against a concurrent labeler) does
+ * not prevent the other from being attempted — the comment still lands even
+ * if the label call failed, and vice versa.
  */
 export async function announceGatedPr(
   spec: GatedSpecEntry,
@@ -125,6 +144,14 @@ export async function announceGatedPr(
 
   if (!prUrl) {
     log?.(`[gate-writeback] no PR known for gated spec "${spec.slug}" — skipping label/comment`);
+    return;
+  }
+
+  const state = await prMergeState(runGh, cwd, prUrl, log);
+  if (TERMINAL_PR_STATES.has(state.state)) {
+    log?.(
+      `[gate-writeback] PR ${prUrl} for gated spec "${spec.slug}" is ${state.state} — skipping label/comment`,
+    );
     return;
   }
 

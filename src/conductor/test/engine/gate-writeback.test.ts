@@ -191,6 +191,7 @@ describe('gate-writeback (Task 17)', () => {
   describe('announceGatedPr (orchestrator)', () => {
     it('composes ensureGatedPrLabel + upsertGatedMarkerComment for a newly gated spec', async () => {
       const { gh, calls } = fakeGh([
+        { stdout: JSON.stringify({ state: 'OPEN', mergeable: 'MERGEABLE', statusCheckRollup: [], labels: [] }) }, // prMergeState
         { stdout: '' }, // ensureLabel
         { stdout: '' }, // addLabel
         { stdout: JSON.stringify({ comments: [] }) }, // upsertComment lookup
@@ -210,6 +211,123 @@ describe('gate-writeback (Task 17)', () => {
       await expect(
         announceGatedPr(SPEC, PR_URL, { runGh: gh, cwd: '/repo', log: () => {} }),
       ).resolves.toBeUndefined();
+    });
+
+    // ── Task 19: write-back failure semantics (S6 NP-1..NP-5) ──────────────
+
+    it('NP-1: skips silently when the target PR is already MERGED (no label/comment calls)', async () => {
+      const { gh, calls } = fakeGh([
+        { stdout: JSON.stringify({ state: 'MERGED', mergeable: 'UNKNOWN', statusCheckRollup: [], labels: [] }) },
+      ]);
+      const logs: string[] = [];
+
+      await announceGatedPr(SPEC, PR_URL, { runGh: gh, cwd: '/repo', log: (m) => logs.push(m) });
+
+      // Only the merge-state lookup call — no label/comment calls at all.
+      expect(calls.length).toBe(1);
+      expect(calls.some((c) => c.join(' ').includes('labels[]=owner-gated'))).toBe(false);
+      expect(calls.some((c) => c.join(' ').includes(OWNER_GATED_MARKER))).toBe(false);
+      expect(logs.some((m) => m.includes('MERGED'))).toBe(true);
+    });
+
+    it('NP-1: skips silently when the target PR is already CLOSED', async () => {
+      const { gh, calls } = fakeGh([
+        { stdout: JSON.stringify({ state: 'CLOSED', mergeable: 'UNKNOWN', statusCheckRollup: [], labels: [] }) },
+      ]);
+      await announceGatedPr(SPEC, PR_URL, { runGh: gh, cwd: '/repo' });
+      expect(calls.length).toBe(1);
+    });
+
+    it('NP-2: gh non-zero on the merge-state lookup is logged once and does not retry or throw', async () => {
+      let ghCalls = 0;
+      const gh: GhRunner = async () => {
+        ghCalls++;
+        throw new Error('gh: rate limited');
+      };
+      const logs: string[] = [];
+
+      await announceGatedPr(SPEC, PR_URL, { runGh: gh, cwd: '/repo', log: (m) => logs.push(m) });
+
+      // prMergeState's error yields a non-terminal sentinel (UNKNOWN), so
+      // label/comment are still attempted (each swallowing its own error):
+      // 1 (prMergeState) + 2 (ensureGatedPrLabel) + 2 (upsertComment: failed
+      // lookup, then a create fallback) = 5 total gh calls, no retries piled
+      // on top of any single failing call.
+      expect(ghCalls).toBe(5);
+      expect(logs.filter((m) => m.includes('rate limited')).length).toBeGreaterThan(0);
+    });
+
+    it('NP-3: a PATCH failure updating the marker comment is terminal — no fallback create', async () => {
+      const markedUrl = `${PR_URL}#issuecomment-123`;
+      const calls: string[][] = [];
+      const gh: GhRunner = async (args) => {
+        calls.push([...args]);
+        if (args[0] === 'pr' && args[1] === 'view' && args.includes('state,mergeable,statusCheckRollup,labels')) {
+          return { stdout: JSON.stringify({ state: 'OPEN', mergeable: 'MERGEABLE', statusCheckRollup: [], labels: [] }) };
+        }
+        if (args[0] === 'label' || (args[0] === 'api' && args.includes('POST'))) {
+          return { stdout: '' };
+        }
+        if (args[0] === 'pr' && args[1] === 'view' && args.includes('comments')) {
+          return {
+            stdout: JSON.stringify({
+              comments: [{ body: `${OWNER_GATED_MARKER}\nold`, url: markedUrl }],
+            }),
+          };
+        }
+        if (args[0] === 'api' && args.includes('PATCH')) {
+          throw new Error('PATCH failed: 500');
+        }
+        throw new Error(`unexpected call: ${args.join(' ')}`);
+      };
+      const logs: string[] = [];
+
+      await announceGatedPr(SPEC, PR_URL, { runGh: gh, cwd: '/repo', log: (m) => logs.push(m) });
+
+      // No 'pr comment' create call fired as a fallback after the PATCH failed.
+      expect(calls.find((c) => c[0] === 'pr' && c[1] === 'comment')).toBeUndefined();
+      expect(logs.some((m) => m.includes('PATCH failed'))).toBe(true);
+    });
+
+    it('NP-4: no PR found (falsy prUrl) skips with a notice and makes zero gh calls', async () => {
+      const { gh, calls } = fakeGh([]);
+      const logs: string[] = [];
+
+      await announceGatedPr(SPEC, '', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m) });
+
+      expect(calls.length).toBe(0);
+      expect(logs.some((m) => m.includes('no PR known'))).toBe(true);
+    });
+
+    it('NP-5: a label-add race (conflict error) is swallowed and the comment still lands', async () => {
+      const calls: string[][] = [];
+      const gh: GhRunner = async (args) => {
+        calls.push([...args]);
+        if (args[0] === 'pr' && args[1] === 'view' && args.includes('state,mergeable,statusCheckRollup,labels')) {
+          return { stdout: JSON.stringify({ state: 'OPEN', mergeable: 'MERGEABLE', statusCheckRollup: [], labels: [] }) };
+        }
+        if (args[0] === 'label') {
+          return { stdout: '' };
+        }
+        if (args[0] === 'api' && args.includes('POST')) {
+          // Simulate a concurrent labeler winning the race.
+          throw new Error('422 Label already exists / conflict');
+        }
+        if (args[0] === 'pr' && args[1] === 'view' && args.includes('comments')) {
+          return { stdout: JSON.stringify({ comments: [] }) };
+        }
+        if (args[0] === 'pr' && args[1] === 'comment') {
+          return { stdout: '' };
+        }
+        return { stdout: '' };
+      };
+
+      await announceGatedPr(SPEC, PR_URL, { runGh: gh, cwd: '/repo', log: () => {} });
+
+      const commentCall = calls.find((c) => c[0] === 'pr' && c[1] === 'comment');
+      expect(commentCall).toBeDefined();
+      const body = commentCall![commentCall!.indexOf('--body') + 1];
+      expect(body).toContain(OWNER_GATED_MARKER);
     });
   });
 });
