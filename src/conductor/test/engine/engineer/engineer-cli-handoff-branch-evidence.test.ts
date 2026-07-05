@@ -14,7 +14,7 @@
 // 4. If ledger.transition throws, exit 0 with stderr error message (handoff still succeeds).
 // 5. pr-opened path regression: original flow works unchanged (branch recorded by openSpecPr caller if needed).
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -364,5 +364,273 @@ describe('engineer handoff — branch evidence recording on local-commit/pr-skip
     // The reportDone call would set status to 'done' and prUrl, but that's
     // beyond the scope of this test — we just verify we didn't break the pr-opened output.
     expect(result.url).toBe(PR_URL);
+  });
+});
+
+describe('engineer handoff — evidence-write failure handling + pr-opened regression (Task 10)', () => {
+  it('TEST 10.1: handoff with --source-ref + openSpecPr throws + ledger.transition throws → exit 0, stderr contains error', async () => {
+    const sourceRef = 'o/a#243';
+    const realLedger = createLedger(join(engineerDir, 'ledger.json'));
+
+    // Seed ledger entry with status 'claimed'
+    await realLedger.record({ source: 'github-issues', sourceRef });
+    await realLedger.transition('github-issues', sourceRef, 'claimed', {});
+
+    const worktree = await seedWorktree();
+    const branch = await git(['rev-parse', '--abbrev-ref', 'HEAD'], worktree);
+
+    // gh runner throws simulating openSpecPr failure
+    const gh = async () => {
+      throw new Error('Network error');
+    };
+
+    // Use vi.mock to intercept createLedger and return a mocked ledger that throws on transition
+    const { out, err, opts } = captureOpts({
+      gh: gh as any,
+      ensureRunningLaunch: async () => {},
+    });
+
+    // Mock the createLedger to throw on transition (for the branch evidence recording path)
+    const ledgerModule = await import('../../../src/engine/engineer/intake/ledger.js');
+    const originalCreateLedger = ledgerModule.createLedger;
+    let transitionThrowCount = 0;
+    vi.spyOn(ledgerModule, 'createLedger').mockImplementation((path: string) => {
+      // Return a mock ledger that throws on transition
+      return {
+        async known() { return false; },
+        async record() {},
+        async transition() {
+          transitionThrowCount++;
+          throw new Error('Ledger write failed: disk full');
+        },
+        async get() {
+          return { source: 'github-issues', sourceRef, status: 'claimed', attempts: 0 };
+        },
+        async forget() {},
+        async reopen() {},
+      };
+    });
+
+    const code = await dispatchEngineer(
+      {
+        kind: 'handoff',
+        project: 'test-proj',
+        branch,
+        worktree,
+        sourceRef,
+      },
+      opts,
+    );
+
+    vi.restoreAllMocks();
+
+    // Assert: exit 0 (handoff succeeds despite ledger error)
+    expect(code).toBe(0);
+
+    // Assert: stdout has kind 'local-commit'
+    const result = JSON.parse(out[0]);
+    expect(result.kind).toBe('local-commit');
+
+    // Assert: stderr contains the ledger error message
+    const stderrText = err.join('\n');
+    expect(stderrText).toMatch(/Failed to record branch evidence.*disk full/i);
+
+    // Assert: transition was actually attempted
+    expect(transitionThrowCount).toBeGreaterThan(0);
+  });
+
+  it('TEST 10.2: handoff with --source-ref + pr-skipped outcome + ledger.transition throws → exit 0, stderr contains error', async () => {
+    const sourceRef = 'o/b#100';
+    const realLedger = createLedger(join(engineerDir, 'ledger.json'));
+
+    // Seed ledger entry with status 'claimed'
+    await realLedger.record({ source: 'github-issues', sourceRef });
+    await realLedger.transition('github-issues', sourceRef, 'claimed', {});
+
+    const worktree = await seedWorktree();
+    const branch = await git(['rev-parse', '--abbrev-ref', 'HEAD'], worktree);
+
+    // gh runner throws with no-remote error (triggers pr-skipped)
+    const gh = async () => {
+      throw new Error('git: error: No remote configured.');
+    };
+
+    const { out, err, opts } = captureOpts({
+      gh: gh as any,
+      ensureRunningLaunch: async () => {},
+    });
+
+    // Mock createLedger to return a ledger that throws on transition
+    const ledgerModule = await import('../../../src/engine/engineer/intake/ledger.js');
+    let transitionThrowCount = 0;
+    vi.spyOn(ledgerModule, 'createLedger').mockImplementation((path: string) => {
+      return {
+        async known() { return false; },
+        async record() {},
+        async transition() {
+          transitionThrowCount++;
+          throw new Error('Ledger write failed: permission denied');
+        },
+        async get() {
+          return { source: 'github-issues', sourceRef, status: 'claimed', attempts: 0 };
+        },
+        async forget() {},
+        async reopen() {},
+      };
+    });
+
+    const code = await dispatchEngineer(
+      {
+        kind: 'handoff',
+        project: 'test-proj',
+        branch,
+        worktree,
+        sourceRef,
+      },
+      opts,
+    );
+
+    vi.restoreAllMocks();
+
+    // Assert: exit 0
+    expect(code).toBe(0);
+
+    // Assert: stdout has kind 'local-commit' (pr-skipped surfaces as local-commit)
+    const result = JSON.parse(out[0]);
+    expect(result.kind).toBe('local-commit');
+
+    // Assert: stderr contains the ledger error message
+    const stderrText = err.join('\n');
+    expect(stderrText).toMatch(/Failed to record branch evidence.*permission denied/i);
+
+    // Assert: transition was attempted
+    expect(transitionThrowCount).toBeGreaterThan(0);
+  });
+
+  it('TEST 10.3: handoff pr-opened path → entry transitions to done with prUrl+branch (reportDone regression)', async () => {
+    const ledger = createLedger(join(engineerDir, 'ledger.json'));
+    const sourceRef = 'o/e#200';
+    const PR_URL = 'https://github.com/o/e/pull/999';
+
+    // Seed ledger entry
+    await ledger.record({ source: 'github-issues', sourceRef });
+    await ledger.transition('github-issues', sourceRef, 'claimed', {});
+
+    const worktree = await seedWorktree();
+    const branch = await git(['rev-parse', '--abbrev-ref', 'HEAD'], worktree);
+
+    // gh succeeds with a PR URL
+    const gh = async (args: string[]) => {
+      if (args[0] === 'pr' && args[1] === 'create') {
+        return { stdout: `Opening pull request...\n${PR_URL}\n` };
+      }
+      if (args[0] === 'pr' && args[1] === 'edit') {
+        return { stdout: '' };
+      }
+      return { stdout: JSON.stringify({}) };
+    };
+
+    const { out, opts } = captureOpts({
+      gh: gh as any,
+      ensureRunningLaunch: async () => {},
+    });
+
+    const code = await dispatchEngineer(
+      {
+        kind: 'handoff',
+        project: 'test-proj',
+        branch,
+        worktree,
+        sourceRef,
+      },
+      opts,
+    );
+
+    // Assert: exit 0
+    expect(code).toBe(0);
+
+    // Assert: stdout has kind 'pr-opened' with URL
+    const result = JSON.parse(out[0]);
+    expect(result.kind).toBe('pr-opened');
+    expect(result.url).toBe(PR_URL);
+
+    // Assert: ledger entry is now 'done' with prUrl and branch (reportDone result)
+    const afterHandoff = await ledger.get('github-issues', sourceRef);
+    expect(afterHandoff?.status).toBe('done');
+    expect(afterHandoff?.prUrl).toBe(PR_URL);
+    expect(afterHandoff?.branch).toBe(branch);
+  });
+
+  it('TEST 10.4: handoff pr-opened with gh failure during reportDone → exit 0, stderr, entry marked done anyway', async () => {
+    const ledger = createLedger(join(engineerDir, 'ledger.json'));
+    const sourceRef = 'o/f#250';
+    const PR_URL = 'https://github.com/o/f/pull/888';
+
+    // Seed ledger entry
+    await ledger.record({ source: 'github-issues', sourceRef });
+    await ledger.transition('github-issues', sourceRef, 'claimed', {});
+
+    const worktree = await seedWorktree();
+    const branch = await git(['rev-parse', '--abbrev-ref', 'HEAD'], worktree);
+
+    // gh succeeds for openSpecPr but fails for reportDone (pr comment/label)
+    let callCount = 0;
+    const gh = async (args: string[]) => {
+      callCount++;
+      if (args[0] === 'pr' && args[1] === 'create') {
+        // openSpecPr succeeds and returns PR URL
+        return { stdout: `Opening pull request...\n${PR_URL}\n` };
+      }
+      if (args[0] === 'pr' && args[1] === 'comment') {
+        // reportDone tries to comment — fails
+        throw new Error('gh: failed to comment on PR (403 Forbidden)');
+      }
+      if (args[0] === 'issue' && args[1] === 'edit') {
+        // reportDone tries to add label — fails
+        throw new Error('gh: failed to update labels (403 Forbidden)');
+      }
+      if (args[0] === 'pr' && args[1] === 'edit') {
+        return { stdout: '' };
+      }
+      return { stdout: JSON.stringify({}) };
+    };
+
+    const { out, err, opts } = captureOpts({
+      gh: gh as any,
+      ensureRunningLaunch: async () => {},
+    });
+
+    const code = await dispatchEngineer(
+      {
+        kind: 'handoff',
+        project: 'test-proj',
+        branch,
+        worktree,
+        sourceRef,
+      },
+      opts,
+    );
+
+    // Assert: exit 0 (handoff succeeds, PR is opened regardless of reportDone gh failure)
+    expect(code).toBe(0);
+
+    // Assert: stdout has kind 'pr-opened' with URL
+    const result = JSON.parse(out[0]);
+    expect(result.kind).toBe('pr-opened');
+    expect(result.url).toBe(PR_URL);
+
+    // Assert: stderr may show the gh failures from reportDone (advisory)
+    // But the key is: even though reportDone gh fails, the ledger is still updated to done
+    // (because reportDone itself doesn't throw, it swallows errors internally)
+    const stderrText = err.join('\n');
+    // Note: reportDone swallows the errors, so we may or may not see them in stderr
+    // The important thing is we don't fail the handoff
+
+    // Assert: ledger entry is marked done with prUrl (reportDone succeeds at ledger level
+    // even if gh fails)
+    const afterHandoff = await ledger.get('github-issues', sourceRef);
+    expect(afterHandoff?.status).toBe('done');
+    expect(afterHandoff?.prUrl).toBe(PR_URL);
+    expect(afterHandoff?.branch).toBe(branch);
   });
 });
