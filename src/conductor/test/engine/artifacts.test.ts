@@ -14,6 +14,7 @@ import {
   FINISH_CHOICE_MARKER,
   HALT_MARKER,
   planStem,
+  planHasDependencyTree,
 } from '../../src/engine/artifacts.js';
 
 describe('engine/artifacts', () => {
@@ -648,6 +649,102 @@ describe('engine/artifacts', () => {
 
       expect(removed).toHaveLength(0);
       expect(await findArtifactFiles(dir, 'manual_test')).toHaveLength(1);
+    });
+  });
+
+  describe('planHasDependencyTree', () => {
+    it('returns true when plan has task dependencies with **Dependencies:** field', () => {
+      const planWithDependencies = `
+# Implementation Plan: Versioned Engine Store
+
+## Tasks
+
+### Task 1: engine-store module — layout + version-id + listing
+**Story:** FR-13/FR-14 (foundations)
+**Type:** infrastructure
+**Dependencies:** none
+
+### Task 2: publish script — staging build + finalize
+**Story:** FR-13 happy ("publish flow is staging → finalize")
+**Type:** infrastructure
+**Dependencies:** Task 1
+
+### Task 3: atomic current flip — never in-place
+**Story:** FR-13 neg (mid-load publish → wholly-old or wholly-new)
+**Type:** happy-path
+**Dependencies:** Task 2
+`;
+      expect(planHasDependencyTree(planWithDependencies)).toBe(true);
+    });
+
+    it('returns true when plan has a Task Dependency Graph section', () => {
+      const planWithGraphSection = `
+# Implementation Plan: Complex Feature
+
+## Tasks
+
+### Task 1: Foundation work
+**Story:** S-1
+**Type:** infrastructure
+
+### Task 2: Dependent task
+**Story:** S-2
+**Type:** feature
+
+## Task Dependency Graph
+
+Task 1 → Task 2 → Task 3
+`;
+      expect(planHasDependencyTree(planWithGraphSection)).toBe(true);
+    });
+
+    it('returns false when plan has no dependency declarations', () => {
+      const planWithoutDependencies = `
+# Implementation Plan: Simple Feature
+
+## Tasks
+
+### Task 1: First task
+**Story:** S-1
+**Type:** feature
+
+### Task 2: Second task
+**Story:** S-2
+**Type:** feature
+
+### Task 3: Third task
+**Story:** S-3
+**Type:** feature
+`;
+      expect(planHasDependencyTree(planWithoutDependencies)).toBe(false);
+    });
+
+    it('returns false for an empty plan', () => {
+      expect(planHasDependencyTree('')).toBe(false);
+    });
+
+    it('is case-insensitive for Task Dependency Graph heading', () => {
+      const plan = `
+# Plan
+
+## task dependency graph
+
+Task 1 → Task 2
+`;
+      expect(planHasDependencyTree(plan)).toBe(true);
+    });
+
+    it('is case-insensitive for Dependencies field', () => {
+      const plan = `
+# Plan
+
+### Task 1
+**dependencies:** Task 0
+
+### Task 2
+**DEPENDENCIES:** Task 1
+`;
+      expect(planHasDependencyTree(plan)).toBe(true);
     });
   });
 });
