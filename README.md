@@ -821,7 +821,7 @@ UNDERSTAND → DECIDE → BUILD → SHIP
 | BUILD | `/writing-system-tests` → `/pipeline` or `/tdd`, `/code-review`, `/debugging` | Acceptance specs → TDD → evaluator gates |
 | SHIP | `/manual-test` → `/prd-audit` → `/architecture-review --as-built` → `/retro` → `/finish`, `/pr` | curl/browser validation → PRD compliance audit → as-built architecture sweep → dual retrospective → verification → pull request |
 
-### Skills (22 total)
+### Skills (23 total)
 
 | Skill | Enforcement | Model | Purpose |
 |-------|-------------|-------|---------|
@@ -841,6 +841,7 @@ UNDERSTAND → DECIDE → BUILD → SHIP
 | `/pipeline` | Structural | sonnet | Multi-task orchestration, quality gates, rework budgets, progress log |
 | `/code-review` | Gating | opus | Evaluator: spec compliance (+ OVER-BUILT) → quality → domain |
 | `/debugging` | Gating | opus | 4-phase investigation before any fix |
+| `/verify-claims` | Gating | inherits caller | Correctness & assumption gate: grounded confidence % on claims, surfaces assumptions, HARD-BLOCKS unconfirmed load-bearing assumptions until approved. Armed by the HARNESS.md Correctness & Assumption Gate rule; cited from author skills (explore, prd, architecture-review, stories, plan, writing-system-tests) and verifier skills (assess, conflict-check, code-review, prd-audit, manual-test, remediate, debugging) |
 | `/finish` | Gating | haiku | Fresh verification, story coverage, merge/PR options |
 | `/manual-test` | Gating | sonnet | Validate stories via curl/browser, bug loop through /tdd |
 | `/prd-audit` | Gating | opus | Audit shipped impl vs PRD FRs; per-FR verdict + gap-class; kicks back to BUILD or DECIDE |
@@ -1021,6 +1022,7 @@ ai-conductor/
 │   ├── stories/
 │   ├── tdd/
 │   │   └── references/      # Detailed RED, GREEN, drill-down, domain-review guidance
+│   ├── verify-claims/
 │   └── writing-system-tests/
 ├── agents/                  # Agent persona prompts
 │   ├── generator.md

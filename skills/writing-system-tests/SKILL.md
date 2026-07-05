@@ -3,6 +3,7 @@ name: writing-system-tests
 description: "Use BEFORE implementing any feature that has stories in .docs/stories/ — generates failing acceptance specs from acceptance criteria as the RED phase of TDD. Generates HTTP/request-level acceptance tests for headless/API projects, end-to-end UI tests for projects with a frontend, using the project's own test framework and directory conventions."
 enforcement: gating
 phase: build
+requires: [verify-claims]
 ---
 
 # Writing Acceptance Tests
@@ -12,6 +13,11 @@ phase: build
 Generate failing acceptance specs from user stories in `.docs/stories/*.md`. Each acceptance
 criterion (happy AND negative paths) becomes a concrete test. Tests are generated BEFORE
 implementation — they are the RED phase of BDD.
+
+**Correctness gate:** a test encodes an expected-behavior claim. Per the `/verify-claims` protocol,
+if a spec rests on an assumption about what "correct" means that is not pinned by the story's
+acceptance criteria, the FR, or the ADR, surface it with its confidence and HARD-BLOCK for operator
+approval (HALT if autonomous) rather than freezing a guess into a passing/failing assertion.
 
 This skill is **language- and framework-agnostic.** It describes *what* acceptance tests to
 write and *why*; the concrete syntax, test runner, file layout, and fixture mechanism come

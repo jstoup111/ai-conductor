@@ -4,7 +4,7 @@ description: "Use after architecture-review, when the design is approved. Genera
 enforcement: gating
 phase: decide
 standalone: true
-requires: []
+requires: [verify-claims]
 ---
 
 ## Purpose
@@ -20,6 +20,11 @@ Stories run **after** architecture-review (the design is known), so they describ
 (WHAT)** grounded in the agreed design — but they state observable behavior/acceptance, NOT the
 mechanism (architecture *informs which scenarios exist*; it is not copied as mechanism into story
 text — the *how* is the plan's job). Negative paths are mandatory — they feed TDD RED phases.
+
+**Correctness gate:** acceptance criteria become the definition of done. Apply the `/verify-claims`
+protocol — if a scenario encodes an assumption about expected behavior that was never confirmed
+(against the FR, the ADR, or the operator), flag it with its confidence and HARD-BLOCK for approval
+(HALT if autonomous) rather than baking the guess into a Given/When/Then.
 
 **Architecture-induced negatives (do not miss these):** because stories follow architecture, every
 failure mode a design decision introduces (an external call that times out, a queue that drops/dupes,

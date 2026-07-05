@@ -4,7 +4,7 @@ description: "Use at the start of any new feature or change. Explores context, a
 enforcement: advisory
 phase: decide
 standalone: true
-requires: []
+requires: [verify-claims]
 ---
 
 ## Purpose
@@ -13,6 +13,11 @@ The divergent opening of DECIDE: understand intent, gather context, weigh approa
 **what kind of work this is** — a *product* feature (needs a PRD) or *technical-only* work
 (refactor/infra/deps — no PRD). Exploration is a thinking step; its durable outputs are the chosen
 approach (to `.memory/decisions/`) and the **track marker** — not a design doc.
+
+**Correctness gate:** approach recommendations and the track decision are load-bearing. Apply the
+`/verify-claims` protocol — attach a grounded confidence % to non-trivial claims about the code or
+domain, surface every assumption feeding an approach, and HARD-BLOCK (operator approval interactive,
+HALT if autonomous) on any unconfirmed assumption that changes which approach or track you pick.
 
 ## Boundaries
 

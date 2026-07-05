@@ -4,7 +4,7 @@ description: "Use after /finish to validate stories via curl (API) or browser (f
 enforcement: gating
 phase: ship
 standalone: false
-requires: [finish]
+requires: [finish, verify-claims]
 ---
 
 ## Purpose
@@ -12,6 +12,11 @@ requires: [finish]
 Validates that implemented stories actually work by exercising the running application.
 Automated tests verify code correctness; manual testing verifies the system works end-to-end
 as a user would experience it.
+
+**Correctness gate:** a "story X passes" result is a claim. Per the `/verify-claims` protocol, a
+pass is `verified` — you actually observed the response/behavior — never assumed from the code or
+inferred from a green unit test. If a story was not actually exercised, do not claim it passed;
+report it as untested rather than presenting an assumption as a result.
 
 **Runs AFTER `/finish` and BEFORE `/retro`.**
 

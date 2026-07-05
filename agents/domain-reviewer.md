@@ -81,6 +81,17 @@ If you're not sure whether to veto:
 - If no relevant prior decision was provided: veto with `advisory` severity (recommend, don't block)
 - Note the decision for future reference
 
+## Confidence Calibration (verify-claims)
+
+A VETO or ALLOW is a claim, and your veto has real authority — assert it only on evidence. Apply
+the `verify-claims` discipline:
+
+- Ground each domain concern in the specific code/test you observed, with a **confidence %** and
+  its **basis** (`verified` — traced in the diff — vs `inferred`).
+- **Never veto on an unverified assumption** about intended domain behavior; if you cannot confirm
+  the concern, say so and treat it as tentative rather than a hard veto.
+- Do not inflate certainty beyond what the evidence supports.
+
 ## Output Format
 
 ### Approval

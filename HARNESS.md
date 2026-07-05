@@ -13,6 +13,37 @@ Claude MUST read and follow this file at the start of every session.
 2. Correct code & gating (no bad code passes gates)
 3. Minimal user intervention during implementation
 
+## Correctness & Assumption Gate
+
+Serves target #1. This is **not** an always-on tax on every sentence — it arms precisely at
+**load-bearing points**, where a statement or assumption is about to drive a spec, a plan, an ADR,
+a schema/API, or code. At those points the `verify-claims` skill's protocol applies:
+
+- **Calibrate claims.** A non-trivial claim or theory carries a grounded confidence estimate (a %)
+  and its basis — `verified` (observed directly), `inferred` (derived from adjacent evidence), or
+  `unverified`. Prefer one cheap `Read`/`grep`/command over an estimate whenever it would settle
+  the question. Never present an unverified guess as confident fact.
+- **Surface every assumption**, with its confidence, its impact-if-wrong, and how to confirm it.
+- **Hard-block on unconfirmed load-bearing assumptions.** No specced or built work proceeds on an
+  assumption that — if wrong — changes a requirement, design, schema, task, or code behavior,
+  until the operator explicitly approves it. Interactive: present and wait. Autonomous/daemon:
+  write a HALT with the assumption ledger — never silently pick the most likely value.
+
+This applies across all skills and dispatched agents, and is enforced concretely by two roles that
+cite `verify-claims` in their own SKILL.md:
+
+- **Authors** (create an artifact) surface assumptions and hard-block before it locks: `explore`,
+  `prd`, `architecture-review`, `stories`, `plan`, `writing-system-tests`.
+- **Verifiers/judges** (render findings/verdicts, don't build) attach a grounded confidence % to
+  every finding and never assert one they haven't verified: `assess`, `conflict-check`,
+  `code-review`, `prd-audit`, `manual-test`, `remediate`, `debugging`.
+
+Execution steps that merely act on an already-gated artifact (`tdd`, `pipeline`), orchestration
+(`conduct`, `engineer`), and mechanical steps (`bootstrap`, `memory`, `architecture-diagram`,
+`simplify`, `retro`, `finish`, `pr`, `rebase`) do **not** self-cite — they rely on this rule and on
+the upstream/surrounding gates. Casual conversation and trivially-verifiable mechanics with no
+downstream blast radius are out of scope.
+
 ## SDLC Phase Flow
 
 Skills chain via artifacts in `.docs/`. No skill orchestrates another internally.
@@ -110,6 +141,7 @@ skills declare `model: opus` in their SKILL.md frontmatter).
 | rebase | fable | max | Fable guards semantic merges; wrong merge silently reverts merged work. Conflict resolution dispatch reasons over both sides of a hunk. |
 | finish | haiku | low | Mechanical checks — run tests, check git status, verify coverage. |
 | remediate | fable | high | Fable guards failure disposition; false HALT wastes context, wrong routing misroutes rework. Gap reasoning + concrete task planning. |
+| verify-claims | inherits caller |  | Cross-cutting correctness protocol applied within the invoking skill's context (calibrate claims, gate assumptions) — not a separately dispatched agent, so it runs on the caller's model. |
 | domain-reviewer | sonnet (<50-line diff), opus (≥50-line diff) |  | Right-sized by diff size: Sonnet for focused small diffs, Opus for large changes needing cross-boundary judgment. |
 | evaluator | sonnet (value objects, pure functions, config, infra) / opus (concurrency, state mutation, security, auth, finance) |  | Right-sized by batch content. |
 | code-review | opus |  | Multi-dimensional analysis (spec, quality, domain). |

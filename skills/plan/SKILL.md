@@ -4,7 +4,7 @@ description: "Use after stories are written and conflict-check has passed clean.
 enforcement: gating
 phase: decide
 standalone: false
-requires: [".docs/stories/ with both paths", ".docs/conflicts/ clean pass or no blocking conflicts"]
+requires: [".docs/stories/ with both paths", ".docs/conflicts/ clean pass or no blocking conflicts", verify-claims]
 ---
 
 ## Purpose
@@ -18,6 +18,12 @@ This is **not** a re-listing of the stories. It adds the engineering layer they 
 architecture/approach, file-level changes, task ordering, and dependencies. Traceability runs
 PRD `FR-N` → story → task. Every acceptance criterion maps to at least one task; negative-path
 stories become explicit test tasks — not afterthoughts.
+
+**Correctness gate:** a plan encodes technical assumptions (which files change, how a subsystem
+behaves, what an API accepts). Apply the `/verify-claims` protocol before finalizing tasks —
+prefer one cheap `Read`/`grep` over a guess, attach a grounded confidence % to claims you cannot
+cheaply verify, and HARD-BLOCK (operator approval interactive, HALT if autonomous) on any
+unconfirmed assumption that changes the technical approach or task breakdown.
 
 Open with a short **Technical Approach** (a paragraph or few bullets: the design decisions,
 key modules/files, and sequencing) before the task list, so `build` has the shape of the work

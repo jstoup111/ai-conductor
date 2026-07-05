@@ -4,7 +4,7 @@ description: "Use after implementing a task, before merging, or when requesting 
 enforcement: gating
 phase: build
 standalone: true
-requires: []
+requires: [verify-claims]
 model: opus
 ---
 
@@ -13,6 +13,12 @@ model: opus
 Implements the generator/evaluator separation pattern. The evaluator gets a fresh context reset
 (no shared state with the generator) and is prompted for calibrated skepticism — finding real
 issues, not rubber-stamping work.
+
+**Correctness gate:** a review finding is a claim, and a false-confident one either blocks good
+work or waves through a bug. Per the `/verify-claims` protocol, the evaluator attaches a grounded
+confidence % and its basis to each finding (`verified` — reproduced/traced in the code — vs
+`inferred`), never asserts a defect it has not verified, and flags a low-confidence finding as
+**tentative** rather than as a hard defect.
 
 ## Practices
 

@@ -4,7 +4,7 @@ description: "Use before implementation to review stories through a technical fe
 enforcement: gating
 phase: decide
 standalone: true
-requires: []
+requires: [verify-claims]
 ---
 
 ## Purpose
@@ -19,6 +19,13 @@ The review's input is the PRD's functional requirements (product) or the explore
 intent (technical) — stories and the plan do not exist yet at this point.
 
 Also invocable at pipeline batch boundaries to verify implementation stays architecturally sound.
+
+**Correctness gate:** an ADR is the most load-bearing artifact in the flow — everything downstream
+builds on it. Apply the `/verify-claims` protocol before writing any APPROVED ADR: state each
+technical claim with a grounded confidence % and its basis (verified vs inferred), surface every
+assumption the design rests on, and HARD-BLOCK (operator approval interactive, HALT if autonomous)
+on any unconfirmed assumption that would change the decision. Do not record a decision as APPROVED
+while it rests on an unconfirmed load-bearing assumption.
 
 ### Full vs amendment mode (convergence — adr-2026-06-29-architecture-before-stories-convergent-kickback)
 
