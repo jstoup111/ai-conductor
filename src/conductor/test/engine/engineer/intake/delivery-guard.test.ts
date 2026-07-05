@@ -221,3 +221,153 @@ describe('Task 2: createDeliveryGuardedQueue — guard passthrough for healthy c
     expect(second).toEqual(candidate2);
   });
 });
+
+// ─── Task 3: auto-heal delivered entries (open/merged) ──────────────────────
+
+describe('Task 3: createDeliveryGuardedQueue — auto-heal delivered entries', () => {
+  it('entry claimed + prUrl, PR OPEN → heals to done, prUrl/branch preserved, next candidate served', async () => {
+    const { createDeliveryGuardedQueue } = await loadDeliveryGuard();
+    const candidate1 = makeEnvelope('idea-1');
+    const candidate2 = makeEnvelope('idea-2');
+    const { queue } = makeFakeQueueWithEnvelopes([candidate1, candidate2]);
+    const { ledger, transitionCalls } = makeFakeLedger();
+    const { runner: gh } = makeFakeGh(JSON.stringify({ state: 'OPEN' }));
+
+    // Pre-populate ledger with a claimed entry that has prUrl
+    const key1 = `${candidate1.source}:${candidate1.sourceRef}`;
+    (ledger as any).get = async (source: string, sourceRef: string) => {
+      if (source === candidate1.source && sourceRef === candidate1.sourceRef) {
+        return {
+          source: candidate1.source,
+          sourceRef: candidate1.sourceRef,
+          status: 'claimed',
+          prUrl: 'https://github.com/owner/repo/pull/123',
+          branch: 'feat/test-branch',
+        };
+      }
+      return undefined;
+    };
+
+    const guarded = createDeliveryGuardedQueue(queue, ledger, { gh });
+
+    // First claim should skip the claimed entry and serve the next one
+    const first = await guarded.claim();
+    expect(first).toEqual(candidate2);
+
+    // Verify transition was called with 'done' status and metadata preserved
+    expect(transitionCalls.length).toBeGreaterThan(0);
+    const transitionCall = transitionCalls[0];
+    expect(transitionCall[0]).toBe(candidate1.source);
+    expect(transitionCall[1]).toBe(candidate1.sourceRef);
+    expect(transitionCall[2]).toBe('done');
+    expect(transitionCall[3]?.prUrl).toBe('https://github.com/owner/repo/pull/123');
+    expect(transitionCall[3]?.branch).toBe('feat/test-branch');
+  });
+
+  it('entry claimed + prUrl, PR MERGED → heals to done, prUrl/branch preserved, next candidate served', async () => {
+    const { createDeliveryGuardedQueue } = await loadDeliveryGuard();
+    const candidate1 = makeEnvelope('idea-1');
+    const candidate2 = makeEnvelope('idea-2');
+    const { queue } = makeFakeQueueWithEnvelopes([candidate1, candidate2]);
+    const { ledger, transitionCalls } = makeFakeLedger();
+    const { runner: gh } = makeFakeGh(
+      JSON.stringify({ state: 'MERGED', mergedAt: '2026-07-05T10:00:00Z' }),
+    );
+
+    // Pre-populate ledger with a claimed entry that has prUrl
+    (ledger as any).get = async (source: string, sourceRef: string) => {
+      if (source === candidate1.source && sourceRef === candidate1.sourceRef) {
+        return {
+          source: candidate1.source,
+          sourceRef: candidate1.sourceRef,
+          status: 'claimed',
+          prUrl: 'https://github.com/owner/repo/pull/456',
+          branch: 'feat/merged-branch',
+        };
+      }
+      return undefined;
+    };
+
+    const guarded = createDeliveryGuardedQueue(queue, ledger, { gh });
+
+    const first = await guarded.claim();
+    expect(first).toEqual(candidate2);
+
+    expect(transitionCalls.length).toBeGreaterThan(0);
+    const transitionCall = transitionCalls[0];
+    expect(transitionCall[2]).toBe('done');
+    expect(transitionCall[3]?.prUrl).toBe('https://github.com/owner/repo/pull/456');
+    expect(transitionCall[3]?.branch).toBe('feat/merged-branch');
+  });
+
+  it('entry routed/deciding + prUrl, PR OPEN → heals to done, continues walk', async () => {
+    const { createDeliveryGuardedQueue } = await loadDeliveryGuard();
+    const candidate1 = makeEnvelope('idea-1');
+    const candidate2 = makeEnvelope('idea-2');
+    const { queue } = makeFakeQueueWithEnvelopes([candidate1, candidate2]);
+    const { ledger, transitionCalls } = makeFakeLedger();
+    const { runner: gh } = makeFakeGh(JSON.stringify({ state: 'OPEN' }));
+
+    // Test with 'routed' status
+    (ledger as any).get = async (source: string, sourceRef: string) => {
+      if (source === candidate1.source && sourceRef === candidate1.sourceRef) {
+        return {
+          source: candidate1.source,
+          sourceRef: candidate1.sourceRef,
+          status: 'routed',
+          prUrl: 'https://github.com/owner/repo/pull/789',
+          branch: 'feat/routed-branch',
+        };
+      }
+      return undefined;
+    };
+
+    const guarded = createDeliveryGuardedQueue(queue, ledger, { gh });
+    const first = await guarded.claim();
+
+    expect(first).toEqual(candidate2);
+    expect(transitionCalls.length).toBeGreaterThan(0);
+    expect(transitionCalls[0][2]).toBe('done');
+  });
+
+  it('three candidates: first claimed+prUrl+OPEN → healed to done, second served, third available', async () => {
+    const { createDeliveryGuardedQueue } = await loadDeliveryGuard();
+    const candidate1 = makeEnvelope('idea-1');
+    const candidate2 = makeEnvelope('idea-2');
+    const candidate3 = makeEnvelope('idea-3');
+    const { queue } = makeFakeQueueWithEnvelopes([candidate1, candidate2, candidate3]);
+    const { ledger, transitionCalls } = makeFakeLedger();
+    const { runner: gh } = makeFakeGh(JSON.stringify({ state: 'OPEN' }));
+
+    (ledger as any).get = async (source: string, sourceRef: string) => {
+      if (source === candidate1.source && sourceRef === candidate1.sourceRef) {
+        return {
+          source: candidate1.source,
+          sourceRef: candidate1.sourceRef,
+          status: 'claimed',
+          prUrl: 'https://github.com/owner/repo/pull/111',
+          branch: 'feat/first-branch',
+        };
+      }
+      return undefined;
+    };
+
+    const guarded = createDeliveryGuardedQueue(queue, ledger, { gh });
+
+    // First claim
+    const first = await guarded.claim();
+    expect(first).toEqual(candidate2);
+
+    // Verify first entry was healed
+    expect(transitionCalls.length).toBeGreaterThan(0);
+    expect(transitionCalls[0][2]).toBe('done');
+
+    // Second claim should get third candidate
+    const second = await guarded.claim();
+    expect(second).toEqual(candidate3);
+
+    // Third claim should return null (queue exhausted)
+    const third = await guarded.claim();
+    expect(third).toBeNull();
+  });
+});
