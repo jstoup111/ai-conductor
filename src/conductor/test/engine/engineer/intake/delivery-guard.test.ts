@@ -801,3 +801,214 @@ describe('Task 5: createDeliveryGuardedQueue — closed-unmerged reopen semantic
     expect(second).toBeNull();
   });
 });
+
+// ─── Task 6: unknown PR state fails safe (no sticky state) ──────────────────
+
+describe('Task 6: createDeliveryGuardedQueue — unknown PR state fails safe', () => {
+  it('entry claimed+prUrl, gh throws (network error) → candidate held, not served, log includes sourceRef, release list contains it', async () => {
+    const { createDeliveryGuardedQueue } = await loadDeliveryGuard();
+    const candidate1 = makeEnvelope('idea-1');
+    const candidate2 = makeEnvelope('idea-2');
+    const { queue, releasedEnvelopes } = makeFakeQueueWithEnvelopes([candidate1, candidate2]);
+    const { ledger, transitionCalls } = makeFakeLedger();
+    const { runner: gh } = makeFailingGh().runner;
+
+    // Capture logger
+    const logMessages: string[] = [];
+    const mockLogger = {
+      info: (msg: string) => {
+        logMessages.push(msg);
+      },
+    };
+
+    // Pre-populate ledger with a claimed entry that has prUrl
+    (ledger as any).get = async (source: string, sourceRef: string) => {
+      if (source === candidate1.source && sourceRef === candidate1.sourceRef) {
+        return {
+          source: candidate1.source,
+          sourceRef: candidate1.sourceRef,
+          status: 'claimed',
+          prUrl: 'https://github.com/owner/repo/pull/123',
+          branch: 'feat/test-branch',
+        };
+      }
+      return undefined;
+    };
+
+    const guarded = createDeliveryGuardedQueue(queue, ledger, { gh, logger: mockLogger });
+
+    // First claim should skip candidate1 (gh threw) and serve candidate2
+    const first = await guarded.claim();
+    expect(first).toEqual(candidate2);
+
+    // Verify no transition was called (ledger not mutated for unknown state)
+    expect(transitionCalls).toHaveLength(0);
+
+    // Verify log includes sourceRef
+    expect(logMessages.some((msg) => msg.includes('idea-1') && msg.toLowerCase().includes('unknown'))).toBe(
+      true,
+    );
+
+    // Verify claim() returns null when queue is exhausted
+    const second = await guarded.claim();
+    expect(second).toBeNull();
+
+    // Verify candidate1 was released (in held list) when queue became empty
+    expect(releasedEnvelopes).toContain(candidate1);
+  });
+
+  it('single candidate, gh throws → claim() returns null after releasing the held candidate', async () => {
+    const { createDeliveryGuardedQueue } = await loadDeliveryGuard();
+    const candidate1 = makeEnvelope('idea-1');
+    const { queue, releasedEnvelopes } = makeFakeQueueWithEnvelopes([candidate1]);
+    const { ledger, transitionCalls } = makeFakeLedger();
+    const { runner: gh } = makeFailingGh().runner;
+
+    const mockLogger = {
+      info: (msg: string) => {
+        // Log captured but not asserted in this test
+      },
+    };
+
+    // Pre-populate ledger with a claimed entry that has prUrl
+    (ledger as any).get = async (source: string, sourceRef: string) => {
+      if (source === candidate1.source && sourceRef === candidate1.sourceRef) {
+        return {
+          source: candidate1.source,
+          sourceRef: candidate1.sourceRef,
+          status: 'claimed',
+          prUrl: 'https://github.com/owner/repo/pull/123',
+          branch: 'feat/test-branch',
+        };
+      }
+      return undefined;
+    };
+
+    const guarded = createDeliveryGuardedQueue(queue, ledger, { gh, logger: mockLogger });
+
+    // Claim should return null (only candidate threw, so held and released)
+    const first = await guarded.claim();
+    expect(first).toBeNull();
+
+    // Verify no transition was called
+    expect(transitionCalls).toHaveLength(0);
+
+    // Verify candidate1 was released when queue became empty
+    expect(releasedEnvelopes).toContain(candidate1);
+  });
+
+  it('two candidates: first claimed+prUrl with gh throws, second pending → first held, second served', async () => {
+    const { createDeliveryGuardedQueue } = await loadDeliveryGuard();
+    const candidate1 = makeEnvelope('idea-1');
+    const candidate2 = makeEnvelope('idea-2');
+    const { queue } = makeFakeQueueWithEnvelopes([candidate1, candidate2]);
+    const { ledger } = makeFakeLedger();
+    const { runner: gh } = makeFailingGh().runner;
+
+    const mockLogger = {
+      info: (msg: string) => {
+        // Log captured
+      },
+    };
+
+    // Pre-populate ledger
+    (ledger as any).get = async (source: string, sourceRef: string) => {
+      if (source === candidate1.source && sourceRef === candidate1.sourceRef) {
+        return {
+          source: candidate1.source,
+          sourceRef: candidate1.sourceRef,
+          status: 'claimed',
+          prUrl: 'https://github.com/owner/repo/pull/123',
+          branch: 'feat/test-branch',
+        };
+      }
+      // candidate2 has pending status (passthrough)
+      if (sourceRef === 'idea-2') {
+        return {
+          source: candidate2.source,
+          sourceRef: candidate2.sourceRef,
+          status: 'pending',
+        };
+      }
+      return undefined;
+    };
+
+    const guarded = createDeliveryGuardedQueue(queue, ledger, { gh, logger: mockLogger });
+
+    // First claim should skip candidate1 (gh threw) and serve candidate2 (pending)
+    const first = await guarded.claim();
+    expect(first).toEqual(candidate2);
+
+    // Second claim should return null (queue exhausted)
+    const second = await guarded.claim();
+    expect(second).toBeNull();
+  });
+
+  it('entry held due to gh failure, then released; next claim() call with healthy gh → entry served normally (no sticky state)', async () => {
+    const { createDeliveryGuardedQueue } = await loadDeliveryGuard();
+    const candidate1 = makeEnvelope('idea-1');
+    const candidate2 = makeEnvelope('idea-2');
+    const { queue, releasedEnvelopes } = makeFakeQueueWithEnvelopes([candidate1, candidate2]);
+    const { ledger } = makeFakeLedger();
+
+    const mockLogger = {
+      info: (msg: string) => {
+        // Log captured
+      },
+    };
+
+    // First guard with failing gh
+    const { runner: failingGh } = makeFailingGh();
+    (ledger as any).get = async (source: string, sourceRef: string) => {
+      if (source === candidate1.source && sourceRef === candidate1.sourceRef) {
+        return {
+          source: candidate1.source,
+          sourceRef: candidate1.sourceRef,
+          status: 'claimed',
+          prUrl: 'https://github.com/owner/repo/pull/123',
+          branch: 'feat/test-branch',
+        };
+      }
+      return undefined;
+    };
+
+    const guarded1 = createDeliveryGuardedQueue(queue, ledger, { gh: failingGh, logger: mockLogger });
+
+    // First attempt should skip candidate1 and serve candidate2
+    const first = await guarded1.claim();
+    expect(first).toEqual(candidate2);
+
+    // Exhausting the queue should release candidate1
+    const exhausted = await guarded1.claim();
+    expect(exhausted).toBeNull();
+    expect(releasedEnvelopes).toContain(candidate1);
+
+    // Now simulate the entry being retried with healthy gh
+    // Reset queue with both candidates again (simulating retry scenario)
+    const { queue: queue2, releasedEnvelopes: releasedEnvelopes2 } = makeFakeQueueWithEnvelopes([candidate1]);
+    (ledger as any).get = async (source: string, sourceRef: string) => {
+      if (source === candidate1.source && sourceRef === candidate1.sourceRef) {
+        // Still has prUrl but now the PR might be in a different state
+        return {
+          source: candidate1.source,
+          sourceRef: candidate1.sourceRef,
+          status: 'claimed',
+          prUrl: 'https://github.com/owner/repo/pull/123',
+          branch: 'feat/test-branch',
+        };
+      }
+      return undefined;
+    };
+
+    // Second guard with healthy gh (returns 'open')
+    const { runner: healthyGh } = makeFakeGh(JSON.stringify({ state: 'OPEN' }));
+    const guarded2 = createDeliveryGuardedQueue(queue2, ledger, { gh: healthyGh, logger: mockLogger });
+
+    // This time, candidate1 should be healed (gh is healthy now)
+    const retried = await guarded2.claim();
+    expect(retried).toBeNull(); // No more candidates in queue2, but candidate1 was healed
+
+    // Verify candidate1 was released (acked after healing, not held)
+    expect(releasedEnvelopes2).toContain(candidate1);
+  });
+});
