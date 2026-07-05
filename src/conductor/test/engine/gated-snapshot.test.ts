@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, readFile } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -131,21 +131,49 @@ describe('writeGatedSnapshot', () => {
 });
 
 describe('readGatedSnapshot', () => {
-  it('returns null when no snapshot has been written yet', async () => {
-    const result = await readGatedSnapshot(daemonDir);
-    expect(result).toBeNull();
+  // readGatedSnapshot takes the REPO root (not the .daemon dir directly) and
+  // joins `.daemon/gated.json` itself — this matches how daemon status calls
+  // it (one repo path per registry entry) — and returns an explicit
+  // discriminated union, never `null`, so an absent/corrupt/future-shaped
+  // snapshot can never be misread by a caller as an implied all-clear.
+
+  it('returns { kind: "unknown", why: "missing" } when no snapshot has been written yet', async () => {
+    const result = await readGatedSnapshot(root);
+    expect(result).toEqual({ kind: 'unknown', why: 'missing' });
   });
 
-  it('round-trips a written snapshot', async () => {
+  it('round-trips a written snapshot as { kind: "ok", gated, repoWarnings, writtenAt }', async () => {
     await writeGatedSnapshot(
       daemonDir,
       { gated: [{ kind: 'spec', slug: 'foo', reason: 'other-owner', otherOwner: 'a', remedy: 'r' }] },
       FIXED_CLOCK,
     );
-    const result = await readGatedSnapshot(daemonDir);
-    expect(result?.schemaVersion).toBe(1);
-    expect(result?.gated).toEqual([
-      { kind: 'spec', slug: 'foo', reason: 'other-owner', otherOwner: 'a', remedy: 'r' },
-    ]);
+    const result = await readGatedSnapshot(root);
+    expect(result).toEqual({
+      kind: 'ok',
+      writtenAt: '2026-07-05T12:00:00.000Z',
+      repoWarnings: [],
+      gated: [{ kind: 'spec', slug: 'foo', reason: 'other-owner', otherOwner: 'a', remedy: 'r' }],
+    });
+  });
+
+  it('returns { kind: "unknown", why: "unreadable" } for truncated/invalid JSON', async () => {
+    await mkdir(daemonDir, { recursive: true });
+    await writeFile(join(daemonDir, 'gated.json'), '{"schemaVersion": 1, "writtenAt": "2026-07-0', 'utf-8');
+
+    const result = await readGatedSnapshot(root);
+    expect(result).toEqual({ kind: 'unknown', why: 'unreadable' });
+  });
+
+  it('returns { kind: "unknown", why: "version" } for an unrecognized schemaVersion', async () => {
+    await mkdir(daemonDir, { recursive: true });
+    await writeFile(
+      join(daemonDir, 'gated.json'),
+      JSON.stringify({ schemaVersion: 999, writtenAt: 'x', repoWarnings: [], gated: [] }),
+      'utf-8',
+    );
+
+    const result = await readGatedSnapshot(root);
+    expect(result).toEqual({ kind: 'unknown', why: 'version' });
   });
 });

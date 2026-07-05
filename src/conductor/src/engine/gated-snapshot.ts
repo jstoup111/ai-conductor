@@ -95,15 +95,66 @@ export async function writeGatedSnapshot(
   }
 }
 
+/** Successful read: the snapshot exists, parsed, and is a recognized schema. */
+export interface GatedSnapshotOk {
+  kind: 'ok';
+  gated: GatedSpecItem[];
+  repoWarnings: GatedRepoItem[];
+  writtenAt: string;
+}
+
 /**
- * Read back `.daemon/gated.json`. Returns `null` when the snapshot does not
- * exist yet (no discovery pass has completed) or fails to parse.
+ * Explicit unknown state: the caller (daemon status, dashboard) must render
+ * this as "gated state unknown", never silently as "nothing gated" — an
+ * absent/corrupt/future-shaped snapshot is NOT the same thing as an empty
+ * one, and must never be misread as an implied all-clear.
  */
-export async function readGatedSnapshot(daemonDir: string): Promise<GatedSnapshot | null> {
+export interface GatedSnapshotUnknown {
+  kind: 'unknown';
+  why: 'missing' | 'unreadable' | 'version';
+}
+
+export type ReadGatedSnapshotResult = GatedSnapshotOk | GatedSnapshotUnknown;
+
+/**
+ * Read `<repoPath>/.daemon/gated.json` and classify the result into an
+ * explicit discriminated union — never `null`, never a thrown exception.
+ *
+ * - Missing file (no discovery pass has completed yet) → `{ why: 'missing' }`.
+ * - Unparseable/truncated JSON → `{ why: 'unreadable' }`.
+ * - Parses but carries an unrecognized `schemaVersion` (forward-compat guard
+ *   against a future writer shape this reader doesn't understand yet) →
+ *   `{ why: 'version' }`.
+ * - Otherwise → `{ kind: 'ok', gated, repoWarnings, writtenAt }`.
+ */
+export async function readGatedSnapshot(repoPath: string): Promise<ReadGatedSnapshotResult> {
+  let raw: string;
   try {
-    const raw = await readFile(snapshotPath(daemonDir), 'utf-8');
-    return JSON.parse(raw) as GatedSnapshot;
+    raw = await readFile(snapshotPath(join(repoPath, '.daemon')), 'utf-8');
   } catch {
-    return null;
+    return { kind: 'unknown', why: 'missing' };
   }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { kind: 'unknown', why: 'unreadable' };
+  }
+
+  if (
+    typeof parsed !== 'object' ||
+    parsed === null ||
+    (parsed as { schemaVersion?: unknown }).schemaVersion !== 1
+  ) {
+    return { kind: 'unknown', why: 'version' };
+  }
+
+  const snapshot = parsed as GatedSnapshot;
+  return {
+    kind: 'ok',
+    gated: snapshot.gated ?? [],
+    repoWarnings: snapshot.repoWarnings ?? [],
+    writtenAt: snapshot.writtenAt,
+  };
 }
