@@ -861,7 +861,7 @@ export class Conductor {
     const result = await advisoryPublish(
       branch,
       'early-draft',
-      () => publishEarlyDraft(this.gitForPublish, this.gh, this.projectRoot, branch, base, {}, undefined),
+      () => publishEarlyDraft(this.gitForPublish, this.gh, this.projectRoot, { branch, base }, log),
       log,
     );
 

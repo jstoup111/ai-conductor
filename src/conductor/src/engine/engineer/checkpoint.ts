@@ -203,9 +203,7 @@ export async function checkpointSpec(
       runGit,
       opts.gh,
       worktreePath,
-      branch,
-      base,
-      undefined,
+      { branch, base },
       log,
     );
     return {

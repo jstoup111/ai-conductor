@@ -92,8 +92,7 @@ describe('smoke/pr-timing-argv (real git binary, local file-remote fixture)', ()
       realGitRunner(),
       gh,
       repoDir,
-      'feat/argv-smoke-even',
-      BASE,
+      { branch: 'feat/argv-smoke-even', base: BASE },
     );
 
     expect(result.pushed).toBe(true);
@@ -114,8 +113,7 @@ describe('smoke/pr-timing-argv (real git binary, local file-remote fixture)', ()
       realGitRunner(),
       gh,
       repoDir,
-      'feat/argv-smoke-ahead',
-      BASE,
+      { branch: 'feat/argv-smoke-ahead', base: BASE },
     );
 
     expect(result.pushed).toBe(true);

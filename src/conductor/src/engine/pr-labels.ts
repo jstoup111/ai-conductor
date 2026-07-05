@@ -724,11 +724,10 @@ export async function publishEarlyDraft(
   runGit: GitRunner = makeProductionGit(),
   runGh: GhRunner = makeProductionGh(),
   cwd: string,
-  branch: string,
-  base: string,
-  options?: Record<string, unknown>,
+  opts: { branch: string; base: string; title?: string; body?: string },
   log?: (msg: string) => void,
 ): Promise<PublishEarlyDraftResult> {
+  const { branch, base, title, body } = opts;
   const cache = getDraftPrCache(runGh);
 
   try {
@@ -765,9 +764,9 @@ export async function publishEarlyDraft(
           '--base',
           base,
           '--title',
-          `[DRAFT] ${branch}`,
+          title ?? `[DRAFT] ${branch}`,
           '--body',
-          'Auto-created draft PR for early checkpoint publish.',
+          body ?? 'Auto-created draft PR for early checkpoint publish.',
           '--draft',
         ];
         const { stdout: createOut } = await runGh(createArgs, { cwd });

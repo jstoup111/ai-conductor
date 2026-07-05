@@ -826,7 +826,7 @@ describe('publishEarlyDraft', () => {
     ]);
     const { gh, calls: ghCalls } = fakeGh([]);
 
-    const result = await publishEarlyDraft(git, gh, '/repo', 'feat/abc', 'main');
+    const result = await publishEarlyDraft(git, gh, '/repo', { branch: 'feat/abc', base: 'main' });
 
     expect(ghCalls).toHaveLength(0); // No gh calls for pr-create
     expect(result).toEqual({ pushed: true, drafted: false });
@@ -842,7 +842,7 @@ describe('publishEarlyDraft', () => {
       { stdout: `Pull request created\n${prUrl}\n` }, // gh pr create (succeeds)
     ]);
 
-    const result = await publishEarlyDraft(git, gh, '/repo', 'feat/xyz', 'main');
+    const result = await publishEarlyDraft(git, gh, '/repo', { branch: 'feat/xyz', base: 'main' });
 
     expect(result).toEqual({ pushed: true, drafted: true, pr_url: prUrl });
     expect(ghCalls.length).toBe(1); // gh pr create called once
@@ -862,11 +862,11 @@ describe('publishEarlyDraft', () => {
     ]);
 
     // First call — gh runner is the key for the WeakMap cache
-    const result1 = await publishEarlyDraft(git, gh, '/repo', 'feat/xyz', 'main');
+    const result1 = await publishEarlyDraft(git, gh, '/repo', { branch: 'feat/xyz', base: 'main' });
     expect(result1.pr_url).toBe(prUrl);
 
     // Second call should use cached PR (same gh runner, same branch)
-    const result2 = await publishEarlyDraft(git, gh, '/repo', 'feat/xyz', 'main');
+    const result2 = await publishEarlyDraft(git, gh, '/repo', { branch: 'feat/xyz', base: 'main' });
     expect(result2.pr_url).toBe(prUrl);
 
     // Only 1 gh call total (cached on second call)
@@ -880,7 +880,7 @@ describe('publishEarlyDraft', () => {
     const { gh } = fakeGh([]);
     const logs: string[] = [];
 
-    const result = await publishEarlyDraft(git, gh, '/repo', 'feat/abc', 'main', {}, (msg) =>
+    const result = await publishEarlyDraft(git, gh, '/repo', { branch: 'feat/abc', base: 'main' }, (msg) =>
       logs.push(msg),
     );
 
@@ -900,7 +900,7 @@ describe('publishEarlyDraft', () => {
     ]);
     const logs: string[] = [];
 
-    const result = await publishEarlyDraft(git, gh, '/repo', 'feat/abc', 'main', {}, (msg) =>
+    const result = await publishEarlyDraft(git, gh, '/repo', { branch: 'feat/abc', base: 'main' }, (msg) =>
       logs.push(msg),
     );
 
