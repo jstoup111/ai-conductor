@@ -11,6 +11,14 @@ import { resolveRebaseResolutionAttempts } from './resolved-config.js';
 import type { WatchEntry } from './mergeable-sweep.js';
 import type { PrMergeState } from './pr-labels.js';
 import {
+  type GhRunner as PrLabelsGhRunner,
+  makeProductionGh,
+  removeLabel,
+  addLabel,
+  upsertComment,
+  NEEDS_REMEDIATION_MARKER,
+} from './pr-labels.js';
+import {
   resolveRebaseConflicts,
   type RebaseOutcome,
   type RebaseResolver,
@@ -581,4 +589,64 @@ export async function pushRefreshedBranch(
 
   log(`pushRefreshedBranch failed: ${reason}`);
   return { pushed: false, reason };
+}
+
+/**
+ * Options for {@link escalate}.
+ */
+export interface EscalateOpts {
+  /** Injectable gh runner (defaults to the production factory). */
+  runGh?: PrLabelsGhRunner;
+  /** cwd for gh calls (typically the primary project root). */
+  cwd: string;
+  /** Optional log callback. All errors are logged here, never thrown. */
+  log?: (msg: string) => void;
+}
+
+/**
+ * Escalate a PR to a human: mark it for manual remediation with a concrete
+ * reason.
+ *
+ * Story: "Escalation marks the PR for a human with a concrete reason"
+ *
+ * Steps (each best-effort, non-throwing, consistent with the pr-labels seam):
+ *   1. Remove the `mergeable` label via the REST endpoint.
+ *   2. Add the `needs-remediation` label via the REST endpoint.
+ *   3. Upsert (post or edit-in-place) a marker-tagged comment describing the
+ *      stage and reason — so repeated escalations on the same PR update a
+ *      single comment rather than piling up duplicates.
+ *
+ * A label failure never blocks the comment attempt (step 3 always runs).
+ * A comment failure never throws — upsertComment's own fallback behavior
+ * (create-once-on-lookup-failure, no fallback on PATCH failure) governs
+ * retry suppression; escalate does not add its own retries on top.
+ *
+ * @param prUrl  The PR to escalate.
+ * @param stage  The pipeline stage at which escalation was triggered (e.g.
+ *               "tier2-resolve", "suite-gate").
+ * @param reason Human-readable reason for the escalation.
+ * @param opts   { runGh, cwd, log } — runGh defaults to the production gh factory.
+ */
+export async function escalate(
+  prUrl: string,
+  stage: string,
+  reason: string,
+  opts: EscalateOpts,
+): Promise<void> {
+  const runGh = opts.runGh ?? makeProductionGh();
+  const { cwd, log } = opts;
+
+  // Step 1 + 2: labels (best-effort; removeLabel/addLabel never throw).
+  await removeLabel(runGh, cwd, prUrl, 'mergeable', log);
+  await addLabel(runGh, cwd, prUrl, 'needs-remediation', log);
+
+  // Step 3: marker-tagged comment (best-effort; upsertComment never throws).
+  const commentBody = [
+    '## Escalation: manual remediation required',
+    '',
+    `**Stage:** ${stage}`,
+    `**Reason:** ${reason}`,
+  ].join('\n');
+
+  await upsertComment(runGh, cwd, prUrl, NEEDS_REMEDIATION_MARKER, commentBody, log);
 }
