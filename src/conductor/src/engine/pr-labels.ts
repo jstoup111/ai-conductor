@@ -417,6 +417,15 @@ export async function comment(
  */
 export const NEEDS_REMEDIATION_MARKER = '<!-- conductor:needs-remediation -->';
 
+/**
+ * Stable hidden marker identifying the single harness-authored owner-gate
+ * status comment on a PR for a spec that is currently owner-gated. Embedded
+ * in the comment body so subsequent scans can find and edit that comment in
+ * place instead of appending a new one, mirroring
+ * {@link NEEDS_REMEDIATION_MARKER}.
+ */
+export const OWNER_GATED_MARKER = '<!-- conductor:owner-gated -->';
+
 interface ParsedCommentRef {
   owner: string;
   repo: string;
