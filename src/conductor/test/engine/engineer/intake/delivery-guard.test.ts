@@ -606,3 +606,198 @@ describe('Task 4: createDeliveryGuardedQueue — heal-path failure tolerance', (
     }
   });
 });
+
+// ─── Task 5: closed-unmerged reopen semantics (FR-39/40) ────────────────────────
+
+describe('Task 5: createDeliveryGuardedQueue — closed-unmerged reopen semantics', () => {
+  it('entry claimed+prUrl, attempts=0, PR CLOSED-unmerged → ledger.reopen() called, candidate served', async () => {
+    const { createDeliveryGuardedQueue } = await loadDeliveryGuard();
+    const candidate1 = makeEnvelope('idea-1');
+    const candidate2 = makeEnvelope('idea-2');
+    const { queue } = makeFakeQueueWithEnvelopes([candidate1, candidate2]);
+    const { ledger, transitionCalls } = makeFakeLedger();
+    const { runner: gh } = makeFakeGh(
+      JSON.stringify({ state: 'CLOSED', mergedAt: null }),
+    );
+
+    let reopenCalls: string[] = [];
+    const originalReopen = (ledger as any).reopen;
+    (ledger as any).reopen = async (source: string, sourceRef: string) => {
+      reopenCalls.push(`${source}:${sourceRef}`);
+      if (originalReopen) await originalReopen(source, sourceRef);
+    };
+
+    // Pre-populate ledger with a claimed entry that has prUrl, attempts=0
+    (ledger as any).get = async (source: string, sourceRef: string) => {
+      if (source === candidate1.source && sourceRef === candidate1.sourceRef) {
+        return {
+          source: candidate1.source,
+          sourceRef: candidate1.sourceRef,
+          status: 'claimed',
+          prUrl: 'https://github.com/owner/repo/pull/123',
+          branch: 'feat/test-branch',
+          attempts: 0,
+        };
+      }
+      return undefined;
+    };
+
+    const guarded = createDeliveryGuardedQueue(queue, ledger, { gh });
+
+    // First claim should skip candidate1 (closed-unmerged, reopen and serve next)
+    // and serve candidate2
+    const first = await guarded.claim();
+    expect(first).toEqual(candidate2);
+
+    // Verify reopen was called
+    expect(reopenCalls.length).toBe(1);
+    expect(reopenCalls[0]).toContain('idea-1');
+
+    // Verify transition was NOT called (only reopen, not transition to needs-manual)
+    expect(transitionCalls.length).toBe(0);
+  });
+
+  it('entry claimed+prUrl, attempts=1, PR CLOSED-unmerged → ledger.reopen() called, candidate served', async () => {
+    const { createDeliveryGuardedQueue } = await loadDeliveryGuard();
+    const candidate1 = makeEnvelope('idea-1');
+    const candidate2 = makeEnvelope('idea-2');
+    const { queue } = makeFakeQueueWithEnvelopes([candidate1, candidate2]);
+    const { ledger, transitionCalls } = makeFakeLedger();
+    const { runner: gh } = makeFakeGh(
+      JSON.stringify({ state: 'CLOSED', mergedAt: null }),
+    );
+
+    let reopenCalls: string[] = [];
+    (ledger as any).reopen = async (source: string, sourceRef: string) => {
+      reopenCalls.push(`${source}:${sourceRef}`);
+    };
+
+    // Pre-populate ledger with a claimed entry, attempts=1
+    (ledger as any).get = async (source: string, sourceRef: string) => {
+      if (source === candidate1.source && sourceRef === candidate1.sourceRef) {
+        return {
+          source: candidate1.source,
+          sourceRef: candidate1.sourceRef,
+          status: 'claimed',
+          prUrl: 'https://github.com/owner/repo/pull/123',
+          branch: 'feat/test-branch',
+          attempts: 1,
+        };
+      }
+      return undefined;
+    };
+
+    const guarded = createDeliveryGuardedQueue(queue, ledger, { gh });
+
+    const first = await guarded.claim();
+    expect(first).toEqual(candidate2);
+
+    // Verify reopen was called
+    expect(reopenCalls.length).toBe(1);
+
+    // Verify transition was NOT called
+    expect(transitionCalls.length).toBe(0);
+  });
+
+  it('entry claimed+prUrl, attempts=2 (at cap), PR CLOSED-unmerged → transition to needs-manual, ack envelope, next candidate served', async () => {
+    const { createDeliveryGuardedQueue } = await loadDeliveryGuard();
+    const candidate1 = makeEnvelope('idea-1');
+    const candidate2 = makeEnvelope('idea-2');
+    const { queue, releasedEnvelopes } = makeFakeQueueWithEnvelopes([candidate1, candidate2]);
+    const { ledger, transitionCalls } = makeFakeLedger();
+    const { runner: gh } = makeFakeGh(
+      JSON.stringify({ state: 'CLOSED', mergedAt: null }),
+    );
+
+    let reopenCalls: string[] = [];
+    (ledger as any).reopen = async (source: string, sourceRef: string) => {
+      reopenCalls.push(`${source}:${sourceRef}`);
+    };
+
+    // Pre-populate ledger with a claimed entry, attempts=2 (at cap, which is 2)
+    (ledger as any).get = async (source: string, sourceRef: string) => {
+      if (source === candidate1.source && sourceRef === candidate1.sourceRef) {
+        return {
+          source: candidate1.source,
+          sourceRef: candidate1.sourceRef,
+          status: 'claimed',
+          prUrl: 'https://github.com/owner/repo/pull/123',
+          branch: 'feat/test-branch',
+          attempts: 2,
+        };
+      }
+      return undefined;
+    };
+
+    const guarded = createDeliveryGuardedQueue(queue, ledger, { gh });
+
+    const first = await guarded.claim();
+    expect(first).toEqual(candidate2);
+
+    // Verify reopen was NOT called
+    expect(reopenCalls.length).toBe(0);
+
+    // Verify transition WAS called with 'needs-manual' status
+    expect(transitionCalls.length).toBeGreaterThan(0);
+    const transitionCall = transitionCalls[0];
+    expect(transitionCall[0]).toBe(candidate1.source);
+    expect(transitionCall[1]).toBe(candidate1.sourceRef);
+    expect(transitionCall[2]).toBe('needs-manual');
+    expect(transitionCall[3]?.prUrl).toBe('https://github.com/owner/repo/pull/123');
+
+    // Verify envelope was released (acked)
+    expect(releasedEnvelopes).toContain(candidate1);
+  });
+
+  it('two candidates: first closed-unmerged at-cap, second healthy → first becomes needs-manual, second served', async () => {
+    const { createDeliveryGuardedQueue } = await loadDeliveryGuard();
+    const candidate1 = makeEnvelope('idea-1');
+    const candidate2 = makeEnvelope('idea-2');
+    const { queue, releasedEnvelopes } = makeFakeQueueWithEnvelopes([candidate1, candidate2]);
+    const { ledger, transitionCalls } = makeFakeLedger();
+    const { runner: gh } = makeFakeGh(
+      JSON.stringify({ state: 'CLOSED', mergedAt: null }),
+    );
+
+    let reopenCalls: string[] = [];
+    (ledger as any).reopen = async (source: string, sourceRef: string) => {
+      reopenCalls.push(`${source}:${sourceRef}`);
+    };
+
+    // Pre-populate ledger
+    (ledger as any).get = async (source: string, sourceRef: string) => {
+      if (source === candidate1.source && sourceRef === candidate1.sourceRef) {
+        return {
+          source: candidate1.source,
+          sourceRef: candidate1.sourceRef,
+          status: 'claimed',
+          prUrl: 'https://github.com/owner/repo/pull/123',
+          branch: 'feat/test-branch',
+          attempts: 2,
+        };
+      }
+      // candidate2 has no entry (passthrough)
+      return undefined;
+    };
+
+    const guarded = createDeliveryGuardedQueue(queue, ledger, { gh });
+
+    // First claim should skip candidate1 (at-cap closed-unmerged) and serve candidate2
+    const first = await guarded.claim();
+    expect(first).toEqual(candidate2);
+
+    // Verify reopen was NOT called
+    expect(reopenCalls.length).toBe(0);
+
+    // Verify transition to needs-manual was called for candidate1
+    expect(transitionCalls.length).toBeGreaterThan(0);
+    expect(transitionCalls[0][2]).toBe('needs-manual');
+
+    // Verify candidate1 was released (acked)
+    expect(releasedEnvelopes).toContain(candidate1);
+
+    // Second claim should return null (queue exhausted)
+    const second = await guarded.claim();
+    expect(second).toBeNull();
+  });
+});

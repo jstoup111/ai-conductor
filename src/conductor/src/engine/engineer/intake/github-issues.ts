@@ -51,6 +51,7 @@ export const HANDLED_LABEL = 'engineer:handled';
  * Maximum number of automatic reopens before an issue is parked as
  * `needs-manual`. attempts starts at 0; the (cap+1)-th detection parks it.
  * FR-40 churn guard: "third reopen (attempts==2) → needs-manual".
+ * Exported for use by delivery-guard.ts (closed-unmerged reopen semantics).
  */
 export const REOPEN_ATTEMPTS_CAP = 2;
 

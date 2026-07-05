@@ -1,10 +1,14 @@
 // delivery-guard module — PR state verification probe (Task 1, TR-1),
-// claim delivery guard decorator (Task 2, TR-2), and auto-heal for delivered
-// entries (Task 3, TR-3).
+// claim delivery guard decorator (Task 2, TR-2), auto-heal for delivered
+// entries (Task 3, TR-3), and closed-unmerged reopen semantics (Task 5, FR-39/40).
 //
 // Provides PR state probing utilities for the claim delivery guard.
 // Used to detect when a spec PR has been closed-unmerged (re-eligibility trigger)
 // and to auto-heal delivered entries that have PRs open or merged.
+// Implements FR-39/40 reopen semantics: closed-unmerged entries below the reopen
+// cap are re-marked for processing; at-cap entries are parked as needs-manual.
+
+import { REOPEN_ATTEMPTS_CAP } from './github-issues.js';
 
 /** Shell runner for the `gh` CLI. Mirrors the engineer loop's GhRunner shape. */
 export type GhRunner = (args: string[], opts: { cwd: string }) => Promise<{ stdout: string }>;
@@ -74,6 +78,7 @@ export interface GuardLedger {
   get(source: string, sourceRef: string): Promise<any>;
   record(input: { source: string; sourceRef: string }): Promise<void>;
   transition(...args: any[]): Promise<void>;
+  reopen(source: string, sourceRef: string): Promise<void>;
 }
 
 /** Simple logger interface. */
@@ -193,6 +198,71 @@ export function createDeliveryGuardedQueue(
 
           // Continue scanning for the next candidate
           return this.claim();
+        }
+
+        // Task 5: closed-unmerged reopen semantics (FR-39/40)
+        if (prState === 'closed-unmerged') {
+          const attempts = entry.attempts ?? 0;
+
+          if (attempts < REOPEN_ATTEMPTS_CAP) {
+            // Below cap — reopen for another attempt
+            try {
+              await ledger.reopen(source, sourceRef);
+              logger.info(`Reopening ${sourceRef}`);
+              // Hold the candidate (will be released when queue is exhausted)
+              held.push(candidate);
+            } catch (err) {
+              // Reopen failed — log error, hold, and continue
+              process.stderr.write(
+                `[delivery-guard] Failed to reopen entry ${sourceRef}: ${err instanceof Error ? err.message : String(err)}\n`,
+              );
+              held.push(candidate);
+            }
+            // Continue scanning for the next candidate
+            return this.claim();
+          } else {
+            // At or past cap — park as needs-manual
+            try {
+              await ledger.transition(source, sourceRef, 'needs-manual', {
+                prUrl: entry.prUrl,
+              });
+            } catch (err) {
+              // Transition failed — log error and hold
+              process.stderr.write(
+                `[delivery-guard] Failed to park entry ${sourceRef} as needs-manual: ${err instanceof Error ? err.message : String(err)}\n`,
+              );
+              held.push(candidate);
+              // Continue scanning for the next candidate
+              return this.claim();
+            }
+
+            // Ack the envelope
+            try {
+              await queue.release(candidate);
+            } catch (err) {
+              // Check if error is ENOENT (benign race)
+              const isEnoent =
+                err instanceof Error &&
+                (('code' in err && (err as any).code === 'ENOENT') ||
+                  err.message.includes('ENOENT'));
+
+              if (!isEnoent) {
+                // Non-ENOENT error — treat as a real failure, hold the candidate
+                process.stderr.write(
+                  `[delivery-guard] Failed to release ack for ${sourceRef}: ${err instanceof Error ? err.message : String(err)}\n`,
+                );
+                held.push(candidate);
+                // Continue scanning for the next candidate
+                return this.claim();
+              }
+              // ENOENT is benign
+              logger.info(`Benign race: failed to ack ${sourceRef} (file already deleted)`);
+            }
+
+            logger.info(`Parking ${sourceRef} as needs-manual (attempts cap reached)`);
+            // Continue scanning for the next candidate
+            return this.claim();
+          }
         }
       }
 
