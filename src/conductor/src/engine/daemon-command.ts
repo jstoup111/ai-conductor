@@ -14,6 +14,8 @@
 export interface DaemonCommandOptions {
   /** Parallel workers (>= 1). Default 1. */
   concurrency: number;
+  /** Watch for changes (watch mode). Default true. */
+  watch?: boolean;
   /** Stop after this many features (default: drain the backlog once). */
   maxItems?: number;
   /** Continuous: idle-poll for new features instead of draining once. */
@@ -22,7 +24,7 @@ export interface DaemonCommandOptions {
   maxCostTokens?: number;
   /** Wall-clock ceiling in seconds. */
   maxRuntimeSeconds?: number;
-  /** Idle poll interval in seconds (continuous mode). Default 5. */
+  /** Idle poll interval in seconds (continuous mode). Fallback interval 60. */
   idlePollSeconds?: number;
   /** Stop after this many consecutive empty polls (continuous mode). */
   maxIdlePolls?: number;
@@ -172,12 +174,12 @@ export function detectDaemonCommand(argv: string[]): DaemonCommandOptions | null
 
   return {
     concurrency: intFlag(argv, '--concurrency', 1) ?? 1,
+    watch: !argv.includes('--no-watch'),
     maxItems: intFlag(argv, '--max-items'),
     continuous: argv.includes('--continuous'),
     maxCostTokens: intFlag(argv, '--max-cost'),
     maxRuntimeSeconds: intFlag(argv, '--max-runtime'),
-    // Mirrors the former flag's default of 5 (commander applied it eagerly).
-    idlePollSeconds: intFlag(argv, '--idle-poll', 5),
+    idlePollSeconds: intFlag(argv, '--idle-poll', 60),
     maxIdlePolls: intFlag(argv, '--max-idle-polls'),
   };
 }
