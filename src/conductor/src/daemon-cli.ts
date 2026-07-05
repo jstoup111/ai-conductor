@@ -8,6 +8,7 @@ import { promisify } from 'node:util';
 import { closeIssueOnImplementationMerge } from './engine/engineer/issue-ref.js';
 import { rehabilitateHaltPr } from './engine/halt-pr-rehabilitation.js';
 import { isEligibleForResolve, resolveConflictingPr } from './engine/autoresolve.js';
+import { resolveRebaseResolutionAttempts } from './engine/resolved-config.js';
 import type { LLMProvider } from './execution/llm-provider.js';
 import { PluginRegistry } from './engine/plugin-registry.js';
 import { registerBuiltins } from './engine/plugin-loader.js';
@@ -55,8 +56,7 @@ import {
 import { isOperatorParked } from './engine/park-marker.js';
 import { listOperatorParkedSlugs } from './engine/park-marker.js';
 import { readState, writeState, getStepStatus } from './engine/state.js';
-import { makeGitRunner, originDefaultBranch } from './engine/rebase.js';
-import { resolveRebaseResolutionAttempts } from './engine/resolved-config.js';
+import { makeGitRunner, originDefaultBranch, type RebaseResolver } from './engine/rebase.js';
 import {
   readBaseSha,
   readPersistedBaseSha,
@@ -853,7 +853,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
                 const runSuite = async (projectRoot: string) => {
                   const cmd = config?.mergeable_autoresolve?.suiteCommand;
                   if (!cmd) {
-                    return { exitCode: 0, durationMs: 0 };
+                    return { exitCode: 0, durationMs: 0, configured: false };
                   }
 
                   const startMs = Date.now();
@@ -865,21 +865,44 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
                     return {
                       exitCode: result.status || 0,
                       durationMs: Date.now() - startMs,
+                      configured: true,
                     };
                   } catch (err: any) {
                     return {
                       exitCode: err.status || 1,
                       durationMs: Date.now() - startMs,
+                      configured: true,
                     };
                   }
                 };
 
-                // Create a simple resolver that escalates (all Tier2 conflicts)
-                // A real implementation would dispatch to the /rebase step
-                const resolver = async () => ({
-                  resolved: false,
-                  reason: 'tier2 resolution not yet implemented in daemon',
-                });
+                // Create a real Tier-2 resolver that dispatches to the /rebase skill
+                // FR-7: wire stepRunner and events for rebase resolution dispatch
+                let attempt = 0;
+                const attemptCap = resolveRebaseResolutionAttempts(config);
+                const resolver: RebaseResolver = async (ctx) => {
+                  attempt += 1;
+                  try {
+                    await events.emit({ type: 'rebase_resolution_attempt', index: attempt, cap: attemptCap });
+                  } catch {
+                    /* best-effort: event emission must not block resolution */
+                  }
+                  try {
+                    // Create a fresh step runner for this rebase resolution attempt
+                    const sessionId = uuidv4();
+                    const stepRunner = new DefaultStepRunner(provider, sessionId, ctx.projectRoot, {
+                      featureDesc: `rebase-resolution-${entry.slug}`,
+                      config,
+                      mode: 'auto',
+                    });
+                    return await stepRunner.resolveRebaseConflict(ctx);
+                  } catch (err) {
+                    return {
+                      resolved: false,
+                      reason: err instanceof Error ? err.message : String(err),
+                    };
+                  }
+                };
 
                 // Run the full resolution pipeline
                 const outcome = await resolveConflictingPr(
@@ -889,7 +912,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
                     enabled: config?.mergeable_autoresolve?.enabled ?? false,
                     suiteCommand: config?.mergeable_autoresolve?.suiteCommand ?? '',
                     cooldownMinutes: config?.mergeable_autoresolve?.cooldownMinutes ?? 60,
-                    attemptCap: config?.mergeable_autoresolve?.attemptCap ?? 3,
+                    attemptCap,
                   },
                   { runGh: ghRunner, runSuite, resolver, log },
                 );

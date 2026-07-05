@@ -920,7 +920,7 @@ export async function resolveConflictingPr(
   config: { enabled: boolean; suiteCommand: string; cooldownMinutes: number; attemptCap: number },
   deps: {
     runGh: PrLabelsGhRunner;
-    runSuite: (projectRoot: string) => Promise<{ exitCode: number; durationMs: number }>;
+    runSuite: (projectRoot: string) => Promise<{ exitCode: number; durationMs: number; configured: boolean }>;
     resolver: RebaseResolver;
     log: (msg: string) => void;
   },
@@ -1015,9 +1015,11 @@ export async function resolveConflictingPr(
     // Suite gate: full test suite must pass
     // Use the injected runSuite function which may be a real suite runner or test stub
     const suiteRunResult = await deps.runSuite(worktreePath);
-    const suiteOk = suiteRunResult.exitCode === 0;
+    const suiteOk = suiteRunResult.exitCode === 0 && suiteRunResult.configured !== false;
     if (!suiteOk) {
-      const reason = `suite exited with code ${suiteRunResult.exitCode}`;
+      const reason = suiteRunResult.configured === false
+        ? 'no suite command configured'
+        : `suite exited with code ${suiteRunResult.exitCode}`;
       log(`${prUrl}: suite gate failed: ${reason}`);
       await escalate(prUrl, 'suite-gate', reason, {
         runGh: deps.runGh,
