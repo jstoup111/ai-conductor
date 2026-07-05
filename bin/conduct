@@ -2853,9 +2853,6 @@ fi
 
 check_harness_update
 
-# Check if project CLAUDE.md references HARNESS.md (auto-upgrade for existing projects)
-check_harness_config
-
 # On resume, check for merged PRs and offer cleanup first
 if [ "$MODE" = "resume" ] && [ -d "${PROJECT_DIR}/.worktrees" ]; then
   run_cleanup
