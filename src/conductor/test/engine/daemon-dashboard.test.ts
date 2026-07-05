@@ -411,6 +411,106 @@ describe('engine/daemon-dashboard — renderDashboard WAITING group (FR-6)', () 
   });
 });
 
+describe('engine/daemon-dashboard — renderDashboard GATED group (FR-7/FR-11, Task 9)', () => {
+  it('renders a populated GATED section with slug, reason, and remedy; names the owner for other-owner', () => {
+    const state: InheritedState = {
+      halted: [],
+      inProgress: [],
+      eligible: [],
+      processed: [],
+      processedCount: 0,
+      gated: [
+        {
+          kind: 'spec',
+          slug: 'owned-elsewhere',
+          reason: 'other-owner',
+          otherOwner: 'alice',
+          remedy: 'ask alice to release it',
+        },
+        {
+          kind: 'spec',
+          slug: 'stale-claim',
+          reason: 'unowned-post-cutover',
+          remedy: 'claim it via daemon identity config',
+        },
+      ],
+    };
+    const out = renderDashboard(state);
+    expect(out).toContain('GATED (2)');
+    expect(out).toContain('owned-elsewhere');
+    expect(out).toContain('other-owner');
+    expect(out).toContain('alice');
+    expect(out).toContain('ask alice to release it');
+    expect(out).toContain('stale-claim');
+    expect(out).toContain('unowned-post-cutover');
+    expect(out).toContain('claim it via daemon identity config');
+  });
+
+  it('renders repo-kind gated entries as section-level warning lines', () => {
+    const state: InheritedState = {
+      halted: [],
+      inProgress: [],
+      eligible: [],
+      processed: [],
+      processedCount: 0,
+      gated: [
+        {
+          kind: 'repo',
+          warning: 'no-cutover',
+          remedy: 'configure a grandfather cutover date',
+        },
+      ],
+    };
+    const out = renderDashboard(state);
+    expect(out).toContain('GATED (1)');
+    expect(out).toContain('no-cutover');
+    expect(out).toContain('configure a grandfather cutover date');
+  });
+
+  it('empty gated list → no GATED section rendered (matches WAITING empty convention)', () => {
+    const out = renderDashboard({
+      halted: [],
+      inProgress: [],
+      eligible: [],
+      processed: [],
+      processedCount: 0,
+      gated: [],
+    });
+    expect(out).not.toContain('GATED');
+  });
+
+  it('a missing gated field renders no GATED section (discovery-failure fallback, mirrors ELIGIBLE)', () => {
+    const out = renderDashboard({
+      halted: [],
+      inProgress: [],
+      eligible: [],
+      processed: [],
+      processedCount: 0,
+    });
+    expect(out).not.toContain('GATED');
+  });
+
+  it('a gated spec slug is excluded from ELIGIBLE and WAITING (GATED outranks both)', () => {
+    const state: InheritedState = {
+      halted: [],
+      inProgress: [],
+      eligible: [{ slug: 'dup' }],
+      processed: [],
+      processedCount: 0,
+      waiting: [{ slug: 'other', verdict: { kind: 'indeterminate', detail: 'x' } }],
+      gated: [
+        { kind: 'spec', slug: 'dup', reason: 'other-owner', otherOwner: 'bob', remedy: 'ask bob' },
+      ],
+    };
+    const out = renderDashboard(state);
+    const eligibleSectionStart = out.indexOf('ELIGIBLE');
+    const processedSectionStart = out.indexOf('PROCESSED');
+    const eligibleSection = out.slice(eligibleSectionStart, processedSectionStart);
+    expect(eligibleSection).not.toContain('• dup');
+    expect(out).toContain('GATED (1)');
+  });
+});
+
 describe('engine/daemon-dashboard — status output parity (FR-6, Task 17)', () => {
   // daemon-cli's status path (renderStartupDashboard) and any future status
   // summary caller MUST drive scanInheritedState + renderDashboard directly —
