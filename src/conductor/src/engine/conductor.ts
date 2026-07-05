@@ -865,7 +865,7 @@ export class Conductor {
     // Exit codes follow Unix convention: 128 + signal number
     const signalHandlerBase = async (signal: NodeJS.Signals) => {
       await writeState(this.stateFilePath, state);
-      const exitCodes: Record<NodeJS.Signals, number> = {
+      const exitCodes: Record<string, number> = {
         SIGINT: 130,   // 128 + 2
         SIGTERM: 143,  // 128 + 15
         SIGHUP: 129,   // 128 + 1
