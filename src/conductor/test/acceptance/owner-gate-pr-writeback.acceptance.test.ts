@@ -164,16 +164,31 @@ describe('owner-gate PR write-back acceptance (Covers: FR-8, FR-10, FR-12)', () 
 
   it('the spec PR is already MERGED: label + comment still apply without error', async () => {
     const mod = await loadGateWriteback();
-    const { gh } = fakeGh([
-      { stdout: '' },
-      { stdout: '' },
-      { stdout: JSON.stringify({ comments: [] }) },
-      { stdout: '' },
-    ]);
+    const calls: string[][] = [];
+    const gh: GhRunner = async (args) => {
+      calls.push([...args]);
+      if (args[0] === 'pr' && args[1] === 'view' && args.includes('state,mergeable,statusCheckRollup,labels')) {
+        return {
+          stdout: JSON.stringify({ state: 'MERGED', mergeable: 'MERGEABLE', statusCheckRollup: [], labels: [] }),
+        };
+      }
+      if (args[0] === 'pr' && args[1] === 'view' && args.includes('comments')) {
+        return { stdout: JSON.stringify({ comments: [] }) };
+      }
+      return { stdout: '' };
+    };
 
     await expect(
       mod.announceGatedPr(OTHER_OWNER_ENTRY, PR_URL, { runGh: gh, cwd: '/repo' }),
     ).resolves.toBeUndefined();
+
+    const labelAddCall = calls.find(
+      (c) => c[0] === 'api' && c.some((a) => a.includes('/labels')) && c.includes('POST'),
+    );
+    expect(labelAddCall).toBeDefined();
+
+    const commentCreateCall = calls.find((c) => c[0] === 'pr' && c[1] === 'comment');
+    expect(commentCreateCall).toBeDefined();
   });
 
   it('gh exits non-zero on the comment upsert: the failure is logged once, no retry storm, and local state was already committed before this call (advisory only)', async () => {
