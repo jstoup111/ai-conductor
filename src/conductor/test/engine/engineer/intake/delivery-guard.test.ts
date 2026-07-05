@@ -1012,3 +1012,180 @@ describe('Task 6: createDeliveryGuardedQueue — unknown PR state fails safe', (
     expect(releasedEnvelopes2).toContain(candidate1);
   });
 });
+
+// ─── Task 7: in-flight duplicate envelope dropped without ledger mutation ────
+
+describe('Task 7: createDeliveryGuardedQueue — in-flight duplicate envelope dropped', () => {
+  it('entry claimed (no prUrl) + matching duplicate envelope → envelope acked, ledger entry unchanged (deep equal), log includes "engineer forget {sourceRef}"', async () => {
+    const { createDeliveryGuardedQueue } = await loadDeliveryGuard();
+    const candidate = makeEnvelope('idea-1');
+    const { queue, releasedEnvelopes } = makeFakeQueueWithEnvelopes([candidate]);
+    const { ledger, transitionCalls } = makeFakeLedger();
+    const { runner: gh } = makeFakeGh('');
+
+    // Capture logger
+    const logMessages: string[] = [];
+    const mockLogger = {
+      info: (msg: string) => {
+        logMessages.push(msg);
+      },
+    };
+
+    // Pre-populate ledger with a claimed entry that has NO prUrl (in-flight)
+    const originalEntry = {
+      source: candidate.source,
+      sourceRef: candidate.sourceRef,
+      status: 'claimed',
+      // NO prUrl — this is in-flight
+      branch: 'feat/in-flight-branch',
+    };
+    (ledger as any).get = async (source: string, sourceRef: string) => {
+      if (source === candidate.source && sourceRef === candidate.sourceRef) {
+        return { ...originalEntry }; // Return a copy to check if it was mutated
+      }
+      return undefined;
+    };
+
+    const guarded = createDeliveryGuardedQueue(queue, ledger, { gh, logger: mockLogger });
+
+    // Claim should drop the duplicate envelope and return null (no more candidates)
+    const claimed = await guarded.claim();
+    expect(claimed).toBeNull();
+
+    // Verify the envelope was acked (released)
+    expect(releasedEnvelopes).toContain(candidate);
+
+    // Verify no transition was called (ledger untouched)
+    expect(transitionCalls).toHaveLength(0);
+
+    // Verify log includes "engineer forget {sourceRef}"
+    const logText = logMessages.join('\n');
+    expect(logText).toMatch(/engineer forget/i);
+    expect(logText).toContain('idea-1');
+  });
+
+  it('two candidates: first claimed (no prUrl), second pending, matching envelope on first → first acked/dropped, second served, ledger untouched', async () => {
+    const { createDeliveryGuardedQueue } = await loadDeliveryGuard();
+    const candidate1 = makeEnvelope('idea-1');
+    const candidate2 = makeEnvelope('idea-2');
+    const { queue, releasedEnvelopes } = makeFakeQueueWithEnvelopes([candidate1, candidate2]);
+    const { ledger, transitionCalls } = makeFakeLedger();
+    const { runner: gh } = makeFakeGh('');
+
+    const logMessages: string[] = [];
+    const mockLogger = {
+      info: (msg: string) => {
+        logMessages.push(msg);
+      },
+    };
+
+    // Pre-populate ledger
+    (ledger as any).get = async (source: string, sourceRef: string) => {
+      if (source === candidate1.source && sourceRef === candidate1.sourceRef) {
+        return {
+          source: candidate1.source,
+          sourceRef: candidate1.sourceRef,
+          status: 'claimed',
+          // NO prUrl — in-flight
+        };
+      }
+      if (sourceRef === 'idea-2') {
+        return {
+          source: candidate2.source,
+          sourceRef: candidate2.sourceRef,
+          status: 'pending',
+        };
+      }
+      return undefined;
+    };
+
+    const guarded = createDeliveryGuardedQueue(queue, ledger, { gh, logger: mockLogger });
+
+    // First claim should skip candidate1 (drop duplicate) and serve candidate2
+    const first = await guarded.claim();
+    expect(first).toEqual(candidate2);
+
+    // Verify candidate1 was acked (released)
+    expect(releasedEnvelopes).toContain(candidate1);
+
+    // Verify no transition was called for candidate1 (ledger untouched)
+    expect(transitionCalls).toHaveLength(0);
+
+    // Verify log includes "engineer forget" for candidate1
+    const logText = logMessages.join('\n');
+    expect(logText).toMatch(/engineer forget/i);
+    expect(logText).toContain('idea-1');
+
+    // Third claim should return null (queue exhausted)
+    const second = await guarded.claim();
+    expect(second).toBeNull();
+  });
+
+  it('entry after forget (cleared) → fresh envelope serves normally (regression test for recovery path)', async () => {
+    const { createDeliveryGuardedQueue } = await loadDeliveryGuard();
+    const candidate1 = makeEnvelope('idea-1');
+    const { queue: queue1, releasedEnvelopes: releasedEnvelopes1 } = makeFakeQueueWithEnvelopes([candidate1]);
+    const { ledger, transitionCalls } = makeFakeLedger();
+    const { runner: gh } = makeFakeGh('');
+
+    const logMessages: string[] = [];
+    const mockLogger = {
+      info: (msg: string) => {
+        logMessages.push(msg);
+      },
+    };
+
+    // Pre-populate ledger with in-flight entry
+    (ledger as any).get = async (source: string, sourceRef: string) => {
+      if (source === candidate1.source && sourceRef === candidate1.sourceRef) {
+        return {
+          source: candidate1.source,
+          sourceRef: candidate1.sourceRef,
+          status: 'claimed',
+          // NO prUrl — in-flight
+        };
+      }
+      return undefined;
+    };
+
+    const guarded1 = createDeliveryGuardedQueue(queue1, ledger, { gh, logger: mockLogger });
+
+    // First claim should drop the duplicate and return null (no more candidates)
+    const first = await guarded1.claim();
+    expect(first).toBeNull();
+
+    // Verify candidate1 was acked (released)
+    expect(releasedEnvelopes1).toContain(candidate1);
+
+    // Verify log includes "engineer forget" for the dropped duplicate
+    const logText1 = logMessages.join('\n');
+    expect(logText1).toMatch(/engineer forget/i);
+
+    // Now simulate recovery: operator runs "engineer forget {sourceRef}" to clear the entry
+    // Reset the ledger to return undefined for the same sourceRef
+    (ledger as any).get = async (source: string, sourceRef: string) => {
+      // Entry is now cleared after forget
+      return undefined;
+    };
+
+    // Create a fresh queue with the same candidate (simulating retry after forget)
+    const candidate2 = makeEnvelope('idea-1'); // Same sourceRef
+    const { queue: queue2, releasedEnvelopes: releasedEnvelopes2 } = makeFakeQueueWithEnvelopes([candidate2]);
+
+    // Clear the log for the second phase
+    logMessages.length = 0;
+
+    const guarded2 = createDeliveryGuardedQueue(queue2, ledger, { gh, logger: mockLogger });
+
+    // Second claim should now serve candidate2 normally (entry is cleared)
+    const second = await guarded2.claim();
+    expect(second).toEqual(candidate2);
+
+    // Verify no transition was called (should be a passthrough)
+    expect(transitionCalls).toHaveLength(0);
+
+    // Third claim should return null (queue exhausted)
+    const third = await guarded2.claim();
+    expect(third).toBeNull();
+  });
+});
