@@ -823,12 +823,15 @@ export async function readChangelogIfPresent(
  * rename/rename conflicts by preserving both versions with distinct names,
  * then stage and continue the rebase.
  *
- * Only processes conflicts in .docs/; non-.docs/ conflicts are rejected
- * (caller should route to different resolvers or HALT).
+ * STRICT SCOPE: Only processes add/add and rename/rename conflicts within .docs/.
+ * Rejects:
+ *   - Any conflict outside .docs/
+ *   - Edit conflicts (content collision on same file)
+ *   - Mixed scenarios (some .docs/, some non-.docs/)
  *
  * Returns {resolved: true} when all .docs/ conflicts are kept-both resolved
  * and the rebase --continue succeeds. Returns {resolved: false, reason} if
- * any conflict is outside .docs/ or if rebase --continue fails.
+ * any conflict is out of scope or if rebase --continue fails.
  */
 export const docsKeepBothResolver: RebaseResolver = async (ctx) => {
   const { conflicts, projectRoot, baseRef } = ctx;
@@ -863,16 +866,29 @@ export const docsKeepBothResolver: RebaseResolver = async (ctx) => {
 
     return { resolved: true };
   } catch (e) {
-    return { resolved: false, reason: `unexpected error during .docs resolution: ${String(e)}` };
+    const errorMsg = e instanceof Error ? e.message : String(e);
+    // Distinguish between scope rejections (edit conflicts) and unexpected errors.
+    if (errorMsg.includes('edit conflict')) {
+      return {
+        resolved: false,
+        reason: `${errorMsg} — not in keep-both scope`,
+      };
+    }
+    return { resolved: false, reason: `unexpected error during .docs resolution: ${errorMsg}` };
   }
 };
 
 /**
- * Resolve a single .docs/ conflict by keeping both versions. Handles:
+ * Resolve a single .docs/ conflict by keeping both versions. Handles ONLY:
  *   - add/add: write both stage 2 and stage 3 to distinct filenames
  *   - rename/rename: both renamed versions already distinct, just keep both
  *
- * Returns the paths of resolved files to be staged.
+ * REJECTS:
+ *   - edit conflicts: same file with common ancestor, both sides edited content
+ *   - delete/edit or other asymmetric conflicts
+ *
+ * Throws an error if the conflict is not add/add or rename/rename.
+ * Returns the paths of resolved files to be staged (for valid conflicts only).
  */
 async function resolveDocsConflictKeepBoth(
   git: GitRunner,
@@ -932,12 +948,19 @@ async function resolveDocsConflictKeepBoth(
       await git(['rm', conflictedFile]);
     }
   } else {
-    // rename/rename conflict: both sides renamed the same file differently.
-    // We need to extract both versions and write them to their renamed paths,
-    // then stage them.
+    // hasStage1 = true: either edit conflict or rename/rename.
+    // Distinguish: rename/rename has stage2Path !== stage3Path; edit conflict has them equal.
     const stage2Path = stageMap.get(2);
     const stage3Path = stageMap.get(3);
 
+    // If stage 2 and stage 3 point to the same path, it's an edit conflict → reject.
+    if (stage2Path === stage3Path) {
+      throw new Error(
+        `edit conflict (content divergence) in ${conflictedFile} — keep-both can only resolve add/add or rename/rename`,
+      );
+    }
+
+    // rename/rename conflict: both sides renamed the same file differently.
     if (stage2Path && stage3Path) {
       // Extract the content from both stages.
       const stage2Content = await git(['show', `:2:${conflictedFile}`]);

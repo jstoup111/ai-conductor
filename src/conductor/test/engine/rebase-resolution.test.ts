@@ -746,3 +746,165 @@ describe('engine/rebase — .docs keep-both resolver (happy path)', () => {
     expect(paths.some((p) => p.includes('design~theirs'))).toBe(true);
   });
 });
+
+describe('engine/rebase — .docs keep-both resolver (negative scope cases)', () => {
+  let repo: string;
+  const g = (args: string[]) => execFile('git', args, { cwd: repo });
+  const gc = (args: string[]) =>
+    execFile('git', ['-c', 'core.editor=true', ...args], { cwd: repo });
+
+  afterEach(async () => {
+    await rm(repo, { recursive: true, force: true });
+  });
+
+  /**
+   * Edit conflict (both sides modified same file): file has a common ancestor
+   * and both sides changed its content. keep-both resolver should NOT resolve
+   * these — they require human intervention.
+   */
+  it('rejects .docs/ edit conflict (content divergence) — not add/add or rename/rename', async () => {
+    repo = await mkdtemp(join(tmpdir(), 'rebase-docs-edit-'));
+    await execFile('git', ['init', '-q', '-b', 'main'], { cwd: repo });
+    await g(['config', 'user.email', 't@t.com']);
+    await g(['config', 'user.name', 'T']);
+
+    // Base: create a .docs file with initial content
+    await execFile('mkdir', ['-p', join(repo, '.docs')], {});
+    await writeFile(join(repo, '.docs/design.md'), 'initial content\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'init']);
+
+    // Feature: edit the .docs file
+    await g(['checkout', '-q', '-b', 'feat']);
+    await writeFile(join(repo, '.docs/design.md'), 'feature content\n');
+    await g(['commit', '-q', '-am', 'feat: change design']);
+
+    // Main: edit the same .docs file differently (edit conflict, not add/add)
+    await g(['checkout', '-q', 'main']);
+    await writeFile(join(repo, '.docs/design.md'), 'main content\n');
+    await g(['commit', '-q', '-am', 'main: change design']);
+
+    // Back to feat
+    await g(['checkout', '-q', 'feat']);
+
+    // Trigger the conflict
+    const git = makeGitRunner(repo);
+    const pre = await performRebase(git, repo, 'main');
+    expect(pre.kind).toBe('conflict_halt');
+
+    // Use the .docs keep-both resolver — should reject edit conflicts
+    const { docsKeepBothResolver } = await import('../../src/engine/rebase.js');
+    const outcome = await resolveRebaseConflicts(git, repo, pre, docsKeepBothResolver, 1);
+
+    // Should NOT resolve: edit conflicts are not in scope (only add/add and rename/rename)
+    expect(outcome.kind).toBe('conflict_halt');
+    if (outcome.kind === 'conflict_halt') {
+      expect(outcome.reason).toContain('edit conflict') ||
+        expect(outcome.reason).toContain('cannot be keep-both resolved');
+    }
+  });
+
+  /**
+   * Conflicted path outside .docs/ — resolver should reject entirely,
+   * even if there might be .docs/ conflicts too.
+   */
+  it('rejects when any conflict is outside .docs/', async () => {
+    repo = await mkdtemp(join(tmpdir(), 'rebase-docs-outside-'));
+    await execFile('git', ['init', '-q', '-b', 'main'], { cwd: repo });
+    await g(['config', 'user.email', 't@t.com']);
+    await g(['config', 'user.name', 'T']);
+
+    // Base: init with a src file
+    await execFile('mkdir', ['-p', join(repo, 'src')], {});
+    await writeFile(join(repo, 'src/code.ts'), 'base code\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'init']);
+
+    // Feature: edit src/code.ts
+    await g(['checkout', '-q', '-b', 'feat']);
+    await writeFile(join(repo, 'src/code.ts'), 'feature code\n');
+    await g(['commit', '-q', '-am', 'feat: change code']);
+
+    // Main: edit src/code.ts differently (conflict outside .docs/)
+    await g(['checkout', '-q', 'main']);
+    await writeFile(join(repo, 'src/code.ts'), 'main code\n');
+    await g(['commit', '-q', '-am', 'main: change code']);
+
+    // Back to feat
+    await g(['checkout', '-q', 'feat']);
+
+    // Trigger the conflict
+    const git = makeGitRunner(repo);
+    const pre = await performRebase(git, repo, 'main');
+    expect(pre.kind).toBe('conflict_halt');
+    expect(pre.conflicts).toContain('src/code.ts');
+
+    // Use the .docs keep-both resolver — should reject non-.docs/ conflicts
+    const { docsKeepBothResolver } = await import('../../src/engine/rebase.js');
+    const outcome = await resolveRebaseConflicts(git, repo, pre, docsKeepBothResolver, 1);
+
+    // Should reject because src/code.ts is not in .docs/
+    expect(outcome.kind).toBe('conflict_halt');
+    if (outcome.kind === 'conflict_halt') {
+      expect(outcome.reason).toContain('non-.docs/');
+    }
+  });
+
+  /**
+   * Mixed conflict: .docs/ add/add + src/ edit conflict.
+   * Resolver should reject the entire operation (cannot handle mixed scenarios).
+   * The result should indicate which conflicts remain unresolved.
+   */
+  it('rejects mixed .docs/ add/add + src/ edit — does not partially resolve', async () => {
+    repo = await mkdtemp(join(tmpdir(), 'rebase-docs-mixed-addadd-edit-'));
+    await execFile('git', ['init', '-q', '-b', 'main'], { cwd: repo });
+    await g(['config', 'user.email', 't@t.com']);
+    await g(['config', 'user.name', 'T']);
+
+    // Base: init with a src file
+    await execFile('mkdir', ['-p', join(repo, '.docs')], {});
+    await execFile('mkdir', ['-p', join(repo, 'src')], {});
+    await writeFile(join(repo, 'src/code.ts'), 'base code\n');
+    await writeFile(join(repo, 'README.md'), 'base\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'init']);
+
+    // Feature: adds .docs/design.md and edits src/code.ts
+    await g(['checkout', '-q', '-b', 'feat']);
+    await writeFile(join(repo, '.docs/design.md'), 'feature design\n');
+    await writeFile(join(repo, 'src/code.ts'), 'feature code\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'feat: add docs and change code']);
+
+    // Main: adds .docs/design.md differently and edits src/code.ts differently
+    // This creates: .docs/design.md add/add conflict + src/code.ts edit conflict
+    await g(['checkout', '-q', 'main']);
+    await execFile('mkdir', ['-p', join(repo, '.docs')], {});
+    await writeFile(join(repo, '.docs/design.md'), 'main design\n');
+    await writeFile(join(repo, 'src/code.ts'), 'main code\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'main: add docs and change code']);
+
+    // Back to feat
+    await g(['checkout', '-q', 'feat']);
+
+    // Trigger the conflict
+    const git = makeGitRunner(repo);
+    const pre = await performRebase(git, repo, 'main');
+    expect(pre.kind).toBe('conflict_halt');
+    expect(pre.conflicts.length).toBe(2); // both .docs/design.md and src/code.ts
+
+    // Use the .docs keep-both resolver
+    const { docsKeepBothResolver } = await import('../../src/engine/rebase.js');
+    const outcome = await resolveRebaseConflicts(git, repo, pre, docsKeepBothResolver, 1);
+
+    // Should reject because src/code.ts (non-.docs/) is in the conflict list
+    // Result should indicate the conflicts remain
+    expect(outcome.kind).toBe('conflict_halt');
+    if (outcome.kind === 'conflict_halt') {
+      expect(outcome.reason).toContain('non-.docs/');
+      // The src/code.ts conflict should still be listed
+      expect(outcome.conflicts).toContain('src/code.ts');
+    }
+  });
+});
