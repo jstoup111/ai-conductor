@@ -103,6 +103,7 @@ export type EngineerDispatch =
   | { kind: 'poll' }
   | { kind: 'claim' }
   | { kind: 'forget'; sourceRef: string }
+  | { kind: 'resolve'; sourceRef: string; prUrl: string; branch?: string }
   | { kind: 'migrate-issue-deps'; confirm: boolean };
 
 // ── Subcommand detection ──────────────────────────────────────────────────────
@@ -188,6 +189,33 @@ export function detectEngineerCommand(argv: string[]): EngineerDispatch | null {
       return { kind: 'guide' };
     }
     return { kind: 'forget', sourceRef };
+  }
+
+  if (subCmd === 'resolve') {
+    // `conduct-ts engineer resolve <sourceRef> --pr-url <url> [--branch <b>]` — mark
+    // a claimed entry as delivered when write-back fails. Recovers from the stranded
+    // state (claimed + no prUrl) by stamping prUrl + optional branch evidence.
+    // The sourceRef is the first positional arg that doesn't start with --.
+    let sourceRef: string | null = null;
+    for (let i = 4; i < argv.length; i++) {
+      if (!argv[i].startsWith('--')) {
+        sourceRef = argv[i];
+        break;
+      }
+      // Skip flag values (if argv[i] is a flag, skip the value too)
+      if (argv[i].startsWith('--') && i + 1 < argv.length && !argv[i + 1].startsWith('--')) {
+        i += 1;
+      }
+    }
+    if (!sourceRef) {
+      return { kind: 'guide' };
+    }
+    const prUrl = parseFlag(argv, '--pr-url');
+    if (!prUrl) {
+      return { kind: 'guide' };
+    }
+    const branch = parseFlag(argv, '--branch') ?? undefined;
+    return { kind: 'resolve', sourceRef, prUrl, branch };
   }
 
   if (subCmd === 'migrate-issue-deps') {
@@ -358,6 +386,7 @@ function printGuide(print: (s: string) => void): void {
       '  conduct-ts engineer worktree --project <n> --idea "<i>"                     — create the per-idea authoring worktree\n' +
       '  conduct-ts engineer land --project <n> --idea "<i>" --worktree <p> [--source-ref <ref>]    — commit spec artifacts in the worktree\n' +
       '  conduct-ts engineer handoff --project <n> --branch <b> --worktree <p> [--source-ref <ref>] — open spec PR + remove worktree + nudge daemon\n' +
+      '  conduct-ts engineer resolve <ref> --pr-url <url> [--branch <b>]              — mark a claimed entry as delivered (recovery from write-back failure)\n' +
       '  conduct-ts engineer poll                                — poll github issues → enqueue new ideas\n' +
       '  conduct-ts engineer forget <owner/repo#N>               — drop an intake ledger entry + label\n' +
       '  conduct-ts engineer migrate-issue-deps [--confirm]      — one-time prose→link dependency migration ' +
@@ -932,6 +961,28 @@ export async function dispatchEngineer(
       }
 
       print(JSON.stringify({ kind: 'forget', sourceRef, found: true, removed: true }));
+      return 0;
+    }
+
+    // ── resolve ─────────────────────────────────────────────────────────────
+    // `conduct-ts engineer resolve <sourceRef> --pr-url <url> [--branch <b>]`:
+    // mark a claimed entry as delivered when write-back fails (recovery from the
+    // stranded state where the spec was authored/handed off but not recorded as done).
+    // Validates the URL format (http(s)://…) before proceeding. Task 12 performs
+    // the actual ledger transition; this case validates input only.
+    case 'resolve': {
+      const { sourceRef, prUrl, branch } = dispatch;
+
+      // Validate --pr-url format: must be http(s)://
+      if (!prUrl.match(/^https?:\/\//)) {
+        printErr(`resolve: invalid --pr-url "${prUrl}" (must be http(s)://…)`);
+        return 1;
+      }
+
+      // For now, just validate and parse. Task 12 implements the ledger write.
+      // Return success (exit 0) and let Task 12 handle the actual transition.
+      // TODO(Task 12): transition the ledger entry to 'done' with prUrl + branch.
+      print(JSON.stringify({ kind: 'resolve', sourceRef, prUrl, branch }));
       return 0;
     }
 
