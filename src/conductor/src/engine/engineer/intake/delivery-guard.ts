@@ -200,6 +200,17 @@ export function createDeliveryGuardedQueue(
           return this.claim();
         }
 
+        // Task 6: unknown PR state — fail safe with no sticky state
+        if (prState === 'unknown') {
+          // PR state lookup failed (gh threw or unparseable output)
+          // Hold the candidate but don't serve or mutate ledger
+          // Log for audit trail
+          logger.info(`PR state unknown for ${sourceRef}, holding`);
+          held.push(candidate);
+          // Continue scanning for the next candidate
+          return this.claim();
+        }
+
         // Task 5: closed-unmerged reopen semantics (FR-39/40)
         if (prState === 'closed-unmerged') {
           const attempts = entry.attempts ?? 0;
