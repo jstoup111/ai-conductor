@@ -13,11 +13,29 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 ### Fixed
 
 - Prevent re-dispatch of delivered and stranded intake entries via claim-time delivery guard (#243)
+- CI: skipped the `publish-interrupted` `bin/setup worktree compatibility` smoke
+  pending #334. It was authored to self-skip until `bin/setup` existed; `bin/setup`
+  landed (#269) and un-skipped it, but the script resolves its target from its own
+  location (`$0/..`), so invoking the primary's `bin/setup` from a worktree
+  rebuilds the primary and never creates the worktree's `dist` (ENOENT). A
+  pre-existing defect the new CI is the first to exercise; tracked in #334 and
+  skipped so the suite is honestly green rather than red on unrelated breakage.
+- CI: the `engineer-agent-hosted` acceptance suite failed under the new PR
+  workflow (#322) because `dispatchEngineer({kind:'land'})` resolves a
+  machine-scoped owner-gate identity from `~/.ai-conductor/config.yml` (where
+  `spec_owner` wins over the `gh` fallback). With no `spec_owner` and no `gh`
+  auth on the CI runner the land path exited *"identity unresolved"* before
+  reaching the behavior under test — six tests green locally (dev is gh-authed)
+  but red in CI. Fixed by pointing `HOME` at a hermetic fake home carrying
+  `spec_owner` in the suite's `beforeEach` (the same pattern the sibling
+  `engineer-cli-land-owner` and `conductor-owner-stamp` suites already use),
+  so identity resolves deterministically and independently of ambient gh auth.
 
 ### Added
 
 - `engineer resolve` recovery subcommand to mark stranded entries delivered (recover from write-back failures)
 - Local-commit and pr-skipped handoff outcomes now record branch evidence for auditing
+- CI: added a PR-triggered GitHub Actions workflow that runs the harness integrity test suite and the conductor build/vitest suite on every pull request.
 - writing-system-tests: FR→acceptance-spec coverage gate — product-track runs emit a per-FR coverage table (`.pipeline/fr-coverage.md`) and refuse to complete while any FR is unresolved (spec-covered / unit-covered / already-tested dispositions with citations). (#244)
 - **Deep-seam tmux guard prevents real daemon sessions under AI_CONDUCTOR_NO_REAL_EXEC kill-switch (#257).** The default tmux runner in `engine/daemon-tmux.ts` checks the `AI_CONDUCTOR_NO_REAL_EXEC` environment variable before creating a new tmux session. When set to '1' and a daemon session name is targeted, the runner throws an error instead of executing, preventing test suites from leaking real tmux daemon sessions into the system. The kill-switch is set globally by vitest, ensuring all conductor tests run in isolation without spawning long-lived daemon processes.
 - **Daemon self-termination on missing repo root with repo_root_missing stop reason (#257).** The daemon now checks at the start of each loop iteration whether its repo root has disappeared (e.g., a worktree deleted out from under it). On definitive absence, it logs the missing path, sets `stoppedReason: 'repo_root_missing'`, and cleanly exits after draining in-flight workers to completion. This enables safe self-termination and cleanup when the underlying repository is removed without leaving the daemon process orphaned.

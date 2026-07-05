@@ -118,11 +118,23 @@ beforeEach(async () => {
   savedEnv.AI_CONDUCTOR_ENGINEER_DIR = process.env.AI_CONDUCTOR_ENGINEER_DIR;
   process.env.AI_CONDUCTOR_REGISTRY = registryPath;
   process.env.AI_CONDUCTOR_ENGINEER_DIR = engineerDir;
+
+  // Owner-gate identity (adr-2026-06-30): dispatchEngineer({kind:'land'}) resolves
+  // a machine-scoped owner from ~/.ai-conductor/config.yml, where `spec_owner`
+  // wins over the gh fallback. Point HOME at a hermetic fake home carrying
+  // spec_owner so land resolves identity deterministically — without it the land
+  // path fails "identity unresolved" in CI (no gh auth) before reaching the
+  // behavior under test, and passes locally only because the dev is gh-authed.
+  await mkdir(join(workDir, '.ai-conductor'), { recursive: true });
+  await writeFile(join(workDir, '.ai-conductor', 'config.yml'), 'spec_owner: test-owner\n', 'utf-8');
+  savedEnv.HOME = process.env.HOME;
+  process.env.HOME = workDir;
 });
 
 afterEach(async () => {
   process.env.AI_CONDUCTOR_REGISTRY = savedEnv.AI_CONDUCTOR_REGISTRY;
   process.env.AI_CONDUCTOR_ENGINEER_DIR = savedEnv.AI_CONDUCTOR_ENGINEER_DIR;
+  process.env.HOME = savedEnv.HOME;
   await rm(workDir, { recursive: true, force: true });
 });
 
