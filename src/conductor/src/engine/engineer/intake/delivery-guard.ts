@@ -70,6 +70,7 @@ export interface GuardedEnvelope {
 /** The subset of IntakeQueue this decorator wraps. */
 export interface GuardedQueue {
   claim(): Promise<GuardedEnvelope | null>;
+  ack(e: GuardedEnvelope): Promise<void>;
   release(e: GuardedEnvelope): Promise<void>;
 }
 
@@ -149,7 +150,7 @@ export function createDeliveryGuardedQueue(
       if (entry.status === 'claimed' && !entry.prUrl) {
         // This is an in-flight duplicate — drop it
         try {
-          await queue.release(candidate);
+          await queue.ack(candidate);
         } catch (err) {
           // Check if error is ENOENT (benign race — file was already deleted)
           const isEnoent =
@@ -160,7 +161,7 @@ export function createDeliveryGuardedQueue(
           if (!isEnoent) {
             // Non-ENOENT error — treat as a real failure, hold the candidate
             process.stderr.write(
-              `[delivery-guard] Failed to release ack for ${sourceRef}: ${err instanceof Error ? err.message : String(err)}\n`,
+              `[delivery-guard] Failed to drop in-flight duplicate ${sourceRef}: ${err instanceof Error ? err.message : String(err)}\n`,
             );
             held.push(candidate);
             // Continue scanning for the next candidate
@@ -205,10 +206,10 @@ export function createDeliveryGuardedQueue(
             return this.claim();
           }
 
-          // Task 4: Wrap queue.release in try/catch for ENOENT handling
+          // Task 4: Wrap queue.ack in try/catch for ENOENT handling
           try {
             // Ack the intake envelope (remove it from queue)
-            await queue.release(candidate);
+            await queue.ack(candidate);
           } catch (err) {
             // Check if error is ENOENT (benign race — file was already deleted)
             const isEnoent =
@@ -219,7 +220,7 @@ export function createDeliveryGuardedQueue(
             if (!isEnoent) {
               // Non-ENOENT error — treat as a real failure, hold the candidate
               process.stderr.write(
-                `[delivery-guard] Failed to release ack for ${sourceRef}: ${err instanceof Error ? err.message : String(err)}\n`,
+                `[delivery-guard] Failed to ack delivered entry ${sourceRef}: ${err instanceof Error ? err.message : String(err)}\n`,
               );
               held.push(candidate);
               // Continue scanning for the next candidate
@@ -286,7 +287,7 @@ export function createDeliveryGuardedQueue(
 
             // Ack the envelope
             try {
-              await queue.release(candidate);
+              await queue.ack(candidate);
             } catch (err) {
               // Check if error is ENOENT (benign race)
               const isEnoent =
@@ -297,7 +298,7 @@ export function createDeliveryGuardedQueue(
               if (!isEnoent) {
                 // Non-ENOENT error — treat as a real failure, hold the candidate
                 process.stderr.write(
-                  `[delivery-guard] Failed to release ack for ${sourceRef}: ${err instanceof Error ? err.message : String(err)}\n`,
+                  `[delivery-guard] Failed to ack parked entry ${sourceRef}: ${err instanceof Error ? err.message : String(err)}\n`,
                 );
                 held.push(candidate);
                 // Continue scanning for the next candidate
@@ -319,6 +320,10 @@ export function createDeliveryGuardedQueue(
 
       // Continue scanning for the next candidate
       return this.claim();
+    },
+
+    async ack(e: GuardedEnvelope): Promise<void> {
+      await queue.ack(e);
     },
 
     async release(e: GuardedEnvelope): Promise<void> {

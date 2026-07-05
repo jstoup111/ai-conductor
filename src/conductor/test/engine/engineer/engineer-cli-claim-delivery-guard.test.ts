@@ -53,7 +53,11 @@ function makeGh(prState: 'OPEN' | 'MERGED' | 'CLOSED' = 'OPEN') {
     if (args[0] === 'pr' && args[1] === 'view') {
       return { stdout: JSON.stringify({ state: prState, mergedAt: prState === 'MERGED' ? '2026-07-04T00:00:00.000Z' : null }) };
     }
-    return { stdout: '' };
+    // For dependency checking (issue list with linked_by filter), return empty
+    if (args[0] === 'issue' && args[1] === 'list') {
+      return { stdout: JSON.stringify([]) };
+    }
+    return { stdout: JSON.stringify({}) };
   };
   return { gh, calls };
 }
@@ -81,6 +85,77 @@ function captureOut() {
   });
   return { out, err, opts };
 }
+
+describe('engineer claim with delivery guard (Task 8: integration of guard into CLI)', () => {
+  it('claim heals a delivered entry and drops its duplicate envelope (TR-1 + TR-3)', async () => {
+    const ledger = createLedger(join(engineerDir, 'ledger.json'));
+    const queue = createFileQueue(join(engineerDir, 'inbox'));
+
+    // Seed the ledger: entry is already claimed and has prUrl (PR was delivered but
+    // we re-captured the same issue as a duplicate envelope).
+    await ledger.record({ source: SOURCE, sourceRef: SOURCE_REF });
+    await ledger.transition(SOURCE, SOURCE_REF, 'claimed', { prUrl: PR_URL, branch: 'spec/243-guard' });
+
+    // Enqueue a duplicate envelope for the same sourceRef
+    await queue.enqueue(makeEnvelope());
+
+    const { out, opts } = captureOut();
+    const { gh } = makeGh('OPEN');
+
+    // Run: engineer claim with guard wrapping the queue
+    const code = await dispatchEngineer({ kind: 'claim' }, opts({ gh }));
+
+    // Assert: exit code 0
+    expect(code).toBe(0);
+
+    // Assert: stdout reports empty queue (guard healed and dropped duplicate)
+    expect(JSON.parse(out[0])).toMatchObject({ kind: 'claim', empty: true });
+
+    // Assert: ledger entry is healed to 'done' with prUrl preserved
+    const afterClaim = await ledger.get(SOURCE, SOURCE_REF);
+    expect(afterClaim).toMatchObject({ status: 'done', prUrl: PR_URL, branch: 'spec/243-guard' });
+
+    // Assert: inbox is empty (duplicate was dropped)
+    const inboxFiles = await readdir(join(engineerDir, 'inbox'));
+    expect(inboxFiles.filter((f) => f.endsWith('.json'))).toHaveLength(0);
+  });
+
+  it('claim serves healthy pending entries unchanged (no friction from guard)', async () => {
+    const ledger = createLedger(join(engineerDir, 'ledger.json'));
+    const queue = createFileQueue(join(engineerDir, 'inbox'));
+
+    // Seed the ledger: entry is pending (healthy state, not yet claimed)
+    await ledger.record({ source: SOURCE, sourceRef: SOURCE_REF });
+    await ledger.transition(SOURCE, SOURCE_REF, 'pending');
+
+    // Enqueue an envelope for this pending entry
+    await queue.enqueue(makeEnvelope({ text: 'a healthy pending idea' }));
+
+    const { out, opts } = captureOut();
+    const { gh, calls } = makeGh('OPEN');
+
+    // Run: engineer claim with guard wrapping the queue
+    const code = await dispatchEngineer({ kind: 'claim' }, opts({ gh }));
+
+    // Assert: exit code 0
+    expect(code).toBe(0);
+
+    // Assert: stdout reports the claimed entry (not empty, healthy path)
+    const claimResponse = JSON.parse(out[0]);
+    expect(claimResponse).toMatchObject({
+      kind: 'claim',
+      sourceRef: SOURCE_REF,
+      source: SOURCE,
+      text: 'a healthy pending idea',
+    });
+    // Healthy entries pass through the guard without PR state checks
+    // (only entries with ledger + prUrl are checked by the guard)
+
+    // Assert: inbox is empty (envelope was claimed)
+    const inboxFiles = await readdir(join(engineerDir, 'inbox'));
+    expect(inboxFiles.filter((f) => f.endsWith('.json'))).toHaveLength(0);
+  });
+});
 
 describe('engineer resolve → engineer claim compose (TR-1 + TR-3 integration, plan Task 13)', () => {
   it('resolves a stranded entry, then a later claim heals/drops the duplicate envelope for it', async () => {
