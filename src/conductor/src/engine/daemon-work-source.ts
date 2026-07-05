@@ -96,6 +96,22 @@ export interface LocalWorkSourceDeps {
   priorityResolver?: {
     resolve(items: BacklogItem[], options: { refresh: boolean }): Promise<PriorityResolution>;
   };
+  /**
+   * Owner-gate snapshot sink (Task 12, adr-2026-07-03-gated-snapshot-status-
+   * read-model). `discover()`'s outward-facing `WorkSource` contract stays
+   * `Promise<BacklogItem[]>` (unchanged, so the run-loop/dashboard callers
+   * that widen it via the object-shape return keep working byte-for-byte) —
+   * but `gated` is computed INSIDE this closure on every pass and would
+   * otherwise be discarded once priority ordering runs. This optional hook
+   * is invoked with that exact `gated` list on EVERY `discover()` call —
+   * populated, empty, or the identity-unresolved early-return's
+   * repo-warning-only list — so a caller (daemon-cli.ts) can persist it via
+   * `writeGatedSnapshot` without a second, duplicate `discoverBacklog` call.
+   * Errors from this hook are NOT caught here — `writeGatedSnapshot` is
+   * itself advisory/never-throws (see gated-snapshot.ts), so a caller wiring
+   * anything else here is responsible for its own error containment.
+   */
+  onGatedDiscovered?: (gated: GatedItem[]) => Promise<void> | void;
 }
 
 /**
@@ -129,8 +145,9 @@ export function localWorkSource(deps: LocalWorkSourceDeps): WorkSource {
       // Fresh resolver instance per pass (never cached across polls) — see
       // `makeResolver` doc above and daemon-backlog.ts:210-221.
       const resolver = deps.makeResolver?.();
-      // `gated` is not yet surfaced by WorkSource.discover() (unused as yet,
-      // Task 1) — a later task wires it through to the dashboard.
+      // `gated` is not surfaced through WorkSource.discover()'s return value
+      // (that stays `BacklogItem[]` — legacy contract, Task 1) but IS handed
+      // to `onGatedDiscovered` below (Task 12) so a caller can snapshot it.
       let { items, waiting, gated } = await deps.discoverBacklog(
         deps.projectRoot,
         (slug) => deps.isProcessed(slug),
@@ -144,6 +161,13 @@ export function localWorkSource(deps: LocalWorkSourceDeps): WorkSource {
           ...gateOpts,
         },
       );
+
+      // Task 12: hand the gated list to the snapshot sink IMMEDIATELY after
+      // gated population, before priority ordering (a side effect on `items`,
+      // never on `gated`) — the single call site for every pass this
+      // WorkSource drives, populated, empty, or identity-unresolved
+      // early-return alike.
+      await deps.onGatedDiscovered?.(gated);
 
       // Apply priority ordering AFTER the gate (post-gate). If the backlog is
       // empty (all filtered by gates), the resolver is still called but with

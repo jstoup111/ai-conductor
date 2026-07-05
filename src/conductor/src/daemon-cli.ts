@@ -63,6 +63,7 @@ import {
   writePersistedBaseSha,
 } from './engine/daemon-sha.js';
 import { scanInheritedState, renderDashboard } from './engine/daemon-dashboard.js';
+import { writeGatedSnapshot } from './engine/gated-snapshot.js';
 import {
   rekickSweep,
   resumeRebaseFirst,
@@ -635,6 +636,13 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   const execRunnerWrapper = (args: string[]) => ownerGh(args, { cwd: projectRoot });
   const priorityResolver = createPriorityResolver(ghIssueLabelReader(execRunnerWrapper), log);
 
+  // Task 12 (adr-2026-07-03-gated-snapshot-status-read-model): the daemon
+  // directory backing `.daemon/gated.json` — every discovery pass rewrites
+  // it via `onGatedDiscovered` below, the SAME `gated` list `discoverBacklog`
+  // just computed (populated, empty, or the identity-unresolved
+  // early-return's repo-warning-only list alike).
+  const daemonDir = join(projectRoot, '.daemon');
+
   const workSource =
     opts.workSource ??
     localWorkSource({
@@ -665,6 +673,11 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       // (no disk persistence). Passed to discover() for ordering and available to
       // the dashboard for fallback-mode display.
       priorityResolver,
+      // Task 12: single call site for the owner-gate snapshot write — fires
+      // on EVERY discover() pass this WorkSource drives. `writeGatedSnapshot`
+      // is itself advisory (never throws, see gated-snapshot.ts), so a write
+      // failure never blocks or aborts the discovery pass that produced it.
+      onGatedDiscovered: (gated) => writeGatedSnapshot(daemonDir, { gated }),
     });
   const discoverTick = (o: { refresh: boolean }) => workSource.discover(o);
 
