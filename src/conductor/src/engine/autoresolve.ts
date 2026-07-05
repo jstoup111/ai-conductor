@@ -37,7 +37,6 @@ import { join } from 'node:path';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { prepareWorktree as defaultPrepareWorktree } from './worktree-prepare.js';
-import { rewriteWatch } from './mergeable-sweep.js';
 
 const execFile = promisify(execFileCb);
 
@@ -639,8 +638,11 @@ export async function runSuiteGate(
 
 /**
  * Result of a push attempt using --force-with-lease.
- * Success updates the watch entry (attempts reset to 0, lastResolveAt updated).
+ * Success returns { pushed: true }.
  * Failure includes a reason (e.g., lease rejection due to concurrent push).
+ *
+ * Watch-registry updates (attempts reset, lastResolveAt) are now handled
+ * exclusively by the sweep (mergeable-sweep.ts).
  */
 export type PushRefreshedResult =
   | { pushed: true }
@@ -654,29 +656,23 @@ export type PushRefreshedResult =
  * Execution:
  *   - Pushes the branch using `git push origin <branch> --force-with-lease`
  *   - On success (exit 0):
- *     * Resets attempt counter to 0 (success = no more retries needed)
- *     * Updates lastResolveAt timestamp
- *     * Removes the resolution worktree (if paths provided)
  *     * Logs outcome as "refreshed"
  *     * Returns { pushed: true }
  *   - On failure (non-zero exit):
  *     * Returns { pushed: false, reason: ... }
  *     * Reason includes lease rejection context if available
  *
+ * Watch-registry updates (attempts reset, lastResolveAt) are now handled
+ * exclusively by the sweep (mergeable-sweep.ts), not by this function.
+ *
  * @param git         Git runner (injected for testability)
  * @param branch      The branch name to push (e.g., "feat/widget")
- * @param projectRoot Optional: the primary project root for watch file updates
- *                    If provided, updates the watch entry with rewriteWatch
- * @param entry       Optional: the watch entry for this PR. If provided with projectRoot,
- *                    its attempts are reset and lastResolveAt is updated.
  * @param logger      Optional logging function (default: console.log)
  * @returns           { pushed: true } on success, { pushed: false, reason } on failure
  */
 export async function pushRefreshedBranch(
   git: GitRunner,
   branch: string,
-  projectRoot?: string,
-  entry?: WatchEntry,
   logger?: (msg: string) => void,
 ): Promise<PushRefreshedResult> {
   const log = logger ?? console.log;
@@ -686,24 +682,6 @@ export async function pushRefreshedBranch(
 
   // Check if the push succeeded
   if (pushResult.exitCode === 0) {
-    // Success: update the watch entry and log
-    if (projectRoot && entry) {
-      // Reset attempts to 0 (successful resolution)
-      const updatedEntry: WatchEntry = {
-        ...entry,
-        resolveAttempts: 0,
-        lastResolveAt: new Date().toISOString(),
-      };
-
-      // Ensure the .daemon directory exists before writing
-      await mkdir(join(projectRoot, '.daemon'), { recursive: true });
-
-      // Update the watch registry
-      await rewriteWatch(projectRoot, [updatedEntry]);
-
-      log(`pushRefreshedBranch: attempts reset to 0, lastResolveAt updated`);
-    }
-
     log(`pushRefreshedBranch: refreshed (${branch} pushed with lease)`);
     return { pushed: true };
   }
@@ -756,10 +734,6 @@ export interface PublishResolutionOptions {
    * instead of attempting the lease push.
    */
   earlierFailure?: EarlierStageFailure;
-  /** Optional: the primary project root, forwarded to pushRefreshedBranch for watch-entry updates. */
-  projectRoot?: string;
-  /** Optional: the watch entry, forwarded to pushRefreshedBranch for watch-entry updates. */
-  entry?: WatchEntry;
 }
 
 /**
@@ -801,8 +775,6 @@ export async function publishResolution(
   const pushResult = await pushRefreshedBranch(
     opts.git,
     opts.branch,
-    opts.projectRoot,
-    opts.entry,
     log,
   );
 
@@ -1040,7 +1012,6 @@ export async function resolveConflictingPr(
         cwd: repoCwd,
         log,
       },
-      projectRoot: repoCwd,
       // No earlierFailure → attempt the lease push
     });
 

@@ -829,15 +829,10 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
                   `gh pr view "${entry.prUrl}" --json headRefName --jq '.headRefName'`,
                 ], { cwd: entry.repoCwd });
 
-                if (prViewResult.status !== 0) {
-                  log(`[autoresolve] failed to fetch branch name for ${entry.prUrl}`);
-                  return;
-                }
-
-                const branch = prViewResult.stdout.toString().trim();
+                const branch = (prViewResult.stdout || '').toString().trim();
                 if (!branch) {
                   log(`[autoresolve] empty branch name for ${entry.prUrl}`);
-                  return;
+                  return { kind: 'escalated' };
                 }
 
                 // Create a gh runner (wrapper around gh commands)
@@ -858,18 +853,18 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
 
                   const startMs = Date.now();
                   try {
-                    const result = await execFile('sh', ['-c', cmd], {
+                    await execFile('sh', ['-c', cmd], {
                       cwd: projectRoot,
                       encoding: 'utf-8',
                     });
                     return {
-                      exitCode: result.status || 0,
+                      exitCode: 0,
                       durationMs: Date.now() - startMs,
                       configured: true,
                     };
                   } catch (err: any) {
                     return {
-                      exitCode: err.status || 1,
+                      exitCode: err.code === 'ERR_CHILD_PROCESS_EXIT' ? (err.status || 1) : 1,
                       durationMs: Date.now() - startMs,
                       configured: true,
                     };
@@ -918,8 +913,10 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
                 );
 
                 log(`[autoresolve] outcome for ${entry.prUrl}: ${outcome.kind}`);
+                return { kind: outcome.kind };
               } catch (err: any) {
                 log(`[autoresolve] error resolving ${entry.prUrl}: ${err?.message || err}`);
+                return { kind: 'escalated' };
               }
             },
           },

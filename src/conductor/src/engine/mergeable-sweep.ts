@@ -144,8 +144,9 @@ export interface AutoresolveDispatchOpts {
    * Dispatch resolution for the chosen entry. Called with the entry AFTER
    * its attempt counter has already been bumped and `lastResolveAt` set
    * (AC3) — the git work itself happens inside this callback.
+   * Returns the outcome kind so the sweep can reset the counter on success.
    */
-  dispatch: (entry: WatchEntry) => Promise<void>;
+  dispatch: (entry: WatchEntry) => Promise<{ kind: 'refreshed' | 'escalated' } | void>;
   /** Clock override for tests; defaults to `new Date()`. */
   now?: () => Date;
 }
@@ -267,7 +268,10 @@ export async function sweepMergeableLabels({
         const idx = survivors.findIndex((s) => s.prUrl === entry.prUrl);
         if (idx >= 0) survivors[idx] = updated;
 
-        await autoresolve.dispatch(updated);
+        const dispatchResult = await autoresolve.dispatch(updated);
+        if (dispatchResult?.kind === 'refreshed') {
+          survivors[idx] = { ...updated, resolveAttempts: 0 };
+        }
       }
     }
 

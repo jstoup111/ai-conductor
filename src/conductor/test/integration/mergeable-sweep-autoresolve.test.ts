@@ -171,4 +171,127 @@ describe('mergeable-sweep autoresolve dispatch (Task 17)', () => {
 
     expect(dispatched).toHaveLength(0);
   });
+
+  // ── FR-15 Regression Tests ─────────────────────────────────────────────────
+  // Verify counter reset on successful refresh and preservation on escalation.
+
+  it('should reset resolveAttempts on successful refresh', async () => {
+    // Setup: two conflicting PRs with different attempt counts.
+    const prUrlA = 'https://github.com/acme/widget/pull/1';
+    const prUrlB = 'https://github.com/acme/widget/pull/2';
+
+    // Entry A: already has 2 resolve attempts
+    await enrollWatch(projectRoot, {
+      prUrl: prUrlA,
+      slug: 'widget-a',
+      repoCwd: projectRoot,
+      resolveAttempts: 2,
+      lastResolveAt: '2026-07-05T10:00:00Z',
+    });
+
+    // Entry B: has 1 attempt (to verify single-element clobber guard)
+    await enrollWatch(projectRoot, {
+      prUrl: prUrlB,
+      slug: 'widget-b',
+      repoCwd: projectRoot,
+      resolveAttempts: 1,
+      lastResolveAt: '2026-07-05T09:00:00Z',
+    });
+
+    const gh = makeGh({ [prUrlA]: 'CONFLICTING', [prUrlB]: 'CONFLICTING' });
+
+    // Dispatch with 'refreshed' outcome → counter should reset to 0
+    await sweepMergeableLabels({
+      projectRoot,
+      runGh: gh,
+      autoresolve: {
+        enabled: true,
+        isEligible: async (entry) => {
+          // Only Entry A is eligible (dispatch happens once per tick)
+          return { eligible: entry.prUrl === prUrlA };
+        },
+        dispatch: async () => {
+          // Simulate successful refresh
+          return { kind: 'refreshed' };
+        },
+      },
+    });
+
+    // Read persisted registry
+    const raw = await readFile(join(projectRoot, '.daemon/mergeable-watch.jsonl'), 'utf-8');
+    const entries = raw
+      .split('\n')
+      .filter((line) => line.trim().length > 0)
+      .map((line) => JSON.parse(line));
+
+    // Find entries by prUrl
+    const persistedA = entries.find((e) => e.prUrl === prUrlA);
+    const persistedB = entries.find((e) => e.prUrl === prUrlB);
+
+    // Assertions
+    expect(persistedA).toBeDefined();
+    expect(persistedA?.resolveAttempts).toBe(0); // Reset by 'refreshed' outcome
+    expect(persistedA?.lastResolveAt).toBeDefined(); // Timestamp still set
+
+    expect(persistedB).toBeDefined();
+    expect(persistedB?.resolveAttempts).toBe(1); // Unchanged (not dispatched)
+  });
+
+  it('should preserve resolveAttempts on escalated outcome', async () => {
+    // Setup: same as above
+    const prUrlA = 'https://github.com/acme/widget/pull/1';
+    const prUrlB = 'https://github.com/acme/widget/pull/2';
+
+    await enrollWatch(projectRoot, {
+      prUrl: prUrlA,
+      slug: 'widget-a',
+      repoCwd: projectRoot,
+      resolveAttempts: 2,
+      lastResolveAt: '2026-07-05T10:00:00Z',
+    });
+
+    await enrollWatch(projectRoot, {
+      prUrl: prUrlB,
+      slug: 'widget-b',
+      repoCwd: projectRoot,
+      resolveAttempts: 1,
+      lastResolveAt: '2026-07-05T09:00:00Z',
+    });
+
+    const gh = makeGh({ [prUrlA]: 'CONFLICTING', [prUrlB]: 'CONFLICTING' });
+
+    // Dispatch with 'escalated' outcome → counter should NOT reset
+    await sweepMergeableLabels({
+      projectRoot,
+      runGh: gh,
+      autoresolve: {
+        enabled: true,
+        isEligible: async (entry) => {
+          return { eligible: entry.prUrl === prUrlA };
+        },
+        dispatch: async () => {
+          // Simulate escalated failure
+          return { kind: 'escalated' };
+        },
+      },
+    });
+
+    // Read persisted registry
+    const raw = await readFile(join(projectRoot, '.daemon/mergeable-watch.jsonl'), 'utf-8');
+    const entries = raw
+      .split('\n')
+      .filter((line) => line.trim().length > 0)
+      .map((line) => JSON.parse(line));
+
+    const persistedA = entries.find((e) => e.prUrl === prUrlA);
+    const persistedB = entries.find((e) => e.prUrl === prUrlB);
+
+    // Assertions
+    expect(persistedA).toBeDefined();
+    expect(persistedA?.resolveAttempts).toBe(3); // Bumped from 2 to 3, NOT reset
+    expect(persistedA?.lastResolveAt).toBeDefined(); // Timestamp updated
+
+    expect(persistedB).toBeDefined();
+    expect(persistedB?.resolveAttempts).toBe(1); // Unchanged
+  });
 });
