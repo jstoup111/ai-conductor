@@ -354,4 +354,24 @@ export interface HarnessConfig {
    * false with a single warning. Default: false. Never throws.
    */
   auto_restart_on_stale_engine?: boolean;
+  /**
+   * Auto-resolve merge conflicts on open harness PRs. Extends rebase-resolution
+   * beyond finish-time by dispatching a daemon task that polls for and resolves
+   * conflicts on previously-built PRs. Absent → disabled (default safe posture).
+   */
+  mergeable_autoresolve?: MergeableAutoresolveConfig;
+}
+
+/**
+ * Configuration for automatic resolution of merge conflicts on open PRs.
+ * When enabled, a daemon task polls for and resolves conflicts on previously-built
+ * harness PRs. Every field is optional and follows the safe-by-default principle.
+ */
+export interface MergeableAutoresolveConfig {
+  /** Enable/disable autoresolve. Default: false. */
+  enabled?: boolean;
+  /** Polling cooldown in minutes between autoresolve attempts. Default: 60. */
+  cooldownMinutes?: number;
+  /** Optional test suite command to verify resolved conflicts. */
+  suiteCommand?: string;
 }
