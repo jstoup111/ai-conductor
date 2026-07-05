@@ -79,6 +79,27 @@ import { readRestartPending, consumeOnBoot, type RestartIntent } from './engine/
 const execFile = promisify(execFileCb);
 
 /**
+ * Rebuild the engine from source into the versioned store (self-host only),
+ * so the stale-engine checker can observe merge-driven drift that the untracked
+ * `dist` artifact (#309) would otherwise hide. Runs the package's own
+ * `npm run build` — a content-addressed `publish` that no-ops when unchanged
+ * and atomically flips `dist` when it changes — in a subprocess, so the running
+ * daemon (executing from its pinned `dist-versions/<id>`) is never disturbed.
+ * Throws on a non-zero build so the caller (daemon loop) logs it and degrades
+ * to the current engine; it never restarts on a failed rebuild.
+ */
+async function rebuildEngineFromSource(conductorRoot: string): Promise<void> {
+  const { stderr } = await execFile('npm', ['run', 'build'], {
+    cwd: conductorRoot,
+    maxBuffer: 32 * 1024 * 1024,
+  }).catch((err: unknown) => {
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new Error(`engine rebuild (\`npm run build\`) failed: ${detail}`);
+  });
+  void stderr;
+}
+
+/**
  * RestartRequester is the injected dependency for restart sequence execution.
  * Called when a stale engine is detected in the idle branch (Task 14+).
  * Implements: write marker → release lock → exit(0).
@@ -684,6 +705,13 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       log,
       staleEngineChecker,
       requestRestart,
+      // Rebuild the engine from source before each dispatch (self-host only) so
+      // the stale-engine checker sees merge-driven drift the untracked `dist`
+      // (#309) hides. projectRoot is the harness root under self-host, so
+      // src/conductor is its build package.
+      rebuildEngine: isSelfHost
+        ? () => rebuildEngineFromSource(join(projectRoot, 'src', 'conductor'))
+        : undefined,
       isSuppressed: suppressionChecker,
       // ── Halt-reconciliation (ADR-013) real-I/O hooks ──────────────────────
       // FR-1: scan inherited state and render the dashboard to both sinks

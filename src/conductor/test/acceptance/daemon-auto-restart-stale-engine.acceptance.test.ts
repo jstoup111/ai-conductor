@@ -255,23 +255,19 @@ describe('acceptance: idle-boundary stale detection + restart request over the R
     });
   });
 
-  it('negative: a stale verdict during in-flight work never requests a restart this pass, but the SAME checker fires once truly idle (control)', async () => {
+  it('stale verdict with a pending feature: restart fires at the dispatch boundary BEFORE the stale engine builds it', async () => {
     await withLockedRepo(async () => {
-      let backlogDrained = false;
-      const requestRestart = vi.fn(async () => {
-        // The restart request must only ever fire once the backlog has genuinely
-        // drained — never while `busy` is in flight.
-        expect(backlogDrained).toBe(true);
-      });
+      let dispatched = false;
+      const requestRestart = vi.fn(async () => {});
 
       const deps: DaemonDeps = {
-        discoverBacklog: async () => (backlogDrained ? [] : [{ slug: 'busy' }]),
+        // A feature is always available → the daemon takes the dispatch branch,
+        // never the drained-idle branch. Pre-fix this built `pending` on the
+        // stale engine and only restarted after draining; the fix restarts first
+        // so a feature is never built on stale code.
+        discoverBacklog: async () => [{ slug: 'pending' }],
         runFeature: async (item) => {
-          // A short REAL delay (not gated by `sleep`, which the pool only
-          // consults once truly idle) so `collectOne()`'s Promise.race resolves
-          // on its own — inFlight is non-empty for at least one whole loop pass.
-          await new Promise((r) => setTimeout(r, 10));
-          backlogDrained = true;
+          dispatched = true;
           return { slug: item.slug, status: 'done' };
         },
         sleep: async () => {},
@@ -283,11 +279,62 @@ describe('acceptance: idle-boundary stale detection + restart request over the R
         requestRestart,
       };
 
-      // One idle-poll budget: the pass while `busy` is in flight never reaches the
-      // idle branch (must NOT request); the single pass once it has drained MUST
-      // request exactly once. Without this control the negative half would pass
-      // vacuously against an unimplemented gate chain that never calls
-      // `requestRestart` in ANY scenario.
+      const res = await runDaemon(deps, {
+        concurrency: 1,
+        once: false,
+        maxIdlePolls: 0,
+        isSelfHost: true,
+        autoRestartOnStaleEngine: true,
+      });
+
+      // Restart requested once, at the dispatch boundary, with both identities —
+      // and the pending feature is never built on the stale engine.
+      expect(requestRestart).toHaveBeenCalledTimes(1);
+      expect(requestRestart).toHaveBeenCalledWith({
+        fromIdentity: 'captured-hash',
+        targetIdentity: 'target-hash',
+      });
+      expect(dispatched).toBe(false);
+      expect(res.stoppedReason).toBe('engine_restart');
+    });
+  });
+
+  it('never requests a restart while a build is in flight: a mid-run stale verdict waits for the quiescent boundary (control: it DOES fire once idle)', async () => {
+    await withLockedRepo(async () => {
+      const events: string[] = [];
+      let inFlight = false;
+      let checks = 0;
+      let served = false;
+      const requestRestart = vi.fn(async () => {
+        // The restart must never fire while a feature build is running.
+        expect(inFlight).toBe(false);
+        events.push('restart');
+      });
+
+      const deps: DaemonDeps = {
+        discoverBacklog: async () => {
+          if (served) return [];
+          served = true;
+          return [{ slug: 'busy' }];
+        },
+        runFeature: async (item) => {
+          inFlight = true;
+          await new Promise((r) => setTimeout(r, 10));
+          inFlight = false;
+          events.push('built');
+          return { slug: item.slug, status: 'done' };
+        },
+        sleep: async () => {},
+        staleEngineChecker: {
+          // Fresh for the first dispatch (so `busy` builds), stale thereafter so
+          // the restart is requested only once the daemon is quiescent again.
+          check: () => (checks++ === 0 ? 'current' : 'stale') as const,
+          capturedIdentity: () => 'captured-hash',
+          targetIdentity: () => 'target-hash',
+        },
+        requestRestart,
+      };
+
       await runDaemon(deps, {
         concurrency: 1,
         once: false,
@@ -295,7 +342,11 @@ describe('acceptance: idle-boundary stale detection + restart request over the R
         isSelfHost: true,
         autoRestartOnStaleEngine: true,
       });
+
+      // The build completes first; the restart is requested only afterward, at a
+      // quiescent boundary — never interleaved with an in-flight build.
       expect(requestRestart).toHaveBeenCalledTimes(1);
+      expect(events).toEqual(['built', 'restart']);
     });
   });
 

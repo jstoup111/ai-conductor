@@ -211,6 +211,20 @@ export interface DaemonDeps {
    */
   isSuppressed?: (currentIdentity: string | null) => Promise<boolean>;
 
+  /**
+   * Rebuild the engine from the current (fast-forwarded) source before the
+   * staleness check runs. Since #309 untracked `dist`/`dist-versions`, a merge
+   * advances SOURCE only — the untracked `dist` artifact never moves on its
+   * own, so the content-hash `staleEngineChecker` can never observe drift from
+   * a merge. This hook rebuilds so `dist` reflects the new source; the checker
+   * then detects the flip and drives a restart. Production wiring runs the
+   * content-addressed `publish` (a no-op when content is unchanged, an atomic
+   * `dist` flip otherwise), so the running version dir is never disturbed.
+   * Only wired for self-host daemons; absent (no-op) everywhere else. A throw
+   * is caught and logged — a failed rebuild degrades to the current engine.
+   */
+  rebuildEngine?: () => Promise<void>;
+
   // ── Halt-reconciliation hooks (ADR-013) — all OPTIONAL so the pure core
   //    (and its no-git tests) run unchanged when they are absent. ──────────────
   /**
@@ -309,7 +323,8 @@ export type DaemonStopReason =
   | 'cost_ceiling'
   | 'time_ceiling'
   | 'idle_timeout'
-  | 'repo_root_missing';
+  | 'repo_root_missing'
+  | 'engine_restart';
 
 export interface DaemonResult {
   processed: FeatureOutcome[];
@@ -491,6 +506,52 @@ export async function runDaemon(
   // FR-14: sweep mergeable labels on startup (after reconciliation).
   await sweepBestEffort();
 
+  // Stale-engine restart gate chain (Task 12, gates 1-4) — constant per run.
+  const staleGatesArmed =
+    !options.once && // gate 1: continuous mode (not once)
+    options.isSelfHost === true && // gate 2: self-host enabled
+    options.autoRestartOnStaleEngine === true && // gate 3: flag enabled
+    deps.staleEngineChecker !== undefined; // gate 4: checker armed
+
+  /**
+   * Rebuild the engine from the current source, then restart if it is now
+   * stale. Returns true when a restart was requested — in production
+   * `requestRestart` has already exited the process; the return value only
+   * informs tests and the caller's decision not to dispatch the pending item.
+   *
+   * Fires only when quiescent (`inFlight` empty) so a restart never interrupts
+   * an in-flight build. Reuses the shipped suppression + requestRestart path.
+   */
+  const rebuildAndMaybeRestartForStaleEngine = async (): Promise<boolean> => {
+    if (!staleGatesArmed || !deps.staleEngineChecker) return false;
+    if (inFlight.size !== 0) return false;
+
+    // Gap A (#309): rebuild so the untracked `dist` reflects fast-forwarded
+    // source; without this the content-hash checker never sees merge-driven
+    // drift. Never fatal — a failed rebuild degrades to the current engine.
+    if (deps.rebuildEngine) {
+      try {
+        await deps.rebuildEngine();
+      } catch (err) {
+        log(
+          `[daemon] engine rebuild failed: ${err instanceof Error ? err.message : String(err)}; continuing on current engine`,
+        );
+      }
+    }
+
+    if (deps.staleEngineChecker.check() !== 'stale') return false;
+
+    const targetIdentity = deps.staleEngineChecker.targetIdentity?.() ?? null;
+    if (deps.isSuppressed && (await deps.isSuppressed(targetIdentity))) return false;
+    if (inFlight.size !== 0) return false; // re-verify after the async suppression check
+
+    const fromIdentity = deps.staleEngineChecker.capturedIdentity?.() ?? null;
+    if (!deps.requestRestart) return false;
+    log('[daemon] engine stale after rebuild — restarting before next task');
+    await deps.requestRestart({ fromIdentity, targetIdentity });
+    return true;
+  };
+
   let stopReason: DaemonStopReason | null = null;
 
   while (true) {
@@ -544,6 +605,17 @@ export async function runDaemon(
       }
 
       if (next) {
+        // Before starting a feature, ensure the running engine matches current
+        // source: rebuild + restart-if-stale so the next feature is built by
+        // fresh code (Gap A/B — the shipped idle-only gate never fires here
+        // because a merge that lands new specs takes THIS dispatch branch, not
+        // the drained-idle branch below). Only acts when quiescent, so at
+        // concurrency 1 it runs before every feature. In production
+        // `requestRestart` exits the process; the break matters only to tests.
+        if (await rebuildAndMaybeRestartForStaleEngine()) {
+          stopReason = 'engine_restart';
+          break;
+        }
         idlePolls = 0;
         dispatch(next);
         continue; // try to fill another slot before awaiting
