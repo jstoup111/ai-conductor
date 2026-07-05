@@ -963,31 +963,25 @@ export class Conductor {
     outcome: RebaseOutcome,
   ): Promise<void> {
     const branch = state.worktree_branch;
-    await writeFile('/tmp/t11-debug-3.log', JSON.stringify({ enteredHook: true, branch, kind: outcome.kind }) + '\n', { flag: 'a' }).catch(() => {});
     if (!branch) return;
     // Only a history-rewriting rebase invalidates the remote tip. A 'noop'
     // outcome means the branch was already current — nothing to force-push.
     if (outcome.kind === 'noop') return;
 
     const log = (m: string) => console.error(m);
-    try {
-      await advisoryPublish(
-        branch,
-        'post-rebase-force-with-lease',
-        () =>
-          pushBranch(
-            this.gitForPublish,
-            this.projectRoot,
-            branch,
-            { forceWithLease: true },
-            log,
-          ),
-        log,
-      );
-      await writeFile('/tmp/t11-debug-3.log', 'push call issued\n', { flag: 'a' }).catch(() => {});
-    } catch (err) {
-      await writeFile('/tmp/t11-debug-3.log', 'ERR: ' + String(err) + '\n', { flag: 'a' }).catch(() => {});
-    }
+    await advisoryPublish(
+      branch,
+      'post-rebase-force-with-lease',
+      () =>
+        pushBranch(
+          this.gitForPublish,
+          this.projectRoot,
+          branch,
+          { forceWithLease: true },
+          log,
+        ),
+      log,
+    );
   }
 
   async run(): Promise<void> {
@@ -2682,7 +2676,6 @@ export class Conductor {
     await applyRebaseVerdicts(this.projectRoot, outcome, ranManualTest);
     await emitRebaseEvent(this.events, outcome);
 
-    await writeFile('/tmp/t11-debug-2.log', JSON.stringify({ outcomeKind: outcome.kind, selfHost: this.selfHost, prTiming: resolvePrTiming(this.config), branch: state.worktree_branch }) + '\n', { flag: 'a' }).catch(() => {});
     if (outcome.kind === 'conflict_halt') {
       await writeHalt(this.projectRoot, outcome.conflicts, outcome.reason);
     } else if (
