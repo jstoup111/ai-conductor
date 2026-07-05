@@ -746,5 +746,13 @@ Task 1 → Task 2
 `;
       expect(planHasDependencyTree(plan)).toBe(true);
     });
+
+    it('handles null content gracefully, returning false without throwing', () => {
+      expect(planHasDependencyTree(null as any)).toBe(false);
+    });
+
+    it('handles undefined content gracefully, returning false without throwing', () => {
+      expect(planHasDependencyTree(undefined as any)).toBe(false);
+    });
   });
 });
