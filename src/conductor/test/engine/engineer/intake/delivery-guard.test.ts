@@ -371,3 +371,238 @@ describe('Task 3: createDeliveryGuardedQueue — auto-heal delivered entries', (
     expect(third).toBeNull();
   });
 });
+
+// ─── Task 4: heal-path failure tolerance (ENOENT ack race, ledger write failure) ────
+
+describe('Task 4: createDeliveryGuardedQueue — heal-path failure tolerance', () => {
+  it('heal path: queue.release() throws ENOENT → treat as success, next candidate served', async () => {
+    const { createDeliveryGuardedQueue } = await loadDeliveryGuard();
+    const candidate1 = makeEnvelope('idea-1');
+    const candidate2 = makeEnvelope('idea-2');
+    const { queue, releasedEnvelopes } = makeFakeQueueWithEnvelopes([candidate1, candidate2]);
+    const { ledger, transitionCalls } = makeFakeLedger();
+    const { runner: gh } = makeFakeGh(JSON.stringify({ state: 'OPEN' }));
+
+    // Simulate queue.release throwing ENOENT for first candidate (benign race)
+    const originalRelease = queue.release.bind(queue);
+    let releaseCallCount = 0;
+    queue.release = async (e: any) => {
+      releaseCallCount++;
+      if (releaseCallCount === 1 && e.sourceRef === 'idea-1') {
+        // First release (healing the stale entry) throws ENOENT
+        const err = new Error('ENOENT: no such file or directory');
+        (err as any).code = 'ENOENT';
+        throw err;
+      }
+      await originalRelease(e);
+    };
+
+    // Pre-populate ledger with a claimed entry that has prUrl
+    (ledger as any).get = async (source: string, sourceRef: string) => {
+      if (source === candidate1.source && sourceRef === candidate1.sourceRef) {
+        return {
+          source: candidate1.source,
+          sourceRef: candidate1.sourceRef,
+          status: 'claimed',
+          prUrl: 'https://github.com/owner/repo/pull/123',
+          branch: 'feat/test-branch',
+        };
+      }
+      return undefined;
+    };
+
+    const guarded = createDeliveryGuardedQueue(queue, ledger, { gh });
+
+    // First claim should skip candidate1 (heal it despite ENOENT) and serve candidate2
+    const first = await guarded.claim();
+    expect(first).toEqual(candidate2);
+
+    // Verify transition was called for healing
+    expect(transitionCalls.length).toBeGreaterThan(0);
+    expect(transitionCalls[0][2]).toBe('done');
+  });
+
+  it('heal path: ledger.transition() throws DB error → candidate NOT served, envelope stays pending, error logged, next candidate served', async () => {
+    const { createDeliveryGuardedQueue } = await loadDeliveryGuard();
+    const candidate1 = makeEnvelope('idea-1');
+    const candidate2 = makeEnvelope('idea-2');
+    const { queue } = makeFakeQueueWithEnvelopes([candidate1, candidate2]);
+    const { ledger, transitionCalls } = makeFakeLedger();
+    const { runner: gh } = makeFakeGh(JSON.stringify({ state: 'OPEN' }));
+
+    // Simulate ledger.transition throwing a DB error
+    const originalTransition = ledger.transition.bind(ledger);
+    ledger.transition = async (...args: any[]) => {
+      if (args[1] === 'idea-1') {
+        // First transition (healing candidate1) throws DB error
+        throw new Error('Database connection lost');
+      }
+      await originalTransition(...args);
+    };
+
+    // Capture stderr
+    const stderrLogs: string[] = [];
+    const originalStderr = process.stderr.write;
+    process.stderr.write = ((msg: string) => {
+      stderrLogs.push(msg);
+      return true;
+    }) as any;
+
+    // Pre-populate ledger with a claimed entry that has prUrl
+    (ledger as any).get = async (source: string, sourceRef: string) => {
+      if (source === candidate1.source && sourceRef === candidate1.sourceRef) {
+        return {
+          source: candidate1.source,
+          sourceRef: candidate1.sourceRef,
+          status: 'claimed',
+          prUrl: 'https://github.com/owner/repo/pull/123',
+          branch: 'feat/test-branch',
+        };
+      }
+      return undefined;
+    };
+
+    const guarded = createDeliveryGuardedQueue(queue, ledger, { gh });
+
+    try {
+      // First claim should skip candidate1 (ledger write failed) and serve candidate2
+      const first = await guarded.claim();
+      expect(first).toEqual(candidate2);
+
+      // Verify error was logged to stderr
+      expect(stderrLogs.length).toBeGreaterThan(0);
+      const errorLog = stderrLogs.join('');
+      expect(errorLog).toMatch(/Database connection lost|error|Error/i);
+    } finally {
+      // Restore stderr
+      process.stderr.write = originalStderr;
+    }
+  });
+
+  it('single candidate, ledger.transition() throws → claim() returns null, not the failed candidate', async () => {
+    const { createDeliveryGuardedQueue } = await loadDeliveryGuard();
+    const candidate1 = makeEnvelope('idea-1');
+    const { queue, releasedEnvelopes } = makeFakeQueueWithEnvelopes([candidate1]);
+    const { ledger } = makeFakeLedger();
+    const { runner: gh } = makeFakeGh(JSON.stringify({ state: 'OPEN' }));
+
+    // Simulate ledger.transition throwing a DB error
+    ledger.transition = async () => {
+      throw new Error('Database write failed');
+    };
+
+    // Capture stderr
+    const stderrLogs: string[] = [];
+    const originalStderr = process.stderr.write;
+    process.stderr.write = ((msg: string) => {
+      stderrLogs.push(msg);
+      return true;
+    }) as any;
+
+    // Pre-populate ledger with a claimed entry that has prUrl
+    (ledger as any).get = async (source: string, sourceRef: string) => {
+      if (source === candidate1.source && sourceRef === candidate1.sourceRef) {
+        return {
+          source: candidate1.source,
+          sourceRef: candidate1.sourceRef,
+          status: 'claimed',
+          prUrl: 'https://github.com/owner/repo/pull/123',
+          branch: 'feat/test-branch',
+        };
+      }
+      return undefined;
+    };
+
+    const guarded = createDeliveryGuardedQueue(queue, ledger, { gh });
+
+    try {
+      // Claim should return null (queue exhausted after skipping failed candidate)
+      const first = await guarded.claim();
+      expect(first).toBeNull();
+
+      // Verify error was logged
+      expect(stderrLogs.length).toBeGreaterThan(0);
+
+      // Verify held candidate was released before returning null
+      expect(releasedEnvelopes).toContain(candidate1);
+    } finally {
+      // Restore stderr
+      process.stderr.write = originalStderr;
+    }
+  });
+
+  it('three candidates: first heal throws, second healthy, third pending → first skipped, second served', async () => {
+    const { createDeliveryGuardedQueue } = await loadDeliveryGuard();
+    const candidate1 = makeEnvelope('idea-1');
+    const candidate2 = makeEnvelope('idea-2');
+    const candidate3 = makeEnvelope('idea-3');
+    const { queue, releasedEnvelopes } = makeFakeQueueWithEnvelopes([candidate1, candidate2, candidate3]);
+    const { ledger } = makeFakeLedger();
+    const { runner: gh } = makeFakeGh(JSON.stringify({ state: 'OPEN' }));
+
+    // Simulate ledger.transition throwing a DB error for candidate1
+    let transitionCount = 0;
+    ledger.transition = async (...args: any[]) => {
+      transitionCount++;
+      if (args[1] === 'idea-1') {
+        throw new Error('Database write failed');
+      }
+    };
+
+    // Capture stderr
+    const stderrLogs: string[] = [];
+    const originalStderr = process.stderr.write;
+    process.stderr.write = ((msg: string) => {
+      stderrLogs.push(msg);
+      return true;
+    }) as any;
+
+    // Pre-populate ledger with entries
+    (ledger as any).get = async (source: string, sourceRef: string) => {
+      if (source === candidate1.source && sourceRef === candidate1.sourceRef) {
+        return {
+          source: candidate1.source,
+          sourceRef: candidate1.sourceRef,
+          status: 'claimed',
+          prUrl: 'https://github.com/owner/repo/pull/123',
+          branch: 'feat/test-branch',
+        };
+      }
+      // candidate3 has pending status (passthrough)
+      if (sourceRef === 'idea-3') {
+        return {
+          source: candidate3.source,
+          sourceRef: candidate3.sourceRef,
+          status: 'pending',
+        };
+      }
+      // candidate2 has no entry (passthrough)
+      return undefined;
+    };
+
+    const guarded = createDeliveryGuardedQueue(queue, ledger, { gh });
+
+    try {
+      // First claim should skip candidate1 (ledger write failed) and serve candidate2
+      const first = await guarded.claim();
+      expect(first).toEqual(candidate2);
+
+      // Second claim should get candidate3
+      const second = await guarded.claim();
+      expect(second).toEqual(candidate3);
+
+      // Third claim should return null (queue exhausted)
+      const third = await guarded.claim();
+      expect(third).toBeNull();
+
+      // Verify error was logged
+      expect(stderrLogs.length).toBeGreaterThan(0);
+
+      // Verify all held candidates were released
+      expect(releasedEnvelopes).toContain(candidate1);
+    } finally {
+      // Restore stderr
+      process.stderr.write = originalStderr;
+    }
+  });
+});
