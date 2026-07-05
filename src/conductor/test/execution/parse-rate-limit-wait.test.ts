@@ -79,7 +79,52 @@ describe('parseRateLimitWaitSeconds', () => {
     it('returns fallback when no time pattern is found', () => {
       const output = 'Some error without time info';
       const now = new Date('2026-07-05T20:00:00Z');
-      expect(parseRateLimitWaitSeconds(output, now)).toBe(0); // Falls back to 0 (no match)
+      expect(parseRateLimitWaitSeconds(output, now)).toBe(300); // Falls back to 300 (no match)
+    });
+  });
+
+  // Negative path: unparseable, zero, and invalid values default to 300
+  describe('negative path: unparseable and invalid values', () => {
+    it('returns 300 for empty string', () => {
+      expect(parseRateLimitWaitSeconds('')).toBe(300);
+    });
+
+    it('returns 300 for random garbage text', () => {
+      expect(parseRateLimitWaitSeconds('random text with no time info')).toBe(300);
+    });
+
+    it('returns 300 for explicit zero: "retry after 0 seconds"', () => {
+      expect(parseRateLimitWaitSeconds('retry after 0 seconds')).toBe(300);
+    });
+
+    it('returns 300 for negative value: "retry after -50 seconds"', () => {
+      expect(parseRateLimitWaitSeconds('retry after -50 seconds')).toBe(300);
+    });
+
+    it('returns 300 when parsing produces NaN', () => {
+      // This is a defensive test — if the regex matches something unparseable
+      expect(parseRateLimitWaitSeconds('retry after NaN seconds')).toBe(300);
+    });
+
+    it('returns 300 for zero from minutes heuristic: "retry after 0 minutes"', () => {
+      expect(parseRateLimitWaitSeconds('retry after 0 minutes')).toBe(300);
+    });
+
+    it('returns very large number as-is: "retry after 999999999 seconds"', () => {
+      expect(parseRateLimitWaitSeconds('retry after 999999999 seconds')).toBe(999999999);
+    });
+
+    it('handles exception gracefully and returns 300', () => {
+      // Create a proxy that throws on match operations — ensures try-catch works
+      const malicious = Object.create(String.prototype);
+      Object.defineProperty(malicious, 'length', {
+        get() {
+          throw new Error('Deliberate error');
+        },
+      });
+      // If the function doesn't have error handling, this would throw
+      // With error handling, it should return 300
+      expect(() => parseRateLimitWaitSeconds(malicious as unknown as string)).not.toThrow();
     });
   });
 });

@@ -57,41 +57,49 @@ export const OUT_OF_CREDITS_RE =
  *
  * @param output The error message to parse
  * @param now Optional Date object for deterministic testing (defaults to current time)
- * @returns The parsed integer seconds value, or 0 if no pattern matches
+ * @returns The parsed integer seconds value, or 300 if no pattern matches or value is invalid/unparseable
  */
 export function parseRateLimitWaitSeconds(output: string, now?: Date): number {
-  // Try duration-based patterns first: "retry after N seconds", "retry in N seconds", etc.
-  const durationMatch = output.match(/(?:retry|try).*(after|in)\s*([0-9]+)/i);
-  if (durationMatch && durationMatch[2]) {
-    const value = parseInt(durationMatch[2], 10);
-    // Apply minutes heuristic: if value < 60, treat as minutes and convert to seconds
-    if (value < 60) {
-      return value * 60;
+  try {
+    // Try duration-based patterns first: "retry after N seconds", "retry in N seconds", etc.
+    const durationMatch = output.match(/(?:retry|try).*(after|in)\s*([0-9]+)/i);
+    if (durationMatch && durationMatch[2]) {
+      const value = parseInt(durationMatch[2], 10);
+      // Check for NaN or non-positive values — default to 300
+      if (isNaN(value) || value <= 0) {
+        return 300;
+      }
+      // Apply minutes heuristic: if value < 60, treat as minutes and convert to seconds
+      if (value < 60) {
+        return value * 60;
+      }
+      return value;
     }
-    return value;
+
+    // Try time-based patterns: "resets at 23:00", "resets 11pm", etc.
+    if (/resets?(?:\s+at)?\s+[0-9a-z]/i.test(output)) {
+      const currentTime = now || new Date();
+
+      // Try HH:MM format first (e.g., "23:00", "11:30", with optional am/pm)
+      let resetTime = output.match(/(\d{1,2}):(\d{2})\s*(?:(am|pm))?/i);
+      if (resetTime) {
+        const resetHour = parseResetHour(parseInt(resetTime[1], 10), resetTime[3]);
+        const resetMinute = parseInt(resetTime[2], 10);
+        return calculateWaitSeconds(resetHour, resetMinute, currentTime);
+      }
+
+      // Try bare hour with am/pm (e.g., "11pm", "3am")
+      resetTime = output.match(/\b(\d{1,2})\s*(am|pm)\b/i);
+      if (resetTime) {
+        const resetHour = parseResetHour(parseInt(resetTime[1], 10), resetTime[2]);
+        return calculateWaitSeconds(resetHour, 0, currentTime);
+      }
+    }
+
+    return 300;
+  } catch {
+    return 300;
   }
-
-  // Try time-based patterns: "resets at 23:00", "resets 11pm", etc.
-  if (/resets?(?:\s+at)?\s+[0-9a-z]/i.test(output)) {
-    const currentTime = now || new Date();
-
-    // Try HH:MM format first (e.g., "23:00", "11:30", with optional am/pm)
-    let resetTime = output.match(/(\d{1,2}):(\d{2})\s*(?:(am|pm))?/i);
-    if (resetTime) {
-      const resetHour = parseResetHour(parseInt(resetTime[1], 10), resetTime[3]);
-      const resetMinute = parseInt(resetTime[2], 10);
-      return calculateWaitSeconds(resetHour, resetMinute, currentTime);
-    }
-
-    // Try bare hour with am/pm (e.g., "11pm", "3am")
-    resetTime = output.match(/\b(\d{1,2})\s*(am|pm)\b/i);
-    if (resetTime) {
-      const resetHour = parseResetHour(parseInt(resetTime[1], 10), resetTime[2]);
-      return calculateWaitSeconds(resetHour, 0, currentTime);
-    }
-  }
-
-  return 0;
 }
 
 /**
