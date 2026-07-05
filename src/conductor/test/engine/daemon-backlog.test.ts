@@ -1040,6 +1040,65 @@ describe('engine/daemon-backlog — owner-gate integration', () => {
     ]);
   });
 
+  // Task 7 (S3 NP-2) — legacy gate-unwired silence pinned: when `daemonOwner`
+  // is entirely ABSENT from opts (the gate was never wired at all), discovery
+  // must stay silent — no repo warnings, `gated` stays empty, and the spec
+  // dispatches unchanged. This is fail-OPEN and is distinct from Task 6's
+  // fail-CLOSED path (a supplied-but-unresolved `daemonOwner`), which emits a
+  // repo-level `identity-unresolved` GATED entry and builds nothing.
+  it('no daemonOwner in opts (legacy unwired gate) stays silent: gated is empty, no repo warnings, items unchanged', async () => {
+    await writeSpec('one');
+    const logs: string[] = [];
+    const { items, waiting, gated } = await discoverBacklog(dir, undefined, (m) => logs.push(m), {
+      treeSource: fsSource(dir),
+      // daemonOwner intentionally omitted — legacy, gate unwired.
+    });
+    expect(items.map((i) => i.slug)).toEqual(['one']);
+    expect(waiting).toEqual([]);
+    expect(gated).toEqual([]);
+    expect(logs.some((l) => /identity unresolved/i.test(l))).toBe(false);
+    expect(logs.some((l) => /owner-gate/i.test(l))).toBe(false);
+  });
+
+  // Task 5 (S3 HP-1) — the gate is active (resolved daemon owner), no
+  // grandfather cutover is configured, and an un-owned spec is encountered: a
+  // single repo-scoped `no-cutover` GATED entry surfaces alongside (not instead
+  // of) the existing `warnGateNoCutoverOnce` log line.
+  it('Task 5: active gate + no cutover + an un-owned spec encountered → one repo-level no-cutover GATED entry (plus the existing log line)', async () => {
+    await writeSpec('un-owned');
+    const logs: string[] = [];
+    const { items, gated } = await discoverBacklog(dir, undefined, (m) => logs.push(m), {
+      treeSource: fsSource(dir),
+      daemonOwner: { resolved: true, id: 'alice' },
+      readStamp: async () => ({ present: false as const }),
+      readMergeTime: async () => null,
+      cutover: null,
+    });
+    expect(items).toEqual([]);
+    expect(gated).toEqual([
+      {
+        kind: 'repo',
+        warning: 'no-cutover',
+        remedy: expect.any(String),
+      },
+    ]);
+    // The pre-existing no-cutover log line is unchanged, not replaced.
+    expect(logs.filter((l) => /no owner_gate_cutover configured/i.test(l))).toHaveLength(1);
+  });
+
+  it('Task 5 (NP-3): cutover set + all specs owned → zero repo-level GATED entries', async () => {
+    await writeSpec('owned-one');
+    const { items, gated } = await discoverBacklog(dir, undefined, undefined, {
+      treeSource: fsSource(dir),
+      daemonOwner: { resolved: true, id: 'alice' },
+      readStamp: async () => ({ present: true as const, id: 'alice' }),
+      readMergeTime: async () => null,
+      cutover: '2026-06-30T00:00:00Z',
+    });
+    expect(items.map((i) => i.slug)).toEqual(['owned-one']);
+    expect(gated).toEqual([]);
+  });
+
   it('is SILENT about the missing cutover when a cutover IS set', async () => {
     await writeSpec('with-cutover');
     const logs: string[] = [];
