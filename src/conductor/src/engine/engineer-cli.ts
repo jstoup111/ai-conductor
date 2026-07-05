@@ -968,10 +968,13 @@ export async function dispatchEngineer(
     // `conduct-ts engineer resolve <sourceRef> --pr-url <url> [--branch <b>]`:
     // mark a claimed entry as delivered when write-back fails (recovery from the
     // stranded state where the spec was authored/handed off but not recorded as done).
-    // Validates the URL format (http(s)://…) before proceeding. Task 12 performs
-    // the actual ledger transition; this case validates input only.
+    // If entry doesn't exist: return {kind:'resolve', found:false} exit 0 (soft failure).
+    // If entry exists: transition to 'done' with prUrl + optional branch override.
+    // Branch is optional; if not provided, preserve existing entry.meta.branch.
+    // Output: {kind:'resolve', sourceRef, priorStatus, prUrl, branch} for operator verification.
+    // Exit code always 0 (resolve is advisory, never a hard failure).
     case 'resolve': {
-      const { sourceRef, prUrl, branch } = dispatch;
+      const { sourceRef, prUrl, branch: newBranch } = dispatch;
 
       // Validate --pr-url format: must be http(s)://
       if (!prUrl.match(/^https?:\/\//)) {
@@ -979,10 +982,36 @@ export async function dispatchEngineer(
         return 1;
       }
 
-      // For now, just validate and parse. Task 12 implements the ledger write.
-      // Return success (exit 0) and let Task 12 handle the actual transition.
-      // TODO(Task 12): transition the ledger entry to 'done' with prUrl + branch.
-      print(JSON.stringify({ kind: 'resolve', sourceRef, prUrl, branch }));
+      const engDir = engineerDir ?? resolveEngineerDir({});
+      const ledger = createLedger(join(engDir, 'ledger.json'));
+
+      // Attempt to get the entry; if absent, return found:false (soft failure).
+      const entry = await ledger.get(GITHUB_ISSUES_SOURCE, sourceRef);
+      if (!entry) {
+        print(JSON.stringify({ kind: 'resolve', found: false }));
+        return 0;
+      }
+
+      // Entry exists: prepare the transition.
+      // Preserve existing branch unless --branch provided.
+      const priorStatus = entry.status;
+      const existingBranch = entry.branch ?? '';
+      const branch = newBranch !== undefined ? newBranch : existingBranch;
+
+      // Transition the entry to 'done' with prUrl + branch evidence.
+      await ledger.transition(GITHUB_ISSUES_SOURCE, sourceRef, 'done', { prUrl, branch });
+
+      // Output: all 4 fields for operator verification.
+      print(
+        JSON.stringify({
+          kind: 'resolve',
+          sourceRef,
+          priorStatus,
+          prUrl,
+          branch,
+        }),
+      );
+
       return 0;
     }
 
