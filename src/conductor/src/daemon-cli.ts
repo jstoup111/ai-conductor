@@ -7,6 +7,7 @@ import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { closeIssueOnImplementationMerge } from './engine/engineer/issue-ref.js';
 import { rehabilitateHaltPr } from './engine/halt-pr-rehabilitation.js';
+import { isEligibleForResolve } from './engine/autoresolve.js';
 import type { LLMProvider } from './execution/llm-provider.js';
 import { PluginRegistry } from './engine/plugin-registry.js';
 import { registerBuiltins } from './engine/plugin-loader.js';
@@ -801,7 +802,34 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       // NOTE: this binding must stay wired — removing it silently no-ops all
       // startup and idle-poll sweeps in production (daemon.ts guards with ?.()).
       sweepMergeableLabels: async () => {
-        await sweepMergeableLabels({ projectRoot, log });
+        await sweepMergeableLabels({
+          projectRoot,
+          log,
+          // Task 17: dispatch autoresolve for the first eligible CONFLICTING
+          // PR after the label pass, gated on `mergeable_autoresolve.enabled`
+          // so a disabled/absent config leaves the sweep unchanged (AC4).
+          autoresolve: {
+            enabled: config?.mergeable_autoresolve?.enabled ?? false,
+            isEligible: (entry, state) =>
+              isEligibleForResolve(
+                entry,
+                state,
+                config,
+                new Date(),
+                { worktreeExists: async (p) => existsSync(join(projectRoot, p)) },
+                log,
+              ),
+            dispatch: async (entry) => {
+              // The full resolution pipeline (worktree prep, tier1/tier2
+              // rebase, acceptance guards, suite gate, lease push) is
+              // composed elsewhere and wired in as it lands; until then this
+              // dispatch point only performs the sweep-level bookkeeping
+              // (attempt counter + lastResolveAt, already applied by the
+              // sweep before this callback runs).
+              log(`[mergeable-sweep] autoresolve dispatch: ${entry.prUrl} (attempt ${entry.resolveAttempts})`);
+            },
+          },
+        });
       },
       // Task T28: check for pending restart marker at idle boundary.
       hasRestartPending: async () => {
