@@ -22,7 +22,11 @@ import {
 import { execa } from 'execa';
 import { rm, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
+import { execFile as execFileCb } from 'node:child_process';
+import { promisify } from 'node:util';
 import { prepareWorktree as defaultPrepareWorktree } from './worktree-prepare.js';
+
+const execFile = promisify(execFileCb);
 
 /**
  * File system interface — injected for testability.
@@ -348,4 +352,87 @@ export async function runAcceptanceGuards(
   }
 
   return { ok: true };
+}
+
+/**
+ * Result of the suite gate. On exit 0, the suite passes; on any other exit code, it fails.
+ */
+export type SuiteGateResult =
+  | { ok: true; exitCode: 0; duration: number }
+  | { ok: false; exitCode: number; duration: number; reason?: string };
+
+/**
+ * Runs a user-configured test suite command in the resolution worktree.
+ *
+ * Story: "Full suite must pass before anything publishes" (happy path)
+ *
+ * Execution:
+ *   - If `suiteCommand` is undefined/empty, returns success (noop)
+ *   - Otherwise, runs the command via sh -c in the worktree directory
+ *   - Captures stdout and stderr
+ *   - Measures execution duration
+ *   - Exit code 0 → success, other codes → failure
+ *   - Logs exit code, duration, and command output
+ *
+ * @param suiteCommand The shell command to run (e.g., `npm test`, `./verify.sh`)
+ *                     If undefined/empty, returns success (no suite configured)
+ * @param worktreePath The worktree directory where the command executes
+ * @param logger       Optional logging function (default: console.log)
+ * @returns            SuiteGateResult: { ok: true, ... } or { ok: false, exitCode, duration, ... }
+ */
+export async function runSuiteGate(
+  suiteCommand: string | undefined,
+  worktreePath: string,
+  logger?: (msg: string) => void,
+): Promise<SuiteGateResult> {
+  const log = logger ?? console.log;
+
+  // If no suite command configured, treat as noop success
+  if (!suiteCommand || suiteCommand.trim() === '') {
+    log('suite gate: no command configured (noop)');
+    return { ok: true, exitCode: 0, duration: 0 };
+  }
+
+  // Measure duration
+  const startMs = Date.now();
+
+  try {
+    // Run the command in the worktree directory using sh -c
+    // This allows complex shell commands with pipes, redirects, etc.
+    const result = await execFile('sh', ['-c', suiteCommand], {
+      cwd: worktreePath,
+      encoding: 'utf-8',
+    });
+
+    const durationMs = Date.now() - startMs;
+
+    // Exit code 0 = success
+    log(`suite gate passed: exit code 0, duration ${durationMs}ms`);
+    if (result.stdout) {
+      log(`suite output: ${result.stdout.trim()}`);
+    }
+
+    return { ok: true, exitCode: 0, duration: durationMs };
+  } catch (err: any) {
+    const durationMs = Date.now() - startMs;
+    const exitCode = err.code ?? err.status ?? 1;
+    const stdout = err.stdout ? String(err.stdout).trim() : '';
+    const stderr = err.stderr ? String(err.stderr).trim() : '';
+
+    // Exit code non-zero = failure
+    log(`suite gate failed: exit code ${exitCode}, duration ${durationMs}ms`);
+    if (stdout) {
+      log(`suite stdout: ${stdout}`);
+    }
+    if (stderr) {
+      log(`suite stderr: ${stderr}`);
+    }
+
+    return {
+      ok: false,
+      exitCode,
+      duration: durationMs,
+      reason: `suite command exited with code ${exitCode}`,
+    };
+  }
 }

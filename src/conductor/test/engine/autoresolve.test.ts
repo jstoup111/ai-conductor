@@ -24,7 +24,7 @@ import { promisify } from 'node:util';
 import type { WatchEntry } from '../../src/engine/mergeable-sweep.js';
 import type { PrMergeState } from '../../src/engine/pr-labels.js';
 import type { HarnessConfig } from '../../src/types/config.js';
-import { isEligibleForResolve, runTier2 } from '../../src/engine/autoresolve.js';
+import { isEligibleForResolve, runTier2, runSuiteGate } from '../../src/engine/autoresolve.js';
 import { makeGitRunner, type ResolutionAttempt } from '../../src/engine/rebase.js';
 
 const execFile = promisify(execFileCb);
@@ -369,5 +369,118 @@ describe('engine/autoresolve — Tier 2 gated dispatch (real git, injected resol
     expect(typeof capturedContext.baseRef).toBe('string');
     expect(capturedContext.baseRef.length).toBeGreaterThan(0);
     expect(capturedContext.projectRoot).toBe(repo);
+  });
+});
+
+describe('engine/autoresolve — suite gate (green path)', () => {
+  let worktree: string;
+
+  beforeEach(async () => {
+    worktree = await mkdtemp(join(tmpdir(), 'suite-gate-'));
+  });
+
+  afterEach(async () => {
+    await rm(worktree, { recursive: true, force: true });
+  });
+
+  it('no suite command configured → returns success (noop)', async () => {
+    const logs: string[] = [];
+    const logger = (msg: string) => logs.push(msg);
+
+    const result = await runSuiteGate(undefined, worktree, logger);
+
+    expect(result.ok).toBe(true);
+    expect(result.exitCode).toBe(0);
+    expect(result.duration).toBeGreaterThanOrEqual(0);
+  });
+
+  it('suite command configured and passes (exit 0) → returns success', async () => {
+    const logs: string[] = [];
+    const logger = (msg: string) => logs.push(msg);
+
+    const result = await runSuiteGate('echo "test passed"', worktree, logger);
+
+    expect(result.ok).toBe(true);
+    expect(result.exitCode).toBe(0);
+    expect(result.duration).toBeGreaterThan(0);
+    // Duration should be logged
+    expect(logs.some((l) => l.toLowerCase().includes('duration'))).toBe(true);
+  });
+
+  it('suite command runs in the worktree directory', async () => {
+    const logs: string[] = [];
+    const logger = (msg: string) => logs.push(msg);
+
+    // Create a marker file in the worktree
+    const markerFile = join(worktree, 'test-marker.txt');
+    await writeFile(markerFile, 'present\n');
+
+    // Run a command that checks if the marker file exists
+    const result = await runSuiteGate(
+      'test -f test-marker.txt && echo "found"',
+      worktree,
+      logger,
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.exitCode).toBe(0);
+    // The command should have found the file (run in worktree cwd)
+    expect(logs.some((l) => l.includes('found'))).toBe(true);
+  });
+
+  it('suite command failure (exit non-zero) → returns failure with exit code', async () => {
+    const logs: string[] = [];
+    const logger = (msg: string) => logs.push(msg);
+
+    const result = await runSuiteGate('exit 42', worktree, logger);
+
+    expect(result.ok).toBe(false);
+    expect(result.exitCode).toBe(42);
+    expect(result.duration).toBeGreaterThan(0);
+    // Exit code should be logged
+    expect(logs.some((l) => l.toLowerCase().includes('42'))).toBe(true);
+  });
+
+  it('exit code and duration are logged', async () => {
+    const logs: string[] = [];
+    const logger = (msg: string) => logs.push(msg);
+
+    await runSuiteGate('echo "running suite"', worktree, logger);
+
+    const logOutput = logs.join(' ');
+    expect(logOutput.toLowerCase()).toMatch(/duration|exit|suite/i);
+  });
+
+  it('captures and logs command stdout', async () => {
+    const logs: string[] = [];
+    const logger = (msg: string) => logs.push(msg);
+
+    await runSuiteGate('echo "test output here"', worktree, logger);
+
+    expect(logs.some((l) => l.includes('test output here'))).toBe(true);
+  });
+
+  it('suite command with multiline output → all captured and logged', async () => {
+    const logs: string[] = [];
+    const logger = (msg: string) => logs.push(msg);
+
+    const command = 'echo "line 1" && echo "line 2" && echo "line 3"';
+    await runSuiteGate(command, worktree, logger);
+
+    const logOutput = logs.join('\n');
+    expect(logOutput).toContain('line 1');
+    expect(logOutput).toContain('line 2');
+    expect(logOutput).toContain('line 3');
+  });
+
+  it('suite command with longer execution time → duration captured accurately', async () => {
+    const logs: string[] = [];
+    const logger = (msg: string) => logs.push(msg);
+
+    const result = await runSuiteGate('sleep 0.1 && echo "done"', worktree, logger);
+
+    expect(result.ok).toBe(true);
+    expect(result.duration).toBeGreaterThanOrEqual(100); // at least ~100ms
+    expect(logs.some((l) => l.includes('done'))).toBe(true);
   });
 });
