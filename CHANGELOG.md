@@ -33,6 +33,16 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- **`verify-claims` skill — correctness & assumption gate (gating, phase: all).** A cross-cutting
+  correctness discipline other skills apply at their decision points: it attaches a grounded
+  confidence % (with basis — verified / inferred / unverified) to non-trivial claims and theories,
+  surfaces every assumption, and HARD-BLOCKS any specced or built work resting on an unconfirmed
+  *load-bearing* assumption until the operator approves it (autonomous runs HALT with the assumption
+  ledger rather than silently picking the likely value). Armed at load-bearing points by a new
+  HARNESS.md **Correctness & Assumption Gate** rule (not an always-on tax) and cited from the
+  DECIDE/BUILD skills where assumptions get baked in (`explore`, `prd`, `architecture-review`,
+  `stories`, `plan`, `tdd`, `debugging`). Added to the generated model-selection table
+  (`inherits caller` — runs in the invoking skill's context).
 - `engineer resolve` recovery subcommand to mark stranded entries delivered (recover from write-back failures)
 - Local-commit and pr-skipped handoff outcomes now record branch evidence for auditing
 - CI: added a PR-triggered GitHub Actions workflow that runs the harness integrity test suite and the conductor build/vitest suite on every pull request.

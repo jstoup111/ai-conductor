@@ -106,6 +106,12 @@ export interface ExtraModelTableRow {
 
 export const EXTRA_MODEL_TABLE_ROWS: ExtraModelTableRow[] = [
   {
+    name: 'verify-claims',
+    model: 'inherits caller',
+    rationale:
+      'Cross-cutting correctness protocol applied within the invoking skill\'s context (calibrate claims, gate assumptions) — not a separately dispatched agent, so it runs on the caller\'s model.',
+  },
+  {
     name: 'domain-reviewer',
     model: 'sonnet (<50-line diff), opus (≥50-line diff)',
     rationale:

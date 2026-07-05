@@ -13,6 +13,10 @@ model: fable
 Prevents shotgun debugging by enforcing systematic root cause investigation before any fix
 is attempted. Evidence-based diagnosis catches the real problem instead of treating symptoms.
 
+**Correctness gate:** a root-cause theory is a claim. Per the `/verify-claims` protocol, state it
+with a grounded confidence % and its basis, and do not fix on it until the evidence puts it high —
+a plausible-but-unverified theory produces a band-aid, not a fix.
+
 ## Practices
 
 ### Phase 1: Investigate

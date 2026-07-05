@@ -14,6 +14,11 @@ The divergent opening of DECIDE: understand intent, gather context, weigh approa
 (refactor/infra/deps — no PRD). Exploration is a thinking step; its durable outputs are the chosen
 approach (to `.memory/decisions/`) and the **track marker** — not a design doc.
 
+**Correctness gate:** approach recommendations and the track decision are load-bearing. Apply the
+`/verify-claims` protocol — attach a grounded confidence % to non-trivial claims about the code or
+domain, surface every assumption feeding an approach, and HARD-BLOCK (operator approval interactive,
+HALT if autonomous) on any unconfirmed assumption that changes which approach or track you pick.
+
 ## Boundaries
 
 `explore` writes **no committed `.docs/` design artifact**. It MAY write exactly one committed
