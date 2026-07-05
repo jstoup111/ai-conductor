@@ -159,6 +159,20 @@ export interface DaemonDeps {
    */
   isParked?: (slug: string) => Promise<boolean>;
   /**
+   * Watch for HALT marker cleared on a parked feature and invoke `onCleared` when
+   * detected. Returns an unsubscribe function to tear down the watch. Used by
+   * event-driven re-dispatch to re-kick a halted slug without polling.
+   *
+   * Optimization-never-authority seam: only used for efficiency (event-driven vs
+   * poll-driven); never drives dispatch authority (that flows through existing
+   * `isHalted` path, FR-8). Pre-bound by CLI with projectRoot + log; this core
+   * accepts a pre-bound two-arg function so it needs no knowledge of projectRoot.
+   *
+   * Pure-core default: absent (no-op, no watching). Production wires from
+   * halt-reconciliation hooks (see daemon-deps.ts).
+   */
+  watchHaltCleared?: (slug: string, onCleared: () => void) => () => void;
+  /**
    * FR-1 (Task 11): true while dispatch is paused (`.daemon/PAUSED`). Gates the
    * fill-pool block — no NEW feature is picked/dispatched while paused. Does
    * NOT affect in-flight work: features already dispatched keep running to
