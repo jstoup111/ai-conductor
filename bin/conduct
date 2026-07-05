@@ -463,46 +463,6 @@ set_update_channel() {
   exit 0
 }
 
-check_harness_config() {
-  # Only run if we're in a project (not the harness repo itself)
-  [ -f "CLAUDE.md" ] || return 0
-  [ -f "${HARNESS_DIR}/HARNESS.md" ] || return 0
-
-  # Skip if this IS the harness repo
-  [ "$(cd "$HARNESS_DIR" && pwd)" = "$(pwd)" ] && return 0
-
-  # Check if project CLAUDE.md already references HARNESS.md
-  if grep -q "HARNESS.md" CLAUDE.md 2>/dev/null; then
-    return 0
-  fi
-
-  # Prompt user for approval before modifying their CLAUDE.md
-  warn "Project CLAUDE.md does not reference HARNESS.md (harness behavioral rules)"
-  if [ -t 0 ]; then
-    read -r -p "  Add HARNESS.md reference to CLAUDE.md? [y/n]: " upgrade_choice
-    case "$upgrade_choice" in
-      [yY])
-        cat >> CLAUDE.md << EOF
-
-## Harness Behavioral Rules
-
-All behavioral rules, model selection, communication protocol, and conventions are defined in:
-\`${HARNESS_DIR}/HARNESS.md\`
-
-Claude MUST read and follow HARNESS.md at the start of every session.
-EOF
-        git add CLAUDE.md
-        git commit -m "chore: add HARNESS.md reference to CLAUDE.md (harness auto-upgrade)"
-        ok "CLAUDE.md upgraded — now references HARNESS.md"
-        ;;
-      *)
-        log "Skipping CLAUDE.md upgrade"
-        ;;
-    esac
-  else
-    warn "Add HARNESS.md reference manually or re-run interactively"
-  fi
-}
 
 # ─── Artifact Review ─────────────────────────────────────────────────────────
 
