@@ -86,7 +86,7 @@ import {
 import {
   makeGitRunner,
   performRebase,
-  resolveRebaseConflicts,
+  runGatedRebaseResolution,
   applyRebaseVerdicts,
   emitRebaseEvent,
   writeHalt,
@@ -94,7 +94,6 @@ import {
   type RebaseOutcome,
   type ResolutionContext,
   type ResolutionAttempt,
-  type RebaseResolver,
 } from './rebase.js';
 import {
   escalateBuildFailure as defaultEscalateBuildFailure,
@@ -2421,39 +2420,26 @@ export class Conductor {
     // When a conflict_halt occurs and the StepRunner provides a resolver, attempt
     // to resolve it up to `cap` times before falling back to the HALT path.
     // cap === 0 (or no resolveRebaseConflict method) → immediate HALT, unchanged
-    // from pre-resolution behavior (FR-7).
-    if (outcome.kind === 'conflict_halt') {
-      const cap = resolveRebaseResolutionAttempts(this.config);
-      if (cap > 0 && this.stepRunner.resolveRebaseConflict) {
-        let attempt = 0;
-        const resolver: RebaseResolver = async (ctx: ResolutionContext) => {
-          attempt += 1;
-          try {
-            await this.events.emit({ type: 'rebase_resolution_attempt', index: attempt, cap });
-          } catch {
-            /* best-effort: event emission must not block resolution */
-          }
-          try {
-            return await this.stepRunner.resolveRebaseConflict!(ctx);
-          } catch (err) {
-            return {
-              resolved: false,
-              reason: err instanceof Error ? err.message : String(err),
-            } satisfies ResolutionAttempt;
-          }
-        };
-        outcome = await resolveRebaseConflicts(git, this.projectRoot, outcome, resolver, cap);
-        try {
-          await this.events.emit(
-            outcome.kind === 'conflict_halt'
-              ? { type: 'rebase_resolution_exhausted' }
-              : { type: 'rebase_resolution_succeeded' },
-          );
-        } catch {
-          /* best-effort */
-        }
-      }
-    }
+    // from pre-resolution behavior (FR-7). The same helper backs the daemon
+    // re-kick play-forward path (`resumeRebaseFirst`) so both routes resolve
+    // identically (#300).
+    outcome = await runGatedRebaseResolution({
+      git,
+      projectRoot: this.projectRoot,
+      outcome,
+      cap: resolveRebaseResolutionAttempts(this.config),
+      resolve: this.stepRunner.resolveRebaseConflict
+        ? (ctx) => this.stepRunner.resolveRebaseConflict!(ctx)
+        : undefined,
+      onAttempt: (index, cap) =>
+        this.events.emit({ type: 'rebase_resolution_attempt', index, cap }),
+      onSettled: (kind) =>
+        this.events.emit(
+          kind === 'exhausted'
+            ? { type: 'rebase_resolution_exhausted' }
+            : { type: 'rebase_resolution_succeeded' },
+        ),
+    });
 
     this.lastRebaseOutcome = outcome;
 

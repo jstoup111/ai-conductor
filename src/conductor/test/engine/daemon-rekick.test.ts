@@ -534,8 +534,8 @@ describe('engine/daemon-rekick — resumeRebaseFirst (FR-12)', () => {
     expect(await fileExists(join(dir, REKICK_SENTINEL))).toBe(false);
   });
 
-  it('a re-conflict on the new base → halted (HALT written, rebase paused), sentinel still consumed', async () => {
-    // Branch and base edit the SAME file differently → conflict on rebase.
+  // Branch and base edit the SAME file differently → guaranteed rebase conflict.
+  async function initConflictRepo(): Promise<void> {
     await execFileAsync('git', ['init', '-b', 'main', dir]);
     await git('config', 'user.email', 'test@example.com');
     await git('config', 'user.name', 'Test');
@@ -553,6 +553,10 @@ describe('engine/daemon-rekick — resumeRebaseFirst (FR-12)', () => {
     await git('add', '.');
     await git('commit', '-m', 'base');
     await git('checkout', 'feature/foo');
+  }
+
+  it('a re-conflict on the new base with NO resolver wired → halted immediately (backward compatible)', async () => {
+    await initConflictRepo();
 
     await writeSentinel();
     const res = await resumeRebaseFirst({
@@ -569,6 +573,65 @@ describe('engine/daemon-rekick — resumeRebaseFirst (FR-12)', () => {
       (await fileExists(join(dir, '.git/rebase-merge'))) ||
       (await fileExists(join(dir, '.git/rebase-apply')));
     expect(inProgress).toBe(true);
+  });
+
+  // #300: a conflict reached via the re-kick play-forward must get the SAME
+  // gated /rebase resolution loop the finish-time step uses before a human HALT.
+
+  it('#300: a wired resolver that resolves the conflict → rebased, no HALT, sentinel consumed', async () => {
+    await initConflictRepo();
+    await writeSentinel();
+
+    let attempts = 0;
+    const res = await resumeRebaseFirst({
+      worktreePath: dir,
+      localBase: 'main',
+      events,
+      ranManualTest: false,
+      resolveAttempts: 3,
+      resolveConflict: async () => {
+        attempts += 1;
+        await writeFile(join(dir, 'src/feature.ts'), 'export const v = 3; // merged\n');
+        await git('add', 'src/feature.ts');
+        // core.editor=true → non-interactive `rebase --continue`
+        await execFileAsync('git', ['-C', dir, '-c', 'core.editor=true', 'rebase', '--continue']);
+        return { resolved: true };
+      },
+    });
+
+    expect(res).toBe('rebased');
+    expect(attempts).toBe(1);
+    expect(await fileExists(join(dir, HALT_MARKER))).toBe(false);
+    expect(await fileExists(join(dir, REKICK_SENTINEL))).toBe(false);
+    // Rebase actually completed — nothing left paused.
+    const inProgress =
+      (await fileExists(join(dir, '.git/rebase-merge'))) ||
+      (await fileExists(join(dir, '.git/rebase-apply')));
+    expect(inProgress).toBe(false);
+  });
+
+  it('#300: a wired resolver that never completes → halted only AFTER exhausting the cap', async () => {
+    await initConflictRepo();
+    await writeSentinel();
+
+    let attempts = 0;
+    const res = await resumeRebaseFirst({
+      worktreePath: dir,
+      localBase: 'main',
+      events,
+      ranManualTest: false,
+      resolveAttempts: 3,
+      // Claims success but leaves the rebase paused → failed attempt, retried.
+      resolveConflict: async () => {
+        attempts += 1;
+        return { resolved: true };
+      },
+    });
+
+    expect(res).toBe('halted');
+    expect(attempts).toBe(3); // exhausted the cap before parking
+    expect(await fileExists(join(dir, HALT_MARKER))).toBe(true);
+    expect(await fileExists(join(dir, REKICK_SENTINEL))).toBe(false);
   });
 });
 

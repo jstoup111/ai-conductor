@@ -55,6 +55,7 @@ import { isOperatorParked } from './engine/park-marker.js';
 import { listOperatorParkedSlugs } from './engine/park-marker.js';
 import { readState, writeState, getStepStatus } from './engine/state.js';
 import { makeGitRunner, originDefaultBranch } from './engine/rebase.js';
+import { resolveRebaseResolutionAttempts } from './engine/resolved-config.js';
 import {
   readBaseSha,
   readPersistedBaseSha,
@@ -514,6 +515,12 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       localBase: baseBranch,
       events,
       ranManualTest,
+      // #300: give the play-forward conflict the SAME gated /rebase attempts the
+      // finish-time step gets, before parking for a human.
+      resolveAttempts: resolveRebaseResolutionAttempts(config),
+      resolveConflict: stepRunner.resolveRebaseConflict
+        ? (ctx) => stepRunner.resolveRebaseConflict(ctx)
+        : undefined,
       log,
     });
     if (resume === 'halted') return; // re-parked: HALT re-written, do not resume the gate

@@ -5,10 +5,12 @@ import {
   makeGitRunner,
   rebaseStateActive,
   performRebase,
+  runGatedRebaseResolution,
   applyRebaseVerdicts,
   emitRebaseEvent,
   writeHalt,
   type RebaseOutcome,
+  type RebaseResolver,
 } from './rebase.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
 
@@ -305,6 +307,16 @@ export async function resumeRebaseFirst(opts: {
   events: ConductorEventEmitter;
   /** Whether manual_test ran for this feature (drives the FR-5 kickback set). */
   ranManualTest: boolean;
+  /**
+   * Bounded auto-resolution cap for a rebase conflict on the play-forward path
+   * (#300). Defaults to 0 (disabled) when unset, preserving the original
+   * bare-rebase-then-HALT behavior; the daemon wires the configured cap so a
+   * re-kicked feature gets the SAME gated `/rebase` attempts as the finish-time
+   * step before parking for a human.
+   */
+  resolveAttempts?: number;
+  /** Resolver dispatched per attempt — the daemon wires DefaultStepRunner's `/rebase`. */
+  resolveConflict?: RebaseResolver;
   log?: (msg: string) => void;
 }): Promise<RekickResumeResult> {
   const sentinel = join(opts.worktreePath, REKICK_SENTINEL);
@@ -324,6 +336,26 @@ export async function resumeRebaseFirst(opts: {
       reason: err instanceof Error ? err.message : String(err),
     };
   }
+
+  // #300: route a conflict through the SAME gated `/rebase` resolution loop the
+  // finish-time step (`conductor.ts:runRebaseStep`) uses, before parking for a
+  // human. With no cap/resolver wired this is a no-op and the original
+  // bare-rebase-then-HALT behavior is preserved exactly.
+  outcome = await runGatedRebaseResolution({
+    git,
+    projectRoot: opts.worktreePath,
+    outcome,
+    cap: opts.resolveAttempts ?? 0,
+    resolve: opts.resolveConflict,
+    onAttempt: (index, cap) =>
+      opts.events.emit({ type: 'rebase_resolution_attempt', index, cap }),
+    onSettled: (kind) =>
+      opts.events.emit(
+        kind === 'exhausted'
+          ? { type: 'rebase_resolution_exhausted' }
+          : { type: 'rebase_resolution_succeeded' },
+      ),
+  });
 
   await applyRebaseVerdicts(opts.worktreePath, outcome, opts.ranManualTest);
   await emitRebaseEvent(opts.events, outcome);

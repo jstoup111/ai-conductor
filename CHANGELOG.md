@@ -12,6 +12,11 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- Daemon re-kick play-forward rebase now routes a conflict through the same gated `/rebase`
+  resolution loop the finish-time step uses (bounded by `rebase_resolution_attempts`) before
+  parking for a human, instead of hard-HALTing on the first conflict. Extracted the shared
+  `runGatedRebaseResolution` helper so both `conductor.ts:runRebaseStep` and
+  `daemon-rekick.ts:resumeRebaseFirst` resolve identically (#300)
 - Prevent re-dispatch of delivered and stranded intake entries via claim-time delivery guard (#243)
 - CI: skipped the `publish-interrupted` `bin/setup worktree compatibility` smoke
   pending #334. It was authored to self-skip until `bin/setup` existed; `bin/setup`
