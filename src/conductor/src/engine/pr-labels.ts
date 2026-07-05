@@ -390,6 +390,34 @@ export async function findOrCreatePr(
   }
 }
 
+/**
+ * Look up the PR (of any state — open, closed, merged) associated with a
+ * branch, and return its URL if one exists. LOOKUP-ONLY: unlike
+ * {@link findOrCreatePr}, this never creates a PR (no draft, no `pr create`).
+ * Intended for resolving gated spec PRs that already exist on origin but have
+ * no per-slug worktree state locally. Swallows all errors and returns
+ * `undefined` when no PR is found or the runner fails.
+ */
+export async function resolveSpecPrUrl(
+  runGh: GhRunner = makeProductionGh(),
+  cwd: string,
+  branch: string,
+  log?: (msg: string) => void,
+): Promise<string | undefined> {
+  try {
+    const { stdout } = await runGh(
+      ['pr', 'list', '--state', 'all', '--head', branch, '--json', 'url,state', '--limit', '1'],
+      { cwd },
+    );
+    const data: Array<{ url?: string; state?: string }> = JSON.parse(stdout);
+    const url = data[0]?.url;
+    return url || undefined;
+  } catch (err) {
+    log?.(`[pr-labels] resolveSpecPrUrl(${branch}) error: ${err}`);
+    return undefined;
+  }
+}
+
 // ── PR comment + ready ────────────────────────────────────────────────────────
 
 /**

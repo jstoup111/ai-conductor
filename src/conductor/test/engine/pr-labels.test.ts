@@ -14,6 +14,7 @@ import {
   prMergeState,
   isMergeable,
   findOrCreatePr,
+  resolveSpecPrUrl,
   comment,
   upsertComment,
   upsertIssueComment,
@@ -511,6 +512,49 @@ describe('findOrCreatePr', () => {
       body: 'body',
     });
     expect(result).toEqual({});
+  });
+});
+
+// ── resolveSpecPrUrl ──────────────────────────────────────────────────────────
+
+describe('resolveSpecPrUrl', () => {
+  it('returns the URL of the found PR', async () => {
+    const { gh, calls } = fakeGh([
+      { stdout: JSON.stringify([{ url: TEST_PR_URL, state: 'MERGED' }]) },
+    ]);
+    const result = await resolveSpecPrUrl(gh, '/repo', 'feat/spec-branch');
+    expect(result).toBe(TEST_PR_URL);
+    expect(calls[0]).toEqual([
+      'pr',
+      'list',
+      '--state',
+      'all',
+      '--head',
+      'feat/spec-branch',
+      '--json',
+      'url,state',
+      '--limit',
+      '1',
+    ]);
+  });
+
+  it('returns undefined when no PR is found', async () => {
+    const { gh } = fakeGh([{ stdout: JSON.stringify([]) }]);
+    const result = await resolveSpecPrUrl(gh, '/repo', 'feat/no-pr');
+    expect(result).toBeUndefined();
+  });
+
+  it('swallows runner errors and returns undefined', async () => {
+    const { gh } = fakeGh([new Error('gh failed')]);
+    const result = await resolveSpecPrUrl(gh, '/repo', 'feat/err');
+    expect(result).toBeUndefined();
+  });
+
+  it('does not create a PR (no draft args in the call)', async () => {
+    const { gh, calls } = fakeGh([{ stdout: JSON.stringify([]) }]);
+    await resolveSpecPrUrl(gh, '/repo', 'feat/no-create');
+    expect(calls[0]).not.toContain('create');
+    expect(calls[0]).not.toContain('--draft');
   });
 });
 
