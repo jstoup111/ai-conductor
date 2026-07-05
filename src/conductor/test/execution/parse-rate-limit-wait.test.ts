@@ -37,4 +37,49 @@ describe('parseRateLimitWaitSeconds', () => {
     const output = 'retry after 59 seconds';
     expect(parseRateLimitWaitSeconds(output)).toBe(3540); // 59 * 60
   });
+
+  // Time-based reset patterns with frozen "now" for deterministic testing
+  describe('time-based reset patterns', () => {
+    it('parses "resets at 23:00" from 8 PM UTC', () => {
+      const output = 'rate limit hit. resets at 23:00';
+      const now = new Date('2026-07-05T20:00:00Z'); // 8 PM UTC
+      expect(parseRateLimitWaitSeconds(output, now)).toBe(10800); // 3 hours = 10800 seconds
+    });
+
+    it('parses "resets 11pm" from 8 PM UTC', () => {
+      const output = 'rate limit hit. resets 11pm';
+      const now = new Date('2026-07-05T20:00:00Z'); // 8 PM UTC
+      expect(parseRateLimitWaitSeconds(output, now)).toBe(10800); // 3 hours = 10800 seconds
+    });
+
+    it('handles next-day rollover: "resets at 23:00" from 11:30 PM UTC', () => {
+      const output = 'resets at 23:00';
+      const now = new Date('2026-07-05T23:30:00Z'); // 11:30 PM UTC
+      expect(parseRateLimitWaitSeconds(output, now)).toBe(84600); // ~23.5 hours to tomorrow 11 PM
+    });
+
+    it('handles next-day rollover: "resets 3am" from 11 PM UTC', () => {
+      const output = 'resets 3am';
+      const now = new Date('2026-07-05T23:00:00Z'); // 11 PM UTC
+      expect(parseRateLimitWaitSeconds(output, now)).toBe(14400); // 4 hours to 3 AM next day
+    });
+
+    it('parses "resets at 23:30" from 8 PM UTC', () => {
+      const output = 'resets at 23:30';
+      const now = new Date('2026-07-05T20:00:00Z'); // 8 PM UTC
+      expect(parseRateLimitWaitSeconds(output, now)).toBe(12600); // 3.5 hours = 12600 seconds
+    });
+
+    it('handles edge case: "resets 1pm" from 12 PM UTC (1 hour away)', () => {
+      const output = 'resets 1pm';
+      const now = new Date('2026-07-05T12:00:00Z'); // 12 PM UTC (noon)
+      expect(parseRateLimitWaitSeconds(output, now)).toBe(3600); // 1 hour = 3600 seconds
+    });
+
+    it('returns fallback when no time pattern is found', () => {
+      const output = 'Some error without time info';
+      const now = new Date('2026-07-05T20:00:00Z');
+      expect(parseRateLimitWaitSeconds(output, now)).toBe(0); // Falls back to 0 (no match)
+    });
+  });
 });
