@@ -592,6 +592,102 @@ export async function pushRefreshedBranch(
 }
 
 /**
+ * An earlier-stage failure (Tier 2 dispatch gave up, an acceptance guard
+ * failed, or the suite gate went red) that must short-circuit
+ * {@link publishResolution} BEFORE any git operation runs.
+ */
+export interface EarlierStageFailure {
+  /** The pipeline stage that failed (e.g. "suite-gate", "acceptance-guards"). */
+  stage: string;
+  /** Human-readable reason, forwarded verbatim to escalation. */
+  reason: string;
+}
+
+/**
+ * Options for {@link publishResolution}.
+ */
+export interface PublishResolutionOptions {
+  /** Injected git runner used for the lease push. */
+  git: GitRunner;
+  /** The PR branch to push. */
+  branch: string;
+  /** The PR being published/escalated. */
+  prUrl: string;
+  /** gh options forwarded to {@link escalate} and the mergeable-label restore. */
+  gh: EscalateOpts;
+  /**
+   * When set, publishResolution short-circuits immediately: no git call is
+   * made at all (zero push calls), and the flow escalates with this reason
+   * instead of attempting the lease push.
+   */
+  earlierFailure?: EarlierStageFailure;
+  /** Optional: the primary project root, forwarded to pushRefreshedBranch for watch-entry updates. */
+  projectRoot?: string;
+  /** Optional: the watch entry, forwarded to pushRefreshedBranch for watch-entry updates. */
+  entry?: WatchEntry;
+}
+
+/**
+ * Result of {@link publishResolution}.
+ */
+export type PublishResolutionResult =
+  | { published: true }
+  | { published: false; stage: string; reason: string };
+
+/**
+ * Orchestrate the final publish of a resolved PR branch: an earlier-stage
+ * failure short-circuits before any git call; otherwise the branch is pushed
+ * with a lease and, on success, the `mergeable` label is restored
+ * (best-effort — a label-restore failure never rolls back the push and is
+ * only logged, per the C3 best-effort-labels convention; the next tick's
+ * normal label pass reconciles it).
+ *
+ * Story: "The refresh publishes with a lease and never overwrites unseen
+ * work" (negative paths).
+ *
+ * @param opts See {@link PublishResolutionOptions}.
+ */
+export async function publishResolution(
+  opts: PublishResolutionOptions,
+): Promise<PublishResolutionResult> {
+  const log = opts.gh.log ?? console.log;
+
+  // Earlier-stage failure: short-circuit before touching git at all.
+  if (opts.earlierFailure) {
+    const { stage, reason } = opts.earlierFailure;
+    await escalate(opts.prUrl, stage, reason, opts.gh);
+    return { published: false, stage, reason };
+  }
+
+  // Lease-protected push. pushRefreshedBranch issues exactly one
+  // `--force-with-lease` push call and never retries or falls back to
+  // bare `--force`.
+  const pushResult = await pushRefreshedBranch(
+    opts.git,
+    opts.branch,
+    opts.projectRoot,
+    opts.entry,
+    log,
+  );
+
+  if (!pushResult.pushed) {
+    // Lease rejected (or other push failure): discard the local result,
+    // escalate with the concrete reason, do not retry.
+    await escalate(opts.prUrl, 'lease-push', pushResult.reason, opts.gh);
+    return { published: false, stage: 'lease-push', reason: pushResult.reason };
+  }
+
+  // Push succeeded: restore the `mergeable` label. This is best-effort —
+  // addLabel never throws, so a gh failure here is only logged (via the
+  // injected `log`) and never rolls back the push or triggers escalation.
+  // The next tick's normal label pass reconciles the label if this fails.
+  const runGh = opts.gh.runGh ?? makeProductionGh();
+  await addLabel(runGh, opts.gh.cwd, opts.prUrl, 'mergeable', log);
+
+  return { published: true };
+}
+
+/**
  * Options for {@link escalate}.
  */
 export interface EscalateOpts {
