@@ -48,6 +48,7 @@ import { restRemoveLabelArgs } from './pr-labels.js';
 import { claimUnblocked, type DependencyClaimQueue } from './engineer/intake/dependency-claim.js';
 import type { Envelope } from './engineer/intake/port.js';
 import { createBlockerResolver } from './blocker-resolver.js';
+import { createDeliveryGuardedQueue } from './engineer/intake/delivery-guard.js';
 import { parseDependencyProse, createDependencyLinks, runMigration } from './engineer/issue-dep-migration.js';
 
 /**
@@ -790,16 +791,27 @@ export async function dispatchEngineer(
     // /engineer skill can route it. claim+ack removes it from the inbox (the ledger
     // is the durable record); the ledger advances to `claimed`. On an empty inbox,
     // reports {empty:true} — the skill then falls back to a CLI idea arg or chat.
+    //
+    // The file queue is wrapped with createDeliveryGuardedQueue (Task 8, TR-1) to detect
+    // and heal stale entries (duplicate envelopes, delivered PRs) transparently.
     case 'claim': {
       const engDir = engineerDir ?? resolveEngineerDir({});
       const { ledger, queue } = buildIntake({ engineerDir: engDir, registryPath, gh, printErr });
+
+      // Wrap the queue with the delivery guard decorator (Task 8: integration point).
+      // The guard is transparent to claimUnblocked; it only filters/heals problematic
+      // candidates via ledger + gh state checks.
+      const guardedQueue = createDeliveryGuardedQueue(queue, ledger, {
+        gh,
+        logger: { info: (msg) => printErr(msg) },
+      });
 
       // Fresh resolver per claim call — createBlockerResolver()'s memo is scoped
       // to a single walk, so reusing one across calls would leak stale verdicts
       // (see daemon-backlog.ts:210-221 for the same rule on the daemon side).
       const resolver = createBlockerResolver({ run: (args) => gh(args, { cwd: process.cwd() }) });
       const outcome = await claimUnblocked({
-        queue: queue as unknown as DependencyClaimQueue,
+        queue: guardedQueue as unknown as DependencyClaimQueue,
         resolveDependency: (sourceRef) => resolver.resolve(sourceRef ?? ''),
       });
 
