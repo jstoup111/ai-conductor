@@ -1944,6 +1944,38 @@ describe('engine/conductor', () => {
     exitSpy.mockRestore();
   });
 
+  it('de-registers signal handlers on normal exit', async () => {
+    const processOnSpy = vi.spyOn(process, 'on').mockReturnValue(process);
+    const processOffSpy = vi.spyOn(process, 'off').mockReturnValue(process);
+
+    const runner: StepRunner = {
+      run: async () => {
+        return { success: true };
+      },
+    };
+
+    const conductor = new Conductor({ projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events });
+    await conductor.run();
+
+    // Signal handlers should have been de-registered on normal exit
+    expect(processOffSpy).toHaveBeenCalledWith('SIGINT', expect.any(Function));
+    expect(processOffSpy).toHaveBeenCalledWith('SIGTERM', expect.any(Function));
+    expect(processOffSpy).toHaveBeenCalledWith('SIGHUP', expect.any(Function));
+
+    // Verify that in the finally block, signal handlers were de-registered
+    // There may be other process.off calls in early return paths, so we check
+    // that the finally block calls are present (last 3 calls should be them)
+    const allCalls = processOffSpy.mock.calls;
+    const lastThreeCalls = allCalls.slice(-3);
+
+    expect(lastThreeCalls.some(call => call[0] === 'SIGINT')).toBe(true);
+    expect(lastThreeCalls.some(call => call[0] === 'SIGTERM')).toBe(true);
+    expect(lastThreeCalls.some(call => call[0] === 'SIGHUP')).toBe(true);
+
+    processOnSpy.mockRestore();
+    processOffSpy.mockRestore();
+  });
+
   describe('backward navigation', () => {
     it('getNavigableSteps returns only done and stale steps', () => {
       const state: ConductState = {
