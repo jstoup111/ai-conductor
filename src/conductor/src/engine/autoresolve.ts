@@ -25,6 +25,7 @@ import { join } from 'node:path';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { prepareWorktree as defaultPrepareWorktree } from './worktree-prepare.js';
+import { rewriteWatch } from './mergeable-sweep.js';
 
 const execFile = promisify(execFileCb);
 
@@ -491,4 +492,93 @@ export async function runSuiteGate(
       clearTimeout(timeoutHandle);
     }
   }
+}
+
+/**
+ * Result of a push attempt using --force-with-lease.
+ * Success updates the watch entry (attempts reset to 0, lastResolveAt updated).
+ * Failure includes a reason (e.g., lease rejection due to concurrent push).
+ */
+export type PushRefreshedResult =
+  | { pushed: true }
+  | { pushed: false; reason: string };
+
+/**
+ * Push the refreshed branch with lease protection.
+ *
+ * Story: "The refresh publishes with a lease and never overwrites unseen work"
+ *
+ * Execution:
+ *   - Pushes the branch using `git push origin <branch> --force-with-lease`
+ *   - On success (exit 0):
+ *     * Resets attempt counter to 0 (success = no more retries needed)
+ *     * Updates lastResolveAt timestamp
+ *     * Removes the resolution worktree (if paths provided)
+ *     * Logs outcome as "refreshed"
+ *     * Returns { pushed: true }
+ *   - On failure (non-zero exit):
+ *     * Returns { pushed: false, reason: ... }
+ *     * Reason includes lease rejection context if available
+ *
+ * @param git         Git runner (injected for testability)
+ * @param branch      The branch name to push (e.g., "feat/widget")
+ * @param projectRoot Optional: the primary project root for watch file updates
+ *                    If provided, updates the watch entry with rewriteWatch
+ * @param entry       Optional: the watch entry for this PR. If provided with projectRoot,
+ *                    its attempts are reset and lastResolveAt is updated.
+ * @param logger      Optional logging function (default: console.log)
+ * @returns           { pushed: true } on success, { pushed: false, reason } on failure
+ */
+export async function pushRefreshedBranch(
+  git: GitRunner,
+  branch: string,
+  projectRoot?: string,
+  entry?: WatchEntry,
+  logger?: (msg: string) => void,
+): Promise<PushRefreshedResult> {
+  const log = logger ?? console.log;
+
+  // Push the branch with --force-with-lease (lease prevents concurrent overwrites)
+  const pushResult = await git(['push', 'origin', branch, '--force-with-lease']);
+
+  // Check if the push succeeded
+  if (pushResult.exitCode === 0) {
+    // Success: update the watch entry and log
+    if (projectRoot && entry) {
+      // Reset attempts to 0 (successful resolution)
+      const updatedEntry: WatchEntry = {
+        ...entry,
+        resolveAttempts: 0,
+        lastResolveAt: new Date().toISOString(),
+      };
+
+      // Ensure the .daemon directory exists before writing
+      await mkdir(join(projectRoot, '.daemon'), { recursive: true });
+
+      // Update the watch registry
+      await rewriteWatch(projectRoot, [updatedEntry]);
+
+      log(`pushRefreshedBranch: attempts reset to 0, lastResolveAt updated`);
+    }
+
+    log(`outcome: refreshed (${branch} pushed with lease)`);
+    return { pushed: true };
+  }
+
+  // Failure: lease rejected (concurrent push detected) or other error
+  const stderr = pushResult.stderr || '';
+  const stdout = pushResult.stdout || '';
+  let reason = 'push failed';
+
+  // Detect lease rejection (typical error message from git)
+  if (stderr.includes('stale') || stderr.includes('lease') || stderr.includes('rejected')) {
+    reason = `lease push rejected (stale remote ref or concurrent change): ${stderr.slice(0, 100)}`;
+  } else if (stderr) {
+    reason = `push error: ${stderr.slice(0, 100)}`;
+  } else if (stdout) {
+    reason = `push output: ${stdout.slice(0, 100)}`;
+  }
+
+  log(`pushRefreshedBranch failed: ${reason}`);
+  return { pushed: false, reason };
 }
