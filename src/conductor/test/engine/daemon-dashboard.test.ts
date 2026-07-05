@@ -11,6 +11,7 @@ import {
 import type { BacklogItem } from '../../src/engine/daemon.js';
 import type { ComplexityTier } from '../../src/types/index.js';
 import type { PriorityResolution } from '../../src/engine/backlog-priority.js';
+import type { GatedItem } from '../../src/engine/daemon-backlog.js';
 
 function item(slug: string, tier?: ComplexityTier): BacklogItem {
   return tier ? { slug, tier } : { slug };
@@ -116,6 +117,35 @@ describe('engine/daemon-dashboard — scanInheritedState (FR-2/FR-3)', () => {
         prUrl: 'https://github.com/o/r/pull/8',
       },
     ]);
+  });
+
+  it('a slug both processed and gated appears only in PROCESSED (pinned precedence)', async () => {
+    await makeProcessed('dup');
+    const gatedDup: GatedItem = {
+      kind: 'spec',
+      slug: 'dup',
+      reason: 'other-owner',
+      otherOwner: 'someone',
+      remedy: 'ping them',
+    };
+    const gatedOnly: GatedItem = {
+      kind: 'spec',
+      slug: 'only-gated',
+      reason: 'unowned-post-cutover',
+      remedy: 'claim it',
+    };
+
+    const state = await scanInheritedState({
+      worktreeBase,
+      processedDir,
+      discover: async () => ({ items: [], waiting: [], gated: [gatedDup, gatedOnly] }),
+    });
+
+    expect(state.processed.map((p) => p.slug)).toEqual(['dup']);
+    expect((state.gated ?? []).some((g) => g.kind === 'spec' && g.slug === 'dup')).toBe(false);
+    expect((state.gated ?? []).some((g) => g.kind === 'spec' && g.slug === 'only-gated')).toBe(
+      true,
+    );
   });
 
   it('eligible carries the backlog tier; processed carries the persisted PR url', async () => {

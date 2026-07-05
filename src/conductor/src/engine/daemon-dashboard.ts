@@ -102,6 +102,17 @@ export interface InheritedState {
    * built before parking existed.
    */
   parked?: string[];
+  /**
+   * Specs (and repo-scoped conditions) held back by the OWNERSHIP gate
+   * (FR-7/FR-11). Optional for backward compatibility with callers built
+   * before owner-gating existed — a bare-array or waiting-only `discover()`
+   * return yields no gated items. `kind: 'spec'` entries carry a `slug` and
+   * participate in the same precedence chain as WAITING (HALTED > PROCESSED
+   * > IN-PROGRESS > GATED > WAITING > ELIGIBLE): a slug already surfaced in a
+   * higher-precedence bucket is excluded here. `kind: 'repo'` entries have no
+   * slug and are never filtered by precedence.
+   */
+  gated?: GatedItem[];
 }
 
 export interface ScanInheritedStateDeps {
@@ -309,11 +320,23 @@ export async function scanInheritedState(
   // bare-array `discover()` (pre-widened callers) yields no waiting items.
   let eligible: EligibleEntry[] = [];
   let waiting: WaitingEntry[] = [];
+  let gated: GatedItem[] = [];
   let priorityResolution: PriorityResolution | undefined;
   try {
     const result = await deps.discover();
     const backlog = Array.isArray(result) ? result : result.items;
     waiting = Array.isArray(result) ? [] : result.waiting;
+    const rawGated = Array.isArray(result) ? [] : (result.gated ?? []);
+    const inProgressSlugs = new Set(inProgress.map((p) => p.slug));
+    // GATED precedence: HALTED > PROCESSED > IN-PROGRESS > GATED — a `kind:
+    // 'spec'` entry already surfaced in a higher-precedence bucket is dropped
+    // here rather than double-listed. `kind: 'repo'` entries have no slug and
+    // are never filtered.
+    gated = rawGated.filter(
+      (g) =>
+        g.kind !== 'spec' ||
+        (!haltedSlugs.has(g.slug) && !processedSlugs.has(g.slug) && !inProgressSlugs.has(g.slug)),
+    );
     const backlogItems = backlog.filter((b) => !haltedSlugs.has(b.slug) && !processedSlugs.has(b.slug));
     eligible = backlogItems.map((b) => ({
       slug: b.slug,
@@ -339,7 +362,16 @@ export async function scanInheritedState(
     );
   }
 
-  return { halted, inProgress, eligible, processed, processedCount: processed.length, waiting, priorityResolution };
+  return {
+    halted,
+    inProgress,
+    eligible,
+    processed,
+    processedCount: processed.length,
+    waiting,
+    gated,
+    priorityResolution,
+  };
 }
 
 // ── Render helpers ────────────────────────────────────────────────────────────
