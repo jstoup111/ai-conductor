@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { GhRunner } from '../../src/engine/pr-labels.js';
+import { resolveSpecPrUrl } from '../../src/engine/pr-labels.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Covers: FR-8, FR-10, FR-12
@@ -281,5 +282,72 @@ describe('owner-gate PR write-back acceptance (Covers: FR-8, FR-10, FR-12)', () 
     await mod.announceGatedPr(OTHER_OWNER_ENTRY, PR_URL, { runGh: gh, cwd: '/repo' });
 
     expect(commentPosted).toBe(true);
+  });
+
+  // ── daemon-cli resolution seam (Task 5, remediation for FR-8) ────────────
+  //
+  // Gated specs are discovered pre-dispatch, so per-slug worktree state is
+  // normally absent (see daemon-cli.ts `announceGated`): the PR url is
+  // resolved by falling back to `resolveSpecPrUrl(ownerGh, projectRoot,
+  // 'spec/<slug>', log)` against origin. These two tests pin that exact
+  // fallback seam end-to-end: (a) a resolvable PR gets labeled and announced
+  // idempotently, (b) no PR on origin never triggers draft PR creation.
+
+  it('a gated spec with NO worktree conduct-state resolves its PR via spec/<slug> from origin, labels it, and stays at exactly one marker comment across two scans', async () => {
+    const mod = await loadGateWriteback();
+    const slug = '2026-07-02-bar';
+    const branch = `spec/${slug}`;
+    const comments: Array<{ body: string; url: string }> = [];
+    const calls: string[][] = [];
+    const gh: GhRunner = async (args) => {
+      calls.push([...args]);
+      if (args[0] === 'pr' && args[1] === 'list' && args.includes('--head') && args.includes(branch)) {
+        return { stdout: JSON.stringify([{ url: PR_URL, state: 'MERGED' }]) };
+      }
+      if (args[0] === 'pr' && args[1] === 'view' && args.includes('comments')) {
+        return { stdout: JSON.stringify({ comments }) };
+      }
+      if (args[0] === 'pr' && args[1] === 'comment') {
+        comments.push({ body: `${mod.OWNER_GATED_MARKER}\nowner-gated: other-owner (alice)`, url: `${PR_URL}#issuecomment-9101` });
+        return { stdout: '' };
+      }
+      return { stdout: '' }; // ensureLabel / addLabel (POST) / PATCH
+    };
+
+    // No per-slug worktree state exists for this spec — the daemon falls
+    // back to resolving the PR from origin by its spec/<slug> branch.
+    const prUrl = await resolveSpecPrUrl(gh, '/repo', branch);
+    expect(prUrl).toBe(PR_URL);
+
+    await mod.announceGatedPr(OTHER_OWNER_ENTRY, prUrl as string, { runGh: gh, cwd: '/repo' });
+
+    const labelAddCall = calls.find(
+      (c) => c[0] === 'api' && c.some((a) => a.includes('/labels')) && c.includes('POST'),
+    );
+    expect(labelAddCall).toBeDefined();
+    expect(calls.filter((c) => c[0] === 'pr' && c[1] === 'comment').length).toBe(1);
+
+    // A second scan pass of the same gated spec must not create a second
+    // marker comment — the PRD requires exactly one after repeated scans.
+    await mod.announceGatedPr(OTHER_OWNER_ENTRY, prUrl as string, { runGh: gh, cwd: '/repo' });
+    expect(calls.filter((c) => c[0] === 'pr' && c[1] === 'comment').length).toBe(1);
+  });
+
+  it('no PR exists on origin for spec/<slug> (local-commit fallback): resolveSpecPrUrl yields undefined and no draft PR is ever created', async () => {
+    const slug = '2026-07-02-baz';
+    const branch = `spec/${slug}`;
+    const calls: string[][] = [];
+    const gh: GhRunner = async (args) => {
+      calls.push([...args]);
+      if (args[0] === 'pr' && args[1] === 'list' && args.includes('--head') && args.includes(branch)) {
+        return { stdout: JSON.stringify([]) };
+      }
+      return { stdout: '' };
+    };
+
+    const prUrl = await resolveSpecPrUrl(gh, '/repo', branch);
+
+    expect(prUrl).toBeUndefined();
+    expect(calls.some((c) => c[0] === 'pr' && c[1] === 'create')).toBe(false);
   });
 });
