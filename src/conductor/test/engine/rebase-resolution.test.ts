@@ -475,3 +475,274 @@ describe('engine/rebase — featureCommitsPreserved (real git)', () => {
     expect(ok).toBe(true);
   });
 });
+
+describe('engine/rebase — .docs keep-both resolver (happy path)', () => {
+  let repo: string;
+  const g = (args: string[]) => execFile('git', args, { cwd: repo });
+  const gc = (args: string[]) =>
+    execFile('git', ['-c', 'core.editor=true', ...args], { cwd: repo });
+
+  afterEach(async () => {
+    await rm(repo, { recursive: true, force: true });
+  });
+
+  /**
+   * add/add conflict inside .docs/: same file added with different content
+   * on different branches. Expected: both versions kept and staged, rebase continues.
+   */
+  it('.docs/ add/add conflict: both versions kept and staged', async () => {
+    repo = await mkdtemp(join(tmpdir(), 'rebase-docs-addadd-'));
+    await execFile('git', ['init', '-q', '-b', 'main'], { cwd: repo });
+    await g(['config', 'user.email', 't@t.com']);
+    await g(['config', 'user.name', 'T']);
+
+    // Base: init without .docs file
+    await writeFile(join(repo, 'README.md'), 'base\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'init']);
+
+    // Feature branch: adds .docs/design.md with feature content
+    await g(['checkout', '-q', '-b', 'feat']);
+    await execFile('mkdir', ['-p', join(repo, '.docs')], {});
+    await writeFile(join(repo, '.docs/design.md'), 'feature design\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'feat: add design docs']);
+
+    // Main: adds .docs/design.md with main content (add/add conflict)
+    await g(['checkout', '-q', 'main']);
+    await execFile('mkdir', ['-p', join(repo, '.docs')], {});
+    await writeFile(join(repo, '.docs/design.md'), 'main design\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'main: add design docs']);
+
+    // Back to feat, set up for rebase
+    await g(['checkout', '-q', 'feat']);
+
+    // Trigger the conflict
+    const git = makeGitRunner(repo);
+    const pre = await performRebase(git, repo, 'main');
+    expect(pre.kind).toBe('conflict_halt');
+
+    // Use the .docs keep-both resolver
+    const { docsKeepBothResolver } = await import('../../src/engine/rebase.js');
+    const outcome = await resolveRebaseConflicts(git, repo, pre, docsKeepBothResolver, 3);
+
+    // Should resolve cleanly, both versions kept (side-by-side), reclassify as noop (docs-only)
+    expect(outcome.kind).toBe('noop'); // docs-only → no downstream invalidate
+    expect((await g(['rev-list', '--count', 'HEAD..main'])).stdout.trim()).toBe('0');
+    // Both versions of the file should be preserved (in a keep-both resolution, typically
+    // both renamed to avoid collision: design~feature.md and design~main.md)
+    const files = await g(['ls-tree', '-r', '--name-only', 'HEAD']);
+    const paths = files.stdout.trim().split('\n');
+    expect(paths.some((p) => p.includes('.docs') && p.includes('design'))).toBe(true);
+  });
+
+  /**
+   * rename/rename collision inside .docs/: same file renamed differently
+   * on each branch. Expected: both versions kept, staged, rebase continues.
+   */
+  it('.docs/ rename/rename conflict: both renamed versions kept and staged', async () => {
+    repo = await mkdtemp(join(tmpdir(), 'rebase-docs-rename-'));
+    await execFile('git', ['init', '-q', '-b', 'main'], { cwd: repo });
+    await g(['config', 'user.email', 't@t.com']);
+    await g(['config', 'user.name', 'T']);
+
+    // Base: create a .docs file to rename
+    await execFile('mkdir', ['-p', join(repo, '.docs')], {});
+    await writeFile(join(repo, '.docs/original.md'), 'content\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'init']);
+
+    // Feature: rename to feature-name.md
+    await g(['checkout', '-q', '-b', 'feat']);
+    await g(['mv', '.docs/original.md', '.docs/feature-name.md']);
+    await g(['commit', '-q', '-m', 'feat: rename to feature-name']);
+
+    // Main: rename to main-name.md
+    await g(['checkout', '-q', 'main']);
+    await g(['mv', '.docs/original.md', '.docs/main-name.md']);
+    await g(['commit', '-q', '-m', 'main: rename to main-name']);
+
+    // Back to feat
+    await g(['checkout', '-q', 'feat']);
+
+    // Trigger the conflict
+    const git = makeGitRunner(repo);
+    const pre = await performRebase(git, repo, 'main');
+    expect(pre.kind).toBe('conflict_halt');
+
+    // Use the .docs keep-both resolver
+    const { docsKeepBothResolver } = await import('../../src/engine/rebase.js');
+    const outcome = await resolveRebaseConflicts(git, repo, pre, docsKeepBothResolver, 3);
+
+    // Should resolve cleanly, both renamed versions kept, reclassify as noop
+    expect(outcome.kind).toBe('noop'); // docs-only → no downstream invalidate
+    expect((await g(['rev-list', '--count', 'HEAD..main'])).stdout.trim()).toBe('0');
+    // Both renamed files should exist at HEAD
+    const featureName = await execFile('git', ['show', 'HEAD:.docs/feature-name.md'], { cwd: repo });
+    const mainName = await execFile('git', ['show', 'HEAD:.docs/main-name.md'], { cwd: repo });
+    expect(featureName.stdout).toContain('content');
+    expect(mainName.stdout).toContain('content');
+  });
+
+  /**
+   * Non-.docs/ conflict mixed with .docs/ conflict: resolver should reject
+   * since it only handles pure .docs/ conflicts.
+   */
+  it('.docs/ resolver rejects mixed .docs/ + non-.docs/ conflicts', async () => {
+    repo = await mkdtemp(join(tmpdir(), 'rebase-docs-mixed-'));
+    await execFile('git', ['init', '-q', '-b', 'main'], { cwd: repo });
+    await g(['config', 'user.email', 't@t.com']);
+    await g(['config', 'user.name', 'T']);
+
+    // Base: init with both files
+    await execFile('mkdir', ['-p', join(repo, '.docs')], {});
+    await execFile('mkdir', ['-p', join(repo, 'src')], {});
+    await writeFile(join(repo, 'src/code.ts'), 'base code\n');
+    await writeFile(join(repo, '.docs/design.md'), 'base design\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'init']);
+
+    // Feature: change both files
+    await g(['checkout', '-q', '-b', 'feat']);
+    await writeFile(join(repo, 'src/code.ts'), 'feature code\n');
+    await writeFile(join(repo, '.docs/design.md'), 'feature design\n');
+    await g(['commit', '-q', '-am', 'feat: change both']);
+
+    // Main: change both files differently (conflict on both)
+    await g(['checkout', '-q', 'main']);
+    await writeFile(join(repo, 'src/code.ts'), 'main code\n');
+    await writeFile(join(repo, '.docs/design.md'), 'main design\n');
+    await g(['commit', '-q', '-am', 'main: change both']);
+
+    // Back to feat
+    await g(['checkout', '-q', 'feat']);
+
+    // Trigger the conflict
+    const git = makeGitRunner(repo);
+    const pre = await performRebase(git, repo, 'main');
+    expect(pre.kind).toBe('conflict_halt');
+    expect(pre.conflicts.length).toBe(2);
+
+    // Use the .docs keep-both resolver
+    const { docsKeepBothResolver } = await import('../../src/engine/rebase.js');
+    const outcome = await resolveRebaseConflicts(git, repo, pre, docsKeepBothResolver, 1);
+
+    // Should reject because src/code.ts is not in .docs/
+    expect(outcome.kind).toBe('conflict_halt');
+    if (outcome.kind === 'conflict_halt') {
+      expect(outcome.reason).toContain('non-.docs/');
+    }
+  });
+
+  /**
+   * .docs/ add/add conflict with proper file staging verification.
+   * After resolution, both versions should be committed and properly staged.
+   */
+  it('.docs/ resolved files are properly committed and in the final tree', async () => {
+    repo = await mkdtemp(join(tmpdir(), 'rebase-docs-staging-'));
+    await execFile('git', ['init', '-q', '-b', 'main'], { cwd: repo });
+    await g(['config', 'user.email', 't@t.com']);
+    await g(['config', 'user.name', 'T']);
+
+    // Base: init without .docs file
+    await writeFile(join(repo, 'README.md'), 'base\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'init']);
+
+    // Feature branch: adds .docs/notes.md with feature content
+    await g(['checkout', '-q', '-b', 'feat']);
+    await execFile('mkdir', ['-p', join(repo, '.docs')], {});
+    await writeFile(join(repo, '.docs/notes.md'), 'feature notes\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'feat: add notes']);
+
+    // Main: adds .docs/notes.md with main content (add/add conflict)
+    await g(['checkout', '-q', 'main']);
+    await execFile('mkdir', ['-p', join(repo, '.docs')], {});
+    await writeFile(join(repo, '.docs/notes.md'), 'main notes\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'main: add notes']);
+
+    // Back to feat
+    await g(['checkout', '-q', 'feat']);
+
+    // Trigger the conflict
+    const git = makeGitRunner(repo);
+    const pre = await performRebase(git, repo, 'main');
+    expect(pre.kind).toBe('conflict_halt');
+
+    // Use the .docs keep-both resolver
+    const { docsKeepBothResolver } = await import('../../src/engine/rebase.js');
+    const outcome = await resolveRebaseConflicts(git, repo, pre, docsKeepBothResolver, 3);
+
+    // Should resolve cleanly
+    expect(outcome.kind).toBe('noop');
+    expect((await g(['rev-list', '--count', 'HEAD..main'])).stdout.trim()).toBe('0');
+
+    // Both versions should exist in the final tree
+    const files = await g(['ls-tree', '-r', '--name-only', 'HEAD']);
+    const paths = files.stdout.trim().split('\n');
+    const docsFiles = paths.filter((p) => p.startsWith('.docs/'));
+    expect(docsFiles.length).toBeGreaterThanOrEqual(2); // At least both versions
+    expect(paths.some((p) => p.includes('notes~ours'))).toBe(true);
+    expect(paths.some((p) => p.includes('notes~theirs'))).toBe(true);
+  });
+
+  /**
+   * Non-conflicted .docs/ files remain unchanged when resolving an add/add conflict
+   * in a different .docs/ file.
+   */
+  it('non-conflicted .docs/ files remain unchanged during resolution', async () => {
+    repo = await mkdtemp(join(tmpdir(), 'rebase-docs-unchanged-'));
+    await execFile('git', ['init', '-q', '-b', 'main'], { cwd: repo });
+    await g(['config', 'user.email', 't@t.com']);
+    await g(['config', 'user.name', 'T']);
+
+    // Base: init with a stable .docs file
+    await execFile('mkdir', ['-p', join(repo, '.docs')], {});
+    await writeFile(join(repo, '.docs/stable.md'), 'stable content\n');
+    await writeFile(join(repo, 'README.md'), 'base\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'init']);
+
+    // Feature: add .docs/design.md, don't touch stable.md
+    await g(['checkout', '-q', '-b', 'feat']);
+    await writeFile(join(repo, '.docs/design.md'), 'feature design\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'feat: add design']);
+
+    // Main: add .docs/design.md differently, don't touch stable.md (add/add conflict on design only)
+    await g(['checkout', '-q', 'main']);
+    await writeFile(join(repo, '.docs/design.md'), 'main design\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'main: add design']);
+
+    // Back to feat
+    await g(['checkout', '-q', 'feat']);
+
+    // Trigger the conflict
+    const git = makeGitRunner(repo);
+    const pre = await performRebase(git, repo, 'main');
+    expect(pre.kind).toBe('conflict_halt');
+
+    // Use the .docs keep-both resolver
+    const { docsKeepBothResolver } = await import('../../src/engine/rebase.js');
+    const outcome = await resolveRebaseConflicts(git, repo, pre, docsKeepBothResolver, 3);
+
+    // Should resolve cleanly
+    expect(outcome.kind).toBe('noop');
+    expect((await g(['rev-list', '--count', 'HEAD..main'])).stdout.trim()).toBe('0');
+
+    // stable.md should still exist with original content
+    const stableFile = await execFile('git', ['show', 'HEAD:.docs/stable.md'], { cwd: repo });
+    expect(stableFile.stdout).toContain('stable content');
+
+    // Both versions of design.md should exist
+    const files = await g(['ls-tree', '-r', '--name-only', 'HEAD']);
+    const paths = files.stdout.trim().split('\n');
+    expect(paths).toContain('.docs/stable.md');
+    expect(paths.some((p) => p.includes('design~ours'))).toBe(true);
+    expect(paths.some((p) => p.includes('design~theirs'))).toBe(true);
+  });
+});

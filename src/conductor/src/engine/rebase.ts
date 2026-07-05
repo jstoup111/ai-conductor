@@ -815,3 +815,182 @@ export async function readChangelogIfPresent(
     return null;
   }
 }
+
+// ── .docs keep-both resolver ────────────────────────────────────────────────
+
+/**
+ * Deterministic resolver for .docs/ conflicts: keep both sides of add/add or
+ * rename/rename conflicts by preserving both versions with distinct names,
+ * then stage and continue the rebase.
+ *
+ * Only processes conflicts in .docs/; non-.docs/ conflicts are rejected
+ * (caller should route to different resolvers or HALT).
+ *
+ * Returns {resolved: true} when all .docs/ conflicts are kept-both resolved
+ * and the rebase --continue succeeds. Returns {resolved: false, reason} if
+ * any conflict is outside .docs/ or if rebase --continue fails.
+ */
+export const docsKeepBothResolver: RebaseResolver = async (ctx) => {
+  const { conflicts, projectRoot, baseRef } = ctx;
+
+  // Only resolve .docs/ conflicts; anything else is not our domain.
+  if (!conflicts.every((f) => f.startsWith('.docs/'))) {
+    return { resolved: false, reason: 'non-.docs/ conflicts cannot be keep-both resolved' };
+  }
+
+  const git = makeGitRunner(projectRoot);
+
+  try {
+    // Resolve each .docs/ conflict by keeping both sides.
+    // For rename/rename conflicts, multiple paths might be in the conflicts list but belong
+    // to the same conflict (original file + both renamed versions). We process them and then
+    // use git add -A to stage everything in .docs/.
+    for (const conflictedFile of conflicts) {
+      await resolveDocsConflictKeepBoth(git, projectRoot, conflictedFile);
+    }
+
+    // Stage all changes in .docs/ directory (covers add/add and rename/rename resolutions).
+    const stageResult = await git(['add', '-A', '.docs/']);
+    if (stageResult.exitCode !== 0) {
+      return { resolved: false, reason: 'failed to stage resolved .docs/ files' };
+    }
+
+    // Continue the rebase.
+    const cont = await git(['-c', 'core.editor=true', 'rebase', '--continue']);
+    if (cont.exitCode !== 0) {
+      return { resolved: false, reason: 'rebase --continue failed after .docs keep-both resolution' };
+    }
+
+    return { resolved: true };
+  } catch (e) {
+    return { resolved: false, reason: `unexpected error during .docs resolution: ${String(e)}` };
+  }
+};
+
+/**
+ * Resolve a single .docs/ conflict by keeping both versions. Handles:
+ *   - add/add: write both stage 2 and stage 3 to distinct filenames
+ *   - rename/rename: both renamed versions already distinct, just keep both
+ *
+ * Returns the paths of resolved files to be staged.
+ */
+async function resolveDocsConflictKeepBoth(
+  git: GitRunner,
+  projectRoot: string,
+  conflictedFile: string,
+): Promise<string[]> {
+  const resolvedPaths: string[] = [];
+
+  // Get the unmerged status to determine conflict type.
+  const statusR = await git(['ls-files', '--stage', conflictedFile]);
+  const stages = statusR.stdout
+    .trim()
+    .split('\n')
+    .filter((l) => l.length > 0);
+
+  if (stages.length === 0) {
+    // File not in index — shouldn't happen, but no-op.
+    return resolvedPaths;
+  }
+
+  // Parse stages: each line is "mode hash stage\tpath"
+  // Stages: 1 = common ancestor, 2 = ours (base), 3 = theirs (feature).
+  const stageMap = new Map<number, string>();
+  for (const line of stages) {
+    const m = line.match(/^(\d+)\s+[0-9a-f]+\s+(\d+)\t(.+)$/);
+    if (m) {
+      const stage = parseInt(m[2], 10);
+      const path = m[3];
+      stageMap.set(stage, path);
+    }
+  }
+
+  // Determine the conflict type by which stages are present.
+  const hasStage1 = stageMap.has(1);
+  const hasStage2 = stageMap.has(2);
+  const hasStage3 = stageMap.has(3);
+
+  if (!hasStage2 || !hasStage3) {
+    // Not a typical conflict with both sides — shouldn't happen.
+    return resolvedPaths;
+  }
+
+  if (!hasStage1) {
+    // add/add conflict: both sides added the file, no common ancestor.
+    // Write both versions with suffixes to distinguish them.
+    const { dir, name, ext } = parsePath(conflictedFile);
+    const base2 = await git(['show', `:2:${conflictedFile}`]);
+    const base3 = await git(['show', `:3:${conflictedFile}`]);
+
+    if (base2.exitCode === 0 && base3.exitCode === 0) {
+      const path2 = join(dir, `${name}~ours${ext}`);
+      const path3 = join(dir, `${name}~theirs${ext}`);
+      await writeFile(join(projectRoot, path2), base2.stdout, 'utf-8');
+      await writeFile(join(projectRoot, path3), base3.stdout, 'utf-8');
+      resolvedPaths.push(path2, path3);
+      // Remove the conflicted entry itself from the index.
+      await git(['rm', conflictedFile]);
+    }
+  } else {
+    // rename/rename conflict: both sides renamed the same file differently.
+    // We need to extract both versions and write them to their renamed paths,
+    // then stage them.
+    const stage2Path = stageMap.get(2);
+    const stage3Path = stageMap.get(3);
+
+    if (stage2Path && stage3Path) {
+      // Extract the content from both stages.
+      const stage2Content = await git(['show', `:2:${conflictedFile}`]);
+      const stage3Content = await git(['show', `:3:${conflictedFile}`]);
+
+      // If the git show commands fail, try using the renamed paths directly.
+      let content2: string = '';
+      let content3: string = '';
+
+      if (stage2Content.exitCode === 0) {
+        content2 = stage2Content.stdout;
+      } else {
+        // Fallback: try to read from the renamed path in the index
+        const fallback2 = await git(['show', `:2:${stage2Path}`]);
+        if (fallback2.exitCode === 0) content2 = fallback2.stdout;
+      }
+
+      if (stage3Content.exitCode === 0) {
+        content3 = stage3Content.stdout;
+      } else {
+        // Fallback: try to read from the renamed path in the index
+        const fallback3 = await git(['show', `:3:${stage3Path}`]);
+        if (fallback3.exitCode === 0) content3 = fallback3.stdout;
+      }
+
+      // Write both versions to their renamed paths if we have content.
+      if (content2 || content3) {
+        if (content2) {
+          await writeFile(join(projectRoot, stage2Path), content2, 'utf-8');
+          resolvedPaths.push(stage2Path);
+        }
+        if (content3) {
+          await writeFile(join(projectRoot, stage3Path), content3, 'utf-8');
+          resolvedPaths.push(stage3Path);
+        }
+        // Remove the original conflicted file from the index.
+        await git(['rm', '--cached', conflictedFile]);
+      }
+    }
+  }
+
+  return resolvedPaths;
+}
+
+/** Parse a path into {dir, name, ext} for suffix manipulation. */
+function parsePath(path: string): { dir: string; name: string; ext: string } {
+  const lastSlash = path.lastIndexOf('/');
+  const dir = lastSlash >= 0 ? path.slice(0, lastSlash) : '.';
+  const file = lastSlash >= 0 ? path.slice(lastSlash + 1) : path;
+
+  const lastDot = file.lastIndexOf('.');
+  const name = lastDot >= 0 ? file.slice(0, lastDot) : file;
+  const ext = lastDot >= 0 ? file.slice(lastDot) : '';
+
+  return { dir, name, ext };
+}
