@@ -216,19 +216,21 @@ describe('gate-writeback (Task 17)', () => {
 
     // ── Task 19: write-back failure semantics (S6 NP-1..NP-5) ──────────────
 
-    it('NP-1: skips silently when the target PR is already MERGED (no label/comment calls)', async () => {
+    it('FR-8: announces (label + comment) when the target PR is already MERGED', async () => {
       const { gh, calls } = fakeGh([
-        { stdout: JSON.stringify({ state: 'MERGED', mergeable: 'UNKNOWN', statusCheckRollup: [], labels: [] }) },
+        { stdout: JSON.stringify({ state: 'MERGED', mergeable: 'UNKNOWN', statusCheckRollup: [], labels: [] }) }, // prMergeState
+        { stdout: '' }, // ensureLabel
+        { stdout: '' }, // addLabel
+        { stdout: JSON.stringify({ comments: [] }) }, // upsertComment lookup
+        { stdout: '' }, // create comment
       ]);
-      const logs: string[] = [];
 
-      await announceGatedPr(SPEC, PR_URL, { runGh: gh, cwd: '/repo', log: (m) => logs.push(m) });
+      await announceGatedPr(SPEC, PR_URL, { runGh: gh, cwd: '/repo' });
 
-      // Only the merge-state lookup call — no label/comment calls at all.
-      expect(calls.length).toBe(1);
-      expect(calls.some((c) => c.join(' ').includes('labels[]=owner-gated'))).toBe(false);
-      expect(calls.some((c) => c.join(' ').includes(OWNER_GATED_MARKER))).toBe(false);
-      expect(logs.some((m) => m.includes('MERGED'))).toBe(true);
+      // The owner gate runs only on already-merged specs, so a MERGED PR
+      // must still be labeled/commented — it was never announced while open.
+      expect(calls.some((c) => c.join(' ').includes('labels[]=owner-gated'))).toBe(true);
+      expect(calls.some((c) => c.join(' ').includes(OWNER_GATED_MARKER))).toBe(true);
     });
 
     it('NP-1: skips silently when the target PR is already CLOSED', async () => {

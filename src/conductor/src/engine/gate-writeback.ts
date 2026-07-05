@@ -29,13 +29,18 @@ import { parseSourceRef } from './engineer/issue-ref.js';
 export { OWNER_GATED_MARKER };
 
 /**
- * PR states for which write-back is a no-op: the PR has already left the
- * "open" lifecycle, so there is nothing left to label/comment on. A PR that
- * merged was presumably already announced while open; a closed PR is dead.
- * `NOTFOUND` (deleted/inaccessible) is treated the same way — see
- * {@link announceGatedPr}.
+ * PR states for which write-back is a no-op: the PR is dead and there is
+ * nothing left to label/comment on. `NOTFOUND` (deleted/inaccessible) is
+ * treated the same way — see {@link announceGatedPr}.
+ *
+ * `MERGED` is deliberately NOT in this set. The owner gate runs only on
+ * specs whose PR has already been merged onto the base branch (gating
+ * happens pre-dispatch, after merge), so every gated spec's PR is MERGED by
+ * the time write-back runs. Skipping MERGED here would mean gated specs are
+ * never announced at all — there is no "while it was open" window in which
+ * the announcement could have already happened.
  */
-const TERMINAL_PR_STATES = new Set(['MERGED', 'CLOSED', 'NOTFOUND']);
+const TERMINAL_PR_STATES = new Set(['CLOSED', 'NOTFOUND']);
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -125,11 +130,14 @@ export async function upsertGatedMarkerComment(
  * on yet. Zero git side effects either way: this module never shells out to
  * `git`, only `gh`.
  *
- * If the PR is already MERGED, CLOSED, or genuinely gone (404/NOTFOUND), the
- * write-back is also skipped: a merged PR was presumably already announced
- * while it was open, and there is nothing useful to label/comment on a dead
- * PR. This one `pr view` lookup is the only extra `gh` call added for this
- * check — no retries are attempted regardless of its outcome.
+ * If the PR is already CLOSED or genuinely gone (404/NOTFOUND), the
+ * write-back is also skipped — there is nothing useful to label/comment on
+ * a dead PR. This one `pr view` lookup is the only extra `gh` call added for
+ * this check — no retries are attempted regardless of its outcome.
+ *
+ * A MERGED PR is NOT skipped: the owner gate only runs on specs already
+ * merged onto the base branch, so every gated spec's PR is MERGED by
+ * construction. It is labeled/commented on exactly like an OPEN PR.
  *
  * Both steps (label, comment) are independently best-effort/non-throwing; a
  * failure in one (e.g. a label-add race against a concurrent labeler) does
