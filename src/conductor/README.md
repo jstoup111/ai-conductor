@@ -1114,6 +1114,51 @@ through an injected `gh` runner — it never touches a registered repo's working
 State lives under the engineer dir (`$AI_CONDUCTOR_ENGINEER_DIR`, default `~/.ai-conductor/engineer/`):
 `ledger.json` (dedup + lifecycle) and `inbox/` (the claimable queue).
 
+#### Delivery guard (engineer claim) and recovery (engineer resolve)
+
+The intake system auto-heals duplicate captures and recovers from write-back failures:
+
+**Claim-time delivery guard (`engine/engineer/intake/delivery-guard.ts`).**
+When `engineer claim` is invoked, the guard checks the ledger against the inbox, looking for entries that are already claimed with a prUrl (PR delivered). On finding a duplicate envelope for such an entry:
+- **If the PR is OPEN or MERGED** (PR state known): the entry is marked `done` and the duplicate envelope is dropped from the inbox **without serving it to the session** (re-served with the cached prUrl, status unchanged, ledger writes preserved). Reduces friction from duplicate captures — no session spin, no duplicate work, no loss of delivery proof.
+- **If the PR state is unknown** (API failure, closed-without-merging, or other): the envelope is held **without ledger mutation**. On the next claim, if the PR state resolves, the guard heals and drops it. Unknown-state envelopes are never re-served, preventing stalled-write issues from blocking the queue indefinitely.
+- **Healthy entries pass through unchanged** (no ledger entry, or ledger entry with no prUrl): the guard does no checking and does not interfere with the normal claim path.
+
+Integration modules: `engine/engineer/intake/delivery-guard.ts` (guard logic), wired into `engineer-cli.ts` (the claim path instantiates it and wraps the queue).
+
+**`engineer resolve` recovery subcommand (`engine/engineer/resolve.ts`).**
+Recovers from write-back failures (e.g., a local-commit completed but the spec PR delivery never happened, or a network timeout during handoff) by marking a claimed entry as delivered. 
+
+**Signature:**
+```
+conduct-ts engineer resolve <sourceRef> --pr-url <url> [--branch <branch>]
+```
+
+**Fields:**
+- `<sourceRef>` — the issue identifier (e.g., `o/a#123`) — parsed from the command line
+- `--pr-url <url>` — the delivered PR URL (https:// or http://) — required, validated before mutation
+- `--branch <branch>` — optional branch name override; if omitted, the ledger's existing branch is preserved
+
+**Behavior:**
+- **Found case (entry exists in ledger)** — transitions the entry from `claimed` (or any status) to `done`, recording the prUrl. If `--branch` is supplied, it overwrites the ledger's existing branch; otherwise, the existing branch is preserved. Returns JSON: `{ kind: 'resolve', sourceRef, priorStatus, prUrl, branch }`, exit 0.
+- **Not-found case (no entry in ledger)** — returns JSON: `{ kind: 'resolve', found: false }`, exit 0 (soft failure, never creates a ledger entry).
+- **Invalid prUrl (not http(s)://)** — returns error on stderr and exits 1.
+- **Idempotent** — running `resolve` multiple times on the same entry with the same prUrl is safe and produces no additional mutations (re-run returns the current status unchanged).
+
+Example:
+```bash
+# Recover from a write-back failure; mark the entry delivered
+conduct-ts engineer resolve o/a#123 --pr-url https://github.com/o/a/pull/456
+
+# Optionally correct the branch if it diverged:
+conduct-ts engineer resolve o/a#123 --pr-url https://github.com/o/a/pull/456 --branch spec/revised
+```
+
+**Integration with claim-time guard (compose pattern, plan Task 13):**
+After `engineer resolve` marks an entry delivered, a subsequent `engineer claim` invokes the delivery guard, which detects the duplicate envelope and heals/drops it — completing the recovery cycle: stranded entry → resolve → entry marked done → next claim drops duplicate via guard.
+
+**Modules:** `engine/engineer/resolve.ts` (resolve command dispatch), `intake/ledger.ts` (ledger transitions).
+
 ### Priority scheduling for daemon backlog ordering
 
 The daemon can reorder eligible features by GitHub issue priority labels, honoring

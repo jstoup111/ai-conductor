@@ -100,6 +100,19 @@ async function rebuildEngineFromSource(conductorRoot: string): Promise<void> {
 }
 
 /**
+ * Absolute path to the running engine's entry file for a harness checkout:
+ * `<projectRoot>/src/conductor/dist/index.js` — the `<conductorRoot>/dist`
+ * symlink target that `publish`/`flipCurrent` maintain (`engine-store.ts`).
+ * The stale-engine checker hashes THIS file to detect drift, so it must be the
+ * real engine artifact. The prior wiring hashed the repo root's `dist/index.js`
+ * (`join(projectRoot, 'dist', ...)`), which never exists — capture always
+ * failed and silently disabled the checker, so no daemon ever auto-restarted.
+ */
+export function engineEntryPathForRepo(projectRoot: string): string {
+  return join(projectRoot, 'src', 'conductor', 'dist', 'index.js');
+}
+
+/**
  * RestartRequester is the injected dependency for restart sequence execution.
  * Called when a stale engine is detected in the idle branch (Task 14+).
  * Implements: write marker → release lock → exit(0).
@@ -329,7 +342,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   }
 
   // Task 8: Capture engine identity at startup and log ARMED/DISARMED status
-  const engineEntryPath = join(projectRoot, 'dist', 'index.js');
+  const engineEntryPath = engineEntryPathForRepo(projectRoot);
   const engineIdentity = await captureEngineIdentity(engineEntryPath);
   if (engineIdentity) {
     log(`daemon identity: ${engineIdentity}`);

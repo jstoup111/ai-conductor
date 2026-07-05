@@ -10,8 +10,31 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ## [Unreleased]
 
+### Fixed
+
+- Prevent re-dispatch of delivered and stranded intake entries via claim-time delivery guard (#243)
+- CI: skipped the `publish-interrupted` `bin/setup worktree compatibility` smoke
+  pending #334. It was authored to self-skip until `bin/setup` existed; `bin/setup`
+  landed (#269) and un-skipped it, but the script resolves its target from its own
+  location (`$0/..`), so invoking the primary's `bin/setup` from a worktree
+  rebuilds the primary and never creates the worktree's `dist` (ENOENT). A
+  pre-existing defect the new CI is the first to exercise; tracked in #334 and
+  skipped so the suite is honestly green rather than red on unrelated breakage.
+- CI: the `engineer-agent-hosted` acceptance suite failed under the new PR
+  workflow (#322) because `dispatchEngineer({kind:'land'})` resolves a
+  machine-scoped owner-gate identity from `~/.ai-conductor/config.yml` (where
+  `spec_owner` wins over the `gh` fallback). With no `spec_owner` and no `gh`
+  auth on the CI runner the land path exited *"identity unresolved"* before
+  reaching the behavior under test — six tests green locally (dev is gh-authed)
+  but red in CI. Fixed by pointing `HOME` at a hermetic fake home carrying
+  `spec_owner` in the suite's `beforeEach` (the same pattern the sibling
+  `engineer-cli-land-owner` and `conductor-owner-stamp` suites already use),
+  so identity resolves deterministically and independently of ambient gh auth.
+
 ### Added
 
+- `engineer resolve` recovery subcommand to mark stranded entries delivered (recover from write-back failures)
+- Local-commit and pr-skipped handoff outcomes now record branch evidence for auditing
 - CI: added a PR-triggered GitHub Actions workflow that runs the harness integrity test suite and the conductor build/vitest suite on every pull request.
 - writing-system-tests: FR→acceptance-spec coverage gate — product-track runs emit a per-FR coverage table (`.pipeline/fr-coverage.md`) and refuse to complete while any FR is unresolved (spec-covered / unit-covered / already-tested dispositions with citations). (#244)
 - **Deep-seam tmux guard prevents real daemon sessions under AI_CONDUCTOR_NO_REAL_EXEC kill-switch (#257).** The default tmux runner in `engine/daemon-tmux.ts` checks the `AI_CONDUCTOR_NO_REAL_EXEC` environment variable before creating a new tmux session. When set to '1' and a daemon session name is targeted, the runner throws an error instead of executing, preventing test suites from leaking real tmux daemon sessions into the system. The kill-switch is set globally by vitest, ensuring all conductor tests run in isolation without spawning long-lived daemon processes.
@@ -71,6 +94,7 @@ Reverting is not supported: if you revert past this version, the `dist` symlink 
 
 ### Fixed
 
+- **Stale-engine checker was silently disabled by a wrong engine path — no daemon ever auto-restarted.** The daemon hashed `<projectRoot>/dist/index.js` for its engine identity, but the harness engine lives at `<projectRoot>/src/conductor/dist/index.js` (`<conductorRoot>/dist`, the symlink `publish`/`flipCurrent` maintain). The wrong path never exists, so `captureEngineIdentity` returned `null`, `createStaleEngineChecker(null)` returned a permanently-disabled checker that always reports `current`, and both the idle-boundary restart (#307) and the dispatch-boundary rebuild-and-restart (#320) were inert — the daemon logged `ARMED` yet also `Engine identity capture failed; stale-engine checker disabled`. Fixed by resolving the entry via a new `engineEntryPathForRepo(projectRoot)`. The identity primitive had unit coverage but its real wiring was never exercised against a self-host layout (orphaned-primitive class); added a regression test that drives the wired path against a real `src/conductor/dist` tree.
 - **Daemon now rebuilds its engine and auto-restarts on stale code *before starting each feature*, not only when the backlog fully drains.** The self-host stale-engine auto-restart (#307) detects drift by content-hashing `dist/index.js` — but #309 untracked `dist`/`dist-versions`, so a merge advances `src/` while the local `dist` artifact never moves, and the checker could never observe merge-driven drift on its own. Compounding it, the check ran only in the drained-idle branch, which a merge that lands new specs *skips* (it takes the dispatch branch) — so the daemon built freshly-merged specs on hours-old engine code. The daemon now, on each dispatch boundary (self-host + armed + quiescent), rebuilds the engine from the fast-forwarded source (content-addressed `npm run build` → atomic `dist` flip; the running pinned `dist-versions/<id>` is never disturbed, and an unchanged build is a no-op) and re-checks staleness; on drift it writes the `RESTART_PENDING` marker and restarts so the **next** feature is built by fresh code. It never fires while a build is in flight (guarded on an empty in-flight pool) and reuses the shipped suppression guard against restart loops; a failed rebuild is logged and degrades to the current engine. Adds an `engine_restart` daemon stop reason. Closes the gap left by the #307 × #309 interaction.
 - **SDLC steps ladder to an available model when their configured model is out of usage credits, instead of silently halting (#315).** Two compounding bugs: (1) the provider only classified a model as unavailable on a non-zero exit, but the CLI prints `You're out of usage credits` on a **zero** exit — so an out-of-credits step was read as a clean success that merely 'forgot' to write its artifact, producing a misleading 'no verdict file' halt and a re-kick thrash. `claude-provider` now detects the credit notice, marks the step not-successful, and flags `modelUnavailable` so `ModelAvailability` walks the fallback ladder to a model with credits. (2) Every SDLC skill hard-pinned `model:` in its frontmatter, which overrode the conductor's per-step (ladder-aware) `--model` and defeated laddering — e.g. the Sonnet-configured as-built review actually ran on Fable and died when Fable's credits ran out. Removed the frontmatter pins from the top-level Fable-driven conductor skills (architecture-review, explore, prd, remediate, rebase), making `MODEL_BY_STEP` the single source of truth; frontmatter pins are kept on nested skills (code-review, simplify, …) where they are load-bearing. Routed the two ladder-bypassing invoke paths (complexity, rebase) through `invokeWithLadder`. Verified end-to-end: with Fable out of credits, the as-built review now runs on Sonnet and records an APPROVED verdict. Follow-up: `debugging` and `engineer` skills remain Fable-pinned (nested/interactive, outside the automated ship path).
 - **Engine build artifacts are no longer committed (#303).** `src/conductor/dist` (symlink) and `dist-versions/` snapshots are untracked and gitignored. They were never meant to be in git — `.gitignore` always ignored `src/conductor/dist/`, but the trailing-slash (directory-only) pattern stopped matching once the lifecycle feature made `dist` a symlink, and builds began committing it plus snapshots. Committed artifacts guaranteed merge conflicts on every engine-touching PR and version drift between committed snapshot and `src/`. Fresh checkouts build locally: `bin/install` runs `npm install + npm run build` in `src/conductor`, and `bin/conduct-ts` fails loudly with a rebuild hint when `dist` is absent. Supersedes the committed-snapshot sync in PR #308.
@@ -1577,23 +1601,6 @@ fi
 ## [Unreleased]
 
 ### Fixed
-- CI: skipped the `publish-interrupted` `bin/setup worktree compatibility` smoke
-  pending #334. It was authored to self-skip until `bin/setup` existed; `bin/setup`
-  landed (#269) and un-skipped it, but the script resolves its target from its own
-  location (`$0/..`), so invoking the primary's `bin/setup` from a worktree
-  rebuilds the primary and never creates the worktree's `dist` (ENOENT). A
-  pre-existing defect the new CI is the first to exercise; tracked in #334 and
-  skipped so the suite is honestly green rather than red on unrelated breakage.
-- CI: the `engineer-agent-hosted` acceptance suite failed under the new PR
-  workflow (#322) because `dispatchEngineer({kind:'land'})` resolves a
-  machine-scoped owner-gate identity from `~/.ai-conductor/config.yml` (where
-  `spec_owner` wins over the `gh` fallback). With no `spec_owner` and no `gh`
-  auth on the CI runner the land path exited *"identity unresolved"* before
-  reaching the behavior under test — six tests green locally (dev is gh-authed)
-  but red in CI. Fixed by pointing `HOME` at a hermetic fake home carrying
-  `spec_owner` in the suite's `beforeEach` (the same pattern the sibling
-  `engineer-cli-land-owner` and `conductor-owner-stamp` suites already use),
-  so identity resolves deterministically and independently of ambient gh auth.
 - conduct-ts: the `engineer` routing adapter (Phase 9.3) built its provider call
   as `provider.invoke({ prompt } as any)`, omitting the **required** `sessionId`
   and `resume` fields of `InvokeOptions`. The `as any` cast hid the type error;
