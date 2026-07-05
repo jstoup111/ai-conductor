@@ -13,6 +13,11 @@ Validates that implemented stories actually work by exercising the running appli
 Automated tests verify code correctness; manual testing verifies the system works end-to-end
 as a user would experience it.
 
+**Correctness gate:** a "story X passes" result is a claim. Per the `/verify-claims` protocol, a
+pass is `verified` — you actually observed the response/behavior — never assumed from the code or
+inferred from a green unit test. If a story was not actually exercised, do not claim it passed;
+report it as untested rather than presenting an assumption as a result.
+
 **Runs AFTER `/finish` and BEFORE `/retro`.**
 
 ## Practices

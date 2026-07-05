@@ -29,12 +29,20 @@ a schema/API, or code. At those points the `verify-claims` skill's protocol appl
   until the operator explicitly approves it. Interactive: present and wait. Autonomous/daemon:
   write a HALT with the assumption ledger — never silently pick the most likely value.
 
-This applies across all skills and dispatched agents. It is enforced concretely at the DECIDE and
-BUILD decision points (`explore`, `prd`, `architecture-review`, `stories`, `plan`, `tdd`,
-`debugging`), which cite `verify-claims` where their assumptions get baked in. It sits *before*
-domain review, conflict-check, and prd-audit — keeping unverified foundations out of the artifacts
-those gates inspect. Casual conversation and trivially-verifiable mechanics with no downstream
-blast radius are out of scope.
+This applies across all skills and dispatched agents, and is enforced concretely by two roles that
+cite `verify-claims` in their own SKILL.md:
+
+- **Authors** (create an artifact) surface assumptions and hard-block before it locks: `explore`,
+  `prd`, `architecture-review`, `stories`, `plan`, `writing-system-tests`.
+- **Verifiers/judges** (render findings/verdicts, don't build) attach a grounded confidence % to
+  every finding and never assert one they haven't verified: `assess`, `conflict-check`,
+  `code-review`, `prd-audit`, `manual-test`, `remediate`, `debugging`.
+
+Execution steps that merely act on an already-gated artifact (`tdd`, `pipeline`), orchestration
+(`conduct`, `engineer`), and mechanical steps (`bootstrap`, `memory`, `architecture-diagram`,
+`simplify`, `retro`, `finish`, `pr`, `rebase`) do **not** self-cite — they rely on this rule and on
+the upstream/surrounding gates. Casual conversation and trivially-verifiable mechanics with no
+downstream blast radius are out of scope.
 
 ## SDLC Phase Flow
 

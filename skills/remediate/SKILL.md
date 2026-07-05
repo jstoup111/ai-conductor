@@ -14,6 +14,12 @@ the `finish` verification reports gaps the daemon would otherwise HALT on, this 
 each blocking gap and decides *how the daemon should proceed* — autonomously where it can,
 human-in-the-loop only where it must.
 
+**Correctness gate:** a gap's disposition and its routing target rest on a claim about the gap's
+nature. Per the `/verify-claims` protocol, ground that classification in the audit evidence with a
+confidence %, and do not auto-route on an unverified assumption about what the gap is — when the
+nature is genuinely uncertain (not just the fix), that low confidence is itself a signal to HALT
+for a human rather than to guess a route.
+
 The daemon should be autonomous. So the default is to **remediate**: translate each gap into
 concrete, file-scoped work and route it back to the right SDLC step. A **HALT** is reserved for the
 two cases a machine genuinely cannot close:

@@ -16,6 +16,12 @@ MISSING` — backed by `file:line` evidence. Any un-accepted, non-`ALIGNED` FR b
 and kicks the feature back to the right phase: **BUILD** to close an implementation gap, or
 **DECIDE** to amend a stale PRD.
 
+**Correctness gate:** each per-FR verdict is a claim that gates the ship. Per the `/verify-claims`
+protocol, every verdict is `verified` against `file:line` evidence, never asserted on an assumption
+about what the code does — if the evidence is ambiguous, mark the verdict **tentative** with its
+confidence rather than declaring `ALIGNED`/`DIVERGED` as fact. A confident-but-wrong verdict is
+exactly a false ship or a false kickback.
+
 This is the final intent-vs-implementation compliance check. It differs from `code-review`, which
 checks code against stories/AC *during* build; prd-audit checks the as-shipped system against the
 PRD's stated intent *after the fact*, and classifies each gap so the kickback lands in the right

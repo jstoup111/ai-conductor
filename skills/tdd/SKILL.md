@@ -13,10 +13,6 @@ Enforces test-driven development with domain integrity as a first-class concern.
 goes through a five-step cycle with subagent isolation — the RED agent only sees tests, the
 GREEN agent only sees source, and the DOMAIN reviewer has veto authority over both.
 
-**Correctness gate:** do not implement on an unstated assumption about how existing code, an API, or
-a schema behaves. Per the `/verify-claims` protocol, verify it (read/run) or, if it is load-bearing
-and cannot be confirmed, surface it and HALT rather than coding against a guess.
-
 ## Practices
 
 ### The Cycle

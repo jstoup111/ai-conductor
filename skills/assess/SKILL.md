@@ -14,6 +14,12 @@ Performs a comprehensive technical assessment of a codebase using 9 specialist a
 deeply evaluate one dimension of code health, followed by a CTO orchestrator that synthesizes
 findings into a prioritized report with opinionated recommendations.
 
+**Correctness gate:** every finding is a claim about the codebase. Per the `/verify-claims`
+protocol, each specialist finding carries a grounded confidence % and its basis (`verified` — you
+observed it in the code — vs `inferred`), never asserts a finding it has not verified, and marks a
+low-confidence judgment as **tentative** rather than stating it as fact. The CTO orchestrator must
+not raise a finding's confidence beyond what its evidence supports when prioritizing.
+
 **Invocation:**
 - **Onboarding:** Runs as part of `/conduct` after bootstrap for existing projects
 - **On-demand:** User invokes `/assess` anytime for a health check

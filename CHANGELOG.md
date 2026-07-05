@@ -39,9 +39,13 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   surfaces every assumption, and HARD-BLOCKS any specced or built work resting on an unconfirmed
   *load-bearing* assumption until the operator approves it (autonomous runs HALT with the assumption
   ledger rather than silently picking the likely value). Armed at load-bearing points by a new
-  HARNESS.md **Correctness & Assumption Gate** rule (not an always-on tax) and cited from the
-  DECIDE/BUILD skills where assumptions get baked in (`explore`, `prd`, `architecture-review`,
-  `stories`, `plan`, `tdd`, `debugging`). Added to the generated model-selection table
+  HARNESS.md **Correctness & Assumption Gate** rule (not an always-on tax) and cited by two roles:
+  **authors** that surface assumptions and hard-block before an artifact locks (`explore`, `prd`,
+  `architecture-review`, `stories`, `plan`, `writing-system-tests`), and **verifiers/judges** that
+  attach a grounded confidence % to every finding/verdict and never assert an unverified one
+  (`assess`, `conflict-check`, `code-review`, `prd-audit`, `manual-test`, `remediate`, `debugging`).
+  Execution/orchestration/mechanical steps (e.g. `tdd`, `pipeline`, `conduct`, `finish`) rely on the
+  rule and surrounding gates rather than self-citing. Added to the generated model-selection table
   (`inherits caller` — runs in the invoking skill's context).
 - `engineer resolve` recovery subcommand to mark stranded entries delivered (recover from write-back failures)
 - Local-commit and pr-skipped handoff outcomes now record branch evidence for auditing

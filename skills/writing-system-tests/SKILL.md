@@ -13,6 +13,11 @@ Generate failing acceptance specs from user stories in `.docs/stories/*.md`. Eac
 criterion (happy AND negative paths) becomes a concrete test. Tests are generated BEFORE
 implementation — they are the RED phase of BDD.
 
+**Correctness gate:** a test encodes an expected-behavior claim. Per the `/verify-claims` protocol,
+if a spec rests on an assumption about what "correct" means that is not pinned by the story's
+acceptance criteria, the FR, or the ADR, surface it with its confidence and HARD-BLOCK for operator
+approval (HALT if autonomous) rather than freezing a guess into a passing/failing assertion.
+
 This skill is **language- and framework-agnostic.** It describes *what* acceptance tests to
 write and *why*; the concrete syntax, test runner, file layout, and fixture mechanism come
 from the project's own conventions. Detect those from the loaded tech-context (see

@@ -13,6 +13,12 @@ Detects when new stories contradict, overlap, or create impossible states with e
 Provides guided resolution so conflicts are resolved before implementation begins — preventing
 the expensive discovery of contradictions during or after coding.
 
+**Correctness gate:** "these two stories conflict" (or "clean") is a judgment call. Per the
+`/verify-claims` protocol, ground each asserted conflict in the specific contradicting text with a
+confidence %, and do not declare a clean pass on the *assumption* that two stories are compatible
+when their interaction was never actually reasoned through — an unexamined pair is not a verified
+clean pass.
+
 ## Practices
 
 ### 1. Inventory
