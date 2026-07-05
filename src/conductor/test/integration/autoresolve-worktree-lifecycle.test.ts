@@ -123,4 +123,50 @@ describe('integration/autoresolve — resolution worktree lifecycle', () => {
     await first;
     expect(secondCallSeen).toBe(false);
   });
+
+  it('calls injected prepareWorktree function during worktree setup (namespace prep injection)', async () => {
+    const autoresolve = await import('../../src/engine/autoresolve.js');
+    const calls: string[] = [];
+    const mockPrepareWorktree = async (worktreePath: string): Promise<void> => {
+      calls.push(worktreePath);
+      // Simulate namespace writing like the real prepareWorktree does
+      await writeFile(join(worktreePath, '.env'), 'WORKTREE_NAMESPACE=resolve_widget\n', 'utf-8');
+    };
+
+    const result = await autoresolve.withResolveWorktree(
+      'widget',
+      'feat/widget',
+      dir,
+      async (worktreePath: string) => {
+        // Verify the prep was called before fn runs
+        expect(calls).toHaveLength(1);
+        expect(calls[0]).toBe(join(dir, '.worktrees', 'resolve-widget'));
+        // Verify namespace is present in .env
+        const env = await readFile(join(worktreePath, '.env'), 'utf-8');
+        expect(env).toContain('WORKTREE_NAMESPACE=resolve_widget');
+        return { ok: true };
+      },
+      mockPrepareWorktree,
+    );
+
+    expect(result).toEqual({ ok: true });
+    expect(calls).toHaveLength(1);
+  });
+
+  it('uses default prepareWorktree when not injected (backward compatibility)', async () => {
+    const autoresolve = await import('../../src/engine/autoresolve.js');
+    const result = await autoresolve.withResolveWorktree(
+      'widget-default',
+      'feat/widget',
+      dir,
+      async (worktreePath: string) => {
+        // Default behavior should still write namespace
+        const env = await readFile(join(worktreePath, '.env'), 'utf-8').catch(() => '');
+        expect(env).toContain('WORKTREE_NAMESPACE');
+        return { ok: true };
+      },
+    );
+
+    expect(result).toEqual({ ok: true });
+  });
 });

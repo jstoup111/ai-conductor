@@ -11,8 +11,9 @@ import { resolveRebaseResolutionAttempts } from './resolved-config.js';
 import type { WatchEntry } from './mergeable-sweep.js';
 import type { PrMergeState } from './pr-labels.js';
 import { execa } from 'execa';
-import { rm, writeFile, mkdir } from 'node:fs/promises';
-import { join, basename } from 'node:path';
+import { rm, mkdir } from 'node:fs/promises';
+import { join } from 'node:path';
+import { prepareWorktree as defaultPrepareWorktree } from './worktree-prepare.js';
 
 /**
  * File system interface — injected for testability.
@@ -156,8 +157,8 @@ const inFlightSlugs = new Set<string>();
  *   2. Remove any stale worktree directory leftover from a crashed prior run
  *   3. Create a fresh worktree at `.worktrees/resolve-<slug>` checked out at
  *      the PR branch tip
- *   4. Write WORKTREE_NAMESPACE into the worktree's `.env` for per-worktree
- *      resource naming (database, redis namespace, etc.)
+ *   4. Prepare the worktree (write WORKTREE_NAMESPACE to .env, run bin/setup)
+ *      using the injected prepareWorktree function (or default)
  *   5. Call the provided async function with the worktree path
  *   6. Always remove the worktree, regardless of success or failure
  *
@@ -166,6 +167,9 @@ const inFlightSlugs = new Set<string>();
  * @param repoCwd The primary checkout directory
  * @param fn Async function that runs inside the worktree, receives the
  *           worktree path as its only argument, returns any value
+ * @param prepareWorktree Optional injected function to prepare the worktree
+ *                        (write namespace, run setup). Defaults to the standard
+ *                        daemon preparation. Useful for testing and custom flows.
  * @returns The return value of fn
  * @throws If the function throws, or if worktree operations fail (add/remove)
  * @throws If a resolution is already in flight for this slug (serial guard)
@@ -175,6 +179,7 @@ export async function withResolveWorktree<T>(
   branch: string,
   repoCwd: string,
   fn: (worktreePath: string) => Promise<T>,
+  prepareWorktree?: (worktreePath: string) => Promise<void>,
 ): Promise<T> {
   // Serial guard: prevent concurrent operations on the same slug
   if (inFlightSlugs.has(slug)) {
@@ -194,9 +199,9 @@ export async function withResolveWorktree<T>(
     // Create a fresh worktree at the branch tip
     await execa('git', ['worktree', 'add', worktreePath, branch], { cwd: repoCwd });
 
-    // Write the namespace into the worktree's .env for per-worktree identity
-    const namespace = sanitizeNamespace(basename(worktreePath));
-    await writeNamespaceEnv(worktreePath, namespace);
+    // Prepare the worktree using the injected prepareWorktree function (or default)
+    const prepare = prepareWorktree ?? defaultPrepareWorktree;
+    await prepare(worktreePath);
 
     // Run the function inside the worktree
     return await fn(worktreePath);
@@ -211,39 +216,4 @@ export async function withResolveWorktree<T>(
       console.error(`failed to remove resolution worktree at ${worktreePath}:`, err);
     }
   }
-}
-
-/**
- * Sanitize a worktree directory name to a token safe as a database or resource name.
- * This is derived from the worktree path, so `resolve-widget` → `resolve_widget`.
- */
-function sanitizeNamespace(raw: string): string {
-  return raw.replace(/[^A-Za-z0-9_]/g, '_');
-}
-
-/**
- * Write WORKTREE_NAMESPACE into the worktree's .env file.
- * Idempotent: replaces an existing entry rather than appending a duplicate.
- */
-async function writeNamespaceEnv(worktreePath: string, namespace: string): Promise<void> {
-  const NAMESPACE_VAR = 'WORKTREE_NAMESPACE';
-  const envPath = join(worktreePath, '.env');
-
-  // Read existing .env if present
-  let existing = '';
-  try {
-    const { stdout } = await execa('cat', [envPath]);
-    existing = stdout;
-  } catch {
-    // No .env yet; we'll create it
-  }
-
-  // Remove any existing WORKTREE_NAMESPACE line and reconstruct
-  const lines = existing.split('\n').filter((l) => !l.startsWith(`${NAMESPACE_VAR}=`));
-  while (lines.length && lines[lines.length - 1].trim() === '') {
-    lines.pop();
-  }
-  lines.push(`${NAMESPACE_VAR}=${namespace}`, '');
-
-  await writeFile(envPath, lines.join('\n'), 'utf-8');
 }
