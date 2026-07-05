@@ -139,6 +139,7 @@ describe('engineer resolve dispatch and validation (integration with dispatchEng
     const parsed = JSON.parse(out[0]);
     expect(parsed).toEqual({
       kind: 'resolve',
+      sourceRef: 'o/a#1',
       found: false,
     });
     expect(err.length).toBe(0);
@@ -159,6 +160,7 @@ describe('engineer resolve dispatch and validation (integration with dispatchEng
     const parsed = JSON.parse(out[0]);
     expect(parsed).toEqual({
       kind: 'resolve',
+      sourceRef: 'o/a#1',
       found: false,
     });
     expect(err.length).toBe(0);
@@ -305,6 +307,7 @@ describe('engineer resolve: happy path (Task 12)', () => {
         const parsed = JSON.parse(out[0]);
         expect(parsed).toEqual({
           kind: 'resolve',
+          sourceRef: 'unknown/repo#999',
           found: false,
         });
       } finally {
