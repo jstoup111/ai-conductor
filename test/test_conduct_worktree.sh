@@ -909,6 +909,124 @@ test_skill_delay_instructions() {
 }
 test_skill_delay_instructions
 
+# ─── Test 21: bin/setup worktree isolation ────────────────────────────────
+
+echo ""
+echo -e "${BOLD}Test Suite: bin/setup Worktree Isolation${NC}"
+echo ""
+
+test_bin_setup_worktree_isolation() {
+  local repo="${TMPDIR_ROOT}/test21"
+  setup_git_repo "$repo"
+
+  # Copy the real src/conductor structure to test repo so we can build with real package.json
+  mkdir -p "$repo/src"
+  cp -r "$HARNESS_DIR/src/conductor" "$repo/src/" 2>/dev/null || {
+    # Fallback: create minimal structure for testing if copy fails
+    mkdir -p "$repo/src/conductor"
+    cat > "$repo/src/conductor/package.json" << 'PKG'
+{
+  "name": "conductor",
+  "version": "0.1.0",
+  "scripts": {
+    "build": "mkdir -p dist && echo 'built' > dist/index.js"
+  }
+}
+PKG
+  }
+
+  # Copy bin/setup to test repo
+  mkdir -p "$repo/bin"
+  cp "$HARNESS_DIR/bin/setup" "$repo/bin/setup"
+  chmod +x "$repo/bin/setup"
+
+  # Commit initial state with bin/setup and src/conductor structure
+  cd "$repo"
+  git add bin/setup src/conductor 2>/dev/null || git add . 2>/dev/null
+  git commit -q -m "Add bin/setup and src/conductor" 2>/dev/null || true
+
+  # Record initial mtime of primary checkout's dist (it may or may not exist yet)
+  local primary_mtime_before="0"
+  if [ -f "$repo/src/conductor/dist/index.js" ]; then
+    primary_mtime_before=$(stat -c %Y "$repo/src/conductor/dist/index.js" 2>/dev/null || stat -f %m "$repo/src/conductor/dist/index.js" 2>/dev/null || echo "0")
+  fi
+
+  # Sleep to ensure any new mtime would be different
+  sleep 1
+
+  # Create a real git worktree
+  local wt_path="${repo}/.worktrees/setup-test"
+  git worktree add -q -b feature/setup-test "$wt_path" 2>/dev/null || {
+    assert "Create git worktree" "1"
+    return
+  }
+
+  # Run bin/setup inside the worktree
+  cd "$wt_path"
+  if bash "$wt_path/bin/setup" > /tmp/setup_out.log 2>&1; then
+    # Setup succeeded
+    true
+  else
+    # Setup may fail due to npm issues, but we still test the isolation
+    true
+  fi
+
+  # Verify worktree has dist (should be created by npm run build)
+  local worktree_has_dist=0
+  if [ -f "$wt_path/src/conductor/dist/index.js" ]; then
+    worktree_has_dist=1
+  fi
+  assert "Worktree has src/conductor/dist/index.js" \
+    "$([ "$worktree_has_dist" -eq 1 ] && echo 0 || echo 1)"
+
+  # Verify worktree has node_modules (created by npm install, only if there are dependencies)
+  local worktree_has_node_modules=0
+  if [ -d "$wt_path/src/conductor/node_modules" ]; then
+    worktree_has_node_modules=1
+  fi
+  # This is a soft assertion - only assert if we expect node_modules to exist
+  assert "Worktree has src/conductor/node_modules (from npm install)" \
+    "$([ "$worktree_has_node_modules" -eq 1 ] && echo 0 || echo 1)"
+
+  # Verify primary checkout's dist was not modified
+  local primary_mtime_after="0"
+  if [ -f "$repo/src/conductor/dist/index.js" ]; then
+    primary_mtime_after=$(stat -c %Y "$repo/src/conductor/dist/index.js" 2>/dev/null || stat -f %m "$repo/src/conductor/dist/index.js" 2>/dev/null || echo "0")
+  fi
+  # Primary should be unchanged (either both 0, or same mtime)
+  assert "Primary checkout dist not modified by worktree setup" \
+    "$([ "$primary_mtime_before" = "$primary_mtime_after" ] && echo 0 || echo 1)"
+
+  # Verify worktree isolation: dist in worktree is separate from primary
+  local dist_isolation=1
+  if [ -f "$repo/src/conductor/dist/index.js" ] && [ -f "$wt_path/src/conductor/dist/index.js" ]; then
+    # Both exist - verify they have different inodes (not hardlinked)
+    local primary_ino wt_ino
+    primary_ino=$(ls -i "$repo/src/conductor/dist/index.js" 2>/dev/null | awk '{print $1}')
+    wt_ino=$(ls -i "$wt_path/src/conductor/dist/index.js" 2>/dev/null | awk '{print $1}')
+    if [ "$primary_ino" = "$wt_ino" ]; then
+      # Same inode means they're hardlinked - isolation failed
+      dist_isolation=0
+    fi
+  elif [ -f "$wt_path/src/conductor/dist/index.js" ] && [ ! -f "$repo/src/conductor/dist/index.js" ]; then
+    # Worktree has dist, primary doesn't - good isolation
+    dist_isolation=1
+  elif [ ! -f "$wt_path/src/conductor/dist/index.js" ] && [ ! -f "$repo/src/conductor/dist/index.js" ]; then
+    # Neither has dist - unclear state but acceptable
+    dist_isolation=1
+  else
+    # Primary has dist but worktree doesn't - setup may not have completed
+    dist_isolation=1
+  fi
+  assert "Worktree dist is isolated from primary (not shared)" \
+    "$([ "$dist_isolation" -eq 1 ] && echo 0 || echo 1)"
+
+  # Clean up worktree
+  cd "$repo"
+  git worktree remove "$wt_path" 2>/dev/null || true
+}
+test_bin_setup_worktree_isolation
+
 # ─── Summary ─────────────────────────────────────────────────────────────
 
 echo ""

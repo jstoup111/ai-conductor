@@ -95,6 +95,8 @@ Reverting is not supported: if you revert past this version, the `dist` symlink 
 
 ### Added
 
+- **Daemon profile** — enable build-to-PR on self-host repos: `bin/setup` worktree prep, `version_approval_gate` with PATCH auto-pass and MINOR/MAJOR HALT, audit record (`.pipeline/version-signal.json`). See `adr-2026-07-03-harness-daemon-profile` and #174.
+
 - **`harness_self_host.version_freeze` — self-satisfying version gate during a declared
   freeze (#261).** During a version freeze the operator's approval decision is always the
   same ("current version, no bump"), yet every self-host build halted at the VERSION-bump

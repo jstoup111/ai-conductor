@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -8,6 +8,7 @@ import {
   runVersionApprovalGate,
   VERSION_APPROVAL_MARKER,
 } from '../../../src/engine/self-host/version-gate.js';
+import type { VersionSignal } from '../../../src/engine/self-host/version-signal.js';
 
 // Phase 4 (TR-7): a self-build HALTs for the operator's semver-bump approval
 // before opening a PR — CLAUDE.md's "present the VERSION bump for approval" rule
@@ -96,6 +97,38 @@ describe('evaluateVersionApproval — version freeze (#261)', () => {
     expect(v.ok).toBe(false);
     if (v.ok) return;
     expect(v.reason).toMatch(/approval required/i);
+  });
+});
+
+describe('evaluateVersionApproval — marker invariance (TR-3 Task 10)', () => {
+  it('marker == VERSION: gate passes, classifier is NEVER invoked (spy check)', () => {
+    const classifierSpy = vi.fn();
+    const signal: VersionSignal = { level: 'patch' };
+    const v = evaluateVersionApproval({
+      approvalMarker: '0.99.19',
+      repoVersion: '0.99.19',
+      signal,
+      classifier: classifierSpy,
+    });
+    expect(v.ok).toBe(true);
+    expect(classifierSpy).not.toHaveBeenCalled();
+  });
+
+  it('marker ≠ VERSION: gate halts with mismatch reason even when signal is pure PATCH', () => {
+    const classifierSpy = vi.fn();
+    const signal: VersionSignal = { level: 'patch' };
+    const v = evaluateVersionApproval({
+      approvalMarker: '0.99.20',
+      repoVersion: '0.99.19',
+      signal,
+      classifier: classifierSpy,
+    });
+    expect(v.ok).toBe(false);
+    if (v.ok) return;
+    expect(v.reason).toContain('0.99.20');
+    expect(v.reason).toContain('0.99.19');
+    // Classifier is not invoked on marker mismatch
+    expect(classifierSpy).not.toHaveBeenCalled();
   });
 });
 
@@ -199,5 +232,210 @@ describe('runVersionApprovalGate (TR-7 wiring: HALT on failure, no PR)', () => {
     });
     expect(verdict.ok).toBe(true);
     expect(Object.keys(written)).toHaveLength(0);
+  });
+});
+
+describe('evaluateVersionApproval — no-marker classification (TR-3 Task 11)', () => {
+  it('no marker + minor change set → HALT with level, paths, and resume procedure', () => {
+    const signal: VersionSignal = { level: 'minor', signals: [{ kind: 'new skill', files: ['skills/new-thing/SKILL.md'] }] };
+    const v = evaluateVersionApproval({
+      approvalMarker: null,
+      repoVersion: '0.99.19',
+      signal,
+    });
+    expect(v.ok).toBe(false);
+    if (v.ok) return;
+    expect(v.reason).toMatch(/minor/i);
+    expect(v.reason).toContain('skills/new-thing/SKILL.md');
+    expect(v.reason).toMatch(/\.pipeline\/version-approval/);
+  });
+
+  it('no marker + major change set → HALT with level, paths, and resume procedure', () => {
+    const signal: VersionSignal = { level: 'major', signals: [{ kind: 'bin/conduct CLI', files: ['bin/conduct'] }] };
+    const v = evaluateVersionApproval({
+      approvalMarker: null,
+      repoVersion: '0.99.19',
+      signal,
+    });
+    expect(v.ok).toBe(false);
+    if (v.ok) return;
+    expect(v.reason).toMatch(/major/i);
+    expect(v.reason).toContain('bin/conduct');
+  });
+
+  it('no marker + null diff (undeterminable) → HALT reason contains "undeterminable"', () => {
+    const signal: VersionSignal = { level: 'halt-undeterminable', reason: 'change set is null or empty; cannot determine version bump' };
+    const v = evaluateVersionApproval({
+      approvalMarker: null,
+      repoVersion: '0.99.19',
+      signal,
+    });
+    expect(v.ok).toBe(false);
+    if (v.ok) return;
+    expect(v.reason).toMatch(/undeterminable/i);
+  });
+
+  it('no marker + patch change set → verdict ok (auto-pass)', () => {
+    const signal: VersionSignal = { level: 'patch' };
+    const v = evaluateVersionApproval({
+      approvalMarker: null,
+      repoVersion: '0.99.19',
+      signal,
+    });
+    expect(v.ok).toBe(true);
+  });
+
+  it('marker present (even if mismatch) short-circuits signal classification', () => {
+    // A mismatch marker halts regardless of signal classification
+    const signal: VersionSignal = { level: 'patch' };
+    const v = evaluateVersionApproval({
+      approvalMarker: '0.99.20',
+      repoVersion: '0.99.19',
+      signal,
+    });
+    expect(v.ok).toBe(false);
+    if (v.ok) return;
+    expect(v.reason).toContain('0.99.20');
+    expect(v.reason).toContain('0.99.19');
+  });
+});
+
+describe('runVersionApprovalGate — audit record write (TR-3 Task 12)', () => {
+  let projectRoot: string;
+  let harnessRoot: string;
+  beforeEach(async () => {
+    projectRoot = await mkdtemp(join(tmpdir(), 'vgate-audit-'));
+    harnessRoot = await mkdtemp(join(tmpdir(), 'vgate-audit-harness-'));
+  });
+  afterEach(async () => {
+    await rm(projectRoot, { recursive: true, force: true });
+    await rm(harnessRoot, { recursive: true, force: true });
+  });
+
+  const reads = (map: Record<string, string | null>) => async (p: string) => map[p] ?? null;
+
+  it('PATCH auto-pass writes .pipeline/version-signal.json with verdict/level/files/classifiedAt', async () => {
+    const readText = reads({
+      [join(projectRoot, VERSION_APPROVAL_MARKER)]: '0.99.19',
+      [join(harnessRoot, 'VERSION')]: '0.99.19',
+    });
+    const auditWrites: Record<string, string> = {};
+    const signal: VersionSignal = { level: 'patch' };
+    const verdict = await runVersionApprovalGate({
+      projectRoot,
+      harnessRoot,
+      readText,
+      signal,
+      writeAudit: async (p, c) => {
+        auditWrites[p] = c;
+      },
+    });
+    expect(verdict.ok).toBe(true);
+    const auditPath = join(projectRoot, '.pipeline', 'version-signal.json');
+    expect(auditWrites[auditPath]).toBeDefined();
+    const auditRecord = JSON.parse(auditWrites[auditPath]);
+    expect(auditRecord.verdict).toBe('ok');
+    expect(auditRecord.level).toBe('patch');
+    expect(auditRecord.files).toEqual([]);
+    expect(auditRecord.classifiedAt).toBeDefined();
+    expect(typeof auditRecord.classifiedAt).toBe('string');
+  });
+
+  it('PATCH auto-pass includes changed files in audit record when signal specifies them', async () => {
+    const readText = reads({
+      [join(projectRoot, VERSION_APPROVAL_MARKER)]: '0.99.19',
+      [join(harnessRoot, 'VERSION')]: '0.99.19',
+    });
+    const auditWrites: Record<string, string> = {};
+    const signal: VersionSignal = {
+      level: 'patch',
+      changedFiles: ['README.md', 'src/conductor/src/engine/selector.ts'],
+    };
+    const verdict = await runVersionApprovalGate({
+      projectRoot,
+      harnessRoot,
+      readText,
+      signal,
+      writeAudit: async (p, c) => {
+        auditWrites[p] = c;
+      },
+    });
+    expect(verdict.ok).toBe(true);
+    const auditPath = join(projectRoot, '.pipeline', 'version-signal.json');
+    const auditRecord = JSON.parse(auditWrites[auditPath]);
+    expect(auditRecord.files).toEqual(['README.md', 'src/conductor/src/engine/selector.ts']);
+  });
+
+  it('signal HALT does not write a pass record (no stale .pipeline/version-signal.json)', async () => {
+    const readText = reads({
+      [join(harnessRoot, 'VERSION')]: '0.99.19',
+    });
+    const auditWrites: Record<string, string> = {};
+    const signal: VersionSignal = {
+      level: 'minor',
+      signals: [{ kind: 'new skill', files: ['skills/new-skill/SKILL.md'] }],
+    };
+    const verdict = await runVersionApprovalGate({
+      projectRoot,
+      harnessRoot,
+      readText,
+      signal,
+      writeAudit: async (p, c) => {
+        auditWrites[p] = c;
+      },
+    });
+    expect(verdict.ok).toBe(false);
+    const auditPath = join(projectRoot, '.pipeline', 'version-signal.json');
+    expect(auditWrites[auditPath]).toBeUndefined();
+  });
+
+  it('write failure on audit record → gate HALTs, not an unaudio pass', async () => {
+    const readText = reads({
+      [join(projectRoot, VERSION_APPROVAL_MARKER)]: '0.99.19',
+      [join(harnessRoot, 'VERSION')]: '0.99.19',
+    });
+    const signal: VersionSignal = { level: 'patch' };
+    const verdict = await runVersionApprovalGate({
+      projectRoot,
+      harnessRoot,
+      readText,
+      signal,
+      writeAudit: async () => {
+        throw new Error('disk full');
+      },
+    });
+    expect(verdict.ok).toBe(false);
+    if (!verdict.ok) {
+      expect(verdict.reason).toContain('disk full');
+    }
+    const halt = await readFile(join(projectRoot, '.pipeline', 'HALT'), 'utf-8');
+    expect(halt).toContain('disk full');
+  });
+
+  it('marker absent, freeze match, PATCH signal → audit writes, marker writes too', async () => {
+    const readText = reads({
+      [join(harnessRoot, 'VERSION')]: '0.99.19',
+    });
+    const auditWrites: Record<string, string> = {};
+    const markerWrites: Record<string, string> = {};
+    const signal: VersionSignal = { level: 'patch' };
+    const verdict = await runVersionApprovalGate({
+      projectRoot,
+      harnessRoot,
+      readText,
+      versionFreeze: '0.99.19',
+      signal,
+      writeText: async (p, c) => {
+        markerWrites[p] = c;
+      },
+      writeAudit: async (p, c) => {
+        auditWrites[p] = c;
+      },
+    });
+    expect(verdict.ok).toBe(true);
+    const auditPath = join(projectRoot, '.pipeline', 'version-signal.json');
+    expect(auditWrites[auditPath]).toBeDefined();
+    // Marker write still happens (best-effort) for the freeze case
+    expect(markerWrites[join(projectRoot, VERSION_APPROVAL_MARKER)]).toBe('0.99.19\n');
   });
 });

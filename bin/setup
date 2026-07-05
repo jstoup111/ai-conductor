@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# setup — Prepares the worktree by installing dependencies and building.
+#
+# Resolves the harness repo root from this script's location, then:
+#   1. Runs npm install in src/conductor
+#   2. Runs npm run build in src/conductor (only after install succeeds)
+#
+# Environment:
+#   CI — Set by prepareWorktree; signals we're running in a worktree context
+#   WORKTREE_NAMESPACE — Set by prepareWorktree; identifies the worktree
+#
+# Usage:
+#   ./bin/setup
+
+HARNESS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+CONDUCTOR_DIR="${HARNESS_DIR}/src/conductor"
+
+echo "Setting up worktree..."
+echo "  Harness directory: $HARNESS_DIR"
+echo "  Conductor directory: $CONDUCTOR_DIR"
+
+# Run npm install in src/conductor
+echo ""
+echo "Running npm install in src/conductor..."
+cd "$CONDUCTOR_DIR"
+npm install
+
+# Run npm run build in src/conductor (only after install succeeds)
+echo ""
+echo "Running npm run build in src/conductor..."
+npm run build
+
+echo ""
+echo "Setup complete."
