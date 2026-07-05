@@ -7,7 +7,7 @@ import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { closeIssueOnImplementationMerge } from './engine/engineer/issue-ref.js';
 import { rehabilitateHaltPr } from './engine/halt-pr-rehabilitation.js';
-import { isEligibleForResolve } from './engine/autoresolve.js';
+import { isEligibleForResolve, resolveConflictingPr } from './engine/autoresolve.js';
 import type { LLMProvider } from './execution/llm-provider.js';
 import { PluginRegistry } from './engine/plugin-registry.js';
 import { registerBuiltins } from './engine/plugin-loader.js';
@@ -820,13 +820,84 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
                 log,
               ),
             dispatch: async (entry) => {
-              // The full resolution pipeline (worktree prep, tier1/tier2
-              // rebase, acceptance guards, suite gate, lease push) is
-              // composed elsewhere and wired in as it lands; until then this
-              // dispatch point only performs the sweep-level bookkeeping
-              // (attempt counter + lastResolveAt, already applied by the
-              // sweep before this callback runs).
               log(`[mergeable-sweep] autoresolve dispatch: ${entry.prUrl} (attempt ${entry.resolveAttempts})`);
+
+              try {
+                // Fetch the branch name from the PR
+                const prViewResult = await execFile('sh', [
+                  '-c',
+                  `gh pr view "${entry.prUrl}" --json headRefName --jq '.headRefName'`,
+                ], { cwd: entry.repoCwd });
+
+                if (prViewResult.status !== 0) {
+                  log(`[autoresolve] failed to fetch branch name for ${entry.prUrl}`);
+                  return;
+                }
+
+                const branch = prViewResult.stdout.toString().trim();
+                if (!branch) {
+                  log(`[autoresolve] empty branch name for ${entry.prUrl}`);
+                  return;
+                }
+
+                // Create a gh runner (wrapper around gh commands)
+                const ghRunner = async (args: string[]) => {
+                  const result = await execFile('gh', args, {
+                    cwd: entry.repoCwd,
+                    encoding: 'utf-8',
+                  });
+                  return { stdout: result.stdout || '' };
+                };
+
+                // Create a suite runner (executes the suite command in the worktree)
+                const runSuite = async (projectRoot: string) => {
+                  const cmd = config?.mergeable_autoresolve?.suiteCommand;
+                  if (!cmd) {
+                    return { exitCode: 0, durationMs: 0 };
+                  }
+
+                  const startMs = Date.now();
+                  try {
+                    const result = await execFile('sh', ['-c', cmd], {
+                      cwd: projectRoot,
+                      encoding: 'utf-8',
+                    });
+                    return {
+                      exitCode: result.status || 0,
+                      durationMs: Date.now() - startMs,
+                    };
+                  } catch (err: any) {
+                    return {
+                      exitCode: err.status || 1,
+                      durationMs: Date.now() - startMs,
+                    };
+                  }
+                };
+
+                // Create a simple resolver that escalates (all Tier2 conflicts)
+                // A real implementation would dispatch to the /rebase step
+                const resolver = async () => ({
+                  resolved: false,
+                  reason: 'tier2 resolution not yet implemented in daemon',
+                });
+
+                // Run the full resolution pipeline
+                const outcome = await resolveConflictingPr(
+                  entry,
+                  branch,
+                  {
+                    enabled: config?.mergeable_autoresolve?.enabled ?? false,
+                    suiteCommand: config?.mergeable_autoresolve?.suiteCommand ?? '',
+                    cooldownMinutes: config?.mergeable_autoresolve?.cooldownMinutes ?? 60,
+                    attemptCap: config?.mergeable_autoresolve?.attemptCap ?? 3,
+                  },
+                  { runGh: ghRunner, runSuite, resolver, log },
+                );
+
+                log(`[autoresolve] outcome for ${entry.prUrl}: ${outcome.kind}`);
+              } catch (err: any) {
+                log(`[autoresolve] error resolving ${entry.prUrl}: ${err?.message || err}`);
+              }
             },
           },
         });

@@ -26,6 +26,10 @@ import {
   featureCommitsPreserved,
   isBranchCurrent,
   rebaseStateActive,
+  conflictedFiles,
+  resolveBase,
+  runTier1,
+  makeGitRunner,
 } from './rebase.js';
 import { execa } from 'execa';
 import { rm, mkdir } from 'node:fs/promises';
@@ -303,12 +307,37 @@ export async function withResolveWorktree<T>(
   resolutionInFlight = true;
   const worktreePath = join(repoCwd, '.worktrees', `resolve-${slug}`);
 
+  let originalBranch: string | null = null;
+
   try {
     // Remove stale worktree directory if it exists (crashed prior run)
     await rm(worktreePath, { recursive: true, force: true });
 
     // Create the .worktrees directory if needed
     await mkdir(join(repoCwd, '.worktrees'), { recursive: true });
+
+    // If the branch is already checked out in the main repo, we need to checkout
+    // a different branch first so we can create the worktree.
+    // Check if HEAD points to the branch we want to create a worktree for.
+    const headResult = await execa('git', ['symbolic-ref', '--short', 'HEAD'], {
+      cwd: repoCwd,
+      reject: false,
+    });
+    if (headResult.exitCode === 0 && headResult.stdout.trim() === branch) {
+      // Branch is currently checked out. Switch to main (or another branch) temporarily.
+      originalBranch = branch;
+      const mainCheckout = await execa('git', ['checkout', '-q', 'main'], {
+        cwd: repoCwd,
+        reject: false,
+      });
+      // If checking out main fails, try origin/main or just master
+      if (mainCheckout.exitCode !== 0) {
+        await execa('git', ['checkout', '-q', 'origin/main'], {
+          cwd: repoCwd,
+          reject: false,
+        });
+      }
+    }
 
     // Create a fresh worktree at the branch tip
     await execa('git', ['worktree', 'add', worktreePath, branch], { cwd: repoCwd });
@@ -325,6 +354,17 @@ export async function withResolveWorktree<T>(
     // Task 18: clear the process-wide flag on both success and failure
     // (thrown error / escalation), so the next tick can dispatch again.
     resolutionInFlight = false;
+
+    // Restore the original branch if we switched away from it
+    if (originalBranch !== null) {
+      try {
+        await execa('git', ['checkout', '-q', originalBranch], { cwd: repoCwd, reject: false });
+      } catch (err) {
+        // Log but don't fail if we can't restore the branch
+        console.error(`failed to restore branch ${originalBranch}:`, err);
+      }
+    }
+
     try {
       await execa('git', ['worktree', 'remove', '--force', worktreePath], { cwd: repoCwd });
     } catch (err) {
@@ -843,4 +883,172 @@ export async function escalate(
   ].join('\n');
 
   await upsertComment(runGh, cwd, prUrl, NEEDS_REMEDIATION_MARKER, commentBody, log);
+}
+
+/**
+ * Comprehensive orchestrator for auto-resolving open PR conflicts.
+ *
+ * Story: "The daemon orchestrates the full resolution pipeline" (Task 20 / FR-3-FR-16)
+ *
+ * Composes all primitives (worktree isolation, Tier1/Tier2 resolution, acceptance
+ * guards, suite gate, lease-protected push) into a single end-to-end pipeline.
+ * Deterministic + assistant-resolved conflicts both flow through the same path.
+ *
+ * Flow:
+ *   1. Create isolated worktree at the feature branch tip (withResolveWorktree)
+ *   2. Determine the base to rebase onto (resolveBase, auto-discovers origin/main)
+ *   3. Capture pre-rebase feature commit subjects (for work-preservation guards)
+ *   4. Start the rebase; if no conflicts → return refreshed (already current)
+ *   5. Run Tier1 (deterministic CHANGELOG + .docs/ resolution)
+ *   6. If conflicts remain, run Tier2 (bounded assistant dispatch via resolver)
+ *   7. Run acceptance guards (rebase state, branch current, commits preserved)
+ *   8. Run suite gate (full suite must pass before pushing)
+ *   9. Publish with lease (--force-with-lease) or escalate on any stage failure
+ *
+ * Deps (injected for testability):
+ *   - runGh     Callable that executes `gh` commands (labels, comments)
+ *   - runSuite  Callable that runs the user's test suite command
+ *   - resolver  Tier2 resolver dispatched for remaining conflicts (RebaseResolver)
+ *   - log       Callback for logging outcome lines (one log per stage result)
+ *
+ * @returns {kind: 'refreshed'} if published successfully,
+ *          {kind: 'escalated'} if any stage fails or suite fails.
+ */
+export async function resolveConflictingPr(
+  entry: { prUrl: string; slug: string; repoCwd: string },
+  branch: string,
+  config: { enabled: boolean; suiteCommand: string; cooldownMinutes: number; attemptCap: number },
+  deps: {
+    runGh: PrLabelsGhRunner;
+    runSuite: (projectRoot: string) => Promise<{ exitCode: number; durationMs: number }>;
+    resolver: RebaseResolver;
+    log: (msg: string) => void;
+  },
+): Promise<{ kind: 'refreshed' | 'escalated' }> {
+  const { prUrl, slug, repoCwd } = entry;
+  const { log } = deps;
+
+  return withResolveWorktree(slug, branch, repoCwd, async (worktreePath) => {
+    // Initialize a git runner for the worktree
+    const git = makeGitRunner(worktreePath);
+
+    // Determine the base to rebase onto
+    const baseResolved = await resolveBase(git, 'main');
+    const baseRef = baseResolved.ref;
+
+    // Capture pre-rebase feature subjects (for work-preservation guard)
+    const subjR = await git(['log', '--format=%s', `${baseRef}..HEAD`]);
+    const subjectsBefore =
+      subjR.exitCode === 0
+        ? subjR.stdout.split('\n').map((l) => l.trim()).filter((l) => l.length > 0)
+        : [];
+
+    // Start the rebase; this will fail with conflicts if base and feature diverged
+    const rebaseAttempt = await git(['rebase', '--autostash', baseRef]);
+    if (rebaseAttempt.exitCode === 0) {
+      // No conflicts — branch is already current or cleanly rebased
+      log(`${prUrl}: rebase completed without conflicts, no resolution needed`);
+      logOutcome(log, prUrl, 'rebase-clean', 'refreshed');
+      return { kind: 'refreshed' };
+    }
+
+    // Check for actual conflicted files
+    const conflicts = await conflictedFiles(git);
+    if (conflicts.length === 0) {
+      // Rebase failed but no unmerged files — treat as escalation-worthy error
+      log(`${prUrl}: rebase failed without conflicts; escalating`);
+      await escalate(prUrl, 'rebase-error', rebaseAttempt.stderr.trim(), {
+        runGh: deps.runGh,
+        cwd: repoCwd,
+        log,
+      });
+      logOutcome(log, prUrl, 'rebase-error', 'escalated');
+      return { kind: 'escalated' };
+    }
+
+    // Rebase paused with conflicts — enter resolution pipeline
+
+    // Stage 1: Deterministic resolution (CHANGELOG + .docs/)
+    const tier1Result = await runTier1(git, worktreePath);
+    log(`${prUrl}: tier1 resolved ${tier1Result.resolved.length} file(s); ${tier1Result.remaining.length} remain`);
+
+    // Stage 2: Assistant dispatch for remaining conflicts
+    let tier2Outcome: RebaseOutcome | null = null;
+    if (tier1Result.remaining.length > 0) {
+      tier2Outcome = await runTier2(
+        git,
+        worktreePath,
+        baseRef,
+        tier1Result.remaining,
+        config.attemptCap,
+        deps.resolver,
+      );
+      log(`${prUrl}: tier2 outcome: ${tier2Outcome.kind}`);
+
+      // If tier2 failed (unresolved conflicts), escalate immediately
+      if (tier2Outcome.kind === 'conflict_halt') {
+        const reason = tier2Outcome.reason || 'could not resolve remaining conflicts';
+        await escalate(prUrl, 'tier2-resolve', reason, {
+          runGh: deps.runGh,
+          cwd: repoCwd,
+          log,
+        });
+        logOutcome(log, prUrl, 'tier2-resolve', 'escalated');
+        return { kind: 'escalated' };
+      }
+    }
+
+    // Work-preservation guards: verify the rebase succeeded correctly
+    const guardsResult = await runAcceptanceGuards(git, baseRef, subjectsBefore);
+    if (!guardsResult.ok) {
+      const reason = `${guardsResult.guard}: ${guardsResult.reason}`;
+      log(`${prUrl}: acceptance guard failed: ${reason}`);
+      await escalate(prUrl, 'acceptance-guards', reason, {
+        runGh: deps.runGh,
+        cwd: repoCwd,
+        log,
+      });
+      logOutcome(log, prUrl, 'acceptance-guards', 'escalated');
+      return { kind: 'escalated' };
+    }
+
+    // Suite gate: full test suite must pass
+    // Use the injected runSuite function which may be a real suite runner or test stub
+    const suiteRunResult = await deps.runSuite(worktreePath);
+    const suiteOk = suiteRunResult.exitCode === 0;
+    if (!suiteOk) {
+      const reason = `suite exited with code ${suiteRunResult.exitCode}`;
+      log(`${prUrl}: suite gate failed: ${reason}`);
+      await escalate(prUrl, 'suite-gate', reason, {
+        runGh: deps.runGh,
+        cwd: repoCwd,
+        log,
+      });
+      logOutcome(log, prUrl, 'suite-gate', 'escalated');
+      return { kind: 'escalated' };
+    }
+
+    // All stages pass — publish the resolution with lease protection
+    const publishResult = await publishResolution({
+      git,
+      branch,
+      prUrl,
+      gh: {
+        runGh: deps.runGh,
+        cwd: repoCwd,
+        log,
+      },
+      projectRoot: repoCwd,
+      // No earlierFailure → attempt the lease push
+    });
+
+    if (!publishResult.published) {
+      // Lease push failed — already escalated by publishResolution
+      return { kind: 'escalated' };
+    }
+
+    // Success
+    logOutcome(log, prUrl, 'lease-push', 'refreshed');
+    return { kind: 'refreshed' };
+  });
 }
