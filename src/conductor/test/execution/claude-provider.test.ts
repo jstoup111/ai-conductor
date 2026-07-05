@@ -327,6 +327,48 @@ describe('ClaudeProvider', () => {
       expect(result.authFailure).toBeUndefined();
       expect(result.success).toBe(false);
     });
+
+    describe('rate-limit waitSeconds parsing', () => {
+      it('parses waitSeconds from rate-limited output with reset time (happy path)', async () => {
+        mockExeca.mockResolvedValue({
+          stdout: '',
+          stderr: 'Error: rate limit exceeded, resets at 23:00',
+          exitCode: 1,
+          failed: true,
+        } as any);
+
+        const result = await provider.invoke(baseOptions);
+        expect(result.rateLimited).toBe(true);
+        expect(result.waitSeconds).toBeDefined();
+        expect(typeof result.waitSeconds).toBe('number');
+        expect(result.waitSeconds).toBeGreaterThan(0);
+      });
+
+      it('returns default 300 seconds when rate-limited output has no parseable reset time', async () => {
+        mockExeca.mockResolvedValue({
+          stdout: '',
+          stderr: 'Error: rate limit exceeded, try again later',
+          exitCode: 1,
+          failed: true,
+        } as any);
+
+        const result = await provider.invoke(baseOptions);
+        expect(result.rateLimited).toBe(true);
+        expect(result.waitSeconds).toBe(300);
+      });
+
+      it('does not populate waitSeconds on non-rate-limited success', async () => {
+        mockExeca.mockResolvedValue({
+          stdout: 'Done!',
+          exitCode: 0,
+          failed: false,
+        } as any);
+
+        const result = await provider.invoke(baseOptions);
+        expect(result.rateLimited).toBeUndefined();
+        expect(result.waitSeconds).toBeUndefined();
+      });
+    });
   });
 
   describe('effort env var', () => {

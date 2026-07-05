@@ -260,6 +260,7 @@ export class ClaudeProvider implements LLMProvider {
       sessionExpired: sessionExpired || undefined,
       modelUnavailable: modelUnavailable || undefined,
       tokenUsage,
+      waitSeconds: rateLimited ? parseRateLimitWaitSeconds(output) : undefined,
     };
   }
 
