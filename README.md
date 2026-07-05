@@ -329,6 +329,34 @@ daemon liveness model (`ensureRunning`, one-per-repo `O_EXCL` mutex, stale-pid r
 
 Handles API rate limits by waiting for reset and auto-retrying.
 
+### Claim-time delivery guard and recovery
+
+The engineer's intake system is resilient to duplicate captures and write-back failures:
+
+**Claim-time delivery guard (auto-healing duplicate dispatch).** When `engineer claim` is called, the intake system checks the ledger for entries that were claimed and delivered (prUrl present) but whose envelopes were re-captured as duplicates. If the PR is OPEN or MERGED, the entry is marked done and the duplicate envelope is dropped without being served to the session — reducing friction from duplicate captures. If the PR state is unknown (API unavailable, closed without merging), the envelope is held without mutation and released on the next claim if status resolves. Unknown-state envelopes are never re-served, preventing stalled-write issues from blocking the queue.
+
+**`engineer resolve` recovery subcommand.** Recovers from write-back failures (e.g., local-commit completed but the spec PR was never delivered, or a network timeout during handoff) by marking a stranded intake entry as delivered. 
+
+```bash
+conduct-ts engineer resolve <sourceRef> --pr-url <url> [--branch <branch>]
+```
+
+Example:
+
+```bash
+# Mark issue o/a#123 as delivered with PR proof
+conduct-ts engineer resolve o/a#123 --pr-url https://github.com/o/a/pull/456
+
+# Optionally override the branch name (default: preserved from ledger)
+conduct-ts engineer resolve o/a#123 --pr-url https://github.com/o/a/pull/456 --branch spec/main-fix
+```
+
+The command is **idempotent** — running it multiple times on the same entry with the same prUrl is safe and produces no additional mutations. An unknown sourceRef returns `found:false` and never creates a ledger entry.
+
+**Integration: resolve + claim compose.** After resolve marks an entry delivered, a subsequent `engineer claim` with a duplicate envelope for that entry invokes the delivery guard, which heals and drops it — completing the recovery cycle end-to-end.
+
+See `src/conductor/README.md` for the full implementation details.
+
 ## Choosing a Conductor
 
 Two conductor binaries ship together. Both drive the same 16-step SDLC pipeline and read
