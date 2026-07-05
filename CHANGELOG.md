@@ -45,8 +45,13 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   attach a grounded confidence % to every finding/verdict and never assert an unverified one
   (`assess`, `conflict-check`, `code-review`, `prd-audit`, `manual-test`, `remediate`, `debugging`).
   Execution/orchestration/mechanical steps (e.g. `tdd`, `pipeline`, `conduct`, `finish`) rely on the
-  rule and surrounding gates rather than self-citing. Added to the generated model-selection table
-  (`inherits caller` — runs in the invoking skill's context).
+  rule and surrounding gates rather than self-citing. Each citing skill also declares `verify-claims`
+  in its `requires` frontmatter. Added to the generated model-selection table (`inherits caller` —
+  runs in the invoking skill's context). The verifier discipline is also propagated into the agent
+  personas that actually author findings (so the gate isn't orphaned in the calling skill): a
+  **Confidence Calibration** section in `evaluator`, `prd-auditor`, `remediation-planner`,
+  `domain-reviewer`, `cto-orchestrator`, and the 9 `cto-*` specialists, plus assumption-surfacing in
+  `planner` (the `generator` is deliberately left heads-down).
 - `engineer resolve` recovery subcommand to mark stranded entries delivered (recover from write-back failures)
 - Local-commit and pr-skipped handoff outcomes now record branch evidence for auditing
 - CI: added a PR-triggered GitHub Actions workflow that runs the harness integrity test suite and the conductor build/vitest suite on every pull request.

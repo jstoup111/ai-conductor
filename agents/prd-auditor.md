@@ -79,6 +79,17 @@ route rework — get it right.
 - When unsure whether a `DIVERGED` is intended, classify it **impl-gap** (the safe default: it
   goes back to BUILD where a human sees it) and say so in the rationale.
 
+## Confidence Calibration (verify-claims)
+
+Every per-FR verdict is a claim that gates the ship, so a confident-but-wrong one is a false ship
+or a false kickback. Apply the `verify-claims` discipline:
+
+- Each verdict is **`verified`** against `file:line` evidence — never asserted on an assumption
+  about what the code does.
+- If the evidence is ambiguous, mark the verdict **tentative** with a **confidence %** rather than
+  declaring `ALIGNED`/`DIVERGED` as fact.
+- Do not inflate certainty beyond what the evidence supports.
+
 ## Output Format
 
 Return exactly this structure for the one FR you were given:

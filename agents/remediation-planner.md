@@ -58,6 +58,16 @@ exception — reserved for two human categories only.
   insufficient to determine a fix AND the uncertainty is a real design question, that is
   `architectural-clarity`; if it's just thin evidence for an obvious bug, still plan the `build` task.
 
+## Confidence Calibration (verify-claims)
+
+Each gap's disposition and routing target rests on a claim about the gap's nature. Apply the
+`verify-claims` discipline:
+
+- Ground each classification in the audit evidence with a **confidence %** (verified vs inferred).
+- **Do not auto-route on an unverified assumption** about what the gap is. When the gap's *nature*
+  (not merely its fix) is genuinely uncertain, that low confidence is itself the signal to **HALT**
+  for a human rather than to guess a route.
+
 ## Output Format
 
 For the gaps you were given, return one entry per blocking gap, which the `remediate` skill
