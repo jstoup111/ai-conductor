@@ -10,6 +10,12 @@ import type { HarnessConfig } from '../types/config.js';
 import { resolveRebaseResolutionAttempts } from './resolved-config.js';
 import type { WatchEntry } from './mergeable-sweep.js';
 import type { PrMergeState } from './pr-labels.js';
+import {
+  resolveRebaseConflicts,
+  type RebaseOutcome,
+  type RebaseResolver,
+  type GitRunner,
+} from './rebase.js';
 import { execa } from 'execa';
 import { rm, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -216,4 +222,58 @@ export async function withResolveWorktree<T>(
       console.error(`failed to remove resolution worktree at ${worktreePath}:`, err);
     }
   }
+}
+
+/**
+ * Tier 2 gated dispatch of `resolveRebaseConflicts` for remaining conflicts.
+ *
+ * Story: "Remaining conflicts go to the gated /rebase session, bounded"
+ * (adr-2026-07-04-widen-rebase-resolution-dispatch-to-sweep)
+ *
+ * Tier 2 runs after Tier 1 (deterministic CHANGELOG + .docs/ resolvers).
+ * When remaining conflicts exist, Tier 2 dispatches them to `resolveRebaseConflicts`
+ * with a bounded cap read from `rebase_resolution_attempts` in the harness config.
+ *
+ * Bounded behavior:
+ *   - cap <= 0        → no dispatch; return escalation (cap=0 disables)
+ *   - cap > 0         → call resolveRebaseConflicts with the cap
+ *   - resolver fails  → short-circuit on attempt 1 (FR-6)
+ *   - cap exhausted   → abort rebase (`git rebase --abort`) and escalate
+ *
+ * @param git          Git runner (injected for testability)
+ * @param projectRoot  Worktree path where the rebase is paused
+ * @param baseRef      The base reference (e.g., "main" or "origin/main") that the rebase is onto
+ * @param remaining    Remaining conflicted files from Tier 1 (if any)
+ * @param cap          Maximum attempts for resolution; 0 disables tier 2
+ * @param resolver     Injected resolver function (dispatches to /rebase or test stub)
+ * @returns            Reclassified RebaseOutcome: unchanged conflict_halt or reclassified as
+ *                     'noop', 'changed', or 'changelog_resolved' if resolver succeeds
+ */
+export async function runTier2(
+  git: GitRunner,
+  projectRoot: string,
+  baseRef: string,
+  remaining: string[],
+  cap: number,
+  resolver: RebaseResolver,
+): Promise<RebaseOutcome> {
+  // FR-7: cap=0 disables resolution entirely — return the conflict unchanged
+  if (cap <= 0) {
+    return {
+      kind: 'conflict_halt',
+      conflicts: remaining,
+      reason: 'tier 2 resolution disabled (cap=0)',
+    };
+  }
+
+  // Create a conflict_halt outcome from the remaining conflicts
+  const conflictOutcome: RebaseOutcome = {
+    kind: 'conflict_halt',
+    conflicts: remaining,
+    reason: 'remaining conflicts after tier 1',
+  };
+
+  // Delegate to resolveRebaseConflicts with the bounded cap
+  // This will retry up to `cap` times until success or the resolver explicitly gives up
+  return resolveRebaseConflicts(git, projectRoot, conflictOutcome, resolver, cap);
 }
