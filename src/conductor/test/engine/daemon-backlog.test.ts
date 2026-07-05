@@ -1260,6 +1260,75 @@ describe('engine/daemon-backlog — owner-gate integration', () => {
     expect(line).toMatch(/un-owned/i); // un-owned branch, not "owned by another"
     expect(line).not.toMatch(/another operator/i);
   });
+
+  // Task 4 (S1 NP-1..NP-4) — exclusion boundaries + byte-identical items
+  // regression. A single mixed fixture asserts that:
+  //   - an OWNED spec dispatches in `items` and is NOT gated (NP-1)
+  //   - a content-INELIGIBLE spec (stories not Accepted) appears in NEITHER
+  //     `items` NOR `gated` — it never reaches the owner gate at all (NP-2)
+  //   - a BLANK `Owner:` marker is treated as un-owned (no crash), landing in
+  //     `gated` via the same un-owned path as a wholly absent marker (NP-3)
+  //   - `items` is byte-identical (same slugs, same shape) to what discovery
+  //     would return with the gate wholly unwired — i.e. gate collection is
+  //     purely additive and never mutates the pre-existing dispatch list (NP-4)
+  it('Task 4: mixed fixture — owned dispatches ungated, ineligible excluded from both, blank Owner treated as un-owned, items unchanged vs. gate-off control', async () => {
+    // owned-spec: stamped with the daemon's own id → builds, never gated.
+    await writeSpec('owned-spec');
+    // ineligible-spec: content-ineligible (stories NOT Accepted) → must never
+    // reach the owner gate at all, so it can't show up in `gated` either.
+    await writeSpec('ineligible-spec', '# Stories\n**Status:** Draft\n');
+    // blank-owner-spec: an `Owner:` marker present but blank/whitespace — the
+    // provenance reader normalizes this to `present: false` (un-owned), which
+    // must not crash the gate and must be treated exactly like "no marker".
+    await writeSpec('blank-owner-spec');
+
+    const stampFor: Record<string, { present: true; id: string } | { present: false }> = {
+      'owned-spec': { present: true, id: 'alice' },
+      'blank-owner-spec': { present: false },
+    };
+
+    const gateOpts = {
+      treeSource: fsSource(dir),
+      daemonOwner: { resolved: true as const, id: 'alice' },
+      readStamp: async (slug: string) => stampFor[slug] ?? { present: false as const },
+      readMergeTime: async () => null,
+      cutover: '2026-06-30T00:00:00Z', // grandfather window set, un-owned specs pre-cutover build
+    };
+
+    const { items, gated } = await discoverBacklog(dir, undefined, undefined, gateOpts);
+
+    // NP-1: owned spec dispatches, never gated.
+    expect(items.map((i) => i.slug)).toContain('owned-spec');
+    expect(gated.some((g) => g.kind === 'spec' && g.slug === 'owned-spec')).toBe(false);
+
+    // NP-2: content-ineligible spec is in neither list — it never reaches the
+    // owner gate (content filters run first and `continue` before the gate).
+    expect(items.map((i) => i.slug)).not.toContain('ineligible-spec');
+    expect(gated.some((g) => g.kind === 'spec' && g.slug === 'ineligible-spec')).toBe(false);
+
+    // NP-3: blank Owner: is un-owned, not a crash, and lands in gated (not
+    // items) via the same un-owned path as an absent marker.
+    expect(items.map((i) => i.slug)).not.toContain('blank-owner-spec');
+    expect(gated).toEqual([
+      expect.objectContaining({ kind: 'spec', slug: 'blank-owner-spec' }),
+    ]);
+
+    // NP-4: the owned spec's dispatched item is byte-identical to the item the
+    // pre-gate (gate wholly unwired) control run produces for that same spec —
+    // gate collection never mutates the shape/fields of an item that still
+    // dispatches; it is purely additive (the `gated` list alongside it).
+    const control = await discoverBacklog(dir, undefined, undefined, {
+      treeSource: fsSource(dir),
+      // daemonOwner intentionally omitted — legacy, gate unwired.
+    });
+    const ownedGated = items.find((i) => i.slug === 'owned-spec');
+    const ownedControl = control.items.find((i) => i.slug === 'owned-spec');
+    expect(ownedGated).toEqual(ownedControl);
+    // And the control run (no gate) still excludes the content-ineligible spec
+    // on content grounds alone, confirming NP-2 is a content filter, not a
+    // side effect of the owner gate being active.
+    expect(control.items.map((i) => i.slug)).not.toContain('ineligible-spec');
+  });
 });
 
 describe('engine/daemon-backlog — shipped-record dedup (Story 3/Task 4)', () => {
