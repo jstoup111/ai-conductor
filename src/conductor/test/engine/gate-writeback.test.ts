@@ -111,6 +111,81 @@ describe('gate-writeback (Task 17)', () => {
       expect(created).toBe(1);
       expect(patched).toBe(9);
     });
+
+    it('re-announces on reason transition: same single comment, body updated in place (Task 18)', async () => {
+      let created = 0;
+      let patched = 0;
+      let existingBody: string | undefined;
+      let existingUrl: string | undefined;
+      const patchedBodies: string[] = [];
+
+      const gh: GhRunner = async (args) => {
+        if (args[0] === 'pr' && args[1] === 'view' && args.includes('comments')) {
+          return {
+            stdout: JSON.stringify({
+              comments: existingBody ? [{ body: existingBody, url: existingUrl }] : [],
+            }),
+          };
+        }
+        if (args[0] === 'pr' && args[1] === 'comment') {
+          created++;
+          const idx = args.indexOf('--body');
+          existingBody = args[idx + 1];
+          existingUrl = `${PR_URL}#issuecomment-1`;
+          return { stdout: '' };
+        }
+        if (args[0] === 'api' && args.includes('PATCH')) {
+          patched++;
+          const fArg = args.find((a) => a.startsWith('body='));
+          const body = fArg ? fArg.slice('body='.length) : '';
+          existingBody = body;
+          patchedBodies.push(body);
+          return { stdout: '' };
+        }
+        return { stdout: '' };
+      };
+
+      const unownedIndeterminate = {
+        kind: 'spec' as const,
+        slug: '2026-07-05-widget',
+        reason: 'unowned-indeterminate' as const,
+        remedy: 'declare an Owner: for this spec, or grandfather it via owner_gate_cutover',
+      };
+      const otherOwner = {
+        kind: 'spec' as const,
+        slug: '2026-07-05-widget',
+        reason: 'other-owner' as const,
+        otherOwner: 'bob',
+        remedy: 'declare an Owner: for this spec, or grandfather it via owner_gate_cutover',
+      };
+
+      // Pass 1: gated as unowned-indeterminate — creates the comment.
+      await upsertGatedMarkerComment(unownedIndeterminate, PR_URL, gh, '/repo');
+      // Pass 2: transitions to other-owner — same comment, body updated.
+      await upsertGatedMarkerComment(otherOwner, PR_URL, gh, '/repo');
+      // Pass 3: transitions back to unowned-indeterminate — still same comment.
+      await upsertGatedMarkerComment(unownedIndeterminate, PR_URL, gh, '/repo');
+
+      expect(created).toBe(1);
+      expect(patched).toBe(2);
+      expect(existingBody).toContain(OWNER_GATED_MARKER);
+      expect(existingBody).toContain('unowned-indeterminate');
+      expect(existingBody).not.toContain('bob');
+      // The intermediate patch reflected the other-owner transition faithfully.
+      expect(patchedBodies[0]).toContain('other-owner');
+      expect(patchedBodies[0]).toContain('bob');
+
+      // Idempotency across further back-and-forth transitions: 10 more passes
+      // alternating between the two reasons still yields exactly one comment,
+      // and the final state matches the last-applied reason.
+      for (let i = 0; i < 10; i++) {
+        const spec = i % 2 === 0 ? otherOwner : unownedIndeterminate;
+        await upsertGatedMarkerComment(spec, PR_URL, gh, '/repo');
+      }
+      expect(created).toBe(1);
+      expect(existingBody).toContain('unowned-indeterminate');
+      expect(existingBody).not.toContain('bob');
+    });
   });
 
   describe('announceGatedPr (orchestrator)', () => {

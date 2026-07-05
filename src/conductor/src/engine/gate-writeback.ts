@@ -82,6 +82,15 @@ function renderCommentBody(spec: GatedSpecEntry): string {
  * Upsert the single owner-gated marker comment on the given PR. Idempotent:
  * repeated calls for the same (or a transitioned) gated state find and edit
  * the existing marked comment in place rather than posting a new one.
+ *
+ * Reason transitions (Task 18): the underlying {@link upsertComment} locates
+ * the existing comment purely by the stable `OWNER_GATED_MARKER`, never by
+ * body content — so when a spec's gated `reason` changes between scan passes
+ * (e.g. `unowned-indeterminate` -> `other-owner` -> back again), the same
+ * comment is found and PATCHed with the freshly rendered body instead of a
+ * new comment being created. This holds across any number of back-and-forth
+ * transitions: exactly one comment ever exists, and its body always reflects
+ * the most recently observed reason/remedy/owner.
  */
 export async function upsertGatedMarkerComment(
   spec: GatedSpecEntry,
