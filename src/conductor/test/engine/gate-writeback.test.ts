@@ -11,6 +11,7 @@ import {
   ensureGatedPrLabel,
   upsertGatedMarkerComment,
   announceGatedPr,
+  announceGatedIssue,
   OWNER_GATED_MARKER,
   OWNER_GATED_LABEL,
 } from '../../src/engine/gate-writeback.js';
@@ -328,6 +329,117 @@ describe('gate-writeback (Task 17)', () => {
       expect(commentCall).toBeDefined();
       const body = commentCall![commentCall!.indexOf('--body') + 1];
       expect(body).toContain(OWNER_GATED_MARKER);
+    });
+  });
+
+  // ── Task 20: Source-Ref issue announcements (S7 all) ─────────────────────
+
+  describe('announceGatedIssue (Task 20)', () => {
+    it('a valid Source-Ref parses via issue-ref.ts and upserts the marker comment on the issue', async () => {
+      const calls: string[][] = [];
+      const gh: GhRunner = async (args) => {
+        calls.push([...args]);
+        if (args[0] === 'issue' && args[1] === 'view') {
+          return { stdout: JSON.stringify({ comments: [] }) };
+        }
+        return { stdout: '' };
+      };
+
+      await announceGatedIssue(SPEC, 'acme/repo#42', { runGh: gh, cwd: '/repo' });
+
+      expect(calls.some((c) => c.join(' ').includes('42'))).toBe(true);
+      const commentCall = calls.find((c) => c[0] === 'issue' && c[1] === 'comment');
+      expect(commentCall).toBeDefined();
+      const body = commentCall![commentCall!.indexOf('--body') + 1];
+      expect(body).toContain(OWNER_GATED_MARKER);
+      expect(body).toContain(SPEC.slug);
+    });
+
+    it('absent marker (sourceRef undefined) skips silently — zero gh calls', async () => {
+      let ghCalled = false;
+      const gh: GhRunner = async () => {
+        ghCalled = true;
+        return { stdout: '' };
+      };
+
+      await expect(
+        announceGatedIssue(SPEC, undefined, { runGh: gh, cwd: '/repo' }),
+      ).resolves.toBeUndefined();
+      expect(ghCalled).toBe(false);
+    });
+
+    it('malformed Source-Ref is logged and skipped — no gh call', async () => {
+      let ghCalled = false;
+      const gh: GhRunner = async () => {
+        ghCalled = true;
+        return { stdout: '' };
+      };
+      const logs: string[] = [];
+
+      await announceGatedIssue(SPEC, 'not-a-ref', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m) });
+
+      expect(ghCalled).toBe(false);
+      expect(logs.some((m) => m.toLowerCase().includes('skip'))).toBe(true);
+    });
+
+    it('closed issue still gets commented on', async () => {
+      let commentPosted = false;
+      const gh: GhRunner = async (args) => {
+        if (args[0] === 'issue' && args[1] === 'view') {
+          return { stdout: JSON.stringify({ state: 'CLOSED', comments: [] }) };
+        }
+        if (args[0] === 'issue' && args[1] === 'comment') {
+          commentPosted = true;
+        }
+        return { stdout: '' };
+      };
+
+      await announceGatedIssue(SPEC, 'acme/repo#7', { runGh: gh, cwd: '/repo' });
+
+      expect(commentPosted).toBe(true);
+    });
+
+    it('PR-succeeded/issue-failed: independent, pass completes without throwing', async () => {
+      const prGh: GhRunner = async (args) => {
+        if (args[0] === 'pr' && args[1] === 'view' && args.includes('comments')) {
+          return { stdout: JSON.stringify({ comments: [] }) };
+        }
+        if (args[0] === 'pr' && args[1] === 'view') {
+          return { stdout: JSON.stringify({ state: 'OPEN', mergeable: 'MERGEABLE', statusCheckRollup: [], labels: [] }) };
+        }
+        return { stdout: '' };
+      };
+      await expect(announceGatedPr(SPEC, PR_URL, { runGh: prGh, cwd: '/repo' })).resolves.toBeUndefined();
+
+      const issueGh: GhRunner = async (args) => {
+        if (args[0] === 'issue' && args[1] === 'view') {
+          throw new Error('issue gh failure');
+        }
+        return { stdout: '' };
+      };
+      await expect(
+        announceGatedIssue(SPEC, 'acme/repo#9', { runGh: issueGh, cwd: '/repo' }),
+      ).resolves.toBeUndefined();
+    });
+
+    it('repo-kind warning entries never trigger a GitHub write for the issue step', async () => {
+      let ghCalled = false;
+      const gh: GhRunner = async () => {
+        ghCalled = true;
+        return { stdout: '' };
+      };
+      const repoWarningEntry = {
+        kind: 'repo' as const,
+        warning: 'identity-unresolved' as const,
+        remedy: 'authenticate gh',
+      };
+
+      await announceGatedIssue(repoWarningEntry as unknown as typeof SPEC, undefined, {
+        runGh: gh,
+        cwd: '/repo',
+      });
+
+      expect(ghCalled).toBe(false);
     });
   });
 });

@@ -20,9 +20,11 @@ import {
   ensureLabel,
   addLabel,
   upsertComment,
+  upsertIssueComment,
   prMergeState,
   OWNER_GATED_MARKER,
 } from './pr-labels.js';
+import { parseSourceRef } from './engineer/issue-ref.js';
 
 export { OWNER_GATED_MARKER };
 
@@ -157,4 +159,59 @@ export async function announceGatedPr(
 
   await ensureGatedPrLabel(spec, prUrl, runGh, cwd, log);
   await upsertGatedMarkerComment(spec, prUrl, runGh, cwd, log);
+}
+
+/**
+ * Called once per scan pass for each spec that is currently owner-gated and
+ * carries an intake-originated `Source-Ref: owner/repo#N` marker (Task 20).
+ * Independent counterpart to {@link announceGatedPr}: this announces on the
+ * originating GitHub *issue*, using the exact same label + marker-comment
+ * upsert pattern, but is entirely decoupled from the PR path — a failure (or
+ * success) here has no bearing on the PR announcement, and vice versa.
+ *
+ * No-ops (zero `gh` calls) when:
+ *   - `spec.kind !== 'spec'` — repo-level warnings have no originating spec/
+ *     issue to announce against.
+ *   - `sourceRef` is absent (chat-originated spec, no intake marker) —
+ *     silent skip.
+ *   - `sourceRef` is present but fails to parse via {@link parseSourceRef}
+ *     (the single parse source shared with the rest of the intake linkage) —
+ *     skipped with a logged notice, never a `gh` call with garbage
+ *     arguments.
+ *
+ * Otherwise labels + upserts the marker comment on the issue. Commenting is
+ * attempted regardless of the issue's open/closed state (a closed issue can
+ * still receive comments). Both steps are best-effort/non-throwing — this
+ * function itself never throws, mirroring {@link announceGatedPr}.
+ */
+export async function announceGatedIssue(
+  spec: GatedSpecEntry,
+  sourceRef: string | undefined,
+  deps: GateWritebackDeps,
+): Promise<void> {
+  const { cwd, log } = deps;
+  const runGh = deps.runGh ?? makeProductionGh();
+
+  if (spec.kind !== 'spec') {
+    return;
+  }
+
+  const parsed = parseSourceRef(sourceRef);
+  if (!parsed) {
+    log?.(
+      `[gate-writeback] no usable Source-Ref for gated spec "${spec.slug}" ` +
+        `("${sourceRef ?? ''}") — skipping issue announcement`,
+    );
+    return;
+  }
+
+  const issueUrl = `https://github.com/${parsed.repo}/issues/${parsed.number}`;
+
+  try {
+    await ensureLabel(runGh, cwd, OWNER_GATED_LABEL, LABEL_COLOR, log);
+    await addLabel(runGh, cwd, issueUrl, OWNER_GATED_LABEL, log);
+    await upsertIssueComment(runGh, cwd, issueUrl, OWNER_GATED_MARKER, renderCommentBody(spec), log);
+  } catch (err) {
+    log?.(`[gate-writeback] issue announcement for ${issueUrl} failed: ${err}`);
+  }
 }

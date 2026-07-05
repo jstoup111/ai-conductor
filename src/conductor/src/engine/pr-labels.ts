@@ -523,6 +523,84 @@ export async function upsertComment(
 }
 
 /**
+ * Post a comment on an issue (as opposed to a PR — see {@link comment}).
+ * `issueUrl` must be a `github.com/.../issues/N` URL. Swallows all errors.
+ */
+export async function issueComment(
+  runGh: GhRunner = makeProductionGh(),
+  cwd: string,
+  issueUrl: string,
+  body: string,
+  log?: (msg: string) => void,
+): Promise<void> {
+  try {
+    await runGh(['issue', 'comment', issueUrl, '--body', body], { cwd });
+  } catch (err) {
+    log?.(`[pr-labels] issueComment(${issueUrl}) error: ${err}`);
+  }
+}
+
+/**
+ * Issue-comment counterpart to {@link upsertComment}: upserts a single
+ * marker-tagged comment on an issue rather than a PR. Mirrors the same
+ * lookup/PATCH/create-fallback contract (find by marker, PATCH in place on a
+ * failure-terminal basis, else create). Best-effort / non-throwing.
+ */
+export async function upsertIssueComment(
+  runGh: GhRunner = makeProductionGh(),
+  cwd: string,
+  issueUrl: string,
+  marker: string,
+  body: string,
+  log?: (msg: string) => void,
+): Promise<void> {
+  const taggedBody = `${marker}\n${body}`;
+
+  let matchedUrl: string | undefined;
+  try {
+    const { stdout } = await runGh(['issue', 'view', issueUrl, '--json', 'comments'], { cwd });
+    const data: GhCommentJson = JSON.parse(stdout);
+    const matched = (data.comments ?? []).find(
+      (c) => typeof c?.body === 'string' && c.body.includes(marker),
+    );
+    matchedUrl = matched?.url;
+  } catch (err) {
+    log?.(`[pr-labels] upsertIssueComment(${issueUrl}) lookup failed: ${err} — creating new comment`);
+    await issueComment(runGh, cwd, issueUrl, taggedBody, log);
+    return;
+  }
+
+  if (matchedUrl) {
+    const ref = parseCommentUrl(matchedUrl);
+    if (ref) {
+      try {
+        await runGh(
+          [
+            'api',
+            '--method',
+            'PATCH',
+            `repos/${ref.owner}/${ref.repo}/issues/comments/${ref.commentId}`,
+            '-f',
+            `body=${taggedBody}`,
+          ],
+          { cwd },
+        );
+      } catch (err) {
+        log?.(
+          `[pr-labels] upsertIssueComment(${issueUrl}) PATCH failed: ${err} — leaving existing comment as-is`,
+        );
+      }
+      return;
+    }
+    log?.(
+      `[pr-labels] upsertIssueComment(${issueUrl}) marked comment url unparseable (${matchedUrl}) — creating new comment`,
+    );
+  }
+
+  await issueComment(runGh, cwd, issueUrl, taggedBody, log);
+}
+
+/**
  * Mark a draft PR as ready for review.
  * Swallows all errors.
  */

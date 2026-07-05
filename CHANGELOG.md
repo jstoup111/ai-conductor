@@ -10,6 +10,16 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ## [Unreleased]
 
+### Added
+
+- Owner-gate write-back now also announces on the originating GitHub issue: when a gated
+  spec's committed intake marker carries `Source-Ref: owner/repo#N`, `announceGatedIssue`
+  (src/conductor/src/engine/gate-writeback.ts) applies the `owner-gated` label and upserts
+  the same marker comment on that issue, using the shared `parseSourceRef` parser
+  (`engine/engineer/issue-ref.ts`). Independent of the existing PR announcement path — a
+  failure on one surface never affects the other, and repo-level warnings never trigger a
+  GitHub write for the issue step (Task 20).
+
 ### Fixed
 
 - Daemon re-kick play-forward rebase now routes a conflict through the same gated `/rebase`
