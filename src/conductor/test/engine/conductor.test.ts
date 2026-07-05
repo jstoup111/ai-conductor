@@ -4612,6 +4612,53 @@ describe('build-step stall circuit breaker', () => {
     expect(runner.runInteractive).toHaveBeenCalledWith('build');
     expect(onRecovery).not.toHaveBeenCalledWith('build', expect.anything(), expect.anything());
   });
+
+  it('skips the interactive stall handoff in auto mode', async () => {
+    await seedAllArtifactsExceptTaskStatus();
+    await writeTaskStatus(2, 5); // 2/5 done — and it never changes
+
+    const runner: StepRunner & { runInteractive: ReturnType<typeof vi.fn> } = {
+      run: vi.fn().mockResolvedValue({ success: true }),
+      runInteractive: vi.fn(async () => {
+        // The "interactive session" is a no-op for the test; it simulates the
+        // user dropping in and /quitting without doing additional work.
+      }),
+    };
+
+    const stallEvents: Array<{ reason: string; before: number; after: number }> = [];
+    events.on('build_stall', (e) => {
+      if (e.type === 'build_stall') {
+        stallEvents.push({
+          reason: e.reason,
+          before: e.resolvedBefore,
+          after: e.resolvedAfter,
+        });
+      }
+    });
+
+    const onRecovery = vi.fn().mockResolvedValue('quit' as const);
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      verifyArtifacts: true,
+      maxRetries: 3,
+      onRecovery,
+      mode: 'auto', // Key: auto-mode should skip interactive stall handoff
+    });
+
+    await conductor.run();
+
+    // build_stall event is still emitted in auto mode
+    expect(stallEvents).toHaveLength(1);
+    expect(stallEvents[0].reason).toBe('no_task_progress');
+    expect(stallEvents[0].before).toBe(2);
+    expect(stallEvents[0].after).toBe(2);
+
+    // But runInteractive should NOT have been called in auto mode
+    expect(runner.runInteractive).not.toHaveBeenCalled();
+  });
 });
 
 // NOTE: The old `bootstrap-mode skip` suite was removed with the Option B
