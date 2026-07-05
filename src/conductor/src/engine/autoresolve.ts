@@ -15,6 +15,9 @@ import {
   type RebaseOutcome,
   type RebaseResolver,
   type GitRunner,
+  featureCommitsPreserved,
+  isBranchCurrent,
+  rebaseStateActive,
 } from './rebase.js';
 import { execa } from 'execa';
 import { rm, mkdir } from 'node:fs/promises';
@@ -276,4 +279,73 @@ export async function runTier2(
   // Delegate to resolveRebaseConflicts with the bounded cap
   // This will retry up to `cap` times until success or the resolver explicitly gives up
   return resolveRebaseConflicts(git, projectRoot, conflictOutcome, resolver, cap);
+}
+
+/**
+ * Work-preservation acceptance guards for sweep-resolution (open-PR auto-resolve).
+ *
+ * Story: "Work-preservation guards reject lossy resolutions"
+ *
+ * Applies after a successful Tier 1 + Tier 2 resolution attempt to verify
+ * the rebase completed correctly and no work was lost.
+ *
+ * Guards (in order):
+ *   1. rebaseStateActive  — rebase-merge dir must not be present; rebase must be fully finished
+ *   2. isBranchCurrent    — branch must be current with the base it rebased onto
+ *   3. featureCommitsPreserved — all pre-rebase feature commits (by subject) must survive
+ *
+ * Subjects MUST be captured BEFORE any rebase work to avoid false negatives.
+ *
+ * @param git             Git runner (injected for testability)
+ * @param baseRef         The base reference the rebase was onto (e.g., "main" or commit hash)
+ * @param subjectsBefore  Commit subjects of the feature, captured BEFORE rebase started
+ * @returns               { ok: true } if all guards pass, or { ok: false, guard, reason } on failure
+ */
+export type AcceptanceGuardResult =
+  | { ok: true }
+  | { ok: false; guard: string; reason: string };
+
+export async function runAcceptanceGuards(
+  git: GitRunner,
+  baseRef: string,
+  subjectsBefore: string[],
+): Promise<AcceptanceGuardResult> {
+  // Determine the project root from the git runner by asking git where it is.
+  // This allows the function to work with git runners bound to any directory.
+  const topLevel = await git(['rev-parse', '--show-toplevel']);
+  const projectRoot = topLevel.exitCode === 0 ? topLevel.stdout.trim() : '.';
+
+  // Guard 1: rebase-merge dir must be gone (rebase fully finished, not mid-state)
+  const active = await rebaseStateActive(git, projectRoot);
+  if (active) {
+    return {
+      ok: false,
+      guard: 'rebaseStateActive',
+      reason: 'rebase did not fully complete (rebase-merge or rebase-apply still present)',
+    };
+  }
+
+  // Guard 2: branch must be current with the base it rebased onto
+  const current = await isBranchCurrent(git, baseRef);
+  if (!current) {
+    return {
+      ok: false,
+      guard: 'isBranchCurrent',
+      reason: `branch not current with ${baseRef} after resolution`,
+    };
+  }
+
+  // Guard 3: all feature commits (by subject) must be preserved
+  const preserved = await featureCommitsPreserved(git, baseRef, subjectsBefore);
+  if (!preserved) {
+    const displaySubjects = subjectsBefore.slice(0, 3).join(', ');
+    const more = subjectsBefore.length > 3 ? `... (+${subjectsBefore.length - 3} more)` : '';
+    return {
+      ok: false,
+      guard: 'featureCommitsPreserved',
+      reason: `feature commit(s) lost during resolution: expected ${displaySubjects}${more}`,
+    };
+  }
+
+  return { ok: true };
 }
