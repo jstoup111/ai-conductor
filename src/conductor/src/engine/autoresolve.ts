@@ -58,6 +58,33 @@ export interface EligibilityResult {
 }
 
 /**
+ * Structured outcome logging (FR-16).
+ *
+ * Story: "one outcome line per concluded attempt — PR identifier, stage
+ * reached, refreshed | escalated | skipped(<reason>)"
+ *
+ * Emits exactly one log line in a consistent, greppable format so operators
+ * can scan the daemon log for what happened to every PR the autoresolve
+ * pipeline touched. Used by `isEligibleForResolve` (skipped), `escalate`'s
+ * caller (escalated), and `publishResolution` (refreshed/escalated).
+ *
+ * @param log          Logging function to write the line to.
+ * @param prIdentifier The PR being reported on (e.g. its URL or slug).
+ * @param stage        The pipeline stage reached when the attempt concluded
+ *                     (e.g. "eligibility", "lease-push", "suite-gate").
+ * @param result       One of `refreshed`, `escalated`, or a `skipped(<reason>)`
+ *                     string built by the caller.
+ */
+export function logOutcome(
+  log: (msg: string) => void,
+  prIdentifier: string,
+  stage: string,
+  result: 'refreshed' | 'escalated' | string,
+): void {
+  log(`outcome: pr=${prIdentifier} stage=${stage} result=${result}`);
+}
+
+/**
  * Determine if a PR is eligible for auto-resolution.
  *
  * Checks all eligibility gates in this order:
@@ -76,8 +103,34 @@ export interface EligibilityResult {
  * @param cfg The harness configuration (may be undefined)
  * @param now The current timestamp for cooldown calculation
  * @param fs Injected fs module for testability
+ * @param logger Optional logging function (default: console.log). When the PR
+ *               is deemed ineligible, one `skipped(<reason>)` outcome line
+ *               (FR-16) is emitted via {@link logOutcome}.
  */
 export async function isEligibleForResolve(
+  entry: WatchEntry,
+  prState: PrMergeState,
+  cfg: HarnessConfig | undefined,
+  now: Date,
+  fs: AutoresolveFs,
+  logger?: (msg: string) => void,
+): Promise<EligibilityResult> {
+  const result = await evaluateEligibilityGates(entry, prState, cfg, now, fs);
+
+  if (!result.eligible) {
+    const log = logger ?? console.log;
+    logOutcome(log, entry.prUrl, 'eligibility', `skipped(${result.reason})`);
+  }
+
+  return result;
+}
+
+/**
+ * Evaluate the eligibility gates without any logging side effect. Extracted
+ * from {@link isEligibleForResolve} so the outcome line is emitted exactly
+ * once, at the single call site, regardless of which gate rejected the PR.
+ */
+async function evaluateEligibilityGates(
   entry: WatchEntry,
   prState: PrMergeState,
   cfg: HarnessConfig | undefined,
@@ -569,7 +622,7 @@ export async function pushRefreshedBranch(
       log(`pushRefreshedBranch: attempts reset to 0, lastResolveAt updated`);
     }
 
-    log(`outcome: refreshed (${branch} pushed with lease)`);
+    log(`pushRefreshedBranch: refreshed (${branch} pushed with lease)`);
     return { pushed: true };
   }
 
@@ -656,6 +709,7 @@ export async function publishResolution(
   if (opts.earlierFailure) {
     const { stage, reason } = opts.earlierFailure;
     await escalate(opts.prUrl, stage, reason, opts.gh);
+    logOutcome(log, opts.prUrl, stage, 'escalated');
     return { published: false, stage, reason };
   }
 
@@ -674,6 +728,7 @@ export async function publishResolution(
     // Lease rejected (or other push failure): discard the local result,
     // escalate with the concrete reason, do not retry.
     await escalate(opts.prUrl, 'lease-push', pushResult.reason, opts.gh);
+    logOutcome(log, opts.prUrl, 'lease-push', 'escalated');
     return { published: false, stage: 'lease-push', reason: pushResult.reason };
   }
 
@@ -684,6 +739,7 @@ export async function publishResolution(
   const runGh = opts.gh.runGh ?? makeProductionGh();
   await addLabel(runGh, opts.gh.cwd, opts.prUrl, 'mergeable', log);
 
+  logOutcome(log, opts.prUrl, 'lease-push', 'refreshed');
   return { published: true };
 }
 
