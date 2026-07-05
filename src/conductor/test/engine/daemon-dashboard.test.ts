@@ -511,6 +511,42 @@ describe('engine/daemon-dashboard — renderDashboard GATED group (FR-7/FR-11, T
   });
 });
 
+describe('engine/daemon-dashboard — exactly-one-bucket invariant (Task 10, S2 Done When 2)', () => {
+  it('a slug present in every bucket type appears exactly once across the whole render', () => {
+    const state: InheritedState = {
+      halted: [{ slug: 'halted-slug', reason: 'boom' }],
+      inProgress: [{ slug: 'inprog-slug', step: 'build' }],
+      eligible: [{ slug: 'eligible-slug' }],
+      processed: [{ slug: 'processed-slug' }],
+      processedCount: 1,
+      waiting: [{ slug: 'waiting-slug', verdict: { kind: 'indeterminate', detail: 'x' } }],
+      gated: [
+        {
+          kind: 'spec',
+          slug: 'gated-slug',
+          reason: 'other-owner',
+          otherOwner: 'alice',
+          remedy: 'ask alice',
+        },
+      ],
+    };
+    const out = renderDashboard(state);
+
+    const slugs = [
+      'halted-slug',
+      'inprog-slug',
+      'waiting-slug',
+      'gated-slug',
+      'eligible-slug',
+      'processed-slug',
+    ];
+    for (const slug of slugs) {
+      const occurrences = out.split(slug).length - 1;
+      expect(occurrences).toBe(1);
+    }
+  });
+});
+
 describe('engine/daemon-dashboard — status output parity (FR-6, Task 17)', () => {
   // daemon-cli's status path (renderStartupDashboard) and any future status
   // summary caller MUST drive scanInheritedState + renderDashboard directly —
