@@ -76,6 +76,12 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Changed
 
+- **manual-test now routes an unexplained failure through `/debugging` before fixing.** The Bug
+  Loop added an explicit root-cause-discovery step: a manual FAIL gives the symptom, not the cause,
+  so when the cause is not obvious the skill dispatches the `/debugging` protocol (root cause before
+  fix, no fixes without evidence) instead of guessing a reproducing test or patch. Previously
+  `/debugging` was cited only for the design-conformance gate. (Complements the existing
+  `tdd` → `/debugging` escalation when GREEN won't go green.)
 - Armed `auto_restart_on_stale_engine: true` in this repo's committed `.ai-conductor/config.yml` — the idle daemon now respawns in place when a local rebuild makes its running engine stale (#256/PR #307 feature, default-inert until armed).
 
 - **Daemon restart now preserves session and respects pause state.** The restart verb (`conduct restart`, formerly kill-session + new-session) is now respawn-in-place: uses tmux respawn-pane -k to remain in the same session with the same window layout. An operator watching a connected daemon stays connected through restart. Restart gating honors pause state — a paused daemon's restart is queued, not immediate. Follows adr-2026-07-04-respawn-in-place-restart.
