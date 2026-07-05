@@ -131,6 +131,7 @@ function makeFakeLedger(): { ledger: FakeLedger; recordCalls: any[]; transitionC
 /** Minimal fake queue for testing. */
 interface FakeQueue {
   claim(): Promise<any>;
+  ack(e: any): Promise<void>;
   release(e: any): Promise<void>;
 }
 
@@ -145,6 +146,9 @@ function makeFakeQueueWithEnvelopes(envelopes: any[]): {
     async claim() {
       const e = pending.shift();
       return e || null;
+    },
+    async ack(e: any) {
+      releasedEnvelopes.push(e);
     },
     async release(e: any) {
       releasedEnvelopes.push(e);
