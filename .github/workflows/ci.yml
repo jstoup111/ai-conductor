@@ -13,3 +13,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: bash test/test_harness_integrity.sh
+
+  conductor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: src/conductor/.tool-versions
+          cache: npm
+          cache-dependency-path: src/conductor/package-lock.json
+      - run: npm ci
+        working-directory: src/conductor
+      - run: npm run build
+        working-directory: src/conductor
+      - run: npm test
+        working-directory: src/conductor
