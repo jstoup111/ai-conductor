@@ -848,6 +848,51 @@ describe('engine/daemon-backlog — owner-gate integration', () => {
     expect(line).toMatch(/alice/);
   });
 
+  it('Task 3 (S1 HP-2): an un-owned post-cutover spec is collected into `gated` with an Owner-marker remedy', async () => {
+    await writeSpec('newish-gated');
+    const { items: backlog, gated } = await discoverBacklog(dir, undefined, undefined, {
+      treeSource: fsSource(dir),
+      daemonOwner: { resolved: true, id: 'alice' },
+      readStamp: async () => ({ present: false as const }),
+      readMergeTime: async () => '2026-07-01T00:00:00Z', // after cutover
+      cutover: '2026-06-30T00:00:00Z',
+    });
+    expect(backlog).toEqual([]);
+    expect(gated).toEqual([
+      {
+        kind: 'spec',
+        slug: 'newish-gated',
+        reason: 'unowned-post-cutover',
+        remedy: expect.stringMatching(/Owner:/),
+      },
+    ]);
+  });
+
+  it('Task 3 (S1 HP-3): an un-owned indeterminate-merge spec is collected into `gated` with a cutover remedy', async () => {
+    await writeSpec('indeterminate-gated');
+    const { items: backlog, gated } = await discoverBacklog(dir, undefined, undefined, {
+      treeSource: fsSource(dir),
+      daemonOwner: { resolved: true, id: 'alice' },
+      readStamp: async () => ({ present: false as const }),
+      readMergeTime: async () => null, // indeterminate
+      cutover: null,
+    });
+    expect(backlog).toEqual([]);
+    expect(gated).toEqual([
+      {
+        kind: 'spec',
+        slug: 'indeterminate-gated',
+        reason: 'unowned-indeterminate',
+        remedy: expect.stringMatching(/owner_gate_cutover/),
+      },
+      {
+        kind: 'repo',
+        warning: 'no-cutover',
+        remedy: expect.any(String),
+      },
+    ]);
+  });
+
   it('Task 12: a content-ineligible spec is skipped for the content reason (gate never reached)', async () => {
     // Stories are DRAFT → content filter rejects BEFORE the gate. Even though the
     // stamp is other-owner, the log must cite the content reason, and readStamp is
@@ -1076,6 +1121,14 @@ describe('engine/daemon-backlog — owner-gate integration', () => {
     });
     expect(items).toEqual([]);
     expect(gated).toEqual([
+      // Task 3 (S1 HP-3): the per-spec gated entry is now collected alongside
+      // the repo-scoped no-cutover notice below, not instead of it.
+      {
+        kind: 'spec',
+        slug: 'un-owned',
+        reason: 'unowned-indeterminate',
+        remedy: expect.any(String),
+      },
       {
         kind: 'repo',
         warning: 'no-cutover',

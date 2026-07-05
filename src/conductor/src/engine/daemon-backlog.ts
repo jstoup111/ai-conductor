@@ -371,6 +371,12 @@ export async function discoverBacklog(
   // and the per-slug ownership skips. Does NOT change any build/skip decision.
   // Silent when a cutover IS set or the gate is inactive.
   let gateNoCutoverWarned = false;
+  // Repo-scoped GATED entry companion (Task 5, S3 HP-1/NP-3): distinct from the
+  // log line above. Pushed at most ONCE per pass, and only when an actual
+  // un-owned spec is skipped for lack of a cutover — never merely because the
+  // gate is active with no cutover set (a pass where every spec is owned, or
+  // grandfathered, must NOT surface a false alarm).
+  let noCutoverGatedPushed = false;
   const warnGateNoCutoverOnce = async (): Promise<void> => {
     if (gateNoCutoverWarned) return;
     gateNoCutoverWarned = true;
@@ -573,6 +579,29 @@ export async function discoverBacklog(
             otherOwner: decision.other,
             remedy: `declare an Owner: ${daemonOwner.id} or the daemon's own owner for this spec`,
           });
+        } else {
+          gatedItems.push({
+            kind: 'spec',
+            slug,
+            reason: decision.reason,
+            remedy: gateRemedy(decision),
+          });
+        }
+        if (
+          decision.reason === 'unowned-indeterminate' &&
+          (opts.cutover ?? null) === null &&
+          !noCutoverGatedPushed
+        ) {
+          // The gate is active, no cutover is configured, and an un-owned spec
+          // was just skipped as a direct result — surface the repo-scoped
+          // GATED entry ONCE per pass (Task 5, S3 HP-1), alongside (not in
+          // place of) the existing `warnGateNoCutoverOnce` log line.
+          noCutoverGatedPushed = true;
+          gatedItems.push({
+            kind: 'repo',
+            warning: 'no-cutover',
+            remedy: 'Set owner_gate_cutover in ~/.ai-conductor/config.yml to grandfather pre-existing un-owned specs.',
+          });
         }
         continue;
       }
@@ -663,6 +692,22 @@ function ownershipSkipMessage(slug: string, decision: GateDecision): string {
     `'Owner:' marker to the spec on the default branch (or grandfather it via ` +
     `owner_gate_cutover); logged once.`
   );
+}
+
+/**
+ * Derive the operator-actionable remedy hint for an un-owned gated spec
+ * (S1 HP-2/HP-3, S2 HP-2 content). Pure function — no I/O, mirrors the
+ * `ownershipSkipMessage` "why"/remedy split so the two stay in lockstep.
+ * Never called for `other-owner` (that reason has its own bespoke remedy at
+ * the call site, naming the daemon's own owner id).
+ */
+function gateRemedy(decision: GateDecision): string {
+  if (decision.build) return ''; // never called on a build decision
+  if (decision.reason === 'other-owner') return ''; // handled at the call site
+  return decision.reason === 'unowned-post-cutover'
+    ? "add an 'Owner:' marker to the spec on the default branch"
+    : "add an 'Owner:' marker to the spec on the default branch, or set " +
+        'owner_gate_cutover to grandfather it';
 }
 
 /**
