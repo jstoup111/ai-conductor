@@ -123,6 +123,4 @@ HARNESS.md is the single source of truth for behavioral rules consumed by projec
 
 - All behavioral changes (communication protocol, model selection, conventions) go in HARNESS.md
 - This CLAUDE.md describes the harness repo itself; HARNESS.md describes rules for projects
-- `check_harness_config()` in `bin/conduct` auto-detects missing HARNESS.md references in
-  project CLAUDE.md files and prompts the user to upgrade
 - When the harness is pulled, HARNESS.md updates propagate to all projects automatically
