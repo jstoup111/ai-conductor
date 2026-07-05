@@ -206,5 +206,6 @@ describe('bin/setup worktree compatibility', () => {
       await execa('git', ['branch', '-D', branchName], { cwd: REPO_ROOT }).catch(() => {});
       await rm(worktreeDir, { recursive: true, force: true });
     }
-  });
+  }, 30_000); // real `git worktree add` + `bin/setup` + teardown exceeds the 5s
+  // default under CI load (observed ~5.4s); give it headroom so the smoke is stable.
 });
