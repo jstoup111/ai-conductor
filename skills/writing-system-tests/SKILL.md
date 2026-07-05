@@ -90,6 +90,19 @@ services** (payment APIs, email providers, external webhooks) that are outside t
 control. If a spec requires infrastructure that isn't available in the test environment,
 configure the test environment to provide it — don't mock it away.
 
+### 2.5. Schema Consistency Check
+
+Before generating specs, compare model/entity column definitions against migration files:
+- Check that column names in models match column names in migrations (e.g., `external_id` in
+  model vs `external_reference_id` in migration is a mismatch)
+- Check that column types match (e.g., `payload` string vs `request_payload`/`response_payload`
+  split columns)
+- If the project uses fake/stub column definitions (e.g., `fake_columns.rb`), verify those
+  match the real migration definitions
+
+**Do not generate specs from inconsistent schemas — resolve the mismatch first.** Specs
+generated against a mismatched schema will either pass incorrectly or fail for the wrong reason.
+
 ### 3. Parse Acceptance Criteria
 
 Extract from each story file:
