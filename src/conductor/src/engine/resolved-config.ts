@@ -16,38 +16,42 @@ import { getStepDefinition } from './steps.js';
 // These apply when nothing is set in config. The effort values map to Claude's
 // native `/effort` levels and are passed via CLAUDE_CODE_EFFORT_LEVEL env var
 // on the subprocess. Reviews default per step. Tune per step/phase in YAML.
+//
+// Rationale for each step's model/effort choice lives in `STEP_RATIONALE`
+// (./model-table-metadata.ts), which also feeds the generated HARNESS.md
+// model-selection table. Keep these value maps and that metadata in sync.
 // ────────────────────────────────────────────────────────────────────────────
 
 export const DEFAULT_STEP_MODELS: Record<StepName, string> = {
-  bootstrap: 'sonnet',     // authors the project CLAUDE.md every later step depends on
+  bootstrap: 'sonnet',
   memory: 'haiku',
-  assess: 'sonnet',        // dispatches 9 specialists + drives structure verification; synthesis is the opus cto-orchestrator agent
-  explore: 'fable',        // divergent discovery via Fable: approach trade-offs + product/technical track classification — mistakes here cascade downstream
-  prd: 'fable',            // product-only PRD authoring via Fable — reasoning-heavy
-  complexity: 'sonnet',    // assigns S/M/L, which gates every downstream model/effort decision — a wrong tier cascades
+  assess: 'sonnet',
+  explore: 'fable',
+  prd: 'fable',
+  complexity: 'sonnet',
   stories: 'sonnet',
   conflict_check: 'sonnet',
   plan: 'sonnet',
   architecture_diagram: 'sonnet',
-  architecture_review: 'fable', // architectural design validation via Fable
+  architecture_review: 'fable',
   worktree: 'haiku',
   acceptance_specs: 'sonnet',
   build: 'haiku',
   manual_test: 'sonnet',
-  prd_audit: 'opus',       // cross-reference PRD intent vs shipped implementation
-  architecture_review_as_built: 'sonnet', // pattern-match code vs approved design
+  prd_audit: 'opus',
+  architecture_review_as_built: 'sonnet',
   retro: 'sonnet',
-  rebase: 'fable',         // Fable guards semantic merges; wrong merge silently reverts merged work
+  rebase: 'fable',
   finish: 'haiku',
-  remediate: 'fable',      // Fable guards failure disposition; wrong disposition misroutes rework
+  remediate: 'fable',
 };
 
 export const DEFAULT_STEP_EFFORT: Record<StepName, EffortLevel> = {
   bootstrap: 'low',
   memory: 'low',
-  assess: 'high',          // orchestrator sets env var that cascades to subagents
-  explore: 'xhigh',        // divergent approach trade-offs + track classification — reasoning-heavy
-  prd: 'xhigh',            // product-only PRD authoring — reasoning-heavy
+  assess: 'high',
+  explore: 'xhigh',
+  prd: 'xhigh',
   complexity: 'low',
   stories: 'medium',
   conflict_check: 'medium',
@@ -56,14 +60,14 @@ export const DEFAULT_STEP_EFFORT: Record<StepName, EffortLevel> = {
   architecture_review: 'high',
   worktree: 'low',
   acceptance_specs: 'medium',
-  build: 'low',            // dispatcher; intelligence is in per-task sub-sessions
+  build: 'low',
   manual_test: 'medium',
-  prd_audit: 'high',       // FR-by-FR intent vs implementation reasoning
+  prd_audit: 'high',
   architecture_review_as_built: 'medium',
   retro: 'medium',
-  rebase: 'max',           // conflict resolution dispatch reasons over both sides of a hunk
+  rebase: 'max',
   finish: 'low',
-  remediate: 'high',       // gap reasoning + concrete task planning
+  remediate: 'high',
 };
 
 export const DEFAULT_STEP_RETRIES: Record<StepName, number> = {
@@ -128,10 +132,10 @@ export const DEFAULT_STEP_TIER_OVERRIDES: Partial<
   },
   plan: {
     S: { effort: 'medium', max_retries: 3 },
-    L: { effort: 'xhigh', model: 'fable' }, // task sequencing/dependency reasoning at scale needs fable
+    L: { effort: 'xhigh', model: 'fable' },
   },
   conflict_check: {
-    L: { model: 'fable' }, // subtle cross-story contradictions at ≥15 stories need fable
+    L: { model: 'fable' },
   },
 };
 

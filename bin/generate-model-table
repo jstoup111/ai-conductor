@@ -1,0 +1,34 @@
+#!/bin/bash
+# generate-model-table — regenerates (or checks/prints pins for) the
+# generated model-selection table region in HARNESS.md.
+#
+# Runs the TypeScript tool directly from source via the local tsx binary
+# (src/conductor/node_modules/.bin/tsx) — deliberately not via a bundled
+# build. This is a source-run-only wrapper and must never touch
+# src/conductor/dist/.
+#
+# Exit codes (see src/conductor/src/tools/generate-model-table.ts):
+#   0 - ok (write succeeded, or --check found no drift, or --pins printed)
+#   1 - drift detected (--check only)
+#   2 - environment error (tsx missing, marker error, read failure)
+set -e
+
+REAL_PATH="$(readlink -f "$0")"
+BIN_DIR="$(dirname "$REAL_PATH")"
+REPO_ROOT="${BIN_DIR}/.."
+CONDUCTOR_DIR="${REPO_ROOT}/src/conductor"
+TSX="${CONDUCTOR_DIR}/node_modules/.bin/tsx"
+TOOL="${CONDUCTOR_DIR}/src/tools/generate-model-table.ts"
+
+if [ ! -x "$TSX" ]; then
+  echo "generate-model-table: missing ${TSX}" >&2
+  echo "generate-model-table: run 'npm install' in src/conductor/" >&2
+  exit 2
+fi
+
+if [ ! -f "$TOOL" ]; then
+  echo "generate-model-table: missing ${TOOL}" >&2
+  exit 2
+fi
+
+exec "$TSX" "$TOOL" "$@"
