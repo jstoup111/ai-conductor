@@ -137,6 +137,17 @@ async function evaluateEligibilityGates(
   now: Date,
   fs: AutoresolveFs,
 ): Promise<EligibilityResult> {
+  // Gate 0 (Task 18): process-wide in-flight serial guard. While ANY
+  // resolution is running (any slug), no other PR may be dispatched — the
+  // next tick must defer, not just the same-slug case `inFlightSlugs`
+  // already covers inside withResolveWorktree.
+  if (isResolutionInFlight()) {
+    return {
+      eligible: false,
+      reason: `resolution already in flight for another PR; serial guard`,
+    };
+  }
+
   // Gate 1: Feature enabled
   const autoresolveEnabled = cfg?.mergeable_autoresolve?.enabled ?? false;
   if (!autoresolveEnabled) {
@@ -222,6 +233,30 @@ async function evaluateEligibilityGates(
 const inFlightSlugs = new Set<string>();
 
 /**
+ * Task 18: process-wide in-flight serial guard across ticks.
+ *
+ * Story: "worktree story negative path — no second resolution while one
+ * runs" (.docs/stories/auto-resolve-open-pr-conflicts.md).
+ *
+ * `inFlightSlugs` above only rejects a second concurrent attempt for the
+ * SAME slug. This flag is broader: while ANY resolution is running (e.g. a
+ * long suite gate), the next sweep tick must start no second resolution for
+ * ANY PR. Set at the top of {@link withResolveWorktree} (before any git
+ * work) and always cleared in its `finally`, so a long-running suite, a
+ * thrown error, or an escalation all leave the flag clear afterward.
+ */
+let resolutionInFlight = false;
+
+/**
+ * True while a resolution (of any PR) is in flight. Consulted by the
+ * eligibility gate (Gate 0) so the next tick defers every other PR until the
+ * current resolution finishes.
+ */
+export function isResolutionInFlight(): boolean {
+  return resolutionInFlight;
+}
+
+/**
  * Provision a transient worktree for conflict resolution, run the provided
  * function inside it, and always tear it down (even on failure).
  *
@@ -262,6 +297,10 @@ export async function withResolveWorktree<T>(
   }
 
   inFlightSlugs.add(slug);
+  // Task 18: set the process-wide flag for the duration of this resolution,
+  // BEFORE any git work runs, so the eligibility gate defers every other PR
+  // (any slug) until this attempt's finally clears it below.
+  resolutionInFlight = true;
   const worktreePath = join(repoCwd, '.worktrees', `resolve-${slug}`);
 
   try {
@@ -283,6 +322,9 @@ export async function withResolveWorktree<T>(
   } finally {
     // Always clean up the worktree, even if fn throws
     inFlightSlugs.delete(slug);
+    // Task 18: clear the process-wide flag on both success and failure
+    // (thrown error / escalation), so the next tick can dispatch again.
+    resolutionInFlight = false;
     try {
       await execa('git', ['worktree', 'remove', '--force', worktreePath], { cwd: repoCwd });
     } catch (err) {
