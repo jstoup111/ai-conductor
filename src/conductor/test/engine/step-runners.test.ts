@@ -523,6 +523,24 @@ describe('DefaultStepRunner', () => {
       // 21st step (callCount=20) should use 3x multiplier
       expect(sleepSpy).toHaveBeenLastCalledWith(30000); // 3x base
     });
+
+    it('cooldown disabled (stepCooldown == 0) → no sleep regardless of call count', async () => {
+      const sleepSpy = vi.fn().mockResolvedValue(undefined);
+      const provider = createMockProvider();
+      const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
+        stepCooldown: 0,
+        sleepFn: sleepSpy,
+      });
+
+      // Run 21 steps to exercise all boundary crossings.
+      // With stepCooldown: 0, sleep should never be called regardless.
+      for (let i = 0; i < 21; i++) {
+        await runner.run('worktree', emptyState);
+      }
+
+      // No sleep calls at all when cooldown is disabled
+      expect(sleepSpy).not.toHaveBeenCalled();
+    });
   });
 
   describe('complexity assessment', () => {
