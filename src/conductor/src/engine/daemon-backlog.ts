@@ -352,6 +352,7 @@ export async function discoverBacklog(
   // content/ownership skip lines. An ABSENT `daemonOwner` stays silent (legacy —
   // the gate is simply unwired).
   let identityUnresolvedWarned = false;
+  let identityUnresolvedGatedPushed = false;
   const warnIdentityUnresolvedOnce = async (): Promise<void> => {
     if (identityUnresolvedWarned) return;
     identityUnresolvedWarned = true;
@@ -393,6 +394,9 @@ export async function discoverBacklog(
   // slug -> raw (unparseable) Source-Ref text, for specs whose intake marker
   // is present but malformed (see the dependency-gate loop below).
   const malformedSourceRefs = new Map<string, string>();
+  // Owner-gate skips surfaced to the operator (FR-7/FR-11/S1 HP-1). Populated
+  // alongside the existing warnOnce log line below — never in place of it.
+  const gatedItems: GatedItem[] = [];
   for (const file of [...planFiles].sort()) {
     const slug = planStem(file);
     const planRel = `.docs/plans/${file}`;
@@ -500,6 +504,20 @@ export async function discoverBacklog(
     // (gate unwired) is untouched — legacy discovery runs normally.
     if (opts.daemonOwner && !opts.daemonOwner.resolved) {
       await warnIdentityUnresolvedOnce();
+      // Fail-closed (D3/Story 3 NP-1): don't just log — surface a repo-scoped
+      // GATED entry too, so the dashboard/status can show WHY the backlog came
+      // back empty instead of looking silently idle. Pushed once per pass
+      // (guarded by `identityUnresolvedGatedPushed`), regardless of how many
+      // candidates hit this fail-closed branch.
+      if (!identityUnresolvedGatedPushed) {
+        identityUnresolvedGatedPushed = true;
+        gatedItems.push({
+          kind: 'repo',
+          warning: 'identity-unresolved',
+          remedy:
+            'Set spec_owner in ~/.ai-conductor/config.yml or authenticate gh.',
+        });
+      }
       continue;
     }
 
@@ -547,6 +565,15 @@ export async function discoverBacklog(
       });
       if (!decision.build) {
         await warnOnce(slug, ownershipSkipMessage(slug, decision));
+        if (decision.reason === 'other-owner') {
+          gatedItems.push({
+            kind: 'spec',
+            slug,
+            reason: 'other-owner',
+            otherOwner: decision.other,
+            remedy: `declare an Owner: ${daemonOwner.id} or the daemon's own owner for this spec`,
+          });
+        }
         continue;
       }
     }
@@ -570,7 +597,7 @@ export async function discoverBacklog(
   // content-eligible, non-intake specs and dispatch unaffected, preserving
   // today's behavior for hand-authored work.
   if (!opts.resolver) {
-    return { items, waiting: [], gated: [] };
+    return { items, waiting: [], gated: gatedItems };
   }
   const resolver = opts.resolver;
   const gated: BacklogItem[] = [];
@@ -606,7 +633,7 @@ export async function discoverBacklog(
   }
 
   announceWaitingForRoot(projectRoot, log, waiting);
-  return { items: gated, waiting, gated: [] };
+  return { items: gated, waiting, gated: gatedItems };
 }
 
 /**

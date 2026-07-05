@@ -822,6 +822,32 @@ describe('engine/daemon-backlog — owner-gate integration', () => {
     expect(line).not.toMatch(/cannot build/);
   });
 
+  it('Task 2 (S1 HP-1): an other-owner spec is collected into `gated` and excluded from items', async () => {
+    await writeSpec('owned-by-alice');
+    const logs: string[] = [];
+    const { items: backlog, gated } = await discoverBacklog(dir, undefined, (m) => logs.push(m), {
+      treeSource: fsSource(dir),
+      daemonOwner: { resolved: true, id: 'bob' },
+      readStamp: async () => ({ present: true as const, id: 'alice' }),
+      readMergeTime: async () => null,
+      cutover: null,
+    });
+    expect(backlog).toEqual([]);
+    expect(gated).toEqual([
+      {
+        kind: 'spec',
+        slug: 'owned-by-alice',
+        reason: 'other-owner',
+        otherOwner: 'alice',
+        remedy: expect.any(String),
+      },
+    ]);
+    // The existing warnOnce ownership-skip log line is unchanged.
+    const line = logs.find((l) => /owned-by-alice/.test(l));
+    expect(line).toBeDefined();
+    expect(line).toMatch(/alice/);
+  });
+
   it('Task 12: a content-ineligible spec is skipped for the content reason (gate never reached)', async () => {
     // Stories are DRAFT → content filter rejects BEFORE the gate. Even though the
     // stamp is other-owner, the log must cite the content reason, and readStamp is
@@ -992,6 +1018,26 @@ describe('engine/daemon-backlog — owner-gate integration', () => {
     await discoverBacklog(dir, undefined, log, opts);
 
     expect(logs.filter((l) => /identity unresolved/i.test(l))).toHaveLength(1);
+  });
+
+  // Task 6 (S3 NP-1) — fail-CLOSED: an unresolved daemon identity must not
+  // silently return an empty backlog. It surfaces a repo-scoped GATED entry so
+  // the operator sees WHY the backlog is empty, not just that it is.
+  it('an unresolved daemon identity emits a repo-level identity-unresolved GATED entry (fail-closed)', async () => {
+    await writeSpec('one');
+    const { items, waiting, gated } = await discoverBacklog(dir, undefined, undefined, {
+      treeSource: fsSource(dir),
+      daemonOwner: { resolved: false },
+    });
+    expect(items).toEqual([]);
+    expect(waiting).toEqual([]);
+    expect(gated).toEqual([
+      {
+        kind: 'repo',
+        warning: 'identity-unresolved',
+        remedy: expect.any(String),
+      },
+    ]);
   });
 
   it('is SILENT about the missing cutover when a cutover IS set', async () => {
