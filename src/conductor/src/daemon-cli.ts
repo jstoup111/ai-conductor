@@ -37,6 +37,7 @@ import { clampDaemonConcurrency } from './engine/daemon-command.js';
 import { makeRunFeature, type FeatureWorktree } from './engine/daemon-runner.js';
 import { createBlockerResolver } from './engine/blocker-resolver.js';
 import { createGhBlockerRunner } from './engine/gh-blocker-runner.js';
+import { resolveSpecPrUrl } from './engine/pr-labels.js';
 import { captureEngineIdentity, createStaleEngineChecker } from './engine/engine-identity.js';
 import {
   readRestartMarkerWithStatus,
@@ -659,12 +660,14 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       if (entry.kind !== 'spec') continue;
       // The spec's implementation PR, if a prior build attempt already opened
       // one (e.g. halted mid-build before ownership changed underneath it).
-      // A spec that has never been dispatched has no worktree/state on disk
-      // — `readState` on a missing file resolves not-ok and `prUrl` stays
-      // undefined, which `announceGatedPr` treats as "skip, no PR yet".
+      // Gated specs are discovered pre-dispatch, so per-slug worktree state
+      // is normally absent — fall back to resolving the merged spec PR from
+      // origin by its spec/<slug> branch (lookup-only, never creates a PR).
       const perSlugStateFile = join(worktreeBase, entry.slug, '.pipeline', 'conduct-state.json');
       const slugState = await readState(perSlugStateFile);
-      const prUrl = slugState.ok ? slugState.value.pr_url : undefined;
+      const prUrl =
+        (slugState.ok ? slugState.value.pr_url : undefined) ??
+        (await resolveSpecPrUrl(ownerGh, projectRoot, `spec/${entry.slug}`, log));
       await announceGatedPr(entry, prUrl as string, gatedWritebackDeps);
       await announceGatedIssue(entry, entry.sourceRef, gatedWritebackDeps);
     }
