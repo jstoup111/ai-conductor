@@ -1840,6 +1840,110 @@ describe('engine/conductor', () => {
     exitSpy.mockRestore();
   });
 
+  it('saves state on SIGTERM before exit', async () => {
+    let sigtermHandler: (() => void) | undefined;
+    const processOnSpy = vi.spyOn(process, 'on').mockImplementation(((
+      event: string,
+      handler: (...args: unknown[]) => void,
+    ) => {
+      if (event === 'SIGTERM') {
+        sigtermHandler = handler as () => void;
+      }
+      return process;
+    }) as typeof process.on);
+
+    // The SIGTERM handler calls process.exit(143); stub it so the real exit
+    // doesn't surface as an unhandled rejection that fails the vitest run.
+    const exitSpy = vi
+      .spyOn(process, 'exit')
+      .mockImplementation((() => undefined) as never);
+
+    // Create a runner that blocks on the 3rd step so we can trigger SIGTERM
+    let stepCount = 0;
+    let resolveBlock: (() => void) | undefined;
+    const blockPromise = new Promise<void>((resolve) => {
+      resolveBlock = resolve;
+    });
+
+    const runner: StepRunner = {
+      run: async (step: StepName) => {
+        stepCount++;
+        if (stepCount === 3) {
+          // Trigger SIGTERM while we're "running" step 3
+          if (sigtermHandler) sigtermHandler();
+          // Let the step finish after SIGTERM handler runs
+          resolveBlock!();
+        }
+        return { success: true };
+      },
+    };
+
+    const conductor = new Conductor({ projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events });
+    await conductor.run();
+
+    // SIGTERM handler should have been registered
+    expect(processOnSpy).toHaveBeenCalledWith('SIGTERM', expect.any(Function));
+
+    // State should have been saved (handler calls writeState)
+    const result = await readState(statePath);
+    expect(result.ok).toBe(true);
+
+    processOnSpy.mockRestore();
+    exitSpy.mockRestore();
+  });
+
+  it('saves state on SIGHUP before exit', async () => {
+    let sighupHandler: (() => void) | undefined;
+    const processOnSpy = vi.spyOn(process, 'on').mockImplementation(((
+      event: string,
+      handler: (...args: unknown[]) => void,
+    ) => {
+      if (event === 'SIGHUP') {
+        sighupHandler = handler as () => void;
+      }
+      return process;
+    }) as typeof process.on);
+
+    // The SIGHUP handler calls process.exit(129); stub it so the real exit
+    // doesn't surface as an unhandled rejection that fails the vitest run.
+    const exitSpy = vi
+      .spyOn(process, 'exit')
+      .mockImplementation((() => undefined) as never);
+
+    // Create a runner that blocks on the 3rd step so we can trigger SIGHUP
+    let stepCount = 0;
+    let resolveBlock: (() => void) | undefined;
+    const blockPromise = new Promise<void>((resolve) => {
+      resolveBlock = resolve;
+    });
+
+    const runner: StepRunner = {
+      run: async (step: StepName) => {
+        stepCount++;
+        if (stepCount === 3) {
+          // Trigger SIGHUP while we're "running" step 3
+          if (sighupHandler) sighupHandler();
+          // Let the step finish after SIGHUP handler runs
+          resolveBlock!();
+        }
+        return { success: true };
+      },
+    };
+
+    const conductor = new Conductor({ projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events });
+    await conductor.run();
+
+    // SIGHUP handler should have been registered
+    expect(processOnSpy).toHaveBeenCalledWith('SIGHUP', expect.any(Function));
+
+    // State should have been saved (handler calls writeState)
+    const result = await readState(statePath);
+    expect(result.ok).toBe(true);
+
+    processOnSpy.mockRestore();
+    exitSpy.mockRestore();
+  });
+
   describe('backward navigation', () => {
     it('getNavigableSteps returns only done and stale steps', () => {
       const state: ConductState = {

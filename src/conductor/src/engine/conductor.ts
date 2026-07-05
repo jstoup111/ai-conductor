@@ -861,12 +861,23 @@ export class Conductor {
       startIndex = this.findResumeIndex(state, steps);
     }
 
-    // Save state on SIGINT before exit
-    const sigintHandler = async () => {
+    // Save state on SIGINT/SIGTERM/SIGHUP before exit
+    // Exit codes follow Unix convention: 128 + signal number
+    const signalHandlerBase = async (signal: NodeJS.Signals) => {
       await writeState(this.stateFilePath, state);
-      process.exit(130); // 128 + SIGINT(2) — standard Unix convention
+      const exitCodes: Record<NodeJS.Signals, number> = {
+        SIGINT: 130,   // 128 + 2
+        SIGTERM: 143,  // 128 + 15
+        SIGHUP: 129,   // 128 + 1
+      };
+      process.exit(exitCodes[signal] ?? 1);
     };
+    const sigintHandler = () => signalHandlerBase('SIGINT');
+    const sigtermHandler = () => signalHandlerBase('SIGTERM');
+    const sighupHandler = () => signalHandlerBase('SIGHUP');
     process.on('SIGINT', sigintHandler);
+    process.on('SIGTERM', sigtermHandler);
+    process.on('SIGHUP', sighupHandler);
 
     // Per-step counter for how many times the user has picked `retry` from the
     // recovery menu in this session. Once it hits MAX_RECOVERY_RETRIES, the
@@ -1971,6 +1982,8 @@ export class Conductor {
       await this.events.emit({ type: 'loop_halt', reason, prUrl });
     } finally {
       process.off('SIGINT', sigintHandler);
+      process.off('SIGTERM', sigtermHandler);
+      process.off('SIGHUP', sighupHandler);
 
       // Self-build sandbox teardown (TR-5): the throwaway CLAUDE_CONFIG_DIR is
       // removed on EVERY exit path — success, HALT, or a mid-build crash. teardown
