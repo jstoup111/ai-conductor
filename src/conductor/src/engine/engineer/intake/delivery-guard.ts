@@ -1,8 +1,10 @@
-// delivery-guard module — PR state verification probe (Task 1, TR-1) and
-// claim delivery guard decorator (Task 2, TR-2)
+// delivery-guard module — PR state verification probe (Task 1, TR-1),
+// claim delivery guard decorator (Task 2, TR-2), and auto-heal for delivered
+// entries (Task 3, TR-3).
 //
 // Provides PR state probing utilities for the claim delivery guard.
-// Used to detect when a spec PR has been closed-unmerged (re-eligibility trigger).
+// Used to detect when a spec PR has been closed-unmerged (re-eligibility trigger)
+// and to auto-heal delivered entries that have PRs open or merged.
 
 /** Shell runner for the `gh` CLI. Mirrors the engineer loop's GhRunner shape. */
 export type GhRunner = (args: string[], opts: { cwd: string }) => Promise<{ stdout: string }>;
@@ -74,9 +76,15 @@ export interface GuardLedger {
   transition(...args: any[]): Promise<void>;
 }
 
+/** Simple logger interface. */
+export interface Logger {
+  info(msg: string): void;
+}
+
 /** Dependencies passed to the decorator. */
 export interface DeliveryGuardDeps {
   gh: GhRunner;
+  logger?: Logger;
 }
 
 /**
@@ -85,12 +93,16 @@ export interface DeliveryGuardDeps {
  * For healthy candidates (no ledger entry or status 'pending'/'unseen'),
  * passes through unchanged without ledger writes or gh calls.
  *
- * Holds rejected candidates in an internal list for later release patterns
- * (implemented in later tasks).
+ * For problematic candidates with a recorded prUrl and status >= 'pending'
+ * (claimed, routed, deciding), checks PR state via gh runner:
+ * - If PR is OPEN or MERGED → auto-heals entry to 'done' with metadata
+ *   preserved, acks the envelope, and continues to next candidate
+ * - Otherwise → holds rejected candidate for later release pattern
+ *   (implemented in later tasks)
  *
  * @param queue - The underlying IntakeQueue to wrap
  * @param ledger - The ledger for duplicate detection
- * @param deps - Dependencies (gh runner, etc.)
+ * @param deps - Dependencies (gh runner, logger)
  * @returns A wrapped queue with { claim(), release() }
  */
 export function createDeliveryGuardedQueue(
@@ -99,6 +111,7 @@ export function createDeliveryGuardedQueue(
   deps: DeliveryGuardDeps,
 ): GuardedQueue {
   const held: GuardedEnvelope[] = [];
+  const logger = deps.logger ?? { info: () => {} };
 
   return {
     async claim(): Promise<GuardedEnvelope | null> {
@@ -117,7 +130,30 @@ export function createDeliveryGuardedQueue(
         return candidate;
       }
 
-      // Problematic candidate — hold it for later release pattern
+      // Task 3: Check if entry can be auto-healed (has prUrl and PR is open/merged)
+      if (entry.prUrl) {
+        const prState = await verifyPrState(deps.gh, entry.prUrl);
+
+        if (prState === 'open' || prState === 'merged') {
+          // PR is delivered — heal the entry to 'done' with metadata preserved
+          const priorStatus = entry.status;
+          await ledger.transition(source, sourceRef, 'done', {
+            prUrl: entry.prUrl,
+            branch: entry.branch,
+          });
+
+          // Ack the intake envelope (remove it from queue)
+          await queue.release(candidate);
+
+          // Log audit trail
+          logger.info(`Healed stale entry ${sourceRef}: ${priorStatus} → done`);
+
+          // Continue scanning for the next candidate
+          return this.claim();
+        }
+      }
+
+      // Not healable — hold it for later release pattern
       held.push(candidate);
 
       // Continue scanning for the next candidate
