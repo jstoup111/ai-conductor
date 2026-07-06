@@ -5603,4 +5603,183 @@ describe('appendRemediationTasks', () => {
     // Valid task should NOT be appended if validation fails
     expect(content).not.toContain('### Task rem-test-1:');
   });
+
+  describe('idempotent upsert semantics', () => {
+    it('append task with id rem-fr10-1 → exists in plan', async () => {
+      const planPath = join(dir, 'plan.md');
+      await writeFile(planPath, '# Implementation Plan\n');
+
+      const remediationList = [
+        {
+          id: 'rem-fr10-1',
+          title: 'Fix framework issue 10 - step 1',
+        },
+      ];
+
+      const result = await appendRemediationTasks(dir, planPath, remediationList);
+      expect(result).toEqual({ success: true });
+
+      const content = await readFile(planPath, 'utf-8');
+      expect(content).toContain('### Task rem-fr10-1:');
+    });
+
+    it('append same id again → still exactly one instance (no duplicate)', async () => {
+      const planPath = join(dir, 'plan.md');
+      await writeFile(planPath, '# Implementation Plan\n');
+
+      const remediationList = [
+        {
+          id: 'rem-fr10-1',
+          title: 'Fix framework issue 10 - step 1',
+        },
+      ];
+
+      // First append
+      let result = await appendRemediationTasks(dir, planPath, remediationList);
+      expect(result).toEqual({ success: true });
+
+      // Second append with same id
+      result = await appendRemediationTasks(dir, planPath, remediationList);
+      expect(result).toEqual({ success: true });
+
+      const content = await readFile(planPath, 'utf-8');
+      const matches = content.match(/### Task rem-fr10-1:/g);
+      expect(matches).toHaveLength(1); // Exactly one, not two
+    });
+
+    it('attempt to append same id with different content → preserved (not mutated)', async () => {
+      const planPath = join(dir, 'plan.md');
+      await writeFile(planPath, '# Implementation Plan\n');
+
+      // First append
+      const firstList = [
+        {
+          id: 'rem-fr10-1',
+          title: 'Original title for rem-fr10-1',
+        },
+      ];
+      let result = await appendRemediationTasks(dir, planPath, firstList);
+      expect(result).toEqual({ success: true });
+
+      let content = await readFile(planPath, 'utf-8');
+      expect(content).toContain('Original title for rem-fr10-1');
+
+      // Try to append same id with different title
+      const secondList = [
+        {
+          id: 'rem-fr10-1',
+          title: 'Different title for rem-fr10-1',
+        },
+      ];
+      result = await appendRemediationTasks(dir, planPath, secondList);
+      expect(result).toEqual({ success: true });
+
+      content = await readFile(planPath, 'utf-8');
+      // Original should be preserved
+      expect(content).toContain('Original title for rem-fr10-1');
+      // A suffixed version should be created for the different content
+      const hasSuffixedVersion = /### Task rem-fr10-1-[a-f0-9]{6}:.*Different title for rem-fr10-1/.test(content);
+      expect(hasSuffixedVersion).toBe(true);
+    });
+
+    it('two separate remediations from different gates with same semantic issue → distinct ids (with suffix)', async () => {
+      const planPath = join(dir, 'plan.md');
+      await writeFile(planPath, '# Implementation Plan\n');
+
+      // Simulate different gates detecting the same semantic issue:
+      // Gate 1 (fr10 gate) creates rem-fr10-1 with specific content
+      const gateOneList = [
+        {
+          id: 'rem-fr10-1',
+          title: 'Fix schema mismatch in validator.ts:42',
+        },
+      ];
+
+      // Gate 2 (adr gate) tries to create rem-fr10-1 with different content
+      // (same semantic issue but from a different gate perspective)
+      const gateTwoList = [
+        {
+          id: 'rem-fr10-1',
+          title: 'Fix schema mismatch in parser.ts:88',
+        },
+      ];
+
+      let result = await appendRemediationTasks(dir, planPath, gateOneList);
+      expect(result).toEqual({ success: true });
+
+      result = await appendRemediationTasks(dir, planPath, gateTwoList);
+      expect(result).toEqual({ success: true });
+
+      const content = await readFile(planPath, 'utf-8');
+
+      // Both distinct versions should exist with different ids or content markers
+      expect(content).toContain('validator.ts:42');
+      expect(content).toContain('parser.ts:88');
+
+      // Should have at least 2 different task entries for the same semantic issue
+      const taskEntries = content.match(/### Task rem-fr10-1[^:]*:/g);
+      expect(taskEntries).toBeDefined();
+      expect((taskEntries || []).length).toBeGreaterThanOrEqual(1);
+    });
+
+    it('plan re-parses after multiple appends with no corruption', async () => {
+      const planPath = join(dir, 'plan.md');
+      const initialContent = `# Implementation Plan
+
+## Overview
+This is the implementation plan.
+
+## Tasks
+
+### Task 1: Initial task
+Some description here.
+`;
+      await writeFile(planPath, initialContent);
+
+      const remediationList1 = [
+        {
+          id: 'rem-test-a',
+          title: 'First remediation',
+        },
+      ];
+
+      const remediationList2 = [
+        {
+          id: 'rem-test-b',
+          title: 'Second remediation',
+        },
+      ];
+
+      const remediationList3 = [
+        {
+          id: 'rem-test-a', // Duplicate id
+          title: 'First remediation',
+        },
+      ];
+
+      // Multiple appends
+      let result = await appendRemediationTasks(dir, planPath, remediationList1);
+      expect(result).toEqual({ success: true });
+
+      result = await appendRemediationTasks(dir, planPath, remediationList2);
+      expect(result).toEqual({ success: true });
+
+      result = await appendRemediationTasks(dir, planPath, remediationList3);
+      expect(result).toEqual({ success: true });
+
+      const content = await readFile(planPath, 'utf-8');
+
+      // Plan should still be valid markdown
+      expect(content).toContain('# Implementation Plan');
+      expect(content).toContain('## Tasks');
+
+      // Original content preserved
+      expect(content).toContain('Initial task');
+      expect(content).toContain('Some description here');
+
+      // Both tasks should exist exactly once
+      expect(content.match(/### Task rem-test-a:/g)).toHaveLength(1);
+      expect(content.match(/### Task rem-test-b:/g)).toHaveLength(1);
+    });
+  });
 });

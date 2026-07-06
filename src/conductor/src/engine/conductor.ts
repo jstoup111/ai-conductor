@@ -3007,10 +3007,61 @@ export async function appendRemediationTasks(
     planContent = '';
   }
 
-  // Append each remediation task header
-  let updated = planContent;
+  // Parse existing task headers to detect duplicates and content drift
+  // Regex: ### Task <id>: <title>
+  const taskHeaderRegex = /^### Task ([A-Za-z0-9._-]+(?:-[a-f0-9]{6})?(?:-\d+)?): (.+)$/gm;
+  const existingTasks = new Map<string, { title: string; fullHeader: string }>();
+  let match;
+  while ((match = taskHeaderRegex.exec(planContent)) !== null) {
+    const taskId = match[1];
+    const taskTitle = match[2];
+    const fullHeader = match[0];
+    existingTasks.set(taskId, { title: taskTitle, fullHeader });
+  }
+
+  // Determine which tasks to append (idempotent upsert semantics)
+  const tasksToAppend: Array<{ id: string; title: string; finalId: string }> = [];
+
   for (const task of remediationList) {
-    const taskHeader = `### Task ${task.id}: ${task.title}\n`;
+    const existing = existingTasks.get(task.id);
+
+    if (existing) {
+      // Task ID already exists
+      if (existing.title === task.title) {
+        // Same ID, same content → idempotent, skip
+        log(`Task ${task.id} already exists with same content, skipping`);
+        continue;
+      } else {
+        // Same ID, different content → create content-hash suffix to distinguish
+        const { createHash } = await import('crypto');
+        const contentHash = createHash('sha256')
+          .update(task.title)
+          .digest('hex')
+          .slice(0, 6);
+
+        const suffixedId = `${task.id}-${contentHash}`;
+
+        // Check if the suffixed ID already exists
+        if (existingTasks.has(suffixedId)) {
+          log(`Task ${suffixedId} already exists with same content, skipping`);
+          continue;
+        }
+
+        log(
+          `Task ${task.id} exists with different content, using suffix: ${suffixedId}`,
+        );
+        tasksToAppend.push({ id: task.id, title: task.title, finalId: suffixedId });
+      }
+    } else {
+      // New task ID, append as-is
+      tasksToAppend.push({ id: task.id, title: task.title, finalId: task.id });
+    }
+  }
+
+  // Append tasks that don't have duplicates
+  let updated = planContent;
+  for (const task of tasksToAppend) {
+    const taskHeader = `### Task ${task.finalId}: ${task.title}\n`;
     updated += taskHeader;
   }
 
