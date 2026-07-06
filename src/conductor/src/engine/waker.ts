@@ -66,5 +66,14 @@ export function Waker() {
 
       return currentPromise;
     },
+
+    /**
+     * Pure synchronous, non-consuming check: true if a wake signal is
+     * currently held (i.e. the next armed() call would resolve immediately).
+     * Does not clear the signal or affect any pending waiter.
+     */
+    isSignalHeld(): boolean {
+      return signalHeld;
+    },
   };
 }

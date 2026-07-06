@@ -782,7 +782,9 @@ export async function runDaemon(
           break;
         }
         idlePolls++;
-        if (idlePolls > maxIdlePolls) {
+        const idleTimeoutHit = idlePolls > maxIdlePolls;
+
+        if (idleTimeoutHit) {
           stopReason = 'idle_timeout';
           break;
         }
