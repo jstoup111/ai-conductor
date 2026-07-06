@@ -36,7 +36,7 @@
 // No real `gh`, no real filesystem status-surface writes, no real tmux/process.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { readFile } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -734,6 +734,108 @@ describe('Task 17 — intake-loop CLI subcommand (production wiring)', () => {
     expect(enqueued).toHaveLength(1);
     expect(notified).toHaveLength(1);
     expect(sleepCalls).toBe(0);
+  });
+
+  it('Production push transport wiring: sends notification for new ideas', async () => {
+    const mod = await load(CLI_MOD);
+    const dispatch = requireFn(mod, 'dispatchIntakeLoop');
+
+    const polled = { count: 0 };
+    const fakeAdapter = {
+      poll: async () => {
+        polled.count++;
+        return [makeEnvelope('o/a#1')];
+      },
+    };
+    const enqueued: any[] = [];
+    const fakeQueue = { enqueue: async (e: any) => void enqueued.push(e) };
+    const fakeBuildIntake = () => ({
+      reader: {} as any,
+      ledger: {} as any,
+      queue: fakeQueue as any,
+      adapter: fakeAdapter as any,
+    });
+
+    let sleepCalls = 0;
+    const fakeSleep = async () => {
+      sleepCalls++;
+    };
+
+    const sendNotification = vi.fn();
+
+    const code = await dispatch(
+      { kind: 'run', once: true, intervalMs: 999 },
+      {
+        buildIntake: fakeBuildIntake as any,
+        sendNotification,
+        sleep: fakeSleep,
+        now: () => new Date('2026-06-30T00:00:00.000Z'),
+        log: () => {},
+        printErr: () => {},
+        engineerDir: '/tmp/test-push-notification-wiring',
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(polled.count).toBe(1);
+    expect(enqueued).toHaveLength(1);
+    expect(sleepCalls).toBe(0);
+
+    // Verify sendNotification was called exactly once with the correct message
+    expect(sendNotification).toHaveBeenCalledTimes(1);
+    const [callArg] = sendNotification.mock.calls[0];
+    expect(callArg.title).toBe('Intake: new ideas queued');
+    expect(callArg.message).toContain('1 new idea(s)');
+    expect(callArg.message).toContain('o/a#1');
+  });
+
+  it('Production push transport wiring: no notification when poll is empty', async () => {
+    const mod = await load(CLI_MOD);
+    const dispatch = requireFn(mod, 'dispatchIntakeLoop');
+
+    const polled = { count: 0 };
+    const fakeAdapter = {
+      poll: async () => {
+        polled.count++;
+        return [];
+      },
+    };
+    const enqueued: any[] = [];
+    const fakeQueue = { enqueue: async (e: any) => void enqueued.push(e) };
+    const fakeBuildIntake = () => ({
+      reader: {} as any,
+      ledger: {} as any,
+      queue: fakeQueue as any,
+      adapter: fakeAdapter as any,
+    });
+
+    let sleepCalls = 0;
+    const fakeSleep = async () => {
+      sleepCalls++;
+    };
+
+    const sendNotification = vi.fn();
+
+    const code = await dispatch(
+      { kind: 'run', once: true, intervalMs: 999 },
+      {
+        buildIntake: fakeBuildIntake as any,
+        sendNotification,
+        sleep: fakeSleep,
+        now: () => new Date('2026-06-30T00:00:00.000Z'),
+        log: () => {},
+        printErr: () => {},
+        engineerDir: '/tmp/test-push-no-notification-empty',
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(polled.count).toBe(1);
+    expect(enqueued).toHaveLength(0);
+    expect(sleepCalls).toBe(0);
+
+    // Verify sendNotification was never called when there are no new ideas
+    expect(sendNotification).toHaveBeenCalledTimes(0);
   });
 
   it('dispatchIntakeLoop imports no LLM/provider/claude-session module (zero-token guard)', async () => {
