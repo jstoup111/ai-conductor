@@ -288,6 +288,7 @@ export function createGithubIssuesAdapter(deps: GithubIssuesDeps): IntakeSource 
         // so a later poll/report can retry.
         const msg = err instanceof Error ? err.message : String(err);
         log(`github-issues: write-back failed for ${sourceRef} (${status}) — ${msg}`);
+        log(`github-issues: retry manually — ${remediation.join(' && ')}`);
         return { ok: false, remediation };
       }
 
