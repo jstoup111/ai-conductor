@@ -58,5 +58,8 @@ export async function intakeTick(deps: IntakeLoopDeps): Promise<IntakeTickSummar
   for (const envelope of envelopes) {
     await deps.enqueue(envelope);
   }
+  if (envelopes.length > 0) {
+    await deps.notify(envelopes);
+  }
   return { captured: envelopes.length };
 }

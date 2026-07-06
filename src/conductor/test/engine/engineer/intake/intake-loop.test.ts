@@ -13,7 +13,7 @@
 // and fails again if either type is renamed/removed.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { readFile } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -119,5 +119,60 @@ describe('intakeTick', () => {
     expect(summary).toEqual({ captured: 2 });
     expect(enqueued).toHaveLength(2);
     expect(enqueued).toEqual([envelopeA, envelopeB]);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Task 3: Tick re-run captures nothing already ledger-known (exactly-once).
+//
+// Story: FR-12/FR-2 · Plan: .docs/plans/2026-06-30-background-intake-conduct-loop.md (Task 3)
+//
+// The adapter's `poll()` is the sole dedup authority (ADR-012): once an idea
+// is ledger-known it is omitted from subsequent `poll()` results. This test
+// asserts the tick correctly handles that `[]` result — no re-enqueue, no
+// re-notify — for exactly-once capture across repeated ticks.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('intakeTick — ledger dedup (exactly-once)', () => {
+  it('a second tick whose poll() returns [] enqueues nothing and notifies nothing', async () => {
+    const mod = (await import(
+      '../../../../src/engine/engineer/intake/intake-loop.js'
+    )) as Record<string, any>;
+    const intakeTick = mod.intakeTick as (deps: any) => Promise<{ captured: number }>;
+
+    const envelopeA = {
+      id: 'o/a#1',
+      source: 'github-issues',
+      sourceRef: 'o/a#1',
+      text: 'idea for o/a#1',
+      status: 'pending' as const,
+      receivedAt: '2026-06-30T00:00:00.000Z',
+    };
+
+    let callCount = 0;
+    const poll = vi.fn(async () => {
+      callCount += 1;
+      return callCount === 1 ? [envelopeA] : [];
+    });
+    const enqueue = vi.fn(async (_envelope: unknown) => {});
+    const notify = vi.fn(async (_ideas: unknown[]) => {});
+    const sleep = async (_ms: number) => {};
+    const now = () => new Date('2026-06-30T00:00:00.000Z');
+    const log = (_msg: string) => {};
+
+    const deps = { poll, enqueue, notify, sleep, now, log };
+
+    const first = await intakeTick(deps);
+    expect(first).toEqual({ captured: 1 });
+    expect(enqueue).toHaveBeenCalledTimes(1);
+    expect(notify).toHaveBeenCalledTimes(1);
+
+    enqueue.mockClear();
+    notify.mockClear();
+
+    const second = await intakeTick(deps);
+
+    expect(second).toEqual({ captured: 0 });
+    expect(enqueue).not.toHaveBeenCalled();
+    expect(notify).not.toHaveBeenCalled();
   });
 });
