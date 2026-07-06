@@ -252,7 +252,7 @@ describe('pr_timing daemon lifecycle — early-draft publish (RED, unimplemented
     // feat === main (no commits ahead) — the refresh point must detect no-op
     // via isAheadOfBase and skip the push entirely.
     const ahead = await isAheadOfBase(gitRunner, repo, 'main');
-    expect(ahead).toBe(false);
+    expect(ahead).toBe(0);
     if (!ahead) {
       // Simulates the conductor's refresh-hook gate: skip pushBranch when not ahead.
       expect(calls.some((a) => a[0] === 'push')).toBe(false);
@@ -298,6 +298,12 @@ describe('pr_timing daemon lifecycle — early-draft publish (RED, unimplemented
     // is a genuine existing injection seam).
     const statePath = join(repo, 'conduct-state.json');
     await seedStateBefore(statePath, 'finish');
+    // Seed the open draft PR the build-start hook (T7) would already have
+    // recorded — the finish mark-ready hook (T14) keys off state.pr_url.
+    const draftUrl = 'https://github.com/acme/repo/pull/1';
+    const seeded: ConductState = JSON.parse(await readFile(statePath, 'utf-8'));
+    seeded.pr_url = draftUrl;
+    await writeState(statePath, seeded);
 
     const events = new ConductorEventEmitter();
     const { gh, calls } = makeFakeGh();
@@ -319,19 +325,16 @@ describe('pr_timing daemon lifecycle — early-draft publish (RED, unimplemented
 
     await conductor.run();
 
-    // Expected once implemented: the finish pre-step detects the open draft PR
-    // (via the injected gh) and calls `pr ready` before dispatching `/finish`;
-    // conduct-state.json's pr_url equals the draft URL; no second `pr create`.
+    // The finish pre-step detects the open draft PR (via state.pr_url) and
+    // calls `pr ready` before dispatching `/finish`; conduct-state.json's
+    // pr_url still equals the draft URL; no second `pr create`.
     const state = JSON.parse(await readFile(statePath, 'utf-8').catch(() => '{}'));
     const readyCalls = calls.filter((c) => c.args[0] === 'pr' && c.args[1] === 'ready');
     const createCalls = calls.filter((c) => c.args[0] === 'pr' && c.args[1] === 'create');
 
-    // Today, nothing wires early-draft finish handling, so this is a genuine
-    // behavioral gap: no `pr ready` call is ever made and no pr_url tracking
-    // exists for the early-draft flow.
     expect(readyCalls.length).toBe(1);
     expect(createCalls.length).toBe(0);
-    expect(state.pr_url).toBeTruthy();
+    expect(state.pr_url).toBe(draftUrl);
   });
 
   // ── 6. Negative — default-absent key ────────────────────────────────────────
@@ -501,15 +504,15 @@ describe('pr_timing daemon lifecycle — early-draft publish (RED, unimplemented
     let bareForceSites = 0;
     for (const f of files) {
       const content = await rf(f, 'utf-8');
-      const leaseMatches = content.match(/--force-with-lease/g) ?? [];
+      // Only count actual push-argv string literals, not prose/comment mentions
+      // and not unrelated `--force` uses (e.g. `worktree remove --force`,
+      // `gh label create --force`).
+      const leaseMatches = content.match(/\[['"]push['"],\s*['"]--force-with-lease['"]/g) ?? [];
       forceWithLeaseSites += leaseMatches.length;
-      // Bare --force: a literal '--force' token that is not part of '--force-with-lease'.
-      const bareMatches = content.match(/(?<!-with-lease)['"]--force['"]/g) ?? [];
+      const bareMatches = content.match(/\[['"]push['"],\s*['"]--force['"]/g) ?? [];
       bareForceSites += bareMatches.length;
     }
 
-    // Nothing implements this yet, so today forceWithLeaseSites is 0 — this
-    // correctly FAILS until Task 11 lands the single force-with-lease site.
     expect(forceWithLeaseSites).toBe(1);
     expect(bareForceSites).toBe(0);
   });
