@@ -318,6 +318,49 @@ function resolvePlanPath(projectRoot: string, planRef: string): string {
 const PATH_EXTENSIONS = /\.(?:ts|tsx|js|jsx|mjs|cjs|md|json|yml|yaml|sh|rb|py|go|rs|html|css|scss|vue|toml)$/i;
 const BACKTICK_TOKEN = /`([^`\s]+)`/g;
 
+export interface PlanTask {
+  name: string;
+  paths: string[];
+}
+
+export function parsePlanTasks(text: string): Map<string, PlanTask> {
+  const result = new Map<string, PlanTask>();
+  const lines = text.split('\n');
+  let currentTaskId: string | null = null;
+
+  // Match: ### Task N: Title or ## Task N: Title, etc.
+  // Requires colon and title after the task id
+  const taskHeaderWithTitle = /^#{1,6}\s+Task\s+(\d+):\s*(.+)$/;
+
+  for (const line of lines) {
+    const headerMatch = line.match(taskHeaderWithTitle);
+    if (headerMatch) {
+      const id = headerMatch[1];
+      const name = headerMatch[2].trim();
+      currentTaskId = id;
+      result.set(id, { name, paths: [] });
+      continue;
+    }
+
+    if (!currentTaskId) continue;
+
+    // Extract paths from backtick-delimited tokens
+    let m: RegExpExecArray | null;
+    while ((m = BACKTICK_TOKEN.exec(line)) !== null) {
+      const token = m[1];
+      if (!PATH_EXTENSIONS.test(token) && !token.includes('/')) continue;
+      const normalized = token.replace(/^\.\//, '');
+      if (!normalized || normalized.startsWith('-')) continue;
+      const task = result.get(currentTaskId);
+      if (task && !task.paths.includes(normalized)) {
+        task.paths.push(normalized);
+      }
+    }
+  }
+
+  return result;
+}
+
 export function parsePlanTaskPaths(text: string): Map<string, Set<string>> {
   const result = new Map<string, Set<string>>();
   const lines = text.split('\n');
