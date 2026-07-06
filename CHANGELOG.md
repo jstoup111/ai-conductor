@@ -39,6 +39,19 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   than the raw `warning` enum value; and a gated spec slug already covered by the PROCESSED
   group (stale-ledger dedup) is excluded from GATED, matching the existing HALTED/PROCESSED
   precedence contract.
+- **Halt-PR presentation reliability — verify-after-write + reconciliation sweep (ai-conductor#274).**
+  Daemon halt PRs now reliably carry `needs-remediation` label + draft status + durable body
+  marker via two mechanisms: (1) **Verify-after-write on escalation:** `ensureHaltPresentation()`
+  writes draft, label, and body marker, then re-reads to confirm all three (bounded retry 3×,
+  100ms backoff), moving on even if unconfirmed (best-effort); (2) **Reconciliation sweep on
+  startup + idle tick:** `reconcileHaltPrs()` enumerates open PRs carrying the body marker and
+  heals any missing draft or label (idempotent, no-throw, injected dep hook). Finish cleanup
+  removes all three markers via `cleanupHaltPresentation()` verify-after-write so remediated
+  PRs exit halt state permanently and cannot be re-halted by the sweep. Together: halt PRs
+  cannot present as mergeable; pre-existing broken PRs self-heal; both mechanisms cover each
+  other's failure modes. Modules: `pr-labels.ts` (`ensureHaltPresentation`, `cleanupHaltPresentation`),
+  `halt-pr-reconciliation.ts` (`reconcileHaltPrs`), `daemon.ts` (sweep wiring). See
+  `adr-2026-07-05-halt-pr-presentation-reliability.md` (D1–D5 decisions) and README/`src/conductor/README.md`.
 
 ### Changed
 

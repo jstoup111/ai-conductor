@@ -699,6 +699,66 @@ silent pass-through on error; a lease-protected push that cannot overwrite a con
 change; and best-effort, non-blocking escalation on any failure so a bad resolution never
 reaches `main` unlabeled.
 
+#### Halt-PR presentation reliability (verify-after-write + reconciliation, ai-conductor#274)
+
+When a daemon feature HALTs irrecoverably, it escalates by opening a **draft PR labeled
+`needs-remediation`** so the operator can triage. A halt PR that loses its draft status or
+label becomes indistinguishable from a ready feature PR — the #268/#269 root cause.
+
+**Design** (`engine/pr-labels.ts`, `engine/halt-pr-reconciliation.ts`, `adr-2026-07-05-halt-pr-presentation-reliability`):
+
+The feature guarantees halt PRs reliably carry **three durable markers**:
+
+1. **Draft status** (`isDraft: true`) — unpublishable
+2. **`needs-remediation` label** — human-scannable signal
+3. **Body marker** (`<!-- conductor:needs-remediation -->`) — invisible durable enumeration
+   anchor for the reconciliation sweep when label/draft are lost
+
+**`ensureHaltPresentation(runGh, cwd, prUrl, log, sleep)`** (`pr-labels.ts`):
+
+- Single idempotent operation that asserts all three markers are present
+- Writes draft status, label, and body marker via existing `gh` primitives
+- **Verify-after-write:** re-reads to confirm all three after writing, retries bounded (3 attempts,
+  100ms backoff) on mismatch
+- On retry exhaustion, returns `'unconfirmed'` without throwing (best-effort contract maintained)
+- Label write uses REST endpoint (`gh api .../issues/N/labels`), never `gh pr edit --add-label`
+  (Projects-classic sunset, PR #172)
+- Idempotent body marker: no duplication on reuse or repeated calls
+- Converts already-ready PRs to draft via `gh pr ready --undo` when reused
+
+**`reconcileHaltPrs({projectRoot, log, runGh})`** (`engine/halt-pr-reconciliation.ts`):
+
+- Best-effort background sweep that enumerates **open** PRs and heals broken halt PRs
+- Filters to PRs carrying the body marker (`<!-- conductor:needs-remediation -->`)
+- For each marked PR missing draft or label, calls `ensureHaltPresentation` to repair it
+- Skips unmarked PRs (never converts ready feature PRs to draft or labels them)
+- Idempotent: skips conforming marked PRs (no writes), retries non-conforming PRs on next tick
+- Never throws; errors logged but never re-thrown
+- Wired into **daemon startup and each idle poll tick** (injected dep hook, ADR-013 pattern)
+
+**Finish cleanup** (`daemon-runner.ts`, `halt-pr-rehabilitation.ts`):
+
+- When a halt PR is successfully remediated and finished (reaches `done`), cleanup runs
+  verify-after-write removal of all three markers
+- `cleanupHaltPresentation()` removes `needs-remediation` label, converts to ready, strips
+  body marker, then re-reads to confirm all gone
+- Label removal and ready-conversion include bounded retry (3 attempts, 100ms backoff)
+- Returns `'confirmed'` if all three markers verified gone, `'partial'` if any residuals
+- Body marker removal is critical: once stripped, `reconcileHaltPrs` will no longer enumerate
+  the PR, so it cannot be re-halted by the sweep
+
+**Confluence:**
+
+- **Verify-after-write on escalation** catches most transient failures inline
+- **Reconciliation sweep** heals PRs broken before this code shipped (e.g. #268/#269 pre-existing
+  PRs) or drifted by concurrent checkouts
+- **Finish cleanup** removes all markers so finished PRs exit the halt state permanently
+- Together: a halt PR cannot present as mergeable; pre-existing broken PRs self-heal; the
+  two mechanisms cover each other's failure modes
+
+All operations are **best-effort, non-throwing**, and sit behind the injected `GhRunner` seam
+so they are fully unit-testable with the existing `makeFakeGh` pattern.
+
 ### Model availability fallback ladder (`engine/model-availability.ts`, #186)
 
 Steps and skills are pinned to a preferred model (e.g. Fable for `rebase`, `remediate`,
