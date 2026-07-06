@@ -708,3 +708,43 @@ export async function readHaltPresentation(
     return null;
   }
 }
+
+/**
+ * Ensure the PR body contains the remediation marker, appending it if not present.
+ * Idempotent: if the marker is already in the body, makes no edit call.
+ *
+ * If `currentBody` is provided, uses it directly; otherwise reads the body via
+ * {@link readHaltPresentation}. Swallows all errors and never throws.
+ */
+export async function ensureBodyMarker(
+  runGh: GhRunner = makeProductionGh(),
+  cwd: string,
+  prUrl: string,
+  currentBody?: string,
+  log?: (msg: string) => void,
+): Promise<void> {
+  try {
+    // ── Step 1: determine the current body ────────────────────────────────
+    let body = currentBody;
+    if (body === undefined) {
+      const presentation = await readHaltPresentation(runGh, cwd, prUrl, log);
+      if (!presentation) {
+        log?.(`[pr-labels] ensureBodyMarker: could not read PR presentation`);
+        return;
+      }
+      body = presentation.body;
+    }
+
+    // ── Step 2: check if marker is present; if so, idempotent-exit ────────
+    if (body.includes(NEEDS_REMEDIATION_BODY_MARKER)) {
+      // Marker already present — no edit needed
+      return;
+    }
+
+    // ── Step 3: append marker and call gh pr edit ────────────────────────
+    const newBody = `${body}\n${NEEDS_REMEDIATION_BODY_MARKER}`;
+    await runGh(['pr', 'edit', prUrl, '--body', newBody], { cwd });
+  } catch (err) {
+    log?.(`[pr-labels] ensureBodyMarker(${prUrl}) error: ${err}`);
+  }
+}

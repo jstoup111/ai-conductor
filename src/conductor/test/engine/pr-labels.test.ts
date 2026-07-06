@@ -813,6 +813,66 @@ describe('readHaltPresentation', () => {
   });
 });
 
+// ── ensureBodyMarker ──────────────────────────────────────────────────────────
+
+describe('ensureBodyMarker', () => {
+  it('appends the marker to a body that does not contain it (RED test case a)', async () => {
+    const { gh, calls } = fakeGh([{ stdout: '' }]);
+    const existingBody = 'This is the PR body.';
+    await ensureBodyMarker(gh, '/repo', TEST_PR_URL, existingBody);
+
+    // Should record a gh pr edit call
+    const editCall = calls.find((a) => a[0] === 'pr' && a[1] === 'edit');
+    expect(editCall).toBeDefined();
+
+    const bodyArgIndex = editCall!.indexOf('--body');
+    expect(bodyArgIndex).toBeGreaterThan(-1);
+    const newBody = editCall![bodyArgIndex + 1];
+
+    // New body should contain both original text and marker
+    expect(newBody).toContain(existingBody);
+    expect(newBody).toContain(NEEDS_REMEDIATION_BODY_MARKER);
+
+    // Marker should appear exactly once
+    const markerCount = (newBody.match(/conductor:needs-remediation/g) || []).length;
+    expect(markerCount).toBe(1);
+  });
+
+  it('makes no edit call when the body already contains the marker (RED test case b)', async () => {
+    const { gh, calls } = fakeGh([]);
+    const existingBody = `Some PR body\n${NEEDS_REMEDIATION_BODY_MARKER}\nMore text`;
+    await ensureBodyMarker(gh, '/repo', TEST_PR_URL, existingBody);
+
+    // Should NOT record any gh pr edit call (idempotent)
+    const editCall = calls.find((a) => a[0] === 'pr' && a[1] === 'edit');
+    expect(editCall).toBeUndefined();
+    expect(calls).toHaveLength(0);
+  });
+
+  it('swallows errors and never throws', async () => {
+    const { gh } = fakeGh([new Error('network error')]);
+    const body = 'test body';
+    await expect(ensureBodyMarker(gh, '/repo', TEST_PR_URL, body)).resolves.toBeUndefined();
+  });
+});
+
+// ── Marker constants ──────────────────────────────────────────────────────────────
+
+describe('marker constants', () => {
+  it('NEEDS_REMEDIATION_BODY_MARKER is defined and exported', () => {
+    expect(NEEDS_REMEDIATION_BODY_MARKER).toBeDefined();
+  });
+
+  it('NEEDS_REMEDIATION_BODY_MARKER has the expected value', () => {
+    expect(NEEDS_REMEDIATION_BODY_MARKER).toBe('<!-- conductor:needs-remediation -->');
+  });
+
+  it('NEEDS_REMEDIATION_BODY_MARKER and NEEDS_REMEDIATION_MARKER both exist', () => {
+    expect(NEEDS_REMEDIATION_BODY_MARKER).toBeDefined();
+    expect(NEEDS_REMEDIATION_MARKER).toBeDefined();
+  });
+});
+
 // ── Kill-switch: production runners refuse to exec under AI_CONDUCTOR_NO_REAL_EXEC ─
 // The vitest global setup (test/setup.ts) sets AI_CONDUCTOR_NO_REAL_EXEC=1, so the
 // real gh/git runners must throw instead of shelling out. This guarantees no test
