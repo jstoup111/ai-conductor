@@ -31,7 +31,7 @@ export interface NotifierDeps {
   /** Injected clock — returns the current timestamp. */
   now(): string;
   /** Injected logger. */
-  log(message: string): void;
+  log?(message: string): void;
 }
 
 // ─── Notifier ─────────────────────────────────────────────────────────────────
@@ -74,13 +74,13 @@ export function createNotifier(deps: NotifierDeps): Notifier {
       }
 
       await deps.writeStatus(status);
-      deps.log(`notifier: wrote status surface for ${status.count} idea(s)`);
+      deps.log?.(`notifier: wrote status surface for ${status.count} idea(s)`);
 
       try {
         await deps.push(status);
       } catch (err) {
         const reason = err instanceof Error ? err.message : String(err);
-        deps.log(`notifier: push notification failed (non-fatal): ${reason}`);
+        deps.log?.(`notifier: push notification failed (non-fatal): ${reason}`);
       }
     },
   };
