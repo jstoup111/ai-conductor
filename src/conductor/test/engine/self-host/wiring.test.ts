@@ -73,6 +73,10 @@ function makeGuardrails(overrides: Partial<SelfHostGuardrails> = {}) {
   };
   const guardrails: SelfHostGuardrails = {
     resolveHarnessRoot: vi.fn(async () => '/installed/harness'),
+    resolveInstalledHarnessRoot: vi.fn(async () => ({
+      status: 'ok' as const,
+      root: '/installed/harness',
+    })),
     relink: vi.fn(async () => {}),
     provisionSandbox: vi.fn(async () => sandbox),
     versionGate: vi.fn(async () => ({ ok: true as const })),
@@ -97,6 +101,18 @@ function recordingRunner(onStep?: (step: StepName) => void): {
   };
   return { runner, seen };
 }
+
+describe('self-host wiring — default bundle members forward to the real primitives', () => {
+  it('resolveInstalledHarnessRoot is exposed on the bundle and forwards to the real function', async () => {
+    const { defaultSelfHostGuardrails } = await import('../../../src/engine/self-host/wiring.js');
+    const { resolveInstalledHarnessRoot } = await import(
+      '../../../src/engine/install-freshness.js'
+    );
+    expect(defaultSelfHostGuardrails.resolveInstalledHarnessRoot).toBe(
+      resolveInstalledHarnessRoot,
+    );
+  });
+});
 
 describe('self-host Phase 6 — daemon-loop wiring', () => {
   let dir: string;
@@ -186,6 +202,61 @@ describe('self-host Phase 6 — daemon-loop wiring', () => {
     expect(process.env.CLAUDE_CONFIG_DIR).toBeUndefined();
     expect(completed).toEqual(['feature_complete']);
     expect(await exists(join(dir, '.pipeline/HALT'))).toBe(false);
+  });
+
+  it('passes the INSTALLED root (not the detection root) to provisionSandbox (#363 / TR-4)', async () => {
+    await writeState(statePath, preBuildDoneState());
+    // Detection root ≠ installed root — the sandbox must get the INSTALLED one,
+    // otherwise settings retargeting (main → worktree) is a silent no-op.
+    const { guardrails } = makeGuardrails({
+      resolveHarnessRoot: vi.fn(async () => '/detector/root'),
+      resolveInstalledHarnessRoot: vi.fn(async () => ({
+        status: 'ok' as const,
+        root: '/installed/main',
+      })),
+    });
+    const { runner } = recordingRunner();
+
+    await selfBuildConductor(guardrails, runner).run();
+
+    expect(guardrails.provisionSandbox).toHaveBeenCalledTimes(1);
+    expect(guardrails.provisionSandbox).toHaveBeenCalledWith(
+      expect.objectContaining({ harnessRoot: '/installed/main', worktreeRoot: dir }),
+    );
+  });
+
+  it('resolver unresolved → provisionSandbox falls back to projectRoot (unchanged behavior)', async () => {
+    await writeState(statePath, preBuildDoneState());
+    const { guardrails } = makeGuardrails({
+      resolveHarnessRoot: vi.fn(async () => '/detector/root'),
+      resolveInstalledHarnessRoot: vi.fn(async () => ({ status: 'unresolved' as const })),
+    });
+    const { runner } = recordingRunner();
+
+    await selfBuildConductor(guardrails, runner).run();
+
+    expect(guardrails.provisionSandbox).toHaveBeenCalledWith(
+      expect.objectContaining({ harnessRoot: dir, worktreeRoot: dir }),
+    );
+  });
+
+  it('resolver rejected → provisionSandbox falls back to projectRoot (relink HALT covers the dangerous case upstream)', async () => {
+    await writeState(statePath, preBuildDoneState());
+    const { guardrails } = makeGuardrails({
+      resolveHarnessRoot: vi.fn(async () => '/detector/root'),
+      resolveInstalledHarnessRoot: vi.fn(async () => ({
+        status: 'rejected' as const,
+        reason: 'worktree-root',
+        detail: 'resolved root /x/.worktrees/y still sits under .worktrees/',
+      })),
+    });
+    const { runner } = recordingRunner();
+
+    await selfBuildConductor(guardrails, runner).run();
+
+    expect(guardrails.provisionSandbox).toHaveBeenCalledWith(
+      expect.objectContaining({ harnessRoot: dir, worktreeRoot: dir }),
+    );
   });
 
   it('restores env and tears down the sandbox when the build throws mid-dispatch', async () => {

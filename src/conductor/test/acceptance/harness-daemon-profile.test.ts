@@ -97,6 +97,7 @@ describe('harness-daemon-profile — real version-gate composition (TR-3)', () =
     };
     const guardrails: SelfHostGuardrails = {
       resolveHarnessRoot: vi.fn(async () => dir),
+      resolveInstalledHarnessRoot: vi.fn(async () => ({ status: 'ok' as const, root: dir })),
       relink: vi.fn(async () => {}),
       provisionSandbox: vi.fn(async () => {
         throw new Error('sandbox must not be provisioned — sandbox_build_env is disabled');
@@ -197,6 +198,7 @@ describe('harness-daemon-profile — real version-gate composition (TR-3)', () =
     };
     const guardrails: SelfHostGuardrails = {
       resolveHarnessRoot: vi.fn(async () => dir),
+      resolveInstalledHarnessRoot: vi.fn(async () => ({ status: 'ok' as const, root: dir })),
       relink: vi.fn(async () => {}),
       provisionSandbox: vi.fn(async () => {
         throw new Error('sandbox must not be provisioned — sandbox_build_env is disabled');

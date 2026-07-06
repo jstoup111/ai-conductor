@@ -741,7 +741,14 @@ export class Conductor {
     }
 
     if (!this.activeSandbox) {
-      const harnessRoot = (await this.guardrails.resolveHarnessRoot()) ?? this.projectRoot;
+      // INSTALLED root, not the module-relative detection root (#363): for a
+      // worktree-run engine the detection root IS the worktree, which made the
+      // sandbox settings retarget (main → worktree) a silent no-op and left the
+      // build running against the operator's live hook paths. Fallback for an
+      // unresolved/rejected root stays projectRoot — the relink preflight has
+      // already HALTed the dangerous (rejected) case before this point.
+      const installed = await this.guardrails.resolveInstalledHarnessRoot();
+      const harnessRoot = installed.status === 'ok' ? installed.root : this.projectRoot;
       this.activeSandbox = await this.guardrails.provisionSandbox({
         worktreeRoot: this.projectRoot,
         harnessRoot,

@@ -75,6 +75,7 @@ describe('acceptance: sandbox auth-expiry park-and-poll (sandbox-auth-expiry-par
   function makeGuardrails(): SelfHostGuardrails {
     return {
       resolveHarnessRoot: async () => dir,
+      resolveInstalledHarnessRoot: async () => ({ status: 'ok' as const, root: dir }),
       relink: async () => {},
       provisionSandbox: vi.fn(async () => {
         const configDir = await mkdtemp(join(tmpdir(), 'sandbox-'));
