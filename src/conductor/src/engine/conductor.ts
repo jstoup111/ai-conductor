@@ -1354,13 +1354,13 @@ export class Conductor {
             // reconcile .pipeline/task-status.json against git log. If the
             // prior pipeline run committed work for tasks still marked
             // "pending", mark them completed in-place and re-check the gate
-            // — the retry never has to fire.
+            // — the retry never has to fire. Runs fresh on every gate
+            // evaluation (no once-per-session guard) to ensure derivation
+            // uses current git state and fresh task counts (H7).
             if (
               !completion.done &&
-              step.name === 'build' &&
-              !autoHealAttempted.has('build')
+              step.name === 'build'
             ) {
-              autoHealAttempted.add('build');
               const heal = await attemptAutoHeal(this.projectRoot).catch(() => ({
                 healed: [],
                 skipped: [],
