@@ -75,7 +75,7 @@ function enrichOrigin(envelope: Envelope, log: (msg: string) => void): Envelope 
         : id.includes('#')
           ? id
           : `${hintRepo}#${id}`;
-    return { ...envelope, target: hintRepo, sourceRef } as Envelope;
+    return { ...envelope, target: hintRepo, sourceRef };
   }
 
   log(
