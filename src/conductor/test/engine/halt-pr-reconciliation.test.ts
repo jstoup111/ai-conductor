@@ -171,4 +171,104 @@ describe('reconcileHaltPrs (Task 15)', () => {
     );
     expect(mutatesPr303).toHaveLength(0);
   });
+
+  it('should gracefully handle gh pr list throwing an error and return without throwing', async () => {
+    // Arrange: fake gh that throws on pr list
+    const failingGh: GhRunner = async (args: string[]) => {
+      if (args[0] === 'pr' && args[1] === 'list') {
+        throw new Error('network error: connection timeout');
+      }
+      return { stdout: '' };
+    };
+
+    const logs: string[] = [];
+    const log = (msg: string) => logs.push(msg);
+
+    // Act & Assert: should not throw
+    await expect(
+      reconcileHaltPrs({ projectRoot: tempDir, runGh: failingGh, log }),
+    ).resolves.toBeUndefined();
+
+    // Assert: error was logged
+    expect(logs.some((msg) => msg.includes('failed to enumerate PRs'))).toBe(true);
+  });
+
+  it('should gracefully handle gh pr list returning empty array and no-op', async () => {
+    // Arrange: fake gh that returns empty PR list
+    const emptyGh: GhRunner = async (args: string[]) => {
+      if (args[0] === 'pr' && args[1] === 'list') {
+        return { stdout: '[]' };
+      }
+      return { stdout: '' };
+    };
+
+    const logs: string[] = [];
+    const log = (msg: string) => logs.push(msg);
+
+    // Act: should not throw and should be a no-op
+    await expect(
+      reconcileHaltPrs({ projectRoot: tempDir, runGh: emptyGh, log }),
+    ).resolves.toBeUndefined();
+
+    // Assert: enumeration happened but found 0 PRs, and found 0 marked PRs
+    expect(logs.some((msg) => msg.includes('enumerated 0 open PRs, found 0 marked'))).toBe(true);
+  });
+
+  it('(Task 16) should heal marked PR missing only label (already draft) → adds label only, no draft conversion', async () => {
+    // Arrange: marked PR already in draft but missing the needs-remediation label
+    const missingLabelOnly: FakePr = {
+      number: 304,
+      url: 'https://github.com/owner/repo/pull/304',
+      isDraft: true, // already draft ✓
+      labels: [], // missing needs-remediation label ✗
+      body: `Halt body.\n\n${NEEDS_REMEDIATION_BODY_MARKER}`,
+    };
+
+    const { gh, calls } = makeFakeGhForReconciliation([missingLabelOnly]);
+
+    // Act
+    await reconcileHaltPrs({ projectRoot: tempDir, runGh: gh });
+
+    // Assert: label should be added
+    expect(missingLabelOnly.labels).toContain('needs-remediation');
+
+    // Assert: no draft conversion should happen (no --undo call)
+    const undoCalls = calls.filter(
+      (c) => c[0] === 'pr' && c[1] === 'ready' && c.includes('--undo'),
+    );
+    expect(undoCalls).toHaveLength(0);
+
+    // Assert: it should still be draft (idempotence: not converted to ready)
+    expect(missingLabelOnly.isDraft).toBe(true);
+  });
+
+  it('(Task 16) should heal marked PR missing only draft (already labeled) → converts to draft only, no redundant label add', async () => {
+    // Arrange: marked PR has the label but is not in draft
+    const missingDraftOnly: FakePr = {
+      number: 305,
+      url: 'https://github.com/owner/repo/pull/305',
+      isDraft: false, // not draft ✗
+      labels: ['needs-remediation'], // already labeled ✓
+      body: `Halt body.\n\n${NEEDS_REMEDIATION_BODY_MARKER}`,
+    };
+
+    const { gh, calls } = makeFakeGhForReconciliation([missingDraftOnly]);
+
+    // Act
+    await reconcileHaltPrs({ projectRoot: tempDir, runGh: gh });
+
+    // Assert: should be converted to draft
+    expect(missingDraftOnly.isDraft).toBe(true);
+
+    // Assert: label should still be present (not removed)
+    expect(missingDraftOnly.labels).toContain('needs-remediation');
+
+    // Assert: verify at least one --undo call was made for draft conversion
+    const undoCalls = calls.filter(
+      (c) =>
+        c[0] === 'pr' && c[1] === 'ready' && c.includes('--undo') &&
+        c.includes(missingDraftOnly.url),
+    );
+    expect(undoCalls.length).toBeGreaterThan(0);
+  });
 });
