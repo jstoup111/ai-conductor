@@ -45,12 +45,43 @@ describe('engine/daemon-runner — makeRunFeature', () => {
   it('done → marks processed, removes the worktree, reports prUrl', async () => {
     const rec: { teardownKeep?: boolean; processed?: boolean } = {};
     const run = makeRunFeature(
-      deps({ done: true, halted: false, prUrl: 'http://pr/1', costTokens: 42 }, rec),
+      deps(
+        {
+          done: true,
+          halted: false,
+          finishChoice: 'pr',
+          prUrl: 'http://pr/1',
+          costTokens: 42,
+        },
+        rec,
+      ),
     );
     const out = await run(ITEM);
     expect(out.status).toBe('done');
     expect(out.prUrl).toBe('http://pr/1');
     expect(out.costTokens).toBe(42);
+    expect(rec.processed).toBe(true);
+    expect(rec.teardownKeep).toBe(false); // removed on success
+  });
+
+  it('done with verified prUrl and finishChoice="pr" → ships (happy path)', async () => {
+    const rec: { teardownKeep?: boolean; processed?: boolean } = {};
+    const run = makeRunFeature(
+      deps(
+        {
+          done: true,
+          halted: false,
+          finishChoice: 'pr',
+          prUrl: 'https://github.com/owner/repo/pull/123',
+          costTokens: 50,
+        },
+        rec,
+      ),
+    );
+    const out = await run(ITEM);
+    expect(out.status).toBe('done');
+    expect(out.prUrl).toBe('https://github.com/owner/repo/pull/123');
+    expect(out.costTokens).toBe(50);
     expect(rec.processed).toBe(true);
     expect(rec.teardownKeep).toBe(false); // removed on success
   });
@@ -103,7 +134,15 @@ describe('engine/daemon-runner — makeRunFeature', () => {
       opts: { prepareThrows?: boolean } = {},
       rec: { teardownKeep?: boolean } = {},
     ): FeatureRunnerDeps {
-      const base = deps({ done: true, halted: false, prUrl: 'http://pr/1' }, rec);
+      const base = deps(
+        {
+          done: true,
+          halted: false,
+          finishChoice: 'pr',
+          prUrl: 'http://pr/1',
+        },
+        rec,
+      );
       return {
         ...base,
         createWorktree: async (slug) => {
@@ -141,7 +180,14 @@ describe('engine/daemon-runner — makeRunFeature', () => {
     it('writes a diagnostic .pipeline/HALT into the worktree on an error (so it is not opaque)', async () => {
       const wt = await mkdtemp(join(tmpdir(), 'wt-err-'));
       try {
-        const base = deps({ done: true, halted: false }, {});
+        const base = deps(
+          {
+            done: true,
+            halted: false,
+            finishChoice: 'pr',
+          },
+          {},
+        );
         const run = makeRunFeature({
           ...base,
           createWorktree: async (slug) => ({ path: wt, branch: `feat/${slug}` }),
@@ -164,7 +210,14 @@ describe('engine/daemon-runner — makeRunFeature', () => {
     it('a deps object without prepareWorktree builds normally (backward compatible)', async () => {
       // The existing deps() helper ships no prepareWorktree — the feature must
       // still build, proving the step is genuinely opt-in.
-      const run = makeRunFeature(deps({ done: true, halted: false, prUrl: 'http://pr/1' }));
+      const run = makeRunFeature(
+        deps({
+          done: true,
+          halted: false,
+          finishChoice: 'pr',
+          prUrl: 'http://pr/1',
+        }),
+      );
       const out = await run(ITEM);
       expect(out.status).toBe('done');
     });

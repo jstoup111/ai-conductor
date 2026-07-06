@@ -114,7 +114,7 @@ describe('integration/engineer-emission — makeRunFeature emits on daemon compl
   // ─── FR-1 (happy): daemon done → exactly one signal line ───────────────────
 
   it('daemon done → appends exactly one signal line (outcome=done)', async () => {
-    const run = makeRunFeature(deps({ done: true, halted: false, prUrl: 'http://pr/1' }, { daemon: true }));
+    const run = makeRunFeature(deps({ done: true, halted: false, finishChoice: 'pr', prUrl: 'http://pr/1' }, { daemon: true }));
     const out = await run(ITEM);
     expect(out.status).toBe('done');
     const lines = await readSignalLines(engineerDir);
@@ -142,7 +142,7 @@ describe('integration/engineer-emission — makeRunFeature emits on daemon compl
   // ─── FR-1 (negative): exactly one record per completion ────────────────────
 
   it('a single completion appends exactly one record (no duplicate)', async () => {
-    const run = makeRunFeature(deps({ done: true, halted: false }, { daemon: true }));
+    const run = makeRunFeature(deps({ done: true, halted: false, finishChoice: 'pr', prUrl: 'http://pr/1' }, { daemon: true }));
     await run(ITEM);
     const lines = await readSignalLines(engineerDir);
     expect(lines.length).toBe(1);
@@ -155,13 +155,13 @@ describe('integration/engineer-emission — makeRunFeature emits on daemon compl
     // the emission machinery is wired (and fails RED until it is), so the
     // "manual = 0 lines" assertion can't pass vacuously just because nothing
     // ever emits.
-    const daemonRun = makeRunFeature(deps({ done: true, halted: false }, { daemon: true }));
+    const daemonRun = makeRunFeature(deps({ done: true, halted: false, finishChoice: 'pr', prUrl: 'http://pr/1' }, { daemon: true }));
     await daemonRun(ITEM);
     expect(await readSignalLines(engineerDir)).toHaveLength(1);
 
     // Now the manual run, against a clean store, must emit nothing.
     await rm(join(engineerDir, SIGNALS_LOG), { force: true });
-    const manualRun = makeRunFeature(deps({ done: true, halted: false }, { daemon: false }));
+    const manualRun = makeRunFeature(deps({ done: true, halted: false, finishChoice: 'pr', prUrl: 'http://pr/1' }, { daemon: false }));
     const out = await manualRun(ITEM);
     expect(out.status).toBe('done');
     expect(await readSignalLines(engineerDir)).toHaveLength(0);
@@ -171,7 +171,7 @@ describe('integration/engineer-emission — makeRunFeature emits on daemon compl
 
   it('daemon done → full retro narrative written to the store, narrativeRef set', async () => {
     const provider = makeProvider('# Full Retro\n\nThe analysis.');
-    const run = makeRunFeature(deps({ done: true, halted: false }, { daemon: true, provider }));
+    const run = makeRunFeature(deps({ done: true, halted: false, finishChoice: 'pr', prUrl: 'http://pr/1' }, { daemon: true, provider }));
     await run(ITEM);
     expect(provider.calls).toBe(1);
     const lines = await readSignalLines(engineerDir);
@@ -185,7 +185,7 @@ describe('integration/engineer-emission — makeRunFeature emits on daemon compl
   // ─── FR-5/FR-7 (negative): repo .docs/retros stays untouched ───────────────
 
   it('daemon done → store narrative written, repo .docs/retros/ gets NO new file', async () => {
-    const run = makeRunFeature(deps({ done: true, halted: false }, { daemon: true }));
+    const run = makeRunFeature(deps({ done: true, halted: false, finishChoice: 'pr', prUrl: 'http://pr/1' }, { daemon: true }));
     await run(ITEM);
     // Positive sentinel: the narrative landed in the STORE (fails RED until
     // emission exists) — so the "repo retro absent" check can't pass vacuously.
@@ -225,7 +225,7 @@ describe('integration/engineer-emission — makeRunFeature emits on daemon compl
     // Control: an identical DAEMON run MUST emit one signal line — proves the
     // emission machinery is wired (fails RED until it is) so the manual
     // "no emission" assertion can't pass vacuously.
-    const daemonRun = makeRunFeature(deps({ done: true, halted: false }, { daemon: true }));
+    const daemonRun = makeRunFeature(deps({ done: true, halted: false, finishChoice: 'pr', prUrl: 'http://pr/1' }, { daemon: true }));
     await daemonRun(ITEM);
     expect(await readSignalLines(engineerDir)).toHaveLength(1);
     await rm(join(engineerDir, SIGNALS_LOG), { force: true });
@@ -234,7 +234,7 @@ describe('integration/engineer-emission — makeRunFeature emits on daemon compl
     // must NOT suppress the in-loop retro. We simulate the in-loop retro by
     // having runConductor drop a repo retro file (what the manual loop does),
     // then assert the store stays empty AND the repo retro survives.
-    const base = deps({ done: true, halted: false }, { daemon: false });
+    const base = deps({ done: true, halted: false, finishChoice: 'pr', prUrl: 'http://pr/1' }, { daemon: false });
     const run = makeRunFeature({
       ...base,
       runConductor: async (wt: FeatureWorktree) => {
@@ -254,11 +254,11 @@ describe('integration/engineer-emission — makeRunFeature emits on daemon compl
     // A worktree whose events show the retro step was tier-skipped → the runner
     // must still emit the structured signal but produce NO narrative.
     const run = makeRunFeature(
-      deps({ done: true, halted: false }, { daemon: true, provider: makeProvider() }),
+      deps({ done: true, halted: false, finishChoice: 'pr', prUrl: 'http://pr/1' }, { daemon: true, provider: makeProvider() }),
     );
     // Mark the run as tier-skipped via a tier_skip event for the retro step.
     const tierSkippedDeps = {
-      ...deps({ done: true, halted: false }, { daemon: true }),
+      ...deps({ done: true, halted: false, finishChoice: 'pr', prUrl: 'http://pr/1' }, { daemon: true }),
       createWorktree: async () => {
         const pipelineDir = join(worktreePath, '.pipeline');
         await mkdir(pipelineDir, { recursive: true });
@@ -294,7 +294,10 @@ describe('integration/engineer-emission — makeRunFeature emits on daemon compl
 
     const logs: string[] = [];
     const run = makeRunFeature(
-      deps({ done: true, halted: false, prUrl: 'http://pr/1' }, { daemon: true, log: (m) => logs.push(m) }),
+      deps(
+        { done: true, halted: false, finishChoice: 'pr', prUrl: 'http://pr/1' },
+        { daemon: true, log: (m) => logs.push(m) },
+      ),
     );
     const out = await run(ITEM);
     // Feature still ships unchanged.
