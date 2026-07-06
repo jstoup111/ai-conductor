@@ -434,6 +434,171 @@ Just some regular text here.
 
     expect(result.get('1')!.paths).toEqual([]);
   });
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Tests for Task 18: Task-id grammar extension (alphanumeric + dot/underscore/dash)
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  it('parses plan with dotted task id (e.g., 1.2)', async () => {
+    const mod = await loadAutoheal();
+
+    const planText = `# Plan
+
+### Task 1.2: Setup dotted task
+Initial setup work.
+`;
+    const result = mod.parsePlanTasks(planText);
+
+    expect(result.has('1.2')).toBe(true);
+    const task = result.get('1.2');
+    expect(task).toBeDefined();
+    expect(task!.name).toBe('Setup dotted task');
+  });
+
+  it('parses plan with alphanumeric task ids with underscores', async () => {
+    const mod = await loadAutoheal();
+
+    const planText = `# Plan
+
+### Task task_1: Underscore task
+Work with underscore.
+
+### Task task_rem_001: Remediation task
+Fix something.
+`;
+    const result = mod.parsePlanTasks(planText);
+
+    expect(result.has('task_1')).toBe(true);
+    expect(result.has('task_rem_001')).toBe(true);
+    expect(result.get('task_1')!.name).toBe('Underscore task');
+    expect(result.get('task_rem_001')!.name).toBe('Remediation task');
+  });
+
+  it('parses plan with hyphenated task ids', async () => {
+    const mod = await loadAutoheal();
+
+    const planText = `# Plan
+
+### Task rem-adr-001: Remediation task
+A remediation with hyphens.
+
+### Task task-name-02: Multi-part task
+Another task.
+`;
+    const result = mod.parsePlanTasks(planText);
+
+    expect(result.has('rem-adr-001')).toBe(true);
+    expect(result.has('task-name-02')).toBe(true);
+    expect(result.get('rem-adr-001')!.name).toBe('Remediation task');
+  });
+
+  it('parses mixed alphanumeric ids in task paths', async () => {
+    const mod = await loadAutoheal();
+
+    const planText = `# Plan
+
+### Task 1.2: Dotted task
+Update files.
+
+- \`src/api.ts\`
+
+### Task rem-adr-001: Remediation
+Update more files.
+
+- \`src/fix.ts\`
+`;
+    const result = mod.parsePlanTasks(planText);
+
+    const dotted = result.get('1.2');
+    expect(dotted).toBeDefined();
+    expect(dotted!.paths).toContain('src/api.ts');
+
+    const remediation = result.get('rem-adr-001');
+    expect(remediation).toBeDefined();
+    expect(remediation!.paths).toContain('src/fix.ts');
+  });
+
+  it('trailer matching: commit with Task: 1.2 matches plan task 1.2', async () => {
+    const mod = await loadAutoheal();
+
+    // Create a commit with a dotted task id in the trailer
+    await writeFile(join(gitDir, 'file.txt'), 'content');
+    await execa('git', ['add', 'file.txt'], { cwd: gitDir });
+
+    const commitMessage = 'feat: dotted task work\n\nTask: 1.2\n';
+    await execa('git', ['commit', '-m', commitMessage], { cwd: gitDir });
+
+    const commits = await mod.listCommitsWithTrailers(gitDir);
+    const testCommit = commits.find(c => c.subject === 'feat: dotted task work');
+
+    expect(testCommit).toBeDefined();
+    expect(testCommit!.trailers.Task).toContain('1.2');
+  });
+
+  it('grammar round-trip: parse ids from plan, extract trailers, re-parse → identical', async () => {
+    const mod = await loadAutoheal();
+
+    // Create a plan with various id formats
+    const planText = `# Plan
+
+### Task 1.2: Dotted
+Work on it.
+
+### Task rem-adr-001: Remediation
+Fix it.
+
+### Task task_1: Underscore
+Another task.
+`;
+    const parsedPlan = mod.parsePlanTasks(planText);
+    const planIds = Array.from(parsedPlan.keys()).sort();
+
+    // Create commits with trailers for each id
+    for (const id of planIds) {
+      await writeFile(join(gitDir, `file-${id}.txt`), 'content');
+      await execa('git', ['add', `file-${id}.txt`], { cwd: gitDir });
+      const commitMessage = `feat: work on ${id}\n\nTask: ${id}\n`;
+      await execa('git', ['commit', '-m', commitMessage], { cwd: gitDir });
+    }
+
+    // Get trailers from commits
+    const commits = await mod.listCommitsWithTrailers(gitDir);
+    const extractedIds = new Set<string>();
+    for (const commit of commits) {
+      if (commit.trailers.Task) {
+        for (const id of commit.trailers.Task) {
+          extractedIds.add(id);
+        }
+      }
+    }
+
+    // All plan ids should be in extracted ids
+    for (const id of planIds) {
+      expect(extractedIds.has(id)).toBe(true);
+    }
+
+    expect(Array.from(extractedIds).sort()).toEqual(planIds);
+  });
+
+  it('parsePlanTaskPaths works with extended id grammar', async () => {
+    const mod = await loadAutoheal();
+
+    const planText = `# Plan
+
+### Task 1.2: Dotted task
+- \`src/dotted.ts\`
+
+### Task rem-adr-001: Remediation
+- \`src/fix.ts\`
+`;
+    const result = mod.parsePlanTaskPaths(planText);
+
+    expect(result.has('1.2')).toBe(true);
+    expect(result.get('1.2')!.has('src/dotted.ts')).toBe(true);
+
+    expect(result.has('rem-adr-001')).toBe(true);
+    expect(result.get('rem-adr-001')!.has('src/fix.ts')).toBe(true);
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

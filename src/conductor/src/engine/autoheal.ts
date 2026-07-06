@@ -676,6 +676,10 @@ function resolvePlanPath(projectRoot: string, planRef: string): string {
 const PATH_EXTENSIONS = /\.(?:ts|tsx|js|jsx|mjs|cjs|md|json|yml|yaml|sh|rb|py|go|rs|html|css|scss|vue|toml)$/i;
 const BACKTICK_TOKEN = /`([^`\s]+)`/g;
 
+// Task ID pattern: alphanumeric + dots, underscores, hyphens
+// Supports: 1, 1.2, task_1, task-name, rem-adr-001, etc.
+const TASK_ID_PATTERN = '[A-Za-z0-9._-]+';
+
 export interface PlanTask {
   name: string;
   paths: string[];
@@ -686,15 +690,16 @@ export function parsePlanTasks(text: string): Map<string, PlanTask> {
   const lines = text.split('\n');
   let currentTaskId: string | null = null;
 
-  // Match: ### Task N: Title or ### Task N (with or without colon and title)
-  // Supports both `### Task 1: Some Title` and `### Task 1`
-  const taskHeader = /^#{1,6}\s+Task\s+(\d+)(?::\s*(.*))?$/;
+  // Match: ### Task ID: Title (requires colon and at least some title)
+  // Supports numeric (1, 18, 100), dotted (1.2), alphanumeric with separators (task_1, rem-adr-001)
+  // Pattern: ### Task <id>: <title_with_at_least_one_char>
+  const taskHeader = new RegExp(`^#{1,6}\\s+Task\\s+(${TASK_ID_PATTERN}):\\s+(.+)$`);
 
   for (const line of lines) {
     const headerMatch = line.match(taskHeader);
     if (headerMatch) {
       const id = headerMatch[1];
-      const name = (headerMatch[2] ?? `Task ${id}`).trim();
+      const name = headerMatch[2].trim();
       currentTaskId = id;
       result.set(id, { name, paths: [] });
       continue;
@@ -724,7 +729,9 @@ export function parsePlanTaskPaths(text: string): Map<string, Set<string>> {
   const lines = text.split('\n');
   let currentTaskIds: string[] = [];
 
-  const taskHeader = /^#{1,6}\s+Task\s+([\d.,\s-]+?)(?::|\s|$)/i;
+  // Match task headers and extract task ids (supports comma-separated ids, ranges like 1-3 for numeric)
+  // Pattern allows: Task 1-3, rem-adr-001, 1.2: or Task 1-3, rem-adr-001, 1.2
+  const taskHeader = /^#{1,6}\s+Task\s+([A-Za-z0-9._,\s-]+?)(?::|$)/;
 
   for (const line of lines) {
     const headerMatch = line.match(taskHeader);
@@ -756,12 +763,15 @@ function expandTaskIds(raw: string): string[] {
   for (const piece of raw.split(',')) {
     const trimmed = piece.trim();
     if (!trimmed) continue;
+
+    // Try numeric range expansion only for numeric ids (e.g., 1-3)
     const rangeMatch = trimmed.match(/^(\d+)\s*-\s*(\d+)$/);
     if (rangeMatch) {
       const start = parseInt(rangeMatch[1], 10);
       const end = parseInt(rangeMatch[2], 10);
       for (let n = start; n <= end; n++) ids.push(String(n));
-    } else if (/^\d+$/.test(trimmed)) {
+    } else if (new RegExp(`^${TASK_ID_PATTERN}$`).test(trimmed)) {
+      // Accept any id matching the TASK_ID_PATTERN (numeric, dotted, hyphenated, underscore)
       ids.push(trimmed);
     }
   }
