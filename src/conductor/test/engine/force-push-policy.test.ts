@@ -55,14 +55,27 @@ async function grepSrc(pattern: RegExp): Promise<Match[]> {
 }
 
 describe('force-push policy invariant (T13, grep-level)', () => {
-  it('`--force-with-lease` string-literal push arg appears at exactly one call site', async () => {
+  it('`--force-with-lease` string-literal push arg appears at exactly two sanctioned call sites', async () => {
     // Matches the actual argv-array literal (single-quoted string literal),
     // not doc-comment prose that merely mentions the flag in backticks.
     const matches = await grepSrc(/'--force-with-lease'/);
 
-    expect(matches).toHaveLength(1);
-    expect(matches[0].file.endsWith('src/engine/pr-labels.ts')).toBe(true);
-    expect(matches[0].text).toContain("['push', '--force-with-lease', 'origin', branch]");
+    // Two sanctioned force-with-lease call sites: T11 (pr-labels) and autoresolve T12
+    // (ADR-2026-07-04-widen-rebase-resolution-dispatch-to-sweep).
+    expect(matches).toHaveLength(2);
+
+    const prLabelsMatch = matches.find((m) =>
+      m.file.endsWith('src/engine/pr-labels.ts')
+    );
+    const autoresolveMatch = matches.find((m) =>
+      m.file.endsWith('src/engine/autoresolve.ts')
+    );
+
+    expect(prLabelsMatch).toBeDefined();
+    expect(prLabelsMatch?.text).toContain("['push', '--force-with-lease', 'origin', branch]");
+
+    expect(autoresolveMatch).toBeDefined();
+    expect(autoresolveMatch?.text).toContain('--force-with-lease');
   });
 
   it('a bare `--force` string-literal argument never appears alongside a `push` invocation', async () => {

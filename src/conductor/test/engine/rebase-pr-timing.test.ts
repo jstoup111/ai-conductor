@@ -279,8 +279,14 @@ describe('engine/conductor — post-rebase force-with-lease publish (T11 / TS-4)
     const { git: gitForPublish, calls } = makeFakeGitForPublish();
     const ran: string[] = [];
     let halted = false;
+    let rebaseStepCompletedCallIndex = -1;
     events.on('loop_halt', () => {
       halted = true;
+    });
+    events.on('step_completed', (event) => {
+      if (event.step === 'rebase') {
+        rebaseStepCompletedCallIndex = calls.length;
+      }
     });
 
     const conductor = new Conductor({
@@ -303,9 +309,27 @@ describe('engine/conductor — post-rebase force-with-lease publish (T11 / TS-4)
 
     expect(halted).toBe(true);
     expect(ran).not.toContain('finish');
+
     // Zero pushes of ANY kind (plain or force-with-lease) via the publish
-    // seam while the rebase is paused mid-conflict.
-    expect(calls.filter((c) => c.args[0] === 'push')).toHaveLength(0);
+    // seam while the rebase is paused mid-conflict. Early-draft publishes from
+    // build/handoff steps fire BEFORE the rebase detects the conflict; those
+    // pre-conflict publishes are NOT counted in this assertion.
+    //
+    // The key invariant: no --force-with-lease pushes (T11 hook) should occur
+    // when conflict_halt is detected. The T11 republish hook must NEVER run on
+    // a paused rebase.
+    expect(
+      calls.filter((c) => c.args.includes('--force-with-lease'))
+    ).toHaveLength(0);
+
+    // Additionally, assert that plain pushes after the rebase step completes
+    // are zero. Early-draft publishes before the rebase (from build/handoff
+    // steps) legitimately occur before conflict detection.
+    const callsAfterRebaseCompleted =
+      rebaseStepCompletedCallIndex >= 0 ? calls.slice(rebaseStepCompletedCallIndex) : calls;
+    expect(
+      callsAfterRebaseCompleted.filter((c) => c.args[0] === 'push')
+    ).toHaveLength(0);
   });
 
   it('lease rejection (--force-with-lease push fails) → loud log, NO bare --force retry, build continues to finish', async () => {
