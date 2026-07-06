@@ -137,11 +137,11 @@ describe('engine/steps', () => {
       expect(s.isCheckpoint).toBe(true);
     });
 
-    it('manual_test is SHIP/advisory, checkpoint, prereq build', () => {
+    it('manual_test is SHIP/gating, checkpoint, prereq build (#367 — a failing manual test must be able to block)', () => {
       const s = ALL_STEPS[12];
       expect(s.name).toBe('manual_test');
       expect(s.phase).toBe('SHIP');
-      expect(s.enforcement).toBe('advisory');
+      expect(s.enforcement).toBe('gating');
       expect(s.prerequisites).toEqual(['build']);
       expect(s.isCheckpoint).toBe(true);
     });

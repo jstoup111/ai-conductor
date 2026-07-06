@@ -961,6 +961,13 @@ dedicated test coverage (950+ tests). See the feature comparison in
   order. A downstream step can **kick back** to `plan`/`stories` (re-open an upstream gate);
   the loop converges to `.pipeline/DONE` or stops at `.pipeline/HALT`. Opt-in via
   `verifyArtifacts`; every step runs on a fresh LLM session (unconditional).
+- **Manual-test FAIL routing + whitewash guard** (#367): `manual_test` is gating (locked —
+  overrides and config disables are rejected) so a failing manual test can never be silently
+  skipped. In daemon runs a manual_test that keeps FAILing kicks back to `build` with the
+  FAIL rows as evidence (bounded, then HALT). The gate records the HEAD sha when it sees
+  FAIL rows and refuses a FAIL→PASS rewrite with no new commits — a claimed fix must exist
+  as commits. Results are append-only per attempt (`## Attempt N` sections; the latest
+  section is the verdict). See `src/conductor/README.md` → "Daemon manual-test routing".
 - **Rebase-on-latest before finish**: an engine-native `rebase` gate (no Claude dispatch)
   rebases the worktree branch onto the **discovered** origin default branch (fetched; falls
   back to the local base — no hardcoded `main`) before the PR is opened, so it's never built

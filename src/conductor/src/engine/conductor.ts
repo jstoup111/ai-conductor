@@ -53,8 +53,11 @@ import {
   parseTrack,
   parseIntakeSourceRef,
   planStem,
+  readManualTestFailRows,
   type RemediationGap,
+  type CompletionContext,
 } from './artifacts.js';
+import { currentCommitSha } from './project-prelude.js';
 import type { Track } from '../types/index.js';
 import {
   resolveStepConfig,
@@ -470,6 +473,21 @@ export class Conductor {
    * `conflict_halt` outcome here drives the loop to HALT.
    */
   private lastRebaseOutcome: RebaseOutcome | null = null;
+
+  /**
+   * The CompletionContext handed to every gate evaluation. `getHeadSha` feeds
+   * the manual_test whitewash guard (#367); it resolves the worktree's real
+   * HEAD and returns null (never throws) when there is no usable repo, which
+   * makes the guard fail open outside real runs.
+   */
+  private completionCtx(state: ConductState): CompletionContext {
+    return {
+      sessionStartedAt: state.session_started_at,
+      featureDesc: state.feature_desc,
+      config: this.config,
+      getHeadSha: () => currentCommitSha(this.projectRoot),
+    };
+  }
 
   constructor(opts: ConductorOptions) {
     this.stateFilePath = opts.stateFilePath;
@@ -888,6 +906,10 @@ export class Conductor {
     // prd-audit back to a target step. Bounded like prdAuditSelfHeals so a gap the
     // planner can't actually close still halts for a human.
     let remediationRounds = 0;
+    // Daemon-only (#367): how many times a manual_test FAIL has routed back to
+    // BUILD. Bounded like prdAuditSelfHeals so a bug BUILD can't actually fix
+    // eventually halts for a human instead of ping-ponging.
+    let manualTestSelfHeals = 0;
     // Retry hints queued for a step that will be (re)entered via a kickback.
     // A prd_audit impl-gap routes back to BUILD and MUST tell the BUILD agent
     // which FRs to close — otherwise BUILD was dispatched with no context, saw a
@@ -1286,11 +1308,11 @@ export class Conductor {
 
           // Step runner returned success. Now verify real completion.
           if (this.verifyArtifacts && stepHasCompletionCheck(step.name) && step.name !== 'complexity') {
-            let completion = await checkStepCompletion(this.projectRoot, step.name, {
-              sessionStartedAt: state.session_started_at,
-              featureDesc: state.feature_desc,
-              config: this.config,
-            });
+            let completion = await checkStepCompletion(
+              this.projectRoot,
+              step.name,
+              this.completionCtx(state),
+            );
 
             // Auto-heal hook: before treating a build-gate miss as a failure,
             // reconcile .pipeline/task-status.json against git log. If the
@@ -1314,11 +1336,11 @@ export class Conductor {
                 skipped: heal.skipped.length,
               });
               if (heal.healed.length > 0) {
-                completion = await checkStepCompletion(this.projectRoot, step.name, {
-                  sessionStartedAt: state.session_started_at,
-                  featureDesc: state.feature_desc,
-                  config: this.config,
-                });
+                completion = await checkStepCompletion(
+                  this.projectRoot,
+                  step.name,
+                  this.completionCtx(state),
+                );
               }
             }
 
@@ -1376,11 +1398,11 @@ export class Conductor {
                   if (this.mode !== 'auto' && this.stepRunner.runInteractive) {
                     await this.stepRunner.runInteractive(step.name);
                   }
-                  const recheck = await checkStepCompletion(this.projectRoot, step.name, {
-                    sessionStartedAt: state.session_started_at,
-                    featureDesc: state.feature_desc,
-                    config: this.config,
-                  });
+                  const recheck = await checkStepCompletion(
+                    this.projectRoot,
+                    step.name,
+                    this.completionCtx(state),
+                  );
                   if (recheck.done) {
                     succeeded = true;
                     successOutput = result.output;
@@ -1438,6 +1460,71 @@ export class Conductor {
             // an impl-gap it can't actually close still halts). A product/plan
             // gap (intended-drift, or an unclassifiable blocking row) needs a
             // human DECIDE amendment the daemon can't run — halt for inspection.
+            // Manual-test FAIL routing (daemon only, #367): a manual_test that
+            // exhausted its retries with FAIL rows recorded is an implementation
+            // gap by definition — the routing question prd_audit needs an agent
+            // for (impl vs product-scope) has exactly one answer here, so route
+            // deterministically back to BUILD with the FAIL rows as the retry
+            // hint (no /remediate dispatch). A non-FAIL gate miss (missing/stale
+            // results — the skill never ran or recorded properly) carries no bug
+            // evidence to hand BUILD and falls through to the generic gating
+            // HALT below, as does an exhausted self-heal budget.
+            if (this.daemon && step.name === 'manual_test') {
+              const failRows = await readManualTestFailRows(this.projectRoot);
+              if (failRows.length > 0) {
+                if (manualTestSelfHeals < MAX_KICKBACKS_PER_GATE) {
+                  manualTestSelfHeals++;
+                  const evidence = failRows.join('\n');
+                  await this.events.emit({
+                    type: 'kickback',
+                    from: 'manual_test',
+                    to: 'build',
+                    evidence,
+                    count: manualTestSelfHeals,
+                  });
+                  // Hand BUILD the bugs it must fix. The whitewash guard on the
+                  // manual_test gate refuses a PASS rewrite with no new commits,
+                  // so a no-op BUILD cannot silently converge this loop.
+                  pendingRetryHints.set(
+                    'build',
+                    `manual-test FAILED with these results:\n${evidence}\nRead ` +
+                      `.pipeline/manual-test-results.md (latest attempt section) for full ` +
+                      `evidence. The plan's task list may already be complete — these are ` +
+                      `BUGS in the shipped code. Implement and COMMIT fixes for each FAIL; ` +
+                      `the manual_test gate refuses a FAIL→PASS rewrite that adds no new ` +
+                      `commits, and manual-test re-runs after this build.`,
+                  );
+                  const nav = navigateBack(state, 'build', steps);
+                  state = nav.state;
+                  // markDownstreamStale only restages `done` steps; manual_test
+                  // is `failed` here, so restage it explicitly for the tail.
+                  (state as Record<string, unknown>).manual_test = 'stale';
+                  await writeState(this.stateFilePath, state);
+                  i = nav.index - 1; // for-loop i++ lands on build
+                  continue;
+                }
+                const reason =
+                  `manual-test FAIL unresolved after ${manualTestSelfHeals} build ` +
+                  `kickback(s) (cap ${MAX_KICKBACKS_PER_GATE}): ${failRows[0]}` +
+                  (failRows.length > 1 ? ` (+${failRows.length - 1} more FAIL row(s))` : '');
+                await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(
+                  () => {},
+                );
+                await writeFile(
+                  join(this.projectRoot, LOOP_HALT_MARKER),
+                  reason + '\n',
+                  'utf-8',
+                ).catch(() => {
+                  /* best-effort marker */
+                });
+                await writeState(this.stateFilePath, state);
+                const prUrl = await this.surfaceRemediationPr(reason);
+                await this.events.emit({ type: 'loop_halt', reason, prUrl });
+                process.off('SIGINT', sigintHandler);
+                return;
+              }
+            }
+
             if (this.daemon && step.name === 'prd_audit') {
               // Agentic remediation (preferred): dispatch /remediate to plan how
               // to close the blocking gaps, then route deterministically from its
@@ -2128,11 +2215,11 @@ export class Conductor {
     } else if (topo.verdictSteps.has(step.name)) {
       // Record the objective verdict for any gate we just ran — including in the
       // front half, so a re-run plan/stories refreshes its verdict on disk.
-      const verdict = await computeAndWriteVerdict(this.projectRoot, step.name, {
-        sessionStartedAt: state.session_started_at,
-        featureDesc: state.feature_desc,
-        config: this.config,
-      });
+      const verdict = await computeAndWriteVerdict(
+        this.projectRoot,
+        step.name,
+        this.completionCtx(state),
+      );
       await this.events.emit({
         type: 'gate_verdict',
         step: step.name,

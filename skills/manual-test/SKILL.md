@@ -107,24 +107,30 @@ Display results to the user in the conversation AND save the same table to
 `.pipeline/manual-test-results.md`. The conductor's completion gate reads this
 file to verify manual-test ran for the current feature — without it, the
 step has no objective on-disk evidence and cannot pass. This is run evidence,
-not a committed design artifact: it lives under `.pipeline/` (gitignored),
-uses a stable filename, and is overwritten each run.
+not a committed design artifact: it lives under `.pipeline/` (gitignored) and
+uses a stable filename.
+
+**Append, never overwrite.** Each run of this skill adds a new
+`## Attempt N — <ISO timestamp>` section to the file (create the file with
+`## Attempt 1 — …` on the first run). The conductor's gate evaluates only the
+LATEST attempt section, so a fixed old FAIL doesn't block you — but the history
+of what earlier attempts found is preserved for audit. Rewriting or deleting a
+previous attempt's rows destroys run evidence; do not do it.
 
 Use this format (both in chat and in the file):
 
 ```
 # Manual Test Results
-**Date:** YYYY-MM-DD
 **Server:** localhost:3000
 **Tester:** Claude (automated curl) / User (browser)
 
-## Results
+## Attempt 1 — 2026-07-06T10:00:00Z
 
 | Story | Criterion | Result | Notes |
 |---|---|---|---|
 | ... | ... | PASS/FAIL | ... |
 
-## Bugs Found
+### Bugs Found
 1. **BUG-001:** Invalid URL returns 500 instead of 422 (story: create-link, negative path: invalid input)
 2. **BUG-002:** ...
 ```
@@ -133,6 +139,14 @@ Use this format (both in chat and in the file):
 which is what the conductor's freshness check needs (the file's mtime must be
 newer than the current session's start; a committed copy from a prior run
 would defeat that).
+
+**Whitewash guard (#367):** when the gate observes FAIL rows it records the
+current commit sha; a later attempt whose rows are all PASS is accepted only if
+new commits exist since that sha. Recording PASS without actually committing a
+fix will be refused by the gate — the fix in Step C below MUST land as commits
+before the re-verify attempt. In daemon runs, a manual_test that keeps failing
+is kicked back to the build step with the FAIL rows as evidence (bounded), then
+HALTs for a human if the bug survives the kickback budget.
 
 ### 6. Bug Loop
 
