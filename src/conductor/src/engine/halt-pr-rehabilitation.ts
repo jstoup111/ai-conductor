@@ -19,7 +19,7 @@
  */
 
 import type { GhRunner } from './pr-labels.js';
-import { parseIssueRef, restRemoveLabelArgs } from './pr-labels.js';
+import { cleanupHaltPresentation } from './pr-labels.js';
 import { injectIssueRef } from './engineer/issue-ref.js';
 
 export const NEEDS_REMEDIATION_TITLE_PREFIX = 'needs-remediation:';
@@ -43,10 +43,11 @@ interface PrViewState {
   title: string;
   isDraft: boolean;
   labels: string[];
+  body?: string;
 }
 
 function parsePrView(stdout: string): PrViewState {
-  let raw: { title?: unknown; isDraft?: unknown; labels?: unknown };
+  let raw: { title?: unknown; isDraft?: unknown; labels?: unknown; body?: unknown };
   try {
     raw = JSON.parse(stdout || '{}') as typeof raw;
   } catch {
@@ -59,6 +60,7 @@ function parsePrView(stdout: string): PrViewState {
     title: String(raw.title ?? ''),
     isDraft: Boolean(raw.isDraft),
     labels,
+    body: String(raw.body ?? ''),
   };
 }
 
@@ -77,7 +79,7 @@ export async function rehabilitateHaltPr(
 
   let view: PrViewState;
   try {
-    const { stdout } = await gh(['pr', 'view', prUrl, '--json', 'title,isDraft,labels'], { cwd });
+    const { stdout } = await gh(['pr', 'view', prUrl, '--json', 'title,isDraft,labels,body'], { cwd });
     view = parsePrView(stdout);
   } catch (err) {
     log(`[halt-pr-rehab] gh pr view failed for ${prUrl} — skipping rehabilitation: ${err}`);
@@ -88,31 +90,12 @@ export async function rehabilitateHaltPr(
   const hasHaltLabel = view.labels.includes(NEEDS_REMEDIATION_LABEL);
   if (!hasHaltTitle && !hasHaltLabel) return 'not-halt-pr';
 
-  let anyFailed = false;
-
-  if (view.isDraft) {
-    try {
-      await gh(['pr', 'ready', prUrl], { cwd });
-    } catch (err) {
-      anyFailed = true;
-      log(`[halt-pr-rehab] ready-flip failed for ${prUrl}: ${err}`);
-    }
-  }
-
-  if (hasHaltLabel) {
-    const ref = parseIssueRef(prUrl);
-    if (!ref) {
-      anyFailed = true;
-      log(`[halt-pr-rehab] unparseable PR URL "${prUrl}" — cannot clear label`);
-    } else {
-      try {
-        await gh(restRemoveLabelArgs(ref.repo, ref.number, NEEDS_REMEDIATION_LABEL), { cwd });
-      } catch (err) {
-        anyFailed = true;
-        log(`[halt-pr-rehab] label clear failed for ${prUrl}: ${err}`);
-      }
-    }
-  }
+  // Label/draft/body-marker removal is delegated to cleanupHaltPresentation,
+  // which retries each mutation (bounded, with backoff) and re-reads to
+  // confirm — the same verify-after-write guarantee ADR
+  // adr-2026-07-05-halt-pr-presentation-reliability (D5) requires here.
+  const cleanupResult = await cleanupHaltPresentation(gh, cwd, prUrl, log);
+  const anyFailed = cleanupResult === 'partial';
 
   // Idempotent Closes injection — injectIssueRef swallows gh failures internally
   // (warn-only) and no-ops when the ref is already present or sourceRef is unusable.

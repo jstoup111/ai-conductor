@@ -446,6 +446,13 @@ export async function comment(
 export const NEEDS_REMEDIATION_MARKER = '<!-- conductor:needs-remediation -->';
 
 /**
+ * Stable hidden marker identifying the remediation need in the PR body itself.
+ * Distinct from {@link NEEDS_REMEDIATION_MARKER} which is embedded in comments.
+ * Used for marking the PR body when a HALT marks a PR as needing remediation.
+ */
+export const NEEDS_REMEDIATION_BODY_MARKER = '<!-- conductor:needs-remediation -->';
+
+/**
  * Stable hidden marker identifying the single harness-authored owner-gate
  * status comment on a PR for a spec that is currently owner-gated. Embedded
  * in the comment body so subsequent scans can find and edit that comment in
@@ -642,5 +649,350 @@ export async function setReady(
     await runGh(['pr', 'ready', prUrl], { cwd });
   } catch (err) {
     log?.(`[pr-labels] setReady(${prUrl}) error: ${err}`);
+  }
+}
+
+/**
+ * Convert a PR to draft status via `gh pr ready --undo`.
+ * Swallows all errors.
+ */
+export async function convertToDraft(
+  runGh: GhRunner = makeProductionGh(),
+  cwd: string,
+  prUrl: string,
+  log?: (msg: string) => void,
+): Promise<void> {
+  try {
+    await runGh(['pr', 'ready', '--undo', prUrl], { cwd });
+  } catch (err) {
+    log?.(`[pr-labels] convertToDraft(${prUrl}) error: ${err}`);
+  }
+}
+
+// ── Halt presentation read ────────────────────────────────────────────────────
+
+export interface HaltPresentation {
+  isDraft: boolean;
+  labels: string[];
+  body: string;
+}
+
+interface GhHaltPresentationJson {
+  isDraft?: boolean;
+  labels?: Array<{ name?: string }> | null;
+  body?: string;
+}
+
+/**
+ * Read the isDraft, labels, and body of a PR for halt-PR presentation purposes.
+ * On any runner error returns null and logs; never throws.
+ */
+export async function readHaltPresentation(
+  runGh: GhRunner = makeProductionGh(),
+  cwd: string,
+  prUrl: string,
+  log?: (msg: string) => void,
+): Promise<HaltPresentation | null> {
+  try {
+    const { stdout } = await runGh(
+      ['pr', 'view', prUrl, '--json', 'isDraft,labels,body'],
+      { cwd },
+    );
+    const data: GhHaltPresentationJson = JSON.parse(stdout);
+    const isDraft = data.isDraft ?? false;
+    const labels = (data.labels ?? []).map((l) => l.name ?? '').filter(Boolean);
+    const body = data.body ?? '';
+    return { isDraft, labels, body };
+  } catch (err) {
+    log?.(`[pr-labels] readHaltPresentation(${prUrl}) error: ${err}`);
+    return null;
+  }
+}
+
+/**
+ * Ensure the PR body contains the remediation marker, appending it if not present.
+ * Idempotent: if the marker is already in the body, makes no edit call.
+ *
+ * If `currentBody` is provided, uses it directly; otherwise reads the body via
+ * {@link readHaltPresentation}. Swallows all errors and never throws.
+ */
+export async function ensureBodyMarker(
+  runGh: GhRunner = makeProductionGh(),
+  cwd: string,
+  prUrl: string,
+  currentBody?: string,
+  log?: (msg: string) => void,
+): Promise<void> {
+  try {
+    // ── Step 1: determine the current body ────────────────────────────────
+    let body = currentBody;
+    if (body === undefined) {
+      const presentation = await readHaltPresentation(runGh, cwd, prUrl, log);
+      if (!presentation) {
+        log?.(`[pr-labels] ensureBodyMarker: could not read PR presentation`);
+        return;
+      }
+      body = presentation.body;
+    }
+
+    // ── Step 2: check if marker is present; if so, idempotent-exit ────────
+    if (body.includes(NEEDS_REMEDIATION_BODY_MARKER)) {
+      // Marker already present — no edit needed
+      return;
+    }
+
+    // ── Step 3: append marker and call gh pr edit ────────────────────────
+    const newBody = `${body}\n${NEEDS_REMEDIATION_BODY_MARKER}`;
+    await runGh(['pr', 'edit', prUrl, '--body', newBody], { cwd });
+  } catch (err) {
+    log?.(`[pr-labels] ensureBodyMarker(${prUrl}) error: ${err}`);
+  }
+}
+
+// ── Halt presentation ensure (verify-after-write) ───────────────────────────
+
+/**
+ * Default sleep implementation for backoff. Exported for test injection.
+ */
+export async function defaultSleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Ensure all three halt-presentation markers are present on a PR (draft status,
+ * needs-remediation label, and body marker). Performs an idempotent verify-after-write:
+ * writes all three markers, then re-reads to verify all are present.
+ *
+ * Implements retry logic (Task 7): if the label is missing after the first add attempt,
+ * the function retries with bounded attempts (3 total) and backoff (100ms, 200ms).
+ *
+ * Happy path returns 'confirmed'; any mismatch returns 'unconfirmed'.
+ *
+ * Never throws; swallows all errors internally and logs them via the optional
+ * `log` callback.
+ *
+ * @param runGh - Injectable gh runner (defaults to production)
+ * @param cwd - Working directory for gh operations
+ * @param prUrl - URL of the PR to ensure (e.g. https://github.com/owner/repo/pull/123)
+ * @param log - Optional logging callback
+ * @param sleep - Optional sleep injection for backoff (defaults to setTimeout-based sleep)
+ * @returns 'confirmed' if all three markers verified, 'unconfirmed' otherwise
+ */
+export async function ensureHaltPresentation(
+  runGh: GhRunner = makeProductionGh(),
+  cwd: string,
+  prUrl: string,
+  log?: (msg: string) => void,
+  sleep: (ms: number) => Promise<void> = defaultSleep,
+): Promise<'confirmed' | 'unconfirmed'> {
+  try {
+    // ── Step 1: ensure body marker ────────────────────────────────────────
+    await ensureBodyMarker(runGh, cwd, prUrl, undefined, log);
+
+    // ── Step 2: read current state to decide if we need to convert to draft ─
+    const beforeConvert = await readHaltPresentation(runGh, cwd, prUrl, log);
+    if (!beforeConvert) {
+      log?.(`[pr-labels] ensureHaltPresentation: could not read PR before convert`);
+      return 'unconfirmed';
+    }
+
+    // ── Step 3: convert to draft only if not already draft ─────────────────
+    if (!beforeConvert.isDraft) {
+      await convertToDraft(runGh, cwd, prUrl, log);
+    }
+
+    // ── Step 4: add the needs-remediation label with retry logic ──────────
+    const maxAttempts = 3;
+    let labelConfirmed = false;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      // Add the label
+      await addLabel(runGh, cwd, prUrl, 'needs-remediation', log);
+
+      // Re-read to check if label is present
+      const afterAdd = await readHaltPresentation(runGh, cwd, prUrl, log);
+      if (afterAdd?.labels.includes('needs-remediation')) {
+        labelConfirmed = true;
+        break;
+      }
+
+      // Label not present yet; log and retry with backoff (unless on last attempt)
+      if (attempt < maxAttempts) {
+        const backoffMs = attempt * 100; // 100ms, 200ms, etc.
+        log?.(
+          `[pr-labels] ensureHaltPresentation(${prUrl}): label missing after attempt ${attempt}, retrying in ${backoffMs}ms`,
+        );
+        await sleep(backoffMs);
+      }
+    }
+
+    // ── Step 5: re-read to verify all three markers are present ───────────
+    const afterWrite = await readHaltPresentation(runGh, cwd, prUrl, log);
+    if (!afterWrite) {
+      log?.(`[pr-labels] ensureHaltPresentation: could not re-read PR after writes`);
+      return 'unconfirmed';
+    }
+
+    // ── Step 6: verify all three markers ──────────────────────────────────
+    const hasDraft = afterWrite.isDraft;
+    const hasLabel = afterWrite.labels.includes('needs-remediation');
+    const hasBodyMarker = afterWrite.body.includes(NEEDS_REMEDIATION_BODY_MARKER);
+
+    if (hasDraft && hasLabel && hasBodyMarker) {
+      return 'confirmed';
+    }
+
+    if (!hasDraft) {
+      log?.(`[pr-labels] ensureHaltPresentation(${prUrl}): missing draft status`);
+    }
+    if (!hasLabel) {
+      log?.(`[pr-labels] ensureHaltPresentation(${prUrl}): missing needs-remediation label`);
+    }
+    if (!hasBodyMarker) {
+      log?.(`[pr-labels] ensureHaltPresentation(${prUrl}): missing body marker`);
+    }
+
+    return 'unconfirmed';
+  } catch (err) {
+    log?.(`[pr-labels] ensureHaltPresentation(${prUrl}) error: ${err}`);
+    return 'unconfirmed';
+  }
+}
+
+// ── Halt presentation cleanup (verify-after-write) ─────────────────────────────
+
+/**
+ * Remove the remediation marker from a PR body, idempotent via marker check.
+ * Does not call gh if the marker is not present.
+ * Swallows all errors and never throws.
+ *
+ * @param runGh - Injectable gh runner (defaults to production)
+ * @param cwd - Working directory for gh operations
+ * @param prUrl - URL of the PR to edit
+ * @param currentBody - The current body content to check and edit
+ * @param log - Optional logging callback
+ */
+export async function removeBodyMarker(
+  runGh: GhRunner = makeProductionGh(),
+  cwd: string,
+  prUrl: string,
+  currentBody: string,
+  log?: (msg: string) => void,
+): Promise<void> {
+  try {
+    // Check if marker is present; if not, idempotent-exit
+    if (!currentBody.includes(NEEDS_REMEDIATION_BODY_MARKER)) {
+      return;
+    }
+
+    // Strip the marker and call gh pr edit
+    const newBody = currentBody.replace(NEEDS_REMEDIATION_BODY_MARKER, '').trim();
+    await runGh(['pr', 'edit', prUrl, '--body', newBody], { cwd });
+  } catch (err) {
+    log?.(`[pr-labels] removeBodyMarker(${prUrl}) error: ${err}`);
+  }
+}
+
+/**
+ * Clean up halt presentation markers after a feature finishes: remove label,
+ * convert to ready, strip body marker, then re-read to verify all gone.
+ *
+ * Implements retry logic for label removal (up to 3 attempts with backoff).
+ * Returns 'confirmed' if all cleanup verified; 'partial' if any residual markers
+ * or failed operations.
+ *
+ * Never throws; swallows all errors internally and logs them via the optional
+ * `log` callback.
+ *
+ * @param runGh - Injectable gh runner (defaults to production)
+ * @param cwd - Working directory for gh operations
+ * @param prUrl - URL of the PR to clean up
+ * @param log - Optional logging callback
+ * @param sleep - Optional sleep injection for backoff (defaults to setTimeout-based sleep)
+ * @returns 'confirmed' if all three markers verified removed, 'partial' otherwise
+ */
+export async function cleanupHaltPresentation(
+  runGh: GhRunner = makeProductionGh(),
+  cwd: string,
+  prUrl: string,
+  log?: (msg: string) => void,
+  sleep: (ms: number) => Promise<void> = defaultSleep,
+): Promise<'confirmed' | 'partial'> {
+  try {
+    // ── Step 1: read current state ────────────────────────────────────────
+    const beforeCleanup = await readHaltPresentation(runGh, cwd, prUrl, log);
+    if (!beforeCleanup) {
+      log?.(`[pr-labels] cleanupHaltPresentation: could not read PR before cleanup`);
+      return 'partial';
+    }
+
+    // ── Step 2: remove the label with retry logic ────────────────────────
+    const hasLabel = beforeCleanup.labels.includes('needs-remediation');
+    if (hasLabel) {
+      const maxAttempts = 3;
+      let labelRemovalConfirmed = false;
+
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        // Remove the label (best-effort, non-throwing)
+        await removeLabel(runGh, cwd, prUrl, 'needs-remediation', log);
+
+        // Re-read to check if label is gone
+        const afterRemove = await readHaltPresentation(runGh, cwd, prUrl, log);
+        if (afterRemove && !afterRemove.labels.includes('needs-remediation')) {
+          labelRemovalConfirmed = true;
+          break;
+        }
+
+        // Label still present; log and retry with backoff (unless on last attempt)
+        if (attempt < maxAttempts) {
+          const backoffMs = attempt * 100; // 100ms, 200ms, etc.
+          log?.(
+            `[pr-labels] cleanupHaltPresentation(${prUrl}): label still present after attempt ${attempt}, retrying in ${backoffMs}ms`,
+          );
+          await sleep(backoffMs);
+        }
+      }
+    }
+
+    // ── Step 3: convert to ready (remove draft status) ─────────────────────
+    // Call setReady whenever we removed a label (which implies the PR was in halt status)
+    // or if the PR is currently in draft status
+    if (hasLabel || beforeCleanup.isDraft) {
+      await setReady(runGh, cwd, prUrl, log);
+    }
+
+    // ── Step 4: remove the body marker ───────────────────────────────────
+    await removeBodyMarker(runGh, cwd, prUrl, beforeCleanup.body, log);
+
+    // ── Step 5: re-read to verify all markers are gone ───────────────────
+    const afterCleanup = await readHaltPresentation(runGh, cwd, prUrl, log);
+    if (!afterCleanup) {
+      log?.(`[pr-labels] cleanupHaltPresentation: could not re-read PR after cleanup`);
+      return 'partial';
+    }
+
+    // ── Step 6: verify all three markers are gone ────────────────────────
+    const hasResidualLabel = afterCleanup.labels.includes('needs-remediation');
+    const isDraft = afterCleanup.isDraft;
+    const hasBodyMarker = afterCleanup.body.includes(NEEDS_REMEDIATION_BODY_MARKER);
+
+    if (!hasResidualLabel && !isDraft && !hasBodyMarker) {
+      return 'confirmed';
+    }
+
+    if (hasResidualLabel) {
+      log?.(`[pr-labels] cleanupHaltPresentation(${prUrl}): residual needs-remediation label`);
+    }
+    if (isDraft) {
+      log?.(`[pr-labels] cleanupHaltPresentation(${prUrl}): still in draft status`);
+    }
+    if (hasBodyMarker) {
+      log?.(`[pr-labels] cleanupHaltPresentation(${prUrl}): residual body marker`);
+    }
+
+    return 'partial';
+  } catch (err) {
+    log?.(`[pr-labels] cleanupHaltPresentation(${prUrl}) error: ${err}`);
+    return 'partial';
   }
 }

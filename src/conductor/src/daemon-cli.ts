@@ -77,6 +77,7 @@ import {
   type RekickSweepDeps,
 } from './engine/daemon-rekick.js';
 import { sweepMergeableLabels } from './engine/mergeable-sweep.js';
+import { reconcileHaltPrs } from './engine/halt-pr-reconciliation.js';
 import { createPriorityResolver, ghIssueLabelReader } from './engine/backlog-priority.js';
 import { isPaused } from './engine/pause-marker.js';
 import { readRestartPending, consumeOnBoot, type RestartIntent } from './engine/restart-marker.js';
@@ -843,6 +844,13 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
           },
           sha,
         );
+      },
+      // ai-conductor#274: wire the startup + per-idle-poll-tick halt-PR
+      // reconciliation sweep. NOTE: this binding must stay wired — removing it
+      // silently no-ops the "ultimate safety net" for halt-PR presentation
+      // (daemon.ts guards with ?.()), same failure mode as sweepMergeableLabels below.
+      reconcileHaltPrs: async () => {
+        await reconcileHaltPrs({ projectRoot, log });
       },
       // FR-14: wire the startup + per-idle-poll-tick mergeable label sweep.
       // NOTE: this binding must stay wired — removing it silently no-ops all
