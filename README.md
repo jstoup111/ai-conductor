@@ -73,6 +73,18 @@ Uninstall:
 ./bin/install --uninstall
 ```
 
+**Worktree-root guard.** Global-mutating installs (default and `--update` modes) refuse to run
+when the installer's own checkout physically resolves under a `.worktrees/` directory — a build
+worktree is deleted at ship time, so installing from one would leave every global bin, skill
+symlink, and `settings.json` hook path dangling (issue #363). The guard resolves the physical
+path (`pwd -P`), so a symlinked path can't hide it. `--check`, `--help`, and `--uninstall` are
+unaffected. To deliberately install from a worktree anyway, pass `--allow-worktree-root`
+(combinable with any mode, inert on a normal checkout):
+
+```bash
+./bin/install --update --allow-worktree-root
+```
+
 ## Quick Start
 
 ### Interactive (recommended for first use)

@@ -1530,13 +1530,14 @@ byte-for-byte unchanged (`FR/TR-13`). Configured by the `harness_self_host` bloc
 | Module | Responsibility |
 |--------|----------------|
 | `self-host/detector.ts` | `SelfHostDetector` interface + `PathSelfHostDetector` (realpath equality vs `resolveHarnessRoot()`); `classifySelfHost` layers the `activation` override. Identity by path, not name; positive-only activation. |
-| `install-freshness.ts` → `relinkSkillsForSelfBuild` | Relink harness skills (`bin/install --update`) before a self-build; non-zero exit / missing installer → `InstallStaleError`, no dispatch. |
+| `install-freshness.ts` → `relinkSkillsForSelfBuild` | Relink harness skills (`bin/install --update`) before a self-build; non-zero exit / missing installer → `InstallStaleError`, no dispatch. Root discovery goes through `resolveInstalledHarnessRoot` (below): a rejected root also throws `InstallStaleError` naming it — the installer is never run against a worktree (#363). |
+| `install-freshness.ts` → `resolveInstalledHarnessRoot` | Installed-root resolution ladder for **operator-global writes only** (adr-2026-07-06): module probe → worktree detection (`.worktrees/` path or `git rev-parse --git-common-dir` outside the probed root) → main-checkout derivation from the common dir → `bin/install` assertion → hard-reject of any `.worktrees/` root → advisory (warn-only) registry cross-check. Returns `ok`/`rejected`/`unresolved`, never throws. `resolveHarnessRoot` (the detector's identity seam) is deliberately untouched. |
 | `self-host/sandbox-build-env.ts` | Throwaway `CLAUDE_CONFIG_DIR`: `skills/`+`hooks/` symlinked to the worktree, with `.credentials.json` + a hook-retargeted `settings.json` **copied** in (auth + own-hooks; copies keep the no-global-symlink invariant). Fails closed on a missing worktree link target; `withSandboxBuildEnv` guarantees teardown on pass/fail/crash; `childEnv()` never mutates the parent env. |
 | `halt-marker.ts` | Canonical `.pipeline/HALT` marker path + best-effort `writeHaltMarker`; the rebase HALT and the self-host gate HALTs both write through it. |
 | `self-host/version-gate.ts` | `VersionApprovalGate` — HALT unless `.pipeline/version-approval` matches VERSION. A declared `version_freeze` matching VERSION self-satisfies the gate (records the marker, no HALT); any other VERSION still halts — a freeze never approves a bump (#261). |
 | `self-host/release-gate.ts` | `ReleaseArtifactGate` — integrity suite (bounded timeout) + CHANGELOG `[Unreleased]` + migration block; all fail-closed, distinct HALT reasons. |
 | `self-host/gate-halt.ts` | `writeSelfHostHalt` — `.pipeline/HALT` with a gate-specific reason + the ADR-005 resume procedure (re-install → `/verify` → operator merges). |
-| `self-host/wiring.ts` | `SelfHostGuardrails` — the injectable bundle (`relink`/`provisionSandbox`/`versionGate`/`releaseGate` + `resolveHarnessRoot`) the conductor calls the primitives through; `defaultSelfHostGuardrails` forwards to the real ones. One seam so the whole bundle activates (or is spied) as a unit. |
+| `self-host/wiring.ts` | `SelfHostGuardrails` — the injectable bundle (`relink`/`provisionSandbox`/`versionGate`/`releaseGate` + `resolveHarnessRoot`/`resolveInstalledHarnessRoot`) the conductor calls the primitives through; `defaultSelfHostGuardrails` forwards to the real ones. One seam so the whole bundle activates (or is spied) as a unit. |
 
 **Non-autonomy (ADR-005/ADR-010):** no self-host module references a merge entry point
 (`test/engine/self-host/non-autonomy.test.ts` asserts this structurally). Every self-build ends at a
@@ -1546,8 +1547,11 @@ HALT for the operator to merge.
 the main repo root (not a worktree — a worktree path never equals the harness root) and threads a
 `selfHost` flag to each `Conductor`. `conductor.run()` then, for a self-build only (`daemon &&
 selfHost`):
-- **before the first `build`** — relinks skills once (`InstallStaleError` → HALT, no build), then
-  provisions the sandbox once (`SandboxProvisionError` → HALT, no build);
+- **before the first `build`** — relinks skills once (`InstallStaleError` → HALT, no build; a
+  worktree-resolved installed root is one of the rejection causes, #363), then provisions the
+  sandbox once (`SandboxProvisionError` → HALT, no build), passing the **installed** main-checkout
+  root (`resolveInstalledHarnessRoot`) as `harnessRoot` so the settings retarget (main → worktree)
+  actually fires for a worktree-run engine — fallback stays `projectRoot` when unresolved;
 - **around the `build` dispatch** — sets `process.env.CLAUDE_CONFIG_DIR` to the sandbox and restores it
   in a `finally` (pass **and** throw), so no config-dir bleeds into `finish`; the sandbox is torn down
   in `run()`'s `finally` on every exit path;
