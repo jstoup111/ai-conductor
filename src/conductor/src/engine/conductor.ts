@@ -2818,14 +2818,20 @@ export function buildRemediationHint(
  */
 export function buildRetryHint(step: StepName, reason: string | undefined): string {
   const r = reason ?? 'unknown';
-  if (step === 'build' && /tasks? not completed/i.test(r)) {
-    return (
-      `Previous attempt did not satisfy the completion check: ${r}. ` +
-      `The implementation may already be done — verify each listed task ID ` +
-      `against git log and files on disk before rewriting. If the work is ` +
-      `complete, update .pipeline/task-status.json to mark those tasks ` +
-      `"completed" (with their commit SHAs) instead of re-implementing.`
-    );
+  if (step === 'build') {
+    if (/tasks? not completed/i.test(r)) {
+      return (
+        `Previous attempt did not satisfy the completion check: ${r}. ` +
+        `Add a Task: <id> trailer to your commits to mark tasks completed. ` +
+        `Format: Task: 9\\nTask: 10 (one per line).`
+      );
+    }
+    if (/no tasks|missing.*task-status|plan is empty/i.test(r)) {
+      return (
+        `Previous attempt did not satisfy the completion check: ${r}. ` +
+        `Check your plan at .docs/plans/ — the seed step creates task-status.json from there.`
+      );
+    }
   }
   return `Previous attempt did not satisfy the completion check: ${r}. Finish the work now.`;
 }

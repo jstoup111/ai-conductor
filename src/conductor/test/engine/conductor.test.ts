@@ -3831,7 +3831,7 @@ describe('engine/conductor', () => {
 
       const buildFailure = failedEvents.find((e) => e.step === 'build');
       expect(buildFailure).toBeDefined();
-      expect(buildFailure?.error).toMatch(/tasks not completed|task-status/i);
+      expect(buildFailure?.error).toMatch(/tasks|task-status|plan/i);
     });
   });
 
@@ -4144,24 +4144,33 @@ describe('buildRetryHint', () => {
     expect(hint).toContain('unknown');
   });
 
-  it('redirects Claude to update task-status.json for build "tasks not completed" failures', () => {
+  it('redirects Claude to use trailers for build "tasks not completed" failures', () => {
     const hint = buildRetryHint('build', '9/31 tasks not completed: 9, 10, 11 (+6 more)');
-    expect(hint).toContain('may already be done');
-    expect(hint).toContain('git log');
-    expect(hint).toContain('.pipeline/task-status.json');
+    expect(hint).toContain('Task:');
+    expect(hint).toContain('trailer');
     expect(hint).not.toContain('Finish the work now');
   });
 
-  it('falls back to the generic hint for build failures unrelated to task completion', () => {
+  it('directs to plan for build failures about missing or empty task files', () => {
     const hint = buildRetryHint('build', 'missing .pipeline/task-status.json — the pipeline skill must create it');
-    expect(hint).toContain('Finish the work now');
-    expect(hint).not.toContain('may already be done');
+    expect(hint).toContain('.docs/plans');
+    expect(hint).not.toContain('Finish the work now');
   });
 
   it('uses the generic hint for non-build steps even if reason mentions tasks', () => {
     const hint = buildRetryHint('plan', '3 tasks not completed: x');
     expect(hint).toContain('Finish the work now');
     expect(hint).not.toContain('may already be done');
+  });
+
+  it('directs to plan for empty plan (no tasks in plan heading)', () => {
+    const hint = buildRetryHint('build', 'plan is empty or contains no tasks (### Task N headings required)');
+    expect(hint).toContain('.docs/plans');
+  });
+
+  it('directs to plan for zero tasks in task-status.json', () => {
+    const hint = buildRetryHint('build', 'no tasks in task-status.json');
+    expect(hint).toContain('.docs/plans');
   });
 });
 
