@@ -80,7 +80,7 @@ import {
   type GateVerdict as GateObjectiveVerdict,
 } from './gate-verdicts.js';
 import { WorktreeManager } from './worktree.js';
-import { attemptAutoHeal } from './autoheal.js';
+import { deriveCompletion, applyDerivedCompletion } from './autoheal.js';
 import {
   countResolvedTasks,
   haltMarkerExists,
@@ -1458,10 +1458,20 @@ export class Conductor {
               !completion.done &&
               step.name === 'build'
             ) {
-              const heal = await attemptAutoHeal(this.projectRoot).catch(() => ({
-                healed: [],
-                skipped: [],
-              }));
+              // Resolve the plan path used for derivation: prefer the
+              // engine-recorded active plan path (H8), falling back to the
+              // completion-context plan (findArtifactFilesForStep) when the
+              // engine hasn't recorded one yet.
+              const activePlanPath = await this.getActivePlanPath();
+              const derivePlanPath = activePlanPath
+                ? join(this.projectRoot, activePlanPath)
+                : (await this.completionCtx(state)).planPath;
+
+              const heal = derivePlanPath
+                ? await deriveCompletion(this.projectRoot, derivePlanPath)
+                    .then((derived) => applyDerivedCompletion(this.projectRoot, derived))
+                    .catch(() => ({ healed: [], skipped: [] }))
+                : { healed: [], skipped: [] };
               await this.events.emit({
                 type: 'auto_heal',
                 step: 'build',

@@ -172,6 +172,153 @@ git commit -q -m "Add feature"
 [ ! -f "$test_repo4/.pipeline/task-status.json" ]
 assert "Hook doesn't write task-status.json" $?
 
+# Test 6: Non-numeric H9 id (e.g., rem-fr10-1) → no warning (H9 grammar,
+# not numeric-only)
+echo ""
+echo "Test 6: Non-numeric H9 task id (rem-fr10-1) → no warning"
+test_repo5="$TMPDIR_ROOT/test_h9_id"
+mkdir -p "$test_repo5"
+cd "$test_repo5"
+git init -q
+git config user.email "test@example.com"
+git config user.name "Test User"
+
+echo "test" > file.txt
+git add file.txt
+git commit -q -m "Initial commit" || true
+
+echo "change" > file.txt
+git add file.txt
+git commit -q -m "Add feature
+
+Task: rem-fr10-1"
+
+output=$("$HOOK" 2>&1 || true)
+[ -z "$output" ]
+assert "No warning on non-numeric H9 id (rem-fr10-1)" $?
+
+# Test 7: Another non-numeric H9 id form (dotted/hyphenated with many segments)
+echo ""
+echo "Test 7: Non-numeric H9 task id (rem-adr-engine-owned-task-status-1) → no warning"
+test_repo6="$TMPDIR_ROOT/test_h9_id2"
+mkdir -p "$test_repo6"
+cd "$test_repo6"
+git init -q
+git config user.email "test@example.com"
+git config user.name "Test User"
+
+echo "test" > file.txt
+git add file.txt
+git commit -q -m "Initial commit" || true
+
+echo "change" > file.txt
+git add file.txt
+git commit -q -m "Add feature
+
+Task: rem-adr-engine-owned-task-status-1"
+
+output=$("$HOOK" 2>&1 || true)
+[ -z "$output" ]
+assert "No warning on non-numeric H9 id (rem-adr-engine-owned-task-status-1)" $?
+
+# Test 8: Hook invokes the engine derive path (AI_CONDUCTOR_ENGINE_BIN honored)
+# — point the hook at a stub "engine" binary that records its invocation
+# and asserts the sha/subcommand contract, so this test fails if the hook
+# regresses back to being pure bash regex with no engine call at all.
+echo ""
+echo "Test 8: Hook invokes the engine derive path (honors AI_CONDUCTOR_ENGINE_BIN)"
+test_repo7="$TMPDIR_ROOT/test_engine_invoke"
+mkdir -p "$test_repo7"
+cd "$test_repo7"
+git init -q
+git config user.email "test@example.com"
+git config user.name "Test User"
+
+echo "test" > file.txt
+git add file.txt
+git commit -q -m "Initial commit" || true
+
+echo "change" > file.txt
+git add file.txt
+git commit -q -m "Add feature"
+
+STUB_BIN="$TMPDIR_ROOT/stub-engine.sh"
+STUB_CALL_LOG="$TMPDIR_ROOT/stub-engine.calls"
+cat > "$STUB_BIN" <<'STUB'
+#!/bin/bash
+echo "$@" >> "$STUB_CALL_LOG"
+echo '{"evidenced":false,"reason":"none"}'
+exit 1
+STUB
+chmod +x "$STUB_BIN"
+
+AI_CONDUCTOR_ENGINE_BIN="$STUB_BIN" STUB_CALL_LOG="$STUB_CALL_LOG" "$HOOK" >/dev/null 2>&1 || true
+
+[ -f "$STUB_CALL_LOG" ] && grep -q "derive-feedback" "$STUB_CALL_LOG"
+assert "Hook shells out to the engine derive-feedback subcommand" $?
+
+# Test 9: Engine binary missing/broken → hook still exits 0 and falls back
+echo ""
+echo "Test 9: Engine binary missing → hook falls back and still exits 0"
+test_repo8="$TMPDIR_ROOT/test_engine_missing"
+mkdir -p "$test_repo8"
+cd "$test_repo8"
+git init -q
+git config user.email "test@example.com"
+git config user.name "Test User"
+
+echo "test" > file.txt
+git add file.txt
+git commit -q -m "Initial commit" || true
+
+echo "change" > file.txt
+git add file.txt
+git commit -q -m "Add feature"
+
+if AI_CONDUCTOR_ENGINE_BIN="/nonexistent/engine-binary" "$HOOK" >/dev/null 2>&1; then
+  exit_code=0
+else
+  exit_code=$?
+fi
+assert "Hook exits 0 when engine binary is missing" $((exit_code == 0 ? 0 : 1))
+
+commit_sha8=$(git -C "$test_repo8" rev-parse HEAD 2>/dev/null || echo "")
+output=$(AI_CONDUCTOR_ENGINE_BIN="/nonexistent/engine-binary" "$HOOK" 2>&1 || true)
+assert_output_contains "Falls back to bash check and still warns with sha" "$output" "$commit_sha8"
+
+# Test 10: Engine path-fallback (mentioned in the script's own header): a
+# stub engine reports "evidenced via path-fallback" and the hook stays
+# silent, proving the hook trusts the path-fallback verdict from the engine
+# path (not just the bare trailer regex).
+echo ""
+echo "Test 10: Engine path-fallback verdict (evidenced:true, reason:path-fallback) → no warning"
+test_repo9="$TMPDIR_ROOT/test_path_fallback"
+mkdir -p "$test_repo9"
+cd "$test_repo9"
+git init -q
+git config user.email "test@example.com"
+git config user.name "Test User"
+
+echo "test" > file.txt
+git add file.txt
+git commit -q -m "Initial commit" || true
+
+echo "change" > file.txt
+git add file.txt
+git commit -q -m "Add feature (no trailer, but plan path overlap)"
+
+STUB_BIN2="$TMPDIR_ROOT/stub-engine-fallback.sh"
+cat > "$STUB_BIN2" <<'STUB'
+#!/bin/bash
+echo '{"evidenced":true,"taskId":"1","reason":"path-fallback"}'
+exit 0
+STUB
+chmod +x "$STUB_BIN2"
+
+output=$(AI_CONDUCTOR_ENGINE_BIN="$STUB_BIN2" "$HOOK" 2>&1 || true)
+[ -z "$output" ]
+assert "No warning when engine reports path-fallback evidence" $?
+
 # Summary
 echo ""
 echo ""

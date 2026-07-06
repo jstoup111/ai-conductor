@@ -66,6 +66,23 @@ interface ParsedStatus {
   statusPath: string;
 }
 
+/**
+ * MIGRATION-ONLY FALLBACK (ADR H5).
+ *
+ * This is the pre-ADR subject/path matching heuristic. It is no longer an
+ * authoritative source of task completion — deriveCompletion() (trailer +
+ * sidecar evidence) is the only engine-owned path that may mark a task
+ * "completed" as a matter of course. attemptAutoHeal is retained solely as a
+ * best-effort migration aid for pre-cutover repos that have no trailer
+ * history to derive from.
+ *
+ * To honor H8 (seedTaskStatus demotes any "completed" row lacking a sidecar
+ * evidence stamp back to "pending"), every heal performed here immediately
+ * writes a corresponding task-evidence.json stamp (form: 'legacy-heal') so
+ * the write it makes to task-status.json is never orphaned: it either has
+ * evidence to back it up, or it must not be written at all. This closes the
+ * legacy-heal -> no-stamp -> demoted-to-pending loop.
+ */
 export async function attemptAutoHeal(projectRoot: string): Promise<AutoHealResult> {
   const result: AutoHealResult = { healed: [], skipped: [] };
   try {
@@ -86,6 +103,9 @@ export async function attemptAutoHeal(projectRoot: string): Promise<AutoHealResu
 
     const planPaths = await readPlanPaths(projectRoot, status.planRef);
 
+    const { createTaskEvidence } = await import('./task-evidence.js');
+    const evidence = await createTaskEvidence(projectRoot);
+
     for (const task of pendingTasks) {
       const match = await findMatchingCommit(projectRoot, task, commits, planPaths);
       if (!match) {
@@ -96,6 +116,10 @@ export async function attemptAutoHeal(projectRoot: string): Promise<AutoHealResu
       if ('commit' in task.rawEntry || !('commit' in task.rawEntry)) {
         task.rawEntry.commit = match.commit.slice(0, 7);
       }
+      // Never write status='completed' without a corresponding sidecar
+      // evidence stamp (H5/H8) — stamp immediately, in the same pass, so
+      // the next seedTaskStatus call sees evidence and preserves it.
+      evidence.evidenceStamps.set(task.id, { sha: match.commit, form: 'legacy-heal' });
       result.healed.push({
         taskId: task.id,
         commit: match.commit.slice(0, 7),
@@ -106,6 +130,7 @@ export async function attemptAutoHeal(projectRoot: string): Promise<AutoHealResu
 
     if (result.healed.length > 0) {
       await writeTaskStatus(status);
+      await evidence.write();
     }
     await writeAuditFile(projectRoot, result);
     return result;
@@ -426,10 +451,15 @@ async function deriveCompletionInternal(
     return result;
   }
 
-  const planTasks = parsePlanTasks(planText);
+  // Task IDs are sourced from parsePlanTaskPaths (colon-optional header match)
+  // rather than parsePlanTasks (colon-required), because plan headers written
+  // as `### Task 1` (no colon/title) are valid and must still be derivable —
+  // the loop body below never reads task name/paths from parsePlanTasks, only
+  // the id, so parsePlanTaskPaths' more permissive header match is a safe and
+  // more correct source of truth for "which task ids exist in this plan."
   const planPaths = parsePlanTaskPaths(planText);
 
-  for (const [taskId, task] of planTasks) {
+  for (const taskId of planPaths.keys()) {
     result[taskId] = { completed: false };
 
     // Look for Evidence: forms first (no-op commits)
@@ -568,12 +598,19 @@ export async function deriveCompletion(
 ): Promise<{ completed: Record<string, { evidencedBy?: string }> }> {
   let anchor = '';
   try {
-    // Get the first commit (plan anchor) for evidence range boundary
-    const { stdout } = await execa('git', ['log', '--format=%H', '-n', '1', '--reverse', 'HEAD'], {
+    // Get the first commit (plan anchor) for evidence range boundary.
+    // NOTE: `-n 1 --reverse` is a classic git footgun — `-n`/`--max-count` is
+    // applied BEFORE `--reverse`, so `-n 1 --reverse HEAD` returns the first
+    // of the newest-first list (i.e. HEAD itself), not the oldest commit.
+    // That made anchor always equal HEAD, so `${anchor}..HEAD` was always an
+    // empty range and every gate evaluation saw zero commits regardless of
+    // real history. Reading the full reversed list and taking its first
+    // line gives the true root commit.
+    const { stdout } = await execa('git', ['log', '--format=%H', '--reverse', 'HEAD'], {
       cwd: projectRoot,
       reject: false,
     });
-    anchor = (stdout || '').trim();
+    anchor = (stdout || '').split('\n')[0]?.trim() ?? '';
   } catch {
     // No commits yet — use empty string, getEvidenceRange will handle it
     anchor = '';
@@ -603,7 +640,61 @@ export async function deriveCompletion(
   return { completed };
 }
 
-function parseTrailers(trailerText: string): Record<string, string[]> {
+/**
+ * Apply a deriveCompletion() result to .pipeline/task-status.json.
+ *
+ * This is the write-back half of the engine-owned task-status contract: derive
+ * only computes fresh completion from git evidence + the task-evidence sidecar
+ * (evidence stamping happens inside deriveCompletion itself); this function is
+ * what actually flips a still-"pending" row to "completed" on disk so the build
+ * gate's raw-row check (CUSTOM_COMPLETION_PREDICATES.build) sees it.
+ *
+ * Returns an AutoHealResult (healed/skipped) so callers can keep emitting the
+ * existing `auto_heal` event shape without caring that the underlying engine
+ * (attemptAutoHeal's commit-matching heuristic vs. deriveCompletion's trailer/
+ * evidence derivation) changed.
+ */
+export async function applyDerivedCompletion(
+  projectRoot: string,
+  derived: { completed: Record<string, { evidencedBy?: string }> },
+): Promise<AutoHealResult> {
+  const result: AutoHealResult = { healed: [], skipped: [] };
+  try {
+    const status = await readTaskStatus(projectRoot);
+    if (!status) return result;
+
+    const pendingTasks = status.tasks.filter((t) => t.status === 'pending');
+    if (pendingTasks.length === 0) return result;
+
+    for (const task of pendingTasks) {
+      const hit = derived.completed[task.id];
+      if (!hit) {
+        result.skipped.push({ taskId: task.id, reason: 'no derived evidence' });
+        continue;
+      }
+      task.rawEntry.status = 'completed';
+      if (hit.evidencedBy) {
+        task.rawEntry.commit = hit.evidencedBy.slice(0, 7);
+      }
+      result.healed.push({
+        taskId: task.id,
+        commit: hit.evidencedBy ? hit.evidencedBy.slice(0, 7) : '',
+        subject: '',
+        matchedFiles: [],
+      });
+    }
+
+    if (result.healed.length > 0) {
+      await writeTaskStatus(status);
+    }
+    await writeAuditFile(projectRoot, result);
+    return result;
+  } catch {
+    return result;
+  }
+}
+
+export function parseTrailers(trailerText: string): Record<string, string[]> {
   const result: Record<string, string[]> = {};
 
   if (!trailerText || trailerText.trim().length === 0) {
@@ -635,7 +726,7 @@ function parseTrailers(trailerText: string): Record<string, string[]> {
   return result;
 }
 
-async function filesForCommit(projectRoot: string, sha: string): Promise<string[]> {
+export async function filesForCommit(projectRoot: string, sha: string): Promise<string[]> {
   const out = await execa('git', ['diff-tree', '--name-only', '-r', sha], {
     cwd: projectRoot,
     reject: false,
@@ -678,7 +769,61 @@ const BACKTICK_TOKEN = /`([^`\s]+)`/g;
 
 // Task ID pattern: alphanumeric + dots, underscores, hyphens
 // Supports: 1, 1.2, task_1, task-name, rem-adr-001, etc.
-const TASK_ID_PATTERN = '[A-Za-z0-9._-]+';
+// (H9 id grammar — exported so callers outside this module, e.g. the
+// post-commit fast-feedback CLI dispatch, validate/derive against the SAME
+// grammar instead of re-deriving a narrower ad hoc regex.)
+export const TASK_ID_PATTERN = '[A-Za-z0-9._-]+';
+
+/**
+ * Fast-feedback, single-commit evidence check (ADR post-landing amendment:
+ * post-commit-derive-feedback.sh invokes this via the `derive-feedback`
+ * CLI dispatch instead of a bare bash regex). Advisory only — never writes
+ * task-status.json or the evidence sidecar; a plain read-only check of
+ * whether the given commit carries a `Task: <id>` trailer matching the H9
+ * grammar, with a path-fallback: if the commit has no Task trailer at all,
+ * check whether its changed files overlap any task's plan-declared paths
+ * (best-effort; plan may not exist yet, e.g. very early in a project).
+ */
+export async function checkCommitEvidence(
+  projectRoot: string,
+  sha: string,
+  planPath?: string,
+): Promise<{ evidenced: boolean; taskId?: string; reason: 'trailer' | 'path-fallback' | 'none' }> {
+  const show = await execa('git', ['show', '-s', '--format=%B', sha], {
+    cwd: projectRoot,
+    reject: false,
+  });
+  const message = show.exitCode === 0 && typeof show.stdout === 'string' ? show.stdout : '';
+  const taskTrailerLine = message
+    .split('\n')
+    .find((l) => new RegExp(`^Task: (${TASK_ID_PATTERN})$`).test(l.trim()));
+
+  if (taskTrailerLine) {
+    const match = taskTrailerLine.trim().match(new RegExp(`^Task: (${TASK_ID_PATTERN})$`));
+    return { evidenced: true, taskId: match?.[1], reason: 'trailer' };
+  }
+
+  // Path-fallback: no Task trailer present. If a plan is available, see
+  // whether this commit's changed files overlap any task's declared paths —
+  // that still counts as (weak) evidence for fast feedback purposes.
+  if (planPath) {
+    try {
+      const planText = await readFile(planPath, 'utf-8');
+      const planPaths = parsePlanTaskPaths(planText);
+      const changedFiles = await filesForCommit(projectRoot, sha);
+      for (const [taskId, paths] of planPaths.entries()) {
+        const overlap = changedFiles.filter((f) => paths.has(f.replace(/^\.\//, '')));
+        if (overlap.length > 0) {
+          return { evidenced: true, taskId, reason: 'path-fallback' };
+        }
+      }
+    } catch {
+      // No plan yet, or unreadable — fall through to "none".
+    }
+  }
+
+  return { evidenced: false, reason: 'none' };
+}
 
 export interface PlanTask {
   name: string;

@@ -125,10 +125,18 @@ export async function seedTaskStatus(projectRoot: string, planPath: string, engi
     // Load task evidence (sidecar)
     const evidence = await createTaskEvidence(projectRoot);
 
-    // On first seed, stamp existing terminal rows as migration-grandfather
+    // On first seed, stamp existing terminal rows as migration-grandfather —
+    // but only for ids the plan actually defines (parsePlanTasks, colon-
+    // required headers). A terminal row for an id the plan doesn't recognize
+    // isn't a pre-cutover legacy row; it's indistinguishable from a forged
+    // row an agent wrote directly (H4/H6), so it must NOT be grandfathered.
     if (isFirstSeed && existingStatus.tasks && Array.isArray(existingStatus.tasks)) {
       for (const task of existingStatus.tasks) {
-        if (task.id && (task.status === 'completed' || task.status === 'skipped')) {
+        if (
+          task.id &&
+          (task.status === 'completed' || task.status === 'skipped') &&
+          planTasks.has(String(task.id))
+        ) {
           evidence.migrationGrandfather.add(String(task.id));
         }
       }

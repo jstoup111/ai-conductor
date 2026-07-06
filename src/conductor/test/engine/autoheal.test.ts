@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, writeFile, mkdir } from 'fs/promises';
+import { mkdtemp, rm, writeFile, mkdir, readFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { execa } from 'execa';
@@ -1295,5 +1295,66 @@ A task that will be pinned by evidence.
     expect(result2).toHaveProperty('12');
     expect(result2['12']).toHaveProperty('completed', true);
     expect(result2['12'].completed).toBe(true);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Regression (ADR H5/H8): attemptAutoHeal is a migration-only fallback. Any
+// completion it writes to task-status.json MUST be backed by a task-evidence.json
+// sidecar stamp, otherwise seedTaskStatus's H8 demotion logic (a "completed" row
+// with no matching evidence stamp gets flipped back to "pending" on next seed)
+// would silently undo the legacy heal on the very next build cycle.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('attemptAutoHeal (H5 migration-only fallback)', () => {
+  it('stamps sidecar evidence for every legacy heal, so seedTaskStatus does not demote it back to pending', async () => {
+    const autoheal = await loadAutoheal();
+    const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
+    const { seedTaskStatus } = await import('../../src/engine/task-seed.js');
+
+    // Plan with one task, matched via subject/id heuristic (legacy path).
+    const planPath = join(gitDir, 'plan.md');
+    await writeFile(planPath, '### Task 1: Do the thing\n\n`file.txt`\n');
+
+    // Commit whose subject satisfies the legacy id-match heuristic and whose
+    // diff touches the plan-declared path.
+    await writeFile(join(gitDir, 'file.txt'), 'content');
+    await execa('git', ['add', 'file.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'feat: T1 do the thing'], { cwd: gitDir });
+
+    // Seed task-status.json with the pending task and a plan_ref pointing at
+    // our plan file (readPlanPaths / seedTaskStatus expect .docs/plans/<name>
+    // unless the path is absolute or starts with ./ or .docs/).
+    await mkdir(join(gitDir, '.pipeline'), { recursive: true });
+    await writeFile(
+      join(gitDir, '.pipeline', 'task-status.json'),
+      JSON.stringify({ plan_ref: planPath, tasks: [{ id: '1', name: 'Do the thing', status: 'pending' }] }, null, 2),
+    );
+
+    // Legacy heal: marks the task completed via subject/path matching.
+    const healResult = await autoheal.attemptAutoHeal(gitDir);
+    expect(healResult.healed.map((h) => h.taskId)).toContain('1');
+
+    const statusAfterHeal = JSON.parse(
+      await readFile(join(gitDir, '.pipeline', 'task-status.json'), 'utf-8'),
+    );
+    const healedTask = statusAfterHeal.tasks.find((t: any) => t.id === '1');
+    expect(healedTask.status).toBe('completed');
+
+    // The heal must have written a sidecar evidence stamp — never a bare
+    // completion with no corresponding evidence (H5).
+    const evidenceAfterHeal = await createTaskEvidence(gitDir);
+    expect(evidenceAfterHeal.evidenceStamps.has('1')).toBe(true);
+    expect(evidenceAfterHeal.evidenceStamps.get('1')?.form).toBe('legacy-heal');
+
+    // Re-seed (simulates the next build-gate cycle). H8's demotion check looks
+    // for a sidecar stamp before preserving a "completed" row; because the
+    // heal stamped one, the task must NOT be flipped back to pending.
+    await seedTaskStatus(gitDir, planPath);
+
+    const statusAfterReseed = JSON.parse(
+      await readFile(join(gitDir, '.pipeline', 'task-status.json'), 'utf-8'),
+    );
+    const reseededTask = statusAfterReseed.tasks.find((t: any) => t.id === '1');
+    expect(reseededTask.status).toBe('completed');
   });
 });

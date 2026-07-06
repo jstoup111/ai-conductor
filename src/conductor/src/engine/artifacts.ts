@@ -456,6 +456,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     }
 
     // If context provides projectRoot and planPath, seed the task status and validate the plan.
+    let planText: string | undefined;
     if (ctx.projectRoot && ctx.planPath) {
       // Task 14: Read engine-recorded plan path if available
       let enginePlanPath: string | undefined;
@@ -484,7 +485,6 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       }
 
       // Validate that the plan is not empty (has tasks to execute).
-      let planText: string;
       try {
         planText = await readFile(ctx.planPath, 'utf-8');
       } catch {
@@ -503,6 +503,102 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       }
     }
 
+    // H6/H7: the gate never trusts task-status.json rows. Every evaluation
+    // recomputes completion from git evidence (deriveCompletion) and writes
+    // it back (applyDerivedCompletion) so the on-disk file stays a fresh
+    // cache, but the pass/fail verdict itself is decided against the
+    // engine-only evidence sidecar (.pipeline/task-evidence.json): a task
+    // only counts as resolved when it has an evidenceStamps entry (real
+    // git-derived evidence, stamped by deriveCompletion) or a
+    // migration-grandfather entry (H8, pre-cutover terminal rows stamped at
+    // first seed). A forged 'completed' row with neither is never counted,
+    // even if task-status.json says otherwise — and a missing/corrupt/wiped
+    // task-status.json is never a terminal failure, since nothing here reads
+    // it as the source of truth.
+    if (ctx.projectRoot && ctx.planPath) {
+      let planTaskIds: string[];
+      try {
+        const { parsePlanTaskPaths } = await import('./autoheal.js');
+        planTaskIds = Array.from(parsePlanTaskPaths(planText!).keys());
+      } catch (err) {
+        return {
+          done: false,
+          reason: `failed to parse plan tasks: ${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
+
+      if (planTaskIds.length === 0) {
+        return { done: false, reason: 'no tasks in plan' };
+      }
+
+      try {
+        const { deriveCompletion, applyDerivedCompletion } = await import('./autoheal.js');
+        const derived = await deriveCompletion(ctx.projectRoot, ctx.planPath);
+        await applyDerivedCompletion(ctx.projectRoot, derived);
+      } catch (err) {
+        return {
+          done: false,
+          reason: `failed to derive completion from git evidence: ${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
+
+      // Best-effort re-read of the (just re-seeded/derived) task-status.json
+      // rows. A migration-grandfather stamp only backs a row that is
+      // CURRENTLY 'completed'/'skipped' on disk — seedTaskStatus already
+      // demotes an unstamped forged 'completed' row back to 'pending' on
+      // reseed, so a grandfathered id whose row got demoted must NOT count
+      // as resolved. A real evidenceStamps entry (from deriveCompletion's own
+      // git-trailer scan) always counts regardless of the row's on-disk
+      // status, since it is independently re-derived from git every time —
+      // this is what makes a wiped/corrupt task-status.json non-terminal.
+      const rowStatusById = new Map<string, string | undefined>();
+      try {
+        const rawStatus = await readFile(join(ctx.projectRoot, '.pipeline/task-status.json'), 'utf-8');
+        const parsedStatus = JSON.parse(rawStatus) as unknown;
+        for (const t of extractTasks(parsedStatus)) {
+          if (t.id) rowStatusById.set(t.id, t.status);
+        }
+      } catch {
+        // Missing/corrupt — rowStatusById stays empty; only evidenceStamps
+        // (not migrationGrandfather) can resolve tasks in this case.
+      }
+
+      let unresolved: string[];
+      try {
+        const { createTaskEvidence } = await import('./task-evidence.js');
+        const evidence = await createTaskEvidence(ctx.projectRoot);
+        unresolved = planTaskIds.filter((id) => {
+          if (evidence.evidenceStamps.has(id)) return false;
+          const rowStatus = rowStatusById.get(id);
+          if (
+            evidence.migrationGrandfather.has(id) &&
+            (rowStatus === 'completed' || rowStatus === 'skipped')
+          ) {
+            return false;
+          }
+          return true;
+        });
+      } catch (err) {
+        return {
+          done: false,
+          reason: `failed to read task-evidence sidecar: ${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
+
+      if (unresolved.length > 0) {
+        const names = unresolved.slice(0, 3).join(', ');
+        const more = unresolved.length > 3 ? ` (+${unresolved.length - 3} more)` : '';
+        return {
+          done: false,
+          reason: `${unresolved.length}/${planTaskIds.length} tasks pending/not completed: ${names}${more}`,
+        };
+      }
+      return { done: true };
+    }
+
+    // No projectRoot/planPath in context (e.g. legacy callers/tests that
+    // don't wire the seed+derive context): fall back to trusting the raw
+    // task-status.json rows, same as before this rework.
     const statusPath = join(dir, '.pipeline/task-status.json');
     let raw: string;
     try {
