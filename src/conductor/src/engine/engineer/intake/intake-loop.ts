@@ -103,8 +103,26 @@ export async function intakeTick(deps: IntakeLoopDeps): Promise<IntakeTickSummar
     deps.log(`intake tick: poll() failed: ${err instanceof Error ? err.message : String(err)}`);
     return { captured: 0 };
   }
+  // Tick-level dedup safety gate (FR-2): if a single poll() returns multiple
+  // envelopes sharing the same sourceRef, only the first is enqueued. The
+  // adapter is expected to dedupe upstream, but this backstop ensures a
+  // single tick never double-enqueues the same source reference.
+  const seenSourceRefs = new Set<string>();
+  const deduplicated: Envelope[] = [];
+  for (const envelope of envelopes) {
+    const sourceRef = envelope.sourceRef;
+    if (typeof sourceRef === 'string' && seenSourceRefs.has(sourceRef)) {
+      deps.log(`intake tick: skipping duplicate envelope for sourceRef=${sourceRef} within this tick`);
+      continue;
+    }
+    if (typeof sourceRef === 'string') {
+      seenSourceRefs.add(sourceRef);
+    }
+    deduplicated.push(envelope);
+  }
+
   const captured: Envelope[] = [];
-  for (const rawEnvelope of envelopes) {
+  for (const rawEnvelope of deduplicated) {
     const envelope = enrichOrigin(rawEnvelope, deps.log);
     try {
       await deps.enqueue(envelope);
