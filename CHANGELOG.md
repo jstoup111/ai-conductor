@@ -858,12 +858,23 @@ fi
 # multi-word descriptions instead, e.g.:  conduct "add user auth"
 ```
 
-The `post-commit-pipeline-sync.sh` hook has been removed. Task-status.json completion is now
-owned by the engine; third-party writers are no longer registered. If you have this hook from
-a prior harness version, it can be safely deleted — the engine will own task-status updates:
+The `post-commit-pipeline-sync.sh` hook has been removed (Task 15). Task-status.json completion is now
+owned by the engine; third-party writers are no longer registered. It has been replaced by
+`post-commit-derive-feedback.sh` (Task 28), which provides fast-feedback warnings on commits
+lacking a `Task: <id>` trailer. If you have the old hook from a prior harness version, it can be
+safely deleted — the engine will own task-status updates, and the new hook runs
+non-fatally to warn on missing evidence:
 
 ```bash migration
 rm -f .claude/hooks/claude/post-commit-pipeline-sync.sh
+# Install the new fast-feedback derive hook in your project's .git/hooks:
+PROJECT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || echo '.')"
+HARNESS_ROOT="${PROJECT_ROOT}/.claude/harness"  # or wherever the harness is checked out
+if [ -d "$PROJECT_ROOT/.git" ] && [ -f "$HARNESS_ROOT/hooks/claude/post-commit-derive-feedback.sh" ]; then
+  cp "$HARNESS_ROOT/hooks/claude/post-commit-derive-feedback.sh" "$PROJECT_ROOT/.git/hooks/post-commit"
+  chmod +x "$PROJECT_ROOT/.git/hooks/post-commit"
+  echo "Installed fast-feedback post-commit hook"
+fi
 ```
 
 ### Changed
