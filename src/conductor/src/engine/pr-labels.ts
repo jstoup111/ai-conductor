@@ -858,3 +858,138 @@ export async function ensureHaltPresentation(
     return 'unconfirmed';
   }
 }
+
+// ── Halt presentation cleanup (verify-after-write) ─────────────────────────────
+
+/**
+ * Remove the remediation marker from a PR body, idempotent via marker check.
+ * Does not call gh if the marker is not present.
+ * Swallows all errors and never throws.
+ *
+ * @param runGh - Injectable gh runner (defaults to production)
+ * @param cwd - Working directory for gh operations
+ * @param prUrl - URL of the PR to edit
+ * @param currentBody - The current body content to check and edit
+ * @param log - Optional logging callback
+ */
+export async function removeBodyMarker(
+  runGh: GhRunner = makeProductionGh(),
+  cwd: string,
+  prUrl: string,
+  currentBody: string,
+  log?: (msg: string) => void,
+): Promise<void> {
+  try {
+    // Check if marker is present; if not, idempotent-exit
+    if (!currentBody.includes(NEEDS_REMEDIATION_BODY_MARKER)) {
+      return;
+    }
+
+    // Strip the marker and call gh pr edit
+    const newBody = currentBody.replace(NEEDS_REMEDIATION_BODY_MARKER, '').trim();
+    await runGh(['pr', 'edit', prUrl, '--body', newBody], { cwd });
+  } catch (err) {
+    log?.(`[pr-labels] removeBodyMarker(${prUrl}) error: ${err}`);
+  }
+}
+
+/**
+ * Clean up halt presentation markers after a feature finishes: remove label,
+ * convert to ready, strip body marker, then re-read to verify all gone.
+ *
+ * Implements retry logic for label removal (up to 3 attempts with backoff).
+ * Returns 'confirmed' if all cleanup verified; 'partial' if any residual markers
+ * or failed operations.
+ *
+ * Never throws; swallows all errors internally and logs them via the optional
+ * `log` callback.
+ *
+ * @param runGh - Injectable gh runner (defaults to production)
+ * @param cwd - Working directory for gh operations
+ * @param prUrl - URL of the PR to clean up
+ * @param log - Optional logging callback
+ * @param sleep - Optional sleep injection for backoff (defaults to setTimeout-based sleep)
+ * @returns 'confirmed' if all three markers verified removed, 'partial' otherwise
+ */
+export async function cleanupHaltPresentation(
+  runGh: GhRunner = makeProductionGh(),
+  cwd: string,
+  prUrl: string,
+  log?: (msg: string) => void,
+  sleep: (ms: number) => Promise<void> = defaultSleep,
+): Promise<'confirmed' | 'partial'> {
+  try {
+    // ── Step 1: read current state ────────────────────────────────────────
+    const beforeCleanup = await readHaltPresentation(runGh, cwd, prUrl, log);
+    if (!beforeCleanup) {
+      log?.(`[pr-labels] cleanupHaltPresentation: could not read PR before cleanup`);
+      return 'partial';
+    }
+
+    // ── Step 2: remove the label with retry logic ────────────────────────
+    if (beforeCleanup.labels.includes('needs-remediation')) {
+      const maxAttempts = 3;
+      let labelRemovalConfirmed = false;
+
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        // Remove the label (best-effort, non-throwing)
+        await removeLabel(runGh, cwd, prUrl, 'needs-remediation', log);
+
+        // Re-read to check if label is gone
+        const afterRemove = await readHaltPresentation(runGh, cwd, prUrl, log);
+        if (afterRemove && !afterRemove.labels.includes('needs-remediation')) {
+          labelRemovalConfirmed = true;
+          break;
+        }
+
+        // Label still present; log and retry with backoff (unless on last attempt)
+        if (attempt < maxAttempts) {
+          const backoffMs = attempt * 100; // 100ms, 200ms, etc.
+          log?.(
+            `[pr-labels] cleanupHaltPresentation(${prUrl}): label still present after attempt ${attempt}, retrying in ${backoffMs}ms`,
+          );
+          await sleep(backoffMs);
+        }
+      }
+    }
+
+    // ── Step 3: convert to ready (remove draft status) ─────────────────────
+    if (beforeCleanup.isDraft) {
+      await setReady(runGh, cwd, prUrl, log);
+    }
+
+    // ── Step 4: remove the body marker ───────────────────────────────────
+    await removeBodyMarker(runGh, cwd, prUrl, beforeCleanup.body, log);
+
+    // ── Step 5: re-read to verify all markers are gone ───────────────────
+    const afterCleanup = await readHaltPresentation(runGh, cwd, prUrl, log);
+    if (!afterCleanup) {
+      log?.(`[pr-labels] cleanupHaltPresentation: could not re-read PR after cleanup`);
+      return 'partial';
+    }
+
+    // ── Step 6: verify all three markers are gone ────────────────────────
+    const hasLabel = afterCleanup.labels.includes('needs-remediation');
+    const isDraft = afterCleanup.isDraft;
+    const hasBodyMarker = afterCleanup.body.includes(NEEDS_REMEDIATION_BODY_MARKER);
+
+    if (!hasLabel && !isDraft && !hasBodyMarker) {
+      return 'confirmed';
+    }
+
+    if (hasLabel) {
+      log?.(`[pr-labels] cleanupHaltPresentation(${prUrl}): residual needs-remediation label`);
+    }
+    if (isDraft) {
+      log?.(`[pr-labels] cleanupHaltPresentation(${prUrl}): still in draft status`);
+    }
+    if (hasBodyMarker) {
+      log?.(`[pr-labels] cleanupHaltPresentation(${prUrl}): residual body marker`);
+    }
+
+    return 'partial';
+  } catch (err) {
+    log?.(`[pr-labels] cleanupHaltPresentation(${prUrl}) error: ${err}`);
+    return 'partial';
+  }
+}

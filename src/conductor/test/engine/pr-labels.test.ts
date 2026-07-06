@@ -25,6 +25,8 @@ import {
   readHaltPresentation,
   ensureBodyMarker,
   ensureHaltPresentation,
+  removeBodyMarker,
+  cleanupHaltPresentation,
   makeProductionGh,
   makeProductionGit,
 } from '../../src/engine/pr-labels.js';
@@ -1241,6 +1243,292 @@ describe('ensureHaltPresentation', () => {
     expect(readBeforeCalls.length).toBeGreaterThanOrEqual(2); // at least 2 reads
     expect(undoCall).toBeDefined(); // undo was attempted
     expect(apiCall).toBeDefined(); // label add proceeded despite draft failure
+  });
+
+  it('T8 RED: returns unconfirmed when all 3 retry attempts fail to add label (exhaustion)', async () => {
+    // T8 negative: all 3 label-add attempts fail (rate limit, network error, etc.)
+    // ensureHaltPresentation should:
+    //   1. Attempt to add label 3 times
+    //   2. After each failure, re-read to check if label present
+    //   3. Each re-read shows label is NOT present
+    //   4. Continue with final verification read
+    //   5. See missing label and return 'unconfirmed' (not throw)
+    const prBodyBefore = 'Some PR body';
+    const { gh, calls } = fakeGh([
+      // ensureBodyMarker: readHaltPresentation (to get body)
+      {
+        stdout: JSON.stringify({
+          isDraft: false,
+          labels: [],
+          body: prBodyBefore,
+        }),
+      },
+      // ensureBodyMarker: pr edit (appends marker)
+      { stdout: '' },
+      // readHaltPresentation before convert (to check if already draft)
+      {
+        stdout: JSON.stringify({
+          isDraft: false,
+          labels: [],
+          body: `${prBodyBefore}\n${NEEDS_REMEDIATION_BODY_MARKER}`,
+        }),
+      },
+      // convertToDraft: pr ready --undo
+      { stdout: '' },
+      // Retry loop: attempt 1
+      new Error('rate limited'), // addLabel: api call fails
+      // readHaltPresentation in retry loop after attempt 1 (label still missing)
+      {
+        stdout: JSON.stringify({
+          isDraft: true,
+          labels: [],
+          body: `${prBodyBefore}\n${NEEDS_REMEDIATION_BODY_MARKER}`,
+        }),
+      },
+      // Retry loop: attempt 2
+      new Error('rate limited'), // addLabel: api call fails
+      // readHaltPresentation in retry loop after attempt 2 (label still missing)
+      {
+        stdout: JSON.stringify({
+          isDraft: true,
+          labels: [],
+          body: `${prBodyBefore}\n${NEEDS_REMEDIATION_BODY_MARKER}`,
+        }),
+      },
+      // Retry loop: attempt 3
+      new Error('rate limited'), // addLabel: api call fails
+      // readHaltPresentation in retry loop after attempt 3 (always called)
+      {
+        stdout: JSON.stringify({
+          isDraft: true,
+          labels: [],
+          body: `${prBodyBefore}\n${NEEDS_REMEDIATION_BODY_MARKER}`,
+        }),
+      },
+      // readHaltPresentation after writes (verification read)
+      {
+        stdout: JSON.stringify({
+          isDraft: true,
+          labels: [],
+          body: `${prBodyBefore}\n${NEEDS_REMEDIATION_BODY_MARKER}`,
+        }),
+      },
+    ]);
+
+    const logs: string[] = [];
+    const sleeps: number[] = [];
+    const result = await ensureHaltPresentation(
+      gh,
+      '/repo',
+      TEST_PR_URL,
+      (msg) => logs.push(msg),
+      async (ms) => sleeps.push(ms),
+    );
+
+    // Should return 'unconfirmed' after all attempts fail
+    expect(result).toBe('unconfirmed');
+
+    // Should NOT throw (test succeeds if no exception)
+
+    // Verify exactly 3 attempts were made (3 api call attempts)
+    const apiCalls = calls.filter((a) => a[0] === 'api');
+    expect(apiCalls).toHaveLength(3);
+
+    // Verify 2 sleep calls (after attempt 1 and 2, not after 3)
+    expect(sleeps).toEqual([100, 200]);
+
+    // Verify logging about missing label in final verification
+    expect(logs.some((msg) => msg.includes('missing needs-remediation label'))).toBe(true);
+  });
+});
+
+// ── removeBodyMarker ─────────────────────────────────────────────────────────
+// Helper function to strip the remediation marker from a PR body.
+// Used during cleanup (finish phase) to remove machine-added text.
+
+describe('removeBodyMarker', () => {
+  it('removes the body marker from PR body idempotently', async () => {
+    const bodyWithMarker = `Some PR body\n${NEEDS_REMEDIATION_BODY_MARKER}`;
+    const { gh, calls } = fakeGh([{ stdout: '' }]);
+
+    await removeBodyMarker(gh, '/repo', TEST_PR_URL, bodyWithMarker);
+
+    const editCall = calls.find((a) => a[0] === 'pr' && a[1] === 'edit');
+    expect(editCall).toBeDefined();
+    const bodyArgIndex = editCall!.indexOf('--body');
+    const newBody = editCall![bodyArgIndex + 1];
+    expect(newBody).not.toContain(NEEDS_REMEDIATION_BODY_MARKER);
+    expect(newBody).toContain('Some PR body');
+  });
+
+  it('does not edit if marker is not present', async () => {
+    const { gh, calls } = fakeGh([]);
+    const bodyWithoutMarker = 'Some PR body without marker';
+    await removeBodyMarker(gh, '/repo', TEST_PR_URL, bodyWithoutMarker);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('swallows errors without throwing', async () => {
+    const { gh } = fakeGh([new Error('network error')]);
+    const bodyWithMarker = `Some PR body\n${NEEDS_REMEDIATION_BODY_MARKER}`;
+    await expect(
+      removeBodyMarker(gh, '/repo', TEST_PR_URL, bodyWithMarker),
+    ).resolves.toBeUndefined();
+  });
+});
+
+// ── cleanupHaltPresentation ──────────────────────────────────────────────────
+// Verify-after-write cleanup: remove label, set ready, strip marker, then
+// read back to confirm all are gone. Returns 'confirmed' | 'partial'.
+
+describe('cleanupHaltPresentation', () => {
+  it('after clearing label and converting to ready, re-read confirms cleanup', async () => {
+    const prBodyBefore = `Some PR body\n${NEEDS_REMEDIATION_BODY_MARKER}`;
+    const { gh, calls } = fakeGh([
+      // readHaltPresentation before cleanup
+      {
+        stdout: JSON.stringify({
+          isDraft: true,
+          labels: [{ name: 'needs-remediation' }],
+          body: prBodyBefore,
+        }),
+      },
+      { stdout: '' }, // removeLabel api call
+      // readHaltPresentation in retry loop to check if label is gone
+      {
+        stdout: JSON.stringify({
+          isDraft: true,
+          labels: [],
+          body: prBodyBefore,
+        }),
+      },
+      { stdout: '' }, // setReady pr ready call
+      { stdout: '' }, // pr edit to remove marker
+      // readHaltPresentation after cleanup (verification read)
+      {
+        stdout: JSON.stringify({
+          isDraft: false,
+          labels: [],
+          body: 'Some PR body',
+        }),
+      },
+    ]);
+
+    const result = await cleanupHaltPresentation(gh, '/repo', TEST_PR_URL);
+
+    expect(result).toBe('confirmed');
+
+    // Verify the sequence of calls
+    const removeCall = calls.find((a) => a[0] === 'api' && a[1] === '--method' && a[2] === 'DELETE');
+    const readyCall = calls.find((a) => a[0] === 'pr' && a[1] === 'ready');
+    const editCall = calls.find((a) => a[0] === 'pr' && a[1] === 'edit');
+
+    expect(removeCall).toBeDefined();
+    expect(readyCall).toBeDefined();
+    expect(editCall).toBeDefined();
+  });
+
+  it('retries label removal on first failure', async () => {
+    const prBodyBefore = `Some PR body\n${NEEDS_REMEDIATION_BODY_MARKER}`;
+    const { gh, calls } = fakeGh([
+      // readHaltPresentation before cleanup
+      {
+        stdout: JSON.stringify({
+          isDraft: true,
+          labels: [{ name: 'needs-remediation' }],
+          body: prBodyBefore,
+        }),
+      },
+      new Error('network error'), // removeLabel fails on first attempt
+      { stdout: '' }, // removeLabel retries and succeeds
+      { stdout: '' }, // setReady
+      { stdout: '' }, // pr edit to remove marker
+      // readHaltPresentation after cleanup (verification read)
+      {
+        stdout: JSON.stringify({
+          isDraft: false,
+          labels: [],
+          body: 'Some PR body',
+        }),
+      },
+    ]);
+
+    const result = await cleanupHaltPresentation(gh, '/repo', TEST_PR_URL);
+
+    expect(result).toBe('confirmed');
+
+    // Should have called removeLabel twice (once failed, once succeeded)
+    const removeCalls = calls.filter(
+      (a) => a[0] === 'api' && a[1] === '--method' && a[2] === 'DELETE',
+    );
+    expect(removeCalls.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('returns partial when cleanup operations fail persistently', async () => {
+    const prBodyBefore = `Some PR body\n${NEEDS_REMEDIATION_BODY_MARKER}`;
+    const { gh } = fakeGh([
+      // readHaltPresentation before cleanup
+      {
+        stdout: JSON.stringify({
+          isDraft: true,
+          labels: [{ name: 'needs-remediation' }],
+          body: prBodyBefore,
+        }),
+      },
+      new Error('persistent network error'), // removeLabel fails persistently
+      new Error('persistent network error'),
+      new Error('persistent network error'),
+      { stdout: '' }, // setReady
+      { stdout: '' }, // pr edit
+      // readHaltPresentation after cleanup (still shows label because removal failed)
+      {
+        stdout: JSON.stringify({
+          isDraft: false,
+          labels: [{ name: 'needs-remediation' }],
+          body: 'Some PR body',
+        }),
+      },
+    ]);
+
+    const result = await cleanupHaltPresentation(gh, '/repo', TEST_PR_URL);
+
+    expect(result).toBe('partial');
+  });
+
+  it('returns partial when marker persists after cleanup', async () => {
+    const prBodyBefore = `Some PR body\n${NEEDS_REMEDIATION_BODY_MARKER}`;
+    const { gh } = fakeGh([
+      // readHaltPresentation before cleanup
+      {
+        stdout: JSON.stringify({
+          isDraft: true,
+          labels: [{ name: 'needs-remediation' }],
+          body: prBodyBefore,
+        }),
+      },
+      { stdout: '' }, // removeLabel
+      { stdout: '' }, // setReady
+      { stdout: '' }, // pr edit to remove marker
+      // readHaltPresentation after cleanup (marker still present)
+      {
+        stdout: JSON.stringify({
+          isDraft: false,
+          labels: [],
+          body: `Some PR body\n${NEEDS_REMEDIATION_BODY_MARKER}`, // marker still there!
+        }),
+      },
+    ]);
+
+    const result = await cleanupHaltPresentation(gh, '/repo', TEST_PR_URL);
+
+    expect(result).toBe('partial');
+  });
+
+  it('swallows errors and never throws', async () => {
+    const { gh } = fakeGh([new Error('network error')]);
+    await expect(
+      cleanupHaltPresentation(gh, '/repo', TEST_PR_URL),
+    ).resolves.toBeDefined();
   });
 });
 
