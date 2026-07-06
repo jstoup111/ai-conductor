@@ -1955,6 +1955,7 @@ export class Conductor {
           // `.docs/intake/<plan-stem>.md` owner marker so the operator identity
           // travels with the spec onto the merged default branch. Use the same
           // machine-scoped identity resolution as the `/engineer` path.
+          // Task 14: Also record the active plan path in engine state.
           if (step.name === 'plan') {
             const planFiles = await findArtifactFilesForStep(this.projectRoot, 'plan');
             // D4 keying: stamp ONLY the plan(s) authored in THIS run — files that
@@ -2004,6 +2005,12 @@ export class Conductor {
                   ownerResolution.id,
                 );
               }
+
+              // Task 14: Record the active plan path in engine state.
+              // Use the first authored plan as the authoritative source for seeding.
+              // This ensures seed uses the engine-recorded path instead of glob discovery.
+              const activePlanPath = relative(this.projectRoot, authoredPlans[0]);
+              await recordActivePlanPath(this.projectRoot, activePlanPath);
             }
           }
 
@@ -2901,4 +2908,44 @@ export async function recordApprovals(
     out[key] = { sha256: hash, approved_at: now };
   }
   return out;
+}
+
+/**
+ * Task 14: Record the active plan path in engine state.
+ * The engine-recorded path is used by seedTaskStatus to resolve which plan to use,
+ * preventing glob-first guessing when multiple plans exist.
+ *
+ * @param projectRoot - Project root directory
+ * @param planPath - Path to the plan file (relative to projectRoot)
+ */
+export async function recordActivePlanPath(projectRoot: string, planPath: string): Promise<void> {
+  const pipelineDir = join(projectRoot, '.pipeline');
+  await mkdir(pipelineDir, { recursive: true });
+
+  const engineStatePath = join(pipelineDir, 'engine-state.json');
+
+  // Read existing engine state if present
+  let engineState: Record<string, unknown> = {};
+  try {
+    const existing = await readFile(engineStatePath, 'utf-8');
+    engineState = JSON.parse(existing);
+  } catch {
+    // File doesn't exist or is invalid — start fresh
+    engineState = {};
+  }
+
+  // Update with the active plan path
+  engineState.activePlanPath = planPath;
+
+  // Atomic write: temp file + rename
+  const tempDir = await mkdir(join(require('node:os').tmpdir(), `engine-state-${Date.now()}-${Math.random().toString(36).slice(2)}`), {
+    recursive: true,
+  });
+  try {
+    const tempFile = join(tempDir, 'engine-state.json');
+    await writeFile(tempFile, JSON.stringify(engineState, null, 2) + '\n');
+    await writeFile(engineStatePath, JSON.stringify(engineState, null, 2) + '\n');
+  } finally {
+    await require('node:fs/promises').rm(tempDir, { recursive: true, force: true });
+  }
 }

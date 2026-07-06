@@ -4858,6 +4858,130 @@ describe('build-step stall circuit breaker', () => {
   });
 });
 
+// Task 14: Engine records the active plan path
+// After plan-step completion, the engine records the plan path in state.
+// Seed reads and uses this path. Ambiguous discovery (multiple plans, no path)
+// is logged and halts. Single plan with no path uses it as fallback.
+describe('engine/conductor: engine-recorded plan path controls seed discovery (H8)', () => {
+  let dir: string;
+  let statePath: string;
+  let events: ConductorEventEmitter;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'conductor-plan-path-test-'));
+    statePath = join(dir, 'conduct-state.json');
+    events = new ConductorEventEmitter();
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('records plan path in engine state after plan step completes', async () => {
+    // Test the recordActivePlanPath function directly
+    const { recordActivePlanPath } = await import('../../src/engine/conductor.js');
+
+    const planPath = '.docs/plans/test-plan.md';
+    await recordActivePlanPath(dir, planPath);
+
+    // After recording, engine state should contain the plan path
+    const engineStatePath = join(dir, '.pipeline/engine-state.json');
+    const engineStateContent = await readFile(engineStatePath, 'utf-8');
+    const engineState = JSON.parse(engineStateContent);
+
+    expect(engineState).toHaveProperty('activePlanPath');
+    expect(engineState.activePlanPath).toBe('.docs/plans/test-plan.md');
+  });
+
+  it('re-seed uses engine-recorded path and ignores glob-first discovery', async () => {
+    // Setup: create two plan files (glob would pick first alphabetically)
+    const planPath1 = join(dir, '.docs/plans/a-plan.md');
+    const planPath2 = join(dir, '.docs/plans/b-plan.md');
+    await mkdir(join(dir, '.docs/plans'), { recursive: true });
+    // Use proper task format: ### Task N: Title
+    await writeFile(planPath1, '# Plan A\n\n### Task 1: Task A1\nContent');
+    await writeFile(planPath2, '# Plan B\n\n### Task 1: Task B1\nContent');
+
+    // Import and call seedTaskStatus directly, passing the engine path
+    const { seedTaskStatus } = await import('../../src/engine/task-seed.js');
+
+    // Seed with plan-a but engine-state points to plan-b
+    // It should use plan-b (the engine-recorded one)
+    await seedTaskStatus(dir, '.docs/plans/a-plan.md', '.docs/plans/b-plan.md');
+
+    const seedStatusPath = join(dir, '.pipeline/task-status.json');
+    const statusContent = await readFile(seedStatusPath, 'utf-8');
+    const status = JSON.parse(statusContent);
+
+    // Should have used plan-b because it was explicitly passed as enginePlanPath
+    expect(status.plan_ref).toBe('.docs/plans/b-plan.md');
+    // And the task should be from plan B
+    expect(status.tasks[0].name).toBe('Task B1');
+  });
+
+  it('multiple plans + no engine path → logged ambiguity + fails seed', async () => {
+    // Setup: multiple plans with no engine-recorded path
+    const planPath1 = join(dir, '.docs/plans/plan-1.md');
+    const planPath2 = join(dir, '.docs/plans/plan-2.md');
+    await mkdir(join(dir, '.docs/plans'), { recursive: true });
+    // Use proper task format: ### Task N: Title
+    await writeFile(planPath1, '# Plan 1\n\n### Task 1: Task 1\nContent');
+    await writeFile(planPath2, '# Plan 2\n\n### Task 1: Task 2\nContent');
+
+    // Import seedTaskStatus
+    const { seedTaskStatus } = await import('../../src/engine/task-seed.js');
+
+    // This should fail or throw when called with no planPath and multiple plans present
+    // No engine path provided, so it should detect ambiguity
+    await expect(seedTaskStatus(dir, '')).rejects.toThrow(/ambiguous|multiple.*plan/i);
+  });
+
+  it('single plan + no engine path → uses fallback without ambiguity', async () => {
+    // Setup: exactly one plan, no engine path
+    const planPath = join(dir, '.docs/plans/only-plan.md');
+    await mkdir(join(dir, '.docs/plans'), { recursive: true });
+    // Use proper task format: ### Task N: Title
+    await writeFile(planPath, '# Plan\n\n### Task 1: Single Task\nContent');
+
+    // Import seedTaskStatus
+    const { seedTaskStatus } = await import('../../src/engine/task-seed.js');
+
+    // Should use the only plan as fallback (pass empty string to trigger discovery)
+    await seedTaskStatus(dir, '');
+
+    const statusContent = await readFile(join(dir, '.pipeline/task-status.json'), 'utf-8');
+    const status = JSON.parse(statusContent);
+
+    expect(status.tasks).toHaveLength(1);
+    expect(status.tasks[0].name).toBe('Single Task');
+  });
+
+  it('ambiguity detection is logged but not silently resolved', async () => {
+    // Setup: multiple plans, no engine path
+    const planPath1 = join(dir, '.docs/plans/x.md');
+    const planPath2 = join(dir, '.docs/plans/y.md');
+    await mkdir(join(dir, '.docs/plans'), { recursive: true });
+    // Use proper task format: ### Task N: Title
+    await writeFile(planPath1, '# Plan X\n\n### Task 1: X\nContent');
+    await writeFile(planPath2, '# Plan Y\n\n### Task 1: Y\nContent');
+
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const { seedTaskStatus } = await import('../../src/engine/task-seed.js');
+
+    // Should fail when ambiguous
+    await expect(seedTaskStatus(dir, '')).rejects.toThrow();
+
+    // Error should have been logged
+    expect(consoleErrorSpy).toHaveBeenCalled();
+    const errorCalls = consoleErrorSpy.mock.calls.map(c => String(c[0]));
+    const hasAmbiguityMsg = errorCalls.some(msg => msg.match(/ambiguous|multiple.*plan/i));
+    expect(hasAmbiguityMsg).toBe(true);
+
+    consoleErrorSpy.mockRestore();
+  });
+});
+
 // NOTE: The old `bootstrap-mode skip` suite was removed with the Option B
 // design decision: bootstrap + assess are project-level concerns handled by
 // `runProjectPrelude` (see src/engine/project-prelude.ts and its test file),

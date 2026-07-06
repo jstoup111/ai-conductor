@@ -457,9 +457,22 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
 
     // If context provides projectRoot and planPath, seed the task status and validate the plan.
     if (ctx.projectRoot && ctx.planPath) {
+      // Task 14: Read engine-recorded plan path if available
+      let enginePlanPath: string | undefined;
+      try {
+        const engineStatePath = join(dir, '.pipeline/engine-state.json');
+        const engineStateContent = await readFile(engineStatePath, 'utf-8');
+        const engineState = JSON.parse(engineStateContent);
+        if (engineState.activePlanPath) {
+          enginePlanPath = engineState.activePlanPath;
+        }
+      } catch {
+        // Engine state doesn't exist yet — OK, seedTaskStatus will handle it
+      }
+
       // Seed task-status.json from the plan, ensuring file exists and is consistent.
       try {
-        await seedTaskStatus(ctx.projectRoot, ctx.planPath);
+        await seedTaskStatus(ctx.projectRoot, ctx.planPath, enginePlanPath);
       } catch (err) {
         console.error(
           `[build] seedTaskStatus failed: ${err instanceof Error ? err.message : String(err)}`,

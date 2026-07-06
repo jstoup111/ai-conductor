@@ -1,4 +1,4 @@
-import { readFile, writeFile, mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, mkdtemp, rm, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { access } from 'node:fs/promises';
@@ -18,6 +18,11 @@ interface TaskStatusFile {
   [key: string]: unknown;
 }
 
+interface EngineState {
+  activePlanPath?: string;
+  [key: string]: unknown;
+}
+
 /**
  * Seed task-status.json from the plan at build entry.
  *
@@ -30,11 +35,13 @@ interface TaskStatusFile {
  * 6. Wholesale-wiped file is fully restored
  * 7. Write is atomic (temp file + rename)
  * 8. First seed (sidecar absent) stamps existing terminal rows as migration-grandfather
+ * 9. (Task 14) Uses engine-recorded plan path; detects ambiguity when multiple plans exist
  *
  * @param projectRoot - Project root directory
  * @param planPath - Path to the plan file (relative to projectRoot or absolute)
+ * @param enginePlanPath - Optional: plan path recorded in engine state (overrides planPath)
  */
-export async function seedTaskStatus(projectRoot: string, planPath: string): Promise<void> {
+export async function seedTaskStatus(projectRoot: string, planPath: string, enginePlanPath?: string): Promise<void> {
   try {
     // Ensure .pipeline directory exists
     const pipelineDir = join(projectRoot, '.pipeline');
@@ -42,6 +49,38 @@ export async function seedTaskStatus(projectRoot: string, planPath: string): Pro
 
     const statusPath = join(pipelineDir, 'task-status.json');
     const sidecarPath = join(pipelineDir, 'task-evidence.json');
+    const engineStatePath = join(pipelineDir, 'engine-state.json');
+
+    // Read engine-recorded plan path if available
+    let recordedPlanPath: string | undefined = enginePlanPath;
+    try {
+      const engineStateContent = await readFile(engineStatePath, 'utf-8');
+      const engineState: EngineState = JSON.parse(engineStateContent);
+      if (engineState.activePlanPath) {
+        recordedPlanPath = engineState.activePlanPath;
+      }
+    } catch {
+      // Engine state doesn't exist yet — OK, will try other sources
+    }
+
+    // Resolve the actual plan path to use:
+    // 1. If engine-recorded path exists, use it exclusively
+    // 2. Otherwise, resolve from planPath or detect ambiguity
+    let resolvedPlanPath: string;
+    if (recordedPlanPath) {
+      resolvedPlanPath = recordedPlanPath;
+    } else {
+      // No engine-recorded path — check for ambiguity
+      resolvedPlanPath = await resolvePlanPathWithAmbiguityCheck(projectRoot, planPath);
+    }
+
+    // Ensure resolvedPlanPath is absolute (join with projectRoot if relative)
+    let absolutePlanPath: string;
+    if (resolvedPlanPath.startsWith('/')) {
+      absolutePlanPath = resolvedPlanPath;
+    } else {
+      absolutePlanPath = join(projectRoot, resolvedPlanPath);
+    }
 
     // Check if this is a first seed (sidecar absent = pre-cutover)
     let isFirstSeed = false;
@@ -55,7 +94,7 @@ export async function seedTaskStatus(projectRoot: string, planPath: string): Pro
     // Parse plan tasks
     let planText: string;
     try {
-      planText = await readFile(planPath, 'utf-8');
+      planText = await readFile(absolutePlanPath, 'utf-8');
     } catch {
       // Plan file not found — create empty status
       planText = '';
@@ -166,7 +205,7 @@ export async function seedTaskStatus(projectRoot: string, planPath: string): Pro
 
     // Build output structure
     const output: TaskStatusFile = {
-      plan_ref: normalizePlanRef(projectRoot, planPath),
+      plan_ref: normalizePlanRef(projectRoot, resolvedPlanPath),
       tasks,
     };
 
@@ -189,6 +228,47 @@ export async function seedTaskStatus(projectRoot: string, planPath: string): Pro
     );
     throw err;
   }
+}
+
+/**
+ * Resolve the plan path to use for seeding.
+ * If no explicit path provided, search for plans in .docs/plans/.
+ * Throws if multiple plans found with no engine guidance (ambiguous).
+ * Uses fallback (single plan) if only one exists.
+ */
+async function resolvePlanPathWithAmbiguityCheck(projectRoot: string, planPath: string): Promise<string> {
+  // If an explicit plan path was provided, use it
+  if (planPath && planPath.trim()) {
+    return planPath;
+  }
+
+  // No explicit path — search for plans in .docs/plans/
+  const plansDir = join(projectRoot, '.docs', 'plans');
+  let planFiles: string[];
+  try {
+    const files = await readdir(plansDir);
+    planFiles = files.filter(f => f.endsWith('.md')).map(f => join(plansDir, f));
+  } catch {
+    // Plans directory doesn't exist
+    planFiles = [];
+  }
+
+  if (planFiles.length === 0) {
+    // No plans found at all — return empty, let downstream handle it
+    return '';
+  }
+
+  if (planFiles.length === 1) {
+    // Single plan — use it as fallback
+    return planFiles[0];
+  }
+
+  // Multiple plans and no engine guidance — ambiguous
+  const planList = planFiles.map(p => p.replace(projectRoot, '.')).join(', ');
+  const errorMsg = `Ambiguous plan discovery: multiple plans found (${planList}) but no engine-recorded path. ` +
+    `The plan step should record the active plan path in engine state; seed cannot guess which to use.`;
+  console.error(`[task-seed] ${errorMsg}`);
+  throw new Error(errorMsg);
 }
 
 /**
