@@ -68,7 +68,12 @@ export function createNotifier(deps: NotifierDeps): Notifier {
       await deps.writeStatus(status);
       deps.log(`notifier: wrote status surface for ${status.count} idea(s)`);
 
-      await deps.push(status);
+      try {
+        await deps.push(status);
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        deps.log(`notifier: push notification failed (non-fatal): ${reason}`);
+      }
     },
   };
 }

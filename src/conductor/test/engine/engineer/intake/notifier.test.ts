@@ -70,6 +70,33 @@ describe('createNotifier — best-effort push (Task 10)', () => {
   });
 });
 
+describe('createNotifier — push failure is non-fatal (Task 12)', () => {
+  it('notify([1 idea]) persists status and swallows a push() error', async () => {
+    const { createNotifier } = await loadNotifier();
+
+    const writeStatus = vi.fn();
+    const push = vi.fn(() => {
+      throw new Error('push transport unavailable');
+    });
+    const now = vi.fn(() => '2026-07-06T12:00:00.000Z');
+    const log = vi.fn();
+
+    const notifier = createNotifier({ writeStatus, push, now, log });
+
+    const idea = envelope('owner/Z#1');
+
+    await expect(notifier.notify([idea])).resolves.toBeUndefined();
+
+    expect(writeStatus).toHaveBeenCalledTimes(1);
+    expect(push).toHaveBeenCalledTimes(1);
+    expect(
+      log.mock.calls.some(
+        (call) => typeof call[0] === 'string' && call[0].toLowerCase().includes('push'),
+      ),
+    ).toBe(true);
+  });
+});
+
 describe('createNotifier — empty capture (Task 11)', () => {
   it('notify([]) resolves cleanly without calling writeStatus or push', async () => {
     const { createNotifier } = await loadNotifier();
