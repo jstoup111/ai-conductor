@@ -52,6 +52,15 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   other's failure modes. Modules: `pr-labels.ts` (`ensureHaltPresentation`, `cleanupHaltPresentation`),
   `halt-pr-reconciliation.ts` (`reconcileHaltPrs`), `daemon.ts` (sweep wiring). See
   `adr-2026-07-05-halt-pr-presentation-reliability.md` (D1–D5 decisions) and README/`src/conductor/README.md`.
+- **Engineer handoff write-back now surfaces failures with a `writebackPending` ledger marker
+  and copy/paste-retryable remediation (#290).** `IntakePort.report()` returns a `ReportOutcome`
+  (`{ ok: true }` or `{ ok: false, remediation: string[] }`); on a failed `done` write-back,
+  `reportDone` (`src/engine/engineer/intake/writeback.ts`) sets `writebackPending: true` on the
+  ledger entry (cleared only on a subsequent `ok: true` outcome, per TR-3 — a pre-existing flag is
+  never silently dropped by an absent port or missing outcome). `remediation` carries the fully
+  substituted `gh` command for the specific step that failed (issue comment or label-add), which
+  `dispatchEngineer`'s `handoff`/`land` primitives print to stderr without affecting stdout or the
+  exit code — a stalled write-back never turns a successful handoff into a failure.
 
 ### Changed
 
@@ -73,6 +82,14 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   held it as `unowned-post-cutover` and the daemon never built it. With the marker committed on
   the default branch, `readSpecOwnerStamp` resolves the owner and the spec re-enters the
   dispatchable backlog.
+- **Engineer handoff write-back no longer spawns `gh` with `ENOENT` (recurring; ledger advanced
+  anyway) (#290).** `report()` in `src/engine/engineer/intake/github-issues.ts` previously fell
+  back to `process.cwd()` when the poll-cache had no entry for a repo (e.g. write-back invoked
+  without a prior `poll()`), spawning `gh` from whatever directory the daemon happened to be
+  running in — which could be missing/deleted and fail with `ENOENT`, or simply target the wrong
+  repo. The new `resolveReportCwd()` resolves cwd in order — poll-cache → registry lookup (matched
+  by `ghRepo`/`name`) → `os.homedir()` — with each candidate `existsSync`-checked; every `gh` call
+  already passes `-R <owner/repo>`, so any existing directory is sufficient.
 - **Daemon-lock handoff race can no longer end with zero daemons (ai-conductor#374).**
   `clearStaleLockForRestart` and `ensureRunning`'s acquire-then-unlink step briefly own the
   pidfile with their OWN live pid; a concurrent `ensureRunning` observing that transient
