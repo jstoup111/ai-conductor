@@ -1,6 +1,7 @@
 import { readFile, writeFile, mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { access } from 'node:fs/promises';
 import { parsePlanTasks, PlanTask } from './autoheal.js';
 import { createTaskEvidence } from './task-evidence.js';
 
@@ -28,6 +29,7 @@ interface TaskStatusFile {
  * 5. Second re-seed produces byte-identical JSON (idempotent)
  * 6. Wholesale-wiped file is fully restored
  * 7. Write is atomic (temp file + rename)
+ * 8. First seed (sidecar absent) stamps existing terminal rows as migration-grandfather
  *
  * @param projectRoot - Project root directory
  * @param planPath - Path to the plan file (relative to projectRoot or absolute)
@@ -39,6 +41,16 @@ export async function seedTaskStatus(projectRoot: string, planPath: string): Pro
     await mkdir(pipelineDir, { recursive: true });
 
     const statusPath = join(pipelineDir, 'task-status.json');
+    const sidecarPath = join(pipelineDir, 'task-evidence.json');
+
+    // Check if this is a first seed (sidecar absent = pre-cutover)
+    let isFirstSeed = false;
+    try {
+      await access(sidecarPath);
+    } catch {
+      // Sidecar doesn't exist — this is a first seed
+      isFirstSeed = true;
+    }
 
     // Parse plan tasks
     let planText: string;
@@ -73,6 +85,15 @@ export async function seedTaskStatus(projectRoot: string, planPath: string): Pro
 
     // Load task evidence (sidecar)
     const evidence = await createTaskEvidence(projectRoot);
+
+    // On first seed, stamp existing terminal rows as migration-grandfather
+    if (isFirstSeed && existingStatus.tasks && Array.isArray(existingStatus.tasks)) {
+      for (const task of existingStatus.tasks) {
+        if (task.id && (task.status === 'completed' || task.status === 'skipped')) {
+          evidence.migrationGrandfather.add(String(task.id));
+        }
+      }
+    }
 
     // Merge logic
     const taskMap = new Map<string, TaskStatusRecord>();
@@ -159,6 +180,9 @@ export async function seedTaskStatus(projectRoot: string, planPath: string): Pro
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
+
+    // Write task evidence (with grandfather stamps if first seed)
+    await evidence.write();
   } catch (err) {
     console.error(
       `[task-seed] Error seeding task-status.json: ${err instanceof Error ? err.message : String(err)}`,

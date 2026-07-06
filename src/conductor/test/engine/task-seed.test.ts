@@ -569,4 +569,191 @@ Content
       expect(status.tasks[0].id).toBe('1');
     });
   });
+
+  describe('migration grandfather stamping (pre-cutover files)', () => {
+    it('stamps existing terminal rows as migration-grandfather on first seed (sidecar absent)', async () => {
+      // Setup: pre-cutover task-status.json file (no sidecar)
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({
+          tasks: [
+            { id: '1', name: 'Task 1', status: 'completed' },
+            { id: '2', name: 'Task 2', status: 'skipped' },
+            { id: '3', name: 'Task 3', status: 'pending' },
+          ],
+        }),
+      );
+
+      // No task-evidence.json sidecar yet (pre-cutover)
+
+      // Plan with same tasks
+      const planPath = join(dir, '.docs/plans/test.md');
+      await mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await writeFile(
+        planPath,
+        `# Plan
+
+## Task 1: Task 1
+Content
+
+## Task 2: Task 2
+Content
+
+## Task 3: Task 3
+Content
+`,
+      );
+
+      // First seed
+      await seedTaskStatus(dir, planPath);
+
+      // Check sidecar was created with grandfather stamps
+      const evidencePath = join(dir, '.pipeline/task-evidence.json');
+      const evidenceContent = await readFile(evidencePath, 'utf-8');
+      const evidence = JSON.parse(evidenceContent);
+
+      // Tasks 1 and 2 should be in migrationGrandfather (terminal statuses)
+      expect(evidence.migrationGrandfather).toContain('1');
+      expect(evidence.migrationGrandfather).toContain('2');
+      // Task 3 should NOT be grandfathered (pending is not terminal)
+      expect(evidence.migrationGrandfather).not.toContain('3');
+    });
+
+    it('does not modify grandfather stamp on second seed', async () => {
+      // Setup: pre-cutover task-status.json
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({
+          tasks: [
+            { id: '1', name: 'Task 1', status: 'completed' },
+            { id: '2', name: 'Task 2', status: 'skipped' },
+          ],
+        }),
+      );
+
+      const planPath = join(dir, '.docs/plans/test.md');
+      await mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await writeFile(
+        planPath,
+        `# Plan
+
+## Task 1: Task 1
+Content
+
+## Task 2: Task 2
+Content
+`,
+      );
+
+      // First seed
+      await seedTaskStatus(dir, planPath);
+
+      const evidencePath = join(dir, '.pipeline/task-evidence.json');
+      const firstEvidence = JSON.parse(await readFile(evidencePath, 'utf-8'));
+
+      // Second seed
+      await seedTaskStatus(dir, planPath);
+
+      const secondEvidence = JSON.parse(await readFile(evidencePath, 'utf-8'));
+
+      // Grandfather set should be unchanged
+      expect(secondEvidence.migrationGrandfather).toEqual(firstEvidence.migrationGrandfather);
+    });
+
+    it('does not grandfather rows added after first seed', async () => {
+      // Setup: pre-cutover task-status.json with task 1
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({
+          tasks: [{ id: '1', name: 'Task 1', status: 'completed' }],
+        }),
+      );
+
+      const planPath = join(dir, '.docs/plans/test.md');
+      await mkdir(join(dir, '.docs/plans'), { recursive: true });
+
+      // First seed with just task 1
+      await writeFile(
+        planPath,
+        `# Plan
+
+## Task 1: Task 1
+Content
+`,
+      );
+      await seedTaskStatus(dir, planPath);
+
+      // Update plan to add task 2 in completed state
+      await writeFile(
+        planPath,
+        `# Plan
+
+## Task 1: Task 1
+Content
+
+## Task 2: Task 2
+Content
+`,
+      );
+
+      // Also update task-status to add task 2 as completed
+      const statusPath = join(dir, '.pipeline/task-status.json');
+      const status = JSON.parse(await readFile(statusPath, 'utf-8'));
+      status.tasks.push({ id: '2', name: 'Task 2', status: 'completed' });
+      await writeFile(statusPath, JSON.stringify(status));
+
+      // Second seed
+      await seedTaskStatus(dir, planPath);
+
+      const evidencePath = join(dir, '.pipeline/task-evidence.json');
+      const evidence = JSON.parse(await readFile(evidencePath, 'utf-8'));
+
+      // Task 1 should be grandfathered (existed at first seed)
+      expect(evidence.migrationGrandfather).toContain('1');
+      // Task 2 should NOT be grandfathered (added after first seed)
+      expect(evidence.migrationGrandfather).not.toContain('2');
+    });
+
+    it('recognizes grandfathered rows as complete', async () => {
+      // This test verifies that grandfathered tasks are properly marked
+      // and can be treated as complete. The gate logic will come in Task 10,
+      // but we can verify the sidecar is set up correctly.
+
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({
+          tasks: [{ id: '1', name: 'Task 1', status: 'completed' }],
+        }),
+      );
+
+      const planPath = join(dir, '.docs/plans/test.md');
+      await mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await writeFile(
+        planPath,
+        `# Plan
+
+## Task 1: Task 1
+Content
+`,
+      );
+
+      // First seed
+      await seedTaskStatus(dir, planPath);
+
+      // Check evidence
+      const evidencePath = join(dir, '.pipeline/task-evidence.json');
+      const evidence = JSON.parse(await readFile(evidencePath, 'utf-8'));
+
+      // Task 1 should be in migrationGrandfather
+      expect(evidence.migrationGrandfather).toContain('1');
+
+      // Verify it's accessible as a Set (for later gate logic)
+      // This is just to ensure structure is correct
+      expect(Array.isArray(evidence.migrationGrandfather)).toBe(true);
+    });
+  });
 });
