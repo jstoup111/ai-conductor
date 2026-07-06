@@ -1334,6 +1334,122 @@ describe('engine/conductor', () => {
       // Verify the runner was called to dispatch steps (feature resumed)
       expect((runner.run as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(0);
     });
+
+    it('interactive: N no-evidence gate misses (acceptance_specs) does NOT auto-park', async () => {
+      const N = 3;
+      // Start with N-1 attempts so the next miss will trigger auto-park in daemon mode
+      // Create a plan file so we test the no-evidence case, not the empty-plan case
+      await seedToBuildGate(N - 1, true);
+
+      const runner = createMockStepRunner();
+      const parkEvents: Array<{ type: string; slug?: string; reason?: string }> = [];
+      events.on('auto_park', (e) => {
+        parkEvents.push({ type: 'auto_park', slug: e.slug, reason: e.reason });
+      });
+
+      const onRecovery = vi
+        .fn<[StepName, boolean], Promise<RecoveryOption>>()
+        .mockResolvedValue('quit');
+
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'default', // interactive mode
+        daemon: false,  // NOT daemon mode
+        verifyArtifacts: true,
+        maxRetries: 1,
+        fromStep: 'acceptance_specs',
+        onRecovery,
+      });
+
+      await conductor.run();
+
+      // Verify NO auto-park marker was written (guard blocks it in interactive mode)
+      const { getProvenanceType } = await import('../../src/engine/park-marker.js');
+      const provenance = await getProvenanceType(dir, 'feat');
+      expect(provenance).not.toBe('auto');
+
+      // Verify no auto_park event was emitted
+      expect(parkEvents).toHaveLength(0);
+
+      // Verify recovery menu was called (interactive path, not auto-park halt)
+      expect(onRecovery).toHaveBeenCalledWith('acceptance_specs', expect.anything(), expect.anything());
+    });
+
+    it('interactive: gate fails → recovery menu reached (not park)', async () => {
+      // Seed to acceptance_specs gate with plan present but no evidence (will fail gate)
+      await seedToBuildGate(0, true);
+
+      const runner = createMockStepRunner();
+      const parkEvents: Array<{ type: string; reason?: string }> = [];
+      events.on('auto_park', (e) => {
+        parkEvents.push({ type: 'auto_park', reason: e.reason });
+      });
+
+      const onRecovery = vi
+        .fn<[StepName, boolean], Promise<RecoveryOption>>()
+        .mockResolvedValue('quit');
+
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'default', // interactive mode
+        daemon: false,  // NOT daemon mode
+        verifyArtifacts: true,
+        maxRetries: 1,
+        fromStep: 'acceptance_specs',
+        onRecovery,
+      });
+
+      await conductor.run();
+
+      // Verify no auto-park occurred (interactive mode skips auto-park entirely)
+      expect(parkEvents).toHaveLength(0);
+
+      // Verify recovery menu was invoked instead (normal interactive path)
+      expect(onRecovery).toHaveBeenCalled();
+    });
+
+    it('interactive: #115 retryReason behavior unchanged in interactive mode', async () => {
+      // Seed to acceptance_specs gate
+      await seedToBuildGate(0, true);
+
+      let recoveryStepName: StepName | undefined;
+      let recoveryReason: boolean | undefined;
+      const onRecovery = vi
+        .fn<[StepName, boolean], Promise<RecoveryOption>>()
+        .mockImplementation(async (step, needsReason) => {
+          recoveryStepName = step;
+          recoveryReason = needsReason;
+          return 'quit';
+        });
+
+      const runner = createMockStepRunner();
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'default', // interactive mode
+        daemon: false,  // NOT daemon mode
+        verifyArtifacts: true,
+        maxRetries: 1,
+        fromStep: 'acceptance_specs',
+        onRecovery,
+      });
+
+      await conductor.run();
+
+      // Verify recovery menu is called with the step and reason flag (#115 mechanism)
+      expect(onRecovery).toHaveBeenCalled();
+      expect(recoveryStepName).toBe('acceptance_specs');
+      // The second parameter indicates whether a retry reason is needed
+      expect(typeof recoveryReason).toBe('boolean');
+    });
   });
 
   describe('dashboard provenance + park visibility (Task 25)', () => {
