@@ -933,6 +933,53 @@ describe('ensureHaltPresentation', () => {
     ]);
   });
 
+  it('RED: idempotent — already-draft PR skips convertToDraft call entirely', async () => {
+    const prBodyBefore = 'Some PR body';
+    const { gh, calls } = fakeGh([
+      // ensureBodyMarker: readHaltPresentation (to get body)
+      {
+        stdout: JSON.stringify({
+          isDraft: true, // Already draft
+          labels: [],
+          body: prBodyBefore,
+        }),
+      },
+      { stdout: '' }, // ensureBodyMarker: pr edit (appends marker)
+      // readHaltPresentation before convert (to check if already draft)
+      {
+        stdout: JSON.stringify({
+          isDraft: true, // Still draft
+          labels: [],
+          body: `${prBodyBefore}\n${NEEDS_REMEDIATION_BODY_MARKER}`,
+        }),
+      },
+      // NO convertToDraft call because isDraft is true
+      { stdout: '' }, // addLabel: api
+      // readHaltPresentation after writes (verification read)
+      {
+        stdout: JSON.stringify({
+          isDraft: true,
+          labels: [{ name: 'needs-remediation' }],
+          body: `${prBodyBefore}\n${NEEDS_REMEDIATION_BODY_MARKER}`,
+        }),
+      },
+    ]);
+
+    const result = await ensureHaltPresentation(gh, '/repo', TEST_PR_URL);
+
+    expect(result).toBe('confirmed');
+
+    // Verify that convertToDraft was NOT called (no 'pr ready --undo' call)
+    const undoCall = calls.find((a) => a[0] === 'pr' && a[1] === 'ready' && a[2] === '--undo');
+    expect(undoCall).toBeUndefined();
+
+    // But body marker edit and label add should still be called
+    const editCall = calls.find((a) => a[0] === 'pr' && a[1] === 'edit');
+    const apiCall = calls.find((a) => a[0] === 'api');
+    expect(editCall).toBeDefined();
+    expect(apiCall).toBeDefined();
+  });
+
   it('swallows errors and never throws', async () => {
     const { gh } = fakeGh([new Error('network error')]);
     await expect(
@@ -998,6 +1045,73 @@ describe('ensureHaltPresentation', () => {
     const result = await ensureHaltPresentation(gh, '/repo', TEST_PR_URL);
 
     expect(result).toBe('unconfirmed');
+  });
+
+  it('retries label add when first attempt fails and re-read shows label missing (D2 negative)', async () => {
+    const prBodyBefore = 'Some PR body';
+    const { gh, calls } = fakeGh([
+      // ensureBodyMarker: readHaltPresentation (to get body)
+      {
+        stdout: JSON.stringify({
+          isDraft: false,
+          labels: [],
+          body: prBodyBefore,
+        }),
+      },
+      { stdout: '' }, // ensureBodyMarker: pr edit (appends marker)
+      // readHaltPresentation before convert (to check if already draft)
+      {
+        stdout: JSON.stringify({
+          isDraft: false,
+          labels: [],
+          body: `${prBodyBefore}\n${NEEDS_REMEDIATION_BODY_MARKER}`,
+        }),
+      },
+      { stdout: '' }, // convertToDraft: pr ready --undo
+      new Error('label add failed: rate limited'), // First addLabel attempt fails
+      // Re-read after first attempt in retry loop — label is still missing
+      {
+        stdout: JSON.stringify({
+          isDraft: true,
+          labels: [], // label is not present
+          body: `${prBodyBefore}\n${NEEDS_REMEDIATION_BODY_MARKER}`,
+        }),
+      },
+      { stdout: '' }, // Second addLabel attempt succeeds
+      // Re-read after second attempt in retry loop — label is now present
+      {
+        stdout: JSON.stringify({
+          isDraft: true,
+          labels: [{ name: 'needs-remediation' }],
+          body: `${prBodyBefore}\n${NEEDS_REMEDIATION_BODY_MARKER}`,
+        }),
+      },
+      // Final readHaltPresentation at step 5 (verification read)
+      {
+        stdout: JSON.stringify({
+          isDraft: true,
+          labels: [{ name: 'needs-remediation' }],
+          body: `${prBodyBefore}\n${NEEDS_REMEDIATION_BODY_MARKER}`,
+        }),
+      },
+    ]);
+
+    // Mock sleep to avoid actual delays
+    const sleepCalls: number[] = [];
+    const mockSleep = async (ms: number) => {
+      sleepCalls.push(ms);
+    };
+
+    const result = await ensureHaltPresentation(gh, '/repo', TEST_PR_URL, undefined, mockSleep);
+
+    expect(result).toBe('confirmed');
+
+    // Verify retry happened: at least 2 addLabel attempts
+    const apiCalls = calls.filter((a) => a[0] === 'api' && a[1] === '--method' && a[2] === 'POST');
+    expect(apiCalls.length).toBeGreaterThanOrEqual(2);
+
+    // Verify backoff was called
+    expect(sleepCalls.length).toBeGreaterThan(0);
   });
 });
 
