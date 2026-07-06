@@ -161,6 +161,12 @@ interface CommitInfo {
   subject: string;
 }
 
+export interface CommitWithTrailers {
+  sha: string;
+  subject: string;
+  trailers: Record<string, string[]>;
+}
+
 async function listCommits(projectRoot: string): Promise<CommitInfo[]> {
   const mergeBase = await execa('git', ['merge-base', 'origin/main', 'HEAD'], {
     cwd: projectRoot,
@@ -191,6 +197,84 @@ async function listCommits(projectRoot: string): Promise<CommitInfo[]> {
       if (tab < 0) return { sha: line, subject: '' };
       return { sha: line.slice(0, tab), subject: line.slice(tab + 1) };
     });
+}
+
+export async function listCommitsWithTrailers(projectRoot: string): Promise<CommitWithTrailers[]> {
+  const mergeBase = await execa('git', ['merge-base', 'origin/main', 'HEAD'], {
+    cwd: projectRoot,
+    reject: false,
+  });
+
+  let range: string;
+  if (mergeBase.exitCode === 0 && typeof mergeBase.stdout === 'string' && mergeBase.stdout.trim()) {
+    range = `${mergeBase.stdout.trim()}..HEAD`;
+  } else {
+    range = 'HEAD';
+  }
+
+  // Use %x1e (ASCII record separator) to delimit commits, since trailers can contain newlines
+  const args =
+    range === 'HEAD'
+      ? ['log', '-n', '100', '--format=%H%x09%s%x00%(trailers)%x1e', 'HEAD']
+      : ['log', '--format=%H%x09%s%x00%(trailers)%x1e', range];
+
+  const log = await execa('git', args, { cwd: projectRoot, reject: false });
+  if (log.exitCode !== 0 || typeof log.stdout !== 'string') return [];
+
+  return log.stdout
+    .split('\x1e') // Split by record separator
+    .map((record) => record.trim())
+    .filter((record) => record.length > 0)
+    .map((record) => {
+      const nullIndex = record.indexOf('\x00');
+      if (nullIndex < 0) return null;
+
+      const metaPart = record.slice(0, nullIndex);
+      const trailersPart = record.slice(nullIndex + 1);
+
+      const tabIndex = metaPart.indexOf('\t');
+      if (tabIndex < 0) return null;
+
+      const sha = metaPart.slice(0, tabIndex);
+      const subject = metaPart.slice(tabIndex + 1);
+
+      const trailers = parseTrailers(trailersPart);
+
+      return { sha, subject, trailers };
+    })
+    .filter((item): item is CommitWithTrailers => item !== null);
+}
+
+function parseTrailers(trailerText: string): Record<string, string[]> {
+  const result: Record<string, string[]> = {};
+
+  if (!trailerText || trailerText.trim().length === 0) {
+    return result;
+  }
+
+  const lines = trailerText.split('\n');
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+
+    // Match "Key: value" format (with space after colon)
+    // Keys must be alphanumeric, hyphens allowed
+    const match = trimmed.match(/^([A-Za-z][A-Za-z0-9-]*): (.+)$/);
+    if (!match) continue;
+
+    const key = match[1];
+    const value = match[2];
+
+    // Only capture Task and Evidence trailers
+    if (key !== 'Task' && key !== 'Evidence') continue;
+
+    if (!result[key]) {
+      result[key] = [];
+    }
+    result[key].push(value);
+  }
+
+  return result;
 }
 
 async function filesForCommit(projectRoot: string, sha: string): Promise<string[]> {
