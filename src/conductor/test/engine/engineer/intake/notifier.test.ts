@@ -97,6 +97,35 @@ describe('createNotifier — push failure is non-fatal (Task 12)', () => {
   });
 });
 
+describe('createNotifier — notification dedup (Task 13)', () => {
+  it('does not re-push ideas already surfaced in a prior notify() call', async () => {
+    const { createNotifier } = await loadNotifier();
+
+    const writeStatus = vi.fn();
+    const push = vi.fn();
+    const now = vi.fn(() => '2026-07-06T12:00:00.000Z');
+    const log = vi.fn();
+
+    const notifier = createNotifier({ writeStatus, push, now, log });
+
+    const ideaA = envelope('owner/X#7');
+    const ideaB = envelope('owner/Y#3');
+    const ideaC = envelope('owner/Z#9');
+
+    await notifier.notify([ideaA, ideaB]);
+    expect(push).toHaveBeenCalledTimes(1);
+    expect(push.mock.calls[0][0].sourceRefs).toEqual(['owner/X#7', 'owner/Y#3']);
+
+    await notifier.notify([ideaA, ideaB, ideaC]);
+    expect(push).toHaveBeenCalledTimes(2);
+    expect(push.mock.calls[1][0].sourceRefs).toEqual(['owner/Z#9']);
+
+    await notifier.notify([ideaA, ideaB]);
+    expect(push).toHaveBeenCalledTimes(2);
+    expect(writeStatus).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe('createNotifier — empty capture (Task 11)', () => {
   it('notify([]) resolves cleanly without calling writeStatus or push', async () => {
     const { createNotifier } = await loadNotifier();

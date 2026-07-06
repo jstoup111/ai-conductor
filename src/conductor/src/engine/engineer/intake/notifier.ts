@@ -50,20 +50,28 @@ export interface Notifier {
  * timestamp from the injected clock — and writes it via deps.writeStatus().
  */
 export function createNotifier(deps: NotifierDeps): Notifier {
+  const alreadyNotified = new Set<string>();
+
   return {
     async notify(ideas: Envelope[]): Promise<void> {
-      if (ideas.length === 0) {
+      const newIdeas = ideas.filter((i) => !alreadyNotified.has(i.sourceRef));
+
+      if (newIdeas.length === 0) {
         return;
       }
 
-      const sourceRefs = ideas.map((i) => i.sourceRef);
-      const message = `${ideas.length} new idea(s) captured from ${sourceRefs.join(', ')}`;
+      const sourceRefs = newIdeas.map((i) => i.sourceRef);
+      const message = `${newIdeas.length} new idea(s) captured from ${sourceRefs.join(', ')}`;
       const status: NotifierStatus = {
-        count: ideas.length,
+        count: newIdeas.length,
         sourceRefs,
         timestamp: deps.now(),
         message,
       };
+
+      for (const ref of sourceRefs) {
+        alreadyNotified.add(ref);
+      }
 
       await deps.writeStatus(status);
       deps.log(`notifier: wrote status surface for ${status.count} idea(s)`);
