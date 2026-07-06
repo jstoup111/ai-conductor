@@ -769,6 +769,9 @@ export async function dispatchEngineer(
         return 1;
       }
 
+      const configResult = await loadConfig(target.canonicalPath);
+      const prTiming = resolvePrTiming(configResult.ok ? configResult.config : undefined);
+
       let handoffResult: Awaited<ReturnType<typeof openSpecPr>>;
       try {
         handoffResult = await openSpecPr(target, branch, {
@@ -784,25 +787,31 @@ export async function dispatchEngineer(
           // close — the daemon's implementation PR closes it on merge).
           sourceRef,
           log: printErr,
-          // Task 20 (TS-8): Wire optional dependencies for draft PR reuse.
-          detectDraftPr: async (branchName, cwd) => {
-            try {
-              const result = await gh(['pr', 'list', '--head', branchName, '--state', 'open', '--draft', '--json', 'url'], { cwd });
-              const data = JSON.parse(result.stdout);
-              if (Array.isArray(data) && data.length > 0 && data[0].url) {
-                return data[0].url;
+          // Task 20 (TS-8): draft-PR reuse is early-draft-only — finish mode (the
+          // default) must stay byte-identical, per
+          // adr-2026-07-03-engineer-checkpoint-commits-idempotent-land.
+          ...(prTiming === 'early-draft'
+            ? {
+                detectDraftPr: async (branchName: string, cwd: string) => {
+                  try {
+                    const result = await gh(['pr', 'list', '--head', branchName, '--state', 'open', '--draft', '--json', 'url'], { cwd });
+                    const data = JSON.parse(result.stdout);
+                    if (Array.isArray(data) && data.length > 0 && data[0].url) {
+                      return data[0].url;
+                    }
+                    return undefined;
+                  } catch {
+                    return undefined;
+                  }
+                },
+                push: async (branchName: string, cwd: string) => {
+                  await pushBranch(undefined, cwd, branchName);
+                },
+                markReadyForReview: async (prUrl: string, cwd: string) => {
+                  await setReady(gh, cwd, prUrl, printErr);
+                },
               }
-              return undefined;
-            } catch {
-              return undefined;
-            }
-          },
-          push: async (branchName, cwd) => {
-            await pushBranch(undefined, cwd, branchName);
-          },
-          markReadyForReview: async (prUrl, cwd) => {
-            await setReady(gh, cwd, prUrl, printErr);
-          },
+            : {}),
         });
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
