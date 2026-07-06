@@ -403,8 +403,10 @@ function printGuide(print: (s: string) => void): void {
   );
 }
 
-// Construct the real gh runner used in production.
-function makeProductionGh(): NonNullable<DispatchEngineerOpts['gh']> {
+// Construct the real gh runner used in production. Exported so other
+// composition roots (e.g. the intake-loop CLI, Task 17) can reuse the exact
+// same production `gh` wiring without duplicating it.
+export function makeProductionGh(): NonNullable<DispatchEngineerOpts['gh']> {
   return async (args: string[], opts: { cwd: string }) => {
     const result = await execFileP('gh', args, { cwd: opts.cwd });
     return { stdout: String(result.stdout) };
@@ -417,8 +419,11 @@ function makeProductionGh(): NonNullable<DispatchEngineerOpts['gh']> {
  * injected gh runner. The engineer loop must NOT import a concrete adapter (FR-13);
  * the CLI is the only place that may. Shared by `poll`, `claim`, the launch pre-poll,
  * and the `--source-ref` write-back on `land`/`handoff`.
+ *
+ * Exported (Task 17) so the production `intake-loop` CLI dispatch can reuse
+ * this exact composition root instead of duplicating adapter wiring.
  */
-function buildIntake(deps: {
+export function buildIntake(deps: {
   engineerDir: string;
   registryPath?: string;
   gh: NonNullable<DispatchEngineerOpts['gh']>;

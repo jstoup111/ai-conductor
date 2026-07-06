@@ -637,3 +637,110 @@ describe('FR-10 — the poll interval is configurable with a validated default f
     }
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Task 17 — production `runIntakeLoop` wiring + `intake-loop` CLI subcommand.
+//
+// `detectIntakeLoopCommand` recognizes `intake-loop --continuous` / `--once`;
+// `dispatchIntakeLoop` is the PRODUCTION composition root that wires the real
+// `buildIntake()` adapter, a real `createNotifier`, a real `sleep`/`now`, and
+// `console.log` into `runIntakeLoop`. It never spawns claude and never opens a
+// PR (FR-9/FR-11). Here we mock `buildIntake`/`createNotifier`/`sleep` via the
+// injected-deps seams on `dispatchIntakeLoop` so the test drives exactly one
+// tick with zero real I/O, then statically re-confirms the zero-token guard.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('Task 17 — intake-loop CLI subcommand (production wiring)', () => {
+  const CLI_MOD = '../../src/intake-loop-cli.js';
+  const CLI_SRC = join(here, '..', '..', 'src', 'intake-loop-cli.ts');
+
+  it('detectIntakeLoopCommand recognizes "intake-loop --continuous"', async () => {
+    const mod = await load(CLI_MOD);
+    const detect = requireFn(mod, 'detectIntakeLoopCommand');
+    expect(detect(['node', 'conduct', 'intake-loop', '--continuous'])).toMatchObject({
+      kind: 'run',
+      once: false,
+    });
+  });
+
+  it('detectIntakeLoopCommand recognizes "intake-loop --once"', async () => {
+    const mod = await load(CLI_MOD);
+    const detect = requireFn(mod, 'detectIntakeLoopCommand');
+    expect(detect(['node', 'conduct', 'intake-loop', '--once'])).toMatchObject({
+      kind: 'run',
+      once: true,
+    });
+  });
+
+  it('detectIntakeLoopCommand returns null for an unrelated subcommand', async () => {
+    const mod = await load(CLI_MOD);
+    const detect = requireFn(mod, 'detectIntakeLoopCommand');
+    expect(detect(['node', 'conduct', 'engineer'])).toBeNull();
+  });
+
+  it('detectIntakeLoopCommand returns {kind:"guide"} when neither flag is given', async () => {
+    const mod = await load(CLI_MOD);
+    const detect = requireFn(mod, 'detectIntakeLoopCommand');
+    expect(detect(['node', 'conduct', 'intake-loop'])).toEqual({ kind: 'guide' });
+  });
+
+  it('dispatchIntakeLoop({once:true}) dispatches the real loop for exactly one tick using mocked buildIntake/notifier/sleep', async () => {
+    const mod = await load(CLI_MOD);
+    const dispatch = requireFn(mod, 'dispatchIntakeLoop');
+
+    const polled = { count: 0 };
+    const fakeAdapter = {
+      poll: async () => {
+        polled.count++;
+        return [makeEnvelope('o/a#1')];
+      },
+    };
+    const enqueued: any[] = [];
+    const fakeQueue = { enqueue: async (e: any) => void enqueued.push(e) };
+    const fakeBuildIntake = () => ({
+      reader: {} as any,
+      ledger: {} as any,
+      queue: fakeQueue as any,
+      adapter: fakeAdapter as any,
+    });
+
+    const notified: any[] = [];
+    const fakeCreateNotifier = (deps: any) => ({
+      notify: async (ideas: any[]) => {
+        notified.push(ideas);
+        await deps.writeStatus({ count: ideas.length, sourceRefs: [], timestamp: deps.now(), message: 'x' });
+      },
+    });
+
+    let sleepCalls = 0;
+    const fakeSleep = async () => {
+      sleepCalls++;
+    };
+
+    const code = await dispatch(
+      { kind: 'run', once: true, intervalMs: 999 },
+      {
+        buildIntake: fakeBuildIntake as any,
+        createNotifier: fakeCreateNotifier as any,
+        sleep: fakeSleep,
+        now: () => new Date('2026-06-30T00:00:00.000Z'),
+        log: () => {},
+        printErr: () => {},
+        engineerDir: '/tmp/does-not-matter-for-this-test',
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(polled.count).toBe(1);
+    expect(enqueued).toHaveLength(1);
+    expect(notified).toHaveLength(1);
+    expect(sleepCalls).toBe(0);
+  });
+
+  it('dispatchIntakeLoop imports no LLM/provider/claude-session module (zero-token guard)', async () => {
+    const src = await readFile(CLI_SRC, 'utf8');
+    expect(src).not.toMatch(/from\s+['"](?:@anthropic-ai\/sdk|[^'"]*\bclaude-[^'"]*)['"]/i);
+    expect(src).not.toMatch(/\bRoutingProvider\b/);
+    expect(src).not.toMatch(/\bSessionCache\b/);
+    expect(src).not.toMatch(/from\s+['"][^'"]*\bsession-?cache[^'"]*['"]/i);
+  });
+});
