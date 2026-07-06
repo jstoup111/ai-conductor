@@ -1101,6 +1101,47 @@ describe('ensureHaltPresentation', () => {
     const markerCount = (newBody.match(/conductor:needs-remediation/g) || []).length;
     expect(markerCount).toBe(1);
   });
+
+  it('returns unconfirmed when readHaltPresentation fails with 404/network error (D2 negative — unreadable PR)', async () => {
+    // D2 negative: verification read fails due to unreadable PR (404 or network error).
+    // ensureHaltPresentation should return 'unconfirmed' and not throw.
+    const { gh } = fakeGh([
+      // ensureBodyMarker: readHaltPresentation succeeds
+      {
+        stdout: JSON.stringify({
+          isDraft: false,
+          labels: [],
+          body: 'Some PR body',
+        }),
+      },
+      // ensureBodyMarker: pr edit (appends marker)
+      { stdout: '' },
+      // readHaltPresentation before convert: succeeds
+      {
+        stdout: JSON.stringify({
+          isDraft: false,
+          labels: [],
+          body: 'Some PR body\n<!-- conductor:needs-remediation -->',
+        }),
+      },
+      // convertToDraft: succeeds
+      { stdout: '' },
+      // addLabel: succeeds
+      { stdout: '' },
+      // readHaltPresentation after writes: FAILS with 404 (PR not found/unreadable)
+      new Error('HTTP 404: could not resolve to a PullRequest with the number 42'),
+    ]);
+
+    const logs: string[] = [];
+    const result = await ensureHaltPresentation(gh, '/repo', TEST_PR_URL, (msg) =>
+      logs.push(msg),
+    );
+
+    // Should return 'unconfirmed' when PR becomes unreadable
+    expect(result).toBe('unconfirmed');
+    // Should log the error
+    expect(logs.some((msg) => msg.includes('could not re-read PR after writes'))).toBe(true);
+  });
 });
 
 // ── Kill-switch: production runners refuse to exec under AI_CONDUCTOR_NO_REAL_EXEC ─
