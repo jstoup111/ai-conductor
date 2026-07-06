@@ -13,14 +13,16 @@
 // calls, no persistence, no scheduling. Types only.
 // ─────────────────────────────────────────────────────────────────────────────
 
+import type { Envelope } from './port.js';
+
 /** Effects injected into the intake loop's tick/scheduler. */
 export interface IntakeLoopDeps {
   /** Polls all registered repos for newly captured envelopes this tick. */
-  poll: () => Promise<unknown[]>;
+  poll: () => Promise<Envelope[]>;
   /** Enqueues a single captured envelope (ledger-deduped upstream). */
-  enqueue: (envelope: unknown) => Promise<void>;
+  enqueue: (envelope: Envelope) => Promise<void>;
   /** Notifies the operator (status surface + best-effort push) of newly captured ideas. */
-  notify: (ideas: unknown[]) => Promise<void>;
+  notify: (ideas: Envelope[]) => Promise<void>;
   /** Delays the loop between ticks by the given number of milliseconds. */
   sleep: (ms: number) => Promise<void>;
   /** Returns the current time (injected clock, for deterministic tests). */
@@ -63,34 +65,21 @@ export interface IntakeTickSummary {
  * `sourceRef` unchanged and logs an origin-unresolved warning via the
  * injected `log` so the tick still enqueues it for later manual routing.
  */
-function enrichOrigin(envelope: unknown, log: (msg: string) => void): unknown {
-  if (
-    envelope !== null &&
-    typeof envelope === 'object' &&
-    'hintRepo' in envelope &&
-    typeof (envelope as { hintRepo?: unknown }).hintRepo === 'string'
-  ) {
-    const record = envelope as Record<string, unknown>;
-    const hintRepo = record.hintRepo as string;
-    const id = record.id;
-    const existingSourceRef = record.sourceRef;
+function enrichOrigin(envelope: Envelope, log: (msg: string) => void): Envelope {
+  if (typeof envelope.hintRepo === 'string') {
+    const hintRepo = envelope.hintRepo;
+    const { id, sourceRef: existingSourceRef } = envelope;
     const sourceRef =
       typeof existingSourceRef === 'string' && existingSourceRef.includes('#')
         ? existingSourceRef
-        : typeof id === 'string' && id.includes('#')
+        : id.includes('#')
           ? id
-          : `${hintRepo}#${String(id)}`;
-    return { ...record, target: hintRepo, sourceRef };
+          : `${hintRepo}#${id}`;
+    return { ...envelope, target: hintRepo, sourceRef } as Envelope;
   }
 
-  const rawSourceRef =
-    envelope !== null && typeof envelope === 'object' && 'sourceRef' in envelope
-      ? (envelope as { sourceRef?: unknown }).sourceRef
-      : undefined;
   log(
-    `intake tick: origin-unresolved (no hintRepo) for envelope with sourceRef=${
-      typeof rawSourceRef === 'string' ? rawSourceRef : String(rawSourceRef)
-    }; enqueuing as-is for manual routing`,
+    `intake tick: origin-unresolved (no hintRepo) for envelope with sourceRef=${envelope.sourceRef}; enqueuing as-is for manual routing`,
   );
   return envelope;
 }
@@ -104,7 +93,7 @@ function enrichOrigin(envelope: unknown, log: (msg: string) => void): unknown {
  * no real I/O, no claude/provider capability.
  */
 export async function intakeTick(deps: IntakeLoopDeps): Promise<IntakeTickSummary> {
-  let envelopes: unknown[];
+  let envelopes: Envelope[];
   try {
     envelopes = await deps.poll();
   } catch (err) {
@@ -114,7 +103,7 @@ export async function intakeTick(deps: IntakeLoopDeps): Promise<IntakeTickSummar
     deps.log(`intake tick: poll() failed: ${err instanceof Error ? err.message : String(err)}`);
     return { captured: 0 };
   }
-  const captured: unknown[] = [];
+  const captured: Envelope[] = [];
   for (const rawEnvelope of envelopes) {
     const envelope = enrichOrigin(rawEnvelope, deps.log);
     try {
