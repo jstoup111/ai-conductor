@@ -1046,6 +1046,61 @@ describe('ensureHaltPresentation', () => {
 
     expect(result).toBe('unconfirmed');
   });
+
+  it('D1 negative: preserves human-written body text when appending marker (reused PR)', async () => {
+    // This is a negative-path test: verify that existing body text is NOT clobbered
+    // when ensureHaltPresentation appends the remediation marker.
+    const originalBody = 'This PR fixes the issue described in #123';
+    const { gh, calls } = fakeGh([
+      // ensureBodyMarker: readHaltPresentation (to get body)
+      {
+        stdout: JSON.stringify({
+          isDraft: false,
+          labels: [],
+          body: originalBody,
+        }),
+      },
+      { stdout: '' }, // ensureBodyMarker: pr edit (appends marker)
+      // readHaltPresentation before convert (to check if already draft)
+      {
+        stdout: JSON.stringify({
+          isDraft: false,
+          labels: [],
+          body: `${originalBody}\n${NEEDS_REMEDIATION_BODY_MARKER}`,
+        }),
+      },
+      { stdout: '' }, // convertToDraft: pr ready --undo
+      { stdout: '' }, // addLabel: api
+      // readHaltPresentation after writes (verification read)
+      {
+        stdout: JSON.stringify({
+          isDraft: true,
+          labels: [{ name: 'needs-remediation' }],
+          body: `${originalBody}\n${NEEDS_REMEDIATION_BODY_MARKER}`,
+        }),
+      },
+    ]);
+
+    const result = await ensureHaltPresentation(gh, '/repo', TEST_PR_URL);
+
+    expect(result).toBe('confirmed');
+
+    // Verify the body edit call preserves original text
+    const editCall = calls.find((a) => a[0] === 'pr' && a[1] === 'edit');
+    expect(editCall).toBeDefined();
+
+    const bodyArgIndex = editCall!.indexOf('--body');
+    expect(bodyArgIndex).toBeGreaterThan(-1);
+    const newBody = editCall![bodyArgIndex + 1];
+
+    // CRITICAL: Body must contain BOTH original text and marker
+    expect(newBody).toContain(originalBody);
+    expect(newBody).toContain(NEEDS_REMEDIATION_BODY_MARKER);
+
+    // Marker must appear exactly once (not duplicated)
+    const markerCount = (newBody.match(/conductor:needs-remediation/g) || []).length;
+    expect(markerCount).toBe(1);
+  });
 });
 
 // ── Kill-switch: production runners refuse to exec under AI_CONDUCTOR_NO_REAL_EXEC ─
