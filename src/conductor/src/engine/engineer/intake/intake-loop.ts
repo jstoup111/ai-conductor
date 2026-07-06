@@ -63,3 +63,23 @@ export async function intakeTick(deps: IntakeLoopDeps): Promise<IntakeTickSummar
   }
   return { captured: envelopes.length };
 }
+
+/**
+ * runIntakeLoop — the intake loop's main entry point (Task 4).
+ *
+ * Poll-sleep loop: calls `intakeTick(deps)` on each iteration, then sleeps
+ * for `opts.intervalMs` via the injected `deps.sleep()` before the next
+ * iteration. When `opts.once` is true, runs exactly one tick and returns
+ * without sleeping. Otherwise loops continuously (until `deps.sleep()`
+ * rejects/throws, which is how tests — and, in production, shutdown
+ * signals — terminate the loop).
+ */
+export async function runIntakeLoop(deps: IntakeLoopDeps, opts: IntakeLoopOptions): Promise<void> {
+  for (;;) {
+    await intakeTick(deps);
+    if (opts.once === true) {
+      return;
+    }
+    await deps.sleep(opts.intervalMs);
+  }
+}

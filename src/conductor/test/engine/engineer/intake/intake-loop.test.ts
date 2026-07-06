@@ -176,3 +176,83 @@ describe('intakeTick — ledger dedup (exactly-once)', () => {
     expect(notify).not.toHaveBeenCalled();
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Task 4: Interval loop — N ticks over N intervals, honors `once` and
+// `intervalMs`.
+//
+// Story: FR-1/FR-10 · Plan: .docs/plans/2026-06-30-background-intake-conduct-loop.md (Task 4)
+//
+// `runIntakeLoop(deps, opts)` is a poll-sleep loop over the already-tested
+// `intakeTick(deps)`. With `opts.once = true` it runs exactly one tick and
+// returns without sleeping. Otherwise it loops continuously, calling the
+// injected `deps.sleep(opts.intervalMs)` between ticks — these tests use a
+// fake sleep/clock (no real delays) and stop the continuous-mode loop by
+// having the fake sleep throw after N calls.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('runIntakeLoop', () => {
+  it('with once=true runs exactly one tick and returns (no sleep)', async () => {
+    const mod = (await import(
+      '../../../../src/engine/engineer/intake/intake-loop.js'
+    )) as Record<string, any>;
+    const runIntakeLoop = mod.runIntakeLoop as (deps: any, opts: any) => Promise<void>;
+    expect(typeof runIntakeLoop).toBe('function');
+
+    let pollCalls = 0;
+    const poll = vi.fn(async () => {
+      pollCalls += 1;
+      return [];
+    });
+    const enqueue = vi.fn(async (_envelope: unknown) => {});
+    const notify = vi.fn(async (_ideas: unknown[]) => {});
+    const sleep = vi.fn(async (_ms: number) => {});
+    const now = () => new Date('2026-06-30T00:00:00.000Z');
+    const log = (_msg: string) => {};
+
+    await runIntakeLoop({ poll, enqueue, notify, sleep, now, log }, { intervalMs: 60000, once: true });
+
+    expect(pollCalls).toBe(1);
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it('with once=false (continuous) runs 3 ticks over 3 intervals, sleeping between ticks', async () => {
+    const mod = (await import(
+      '../../../../src/engine/engineer/intake/intake-loop.js'
+    )) as Record<string, any>;
+    const runIntakeLoop = mod.runIntakeLoop as (deps: any, opts: any) => Promise<void>;
+
+    let tickCount = 0;
+    const poll = vi.fn(async () => {
+      tickCount += 1;
+      return [];
+    });
+    const enqueue = vi.fn(async (_envelope: unknown) => {});
+    const notify = vi.fn(async (_ideas: unknown[]) => {});
+    const now = () => new Date('2026-06-30T00:00:00.000Z');
+    const log = (_msg: string) => {};
+
+    const delays: number[] = [];
+    let sleepCalls = 0;
+    const STOP = { __stop: true };
+    const sleep = vi.fn(async (ms: number) => {
+      delays.push(ms);
+      sleepCalls += 1;
+      if (sleepCalls >= 3) {
+        throw STOP;
+      }
+    });
+
+    await runIntakeLoop(
+      { poll, enqueue, notify, sleep, now, log },
+      { intervalMs: 60000, once: false },
+    ).catch((e: unknown) => {
+      if (e !== STOP) throw e;
+    });
+
+    // Each iteration ticks then sleeps; the 3rd sleep call throws, stopping
+    // the loop before a 4th tick begins — so exactly 3 ticks and 3 sleeps.
+    expect(tickCount).toBe(3);
+    expect(sleep).toHaveBeenCalledTimes(3);
+    expect(delays).toEqual([60000, 60000, 60000]);
+  });
+});
