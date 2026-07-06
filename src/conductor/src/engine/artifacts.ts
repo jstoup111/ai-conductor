@@ -1,4 +1,4 @@
-import { access, readdir, readFile, rm, stat } from 'fs/promises';
+import { access, readdir, readFile, rm, stat, writeFile } from 'fs/promises';
 import { basename, join, relative } from 'path';
 import type { StepName, ComplexityTier, Track } from '../types/index.js';
 import type { HarnessConfig } from '../types/config.js';
@@ -253,6 +253,54 @@ export interface CompletionContext {
    * project-declared (e.g. monorepo) spec locations. Absent → defaults only.
    */
   config?: HarnessConfig;
+  /**
+   * Injectable HEAD reader for the manual_test whitewash guard (#367): resolve
+   * the current commit sha of the project worktree, or null when there is no
+   * usable repo. Absent/null → the guard is skipped entirely (fail-open), so
+   * environments without git behave exactly as before the guard existed.
+   */
+  getHeadSha?: () => Promise<string | null>;
+}
+
+/**
+ * Run-evidence marker for the manual_test whitewash guard (#367). Written by
+ * the manual_test completion gate when it observes FAIL rows; a later FAIL-free
+ * results file is accepted only if HEAD moved past `headSha` (i.e. fix commits
+ * exist). Gitignored run evidence, not a committed design artifact.
+ */
+export const MANUAL_TEST_FAIL_EVIDENCE = '.pipeline/manual-test-fail-evidence.json';
+
+/**
+ * The region of a manual-test results file that carries the CURRENT verdict.
+ * Append-only per-attempt files (#367) record one `## Attempt N — <ts>` section
+ * per run; only the newest section's rows count, so a fixed old FAIL cannot
+ * block forever while history stays visible. Sectionless files (pre-#367
+ * format) are evaluated whole.
+ */
+export function latestAttemptRegion(content: string): string {
+  const matches = [...content.matchAll(/^##\s+Attempt\s+\d+\b.*$/gim)];
+  if (matches.length === 0) return content;
+  const last = matches[matches.length - 1];
+  return content.slice(last.index ?? 0);
+}
+
+/**
+ * The FAIL rows of the manual-test results file's current verdict region, or
+ * [] when the file is missing/unreadable or clean. Used by the daemon's
+ * manual_test→build kickback (#367) to decide whether there is concrete bug
+ * evidence to hand BUILD (no evidence → no kickback, the gate's own reason
+ * halts the run instead).
+ */
+export async function readManualTestFailRows(dir: string): Promise<string[]> {
+  let content: string;
+  try {
+    content = await readFile(join(dir, '.pipeline/manual-test-results.md'), 'utf-8');
+  } catch {
+    return [];
+  }
+  return latestAttemptRegion(content)
+    .split('\n')
+    .filter((line) => /\|\s*FAIL/i.test(line));
 }
 
 /**
@@ -460,12 +508,17 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
   },
 
   // Manual-test passes only when .pipeline/manual-test-results.md exists, has
-  // no FAIL rows, and was written this session. Previously the step had no
-  // gate at all (STEP_ARTIFACT_GLOBS['manual_test'] = []) — any clean REPL
-  // exit marked it done with zero proof of work. The results file is run
-  // evidence (gitignored) — it is NOT a committed design artifact.
+  // no FAIL rows in its LATEST attempt section, was written this session, and —
+  // when a FAIL was previously recorded — HEAD has moved since (fix commits
+  // exist). Previously the step had no gate at all
+  // (STEP_ARTIFACT_GLOBS['manual_test'] = []) — any clean REPL exit marked it
+  // done with zero proof of work; and until #367 a retry could satisfy the gate
+  // by simply rewriting the file as PASS with no fix (incident PR #364). The
+  // results file and fail-evidence marker are run evidence (gitignored) — NOT
+  // committed design artifacts.
   manual_test: async (dir, ctx): Promise<CompletionResult> => {
     const file = join(dir, '.pipeline/manual-test-results.md');
+    const markerPath = join(dir, MANUAL_TEST_FAIL_EVIDENCE);
     let content: string;
     try {
       content = await readFile(file, 'utf-8');
@@ -475,10 +528,28 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
         reason: '.pipeline/manual-test-results.md is missing — the manual-test skill must record per-story PASS/FAIL results before exiting',
       };
     }
-    if (/\|\s*FAIL/i.test(content)) {
+    const headSha = ctx.getHeadSha ? await ctx.getHeadSha().catch(() => null) : null;
+    const region = latestAttemptRegion(content);
+    const failRows = region.split('\n').filter((line) => /\|\s*FAIL/i.test(line));
+    if (failRows.length > 0) {
+      // Record the whitewash-guard evidence: the sha this FAIL was observed at.
+      // A later FAIL-free file is only accepted once HEAD moves past it.
+      if (headSha) {
+        await writeFile(
+          markerPath,
+          JSON.stringify(
+            { observedAt: Date.now(), headSha, failRows: failRows.slice(0, 20) },
+            null,
+            2,
+          ),
+          'utf-8',
+        ).catch(() => {
+          /* best-effort evidence — the FAIL verdict below stands regardless */
+        });
+      }
       return {
         done: false,
-        reason: '.pipeline/manual-test-results.md contains FAIL rows — fix the bugs and re-run manual-test',
+        reason: '.pipeline/manual-test-results.md contains FAIL rows (latest attempt) — fix the bugs (commits required) and re-run manual-test',
       };
     }
     if (!(await fileIsFreshSinceSession(file, ctx.sessionStartedAt))) {
@@ -486,6 +557,35 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
         done: false,
         reason: '.pipeline/manual-test-results.md exists but is stale (mtime predates this conductor session); manual-test must re-run for the current feature',
       };
+    }
+    // Whitewash guard (#367): a FAIL was recorded this session and the results
+    // now read clean — require the fix to exist as commits (HEAD moved).
+    // Fail-open when HEAD is unreadable (no seam / no repo): behaves pre-#367.
+    if (headSha) {
+      let marker: { observedAt?: unknown; headSha?: unknown } | null = null;
+      try {
+        marker = JSON.parse(await readFile(markerPath, 'utf-8')) as typeof marker;
+      } catch {
+        marker = null;
+      }
+      if (marker && typeof marker.headSha === 'string') {
+        const freshMarker =
+          ctx.sessionStartedAt === undefined ||
+          (typeof marker.observedAt === 'number' && marker.observedAt >= ctx.sessionStartedAt);
+        if (!freshMarker) {
+          await rm(markerPath, { force: true }).catch(() => {});
+        } else if (marker.headSha === headSha) {
+          return {
+            done: false,
+            reason:
+              `manual-test results flipped FAIL→PASS but HEAD (${headSha.slice(0, 12)}) has not ` +
+              'moved since the recorded FAIL — no new commits means no fix (whitewash guard). ' +
+              'Implement and commit the fix, then re-run manual-test',
+          };
+        } else {
+          await rm(markerPath, { force: true }).catch(() => {});
+        }
+      }
     }
     return { done: true };
   },

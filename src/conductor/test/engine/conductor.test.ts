@@ -876,6 +876,189 @@ describe('engine/conductor', () => {
     });
   });
 
+  describe('daemon manual-test FAIL routing (#367)', () => {
+    const FAIL_RESULTS = '# Results\n\n| Story | Result |\n|--|--|\n| s1 | FAIL |\n';
+
+    // Seed every step before manual_test as done so the loop enters at the
+    // SHIP tail's first gate; build's own gate needs task-status.json.
+    async function seedToManualTest(): Promise<void> {
+      const res = await readState(statePath);
+      const state = (res.ok ? res.value : {}) as Record<string, unknown>;
+      for (const s of ALL_STEPS) {
+        if (s.name === 'manual_test') break;
+        state[s.name] = 'done';
+      }
+      state.complexity_tier = 'L';
+      state.feature_desc = 'feat';
+      await writeState(statePath, state as unknown as ConductState);
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
+      );
+    }
+
+    // Runner where manual_test always records FAIL rows; build re-satisfies
+    // its own gate. Perpetual bug → exercises kickback + cap behavior.
+    function failingManualTestRunner(): { runner: StepRunner; calls: StepName[] } {
+      const calls: StepName[] = [];
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          calls.push(step);
+          if (step === 'build') {
+            await mkdir(join(dir, '.pipeline'), { recursive: true });
+            await writeFile(
+              join(dir, '.pipeline/task-status.json'),
+              JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
+            );
+          } else if (step === 'manual_test') {
+            await mkdir(join(dir, '.pipeline'), { recursive: true });
+            await writeFile(join(dir, '.pipeline/manual-test-results.md'), FAIL_RESULTS);
+          }
+          return { success: true };
+        }),
+      };
+      return { runner, calls };
+    }
+
+    it('routes a FAILing manual_test back to build with the FAIL rows, then HALTs at the cap', async () => {
+      await seedToManualTest();
+      const { runner, calls } = failingManualTestRunner();
+      const kickbacks: Array<{ from: string; to: string }> = [];
+      events.on('kickback', (e) => {
+        if (e.type === 'kickback') kickbacks.push({ from: e.from, to: e.to });
+      });
+      let halted = false;
+      events.on('loop_halt', () => {
+        halted = true;
+      });
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 1,
+        fromStep: 'manual_test',
+      });
+
+      await conductor.run();
+
+      // Kicked back to build twice (the cap), rebuilt each time, then HALTed
+      // with a reason naming the exhausted budget and the surviving FAIL row.
+      expect(kickbacks.filter((k) => k.from === 'manual_test' && k.to === 'build').length).toBe(2);
+      expect(calls.filter((s) => s === 'build').length).toBe(2);
+      expect(halted).toBe(true);
+      const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+      expect(halt).toMatch(/manual-test FAIL unresolved after 2 build kickback/);
+      expect(halt).toMatch(/s1/);
+    });
+
+    it('hands BUILD the FAIL rows + the no-whitewash contract in its retryReason', async () => {
+      await seedToManualTest();
+      const { runner } = failingManualTestRunner();
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 1,
+        fromStep: 'manual_test',
+      });
+
+      await conductor.run();
+
+      const buildReasons = vi
+        .mocked(runner.run)
+        .mock.calls.filter((c) => c[0] === 'build')
+        .map((c) => (c[2] as { retryReason?: string } | undefined)?.retryReason ?? '');
+      expect(buildReasons.length).toBeGreaterThan(0);
+      for (const r of buildReasons) {
+        expect(r).toContain('| s1 | FAIL |');
+        expect(r).toContain('.pipeline/manual-test-results.md');
+        expect(r).toMatch(/COMMIT/i);
+      }
+    });
+
+    it('does NOT kick back on a non-FAIL gate miss (skill never recorded results) — HALTs with the gate reason', async () => {
+      await seedToManualTest();
+      // manual_test runner writes NOTHING → gate miss is "file missing", which
+      // carries no bug evidence for build. Must HALT, not loop.
+      const calls: StepName[] = [];
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          calls.push(step);
+          return { success: true };
+        }),
+      };
+      const kickbacks: string[] = [];
+      events.on('kickback', (e) => {
+        if (e.type === 'kickback') kickbacks.push(e.to);
+      });
+      let halted = false;
+      events.on('loop_halt', () => {
+        halted = true;
+      });
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 1,
+        fromStep: 'manual_test',
+      });
+
+      await conductor.run();
+
+      expect(halted).toBe(true);
+      expect(kickbacks).toHaveLength(0);
+      expect(calls.filter((s) => s === 'build')).toHaveLength(0);
+      const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+      expect(halt).toMatch(/step 'manual_test' failed/);
+    });
+
+    it('auto mode non-daemon: a failing manual_test HALTs — never silently auto-skipped (#367 gating flip)', async () => {
+      await seedToManualTest();
+      const { runner, calls } = failingManualTestRunner();
+      const kickbacks: string[] = [];
+      events.on('kickback', (e) => {
+        if (e.type === 'kickback') kickbacks.push(e.to);
+      });
+      let halted = false;
+      events.on('loop_halt', () => {
+        halted = true;
+      });
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: false,
+        verifyArtifacts: true,
+        maxRetries: 1,
+        fromStep: 'manual_test',
+      });
+
+      await conductor.run();
+
+      // Gating now: HALT, no advisory auto-skip, no daemon kickback either.
+      expect(halted).toBe(true);
+      expect(kickbacks).toHaveLength(0);
+      expect(calls.filter((s) => s === 'build')).toHaveLength(0);
+      const result = await readState(statePath);
+      expect(result.ok && result.value.manual_test).not.toBe('skipped');
+    });
+  });
+
   describe('daemon finish/as-built remediation', () => {
     // Seed the SHIP tail in the technical-track shape (prd_audit skipped) —
     // exactly the shape that had NO remediation entry point before the

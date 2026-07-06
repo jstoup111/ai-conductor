@@ -132,6 +132,22 @@ describe('engine/skill-resolver', () => {
       expect(result.isOverride).toBe(true);
     });
 
+    it('ignores enforcement downgrade for manual_test (#367 — locked so an override cannot re-open the false-ship hole)', () => {
+      writeSkillFile(path.join(tmpDir, '.ai-conductor', 'skills', 'manual-test'), {
+        name: 'manual-test',
+        enforcement: 'advisory',
+        phase: 'SHIP',
+      });
+
+      const config: HarnessConfig = {
+        steps: { manual_test: { skill: '.ai-conductor/skills/manual-test/SKILL.md' } },
+      };
+
+      const result = resolveSkill('manual_test', config, tmpDir);
+      expect(result.enforcement).toBe('gating');
+      expect(result.isOverride).toBe(true);
+    });
+
     it('accepts enforcement override for non-gating step', () => {
       writeSkillFile(path.join(tmpDir, '.ai-conductor', 'skills', 'retro'), {
         name: 'retro',

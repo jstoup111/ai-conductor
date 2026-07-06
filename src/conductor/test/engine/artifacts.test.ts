@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, mkdir, writeFile, utimes } from 'fs/promises';
+import { mkdtemp, rm, mkdir, writeFile, utimes, readFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import {
@@ -400,6 +400,108 @@ describe('engine/artifacts', () => {
       });
       expect(result.done).toBe(false);
       expect(result.reason).toMatch(/stale/);
+    });
+  });
+
+  describe('checkStepCompletion: manual_test whitewash guard + attempt sections (#367)', () => {
+    const RESULTS = '.pipeline/manual-test-results.md';
+    const MARKER = '.pipeline/manual-test-fail-evidence.json';
+    const FAIL_FILE = '| Story | Result |\n|---|---|\n| Foo | PASS |\n| Bar | FAIL |\n';
+    const PASS_FILE = '| Story | Result |\n|---|---|\n| Foo | PASS |\n| Bar | PASS |\n';
+    const sha = (s: string) => async () => s;
+
+    it('observing FAIL rows records fail evidence (HEAD sha + excerpt) and still fails', async () => {
+      await createFile(RESULTS, FAIL_FILE);
+      const result = await checkStepCompletion(dir, 'manual_test', {
+        sessionStartedAt: 0,
+        getHeadSha: sha('aaa111'),
+      });
+      expect(result.done).toBe(false);
+      expect(result.reason).toMatch(/FAIL/);
+      const marker = JSON.parse(await readFile(join(dir, MARKER), 'utf-8'));
+      expect(marker.headSha).toBe('aaa111');
+      expect(marker.failRows.join('\n')).toMatch(/Bar.*FAIL/);
+      expect(typeof marker.observedAt).toBe('number');
+    });
+
+    it('refuses a FAIL→PASS flip when HEAD has not moved since the recorded FAIL', async () => {
+      await createFile(RESULTS, FAIL_FILE);
+      await checkStepCompletion(dir, 'manual_test', { sessionStartedAt: 0, getHeadSha: sha('aaa111') });
+      await createFile(RESULTS, PASS_FILE);
+      const result = await checkStepCompletion(dir, 'manual_test', {
+        sessionStartedAt: 0,
+        getHeadSha: sha('aaa111'),
+      });
+      expect(result.done).toBe(false);
+      expect(result.reason).toMatch(/no new commits|whitewash/i);
+    });
+
+    it('accepts a FAIL→PASS flip once HEAD moved, and clears the marker', async () => {
+      await createFile(RESULTS, FAIL_FILE);
+      await checkStepCompletion(dir, 'manual_test', { sessionStartedAt: 0, getHeadSha: sha('aaa111') });
+      await createFile(RESULTS, PASS_FILE);
+      const result = await checkStepCompletion(dir, 'manual_test', {
+        sessionStartedAt: 0,
+        getHeadSha: sha('bbb222'),
+      });
+      expect(result).toEqual({ done: true });
+      await expect(readFile(join(dir, MARKER), 'utf-8')).rejects.toThrow();
+    });
+
+    it('ignores (and cleans up) a fail-evidence marker from a previous session', async () => {
+      await createFile(
+        MARKER,
+        JSON.stringify({ observedAt: Date.now() - 120_000, headSha: 'aaa111', failRows: ['| Bar | FAIL |'] }),
+      );
+      await createFile(RESULTS, PASS_FILE);
+      const result = await checkStepCompletion(dir, 'manual_test', {
+        sessionStartedAt: Date.now() - 1_000,
+        getHeadSha: sha('aaa111'),
+      });
+      expect(result).toEqual({ done: true });
+      await expect(readFile(join(dir, MARKER), 'utf-8')).rejects.toThrow();
+    });
+
+    it('fails open when no getHeadSha seam is provided (pre-change behavior preserved)', async () => {
+      await createFile(
+        MARKER,
+        JSON.stringify({ observedAt: Date.now(), headSha: 'aaa111', failRows: [] }),
+      );
+      await createFile(RESULTS, PASS_FILE);
+      const result = await checkStepCompletion(dir, 'manual_test', { sessionStartedAt: 0 });
+      expect(result).toEqual({ done: true });
+    });
+
+    it('fails open when getHeadSha returns null (no repo)', async () => {
+      await createFile(
+        MARKER,
+        JSON.stringify({ observedAt: Date.now(), headSha: 'aaa111', failRows: [] }),
+      );
+      await createFile(RESULTS, PASS_FILE);
+      const result = await checkStepCompletion(dir, 'manual_test', {
+        sessionStartedAt: 0,
+        getHeadSha: async () => null,
+      });
+      expect(result).toEqual({ done: true });
+    });
+
+    it('evaluates only the LATEST attempt section: old FAIL + new clean attempt passes', async () => {
+      await createFile(
+        RESULTS,
+        '# Manual Test Results\n\n## Attempt 1 — 2026-07-06T10:00:00Z\n\n| Story | Result |\n|---|---|\n| Bar | FAIL |\n\n## Attempt 2 — 2026-07-06T10:30:00Z\n\n| Story | Result |\n|---|---|\n| Bar | PASS |\n',
+      );
+      const result = await checkStepCompletion(dir, 'manual_test', { sessionStartedAt: 0 });
+      expect(result).toEqual({ done: true });
+    });
+
+    it('fails when the LATEST attempt section contains FAIL rows even if an earlier one was clean', async () => {
+      await createFile(
+        RESULTS,
+        '## Attempt 1 — 2026-07-06T10:00:00Z\n\n| Bar | PASS |\n\n## Attempt 2 — 2026-07-06T10:30:00Z\n\n| Bar | FAIL |\n',
+      );
+      const result = await checkStepCompletion(dir, 'manual_test', { sessionStartedAt: 0 });
+      expect(result.done).toBe(false);
+      expect(result.reason).toMatch(/FAIL/);
     });
   });
 

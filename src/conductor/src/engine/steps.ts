@@ -141,7 +141,11 @@ export const ALL_STEPS: StepDefinition[] = [
     name: 'manual_test',
     label: 'Manual Test',
     phase: 'SHIP',
-    enforcement: 'advisory',
+    // Gating (#367): a failing manual test must be able to block the tail.
+    // While advisory, auto mode silently skipped it after retries exhausted —
+    // one of the two false-ship paths behind incident PR #364. Matches the
+    // enforcement the manual-test SKILL.md frontmatter has always declared.
+    enforcement: 'gating',
     prerequisites: ['build'],
     skippableForTiers: [],
     isCheckpoint: true,
