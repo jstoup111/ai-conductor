@@ -55,6 +55,17 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- **Daemon-lock handoff race can no longer end with zero daemons (ai-conductor#374).**
+  `clearStaleLockForRestart` and `ensureRunning`'s acquire-then-unlink step briefly own the
+  pidfile with their OWN live pid; a concurrent `ensureRunning` observing that transient
+  record (or the phantom `pid: -1` owner left when it vanished mid-read) concluded "live
+  daemon, no-op" and returned — while the transient holder unlinked and returned too,
+  leaving nothing running (the flaky `daemon-restart-lock` AC3b failure that blocked CI on
+  unrelated PRs, and the production shape of `daemon restart` racing an engineer-claim
+  nudge). Handoff records are now marked `transient: true` (`PidRecord`, additive) and
+  `ensureRunning` treats a live transient or phantom owner as in-transition — it spawns;
+  the spawned daemon's boot-time acquire and the idempotent tmux session arbitrate any
+  duplicate. Live NON-transient owners still strictly no-op (FR-21/ADR-005 unchanged).
 - **manual_test FAILs can no longer be whitewashed or shipped (#367, incident PR #364).**
   The completion gate (`engine/artifacts.ts`) now records the worktree HEAD sha in
   `.pipeline/manual-test-fail-evidence.json` when it observes FAIL rows (via the new
