@@ -650,7 +650,6 @@ export async function runDaemon(
           stopReason = 'engine_restart';
           break;
         }
-        idlePolls = 0;
         dispatch(next);
         continue; // try to fill another slot before awaiting
       }

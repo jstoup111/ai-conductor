@@ -61,6 +61,7 @@ export function Waker() {
         currentPromise = new Promise<void>((resolve) => {
           resolver = resolve;
         });
+      } else {
       }
 
       return currentPromise;
