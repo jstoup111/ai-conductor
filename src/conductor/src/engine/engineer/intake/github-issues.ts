@@ -9,6 +9,8 @@
 // intake filter.
 
 import { randomUUID } from 'node:crypto';
+import { existsSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { parseEnvelope } from './port.js';
 import type { Envelope, EnvelopeStatus, IntakePort, ReportMeta } from './port.js';
 import type { IntakeSource } from './source.js';
@@ -112,6 +114,26 @@ export function createGithubIssuesAdapter(deps: GithubIssuesDeps): IntakeSource 
   // Map repo name to local path for use as working directory in report() gh calls.
   // Populated during poll(); keyed by the ghRepo or name used in sourceRef.
   const repoPaths = new Map<string, string>();
+
+  /**
+   * Resolve the working directory for a report() gh call. Never falls back to
+   * process.cwd() — gh calls always target `-R <owner/repo>`, so any existing
+   * directory suffices as cwd. Resolution order:
+   *   1. poll-cache (repoPaths, populated by a prior poll())
+   *   2. registry lookup (matched by ghRepo or name)
+   *   3. os.homedir()
+   * Every candidate is existsSync-checked before use.
+   */
+  async function resolveReportCwd(repo: string): Promise<string> {
+    const cached = repoPaths.get(repo);
+    if (cached && existsSync(cached)) return cached;
+
+    const repos = await registry.list();
+    const found = repos.find((r) => (r.ghRepo ?? r.name) === repo);
+    if (found && existsSync(found.path)) return found.path;
+
+    return homedir();
+  }
 
   // ── Re-eligibility (FR-39/40) ────────────────────────────────────────────────
   // A `done` issue still carrying the handled label is re-emitted iff its spec PR
@@ -245,7 +267,7 @@ export function createGithubIssuesAdapter(deps: GithubIssuesDeps): IntakeSource 
         return;
       }
       const { repo, number } = parsed;
-      const repoPath = repoPaths.get(repo) ?? process.cwd();
+      const repoPath = await resolveReportCwd(repo);
 
       try {
         if (status === 'routed') {
