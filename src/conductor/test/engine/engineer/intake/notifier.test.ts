@@ -69,3 +69,21 @@ describe('createNotifier — best-effort push (Task 10)', () => {
     expect(pushArg.message.length).toBeGreaterThan(0);
   });
 });
+
+describe('createNotifier — empty capture (Task 11)', () => {
+  it('notify([]) resolves cleanly without calling writeStatus or push', async () => {
+    const { createNotifier } = await loadNotifier();
+
+    const writeStatus = vi.fn();
+    const push = vi.fn();
+    const now = vi.fn(() => '2026-07-06T12:00:00.000Z');
+    const log = vi.fn();
+
+    const notifier = createNotifier({ writeStatus, push, now, log });
+
+    await expect(notifier.notify([])).resolves.toBeUndefined();
+
+    expect(writeStatus).not.toHaveBeenCalled();
+    expect(push).not.toHaveBeenCalled();
+  });
+});

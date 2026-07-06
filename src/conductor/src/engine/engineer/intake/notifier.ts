@@ -52,6 +52,10 @@ export interface Notifier {
 export function createNotifier(deps: NotifierDeps): Notifier {
   return {
     async notify(ideas: Envelope[]): Promise<void> {
+      if (ideas.length === 0) {
+        return;
+      }
+
       const sourceRefs = ideas.map((i) => i.sourceRef);
       const message = `${ideas.length} new idea(s) captured from ${sourceRefs.join(', ')}`;
       const status: NotifierStatus = {
