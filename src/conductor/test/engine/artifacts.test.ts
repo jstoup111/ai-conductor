@@ -332,6 +332,79 @@ describe('engine/artifacts', () => {
       expect(result.done).toBe(false);
       expect(result.reason).toMatch(/stale/);
     });
+
+    it('rejects finish-choice="keep" when running in daemon mode', async () => {
+      await createFile(FINISH_CHOICE_MARKER, 'keep');
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        daemon: true,
+      });
+      expect(result.done).toBe(false);
+      expect(result.reason).toMatch(/keep/);
+      expect(result.reason).toMatch(/daemon/i);
+    });
+
+    it('rejects finish-choice="merge-local" when running in daemon mode', async () => {
+      await createFile(FINISH_CHOICE_MARKER, 'merge-local');
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        daemon: true,
+      });
+      expect(result.done).toBe(false);
+      expect(result.reason).toMatch(/merge-local/);
+      expect(result.reason).toMatch(/daemon/i);
+    });
+
+    it('rejects finish-choice="discard" when running in daemon mode', async () => {
+      await createFile(FINISH_CHOICE_MARKER, 'discard');
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        daemon: true,
+      });
+      expect(result.done).toBe(false);
+      expect(result.reason).toMatch(/discard/);
+      expect(result.reason).toMatch(/daemon/i);
+    });
+
+    it('allows finish-choice="keep" in interactive mode (daemon: false)', async () => {
+      await createFile(FINISH_CHOICE_MARKER, 'keep');
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        daemon: false,
+      });
+      expect(result).toEqual({ done: true });
+    });
+
+    it('allows finish-choice="merge-local" in interactive mode (daemon: false)', async () => {
+      await createFile(FINISH_CHOICE_MARKER, 'merge-local');
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        daemon: false,
+      });
+      expect(result).toEqual({ done: true });
+    });
+
+    it('allows finish-choice="keep" when daemon property is absent (legacy interactive mode)', async () => {
+      await createFile(FINISH_CHOICE_MARKER, 'keep');
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        // daemon not set
+      });
+      expect(result).toEqual({ done: true });
+    });
+
+    it('allows finish-choice="pr" in daemon mode (pr is safe to ship autonomously)', async () => {
+      await createFile(FINISH_CHOICE_MARKER, 'pr');
+      await createFile(
+        '.pipeline/conduct-state.json',
+        JSON.stringify({ pr_url: 'https://github.com/foo/bar/pull/1' }),
+      );
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        daemon: true,
+      });
+      expect(result).toEqual({ done: true });
+    });
   });
 
   describe('checkStepCompletion: build predicate (halt marker)', () => {
