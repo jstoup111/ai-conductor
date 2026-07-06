@@ -2,6 +2,19 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { execa } from 'execa';
 
+// Simple logger interface for fail-closed operations
+interface EvidenceRangeLogger {
+  anomalies: string[];
+  warnings: string[];
+}
+
+function createEvidenceRangeLogger(): EvidenceRangeLogger {
+  return {
+    anomalies: [],
+    warnings: [],
+  };
+}
+
 /**
  * Auto-heal records `.pipeline/task-status.json` drift against the branch's
  * git log BEFORE the build-step completion gate re-invokes Claude. When a
@@ -167,6 +180,125 @@ export interface CommitWithTrailers {
   trailers: Record<string, string[]>;
 }
 
+export interface EvidenceRangeResult {
+  commits: CommitWithTrailers[];
+  anomalies: string[];
+  warnings: string[];
+}
+
+/**
+ * Get evidence range for a task, anchored to a plan SHA.
+ * Fails closed: if origin/main doesn't exist, returns zero commits.
+ * If anchor is unreachable, falls back to merge-base.
+ * All failures are logged but never thrown.
+ *
+ * @param projectRoot - Root of the git repository
+ * @param anchor - Plan anchor SHA (required); commits before this are excluded
+ * @returns EvidenceRangeResult with commits, anomalies, and warnings
+ */
+export async function getEvidenceRange(
+  projectRoot: string,
+  anchor: string,
+): Promise<EvidenceRangeResult> {
+  const logger = createEvidenceRangeLogger();
+  const result: EvidenceRangeResult = {
+    commits: [],
+    anomalies: logger.anomalies,
+    warnings: logger.warnings,
+  };
+
+  try {
+    // Check if origin/main exists
+    const refCheck = await execa('git', ['rev-parse', '--verify', 'origin/main'], {
+      cwd: projectRoot,
+      reject: false,
+    });
+
+    if (refCheck.exitCode !== 0) {
+      const msg = 'Evidence range: origin/main does not exist; returning zero commits (fail-closed)';
+      logger.anomalies.push(msg);
+      console.error(msg);
+      return result;
+    }
+
+    // Try to get merge-base for fallback
+    const mergeBase = await execa('git', ['merge-base', '--fork-point', 'origin/main', 'HEAD'], {
+      cwd: projectRoot,
+      reject: false,
+    });
+
+    let lowerBound: string | null = null;
+
+    // First, verify that anchor is reachable
+    const anchorCheck = await execa('git', ['rev-parse', '--verify', `${anchor}^{commit}`], {
+      cwd: projectRoot,
+      reject: false,
+    });
+
+    if (anchorCheck.exitCode === 0) {
+      // Anchor is reachable, use it as lower bound
+      lowerBound = anchor;
+    } else {
+      // Anchor is unreachable, fall back to merge-base
+      const warningMsg = `Evidence range: anchor ${anchor.slice(0, 7)} is unreachable; falling back to merge-base`;
+      logger.warnings.push(warningMsg);
+      console.warn(warningMsg);
+
+      if (mergeBase.exitCode === 0 && mergeBase.stdout.trim()) {
+        lowerBound = mergeBase.stdout.trim();
+      }
+    }
+
+    // Build the range
+    let range: string;
+    if (lowerBound) {
+      range = `${lowerBound}..HEAD`;
+    } else {
+      // No valid lower bound, use HEAD with limit
+      range = 'HEAD';
+    }
+
+    // Use %x1e (ASCII record separator) to delimit commits, since trailers can contain newlines
+    const args =
+      range === 'HEAD'
+        ? ['log', '-n', '100', '--format=%H%x09%s%x00%(trailers)%x1e', 'HEAD']
+        : ['log', '--format=%H%x09%s%x00%(trailers)%x1e', range];
+
+    const log = await execa('git', args, { cwd: projectRoot, reject: false });
+    if (log.exitCode === 0 && typeof log.stdout === 'string') {
+      result.commits = log.stdout
+        .split('\x1e') // Split by record separator
+        .map((record) => record.trim())
+        .filter((record) => record.length > 0)
+        .map((record) => {
+          const nullIndex = record.indexOf('\x00');
+          if (nullIndex < 0) return null;
+
+          const metaPart = record.slice(0, nullIndex);
+          const trailersPart = record.slice(nullIndex + 1);
+
+          const tabIndex = metaPart.indexOf('\t');
+          if (tabIndex < 0) return null;
+
+          const sha = metaPart.slice(0, tabIndex);
+          const subject = metaPart.slice(tabIndex + 1);
+
+          const trailers = parseTrailers(trailersPart);
+
+          return { sha, subject, trailers };
+        })
+        .filter((item): item is CommitWithTrailers => item !== null);
+    }
+  } catch (err) {
+    // Catch any unexpected errors and log them
+    const errMsg = `Evidence range: unexpected error: ${err instanceof Error ? err.message : String(err)}`;
+    logger.anomalies.push(errMsg);
+    console.error(errMsg);
+  }
+
+  return result;
+}
+
 async function listCommits(projectRoot: string): Promise<CommitInfo[]> {
   const mergeBase = await execa('git', ['merge-base', 'origin/main', 'HEAD'], {
     cwd: projectRoot,
@@ -199,7 +331,17 @@ async function listCommits(projectRoot: string): Promise<CommitInfo[]> {
     });
 }
 
-export async function listCommitsWithTrailers(projectRoot: string): Promise<CommitWithTrailers[]> {
+export async function listCommitsWithTrailers(
+  projectRoot: string,
+  anchor?: string,
+): Promise<CommitWithTrailers[]> {
+  // If anchor is provided, use the evidence range (fail-closed)
+  if (anchor) {
+    const range = await getEvidenceRange(projectRoot, anchor);
+    return range.commits;
+  }
+
+  // Legacy path: no anchor provided, use simple merge-base logic
   const mergeBase = await execa('git', ['merge-base', 'origin/main', 'HEAD'], {
     cwd: projectRoot,
     reject: false,

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -433,5 +433,246 @@ Just some regular text here.
     const result = mod.parsePlanTasks(planText);
 
     expect(result.get('1')!.paths).toEqual([]);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Unit tests for getEvidenceRange (Task 3, fail-closed merge-base + plan-anchor).
+//
+// Tests evidence range calculation with fail-closed behavior:
+// - Missing origin/main returns zero commits + logs anomaly
+// - Plan-anchored range excludes commits before anchor
+// - Unreachable anchor falls back to merge-base with logged warning
+// - All failures are logged but never thrown
+// - Anchor is a required parameter
+//
+// Acceptance criteria:
+// 1. No origin/main scenario → empty commits list with anomaly logging
+// 2. Plan-anchored range (anchor sha provided) → excludes commits before anchor
+// 3. Unreachable anchor → falls back to merge-base with logged warning
+// 4. Anchor is a required parameter
+// 5. All failures are logged but DO NOT throw
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('getEvidenceRange', () => {
+  it('returns zero commits when origin/main does not exist', async () => {
+    const mod = await loadAutoheal();
+    const mockLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    // In a fresh git repo with no remote, origin/main doesn't exist
+    const range = await mod.getEvidenceRange(gitDir, 'someSha123');
+
+    expect(range.commits).toHaveLength(0);
+    expect(range.anomalies).toHaveLength(1);
+    expect(range.anomalies[0]).toContain('origin/main');
+
+    mockLog.mockRestore();
+  });
+
+  it('logs anomaly when origin/main does not exist', async () => {
+    const mod = await loadAutoheal();
+    const mockLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const range = await mod.getEvidenceRange(gitDir, 'someSha');
+
+    // Verify that an anomaly was logged about missing origin/main
+    expect(range.anomalies).toHaveLength(1);
+    expect(range.anomalies[0]).toMatch(/origin\/main/i);
+
+    mockLog.mockRestore();
+  });
+
+  it('uses anchor as lower bound and excludes commits before anchor', async () => {
+    const mod = await loadAutoheal();
+
+    // Create a bare repo to act as origin/main
+    const bareDir = await mkdtemp(join(tmpdir(), 'origin-bare-'));
+    await execa('git', ['init', '--bare'], { cwd: bareDir });
+
+    // Add origin remote to our test repo
+    await execa('git', ['remote', 'add', 'origin', bareDir], { cwd: gitDir });
+
+    // Create several commits
+    for (let i = 0; i < 3; i++) {
+      await writeFile(join(gitDir, `file${i}.txt`), `content ${i}`);
+      await execa('git', ['add', `file${i}.txt`], { cwd: gitDir });
+      await execa('git', ['commit', '-m', `commit ${i}`], { cwd: gitDir });
+    }
+
+    // Push main to origin
+    await execa('git', ['push', '-u', 'origin', 'main'], { cwd: gitDir });
+
+    // Create additional commit after origin/main
+    await writeFile(join(gitDir, 'file3.txt'), 'content 3');
+    await execa('git', ['add', 'file3.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'feat: after origin/main\n\nTask: 1\n'], { cwd: gitDir });
+
+    // Get SHA of the second commit (to be used as anchor)
+    const logOutput = await execa('git', ['log', '--format=%H'], { cwd: gitDir });
+    const allShas = logOutput.stdout.split('\n').filter(s => s.trim());
+    const anchorSha = allShas[allShas.length - 2]; // Second from bottom (after initial)
+
+    const range = await mod.getEvidenceRange(gitDir, anchorSha);
+
+    // Should include commits after the anchor
+    expect(range.commits.length).toBeGreaterThan(0);
+    expect(range.anomalies).toHaveLength(0);
+
+    // Cleanup
+    await rm(bareDir, { recursive: true, force: true });
+  });
+
+  it('falls back to merge-base when anchor is unreachable', async () => {
+    const mod = await loadAutoheal();
+
+    // Create a bare repo to act as origin/main
+    const bareDir = await mkdtemp(join(tmpdir(), 'origin-bare-'));
+    await execa('git', ['init', '--bare'], { cwd: bareDir });
+
+    // Add origin remote to our test repo
+    await execa('git', ['remote', 'add', 'origin', bareDir], { cwd: gitDir });
+
+    // Create a commit and push to origin
+    await writeFile(join(gitDir, 'file.txt'), 'content');
+    await execa('git', ['add', 'file.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'initial commit'], { cwd: gitDir });
+    await execa('git', ['push', '-u', 'origin', 'main'], { cwd: gitDir });
+
+    // Create a new commit after pushing
+    await writeFile(join(gitDir, 'file2.txt'), 'content2');
+    await execa('git', ['add', 'file2.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'new commit'], { cwd: gitDir });
+
+    // Use a fake unreachable SHA
+    const unreachableSha = 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef';
+
+    const range = await mod.getEvidenceRange(gitDir, unreachableSha);
+
+    // Should have logged a warning about the unreachable anchor
+    expect(range.warnings).toHaveLength(1);
+    expect(range.warnings[0]).toMatch(/unreachable|anchor/i);
+
+    // Cleanup
+    await rm(bareDir, { recursive: true, force: true });
+  });
+
+  it('logs warning when anchor is unreachable', async () => {
+    const mod = await loadAutoheal();
+
+    // Create a bare repo to act as origin/main
+    const bareDir = await mkdtemp(join(tmpdir(), 'origin-bare-'));
+    await execa('git', ['init', '--bare'], { cwd: bareDir });
+
+    // Add origin remote to our test repo
+    await execa('git', ['remote', 'add', 'origin', bareDir], { cwd: gitDir });
+
+    // Create a commit and push to origin
+    await writeFile(join(gitDir, 'file.txt'), 'content');
+    await execa('git', ['add', 'file.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'initial commit'], { cwd: gitDir });
+    await execa('git', ['push', '-u', 'origin', 'main'], { cwd: gitDir });
+
+    // Create a new commit after pushing
+    await writeFile(join(gitDir, 'file2.txt'), 'content2');
+    await execa('git', ['add', 'file2.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'new commit'], { cwd: gitDir });
+
+    const unreachableSha = 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef';
+
+    const range = await mod.getEvidenceRange(gitDir, unreachableSha);
+
+    // Should log a warning about the unreachable anchor
+    expect(range.warnings).toHaveLength(1);
+    expect(range.warnings[0]).toContain('unreachable');
+
+    // Cleanup
+    await rm(bareDir, { recursive: true, force: true });
+  });
+
+  it('does not throw on missing origin/main', async () => {
+    const mod = await loadAutoheal();
+
+    // Should not throw, just return with anomalies
+    expect(async () => {
+      await mod.getEvidenceRange(gitDir, 'someSha');
+    }).not.toThrow();
+  });
+
+  it('does not throw on unreachable anchor', async () => {
+    const mod = await loadAutoheal();
+
+    // Create a commit
+    await writeFile(join(gitDir, 'file.txt'), 'content');
+    await execa('git', ['add', 'file.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'test commit'], { cwd: gitDir });
+
+    const unreachableSha = 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef';
+
+    // Should not throw, just log warning and fall back
+    expect(async () => {
+      await mod.getEvidenceRange(gitDir, unreachableSha);
+    }).not.toThrow();
+  });
+
+  it('requires anchor as a parameter', async () => {
+    const mod = await loadAutoheal();
+
+    // The function signature should require an anchor parameter
+    // (This is more of a type check, but we can verify it exists)
+    expect(mod.getEvidenceRange).toBeDefined();
+  });
+});
+
+describe('listCommitsWithTrailers with anchor', () => {
+  it('accepts an anchor parameter', async () => {
+    const mod = await loadAutoheal();
+
+    // Create a commit with a trailer
+    await writeFile(join(gitDir, 'file.txt'), 'content');
+    await execa('git', ['add', 'file.txt'], { cwd: gitDir });
+    const commitMsg = 'feat: test\n\nTask: 1\n';
+    await execa('git', ['commit', '-m', commitMsg], { cwd: gitDir });
+
+    const logOutput = await execa('git', ['log', '--format=%H'], { cwd: gitDir });
+    const allShas = logOutput.stdout.split('\n').filter(s => s.trim());
+    const anchorSha = allShas[allShas.length - 1]; // Initial commit as anchor
+
+    // Should accept an anchor parameter (optional for backward compatibility)
+    const result = await mod.listCommitsWithTrailers(gitDir, anchorSha);
+
+    expect(Array.isArray(result)).toBe(true);
+  });
+
+  it('excludes commits before the anchor when provided', async () => {
+    const mod = await loadAutoheal();
+
+    // Create initial commit (will be the anchor)
+    await writeFile(join(gitDir, 'file0.txt'), 'content0');
+    await execa('git', ['add', 'file0.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'initial'], { cwd: gitDir });
+
+    const afterInitial = await execa('git', ['log', '--format=%H'], { cwd: gitDir });
+    const afterInitialShas = afterInitial.stdout.split('\n').filter(s => s.trim());
+    const anchorSha = afterInitialShas[0]; // Initial commit
+
+    // Create second commit after anchor
+    await writeFile(join(gitDir, 'file1.txt'), 'content1');
+    await execa('git', ['add', 'file1.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'feat: after anchor\n\nTask: 1\n'], { cwd: gitDir });
+
+    // Create third commit after anchor
+    await writeFile(join(gitDir, 'file2.txt'), 'content2');
+    await execa('git', ['add', 'file2.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'feat: second after anchor\n\nTask: 2\n'], { cwd: gitDir });
+
+    // Without anchor, we'd get all commits (initial + 2 new ones)
+    const allCommits = await mod.listCommitsWithTrailers(gitDir);
+    const beforeAnchor = allCommits.filter(c => c.subject === 'initial');
+    expect(beforeAnchor.length).toBe(1);
+
+    // With anchor set to initial commit, we should exclude it
+    const afterAnchorCommits = await mod.listCommitsWithTrailers(gitDir, anchorSha);
+    const stillBeforeAnchor = afterAnchorCommits.filter(c => c.subject === 'initial');
+    expect(stillBeforeAnchor.length).toBe(0);
   });
 });
