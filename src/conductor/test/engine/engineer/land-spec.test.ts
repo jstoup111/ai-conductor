@@ -334,4 +334,42 @@ describe('landSpec fails closed on unresolved identity (Slice B Story 2, D3)', (
     expect(headAfter).toBe(headBefore);
     expect(logCountAfter).toBe(logCountBefore);
   });
+
+  it('Story 1, happy path #1: marker keyed by plan stem with source-ref (diverging idea slug)', async () => {
+    // RED test: verifies land-spec keys the intake marker by plan stem (not idea slug)
+    // when both a source-ref is provided AND the idea's slug diverges from the plan stem.
+    //
+    // Idea "some new idea" slugifies to "some-new-idea", but the plan artifact
+    // is named "2026-07-03-some-feature.md" with stem "2026-07-03-some-feature".
+    // The marker MUST land at .docs/intake/2026-07-03-some-feature.md (plan stem),
+    // NOT at .docs/intake/some-new-idea.md (idea slug).
+    const idea = 'some new idea';
+    const worktree = await seedValidWorktree(idea);
+    // Replace the default "dep-bump" plan with a dated one whose stem diverges.
+    await rm(join(worktree, '.docs', 'plans', 'dep-bump.md'), { force: true });
+    await writeFile(join(worktree, '.docs', 'plans', '2026-07-03-some-feature.md'), PLAN_WITH_DEPS);
+
+    const gh: GhRunner = async () => ({ stdout: 'alice\n' });
+
+    // Land with a source-ref to prove the plan-stem keying works even with intake tracking.
+    const result = await landSpec(target(), idea, worktree, 'owner/repo#1', { ownerConfig: {}, gh });
+
+    // Assert marker lands ONLY at the plan stem, not the idea slug.
+    const { stdout: marker } = await execFile(
+      'git',
+      ['show', `${result.branch}:.docs/intake/2026-07-03-some-feature.md`],
+      { cwd: worktree },
+    );
+    expect(marker).toContain('Owner: alice');
+    expect(marker).toContain('Source-Ref: owner/repo#1');
+
+    // Assert the idea-slug path does NOT exist (proof that we're not keying by slug).
+    const { existsSync } = await import('node:fs');
+    expect(existsSync(join(worktree, '.docs', 'intake', 'some-new-idea.md'))).toBe(false);
+
+    // Also verify via git that the old slug path doesn't exist in the commit.
+    await expect(
+      execFile('git', ['show', `${result.branch}:.docs/intake/some-new-idea.md`], { cwd: worktree }),
+    ).rejects.toThrow();
+  });
 });
