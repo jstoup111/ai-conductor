@@ -400,6 +400,20 @@ export async function runDaemon(
   const waker = Waker();
   const watchers = new Map<string, () => void>();
 
+  // Register a watchHaltCleared watcher for a newly-parked slug, if the seam
+  // is present and no watcher already exists for it. Shared by both park
+  // sites: collectOne (a feature this run just halted/errored) and
+  // pickEligible's "durable HALT from a prior run" branch (a feature this
+  // run never dispatched but whose worktree carries a live HALT marker).
+  const registerWatcher = (slug: string): void => {
+    if (deps.watchHaltCleared && !watchers.has(slug)) {
+      const dispose = deps.watchHaltCleared(slug, () => {
+        waker.wake();
+      });
+      watchers.set(slug, dispose);
+    }
+  };
+
   const processed: FeatureOutcome[] = [];
   const inFlight = new Map<string, Tagged>();
   // Task T28: track whether the restart trigger has been successfully called
@@ -470,12 +484,7 @@ export async function runDaemon(
     if (outcome.status === 'halted' || outcome.status === 'error') {
       parked.add(slug);
       // Register a watcher for event-driven wake when this feature's HALT is cleared
-      if (deps.watchHaltCleared && !watchers.has(slug)) {
-        const dispose = deps.watchHaltCleared(slug, () => {
-          waker.wake();
-        });
-        watchers.set(slug, dispose);
-      }
+      registerWatcher(slug);
     }
     const ok = outcome.status === 'done';
     const marker = ok ? chalk.green('■') : chalk.red('■');
@@ -622,7 +631,14 @@ export async function runDaemon(
       if (!paused) {
         // Local-only discovery first (no remote fetch): cheap, and it keeps a build
         // from being re-based onto specs that landed on origin while work is running.
+        const parkedBeforeLocal = new Set(parked);
         next = await pickEligible({ items: await deps.discoverBacklog({ refresh: false }) }, pickCtx);
+        // pickEligible's "durable HALT from a prior run" branch adds directly to
+        // `parked` for a slug this run never dispatched — register its watcher
+        // here (collectOne never sees it, since it never went through runFeature).
+        for (const slug of parked) {
+          if (!parkedBeforeLocal.has(slug)) registerWatcher(slug);
+        }
 
         // Only when fully idle (nothing running) AND nothing left locally do we reach
         // out to origin for newly-merged specs — "drained, now find more".
@@ -634,7 +650,11 @@ export async function runDaemon(
           // marker is un-parked in THIS iteration (its dispatch still flows through
           // the existing un-park path, FR-8 — the sweep issues none).
           await maybeRekick(false);
+          const parkedBeforeRefresh = new Set(parked);
           next = await pickEligible({ items: refreshed }, pickCtx);
+          for (const slug of parked) {
+            if (!parkedBeforeRefresh.has(slug)) registerWatcher(slug);
+          }
         }
       }
 
