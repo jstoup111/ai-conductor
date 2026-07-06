@@ -12,7 +12,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { parseEnvelope } from './port.js';
-import type { Envelope, EnvelopeStatus, IntakePort, ReportMeta } from './port.js';
+import type { Envelope, EnvelopeStatus, IntakePort, ReportMeta, ReportOutcome } from './port.js';
 import type { IntakeSource } from './source.js';
 import type { Ledger } from './ledger.js';
 import { parseSourceRef } from '../issue-ref.js';
@@ -256,15 +256,19 @@ export function createGithubIssuesAdapter(deps: GithubIssuesDeps): IntakeSource 
     },
 
     // ── report / write-back ─────────────────────────────────────────────────────
-    async report(sourceRef: string, status: EnvelopeStatus, meta?: ReportMeta): Promise<void> {
+    async report(
+      sourceRef: string,
+      status: EnvelopeStatus,
+      meta?: ReportMeta,
+    ): Promise<ReportOutcome> {
       const marker = `${sourceRef}\0${status}`;
-      if (postedMarkers.has(marker)) return; // FR-38: post once per (sourceRef,status).
+      if (postedMarkers.has(marker)) return { ok: true }; // FR-38: post once per (sourceRef,status).
 
       const parsed = parseSourceRef(sourceRef);
       if (!parsed) {
         // Unparseable ref → log and make no gh call (cannot target an issue).
         log(`github-issues: report() ignoring unparseable sourceRef "${sourceRef}"`);
-        return;
+        return { ok: true };
       }
       const { repo, number } = parsed;
       const repoPath = await resolveReportCwd(repo);
@@ -285,15 +289,22 @@ export function createGithubIssuesAdapter(deps: GithubIssuesDeps): IntakeSource 
           await gh(restAddLabelArgs(repo, number, HANDLED_LABEL), { cwd: repoPath });
         } else {
           // No write-back marker for intermediate statuses (pending/deciding).
-          return;
+          return { ok: true };
         }
         postedMarkers.add(marker);
+        return { ok: true };
       } catch (err: unknown) {
         // FR-37: write-back is non-fatal. Log with the sourceRef and swallow so a
         // gh outage never rolls back a completed route/spec-PR. Marker is NOT set,
         // so a later poll/report can retry.
         const msg = err instanceof Error ? err.message : String(err);
         log(`github-issues: write-back failed for ${sourceRef} (${status}) — ${msg}`);
+        return {
+          ok: false,
+          remediation: [
+            `github-issues write-back failed for ${sourceRef} (${status}): ${msg}`,
+          ],
+        };
       }
     },
   };
