@@ -203,6 +203,9 @@ Wait for the user to choose. Do not assume.
 describe the choice):
 - If the repo has a configured git remote and `gh` is authenticated → **Option 2:
   Push & PR** (never merge). Record `pr_url` in `.pipeline/conduct-state.json`.
+  **Before writing `finish-choice=pr`, verify using the §5 Option 2 STOP gate** — if
+  the push did not land or the PR does not exist, do NOT write the markers; halt
+  for human review.
 - Otherwise (no remote, or `gh` unavailable/unauthenticated) → **Option 3: Keep
   as-is** — leave the work committed on the branch.
 
@@ -257,6 +260,36 @@ it, even if the skill itself reports success.
   rewrite its title/body as for a fresh PR — the conductor's finish gate fails
   while the recorded PR title still starts with `needs-remediation:`
   (adr-2026-07-03-halt-pr-rehabilitation-at-finish)
+
+#### STOP Gate: Verify Push + PR Before Recording Choice
+
+Before writing `finish-choice=pr` and `pr_url`, verify both the PR and the push:
+
+1. **PR exists and has a non-empty URL:**
+   ```
+   gh pr view --json url -q .url
+   ```
+   If this returns empty or fails, the PR does not exist or is inaccessible.
+
+2. **The branch was pushed (remote-tracking ref contains HEAD):**
+   ```
+   git merge-base --is-ancestor HEAD refs/remotes/origin/<branch>
+   ```
+   If this exits non-zero, `HEAD` is not an ancestor of the remote tracking ref —
+   the push did not land, or the remote never updated locally (stale tracking ref).
+
+**If EITHER check fails, STOP immediately.** Do NOT write `finish-choice=pr` or `pr_url`.
+Explain what failed and what to do next:
+
+- **If the PR check failed:** "The PR URL is empty or inaccessible. Verify `gh pr view`
+  works and the PR exists on GitHub. Then retry `/finish`."
+- **If the push check failed:** "The branch was not pushed, or the remote tracking ref
+  is stale. Run `git push --force-with-lease origin <branch>` to push the branch,
+  then retry `/finish`."
+
+**In daemon mode:** a missing `finish-choice` marker leaves the completion gate unsatisfied
+(Story 1), routing to HALT for human review.
+
 - **Shipped record (before handing the PR to the human):** on the feature
   branch, run `conduct-ts shipped-record --slug <slug> --pr <PR_URL>` (where
   `<slug>` is the plan-file stem, `.docs/plans/<slug>.md`), then `git push` so

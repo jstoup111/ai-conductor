@@ -655,7 +655,11 @@ export class DefaultStepRunner implements StepRunner {
         'Decide deterministically and ACT (do not merely describe):\n' +
         '- If the repo has a configured git remote and `gh` is authenticated: push the branch and open a ' +
         'PR with `gh pr create` (NEVER merge). If a PR for this branch already exists, reuse it instead ' +
-        'of failing (`gh pr view --json url -q .url`). Record the PR URL as the `pr_url` field in ' +
+        'of failing (`gh pr view --json url -q .url`). Before recording `pr` and `pr_url`, verify the ' +
+        'STOP gate in §5 Option 2 of the finish skill: (1) the PR URL is non-empty (`gh pr view --json url`), ' +
+        'and (2) the branch was pushed (`git merge-base --is-ancestor HEAD refs/remotes/origin/<branch>`). ' +
+        'If EITHER check fails, do NOT write the markers — HALT for human review. If BOTH pass: Record ' +
+        'the PR URL as the `pr_url` field in ' +
         `\`${statePath}\`, then write the single word \`pr\` to \`${choicePath}\`.\n` +
         '- Otherwise (no remote, or `gh` unavailable/unauthenticated): leave the work committed on the ' +
         `branch and write the single word \`keep\` to \`${choicePath}\`.\n` +
