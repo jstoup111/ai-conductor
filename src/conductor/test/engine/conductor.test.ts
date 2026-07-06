@@ -5066,4 +5066,54 @@ describe('projectRoot is required', () => {
     }
     expect(pipelineExistsAfter).toBe(false);
   });
+
+  describe('completionCtx threading', () => {
+    it('includes daemon flag and isHeadPushed injectable in completion context', async () => {
+      const runner = createMockStepRunner();
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        daemon: true,
+      });
+
+      // Access private method via bracket notation for testing
+      const state: ConductState = {
+        worktree: 'pending',
+        session_started_at: Date.now(),
+      } as ConductState;
+      const ctx = (conductor as any)['completionCtx'](state);
+
+      // Verify daemon field is threaded
+      expect(ctx.daemon).toBe(true);
+
+      // Verify isHeadPushed is defined and callable
+      expect(ctx.isHeadPushed).toBeDefined();
+      expect(typeof ctx.isHeadPushed).toBe('function');
+    });
+
+    it('isHeadPushed injectable returns null when git runner fails', async () => {
+      const runner = createMockStepRunner();
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        daemon: true,
+      });
+
+      const state: ConductState = {
+        worktree: 'pending',
+        session_started_at: Date.now(),
+      } as ConductState;
+      const ctx = (conductor as any)['completionCtx'](state);
+
+      // Call isHeadPushed and verify it handles errors gracefully
+      // (returns null instead of throwing)
+      const result = await ctx.isHeadPushed!();
+      // In a non-git directory, it should return null (indeterminate)
+      expect(result).toBeNull();
+    });
+  });
 });

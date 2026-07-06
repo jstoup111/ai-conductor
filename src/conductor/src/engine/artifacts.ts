@@ -260,6 +260,13 @@ export interface CompletionContext {
    * environments without git behave exactly as before the guard existed.
    */
   getHeadSha?: () => Promise<string | null>;
+  /** Whether the engine is running in daemon mode. Affects finish convergence (Story 2). */
+  daemon?: boolean;
+  /**
+   * Evidence reader for push verification. Returns true if HEAD is pushed, false if not,
+   * null if indeterminate. Injected by Conductor; returns undefined for non-git or legacy contexts.
+   */
+  isHeadPushed?: () => Promise<boolean | null>;
 }
 
 /**
