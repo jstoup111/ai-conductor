@@ -165,5 +165,71 @@ describe('headPushedToUpstream', () => {
         'refs/remotes/origin/feature/my-feature',
       ]);
     });
+
+    it('returns false when fallback ref is used but HEAD is not pushed (stale PR case)', async () => {
+      const notPushedErr = new Error('not an ancestor');
+      (notPushedErr as any).code = 1; // Exit code 1 from merge-base --is-ancestor
+      const { git, calls } = fakeGit([
+        new Error('no upstream'),
+        { stdout: 'my-feature\n' },
+        notPushedErr, // merge-base fails with exit 1
+      ]);
+
+      const result = await headPushedToUpstream(git, '/repo');
+      expect(result).toBe(false);
+      // Verify we used the fallback ref in the merge-base call
+      expect(calls[2]).toEqual([
+        'merge-base',
+        '--is-ancestor',
+        'HEAD',
+        'refs/remotes/origin/my-feature',
+      ]);
+    });
+  });
+
+  describe('error handling', () => {
+    it('returns null when git spawn fails with ENOENT (git not found)', async () => {
+      const spawnErr = new Error('git not found');
+      (spawnErr as any).code = 'ENOENT';
+      // Provide errors for both @{u} and fallback branch resolution attempts
+      const { git } = fakeGit([spawnErr, spawnErr]);
+
+      const result = await headPushedToUpstream(git, '/repo');
+      expect(result).toBeNull();
+    });
+
+    it('returns null when git command throws without exit code (generic spawn error)', async () => {
+      const spawnErr = new Error('spawn failed');
+      // No .code property — generic spawn error
+      // Provide errors for both @{u} and fallback branch resolution attempts
+      const { git } = fakeGit([spawnErr, spawnErr]);
+
+      const result = await headPushedToUpstream(git, '/repo');
+      expect(result).toBeNull();
+    });
+
+    it('returns null when merge-base throws without exit code', async () => {
+      const mergeBaseErr = new Error('merge-base failed');
+      // No .code property — exit code is undefined, not 1
+      const { git } = fakeGit([
+        { stdout: 'refs/remotes/origin/main\n' },
+        mergeBaseErr,
+      ]);
+
+      const result = await headPushedToUpstream(git, '/repo');
+      expect(result).toBeNull();
+    });
+
+    it('returns null when fallback branch resolution fails with spawn error', async () => {
+      const branchErr = new Error('detached HEAD');
+      // No .code property
+      const { git } = fakeGit([
+        new Error('no upstream'),
+        branchErr,
+      ]);
+
+      const result = await headPushedToUpstream(git, '/repo');
+      expect(result).toBeNull();
+    });
   });
 });
