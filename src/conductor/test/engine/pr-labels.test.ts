@@ -19,7 +19,11 @@ import {
   upsertComment,
   upsertIssueComment,
   NEEDS_REMEDIATION_MARKER,
+  NEEDS_REMEDIATION_BODY_MARKER,
   setReady,
+  convertToDraft,
+  readHaltPresentation,
+  ensureBodyMarker,
   makeProductionGh,
   makeProductionGit,
 } from '../../src/engine/pr-labels.js';
@@ -718,6 +722,94 @@ describe('setReady', () => {
   it('swallows a rejecting runner without throwing', async () => {
     const { gh } = fakeGh([new Error('failed')]);
     await expect(setReady(gh, '/repo', TEST_PR_URL)).resolves.toBeUndefined();
+  });
+});
+
+
+// ── convertToDraft ────────────────────────────────────────────────────────────
+
+describe('convertToDraft', () => {
+  it('calls gh pr ready --undo with the PR URL', async () => {
+    const { gh, calls } = fakeGh([{ stdout: '' }]);
+    await convertToDraft(gh, '/repo', TEST_PR_URL);
+    expect(calls[0]).toEqual(['pr', 'ready', '--undo', TEST_PR_URL]);
+  });
+
+  it('swallows a rejecting runner without throwing', async () => {
+    const { gh } = fakeGh([new Error('failed')]);
+    await expect(convertToDraft(gh, '/repo', TEST_PR_URL)).resolves.toBeUndefined();
+  });
+});
+
+// ── readHaltPresentation ──────────────────────────────────────────────────────
+
+describe('readHaltPresentation', () => {
+  it('reads isDraft, labels, and body via gh pr view --json', async () => {
+    const { gh, calls } = fakeGh([
+      {
+        stdout: JSON.stringify({
+          isDraft: false,
+          labels: [{ name: 'tier:S' }, { name: 'in-progress' }],
+          body: 'This is the PR body.',
+        }),
+      },
+    ]);
+    const result = await readHaltPresentation(gh, '/repo', TEST_PR_URL);
+    expect(result).toEqual({
+      isDraft: false,
+      labels: ['tier:S', 'in-progress'],
+      body: 'This is the PR body.',
+    });
+    expect(calls[0]).toEqual(['pr', 'view', TEST_PR_URL, '--json', 'isDraft,labels,body']);
+  });
+
+  it('returns a presentation with empty labels when labels are absent', async () => {
+    const { gh } = fakeGh([
+      {
+        stdout: JSON.stringify({
+          isDraft: true,
+          labels: [],
+          body: 'Draft PR body',
+        }),
+      },
+    ]);
+    const result = await readHaltPresentation(gh, '/repo', TEST_PR_URL);
+    expect(result).toEqual({
+      isDraft: true,
+      labels: [],
+      body: 'Draft PR body',
+    });
+  });
+
+  it('returns null and logs on runner error', async () => {
+    const { gh } = fakeGh([new Error('network error')]);
+    const logs: string[] = [];
+    const result = await readHaltPresentation(gh, '/repo', TEST_PR_URL, (msg) => logs.push(msg));
+    expect(result).toBeNull();
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toContain('readHaltPresentation');
+    expect(logs[0]).toContain(TEST_PR_URL);
+  });
+
+  it('does not throw when gh runner rejects', async () => {
+    const { gh } = fakeGh([new Error('auth failed')]);
+    await expect(
+      readHaltPresentation(gh, '/repo', TEST_PR_URL),
+    ).resolves.toBeNull();
+  });
+
+  it('parses labels into a string array', async () => {
+    const { gh } = fakeGh([
+      {
+        stdout: JSON.stringify({
+          isDraft: false,
+          labels: [{ name: 'label-1' }, { name: 'label-2' }, { name: 'label-3' }],
+          body: 'Body text',
+        }),
+      },
+    ]);
+    const result = await readHaltPresentation(gh, '/repo', TEST_PR_URL);
+    expect(result?.labels).toEqual(['label-1', 'label-2', 'label-3']);
   });
 });
 

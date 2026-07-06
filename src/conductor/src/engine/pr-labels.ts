@@ -446,6 +446,13 @@ export async function comment(
 export const NEEDS_REMEDIATION_MARKER = '<!-- conductor:needs-remediation -->';
 
 /**
+ * Stable hidden marker identifying the remediation need in the PR body itself.
+ * Distinct from {@link NEEDS_REMEDIATION_MARKER} which is embedded in comments.
+ * Used for marking the PR body when a HALT marks a PR as needing remediation.
+ */
+export const NEEDS_REMEDIATION_BODY_MARKER = '<!-- conductor:needs-remediation -->';
+
+/**
  * Stable hidden marker identifying the single harness-authored owner-gate
  * status comment on a PR for a spec that is currently owner-gated. Embedded
  * in the comment body so subsequent scans can find and edit that comment in
@@ -642,5 +649,62 @@ export async function setReady(
     await runGh(['pr', 'ready', prUrl], { cwd });
   } catch (err) {
     log?.(`[pr-labels] setReady(${prUrl}) error: ${err}`);
+  }
+}
+
+/**
+ * Convert a PR to draft status via `gh pr ready --undo`.
+ * Swallows all errors.
+ */
+export async function convertToDraft(
+  runGh: GhRunner = makeProductionGh(),
+  cwd: string,
+  prUrl: string,
+  log?: (msg: string) => void,
+): Promise<void> {
+  try {
+    await runGh(['pr', 'ready', '--undo', prUrl], { cwd });
+  } catch (err) {
+    log?.(`[pr-labels] convertToDraft(${prUrl}) error: ${err}`);
+  }
+}
+
+// ── Halt presentation read ────────────────────────────────────────────────────
+
+export interface HaltPresentation {
+  isDraft: boolean;
+  labels: string[];
+  body: string;
+}
+
+interface GhHaltPresentationJson {
+  isDraft?: boolean;
+  labels?: Array<{ name?: string }> | null;
+  body?: string;
+}
+
+/**
+ * Read the isDraft, labels, and body of a PR for halt-PR presentation purposes.
+ * On any runner error returns null and logs; never throws.
+ */
+export async function readHaltPresentation(
+  runGh: GhRunner = makeProductionGh(),
+  cwd: string,
+  prUrl: string,
+  log?: (msg: string) => void,
+): Promise<HaltPresentation | null> {
+  try {
+    const { stdout } = await runGh(
+      ['pr', 'view', prUrl, '--json', 'isDraft,labels,body'],
+      { cwd },
+    );
+    const data: GhHaltPresentationJson = JSON.parse(stdout);
+    const isDraft = data.isDraft ?? false;
+    const labels = (data.labels ?? []).map((l) => l.name ?? '').filter(Boolean);
+    const body = data.body ?? '';
+    return { isDraft, labels, body };
+  } catch (err) {
+    log?.(`[pr-labels] readHaltPresentation(${prUrl}) error: ${err}`);
+    return null;
   }
 }
