@@ -53,6 +53,7 @@ import {
   markWarned,
   repairProcessed,
   makeFeatureRunnerDeps,
+  makeWatchHaltClearedSeam,
 } from './engine/daemon-deps.js';
 import { isOperatorParked } from './engine/park-marker.js';
 import { listOperatorParkedSlugs } from './engine/park-marker.js';
@@ -168,6 +169,13 @@ export interface DaemonModeOptions {
    * the next idle boundary. Absent → no self-restart (default, for tests).
    */
   triggerSelfRestart?: () => Promise<void>;
+  /**
+   * Task 14: Enable event-driven HALT marker watching (default: true).
+   * When true, the daemon watches for HALT marker removal and re-kicks halted
+   * features immediately without waiting for the next idle poll. When false,
+   * the daemon relies on polling alone.
+   */
+  watch?: boolean;
 }
 
 // Front-half steps the daemon treats as already done — the human authored the
@@ -272,7 +280,51 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   // run had color on. The sink is opened once we own the repo (below); until then
   // `log` goes to the console only.
   let logSink: DaemonLogSink | null = null;
+
+  // Task 16: Transition-only per-slug status logging + resume line
+  // Track the last status for each slug so we only emit log lines when status changes
+  const lastStatus = new Map<string, string>();
+
   const log = (msg: string) => {
+    // Task 16: Parse per-feature log lines and suppress unchanged status
+    // Pattern 1: "▶ start <slug>" → { slug, status: 'start' }
+    const startMatch = msg.match(/▶.*start\s+(\S+)/);
+    if (startMatch) {
+      const slug = startMatch[1];
+      const status = 'start';
+      if (lastStatus.get(slug) === status) {
+        return; // Suppress unchanged status
+      }
+      lastStatus.set(slug, status);
+      // Fall through to log
+    }
+
+    // Pattern 2: "↻ resume <slug>" → { slug, status: 'resume' }
+    const resumeMatch = msg.match(/↻.*resume\s+(\S+)/);
+    if (resumeMatch) {
+      const slug = resumeMatch[1];
+      const oldStatus = lastStatus.get(slug);
+      const newMsg = oldStatus ? `${msg} (was: ${oldStatus})` : msg;
+      lastStatus.set(slug, 'resume');
+      console.log(`${chalk.dim('[daemon]')} ${newMsg}`);
+      logSink?.write(formatDaemonLogLine(`[daemon] ${stripAnsi(newMsg)}`));
+      return; // Resume lines always logged with (was: ...) appended
+    }
+
+    // Pattern 3: "■ done <slug>: <outcome_status>" → { slug, status: outcome_status }
+    // This captures the outcome status (done, halted, error)
+    const doneMatch = msg.match(/■.*done\s+(\S+):\s+(\S+)/);
+    if (doneMatch) {
+      const slug = doneMatch[1];
+      const outcomeStatus = doneMatch[2]; // e.g., "done", "halted", "error"
+      if (lastStatus.get(slug) === outcomeStatus) {
+        return; // Suppress unchanged status
+      }
+      lastStatus.set(slug, outcomeStatus);
+      // Fall through to log
+    }
+
+    // For all other lines (discovery, sweeps, etc.), always log
     console.log(`${chalk.dim('[daemon]')} ${msg}`);
     // The persisted record gets a leading ISO-8601 UTC timestamp so activity read
     // back via `conduct daemon logs` can be correlated in time; the console stays
@@ -756,10 +808,21 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   const suppressionChecker = (currentIdentity: string | null) =>
     isSuppressed(currentIdentity, projectRoot, log);
 
+  const watch = opts.watch ?? true;
+  const watchHaltCleared = watch !== false
+    ? (slug: string, onCleared: () => void) =>
+        makeWatchHaltClearedSeam(worktreeBase)(slug, onCleared)
+    : undefined;
+
   const result = await runDaemon(
     {
       discoverBacklog: discoverTick,
       isHalted: (slug) => isHalted(worktreeBase, slug),
+      // Task 14: wire the filesystem watcher for HALT marker removal.
+      // When watch is false, the watcher is undefined and the daemon falls
+      // back to polling alone. Otherwise, the daemon uses event-driven re-kick
+      // when a halted feature's HALT marker is cleared.
+      watchHaltCleared,
       // Task 7 (operator-park): consulted alongside `isHalted` — a
       // `.daemon/parked/<slug>` marker is durable across restarts and is
       // never lifted by clearing the HALT marker (halt-clear resume, PR-#109).
