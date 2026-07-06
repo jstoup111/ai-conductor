@@ -285,6 +285,56 @@ describe('intakeTick — origin routing (target + sourceRef)', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Task 8: Origin-unresolved idea is still enqueued (not dropped, not
+// arbitrary).
+//
+// Story: FR-7/ADR-008 negative · Plan: .docs/plans/2026-06-30-background-intake-conduct-loop.md (Task 8)
+//
+// When an envelope carries no `hintRepo` (origin cannot be resolved), the
+// tick must NOT drop it — it still gets enqueued, preserving its raw
+// `sourceRef` unchanged, and a warning is logged for observability so the
+// idea can be routed manually later.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('intakeTick — origin-unresolved (preserve, do not drop)', () => {
+  it('an envelope without hintRepo is still enqueued with its raw sourceRef, and a warning is logged', async () => {
+    const mod = (await import(
+      '../../../../src/engine/engineer/intake/intake-loop.js'
+    )) as Record<string, any>;
+    const intakeTick = mod.intakeTick as (deps: any) => Promise<{ captured: number }>;
+
+    const envelope = {
+      id: 'unknown#42',
+      source: 'github-issues',
+      sourceRef: 'unknown#42',
+      text: 'idea with no resolvable origin',
+      status: 'pending' as const,
+      receivedAt: '2026-06-30T00:00:00.000Z',
+    };
+
+    const poll = async () => [envelope];
+    const enqueue = vi.fn(async (_envelope: unknown) => {});
+    const notify = async (_ideas: unknown[]) => {};
+    const sleep = async (_ms: number) => {};
+    const now = () => new Date('2026-06-30T00:00:00.000Z');
+    const log = vi.fn((_msg: string) => {});
+
+    const summary = await intakeTick({ poll, enqueue, notify, sleep, now, log });
+
+    expect(summary).toEqual({ captured: 1 });
+    expect(enqueue).toHaveBeenCalledTimes(1);
+    const enqueued = enqueue.mock.calls[0][0];
+    expect(enqueued).toMatchObject({ sourceRef: 'unknown#42' });
+    expect(enqueued.target).toBeUndefined();
+    expect(log).toHaveBeenCalled();
+    expect(
+      log.mock.calls.some(
+        (call: unknown[]) => /origin-unresolved/i.test(String(call[0])) && String(call[0]).includes('unknown#42'),
+      ),
+    ).toBe(true);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Task 4: Interval loop — N ticks over N intervals, honors `once` and
 // `intervalMs`.
 //

@@ -55,8 +55,15 @@ export interface IntakeTickSummary {
  * reference, e.g. `owner/X#7`) so the `claim` phase can auto-route later
  * (ADR-008) without recomputing this from the raw source. Envelopes without
  * a `hintRepo` pass through unchanged — this enrichment is additive only.
+ *
+ * When an envelope has no resolvable `hintRepo` (Task 8), origin routing
+ * cannot map it to an explicit `target`. Rather than drop it — losing a
+ * captured idea because routing metadata is missing would be worse than
+ * surfacing it for manual triage — this preserves the envelope's raw
+ * `sourceRef` unchanged and logs an origin-unresolved warning via the
+ * injected `log` so the tick still enqueues it for later manual routing.
  */
-function enrichOrigin(envelope: unknown): unknown {
+function enrichOrigin(envelope: unknown, log: (msg: string) => void): unknown {
   if (
     envelope !== null &&
     typeof envelope === 'object' &&
@@ -75,6 +82,16 @@ function enrichOrigin(envelope: unknown): unknown {
           : `${hintRepo}#${String(id)}`;
     return { ...record, target: hintRepo, sourceRef };
   }
+
+  const rawSourceRef =
+    envelope !== null && typeof envelope === 'object' && 'sourceRef' in envelope
+      ? (envelope as { sourceRef?: unknown }).sourceRef
+      : undefined;
+  log(
+    `intake tick: origin-unresolved (no hintRepo) for envelope with sourceRef=${
+      typeof rawSourceRef === 'string' ? rawSourceRef : String(rawSourceRef)
+    }; enqueuing as-is for manual routing`,
+  );
   return envelope;
 }
 
@@ -99,7 +116,7 @@ export async function intakeTick(deps: IntakeLoopDeps): Promise<IntakeTickSummar
   }
   const captured: unknown[] = [];
   for (const rawEnvelope of envelopes) {
-    const envelope = enrichOrigin(rawEnvelope);
+    const envelope = enrichOrigin(rawEnvelope, deps.log);
     try {
       await deps.enqueue(envelope);
       captured.push(envelope);
