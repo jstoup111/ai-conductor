@@ -103,3 +103,68 @@ export async function listOperatorParkedSlugs(root: string): Promise<string[]> {
     return [];
   }
 }
+
+/**
+ * Write an auto-park marker (`.daemon/parked/<slug>`) created by the machine
+ * (e.g., "No evidence after N attempts"), distinct from operator-park markers.
+ *
+ * The marker body has the format:
+ * ```
+ * auto-parked: <reason>
+ * timestamp: <ISO-8601>
+ * ```
+ *
+ * Idempotent: uses an exclusive create (`wx`) so a marker that already exists
+ * is left completely untouched — same content, same mtime. Concurrent writers
+ * for the same slug race safely: exactly one create wins, others see `EEXIST`
+ * and treat it as already-parked (a no-op).
+ */
+export async function writeAutoPark(root: string, slug: string, reason: string): Promise<void> {
+  const dir = join(root, '.daemon', OPERATOR_PARKED_SUBDIR);
+  await mkdir(dir, { recursive: true });
+  const body = `auto-parked: ${reason}\ntimestamp: ${new Date().toISOString()}\n`;
+  let handle;
+  try {
+    handle = await open(parkedMarkerPath(root, slug), 'wx');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'EEXIST') {
+      // Already parked — writeAutoPark is idempotent, so this is a no-op.
+      return;
+    }
+    throw err;
+  }
+  try {
+    await handle.writeFile(body, 'utf-8');
+  } finally {
+    await handle.close();
+  }
+}
+
+/**
+ * Distinguish the provenance of a park marker:
+ * - `'auto'` if the marker was created by writeAutoPark() (machine provenance)
+ * - `'operator'` if the marker was created by writeOperatorPark() (operator provenance)
+ * - `null` if no marker exists for this slug
+ *
+ * Reads the marker file and checks the prefix:
+ * - If it starts with `auto-parked:`, returns 'auto'
+ * - Otherwise (operator-park format), returns 'operator'
+ * - ENOENT returns null
+ */
+export async function getProvenanceType(
+  root: string,
+  slug: string
+): Promise<'auto' | 'operator' | null> {
+  try {
+    const content = await readFile(parkedMarkerPath(root, slug), 'utf-8');
+    if (content.startsWith('auto-parked:')) {
+      return 'auto';
+    }
+    return 'operator';
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      return null;
+    }
+    throw err;
+  }
+}
