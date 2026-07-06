@@ -7,15 +7,17 @@
 // This module is the PRODUCTION composition root for `runIntakeLoop`: it
 // wires the real github-issues intake adapter (via `buildIntake` in
 // engineer-cli.ts), a real status-surface notifier (`createNotifier`), a real
+// push notification transport (sendNotification from ui/notifications.ts), a real
 // `sleep`, a real clock, and `console.log`/`console.error`. It never spawns
 // `claude` and never opens a PR — the loop stops at "routed + notified"
 // (FR-11); DECIDE/authoring still happens in an interactive `/engineer`
 // session started separately (Task 18 wraps this in a tmux pane).
 //
 // Zero-token guard (FR-9): this module and its transitive production imports
-// (engineer-cli.ts's buildIntake, intake-loop.ts, notifier.ts) must never
-// import an LLM/provider/claude-session module. See
-// test/acceptance/background-intake-conduct-loop.test.ts for the static
+// (engineer-cli.ts's buildIntake, intake-loop.ts, notifier.ts,
+// ui/notifications.ts) must never import an LLM/provider/claude-session module.
+// ui/notifications.ts uses child_process and is inside the allowed set.
+// See test/acceptance/background-intake-conduct-loop.test.ts for the static
 // import-scan that enforces this.
 
 import { join } from 'node:path';
@@ -24,6 +26,7 @@ import { runIntakeLoop, type IntakeLoopDeps } from './engine/engineer/intake/int
 import { createNotifier } from './engine/engineer/intake/notifier.js';
 import { buildIntake, makeProductionGh } from './engine/engineer-cli.js';
 import { resolveEngineerDir } from './engine/engineer-store.js';
+import { sendNotification } from './ui/notifications.js';
 
 /** Default poll interval between intake ticks, in milliseconds. */
 const DEFAULT_INTERVAL_MS = 5 * 60 * 1000;
@@ -69,6 +72,8 @@ export interface DispatchIntakeLoopOpts {
   buildIntake?: typeof buildIntake;
   /** Injected for tests: overrides the real notifier factory. */
   createNotifier?: typeof createNotifier;
+  /** Injected for tests: overrides the real push notification transport. */
+  sendNotification?: typeof sendNotification;
   /** Injected for tests: overrides the real interval scheduler. */
   runIntakeLoop?: typeof runIntakeLoop;
   /** Injected for tests: overrides the real sleep effect. */
@@ -118,6 +123,7 @@ export async function dispatchIntakeLoop(
   const printErr = opts.printErr ?? ((msg: string) => console.error(msg));
   const build = opts.buildIntake ?? buildIntake;
   const makeNotifier = opts.createNotifier ?? createNotifier;
+  const notify = opts.sendNotification ?? sendNotification;
   const loop = opts.runIntakeLoop ?? runIntakeLoop;
   const sleep = opts.sleep ?? realSleep;
   const now = opts.now ?? (() => new Date());
@@ -136,9 +142,13 @@ export async function dispatchIntakeLoop(
       await mkdir(engineerDir, { recursive: true });
       await writeFile(statusPath, JSON.stringify(status, null, 2) + '\n', 'utf-8');
     },
-    push: () => {
-      // No real push channel wired yet — the status-surface write above is
-      // the notification of record. Reserved for a future push integration.
+    push: async (ideas) => {
+      if (!Array.isArray(ideas) || ideas.length === 0) {
+        return;
+      }
+      const sourceRefs = ideas.map((i) => i.sourceRef).join(', ');
+      const message = `${ideas.length} new idea(s): ${sourceRefs}`;
+      await notify('Intake: new ideas queued', message);
     },
     now: () => now().toISOString(),
     log,
