@@ -46,6 +46,39 @@ export interface IntakeTickSummary {
 }
 
 /**
+ * enrichOrigin — attaches origin-routing hints to a captured envelope
+ * (Task 7).
+ *
+ * When an envelope carries a `hintRepo` (set by the GitHub adapter, per the
+ * ADR), this maps it to an explicit `target` (the proposed routing
+ * destination — the origin repo) and a `sourceRef` (the full source
+ * reference, e.g. `owner/X#7`) so the `claim` phase can auto-route later
+ * (ADR-008) without recomputing this from the raw source. Envelopes without
+ * a `hintRepo` pass through unchanged — this enrichment is additive only.
+ */
+function enrichOrigin(envelope: unknown): unknown {
+  if (
+    envelope !== null &&
+    typeof envelope === 'object' &&
+    'hintRepo' in envelope &&
+    typeof (envelope as { hintRepo?: unknown }).hintRepo === 'string'
+  ) {
+    const record = envelope as Record<string, unknown>;
+    const hintRepo = record.hintRepo as string;
+    const id = record.id;
+    const existingSourceRef = record.sourceRef;
+    const sourceRef =
+      typeof existingSourceRef === 'string' && existingSourceRef.includes('#')
+        ? existingSourceRef
+        : typeof id === 'string' && id.includes('#')
+          ? id
+          : `${hintRepo}#${String(id)}`;
+    return { ...record, target: hintRepo, sourceRef };
+  }
+  return envelope;
+}
+
+/**
  * intakeTick — a single tick of the intake loop (Task 2).
  *
  * Polls all registered repos via the injected `poll()`, enqueues every
@@ -65,7 +98,8 @@ export async function intakeTick(deps: IntakeLoopDeps): Promise<IntakeTickSummar
     return { captured: 0 };
   }
   const captured: unknown[] = [];
-  for (const envelope of envelopes) {
+  for (const rawEnvelope of envelopes) {
+    const envelope = enrichOrigin(rawEnvelope);
     try {
       await deps.enqueue(envelope);
       captured.push(envelope);

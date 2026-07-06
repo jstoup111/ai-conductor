@@ -243,6 +243,48 @@ describe('intakeTick — repo isolation on failure', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Task 7: Captured idea carries target=origin + source-ref (origin routing).
+//
+// Story: ADR-008 · Plan: .docs/plans/2026-06-30-background-intake-conduct-loop.md (Task 7)
+//
+// An envelope captured from `owner/X#7` carries `hintRepo: 'owner/X'` (set by
+// the GitHub adapter). Before enqueueing, the tick must enrich the envelope
+// with an explicit `target` (the origin repo) and `sourceRef` (the full
+// source reference) so the `claim` phase can auto-route later without
+// recomputing this from the raw source.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('intakeTick — origin routing (target + sourceRef)', () => {
+  it('an envelope from owner/X#7 carries target=owner/X and sourceRef=owner/X#7 when enqueued', async () => {
+    const mod = (await import(
+      '../../../../src/engine/engineer/intake/intake-loop.js'
+    )) as Record<string, any>;
+    const intakeTick = mod.intakeTick as (deps: any) => Promise<{ captured: number }>;
+
+    const envelope = {
+      id: '7',
+      hintRepo: 'owner/X',
+      source: 'github-issues',
+      text: 'idea for owner/X#7',
+      status: 'pending' as const,
+      receivedAt: '2026-06-30T00:00:00.000Z',
+    };
+
+    const poll = async () => [envelope];
+    const enqueue = vi.fn(async (_envelope: unknown) => {});
+    const notify = async (_ideas: unknown[]) => {};
+    const sleep = async (_ms: number) => {};
+    const now = () => new Date('2026-06-30T00:00:00.000Z');
+    const log = (_msg: string) => {};
+
+    await intakeTick({ poll, enqueue, notify, sleep, now, log });
+
+    expect(enqueue).toHaveBeenCalledTimes(1);
+    const enqueued = enqueue.mock.calls[0][0];
+    expect(enqueued).toMatchObject({ target: 'owner/X', sourceRef: 'owner/X#7' });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Task 4: Interval loop — N ticks over N intervals, honors `once` and
 // `intervalMs`.
 //
