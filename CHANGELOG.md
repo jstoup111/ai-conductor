@@ -12,6 +12,11 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- `bin/install --allow-worktree-root` — explicit override for the new worktree-root guard.
+  The flag is stripped before mode dispatch, so it combines with any mode (e.g.
+  `--update --allow-worktree-root`) and is accepted but inert on a non-worktree checkout.
+  Documented in `bin/install --help`, README, and covered by the new real-binary smoke
+  `test/test_install_worktree_guard.sh`.
 - Owner-gate write-back now also announces on the originating GitHub issue: when a gated
   spec's committed intake marker carries `Source-Ref: owner/repo#N`, `announceGatedIssue`
   (src/conductor/src/engine/gate-writeback.ts) applies the `owner-gated` label and upserts
@@ -37,6 +42,18 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- Worktree-rooted installs can no longer brick the operator environment (ai-conductor#363):
+  (1) `bin/install` refuses global-mutating modes (default, `--update`) when its own checkout
+  physically resolves under `.worktrees/` — exiting non-zero before any global write, with the
+  resolved root and remedy in the message (`--check`/`--help`/`--uninstall` unaffected);
+  (2) a new `resolveInstalledHarnessRoot()` ladder (`src/conductor/src/engine/install-freshness.ts`,
+  adr-2026-07-06-installed-root-resolution-for-global-writes) derives the installed main checkout
+  from the git common dir and hard-rejects worktree roots — the self-build relink preflight now
+  throws `InstallStaleError` (→ `.pipeline/HALT`, no dispatch) instead of running
+  `bin/install --update` at a worktree, and `runSelfBuildDispatch` passes the installed root to
+  `provisionSandbox` so the sandbox `settings.json` retarget (main → worktree) actually fires.
+  `resolveHarnessRoot` is untouched (self-host detection unchanged — regression-locked in
+  `detector.test.ts`).
 - Every conductor step now starts on a fresh LLM session unconditionally (ai-conductor#325):
   the step-boundary `resetSession()` in `engine/conductor.ts` is no longer gated behind the
   daemon-only `freshContextPerStep` flag, which left interactive `/conduct` and the DECIDE
