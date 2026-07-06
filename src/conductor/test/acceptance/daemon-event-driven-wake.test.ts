@@ -28,7 +28,10 @@
 //     Included.
 //   - "Poll backstop and shared discovery timer" — composed: which race arm
 //     resolved determines `discoverBacklog({refresh})`'s flag on that
-//     iteration. Included, sharing the wake-arm setup with the first test.
+//     iteration. Included, sharing the wake-arm setup with the first test. The
+//     refresh assertion is scoped to the post-wake window (D3/D5 wake-arm
+//     criterion) to isolate from the pre-wake idle-drain refresh:true contract
+//     pinned by test/engine/daemon.test.ts:311.
 //
 // Explicitly EXCLUDED (with reasons):
 //   - "Latched single-shot Waker" — a single pure unit (`waker.ts`'s
@@ -155,16 +158,24 @@ describe('Watcher lifecycle bound to park/unpark', () => {
       const registered: string[] = [];
       const clearedCallbacks = new Map<string, () => void>();
       const disposeSpies = new Map<string, ReturnType<typeof vi.fn>>();
-      let dispatches = 0;
+      const halted = new Set<string>();
+      const runs = new Map<string, number>();
 
       const deps = {
         // f0 parks then resumes; f1 parks and stays parked through daemon exit.
         discoverBacklog: async () => items(2),
-        isHalted: async (slug: string) => slug === 'f1' || (slug === 'f0' && dispatches < 1),
+        isHalted: async (slug: string) => halted.has(slug),
         runFeature: async (it: BacklogItem) => {
-          dispatches++;
-          if (it.slug === 'f1') return { slug: it.slug, status: 'halted' as const };
-          if (dispatches <= 1) return { slug: it.slug, status: 'halted' as const };
+          const n = (runs.get(it.slug) ?? 0) + 1;
+          runs.set(it.slug, n);
+          if (it.slug === 'f1') {
+            halted.add('f1');
+            return { slug: it.slug, status: 'halted' as const };
+          }
+          if (n === 1) {
+            halted.add('f0');
+            return { slug: it.slug, status: 'halted' as const };
+          }
           return { slug: it.slug, status: 'done' as const };
         },
         watchHaltCleared: (slug: string, onCleared: () => void) => {
@@ -188,6 +199,7 @@ describe('Watcher lifecycle bound to park/unpark', () => {
 
       // Clearing f0 and firing its wake must re-dispatch it, disposing its
       // watcher BEFORE runFeature could tear down its worktree.
+      halted.delete('f0');
       clearedCallbacks.get('f0')!();
 
       const res = await resultPromise;
@@ -210,17 +222,22 @@ describe('Poll backstop and shared discovery timer (D3/D5: no network on unpark)
     async () => {
       const refreshCalls: boolean[] = [];
       const clearedCallbacks = new Map<string, () => void>();
-      let dispatches = 0;
+      const halted = new Set<string>();
+      const runs = new Map<string, number>();
 
       const deps = {
         discoverBacklog: async (opts: { refresh: boolean }) => {
           refreshCalls.push(opts.refresh);
           return items(1);
         },
-        isHalted: async (slug: string) => slug === 'f0' && dispatches < 1,
+        isHalted: async (slug: string) => halted.has(slug),
         runFeature: async (it: BacklogItem) => {
-          dispatches++;
-          if (dispatches === 1) return { slug: it.slug, status: 'halted' as const };
+          const n = (runs.get(it.slug) ?? 0) + 1;
+          runs.set(it.slug, n);
+          if (n === 1) {
+            halted.add(it.slug);
+            return { slug: it.slug, status: 'halted' as const };
+          }
           return { slug: it.slug, status: 'done' as const };
         },
         watchHaltCleared: (slug: string, onCleared: () => void) => {
@@ -237,11 +254,15 @@ describe('Poll backstop and shared discovery timer (D3/D5: no network on unpark)
       });
 
       await vi.waitFor(() => expect(clearedCallbacks.has('f0')).toBe(true), { timeout: 2000 });
+      await vi.waitFor(() => expect(refreshCalls.filter((r) => r === true)).toHaveLength(1), { timeout: 2000 });
+      const idxAtWake = refreshCalls.length;
+      halted.delete('f0');
       clearedCallbacks.get('f0')!();
 
       await resultPromise;
 
-      expect(refreshCalls.some((r) => r === true)).toBe(false);
+      expect(refreshCalls.slice(idxAtWake).every((r) => r === false)).toBe(true);
+      expect(refreshCalls.slice(idxAtWake).length).toBeGreaterThan(0);
     },
     3000,
   );
