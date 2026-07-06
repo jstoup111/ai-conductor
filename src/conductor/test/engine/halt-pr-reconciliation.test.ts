@@ -271,4 +271,44 @@ describe('reconcileHaltPrs (Task 15)', () => {
     );
     expect(undoCalls.length).toBeGreaterThan(0);
   });
+
+  it('(Task 20) should NOT re-halt a finished PR after marker is stripped by cleanup (D5 negative path)', async () => {
+    // Arrange: PR was previously marked (had label + draft + body marker),
+    // but Task 19 cleanup has removed all three. The PR is now "finished" and
+    // should remain unhalted across reconciliation sweeps.
+    const finishedPr: FakePr = {
+      number: 306,
+      url: 'https://github.com/owner/repo/pull/306',
+      isDraft: false, // cleanup converted back to ready ✓
+      labels: [], // cleanup removed label ✓
+      body: 'A clean feature PR description.\n\n', // cleanup stripped marker ✓
+      // NOTE: marker is completely absent; this is the key condition
+    };
+
+    const { gh, calls } = makeFakeGhForReconciliation([finishedPr]);
+
+    const logs: string[] = [];
+    const log = (msg: string) => logs.push(msg);
+
+    // Act: run the reconciliation sweep
+    await reconcileHaltPrs({ projectRoot: tempDir, runGh: gh, log });
+
+    // Assert 1: PR should NOT be enumerated as marked because body marker is gone
+    const log_foundMarked = logs.find((msg) => msg.includes('found 0 marked'));
+    expect(log_foundMarked).toBeTruthy();
+
+    // Assert 2: no mutating calls should be made to the finished PR
+    // (no draft conversion, no label adds)
+    const mutatesPr306 = calls.filter(
+      (c) =>
+        (c[0] === 'pr' && (c[1] === 'ready' || c[1] === 'edit') && c.includes(finishedPr.url)) ||
+        (c[0] === 'api' && c.some((a) => a.includes('/306/'))),
+    );
+    expect(mutatesPr306).toHaveLength(0);
+
+    // Assert 3: PR state unchanged (no re-halting)
+    expect(finishedPr.isDraft).toBe(false); // still ready
+    expect(finishedPr.labels).not.toContain('needs-remediation'); // no re-label
+    expect(finishedPr.body).not.toContain(NEEDS_REMEDIATION_BODY_MARKER); // marker still gone
+  });
 });
