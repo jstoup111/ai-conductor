@@ -239,6 +239,10 @@ describe('pr_timing engineer lifecycle — checkpoint commits (RED, unimplemente
     const calls: string[][] = [];
     const runner: HandoffDeps['runner'] = async (args) => {
       calls.push([...args]);
+      if (args[0] === 'pr' && args[1] === 'list') {
+        // Return an open draft PR for the branch
+        return { stdout: JSON.stringify([{ url: 'https://github.com/acme/alpha/pull/5' }]), stderr: '' };
+      }
       if (args[0] === 'pr' && args[1] === 'view') {
         return { stdout: JSON.stringify({ url: 'https://github.com/acme/alpha/pull/5', state: 'OPEN' }), stderr: '' };
       }
@@ -248,7 +252,29 @@ describe('pr_timing engineer lifecycle — checkpoint commits (RED, unimplemente
       return { stdout: 'https://github.com/acme/alpha/pull/999\n', stderr: '' };
     };
 
-    await openSpecPr(target(), 'spec/dep-bump', { runner, worktreePath: worktree });
+    await openSpecPr(target(), 'spec/dep-bump', {
+      runner,
+      worktreePath: worktree,
+      // Task 20: Wire optional dependencies for draft PR reuse detection
+      detectDraftPr: async (branch, cwd) => {
+        const result = await runner(['pr', 'list', '--head', branch, '--state', 'open', '--draft', '--json', 'url'], { cwd });
+        try {
+          const data = JSON.parse(result.stdout);
+          if (Array.isArray(data) && data.length > 0 && data[0].url) {
+            return data[0].url;
+          }
+        } catch {
+          // Ignore parse errors
+        }
+        return undefined;
+      },
+      push: async () => {
+        // Mock push — does not need to do anything for the test
+      },
+      markReadyForReview: async (prUrl, cwd) => {
+        await runner(['pr', 'ready', prUrl], { cwd });
+      },
+    });
 
     const createCalls = calls.filter((a) => a[0] === 'pr' && a[1] === 'create');
     const readyCalls = calls.filter((a) => a[0] === 'pr' && a[1] === 'ready');

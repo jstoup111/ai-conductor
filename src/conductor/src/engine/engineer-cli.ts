@@ -46,7 +46,7 @@ import { createLedger } from './engineer/intake/ledger.js';
 import { createFileQueue } from './engineer/intake/queue.js';
 import { createGithubIssuesAdapter, GITHUB_ISSUES_SOURCE, HANDLED_LABEL } from './engineer/intake/github-issues.js';
 import { reportRouted, reportDone } from './engineer/intake/writeback.js';
-import { restRemoveLabelArgs } from './pr-labels.js';
+import { restRemoveLabelArgs, pushBranch, setReady } from './pr-labels.js';
 import { claimUnblocked, type DependencyClaimQueue } from './engineer/intake/dependency-claim.js';
 import type { Envelope } from './engineer/intake/port.js';
 import { createBlockerResolver } from './blocker-resolver.js';
@@ -783,6 +783,25 @@ export async function dispatchEngineer(
           // Link the spec PR to its issue with a non-closing `Refs` (does not
           // close — the daemon's implementation PR closes it on merge).
           sourceRef,
+          // Task 20 (TS-8): Wire optional dependencies for draft PR reuse.
+          detectDraftPr: async (branchName, cwd) => {
+            try {
+              const result = await gh(['pr', 'list', '--head', branchName, '--state', 'open', '--draft', '--json', 'url'], { cwd });
+              const data = JSON.parse(result.stdout);
+              if (Array.isArray(data) && data.length > 0 && data[0].url) {
+                return data[0].url;
+              }
+              return undefined;
+            } catch {
+              return undefined;
+            }
+          },
+          push: async (branchName, cwd) => {
+            await pushBranch(undefined, cwd, branchName);
+          },
+          markReadyForReview: async (prUrl, cwd) => {
+            await setReady(gh, cwd, prUrl);
+          },
         });
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);

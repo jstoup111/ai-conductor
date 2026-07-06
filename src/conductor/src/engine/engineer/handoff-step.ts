@@ -23,6 +23,7 @@ import type { GhRunner } from './loop.js';
 import { openSpecPr } from './handoff.js';
 import { recordAuthoredKey } from './authored-ledger.js';
 import { ensureRunning } from '../daemon-lock.js';
+import { pushBranch, setReady } from '../pr-labels.js';
 
 /** The authored-ledger entry returned for the session summary. */
 export interface HandoffEntry {
@@ -89,6 +90,25 @@ export async function runHandoff(
       },
       ledgerOpts,
       sourceRef: deps.sourceRef,
+      // Task 20 (TS-8): Wire optional dependencies for draft PR reuse.
+      detectDraftPr: async (branchName, cwd) => {
+        try {
+          const result = await gh(['pr', 'list', '--head', branchName, '--state', 'open', '--draft', '--json', 'url'], { cwd });
+          const data = JSON.parse(result.stdout);
+          if (Array.isArray(data) && data.length > 0 && data[0].url) {
+            return data[0].url;
+          }
+          return undefined;
+        } catch {
+          return undefined;
+        }
+      },
+      push: async (branchName, cwd) => {
+        await pushBranch(undefined, cwd, branchName);
+      },
+      markReadyForReview: async (prUrl, cwd) => {
+        await setReady(gh, cwd, prUrl);
+      },
     });
     if (handoffResult.kind === 'pr-opened') {
       deps.print(`Spec PR opened: ${handoffResult.url}`);
