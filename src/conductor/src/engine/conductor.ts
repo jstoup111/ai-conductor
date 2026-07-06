@@ -2081,7 +2081,8 @@ export class Conductor {
             step.loopGate &&
             this.daemon &&
             !this.selfHost &&
-            resolvePrTiming(this.config) === 'early-draft'
+            resolvePrTiming(this.config) === 'early-draft' &&
+            this.lastRebaseOutcome?.kind !== 'conflict_halt'
           ) {
             await this.runStepBoundaryRefreshHook(state);
           }
