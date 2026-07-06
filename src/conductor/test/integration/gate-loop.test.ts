@@ -635,7 +635,7 @@ describe('integration/gate-loop', () => {
     });
   });
 
-  it('freshContextPerStep resets the session before each tail step', async () => {
+  it('resets the session before each tail step (unconditional fresh-per-step)', async () => {
     // All front-half steps done; tail steps pending so they run. Start at build.
     const state: Record<string, string> = {};
     for (const s of ALL_STEPS) state[s.name] = 'done';
@@ -657,7 +657,6 @@ describe('integration/gate-loop', () => {
       projectRoot: dir,
       mode: 'auto',
       fromStep: 'build',
-      freshContextPerStep: true,
     });
     await conductor.run();
 

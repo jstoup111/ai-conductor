@@ -948,7 +948,7 @@ dedicated test coverage (950+ tests). See the feature comparison in
   is driven by a *selector* over machine-checkable **gate verdicts** rather than a fixed
   order. A downstream step can **kick back** to `plan`/`stories` (re-open an upstream gate);
   the loop converges to `.pipeline/DONE` or stops at `.pipeline/HALT`. Opt-in via
-  `verifyArtifacts`; with `freshContextPerStep`, each tail step runs on fresh context.
+  `verifyArtifacts`; every step runs on a fresh LLM session (unconditional).
 - **Rebase-on-latest before finish**: an engine-native `rebase` gate (no Claude dispatch)
   rebases the worktree branch onto the **discovered** origin default branch (fetched; falls
   back to the local base — no hardcoded `main`) before the PR is opened, so it's never built

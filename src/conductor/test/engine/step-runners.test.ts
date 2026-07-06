@@ -309,7 +309,7 @@ describe('DefaultStepRunner', () => {
       // lazy-init would set sessionStarted=true and `--resume` a brand-new
       // session id that was never created → "No conversation found" → "session
       // unavailable (expired or in use)". The conductor calls resetSession()
-      // before each step under freshContextPerStep; it must win over the stale
+      // before every step (unconditional fresh-per-step); it must win over the stale
       // marker and force a create.
       await writeFile(join(pipeDir, 'session-created'), '1', 'utf-8');
       await writeFile(join(pipeDir, 'conduct-session-id'), 'stale-id', 'utf-8');

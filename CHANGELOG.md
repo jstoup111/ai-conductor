@@ -37,6 +37,13 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- Every conductor step now starts on a fresh LLM session unconditionally (ai-conductor#325):
+  the step-boundary `resetSession()` in `engine/conductor.ts` is no longer gated behind the
+  daemon-only `freshContextPerStep` flag, which left interactive `/conduct` and the DECIDE
+  front half sharing one persistent session across steps (context bloat + cross-step
+  leakage). The flag is removed from `ConductorOptions` and from the daemon's conductor
+  construction (`daemon-cli.ts`); within-step retries still resume the step's own session.
+
 - Daemon re-kick play-forward rebase now routes a conflict through the same gated `/rebase`
   resolution loop the finish-time step uses (bounded by `rebase_resolution_attempts`) before
   parking for a human, instead of hard-HALTing on the first conflict. Extracted the shared
