@@ -808,6 +808,74 @@ describe('#159: repeated HALTs upsert a single comment (one create + one PATCH)'
   });
 });
 
+// ── Task 14 (RED): comment posted even if ensureHaltPresentation is unconfirmed ──
+
+describe('Task 14: comment posted even when ensureHaltPresentation returns unconfirmed', () => {
+  it('posts comment even when ensureHaltPresentation encounters transient errors', async () => {
+    const { git } = fakeGit(standardGitResps());
+    const { gh, calls: ghCalls } = fakeGh([
+      // findOrCreatePr: check existing
+      new Error('no pull requests found'),
+      // findOrCreatePr: create new PR
+      { stdout: `${PR_URL}\n` },
+      // ensureHaltPresentation: readHaltPresentation fails (transient error)
+      new Error('transient API error reading PR'),
+      // Despite ensureHaltPresentation being unconfirmed, upsertComment should still run:
+      // upsertComment: lookup comments
+      { stdout: JSON.stringify({ comments: [] }) },
+      // upsertComment: create comment
+      { stdout: '' },
+    ]);
+
+    const result = await escalateBuildFailure({
+      projectRoot: '/repo',
+      failureReason: 'tests failed with transient presentation error',
+      runGit: git,
+      runGh: gh,
+    });
+
+    // Function should return prUrl despite presentation being unconfirmed
+    expect(result).toEqual({ prUrl: PR_URL });
+
+    // Comment should have been posted (this is the fallback artifact)
+    const commentCall = ghCalls.find((args) => args[0] === 'pr' && args[1] === 'comment');
+    expect(commentCall).toBeDefined();
+    expect(commentCall).toContain(PR_URL);
+
+    // Verify the failure reason is in the comment
+    const bodyIdx = commentCall!.indexOf('--body');
+    const body = commentCall![bodyIdx + 1];
+    expect(body).toContain('tests failed with transient presentation error');
+  });
+
+  it('returns prUrl without throwing when ensureHaltPresentation fails but comment succeeds', async () => {
+    const { git } = fakeGit(standardGitResps());
+    const { gh } = fakeGh([
+      new Error('no PR'),                  // pr view
+      { stdout: `${PR_URL}\n` },           // pr create
+      new Error('could not read PR state'), // ensureHaltPresentation fails
+      { stdout: JSON.stringify({ comments: [] }) }, // upsertComment lookup
+      { stdout: '' },                      // upsertComment create
+    ]);
+
+    let threw = false;
+    let result: Awaited<ReturnType<typeof escalateBuildFailure>> | undefined;
+    try {
+      result = await escalateBuildFailure({
+        projectRoot: '/repo',
+        failureReason: 'failure with unconfirmed presentation',
+        runGit: git,
+        runGh: gh,
+      });
+    } catch {
+      threw = true;
+    }
+
+    expect(threw).toBe(false);
+    expect(result?.prUrl).toEqual(PR_URL);
+  });
+});
+
 // ── Task 13 (RED): ensureHaltPresentation wired into escalation ──────────────
 
 describe('Task 13: escalateBuildFailure ensures halt presentation markers', () => {
