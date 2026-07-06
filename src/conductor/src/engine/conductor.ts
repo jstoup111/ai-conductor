@@ -113,6 +113,7 @@ import {
   type TaskEvidence,
 } from './task-evidence.js';
 import { seedTaskStatus } from './task-seed.js';
+import { writeAutoPark } from './park-marker.js';
 
 export type CheckpointResponse = 'continue' | 'back' | 'quit';
 
@@ -1184,6 +1185,44 @@ export class Conductor {
             state[step.name] = 'stale';
             await writeState(this.stateFilePath, state);
             await this.events.emit({ type: 'loop_halt', reason: verdict.reason });
+            process.off('SIGINT', sigintHandler);
+            return;
+          }
+        }
+
+        // Task 23: Daemon auto-park on no-evidence gate misses.
+        // If daemon mode and at acceptance_specs gate:
+        //   - Check if plan artifact is missing (empty plan case)
+        //   - Check if noEvidenceAttempts > 0 (already had failed attempts, don't retry)
+        // Park the feature instead of dispatching, halt gracefully.
+        const DAEMON_NO_EVIDENCE_THRESHOLD = 3;
+        if (this.daemon && step.name === 'acceptance_specs') {
+          let shouldAutoPark = false;
+          let parkReason = '';
+
+          // Check for empty/missing plan
+          const ctx = await this.completionCtx(state);
+          if (!ctx.planPath) {
+            shouldAutoPark = true;
+            parkReason = 'empty/missing plan';
+          }
+          // Check for N-1 consecutive no-evidence gate misses (don't try again)
+          else if (
+            this.taskEvidence &&
+            this.taskEvidence.noEvidenceAttempts >= DAEMON_NO_EVIDENCE_THRESHOLD - 1
+          ) {
+            shouldAutoPark = true;
+            parkReason = `no evidence after ${DAEMON_NO_EVIDENCE_THRESHOLD} attempts`;
+          }
+
+          if (shouldAutoPark) {
+            const slug = state.feature_desc || 'unknown';
+            await writeAutoPark(this.projectRoot, slug, parkReason);
+            await this.events.emit({
+              type: 'auto_park',
+              slug,
+              reason: parkReason,
+            });
             process.off('SIGINT', sigintHandler);
             return;
           }

@@ -1063,6 +1063,183 @@ describe('engine/conductor', () => {
     });
   });
 
+  describe('daemon auto-park on no-evidence gate misses (#302)', () => {
+    // Seed to acceptance_specs gate (which gates the build) with a durable
+    // no-evidence counter already at N-1 attempts. The gate will miss because
+    // the plan is missing, the counter will increment to N, and the daemon
+    // should auto-park instead of re-kicking.
+    async function seedToBuildGate(noEvidenceAttempts: number = 0, withPlanFile: boolean = false): Promise<void> {
+      const res = await readState(statePath);
+      const state = (res.ok ? res.value : {}) as Record<string, unknown>;
+      for (const s of ALL_STEPS) {
+        if (s.name === 'acceptance_specs') break;
+        state[s.name] = 'done';
+      }
+      state.complexity_tier = 'L';
+      state.feature_desc = 'feat';
+      state.track = 'technical';
+      await writeState(statePath, state as unknown as ConductState);
+
+      // Optionally create a plan file (for no-evidence test)
+      if (withPlanFile) {
+        await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+        await writeFile(
+          join(dir, '.docs', 'plans', 'plan.md'),
+          '# Plan\n\n- Task 1\n- Task 2\n',
+        );
+      }
+
+      // Seed task evidence with no-evidence attempts counter
+      if (noEvidenceAttempts > 0) {
+        const evidence = await createTaskEvidence(dir);
+        evidence.noEvidenceAttempts = noEvidenceAttempts;
+        await evidence.write();
+      }
+    }
+
+    it('daemon: N consecutive no-evidence gate misses (acceptance_specs) auto-parks with reason', async () => {
+      const N = 3;
+      // Start with N-1 attempts so the next miss will trigger auto-park
+      // Create a plan file so we test the no-evidence case, not the empty-plan case
+      await seedToBuildGate(N - 1, true);
+
+      const runner = createMockStepRunner();
+      const parkEvents: Array<{ type: string; slug?: string; reason?: string }> = [];
+      events.on('auto_park', (e) => {
+        parkEvents.push({ type: 'auto_park', slug: e.slug, reason: e.reason });
+      });
+
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 1,
+        fromStep: 'acceptance_specs',
+      });
+
+      await conductor.run();
+
+      // Verify auto-park marker was written
+      const { getProvenanceType } = await import('../../src/engine/park-marker.js');
+      const provenance = await getProvenanceType(dir, 'feat');
+      expect(provenance).toBe('auto');
+
+      // Verify park event was emitted
+      expect(parkEvents).toHaveLength(1);
+      expect(parkEvents[0].reason).toMatch(/no evidence after \d+ attempts/);
+
+      // Verify dispatch halts (runner only called for acceptance_specs, not build)
+      expect((runner.run as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(0);
+    });
+
+    it('daemon: empty plan at seed auto-parks with "empty plan" reason', async () => {
+      await seedToBuildGate(0);
+      // Don't create a plan file — empty/missing plan condition
+
+      const runner = createMockStepRunner();
+      const parkEvents: Array<{ type: string; reason?: string }> = [];
+      events.on('auto_park', (e) => {
+        parkEvents.push({ type: 'auto_park', reason: e.reason });
+      });
+
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 1,
+        fromStep: 'acceptance_specs',
+      });
+
+      await conductor.run();
+
+      // Verify auto-park marker was written
+      const { getProvenanceType } = await import('../../src/engine/park-marker.js');
+      const provenance = await getProvenanceType(dir, 'feat');
+      expect(provenance).toBe('auto');
+
+      // Verify park event was emitted with correct reason
+      expect(parkEvents).toHaveLength(1);
+      expect(parkEvents[0].reason).toBe('empty/missing plan');
+
+      // Verify dispatch halts
+      expect((runner.run as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(0);
+    });
+
+    it('daemon: auto-park event is emitted to logging/telemetry', async () => {
+      const N = 3;
+      await seedToBuildGate(N - 1, true);
+
+      const runner = createMockStepRunner();
+      const allEvents: unknown[] = [];
+      events.on('auto_park', (e) => {
+        allEvents.push(e);
+      });
+
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 1,
+        fromStep: 'acceptance_specs',
+      });
+
+      await conductor.run();
+
+      // Verify event was emitted with expected structure
+      expect(allEvents).toHaveLength(1);
+      const event = allEvents[0] as Record<string, unknown>;
+      expect(event).toHaveProperty('type', 'auto_park');
+      expect(event).toHaveProperty('slug');
+      expect(event).toHaveProperty('reason');
+    });
+
+    it('daemon: no further dispatch attempts after auto-park', async () => {
+      const N = 3;
+      await seedToBuildGate(N - 1, true);
+
+      const dispatchedSteps: StepName[] = [];
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          dispatchedSteps.push(step);
+          return { success: true };
+        }),
+      };
+
+      events.on('auto_park', () => {
+        // Park event received
+      });
+
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 1,
+        fromStep: 'acceptance_specs',
+      });
+
+      await conductor.run();
+
+      // Verify no steps were dispatched (conductor halted before dispatch)
+      expect(dispatchedSteps).toHaveLength(0);
+    });
+  });
+
   describe('daemon finish/as-built remediation', () => {
     // Seed the SHIP tail in the technical-track shape (prd_audit skipped) —
     // exactly the shape that had NO remediation entry point before the
