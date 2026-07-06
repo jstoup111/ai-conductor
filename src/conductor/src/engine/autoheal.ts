@@ -16,25 +16,23 @@ function createEvidenceRangeLogger(): EvidenceRangeLogger {
 }
 
 /**
- * Auto-heal records `.pipeline/task-status.json` drift against the branch's
- * git log BEFORE the build-step completion gate re-invokes Claude. When a
- * prior pipeline run crashed mid-batch, commits can exist on disk for tasks
- * the status file still marks "pending". Fix A (buildRetryHint) tells Claude
- * to reconcile; Fix C caps recovery retries. This is Fix B — the engine
- * itself reconciles before the retry runs, so the gate passes with no Claude
- * involvement when the evidence is unambiguous.
+ * Derive task completion from git evidence. Evaluates commits since a plan
+ * anchor and marks tasks complete based on trailer evidence (Task: N),
+ * explicit Evidence: forms, or pinned sidecar stamps.
  *
- * Evidence bar (both conditions must hold for a commit to heal a task):
- *  1. Commit subject contains `T<id>`, `#<id>` (word-boundary on the id),
- *     OR a case-insensitive substring of `task.name`. Short names (<12 chars)
- *     get word-boundary matching so `user` doesn't match `userController`.
- *  2. Commit's diff touches at least one file the plan attributes to this
- *     task. If the plan has no files for the task, the commit-message check
- *     is upgraded to require BOTH `T<id>` AND `task.name` — no file-path
- *     signal means we need a stricter message signal.
+ * Automatically:
+ * - Loads the plan from planPath and extracts task IDs + file paths
+ * - Resolves the plan anchor (first commit on HEAD) for the evidence range
+ * - Reads git history for evidence (commits with Task: trailers, Evidence: forms)
+ * - Loads and writes task-evidence.json sidecar for evidence stamps
  *
- * Anything weaker is skipped — the conductor falls through to the existing
- * (Fix A) retry hint so Claude or the user can decide.
+ * Evidence bar (both conditions must hold for a commit to mark a task complete):
+ *  1. Commit contains Task: <id> trailer OR Evidence: satisfied-by/skipped form
+ *  2. If task has file paths, commit must touch at least one (path corroboration)
+ *     If task has no paths, Task: trailer alone is sufficient
+ *
+ * Call this function on every build-gate evaluation to derive fresh evidence.
+ * Writes evidence stamps to .pipeline/task-evidence.json sidecar.
  */
 
 export interface HealedTask {
@@ -411,7 +409,7 @@ export interface DeriveCompletionResult {
  * @param evidence - TaskEvidence instance for sidecar writes
  * @returns Map of task ID → {completed, evidencedBy?, auditEntry?, status?, skipReason?}
  */
-export async function deriveCompletion(
+async function deriveCompletionInternal(
   projectRoot: string,
   planPath: string,
   anchor: string,
@@ -555,6 +553,56 @@ export async function deriveCompletion(
   return result;
 }
 
+/**
+ * PUBLIC API: Derive task completion from git evidence.
+ * Automatically resolves all parameters and calls deriveCompletionInternal.
+ * Call this function on every build-gate evaluation to get fresh completion data.
+ *
+ * @param projectRoot - Project root directory
+ * @param planPath - Path to the plan markdown file
+ * @returns Object with { completed: { taskId: { evidencedBy, ... }, ... } }
+ */
+export async function deriveCompletion(
+  projectRoot: string,
+  planPath: string,
+): Promise<{ completed: Record<string, { evidencedBy?: string }> }> {
+  let anchor = '';
+  try {
+    // Get the first commit (plan anchor) for evidence range boundary
+    const { stdout } = await execa('git', ['log', '--format=%H', '-n', '1', '--reverse', 'HEAD'], {
+      cwd: projectRoot,
+      reject: false,
+    });
+    anchor = (stdout || '').trim();
+  } catch {
+    // No commits yet — use empty string, getEvidenceRange will handle it
+    anchor = '';
+  }
+
+  // Load commits with trailers
+  const commitResult = await getEvidenceRange(projectRoot, anchor);
+  const commits = commitResult.commits;
+
+  // Load task evidence sidecar
+  const { createTaskEvidence } = await import('./task-evidence.js');
+  const evidence = await createTaskEvidence(projectRoot);
+
+  // Delegate to internal implementation
+  const result = await deriveCompletionInternal(projectRoot, planPath, anchor, commits, evidence);
+
+  // Transform result to match test expectations: { completed: { taskId: { evidencedBy, ... } } }
+  const completed: Record<string, { evidencedBy?: string }> = {};
+  for (const [taskId, taskResult] of Object.entries(result)) {
+    if (taskResult.completed) {
+      completed[taskId] = {
+        evidencedBy: taskResult.evidencedBy,
+      };
+    }
+  }
+
+  return { completed };
+}
+
 function parseTrailers(trailerText: string): Record<string, string[]> {
   const result: Record<string, string[]> = {};
 
@@ -638,15 +686,15 @@ export function parsePlanTasks(text: string): Map<string, PlanTask> {
   const lines = text.split('\n');
   let currentTaskId: string | null = null;
 
-  // Match: ### Task N: Title or ## Task N: Title, etc.
-  // Requires colon and title after the task id
-  const taskHeaderWithTitle = /^#{1,6}\s+Task\s+(\d+):\s*(.+)$/;
+  // Match: ### Task N: Title or ### Task N (with or without colon and title)
+  // Supports both `### Task 1: Some Title` and `### Task 1`
+  const taskHeader = /^#{1,6}\s+Task\s+(\d+)(?::\s*(.*))?$/;
 
   for (const line of lines) {
-    const headerMatch = line.match(taskHeaderWithTitle);
+    const headerMatch = line.match(taskHeader);
     if (headerMatch) {
       const id = headerMatch[1];
-      const name = headerMatch[2].trim();
+      const name = (headerMatch[2] ?? `Task ${id}`).trim();
       currentTaskId = id;
       result.set(id, { name, paths: [] });
       continue;

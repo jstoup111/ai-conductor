@@ -490,7 +490,20 @@ export class Conductor {
    * makes the guard fail open outside real runs. `daemon` and `isHeadPushed`
    * feed the finish predicate for daemon false-ship guard (ADR-2026-07-06).
    */
-  private completionCtx(state: ConductState): CompletionContext {
+  private async completionCtx(state: ConductState): Promise<CompletionContext> {
+    // For the build predicate, resolve the plan file to pass into the context.
+    let planPath: string | undefined;
+    try {
+      const planFiles = await findArtifactFilesForStep(this.projectRoot, 'plan');
+      if (planFiles.length > 0) {
+        // Use the first (or only) plan file; in practice, there's typically one per feature
+        planPath = planFiles[0];
+      }
+    } catch {
+      // Plan file resolution failed — let the predicate handle missing plan
+      planPath = undefined;
+    }
+
     return {
       sessionStartedAt: state.session_started_at,
       featureDesc: state.feature_desc,
@@ -506,6 +519,8 @@ export class Conductor {
           return null;
         }
       },
+      projectRoot: this.projectRoot,
+      planPath,
     };
   }
 
@@ -1332,7 +1347,7 @@ export class Conductor {
             let completion = await checkStepCompletion(
               this.projectRoot,
               step.name,
-              this.completionCtx(state),
+              await this.completionCtx(state),
             );
 
             // Auto-heal hook: before treating a build-gate miss as a failure,
@@ -1360,7 +1375,7 @@ export class Conductor {
                 completion = await checkStepCompletion(
                   this.projectRoot,
                   step.name,
-                  this.completionCtx(state),
+                  await this.completionCtx(state),
                 );
               }
             }
@@ -1422,7 +1437,7 @@ export class Conductor {
                   const recheck = await checkStepCompletion(
                     this.projectRoot,
                     step.name,
-                    this.completionCtx(state),
+                    await this.completionCtx(state),
                   );
                   if (recheck.done) {
                     succeeded = true;
@@ -2239,7 +2254,7 @@ export class Conductor {
       const verdict = await computeAndWriteVerdict(
         this.projectRoot,
         step.name,
-        this.completionCtx(state),
+        await this.completionCtx(state),
       );
       await this.events.emit({
         type: 'gate_verdict',

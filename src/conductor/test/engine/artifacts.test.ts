@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, utimes, readFile } from 'fs/promises';
-import { join } from 'path';
+import { join, dirname } from 'path';
 import { tmpdir } from 'os';
 import {
   STEP_ARTIFACT_GLOBS,
@@ -512,6 +512,123 @@ describe('engine/artifacts', () => {
       await writeAllCompleteTaskStatus();
       const result = await checkStepCompletion(dir, 'build');
       expect(result).toEqual({ done: true });
+    });
+
+    // NEW TESTS: build predicate recomputes from seeded state + evidence
+    describe('reworked build predicate: seed + derive', () => {
+      async function writePlan(content: string) {
+        await createFile('.docs/plans/phase-1.md', content);
+      }
+
+      async function writeTasks(tasks: Array<{ id: string; name?: string; status: string }>) {
+        await createFile(
+          '.pipeline/task-status.json',
+          JSON.stringify({ tasks }),
+        );
+      }
+
+      it('fails when plan is missing (context.planPath not found)', async () => {
+        const ctx = { projectRoot: dir, planPath: join(dir, '.docs/plans/missing.md') };
+        // Plan doesn't exist; task-status.json doesn't exist either
+        const result = await checkStepCompletion(dir, 'build', ctx);
+        expect(result.done).toBe(false);
+        expect(result.reason).toMatch(/plan|missing|unreadable/i);
+      });
+
+      it('fails when plan is empty (no tasks to seed)', async () => {
+        await writePlan('# Empty Plan\n\nNo tasks defined.\n');
+        const ctx = { projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md') };
+        const result = await checkStepCompletion(dir, 'build', ctx);
+        expect(result.done).toBe(false);
+        expect(result.reason).toMatch(/empty|no tasks/i);
+      });
+
+      it('re-seeds .pipeline/task-status.json when deleted mid-run', async () => {
+        // Use correct task header format: ### Task N: Title
+        await writePlan('### Task 1: First task\n**Story:** 1\n\n### Task 2: Second task\n**Story:** 2\n');
+        const ctx = { projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md') };
+
+        // First check creates the seeded file
+        const result1 = await checkStepCompletion(dir, 'build', ctx);
+        expect(result1.done).toBe(false); // pending tasks exist
+
+        // Verify file was created
+        const statusPath = join(dir, '.pipeline/task-status.json');
+        const first = JSON.parse(await readFile(statusPath, 'utf-8'));
+        expect(first.tasks).toBeDefined();
+        expect(first.tasks.length).toBeGreaterThan(0);
+
+        // Delete the file to simulate mid-run deletion
+        await rm(statusPath);
+
+        // Re-check should re-seed the file
+        const result2 = await checkStepCompletion(dir, 'build', ctx);
+        expect(result2.done).toBe(false); // still has pending
+
+        // File should be recreated
+        const second = JSON.parse(await readFile(statusPath, 'utf-8'));
+        expect(second.tasks).toBeDefined();
+        expect(second.tasks.length).toBe(first.tasks.length);
+      });
+
+      it('rebuilds corrupt JSON in task-status.json', async () => {
+        await writePlan('### Task 1: Task one\n**Story:** 1\n');
+        const statusPath = join(dir, '.pipeline/task-status.json');
+
+        // Write corrupt JSON
+        await mkdir(dirname(statusPath), { recursive: true });
+        await writeFile(statusPath, 'not valid json {');
+
+        const ctx = { projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md') };
+
+        // Predicate should handle corrupt JSON gracefully and rebuild
+        const result = await checkStepCompletion(dir, 'build', ctx);
+        expect(result.done).toBe(false); // has pending tasks
+
+        // File should be rebuilt (valid JSON)
+        const rebuilt = JSON.parse(await readFile(statusPath, 'utf-8'));
+        expect(rebuilt.tasks).toBeDefined();
+        expect(Array.isArray(rebuilt.tasks)).toBe(true);
+      });
+
+      it('fails with pending tasks (seeded state has pending)', async () => {
+        await writePlan('### Task 1: Task one\n**Story:** 1\n\n### Task 2: Task two\n**Story:** 2\n');
+
+        const ctx = { projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md') };
+        const result = await checkStepCompletion(dir, 'build', ctx);
+        // After seeding, both tasks are pending (no evidence/commits)
+        expect(result.done).toBe(false);
+        expect(result.reason).toMatch(/pending|not completed/i);
+      });
+
+      it('marks tasks as pending after seeding (without evidence commits)', async () => {
+        await writePlan('### Task 1: Task one\n**Story:** 1\n\n### Task 2: Task two\n**Story:** 2\n');
+        // Pre-write some completed tasks (forged state, no commit evidence)
+        await writeTasks([
+          { id: '1', name: 'Task 1', status: 'completed' },
+          { id: '2', name: 'Task 2', status: 'completed' },
+        ]);
+
+        const ctx = { projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md') };
+        const result = await checkStepCompletion(dir, 'build', ctx);
+        // seedTaskStatus resets tasks without evidence to pending
+        // So gate should fail with pending tasks
+        expect(result.done).toBe(false);
+        expect(result.reason).toMatch(/pending|not completed/i);
+      });
+
+      it('detects all-completed forged rows as incomplete (no evidence)', async () => {
+        // This tests the acceptance criterion: forged all-completed rows + zero commits → gate fails
+        await writePlan('### Task 1: Task one\n**Story:** 1\n');
+        // Write task-status showing completed but no evidence commits
+        await writeTasks([{ id: '1', name: 'Task 1', status: 'completed' }]);
+
+        const ctx = { projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md') };
+        const result = await checkStepCompletion(dir, 'build', ctx);
+        // seedTaskStatus resets to pending → gate fails
+        expect(result.done).toBe(false);
+        expect(result.reason).toMatch(/pending|not completed/i);
+      });
     });
   });
 

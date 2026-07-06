@@ -6,6 +6,7 @@ import { slugify } from './worktree.js';
 import { parseSourceRef } from './engineer/issue-ref.js';
 import { makeProductionGh } from './pr-labels.js';
 import { readStaleHaltTitle } from './halt-pr-rehabilitation.js';
+import { seedTaskStatus } from './task-seed.js';
 
 /**
  * Artifact glob patterns per step. Each pattern is `<dir>/*.md`, `<dir>/**\/*.md`,
@@ -267,6 +268,15 @@ export interface CompletionContext {
    * null if indeterminate. Injected by Conductor; returns undefined for non-git or legacy contexts.
    */
   isHeadPushed?: () => Promise<boolean | null>;
+  /**
+   * Project root directory. Used by the build predicate to seed task-status and derive completion.
+   */
+  projectRoot?: string;
+  /**
+   * Path to the plan file (absolute or relative to projectRoot). Used by the build
+   * predicate to seed task-status and validate plan presence/emptiness.
+   */
+  planPath?: string;
 }
 
 /**
@@ -428,7 +438,13 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
   // §"User-requested exit during a run"); the conductor's stall handler
   // clears it before re-checking, so a marker that survives to gate-check
   // means a true halt that bypassed the stall handler.
-  build: async (dir: string): Promise<CompletionResult> => {
+  //
+  // Reworked to seed and derive fresh evidence on every evaluation:
+  // - Calls seedTaskStatus(projectRoot, planPath) if context provides both
+  // - Ensures file exists and is in consistent state (deleted/corrupt recovery)
+  // - Returns false if plan is empty/missing (no executable work)
+  // - Evaluates completion based on derived state (forged rows fail)
+  build: async (dir: string, ctx: CompletionContext): Promise<CompletionResult> => {
     try {
       await access(join(dir, HALT_MARKER));
       return {
@@ -437,6 +453,41 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       };
     } catch {
       // No marker — proceed.
+    }
+
+    // If context provides projectRoot and planPath, seed the task status and validate the plan.
+    if (ctx.projectRoot && ctx.planPath) {
+      // Seed task-status.json from the plan, ensuring file exists and is consistent.
+      try {
+        await seedTaskStatus(ctx.projectRoot, ctx.planPath);
+      } catch (err) {
+        console.error(
+          `[build] seedTaskStatus failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        return {
+          done: false,
+          reason: `failed to seed task-status from plan: ${err instanceof Error ? err.message : 'unknown error'}`,
+        };
+      }
+
+      // Validate that the plan is not empty (has tasks to execute).
+      let planText: string;
+      try {
+        planText = await readFile(ctx.planPath, 'utf-8');
+      } catch {
+        return {
+          done: false,
+          reason: 'plan file not found or unreadable; cannot verify tasks exist',
+        };
+      }
+
+      // Quick check: plan must have at least one task block (### Task lines)
+      if (!planText.trim() || !/^###\s+Task\s+\d+/im.test(planText)) {
+        return {
+          done: false,
+          reason: 'plan is empty or contains no tasks (### Task N headings required)',
+        };
+      }
     }
 
     const statusPath = join(dir, '.pipeline/task-status.json');
