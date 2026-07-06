@@ -494,6 +494,18 @@ export async function deriveCompletion(
     });
 
     if (!matchingCommit) {
+      // No current evidence found; check if task has a pinned evidence stamp in sidecar
+      if (evidence.evidenceStamps.has(taskId)) {
+        // Task was previously completed and evidenced; preserve that status to prevent demotion
+        result[taskId].completed = true;
+        result[taskId].status = 'completed';
+        const stamp = evidence.evidenceStamps.get(taskId);
+        result[taskId].evidencedBy = stamp?.sha;
+        console.warn(
+          `[autoheal] Task ${taskId}: no current evidence in history but sidecar has evidence stamp (pinned completed); preventing demotion`,
+        );
+        continue;
+      }
       continue;
     }
 

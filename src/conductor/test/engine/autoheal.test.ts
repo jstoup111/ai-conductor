@@ -1075,4 +1075,60 @@ Another task to skip.
     expect(result['11']).toHaveProperty('status');
     expect(result['11'].status).toBe('skipped');
   });
+
+  it('preserves completed status when evidence commit is removed (never-demote pinned)', async () => {
+    const autoheal = await loadAutoheal();
+    const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
+
+    // Create a plan with paths
+    const planPath = join(gitDir, '.docs/plans/test-plan.md');
+    await mkdir(join(gitDir, '.docs/plans'), { recursive: true });
+    const planContent = `# Test Plan
+
+### Task 12: Never demote
+A task that will be pinned by evidence.
+
+- \`src/pinned.ts\`
+`;
+    await writeFile(planPath, planContent);
+    await execa('git', ['add', '.docs/plans/test-plan.md'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: gitDir });
+
+    // Create a commit touching the plan file with Task: trailer
+    await mkdir(join(gitDir, 'src'), { recursive: true });
+    await writeFile(join(gitDir, 'src/pinned.ts'), 'export const pinned = 1;');
+    await execa('git', ['add', 'src/pinned.ts'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'feat: pinned work\n\nTask: 12\n'], { cwd: gitDir });
+
+    // Get the SHA of the evidence commit
+    const evidenceCommitSha = (await execa('git', ['rev-parse', 'HEAD'], { cwd: gitDir })).stdout.trim();
+
+    // First derivation: should mark task as completed and store evidence stamp
+    const commits1 = await autoheal.listCommitsWithTrailers(gitDir);
+    const evidence1 = await createTaskEvidence(gitDir);
+    const result1 = await autoheal.deriveCompletion(gitDir, planPath, '', commits1, evidence1);
+
+    expect(result1).toHaveProperty('12');
+    expect(result1['12']).toHaveProperty('completed', true);
+    expect(result1['12']).toHaveProperty('evidencedBy');
+    expect(evidence1.evidenceStamps.has('12')).toBe(true);
+
+    // Simulate rebase/history edit by removing the evidence commit
+    // Use git reset --hard to go back to before the evidence commit
+    await execa('git', ['reset', '--hard', 'HEAD~1'], { cwd: gitDir });
+
+    // Second derivation: evidence stamp still exists in sidecar, task should remain completed
+    // Note: we need to manually reload the evidence from the sidecar to simulate persistence
+    const commits2 = await autoheal.listCommitsWithTrailers(gitDir);
+    // Manually set the evidence stamp to simulate it being loaded from persisted sidecar
+    const evidence2 = await createTaskEvidence(gitDir);
+    evidence2.evidenceStamps.set('12', { sha: evidenceCommitSha, form: 'trailer' });
+
+    const result2 = await autoheal.deriveCompletion(gitDir, planPath, '', commits2, evidence2);
+
+    // Task should remain completed despite evidence commit being removed
+    expect(result2).toHaveProperty('12');
+    expect(result2['12']).toHaveProperty('completed', true);
+    expect(result2['12'].completed).toBe(true);
+  });
 });
