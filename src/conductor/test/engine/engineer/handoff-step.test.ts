@@ -163,6 +163,65 @@ describe('runHandoff — ensure-running is fire-and-forget', () => {
   });
 });
 
+describe('runHandoff — mark-ready-failure handling (TS-8-2)', () => {
+  let tempDir: string;
+  beforeEach(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), 'handoff-step-mark-ready-'));
+  });
+  afterEach(async () => {
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  it('surfaces mark-ready-failure when draft PR reuse fails on markReadyForReview', async () => {
+    const DRAFT_PR_URL = 'https://github.com/acme/proj/pull/42';
+    const target = makeTarget(tempDir, 'proj', 'git@github.com:acme/proj.git');
+    const { print, out } = makePrint();
+    const launchCalls: string[] = [];
+
+    // Inject a gh runner that:
+    // - Returns a draft PR for pr list (detectDraftPr)
+    // - Fails on pr ready (markReadyForReview)
+    const gh = async (args: string[]) => {
+      if (args.includes('pr') && args.includes('list')) {
+        // detectDraftPr: return a draft PR URL
+        return { stdout: JSON.stringify([{ url: DRAFT_PR_URL }]) };
+      }
+      if (args.includes('pr') && args.includes('ready')) {
+        // markReadyForReview: fail with an error
+        throw new Error('gh pr ready: failed to mark PR as ready (rate limited)');
+      }
+      // Fallback for other commands (shouldn't happen in this test)
+      return { stdout: '' };
+    };
+
+    const entry = await runHandoff(target, 'spec/feat', {
+      gh,
+      engineerDir: tempDir,
+      launchFn: (p) => {
+        launchCalls.push(p);
+      },
+      print,
+    });
+
+    // Assert handoff completed successfully (mark-ready failure is non-fatal).
+    expect(entry).toEqual({ project: 'proj', prUrl: DRAFT_PR_URL });
+
+    // Assert the failure was logged via deps.print (not silent).
+    // setReady catches the error and logs it with "[pr-labels] setReady(...) error: ..."
+    const printed = out.join('\n');
+    expect(printed).toContain('[pr-labels] setReady');
+    expect(printed).toContain(DRAFT_PR_URL);
+    expect(printed).toContain('rate limited');
+
+    // Assert ensure-running fired exactly once.
+    expect(launchCalls).toEqual([tempDir]);
+
+    // Assert the key was recorded (authoring completed despite mark-ready failure).
+    const keys = await readAuthoredKeys({ engineerDir: tempDir });
+    expect(keys).toEqual([{ project: 'proj', feature: 'spec/feat' }]);
+  });
+});
+
 describe('runHandoff — un-injected handoff path leaks zero sessions (deep guard)', () => {
   let tempDir: string;
   beforeEach(async () => {

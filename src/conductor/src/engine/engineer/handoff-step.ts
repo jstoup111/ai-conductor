@@ -90,6 +90,7 @@ export async function runHandoff(
       },
       ledgerOpts,
       sourceRef: deps.sourceRef,
+      log: deps.print,
       // Task 20 (TS-8): Wire optional dependencies for draft PR reuse.
       detectDraftPr: async (branchName, cwd) => {
         try {
@@ -107,7 +108,7 @@ export async function runHandoff(
         await pushBranch(undefined, cwd, branchName);
       },
       markReadyForReview: async (prUrl, cwd) => {
-        await setReady(gh, cwd, prUrl);
+        await setReady(gh, cwd, prUrl, deps.print);
       },
     });
     if (handoffResult.kind === 'pr-opened') {
