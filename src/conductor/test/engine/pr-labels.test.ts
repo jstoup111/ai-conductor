@@ -24,6 +24,7 @@ import {
   convertToDraft,
   readHaltPresentation,
   ensureBodyMarker,
+  ensureHaltPresentation,
   makeProductionGh,
   makeProductionGit,
 } from '../../src/engine/pr-labels.js';
@@ -870,6 +871,133 @@ describe('marker constants', () => {
   it('NEEDS_REMEDIATION_BODY_MARKER and NEEDS_REMEDIATION_MARKER both exist', () => {
     expect(NEEDS_REMEDIATION_BODY_MARKER).toBeDefined();
     expect(NEEDS_REMEDIATION_MARKER).toBeDefined();
+  });
+});
+
+// ── ensureHaltPresentation ───────────────────────────────────────────────────
+
+describe('ensureHaltPresentation', () => {
+  it('happy path: writes all three markers then reads back to confirm all present', async () => {
+    const prBodyBefore = 'Some PR body';
+    const { gh, calls } = fakeGh([
+      // ensureBodyMarker: readHaltPresentation (to get body)
+      {
+        stdout: JSON.stringify({
+          isDraft: false,
+          labels: [],
+          body: prBodyBefore,
+        }),
+      },
+      { stdout: '' }, // ensureBodyMarker: pr edit (appends marker)
+      // readHaltPresentation before convert (to check if already draft)
+      {
+        stdout: JSON.stringify({
+          isDraft: false,
+          labels: [],
+          body: `${prBodyBefore}\n${NEEDS_REMEDIATION_BODY_MARKER}`,
+        }),
+      },
+      { stdout: '' }, // convertToDraft: pr ready --undo
+      { stdout: '' }, // addLabel: api
+      // readHaltPresentation after writes (verification read)
+      {
+        stdout: JSON.stringify({
+          isDraft: true,
+          labels: [{ name: 'needs-remediation' }],
+          body: `${prBodyBefore}\n${NEEDS_REMEDIATION_BODY_MARKER}`,
+        }),
+      },
+    ]);
+
+    const result = await ensureHaltPresentation(gh, '/repo', TEST_PR_URL);
+
+    expect(result).toBe('confirmed');
+
+    // Verify the sequence of calls
+    const editCall = calls.find((a) => a[0] === 'pr' && a[1] === 'edit');
+    const undoCall = calls.find((a) => a[0] === 'pr' && a[1] === 'ready' && a[2] === '--undo');
+    const apiCall = calls.find((a) => a[0] === 'api');
+
+    expect(editCall).toBeDefined();
+    expect(undoCall).toBeDefined();
+    expect(apiCall).toBeDefined();
+
+    // Verify the label API call uses REST
+    expect(apiCall).toEqual([
+      'api',
+      '--method',
+      'POST',
+      'repos/foo/bar/issues/42/labels',
+      '-f',
+      'labels[]=needs-remediation',
+    ]);
+  });
+
+  it('swallows errors and never throws', async () => {
+    const { gh } = fakeGh([new Error('network error')]);
+    await expect(
+      ensureHaltPresentation(gh, '/repo', TEST_PR_URL),
+    ).resolves.toBeDefined();
+  });
+
+  it('returns unconfirmed when read-back does not show isDraft', async () => {
+    const { gh } = fakeGh([
+      { stdout: '' }, // ensureBodyMarker
+      { stdout: '' }, // convertToDraft
+      { stdout: '' }, // addLabel
+      {
+        // readHaltPresentation returns isDraft: false
+        stdout: JSON.stringify({
+          isDraft: false,
+          labels: [{ name: 'needs-remediation' }],
+          body: `Some PR body\n${NEEDS_REMEDIATION_BODY_MARKER}`,
+        }),
+      },
+    ]);
+
+    const result = await ensureHaltPresentation(gh, '/repo', TEST_PR_URL);
+
+    expect(result).toBe('unconfirmed');
+  });
+
+  it('returns unconfirmed when read-back does not show the label', async () => {
+    const { gh } = fakeGh([
+      { stdout: '' }, // ensureBodyMarker
+      { stdout: '' }, // convertToDraft
+      { stdout: '' }, // addLabel
+      {
+        // readHaltPresentation returns empty labels
+        stdout: JSON.stringify({
+          isDraft: true,
+          labels: [],
+          body: `Some PR body\n${NEEDS_REMEDIATION_BODY_MARKER}`,
+        }),
+      },
+    ]);
+
+    const result = await ensureHaltPresentation(gh, '/repo', TEST_PR_URL);
+
+    expect(result).toBe('unconfirmed');
+  });
+
+  it('returns unconfirmed when read-back does not show the body marker', async () => {
+    const { gh } = fakeGh([
+      { stdout: '' }, // ensureBodyMarker
+      { stdout: '' }, // convertToDraft
+      { stdout: '' }, // addLabel
+      {
+        // readHaltPresentation returns body without marker
+        stdout: JSON.stringify({
+          isDraft: true,
+          labels: [{ name: 'needs-remediation' }],
+          body: 'Some PR body without marker',
+        }),
+      },
+    ]);
+
+    const result = await ensureHaltPresentation(gh, '/repo', TEST_PR_URL);
+
+    expect(result).toBe('unconfirmed');
   });
 });
 

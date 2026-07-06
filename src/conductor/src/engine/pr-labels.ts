@@ -748,3 +748,80 @@ export async function ensureBodyMarker(
     log?.(`[pr-labels] ensureBodyMarker(${prUrl}) error: ${err}`);
   }
 }
+
+// ── Halt presentation ensure (verify-after-write) ───────────────────────────
+
+/**
+ * Ensure all three halt-presentation markers are present on a PR (draft status,
+ * needs-remediation label, and body marker). Performs an idempotent verify-after-write:
+ * writes all three markers, then re-reads to verify all are present.
+ *
+ * Happy path returns 'confirmed'; any mismatch returns 'unconfirmed' (retry logic
+ * handled by Tasks 7-8).
+ *
+ * Never throws; swallows all errors internally and logs them via the optional
+ * `log` callback.
+ *
+ * @param runGh - Injectable gh runner (defaults to production)
+ * @param cwd - Working directory for gh operations
+ * @param prUrl - URL of the PR to ensure (e.g. https://github.com/owner/repo/pull/123)
+ * @param log - Optional logging callback
+ * @returns 'confirmed' if all three markers verified, 'unconfirmed' otherwise
+ */
+export async function ensureHaltPresentation(
+  runGh: GhRunner = makeProductionGh(),
+  cwd: string,
+  prUrl: string,
+  log?: (msg: string) => void,
+): Promise<'confirmed' | 'unconfirmed'> {
+  try {
+    // ── Step 1: ensure body marker ────────────────────────────────────────
+    await ensureBodyMarker(runGh, cwd, prUrl, undefined, log);
+
+    // ── Step 2: read current state to decide if we need to convert to draft ─
+    const beforeConvert = await readHaltPresentation(runGh, cwd, prUrl, log);
+    if (!beforeConvert) {
+      log?.(`[pr-labels] ensureHaltPresentation: could not read PR before convert`);
+      return 'unconfirmed';
+    }
+
+    // ── Step 3: convert to draft only if not already draft ─────────────────
+    if (!beforeConvert.isDraft) {
+      await convertToDraft(runGh, cwd, prUrl, log);
+    }
+
+    // ── Step 4: add the needs-remediation label via REST ──────────────────
+    await addLabel(runGh, cwd, prUrl, 'needs-remediation', log);
+
+    // ── Step 5: re-read to verify all three markers are present ───────────
+    const afterWrite = await readHaltPresentation(runGh, cwd, prUrl, log);
+    if (!afterWrite) {
+      log?.(`[pr-labels] ensureHaltPresentation: could not re-read PR after writes`);
+      return 'unconfirmed';
+    }
+
+    // ── Step 6: verify all three markers ──────────────────────────────────
+    const hasDraft = afterWrite.isDraft;
+    const hasLabel = afterWrite.labels.includes('needs-remediation');
+    const hasBodyMarker = afterWrite.body.includes(NEEDS_REMEDIATION_BODY_MARKER);
+
+    if (hasDraft && hasLabel && hasBodyMarker) {
+      return 'confirmed';
+    }
+
+    if (!hasDraft) {
+      log?.(`[pr-labels] ensureHaltPresentation(${prUrl}): missing draft status`);
+    }
+    if (!hasLabel) {
+      log?.(`[pr-labels] ensureHaltPresentation(${prUrl}): missing needs-remediation label`);
+    }
+    if (!hasBodyMarker) {
+      log?.(`[pr-labels] ensureHaltPresentation(${prUrl}): missing body marker`);
+    }
+
+    return 'unconfirmed';
+  } catch (err) {
+    log?.(`[pr-labels] ensureHaltPresentation(${prUrl}) error: ${err}`);
+    return 'unconfirmed';
+  }
+}
