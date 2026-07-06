@@ -259,6 +259,27 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   the reused PR's title/body, and the finish completion gate fails (fail-open on gh
   read errors) while the recorded PR title still starts with `needs-remediation:`
   (adr-2026-07-03-halt-pr-rehabilitation-at-finish).
+- **Engine-owned task-status.json with git-evidence auto-heal (#302).** The conductor
+  engine is now the single authority for `.pipeline/task-status.json`, which tracks
+  per-task completion state across build retries. Completion evidence is derived from
+  git log (commits with `Task: <id>` trailers). The auto-heal step (`engine/autoheal.ts`)
+  reconciles stale in-flight state before a gate retry by matching commits to tasks via
+  trailer match and content-hash, flipping `pending` tasks to `completed` when evidence
+  is unambiguous (word-boundary name match + file-path overlap with plan). All
+  reconciliations logged to `.pipeline/audit-trail/` for audit. Engine seeds task-status
+  on merge/upsert from plan; the trailer contract (`Task: <id>` in commit messages) is
+  verified by the rebase completion gate (FR-9, commit preservation).
+- **Daemon auto-park on N-attempt trigger (#302).** When the daemon encounters N
+  consecutive no-evidence gate misses (a gate showing no new commit evidence since its
+  prior attempt) or an empty/missing plan at seed time, it auto-parks the feature instead
+  of re-kicking infinitely. Auto-park writes `.daemon/parked/<slug>` with provenance
+  `auto` and the reason in the marker body (e.g., `'empty plan'` or `'no evidence after
+  2 attempts'`), emits a `ConductorEvent` of type `auto_park`, and halts gracefully.
+  Unpark (`conduct daemon unpark <slug>`) removes the park marker and resets the
+  evidence counter. The daemon dashboard's PARKED group displays provenance (`— auto-parked`
+  for machine-triggered, `— operator` for human-placed), distinguishing the two halt
+  styles. Auto-park is deterministic (triggered after N consecutive no-evidence misses);
+  operator park is human-triggered via the `conduct daemon park` subcommand.
 
 ### Changed
 
