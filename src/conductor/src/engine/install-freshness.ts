@@ -287,11 +287,21 @@ export async function ensureInstallFresh(opts: EnsureFreshOptions = {}): Promise
 // reaches here and `ensureInstallFresh`'s normal-repo behavior is unchanged.
 
 export interface RelinkPreflightOptions {
-  /** Override harness-root discovery (tests). */
+  /**
+   * Override harness-root discovery (tests). An explicit string behaves as an
+   * `ok` resolution at that root; `null` behaves as `unresolved` (skip).
+   * Takes precedence over `resolveInstalledRoot`.
+   */
   harnessRoot?: string | null;
   /** Override the `bin/install` runner (tests). When set, the real installer-
    *  existence check is skipped (the injected runner models install behavior). */
   runner?: InstallRunner;
+  /**
+   * Override installed-root resolution (tests). Defaults to
+   * `resolveInstalledHarnessRoot` — the relink authorizes writes to operator
+   * globals, so it must never run against a worktree-resolved root (#363).
+   */
+  resolveInstalledRoot?: () => Promise<InstalledRootResolution>;
   /** Diagnostic sink (defaults to stderr). */
   log?: (message: string) => void;
 }
@@ -305,13 +315,35 @@ export interface RelinkPreflightOptions {
  */
 export async function relinkSkillsForSelfBuild(opts: RelinkPreflightOptions = {}): Promise<void> {
   const log = opts.log ?? ((m: string) => console.error(m));
-  const harnessRoot =
-    opts.harnessRoot !== undefined ? opts.harnessRoot : await resolveHarnessRoot();
-  if (!harnessRoot) {
+
+  // Root discovery goes through the INSTALLED-root resolver (#363): the relink
+  // repoints operator globals, so a worktree-resolved root must abort loudly
+  // (HALT upstream), never run the installer. An explicit harnessRoot override
+  // keeps the existing test seam: string → ok, null → unresolved.
+  const resolution: InstalledRootResolution =
+    opts.harnessRoot !== undefined
+      ? opts.harnessRoot === null
+        ? { status: 'unresolved' }
+        : { status: 'ok', root: opts.harnessRoot }
+      : opts.resolveInstalledRoot
+        ? await opts.resolveInstalledRoot()
+        : await resolveInstalledHarnessRoot({ log });
+
+  if (resolution.status === 'unresolved') {
     // Nothing to link against — report and skip rather than crash (TR-4 negative).
     log('skill-relink preflight: harness root unresolved; skipping the self-build relink.');
     return;
   }
+
+  if (resolution.status === 'rejected') {
+    throw new InstallStaleError(
+      `Skill relink refused for the harness self-build: ${resolution.detail} ` +
+        'Running `bin/install --update` at this root would repoint operator globals at a ' +
+        'directory that is deleted at ship time (#363). Not dispatching.',
+    );
+  }
+
+  const harnessRoot = resolution.root;
 
   // Production path (no injected runner): verify the real installer up front so a
   // missing / non-executable `bin/install` surfaces a keyed error naming the
