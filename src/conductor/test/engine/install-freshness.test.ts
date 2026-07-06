@@ -10,15 +10,17 @@
  * All collaborators are injected — no real `bin/install`, no real TTY.
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, chmod } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   ensureInstallFresh,
   relinkSkillsForSelfBuild,
+  resolveInstalledHarnessRoot,
   InstallStaleError,
   type InstallRunner,
+  type InstalledRootResolution,
 } from '../../src/engine/install-freshness.js';
 import { dispatchDaemonSupervisor } from '../../src/engine/daemon-supervisor-cli.js';
 import type { Supervisor } from '../../src/engine/daemon-tmux.js';
@@ -97,6 +99,161 @@ describe('ensureInstallFresh — staleness policy', () => {
       ensureInstallFresh({ harnessRoot: null, runner, interactive: false, log: () => {} }),
     ).resolves.toBeUndefined();
     expect(calls).toEqual([]); // runner never invoked
+  });
+});
+
+describe('resolveInstalledHarnessRoot — installed-root resolution ladder (#363 / TR-2)', () => {
+  // All seams injected: no real git, no real fs probing outside temp dirs, and
+  // never the real ~/.ai-conductor or ~/.claude. `registryPath` points at temp
+  // files only.
+
+  /** Seam kit: a probed root, a git runner answer, and a bin/install answer. */
+  function seams(over: {
+    probed?: string | null;
+    /** What `git rev-parse --git-common-dir` prints, or an Error to throw. */
+    commonDir?: string | Error;
+    /** Paths (…/bin/install) that exist. Default: everything exists. */
+    installerAt?: string[] | 'all';
+  }) {
+    const gitCalls: Array<{ args: string[]; cwd: string }> = [];
+    return {
+      gitCalls,
+      probeRoot: async () => (over.probed === undefined ? '/main/harness' : over.probed),
+      git: async (args: string[], cwd: string) => {
+        gitCalls.push({ args, cwd });
+        if (over.commonDir instanceof Error) throw over.commonDir;
+        return over.commonDir ?? '.git';
+      },
+      pathExists: async (p: string) =>
+        over.installerAt === undefined || over.installerAt === 'all'
+          ? true
+          : over.installerAt.some((root) => p === join(root, 'bin', 'install')),
+      log: () => {},
+    };
+  }
+
+  it('main checkout: probe resolves a non-worktree root with bin/install → ok at that root', async () => {
+    // Relative `.git` is what git prints from the main checkout's root.
+    const s = seams({ probed: '/main/harness', commonDir: '.git' });
+    const r = await resolveInstalledHarnessRoot(s);
+    expect(r).toEqual({ status: 'ok', root: '/main/harness' });
+    // Detection consulted git in the probed root.
+    expect(s.gitCalls).toEqual([
+      { args: ['rev-parse', '--git-common-dir'], cwd: '/main/harness' },
+    ]);
+  });
+
+  it('worktree by path (/.worktrees/): derives the main checkout from the git common dir', async () => {
+    const s = seams({ probed: '/main/.worktrees/x', commonDir: '/main/.git' });
+    const r = await resolveInstalledHarnessRoot(s);
+    expect(r).toEqual({ status: 'ok', root: '/main' });
+  });
+
+  it('linked worktree at a non-.worktrees path: common dir outside the probed root → derives main', async () => {
+    const s = seams({ probed: '/elsewhere/linked-wt', commonDir: '/main/.git' });
+    const r = await resolveInstalledHarnessRoot(s);
+    expect(r).toEqual({ status: 'ok', root: '/main' });
+  });
+
+  it('git runner throws → rejected (resolver itself never throws), detail names the probed path', async () => {
+    const s = seams({
+      probed: '/main/.worktrees/x',
+      commonDir: new Error('fatal: not a git repository'),
+    });
+    const r = await resolveInstalledHarnessRoot(s);
+    expect(r.status).toBe('rejected');
+    if (r.status === 'rejected') {
+      expect(r.detail).toContain('/main/.worktrees/x');
+    }
+  });
+
+  it('derived root lacks bin/install → rejected, detail names the derived root', async () => {
+    const s = seams({
+      probed: '/main/.worktrees/x',
+      commonDir: '/main/.git',
+      installerAt: [], // nothing has bin/install
+    });
+    const r = await resolveInstalledHarnessRoot(s);
+    expect(r.status).toBe('rejected');
+    if (r.status === 'rejected') {
+      expect(r.detail).toContain('/main');
+    }
+  });
+
+  it('derived root STILL under /.worktrees/ → rejected (never authorizes a worktree root)', async () => {
+    const s = seams({
+      probed: '/main/.worktrees/outer/.worktrees/inner',
+      commonDir: '/main/.worktrees/outer/.git',
+    });
+    const r = await resolveInstalledHarnessRoot(s);
+    expect(r.status).toBe('rejected');
+    if (r.status === 'rejected') {
+      expect(r.detail).toContain('/main/.worktrees/outer');
+    }
+  });
+
+  it('probe finds no root at all → unresolved (parity with existing null semantics)', async () => {
+    const s = seams({ probed: null });
+    const r = await resolveInstalledHarnessRoot(s);
+    expect(r).toEqual({ status: 'unresolved' });
+    expect(s.gitCalls).toEqual([]); // no derivation attempted without a probe
+  });
+
+  describe('advisory registry cross-check (warn-only, never blocks)', () => {
+    let dir: string;
+    beforeEach(async () => {
+      dir = await mkdtemp(join(tmpdir(), 'installed-root-registry-'));
+    });
+    afterEach(async () => {
+      await rm(dir, { recursive: true, force: true });
+    });
+
+    it('registry recording a different path → result unchanged, warning logged', async () => {
+      const registryPath = join(dir, 'registry.json');
+      await writeFile(
+        registryPath,
+        JSON.stringify([
+          { schemaVersion: 1, name: 'h', path: '/somewhere/else', status: 'registered', registeredAt: 'x' },
+        ]),
+      );
+      const logs: string[] = [];
+      const s = { ...seams({ probed: '/main/harness', commonDir: '.git' }), log: (m: string) => logs.push(m) };
+      const r = await resolveInstalledHarnessRoot({ ...s, registryPath });
+      expect(r).toEqual({ status: 'ok', root: '/main/harness' });
+      expect(logs.join('\n')).toMatch(/registry/i);
+    });
+
+    it('registry missing → result unchanged, no throw', async () => {
+      const s = seams({ probed: '/main/harness', commonDir: '.git' });
+      const r = await resolveInstalledHarnessRoot({
+        ...s,
+        registryPath: join(dir, 'nope', 'registry.json'),
+      });
+      expect(r).toEqual({ status: 'ok', root: '/main/harness' });
+    });
+
+    it('registry unreadable (corrupt JSON) → result unchanged, no throw', async () => {
+      const registryPath = join(dir, 'registry.json');
+      await writeFile(registryPath, '{not json');
+      const s = seams({ probed: '/main/harness', commonDir: '.git' });
+      const r = await resolveInstalledHarnessRoot({ ...s, registryPath });
+      expect(r).toEqual({ status: 'ok', root: '/main/harness' });
+    });
+
+    it('registry recording the resolved root → no disagreement warning', async () => {
+      const registryPath = join(dir, 'registry.json');
+      await writeFile(
+        registryPath,
+        JSON.stringify([
+          { schemaVersion: 1, name: 'h', path: '/main/harness', status: 'registered', registeredAt: 'x' },
+        ]),
+      );
+      const logs: string[] = [];
+      const s = { ...seams({ probed: '/main/harness', commonDir: '.git' }), log: (m: string) => logs.push(m) };
+      const r = await resolveInstalledHarnessRoot({ ...s, registryPath });
+      expect(r).toEqual({ status: 'ok', root: '/main/harness' });
+      expect(logs.filter((l) => /registry/i.test(l) && /warn|disagree|not recorded/i.test(l))).toEqual([]);
+    });
   });
 });
 
