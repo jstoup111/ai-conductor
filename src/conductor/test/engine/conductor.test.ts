@@ -28,6 +28,7 @@ import {
   recordApprovals,
   approvalKey,
   buildRetryHint,
+  appendRemediationTasks,
 } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import type { GitRunner } from '../../src/engine/pr-labels.js';
@@ -5458,5 +5459,148 @@ describe('durable no-evidence counter', () => {
     expect(sidecarData.noEvidenceAttempts).toBeGreaterThan(0);
     expect(sidecarData).toHaveProperty('evidenceStamps');
     expect(sidecarData).toHaveProperty('migrationGrandfather');
+  });
+});
+
+describe('appendRemediationTasks', () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'append-remediation-tasks-test-'));
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('appends valid remediation task with gate-source prefix to plan successfully', async () => {
+    const planPath = join(dir, 'plan.md');
+    await writeFile(planPath, '# Implementation Plan\n\n## Tasks\n\n### Task 1: First task\n');
+
+    const remediationList = [
+      {
+        id: 'rem-fr10-1',
+        title: 'Fix the thing in file.ts:123',
+      },
+    ];
+
+    const result = await appendRemediationTasks(dir, planPath, remediationList);
+
+    expect(result).toEqual({ success: true });
+    const content = await readFile(planPath, 'utf-8');
+    expect(content).toContain('### Task rem-fr10-1: Fix the thing in file.ts:123');
+  });
+
+  it('rejects empty task id with error', async () => {
+    const planPath = join(dir, 'plan.md');
+    await writeFile(planPath, '# Implementation Plan\n');
+
+    const remediationList = [
+      {
+        id: '',
+        title: 'Some title',
+      },
+    ];
+
+    const result = await appendRemediationTasks(dir, planPath, remediationList);
+
+    expect(result).toEqual({ success: false, error: expect.stringContaining('empty') });
+  });
+
+  it('accepts task without gate-source prefix but logs warning', async () => {
+    const planPath = join(dir, 'plan.md');
+    await writeFile(planPath, '# Implementation Plan\n');
+
+    const logMessages: string[] = [];
+    const remediationList = [
+      {
+        id: 'task-001',
+        title: 'Some task without prefix',
+      },
+    ];
+
+    const result = await appendRemediationTasks(dir, planPath, remediationList, {
+      log: (msg) => logMessages.push(msg),
+    });
+
+    expect(result).toEqual({ success: true });
+    const content = await readFile(planPath, 'utf-8');
+    expect(content).toContain('### Task task-001: Some task without prefix');
+    expect(logMessages.some((m) => m.includes('prefix') || m.includes('gate-source'))).toBe(true);
+  });
+
+  it('appended task header re-parses via TASK_ID_PATTERN grammar', async () => {
+    const planPath = join(dir, 'plan.md');
+    await writeFile(planPath, '# Implementation Plan\n');
+
+    const remediationList = [
+      {
+        id: 'rem-adr-001',
+        title: 'Update architecture decision',
+      },
+    ];
+
+    const result = await appendRemediationTasks(dir, planPath, remediationList);
+
+    expect(result).toEqual({ success: true });
+    const content = await readFile(planPath, 'utf-8');
+
+    // Verify it matches the TASK_ID_PATTERN regex: [A-Za-z0-9._-]+
+    const taskHeaderRegex = /^### Task ([A-Za-z0-9._-]+): (.+)$/m;
+    const match = content.match(taskHeaderRegex);
+
+    expect(match).not.toBeNull();
+    expect(match?.[1]).toBe('rem-adr-001');
+    expect(match?.[2]).toBe('Update architecture decision');
+  });
+
+  it('appends multiple remediation tasks in order', async () => {
+    const planPath = join(dir, 'plan.md');
+    await writeFile(planPath, '# Implementation Plan\n');
+
+    const remediationList = [
+      {
+        id: 'rem-test-1',
+        title: 'First remediation task',
+      },
+      {
+        id: 'rem-test-2',
+        title: 'Second remediation task',
+      },
+    ];
+
+    const result = await appendRemediationTasks(dir, planPath, remediationList);
+
+    expect(result).toEqual({ success: true });
+    const content = await readFile(planPath, 'utf-8');
+    const firstIndex = content.indexOf('### Task rem-test-1:');
+    const secondIndex = content.indexOf('### Task rem-test-2:');
+
+    expect(firstIndex).toBeGreaterThan(-1);
+    expect(secondIndex).toBeGreaterThan(-1);
+    expect(firstIndex).toBeLessThan(secondIndex);
+  });
+
+  it('validates all tasks before appending any', async () => {
+    const planPath = join(dir, 'plan.md');
+    await writeFile(planPath, '# Implementation Plan\n');
+
+    const remediationList = [
+      {
+        id: 'rem-test-1',
+        title: 'Valid task',
+      },
+      {
+        id: '', // Invalid: empty id
+        title: 'Invalid task',
+      },
+    ];
+
+    const result = await appendRemediationTasks(dir, planPath, remediationList);
+
+    expect(result).toEqual({ success: false, error: expect.stringContaining('empty') });
+    const content = await readFile(planPath, 'utf-8');
+    // Valid task should NOT be appended if validation fails
+    expect(content).not.toContain('### Task rem-test-1:');
   });
 });

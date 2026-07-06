@@ -2949,3 +2949,92 @@ export async function recordActivePlanPath(projectRoot: string, planPath: string
     await require('node:fs/promises').rm(tempDir, { recursive: true, force: true });
   }
 }
+
+/**
+ * Task 19: Append remediation tasks to the plan file with validation.
+ *
+ * Validates that all remediation task IDs are non-empty and match TASK_ID_PATTERN,
+ * then appends them to the plan file. Gate-source prefix is expected but not required.
+ *
+ * @param projectRoot - Project root directory
+ * @param planPath - Path to the plan file to append to
+ * @param remediationList - List of remediation tasks with id and title
+ * @param options - Optional logger function
+ * @returns { success: true } on success, { success: false, error: string } on failure
+ */
+export async function appendRemediationTasks(
+  projectRoot: string,
+  planPath: string,
+  remediationList: Array<{ id: string; title: string }>,
+  options?: { log?: (msg: string) => void },
+): Promise<{ success: true } | { success: false; error: string }> {
+  const log = options?.log ?? (() => {});
+
+  // TASK_ID_PATTERN from autoheal.ts: [A-Za-z0-9._-]+
+  const TASK_ID_PATTERN = '[A-Za-z0-9._-]+';
+  const taskIdRegex = new RegExp(`^${TASK_ID_PATTERN}$`);
+
+  // Validate all task IDs before appending anything
+  for (const task of remediationList) {
+    // Check for empty ID
+    if (!task.id || task.id.trim() === '') {
+      return {
+        success: false,
+        error: `Task ID must be non-empty, but got empty string for title: "${task.title}"`,
+      };
+    }
+
+    // Check if ID matches pattern
+    if (!taskIdRegex.test(task.id)) {
+      return {
+        success: false,
+        error: `Task ID "${task.id}" does not match TASK_ID_PATTERN [A-Za-z0-9._-]+`,
+      };
+    }
+
+    // Warn if gate-source prefix is missing (rem-fr10-*, rem-adr-*, rem-test-*, etc.)
+    if (!task.id.startsWith('rem-')) {
+      log(`Warning: Task ID "${task.id}" missing gate-source prefix (expected rem-*)`);
+    }
+  }
+
+  // Read existing plan content
+  let planContent = '';
+  try {
+    planContent = await readFile(planPath, 'utf-8');
+  } catch {
+    // If plan file doesn't exist, start with empty content
+    planContent = '';
+  }
+
+  // Append each remediation task header
+  let updated = planContent;
+  for (const task of remediationList) {
+    const taskHeader = `### Task ${task.id}: ${task.title}\n`;
+    updated += taskHeader;
+  }
+
+  // Write plan atomically using temp file + rename pattern
+  const pipelineDir = join(projectRoot, '.pipeline');
+  await mkdir(pipelineDir, { recursive: true });
+
+  const tempFile = `${planPath}.tmp-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  try {
+    await writeFile(tempFile, updated, 'utf-8');
+    // Rename temp file to target (atomic on most filesystems)
+    await require('node:fs/promises').rename(tempFile, planPath);
+  } catch (error) {
+    // Clean up temp file if something went wrong
+    try {
+      await unlinkFile(tempFile);
+    } catch {
+      // Ignore cleanup errors
+    }
+    return {
+      success: false,
+      error: `Failed to append remediation tasks to plan: ${error instanceof Error ? error.message : 'unknown error'}`,
+    };
+  }
+
+  return { success: true };
+}
