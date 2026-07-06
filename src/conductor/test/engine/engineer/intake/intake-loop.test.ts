@@ -362,4 +362,74 @@ describe('runIntakeLoop', () => {
     expect(sleep).toHaveBeenCalledTimes(3);
     expect(delays).toEqual([60000, 60000, 60000]);
   });
+
+  // ───────────────────────────────────────────────────────────────────────
+  // Task 6: Whole-tick failure does not crash the loop.
+  //
+  // Story: FR-27 negative · Plan: .docs/plans/2026-06-30-background-intake-conduct-loop.md (Task 6)
+  //
+  // `intakeTick()` already isolates per-repo poll/enqueue failures (Task 5),
+  // but an unexpected failure elsewhere in the tick (e.g. notify()) is not
+  // wrapped and would otherwise propagate out of intakeTick(). This test
+  // forces that path via a throwing `notify()` on the first tick and asserts
+  // `runIntakeLoop` catches it, logs it, and proceeds to a second tick.
+  // ───────────────────────────────────────────────────────────────────────
+  it('a tick that throws (e.g. notify() rejects) is caught, logged, and the loop continues to the next tick', async () => {
+    const mod = (await import(
+      '../../../../src/engine/engineer/intake/intake-loop.js'
+    )) as Record<string, any>;
+    const runIntakeLoop = mod.runIntakeLoop as (deps: any, opts: any) => Promise<void>;
+
+    const envelope = {
+      id: 'o/a#1',
+      source: 'github-issues',
+      sourceRef: 'o/a#1',
+      text: 'idea for o/a#1',
+      status: 'pending' as const,
+      receivedAt: '2026-06-30T00:00:00.000Z',
+    };
+
+    let pollCalls = 0;
+    const poll = vi.fn(async () => {
+      pollCalls += 1;
+      // Only the first tick captures an envelope, so only the first tick's
+      // notify() call is exercised (and throws).
+      return pollCalls === 1 ? [envelope] : [];
+    });
+    const enqueue = vi.fn(async (_envelope: unknown) => {});
+    const notify = vi.fn(async (_ideas: unknown[]) => {
+      if (pollCalls === 1) {
+        throw new Error('notify: total tick failure');
+      }
+    });
+    const now = () => new Date('2026-06-30T00:00:00.000Z');
+    const log = vi.fn((_msg: string) => {});
+
+    const STOP = { __stop: true };
+    let sleepCalls = 0;
+    const sleep = vi.fn(async (_ms: number) => {
+      sleepCalls += 1;
+      if (sleepCalls >= 2) {
+        throw STOP;
+      }
+    });
+
+    await expect(
+      runIntakeLoop(
+        { poll, enqueue, notify, sleep, now, log },
+        { intervalMs: 1000, once: false },
+      ).catch((e: unknown) => {
+        if (e !== STOP) throw e;
+      }),
+    ).resolves.toBeUndefined();
+
+    // The first tick's notify() threw, but the loop caught it, logged it, and
+    // proceeded through sleep to a second tick — no exception escaped
+    // runIntakeLoop other than the deliberate STOP sentinel from sleep().
+    expect(pollCalls).toBe(2);
+    expect(sleep).toHaveBeenCalledTimes(2);
+    expect(log.mock.calls.some((call: unknown[]) => String(call[0]).includes('notify: total tick failure'))).toBe(
+      true,
+    );
+  });
 });

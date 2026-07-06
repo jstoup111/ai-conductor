@@ -128,7 +128,15 @@ export async function intakeTick(deps: IntakeLoopDeps): Promise<IntakeTickSummar
  */
 export async function runIntakeLoop(deps: IntakeLoopDeps, opts: IntakeLoopOptions): Promise<void> {
   for (;;) {
-    await intakeTick(deps);
+    try {
+      await intakeTick(deps);
+    } catch (err) {
+      // Whole-tick failure backstop (Task 6): intakeTick() already isolates
+      // per-repo poll/enqueue failures internally, but an unexpected failure
+      // elsewhere in the tick (e.g. notify()) must not crash the loop. Log it
+      // and proceed to the next sleep/tick cycle.
+      deps.log(`intake loop: tick failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
     if (opts.once === true) {
       return;
     }
