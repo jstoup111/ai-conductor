@@ -11,6 +11,7 @@ import {
 import type { BacklogItem } from '../../src/engine/daemon.js';
 import type { ComplexityTier } from '../../src/types/index.js';
 import type { PriorityResolution } from '../../src/engine/backlog-priority.js';
+import type { GatedItem } from '../../src/engine/daemon-backlog.js';
 
 function item(slug: string, tier?: ComplexityTier): BacklogItem {
   return tier ? { slug, tier } : { slug };
@@ -116,6 +117,35 @@ describe('engine/daemon-dashboard — scanInheritedState (FR-2/FR-3)', () => {
         prUrl: 'https://github.com/o/r/pull/8',
       },
     ]);
+  });
+
+  it('a slug both processed and gated appears only in PROCESSED (pinned precedence)', async () => {
+    await makeProcessed('dup');
+    const gatedDup: GatedItem = {
+      kind: 'spec',
+      slug: 'dup',
+      reason: 'other-owner',
+      otherOwner: 'someone',
+      remedy: 'ping them',
+    };
+    const gatedOnly: GatedItem = {
+      kind: 'spec',
+      slug: 'only-gated',
+      reason: 'unowned-post-cutover',
+      remedy: 'claim it',
+    };
+
+    const state = await scanInheritedState({
+      worktreeBase,
+      processedDir,
+      discover: async () => ({ items: [], waiting: [], gated: [gatedDup, gatedOnly] }),
+    });
+
+    expect(state.processed.map((p) => p.slug)).toEqual(['dup']);
+    expect((state.gated ?? []).some((g) => g.kind === 'spec' && g.slug === 'dup')).toBe(false);
+    expect((state.gated ?? []).some((g) => g.kind === 'spec' && g.slug === 'only-gated')).toBe(
+      true,
+    );
   });
 
   it('eligible carries the backlog tier; processed carries the persisted PR url', async () => {
@@ -378,6 +408,142 @@ describe('engine/daemon-dashboard — renderDashboard WAITING group (FR-6)', () 
     const eligibleSection = out.slice(eligibleSectionStart, nextSectionStart);
     expect(eligibleSection).not.toContain('• dup');
     expect(out).toContain('WAITING (1)');
+  });
+});
+
+describe('engine/daemon-dashboard — renderDashboard GATED group (FR-7/FR-11, Task 9)', () => {
+  it('renders a populated GATED section with slug, reason, and remedy; names the owner for other-owner', () => {
+    const state: InheritedState = {
+      halted: [],
+      inProgress: [],
+      eligible: [],
+      processed: [],
+      processedCount: 0,
+      gated: [
+        {
+          kind: 'spec',
+          slug: 'owned-elsewhere',
+          reason: 'other-owner',
+          otherOwner: 'alice',
+          remedy: 'ask alice to release it',
+        },
+        {
+          kind: 'spec',
+          slug: 'stale-claim',
+          reason: 'unowned-post-cutover',
+          remedy: 'claim it via daemon identity config',
+        },
+      ],
+    };
+    const out = renderDashboard(state);
+    expect(out).toContain('GATED (2)');
+    expect(out).toContain('owned-elsewhere');
+    expect(out).toContain('other-owner');
+    expect(out).toContain('alice');
+    expect(out).toContain('ask alice to release it');
+    expect(out).toContain('stale-claim');
+    expect(out).toContain('unowned-post-cutover');
+    expect(out).toContain('claim it via daemon identity config');
+  });
+
+  it('renders repo-kind gated entries as section-level warning lines', () => {
+    const state: InheritedState = {
+      halted: [],
+      inProgress: [],
+      eligible: [],
+      processed: [],
+      processedCount: 0,
+      gated: [
+        {
+          kind: 'repo',
+          warning: 'no-cutover',
+          remedy: 'configure a grandfather cutover date',
+        },
+      ],
+    };
+    const out = renderDashboard(state);
+    expect(out).toContain('GATED (1)');
+    expect(out.toLowerCase()).toContain('un-owned');
+    expect(out).toContain('configure a grandfather cutover date');
+  });
+
+  it('empty gated list → an explicit GATED (0) header is still rendered (never a silently missing section)', () => {
+    const out = renderDashboard({
+      halted: [],
+      inProgress: [],
+      eligible: [],
+      processed: [],
+      processedCount: 0,
+      gated: [],
+    });
+    expect(out).toContain('GATED (0)');
+  });
+
+  it('a missing gated field renders no GATED section (discovery-failure fallback, mirrors ELIGIBLE)', () => {
+    const out = renderDashboard({
+      halted: [],
+      inProgress: [],
+      eligible: [],
+      processed: [],
+      processedCount: 0,
+    });
+    expect(out).not.toContain('GATED');
+  });
+
+  it('a gated spec slug is excluded from ELIGIBLE and WAITING (GATED outranks both)', () => {
+    const state: InheritedState = {
+      halted: [],
+      inProgress: [],
+      eligible: [{ slug: 'dup' }],
+      processed: [],
+      processedCount: 0,
+      waiting: [{ slug: 'other', verdict: { kind: 'indeterminate', detail: 'x' } }],
+      gated: [
+        { kind: 'spec', slug: 'dup', reason: 'other-owner', otherOwner: 'bob', remedy: 'ask bob' },
+      ],
+    };
+    const out = renderDashboard(state);
+    const eligibleSectionStart = out.indexOf('ELIGIBLE');
+    const processedSectionStart = out.indexOf('PROCESSED');
+    const eligibleSection = out.slice(eligibleSectionStart, processedSectionStart);
+    expect(eligibleSection).not.toContain('• dup');
+    expect(out).toContain('GATED (1)');
+  });
+});
+
+describe('engine/daemon-dashboard — exactly-one-bucket invariant (Task 10, S2 Done When 2)', () => {
+  it('a slug present in every bucket type appears exactly once across the whole render', () => {
+    const state: InheritedState = {
+      halted: [{ slug: 'halted-slug', reason: 'boom' }],
+      inProgress: [{ slug: 'inprog-slug', step: 'build' }],
+      eligible: [{ slug: 'eligible-slug' }],
+      processed: [{ slug: 'processed-slug' }],
+      processedCount: 1,
+      waiting: [{ slug: 'waiting-slug', verdict: { kind: 'indeterminate', detail: 'x' } }],
+      gated: [
+        {
+          kind: 'spec',
+          slug: 'gated-slug',
+          reason: 'other-owner',
+          otherOwner: 'alice',
+          remedy: 'ask alice',
+        },
+      ],
+    };
+    const out = renderDashboard(state);
+
+    const slugs = [
+      'halted-slug',
+      'inprog-slug',
+      'waiting-slug',
+      'gated-slug',
+      'eligible-slug',
+      'processed-slug',
+    ];
+    for (const slug of slugs) {
+      const occurrences = out.split(slug).length - 1;
+      expect(occurrences).toBe(1);
+    }
   });
 });
 

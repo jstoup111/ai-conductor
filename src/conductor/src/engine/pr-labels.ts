@@ -390,6 +390,34 @@ export async function findOrCreatePr(
   }
 }
 
+/**
+ * Look up the PR (of any state — open, closed, merged) associated with a
+ * branch, and return its URL if one exists. LOOKUP-ONLY: unlike
+ * {@link findOrCreatePr}, this never creates a PR (no draft, no `pr create`).
+ * Intended for resolving gated spec PRs that already exist on origin but have
+ * no per-slug worktree state locally. Swallows all errors and returns
+ * `undefined` when no PR is found or the runner fails.
+ */
+export async function resolveSpecPrUrl(
+  runGh: GhRunner = makeProductionGh(),
+  cwd: string,
+  branch: string,
+  log?: (msg: string) => void,
+): Promise<string | undefined> {
+  try {
+    const { stdout } = await runGh(
+      ['pr', 'list', '--state', 'all', '--head', branch, '--json', 'url,state', '--limit', '1'],
+      { cwd },
+    );
+    const data: Array<{ url?: string; state?: string }> = JSON.parse(stdout);
+    const url = data[0]?.url;
+    return url || undefined;
+  } catch (err) {
+    log?.(`[pr-labels] resolveSpecPrUrl(${branch}) error: ${err}`);
+    return undefined;
+  }
+}
+
 // ── PR comment + ready ────────────────────────────────────────────────────────
 
 /**
@@ -416,6 +444,15 @@ export async function comment(
  * edit that comment in place instead of appending a new one (issue #159).
  */
 export const NEEDS_REMEDIATION_MARKER = '<!-- conductor:needs-remediation -->';
+
+/**
+ * Stable hidden marker identifying the single harness-authored owner-gate
+ * status comment on a PR for a spec that is currently owner-gated. Embedded
+ * in the comment body so subsequent scans can find and edit that comment in
+ * place instead of appending a new one, mirroring
+ * {@link NEEDS_REMEDIATION_MARKER}.
+ */
+export const OWNER_GATED_MARKER = '<!-- conductor:owner-gated -->';
 
 interface ParsedCommentRef {
   owner: string;
@@ -511,6 +548,84 @@ export async function upsertComment(
 
   // No editable marked comment — create one carrying the marker.
   await comment(runGh, cwd, prUrl, taggedBody, log);
+}
+
+/**
+ * Post a comment on an issue (as opposed to a PR — see {@link comment}).
+ * `issueUrl` must be a `github.com/.../issues/N` URL. Swallows all errors.
+ */
+export async function issueComment(
+  runGh: GhRunner = makeProductionGh(),
+  cwd: string,
+  issueUrl: string,
+  body: string,
+  log?: (msg: string) => void,
+): Promise<void> {
+  try {
+    await runGh(['issue', 'comment', issueUrl, '--body', body], { cwd });
+  } catch (err) {
+    log?.(`[pr-labels] issueComment(${issueUrl}) error: ${err}`);
+  }
+}
+
+/**
+ * Issue-comment counterpart to {@link upsertComment}: upserts a single
+ * marker-tagged comment on an issue rather than a PR. Mirrors the same
+ * lookup/PATCH/create-fallback contract (find by marker, PATCH in place on a
+ * failure-terminal basis, else create). Best-effort / non-throwing.
+ */
+export async function upsertIssueComment(
+  runGh: GhRunner = makeProductionGh(),
+  cwd: string,
+  issueUrl: string,
+  marker: string,
+  body: string,
+  log?: (msg: string) => void,
+): Promise<void> {
+  const taggedBody = `${marker}\n${body}`;
+
+  let matchedUrl: string | undefined;
+  try {
+    const { stdout } = await runGh(['issue', 'view', issueUrl, '--json', 'comments'], { cwd });
+    const data: GhCommentJson = JSON.parse(stdout);
+    const matched = (data.comments ?? []).find(
+      (c) => typeof c?.body === 'string' && c.body.includes(marker),
+    );
+    matchedUrl = matched?.url;
+  } catch (err) {
+    log?.(`[pr-labels] upsertIssueComment(${issueUrl}) lookup failed: ${err} — creating new comment`);
+    await issueComment(runGh, cwd, issueUrl, taggedBody, log);
+    return;
+  }
+
+  if (matchedUrl) {
+    const ref = parseCommentUrl(matchedUrl);
+    if (ref) {
+      try {
+        await runGh(
+          [
+            'api',
+            '--method',
+            'PATCH',
+            `repos/${ref.owner}/${ref.repo}/issues/comments/${ref.commentId}`,
+            '-f',
+            `body=${taggedBody}`,
+          ],
+          { cwd },
+        );
+      } catch (err) {
+        log?.(
+          `[pr-labels] upsertIssueComment(${issueUrl}) PATCH failed: ${err} — leaving existing comment as-is`,
+        );
+      }
+      return;
+    }
+    log?.(
+      `[pr-labels] upsertIssueComment(${issueUrl}) marked comment url unparseable (${matchedUrl}) — creating new comment`,
+    );
+  }
+
+  await issueComment(runGh, cwd, issueUrl, taggedBody, log);
 }
 
 /**

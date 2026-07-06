@@ -606,6 +606,30 @@ spec_owner: your-github-login
   marker is skipped with a distinct, deduped line telling you to add an `Owner:` marker on
   the default branch (or grandfather it via `owner_gate_cutover`).
 
+**GATED dashboard section:** every daemon status view (`conduct-ts daemon-status`, the
+startup dashboard, `.daemon/gated.json`) carries a `GATED (n)` group alongside
+PARKED/HALTED/PROCESSED/IN-PROGRESS/WAITING/ELIGIBLE. It always renders explicitly — even
+`GATED (0)` — so an empty backlog is never mistaken for "nothing to do" when the real cause
+is an unresolved owner gate. Each `kind: 'spec'` row names the slug, the skip reason
+(`other-owner` / `unowned-post-cutover` / `unowned-indeterminate`), the other operator when
+known, and a remedy hint; each `kind: 'repo'` row is a section-level warning (e.g. "building
+NOTHING — identity unresolved" or "un-owned specs skipped — no owner_gate_cutover
+configured") for conditions with no single owning slug.
+
+**Gate write-back (owner-gated PR/issue announcement):** on every discovery pass, the daemon
+also announces each owner-gated spec where a GitHub artifact exists to announce on:
+  - if the spec already has an implementation PR open (e.g. a prior build attempt halted
+    before ownership changed underneath it), the PR gets an `owner-gated` label and a single
+    upserted marker comment naming the reason/remedy/other-owner — edited in place on later
+    passes rather than duplicated, and updated when the reason transitions (e.g.
+    `unowned-indeterminate` → `other-owner`);
+  - if the spec originated from GitHub issue intake (carries a `Source-Ref: owner/repo#N`
+    marker), the same label + marker comment are applied to the originating **issue** too, so
+    the reporter sees why their request stalled without needing daemon/dashboard access.
+
+Both write-backs are best-effort and non-throwing — a `gh` failure never blocks or aborts the
+discovery pass that produced the gated list.
+
 **Daemon Profile & Version Gate (Self-Host)**
 
 As of 2026-07-02T11:00:00Z, this harness repo is daemon-registered for build-to-PR automation

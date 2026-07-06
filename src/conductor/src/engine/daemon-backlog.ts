@@ -285,12 +285,47 @@ export interface WaitingItem {
   verdict: BlockerVerdict;
 }
 
+/**
+ * An owner-gate skip surfaced to the operator (FR-7/FR-11). Distinct from
+ * `WaitingItem` (dependency gate): `GatedItem` covers specs (and repo-scoped
+ * conditions) held back by the OWNERSHIP gate, not the dependency gate.
+ *
+ * - `kind: 'spec'` — a single merged spec skipped by the owner gate, carrying
+ *   the reason (`other-owner` | `unowned-post-cutover` | `unowned-indeterminate`),
+ *   the other operator's id when known (`other-owner` only), and an
+ *   operator-actionable remedy hint.
+ * - `kind: 'repo'` — a repo-scoped (non-slug) owner-gate condition: either the
+ *   daemon's own identity is unresolved (fail-closed, nothing scanned this
+ *   pass) or the gate is active with no grandfather cutover configured.
+ *
+ * Populated by later tasks in this plan; `discoverBacklog` returns `gated: []`
+ * unconditionally until then (this task only introduces the type + shape).
+ */
+export interface GatedSpecItem {
+  kind: 'spec';
+  slug: string;
+  reason: 'other-owner' | 'unowned-post-cutover' | 'unowned-indeterminate';
+  otherOwner?: string;
+  remedy: string;
+  // Task 21: the spec's originating `Source-Ref: owner/repo#N` intake marker,
+  // when present — carried through so the gate write-back orchestrator
+  // (gate-writeback.ts) can announce on the originating issue, exactly the
+  // same `sourceRef` already resolved above for the dependency-gate loop.
+  sourceRef?: string;
+}
+export interface GatedRepoItem {
+  kind: 'repo';
+  warning: 'identity-unresolved' | 'no-cutover';
+  remedy: string;
+}
+export type GatedItem = GatedSpecItem | GatedRepoItem;
+
 export async function discoverBacklog(
   projectRoot: string,
   isProcessed: (slug: string) => Promise<boolean> = async () => false,
   log: (msg: string) => void = () => {},
   opts: DiscoverBacklogOpts = {},
-): Promise<{ items: BacklogItem[]; waiting: WaitingItem[] }> {
+): Promise<{ items: BacklogItem[]; waiting: WaitingItem[]; gated: GatedItem[] }> {
   const baseBranch = opts.baseBranch ?? 'main';
   const tree = opts.treeSource ?? gitTreeSource(projectRoot, baseBranch);
 
@@ -322,6 +357,7 @@ export async function discoverBacklog(
   // content/ownership skip lines. An ABSENT `daemonOwner` stays silent (legacy —
   // the gate is simply unwired).
   let identityUnresolvedWarned = false;
+  let identityUnresolvedGatedPushed = false;
   const warnIdentityUnresolvedOnce = async (): Promise<void> => {
     if (identityUnresolvedWarned) return;
     identityUnresolvedWarned = true;
@@ -340,6 +376,12 @@ export async function discoverBacklog(
   // and the per-slug ownership skips. Does NOT change any build/skip decision.
   // Silent when a cutover IS set or the gate is inactive.
   let gateNoCutoverWarned = false;
+  // Repo-scoped GATED entry companion (Task 5, S3 HP-1/NP-3): distinct from the
+  // log line above. Pushed at most ONCE per pass, and only when an actual
+  // un-owned spec is skipped for lack of a cutover — never merely because the
+  // gate is active with no cutover set (a pass where every spec is owned, or
+  // grandfathered, must NOT surface a false alarm).
+  let noCutoverGatedPushed = false;
   const warnGateNoCutoverOnce = async (): Promise<void> => {
     if (gateNoCutoverWarned) return;
     gateNoCutoverWarned = true;
@@ -351,7 +393,7 @@ export async function discoverBacklog(
   };
 
   const planFiles = (await tree.listPlanFiles()).filter((f) => f.endsWith('.md'));
-  if (planFiles.length === 0) return { items: [], waiting: [] };
+  if (planFiles.length === 0) return { items: [], waiting: [], gated: [] };
 
   // Shipped-record dedup (Story 3/Task 4): read every committed shipped
   // record from the base-branch tree ONCE per discovery run (not once per
@@ -363,6 +405,9 @@ export async function discoverBacklog(
   // slug -> raw (unparseable) Source-Ref text, for specs whose intake marker
   // is present but malformed (see the dependency-gate loop below).
   const malformedSourceRefs = new Map<string, string>();
+  // Owner-gate skips surfaced to the operator (FR-7/FR-11/S1 HP-1). Populated
+  // alongside the existing warnOnce log line below — never in place of it.
+  const gatedItems: GatedItem[] = [];
   for (const file of [...planFiles].sort()) {
     const slug = planStem(file);
     const planRel = `.docs/plans/${file}`;
@@ -470,6 +515,20 @@ export async function discoverBacklog(
     // (gate unwired) is untouched — legacy discovery runs normally.
     if (opts.daemonOwner && !opts.daemonOwner.resolved) {
       await warnIdentityUnresolvedOnce();
+      // Fail-closed (D3/Story 3 NP-1): don't just log — surface a repo-scoped
+      // GATED entry too, so the dashboard/status can show WHY the backlog came
+      // back empty instead of looking silently idle. Pushed once per pass
+      // (guarded by `identityUnresolvedGatedPushed`), regardless of how many
+      // candidates hit this fail-closed branch.
+      if (!identityUnresolvedGatedPushed) {
+        identityUnresolvedGatedPushed = true;
+        gatedItems.push({
+          kind: 'repo',
+          warning: 'identity-unresolved',
+          remedy:
+            'Set spec_owner in ~/.ai-conductor/config.yml or authenticate gh.',
+        });
+      }
       continue;
     }
 
@@ -517,6 +576,40 @@ export async function discoverBacklog(
       });
       if (!decision.build) {
         await warnOnce(slug, ownershipSkipMessage(slug, decision));
+        if (decision.reason === 'other-owner') {
+          gatedItems.push({
+            kind: 'spec',
+            slug,
+            reason: 'other-owner',
+            otherOwner: decision.other,
+            remedy: `declare an Owner: ${daemonOwner.id} or the daemon's own owner for this spec`,
+            sourceRef,
+          });
+        } else {
+          gatedItems.push({
+            kind: 'spec',
+            slug,
+            reason: decision.reason,
+            remedy: gateRemedy(decision),
+            sourceRef,
+          });
+        }
+        if (
+          decision.reason === 'unowned-indeterminate' &&
+          (opts.cutover ?? null) === null &&
+          !noCutoverGatedPushed
+        ) {
+          // The gate is active, no cutover is configured, and an un-owned spec
+          // was just skipped as a direct result — surface the repo-scoped
+          // GATED entry ONCE per pass (Task 5, S3 HP-1), alongside (not in
+          // place of) the existing `warnGateNoCutoverOnce` log line.
+          noCutoverGatedPushed = true;
+          gatedItems.push({
+            kind: 'repo',
+            warning: 'no-cutover',
+            remedy: 'Set owner_gate_cutover in ~/.ai-conductor/config.yml to grandfather pre-existing un-owned specs.',
+          });
+        }
         continue;
       }
     }
@@ -540,7 +633,7 @@ export async function discoverBacklog(
   // content-eligible, non-intake specs and dispatch unaffected, preserving
   // today's behavior for hand-authored work.
   if (!opts.resolver) {
-    return { items, waiting: [] };
+    return { items, waiting: [], gated: gatedItems };
   }
   const resolver = opts.resolver;
   const gated: BacklogItem[] = [];
@@ -576,7 +669,7 @@ export async function discoverBacklog(
   }
 
   announceWaitingForRoot(projectRoot, log, waiting);
-  return { items: gated, waiting };
+  return { items: gated, waiting, gated: gatedItems };
 }
 
 /**
@@ -606,6 +699,22 @@ function ownershipSkipMessage(slug: string, decision: GateDecision): string {
     `'Owner:' marker to the spec on the default branch (or grandfather it via ` +
     `owner_gate_cutover); logged once.`
   );
+}
+
+/**
+ * Derive the operator-actionable remedy hint for an un-owned gated spec
+ * (S1 HP-2/HP-3, S2 HP-2 content). Pure function — no I/O, mirrors the
+ * `ownershipSkipMessage` "why"/remedy split so the two stay in lockstep.
+ * Never called for `other-owner` (that reason has its own bespoke remedy at
+ * the call site, naming the daemon's own owner id).
+ */
+function gateRemedy(decision: GateDecision): string {
+  if (decision.build) return ''; // never called on a build decision
+  if (decision.reason === 'other-owner') return ''; // handled at the call site
+  return decision.reason === 'unowned-post-cutover'
+    ? "add an 'Owner:' marker to the spec on the default branch"
+    : "add an 'Owner:' marker to the spec on the default branch, or set " +
+        'owner_gate_cutover to grandfather it';
 }
 
 /**

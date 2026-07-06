@@ -37,6 +37,7 @@ import { clampDaemonConcurrency } from './engine/daemon-command.js';
 import { makeRunFeature, type FeatureWorktree } from './engine/daemon-runner.js';
 import { createBlockerResolver } from './engine/blocker-resolver.js';
 import { createGhBlockerRunner } from './engine/gh-blocker-runner.js';
+import { resolveSpecPrUrl } from './engine/pr-labels.js';
 import { captureEngineIdentity, createStaleEngineChecker } from './engine/engine-identity.js';
 import {
   readRestartMarkerWithStatus,
@@ -63,6 +64,8 @@ import {
   writePersistedBaseSha,
 } from './engine/daemon-sha.js';
 import { scanInheritedState, renderDashboard } from './engine/daemon-dashboard.js';
+import { writeGatedSnapshot } from './engine/gated-snapshot.js';
+import { announceGatedPr, announceGatedIssue } from './engine/gate-writeback.js';
 import {
   rekickSweep,
   resumeRebaseFirst,
@@ -635,6 +638,41 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   const execRunnerWrapper = (args: string[]) => ownerGh(args, { cwd: projectRoot });
   const priorityResolver = createPriorityResolver(ghIssueLabelReader(execRunnerWrapper), log);
 
+  // Task 12 (adr-2026-07-03-gated-snapshot-status-read-model): the daemon
+  // directory backing `.daemon/gated.json` — every discovery pass rewrites
+  // it via `onGatedDiscovered` below, the SAME `gated` list `discoverBacklog`
+  // just computed (populated, empty, or the identity-unresolved
+  // early-return's repo-warning-only list alike).
+  const daemonDir = join(projectRoot, '.daemon');
+
+  // Task 21 (adr-2026-07-03-gate-writeback-daemon-tick, Tasks 17-20): announce
+  // each owner-gated spec on its implementation PR (if one was already opened
+  // by an earlier build attempt, e.g. a halted worktree whose ownership later
+  // changed) and on its originating Source-Ref issue (intake specs only).
+  // Both `announceGatedPr`/`announceGatedIssue` are fire-and-forget/
+  // never-throw (see gate-writeback.ts), so a `gh` failure here never blocks
+  // or aborts the discovery pass that produced the gated list. Runs AFTER the
+  // snapshot write (Task 12) so `.daemon/gated.json` is never delayed behind
+  // network calls to GitHub.
+  const gatedWritebackDeps = { cwd: projectRoot, log };
+  const announceGated = async (gated: Awaited<ReturnType<typeof discoverBacklog>>['gated']) => {
+    for (const entry of gated) {
+      if (entry.kind !== 'spec') continue;
+      // The spec's implementation PR, if a prior build attempt already opened
+      // one (e.g. halted mid-build before ownership changed underneath it).
+      // Gated specs are discovered pre-dispatch, so per-slug worktree state
+      // is normally absent — fall back to resolving the merged spec PR from
+      // origin by its spec/<slug> branch (lookup-only, never creates a PR).
+      const perSlugStateFile = join(worktreeBase, entry.slug, '.pipeline', 'conduct-state.json');
+      const slugState = await readState(perSlugStateFile);
+      const prUrl =
+        (slugState.ok ? slugState.value.pr_url : undefined) ??
+        (await resolveSpecPrUrl(ownerGh, projectRoot, `spec/${entry.slug}`, log));
+      await announceGatedPr(entry, prUrl as string, gatedWritebackDeps);
+      await announceGatedIssue(entry, entry.sourceRef, gatedWritebackDeps);
+    }
+  };
+
   const workSource =
     opts.workSource ??
     localWorkSource({
@@ -665,6 +703,14 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       // (no disk persistence). Passed to discover() for ordering and available to
       // the dashboard for fallback-mode display.
       priorityResolver,
+      // Task 12: single call site for the owner-gate snapshot write — fires
+      // on EVERY discover() pass this WorkSource drives. `writeGatedSnapshot`
+      // is itself advisory (never throws, see gated-snapshot.ts), so a write
+      // failure never blocks or aborts the discovery pass that produced it.
+      onGatedDiscovered: async (gated) => {
+        await writeGatedSnapshot(daemonDir, { gated });
+        await announceGated(gated);
+      },
     });
   const discoverTick = (o: { refresh: boolean }) => workSource.discover(o);
 

@@ -75,7 +75,16 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
     const empty = await mkdtemp(join(tmpdir(), 'empty-'));
     expect(
       await discoverBacklog(empty, undefined, undefined, { treeSource: fsTreeSource(empty) }),
-    ).toEqual({ items: [], waiting: [] });
+    ).toEqual({ items: [], waiting: [], gated: [] });
+    await rm(empty, { recursive: true, force: true });
+  });
+
+  it('returns gated: [] on a no-spec fixture (widened result shape, Task 1)', async () => {
+    const empty = await mkdtemp(join(tmpdir(), 'empty-'));
+    const result = await discoverBacklog(empty, undefined, undefined, {
+      treeSource: fsTreeSource(empty),
+    });
+    expect(result.gated).toEqual([]);
     await rm(empty, { recursive: true, force: true });
   });
 
@@ -91,6 +100,7 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
     });
     expect(result.items.map((b) => b.slug)).toEqual(['feature-shape']);
     expect(result.waiting).toEqual([]);
+    expect(result.gated).toEqual([]);
   });
 
   describe('dependency gate (Task 11)', () => {
@@ -812,6 +822,77 @@ describe('engine/daemon-backlog — owner-gate integration', () => {
     expect(line).not.toMatch(/cannot build/);
   });
 
+  it('Task 2 (S1 HP-1): an other-owner spec is collected into `gated` and excluded from items', async () => {
+    await writeSpec('owned-by-alice');
+    const logs: string[] = [];
+    const { items: backlog, gated } = await discoverBacklog(dir, undefined, (m) => logs.push(m), {
+      treeSource: fsSource(dir),
+      daemonOwner: { resolved: true, id: 'bob' },
+      readStamp: async () => ({ present: true as const, id: 'alice' }),
+      readMergeTime: async () => null,
+      cutover: null,
+    });
+    expect(backlog).toEqual([]);
+    expect(gated).toEqual([
+      {
+        kind: 'spec',
+        slug: 'owned-by-alice',
+        reason: 'other-owner',
+        otherOwner: 'alice',
+        remedy: expect.any(String),
+      },
+    ]);
+    // The existing warnOnce ownership-skip log line is unchanged.
+    const line = logs.find((l) => /owned-by-alice/.test(l));
+    expect(line).toBeDefined();
+    expect(line).toMatch(/alice/);
+  });
+
+  it('Task 3 (S1 HP-2): an un-owned post-cutover spec is collected into `gated` with an Owner-marker remedy', async () => {
+    await writeSpec('newish-gated');
+    const { items: backlog, gated } = await discoverBacklog(dir, undefined, undefined, {
+      treeSource: fsSource(dir),
+      daemonOwner: { resolved: true, id: 'alice' },
+      readStamp: async () => ({ present: false as const }),
+      readMergeTime: async () => '2026-07-01T00:00:00Z', // after cutover
+      cutover: '2026-06-30T00:00:00Z',
+    });
+    expect(backlog).toEqual([]);
+    expect(gated).toEqual([
+      {
+        kind: 'spec',
+        slug: 'newish-gated',
+        reason: 'unowned-post-cutover',
+        remedy: expect.stringMatching(/Owner:/),
+      },
+    ]);
+  });
+
+  it('Task 3 (S1 HP-3): an un-owned indeterminate-merge spec is collected into `gated` with a cutover remedy', async () => {
+    await writeSpec('indeterminate-gated');
+    const { items: backlog, gated } = await discoverBacklog(dir, undefined, undefined, {
+      treeSource: fsSource(dir),
+      daemonOwner: { resolved: true, id: 'alice' },
+      readStamp: async () => ({ present: false as const }),
+      readMergeTime: async () => null, // indeterminate
+      cutover: null,
+    });
+    expect(backlog).toEqual([]);
+    expect(gated).toEqual([
+      {
+        kind: 'spec',
+        slug: 'indeterminate-gated',
+        reason: 'unowned-indeterminate',
+        remedy: expect.stringMatching(/owner_gate_cutover/),
+      },
+      {
+        kind: 'repo',
+        warning: 'no-cutover',
+        remedy: expect.any(String),
+      },
+    ]);
+  });
+
   it('Task 12: a content-ineligible spec is skipped for the content reason (gate never reached)', async () => {
     // Stories are DRAFT → content filter rejects BEFORE the gate. Even though the
     // stamp is other-owner, the log must cite the content reason, and readStamp is
@@ -984,6 +1065,93 @@ describe('engine/daemon-backlog — owner-gate integration', () => {
     expect(logs.filter((l) => /identity unresolved/i.test(l))).toHaveLength(1);
   });
 
+  // Task 6 (S3 NP-1) — fail-CLOSED: an unresolved daemon identity must not
+  // silently return an empty backlog. It surfaces a repo-scoped GATED entry so
+  // the operator sees WHY the backlog is empty, not just that it is.
+  it('an unresolved daemon identity emits a repo-level identity-unresolved GATED entry (fail-closed)', async () => {
+    await writeSpec('one');
+    const { items, waiting, gated } = await discoverBacklog(dir, undefined, undefined, {
+      treeSource: fsSource(dir),
+      daemonOwner: { resolved: false },
+    });
+    expect(items).toEqual([]);
+    expect(waiting).toEqual([]);
+    expect(gated).toEqual([
+      {
+        kind: 'repo',
+        warning: 'identity-unresolved',
+        remedy: expect.any(String),
+      },
+    ]);
+  });
+
+  // Task 7 (S3 NP-2) — legacy gate-unwired silence pinned: when `daemonOwner`
+  // is entirely ABSENT from opts (the gate was never wired at all), discovery
+  // must stay silent — no repo warnings, `gated` stays empty, and the spec
+  // dispatches unchanged. This is fail-OPEN and is distinct from Task 6's
+  // fail-CLOSED path (a supplied-but-unresolved `daemonOwner`), which emits a
+  // repo-level `identity-unresolved` GATED entry and builds nothing.
+  it('no daemonOwner in opts (legacy unwired gate) stays silent: gated is empty, no repo warnings, items unchanged', async () => {
+    await writeSpec('one');
+    const logs: string[] = [];
+    const { items, waiting, gated } = await discoverBacklog(dir, undefined, (m) => logs.push(m), {
+      treeSource: fsSource(dir),
+      // daemonOwner intentionally omitted — legacy, gate unwired.
+    });
+    expect(items.map((i) => i.slug)).toEqual(['one']);
+    expect(waiting).toEqual([]);
+    expect(gated).toEqual([]);
+    expect(logs.some((l) => /identity unresolved/i.test(l))).toBe(false);
+    expect(logs.some((l) => /owner-gate/i.test(l))).toBe(false);
+  });
+
+  // Task 5 (S3 HP-1) — the gate is active (resolved daemon owner), no
+  // grandfather cutover is configured, and an un-owned spec is encountered: a
+  // single repo-scoped `no-cutover` GATED entry surfaces alongside (not instead
+  // of) the existing `warnGateNoCutoverOnce` log line.
+  it('Task 5: active gate + no cutover + an un-owned spec encountered → one repo-level no-cutover GATED entry (plus the existing log line)', async () => {
+    await writeSpec('un-owned');
+    const logs: string[] = [];
+    const { items, gated } = await discoverBacklog(dir, undefined, (m) => logs.push(m), {
+      treeSource: fsSource(dir),
+      daemonOwner: { resolved: true, id: 'alice' },
+      readStamp: async () => ({ present: false as const }),
+      readMergeTime: async () => null,
+      cutover: null,
+    });
+    expect(items).toEqual([]);
+    expect(gated).toEqual([
+      // Task 3 (S1 HP-3): the per-spec gated entry is now collected alongside
+      // the repo-scoped no-cutover notice below, not instead of it.
+      {
+        kind: 'spec',
+        slug: 'un-owned',
+        reason: 'unowned-indeterminate',
+        remedy: expect.any(String),
+      },
+      {
+        kind: 'repo',
+        warning: 'no-cutover',
+        remedy: expect.any(String),
+      },
+    ]);
+    // The pre-existing no-cutover log line is unchanged, not replaced.
+    expect(logs.filter((l) => /no owner_gate_cutover configured/i.test(l))).toHaveLength(1);
+  });
+
+  it('Task 5 (NP-3): cutover set + all specs owned → zero repo-level GATED entries', async () => {
+    await writeSpec('owned-one');
+    const { items, gated } = await discoverBacklog(dir, undefined, undefined, {
+      treeSource: fsSource(dir),
+      daemonOwner: { resolved: true, id: 'alice' },
+      readStamp: async () => ({ present: true as const, id: 'alice' }),
+      readMergeTime: async () => null,
+      cutover: '2026-06-30T00:00:00Z',
+    });
+    expect(items.map((i) => i.slug)).toEqual(['owned-one']);
+    expect(gated).toEqual([]);
+  });
+
   it('is SILENT about the missing cutover when a cutover IS set', async () => {
     await writeSpec('with-cutover');
     const logs: string[] = [];
@@ -1091,6 +1259,75 @@ describe('engine/daemon-backlog — owner-gate integration', () => {
     const line = logs.find((l) => /unstamped-again/.test(l));
     expect(line).toMatch(/un-owned/i); // un-owned branch, not "owned by another"
     expect(line).not.toMatch(/another operator/i);
+  });
+
+  // Task 4 (S1 NP-1..NP-4) — exclusion boundaries + byte-identical items
+  // regression. A single mixed fixture asserts that:
+  //   - an OWNED spec dispatches in `items` and is NOT gated (NP-1)
+  //   - a content-INELIGIBLE spec (stories not Accepted) appears in NEITHER
+  //     `items` NOR `gated` — it never reaches the owner gate at all (NP-2)
+  //   - a BLANK `Owner:` marker is treated as un-owned (no crash), landing in
+  //     `gated` via the same un-owned path as a wholly absent marker (NP-3)
+  //   - `items` is byte-identical (same slugs, same shape) to what discovery
+  //     would return with the gate wholly unwired — i.e. gate collection is
+  //     purely additive and never mutates the pre-existing dispatch list (NP-4)
+  it('Task 4: mixed fixture — owned dispatches ungated, ineligible excluded from both, blank Owner treated as un-owned, items unchanged vs. gate-off control', async () => {
+    // owned-spec: stamped with the daemon's own id → builds, never gated.
+    await writeSpec('owned-spec');
+    // ineligible-spec: content-ineligible (stories NOT Accepted) → must never
+    // reach the owner gate at all, so it can't show up in `gated` either.
+    await writeSpec('ineligible-spec', '# Stories\n**Status:** Draft\n');
+    // blank-owner-spec: an `Owner:` marker present but blank/whitespace — the
+    // provenance reader normalizes this to `present: false` (un-owned), which
+    // must not crash the gate and must be treated exactly like "no marker".
+    await writeSpec('blank-owner-spec');
+
+    const stampFor: Record<string, { present: true; id: string } | { present: false }> = {
+      'owned-spec': { present: true, id: 'alice' },
+      'blank-owner-spec': { present: false },
+    };
+
+    const gateOpts = {
+      treeSource: fsSource(dir),
+      daemonOwner: { resolved: true as const, id: 'alice' },
+      readStamp: async (slug: string) => stampFor[slug] ?? { present: false as const },
+      readMergeTime: async () => null,
+      cutover: '2026-06-30T00:00:00Z', // grandfather window set, un-owned specs pre-cutover build
+    };
+
+    const { items, gated } = await discoverBacklog(dir, undefined, undefined, gateOpts);
+
+    // NP-1: owned spec dispatches, never gated.
+    expect(items.map((i) => i.slug)).toContain('owned-spec');
+    expect(gated.some((g) => g.kind === 'spec' && g.slug === 'owned-spec')).toBe(false);
+
+    // NP-2: content-ineligible spec is in neither list — it never reaches the
+    // owner gate (content filters run first and `continue` before the gate).
+    expect(items.map((i) => i.slug)).not.toContain('ineligible-spec');
+    expect(gated.some((g) => g.kind === 'spec' && g.slug === 'ineligible-spec')).toBe(false);
+
+    // NP-3: blank Owner: is un-owned, not a crash, and lands in gated (not
+    // items) via the same un-owned path as an absent marker.
+    expect(items.map((i) => i.slug)).not.toContain('blank-owner-spec');
+    expect(gated).toEqual([
+      expect.objectContaining({ kind: 'spec', slug: 'blank-owner-spec' }),
+    ]);
+
+    // NP-4: the owned spec's dispatched item is byte-identical to the item the
+    // pre-gate (gate wholly unwired) control run produces for that same spec —
+    // gate collection never mutates the shape/fields of an item that still
+    // dispatches; it is purely additive (the `gated` list alongside it).
+    const control = await discoverBacklog(dir, undefined, undefined, {
+      treeSource: fsSource(dir),
+      // daemonOwner intentionally omitted — legacy, gate unwired.
+    });
+    const ownedGated = items.find((i) => i.slug === 'owned-spec');
+    const ownedControl = control.items.find((i) => i.slug === 'owned-spec');
+    expect(ownedGated).toEqual(ownedControl);
+    // And the control run (no gate) still excludes the content-ineligible spec
+    // on content grounds alone, confirming NP-2 is a content filter, not a
+    // side effect of the owner gate being active.
+    expect(control.items.map((i) => i.slug)).not.toContain('ineligible-spec');
   });
 });
 

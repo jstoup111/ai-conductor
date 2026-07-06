@@ -6,6 +6,7 @@ import { ALL_STEPS } from './steps.js';
 import type { ComplexityTier, StepStatus } from '../types/index.js';
 import type { BlockerVerdict, IssueRef } from './blocker-resolver.js';
 import type { PriorityBand, PriorityResolution } from './backlog-priority.js';
+import type { GatedItem } from './daemon-backlog.js';
 
 // ── Startup inherited-state dashboard (ADR-013 / FR-1, FR-2, FR-3) ────────────
 //
@@ -101,6 +102,17 @@ export interface InheritedState {
    * built before parking existed.
    */
   parked?: string[];
+  /**
+   * Specs (and repo-scoped conditions) held back by the OWNERSHIP gate
+   * (FR-7/FR-11). Optional for backward compatibility with callers built
+   * before owner-gating existed — a bare-array or waiting-only `discover()`
+   * return yields no gated items. `kind: 'spec'` entries carry a `slug` and
+   * participate in the same precedence chain as WAITING (HALTED > PROCESSED
+   * > IN-PROGRESS > GATED > WAITING > ELIGIBLE): a slug already surfaced in a
+   * higher-precedence bucket is excluded here. `kind: 'repo'` entries have no
+   * slug and are never filtered by precedence.
+   */
+  gated?: GatedItem[];
 }
 
 export interface ScanInheritedStateDeps {
@@ -114,7 +126,10 @@ export interface ScanInheritedStateDeps {
    * gate, FR-6). A bare-array return (pre-widened callers) is also accepted
    * for backward compatibility and treated as `{ items, waiting: [] }`.
    */
-  discover: () => Promise<BacklogItem[] | { items: BacklogItem[]; waiting: WaitingEntry[] }>;
+  discover: () => Promise<
+    | BacklogItem[]
+    | { items: BacklogItem[]; waiting: WaitingEntry[]; gated?: GatedItem[] }
+  >;
   /** Optional log sink for skipped-worktree diagnostics. */
   log?: (msg: string) => void;
 }
@@ -305,11 +320,23 @@ export async function scanInheritedState(
   // bare-array `discover()` (pre-widened callers) yields no waiting items.
   let eligible: EligibleEntry[] = [];
   let waiting: WaitingEntry[] = [];
+  let gated: GatedItem[] = [];
   let priorityResolution: PriorityResolution | undefined;
   try {
     const result = await deps.discover();
     const backlog = Array.isArray(result) ? result : result.items;
     waiting = Array.isArray(result) ? [] : result.waiting;
+    const rawGated = Array.isArray(result) ? [] : (result.gated ?? []);
+    const inProgressSlugs = new Set(inProgress.map((p) => p.slug));
+    // GATED precedence: HALTED > PROCESSED > IN-PROGRESS > GATED — a `kind:
+    // 'spec'` entry already surfaced in a higher-precedence bucket is dropped
+    // here rather than double-listed. `kind: 'repo'` entries have no slug and
+    // are never filtered.
+    gated = rawGated.filter(
+      (g) =>
+        g.kind !== 'spec' ||
+        (!haltedSlugs.has(g.slug) && !processedSlugs.has(g.slug) && !inProgressSlugs.has(g.slug)),
+    );
     const backlogItems = backlog.filter((b) => !haltedSlugs.has(b.slug) && !processedSlugs.has(b.slug));
     eligible = backlogItems.map((b) => ({
       slug: b.slug,
@@ -335,7 +362,16 @@ export async function scanInheritedState(
     );
   }
 
-  return { halted, inProgress, eligible, processed, processedCount: processed.length, waiting, priorityResolution };
+  return {
+    halted,
+    inProgress,
+    eligible,
+    processed,
+    processedCount: processed.length,
+    waiting,
+    gated,
+    priorityResolution,
+  };
 }
 
 // ── Render helpers ────────────────────────────────────────────────────────────
@@ -360,6 +396,21 @@ export function refLabel(ref: IssueRef): string {
   return `${ref.repo}#${ref.number}`;
 }
 
+/** Slug + reason + remedy line for a `kind: 'spec'` GATED entry (owner named for `other-owner`). */
+function gatedSpecLine(g: GatedItem & { kind: 'spec' }): string {
+  const owner = g.reason === 'other-owner' && g.otherOwner ? ` (owner: ${g.otherOwner})` : '';
+  return `  • ${g.slug} — ${g.reason}${owner} — ${g.remedy}`;
+}
+
+/** Section-level warning line for a `kind: 'repo'` GATED entry (no slug). */
+function gatedRepoLine(g: GatedItem & { kind: 'repo' }): string {
+  const label =
+    g.warning === 'identity-unresolved'
+      ? 'building NOTHING — identity unresolved'
+      : 'un-owned specs skipped — no owner_gate_cutover configured';
+  return `  ⚠ ${label} — ${g.remedy}`;
+}
+
 /** Verdict-kind-specific detail suffix for a WAITING row. */
 export function waitingDetail(verdict: BlockerVerdict): string {
   switch (verdict.kind) {
@@ -375,15 +426,23 @@ export function waitingDetail(verdict: BlockerVerdict): string {
 }
 
 /**
- * Render the five-group dashboard as a single plain-text block. Each group
- * carries a count and lists its members with the bits an operator triages on:
- * tier, step, PR link, halt reason. PROCESSED lists each shipped slug with its
- * PR link when one was persisted. WAITING lists each slug held back by an
- * unresolved dependency gate with its blockers/cycle members/indeterminate
- * reason (FR-6) — a single bucket, not split by verdict kind, rendered after
- * IN-PROGRESS and before ELIGIBLE (precedence HALTED > PROCESSED >
- * IN-PROGRESS > WAITING > ELIGIBLE). Omitted entirely when `waiting` is
- * absent or empty. Zero-state renders every present group at `0`.
+ * Render the dashboard as a single plain-text block. Each group carries a
+ * count and lists its members with the bits an operator triages on: tier,
+ * step, PR link, halt reason. PROCESSED lists each shipped slug with its PR
+ * link when one was persisted. GATED lists specs (and repo-scoped conditions)
+ * held back by the OWNERSHIP gate (FR-7/FR-11) — `kind: 'spec'` entries show
+ * slug, reason, and remedy (naming the other operator for `other-owner`);
+ * `kind: 'repo'` entries render as section-level warning lines with no slug.
+ * Rendered after IN-PROGRESS and before WAITING/ELIGIBLE (precedence HALTED >
+ * PROCESSED > IN-PROGRESS > GATED > WAITING > ELIGIBLE); a gated spec slug is
+ * excluded from WAITING and ELIGIBLE below. Omitted entirely when `gated` is
+ * absent or empty (this also covers the discovery-failure fallback, which
+ * degrades `gated` to `[]` the same way it degrades `eligible`). WAITING lists
+ * each slug held back by an unresolved dependency gate with its
+ * blockers/cycle members/indeterminate reason (FR-6) — a single bucket, not
+ * split by verdict kind, rendered after GATED and before ELIGIBLE. Omitted
+ * entirely when `waiting` is absent or empty. Zero-state renders every
+ * always-present group at `0`.
  *
  * When `priorityResolution` is provided (either in state or as a parameter) in
  * banded mode, ELIGIBLE lines gain band annotations (` [${band}]` suffix). When
@@ -416,7 +475,32 @@ export function renderDashboard(state: InheritedState, priorityResolution?: Prio
     lines.push(`  • ${p.slug}${tierTag(p.tier)} @${p.step}${prSuffix(p.prUrl)}`);
   }
 
-  const waiting = (state.waiting ?? []).filter((w) => !parkedSet.has(w.slug));
+  // GATED (FR-7/FR-11): specs (and repo-scoped conditions) held back by the
+  // OWNERSHIP gate. Precedence HALTED > PROCESSED > IN-PROGRESS > GATED >
+  // WAITING > ELIGIBLE — a `kind: 'spec'` slug already excluded upstream from
+  // higher-precedence buckets is rendered here and then excluded below from
+  // WAITING and ELIGIBLE. `kind: 'repo'` entries have no slug and render as
+  // section-level warning lines. Omitted entirely when `gated` is absent or
+  // empty, matching the WAITING empty convention (and the ELIGIBLE
+  // discovery-failure fallback, which likewise degrades to an empty list
+  // rather than rendering a distinct failure line).
+  const processedSlugsSet = new Set(state.processed.map((p) => p.slug));
+  const gated = (state.gated ?? []).filter(
+    (g) => g.kind !== 'spec' || (!parkedSet.has(g.slug) && !processedSlugsSet.has(g.slug)),
+  );
+  const gatedSlugs = new Set(
+    gated.filter((g): g is GatedItem & { kind: 'spec' } => g.kind === 'spec').map((g) => g.slug),
+  );
+  if (state.gated !== undefined) {
+    lines.push(`GATED (${gated.length})`);
+    for (const g of gated) {
+      lines.push(g.kind === 'spec' ? gatedSpecLine(g) : gatedRepoLine(g));
+    }
+  }
+
+  const waiting = (state.waiting ?? []).filter(
+    (w) => !parkedSet.has(w.slug) && !gatedSlugs.has(w.slug),
+  );
   const waitingSlugs = new Set(waiting.map((w) => w.slug));
   if (waiting.length > 0) {
     lines.push(`WAITING (${waiting.length})`);
@@ -425,10 +509,13 @@ export function renderDashboard(state: InheritedState, priorityResolution?: Prio
     }
   }
 
-  // Defensive: a slug should never appear in both ELIGIBLE and WAITING, but
-  // if it does, WAITING wins (precedence HALTED > PROCESSED > IN-PROGRESS >
-  // WAITING > ELIGIBLE) — filter it out of ELIGIBLE rather than double-list it.
-  const eligible = state.eligible.filter((e) => !waitingSlugs.has(e.slug) && !parkedSet.has(e.slug));
+  // Defensive: a slug should never appear in both ELIGIBLE and WAITING/GATED,
+  // but if it does, the higher-precedence bucket wins (HALTED > PROCESSED >
+  // IN-PROGRESS > GATED > WAITING > ELIGIBLE) — filter it out of ELIGIBLE
+  // rather than double-list it.
+  const eligible = state.eligible.filter(
+    (e) => !waitingSlugs.has(e.slug) && !gatedSlugs.has(e.slug) && !parkedSet.has(e.slug),
+  );
   lines.push(`ELIGIBLE (${eligible.length})`);
 
   // Render band annotations or fallback mode marker

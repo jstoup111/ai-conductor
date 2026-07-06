@@ -20,6 +20,7 @@ import { hasSession, isPaneDead, sessionNameForRepo } from './daemon-tmux.js';
 import { isPaused, readPauseMetadata } from './pause-marker.js';
 import { readRestartPending, type RestartIntent } from './restart-marker.js';
 import { isEngineVersionId } from './engine-store.js';
+import { readGatedSnapshot, type GatedSpecItem, type GatedRepoItem, type Clock } from './gated-snapshot.js';
 
 /** Fallback label when a pidfile record has no `engineDir`, or its basename
  * isn't a recognized version id (legacy record, dev/unpublished run, etc.). */
@@ -147,6 +148,8 @@ export interface DaemonStatusDeps {
   kill?: KillProbe;
   /** Output sink (tests). Defaults to console.log. */
   out?: (line: string) => void;
+  /** Injectable clock (tests) — used only for GATED-section freshness ("Nm ago"). */
+  clock?: Clock;
 }
 
 /**
@@ -307,6 +310,55 @@ function formatStatusRow(row: DaemonStatusRow): string {
   return parts.join('');
 }
 
+/** Slug + reason + remedy line for a gated spec (owner named for `other-owner`), mirrors daemon-dashboard.ts's gatedSpecLine. */
+function gatedSpecLine(g: GatedSpecItem): string {
+  const owner = g.reason === 'other-owner' && g.otherOwner ? ` (owner: ${g.otherOwner})` : '';
+  return `    • ${g.slug} — ${g.reason}${owner} — ${g.remedy}`;
+}
+
+/** Section-level warning line for a repo-scoped gated condition (no slug). */
+function gatedRepoLine(g: GatedRepoItem): string {
+  return `    ⚠ ${g.warning} — ${g.remedy}`;
+}
+
+/** Render a snapshot's `writtenAt` ISO timestamp as "Nm ago" relative to `now`. */
+function formatGatedAge(writtenAt: string, now: Date): string {
+  const writtenMs = Date.parse(writtenAt);
+  if (Number.isNaN(writtenMs)) return 'unknown age';
+  const minutes = Math.max(0, Math.floor((now.getTime() - writtenMs) / 60000));
+  return `${minutes}m ago`;
+}
+
+/**
+ * Render the per-repo GATED section (Task 15, S5 HP-1/HP-2/NP-4/NP-5) by
+ * reading `.daemon/gated.json` via `readGatedSnapshot` — read-only, no git/gh
+ * spawns on this path. `unknown` results (missing/unreadable/version) render
+ * explicit "gated state unknown" wording, never an implied all-clear.
+ */
+async function renderGatedSection(repoPath: string, out: (line: string) => void, clock: Clock): Promise<void> {
+  const result = await readGatedSnapshot(repoPath);
+  if (result.kind === 'unknown') {
+    const reason =
+      result.why === 'missing'
+        ? 'no scan recorded'
+        : result.why === 'unreadable'
+          ? 'snapshot unreadable'
+          : 'snapshot schema mismatch';
+    out(`  GATED: gated state unknown — ${reason}`);
+    return;
+  }
+
+  const age = formatGatedAge(result.writtenAt, clock());
+  if (result.gated.length === 0 && result.repoWarnings.length === 0) {
+    out(`  GATED: no specs are gated (as of ${age})`);
+    return;
+  }
+
+  out(`  GATED (as of ${age}):`);
+  for (const w of result.repoWarnings) out(gatedRepoLine(w));
+  for (const g of result.gated) out(gatedSpecLine(g));
+}
+
 /**
  * `conduct daemon status` — read-only sweep of the registry. Always exits 0
  * (stale/missing entries are reported, not errors). Returns the rows for testing.
@@ -316,6 +368,7 @@ export async function runDaemonStatus(
 ): Promise<{ code: number; rows: DaemonStatusRow[] }> {
   const out = deps.out ?? ((l: string) => console.log(l));
   const registryPath = deps.registryPath ?? resolveRegistryPath();
+  const clock = deps.clock ?? (() => new Date());
 
   let records: ProjectRecord[];
   try {
@@ -335,6 +388,11 @@ export async function runDaemonStatus(
     const row = await computeStatusRow(record, deps.kill);
     rows.push(row);
     out(formatStatusRow(row));
+    // path-missing repos have no `.daemon/` directory to read from — never
+    // attempt the snapshot read for them (AC: "path-missing repo skips the read").
+    if (row.liveness !== 'path-missing') {
+      await renderGatedSection(record.path, out, clock);
+    }
   }
   return { code: 0, rows };
 }
