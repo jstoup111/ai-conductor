@@ -392,12 +392,15 @@ export interface DeriveCompletionResult {
     completed: boolean;
     evidencedBy?: string;
     auditEntry?: string;
+    status?: 'skipped' | 'completed';
+    skipReason?: string;
   };
 }
 
 /**
  * Derive task completion from git trailers.
  * Trailer-first: checks for Task: <id> trailers in commit bodies.
+ * Evidence forms: Evidence: satisfied-by <sha> and Evidence: skipped <reason>
  * Path corroboration: if task has paths, commit must touch at least one.
  * Sidecar writes: evidence stamps stored in task-evidence.json on completion.
  *
@@ -406,7 +409,7 @@ export interface DeriveCompletionResult {
  * @param anchor - Plan anchor SHA for evidence range
  * @param commits - CommitWithTrailers array (from listCommitsWithTrailers)
  * @param evidence - TaskEvidence instance for sidecar writes
- * @returns Map of task ID → {completed, evidencedBy?, auditEntry?}
+ * @returns Map of task ID → {completed, evidencedBy?, auditEntry?, status?, skipReason?}
  */
 export async function deriveCompletion(
   projectRoot: string,
@@ -431,6 +434,59 @@ export async function deriveCompletion(
   for (const [taskId, task] of planTasks) {
     result[taskId] = { completed: false };
 
+    // Look for Evidence: forms first (no-op commits)
+    const evidenceCommit = commits.find((c) => {
+      const evidenceTrailers = c.trailers['Evidence'] || [];
+      return evidenceTrailers.some((e) => e.startsWith(`satisfied-by `) || e.startsWith('skipped '));
+    });
+
+    if (evidenceCommit) {
+      // Check for Evidence: satisfied-by form
+      const satisfiedByTrailer = (evidenceCommit.trailers['Evidence'] || []).find((e) =>
+        e.startsWith('satisfied-by '),
+      );
+
+      if (satisfiedByTrailer) {
+        // Extract the sha from "satisfied-by <sha>"
+        const sha = satisfiedByTrailer.slice('satisfied-by '.length).trim();
+
+        // Validate the sha exists in git
+        const shaCheck = await execa('git', ['rev-parse', '--verify', `${sha}^{commit}`], {
+          cwd: projectRoot,
+          reject: false,
+        });
+
+        if (shaCheck.exitCode === 0) {
+          // Valid sha: mark task completed
+          result[taskId].completed = true;
+          result[taskId].evidencedBy = sha;
+          result[taskId].status = 'completed';
+          evidence.evidenceStamps.set(taskId, { sha, form: 'evidence:satisfied-by' });
+        } else {
+          // Dangling sha: log audit entry, leave incomplete
+          result[taskId].auditEntry = `Task ${taskId}: Evidence: satisfied-by ${sha.slice(0, 7)} is dangling (unreachable SHA)`;
+          console.warn(
+            `[autoheal] Task ${taskId}: dangling satisfied-by sha ${sha.slice(0, 7)}`,
+          );
+        }
+        continue;
+      }
+
+      // Check for Evidence: skipped form
+      const skippedTrailer = (evidenceCommit.trailers['Evidence'] || []).find((e) =>
+        e.startsWith('skipped '),
+      );
+
+      if (skippedTrailer) {
+        // Extract the reason from "skipped <reason>"
+        const reason = skippedTrailer.slice('skipped '.length).trim();
+        result[taskId].status = 'skipped';
+        result[taskId].skipReason = reason;
+        result[taskId].completed = false;
+        continue;
+      }
+    }
+
     // Look for a commit with Task: <taskId> trailer
     const matchingCommit = commits.find((c) => {
       const taskTrailers = c.trailers['Task'] || [];
@@ -441,7 +497,17 @@ export async function deriveCompletion(
       continue;
     }
 
-    // Found a commit with the Task: trailer
+    // Check if the commit is empty (no files changed)
+    const filesInCommit = await filesForCommit(projectRoot, matchingCommit.sha);
+    const isEmptyCommit = filesInCommit.length === 0;
+
+    // Empty commits with only Task: trailer (no Evidence:) do not complete tasks
+    if (isEmptyCommit) {
+      result[taskId].auditEntry = `Task ${taskId}: empty commit with Task: trailer but no Evidence: form (incomplete)`;
+      continue;
+    }
+
+    // Found a commit with the Task: trailer and file changes
     const taskPaths = planPaths.get(taskId);
     const hasPlanFiles = !!(taskPaths && taskPaths.size > 0);
 
@@ -454,7 +520,6 @@ export async function deriveCompletion(
     }
 
     // Task has paths; verify commit touches at least one
-    const filesInCommit = await filesForCommit(projectRoot, matchingCommit.sha);
     const overlap = filesInCommit.filter((f) => taskPaths!.has(f.replace(/^\.\//, '')));
 
     if (overlap.length === 0) {

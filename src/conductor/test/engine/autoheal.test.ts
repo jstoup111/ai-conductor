@@ -905,3 +905,174 @@ Update specific files.
     mockWarn.mockRestore();
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Unit tests for deriveCompletion Evidence forms (Task 8, no-op evidence commits).
+//
+// Tests evidence trailer forms: satisfied-by and skipped.
+// No-op commits (empty) can carry evidence forms to satisfy task completion.
+//
+// Acceptance criteria:
+// 1. Empty commit with `Task: N` + `Evidence: satisfied-by <sha>` → completed
+// 2. Empty commit with `Evidence: skipped <reason>` → skipped (gate-acceptable)
+// 3. Dangling `satisfied-by` sha (invalid/unreachable) → NOT completed + audit log
+// 4. Bare `Task: N` empty commit without `Evidence:` → no evidence + incomplete
+// 5. A `skipped` task status appears in result
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('deriveCompletion Evidence forms', () => {
+  it('marks task completed with Evidence: satisfied-by <valid sha>', async () => {
+    const autoheal = await loadAutoheal();
+    const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
+
+    // Create a plan
+    const planPath = join(gitDir, '.docs/plans/test-plan.md');
+    await mkdir(join(gitDir, '.docs/plans'), { recursive: true });
+    const planContent = `# Test Plan
+
+### Task 7: Satisfied by evidence
+A task that will be completed by evidence form.
+`;
+    await writeFile(planPath, planContent);
+    await execa('git', ['add', '.docs/plans/test-plan.md'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: gitDir });
+
+    // Create a commit that will be referenced as the evidence SHA
+    await writeFile(join(gitDir, 'src.ts'), 'export const x = 1;');
+    await execa('git', ['add', 'src.ts'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'feat: real work\n\nTask: 7\n'], { cwd: gitDir });
+
+    // Get the SHA of the work commit
+    const workCommitSha = (await execa('git', ['rev-parse', 'HEAD'], { cwd: gitDir })).stdout.trim();
+
+    // Create an empty no-op commit with Evidence: satisfied-by trailer
+    await execa('git', ['commit', '--allow-empty', '-m', `noop: evidence commit\n\nEvidence: satisfied-by ${workCommitSha}\n`], { cwd: gitDir });
+
+    const commits = await autoheal.listCommitsWithTrailers(gitDir);
+    const evidence = await createTaskEvidence(gitDir);
+
+    const result = await autoheal.deriveCompletion(gitDir, planPath, '', commits, evidence);
+
+    expect(result).toHaveProperty('7');
+    expect(result['7']).toHaveProperty('completed', true);
+    expect(result['7']).toHaveProperty('evidencedBy');
+    expect(result['7'].evidencedBy).toBe(workCommitSha);
+  });
+
+  it('marks task skipped with Evidence: skipped <reason>', async () => {
+    const autoheal = await loadAutoheal();
+    const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
+
+    // Create a plan
+    const planPath = join(gitDir, '.docs/plans/test-plan.md');
+    await mkdir(join(gitDir, '.docs/plans'), { recursive: true });
+    const planContent = `# Test Plan
+
+### Task 8: Skippable task
+A task that will be skipped.
+`;
+    await writeFile(planPath, planContent);
+    await execa('git', ['add', '.docs/plans/test-plan.md'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: gitDir });
+
+    // Create a no-op commit with Evidence: skipped trailer
+    await execa('git', ['commit', '--allow-empty', '-m', 'noop: skip evidence\n\nEvidence: skipped build unavailable\n'], { cwd: gitDir });
+
+    const commits = await autoheal.listCommitsWithTrailers(gitDir);
+    const evidence = await createTaskEvidence(gitDir);
+
+    const result = await autoheal.deriveCompletion(gitDir, planPath, '', commits, evidence);
+
+    expect(result).toHaveProperty('8');
+    expect(result['8']).toHaveProperty('status', 'skipped');
+    expect(result['8']).toHaveProperty('skipReason', 'build unavailable');
+  });
+
+  it('does NOT complete task with dangling satisfied-by sha', async () => {
+    const autoheal = await loadAutoheal();
+    const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
+
+    // Create a plan
+    const planPath = join(gitDir, '.docs/plans/test-plan.md');
+    await mkdir(join(gitDir, '.docs/plans'), { recursive: true });
+    const planContent = `# Test Plan
+
+### Task 9: Dangling evidence
+A task with a dangling sha.
+`;
+    await writeFile(planPath, planContent);
+    await execa('git', ['add', '.docs/plans/test-plan.md'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: gitDir });
+
+    // Create a no-op commit with a bogus sha
+    const fakeSha = 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef';
+    await execa('git', ['commit', '--allow-empty', '-m', `noop: bad evidence\n\nEvidence: satisfied-by ${fakeSha}\n`], { cwd: gitDir });
+
+    const commits = await autoheal.listCommitsWithTrailers(gitDir);
+    const evidence = await createTaskEvidence(gitDir);
+
+    const result = await autoheal.deriveCompletion(gitDir, planPath, '', commits, evidence);
+
+    expect(result).toHaveProperty('9');
+    expect(result['9']).toHaveProperty('completed', false);
+    expect(result['9']).toHaveProperty('auditEntry');
+    expect(result['9'].auditEntry).toContain('dangling');
+  });
+
+  it('does NOT complete task with bare Task: trailer but no Evidence:', async () => {
+    const autoheal = await loadAutoheal();
+    const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
+
+    // Create a plan
+    const planPath = join(gitDir, '.docs/plans/test-plan.md');
+    await mkdir(join(gitDir, '.docs/plans'), { recursive: true });
+    const planContent = `# Test Plan
+
+### Task 10: Bare task
+A task with bare Task: trailer.
+`;
+    await writeFile(planPath, planContent);
+    await execa('git', ['add', '.docs/plans/test-plan.md'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: gitDir });
+
+    // Create an empty commit with ONLY Task: trailer (no Evidence:)
+    await execa('git', ['commit', '--allow-empty', '-m', 'noop: bare task\n\nTask: 10\n'], { cwd: gitDir });
+
+    const commits = await autoheal.listCommitsWithTrailers(gitDir);
+    const evidence = await createTaskEvidence(gitDir);
+
+    const result = await autoheal.deriveCompletion(gitDir, planPath, '', commits, evidence);
+
+    expect(result).toHaveProperty('10');
+    expect(result['10']).toHaveProperty('completed', false);
+  });
+
+  it('includes skipped status in result when Evidence: skipped present', async () => {
+    const autoheal = await loadAutoheal();
+    const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
+
+    // Create a plan
+    const planPath = join(gitDir, '.docs/plans/test-plan.md');
+    await mkdir(join(gitDir, '.docs/plans'), { recursive: true });
+    const planContent = `# Test Plan
+
+### Task 11: Skip test
+Another task to skip.
+`;
+    await writeFile(planPath, planContent);
+    await execa('git', ['add', '.docs/plans/test-plan.md'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: gitDir });
+
+    // Create skip evidence
+    await execa('git', ['commit', '--allow-empty', '-m', 'noop: skip commit\n\nEvidence: skipped deployment blocked\n'], { cwd: gitDir });
+
+    const commits = await autoheal.listCommitsWithTrailers(gitDir);
+    const evidence = await createTaskEvidence(gitDir);
+
+    const result = await autoheal.deriveCompletion(gitDir, planPath, '', commits, evidence);
+
+    expect(result).toHaveProperty('11');
+    expect(result['11']).toHaveProperty('status');
+    expect(result['11'].status).toBe('skipped');
+  });
+});
