@@ -1238,6 +1238,102 @@ describe('engine/conductor', () => {
       // Verify no steps were dispatched (conductor halted before dispatch)
       expect(dispatchedSteps).toHaveLength(0);
     });
+
+    it('unpark verb removes auto-park marker and resets the no-evidence counter', async () => {
+      const { dispatchDaemonPark } = await import('../../src/engine/daemon-park-cli.js');
+      const { writeAutoPark } = await import('../../src/engine/park-marker.js');
+      const { readNoEvidenceAttempts } = await import('../../src/engine/task-evidence.js');
+
+      // Setup: create auto-park marker and set counter to N
+      await writeAutoPark(dir, 'feat', 'no evidence after 3 attempts');
+      const evidence = await createTaskEvidence(dir);
+      evidence.noEvidenceAttempts = 3;
+      await evidence.write();
+
+      expect(await readNoEvidenceAttempts(dir)).toBe(3);
+
+      // Call unpark verb
+      const code = await dispatchDaemonPark(
+        { kind: 'unpark', slug: 'feat' },
+        { cwd: dir, out: () => {} }
+      );
+
+      // Verify unpark succeeded
+      expect(code).toBe(0);
+
+      // Verify marker was removed and counter was reset
+      const { isOperatorParked } = await import('../../src/engine/park-marker.js');
+      expect(await isOperatorParked(dir, 'feat')).toBe(false);
+      expect(await readNoEvidenceAttempts(dir)).toBe(0);
+    });
+
+    it('feature re-kicked after unpark resumes normal build cycle with fresh counter', async () => {
+      const { writeAutoPark } = await import('../../src/engine/park-marker.js');
+      const { dispatchDaemonPark } = await import('../../src/engine/daemon-park-cli.js');
+      const { readNoEvidenceAttempts } = await import('../../src/engine/task-evidence.js');
+
+      // Setup: auto-parked feature with counter at N-1, seed to acceptance_specs gate
+      await writeAutoPark(dir, 'feat', 'no evidence after 3 attempts');
+      const evidence = await createTaskEvidence(dir);
+      evidence.noEvidenceAttempts = 2;
+      await evidence.write();
+
+      const res = await readState(statePath);
+      const state = (res.ok ? res.value : {}) as Record<string, unknown>;
+      for (const s of ALL_STEPS) {
+        if (s.name === 'acceptance_specs') break;
+        state[s.name] = 'done';
+      }
+      state.complexity_tier = 'L';
+      state.feature_desc = 'feat';
+      state.track = 'technical';
+      await writeState(statePath, state as unknown as ConductState);
+
+      // Create a plan file (for no-evidence test)
+      await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+      await writeFile(
+        join(dir, '.docs', 'plans', 'plan.md'),
+        '# Plan\n\n- Task 1\n- Task 2\n',
+      );
+
+      // Unpark the feature
+      const code = await dispatchDaemonPark(
+        { kind: 'unpark', slug: 'feat' },
+        { cwd: dir, out: () => {} }
+      );
+      expect(code).toBe(0);
+
+      // Verify counter was reset
+      expect(await readNoEvidenceAttempts(dir)).toBe(0);
+
+      // Now run the conductor again from acceptance_specs — it should not auto-park
+      // because the counter is at zero (fresh after unpark)
+      const runner = createMockStepRunner({ success: true });
+      const parkEvents: Array<{ type: string; slug?: string; reason?: string }> = [];
+      events.on('auto_park', (e) => {
+        parkEvents.push({ type: 'auto_park', slug: e.slug, reason: e.reason });
+      });
+
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 1,
+        fromStep: 'acceptance_specs',
+      });
+
+      await conductor.run();
+
+      // Verify no auto-park occurred (counter was reset, so one miss is tolerated)
+      expect(parkEvents).toHaveLength(0);
+
+      // Verify the runner was called to dispatch steps (feature resumed)
+      expect((runner.run as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(0);
+    });
   });
 
   describe('daemon finish/as-built remediation', () => {

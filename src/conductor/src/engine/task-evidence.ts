@@ -116,3 +116,31 @@ function createInstance(
 
   return instance;
 }
+
+/**
+ * Increment the no-evidence attempts counter by 1 and persist to sidecar.
+ * Returns the new counter value.
+ */
+export async function incrementNoEvidenceAttempts(projectRoot: string): Promise<number> {
+  const evidence = await createTaskEvidence(projectRoot);
+  evidence.noEvidenceAttempts++;
+  await evidence.write();
+  return evidence.noEvidenceAttempts;
+}
+
+/**
+ * Reset the no-evidence attempts counter to zero and persist to sidecar.
+ */
+export async function resetNoEvidenceAttempts(projectRoot: string): Promise<void> {
+  const evidence = await createTaskEvidence(projectRoot);
+  evidence.noEvidenceAttempts = 0;
+  await evidence.write();
+}
+
+/**
+ * Read the current no-evidence attempts counter from sidecar.
+ */
+export async function readNoEvidenceAttempts(projectRoot: string): Promise<number> {
+  const evidence = await createTaskEvidence(projectRoot);
+  return evidence.noEvidenceAttempts;
+}

@@ -168,3 +168,9 @@ export async function getProvenanceType(
     throw err;
   }
 }
+
+/**
+ * Alias for getProvenanceType — read park provenance (auto vs operator).
+ * Maintained for backward compatibility with acceptance tests.
+ */
+export const readParkProvenance = getProvenanceType;
