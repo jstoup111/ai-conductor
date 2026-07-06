@@ -19,13 +19,7 @@
  */
 
 import type { GhRunner } from './pr-labels.js';
-import {
-  parseIssueRef,
-  restRemoveLabelArgs,
-  readHaltPresentation,
-  removeBodyMarker,
-  NEEDS_REMEDIATION_BODY_MARKER,
-} from './pr-labels.js';
+import { cleanupHaltPresentation } from './pr-labels.js';
 import { injectIssueRef } from './engineer/issue-ref.js';
 
 export const NEEDS_REMEDIATION_TITLE_PREFIX = 'needs-remediation:';
@@ -96,66 +90,16 @@ export async function rehabilitateHaltPr(
   const hasHaltLabel = view.labels.includes(NEEDS_REMEDIATION_LABEL);
   if (!hasHaltTitle && !hasHaltLabel) return 'not-halt-pr';
 
-  let anyFailed = false;
-
-  if (view.isDraft) {
-    try {
-      await gh(['pr', 'ready', prUrl], { cwd });
-    } catch (err) {
-      anyFailed = true;
-      log(`[halt-pr-rehab] ready-flip failed for ${prUrl}: ${err}`);
-    }
-  }
-
-  if (hasHaltLabel) {
-    const ref = parseIssueRef(prUrl);
-    if (!ref) {
-      anyFailed = true;
-      log(`[halt-pr-rehab] unparseable PR URL "${prUrl}" — cannot clear label`);
-    } else {
-      try {
-        await gh(restRemoveLabelArgs(ref.repo, ref.number, NEEDS_REMEDIATION_LABEL), { cwd });
-      } catch (err) {
-        anyFailed = true;
-        log(`[halt-pr-rehab] label clear failed for ${prUrl}: ${err}`);
-      }
-    }
-  }
-
-  // Remove body marker if present (idempotent)
-  if (view.body.includes(NEEDS_REMEDIATION_BODY_MARKER)) {
-    await removeBodyMarker(gh, cwd, prUrl, view.body, log);
-  }
+  // Label/draft/body-marker removal is delegated to cleanupHaltPresentation,
+  // which retries each mutation (bounded, with backoff) and re-reads to
+  // confirm — the same verify-after-write guarantee ADR
+  // adr-2026-07-05-halt-pr-presentation-reliability (D5) requires here.
+  const cleanupResult = await cleanupHaltPresentation(gh, cwd, prUrl, log);
+  const anyFailed = cleanupResult === 'partial';
 
   // Idempotent Closes injection — injectIssueRef swallows gh failures internally
   // (warn-only) and no-ops when the ref is already present or sourceRef is unusable.
   await injectIssueRef({ gh, prUrl, keyword: 'Closes', sourceRef, cwd, log });
-
-  // ── Verify-after-write: re-read to confirm all markers are gone ────────
-  try {
-    const afterCleanup = await readHaltPresentation(gh, cwd, prUrl, log);
-    if (afterCleanup) {
-      const hasResidualLabel = afterCleanup.labels.includes(NEEDS_REMEDIATION_LABEL);
-      const hasResidualDraft = afterCleanup.isDraft;
-      const hasResidualMarker = afterCleanup.body.includes(NEEDS_REMEDIATION_BODY_MARKER);
-
-      if (hasResidualLabel || hasResidualDraft || hasResidualMarker) {
-        anyFailed = true;
-        if (hasResidualLabel) {
-          log(`[halt-pr-rehab] verify-after-write: residual needs-remediation label on ${prUrl}`);
-        }
-        if (hasResidualDraft) {
-          log(`[halt-pr-rehab] verify-after-write: still in draft status on ${prUrl}`);
-        }
-        if (hasResidualMarker) {
-          log(`[halt-pr-rehab] verify-after-write: residual body marker on ${prUrl}`);
-        }
-      }
-    }
-  } catch (err) {
-    // Verification read failed, but we'll still return based on the cleanup attempts
-    log(`[halt-pr-rehab] verify-after-write read failed for ${prUrl}: ${err}`);
-  }
 
   return anyFailed ? 'partial' : 'rehabilitated';
 }
