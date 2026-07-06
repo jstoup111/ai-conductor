@@ -195,6 +195,10 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   round-trip. Read at daemon startup (restart to apply); update or remove at the 1.0 cut.
 - **pipeline: per-task VERIFY now runs the scoped affected-test set with fallback-to-full-suite triggers; batch-boundary full suite unchanged (#245).** Implementation subagents now scope each task's VERIFY step to the test files affected by that task's code changes, reducing feedback latency and test noise. Fallback triggers—shared/core modules (3+ importers), config/migrations/test infrastructure, empty scoped set, or low-confidence mapping—revert to full suite when a task's scope is indeterminate. Batch-boundary verification continues to run the full test suite. Scoped sets are reported per-task and visible in the pipeline dispatch output.
 
+### Removed
+
+- Removed `check_harness_config` (consumer CLAUDE.md → HARNESS.md auto-upgrade) from `bin/conduct`; detection is retained by the session-start context hook. Unblocks the v1.0 bin/conduct removal (#226).
+
 ### Migration
 
 **Engine store: one-time dist→store migration on first build.**
