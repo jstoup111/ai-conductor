@@ -97,4 +97,55 @@ describe('report() cwd resolution (#290)', () => {
       process.chdir(originalCwd);
     }
   });
+
+  it('falls back to os.homedir() when the sourceRef repo is entirely absent from the registry', async () => {
+    const { homedir } = await import('node:os');
+    const { gh, cwds } = makeRecordingGh();
+    // Registry lists other repos, but never the one referenced in sourceRef.
+    const registry = { list: async () => [{ name: 'o/other', path: join(dir, 'o-other') }] };
+    const ledger = createLedger(join(dir, 'ledger.json'));
+    const adapter = createGithubIssuesAdapter({ gh, registry, ledger });
+
+    await expect(
+      adapter.report('o/missing#1', 'done', { prUrl: 'https://x/pr/9' }),
+    ).resolves.not.toThrow();
+
+    expect(cwds.length).toBeGreaterThan(0);
+    for (const cwd of cwds) {
+      expect(cwd).toBe(homedir());
+      expect(existsSync(cwd)).toBe(true);
+      expect(cwd).not.toBe(process.cwd());
+    }
+  });
+
+  it('degrades gracefully when registry.list() rejects, still calling gh with -R targeting', async () => {
+    const { homedir } = await import('node:os');
+    const { gh, cwds } = makeRecordingGh();
+    const registry = { list: async () => { throw new Error('registry unavailable'); } };
+    const ledger = createLedger(join(dir, 'ledger.json'));
+    const adapter = createGithubIssuesAdapter({ gh, registry, ledger });
+
+    const outcome = await adapter.report('o/a#1', 'done', { prUrl: 'https://x/pr/9' });
+
+    expect(outcome.ok).toBe(true);
+    expect(cwds.length).toBeGreaterThan(0);
+    for (const cwd of cwds) {
+      expect(cwd).toBe(homedir());
+      expect(existsSync(cwd)).toBe(true);
+    }
+  });
+
+  it('TR-2 failure path applies only when gh itself fails after a registry rejection', async () => {
+    const registry = { list: async () => { throw new Error('registry unavailable'); } };
+    const ledger = createLedger(join(dir, 'ledger.json'));
+    const gh: GhRunner = async () => {
+      throw new Error('gh: command not found (ENOENT)');
+    };
+    const adapter = createGithubIssuesAdapter({ gh, registry, ledger });
+
+    const outcome = await adapter.report('o/a#1', 'done', { prUrl: 'https://x/pr/9' });
+
+    expect(outcome.ok).toBe(false);
+    expect(outcome.remediation?.[0]).toMatch(/write-back failed for o\/a#1/);
+  });
 });

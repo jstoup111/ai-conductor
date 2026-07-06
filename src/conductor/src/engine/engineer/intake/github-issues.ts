@@ -128,9 +128,16 @@ export function createGithubIssuesAdapter(deps: GithubIssuesDeps): IntakeSource 
     const cached = repoPaths.get(repo);
     if (cached && existsSync(cached)) return cached;
 
-    const repos = await registry.list();
-    const found = repos.find((r) => (r.ghRepo ?? r.name) === repo);
-    if (found && existsSync(found.path)) return found.path;
+    try {
+      const repos = await registry.list();
+      const found = repos.find((r) => (r.ghRepo ?? r.name) === repo);
+      if (found && existsSync(found.path)) return found.path;
+    } catch (err: unknown) {
+      // Registry is unavailable — degrade gracefully to the homedir fallback
+      // rather than let a registry failure block write-back entirely.
+      const msg = err instanceof Error ? err.message : String(err);
+      log(`github-issues: registry lookup failed while resolving cwd for ${repo} — ${msg}`);
+    }
 
     return homedir();
   }
