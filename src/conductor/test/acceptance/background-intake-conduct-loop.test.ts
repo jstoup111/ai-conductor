@@ -46,6 +46,11 @@ const INTAKE_LOOP_MOD = '../../src/engine/engineer/intake/intake-loop.js';
 const NOTIFIER_MOD = '../../src/engine/engineer/intake/notifier.js';
 const INTAKE_LOOP_SRC = join(here, '..', '..', 'src', 'engine', 'engineer', 'intake', 'intake-loop.ts');
 const NOTIFIER_SRC = join(here, '..', '..', 'src', 'engine', 'engineer', 'intake', 'notifier.ts');
+// buildIntake() is the composition-root factory that wires the concrete
+// github-issues adapter for the intake path (ADR-008: the engineer loop must
+// not import a concrete adapter, but the CLI composition root does). It lives
+// in engineer-cli.ts rather than its own module — this is the file to scan.
+const BUILD_INTAKE_SRC = join(here, '..', '..', 'src', 'engine', 'engineer-cli.ts');
 
 async function load(modPath: string): Promise<Record<string, any>> {
   return (await import(modPath)) as Record<string, any>;
@@ -459,6 +464,52 @@ describe('FR-9 — the intake loop path imports no LLM/provider module', () => {
     await intakeTick(deps);
 
     expect(Object.keys(deps).some((k) => /model|llm|provider|claude/i.test(k))).toBe(false);
+  });
+
+  // Task 15 — zero-token guard, broadened patterns + buildIntake's composition
+  // root (engineer-cli.ts). This is a static import-scan (readFile + regex),
+  // never a dynamic import: a dynamic import would only prove the module
+  // *resolves*, not that its source text is free of provider/LLM imports.
+  const NO_PROVIDER_IMPORT_PATTERNS: RegExp[] = [
+    // @anthropic-ai/sdk or any claude-* module (e.g. claude-session.js)
+    /from\s+['"](?:@anthropic-ai\/sdk|[^'"]*\bclaude-[^'"]*)['"]/i,
+    // a routing adapter module or the RoutingProvider type/class itself
+    /from\s+['"][^'"]*\brouting[^'"]*['"]/i,
+    /\bRoutingProvider\b/,
+    // a session-cache module or the SessionCache type/class itself
+    /from\s+['"][^'"]*\bsession-?cache[^'"]*['"]/i,
+    /\bSessionCache\b/,
+    // any generic "provider" API module import
+    /from\s+['"][^'"]*\bprovider[^'"]*['"]/i,
+  ];
+
+  function assertNoProviderImports(src: string, label: string): void {
+    for (const pattern of NO_PROVIDER_IMPORT_PATTERNS) {
+      expect(src, `${label} must not match ${pattern} (zero-token guard)`).not.toMatch(pattern);
+    }
+  }
+
+  it('intake-loop.ts imports no LLM/provider module (broadened pattern set)', async () => {
+    const src = await readFile(INTAKE_LOOP_SRC, 'utf8');
+    assertNoProviderImports(src, 'intake-loop.ts');
+  });
+
+  it('notifier.ts imports no LLM/provider module (broadened pattern set)', async () => {
+    const src = await readFile(NOTIFIER_SRC, 'utf8');
+    assertNoProviderImports(src, 'notifier.ts');
+  });
+
+  it("buildIntake's composition root (engineer-cli.ts) imports no @anthropic-ai/sdk, RoutingProvider, or SessionCache", async () => {
+    const src = await readFile(BUILD_INTAKE_SRC, 'utf8');
+    // engineer-cli.ts is the CLI entrypoint and legitimately spawns an
+    // interactive `claude /engineer` session as a subprocess (ADR-008) — that
+    // is process spawning, not an in-process LLM/provider import, so it is
+    // not covered by these patterns. What must never appear is a direct
+    // import of an SDK/provider/session-cache module into the intake path.
+    expect(src).not.toMatch(/from\s+['"]@anthropic-ai\/sdk['"]/i);
+    expect(src).not.toMatch(/\bRoutingProvider\b/);
+    expect(src).not.toMatch(/\bSessionCache\b/);
+    expect(src).not.toMatch(/from\s+['"][^'"]*\bsession-?cache[^'"]*['"]/i);
   });
 });
 
