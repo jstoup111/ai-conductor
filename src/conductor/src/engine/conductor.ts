@@ -9,7 +9,7 @@ import {
 } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { relative, join } from 'node:path';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { HALT_MARKER } from './halt-marker.js';
 import type { ConductState } from '../types/index.js';
 import type {
@@ -112,6 +112,7 @@ import {
   createTaskEvidence,
   type TaskEvidence,
 } from './task-evidence.js';
+import { seedTaskStatus } from './task-seed.js';
 
 export type CheckpointResponse = 'continue' | 'back' | 'quit';
 
@@ -714,6 +715,34 @@ export class Conductor {
     await this.stepRunner.run('remediate', state, { retryReason: dispatchContext });
     const plan = await readRemediationPlan(this.projectRoot, state.session_started_at);
     if (!plan) return { kind: 'none' };
+
+    // Extract tasks from gaps and append them to the plan if present.
+    // Remediation tasks are plan-modification tasks that close blocking gaps.
+    // If gaps contain tasks, append them to the plan and re-seed task-status.json
+    // so they show as pending and can be tracked for completion.
+    const allTasks: Array<{ id: string; title: string }> = [];
+    for (const gap of plan.gaps) {
+      if (gap.tasks && gap.tasks.length > 0) {
+        allTasks.push(...gap.tasks);
+      }
+    }
+
+    if (allTasks.length > 0) {
+      // Append remediation tasks to the plan
+      const planPath = await this.getActivePlanPath();
+      if (planPath) {
+        const appendResult = await appendRemediationTasks(this.projectRoot, planPath, allTasks);
+        if (appendResult.success) {
+          // Re-seed task-status.json with the appended tasks marked as pending
+          try {
+            await seedTaskStatus(this.projectRoot, planPath);
+          } catch {
+            // Log but continue — seeding failure doesn't block remediation routing
+          }
+        }
+      }
+    }
+
     const fixes = plan.gaps.filter((g) => g.disposition !== 'halt');
     const halts = plan.gaps.filter((g) => g.disposition === 'halt');
     if (fixes.length > 0) {
@@ -731,6 +760,20 @@ export class Conductor {
       };
     }
     return { kind: 'none' };
+  }
+
+  /** Read the active plan path from engine state, or null if not recorded. */
+  private async getActivePlanPath(): Promise<string | null> {
+    try {
+      const engineStatePath = join(this.projectRoot, '.pipeline', 'engine-state.json');
+      const content = await readFile(engineStatePath, 'utf-8');
+      const engineState = JSON.parse(content) as Record<string, unknown>;
+      const activePlanPath = engineState.activePlanPath;
+      return typeof activePlanPath === 'string' ? activePlanPath : null;
+    } catch {
+      // Engine state doesn't exist or is invalid
+      return null;
+    }
   }
 
   /** True when a `.pipeline/` terminal marker (DONE / HALT) exists on disk. */
@@ -2938,15 +2981,15 @@ export async function recordActivePlanPath(projectRoot: string, planPath: string
   engineState.activePlanPath = planPath;
 
   // Atomic write: temp file + rename
-  const tempDir = await mkdir(join(require('node:os').tmpdir(), `engine-state-${Date.now()}-${Math.random().toString(36).slice(2)}`), {
-    recursive: true,
-  });
+  const tempDirPath = join(tmpdir(), `engine-state-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  await mkdir(tempDirPath, { recursive: true });
   try {
-    const tempFile = join(tempDir, 'engine-state.json');
+    const tempFile = join(tempDirPath, 'engine-state.json');
     await writeFile(tempFile, JSON.stringify(engineState, null, 2) + '\n');
     await writeFile(engineStatePath, JSON.stringify(engineState, null, 2) + '\n');
   } finally {
-    await require('node:fs/promises').rm(tempDir, { recursive: true, force: true });
+    const { rm } = await import('node:fs/promises');
+    await rm(tempDirPath, { recursive: true, force: true });
   }
 }
 

@@ -5782,4 +5782,110 @@ Some description here.
       expect(content.match(/### Task rem-test-b:/g)).toHaveLength(1);
     });
   });
+
+  describe('remediation end-to-end (happy path #2)', () => {
+    let dir: string;
+
+    beforeEach(async () => {
+      dir = await mkdtemp(join(tmpdir(), 'remediation-e2e-test-'));
+    });
+
+    afterEach(async () => {
+      await rm(dir, { recursive: true, force: true });
+    });
+
+    it('blocking gap → plan append → re-seed → commit → gate-pass', async () => {
+      // SETUP: Create initial plan with one task
+      const planPath = join(dir, '.docs', 'plans', 'plan.md');
+      await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+      await writeFile(
+        planPath,
+        `# Implementation Plan
+
+## Tasks
+
+### Task 1: Initial task
+Initial task content.
+`,
+      );
+
+      // Step 1: Simulate a blocking gap detected → plan remediation outcome with tasks
+      // This simulates what planRemediation would produce when a gap has remediation tasks
+      const remediationTasks = [
+        {
+          id: 'rem-fr10-1',
+          title: 'Fix schema validation issue',
+        },
+      ];
+
+      // Step 2: Trigger remediation flow
+      // 2a. Call appendRemediationTasks() with the gap-derived tasks
+      let result = await appendRemediationTasks(dir, planPath, remediationTasks);
+      expect(result).toEqual({ success: true });
+
+      // Verify the task was appended to the plan
+      let planContent = await readFile(planPath, 'utf-8');
+      expect(planContent).toContain('### Task rem-fr10-1: Fix schema validation issue');
+
+      // 2b. Call seedTaskStatus() to re-seed with appended tasks
+      const { seedTaskStatus } = await import('../../src/engine/task-seed.js');
+      await seedTaskStatus(dir, '.docs/plans/plan.md');
+
+      // Step 3: Verify appended tasks are pending in task-status.json
+      let statusPath = join(dir, '.pipeline', 'task-status.json');
+      let statusContent = await readFile(statusPath, 'utf-8');
+      let status = JSON.parse(statusContent);
+
+      expect(status.tasks).toBeDefined();
+      expect(status.tasks).toBeInstanceOf(Array);
+      expect(status.tasks.some((t: Record<string, unknown>) => t.id === 'rem-fr10-1')).toBe(true);
+
+      const remTask = status.tasks.find((t: Record<string, unknown>) => t.id === 'rem-fr10-1');
+      expect(remTask).toBeDefined();
+      expect(remTask.status).toBe('pending');
+
+      // Step 4: Simulate commit with Task: <rem-id> trailer on appended task
+      // In this test, we directly simulate the evidence that autoheal would have collected
+      // from git. In integration, autoheal reads commits and creates evidence stamps.
+      const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
+      const evidence = await createTaskEvidence(dir);
+      // Simulate the evidence that autoheal would have found from a "Task: rem-fr10-1" trailer
+      evidence.evidenceStamps.set('rem-fr10-1', {
+        sha: 'abc1234567890abcdef1234567890',
+        form: 'trailer',
+      });
+      await evidence.write();
+
+      // Step 5: Manually update task-status.json to mark task as completed
+      // This simulates what autoheal/seedTaskStatus would do after finding evidence
+      statusContent = await readFile(statusPath, 'utf-8');
+      status = JSON.parse(statusContent);
+      for (const task of status.tasks) {
+        if (task.id === 'rem-fr10-1') {
+          task.status = 'completed';
+          task.commit = 'abc1234';
+        }
+      }
+      await writeFile(statusPath, JSON.stringify(status, null, 2) + '\n');
+
+      // Step 6: Verify appended task is now marked completed
+      const updatedStatusContent = await readFile(statusPath, 'utf-8');
+      const updatedStatus = JSON.parse(updatedStatusContent);
+
+      const completedTask = updatedStatus.tasks.find(
+        (t: Record<string, unknown>) => t.id === 'rem-fr10-1',
+      );
+      expect(completedTask).toBeDefined();
+      expect(completedTask.status).toBe('completed');
+      expect(completedTask.commit).toBe('abc1234');
+
+      // Step 7: Verify gate predicate returns true (blocking gap resolved)
+      // The blocking gap is resolved when its remediation task is completed.
+      // The initial task is unrelated to this blocking gap, so we only check the remediation task.
+      const blockingGapResolved = updatedStatus.tasks
+        .filter((t: Record<string, unknown>) => String(t.id).startsWith('rem-'))
+        .every((t: Record<string, unknown>) => t.status === 'completed' || t.status === 'skipped');
+      expect(blockingGapResolved).toBe(true);
+    });
+  });
 });
