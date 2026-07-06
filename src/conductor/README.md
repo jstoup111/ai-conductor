@@ -1279,6 +1279,26 @@ through an injected `gh` runner — it never touches a registered repo's working
   on `land` (routed) and `handoff` (done); the shared `intake/writeback.ts` helper backs both the CLI
   primitives and the test-only loop. It is **non-fatal** (a `gh` outage never reverts a delivered spec
   PR) and **de-duplicated** per `(sourceRef, status)`.
+  - **`gh` cwd resolution never falls back to `process.cwd()`.** `report()`'s `gh` calls always pass
+    `-R <owner/repo>`, so any existing directory is a sufficient cwd — but a bare `process.cwd()`
+    fallback previously spawned `gh` from wherever the daemon happened to be running, which could hit
+    a deleted/missing directory and fail with `ENOENT`. `resolveReportCwd()` instead resolves, in
+    order: the poll-cache (`repoPaths`, populated by a prior `poll()`) → a registry lookup matched by
+    `ghRepo`/`name` → `os.homedir()` — each candidate `existsSync`-checked before use.
+  - **Failures return actionable remediation, not just a log line.** `report()` returns a
+    `ReportOutcome`: `{ ok: true }` on success, or `{ ok: false, remediation: string[] }` on failure,
+    where `remediation` is the fully-substituted `gh` command for the *specific* step that failed
+    (issue comment or label-add), ready to copy/paste-retry — e.g.
+    `gh issue comment 200 --repo o/e --body "..."`. `dispatchEngineer`'s `handoff`/`land` primitives
+    print that remediation to stderr; stdout (the `pr-opened`/`routed` envelope) and the exit code are
+    unaffected — a failed write-back never turns a successful handoff into a failure.
+  - **A failed `done` write-back sets `writebackPending: true` on the ledger entry** (`reportDone` in
+    `intake/writeback.ts`, threaded through `Ledger.transition`'s `meta`), so a stalled write-back is
+    visible in `ledger.json` for later reconciliation even though the spec PR itself was delivered. A
+    subsequent successful write-back (any later `report()` call for that `(source, sourceRef)` that
+    resolves `ok: true`) clears the flag; per TR-3 the flag is only ever cleared on an explicit
+    `ok: true` outcome — an absent port, or a port call that produced no outcome, leaves a
+    pre-existing flag untouched rather than silently dropping it.
 - **Issue ↔ PR linkage + auto-close (on implementation merge).** Commenting is not linking: GitHub's
   formal issue↔PR link and auto-close come from a closing keyword in a PR body. The issue reference
   travels WITH the spec via a committed **`.docs/intake/<plan-stem>.md`** marker (`Source-Ref: owner/repo#N`,

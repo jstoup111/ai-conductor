@@ -257,8 +257,9 @@ describe('Task 24: degraded loop start without registry/store, no subprocess (FR
 /** Create a no-op IntakePort for injection testing. */
 function createTestIntakePort(): IntakePort {
   return {
-    async report(_sourceRef: string, _status: any): Promise<void> {
+    async report(_sourceRef: string, _status: any) {
       // no-op — 9.3b write-back deferred
+      return { ok: true } as const;
     },
   };
 }
@@ -273,8 +274,8 @@ describe('Task 25: multi-idea loop via intake port (FR-2)', () => {
   it('injected in-memory IntakePort satisfies the port contract (report no-op)', async () => {
     // An in-memory IntakePort must implement report() without throwing.
     const port = createTestIntakePort();
-    await expect(port.report('turn-1', 'pending')).resolves.toBeUndefined();
-    await expect(port.report('turn-2', 'done')).resolves.toBeUndefined();
+    await expect(port.report('turn-1', 'pending')).resolves.toEqual({ ok: true });
+    await expect(port.report('turn-2', 'done')).resolves.toEqual({ ok: true });
   });
 
   it('two sequential sessions on same registry do not leak context between them', async () => {

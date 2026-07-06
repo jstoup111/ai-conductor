@@ -129,6 +129,16 @@ export interface ReportMeta {
   prUrl?: string;
 }
 
+// ─── ReportOutcome ────────────────────────────────────────────────────────────
+
+/**
+ * Result of an IntakePort.report() call.
+ * `ok: true` — the write-back succeeded (or is a no-op, as with claude-session).
+ * `ok: false` — the write-back failed; `remediation` carries human-readable
+ * steps the caller/operator can act on (e.g. re-authenticate `gh`).
+ */
+export type ReportOutcome = { ok: true } | { ok: false; remediation: string[] };
+
 // ─── IntakePort ───────────────────────────────────────────────────────────────
 
 /**
@@ -147,5 +157,5 @@ export interface IntakePort {
    * No-op for the claude-session adapter; future adapters (github-issues) will use it.
    * FR-36: `meta` widens the original 2-arg signature — existing callers are unaffected.
    */
-  report(sourceRef: string, status: EnvelopeStatus, meta?: ReportMeta): Promise<void>;
+  report(sourceRef: string, status: EnvelopeStatus, meta?: ReportMeta): Promise<ReportOutcome>;
 }

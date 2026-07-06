@@ -10,7 +10,7 @@
 // never abort spec authoring or revert a delivered spec PR. They therefore
 // swallow every error internally and never throw.
 
-import type { IntakePort } from './port.js';
+import type { IntakePort, ReportOutcome } from './port.js';
 import type { Ledger } from './ledger.js';
 
 /** Common write-back context: the source/sourceRef pair plus optional sinks. */
@@ -50,17 +50,24 @@ export async function reportDone(
   prUrl: string,
   branch?: string,
 ): Promise<void> {
+  let outcome: ReportOutcome | undefined;
   if (target.port) {
     try {
-      await target.port.report(target.sourceRef, 'done', { prUrl });
+      outcome = await target.port.report(target.sourceRef, 'done', { prUrl });
     } catch {
-      // FR-37: a failed done comment never reverts a delivered spec PR.
+      // FR-37: a failed done comment never reverts a delivered spec PR — but it
+      // does leave a pending write-back marker for later reconciliation.
+      outcome = { ok: false, remediation: [] };
     }
   }
   try {
     await target.ledger?.transition(target.source, target.sourceRef, 'done', {
       prUrl,
       ...(branch !== undefined ? { branch } : {}),
+      // Only thread the flag when the port actually reported an outcome — an
+      // absent port (or one that resolved with no outcome) leaves the flag
+      // untouched (TR-3: a pre-seeded stale flag is only cleared on ok:true).
+      ...(outcome !== undefined ? { writebackPending: outcome.ok === false } : {}),
     });
   } catch {
     // advisory ledger transition.
