@@ -899,6 +899,14 @@ describe('ensureHaltPresentation', () => {
       },
       { stdout: '' }, // convertToDraft: pr ready --undo
       { stdout: '' }, // addLabel: api
+      // readHaltPresentation in retry loop after first addLabel (to check if label present)
+      {
+        stdout: JSON.stringify({
+          isDraft: true,
+          labels: [{ name: 'needs-remediation' }],
+          body: `${prBodyBefore}\n${NEEDS_REMEDIATION_BODY_MARKER}`,
+        }),
+      },
       // readHaltPresentation after writes (verification read)
       {
         stdout: JSON.stringify({
@@ -955,6 +963,14 @@ describe('ensureHaltPresentation', () => {
       },
       // NO convertToDraft call because isDraft is true
       { stdout: '' }, // addLabel: api
+      // readHaltPresentation in retry loop after first addLabel (to check if label present)
+      {
+        stdout: JSON.stringify({
+          isDraft: true,
+          labels: [{ name: 'needs-remediation' }],
+          body: `${prBodyBefore}\n${NEEDS_REMEDIATION_BODY_MARKER}`,
+        }),
+      },
       // readHaltPresentation after writes (verification read)
       {
         stdout: JSON.stringify({
@@ -1071,6 +1087,14 @@ describe('ensureHaltPresentation', () => {
       },
       { stdout: '' }, // convertToDraft: pr ready --undo
       { stdout: '' }, // addLabel: api
+      // readHaltPresentation in retry loop after first addLabel (to check if label present)
+      {
+        stdout: JSON.stringify({
+          isDraft: true,
+          labels: [{ name: 'needs-remediation' }],
+          body: `${originalBody}\n${NEEDS_REMEDIATION_BODY_MARKER}`,
+        }),
+      },
       // readHaltPresentation after writes (verification read)
       {
         stdout: JSON.stringify({
@@ -1174,6 +1198,14 @@ describe('ensureHaltPresentation', () => {
       new Error('gh: insufficient permissions to mark this PR as draft'),
       // addLabel: still proceeds (api call succeeds)
       { stdout: '' },
+      // readHaltPresentation in retry loop after first addLabel (to check if label present)
+      {
+        stdout: JSON.stringify({
+          isDraft: false,
+          labels: [{ name: 'needs-remediation' }],
+          body: `${prBodyBefore}\n${NEEDS_REMEDIATION_BODY_MARKER}`,
+        }),
+      },
       // readHaltPresentation after writes: re-read shows isDraft still false
       // (because the draft conversion failed)
       {

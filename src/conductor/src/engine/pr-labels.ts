@@ -752,12 +752,21 @@ export async function ensureBodyMarker(
 // ── Halt presentation ensure (verify-after-write) ───────────────────────────
 
 /**
+ * Default sleep implementation for backoff. Exported for test injection.
+ */
+export async function defaultSleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
  * Ensure all three halt-presentation markers are present on a PR (draft status,
  * needs-remediation label, and body marker). Performs an idempotent verify-after-write:
  * writes all three markers, then re-reads to verify all are present.
  *
- * Happy path returns 'confirmed'; any mismatch returns 'unconfirmed' (retry logic
- * handled by Tasks 7-8).
+ * Implements retry logic (Task 7): if the label is missing after the first add attempt,
+ * the function retries with bounded attempts (3 total) and backoff (100ms, 200ms).
+ *
+ * Happy path returns 'confirmed'; any mismatch returns 'unconfirmed'.
  *
  * Never throws; swallows all errors internally and logs them via the optional
  * `log` callback.
@@ -766,6 +775,7 @@ export async function ensureBodyMarker(
  * @param cwd - Working directory for gh operations
  * @param prUrl - URL of the PR to ensure (e.g. https://github.com/owner/repo/pull/123)
  * @param log - Optional logging callback
+ * @param sleep - Optional sleep injection for backoff (defaults to setTimeout-based sleep)
  * @returns 'confirmed' if all three markers verified, 'unconfirmed' otherwise
  */
 export async function ensureHaltPresentation(
@@ -773,6 +783,7 @@ export async function ensureHaltPresentation(
   cwd: string,
   prUrl: string,
   log?: (msg: string) => void,
+  sleep: (ms: number) => Promise<void> = defaultSleep,
 ): Promise<'confirmed' | 'unconfirmed'> {
   try {
     // ── Step 1: ensure body marker ────────────────────────────────────────
@@ -790,8 +801,30 @@ export async function ensureHaltPresentation(
       await convertToDraft(runGh, cwd, prUrl, log);
     }
 
-    // ── Step 4: add the needs-remediation label via REST ──────────────────
-    await addLabel(runGh, cwd, prUrl, 'needs-remediation', log);
+    // ── Step 4: add the needs-remediation label with retry logic ──────────
+    const maxAttempts = 3;
+    let labelConfirmed = false;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      // Add the label
+      await addLabel(runGh, cwd, prUrl, 'needs-remediation', log);
+
+      // Re-read to check if label is present
+      const afterAdd = await readHaltPresentation(runGh, cwd, prUrl, log);
+      if (afterAdd?.labels.includes('needs-remediation')) {
+        labelConfirmed = true;
+        break;
+      }
+
+      // Label not present yet; log and retry with backoff (unless on last attempt)
+      if (attempt < maxAttempts) {
+        const backoffMs = attempt * 100; // 100ms, 200ms, etc.
+        log?.(
+          `[pr-labels] ensureHaltPresentation(${prUrl}): label missing after attempt ${attempt}, retrying in ${backoffMs}ms`,
+        );
+        await sleep(backoffMs);
+      }
+    }
 
     // ── Step 5: re-read to verify all three markers are present ───────────
     const afterWrite = await readHaltPresentation(runGh, cwd, prUrl, log);
