@@ -13,14 +13,24 @@ reconciled by whichever merges second)
 ## Summary
 Introduce an in-process `RateLimitEpisode` coordinator that turns a rate-limit episode into a
 daemon-level coordinated pause: it gates new dispatch, gives in-flight features one shared
-escalating (capped) interruptible wait, makes the wait SIGTERM-responsive, and fixes the pre-step
-call site that today fast-HALTs a feature on a rate limit. 16 tasks.
+escalating (capped) interruptible wait, and makes the wait SIGTERM-responsive. **Fable review
+(2026-07-05, from the actual daemon log):** the observed cascade was a CLASSIFIER miss
+(`You've hit your session limit · resets 3:20pm (America/New_York)` doesn't match
+`RATE_LIMIT_RE`) at ordinary steps — NOT the prelude (which the daemon path never runs) — so
+classification hardening (T17) + deadline-first parsing (T18) are the primary fixes, with jitter
+(T19), episode-caused HALT self-heal (T20), restart deferral (T21), and process-level SIGTERM
+(T22) closing the remaining gaps. 22 tasks.
 
 ## Technical Approach
-- **New module** `src/conductor/src/engine/rate-limit-episode.ts` — pure, `now`/`setTimer`-injected
-  (mirrors `waker.ts`): `createRateLimitEpisode()` → `{ enter(untilMs), active(nowMs?),
-  clear(signal?), reset() }`. Holds the latest deadline (later-wins), an escalation counter with a
-  documented cap, and a single shared `clear()` promise; no direct `Date.now`/`setTimeout`.
+- **New module** `src/conductor/src/engine/rate-limit-episode.ts` — pure, `now`/`setTimer`/RNG-
+  injected (pattern: pure factory, injected clocks — NOTE: the `waker.ts` cited by the draft does
+  NOT exist on this branch, it is unmerged PR #329; do not hunt for it):
+  `createRateLimitEpisode()` → `{ enter({ waitSeconds }), active(nowMs?), clear(signal?) }`. The
+  module computes deadlines with its OWN injected `now()` (single clock). Holds the latest
+  deadline (later-wins), an escalation counter with a documented cap and a time-based
+  self-contained reset (grace period past last deadline — no external `reset()` caller), and a
+  shared `clear()` promise with **wake-recheck** semantics (timer fires → re-check `active()` →
+  re-arm if extended; fresh promise after resolve).
 - **Dispatch gate** (`daemon.ts` ~line 574, beside `checkPaused`) — read an optional
   `DaemonDeps.rateLimitEpisode?` (optimization-never-authority: absent → today's behavior). When
   `active()`, skip `pickEligible`/dispatch for NEW features this cycle; in-flight untouched.
@@ -33,10 +43,18 @@ call site that today fast-HALTs a feature on a rate limit. 16 tasks.
 - **SIGTERM handler** — add alongside the existing SIGINT handler (`conductor.ts:863-868`):
   save-state-then-exit; `off()` it at every conductor exit site (the ~13 sites that already `off()`
   SIGINT). Aborts the in-flight wait signal.
-- **Call-site classification** — `project-prelude.ts:invokeSkill` must stop mapping a
-  `rateLimited` result to a bare `success:false`; propagate it so the caller routes to the wait.
-  Audit sibling non-step `provider.invoke` sites (`model-availability` already propagates —
-  confirm; `engineer-store`/`engineer/*` are the /engineer path, not daemon build — document).
+- **Classification hardening (PRIMARY — T17/T18)** — extend the rate-limit family in
+  `claude-provider.ts` so session/usage-cap messages set `rateLimited` (regression fixture: the
+  exact observed log message), and make `parseRateLimitWaitSeconds` handle the observed
+  `resets <time> (<tz>)` shape timezone-aware with a sane clamp; deadline-first (parsed reset =
+  episode deadline), escalation only as fallback.
+- **Call-site classification (interactive-path hardening)** — `project-prelude.ts:invokeSkill`
+  must stop mapping a `rateLimited` result to a bare `success:false`; propagate it so the caller
+  routes to the wait. NOTE (Fable review): the prelude runs ONLY on the interactive path
+  (`index.ts:774`); the daemon never calls it — this is not the daemon cascade fix. Audit sibling
+  non-step `provider.invoke` sites (`model-availability` already propagates — confirm;
+  `runSelfBuildDispatch` delegates to `stepRunner.run` — confirmed; `engineer-store`/`engineer/*`
+  are the /engineer path, not daemon build — document).
 - **Wiring** (`daemon-cli.ts`) — construct one `RateLimitEpisode` next to `events` (line 388), pass
   it into every `new Conductor` (line 468) and into `DaemonDeps` for the dispatch gate.
 
@@ -214,6 +232,87 @@ call site that today fast-HALTs a feature on a rate limit. 16 tasks.
 option threading requires), tests
 **Dependencies:** Tasks 7, 10, 13
 
+## Fable review additions (2026-07-05)
+
+### Task 17: Classification hardening — session-limit family → rateLimited (RED then GREEN)
+**Story:** "Session-limit messages classify as rate-limit-family waits" — all criteria (PRIMARY fix)
+**Type:** happy-path + negative-path
+**Steps:**
+1. Failing tests in `claude-provider.test.ts`: the LITERAL observed message
+   `You've hit your session limit · resets 3:20pm (America/New_York)` → `rateLimited: true`;
+   variant family (`usage limit`, `session limit reached`, 5-hour wordings) → true; genuine
+   failure fixtures → false; exit-0 session-limit → not `success` (mirror `outOfCredits`);
+   precedence vs `AUTH_FAILURE_RE`/`STALE_SESSION_RE` pinned.
+2. Implement the family regex (extend `RATE_LIMIT_RE` or sibling folded into `rateLimited`).
+3. Integration test: session-limit failure at a step → wait + episode entry, retry budget intact.
+4. Verify GREEN; commit.
+**Files likely touched:** `src/conductor/src/execution/claude-provider.ts`, tests
+**Dependencies:** none (independent; unblocks the observed scenario end-to-end with T10)
+
+### Task 18: Deadline-first — timezone-aware reset parse with clamp (RED then GREEN)
+**Story:** "A parseable reset time becomes the episode deadline" — all criteria
+**Type:** happy-path + negative-path
+**Steps:**
+1. Failing tests: exact observed message + injected `now=2026-07-03T18:05:54Z` → ≈4446s
+   (computed in America/New_York, not host zone); parsed deadline becomes the episode deadline
+   with exactly ONE timer arm (no re-probe before it); >cap clamps; past/negative → safe default;
+   unknown zone → default; midnight rollover future-safe.
+2. Implement in `parseRateLimitWaitSeconds` + episode wiring (deadline-first, escalation fallback).
+3. Verify GREEN; commit.
+**Files likely touched:** `src/conductor/src/execution/claude-provider.ts`,
+`rate-limit-episode.ts`, `conductor.ts`, tests
+**Dependencies:** Tasks 4, 17
+
+### Task 19: Jittered resume (RED then GREEN)
+**Story:** "Episode end resumes with jitter" — all criteria
+**Type:** happy-path + negative-path
+**Steps:**
+1. Failing tests (injected RNG): N waiters resume staggered within the documented range; dispatch
+   reopen jittered relative to waiters; N=1 overhead bounded.
+2. Implement injected-RNG jitter in the coordinator's resume + gate reopen.
+3. Verify GREEN; commit.
+**Files likely touched:** `rate-limit-episode.ts`, `daemon.ts`, tests
+**Dependencies:** Tasks 3, 7
+
+### Task 20: Episode-caused HALT stamp + episode-end self-heal sweep (RED then GREEN)
+**Story:** "HALTs written during an active episode self-heal when it ends" — all criteria
+**Type:** happy-path + negative-path
+**Steps:**
+1. Failing tests: HALT during active episode carries the stamp; episode end clears stamped HALTs
+   via the EXISTING rekick path (operator-park respected; unstamped HALTs untouched); restart-
+   between → stamped HALT still recovered by the ordinary sweep later.
+2. Implement stamp-at-write (episode injected where the HALT reason is composed) + episode-end
+   sweep hook in the daemon loop.
+3. Verify GREEN; commit.
+**Files likely touched:** `daemon-cli.ts`/`daemon.ts` (halt write + episode-end hook),
+`daemon-rekick.ts` (reuse), tests
+**Dependencies:** Tasks 7, 15
+
+### Task 21: Defer autonomous self-restarts during an active episode (RED then GREEN)
+**Story:** "Dispatch loop pauses NEW feature dispatch" — restart-deferral negative path (ADR 11)
+**Type:** negative-path
+**Steps:**
+1. Failing tests: episode active + restart-pending marker at idle boundary → NO
+   `triggerSelfRestart` this tick; stale-engine verdict → NO `requestRestart`; episode clears →
+   restart fires on the next tick (defer, not drop).
+2. Gate the idle-boundary triggers on `!episode.active()`.
+3. Verify GREEN; commit.
+**Files likely touched:** `src/conductor/src/engine/daemon.ts`, tests
+**Dependencies:** Task 7
+
+### Task 22: Process-level SIGTERM in daemon-cli; per-conductor stays interactive-only (RED then GREEN)
+**Story:** "In-flight rate-limit wait is interruptible + SIGTERM-responsive" — N>1 negative paths (ADR 12)
+**Type:** negative-path
+**Steps:**
+1. Failing tests: TWO concurrent conductors + SIGTERM → BOTH state files written before exit
+   (injected exit spy); daemon path installs ONE process-level handler (abort shared signals →
+   await all saves → exit); interactive path keeps the per-conductor handler; listener count
+   baseline preserved.
+2. Implement the daemon-cli handler; scope T11's per-conductor SIGTERM to interactive mode.
+3. Verify GREEN; commit.
+**Files likely touched:** `src/conductor/src/daemon-cli.ts`, `conductor.ts` (mode scoping), tests
+**Dependencies:** Tasks 11, 15
+
 ### Task 16: Docs, CHANGELOG, full verification
 **Story:** "Docs and CHANGELOG reflect the new daemon rate-limit behavior"
 **Type:** infrastructure
@@ -225,15 +324,19 @@ option threading requires), tests
 3. Run `cd src/conductor && npm run typecheck && rtk proxy npx vitest run && npm run build`; then
    `test/test_harness_integrity.sh`. All green.
 **Files likely touched:** `README.md`, `src/conductor/README.md`, `CHANGELOG.md`
-**Dependencies:** Tasks 1–15
+**Dependencies:** Tasks 1–15, 17–22 (T16 runs LAST despite its number — ids are stable, order is
+the graph)
 
 ## Task Dependency Graph
 ```
-T1 ► T2 ► T3 ► T4 ─────────────► T9 ► T10 ─┬► T11
+T1 ► T2 ► T3 ► T4 ─────────────► T9 ► T10 ─┬► T11 ► T22 (needs T15)
 T5 ► T6 ► T7 ► T8                          ├► T12
-                                           ├► T13 ► T14
+T7 ► T21                                   ├► T13 ► T14
+T3, T7 ► T19                               │
+T7, T15 ► T20                              │
+T17 (independent) ► T18 (needs T4)         │
 T7, T10, T13 ─────────────► T15            │
-T1..T15 ──────────────────► T16 ◄──────────┘
+T1..T15, T17..T22 ────────► T16 ◄──────────┘
 ```
 
 ## Integration Points
@@ -245,17 +348,22 @@ T1..T15 ──────────────────► T16 ◄──�
 ## Coverage Mapping
 | Story | Tasks |
 |---|---|
-| RateLimitEpisode coordinator tracks an active episode | T1, T2, T3 |
-| Dispatch loop pauses NEW feature dispatch | T5, T6, T7, T8 |
-| In-flight wait interruptible + SIGTERM-responsive | T9, T10, T11 |
-| Adaptive escalating re-probe with cap | T4 |
-| Pre-step call sites route a rate limit to the wait | T13, T14 |
+| RateLimitEpisode coordinator tracks an active episode (incl. wake-recheck, fresh promise, single clock) | T1, T2, T3 |
+| Dispatch loop pauses NEW feature dispatch (incl. restart deferral) | T5, T6, T7, T8, T21 |
+| In-flight wait interruptible + SIGTERM-responsive (incl. N>1 process-level) | T9, T10, T11, T22 |
+| Adaptive escalating re-probe with cap (incl. time-based reset, shared escalation) | T4 |
+| Session-limit messages classify as rate-limit-family waits (PRIMARY) | T17 |
+| A parseable reset time becomes the episode deadline | T18 |
+| Episode end resumes with jitter | T19 |
+| HALTs written during an active episode self-heal | T20 |
+| Pre-step call sites route a rate limit to the wait (interactive-path) | T13, T14 |
 | In-flight features share ONE coordinated backoff | T12 |
 | Docs and CHANGELOG | T16 |
 
 ## Verification
 - [ ] All happy path criteria covered by at least one task (mapping above)
-- [ ] All negative path criteria covered by explicit tasks (T2, T3, T4, T8, T11, T12, T13, T14)
+- [ ] All negative path criteria covered by explicit tasks (T2, T3, T4, T8, T11, T12, T13, T14,
+      T17–T22)
 - [ ] No task exceeds ~5 minutes of work
 - [ ] Dependencies are explicit and acyclic
 - [ ] `cd src/conductor && npm run typecheck && npm test && npm run build` green
