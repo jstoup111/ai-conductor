@@ -54,14 +54,32 @@ export interface IntakeTickSummary {
  * no real I/O, no claude/provider capability.
  */
 export async function intakeTick(deps: IntakeLoopDeps): Promise<IntakeTickSummary> {
-  const envelopes = await deps.poll();
+  let envelopes: unknown[];
+  try {
+    envelopes = await deps.poll();
+  } catch (err) {
+    // The adapter already isolates per-repo failures (FR-27/ADR-012); this
+    // catch is a defensive backstop so an unexpected poll() rejection never
+    // crashes the tick or the loop. Log and treat this tick as zero-capture.
+    deps.log(`intake tick: poll() failed: ${err instanceof Error ? err.message : String(err)}`);
+    return { captured: 0 };
+  }
+  const captured: unknown[] = [];
   for (const envelope of envelopes) {
-    await deps.enqueue(envelope);
+    try {
+      await deps.enqueue(envelope);
+      captured.push(envelope);
+    } catch (err) {
+      // Per-repo isolation backstop (FR-7/FR-27, ADR-012): a single envelope's
+      // enqueue failure must not abort the tick or drop the other repos'
+      // captures — log it and keep going.
+      deps.log(`intake tick: enqueue() failed for an envelope: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
-  if (envelopes.length > 0) {
-    await deps.notify(envelopes);
+  if (captured.length > 0) {
+    await deps.notify(captured);
   }
-  return { captured: envelopes.length };
+  return { captured: captured.length };
 }
 
 /**

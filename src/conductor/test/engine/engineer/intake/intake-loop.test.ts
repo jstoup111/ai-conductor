@@ -178,6 +178,71 @@ describe('intakeTick — ledger dedup (exactly-once)', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Task 5: A failing repo is isolated; loop continues.
+//
+// Story: FR-7 negative · Plan: .docs/plans/2026-06-30-background-intake-conduct-loop.md (Task 5)
+//
+// The adapter already isolates per-repo poll failures (FR-27/ADR-012). This
+// test asserts the tick defensively survives an unexpected per-envelope
+// enqueue failure too: `poll()` yields envelopes for repos A, B, and C, but
+// `enqueue()` throws for repo B's envelope. The tick must not throw, must log
+// B's error, and must still report `{ captured: 2 }` reflecting A and C.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('intakeTick — repo isolation on failure', () => {
+  it('poll() yields A/B/C but enqueue() throws for B: tick captures A+C, logs B, does not throw', async () => {
+    const mod = (await import(
+      '../../../../src/engine/engineer/intake/intake-loop.js'
+    )) as Record<string, any>;
+    const intakeTick = mod.intakeTick as (deps: any) => Promise<{ captured: number }>;
+
+    const envelopeA = {
+      id: 'o/a#1',
+      source: 'github-issues',
+      sourceRef: 'o/a#1',
+      text: 'idea for o/a#1',
+      status: 'pending' as const,
+      receivedAt: '2026-06-30T00:00:00.000Z',
+    };
+    const envelopeB = {
+      id: 'o/b#7',
+      source: 'github-issues',
+      sourceRef: 'o/b#7',
+      text: 'idea for o/b#7',
+      status: 'pending' as const,
+      receivedAt: '2026-06-30T00:00:00.000Z',
+    };
+    const envelopeC = {
+      id: 'o/c#3',
+      source: 'github-issues',
+      sourceRef: 'o/c#3',
+      text: 'idea for o/c#3',
+      status: 'pending' as const,
+      receivedAt: '2026-06-30T00:00:00.000Z',
+    };
+
+    const poll = vi.fn(async () => [envelopeA, envelopeB, envelopeC]);
+    const enqueue = vi.fn(async (envelope: any) => {
+      if (envelope === envelopeB) {
+        throw new Error('repo o/b unreachable');
+      }
+    });
+    const notify = vi.fn(async (_ideas: unknown[]) => {});
+    const sleep = async (_ms: number) => {};
+    const now = () => new Date('2026-06-30T00:00:00.000Z');
+    const log = vi.fn((_msg: string) => {});
+
+    const deps = { poll, enqueue, notify, sleep, now, log };
+
+    await expect(intakeTick(deps)).resolves.toEqual({ captured: 2 });
+
+    expect(log).toHaveBeenCalled();
+    expect(log.mock.calls.some((call: unknown[]) => String(call[0]).includes('o/b unreachable'))).toBe(true);
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(notify).toHaveBeenCalledWith([envelopeA, envelopeC]);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Task 4: Interval loop — N ticks over N intervals, honors `once` and
 // `intervalMs`.
 //
