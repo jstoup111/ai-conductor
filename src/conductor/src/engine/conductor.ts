@@ -108,6 +108,10 @@ import { readMachineOwnerConfig } from './owner-gate/machine-identity.js';
 import { resolveDaemonOwner, type GhRunner } from './owner-gate/identity.js';
 import { makeProductionGh, makeProductionGit, type GitRunner } from './pr-labels.js';
 import { headPushedToUpstream } from './push-evidence.js';
+import {
+  createTaskEvidence,
+  type TaskEvidence,
+} from './task-evidence.js';
 
 export type CheckpointResponse = 'continue' | 'back' | 'quit';
 
@@ -482,6 +486,12 @@ export class Conductor {
    * `conflict_halt` outcome here drives the loop to HALT.
    */
   private lastRebaseOutcome: RebaseOutcome | null = null;
+
+  /**
+   * Durable engine state for task evidence tracking (sidecar JSON).
+   * Loaded at the start of run() and written back when gates change evidence counts.
+   */
+  private taskEvidence: TaskEvidence | null = null;
 
   /**
    * The CompletionContext handed to every gate evaluation. `getHeadSha` feeds
@@ -883,6 +893,11 @@ export class Conductor {
     state.session_started_at = sessionStartedAt;
     if (!state.run_started_at) state.run_started_at = sessionStartedAt;
     await writeState(this.stateFilePath, state);
+
+    // Load task evidence sidecar for durable no-evidence counter (Task 12).
+    // The counter tracks consecutive gate misses with no task progress and
+    // persists across engine restarts. It feeds the auto-park trigger (Task 23).
+    this.taskEvidence = await createTaskEvidence(this.projectRoot);
 
     // Sweep stale per-session markers from prior invocations. A marker left
     // here from a previous run can't legitimately satisfy this run's gate
@@ -1415,6 +1430,21 @@ export class Conductor {
                 } else if (attempt >= 2 && resolvedTasksAfter <= resolvedTasksBefore) {
                   stalled = 'no_task_progress';
                 }
+
+                // Task 12: Durable no-evidence counter. Increment on gate miss with no progress,
+                // reset when progress is detected.
+                if (this.taskEvidence) {
+                  if (resolvedTasksAfter > resolvedTasksBefore) {
+                    // Progress detected — reset counter
+                    this.taskEvidence.noEvidenceAttempts = 0;
+                    await this.taskEvidence.write();
+                  } else if (stalled === 'no_task_progress') {
+                    // No progress stall detected — increment counter
+                    this.taskEvidence.noEvidenceAttempts++;
+                    await this.taskEvidence.write();
+                  }
+                }
+
                 if (stalled) {
                   await this.events.emit({
                     type: 'build_stall',
@@ -1442,6 +1472,13 @@ export class Conductor {
                   if (recheck.done) {
                     succeeded = true;
                     successOutput = result.output;
+
+                    // Task 12: If the interactive REPL resolved the issue and the gate
+                    // now passes, reset the counter since progress was made.
+                    if (this.taskEvidence) {
+                      this.taskEvidence.noEvidenceAttempts = 0;
+                      await this.taskEvidence.write();
+                    }
                   }
                   break;
                 }

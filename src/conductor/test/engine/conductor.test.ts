@@ -34,6 +34,7 @@ import type { GitRunner } from '../../src/engine/pr-labels.js';
 import { writeFile, mkdir, readFile } from 'fs/promises';
 import { readState, writeState } from '../../src/engine/state.js';
 import { createHash } from 'crypto';
+import { createTaskEvidence } from '../../src/engine/task-evidence.js';
 
 function createMockStepRunner(result: StepRunResult = { success: true }): StepRunner {
   return {
@@ -5128,5 +5129,201 @@ describe('projectRoot is required', () => {
       // In a non-git directory, it should return null (indeterminate)
       expect(result).toBeNull();
     });
+  });
+});
+
+describe('durable no-evidence counter', () => {
+  let dir: string;
+  let statePath: string;
+  let events: ConductorEventEmitter;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'conductor-no-evidence-'));
+    statePath = join(dir, 'conduct-state.json');
+    events = new ConductorEventEmitter();
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  async function seedAllArtifactsExceptTaskStatus(): Promise<void> {
+    const artifacts: Array<[string, string]> = [
+      ['.docs/decisions/technical-assessment-2026-04-18.md', 'x'],
+      ['.docs/specs/2026-04-18-feature.md', 'x'],
+      ['.docs/stories/epic-1/a.md', 'x'],
+      ['.docs/conflicts/2026-04-18.md', 'x'],
+      ['.docs/plans/2026-04-18-plan.md', 'x'],
+      ['.docs/architecture/arch.md', 'x'],
+      ['.docs/decisions/adr-001.md', 'x'],
+      ['spec/acceptance/feature_spec.rb', 'x'],
+      ['.pipeline/acceptance-specs-red.json', RED_EVIDENCE_JSON],
+      ['.docs/retros/2026-04-18-retro.md', 'x'],
+    ];
+    for (const [rel, content] of artifacts) {
+      const full = join(dir, rel);
+      await mkdir(full.substring(0, full.lastIndexOf('/')), { recursive: true });
+      await writeFile(full, content);
+    }
+  }
+
+  async function writeTaskStatus(completed: number, total: number): Promise<void> {
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    const tasks: Array<{ id: number; status: string }> = [];
+    for (let i = 1; i <= total; i++) {
+      tasks.push({ id: i, status: i <= completed ? 'completed' : 'pending' });
+    }
+    await writeFile(join(dir, '.pipeline/task-status.json'), JSON.stringify({ tasks }));
+  }
+
+  async function readNoEvidenceCounter(): Promise<number> {
+    const evidence = await createTaskEvidence(dir);
+    return evidence.noEvidenceAttempts;
+  }
+
+  it('initial counter value is zero', async () => {
+    const counter = await readNoEvidenceCounter();
+    expect(counter).toBe(0);
+  });
+
+  it('gate miss with no tasks completed increments the counter', async () => {
+    await seedAllArtifactsExceptTaskStatus();
+    await writeTaskStatus(2, 5); // 2/5 done — and it never changes
+
+    const runner: StepRunner & { runInteractive: ReturnType<typeof vi.fn> } = {
+      run: vi.fn().mockResolvedValue({ success: true }),
+      runInteractive: vi.fn(async () => {
+        // no-op
+      }),
+    };
+
+    const onRecovery = vi.fn().mockResolvedValue('quit' as const);
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      verifyArtifacts: true,
+      maxRetries: 3,
+      onRecovery,
+    });
+
+    await conductor.run();
+
+    // Counter should have been incremented on gate miss with no progress
+    const counter = await readNoEvidenceCounter();
+    expect(counter).toBeGreaterThan(0);
+  });
+
+  it('counter persists across engine process restarts (simulated by re-reading sidecar)', async () => {
+    await seedAllArtifactsExceptTaskStatus();
+    await writeTaskStatus(2, 5); // 2/5 done
+
+    const runner: StepRunner & { runInteractive: ReturnType<typeof vi.fn> } = {
+      run: vi.fn().mockResolvedValue({ success: true }),
+      runInteractive: vi.fn(async () => {
+        // no-op
+      }),
+    };
+
+    const onRecovery = vi.fn().mockResolvedValue('quit' as const);
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      verifyArtifacts: true,
+      maxRetries: 3,
+      onRecovery,
+    });
+
+    await conductor.run();
+
+    const counterAfterFirstRun = await readNoEvidenceCounter();
+    expect(counterAfterFirstRun).toBeGreaterThan(0);
+
+    // Simulate restart: read the sidecar again
+    const counterAfterRestart = await readNoEvidenceCounter();
+    expect(counterAfterRestart).toBe(counterAfterFirstRun);
+  });
+
+  it('counter resets to zero when a new task is completed', async () => {
+    await seedAllArtifactsExceptTaskStatus();
+    await writeTaskStatus(2, 5); // 2/5 done
+
+    let completedCount = 2;
+    const runner: StepRunner & { runInteractive: ReturnType<typeof vi.fn> } = {
+      run: vi.fn(async (step: StepName) => {
+        if (step === 'build') {
+          // First attempt: fail gate (2/5 completed)
+          // This should increment the counter
+          // Then on interactive REPL, one more task completes
+          if ((runner.run as ReturnType<typeof vi.fn>).mock.callCount === 1) {
+            // First call — still 2/5
+            return { success: true };
+          }
+          // After interactive, complete one more task
+          completedCount++;
+          await writeTaskStatus(completedCount, 5);
+        }
+        return { success: true };
+      }),
+      runInteractive: vi.fn(async () => {
+        // The interactive session completes one task
+        completedCount++;
+        await writeTaskStatus(completedCount, 5);
+      }),
+    };
+
+    const onRecovery = vi.fn().mockResolvedValue('quit' as const);
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      verifyArtifacts: true,
+      maxRetries: 3,
+      onRecovery,
+    });
+
+    await conductor.run();
+
+    // After the interactive REPL completes a new task, counter should reset to 0
+    const counter = await readNoEvidenceCounter();
+    expect(counter).toBe(0);
+  });
+
+  it('counter value is persisted in .pipeline/task-evidence.json', async () => {
+    await seedAllArtifactsExceptTaskStatus();
+    await writeTaskStatus(1, 4); // 1/4 done — and it never changes
+
+    const runner: StepRunner & { runInteractive: ReturnType<typeof vi.fn> } = {
+      run: vi.fn().mockResolvedValue({ success: true }),
+      runInteractive: vi.fn(async () => {
+        // no-op
+      }),
+    };
+
+    const onRecovery = vi.fn().mockResolvedValue('quit' as const);
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      verifyArtifacts: true,
+      maxRetries: 2,
+      onRecovery,
+    });
+
+    await conductor.run();
+
+    // Read the sidecar JSON file directly to verify it's written atomically
+    const sidecarPath = join(dir, '.pipeline/task-evidence.json');
+    const sidecarContent = await readFile(sidecarPath, 'utf-8');
+    const sidecarData = JSON.parse(sidecarContent);
+
+    expect(sidecarData.noEvidenceAttempts).toBeGreaterThan(0);
+    expect(sidecarData).toHaveProperty('evidenceStamps');
+    expect(sidecarData).toHaveProperty('migrationGrandfather');
   });
 });
