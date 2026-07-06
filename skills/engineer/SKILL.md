@@ -125,7 +125,7 @@ step, loop within that skill until accepted or abandon the idea — never carry 
 **Checkpoint after each DECIDE skill (advisory, `pr_timing: early-draft` only).** After every one
 of the 8 sub-steps above completes and its artifact lands under `worktreePath/.docs/`, run:
 
-`conduct-ts engineer checkpoint --project <name> --worktree <worktreePath>`
+`conduct-ts engineer checkpoint --project <name> --worktree <worktreePath> --slug <slug>`
 
 This commits ONLY the `.docs` content authored so far (never `-A`), pushes `spec/<slug>`, and — for
 a target repo configured with `pr_timing: early-draft` — lazily opens/reuses a draft spec PR once

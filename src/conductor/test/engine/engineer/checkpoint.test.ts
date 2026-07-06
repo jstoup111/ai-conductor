@@ -220,6 +220,8 @@ describe('checkpointSpec', () => {
     expect(calls).toHaveLength(0);
     expect(result.drafted).toBe(false);
     expect(result.prUrl).toBeUndefined();
+    expect(result.committed).toBe(false);
+    expect(result.pushed).toBe(false);
   });
 
   it('push failure (no remote): logs loudly, resolves without throwing', async () => {

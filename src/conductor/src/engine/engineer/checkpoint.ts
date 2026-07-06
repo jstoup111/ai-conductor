@@ -169,6 +169,16 @@ export async function checkpointSpec(
     return { committed: false, pushed: false, drafted: false, skippedReason: 'identity-unresolved' };
   }
 
+  // Checkpoint (commit + publish) is early-draft mode ONLY. Non-early-draft modes
+  // return a zero-activity advisory result — this is a code gate, not just a test expectation.
+  if (prTiming !== 'early-draft') {
+    log?.(
+      `[engineer/checkpoint] checkpoint is early-draft-only — "${prTiming}" mode skips ` +
+        '(no commit, no push). Spec will be authored at finish-time.',
+    );
+    return { committed: false, pushed: false, drafted: false };
+  }
+
   const branch = `spec/${slug}`;
 
   // 1. Stage ONLY the `.docs` tree (never `-A`) — mirrors landSpec's idea-scoped
@@ -196,32 +206,18 @@ export async function checkpointSpec(
   // 3. Publish. Push failures are logged and swallowed (advisory) — checkpointSpec
   //    never throws on a publish failure.
   const runGit = opts.git ?? defaultCheckpointGit();
-
-  if (prTiming === 'early-draft') {
-    const base = (await resolveBaseBranch(worktreePath)) ?? 'main';
-    const result = await publishEarlyDraft(
-      runGit,
-      opts.gh,
-      worktreePath,
-      { branch, base },
-      log,
-    );
-    return {
-      committed,
-      pushed: result.pushed,
-      drafted: result.drafted,
-      prUrl: result.pr_url,
-    };
-  }
-
-  // Non-early-draft timing: plain push only, no PR creation.
-  let pushed = true;
-  try {
-    await pushBranch(runGit, worktreePath, branch, undefined, log);
-  } catch (err) {
-    pushed = false;
-    log?.(`[engineer/checkpoint] pushBranch(${branch}) error: ${err}`);
-  }
-
-  return { committed, pushed, drafted: false };
+  const base = (await resolveBaseBranch(worktreePath)) ?? 'main';
+  const result = await publishEarlyDraft(
+    runGit,
+    opts.gh,
+    worktreePath,
+    { branch, base },
+    log,
+  );
+  return {
+    committed,
+    pushed: result.pushed,
+    drafted: result.drafted,
+    prUrl: result.pr_url,
+  };
 }
