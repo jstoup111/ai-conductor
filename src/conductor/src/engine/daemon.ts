@@ -15,6 +15,7 @@
 
 import chalk from 'chalk';
 import type { ComplexityTier, Track } from '../types/index.js';
+import { Waker } from './waker.js';
 
 export interface BacklogItem {
   /** Stable feature identifier (also the worktree/branch slug). The vetted
@@ -396,6 +397,9 @@ export async function runDaemon(
   const maxIdlePolls = options.maxIdlePolls ?? Infinity;
   const startedAt = now();
 
+  const waker = Waker();
+  const watchers = new Map<string, () => void>();
+
   const processed: FeatureOutcome[] = [];
   const inFlight = new Map<string, Tagged>();
   // Task T28: track whether the restart trigger has been successfully called
@@ -430,6 +434,13 @@ export async function runDaemon(
   const dispatch = (item: BacklogItem): void => {
     started.add(item.slug);
     parked.delete(item.slug); // re-dispatching a cleared feature un-parks it
+    // Dispose any existing watcher before re-dispatching (to avoid stale watchers
+    // from the previous dispatch)
+    const dispose = watchers.get(item.slug);
+    if (dispose) {
+      dispose();
+      watchers.delete(item.slug);
+    }
 
     log(`${chalk.cyan('▶')} start ${chalk.bold(item.slug)}`);
     const tagged: Tagged = deps
@@ -456,7 +467,16 @@ export async function runDaemon(
     // makeRunFeature), so a later scan can re-dispatch once the operator fixes
     // the cause and clears the marker (gated by `isHalted` below). Only `done`
     // stays permanently excluded.
-    if (outcome.status === 'halted' || outcome.status === 'error') parked.add(slug);
+    if (outcome.status === 'halted' || outcome.status === 'error') {
+      parked.add(slug);
+      // Register a watcher for event-driven wake when this feature's HALT is cleared
+      if (deps.watchHaltCleared && !watchers.has(slug)) {
+        const dispose = deps.watchHaltCleared(slug, () => {
+          waker.wake();
+        });
+        watchers.set(slug, dispose);
+      }
+    }
     const ok = outcome.status === 'done';
     const marker = ok ? chalk.green('■') : chalk.red('■');
     const status = ok ? chalk.green(outcome.status) : chalk.red(outcome.status);
@@ -748,7 +768,13 @@ export async function runDaemon(
           break;
         }
 
-        await sleep(idlePollMs);
+        // Race the idle sleep against event-driven wake: if a watched HALT is
+        // cleared before the poll timeout, waker.armed() resolves first and we
+        // loop back to discovery without waiting the full idle interval (refresh:false).
+        // If the timeout wins, sleep resolves and we proceed normally (next iteration's
+        // fully-idle discovery will use refresh:true). The dummy test sleep never
+        // resolves, so only wake can unblock test-mode daemons.
+        await Promise.race([sleep(idlePollMs), waker.armed()]);
         // FR-14: sweep once per idle poll tick.
         await sweepBestEffort();
         continue;
@@ -763,6 +789,12 @@ export async function runDaemon(
   while (inFlight.size > 0) {
     await collectOne();
   }
+
+  // Dispose all remaining watchers before exiting
+  for (const dispose of watchers.values()) {
+    dispose();
+  }
+  watchers.clear();
 
   return { processed, stoppedReason: stopReason ?? 'backlog_drained' };
 }

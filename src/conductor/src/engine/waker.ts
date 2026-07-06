@@ -44,16 +44,16 @@ export function Waker() {
     },
 
     /**
-     * Async method that returns when a wake signal is captured.
-     * - If a signal is already held, resolves immediately and clears it
+     * Returns a promise that resolves when a wake signal is captured.
+     * - If a signal is already held, returns an already-resolved promise and clears the signal
      * - Otherwise, returns a pending promise until wake() is called
      * - Resolves to undefined (single-shot, no payload)
      */
-    async armed(): Promise<void> {
+    armed(): Promise<void> {
       if (signalHeld) {
         // Signal was already held, resolve immediately
         signalHeld = false;
-        return;
+        return Promise.resolve();
       }
 
       if (!currentPromise) {
