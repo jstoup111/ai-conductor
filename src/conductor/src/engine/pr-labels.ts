@@ -927,7 +927,8 @@ export async function cleanupHaltPresentation(
     }
 
     // ── Step 2: remove the label with retry logic ────────────────────────
-    if (beforeCleanup.labels.includes('needs-remediation')) {
+    const hasLabel = beforeCleanup.labels.includes('needs-remediation');
+    if (hasLabel) {
       const maxAttempts = 3;
       let labelRemovalConfirmed = false;
 
@@ -954,7 +955,9 @@ export async function cleanupHaltPresentation(
     }
 
     // ── Step 3: convert to ready (remove draft status) ─────────────────────
-    if (beforeCleanup.isDraft) {
+    // Call setReady whenever we removed a label (which implies the PR was in halt status)
+    // or if the PR is currently in draft status
+    if (hasLabel || beforeCleanup.isDraft) {
       await setReady(runGh, cwd, prUrl, log);
     }
 
@@ -969,15 +972,15 @@ export async function cleanupHaltPresentation(
     }
 
     // ── Step 6: verify all three markers are gone ────────────────────────
-    const hasLabel = afterCleanup.labels.includes('needs-remediation');
+    const hasResidualLabel = afterCleanup.labels.includes('needs-remediation');
     const isDraft = afterCleanup.isDraft;
     const hasBodyMarker = afterCleanup.body.includes(NEEDS_REMEDIATION_BODY_MARKER);
 
-    if (!hasLabel && !isDraft && !hasBodyMarker) {
+    if (!hasResidualLabel && !isDraft && !hasBodyMarker) {
       return 'confirmed';
     }
 
-    if (hasLabel) {
+    if (hasResidualLabel) {
       log?.(`[pr-labels] cleanupHaltPresentation(${prUrl}): residual needs-remediation label`);
     }
     if (isDraft) {

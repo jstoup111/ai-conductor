@@ -14,6 +14,7 @@ import {
   prMergeState,
   removeLabel,
   setReady,
+  cleanupHaltPresentation,
   makeProductionGh,
   type GhRunner,
 } from './pr-labels.js';
@@ -171,16 +172,14 @@ export function makeRunFeature(
       }
 
       if (outcome.done) {
-        // FR-16: clear-on-success — remove `needs-remediation` + mark ready when
-        // the label is present. Best-effort: a failure is logged and swallowed so
+        // FR-16: clear-on-success — verify-after-write cleanup of halt presentation
+        // markers (label, draft status, body marker). Returns 'confirmed' on success,
+        // 'partial' on any residual markers. Best-effort: logged and swallowed so
         // enroll + teardown still run regardless.
         if (outcome.prUrl && deps.projectRoot) {
           try {
-            const state = await prMergeState(gh, deps.projectRoot, outcome.prUrl, log);
-            if (state.labels.includes('needs-remediation')) {
-              await removeLabel(gh, deps.projectRoot, outcome.prUrl, 'needs-remediation', log);
-              await setReady(gh, deps.projectRoot, outcome.prUrl, log);
-            }
+            const cleanupResult = await cleanupHaltPresentation(gh, deps.projectRoot, outcome.prUrl, log);
+            log(`[daemon-runner] cleanup result: ${cleanupResult}`);
           } catch (err) {
             log(`[daemon-runner] clear-on-success error: ${err instanceof Error ? err.message : String(err)}`);
           }

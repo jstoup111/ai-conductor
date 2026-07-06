@@ -19,7 +19,13 @@
  */
 
 import type { GhRunner } from './pr-labels.js';
-import { parseIssueRef, restRemoveLabelArgs } from './pr-labels.js';
+import {
+  parseIssueRef,
+  restRemoveLabelArgs,
+  readHaltPresentation,
+  removeBodyMarker,
+  NEEDS_REMEDIATION_BODY_MARKER,
+} from './pr-labels.js';
 import { injectIssueRef } from './engineer/issue-ref.js';
 
 export const NEEDS_REMEDIATION_TITLE_PREFIX = 'needs-remediation:';
@@ -43,10 +49,11 @@ interface PrViewState {
   title: string;
   isDraft: boolean;
   labels: string[];
+  body?: string;
 }
 
 function parsePrView(stdout: string): PrViewState {
-  let raw: { title?: unknown; isDraft?: unknown; labels?: unknown };
+  let raw: { title?: unknown; isDraft?: unknown; labels?: unknown; body?: unknown };
   try {
     raw = JSON.parse(stdout || '{}') as typeof raw;
   } catch {
@@ -59,6 +66,7 @@ function parsePrView(stdout: string): PrViewState {
     title: String(raw.title ?? ''),
     isDraft: Boolean(raw.isDraft),
     labels,
+    body: String(raw.body ?? ''),
   };
 }
 
@@ -77,7 +85,7 @@ export async function rehabilitateHaltPr(
 
   let view: PrViewState;
   try {
-    const { stdout } = await gh(['pr', 'view', prUrl, '--json', 'title,isDraft,labels'], { cwd });
+    const { stdout } = await gh(['pr', 'view', prUrl, '--json', 'title,isDraft,labels,body'], { cwd });
     view = parsePrView(stdout);
   } catch (err) {
     log(`[halt-pr-rehab] gh pr view failed for ${prUrl} — skipping rehabilitation: ${err}`);
@@ -114,9 +122,40 @@ export async function rehabilitateHaltPr(
     }
   }
 
+  // Remove body marker if present (idempotent)
+  if (view.body.includes(NEEDS_REMEDIATION_BODY_MARKER)) {
+    await removeBodyMarker(gh, cwd, prUrl, view.body, log);
+  }
+
   // Idempotent Closes injection — injectIssueRef swallows gh failures internally
   // (warn-only) and no-ops when the ref is already present or sourceRef is unusable.
   await injectIssueRef({ gh, prUrl, keyword: 'Closes', sourceRef, cwd, log });
+
+  // ── Verify-after-write: re-read to confirm all markers are gone ────────
+  try {
+    const afterCleanup = await readHaltPresentation(gh, cwd, prUrl, log);
+    if (afterCleanup) {
+      const hasResidualLabel = afterCleanup.labels.includes(NEEDS_REMEDIATION_LABEL);
+      const hasResidualDraft = afterCleanup.isDraft;
+      const hasResidualMarker = afterCleanup.body.includes(NEEDS_REMEDIATION_BODY_MARKER);
+
+      if (hasResidualLabel || hasResidualDraft || hasResidualMarker) {
+        anyFailed = true;
+        if (hasResidualLabel) {
+          log(`[halt-pr-rehab] verify-after-write: residual needs-remediation label on ${prUrl}`);
+        }
+        if (hasResidualDraft) {
+          log(`[halt-pr-rehab] verify-after-write: still in draft status on ${prUrl}`);
+        }
+        if (hasResidualMarker) {
+          log(`[halt-pr-rehab] verify-after-write: residual body marker on ${prUrl}`);
+        }
+      }
+    }
+  } catch (err) {
+    // Verification read failed, but we'll still return based on the cleanup attempts
+    log(`[halt-pr-rehab] verify-after-write read failed for ${prUrl}: ${err}`);
+  }
 
   return anyFailed ? 'partial' : 'rehabilitated';
 }

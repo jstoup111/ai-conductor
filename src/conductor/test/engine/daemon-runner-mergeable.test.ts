@@ -63,7 +63,9 @@ function makeGhFake(opts: { labels?: string[]; throws?: boolean } = {}): {
           state: 'OPEN',
           mergeable: 'MERGEABLE',
           statusCheckRollup: [],
+          isDraft: false,
           labels: labelObjs,
+          body: 'Test PR body',
         }),
       };
     }

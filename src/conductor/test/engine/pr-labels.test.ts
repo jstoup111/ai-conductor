@@ -1440,7 +1440,23 @@ describe('cleanupHaltPresentation', () => {
         }),
       },
       new Error('network error'), // removeLabel fails on first attempt
+      // readHaltPresentation in retry loop to check if label is gone (still present)
+      {
+        stdout: JSON.stringify({
+          isDraft: true,
+          labels: [{ name: 'needs-remediation' }],
+          body: prBodyBefore,
+        }),
+      },
       { stdout: '' }, // removeLabel retries and succeeds
+      // readHaltPresentation in retry loop after second attempt (now gone)
+      {
+        stdout: JSON.stringify({
+          isDraft: true,
+          labels: [],
+          body: prBodyBefore,
+        }),
+      },
       { stdout: '' }, // setReady
       { stdout: '' }, // pr edit to remove marker
       // readHaltPresentation after cleanup (verification read)
