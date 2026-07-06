@@ -280,39 +280,54 @@ export function createGithubIssuesAdapter(deps: GithubIssuesDeps): IntakeSource 
       const { repo, number } = parsed;
       const repoPath = await resolveReportCwd(repo);
 
-      try {
-        if (status === 'routed') {
-          const body = `Routed to ${meta?.repo ?? '(unresolved)'}`;
-          await gh(['issue', 'comment', number, '-R', repo, '--body', body], { cwd: repoPath });
-        } else if (status === 'done') {
-          const body = `Spec PR opened: ${meta?.prUrl ?? '(unknown)'}`;
-          await gh(['issue', 'comment', number, '-R', repo, '--body', body], { cwd: repoPath });
-          // Ensure the label exists before applying it (auto-create; ignore "already exists").
-          try {
-            await gh(['label', 'create', HANDLED_LABEL, '-R', repo], { cwd: repoPath });
-          } catch {
-            // label already present — not an error.
-          }
-          await gh(restAddLabelArgs(repo, number, HANDLED_LABEL), { cwd: repoPath });
-        } else {
-          // No write-back marker for intermediate statuses (pending/deciding).
-          return { ok: true };
-        }
-        postedMarkers.add(marker);
-        return { ok: true };
-      } catch (err: unknown) {
+      // Compose a single-command remediation for the step that failed, using
+      // real substituted values so an operator can copy/paste-retry it directly.
+      function fail(err: unknown, remediation: string[]): ReportOutcome {
         // FR-37: write-back is non-fatal. Log with the sourceRef and swallow so a
         // gh outage never rolls back a completed route/spec-PR. Marker is NOT set,
         // so a later poll/report can retry.
         const msg = err instanceof Error ? err.message : String(err);
         log(`github-issues: write-back failed for ${sourceRef} (${status}) — ${msg}`);
-        return {
-          ok: false,
-          remediation: [
-            `github-issues write-back failed for ${sourceRef} (${status}): ${msg}`,
-          ],
-        };
+        return { ok: false, remediation };
       }
+
+      if (status === 'routed') {
+        const body = `Routed to ${meta?.repo ?? '(unresolved)'}`;
+        const commentCmd = `gh issue comment ${number} --repo ${repo} --body "${body}"`;
+        try {
+          await gh(['issue', 'comment', number, '-R', repo, '--body', body], { cwd: repoPath });
+        } catch (err) {
+          return fail(err, [commentCmd]);
+        }
+      } else if (status === 'done') {
+        const body = `Spec PR opened: ${meta?.prUrl ?? '(unknown)'}`;
+        const commentCmd = `gh issue comment ${number} --repo ${repo} --body "${body}"`;
+        try {
+          await gh(['issue', 'comment', number, '-R', repo, '--body', body], { cwd: repoPath });
+        } catch (err) {
+          return fail(err, [commentCmd]);
+        }
+
+        // Ensure the label exists before applying it (auto-create; ignore "already exists").
+        try {
+          await gh(['label', 'create', HANDLED_LABEL, '-R', repo], { cwd: repoPath });
+        } catch {
+          // label already present — not an error.
+        }
+
+        const labelCmd = `gh api repos/${repo}/issues/${number}/labels -f "labels[]=${HANDLED_LABEL}"`;
+        try {
+          await gh(restAddLabelArgs(repo, number, HANDLED_LABEL), { cwd: repoPath });
+        } catch (err) {
+          return fail(err, [labelCmd]);
+        }
+      } else {
+        // No write-back marker for intermediate statuses (pending/deciding).
+        return { ok: true };
+      }
+
+      postedMarkers.add(marker);
+      return { ok: true };
     },
   };
 }

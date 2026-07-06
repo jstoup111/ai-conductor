@@ -146,6 +146,119 @@ describe('report() cwd resolution (#290)', () => {
     const outcome = await adapter.report('o/a#1', 'done', { prUrl: 'https://x/pr/9' });
 
     expect(outcome.ok).toBe(false);
-    expect(outcome.remediation?.[0]).toMatch(/write-back failed for o\/a#1/);
+    expect(outcome.remediation?.[0]).toMatch(/^gh issue comment 1 --repo o\/a --body/);
+  });
+});
+
+// ─── report() failure outcomes with actionable remediation (#290 Task 6) ──────
+
+describe('report() failure outcomes with actionable remediation', () => {
+  function repoSetup() {
+    const repoPath = join(dir, 'o-a');
+    return { repoPath, registry: { list: async () => [{ name: 'o/a', path: repoPath }] } };
+  }
+
+  it('comment rejects → { ok: false, remediation } with fully-substituted commands', async () => {
+    const { repoPath, registry } = repoSetup();
+    await mkdir(repoPath, { recursive: true });
+    const gh: GhRunner = async (args) => {
+      if (args[0] === 'issue' && args[1] === 'comment') {
+        throw new Error('gh: command failed (ENOENT)');
+      }
+      return { stdout: '' };
+    };
+    const ledger = createLedger(join(dir, 'ledger.json'));
+    const logs: string[] = [];
+    const adapter = createGithubIssuesAdapter({ gh, registry, ledger, log: (m) => logs.push(m) });
+
+    const outcome = await adapter.report('o/a#7', 'done', { prUrl: 'https://x/pull/9' });
+
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.remediation).toEqual([
+        `gh issue comment 7 --repo o/a --body "Spec PR opened: https://x/pull/9"`,
+      ]);
+    }
+    expect(logs.length).toBeGreaterThan(0);
+  });
+
+  it('comment succeeds, label add rejects → remediation covers only the label step', async () => {
+    const { repoPath, registry } = repoSetup();
+    await mkdir(repoPath, { recursive: true });
+    const gh: GhRunner = async (args) => {
+      if (args[0] === 'api' && args.includes('--method') && args[1 + args.indexOf('--method')] === 'POST') {
+        throw new Error('gh: label add failed');
+      }
+      return { stdout: '' };
+    };
+    const ledger = createLedger(join(dir, 'ledger.json'));
+    const adapter = createGithubIssuesAdapter({ gh, registry, ledger });
+
+    const outcome = await adapter.report('o/a#7', 'done', { prUrl: 'https://x/pull/9' });
+
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.remediation).toEqual([
+        `gh api repos/o/a/issues/7/labels -f "labels[]=engineer:handled"`,
+      ]);
+    }
+  });
+
+  it('success → { ok: true }, no remediation, posted-marker set (dedup on retry)', async () => {
+    const { repoPath, registry } = repoSetup();
+    await mkdir(repoPath, { recursive: true });
+    const calls: string[][] = [];
+    const gh: GhRunner = async (args) => {
+      calls.push(args);
+      return { stdout: '' };
+    };
+    const ledger = createLedger(join(dir, 'ledger.json'));
+    const adapter = createGithubIssuesAdapter({ gh, registry, ledger });
+
+    const outcome = await adapter.report('o/a#7', 'done', { prUrl: 'https://x/pull/9' });
+    expect(outcome).toEqual({ ok: true });
+
+    const callCountAfterFirst = calls.length;
+    // Retrying the same (sourceRef,status) must not re-post — marker was set.
+    const secondOutcome = await adapter.report('o/a#7', 'done', { prUrl: 'https://x/pull/9' });
+    expect(secondOutcome).toEqual({ ok: true });
+    expect(calls.length).toBe(callCountAfterFirst); // no new gh calls
+  });
+
+  it('failure → posted-marker NOT set, so a retry can attempt the gh calls again', async () => {
+    const { repoPath, registry } = repoSetup();
+    await mkdir(repoPath, { recursive: true });
+    let attempt = 0;
+    const gh: GhRunner = async (args) => {
+      if (args[0] === 'issue' && args[1] === 'comment') {
+        attempt += 1;
+        if (attempt === 1) throw new Error('gh down');
+      }
+      return { stdout: '' };
+    };
+    const ledger = createLedger(join(dir, 'ledger.json'));
+    const adapter = createGithubIssuesAdapter({ gh, registry, ledger });
+
+    const first = await adapter.report('o/a#7', 'done', { prUrl: 'https://x/pull/9' });
+    expect(first.ok).toBe(false);
+
+    const second = await adapter.report('o/a#7', 'done', { prUrl: 'https://x/pull/9' });
+    expect(second).toEqual({ ok: true }); // retry succeeded — marker was not set by the failure
+  });
+
+  it('"label already exists" on `label create` is swallowed, not a failure', async () => {
+    const { repoPath, registry } = repoSetup();
+    await mkdir(repoPath, { recursive: true });
+    const gh: GhRunner = async (args) => {
+      if (args[0] === 'label' && args[1] === 'create') {
+        throw new Error('HTTP 422: Validation Failed - already_exists');
+      }
+      return { stdout: '' };
+    };
+    const ledger = createLedger(join(dir, 'ledger.json'));
+    const adapter = createGithubIssuesAdapter({ gh, registry, ledger });
+
+    const outcome = await adapter.report('o/a#7', 'done', { prUrl: 'https://x/pull/9' });
+    expect(outcome).toEqual({ ok: true });
   });
 });
