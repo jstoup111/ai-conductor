@@ -16,6 +16,8 @@ export interface NotifierStatus {
   sourceRefs: string[];
   /** Timestamp of this notification, from the injected clock. */
   timestamp: string;
+  /** Human-readable summary message for the push notification. */
+  message: string;
 }
 
 // ─── NotifierDeps ─────────────────────────────────────────────────────────────
@@ -50,14 +52,19 @@ export interface Notifier {
 export function createNotifier(deps: NotifierDeps): Notifier {
   return {
     async notify(ideas: Envelope[]): Promise<void> {
+      const sourceRefs = ideas.map((i) => i.sourceRef);
+      const message = `${ideas.length} new idea(s) captured from ${sourceRefs.join(', ')}`;
       const status: NotifierStatus = {
         count: ideas.length,
-        sourceRefs: ideas.map((i) => i.sourceRef),
+        sourceRefs,
         timestamp: deps.now(),
+        message,
       };
 
       await deps.writeStatus(status);
       deps.log(`notifier: wrote status surface for ${status.count} idea(s)`);
+
+      await deps.push(status);
     },
   };
 }
