@@ -291,6 +291,84 @@ describe('relinkSkillsForSelfBuild — Phase 2 skill-relink preflight (TR-4)', (
     expect(logs.join('\n')).toMatch(/unresolved|could not|skip/i);
   });
 
+  // ── Installed-root resolution wiring (#363 / TR-3) ─────────────────────────
+  // The preflight must never run `bin/install --update` at a root the resolver
+  // rejects — a worktree-rooted relink is exactly the incident this guards.
+
+  it('resolver rejects → throws InstallStaleError naming the rejected root; runner NEVER invoked', async () => {
+    const { runner, calls } = makeRunner({ check: 0, update: 0 });
+    const rejected: InstalledRootResolution = {
+      status: 'rejected',
+      reason: 'worktree-root',
+      detail: 'resolved root /main/.worktrees/x still sits under .worktrees/',
+    };
+    const err = await relinkSkillsForSelfBuild({
+      resolveInstalledRoot: async () => rejected,
+      runner,
+      log: () => {},
+    }).catch((e) => e);
+    expect(err).toBeInstanceOf(InstallStaleError);
+    expect((err as Error).message).toContain('/main/.worktrees/x');
+    expect(calls).toEqual([]); // installer never ran against the rejected root
+  });
+
+  it('resolver unresolved → logs and skips without throwing, zero runner calls (null-skip preserved)', async () => {
+    const { runner, calls } = makeRunner({ check: 0, update: 0 });
+    const logs: string[] = [];
+    await expect(
+      relinkSkillsForSelfBuild({
+        resolveInstalledRoot: async () => ({ status: 'unresolved' }),
+        runner,
+        log: (m) => logs.push(m),
+      }),
+    ).resolves.toBeUndefined();
+    expect(calls).toEqual([]);
+    expect(logs.join('\n')).toMatch(/unresolved|could not|skip/i);
+  });
+
+  it('resolver ok → runner invoked once with --update at the resolved root', async () => {
+    const roots: string[] = [];
+    const calls: string[][] = [];
+    const runner: InstallRunner = async (args, harnessRoot) => {
+      calls.push(args);
+      roots.push(harnessRoot);
+      return 0;
+    };
+    await expect(
+      relinkSkillsForSelfBuild({
+        resolveInstalledRoot: async () => ({ status: 'ok', root: '/installed/main' }),
+        runner,
+        log: () => {},
+      }),
+    ).resolves.toBeUndefined();
+    expect(calls).toEqual([['--update']]);
+    expect(roots).toEqual(['/installed/main']);
+  });
+
+  it('explicit harnessRoot string override behaves as ok (existing test seam preserved)', async () => {
+    const roots: string[] = [];
+    const runner: InstallRunner = async (_args, harnessRoot) => {
+      roots.push(harnessRoot);
+      return 0;
+    };
+    // harnessRoot set → the resolver seam must NOT be consulted.
+    const resolveInstalledRoot = vi.fn(async (): Promise<InstalledRootResolution> => ({
+      status: 'rejected',
+      reason: 'should-not-be-called',
+      detail: 'the explicit override wins',
+    }));
+    await expect(
+      relinkSkillsForSelfBuild({
+        harnessRoot: HARNESS,
+        resolveInstalledRoot,
+        runner,
+        log: () => {},
+      }),
+    ).resolves.toBeUndefined();
+    expect(resolveInstalledRoot).not.toHaveBeenCalled();
+    expect(roots).toEqual([HARNESS]);
+  });
+
   it('missing bin/install → keyed error naming the installer path (not opaque spawn error)', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'relink-noinstaller-'));
     try {
