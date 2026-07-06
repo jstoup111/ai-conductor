@@ -69,3 +69,55 @@ describe('intake-loop types', () => {
     expect(mod).toBeTypeOf('object');
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Task 2: One tick polls all repos and enqueues captured ideas.
+//
+// Story: FR-1 happy · Plan: .docs/plans/2026-06-30-background-intake-conduct-loop.md (Task 2)
+//
+// `intakeTick(deps)` calls the injected `poll()`, enqueues every returned
+// envelope via the injected `enqueue()`, and returns a tick summary
+// `{ captured: <count> }`. All deps are injected — zero real I/O.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('intakeTick', () => {
+  it('a tick with 2 envelopes from poll() enqueues both and returns {captured: 2}', async () => {
+    const mod = (await import(
+      '../../../../src/engine/engineer/intake/intake-loop.js'
+    )) as Record<string, any>;
+    const intakeTick = mod.intakeTick as (deps: any) => Promise<{ captured: number }>;
+    expect(typeof intakeTick).toBe('function');
+
+    const envelopeA = {
+      id: 'o/a#1',
+      source: 'github-issues',
+      sourceRef: 'o/a#1',
+      text: 'idea for o/a#1',
+      status: 'pending' as const,
+      receivedAt: '2026-06-30T00:00:00.000Z',
+    };
+    const envelopeB = {
+      id: 'o/b#7',
+      source: 'github-issues',
+      sourceRef: 'o/b#7',
+      text: 'idea for o/b#7',
+      status: 'pending' as const,
+      receivedAt: '2026-06-30T00:00:00.000Z',
+    };
+
+    const poll = async () => [envelopeA, envelopeB];
+    const enqueued: unknown[] = [];
+    const enqueue = async (envelope: unknown) => {
+      enqueued.push(envelope);
+    };
+    const notify = async (_ideas: unknown[]) => {};
+    const sleep = async (_ms: number) => {};
+    const now = () => new Date('2026-06-30T00:00:00.000Z');
+    const log = (_msg: string) => {};
+
+    const summary = await intakeTick({ poll, enqueue, notify, sleep, now, log });
+
+    expect(summary).toEqual({ captured: 2 });
+    expect(enqueued).toHaveLength(2);
+    expect(enqueued).toEqual([envelopeA, envelopeB]);
+  });
+});

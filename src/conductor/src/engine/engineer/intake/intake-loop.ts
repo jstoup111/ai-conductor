@@ -38,3 +38,25 @@ export interface IntakeLoopOptions {
   /** Maximum number of consecutive idle (zero-capture) polls before... (reserved for later tasks). */
   maxIdlePolls?: number;
 }
+
+/** Summary of a single intake tick's outcome (Task 2). */
+export interface IntakeTickSummary {
+  /** Number of envelopes captured (polled and enqueued) this tick. */
+  captured: number;
+}
+
+/**
+ * intakeTick — a single tick of the intake loop (Task 2).
+ *
+ * Polls all registered repos via the injected `poll()`, enqueues every
+ * returned envelope via the injected `enqueue()`, and returns a tick
+ * summary `{ captured: <count> }`. Pure orchestration over injected effects:
+ * no real I/O, no claude/provider capability.
+ */
+export async function intakeTick(deps: IntakeLoopDeps): Promise<IntakeTickSummary> {
+  const envelopes = await deps.poll();
+  for (const envelope of envelopes) {
+    await deps.enqueue(envelope);
+  }
+  return { captured: envelopes.length };
+}
