@@ -77,15 +77,68 @@ function standardGitResps(
 
 /**
  * Standard happy-path gh responses after push:
- * view fails (no existing PR) → create succeeds → ensureLabel → addLabel →
+ * view fails (no existing PR) → create succeeds → ensureHaltPresentation →
  * upsertComment lookup (no marked comment yet) → create comment.
+ *
+ * ensureHaltPresentation flow:
+ * - readHaltPresentation (from ensureBodyMarker)
+ * - pr edit --body (append marker)
+ * - readHaltPresentation (beforeConvert)
+ * - addLabel (api POST)
+ * - readHaltPresentation (verify in retry loop)
+ * - readHaltPresentation (final verify)
  */
 function standardGhResps(prUrl = PR_URL): Array<{ stdout: string } | Error> {
+  const prBody =
+    'This PR was opened automatically after an irrecoverable daemon HALT.\n\n' +
+    'Manual remediation is required to unblock this feature.\n' +
+    'See the comment below for the failure reason.';
+
   return [
-    new Error('no pull requests found'), // pr view (findOrCreatePr)
-    { stdout: `${prUrl}\n` },           // pr create
-    { stdout: '' },                      // label create (ensureLabel)
-    { stdout: '' },                      // gh api POST .../labels (addLabel, REST)
+    // findOrCreatePr
+    new Error('no pull requests found'), // pr view (check existing)
+    { stdout: `${prUrl}\n` },            // pr create
+
+    // ensureHaltPresentation:
+    // ensureBodyMarker: readHaltPresentation
+    {
+      stdout: JSON.stringify({
+        isDraft: true,
+        labels: [],
+        body: prBody,
+      }),
+    },
+    // ensureBodyMarker: pr edit --body
+    { stdout: '' },
+    // readHaltPresentation (beforeConvert)
+    {
+      stdout: JSON.stringify({
+        isDraft: true,
+        labels: [],
+        body: `${prBody}\n<!-- conductor:needs-remediation -->`,
+      }),
+    },
+    // convertToDraft skipped (already draft)
+    // addLabel: api POST
+    { stdout: '' },
+    // readHaltPresentation (verify in retry)
+    {
+      stdout: JSON.stringify({
+        isDraft: true,
+        labels: [{ name: 'needs-remediation' }],
+        body: `${prBody}\n<!-- conductor:needs-remediation -->`,
+      }),
+    },
+    // readHaltPresentation (final verify)
+    {
+      stdout: JSON.stringify({
+        isDraft: true,
+        labels: [{ name: 'needs-remediation' }],
+        body: `${prBody}\n<!-- conductor:needs-remediation -->`,
+      }),
+    },
+
+    // upsertComment
     { stdout: JSON.stringify({ comments: [] }) }, // pr view --json comments (upsert lookup)
     { stdout: '' },                      // pr comment (upsert fallback create)
   ];
@@ -312,7 +365,7 @@ describe('FR-2/4: draft PR + needs-remediation label', () => {
     expect(title).toContain('feat/my-feature');
   });
 
-  it('calls ensureLabel for needs-remediation with color B60205', async () => {
+  it('ensures needs-remediation label is added via ensureHaltPresentation', async () => {
     const { git } = fakeGit(standardGitResps());
     const { gh, calls: ghCalls } = fakeGh(standardGhResps());
 
@@ -323,26 +376,7 @@ describe('FR-2/4: draft PR + needs-remediation label', () => {
       runGh: gh,
     });
 
-    const ensureCall = ghCalls.find(
-      (args) => args[0] === 'label' && args[1] === 'create',
-    );
-    expect(ensureCall).toBeDefined();
-    expect(ensureCall).toContain('needs-remediation');
-    expect(ensureCall).toContain('B60205');
-    expect(ensureCall).toContain('--force');
-  });
-
-  it('calls addLabel with needs-remediation on the PR', async () => {
-    const { git } = fakeGit(standardGitResps());
-    const { gh, calls: ghCalls } = fakeGh(standardGhResps());
-
-    await escalateBuildFailure({
-      projectRoot: '/repo',
-      failureReason: 'failure',
-      runGit: git,
-      runGh: gh,
-    });
-
+    // ensureHaltPresentation adds the label via api POST
     const addCall = ghCalls.find(
       (args) => args[0] === 'api' && args.includes('POST') && args.some((s) => /\/labels$/.test(s)),
     );
@@ -371,13 +405,49 @@ describe('FR-2/4: draft PR + needs-remediation label', () => {
 describe('FR-5: reuse existing OPEN PR', () => {
   it('reuses an existing OPEN PR without calling pr create', async () => {
     const existingUrl = 'https://github.com/foo/bar/pull/10';
+    const prBody =
+      'This PR was opened automatically after an irrecoverable daemon HALT.\n\n' +
+      'Manual remediation is required to unblock this feature.\n' +
+      'See the comment below for the failure reason.';
+
     const { git } = fakeGit(standardGitResps());
     const { gh, calls: ghCalls } = fakeGh([
       { stdout: JSON.stringify({ url: existingUrl, state: 'OPEN' }) }, // pr view → existing
-      { stdout: '' }, // ensureLabel
-      { stdout: '' }, // addLabel
-      { stdout: JSON.stringify({ comments: [] }) }, // upsert lookup → none
-      { stdout: '' }, // comment (upsert create)
+      // ensureHaltPresentation
+      {
+        stdout: JSON.stringify({
+          isDraft: false,
+          labels: [],
+          body: prBody,
+        }),
+      },                            // readHaltPresentation
+      { stdout: '' },               // pr edit
+      {
+        stdout: JSON.stringify({
+          isDraft: false,
+          labels: [],
+          body: `${prBody}\n<!-- conductor:needs-remediation -->`,
+        }),
+      },                            // readHaltPresentation (beforeConvert)
+      { stdout: '' },               // pr ready --undo
+      { stdout: '' },               // addLabel
+      {
+        stdout: JSON.stringify({
+          isDraft: true,
+          labels: [{ name: 'needs-remediation' }],
+          body: `${prBody}\n<!-- conductor:needs-remediation -->`,
+        }),
+      },                            // readHaltPresentation (verify)
+      {
+        stdout: JSON.stringify({
+          isDraft: true,
+          labels: [{ name: 'needs-remediation' }],
+          body: `${prBody}\n<!-- conductor:needs-remediation -->`,
+        }),
+      },                            // readHaltPresentation (final)
+      // upsertComment
+      { stdout: JSON.stringify({ comments: [] }) }, // pr view --json comments
+      { stdout: '' },               // pr comment (create)
     ]);
 
     const result = await escalateBuildFailure({
@@ -496,14 +566,49 @@ describe('FR-3: failure-reason comment', () => {
 // ── FR-7: comment failure swallowed, label already ran ───────────────────────
 
 describe('FR-7: comment failure is swallowed, label step already ran', () => {
-  it('swallows comment error without throwing, label step already ran', async () => {
+  it('swallows comment error without throwing, ensureHaltPresentation already ran', async () => {
+    const prBody =
+      'This PR was opened automatically after an irrecoverable daemon HALT.\n\n' +
+      'Manual remediation is required to unblock this feature.\n' +
+      'See the comment below for the failure reason.';
+
     const { git } = fakeGit(standardGitResps());
     const { gh, calls: ghCalls } = fakeGh([
-      new Error('no PR'),          // pr view
-      { stdout: `${PR_URL}\n` },  // pr create
-      { stdout: '' },              // ensureLabel
-      { stdout: '' },              // addLabel
-      { stdout: JSON.stringify({ comments: [] }) }, // upsert lookup → none
+      new Error('no PR'),           // pr view (findOrCreatePr)
+      { stdout: `${PR_URL}\n` },   // pr create
+      // ensureHaltPresentation
+      {
+        stdout: JSON.stringify({
+          isDraft: true,
+          labels: [],
+          body: prBody,
+        }),
+      },                            // readHaltPresentation
+      { stdout: '' },               // pr edit
+      {
+        stdout: JSON.stringify({
+          isDraft: true,
+          labels: [],
+          body: `${prBody}\n<!-- conductor:needs-remediation -->`,
+        }),
+      },                            // readHaltPresentation (beforeConvert)
+      { stdout: '' },               // addLabel
+      {
+        stdout: JSON.stringify({
+          isDraft: true,
+          labels: [{ name: 'needs-remediation' }],
+          body: `${prBody}\n<!-- conductor:needs-remediation -->`,
+        }),
+      },                            // readHaltPresentation (verify)
+      {
+        stdout: JSON.stringify({
+          isDraft: true,
+          labels: [{ name: 'needs-remediation' }],
+          body: `${prBody}\n<!-- conductor:needs-remediation -->`,
+        }),
+      },                            // readHaltPresentation (final)
+      // upsertComment
+      { stdout: JSON.stringify({ comments: [] }) }, // pr view --json comments
       new Error('comment failed'), // create comment fails — swallowed by pr-labels seam
     ]);
 
@@ -523,7 +628,7 @@ describe('FR-7: comment failure is swallowed, label step already ran', () => {
     expect(threw).toBe(false);
     expect(result?.prUrl).toEqual(PR_URL);
 
-    // Label step ran before the comment
+    // Label step ran before the comment (ensureHaltPresentation adds label)
     const addLabelCall = ghCalls.find(
       (args) => args[0] === 'api' && args.some((s) => /\/labels$/.test(s)),
     );
@@ -584,6 +689,11 @@ describe('#159: repeated HALTs upsert a single comment (one create + one PATCH)'
     // Two runs share one scripted gh so we can assert across both.
     const existingUrl = 'https://github.com/foo/bar/pull/42';
     const markedCommentUrl = `${existingUrl}#issuecomment-555`;
+    const prBody =
+      'This PR was opened automatically after an irrecoverable daemon HALT.\n\n' +
+      'Manual remediation is required to unblock this feature.\n' +
+      'See the comment below for the failure reason.';
+
     const { git } = fakeGit([
       ...standardGitResps(), // run 1
       ...standardGitResps(), // run 2
@@ -592,19 +702,78 @@ describe('#159: repeated HALTs upsert a single comment (one create + one PATCH)'
       // ── run 1: fresh PR, no marked comment yet → create ──
       new Error('no pull requests found'),               // pr view (findOrCreatePr)
       { stdout: `${existingUrl}\n` },                    // pr create
-      { stdout: '' },                                    // ensureLabel
+      // ensureHaltPresentation
+      {
+        stdout: JSON.stringify({
+          isDraft: true,
+          labels: [],
+          body: prBody,
+        }),
+      },                                                 // readHaltPresentation
+      { stdout: '' },                                    // pr edit
+      {
+        stdout: JSON.stringify({
+          isDraft: true,
+          labels: [],
+          body: `${prBody}\n<!-- conductor:needs-remediation -->`,
+        }),
+      },                                                 // readHaltPresentation (beforeConvert)
       { stdout: '' },                                    // addLabel
-      { stdout: JSON.stringify({ comments: [] }) },      // upsert lookup → none
+      {
+        stdout: JSON.stringify({
+          isDraft: true,
+          labels: [{ name: 'needs-remediation' }],
+          body: `${prBody}\n<!-- conductor:needs-remediation -->`,
+        }),
+      },                                                 // readHaltPresentation (verify)
+      {
+        stdout: JSON.stringify({
+          isDraft: true,
+          labels: [{ name: 'needs-remediation' }],
+          body: `${prBody}\n<!-- conductor:needs-remediation -->`,
+        }),
+      },                                                 // readHaltPresentation (final)
+      // upsertComment
+      { stdout: JSON.stringify({ comments: [] }) },      // pr view --json comments
       { stdout: '' },                                    // pr comment (create)
       // ── run 2: PR now exists, marked comment present → PATCH ──
       { stdout: JSON.stringify({ url: existingUrl, state: 'OPEN' }) }, // pr view (reuse)
-      { stdout: '' },                                    // ensureLabel
+      // ensureHaltPresentation
+      {
+        stdout: JSON.stringify({
+          isDraft: true,
+          labels: [{ name: 'needs-remediation' }],
+          body: `${prBody}\n<!-- conductor:needs-remediation -->`,
+        }),
+      },                                                 // readHaltPresentation (from ensureBodyMarker - marker already present, no edit)
+      {
+        stdout: JSON.stringify({
+          isDraft: true,
+          labels: [{ name: 'needs-remediation' }],
+          body: `${prBody}\n<!-- conductor:needs-remediation -->`,
+        }),
+      },                                                 // readHaltPresentation (beforeConvert)
       { stdout: '' },                                    // addLabel
+      {
+        stdout: JSON.stringify({
+          isDraft: true,
+          labels: [{ name: 'needs-remediation' }],
+          body: `${prBody}\n<!-- conductor:needs-remediation -->`,
+        }),
+      },                                                 // readHaltPresentation (verify in retry loop)
+      {
+        stdout: JSON.stringify({
+          isDraft: true,
+          labels: [{ name: 'needs-remediation' }],
+          body: `${prBody}\n<!-- conductor:needs-remediation -->`,
+        }),
+      },                                                 // readHaltPresentation (final)
+      // upsertComment
       {
         stdout: JSON.stringify({
           comments: [{ body: `${NEEDS_REMEDIATION_MARKER}\nfirst halt`, url: markedCommentUrl }],
         }),
-      },                                                 // upsert lookup → marked comment
+      },                                                 // pr view --json comments
       { stdout: '' },                                    // api PATCH
     ]);
 
@@ -636,5 +805,113 @@ describe('#159: repeated HALTs upsert a single comment (one create + one PATCH)'
       '-f',
       `body=${NEEDS_REMEDIATION_MARKER}\n## Daemon halt\n\nsecond halt\n\nManual remediation is required.`,
     ]);
+  });
+});
+
+// ── Task 13 (RED): ensureHaltPresentation wired into escalation ──────────────
+
+describe('Task 13: escalateBuildFailure ensures halt presentation markers', () => {
+  it('wires ensureHaltPresentation to verify all three markers (draft, label, body marker)', async () => {
+    const { git } = fakeGit(standardGitResps());
+    const prBody =
+      'This PR was opened automatically after an irrecoverable daemon HALT.\n\n' +
+      'Manual remediation is required to unblock this feature.\n' +
+      'See the comment below for the failure reason.';
+
+    const { gh, calls: ghCalls } = fakeGh([
+      // findOrCreatePr: check existing
+      new Error('no pull requests found'),
+      // findOrCreatePr: create new PR
+      { stdout: `${PR_URL}\n` },
+      // ensureHaltPresentation flow:
+      // ensureBodyMarker → readHaltPresentation (read current state before edit)
+      {
+        stdout: JSON.stringify({
+          isDraft: true,
+          labels: [],
+          body: prBody,
+        }),
+      },
+      // ensureBodyMarker: pr edit (append marker)
+      { stdout: '' },
+      // readHaltPresentation (beforeConvert - read after body marker appended)
+      {
+        stdout: JSON.stringify({
+          isDraft: true,
+          labels: [],
+          body: `${prBody}\n<!-- conductor:needs-remediation -->`,
+        }),
+      },
+      // convertToDraft skipped since PR is already draft
+      // addLabel (from ensureHaltPresentation retry loop - first attempt)
+      { stdout: '' },
+      // readHaltPresentation (verify label added in retry loop)
+      {
+        stdout: JSON.stringify({
+          isDraft: true,
+          labels: [{ name: 'needs-remediation' }],
+          body: `${prBody}\n<!-- conductor:needs-remediation -->`,
+        }),
+      },
+      // readHaltPresentation (final verification - confirm all three markers present)
+      {
+        stdout: JSON.stringify({
+          isDraft: true,
+          labels: [{ name: 'needs-remediation' }],
+          body: `${prBody}\n<!-- conductor:needs-remediation -->`,
+        }),
+      },
+      // upsertComment: lookup comments
+      { stdout: JSON.stringify({ comments: [] }) },
+      // upsertComment: create comment
+      { stdout: '' },
+    ]);
+
+    const result = await escalateBuildFailure({
+      projectRoot: '/repo',
+      failureReason: 'tests failed during daemon run',
+      runGit: git,
+      runGh: gh,
+    });
+
+    // Verify escalateBuildFailure returned the PR URL
+    expect(result).toEqual({ prUrl: PR_URL });
+
+    // Verify the comment with failure reason was posted (existing functionality preserved)
+    const commentCall = ghCalls.find((args) => args[0] === 'pr' && args[1] === 'comment');
+    expect(commentCall).toBeDefined();
+    expect(commentCall).toContain(PR_URL);
+    const bodyIdx = commentCall!.indexOf('--body');
+    if (bodyIdx >= 0) {
+      const bodyText = commentCall![bodyIdx + 1];
+      expect(bodyText).toContain('tests failed during daemon run');
+    }
+
+    // RED assertions: verify ensureHaltPresentation is wired in:
+
+    // Assert ensureHaltPresentation makes multiple pr view --json isDraft,labels,body calls
+    const prViewCalls = ghCalls.filter(
+      (args) =>
+        args[0] === 'pr' &&
+        args[1] === 'view' &&
+        args.includes('--json') &&
+        args.some((arg) => arg.includes('isDraft')),
+    );
+    expect(prViewCalls.length).toBeGreaterThanOrEqual(3);
+
+    // Assert pr edit was called (for appending body marker)
+    const editCall = ghCalls.find(
+      (args) => args[0] === 'pr' && args[1] === 'edit' && args.includes('--body'),
+    );
+    expect(editCall).toBeDefined();
+
+    // Assert label was added via api (not label create)
+    const addLabelCall = ghCalls.find(
+      (args) => args[0] === 'api' && args.includes('POST') && args.some((s) => /\/labels$/.test(s)),
+    );
+    expect(addLabelCall).toBeDefined();
+
+    // Assert all three markers are verified in final state
+    expect(ghCalls).toHaveLength(10);
   });
 });
