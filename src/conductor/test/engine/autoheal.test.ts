@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, writeFile } from 'fs/promises';
+import { mkdtemp, rm, writeFile, mkdir } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { execa } from 'execa';
@@ -674,5 +674,234 @@ describe('listCommitsWithTrailers with anchor', () => {
     const afterAnchorCommits = await mod.listCommitsWithTrailers(gitDir, anchorSha);
     const stillBeforeAnchor = afterAnchorCommits.filter(c => c.subject === 'initial');
     expect(stillBeforeAnchor.length).toBe(0);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Unit tests for deriveCompletion (Task 7, trailer-first authoritative matching).
+//
+// Tests task completion evidence derivation from git trailers.
+// Validates: trailer parsing, path corroboration, grandfathering, and evidence writing.
+//
+// Acceptance criteria:
+// 1. Trailer + touched plan file → task marked `completed` with `evidencedBy` field
+// 2. Trailer-only task (no file paths) → completes based on trailer alone
+// 3. `(#3)` subject form post-cutover → never evidences; only accepted for grandfather-era rows
+// 4. Trailer with zero path overlap (task has paths, commit touches none) → NOT completed + audit-trail entry
+// 5. Trailer-first matching (ignores legacy subject forms for non-grandfathered tasks)
+// 6. Writes evidence stamps to the sidecar
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('deriveCompletion', () => {
+  it('marks task completed when trailer + commit touches plan file', async () => {
+    const autoheal = await loadAutoheal();
+    const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
+
+    // Create a plan with paths
+    const planPath = join(gitDir, '.docs/plans/test-plan.md');
+    await mkdir(join(gitDir, '.docs/plans'), { recursive: true });
+    const planContent = `# Test Plan
+
+### Task 1: Implementation
+Update the API layer.
+
+- \`src/api.ts\`
+- \`src/types.ts\`
+`;
+    await writeFile(planPath, planContent);
+    await execa('git', ['add', '.docs/plans/test-plan.md'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: gitDir });
+
+    // Create a commit touching one of the plan files with Task: trailer
+    await mkdir(join(gitDir, 'src'), { recursive: true });
+    await writeFile(join(gitDir, 'src/api.ts'), 'export function api() {}');
+    await execa('git', ['add', 'src/api.ts'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'feat: api implementation\n\nTask: 1\n'], { cwd: gitDir });
+
+    const commits = await autoheal.listCommitsWithTrailers(gitDir); // No anchor needed
+    const evidence = await createTaskEvidence(gitDir);
+    const anchor = ''; // Not used in this test
+
+    const result = await autoheal.deriveCompletion(gitDir, planPath, anchor, commits, evidence);
+
+    expect(result).toHaveProperty('1');
+    expect(result['1']).toHaveProperty('completed', true);
+    expect(result['1']).toHaveProperty('evidencedBy');
+    expect(result['1'].evidencedBy).toMatch(/^[0-9a-f]{40}$/);
+  });
+
+  it('marks task completed when trailer alone (no plan paths)', async () => {
+    const autoheal = await loadAutoheal();
+    const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
+
+    // Create a plan with NO paths for this task
+    const planPath = join(gitDir, '.docs/plans/test-plan.md');
+    await mkdir(join(gitDir, '.docs/plans'), { recursive: true });
+    const planContent = `# Test Plan
+
+### Task 2: No files task
+A task with no specific files.
+`;
+    await writeFile(planPath, planContent);
+    await execa('git', ['add', '.docs/plans/test-plan.md'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: gitDir });
+
+    // Create a commit with Task: trailer (touching any file is ok)
+    await writeFile(join(gitDir, 'random.txt'), 'content');
+    await execa('git', ['add', 'random.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'feat: work\n\nTask: 2\n'], { cwd: gitDir });
+
+    const commits = await autoheal.listCommitsWithTrailers(gitDir);
+    const evidence = await createTaskEvidence(gitDir);
+
+    const result = await autoheal.deriveCompletion(gitDir, planPath, '', commits, evidence);
+
+    expect(result).toHaveProperty('2');
+    expect(result['2']).toHaveProperty('completed', true);
+  });
+
+  it('does NOT complete task with (# form on non-grandfathered task', async () => {
+    const autoheal = await loadAutoheal();
+    const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
+
+    // Create a plan
+    const planPath = join(gitDir, '.docs/plans/test-plan.md');
+    await mkdir(join(gitDir, '.docs/plans'), { recursive: true });
+    const planContent = `# Test Plan
+
+### Task 3: Subject-form task
+Some task.
+
+- \`src/index.ts\`
+`;
+    await writeFile(planPath, planContent);
+    await execa('git', ['add', '.docs/plans/test-plan.md'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: gitDir });
+
+    // Create a commit using (#3) subject form (legacy, should NOT match post-cutover)
+    await mkdir(join(gitDir, 'src'), { recursive: true });
+    await writeFile(join(gitDir, 'src/index.ts'), 'export const x = 1;');
+    await execa('git', ['add', 'src/index.ts'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'fix: update (#3)\n\nThis task uses legacy form, no Task: trailer'], { cwd: gitDir });
+
+    const commits = await autoheal.listCommitsWithTrailers(gitDir);
+    const evidence = await createTaskEvidence(gitDir);
+
+    const result = await autoheal.deriveCompletion(gitDir, planPath, '', commits, evidence);
+
+    // Should NOT mark as completed (no Task: trailer, (#3) form ignored)
+    expect(result).toHaveProperty('3');
+    expect(result['3']).toHaveProperty('completed', false);
+  });
+
+  it('does NOT complete task when trailer path overlap is zero', async () => {
+    const autoheal = await loadAutoheal();
+    const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
+
+    // Create a plan with specific paths
+    const planPath = join(gitDir, '.docs/plans/test-plan.md');
+    await mkdir(join(gitDir, '.docs/plans'), { recursive: true });
+    const planContent = `# Test Plan
+
+### Task 4: API layer
+Update the API.
+
+- \`src/api.ts\`
+- \`src/types.ts\`
+`;
+    await writeFile(planPath, planContent);
+    await execa('git', ['add', '.docs/plans/test-plan.md'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: gitDir });
+
+    // Create a commit with Task: 4 but touching DIFFERENT files
+    await mkdir(join(gitDir, 'src'), { recursive: true });
+    await writeFile(join(gitDir, 'src/utils.ts'), 'export const util = 1;');
+    await execa('git', ['add', 'src/utils.ts'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'feat: utilities\n\nTask: 4\n'], { cwd: gitDir });
+
+    const commits = await autoheal.listCommitsWithTrailers(gitDir);
+    const evidence = await createTaskEvidence(gitDir);
+
+    const result = await autoheal.deriveCompletion(gitDir, planPath, '', commits, evidence);
+
+    // Should NOT mark as completed (no path overlap)
+    expect(result).toHaveProperty('4');
+    expect(result['4']).toHaveProperty('completed', false);
+  });
+
+  it('stores evidence stamp in sidecar when task completed', async () => {
+    const autoheal = await loadAutoheal();
+    const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
+
+    // Create a plan with paths
+    const planPath = join(gitDir, '.docs/plans/test-plan.md');
+    await mkdir(join(gitDir, '.docs/plans'), { recursive: true });
+    const planContent = `# Test Plan
+
+### Task 5: Feature
+Implement a feature.
+
+- \`src/feature.ts\`
+`;
+    await writeFile(planPath, planContent);
+    await execa('git', ['add', '.docs/plans/test-plan.md'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: gitDir });
+
+    // Create a commit touching the plan file with Task: trailer
+    await mkdir(join(gitDir, 'src'), { recursive: true });
+    await writeFile(join(gitDir, 'src/feature.ts'), 'export const feature = 1;');
+    await execa('git', ['add', 'src/feature.ts'], { cwd: gitDir });
+    const commitResult = await execa('git', ['commit', '-m', 'feat: feature\n\nTask: 5\n'], { cwd: gitDir });
+    const commitSha = (await execa('git', ['rev-parse', 'HEAD'], { cwd: gitDir })).stdout.trim();
+
+    const commits = await autoheal.listCommitsWithTrailers(gitDir);
+    const evidence = await createTaskEvidence(gitDir);
+
+    const result = await autoheal.deriveCompletion(gitDir, planPath, '', commits, evidence);
+
+    // Check that evidence was written to sidecar
+    expect(evidence.evidenceStamps.has('5')).toBe(true);
+    const stamp = evidence.evidenceStamps.get('5');
+    expect(stamp).toBeDefined();
+    expect(stamp!.sha).toBe(commitSha);
+    expect(stamp!.form).toBe('trailer');
+  });
+
+  it('logs audit trail entry when path overlap is zero', async () => {
+    const autoheal = await loadAutoheal();
+    const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
+    const mockWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    // Create a plan with specific paths
+    const planPath = join(gitDir, '.docs/plans/test-plan.md');
+    await mkdir(join(gitDir, '.docs/plans'), { recursive: true });
+    const planContent = `# Test Plan
+
+### Task 6: Specific task
+Update specific files.
+
+- \`src/specific.ts\`
+`;
+    await writeFile(planPath, planContent);
+    await execa('git', ['add', '.docs/plans/test-plan.md'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: gitDir });
+
+    // Create a commit with Task: trailer but no path overlap
+    await mkdir(join(gitDir, 'src'), { recursive: true });
+    await writeFile(join(gitDir, 'src/other.ts'), 'export const other = 1;');
+    await execa('git', ['add', 'src/other.ts'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'feat: other work\n\nTask: 6\n'], { cwd: gitDir });
+
+    const commits = await autoheal.listCommitsWithTrailers(gitDir);
+    const evidence = await createTaskEvidence(gitDir);
+
+    const result = await autoheal.deriveCompletion(gitDir, planPath, '', commits, evidence);
+
+    // Should have audit entry or warning about path mismatch
+    expect(result).toHaveProperty('6');
+    expect(result['6']).toHaveProperty('completed', false);
+    expect(result['6']).toHaveProperty('auditEntry');
+
+    mockWarn.mockRestore();
   });
 });

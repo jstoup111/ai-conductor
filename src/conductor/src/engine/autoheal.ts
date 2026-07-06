@@ -387,6 +387,97 @@ export async function listCommitsWithTrailers(
     .filter((item): item is CommitWithTrailers => item !== null);
 }
 
+export interface DeriveCompletionResult {
+  [taskId: string]: {
+    completed: boolean;
+    evidencedBy?: string;
+    auditEntry?: string;
+  };
+}
+
+/**
+ * Derive task completion from git trailers.
+ * Trailer-first: checks for Task: <id> trailers in commit bodies.
+ * Path corroboration: if task has paths, commit must touch at least one.
+ * Sidecar writes: evidence stamps stored in task-evidence.json on completion.
+ *
+ * @param projectRoot - Root of the git repository
+ * @param planPath - Path to the plan markdown file
+ * @param anchor - Plan anchor SHA for evidence range
+ * @param commits - CommitWithTrailers array (from listCommitsWithTrailers)
+ * @param evidence - TaskEvidence instance for sidecar writes
+ * @returns Map of task ID → {completed, evidencedBy?, auditEntry?}
+ */
+export async function deriveCompletion(
+  projectRoot: string,
+  planPath: string,
+  anchor: string,
+  commits: CommitWithTrailers[],
+  evidence: any, // TaskEvidence type from task-evidence.ts
+): Promise<DeriveCompletionResult> {
+  const result: DeriveCompletionResult = {};
+
+  // Parse the plan to extract tasks and their file paths
+  let planText: string;
+  try {
+    planText = await readFile(planPath, 'utf-8');
+  } catch {
+    return result;
+  }
+
+  const planTasks = parsePlanTasks(planText);
+  const planPaths = parsePlanTaskPaths(planText);
+
+  for (const [taskId, task] of planTasks) {
+    result[taskId] = { completed: false };
+
+    // Look for a commit with Task: <taskId> trailer
+    const matchingCommit = commits.find((c) => {
+      const taskTrailers = c.trailers['Task'] || [];
+      return taskTrailers.includes(taskId);
+    });
+
+    if (!matchingCommit) {
+      continue;
+    }
+
+    // Found a commit with the Task: trailer
+    const taskPaths = planPaths.get(taskId);
+    const hasPlanFiles = !!(taskPaths && taskPaths.size > 0);
+
+    if (!hasPlanFiles) {
+      // Task has no specific paths; trailer alone is enough
+      result[taskId].completed = true;
+      result[taskId].evidencedBy = matchingCommit.sha;
+      evidence.evidenceStamps.set(taskId, { sha: matchingCommit.sha, form: 'trailer' });
+      continue;
+    }
+
+    // Task has paths; verify commit touches at least one
+    const filesInCommit = await filesForCommit(projectRoot, matchingCommit.sha);
+    const overlap = filesInCommit.filter((f) => taskPaths!.has(f.replace(/^\.\//, '')));
+
+    if (overlap.length === 0) {
+      // Path mismatch: log audit entry
+      result[taskId].auditEntry = `Task ${taskId}: trailer found but no path overlap. Commit ${matchingCommit.sha.slice(0, 7)} touched [${filesInCommit.slice(0, 3).join(', ')}...] but expected paths like [${Array.from(taskPaths).slice(0, 3).join(', ')}...]`;
+      console.warn(
+        `[autoheal] Path corroboration failed for task ${taskId}: trailer ${matchingCommit.sha.slice(0, 7)} has no overlap with plan paths`,
+      );
+      continue;
+    }
+
+    // Path overlap confirmed; mark completed
+    result[taskId].completed = true;
+    result[taskId].evidencedBy = matchingCommit.sha;
+    evidence.evidenceStamps.set(taskId, { sha: matchingCommit.sha, form: 'trailer' });
+  }
+
+  // Write evidence to sidecar
+  await evidence.write();
+
+  return result;
+}
+
 function parseTrailers(trailerText: string): Record<string, string[]> {
   const result: Record<string, string[]> = {};
 
