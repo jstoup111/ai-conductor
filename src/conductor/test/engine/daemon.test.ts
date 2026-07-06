@@ -1007,7 +1007,7 @@ describe('engine/daemon — runDaemon', () => {
       expect(res.processed.filter((o) => o.slug === 'f0' && o.status === 'done')).toHaveLength(1);
     });
 
-    it('parked feature: onCleared callback re-dispatches WITHOUT waiting for sleep tick', async () => {
+    it('parked feature: onCleared callback re-dispatches without waiting for the sleep timeout', async () => {
       // Verify that when onCleared fires, the feature is picked and dispatched
       // again IMMEDIATELY, not after the next sleep poll. Track dispatch vs sleep order.
 
@@ -1038,7 +1038,8 @@ describe('engine/daemon — runDaemon', () => {
           return () => {};
         },
         sleep: async () => {
-          // This should NOT be called before dispatch:2 happens (event-driven path)
+          // Sleep is invoked as a race arm per commit a9963d73, but never resolves.
+          // dispatch:2 occurring proves the wake arm (waker.armed()) unblocked the race.
           events.push('sleep:started');
           await new Promise(() => {});
         },
@@ -1066,8 +1067,9 @@ describe('engine/daemon — runDaemon', () => {
       expect(dispatchIdx).toBeGreaterThanOrEqual(0);
       expect(clearIdx).toBeGreaterThan(dispatchIdx); // clear fires after first dispatch
       expect(dispatch2Idx).toBeGreaterThan(clearIdx); // re-dispatch fires after clear
-      // Critical: re-dispatch must happen WITHOUT sleep blocking
-      expect(dispatch2Idx).toBeLessThan(sleepIdx); // dispatch:2 before sleep:started
+      // Critical: sleep is invoked as a race arm per a9963d73, but dispatch:2 proves waker.armed() won
+      expect(sleepIdx).toBeGreaterThanOrEqual(0); // sleep arm is invoked as part of the race
+      expect(dispatch2Idx).toBeGreaterThan(sleepIdx); // dispatch:2 after sleep starts the race
     });
 
     it('multiple halted features: each gets its own watchHaltCleared watcher', async () => {
