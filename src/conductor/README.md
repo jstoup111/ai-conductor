@@ -129,9 +129,9 @@ by **gate verdicts** instead of a fixed order:
   step), and a `finally` backstop writes a diagnostic `HALT` if a daemon run reaches it
   with neither marker. Interactive runs (`daemon:false`) are untouched — they legitimately
   exit markerless and the daemon never reads their markers.
-- **Fresh session per step** — with `freshContextPerStep` (daemon/auto only; interactive
-  `/conduct` leaves it off so the explore→prd→…→stories→plan design session keeps its
-  context), the LLM session is reset before **every** executed step in the loop
+- **Fresh session per step** — unconditionally, in all modes and all phases (interactive
+  `/conduct` included; each step reads its inputs from committed `.docs/` artifacts, not
+  conversational memory), the LLM session is reset before **every** executed step
   (Ralph-style; context never bloats across the loop), while a step's own retries resume
   the same session. The reset also fires before the **first** step, which discards any
   stale session inherited from a **reused worktree** — a kept worktree carries the prior

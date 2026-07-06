@@ -278,14 +278,6 @@ export interface ConductorOptions {
    */
   verifyArtifacts?: boolean;
   /**
-   * Hybrid session model (Phase 4): reset the LLM session before each new step
-   * in the looped region (`build`…`finish`) so each runs on fresh context
-   * (Ralph-style resilience — context never bloats across the SHIP phase). A
-   * step's internal retries still resume the same session. The front half keeps
-   * the persistent session. Default false (persistent session everywhere).
-   */
-  freshContextPerStep?: boolean;
-  /**
    * Daemon mode (Phase 9.1). When true, the in-loop `retro` step is skipped:
    * the daemon's emission step owns narrative production into the cross-project
    * engineer store instead of writing `.docs/retros/` into the feature repo (ADR-002
@@ -448,7 +440,6 @@ export class Conductor {
   private onCheckpoint: (step: StepName) => Promise<CheckpointResponse>;
   private onNavigate: (steps: NavigableStep[]) => Promise<StepName | null>;
   private verifyArtifacts: boolean;
-  private freshContextPerStep: boolean;
   private daemon: boolean;
   private selfHost: boolean;
   private baseBranch?: string;
@@ -492,7 +483,6 @@ export class Conductor {
     this.projectRoot = opts.projectRoot;
     this.featureDesc = opts.featureDesc;
     this.verifyArtifacts = opts.verifyArtifacts ?? false;
-    this.freshContextPerStep = opts.freshContextPerStep ?? false;
     this.daemon = opts.daemon ?? false;
     this.selfHost = opts.selfHost ?? false;
     this.baseBranch = opts.baseBranch;
@@ -1097,12 +1087,12 @@ export class Conductor {
           );
         }
 
-        // Fresh session per step (Phase 4 + daemon fix): when freshContextPerStep
-        // is on (daemon/auto only — interactive `/conduct` leaves it false so the
-        // explore→prd→…→plan design session keeps its context), start EVERY
-        // executed step on a brand-new LLM session so context never accumulates
-        // across the loop. The retry loop below reuses this session (resume) for
-        // the step's OWN attempts only.
+        // Fresh session per step (ai-conductor#325): start EVERY executed step on
+        // a brand-new LLM session, in all phases and all modes, so context never
+        // accumulates across the loop. Each step reads its inputs from the
+        // committed artifacts (.docs/), not from conversational memory. The retry
+        // loop below reuses this session (resume) for the step's OWN attempts
+        // only.
         //
         // This also resets before the FIRST executed step (`acceptance_specs` in a
         // daemon run — the front half is pre-seeded `done` and skipped above). That
@@ -1111,7 +1101,7 @@ export class Conductor {
         // `claude --session-id <new>` (create) instead of `--resume <new>` against
         // a conversation that never existed (which surfaced as "session
         // unavailable (expired or in use)" and errored the feature out).
-        if (this.freshContextPerStep && this.stepRunner.resetSession) {
+        if (this.stepRunner.resetSession) {
           await this.stepRunner.resetSession();
         }
 

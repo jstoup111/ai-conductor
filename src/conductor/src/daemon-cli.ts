@@ -245,7 +245,8 @@ export function createRestartRequester(
 /**
  * Daemon entry (Phase 6). Drains the backlog of features with existing
  * stories+plan, running each in its own worktree via the gate loop
- * (verifyArtifacts + freshContextPerStep), opening a PR on finish, and tearing
+ * (verifyArtifacts + the engine's unconditional fresh-session-per-step),
+ * opening a PR on finish, and tearing
  * the worktree down on success. Unattended; ceilings + supervision live in
  * runDaemon / makeRunFeature.
  */
@@ -426,7 +427,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     // its FIRST step would `--resume` a brand-new session id that was never
     // created → "No conversation found" → "session unavailable (expired or in
     // use)" → the feature errors out. The conductor also resets per step
-    // (freshContextPerStep), but sweeping here guarantees a clean start.
+    // before every step, but sweeping here guarantees a clean start.
     await rm(join(pipelineDir, 'session-created'), { force: true });
     await rm(join(pipelineDir, 'conduct-session-id'), { force: true });
 
@@ -482,7 +483,6 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       selfHost: isSelfHost,
       baseBranch,
       verifyArtifacts: true,
-      freshContextPerStep: true,
       // Resume from the first unsatisfied step rather than hardcoding the entry
       // point. With the DECIDE steps stamped done (PRESEEDED_DONE above), a
       // FRESH feature resumes at `acceptance_specs` — the first pending step —

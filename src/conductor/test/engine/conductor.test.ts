@@ -344,7 +344,7 @@ describe('engine/conductor', () => {
     expect(result.ok && result.value.feature_status).toBeUndefined();
   });
 
-  describe('fresh session per step (freshContextPerStep)', () => {
+  describe('fresh session per step (unconditional)', () => {
     // A runner that logs every session reset and every dispatch, so we can
     // assert the interleaving (reset-then-run for every executed step).
     function trackingRunner(): { runner: StepRunner; log: string[] } {
@@ -361,14 +361,13 @@ describe('engine/conductor', () => {
       return { runner, log };
     }
 
-    it('resets the session before every dispatched step when on', async () => {
+    it('resets the session before every dispatched step', async () => {
       const { runner, log } = trackingRunner();
       const conductor = new Conductor({
         projectRoot: dir,
         stateFilePath: statePath,
         stepRunner: runner,
         events,
-        freshContextPerStep: true,
       });
 
       await conductor.run();
@@ -383,19 +382,61 @@ describe('engine/conductor', () => {
       for (const i of runIdxs) expect(log[i - 1]).toBe('reset');
     });
 
-    it('does NOT reset when off (interactive /conduct keeps its design session)', async () => {
+    it('resets in interactive/default mode too — fresh-per-step is not opt-in', async () => {
+      // Regression for ai-conductor#325: the reset used to be gated behind a
+      // daemon-only freshContextPerStep flag, so interactive `/conduct` (and
+      // the daemon front half) shared one persistent session across steps.
       const { runner, log } = trackingRunner();
       const conductor = new Conductor({
         projectRoot: dir,
         stateFilePath: statePath,
         stepRunner: runner,
         events,
-        freshContextPerStep: false,
       });
 
       await conductor.run();
 
-      expect(log.includes('reset')).toBe(false);
+      expect(log.includes('reset')).toBe(true);
+      const runIdxs = log
+        .map((e, i) => (e.startsWith('run:') ? i : -1))
+        .filter((i) => i >= 0);
+      for (const i of runIdxs) expect(log[i - 1]).toBe('reset');
+    });
+
+    it('a step retry resumes the same session — no reset between attempts', async () => {
+      // Load-bearing invariant: the reset happens once BEFORE the retry loop;
+      // a step's own retries resume the session it started with.
+      const log: string[] = [];
+      let storiesAttempts = 0;
+      const runner: StepRunner = {
+        run: async (step: StepName) => {
+          log.push(`run:${step}`);
+          if (step === 'stories' && storiesAttempts++ === 0) {
+            return { success: false, error: 'flaky first attempt' };
+          }
+          return { success: true };
+        },
+        resetSession: async () => {
+          log.push('reset');
+        },
+      };
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        mode: 'auto',
+        maxRetries: 2,
+      });
+
+      await conductor.run();
+
+      const first = log.indexOf('run:stories');
+      const second = log.indexOf('run:stories', first + 1);
+      expect(first).toBeGreaterThan(0); // ran, and something precedes it
+      expect(second).toBeGreaterThan(first); // retried
+      expect(log[first - 1]).toBe('reset'); // fresh session for the step
+      expect(log.slice(first + 1, second)).not.toContain('reset'); // retry resumes
     });
 
     it('resets before the FIRST executed step — the daemon worktree-reuse fix', async () => {
@@ -417,7 +458,6 @@ describe('engine/conductor', () => {
         stateFilePath: statePath,
         stepRunner: runner,
         events,
-        freshContextPerStep: true,
         fromStep: 'acceptance_specs',
       });
 
@@ -447,7 +487,6 @@ describe('engine/conductor', () => {
         stateFilePath: statePath,
         stepRunner: runner,
         events,
-        freshContextPerStep: true,
         resume: true,
       });
 
@@ -477,7 +516,6 @@ describe('engine/conductor', () => {
         stateFilePath: statePath,
         stepRunner: runner,
         events,
-        freshContextPerStep: true,
         resume: true,
       });
 
