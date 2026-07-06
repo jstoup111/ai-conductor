@@ -39,8 +39,26 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   than the raw `warning` enum value; and a gated spec slug already covered by the PROCESSED
   group (stale-ledger dedup) is excluded from GATED, matching the existing HALTED/PROCESSED
   precedence contract.
+- Event-driven re-dispatch on HALT clear (Task 18): when a parked feature's `.pipeline/HALT`
+  marker is removed, the daemon detects it via filesystem watch (chokidar) and immediately
+  re-dispatches without waiting for the next idle poll. Sub-second response vs. 5-60s polling.
+  Fallback: `--no-watch` flag disables filesystem watching and relies on polling only.
+- `--no-watch` flag for daemon (conduct-ts daemon): disables filesystem watching, falls back
+  to polling-only. Use when chokidar watch fails or for testing. Pairs with `--idle-poll`.
+- Transition-only daemon logging (Task 18): daemon logs only slug status transitions (park/unpark,
+  dispatch/halt/done), no idle-polling spam. One line per state change, no per-tick chatter.
+- Resume marker for re-dispatches (Task 18): when a parked feature is re-dispatched, the daemon
+  logs `↻ resume` instead of `▶ start` to distinguish fresh dispatch from re-kick. Feature state
+  and logging remain clean and audit-friendly.
 
 ### Changed
+
+- `--idle-poll` default raised: 5s → 60s (Task 18). Event-driven wake now handles the hot
+  path (HALT clear detection), so the polling fallback can be slower. Override with
+  `--idle-poll 5` to restore legacy behavior or when filesystem watch is unavailable.
+- Daemon idle timeout behavior improved (Task 11): unref'd timer no longer blocks process
+  exit when daemon is idle. Features in-flight still drain before exit, but idle sleeping
+  doesn't prevent process termination. Fixes "hanging daemon on SIGTERM when idle" issue.
 
 - **`manual_test` is now a gating step, and its enforcement is locked (#367).** While it was
   advisory, an auto-mode run whose manual test kept failing was silently auto-skipped after

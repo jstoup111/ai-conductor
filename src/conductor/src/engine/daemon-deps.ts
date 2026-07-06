@@ -1,6 +1,7 @@
 import { execa } from 'execa';
 import { mkdir, writeFile, readFile, access, stat } from 'node:fs/promises';
 import { basename, join } from 'node:path';
+import * as chokidar from 'chokidar';
 import { HALT_MARKER } from './halt-marker.js';
 import type { BacklogItem } from './daemon.js';
 import type { LLMProvider } from '../execution/llm-provider.js';
@@ -254,4 +255,87 @@ async function exists(p: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/**
+ * Watch a halted feature's worktree for HALT marker removal, calling `onCleared`
+ * when the `.pipeline/HALT` file is deleted or renamed away.
+ *
+ * Uses chokidar to watch for filesystem events. On detecting an unlink event
+ * (both delete and rename), re-verifies the file is truly gone before calling
+ * the callback. Returns a dispose function that closes the watcher (idempotent).
+ *
+ * Errors and missing directories are handled gracefully:
+ * - If the worktree directory doesn't exist, returns a no-op dispose function
+ * - Watcher errors are swallowed (best-effort monitoring)
+ * - Calling dispose multiple times is safe
+ *
+ * Internal implementation. Use `makeWatchHaltClearedSeam` to create the
+ * DaemonDeps-compatible seam.
+ *
+ * @param worktreeBase Directory under which per-feature worktrees live
+ * @param slug Feature slug (worktree is at `<worktreeBase>/<slug>`)
+ * @param onCleared Callback fired exactly once when HALT marker is confirmed gone
+ * @returns Dispose function that closes the watcher
+ */
+export function watchHaltCleared(
+  worktreeBase: string,
+  slug: string,
+  onCleared: () => void,
+): () => void {
+  const haltPath = join(worktreeBase, slug, HALT_MARKER);
+  let watcher: chokidar.FSWatcher | null = null;
+  let disposed = false;
+
+  // Start the watcher
+  try {
+    watcher = chokidar.watch(haltPath, { ignoreInitial: true });
+
+    watcher.on('unlink', async () => {
+      if (disposed) return;
+
+      // Re-verify the file is actually gone
+      const stillExists = await exists(haltPath);
+      if (!stillExists) {
+        onCleared();
+      }
+    });
+
+    // Swallow watcher errors (best-effort monitoring)
+    watcher.on('error', () => {
+      /* ignore */
+    });
+  } catch {
+    // If the directory doesn't exist or the watcher fails to start,
+    // just return a no-op dispose
+    watcher = null;
+  }
+
+  // Return idempotent dispose function
+  return () => {
+    if (disposed) return;
+    disposed = true;
+    if (watcher) {
+      watcher.close().catch(() => {
+        /* best-effort cleanup */
+      });
+    }
+  };
+}
+
+/**
+ * Factory for the DaemonDeps watchHaltCleared seam (Task 12).
+ *
+ * Creates a seam-compatible function `(slug: string, onCleared: () => void) => () => void`
+ * that uses the real filesystem watcher to detect HALT marker removal.
+ *
+ * @param worktreeBase Directory under which per-feature worktrees live
+ * @returns DaemonDeps-compatible watchHaltCleared function
+ */
+export function makeWatchHaltClearedSeam(
+  worktreeBase: string,
+): (slug: string, onCleared: () => void) => () => void {
+  return (slug: string, onCleared: () => void) => {
+    return watchHaltCleared(worktreeBase, slug, onCleared);
+  };
 }

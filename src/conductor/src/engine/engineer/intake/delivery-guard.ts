@@ -9,6 +9,8 @@
 // cap are re-marked for processing; at-cap entries are parked as needs-manual.
 
 import { REOPEN_ATTEMPTS_CAP } from './github-issues.js';
+import type { IntakeQueue } from './queue.js';
+import type { Envelope } from './port.js';
 
 /** Shell runner for the `gh` CLI. Mirrors the engineer loop's GhRunner shape. */
 export type GhRunner = (args: string[], opts: { cwd: string }) => Promise<{ stdout: string }>;
@@ -60,18 +62,11 @@ export async function verifyPrState(gh: GhRunner, url: string): Promise<PrState>
 
 // ─── createDeliveryGuardedQueue ────────────────────────────────────────────────
 
-/** Minimal envelope shape this module cares about. */
-export interface GuardedEnvelope {
-  source?: string;
-  sourceRef?: string;
-  [key: string]: unknown;
-}
-
-/** The subset of IntakeQueue this decorator wraps. */
+/** The subset of IntakeQueue this decorator wraps. Returns Envelope (same as IntakeQueue). */
 export interface GuardedQueue {
-  claim(): Promise<GuardedEnvelope | null>;
-  ack(e: GuardedEnvelope): Promise<void>;
-  release(e: GuardedEnvelope): Promise<void>;
+  claim(): Promise<Envelope | null>;
+  ack(e: Envelope): Promise<void>;
+  release(e: Envelope): Promise<void>;
 }
 
 /** Minimal ledger interface for guard. */
@@ -112,15 +107,15 @@ export interface DeliveryGuardDeps {
  * @returns A wrapped queue with { claim(), release() }
  */
 export function createDeliveryGuardedQueue(
-  queue: GuardedQueue,
+  queue: IntakeQueue,
   ledger: GuardLedger,
   deps: DeliveryGuardDeps,
 ): GuardedQueue {
-  const held: GuardedEnvelope[] = [];
+  const held: Envelope[] = [];
   const logger = deps.logger ?? { info: () => {} };
 
   return {
-    async claim(): Promise<GuardedEnvelope | null> {
+    async claim(): Promise<Envelope | null> {
       const candidate = await queue.claim();
       if (!candidate) {
         // Before returning null, release all held candidates
@@ -322,11 +317,11 @@ export function createDeliveryGuardedQueue(
       return this.claim();
     },
 
-    async ack(e: GuardedEnvelope): Promise<void> {
+    async ack(e: Envelope): Promise<void> {
       await queue.ack(e);
     },
 
-    async release(e: GuardedEnvelope): Promise<void> {
+    async release(e: Envelope): Promise<void> {
       await queue.release(e);
     },
   };

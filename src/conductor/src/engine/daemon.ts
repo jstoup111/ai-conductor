@@ -17,6 +17,19 @@ import chalk from 'chalk';
 import type { ComplexityTier, Track } from '../types/index.js';
 import { Waker } from './waker.js';
 
+/**
+ * Default sleep implementation that returns an unref'd timer.
+ * The timer won't prevent the process from exiting when there's no other work.
+ * Task 11: Ensure the idle poll timeout doesn't block process exit.
+ */
+export function createDefaultSleep(): (ms: number) => Promise<void> {
+  return (ms: number) =>
+    new Promise<void>((r) => {
+      const timer = setTimeout(r, ms);
+      timer.unref();
+    });
+}
+
 export interface BacklogItem {
   /** Stable feature identifier (also the worktree/branch slug). The vetted
    *  stories + plan live on the default branch each worktree is cut from, so the
@@ -354,7 +367,7 @@ export async function runDaemon(
   options: DaemonOptions,
 ): Promise<DaemonResult> {
   const concurrency = Math.max(1, Math.floor(options.concurrency));
-  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  const sleep = deps.sleep ?? createDefaultSleep();
   const now = deps.now ?? (() => Date.now());
   const log = deps.log ?? (() => {});
 
@@ -446,6 +459,9 @@ export async function runDaemon(
   };
 
   const dispatch = (item: BacklogItem): void => {
+    // Task 16: Detect if this is a re-dispatch (slug was parked)
+    const isResume = parked.has(item.slug);
+
     started.add(item.slug);
     parked.delete(item.slug); // re-dispatching a cleared feature un-parks it
     // Dispose any existing watcher before re-dispatching (to avoid stale watchers
@@ -456,7 +472,12 @@ export async function runDaemon(
       watchers.delete(item.slug);
     }
 
-    log(`${chalk.cyan('▶')} start ${chalk.bold(item.slug)}`);
+    // Task 16: Emit resume marker for re-dispatches, start for fresh dispatches
+    if (isResume) {
+      log(`${chalk.cyan('↻')} resume ${chalk.bold(item.slug)}`);
+    } else {
+      log(`${chalk.cyan('▶')} start ${chalk.bold(item.slug)}`);
+    }
     const tagged: Tagged = deps
       .runFeature(item)
       .then((outcome) => ({ slug: item.slug, outcome }))

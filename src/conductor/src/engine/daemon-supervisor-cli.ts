@@ -76,12 +76,12 @@ async function reconcileOrphan(
     // Orphan detected: session gone but process still alive.
     // Terminate the process using SIGTERM → SIGKILL flow.
     try {
-      kill(pidRecord.pid, 'SIGTERM');
+      kill(pidRecord.pid, 15); // SIGTERM
       // Give it a moment to exit gracefully
       await new Promise((r) => setTimeout(r, 100));
       // Check if it's still alive; if so, force kill
       if (isLive(pidRecord.pid, kill)) {
-        kill(pidRecord.pid, 'SIGKILL');
+        kill(pidRecord.pid, 9); // SIGKILL
       }
     } catch {
       // Process kill failed (e.g. EPERM, ESRCH) — best-effort

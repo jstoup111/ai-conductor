@@ -26,7 +26,7 @@ import {
 } from './engine/daemon-log.js';
 import type { ConductState, ConductorEvent, StepName } from './types/index.js';
 import { runDaemon, type BacklogItem } from './engine/daemon.js';
-import { discoverBacklog, fastForwardRoot, gitTreeSource } from './engine/daemon-backlog.js';
+import { discoverBacklog, fastForwardRoot, gitTreeSource, type DiscoveryLogger } from './engine/daemon-backlog.js';
 import { makeIsProcessed } from './engine/shipped-record.js';
 import { localWorkSource, type WorkSource } from './engine/daemon-work-source.js';
 import { type GhRunner } from './engine/owner-gate/identity.js';
@@ -83,6 +83,31 @@ import { isPaused } from './engine/pause-marker.js';
 import { readRestartPending, consumeOnBoot, type RestartIntent } from './engine/restart-marker.js';
 
 const execFile = promisify(execFileCb);
+
+/**
+ * Task 17: Create a transition-aware discovery logger that tracks fetch state
+ * and logs only on state transitions (idle→failed, failed→succeeded).
+ * Logs once on first failure (onset) and once on recovery, suppressing
+ * consecutive retries to avoid spam in the persistent daemon log.
+ */
+export function createDiscoveryLogger(log: (msg: string) => void): DiscoveryLogger {
+  let lastState: 'idle' | 'failed' | 'succeeded' = 'idle';
+
+  return {
+    onFetchFailed(err: Error) {
+      if (lastState !== 'failed') {
+        log(`[fetch] FAILED: ${err.message}`);
+        lastState = 'failed';
+      }
+    },
+    onFetchSucceeded() {
+      if (lastState === 'failed') {
+        log(`[fetch] recovered`);
+        lastState = 'succeeded';
+      }
+    },
+  };
+}
 
 /**
  * Rebuild the engine from source into the versioned store (self-host only),
@@ -331,6 +356,10 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     // uncluttered for live watching.
     logSink?.write(formatDaemonLogLine(`[daemon] ${stripAnsi(msg)}`));
   };
+
+  // Task 17: Create the transition-aware discovery logger
+  // Logs fetch failures/recovery only on state transitions
+  const discoveryLogger = createDiscoveryLogger(log);
 
   // ADR-010: claim the 1-per-repo pidfile so this daemon's liveness is observable
   // (the pidfile under .daemon/ holds our pid) and a second daemon for the same repo
@@ -890,7 +919,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       // the backlog reads. On idle refresh we fast-forward it first so the SHA
       // reflects origin's latest (driving ADR-013 re-kick when main advances).
       resolveBaseSha: async ({ refresh }) => {
-        if (refresh) await fastForwardRoot(projectRoot, log);
+        if (refresh) await fastForwardRoot(projectRoot, log, undefined, discoveryLogger);
         return readBaseSha(makeGitRunner(projectRoot), baseBranch);
       },
       readPersistedBaseSha: () => readPersistedBaseSha(projectRoot),
