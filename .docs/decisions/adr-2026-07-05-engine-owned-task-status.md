@@ -1,12 +1,13 @@
 # ADR 2026-07-05: Engine-owned, git-derived task-status.json
 
 **Date:** 2026-07-05
-**Status:** DRAFT — pending Fable validation. The design below was pressure-tested under **Opus**
-(the session model was Opus despite the runtime context claiming Fable); the operator requires a
-**Fable** re-validation of the ownership-inversion design before this ADR is flipped to APPROVED and
-the spec lands. Do not land while this reads DRAFT (the `land` ADR gate enforces this). See
-`.docs/PENDING-fable-pressure-test.md`.
-**Deciders:** James (solo dev) + harness architecture-review + design pressure-test (Opus; awaiting Fable)
+**Status:** APPROVED — Fable-validated 2026-07-05. First pressure-tested under Opus (2026-07-05),
+then re-validated under **Fable 5** (session model confirmed) via three independent adversarial
+lenses (evidence derivation; lifecycle/concurrency/migration; skill contracts). Verdict: the
+ownership inversion **survives**, conditioned on five additional binding constraints (H5–H9 below)
+that the Opus round missed. See the Fable findings table in
+`architecture-review-prd-audit-kickback-preserves-task-status.md`.
+**Deciders:** James (solo dev) + harness architecture-review + design pressure-test (Opus 2026-07-05, Fable 2026-07-05)
 **Feature:** jstoup111/ai-conductor#302 — `prd_audit → build` kickback wipes `.pipeline/task-status.json`
 **Related:** #115 (closed, retryReason handoff), #280 (open, forward-progress halt for partial completion)
 
@@ -78,10 +79,11 @@ The engine is the **single writer** of `task-status.json`; the build agent only 
   provenance, dashboard surface) that `rekickSweep` skips — a visible, actionable stop instead of an
   infinite loop; reconciled with #280.
 
-**Pros:** the wipe is **structurally impossible** (the agent can't erase what it doesn't own);
-completion is ground-truth (git), not agent bookkeeping; decoupled from `/pipeline` (works for any
-build skill); subsumes the append mechanism; leverages existing `autoheal`/`park-marker`/`plan-ref`
-machinery.
+**Pros:** the wipe is **structurally harmless** (completion is recomputed from plan + git on every
+gate evaluation, and durable engine state lives in an agent-untouchable sidecar — erasing the cache
+erases nothing authoritative; see H6); completion is ground-truth (git), not agent bookkeeping;
+decoupled from `/pipeline` (works for any build skill); subsumes the append mechanism; leverages
+existing `autoheal`/`park-marker`/plan-snapshot machinery.
 **Cons:** a coordinated contract change across the engine + `/pipeline` SKILL.md + `/remediate`
 SKILL.md, with `autoheal` hardening and a careful in-flight-state migration — Large, not a localized
 patch. Mitigated by sequencing (loop-and-wipe elimination first).
@@ -95,24 +97,93 @@ bar). The build agent implements + commits + stamps ids; it is never the authori
 The following are **binding constraints** (each maps to a story):
 
 - **H1 — Seed is merge/upsert by id**, preserving existing `status`/`in_progress`/rework counts;
-  never a blind overwrite. This is also the in-flight migration path.
-- **H2 — The `Task: <id>` trailer is enforced** by the `/pipeline` per-task template; a plan-path
-  fallback applies; a task that cannot be evidenced after N attempts **parks, never loops**.
-- **H3 — Remediation tasks carry deterministic gap/FR-derived ids** → idempotent upsert into the plan.
-- **H4 — Single-authority migration:** the engine is the sole authority; `/pipeline` stops writing
-  `task-status.json` authoritatively (advisory only). The two writers never coexist authoritatively.
+  never a blind overwrite. This is also the in-flight migration path. *(Fable amendment: "preserve"
+  applies only to engine-stamped rows — see H6/H8; a bare agent-written `completed` row is never
+  preserved into authority.)*
+- **H2 — The `Task: <id>` trailer is enforced at BOTH layers that touch commits:** the `/tdd`
+  commit checklist gains the trailer as a gate (the TDD subagent is what actually runs `git commit`)
+  AND the `/pipeline` per-task dispatch template injects the task id. A plan-path fallback applies;
+  a task that cannot be evidenced after N attempts **parks, never loops**.
+- **H3 — Remediation tasks carry deterministic gap/FR-derived ids** → idempotent upsert into the
+  plan, under the H9 grammar rules.
+- **H4 — Single-authority migration:** the engine is the sole authority on completion. The write
+  partition is **field-level**, not file-level: the agent retains only advisory *scheduling* writes
+  (`pending`/`in_progress` — the user-exit contract and dependency ordering genuinely consume
+  them); `completed`/`skipped` are engine-only. The `post-commit-pipeline-sync.sh` PostToolUse hook
+  (today: blindly completes the first pending task on any `git commit`, wired by `bin/install`) is
+  **removed/no-oped** in the same change; `finish` SKILL.md drops its task-status write; the two
+  writers never coexist authoritatively.
+
+Fable-round additions (2026-07-05), equally binding:
+
+- **H5 — Evidence contract is trailer-first:** canonical evidence is the `Task: <id>` git
+  **trailer** in the commit *body*; derive reads trailers (`git log --format` with
+  `%(trailers:key=Task,valueonly)` or `%B`) — the current subject-only scan
+  (`listCommits` `%H%x09%s`) cannot see trailers and MUST be replaced. Legacy `T<id>`/`#<id>`
+  subject heuristics are demoted to a migration-only fallback (never authoritative — `#<n>`
+  collides with issue/PR refs). Multi-trailer commits evidence several ids; any one evidencing
+  commit completes a multi-commit task; the trailer alone suffices for tasks with no plan files.
+  Commit-less completions (`skipped`, pre-completed, side-effect-completed) get a **no-op evidence
+  commit**: an empty commit carrying `Task: <id>` plus `Evidence: skipped <reason>` or
+  `Evidence: satisfied-by <sha>`. Merge-base failure **fails closed** (empty evidence + logged
+  anomaly — never the unbounded `HEAD -n 100` fallback); the commit range is anchored to the
+  current plan (plan-ref commit) so stale same-id commits on a reused branch can't false-complete.
+- **H6 — The gate never trusts file rows:** completion is **recomputed** from plan + git evidence
+  (+ engine sidecar) on every gate evaluation; `task-status.json` is a derived cache for dashboards
+  and agent scheduling. A `completed` counts only with an engine `evidencedBy` stamp or the H8
+  migration grandfather. Durable engine state (evidence stamps, attempt counters, grandfather set)
+  lives in an **engine-only sidecar** (e.g. `.pipeline/task-evidence.json`) the agent never writes —
+  so an agent wholesale rewrite of `task-status.json` destroys nothing authoritative, closing both
+  the wipe AND the agent-asserted false-complete. `buildRetryHint`'s current "update
+  .pipeline/task-status.json yourself" instruction is **rewritten** to "commit with the
+  `Task: <id>` trailer."
+- **H7 — Derive cadence + durable park counter:** seed+derive is one idempotent engine operation
+  run at build entry AND before **every** completion-gate evaluation AND before the stall-breaker's
+  resolved-count read (the `autoHealAttempted` once-per-run guard is removed for build — a
+  once-per-run derive breaks both the loop fix and the stall/forward-progress signal). The
+  no-evidence attempt counter persists in the engine sidecar and resets on any completed-count
+  increase, so the park fires **across daemon re-kicks** (all current counters are per-run
+  in-memory — without this the infinite loop survives). This counter is also #280's
+  forward-progress delta.
+- **H8 — Migration grandfather + engine plan resolution:** at first engine seed, existing terminal
+  rows are stamped `evidencedBy: migration-grandfather` (their pre-cutover commits carry no
+  trailers); thereafter only engine-stamped rows are preserved/counted. **Never-demote** is an
+  explicit constraint: derive never flips an evidenced `completed` back to `pending`; post-completion
+  evidence loss (e.g. a rebase dropping a commit) is a stated **non-goal** caught by tests/finish
+  verification, not by demotion. The engine records the active plan path at plan-step completion
+  (from the existing plan snapshot); agent-written plan refs (`plan_ref`, `.pipeline/plan-ref.md`)
+  are never load-bearing.
+- **H9 — Remediation id grammar:** the plan grammar, `parsePlanTaskPaths`/`expandTaskIds`, and the
+  `/plan` + `/remediate` templates must **agree on one id form** — today the parser accepts only
+  numeric `Task <n>` headers (and silently drops dotted ids), so H3's string ids (`rem-fr10-1`)
+  would be structurally unevidenceable and every remediation round would park. Either extend the
+  parser + matcher to `[A-Za-z0-9._-]+` ids or bind remediation determinism to an annotation on
+  next-numeric ids — one choice, applied everywhere. Upsert never mutates a `completed` row
+  (same-id/different-content gets an ordinal or content-hash suffix); derived ids carry their gate
+  source; a non-empty deterministic id is a **validated** requirement of the plan-append, not a
+  convention.
+
+Carried over from the Opus round:
+
 - **Empty-is-done removed:** an empty/missing task list is a seed-and-run (or park) state, never a
-  completion. `buildRetryHint` gains explicit `'no tasks'`/`'missing'` cases.
+  completion. `buildRetryHint` gains explicit `'no tasks'`/`'missing'` cases; the hint text directs
+  at the *plan* ("no parseable tasks — fix `.docs/plans/…`"), never "create task-status entries."
 - **No false-positive on a fresh build:** evidence = commits on the worktree branch since merge-base;
-  0 commits = genuinely fresh, behavior unchanged.
+  0 commits = genuinely fresh, behavior unchanged (fail-closed per H5 when merge-base is unresolvable).
 - **#115 retained** (retryReason context is additive); **park reconciled with #280**, not parallel.
+  The auto-park marker carries **distinct auto provenance** (never "parked by operator"), is
+  dashboard-surfaced, and emits a logged event so the halt-monitor sees it; the park is
+  daemon-layer — interactive runs keep the existing stall-REPL/recovery path.
 
 ## Consequences
 
 - The completion gate stops trusting an agent-maintained artifact; the daemon can no longer loop on an
-  empty task list, and completed work can no longer be silently destroyed.
-- `/pipeline` and `/remediate` SKILL.md contracts change; the harness integrity suite and
-  `src/conductor` vitest specs must cover the new engine ownership, the trailer contract, idempotent
-  remediation, the migration merge, and the survivable park.
+  empty task list, completed work can no longer be silently destroyed, and an agent-asserted
+  `completed` can no longer be laundered into a false-green ship (H6).
+- `/pipeline`, `/tdd`, `/remediate`, and `finish` SKILL.md contracts change, and the
+  `post-commit-pipeline-sync.sh` hook is removed; the harness integrity suite and `src/conductor`
+  vitest specs must cover the new engine ownership, the trailer-first evidence contract (H5), the
+  per-gate derive cadence + durable counters (H7), idempotent remediation under the id grammar (H9),
+  the migration grandfather (H8), and the survivable park.
 - Follow-up coordination with #280 is required for the shared park/forward-progress surface; this ADR
   scopes the park as the empty/no-evidence trigger of that mechanism, not a competing one.

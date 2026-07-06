@@ -90,13 +90,21 @@ graph TD
   **id**, preserving any existing `status`/`in_progress`/rework-count rows. This is the migration-safe
   path for in-flight features whose `task-status.json` the agent already wrote.
 - **Derive (authoritative autoheal):** promote `attemptAutoHeal` (`autoheal.ts:58-104`) from a
-  best-effort rescue to *the* completion source. Tighten `findMatchingCommit` (`autoheal.ts:292`) so a
-  commit heals a task only when it **references the task id** (message/trailer) AND touches the task's
-  plan files — removing the shared-path ambiguity. Scope commits to the worktree branch since its base.
-- **Agent contract change:** `/pipeline` SKILL.md — the per-task template commits with a
-  `Task: <id>` trailer and **stops** writing `task-status.json` authoritatively (advisory only; engine
-  reconciles). The Entry Guard's `all([]) === true` "empty = done" semantics is removed — an empty list
-  is a seed-and-run state, never completion.
+  best-effort rescue to *the* completion source. The evidence read is **trailer-first** (ADR H5): the
+  `Task: <id>` trailer lives in the commit *body*, so `listCommits` must read trailers/full messages,
+  not subjects; legacy `T<id>`/`#<id>` subject forms are migration-only fallback. Runs at build entry
+  and before **every** gate evaluation (once-per-run guard removed, ADR H7); range anchored to the
+  current plan, fail-closed on merge-base failure. Completion is recomputed each evaluation — the
+  gate never trusts file rows (ADR H6); durable engine state (evidence stamps, attempt counters)
+  lives in an engine-only sidecar the agent never writes.
+- **Agent contract change:** the trailer lands at BOTH layers (ADR H2): `/tdd`'s commit checklist
+  (the subagent that actually commits) gains the `Task: <id>` trailer gate, and `/pipeline`'s
+  dispatch template injects the id. The write partition is **field-level** (ADR H4/H6): the agent
+  keeps advisory scheduling writes (`pending`/`in_progress` — the user-exit contract consumes them);
+  `completed`/`skipped` are engine-only, and commit-less completions use a no-op evidence commit
+  (`Evidence: skipped <reason>` / `satisfied-by <sha>`). The `post-commit-pipeline-sync.sh` hook and
+  `finish`'s task-status write are removed. The Entry Guard's `all([]) === true` "empty = done"
+  semantics is removed — an empty list is a seed-and-run state, never completion.
 - **Remediation extends the plan:** `/remediate` SKILL.md — emit remediation tasks **into the plan**
   with deterministic, gap/FR-derived ids so re-runs upsert (idempotent) rather than duplicate. The
   engine re-seeds and re-derives; already-done tasks re-mark complete from their id-stamped commits.
