@@ -405,6 +405,69 @@ describe('engine/artifacts', () => {
       });
       expect(result).toEqual({ done: true });
     });
+
+    it('passes when finish-choice="pr" and isHeadPushed returns true (happy path: evidence pass)', async () => {
+      await createFile(FINISH_CHOICE_MARKER, 'pr');
+      await createFile(
+        '.pipeline/conduct-state.json',
+        JSON.stringify({ pr_url: 'https://github.com/foo/bar/pull/1' }),
+      );
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        isHeadPushed: async () => true,
+      });
+      expect(result).toEqual({ done: true });
+    });
+
+    it('fails when finish-choice="pr" and isHeadPushed returns false (evidence check)', async () => {
+      await createFile(FINISH_CHOICE_MARKER, 'pr');
+      await createFile(
+        '.pipeline/conduct-state.json',
+        JSON.stringify({ pr_url: 'https://github.com/foo/bar/pull/1' }),
+      );
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        isHeadPushed: async () => false,
+      });
+      expect(result.done).toBe(false);
+      expect(result.reason).toMatch(/push|push evidence|refs\/remotes/i);
+    });
+
+    it('fails when finish-choice="pr" and isHeadPushed returns null (indeterminate evidence)', async () => {
+      await createFile(FINISH_CHOICE_MARKER, 'pr');
+      await createFile(
+        '.pipeline/conduct-state.json',
+        JSON.stringify({ pr_url: 'https://github.com/foo/bar/pull/1' }),
+      );
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        isHeadPushed: async () => null,
+      });
+      expect(result.done).toBe(false);
+      expect(result.reason).toMatch(/indeterminate|cannot verify/i);
+    });
+
+    it('passes when finish-choice="pr" and isHeadPushed injectable is absent (fail-open legacy)', async () => {
+      await createFile(FINISH_CHOICE_MARKER, 'pr');
+      await createFile(
+        '.pipeline/conduct-state.json',
+        JSON.stringify({ pr_url: 'https://github.com/foo/bar/pull/1' }),
+      );
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        // isHeadPushed is undefined/absent
+      });
+      expect(result).toEqual({ done: true });
+    });
+
+    it('ignores isHeadPushed for non-PR choices (e.g., keep)', async () => {
+      await createFile(FINISH_CHOICE_MARKER, 'keep');
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        isHeadPushed: async () => false, // Would fail for PR, but ignored for keep
+      });
+      expect(result).toEqual({ done: true });
+    });
   });
 
   describe('checkStepCompletion: build predicate (halt marker)', () => {
