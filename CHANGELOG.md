@@ -55,6 +55,11 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- Backfilled the missing intake marker `.docs/intake/2026-06-30-background-intake-conduct-loop.md`
+  (`Owner: jstoup111`): the spec landed without an owner stamp, so the post-cutover owner gate
+  held it as `unowned-post-cutover` and the daemon never built it. With the marker committed on
+  the default branch, `readSpecOwnerStamp` resolves the owner and the spec re-enters the
+  dispatchable backlog.
 - **Daemon-lock handoff race can no longer end with zero daemons (ai-conductor#374).**
   `clearStaleLockForRestart` and `ensureRunning`'s acquire-then-unlink step briefly own the
   pidfile with their OWN live pid; a concurrent `ensureRunning` observing that transient
