@@ -27,7 +27,7 @@ export interface NotifierDeps {
   /** Persist the status surface. Durable location is the caller's concern. */
   writeStatus(status: NotifierStatus): Promise<void> | void;
   /** Optional push notification side-effect (e.g. desktop/chat alert). */
-  push(status: NotifierStatus): Promise<void> | void;
+  push(ideas: Envelope[]): Promise<void> | void;
   /** Injected clock — returns the current timestamp. */
   now(): string;
   /** Injected logger. */
@@ -77,7 +77,7 @@ export function createNotifier(deps: NotifierDeps): Notifier {
       deps.log?.(`notifier: wrote status surface for ${status.count} idea(s)`);
 
       try {
-        await deps.push(status);
+        await deps.push(newIdeas);
       } catch (err) {
         const reason = err instanceof Error ? err.message : String(err);
         deps.log?.(`notifier: push notification failed (non-fatal): ${reason}`);

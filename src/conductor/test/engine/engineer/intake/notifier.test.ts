@@ -63,10 +63,8 @@ describe('createNotifier — best-effort push (Task 10)', () => {
 
     expect(push).toHaveBeenCalledTimes(1);
     const pushArg = push.mock.calls[0][0];
-    expect(pushArg.count).toBe(2);
-    expect(pushArg.sourceRefs).toEqual(['owner/X#7', 'owner/Y#3']);
-    expect(typeof pushArg.message).toBe('string');
-    expect(pushArg.message.length).toBeGreaterThan(0);
+    expect(pushArg).toHaveLength(2);
+    expect(pushArg.map((i: Envelope) => i.sourceRef)).toEqual(['owner/X#7', 'owner/Y#3']);
   });
 });
 
@@ -114,11 +112,14 @@ describe('createNotifier — notification dedup (Task 13)', () => {
 
     await notifier.notify([ideaA, ideaB]);
     expect(push).toHaveBeenCalledTimes(1);
-    expect(push.mock.calls[0][0].sourceRefs).toEqual(['owner/X#7', 'owner/Y#3']);
+    expect(push.mock.calls[0][0].map((i: Envelope) => i.sourceRef)).toEqual([
+      'owner/X#7',
+      'owner/Y#3',
+    ]);
 
     await notifier.notify([ideaA, ideaB, ideaC]);
     expect(push).toHaveBeenCalledTimes(2);
-    expect(push.mock.calls[1][0].sourceRefs).toEqual(['owner/Z#9']);
+    expect(push.mock.calls[1][0].map((i: Envelope) => i.sourceRef)).toEqual(['owner/Z#9']);
 
     await notifier.notify([ideaA, ideaB]);
     expect(push).toHaveBeenCalledTimes(2);
