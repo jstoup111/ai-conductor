@@ -837,6 +837,14 @@ fi
 # multi-word descriptions instead, e.g.:  conduct "add user auth"
 ```
 
+The `post-commit-pipeline-sync.sh` hook has been removed. Task-status.json completion is now
+owned by the engine; third-party writers are no longer registered. If you have this hook from
+a prior harness version, it can be safely deleted — the engine will own task-status updates:
+
+```bash migration
+rm -f .claude/hooks/claude/post-commit-pipeline-sync.sh
+```
+
 ### Changed
 
 - **`conduct-ts daemon start` now auto-attaches to the daemon's tmux session (conduct-ts).** After

@@ -355,16 +355,6 @@ harness_hooks = {
                     "timeout": 10
                 }
             ]
-        },
-        {
-            "matcher": "Bash",
-            "hooks": [
-                {
-                    "type": "command",
-                    "command": f"{hooks_dir}/post-commit-pipeline-sync.sh",
-                    "timeout": 10
-                }
-            ]
         }
     ],
     "SessionStart": [
