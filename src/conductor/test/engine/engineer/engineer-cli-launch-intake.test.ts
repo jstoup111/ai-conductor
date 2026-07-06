@@ -11,7 +11,23 @@ import { mkdtemp, rm, mkdir, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile as execFileCb } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import { promisify } from 'node:util';
+
+// Only `spawn` is faked (to exercise the real, non-injected `launchInteractive`
+// default without actually spawning `claude`) — `execFile` (used by the git-repo
+// test scaffolding below) stays real.
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  return {
+    ...actual,
+    spawn: vi.fn(() => {
+      const child = new EventEmitter();
+      queueMicrotask(() => child.emit('exit', 0));
+      return child;
+    }),
+  };
+});
 
 import {
   detectEngineerCommand,
@@ -259,6 +275,63 @@ describe('dispatchEngineer({kind:"launch"}): intake pre-poll', () => {
     expect(code).toBe(0);
     expect(launchInteractive).toHaveBeenCalledOnce();
     expect(err.join('\n')).toMatch(/pre-poll failed/i);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 4a. dispatchEngineer launch — defers pre-poll to a live brain loop (single-writer gate)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+describe('dispatchEngineer({kind:"launch"}): defers to a live brain loop', () => {
+  // These two tests deliberately do NOT inject `launchInteractive` — that would
+  // short-circuit the production default `prePoll` regardless of `brainLoopAlive`
+  // (see the "opts.launchInteractive" test-network guard in dispatchEngineer).
+  // Instead `node:child_process`'s `spawn` is faked module-wide (above) so the
+  // real, non-injected launcher path runs without actually spawning `claude`,
+  // letting these tests exercise the real default-`prePoll`-construction logic
+  // gated purely by the injected `brainLoopAlive`.
+
+  it('skips the default pre-poll when brainLoopAlive() returns true', async () => {
+    await writeRegistry([{ name: 'o/a' }]);
+    const { gh } = makeGh({ 'o/a': [{ number: 1, title: 'Idea', body: 'body' }] });
+    const out: string[] = [];
+
+    const code = await dispatchEngineer(
+      { kind: 'launch' },
+      baseOpts({
+        gh,
+        confirmAnother: () => false,
+        print: (s) => out.push(s),
+        brainLoopAlive: () => true,
+        insideClaudeSession: false,
+      }),
+    );
+    expect(code).toBe(0);
+    // No queued-count announcement means prePoll never ran (inbox dir isn't
+    // even created, since prePollIntake is what creates it).
+    expect(out.join('\n')).not.toMatch(/Intake:/);
+    await expect(readdir(join(engineerDir, 'inbox'))).rejects.toThrow(/ENOENT/);
+  });
+
+  it('runs the default pre-poll when brainLoopAlive() returns false', async () => {
+    await writeRegistry([{ name: 'o/a' }]);
+    const { gh } = makeGh({ 'o/a': [{ number: 1, title: 'Idea', body: 'body' }] });
+    const out: string[] = [];
+
+    const code = await dispatchEngineer(
+      { kind: 'launch' },
+      baseOpts({
+        gh,
+        confirmAnother: () => false,
+        print: (s) => out.push(s),
+        brainLoopAlive: () => false,
+        insideClaudeSession: false,
+      }),
+    );
+    expect(code).toBe(0);
+    expect(out.join('\n')).toMatch(/Intake: 1 issue\(s\) queued/);
+    const inbox = await readdir(join(engineerDir, 'inbox'));
+    expect(inbox.filter((f) => f.endsWith('.json')).length).toBe(1);
   });
 });
 

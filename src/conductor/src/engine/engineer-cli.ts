@@ -40,6 +40,7 @@ import { recordAuthoredKey } from './engineer/authored-ledger.js';
 import { ensureRunning } from './daemon-lock.js';
 // The CLI is the composition root for the github-issues intake adapter — the
 // engineer loop must NOT import a concrete adapter (FR-13), but the CLI must.
+import { brainLoopAlive } from './engineer/brain-liveness.js';
 import { createLedger } from './engineer/intake/ledger.js';
 import { createFileQueue } from './engineer/intake/queue.js';
 import { createGithubIssuesAdapter, GITHUB_ISSUES_SOURCE, HANDLED_LABEL } from './engineer/intake/github-issues.js';
@@ -289,6 +290,14 @@ export interface DispatchEngineerOpts {
    */
   prePoll?: () => number | Promise<number>;
   /**
+   * Injected brain-loop liveness check (for tests). When it returns true, the
+   * production default `prePoll` is skipped entirely (the launcher defers to the
+   * live brain loop — single-writer gate). Defaults to the real `brainLoopAlive()`
+   * (pidfile or `cc-brain-*` tmux session). Ignored when `prePoll` is injected
+   * directly.
+   */
+  brainLoopAlive?: () => boolean;
+  /**
    * Whether we are already inside a Claude Code session (default: reads CLAUDECODE).
    * When true, the 'launch' kind prints an in-session note instead of spawning a
    * nested interactive `claude` (which would recurse).
@@ -508,9 +517,13 @@ export async function dispatchEngineer(
       // that stub the launcher never hit the network. A CLI-supplied idea drives a
       // specific idea and skips polling. Best-effort — a poll failure never blocks
       // the launch.
+      // Single-writer gate (ADR Q2): when a background brain loop is already
+      // running, it owns intake polling — the interactive launcher's pre-poll
+      // defers to it rather than racing to enqueue/dedup against the same ledger.
+      const brainAlive = (opts.brainLoopAlive ?? brainLoopAlive)();
       const prePoll =
         opts.prePoll ??
-        (opts.launchInteractive
+        (opts.launchInteractive || brainAlive
           ? undefined
           : () =>
               prePollIntake({
