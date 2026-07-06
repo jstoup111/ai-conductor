@@ -783,10 +783,10 @@ describe('Task 17 — intake-loop CLI subcommand (production wiring)', () => {
 
     // Verify sendNotification was called exactly once with the correct message
     expect(sendNotification).toHaveBeenCalledTimes(1);
-    const [callArg] = sendNotification.mock.calls[0];
-    expect(callArg.title).toBe('Intake: new ideas queued');
-    expect(callArg.message).toContain('1 new idea(s)');
-    expect(callArg.message).toContain('o/a#1');
+    const [callTitle, callMessage] = sendNotification.mock.calls[0];
+    expect(callTitle).toBe('Intake: new ideas queued');
+    expect(callMessage).toContain('1 new idea(s)');
+    expect(callMessage).toContain('o/a#1');
   });
 
   it('Production push transport wiring: no notification when poll is empty', async () => {

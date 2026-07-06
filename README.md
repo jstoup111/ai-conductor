@@ -411,6 +411,31 @@ The command is **idempotent** — running it multiple times on the same entry wi
 
 See `src/conductor/README.md` for the full implementation details.
 
+### Brain Loop Supervision
+
+`conduct-ts` can host the GitHub-issues intake poll as a **background daemon** instead of a
+cron job, so idea capture keeps running without a scheduled task or a live terminal:
+
+```bash
+conduct-ts brain start   # launch the intake loop in a detached tmux session
+conduct-ts brain status  # report whether it's running + how many issues are queued
+conduct-ts brain stop    # kill the session
+```
+
+- **`brain start`** launches a host-wide singleton tmux session (one per machine, not
+  per-repo) running `conduct-ts intake-loop --continuous`. Idempotent — calling it again
+  while already running prints `brain loop already running.` instead of spawning a duplicate.
+- **`brain status`** reports `brain loop: running|stopped` plus `queued: <n>` read from the
+  status surface written by the loop (see `src/conductor/README.md` → "Intake Loop Automation").
+- **`brain stop`** kills the tmux session; safe to call when nothing is running.
+- **Alternative to cron, zero-token execution.** The loop only polls GitHub via `gh` and
+  writes to the local ledger/inbox — it never spawns `claude` or opens a PR, so running it
+  continuously costs no model tokens.
+- **Single-writer guarantee.** When the brain loop is live, the interactive
+  `conduct-ts engineer` launcher's manual pre-poll is skipped (see
+  `src/conductor/README.md` → "Intake Loop Automation") so the two paths never race the
+  same ledger.
+
 ## Choosing a Conductor
 
 Two conductor binaries ship together. Both drive the same 16-step SDLC pipeline and read
