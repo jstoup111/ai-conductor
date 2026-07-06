@@ -149,6 +149,37 @@ describe('SandboxBuildEnv (TR-5/TR-6)', () => {
     }
   });
 
+  it('retarget content lock (#363 / TR-4): hook command + statusLine rewritten to the worktree, personal hooks untouched, ZERO harness-root paths remain', async () => {
+    const mainReal = await realpath(mainCheckout);
+    const globalReal = await realpath(globalConfig);
+    const settings = JSON.stringify({
+      statusLine: { type: 'command', command: `${mainReal}/bin/statusline` },
+      hooks: {
+        PreToolUse: [
+          { command: `${mainReal}/hooks/claude/block-destructive-git.sh` }, // harness hook → retarget
+          { command: `${globalReal}/hooks/personal.sh` }, // personal hook → untouched
+        ],
+      },
+    });
+    await writeFile(join(globalConfig, 'settings.json'), settings);
+
+    const sandbox = await provisionSandboxBuildEnv(opts({ harnessRoot: mainCheckout }));
+    try {
+      const written = await readFile(join(sandbox.configDir, 'settings.json'), 'utf-8');
+      const worktreeReal = await realpath(worktree);
+      // Both harness-owned paths rewritten to the worktree…
+      expect(written).toContain(`${worktreeReal}/hooks/claude/block-destructive-git.sh`);
+      expect(written).toContain(`${worktreeReal}/bin/statusline`);
+      // …the personal path untouched…
+      expect(written).toContain(`${globalReal}/hooks/personal.sh`);
+      // …and NOT ONE main-checkout-prefixed harness path survives (the incident
+      // mode: a no-op retarget leaves the build on the operator's live hooks).
+      expect(written).not.toContain(`${mainReal}/`);
+    } finally {
+      await sandbox.teardown();
+    }
+  });
+
   it('fails closed when the worktree is missing a linked dir — no dangling-link sandbox is launched (TR-5)', async () => {
     await rm(join(worktree, 'skills'), { recursive: true, force: true });
     const err = await provisionSandboxBuildEnv(opts()).catch((e) => e);
