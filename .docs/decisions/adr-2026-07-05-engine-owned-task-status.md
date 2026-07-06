@@ -163,6 +163,17 @@ Fable-round additions (2026-07-05), equally binding:
   source; a non-empty deterministic id is a **validated** requirement of the plan-append, not a
   convention.
 
+Operator-approved addition (2026-07-05, post-landing amendment):
+
+- **Fast-feedback derive on commit (advisory):** the removed `post-commit-pipeline-sync.sh` hook's
+  PostToolUse slot is reused for an **engine-invoking** hook: after each `git commit` it runs the
+  engine derive and, when the new commit evidences no task (no `Task:` trailer match, no path
+  fallback), emits a warning into the agent's feedback — so trailer mistakes surface at commit
+  time, not at gate time. Strictly advisory and engine-executed: the hook never writes status
+  itself (derive does, as engine code — no H4/H6 violation), a hook failure is non-fatal, and the
+  per-gate derive (H7) remains the sole authority. This does not weaken the writer audit: the only
+  writer the hook touches is the engine's own derive path.
+
 Carried over from the Opus round:
 
 - **Empty-is-done removed:** an empty/missing task list is a seed-and-run (or park) state, never a

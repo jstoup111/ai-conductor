@@ -316,17 +316,31 @@ single-authority claim is true in the wired system, not just in skill prose.
 - Given a build gate miss with reason `tasks not completed`, when `buildRetryHint` builds the
   hint, then it instructs "commit the remaining work with the `Task: <id>` trailer (empty
   `Evidence:` commit if already done)" — never "update .pipeline/task-status.json yourself."
+- Given the replacement fast-feedback hook in the removed hook's PostToolUse slot
+  (engine-invoking, operator-approved ADR amendment), when a `git commit` lands that evidences no
+  task (no trailer match, no path fallback), then the hook output warns the agent — naming the
+  commit and the expected `Task: <id>` form — at commit time, not gate time.
+- Given a `git commit` that DOES evidence a task, when the fast-feedback hook runs, then it is
+  silent (no warning noise on compliant commits).
 
 #### Negative Paths
 - Given a consumer repo that installed the old hook, when `bin/install`/`bin/migrate` runs the
-  update, then the stale hook wiring is removed (migration block in CHANGELOG) — an orphaned old
-  hook silently forging completions is the failure this story exists to prevent.
+  update, then the stale hook wiring is replaced by the fast-feedback hook (migration block in
+  CHANGELOG) — an orphaned old hook silently forging completions is the failure this story exists
+  to prevent.
 - Given any remaining repo source (`src/conductor`, `skills/`, `hooks/`, `bin/`), when grepped for
   `task-status.json` writers, then only engine code and the sanctioned agent scheduling writes
-  remain — asserted as a test or integrity check, not a one-off audit.
+  remain — asserted as a test or integrity check, not a one-off audit. The fast-feedback hook
+  passes this audit: it only invokes the engine derive, never writes status itself.
+- Given the fast-feedback hook errors (engine binary missing, derive throws), when a `git commit`
+  lands, then the commit and the build continue unaffected (non-fatal, logged) — the per-gate
+  derive remains the sole authority and the only correctness-bearing path.
 
 ### Done When
-- [ ] Hook removed/no-oped + `bin/install` wiring updated + CHANGELOG migration block present.
+- [ ] Old hook removed + replacement engine-invoking hook wired via `bin/install` + CHANGELOG
+      migration block present.
+- [ ] Fast-feedback specs: warning on non-evidencing commit, silence on evidencing commit,
+      non-fatal on hook error.
 - [ ] `buildRetryHint` no longer instructs agent self-marking (spec asserts new wording, and the
       `'no tasks'`/`'missing'` cases direct at the plan: "no parseable tasks — fix `.docs/plans/…`").
 - [ ] Repo-wide writer audit is encoded as a check (grep-based integrity test).

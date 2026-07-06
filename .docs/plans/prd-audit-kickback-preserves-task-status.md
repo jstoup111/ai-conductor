@@ -5,7 +5,7 @@
 binding constraints H1–H9) + `.docs/decisions/architecture-review-prd-audit-kickback-preserves-task-status.md`
 **Stories:** `.docs/stories/prd-audit-kickback-preserves-task-status.md` (Status: Accepted)
 **Conflict check:** Clean as of 2026-07-05 (`.docs/conflicts/2026-07-05-engine-owned-task-status.md`)
-**Source:** jstoup111/ai-conductor#302. Tier **L** — 27 tasks across 3 slices; the scope was
+**Source:** jstoup111/ai-conductor#302. Tier **L** — 28 tasks across 3 slices; the scope was
 reviewed and accepted at complexity assessment (a coordinated engine + skill-contract change, not
 a bundle of unrelated features). Slices are independently shippable checkpoints.
 
@@ -13,9 +13,9 @@ a bundle of unrelated features). Slices are independently shippable checkpoints.
 
 Inverts ownership of `.pipeline/task-status.json`: the engine seeds it from the plan, derives
 completion from `Task: <id>` commit trailers, and persists durable state in an engine-only
-sidecar; the build agent only implements + commits. 27 TDD tasks: Slice 1 (tasks 1–17) eliminates
-the wipe-and-loop, Slice 2 (18–21) makes remediation extend the plan, Slice 3 (22–27) adds the
-survivable auto-park.
+sidecar; the build agent only implements + commits. 28 TDD tasks: Slice 1 (tasks 1–17, plus the
+additive Task 28 fast-feedback hook) eliminates the wipe-and-loop, Slice 2 (18–21) makes
+remediation extend the plan, Slice 3 (22–27) adds the survivable auto-park.
 
 ## Technical Approach
 
@@ -200,7 +200,7 @@ survivable auto-park.
 **Type:** infrastructure
 **Steps:**
 1. Failing check: integrity/grep test asserting no hook writes task-status (Task 16's audit covers steady-state; this task makes it true).
-2. Remove `hooks/claude/post-commit-pipeline-sync.sh` + its `bin/install` wiring; drop the `finish` SKILL.md status-write line; add CHANGELOG `## Migration` block (removes stale hook wiring in consumers).
+2. Remove `hooks/claude/post-commit-pipeline-sync.sh` + its `bin/install` wiring; drop the `finish` SKILL.md status-write line; add CHANGELOG `## Migration` block (replaces stale hook wiring in consumers — Task 28 installs the replacement in the same slot).
 3. GREEN (integrity suite + install tests).
 5. Commit: `fix(harness): remove non-engine task-status writers (H4) + migration`
 **Files likely touched:** `hooks/claude/post-commit-pipeline-sync.sh` (deleted), `bin/install`, `skills/finish/SKILL.md`, `CHANGELOG.md`
@@ -325,10 +325,28 @@ survivable auto-park.
 **Type:** infrastructure
 **Steps:**
 1. Run the full `src/conductor` suite + `test/test_harness_integrity.sh`; fix wording-only #115 assertion updates (call them out in the PR).
-2. Update `README.md` + `src/conductor/README.md` (engine-owned task-status, trailer contract, auto-park + unpark, sidecar) and `CHANGELOG.md` `[Unreleased]`.
+2. Update `README.md` + `src/conductor/README.md` (engine-owned task-status, trailer contract, auto-park + unpark, sidecar, fast-feedback hook) and `CHANGELOG.md` `[Unreleased]`.
 5. Commit: `docs: engine-owned task-status contract, auto-park, migration notes`
 **Files likely touched:** `README.md`, `src/conductor/README.md`, `CHANGELOG.md`
 **Dependencies:** all prior
+
+### Task 28: Fast-feedback derive hook in the removed hook's slot
+**Story:** "Third writers are eliminated…" (happy 4–5: warn on non-evidencing commit, silent on
+evidencing commit; negative: non-fatal on hook error, passes the writer audit) — operator-approved
+ADR amendment ("Fast-feedback derive on commit")
+**Type:** happy-path
+**Steps:**
+1. Failing tests: a `git commit` with no `Task:` trailer and no path-fallback match → hook stdout
+   warns naming the commit sha + expected `Task: <id>` form; an evidencing commit → no output;
+   engine binary missing / derive throws → exit 0, commit unaffected, anomaly logged.
+2. RED. 3. Implement `hooks/claude/post-commit-derive-feedback.sh` (thin shell → `conduct-ts`
+   derive entry point; advisory output only, never writes status itself) + wire in `bin/install`
+   in the slot Task 15 vacated; extend the Task 15 CHANGELOG migration block to install it.
+4. GREEN (incl. Task 16's writer audit still passing).
+5. Commit: `feat(harness): fast-feedback derive on commit — trailer mistakes surface at commit time`
+**Files likely touched:** `hooks/claude/post-commit-derive-feedback.sh` (new), `bin/install`,
+`src/conductor/src/` (derive CLI entry), `CHANGELOG.md`, tests
+**Dependencies:** Tasks 7, 15, 16
 
 ## Task Dependency Graph
 
@@ -337,7 +355,7 @@ survivable auto-park.
 4 ──┘                         │
 2 ──► 3 ──► 7 ──► 8 ──────────┼─► 10 ──► 11
             7 ──► 9           │    10 ──► 12 (needs 1)
-                              │    10 ──► 15 ──► 16
+                              │    10 ──► 15 ──► 16 ──► 28 (needs 7)
                               │          15 ──► 17
 5 ──► 14                      │
 13 (independent wording)      │
@@ -345,7 +363,8 @@ survivable auto-park.
 22 ──► 23 (needs 12) ──► 24, 25, 26
 all ──► 27
 ```
-Acyclic; Slice boundaries: {1–17} → {18–21} → {22–27}.
+Acyclic; Slice boundaries: {1–17, 28} → {18–21} → {22–27}. (Task 28 is Slice-1 scoped but
+non-blocking for the Slice-1 checkpoint — it is additive fast-feedback, not correctness-bearing.)
 
 ## Integration Points
 
@@ -358,11 +377,11 @@ Acyclic; Slice boundaries: {1–17} → {18–21} → {22–27}.
 ## Verification
 
 - [ ] All happy path criteria covered: seed (T5,6,14), evidence (T2,7,8), gate (T10,11), sidecar
-      (T1,12), contracts (T15,17), remediation (T19–21), park (T22–25)
+      (T1,12), contracts (T15,17), fast feedback (T28), remediation (T19–21), park (T22–25)
 - [ ] All negative path criteria covered: T3 (fail-closed/anchor), T8 (dangling/bare/skip-dependents),
       T9 (never-demote), T10 (forged/deleted/corrupt/empty), T11 (once-guard), T12+T24 (counter
       persistence/reset), T16 (writer audit), T18 (grammar round-trip), T20 (drift/collision/empty-id),
-      T25 (visibility), T26 (interactive)
+      T25 (visibility), T26 (interactive), T28 (hook non-fatal + audit-clean)
 - [ ] No task exceeds ~5 minutes of agent work
 - [ ] Dependencies explicit and acyclic
 - [ ] Every commit carries the `Task: <id>` trailer once Task 17 lands (self-hosting note: until
