@@ -1142,6 +1142,74 @@ describe('ensureHaltPresentation', () => {
     // Should log the error
     expect(logs.some((msg) => msg.includes('could not re-read PR after writes'))).toBe(true);
   });
+
+  it('D3 negative: handles convertToDraft failure gracefully — still returns unconfirmed on final verification', async () => {
+    // D3 negative: draft conversion fails (network error, permission denied, etc.)
+    // ensureHaltPresentation should:
+    //   1. Log the draft conversion error (via convertToDraft)
+    //   2. Continue with the re-read verification
+    //   3. See isDraft: false in the final read (because draft conversion failed)
+    //   4. Return 'unconfirmed' without throwing
+    const prBodyBefore = 'Some PR body';
+    const { gh, calls } = fakeGh([
+      // ensureBodyMarker: readHaltPresentation (to get body)
+      {
+        stdout: JSON.stringify({
+          isDraft: false,
+          labels: [],
+          body: prBodyBefore,
+        }),
+      },
+      // ensureBodyMarker: pr edit (appends marker)
+      { stdout: '' },
+      // readHaltPresentation before convert (to check if already draft)
+      {
+        stdout: JSON.stringify({
+          isDraft: false,
+          labels: [],
+          body: `${prBodyBefore}\n${NEEDS_REMEDIATION_BODY_MARKER}`,
+        }),
+      },
+      // convertToDraft: FAILS with permission error (best-effort, non-throwing)
+      new Error('gh: insufficient permissions to mark this PR as draft'),
+      // addLabel: still proceeds (api call succeeds)
+      { stdout: '' },
+      // readHaltPresentation after writes: re-read shows isDraft still false
+      // (because the draft conversion failed)
+      {
+        stdout: JSON.stringify({
+          isDraft: false,
+          labels: [{ name: 'needs-remediation' }],
+          body: `${prBodyBefore}\n${NEEDS_REMEDIATION_BODY_MARKER}`,
+        }),
+      },
+    ]);
+
+    const logs: string[] = [];
+    const result = await ensureHaltPresentation(gh, '/repo', TEST_PR_URL, (msg) =>
+      logs.push(msg),
+    );
+
+    // Should return 'unconfirmed' because final verification shows isDraft: false
+    expect(result).toBe('unconfirmed');
+
+    // Should log the draft conversion error
+    expect(logs.some((msg) => msg.includes('convertToDraft'))).toBe(true);
+
+    // Should log the missing draft status in the final verification
+    expect(logs.some((msg) => msg.includes('missing draft status'))).toBe(true);
+
+    // Verify the sequence: body marker edit, draft conversion attempt, label add
+    const editCall = calls.find((a) => a[0] === 'pr' && a[1] === 'edit');
+    const readBeforeCalls = calls.filter((a) => a[0] === 'pr' && a[1] === 'view');
+    const undoCall = calls.find((a) => a[0] === 'pr' && a[1] === 'ready' && a[2] === '--undo');
+    const apiCall = calls.find((a) => a[0] === 'api');
+
+    expect(editCall).toBeDefined();
+    expect(readBeforeCalls.length).toBeGreaterThanOrEqual(2); // at least 2 reads
+    expect(undoCall).toBeDefined(); // undo was attempted
+    expect(apiCall).toBeDefined(); // label add proceeded despite draft failure
+  });
 });
 
 // ── Kill-switch: production runners refuse to exec under AI_CONDUCTOR_NO_REAL_EXEC ─
