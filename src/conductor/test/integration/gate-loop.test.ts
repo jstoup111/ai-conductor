@@ -2,6 +2,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, readFile, access } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 
 vi.mock('execa', () => ({ execa: vi.fn() }));
 import type { ConductState } from '../../src/types/index.js';
@@ -662,5 +664,150 @@ describe('integration/gate-loop', () => {
 
     // build, manual_test, finish ran (retro tier-skipped) → one reset each.
     expect(resetSession).toHaveBeenCalledTimes(3);
+  });
+
+  describe('manual-test FAIL routing end-to-end with a real repo (#367)', () => {
+    const execFileP = promisify(execFile);
+    const FAIL_RESULTS = '| Story | Result |\n|---|---|\n| s1 | FAIL |\n';
+    const PASS_RESULTS = '| Story | Result |\n|---|---|\n| s1 | PASS |\n';
+
+    async function git(...args: string[]): Promise<void> {
+      await execFileP(
+        'git',
+        ['-c', 'user.email=t@test', '-c', 'user.name=t', ...args],
+        { cwd: dir },
+      );
+    }
+
+    async function initRepo(): Promise<void> {
+      await git('init', '-q');
+      await git('commit', '--allow-empty', '-q', '-m', 'init');
+    }
+
+    function daemonConductor(runner: StepRunner): Conductor {
+      return new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        verifyArtifacts: true,
+        mode: 'auto',
+        daemon: true,
+        maxRetries: 1,
+        fromStep: 'build',
+      });
+    }
+
+    it('FAIL → kickback → build commits a fix → manual_test passes and the run converges', async () => {
+      await initRepo();
+      // rebase seeded skipped: the engine-native rebase step needs an origin
+      // this fixture doesn't have; skipping it keeps the tail converging.
+      await writeState(statePath, { ...FRONT_DONE, rebase: 'skipped' } as ConductState);
+
+      let fixed = false;
+      const ran: string[] = [];
+      const runner: StepRunner = {
+        run: async (step, _artifacts?: unknown, opts?: { retryReason?: string }) => {
+          ran.push(step);
+          if (step === 'build') {
+            await writeFile(
+              join(dir, '.pipeline/task-status.json'),
+              JSON.stringify({ tasks: [{ id: 't1', status: 'completed' }] }),
+            );
+            if (opts?.retryReason) {
+              // The kickback dispatch: implement the fix AS COMMITS (moves HEAD),
+              // which is exactly what the whitewash guard requires.
+              await writeFile(join(dir, 'src.txt'), 'fixed');
+              await git('add', '.');
+              await git('commit', '-q', '-m', 'fix manual-test bug');
+              fixed = true;
+            }
+            return { success: true };
+          }
+          if (step === 'manual_test') {
+            await writeFile(
+              join(dir, '.pipeline/manual-test-results.md'),
+              fixed ? PASS_RESULTS : FAIL_RESULTS,
+            );
+            return { success: true };
+          }
+          return satisfy(step);
+        },
+      };
+      const kickbacks: Array<{ from: string; to: string }> = [];
+      events.on('kickback', (e) => {
+        if (e.type === 'kickback') kickbacks.push({ from: e.from, to: e.to });
+      });
+      let halted = false;
+      events.on('loop_halt', () => {
+        halted = true;
+      });
+
+      await daemonConductor(runner).run();
+
+      // One kickback, one fix build, convergence — no HALT.
+      expect(kickbacks).toEqual([{ from: 'manual_test', to: 'build' }]);
+      expect(ran.filter((s) => s === 'build')).toHaveLength(2);
+      expect(halted).toBe(false);
+      await expect(access(join(dir, '.pipeline/DONE'))).resolves.toBeUndefined();
+      // #302-hazard guard: the kickback + re-entered build left task-status
+      // intact and parseable (the loop converged rather than HALT-looping).
+      const ts = JSON.parse(await readFile(join(dir, '.pipeline/task-status.json'), 'utf-8'));
+      expect(ts.tasks[0].status).toBe('completed');
+      // Whitewash-guard marker was cleared on the legitimate pass.
+      await expect(
+        access(join(dir, '.pipeline/manual-test-fail-evidence.json')),
+      ).rejects.toThrow();
+    });
+
+    it('FAIL → kickback → build commits nothing → PASS rewrite is refused (whitewash) and the run HALTs', async () => {
+      await initRepo();
+      await writeState(statePath, { ...FRONT_DONE, rebase: 'skipped' } as ConductState);
+
+      let kicked = false;
+      const runner: StepRunner = {
+        run: async (step, _artifacts?: unknown, opts?: { retryReason?: string }) => {
+          if (step === 'build') {
+            await writeFile(
+              join(dir, '.pipeline/task-status.json'),
+              JSON.stringify({ tasks: [{ id: 't1', status: 'completed' }] }),
+            );
+            if (opts?.retryReason) kicked = true; // "fixes" the bug without committing
+            return { success: true };
+          }
+          if (step === 'manual_test') {
+            await writeFile(
+              join(dir, '.pipeline/manual-test-results.md'),
+              kicked ? PASS_RESULTS : FAIL_RESULTS, // whitewash: PASS with no commits
+            );
+            return { success: true };
+          }
+          return satisfy(step);
+        },
+      };
+      const stepErrors: string[] = [];
+      events.on('step_failed', (e) => {
+        if (e.type === 'step_failed' && e.step === 'manual_test') stepErrors.push(e.error);
+      });
+      let halted = false;
+      events.on('loop_halt', () => {
+        halted = true;
+      });
+      let completed = false;
+      events.on('feature_complete', () => {
+        completed = true;
+      });
+
+      await daemonConductor(runner).run();
+
+      // The guard refused the no-commit PASS rewrite and the run HALTed.
+      expect(halted).toBe(true);
+      expect(completed).toBe(false);
+      expect(stepErrors.join('\n')).toMatch(/whitewash|no new commits/i);
+      // The FAIL evidence survives for the human who inspects the HALT.
+      await expect(
+        access(join(dir, '.pipeline/manual-test-fail-evidence.json')),
+      ).resolves.toBeUndefined();
+    });
   });
 });

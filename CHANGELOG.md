@@ -40,7 +40,31 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   group (stale-ledger dedup) is excluded from GATED, matching the existing HALTED/PROCESSED
   precedence contract.
 
+### Changed
+
+- **`manual_test` is now a gating step, and its enforcement is locked (#367).** While it was
+  advisory, an auto-mode run whose manual test kept failing was silently auto-skipped after
+  retries — one of the two false-ship paths behind incident PR #364. It now HALTs
+  (auto/daemon) or opens the recovery menu (interactive) instead, matching the enforcement
+  the manual-test SKILL.md frontmatter always declared. `manual_test` joined
+  `ENFORCEMENT_LOCKED_STEPS` (`engine/skill-resolver.ts`), so a project-local skill override
+  cannot downgrade it, and disabling it in project config is now rejected by validation.
+  Manual-test results are append-only per attempt: the skill records an
+  `## Attempt N — <timestamp>` section per run and the gate evaluates only the latest
+  section (sectionless files still scan whole, back-compat).
+
 ### Fixed
+
+- **manual_test FAILs can no longer be whitewashed or shipped (#367, incident PR #364).**
+  The completion gate (`engine/artifacts.ts`) now records the worktree HEAD sha in
+  `.pipeline/manual-test-fail-evidence.json` when it observes FAIL rows (via the new
+  injectable `CompletionContext.getHeadSha` seam; fail-open without a repo) and refuses a
+  later FAIL-free results file unless HEAD has moved — a PASS rewrite with no fix commits
+  no longer satisfies the gate. In daemon runs, a manual_test that exhausts its retries
+  with FAIL rows recorded is routed deterministically back to `build` with the FAIL rows as
+  the retry hint (kickback `manual_test → build`, bounded by `MAX_KICKBACKS_PER_GATE`),
+  then HALTs naming the exhausted budget; a non-FAIL gate miss (missing/stale results)
+  HALTs directly.
 
 - Worktree-rooted installs can no longer brick the operator environment (ai-conductor#363):
   (1) `bin/install` refuses global-mutating modes (default, `--update`) when its own checkout
@@ -181,6 +205,27 @@ If you have daemons running:
 - A short transition window exists where you may see one old-style restart (if a daemon restarts before the migration); this is normal and safe
 
 Reverting is not supported: if you revert past this version, the `dist` symlink structure will block the old build flow. Instead, keep forward and use `conduct pause --all` + `npm run build` + `conduct restart --all` for a controlled engine upgrade.
+
+**`manual_test` can no longer be disabled or downgraded (#367).**
+
+`manual_test` is now a gating step with locked enforcement. A project config that disables it
+(legal while it was advisory) now fails config validation at startup with
+`Cannot disable gating step: "manual_test"`. Remove the disable before updating:
+
+```bash migration
+# Only needed if your project config disables manual_test.
+# Remove the `manual_test:` disabled block from .ai-conductor/config.yml, e.g.:
+if [ -f .ai-conductor/config.yml ] && grep -qE 'manual_test:' .ai-conductor/config.yml; then
+  echo "manual_test step config found in .ai-conductor/config.yml —"
+  echo "if it sets 'disabled: true', delete that line (gating steps cannot be disabled)."
+  grep -n -A2 'manual_test:' .ai-conductor/config.yml
+else
+  echo "No manual_test step config found — nothing to do."
+fi
+```
+
+Project-local manual-test skill overrides keep working, but an `enforcement:` value in their
+frontmatter is now ignored (locked to `gating`).
 
 ### Fixed
 

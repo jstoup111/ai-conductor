@@ -197,6 +197,24 @@ routes by the audit's `Gap-class` column (`classifyPrdAuditGaps`, `engine/artifa
 Re-auditing unchanged code yields the same verdict, so the daemon skips the default per-step
 retries for a blocking `prd_audit` and routes straight away.
 
+**Daemon manual-test routing + whitewash guard (#367).** `manual_test` is a **gating** step
+(locked — neither a project-local skill override nor a config `disabled` can soften it; both
+are rejected). Its completion gate (`engine/artifacts.ts`) requires
+`.pipeline/manual-test-results.md` to be fresh for the session and FAIL-free **in its latest
+`## Attempt N` section** (sectionless files are scanned whole, back-compat), and enforces
+fix evidence: when the gate observes FAIL rows it records the worktree's HEAD sha in
+`.pipeline/manual-test-fail-evidence.json` (via the injectable
+`CompletionContext.getHeadSha` seam; fail-open when there is no repo), and a later FAIL-free
+file is accepted only once HEAD has moved — a PASS rewrite with no new commits is refused
+(the "whitewash" that shipped incident PR #364). In a daemon run, a manual_test that
+exhausts its retries with recorded FAIL rows is routed deterministically back to `build`
+(kickback `manual_test → build`, FAIL rows as the retry hint) — no `/remediate` dispatch,
+because a manual FAIL is an implementation gap by definition — bounded by
+`manualTestSelfHeals` (cap `MAX_KICKBACKS_PER_GATE`), then HALTs
+(`manual-test FAIL unresolved after N build kickback(s)`). A non-FAIL gate miss (missing or
+stale results — the skill never recorded properly) carries no bug evidence and HALTs
+directly.
+
 ### Mermaid diagram rendering (approval gates)
 
 Generated architecture diagrams and DRAFT ADRs are Mermaid-in-Markdown. So the human approves
