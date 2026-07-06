@@ -1299,6 +1299,85 @@ through an injected `gh` runner — it never touches a registered repo's working
 State lives under the engineer dir (`$AI_CONDUCTOR_ENGINEER_DIR`, default `~/.ai-conductor/engineer/`):
 `ledger.json` (dedup + lifecycle) and `inbox/` (the claimable queue).
 
+#### Intake Loop Automation
+
+The GitHub-issues poll above can run as a **standalone background loop** instead of (or in
+addition to) the launcher's pre-poll and an external cron job — a tmux-hosted, zero-token
+process managed via `conduct-ts brain start|stop|status` (see the root README's "Brain Loop
+Supervision" section for the operator-facing commands).
+
+- **CLI: `conduct-ts intake-loop`** (`intake-loop-cli.ts`, composition root, wraps
+  `engine/engineer/intake/intake-loop.ts`). Exactly one of two mode flags is required:
+  - **`--continuous`** — runs the poll→enqueue→notify tick forever, sleeping between ticks.
+    This is the mode `conduct-ts brain start` launches inside its tmux session.
+  - **`--once`** — runs a single tick and returns; useful for cron or manual invocation
+    without the tmux supervisor.
+  Supplying both or neither flag is rejected (prints usage guidance) rather than silently
+  falling back to a default mode.
+- **`--interval-ms <n>`** — sleep between ticks in continuous mode. CLI default is 5 minutes
+  (`DEFAULT_INTERVAL_MS`). The value must parse to a finite number `> 0`; a non-finite or
+  non-positive interval is rejected at the CLI layer, and the loop core additionally guards
+  against a bad interval reaching the sleep call by substituting its own 60-second fallback
+  (`INTAKE_INTERVAL_DEFAULT_MS`) — a defense-in-depth measure so a misconfigured interval
+  can never produce a zero/negative-delay busy-loop.
+- **Never spawns `claude`, never opens a PR.** The loop only calls `gh` (via the same
+  injected runner as the launcher's pre-poll) to list/enqueue issues and to push
+  best-effort notifications — it is a pure polling/bookkeeping process, so leaving it
+  running continuously costs no model tokens.
+- **Status surface (`<engineer-dir>/intake-status.json`).** Written on every tick that finds
+  new issues (skipped when there's nothing new to report). Shape:
+  ```json
+  {
+    "count": 3,
+    "sourceRefs": ["owner/repo#7", "owner/repo#9", "owner/repo#12"],
+    "timestamp": "2026-06-30T12:00:00.000Z",
+    "message": "3 new idea(s) captured from owner/repo#7, owner/repo#9, owner/repo#12"
+  }
+  ```
+  `conduct-ts brain status` reads this file for its `queued: <n>` line; a missing or
+  malformed file is treated as `count: 0` rather than an error.
+- **Durable de-dup across restarts.** The notifier tracks which `sourceRef`s it has already
+  notified so a loop restart doesn't re-announce issues already surfaced in a prior run;
+  when a tick finds nothing new, both the status write and the (optional) push are skipped
+  entirely.
+- **`intake_notifier` config (optional, best-effort push).** Mirrors the existing
+  `mermaid_renderer` config pattern (see `config.ts`) — an optional block that, when present,
+  lets the loop push a notification (e.g. to a webhook or external channel) alongside writing
+  the status file. Like `mermaid_renderer`, it is fully optional: omitting it leaves the loop
+  writing only the local status surface. A push failure is caught and logged — it never
+  blocks the tick, corrupts the status file, or crashes the loop.
+- **Single-writer deferral.** `engine/engineer/brain-liveness.ts`'s `brainLoopAlive()` checks
+  for a live tmux session (`cc-brain-*`) or pidfile. When the brain loop is alive, the
+  interactive `conduct-ts engineer` launcher's `prePoll` step (see "GitHub-issues intake"
+  above) is set to a no-op rather than running its own poll, so the background loop and the
+  interactive launcher never race the same ledger/inbox.
+
+#### Push Notifications
+
+When the intake loop (`--continuous` or `--once`) discovers new issues, it sends a desktop
+push notification via the **existing `sendNotification` transport**:
+
+- **Transport mechanism:**
+  - **macOS**: `osascript` via native notification API
+  - **Linux**: `notify-send` (freedesktop.org Desktop Notifications)
+  - **Fallback**: terminal bell (BEL character, audible on most terminals)
+
+- **Behavior:**
+  - Notifications fire only on **non-empty ticks** (when new issues are discovered)
+  - Transport failures are caught, logged, and **non-blocking** — they never interrupt the
+    intake tick or prevent the status file from being written
+  - The notification is **best-effort**: if the transport is unavailable (e.g., `notify-send`
+    not installed), the system falls back gracefully to the next transport in the chain
+  - The status file (`.../intake-status.json`) is always written, regardless of push success —
+    the two surfaces (durable file + best-effort notification) work together to surface new
+    captured ideas
+
+- **Configuration:** No explicit config needed beyond `intake_notifier` (see "Intake Loop
+  Automation" above). The transport is selected automatically by the platform at runtime.
+
+- **Applies to:** Both `brain start` (tmux-hosted continuous mode) and direct CLI invocation
+  (`--continuous` or `--once` flags)
+
 #### Delivery guard (engineer claim) and recovery (engineer resolve)
 
 The intake system auto-heals duplicate captures and recovers from write-back failures:

@@ -12,6 +12,35 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- New `conduct-ts brain start|stop|status` verbs (`brain-supervisor-cli.ts`) host the
+  GitHub-issues intake poll as a host-wide, tmux-hosted background loop — an alternative to
+  cron for keeping idea capture running without a scheduled task or a live terminal. `start`
+  is idempotent (no duplicate session), `stop` kills the session, `status` reports
+  `running|stopped` plus the queued-issue count from the status surface below.
+- `intake-loop --continuous|--once` CLI subcommand (`intake-loop-cli.ts` +
+  `engine/engineer/intake/intake-loop.ts`) for background polling: `--continuous` runs the
+  poll→enqueue→notify tick forever (the mode `brain start` launches under tmux); `--once`
+  runs a single tick for cron/manual use. `--interval-ms <n>` is configurable (default 5
+  minutes) and validated against non-finite/non-positive values, with a core-level 60s
+  fallback as defense-in-depth against a zero-delay busy-loop. Never spawns `claude` or
+  opens a PR — zero-token execution.
+- `intake_notifier` config block (mirrors the existing `mermaid_renderer` pattern) — optional,
+  best-effort push notification alongside the loop's status-file write; a push failure is
+  caught and logged without blocking the tick.
+- Desktop push notifications on non-empty intake ticks: when the intake loop discovers new
+  issues, it fires a push notification via the existing `sendNotification` transport
+  (osascript on macOS, notify-send on Linux, terminal-bell fallback). Transport failures
+  are caught and logged without blocking the tick, and the status file is always written
+  regardless of push success — both surfaces (durable status file + best-effort notification)
+  work together to surface new captured ideas to the operator.
+- Status surface durably tracks notified issues: `<engineer-dir>/intake-status.json`
+  (`count`, `sourceRefs`, `timestamp`, `message`) is only rewritten when a tick finds new
+  issues, and the notifier's de-dup set prevents re-notifying the same `sourceRef` across
+  loop restarts.
+- Launcher defers to the brain loop when live: `engine/engineer/brain-liveness.ts`'s
+  `brainLoopAlive()` (tmux session or pidfile check) causes the interactive
+  `conduct-ts engineer` launcher to skip its own `prePoll` step, enforcing a single writer
+  on the intake ledger/inbox when the background loop is already running.
 - `bin/install --allow-worktree-root` — explicit override for the new worktree-root guard.
   The flag is stripped before mode dispatch, so it combines with any mode (e.g.
   `--update --allow-worktree-root`) and is accepted but inert on a non-worktree checkout.
