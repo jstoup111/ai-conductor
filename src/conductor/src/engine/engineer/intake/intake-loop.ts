@@ -117,7 +117,14 @@ export async function intakeTick(deps: IntakeLoopDeps): Promise<IntakeTickSummar
     }
   }
   if (captured.length > 0) {
-    await deps.notify(captured);
+    try {
+      await deps.notify(captured);
+    } catch (err) {
+      // Non-fatal notification backstop (FR-5/FR-12): a notify() failure must
+      // not prevent captures from being persisted or crash the tick — log it
+      // and proceed.
+      deps.log(`notify failed (non-fatal, tick continues): ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
   return { captured: captured.length };
 }
