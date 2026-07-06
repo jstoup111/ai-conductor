@@ -68,4 +68,33 @@ describe('report() cwd resolution (#290)', () => {
       expect(existsSync(cwd)).toBe(true);
     }
   });
+
+  it('regression: process.cwd() deleted out from under the daemon does not crash write-back (#290)', async () => {
+    const repoPath = join(dir, 'o-a');
+    await mkdir(repoPath, { recursive: true });
+    const deletedDir = await mkdtemp(join(tmpdir(), 'gh-cwd-deleted-'));
+
+    const originalCwd = process.cwd();
+    process.chdir(deletedDir);
+    await rm(deletedDir, { recursive: true, force: true });
+
+    try {
+      const { gh, cwds } = makeRecordingGh();
+      const registry = { list: async () => [{ name: 'o/a', path: repoPath }] };
+      const ledger = createLedger(join(dir, 'ledger.json'));
+      const adapter = createGithubIssuesAdapter({ gh, registry, ledger });
+
+      await expect(
+        adapter.report('o/a#1', 'done', { prUrl: 'https://x/pr/9' })
+      ).resolves.not.toThrow();
+
+      expect(cwds.length).toBeGreaterThan(0);
+      for (const cwd of cwds) {
+        expect(existsSync(cwd)).toBe(true);
+        expect(cwd).toBe(repoPath);
+      }
+    } finally {
+      process.chdir(originalCwd);
+    }
+  });
 });
