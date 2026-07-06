@@ -18,6 +18,11 @@ HARNESS_USER_CONFIG="${HOME}/.ai-conductor/config.yml"
 # harness update.
 UPDATE_MODE=false
 
+# ALLOW_WORKTREE_ROOT=true bypasses the worktree-root guard (issue #363). Set
+# via the --allow-worktree-root flag, which is stripped from "$@" before the
+# mode dispatch so it composes with any mode (e.g. --update).
+ALLOW_WORKTREE_ROOT=false
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -45,6 +50,37 @@ if [ ${#SKILLS[@]} -eq 0 ]; then
   fail "No skills found under ${HARNESS_DIR}/skills/ — is the harness checkout intact?"
   exit 1
 fi
+
+# ─── Worktree-root guard (issue #363) ─────────────────────────────────────────
+
+# Refuse global-mutating installs when this checkout is a build worktree.
+# A daemon self-build once ran `bin/install --update` rooted at a worktree:
+# every global bin/skill symlink and settings.json hook path was repointed at
+# a directory that ship-time worktree removal then deleted, bricking the
+# operator environment. The guard keys on the PHYSICAL path (pwd -P) so a
+# symlinked logical path cannot hide the `.worktrees` segment. Read-only modes
+# (--check, --help) and --uninstall never call this.
+guard_worktree_root() {
+  if [ "$ALLOW_WORKTREE_ROOT" = true ]; then
+    return 0
+  fi
+  local physical_root
+  physical_root="$(cd "$HARNESS_DIR" && pwd -P)"
+  case "$physical_root" in
+    */.worktrees/*)
+      fail "Refusing to install from a build worktree."
+      echo ""
+      echo "  Resolved harness root: ${physical_root}"
+      echo ""
+      echo "  Installing from a worktree would repoint your global bins, skills, and"
+      echo "  settings.json hooks at a directory that is deleted when the build ships."
+      echo ""
+      echo "  Fix: run bin/install from the main checkout, or pass --allow-worktree-root"
+      echo "  if you really mean to install from this worktree."
+      exit 1
+      ;;
+  esac
+}
 
 # ─── Check Mode ───────────────────────────────────────────────────────────────
 
@@ -948,6 +984,8 @@ build_conduct_ts() {
 # ─── Install ──────────────────────────────────────────────────────────────────
 
 install() {
+  guard_worktree_root
+
   echo -e "${BOLD}${CYAN}Installing James Stoup Agents Harness${NC}"
   echo -e "  Source: ${HARNESS_DIR}"
   echo ""
@@ -1135,17 +1173,34 @@ uninstall() {
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
+# Strip --allow-worktree-root from "$@" before the mode dispatch so it can be
+# combined with any mode (e.g. `--update --allow-worktree-root`).
+_filtered_args=()
+for _arg in "$@"; do
+  if [ "$_arg" = "--allow-worktree-root" ]; then
+    ALLOW_WORKTREE_ROOT=true
+  else
+    _filtered_args+=("$_arg")
+  fi
+done
+set -- ${_filtered_args[@]+"${_filtered_args[@]}"}
+unset _filtered_args _arg
+
 case "${1:-}" in
   --check)     check_installation; exit $? ;;
   --uninstall) uninstall ;;
   --update)    UPDATE_MODE=true; install ;;
   -h|--help)
-    echo "Usage: ./bin/install [--check | --update | --uninstall | -h]"
+    echo "Usage: ./bin/install [--check | --update | --uninstall | -h] [--allow-worktree-root]"
     echo ""
     echo "  (no args)     Install/update harness skills and conduct script"
     echo "  --check       Check installation status"
     echo "  --update      Refresh symlinks + settings (skip deps + channel prompt)"
     echo "  --uninstall   Remove all symlinks"
+    echo "  --allow-worktree-root"
+    echo "                Bypass the refusal to install from a .worktrees/ checkout"
+    echo "                (installs from a worktree normally repoint global symlinks"
+    echo "                at a directory that is deleted at ship time)"
     echo "  -h, --help    Show this help"
     ;;
   *)           install ;;
