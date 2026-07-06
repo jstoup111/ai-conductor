@@ -42,25 +42,6 @@ context bounded to ~2-3 summary lines per task regardless of feature size.
 
 Default to **Standard** unless the user specifies otherwise.
 
-### Pipeline Entry Guard (Early Exit)
-
-Before loading any plan, validating tasks, or dispatching subagents, check
-`.pipeline/task-status.json`:
-
-```
-jq -e 'all(.tasks[]; .status == "completed" or .status == "skipped")' .pipeline/task-status.json
-```
-
-If every task is already `completed` or `skipped`, write a one-line note to
-`.pipeline/progress.log` ("pipeline entry: all N tasks already complete, exiting") and
-return immediately — do NOT load plan text, dispatch the evaluator, or run any
-subagent. The conductor's completion gate will read the JSON and advance.
-
-This guard exists because a crashed session resumed against a fully-completed pipeline
-otherwise loads the full skill text, dispatches the Plan-Validation step, and burns tokens
-rediscovering there is nothing to do. Auto-heal (engine-side) handles drift between git
-and the JSON; this guard handles the happy-path where the JSON is already correct.
-
 ### Per-Task Execution
 
 The conductor marks the task as `in_progress` in `.pipeline/task-status.json`, then sends
@@ -78,7 +59,8 @@ DEPENDENCY ORDER — Dispatch tasks in topological order respecting declared dep
 0. UPDATE STATUS — Conductor marks task "in_progress" in .pipeline/task-status.json
 1. DECOMPOSE    — Read task, identify files to touch, check dependencies met
 2. DISPATCH     — Send task to a TDD subagent via Agent tool with model="sonnet" (scoped context only)
-                  Subagent runs full TDD cycle: RED → DOMAIN → GREEN → DOMAIN → COMMIT
+                  Dispatch template injects Task: <id> in the prompt — subagent includes it as a trailer
+                  in all commits (including refactors). Subagent runs full TDD cycle: RED → DOMAIN → GREEN → DOMAIN → COMMIT
 3. VERIFY       — Run the scoped affected-test set (see Scoped VERIFY below) to confirm the subagent's work
 4. FIX          — If tests fail, VERIFY failure first (see below), then dispatch subagent with error context
 5. UPDATE       — Mark task as "completed" in .pipeline/task-status.json
@@ -125,12 +107,10 @@ dispatch, so the class fails fast. Pair it with the real-entry-point acceptance 
 `/writing-system-tests` (§3b): the acceptance test proves the new path runs; this grep proves
 the old one is gone.
 
-**Task status tracking is mandatory — write directly to `.pipeline/task-status.json`.**
-
-Do NOT rely on conversation-level task tools (TaskCreate/TaskUpdate) for persistence — those
-are ephemeral and lost between sessions. Write to the JSON file at each task boundary:
-- Mark `in_progress` before dispatching the subagent
-- Mark `completed` after tests pass and commit is confirmed
+**Task status tracking:** The conductor (`bin/conduct`) reads `.pipeline/task-status.json` and
+updates task status automatically based on the subagent's commit. You (the orchestrator) do NOT
+write to this file — the engine owns it. You report the subagent's result (PASS/FAIL) to the
+conductor, which then updates the JSON.
 
 **Subagent context scoping:** The subagent receives ONLY:
 - The task description and acceptance criteria (from the plan)
