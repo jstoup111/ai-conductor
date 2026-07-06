@@ -130,6 +130,36 @@ export async function intakeTick(deps: IntakeLoopDeps): Promise<IntakeTickSummar
 }
 
 /**
+ * Documented fallback poll interval (Task 19), used whenever the caller
+ * passes an invalid `intervalMs` (non-finite, zero, or negative). Prevents a
+ * misconfigured interval from causing a busy-loop (tight-spinning with a
+ * zero/negative/NaN delay) — the loop always sleeps a positive amount of
+ * time between ticks.
+ */
+export const INTAKE_INTERVAL_DEFAULT_MS = 60_000;
+
+/**
+ * resolveIntervalMs — validates `intervalMs`, falling back to the documented
+ * default (Task 19) when invalid.
+ *
+ * A valid interval is finite and strictly positive. Anything else (0,
+ * negative, NaN, +/-Infinity) is rejected: this logs a warning describing
+ * the rejected value and returns `INTAKE_INTERVAL_DEFAULT_MS` instead of
+ * throwing, so a misconfiguration never crashes the loop or causes a
+ * busy-loop (tight spin on a zero/negative delay).
+ */
+function resolveIntervalMs(intervalMs: number, log: (msg: string) => void): number {
+  if (Number.isFinite(intervalMs) && intervalMs > 0) {
+    return intervalMs;
+  }
+  log(
+    `intake loop: invalid intervalMs (${intervalMs}) — falling back to documented default ` +
+      `${INTAKE_INTERVAL_DEFAULT_MS}ms`,
+  );
+  return INTAKE_INTERVAL_DEFAULT_MS;
+}
+
+/**
  * runIntakeLoop — the intake loop's main entry point (Task 4).
  *
  * Poll-sleep loop: calls `intakeTick(deps)` on each iteration, then sleeps
@@ -138,8 +168,14 @@ export async function intakeTick(deps: IntakeLoopDeps): Promise<IntakeTickSummar
  * without sleeping. Otherwise loops continuously (until `deps.sleep()`
  * rejects/throws, which is how tests — and, in production, shutdown
  * signals — terminate the loop).
+ *
+ * `opts.intervalMs` is validated on every call (Task 19): an invalid value
+ * (0, negative, NaN) is logged and replaced with `INTAKE_INTERVAL_DEFAULT_MS`
+ * rather than thrown, so a bad configuration never crashes the loop or
+ * busy-loops on a non-positive delay.
  */
 export async function runIntakeLoop(deps: IntakeLoopDeps, opts: IntakeLoopOptions): Promise<void> {
+  const intervalMs = resolveIntervalMs(opts.intervalMs, deps.log);
   for (;;) {
     try {
       await intakeTick(deps);
@@ -153,6 +189,6 @@ export async function runIntakeLoop(deps: IntakeLoopDeps, opts: IntakeLoopOption
     if (opts.once === true) {
       return;
     }
-    await deps.sleep(opts.intervalMs);
+    await deps.sleep(intervalMs);
   }
 }
