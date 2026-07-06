@@ -564,7 +564,10 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     if (headSha) {
       let marker: { observedAt?: unknown; headSha?: unknown } | null = null;
       try {
-        marker = JSON.parse(await readFile(markerPath, 'utf-8')) as typeof marker;
+        marker = JSON.parse(await readFile(markerPath, 'utf-8')) as {
+          observedAt?: unknown;
+          headSha?: unknown;
+        };
       } catch {
         marker = null;
       }
