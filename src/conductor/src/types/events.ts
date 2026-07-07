@@ -87,6 +87,8 @@ export type ConductorEvent =
       step: StepName;
       satisfied: boolean;
       reason?: string;
+      /** Timestamp (ms epoch) the gate's verdict was computed, for audit non-divergence checks. */
+      checkedAt?: number;
     }
   | {
       /** A downstream step re-opened an upstream gate (plan/stories). */
