@@ -531,4 +531,68 @@ describe('dispatchDaemonSupervisor: restart — immediate (idle/paused) vs queue
     expect(code).toBe(0);
     expect(callOrder).toEqual(['relink', 'restart']);
   });
+
+  it('relink failure aborts restart; supervisor.restart is NOT called (TR-4 negative)', async () => {
+    const dispatch = requireFn(await load(), 'dispatchDaemonSupervisor');
+    const repo = await tempRepo();
+    const { calls, supervisor } = makeFakeSupervisor();
+    const out: string[] = [];
+
+    // Mock relinkSkills to throw an error
+    const relinkError = new Error('Skill relink failed: stale install');
+    const mockRelink = async () => {
+      throw relinkError;
+    };
+
+    const code: number = await dispatch(
+      { verb: 'restart' },
+      {
+        supervisor,
+        cwd: repo,
+        out: (l: string) => out.push(l),
+        relinkSkills: mockRelink,
+      },
+    );
+
+    expect(code).not.toBe(0);
+    expect(code).toBe(1);
+    expect(calls).toHaveLength(0); // supervisor.restart was NOT called
+    expect(out.join('\n')).toMatch(/Skill relink failed/);
+  });
+
+  it('busy probe true → queues marker, does not call relink or restart (TR-4 negative)', async () => {
+    const dispatch = requireFn(await load(), 'dispatchDaemonSupervisor');
+    const { consumeOnBoot } = await import('../../src/engine/restart-marker.js');
+    const repo = await tempRepo();
+    const { calls, supervisor } = makeFakeSupervisor();
+    const out: string[] = [];
+    let relinkCalled = false;
+
+    // Mock relinkSkills to track if it's called
+    const mockRelink = async () => {
+      relinkCalled = true;
+    };
+
+    const code: number = await dispatch(
+      { verb: 'restart' },
+      {
+        supervisor,
+        cwd: repo,
+        out: (l: string) => out.push(l),
+        isBusy: async () => ({ busy: true, blockingSlug: 'test-feature' }),
+        relinkSkills: mockRelink,
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(relinkCalled).toBe(false); // relink was NOT called
+    expect(calls).toHaveLength(0); // supervisor.restart was NOT called
+    expect(out.join('\n')).toMatch(/test-feature/);
+
+    const intent = await (consumeOnBoot as (r: string) => Promise<{ blockingSlug?: string } | null>)(
+      repo,
+    );
+    expect(intent).toBeTruthy();
+    expect(intent!.blockingSlug).toBe('test-feature');
+  });
 });
