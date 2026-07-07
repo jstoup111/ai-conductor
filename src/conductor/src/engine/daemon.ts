@@ -658,6 +658,11 @@ export async function runDaemon(
       // (handled below/at drain) is completely unaffected.
       const paused = await checkPaused();
 
+      // Task 7: Rate-limit episode gate. When an episode is active, skip new
+      // feature dispatch to avoid thundering herd. In-flight features remain
+      // untouched. Optional dep: absence or inactive episode → proceed normally.
+      const episodeActive = deps.rateLimitEpisode?.active?.() ?? false;
+
       // First-in-backlog-order eligible item (Task 14: `pickEligible` consumes
       // only `items`, never `waiting`, so a dependency-gated spec never causes
       // head-of-line blocking of a later, unblocked one).
@@ -670,7 +675,7 @@ export async function runDaemon(
       };
 
       let next: BacklogItem | undefined;
-      if (!paused) {
+      if (!paused && !episodeActive) {
         // Local-only discovery first (no remote fetch): cheap, and it keeps a build
         // from being re-based onto specs that landed on origin while work is running.
         const parkedBeforeLocal = new Set(parked);
