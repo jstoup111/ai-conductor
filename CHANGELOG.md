@@ -12,6 +12,16 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- Self-host release gate (TR-10) now accepts a committed waiver as a third way
+  to satisfy the migration-block check (`evaluateWaiver` in
+  `src/engine/self-host/release-gate.ts`, adr-2026-07-06-migration-gate-waiver,
+  fix #354): an internal-only edit to a breaking surface (e.g. `bin/conduct`,
+  hook wiring) can commit `.docs/release-waivers/<plan-stem>.md` with a
+  `Waives:` list of canonical surface names and a `Rationale:` instead of a
+  `## Migration` block. Fail-closed throughout — a stale (not in this diff),
+  malformed, or partial-coverage waiver still HALTs, and an undeterminable
+  change set stays unwaivable. See CLAUDE.md's "Release & Update Gates" for
+  the authoring format.
 - New `conduct-ts brain start|stop|status` verbs (`brain-supervisor-cli.ts`) host the
   GitHub-issues intake poll as a host-wide, tmux-hosted background loop — an alternative to
   cron for keeping idea capture running without a scheduled task or a live terminal. `start`
