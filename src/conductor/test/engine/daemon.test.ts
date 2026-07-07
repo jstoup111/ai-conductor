@@ -698,6 +698,45 @@ describe('engine/daemon — runDaemon', () => {
       // (This test may need adjustment based on actual behavior.)
       // expect(requestRestart).toHaveBeenCalledTimes(0);
     });
+
+    it('requestRestart returns { fired: false } → ≥2 invocations across idle boundaries, NO engine_restart stop (Task 8)', async () => {
+      let callCount = 0;
+      const requestRestart = vi.fn(async () => {
+        callCount++;
+        return { fired: false }; // Restart NOT fired
+      });
+
+      const deps: DaemonDeps = {
+        discoverBacklog: staticBacklog([]),
+        runFeature: async (it) => ({ slug: it.slug, status: 'done' }),
+        staleEngineChecker: {
+          check: () => 'stale', // Always stale
+          capturedIdentity: () => 'captured-v1-hash',
+          targetIdentity: () => 'current-v2-hash',
+        },
+        sleep: async () => {}, // No-op sleep
+        requestRestart,
+      };
+
+      const res = await runDaemon(deps, {
+        concurrency: 1,
+        once: false,
+        isSelfHost: true,
+        autoRestartOnStaleEngine: true,
+        maxIdlePolls: 5, // Allow multiple idle cycles for retry
+      });
+
+      // Assertions:
+      // - requestRestart should be called multiple times (once per idle boundary where stale is detected)
+      expect(requestRestart.mock.calls.length).toBeGreaterThanOrEqual(2);
+      // - callCount confirms that requestRestart was invoked at least twice
+      expect(callCount).toBeGreaterThanOrEqual(2);
+      // - Loop should NOT break on fired:false; should NOT have engine_restart stop reason
+      expect(res.stoppedReason).not.toBe('engine_restart');
+      expect(res.stoppedReason).toBe('idle_timeout'); // Exits normally on idle timeout, not restart
+      // - No features dispatched (backlog is empty)
+      expect(res.processed).toHaveLength(0);
+    });
   });
 
   // ── Dispatch-boundary rebuild + restart (Gap A/B: fire before next task) ────

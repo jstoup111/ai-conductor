@@ -907,14 +907,17 @@ export async function runDaemon(
                   const fromIdentity = deps.staleEngineChecker.capturedIdentity?.() ?? null;
 
                   if (deps.requestRestart) {
-                    await deps.requestRestart({
+                    const result = await deps.requestRestart({
                       fromIdentity,
                       targetIdentity,
                     });
-                    // In production, requestRestart exits the process; in tests it returns.
-                    // Either way, after a successful restart request, we're done.
-                    stopReason = 'engine_restart';
-                    break;
+                    // Only break if restart was actually fired. If fired: false,
+                    // the restart request was aborted and the loop retries at the next idle boundary.
+                    if (result.fired) {
+                      stopReason = 'engine_restart';
+                      break;
+                    }
+                    // If fired: false, fall through to continue idle polling and retry
                   }
               }
               // If inFlight not empty, someone added a task while we checked.
