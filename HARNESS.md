@@ -134,6 +134,7 @@ skills declare `model: opus` in their SKILL.md frontmatter).
 | worktree-manager | haiku | low | Git operations — mechanical branch/worktree management. |
 | writing-system-tests | sonnet | medium | Generating specs from acceptance criteria — templated work. |
 | pipeline | haiku | low | Dispatcher; intelligence is in per-task sub-sessions, so the dispatcher itself runs mechanically on the cheapest model. |
+| build-review | opus | high | Fresh-session grader judging a maker's diff for test tautology, scope creep, and root-cause fixes vs band-aids — adversarial code review demands the deepest reasoning tier, same class of judgement as prd_audit/code-review. |
 | manual-test | sonnet | medium | Structured validation against stories — pattern-following. |
 | prd-audit | opus | high | Cross-references PRD intent vs shipped implementation across two domains (spec + code) — deep reasoning, FR-by-FR. |
 | architecture-review --as-built | sonnet | medium | The SHIP --as-built compliance mode is lighter than the pre-implementation review (code vs APPROVED ADRs) — pattern-match code vs approved design. |

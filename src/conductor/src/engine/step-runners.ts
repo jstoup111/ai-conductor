@@ -33,7 +33,9 @@ const STEP_PROMPTS: Record<StepName, string> = {
   worktree: '/conduct worktree',
   acceptance_specs: '/writing-system-tests',
   build: '/pipeline',
-  // stub — Task 2 wires the real judgement-gate skill/prompt.
+  // Display sentinel for the model table; the grader dispatch is driven by
+  // the fresh-session assembly logic (see resolveRebaseConflict pattern),
+  // not by invoking a literal `/build-review` skill.
   build_review: '/build-review',
   manual_test: '/manual-test',
   prd_audit: '/prd-audit',
