@@ -63,6 +63,7 @@ import {
   resolveStepConfig,
   resolveRebaseResolutionAttempts,
   resolveSelfHostConfig,
+  resolveBuildReviewConfig,
 } from './resolved-config.js';
 import {
   defaultSelfHostGuardrails,
@@ -2444,6 +2445,10 @@ export class Conductor {
     // Resolve the track once (state-seeded, or the committed marker in the
     // interactive flow) so a technical feature skips prd_audit in the SHIP loop.
     const track = await this.resolveTrack(state);
+    // Opt-in judgement gate (jstoup111/ai-conductor#324): resolved once here
+    // (read-once, `owner_gate_cutover` semantics) so a config value flipped
+    // mid-run doesn't produce inconsistent skip decisions across the pass.
+    const buildReviewEnabled = resolveBuildReviewConfig(this.config).enabled;
     // Steps are in topological order, so an upstream step's `skipped` mark is
     // already in `state` before a step that depends on it via skipWhenSkipped
     // is evaluated in this same pass (e.g. architecture_review → as_built).
@@ -2453,10 +2458,14 @@ export class Conductor {
         (s.skippableForTiers.includes(tier) ||
           (s.skippableForTracks ?? []).includes(track) ||
           shouldSkipForBootstrapMode(s.name, state.bootstrap_mode) ||
-          shouldSkipForUpstreamSkip(s, state))
+          shouldSkipForUpstreamSkip(s, state) ||
+          (s.name === 'build_review' && !buildReviewEnabled))
       ) {
         (state as Record<string, unknown>)[s.name] = 'skipped';
         markedSkip = true;
+        if (s.name === 'build_review' && !buildReviewEnabled) {
+          await this.events.emit({ type: 'config_skip', step: s.name });
+        }
       }
     }
     if (markedSkip) await writeState(this.stateFilePath, state);
