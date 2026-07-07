@@ -136,6 +136,36 @@ Field rules:
 
 Emit one disposition per **blocking** gap. Non-blocking (`ALIGNED` / `ACCEPTED`) FRs are not included.
 
+### 5. Plan-Append Contract
+
+For `build`, `acceptance_specs`, `plan`, and `architecture_review` dispositions, the conductor engine appends each task to the `.docs/plans/{slug}.md` file as a task header for later execution. The append happens at the engine level after remediation completes.
+
+**Task ID Format:**
+- Task IDs must be non-empty and match the grammar: `[A-Za-z0-9._-]+` (alphanumeric, dots, underscores, hyphens)
+- **Gate-source prefix is required:** `rem-<category>-<number>` format. Examples:
+  - `rem-fr10-1` — remediation for feature request 10
+  - `rem-adr-001` — remediation for ADR drift
+  - `rem-test-001` — remediation for test failure
+- Empty IDs are rejected and cause the remediation to fail
+- IDs without the `rem-` prefix trigger a warning but are not rejected (for backward compatibility)
+
+**Appended Headers:**
+Each remediation task is appended as a markdown task header:
+```markdown
+### Task rem-fr10-1: kids/[id].tsx:119 — read kidIdentityQuery.data?.data?.name...
+```
+
+Headers re-parse via the Task 18 grammar and must include:
+- 1–6 `#` markers (level 1–6 heading)
+- The word `Task` followed by the deterministic ID
+- A colon `:` and at least one character of title text
+
+**Engine Behavior:**
+1. **Validation:** All task IDs are validated before any append occurs
+2. **Atomic write:** Appended tasks are written atomically to the plan file (temp file + rename)
+3. **Non-empty content:** Titles must be non-empty strings
+4. **Prefix warning:** Tasks without `rem-` prefix are logged but not rejected
+
 ## Verification
 
 - [ ] Read the blocking gaps from `.pipeline/prd-audit.md` (and `.pipeline/architecture-review-as-built.md` if present)

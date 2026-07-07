@@ -71,6 +71,14 @@ export interface WaitingEntry {
   verdict: BlockerVerdict;
 }
 
+export interface ParkedEntry {
+  slug: string;
+  /** Provenance of the park: 'auto' or 'operator' */
+  provenance?: 'auto' | 'operator';
+  /** Reason for the auto-park (if available) */
+  reason?: string;
+}
+
 export interface InheritedState {
   halted: HaltedEntry[];
   inProgress: InProgressEntry[];
@@ -99,9 +107,10 @@ export interface InheritedState {
    * rendered first. Populated by the caller (daemon-cli) by consulting
    * `isOperatorParked` for every known slug — `scanInheritedState` itself has
    * no opinion on parking. Optional for backward compatibility with callers
-   * built before parking existed.
+   * built before parking existed. Can be either a string[] (legacy) or
+   * ParkedEntry[] (with provenance info).
    */
-  parked?: string[];
+  parked?: string[] | ParkedEntry[];
   /**
    * Specs (and repo-scoped conditions) held back by the OWNERSHIP gate
    * (FR-7/FR-11). Optional for backward compatibility with callers built
@@ -457,10 +466,18 @@ export function renderDashboard(state: InheritedState, priorityResolution?: Prio
   // FIRST, and a parked slug is excluded from HALTED, PROCESSED, IN-PROGRESS,
   // WAITING, and ELIGIBLE below — a slug appears in exactly one group, and if
   // it's parked, that group is PARKED. Sorted alphabetically for stability.
-  const parkedSlugs = [...(state.parked ?? [])].sort();
-  const parkedSet = new Set(parkedSlugs);
+  const parkedRaw = state.parked ?? [];
+  const parkedEntries: ParkedEntry[] = parkedRaw.map((p) =>
+    typeof p === 'string' ? { slug: p } : p
+  );
+  const parkedSlugs = [...parkedEntries].sort((a, b) => a.slug.localeCompare(b.slug));
+  const parkedSet = new Set(parkedSlugs.map((p) => p.slug));
   lines.push(`PARKED (${parkedSlugs.length})`);
-  for (const slug of parkedSlugs) lines.push(`  • ${slug}`);
+  for (const entry of parkedSlugs) {
+    const provenance = entry.provenance === 'auto' ? ' — auto-parked' : entry.provenance === 'operator' ? ' — operator' : '';
+    const reason = entry.reason ? ` (${entry.reason})` : '';
+    lines.push(`  • ${entry.slug}${provenance}${reason}`);
+  }
 
   const halted = state.halted.filter((h) => !parkedSet.has(h.slug));
   lines.push(`HALTED (${halted.length})`);

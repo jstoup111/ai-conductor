@@ -1144,6 +1144,106 @@ a completion-gate retry, the conductor runs auto-heal once per session:
 See `engine/autoheal.ts` for the heuristic and `test/engine/conductor.test.ts` for the
 six auto-heal test scenarios.
 
+### Task Status (engine-owned)
+
+The conductor engine is the **single authority** for `.pipeline/task-status.json`, which
+tracks per-task completion state across build retries. The engine owns reads and writes;
+no other component modifies it.
+
+**Ownership model:**
+- Engine seeds the task-status on merge/upsert from the plan (`.pipeline/plan.json`)
+- Completion state is derived from **git evidence**: each pending task maps to commits by
+  trailer match (`Task: <id>` in the commit message) or by content-hash matching (when
+  trailers are absent).
+- Evidence sidecar (`autoheal.ts`) reconciles stale in-flight state against the live
+  git log before re-invoking a build step, flipping `pending` tasks to `completed` when
+  their commits are unambiguously matched (word-boundary name match + file-path overlap
+  with the plan's per-task file list).
+
+**Trailer contract:** Every task commit must carry a `Task: <id>` line in its message
+(or the older `#<id>` form for backward compatibility). The conductor reads this to
+correlate commits with tasks and to verify no intermediate work was dropped during rebase
+or conflict resolution (FR-9).
+
+**Audit trail:** All reconciliations are logged to `.pipeline/audit-trail/` so the
+operator can see how completion state evolved across a multi-attempt build.
+
+Key modules: `engine/autoheal.ts` (reconciliation logic), `engine/conductor.ts` (ownership,
+seed/upsert), `engine/artifacts.ts` (gate predicates on task-status shape).
+
+### Auto-park on N-attempt trigger
+
+The daemon auto-parks a feature after N consecutive **no-evidence** gate misses (a gate
+whose completion check found no new evidence of task completion since the prior attempt)
+or when the plan artifact is empty/missing at seed time. This replaces the prior
+infinite re-kick loop with a survivable, machine-placed halt.
+
+**Trigger:** After a gate evaluation, if:
+1. The plan is absent or empty → park immediately with reason `'empty plan'`
+2. The gate shows no new evidence AND `noEvidenceAttempts >= AUTO_PARK_THRESHOLD` (default
+   N=1, meaning "2 consecutive no-evidence misses") → park with reason `'no evidence
+   after N attempts'`
+
+**Behavior:**
+- Writes `.daemon/parked/<slug>` with provenance `auto` and the reason in the marker body
+- Emits a `ConductorEvent` of type `auto_park` with the slug and reason
+- Halts the feature gracefully instead of re-kicking
+- The feature is visible in the daemon dashboard's PARKED group with provenance shown
+  (`— auto-parked`)
+
+**Unpark (Task 24 — `conduct daemon unpark <slug>`):** Removes the park marker and resets
+the `noEvidenceAttempts` counter, allowing the daemon to re-dispatch the feature.
+Operator unpark and manual re-kick both resume from where they left off.
+
+**Distinction from operator park:** A human-placed operator park (`conduct daemon park`)
+places a different provenance marker and serves a different purpose (manual hold). Both
+are respected by the daemon's dispatch and re-kick logic, but auto-park is deterministic
+(machine-triggered after N attempts) while operator park is human-triggered.
+
+Key modules: `engine/park-marker.ts` (marker write/read), `engine/conductor.ts` (auto-park
+trigger check), `engine/daemon-park-cli.ts` (unpark subcommand), `daemon-dashboard.ts`
+(provenance display).
+
+### Remediation (agentic gap routing)
+
+When a SHIP-phase gate blocks the daemon (`prd_audit`, `finish` verification, or
+`architecture_review_as_built`), the conductor first dispatches the `/remediate` planner
+to reason over the gap and suggest routing. The planner writes `.pipeline/remediation.json`
+with per-gap dispositions.
+
+**Three remediation entry points:**
+
+1. **`prd_audit` blocking** — gap artifact is `.pipeline/prd-audit.md` (audit table with
+   FR-gap rows)
+2. **`finish` verification failure** — gap artifact is `.pipeline/test-failures.md` (written
+   by the finish skill after flake-checking a failing suite; distinguishes real bugs from
+   transient infra)
+3. **`architecture_review_as_built` BLOCKED** — gap artifact is
+   `.pipeline/architecture-review-as-built.md` (design conformance verdict)
+
+**Disposition model:** The planner categorizes each gap and proposes one of:
+- **`route_to: 'build'`** — a code gap the daemon owns; the conductor routes back to `build`
+  with a retry hint (the gap details) and re-verifies
+- **`route_to: 'stories'` or `route_to: 'plan'`** — a DECIDE-phase rework; routes back and
+  clears both artifacts
+- **`halt: 'architectural-clarity'` or `halt: 'product-scope'`** — genuinely human categories;
+  the conductor HALTs and opens a draft PR for triage
+
+**Bounds:** Remediation rounds are bounded by `MAX_KICKBACKS_PER_GATE` (default 3), so a
+cycle that's not converging HALTs eventually. Daemon prd_audit also has its own
+self-healing fallback: if every blocking row is `impl-gap` (code), the conductor auto-kicks
+back to `build` up to N times before giving up.
+
+**Deterministic plan routing:** When routing back to `plan` or `stories`, the conductor
+uses deterministic task-id assignment from `.pipeline/remediation.json` so re-opened stories
+inherit task ids, allowing `Task: <id>` trailers to bind any new work to the re-opened
+task. This keeps the task-status ledger coherent across DECIDE rework cycles.
+
+Key modules: `engine/conductor.ts` (dispatch, disposition routing), `engine/gate-verdicts.ts`
+(blocking gate detection), helpers in `engine/remediati
+
+on-append.ts` (deterministic routing).
+
 ### Pinned Node
 
 `.tool-versions` pins `nodejs 20.19.0`. The bundle targets `node20` — older Node throws
