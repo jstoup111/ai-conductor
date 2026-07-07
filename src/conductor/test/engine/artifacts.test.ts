@@ -468,6 +468,23 @@ describe('engine/artifacts', () => {
       });
       expect(result).toEqual({ done: true });
     });
+
+    it('fails when finish-choice="pr" and isHeadPushed throws an error (corrupt repo)', async () => {
+      await createFile(FINISH_CHOICE_MARKER, 'pr');
+      await createFile(
+        '.pipeline/conduct-state.json',
+        JSON.stringify({ pr_url: 'https://github.com/foo/bar/pull/1' }),
+      );
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        isHeadPushed: async () => {
+          throw new Error('corrupt repo: .git/refs corrupted');
+        },
+      });
+      expect(result.done).toBe(false);
+      expect(result.reason).toMatch(/push evidence check failed/i);
+      expect(result.reason).toMatch(/corrupt repo/i);
+    });
   });
 
   describe('checkStepCompletion: build predicate (halt marker)', () => {

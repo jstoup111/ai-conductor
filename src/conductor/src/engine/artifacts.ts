@@ -808,25 +808,33 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
         // fail-open — presentation is not worth blocking a ship on gh failure
       }
 
-      // adr-2026-07-06-daemon-false-ship-guard (Task 5): Evidence check for push
+      // adr-2026-07-06-daemon-false-ship-guard (Task 5+6): Evidence check for push
       // verification. When isHeadPushed is available, verify HEAD was pushed to
-      // the tracking ref before allowing convergence to DONE. Fail-open if the
-      // injectable is absent (legacy/non-git contexts).
+      // the tracking ref before allowing convergence to DONE. Fail-closed (never
+      // silently pass) on any error: false → not pushed, null → indeterminate,
+      // throw → corrupt repo. Fail-open if the injectable is absent (legacy/non-git).
       if (ctx.isHeadPushed) {
-        const pushed = await ctx.isHeadPushed();
-        if (pushed === false) {
+        try {
+          const pushed = await ctx.isHeadPushed();
+          if (pushed === false) {
+            return {
+              done: false,
+              reason: `Push evidence required: HEAD not found in refs/remotes/origin/<branch> — ${prUrl}`,
+            };
+          }
+          if (pushed === null) {
+            return {
+              done: false,
+              reason: `Push evidence indeterminate: cannot verify branch was pushed — ${prUrl}`,
+            };
+          }
+          // pushed === true: continue to done: true
+        } catch (error) {
           return {
             done: false,
-            reason: `Push evidence required: HEAD not found in refs/remotes/origin/<branch> — ${prUrl}`,
+            reason: `Push evidence check failed: ${error instanceof Error ? error.message : String(error)}`,
           };
         }
-        if (pushed === null) {
-          return {
-            done: false,
-            reason: `Push evidence indeterminate: cannot verify branch was pushed — ${prUrl}`,
-          };
-        }
-        // pushed === true: continue to done: true
       }
     }
     return { done: true };
