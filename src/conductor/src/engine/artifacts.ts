@@ -69,8 +69,7 @@ export const STEP_ARTIFACT_GLOBS: Record<StepName, string[]> = {
     '*.spec.tsx',
   ],
   build: ['.pipeline/task-status.json'],
-  // stub — Task 2 wires the real judgement-gate artifact glob.
-  build_review: [],
+  build_review: ['.pipeline/build-review.json'],
   // Run evidence (gitignored, stable filename, overwritten each run) — NOT
   // committed. These are regenerated every run; tracking them caused date-stamp
   // sprawl, rebase/merge conflicts, and dirty-tree HALTs at the finish-time
@@ -433,7 +432,7 @@ export function validateAcceptanceRedEvidence(
  * completion predicate (Task 8) to decide PASS (advance) vs FAIL (kickback to
  * `build`). Gitignored run evidence, not a committed design artifact.
  */
-export const BUILD_REVIEW_VERDICT = '.pipeline/build-review-verdict.json';
+export const BUILD_REVIEW_VERDICT = '.pipeline/build-review.json';
 
 /**
  * Which rubric category the grader flagged, when the verdict is FAIL. All
@@ -934,6 +933,51 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
           reason: `as-built review verdict is "${verdict}" — not a clean APPROVED (BLOCKED means shipped code violates an APPROVED ADR; an unrecognized verdict means the review may have found no ADRs to check). Fix the code or supersede the ADR (human-approved), then re-run`,
         };
       }
+    }
+    return { done: true };
+  },
+
+  // build_review judgement gate: satisfied only by a fresh, valid PASS
+  // verdict at `.pipeline/build-review.json` (BUILD_REVIEW_VERDICT). Missing
+  // file, stale (prior-session) file, malformed JSON, or a FAIL verdict all
+  // keep the gate unsatisfied (fail-closed) — a FAIL surfaces the grader's
+  // reasons so the kickback message tells `build` what to fix.
+  build_review: async (dir, ctx): Promise<CompletionResult> => {
+    const path = join(dir, BUILD_REVIEW_VERDICT);
+    if (!(await fileIsFreshSinceSession(path, ctx.sessionStartedAt))) {
+      // fileIsFreshSinceSession returns false both for "missing" and "stale";
+      // distinguish them so the reason message is accurate.
+      const exists = await access(path)
+        .then(() => true)
+        .catch(() => false);
+      return {
+        done: false,
+        reason: exists
+          ? `${BUILD_REVIEW_VERDICT} is stale (mtime predates this session) — the build_review grader must re-run and rewrite it`
+          : `no build-review verdict at ${BUILD_REVIEW_VERDICT} — the build_review grader must run and record a PASS/FAIL verdict`,
+      };
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(await readFile(path, 'utf-8'));
+    } catch {
+      return {
+        done: false,
+        reason: `${BUILD_REVIEW_VERDICT} is not valid JSON — the build_review grader must rewrite it`,
+      };
+    }
+    const result = validateBuildReviewVerdict(parsed);
+    if (!result.ok) {
+      return { done: false, reason: result.reason };
+    }
+    if (result.verdict === 'FAIL') {
+      const reasons = result.reasons && result.reasons.length > 0
+        ? result.reasons.join('; ')
+        : 'no reasons recorded';
+      return {
+        done: false,
+        reason: `build_review FAILed: ${reasons} — fix in build, then the gate re-runs build_review`,
+      };
     }
     return { done: true };
   },
