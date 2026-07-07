@@ -124,6 +124,15 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- **Continuous daemon no longer dies silently at its first idle poll (#329 regression).**
+  `createDefaultSleep` unref'd its timer, so during an idle poll with no wake-watchers
+  registered (a fully drained backlog) the sleep timer was the process's only pending work —
+  the node event loop emptied and the daemon exited 0 mid-await with no log, no HALT, and no
+  restart marker (observed 2026-07-07: three consecutive silent boot-deaths ~10s after
+  startup). The idle-poll timer now holds the event loop; a regression test pins the timer's
+  ref via a test-only seam (an await-based test is a false green — the vitest runner itself
+  keeps the loop alive).
+
 - **Daemon false-ship guard: daemon no longer records shipped markers for outcomes missing verified PR evidence.** Done-outcomes with null prUrl or non-pr finishChoice now halt with HALT markers, DONE markers deleted, and worktrees kept for operator inspection (#337).
 - Backfilled the missing intake marker `.docs/intake/2026-06-30-background-intake-conduct-loop.md`
   (`Owner: jstoup111`): the spec landed without an owner stamp, so the post-cutover owner gate
