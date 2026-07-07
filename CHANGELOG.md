@@ -943,6 +943,11 @@ frontmatter is now ignored (locked to `gating`).
 - Documented the `mergeable_autoresolve` config block and behavior (detection, Tier-1/Tier-2
   resolution, acceptance guards, fail-closed suite gate, lease-protected push, and
   `needs-remediation` escalation) in `README.md` and `src/conductor/README.md`.
+- `skills/retro/SKILL.md` Data Collection now names `.pipeline/audit-trail/events.jsonl` as the
+  primary source for gate/rework history (replacing `.pipeline/gates/` files), documents that a
+  missing/empty audit trail despite executed steps must be reported INCOMPLETE rather than read
+  as a clean run, and keeps raw `.pipeline/events.jsonl` as the retry-escalation source for Part
+  C (issue #328, Story 7).
 
 ## Migration
 

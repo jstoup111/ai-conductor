@@ -115,7 +115,9 @@ describe('Acceptance: retro reconstructs friction from the audit trail alone', (
   it('a step executed in strict isolation (fresh process, no prior conversation turns) is reconstructable from the audit trail alone', async () => {
     // Simulates a "fresh session": a brand-new writer instance and a
     // single-step run, nothing carried over from a prior in-memory run.
-    await writeState(statePath, { complexity_tier: 'S' } as ConductState);
+    // `plan: 'done'` satisfies build's prerequisite gate so the run actually
+    // reaches the step runner instead of short-circuiting on gate_blocked.
+    await writeState(statePath, { complexity_tier: 'S', plan: 'done' } as ConductState);
 
     const mod = await loadWriter();
     const AuditTrailWriter = mod.AuditTrailWriter as new (root: string) => {
@@ -142,7 +144,7 @@ describe('Acceptance: retro reconstructs friction from the audit trail alone', (
       stateFilePath: statePath,
       stepRunner: runner,
       events: isolatedEmitter,
-      maxRetries: 1,
+      maxRetries: 2,
       fromStep: 'build',
     });
 
