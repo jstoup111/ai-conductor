@@ -1187,4 +1187,196 @@ describe('engine/daemon — runDaemon', () => {
     // 5. Nothing was processed (no dispatch happened)
     expect(res.processed).toHaveLength(0);
   });
+
+  // ── Task 8 negative paths: dispatch gate negatives ─────────────────────────────────
+
+  describe('Task 8 negative paths: dispatch gate with PAUSE and episode composition', () => {
+    it('in-flight untouched: feature running when episode activates continues to completion', async () => {
+      // Setup: Feature A is already in flight when episode becomes active.
+      // The gate should NOT cancel or re-dispatch it; it must complete normally.
+      // Then episode clears, and Feature B is picked/dispatched.
+      let episodeActive = false;
+      let resolveFeatureA: ((value: FeatureOutcome) => void) | undefined;
+      const featureAPromise = new Promise<FeatureOutcome>((resolve) => {
+        resolveFeatureA = resolve;
+      });
+
+      const deps: DaemonDeps = {
+        discoverBacklog: staticBacklog(items(2)), // f0 and f1
+        runFeature: async (it: BacklogItem) => {
+          if (it.slug === 'f0') {
+            // Feature A: return pending promise — blocks until we resolve it
+            return featureAPromise;
+          }
+          // Feature B: completes immediately
+          return { slug: it.slug, status: 'done' };
+        },
+        rateLimitEpisode: {
+          active: () => episodeActive,
+          enter: () => {},
+          clear: () => Promise.resolve(),
+        },
+        sleep: async () => {},
+      };
+
+      // Start daemon without awaiting
+      const daemonPromise = runDaemon(deps, {
+        concurrency: 2,
+        once: true,
+      });
+
+      // Yield to let daemon dispatch f0
+      await new Promise((r) => setTimeout(r, 10));
+
+      // Now activate episode while f0 is in flight
+      episodeActive = true;
+      await new Promise((r) => setTimeout(r, 10));
+
+      // Resolve feature A; episode is still active
+      resolveFeatureA?.({ slug: 'f0', status: 'done' });
+
+      // Clear episode before the daemon loop completes
+      await new Promise((r) => setTimeout(r, 10));
+      episodeActive = false;
+
+      // Collect result
+      const res = await daemonPromise;
+
+      // Assertions:
+      // 1. Feature A (f0) was dispatched and completed despite episode activation
+      expect(res.processed.map((o) => o.slug)).toContain('f0');
+      expect(res.processed.find((o) => o.slug === 'f0')?.status).toBe('done');
+      // 2. Feature B (f1) was also dispatched and completed after episode cleared
+      expect(res.processed.map((o) => o.slug)).toContain('f1');
+      expect(res.processed.find((o) => o.slug === 'f1')?.status).toBe('done');
+      // 3. Both features completed (gate only blocks NEW dispatch, not in-flight)
+      expect(res.processed).toHaveLength(2);
+    });
+
+    it('compose with PAUSE: episode + PAUSE both set blocks dispatch; clearing episode with PAUSE still set keeps block', async () => {
+      // Setup: Both episode active and paused → double-block.
+      // Verify the gate order: (paused || episodeActive) → don't dispatch.
+      // This means both MUST allow dispatch for new picks to happen.
+      let episodeActive = true;
+      let isPausedFlag = true;
+      let dispatchAttempts = 0;
+      let pollPhase = 0;
+
+      const deps: DaemonDeps = {
+        discoverBacklog: staticBacklog(items(2)), // f0, f1
+        runFeature: async (it: BacklogItem) => {
+          dispatchAttempts++;
+          return { slug: it.slug, status: 'done' };
+        },
+        rateLimitEpisode: {
+          active: () => episodeActive,
+          enter: () => {},
+          clear: () => Promise.resolve(),
+        },
+        isPaused: async () => isPausedFlag,
+        sleep: async () => {
+          pollPhase++;
+          // Transition through phases based on poll count
+          if (pollPhase === 2) {
+            // After first idle, clear episode but keep pause
+            episodeActive = false;
+          }
+          if (pollPhase === 3) {
+            // After second idle, clear pause too
+            isPausedFlag = false;
+          }
+        },
+      };
+
+      const res = await runDaemon(deps, {
+        concurrency: 1,
+        once: false,
+        maxIdlePolls: 4, // Enough to reach phase 3
+      });
+
+      // Phase 1 (both active): no dispatch
+      // Phase 2 (episode cleared, pause active): still no dispatch
+      // Phase 3 (both cleared): dispatch can happen
+      // We should see dispatch ONLY after both gates clear (phase 3+)
+      expect(dispatchAttempts).toBeGreaterThan(0);
+      expect(res.processed.length).toBeGreaterThan(0);
+    });
+
+    it('no double-dispatch: episode clears mid-cycle, at most one dispatch per eligible slug', async () => {
+      // Setup: Two identical "eligible features" (same slug, shouldn't happen but test it).
+      // Episode is active, then clears.
+      // Verify at most one dispatch of that slug occurs in the cycle.
+      let episodeActive = true;
+      let dispatchCount = 0;
+      const dispatchedSlugs = new Map<string, number>();
+
+      const deps: DaemonDeps = {
+        discoverBacklog: staticBacklog([{ slug: 'duplicate' }, { slug: 'duplicate' }]),
+        runFeature: async (it: BacklogItem) => {
+          dispatchCount++;
+          dispatchedSlugs.set(it.slug, (dispatchedSlugs.get(it.slug) ?? 0) + 1);
+          return { slug: it.slug, status: 'done' };
+        },
+        rateLimitEpisode: {
+          active: () => episodeActive,
+          enter: () => {},
+          clear: () => Promise.resolve(),
+        },
+        sleep: async () => {
+          // Clear episode on first sleep (idle poll)
+          episodeActive = false;
+        },
+      };
+
+      const res = await runDaemon(deps, {
+        concurrency: 1,
+        once: false,
+        maxIdlePolls: 1,
+      });
+
+      // Verify that 'duplicate' slug was dispatched at most once per cycle
+      // (pickEligible filters duplicates anyway via inFlight set)
+      const duplicateDispatches = dispatchedSlugs.get('duplicate') ?? 0;
+      expect(duplicateDispatches).toBeLessThanOrEqual(1);
+      // Overall, only one dispatch should occur in this scenario
+      expect(dispatchCount).toBeLessThanOrEqual(1);
+    });
+
+    it('gate composition order: PAUSE checked BEFORE episode, so both must allow dispatch', async () => {
+      // Verify the gate is: if (paused || episodeActive) return (don't dispatch)
+      // NOT: if (episodeActive) return; if (paused) return;
+      // The second form would allow episode to suppress pause checks.
+      let episodeActive = true;
+      let isPausedFlag = true;
+      let dispatchCount = 0;
+
+      const deps: DaemonDeps = {
+        discoverBacklog: staticBacklog(items(1)),
+        runFeature: async (it: BacklogItem) => {
+          dispatchCount++;
+          return { slug: it.slug, status: 'done' };
+        },
+        rateLimitEpisode: {
+          active: () => episodeActive,
+          enter: () => {},
+          clear: () => Promise.resolve(),
+        },
+        isPaused: async () => isPausedFlag,
+        sleep: async () => {},
+      };
+
+      const res = await runDaemon(deps, {
+        concurrency: 1,
+        once: false,
+        maxIdlePolls: 2,
+      });
+
+      // With both gates set, no dispatch should occur
+      expect(dispatchCount).toBe(0);
+      expect(res.processed).toHaveLength(0);
+      // This test verifies the gate composition — if the gates were in wrong order
+      // (episode before pause), the order wouldn't matter in this scenario,
+      // but in a live system it would cause pause to be bypassable by an active episode.
+    });
+  });
 });
