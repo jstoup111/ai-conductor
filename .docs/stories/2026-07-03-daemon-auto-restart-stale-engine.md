@@ -40,6 +40,13 @@ staleness is decidable later without guessing.
 
 ---
 
+> **Amended 2026-07-06 (#353, adr-2026-07-06-stale-engine-respawn-in-place):** the
+> "write marker → release lock → exit 0" contract below now applies **only to headless
+> (non-session-hosted) daemons**. A session-hosted daemon relinks skills, writes the same
+> marker, then respawns in place via `triggerSelfRestart`; a marker-write failure while
+> session-hosted aborts the attempt (stays alive) instead of exit(1). See
+> `.docs/stories/daemon-restart-leaves-the-daemon-stopped-when-orig.md` (TR-2/TR-3).
+
 ## Story: Detect stale engine at the idle boundary and request restart
 
 As the self-host daemon, I want to detect at the idle boundary that the on-disk engine is
