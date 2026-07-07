@@ -35,9 +35,11 @@ jobs:
       # accumulation deterministically. Wall time is not a constraint here
       # (operator directive). The durable fix is hunting the per-file leak —
       # tracked separately.
+      # --logHeapUsage: per-file worker heap in the log — the OOM reproduces
+      # only under CI's file-set/partition, so CI itself names the balloon.
       - run: |
-          npx vitest run --shard=1/4
-          npx vitest run --shard=2/4
-          npx vitest run --shard=3/4
-          npx vitest run --shard=4/4
+          npx vitest run --shard=1/4 --logHeapUsage
+          npx vitest run --shard=2/4 --logHeapUsage
+          npx vitest run --shard=3/4 --logHeapUsage
+          npx vitest run --shard=4/4 --logHeapUsage
         working-directory: src/conductor
