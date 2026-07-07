@@ -5902,7 +5902,7 @@ describe('projectRoot is required', () => {
         worktree: 'pending',
         session_started_at: Date.now(),
       } as ConductState;
-      const ctx = (conductor as any)['completionCtx'](state);
+      const ctx = await (conductor as any)['completionCtx'](state);
 
       // Verify daemon field is threaded
       expect(ctx.daemon).toBe(true);
@@ -5926,7 +5926,7 @@ describe('projectRoot is required', () => {
         worktree: 'pending',
         session_started_at: Date.now(),
       } as ConductState;
-      const ctx = (conductor as any)['completionCtx'](state);
+      const ctx = await (conductor as any)['completionCtx'](state);
 
       // Call isHeadPushed and verify it handles errors gracefully
       // (returns null instead of throwing)
