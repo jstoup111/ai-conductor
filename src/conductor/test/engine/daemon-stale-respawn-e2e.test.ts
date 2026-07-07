@@ -15,6 +15,7 @@ import {
 } from '../../src/engine/daemon-tmux.js';
 import { createRestartRequester } from '../../src/daemon-cli.js';
 import * as restartIntent from '../../src/engine/restart-intent.js';
+import { runDaemon, type DaemonDeps } from '../../src/engine/daemon.js';
 
 // Capstone acceptance spec for #353 / adr-2026-07-06-stale-engine-respawn-in-place
 // (TR-2, TR-3, TR-4). The production wiring this drives — createRestartRequester
@@ -111,6 +112,69 @@ describe('daemon-stale-respawn-e2e — #353 capstone (TR-2/TR-3/TR-4)', () => {
         expect(mockLock.releaseSync).not.toHaveBeenCalled();
 
         writeSpy.mockRestore();
+      },
+    );
+  });
+
+  describe('single-generation invariant: real runDaemon idle loop drives the real requester (#400, ADR-2026-07-07)', () => {
+    let daemonDir: string;
+
+    beforeEach(async () => {
+      daemonDir = await mkdtemp(join(tmpdir(), 'single-gen-'));
+    });
+
+    afterEach(async () => {
+      await rm(daemonDir, { recursive: true, force: true });
+    });
+
+    it(
+      'a permanently-stale checker across repeated idle polls fires the requester exactly once, ' +
+        'exits exactly once, and the loop stops with stopReason "engine_restart" — no stacked respawns',
+      async () => {
+        const mockLock = { releaseSync: vi.fn() };
+        const mockProcess = { exit: vi.fn() } as unknown as NodeJS.Process;
+        const triggerSelfRestart = vi.fn(async () => {});
+
+        // The REAL production requester (daemon-cli.ts), session-hosted (a
+        // triggerSelfRestart dep is supplied) — not a mock of the requester
+        // itself. Composed with the REAL idle loop (daemon.ts runDaemon)
+        // below: this is the cross-module seam #400 broke (the requester
+        // fired repeatedly because neither module stopped the loop).
+        const requestRestart = createRestartRequester(daemonDir, () => {}, mockLock, mockProcess, {
+          triggerSelfRestart,
+        });
+
+        const deps: DaemonDeps = {
+          discoverBacklog: async () => [],
+          runFeature: async (it) => ({ slug: it.slug, status: 'done' }),
+          staleEngineChecker: {
+            check: () => 'stale',
+            capturedIdentity: () => 'old-hash',
+            targetIdentity: () => 'new-hash',
+          },
+          sleep: async () => {},
+          requestRestart,
+        };
+
+        const res = await runDaemon(deps, {
+          concurrency: 1,
+          once: false,
+          isSelfHost: true,
+          autoRestartOnStaleEngine: true,
+          maxIdlePolls: 5,
+        });
+
+        // Single-generation invariant (ADR Decisions 1 + 2): exactly one fire,
+        // exactly one exit, the loop breaks instead of polling on. Today the
+        // requester returns without exiting and the loop has no backstop, so
+        // triggerSelfRestart fires on every idle poll (the #400 burst) and
+        // stoppedReason is 'idle_timeout' — this fails for that reason, not a
+        // type/collection error.
+        expect(triggerSelfRestart).toHaveBeenCalledTimes(1);
+        expect(mockProcess.exit).toHaveBeenCalledTimes(1);
+        expect(mockProcess.exit).toHaveBeenCalledWith(0);
+        expect(mockLock.releaseSync).toHaveBeenCalledTimes(1);
+        expect(res.stoppedReason).toBe('engine_restart');
       },
     );
   });
