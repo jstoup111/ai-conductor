@@ -1552,4 +1552,215 @@ describe('engine/daemon — runDaemon', () => {
       expect(rekickedSlugs).not.toContain('f0');
     });
   });
+
+  // ── Task 21: Restart deferral during active episode ──────────────────────────
+
+  describe('restart deferral during active episode (ADR 11)', () => {
+    it('episode active + restart-pending marker at idle boundary: NO triggerSelfRestart this tick', async () => {
+      let episodeActive = true;
+      let triggerCalls = 0;
+      let pollCount = 0;
+
+      const deps: DaemonDeps = {
+        discoverBacklog: staticBacklog(items(1)),
+        runFeature: async (it) => ({ slug: it.slug, status: 'done' }),
+        hasRestartPending: async () => true, // marker always present
+        triggerSelfRestart: async () => {
+          triggerCalls++;
+        },
+        rateLimitEpisode: {
+          active: () => episodeActive,
+          enter: () => {},
+          clear: () => Promise.resolve(),
+        },
+        sleep: async () => {
+          pollCount++;
+          if (pollCount === 1) {
+            // Episode clears after first idle poll
+            episodeActive = false;
+          }
+        },
+      };
+
+      await runDaemon(deps, {
+        concurrency: 1,
+        once: false,
+        maxIdlePolls: 3,
+      });
+
+      // Trigger should NOT have been called while episode was active.
+      // It should be called after episode clears.
+      expect(triggerCalls).toBe(1); // called after episode cleared
+    });
+
+    it('stale-engine verdict while episode active: NO requestRestart', async () => {
+      const { vi } = await import('vitest');
+      const requestRestart = vi.fn(async () => {});
+      let episodeActive = true;
+      let pollCount = 0;
+
+      const deps: DaemonDeps = {
+        discoverBacklog: staticBacklog([]), // empty → enters idle branch
+        runFeature: async (it) => ({ slug: it.slug, status: 'done' }),
+        staleEngineChecker: {
+          check: () => 'stale', // always stale
+          capturedIdentity: () => 'old-hash',
+          targetIdentity: () => 'new-hash',
+        },
+        rateLimitEpisode: {
+          active: () => episodeActive,
+          enter: () => {},
+          clear: () => Promise.resolve(),
+        },
+        requestRestart,
+        sleep: async () => {
+          pollCount++;
+          if (pollCount === 1) {
+            // Episode clears after first idle poll
+            episodeActive = false;
+          }
+        },
+      };
+
+      await runDaemon(deps, {
+        concurrency: 1,
+        once: false,
+        isSelfHost: true,
+        autoRestartOnStaleEngine: true,
+        maxIdlePolls: 2,
+      });
+
+      // requestRestart should NOT be called while episode is active.
+      // It will be called once after episode clears (on the next idle poll).
+      // Since pollCount increments on each idle poll and episode clears on first poll,
+      // requestRestart will be called on poll 2.
+      expect(requestRestart).toHaveBeenCalledTimes(1);
+      expect(requestRestart).toHaveBeenCalledWith({
+        fromIdentity: 'old-hash',
+        targetIdentity: 'new-hash',
+      });
+    });
+
+    it('episode clears: restart fires on next tick (defer, not drop)', async () => {
+      let episodeActive = true;
+      let triggerCalls = 0;
+      let pollCount = 0;
+
+      const deps: DaemonDeps = {
+        discoverBacklog: staticBacklog(items(1)),
+        runFeature: async (it) => ({ slug: it.slug, status: 'done' }),
+        hasRestartPending: async () => true, // marker present
+        triggerSelfRestart: async () => {
+          triggerCalls++;
+        },
+        rateLimitEpisode: {
+          active: () => episodeActive,
+          enter: () => {},
+          clear: () => Promise.resolve(),
+        },
+        sleep: async () => {
+          pollCount++;
+          if (pollCount === 1) {
+            // Episode clears after first idle poll
+            episodeActive = false;
+          }
+        },
+      };
+
+      await runDaemon(deps, {
+        concurrency: 1,
+        once: false,
+        maxIdlePolls: 3,
+      });
+
+      // After episode clears on first idle poll, restart should fire on the next idle poll
+      expect(triggerCalls).toBe(1);
+      expect(pollCount).toBeGreaterThanOrEqual(2); // at least two polls to allow deferral
+    });
+
+    it('restart marker persisted through deferral: no re-run of hasRestartPending', async () => {
+      const { vi } = await import('vitest');
+      const hasRestartPending = vi.fn(async () => true); // marker always present
+      let episodeActive = true;
+      let triggerCalls = 0;
+      let pollCount = 0;
+
+      const deps: DaemonDeps = {
+        discoverBacklog: staticBacklog(items(1)),
+        runFeature: async (it) => ({ slug: it.slug, status: 'done' }),
+        hasRestartPending,
+        triggerSelfRestart: async () => {
+          triggerCalls++;
+        },
+        rateLimitEpisode: {
+          active: () => episodeActive,
+          enter: () => {},
+          clear: () => Promise.resolve(),
+        },
+        sleep: async () => {
+          pollCount++;
+          if (pollCount === 1) {
+            episodeActive = false; // episode clears
+          }
+        },
+      };
+
+      await runDaemon(deps, {
+        concurrency: 1,
+        once: false,
+        maxIdlePolls: 3,
+      });
+
+      // hasRestartPending should be called until the trigger succeeds.
+      // Idle poll 1: called, deferred (episode active)
+      // Idle poll 2: called, trigger fires (episode inactive), restartTriggeredSuccessfully = true
+      // Idle poll 3: NOT called (restartTriggeredSuccessfully is true, so the check is skipped)
+      expect(hasRestartPending).toHaveBeenCalledTimes(2);
+      expect(triggerCalls).toBe(1); // called once after episode clears
+    });
+
+    it('stale verdict while episode active: restart marker not consumed, retried after episode', async () => {
+      const { vi } = await import('vitest');
+      const requestRestart = vi.fn(async () => {});
+      let episodeActive = true;
+      let pollCount = 0;
+
+      const deps: DaemonDeps = {
+        discoverBacklog: staticBacklog([]),
+        runFeature: async (it) => ({ slug: it.slug, status: 'done' }),
+        staleEngineChecker: {
+          check: () => 'stale',
+          capturedIdentity: () => 'old',
+          targetIdentity: () => 'new',
+        },
+        rateLimitEpisode: {
+          active: () => episodeActive,
+          enter: () => {},
+          clear: () => Promise.resolve(),
+        },
+        requestRestart,
+        sleep: async () => {
+          pollCount++;
+          if (pollCount === 1) {
+            episodeActive = false;
+          }
+        },
+      };
+
+      await runDaemon(deps, {
+        concurrency: 1,
+        once: false,
+        isSelfHost: true,
+        autoRestartOnStaleEngine: true,
+        maxIdlePolls: 2,
+      });
+
+      // Should be called once after episode clears
+      expect(requestRestart).toHaveBeenCalledTimes(1);
+      expect(requestRestart).toHaveBeenCalledWith({
+        fromIdentity: 'old',
+        targetIdentity: 'new',
+      });
+    });
+  });
 });

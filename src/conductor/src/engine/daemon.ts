@@ -470,6 +470,9 @@ export async function runDaemon(
   // Task T28: track whether the restart trigger has been successfully called
   // in this run. Once successful, don't retry (the respawn would exit the process).
   let restartTriggeredSuccessfully = false;
+  // Task 21: track whether a stale-engine restart request has been made in this
+  // run. Once requested, don't retry (the restart would exit the process).
+  let staleEngineRestartRequested = false;
   // Slugs dispatched this run, to prevent double-dispatch. Stays populated for
   // the run's lifetime; `done`/`error` slugs remain permanently excluded.
   const started = new Set<string>();
@@ -748,6 +751,7 @@ export async function runDaemon(
         // fire the supervisor trigger (T28) or consume in bare-run (T30).
         // This check happens BEFORE the once/idle-timeout checks so restart is honored
         // at the earliest idle boundary, even in once mode.
+        // Task 21: Defer restart trigger while episode is active to avoid interference.
         // - T28 (supervisor mode): triggerSelfRestart is injected, fire it to respawn
         // - T30 (bare-run): triggerSelfRestart is absent, consume marker and exit cleanly
         // The daemon continues normally if supervisor trigger fails (no crash on failure).
@@ -756,37 +760,45 @@ export async function runDaemon(
           try {
             const hasRestart = await deps.hasRestartPending();
             if (hasRestart) {
-              // T28 path: supervisor mode — fire respawn trigger
-              if (deps.triggerSelfRestart) {
-                log('[daemon] self-restart marker found at idle boundary; firing trigger');
-                try {
-                  await deps.triggerSelfRestart();
-                  // If trigger succeeds, it respawns the process and we never reach here.
-                  // But if it doesn't respawn immediately, track that we succeeded so we
-                  // don't retry (in production, the process exits on respawn).
-                  restartTriggeredSuccessfully = true;
-                  log('[daemon] self-restart trigger completed (no respawn yet)');
-                } catch (err) {
-                  log(
-                    `[daemon] self-restart trigger failed: ${err instanceof Error ? err.message : String(err)}; will retry at next idle boundary`,
-                  );
+              // Task 21: Check if episode is active before firing triggers
+              const episodeActive = deps.rateLimitEpisode?.active?.() ?? false;
+
+              if (!episodeActive) {
+                // T28 path: supervisor mode — fire respawn trigger
+                if (deps.triggerSelfRestart) {
+                  log('[daemon] self-restart marker found at idle boundary; firing trigger');
+                  try {
+                    await deps.triggerSelfRestart();
+                    // If trigger succeeds, it respawns the process and we never reach here.
+                    // But if it doesn't respawn immediately, track that we succeeded so we
+                    // don't retry (in production, the process exits on respawn).
+                    restartTriggeredSuccessfully = true;
+                    log('[daemon] self-restart trigger completed (no respawn yet)');
+                  } catch (err) {
+                    log(
+                      `[daemon] self-restart trigger failed: ${err instanceof Error ? err.message : String(err)}; will retry at next idle boundary`,
+                    );
+                  }
                 }
-              }
-              // T30 path: bare-run mode — no supervisor, consume marker and exit cleanly
-              else if (deps.consumeRestartPending) {
-                log('[daemon] restart-pending honored (bare-run, no supervisor available)');
-                try {
-                  await deps.consumeRestartPending();
-                  log('[daemon] restart marker consumed; exiting cleanly');
-                  restartTriggeredSuccessfully = true;
-                  // Break from the loop to exit cleanly with the current processed results
-                  stopReason = 'backlog_drained';
-                  break;
-                } catch (err) {
-                  log(
-                    `[daemon] bare-run consume failed: ${err instanceof Error ? err.message : String(err)}; will retry at next idle boundary`,
-                  );
+                // T30 path: bare-run mode — no supervisor, consume marker and exit cleanly
+                else if (deps.consumeRestartPending) {
+                  log('[daemon] restart-pending honored (bare-run, no supervisor available)');
+                  try {
+                    await deps.consumeRestartPending();
+                    log('[daemon] restart marker consumed; exiting cleanly');
+                    restartTriggeredSuccessfully = true;
+                    // Break from the loop to exit cleanly with the current processed results
+                    stopReason = 'backlog_drained';
+                    break;
+                  } catch (err) {
+                    log(
+                      `[daemon] bare-run consume failed: ${err instanceof Error ? err.message : String(err)}; will retry at next idle boundary`,
+                    );
+                  }
                 }
+              } else {
+                // Episode is active: defer the restart trigger but keep the marker
+                log('[daemon] restart marker present but episode active; deferring trigger');
               }
             }
           } catch (err) {
@@ -830,14 +842,22 @@ export async function runDaemon(
               // Re-verify that inFlight is still empty before requesting restart.
               // A task could have been added between the verdict check and now.
               if (inFlight.size === 0) {
-                // All gates still pass, request restart with identities
-                const fromIdentity = deps.staleEngineChecker.capturedIdentity?.() ?? null;
+                // Task 21: Check if episode is active before requesting restart
+                const episodeActive = deps.rateLimitEpisode?.active?.() ?? false;
+                if (episodeActive) {
+                  // Defer restart request while episode is active
+                  log('[daemon] stale engine detected but episode active; deferring restart request');
+                } else if (!staleEngineRestartRequested) {
+                  // All gates still pass, request restart with identities (only once per run)
+                  const fromIdentity = deps.staleEngineChecker.capturedIdentity?.() ?? null;
 
-                if (deps.requestRestart) {
-                  await deps.requestRestart({
-                    fromIdentity,
-                    targetIdentity,
-                  });
+                  if (deps.requestRestart) {
+                    await deps.requestRestart({
+                      fromIdentity,
+                      targetIdentity,
+                    });
+                    staleEngineRestartRequested = true;
+                  }
                 }
               }
               // If inFlight not empty, someone added a task while we checked.
