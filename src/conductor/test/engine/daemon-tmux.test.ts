@@ -695,6 +695,52 @@ describe('defaultTmuxRunner: AI_CONDUCTOR_NO_REAL_EXEC kill-switch guards cc-dae
       await killSessionFn(sessionName);
     }
   });
+
+  it('throws instead of respawning a pane in a real cc-daemon-* session when the kill-switch is set (#377)', async () => {
+    const mod = await load();
+    const runner = requireFn(mod, 'defaultTmuxRunner');
+    const sessionName = 'cc-daemon-guardtest-def456';
+    const prevFlag = process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+    process.env.AI_CONDUCTOR_NO_REAL_EXEC = '1';
+    try {
+      let thrown: unknown;
+      try {
+        runner(['respawn-pane', '-k', '-t', `=${sessionName}:`, 'sleep 1'], { inherit: false });
+      } catch (err) {
+        thrown = err;
+      }
+      expect(thrown).toBeInstanceOf(Error);
+      expect((thrown as Error).message).toContain('AI_CONDUCTOR_NO_REAL_EXEC');
+      expect((thrown as Error).message).toContain(sessionName);
+    } finally {
+      if (prevFlag === undefined) {
+        delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+      } else {
+        process.env.AI_CONDUCTOR_NO_REAL_EXEC = prevFlag;
+      }
+    }
+  });
+
+  it('does NOT guard non-cc-daemon session names (test-fixture sessions stay usable) (#377)', async () => {
+    const mod = await load();
+    const runner = requireFn(mod, 'defaultTmuxRunner');
+    const prevFlag = process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+    process.env.AI_CONDUCTOR_NO_REAL_EXEC = '1';
+    try {
+      // A respawn-pane against a non-prefixed (absent) session must reach real
+      // tmux and fail with a plain non-zero exit — NOT the kill-switch throw.
+      const result = runner(['respawn-pane', '-k', '-t', '=test-wiring-nope:', 'sleep 1'], {
+        inherit: false,
+      });
+      expect(result.code).not.toBe(0);
+    } finally {
+      if (prevFlag === undefined) {
+        delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+      } else {
+        process.env.AI_CONDUCTOR_NO_REAL_EXEC = prevFlag;
+      }
+    }
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

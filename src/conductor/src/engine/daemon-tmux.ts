@@ -51,12 +51,30 @@ export class TmuxNotInstalledError extends Error {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const defaultTmuxRunner: TmuxRunner = (args, opts) => {
-  if (process.env.AI_CONDUCTOR_NO_REAL_EXEC === '1' && args[0] === 'new-session') {
-    const sIndex = args.indexOf('-s');
-    const sessionName = sIndex >= 0 ? args[sIndex + 1] : undefined;
+  // Kill-switch (#377): under AI_CONDUCTOR_NO_REAL_EXEC=1, refuse any tmux
+  // verb that would put a live process into a real `cc-daemon-*` session —
+  // both fresh creation (new-session) and re-launching a command in an
+  // existing pane (respawn-pane). This guard is deliberately runner-level,
+  // not operation-level: the injectable-runner seam is HOW the unit tests
+  // drive newDetachedSession/respawnPane with cc-daemon names and fake
+  // runners under the suite-wide kill-switch, so only the runner that
+  // actually reaches real tmux may refuse. In-process guards cannot catch a
+  // child process spawned without the env — the suite-level teardown
+  // assertion in test/global-setup.ts is the net for that class. The
+  // intentional real-binary smokes opt out by unsetting the env var around
+  // their real tmux usage.
+  if (
+    process.env.AI_CONDUCTOR_NO_REAL_EXEC === '1' &&
+    (args[0] === 'new-session' || args[0] === 'respawn-pane')
+  ) {
+    const targetFlag = args[0] === 'new-session' ? '-s' : '-t';
+    const tIndex = args.indexOf(targetFlag);
+    const rawTarget = tIndex >= 0 ? args[tIndex + 1] : undefined;
+    // respawn-pane targets look like `=<session>:`; normalize to the session name.
+    const sessionName = rawTarget?.replace(/^=/, '').replace(/:.*$/, '');
     if (sessionName && sessionName.startsWith(SESSION_PREFIX)) {
       throw new Error(
-        `Refusing to create real tmux session "${sessionName}": AI_CONDUCTOR_NO_REAL_EXEC=1 kill-switch is set.`
+        `Refusing to ${args[0]} real tmux session "${sessionName}": AI_CONDUCTOR_NO_REAL_EXEC=1 kill-switch is set.`
       );
     }
   }
