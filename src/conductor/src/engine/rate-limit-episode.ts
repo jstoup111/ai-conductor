@@ -28,16 +28,43 @@ export interface RateLimitEpisode {
   clear(): void;
 }
 
+export interface CreateOptions {
+  /**
+   * Optional function to get the current time (for testing).
+   * Defaults to Date.now().
+   */
+  now?: () => number;
+}
+
 /**
  * Create a new RateLimitEpisode coordinator.
+ * @param options - Optional configuration with a custom "now" function for testing
  * @returns A coordinator object with enter(), active(), and clear() methods
  */
-export function create(): RateLimitEpisode {
+export function create(options?: CreateOptions): RateLimitEpisode {
   let deadline: number | null = null;
+  const getNow = options?.now ?? (() => Date.now());
 
   return {
     enter(untilMs: number): void {
-      deadline = untilMs;
+      // Guard 1: Non-finite values (Infinity, NaN) → clear
+      if (!isFinite(untilMs)) {
+        deadline = null;
+        return;
+      }
+
+      // Guard 2: Past or current deadline → clear
+      const now = getNow();
+      if (untilMs <= now) {
+        deadline = null;
+        return;
+      }
+
+      // Later-deadline-wins: only update if new deadline is later than existing
+      if (deadline === null || untilMs > deadline) {
+        deadline = untilMs;
+      }
+      // else: earlier deadline ignored, no-op
     },
 
     active(nowMs?: number): boolean {
@@ -47,7 +74,7 @@ export function create(): RateLimitEpisode {
       }
 
       // Use provided time or default to current time
-      const now = nowMs ?? Date.now();
+      const now = nowMs ?? getNow();
 
       // Active only if current time is strictly before deadline
       return now < deadline;

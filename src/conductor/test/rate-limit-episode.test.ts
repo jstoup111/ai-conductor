@@ -38,10 +38,10 @@ describe('rate-limit-episode', () => {
     const mod = await load();
     const create = requireFn(mod, 'create');
 
-    const episode = create();
-
     // Fixed timeline for testing
     const baseTime = 1000;
+    const episode = create({ now: () => baseTime });
+
     const deadline = baseTime + 5000; // 5 seconds from base
 
     // Enter the episode with the deadline
@@ -64,7 +64,7 @@ describe('rate-limit-episode', () => {
     const mod = await load();
     const create = requireFn(mod, 'create');
 
-    const episode = create();
+    const episode = create({ now: () => 1000 });
 
     // Without calling enter(), active() should return false
     expect(episode.active(1000)).toBe(false);
@@ -75,8 +75,8 @@ describe('rate-limit-episode', () => {
     const mod = await load();
     const create = requireFn(mod, 'create');
 
-    const episode = create();
     const baseTime = 1000;
+    const episode = create({ now: () => baseTime });
     const deadline = baseTime + 5000;
 
     // Enter an episode
@@ -87,6 +87,111 @@ describe('rate-limit-episode', () => {
     episode.clear();
 
     // Now active should return false
+    expect(episode.active(baseTime)).toBe(false);
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Task 2: Later-deadline-wins + guards (Infinity, NaN, past deadline)
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  it('enter(laterDeadline) extends the deadline when later > existing', async () => {
+    const mod = await load();
+    const create = requireFn(mod, 'create');
+
+    const baseTime = 1000;
+    const episode = create({ now: () => baseTime });
+
+    // Enter with first deadline
+    const deadline1 = baseTime + 5000; // 6000
+    episode.enter(deadline1);
+    expect(episode.active(baseTime)).toBe(true);
+    expect(episode.active(deadline1 - 1)).toBe(true);
+    expect(episode.active(deadline1)).toBe(false);
+
+    // Enter with later deadline — should extend
+    const deadline2 = baseTime + 8000; // 9000 (later than 6000)
+    episode.enter(deadline2);
+    expect(episode.active(deadline1 - 1)).toBe(true); // Still active with old deadline time
+    expect(episode.active(deadline1)).toBe(true); // Now active past old deadline
+    expect(episode.active(deadline2 - 1)).toBe(true);
+    expect(episode.active(deadline2)).toBe(false); // Finally inactive at new deadline
+  });
+
+  it('enter(earlierDeadline) does not truncate — earlier ignored', async () => {
+    const mod = await load();
+    const create = requireFn(mod, 'create');
+
+    const baseTime = 1000;
+    const episode = create({ now: () => baseTime });
+
+    // Enter with later deadline first
+    const deadline1 = baseTime + 8000; // 9000
+    episode.enter(deadline1);
+    expect(episode.active(baseTime)).toBe(true);
+
+    // Try to enter with earlier deadline — should be ignored
+    const deadline2 = baseTime + 3000; // 4000 (earlier than 9000)
+    episode.enter(deadline2);
+
+    // Episode should still use the later deadline (9000)
+    expect(episode.active(baseTime + 3500)).toBe(true); // Would be inactive at 4000 if deadline2 was active
+    expect(episode.active(deadline1 - 1)).toBe(true);
+    expect(episode.active(deadline1)).toBe(false);
+  });
+
+  it('enter(Infinity) clears the episode (non-finite guard)', async () => {
+    const mod = await load();
+    const create = requireFn(mod, 'create');
+
+    const baseTime = 1000;
+    const episode = create({ now: () => baseTime });
+
+    // Enter with valid deadline
+    episode.enter(baseTime + 5000);
+    expect(episode.active(baseTime)).toBe(true);
+
+    // Enter with Infinity — should clear
+    episode.enter(Infinity);
+    expect(episode.active(baseTime)).toBe(false);
+    expect(episode.active(baseTime + 5000)).toBe(false);
+  });
+
+  it('enter(NaN) clears the episode (NaN guard)', async () => {
+    const mod = await load();
+    const create = requireFn(mod, 'create');
+
+    const baseTime = 1000;
+    const episode = create({ now: () => baseTime });
+
+    // Enter with valid deadline
+    episode.enter(baseTime + 5000);
+    expect(episode.active(baseTime)).toBe(true);
+
+    // Enter with NaN — should clear
+    episode.enter(NaN);
+    expect(episode.active(baseTime)).toBe(false);
+    expect(episode.active(baseTime + 5000)).toBe(false);
+  });
+
+  it('enter(pastDeadline) clears the episode (past deadline guard)', async () => {
+    const mod = await load();
+    const create = requireFn(mod, 'create');
+
+    const baseTime = 1000;
+    const episode = create({ now: () => baseTime });
+
+    // Enter with valid deadline
+    episode.enter(baseTime + 5000);
+    expect(episode.active(baseTime)).toBe(true);
+
+    // Enter with past deadline — should clear (not throw)
+    episode.enter(baseTime - 100); // Deadline in the past
+    expect(episode.active(baseTime)).toBe(false);
+
+    // Also test with deadline equal to now
+    episode.enter(baseTime + 5000); // Reset to valid
+    expect(episode.active(baseTime)).toBe(true);
+    episode.enter(baseTime); // Deadline exactly at now
     expect(episode.active(baseTime)).toBe(false);
   });
 });
