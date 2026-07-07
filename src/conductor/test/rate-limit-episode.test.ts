@@ -354,4 +354,182 @@ describe('rate-limit-episode', () => {
     // This is implicit in the test passing without hanging
     expect(clearPromise).toBeDefined();
   });
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Task 4: RateLimitEpisode — escalating re-probe with cap + reset (RED then GREEN)
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  it('nextWaitSeconds() returns supplied baseSeconds on first call', async () => {
+    const mod = await load();
+    const create = requireFn(mod, 'create');
+
+    const episode = create({ now: () => 1000 });
+    const nextWait = episode.nextWaitSeconds(60);
+
+    expect(nextWait).toBe(60);
+  });
+
+  it('nextWaitSeconds() escalates interval on immediate re-entry', async () => {
+    const mod = await load();
+    const create = requireFn(mod, 'create');
+
+    const episode = create({ now: () => 1000 });
+
+    // First call: return base
+    let nextWait = episode.nextWaitSeconds(60);
+    expect(nextWait).toBe(60);
+
+    // Re-entry immediately: escalate (60 * 2^1 = 120)
+    nextWait = episode.nextWaitSeconds(60);
+    expect(nextWait).toBe(120);
+
+    // Re-entry again: escalate more (60 * 2^2 = 240)
+    nextWait = episode.nextWaitSeconds(60);
+    expect(nextWait).toBe(240);
+
+    // Re-entry again: escalate more (60 * 2^3 = 480)
+    nextWait = episode.nextWaitSeconds(60);
+    expect(nextWait).toBe(480);
+  });
+
+  it('nextWaitSeconds() clamps escalation at cap', async () => {
+    const mod = await load();
+    const create = requireFn(mod, 'create');
+
+    const episode = create({ now: () => 1000 });
+    const baseSeconds = 60;
+    const cap = 3600; // 1 hour
+
+    // Escalate until we reach the cap
+    let nextWait = episode.nextWaitSeconds(baseSeconds);
+    expect(nextWait).toBe(60); // 60 * 2^0
+
+    for (let i = 0; i < 10; i++) {
+      nextWait = episode.nextWaitSeconds(baseSeconds);
+    }
+
+    // Should be capped at 3600
+    expect(nextWait).toBeLessThanOrEqual(cap);
+    expect(nextWait).toBeGreaterThan(0);
+
+    // Further calls should stay at or below cap
+    nextWait = episode.nextWaitSeconds(baseSeconds);
+    expect(nextWait).toBeLessThanOrEqual(cap);
+  });
+
+  it('nextWaitSeconds() resets after grace period past deadline', async () => {
+    const mod = await load();
+    const create = requireFn(mod, 'create');
+
+    let currentTime = 1000;
+    const episode = create({ now: () => currentTime });
+    const baseSeconds = 60;
+
+    // First call
+    let nextWait = episode.nextWaitSeconds(baseSeconds);
+    expect(nextWait).toBe(60);
+
+    // Enter an episode with a deadline
+    const deadline = currentTime + 5000; // 5 seconds from base
+    episode.enter(deadline);
+
+    // Re-entry immediately: escalate
+    nextWait = episode.nextWaitSeconds(baseSeconds);
+    expect(nextWait).toBe(120);
+
+    // Re-entry again: escalate more
+    nextWait = episode.nextWaitSeconds(baseSeconds);
+    expect(nextWait).toBe(240);
+
+    // Move time past deadline + grace period (60s = 60000ms grace)
+    currentTime = deadline + 60001; // Just past the grace period
+
+    // Now should reset to base
+    nextWait = episode.nextWaitSeconds(baseSeconds);
+    expect(nextWait).toBe(60);
+  });
+
+  it('nextWaitSeconds() defaults to 60s for non-positive baseSeconds', async () => {
+    const mod = await load();
+    const create = requireFn(mod, 'create');
+
+    const episode = create({ now: () => 1000 });
+
+    // Non-positive should default to 60
+    let nextWait = episode.nextWaitSeconds(0);
+    expect(nextWait).toBe(60);
+
+    // Reset to test negative
+    const episode2 = create({ now: () => 1000 });
+    nextWait = episode2.nextWaitSeconds(-10);
+    expect(nextWait).toBe(60);
+  });
+
+  it('nextWaitSeconds() defaults to 60s for NaN baseSeconds', async () => {
+    const mod = await load();
+    const create = requireFn(mod, 'create');
+
+    const episode = create({ now: () => 1000 });
+
+    // NaN should default to 60
+    const nextWait = episode.nextWaitSeconds(NaN);
+    expect(nextWait).toBe(60);
+  });
+
+  it('nextWaitSeconds() without baseSeconds argument uses default 60s', async () => {
+    const mod = await load();
+    const create = requireFn(mod, 'create');
+
+    const episode = create({ now: () => 1000 });
+
+    // No argument should use default 60
+    let nextWait = episode.nextWaitSeconds();
+    expect(nextWait).toBe(60);
+
+    // Re-entry without argument: should still escalate
+    nextWait = episode.nextWaitSeconds();
+    expect(nextWait).toBe(120);
+
+    // Re-entry without argument: escalate more
+    nextWait = episode.nextWaitSeconds();
+    expect(nextWait).toBe(240);
+  });
+
+  it('clear() resets escalation counter', async () => {
+    const mod = await load();
+    const create = requireFn(mod, 'create');
+
+    const baseTime = 1000;
+    const timers: Array<() => void> = [];
+    const setTimer = (fn: () => void, delayMs: number) => {
+      timers.push(fn);
+      return { cancel: () => timers.splice(timers.indexOf(fn), 1) };
+    };
+
+    const episode = create({ now: () => baseTime, setTimer });
+
+    // Escalate multiple times
+    let nextWait = episode.nextWaitSeconds(60);
+    expect(nextWait).toBe(60);
+
+    nextWait = episode.nextWaitSeconds(60);
+    expect(nextWait).toBe(120);
+
+    nextWait = episode.nextWaitSeconds(60);
+    expect(nextWait).toBe(240);
+
+    // Clear the episode
+    const deadline = baseTime + 5000;
+    episode.enter(deadline);
+    const clearPromise = episode.clear();
+
+    // After clear, escalation should be reset
+    // (next call should return base again)
+    nextWait = episode.nextWaitSeconds(60);
+    expect(nextWait).toBe(60);
+
+    // Fire the timer
+    timers[0]();
+    await clearPromise;
+  });
 });

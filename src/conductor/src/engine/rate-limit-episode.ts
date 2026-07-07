@@ -35,6 +35,16 @@ export interface RateLimitEpisode {
    * @returns Promise that resolves when timer fires or signal aborts
    */
   clear(signal?: AbortSignal): Promise<void>;
+
+  /**
+   * Calculate the next wait interval with escalation.
+   * On first call: returns baseSeconds (or default 60s)
+   * On re-entry before grace period expires: escalates (baseSeconds * 2^counter)
+   * After grace period: resets counter and returns baseSeconds
+   * @param baseSeconds - Optional base wait time in seconds (defaults to 60)
+   * @returns Next wait interval in seconds
+   */
+  nextWaitSeconds(baseSeconds?: number): number;
 }
 
 export interface CreateOptions {
@@ -54,6 +64,11 @@ export interface CreateOptions {
   setTimer?: SetTimer;
 }
 
+// Default constants for escalation
+const DEFAULT_BASE_WAIT = 60; // seconds
+const DEFAULT_ESCALATION_CAP = 3600; // seconds (1 hour)
+const GRACE_PERIOD = 60; // seconds after deadline
+
 /**
  * Create a new RateLimitEpisode coordinator.
  * @param options - Optional configuration with a custom "now" function for testing
@@ -61,6 +76,10 @@ export interface CreateOptions {
  */
 export function create(options?: CreateOptions): RateLimitEpisode {
   let deadline: number | null = null;
+  let escalationStartDeadline: number | null = null; // Track deadline when escalation started
+  let escalationCounter = 0;
+  const escalationCap = DEFAULT_ESCALATION_CAP;
+  const gracePeriod = GRACE_PERIOD * 1000; // Convert to milliseconds
   const getNow = options?.now ?? (() => Date.now());
 
   // Default setTimer uses setTimeout
@@ -91,6 +110,10 @@ export function create(options?: CreateOptions): RateLimitEpisode {
 
       // Later-deadline-wins: only update if new deadline is later than existing
       if (deadline === null || untilMs > deadline) {
+        // If we're setting a new deadline and escalation is active, track it for grace period
+        if (escalationCounter > 0 && escalationStartDeadline === null) {
+          escalationStartDeadline = untilMs; // Track the new deadline for grace period
+        }
         deadline = untilMs;
       }
       // else: earlier deadline ignored, no-op
@@ -110,6 +133,10 @@ export function create(options?: CreateOptions): RateLimitEpisode {
     },
 
     clear(signal?: AbortSignal): Promise<void> {
+      // Reset escalation counter and tracking when clearing
+      escalationCounter = 0;
+      escalationStartDeadline = null;
+
       // If signal is already aborted, resolve immediately
       if (signal?.aborted) {
         return Promise.resolve();
@@ -153,6 +180,46 @@ export function create(options?: CreateOptions): RateLimitEpisode {
         // Clear the deadline
         deadline = null;
       });
+    },
+
+    nextWaitSeconds(baseSeconds?: number): number {
+      // Guard: normalize baseSeconds (non-positive or NaN → use default)
+      let base = baseSeconds ?? DEFAULT_BASE_WAIT;
+      if (!isFinite(base) || base <= 0) {
+        base = DEFAULT_BASE_WAIT;
+      }
+
+      const now = getNow();
+
+      // Check if we're past the grace period
+      // If escalationStartDeadline is set and grace period has expired, reset
+      if (escalationStartDeadline !== null && now > escalationStartDeadline + gracePeriod) {
+        escalationCounter = 0;
+        escalationStartDeadline = null;
+      }
+
+      // On first call (escalationCounter === 0), return base and track the deadline
+      if (escalationCounter === 0) {
+        escalationCounter = 1; // Prepare for next call
+        // If there's an active deadline, use it for grace period tracking
+        if (deadline !== null) {
+          escalationStartDeadline = deadline;
+        }
+        return base;
+      }
+
+      // Calculate escalated wait: base * 2^(escalationCounter - 1)
+      // because we've already incremented it
+      const exponent = escalationCounter;
+      let waitSeconds = base * Math.pow(2, exponent);
+
+      // Clamp at cap
+      waitSeconds = Math.min(waitSeconds, escalationCap);
+
+      // Increment counter for next call
+      escalationCounter += 1;
+
+      return waitSeconds;
     },
   };
 }
