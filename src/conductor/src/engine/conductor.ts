@@ -919,6 +919,21 @@ export class Conductor {
     };
     process.on('SIGINT', sigintHandler);
 
+    // Mutable reference for the current rate-limit wait AbortController, used by
+    // SIGTERM handler to abort in-flight wait when signal is received.
+    let currentWaitController: AbortController | undefined;
+
+    // Save state on SIGTERM before exit and abort in-flight wait if active
+    const sigterm = async () => {
+      // Abort any in-flight rate-limit wait
+      if (currentWaitController) {
+        currentWaitController.abort();
+      }
+      await writeState(this.stateFilePath, state);
+      process.exit(1);
+    };
+    process.on('SIGTERM', sigterm);
+
     // Per-step counter for how many times the user has picked `retry` from the
     // recovery menu in this session. Once it hits MAX_RECOVERY_RETRIES, the
     // UI is told retry is exhausted so the step can't spin forever.
@@ -1101,6 +1116,7 @@ export class Conductor {
             });
             await writeState(this.stateFilePath, state);
             process.off('SIGINT', sigintHandler);
+            process.off('SIGTERM', sigterm);
             return;
           }
           continue;
@@ -1112,6 +1128,7 @@ export class Conductor {
           await this.events.emit({ type: 'gate_blocked', step: step.name, reason: gate.reason });
           await writeState(this.stateFilePath, state);
           process.off('SIGINT', sigintHandler);
+          process.off('SIGTERM', sigterm);
           return;
         }
 
@@ -1128,6 +1145,7 @@ export class Conductor {
             await writeState(this.stateFilePath, state);
             await this.events.emit({ type: 'loop_halt', reason: verdict.reason });
             process.off('SIGINT', sigintHandler);
+            process.off('SIGTERM', sigterm);
             return;
           }
         }
@@ -1230,14 +1248,20 @@ export class Conductor {
               this.rateLimitEpisode.enter(deadline);
             }
 
-            // Create AbortSignal for future SIGTERM handling (Task 11 will use this)
+            // Create AbortSignal for SIGTERM handling (Task 11)
             const controller = new AbortController();
+            currentWaitController = controller;
 
-            // Await episode.clear() or fallback to sleep if episode undefined
-            if (this.rateLimitEpisode && this.rateLimitEpisode.clear) {
-              await this.rateLimitEpisode.clear(controller.signal);
-            } else {
-              await this.sleep(waitMs);
+            try {
+              // Await episode.clear() or fallback to sleep if episode undefined
+              if (this.rateLimitEpisode && this.rateLimitEpisode.clear) {
+                await this.rateLimitEpisode.clear(controller.signal);
+              } else {
+                await this.sleep(waitMs);
+              }
+            } finally {
+              // Clear reference after wait completes
+              currentWaitController = undefined;
             }
 
             // Continue retry loop without burning budget
@@ -1323,6 +1347,7 @@ export class Conductor {
               const prUrl = await this.surfaceRemediationPr(credReason);
               await this.events.emit({ type: 'loop_halt', reason: credReason, prUrl });
               process.off('SIGINT', sigintHandler);
+              process.off('SIGTERM', sigterm);
               return;
             }
 
@@ -1577,6 +1602,7 @@ export class Conductor {
                 const prUrl = await this.surfaceRemediationPr(reason);
                 await this.events.emit({ type: 'loop_halt', reason, prUrl });
                 process.off('SIGINT', sigintHandler);
+                process.off('SIGTERM', sigterm);
                 return;
               }
             }
@@ -1633,6 +1659,7 @@ export class Conductor {
                   const prUrl = await this.surfaceRemediationPr(reason);
                   await this.events.emit({ type: 'loop_halt', reason, prUrl });
                   process.off('SIGINT', sigintHandler);
+                  process.off('SIGTERM', sigterm);
                   return;
                 }
                 // No usable remediation plan → fall through to the fallback below.
@@ -1694,6 +1721,7 @@ export class Conductor {
               const prUrl = await this.surfaceRemediationPr(reason);
               await this.events.emit({ type: 'loop_halt', reason, prUrl });
               process.off('SIGINT', sigintHandler);
+              process.off('SIGTERM', sigterm);
               return;
             }
 
@@ -1764,6 +1792,7 @@ export class Conductor {
                 const prUrl = await this.surfaceRemediationPr(reason);
                 await this.events.emit({ type: 'loop_halt', reason, prUrl });
                 process.off('SIGINT', sigintHandler);
+                process.off('SIGTERM', sigterm);
                 return;
               }
               // No usable remediation plan → fall through to the generic HALT below.
@@ -1805,6 +1834,7 @@ export class Conductor {
             const prUrl = await this.surfaceRemediationPr(`${reason}\n${lastError}`);
             await this.events.emit({ type: 'loop_halt', reason, prUrl });
             process.off('SIGINT', sigintHandler);
+            process.off('SIGTERM', sigterm);
             return;
           }
 
@@ -1858,6 +1888,7 @@ export class Conductor {
 
           await writeState(this.stateFilePath, state);
           process.off('SIGINT', sigintHandler);
+          process.off('SIGTERM', sigterm);
           return;
         }
 
@@ -2023,6 +2054,7 @@ export class Conductor {
             if (response === 'quit') {
               await writeState(this.stateFilePath, state);
               process.off('SIGINT', sigintHandler);
+              process.off('SIGTERM', sigterm);
               return;
             }
             if (response === 'back') {
@@ -2056,6 +2088,7 @@ export class Conductor {
           if (advance === 'halt') {
             await writeState(this.stateFilePath, state);
             process.off('SIGINT', sigintHandler);
+            process.off('SIGTERM', sigterm);
             return;
           }
           if (advance !== null) {
@@ -2065,8 +2098,9 @@ export class Conductor {
         }
       }
 
-      // Clean up SIGINT handler
+      // Clean up SIGINT handler and SIGTERM handler
       process.off('SIGINT', sigintHandler);
+      process.off('SIGTERM', sigterm);
 
       // All steps completed successfully
       await this.events.emit({
@@ -2110,6 +2144,7 @@ export class Conductor {
       await this.events.emit({ type: 'loop_halt', reason, prUrl });
     } finally {
       process.off('SIGINT', sigintHandler);
+      process.off('SIGTERM', sigterm);
 
       // Self-build sandbox teardown (TR-5): the throwaway CLAUDE_CONFIG_DIR is
       // removed on EVERY exit path — success, HALT, or a mid-build crash. teardown
