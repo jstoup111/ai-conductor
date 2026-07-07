@@ -1,6 +1,6 @@
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, rm } from 'node:fs/promises';
 import type { BacklogItem, FeatureOutcome } from './daemon.js';
 import type { LLMProvider } from '../execution/llm-provider.js';
 import { emitEngineerSignal, resolveEngineerDir } from './engineer-store.js';
@@ -119,6 +119,48 @@ export interface FeatureRunnerDeps {
    * and verify throw-isolation (feature result unaffected by sweep errors).
    */
   sweepMergeableLabels?: (opts: SweepOpts) => Promise<void>;
+  /**
+   * Escalate a false-ship outcome by pushing the worktree branch and opening a
+   * draft `needs-remediation` PR, preserving the work on origin. Called when an
+   * outcome converges `DONE` but fails the ship-eligibility guard (finishChoice
+   * is not 'pr', prUrl is null, etc.). The worktree path is the cwd so the
+   * operation has full git context. Returns the escalation result (prUrl on
+   * success, {} on push failure — a best-effort best documented contract for
+   * FR-7 degradation). Optional; if absent, the failed-ship branch skips
+   * escalation and merely halts.
+   */
+  escalateBuildFailure?: (opts: {
+    projectRoot: string;
+    failureReason: string;
+  }) => Promise<{ prUrl?: string }>;
+}
+
+/**
+ * Verify that an outcome is a legitimate ship: `done=true` AND `finishChoice='pr'`
+ * AND `prUrl` is non-null. This is the only outcome eligible for the ship side
+ * effects (markProcessed, cleanup, enroll). Any other done-outcome is a false
+ * ship that requires halting and remediation escalation (#337).
+ */
+function isVerifiedShip(outcome: WorktreeOutcome): boolean {
+  return outcome.done === true && outcome.finishChoice === 'pr' && outcome.prUrl != null;
+}
+
+/**
+ * Generate a reason string explaining why an outcome is a false ship, naming the
+ * specific contradiction (missing finishChoice, finishChoice != 'pr', prUrl null).
+ * Used in the HALT marker and escalation reason.
+ */
+function failureReasonForFalseShip(outcome: WorktreeOutcome): string {
+  if (!outcome.finishChoice) {
+    return 'done without a finish-choice marker (expected finishChoice: "pr")';
+  }
+  if (outcome.finishChoice !== 'pr') {
+    return `done without a verified PR ship — finish choice is "${outcome.finishChoice}" not "pr"`;
+  }
+  if (!outcome.prUrl) {
+    return 'done without a verified PR ship — prUrl is null or missing (expected after successful push)';
+  }
+  return 'done outcome failed ship eligibility guard (unknown reason)';
 }
 
 /**
@@ -172,53 +214,99 @@ export function makeRunFeature(
       }
 
       if (outcome.done) {
-        // FR-16: clear-on-success — verify-after-write cleanup of halt presentation
-        // markers (label, draft status, body marker). Returns 'confirmed' on success,
-        // 'partial' on any residual markers. Best-effort: logged and swallowed so
-        // enroll + teardown still run regardless.
-        if (outcome.prUrl && deps.projectRoot) {
-          try {
-            const cleanupResult = await cleanupHaltPresentation(gh, deps.projectRoot, outcome.prUrl, log);
-            log(`[daemon-runner] cleanup result: ${cleanupResult}`);
-          } catch (err) {
-            log(`[daemon-runner] clear-on-success error: ${err instanceof Error ? err.message : String(err)}`);
+        if (isVerifiedShip(outcome)) {
+          // Happy path: outcome is a verified ship (done=true, finishChoice='pr', prUrl != null).
+          // Run the existing ship side effects.
+
+          // FR-16: clear-on-success — verify-after-write cleanup of halt presentation
+          // markers (label, draft status, body marker). Returns 'confirmed' on success,
+          // 'partial' on any residual markers. Best-effort: logged and swallowed so
+          // enroll + teardown still run regardless.
+          if (outcome.prUrl && deps.projectRoot) {
+            try {
+              const cleanupResult = await cleanupHaltPresentation(gh, deps.projectRoot, outcome.prUrl, log);
+              log(`[daemon-runner] cleanup result: ${cleanupResult}`);
+            } catch (err) {
+              log(
+                `[daemon-runner] clear-on-success error: ${err instanceof Error ? err.message : String(err)}`,
+              );
+            }
           }
+
+          // FR-9: enroll the shipped PR in the mergeable watch registry BEFORE
+          // teardown (worktree path still valid for context). Best-effort: enroll
+          // internally swallows; the outer wrap logs any re-throw so teardown still
+          // runs.
+          if (outcome.prUrl && deps.projectRoot) {
+            try {
+              await enroll(deps.projectRoot, {
+                prUrl: outcome.prUrl,
+                slug: item.slug,
+                repoCwd: deps.projectRoot,
+              });
+            } catch (err) {
+              log(`[daemon-runner] enrollWatch error: ${err instanceof Error ? err.message : String(err)}`);
+            }
+          }
+
+          await deps.markProcessed(item.slug, outcome.prUrl);
+
+          // #204/#205: the durable `.docs/shipped/<slug>.md` record is NOT
+          // written here — `/finish` commits it on the IMPLEMENTATION branch
+          // (via `conduct shipped-record`) before the branch's final push, so
+          // the human merge lands code + shipped-fact atomically (ADR
+          // adr-2026-07-03-committed-shipped-record-dispatch-dedup, Decision 1).
+          // If the finish flow failed to write it, dedup degrades to the
+          // `.daemon/processed/` ledger marker written above.
+
+          await deps.teardownWorktree(worktree, false);
+          log(`✓ ${item.slug} shipped${outcome.prUrl ? ` → ${outcome.prUrl}` : ''}`);
+          // FR-14: sweep mergeable labels after feature completes.
+          await maybeSweep();
+          return {
+            slug: item.slug,
+            status: 'done',
+            prUrl: outcome.prUrl,
+            costTokens: outcome.costTokens,
+          };
         }
 
-        // FR-9: enroll the shipped PR in the mergeable watch registry BEFORE
-        // teardown (worktree path still valid for context). Best-effort: enroll
-        // internally swallows; the outer wrap logs any re-throw so teardown still
-        // runs.
-        if (outcome.prUrl && deps.projectRoot) {
+        // False-ship case: outcome converged DONE but failed the ship-eligibility guard.
+        // #337: halting ineligible outcomes prevents silent locked-up features.
+        // Remove the DONE marker (the gate loop wrote it prematurely), write HALT with a
+        // reason naming the contradiction, call escalateBuildFailure (best-effort — push
+        // failure logs and does not disrupt), keep the worktree, teardown with keep=true,
+        // and report halted.
+        const reason = failureReasonForFalseShip(outcome);
+        const doneMarker = join(worktree.path, '.pipeline', 'DONE');
+        await rm(doneMarker, { force: true }).catch(() => {});
+        await writeErrorHalt(worktree, reason);
+
+        // Escalate the false ship: push the branch and open a draft needs-remediation PR
+        // (so even the failure path preserves the work on origin). Best-effort: logs any
+        // error internally. Optional: if no escalateBuildFailure is present, the HALT
+        // marker and kept worktree still protect the work.
+        if (deps.escalateBuildFailure) {
           try {
-            await enroll(deps.projectRoot, {
-              prUrl: outcome.prUrl,
-              slug: item.slug,
-              repoCwd: deps.projectRoot,
+            await deps.escalateBuildFailure({
+              projectRoot: worktree.path,
+              failureReason: reason,
             });
           } catch (err) {
-            log(`[daemon-runner] enrollWatch error: ${err instanceof Error ? err.message : String(err)}`);
+            log(
+              `[daemon-runner] escalateBuildFailure error: ${err instanceof Error ? err.message : String(err)}`,
+            );
           }
         }
 
-        await deps.markProcessed(item.slug, outcome.prUrl);
-
-        // #204/#205: the durable `.docs/shipped/<slug>.md` record is NOT
-        // written here — `/finish` commits it on the IMPLEMENTATION branch
-        // (via `conduct shipped-record`) before the branch's final push, so
-        // the human merge lands code + shipped-fact atomically (ADR
-        // adr-2026-07-03-committed-shipped-record-dispatch-dedup, Decision 1).
-        // If the finish flow failed to write it, dedup degrades to the
-        // `.daemon/processed/` ledger marker written above.
-
-        await deps.teardownWorktree(worktree, false);
-        log(`✓ ${item.slug} shipped${outcome.prUrl ? ` → ${outcome.prUrl}` : ''}`);
-        // FR-14: sweep mergeable labels after feature completes.
+        await deps.teardownWorktree(worktree, true);
+        log(`✋ ${item.slug} false-ship halted — worktree kept (${reason})`);
+        // FR-14: sweep mergeable labels after feature completes (failed-ship).
         await maybeSweep();
         return {
           slug: item.slug,
-          status: 'done',
-          prUrl: outcome.prUrl,
+          status: 'halted',
+          reason,
           costTokens: outcome.costTokens,
         };
       }

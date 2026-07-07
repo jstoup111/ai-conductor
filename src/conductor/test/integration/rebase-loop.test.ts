@@ -7,9 +7,10 @@ import { promisify } from 'node:util';
 
 import type { ConductState } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
-import { writeState } from '../../src/engine/state.js';
+import { writeState, readState } from '../../src/engine/state.js';
 import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
+import type { GitRunner } from '../../src/engine/pr-labels.js';
 
 // END-TO-END acceptance specs for the Phase 9.0 daemon rebase-on-latest step.
 //
@@ -138,6 +139,10 @@ describe('integration/rebase-loop', () => {
   });
 
   function conductorWith(runner: StepRunner): Conductor {
+    const fakeGit: GitRunner = async (args) =>
+      args.includes('--symbolic-full-name')
+        ? { stdout: 'refs/remotes/origin/feature/x\n' }
+        : { stdout: '' };
     return new Conductor({
       stateFilePath: statePath,
       stepRunner: runner,
@@ -152,6 +157,7 @@ describe('integration/rebase-loop', () => {
       mode: 'auto',
       fromStep: 'build',
       maxRetries: 1,
+      git: fakeGit,
     });
   }
 
@@ -182,7 +188,13 @@ describe('integration/rebase-loop', () => {
         '# As-Built Review\n\nVerdict: APPROVED\n',
       );
     } else if (step === 'finish') {
-      await writeFile(join(dir, '.pipeline/finish-choice'), 'keep');
+      await writeFile(join(dir, '.pipeline/finish-choice'), 'pr\n');
+      const stateResult = await readState(statePath);
+      const state = stateResult.ok ? stateResult.value : {};
+      state.pr_url = 'https://github.com/org/repo/pull/1';
+      await writeState(statePath, state);
+      // Also write to the path the gate reads from
+      await writeState(join(dir, '.pipeline/conduct-state.json'), state);
     }
     return { success: true };
   }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { makeRunFeature, type FeatureRunnerDeps, type WorktreeOutcome } from '../../src/engine/daemon-runner.js';
@@ -7,14 +7,28 @@ import type { BacklogItem } from '../../src/engine/daemon.js';
 
 const ITEM: BacklogItem = { slug: 'feat-x' };
 
+interface TestRecorder {
+  teardownKeep?: boolean;
+  processed?: boolean;
+  processedCalls?: Array<{ slug: string; prUrl?: string }>;
+  cleanupCalls?: Array<{ prUrl: string }>;
+  enrollCalls?: Array<{ prUrl: string; slug: string }>;
+  threw?: boolean;
+}
+
 function deps(
   outcome: WorktreeOutcome,
-  rec: { teardownKeep?: boolean; processed?: boolean; threw?: boolean } = {},
+  rec: TestRecorder = {},
   opts: { throwIn?: keyof FeatureRunnerDeps } = {},
 ): FeatureRunnerDeps {
   const maybeThrow = (k: keyof FeatureRunnerDeps) => {
     if (opts.throwIn === k) throw new Error(`fail in ${k}`);
   };
+  // Ensure arrays are initialized
+  if (!rec.processedCalls) rec.processedCalls = [];
+  if (!rec.enrollCalls) rec.enrollCalls = [];
+  if (!rec.cleanupCalls) rec.cleanupCalls = [];
+
   return {
     createWorktree: async (slug) => {
       maybeThrow('createWorktree');
@@ -27,8 +41,9 @@ function deps(
     teardownWorktree: async (_wt, keep) => {
       rec.teardownKeep = keep;
     },
-    markProcessed: async () => {
+    markProcessed: async (slug: string, prUrl?: string) => {
       rec.processed = true;
+      rec.processedCalls!.push({ slug, prUrl });
     },
     // Non-daemon path: emission never runs, so these are inert but keep the
     // deps object type-complete.
@@ -38,6 +53,16 @@ function deps(
       invokeInteractive: async () => {},
     },
     project: 'test-project',
+    projectRoot: '/proj',
+    runGh: {
+      async invoke() {
+        return { stdout: '', exitCode: 0 };
+      },
+      async invokeInteractive() {},
+    },
+    enrollWatch: async (projectRoot: string, entry: any) => {
+      rec.enrollCalls!.push({ prUrl: entry.prUrl, slug: entry.slug });
+    },
   };
 }
 
@@ -45,12 +70,43 @@ describe('engine/daemon-runner — makeRunFeature', () => {
   it('done → marks processed, removes the worktree, reports prUrl', async () => {
     const rec: { teardownKeep?: boolean; processed?: boolean } = {};
     const run = makeRunFeature(
-      deps({ done: true, halted: false, prUrl: 'http://pr/1', costTokens: 42 }, rec),
+      deps(
+        {
+          done: true,
+          halted: false,
+          finishChoice: 'pr',
+          prUrl: 'http://pr/1',
+          costTokens: 42,
+        },
+        rec,
+      ),
     );
     const out = await run(ITEM);
     expect(out.status).toBe('done');
     expect(out.prUrl).toBe('http://pr/1');
     expect(out.costTokens).toBe(42);
+    expect(rec.processed).toBe(true);
+    expect(rec.teardownKeep).toBe(false); // removed on success
+  });
+
+  it('done with verified prUrl and finishChoice="pr" → ships (happy path)', async () => {
+    const rec: { teardownKeep?: boolean; processed?: boolean } = {};
+    const run = makeRunFeature(
+      deps(
+        {
+          done: true,
+          halted: false,
+          finishChoice: 'pr',
+          prUrl: 'https://github.com/owner/repo/pull/123',
+          costTokens: 50,
+        },
+        rec,
+      ),
+    );
+    const out = await run(ITEM);
+    expect(out.status).toBe('done');
+    expect(out.prUrl).toBe('https://github.com/owner/repo/pull/123');
+    expect(out.costTokens).toBe(50);
     expect(rec.processed).toBe(true);
     expect(rec.teardownKeep).toBe(false); // removed on success
   });
@@ -103,7 +159,15 @@ describe('engine/daemon-runner — makeRunFeature', () => {
       opts: { prepareThrows?: boolean } = {},
       rec: { teardownKeep?: boolean } = {},
     ): FeatureRunnerDeps {
-      const base = deps({ done: true, halted: false, prUrl: 'http://pr/1' }, rec);
+      const base = deps(
+        {
+          done: true,
+          halted: false,
+          finishChoice: 'pr',
+          prUrl: 'http://pr/1',
+        },
+        rec,
+      );
       return {
         ...base,
         createWorktree: async (slug) => {
@@ -141,7 +205,14 @@ describe('engine/daemon-runner — makeRunFeature', () => {
     it('writes a diagnostic .pipeline/HALT into the worktree on an error (so it is not opaque)', async () => {
       const wt = await mkdtemp(join(tmpdir(), 'wt-err-'));
       try {
-        const base = deps({ done: true, halted: false }, {});
+        const base = deps(
+          {
+            done: true,
+            halted: false,
+            finishChoice: 'pr',
+          },
+          {},
+        );
         const run = makeRunFeature({
           ...base,
           createWorktree: async (slug) => ({ path: wt, branch: `feat/${slug}` }),
@@ -164,9 +235,470 @@ describe('engine/daemon-runner — makeRunFeature', () => {
     it('a deps object without prepareWorktree builds normally (backward compatible)', async () => {
       // The existing deps() helper ships no prepareWorktree — the feature must
       // still build, proving the step is genuinely opt-in.
-      const run = makeRunFeature(deps({ done: true, halted: false, prUrl: 'http://pr/1' }));
+      const run = makeRunFeature(
+        deps({
+          done: true,
+          halted: false,
+          finishChoice: 'pr',
+          prUrl: 'http://pr/1',
+        }),
+      );
       const out = await run(ITEM);
       expect(out.status).toBe('done');
+    });
+  });
+
+  describe('false-ship path (Task 10: #337)', () => {
+    // Story 3 acceptance criteria: outcome.done=true but fails ship-eligibility guard
+    // (finishChoice != 'pr' or prUrl null or finishChoice undefined).
+    // Expected: HALT written, DONE deleted, worktree kept, markProcessed NOT called,
+    // status='halted', reason names the contradiction.
+
+    it('done with null prUrl → halted (Story 3, null prUrl)', async () => {
+      const wt = await mkdtemp(join(tmpdir(), 'wt-false-ship-'));
+      try {
+        const rec: { teardownKeep?: boolean; processed?: boolean; escalated?: boolean } = {};
+        const run = makeRunFeature({
+          ...deps(
+            {
+              done: true,
+              halted: false,
+              finishChoice: 'pr',
+              prUrl: undefined, // null prUrl fails the guard
+              costTokens: 30,
+            },
+            rec,
+          ),
+          createWorktree: async (slug) => ({ path: wt, branch: `feat/${slug}` }),
+          escalateBuildFailure: async () => {
+            rec.escalated = true;
+            return {};
+          },
+        });
+        const out = await run(ITEM);
+        expect(out.status).toBe('halted');
+        expect(out.reason).toMatch(/prUrl is null/);
+        expect(out.costTokens).toBe(30);
+        expect(rec.processed).toBeUndefined(); // markProcessed NOT called
+        expect(rec.teardownKeep).toBe(true); // worktree kept
+        expect(rec.escalated).toBe(true); // escalateBuildFailure called
+        // HALT marker must exist
+        const halt = await readFile(join(wt, '.pipeline', 'HALT'), 'utf-8');
+        expect(halt).toMatch(/prUrl is null/);
+      } finally {
+        await rm(wt, { recursive: true, force: true });
+      }
+    });
+
+    it('done with undefined finishChoice → halted (Story 3, missing finishChoice)', async () => {
+      const wt = await mkdtemp(join(tmpdir(), 'wt-false-ship-'));
+      try {
+        const rec: { teardownKeep?: boolean; processed?: boolean } = {};
+        const run = makeRunFeature({
+          ...deps(
+            {
+              done: true,
+              halted: false,
+              finishChoice: undefined, // missing finishChoice fails the guard
+              prUrl: 'https://github.com/owner/repo/pull/123',
+              costTokens: 25,
+            },
+            rec,
+          ),
+          createWorktree: async (slug) => ({ path: wt, branch: `feat/${slug}` }),
+        });
+        const out = await run(ITEM);
+        expect(out.status).toBe('halted');
+        expect(out.reason).toMatch(/without a finish-choice marker/);
+        expect(rec.processed).toBeUndefined(); // markProcessed NOT called
+        expect(rec.teardownKeep).toBe(true); // worktree kept
+        // HALT marker must exist
+        const halt = await readFile(join(wt, '.pipeline', 'HALT'), 'utf-8');
+        expect(halt).toMatch(/without a finish-choice marker/);
+      } finally {
+        await rm(wt, { recursive: true, force: true });
+      }
+    });
+
+    it('done with finishChoice="keep" → halted', async () => {
+      const wt = await mkdtemp(join(tmpdir(), 'wt-false-ship-'));
+      try {
+        const rec: { teardownKeep?: boolean; processed?: boolean } = {};
+        const run = makeRunFeature({
+          ...deps(
+            {
+              done: true,
+              halted: false,
+              finishChoice: 'keep', // not 'pr' fails the guard
+              prUrl: 'https://github.com/owner/repo/pull/123',
+            },
+            rec,
+          ),
+          createWorktree: async (slug) => ({ path: wt, branch: `feat/${slug}` }),
+        });
+        const out = await run(ITEM);
+        expect(out.status).toBe('halted');
+        expect(out.reason).toMatch(/finish choice is "keep" not "pr"/);
+        expect(rec.processed).toBeUndefined();
+        expect(rec.teardownKeep).toBe(true);
+      } finally {
+        await rm(wt, { recursive: true, force: true });
+      }
+    });
+
+    it('false-ship deletes the DONE marker if it exists', async () => {
+      const wt = await mkdtemp(join(tmpdir(), 'wt-false-ship-'));
+      try {
+        // Pre-create the DONE marker (simulating an outcome that converged DONE before the guard)
+        await mkdir(join(wt, '.pipeline'), { recursive: true });
+        await writeFile(join(wt, '.pipeline', 'DONE'), 'marked\n', 'utf-8');
+
+        const rec: { teardownKeep?: boolean } = {};
+        const run = makeRunFeature({
+          ...deps(
+            {
+              done: true,
+              halted: false,
+              finishChoice: 'pr',
+              prUrl: undefined, // fails guard
+            },
+            rec,
+          ),
+          createWorktree: async (slug) => ({ path: wt, branch: `feat/${slug}` }),
+        });
+        const out = await run(ITEM);
+        expect(out.status).toBe('halted');
+
+        // DONE marker must be deleted (conflict resolution)
+        try {
+          await readFile(join(wt, '.pipeline', 'DONE'), 'utf-8');
+          throw new Error('DONE marker should have been deleted');
+        } catch (err) {
+          if ((err as any).code !== 'ENOENT') throw err;
+        }
+
+        // HALT marker must exist
+        const halt = await readFile(join(wt, '.pipeline', 'HALT'), 'utf-8');
+        expect(halt).toBeTruthy();
+      } finally {
+        await rm(wt, { recursive: true, force: true });
+      }
+    });
+
+    it('false-ship calls escalateBuildFailure with proper context', async () => {
+      const wt = await mkdtemp(join(tmpdir(), 'wt-false-ship-'));
+      try {
+        const escalateCalls: Array<{ projectRoot: string; failureReason: string }> = [];
+        const run = makeRunFeature({
+          ...deps(
+            {
+              done: true,
+              halted: false,
+              finishChoice: 'pr',
+              prUrl: undefined,
+            },
+            {},
+          ),
+          createWorktree: async (slug) => ({ path: wt, branch: `feat/${slug}` }),
+          escalateBuildFailure: async (opts) => {
+            escalateCalls.push(opts);
+            return {};
+          },
+        });
+        await run(ITEM);
+        expect(escalateCalls).toHaveLength(1);
+        expect(escalateCalls[0].projectRoot).toBe(wt);
+        expect(escalateCalls[0].failureReason).toMatch(/prUrl is null/);
+      } finally {
+        await rm(wt, { recursive: true, force: true });
+      }
+    });
+
+    it('false-ship continues even if escalateBuildFailure throws', async () => {
+      const wt = await mkdtemp(join(tmpdir(), 'wt-false-ship-'));
+      try {
+        const rec: { teardownKeep?: boolean; processed?: boolean } = {};
+        const run = makeRunFeature({
+          ...deps(
+            {
+              done: true,
+              halted: false,
+              finishChoice: 'pr',
+              prUrl: undefined,
+            },
+            rec,
+          ),
+          createWorktree: async (slug) => ({ path: wt, branch: `feat/${slug}` }),
+          escalateBuildFailure: async () => {
+            throw new Error('push failed');
+          },
+        });
+        const out = await run(ITEM);
+        // Must not throw; must complete the halted path
+        expect(out.status).toBe('halted');
+        expect(rec.teardownKeep).toBe(true); // still kept
+        // HALT marker still written
+        const halt = await readFile(join(wt, '.pipeline', 'HALT'), 'utf-8');
+        expect(halt).toBeTruthy();
+      } finally {
+        await rm(wt, { recursive: true, force: true });
+      }
+    });
+
+    it('false-ship runs maybeSweep (FR-14: sweep after every completion)', async () => {
+      const wt = await mkdtemp(join(tmpdir(), 'wt-false-ship-'));
+      try {
+        const sweepCalls: number[] = [];
+        const run = makeRunFeature({
+          ...deps(
+            {
+              done: true,
+              halted: false,
+              finishChoice: 'pr',
+              prUrl: undefined,
+            },
+            {},
+          ),
+          createWorktree: async (slug) => ({ path: wt, branch: `feat/${slug}` }),
+          projectRoot: '/proj',
+          sweepMergeableLabels: async () => {
+            sweepCalls.push(Date.now());
+          },
+        });
+        const out = await run(ITEM);
+        expect(out.status).toBe('halted');
+        expect(sweepCalls).toHaveLength(1); // sweep called
+      } finally {
+        await rm(wt, { recursive: true, force: true });
+      }
+    });
+
+    describe('Task 12: ship side effects skipped on failed ship (Story 3 + Story 5)', () => {
+      // Story 3 acceptance criteria: when false-ship path runs, NO ship side effects occur.
+      // Ship side effects are: markProcessed, removeLabel/clearOnSuccess, enrollWatch.
+      // Only the live (verified) ship path should call these.
+
+      it('false-ship with null prUrl: zero markProcessed calls (Story 3)', async () => {
+        const wt = await mkdtemp(join(tmpdir(), 'wt-false-ship-'));
+        try {
+          const rec: TestRecorder = {};
+          const run = makeRunFeature({
+            ...deps(
+              {
+                done: true,
+                halted: false,
+                finishChoice: 'pr',
+                prUrl: undefined, // fails ship guard
+              },
+              rec,
+            ),
+            createWorktree: async (slug) => ({ path: wt, branch: `feat/${slug}` }),
+          });
+          const out = await run(ITEM);
+          expect(out.status).toBe('halted');
+          // Verification: markProcessed must never be called on false-ship
+          expect(rec.processedCalls).toHaveLength(0);
+          expect(rec.processed).toBeUndefined();
+        } finally {
+          await rm(wt, { recursive: true, force: true });
+        }
+      });
+
+      it('false-ship with null prUrl: zero enrollWatch calls (Story 3)', async () => {
+        const wt = await mkdtemp(join(tmpdir(), 'wt-false-ship-'));
+        try {
+          const rec: TestRecorder = {};
+          const run = makeRunFeature({
+            ...deps(
+              {
+                done: true,
+                halted: false,
+                finishChoice: 'pr',
+                prUrl: undefined, // fails ship guard
+              },
+              rec,
+            ),
+            createWorktree: async (slug) => ({ path: wt, branch: `feat/${slug}` }),
+          });
+          const out = await run(ITEM);
+          expect(out.status).toBe('halted');
+          // Verification: enrollWatch must never be called on false-ship
+          expect(rec.enrollCalls).toHaveLength(0);
+        } finally {
+          await rm(wt, { recursive: true, force: true });
+        }
+      });
+
+      it('false-ship with missing finishChoice: zero markProcessed calls (Story 3)', async () => {
+        const wt = await mkdtemp(join(tmpdir(), 'wt-false-ship-'));
+        try {
+          const rec: TestRecorder = {};
+          const run = makeRunFeature({
+            ...deps(
+              {
+                done: true,
+                halted: false,
+                finishChoice: undefined, // fails ship guard
+                prUrl: 'https://github.com/owner/repo/pull/123',
+              },
+              rec,
+            ),
+            createWorktree: async (slug) => ({ path: wt, branch: `feat/${slug}` }),
+          });
+          const out = await run(ITEM);
+          expect(out.status).toBe('halted');
+          // Verification: markProcessed must never be called on false-ship
+          expect(rec.processedCalls).toHaveLength(0);
+          expect(rec.processed).toBeUndefined();
+        } finally {
+          await rm(wt, { recursive: true, force: true });
+        }
+      });
+
+      it('false-ship with missing finishChoice: zero enrollWatch calls (Story 3)', async () => {
+        const wt = await mkdtemp(join(tmpdir(), 'wt-false-ship-'));
+        try {
+          const rec: TestRecorder = {};
+          const run = makeRunFeature({
+            ...deps(
+              {
+                done: true,
+                halted: false,
+                finishChoice: undefined, // fails ship guard
+                prUrl: 'https://github.com/owner/repo/pull/123',
+              },
+              rec,
+            ),
+            createWorktree: async (slug) => ({ path: wt, branch: `feat/${slug}` }),
+          });
+          const out = await run(ITEM);
+          expect(out.status).toBe('halted');
+          // Verification: enrollWatch must never be called on false-ship
+          expect(rec.enrollCalls).toHaveLength(0);
+        } finally {
+          await rm(wt, { recursive: true, force: true });
+        }
+      });
+
+      it('false-ship with finishChoice="keep": zero markProcessed calls (Story 3)', async () => {
+        const wt = await mkdtemp(join(tmpdir(), 'wt-false-ship-'));
+        try {
+          const rec: TestRecorder = {};
+          const run = makeRunFeature({
+            ...deps(
+              {
+                done: true,
+                halted: false,
+                finishChoice: 'keep', // fails ship guard
+                prUrl: 'https://github.com/owner/repo/pull/123',
+              },
+              rec,
+            ),
+            createWorktree: async (slug) => ({ path: wt, branch: `feat/${slug}` }),
+          });
+          const out = await run(ITEM);
+          expect(out.status).toBe('halted');
+          // Verification: markProcessed must never be called on false-ship
+          expect(rec.processedCalls).toHaveLength(0);
+          expect(rec.processed).toBeUndefined();
+        } finally {
+          await rm(wt, { recursive: true, force: true });
+        }
+      });
+
+      it('false-ship with finishChoice="keep": zero enrollWatch calls (Story 3)', async () => {
+        const wt = await mkdtemp(join(tmpdir(), 'wt-false-ship-'));
+        try {
+          const rec: TestRecorder = {};
+          const run = makeRunFeature({
+            ...deps(
+              {
+                done: true,
+                halted: false,
+                finishChoice: 'keep', // fails ship guard
+                prUrl: 'https://github.com/owner/repo/pull/123',
+              },
+              rec,
+            ),
+            createWorktree: async (slug) => ({ path: wt, branch: `feat/${slug}` }),
+          });
+          const out = await run(ITEM);
+          expect(out.status).toBe('halted');
+          // Verification: enrollWatch must never be called on false-ship
+          expect(rec.enrollCalls).toHaveLength(0);
+        } finally {
+          await rm(wt, { recursive: true, force: true });
+        }
+      });
+
+      it('happy-ship path calls markProcessed with non-null prUrl (Story 5 invariant)', async () => {
+        const wt = await mkdtemp(join(tmpdir(), 'wt-happy-ship-'));
+        try {
+          const rec: TestRecorder = {};
+          const prUrl = 'https://github.com/owner/repo/pull/999';
+          const run = makeRunFeature({
+            ...deps(
+              {
+                done: true,
+                halted: false,
+                finishChoice: 'pr',
+                prUrl, // verified ship
+              },
+              rec,
+            ),
+            createWorktree: async (slug) => ({ path: wt, branch: `feat/${slug}` }),
+          });
+          const out = await run(ITEM);
+          expect(out.status).toBe('done');
+          // Verification: markProcessed MUST be called exactly once with non-null prUrl
+          expect(rec.processedCalls).toHaveLength(1);
+          expect(rec.processedCalls![0].prUrl).toBe(prUrl);
+          expect(rec.processedCalls![0].prUrl).not.toBeNull();
+          expect(rec.processedCalls![0].prUrl).not.toBeUndefined();
+        } finally {
+          await rm(wt, { recursive: true, force: true });
+        }
+      });
+
+      it('happy-ship path calls enrollWatch with verified prUrl (Story 5)', async () => {
+        const wt = await mkdtemp(join(tmpdir(), 'wt-happy-ship-'));
+        try {
+          const rec: TestRecorder = {};
+          const prUrl = 'https://github.com/owner/repo/pull/888';
+          const run = makeRunFeature({
+            ...deps(
+              {
+                done: true,
+                halted: false,
+                finishChoice: 'pr',
+                prUrl, // verified ship
+              },
+              rec,
+            ),
+            createWorktree: async (slug) => ({ path: wt, branch: `feat/${slug}` }),
+          });
+          const out = await run(ITEM);
+          expect(out.status).toBe('done');
+          // Verification: enrollWatch MUST be called with verified prUrl
+          expect(rec.enrollCalls).toHaveLength(1);
+          expect(rec.enrollCalls![0].prUrl).toBe(prUrl);
+          expect(rec.enrollCalls![0].slug).toBe('feat-x');
+        } finally {
+          await rm(wt, { recursive: true, force: true });
+        }
+      });
+
+      // Story 5 scope note exemption: repairProcessed is exempt from the null-prUrl guard
+      // because it drives a cache repair from a committed shipped record already merged
+      // on the base branch. Its null prUrl marks a malformed-but-proven record (ADR §2,
+      // scope note). This test documents the exception for future refactors.
+      it('repairProcessed exemption documented: scope note permits null prUrl in repair-path markers (Story 5)', () => {
+        // This is a documentation test — it clarifies that the live-path guard
+        // (markProcessed must be called with non-null prUrl) does NOT apply to
+        // repairProcessed, which is driven by committed evidence already on the branch.
+        // See ADR adr-2026-07-06-daemon-false-ship-guard §2, scope note (amended).
+        expect(true).toBe(true); // placeholder assertion
+      });
     });
   });
 });
