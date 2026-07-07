@@ -1073,4 +1073,70 @@ TIER: M`,
       warnSpy.mockRestore();
     });
   });
+
+  // ── build_review one-shot grader dispatch (jstoup111/ai-conductor#324, Task 11) ──
+  // build_review is a fresh, isolated grader session — never resumes the
+  // conductor's own session (constructor sessionId 'session-1'). Follows the
+  // resolveRebaseConflict one-shot pattern (step-runners.ts:594-610).
+  describe('build_review one-shot dispatch', () => {
+    let dir: string;
+    let planPath: string;
+
+    beforeEach(async () => {
+      dir = await mkdtemp(join(tmpdir(), 'build-review-runner-'));
+      planPath = join(dir, 'plan.md');
+      await writeFile(planPath, '# Plan\n\nDo the thing.\n', 'utf-8');
+    });
+
+    afterEach(async () => {
+      await rm(dir, { recursive: true, force: true });
+    });
+
+    function scriptedGit() {
+      const git = async (args: string[]) => {
+        if (args[0] === 'symbolic-ref') return { exitCode: 0, stdout: 'refs/remotes/origin/main\n', stderr: '' };
+        if (args[0] === 'merge-base') return { exitCode: 0, stdout: 'abc123\n', stderr: '' };
+        if (args[0] === 'diff') return { exitCode: 0, stdout: 'diff --git a/x b/x\n', stderr: '' };
+        return { exitCode: 1, stdout: '', stderr: '' };
+      };
+      return git;
+    }
+
+    it('dispatches with a fresh uuid and resume:false, never the constructor session', async () => {
+      const invoke = vi.fn().mockResolvedValue({ success: true, output: '{"verdict":"PASS"}', exitCode: 0 });
+      const provider: LLMProvider = { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) };
+      const runner = new DefaultStepRunner(provider, 'session-1', dir, {
+        gitRunner: scriptedGit(),
+        planPath,
+      });
+
+      const result = await runner.run('build_review', emptyState);
+
+      expect(result.success).toBe(true);
+      expect(invoke).toHaveBeenCalledOnce();
+      const opts = invoke.mock.calls[0][0] as InvokeOptions;
+      expect(opts.resume).toBe(false);
+      expect(opts.sessionId).not.toBe('session-1');
+      // A real uuid, not empty/undefined.
+      expect(opts.sessionId).toMatch(/^[0-9a-f-]{36}$/);
+    });
+
+    it('ladder-exhausted (all retries fail) reports step failure, never PASS', async () => {
+      const invoke = vi.fn().mockResolvedValue({
+        success: false,
+        output: 'no models available',
+        exitCode: 1,
+        modelUnavailable: true,
+      });
+      const provider: LLMProvider = { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) };
+      const runner = new DefaultStepRunner(provider, 'session-1', dir, {
+        gitRunner: scriptedGit(),
+        planPath,
+      });
+
+      const result = await runner.run('build_review', emptyState);
+
+      expect(result.success).toBe(false);
+    });
+  });
 });

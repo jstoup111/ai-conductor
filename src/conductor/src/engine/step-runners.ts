@@ -17,6 +17,10 @@ import {
   type Signal,
 } from './complexity.js';
 import type { ResolutionContext, ResolutionAttempt } from './rebase.js';
+import { makeGitRunner, type GitRunner } from './rebase.js';
+import { findArtifactFiles } from './artifacts.js';
+import { assembleBuildReviewInputs } from './build-review-inputs.js';
+import { buildGraderPrompt } from './build-review-prompt.js';
 
 const STEP_PROMPTS: Record<StepName, string> = {
   bootstrap: '/bootstrap',
@@ -262,6 +266,14 @@ export interface StepRunnerOptions {
    * Claude REPL so the user can iterate with the skill. Default: `'default'`.
    */
   mode?: RunMode;
+  /**
+   * Test-only injection points for the `build_review` one-shot grader
+   * dispatch. Production always uses `makeGitRunner(projectDir)` and the
+   * most recently modified `.docs/plans/*.md`; tests inject a scripted
+   * GitRunner and a fixture plan path to avoid touching real git state.
+   */
+  gitRunner?: GitRunner;
+  planPath?: string;
 }
 
 export class DefaultStepRunner implements StepRunner {
@@ -277,6 +289,8 @@ export class DefaultStepRunner implements StepRunner {
   private effortOverride?: EffortLevel;
   private mode: RunMode;
   private modelAvailability: ModelAvailability;
+  private gitRunner: GitRunner;
+  private planPathOverride?: string;
   callCount = 0;
 
   constructor(
@@ -297,6 +311,8 @@ export class DefaultStepRunner implements StepRunner {
     this.modelAvailability = new ModelAvailability(this.config?.model_fallback_ladder, (line) =>
       console.warn(line),
     );
+    this.gitRunner = options?.gitRunner ?? makeGitRunner(this.projectDir);
+    this.planPathOverride = options?.planPath;
   }
 
   resolvedConfigFor(step: StepName, tier?: ComplexityTier): ResolvedStepConfig {
@@ -321,6 +337,13 @@ export class DefaultStepRunner implements StepRunner {
       throw new Error(
         'rebase is handled by the engine (native git rebase-on-latest); it must not be dispatched to run()',
       );
+    }
+
+    // build_review is a one-shot grader dispatch — never resumes the main
+    // conductor session (see runBuildReview() for the resolveRebaseConflict
+    // fresh-uuid/resume:false pattern).
+    if (step === 'build_review') {
+      return this.runBuildReview();
     }
 
     // Lazy-init: check marker file on first run
@@ -614,6 +637,103 @@ export class DefaultStepRunner implements StepRunner {
     });
 
     return parseRebaseResolutionOutput(result.output);
+  }
+
+  /**
+   * Dispatch the build_review grader: a fresh, isolated one-shot session
+   * (never resumes the main conductor session), fed strictly the diff since
+   * the default branch plus the plan body (assembleBuildReviewInputs /
+   * buildGraderPrompt — no task-status, transcript, or maker-summary access).
+   *
+   * Follows the same one-shot pattern as resolveRebaseConflict: fresh uuid,
+   * `resume: false`, walked through the model fallback ladder. On full-ladder
+   * exhaustion (every attempted model unavailable) this returns
+   * `{success: false}` — the step is reported failed and the build_review
+   * completion gate (artifacts.ts) stays unsatisfied; it is never reported
+   * as a PASS.
+   */
+  private async runBuildReview(): Promise<StepRunResult> {
+    const resolved = this.resolvedConfigFor('build_review');
+
+    let planPath = this.planPathOverride;
+    if (!planPath) {
+      const planFiles = await findArtifactFiles(this.projectDir, 'plan');
+      planPath = planFiles.sort().at(-1);
+    }
+    if (!planPath) {
+      return {
+        success: false,
+        output: 'no .docs/plans/*.md present — build_review has no plan to grade the diff against',
+      };
+    }
+
+    let inputs;
+    try {
+      inputs = await assembleBuildReviewInputs(this.gitRunner, planPath);
+    } catch (err) {
+      return {
+        success: false,
+        output: `build_review input assembly failed: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
+
+    const prompt = buildGraderPrompt(inputs);
+
+    // Fresh one-shot session — never contaminate the main conductor session,
+    // and never resume a prior grader session either.
+    const { v4: uuidv4 } = await import('uuid');
+    const sessionId = uuidv4();
+
+    // Track every model attempted during the ladder walk so a full-ladder
+    // exhaustion failure names every model tried.
+    const attemptedModels: string[] = [];
+    const trackingProvider: LLMProvider = {
+      invoke: (invokeOpts) => {
+        attemptedModels.push(invokeOpts.model ?? '');
+        return this.provider.invoke(invokeOpts);
+      },
+      invokeInteractive: (invokeOpts) => this.provider.invokeInteractive(invokeOpts),
+    };
+
+    const result = await this.modelAvailability.invokeWithLadder(trackingProvider, {
+      prompt,
+      sessionId,
+      resume: false,
+      dangerouslySkipPermissions: true,
+      model: this.modelAvailability.effectiveModel(resolved.model).model,
+      effort: resolved.effort,
+      cwd: this.projectDir,
+    });
+    this.callCount++;
+
+    if (result.authFailure) {
+      return { success: false, output: result.output, authFailure: true };
+    }
+    if (result.rateLimited) {
+      return {
+        success: false,
+        output: result.output,
+        rateLimited: true,
+        waitSeconds: result.waitSeconds ?? 300,
+      };
+    }
+    if (result.sessionExpired) {
+      return { success: false, output: result.output, sessionExpired: true };
+    }
+    if (result.success) {
+      return { success: true, output: result.output };
+    }
+
+    // Full-ladder exhaustion: every attempted model reported unavailable.
+    // Name them all so the eventual HALT is diagnosable from daemon.log alone.
+    if (result.modelUnavailable && attemptedModels.length > 1) {
+      return {
+        success: false,
+        output: `${result.output} (model fallback ladder exhausted, tried: ${attemptedModels.join(', ')})`,
+      };
+    }
+
+    return { success: false, output: result.output };
   }
 
   private async fileExists(path: string): Promise<boolean> {
