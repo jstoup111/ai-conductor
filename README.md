@@ -309,6 +309,28 @@ PARKED group takes absolute precedence over every other group (HALTED, ELIGIBLE,
 slug always shows there and nowhere else. See
 [`src/conductor/README.md`](src/conductor/README.md#operator-park--unpark) for details.
 
+**Event-driven re-dispatch on HALT clear.** When a parked (halted) feature's `.pipeline/HALT` marker is cleared — either by a human operator, base-branch re-kick, or another process — the daemon detects the change via filesystem watch (chokidar) and immediately re-dispatches the feature without waiting for the next idle poll. This reduces recovery latency from up to 60 seconds (idle-poll window) to sub-second response times when HALT is cleared live.
+
+- **Without filesystem watch (`--no-watch`):** the daemon falls back to polling, discovering the cleared HALT within the next idle-poll interval (default 60s).
+- **With filesystem watch (default):** the daemon registers a filesystem watcher for each parked feature and fires an event-driven wake signal when the marker is removed, triggering immediate re-dispatch.
+
+The daemon's `--idle-poll` default increased from 5s to 60s (Task 11: Optimization) since event-driven wake now handles the hot path. Override with `--idle-poll` or `--no-watch` if you need polling-only behavior:
+
+```bash
+# Default: event-driven wake + 60s polling fallback
+conduct-ts daemon --continuous
+
+# Opt-out of filesystem watch (legacy polling-only, 60s interval)
+conduct-ts daemon --continuous --no-watch
+
+# Custom polling interval (ignores filesystem watch)
+conduct-ts daemon --continuous --no-watch --idle-poll 5
+```
+
+**Latency implications:**
+- **New spec discovery:** max latency is 60s (was 5s); polling is the backstop when a spec is first committed.
+- **HALT clear on parked feature:** sub-second with event-driven wake (was 5-60s polling window).
+
 **Auto-restart on stale engine (self-host only).** In self-host mode, before starting each feature
 (and at idle) the daemon rebuilds its engine from the fast-forwarded source (content-addressed —
 a no-op when unchanged, an atomic `dist` flip otherwise) and checks whether the running engine has

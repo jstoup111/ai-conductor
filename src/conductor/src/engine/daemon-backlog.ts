@@ -95,6 +95,11 @@ export function gitTreeSource(projectRoot: string, baseBranch: string): BacklogT
   };
 }
 
+export type DiscoveryLogger = {
+  onFetchFailed?: (error: Error) => void;
+  onFetchSucceeded?: () => void;
+};
+
 /**
  * Fast-forward `projectRoot`'s checkout to origin so newly merged specs become
  * present in the working tree — and therefore in any worktree freshly cut from
@@ -120,11 +125,17 @@ export function gitTreeSource(projectRoot: string, baseBranch: string): BacklogT
  * The `gitOverride` parameter allows tests to inject a fake git runner. The
  * default uses `makeGitRunner(projectRoot)` (the main checkout dir, never a
  * worktree).
+ *
+ * Task 17: The `discoveryLogger` parameter enables transition-aware logging
+ * for fetch failures. When provided, calls onFetchFailed on fetch errors and
+ * onFetchSucceeded on success, allowing the daemon to log fetch state changes
+ * only once instead of spamming the log on every retry.
  */
 export async function fastForwardRoot(
   projectRoot: string,
   log: (msg: string) => void = () => {},
   gitOverride?: GitRunner,
+  discoveryLogger?: DiscoveryLogger,
 ): Promise<void> {
   const git = gitOverride ?? makeGitRunner(projectRoot);
 
@@ -175,12 +186,20 @@ export async function fastForwardRoot(
   // Best-effort fetch; offline/unreachable must NOT crash the poll loop.
   const fetched = await git(['fetch', 'origin', defaultBranch]);
   if (fetched.exitCode !== 0) {
+    // Task 17: Log fetch failure via transition-aware logger if provided
+    const fetchError = new Error(
+      `fetch origin ${defaultBranch} failed (offline?); continuing on local ${defaultBranch}.`,
+    );
+    discoveryLogger?.onFetchFailed?.(fetchError);
     log(
       `fast-forward: fetch origin ${defaultBranch} failed (offline?); continuing on ` +
         `local ${defaultBranch}.`,
     );
     return;
   }
+
+  // Task 17: Log fetch success via transition-aware logger if provided
+  discoveryLogger?.onFetchSucceeded?.();
 
   // Fast-forward only. A non-ff (local has diverged from origin) is left for a
   // human rather than rewriting/merging the daemon's checkout.

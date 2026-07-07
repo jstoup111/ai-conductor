@@ -1,4 +1,4 @@
-import type { LLMProvider, InvokeOptions, InvokeResult } from "../execution/llm-provider";
+import type { LLMProvider, InvokeOptions, InvokeResult } from "../execution/llm-provider.js";
 
 export const DEFAULT_MODEL_FALLBACK_LADDER: string[] = ["fable", "opus", "sonnet"];
 

@@ -15,6 +15,20 @@
 
 import chalk from 'chalk';
 import type { ComplexityTier, Track } from '../types/index.js';
+import { Waker } from './waker.js';
+
+/**
+ * Default sleep implementation that returns an unref'd timer.
+ * The timer won't prevent the process from exiting when there's no other work.
+ * Task 11: Ensure the idle poll timeout doesn't block process exit.
+ */
+export function createDefaultSleep(): (ms: number) => Promise<void> {
+  return (ms: number) =>
+    new Promise<void>((r) => {
+      const timer = setTimeout(r, ms);
+      timer.unref();
+    });
+}
 
 export interface BacklogItem {
   /** Stable feature identifier (also the worktree/branch slug). The vetted
@@ -158,6 +172,20 @@ export interface DaemonDeps {
    * production wires `isOperatorParked` (see park-marker.ts / daemon-deps.ts).
    */
   isParked?: (slug: string) => Promise<boolean>;
+  /**
+   * Watch for HALT marker cleared on a parked feature and invoke `onCleared` when
+   * detected. Returns an unsubscribe function to tear down the watch. Used by
+   * event-driven re-dispatch to re-kick a halted slug without polling.
+   *
+   * Optimization-never-authority seam: only used for efficiency (event-driven vs
+   * poll-driven); never drives dispatch authority (that flows through existing
+   * `isHalted` path, FR-8). Pre-bound by CLI with projectRoot + log; this core
+   * accepts a pre-bound two-arg function so it needs no knowledge of projectRoot.
+   *
+   * Pure-core default: absent (no-op, no watching). Production wires from
+   * halt-reconciliation hooks (see daemon-deps.ts).
+   */
+  watchHaltCleared?: (slug: string, onCleared: () => void) => () => void;
   /**
    * FR-1 (Task 11): true while dispatch is paused (`.daemon/PAUSED`). Gates the
    * fill-pool block — no NEW feature is picked/dispatched while paused. Does
@@ -347,7 +375,7 @@ export async function runDaemon(
   options: DaemonOptions,
 ): Promise<DaemonResult> {
   const concurrency = Math.max(1, Math.floor(options.concurrency));
-  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  const sleep = deps.sleep ?? createDefaultSleep();
   const now = deps.now ?? (() => Date.now());
   const log = deps.log ?? (() => {});
 
@@ -395,6 +423,23 @@ export async function runDaemon(
   const maxIdlePolls = options.maxIdlePolls ?? Infinity;
   const startedAt = now();
 
+  const waker = Waker();
+  const watchers = new Map<string, () => void>();
+
+  // Register a watchHaltCleared watcher for a newly-parked slug, if the seam
+  // is present and no watcher already exists for it. Shared by both park
+  // sites: collectOne (a feature this run just halted/errored) and
+  // pickEligible's "durable HALT from a prior run" branch (a feature this
+  // run never dispatched but whose worktree carries a live HALT marker).
+  const registerWatcher = (slug: string): void => {
+    if (deps.watchHaltCleared && !watchers.has(slug)) {
+      const dispose = deps.watchHaltCleared(slug, () => {
+        waker.wake();
+      });
+      watchers.set(slug, dispose);
+    }
+  };
+
   const processed: FeatureOutcome[] = [];
   const inFlight = new Map<string, Tagged>();
   // Task T28: track whether the restart trigger has been successfully called
@@ -427,10 +472,25 @@ export async function runDaemon(
   };
 
   const dispatch = (item: BacklogItem): void => {
+    // Task 16: Detect if this is a re-dispatch (slug was parked)
+    const isResume = parked.has(item.slug);
+
     started.add(item.slug);
     parked.delete(item.slug); // re-dispatching a cleared feature un-parks it
+    // Dispose any existing watcher before re-dispatching (to avoid stale watchers
+    // from the previous dispatch)
+    const dispose = watchers.get(item.slug);
+    if (dispose) {
+      dispose();
+      watchers.delete(item.slug);
+    }
 
-    log(`${chalk.cyan('▶')} start ${chalk.bold(item.slug)}`);
+    // Task 16: Emit resume marker for re-dispatches, start for fresh dispatches
+    if (isResume) {
+      log(`${chalk.cyan('↻')} resume ${chalk.bold(item.slug)}`);
+    } else {
+      log(`${chalk.cyan('▶')} start ${chalk.bold(item.slug)}`);
+    }
     const tagged: Tagged = deps
       .runFeature(item)
       .then((outcome) => ({ slug: item.slug, outcome }))
@@ -455,7 +515,11 @@ export async function runDaemon(
     // makeRunFeature), so a later scan can re-dispatch once the operator fixes
     // the cause and clears the marker (gated by `isHalted` below). Only `done`
     // stays permanently excluded.
-    if (outcome.status === 'halted' || outcome.status === 'error') parked.add(slug);
+    if (outcome.status === 'halted' || outcome.status === 'error') {
+      parked.add(slug);
+      // Register a watcher for event-driven wake when this feature's HALT is cleared
+      registerWatcher(slug);
+    }
     const ok = outcome.status === 'done';
     const marker = ok ? chalk.green('■') : chalk.red('■');
     const status = ok ? chalk.green(outcome.status) : chalk.red(outcome.status);
@@ -601,7 +665,14 @@ export async function runDaemon(
       if (!paused) {
         // Local-only discovery first (no remote fetch): cheap, and it keeps a build
         // from being re-based onto specs that landed on origin while work is running.
+        const parkedBeforeLocal = new Set(parked);
         next = await pickEligible({ items: await deps.discoverBacklog({ refresh: false }) }, pickCtx);
+        // pickEligible's "durable HALT from a prior run" branch adds directly to
+        // `parked` for a slug this run never dispatched — register its watcher
+        // here (collectOne never sees it, since it never went through runFeature).
+        for (const slug of parked) {
+          if (!parkedBeforeLocal.has(slug)) registerWatcher(slug);
+        }
 
         // Only when fully idle (nothing running) AND nothing left locally do we reach
         // out to origin for newly-merged specs — "drained, now find more".
@@ -613,7 +684,11 @@ export async function runDaemon(
           // marker is un-parked in THIS iteration (its dispatch still flows through
           // the existing un-park path, FR-8 — the sweep issues none).
           await maybeRekick(false);
+          const parkedBeforeRefresh = new Set(parked);
           next = await pickEligible({ items: refreshed }, pickCtx);
+          for (const slug of parked) {
+            if (!parkedBeforeRefresh.has(slug)) registerWatcher(slug);
+          }
         }
       }
 
@@ -629,7 +704,6 @@ export async function runDaemon(
           stopReason = 'engine_restart';
           break;
         }
-        idlePolls = 0;
         dispatch(next);
         continue; // try to fill another slot before awaiting
       }
@@ -742,12 +816,20 @@ export async function runDaemon(
           break;
         }
         idlePolls++;
-        if (idlePolls > maxIdlePolls) {
+        const idleTimeoutHit = idlePolls > maxIdlePolls;
+
+        if (idleTimeoutHit) {
           stopReason = 'idle_timeout';
           break;
         }
 
-        await sleep(idlePollMs);
+        // Race the idle sleep against event-driven wake: if a watched HALT is
+        // cleared before the poll timeout, waker.armed() resolves first and we
+        // loop back to discovery without waiting the full idle interval (refresh:false).
+        // If the timeout wins, sleep resolves and we proceed normally (next iteration's
+        // fully-idle discovery will use refresh:true). The dummy test sleep never
+        // resolves, so only wake can unblock test-mode daemons.
+        await Promise.race([sleep(idlePollMs), waker.armed()]);
         // FR-14: sweep once per idle poll tick.
         await sweepBestEffort();
         continue;
@@ -762,6 +844,12 @@ export async function runDaemon(
   while (inFlight.size > 0) {
     await collectOne();
   }
+
+  // Dispose all remaining watchers before exiting
+  for (const dispose of watchers.values()) {
+    dispose();
+  }
+  watchers.clear();
 
   return { processed, stoppedReason: stopReason ?? 'backlog_drained' };
 }
