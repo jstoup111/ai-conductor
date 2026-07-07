@@ -316,9 +316,21 @@ export async function readManualTestFailRows(dir: string): Promise<string[]> {
   } catch {
     return [];
   }
-  return latestAttemptRegion(content)
-    .split('\n')
-    .filter((line) => /\|\s*FAIL/i.test(line));
+  return latestAttemptRegion(content).split('\n').filter(isManualTestFailRow);
+}
+
+/**
+ * True when a markdown table row's Result cell is exactly "FAIL" (case-insensitive,
+ * whitespace-trimmed). Checks cell boundaries, not substring presence — a Story or
+ * Notes cell containing the word "FAIL" (e.g. "FAIL kicks back to build with
+ * evidence", "fail-closed verdict predicate") must never be mistaken for a failing
+ * result.
+ */
+function isManualTestFailRow(line: string): boolean {
+  return line
+    .split('|')
+    .map((cell) => cell.trim())
+    .some((cell) => /^FAIL$/i.test(cell));
 }
 
 /**
@@ -785,7 +797,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     }
     const headSha = ctx.getHeadSha ? await ctx.getHeadSha().catch(() => null) : null;
     const region = latestAttemptRegion(content);
-    const failRows = region.split('\n').filter((line) => /\|\s*FAIL/i.test(line));
+    const failRows = region.split('\n').filter(isManualTestFailRow);
     if (failRows.length > 0) {
       // Record the whitewash-guard evidence: the sha this FAIL was observed at.
       // A later FAIL-free file is only accepted once HEAD moves past it.

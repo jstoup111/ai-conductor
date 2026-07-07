@@ -787,6 +787,18 @@ describe('engine/artifacts', () => {
       expect(result.done).toBe(false);
       expect(result.reason).toMatch(/FAIL/);
     });
+
+    it('passes when only the Story/Notes text contains the substring "FAIL" but the Result cell is SKIP (no false-positive whitewash)', async () => {
+      await createFile(
+        RESULTS,
+        '## Attempt 1 — 2026-07-06T10:00:00Z\n\n' +
+          '| Story | Criterion | Result | Notes |\n|---|---|---|---|\n' +
+          '| FAIL kicks back to build with evidence | N/A | SKIP | engine-internal |\n' +
+          '| fail-closed verdict predicate | N/A | SKIP | engine-internal |\n',
+      );
+      const result = await checkStepCompletion(dir, 'manual_test', { sessionStartedAt: 0 });
+      expect(result).toEqual({ done: true });
+    });
   });
 
   describe('checkStepCompletion: retro predicate', () => {
