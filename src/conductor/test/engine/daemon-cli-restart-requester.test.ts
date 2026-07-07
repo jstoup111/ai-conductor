@@ -457,4 +457,394 @@ describe('Task 14 — RestartRequester: marker → release → exit ordering', (
     // Verify call order: release → exit(0)
     expect(callOrder).toEqual(['release', 'exit(0)']);
   });
+
+  /**
+   * Task 5 (RED): relink throws in session-hosted mode → abort-alive
+   *
+   * When relink throws during session-hosted restart:
+   * 1. No marker file is created
+   * 2. No trigger is called
+   * 3. No lock release, no exit
+   * 4. Error is logged
+   * 5. Function returns normally (not throw, not exit)
+   */
+  it('Task 5 — relink throws in session-hosted: abort-alive (no marker, no trigger, no lock release/exit)', async () => {
+    const { createRestartRequester } = await import('../../src/daemon-cli.js');
+
+    const callOrder: string[] = [];
+    const logs: string[] = [];
+
+    const mockRelink = vi.fn(async () => {
+      callOrder.push('relink');
+      throw new Error('InstallStaleError: relink failed');
+    });
+
+    const mockTriggerSelfRestart = vi.fn(async () => {
+      callOrder.push('triggerSelfRestart');
+    });
+
+    let releaseSyncCalled = false;
+    const mockLock = {
+      releaseSync: () => {
+        releaseSyncCalled = true;
+        callOrder.push('release');
+      },
+    };
+
+    let exitCalled = false;
+    const mockProcess = {
+      exit: (code: number) => {
+        exitCalled = true;
+        callOrder.push(`exit(${code})`);
+      },
+    } as unknown as NodeJS.Process;
+
+    const mockLog = (msg: string) => {
+      logs.push(msg);
+    };
+
+    const requester = createRestartRequester(daemonDir, mockLog, mockLock, mockProcess, {
+      relink: mockRelink,
+      triggerSelfRestart: mockTriggerSelfRestart,
+    });
+
+    // Should NOT throw or call exit
+    await requester({
+      fromIdentity: 'daemon-id-123',
+      targetIdentity: 'engine-id-456',
+    });
+
+    // Verify relink was called, but trigger was NOT called
+    expect(callOrder).toEqual(['relink']);
+
+    // Verify lock release and exit were NOT called
+    expect(releaseSyncCalled).toBe(false);
+    expect(exitCalled).toBe(false);
+
+    // Verify marker was NOT created
+    const markerPath = join(daemonDir, '.daemon', 'RESTART_PENDING');
+    expect(existsSync(markerPath)).toBe(false);
+
+    // Verify error was logged (at least one log mentioning the error)
+    expect(logs.length).toBeGreaterThan(0);
+    const errorLogged = logs.some((msg) => msg.includes('relink') || msg.includes('failed'));
+    expect(errorLogged).toBe(true);
+  });
+
+  /**
+   * Task 5: relink throws in headless mode → keep existing behavior (release + exit(1))
+   *
+   * When relink throws during headless restart:
+   * 1. No marker file is created (relink error prevents us getting there)
+   * 2. Lock IS released
+   * 3. process.exit(1) IS called
+   * 4. Error is logged
+   */
+  it('Task 5 — relink throws in headless: release → exit(1)', async () => {
+    const { createRestartRequester } = await import('../../src/daemon-cli.js');
+
+    const callOrder: string[] = [];
+    const logs: string[] = [];
+
+    const mockRelink = vi.fn(async () => {
+      callOrder.push('relink');
+      throw new Error('InstallStaleError: relink failed');
+    });
+
+    let releaseSyncCalled = false;
+    const mockLock = {
+      releaseSync: () => {
+        releaseSyncCalled = true;
+        callOrder.push('release');
+      },
+    };
+
+    const mockProcess = {
+      exit: (code: number) => {
+        callOrder.push(`exit(${code})`);
+        throw new Error(`process.exit(${code})`);
+      },
+    } as unknown as NodeJS.Process;
+
+    const mockLog = (msg: string) => {
+      logs.push(msg);
+    };
+
+    // Headless mode: relink provided but NO triggerSelfRestart
+    const requester = createRestartRequester(daemonDir, mockLog, mockLock, mockProcess, {
+      relink: mockRelink,
+    });
+
+    try {
+      await requester({
+        fromIdentity: 'daemon-id-123',
+        targetIdentity: 'engine-id-456',
+      });
+    } catch (e) {
+      // Expected: process.exit(1) throws
+    }
+
+    // Verify call order: relink → release → exit(1)
+    expect(callOrder).toEqual(['relink', 'release', 'exit(1)']);
+
+    // Verify marker was NOT created
+    const markerPath = join(daemonDir, '.daemon', 'RESTART_PENDING');
+    expect(existsSync(markerPath)).toBe(false);
+
+    // Verify error was logged
+    expect(logs.length).toBeGreaterThan(0);
+  });
+
+  /**
+   * Task 7: respawn throws in session-hosted mode → stay alive, marker remains
+   *
+   * When triggerSelfRestart throws during session-hosted restart:
+   * 1. Marker file WAS created before the trigger was attempted (still present)
+   * 2. No lock release (lock.releaseSync() NOT called)
+   * 3. No exit (process.exit() NOT called)
+   * 4. Error is logged
+   * 5. Function returns normally (doesn't throw or exit)
+   * 6. Marker is preserved for retry at next idle boundary
+   */
+  it('Task 7 — respawn throws in session-hosted: stay alive, marker remains (consume-once at next boot)', async () => {
+    const { createRestartRequester } = await import('../../src/daemon-cli.js');
+
+    const callOrder: string[] = [];
+    const logs: string[] = [];
+
+    const mockRelink = vi.fn(async () => {
+      callOrder.push('relink');
+    });
+
+    const mockTriggerSelfRestart = vi.fn(async () => {
+      callOrder.push('triggerSelfRestart');
+      throw new Error('respawn failed: supervisor not ready');
+    });
+
+    let releaseSyncCalled = false;
+    const mockLock = {
+      releaseSync: () => {
+        releaseSyncCalled = true;
+        callOrder.push('release');
+      },
+    };
+
+    let exitCalled = false;
+    const mockProcess = {
+      exit: (code: number) => {
+        exitCalled = true;
+        callOrder.push(`exit(${code})`);
+      },
+    } as unknown as NodeJS.Process;
+
+    const mockLog = (msg: string) => {
+      logs.push(msg);
+    };
+
+    const requester = createRestartRequester(daemonDir, mockLog, mockLock, mockProcess, {
+      relink: mockRelink,
+      triggerSelfRestart: mockTriggerSelfRestart,
+    });
+
+    // Session-hosted mode should NOT throw or call exit, even if trigger fails
+    await requester({
+      fromIdentity: 'daemon-id-123',
+      targetIdentity: 'engine-id-456',
+    });
+
+    // Verify relink and trigger were called
+    expect(callOrder).toEqual(['relink', 'triggerSelfRestart']);
+
+    // Verify lock release and exit were NOT called
+    expect(releaseSyncCalled).toBe(false);
+    expect(exitCalled).toBe(false);
+
+    // Verify marker file was created and still present (not cleaned up on error)
+    const markerPath = join(daemonDir, '.daemon', 'RESTART_PENDING');
+    expect(existsSync(markerPath)).toBe(true);
+
+    const markerContent = JSON.parse(await readFile(markerPath, 'utf-8'));
+    expect(markerContent.reason).toBe('stale-engine');
+    expect(markerContent.fromIdentity).toBe('daemon-id-123');
+    expect(markerContent.targetIdentity).toBe('engine-id-456');
+
+    // Verify error was logged
+    expect(logs.length).toBeGreaterThan(0);
+    const errorLogged = logs.some((msg) =>
+      msg.includes('respawn') || msg.includes('failed') || msg.includes('trigger')
+    );
+    expect(errorLogged).toBe(true);
+  });
+
+  /**
+   * Task 6 (RED): marker-write throws in session-hosted mode → abort-alive
+   *
+   * When marker-write throws during session-hosted restart:
+   * 1. triggerSelfRestart is NOT called
+   * 2. No lock release (lock.releaseSync() NOT called)
+   * 3. No exit (process.exit() NOT called)
+   * 4. Error is logged
+   * 5. Function returns normally (doesn't throw)
+   * 6. Remain alive so marker can be retried on next idle boundary
+   */
+  it('Task 6 — marker-write throws in session-hosted: abort-alive (no trigger, no lock release/exit)', async () => {
+    const { createRestartRequester } = await import('../../src/daemon-cli.js');
+    const restartIntentModule = await import('../../src/engine/restart-intent.js');
+
+    const callOrder: string[] = [];
+    const logMessages: string[] = [];
+
+    const mockRelink = vi.fn(async () => {
+      callOrder.push('relink');
+    });
+
+    const mockTriggerSelfRestart = vi.fn(async () => {
+      callOrder.push('triggerSelfRestart');
+    });
+
+    let releaseSyncCalled = false;
+    const mockLock = {
+      releaseSync: () => {
+        releaseSyncCalled = true;
+        callOrder.push('release');
+      },
+    };
+
+    let exitCalled = false;
+    const mockProcess = {
+      exit: (code: number) => {
+        exitCalled = true;
+        callOrder.push(`exit(${code})`);
+      },
+    } as unknown as NodeJS.Process;
+
+    const mockLog = (msg: string) => {
+      logMessages.push(msg);
+    };
+
+    // Spy on writeRestartMarker and make it throw
+    const writeSpy = vi.spyOn(restartIntentModule, 'writeRestartMarker').mockImplementation(
+      async () => {
+        throw new Error('Marker write failed: EACCES permission denied');
+      },
+    );
+
+    const requester = createRestartRequester(daemonDir, mockLog, mockLock, mockProcess, {
+      relink: mockRelink,
+      triggerSelfRestart: mockTriggerSelfRestart,
+    });
+
+    // Session-hosted mode should NOT throw when marker-write fails
+    await requester({
+      fromIdentity: 'daemon-id-123',
+      targetIdentity: 'engine-id-456',
+    });
+
+    // Verify relink was called, but trigger was NOT called
+    expect(callOrder).toEqual(['relink']);
+
+    // Verify triggerSelfRestart was NOT called
+    expect(mockTriggerSelfRestart).not.toHaveBeenCalled();
+
+    // Verify lock.releaseSync() was NOT called
+    expect(releaseSyncCalled).toBe(false);
+
+    // Verify process.exit() was NOT called
+    expect(exitCalled).toBe(false);
+
+    // Verify error was logged (at least one log mentioning the error)
+    expect(logMessages.length).toBeGreaterThan(0);
+    const errorLogged = logMessages.some((msg) =>
+      msg.includes('Marker write failed') || msg.includes('permission') || msg.includes('EACCES')
+    );
+    expect(errorLogged).toBe(true);
+
+    // Verify marker was NOT created (due to the write failure)
+    const markerPath = join(daemonDir, '.daemon', 'RESTART_PENDING');
+    expect(existsSync(markerPath)).toBe(false);
+
+    // Clean up spy
+    writeSpy.mockRestore();
+  });
+
+  /**
+   * Task 6: marker-write throws in headless mode → release + exit(1) (backward compatibility)
+   *
+   * When marker-write throws during headless restart:
+   * 1. Lock IS released
+   * 2. process.exit(1) IS called
+   * 3. Error is logged
+   * 4. Backward compatibility: existing test still passes
+   */
+  it('Task 6 — marker-write throws in headless: release → exit(1) (backward compatibility)', async () => {
+    const { createRestartRequester } = await import('../../src/daemon-cli.js');
+    const restartIntentModule = await import('../../src/engine/restart-intent.js');
+
+    const callOrder: string[] = [];
+    const logMessages: string[] = [];
+
+    const mockRelink = vi.fn(async () => {
+      callOrder.push('relink');
+    });
+
+    let releaseSyncCalled = false;
+    const mockLock = {
+      releaseSync: () => {
+        releaseSyncCalled = true;
+        callOrder.push('release');
+      },
+    };
+
+    const mockProcess = {
+      exit: (code: number) => {
+        callOrder.push(`exit(${code})`);
+        throw new Error(`process.exit(${code})`);
+      },
+    } as unknown as NodeJS.Process;
+
+    const mockLog = (msg: string) => {
+      logMessages.push(msg);
+    };
+
+    // Spy on writeRestartMarker and make it throw
+    const writeSpy = vi.spyOn(restartIntentModule, 'writeRestartMarker').mockImplementation(
+      async () => {
+        throw new Error('Marker write failed: fs quota exceeded');
+      },
+    );
+
+    // Headless mode: relink provided but NO triggerSelfRestart
+    const requester = createRestartRequester(daemonDir, mockLog, mockLock, mockProcess, {
+      relink: mockRelink,
+    });
+
+    try {
+      await requester({
+        fromIdentity: 'daemon-id-123',
+        targetIdentity: 'engine-id-456',
+      });
+    } catch (e) {
+      // Expected: process.exit(1) throws
+    }
+
+    // Verify call order: relink → release → exit(1)
+    expect(callOrder).toEqual(['relink', 'release', 'exit(1)']);
+
+    // Verify lock release was called
+    expect(releaseSyncCalled).toBe(true);
+
+    // Verify error was logged
+    expect(logMessages.length).toBeGreaterThan(0);
+    const errorLogged = logMessages.some((msg) =>
+      msg.includes('Marker write failed') || msg.includes('quota')
+    );
+    expect(errorLogged).toBe(true);
+
+    // Verify marker was NOT created (due to the write failure)
+    const markerPath = join(daemonDir, '.daemon', 'RESTART_PENDING');
+    expect(existsSync(markerPath)).toBe(false);
+
+    // Clean up spy
+    writeSpy.mockRestore();
+  });
 });

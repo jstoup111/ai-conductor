@@ -230,6 +230,7 @@ export function stripAnsi(s: string): string {
 
 /**
  * Task 4: RestartRequester accepts injected relink + trigger; session-hosted happy ordering
+ * Task 5: Handle relink failure with abort-alive semantics in session-hosted mode
  *
  * Create a RestartRequester that implements two flows:
  *
@@ -245,8 +246,11 @@ export function stripAnsi(s: string): string {
  *   3. Release lock
  *   4. Exit with code 0
  *
- * On error during marker write, a catch block ensures the lock is released and exit(1) is called
- * (headless mode only).
+ * Error handling:
+ * - If relink throws in session-hosted mode: log error, return alive (abort-alive)
+ * - If relink throws in headless mode: log error, release lock, exit(1)
+ * - If marker write throws in headless mode: release lock, exit(1)
+ * - If marker write throws in session-hosted mode: log error, return alive
  *
  * @param daemonDir - project root directory
  * @param log - logging function
@@ -268,12 +272,26 @@ export function createRestartRequester(
   return async (opts: { fromIdentity: string | null; targetIdentity: string | null }) => {
     const isSessionHosted = deps?.triggerSelfRestart !== undefined;
 
-    try {
-      // Step 1: Call relink if provided
-      if (deps?.relink) {
+    // Step 1: Call relink if provided (Task 5: separate error handling for relink)
+    if (deps?.relink) {
+      try {
         await deps.relink();
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err);
+        log(`relink failed: ${detail}`);
+        // Task 5: abort-alive in session-hosted mode
+        if (isSessionHosted) {
+          // Don't release lock, don't exit, just return and stay alive
+          return;
+        }
+        // In headless mode: release lock and exit(1)
+        lock.releaseSync();
+        process.exit(1);
+        return; // Never reached but clarifies intent
       }
+    }
 
+    try {
       // Step 2: Write marker (can fail)
       await writeRestartMarker(
         {
@@ -288,6 +306,8 @@ export function createRestartRequester(
     } catch (err) {
       // Backstop: ensure lock is released even if marker write fails
       // Only applies to headless mode (session-hosted should not reach here)
+      const detail = err instanceof Error ? err.message : String(err);
+      log(`marker write failed: ${detail}`);
       if (!isSessionHosted) {
         lock.releaseSync();
         process.exit(1);
@@ -299,7 +319,16 @@ export function createRestartRequester(
     // (moved outside try-catch so exit(0) is not caught on failure in tests)
     if (isSessionHosted) {
       // Session-hosted: call triggerSelfRestart and don't exit
-      await deps.triggerSelfRestart();
+      // Task 7: catch errors from trigger and stay alive (marker already written)
+      try {
+        await deps.triggerSelfRestart();
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err);
+        log(`triggerSelfRestart failed: ${detail}`);
+        // Stay alive: don't release lock, don't exit
+        // Marker is already written, so this can be retried at next idle boundary
+        return;
+      }
     } else {
       // Headless: release lock and exit(0)
       lock.releaseSync();
