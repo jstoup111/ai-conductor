@@ -437,6 +437,29 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   // every feature start/finish line already route through `log`, so this single tee
   // captures the full BUILD-phase narrative (per-step results, shipped/failed + PR).
   logSink = await openDaemonLog(projectRoot);
+  // #405: engine diagnostics (console.warn/console.error from autoheal, task-seed,
+  // etc.) were visible only in the live pane and absent from daemon.log
+  // (`grep 'Path corroboration' daemon.log` → 0 while the pane was full of them).
+  // Tee them into the activity log so post-hoc forensics see what the operator saw.
+  // Conductors run in-process, so this process-level tee covers all engine warnings.
+  const originalConsoleWarn = console.warn.bind(console);
+  const originalConsoleError = console.error.bind(console);
+  const teeConsoleLine = (level: string, args: unknown[]): void => {
+    try {
+      const line = args.map((a) => (typeof a === 'string' ? a : String(a))).join(' ');
+      logSink?.write(formatDaemonLogLine(`[${level}] ${stripAnsi(line)}`));
+    } catch {
+      // Best-effort: the tee must never disrupt the warning path itself.
+    }
+  };
+  console.warn = (...args: unknown[]) => {
+    originalConsoleWarn(...args);
+    teeConsoleLine('warn', args);
+  };
+  console.error = (...args: unknown[]) => {
+    originalConsoleError(...args);
+    teeConsoleLine('error', args);
+  };
   log(
     lock.owned
       ? `holding daemon lock (pid ${lock.pid}) for ${projectRoot}`
@@ -1245,9 +1268,11 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     );
   }
 
-  // Normal completion: drop the crash backstop, flush+close the log, and release
-  // the lock asynchronously.
+  // Normal completion: drop the crash backstop, restore the console tee,
+  // flush+close the log, and release the lock asynchronously.
   process.off('exit', releaseBackstop);
+  console.warn = originalConsoleWarn;
+  console.error = originalConsoleError;
   await logSink.close();
   await lock.release();
 }

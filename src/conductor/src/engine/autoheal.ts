@@ -2,6 +2,25 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { execa } from 'execa';
 
+// #405: near-miss derive diagnostics (path-corroboration miss, pinned-stamp
+// demotion prevention) repeat on EVERY build-gate evaluation — H7 deliberately
+// re-derives each pass, so a healthy long build re-warns the same
+// (task, commit) pairs all build long. First occurrence is signal; repeats are
+// noise. Warn once per key for the process lifetime (a daemon run); the
+// verdict/audit-entry machinery is untouched — this is presentation-only.
+const derivedWarningsSeen = new Set<string>();
+
+/** Test seam: clear the warn-once memory (module state spans vitest files). */
+export function resetDeriveWarnOnce(): void {
+  derivedWarningsSeen.clear();
+}
+
+function warnOnce(key: string, message: string): void {
+  if (derivedWarningsSeen.has(key)) return;
+  derivedWarningsSeen.add(key);
+  console.warn(message);
+}
+
 // Simple logger interface for fail-closed operations
 interface EvidenceRangeLogger {
   anomalies: string[];
@@ -534,7 +553,8 @@ async function deriveCompletionInternal(
         result[taskId].status = 'completed';
         const stamp = evidence.evidenceStamps.get(taskId);
         result[taskId].evidencedBy = stamp?.sha;
-        console.warn(
+        warnOnce(
+          `${projectRoot}:demotion:${taskId}:${stamp?.sha ?? ''}`,
           `[autoheal] Task ${taskId}: no current evidence in history but sidecar has evidence stamp (pinned completed); preventing demotion`,
         );
         continue;
@@ -570,7 +590,8 @@ async function deriveCompletionInternal(
     if (overlap.length === 0) {
       // Path mismatch: log audit entry
       result[taskId].auditEntry = `Task ${taskId}: trailer found but no path overlap. Commit ${matchingCommit.sha.slice(0, 7)} touched [${filesInCommit.slice(0, 3).join(', ')}...] but expected paths like [${Array.from(taskPaths).slice(0, 3).join(', ')}...]`;
-      console.warn(
+      warnOnce(
+        `${projectRoot}:pathcorr:${taskId}:${matchingCommit.sha}`,
         `[autoheal] Path corroboration failed for task ${taskId}: trailer ${matchingCommit.sha.slice(0, 7)} has no overlap with plan paths`,
       );
       continue;
