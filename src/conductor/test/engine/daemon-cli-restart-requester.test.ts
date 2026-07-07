@@ -753,6 +753,10 @@ describe('Task 14 — RestartRequester: marker → release → exit ordering', (
     expect(exitCalled).toBe(false);
 
     // Verify error was logged (at least one log mentioning the error)
+    // DEBUG: Check what was actually logged
+    if (logMessages.length === 0) {
+      console.log('DEBUG: No messages logged - this is the RED phase, error is not being logged');
+    }
     expect(logMessages.length).toBeGreaterThan(0);
     const errorLogged = logMessages.some((msg) =>
       msg.includes('Marker write failed') || msg.includes('permission') || msg.includes('EACCES')
