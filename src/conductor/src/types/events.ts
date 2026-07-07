@@ -158,4 +158,11 @@ export type ConductorEvent =
       type: 'auto_park';
       slug: string;
       reason: string;
+    }
+  // ── Audit-trail write-completeness: halt lifecycle closure ──
+  | {
+      /** A halt (operator park or daemon HALT) was cleared, resuming the feature. */
+      type: 'halt_cleared';
+      step?: StepName;
+      cause: 'operator' | 'rekick';
     };
