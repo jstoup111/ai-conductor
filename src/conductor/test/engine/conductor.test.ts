@@ -4007,6 +4007,17 @@ describe('engine/conductor', () => {
           return { success: true };
         }),
       };
+      // The newer daemon loop refuses to advance past gates without recorded
+      // state (terminal-verdict guard), so start the run AT build with every
+      // prior step stamped done — these tests exercise the auth-park path of
+      // the build step only.
+      await writeState(statePath, {
+        worktree: 'done', memory: 'done', explore: 'done', complexity: 'done',
+        stories: 'done', conflict_check: 'done', plan: 'done',
+        architecture_diagram: 'done', architecture_review: 'done',
+        acceptance_specs: 'done', complexity_tier: 'M', track: 'technical',
+        feature_desc: 'auth-park-test',
+      } as ConductState);
 
       vi.mocked(waitForCredentialsChange).mockResolvedValue({
         type: 'timeout' as const,
@@ -4022,6 +4033,7 @@ describe('engine/conductor', () => {
         projectRoot: dir,
         mode: 'auto',
         daemon: true,
+        fromStep: 'build',
         maxRetries: 2, // enough budget to retry if it were burned
       });
 
@@ -4054,6 +4066,17 @@ describe('engine/conductor', () => {
           return { success: true };
         }),
       };
+      // The newer daemon loop refuses to advance past gates without recorded
+      // state (terminal-verdict guard), so start the run AT build with every
+      // prior step stamped done — these tests exercise the auth-park path of
+      // the build step only.
+      await writeState(statePath, {
+        worktree: 'done', memory: 'done', explore: 'done', complexity: 'done',
+        stories: 'done', conflict_check: 'done', plan: 'done',
+        architecture_diagram: 'done', architecture_review: 'done',
+        acceptance_specs: 'done', complexity_tier: 'M', track: 'technical',
+        feature_desc: 'auth-park-test',
+      } as ConductState);
 
       vi.mocked(waitForCredentialsChange).mockResolvedValue({
         type: 'timeout' as const,
@@ -4069,6 +4092,7 @@ describe('engine/conductor', () => {
         projectRoot: dir,
         mode: 'auto',
         daemon: true,
+        fromStep: 'build',
         maxRetries: 1,
         escalateBuildFailure: fakeEscalation,
       });
@@ -4427,7 +4451,11 @@ describe('engine/conductor', () => {
         ['.docs/specs/2026-04-16-feature.md', 'test'],
         ['.docs/stories/epic-1/story-a.md', 'test'],
         ['.docs/conflicts/2026-04-16-conflict.md', 'test'],
-        ['.docs/plans/2026-04-16-plan.md', 'test'],
+        // Empty-is-done is removed (ADR): the build gate parses the plan and
+        // requires every plan task resolved, so the fixture plan declares one
+        // task whose pre-existing completed row rides the H8 first-seed
+        // migration grandfather (no sidecar yet = first seed).
+        ['.docs/plans/2026-04-16-plan.md', '### Task task-1: Pre-completed work\n'],
         ['.docs/architecture/2026-04-16-arch.md', 'test'],
         ['.docs/decisions/adr-001.md', 'test'],
         ['spec/acceptance/feature_spec.rb', 'test'],
@@ -4797,8 +4825,14 @@ describe('auto-heal', () => {
     );
   }
 
+  // Serves the trailer-first derive path (ADR H5): `rev-parse --verify` for
+  // the origin/main + anchor reachability checks, the `--reverse` anchor-log
+  // form, and the %(trailers) evidence-log form. `handlers.log` is the
+  // EVIDENCE response (records separated by \x1e, `sha\tsubject\0trailers`).
+  // Omit `revParse` to simulate a repo where git fails (fail-closed derive).
   function routeGitMock(
     handlers: Partial<{
+      revParse: { stdout: string; exitCode?: number };
       mergeBase: { stdout: string; exitCode?: number };
       log: { stdout: string; exitCode?: number };
       diffTree: (sha: string) => { stdout: string; exitCode?: number };
@@ -4809,11 +4843,21 @@ describe('auto-heal', () => {
         return Promise.resolve({ stdout: '', exitCode: 1 } as never);
       }
       const subcommand = args[0];
+      if (subcommand === 'rev-parse') {
+        const h = handlers.revParse ?? { stdout: '', exitCode: 128 };
+        return Promise.resolve({ stdout: h.stdout, exitCode: h.exitCode ?? 0 } as never);
+      }
       if (subcommand === 'merge-base') {
         const h = handlers.mergeBase ?? { stdout: '', exitCode: 128 };
         return Promise.resolve({ stdout: h.stdout, exitCode: h.exitCode ?? 0 } as never);
       }
       if (subcommand === 'log') {
+        if (args.includes('--reverse')) {
+          // Anchor resolution: first commit on HEAD.
+          return Promise.resolve(
+            { stdout: 'a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0', exitCode: 0 } as never,
+          );
+        }
         const h = handlers.log ?? { stdout: '', exitCode: 0 };
         return Promise.resolve({ stdout: h.stdout, exitCode: h.exitCode ?? 0 } as never);
       }
@@ -4828,6 +4872,11 @@ describe('auto-heal', () => {
     }) as never);
   }
 
+  /** One evidence-log record in the %(trailers) wire format. */
+  function evidenceRecord(sha: string, subject: string, trailers: string): string {
+    return `${sha}\t${subject}\x00${trailers}\x1e`;
+  }
+
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'conductor-autoheal-'));
     statePath = join(dir, 'conduct-state.json');
@@ -4839,12 +4888,19 @@ describe('auto-heal', () => {
     await rm(dir, { recursive: true, force: true });
   });
 
-  it('heals a pending task when commit subject + files match unambiguously', async () => {
+  it('completes a pending task from a Task: trailer commit touching its plan files (H5)', async () => {
     await seedAllOtherArtifacts();
     await seedProjectFixture();
     routeGitMock({
+      revParse: { stdout: 'deadbeef0000000000000000000000000000dead' },
       mergeBase: { stdout: 'deadbeef0000000000000000000000000000dead' },
-      log: { stdout: 'abc1234567890000000000000000000000000000\tfeat(T9): add users slice' },
+      log: {
+        stdout: evidenceRecord(
+          'abc1234567890000000000000000000000000000',
+          'feat: add users slice',
+          'Task: 9\n',
+        ),
+      },
       diffTree: () => ({ stdout: 'src/users/controller.ts\nsrc/users/routes.ts' }),
     });
 
@@ -4868,23 +4924,35 @@ describe('auto-heal', () => {
     const { readFile: _rf } = await import('fs/promises');
     const afterRaw = await _rf(join(dir, '.pipeline/task-status.json'), 'utf-8');
     const after = JSON.parse(afterRaw);
-    expect(after.tasks['9'].status).toBe('completed');
-    expect(after.tasks['9'].commit).toBe('abc1234');
+    // The engine seed normalizes the legacy object form to the array form.
+    const task9 = after.tasks.find((t: { id: string }) => t.id === '9');
+    expect(task9.status).toBe('completed');
+    expect(task9.commit).toBe('abc1234');
 
     // Build runner was called exactly once — no retry was needed.
     const buildCalls = (runner.run as ReturnType<typeof vi.fn>).mock.calls.filter(
       (c: unknown[]) => c[0] === 'build',
     );
     expect(buildCalls).toHaveLength(1);
-    expect(healEvents).toEqual([{ healed: 1, skipped: 0 }]);
+    // H7: the gate itself seeds+derives on evaluation, so it passes without
+    // ever reaching the conductor's failure-path heal branch — no auto_heal
+    // event is the CORRECT signal for a first-evaluation pass.
+    expect(healEvents).toEqual([]);
   });
 
   it('leaves a task pending when evidence is weak and runs the normal retry path', async () => {
     await seedAllOtherArtifacts();
     await seedProjectFixture();
     routeGitMock({
+      revParse: { stdout: 'deadbeef0000000000000000000000000000dead' },
       mergeBase: { stdout: 'deadbeef0000000000000000000000000000dead' },
-      log: { stdout: 'deadbeef1111111111111111111111111111beef\tchore: lint fixes' },
+      log: {
+        stdout: evidenceRecord(
+          'deadbeef1111111111111111111111111111beef',
+          'chore: lint fixes',
+          '',
+        ),
+      },
       diffTree: () => ({ stdout: 'eslintrc.js' }),
     });
 
@@ -4916,18 +4984,26 @@ describe('auto-heal', () => {
     const { readFile: _rf } = await import('fs/promises');
     const afterRaw = await _rf(join(dir, '.pipeline/task-status.json'), 'utf-8');
     const after = JSON.parse(afterRaw);
-    expect(after.tasks['9'].status).toBe('pending');
+    const task9 = after.tasks.find((t: { id: string }) => t.id === '9');
+    expect(task9.status).toBe('pending');
     expect(buildCalls).toBeGreaterThanOrEqual(2);
     expect(retryEvents.length).toBeGreaterThanOrEqual(1);
-    expect(retryEvents[0].reason).toMatch(/tasks not completed/i);
+    expect(retryEvents[0].reason).toMatch(/not completed/i);
   });
 
-  it('runs auto-heal at most once per session even across multiple gate failures', async () => {
+  it('derives on EVERY gate evaluation — the once-per-run guard is removed for build (H7)', async () => {
     await seedAllOtherArtifacts();
     await seedProjectFixture();
     routeGitMock({
+      revParse: { stdout: 'deadbeef0000000000000000000000000000dead' },
       mergeBase: { stdout: 'deadbeef0000000000000000000000000000dead' },
-      log: { stdout: 'feedface1111111111111111111111111111face\tchore: nothing relevant' },
+      log: {
+        stdout: evidenceRecord(
+          'feedface1111111111111111111111111111face',
+          'chore: nothing relevant',
+          '',
+        ),
+      },
       diffTree: () => ({ stdout: 'README.md' }),
     });
 
@@ -4950,11 +5026,18 @@ describe('auto-heal', () => {
 
     await conductor.run();
 
-    const gitLogCalls = mockedExeca.mock.calls.filter(
-      (c) => c[0] === 'git' && (c[1] as string[])[0] === 'log',
+    // Every failed evaluation re-derives from git (H7): with retries, the
+    // evidence-log form is fetched more than once and the conductor's heal
+    // branch fires per failure. A once-per-run guard here is what let the
+    // original infinite-loop bug survive across retries.
+    const evidenceLogCalls = mockedExeca.mock.calls.filter(
+      (c) =>
+        c[0] === 'git' &&
+        (c[1] as string[])[0] === 'log' &&
+        (c[1] as string[]).some((a) => a.includes('trailers')),
     );
-    expect(gitLogCalls).toHaveLength(1);
-    expect(healEventCount.count).toBe(1);
+    expect(evidenceLogCalls.length).toBeGreaterThan(1);
+    expect(healEventCount.count).toBeGreaterThanOrEqual(2);
   });
 
   it('silently skips when git is absent and falls through to the normal retry path', async () => {
@@ -4988,17 +5071,27 @@ describe('auto-heal', () => {
     const { readFile: _rf } = await import('fs/promises');
     const afterRaw = await _rf(join(dir, '.pipeline/task-status.json'), 'utf-8');
     const after = JSON.parse(afterRaw);
-    expect(after.tasks['9'].status).toBe('pending');
-    // Auto-heal still fired once (and skipped everything) — the dashboard should record the attempt.
-    expect(healEvents).toEqual([{ healed: 0, skipped: 1 }]);
+    const task9 = after.tasks.find((t: { id: string }) => t.id === '9');
+    expect(task9.status).toBe('pending');
+    // Fail-closed derive found nothing on any evaluation; each failure still
+    // records the attempt for the dashboard (H7: one event per evaluation).
+    expect(healEvents.length).toBeGreaterThanOrEqual(1);
+    for (const e of healEvents) expect(e).toEqual({ healed: 0, skipped: 1 });
   });
 
   it('writes an audit file under .pipeline/audit-trail with healed + skipped entries', async () => {
     await seedAllOtherArtifacts();
     await seedProjectFixture();
     routeGitMock({
+      revParse: { stdout: 'deadbeef0000000000000000000000000000dead' },
       mergeBase: { stdout: 'deadbeef0000000000000000000000000000dead' },
-      log: { stdout: 'abc1234567890000000000000000000000000000\tfeat(T9): add users slice' },
+      log: {
+        stdout: evidenceRecord(
+          'abc1234567890000000000000000000000000000',
+          'feat: add users slice',
+          'Task: 9\n',
+        ),
+      },
       diffTree: () => ({ stdout: 'src/users/controller.ts' }),
     });
 
@@ -5017,17 +5110,14 @@ describe('auto-heal', () => {
     const auditDir = join(dir, '.pipeline/audit-trail');
     const entries = await readdir(auditDir);
     const autohealFiles = entries.filter((e) => e.startsWith('autoheal-') && e.endsWith('.json'));
-    expect(autohealFiles).toHaveLength(1);
+    expect(autohealFiles.length).toBeGreaterThanOrEqual(1);
     const { readFile: _rf } = await import('fs/promises');
     const audit = JSON.parse(await _rf(join(auditDir, autohealFiles[0]), 'utf-8'));
     expect(Array.isArray(audit.healed)).toBe(true);
     expect(Array.isArray(audit.skipped)).toBe(true);
-    expect(audit.healed[0]).toMatchObject({
-      taskId: '9',
-      commit: 'abc1234',
-      subject: 'feat(T9): add users slice',
-    });
-    expect(audit.healed[0].matchedFiles).toContain('src/users/controller.ts');
+    // Derive-based write-back records the evidencing sha; subject/paths are a
+    // legacy-heal concept and stay empty on the trailer path.
+    expect(audit.healed[0]).toMatchObject({ taskId: '9', commit: 'abc1234' });
   });
 
   it('never invokes git for non-build steps even when their completion gate fails', async () => {
@@ -5240,13 +5330,32 @@ describe('build-step stall circuit breaker', () => {
     }
   }
 
+  // Writes the plan (Task 1..total headings), the status rows, AND a sidecar
+  // evidence stamp for every completed id. Under the engine-owned contract
+  // (ADR H6) an agent-asserted 'completed' row with no evidence is demoted on
+  // every gate evaluation — so these tests' notion of "progress" must be
+  // evidence-backed completions, or the stall breaker would (correctly) fire
+  // on all of them.
   async function writeTaskStatus(completed: number, total: number): Promise<void> {
     await mkdir(join(dir, '.pipeline'), { recursive: true });
-    const tasks: Array<{ id: number; status: string }> = [];
+    await mkdir(join(dir, '.docs/plans'), { recursive: true });
+    const planLines: string[] = ['# Plan', ''];
     for (let i = 1; i <= total; i++) {
-      tasks.push({ id: i, status: i <= completed ? 'completed' : 'pending' });
+      planLines.push(`### Task ${i}: Step ${i}`, '');
+    }
+    await writeFile(join(dir, '.docs/plans/2026-04-18-plan.md'), planLines.join('\n'));
+    const tasks: Array<{ id: number; status: string }> = [];
+    const stamps: Record<string, { sha: string; form: string }> = {};
+    for (let i = 1; i <= total; i++) {
+      const done = i <= completed;
+      tasks.push({ id: i, status: done ? 'completed' : 'pending' });
+      if (done) stamps[String(i)] = { sha: `${'0'.repeat(38)}${String(i).padStart(2, '0')}`, form: 'trailer' };
     }
     await writeFile(join(dir, '.pipeline/task-status.json'), JSON.stringify({ tasks }));
+    await writeFile(
+      join(dir, '.pipeline/task-evidence.json'),
+      JSON.stringify({ evidenceStamps: stamps, noEvidenceAttempts: 0, migrationGrandfather: [] }),
+    );
   }
 
   it('triggers build_stall after two retries with zero new task completions', async () => {

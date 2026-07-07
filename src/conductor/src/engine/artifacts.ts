@@ -494,11 +494,14 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
         };
       }
 
-      // Quick check: plan must have at least one task block (### Task lines)
-      if (!planText.trim() || !/^###\s+Task\s+\d+/im.test(planText)) {
+      // Quick check: plan must have at least one task block. The header match
+      // mirrors parsePlanTaskPaths (any heading level, H9 id grammar) — the
+      // old `^### Task \d+` form rejected h2 headings and every remediation
+      // id (`rem-…`), reading real plans as "empty".
+      if (!planText.trim() || !/^#{1,6}\s+Task\s+[A-Za-z0-9._-]+/im.test(planText)) {
         return {
           done: false,
-          reason: 'plan is empty or contains no tasks (### Task N headings required)',
+          reason: 'plan is empty or contains no tasks (### Task <id> headings required)',
         };
       }
     }

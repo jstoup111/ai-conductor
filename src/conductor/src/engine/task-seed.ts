@@ -109,8 +109,18 @@ export async function seedTaskStatus(projectRoot: string, planPath: string, engi
       if (raw && raw.trim()) {
         try {
           existingStatus = JSON.parse(raw);
-          if (!existingStatus.tasks || !Array.isArray(existingStatus.tasks)) {
+          if (!existingStatus.tasks) {
             existingStatus.tasks = [];
+          } else if (!Array.isArray(existingStatus.tasks)) {
+            // In-flight migration (H1): agent-written files also use the
+            // object form `tasks: { "<id>": {...} }`. Normalize to the
+            // engine's array form instead of discarding — dropping these
+            // rows would lose real pre-cutover completions AND their H8
+            // grandfather eligibility.
+            const objTasks = existingStatus.tasks as unknown as Record<string, unknown>;
+            existingStatus.tasks = Object.entries(objTasks)
+              .filter((e): e is [string, Record<string, unknown>] => !!e[1] && typeof e[1] === 'object')
+              .map(([id, entry]) => ({ ...(entry as object), id }) as (typeof existingStatus.tasks)[number]);
           }
         } catch {
           // Corrupt JSON — start fresh
@@ -165,11 +175,13 @@ export async function seedTaskStatus(projectRoot: string, planPath: string, engi
           continue;
         }
 
-        // Check if we should preserve completed
-        if (existing.status === 'completed') {
+        // Preserve terminal rows backed by engine evidence: a real stamp, or
+        // the H8 migration grandfather (stamped moments ago on first seed —
+        // demoting a just-grandfathered row here would make the grandfather a
+        // no-op and re-open the demote-completed-work loop this feature fixes).
+        if (existing.status === 'completed' || existing.status === 'skipped') {
           const stamp = evidence.evidenceStamps.get(taskId);
-          if (stamp) {
-            // Has engine stamp — keep completed
+          if (stamp || evidence.migrationGrandfather.has(taskId)) {
             continue;
           }
         }

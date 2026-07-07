@@ -129,7 +129,15 @@ Content
         }),
       );
 
-      // No evidence sidecar
+      // A PRESENT-but-empty sidecar: post-cutover state, so this is NOT a
+      // first seed — the H8 migration grandfather does not apply, and an
+      // unstamped 'completed' row is a forged/agent-asserted one that must
+      // demote. (First seed — sidecar absent — grandfathers terminal rows
+      // instead; that path is covered by the grandfather tests.)
+      await writeFile(
+        join(dir, '.pipeline/task-evidence.json'),
+        JSON.stringify({ evidenceStamps: {}, noEvidenceAttempts: 0, migrationGrandfather: [] }),
+      );
       const planPath = join(dir, '.docs/plans/test.md');
       await mkdir(join(dir, '.docs/plans'), { recursive: true });
       await writeFile(
