@@ -1000,6 +1000,21 @@ describe('integration/gate-loop', () => {
             );
             return { success: true };
           }
+          if (step === 'finish') {
+            // Daemon mode only converges finish on choice='pr' (see
+            // artifacts.ts finish predicate) — record that plus the pr_url
+            // it requires so the tail can actually reach feature_complete.
+            await writeFile(join(dir, '.pipeline/finish-choice'), 'pr\n');
+            const state = JSON.parse(await readFile(statePath, 'utf-8'));
+            state.pr_url = 'https://example.com/pr/1';
+            await writeFile(statePath, JSON.stringify(state));
+            // The finish predicate reads pr_url from .pipeline/conduct-state.json
+            // specifically (not the top-level state file the conductor itself
+            // uses in this test fixture) — mirror it there too.
+            await mkdir(join(dir, '.pipeline'), { recursive: true });
+            await writeFile(join(dir, '.pipeline/conduct-state.json'), JSON.stringify(state));
+            return { success: true };
+          }
           return satisfy(step);
         },
       };
@@ -1011,6 +1026,14 @@ describe('integration/gate-loop', () => {
       events.on('feature_complete', () => {
         completed = true;
       });
+      // The finish predicate's daemon false-ship guard needs push evidence
+      // (isHeadPushed → headPushedToUpstream(this.git, ...)); a fake git
+      // runner that reports HEAD as pushed lets these fixtures (which never
+      // touch a real remote) converge on the recorded pr_url.
+      const fakeGit: GitRunner = async (args) =>
+        args.includes('--symbolic-full-name')
+          ? { stdout: 'refs/remotes/origin/feature/x\n' }
+          : { stdout: '' };
       const conductor = new Conductor({
         stateFilePath: statePath,
         stepRunner: runner,
@@ -1022,6 +1045,7 @@ describe('integration/gate-loop', () => {
         fromStep: 'build',
         maxRetries: 1,
         config: reviewFailConfig(),
+        git: fakeGit,
       });
       await conductor.run();
       return { buildRuns, retryReasons, kicks, completed, ran };
@@ -1155,6 +1179,17 @@ describe('integration/gate-loop', () => {
             );
             return { success: true };
           }
+          if (step === 'finish') {
+            // Daemon mode only converges finish on choice='pr' with push
+            // evidence (see artifacts.ts finish predicate + fakeGit below).
+            await writeFile(join(dir, '.pipeline/finish-choice'), 'pr\n');
+            const st = JSON.parse(await readFile(statePath, 'utf-8'));
+            st.pr_url = 'https://example.com/pr/1';
+            await writeFile(statePath, JSON.stringify(st));
+            await mkdir(join(dir, '.pipeline'), { recursive: true });
+            await writeFile(join(dir, '.pipeline/conduct-state.json'), JSON.stringify(st));
+            return { success: true };
+          }
           return satisfy(step);
         },
       };
@@ -1167,6 +1202,10 @@ describe('integration/gate-loop', () => {
         halted = true;
       });
       const config = { build_review: { enabled: true } };
+      const fakeGit: GitRunner = async (args) =>
+        args.includes('--symbolic-full-name')
+          ? { stdout: 'refs/remotes/origin/feature/x\n' }
+          : { stdout: '' };
       const conductor = new Conductor({
         stateFilePath: statePath,
         stepRunner: runner,
@@ -1178,6 +1217,7 @@ describe('integration/gate-loop', () => {
         fromStep: 'build',
         maxRetries: 1,
         config,
+        git: fakeGit,
       });
 
       await conductor.run();
