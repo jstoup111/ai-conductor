@@ -10,6 +10,16 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ## [Unreleased]
 
+### Fixed
+
+- Derive diagnostics no longer flood the daemon pane (#405): the autoheal
+  path-corroboration near-miss and pinned-stamp demotion-prevention notices
+  now warn once per (task, commit) per daemon run instead of on every
+  build-gate re-derivation, and the daemon tees engine `console.warn`/
+  `console.error` lines into `.daemon/daemon.log` (tagged `[warn]`/`[error]`)
+  so post-hoc forensics see what the operator saw in the pane. Verdicts and
+  audit entries are unchanged — presentation/dedup only.
+
 ### Added
 
 - Opt-in `build_review` judgement gate at the build → manual_test seam
