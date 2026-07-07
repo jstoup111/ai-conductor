@@ -223,6 +223,122 @@ describe('ClaudeProvider', () => {
       expect(result.modelUnavailable).toBeUndefined();
     });
 
+    // Task 17: Session-limit classification family (observed 2026-07-03 incident)
+    it('detects LITERAL session-limit message with reset time', async () => {
+      const observedMessage = "You've hit your session limit · resets 3:20pm (America/New_York)";
+      mockExeca.mockResolvedValue({
+        stdout: observedMessage,
+        stderr: '',
+        exitCode: 1,
+        failed: true,
+      } as any);
+
+      const result = await provider.invoke(baseOptions);
+      expect(result.rateLimited).toBe(true);
+      expect(result.success).toBe(false);
+      expect(result.waitSeconds).toBeDefined();
+    });
+
+    it('detects usage-limit variant as rateLimited', async () => {
+      mockExeca.mockResolvedValue({
+        stdout: 'usage limit reached · resets 3:20pm (America/New_York)',
+        stderr: '',
+        exitCode: 1,
+        failed: true,
+      } as any);
+
+      const result = await provider.invoke(baseOptions);
+      expect(result.rateLimited).toBe(true);
+      expect(result.success).toBe(false);
+    });
+
+    it('detects "session limit reached" variant as rateLimited', async () => {
+      mockExeca.mockResolvedValue({
+        stdout: 'session limit reached · resets 5:45pm (America/New_York)',
+        stderr: '',
+        exitCode: 1,
+        failed: true,
+      } as any);
+
+      const result = await provider.invoke(baseOptions);
+      expect(result.rateLimited).toBe(true);
+      expect(result.success).toBe(false);
+    });
+
+    it('detects "session limit" (short form) variant as rateLimited', async () => {
+      mockExeca.mockResolvedValue({
+        stdout: 'session limit · resets tomorrow',
+        stderr: '',
+        exitCode: 1,
+        failed: true,
+      } as any);
+
+      const result = await provider.invoke(baseOptions);
+      expect(result.rateLimited).toBe(true);
+      expect(result.success).toBe(false);
+    });
+
+    it('treats exit-0 session-limit message as rateLimited and NOT success (mirrors outOfCredits)', async () => {
+      mockExeca.mockResolvedValue({
+        stdout: "You've hit your session limit · resets 3:20pm (America/New_York)",
+        stderr: '',
+        exitCode: 0,
+        failed: false,
+      } as any);
+
+      const result = await provider.invoke(baseOptions);
+      // Soft notice rides exit 0, but rate limit is still in effect → must wait and retry.
+      expect(result.rateLimited).toBe(true);
+      // And it is NOT a real success — no work was done, no artifact written.
+      expect(result.success).toBe(false);
+      expect(result.waitSeconds).toBeDefined();
+    });
+
+    it('does not flag rateLimited when message has session-limit-like word in prose (no reset time)', async () => {
+      mockExeca.mockResolvedValue({
+        stdout: 'Discussion about session limit policies in documentation',
+        stderr: '',
+        exitCode: 0,
+        failed: false,
+      } as any);
+
+      const result = await provider.invoke(baseOptions);
+      expect(result.rateLimited).toBeUndefined();
+      expect(result.success).toBe(true);
+    });
+
+    it('preserves precedence: session-limit classifies before auth-failure check', async () => {
+      // A contrived case where message matches both session-limit AND auth patterns
+      // (unlikely in practice, but tests the precedence)
+      mockExeca.mockResolvedValue({
+        stdout: 'You\'ve hit your session limit and are not logged in',
+        stderr: '',
+        exitCode: 1,
+        failed: true,
+      } as any);
+
+      const result = await provider.invoke(baseOptions);
+      expect(result.rateLimited).toBe(true);
+      expect(result.authFailure).toBeUndefined();
+    });
+
+    // Regression test for acceptance test: verify the EXACT observed message is classified
+    it('acceptance regression: EXACT observed message yields rateLimited and proper waitSeconds', async () => {
+      const observedMessage = "You've hit your session limit · resets 3:20pm (America/New_York)";
+      mockExeca.mockResolvedValue({
+        stdout: observedMessage,
+        stderr: '',
+        exitCode: 1,
+        failed: true,
+      } as any);
+
+      const result = await provider.invoke(baseOptions);
+      expect(result.rateLimited).toBe(true);
+      expect(result.success).toBe(false);
+      expect(result.waitSeconds).toBeDefined();
+      expect(result.waitSeconds).toBeGreaterThan(0);
+    });
+
     it('does not flag modelUnavailable when the binary is missing (exit 127/ENOENT)', async () => {
       mockExeca.mockResolvedValue({
         stdout: '',
@@ -368,6 +484,35 @@ describe('ClaudeProvider', () => {
         expect(result.rateLimited).toBeUndefined();
         expect(result.waitSeconds).toBeUndefined();
       });
+    });
+  });
+
+  describe('Task 17: Session-limit acceptance validation', () => {
+    it('simulates acceptance test scenario: session-limit message with exitCode 1', async () => {
+      const SESSION_LIMIT_MESSAGE = "You've hit your session limit · resets 3:20pm (America/New_York)";
+
+      // Simulate the acceptance test mock: first call returns rate limit, second call succeeds
+      let callCount = 0;
+      mockExeca.mockImplementation(async () => {
+        callCount++;
+        if (callCount === 1) {
+          return { stdout: SESSION_LIMIT_MESSAGE, stderr: '', exitCode: 1, failed: true } as any;
+        }
+        return { stdout: 'done', stderr: '', exitCode: 0, failed: false } as any;
+      });
+
+      const provider = new ClaudeProvider();
+
+      // First call should detect rate limit
+      const result1 = await provider.invoke(baseOptions);
+      expect(result1.rateLimited).toBe(true);
+      expect(result1.success).toBe(false);
+      expect(result1.waitSeconds).toBeDefined();
+
+      // Second call should succeed
+      const result2 = await provider.invoke(baseOptions);
+      expect(result2.success).toBe(true);
+      expect(result2.rateLimited).toBeUndefined();
     });
   });
 

@@ -2,8 +2,21 @@ import { execa } from 'execa';
 import type { LLMProvider, InvokeOptions, InvokeResult, TokenUsage } from './llm-provider.js';
 
 // Task 17: Extended to include session-limit family (observed 2026-07-03 incident)
-// Patterns: "rate limit", "429", "overloaded", "usage limit", "session limit" (any variant)
-const RATE_LIMIT_RE = /rate limit|429|overloaded|usage limit|session limit/i;
+// Patterns: "rate limit", "429", "overloaded"
+const RATE_LIMIT_RE = /rate limit|429|overloaded/i;
+
+// Session-limit and usage-limit messages. Unlike RATE_LIMIT_RE, this is checked
+// regardless of exit code (similar to OUT_OF_CREDITS_RE) because session-limit
+// can ride on exit=0 as a "soft notice" that the session quota is exhausted.
+// Patterns matched:
+// - "You've hit your session/usage limit" (exact CLI message)
+// - "session/usage limit reached" (variant)
+// - "session/usage limit · resets" (with reset time)
+// Precedence: checked BEFORE AUTH_FAILURE_RE so a message like
+// "You've hit your session limit and not logged in" classifies as session-limit,
+// not auth failure. Avoids false positives by requiring context beyond bare
+// "session limit" in prose.
+const SESSION_LIMIT_RE = /you've hit your (?:session|usage) limit|session limit reached|usage limit reached|(?:session|usage) limit\s+·\s+resets/i;
 const STALE_SESSION_RE = /No conversation found/i;
 // A session-id lock ("already in use" / "session is in use by another
 // process"). Recovers the same way as a stale session — reset to a fresh
@@ -154,6 +167,11 @@ export function detectsOutOfCredits(output: string): boolean {
   return OUT_OF_CREDITS_RE.test(output);
 }
 
+/** Test helper: true if `output` matches the session-limit signature. */
+export function detectsSessionLimit(output: string): boolean {
+  return SESSION_LIMIT_RE.test(output);
+}
+
 /** Test helper: true if `output` matches the auth-failure signature. */
 export function detectsAuthFailure(output: string): boolean {
   return AUTH_FAILURE_RE.test(output);
@@ -234,27 +252,31 @@ export class ClaudeProvider implements LLMProvider {
       };
     }
 
-    // Check auth failure first (highest priority), gated on non-zero exit.
-    // Then model availability and rate limit — these are also only valid
-    // error states (exit !== 0).
-    const authFailure = exitCode !== 0 && AUTH_FAILURE_RE.test(output);
-    // Out-of-credits is a soft notice on a ZERO exit code, so it is NOT gated on
-    // exitCode !== 0 (unlike the hard model-unavailable error). It still means
-    // "this model can't run" → fold into modelUnavailable so the ladder walks to
-    // a model with credits.
+    // PRECEDENCE (highest to lowest):
+    // 1. Session-limit: check regardless of exit code (soft notice can ride exit=0),
+    //    checked BEFORE auth-failure so a combined message classifies as session-limit
+    // 2. Out-of-credits: soft notice on exit=0 (model unavailable)
+    // 3. Model unavailable: only on exit !== 0
+    // 4. Rate limit (non-session): only on exit !== 0
+    // 5. Auth failure: only on exit !== 0
+    // 6. Session expired: checked regardless of exit code
+
+    const sessionLimit = SESSION_LIMIT_RE.test(output);
     const outOfCredits = OUT_OF_CREDITS_RE.test(output);
     const modelUnavailable =
       outOfCredits || (exitCode !== 0 && MODEL_UNAVAILABLE_RE.test(output));
-    const rateLimited = exitCode !== 0 && RATE_LIMIT_RE.test(output);
+    const rateLimited = sessionLimit || (exitCode !== 0 && RATE_LIMIT_RE.test(output));
+    // Auth failure only if NOT a session-limit case
+    const authFailure = !sessionLimit && exitCode !== 0 && AUTH_FAILURE_RE.test(output);
     const sessionExpired =
       STALE_SESSION_RE.test(output) || SESSION_IN_USE_RE.test(output);
     const tokenUsage = parseTokenUsage(stdout);
 
     return {
-      // An out-of-credits notice rides on exit 0 but is not a real success —
-      // no work was done and no artifact written. Never report it as success,
-      // or the step's completion check reads a confusing "no artifact" halt.
-      success: exitCode === 0 && !outOfCredits,
+      // Session-limit and out-of-credits notices ride exit 0 but are not real
+      // successes — no work was done and no artifact written. Never report them
+      // as success, or the step's completion check reads a confusing "no artifact" halt.
+      success: exitCode === 0 && !outOfCredits && !sessionLimit,
       output,
       exitCode,
       authFailure: authFailure || undefined,
