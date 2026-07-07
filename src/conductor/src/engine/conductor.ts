@@ -22,6 +22,7 @@ import type {
   RecoveryOption,
   RecoveryContext,
 } from '../types/index.js';
+import type { RateLimitEpisode } from './rate-limit-episode.js';
 import type { ParallelBranch } from '../types/config.js';
 import { evaluateWhen } from './when-expression.js';
 import type { HarnessConfig } from '../types/config.js';
@@ -226,6 +227,13 @@ export interface StepRunResult {
    */
   waitSeconds?: number;
   /**
+   * Task 18: Parsed absolute deadline (milliseconds since epoch) from rate-limit message.
+   * When set, represents a timezone-aware reset time extracted from the message
+   * (e.g., "resets 3:20pm (America/New_York)"). Used by the episode coordinator
+   * for deadline-first scheduling. Undefined if timezone is unknown or not present.
+   */
+  deadline?: number;
+  /**
    * Set when Claude reports "No conversation found" (session evaporated).
    * The conductor resets the session state and retries without burning budget.
    */
@@ -366,6 +374,22 @@ export interface ConductorOptions {
    * in the finish gate (daemon false-ship guard).
    */
   git?: GitRunner;
+  /**
+   * Optional rate-limit episode coordinator (Task 10). When provided and active,
+   * enables coordinated episode-aware backoff during rate-limit waits, allowing
+   * SIGTERM handling and deadline-coordinated redrives. If undefined, rate-limit
+   * handling falls back to bare sleep (existing behavior).
+   */
+  rateLimitEpisode?: RateLimitEpisode;
+  /**
+   * Task 22: Callback to register an in-flight rate-limit wait AbortController
+   * with the daemon-level handler. Called when a conductor creates a wait controller
+   * so process-level SIGTERM can abort all in-flight waits across N concurrent conductors.
+   * Only used in daemon mode; in interactive mode, per-conductor SIGTERM handlers
+   * manage individual controllers. Optional — if absent, the conductor works normally
+   * but its wait controller won't be aborted by process-level SIGTERM.
+   */
+  registerAbortController?: (controller: AbortController) => void;
 }
 
 /**
@@ -497,6 +521,19 @@ export class Conductor {
   private lastRebaseOutcome: RebaseOutcome | null = null;
 
   /**
+   * Optional rate-limit episode coordinator (Task 10). When active, coordinates
+   * deadline-aware backoff during rate-limit waits. May be undefined (graceful
+   * fallback to bare sleep).
+   */
+  private rateLimitEpisode: RateLimitEpisode | undefined;
+
+  /**
+   * Task 22: Optional callback to register in-flight wait AbortControllers with
+   * the daemon-level SIGTERM handler.
+   */
+  private registerAbortController: ((controller: AbortController) => void) | undefined;
+
+  /**
    * Durable engine state for task evidence tracking (sidecar JSON).
    * Loaded at the start of run() and written back when gates change evidence counts.
    */
@@ -578,6 +615,8 @@ export class Conductor {
     this.escalateBuildFailure = opts.escalateBuildFailure ?? defaultEscalateBuildFailure;
     this.gh = opts.gh ?? makeProductionGh();
     this.git = opts.git ?? makeProductionGit();
+    this.rateLimitEpisode = opts.rateLimitEpisode;
+    this.registerAbortController = opts.registerAbortController;
   }
 
   /**
@@ -986,6 +1025,27 @@ export class Conductor {
     };
     process.on('SIGINT', sigintHandler);
 
+    // Mutable reference for the current rate-limit wait AbortController, used by
+    // SIGTERM handler to abort in-flight wait when signal is received.
+    let currentWaitController: AbortController | undefined;
+
+    // Save state on SIGTERM before exit and abort in-flight wait if active
+    // Task 22: Scope per-conductor SIGTERM handler to interactive mode only.
+    // In daemon mode, the process-level handler (installed in daemon-cli.ts)
+    // handles SIGTERM for N concurrent conductors; in interactive mode, each
+    // conductor installs its own handler.
+    const sigterm = async () => {
+      // Abort any in-flight rate-limit wait
+      if (currentWaitController) {
+        currentWaitController.abort();
+      }
+      await writeState(this.stateFilePath, state);
+      process.exit(1);
+    };
+    if (!this.daemon) {
+      process.on('SIGTERM', sigterm);
+    }
+
     // Per-step counter for how many times the user has picked `retry` from the
     // recovery menu in this session. Once it hits MAX_RECOVERY_RETRIES, the
     // UI is told retry is exhausted so the step can't spin forever.
@@ -1168,6 +1228,9 @@ export class Conductor {
             });
             await writeState(this.stateFilePath, state);
             process.off('SIGINT', sigintHandler);
+            if (!this.daemon) {
+              process.off('SIGTERM', sigterm);
+            }
             return;
           }
           continue;
@@ -1179,6 +1242,7 @@ export class Conductor {
           await this.events.emit({ type: 'gate_blocked', step: step.name, reason: gate.reason });
           await writeState(this.stateFilePath, state);
           process.off('SIGINT', sigintHandler);
+          process.off('SIGTERM', sigterm);
           return;
         }
 
@@ -1195,6 +1259,7 @@ export class Conductor {
             await writeState(this.stateFilePath, state);
             await this.events.emit({ type: 'loop_halt', reason: verdict.reason });
             process.off('SIGINT', sigintHandler);
+            process.off('SIGTERM', sigterm);
             return;
           }
         }
@@ -1285,10 +1350,44 @@ export class Conductor {
 
           // Rate limit: wait deterministically, then retry WITHOUT burning the
           // retry budget (matches bin/conduct:2248–2280 handle_rate_limit).
+          // Task 10: Integrate episode coordinator for deadline-aware backoff.
+          // Task 18: Deadline-first — use parsed timezone-aware deadline if available.
           if (result.rateLimited) {
-            const waitSeconds = result.waitSeconds ?? 300;
+            // Task 18: Prefer deadline-first (parsed from message) over escalation (waitSeconds)
+            const deadline = result.deadline ?? Date.now() + (result.waitSeconds ?? 300) * 1000;
+            let waitMs = deadline - Date.now();
+            // Ensure waitMs is positive (defensive guard against clock skew or past deadlines)
+            if (waitMs <= 0) {
+              waitMs = 1;
+            }
+            const waitSeconds = Math.ceil(waitMs / 1000);
+
             await this.events.emit({ type: 'rate_limit', waitSeconds });
-            await this.sleep(waitSeconds * 1000);
+
+            // Enter episode with deadline for coordinated backoff
+            if (this.rateLimitEpisode) {
+              this.rateLimitEpisode.enter(deadline);
+            }
+
+            // Create AbortSignal for SIGTERM handling (Task 11)
+            const controller = new AbortController();
+            currentWaitController = controller;
+            // Task 22: Register with daemon-level handler if provided (daemon mode)
+            this.registerAbortController?.(controller);
+
+            try {
+              // Await episode.clear() or fallback to sleep if episode undefined
+              if (this.rateLimitEpisode && this.rateLimitEpisode.clear) {
+                await this.rateLimitEpisode.clear(controller.signal);
+              } else {
+                await this.sleep(waitMs);
+              }
+            } finally {
+              // Clear reference after wait completes
+              currentWaitController = undefined;
+            }
+
+            // Continue retry loop without burning budget
             attempt--;
             continue;
           }
@@ -1371,6 +1470,7 @@ export class Conductor {
               const prUrl = await this.surfaceRemediationPr(credReason);
               await this.events.emit({ type: 'loop_halt', reason: credReason, prUrl });
               process.off('SIGINT', sigintHandler);
+              process.off('SIGTERM', sigterm);
               return;
             }
 
@@ -1705,6 +1805,7 @@ export class Conductor {
                 const prUrl = await this.surfaceRemediationPr(reason);
                 await this.events.emit({ type: 'loop_halt', reason, prUrl });
                 process.off('SIGINT', sigintHandler);
+                process.off('SIGTERM', sigterm);
                 return;
               }
             }
@@ -1831,6 +1932,7 @@ export class Conductor {
                   const prUrl = await this.surfaceRemediationPr(reason);
                   await this.events.emit({ type: 'loop_halt', reason, prUrl });
                   process.off('SIGINT', sigintHandler);
+                  process.off('SIGTERM', sigterm);
                   return;
                 }
                 // No usable remediation plan → fall through to the fallback below.
@@ -1892,6 +1994,7 @@ export class Conductor {
               const prUrl = await this.surfaceRemediationPr(reason);
               await this.events.emit({ type: 'loop_halt', reason, prUrl });
               process.off('SIGINT', sigintHandler);
+              process.off('SIGTERM', sigterm);
               return;
             }
 
@@ -1962,6 +2065,7 @@ export class Conductor {
                 const prUrl = await this.surfaceRemediationPr(reason);
                 await this.events.emit({ type: 'loop_halt', reason, prUrl });
                 process.off('SIGINT', sigintHandler);
+                process.off('SIGTERM', sigterm);
                 return;
               }
               // No usable remediation plan → fall through to the generic HALT below.
@@ -2003,6 +2107,7 @@ export class Conductor {
             const prUrl = await this.surfaceRemediationPr(`${reason}\n${lastError}`);
             await this.events.emit({ type: 'loop_halt', reason, prUrl });
             process.off('SIGINT', sigintHandler);
+            process.off('SIGTERM', sigterm);
             return;
           }
 
@@ -2056,6 +2161,7 @@ export class Conductor {
 
           await writeState(this.stateFilePath, state);
           process.off('SIGINT', sigintHandler);
+          process.off('SIGTERM', sigterm);
           return;
         }
 
@@ -2228,6 +2334,7 @@ export class Conductor {
             if (response === 'quit') {
               await writeState(this.stateFilePath, state);
               process.off('SIGINT', sigintHandler);
+              process.off('SIGTERM', sigterm);
               return;
             }
             if (response === 'back') {
@@ -2261,6 +2368,9 @@ export class Conductor {
           if (advance === 'halt') {
             await writeState(this.stateFilePath, state);
             process.off('SIGINT', sigintHandler);
+            if (!this.daemon) {
+              process.off('SIGTERM', sigterm);
+            }
             return;
           }
           if (advance !== null) {
@@ -2270,8 +2380,9 @@ export class Conductor {
         }
       }
 
-      // Clean up SIGINT handler
+      // Clean up SIGINT handler and SIGTERM handler
       process.off('SIGINT', sigintHandler);
+      process.off('SIGTERM', sigterm);
 
       // All steps completed successfully
       await this.events.emit({
@@ -2315,6 +2426,7 @@ export class Conductor {
       await this.events.emit({ type: 'loop_halt', reason, prUrl });
     } finally {
       process.off('SIGINT', sigintHandler);
+      process.off('SIGTERM', sigterm);
 
       // Self-build sandbox teardown (TR-5): the throwaway CLAUDE_CONFIG_DIR is
       // removed on EVERY exit path — success, HALT, or a mid-build crash. teardown

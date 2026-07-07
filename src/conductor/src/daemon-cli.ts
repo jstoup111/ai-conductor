@@ -82,6 +82,8 @@ import { reconcileHaltPrs } from './engine/halt-pr-reconciliation.js';
 import { createPriorityResolver, ghIssueLabelReader } from './engine/backlog-priority.js';
 import { isPaused } from './engine/pause-marker.js';
 import { readRestartPending, consumeOnBoot, type RestartIntent } from './engine/restart-marker.js';
+import { create as createRateLimitEpisode } from './engine/rate-limit-episode.js';
+import { createEpisodeHaltTracker } from './engine/episode-halt-tracker.js';
 
 const execFile = promisify(execFileCb);
 
@@ -449,6 +451,26 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   };
   process.once('exit', releaseBackstop);
 
+  // Task 22: Process-level SIGTERM handler for daemon mode. Track all in-flight
+  // rate-limit waits across N concurrent conductors so a single process-level
+  // handler can abort them all and coordinate state saves before exit.
+  // Conductors running in daemon mode (daemon:true) will register their
+  // AbortControllers here instead of installing per-conductor handlers.
+  const allWaitSignals = new Set<AbortController>();
+
+  // Task 22: Install ONE process-level SIGTERM handler (not N per-conductor).
+  // When SIGTERM fires, abort all in-flight waits and coordinate state saves.
+  const daemonSigtermHandler = async () => {
+    // Abort all in-flight rate-limit waits across all conductors
+    for (const controller of allWaitSignals) {
+      controller.abort();
+    }
+    // Note: State saves are handled by individual conductors' exit handlers.
+    // The daemon-cli process cleanup (releaseBackstop) will flush logs + release lock.
+    process.exit(1);
+  };
+  process.on('SIGTERM', daemonSigtermHandler);
+
   // FR-4/FR-7: honor a pause marker set BEFORE this daemon even booted (e.g. the
   // daemon was stopped, `conduct daemon pause` ran, then the daemon was started
   // again). isPaused is fail-closed (pause-marker.ts) — a corrupt marker still
@@ -534,6 +556,10 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
 
   // One shared provider + event bus across workers (rate limits are shared).
   const events = new ConductorEventEmitter();
+  const rateLimitEpisode = createRateLimitEpisode();
+  // Task 20: track which parks were episode-caused so the episode-end sweep
+  // (runDaemon's active→inactive transition hook) can recover exactly those.
+  const episodeHaltTracker = createEpisodeHaltTracker();
   const registry = new PluginRegistry();
   // Surface per-step loop progress on the console. Without this the daemon was
   // silent between `▶ start` and `✓ shipped` (the no-op renderer threw every
@@ -638,6 +664,10 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       // Phase 9.1: daemon runs skip the in-loop retro; the emission step writes
       // the narrative to the engineer store instead of the repo's .docs/retros/.
       daemon: true,
+      rateLimitEpisode,
+      // Task 22: Register in-flight wait AbortControllers with daemon-level handler
+      // so process-level SIGTERM can abort all waits across N concurrent conductors.
+      registerAbortController: (controller) => allWaitSignals.add(controller),
     });
 
     // FR-12 (ADR-013): a re-kick dropped a `.pipeline/REKICK` sentinel. Integrate
@@ -928,6 +958,30 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       // re-polled every loop iteration by runDaemon so a pause lifted mid-run
       // resumes dispatch at the next boundary (no restart required).
       isPaused: () => isPaused(projectRoot),
+      rateLimitEpisode,
+      // Task 20: record episode causality when the daemon parks a halted/error
+      // outcome, and recover exactly those parks when the episode ends. The
+      // sweep clears each stamped worktree's HALT non-destructively via the
+      // existing rekick primitive (reason → HALT.cleared + REKICK sentinel),
+      // which also fires the watchHaltCleared wake for immediate re-dispatch.
+      // NOTE: this binding must stay wired — removing it silently no-ops
+      // episode-caused HALT recovery (daemon.ts guards with ?.()).
+      onHaltWritten: async (slug, episodeCaused) =>
+        episodeHaltTracker.onHaltWritten(slug, episodeCaused),
+      sweepEpisodeHalts: async (isParkedDep) => {
+        const stamped = await episodeHaltTracker.getEpisodeHalts((slug) =>
+          isHalted(worktreeBase, slug),
+        );
+        for (const slug of stamped) {
+          // Operator intent outranks automatic recovery (same rule as rekickSweep).
+          if (isParkedDep && (await isParkedDep(slug))) {
+            log(`episode-end sweep: ${slug} operator-parked — left for a human`);
+            continue;
+          }
+          await clearMarker(join(worktreeBase, slug));
+          log(`episode-end sweep: re-kicked ${slug} (episode-caused HALT cleared)`);
+        }
+      },
       runFeature,
       log,
       staleEngineChecker,

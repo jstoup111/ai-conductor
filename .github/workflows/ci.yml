@@ -27,5 +27,5 @@ jobs:
         working-directory: src/conductor
       - run: npm run build
         working-directory: src/conductor
-      - run: npm test
+      - run: npx vitest run
         working-directory: src/conductor

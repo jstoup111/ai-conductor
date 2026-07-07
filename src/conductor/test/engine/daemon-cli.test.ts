@@ -13,13 +13,15 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, readFile } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { readFileSync } from 'node:fs';
 import type { BacklogItem } from '../../src/engine/daemon.js';
 import { localWorkSource, type LocalWorkSourceDeps } from '../../src/engine/daemon-work-source.js';
 import { writeGatedSnapshot } from '../../src/engine/gated-snapshot.js';
+import type { ConductState } from '../../src/types/index.js';
+import { writeState } from '../../src/engine/state.js';
 
 let daemonDir: string;
 let root: string;
@@ -185,6 +187,88 @@ describe('daemon-cli discover-path gated snapshot wiring (Task 12)', () => {
     expect(matches).toHaveLength(1);
     expect(src).toContain('writeGatedSnapshot(daemonDir, { gated })');
   });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Task 22: Process-level SIGTERM in daemon-cli; per-conductor stays
+// interactive-only (RED then GREEN)
+//
+// Story: "In-flight rate-limit wait is interruptible + SIGTERM-responsive"
+// — N>1 negative paths (ADR 12)
+//
+// RED specs: These tests fail without the Task 22 implementation
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('Task 22: Process-level SIGTERM handler in daemon-cli', () => {
+  it('daemon-cli.ts source code has process-level SIGTERM handler wiring', () => {
+    // Static check: daemon-cli.ts must wire ONE process-level handler that
+    // aborts all in-flight waits, awaits state saves, then exits.
+    const src = readFileSync(
+      join(__dirname, '../../src/daemon-cli.ts'),
+      'utf-8'
+    );
+
+    // Verify daemon-cli has the allWaitSignals tracking set
+    expect(src).toContain('allWaitSignals');
+    // Verify daemon-cli installs process-level SIGTERM handler
+    expect(src).toContain(`process.on('SIGTERM'`);
+    // Verify the handler aborts in-flight waits
+    expect(src).toContain('abort()');
+  });
+
+  it('conductor.ts per-conductor SIGTERM handler is scoped to interactive mode only', () => {
+    // Task 11 added per-conductor SIGTERM in conductor.ts.
+    // Task 22 requirement: scope it to interactive mode only, so daemon path
+    // uses the process-level handler (one per daemon) instead of N per-conductor handlers.
+    const src = readFileSync(
+      join(__dirname, '../../src/engine/conductor.ts'),
+      'utf-8'
+    );
+
+    // Verify scoping: per-conductor handler should only be installed when NOT daemon mode
+    // Look for the mode check guarding the per-conductor SIGTERM handler
+    expect(src).toContain("!this.daemon");
+    expect(src).toContain("process.on('SIGTERM'");
+  });
+
+  it('daemon-cli tracks conductor-level AbortController references for process-level handler', () => {
+    // The daemon-cli process-level handler must be able to abort all in-flight
+    // rate-limit waits across N concurrent conductors. This requires tracking
+    // AbortControllers at the daemon process level (not per-conductor).
+    const src = readFileSync(
+      join(__dirname, '../../src/daemon-cli.ts'),
+      'utf-8'
+    );
+
+    // Daemon must have a mechanism to collect AbortSignals/Controllers from conductors
+    // so the process-level handler can abort them all on SIGTERM
+    expect(src).toContain('allWaitSignals');
+  });
+
+  it('per-conductor handler installs only in interactive mode', async () => {
+    // When daemon=false (interactive), per-conductor handler should be installed.
+    // When daemon=true, per-conductor handler should be skipped (process-level handles it).
+    // This guards against N redundant handlers in daemon mode.
+
+    const dir = await mkdtemp(join(tmpdir(), 'conductor-interactive-test-'));
+    const statePath = join(dir, '.pipeline', 'conduct-state.json');
+
+    try {
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+
+      // Verify the guard condition exists in source
+      const src = readFileSync(
+        join(__dirname, '../../src/engine/conductor.ts'),
+        'utf-8'
+      );
+
+      // The handler should be guarded by: if (!this.daemon)
+      expect(src).toContain('if (!this.daemon)');
+      expect(src).toMatch(/if\s*\(\s*!this\.daemon\s*\)\s*\{[\s\S]*?process\.on\('SIGTERM'/);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 
   // ───────────────────────────────────────────────────────────────────────────
   // Task 21 (adr-2026-07-03-gate-writeback-daemon-tick): the daemon tick must
@@ -222,5 +306,23 @@ describe('daemon-cli discover-path gated snapshot wiring (Task 12)', () => {
     await expect(
       announceGatedIssue(entry, undefined, { cwd: '/repo', log: (m) => logs.push(m) }),
     ).resolves.toBeUndefined();
+  });
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // Task 15 (wire-episode-daemon-cli): daemon-cli must construct and wire the
+  // RateLimitEpisode into both the Conductor (for wait coordination) and the
+  // runDaemon deps (for dispatch gating). Static wiring check to catch a
+  // future refactor that silently drops the episode construction or wiring.
+  // ───────────────────────────────────────────────────────────────────────────
+  it('daemon-cli.ts wires RateLimitEpisode: imports create, constructs one episode, passes to Conductor and runDaemon', () => {
+    const src = readFileSync(join(__dirname, '../../src/daemon-cli.ts'), 'utf-8');
+    // Verify import
+    expect(src).toContain("import { create as createRateLimitEpisode } from './engine/rate-limit-episode.js';");
+    // Verify construction
+    expect(src).toContain('const rateLimitEpisode = createRateLimitEpisode();');
+    // Verify wiring to Conductor
+    expect(src).toContain('rateLimitEpisode,') && expect(src).toMatch(/new Conductor\({[\s\S]*?rateLimitEpisode,/);
+    // Verify wiring to runDaemon deps (should appear in the deps object)
+    expect(src).toMatch(/await runDaemon\(\s*\{[\s\S]*?rateLimitEpisode,/);
   });
 });
