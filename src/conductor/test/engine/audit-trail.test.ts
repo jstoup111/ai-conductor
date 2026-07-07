@@ -4,6 +4,7 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { AuditTrailWriter, type AuditRecord } from '../../src/engine/audit-trail.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
+import { writeVerdict, readVerdict, type GateVerdict } from '../../src/engine/gate-verdicts.js';
 
 describe('engine/audit-trail', () => {
   let dir: string;
@@ -339,6 +340,68 @@ describe('engine/audit-trail', () => {
     expect(first.step).toBe('stories');
     expect(second.event).toBe('intervention');
     expect(second.cause).toBe('kickback cap exceeded');
+  });
+
+  it('preserves both gate_fail and gate_pass history when a gate fails then later passes, agreeing with the latest-state GateVerdict file', async () => {
+    const writer = new AuditTrailWriter(dir);
+    const emitter = new ConductorEventEmitter();
+    writer.subscribe(emitter);
+
+    const step = 'conflict_check';
+    const failReason = 'contradiction found between stories 3 and 6';
+    const passReason = 'no contradictions remain';
+
+    await emitter.emit({
+      type: 'gate_verdict',
+      step,
+      satisfied: false,
+      reason: failReason,
+      checkedAt: Date.now() - 2000,
+    });
+
+    const passCheckedAt = Date.now();
+    await emitter.emit({
+      type: 'gate_verdict',
+      step,
+      satisfied: true,
+      reason: passReason,
+      checkedAt: passCheckedAt,
+    });
+
+    const eventsPath = join(dir, '.pipeline', 'audit-trail', 'events.jsonl');
+    const contents = await readFile(eventsPath, 'utf8');
+    const lines = contents.split('\n').filter((line) => line.length > 0);
+
+    // Both records must be present, in order — no dedup or replacement.
+    expect(lines).toHaveLength(2);
+
+    const first = JSON.parse(lines[0]) as AuditRecord;
+    const second = JSON.parse(lines[1]) as AuditRecord;
+
+    expect(first.step).toBe(step);
+    expect(first.event).toBe('gate_fail');
+    expect(first.reason).toBe(failReason);
+
+    expect(second.step).toBe(step);
+    expect(second.event).toBe('gate_pass');
+    expect(second.reason).toBe(passReason);
+
+    // The final on-disk gate verdict (latest state) must agree with the
+    // last-appended audit record, even though the audit trail also retains
+    // the earlier gate_fail history.
+    const verdict: GateVerdict = {
+      satisfied: true,
+      reason: passReason,
+      checkedAt: passCheckedAt,
+    };
+    await writeVerdict(dir, step, verdict);
+
+    const persisted = await readVerdict(dir, step);
+    expect(persisted).not.toBeNull();
+    expect(persisted?.satisfied).toBe(true);
+    expect(persisted?.reason).toBe(second.reason);
+    expect(persisted?.checkedAt).toBe(passCheckedAt);
+    expect(second.at).toBeGreaterThanOrEqual(passCheckedAt);
   });
 
   it('subscribe() ignores unmapped event types without error or append', async () => {
