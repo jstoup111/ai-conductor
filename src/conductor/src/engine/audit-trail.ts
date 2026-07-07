@@ -16,6 +16,7 @@ const SUBSCRIBED_EVENT_TYPES: Array<ConductorEvent['type']> = [
   'kickback',
   'loop_halt',
   'step_completed',
+  'halt_cleared',
 ];
 
 /**
@@ -140,6 +141,12 @@ export class AuditTrailWriter {
         };
       case 'loop_halt':
         return { step: 'build', event: 'intervention', cause: event.reason };
+      case 'halt_cleared':
+        return {
+          step: event.step ?? 'build',
+          event: 'halt_cleared',
+          cause: event.cause,
+        };
       case 'step_completed':
         // Positive evidence for steps that never produce a gate_verdict
         // (e.g. early-exit steps). If a gate_verdict was already recorded
