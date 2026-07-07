@@ -37,6 +37,7 @@ export const DEFAULT_STEP_MODELS: Record<StepName, string> = {
   worktree: 'haiku',
   acceptance_specs: 'sonnet',
   build: 'haiku',
+  build_review: 'sonnet', // stub — Task 2 finalizes the judgement-gate model choice
   manual_test: 'sonnet',
   prd_audit: 'opus',
   architecture_review_as_built: 'sonnet',
@@ -61,6 +62,7 @@ export const DEFAULT_STEP_EFFORT: Record<StepName, EffortLevel> = {
   worktree: 'low',
   acceptance_specs: 'medium',
   build: 'low',
+  build_review: 'medium', // stub — Task 2 finalizes the judgement-gate effort level
   manual_test: 'medium',
   prd_audit: 'high',
   architecture_review_as_built: 'medium',
@@ -85,6 +87,7 @@ export const DEFAULT_STEP_RETRIES: Record<StepName, number> = {
   worktree: 1,
   acceptance_specs: 3,
   build: 5,
+  build_review: 3, // stub — Task 2 finalizes the judgement-gate retry count
   manual_test: 3,
   prd_audit: 3,
   architecture_review_as_built: 3,
@@ -109,6 +112,7 @@ export const DEFAULT_STEP_REVIEW: Record<StepName, ReviewMode> = {
   worktree: 'auto',
   acceptance_specs: 'auto',
   build: 'auto',
+  build_review: 'auto', // stub — Task 2 finalizes the judgement-gate review mode
   manual_test: 'auto',
   prd_audit: 'conditional',          // marker written only when an FR is non-ALIGNED
   architecture_review_as_built: 'conditional', // marker written only on drift/BLOCKED

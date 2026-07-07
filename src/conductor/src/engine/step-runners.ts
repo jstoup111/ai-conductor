@@ -33,6 +33,8 @@ const STEP_PROMPTS: Record<StepName, string> = {
   worktree: '/conduct worktree',
   acceptance_specs: '/writing-system-tests',
   build: '/pipeline',
+  // stub — Task 2 wires the real judgement-gate skill/prompt.
+  build_review: '/build-review',
   manual_test: '/manual-test',
   prd_audit: '/prd-audit',
   // Runs the architecture-review skill in its as-built compliance-gate mode.

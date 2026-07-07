@@ -22,12 +22,12 @@ describe('engine/steps', () => {
     const expectedOrder: StepName[] = [
       'worktree', 'memory', 'explore', 'complexity', 'prd',
       'architecture_diagram', 'architecture_review', 'stories', 'conflict_check', 'plan',
-      'acceptance_specs', 'build', 'manual_test', 'prd_audit',
+      'acceptance_specs', 'build', 'build_review', 'manual_test', 'prd_audit',
       'architecture_review_as_built', 'retro', 'rebase', 'finish',
     ];
 
-    it('has exactly 18 steps', () => {
-      expect(ALL_STEPS).toHaveLength(18);
+    it('has exactly 19 steps', () => {
+      expect(ALL_STEPS).toHaveLength(19);
     });
 
     it('steps are in exact order', () => {
@@ -137,17 +137,27 @@ describe('engine/steps', () => {
       expect(s.isCheckpoint).toBe(true);
     });
 
-    it('manual_test is SHIP/gating, checkpoint, prereq build (#367 — a failing manual test must be able to block)', () => {
+    it('build_review is a BUILD/gating loop gate sitting between build and manual_test', () => {
       const s = ALL_STEPS[12];
+      expect(s.name).toBe('build_review');
+      expect(s.phase).toBe('BUILD');
+      expect(s.enforcement).toBe('gating');
+      expect(s.prerequisites).toEqual(['build']);
+      expect(s.loopGate).toBe(true);
+      expect(s.isCheckpoint).toBe(false);
+    });
+
+    it('manual_test is SHIP/gating, checkpoint, prereq build_review (#367 — a failing manual test must be able to block)', () => {
+      const s = ALL_STEPS[13];
       expect(s.name).toBe('manual_test');
       expect(s.phase).toBe('SHIP');
       expect(s.enforcement).toBe('gating');
-      expect(s.prerequisites).toEqual(['build']);
+      expect(s.prerequisites).toEqual(['build_review']);
       expect(s.isCheckpoint).toBe(true);
     });
 
     it('prd_audit is SHIP/gating loopGate, after manual_test, not skippable', () => {
-      const s = ALL_STEPS[13];
+      const s = ALL_STEPS[14];
       expect(s.name).toBe('prd_audit');
       expect(s.phase).toBe('SHIP');
       expect(s.enforcement).toBe('gating');
@@ -159,7 +169,7 @@ describe('engine/steps', () => {
     });
 
     it('architecture_review_as_built is SHIP/gating loopGate, after prd_audit', () => {
-      const s = ALL_STEPS[14];
+      const s = ALL_STEPS[15];
       expect(s.name).toBe('architecture_review_as_built');
       expect(s.phase).toBe('SHIP');
       expect(s.enforcement).toBe('gating');
@@ -176,7 +186,7 @@ describe('engine/steps', () => {
     });
 
     it('retro is SHIP/advisory, skippable for S', () => {
-      const s = ALL_STEPS[15];
+      const s = ALL_STEPS[16];
       expect(s.name).toBe('retro');
       expect(s.enforcement).toBe('advisory');
       expect(s.prerequisites).toEqual(['architecture_review_as_built']);
@@ -184,7 +194,7 @@ describe('engine/steps', () => {
     });
 
     it('rebase is SHIP/structural loopGate, engine-native, before finish', () => {
-      const s = ALL_STEPS[16];
+      const s = ALL_STEPS[17];
       expect(s.name).toBe('rebase');
       expect(s.phase).toBe('SHIP');
       expect(s.enforcement).toBe('structural');
@@ -197,18 +207,18 @@ describe('engine/steps', () => {
     });
 
     it('finish is SHIP/gating with prereq rebase', () => {
-      const s = ALL_STEPS[17];
+      const s = ALL_STEPS[18];
       expect(s.name).toBe('finish');
       expect(s.enforcement).toBe('gating');
       expect(s.prerequisites).toEqual(['rebase']);
       expect(s.isCheckpoint).toBe(false);
     });
 
-    it('build → manual_test → prd_audit → architecture_review_as_built → retro → rebase → finish loop-tail topology', () => {
+    it('build → build_review → manual_test → prd_audit → architecture_review_as_built → retro → rebase → finish loop-tail topology', () => {
       const names = ALL_STEPS.map((s) => s.name);
       const tail = names.slice(names.indexOf('build'));
       expect(tail).toEqual([
-        'build', 'manual_test', 'prd_audit', 'architecture_review_as_built',
+        'build', 'build_review', 'manual_test', 'prd_audit', 'architecture_review_as_built',
         'retro', 'rebase', 'finish',
       ]);
     });
@@ -253,8 +263,8 @@ describe('engine/steps', () => {
       expect(getStepIndex('worktree')).toBe(0);
     });
 
-    it('returns 17 for finish', () => {
-      expect(getStepIndex('finish')).toBe(17);
+    it('returns 18 for finish', () => {
+      expect(getStepIndex('finish')).toBe(18);
     });
   });
 
@@ -263,12 +273,12 @@ describe('engine/steps', () => {
       expect(getStepByIndex(0).name).toBe('worktree');
     });
 
-    it('returns finish for index 17', () => {
-      expect(getStepByIndex(17).name).toBe('finish');
+    it('returns finish for index 18', () => {
+      expect(getStepByIndex(18).name).toBe('finish');
     });
 
     it('throws for out-of-range index', () => {
-      expect(() => getStepByIndex(18)).toThrow();
+      expect(() => getStepByIndex(19)).toThrow();
       expect(() => getStepByIndex(-1)).toThrow();
     });
   });
