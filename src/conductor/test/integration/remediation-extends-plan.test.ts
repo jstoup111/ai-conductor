@@ -69,12 +69,11 @@ async function loadAppendRemediationTasks(): Promise<AppendFn> {
   return fn as AppendFn;
 }
 
-interface SeedResult {
-  tasks: Array<{ id: string; status: string }>;
-}
-
+// seedTaskStatus (Slice 1, landed) returns void and writes
+// .pipeline/task-status.json on disk — the earlier guessed {tasks} return
+// shape in this file's header is resolved against the real API here.
 async function loadSeedTaskStatus(): Promise<
-  (projectRoot: string, planPath: string) => Promise<SeedResult>
+  (projectRoot: string, planPath: string) => Promise<void>
 > {
   const mod = (await import(TASK_SEED_MOD)) as Record<string, unknown>;
   const fn = mod.seedTaskStatus;
@@ -83,7 +82,13 @@ async function loadSeedTaskStatus(): Promise<
       'expected export "seedTaskStatus" from task-seed.ts to be a function (not yet implemented)',
     );
   }
-  return fn as (projectRoot: string, planPath: string) => Promise<SeedResult>;
+  return fn as (projectRoot: string, planPath: string) => Promise<void>;
+}
+
+async function readSeededTasks(projectRoot: string): Promise<Array<{ id: string; status: string }>> {
+  const raw = await readFile(join(projectRoot, '.pipeline/task-status.json'), 'utf-8');
+  const parsed = JSON.parse(raw) as { tasks?: Array<{ id: string; status: string }> };
+  return parsed.tasks ?? [];
 }
 
 function gap(id: string, title: string, rationale = 'residual gap'): RemediationGap {
@@ -139,8 +144,8 @@ describe('integration: remediation extends the plan, end-to-end (H3/H9, plan Tas
     expect(parsed.has(remId)).toBe(true);
 
     // Re-seed picks up the new plan row as pending.
-    const seeded = await seedTaskStatus(dir, planPath);
-    const remRow = seeded.tasks.find((t) => t.id === remId);
+    await seedTaskStatus(dir, planPath);
+    const remRow = (await readSeededTasks(dir)).find((t) => t.id === remId);
     expect(remRow).toBeDefined();
     expect(remRow!.status).toBe('pending');
 
@@ -151,10 +156,13 @@ describe('integration: remediation extends the plan, end-to-end (H3/H9, plan Tas
     await git('commit', '-q', '-m', `fix: remediate fr10-1\n\nTask: ${remId}`);
 
     const { deriveCompletion } = (await import('../../src/engine/autoheal.js')) as unknown as {
-      deriveCompletion: (root: string, plan: string) => Promise<{ completed: Record<string, unknown> }>;
+      deriveCompletion: (
+        root: string,
+        plan: string,
+      ) => Promise<Record<string, { completed: boolean }>>;
     };
     const derived = await deriveCompletion(dir, planPath);
-    expect(derived.completed[remId]).toBeDefined();
+    expect(derived[remId]?.completed).toBe(true);
   });
 
   it('negative: a completed remediation task re-deriving the same id for DIFFERENT content is never mutated (bumped id instead)', async () => {
