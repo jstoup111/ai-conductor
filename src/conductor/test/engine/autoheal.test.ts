@@ -30,7 +30,10 @@ beforeEach(async () => {
   gitDir = tmpDir;
 
   // Initialize a git repo for testing
-  await execa('git', ['init'], { cwd: gitDir });
+  // -b main: CI runners' git default branch is not necessarily `main`
+  // (ubuntu-latest defaults to master without init.defaultBranch config) —
+  // the origin-push fixtures below push `main` explicitly.
+  await execa('git', ['init', '-b', 'main'], { cwd: gitDir });
   await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: gitDir });
   await execa('git', ['config', 'user.name', 'Test User'], { cwd: gitDir });
 

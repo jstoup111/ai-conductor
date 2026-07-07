@@ -1,7 +1,5 @@
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import * as crypto from 'node:crypto';
 
 /**
@@ -91,25 +89,30 @@ function createInstance(
       // Ensure .pipeline directory exists
       await mkdir(sidecarDir, { recursive: true });
 
-      // Atomic write: write to temp file, then rename
-      const tempDir = await mkdtemp(join(tmpdir(), 'task-evidence-'));
+      // Serialize Maps and Sets to JSON-compatible format
+      const serialized: SerializedEvidenceData = {
+        evidenceStamps: Object.fromEntries(instance.evidenceStamps),
+        noEvidenceAttempts: instance.noEvidenceAttempts,
+        migrationGrandfather: Array.from(instance.migrationGrandfather),
+      };
+
+      // TRUE atomic write: unique temp file in the SAME directory, then
+      // rename(2) over the target — atomic on POSIX, last-write-wins, and a
+      // reader can never observe a torn/empty sidecar. The previous
+      // implementation staged the temp in the OS tmpdir and then did a second
+      // plain writeFile to the real path — two concurrent writers could
+      // interleave and leave a truncated file (the "concurrent writes" flake,
+      // deterministic on 2-core CI runners).
+      const tempFile = join(
+        sidecarDir,
+        `.task-evidence.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`,
+      );
       try {
-        const tempFile = join(tempDir, 'task-evidence.json');
-
-        // Serialize Maps and Sets to JSON-compatible format
-        const serialized: SerializedEvidenceData = {
-          evidenceStamps: Object.fromEntries(instance.evidenceStamps),
-          noEvidenceAttempts: instance.noEvidenceAttempts,
-          migrationGrandfather: Array.from(instance.migrationGrandfather),
-        };
-
         await writeFile(tempFile, JSON.stringify(serialized, null, 2));
-
-        // Atomic rename (last-write-wins semantics)
-        await writeFile(sidecarPath, await readFile(tempFile, 'utf-8'));
-      } finally {
-        // Clean up temp dir
-        await rm(tempDir, { recursive: true, force: true });
+        await rename(tempFile, sidecarPath);
+      } catch (err) {
+        await rm(tempFile, { force: true }).catch(() => {});
+        throw err;
       }
     },
   };
