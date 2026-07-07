@@ -5330,6 +5330,47 @@ describe('auto-heal', () => {
     expect(healEvents).toEqual([]);
   });
 
+  it('completes a pending task from a guarded task-N alias trailer, driven through the real build-gate wiring (#417)', async () => {
+    // Drives the actual production call site (Conductor's auto-heal hook at
+    // build-gate evaluation), not deriveCompletion() called directly — proves
+    // the alias reaches the gate through conductor.run(), not just the
+    // derivation's own unit tests.
+    await seedAllOtherArtifacts();
+    await seedProjectFixture();
+    routeGitMock({
+      revParse: { stdout: 'deadbeef0000000000000000000000000000dead' },
+      mergeBase: { stdout: 'deadbeef0000000000000000000000000000dead' },
+      log: {
+        stdout: evidenceRecord(
+          'abc1234567890000000000000000000000000000',
+          'feat: add users slice',
+          'Task: task-9\n',
+        ),
+      },
+      diffTree: () => ({ stdout: 'src/users/controller.ts\nsrc/users/routes.ts' }),
+    });
+
+    const runner: StepRunner = { run: vi.fn().mockResolvedValue({ success: true }) };
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      verifyArtifacts: true,
+      maxRetries: 2,
+    });
+
+    await conductor.run();
+
+    const { readFile: _rf } = await import('fs/promises');
+    const afterRaw = await _rf(join(dir, '.pipeline/task-status.json'), 'utf-8');
+    const after = JSON.parse(afterRaw);
+    const task9 = after.tasks.find((t: { id: string }) => t.id === '9');
+    expect(task9.status).toBe('completed');
+    expect(task9.commit).toBe('abc1234');
+  });
+
   it('leaves a task pending when evidence is weak and runs the normal retry path', async () => {
     await seedAllOtherArtifacts();
     await seedProjectFixture();
