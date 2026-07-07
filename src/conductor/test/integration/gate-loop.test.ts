@@ -14,6 +14,8 @@ import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import type { GitRunner } from '../../src/engine/pr-labels.js';
 import { writeVerdict } from '../../src/engine/gate-verdicts.js';
+import { parsePlanTaskPaths } from '../../src/engine/autoheal.js';
+import { createTaskEvidence } from '../../src/engine/task-evidence.js';
 
 // Drives the gate-driven tail (build…finish) with verifyArtifacts on. The front
 // half is pre-marked done and the loop is started at `build` (fromStep), so each
@@ -68,9 +70,31 @@ describe('integration/gate-loop', () => {
   // Per-step artifact creation so each gate's objective verdict passes.
   async function satisfy(step: string): Promise<StepRunResult> {
     if (step === 'build') {
+      // The build gate now recomputes completion from the engine-only
+      // evidence sidecar (H6/H7) rather than trusting raw task-status.json
+      // rows. execa is mocked module-wide in this file (to keep the rest of
+      // the tail hermetic), so the git-trailer path in deriveCompletion
+      // can't run here — stamp the sidecar directly for whatever task ids
+      // the test's plan actually declares (falling back to a single
+      // placeholder id for tests that never seed a plan, where the
+      // completion context has no planPath and the gate falls back to
+      // trusting the raw file rows unchanged).
+      let taskIds: string[] = ['t1'];
+      try {
+        const planText = await readFile(join(dir, '.docs/plans/p.md'), 'utf-8');
+        const planned = Array.from(parsePlanTaskPaths(planText).keys());
+        if (planned.length > 0) taskIds = planned;
+      } catch {
+        // No plan seeded — keep the legacy placeholder id.
+      }
+      const evidence = await createTaskEvidence(dir);
+      for (const id of taskIds) {
+        evidence.evidenceStamps.set(id, { sha: '0'.repeat(40), form: 'test-stub' });
+      }
+      await evidence.write();
       await writeFile(
         join(dir, '.pipeline/task-status.json'),
-        JSON.stringify({ tasks: [{ id: 't1', status: 'completed' }] }),
+        JSON.stringify({ tasks: taskIds.map((id) => ({ id, status: 'completed' })) }),
       );
     } else if (step === 'manual_test') {
       await writeFile(

@@ -19,15 +19,30 @@ import { Waker } from './waker.js';
 import type { RateLimitEpisode } from './rate-limit-episode.js';
 
 /**
- * Default sleep implementation that returns an unref'd timer.
- * The timer won't prevent the process from exiting when there's no other work.
- * Task 11: Ensure the idle poll timeout doesn't block process exit.
+ * Default sleep implementation whose timer HOLDS the event loop.
+ *
+ * This timer used to be unref'd ("don't block process exit") — but during an
+ * idle poll with no wake-watchers registered (a fully drained backlog: zero
+ * halted/parked features), the sleep timer is the process's ONLY pending
+ * work. Unref'd, the event loop emptied and the continuous daemon exited 0
+ * silently mid-await — no log, no HALT, no restart marker (observed live
+ * 2026-07-07: three consecutive silent boot-deaths ~10s after startup). An
+ * awaited idle-poll sleep IS the daemon's liveness; it must keep the process
+ * alive. There is no lingering-handle cost: the loop only exits via `break`
+ * paths that run after a sleep has already resolved, so no orphan timer can
+ * delay a normal shutdown.
+ *
+ * `onTimer` is a test-only seam: the ref property is unobservable otherwise
+ * (the vitest runner holds the loop itself, so an await-based test passes
+ * either way — a false green).
  */
-export function createDefaultSleep(): (ms: number) => Promise<void> {
+export function createDefaultSleep(
+  opts: { onTimer?: (timer: NodeJS.Timeout) => void } = {},
+): (ms: number) => Promise<void> {
   return (ms: number) =>
     new Promise<void>((r) => {
       const timer = setTimeout(r, ms);
-      timer.unref();
+      opts.onTimer?.(timer);
     });
 }
 

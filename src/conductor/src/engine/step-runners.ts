@@ -347,8 +347,20 @@ export class DefaultStepRunner implements StepRunner {
 
     // Open a REPL when the step is designed for user conversation AND we're
     // not in auto mode (auto = unattended, must still one-shot so the flow
-    // advances). Otherwise dispatch print mode — Claude answers once and exits.
-    const interactive = this.mode !== 'auto' && INTERACTIVE_STEPS.has(step);
+    // advances). In interactive mode, open REPL for all conversational steps
+    // except one-shot analysis steps. Otherwise dispatch print mode.
+    let interactive: boolean;
+    if (this.mode === 'interactive') {
+      // In interactive mode, open REPL for all conversational steps except
+      // one-shot steps that generate artifacts without user input
+      const oneShotSteps = new Set(['complexity', 'conflict_check', 'architecture_diagram', 'retro', 'rebase']);
+      interactive = !oneShotSteps.has(step);
+    } else if (this.mode === 'auto') {
+      interactive = false;
+    } else {
+      // default mode: REPL only for explicitly conversational steps
+      interactive = INTERACTIVE_STEPS.has(step);
+    }
 
     // Consult the availability cache before dispatch so a model already
     // known-dead (e.g. downgraded during an earlier autonomous step) isn't
