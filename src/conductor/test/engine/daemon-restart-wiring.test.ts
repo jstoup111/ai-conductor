@@ -327,3 +327,150 @@ describe('daemon-cli.ts wiring: createRestartRequester deps injection', () => {
     expect(exitCalled).toBe(true);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// (e) Queued-restart relink wiring at idle boundary (Task 13):
+// When the hyphen marker fires triggerSelfRestart at the idle boundary,
+// the injected relink must run FIRST. This verifies the call order in
+// the hasRestartPending block of runDaemon's idle loop.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('Task 13: queued-restart relink at idle boundary', () => {
+  function items(n: number): BacklogItem[] {
+    return Array.from({ length: n }, (_, i) => ({ slug: `f${i}` }));
+  }
+
+  it('queued restart at idle boundary relinks before firing trigger (TR-3, TR-4)', async () => {
+    const logs: string[] = [];
+    const callOrder: string[] = [];
+    let relinkCalls = 0;
+    let triggerCalls = 0;
+    let markerPresent = true; // stays "pending" throughout
+
+    let dispatched = 0;
+
+    const deps: DaemonDeps = {
+      discoverBacklog: async () => (dispatched === 0 ? items(1) : []),
+      runFeature: async (item) => {
+        dispatched++;
+        return { slug: item.slug, status: 'done' };
+      },
+      log: (msg) => logs.push(msg),
+      sleep: async () => {},
+      hasRestartPending: async () => markerPresent,
+      relink: async () => {
+        relinkCalls++;
+        callOrder.push('relink');
+      },
+      triggerSelfRestart: async () => {
+        triggerCalls++;
+        callOrder.push('trigger');
+      },
+    };
+
+    // Continuous mode with small idle-poll ceiling to reach multiple idle boundaries
+    const result = await runDaemon(deps, {
+      concurrency: 1,
+      once: false,
+      idlePollMs: 0,
+      maxIdlePolls: 2,
+    });
+
+    // Verify relink was called exactly once
+    expect(relinkCalls).toBe(1);
+    // Verify trigger was called exactly once
+    expect(triggerCalls).toBe(1);
+    // Verify call order: relink BEFORE trigger
+    expect(callOrder).toEqual(['relink', 'trigger']);
+    expect(result.stoppedReason).toBe('idle_timeout');
+  });
+
+  it('queued restart relink failure → log, do NOT fire trigger (TR-3)', async () => {
+    const logs: string[] = [];
+    let relinkCalls = 0;
+    let triggerCalls = 0;
+    let markerPresent = true;
+
+    let dispatched = 0;
+
+    const deps: DaemonDeps = {
+      discoverBacklog: async () => (dispatched === 0 ? items(1) : []),
+      runFeature: async (item) => {
+        dispatched++;
+        return { slug: item.slug, status: 'done' };
+      },
+      log: (msg) => logs.push(msg),
+      sleep: async () => {},
+      hasRestartPending: async () => markerPresent,
+      relink: async () => {
+        relinkCalls++;
+        throw new Error('relink failed: socket error');
+      },
+      triggerSelfRestart: async () => {
+        triggerCalls++;
+      },
+    };
+
+    const result = await runDaemon(deps, {
+      concurrency: 1,
+      once: false,
+      idlePollMs: 0,
+      maxIdlePolls: 1,
+    });
+
+    // Verify relink was called at least once (will be retried on each idle boundary)
+    expect(relinkCalls).toBeGreaterThan(0);
+    // Verify trigger was NOT called due to relink failure (marker remains, so no trigger)
+    expect(triggerCalls).toBe(0);
+    // Verify error was logged
+    const errorLogs = logs.filter((m) => m.includes('relink'));
+    expect(errorLogs.length).toBeGreaterThan(0);
+    // Marker should remain for retry (marker check on next idle boundary succeeds)
+    expect(markerPresent).toBe(true);
+    expect(result.stoppedReason).toBe('idle_timeout');
+  });
+
+  it('queued restart relink success → trigger fires immediately after', async () => {
+    const logs: string[] = [];
+    const callOrder: string[] = [];
+    let relinkCalls = 0;
+    let triggerCalls = 0;
+    let markerPresent = true;
+
+    let dispatched = 0;
+
+    const deps: DaemonDeps = {
+      discoverBacklog: async () => (dispatched === 0 ? items(1) : []),
+      runFeature: async (item) => {
+        dispatched++;
+        return { slug: item.slug, status: 'done' };
+      },
+      log: (msg) => logs.push(msg),
+      sleep: async () => {},
+      hasRestartPending: async () => markerPresent,
+      relink: async () => {
+        relinkCalls++;
+        callOrder.push('relink');
+        // Simulate successful relink work
+        await Promise.resolve();
+      },
+      triggerSelfRestart: async () => {
+        triggerCalls++;
+        callOrder.push('trigger');
+      },
+    };
+
+    const result = await runDaemon(deps, {
+      concurrency: 1,
+      once: false,
+      idlePollMs: 0,
+      maxIdlePolls: 2,
+    });
+
+    // Verify both were called exactly once
+    expect(relinkCalls).toBe(1);
+    expect(triggerCalls).toBe(1);
+    // Verify immediate succession
+    expect(callOrder).toEqual(['relink', 'trigger']);
+    expect(result.stoppedReason).toBe('idle_timeout');
+  });
+});

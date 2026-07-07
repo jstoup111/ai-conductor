@@ -301,6 +301,14 @@ export interface DaemonDeps {
    */
   hasRestartPending?: () => Promise<boolean>;
   /**
+   * Task 13 (queued-restart relink wiring): Relink harness skills before firing
+   * the self-restart trigger at the idle boundary. Called BEFORE triggerSelfRestart
+   * to ensure fresh skills are available in the restarted daemon. If relink fails,
+   * error is logged, trigger is NOT called, and the marker remains for retry at
+   * the next idle boundary. Absence → no relink (skip directly to trigger).
+   */
+  relink?: () => Promise<void>;
+  /**
    * Fire the self-restart callback when a restart marker is pending and the daemon
    * reaches idle boundary with no in-flight work. This is the respawn hook injected
    * from supervisor-cli or bare-run handler. Must handle async failures gracefully:
@@ -724,17 +732,33 @@ export async function runDaemon(
               // T28 path: supervisor mode — fire respawn trigger
               if (deps.triggerSelfRestart) {
                 log('[daemon] self-restart marker found at idle boundary; firing trigger');
-                try {
-                  await deps.triggerSelfRestart();
-                  // If trigger succeeds, it respawns the process and we never reach here.
-                  // But if it doesn't respawn immediately, track that we succeeded so we
-                  // don't retry (in production, the process exits on respawn).
-                  restartTriggeredSuccessfully = true;
-                  log('[daemon] self-restart trigger completed (no respawn yet)');
-                } catch (err) {
-                  log(
-                    `[daemon] self-restart trigger failed: ${err instanceof Error ? err.message : String(err)}; will retry at next idle boundary`,
-                  );
+                // Task 13: Call relink BEFORE firing trigger (queued-restart relink wiring)
+                let relinkFailed = false;
+                if (deps.relink) {
+                  try {
+                    await deps.relink();
+                  } catch (err) {
+                    log(
+                      `[daemon] relink failed: ${err instanceof Error ? err.message : String(err)}; will retry at next idle boundary`,
+                    );
+                    // Relink failure → do NOT fire trigger, marker remains for retry
+                    relinkFailed = true;
+                  }
+                }
+                // Only fire trigger if relink succeeded (or was absent)
+                if (!relinkFailed) {
+                  try {
+                    await deps.triggerSelfRestart();
+                    // If trigger succeeds, it respawns the process and we never reach here.
+                    // But if it doesn't respawn immediately, track that we succeeded so we
+                    // don't retry (in production, the process exits on respawn).
+                    restartTriggeredSuccessfully = true;
+                    log('[daemon] self-restart trigger completed (no respawn yet)');
+                  } catch (err) {
+                    log(
+                      `[daemon] self-restart trigger failed: ${err instanceof Error ? err.message : String(err)}; will retry at next idle boundary`,
+                    );
+                  }
                 }
               }
               // T30 path: bare-run mode — no supervisor, consume marker and exit cleanly
