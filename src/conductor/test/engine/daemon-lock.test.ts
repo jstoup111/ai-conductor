@@ -335,4 +335,104 @@ describe('daemon-lock: holdLock — daemon lifetime lock (ADR-010)', () => {
 
     await handle?.release();
   });
+
+  // ═════════════════════════════════════════════════════════════════════════════
+  // Task 12: holdLock negative paths — persistent holder + race (RED/GREEN)
+  // ═════════════════════════════════════════════════════════════════════════════
+
+  it('live holder NEVER releases → holdLock resolves null after injected window (no throw, no infinite wait)', async () => {
+    const mod = await load(LOCK_MOD);
+    const holdLock = requireFn(mod, 'holdLock');
+
+    // Seed a pidfile owned by THIS process (guaranteed live, never unlinked).
+    await mkdir(join(repoPath, '.daemon'), { recursive: true });
+    const seeded = { pid: process.pid, uuid: 'persistent-holder', startedAt: new Date().toISOString() };
+    await writeFile(pidfile(), JSON.stringify(seeded));
+
+    // holdLock with bounded-wait: poll every 25ms, wait up to 300ms.
+    // The pidfile is never released, so the loop expires and returns null.
+    const startTime = Date.now();
+    const handle = await holdLock(repoPath, { takeoverWaitMs: 300, pollMs: 25 });
+    const elapsedMs = Date.now() - startTime;
+
+    // Assert: returns null (1-per-repo, not acquired) and elapsed >= window.
+    expect(handle).toBeNull();
+    expect(elapsedMs).toBeGreaterThanOrEqual(300);
+    // Allow some margin for timing variation, but ensure we didn't exit early.
+    expect(elapsedMs).toBeLessThan(400); // sanity check: not wildly over
+  });
+
+  it('two concurrent holdLock calls racing a just-released pidfile → exactly one handle, one null (O_EXCL single-winner)', async () => {
+    const mod = await load(LOCK_MOD);
+    const holdLock = requireFn(mod, 'holdLock');
+
+    // Seed a pidfile owned by THIS process (guaranteed live).
+    await mkdir(join(repoPath, '.daemon'), { recursive: true });
+    const seeded = { pid: process.pid, uuid: 'racer-holder', startedAt: new Date().toISOString() };
+    await writeFile(pidfile(), JSON.stringify(seeded));
+
+    // On a timer, release the pidfile.
+    const releaseTimer = setTimeout(async () => {
+      try {
+        await unlink(pidfile());
+      } catch {
+        // Already gone — fine.
+      }
+    }, 150);
+
+    // Launch two concurrent holdLock calls that race for the released lock.
+    const [h1, h2] = await Promise.all([
+      holdLock(repoPath, { takeoverWaitMs: 500, pollMs: 25 }),
+      holdLock(repoPath, { takeoverWaitMs: 500, pollMs: 25 }),
+    ]);
+
+    clearTimeout(releaseTimer);
+
+    // Exactly one should acquire (O_EXCL single-winner), one should get null.
+    const acquiredCount = [h1, h2].filter((h) => h !== null).length;
+    expect(acquiredCount).toBe(1);
+
+    // The winner must own the lock.
+    const winner = h1 ?? h2;
+    expect(winner?.owned).toBe(true);
+    expect(winner?.pid).toBe(process.pid);
+
+    // Verify pidfile contains the winner's pid.
+    const rec = JSON.parse(await readFile(pidfile(), 'utf8'));
+    expect(rec.pid).toBe(process.pid);
+
+    await winner?.release();
+  });
+
+  it('dead-pid pidfile → immediate reclaim with NO wait', async () => {
+    const mod = await load(LOCK_MOD);
+    const holdLock = requireFn(mod, 'holdLock');
+
+    // Seed a pidfile with a dead pid (will fail isLive check).
+    await mkdir(join(repoPath, '.daemon'), { recursive: true });
+    await writeFile(
+      pidfile(),
+      JSON.stringify({ pid: deadPid(), uuid: 'dead-holder', startedAt: new Date(0).toISOString() }),
+    );
+
+    // Call holdLock with a bounded-wait window (should exit immediately, not poll).
+    const startTime = Date.now();
+    const handle = await holdLock(repoPath, { takeoverWaitMs: 5000, pollMs: 250 });
+    const elapsedMs = Date.now() - startTime;
+
+    // Assert: returns a valid handle (we reclaimed the dead lock).
+    expect(handle).not.toBeNull();
+    expect(handle?.owned).toBe(true);
+    expect(handle?.pid).toBe(process.pid);
+
+    // Assert: reclaim happened immediately (no significant wait for dead pid).
+    // Reclaim should complete in well under 100ms (no polling loop).
+    expect(elapsedMs).toBeLessThan(100);
+
+    // Verify pidfile contains our pid (reclaimed).
+    const rec = JSON.parse(await readFile(pidfile(), 'utf8'));
+    expect(rec.pid).toBe(process.pid);
+
+    await handle?.release();
+  });
 });
