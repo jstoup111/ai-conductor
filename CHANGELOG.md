@@ -34,6 +34,9 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   `feature_desc` (the daemon convention), then a single plan file; on true
   ambiguity it passes no plan and the gate fails closed instead of upserting
   someone else's tasks into `task-status.json` and halting on every re-kick.
+- Evidence gate id-grammar unification (#417) — guarded `task-N` trailer alias in derive,
+  one id grammar + trailer discipline across tdd/pipeline skills, operator-gated recovery
+  runbook for parked features (see `docs/runbooks/evidence-backfill-recovery.md`).
 
 ### Added
 
