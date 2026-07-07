@@ -27,5 +27,10 @@ jobs:
         working-directory: src/conductor
       - run: npm run build
         working-directory: src/conductor
-      - run: npm test
+      # --maxWorkers=2: the suite (4500+ tests) OOM-kills a vitest fork worker
+      # on the 7GB runner at full parallelism (observed 2026-07-07: all tests
+      # pass, then "Worker exited unexpectedly" with a V8 allocation-failure
+      # stack fails the job). Two workers halves peak memory; wall time is not
+      # a constraint here.
+      - run: npm test -- --minWorkers=1 --maxWorkers=2
         working-directory: src/conductor
