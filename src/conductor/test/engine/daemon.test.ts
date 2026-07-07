@@ -1143,4 +1143,48 @@ describe('engine/daemon — runDaemon', () => {
       expect(res.processed[0].status).toBe('done');
     });
   });
+
+  // ── Task 6: Dispatch gate suppresses new picks when active (rate-limit episode) ──
+
+  it('dispatch gate: episode active suppresses new picks, idle cycle still ticks', async () => {
+    // Setup: rate-limit episode is active (ongoing rate-limit event).
+    // The daemon has eligible features in the backlog and no in-flight work,
+    // but the active episode should suppress new dispatch.
+    // Idle-cycle invariant: sleep is still called even when no dispatch happens.
+
+    const mockEpisode = {
+      active: () => true, // Episode is active → suppress dispatch
+      enter: () => {},
+      clear: () => Promise.resolve(),
+    };
+
+    let sleptCount = 0;
+    const runFeature = vi.fn(async (it: BacklogItem) => ({ slug: it.slug, status: 'done' as const }));
+
+    const deps: DaemonDeps = {
+      discoverBacklog: staticBacklog(items(1)), // One eligible feature in backlog
+      runFeature,
+      rateLimitEpisode: mockEpisode,
+      sleep: async () => {
+        sleptCount++;
+      },
+    };
+
+    const res = await runDaemon(deps, {
+      concurrency: 1,
+      once: false, // continuous mode so we can idle-poll
+      maxIdlePolls: 1, // Just one idle poll to verify the pattern
+    });
+
+    // Assertions:
+    // 1. No dispatch occurred (runFeature never called)
+    expect(runFeature).not.toHaveBeenCalled();
+    // 2. Sleep was called exactly once (idle cycle still ticked)
+    expect(sleptCount).toBe(1);
+    // 3. Feature remains eligible in backlog (nothing was popped)
+    // 4. Stopped due to idle timeout (not dispatch ceiling)
+    expect(res.stoppedReason).toBe('idle_timeout');
+    // 5. Nothing was processed (no dispatch happened)
+    expect(res.processed).toHaveLength(0);
+  });
 });
