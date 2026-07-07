@@ -94,6 +94,28 @@ to this repo must honor these gates:
    ```` ```bash migration ```` fenced block. `bin/migrate` will execute these
    blocks (after user approval) when consumers update past this version.
 
+   **Waiver (self-host builds only, adr-2026-07-06-migration-gate-waiver).**
+   When the self-host release gate's path-based classifier flags a breaking
+   surface but the actual edit is internal-only (e.g. deleting a private
+   helper, no consumer-visible CLI/hook/schema change), a migration block is
+   not the right fix — commit a waiver instead of inventing an empty one.
+   Add a file under `.docs/release-waivers/<plan-stem>.md` in the SAME diff as:
+   ```
+   Waives: <comma-separated canonical surface names>
+
+   Rationale: <non-empty prose — why this is internal-only>
+   ```
+   Canonical surface names are exactly: `bin/conduct CLI`, `skill symlink
+   targets`, `hook wiring`, `settings.json schema` (must match
+   `CANONICAL_BREAKING_SURFACES` in `release-gate.ts` verbatim — an unknown
+   name is treated as malformed, never silently accepted). The waiver must
+   list every touched surface (partial coverage HALTs naming the gap) and
+   must be part of the `base...HEAD` diff — a waiver merged by a prior
+   feature never satisfies a later one (fail-closed freshness). An
+   undeterminable change set (null diff) can never be waived. Do NOT use a
+   waiver when the edit changes actual CLI/hook/schema *behavior* — that
+   always needs a real migration block.
+
 3. **Releases are cut by CI on merge to main.** `.github/workflows/release.yml`
    reads `VERSION`, tags `vX.Y.Z`, rewrites the `[Unreleased]` block under
    `## [X.Y.Z] - <today>`, bumps `VERSION` to the next patch, and publishes a
