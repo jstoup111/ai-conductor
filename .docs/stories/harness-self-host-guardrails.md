@@ -333,6 +333,12 @@ self-builds too.
 
 **Requirement:** TR-10 (ReleaseArtifactGate — migration block)
 
+> **Amended 2026-07-06** by `adr-2026-07-06-migration-gate-waiver` (fix #354): TR-10 gains a
+> third satisfying condition — a valid committed waiver at `.docs/release-waivers/<plan-stem>.md`
+> (see `.docs/stories/self-host-release-gate-bin-conduct-breaking-surfac.md`). The negative path
+> "breaking surface + no block → HALT" now reads "…+ no block **and no valid waiver** → HALT".
+> The fail-closed uncertain-diff path below is unchanged (uncertain remains unwaivable).
+
 As the operator, I want a harness self-build that makes a breaking change (settings.json schema,
 hook wiring, skill symlink targets, or `bin/conduct` CLI) to HALT unless `CHANGELOG.md` includes a
 runnable `## Migration` block so that `bin/migrate` can carry consumers past the breaking version.
