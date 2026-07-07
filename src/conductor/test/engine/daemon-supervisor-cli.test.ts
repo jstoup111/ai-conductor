@@ -496,4 +496,37 @@ describe('dispatchDaemonSupervisor: restart — immediate (idle/paused) vs queue
     expect(isBusyCalled).toBe(false);
     expect(calls.map((c) => c.method)).toEqual(['restart']); // immediate, not queued
   });
+
+  it('idle → relink called before supervisor.restart (TR-4)', async () => {
+    const dispatch = requireFn(await load(), 'dispatchDaemonSupervisor');
+    const repo = await tempRepo();
+    const { calls, supervisor } = makeFakeSupervisor();
+    const out: string[] = [];
+    const callOrder: string[] = [];
+
+    // Mock relinkSkillsForSelfBuild
+    const mockRelink = async () => {
+      callOrder.push('relink');
+    };
+
+    // Wrap the supervisor.restart to track when it's called
+    const originalRestart = supervisor.restart;
+    supervisor.restart = async (...args: unknown[]) => {
+      callOrder.push('restart');
+      return originalRestart.apply(supervisor, args);
+    };
+
+    const code: number = await dispatch(
+      { verb: 'restart' },
+      {
+        supervisor,
+        cwd: repo,
+        out: (l: string) => out.push(l),
+        relinkSkills: mockRelink,
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(callOrder).toEqual(['relink', 'restart']);
+  });
 });

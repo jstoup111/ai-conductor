@@ -463,6 +463,7 @@ export function makeTmuxSupervisor(run: TmuxRunner = defaultTmuxRunner): Supervi
         return; // already running (or just revived) — idempotent
       }
       await newDetachedSession(name, DAEMON_FOREGROUND_COMMAND, repo, run);
+      await setRemainOnExit(name, run);
     },
 
     async stop(repo: string): Promise<void> {

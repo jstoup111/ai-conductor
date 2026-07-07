@@ -443,6 +443,23 @@ describe('makeTmuxSupervisor().start: dead-pane revival', () => {
     expect(subs).toContain('new-session');
     expect(subs).not.toContain('respawn-pane');
   });
+
+  it('session absent → fresh creation arms remain-on-exit after newDetachedSession', async () => {
+    const makeTmuxSupervisor = requireFn(await load(), 'makeTmuxSupervisor');
+    const { run, calls } = spyRunner({
+      '-V': { code: 0 },
+      'has-session': { code: 1 },
+    });
+    await makeTmuxSupervisor(run).start('/home/alice/myapp');
+    const subs = calls.map((c) => c.args[0]);
+    expect(subs).toContain('new-session');
+    expect(subs).toContain('set-option');
+    const newSessionIdx = subs.indexOf('new-session');
+    const setOptionIdx = subs.indexOf('set-option');
+    expect(newSessionIdx).toBeGreaterThanOrEqual(0);
+    expect(setOptionIdx).toBeGreaterThanOrEqual(0);
+    expect(newSessionIdx).toBeLessThan(setOptionIdx);
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

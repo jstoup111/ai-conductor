@@ -229,17 +229,30 @@ export function stripAnsi(s: string): string {
 }
 
 /**
- * Task 14: Create a RestartRequester that implements the restart sequence:
- * 1. Write a restart marker with identity metadata
- * 2. Release the lock
- * 3. Exit with code 0
+ * Task 4: RestartRequester accepts injected relink + trigger; session-hosted happy ordering
  *
- * On error during marker write, a catch block ensures the lock is released and exit(1) is called.
+ * Create a RestartRequester that implements two flows:
+ *
+ * Session-hosted mode (triggerSelfRestart provided):
+ *   1. Call relink (if provided)
+ *   2. Write restart marker
+ *   3. Call triggerSelfRestart
+ *   4. Do NOT call lock.releaseSync() or process.exit()
+ *
+ * Headless mode (triggerSelfRestart not provided):
+ *   1. Call relink (if provided)
+ *   2. Write restart marker
+ *   3. Release lock
+ *   4. Exit with code 0
+ *
+ * On error during marker write, a catch block ensures the lock is released and exit(1) is called
+ * (headless mode only).
  *
  * @param daemonDir - project root directory
  * @param log - logging function
  * @param lock - lock object with releaseSync method
  * @param process - Node process object (injected for testability)
+ * @param deps - optional dependencies: { relink, triggerSelfRestart }
  * @returns RestartRequester function
  */
 export function createRestartRequester(
@@ -247,10 +260,21 @@ export function createRestartRequester(
   log: (msg: string) => void,
   lock: { releaseSync(): void },
   process: NodeJS.Process,
+  deps?: {
+    relink?: () => Promise<void>;
+    triggerSelfRestart?: () => Promise<void>;
+  },
 ): RestartRequester {
   return async (opts: { fromIdentity: string | null; targetIdentity: string | null }) => {
+    const isSessionHosted = deps?.triggerSelfRestart !== undefined;
+
     try {
-      // Step 1: Write marker (can fail)
+      // Step 1: Call relink if provided
+      if (deps?.relink) {
+        await deps.relink();
+      }
+
+      // Step 2: Write marker (can fail)
       await writeRestartMarker(
         {
           reason: 'stale-engine',
@@ -261,18 +285,25 @@ export function createRestartRequester(
         daemonDir,
         log,
       );
+
+      // Step 3: Handle session-hosted vs headless paths
+      if (isSessionHosted) {
+        // Session-hosted: call triggerSelfRestart and don't exit
+        await deps.triggerSelfRestart();
+      } else {
+        // Headless: release lock and exit(0)
+        lock.releaseSync();
+        process.exit(0);
+      }
     } catch (err) {
       // Backstop: ensure lock is released even if marker write fails
-      lock.releaseSync();
-      process.exit(1);
+      // Only applies to headless mode (session-hosted should not reach here)
+      if (!isSessionHosted) {
+        lock.releaseSync();
+        process.exit(1);
+      }
       return; // Never reached in production, but clarifies intent
     }
-
-    // Step 2: Release lock (marker write succeeded)
-    lock.releaseSync();
-
-    // Step 3: Exit with 0 (marker and lock release succeeded)
-    process.exit(0);
   };
 }
 

@@ -290,4 +290,171 @@ describe('Task 14 — RestartRequester: marker → release → exit ordering', (
     expect(markerContent.fromIdentity).toBeNull();
     expect(markerContent.targetIdentity).toBeNull();
   });
+
+  /**
+   * Test: session-hosted mode with injected relink + triggerSelfRestart
+   *
+   * Session-hosted flow:
+   * 1. Call relink
+   * 2. Write underscore marker
+   * 3. Call triggerSelfRestart
+   * 4. Never call lock.releaseSync() or process.exit()
+   *
+   * Verifies exact call order via spy call counts and order
+   */
+  it('session-hosted mode: relink → marker → triggerSelfRestart (no lock release, no exit)', async () => {
+    const { createRestartRequester } = await import('../../src/daemon-cli.js');
+
+    const callOrder: string[] = [];
+
+    const mockRelink = vi.fn(async () => {
+      callOrder.push('relink');
+    });
+
+    const mockTriggerSelfRestart = vi.fn(async () => {
+      callOrder.push('triggerSelfRestart');
+    });
+
+    let releaseSyncCalled = false;
+    const mockLock = {
+      releaseSync: () => {
+        releaseSyncCalled = true;
+        callOrder.push('release');
+      },
+    };
+
+    let exitCalled = false;
+    const mockProcess = {
+      exit: (code: number) => {
+        exitCalled = true;
+        callOrder.push(`exit(${code})`);
+      },
+    } as unknown as NodeJS.Process;
+
+    const mockLog = () => {};
+
+    const requester = createRestartRequester(daemonDir, mockLog, mockLock, mockProcess, {
+      relink: mockRelink,
+      triggerSelfRestart: mockTriggerSelfRestart,
+    });
+
+    // Session-hosted mode should NOT throw or call exit
+    await requester({
+      fromIdentity: 'daemon-id-123',
+      targetIdentity: 'engine-id-456',
+    });
+
+    // Verify call order: relink → marker → triggerSelfRestart
+    expect(callOrder).toEqual(['relink', 'triggerSelfRestart']);
+
+    // Verify lock and exit were NOT called
+    expect(releaseSyncCalled).toBe(false);
+    expect(exitCalled).toBe(false);
+
+    // Verify marker was written
+    const markerPath = join(daemonDir, '.daemon', 'RESTART_PENDING');
+    expect(existsSync(markerPath)).toBe(true);
+
+    const markerContent = JSON.parse(await readFile(markerPath, 'utf-8'));
+    expect(markerContent.reason).toBe('stale-engine');
+    expect(markerContent.fromIdentity).toBe('daemon-id-123');
+    expect(markerContent.targetIdentity).toBe('engine-id-456');
+  });
+
+  /**
+   * Test: session-hosted mode without triggerSelfRestart but with relink
+   *
+   * When only relink is provided (no triggerSelfRestart), headless behavior applies:
+   * 1. Call relink
+   * 2. Write marker
+   * 3. Release lock
+   * 4. Exit(0)
+   */
+  it('headless with relink: relink → marker → release → exit(0)', async () => {
+    const { createRestartRequester } = await import('../../src/daemon-cli.js');
+
+    const callOrder: string[] = [];
+
+    const mockRelink = vi.fn(async () => {
+      callOrder.push('relink');
+    });
+
+    const mockLock = {
+      releaseSync: () => {
+        callOrder.push('release');
+      },
+    };
+
+    const mockProcess = {
+      exit: (code: number) => {
+        callOrder.push(`exit(${code})`);
+        throw new Error(`process.exit(${code})`);
+      },
+    } as unknown as NodeJS.Process;
+
+    const mockLog = () => {};
+
+    // Deps with relink but no triggerSelfRestart
+    const requester = createRestartRequester(daemonDir, mockLog, mockLock, mockProcess, {
+      relink: mockRelink,
+    });
+
+    try {
+      await requester({
+        fromIdentity: 'daemon-id-123',
+        targetIdentity: 'engine-id-456',
+      });
+    } catch (e) {
+      // Expected: process.exit() breaks control flow
+    }
+
+    // Verify call order: relink → release → exit(0)
+    expect(callOrder).toEqual(['relink', 'release', 'exit(0)']);
+
+    // Verify marker was written
+    const markerPath = join(daemonDir, '.daemon', 'RESTART_PENDING');
+    expect(existsSync(markerPath)).toBe(true);
+  });
+
+  /**
+   * Test: backward compatibility — no deps provided (legacy behavior)
+   *
+   * When no deps are provided, the function should still work with the old flow:
+   * write marker → release → exit(0)
+   */
+  it('backward compatibility: no deps provided → marker → release → exit(0)', async () => {
+    const { createRestartRequester } = await import('../../src/daemon-cli.js');
+
+    const callOrder: string[] = [];
+
+    const mockLock = {
+      releaseSync: () => {
+        callOrder.push('release');
+      },
+    };
+
+    const mockProcess = {
+      exit: (code: number) => {
+        callOrder.push(`exit(${code})`);
+        throw new Error(`process.exit(${code})`);
+      },
+    } as unknown as NodeJS.Process;
+
+    const mockLog = () => {};
+
+    // No deps provided
+    const requester = createRestartRequester(daemonDir, mockLog, mockLock, mockProcess);
+
+    try {
+      await requester({
+        fromIdentity: 'daemon-id-123',
+        targetIdentity: 'engine-id-456',
+      });
+    } catch (e) {
+      // Expected: process.exit() throws
+    }
+
+    // Verify call order: release → exit(0)
+    expect(callOrder).toEqual(['release', 'exit(0)']);
+  });
 });

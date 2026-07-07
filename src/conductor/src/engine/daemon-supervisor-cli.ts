@@ -8,7 +8,7 @@
 
 import { makeTmuxSupervisor, TmuxNotInstalledError, type Supervisor } from './daemon-tmux.js';
 import type { DaemonSupervisorCommand } from './daemon-command.js';
-import { ensureInstallFresh } from './install-freshness.js';
+import { ensureInstallFresh, relinkSkillsForSelfBuild } from './install-freshness.js';
 import { clearStaleLockForRestart, readPidRecord, reclaim, isLive, type KillProbe } from './daemon-lock.js';
 import { isPaused, writePauseMarker, removePauseMarker } from './pause-marker.js';
 import { writeRestartPending } from './restart-marker.js';
@@ -149,6 +149,13 @@ export interface DaemonSupervisorDeps {
    * Passed to reconcileOrphan; defaults to process.kill.
    */
   kill?: KillProbe;
+  /**
+   * Injectable skill-relink function (tests) for self-build restart (TR-4).
+   * Called before supervisor.restart in the idle restart path. Defaults to
+   * relinkSkillsForSelfBuild. When relink fails, the error is propagated to
+   * the caller (Task 12).
+   */
+  relinkSkills?: () => Promise<void>;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -188,6 +195,7 @@ export async function dispatchDaemonSupervisor(
   const isInteractive = deps.isInteractive ?? Boolean(process.stdin.isTTY);
   const isBusy = deps.isBusy ?? (async () => ({ busy: false }));
   const kill = deps.kill ?? defaultKillForOrphan;
+  const relinkSkills = deps.relinkSkills ?? (() => relinkSkillsForSelfBuild({ log: out }));
 
   // Fleet dispatch (FR-3/FR-17/FR-18): pause/resume/restart accept a named subset or
   // `--all` and iterate the registry instead of acting on `cwd` alone. This
