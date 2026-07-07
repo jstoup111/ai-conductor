@@ -94,6 +94,26 @@ describe("ModelAvailability", () => {
       expect(avail.dead.has("fable")).toBe(true);
     });
 
+    it("configured model returns rateLimited immediately: no ladder walk, result propagated", async () => {
+      const avail = new ModelAvailability(["fable", "opus", "sonnet"]);
+      const { provider, invokeCalls } = fakeProvider({
+        fable: { success: false, output: "rate limited", exitCode: 1, rateLimited: true, modelUnavailable: false },
+      });
+
+      const result = await avail.invokeWithLadder(provider, {
+        prompt: "hi",
+        sessionId: "s1",
+        resume: false,
+        model: "fable",
+      });
+
+      expect(result.rateLimited).toBe(true);
+      expect(result.modelUnavailable).not.toBe(true);
+      expect(invokeCalls.map((c) => c.model)).toEqual(["fable"]);
+      expect(avail.dead.has("fable")).toBe(false);
+      expect(avail.dead.has("opus")).toBe(false);
+    });
+
     it("rate-limited result after modelUnavailable walk does not advance further: opus not marked dead, no walk to sonnet", async () => {
       const avail = new ModelAvailability(["fable", "opus", "sonnet"]);
       const { provider, invokeCalls } = fakeProvider({
