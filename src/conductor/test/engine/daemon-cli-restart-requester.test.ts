@@ -870,3 +870,383 @@ describe('Task 14 — RestartRequester: marker → release → exit ordering', (
     writeSpy.mockRestore();
   });
 });
+
+/**
+ * Task 4 (RED): RestartRequester returns { fired: boolean } instead of Promise<void>
+ *
+ * These tests verify the new return type. They expect:
+ * - fired: true on successful request (process.exit(0) called)
+ * - fired: false on relink/trigger failures (abort-alive or abort-headless)
+ *
+ * The tests use mockProcess that does NOT throw on exit(), allowing the
+ * function to return a value that tests can assert on.
+ */
+describe('Task 4 (RED) — RestartRequester returns { fired: boolean }', () => {
+  let daemonDir: string;
+
+  beforeEach(async () => {
+    daemonDir = await mkdtemp(join(tmpdir(), 'restart-requester-red-'));
+  });
+
+  afterEach(async () => {
+    await rm(daemonDir, { recursive: true, force: true });
+  });
+
+  /**
+   * Test: Session-hosted happy path returns { fired: true }
+   *
+   * Setup: relink succeeds, trigger succeeds, marker write succeeds
+   * Expected: resolves with { fired: true }
+   * Verified: exit(0) was called
+   */
+  it('RED: returns { fired: true } on session-hosted success', async () => {
+    const { createRestartRequester } = await import('../../src/daemon-cli.js');
+
+    const mockRelink = vi.fn(async () => {});
+    const mockTriggerSelfRestart = vi.fn(async () => {});
+
+    let exitCode: number | undefined;
+    const mockLock = {
+      releaseSync: vi.fn(),
+    };
+
+    const mockProcess = {
+      exit: (code: number) => {
+        exitCode = code;
+        // RED phase: do NOT throw, allow function to return
+      },
+    } as unknown as NodeJS.Process;
+
+    const mockLog = vi.fn();
+
+    const requester = createRestartRequester(daemonDir, mockLog, mockLock, mockProcess, {
+      relink: mockRelink,
+      triggerSelfRestart: mockTriggerSelfRestart,
+    });
+
+    // RED: Expect the function to return { fired: boolean } instead of Promise<void>
+    const result = await requester({
+      fromIdentity: 'daemon-id-123',
+      targetIdentity: 'engine-id-456',
+    });
+
+    // RED: Assert return type is { fired: boolean }
+    expect(result).toEqual({ fired: true });
+    // Verify exit(0) was called (Task 2 — session-hosted success)
+    expect(exitCode).toBe(0);
+    // Verify lock was released
+    expect(mockLock.releaseSync).toHaveBeenCalled();
+    // Verify relink and trigger were called
+    expect(mockRelink).toHaveBeenCalled();
+    expect(mockTriggerSelfRestart).toHaveBeenCalled();
+  });
+
+  /**
+   * Test: Relink failure returns { fired: false }
+   *
+   * Setup: relink throws error
+   * Expected: resolves with { fired: false }
+   * Verified: no trigger call, no exit, no lock release
+   */
+  it('RED: returns { fired: false } when relink throws in session-hosted', async () => {
+    const { createRestartRequester } = await import('../../src/daemon-cli.js');
+
+    const mockRelink = vi.fn(async () => {
+      throw new Error('InstallStaleError: relink failed');
+    });
+    const mockTriggerSelfRestart = vi.fn(async () => {});
+
+    let exitCalled = false;
+    const mockLock = {
+      releaseSync: vi.fn(),
+    };
+
+    const mockProcess = {
+      exit: (code: number) => {
+        exitCalled = true;
+        // RED phase: do NOT throw
+      },
+    } as unknown as NodeJS.Process;
+
+    const mockLog = vi.fn();
+
+    const requester = createRestartRequester(daemonDir, mockLog, mockLock, mockProcess, {
+      relink: mockRelink,
+      triggerSelfRestart: mockTriggerSelfRestart,
+    });
+
+    // RED: Expect the function to return { fired: boolean }
+    const result = await requester({
+      fromIdentity: 'daemon-id-123',
+      targetIdentity: 'engine-id-456',
+    });
+
+    // RED: Assert return type is { fired: false }
+    expect(result).toEqual({ fired: false });
+    // Verify trigger was NOT called (abort-alive)
+    expect(mockTriggerSelfRestart).not.toHaveBeenCalled();
+    // Verify lock was NOT released (abort-alive)
+    expect(mockLock.releaseSync).not.toHaveBeenCalled();
+    // Verify exit was NOT called (abort-alive)
+    expect(exitCalled).toBe(false);
+  });
+
+  /**
+   * Test: Trigger failure returns { fired: false }
+   *
+   * Setup: relink succeeds, triggerSelfRestart throws error
+   * Expected: resolves with { fired: false }
+   * Verified: no exit, no lock release (marker still written)
+   */
+  it('RED: returns { fired: false } when triggerSelfRestart throws', async () => {
+    const { createRestartRequester } = await import('../../src/daemon-cli.js');
+
+    const mockRelink = vi.fn(async () => {});
+    const mockTriggerSelfRestart = vi.fn(async () => {
+      throw new Error('respawn failed: supervisor not ready');
+    });
+
+    let exitCalled = false;
+    const mockLock = {
+      releaseSync: vi.fn(),
+    };
+
+    const mockProcess = {
+      exit: (code: number) => {
+        exitCalled = true;
+        // RED phase: do NOT throw
+      },
+    } as unknown as NodeJS.Process;
+
+    const mockLog = vi.fn();
+
+    const requester = createRestartRequester(daemonDir, mockLog, mockLock, mockProcess, {
+      relink: mockRelink,
+      triggerSelfRestart: mockTriggerSelfRestart,
+    });
+
+    // RED: Expect the function to return { fired: boolean }
+    const result = await requester({
+      fromIdentity: 'daemon-id-123',
+      targetIdentity: 'engine-id-456',
+    });
+
+    // RED: Assert return type is { fired: false }
+    expect(result).toEqual({ fired: false });
+    // Verify relink was called (we made progress)
+    expect(mockRelink).toHaveBeenCalled();
+    // Verify trigger was called
+    expect(mockTriggerSelfRestart).toHaveBeenCalled();
+    // Verify lock was NOT released (marker already written, stay alive)
+    expect(mockLock.releaseSync).not.toHaveBeenCalled();
+    // Verify exit was NOT called (stay alive for retry)
+    expect(exitCalled).toBe(false);
+    // Verify marker file was created (marker write succeeded before trigger failed)
+    const markerPath = join(daemonDir, '.daemon', 'RESTART_PENDING');
+    expect(existsSync(markerPath)).toBe(true);
+  });
+
+  /**
+   * Test: Headless mode returns { fired: true }
+   *
+   * Setup: relink provided but no triggerSelfRestart (headless)
+   * Expected: resolves with { fired: true }
+   * Verified: exit(0) was called
+   */
+  it('RED: returns { fired: true } on headless success', async () => {
+    const { createRestartRequester } = await import('../../src/daemon-cli.js');
+
+    const mockRelink = vi.fn(async () => {});
+
+    let exitCode: number | undefined;
+    const mockLock = {
+      releaseSync: vi.fn(),
+    };
+
+    const mockProcess = {
+      exit: (code: number) => {
+        exitCode = code;
+        // RED phase: do NOT throw, allow function to return
+      },
+    } as unknown as NodeJS.Process;
+
+    const mockLog = vi.fn();
+
+    // Headless mode: relink provided but NO triggerSelfRestart
+    const requester = createRestartRequester(daemonDir, mockLog, mockLock, mockProcess, {
+      relink: mockRelink,
+      // No triggerSelfRestart → headless mode
+    });
+
+    // RED: Expect the function to return { fired: boolean }
+    const result = await requester({
+      fromIdentity: 'daemon-id-123',
+      targetIdentity: 'engine-id-456',
+    });
+
+    // RED: Assert return type is { fired: true }
+    expect(result).toEqual({ fired: true });
+    // Verify exit(0) was called
+    expect(exitCode).toBe(0);
+    // Verify lock was released
+    expect(mockLock.releaseSync).toHaveBeenCalled();
+  });
+
+  /**
+   * Test: No deps provided (backward compatibility) returns { fired: true }
+   *
+   * Setup: no deps provided (legacy mode)
+   * Expected: resolves with { fired: true }
+   * Verified: exit(0) was called
+   */
+  it('RED: returns { fired: true } on backward-compat mode (no deps)', async () => {
+    const { createRestartRequester } = await import('../../src/daemon-cli.js');
+
+    let exitCode: number | undefined;
+    const mockLock = {
+      releaseSync: vi.fn(),
+    };
+
+    const mockProcess = {
+      exit: (code: number) => {
+        exitCode = code;
+        // RED phase: do NOT throw
+      },
+    } as unknown as NodeJS.Process;
+
+    const mockLog = vi.fn();
+
+    // No deps provided
+    const requester = createRestartRequester(daemonDir, mockLog, mockLock, mockProcess);
+
+    // RED: Expect the function to return { fired: boolean }
+    const result = await requester({
+      fromIdentity: 'daemon-id-123',
+      targetIdentity: 'engine-id-456',
+    });
+
+    // RED: Assert return type is { fired: true }
+    expect(result).toEqual({ fired: true });
+    // Verify exit(0) was called
+    expect(exitCode).toBe(0);
+    // Verify lock was released
+    expect(mockLock.releaseSync).toHaveBeenCalled();
+  });
+
+  /**
+   * Test: Marker write failure returns { fired: false } in session-hosted
+   *
+   * Setup: relink succeeds, marker write throws (EACCES)
+   * Expected: resolves with { fired: false }
+   * Verified: trigger not called, no exit, no lock release (abort-alive)
+   */
+  it('RED: returns { fired: false } when marker-write throws in session-hosted', async () => {
+    const { createRestartRequester } = await import('../../src/daemon-cli.js');
+    const restartIntentModule = await import('../../src/engine/restart-intent.js');
+
+    const mockRelink = vi.fn(async () => {});
+    const mockTriggerSelfRestart = vi.fn(async () => {});
+
+    let exitCalled = false;
+    const mockLock = {
+      releaseSync: vi.fn(),
+    };
+
+    const mockProcess = {
+      exit: (code: number) => {
+        exitCalled = true;
+        // RED phase: do NOT throw
+      },
+    } as unknown as NodeJS.Process;
+
+    const mockLog = vi.fn();
+
+    // Spy on writeRestartMarker and make it throw
+    const writeSpy = vi.spyOn(restartIntentModule, 'writeRestartMarker').mockImplementation(
+      async () => {
+        throw new Error('EACCES: permission denied');
+      },
+    );
+
+    const requester = createRestartRequester(daemonDir, mockLog, mockLock, mockProcess, {
+      relink: mockRelink,
+      triggerSelfRestart: mockTriggerSelfRestart,
+    });
+
+    // RED: Expect the function to return { fired: boolean }
+    const result = await requester({
+      fromIdentity: 'daemon-id-123',
+      targetIdentity: 'engine-id-456',
+    });
+
+    // RED: Assert return type is { fired: false }
+    expect(result).toEqual({ fired: false });
+    // Verify relink was called (made progress)
+    expect(mockRelink).toHaveBeenCalled();
+    // Verify trigger was NOT called (abort-alive after marker write failure)
+    expect(mockTriggerSelfRestart).not.toHaveBeenCalled();
+    // Verify lock was NOT released (abort-alive)
+    expect(mockLock.releaseSync).not.toHaveBeenCalled();
+    // Verify exit was NOT called (abort-alive)
+    expect(exitCalled).toBe(false);
+
+    writeSpy.mockRestore();
+  });
+
+  /**
+   * Test: Marker write failure returns { fired: false } in headless
+   *
+   * Setup: relink succeeds, marker write throws (ENOSPC)
+   * Expected: resolves with { fired: false }
+   * Verified: exit(1) was called (headless abort path)
+   */
+  it('RED: returns { fired: false } when marker-write throws in headless', async () => {
+    const { createRestartRequester } = await import('../../src/daemon-cli.js');
+    const restartIntentModule = await import('../../src/engine/restart-intent.js');
+
+    const mockRelink = vi.fn(async () => {});
+
+    let exitCode: number | undefined;
+    const mockLock = {
+      releaseSync: vi.fn(),
+    };
+
+    const mockProcess = {
+      exit: (code: number) => {
+        exitCode = code;
+        // RED phase: do NOT throw
+      },
+    } as unknown as NodeJS.Process;
+
+    const mockLog = vi.fn();
+
+    // Spy on writeRestartMarker and make it throw
+    const writeSpy = vi.spyOn(restartIntentModule, 'writeRestartMarker').mockImplementation(
+      async () => {
+        throw new Error('ENOSPC: no space left on device');
+      },
+    );
+
+    // Headless mode: relink provided but NO triggerSelfRestart
+    const requester = createRestartRequester(daemonDir, mockLog, mockLock, mockProcess, {
+      relink: mockRelink,
+    });
+
+    // RED: Expect the function to return { fired: boolean }
+    const result = await requester({
+      fromIdentity: 'daemon-id-123',
+      targetIdentity: 'engine-id-456',
+    });
+
+    // RED: Assert return type is { fired: false }
+    expect(result).toEqual({ fired: false });
+    // Verify relink was called (made progress)
+    expect(mockRelink).toHaveBeenCalled();
+    // Verify lock WAS released (headless abort path)
+    expect(mockLock.releaseSync).toHaveBeenCalled();
+    // Verify exit(1) was called (headless abort path)
+    expect(exitCode).toBe(1);
+
+    writeSpy.mockRestore();
+  });
+});
