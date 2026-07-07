@@ -63,4 +63,29 @@ describe('engine/audit-trail', () => {
     expect(satisfiedAfter).toBe(satisfiedContent);
     expect(reviewAfter).toBe(reviewContent);
   });
+
+  it('roots paths at the injected projectRoot, never process.cwd()', async () => {
+    const rootA = await mkdtemp(join(tmpdir(), 'audit-trail-root-a-'));
+    const rootB = await mkdtemp(join(tmpdir(), 'audit-trail-root-b-'));
+    const originalCwd = process.cwd();
+
+    try {
+      const writer = new AuditTrailWriter(rootA);
+      process.chdir(rootB);
+
+      writer.record({ step: 'build', event: 'retry', reason: 'tests failed', attempt: 1 });
+
+      const pathA = join(rootA, '.pipeline', 'audit-trail', 'events.jsonl');
+      const pathB = join(rootB, '.pipeline', 'audit-trail', 'events.jsonl');
+
+      const contentsA = await readFile(pathA, 'utf8');
+      expect(contentsA.length).toBeGreaterThan(0);
+
+      await expect(readFile(pathB, 'utf8')).rejects.toThrow();
+    } finally {
+      process.chdir(originalCwd);
+      await rm(rootA, { recursive: true, force: true });
+      await rm(rootB, { recursive: true, force: true });
+    }
+  });
 });
