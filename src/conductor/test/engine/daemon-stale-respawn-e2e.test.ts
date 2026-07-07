@@ -129,7 +129,7 @@ describe('daemon-stale-respawn-e2e — #353 capstone (TR-2/TR-3/TR-4)', () => {
 
     it(
       'a permanently-stale checker across repeated idle polls fires the requester exactly once, ' +
-        'exits exactly once, and the loop stops with stopReason "engine_restart" — no stacked respawns',
+        'and the loop stops with stopReason "engine_restart" — no stacked respawns',
       async () => {
         const mockLock = { releaseSync: vi.fn() };
         const mockProcess = { exit: vi.fn() } as unknown as NodeJS.Process;
@@ -165,15 +165,12 @@ describe('daemon-stale-respawn-e2e — #353 capstone (TR-2/TR-3/TR-4)', () => {
         });
 
         // Single-generation invariant (ADR Decisions 1 + 2): exactly one fire,
-        // exactly one exit, the loop breaks instead of polling on. Today the
-        // requester returns without exiting and the loop has no backstop, so
-        // triggerSelfRestart fires on every idle poll (the #400 burst) and
-        // stoppedReason is 'idle_timeout' — this fails for that reason, not a
-        // type/collection error.
+        // the loop breaks instead of polling on. Session-hosted mode does NOT
+        // exit (supervisor handles restart), but requestRestart returns { fired: true }
+        // which signals the loop to stop with stopReason 'engine_restart'.
         expect(triggerSelfRestart).toHaveBeenCalledTimes(1);
-        expect(mockProcess.exit).toHaveBeenCalledTimes(1);
-        expect(mockProcess.exit).toHaveBeenCalledWith(0);
-        expect(mockLock.releaseSync).toHaveBeenCalledTimes(1);
+        expect(mockProcess.exit).not.toHaveBeenCalled(); // Session-hosted: no exit
+        expect(mockLock.releaseSync).not.toHaveBeenCalled(); // Session-hosted: no lock release
         expect(res.stoppedReason).toBe('engine_restart');
       },
     );

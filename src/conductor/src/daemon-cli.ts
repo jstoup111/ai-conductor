@@ -329,7 +329,7 @@ export function createRestartRequester(
     // Step 3: Handle session-hosted vs headless paths
     // (moved outside try-catch so exit(0) is not caught on failure in tests)
     if (isSessionHosted && triggerSelfRestart) {
-      // Session-hosted: call triggerSelfRestart and exit on success
+      // Session-hosted: call triggerSelfRestart but do NOT exit or release lock
       // Task 7: catch errors from trigger and stay alive (marker already written)
       try {
         await triggerSelfRestart();
@@ -340,9 +340,8 @@ export function createRestartRequester(
         // Marker is already written, so this can be retried at next idle boundary
         return { fired: false };
       }
-      // Task 2: Unconditional exit on successful trigger
-      lock.releaseSync();
-      process.exit(0);
+      // Trigger succeeded: return without exiting or releasing lock
+      // The supervisor/respawn handler is responsible for the restart
       return { fired: true };
     } else {
       // Headless: release lock and exit(0)

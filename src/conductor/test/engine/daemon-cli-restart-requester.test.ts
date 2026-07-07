@@ -298,7 +298,7 @@ describe('Task 14 — RestartRequester: marker → release → exit ordering', (
    * 1. Call relink
    * 2. Write underscore marker
    * 3. Call triggerSelfRestart
-   * 4. ALWAYS call lock.releaseSync() and process.exit(0) on success
+   * 4. Do NOT call lock.releaseSync() or process.exit() — stay alive for supervisor
    *
    * Verifies exact call order via spy call counts and order
    *
@@ -306,7 +306,7 @@ describe('Task 14 — RestartRequester: marker → release → exit ordering', (
    * `daemon restart` queued restarts and must NEVER be touched by the stale-engine path.
    * This assertion verifies that the hyphen marker is never created or modified.
    */
-  it('session-hosted mode: relink → marker → triggerSelfRestart → release → exit(0)', async () => {
+  it('session-hosted mode: relink → marker → triggerSelfRestart (no exit/lock release)', async () => {
     const { createRestartRequester } = await import('../../src/daemon-cli.js');
 
     const callOrder: string[] = [];
@@ -332,7 +332,6 @@ describe('Task 14 — RestartRequester: marker → release → exit ordering', (
       exit: (code: number) => {
         exitCalled = true;
         callOrder.push(`exit(${code})`);
-        throw new Error(`process.exit(${code})`);
       },
     } as unknown as NodeJS.Process;
 
@@ -352,22 +351,21 @@ describe('Task 14 — RestartRequester: marker → release → exit ordering', (
       triggerSelfRestart: mockTriggerSelfRestart,
     });
 
-    // Session-hosted mode should call exit on successful trigger fire
-    try {
-      await requester({
-        fromIdentity: 'daemon-id-123',
-        targetIdentity: 'engine-id-456',
-      });
-    } catch (e) {
-      // Expected: process.exit() breaks control flow
-    }
+    // Session-hosted mode should NOT exit on successful trigger fire
+    const result = await requester({
+      fromIdentity: 'daemon-id-123',
+      targetIdentity: 'engine-id-456',
+    });
 
-    // Verify call order: relink → marker → triggerSelfRestart → release → exit(0)
-    expect(callOrder).toEqual(['relink', 'triggerSelfRestart', 'release', 'exit(0)']);
+    // Verify return value indicates successful fire
+    expect(result).toEqual({ fired: true });
 
-    // Verify lock and exit WERE called exactly once each
-    expect(releaseSyncCalled).toBe(true);
-    expect(exitCalled).toBe(true);
+    // Verify call order: relink → marker → triggerSelfRestart (no release, no exit)
+    expect(callOrder).toEqual(['relink', 'triggerSelfRestart']);
+
+    // Verify lock and exit were NOT called
+    expect(releaseSyncCalled).toBe(false);
+    expect(exitCalled).toBe(false);
 
     // Verify underscore marker was written (stale-engine marker)
     const markerPath = join(daemonDir, '.daemon', 'RESTART_PENDING');
@@ -897,7 +895,7 @@ describe('Task 4 (RED) — RestartRequester returns { fired: boolean }', () => {
    *
    * Setup: relink succeeds, trigger succeeds, marker write succeeds
    * Expected: resolves with { fired: true }
-   * Verified: exit(0) was called
+   * Verified: exit and lock release NOT called (supervisor handles restart)
    */
   it('RED: returns { fired: true } on session-hosted success', async () => {
     const { createRestartRequester } = await import('../../src/daemon-cli.js');
@@ -905,14 +903,14 @@ describe('Task 4 (RED) — RestartRequester returns { fired: boolean }', () => {
     const mockRelink = vi.fn(async () => {});
     const mockTriggerSelfRestart = vi.fn(async () => {});
 
-    let exitCode: number | undefined;
+    let exitCalled = false;
     const mockLock = {
       releaseSync: vi.fn(),
     };
 
     const mockProcess = {
       exit: (code: number) => {
-        exitCode = code;
+        exitCalled = true;
         // RED phase: do NOT throw, allow function to return
       },
     } as unknown as NodeJS.Process;
@@ -932,10 +930,9 @@ describe('Task 4 (RED) — RestartRequester returns { fired: boolean }', () => {
 
     // RED: Assert return type is { fired: boolean }
     expect(result).toEqual({ fired: true });
-    // Verify exit(0) was called (Task 2 — session-hosted success)
-    expect(exitCode).toBe(0);
-    // Verify lock was released
-    expect(mockLock.releaseSync).toHaveBeenCalled();
+    // Verify exit and lock release were NOT called (supervisor handles restart)
+    expect(exitCalled).toBe(false);
+    expect(mockLock.releaseSync).not.toHaveBeenCalled();
     // Verify relink and trigger were called
     expect(mockRelink).toHaveBeenCalled();
     expect(mockTriggerSelfRestart).toHaveBeenCalled();
