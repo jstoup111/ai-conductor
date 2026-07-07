@@ -515,6 +515,7 @@ async function deriveCompletionInternal(
   // the id, so parsePlanTaskPaths' more permissive header match is a safe and
   // more correct source of truth for "which task ids exist in this plan."
   const planPaths = parsePlanTaskPaths(planText);
+  const planIds = new Set(planPaths.keys());
 
   for (const taskId of planPaths.keys()) {
     result[taskId] = { completed: false };
@@ -525,7 +526,7 @@ async function deriveCompletionInternal(
     // must never complete/skip every task in the plan.
     const evidenceCommit = commits.find((c) => {
       const taskTrailers = c.trailers['Task'] || [];
-      if (!taskTrailers.includes(taskId)) return false;
+      if (!taskTrailerMatches(taskTrailers, taskId, planIds)) return false;
       const evidenceTrailers = c.trailers['Evidence'] || [];
       return evidenceTrailers.some((e) => e.startsWith(`satisfied-by `) || e.startsWith('skipped '));
     });
@@ -580,7 +581,7 @@ async function deriveCompletionInternal(
     // Look for a commit with Task: <taskId> trailer
     const matchingCommit = commits.find((c) => {
       const taskTrailers = c.trailers['Task'] || [];
-      return taskTrailers.includes(taskId);
+      return taskTrailerMatches(taskTrailers, taskId, planIds);
     });
 
     if (!matchingCommit) {
@@ -617,6 +618,7 @@ async function deriveCompletionInternal(
     if (!hasPlanFiles) {
       // Task has no specific paths; trailer alone is enough
       result[taskId].completed = true;
+      result[taskId].status = 'completed';
       result[taskId].evidencedBy = matchingCommit.sha;
       evidence.evidenceStamps.set(taskId, { sha: matchingCommit.sha, form: 'trailer' });
       continue;
@@ -637,6 +639,7 @@ async function deriveCompletionInternal(
 
     // Path overlap confirmed; mark completed
     result[taskId].completed = true;
+    result[taskId].status = 'completed';
     result[taskId].evidencedBy = matchingCommit.sha;
     evidence.evidenceStamps.set(taskId, { sha: matchingCommit.sha, form: 'trailer' });
   }

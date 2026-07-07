@@ -1162,6 +1162,53 @@ Update specific files.
 
     mockWarn.mockRestore();
   });
+
+  it('completes task with guarded task-N alias when alias is NOT in plan', async () => {
+    const autoheal = await loadAutoheal();
+    const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
+
+    // Create a plan with task 7 (bare numeric form only)
+    const planPath = join(gitDir, '.docs/plans/test-plan.md');
+    await mkdir(join(gitDir, '.docs/plans'), { recursive: true });
+    const planContent = `# Test Plan
+
+### Task 7: Implementation
+Update the implementation.
+
+- \`src/impl.ts\`
+`;
+    await writeFile(planPath, planContent);
+    await execa('git', ['add', '.docs/plans/test-plan.md'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: gitDir });
+
+    // Create a commit touching the plan file with Task: task-7 (aliased form)
+    await mkdir(join(gitDir, 'src'), { recursive: true });
+    await writeFile(join(gitDir, 'src/impl.ts'), 'export function impl() {}');
+    await execa('git', ['add', 'src/impl.ts'], { cwd: gitDir });
+    const commitMsg = 'feat: implementation\n\nTask: task-7\n';
+    await execa('git', ['commit', '-m', commitMsg], { cwd: gitDir });
+
+    // Get the commit SHA for assertion
+    const commitSha = (await execa('git', ['rev-parse', 'HEAD'], { cwd: gitDir })).stdout.trim();
+
+    const commits = await autoheal.listCommitsWithTrailers(gitDir);
+    const evidence = await createTaskEvidence(gitDir);
+
+    const result = await autoheal.deriveCompletion(gitDir, planPath, '', commits, evidence);
+
+    // Should mark task 7 as completed with the aliased task-7 trailer
+    expect(result).toHaveProperty('7');
+    expect(result['7']).toHaveProperty('completed', true);
+    expect(result['7']).toHaveProperty('evidencedBy', commitSha);
+    expect(result['7'].status).toBe('completed');
+
+    // Sidecar should have the evidence stamp
+    expect(evidence.evidenceStamps.has('7')).toBe(true);
+    const stamp = evidence.evidenceStamps.get('7');
+    expect(stamp).toBeDefined();
+    expect(stamp!.sha).toBe(commitSha);
+    expect(stamp!.form).toBe('trailer');
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1335,6 +1382,48 @@ Another task to skip.
     expect(result).toHaveProperty('11');
     expect(result['11']).toHaveProperty('status');
     expect(result['11'].status).toBe('skipped');
+  });
+
+  it('marks task completed with Evidence: satisfied-by and guarded task-N alias', async () => {
+    const autoheal = await loadAutoheal();
+    const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
+
+    // Create a plan with task 13 (bare numeric form only)
+    const planPath = join(gitDir, '.docs/plans/test-plan.md');
+    await mkdir(join(gitDir, '.docs/plans'), { recursive: true });
+    const planContent = `# Test Plan
+
+### Task 13: Aliased evidence task
+A task that will be completed by aliased evidence form.
+`;
+    await writeFile(planPath, planContent);
+    await execa('git', ['add', '.docs/plans/test-plan.md'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: gitDir });
+
+    // Create a commit that will be referenced as the evidence SHA
+    await writeFile(join(gitDir, 'src.ts'), 'export const x = 1;');
+    await execa('git', ['add', 'src.ts'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'feat: real work\n\nTask: 13\n'], { cwd: gitDir });
+
+    // Get the SHA of the work commit
+    const workCommitSha = (await execa('git', ['rev-parse', 'HEAD'], { cwd: gitDir })).stdout.trim();
+
+    // Create an empty no-op commit with aliased Task: task-13 form PLUS Evidence: satisfied-by
+    await execa('git', ['commit', '--allow-empty', '-m', `noop: aliased evidence commit\n\nTask: task-13\nEvidence: satisfied-by ${workCommitSha}\n`], { cwd: gitDir });
+
+    const commits = await autoheal.listCommitsWithTrailers(gitDir);
+    const evidence = await createTaskEvidence(gitDir);
+
+    const result = await autoheal.deriveCompletion(gitDir, planPath, '', commits, evidence);
+
+    expect(result).toHaveProperty('13');
+    expect(result['13']).toHaveProperty('completed', true);
+    expect(result['13']).toHaveProperty('evidencedBy', workCommitSha);
+    expect(result['13']).toHaveProperty('status', 'completed');
+    expect(evidence.evidenceStamps.has('13')).toBe(true);
+    const stamp = evidence.evidenceStamps.get('13');
+    expect(stamp).toBeDefined();
+    expect(stamp!.form).toBe('evidence:satisfied-by');
   });
 
   it('preserves completed status when evidence commit is removed (never-demote pinned)', async () => {
