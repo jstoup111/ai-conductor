@@ -188,7 +188,10 @@ describe('bin/setup worktree compatibility', () => {
         cwd: REPO_ROOT,
       });
 
-      await execa(BIN_SETUP, [], { cwd: worktreeDir, env: { ...process.env, CI: 'true' } });
+      await execa(join(worktreeDir, 'bin', 'setup'), [], {
+        cwd: worktreeDir,
+        env: { ...process.env, CI: 'true' },
+      });
 
       const worktreeDistLink = join(worktreeDir, 'src', 'conductor', 'dist');
       const worktreeStat = await lstat(worktreeDistLink);
