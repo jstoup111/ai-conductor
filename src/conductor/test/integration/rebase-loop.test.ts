@@ -275,6 +275,60 @@ describe('integration/rebase-loop', () => {
     expect(completed).toBe(true);
   });
 
+  it(
+    'a file-changing rebase kickback stales build_review too, not just build/manual_test ' +
+      '(TS-5 negative 4, jstoup111/ai-conductor#324)',
+    async () => {
+      // `build_review` does not exist yet (no StepName, no config resolver,
+      // no rebase-reverify wiring) — this pins the FUTURE re-verify target
+      // set `{build, build_review, manual_test}` per the ADR amendment.
+      // Pre-implementation, `build_review` is never a state key, so it can
+      // never read 'stale' — this fails on the assertion, not on setup.
+      await initRepoOnFeatureBranch({
+        path: 'src/feature.ts',
+        content: 'export const foo = 1;\n',
+      });
+      await git('checkout', BASE);
+      await mkdir(join(dir, 'src'), { recursive: true });
+      await writeFile(join(dir, 'src/sibling.ts'), 'export const sib = 2;\n');
+      await git('add', '.');
+      await git('commit', '-m', 'sibling code merged to base');
+      await git('checkout', 'feature/foo');
+
+      await writeState(statePath, { ...FRONT_DONE });
+      const fakeGit: GitRunner = async (args) =>
+        args.includes('--symbolic-full-name')
+          ? { stdout: 'refs/remotes/origin/feature/x\n' }
+          : { stdout: '' };
+      const config = { build_review: { enabled: true } };
+      const runner: StepRunner = {
+        run: async (step) => satisfy(step),
+      };
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        daemon: true,
+        verifyArtifacts: true,
+        mode: 'auto',
+        fromStep: 'build',
+        maxRetries: 1,
+        git: fakeGit,
+        config,
+      });
+
+      await conductor.run();
+
+      const finalState = JSON.parse(await readFile(statePath, 'utf-8'));
+      // The re-verify target set for a code-changing rebase kickback must be
+      // {build, build_review, manual_test} — build_review is staled
+      // alongside the other two so it must re-pass before manual_test is
+      // selectable again.
+      expect(finalState.build_review).toBe('stale');
+    },
+  );
+
   it('auto-resolves a CHANGELOG-only conflict keeping both entries exactly once (FR-7)', async () => {
     // Both base and branch append a DIFFERENT entry under ## [Unreleased] →
     // a rebase conflict confined to CHANGELOG.md.

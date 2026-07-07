@@ -850,4 +850,329 @@ describe('integration/gate-loop', () => {
       ).resolves.toBeUndefined();
     });
   });
+
+  // ── build_review judgement gate (jstoup111/ai-conductor#324) ─────────────
+  // `build_review` does not exist yet (no StepName entry, no ALL_STEPS row, no
+  // config resolver, no kickback wiring) — every test below pins observable
+  // end-to-end behavior of the FUTURE gate-loop seam between `build` and
+  // `manual_test`. Pre-implementation, `build_review` is never dispatched and
+  // never appears in state, so these fail on their behavioral assertions
+  // (RED), not on setup — exactly like the `rebase` step's pre-implementation
+  // specs in rebase-loop.test.ts.
+  //
+  // TS-1 (registry/topology ordering) is intentionally NOT duplicated here —
+  // it's unit-covered by `test/engine/selector.test.ts`, which drives
+  // `selectNextGate`/`gateSatisfied` directly against `ALL_STEPS` + verdicts
+  // without needing a full Conductor run (Task 3 of the plan owns it there).
+
+  describe('build_review flag topology (TS-2)', () => {
+    it('flag off: build_review is skipped, manual_test follows build directly, zero grader dispatches', async () => {
+      await writeState(statePath, { ...FRONT_DONE });
+      const ran: string[] = [];
+      const runner: StepRunner = {
+        run: async (step) => {
+          ran.push(step);
+          return satisfy(step);
+        },
+      };
+
+      await conductorWith(runner).run();
+
+      expect(ran.filter((s) => s === 'build_review')).toHaveLength(0);
+      const finalState = JSON.parse(await readFile(statePath, 'utf-8'));
+      // Task 5: the flag-off resolver must mark the step `skipped` (with a
+      // skip event) at startup — today `build_review` is not a registry
+      // member at all, so this key is absent (undefined), not 'skipped'.
+      expect(finalState.build_review).toBe('skipped');
+    });
+
+    it('flag off: a stale build-review.json from a previous enabled run is ignored', async () => {
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline/build-review.json'),
+        JSON.stringify({ verdict: 'FAIL', reasons: ['stale from a prior run'] }),
+      );
+      await writeState(statePath, { ...FRONT_DONE });
+      const runner: StepRunner = {
+        run: async (step) => satisfy(step),
+      };
+
+      await conductorWith(runner).run();
+
+      const finalState = JSON.parse(await readFile(statePath, 'utf-8'));
+      expect(finalState.build_review).toBe('skipped');
+      await expect(access(join(dir, '.pipeline/DONE'))).resolves.toBeUndefined();
+    });
+
+    it('flag on: build_review is dispatched between build and manual_test', async () => {
+      await writeState(statePath, { ...FRONT_DONE });
+      // Not inlined as a literal in the ConductorOptions call (which would
+      // trip an excess-property compile error against today's HarnessConfig)
+      // — assigned to a variable first, matching the existing custom-step
+      // config test's convention in this file.
+      const config = { build_review: { enabled: true } };
+      const ran: string[] = [];
+      const runner: StepRunner = {
+        run: async (step) => {
+          ran.push(step);
+          return satisfy(step);
+        },
+      };
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        verifyArtifacts: true,
+        mode: 'auto',
+        fromStep: 'build',
+        maxRetries: 1,
+        config,
+      });
+
+      await conductor.run();
+
+      const buildIdx = ran.indexOf('build');
+      const reviewIdx = ran.indexOf('build_review');
+      const manualIdx = ran.indexOf('manual_test');
+      expect(reviewIdx).toBeGreaterThan(-1); // build_review must dispatch at all
+      expect(reviewIdx).toBeGreaterThan(buildIdx);
+      expect(manualIdx).toBeGreaterThan(reviewIdx);
+    });
+  });
+
+  describe('build_review FAIL kickback end-to-end (TS-5)', () => {
+    // Drives the real gate-loop call site: the fake runner stands in for the
+    // grader, writing `.pipeline/build-review.json` exactly as the real
+    // one-shot grader session will (Task 9-12), when the loop actually
+    // dispatches `build_review`. The kickback machinery (counter, retry
+    // hints, navigateBack, stale cascade — Task 13) is what's under test.
+    function reviewFailConfig() {
+      return { build_review: { enabled: true } };
+    }
+
+    async function runWithGraderVerdicts(
+      verdicts: Array<{ verdict: 'FAIL' | 'PASS'; reasons: string[] }>,
+    ): Promise<{
+      buildRuns: number;
+      retryReasons: string[];
+      kicks: Array<{ from: string; to: string }>;
+      completed: boolean;
+      ran: string[];
+    }> {
+      await writeState(statePath, { ...FRONT_DONE });
+      let buildRuns = 0;
+      let reviewRuns = 0;
+      const retryReasons: string[] = [];
+      const ran: string[] = [];
+      const runner: StepRunner = {
+        run: async (step, _artifacts?: unknown, opts?: { retryReason?: string }) => {
+          ran.push(step);
+          if (step === 'build') {
+            buildRuns++;
+            if (opts?.retryReason) retryReasons.push(opts.retryReason);
+            return satisfy('build');
+          }
+          if (step === 'build_review') {
+            const v = verdicts[Math.min(reviewRuns, verdicts.length - 1)];
+            reviewRuns++;
+            await writeFile(
+              join(dir, '.pipeline/build-review.json'),
+              JSON.stringify({
+                verdict: v.verdict,
+                reasons: v.reasons,
+                rubric: { tautology: false, scope: false, rootCause: false },
+              }),
+            );
+            return { success: true };
+          }
+          return satisfy(step);
+        },
+      };
+      const kicks: Array<{ from: string; to: string }> = [];
+      events.on('kickback', (e) => {
+        if (e.type === 'kickback') kicks.push({ from: e.from, to: e.to });
+      });
+      let completed = false;
+      events.on('feature_complete', () => {
+        completed = true;
+      });
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        verifyArtifacts: true,
+        mode: 'auto',
+        daemon: true,
+        fromStep: 'build',
+        maxRetries: 1,
+        config: reviewFailConfig(),
+      });
+      await conductor.run();
+      return { buildRuns, retryReasons, kicks, completed, ran };
+    }
+
+    it('FAIL-tautological kicks back to build with the grader evidence, then PASS converges', async () => {
+      const result = await runWithGraderVerdicts([
+        { verdict: 'FAIL', reasons: ['tautological test padding, no real assertion'] },
+        { verdict: 'PASS', reasons: [] },
+      ]);
+
+      expect(result.kicks).toContainEqual({ from: 'build_review', to: 'build' });
+      expect(result.buildRuns).toBe(2); // initial + one kickback rebuild
+      expect(result.retryReasons.join('\n')).toContain('tautological test padding');
+      expect(result.completed).toBe(true);
+    });
+
+    it('FAIL-scope kicks back with a distinct evidence string end-to-end', async () => {
+      const result = await runWithGraderVerdicts([
+        { verdict: 'FAIL', reasons: ['change exceeds the approved plan scope'] },
+        { verdict: 'PASS', reasons: [] },
+      ]);
+
+      expect(result.kicks).toContainEqual({ from: 'build_review', to: 'build' });
+      expect(result.retryReasons.join('\n')).toContain('exceeds the approved plan scope');
+      expect(result.completed).toBe(true);
+    });
+
+    it('an empty reasons[] on FAIL still writes placeholder kickback evidence (never a silent kickback)', async () => {
+      const result = await runWithGraderVerdicts([
+        { verdict: 'FAIL', reasons: [] },
+        { verdict: 'PASS', reasons: [] },
+      ]);
+
+      expect(result.kicks).toContainEqual({ from: 'build_review', to: 'build' });
+      expect(result.retryReasons.join('\n')).toMatch(
+        /grader returned FAIL without reasons/,
+      );
+    });
+  });
+
+  describe('build_review retry cap HALTs (TS-6)', () => {
+    it('exactly MAX_KICKBACKS_PER_GATE (2) kickbacks then LOOP_HALT_MARKER + loop_halt, no further dispatch', async () => {
+      await writeState(statePath, { ...FRONT_DONE });
+      let buildRuns = 0;
+      const runner: StepRunner = {
+        run: async (step) => {
+          if (step === 'build') {
+            buildRuns++;
+            return satisfy('build');
+          }
+          if (step === 'build_review') {
+            await writeFile(
+              join(dir, '.pipeline/build-review.json'),
+              JSON.stringify({
+                verdict: 'FAIL',
+                reasons: [`always fails (attempt ${buildRuns})`],
+                rubric: { tautology: true, scope: false, rootCause: false },
+              }),
+            );
+            return { success: true };
+          }
+          return satisfy(step);
+        },
+      };
+      const kicks: Array<{ from: string; to: string }> = [];
+      events.on('kickback', (e) => {
+        if (e.type === 'kickback') kicks.push({ from: e.from, to: e.to });
+      });
+      let halted = false;
+      events.on('loop_halt', () => {
+        halted = true;
+      });
+      let completed = false;
+      events.on('feature_complete', () => {
+        completed = true;
+      });
+      const config = { build_review: { enabled: true } };
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        verifyArtifacts: true,
+        mode: 'auto',
+        daemon: true,
+        fromStep: 'build',
+        maxRetries: 1,
+        config,
+      });
+
+      await conductor.run();
+
+      expect(kicks.filter((k) => k.from === 'build_review')).toHaveLength(2);
+      expect(halted).toBe(true);
+      expect(completed).toBe(false);
+      expect(buildRuns).toBe(3); // initial + 2 kickback rebuilds, capped there
+      await expect(access(join(dir, '.pipeline/HALT'))).resolves.toBeUndefined();
+    });
+
+    it('the build_review counter is independent of manualTestSelfHeals', async () => {
+      await writeState(statePath, { ...FRONT_DONE, rebase: 'skipped' } as ConductState);
+      let buildRuns = 0;
+      let manualTestRuns = 0;
+      const runner: StepRunner = {
+        run: async (step) => {
+          if (step === 'build') {
+            buildRuns++;
+            return satisfy('build');
+          }
+          if (step === 'build_review') {
+            // Fails exactly once (counter → 1), then passes for good.
+            const verdict = buildRuns <= 1 ? 'FAIL' : 'PASS';
+            await writeFile(
+              join(dir, '.pipeline/build-review.json'),
+              JSON.stringify({
+                verdict,
+                reasons: verdict === 'FAIL' ? ['one-time grader nit'] : [],
+                rubric: { tautology: false, scope: false, rootCause: false },
+              }),
+            );
+            return { success: true };
+          }
+          if (step === 'manual_test') {
+            manualTestRuns++;
+            await writeFile(
+              join(dir, '.pipeline/manual-test-results.md'),
+              manualTestRuns === 1
+                ? '| Story | Result |\n|---|---|\n| s1 | FAIL |\n'
+                : '| Story | Result |\n|---|---|\n| s1 | PASS |\n',
+            );
+            return { success: true };
+          }
+          return satisfy(step);
+        },
+      };
+      const kicks: Array<{ from: string; to: string }> = [];
+      events.on('kickback', (e) => {
+        if (e.type === 'kickback') kicks.push({ from: e.from, to: e.to });
+      });
+      let halted = false;
+      events.on('loop_halt', () => {
+        halted = true;
+      });
+      const config = { build_review: { enabled: true } };
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        verifyArtifacts: true,
+        mode: 'auto',
+        daemon: true,
+        fromStep: 'build',
+        maxRetries: 1,
+        config,
+      });
+
+      await conductor.run();
+
+      // One build_review-origin kickback and, independently, one
+      // manual_test-origin kickback — neither cap trips the other's HALT.
+      expect(kicks.filter((k) => k.from === 'build_review')).toHaveLength(1);
+      expect(kicks.filter((k) => k.from === 'manual_test')).toHaveLength(1);
+      expect(halted).toBe(false);
+    });
+  });
 });
