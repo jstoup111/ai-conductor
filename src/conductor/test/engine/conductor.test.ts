@@ -2636,6 +2636,137 @@ describe('engine/conductor', () => {
     exitSpy.mockRestore();
   });
 
+  it('saves state on SIGTERM before exit', async () => {
+    let sigtermHandler: (() => void) | undefined;
+    const processOnSpy = vi.spyOn(process, 'on').mockImplementation(((
+      event: string,
+      handler: (...args: unknown[]) => void,
+    ) => {
+      if (event === 'SIGTERM') {
+        sigtermHandler = handler as () => void;
+      }
+      return process;
+    }) as typeof process.on);
+
+    // The SIGTERM handler calls process.exit(1); stub it so the real exit
+    // doesn't surface as an unhandled rejection that fails the vitest run.
+    const exitSpy = vi
+      .spyOn(process, 'exit')
+      .mockImplementation((() => undefined) as never);
+
+    // Create a runner that blocks on the 3rd step so we can trigger SIGTERM
+    let stepCount = 0;
+    let resolveBlock: (() => void) | undefined;
+    const blockPromise = new Promise<void>((resolve) => {
+      resolveBlock = resolve;
+    });
+
+    const runner: StepRunner = {
+      run: async (step: StepName) => {
+        stepCount++;
+        if (stepCount === 3) {
+          // Trigger SIGTERM while we're "running" step 3
+          if (sigtermHandler) sigtermHandler();
+          // Let the step finish after SIGTERM handler runs
+          resolveBlock!();
+        }
+        return { success: true };
+      },
+    };
+
+    const conductor = new Conductor({ projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events });
+    await conductor.run();
+
+    // SIGTERM handler should have been registered
+    expect(processOnSpy).toHaveBeenCalledWith('SIGTERM', expect.any(Function));
+
+    // State should have been saved (handler calls writeState)
+    const result = await readState(statePath);
+    expect(result.ok).toBe(true);
+
+    // process.exit(1) should have been called
+    expect(exitSpy).toHaveBeenCalledWith(1);
+
+    processOnSpy.mockRestore();
+    exitSpy.mockRestore();
+  });
+
+  it('SIGTERM with no wait in progress still exits safely', async () => {
+    let sigtermHandler: (() => void) | undefined;
+    const processOnSpy = vi.spyOn(process, 'on').mockImplementation(((
+      event: string,
+      handler: (...args: unknown[]) => void,
+    ) => {
+      if (event === 'SIGTERM') {
+        sigtermHandler = handler as () => void;
+      }
+      return process;
+    }) as typeof process.on);
+
+    const exitSpy = vi
+      .spyOn(process, 'exit')
+      .mockImplementation((() => undefined) as never);
+
+    // Create a runner that triggers SIGTERM on 2nd step
+    let stepCount = 0;
+    const runner: StepRunner = {
+      run: async () => {
+        stepCount++;
+        if (stepCount === 2) {
+          // Trigger SIGTERM when no wait is in progress
+          if (sigtermHandler) sigtermHandler();
+        }
+        return { success: true };
+      },
+    };
+
+    const conductor = new Conductor({ projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events });
+    await conductor.run();
+
+    // Should exit safely with status 1
+    expect(exitSpy).toHaveBeenCalledWith(1);
+
+    // State should have been saved
+    const result = await readState(statePath);
+    expect(result.ok).toBe(true);
+
+    processOnSpy.mockRestore();
+    exitSpy.mockRestore();
+  });
+
+  it('no SIGTERM listener leak after sequential conductor runs', async () => {
+    const exitSpy = vi
+      .spyOn(process, 'exit')
+      .mockImplementation((() => undefined) as never);
+
+    // Track listener count
+    const initialCount = process.listenerCount('SIGTERM');
+
+    // Run 3 sequential conductor instances
+    for (let i = 0; i < 3; i++) {
+      const runner: StepRunner = {
+        run: async () => {
+          return { success: true };
+        },
+      };
+
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+      });
+
+      await conductor.run();
+    }
+
+    // Listener count should return to baseline (no leak)
+    const finalCount = process.listenerCount('SIGTERM');
+    expect(finalCount).toBe(initialCount);
+
+    exitSpy.mockRestore();
+  });
+
   describe('backward navigation', () => {
     it('getNavigableSteps returns only done and stale steps', () => {
       const state: ConductState = {
@@ -3734,6 +3865,251 @@ describe('engine/conductor', () => {
       await conductor.run();
 
       expect(sleepFn).toHaveBeenCalledWith(300_000);
+    });
+
+    it('conductor: enters episode and awaits episode.clear() on rate-limited result', async () => {
+      // Task 9: RED spec for conductor episode integration
+      // Expects: conductor calls episode.enter(deadline) and awaits episode.clear(signal)
+      // instead of bare sleep when handling rate limits.
+
+      let attempt = 0;
+      const runner: StepRunner = {
+        run: vi.fn(async () => {
+          attempt++;
+          if (attempt === 1) return { success: false, rateLimited: true, waitSeconds: 60 };
+          return { success: true };
+        }),
+      };
+
+      // Mock episode with spy methods to verify calls
+      let episodeEnterCalled = false;
+      let episodeEnterDeadline: number | null = null;
+      let episodeClearCalled = false;
+      let episodeClearSignal: AbortSignal | undefined;
+
+      const mockEpisode = {
+        enter: (untilMs: number) => {
+          episodeEnterCalled = true;
+          episodeEnterDeadline = untilMs;
+        },
+        active: () => false,
+        clear: async (signal?: AbortSignal) => {
+          episodeClearCalled = true;
+          episodeClearSignal = signal;
+          return Promise.resolve();
+        },
+        nextWaitSeconds: () => 60,
+      };
+
+      const nowTime = Date.now();
+      const sleepFn = vi.fn().mockResolvedValue(undefined);
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        maxRetries: 2,
+        sleepFn,
+        onRecovery: vi.fn().mockResolvedValue('quit' as const),
+        rateLimitEpisode: mockEpisode,
+      });
+
+      await conductor.run();
+
+      // Assertions (will fail because conductor doesn't yet integrate episode):
+      // - episode.enter() was NOT called yet (conductor doesn't integrate episode yet)
+      expect(episodeEnterCalled).toBe(true);
+      // - deadline should be approximately now + 60000ms
+      if (episodeEnterDeadline !== null) {
+        const expectedMin = nowTime + 59000; // Allow 1s tolerance
+        const expectedMax = nowTime + 61000;
+        expect(episodeEnterDeadline).toBeGreaterThanOrEqual(expectedMin);
+        expect(episodeEnterDeadline).toBeLessThanOrEqual(expectedMax);
+      }
+      // - episode.clear(signal) should be called instead of bare sleep
+      expect(episodeClearCalled).toBe(true);
+      expect(episodeClearSignal).toBeDefined();
+      // - attempt counter unchanged (rate-limit doesn't burn budget)
+      expect(attempt).toBeGreaterThanOrEqual(2);
+      // - sleepFn should NOT have been called (conductor should use episode.clear)
+      expect(sleepFn).not.toHaveBeenCalled();
+    });
+
+    describe('Task 12: coordinated shared backoff across concurrent conductors', () => {
+      it('two conductors share one episode: shared deadline (later-wins), joint resume', async () => {
+        // Task 12 RED: Two conductors with one shared episode
+        // - Conductor A hits rate-limit with waitSeconds=60
+        // - Conductor B hits rate-limit with waitSeconds=120
+        // - Later deadline wins → shared deadline = later of the two
+        // - Both conductors await episode.clear() → same promise, both resume together
+
+        const { create: createEpisode } = await import(
+          '../../src/engine/rate-limit-episode.js'
+        );
+
+        let fakeNow = 0;
+        const sharedEpisode = createEpisode({
+          now: () => fakeNow,
+          setTimer: (fn: () => void, delayMs: number) => {
+            // Advance the fake clock past the delay BEFORE firing: the
+            // episode's wake-recheck loop re-reads now() at wake and re-arms
+            // unless the deadline has genuinely passed — an immediate fire
+            // with a frozen clock is an infinite re-arm loop (the CI hang).
+            fakeNow += delayMs;
+            setImmediate(fn);
+            return { cancel: () => {} };
+          },
+        });
+
+        let conductorAAttempt = 0;
+        let conductorBAttempt = 0;
+        let episodeEnterCalls: Array<{ deadline: number }> = [];
+
+        const originalEnter = sharedEpisode.enter.bind(sharedEpisode);
+        sharedEpisode.enter = (deadline: number) => {
+          episodeEnterCalls.push({ deadline });
+          originalEnter(deadline);
+        };
+
+        const runnerA: StepRunner = {
+          run: vi.fn(async () => {
+            conductorAAttempt++;
+            if (conductorAAttempt === 1) {
+              return { success: false, rateLimited: true, waitSeconds: 60 };
+            }
+            return { success: true };
+          }),
+        };
+
+        const runnerB: StepRunner = {
+          run: vi.fn(async () => {
+            conductorBAttempt++;
+            if (conductorBAttempt === 1) {
+              return { success: false, rateLimited: true, waitSeconds: 120 };
+            }
+            return { success: true };
+          }),
+        };
+
+        const conductorA = new Conductor({
+          stateFilePath: join(dir, 'state-a.json'),
+          stepRunner: runnerA,
+          events,
+          projectRoot: dir,
+          maxRetries: 2,
+          rateLimitEpisode: sharedEpisode,
+        });
+
+        const conductorB = new Conductor({
+          stateFilePath: join(dir, 'state-b.json'),
+          stepRunner: runnerB,
+          events,
+          projectRoot: dir,
+          maxRetries: 2,
+          rateLimitEpisode: sharedEpisode,
+        });
+
+        // Run both conductors concurrently
+        const [resultA, resultB] = await Promise.all([
+          conductorA.run(),
+          conductorB.run(),
+        ]);
+
+        // Both should complete without errors
+        expect(resultA).toBeUndefined();
+        expect(resultB).toBeUndefined();
+
+        // Both should have retried (rate-limit + success)
+        expect(conductorAAttempt).toBeGreaterThanOrEqual(2);
+        expect(conductorBAttempt).toBeGreaterThanOrEqual(2);
+
+        // Both should have called episode.enter()
+        expect(episodeEnterCalls.length).toBeGreaterThanOrEqual(2);
+      });
+
+      it('later-deadline-wins: 60s vs 120s → shared deadline respects 120s', async () => {
+        // Verify that the later deadline (120s) wins over earlier (60s)
+        const { create: createEpisode } = await import(
+          '../../src/engine/rate-limit-episode.js'
+        );
+
+        const baseTime = 1000000;
+        let fakeNow = baseTime;
+        const episodeEnterCalls: Array<number> = [];
+
+        const sharedEpisode = createEpisode({
+          now: () => fakeNow,
+          setTimer: () => ({ cancel: () => {} }),
+        });
+
+        const originalEnter = sharedEpisode.enter.bind(sharedEpisode);
+        sharedEpisode.enter = (deadline: number) => {
+          episodeEnterCalls.push(deadline);
+          originalEnter(deadline);
+        };
+
+        // Simulate conductor A entering with 60s deadline
+        sharedEpisode.enter(baseTime + 60000);
+        expect(episodeEnterCalls[0]).toBe(baseTime + 60000);
+
+        // Simulate conductor B entering with 120s deadline
+        sharedEpisode.enter(baseTime + 120000);
+        expect(episodeEnterCalls[1]).toBe(baseTime + 120000);
+
+        // The shared deadline should now be the later one (120s)
+        // Check by verifying active() returns true up to 120s but not 60s
+        fakeNow = baseTime + 119999;
+        expect(sharedEpisode.active(fakeNow)).toBe(true);
+
+        fakeNow = baseTime + 120001;
+        expect(sharedEpisode.active(fakeNow)).toBe(false);
+      });
+
+      it('N=1 unchanged: single conductor works same as before', async () => {
+        // Task 12: Verify backward compatibility
+        // A single conductor should work identically to before (no behavior change)
+
+        const { create: createEpisode } = await import(
+          '../../src/engine/rate-limit-episode.js'
+        );
+
+        let attempt = 0;
+        const runner: StepRunner = {
+          run: vi.fn(async () => {
+            attempt++;
+            if (attempt === 1) {
+              return { success: false, rateLimited: true, waitSeconds: 30 };
+            }
+            return { success: true };
+          }),
+        };
+
+        // Fake clock advanced by the timer itself — the wake-recheck loop
+        // re-arms forever if the deadline hasn't genuinely passed at wake.
+        let singleFakeNow = 0;
+        const singleEpisode = createEpisode({
+          now: () => singleFakeNow,
+          setTimer: (fn: () => void, delayMs: number) => {
+            singleFakeNow += delayMs;
+            setImmediate(fn);
+            return { cancel: () => {} };
+          },
+        });
+
+        const conductor = new Conductor({
+          stateFilePath: join(dir, 'state-single.json'),
+          stepRunner: runner,
+          events,
+          projectRoot: dir,
+          maxRetries: 2,
+          rateLimitEpisode: singleEpisode,
+        });
+
+        await conductor.run();
+
+        // Should have retried once (rate-limit + success)
+        expect(attempt).toBeGreaterThanOrEqual(2);
+      });
     });
   });
 

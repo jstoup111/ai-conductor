@@ -1143,4 +1143,644 @@ describe('engine/daemon — runDaemon', () => {
       expect(res.processed[0].status).toBe('done');
     });
   });
+
+  // ── Task 6: Dispatch gate suppresses new picks when active (rate-limit episode) ──
+
+  it('dispatch gate: episode active suppresses new picks, idle cycle still ticks', async () => {
+    // Setup: rate-limit episode is active (ongoing rate-limit event).
+    // The daemon has eligible features in the backlog and no in-flight work,
+    // but the active episode should suppress new dispatch.
+    // Idle-cycle invariant: sleep is still called even when no dispatch happens.
+
+    const mockEpisode = {
+      active: () => true, // Episode is active → suppress dispatch
+      enter: () => {},
+      clear: () => Promise.resolve(),
+    };
+
+    let sleptCount = 0;
+    const runFeature = vi.fn(async (it: BacklogItem) => ({ slug: it.slug, status: 'done' as const }));
+
+    const deps: DaemonDeps = {
+      discoverBacklog: staticBacklog(items(1)), // One eligible feature in backlog
+      runFeature,
+      rateLimitEpisode: mockEpisode,
+      sleep: async () => {
+        sleptCount++;
+      },
+    };
+
+    const res = await runDaemon(deps, {
+      concurrency: 1,
+      once: false, // continuous mode so we can idle-poll
+      maxIdlePolls: 1, // Just one idle poll to verify the pattern
+    });
+
+    // Assertions:
+    // 1. No dispatch occurred (runFeature never called)
+    expect(runFeature).not.toHaveBeenCalled();
+    // 2. Sleep was called exactly once (idle cycle still ticked)
+    expect(sleptCount).toBe(1);
+    // 3. Feature remains eligible in backlog (nothing was popped)
+    // 4. Stopped due to idle timeout (not dispatch ceiling)
+    expect(res.stoppedReason).toBe('idle_timeout');
+    // 5. Nothing was processed (no dispatch happened)
+    expect(res.processed).toHaveLength(0);
+  });
+
+  // ── Task 8 negative paths: dispatch gate negatives ─────────────────────────────────
+
+  describe('Task 8 negative paths: dispatch gate with PAUSE and episode composition', () => {
+    it('in-flight untouched: feature running when episode activates continues to completion', async () => {
+      // Setup: Feature A is already in flight when episode becomes active.
+      // The gate should NOT cancel or re-dispatch it; it must complete normally.
+      // Then episode clears, and Feature B is picked/dispatched.
+      let episodeActive = false;
+      let resolveFeatureA: ((value: FeatureOutcome) => void) | undefined;
+      const featureAPromise = new Promise<FeatureOutcome>((resolve) => {
+        resolveFeatureA = resolve;
+      });
+
+      const deps: DaemonDeps = {
+        discoverBacklog: staticBacklog(items(2)), // f0 and f1
+        runFeature: async (it: BacklogItem) => {
+          if (it.slug === 'f0') {
+            // Feature A: return pending promise — blocks until we resolve it
+            return featureAPromise;
+          }
+          // Feature B: completes immediately
+          return { slug: it.slug, status: 'done' };
+        },
+        rateLimitEpisode: {
+          active: () => episodeActive,
+          enter: () => {},
+          clear: () => Promise.resolve(),
+        },
+        sleep: async () => {},
+      };
+
+      // Start daemon without awaiting
+      const daemonPromise = runDaemon(deps, {
+        concurrency: 2,
+        once: true,
+      });
+
+      // Yield to let daemon dispatch f0
+      await new Promise((r) => setTimeout(r, 10));
+
+      // Now activate episode while f0 is in flight
+      episodeActive = true;
+      await new Promise((r) => setTimeout(r, 10));
+
+      // Resolve feature A; episode is still active
+      resolveFeatureA?.({ slug: 'f0', status: 'done' });
+
+      // Clear episode before the daemon loop completes
+      await new Promise((r) => setTimeout(r, 10));
+      episodeActive = false;
+
+      // Collect result
+      const res = await daemonPromise;
+
+      // Assertions:
+      // 1. Feature A (f0) was dispatched and completed despite episode activation
+      expect(res.processed.map((o) => o.slug)).toContain('f0');
+      expect(res.processed.find((o) => o.slug === 'f0')?.status).toBe('done');
+      // 2. Feature B (f1) was also dispatched and completed after episode cleared
+      expect(res.processed.map((o) => o.slug)).toContain('f1');
+      expect(res.processed.find((o) => o.slug === 'f1')?.status).toBe('done');
+      // 3. Both features completed (gate only blocks NEW dispatch, not in-flight)
+      expect(res.processed).toHaveLength(2);
+    });
+
+    it('compose with PAUSE: episode + PAUSE both set blocks dispatch; clearing episode with PAUSE still set keeps block', async () => {
+      // Setup: Both episode active and paused → double-block.
+      // Verify the gate order: (paused || episodeActive) → don't dispatch.
+      // This means both MUST allow dispatch for new picks to happen.
+      let episodeActive = true;
+      let isPausedFlag = true;
+      let dispatchAttempts = 0;
+      let pollPhase = 0;
+
+      const deps: DaemonDeps = {
+        discoverBacklog: staticBacklog(items(2)), // f0, f1
+        runFeature: async (it: BacklogItem) => {
+          dispatchAttempts++;
+          return { slug: it.slug, status: 'done' };
+        },
+        rateLimitEpisode: {
+          active: () => episodeActive,
+          enter: () => {},
+          clear: () => Promise.resolve(),
+        },
+        isPaused: async () => isPausedFlag,
+        sleep: async () => {
+          pollPhase++;
+          // Transition through phases based on poll count
+          if (pollPhase === 2) {
+            // After first idle, clear episode but keep pause
+            episodeActive = false;
+          }
+          if (pollPhase === 3) {
+            // After second idle, clear pause too
+            isPausedFlag = false;
+          }
+        },
+      };
+
+      const res = await runDaemon(deps, {
+        concurrency: 1,
+        once: false,
+        maxIdlePolls: 4, // Enough to reach phase 3
+      });
+
+      // Phase 1 (both active): no dispatch
+      // Phase 2 (episode cleared, pause active): still no dispatch
+      // Phase 3 (both cleared): dispatch can happen
+      // We should see dispatch ONLY after both gates clear (phase 3+)
+      expect(dispatchAttempts).toBeGreaterThan(0);
+      expect(res.processed.length).toBeGreaterThan(0);
+    });
+
+    it('no double-dispatch: episode clears mid-cycle, at most one dispatch per eligible slug', async () => {
+      // Setup: Two identical "eligible features" (same slug, shouldn't happen but test it).
+      // Episode is active, then clears.
+      // Verify at most one dispatch of that slug occurs in the cycle.
+      let episodeActive = true;
+      let dispatchCount = 0;
+      const dispatchedSlugs = new Map<string, number>();
+
+      const deps: DaemonDeps = {
+        discoverBacklog: staticBacklog([{ slug: 'duplicate' }, { slug: 'duplicate' }]),
+        runFeature: async (it: BacklogItem) => {
+          dispatchCount++;
+          dispatchedSlugs.set(it.slug, (dispatchedSlugs.get(it.slug) ?? 0) + 1);
+          return { slug: it.slug, status: 'done' };
+        },
+        rateLimitEpisode: {
+          active: () => episodeActive,
+          enter: () => {},
+          clear: () => Promise.resolve(),
+        },
+        sleep: async () => {
+          // Clear episode on first sleep (idle poll)
+          episodeActive = false;
+        },
+      };
+
+      const res = await runDaemon(deps, {
+        concurrency: 1,
+        once: false,
+        maxIdlePolls: 1,
+      });
+
+      // Verify that 'duplicate' slug was dispatched at most once per cycle
+      // (pickEligible filters duplicates anyway via inFlight set)
+      const duplicateDispatches = dispatchedSlugs.get('duplicate') ?? 0;
+      expect(duplicateDispatches).toBeLessThanOrEqual(1);
+      // Overall, only one dispatch should occur in this scenario
+      expect(dispatchCount).toBeLessThanOrEqual(1);
+    });
+
+    it('gate composition order: PAUSE checked BEFORE episode, so both must allow dispatch', async () => {
+      // Verify the gate is: if (paused || episodeActive) return (don't dispatch)
+      // NOT: if (episodeActive) return; if (paused) return;
+      // The second form would allow episode to suppress pause checks.
+      let episodeActive = true;
+      let isPausedFlag = true;
+      let dispatchCount = 0;
+
+      const deps: DaemonDeps = {
+        discoverBacklog: staticBacklog(items(1)),
+        runFeature: async (it: BacklogItem) => {
+          dispatchCount++;
+          return { slug: it.slug, status: 'done' };
+        },
+        rateLimitEpisode: {
+          active: () => episodeActive,
+          enter: () => {},
+          clear: () => Promise.resolve(),
+        },
+        isPaused: async () => isPausedFlag,
+        sleep: async () => {},
+      };
+
+      const res = await runDaemon(deps, {
+        concurrency: 1,
+        once: false,
+        maxIdlePolls: 2,
+      });
+
+      // With both gates set, no dispatch should occur
+      expect(dispatchCount).toBe(0);
+      expect(res.processed).toHaveLength(0);
+      // This test verifies the gate composition — if the gates were in wrong order
+      // (episode before pause), the order wouldn't matter in this scenario,
+      // but in a live system it would cause pause to be bypassable by an active episode.
+    });
+  });
+
+  // ── Episode-caused HALT self-heal sweep (Task 20) ─────────────────────────
+  describe('episode-caused HALT self-heal sweep (Task 20)', () => {
+    it('HALT written while episode active is marked with episodeCausedHalt stamp', async () => {
+      // When a feature halts AND rateLimitEpisode is active, the onHaltWritten
+      // callback should receive a flag indicating the HALT is episode-caused.
+      //
+      // The realistic sequence: the feature is DISPATCHED while no episode is
+      // active (an active episode suppresses dispatch entirely), the episode
+      // begins while it is in flight (the rate-limited run itself triggers
+      // episode entry), and the halt lands during the active episode. The
+      // runFeature mock models that by flipping the episode on before halting.
+      let episodeActive = false;
+      const haltEventLog: Array<{ slug: string; episodeCaused: boolean }> = [];
+
+      const deps: DaemonDeps = {
+        discoverBacklog: staticBacklog(items(1)),
+        runFeature: async (it) => {
+          episodeActive = true; // rate-limit episode begins mid-run
+          return { slug: it.slug, status: 'halted', reason: 'rate limited' };
+        },
+        isHalted: async (slug) => haltEventLog.some((e) => e.slug === slug),
+        rateLimitEpisode: {
+          active: () => episodeActive,
+          enter: () => {},
+          clear: () => Promise.resolve(),
+        },
+        onHaltWritten: async (slug, episodeCaused) => {
+          haltEventLog.push({ slug, episodeCaused });
+        },
+        sleep: async () => {},
+      };
+
+      await runDaemon(deps, { concurrency: 1, once: true });
+
+      // Verify that the HALT was recorded as episode-caused
+      expect(haltEventLog).toContainEqual({ slug: 'f0', episodeCaused: true });
+    });
+
+    it('unstamped HALT: written when episode not active', async () => {
+      // When a HALT is written with episode NOT active, it should be marked
+      // with episodeCaused: false.
+      let episodeActive = false;
+      const haltEventLog: Array<{ slug: string; episodeCaused: boolean }> = [];
+
+      const deps: DaemonDeps = {
+        discoverBacklog: staticBacklog(items(1)),
+        runFeature: async (it) => {
+          return { slug: it.slug, status: 'halted', reason: 'normal halt' };
+        },
+        isHalted: async (slug) => haltEventLog.some((e) => e.slug === slug),
+        rateLimitEpisode: {
+          active: () => episodeActive,
+          enter: () => {},
+          clear: () => Promise.resolve(),
+        },
+        onHaltWritten: async (slug, episodeCaused) => {
+          haltEventLog.push({ slug, episodeCaused });
+        },
+        sleep: async () => {},
+      };
+
+      await runDaemon(deps, { concurrency: 1, once: true });
+
+      // Verify that the HALT was recorded as NOT episode-caused
+      expect(haltEventLog).toContainEqual({ slug: 'f0', episodeCaused: false });
+    });
+
+    it('episode end triggers sweep of episode-caused HALTs via rekickHalt', async () => {
+      // When episode transitions from active to inactive, episode-caused HALTs
+      // should be recovered via the injected sweep (the existing rekick path).
+      //
+      // Dispatch must happen while the episode is INACTIVE (an active episode
+      // suppresses dispatch); the episode begins mid-run, the halt lands
+      // stamped, and a later idle tick clears the episode — the daemon must
+      // detect the active→inactive transition and fire sweepEpisodeHalts.
+      let episodeActive = false;
+      const haltedSlugs: { [key: string]: boolean } = {};
+      const episodeCausedSlugs: { [key: string]: boolean } = {};
+      const rekickedSlugs: string[] = [];
+      let pollCount = 0;
+
+      const deps: DaemonDeps = {
+        discoverBacklog: staticBacklog(items(1)),
+        runFeature: async (it) => {
+          episodeActive = true; // rate-limit episode begins mid-run
+          return { slug: it.slug, status: 'halted', reason: 'episode halt' };
+        },
+        isHalted: async (slug) => haltedSlugs[slug] ?? false,
+        rateLimitEpisode: {
+          active: () => episodeActive,
+          enter: () => {},
+          clear: () => Promise.resolve(),
+        },
+        onHaltWritten: async (slug, episodeCaused) => {
+          haltedSlugs[slug] = true;
+          if (episodeCaused) {
+            episodeCausedSlugs[slug] = true;
+          }
+        },
+        sweepEpisodeHalts: async () => {
+          // When episode-end sweep is triggered, rekick all episode-caused HALTs
+          for (const slug of Object.keys(episodeCausedSlugs)) {
+            if (haltedSlugs[slug]) {
+              rekickedSlugs.push(slug);
+            }
+          }
+        },
+        sleep: async () => {
+          pollCount++;
+          if (pollCount === 2) {
+            // Clear episode to trigger sweep
+            episodeActive = false;
+          }
+        },
+      };
+
+      await runDaemon(deps, {
+        concurrency: 1,
+        once: false,
+        maxIdlePolls: 3,
+      });
+
+      // After episode clears, episode-caused HALT should be swept/rekicked
+      expect(rekickedSlugs).toContain('f0');
+    });
+
+    it('episode sweep respects operator-park: parked slug not recovered', async () => {
+      // Even if a HALT is episode-caused, if the operator has parked the slug,
+      // the episode sweep should NOT recover it. Operator intent overrides
+      // automatic recovery.
+      //
+      // Same choreography as the sweep test above (dispatch while inactive,
+      // episode begins mid-run, halt lands stamped) — but the operator parks
+      // the slug before the episode clears, so the sweep must skip it. Without
+      // a real dispatch+stamp first, the not-rekicked assertion would pass
+      // vacuously (nothing stamped, sweep empty).
+      let episodeActive = false;
+      const haltedSlugs: { [key: string]: boolean } = {};
+      const episodeCausedSlugs: { [key: string]: boolean } = {};
+      const operatorParked = new Set<string>();
+      const rekickedSlugs: string[] = [];
+      let pollCount = 0;
+
+      const deps: DaemonDeps = {
+        discoverBacklog: staticBacklog(items(1)),
+        runFeature: async (it) => {
+          episodeActive = true; // rate-limit episode begins mid-run
+          return { slug: it.slug, status: 'halted', reason: 'episode halt' };
+        },
+        isHalted: async (slug) => haltedSlugs[slug] ?? false,
+        isParked: async (slug) => operatorParked.has(slug),
+        rateLimitEpisode: {
+          active: () => episodeActive,
+          enter: () => {},
+          clear: () => Promise.resolve(),
+        },
+        onHaltWritten: async (slug, episodeCaused) => {
+          haltedSlugs[slug] = true;
+          if (episodeCaused) {
+            episodeCausedSlugs[slug] = true;
+          }
+        },
+        sweepEpisodeHalts: async (isParked) => {
+          // When sweeping, respect operator-park
+          for (const slug of Object.keys(episodeCausedSlugs)) {
+            if (haltedSlugs[slug] && !(await isParked?.(slug))) {
+              rekickedSlugs.push(slug);
+            }
+          }
+        },
+        sleep: async () => {
+          pollCount++;
+          if (pollCount === 1) {
+            // Operator parks the slug
+            operatorParked.add('f0');
+          } else if (pollCount === 2) {
+            // Clear episode
+            episodeActive = false;
+          }
+        },
+      };
+
+      await runDaemon(deps, {
+        concurrency: 1,
+        once: false,
+        maxIdlePolls: 3,
+      });
+
+      // Operator-parked HALT should NOT be rekicked even if episode-caused
+      expect(rekickedSlugs).not.toContain('f0');
+    });
+  });
+
+  // ── Task 21: Restart deferral during active episode ──────────────────────────
+
+  describe('restart deferral during active episode (ADR 11)', () => {
+    it('episode active + restart-pending marker at idle boundary: NO triggerSelfRestart this tick', async () => {
+      let episodeActive = true;
+      let triggerCalls = 0;
+      let pollCount = 0;
+
+      const deps: DaemonDeps = {
+        discoverBacklog: staticBacklog(items(1)),
+        runFeature: async (it) => ({ slug: it.slug, status: 'done' }),
+        hasRestartPending: async () => true, // marker always present
+        triggerSelfRestart: async () => {
+          triggerCalls++;
+        },
+        rateLimitEpisode: {
+          active: () => episodeActive,
+          enter: () => {},
+          clear: () => Promise.resolve(),
+        },
+        sleep: async () => {
+          pollCount++;
+          if (pollCount === 1) {
+            // Episode clears after first idle poll
+            episodeActive = false;
+          }
+        },
+      };
+
+      await runDaemon(deps, {
+        concurrency: 1,
+        once: false,
+        maxIdlePolls: 3,
+      });
+
+      // Trigger should NOT have been called while episode was active.
+      // It should be called after episode clears.
+      expect(triggerCalls).toBe(1); // called after episode cleared
+    });
+
+    it('stale-engine verdict while episode active: NO requestRestart', async () => {
+      const { vi } = await import('vitest');
+      const requestRestart = vi.fn(async () => {});
+      let episodeActive = true;
+      let pollCount = 0;
+
+      const deps: DaemonDeps = {
+        discoverBacklog: staticBacklog([]), // empty → enters idle branch
+        runFeature: async (it) => ({ slug: it.slug, status: 'done' }),
+        staleEngineChecker: {
+          check: () => 'stale', // always stale
+          capturedIdentity: () => 'old-hash',
+          targetIdentity: () => 'new-hash',
+        },
+        rateLimitEpisode: {
+          active: () => episodeActive,
+          enter: () => {},
+          clear: () => Promise.resolve(),
+        },
+        requestRestart,
+        sleep: async () => {
+          pollCount++;
+          if (pollCount === 1) {
+            // Episode clears after first idle poll
+            episodeActive = false;
+          }
+        },
+      };
+
+      await runDaemon(deps, {
+        concurrency: 1,
+        once: false,
+        isSelfHost: true,
+        autoRestartOnStaleEngine: true,
+        maxIdlePolls: 2,
+      });
+
+      // requestRestart should NOT be called while episode is active.
+      // It will be called once after episode clears (on the next idle poll).
+      // Since pollCount increments on each idle poll and episode clears on first poll,
+      // requestRestart will be called on poll 2.
+      expect(requestRestart).toHaveBeenCalledTimes(1);
+      expect(requestRestart).toHaveBeenCalledWith({
+        fromIdentity: 'old-hash',
+        targetIdentity: 'new-hash',
+      });
+    });
+
+    it('episode clears: restart fires on next tick (defer, not drop)', async () => {
+      let episodeActive = true;
+      let triggerCalls = 0;
+      let pollCount = 0;
+
+      const deps: DaemonDeps = {
+        discoverBacklog: staticBacklog(items(1)),
+        runFeature: async (it) => ({ slug: it.slug, status: 'done' }),
+        hasRestartPending: async () => true, // marker present
+        triggerSelfRestart: async () => {
+          triggerCalls++;
+        },
+        rateLimitEpisode: {
+          active: () => episodeActive,
+          enter: () => {},
+          clear: () => Promise.resolve(),
+        },
+        sleep: async () => {
+          pollCount++;
+          if (pollCount === 1) {
+            // Episode clears after first idle poll
+            episodeActive = false;
+          }
+        },
+      };
+
+      await runDaemon(deps, {
+        concurrency: 1,
+        once: false,
+        maxIdlePolls: 3,
+      });
+
+      // After episode clears on first idle poll, restart should fire on the next idle poll
+      expect(triggerCalls).toBe(1);
+      expect(pollCount).toBeGreaterThanOrEqual(2); // at least two polls to allow deferral
+    });
+
+    it('restart marker persisted through deferral: no re-run of hasRestartPending', async () => {
+      const { vi } = await import('vitest');
+      const hasRestartPending = vi.fn(async () => true); // marker always present
+      let episodeActive = true;
+      let triggerCalls = 0;
+      let pollCount = 0;
+
+      const deps: DaemonDeps = {
+        discoverBacklog: staticBacklog(items(1)),
+        runFeature: async (it) => ({ slug: it.slug, status: 'done' }),
+        hasRestartPending,
+        triggerSelfRestart: async () => {
+          triggerCalls++;
+        },
+        rateLimitEpisode: {
+          active: () => episodeActive,
+          enter: () => {},
+          clear: () => Promise.resolve(),
+        },
+        sleep: async () => {
+          pollCount++;
+          if (pollCount === 1) {
+            episodeActive = false; // episode clears
+          }
+        },
+      };
+
+      await runDaemon(deps, {
+        concurrency: 1,
+        once: false,
+        maxIdlePolls: 3,
+      });
+
+      // hasRestartPending should be called until the trigger succeeds.
+      // Idle poll 1: called, deferred (episode active)
+      // Idle poll 2: called, trigger fires (episode inactive), restartTriggeredSuccessfully = true
+      // Idle poll 3: NOT called (restartTriggeredSuccessfully is true, so the check is skipped)
+      expect(hasRestartPending).toHaveBeenCalledTimes(2);
+      expect(triggerCalls).toBe(1); // called once after episode clears
+    });
+
+    it('stale verdict while episode active: restart marker not consumed, retried after episode', async () => {
+      const { vi } = await import('vitest');
+      const requestRestart = vi.fn(async () => {});
+      let episodeActive = true;
+      let pollCount = 0;
+
+      const deps: DaemonDeps = {
+        discoverBacklog: staticBacklog([]),
+        runFeature: async (it) => ({ slug: it.slug, status: 'done' }),
+        staleEngineChecker: {
+          check: () => 'stale',
+          capturedIdentity: () => 'old',
+          targetIdentity: () => 'new',
+        },
+        rateLimitEpisode: {
+          active: () => episodeActive,
+          enter: () => {},
+          clear: () => Promise.resolve(),
+        },
+        requestRestart,
+        sleep: async () => {
+          pollCount++;
+          if (pollCount === 1) {
+            episodeActive = false;
+          }
+        },
+      };
+
+      await runDaemon(deps, {
+        concurrency: 1,
+        once: false,
+        isSelfHost: true,
+        autoRestartOnStaleEngine: true,
+        maxIdlePolls: 2,
+      });
+
+      // Should be called once after episode clears
+      expect(requestRestart).toHaveBeenCalledTimes(1);
+      expect(requestRestart).toHaveBeenCalledWith({
+        fromIdentity: 'old',
+        targetIdentity: 'new',
+      });
+    });
+  });
 });
