@@ -108,13 +108,30 @@ export class AuditTrailWriter {
   private toRecordInput(event: ConductorEvent): AuditRecordInput | null {
     switch (event.type) {
       case 'gate_verdict':
-        return { step: event.step, event: event.type, reason: event.reason };
+        // Non-divergent mapping: `reason` is taken directly from the verdict
+        // (no transformation), and `at` is stamped by `record()` as
+        // `Date.now()`, which is always >= the verdict's `checkedAt` since
+        // the verdict is computed before this handler runs.
+        return {
+          step: event.step,
+          event: event.satisfied ? 'gate_pass' : 'gate_fail',
+          reason: event.reason,
+        };
       case 'step_retry':
-        return { step: event.step, event: event.type, reason: event.reason, attempt: event.attempt };
+        return {
+          step: event.step,
+          event: 'retry',
+          reason: event.reason || 'step retry',
+          attempt: event.attempt,
+        };
       case 'kickback':
-        return { step: event.to, event: event.type, reason: event.evidence, cause: event.from };
+        return {
+          step: event.to,
+          event: event.type,
+          cause: `${event.from} evidence: ${event.evidence}`,
+        };
       case 'loop_halt':
-        return { step: 'build', event: event.type, reason: event.reason };
+        return { step: 'build', event: 'intervention', cause: event.reason };
       case 'step_completed':
         return { step: event.step, event: event.type };
       default:

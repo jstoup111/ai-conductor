@@ -163,7 +163,182 @@ describe('engine/audit-trail', () => {
     expect(lines).toHaveLength(1);
     const record = JSON.parse(lines[0]) as AuditRecord;
     expect(record.step).toBe('build');
-    expect(record.event).toBe('gate_verdict');
+    expect(record.event).toBe('gate_pass');
+  });
+
+  it('gate_verdict with satisfied:false maps to gate_fail with non-divergent reason and at >= checkedAt', async () => {
+    const writer = new AuditTrailWriter(dir);
+    const emitter = new ConductorEventEmitter();
+    writer.subscribe(emitter);
+
+    const checkedAt = Date.now() - 1000;
+    const reason = 'stories missing Status: Accepted';
+
+    await emitter.emit({
+      type: 'gate_verdict',
+      step: 'conflict_check',
+      satisfied: false,
+      reason,
+      checkedAt,
+    });
+
+    const eventsPath = join(dir, '.pipeline', 'audit-trail', 'events.jsonl');
+    const contents = await readFile(eventsPath, 'utf8');
+    const lines = contents.split('\n').filter((line) => line.length > 0);
+
+    expect(lines).toHaveLength(1);
+    const record = JSON.parse(lines[0]) as AuditRecord;
+    expect(record.event).toBe('gate_fail');
+    expect(record.reason).toBe(reason);
+    expect(record.at).toBeGreaterThanOrEqual(checkedAt);
+  });
+
+  it('gate_verdict with satisfied:true maps to gate_pass with non-divergent reason', async () => {
+    const writer = new AuditTrailWriter(dir);
+    const emitter = new ConductorEventEmitter();
+    writer.subscribe(emitter);
+
+    const checkedAt = Date.now() - 500;
+    const reason = 'all stories accepted';
+
+    await emitter.emit({
+      type: 'gate_verdict',
+      step: 'build',
+      satisfied: true,
+      reason,
+      checkedAt,
+    });
+
+    const eventsPath = join(dir, '.pipeline', 'audit-trail', 'events.jsonl');
+    const contents = await readFile(eventsPath, 'utf8');
+    const lines = contents.split('\n').filter((line) => line.length > 0);
+
+    expect(lines).toHaveLength(1);
+    const record = JSON.parse(lines[0]) as AuditRecord;
+    expect(record.event).toBe('gate_pass');
+    expect(record.reason).toBe(reason);
+    expect(record.at).toBeGreaterThanOrEqual(checkedAt);
+  });
+
+  it('subscribe() maps kickback to a record at the target step with cause documenting source + evidence', async () => {
+    const writer = new AuditTrailWriter(dir);
+    const emitter = new ConductorEventEmitter();
+    writer.subscribe(emitter);
+
+    await emitter.emit({
+      type: 'kickback',
+      from: 'conflict_check',
+      to: 'architecture_review',
+      evidence: 'missing seam',
+      count: 1,
+    });
+
+    const eventsPath = join(dir, '.pipeline', 'audit-trail', 'events.jsonl');
+    const contents = await readFile(eventsPath, 'utf8');
+    const lines = contents.split('\n').filter((line) => line.length > 0);
+
+    expect(lines).toHaveLength(1);
+    const record = JSON.parse(lines[0]) as AuditRecord;
+    expect(record.step).toBe('architecture_review');
+    expect(record.event).toBe('kickback');
+    expect(record.cause).toBe('conflict_check evidence: missing seam');
+  });
+
+  it('subscribe() maps step_retry to a retry record with attempt and reason', async () => {
+    const writer = new AuditTrailWriter(dir);
+    const emitter = new ConductorEventEmitter();
+    writer.subscribe(emitter);
+
+    await emitter.emit({
+      type: 'step_retry',
+      step: 'build',
+      attempt: 2,
+      maxAttempts: 3,
+      reason: 'tests failed',
+    });
+
+    const eventsPath = join(dir, '.pipeline', 'audit-trail', 'events.jsonl');
+    const contents = await readFile(eventsPath, 'utf8');
+    const lines = contents.split('\n').filter((line) => line.length > 0);
+
+    expect(lines).toHaveLength(1);
+    const record = JSON.parse(lines[0]) as AuditRecord;
+    expect(record.step).toBe('build');
+    expect(record.event).toBe('retry');
+    expect(record.attempt).toBe(2);
+    expect(record.reason).toBe('tests failed');
+  });
+
+  it('subscribe() falls back to a default reason and still appends when step_retry reason is empty', async () => {
+    const writer = new AuditTrailWriter(dir);
+    const emitter = new ConductorEventEmitter();
+    writer.subscribe(emitter);
+
+    await emitter.emit({
+      type: 'step_retry',
+      step: 'build',
+      attempt: 1,
+      maxAttempts: 3,
+      reason: '',
+    });
+
+    const eventsPath = join(dir, '.pipeline', 'audit-trail', 'events.jsonl');
+    const contents = await readFile(eventsPath, 'utf8');
+    const lines = contents.split('\n').filter((line) => line.length > 0);
+
+    expect(lines).toHaveLength(1);
+    const record = JSON.parse(lines[0]) as AuditRecord;
+    expect(record.step).toBe('build');
+    expect(record.event).toBe('retry');
+    expect(record.attempt).toBe(1);
+    expect(record.reason).toBeTruthy();
+    expect(record.reason).not.toBe('');
+  });
+
+  it('subscribe() maps loop_halt to an intervention record with cause', async () => {
+    const writer = new AuditTrailWriter(dir);
+    const emitter = new ConductorEventEmitter();
+    writer.subscribe(emitter);
+
+    await emitter.emit({ type: 'loop_halt', reason: 'stuck cap exceeded' });
+
+    const eventsPath = join(dir, '.pipeline', 'audit-trail', 'events.jsonl');
+    const contents = await readFile(eventsPath, 'utf8');
+    const lines = contents.split('\n').filter((line) => line.length > 0);
+
+    expect(lines).toHaveLength(1);
+    const record = JSON.parse(lines[0]) as AuditRecord;
+    expect(record.event).toBe('intervention');
+    expect(record.cause).toBe('stuck cap exceeded');
+  });
+
+  it('subscribe() keeps both records in order when a kickback is immediately followed by loop_halt (cap exceeded)', async () => {
+    const writer = new AuditTrailWriter(dir);
+    const emitter = new ConductorEventEmitter();
+    writer.subscribe(emitter);
+
+    await emitter.emit({
+      type: 'kickback',
+      from: 'plan',
+      to: 'stories',
+      evidence: 'contradiction found',
+      count: 3,
+    });
+    await emitter.emit({ type: 'loop_halt', reason: 'kickback cap exceeded' });
+
+    const eventsPath = join(dir, '.pipeline', 'audit-trail', 'events.jsonl');
+    const contents = await readFile(eventsPath, 'utf8');
+    const lines = contents.split('\n').filter((line) => line.length > 0);
+
+    expect(lines).toHaveLength(2);
+
+    const first = JSON.parse(lines[0]) as AuditRecord;
+    const second = JSON.parse(lines[1]) as AuditRecord;
+
+    expect(first.event).toBe('kickback');
+    expect(first.step).toBe('stories');
+    expect(second.event).toBe('intervention');
+    expect(second.cause).toBe('kickback cap exceeded');
   });
 
   it('subscribe() ignores unmapped event types without error or append', async () => {
