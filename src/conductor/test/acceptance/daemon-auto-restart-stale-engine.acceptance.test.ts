@@ -358,7 +358,7 @@ describe('acceptance: idle-boundary stale detection + restart request over the R
       capturedIdentity: () => 'captured-hash',
       targetIdentity: () => 'target-hash',
     };
-    const onceRequestRestart = vi.fn(async () => {});
+    const onceRequestRestart = vi.fn(async () => ({ fired: false }));
     const onceDeps: DaemonDeps = {
       discoverBacklog: async () => [],
       runFeature: async () => ({ slug: 'never', status: 'done' }),
@@ -378,7 +378,7 @@ describe('acceptance: idle-boundary stale detection + restart request over the R
     // Control: the identical checker verdict, in continuous mode, over an
     // otherwise-idle backlog, MUST request a restart — proving the once-mode
     // guard above is an actual gate, not an unimplemented no-op passing vacuously.
-    const continuousRequestRestart = vi.fn(async () => {});
+    const continuousRequestRestart = vi.fn(async () => ({ fired: true }));
     const continuousDeps: DaemonDeps = {
       discoverBacklog: async () => [],
       runFeature: async () => ({ slug: 'never', status: 'done' }),
