@@ -20,6 +20,13 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   snapshot, kills every leaked session, and fails the run naming each one
   with its pane cwd — leaks become red builds instead of resident daemons
   idle-polling deleted /tmp fixture repos.
+- Build completion gate no longer evaluates an unrelated feature's plan when
+  multiple plans exist in the shared `.docs/plans/` (#407). `completionCtx` now
+  resolves the plan scoped to the current feature via `resolveFeaturePlanPath`:
+  engine-recorded `activePlanPath` first, then the plan named after
+  `feature_desc` (the daemon convention), then a single plan file; on true
+  ambiguity it passes no plan and the gate fails closed instead of upserting
+  someone else's tasks into `task-status.json` and halting on every re-kick.
 
 ### Added
 

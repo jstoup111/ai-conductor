@@ -6,6 +6,15 @@
 adr-2026-07-06-stale-engine-respawn-in-place, APPROVED)
 **Tier:** M
 
+> **Amended 2026-07-07 (#400, adr-2026-07-07-single-generation-stale-respawn):** TR-2's
+> session-hosted happy path is narrowed — after `triggerSelfRestart()` returns
+> **successfully**, the requester now releases the pidfile lock and exits 0 explicitly
+> (it no longer stays resident trusting `respawn-pane -k`; #400 proved predecessors
+> survive it and stack generations). Session survival is still guaranteed (respawn-pane
+> relaunch + remain-on-exit). The trigger-**failure** and marker-write-failure stay-alive
+> contracts below are unchanged and remain binding. See
+> `.docs/stories/fix-400-stale-engine-respawn-in-place-stacks-daemo.md`.
+
 ---
 
 ## Story: remain-on-exit is actually armed and keeps the pane through its own exit
