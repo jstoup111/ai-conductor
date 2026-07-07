@@ -124,6 +124,8 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- Re-enabled bin/setup worktree smoke by invoking the worktree's own `bin/setup` (#334).
+
 - **Continuous daemon no longer dies silently at its first idle poll (#329 regression).**
   `createDefaultSleep` unref'd its timer, so during an idle poll with no wake-watchers
   registered (a fully drained backlog) the sleep timer was the process's only pending work —
