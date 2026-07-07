@@ -39,7 +39,9 @@ jobs:
       # only under CI's file-set/partition, so CI itself names the balloon.
       - run: |
           npx vitest run --shard=1/4 --logHeapUsage
-          npx vitest run --shard=2/4 --logHeapUsage
+          # shard 2 instrumented: one worker + verbose — the line after the
+          # last completed test names the ballooning file (it dies mid-file).
+          npx vitest run --shard=2/4 --logHeapUsage --minWorkers=1 --maxWorkers=1 --reporter=verbose
           npx vitest run --shard=3/4 --logHeapUsage
           npx vitest run --shard=4/4 --logHeapUsage
         working-directory: src/conductor
