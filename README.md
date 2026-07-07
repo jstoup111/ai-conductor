@@ -1104,7 +1104,25 @@ dedicated test coverage (950+ tests). See the feature comparison in
   default is older.
 
 See [`src/conductor/README.md`](src/conductor/README.md) for the gate-loop and daemon
-internals (verdicts, selector, kickback, worker pool).
+internals (verdicts, selector, kickback, worker pool, task-status, auto-park, remediation).
+
+**Task Status (engine-owned):** The engine is the single authority for
+`.pipeline/task-status.json`. Completion state is derived from git evidence (commits with
+`Task: <id>` trailers). The auto-heal step reconciles stale state before retrying a gate
+by matching commits to tasks and verifying no intermediate work was dropped. See
+`src/conductor/README.md` → "Task Status (engine-owned)".
+
+**Auto-park on N-attempt trigger:** The daemon auto-parks after N consecutive no-evidence
+gate misses (where a gate found no new commit evidence since its prior attempt) or when the
+plan is empty/missing at seed time. This replaces infinite re-kick with a survivable halt.
+Unpark (`conduct daemon unpark <slug>`) resets the evidence counter and resumes. See
+`src/conductor/README.md` → "Auto-park on N-attempt trigger".
+
+**Remediation (agentic gap routing):** When a SHIP gate blocks the daemon, the `/remediate`
+planner analyzes the gap and routes back to the appropriate step or halts for human triage.
+Three entry points (prd_audit, finish verification, architecture_review_as_built) and
+deterministic task-id assignment keep task ledgers coherent across DECIDE rework. See
+`src/conductor/README.md` → "Remediation (agentic gap routing)".
 
 Build and install:
 

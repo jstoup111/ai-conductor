@@ -2,7 +2,7 @@ import chalk from 'chalk';
 import { v4 as uuidv4 } from 'uuid';
 import { join } from 'node:path';
 import { existsSync } from 'node:fs';
-import { mkdir, rm } from 'node:fs/promises';
+import { mkdir, rm, readFile } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { closeIssueOnImplementationMerge } from './engine/engineer/issue-ref.js';
@@ -56,7 +56,7 @@ import {
   makeWatchHaltClearedSeam,
 } from './engine/daemon-deps.js';
 import { isOperatorParked } from './engine/park-marker.js';
-import { listOperatorParkedSlugs } from './engine/park-marker.js';
+import { listOperatorParkedSlugs, getProvenanceType } from './engine/park-marker.js';
 import { readState, writeState, getStepStatus } from './engine/state.js';
 import { makeGitRunner, originDefaultBranch, type RebaseResolver } from './engine/rebase.js';
 import {
@@ -64,7 +64,7 @@ import {
   readPersistedBaseSha,
   writePersistedBaseSha,
 } from './engine/daemon-sha.js';
-import { scanInheritedState, renderDashboard } from './engine/daemon-dashboard.js';
+import { scanInheritedState, renderDashboard, type ParkedEntry } from './engine/daemon-dashboard.js';
 import { writeGatedSnapshot } from './engine/gated-snapshot.js';
 import { announceGatedPr, announceGatedIssue } from './engine/gate-writeback.js';
 import {
@@ -906,12 +906,30 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
         for (const slug of await listOperatorParkedSlugs(projectRoot)) {
           candidateSlugs.add(slug);
         }
-        const parked: string[] = [];
+        const parked: ParkedEntry[] = [];
         for (const slug of candidateSlugs) {
           if (await isOperatorParked(projectRoot, slug, (err) =>
             log(`anomaly checking if ${slug} is parked: ${err.message}`),
           )) {
-            parked.push(slug);
+            // Fetch provenance (auto vs operator) and reason if available
+            const provenance = await getProvenanceType(projectRoot, slug);
+            let reason: string | undefined;
+
+            // For auto-parks, try to extract reason from marker body
+            if (provenance === 'auto') {
+              try {
+                const markerPath = join(projectRoot, '.daemon', 'parked', slug);
+                const content = await readFile(markerPath, 'utf-8');
+                const lines = content.split('\n');
+                if (lines[0]?.startsWith('auto-parked:')) {
+                  reason = lines[0].substring('auto-parked:'.length).trim();
+                }
+              } catch {
+                // Ignore read errors — marker exists but reason extraction failed
+              }
+            }
+
+            parked.push({ slug, provenance: provenance || undefined, reason });
           }
         }
         log(`\n${renderDashboard({ ...state, parked })}`);
