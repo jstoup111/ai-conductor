@@ -404,6 +404,41 @@ describe('engine/audit-trail', () => {
     expect(second.at).toBeGreaterThanOrEqual(passCheckedAt);
   });
 
+  it('step_completed with no prior gate_verdict emits one gate_pass positive-evidence record', async () => {
+    const writer = new AuditTrailWriter(dir);
+    const emitter = new ConductorEventEmitter();
+    writer.subscribe(emitter);
+
+    await emitter.emit({ type: 'step_completed', step: 'manual_test', status: 'done' });
+
+    const eventsPath = join(dir, '.pipeline', 'audit-trail', 'events.jsonl');
+    const contents = await readFile(eventsPath, 'utf8');
+    const lines = contents.split('\n').filter((line) => line.length > 0);
+
+    expect(lines).toHaveLength(1);
+    const record = JSON.parse(lines[0]) as AuditRecord;
+    expect(record.step).toBe('manual_test');
+    expect(record.event).toBe('gate_pass');
+  });
+
+  it('step_completed for a step that already has a gate_verdict does not duplicate the pass record', async () => {
+    const writer = new AuditTrailWriter(dir);
+    const emitter = new ConductorEventEmitter();
+    writer.subscribe(emitter);
+
+    await emitter.emit({ type: 'gate_verdict', step: 'build', satisfied: true, reason: 'ok' });
+    await emitter.emit({ type: 'step_completed', step: 'build', status: 'done' });
+
+    const eventsPath = join(dir, '.pipeline', 'audit-trail', 'events.jsonl');
+    const contents = await readFile(eventsPath, 'utf8');
+    const lines = contents.split('\n').filter((line) => line.length > 0);
+
+    expect(lines).toHaveLength(1);
+    const record = JSON.parse(lines[0]) as AuditRecord;
+    expect(record.step).toBe('build');
+    expect(record.event).toBe('gate_pass');
+  });
+
   it('subscribe() ignores unmapped event types without error or append', async () => {
     const writer = new AuditTrailWriter(dir);
     const emitter = new ConductorEventEmitter();

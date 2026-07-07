@@ -45,6 +45,13 @@ export type AuditRecordInput = Omit<AuditRecord, 'phase' | 'at'>;
 export class AuditTrailWriter {
   private readonly projectRoot: string;
 
+  /**
+   * Steps for which a `gate_verdict` has already been observed. Used by
+   * `step_completed` handling to avoid emitting a duplicate positive-evidence
+   * `gate_pass` record when a real verdict already covered that step.
+   */
+  private readonly stepsWithVerdicts = new Set<StepName>();
+
   constructor(projectRoot: string) {
     this.projectRoot = projectRoot;
   }
@@ -112,6 +119,7 @@ export class AuditTrailWriter {
         // (no transformation), and `at` is stamped by `record()` as
         // `Date.now()`, which is always >= the verdict's `checkedAt` since
         // the verdict is computed before this handler runs.
+        this.stepsWithVerdicts.add(event.step);
         return {
           step: event.step,
           event: event.satisfied ? 'gate_pass' : 'gate_fail',
@@ -133,7 +141,12 @@ export class AuditTrailWriter {
       case 'loop_halt':
         return { step: 'build', event: 'intervention', cause: event.reason };
       case 'step_completed':
-        return { step: event.step, event: event.type };
+        // Positive evidence for steps that never produce a gate_verdict
+        // (e.g. early-exit steps). If a gate_verdict was already recorded
+        // for this step, that verdict wins — skip to avoid a duplicate
+        // pass record.
+        if (this.stepsWithVerdicts.has(event.step)) return null;
+        return { step: event.step, event: 'gate_pass', reason: 'step completed' };
       default:
         return null;
     }
