@@ -42,6 +42,7 @@ graph TD
 - **NEW** nodes are introduced by this feature; all others exist today.
 - Solid arrows: control flow. Dotted arrows: reads/writes.
 - The **RestartRequester** never respawns anything itself — it records intent and exits cleanly. The respawn transport is #215's restart primitive (or a later `ensureRunning` nudge); this feature only guarantees the process gets out of the way at a safe boundary.
+  - **Superseded 2026-07-06 (#353):** the marker-and-exit contract left the daemon `stopped` in practice (marker filename mismatch with the #215 transport + `remain-on-exit` never actually armed). The RestartRequester now fires the respawn transport directly when a session exists; marker+exit survives only as the headless fallback. See `daemon-restart-leaves-the-daemon-stopped-when-orig.md`.
 - Gates (all must pass before a restart is requested): daemon idle (`inFlight` empty, nothing eligible), self-host repo (`classifySelfHost` true), config flag enabled, identity check determinate, loop-guard clear.
 
 ## Failure semantics
@@ -55,3 +56,4 @@ graph TD
 | Date | Change | Reason |
 |------|--------|--------|
 | 2026-07-03 | Initial generation | DECIDE phase for issue jstoup111/ai-conductor#256 |
+| 2026-07-06 | Legend note: exit-to-respawn contract superseded by respawn-in-place wiring | Issue #353 (respawn gap) |
