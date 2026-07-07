@@ -291,6 +291,15 @@ The management/observability verbs (`start`/`stop`/`restart`/`connect`/`debug`/`
 for a launch — and `conduct daemon <verb>` (the bash wrapper) now forwards to `conduct-ts`
 instead of starting a feature build named after the verb.
 
+**Restart semantics:** `conduct-ts daemon restart` performs an in-place restart while preserving
+your tmux session, window layout, and any operator windows. The pane survives the restart
+(remain-on-exit armed), so you stay connected in color. If the daemon is busy (features
+in-flight), the restart queues durably via `.daemon/RESTART-PENDING` and fires when idle.
+Restart also relinks skills preflight (self-host only), ensuring a fresh harness is active.
+See [`src/conductor/README.md`](src/conductor/README.md#daemon-lifecycle-controls-pause-resume-restart)
+for the full lifecycle flow, including stale-engine auto-restart, respawn-in-place, and
+headless fallback behavior.
+
 **Operator park.** Prevent a worktree from being re-kicked or re-dispatched without stopping the
 daemon:
 
@@ -334,14 +343,18 @@ conduct-ts daemon --continuous --no-watch --idle-poll 5
 **Auto-restart on stale engine (self-host only).** In self-host mode, before starting each feature
 (and at idle) the daemon rebuilds its engine from the fast-forwarded source (content-addressed —
 a no-op when unchanged, an atomic `dist` flip otherwise) and checks whether the running engine has
-gone stale. When it has and no tasks are in-flight, the daemon writes a `.daemon/RESTART_PENDING`
-marker and exits cleanly, allowing an external respawn transport to relaunch with fresh code so the
-next feature builds on it. Firing at the dispatch boundary — not only when the backlog drains —
-ensures freshly-merged specs are never built on stale engine code (the rebuild is required because
-build artifacts are untracked, so a merge alone never moves `dist`). It never interrupts an
-in-flight build. Enable with `auto_restart_on_stale_engine: true` in your project config; ignored
-in non-self-host environments and disabled in once-mode runs. Requires PR #215 respawn transport
-for deployment.
+gone stale. When it has and no tasks are in-flight, the daemon writes a `.daemon/RESTART-PENDING`
+marker (carrying engine identity metadata) and exits cleanly at the next idle point. On restart,
+the daemon's startup handshake captures the fresh engine identity, detects any non-convergence
+(target identity differs from fresh identity), and clears the marker before dispatch. An external
+respawn transport relaunches with fresh code so the next feature builds on it. Firing at the
+dispatch boundary — not only when the backlog drains — ensures freshly-merged specs are never
+built on stale engine code (the rebuild is required because build artifacts are untracked, so a
+merge alone never moves `dist`). It never interrupts an in-flight build. Enable with
+`auto_restart_on_stale_engine: true` in your project config; ignored in non-self-host
+environments and disabled in once-mode runs. See `src/conductor/README.md` → "Daemon lifecycle
+controls" for the full handshake and suppression flow. Requires PR #215 respawn transport for
+deployment.
 
 On failure, conduct sends a desktop notification and drops into an interactive Claude session
 to fix the issue. After you `/quit`, it rechecks artifacts and continues automatically.

@@ -176,6 +176,15 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- **Daemon restart no longer leaves the daemon stopped when origin is ahead (#353).** Stale-engine
+  restarts now respawn in place within the live tmux session: skills relinked via
+  `bin/install --update` before the handoff, `remain-on-exit` armed at session creation, and
+  the flow is detect drift → relink → write marker → respawn (no exit/pidfile-release/dead
+  session). An operator on `conduct-ts daemon connect` stays connected across the respawn.
+  Modules: `daemon-tmux.ts`, `daemon-cli.ts`, `daemon.ts`; capstone specs in
+  `daemon-stale-respawn-e2e.test.ts` + `daemon-tmux-smoke.test.ts`
+  (adr-2026-07-06-stale-engine-respawn-in-place).
+
 - Re-enabled bin/setup worktree smoke by invoking the worktree's own `bin/setup` (#334).
 
 - **Continuous daemon no longer dies silently at its first idle poll (#329 regression).**

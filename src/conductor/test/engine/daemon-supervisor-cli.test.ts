@@ -123,7 +123,7 @@ describe('dispatchDaemonSupervisor: verb → supervisor method routing', () => {
 
     const code: number = await dispatch(
       { verb: 'restart' },
-      { supervisor, cwd: CWD, out: (l: string) => out.push(l) },
+      { supervisor, cwd: CWD, out: (l: string) => out.push(l), relinkSkills: async () => {} },
     );
 
     expect(code).toBe(0);
@@ -416,7 +416,7 @@ describe('dispatchDaemonSupervisor: restart — immediate (idle/paused) vs queue
 
     const code: number = await dispatch(
       { verb: 'restart' },
-      { supervisor, cwd: repo, out: (l: string) => out.push(l) },
+      { supervisor, cwd: repo, out: (l: string) => out.push(l), relinkSkills: async () => {} },
     );
 
     expect(code).toBe(0);
@@ -434,7 +434,7 @@ describe('dispatchDaemonSupervisor: restart — immediate (idle/paused) vs queue
 
     const code: number = await dispatch(
       { verb: 'restart' },
-      { supervisor, cwd: repo, out: (l: string) => out.push(l) },
+      { supervisor, cwd: repo, out: (l: string) => out.push(l), relinkSkills: async () => {} },
     );
 
     expect(code).toBe(0);
@@ -456,6 +456,7 @@ describe('dispatchDaemonSupervisor: restart — immediate (idle/paused) vs queue
         cwd: repo,
         out: (l: string) => out.push(l),
         isBusy: async () => ({ busy: true, blockingSlug: 'feature-in-flight' }),
+        relinkSkills: async () => {},
       },
     );
 
@@ -489,11 +490,109 @@ describe('dispatchDaemonSupervisor: restart — immediate (idle/paused) vs queue
           isBusyCalled = true;
           return { busy: true, blockingSlug: 'should-never-surface' };
         },
+        relinkSkills: async () => {},
       },
     );
 
     expect(code).toBe(0);
     expect(isBusyCalled).toBe(false);
     expect(calls.map((c) => c.method)).toEqual(['restart']); // immediate, not queued
+  });
+
+  it('idle → relink called before supervisor.restart (TR-4)', async () => {
+    const dispatch = requireFn(await load(), 'dispatchDaemonSupervisor');
+    const repo = await tempRepo();
+    const { calls, supervisor } = makeFakeSupervisor();
+    const out: string[] = [];
+    const callOrder: string[] = [];
+
+    // Mock relinkSkillsForSelfBuild
+    const mockRelink = async () => {
+      callOrder.push('relink');
+    };
+
+    // Wrap the supervisor.restart to track when it's called
+    const originalRestart = supervisor.restart;
+    supervisor.restart = async (...args: unknown[]) => {
+      callOrder.push('restart');
+      return originalRestart.apply(supervisor, args);
+    };
+
+    const code: number = await dispatch(
+      { verb: 'restart' },
+      {
+        supervisor,
+        cwd: repo,
+        out: (l: string) => out.push(l),
+        relinkSkills: mockRelink,
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(callOrder).toEqual(['relink', 'restart']);
+  });
+
+  it('relink failure aborts restart; supervisor.restart is NOT called (TR-4 negative)', async () => {
+    const dispatch = requireFn(await load(), 'dispatchDaemonSupervisor');
+    const repo = await tempRepo();
+    const { calls, supervisor } = makeFakeSupervisor();
+    const out: string[] = [];
+
+    // Mock relinkSkills to throw an error
+    const relinkError = new Error('Skill relink failed: stale install');
+    const mockRelink = async () => {
+      throw relinkError;
+    };
+
+    const code: number = await dispatch(
+      { verb: 'restart' },
+      {
+        supervisor,
+        cwd: repo,
+        out: (l: string) => out.push(l),
+        relinkSkills: mockRelink,
+      },
+    );
+
+    expect(code).not.toBe(0);
+    expect(code).toBe(1);
+    expect(calls).toHaveLength(0); // supervisor.restart was NOT called
+    expect(out.join('\n')).toMatch(/Skill relink failed/);
+  });
+
+  it('busy probe true → queues marker, does not call relink or restart (TR-4 negative)', async () => {
+    const dispatch = requireFn(await load(), 'dispatchDaemonSupervisor');
+    const { consumeOnBoot } = await import('../../src/engine/restart-marker.js');
+    const repo = await tempRepo();
+    const { calls, supervisor } = makeFakeSupervisor();
+    const out: string[] = [];
+    let relinkCalled = false;
+
+    // Mock relinkSkills to track if it's called
+    const mockRelink = async () => {
+      relinkCalled = true;
+    };
+
+    const code: number = await dispatch(
+      { verb: 'restart' },
+      {
+        supervisor,
+        cwd: repo,
+        out: (l: string) => out.push(l),
+        isBusy: async () => ({ busy: true, blockingSlug: 'test-feature' }),
+        relinkSkills: mockRelink,
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(relinkCalled).toBe(false); // relink was NOT called
+    expect(calls).toHaveLength(0); // supervisor.restart was NOT called
+    expect(out.join('\n')).toMatch(/test-feature/);
+
+    const intent = await (consumeOnBoot as (r: string) => Promise<{ blockingSlug?: string } | null>)(
+      repo,
+    );
+    expect(intent).toBeTruthy();
+    expect(intent!.blockingSlug).toBe('test-feature');
   });
 });

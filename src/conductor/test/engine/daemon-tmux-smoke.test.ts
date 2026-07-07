@@ -215,4 +215,168 @@ describe('daemon-tmux — real tmux smoke (FR-20, Task T36)', () => {
     },
     120_000,
   );
+
+  // TR-1 (adr-2026-07-06-stale-engine-respawn-in-place): setRemainOnExit has
+  // never actually worked — daemon-tmux.ts:230 issues `set-option -t '=<name>'`
+  // with no `-w`, which tmux parses `-t` as a *window* target; a bare session
+  // name matches no window, so the call fails "no such window" and the
+  // failure was swallowed as best-effort. The pre-existing respawn-while-alive
+  // smoke above never exercises remain-on-exit at all — these assertions are
+  // the shape that would have caught the defect.
+
+  /** Reads the `remain-on-exit` WINDOW option, scoped to the session's window
+   * the same way every other pane-targeting verb in this module is scoped
+   * (`=<name>:`). Returns raw stdout so callers can match the exact line
+   * tmux prints ("remain-on-exit on"/"remain-on-exit off"). */
+  function showRemainOnExit(name: string): string {
+    const result = defaultTmuxRunner(['show-options', '-w', '-t', `=${name}:`], { inherit: false });
+    return result.code === 0 ? result.stdout : '';
+  }
+
+  /** Reads `pane_dead` for the session's active pane via list-panes. */
+  function paneDeadFlag(name: string): string {
+    const result = defaultTmuxRunner(
+      ['list-panes', '-t', `=${name}:`, '-F', '#{pane_dead}'],
+      { inherit: false },
+    );
+    return result.code === 0 ? result.stdout.trim() : '';
+  }
+
+  it(
+    'remain-on-exit is reported by show-options -w and survives a NATURAL process exit (pane_dead=1, session alive)',
+    async () => {
+      if (!(await tmuxInstalled())) return; // skip cleanly — no tmux on PATH
+
+      const suffix = randomBytes(4).toString('hex');
+      const name = `cc-daemon-roe-${suffix}`;
+      const cwd = await mkdtemp(join(tmpdir(), 'daemon-tmux-roe-'));
+
+      const prevNoRealExec = process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+      delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+
+      try {
+        // Mirrors `start`'s fresh-session path: create the session, then arm
+        // remain-on-exit exactly as Supervisor.start does immediately after
+        // newDetachedSession (plan Task 2). The foreground command prints its
+        // own pid then exits quickly on its own — no `respawn-pane -k`
+        // involved anywhere in this test.
+        const naturalExitCmd = 'bash -c "echo READY_$$; sleep 1; echo DONE"';
+        await newDetachedSession(name, naturalExitCmd, cwd);
+        expect(await hasSession(name)).toBe(true);
+        await waitFor(() => captureScrollback(name).includes('READY_'));
+
+        await setRemainOnExit(name);
+
+        // (i) The option is reported by show-options -w immediately after arming.
+        expect(showRemainOnExit(name)).toMatch(/remain-on-exit\s+on/);
+
+        // (ii) Let the foreground process exit ON ITS OWN (no kill signal, no
+        // respawn-pane). With remain-on-exit correctly armed, tmux keeps the
+        // pane (and session) open instead of tearing the window down.
+        await waitFor(() => captureScrollback(name).includes('DONE'), 5000);
+        await waitFor(() => paneDeadFlag(name) === '1', 5000);
+
+        expect(await hasSession(name)).toBe(true);
+        expect(paneDeadFlag(name)).toBe('1');
+      } finally {
+        await killSession(name);
+        await rm(cwd, { recursive: true, force: true });
+        if (prevNoRealExec === undefined) {
+          delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+        } else {
+          process.env.AI_CONDUCTOR_NO_REAL_EXEC = prevNoRealExec;
+        }
+      }
+    },
+    60_000,
+  );
+
+  it(
+    'remain-on-exit is still reported after a respawnPane cycle (option survives respawn)',
+    async () => {
+      if (!(await tmuxInstalled())) return; // skip cleanly — no tmux on PATH
+
+      const suffix = randomBytes(4).toString('hex');
+      const name = `cc-daemon-roe-respawn-${suffix}`;
+      const cwd = await mkdtemp(join(tmpdir(), 'daemon-tmux-roe-respawn-'));
+      const dummyDaemonCommand = 'bash -c "while true; do echo BOOT_$$; sleep 1; done"';
+
+      const prevNoRealExec = process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+      delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+
+      try {
+        await newDetachedSession(name, dummyDaemonCommand, cwd);
+        expect(await hasSession(name)).toBe(true);
+        await waitFor(() => /BOOT_\d+/.test(captureScrollback(name)));
+
+        await setRemainOnExit(name);
+        expect(showRemainOnExit(name)).toMatch(/remain-on-exit\s+on/);
+
+        await respawnPane(name, defaultTmuxRunner, dummyDaemonCommand);
+
+        // The replacement pane's window must still report the option — a
+        // respawn re-execs the pane's command but must not reset window
+        // options set before the respawn.
+        expect(showRemainOnExit(name)).toMatch(/remain-on-exit\s+on/);
+        expect(await hasSession(name)).toBe(true);
+      } finally {
+        await killSession(name);
+        await rm(cwd, { recursive: true, force: true });
+        if (prevNoRealExec === undefined) {
+          delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+        } else {
+          process.env.AI_CONDUCTOR_NO_REAL_EXEC = prevNoRealExec;
+        }
+      }
+    },
+    60_000,
+  );
+
+  it(
+    'regression guard: the OLD/broken set-option invocation (no -w, bare =name target) exits non-zero against real tmux',
+    async () => {
+      if (!(await tmuxInstalled())) return; // skip cleanly — no tmux on PATH
+
+      const suffix = randomBytes(4).toString('hex');
+      const name = `cc-daemon-roe-legacy-${suffix}`;
+      const cwd = await mkdtemp(join(tmpdir(), 'daemon-tmux-roe-legacy-'));
+
+      const prevNoRealExec = process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+      delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+
+      try {
+        await newDetachedSession(name, 'bash -c "sleep 100"', cwd);
+        expect(await hasSession(name)).toBe(true);
+
+        // The corrected form (what setRemainOnExit must issue) succeeds.
+        const corrected = defaultTmuxRunner(
+          ['set-option', '-w', '-t', `=${name}:`, 'remain-on-exit', 'on'],
+          { inherit: false },
+        );
+        expect(corrected.code).toBe(0);
+        expect(showRemainOnExit(name)).toMatch(/remain-on-exit\s+on/);
+
+        // The legacy/broken form — no `-w`, bare `=name` (no trailing `:`) —
+        // is exactly daemon-tmux.ts:230's current argv. `remain-on-exit` is a
+        // window option; without `-w`, tmux resolves `-t` as a window target,
+        // and a bare session name (no window index) matches no window, so
+        // this must exit non-zero ("no such window"). If a regression ever
+        // makes this form pass, this assertion — not vibes — fails the suite.
+        const legacy = defaultTmuxRunner(
+          ['set-option', '-t', `=${name}`, 'remain-on-exit', 'on'],
+          { inherit: false },
+        );
+        expect(legacy.code).not.toBe(0);
+      } finally {
+        await killSession(name);
+        await rm(cwd, { recursive: true, force: true });
+        if (prevNoRealExec === undefined) {
+          delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+        } else {
+          process.env.AI_CONDUCTOR_NO_REAL_EXEC = prevNoRealExec;
+        }
+      }
+    },
+    60_000,
+  );
 });
