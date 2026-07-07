@@ -49,6 +49,8 @@ import type { UISubscriber } from "./ui/types.js";
 import type { VisualizerPlugin } from './types/plugin.js';
 import { detectRegistryCommand, dispatchRegistry } from './engine/registry-cli.js';
 import { detectEngineerCommand, dispatchEngineer } from './engine/engineer-cli.js';
+import { detectIntakeLoopCommand, dispatchIntakeLoop } from './intake-loop-cli.js';
+import { detectBrainCommand, dispatchBrain } from './engine/brain-supervisor-cli.js';
 import { detectMemoryCommand, dispatchMemorySetup } from './engine/memory-cli.js';
 import {
   detectDaemonCommand,
@@ -277,6 +279,27 @@ async function main(): Promise<void> {
   const engineerCmd = detectEngineerCommand(process.argv);
   if (engineerCmd) {
     const code = await dispatchEngineer(engineerCmd);
+    process.exit(code);
+  }
+
+  // Intake-loop subcommand (Task 17) runs NON-INTERACTIVELY and exits — it
+  // drives the background auto-intake poll loop (poll → enqueue → notify),
+  // never spawning claude and never opening a PR. Dispatched before parseArgs,
+  // mirroring the engineer/registry subcommand pattern.
+  const intakeLoopCmd = detectIntakeLoopCommand(process.argv);
+  if (intakeLoopCmd) {
+    const code = await dispatchIntakeLoop(intakeLoopCmd);
+    process.exit(code);
+  }
+
+  // Brain subcommand (`conduct-ts brain start|stop|status`, Task 18) runs
+  // NON-INTERACTIVELY and exits — it hosts the intake-loop (Task 17) under a
+  // dedicated `cc-brain-*` tmux session (no cron, no external scheduler).
+  // Dispatched before parseArgs, mirroring the daemon/intake-loop subcommand
+  // pattern.
+  const brainCmd = detectBrainCommand(process.argv);
+  if (brainCmd) {
+    const code = await dispatchBrain(brainCmd);
     process.exit(code);
   }
 

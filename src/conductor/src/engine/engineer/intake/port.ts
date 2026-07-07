@@ -23,6 +23,8 @@ export interface Envelope {
   text: string;
   /** Optional hint toward the target repo. */
   hintRepo?: string;
+  /** Optional resolved routing target repo (set by origin enrichment). */
+  target?: string;
   /** Lifecycle status. */
   status: EnvelopeStatus;
   /** ISO 8601 timestamp of when the envelope entered the system. */
