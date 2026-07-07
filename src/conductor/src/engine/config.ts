@@ -181,6 +181,8 @@ export function validateConfig(
     'auto_restart_on_stale_engine',
     // Auto-resolve merge conflicts on open PRs.
     'mergeable_autoresolve',
+    // Opt-in judgement gate at the build → manual_test seam.
+    'build_review',
   ]);
   for (const key of Object.keys(obj)) {
     if (!knownTopLevelKeys.has(key)) {
@@ -556,6 +558,41 @@ export function validateConfig(
       block.cooldownMinutes = 60;
     }
     // suiteCommand is optional and remains undefined if not provided
+  }
+
+  // build_review — opt-in judgement gate at the build → manual_test seam.
+  // Contract (total — never throws, never undefined):
+  //   C1  absent / null → { enabled: false } (no warning)
+  //   C2  { enabled: true|false } → as given (no warning)
+  //   C3  malformed (non-object, unknown key, or non-boolean enabled) →
+  //       { enabled: false } + one warning
+  if (obj.build_review !== undefined && obj.build_review !== null) {
+    if (isPlainObject(obj.build_review)) {
+      const br = obj.build_review as Record<string, unknown>;
+      const unknownKey = Object.keys(br).find((k) => k !== 'enabled');
+      if (unknownKey !== undefined) {
+        warnings.push(
+          `build_review has invalid value ${JSON.stringify(obj.build_review)}, falling back to disabled.`,
+        );
+        obj.build_review = { enabled: false };
+      } else if (br.enabled === undefined) {
+        obj.build_review = { enabled: false };
+      } else if (typeof br.enabled === 'boolean') {
+        obj.build_review = { enabled: br.enabled };
+      } else {
+        warnings.push(
+          `build_review.enabled has invalid value ${JSON.stringify(br.enabled)}, falling back to disabled.`,
+        );
+        obj.build_review = { enabled: false };
+      }
+    } else {
+      warnings.push(
+        `build_review has invalid value ${JSON.stringify(obj.build_review)}, falling back to disabled.`,
+      );
+      obj.build_review = { enabled: false };
+    }
+  } else {
+    obj.build_review = { enabled: false };
   }
 
   return { ok: true, config: obj as HarnessConfig, warnings };
