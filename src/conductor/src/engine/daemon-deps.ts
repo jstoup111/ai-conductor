@@ -1,5 +1,6 @@
 import { execa } from 'execa';
 import { mkdir, writeFile, readFile, access, stat } from 'node:fs/promises';
+import { appendFileSync, existsSync, mkdirSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import * as chokidar from 'chokidar';
 import { HALT_MARKER } from './halt-marker.js';
@@ -271,6 +272,29 @@ async function exists(p: string): Promise<boolean> {
 }
 
 /**
+ * Task 15: append a `halt_cleared` audit-trail record to the halted feature's
+ * OWN worktree ledger (`<worktreePath>/.pipeline/audit-trail/events.jsonl`),
+ * synchronously and best-effort. The worktree can legitimately be removed
+ * between the fs-watcher's unlink event and this call (e.g. a fast
+ * teardown race) — that must never crash the daemon process, so failures are
+ * caught, logged loudly to stderr, and swallowed (never rethrown).
+ */
+function appendHaltClearedRecord(worktreePath: string, cause: 'operator' | 'rekick'): void {
+  try {
+    const auditDir = join(worktreePath, '.pipeline', 'audit-trail');
+    mkdirSync(auditDir, { recursive: true });
+    const record = { event: 'halt_cleared', cause, at: Date.now() };
+    appendFileSync(join(auditDir, 'events.jsonl'), `${JSON.stringify(record)}\n`, { flag: 'a' });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    process.stderr.write(
+      `[daemon] WRITE-FAILED: failed to append halt_cleared audit record ` +
+        `(worktree=${worktreePath}, cause=${cause}): ${message}\n`,
+    );
+  }
+}
+
+/**
  * Watch a halted feature's worktree for HALT marker removal, calling `onCleared`
  * when the `.pipeline/HALT` file is deleted or renamed away.
  *
@@ -296,7 +320,9 @@ export function watchHaltCleared(
   slug: string,
   onCleared: () => void,
 ): () => void {
-  const haltPath = join(worktreeBase, slug, HALT_MARKER);
+  const worktreePath = join(worktreeBase, slug);
+  const haltPath = join(worktreePath, HALT_MARKER);
+  const clearedPath = join(worktreePath, '.pipeline', 'HALT.cleared');
   let watcher: chokidar.FSWatcher | null = null;
   let disposed = false;
 
@@ -310,6 +336,14 @@ export function watchHaltCleared(
       // Re-verify the file is actually gone
       const stillExists = await exists(haltPath);
       if (!stillExists) {
+        // Task 15: attribute the clear to its cause before waking the
+        // daemon. A `HALT.cleared` sibling means the rekick flow renamed
+        // HALT away (cause='rekick'); its absence means an operator deleted
+        // HALT directly (cause='operator'). The append is synchronous and
+        // happens BEFORE onCleared() fires, so the record always precedes
+        // any re-dispatch/dispose race (AC5).
+        const cause: 'operator' | 'rekick' = existsSync(clearedPath) ? 'rekick' : 'operator';
+        appendHaltClearedRecord(worktreePath, cause);
         onCleared();
       }
     });
