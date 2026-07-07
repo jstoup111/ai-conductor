@@ -124,6 +124,7 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- Re-enabled bin/setup worktree smoke by invoking the worktree's own `bin/setup` (#334).
 - **Daemon false-ship guard: daemon no longer records shipped markers for outcomes missing verified PR evidence.** Done-outcomes with null prUrl or non-pr finishChoice now halt with HALT markers, DONE markers deleted, and worktrees kept for operator inspection (#337).
 - Backfilled the missing intake marker `.docs/intake/2026-06-30-background-intake-conduct-loop.md`
   (`Owner: jstoup111`): the spec landed without an owner stamp, so the post-cutover owner gate
