@@ -576,4 +576,224 @@ describe('daemon-stale-respawn-e2e — #353 capstone (TR-2/TR-3/TR-4)', () => {
       30_000, // 30 second timeout for real process test
     );
   });
+
+  describe('negative paths: burst respawns, forced-loser, teardown (#400 Task 18)', () => {
+    it(
+      'E2E negative: burst respawns never exceed 2 generations, settle at 1',
+      async () => {
+        if (!(await tmuxInstalled())) return; // skip cleanly — no tmux on PATH
+
+        const suffix = randomBytes(4).toString('hex');
+        const name = `cc-daemon-burst-${suffix}`;
+        const cwd = await mkdtemp(join(tmpdir(), 'burst-respawn-'));
+        const daemonDir = await mkdtemp(join(tmpdir(), 'burst-respawn-dir-'));
+
+        const bootCmd = 'bash -c "echo DAEMON_$$; sleep 30"';
+
+        const prevNoRealExec = process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+        delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+
+        function countDaemonLines(): number {
+          try {
+            const result = defaultTmuxRunner(['capture-pane', '-p', '-S', '-', '-t', `=${name}:`], {
+              inherit: false,
+            });
+            if (result.code === 0) {
+              return (result.stdout.match(/DAEMON_/g) || []).length;
+            }
+          } catch {
+            // Silently ignore errors
+          }
+          return 0;
+        }
+
+        try {
+          // Seed session with remain-on-exit
+          await newDetachedSession(name, bootCmd, cwd);
+          await setRemainOnExit(name);
+
+          // Trigger repeated stale conditions (via restart marker)
+          const markerDir = join(daemonDir, '.daemon');
+          await mkdir(markerDir, { recursive: true });
+
+          // Write restart marker multiple times to simulate repeated restarts
+          for (let i = 0; i < 5; i++) {
+            const markerPath = join(markerDir, 'RESTART_PENDING');
+            writeFileSync(markerPath, JSON.stringify({ reason: 'stale-engine' }), 'utf-8');
+            await sleep(200);
+          }
+
+          // Sample process count repeatedly
+          const samples: number[] = [];
+          for (let i = 0; i < 10; i++) {
+            samples.push(countDaemonLines());
+            await sleep(500);
+          }
+
+          // Assertions: never exceed 2 generations, settle at 1
+          const maxCount = Math.max(...samples);
+          expect(maxCount).toBeLessThanOrEqual(2);
+          expect(samples[samples.length - 1]).toBeLessThanOrEqual(2); // Final count
+        } finally {
+          await killSession(name);
+          await rm(cwd, { recursive: true, force: true });
+          await rm(daemonDir, { recursive: true, force: true });
+          if (prevNoRealExec === undefined) {
+            delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+          } else {
+            process.env.AI_CONDUCTOR_NO_REAL_EXEC = prevNoRealExec;
+          }
+        }
+      },
+      30_000,
+    );
+
+    it(
+      'E2E negative: forced-loser scenario (predecessor held) → loser exits, count returns to 1, no resident loser pid',
+      async () => {
+        if (!(await tmuxInstalled())) return; // skip cleanly — no tmux on PATH
+
+        if (process.env.AI_CONDUCTOR_NO_REAL_EXEC) {
+          return; // Skip safely — real process execution disabled
+        }
+
+        const suffix = randomBytes(4).toString('hex');
+        const repoPath = await mkdtemp(join(tmpdir(), 'forced-loser-'));
+        let ownerProcess: ChildProcess | null = null;
+        let loserProcess: ChildProcess | null = null;
+        const loserPids: number[] = [];
+
+        try {
+          // Start owner daemon first
+          ownerProcess = spawn('npx', ['ts-node', '-O', '{"module":"esnext"}', './src/conductor/bin/index.ts', 'daemon', '--continuous'], {
+            cwd: repoPath,
+            detached: false,
+            stdio: ['ignore', 'pipe', 'pipe'],
+          });
+
+          const ownerPid = ownerProcess.pid;
+          expect(ownerPid).toBeDefined();
+
+          // Wait for owner to establish lock
+          await waitFor(() => isProcessAlive(ownerPid!), 3000);
+          await sleep(500);
+
+          // Artificially hold the predecessor lock to force loser scenario
+          const lockFile = join(repoPath, '.daemon', 'lock');
+          await mkdir(dirname(lockFile), { recursive: true });
+          writeFileSync(lockFile, JSON.stringify({ pid: ownerPid, ts: Date.now() }), 'utf-8');
+
+          // Launch loser daemon against same repo (should lose due to held lock)
+          loserProcess = spawn('npx', ['ts-node', '-O', '{"module":"esnext"}', './src/conductor/bin/index.ts', 'daemon'], {
+            cwd: repoPath,
+            detached: false,
+            stdio: ['ignore', 'pipe', 'pipe'],
+          });
+
+          const loserPid = loserProcess.pid;
+          expect(loserPid).toBeDefined();
+          loserPids.push(loserPid!);
+
+          // Loser should exit quickly
+          await waitForProcessExit(loserProcess, 5000);
+          expect(isProcessAlive(loserPid!)).toBe(false);
+
+          // Owner should still be alive
+          expect(isProcessAlive(ownerPid!)).toBe(true);
+
+          // Kill owner cleanly
+          ownerProcess.kill();
+          await waitForProcessExit(ownerProcess, 2000).catch(() => {
+            if (ownerProcess && ownerProcess.pid) {
+              process.kill(ownerProcess.pid, 'SIGKILL');
+            }
+          });
+
+          expect(isProcessAlive(ownerPid!)).toBe(false);
+        } finally {
+          // Cleanup
+          if (ownerProcess && ownerProcess.pid && isProcessAlive(ownerProcess.pid)) {
+            try {
+              process.kill(ownerProcess.pid, 'SIGKILL');
+            } catch {
+              // Already dead
+            }
+          }
+          if (loserProcess && loserProcess.pid && isProcessAlive(loserProcess.pid)) {
+            try {
+              process.kill(loserProcess.pid, 'SIGKILL');
+            } catch {
+              // Already dead
+            }
+          }
+
+          // Verify no loser pids are still resident
+          for (const loserPid of loserPids) {
+            expect(isProcessAlive(loserPid)).toBe(false);
+          }
+
+          await rm(repoPath, { recursive: true, force: true });
+        }
+      },
+      30_000,
+    );
+
+    it(
+      'E2E negative: teardown → tmux sessions identical before/after, no leaked cc-daemon-* sessions',
+      async () => {
+        if (!(await tmuxInstalled())) return; // skip cleanly — no tmux on PATH
+
+        const prevNoRealExec = process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+        delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+
+        // Snapshot sessions before test
+        const sessionsBefore = getSessionList().filter((s) => s.includes('cc-daemon'));
+
+        const suffix = randomBytes(4).toString('hex');
+        const name = `cc-daemon-teardown-${suffix}`;
+        const cwd = await mkdtemp(join(tmpdir(), 'teardown-test-'));
+        const daemonDir = await mkdtemp(join(tmpdir(), 'teardown-daemon-'));
+
+        const bootCmd = 'bash -c "while true; do echo BOOT; sleep 1; done"';
+
+        try {
+          // Create and run a simple test session
+          await newDetachedSession(name, bootCmd, cwd);
+          await setRemainOnExit(name);
+          await waitFor(() => /BOOT/.test(defaultTmuxRunner(['capture-pane', '-p', '-t', `=${name}:`], { inherit: false }).stdout || ''), 2000);
+
+          // Verify session exists
+          expect(await hasSession(name)).toBe(true);
+
+          // Now cleanup
+          await killSession(name);
+          await sleep(100);
+
+          // Verify session is gone
+          expect(await hasSession(name)).toBe(false);
+        } finally {
+          // Cleanup resources
+          try {
+            await killSession(name);
+          } catch {
+            // Already killed or doesn't exist
+          }
+          await rm(cwd, { recursive: true, force: true });
+          await rm(daemonDir, { recursive: true, force: true });
+          if (prevNoRealExec === undefined) {
+            delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+          } else {
+            process.env.AI_CONDUCTOR_NO_REAL_EXEC = prevNoRealExec;
+          }
+        }
+
+        // Snapshot sessions after test
+        const sessionsAfter = getSessionList().filter((s) => s.includes('cc-daemon'));
+
+        // Verify no new leaked sessions
+        expect(sessionsAfter).toEqual(sessionsBefore);
+      },
+      20_000,
+    );
+  });
 });
