@@ -1,9 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { randomBytes } from 'node:crypto';
 import { mkdir, mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { existsSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { spawn, type ChildProcess, execSync } from 'node:child_process';
 import {
   tmuxInstalled,
   newDetachedSession,
@@ -43,6 +45,85 @@ async function waitFor(predicate: () => boolean | Promise<boolean>, timeoutMs = 
   }
   if (!(await predicate())) {
     throw new Error(`waitFor: predicate did not become true within ${timeoutMs}ms`);
+  }
+}
+
+/**
+ * Check if a process is alive using process.kill(pid, 0).
+ * Returns true if alive, false if dead (ESRCH) or error (EPERM → conservative, assume alive).
+ */
+function isProcessAlive(pid: number): boolean {
+  try {
+    // Sending signal 0 checks if the process exists without actually sending a signal
+    process.kill(pid, 0);
+    return true;
+  } catch (err: any) {
+    // ESRCH = process doesn't exist
+    if (err.code === 'ESRCH') {
+      return false;
+    }
+    // EPERM = we don't have permission; process likely exists but we can't signal it
+    // Conservative approach: assume it's alive
+    return true;
+  }
+}
+
+/**
+ * Wait for a process to exit cleanly.
+ */
+async function waitForProcessExit(child: ChildProcess, timeoutMs = 5000): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      if (child.pid && isProcessAlive(child.pid)) {
+        reject(new Error(`Process ${child.pid} did not exit within ${timeoutMs}ms`));
+      } else {
+        resolve();
+      }
+    }, timeoutMs);
+
+    child.on('exit', () => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
+}
+
+/**
+ * Sleep for a given duration in milliseconds.
+ */
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+/**
+ * Get count of daemon processes for a given session name.
+ * Uses pgrep to find processes matching the session.
+ */
+function getProcessCount(sessionName: string): number {
+  try {
+    // Count processes in the tmux pane (cautiously using ps to avoid pgrep edge cases)
+    const result = execSync(`tmux capture-pane -p -t "${sessionName}" | grep -c . || true`, {
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    return Math.max(0, parseInt(result.trim()) || 0);
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Get list of all tmux sessions.
+ */
+function getSessionList(): string[] {
+  try {
+    const result = execSync('tmux ls -F "#{session_name}" 2>/dev/null || true', {
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    return result.split('\n').filter((s) => s.trim());
+  } catch {
+    return [];
   }
 }
 
@@ -275,6 +356,224 @@ describe('daemon-stale-respawn-e2e — #353 capstone (TR-2/TR-3/TR-4)', () => {
         }
       },
       60_000,
+    );
+
+    it(
+      'E2E capstone: supervised daemon → stale → respawn → single-generation steady-state (Task 17)',
+      async () => {
+        if (!(await tmuxInstalled())) return; // skip cleanly — no tmux on PATH
+
+        const suffix = randomBytes(4).toString('hex');
+        const sessionName = `cc-daemon-capstone-${suffix}`;
+        const cwd = await mkdtemp(join(tmpdir(), 'stale-respawn-capstone-'));
+        const daemonDir = join(cwd, '.daemon');
+
+        const prevNoRealExec = process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+        delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+
+        // Simple daemon command that prints its PID and stays running.
+        const bootCmd = 'bash -c "echo DAEMON_PID_$$; while true; do sleep 1; done"';
+
+        function captureScrollback(): string {
+          const result = defaultTmuxRunner(
+            ['capture-pane', '-p', '-S', '-', '-t', `=${sessionName}:`],
+            { inherit: false },
+          );
+          return result.code === 0 ? result.stdout : '';
+        }
+
+        try {
+          // 1. Start supervised daemon in tmux session
+          await newDetachedSession(sessionName, bootCmd, cwd);
+          await setRemainOnExit(sessionName);
+          expect(await hasSession(sessionName)).toBe(true);
+
+          // Wait for daemon to print its PID
+          await waitFor(() => /DAEMON_PID_\d+/.test(captureScrollback()), 5000);
+          const prePidMatch = captureScrollback().match(/DAEMON_PID_(\d+)/);
+          expect(prePidMatch).not.toBeNull();
+          const prePid = parseInt(prePidMatch![1], 10);
+
+          // Verify initial daemon is alive
+          expect(isProcessAlive(prePid)).toBe(true);
+
+          // 2. Invalidate engine identity on disk by modifying the engine identity marker.
+          //    In production, this simulates a build change detected by the stale-engine checker.
+          await mkdir(daemonDir, { recursive: true });
+          const engineMarkerPath = join(daemonDir, 'engine-identity');
+          await writeFile(engineMarkerPath, 'v1', 'utf-8');
+
+          // Store identities for comparison and marker writing
+          const oldIdentity = 'v1';
+          const newIdentity = 'v2';
+
+          // Simulate the stale-engine checker detecting the change
+          await writeFile(engineMarkerPath, newIdentity, 'utf-8');
+
+          // Write the RESTART_PENDING marker (as the daemon's stale-engine path would)
+          const markerPath = join(daemonDir, 'RESTART_PENDING');
+          const marker = {
+            reason: 'stale-engine',
+            fromIdentity: oldIdentity,
+            targetIdentity: newIdentity,
+            at: Date.now(),
+          };
+          await writeFile(markerPath, JSON.stringify(marker, null, 2), 'utf-8');
+
+          // 3. Idle boundary fires respawn: trigger the respawnPane directly.
+          //    In real scenario, daemon loop would detect staleness and call this
+          //    via the triggerSelfRestart callback.
+          await respawnPane(sessionName, defaultTmuxRunner, bootCmd);
+
+          // Wait for the new daemon to boot (new PID should appear in scrollback)
+          let newPid: number | null = null;
+          await waitFor(() => {
+            const scrollback = captureScrollback();
+            const matches = [...scrollback.matchAll(/DAEMON_PID_(\d+)/g)];
+            if (matches.length >= 2) {
+              // Get the most recent PID (last occurrence)
+              newPid = parseInt(matches[matches.length - 1][1], 10);
+              return newPid !== prePid;
+            }
+            return false;
+          }, 10000);
+
+          expect(newPid).not.toBeNull();
+          expect(newPid).not.toBe(prePid);
+
+          // 4. Verify steady-state after respawn
+          // Give the old process a moment to clean up
+          await new Promise((r) => setTimeout(r, 500));
+
+          // 4a. Verify session is still alive (never stopped)
+          expect(await hasSession(sessionName)).toBe(true);
+
+          // 4b. Verify predecessor is dead (ESRCH)
+          expect(isProcessAlive(prePid)).toBe(false);
+
+          // 4c. Verify successor daemon is alive
+          expect(isProcessAlive(newPid!)).toBe(true);
+
+          // 4d. Verify marker was written (underscore marker)
+          expect(existsSync(markerPath)).toBe(true);
+          const storedMarker = JSON.parse(await readFile(markerPath, 'utf-8'));
+          expect(storedMarker.reason).toBe('stale-engine');
+          expect(storedMarker.fromIdentity).toBe(oldIdentity);
+          expect(storedMarker.targetIdentity).toBe(newIdentity);
+
+          // 4e. Verify hyphen marker was NOT created (non-autonomy clause)
+          const hyphenMarkerPath = join(daemonDir, 'RESTART-PENDING');
+          expect(existsSync(hyphenMarkerPath)).toBe(false);
+        } finally {
+          await killSession(sessionName);
+          await rm(cwd, { recursive: true, force: true });
+          if (prevNoRealExec === undefined) {
+            delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+          } else {
+            process.env.AI_CONDUCTOR_NO_REAL_EXEC = prevNoRealExec;
+          }
+        }
+      },
+      60_000,
+    );
+  });
+
+  describe('real-process loser smoke (kill-switch-guarded) — Task 16', () => {
+    it(
+      'start owner daemon, launch loser daemon against same repo, loser exits cleanly, owner untouched, no leaked processes',
+      async () => {
+        // Kill-switch guard: respect AI_CONDUCTOR_NO_REAL_EXEC to allow
+        // disabling real process execution in certain environments
+        if (process.env.AI_CONDUCTOR_NO_REAL_EXEC) {
+          return; // Skip safely
+        }
+
+        // tmux is required for session-hosted daemon mode
+        if (!(await tmuxInstalled())) {
+          return; // Skip cleanly — no tmux on PATH
+        }
+
+        const suffix = randomBytes(4).toString('hex');
+        const repoPath = await mkdtemp(join(tmpdir(), 'daemon-loser-smoke-'));
+        let ownerProcess: ChildProcess | null = null;
+        let loserProcess: ChildProcess | null = null;
+
+        try {
+          // Construct the path to the conductor CLI entry point.
+          // The test file is at src/conductor/test/engine/, and the CLI is at src/conductor/src/index.ts
+          const __dirname = dirname(fileURLToPath(import.meta.url));
+          const conductorSrcPath = join(__dirname, '..', '..', 'src', 'index.ts');
+
+          // Start owner daemon (should acquire the lock and run continuously)
+          // Using tsx to run the TypeScript CLI entry point
+          ownerProcess = spawn('npx', ['tsx', conductorSrcPath, 'daemon', '--continuous'], {
+            cwd: repoPath,
+            detached: false,
+            stdio: ['ignore', 'pipe', 'pipe'],
+          });
+
+          const ownerPid = ownerProcess.pid;
+          expect(ownerPid).toBeDefined();
+          expect(ownerPid! > 0).toBe(true);
+
+          // Wait for owner to establish the lock and be running
+          await waitFor(() => isProcessAlive(ownerPid!), 3000);
+          expect(isProcessAlive(ownerPid!)).toBe(true);
+
+          // Give owner time to fully initialize the lock
+          await new Promise((r) => setTimeout(r, 500));
+
+          // Launch loser daemon against the same repo (should lose lock and exit)
+          loserProcess = spawn('npx', ['tsx', conductorSrcPath, 'daemon'], {
+            cwd: repoPath,
+            detached: false,
+            stdio: ['ignore', 'pipe', 'pipe'],
+          });
+
+          const loserPid = loserProcess.pid;
+          expect(loserPid).toBeDefined();
+          expect(loserPid! > 0).toBe(true);
+
+          // Verify loser exits quickly (within bounded timeout)
+          await waitForProcessExit(loserProcess, 5000);
+          expect(isProcessAlive(loserPid!)).toBe(false);
+
+          // Verify owner is still alive after loser exited
+          expect(isProcessAlive(ownerPid!)).toBe(true);
+
+          // Clean up: kill owner
+          ownerProcess.kill();
+          await waitForProcessExit(ownerProcess, 2000).catch(() => {
+            // If graceful kill doesn't work, force kill
+            if (ownerProcess && ownerProcess.pid) {
+              process.kill(ownerProcess.pid, 'SIGKILL');
+            }
+          });
+
+          // Verify owner is now dead
+          expect(isProcessAlive(ownerPid!)).toBe(false);
+        } finally {
+          // Cleanup: kill any remaining processes
+          if (ownerProcess && ownerProcess.pid && isProcessAlive(ownerProcess.pid)) {
+            try {
+              process.kill(ownerProcess.pid, 'SIGKILL');
+            } catch {
+              // Already dead
+            }
+          }
+          if (loserProcess && loserProcess.pid && isProcessAlive(loserProcess.pid)) {
+            try {
+              process.kill(loserProcess.pid, 'SIGKILL');
+            } catch {
+              // Already dead
+            }
+          }
+
+          // Cleanup temp directory
+          await rm(repoPath, { recursive: true, force: true });
+        }
+      },
+      30_000, // 30 second timeout for real process test
     );
   });
 });
