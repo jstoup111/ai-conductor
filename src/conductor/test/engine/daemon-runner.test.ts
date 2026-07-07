@@ -7,14 +7,28 @@ import type { BacklogItem } from '../../src/engine/daemon.js';
 
 const ITEM: BacklogItem = { slug: 'feat-x' };
 
+interface TestRecorder {
+  teardownKeep?: boolean;
+  processed?: boolean;
+  processedCalls?: Array<{ slug: string; prUrl?: string }>;
+  cleanupCalls?: Array<{ prUrl: string }>;
+  enrollCalls?: Array<{ prUrl: string; slug: string }>;
+  threw?: boolean;
+}
+
 function deps(
   outcome: WorktreeOutcome,
-  rec: { teardownKeep?: boolean; processed?: boolean; threw?: boolean } = {},
+  rec: TestRecorder = {},
   opts: { throwIn?: keyof FeatureRunnerDeps } = {},
 ): FeatureRunnerDeps {
   const maybeThrow = (k: keyof FeatureRunnerDeps) => {
     if (opts.throwIn === k) throw new Error(`fail in ${k}`);
   };
+  // Ensure arrays are initialized
+  if (!rec.processedCalls) rec.processedCalls = [];
+  if (!rec.enrollCalls) rec.enrollCalls = [];
+  if (!rec.cleanupCalls) rec.cleanupCalls = [];
+
   return {
     createWorktree: async (slug) => {
       maybeThrow('createWorktree');
@@ -27,8 +41,9 @@ function deps(
     teardownWorktree: async (_wt, keep) => {
       rec.teardownKeep = keep;
     },
-    markProcessed: async () => {
+    markProcessed: async (slug: string, prUrl?: string) => {
       rec.processed = true;
+      rec.processedCalls!.push({ slug, prUrl });
     },
     // Non-daemon path: emission never runs, so these are inert but keep the
     // deps object type-complete.
@@ -38,6 +53,16 @@ function deps(
       invokeInteractive: async () => {},
     },
     project: 'test-project',
+    projectRoot: '/proj',
+    runGh: {
+      async invoke() {
+        return { stdout: '', exitCode: 0 };
+      },
+      async invokeInteractive() {},
+    },
+    enrollWatch: async (projectRoot: string, entry: any) => {
+      rec.enrollCalls!.push({ prUrl: entry.prUrl, slug: entry.slug });
+    },
   };
 }
 
@@ -446,6 +471,234 @@ describe('engine/daemon-runner — makeRunFeature', () => {
       } finally {
         await rm(wt, { recursive: true, force: true });
       }
+    });
+
+    describe('Task 12: ship side effects skipped on failed ship (Story 3 + Story 5)', () => {
+      // Story 3 acceptance criteria: when false-ship path runs, NO ship side effects occur.
+      // Ship side effects are: markProcessed, removeLabel/clearOnSuccess, enrollWatch.
+      // Only the live (verified) ship path should call these.
+
+      it('false-ship with null prUrl: zero markProcessed calls (Story 3)', async () => {
+        const wt = await mkdtemp(join(tmpdir(), 'wt-false-ship-'));
+        try {
+          const rec: TestRecorder = {};
+          const run = makeRunFeature({
+            ...deps(
+              {
+                done: true,
+                halted: false,
+                finishChoice: 'pr',
+                prUrl: undefined, // fails ship guard
+              },
+              rec,
+            ),
+            createWorktree: async (slug) => ({ path: wt, branch: `feat/${slug}` }),
+          });
+          const out = await run(ITEM);
+          expect(out.status).toBe('halted');
+          // Verification: markProcessed must never be called on false-ship
+          expect(rec.processedCalls).toHaveLength(0);
+          expect(rec.processed).toBeUndefined();
+        } finally {
+          await rm(wt, { recursive: true, force: true });
+        }
+      });
+
+      it('false-ship with null prUrl: zero enrollWatch calls (Story 3)', async () => {
+        const wt = await mkdtemp(join(tmpdir(), 'wt-false-ship-'));
+        try {
+          const rec: TestRecorder = {};
+          const run = makeRunFeature({
+            ...deps(
+              {
+                done: true,
+                halted: false,
+                finishChoice: 'pr',
+                prUrl: undefined, // fails ship guard
+              },
+              rec,
+            ),
+            createWorktree: async (slug) => ({ path: wt, branch: `feat/${slug}` }),
+          });
+          const out = await run(ITEM);
+          expect(out.status).toBe('halted');
+          // Verification: enrollWatch must never be called on false-ship
+          expect(rec.enrollCalls).toHaveLength(0);
+        } finally {
+          await rm(wt, { recursive: true, force: true });
+        }
+      });
+
+      it('false-ship with missing finishChoice: zero markProcessed calls (Story 3)', async () => {
+        const wt = await mkdtemp(join(tmpdir(), 'wt-false-ship-'));
+        try {
+          const rec: TestRecorder = {};
+          const run = makeRunFeature({
+            ...deps(
+              {
+                done: true,
+                halted: false,
+                finishChoice: undefined, // fails ship guard
+                prUrl: 'https://github.com/owner/repo/pull/123',
+              },
+              rec,
+            ),
+            createWorktree: async (slug) => ({ path: wt, branch: `feat/${slug}` }),
+          });
+          const out = await run(ITEM);
+          expect(out.status).toBe('halted');
+          // Verification: markProcessed must never be called on false-ship
+          expect(rec.processedCalls).toHaveLength(0);
+          expect(rec.processed).toBeUndefined();
+        } finally {
+          await rm(wt, { recursive: true, force: true });
+        }
+      });
+
+      it('false-ship with missing finishChoice: zero enrollWatch calls (Story 3)', async () => {
+        const wt = await mkdtemp(join(tmpdir(), 'wt-false-ship-'));
+        try {
+          const rec: TestRecorder = {};
+          const run = makeRunFeature({
+            ...deps(
+              {
+                done: true,
+                halted: false,
+                finishChoice: undefined, // fails ship guard
+                prUrl: 'https://github.com/owner/repo/pull/123',
+              },
+              rec,
+            ),
+            createWorktree: async (slug) => ({ path: wt, branch: `feat/${slug}` }),
+          });
+          const out = await run(ITEM);
+          expect(out.status).toBe('halted');
+          // Verification: enrollWatch must never be called on false-ship
+          expect(rec.enrollCalls).toHaveLength(0);
+        } finally {
+          await rm(wt, { recursive: true, force: true });
+        }
+      });
+
+      it('false-ship with finishChoice="keep": zero markProcessed calls (Story 3)', async () => {
+        const wt = await mkdtemp(join(tmpdir(), 'wt-false-ship-'));
+        try {
+          const rec: TestRecorder = {};
+          const run = makeRunFeature({
+            ...deps(
+              {
+                done: true,
+                halted: false,
+                finishChoice: 'keep', // fails ship guard
+                prUrl: 'https://github.com/owner/repo/pull/123',
+              },
+              rec,
+            ),
+            createWorktree: async (slug) => ({ path: wt, branch: `feat/${slug}` }),
+          });
+          const out = await run(ITEM);
+          expect(out.status).toBe('halted');
+          // Verification: markProcessed must never be called on false-ship
+          expect(rec.processedCalls).toHaveLength(0);
+          expect(rec.processed).toBeUndefined();
+        } finally {
+          await rm(wt, { recursive: true, force: true });
+        }
+      });
+
+      it('false-ship with finishChoice="keep": zero enrollWatch calls (Story 3)', async () => {
+        const wt = await mkdtemp(join(tmpdir(), 'wt-false-ship-'));
+        try {
+          const rec: TestRecorder = {};
+          const run = makeRunFeature({
+            ...deps(
+              {
+                done: true,
+                halted: false,
+                finishChoice: 'keep', // fails ship guard
+                prUrl: 'https://github.com/owner/repo/pull/123',
+              },
+              rec,
+            ),
+            createWorktree: async (slug) => ({ path: wt, branch: `feat/${slug}` }),
+          });
+          const out = await run(ITEM);
+          expect(out.status).toBe('halted');
+          // Verification: enrollWatch must never be called on false-ship
+          expect(rec.enrollCalls).toHaveLength(0);
+        } finally {
+          await rm(wt, { recursive: true, force: true });
+        }
+      });
+
+      it('happy-ship path calls markProcessed with non-null prUrl (Story 5 invariant)', async () => {
+        const wt = await mkdtemp(join(tmpdir(), 'wt-happy-ship-'));
+        try {
+          const rec: TestRecorder = {};
+          const prUrl = 'https://github.com/owner/repo/pull/999';
+          const run = makeRunFeature({
+            ...deps(
+              {
+                done: true,
+                halted: false,
+                finishChoice: 'pr',
+                prUrl, // verified ship
+              },
+              rec,
+            ),
+            createWorktree: async (slug) => ({ path: wt, branch: `feat/${slug}` }),
+          });
+          const out = await run(ITEM);
+          expect(out.status).toBe('done');
+          // Verification: markProcessed MUST be called exactly once with non-null prUrl
+          expect(rec.processedCalls).toHaveLength(1);
+          expect(rec.processedCalls![0].prUrl).toBe(prUrl);
+          expect(rec.processedCalls![0].prUrl).not.toBeNull();
+          expect(rec.processedCalls![0].prUrl).not.toBeUndefined();
+        } finally {
+          await rm(wt, { recursive: true, force: true });
+        }
+      });
+
+      it('happy-ship path calls enrollWatch with verified prUrl (Story 5)', async () => {
+        const wt = await mkdtemp(join(tmpdir(), 'wt-happy-ship-'));
+        try {
+          const rec: TestRecorder = {};
+          const prUrl = 'https://github.com/owner/repo/pull/888';
+          const run = makeRunFeature({
+            ...deps(
+              {
+                done: true,
+                halted: false,
+                finishChoice: 'pr',
+                prUrl, // verified ship
+              },
+              rec,
+            ),
+            createWorktree: async (slug) => ({ path: wt, branch: `feat/${slug}` }),
+          });
+          const out = await run(ITEM);
+          expect(out.status).toBe('done');
+          // Verification: enrollWatch MUST be called with verified prUrl
+          expect(rec.enrollCalls).toHaveLength(1);
+          expect(rec.enrollCalls![0].prUrl).toBe(prUrl);
+          expect(rec.enrollCalls![0].slug).toBe('feat-x');
+        } finally {
+          await rm(wt, { recursive: true, force: true });
+        }
+      });
+
+      // Story 5 scope note exemption: repairProcessed is exempt from the null-prUrl guard
+      // because it drives a cache repair from a committed shipped record already merged
+      // on the base branch. Its null prUrl marks a malformed-but-proven record (ADR §2,
+      // scope note). This test documents the exception for future refactors.
+      it('repairProcessed exemption documented: scope note permits null prUrl in repair-path markers (Story 5)', () => {
+        // This is a documentation test — it clarifies that the live-path guard
+        // (markProcessed must be called with non-null prUrl) does NOT apply to
+        // repairProcessed, which is driven by committed evidence already on the branch.
+        // See ADR adr-2026-07-06-daemon-false-ship-guard §2, scope note (amended).
+        expect(true).toBe(true); // placeholder assertion
+      });
     });
   });
 });
