@@ -62,12 +62,20 @@ export interface CreateOptions {
    * @returns A handle with a cancel() method, or undefined if timer cannot be cancelled
    */
   setTimer?: SetTimer;
+
+  /**
+   * Optional random number generator for jitter (returns [0, 1)).
+   * Defaults to Math.random().
+   * Used to stagger waiter resumption and prevent thundering herd.
+   */
+  rng?: () => number;
 }
 
 // Default constants for escalation
 const DEFAULT_BASE_WAIT = 60; // seconds
 const DEFAULT_ESCALATION_CAP = 3600; // seconds (1 hour)
 const GRACE_PERIOD = 60; // seconds after deadline
+const MAX_JITTER_MS = 500; // milliseconds — max jitter to prevent thundering herd
 
 /**
  * Create a new RateLimitEpisode coordinator.
@@ -91,6 +99,7 @@ export function create(options?: CreateOptions): RateLimitEpisode {
   };
 
   const setTimer = options?.setTimer ?? defaultSetTimer;
+  const getRandom = options?.rng ?? (() => Math.random());
   let currentTimerHandle: TimerHandle | void | undefined = undefined;
 
   return {
@@ -164,11 +173,16 @@ export function create(options?: CreateOptions): RateLimitEpisode {
           return;
         }
 
-        // Arm the timer
+        // Apply jitter to delay: add random jitter up to MAX_JITTER_MS
+        // This staggers waiter resumption to prevent thundering herd
+        const jitterMs = getRandom() * MAX_JITTER_MS;
+        const jitteredDelay = delay + jitterMs;
+
+        // Arm the timer with jittered delay
         currentTimerHandle = setTimer(() => {
           deadline = null;
           cleanup();
-        }, delay);
+        }, jitteredDelay);
 
         // If signal is provided, listen for abort
         if (signal) {
