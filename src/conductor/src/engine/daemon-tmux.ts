@@ -28,11 +28,11 @@ export const DAEMON_FOREGROUND_COMMAND = 'conduct-ts daemon --continuous';
 // TmuxRunner — injectable execution boundary (allows deterministic unit tests).
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Callable that executes tmux with the given argv and returns exit code + stdout. */
+/** Callable that executes tmux with the given argv and returns exit code + stdout + stderr. */
 export type TmuxRunner = (
   args: string[],
   opts: { inherit: boolean },
-) => { code: number; stdout: string };
+) => { code: number; stdout: string; stderr: string };
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TmuxNotInstalledError — exported so callers can instanceof-check without
@@ -71,10 +71,14 @@ export const defaultTmuxRunner: TmuxRunner = (args, opts) => {
     }
     throw result.error;
   }
-  // When stdio is 'inherit', stdout is not captured (null) — that is expected for
+  // When stdio is 'inherit', stdout/stderr are not captured (null) — that is expected for
   // attach-session where the terminal takes over. Callers that pass inherit:true
-  // never inspect stdout.
-  return { code: result.status ?? 1, stdout: (result.stdout as string | null) ?? '' };
+  // never inspect stdout/stderr.
+  return {
+    code: result.status ?? 1,
+    stdout: (result.stdout as string | null) ?? '',
+    stderr: (result.stderr as string | null) ?? '',
+  };
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -221,15 +225,20 @@ export async function isPaneDead(
 /**
  * Sets the `remain-on-exit` window option so the daemon pane survives after its
  * foreground process exits, instead of the window/session closing out from
- * under us. Session-scoped target (`=<name>`) — never touches other sessions.
+ * under us. Pane-scoped target (`=<name>:`) with `-w` flag for window option —
+ * never touches other sessions.
  */
 export async function setRemainOnExit(
   name: string,
   run: TmuxRunner = defaultTmuxRunner,
 ): Promise<void> {
-  run(['set-option', '-t', `=${name}`, 'remain-on-exit', 'on'], { inherit: false });
-  // Non-zero exit is not fatal here — remain-on-exit is best-effort hardening;
-  // the respawn-pane call below is the operation that must succeed or throw.
+  const result = run(['set-option', '-w', '-t', `=${name}:`, 'remain-on-exit', 'on'], { inherit: false });
+  if (result.code !== 0) {
+    // Log the failure but don't throw — remain-on-exit is best-effort hardening;
+    // the respawn-pane call is the operation that must succeed or throw.
+    const stderr = result.stderr.trim() || '(no error message)';
+    console.warn(`setRemainOnExit failed for session "${name}": tmux exited with code ${result.code}: ${stderr}`);
+  }
 }
 
 /**
