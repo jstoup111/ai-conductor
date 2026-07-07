@@ -1,4 +1,5 @@
 import { snapshotPipeline, diffPipeline } from './pipeline-leak-guard.js';
+import { listDaemonSessions, reapLeakedDaemonSessions } from './tmux-leak-guard.js';
 
 /**
  * Global vitest setup/teardown: detect .pipeline leaks during test runs.
@@ -20,6 +21,9 @@ import { snapshotPipeline, diffPipeline } from './pipeline-leak-guard.js';
  */
 export default async function setup() {
   const beforeState = await snapshotPipeline(process.cwd());
+  // Tmux leak guard (#377): snapshot the operator's pre-existing cc-daemon-*
+  // sessions so only sessions CREATED during this run count as leaks.
+  const daemonSessionsBefore = new Set(listDaemonSessions());
 
   // Return the async teardown function
   return async () => {
@@ -30,6 +34,18 @@ export default async function setup() {
       const leakedFiles = [...diff.added, ...diff.modified].join(', ');
       throw new Error(
         `.pipeline leak into ${process.cwd()} during test run: ${leakedFiles}`
+      );
+    }
+
+    // Tmux leak guard (#377): any cc-daemon-* session created during the run
+    // is a kill-switch escape — a REAL daemon idle-polling a (likely deleted)
+    // fixture repo. Kill it, then fail the run naming it; the pane cwd's
+    // fixture prefix (loop-test-, intake-life-, …) attributes the leaking file.
+    const leaked = reapLeakedDaemonSessions(daemonSessionsBefore);
+    if (leaked.length > 0) {
+      throw new Error(
+        `tmux daemon-session leak during test run (killed at teardown, but the ` +
+          `spawning path must be fixed — see #377): ${leaked.join('; ')}`
       );
     }
   };

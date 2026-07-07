@@ -10,6 +10,17 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ## [Unreleased]
 
+### Fixed
+
+- Test suite can no longer leak real `cc-daemon-*` tmux daemons (#377): the
+  `AI_CONDUCTOR_NO_REAL_EXEC` kill-switch now also refuses `respawn-pane`
+  against `cc-daemon-*` sessions (previously only `new-session`), and a new
+  suite-level teardown guard (`test/tmux-leak-guard.ts`, wired in
+  `test/global-setup.ts`) diffs live sessions against the suite-start
+  snapshot, kills every leaked session, and fails the run naming each one
+  with its pane cwd — leaks become red builds instead of resident daemons
+  idle-polling deleted /tmp fixture repos.
+
 ### Added
 
 - Opt-in `build_review` judgement gate at the build → manual_test seam
