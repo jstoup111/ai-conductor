@@ -31,6 +31,11 @@ export type BootstrapReason = 'never_run' | 'migration';
 export type AssessReason = 'never_run' | 'stale_time' | 'stale_commits' | 'forced';
 export type AssessSkip = 'no_codebase' | 'recent' | 'not_confirmed';
 
+export interface InvokeSkillResult {
+  success: boolean;
+  rateLimited?: boolean;
+}
+
 export interface PreludeResult {
   bootstrapExecuted: boolean;
   bootstrapReason?: BootstrapReason;
@@ -97,11 +102,11 @@ export async function runProjectPrelude(
   if (bootstrapReason) {
     result.bootstrapExecuted = true;
     result.bootstrapReason = bootstrapReason;
-    const ok = await invokeSkill(provider, sessionId, '/bootstrap',
+    const skillResult = await invokeSkill(provider, sessionId, '/bootstrap',
       'Run the bootstrap skill for this project. It is safe to re-run: detect ' +
       'current state, refresh artifacts, apply any harness migrations.');
-    result.bootstrapSuccess = ok;
-    if (ok) {
+    result.bootstrapSuccess = skillResult.success;
+    if (skillResult.success) {
       await writeBootstrapMarker(projectRoot, options.harnessVersion);
     }
   }
@@ -113,11 +118,11 @@ export async function runProjectPrelude(
   } else {
     result.assessExecuted = true;
     result.assessReason = assessResult.reason;
-    const ok = await invokeSkill(provider, sessionId, '/assess',
+    const skillResult = await invokeSkill(provider, sessionId, '/assess',
       'Run the assess skill. Produce or refresh technical-assessment docs and ' +
       'architecture decision records based on current project state.');
-    result.assessSuccess = ok;
-    if (ok) {
+    result.assessSuccess = skillResult.success;
+    if (skillResult.success) {
       const sha = await currentCommitSha(projectRoot);
       await writeAssessMarker(projectRoot, sha);
     }
@@ -126,12 +131,12 @@ export async function runProjectPrelude(
   return result;
 }
 
-async function invokeSkill(
+export async function invokeSkill(
   provider: LLMProvider,
   sessionId: string,
   prompt: string,
   systemPrompt: string,
-): Promise<boolean> {
+): Promise<InvokeSkillResult> {
   const result = await provider.invoke({
     prompt,
     sessionId,
@@ -139,7 +144,10 @@ async function invokeSkill(
     dangerouslySkipPermissions: true,
     systemPrompt,
   });
-  return result.success;
+  return {
+    success: result.success,
+    rateLimited: result.rateLimited,
+  };
 }
 
 // ---------------------------------------------------------------------------
