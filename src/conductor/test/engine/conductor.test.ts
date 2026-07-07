@@ -3388,7 +3388,11 @@ describe('engine/conductor', () => {
         const sharedEpisode = createEpisode({
           now: () => fakeNow,
           setTimer: (fn: () => void, delayMs: number) => {
-            // Immediately call fn to avoid actual timeout
+            // Advance the fake clock past the delay BEFORE firing: the
+            // episode's wake-recheck loop re-reads now() at wake and re-arms
+            // unless the deadline has genuinely passed — an immediate fire
+            // with a frozen clock is an infinite re-arm loop (the CI hang).
+            fakeNow += delayMs;
             setImmediate(fn);
             return { cancel: () => {} };
           },
@@ -3517,8 +3521,13 @@ describe('engine/conductor', () => {
           }),
         };
 
+        // Fake clock advanced by the timer itself — the wake-recheck loop
+        // re-arms forever if the deadline hasn't genuinely passed at wake.
+        let singleFakeNow = 0;
         const singleEpisode = createEpisode({
-          setTimer: (fn: () => void) => {
+          now: () => singleFakeNow,
+          setTimer: (fn: () => void, delayMs: number) => {
+            singleFakeNow += delayMs;
             setImmediate(fn);
             return { cancel: () => {} };
           },
