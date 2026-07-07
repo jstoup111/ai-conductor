@@ -346,6 +346,38 @@ for deployment.
 On failure, conduct sends a desktop notification and drops into an interactive Claude session
 to fix the issue. After you `/quit`, it rechecks artifacts and continues automatically.
 
+### Rate-Limit Episode Coordination
+
+API providers periodically enforce rate limits — sudden hard stops when usage hits ceilings.
+An uncoordinated daemon with N concurrent features all hitting the same limit creates a
+**thundering herd**: each worker waits independently, then all retry at once, triggering
+cascading HALTs and 300-second wedges that ignore SIGTERM signals.
+
+**The solution:** a shared **rate-limit episode** coordinator running alongside the daemon.
+When a provider signals rate-limiting (HTTP 429, "usage limit" messages, or session-limit
+detection), the coordinator:
+
+1. **Captures the deadline** — parses reset time from the provider message (e.g., "3:20pm
+   America/New_York") into an absolute wall-clock deadline, timezone-aware.
+2. **Coordinates N concurrent workers** — all in-flight conductors wait until the deadline
+   instead of fixing durations, then resume staggered (jitter) so they don't re-collide.
+3. **Pauses new dispatch** — while an episode is active, no new features start (in-flight work
+   continues); dispatch resumes when the deadline passes.
+4. **Handles SIGTERM gracefully** — rate-limit waits are abortable, so the daemon can shut down
+   cleanly even mid-wait without hanging or wedging.
+5. **Self-heals episode-caused HALTs** — when the episode clears, previously-halted features
+   are automatically re-kicked (without re-kicking them on every base-SHA advance).
+6. **Propagates rate-limited signals** — pre-step rate-limit detection (before a step runs)
+   prevents a redundant wait inside the step, triggering escalation instead.
+
+**Detection:** Session-limit classification detects observed messages (PRIMARY fix for the
+2026-07-03 incident) in addition to the standard 429 codes. This catches subtle API responses
+that don't set HTTP status but clearly signal exhaustion.
+
+**Configuration & restart**: The episode coordinator lives as an in-process singleton in the
+daemon, created once at startup. Autonomous restarts (on stale engine) preserve the shared
+coordinator across the restart boundary, so an in-flight wait doesn't get orphaned.
+
 ### Halt-PR presentation reliability
 
 When a daemon feature HALTs irrecoverably (build failure, unresolved gap, or gating step failure), it

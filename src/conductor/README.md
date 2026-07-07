@@ -325,6 +325,122 @@ no-op (branch now current), and converges to the PR. If you clear HALT without f
 rebase, the daemon detects the still-stale/in-progress state and re-parks rather than shipping
 a half-rebased branch.
 
+### Rate-Limit Episode Coordinator
+
+The `RateLimitEpisode` coordinator (`engine/rate-limit-episode.ts`) manages coordinated backoff
+when the API provider signals rate-limiting. It runs as a **shared singleton** across all N
+concurrent feature workers in the daemon, ensuring they wake up together at the provider's
+deadline instead of retreating into independent, competing waits.
+
+#### Motivation
+
+When a provider enforces a rate limit:
+- **Uncoordinated behavior:** each of N workers waits independently (e.g. 300s fixed), then
+  all retry at once → thundering herd → cascading failures.
+- **Coordinated behavior:** all workers wait until a shared deadline (parsed from the provider
+  message, e.g., "reset at 3:20pm America/New_York"), then resume with staggered jitter so
+  they spread out instead of colliding.
+
+#### How it works
+
+**Episode detection and deadline capture** (`engine/recovery.ts`, `engine/conductor.ts`):
+
+- When a step's output signals rate-limiting (HTTP 429, `"rate limit"` / `"usage limit"` /
+  `"overloaded"` keywords, or session-limit classification), the provider marks the response
+  `rateLimited: true`.
+- The conductor extracts the deadline from the provider's message (e.g., Anthropic's
+  `retry-reset-at: 3:20pm America/New_York`). The parser is timezone-aware, computing an
+  absolute wall-clock deadline in milliseconds since epoch.
+- If a `RateLimitEpisode` coordinator is supplied, the deadline is registered: `episode.registerDeadline(deadline)`.
+
+**Dispatch gate** (`engine/daemon-backlog.ts`):
+
+- Before discovery and per-feature dispatch, the daemon checks `episode.isActive()`.
+- While active (`now() < deadline`), new dispatch is paused (in-flight work continues).
+- Dispatch resumes when `now() >= deadline`.
+
+**Conductor rate-limit wait** (`engine/conductor.ts`):
+
+- When a rate-limited step is detected, the conductor does not retry immediately. Instead,
+  if an episode is active, it calls `episode.waitUntilReady()` — an **abortable** async wait.
+- The wait computes `delayMs = episode.deadline - now()` and sleeps, but:
+  - Respects SIGTERM: the AbortController can be signaled, and the wait resolves with
+    `{aborted: true}` (conductor escalates to HALT).
+  - Coordinates with jitter: `episode.waitUntilReady()` internally staggers wake-up times so
+    all N workers don't resume at exactly the same instant.
+  - Deadline-first: if the deadline has already passed by the time the wait is called, it
+    returns immediately (no spurious delay).
+
+**Pre-step rate-limit handling** (`engine/conductor.ts`):
+
+- Task 15: When a step is about to run, the conductor checks if a rate-limit episode is
+  active AND the deadline has not yet passed.
+- If so, the step is skipped and escalated as `rateLimited: true` (prevents a redundant wait
+  inside the step).
+
+**HALT recovery from episodes** (`daemon-rekick.ts`):
+
+- When a base-SHA advance triggers a re-kick, the conductor checks whether the halted feature
+  was marked by an episode-caused HALT (via `.pipeline/conduct-state.json` or a sentinel).
+- If the episode has now cleared (deadline passed), the HALT is cleared and the feature is
+  re-kicked — allowing automatic recovery without manual intervention.
+
+**Autonomous restart preservation** (`daemon-cli.ts`):
+
+- The daemon creates `rateLimitEpisode` at startup and threads it through all workers.
+- On auto-restart (stale engine detected), the coordinator is re-created fresh, but any
+  in-flight `waitUntilReady()` calls in the old workers are already aborted (via
+  `onSignal` before the restart fires).
+
+#### Session-limit classification
+
+**Task 12 addition:** The conductor now detects session-limit and usage-limit messages
+(beyond the standard HTTP 429) as rate-limited, implementing the PRIMARY fix for the
+2026-07-03 incident:
+
+- `isRateLimitError(output)` in `engine/recovery.ts` matches `/(rate limit|429|overloaded|usage limit)/i`.
+- This catches subtle responses where the API does not set HTTP 429 but clearly signals
+  exhaustion in the message body (e.g., "session limit exceeded").
+
+#### Configuration & lifecycle
+
+- **Coordinator creation:** `create()` in `rate-limit-episode.ts` returns a new episode
+  manager (no config needed; deadline and state are runtime-populated).
+- **Sharing:** daemon-cli.ts creates one, passes it to all workers via `ConductorOptions.rateLimitEpisode`.
+- **Graceful degredation:** if `rateLimitEpisode` is undefined, the conductor behaves as if
+  no episode is active (pure fallback to independent waits).
+- **Thread-safety:** `registerDeadline`, `isActive`, and `waitUntilReady` are safe for
+  concurrent calls from N workers; they use atomic-friendly flag + deadline updates.
+
+#### SIGTERM responsiveness
+
+When the daemon receives SIGTERM:
+
+1. The signal handler calls `episode.abort()`, which signals all registered in-flight
+   `waitUntilReady()` AbortControllers (via `conductor.registerRateLimitWait()`).
+2. Each worker's wait immediately resolves with `{aborted: true}`.
+3. The conductor catches the abort, escalates the current step as a HALT.
+4. The daemon drains all in-flight workers, then exits cleanly.
+
+#### Jitter and staggering
+
+`waitUntilReady()` does **not** sleep for the full deadline duration at once. Instead:
+
+- It divides the wait into small windows (e.g., 100ms ticks).
+- Each worker adds a small random jitter to its wake-up time (e.g., ±50ms).
+- On each tick, it checks `now() >= (deadline + jitter)` and returns when true.
+- This ensures that when multiple workers wake up after the deadline, they do so at
+  slightly offset times, spreading out the retry load.
+
+#### Modules
+
+- **`engine/rate-limit-episode.ts`** — `RateLimitEpisode` interface + `create()` factory
+- **`engine/recovery.ts`** — `isRateLimitError()` classification + output parsing
+- **`engine/conductor.ts`** — episode registration, wait integration, pre-step check
+- **`daemon-cli.ts`** — episode creation and threading to workers
+- **`daemon-rekick.ts`** — episode-caused HALT recovery
+- **Test coverage** (`test/engine/rate-limit-episode.test.ts`, etc.)
+
 ### Daemon mode
 
 `conduct-ts daemon` (`daemon-cli.ts`) drains a backlog of features that already have

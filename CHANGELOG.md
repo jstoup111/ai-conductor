@@ -92,6 +92,35 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   other's failure modes. Modules: `pr-labels.ts` (`ensureHaltPresentation`, `cleanupHaltPresentation`),
   `halt-pr-reconciliation.ts` (`reconcileHaltPrs`), `daemon.ts` (sweep wiring). See
   `adr-2026-07-05-halt-pr-presentation-reliability.md` (D1–D5 decisions) and README/`src/conductor/README.md`.
+- **RateLimitEpisode coordinator (Tasks 10–16):** in-process episode tracker with shared
+  deadline management. When a provider signals rate-limiting (HTTP 429, session-limit messages,
+  or usage-limit text), the coordinator captures a timezone-aware deadline and coordinates N
+  concurrent workers to wake up together at that deadline (instead of retreating into
+  independent, competing waits). New `engine/rate-limit-episode.ts` module + wiring in
+  `daemon-cli.ts`, `conductor.ts`, `daemon-backlog.ts`, `daemon-rekick.ts`. Resolves the
+  2026-07-03 cascading-HALT + 300s wedge incident.
+- **Dispatch gate:** pause NEW feature dispatch while rate-limit episode active (in-flight
+  work continues untouched). Entry point: `engine/daemon-backlog.ts` checks
+  `episode.isActive()` before discovery and dispatch.
+- **Session-limit classification (PRIMARY fix):** detect session/usage-limit messages beyond
+  HTTP 429 as rate-limited signals. `isRateLimitError(output)` in `engine/recovery.ts` matches
+  `/(rate limit|429|overloaded|usage limit)/i`. Catches subtle API responses that don't set
+  HTTP status but clearly signal exhaustion in the message body.
+- **Timezone-aware reset parsing:** extract deadline from provider message (e.g.,
+  `retry-reset-at: 3:20pm America/New_York`) into absolute wall-clock milliseconds. Parses
+  time zone, handles locale-specific formats, computes epoch-relative deadline.
+- **Pre-step rate-limit handling (Task 15):** when a rate-limit episode is active and
+  unexpired, skip a pending step and escalate as `rateLimited: true` (prevents a redundant
+  wait inside the step). Entry point: `Conductor.runBuildStep()` pre-flight check.
+- **Episode-caused HALT recovery (Task 22):** automatically re-kick previously-halted
+  features when the episode clears (deadline passed), without re-kicking them on every
+  base-SHA advance. Entry point: `daemon-rekick.ts` checks episode state and clears sentinel.
+- **SIGTERM-responsive wait (abortable rate-limit wait):** `episode.waitUntilReady()` is
+  abortable via AbortController. Daemon registers in-flight waits with the coordinator;
+  on SIGTERM, all are aborted immediately and conductors escalate to HALT. Preserves graceful
+  shutdown under rate-limiting.
+- **Jitter and staggered resumption:** `waitUntilReady()` staggers wake-up times so N workers
+  don't all resume at the exact deadline instant (prevents thundering herd on retry).
 - **Engineer handoff write-back now surfaces failures with a `writebackPending` ledger marker
   and copy/paste-retryable remediation (#290).** `IntakePort.report()` returns a `ReportOutcome`
   (`{ ok: true }` or `{ ok: false, remediation: string[] }`); on a failed `done` write-back,
@@ -121,10 +150,41 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   Manual-test results are append-only per attempt: the skill records an
   `## Attempt N — <timestamp>` section per run and the gate evaluates only the latest
   section (sectionless files still scan whole, back-compat).
+- **Conductor rate-limit wait now abortable and deadline-first (Tasks 11, 14):**
+  `episode.waitUntilReady()` is now abortable via AbortController, computing
+  `delayMs = deadline - now()` and respecting SIGTERM signals (wait resolves with
+  `{aborted: true}`, conductor escalates to HALT). If the deadline has already passed, the
+  wait returns immediately (no spurious delay). Jitter internal to `waitUntilReady()` spreads
+  worker wake-up times so they don't collide at the deadline instant.
+- **Pre-step rate-limit handling (Task 15):** when a rate-limit episode is active and
+  unexpired, `Conductor.runBuildStep()` skips the pending step and escalates it as
+  `rateLimited: true` instead of entering the step and waiting there (prevents redundant
+  waits and allows earlier dispatch-gate pausing).
+- **HALT recovery from rate-limit episodes (Task 22):** when a base-SHA advance triggers a
+  re-kick sweep, the conductor checks whether a halted feature was caused by an active
+  episode. If the episode has now cleared (`now() >= deadline`), the HALT is automatically
+  cleared and the feature is re-kicked, enabling automatic recovery without re-kicking on
+  every base-SHA advance.
+- **Autonomous restart preserves rate-limit episode (Tasks 19, 20):** when the daemon
+  auto-restarts on a stale engine, the `RateLimitEpisode` coordinator is re-created fresh
+  but any in-flight `waitUntilReady()` calls in the old workers are already aborted
+  (via `onSignal` before restart fires), so waits do not get orphaned.
 
 ### Fixed
 
 - **Daemon false-ship guard: daemon no longer records shipped markers for outcomes missing verified PR evidence.** Done-outcomes with null prUrl or non-pr finishChoice now halt with HALT markers, DONE markers deleted, and worktrees kept for operator inspection (#337).
+- **Rate-limit cascades now prevented by coordinated episode wait (resolves 2026-07-03
+  incident).** Previously, N concurrent workers hitting a rate-limit all waited independently
+  (e.g., 300s fixed), then retried at once → thundering herd → cascading HALTs + 300s wedges
+  that ignored SIGTERM. With the coordinator active, all workers wake up at a single shared
+  deadline (extracted from the provider message, timezone-aware), then resume with jitter so
+  they spread out instead of colliding. Episode-caused HALTs are automatically recovered when
+  the deadline passes.
+- **Session-limit and usage-limit signals now properly classified as rate-limited (PRIMARY
+  fix for 2026-07-03 incident).** Subtle API responses that don't set HTTP 429 but clearly
+  signal exhaustion in the message body (e.g., "session limit exceeded") are now detected by
+  `isRateLimitError(output)` and trigger rate-limit coordination instead of being silently
+  treated as a step failure.
 - Backfilled the missing intake marker `.docs/intake/2026-06-30-background-intake-conduct-loop.md`
   (`Owner: jstoup111`): the spec landed without an owner stamp, so the post-cutover owner gate
   held it as `unowned-post-cutover` and the daemon never built it. With the marker committed on
