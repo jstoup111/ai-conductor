@@ -125,7 +125,20 @@ inputs without failing open or closed). Has veto authority to send back to GREEN
 6. Commit with descriptive message referencing the behavior added
 7. **Commit includes Task trailer** — All commits (feature, refactor, fixups) in this TDD
    cycle must include `Task: <id>` as a trailer in the commit body. This anchors commits
-   to their implementation task and enables task-status tracking. Example:
+   to their implementation task and enables task-status tracking.
+
+   **Grammar Rule:** The trailer ID MUST match the plan header ID exactly. For example:
+   - Plan header: `### Task 7:` → Trailer must be: `Task: 7` (NOT `Task: task-7`)
+   - Forbidden: `Task: task-7`, `Task: task-N`, `task-7` (incorrect spellings)
+   - Required: `Task: 7`, `Task: 42` (bare numeric ID only)
+
+   **Subject ⇒ Trailer Discipline:** If the commit subject line references a task ID
+   (e.g., `fix: resolve Task 7 token rejection`), the commit MUST include the matching
+   `Task: <id>` trailer. A commit whose subject names a task but lacks the corresponding
+   trailer FAILS this gate — amend the commit before proceeding. This ensures
+   bidirectional traceability: commits identify their task, and tasks can find their commits.
+
+   Example (good):
    ```
    feat(auth): reject expired tokens at request boundary
 
@@ -134,6 +147,7 @@ inputs without failing open or closed). Has veto authority to send back to GREEN
 
    Task: 42
    ```
+
    Refactor commits within the same task also carry the same Task: <id> so the task
    is atomically marked complete when the final commit lands.
 
