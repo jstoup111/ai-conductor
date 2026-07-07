@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, mkdir, readFile, writeFile, access } from 'fs/promises';
+import { mkdtemp, rm, mkdir, readFile, writeFile, access, unlink } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
@@ -299,5 +299,40 @@ describe('daemon-lock: holdLock — daemon lifetime lock (ADR-010)', () => {
 
     handle.releaseSync();
     await expect(access(pidfile())).rejects.toThrow();
+  });
+
+  it('a LIVE owner releases the lock during bounded-wait → acquires (holdLock bounded-wait happy path)', async () => {
+    const mod = await load(LOCK_MOD);
+    const holdLock = requireFn(mod, 'holdLock');
+
+    // Seed a pidfile owned by THIS process (guaranteed live).
+    await mkdir(join(repoPath, '.daemon'), { recursive: true });
+    const seeded = { pid: process.pid, uuid: 'live-owner', startedAt: new Date().toISOString() };
+    await writeFile(pidfile(), JSON.stringify(seeded));
+
+    // On a timer shorter than the wait window, release the pidfile.
+    const releaseTimer = setTimeout(async () => {
+      try {
+        await unlink(pidfile());
+      } catch {
+        // Already gone — fine.
+      }
+    }, 200);
+
+    // holdLock with bounded-wait options: poll every 25ms, wait up to 500ms.
+    const handle = await holdLock(repoPath, { takeoverWaitMs: 500, pollMs: 25 });
+
+    clearTimeout(releaseTimer);
+
+    // Should have acquired the lock after waiting for it to be released.
+    expect(handle).not.toBeNull();
+    expect(handle?.owned).toBe(true);
+    expect(handle?.pid).toBe(process.pid);
+
+    // Pidfile should now contain our pid.
+    const rec = JSON.parse(await readFile(pidfile(), 'utf8'));
+    expect(rec.pid).toBe(process.pid);
+
+    await handle?.release();
   });
 });
