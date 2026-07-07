@@ -34,4 +34,9 @@ harness_self_host:
 # rebuild — bin/install or npm run build), it respawns in place: restart marker
 # → lock release → same-tmux-session respawn. Default-inert engine-side; armed
 # here. Read at daemon startup; restart once to apply.
-auto_restart_on_stale_engine: true
+# DISABLED 2026-07-07 pending issue #400: the respawn transport stacks daemon
+# generations (one stale-engine event at 13:12Z stacked four processes; a
+# pre-#393 generation survived 3h alongside the owner). Re-enable once #400
+# ships. While off: after merging engine changes, refresh manually —
+# `bin/install --update` then `conduct-ts daemon stop && conduct-ts daemon start`.
+auto_restart_on_stale_engine: false

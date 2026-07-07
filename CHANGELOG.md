@@ -138,6 +138,11 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- Disabled `auto_restart_on_stale_engine` in the harness repo config pending #400: the
+  respawn-in-place transport stacks daemon generations (predecessor survives the handoff;
+  one stale event fired four respawns). Manual refresh procedure documented in the config
+  comment; re-enable with the #400 fix.
+
 - **Daemon restart no longer leaves the daemon stopped when origin is ahead (#353).** Stale-engine
   restarts now respawn in place within the live tmux session: skills relinked via
   `bin/install --update` before the handoff, `remain-on-exit` armed at session creation, and
