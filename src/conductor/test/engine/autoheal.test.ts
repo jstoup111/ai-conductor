@@ -1660,3 +1660,118 @@ describe('attemptAutoHeal (H5 migration-only fallback)', () => {
     expect(reseededTask.status).toBe('completed');
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Regression: Alias inherits rejection rules (Task 5)
+//
+// Tests to verify that the guarded task-N alias feature does NOT loosen
+// existing rejection rules. These tests use the aliased form (task-N) in
+// trailers to ensure that empty commits, dangling SHAs, and path mismatches
+// are still properly rejected even when using the alias.
+//
+// Acceptance criteria:
+// 1. Empty commit without Evidence (using task-N alias) → incomplete + audit entry
+// 2. Dangling SHA in Evidence (using task-N alias) → incomplete + audit entry with "dangling"
+// 3. Path corroboration mismatch (using task-N alias) → incomplete + audit entry
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('Regression: alias inherits empty/dangling/path-corroboration rejections', () => {
+  it('rejects empty commit without Evidence trailer (using aliased task-N)', async () => {
+    const autoheal = await loadAutoheal();
+    const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
+
+    // Create a plan with task 9
+    const planPath = join(gitDir, '.docs/plans/test-plan.md');
+    await mkdir(join(gitDir, '.docs/plans'), { recursive: true });
+    const planContent = `# Test Plan
+
+### Task 9: Empty rejection
+A task that will be rejected for being empty.
+`;
+    await writeFile(planPath, planContent);
+    await execa('git', ['add', '.docs/plans/test-plan.md'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: gitDir });
+
+    // Create an empty commit with ONLY Task: task-9 trailer (aliased form, no Evidence:)
+    await execa('git', ['commit', '--allow-empty', '-m', 'noop: empty task\n\nTask: task-9\n'], { cwd: gitDir });
+
+    const commits = await autoheal.listCommitsWithTrailers(gitDir);
+    const evidence = await createTaskEvidence(gitDir);
+
+    const result = await autoheal.deriveCompletion(gitDir, planPath, '', commits, evidence);
+
+    // Should NOT mark as completed (empty without Evidence)
+    expect(result).toHaveProperty('9');
+    expect(result['9']).toHaveProperty('completed', false);
+    expect(result['9']).toHaveProperty('auditEntry');
+    expect(result['9'].auditEntry).toContain('empty commit');
+  });
+
+  it('rejects dangling SHA in Evidence trailer (using aliased task-N)', async () => {
+    const autoheal = await loadAutoheal();
+    const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
+
+    // Create a plan with task 4
+    const planPath = join(gitDir, '.docs/plans/test-plan.md');
+    await mkdir(join(gitDir, '.docs/plans'), { recursive: true });
+    const planContent = `# Test Plan
+
+### Task 4: Dangling evidence
+A task with dangling sha.
+`;
+    await writeFile(planPath, planContent);
+    await execa('git', ['add', '.docs/plans/test-plan.md'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: gitDir });
+
+    // Create a commit with a dangling sha using aliased task-4 form
+    const fakeSha = 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef';
+    await execa('git', ['commit', '--allow-empty', '-m', `noop: bad evidence\n\nTask: task-4\nEvidence: satisfied-by ${fakeSha}\n`], { cwd: gitDir });
+
+    const commits = await autoheal.listCommitsWithTrailers(gitDir);
+    const evidence = await createTaskEvidence(gitDir);
+
+    const result = await autoheal.deriveCompletion(gitDir, planPath, '', commits, evidence);
+
+    // Should NOT mark as completed (dangling SHA)
+    expect(result).toHaveProperty('4');
+    expect(result['4']).toHaveProperty('completed', false);
+    expect(result['4']).toHaveProperty('auditEntry');
+    expect(result['4'].auditEntry).toContain('dangling');
+  });
+
+  it('rejects path-corroboration mismatch (using aliased task-N)', async () => {
+    const autoheal = await loadAutoheal();
+    const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
+
+    // Create a plan with task 6 and specific path
+    const planPath = join(gitDir, '.docs/plans/test-plan.md');
+    await mkdir(join(gitDir, '.docs/plans'), { recursive: true });
+    const planContent = `# Test Plan
+
+### Task 6: Path specific
+Update specific file.
+
+- \`docs/path-a.md\`
+`;
+    await writeFile(planPath, planContent);
+    await execa('git', ['add', '.docs/plans/test-plan.md'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: gitDir });
+
+    // Create a commit with Task: task-6 (aliased form) that touches a DIFFERENT file
+    await mkdir(join(gitDir, 'docs'), { recursive: true });
+    await writeFile(join(gitDir, 'docs/path-b.md'), 'content');
+    await execa('git', ['add', 'docs/path-b.md'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'feat: wrong path\n\nTask: task-6\n'], { cwd: gitDir });
+
+    const commits = await autoheal.listCommitsWithTrailers(gitDir);
+    const evidence = await createTaskEvidence(gitDir);
+
+    const result = await autoheal.deriveCompletion(gitDir, planPath, '', commits, evidence);
+
+    // Should NOT mark as completed (path mismatch)
+    expect(result).toHaveProperty('6');
+    expect(result['6']).toHaveProperty('completed', false);
+    expect(result['6']).toHaveProperty('auditEntry');
+    expect(result['6'].auditEntry).toContain('path overlap');
+  });
+});
