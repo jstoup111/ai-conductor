@@ -441,6 +441,8 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   const lock = await holdLock(projectRoot);
   if (lock === null) {
     log(`another daemon is already running for ${projectRoot}; exiting (1-per-repo).`);
+    const exitProcess = opts.exitProcess ?? process.exit;
+    exitProcess(0);
     return;
   }
   // We own the repo: open the activity log and start teeing. renderDaemonEvent and
