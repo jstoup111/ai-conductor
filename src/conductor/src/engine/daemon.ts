@@ -16,6 +16,7 @@
 import chalk from 'chalk';
 import type { ComplexityTier, Track } from '../types/index.js';
 import { Waker } from './waker.js';
+import type { RateLimitEpisode } from './rate-limit-episode.js';
 
 /**
  * Default sleep implementation that returns an unref'd timer.
@@ -196,6 +197,13 @@ export interface DaemonDeps {
    * wires the real `isPaused` from `pause-marker.ts`).
    */
   isPaused?: () => Promise<boolean>;
+  /**
+   * Optional rate-limit episode coordinator (optimization-never-authority).
+   * If provided and active, gates new dispatch to avoid thundering herd.
+   * If undefined or inactive, behaves as today (no change to existing code path).
+   * @internal Daemon-scoped seam; never blocks on missing dep or stale state.
+   */
+  rateLimitEpisode?: RateLimitEpisode;
   /** Optional progress line (narrator). */
   log?: (msg: string) => void;
   /** Injectable sleep (tests pass a no-op / fake clock). */
