@@ -160,6 +160,51 @@ export async function findArtifactFiles(
 }
 
 /**
+ * Resolve the plan file for the CURRENT feature — never an unscoped
+ * `.docs/plans/*.md`[0] guess (#407: with several features in flight the
+ * shared plans directory holds many files, and the alphabetically-first one
+ * belonged to a different feature entirely, poisoning task-status.json and
+ * halting the build gate forever).
+ *
+ * Resolution order:
+ * 1. `.pipeline/engine-state.json` `activePlanPath` — authoritative when the
+ *    plan step recorded it (interactive runs, Task 14 of #302).
+ * 2. The plan whose stem equals `featureDesc` — the daemon convention
+ *    (engineer/land writes `.docs/plans/<slug>.md`, and daemon-cli seeds
+ *    `feature_desc` = slug).
+ * 3. A single plan file on disk — unambiguous regardless of name.
+ * 4. Otherwise `undefined` — multiple plans, none provably ours: never guess.
+ *    Callers fail closed (the build gate reports an actionable reason rather
+ *    than evaluating someone else's task list).
+ */
+export async function resolveFeaturePlanPath(
+  projectRoot: string,
+  featureDesc: string | undefined,
+): Promise<string | undefined> {
+  try {
+    const raw = await readFile(join(projectRoot, '.pipeline', 'engine-state.json'), 'utf-8');
+    const engineState = JSON.parse(raw) as Record<string, unknown>;
+    if (typeof engineState.activePlanPath === 'string' && engineState.activePlanPath.trim()) {
+      const recorded = engineState.activePlanPath;
+      return recorded.startsWith('/') ? recorded : join(projectRoot, recorded);
+    }
+  } catch {
+    // No engine state (daemon-preseeded runs never execute the plan step) —
+    // fall through to convention-based resolution.
+  }
+
+  const planFiles = await findArtifactFiles(projectRoot, 'plan');
+  if (planFiles.length === 0) return undefined;
+  if (planFiles.length === 1) return planFiles[0];
+
+  if (featureDesc) {
+    const bySlug = planFiles.find((p) => planStem(p) === featureDesc);
+    if (bySlug) return bySlug;
+  }
+  return undefined;
+}
+
+/**
  * True if the step has at least one artifact on disk. True for steps that
  * produce no artifacts (nothing to verify).
  */
