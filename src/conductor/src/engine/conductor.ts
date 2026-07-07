@@ -113,7 +113,6 @@ import {
   type TaskEvidence,
 } from './task-evidence.js';
 import { seedTaskStatus } from './task-seed.js';
-import { writeAutoPark } from './park-marker.js';
 
 export type CheckpointResponse = 'continue' | 'back' | 'quit';
 
@@ -168,6 +167,10 @@ const MAX_KICKBACKS_PER_GATE = 2;
 const MAX_GATE_SELECTIONS = 6;
 const DONE_MARKER = '.pipeline/DONE';
 const LOOP_HALT_MARKER = HALT_MARKER;
+
+// Task 23 (auto-park): build-gate no-evidence misses tolerated before the
+// daemon parks the feature (durable sidecar counter — see daemon-auto-park.ts).
+const DAEMON_NO_EVIDENCE_THRESHOLD = 3;
 
 export interface NavigableStep {
   name: StepName;
@@ -1190,44 +1193,6 @@ export class Conductor {
           }
         }
 
-        // Task 23: Daemon auto-park on no-evidence gate misses.
-        // If daemon mode and at acceptance_specs gate:
-        //   - Check if plan artifact is missing (empty plan case)
-        //   - Check if noEvidenceAttempts > 0 (already had failed attempts, don't retry)
-        // Park the feature instead of dispatching, halt gracefully.
-        const DAEMON_NO_EVIDENCE_THRESHOLD = 3;
-        if (this.daemon && step.name === 'acceptance_specs') {
-          let shouldAutoPark = false;
-          let parkReason = '';
-
-          // Check for empty/missing plan
-          const ctx = await this.completionCtx(state);
-          if (!ctx.planPath) {
-            shouldAutoPark = true;
-            parkReason = 'empty/missing plan';
-          }
-          // Check for N-1 consecutive no-evidence gate misses (don't try again)
-          else if (
-            this.taskEvidence &&
-            this.taskEvidence.noEvidenceAttempts >= DAEMON_NO_EVIDENCE_THRESHOLD - 1
-          ) {
-            shouldAutoPark = true;
-            parkReason = `no evidence after ${DAEMON_NO_EVIDENCE_THRESHOLD} attempts`;
-          }
-
-          if (shouldAutoPark) {
-            const slug = state.feature_desc || 'unknown';
-            await writeAutoPark(this.projectRoot, slug, parkReason);
-            await this.events.emit({
-              type: 'auto_park',
-              slug,
-              reason: parkReason,
-            });
-            process.off('SIGINT', sigintHandler);
-            return;
-          }
-        }
-
         // Mark in_progress before running
         await saveStepStatus(this.stateFilePath, step.name, 'in_progress');
         state[step.name] = 'in_progress';
@@ -1523,17 +1488,65 @@ export class Conductor {
                   stalled = 'no_task_progress';
                 }
 
-                // Task 12: Durable no-evidence counter. Increment on gate miss with no progress,
-                // reset when progress is detected.
+                // Task 12: Durable no-evidence counter. Increment on EVERY
+                // gate miss without progress (H7 — the counter accrues across
+                // attempts, runs, and re-kicks; gating it on the attempt>=2
+                // stall verdict would let single-attempt re-kick loops never
+                // reach the park threshold), reset when progress is detected.
                 if (this.taskEvidence) {
                   if (resolvedTasksAfter > resolvedTasksBefore) {
                     // Progress detected — reset counter
                     this.taskEvidence.noEvidenceAttempts = 0;
                     await this.taskEvidence.write();
-                  } else if (stalled === 'no_task_progress') {
-                    // No progress stall detected — increment counter
+                  } else {
+                    // No-evidence miss — increment the durable counter
                     this.taskEvidence.noEvidenceAttempts++;
                     await this.taskEvidence.write();
+                  }
+                }
+
+                // Task 23: daemon auto-park at the build gate layer (ADR
+                // "last resort" + H7 durable counter). Fires ONLY on a build
+                // gate miss: an empty/missing plan (the gate's own seed-time
+                // verdict — never re-derived here) parks immediately; a
+                // no-evidence counter at the threshold (durable in the
+                // sidecar, so it accrues ACROSS re-kicks and restarts) parks
+                // instead of looping. checkAndAutoPark is daemon-gated by
+                // construction — interactive runs keep the stall-REPL path
+                // below. A park is terminal for this run: the HALT marker
+                // satisfies the marker guarantee, while the park marker is
+                // what the re-kick sweep honors until an operator unparks.
+                if (this.daemon) {
+                  const gateReason = completion.reason ?? '';
+                  const parkCtx = await this.completionCtx(state);
+                  const emptyPlan =
+                    !parkCtx.planPath ||
+                    gateReason.includes('plan is empty') ||
+                    gateReason.includes('no tasks in plan') ||
+                    gateReason.includes('plan file not found');
+                  const slug = state.feature_desc || 'unknown';
+                  const { checkAndAutoPark } = await import('./daemon-auto-park.js');
+                  const parkResult = await checkAndAutoPark(this.projectRoot, slug, {
+                    maxAttempts: DAEMON_NO_EVIDENCE_THRESHOLD,
+                    daemon: this.daemon,
+                    ...(emptyPlan ? { reason: 'empty/missing plan' } : {}),
+                    emit: (evt) =>
+                      void this.events.emit(evt as Parameters<typeof this.events.emit>[0]),
+                  });
+                  if (parkResult.parked) {
+                    const reason =
+                      `auto-parked: ${emptyPlan ? 'empty/missing plan' : `no completion evidence after ${DAEMON_NO_EVIDENCE_THRESHOLD} attempts`}` +
+                      ` — unpark with \`conduct daemon unpark ${slug}\``;
+                    await writeFile(
+                      join(this.projectRoot, LOOP_HALT_MARKER),
+                      reason + '\n',
+                      'utf-8',
+                    ).catch(() => {});
+                    state[step.name] = 'failed';
+                    await writeState(this.stateFilePath, state);
+                    await this.events.emit({ type: 'loop_halt', reason });
+                    process.off('SIGINT', sigintHandler);
+                    return;
                   }
                 }
 

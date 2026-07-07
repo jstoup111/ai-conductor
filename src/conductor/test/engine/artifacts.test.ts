@@ -603,11 +603,19 @@ describe('engine/artifacts', () => {
 
       it('marks tasks as pending after seeding (without evidence commits)', async () => {
         await writePlan('### Task 1: Task one\n**Story:** 1\n\n### Task 2: Task two\n**Story:** 2\n');
-        // Pre-write some completed tasks (forged state, no commit evidence)
+        // Pre-write some completed tasks (forged state, no commit evidence).
+        // A PRESENT sidecar makes this a post-cutover state: without it, the
+        // first-seed H8 migration grandfather would (by design) preserve
+        // pre-cutover terminal rows — forgery detection is a post-cutover
+        // contract.
         await writeTasks([
           { id: '1', name: 'Task 1', status: 'completed' },
           { id: '2', name: 'Task 2', status: 'completed' },
         ]);
+        await writeFile(
+          join(dir, '.pipeline/task-evidence.json'),
+          JSON.stringify({ evidenceStamps: {}, noEvidenceAttempts: 0, migrationGrandfather: [] }),
+        );
 
         const ctx = { projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md') };
         const result = await checkStepCompletion(dir, 'build', ctx);
@@ -620,8 +628,13 @@ describe('engine/artifacts', () => {
       it('detects all-completed forged rows as incomplete (no evidence)', async () => {
         // This tests the acceptance criterion: forged all-completed rows + zero commits → gate fails
         await writePlan('### Task 1: Task one\n**Story:** 1\n');
+        // Post-cutover state (sidecar present) — see the sibling test's note.
         // Write task-status showing completed but no evidence commits
         await writeTasks([{ id: '1', name: 'Task 1', status: 'completed' }]);
+        await writeFile(
+          join(dir, '.pipeline/task-evidence.json'),
+          JSON.stringify({ evidenceStamps: {}, noEvidenceAttempts: 0, migrationGrandfather: [] }),
+        );
 
         const ctx = { projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md') };
         const result = await checkStepCompletion(dir, 'build', ctx);

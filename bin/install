@@ -355,6 +355,21 @@ harness_hooks = {
                     "timeout": 10
                 }
             ]
+        },
+        {
+            "matcher": "Bash",
+            "hooks": [
+                {
+                    # Fast-feedback derive on commit (ADR engine-owned
+                    # task-status, post-landing amendment): engine-invoking,
+                    # strictly advisory — warns when a commit evidences no
+                    # task. Occupies the PostToolUse/Bash slot the removed
+                    # legacy pipeline-sync hook vacated.
+                    "type": "command",
+                    "command": f"{hooks_dir}/post-commit-derive-feedback.sh",
+                    "timeout": 15
+                }
+            ]
         }
     ],
     "SessionStart": [

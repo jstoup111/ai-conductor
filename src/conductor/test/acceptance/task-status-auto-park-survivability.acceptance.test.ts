@@ -202,17 +202,20 @@ describe('acceptance: no evidence after N attempts parks the feature, survivably
     expect(await taskEvidence.readNoEvidenceAttempts(root)).toBe(0);
   });
 
-  it('negative: the N-attempt counter persists across a simulated engine restart (fresh module instance reads the sidecar, not an in-memory Map)', async () => {
+  it('negative: the N-attempt counter persists across a simulated engine restart (the sidecar on disk is authoritative, not an in-memory Map)', async () => {
     const first = await loadTaskEvidence();
     await first.incrementNoEvidenceAttempts(root);
     await first.incrementNoEvidenceAttempts(root);
 
-    // Force a genuinely fresh module instance (cache-busted specifier) so any
-    // in-memory Map/Set keyed by root cannot leak the count across — the
-    // counter must be readable ONLY because it was persisted to
-    // `.pipeline/task-evidence.json` on disk.
-    const fresh = await loadTaskEvidence(true);
-    expect(await fresh.readNoEvidenceAttempts(root)).toBe(2);
+    // The restart-survival proof is the RAW FILE: the count must be readable
+    // straight from `.pipeline/task-evidence.json` on disk — an in-memory
+    // Map/Set keyed by root would leave this file at 0 (or absent) and a
+    // restarted engine would lose the count. (A cache-busted dynamic import
+    // was the original mechanism here; the vitest loader rejects query-string
+    // specifiers, and the raw-file read is the stronger assertion anyway.)
+    const raw = JSON.parse(await readFile(join(root, '.pipeline/task-evidence.json'), 'utf-8'));
+    expect(raw.noEvidenceAttempts).toBe(2);
+    expect(await first.readNoEvidenceAttempts(root)).toBe(2);
   });
 
   it('negative: evidence accruing before N is reached resets the counter (a slow-but-progressing feature is never parked)', async () => {
@@ -231,6 +234,10 @@ describe('acceptance: no evidence after N attempts parks the feature, survivably
     const parkMarker = await loadParkMarkerAutoExtension();
     await parkMarker.writeAutoPark(root, SLUG, 'no completion evidence after 3 attempts');
 
+    // The landed design enriches parked slugs into ParkedEntry objects at the
+    // daemon-cli boundary (where the project root is available to read marker
+    // provenance); renderDashboard itself is sync and consumes the enriched
+    // entries. This fixture mirrors that boundary's output.
     const state = {
       halted: [],
       processed: [],
@@ -238,7 +245,10 @@ describe('acceptance: no evidence after N attempts parks the feature, survivably
       eligible: [],
       halvedCount: 0,
       processedCount: 0,
-      parked: [SLUG, 'human-parked-feat'],
+      parked: [
+        { slug: SLUG, provenance: 'auto', reason: 'no completion evidence after 3 attempts' },
+        { slug: 'human-parked-feat', provenance: 'operator' },
+      ],
     } as unknown as InheritedState;
 
     const rendered = renderDashboard(state);

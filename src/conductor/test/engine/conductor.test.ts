@@ -1064,15 +1064,16 @@ describe('engine/conductor', () => {
   });
 
   describe('daemon auto-park on no-evidence gate misses (#302)', () => {
-    // Seed to acceptance_specs gate (which gates the build) with a durable
-    // no-evidence counter already at N-1 attempts. The gate will miss because
-    // the plan is missing, the counter will increment to N, and the daemon
-    // should auto-park instead of re-kicking.
+    // Seed to the BUILD step (the auto-park fires on a build GATE miss, per
+    // the ADR's "empty/missing plan at seed" + H7 counter semantics) with a
+    // durable no-evidence counter already at N-1 attempts. The build runs,
+    // its gate misses (no git evidence for the plan task), the counter
+    // increments to N, and the daemon parks instead of retrying/re-kicking.
     async function seedToBuildGate(noEvidenceAttempts: number = 0, withPlanFile: boolean = false): Promise<void> {
       const res = await readState(statePath);
       const state = (res.ok ? res.value : {}) as Record<string, unknown>;
       for (const s of ALL_STEPS) {
-        if (s.name === 'acceptance_specs') break;
+        if (s.name === 'build') break;
         state[s.name] = 'done';
       }
       state.complexity_tier = 'L';
@@ -1085,7 +1086,7 @@ describe('engine/conductor', () => {
         await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
         await writeFile(
           join(dir, '.docs', 'plans', 'plan.md'),
-          '# Plan\n\n- Task 1\n- Task 2\n',
+          '# Plan\n\n### Task 1: First\n\n### Task 2: Second\n',
         );
       }
 
@@ -1118,7 +1119,7 @@ describe('engine/conductor', () => {
         daemon: true,
         verifyArtifacts: true,
         maxRetries: 1,
-        fromStep: 'acceptance_specs',
+        fromStep: 'build',
       });
 
       await conductor.run();
@@ -1130,10 +1131,13 @@ describe('engine/conductor', () => {
 
       // Verify park event was emitted
       expect(parkEvents).toHaveLength(1);
-      expect(parkEvents[0].reason).toMatch(/no evidence after \d+ attempts/);
+      expect(parkEvents[0].reason).toMatch(/no completion evidence after \d+ attempts/);
 
-      // Verify dispatch halts (runner only called for acceptance_specs, not build)
-      expect((runner.run as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(0);
+      // Build dispatched once; the park fired at its gate miss, so no retry
+      // and nothing after build was dispatched.
+      const calls = (runner.run as ReturnType<typeof vi.fn>).mock.calls;
+      expect(calls).toHaveLength(1);
+      expect(calls[0][0]).toBe('build');
     });
 
     it('daemon: empty plan at seed auto-parks with "empty plan" reason', async () => {
@@ -1155,7 +1159,7 @@ describe('engine/conductor', () => {
         daemon: true,
         verifyArtifacts: true,
         maxRetries: 1,
-        fromStep: 'acceptance_specs',
+        fromStep: 'build',
       });
 
       await conductor.run();
@@ -1169,8 +1173,10 @@ describe('engine/conductor', () => {
       expect(parkEvents).toHaveLength(1);
       expect(parkEvents[0].reason).toBe('empty/missing plan');
 
-      // Verify dispatch halts
-      expect((runner.run as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(0);
+      // Build dispatched once; the park fired at its gate miss — no retries.
+      const calls = (runner.run as ReturnType<typeof vi.fn>).mock.calls;
+      expect(calls).toHaveLength(1);
+      expect(calls[0][0]).toBe('build');
     });
 
     it('daemon: auto-park event is emitted to logging/telemetry', async () => {
@@ -1192,7 +1198,7 @@ describe('engine/conductor', () => {
         daemon: true,
         verifyArtifacts: true,
         maxRetries: 1,
-        fromStep: 'acceptance_specs',
+        fromStep: 'build',
       });
 
       await conductor.run();
@@ -1230,13 +1236,14 @@ describe('engine/conductor', () => {
         daemon: true,
         verifyArtifacts: true,
         maxRetries: 1,
-        fromStep: 'acceptance_specs',
+        fromStep: 'build',
       });
 
       await conductor.run();
 
-      // Verify no steps were dispatched (conductor halted before dispatch)
-      expect(dispatchedSteps).toHaveLength(0);
+      // Build dispatched once; the park at its gate miss is terminal — no
+      // retry of build and nothing downstream (manual_test etc.) dispatched.
+      expect(dispatchedSteps).toEqual(['build']);
     });
 
     it('unpark verb removes auto-park marker and resets the no-evidence counter', async () => {
@@ -1272,7 +1279,7 @@ describe('engine/conductor', () => {
       const { dispatchDaemonPark } = await import('../../src/engine/daemon-park-cli.js');
       const { readNoEvidenceAttempts } = await import('../../src/engine/task-evidence.js');
 
-      // Setup: auto-parked feature with counter at N-1, seed to acceptance_specs gate
+      // Setup: auto-parked feature with counter at N-1, seeded to the build step
       await writeAutoPark(dir, 'feat', 'no evidence after 3 attempts');
       const evidence = await createTaskEvidence(dir);
       evidence.noEvidenceAttempts = 2;
@@ -1281,7 +1288,7 @@ describe('engine/conductor', () => {
       const res = await readState(statePath);
       const state = (res.ok ? res.value : {}) as Record<string, unknown>;
       for (const s of ALL_STEPS) {
-        if (s.name === 'acceptance_specs') break;
+        if (s.name === 'build') break;
         state[s.name] = 'done';
       }
       state.complexity_tier = 'L';
@@ -1289,11 +1296,13 @@ describe('engine/conductor', () => {
       state.track = 'technical';
       await writeState(statePath, state as unknown as ConductState);
 
-      // Create a plan file (for no-evidence test)
+      // Create a plan file with PARSEABLE task headers — a header-less plan
+      // reads as empty at the gate, which (correctly) parks immediately and
+      // would mask this test's counter-reset behavior.
       await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
       await writeFile(
         join(dir, '.docs', 'plans', 'plan.md'),
-        '# Plan\n\n- Task 1\n- Task 2\n',
+        '# Plan\n\n### Task 1: First\n\n### Task 2: Second\n',
       );
 
       // Unpark the feature
@@ -1323,7 +1332,7 @@ describe('engine/conductor', () => {
         daemon: true,
         verifyArtifacts: true,
         maxRetries: 1,
-        fromStep: 'acceptance_specs',
+        fromStep: 'build',
       });
 
       await conductor.run();
@@ -1553,7 +1562,7 @@ describe('engine/conductor', () => {
         daemon: true,
         verifyArtifacts: true,
         maxRetries: 1,
-        fromStep: 'acceptance_specs',
+        fromStep: 'build',
       });
 
       await conductor.run();
@@ -5075,8 +5084,14 @@ describe('auto-heal', () => {
     expect(task9.status).toBe('pending');
     // Fail-closed derive found nothing on any evaluation; each failure still
     // records the attempt for the dashboard (H7: one event per evaluation).
+    // (skipped counts every still-pending row — the run's sidecar exists
+    // before the first gate seed, so the unstamped completed fixture row is
+    // correctly demoted and counted too.)
     expect(healEvents.length).toBeGreaterThanOrEqual(1);
-    for (const e of healEvents) expect(e).toEqual({ healed: 0, skipped: 1 });
+    for (const e of healEvents as Array<{ healed: number; skipped: number }>) {
+      expect(e.healed).toBe(0);
+      expect(e.skipped).toBeGreaterThanOrEqual(1);
+    }
   });
 
   it('writes an audit file under .pipeline/audit-trail with healed + skipped entries', async () => {
