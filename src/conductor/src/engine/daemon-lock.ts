@@ -363,6 +363,10 @@ export async function reclaim(
 // holdLock — the running daemon's OWN lifetime lock (ADR-010 liveness).
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Module-confined production defaults for holdLock bounded-wait polling.
+const DEFAULT_TAKEOVER_WAIT_MS = 10_000;
+const DEFAULT_POLL_MS = 250;
+
 /** Handle returned to a daemon that successfully claimed (or proceeded past) the lock. */
 export interface DaemonLockHandle {
   /** The pid recorded in the pidfile (this process), or process.pid if unwritten. */
@@ -373,6 +377,20 @@ export interface DaemonLockHandle {
   release: () => Promise<void>;
   /** Sync release — unlink our pidfile (best-effort). Backstop for `process.exit`. */
   releaseSync: () => void;
+}
+
+/** Optional parameters for holdLock bounded-wait behavior. */
+export interface HoldLockOptions {
+  /**
+   * Maximum time in milliseconds to wait for a live owner to release the lock.
+   * Only used when encountering a live owner; defaults to 10 seconds.
+   */
+  takeoverWaitMs?: number;
+  /**
+   * Poll interval in milliseconds when waiting for lock availability.
+   * Only used when encountering a live owner; defaults to 250ms.
+   */
+  pollMs?: number;
 }
 
 function makeLockHandle(repoPath: string, pid: number, owned: boolean): DaemonLockHandle {
@@ -408,13 +426,25 @@ function makeLockHandle(repoPath: string, pid: number, owned: boolean): DaemonLo
  * pid — the wiring that was missing, leaving liveness unobservable.
  *
  *   - acquired (no prior pidfile)        → own the lock, return a handle.
- *   - occupied by a LIVE pid             → return null (caller must exit; 1-per-repo).
- *   - occupied by a DEAD/phantom pid     → reclaim it, return a handle.
+ *   - occupied by a LIVE pid             → poll (if options.takeoverWaitMs set) or
+ *                                           return null immediately (1-per-repo).
+ *   - occupied by a DEAD/phantom pid     → reclaim it, return a handle (immediate,
+ *                                           no wait).
  *   - reclaim lost to a concurrent daemon → return null.
  *   - acquire/reclaim ERROR (e.g. EACCES) → return an unowned handle so the daemon
  *     still builds; liveness just isn't observable (self-heals on the next claim).
+ *
+ * @param repoPath - Absolute path to the repository root.
+ * @param options  - Optional: { takeoverWaitMs?: number, pollMs?: number }.
+ *                   When set, on live-owner occupancy, poll acquire() every pollMs
+ *                   until takeoverWaitMs elapses. Returns a handle if acquired
+ *                   during the wait, null if the wait expires with owner still live.
+ *                   Dead-pid reclaim is unaffected (immediate, no wait).
  */
-export async function holdLock(repoPath: string): Promise<DaemonLockHandle | null> {
+export async function holdLock(
+  repoPath: string,
+  options?: HoldLockOptions,
+): Promise<DaemonLockHandle | null> {
   const result = await acquire(repoPath);
   if (result.acquired) {
     return makeLockHandle(repoPath, result.pid, true);
@@ -422,9 +452,37 @@ export async function holdLock(repoPath: string): Promise<DaemonLockHandle | nul
   if (result.reason === 'occupied') {
     const owner = result.owner;
     if (owner.pid > 0 && isLive(owner.pid)) {
-      return null; // a live daemon already owns the lock — 1-per-repo
+      // A live daemon owns the lock.
+      // If options.takeoverWaitMs is set, poll for the lock to become available.
+      if (options?.takeoverWaitMs !== undefined) {
+        const takeoverWaitMs = options.takeoverWaitMs ?? DEFAULT_TAKEOVER_WAIT_MS;
+        const pollMs = options.pollMs ?? DEFAULT_POLL_MS;
+
+        const startTime = Date.now();
+        while (Date.now() - startTime < takeoverWaitMs) {
+          // Wait for the next poll interval.
+          await new Promise((resolve) => setTimeout(resolve, pollMs));
+
+          // Try to acquire the lock.
+          const pollResult = await acquire(repoPath);
+          if (pollResult.acquired) {
+            return makeLockHandle(repoPath, pollResult.pid, true);
+          }
+          // If the result is occupied but by a dead pid, the loop will
+          // continue polling until the timeout, then fall through to the
+          // normal dead-pid reclaim path below.
+          if (pollResult.reason === 'occupied' && pollResult.owner.pid > 0) {
+            if (!isLive(pollResult.owner.pid)) {
+              // Owner is now dead — exit polling and let the normal stale path handle it.
+              break;
+            }
+          }
+        }
+      }
+      // Bounded-wait expired or no wait requested — return null (1-per-repo).
+      return null;
     }
-    // Stale (dead or phantom) → reclaim.
+    // Stale (dead or phantom) → reclaim (immediate, no wait).
     const r = await reclaim(repoPath, defaultKill);
     if (r.reclaimed) {
       return makeLockHandle(repoPath, r.pid, true);
