@@ -592,7 +592,7 @@ describe('engine/daemon — runDaemon', () => {
   describe('stale-engine restart request + in-flight re-verify (Task 13)', () => {
     it('happy path: stale verdict + all gates pass + empty inFlight → requestRestart called once with both identities', async () => {
       const { vi } = await import('vitest');
-      const requestRestart = vi.fn(async () => {});
+      const requestRestart = vi.fn(async () => ({ fired: true }));
 
       const deps: DaemonDeps = {
         discoverBacklog: staticBacklog([]),
@@ -621,9 +621,38 @@ describe('engine/daemon — runDaemon', () => {
       });
     });
 
+    it('permanently-stale checker + requestRestart returns { fired: true } (process fake) → exactly 1 invocation, loop stops with stopReason "engine_restart"', async () => {
+      const requestRestart = vi.fn(async () => ({ fired: true }));
+
+      const deps: DaemonDeps = {
+        discoverBacklog: staticBacklog([]),
+        runFeature: async (it) => ({ slug: it.slug, status: 'done' }),
+        staleEngineChecker: {
+          check: () => 'stale', // Always stale
+          capturedIdentity: () => 'captured-v1-hash',
+          targetIdentity: () => 'current-v2-hash',
+        },
+        sleep: async () => {}, // No-op sleep
+        requestRestart,
+      };
+
+      const res = await runDaemon(deps, {
+        concurrency: 1,
+        once: false,
+        isSelfHost: true,
+        autoRestartOnStaleEngine: true,
+        maxIdlePolls: 10, // Multiple idle polls to verify one-shot behavior
+      });
+
+      // Core assertions for one-shot behavior:
+      expect(requestRestart).toHaveBeenCalledTimes(1); // Fire exactly once
+      expect(res.stoppedReason).toBe('engine_restart'); // Exit with engine_restart reason
+      expect(res.processed).toHaveLength(0); // No features dispatched
+    });
+
     it('negative: in-flight re-verify prevents call when inFlight becomes non-empty', async () => {
       const { vi } = await import('vitest');
-      const requestRestart = vi.fn(async () => {});
+      const requestRestart = vi.fn(async () => ({ fired: false }));
 
       // This test simulates the scenario where:
       // 1. First idle poll: backlog is empty, stale check runs and returns 'stale'
@@ -676,7 +705,7 @@ describe('engine/daemon — runDaemon', () => {
   describe('stale-engine rebuild + restart at the dispatch boundary', () => {
     it('stale after rebuild: rebuilds, requests restart with identities, and does NOT dispatch the pending feature', async () => {
       const rebuildEngine = vi.fn(async () => {});
-      const requestRestart = vi.fn(async () => {});
+      const requestRestart = vi.fn(async () => ({ fired: true }));
       const runFeature = vi.fn(async (it: BacklogItem) => ({ slug: it.slug, status: 'done' as const }));
       const deps: DaemonDeps = {
         discoverBacklog: staticBacklog(items(2)), // non-empty → dispatch branch, never idles
@@ -705,7 +734,7 @@ describe('engine/daemon — runDaemon', () => {
 
     it('current after rebuild: rebuilds before each dispatch, dispatches every feature, never restarts', async () => {
       const rebuildEngine = vi.fn(async () => {});
-      const requestRestart = vi.fn(async () => {});
+      const requestRestart = vi.fn(async () => ({ fired: true }));
       const runFeature = vi.fn(async (it: BacklogItem) => ({ slug: it.slug, status: 'done' as const }));
       const deps: DaemonDeps = {
         discoverBacklog: staticBacklog(items(2)),
@@ -733,7 +762,7 @@ describe('engine/daemon — runDaemon', () => {
       const rebuildEngine = vi.fn(async () => {
         throw new Error('tsup boom');
       });
-      const requestRestart = vi.fn(async () => {});
+      const requestRestart = vi.fn(async () => ({ fired: true }));
       const runFeature = vi.fn(async (it: BacklogItem) => ({ slug: it.slug, status: 'done' as const }));
       const deps: DaemonDeps = {
         discoverBacklog: staticBacklog(items(1)),
@@ -780,7 +809,7 @@ describe('engine/daemon — runDaemon', () => {
 
     it('suppressed identity: stale after rebuild but suppressed → no restart, feature dispatches', async () => {
       const rebuildEngine = vi.fn(async () => {});
-      const requestRestart = vi.fn(async () => {});
+      const requestRestart = vi.fn(async () => ({ fired: true }));
       const runFeature = vi.fn(async (it: BacklogItem) => ({ slug: it.slug, status: 'done' as const }));
       const deps: DaemonDeps = {
         discoverBacklog: staticBacklog(items(1)),
