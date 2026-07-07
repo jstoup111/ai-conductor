@@ -69,6 +69,8 @@ export const STEP_ARTIFACT_GLOBS: Record<StepName, string[]> = {
     '*.spec.tsx',
   ],
   build: ['.pipeline/task-status.json'],
+  // stub — Task 2 wires the real judgement-gate artifact glob.
+  build_review: [],
   // Run evidence (gitignored, stable filename, overwritten each run) — NOT
   // committed. These are regenerated every run; tracking them caused date-stamp
   // sprawl, rebase/merge conflicts, and dirty-tree HALTs at the finish-time
@@ -423,6 +425,90 @@ export function validateAcceptanceRedEvidence(
     };
   }
   return { ok: true };
+}
+
+/**
+ * Path to the build_review judgement gate's verdict artifact. Written by the
+ * grader dispatched between `build` and `manual_test`; read back by the
+ * completion predicate (Task 8) to decide PASS (advance) vs FAIL (kickback to
+ * `build`). Gitignored run evidence, not a committed design artifact.
+ */
+export const BUILD_REVIEW_VERDICT = '.pipeline/build-review-verdict.json';
+
+/**
+ * Which rubric category the grader flagged, when the verdict is FAIL. All
+ * fields optional — a grader may flag one, several, or (rarely) none of the
+ * categories while still returning FAIL with free-form `reasons`.
+ */
+export interface BuildReviewRubric {
+  /** Test asserts against its own implementation rather than real behavior. */
+  tautology?: boolean;
+  /** Change reaches outside the task's declared scope. */
+  scope?: boolean;
+  /** Fix addresses a symptom rather than the underlying root cause. */
+  rootCause?: boolean;
+}
+
+export interface BuildReviewVerdict {
+  verdict: 'PASS' | 'FAIL';
+  /** Free-form explanations; required in practice for FAIL, but not enforced
+   * here — an empty/absent reasons array on FAIL still parses (fail-closed
+   * validation only guards the shape needed to route PASS vs FAIL safely). */
+  reasons?: string[];
+  rubric: BuildReviewRubric;
+}
+
+/**
+ * Validate a parsed build_review verdict object. Fail-closed: only the exact
+ * string 'PASS' is treated as passing. Anything else recognizable as FAIL
+ * (the exact string 'FAIL') is a valid parse whose reasons/rubric are
+ * preserved for the kickback message; anything unrecognized (malformed JSON,
+ * missing required fields, or a string other than 'PASS'/'FAIL' such as
+ * 'pass', 'APPROVED', or '') is invalid — the caller must treat an invalid
+ * parse as FAIL, never as PASS. Missing-file handling is the completion
+ * predicate's job (Task 8), not this validator's.
+ */
+export function validateBuildReviewVerdict(
+  ev: unknown,
+):
+  | { ok: true; verdict: 'PASS' | 'FAIL'; reasons?: string[]; rubric: BuildReviewRubric }
+  | { ok: false; reason: string } {
+  if (typeof ev !== 'object' || ev === null) {
+    return { ok: false, reason: `${BUILD_REVIEW_VERDICT} is not a JSON object` };
+  }
+  const e = ev as Record<string, unknown>;
+  if (e.verdict !== 'PASS' && e.verdict !== 'FAIL') {
+    return {
+      ok: false,
+      reason: `${BUILD_REVIEW_VERDICT} "verdict" must be exactly 'PASS' or 'FAIL' (got ${JSON.stringify(e.verdict)})`,
+    };
+  }
+  if (typeof e.rubric !== 'object' || e.rubric === null || Array.isArray(e.rubric)) {
+    return {
+      ok: false,
+      reason: `${BUILD_REVIEW_VERDICT} must include a "rubric" object`,
+    };
+  }
+  const rubricSrc = e.rubric as Record<string, unknown>;
+  const rubric: BuildReviewRubric = {};
+  if (typeof rubricSrc.tautology === 'boolean') rubric.tautology = rubricSrc.tautology;
+  if (typeof rubricSrc.scope === 'boolean') rubric.scope = rubricSrc.scope;
+  if (typeof rubricSrc.rootCause === 'boolean') rubric.rootCause = rubricSrc.rootCause;
+
+  const result: {
+    ok: true;
+    verdict: 'PASS' | 'FAIL';
+    reasons?: string[];
+    rubric: BuildReviewRubric;
+  } = {
+    ok: true,
+    verdict: e.verdict,
+    rubric,
+  };
+  if (Array.isArray(e.reasons)) {
+    result.reasons = e.reasons as string[];
+  }
+  return result;
 }
 
 export const CUSTOM_COMPLETION_PREDICATES: Partial<

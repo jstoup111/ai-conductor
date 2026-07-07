@@ -14,6 +14,7 @@ import {
   FINISH_CHOICE_MARKER,
   HALT_MARKER,
   planStem,
+  validateBuildReviewVerdict,
 } from '../../src/engine/artifacts.js';
 
 describe('engine/artifacts', () => {
@@ -1033,6 +1034,80 @@ describe('engine/artifacts', () => {
 
       expect(removed).toHaveLength(0);
       expect(await findArtifactFiles(dir, 'manual_test')).toHaveLength(1);
+    });
+  });
+
+  describe('validateBuildReviewVerdict', () => {
+    it('accepts a valid PASS verdict', () => {
+      const result = validateBuildReviewVerdict({
+        verdict: 'PASS',
+        rubric: { tautology: false, scope: false, rootCause: false },
+      });
+      expect(result).toEqual({
+        ok: true,
+        verdict: 'PASS',
+        rubric: { tautology: false, scope: false, rootCause: false },
+      });
+    });
+
+    it('rejects malformed JSON (non-object) as invalid-or-FAIL', () => {
+      const result = validateBuildReviewVerdict('not an object');
+      expect(result.ok).toBe(false);
+    });
+
+    it('rejects null as invalid-or-FAIL', () => {
+      const result = validateBuildReviewVerdict(null);
+      expect(result.ok).toBe(false);
+    });
+
+    it('rejects a verdict missing the "verdict" field as invalid-or-FAIL', () => {
+      const result = validateBuildReviewVerdict({
+        rubric: { tautology: false },
+      });
+      expect(result.ok).toBe(false);
+    });
+
+    it('rejects a verdict missing the "rubric" field as invalid-or-FAIL', () => {
+      const result = validateBuildReviewVerdict({ verdict: 'PASS' });
+      expect(result.ok).toBe(false);
+    });
+
+    it('accepts a FAIL verdict with reasons and preserves them', () => {
+      const result = validateBuildReviewVerdict({
+        verdict: 'FAIL',
+        reasons: ['tautological assertion in test', 'scope creep beyond acceptance criteria'],
+        rubric: { tautology: true, scope: true, rootCause: false },
+      });
+      expect(result).toEqual({
+        ok: true,
+        verdict: 'FAIL',
+        reasons: ['tautological assertion in test', 'scope creep beyond acceptance criteria'],
+        rubric: { tautology: true, scope: true, rootCause: false },
+      });
+    });
+
+    it('rejects lowercase "pass" as invalid-or-FAIL (fail-closed, exact match only)', () => {
+      const result = validateBuildReviewVerdict({
+        verdict: 'pass',
+        rubric: {},
+      });
+      expect(result.ok).toBe(false);
+    });
+
+    it('rejects unrecognized string "APPROVED" as invalid-or-FAIL', () => {
+      const result = validateBuildReviewVerdict({
+        verdict: 'APPROVED',
+        rubric: {},
+      });
+      expect(result.ok).toBe(false);
+    });
+
+    it('rejects an empty string verdict as invalid-or-FAIL', () => {
+      const result = validateBuildReviewVerdict({
+        verdict: '',
+        rubric: {},
+      });
+      expect(result.ok).toBe(false);
     });
   });
 });
