@@ -43,3 +43,7 @@ jobs:
           npx vitest run --shard=3/4 --logHeapUsage
           npx vitest run --shard=4/4 --logHeapUsage
         working-directory: src/conductor
+        env:
+          # Headroom over V8's ~4GB default for the one CI-only balloon file
+          # (shard baseline is ~50MB/file, so a single spike has the space).
+          NODE_OPTIONS: --max-old-space-size=5632
