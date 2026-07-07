@@ -919,6 +919,7 @@ export async function runDaemon(
                     }
                     // If fired: false, fall through to continue idle polling and retry
                   }
+                }
               }
               // If inFlight not empty, someone added a task while we checked.
               // Fall through to next iteration; will not enter idle branch again.
