@@ -760,7 +760,15 @@ export async function applyRebaseVerdicts(
       ? ` (+${outcome.changedCodePaths.length - 5} more)`
       : '');
   const kickedBack: StepName[] = [];
-  const targets: StepName[] = ranManualTest ? ['build', 'manual_test'] : ['build'];
+  // build_review sits between build and manual_test — a build change must
+  // invalidate it too (it grades the diff that just changed), or the
+  // selector could jump straight to manual_test on a stale build_review
+  // verdict. Included unconditionally: even if build_review is disabled
+  // for this project the verdict file is inert, but when it IS enabled the
+  // stale state must exist before manual_test is re-selectable.
+  const targets: StepName[] = ranManualTest
+    ? ['build', 'build_review', 'manual_test']
+    : ['build', 'build_review'];
   for (const target of targets) {
     await writeVerdict(projectRoot, target, {
       satisfied: false,

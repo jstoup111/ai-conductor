@@ -2448,12 +2448,16 @@ export class Conductor {
         await this.events.emit({ type: 'loop_halt', reason });
         return 'halt';
       }
-      // FR-5: a file-changing rebase invalidated build (+manual_test) via
-      // kickback-shaped verdicts. Those gates aren't `kickbackTarget` steps, so
-      // emit the kickback event(s) here; the selector below routes back to them.
+      // FR-5: a file-changing rebase invalidated build (+build_review,
+      // +manual_test) via kickback-shaped verdicts. Those gates aren't
+      // `kickbackTarget` steps, so emit the kickback event(s) here; the
+      // selector below routes back to them. build_review sits between build
+      // and manual_test in the tail (Task 18) — it grades the diff that the
+      // rebase just changed, so it must re-verify before manual_test is
+      // selectable again, same as build and manual_test.
       if (this.lastRebaseOutcome?.kind === 'changed') {
         const verdicts = await readAllVerdicts(this.projectRoot);
-        for (const target of ['build', 'manual_test'] as StepName[]) {
+        for (const target of ['build', 'build_review', 'manual_test'] as StepName[]) {
           const v = verdicts[target];
           if (v && v.satisfied === false && v.kickback?.from === 'rebase') {
             await this.events.emit({

@@ -170,6 +170,18 @@ describe('integration/rebase-loop', () => {
         join(dir, '.pipeline/task-status.json'),
         JSON.stringify({ tasks: [{ id: 't1', status: 'completed' }] }),
       );
+    } else if (step === 'build_review') {
+      // The build_review judgement gate's completion predicate requires a
+      // fresh, valid PASS verdict at .pipeline/build-review.json (see
+      // artifacts.ts BUILD_REVIEW_VERDICT), same fixture as gate-loop.test.ts.
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline/build-review.json'),
+        JSON.stringify({
+          verdict: 'PASS',
+          rubric: { tautology: false, scope: false, rootCause: false },
+        }),
+      );
     } else if (step === 'manual_test') {
       await writeFile(
         join(dir, '.pipeline/manual-test-results.md'),
@@ -276,14 +288,14 @@ describe('integration/rebase-loop', () => {
   });
 
   it(
-    'a file-changing rebase kickback stales build_review too, not just build/manual_test ' +
-      '(TS-5 negative 4, jstoup111/ai-conductor#324)',
+    'a file-changing rebase kickback re-verifies build_review too, not just build/manual_test ' +
+      '(TS-5 negative 4, jstoup111/ai-conductor#324, Task 18)',
     async () => {
-      // `build_review` does not exist yet (no StepName, no config resolver,
-      // no rebase-reverify wiring) — this pins the FUTURE re-verify target
-      // set `{build, build_review, manual_test}` per the ADR amendment.
-      // Pre-implementation, `build_review` is never a state key, so it can
-      // never read 'stale' — this fails on the assertion, not on setup.
+      // The re-verify target set for a code-changing rebase kickback must be
+      // {build, build_review, manual_test}: build_review grades the diff
+      // that the rebase just changed, so it must be invalidated and re-run
+      // alongside build and manual_test — the selector must never be able to
+      // pick manual_test on a stale build_review verdict.
       await initRepoOnFeatureBranch({
         path: 'src/feature.ts',
         content: 'export const foo = 1;\n',
@@ -301,8 +313,12 @@ describe('integration/rebase-loop', () => {
           ? { stdout: 'refs/remotes/origin/feature/x\n' }
           : { stdout: '' };
       const config = { build_review: { enabled: true } };
+      let buildReviewRuns = 0;
       const runner: StepRunner = {
-        run: async (step) => satisfy(step),
+        run: async (step) => {
+          if (step === 'build_review') buildReviewRuns++;
+          return satisfy(step);
+        },
       };
       const conductor = new Conductor({
         stateFilePath: statePath,
@@ -318,14 +334,23 @@ describe('integration/rebase-loop', () => {
         config,
       });
 
+      let completed = false;
+      const kicks: Array<{ from: string; to: string }> = [];
+      events.on('feature_complete', () => {
+        completed = true;
+      });
+      events.on('kickback', (e) => {
+        if (e.type === 'kickback') kicks.push({ from: e.from, to: e.to });
+      });
+
       await conductor.run();
 
-      const finalState = JSON.parse(await readFile(statePath, 'utf-8'));
-      // The re-verify target set for a code-changing rebase kickback must be
-      // {build, build_review, manual_test} — build_review is staled
-      // alongside the other two so it must re-pass before manual_test is
-      // selectable again.
-      expect(finalState.build_review).toBe('stale');
+      // build_review ran once before the rebase and a second time as part of
+      // the rebase re-verify — the selector never jumped straight from build
+      // to manual_test on a stale build_review verdict.
+      expect(buildReviewRuns).toBe(2);
+      expect(kicks).toContainEqual({ from: 'rebase', to: 'build_review' });
+      expect(completed).toBe(true);
     },
   );
 
