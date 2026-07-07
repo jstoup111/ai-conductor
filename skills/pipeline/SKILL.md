@@ -59,12 +59,14 @@ DEPENDENCY ORDER — Dispatch tasks in topological order respecting declared dep
 0. UPDATE STATUS — Conductor marks task "in_progress" in .pipeline/task-status.json
 1. DECOMPOSE    — Read task, identify files to touch, check dependencies met
 2. DISPATCH     — Send task to a TDD subagent via Agent tool with model="sonnet" (scoped context only)
-                  Dispatch template injects Task: <id> in the prompt — subagent includes it as a trailer
-                  in all commits (including refactors). Subagent runs full TDD cycle: RED → DOMAIN → GREEN → DOMAIN → COMMIT
+                  Dispatch template injects Task: <id> in the prompt — <id> is the bare PLAN header id (e.g. 9, not task-9).
+                  Subagent includes it as a trailer in all commits (including refactors); subagent amends before PASS
+                  if the trailer is malformed. Subagent runs full TDD cycle: RED → DOMAIN → GREEN → DOMAIN → COMMIT
 3. VERIFY       — Run the scoped affected-test set (see Scoped VERIFY below) to confirm the subagent's work
 4. FIX          — If tests fail, VERIFY failure first (see below), then dispatch subagent with error context
-5. COMMIT       — Ensure the subagent's commit carries the `Task: <id>` trailer (the engine
-                  derives completion from it; the orchestrator never writes `completed` itself)
+5. COMMIT       — Verify the subagent's commit carries the `Task: <id>` trailer with <id> as the bare plan id
+                  (e.g. Task: 9, not Task: task-9). The engine derives completion from this trailer; the orchestrator
+                  never writes `completed` itself. If the trailer uses task-N format, report FAIL and dispatch for fix
 6. REPORT       — Return PASS or FAIL with reason to the conductor
 ```
 
@@ -418,9 +420,9 @@ Append to `.pipeline/progress.log` at every batch boundary — a chronological n
 
 ```
 ## Batch 1 — 2026-03-28 14:30
-- Completed: task-1 (User model), task-2 (registration endpoint) | Rework: 0 cycles
+- Completed: 1 (User model), 2 (registration endpoint) | Rework: 0 cycles
 - Issue: PostgreSQL JSONB casting needed explicit type (wrote .memory/gotchas/)
-- Next: task-3 (authentication) | State: 2/13 tasks, all tests passing, merge-ready
+- Next: 3 (authentication) | State: 2/13 tasks, all tests passing, merge-ready
 ```
 
 ### Git Revert Recovery
