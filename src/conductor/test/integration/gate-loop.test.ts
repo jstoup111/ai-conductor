@@ -1232,5 +1232,108 @@ describe('integration/gate-loop', () => {
       expect(kicks.filter((k) => k.from === 'manual_test')).toHaveLength(1);
       expect(halted).toBe(false);
     });
+
+    it('a simulated conductor restart mid-cycle does not unbound the loop (Task 17)', async () => {
+      // kickbackCounts (line ~998) and stuckGate are local Maps created fresh
+      // inside Conductor#run — there is no persistence layer for them. A real
+      // process restart (new Conductor instance from the same on-disk state)
+      // therefore starts both counters back at zero. This test pins that
+      // behavior: it drives one Conductor instance ("session A") to its
+      // MAX_KICKBACKS_PER_GATE HALT, then simulates an operator restart by
+      // clearing the HALT marker and constructing a brand-new Conductor
+      // ("session B") against the same state/dir with a runner that keeps
+      // failing build_review forever. Because the backstop is re-armed per
+      // session (not cumulative across restarts), session B independently
+      // HALTs again after exactly MAX_KICKBACKS_PER_GATE more kickbacks — the
+      // combined run across both sessions never exceeds a small, bounded
+      // number of dispatches, i.e. no unbounded loop survives a restart.
+      await writeState(statePath, { ...FRONT_DONE });
+      let buildRuns = 0;
+      const alwaysFailReviewRunner: StepRunner = {
+        run: async (step) => {
+          if (step === 'build') {
+            buildRuns++;
+            return satisfy('build');
+          }
+          if (step === 'build_review') {
+            await writeFile(
+              join(dir, '.pipeline/build-review.json'),
+              JSON.stringify({
+                verdict: 'FAIL',
+                reasons: [`always fails (attempt ${buildRuns})`],
+                rubric: { tautology: true, scope: false, rootCause: false },
+              }),
+            );
+            return { success: true };
+          }
+          return satisfy(step);
+        },
+      };
+      const config = { build_review: { enabled: true } };
+
+      const kicksA: Array<{ from: string; to: string }> = [];
+      const eventsA = new ConductorEventEmitter();
+      eventsA.on('kickback', (e) => {
+        if (e.type === 'kickback') kicksA.push({ from: e.from, to: e.to });
+      });
+      let haltedA = false;
+      eventsA.on('loop_halt', () => {
+        haltedA = true;
+      });
+      const conductorA = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: alwaysFailReviewRunner,
+        events: eventsA,
+        projectRoot: dir,
+        verifyArtifacts: true,
+        mode: 'auto',
+        daemon: true,
+        fromStep: 'build',
+        maxRetries: 1,
+        config,
+      });
+      await conductorA.run();
+
+      expect(kicksA.filter((k) => k.from === 'build_review')).toHaveLength(2);
+      expect(haltedA).toBe(true);
+      await expect(access(join(dir, '.pipeline/HALT'))).resolves.toBeUndefined();
+
+      // Simulate the restart: clear the HALT marker (an operator re-queuing
+      // the feature would do this) and stand up a *new* Conductor instance —
+      // a fresh process would allocate fresh kickbackCounts/stuckGate Maps,
+      // which this new instance mirrors exactly.
+      await rm(join(dir, '.pipeline/HALT'), { force: true });
+
+      const kicksB: Array<{ from: string; to: string }> = [];
+      const eventsB = new ConductorEventEmitter();
+      eventsB.on('kickback', (e) => {
+        if (e.type === 'kickback') kicksB.push({ from: e.from, to: e.to });
+      });
+      let haltedB = false;
+      eventsB.on('loop_halt', () => {
+        haltedB = true;
+      });
+      const conductorB = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: alwaysFailReviewRunner,
+        events: eventsB,
+        projectRoot: dir,
+        verifyArtifacts: true,
+        mode: 'auto',
+        daemon: true,
+        fromStep: 'build',
+        maxRetries: 1,
+        config,
+      });
+      await conductorB.run();
+
+      // Session B's counters started over at zero (no persistence survived
+      // the restart) yet still HALT after its own MAX_KICKBACKS_PER_GATE cap
+      // — proving the backstop, not accumulated history, is what terminates
+      // the loop, so no restart can produce an unbounded kickback loop.
+      expect(kicksB.filter((k) => k.from === 'build_review')).toHaveLength(2);
+      expect(haltedB).toBe(true);
+      await expect(access(join(dir, '.pipeline/HALT'))).resolves.toBeUndefined();
+    });
   });
 });
