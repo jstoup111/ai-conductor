@@ -582,6 +582,24 @@ that need no setup (a static site, a pure library) simply ship no `bin/setup` an
 untouched. This is what lets one daemon serve **any** project setup, including consumer
 projects that use the harness.
 
+#### Daemon mode: false-ship guard (#337)
+
+When running in daemon mode, the engine enforces additional constraints at the finish and done-outcome boundaries to prevent recording false ships (issues #337):
+
+**1. Finish gate push-evidence check** — For PR-choice ships, the finish predicate verifies `HEAD` is an ancestor of `refs/remotes/origin/<branch>` before recording the PR URL. If push evidence is missing or indeterminate, convergence halts.
+
+**2. Daemon finish non-convergence** — Daemon mode rejects `keep`, `merge-local`, and `discard` finish choices (operator decisions) and only proceeds with autonomous `pr` choices.
+
+**3. Done-outcome verification** — A done-outcome is eligible for ship only if `finishChoice === 'pr'` AND `prUrl != null`. Ineligible outcomes (false ships) trigger:
+   - Delete any `.pipeline/DONE` marker (conflict resolution: DONE and HALT stay disjoint)
+   - Write `.pipeline/HALT` with the contradiction reason
+   - Keep the worktree for operator inspection and remediation
+   - Best-effort escalation: push the branch and create a draft "needs-remediation" PR
+
+**4. Escalation degradation (FR-7)** — If the escalation push fails (network, auth), the HALT is still written and the worktree still kept; surfacing degrades but protection does not.
+
+**Implementation:** `engine/done-outcome-validation.ts` (`validateDoneOutcome`), wired into the daemon runner (`daemon-runner.ts`) at the point where a feature reaches the `done` state, before any shipped-record write or worktree cleanup. The validation runs independently of the existing PR-labeling mechanism (`needs-remediation` is still written when applicable for debugging, but does not interfere with the core validation). See `.docs/decisions/adr-2026-07-06-daemon-false-ship-guard.md` for design details and requirements.
+
 #### PR labeling (`needs-remediation` + `mergeable`, daemon-only)
 
 Two GitHub labels give a human operator an at-a-glance signal on the daemon's PRs without
