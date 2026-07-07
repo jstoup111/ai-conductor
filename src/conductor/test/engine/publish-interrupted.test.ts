@@ -169,14 +169,10 @@ async function exists(path: string): Promise<boolean> {
 }
 
 describe('bin/setup worktree compatibility', () => {
-  // SKIPPED pending #334. `bin/setup` landed (PR #269) and un-skipped this smoke,
-  // but the landed script resolves its target from its own location ($0/..), so
-  // running the primary's `bin/setup` from a worktree rebuilds the PRIMARY and
-  // never creates the worktree's `dist` → ENOENT here. That is a real bin/setup
-  // vs. worktree-prep contract gap, tracked in #334; re-enable (`it`) as the
-  // acceptance criterion of its fix. Skipped so this suite is honestly green in
-  // CI rather than red on a pre-existing, unrelated defect.
-  it.skip('creates a worktree-local dist/ symlink without touching the primary checkout', async (ctx) => {
+  it(
+    'creates a worktree-local dist/ symlink without touching the primary checkout',
+    { timeout: 600_000 },
+    async (ctx) => {
     if (!(await exists(BIN_SETUP))) {
       ctx.skip();
       return;
@@ -213,5 +209,6 @@ describe('bin/setup worktree compatibility', () => {
       await execa('git', ['branch', '-D', branchName], { cwd: REPO_ROOT }).catch(() => {});
       await rm(worktreeDir, { recursive: true, force: true });
     }
-  });
+    },
+  );
 });
