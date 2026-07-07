@@ -1,7 +1,9 @@
 import { execa } from 'execa';
 import type { LLMProvider, InvokeOptions, InvokeResult, TokenUsage } from './llm-provider.js';
 
-const RATE_LIMIT_RE = /rate limit|429|overloaded|usage limit/i;
+// Task 17: Extended to include session-limit family (observed 2026-07-03 incident)
+// Patterns: "rate limit", "429", "overloaded", "usage limit", "session limit" (any variant)
+const RATE_LIMIT_RE = /rate limit|429|overloaded|usage limit|session limit/i;
 const STALE_SESSION_RE = /No conversation found/i;
 // A session-id lock ("already in use" / "session is in use by another
 // process"). Recovers the same way as a stale session — reset to a fresh

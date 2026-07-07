@@ -22,6 +22,7 @@ import type {
   RecoveryOption,
   RecoveryContext,
 } from '../types/index.js';
+import type { RateLimitEpisode } from './rate-limit-episode.js';
 import type { ParallelBranch } from '../types/config.js';
 import { evaluateWhen } from './when-expression.js';
 import type { HarnessConfig } from '../types/config.js';
@@ -353,6 +354,13 @@ export interface ConductorOptions {
    * in the finish gate (daemon false-ship guard).
    */
   git?: GitRunner;
+  /**
+   * Optional rate-limit episode coordinator (Task 10). When provided and active,
+   * enables coordinated episode-aware backoff during rate-limit waits, allowing
+   * SIGTERM handling and deadline-coordinated redrives. If undefined, rate-limit
+   * handling falls back to bare sleep (existing behavior).
+   */
+  rateLimitEpisode?: RateLimitEpisode;
 }
 
 /**
@@ -484,6 +492,13 @@ export class Conductor {
   private lastRebaseOutcome: RebaseOutcome | null = null;
 
   /**
+   * Optional rate-limit episode coordinator (Task 10). When active, coordinates
+   * deadline-aware backoff during rate-limit waits. May be undefined (graceful
+   * fallback to bare sleep).
+   */
+  private rateLimitEpisode: RateLimitEpisode | undefined;
+
+  /**
    * The CompletionContext handed to every gate evaluation. `getHeadSha` feeds
    * the manual_test whitewash guard (#367); it resolves the worktree's real
    * HEAD and returns null (never throws) when there is no usable repo, which
@@ -542,6 +557,7 @@ export class Conductor {
     this.escalateBuildFailure = opts.escalateBuildFailure ?? defaultEscalateBuildFailure;
     this.gh = opts.gh ?? makeProductionGh();
     this.git = opts.git ?? makeProductionGit();
+    this.rateLimitEpisode = opts.rateLimitEpisode;
   }
 
   /**
@@ -1202,10 +1218,29 @@ export class Conductor {
 
           // Rate limit: wait deterministically, then retry WITHOUT burning the
           // retry budget (matches bin/conduct:2248–2280 handle_rate_limit).
+          // Task 10: Integrate episode coordinator for deadline-aware backoff.
           if (result.rateLimited) {
             const waitSeconds = result.waitSeconds ?? 300;
             await this.events.emit({ type: 'rate_limit', waitSeconds });
-            await this.sleep(waitSeconds * 1000);
+
+            // Enter episode with deadline for coordinated backoff
+            const waitMs = waitSeconds * 1000;
+            const deadline = Date.now() + waitMs;
+            if (this.rateLimitEpisode) {
+              this.rateLimitEpisode.enter(deadline);
+            }
+
+            // Create AbortSignal for future SIGTERM handling (Task 11 will use this)
+            const controller = new AbortController();
+
+            // Await episode.clear() or fallback to sleep if episode undefined
+            if (this.rateLimitEpisode && this.rateLimitEpisode.clear) {
+              await this.rateLimitEpisode.clear(controller.signal);
+            } else {
+              await this.sleep(waitMs);
+            }
+
+            // Continue retry loop without burning budget
             attempt--;
             continue;
           }

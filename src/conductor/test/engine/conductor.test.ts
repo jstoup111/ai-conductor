@@ -3217,8 +3217,7 @@ describe('engine/conductor', () => {
         maxRetries: 2,
         sleepFn,
         onRecovery: vi.fn().mockResolvedValue('quit' as const),
-        // Would pass daemonDeps with episode here when implemented
-        // For now, this test documents the expected integration
+        rateLimitEpisode: mockEpisode,
       });
 
       await conductor.run();
