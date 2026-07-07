@@ -65,6 +65,7 @@ describe('engine/selector — selectNextGate', () => {
   it('returns done when every gate in the region is satisfied', () => {
     const verdicts: Partial<Record<StepName, GateVerdict>> = {
       build: VSAT,
+      build_review: VSAT,
       manual_test: VSAT,
       prd_audit: VSAT,
       architecture_review_as_built: VSAT,
@@ -79,6 +80,7 @@ describe('engine/selector — selectNextGate', () => {
   it('blocks at prd_audit when its verdict is unsatisfied (does not reach finish)', () => {
     const verdicts: Partial<Record<StepName, GateVerdict>> = {
       build: VSAT,
+      build_review: VSAT,
       manual_test: VSAT,
       prd_audit: { satisfied: false, checkedAt: 2, reason: 'FR-3 MISSING' },
       architecture_review_as_built: VSAT,
@@ -94,6 +96,7 @@ describe('engine/selector — selectNextGate', () => {
     const state: ConductState = { ...frontDone(), complexity_tier: 'S' };
     const verdicts: Partial<Record<StepName, GateVerdict>> = {
       build: VSAT,
+      build_review: VSAT,
       manual_test: VSAT,
       prd_audit: VSAT,
       architecture_review_as_built: VSAT,
@@ -108,6 +111,7 @@ describe('engine/selector — selectNextGate', () => {
     const state: ConductState = {
       ...frontDone(),
       build: 'skipped',
+      build_review: 'skipped',
       manual_test: 'skipped',
       retro: 'skipped',
     };
@@ -132,6 +136,7 @@ describe('engine/selector — selectNextGate', () => {
     };
     const verdicts: Partial<Record<StepName, GateVerdict>> = {
       build: VSAT,
+      build_review: VSAT,
       manual_test: VSAT,
       prd_audit: VSAT,
       rebase: VSAT,
@@ -152,6 +157,7 @@ describe('engine/selector — selectNextGate', () => {
     };
     const verdicts: Partial<Record<StepName, GateVerdict>> = {
       build: VSAT,
+      build_review: VSAT,
       manual_test: VSAT,
       prd_audit: VSAT,
       retro: VSAT,
@@ -170,6 +176,7 @@ describe('engine/selector — selectNextGate', () => {
     };
     const verdicts: Partial<Record<StepName, GateVerdict>> = {
       build: VSAT,
+      build_review: VSAT,
       manual_test: VSAT,
       prd_audit: VSAT,
       // as-built pending, review ran → as-built must run
