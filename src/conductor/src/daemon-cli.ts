@@ -205,6 +205,12 @@ export interface DaemonModeOptions {
    * the daemon relies on polling alone.
    */
   watch?: boolean;
+  /**
+   * Task 14: Injectable exit seam for lock-loser explicit exit (default: process.exit).
+   * Called with exit code when another daemon holds the lock.
+   * Tests inject a fake to verify the exit call is made.
+   */
+  exitProcess?: (code: number) => void;
 }
 
 // Front-half steps the daemon treats as already done — the human authored the
