@@ -1683,7 +1683,7 @@ describe('engine/daemon — runDaemon', () => {
 
     it('stale-engine verdict while episode active: NO requestRestart', async () => {
       const { vi } = await import('vitest');
-      const requestRestart = vi.fn(async () => {});
+      const requestRestart = vi.fn(async () => ({ fired: true }));
       let episodeActive = true;
       let pollCount = 0;
 
@@ -1809,7 +1809,7 @@ describe('engine/daemon — runDaemon', () => {
 
     it('stale verdict while episode active: restart marker not consumed, retried after episode', async () => {
       const { vi } = await import('vitest');
-      const requestRestart = vi.fn(async () => {});
+      const requestRestart = vi.fn(async () => ({ fired: true }));
       let episodeActive = true;
       let pollCount = 0;
 
