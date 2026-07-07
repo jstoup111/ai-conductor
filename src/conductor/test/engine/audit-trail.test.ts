@@ -88,4 +88,63 @@ describe('engine/audit-trail', () => {
       await rm(rootB, { recursive: true, force: true });
     }
   });
+
+  it('does not throw and writes stderr + a WRITE-FAILED marker when the append fails', async () => {
+    const auditDir = join(dir, '.pipeline', 'audit-trail');
+    await mkdir(auditDir, { recursive: true });
+    const eventsPath = join(auditDir, 'events.jsonl');
+    // Create events.jsonl as a directory so appendFileSync fails (EISDIR) instead of writing.
+    await mkdir(eventsPath);
+
+    const writer = new AuditTrailWriter(dir);
+    const stderrWrites: string[] = [];
+    const originalWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: unknown) => {
+      stderrWrites.push(String(chunk));
+      return true;
+    }) as typeof process.stderr.write;
+
+    try {
+      expect(() =>
+        writer.record({ step: 'build', event: 'retry', reason: 'tests failed', attempt: 2 })
+      ).not.toThrow();
+    } finally {
+      process.stderr.write = originalWrite;
+    }
+
+    const stderrOutput = stderrWrites.join('');
+    expect(stderrOutput).toContain('build');
+    expect(stderrOutput).toContain('retry');
+    expect(stderrOutput.toLowerCase()).toContain('error');
+
+    const marker = await readFile(join(auditDir, 'WRITE-FAILED'), 'utf8').catch(() => null);
+    expect(marker).not.toBeNull();
+  });
+
+  it('preserves every record with no corruption when two writers append concurrently without coordination', async () => {
+    const writer1 = new AuditTrailWriter(dir);
+    const writer2 = new AuditTrailWriter(dir);
+
+    const appendMany = async (writer: AuditTrailWriter, count: number, tag: string) => {
+      for (let i = 0; i < count; i++) {
+        // Yield to the microtask queue between writes so the two loops'
+        // synchronous appendFileSync calls actually interleave in time,
+        // rather than one loop running to completion before the other starts.
+        await Promise.resolve();
+        writer.record({ step: 'build', event: `${tag}-${i}`, attempt: i });
+      }
+    };
+
+    await Promise.all([appendMany(writer1, 100, 'writer1'), appendMany(writer2, 100, 'writer2')]);
+
+    const eventsPath = join(dir, '.pipeline', 'audit-trail', 'events.jsonl');
+    const contents = await readFile(eventsPath, 'utf8');
+    const lines = contents.split('\n').filter((line) => line.length > 0);
+
+    expect(lines).toHaveLength(200);
+
+    for (const line of lines) {
+      expect(() => JSON.parse(line)).not.toThrow();
+    }
+  });
 });

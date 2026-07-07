@@ -40,8 +40,8 @@ export class AuditTrailWriter {
   }
 
   record(input: AuditRecordInput): void {
+    const auditDir = join(this.projectRoot, '.pipeline', 'audit-trail');
     const eventsPath = this.eventsPath();
-    mkdirSync(join(this.projectRoot, '.pipeline', 'audit-trail'), { recursive: true });
 
     const record: AuditRecord = {
       ...input,
@@ -49,6 +49,28 @@ export class AuditTrailWriter {
       at: Date.now(),
     };
 
-    appendFileSync(eventsPath, JSON.stringify(record) + '\n', { flag: 'a' });
+    try {
+      mkdirSync(auditDir, { recursive: true });
+      appendFileSync(eventsPath, JSON.stringify(record) + '\n', { flag: 'a' });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      process.stderr.write(
+        `[audit-trail] WRITE-FAILED: failed to append audit record ` +
+          `(step=${input.step}, event=${input.event}): error: ${message}\n`
+      );
+
+      // Best-effort marker so operators can detect silent audit-trail loss.
+      // Deliberately not rethrown — audit-trail failures must never break the caller.
+      try {
+        mkdirSync(auditDir, { recursive: true });
+        appendFileSync(
+          join(auditDir, 'WRITE-FAILED'),
+          `${new Date().toISOString()} step=${input.step} event=${input.event} error=${message}\n`,
+          { flag: 'a' }
+        );
+      } catch {
+        // Marker write also failed; nothing more we can do without throwing.
+      }
+    }
   }
 }
