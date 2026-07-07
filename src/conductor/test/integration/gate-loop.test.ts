@@ -96,6 +96,20 @@ describe('integration/gate-loop', () => {
         join(dir, '.pipeline/task-status.json'),
         JSON.stringify({ tasks: taskIds.map((id) => ({ id, status: 'completed' })) }),
       );
+    } else if (step === 'build_review') {
+      // The build_review judgement gate's completion predicate requires a
+      // fresh, valid PASS verdict at .pipeline/build-review.json (see
+      // artifacts.ts BUILD_REVIEW_VERDICT). Tests that enable build_review
+      // and don't care about its grader behavior (only its topology/ordering
+      // in the tail) satisfy it here, same as every other gate's artifact.
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline/build-review.json'),
+        JSON.stringify({
+          verdict: 'PASS',
+          rubric: { tautology: false, scope: false, rootCause: false },
+        }),
+      );
     } else if (step === 'manual_test') {
       await writeFile(
         join(dir, '.pipeline/manual-test-results.md'),
@@ -848,6 +862,633 @@ describe('integration/gate-loop', () => {
       await expect(
         access(join(dir, '.pipeline/manual-test-fail-evidence.json')),
       ).resolves.toBeUndefined();
+    });
+  });
+
+  // ── build_review judgement gate (jstoup111/ai-conductor#324) ─────────────
+  // `build_review` does not exist yet (no StepName entry, no ALL_STEPS row, no
+  // config resolver, no kickback wiring) — every test below pins observable
+  // end-to-end behavior of the FUTURE gate-loop seam between `build` and
+  // `manual_test`. Pre-implementation, `build_review` is never dispatched and
+  // never appears in state, so these fail on their behavioral assertions
+  // (RED), not on setup — exactly like the `rebase` step's pre-implementation
+  // specs in rebase-loop.test.ts.
+  //
+  // TS-1 (registry/topology ordering) is intentionally NOT duplicated here —
+  // it's unit-covered by `test/engine/selector.test.ts`, which drives
+  // `selectNextGate`/`gateSatisfied` directly against `ALL_STEPS` + verdicts
+  // without needing a full Conductor run (Task 3 of the plan owns it there).
+
+  describe('build_review flag topology (TS-2)', () => {
+    it('flag off: build_review is skipped, manual_test follows build directly, zero grader dispatches', async () => {
+      await writeState(statePath, { ...FRONT_DONE });
+      const ran: string[] = [];
+      const runner: StepRunner = {
+        run: async (step) => {
+          ran.push(step);
+          return satisfy(step);
+        },
+      };
+
+      await conductorWith(runner).run();
+
+      expect(ran.filter((s) => s === 'build_review')).toHaveLength(0);
+      const finalState = JSON.parse(await readFile(statePath, 'utf-8'));
+      // Task 5: the flag-off resolver must mark the step `skipped` (with a
+      // skip event) at startup — today `build_review` is not a registry
+      // member at all, so this key is absent (undefined), not 'skipped'.
+      expect(finalState.build_review).toBe('skipped');
+    });
+
+    it('flag off: a stale build-review.json from a previous enabled run is ignored', async () => {
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline/build-review.json'),
+        JSON.stringify({ verdict: 'FAIL', reasons: ['stale from a prior run'] }),
+      );
+      await writeState(statePath, { ...FRONT_DONE });
+      const runner: StepRunner = {
+        run: async (step) => satisfy(step),
+      };
+
+      await conductorWith(runner).run();
+
+      const finalState = JSON.parse(await readFile(statePath, 'utf-8'));
+      expect(finalState.build_review).toBe('skipped');
+      await expect(access(join(dir, '.pipeline/DONE'))).resolves.toBeUndefined();
+    });
+
+    it('flag on: build_review is dispatched between build and manual_test', async () => {
+      await writeState(statePath, { ...FRONT_DONE });
+      // Not inlined as a literal in the ConductorOptions call (which would
+      // trip an excess-property compile error against today's HarnessConfig)
+      // — assigned to a variable first, matching the existing custom-step
+      // config test's convention in this file.
+      const config = { build_review: { enabled: true } };
+      const ran: string[] = [];
+      const runner: StepRunner = {
+        run: async (step) => {
+          ran.push(step);
+          return satisfy(step);
+        },
+      };
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        verifyArtifacts: true,
+        mode: 'auto',
+        fromStep: 'build',
+        maxRetries: 1,
+        config,
+      });
+
+      await conductor.run();
+
+      const buildIdx = ran.indexOf('build');
+      const reviewIdx = ran.indexOf('build_review');
+      const manualIdx = ran.indexOf('manual_test');
+      expect(reviewIdx).toBeGreaterThan(-1); // build_review must dispatch at all
+      expect(reviewIdx).toBeGreaterThan(buildIdx);
+      expect(manualIdx).toBeGreaterThan(reviewIdx);
+    });
+  });
+
+  describe('build_review FAIL kickback end-to-end (TS-5)', () => {
+    // Drives the real gate-loop call site: the fake runner stands in for the
+    // grader, writing `.pipeline/build-review.json` exactly as the real
+    // one-shot grader session will (Task 9-12), when the loop actually
+    // dispatches `build_review`. The kickback machinery (counter, retry
+    // hints, navigateBack, stale cascade — Task 13) is what's under test.
+    function reviewFailConfig() {
+      return { build_review: { enabled: true } };
+    }
+
+    async function runWithGraderVerdicts(
+      verdicts: Array<{ verdict: 'FAIL' | 'PASS'; reasons: string[] }>,
+    ): Promise<{
+      buildRuns: number;
+      retryReasons: string[];
+      kicks: Array<{ from: string; to: string }>;
+      completed: boolean;
+      ran: string[];
+    }> {
+      await writeState(statePath, { ...FRONT_DONE });
+      let buildRuns = 0;
+      let reviewRuns = 0;
+      const retryReasons: string[] = [];
+      const ran: string[] = [];
+      const runner: StepRunner = {
+        run: async (step, _artifacts?: unknown, opts?: { retryReason?: string }) => {
+          ran.push(step);
+          if (step === 'build') {
+            buildRuns++;
+            if (opts?.retryReason) retryReasons.push(opts.retryReason);
+            return satisfy('build');
+          }
+          if (step === 'build_review') {
+            const v = verdicts[Math.min(reviewRuns, verdicts.length - 1)];
+            reviewRuns++;
+            await writeFile(
+              join(dir, '.pipeline/build-review.json'),
+              JSON.stringify({
+                verdict: v.verdict,
+                reasons: v.reasons,
+                rubric: { tautology: false, scope: false, rootCause: false },
+              }),
+            );
+            return { success: true };
+          }
+          if (step === 'finish') {
+            // Daemon mode only converges finish on choice='pr' (see
+            // artifacts.ts finish predicate) — record that plus the pr_url
+            // it requires so the tail can actually reach feature_complete.
+            await writeFile(join(dir, '.pipeline/finish-choice'), 'pr\n');
+            const state = JSON.parse(await readFile(statePath, 'utf-8'));
+            state.pr_url = 'https://example.com/pr/1';
+            await writeFile(statePath, JSON.stringify(state));
+            // The finish predicate reads pr_url from .pipeline/conduct-state.json
+            // specifically (not the top-level state file the conductor itself
+            // uses in this test fixture) — mirror it there too.
+            await mkdir(join(dir, '.pipeline'), { recursive: true });
+            await writeFile(join(dir, '.pipeline/conduct-state.json'), JSON.stringify(state));
+            return { success: true };
+          }
+          return satisfy(step);
+        },
+      };
+      const kicks: Array<{ from: string; to: string }> = [];
+      events.on('kickback', (e) => {
+        if (e.type === 'kickback') kicks.push({ from: e.from, to: e.to });
+      });
+      let completed = false;
+      events.on('feature_complete', () => {
+        completed = true;
+      });
+      // The finish predicate's daemon false-ship guard needs push evidence
+      // (isHeadPushed → headPushedToUpstream(this.git, ...)); a fake git
+      // runner that reports HEAD as pushed lets these fixtures (which never
+      // touch a real remote) converge on the recorded pr_url.
+      const fakeGit: GitRunner = async (args) =>
+        args.includes('--symbolic-full-name')
+          ? { stdout: 'refs/remotes/origin/feature/x\n' }
+          : { stdout: '' };
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        verifyArtifacts: true,
+        mode: 'auto',
+        daemon: true,
+        fromStep: 'build',
+        maxRetries: 1,
+        config: reviewFailConfig(),
+        git: fakeGit,
+      });
+      await conductor.run();
+      return { buildRuns, retryReasons, kicks, completed, ran };
+    }
+
+    it('FAIL-tautological kicks back to build with the grader evidence, then PASS converges', async () => {
+      const result = await runWithGraderVerdicts([
+        { verdict: 'FAIL', reasons: ['tautological test padding, no real assertion'] },
+        { verdict: 'PASS', reasons: [] },
+      ]);
+
+      expect(result.kicks).toContainEqual({ from: 'build_review', to: 'build' });
+      expect(result.buildRuns).toBe(2); // initial + one kickback rebuild
+      expect(result.retryReasons.join('\n')).toContain('tautological test padding');
+      expect(result.completed).toBe(true);
+    });
+
+    it('FAIL-scope kicks back with a distinct evidence string end-to-end', async () => {
+      const result = await runWithGraderVerdicts([
+        { verdict: 'FAIL', reasons: ['change exceeds the approved plan scope'] },
+        { verdict: 'PASS', reasons: [] },
+      ]);
+
+      expect(result.kicks).toContainEqual({ from: 'build_review', to: 'build' });
+      expect(result.retryReasons.join('\n')).toContain('exceeds the approved plan scope');
+      expect(result.completed).toBe(true);
+    });
+
+    it('an empty reasons[] on FAIL still writes placeholder kickback evidence (never a silent kickback)', async () => {
+      const result = await runWithGraderVerdicts([
+        { verdict: 'FAIL', reasons: [] },
+        { verdict: 'PASS', reasons: [] },
+      ]);
+
+      expect(result.kicks).toContainEqual({ from: 'build_review', to: 'build' });
+      expect(result.retryReasons.join('\n')).toMatch(
+        /grader returned FAIL without reasons/,
+      );
+    });
+  });
+
+  describe('build_review retry cap HALTs (TS-6)', () => {
+    it('exactly MAX_KICKBACKS_PER_GATE (2) kickbacks then LOOP_HALT_MARKER + loop_halt, no further dispatch', async () => {
+      await writeState(statePath, { ...FRONT_DONE });
+      let buildRuns = 0;
+      const runner: StepRunner = {
+        run: async (step) => {
+          if (step === 'build') {
+            buildRuns++;
+            return satisfy('build');
+          }
+          if (step === 'build_review') {
+            await writeFile(
+              join(dir, '.pipeline/build-review.json'),
+              JSON.stringify({
+                verdict: 'FAIL',
+                reasons: [`always fails (attempt ${buildRuns})`],
+                rubric: { tautology: true, scope: false, rootCause: false },
+              }),
+            );
+            return { success: true };
+          }
+          return satisfy(step);
+        },
+      };
+      const kicks: Array<{ from: string; to: string }> = [];
+      events.on('kickback', (e) => {
+        if (e.type === 'kickback') kicks.push({ from: e.from, to: e.to });
+      });
+      let halted = false;
+      events.on('loop_halt', () => {
+        halted = true;
+      });
+      let completed = false;
+      events.on('feature_complete', () => {
+        completed = true;
+      });
+      const config = { build_review: { enabled: true } };
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        verifyArtifacts: true,
+        mode: 'auto',
+        daemon: true,
+        fromStep: 'build',
+        maxRetries: 1,
+        config,
+      });
+
+      await conductor.run();
+
+      expect(kicks.filter((k) => k.from === 'build_review')).toHaveLength(2);
+      expect(halted).toBe(true);
+      expect(completed).toBe(false);
+      expect(buildRuns).toBe(3); // initial + 2 kickback rebuilds, capped there
+      await expect(access(join(dir, '.pipeline/HALT'))).resolves.toBeUndefined();
+      const haltContents = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+      // The HALT marker must carry the grader's evidence, not a generic message,
+      // so the surfaced blocker tells the human what the grader actually flagged.
+      expect(haltContents).toContain('always fails');
+    });
+
+    it('the build_review counter is independent of manualTestSelfHeals', async () => {
+      await writeState(statePath, { ...FRONT_DONE, rebase: 'skipped' } as ConductState);
+      let buildRuns = 0;
+      let manualTestRuns = 0;
+      const runner: StepRunner = {
+        run: async (step) => {
+          if (step === 'build') {
+            buildRuns++;
+            return satisfy('build');
+          }
+          if (step === 'build_review') {
+            // Fails exactly once (counter → 1), then passes for good.
+            const verdict = buildRuns <= 1 ? 'FAIL' : 'PASS';
+            await writeFile(
+              join(dir, '.pipeline/build-review.json'),
+              JSON.stringify({
+                verdict,
+                reasons: verdict === 'FAIL' ? ['one-time grader nit'] : [],
+                rubric: { tautology: false, scope: false, rootCause: false },
+              }),
+            );
+            return { success: true };
+          }
+          if (step === 'manual_test') {
+            manualTestRuns++;
+            await writeFile(
+              join(dir, '.pipeline/manual-test-results.md'),
+              manualTestRuns === 1
+                ? '| Story | Result |\n|---|---|\n| s1 | FAIL |\n'
+                : '| Story | Result |\n|---|---|\n| s1 | PASS |\n',
+            );
+            return { success: true };
+          }
+          if (step === 'finish') {
+            // Daemon mode only converges finish on choice='pr' with push
+            // evidence (see artifacts.ts finish predicate + fakeGit below).
+            await writeFile(join(dir, '.pipeline/finish-choice'), 'pr\n');
+            const st = JSON.parse(await readFile(statePath, 'utf-8'));
+            st.pr_url = 'https://example.com/pr/1';
+            await writeFile(statePath, JSON.stringify(st));
+            await mkdir(join(dir, '.pipeline'), { recursive: true });
+            await writeFile(join(dir, '.pipeline/conduct-state.json'), JSON.stringify(st));
+            return { success: true };
+          }
+          return satisfy(step);
+        },
+      };
+      const kicks: Array<{ from: string; to: string }> = [];
+      events.on('kickback', (e) => {
+        if (e.type === 'kickback') kicks.push({ from: e.from, to: e.to });
+      });
+      let halted = false;
+      events.on('loop_halt', () => {
+        halted = true;
+      });
+      const config = { build_review: { enabled: true } };
+      const fakeGit: GitRunner = async (args) =>
+        args.includes('--symbolic-full-name')
+          ? { stdout: 'refs/remotes/origin/feature/x\n' }
+          : { stdout: '' };
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        verifyArtifacts: true,
+        mode: 'auto',
+        daemon: true,
+        fromStep: 'build',
+        maxRetries: 1,
+        config,
+        git: fakeGit,
+      });
+
+      await conductor.run();
+
+      // One build_review-origin kickback and, independently, one
+      // manual_test-origin kickback — neither cap trips the other's HALT.
+      expect(kicks.filter((k) => k.from === 'build_review')).toHaveLength(1);
+      expect(kicks.filter((k) => k.from === 'manual_test')).toHaveLength(1);
+      expect(halted).toBe(false);
+    });
+
+    it('a simulated conductor restart mid-cycle does not unbound the loop (Task 17)', async () => {
+      // kickbackCounts (line ~998) and stuckGate are local Maps created fresh
+      // inside Conductor#run — there is no persistence layer for them. A real
+      // process restart (new Conductor instance from the same on-disk state)
+      // therefore starts both counters back at zero. This test pins that
+      // behavior: it drives one Conductor instance ("session A") to its
+      // MAX_KICKBACKS_PER_GATE HALT, then simulates an operator restart by
+      // clearing the HALT marker and constructing a brand-new Conductor
+      // ("session B") against the same state/dir with a runner that keeps
+      // failing build_review forever. Because the backstop is re-armed per
+      // session (not cumulative across restarts), session B independently
+      // HALTs again after exactly MAX_KICKBACKS_PER_GATE more kickbacks — the
+      // combined run across both sessions never exceeds a small, bounded
+      // number of dispatches, i.e. no unbounded loop survives a restart.
+      await writeState(statePath, { ...FRONT_DONE });
+      let buildRuns = 0;
+      const alwaysFailReviewRunner: StepRunner = {
+        run: async (step) => {
+          if (step === 'build') {
+            buildRuns++;
+            return satisfy('build');
+          }
+          if (step === 'build_review') {
+            await writeFile(
+              join(dir, '.pipeline/build-review.json'),
+              JSON.stringify({
+                verdict: 'FAIL',
+                reasons: [`always fails (attempt ${buildRuns})`],
+                rubric: { tautology: true, scope: false, rootCause: false },
+              }),
+            );
+            return { success: true };
+          }
+          return satisfy(step);
+        },
+      };
+      const config = { build_review: { enabled: true } };
+
+      const kicksA: Array<{ from: string; to: string }> = [];
+      const eventsA = new ConductorEventEmitter();
+      eventsA.on('kickback', (e) => {
+        if (e.type === 'kickback') kicksA.push({ from: e.from, to: e.to });
+      });
+      let haltedA = false;
+      eventsA.on('loop_halt', () => {
+        haltedA = true;
+      });
+      const conductorA = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: alwaysFailReviewRunner,
+        events: eventsA,
+        projectRoot: dir,
+        verifyArtifacts: true,
+        mode: 'auto',
+        daemon: true,
+        fromStep: 'build',
+        maxRetries: 1,
+        config,
+      });
+      await conductorA.run();
+
+      expect(kicksA.filter((k) => k.from === 'build_review')).toHaveLength(2);
+      expect(haltedA).toBe(true);
+      await expect(access(join(dir, '.pipeline/HALT'))).resolves.toBeUndefined();
+
+      // Simulate the restart: clear the HALT marker (an operator re-queuing
+      // the feature would do this) and stand up a *new* Conductor instance —
+      // a fresh process would allocate fresh kickbackCounts/stuckGate Maps,
+      // which this new instance mirrors exactly.
+      await rm(join(dir, '.pipeline/HALT'), { force: true });
+
+      const kicksB: Array<{ from: string; to: string }> = [];
+      const eventsB = new ConductorEventEmitter();
+      eventsB.on('kickback', (e) => {
+        if (e.type === 'kickback') kicksB.push({ from: e.from, to: e.to });
+      });
+      let haltedB = false;
+      eventsB.on('loop_halt', () => {
+        haltedB = true;
+      });
+      const conductorB = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: alwaysFailReviewRunner,
+        events: eventsB,
+        projectRoot: dir,
+        verifyArtifacts: true,
+        mode: 'auto',
+        daemon: true,
+        fromStep: 'build',
+        maxRetries: 1,
+        config,
+      });
+      await conductorB.run();
+
+      // Session B's counters started over at zero (no persistence survived
+      // the restart) yet still HALT after its own MAX_KICKBACKS_PER_GATE cap
+      // — proving the backstop, not accumulated history, is what terminates
+      // the loop, so no restart can produce an unbounded kickback loop.
+      expect(kicksB.filter((k) => k.from === 'build_review')).toHaveLength(2);
+      expect(haltedB).toBe(true);
+      await expect(access(join(dir, '.pipeline/HALT'))).resolves.toBeUndefined();
+    });
+  });
+
+  // ── Task completion survives build_review kickback (Task 15) ────────────
+  // task-status.json is engine-internal cache (Task 1 ADR, #384) — real
+  // completion is derived from git evidence (Task: <id> trailers), not
+  // trusted from the JSON rows. This drives a real repo through a
+  // build_review FAIL kickback where the fake build agent wipes
+  // .pipeline/task-status.json entirely between the initial build and the
+  // re-grade, proving the build gate still recognizes the already-completed
+  // task (via the engine-only evidence sidecar, H6/H7) and that the re-grade
+  // diff still contains both the original completion commit and the fix
+  // commit landed during the kickback.
+  describe('task completion survives build_review kickback + task-status.json wipe (Task 15)', () => {
+    const execFileP = promisify(execFile);
+
+    async function git(...args: string[]): Promise<void> {
+      await execFileP(
+        'git',
+        ['-c', 'user.email=t@test', '-c', 'user.name=t', ...args],
+        { cwd: dir },
+      );
+    }
+
+    async function initRepo(): Promise<void> {
+      await git('init', '-q');
+      await git('commit', '--allow-empty', '-q', '-m', 'init');
+    }
+
+    async function gitLog(): Promise<string> {
+      const { stdout } = await execFileP('git', ['log', '--format=%B'], { cwd: dir });
+      return stdout;
+    }
+
+    it('derives completed tasks from git log after task-status.json is wiped mid-kickback, and the re-grade diff keeps the fix commit', async () => {
+      await initRepo();
+      await mkdir(join(dir, '.docs/plans'), { recursive: true });
+      // A single task, no path list — a bare `Task: t1` trailer is enough
+      // for deriveCompletion / the evidence-sidecar stamp to resolve it.
+      await writeFile(join(dir, '.docs/plans/p.md'), '### Task t1\n**Story:** 1-1 (happy path)\n');
+      await writeState(statePath, { ...FRONT_DONE, rebase: 'skipped' } as ConductState);
+
+      const config = { build_review: { enabled: true } };
+      let buildRuns = 0;
+      let reviewRuns = 0;
+      const runner: StepRunner = {
+        run: async (step, _artifacts?: unknown, opts?: { retryReason?: string }) => {
+          if (step === 'build') {
+            buildRuns++;
+            // Real commit carrying the `Task: <id>` trailer — this is the
+            // completion evidence a real build agent would leave behind.
+            const msg = opts?.retryReason
+              ? 'fix: address build_review feedback\n\nTask: t1'
+              : 'feat: implement task t1\n\nTask: t1';
+            await writeFile(join(dir, `src-${buildRuns}.txt`), `work ${buildRuns}`);
+            await git('add', '.');
+            await git('commit', '-q', '-m', msg);
+            // Mirrors the existing `satisfy('build')` helper: stamp the
+            // engine-only evidence sidecar directly (execa is mocked
+            // module-wide in this file, so the real git-log-parsing path
+            // inside deriveCompletion can't run here) and write the
+            // task-status.json cache the same way a real run would.
+            const evidence = await createTaskEvidence(dir);
+            evidence.evidenceStamps.set('t1', { sha: '0'.repeat(40), form: 'test-stub' });
+            await evidence.write();
+            await writeFile(
+              join(dir, '.pipeline/task-status.json'),
+              JSON.stringify({ tasks: [{ id: 't1', status: 'completed' }] }),
+            );
+            return { success: true };
+          }
+          if (step === 'build_review') {
+            reviewRuns++;
+            if (reviewRuns === 1) {
+              // The fake build/review agent wipes task-status.json
+              // completely — simulating total loss of the on-disk cache
+              // between the initial build and the kickback re-grade.
+              await rm(join(dir, '.pipeline/task-status.json'), { force: true });
+              await writeFile(
+                join(dir, '.pipeline/build-review.json'),
+                JSON.stringify({
+                  verdict: 'FAIL',
+                  reasons: ['tighten the assertion, it currently tautologizes'],
+                  rubric: { tautology: true, scope: false, rootCause: false },
+                }),
+              );
+              return { success: true };
+            }
+            await writeFile(
+              join(dir, '.pipeline/build-review.json'),
+              JSON.stringify({
+                verdict: 'PASS',
+                rubric: { tautology: false, scope: false, rootCause: false },
+              }),
+            );
+            return { success: true };
+          }
+          if (step === 'finish') {
+            // Daemon mode only converges finish on choice='pr' with push
+            // evidence (see artifacts.ts finish predicate + fakeGit below).
+            await writeFile(join(dir, '.pipeline/finish-choice'), 'pr\n');
+            const stateResult = await readState(statePath);
+            const state = stateResult.ok ? stateResult.value : {};
+            state.pr_url = 'https://example.com/pr/1';
+            await writeState(statePath, state);
+            await writeState(join(dir, '.pipeline/conduct-state.json'), state);
+            return { success: true };
+          }
+          return satisfy(step);
+        },
+      };
+
+      const kicks: Array<{ from: string; to: string }> = [];
+      events.on('kickback', (e) => {
+        if (e.type === 'kickback') kicks.push({ from: e.from, to: e.to });
+      });
+      let completed = false;
+      events.on('feature_complete', () => {
+        completed = true;
+      });
+      const fakeGit: GitRunner = async (args) =>
+        args.includes('--symbolic-full-name')
+          ? { stdout: 'refs/remotes/origin/feature/x\n' }
+          : { stdout: '' };
+
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        verifyArtifacts: true,
+        mode: 'auto',
+        daemon: true,
+        fromStep: 'build',
+        maxRetries: 1,
+        config,
+        git: fakeGit,
+      });
+      await conductor.run();
+
+      // The kickback fired and the loop still converged despite the wipe —
+      // the build gate never treated the missing task-status.json as a
+      // reason to re-do already-completed work or to HALT.
+      expect(kicks).toContainEqual({ from: 'build_review', to: 'build' });
+      expect(buildRuns).toBe(2);
+      expect(completed).toBe(true);
+      await expect(access(join(dir, '.pipeline/DONE'))).resolves.toBeUndefined();
+
+      // The re-grade diff (git log) still contains BOTH the original
+      // completion commit and the fix commit landed during the kickback —
+      // nothing about the wipe rewrote or dropped history.
+      const log = await gitLog();
+      expect(log).toContain('feat: implement task t1');
+      expect(log).toContain('fix: address build_review feedback');
+      expect((log.match(/Task: t1/g) || []).length).toBe(2);
     });
   });
 });

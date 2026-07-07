@@ -13,6 +13,7 @@ export type StepName =
   | 'worktree'
   | 'acceptance_specs'
   | 'build'
+  | 'build_review'
   | 'manual_test'
   | 'prd_audit'
   | 'architecture_review_as_built'

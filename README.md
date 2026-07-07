@@ -1052,6 +1052,13 @@ dedicated test coverage (950+ tests). See the feature comparison in
   order. A downstream step can **kick back** to `plan`/`stories` (re-open an upstream gate);
   the loop converges to `.pipeline/DONE` or stops at `.pipeline/HALT`. Opt-in via
   `verifyArtifacts`; every step runs on a fresh LLM session (unconditional).
+- **Judgement gate at the build → manual_test seam** (`build_review`, opt-in via
+  `build_review.enabled: true`): a fresh-session, input-starved Opus grader sits between
+  `build` and `manual_test`, recording an objective PASS/FAIL verdict on the diff before it
+  reaches the more expensive manual-test step. A FAIL kicks back to `build` with the
+  reasons (bounded retries, then HALT); absent config preserves the legacy
+  `build → manual_test` topology unchanged. See `src/conductor/README.md` → "Judgement gate
+  at the build → manual_test seam" for config, cap/HALT behavior, and the cost trade-off.
 - **Manual-test FAIL routing + whitewash guard** (#367): `manual_test` is gating (locked —
   overrides and config disables are rejected) so a failing manual test can never be silently
   skipped. In daemon runs a manual_test that keeps FAILing kicks back to `build` with the

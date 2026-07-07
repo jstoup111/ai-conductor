@@ -205,7 +205,7 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     const outcome: RebaseOutcome = { kind: 'changed', changedCodePaths: ['src/a.ts'] };
     const r = await applyRebaseVerdicts(dir, outcome, true);
     expect(r.satisfied).toBe(true);
-    expect(r.kickedBack).toEqual(['build', 'manual_test']);
+    expect(r.kickedBack).toEqual(['build', 'build_review', 'manual_test']);
     const build = await readVerdict(dir, 'build');
     expect(build?.satisfied).toBe(false);
     expect(build?.kickback?.from).toBe('rebase');
@@ -214,7 +214,7 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
   it('changed but manual_test did not run → only build kicked back', async () => {
     const outcome: RebaseOutcome = { kind: 'changed', changedCodePaths: ['src/a.ts'] };
     const r = await applyRebaseVerdicts(dir, outcome, false);
-    expect(r.kickedBack).toEqual(['build']);
+    expect(r.kickedBack).toEqual(['build', 'build_review']);
   });
 
   it('changelog_resolved (docs-only) → satisfied, NO kickback (FR-5×FR-7)', async () => {

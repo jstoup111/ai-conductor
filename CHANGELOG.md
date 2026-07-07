@@ -12,6 +12,15 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- Opt-in `build_review` judgement gate at the build → manual_test seam
+  (`build_review.enabled: true` in `pipeline.yml` / `.ai-conductor/config.yml`): a
+  fresh-session, input-starved Opus grader records an objective PASS/FAIL verdict
+  (`.pipeline/build-review.json`) on the diff before it reaches manual test. A FAIL kicks
+  back to `build` with the reasons as evidence, capped by the shared
+  `MAX_KICKBACKS_PER_GATE` constant before HALTing; absent config preserves the legacy
+  `build → manual_test` topology. Gating built-in once enabled (`steps.build_review.disable: true` is rejected
+  by `validateConfig()`). See `src/conductor/README.md` → "Judgement gate at the build →
+  manual_test seam".
 - Self-host release gate (TR-10) now accepts a committed waiver as a third way
   to satisfy the migration-block check (`evaluateWaiver` in
   `src/engine/self-host/release-gate.ts`, adr-2026-07-06-migration-gate-waiver,

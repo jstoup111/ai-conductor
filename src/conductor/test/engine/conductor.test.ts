@@ -580,6 +580,7 @@ describe('engine/conductor', () => {
       }
       state.complexity_tier = 'L';
       state.feature_desc = 'feat';
+      state.build_review = 'skipped';
       await writeState(statePath, state as unknown as ConductState);
       await mkdir(join(dir, '.pipeline'), { recursive: true });
       await writeFile(
@@ -894,6 +895,7 @@ describe('engine/conductor', () => {
       }
       state.complexity_tier = 'L';
       state.feature_desc = 'feat';
+      state.build_review = 'skipped';
       await writeState(statePath, state as unknown as ConductState);
       await mkdir(join(dir, '.pipeline'), { recursive: true });
       await writeFile(
@@ -1638,6 +1640,7 @@ describe('engine/conductor', () => {
         {
           complexity_tier: 'L',
           feature_desc: 'feat',
+          build_review: 'skipped',
           manual_test: 'skipped',
           prd_audit: 'skipped',
           retro: 'skipped',
@@ -2395,6 +2398,7 @@ describe('engine/conductor', () => {
       architecture_review: 'done',
       acceptance_specs: 'done',
       build: 'done',
+      build_review: 'done',
     } as ConductState);
 
     const runner = createMockStepRunner();
@@ -2942,6 +2946,7 @@ describe('engine/conductor', () => {
         architecture_review: 'done',
         acceptance_specs: 'done',
         build: 'done',
+        build_review: 'done',
         manual_test: 'done',
         prd_audit: 'done',
         architecture_review_as_built: 'done',

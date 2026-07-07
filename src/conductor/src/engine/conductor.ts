@@ -54,6 +54,8 @@ import {
   parseIntakeSourceRef,
   planStem,
   readManualTestFailRows,
+  BUILD_REVIEW_VERDICT,
+  validateBuildReviewVerdict,
   type RemediationGap,
   type CompletionContext,
 } from './artifacts.js';
@@ -63,6 +65,7 @@ import {
   resolveStepConfig,
   resolveRebaseResolutionAttempts,
   resolveSelfHostConfig,
+  resolveBuildReviewConfig,
 } from './resolved-config.js';
 import {
   defaultSelfHostGuardrails,
@@ -1703,6 +1706,76 @@ export class Conductor {
               }
             }
 
+            // build_review kickback (daemon only, Task 13): a FAIL verdict from
+            // the objective grader between `build` and `manual_test` is an
+            // implementation gap by definition — route back to BUILD with the
+            // grader's reasons as the retry hint. Uses the shared `kickbackCounts`
+            // map keyed by 'build_review' (the same anti-ping-pong mechanism the
+            // gate-driven tail uses for other gates), bounded by
+            // MAX_KICKBACKS_PER_GATE like the other self-heal loops.
+            if (this.daemon && step.name === 'build_review') {
+              let verdictRaw: unknown = null;
+              try {
+                verdictRaw = JSON.parse(
+                  await readFile(join(this.projectRoot, BUILD_REVIEW_VERDICT), 'utf-8'),
+                );
+              } catch {
+                /* missing/unreadable — falls through to generic HALT below */
+              }
+              const parsed = verdictRaw !== null ? validateBuildReviewVerdict(verdictRaw) : null;
+              if (parsed?.ok && parsed.verdict === 'FAIL') {
+                const count = (kickbackCounts.get('build_review') ?? 0) + 1;
+                if (count <= MAX_KICKBACKS_PER_GATE) {
+                  kickbackCounts.set('build_review', count);
+                  const evidence =
+                    parsed.reasons && parsed.reasons.length > 0
+                      ? parsed.reasons.join('\n')
+                      : 'grader returned FAIL without reasons';
+                  await this.events.emit({
+                    type: 'kickback',
+                    from: 'build_review',
+                    to: 'build',
+                    evidence,
+                    count,
+                  });
+                  pendingRetryHints.set(
+                    'build',
+                    `build_review FAILED with these reasons:\n${evidence}\nFix the ` +
+                      `flagged issue(s) in build, then COMMIT — build_review re-runs after ` +
+                      `this build.`,
+                  );
+                  const nav = navigateBack(state, 'build', steps);
+                  state = nav.state;
+                  // markDownstreamStale only restages `done` steps; build_review
+                  // is `failed` here, so restage it (and manual_test) explicitly
+                  // for the tail.
+                  (state as Record<string, unknown>).build_review = 'stale';
+                  (state as Record<string, unknown>).manual_test = 'stale';
+                  await writeState(this.stateFilePath, state);
+                  i = nav.index - 1; // for-loop i++ lands on build
+                  continue;
+                }
+                const reason =
+                  `build_review FAIL unresolved after ${count - 1} build kickback(s) ` +
+                  `(cap ${MAX_KICKBACKS_PER_GATE}): ${parsed.reasons?.[0] ?? 'no reasons recorded'}`;
+                await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(
+                  () => {},
+                );
+                await writeFile(
+                  join(this.projectRoot, LOOP_HALT_MARKER),
+                  reason + '\n',
+                  'utf-8',
+                ).catch(() => {
+                  /* best-effort marker */
+                });
+                await writeState(this.stateFilePath, state);
+                const prUrl = await this.surfaceRemediationPr(reason);
+                await this.events.emit({ type: 'loop_halt', reason, prUrl });
+                process.off('SIGINT', sigintHandler);
+                return;
+              }
+            }
+
             if (this.daemon && step.name === 'prd_audit') {
               // Agentic remediation (preferred): dispatch /remediate to plan how
               // to close the blocking gaps, then route deterministically from its
@@ -2375,12 +2448,16 @@ export class Conductor {
         await this.events.emit({ type: 'loop_halt', reason });
         return 'halt';
       }
-      // FR-5: a file-changing rebase invalidated build (+manual_test) via
-      // kickback-shaped verdicts. Those gates aren't `kickbackTarget` steps, so
-      // emit the kickback event(s) here; the selector below routes back to them.
+      // FR-5: a file-changing rebase invalidated build (+build_review,
+      // +manual_test) via kickback-shaped verdicts. Those gates aren't
+      // `kickbackTarget` steps, so emit the kickback event(s) here; the
+      // selector below routes back to them. build_review sits between build
+      // and manual_test in the tail (Task 18) — it grades the diff that the
+      // rebase just changed, so it must re-verify before manual_test is
+      // selectable again, same as build and manual_test.
       if (this.lastRebaseOutcome?.kind === 'changed') {
         const verdicts = await readAllVerdicts(this.projectRoot);
-        for (const target of ['build', 'manual_test'] as StepName[]) {
+        for (const target of ['build', 'build_review', 'manual_test'] as StepName[]) {
           const v = verdicts[target];
           if (v && v.satisfied === false && v.kickback?.from === 'rebase') {
             await this.events.emit({
@@ -2444,6 +2521,10 @@ export class Conductor {
     // Resolve the track once (state-seeded, or the committed marker in the
     // interactive flow) so a technical feature skips prd_audit in the SHIP loop.
     const track = await this.resolveTrack(state);
+    // Opt-in judgement gate (jstoup111/ai-conductor#324): resolved once here
+    // (read-once, `owner_gate_cutover` semantics) so a config value flipped
+    // mid-run doesn't produce inconsistent skip decisions across the pass.
+    const buildReviewEnabled = resolveBuildReviewConfig(this.config).enabled;
     // Steps are in topological order, so an upstream step's `skipped` mark is
     // already in `state` before a step that depends on it via skipWhenSkipped
     // is evaluated in this same pass (e.g. architecture_review → as_built).
@@ -2453,10 +2534,14 @@ export class Conductor {
         (s.skippableForTiers.includes(tier) ||
           (s.skippableForTracks ?? []).includes(track) ||
           shouldSkipForBootstrapMode(s.name, state.bootstrap_mode) ||
-          shouldSkipForUpstreamSkip(s, state))
+          shouldSkipForUpstreamSkip(s, state) ||
+          (s.name === 'build_review' && !buildReviewEnabled))
       ) {
         (state as Record<string, unknown>)[s.name] = 'skipped';
         markedSkip = true;
+        if (s.name === 'build_review' && !buildReviewEnabled) {
+          await this.events.emit({ type: 'config_skip', step: s.name });
+        }
       }
     }
     if (markedSkip) await writeState(this.stateFilePath, state);

@@ -31,6 +31,8 @@ export const STEP_RATIONALE: Record<StepName, string> = {
   worktree: 'Git operations — mechanical branch/worktree management.',
   acceptance_specs: 'Generating specs from acceptance criteria — templated work.',
   build: 'Dispatcher; intelligence is in per-task sub-sessions, so the dispatcher itself runs mechanically on the cheapest model.',
+  build_review:
+    'Fresh-session grader judging a maker\'s diff for test tautology, scope creep, and root-cause fixes vs band-aids — adversarial code review demands the deepest reasoning tier, same class of judgement as prd_audit/code-review.',
   manual_test: 'Structured validation against stories — pattern-following.',
   prd_audit: 'Cross-references PRD intent vs shipped implementation across two domains (spec + code) — deep reasoning, FR-by-FR.',
   architecture_review_as_built:

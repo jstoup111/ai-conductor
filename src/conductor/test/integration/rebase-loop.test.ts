@@ -170,6 +170,18 @@ describe('integration/rebase-loop', () => {
         join(dir, '.pipeline/task-status.json'),
         JSON.stringify({ tasks: [{ id: 't1', status: 'completed' }] }),
       );
+    } else if (step === 'build_review') {
+      // The build_review judgement gate's completion predicate requires a
+      // fresh, valid PASS verdict at .pipeline/build-review.json (see
+      // artifacts.ts BUILD_REVIEW_VERDICT), same fixture as gate-loop.test.ts.
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline/build-review.json'),
+        JSON.stringify({
+          verdict: 'PASS',
+          rubric: { tautology: false, scope: false, rootCause: false },
+        }),
+      );
     } else if (step === 'manual_test') {
       await writeFile(
         join(dir, '.pipeline/manual-test-results.md'),
@@ -274,6 +286,73 @@ describe('integration/rebase-loop', () => {
     expect(kicks).toContainEqual({ from: 'rebase', to: 'build' });
     expect(completed).toBe(true);
   });
+
+  it(
+    'a file-changing rebase kickback re-verifies build_review too, not just build/manual_test ' +
+      '(TS-5 negative 4, jstoup111/ai-conductor#324, Task 18)',
+    async () => {
+      // The re-verify target set for a code-changing rebase kickback must be
+      // {build, build_review, manual_test}: build_review grades the diff
+      // that the rebase just changed, so it must be invalidated and re-run
+      // alongside build and manual_test — the selector must never be able to
+      // pick manual_test on a stale build_review verdict.
+      await initRepoOnFeatureBranch({
+        path: 'src/feature.ts',
+        content: 'export const foo = 1;\n',
+      });
+      await git('checkout', BASE);
+      await mkdir(join(dir, 'src'), { recursive: true });
+      await writeFile(join(dir, 'src/sibling.ts'), 'export const sib = 2;\n');
+      await git('add', '.');
+      await git('commit', '-m', 'sibling code merged to base');
+      await git('checkout', 'feature/foo');
+
+      await writeState(statePath, { ...FRONT_DONE });
+      const fakeGit: GitRunner = async (args) =>
+        args.includes('--symbolic-full-name')
+          ? { stdout: 'refs/remotes/origin/feature/x\n' }
+          : { stdout: '' };
+      const config = { build_review: { enabled: true } };
+      let buildReviewRuns = 0;
+      const runner: StepRunner = {
+        run: async (step) => {
+          if (step === 'build_review') buildReviewRuns++;
+          return satisfy(step);
+        },
+      };
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        daemon: true,
+        verifyArtifacts: true,
+        mode: 'auto',
+        fromStep: 'build',
+        maxRetries: 1,
+        git: fakeGit,
+        config,
+      });
+
+      let completed = false;
+      const kicks: Array<{ from: string; to: string }> = [];
+      events.on('feature_complete', () => {
+        completed = true;
+      });
+      events.on('kickback', (e) => {
+        if (e.type === 'kickback') kicks.push({ from: e.from, to: e.to });
+      });
+
+      await conductor.run();
+
+      // build_review ran once before the rebase and a second time as part of
+      // the rebase re-verify — the selector never jumped straight from build
+      // to manual_test on a stale build_review verdict.
+      expect(buildReviewRuns).toBe(2);
+      expect(kicks).toContainEqual({ from: 'rebase', to: 'build_review' });
+      expect(completed).toBe(true);
+    },
+  );
 
   it('auto-resolves a CHANGELOG-only conflict keeping both entries exactly once (FR-7)', async () => {
     // Both base and branch append a DIFFERENT entry under ## [Unreleased] →

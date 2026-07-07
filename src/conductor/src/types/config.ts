@@ -360,6 +360,14 @@ export interface HarnessConfig {
    * conflicts on previously-built PRs. Absent → disabled (default safe posture).
    */
   mergeable_autoresolve?: MergeableAutoresolveConfig;
+  /**
+   * Opt-in judgement gate at the build → manual_test seam. Absent → disabled
+   * (legacy topology: build → manual_test directly). `enabled: true` inserts
+   * the objective non-human reviewer verdict step between them. The step
+   * itself is a gating built-in (ALL_STEPS), so once opted in
+   * `steps.build_review.disable: true` is rejected by `validateConfig()`.
+   */
+  build_review?: BuildReviewConfig;
 }
 
 /**
@@ -374,4 +382,13 @@ export interface MergeableAutoresolveConfig {
   cooldownMinutes?: number;
   /** Optional test suite command to verify resolved conflicts. */
   suiteCommand?: string;
+}
+
+/**
+ * Configuration for the opt-in `build_review` judgement gate. Every field is
+ * optional and follows the safe-by-default principle: absent/malformed → off.
+ */
+export interface BuildReviewConfig {
+  /** Enable the build_review gate. Default: false (off, legacy topology). */
+  enabled?: boolean;
 }

@@ -878,6 +878,83 @@ complexity:
     });
   });
 
+  describe('build_review config field', () => {
+    it('resolves absent key to disabled, no warning', () => {
+      const result = validateConfig({ harness_version: '>=1.0.0' });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.build_review?.enabled).toBe(false);
+      expect(result.warnings).toHaveLength(0);
+    });
+
+    it('resolves enabled:false to disabled, identical to absent', () => {
+      const result = validateConfig({ build_review: { enabled: false } });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.build_review?.enabled).toBe(false);
+      expect(result.warnings).toHaveLength(0);
+    });
+
+    it('resolves enabled:true to enabled', () => {
+      const result = validateConfig({ build_review: { enabled: true } });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.build_review?.enabled).toBe(true);
+      expect(result.warnings).toHaveLength(0);
+    });
+
+    it('resolves null to disabled silently', () => {
+      const result = validateConfig({ build_review: null });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.build_review?.enabled).toBe(false);
+      expect(result.warnings).toHaveLength(0);
+    });
+
+    it('resolves a non-object build_review value to disabled + one warning', () => {
+      const result = validateConfig({ build_review: 'yes' });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.build_review?.enabled).toBe(false);
+      expect(result.warnings).toHaveLength(1);
+      expect(result.warnings[0]).toMatch(/build_review.*invalid/i);
+    });
+
+    it('resolves a non-boolean enabled value to disabled + one warning', () => {
+      const result = validateConfig({ build_review: { enabled: 'banana' } });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.build_review?.enabled).toBe(false);
+      expect(result.warnings).toHaveLength(1);
+      expect(result.warnings[0]).toMatch(/build_review.*invalid/i);
+    });
+
+    it('never throws — always returns ok: true', () => {
+      const testCases = [
+        { build_review: { enabled: true } },
+        { build_review: { enabled: false } },
+        { build_review: 'yes' },
+        { build_review: 1 },
+        { build_review: [] },
+        { build_review: {} },
+        { build_review: null },
+        {},
+      ];
+      for (const testCase of testCases) {
+        const result = validateConfig(testCase);
+        expect(result.ok).toBe(true);
+      }
+    });
+
+    it('rejects steps.build_review.disable: true — gating steps cannot be disabled', () => {
+      const result = validateConfig({ steps: { build_review: { disable: true } } });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.message).toMatch(/build_review/);
+      expect(result.error.message).toMatch(/gating/i);
+    });
+  });
+
   describe('mergeable_autoresolve config block (Task 2)', () => {
     it('absent block → {enabled:false, cooldownMinutes:60, suiteCommand:undefined}', () => {
       const result = validateConfig({});

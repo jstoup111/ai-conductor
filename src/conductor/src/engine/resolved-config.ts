@@ -37,6 +37,7 @@ export const DEFAULT_STEP_MODELS: Record<StepName, string> = {
   worktree: 'haiku',
   acceptance_specs: 'sonnet',
   build: 'haiku',
+  build_review: 'opus',
   manual_test: 'sonnet',
   prd_audit: 'opus',
   architecture_review_as_built: 'sonnet',
@@ -61,6 +62,7 @@ export const DEFAULT_STEP_EFFORT: Record<StepName, EffortLevel> = {
   worktree: 'low',
   acceptance_specs: 'medium',
   build: 'low',
+  build_review: 'high',
   manual_test: 'medium',
   prd_audit: 'high',
   architecture_review_as_built: 'medium',
@@ -85,6 +87,7 @@ export const DEFAULT_STEP_RETRIES: Record<StepName, number> = {
   worktree: 1,
   acceptance_specs: 3,
   build: 5,
+  build_review: 3,
   manual_test: 3,
   prd_audit: 3,
   architecture_review_as_built: 3,
@@ -109,6 +112,7 @@ export const DEFAULT_STEP_REVIEW: Record<StepName, ReviewMode> = {
   worktree: 'auto',
   acceptance_specs: 'auto',
   build: 'auto',
+  build_review: 'conditional', // marker written only on FAIL verdict (kickback)
   manual_test: 'auto',
   prd_audit: 'conditional',          // marker written only when an FR is non-ALIGNED
   architecture_review_as_built: 'conditional', // marker written only on drift/BLOCKED
@@ -421,5 +425,30 @@ export function resolveMergeableAutoresolve(config?: HarnessConfig): ResolvedMer
     enabled: block?.enabled ?? DEFAULT_MERGEABLE_AUTORESOLVE_ENABLED,
     cooldownMinutes: block?.cooldownMinutes ?? DEFAULT_MERGEABLE_AUTORESOLVE_COOLDOWN_MINUTES,
     suiteCommand: block?.suiteCommand,
+  };
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// build_review configuration (opt-in judgement gate at the build → manual_test seam)
+// ────────────────────────────────────────────────────────────────────────────
+
+export const DEFAULT_BUILD_REVIEW_ENABLED = false;
+
+/** Fully-resolved build_review settings (no optional fields). */
+export interface ResolvedBuildReviewConfig {
+  enabled: boolean;
+}
+
+/**
+ * Resolve the `build_review` block to concrete settings.
+ * Absent/malformed block defaults to disabled (safe-by-default) — mirrors
+ * `resolveMergeableAutoresolve` above. Validation and warning emission for
+ * malformed input happens in `validateConfig`; this resolver assumes a
+ * validated (or absent) block and only applies the default.
+ */
+export function resolveBuildReviewConfig(config?: HarnessConfig): ResolvedBuildReviewConfig {
+  const block = config?.build_review;
+  return {
+    enabled: block?.enabled ?? DEFAULT_BUILD_REVIEW_ENABLED,
   };
 }

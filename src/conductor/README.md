@@ -600,6 +600,49 @@ When running in daemon mode, the engine enforces additional constraints at the f
 
 **Implementation:** `engine/done-outcome-validation.ts` (`validateDoneOutcome`), wired into the daemon runner (`daemon-runner.ts`) at the point where a feature reaches the `done` state, before any shipped-record write or worktree cleanup. The validation runs independently of the existing PR-labeling mechanism (`needs-remediation` is still written when applicable for debugging, but does not interfere with the core validation). See `.docs/decisions/adr-2026-07-06-daemon-false-ship-guard.md` for design details and requirements.
 
+#### Judgement gate at the build → manual_test seam (`build_review`)
+
+`build_review` is an opt-in, objective non-human reviewer verdict that sits strictly between
+`build` and `manual_test` in the SHIP-phase gate loop (`build → build_review → manual_test →
+retro → rebase → finish`). It exists to catch build-quality issues (regressions, obviously
+wrong diffs, missed acceptance criteria) *before* they reach the more expensive manual-test
+step, cheaply short-circuiting a bad build rather than letting it burn a manual-test cycle.
+
+**Enabling.** Absent config (or `build_review.enabled: false`) preserves the legacy topology —
+`build` feeds `manual_test` directly, and the step does not run. Set `build_review.enabled:
+true` in `pipeline.yml` / `.ai-conductor/config.yml` to insert the gate:
+
+```yaml
+build_review:
+  enabled: true
+```
+
+Once opted in, `build_review` is a gating built-in (`ALL_STEPS`): `steps.build_review.disable:
+true` is rejected by `validateConfig()` — you cannot silently disable a gate you've already
+turned on.
+
+**What it grades.** The grader is a fresh, input-starved one-shot session: it sees only the
+diff since the merge-base and the plan being graded against (`build-review-inputs.ts`,
+`build-review-prompt.ts`) — no chat history, no prior reasoning to rubber-stamp. It records a
+PASS/FAIL verdict to `.pipeline/build-review.json` (`artifacts.ts` →
+`BUILD_REVIEW_VERDICT`), validated fail-closed: missing, stale (mtime predates the session),
+malformed JSON, or a non-exact-shape verdict are all treated as "gate not satisfied, must
+re-run."
+
+**Cap / HALT behavior.** A FAIL verdict kicks back to `build` with the FAIL reasons as evidence
+(daemon only), the same anti-ping-pong mechanism used elsewhere in the gate loop. Kickbacks are
+capped by the shared `MAX_KICKBACKS_PER_GATE` constant (`conductor.ts`, currently 2) — once
+exhausted, the loop HALTs with the unresolved FAIL reasons rather than looping forever or
+silently passing the build through. Separately, each `build_review` dispatch attempt itself
+gets up to `DEFAULT_STEP_RETRIES.build_review` (3) retries before being reported failed, same
+as any other step.
+
+**Cost note.** Because it must be an objective outside opinion rather than the same session
+grading its own work, `build_review` always dispatches on the Opus model tier (see the model
+selection table in `HARNESS.md`) in a fresh session — it is deliberately not cheap, and enabling
+it adds one additional model dispatch per build attempt. Leave it disabled for low-stakes or
+cost-sensitive projects; the legacy `build → manual_test` topology is unaffected either way.
+
 #### PR labeling (`needs-remediation` + `mergeable`, daemon-only)
 
 Two GitHub labels give a human operator an at-a-glance signal on the daemon's PRs without

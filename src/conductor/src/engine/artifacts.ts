@@ -69,6 +69,7 @@ export const STEP_ARTIFACT_GLOBS: Record<StepName, string[]> = {
     '*.spec.tsx',
   ],
   build: ['.pipeline/task-status.json'],
+  build_review: ['.pipeline/build-review.json'],
   // Run evidence (gitignored, stable filename, overwritten each run) — NOT
   // committed. These are regenerated every run; tracking them caused date-stamp
   // sprawl, rebase/merge conflicts, and dirty-tree HALTs at the finish-time
@@ -315,9 +316,21 @@ export async function readManualTestFailRows(dir: string): Promise<string[]> {
   } catch {
     return [];
   }
-  return latestAttemptRegion(content)
-    .split('\n')
-    .filter((line) => /\|\s*FAIL/i.test(line));
+  return latestAttemptRegion(content).split('\n').filter(isManualTestFailRow);
+}
+
+/**
+ * True when a markdown table row's Result cell is exactly "FAIL" (case-insensitive,
+ * whitespace-trimmed). Checks cell boundaries, not substring presence — a Story or
+ * Notes cell containing the word "FAIL" (e.g. "FAIL kicks back to build with
+ * evidence", "fail-closed verdict predicate") must never be mistaken for a failing
+ * result.
+ */
+function isManualTestFailRow(line: string): boolean {
+  return line
+    .split('|')
+    .map((cell) => cell.trim())
+    .some((cell) => /^FAIL$/i.test(cell));
 }
 
 /**
@@ -423,6 +436,90 @@ export function validateAcceptanceRedEvidence(
     };
   }
   return { ok: true };
+}
+
+/**
+ * Path to the build_review judgement gate's verdict artifact. Written by the
+ * grader dispatched between `build` and `manual_test`; read back by the
+ * completion predicate (Task 8) to decide PASS (advance) vs FAIL (kickback to
+ * `build`). Gitignored run evidence, not a committed design artifact.
+ */
+export const BUILD_REVIEW_VERDICT = '.pipeline/build-review.json';
+
+/**
+ * Which rubric category the grader flagged, when the verdict is FAIL. All
+ * fields optional — a grader may flag one, several, or (rarely) none of the
+ * categories while still returning FAIL with free-form `reasons`.
+ */
+export interface BuildReviewRubric {
+  /** Test asserts against its own implementation rather than real behavior. */
+  tautology?: boolean;
+  /** Change reaches outside the task's declared scope. */
+  scope?: boolean;
+  /** Fix addresses a symptom rather than the underlying root cause. */
+  rootCause?: boolean;
+}
+
+export interface BuildReviewVerdict {
+  verdict: 'PASS' | 'FAIL';
+  /** Free-form explanations; required in practice for FAIL, but not enforced
+   * here — an empty/absent reasons array on FAIL still parses (fail-closed
+   * validation only guards the shape needed to route PASS vs FAIL safely). */
+  reasons?: string[];
+  rubric: BuildReviewRubric;
+}
+
+/**
+ * Validate a parsed build_review verdict object. Fail-closed: only the exact
+ * string 'PASS' is treated as passing. Anything else recognizable as FAIL
+ * (the exact string 'FAIL') is a valid parse whose reasons/rubric are
+ * preserved for the kickback message; anything unrecognized (malformed JSON,
+ * missing required fields, or a string other than 'PASS'/'FAIL' such as
+ * 'pass', 'APPROVED', or '') is invalid — the caller must treat an invalid
+ * parse as FAIL, never as PASS. Missing-file handling is the completion
+ * predicate's job (Task 8), not this validator's.
+ */
+export function validateBuildReviewVerdict(
+  ev: unknown,
+):
+  | { ok: true; verdict: 'PASS' | 'FAIL'; reasons?: string[]; rubric: BuildReviewRubric }
+  | { ok: false; reason: string } {
+  if (typeof ev !== 'object' || ev === null) {
+    return { ok: false, reason: `${BUILD_REVIEW_VERDICT} is not a JSON object` };
+  }
+  const e = ev as Record<string, unknown>;
+  if (e.verdict !== 'PASS' && e.verdict !== 'FAIL') {
+    return {
+      ok: false,
+      reason: `${BUILD_REVIEW_VERDICT} "verdict" must be exactly 'PASS' or 'FAIL' (got ${JSON.stringify(e.verdict)})`,
+    };
+  }
+  if (typeof e.rubric !== 'object' || e.rubric === null || Array.isArray(e.rubric)) {
+    return {
+      ok: false,
+      reason: `${BUILD_REVIEW_VERDICT} must include a "rubric" object`,
+    };
+  }
+  const rubricSrc = e.rubric as Record<string, unknown>;
+  const rubric: BuildReviewRubric = {};
+  if (typeof rubricSrc.tautology === 'boolean') rubric.tautology = rubricSrc.tautology;
+  if (typeof rubricSrc.scope === 'boolean') rubric.scope = rubricSrc.scope;
+  if (typeof rubricSrc.rootCause === 'boolean') rubric.rootCause = rubricSrc.rootCause;
+
+  const result: {
+    ok: true;
+    verdict: 'PASS' | 'FAIL';
+    reasons?: string[];
+    rubric: BuildReviewRubric;
+  } = {
+    ok: true,
+    verdict: e.verdict,
+    rubric,
+  };
+  if (Array.isArray(e.reasons)) {
+    result.reasons = e.reasons as string[];
+  }
+  return result;
 }
 
 export const CUSTOM_COMPLETION_PREDICATES: Partial<
@@ -700,7 +797,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     }
     const headSha = ctx.getHeadSha ? await ctx.getHeadSha().catch(() => null) : null;
     const region = latestAttemptRegion(content);
-    const failRows = region.split('\n').filter((line) => /\|\s*FAIL/i.test(line));
+    const failRows = region.split('\n').filter(isManualTestFailRow);
     if (failRows.length > 0) {
       // Record the whitewash-guard evidence: the sha this FAIL was observed at.
       // A later FAIL-free file is only accepted once HEAD moves past it.
@@ -848,6 +945,51 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
           reason: `as-built review verdict is "${verdict}" — not a clean APPROVED (BLOCKED means shipped code violates an APPROVED ADR; an unrecognized verdict means the review may have found no ADRs to check). Fix the code or supersede the ADR (human-approved), then re-run`,
         };
       }
+    }
+    return { done: true };
+  },
+
+  // build_review judgement gate: satisfied only by a fresh, valid PASS
+  // verdict at `.pipeline/build-review.json` (BUILD_REVIEW_VERDICT). Missing
+  // file, stale (prior-session) file, malformed JSON, or a FAIL verdict all
+  // keep the gate unsatisfied (fail-closed) — a FAIL surfaces the grader's
+  // reasons so the kickback message tells `build` what to fix.
+  build_review: async (dir, ctx): Promise<CompletionResult> => {
+    const path = join(dir, BUILD_REVIEW_VERDICT);
+    if (!(await fileIsFreshSinceSession(path, ctx.sessionStartedAt))) {
+      // fileIsFreshSinceSession returns false both for "missing" and "stale";
+      // distinguish them so the reason message is accurate.
+      const exists = await access(path)
+        .then(() => true)
+        .catch(() => false);
+      return {
+        done: false,
+        reason: exists
+          ? `${BUILD_REVIEW_VERDICT} is stale (mtime predates this session) — the build_review grader must re-run and rewrite it`
+          : `no build-review verdict at ${BUILD_REVIEW_VERDICT} — the build_review grader must run and record a PASS/FAIL verdict`,
+      };
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(await readFile(path, 'utf-8'));
+    } catch {
+      return {
+        done: false,
+        reason: `${BUILD_REVIEW_VERDICT} is not valid JSON — the build_review grader must rewrite it`,
+      };
+    }
+    const result = validateBuildReviewVerdict(parsed);
+    if (!result.ok) {
+      return { done: false, reason: result.reason };
+    }
+    if (result.verdict === 'FAIL') {
+      const reasons = result.reasons && result.reasons.length > 0
+        ? result.reasons.join('; ')
+        : 'no reasons recorded';
+      return {
+        done: false,
+        reason: `build_review FAILed: ${reasons} — fix in build, then the gate re-runs build_review`,
+      };
     }
     return { done: true };
   },
