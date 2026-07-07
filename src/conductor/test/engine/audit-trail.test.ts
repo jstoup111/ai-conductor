@@ -3,6 +3,7 @@ import { mkdtemp, rm, readFile, mkdir, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { AuditTrailWriter, type AuditRecord } from '../../src/engine/audit-trail.js';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 describe('engine/audit-trail', () => {
   let dir: string;
@@ -146,5 +147,37 @@ describe('engine/audit-trail', () => {
     for (const line of lines) {
       expect(() => JSON.parse(line)).not.toThrow();
     }
+  });
+
+  it('subscribe() appends a record for allowlisted event types', async () => {
+    const writer = new AuditTrailWriter(dir);
+    const emitter = new ConductorEventEmitter();
+    writer.subscribe(emitter);
+
+    await emitter.emit({ type: 'gate_verdict', step: 'build', satisfied: true, reason: 'ok' });
+
+    const eventsPath = join(dir, '.pipeline', 'audit-trail', 'events.jsonl');
+    const contents = await readFile(eventsPath, 'utf8');
+    const lines = contents.split('\n').filter((line) => line.length > 0);
+
+    expect(lines).toHaveLength(1);
+    const record = JSON.parse(lines[0]) as AuditRecord;
+    expect(record.step).toBe('build');
+    expect(record.event).toBe('gate_verdict');
+  });
+
+  it('subscribe() ignores unmapped event types without error or append', async () => {
+    const writer = new AuditTrailWriter(dir);
+    const emitter = new ConductorEventEmitter();
+    writer.subscribe(emitter);
+
+    await expect(
+      emitter.emit({ type: 'step_started', step: 'build', index: 0 })
+    ).resolves.not.toThrow();
+
+    const eventsPath = join(dir, '.pipeline', 'audit-trail', 'events.jsonl');
+    const contents = await readFile(eventsPath, 'utf8').catch(() => '');
+    const lines = contents.split('\n').filter((line) => line.length > 0);
+    expect(lines).toHaveLength(0);
   });
 });

@@ -1,8 +1,22 @@
 import { appendFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
 
-import type { StepName, Phase } from '../types/index.js';
+import type { StepName, Phase, ConductorEvent } from '../types/index.js';
 import { phaseForStep } from './resolved-config.js';
+import type { ConductorEventEmitter } from '../ui/events.js';
+
+/**
+ * Event types the audit trail cares about. Anything else emitted on the bus
+ * is deliberately ignored — no handler is registered for it, so it neither
+ * appends nor errors.
+ */
+const SUBSCRIBED_EVENT_TYPES: Array<ConductorEvent['type']> = [
+  'gate_verdict',
+  'step_retry',
+  'kickback',
+  'loop_halt',
+  'step_completed',
+];
 
 /**
  * A single audit-trail event. `phase` and `at` are derived by the writer —
@@ -71,6 +85,40 @@ export class AuditTrailWriter {
       } catch {
         // Marker write also failed; nothing more we can do without throwing.
       }
+    }
+  }
+
+  /**
+   * Subscribe to the allowlisted subset of ConductorEvent types on `events`.
+   * Unmapped event types are never registered, so they emit on the bus and
+   * are silently ignored by the audit trail — no handler runs, no error.
+   *
+   * Per-type field mapping here is intentionally minimal; tasks 7–12 refine
+   * how each event type is translated into an AuditRecordInput.
+   */
+  subscribe(events: ConductorEventEmitter): void {
+    for (const type of SUBSCRIBED_EVENT_TYPES) {
+      events.on(type, (event: ConductorEvent) => {
+        const input = this.toRecordInput(event);
+        if (input) this.record(input);
+      });
+    }
+  }
+
+  private toRecordInput(event: ConductorEvent): AuditRecordInput | null {
+    switch (event.type) {
+      case 'gate_verdict':
+        return { step: event.step, event: event.type, reason: event.reason };
+      case 'step_retry':
+        return { step: event.step, event: event.type, reason: event.reason, attempt: event.attempt };
+      case 'kickback':
+        return { step: event.to, event: event.type, reason: event.evidence, cause: event.from };
+      case 'loop_halt':
+        return { step: 'build', event: event.type, reason: event.reason };
+      case 'step_completed':
+        return { step: event.step, event: event.type };
+      default:
+        return null;
     }
   }
 }
