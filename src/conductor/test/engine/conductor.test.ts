@@ -3172,6 +3172,75 @@ describe('engine/conductor', () => {
 
       expect(sleepFn).toHaveBeenCalledWith(300_000);
     });
+
+    it('conductor: enters episode and awaits episode.clear() on rate-limited result', async () => {
+      // Task 9: RED spec for conductor episode integration
+      // Expects: conductor calls episode.enter(deadline) and awaits episode.clear(signal)
+      // instead of bare sleep when handling rate limits.
+
+      let attempt = 0;
+      const runner: StepRunner = {
+        run: vi.fn(async () => {
+          attempt++;
+          if (attempt === 1) return { success: false, rateLimited: true, waitSeconds: 60 };
+          return { success: true };
+        }),
+      };
+
+      // Mock episode with spy methods to verify calls
+      let episodeEnterCalled = false;
+      let episodeEnterDeadline: number | null = null;
+      let episodeClearCalled = false;
+      let episodeClearSignal: AbortSignal | undefined;
+
+      const mockEpisode = {
+        enter: (untilMs: number) => {
+          episodeEnterCalled = true;
+          episodeEnterDeadline = untilMs;
+        },
+        active: () => false,
+        clear: async (signal?: AbortSignal) => {
+          episodeClearCalled = true;
+          episodeClearSignal = signal;
+          return Promise.resolve();
+        },
+        nextWaitSeconds: () => 60,
+      };
+
+      const nowTime = Date.now();
+      const sleepFn = vi.fn().mockResolvedValue(undefined);
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        maxRetries: 2,
+        sleepFn,
+        onRecovery: vi.fn().mockResolvedValue('quit' as const),
+        // Would pass daemonDeps with episode here when implemented
+        // For now, this test documents the expected integration
+      });
+
+      await conductor.run();
+
+      // Assertions (will fail because conductor doesn't yet integrate episode):
+      // - episode.enter() was NOT called yet (conductor doesn't integrate episode yet)
+      expect(episodeEnterCalled).toBe(true);
+      // - deadline should be approximately now + 60000ms
+      if (episodeEnterDeadline !== null) {
+        const expectedMin = nowTime + 59000; // Allow 1s tolerance
+        const expectedMax = nowTime + 61000;
+        expect(episodeEnterDeadline).toBeGreaterThanOrEqual(expectedMin);
+        expect(episodeEnterDeadline).toBeLessThanOrEqual(expectedMax);
+      }
+      // - episode.clear(signal) should be called instead of bare sleep
+      expect(episodeClearCalled).toBe(true);
+      expect(episodeClearSignal).toBeDefined();
+      // - attempt counter unchanged (rate-limit doesn't burn budget)
+      expect(attempt).toBeGreaterThanOrEqual(2);
+      // - sleepFn should NOT have been called (conductor should use episode.clear)
+      expect(sleepFn).not.toHaveBeenCalled();
+    });
   });
 
   describe('stale-session handling', () => {
