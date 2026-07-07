@@ -389,6 +389,26 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   };
   process.once('exit', releaseBackstop);
 
+  // Task 22: Process-level SIGTERM handler for daemon mode. Track all in-flight
+  // rate-limit waits across N concurrent conductors so a single process-level
+  // handler can abort them all and coordinate state saves before exit.
+  // Conductors running in daemon mode (daemon:true) will register their
+  // AbortControllers here instead of installing per-conductor handlers.
+  const allWaitSignals = new Set<AbortController>();
+
+  // Task 22: Install ONE process-level SIGTERM handler (not N per-conductor).
+  // When SIGTERM fires, abort all in-flight waits and coordinate state saves.
+  const daemonSigtermHandler = async () => {
+    // Abort all in-flight rate-limit waits across all conductors
+    for (const controller of allWaitSignals) {
+      controller.abort();
+    }
+    // Note: State saves are handled by individual conductors' exit handlers.
+    // The daemon-cli process cleanup (releaseBackstop) will flush logs + release lock.
+    process.exit(1);
+  };
+  process.on('SIGTERM', daemonSigtermHandler);
+
   // FR-4/FR-7: honor a pause marker set BEFORE this daemon even booted (e.g. the
   // daemon was stopped, `conduct daemon pause` ran, then the daemon was started
   // again). isPaused is fail-closed (pause-marker.ts) — a corrupt marker still
@@ -580,6 +600,9 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       // the narrative to the engineer store instead of the repo's .docs/retros/.
       daemon: true,
       rateLimitEpisode,
+      // Task 22: Register in-flight wait AbortControllers with daemon-level handler
+      // so process-level SIGTERM can abort all waits across N concurrent conductors.
+      registerAbortController: (controller) => allWaitSignals.add(controller),
     });
 
     // FR-12 (ADR-013): a re-kick dropped a `.pipeline/REKICK` sentinel. Integrate

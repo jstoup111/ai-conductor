@@ -374,6 +374,15 @@ export interface ConductorOptions {
    * when the episode ends. Absent → no tracking (no-op).
    */
   onHaltWritten?: (slug: string, episodeCaused: boolean) => Promise<void>;
+  /**
+   * Task 22: Callback to register an in-flight rate-limit wait AbortController
+   * with the daemon-level handler. Called when a conductor creates a wait controller
+   * so process-level SIGTERM can abort all in-flight waits across N concurrent conductors.
+   * Only used in daemon mode; in interactive mode, per-conductor SIGTERM handlers
+   * manage individual controllers. Optional — if absent, the conductor works normally
+   * but its wait controller won't be aborted by process-level SIGTERM.
+   */
+  registerAbortController?: (controller: AbortController) => void;
 }
 
 /**
@@ -519,6 +528,12 @@ export class Conductor {
   private onHaltWritten: ((slug: string, episodeCaused: boolean) => Promise<void>) | undefined;
 
   /**
+   * Task 22: Optional callback to register in-flight wait AbortControllers with
+   * the daemon-level SIGTERM handler.
+   */
+  private registerAbortController: ((controller: AbortController) => void) | undefined;
+
+  /**
    * The CompletionContext handed to every gate evaluation. `getHeadSha` feeds
    * the manual_test whitewash guard (#367); it resolves the worktree's real
    * HEAD and returns null (never throws) when there is no usable repo, which
@@ -579,6 +594,7 @@ export class Conductor {
     this.git = opts.git ?? makeProductionGit();
     this.rateLimitEpisode = opts.rateLimitEpisode;
     this.onHaltWritten = opts.onHaltWritten;
+    this.registerAbortController = opts.registerAbortController;
   }
 
   /**
@@ -945,6 +961,10 @@ export class Conductor {
     let currentWaitController: AbortController | undefined;
 
     // Save state on SIGTERM before exit and abort in-flight wait if active
+    // Task 22: Scope per-conductor SIGTERM handler to interactive mode only.
+    // In daemon mode, the process-level handler (installed in daemon-cli.ts)
+    // handles SIGTERM for N concurrent conductors; in interactive mode, each
+    // conductor installs its own handler.
     const sigterm = async () => {
       // Abort any in-flight rate-limit wait
       if (currentWaitController) {
@@ -953,7 +973,9 @@ export class Conductor {
       await writeState(this.stateFilePath, state);
       process.exit(1);
     };
-    process.on('SIGTERM', sigterm);
+    if (!this.daemon) {
+      process.on('SIGTERM', sigterm);
+    }
 
     // Per-step counter for how many times the user has picked `retry` from the
     // recovery menu in this session. Once it hits MAX_RECOVERY_RETRIES, the
@@ -1137,7 +1159,9 @@ export class Conductor {
             });
             await writeState(this.stateFilePath, state);
             process.off('SIGINT', sigintHandler);
-            process.off('SIGTERM', sigterm);
+            if (!this.daemon) {
+              process.off('SIGTERM', sigterm);
+            }
             return;
           }
           continue;
@@ -1279,6 +1303,8 @@ export class Conductor {
             // Create AbortSignal for SIGTERM handling (Task 11)
             const controller = new AbortController();
             currentWaitController = controller;
+            // Task 22: Register with daemon-level handler if provided (daemon mode)
+            this.registerAbortController?.(controller);
 
             try {
               // Await episode.clear() or fallback to sleep if episode undefined
@@ -2116,7 +2142,9 @@ export class Conductor {
           if (advance === 'halt') {
             await writeState(this.stateFilePath, state);
             process.off('SIGINT', sigintHandler);
-            process.off('SIGTERM', sigterm);
+            if (!this.daemon) {
+              process.off('SIGTERM', sigterm);
+            }
             return;
           }
           if (advance !== null) {
