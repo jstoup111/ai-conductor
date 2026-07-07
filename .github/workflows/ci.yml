@@ -27,14 +27,17 @@ jobs:
         working-directory: src/conductor
       - run: npm run build
         working-directory: src/conductor
-      # Suite-scale memory ceiling (2026-07-07): all 4480+ tests pass, then a
-      # long-lived fork worker dies at V8's default ~4GB old-space cap
-      # ("Worker exited unexpectedly", allocation-failure stack) — per-file
-      # memory accumulates in reused workers, and fewer workers concentrate
-      # more files per process. Two workers bound machine-level parallelism;
-      # the raised old-space cap clears the per-worker ceiling. Wall time is
-      # not a constraint here (operator directive).
-      - run: npm test -- --minWorkers=1 --maxWorkers=2
+      # Suite-scale memory ceiling (2026-07-07): the suite passes, then a
+      # long-lived fork worker dies of V8 heap exhaustion — per-file memory
+      # accumulates in reused workers, and at 4500+ tests one worker crosses
+      # the cap no matter how the worker count/heap knobs are tuned. Sharding
+      # the run per test tree gives every shard FRESH workers, resetting the
+      # accumulation deterministically. Wall time is not a constraint here
+      # (operator directive). The durable fix is hunting the per-file leak —
+      # tracked separately.
+      - run: |
+          npx vitest run --shard=1/4
+          npx vitest run --shard=2/4
+          npx vitest run --shard=3/4
+          npx vitest run --shard=4/4
         working-directory: src/conductor
-        env:
-          NODE_OPTIONS: --max-old-space-size=5120
