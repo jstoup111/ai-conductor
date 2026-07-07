@@ -223,4 +223,22 @@ describe('daemon-cli discover-path gated snapshot wiring (Task 12)', () => {
       announceGatedIssue(entry, undefined, { cwd: '/repo', log: (m) => logs.push(m) }),
     ).resolves.toBeUndefined();
   });
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // Task 15 (wire-episode-daemon-cli): daemon-cli must construct and wire the
+  // RateLimitEpisode into both the Conductor (for wait coordination) and the
+  // runDaemon deps (for dispatch gating). Static wiring check to catch a
+  // future refactor that silently drops the episode construction or wiring.
+  // ───────────────────────────────────────────────────────────────────────────
+  it('daemon-cli.ts wires RateLimitEpisode: imports create, constructs one episode, passes to Conductor and runDaemon', () => {
+    const src = readFileSync(join(__dirname, '../../src/daemon-cli.ts'), 'utf-8');
+    // Verify import
+    expect(src).toContain("import { create as createRateLimitEpisode } from './engine/rate-limit-episode.js';");
+    // Verify construction
+    expect(src).toContain('const rateLimitEpisode = createRateLimitEpisode();');
+    // Verify wiring to Conductor
+    expect(src).toContain('rateLimitEpisode,') && expect(src).toMatch(/new Conductor\({[\s\S]*?rateLimitEpisode,/);
+    // Verify wiring to runDaemon deps (should appear in the deps object)
+    expect(src).toMatch(/await runDaemon\(\s*\{[\s\S]*?rateLimitEpisode,/);
+  });
 });

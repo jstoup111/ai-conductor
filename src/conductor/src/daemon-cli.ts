@@ -82,6 +82,7 @@ import { reconcileHaltPrs } from './engine/halt-pr-reconciliation.js';
 import { createPriorityResolver, ghIssueLabelReader } from './engine/backlog-priority.js';
 import { isPaused } from './engine/pause-marker.js';
 import { readRestartPending, consumeOnBoot, type RestartIntent } from './engine/restart-marker.js';
+import { create as createRateLimitEpisode } from './engine/rate-limit-episode.js';
 
 const execFile = promisify(execFileCb);
 
@@ -473,6 +474,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
 
   // One shared provider + event bus across workers (rate limits are shared).
   const events = new ConductorEventEmitter();
+  const rateLimitEpisode = createRateLimitEpisode();
   const registry = new PluginRegistry();
   // Surface per-step loop progress on the console. Without this the daemon was
   // silent between `▶ start` and `✓ shipped` (the no-op renderer threw every
@@ -577,6 +579,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       // Phase 9.1: daemon runs skip the in-loop retro; the emission step writes
       // the narrative to the engineer store instead of the repo's .docs/retros/.
       daemon: true,
+      rateLimitEpisode,
     });
 
     // FR-12 (ADR-013): a re-kick dropped a `.pipeline/REKICK` sentinel. Integrate
@@ -861,6 +864,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       // re-polled every loop iteration by runDaemon so a pause lifted mid-run
       // resumes dispatch at the next boundary (no restart required).
       isPaused: () => isPaused(projectRoot),
+      rateLimitEpisode,
       runFeature,
       log,
       staleEngineChecker,
