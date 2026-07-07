@@ -298,7 +298,7 @@ describe('Task 14 — RestartRequester: marker → release → exit ordering', (
    * 1. Call relink
    * 2. Write underscore marker
    * 3. Call triggerSelfRestart
-   * 4. Never call lock.releaseSync() or process.exit()
+   * 4. ALWAYS call lock.releaseSync() and process.exit(0) on success
    *
    * Verifies exact call order via spy call counts and order
    *
@@ -306,7 +306,7 @@ describe('Task 14 — RestartRequester: marker → release → exit ordering', (
    * `daemon restart` queued restarts and must NEVER be touched by the stale-engine path.
    * This assertion verifies that the hyphen marker is never created or modified.
    */
-  it('session-hosted mode: relink → marker → triggerSelfRestart (no lock release, no exit)', async () => {
+  it('session-hosted mode: relink → marker → triggerSelfRestart → release → exit(0)', async () => {
     const { createRestartRequester } = await import('../../src/daemon-cli.js');
 
     const callOrder: string[] = [];
@@ -332,6 +332,7 @@ describe('Task 14 — RestartRequester: marker → release → exit ordering', (
       exit: (code: number) => {
         exitCalled = true;
         callOrder.push(`exit(${code})`);
+        throw new Error(`process.exit(${code})`);
       },
     } as unknown as NodeJS.Process;
 
@@ -351,18 +352,22 @@ describe('Task 14 — RestartRequester: marker → release → exit ordering', (
       triggerSelfRestart: mockTriggerSelfRestart,
     });
 
-    // Session-hosted mode should NOT throw or call exit
-    await requester({
-      fromIdentity: 'daemon-id-123',
-      targetIdentity: 'engine-id-456',
-    });
+    // Session-hosted mode should call exit on successful trigger fire
+    try {
+      await requester({
+        fromIdentity: 'daemon-id-123',
+        targetIdentity: 'engine-id-456',
+      });
+    } catch (e) {
+      // Expected: process.exit() breaks control flow
+    }
 
-    // Verify call order: relink → marker → triggerSelfRestart
-    expect(callOrder).toEqual(['relink', 'triggerSelfRestart']);
+    // Verify call order: relink → marker → triggerSelfRestart → release → exit(0)
+    expect(callOrder).toEqual(['relink', 'triggerSelfRestart', 'release', 'exit(0)']);
 
-    // Verify lock and exit were NOT called
-    expect(releaseSyncCalled).toBe(false);
-    expect(exitCalled).toBe(false);
+    // Verify lock and exit WERE called exactly once each
+    expect(releaseSyncCalled).toBe(true);
+    expect(exitCalled).toBe(true);
 
     // Verify underscore marker was written (stale-engine marker)
     const markerPath = join(daemonDir, '.daemon', 'RESTART_PENDING');
