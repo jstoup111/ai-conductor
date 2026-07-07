@@ -64,6 +64,10 @@ import {
   dispatchShippedRecord,
 } from './engine/shipped-record-cli.js';
 import {
+  detectDeriveFeedbackCommand,
+  dispatchDeriveFeedback,
+} from './engine/derive-feedback-cli.js';
+import {
   detectDaemonObserveCommand,
   dispatchDaemonObserve,
 } from './engine/daemon-observe-cli.js';
@@ -320,6 +324,18 @@ async function main(): Promise<void> {
   const shippedRecordCmd = detectShippedRecordCommand(process.argv);
   if (shippedRecordCmd) {
     const code = await dispatchShippedRecord(shippedRecordCmd, process.cwd());
+    process.exit(code);
+  }
+
+  // Derive-feedback subcommand (`derive-feedback --sha <sha> [--plan <path>]`)
+  // runs NON-INTERACTIVELY and exits — read-only, advisory single-commit
+  // evidence check used by hooks/claude/post-commit-derive-feedback.sh so
+  // fast feedback comes from the SAME engine-owned evidence grammar as the
+  // build gate, instead of a bare bash regex. Mirrors the shipped-record
+  // dispatch pattern.
+  const deriveFeedbackCmd = detectDeriveFeedbackCommand(process.argv);
+  if (deriveFeedbackCmd) {
+    const code = await dispatchDeriveFeedback(deriveFeedbackCmd, process.cwd());
     process.exit(code);
   }
 

@@ -9,7 +9,7 @@ import {
 } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { relative, join } from 'node:path';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { HALT_MARKER } from './halt-marker.js';
 import type { ConductState } from '../types/index.js';
 import type {
@@ -80,7 +80,7 @@ import {
   type GateVerdict as GateObjectiveVerdict,
 } from './gate-verdicts.js';
 import { WorktreeManager } from './worktree.js';
-import { attemptAutoHeal } from './autoheal.js';
+import { deriveCompletion, applyDerivedCompletion } from './autoheal.js';
 import {
   countResolvedTasks,
   haltMarkerExists,
@@ -108,6 +108,11 @@ import { readMachineOwnerConfig } from './owner-gate/machine-identity.js';
 import { resolveDaemonOwner, type GhRunner } from './owner-gate/identity.js';
 import { makeProductionGh, makeProductionGit, type GitRunner } from './pr-labels.js';
 import { headPushedToUpstream } from './push-evidence.js';
+import {
+  createTaskEvidence,
+  type TaskEvidence,
+} from './task-evidence.js';
+import { seedTaskStatus } from './task-seed.js';
 
 export type CheckpointResponse = 'continue' | 'back' | 'quit';
 
@@ -162,6 +167,10 @@ const MAX_KICKBACKS_PER_GATE = 2;
 const MAX_GATE_SELECTIONS = 6;
 const DONE_MARKER = '.pipeline/DONE';
 const LOOP_HALT_MARKER = HALT_MARKER;
+
+// Task 23 (auto-park): build-gate no-evidence misses tolerated before the
+// daemon parks the feature (durable sidecar counter — see daemon-auto-park.ts).
+const DAEMON_NO_EVIDENCE_THRESHOLD = 3;
 
 export interface NavigableStep {
   name: StepName;
@@ -484,13 +493,32 @@ export class Conductor {
   private lastRebaseOutcome: RebaseOutcome | null = null;
 
   /**
+   * Durable engine state for task evidence tracking (sidecar JSON).
+   * Loaded at the start of run() and written back when gates change evidence counts.
+   */
+  private taskEvidence: TaskEvidence | null = null;
+
+  /**
    * The CompletionContext handed to every gate evaluation. `getHeadSha` feeds
    * the manual_test whitewash guard (#367); it resolves the worktree's real
    * HEAD and returns null (never throws) when there is no usable repo, which
    * makes the guard fail open outside real runs. `daemon` and `isHeadPushed`
    * feed the finish predicate for daemon false-ship guard (ADR-2026-07-06).
    */
-  private completionCtx(state: ConductState): CompletionContext {
+  private async completionCtx(state: ConductState): Promise<CompletionContext> {
+    // For the build predicate, resolve the plan file to pass into the context.
+    let planPath: string | undefined;
+    try {
+      const planFiles = await findArtifactFilesForStep(this.projectRoot, 'plan');
+      if (planFiles.length > 0) {
+        // Use the first (or only) plan file; in practice, there's typically one per feature
+        planPath = planFiles[0];
+      }
+    } catch {
+      // Plan file resolution failed — let the predicate handle missing plan
+      planPath = undefined;
+    }
+
     return {
       sessionStartedAt: state.session_started_at,
       featureDesc: state.feature_desc,
@@ -506,6 +534,8 @@ export class Conductor {
           return null;
         }
       },
+      projectRoot: this.projectRoot,
+      planPath,
     };
   }
 
@@ -689,6 +719,34 @@ export class Conductor {
     await this.stepRunner.run('remediate', state, { retryReason: dispatchContext });
     const plan = await readRemediationPlan(this.projectRoot, state.session_started_at);
     if (!plan) return { kind: 'none' };
+
+    // Extract tasks from gaps and append them to the plan if present.
+    // Remediation tasks are plan-modification tasks that close blocking gaps.
+    // If gaps contain tasks, append them to the plan and re-seed task-status.json
+    // so they show as pending and can be tracked for completion.
+    const allTasks: Array<{ id: string; title: string }> = [];
+    for (const gap of plan.gaps) {
+      if (gap.tasks && gap.tasks.length > 0) {
+        allTasks.push(...gap.tasks);
+      }
+    }
+
+    if (allTasks.length > 0) {
+      // Append remediation tasks to the plan
+      const planPath = await this.getActivePlanPath();
+      if (planPath) {
+        const appendResult = await appendRemediationTasks(this.projectRoot, planPath, allTasks);
+        if (appendResult.success) {
+          // Re-seed task-status.json with the appended tasks marked as pending
+          try {
+            await seedTaskStatus(this.projectRoot, planPath);
+          } catch {
+            // Log but continue — seeding failure doesn't block remediation routing
+          }
+        }
+      }
+    }
+
     const fixes = plan.gaps.filter((g) => g.disposition !== 'halt');
     const halts = plan.gaps.filter((g) => g.disposition === 'halt');
     if (fixes.length > 0) {
@@ -706,6 +764,20 @@ export class Conductor {
       };
     }
     return { kind: 'none' };
+  }
+
+  /** Read the active plan path from engine state, or null if not recorded. */
+  private async getActivePlanPath(): Promise<string | null> {
+    try {
+      const engineStatePath = join(this.projectRoot, '.pipeline', 'engine-state.json');
+      const content = await readFile(engineStatePath, 'utf-8');
+      const engineState = JSON.parse(content) as Record<string, unknown>;
+      const activePlanPath = engineState.activePlanPath;
+      return typeof activePlanPath === 'string' ? activePlanPath : null;
+    } catch {
+      // Engine state doesn't exist or is invalid
+      return null;
+    }
   }
 
   /** True when a `.pipeline/` terminal marker (DONE / HALT) exists on disk. */
@@ -868,6 +940,11 @@ export class Conductor {
     state.session_started_at = sessionStartedAt;
     if (!state.run_started_at) state.run_started_at = sessionStartedAt;
     await writeState(this.stateFilePath, state);
+
+    // Load task evidence sidecar for durable no-evidence counter (Task 12).
+    // The counter tracks consecutive gate misses with no task progress and
+    // persists across engine restarts. It feeds the auto-park trigger (Task 23).
+    this.taskEvidence = await createTaskEvidence(this.projectRoot);
 
     // Sweep stale per-session markers from prior invocations. A marker left
     // here from a previous run can't legitimately satisfy this run's gate
@@ -1332,24 +1409,34 @@ export class Conductor {
             let completion = await checkStepCompletion(
               this.projectRoot,
               step.name,
-              this.completionCtx(state),
+              await this.completionCtx(state),
             );
 
             // Auto-heal hook: before treating a build-gate miss as a failure,
             // reconcile .pipeline/task-status.json against git log. If the
             // prior pipeline run committed work for tasks still marked
             // "pending", mark them completed in-place and re-check the gate
-            // — the retry never has to fire.
+            // — the retry never has to fire. Runs fresh on every gate
+            // evaluation (no once-per-session guard) to ensure derivation
+            // uses current git state and fresh task counts (H7).
             if (
               !completion.done &&
-              step.name === 'build' &&
-              !autoHealAttempted.has('build')
+              step.name === 'build'
             ) {
-              autoHealAttempted.add('build');
-              const heal = await attemptAutoHeal(this.projectRoot).catch(() => ({
-                healed: [],
-                skipped: [],
-              }));
+              // Resolve the plan path used for derivation: prefer the
+              // engine-recorded active plan path (H8), falling back to the
+              // completion-context plan (findArtifactFilesForStep) when the
+              // engine hasn't recorded one yet.
+              const activePlanPath = await this.getActivePlanPath();
+              const derivePlanPath = activePlanPath
+                ? join(this.projectRoot, activePlanPath)
+                : (await this.completionCtx(state)).planPath;
+
+              const heal = derivePlanPath
+                ? await deriveCompletion(this.projectRoot, derivePlanPath)
+                    .then((derived) => applyDerivedCompletion(this.projectRoot, derived))
+                    .catch(() => ({ healed: [], skipped: [] }))
+                : { healed: [], skipped: [] };
               await this.events.emit({
                 type: 'auto_heal',
                 step: 'build',
@@ -1360,7 +1447,7 @@ export class Conductor {
                 completion = await checkStepCompletion(
                   this.projectRoot,
                   step.name,
-                  this.completionCtx(state),
+                  await this.completionCtx(state),
                 );
               }
             }
@@ -1400,6 +1487,69 @@ export class Conductor {
                 } else if (attempt >= 2 && resolvedTasksAfter <= resolvedTasksBefore) {
                   stalled = 'no_task_progress';
                 }
+
+                // Task 12: Durable no-evidence counter. Increment on EVERY
+                // gate miss without progress (H7 — the counter accrues across
+                // attempts, runs, and re-kicks; gating it on the attempt>=2
+                // stall verdict would let single-attempt re-kick loops never
+                // reach the park threshold), reset when progress is detected.
+                if (this.taskEvidence) {
+                  if (resolvedTasksAfter > resolvedTasksBefore) {
+                    // Progress detected — reset counter
+                    this.taskEvidence.noEvidenceAttempts = 0;
+                    await this.taskEvidence.write();
+                  } else {
+                    // No-evidence miss — increment the durable counter
+                    this.taskEvidence.noEvidenceAttempts++;
+                    await this.taskEvidence.write();
+                  }
+                }
+
+                // Task 23: daemon auto-park at the build gate layer (ADR
+                // "last resort" + H7 durable counter). Fires ONLY on a build
+                // gate miss: an empty/missing plan (the gate's own seed-time
+                // verdict — never re-derived here) parks immediately; a
+                // no-evidence counter at the threshold (durable in the
+                // sidecar, so it accrues ACROSS re-kicks and restarts) parks
+                // instead of looping. checkAndAutoPark is daemon-gated by
+                // construction — interactive runs keep the stall-REPL path
+                // below. A park is terminal for this run: the HALT marker
+                // satisfies the marker guarantee, while the park marker is
+                // what the re-kick sweep honors until an operator unparks.
+                if (this.daemon) {
+                  const gateReason = completion.reason ?? '';
+                  const parkCtx = await this.completionCtx(state);
+                  const emptyPlan =
+                    !parkCtx.planPath ||
+                    gateReason.includes('plan is empty') ||
+                    gateReason.includes('no tasks in plan') ||
+                    gateReason.includes('plan file not found');
+                  const slug = state.feature_desc || 'unknown';
+                  const { checkAndAutoPark } = await import('./daemon-auto-park.js');
+                  const parkResult = await checkAndAutoPark(this.projectRoot, slug, {
+                    maxAttempts: DAEMON_NO_EVIDENCE_THRESHOLD,
+                    daemon: this.daemon,
+                    ...(emptyPlan ? { reason: 'empty/missing plan' } : {}),
+                    emit: (evt) =>
+                      void this.events.emit(evt as Parameters<typeof this.events.emit>[0]),
+                  });
+                  if (parkResult.parked) {
+                    const reason =
+                      `auto-parked: ${emptyPlan ? 'empty/missing plan' : `no completion evidence after ${DAEMON_NO_EVIDENCE_THRESHOLD} attempts`}` +
+                      ` — unpark with \`conduct daemon unpark ${slug}\``;
+                    await writeFile(
+                      join(this.projectRoot, LOOP_HALT_MARKER),
+                      reason + '\n',
+                      'utf-8',
+                    ).catch(() => {});
+                    state[step.name] = 'failed';
+                    await writeState(this.stateFilePath, state);
+                    await this.events.emit({ type: 'loop_halt', reason });
+                    process.off('SIGINT', sigintHandler);
+                    return;
+                  }
+                }
+
                 if (stalled) {
                   await this.events.emit({
                     type: 'build_stall',
@@ -1422,11 +1572,18 @@ export class Conductor {
                   const recheck = await checkStepCompletion(
                     this.projectRoot,
                     step.name,
-                    this.completionCtx(state),
+                    await this.completionCtx(state),
                   );
                   if (recheck.done) {
                     succeeded = true;
                     successOutput = result.output;
+
+                    // Task 12: If the interactive REPL resolved the issue and the gate
+                    // now passes, reset the counter since progress was made.
+                    if (this.taskEvidence) {
+                      this.taskEvidence.noEvidenceAttempts = 0;
+                      await this.taskEvidence.write();
+                    }
                   }
                   break;
                 }
@@ -1903,6 +2060,7 @@ export class Conductor {
           // `.docs/intake/<plan-stem>.md` owner marker so the operator identity
           // travels with the spec onto the merged default branch. Use the same
           // machine-scoped identity resolution as the `/engineer` path.
+          // Task 14: Also record the active plan path in engine state.
           if (step.name === 'plan') {
             const planFiles = await findArtifactFilesForStep(this.projectRoot, 'plan');
             // D4 keying: stamp ONLY the plan(s) authored in THIS run — files that
@@ -1952,6 +2110,12 @@ export class Conductor {
                   ownerResolution.id,
                 );
               }
+
+              // Task 14: Record the active plan path in engine state.
+              // Use the first authored plan as the authoritative source for seeding.
+              // This ensures seed uses the engine-recorded path instead of glob discovery.
+              const activePlanPath = relative(this.projectRoot, authoredPlans[0]);
+              await recordActivePlanPath(this.projectRoot, activePlanPath);
             }
           }
 
@@ -2239,7 +2403,7 @@ export class Conductor {
       const verdict = await computeAndWriteVerdict(
         this.projectRoot,
         step.name,
-        this.completionCtx(state),
+        await this.completionCtx(state),
       );
       await this.events.emit({
         type: 'gate_verdict',
@@ -2766,14 +2930,20 @@ export function buildRemediationHint(
  */
 export function buildRetryHint(step: StepName, reason: string | undefined): string {
   const r = reason ?? 'unknown';
-  if (step === 'build' && /tasks? not completed/i.test(r)) {
-    return (
-      `Previous attempt did not satisfy the completion check: ${r}. ` +
-      `The implementation may already be done — verify each listed task ID ` +
-      `against git log and files on disk before rewriting. If the work is ` +
-      `complete, update .pipeline/task-status.json to mark those tasks ` +
-      `"completed" (with their commit SHAs) instead of re-implementing.`
-    );
+  if (step === 'build') {
+    if (/tasks? not completed/i.test(r)) {
+      return (
+        `Previous attempt did not satisfy the completion check: ${r}. ` +
+        `Add a Task: <id> trailer to your commits to mark tasks completed. ` +
+        `Format: Task: 9\\nTask: 10 (one per line).`
+      );
+    }
+    if (/no tasks|missing.*task-status|plan is empty/i.test(r)) {
+      return (
+        `Previous attempt did not satisfy the completion check: ${r}. ` +
+        `Check your plan at .docs/plans/ — the seed step creates task-status.json from there.`
+      );
+    }
   }
   return `Previous attempt did not satisfy the completion check: ${r}. Finish the work now.`;
 }
@@ -2843,4 +3013,184 @@ export async function recordApprovals(
     out[key] = { sha256: hash, approved_at: now };
   }
   return out;
+}
+
+/**
+ * Task 14: Record the active plan path in engine state.
+ * The engine-recorded path is used by seedTaskStatus to resolve which plan to use,
+ * preventing glob-first guessing when multiple plans exist.
+ *
+ * @param projectRoot - Project root directory
+ * @param planPath - Path to the plan file (relative to projectRoot)
+ */
+export async function recordActivePlanPath(projectRoot: string, planPath: string): Promise<void> {
+  const pipelineDir = join(projectRoot, '.pipeline');
+  await mkdir(pipelineDir, { recursive: true });
+
+  const engineStatePath = join(pipelineDir, 'engine-state.json');
+
+  // Read existing engine state if present
+  let engineState: Record<string, unknown> = {};
+  try {
+    const existing = await readFile(engineStatePath, 'utf-8');
+    engineState = JSON.parse(existing);
+  } catch {
+    // File doesn't exist or is invalid — start fresh
+    engineState = {};
+  }
+
+  // Update with the active plan path
+  engineState.activePlanPath = planPath;
+
+  // Atomic write: temp file + rename
+  const tempDirPath = join(tmpdir(), `engine-state-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  await mkdir(tempDirPath, { recursive: true });
+  try {
+    const tempFile = join(tempDirPath, 'engine-state.json');
+    await writeFile(tempFile, JSON.stringify(engineState, null, 2) + '\n');
+    await writeFile(engineStatePath, JSON.stringify(engineState, null, 2) + '\n');
+  } finally {
+    const { rm } = await import('node:fs/promises');
+    await rm(tempDirPath, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Task 19: Append remediation tasks to the plan file with validation.
+ *
+ * Validates that all remediation task IDs are non-empty and match TASK_ID_PATTERN,
+ * then appends them to the plan file. Gate-source prefix is expected but not required.
+ *
+ * @param projectRoot - Project root directory
+ * @param planPath - Path to the plan file to append to
+ * @param remediationList - List of remediation tasks with id and title
+ * @param options - Optional logger function
+ * @returns { success: true } on success, { success: false, error: string } on failure
+ */
+export async function appendRemediationTasks(
+  projectRoot: string,
+  planPath: string,
+  remediationList: Array<{ id: string; title: string }>,
+  options?: { log?: (msg: string) => void },
+): Promise<{ success: true } | { success: false; error: string }> {
+  const log = options?.log ?? (() => {});
+
+  // TASK_ID_PATTERN from autoheal.ts: [A-Za-z0-9._-]+
+  const TASK_ID_PATTERN = '[A-Za-z0-9._-]+';
+  const taskIdRegex = new RegExp(`^${TASK_ID_PATTERN}$`);
+
+  // Validate all task IDs before appending anything
+  for (const task of remediationList) {
+    // Check for empty ID
+    if (!task.id || task.id.trim() === '') {
+      return {
+        success: false,
+        error: `Task ID must be non-empty, but got empty string for title: "${task.title}"`,
+      };
+    }
+
+    // Check if ID matches pattern
+    if (!taskIdRegex.test(task.id)) {
+      return {
+        success: false,
+        error: `Task ID "${task.id}" does not match TASK_ID_PATTERN [A-Za-z0-9._-]+`,
+      };
+    }
+
+    // Warn if gate-source prefix is missing (rem-fr10-*, rem-adr-*, rem-test-*, etc.)
+    if (!task.id.startsWith('rem-')) {
+      log(`Warning: Task ID "${task.id}" missing gate-source prefix (expected rem-*)`);
+    }
+  }
+
+  // Read existing plan content
+  let planContent = '';
+  try {
+    planContent = await readFile(planPath, 'utf-8');
+  } catch {
+    // If plan file doesn't exist, start with empty content
+    planContent = '';
+  }
+
+  // Parse existing task headers to detect duplicates and content drift
+  // Regex: ### Task <id>: <title>
+  const taskHeaderRegex = /^### Task ([A-Za-z0-9._-]+(?:-[a-f0-9]{6})?(?:-\d+)?): (.+)$/gm;
+  const existingTasks = new Map<string, { title: string; fullHeader: string }>();
+  let match;
+  while ((match = taskHeaderRegex.exec(planContent)) !== null) {
+    const taskId = match[1];
+    const taskTitle = match[2];
+    const fullHeader = match[0];
+    existingTasks.set(taskId, { title: taskTitle, fullHeader });
+  }
+
+  // Determine which tasks to append (idempotent upsert semantics)
+  const tasksToAppend: Array<{ id: string; title: string; finalId: string }> = [];
+
+  for (const task of remediationList) {
+    const existing = existingTasks.get(task.id);
+
+    if (existing) {
+      // Task ID already exists
+      if (existing.title === task.title) {
+        // Same ID, same content → idempotent, skip
+        log(`Task ${task.id} already exists with same content, skipping`);
+        continue;
+      } else {
+        // Same ID, different content → create content-hash suffix to distinguish
+        const { createHash } = await import('crypto');
+        const contentHash = createHash('sha256')
+          .update(task.title)
+          .digest('hex')
+          .slice(0, 6);
+
+        const suffixedId = `${task.id}-${contentHash}`;
+
+        // Check if the suffixed ID already exists
+        if (existingTasks.has(suffixedId)) {
+          log(`Task ${suffixedId} already exists with same content, skipping`);
+          continue;
+        }
+
+        log(
+          `Task ${task.id} exists with different content, using suffix: ${suffixedId}`,
+        );
+        tasksToAppend.push({ id: task.id, title: task.title, finalId: suffixedId });
+      }
+    } else {
+      // New task ID, append as-is
+      tasksToAppend.push({ id: task.id, title: task.title, finalId: task.id });
+    }
+  }
+
+  // Append tasks that don't have duplicates
+  let updated = planContent;
+  for (const task of tasksToAppend) {
+    const taskHeader = `### Task ${task.finalId}: ${task.title}\n`;
+    updated += taskHeader;
+  }
+
+  // Write plan atomically using temp file + rename pattern
+  const pipelineDir = join(projectRoot, '.pipeline');
+  await mkdir(pipelineDir, { recursive: true });
+
+  const tempFile = `${planPath}.tmp-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  try {
+    await writeFile(tempFile, updated, 'utf-8');
+    // Rename temp file to target (atomic on most filesystems)
+    await require('node:fs/promises').rename(tempFile, planPath);
+  } catch (error) {
+    // Clean up temp file if something went wrong
+    try {
+      await unlinkFile(tempFile);
+    } catch {
+      // Ignore cleanup errors
+    }
+    return {
+      success: false,
+      error: `Failed to append remediation tasks to plan: ${error instanceof Error ? error.message : 'unknown error'}`,
+    };
+  }
+
+  return { success: true };
 }
