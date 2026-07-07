@@ -1268,6 +1268,64 @@ Work on the literal task-N form.
     expect(stamp!.sha).toBe(commitSha);
     expect(stamp!.form).toBe('trailer');
   });
+
+  it('parked-feature: 19-task plan resolves 16/19 via alias (16 completed, 3 unresolved)', async () => {
+    const autoheal = await loadAutoheal();
+    const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
+
+    // Create a plan with 19 tasks
+    const planPath = join(gitDir, '.docs/plans/parked-plan.md');
+    await mkdir(join(gitDir, '.docs/plans'), { recursive: true });
+    let planContent = '# Parked Feature Plan\n\n';
+    for (let i = 1; i <= 19; i++) {
+      planContent += `### Task ${i}: Task ${i} implementation\nWork on task ${i}.\n\n`;
+    }
+    await writeFile(planPath, planContent);
+    await execa('git', ['add', '.docs/plans/parked-plan.md'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'docs: add parked plan'], { cwd: gitDir });
+
+    // Create commits with Task: task-{id} trailers for tasks 1-4, 6-8, 11-19 (16 total)
+    // These are the tasks that will be resolved
+    const resolvedTasks = [1, 2, 3, 4, 6, 7, 8, 11, 12, 13, 14, 15, 16, 17, 18, 19];
+
+    await mkdir(join(gitDir, 'src'), { recursive: true });
+    for (const taskId of resolvedTasks) {
+      const filePath = join(gitDir, 'src', `task-${taskId}.ts`);
+      await writeFile(filePath, `export const task${taskId} = ${taskId};`);
+      await execa('git', ['add', `src/task-${taskId}.ts`], { cwd: gitDir });
+      const commitMsg = `feat: implement task ${taskId}\n\nTask: task-${taskId}\n`;
+      await execa('git', ['commit', '-m', commitMsg], { cwd: gitDir });
+    }
+
+    // Tasks 5, 9, 10 will NOT have commits (left unresolved)
+    // This creates the recovery boundary that Task 10 runbook will cite
+
+    const commits = await autoheal.listCommitsWithTrailers(gitDir);
+    const evidence = await createTaskEvidence(gitDir);
+
+    const result = await autoheal.deriveCompletion(gitDir, planPath, '', commits, evidence);
+
+    // Count completed and incomplete tasks
+    const completedTasks: string[] = [];
+    const incompleteTasks: string[] = [];
+
+    for (let i = 1; i <= 19; i++) {
+      const taskId = String(i);
+      if (result[taskId]?.completed) {
+        completedTasks.push(taskId);
+      } else {
+        incompleteTasks.push(taskId);
+      }
+    }
+
+    // Assert exactly 16 tasks are completed
+    expect(completedTasks).toHaveLength(16);
+    expect(completedTasks.sort((a, b) => Number(a) - Number(b))).toEqual(['1', '2', '3', '4', '6', '7', '8', '11', '12', '13', '14', '15', '16', '17', '18', '19']);
+
+    // Assert exactly 3 tasks remain incomplete
+    expect(incompleteTasks).toHaveLength(3);
+    expect(incompleteTasks.sort((a, b) => Number(a) - Number(b))).toEqual(['5', '9', '10']);
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
