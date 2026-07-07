@@ -12,6 +12,10 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- `conduct-ts --interactive` RunMode: conversational steps open a live REPL session
+  instead of headless print-mode dispatch (`step-runners.ts` respects the RunMode for
+  all conversational steps).
+
 - New `conduct-ts brain start|stop|status` verbs (`brain-supervisor-cli.ts`) host the
   GitHub-issues intake poll as a host-wide, tmux-hosted background loop — an alternative to
   cron for keeping idea capture running without a scheduled task or a live terminal. `start`

@@ -470,7 +470,7 @@ day-to-day, but the surface is still changing.
 | **Status**                   | Reference implementation                      | Active rewrite — feature parity ongoing                          |
 | **Install**                  | Always symlinked by `bin/install`             | Built + symlinked by `bin/install` when Node >= 20.5 is active   |
 | **Build step**               | None                                          | `bin/install` runs `npm install && npm run build` in src/conductor/ |
-| **CLI flags**                | Full surface (`--auto`, `--interactive`, …)   | Same flags **except `--interactive`** is not yet wired           |
+| **CLI flags**                | Full surface (`--auto`, `--interactive`, …)   | Same flags, fully wired                                          |
 | **Dashboard**                | Terminal status log                           | Event-driven renderer with live-region updates and tail pane     |
 | **Completion gates**         | Artifact grep                                 | Typed events + structured gate-runner                            |
 | **Auto-heal**                | None                                          | Reconciles stale `task-status.json` against git log before retry |
