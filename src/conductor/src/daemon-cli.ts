@@ -14,7 +14,7 @@ import { PluginRegistry } from './engine/plugin-registry.js';
 import { registerBuiltins } from './engine/plugin-loader.js';
 import { ConductorEventEmitter } from './ui/events.js';
 import { DefaultStepRunner } from './engine/step-runners.js';
-import { ensureInstallFresh } from './engine/install-freshness.js';
+import { ensureInstallFresh, relinkSkillsForSelfBuild } from './engine/install-freshness.js';
 import { Conductor } from './engine/conductor.js';
 import { classifySelfHost, defaultSelfHostDetector } from './engine/self-host/detector.js';
 import { loadConfig, resolveMemoryProvider } from './engine/config.js';
@@ -893,8 +893,13 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   };
 
   // Task 4: Create the real restart requester with injected lock + process
-  // Task 9 will wire real deps (relink, triggerSelfRestart)
-  const requestRestart = createRestartRequester(projectRoot, log, lock, process, undefined);
+  // Task 9: Wire real deps (relink, triggerSelfRestart) at construction site
+  // relink rebuilds the harness skill symlinks before self-host dispatches
+  // triggerSelfRestart is injected from opts (respawn pane in session-hosted mode)
+  const requestRestart = createRestartRequester(projectRoot, log, lock, process, {
+    relink: () => relinkSkillsForSelfBuild({ log }),
+    triggerSelfRestart: opts.triggerSelfRestart,
+  });
 
   // Task 11: Create the suppression check wrapper that binds projectRoot
   const suppressionChecker = (currentIdentity: string | null) =>

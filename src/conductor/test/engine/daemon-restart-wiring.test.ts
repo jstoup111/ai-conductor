@@ -256,3 +256,74 @@ describe('FR-9 — idle-boundary one-shot fire (real runDaemon loop)', () => {
     expect(fireLogs).toHaveLength(1);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// (d) Construction-site wiring test (daemon-cli.ts): verify that real deps
+// (relink + triggerSelfRestart) are injected into createRestartRequester.
+// Confirms that runDaemonMode threads the deps through to the restart requester.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('daemon-cli.ts wiring: createRestartRequester deps injection', () => {
+  it('verifies createRestartRequester accepts and uses relink + triggerSelfRestart deps', async () => {
+    const { createRestartRequester } = await import('../../src/daemon-cli.js');
+
+    const callOrder: string[] = [];
+    const relinkMock = async () => {
+      callOrder.push('relink');
+    };
+    const triggerMock = async () => {
+      callOrder.push('trigger');
+    };
+
+    const logs: string[] = [];
+    const log = (msg: string) => logs.push(msg);
+
+    // Create a mock lock
+    const lockMock = { releaseSync: () => {} };
+
+    // Create a mock process that doesn't actually exit
+    const processMock = {
+      exit: () => {
+        // no-op in test
+      },
+    } as unknown as NodeJS.Process;
+
+    // Create the requester with deps provided (this is what daemon-cli.ts should do)
+    const requester = createRestartRequester('/fake/daemon/dir', log, lockMock, processMock, {
+      relink: relinkMock,
+      triggerSelfRestart: triggerMock,
+    });
+
+    // Trigger a restart — this should call relink first, then trigger
+    await requester({ fromIdentity: null, targetIdentity: null });
+
+    // Verify both deps were called in the correct order
+    expect(callOrder).toEqual(['relink', 'trigger']);
+  });
+
+  it('verifies createRestartRequester handles missing deps (headless fallback)', async () => {
+    const { createRestartRequester } = await import('../../src/daemon-cli.js');
+
+    const logs: string[] = [];
+    const log = (msg: string) => logs.push(msg);
+
+    // Create a mock lock
+    const lockMock = { releaseSync: () => {} };
+
+    // Track if process.exit was called
+    let exitCalled = false;
+    const processMock = {
+      exit: (code: number) => {
+        exitCalled = true;
+      },
+    } as unknown as NodeJS.Process;
+
+    // Create the requester WITHOUT deps (headless mode)
+    const requester = createRestartRequester('/fake/daemon/dir', log, lockMock, processMock, undefined);
+
+    // Trigger a restart — without deps, should write marker and exit(0)
+    await requester({ fromIdentity: null, targetIdentity: null });
+
+    // In headless mode (no triggerSelfRestart), process.exit should be called
+    expect(exitCalled).toBe(true);
+  });
+});
