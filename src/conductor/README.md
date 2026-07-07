@@ -870,32 +870,89 @@ pidfile path and the O_EXCL create flag stay confined to `daemon-lock.ts`
 
 ### Daemon lifecycle controls: pause, resume, restart (adr-2026-07-04-durable-pause-marker / adr-2026-07-04-respawn-in-place-restart)
 
-**Pause/resume** (`engine/pause-marker.ts`, `engine/daemon.ts`) — operators can quiesce
-daemons before maintenance or upgrades without losing state. Pause writes a durable `.daemon/PAUSED`
-marker; the daemon's loop checks it before the dispatch boundary (`maybeDispatch`), so no new
-work starts while in-flight work finishes normally. Resume removes the marker. Both operations
-work per-repo or fleet-wide (`--all`) with per-repo outcome reporting. Pause is **reentrant**
-(pausing an already-paused repo is a no-op); resume does the same. Pause **persists across
-daemon restarts** — a stopped daemon starting up in a paused repo comes up paused. Automation
-(`ensureRunning`) never bypasses pause. The status surface (`daemon-observe-cli.ts`) shows
-pause state (running / paused / stopped / stale) and timestamp/operator who paused.
+#### Remain-on-exit semantics
 
-**Restart** (`daemon-supervisor-cli.ts`, `engine/daemon-tmux.ts`) — safe in-place restart
+When a tmux session is created for the daemon, **remain-on-exit is armed** via `setRemainOnExit` on
+the pane. This ensures that when the daemon process exits naturally (or is killed), the tmux pane
+survives with the exit status and logs visible. An operator watching a connected daemon stays
+connected through restart and can observe the output. This is critical for observability — the
+pane becomes a durable record of the daemon's lifecycle and any exit reason.
+
+Remain-on-exit is **armed unconditionally at session creation** — it applies to every restart
+scenario: manual operator restart (`restart`), queued-restart-at-idle (`RESTART-PENDING` marker),
+and stale-engine auto-restart. The goal is to ensure that whether the daemon exits cleanly or
+crashes, an operator with an attached PTY sees it happen rather than being mysteriously
+disconnected.
+
+#### Respawn-in-place stale-engine flow
+
+When the daemon (or an external monitor) detects that `dist/index.js` has changed (stale engine),
+the daemon writes a `.daemon/RESTART_PENDING` marker (underscore, stale-engine marker — distinct
+from the CLI restart queue marker `.daemon/RESTART-PENDING` which uses hyphen) with engine
+identity metadata and exits cleanly at the next idle point (before dispatching a new feature).
+The marker carries two engine identities: the identity when the restart was requested, and the
+target identity (the engine being transitioned to). It also records `reason`, `fromIdentity`,
+`targetIdentity`, and `at` timestamp.
+
+On restart, the daemon's startup handshake (`initStaleEngineState`, `stale-engine-init.ts`):
+1. Captures the fresh engine identity (sha256 of `dist/index.js`)
+2. Logs `ARMED` (if auto-restart is enabled and self-host mode is active) or `DISARMED`
+3. If a `RESTART_PENDING` marker is present:
+   - Logs the transition: "restarted for engine refresh — from `<old>` to `<target>`, fresh `<current>`"
+   - Detects non-convergence when fresh identity differs from the target (e.g., a rebuild didn't
+     finish), records a suppression, and prevents restart loops
+4. Clears the marker before dispatch so the backlog scan observes clean state
+
+**Headless fallback**: When the daemon runs in headless mode (bare-run, no tmux), the stale-engine
+flow operates identically — the daemon exits with code 0 on the stale verdict, and an external
+respawn mechanism (supervisor, systemd, etc.) relaunches it with the fresh engine. The marker
+persists on disk, so the fresh restart consumes it and completes the handshake.
+
+#### Relink-before-handoff
+
+Every daemon restart entry point — manual `restart`, queued restart at idle, or stale-engine
+respawn — runs a skill-relink preflight (`relinkSkillsForSelfBuild`, `install-freshness.ts`) in
+self-host mode **before any dispatch** occurs. This ensures skills are fresh on every restart,
+catching any edits to the harness that landed on main while the daemon was running. The relink
+failure (e.g., installer missing) aborts the build with an `InstallStaleError` and HALTs rather
+than proceeding with stale skills.
+
+#### Pause/resume
+
+Operators can quiesce daemons before maintenance or upgrades without losing state. Pause writes a
+durable `.daemon/PAUSED` marker; the daemon's loop checks it before the dispatch boundary
+(`maybeDispatch`), so no new work starts while in-flight work finishes normally. Resume removes
+the marker. Both operations work per-repo or fleet-wide (`--all`) with per-repo outcome reporting.
+Pause is **reentrant** (pausing an already-paused repo is a no-op); resume does the same. Pause
+**persists across daemon restarts** — a stopped daemon starting up in a paused repo comes up
+paused. Automation (`ensureRunning`) never bypasses pause. The status surface (`daemon-observe-cli.ts`)
+shows pause state (running / paused / stopped / stale) and timestamp/operator who paused.
+
+#### Restart (manual and queued)
+
+**Manual restart** (`daemon-supervisor-cli.ts`, `engine/daemon-tmux.ts`) — safe in-place restart
 preserves the daemon's tmux **session**, **window layout**, and any **operator windows** the
-operator may have opened. Implementation: `setRemainOnExit` (so the pane survives when the
-daemon exits) + `respawn-pane -k` (kills the existing process, re-runs the daemon command in
-the same pane). Unlike the old kill-session + new-session, an operator watching a connected
-daemon stays connected through restart. Restart respects **pause state** — restarting a paused
-daemon queues the restart (writes a `.daemon/RESTART-PENDING` marker) and fires when the daemon
-next goes idle, keeping the daemon paused. Fleet restart (`--all`) reports per-repo outcome:
-restarted / queued / started / error.
+operator may have opened. Implementation: `setRemainOnExit` arms the pane (documented above);
+`respawn-pane -k` kills the existing process and re-runs the daemon command in the same pane.
+Unlike the old kill-session + new-session, an operator watching a connected daemon stays
+connected through restart. Restart respects **pause state** — restarting a paused daemon queues
+the restart instead of firing immediately.
+
+**CLI restart flow** — when a restart is requested against a busy daemon (in-flight features),
+the restart cannot interrupt, so it queues durably by writing a `.daemon/RESTART-PENDING`
+marker (hyphen, CLI queue marker — distinct from the stale-engine marker `.daemon/RESTART_PENDING`
+which uses underscore). The marker carries the restart reason and optional metadata (`requestedBy`,
+`blockingSlug`). The daemon polls the marker and fires the restart at the next idle point
+(after in-flight work drains). This **prevents restart storms** — multiple writes coalesce into
+one fire — and **survives daemon crashes** — a crash before firing leaves the marker on disk to
+be consumed at the next boot.
 
 **Consume-once restart queuing** (`engine/restart-marker.ts`) — when a daemon starts up with
-a pending-restart marker, it consumes the marker (won't fire again) and, if idle, self-respawns
-as its final act (bare-run path: log + clean exit; supervisor path: supervisor sees the restart
-and respawns via the management interface). This **prevents restart storms** (multiple writes
-coalesce into one fire) and **survives daemon crashes** (a crash before fire doesn't lose the
-intent).
+a pending-restart marker (`.daemon/RESTART-PENDING`, hyphen format), it consumes the marker
+(won't fire again) and clears it. If the daemon is idle at boot, the restart fires as its
+final act: in supervisor mode, the supervisor sees the restart signal and respawns via tmux;
+in bare-run mode, a clean exit (code 0) signals the external respawn mechanism. In both cases,
+the restart relinks skills preflight before the respawn, ensuring skills are fresh.
 
 **Engine version pinning and safe rebuilds** — each daemon pins its engine version at startup
 (stores the pinned `engineDir` in the pidfile). Rebuilding or upgrading the shared engine does

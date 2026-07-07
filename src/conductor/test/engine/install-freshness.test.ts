@@ -11,7 +11,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, mkdir, writeFile, chmod } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, writeFile, chmod, lstat, readlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -398,6 +398,129 @@ describe('relinkSkillsForSelfBuild — Phase 2 skill-relink preflight (TR-4)', (
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('relinkSkillsForSelfBuild — integration tests with real installer (TR-3)', () => {
+  // These tests verify the relink step end-to-end with a real (isolated) installer binary.
+  // They use isolated temp directories to avoid mutating the real system.
+
+  let tempHome: string;
+  let tempHarnessRoot: string;
+  let skillsDir: string;
+
+  beforeEach(async () => {
+    // Create an isolated temp HOME and harness root
+    tempHome = await mkdtemp(join(tmpdir(), 'test-home-'));
+    tempHarnessRoot = await mkdtemp(join(tmpdir(), 'test-harness-'));
+    skillsDir = join(tempHome, '.claude', 'skills');
+  });
+
+  afterEach(async () => {
+    await rm(tempHome, { recursive: true, force: true });
+    await rm(tempHarnessRoot, { recursive: true, force: true });
+  });
+
+  it('relink with real bin/install creates skill symlinks in isolated $HOME (TR-3)', async () => {
+    // Set up isolated harness with some skills
+    const skills = ['skill-a', 'skill-b'];
+    for (const skill of skills) {
+      const skillDir = join(tempHarnessRoot, 'skills', skill);
+      await mkdir(skillDir, { recursive: true });
+      await writeFile(join(skillDir, 'SKILL.md'), '# Test Skill\n');
+    }
+
+    // Create a real bin/install script that handles --update
+    const binDir = join(tempHarnessRoot, 'bin');
+    await mkdir(binDir, { recursive: true });
+    const installer = join(binDir, 'install');
+    const installScript = `#!/usr/bin/env bash
+set -euo pipefail
+
+if [ "\${1:-}" = "--update" ]; then
+  SKILLS_DIR="\${HOME}/.claude/skills"
+  mkdir -p "\$SKILLS_DIR"
+
+  # Symlink each skill
+  for skill in skill-a skill-b; do
+    ln -sfn "${tempHarnessRoot}/skills/\$skill" "\$SKILLS_DIR/\$skill"
+  done
+
+  exit 0
+fi
+
+exit 1
+`;
+    await writeFile(installer, installScript);
+    await chmod(installer, 0o755);
+
+    // Mock the HOME for the duration of the test
+    const originalHome = process.env.HOME;
+    process.env.HOME = tempHome;
+
+    try {
+      // Create a custom runner that uses the isolated HOME
+      const runner: InstallRunner = async (args, harnessRoot) => {
+        const { execa } = await import('execa');
+        const r = await execa(join(harnessRoot, 'bin', 'install'), args, {
+          cwd: harnessRoot,
+          reject: false,
+          env: { ...process.env, HOME: tempHome },
+        });
+        return typeof r.exitCode === 'number' ? r.exitCode : 1;
+      };
+
+      // Call relinkSkillsForSelfBuild with the isolated harness
+      const logs: string[] = [];
+      await expect(
+        relinkSkillsForSelfBuild({ harnessRoot: tempHarnessRoot, runner, log: (m) => logs.push(m) }),
+      ).resolves.toBeUndefined();
+
+      // Verify skill symlinks were created
+      for (const skill of skills) {
+        const symlink = join(skillsDir, skill);
+        const stats = await lstat(symlink);
+        expect(stats.isSymbolicLink()).toBe(true);
+
+        // Verify the symlink points to the correct location
+        const target = await readlink(symlink);
+        expect(target).toBe(join(tempHarnessRoot, 'skills', skill));
+      }
+    } finally {
+      process.env.HOME = originalHome;
+    }
+  });
+
+  it('#363 guard rejects unresolved root (worktree-resolved)', async () => {
+    // Create a worktree-style root and verify it's rejected
+    const worktreeRoot = join(tempHarnessRoot, '.worktrees', 'feature');
+    await mkdir(worktreeRoot, { recursive: true });
+    await mkdir(join(worktreeRoot, 'bin'), { recursive: true });
+    await writeFile(
+      join(worktreeRoot, 'bin', 'install'),
+      '#!/usr/bin/env bash\nexit 0\n',
+    );
+    await chmod(join(worktreeRoot, 'bin', 'install'), 0o755);
+
+    // Mock the installed-root resolver to return a rejected result
+    const rejected: InstalledRootResolution = {
+      status: 'rejected',
+      reason: 'worktree-root',
+      detail: `resolved root ${worktreeRoot} still sits under .worktrees/`,
+    };
+
+    const { runner, calls } = makeRunner({ check: 0, update: 0 });
+
+    const err = await relinkSkillsForSelfBuild({
+      resolveInstalledRoot: async () => rejected,
+      runner,
+      log: () => {},
+    }).catch((e) => e);
+
+    expect(err).toBeInstanceOf(InstallStaleError);
+    expect((err as Error).message).toContain('#363');
+    expect((err as Error).message).toContain(worktreeRoot);
+    expect(calls).toEqual([]); // installer was never run
   });
 });
 
