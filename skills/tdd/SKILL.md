@@ -164,28 +164,37 @@ task are covered.
 
 Not all tasks require code commits. Some tasks verify that existing behavior meets acceptance
 criteria, and some have no implementation work (documentation, architectural decisions, etc.).
-Use `Evidence:` trailers in the final task report to document completion:
+When a task completes without code changes, emit an empty commit with Evidence trailers.
+
+The engine reads commits only — it does not inspect task reports or summary lines. Evidence
+forms MUST be emitted as `git commit --allow-empty` with the Evidence trailer in the commit
+body. This ensures the conductor can track task completion by reading the commit log, achieving
+bidirectional traceability: tasks identify their commits via trailers, and commits carry proof
+of completion.
 
 **Form 1: `Evidence: satisfied-by <sha>`**
 Use when a task's acceptance criteria are already met by existing code (discovered during
-pre-completion scan). Include the commit SHA that satisfies the criteria:
+pre-completion scan). Emit a no-op commit carrying the satisfying commit SHA:
 ```
-Task 7: Database connection pooling already implemented and tested
-Evidence: satisfied-by abc123def456
+git commit --allow-empty -m "chore(evidence): task criteria met" \
+  -m "Task: 7" \
+  -m "Evidence: satisfied-by abc123def456"
 ```
 
 **Form 2: `Evidence: skipped <reason>`**
-Use when a task has no implementation work or is intentionally deferred. Provide a concise
-reason:
+Use when a task has no implementation work or is intentionally deferred. Emit a no-op commit
+with a concise reason:
 ```
-Task 12: Style documentation (no code changes required, awaiting designer feedback)
-Evidence: skipped awaiting_stakeholder_input
+git commit --allow-empty -m "chore(evidence): task deferred" \
+  -m "Task: 12" \
+  -m "Evidence: skipped awaiting_stakeholder_input"
 ```
 
-Both forms should appear in the task report sent to the conductor. The conductor recognizes
-these trailers and marks the task `completed` without requiring a commit. This enables
-honest tracking: a task that "completes" via verification is marked differently from one
-that completes via code delivery, supporting retro analysis and pipeline audits.
+Each empty commit carries `Task: <id>` (the task ID) plus `Evidence: satisfied-by <sha>` OR
+`Evidence: skipped <reason>` (the evidence form). The conductor recognizes these commits and
+marks the task `completed` without requiring ordinary code changes. This enables honest tracking:
+a task that "completes" via verification is marked differently from one that completes via code
+delivery, supporting retro analysis and pipeline audits.
 
 ### Memory Checkpoint (Per-Cycle, Conditional)
 
