@@ -63,7 +63,8 @@ DEPENDENCY ORDER — Dispatch tasks in topological order respecting declared dep
                   in all commits (including refactors). Subagent runs full TDD cycle: RED → DOMAIN → GREEN → DOMAIN → COMMIT
 3. VERIFY       — Run the scoped affected-test set (see Scoped VERIFY below) to confirm the subagent's work
 4. FIX          — If tests fail, VERIFY failure first (see below), then dispatch subagent with error context
-5. UPDATE       — Mark task as "completed" in .pipeline/task-status.json
+5. COMMIT       — Ensure the subagent's commit carries the `Task: <id>` trailer (the engine
+                  derives completion from it; the orchestrator never writes `completed` itself)
 6. REPORT       — Return PASS or FAIL with reason to the conductor
 ```
 
