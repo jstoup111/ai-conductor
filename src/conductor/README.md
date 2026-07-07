@@ -2027,6 +2027,21 @@ dispatch (and at idle), rebuilds from source and re-hashes. A mismatch means the
 longer matches the freshly-built source. On non-convergence at boot (fresh identity ≠ the restart's
 target) restart is suppressed to avoid thrashing.
 
+#### Respawn in-place (single-generation) — Fix for #400
+
+On stale-engine detection at idle boundary:
+
+1. **Fired trigger**: Requester exits unconditionally (`lock.releaseSync()` then `process.exit(0)`)
+   - Predecessor daemon ends cleanly
+   - Tmux session survives for successor to reattach
+2. **Bounded takeover**: Lock holder polls for up to 10s waiting for predecessor to release
+   - If acquired: successor daemon takes over
+   - If timeout: abandoned lock, fallback reclaim logic
+3. **Lock-loser exit**: Non-owner daemon detects lock held, exits cleanly (code 0)
+   - No resident process, no cleanup needed
+
+This ensures single-generation handoff: exactly one daemon owns the session at any time, and predecessor always exits before successor takes control.
+
 See `.docs/plans/2026-07-03-daemon-auto-restart-stale-engine.md` for the full design.
 
 ### Harness self-host guardrails (`engine/self-host/`)
