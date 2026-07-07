@@ -96,6 +96,20 @@ describe('integration/gate-loop', () => {
         join(dir, '.pipeline/task-status.json'),
         JSON.stringify({ tasks: taskIds.map((id) => ({ id, status: 'completed' })) }),
       );
+    } else if (step === 'build_review') {
+      // The build_review judgement gate's completion predicate requires a
+      // fresh, valid PASS verdict at .pipeline/build-review.json (see
+      // artifacts.ts BUILD_REVIEW_VERDICT). Tests that enable build_review
+      // and don't care about its grader behavior (only its topology/ordering
+      // in the tail) satisfy it here, same as every other gate's artifact.
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline/build-review.json'),
+        JSON.stringify({
+          verdict: 'PASS',
+          rubric: { tautology: false, scope: false, rootCause: false },
+        }),
+      );
     } else if (step === 'manual_test') {
       await writeFile(
         join(dir, '.pipeline/manual-test-results.md'),
