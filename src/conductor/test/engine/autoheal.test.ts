@@ -1110,8 +1110,10 @@ A task that will be completed by evidence form.
     // Get the SHA of the work commit
     const workCommitSha = (await execa('git', ['rev-parse', 'HEAD'], { cwd: gitDir })).stdout.trim();
 
-    // Create an empty no-op commit with Evidence: satisfied-by trailer
-    await execa('git', ['commit', '--allow-empty', '-m', `noop: evidence commit\n\nEvidence: satisfied-by ${workCommitSha}\n`], { cwd: gitDir });
+    // Create an empty no-op commit with the ADR-canonical form: `Task: <id>`
+    // PLUS the Evidence: trailer (H5 — an unscoped Evidence commit must never
+    // evidence every task in a plan).
+    await execa('git', ['commit', '--allow-empty', '-m', `noop: evidence commit\n\nTask: 7\nEvidence: satisfied-by ${workCommitSha}\n`], { cwd: gitDir });
 
     const commits = await autoheal.listCommitsWithTrailers(gitDir);
     const evidence = await createTaskEvidence(gitDir);
@@ -1140,8 +1142,9 @@ A task that will be skipped.
     await execa('git', ['add', '.docs/plans/test-plan.md'], { cwd: gitDir });
     await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: gitDir });
 
-    // Create a no-op commit with Evidence: skipped trailer
-    await execa('git', ['commit', '--allow-empty', '-m', 'noop: skip evidence\n\nEvidence: skipped build unavailable\n'], { cwd: gitDir });
+    // Create a no-op commit with the ADR-canonical form: `Task: <id>` PLUS
+    // the Evidence: skipped trailer (H5 scoping, as above).
+    await execa('git', ['commit', '--allow-empty', '-m', 'noop: skip evidence\n\nTask: 8\nEvidence: skipped build unavailable\n'], { cwd: gitDir });
 
     const commits = await autoheal.listCommitsWithTrailers(gitDir);
     const evidence = await createTaskEvidence(gitDir);
@@ -1171,7 +1174,7 @@ A task with a dangling sha.
 
     // Create a no-op commit with a bogus sha
     const fakeSha = 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef';
-    await execa('git', ['commit', '--allow-empty', '-m', `noop: bad evidence\n\nEvidence: satisfied-by ${fakeSha}\n`], { cwd: gitDir });
+    await execa('git', ['commit', '--allow-empty', '-m', `noop: bad evidence\n\nTask: 9\nEvidence: satisfied-by ${fakeSha}\n`], { cwd: gitDir });
 
     const commits = await autoheal.listCommitsWithTrailers(gitDir);
     const evidence = await createTaskEvidence(gitDir);
@@ -1229,7 +1232,7 @@ Another task to skip.
     await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: gitDir });
 
     // Create skip evidence
-    await execa('git', ['commit', '--allow-empty', '-m', 'noop: skip commit\n\nEvidence: skipped deployment blocked\n'], { cwd: gitDir });
+    await execa('git', ['commit', '--allow-empty', '-m', 'noop: skip commit\n\nTask: 11\nEvidence: skipped deployment blocked\n'], { cwd: gitDir });
 
     const commits = await autoheal.listCommitsWithTrailers(gitDir);
     const evidence = await createTaskEvidence(gitDir);

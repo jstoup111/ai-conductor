@@ -118,8 +118,8 @@ describe('integration: build gate recomputes completion on every evaluation (H6/
 
     // Attempt 1: zero evidencing commits — nothing completed.
     const first = await deriveCompletion(dir, planPath);
-    expect(first.completed['1']).toBeUndefined();
-    expect(first.completed['2']).toBeUndefined();
+    expect(first['1']?.completed).toBeFalsy();
+    expect(first['2']?.completed).toBeFalsy();
 
     // Attempt 2 (same run, same repo): commit evidence for both tasks.
     await commitTrailer('1', 'src/a.ts');
@@ -129,9 +129,9 @@ describe('integration: build gate recomputes completion on every evaluation (H6/
     // evaluation within the same run) must see attempt 2's new commits —
     // proving there is no once-per-run memoization/guard baked into derive.
     const second = await deriveCompletion(dir, planPath);
-    expect(second.completed['1']).toBeDefined();
-    expect(second.completed['2']).toBeDefined();
-    expect(typeof second.completed['1'].evidencedBy).toBe('string');
+    expect(second['1'].completed).toBe(true);
+    expect(second['2'].completed).toBe(true);
+    expect(typeof second['1'].evidencedBy).toBe('string');
   });
 
   it('negative: forged all-completed rows with zero commits must NOT pass the gate', async () => {
@@ -186,7 +186,7 @@ describe('integration: build gate recomputes completion on every evaluation (H6/
 
     // First evaluation: no evidence at all.
     const before = await deriveCompletion(dir, planPath);
-    expect(Object.keys(before.completed)).toHaveLength(0);
+    expect(Object.values(before).filter((t) => t.completed)).toHaveLength(0);
 
     // The "attempt 2" commit lands on the SAME branch, in the SAME process —
     // there is no restart between these two derive calls.
@@ -199,6 +199,6 @@ describe('integration: build gate recomputes completion on every evaluation (H6/
     // (mirroring the removed `autoHealAttempted` semantics) would make this
     // call reuse the FIRST call's cached empty result instead of re-scanning
     // git, so `after` would incorrectly still show zero completions.
-    expect(Object.keys(after.completed).length).toBe(2);
+    expect(Object.values(after).filter((t) => t.completed).length).toBe(2);
   });
 });

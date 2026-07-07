@@ -462,8 +462,13 @@ async function deriveCompletionInternal(
   for (const taskId of planPaths.keys()) {
     result[taskId] = { completed: false };
 
-    // Look for Evidence: forms first (no-op commits)
+    // Look for Evidence: forms first (no-op commits). Scoped to THIS task:
+    // the ADR's canonical no-op form is an empty commit carrying BOTH
+    // `Task: <id>` and the `Evidence:` trailer — an unscoped Evidence commit
+    // must never complete/skip every task in the plan.
     const evidenceCommit = commits.find((c) => {
+      const taskTrailers = c.trailers['Task'] || [];
+      if (!taskTrailers.includes(taskId)) return false;
       const evidenceTrailers = c.trailers['Evidence'] || [];
       return evidenceTrailers.some((e) => e.startsWith(`satisfied-by `) || e.startsWith('skipped '));
     });
@@ -585,59 +590,59 @@ async function deriveCompletionInternal(
 
 /**
  * PUBLIC API: Derive task completion from git evidence.
- * Automatically resolves all parameters and calls deriveCompletionInternal.
- * Call this function on every build-gate evaluation to get fresh completion data.
  *
- * @param projectRoot - Project root directory
- * @param planPath - Path to the plan markdown file
- * @returns Object with { completed: { taskId: { evidencedBy, ... }, ... } }
+ * Two call forms, one behavior:
+ *  - `deriveCompletion(root, planPath)` — gate/engine form: resolves the plan
+ *    anchor, evidence-range commits, and the sidecar itself (H7 per-gate
+ *    derive), then derives.
+ *  - `deriveCompletion(root, planPath, anchor, commits, evidence)` — explicit
+ *    form (tests, hook feedback path): callers supply the pieces.
+ *
+ * Returns the FULL per-task map — an entry for EVERY plan task, including
+ * incomplete (`completed: false`), audit entries for near-misses, and
+ * `status: 'skipped'` rows from `Evidence: skipped` no-op commits. Callers
+ * that only care about positives filter on `.completed`; discarding the
+ * negative/skip information here is what previously hid H5's skip form from
+ * the write-back entirely.
  */
 export async function deriveCompletion(
   projectRoot: string,
   planPath: string,
-): Promise<{ completed: Record<string, { evidencedBy?: string }> }> {
-  let anchor = '';
-  try {
-    // Get the first commit (plan anchor) for evidence range boundary.
-    // NOTE: `-n 1 --reverse` is a classic git footgun — `-n`/`--max-count` is
-    // applied BEFORE `--reverse`, so `-n 1 --reverse HEAD` returns the first
-    // of the newest-first list (i.e. HEAD itself), not the oldest commit.
-    // That made anchor always equal HEAD, so `${anchor}..HEAD` was always an
-    // empty range and every gate evaluation saw zero commits regardless of
-    // real history. Reading the full reversed list and taking its first
-    // line gives the true root commit.
-    const { stdout } = await execa('git', ['log', '--format=%H', '--reverse', 'HEAD'], {
-      cwd: projectRoot,
-      reject: false,
-    });
-    anchor = (stdout || '').split('\n')[0]?.trim() ?? '';
-  } catch {
-    // No commits yet — use empty string, getEvidenceRange will handle it
-    anchor = '';
-  }
-
-  // Load commits with trailers
-  const commitResult = await getEvidenceRange(projectRoot, anchor);
-  const commits = commitResult.commits;
-
-  // Load task evidence sidecar
-  const { createTaskEvidence } = await import('./task-evidence.js');
-  const evidence = await createTaskEvidence(projectRoot);
-
-  // Delegate to internal implementation
-  const result = await deriveCompletionInternal(projectRoot, planPath, anchor, commits, evidence);
-
-  // Transform result to match test expectations: { completed: { taskId: { evidencedBy, ... } } }
-  const completed: Record<string, { evidencedBy?: string }> = {};
-  for (const [taskId, taskResult] of Object.entries(result)) {
-    if (taskResult.completed) {
-      completed[taskId] = {
-        evidencedBy: taskResult.evidencedBy,
-      };
+  anchorArg?: string,
+  commitsArg?: CommitWithTrailers[],
+  evidenceArg?: { evidenceStamps: Map<string, { sha: string; form: string }>; write(): Promise<void> },
+): Promise<DeriveCompletionResult> {
+  let anchor = anchorArg ?? '';
+  if (anchorArg === undefined) {
+    try {
+      // Get the first commit (plan anchor) for evidence range boundary.
+      // NOTE: `-n 1 --reverse` is a classic git footgun — `-n`/`--max-count` is
+      // applied BEFORE `--reverse`, so `-n 1 --reverse HEAD` returns the first
+      // of the newest-first list (i.e. HEAD itself), not the oldest commit.
+      // That made anchor always equal HEAD, so `${anchor}..HEAD` was always an
+      // empty range and every gate evaluation saw zero commits regardless of
+      // real history. Reading the full reversed list and taking its first
+      // line gives the true root commit.
+      const { stdout } = await execa('git', ['log', '--format=%H', '--reverse', 'HEAD'], {
+        cwd: projectRoot,
+        reject: false,
+      });
+      anchor = (stdout || '').split('\n')[0]?.trim() ?? '';
+    } catch {
+      // No commits yet — use empty string, getEvidenceRange will handle it
+      anchor = '';
     }
   }
 
-  return { completed };
+  const commits = commitsArg ?? (await getEvidenceRange(projectRoot, anchor)).commits;
+
+  let evidence = evidenceArg;
+  if (!evidence) {
+    const { createTaskEvidence } = await import('./task-evidence.js');
+    evidence = await createTaskEvidence(projectRoot);
+  }
+
+  return deriveCompletionInternal(projectRoot, planPath, anchor, commits, evidence);
 }
 
 /**
@@ -656,7 +661,7 @@ export async function deriveCompletion(
  */
 export async function applyDerivedCompletion(
   projectRoot: string,
-  derived: { completed: Record<string, { evidencedBy?: string }> },
+  derived: DeriveCompletionResult,
 ): Promise<AutoHealResult> {
   const result: AutoHealResult = { healed: [], skipped: [] };
   try {
@@ -666,9 +671,19 @@ export async function applyDerivedCompletion(
     const pendingTasks = status.tasks.filter((t) => t.status === 'pending');
     if (pendingTasks.length === 0) return result;
 
+    let wroteAnything = false;
     for (const task of pendingTasks) {
-      const hit = derived.completed[task.id];
-      if (!hit) {
+      const hit = derived[task.id];
+      if (hit?.status === 'skipped') {
+        // H5: `Evidence: skipped <reason>` no-op commits mark the row skipped
+        // (gate-acceptable) — previously dropped entirely by the write-back,
+        // leaving skip-evidenced tasks pending forever.
+        task.rawEntry.status = 'skipped';
+        if (hit.skipReason) task.rawEntry.skip_reason = hit.skipReason;
+        wroteAnything = true;
+        continue;
+      }
+      if (!hit?.completed) {
         result.skipped.push({ taskId: task.id, reason: 'no derived evidence' });
         continue;
       }
@@ -676,6 +691,7 @@ export async function applyDerivedCompletion(
       if (hit.evidencedBy) {
         task.rawEntry.commit = hit.evidencedBy.slice(0, 7);
       }
+      wroteAnything = true;
       result.healed.push({
         taskId: task.id,
         commit: hit.evidencedBy ? hit.evidencedBy.slice(0, 7) : '',
@@ -684,7 +700,7 @@ export async function applyDerivedCompletion(
       });
     }
 
-    if (result.healed.length > 0) {
+    if (wroteAnything) {
       await writeTaskStatus(status);
     }
     await writeAuditFile(projectRoot, result);
