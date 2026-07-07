@@ -1144,6 +1144,10 @@ describe('integration/gate-loop', () => {
       expect(completed).toBe(false);
       expect(buildRuns).toBe(3); // initial + 2 kickback rebuilds, capped there
       await expect(access(join(dir, '.pipeline/HALT'))).resolves.toBeUndefined();
+      const haltContents = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+      // The HALT marker must carry the grader's evidence, not a generic message,
+      // so the surfaced blocker tells the human what the grader actually flagged.
+      expect(haltContents).toContain('always fails');
     });
 
     it('the build_review counter is independent of manualTestSelfHeals', async () => {
