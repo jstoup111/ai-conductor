@@ -346,6 +346,12 @@ export async function dispatchDaemonSupervisor(
           }
         }
 
+        // Self-build skill-relink preflight (TR-4): before respawning, proactively
+        // relink harness skills so newly-added or renamed skills are available to
+        // dispatched `claude -p '/<skill>'` calls. Throws InstallStaleError on
+        // failure (Task 12 handles non-zero exit).
+        await relinkSkills();
+
         const outcome = await supervisor.restart(cwd);
         // Always surface the outcome — degraded restarts (fallback kill+recreate)
         // MUST be reported explicitly so the operator knows scrollback/session

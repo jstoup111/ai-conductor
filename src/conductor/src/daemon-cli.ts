@@ -285,16 +285,6 @@ export function createRestartRequester(
         daemonDir,
         log,
       );
-
-      // Step 3: Handle session-hosted vs headless paths
-      if (isSessionHosted) {
-        // Session-hosted: call triggerSelfRestart and don't exit
-        await deps.triggerSelfRestart();
-      } else {
-        // Headless: release lock and exit(0)
-        lock.releaseSync();
-        process.exit(0);
-      }
     } catch (err) {
       // Backstop: ensure lock is released even if marker write fails
       // Only applies to headless mode (session-hosted should not reach here)
@@ -303,6 +293,17 @@ export function createRestartRequester(
         process.exit(1);
       }
       return; // Never reached in production, but clarifies intent
+    }
+
+    // Step 3: Handle session-hosted vs headless paths
+    // (moved outside try-catch so exit(0) is not caught on failure in tests)
+    if (isSessionHosted) {
+      // Session-hosted: call triggerSelfRestart and don't exit
+      await deps.triggerSelfRestart();
+    } else {
+      // Headless: release lock and exit(0)
+      lock.releaseSync();
+      process.exit(0);
     }
   };
 }
@@ -862,8 +863,9 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       ),
   };
 
-  // Task 14: Create the real restart requester with injected lock + process
-  const requestRestart = createRestartRequester(projectRoot, log, lock, process);
+  // Task 4: Create the real restart requester with injected lock + process
+  // Task 9 will wire real deps (relink, triggerSelfRestart)
+  const requestRestart = createRestartRequester(projectRoot, log, lock, process, undefined);
 
   // Task 11: Create the suppression check wrapper that binds projectRoot
   const suppressionChecker = (currentIdentity: string | null) =>

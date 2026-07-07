@@ -123,7 +123,7 @@ describe('dispatchDaemonSupervisor: verb → supervisor method routing', () => {
 
     const code: number = await dispatch(
       { verb: 'restart' },
-      { supervisor, cwd: CWD, out: (l: string) => out.push(l) },
+      { supervisor, cwd: CWD, out: (l: string) => out.push(l), relinkSkills: async () => {} },
     );
 
     expect(code).toBe(0);
@@ -416,7 +416,7 @@ describe('dispatchDaemonSupervisor: restart — immediate (idle/paused) vs queue
 
     const code: number = await dispatch(
       { verb: 'restart' },
-      { supervisor, cwd: repo, out: (l: string) => out.push(l) },
+      { supervisor, cwd: repo, out: (l: string) => out.push(l), relinkSkills: async () => {} },
     );
 
     expect(code).toBe(0);
@@ -434,7 +434,7 @@ describe('dispatchDaemonSupervisor: restart — immediate (idle/paused) vs queue
 
     const code: number = await dispatch(
       { verb: 'restart' },
-      { supervisor, cwd: repo, out: (l: string) => out.push(l) },
+      { supervisor, cwd: repo, out: (l: string) => out.push(l), relinkSkills: async () => {} },
     );
 
     expect(code).toBe(0);
@@ -456,6 +456,7 @@ describe('dispatchDaemonSupervisor: restart — immediate (idle/paused) vs queue
         cwd: repo,
         out: (l: string) => out.push(l),
         isBusy: async () => ({ busy: true, blockingSlug: 'feature-in-flight' }),
+        relinkSkills: async () => {},
       },
     );
 
@@ -489,6 +490,7 @@ describe('dispatchDaemonSupervisor: restart — immediate (idle/paused) vs queue
           isBusyCalled = true;
           return { busy: true, blockingSlug: 'should-never-surface' };
         },
+        relinkSkills: async () => {},
       },
     );
 
