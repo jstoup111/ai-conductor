@@ -14,6 +14,7 @@ import { prepareWorktree } from './worktree-prepare.js';
 import { makeProductionGh } from './pr-labels.js';
 import { ensureWorktree } from './worktree-shared.js';
 import { FINISH_CHOICE_MARKER, FINISH_CHOICE_VALUES } from './artifacts.js';
+import { escalateBuildFailure } from './build-failure-escalation.js';
 
 export interface RealDepsConfig {
   /** The main checkout the daemon runs from. */
@@ -114,6 +115,18 @@ export function makeFeatureRunnerDeps(cfg: RealDepsConfig): FeatureRunnerDeps {
     // daemon-side write here would land on the main checkout's base branch —
     // never pushed, and it permanently breaks fastForwardRoot's --ff-only
     // advance once local main is ahead of origin.
+
+    // Escalate a false-ship outcome by pushing the worktree branch and opening a
+    // draft needs-remediation PR. Called when an outcome converges DONE but fails
+    // the ship-eligibility guard. Best-effort: push failure resolves to {} (FR-7
+    // degradation), never throws (non-throwing contract).
+    escalateBuildFailure: async (opts) => {
+      return escalateBuildFailure({
+        projectRoot: opts.projectRoot,
+        failureReason: opts.failureReason,
+        log: cfg.log,
+      });
+    },
   };
 }
 

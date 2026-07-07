@@ -260,6 +260,13 @@ export interface CompletionContext {
    * environments without git behave exactly as before the guard existed.
    */
   getHeadSha?: () => Promise<string | null>;
+  /** Whether the engine is running in daemon mode. Affects finish convergence (Story 2). */
+  daemon?: boolean;
+  /**
+   * Evidence reader for push verification. Returns true if HEAD is pushed, false if not,
+   * null if indeterminate. Injected by Conductor; returns undefined for non-git or legacy contexts.
+   */
+  isHeadPushed?: () => Promise<boolean | null>;
 }
 
 /**
@@ -757,6 +764,15 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
         reason: `${FINISH_CHOICE_MARKER} is stale (mtime predates this session) — finish must re-run`,
       };
     }
+    // LEADING branch: Daemon mode non-convergence check.
+    // Daemon mode is deterministic; operator decisions cannot be made autonomously.
+    // Only 'pr' choice converges in daemon mode (autonomous ship to PR).
+    if (ctx.daemon === true && (choice === 'keep' || choice === 'merge-local' || choice === 'discard')) {
+      return {
+        done: false,
+        reason: `Daemon mode cannot converge on '${choice}': requires operator decision`,
+      };
+    }
     if (choice === 'pr') {
       let prUrl: string | undefined;
       try {
@@ -790,6 +806,35 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
         }
       } catch {
         // fail-open — presentation is not worth blocking a ship on gh failure
+      }
+
+      // adr-2026-07-06-daemon-false-ship-guard (Task 5+6): Evidence check for push
+      // verification. When isHeadPushed is available, verify HEAD was pushed to
+      // the tracking ref before allowing convergence to DONE. Fail-closed (never
+      // silently pass) on any error: false → not pushed, null → indeterminate,
+      // throw → corrupt repo. Fail-open if the injectable is absent (legacy/non-git).
+      if (ctx.isHeadPushed) {
+        try {
+          const pushed = await ctx.isHeadPushed();
+          if (pushed === false) {
+            return {
+              done: false,
+              reason: `Push evidence required: HEAD not found in refs/remotes/origin/<branch> — ${prUrl}`,
+            };
+          }
+          if (pushed === null) {
+            return {
+              done: false,
+              reason: `Push evidence indeterminate: cannot verify branch was pushed — ${prUrl}`,
+            };
+          }
+          // pushed === true: continue to done: true
+        } catch (error) {
+          return {
+            done: false,
+            reason: `Push evidence check failed: ${error instanceof Error ? error.message : String(error)}`,
+          };
+        }
       }
     }
     return { done: true };

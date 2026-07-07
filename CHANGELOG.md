@@ -12,6 +12,35 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- New `conduct-ts brain start|stop|status` verbs (`brain-supervisor-cli.ts`) host the
+  GitHub-issues intake poll as a host-wide, tmux-hosted background loop — an alternative to
+  cron for keeping idea capture running without a scheduled task or a live terminal. `start`
+  is idempotent (no duplicate session), `stop` kills the session, `status` reports
+  `running|stopped` plus the queued-issue count from the status surface below.
+- `intake-loop --continuous|--once` CLI subcommand (`intake-loop-cli.ts` +
+  `engine/engineer/intake/intake-loop.ts`) for background polling: `--continuous` runs the
+  poll→enqueue→notify tick forever (the mode `brain start` launches under tmux); `--once`
+  runs a single tick for cron/manual use. `--interval-ms <n>` is configurable (default 5
+  minutes) and validated against non-finite/non-positive values, with a core-level 60s
+  fallback as defense-in-depth against a zero-delay busy-loop. Never spawns `claude` or
+  opens a PR — zero-token execution.
+- `intake_notifier` config block (mirrors the existing `mermaid_renderer` pattern) — optional,
+  best-effort push notification alongside the loop's status-file write; a push failure is
+  caught and logged without blocking the tick.
+- Desktop push notifications on non-empty intake ticks: when the intake loop discovers new
+  issues, it fires a push notification via the existing `sendNotification` transport
+  (osascript on macOS, notify-send on Linux, terminal-bell fallback). Transport failures
+  are caught and logged without blocking the tick, and the status file is always written
+  regardless of push success — both surfaces (durable status file + best-effort notification)
+  work together to surface new captured ideas to the operator.
+- Status surface durably tracks notified issues: `<engineer-dir>/intake-status.json`
+  (`count`, `sourceRefs`, `timestamp`, `message`) is only rewritten when a tick finds new
+  issues, and the notifier's de-dup set prevents re-notifying the same `sourceRef` across
+  loop restarts.
+- Launcher defers to the brain loop when live: `engine/engineer/brain-liveness.ts`'s
+  `brainLoopAlive()` (tmux session or pidfile check) causes the interactive
+  `conduct-ts engineer` launcher to skip its own `prePoll` step, enforcing a single writer
+  on the intake ledger/inbox when the background loop is already running.
 - `bin/install --allow-worktree-root` — explicit override for the new worktree-root guard.
   The flag is stripped before mode dispatch, so it combines with any mode (e.g.
   `--update --allow-worktree-root`) and is accepted but inert on a non-worktree checkout.
@@ -50,6 +79,28 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 - Resume marker for re-dispatches (Task 18): when a parked feature is re-dispatched, the daemon
   logs `↻ resume` instead of `▶ start` to distinguish fresh dispatch from re-kick. Feature state
   and logging remain clean and audit-friendly.
+- **Halt-PR presentation reliability — verify-after-write + reconciliation sweep (ai-conductor#274).**
+  Daemon halt PRs now reliably carry `needs-remediation` label + draft status + durable body
+  marker via two mechanisms: (1) **Verify-after-write on escalation:** `ensureHaltPresentation()`
+  writes draft, label, and body marker, then re-reads to confirm all three (bounded retry 3×,
+  100ms backoff), moving on even if unconfirmed (best-effort); (2) **Reconciliation sweep on
+  startup + idle tick:** `reconcileHaltPrs()` enumerates open PRs carrying the body marker and
+  heals any missing draft or label (idempotent, no-throw, injected dep hook). Finish cleanup
+  removes all three markers via `cleanupHaltPresentation()` verify-after-write so remediated
+  PRs exit halt state permanently and cannot be re-halted by the sweep. Together: halt PRs
+  cannot present as mergeable; pre-existing broken PRs self-heal; both mechanisms cover each
+  other's failure modes. Modules: `pr-labels.ts` (`ensureHaltPresentation`, `cleanupHaltPresentation`),
+  `halt-pr-reconciliation.ts` (`reconcileHaltPrs`), `daemon.ts` (sweep wiring). See
+  `adr-2026-07-05-halt-pr-presentation-reliability.md` (D1–D5 decisions) and README/`src/conductor/README.md`.
+- **Engineer handoff write-back now surfaces failures with a `writebackPending` ledger marker
+  and copy/paste-retryable remediation (#290).** `IntakePort.report()` returns a `ReportOutcome`
+  (`{ ok: true }` or `{ ok: false, remediation: string[] }`); on a failed `done` write-back,
+  `reportDone` (`src/engine/engineer/intake/writeback.ts`) sets `writebackPending: true` on the
+  ledger entry (cleared only on a subsequent `ok: true` outcome, per TR-3 — a pre-existing flag is
+  never silently dropped by an absent port or missing outcome). `remediation` carries the fully
+  substituted `gh` command for the specific step that failed (issue comment or label-add), which
+  `dispatchEngineer`'s `handoff`/`land` primitives print to stderr without affecting stdout or the
+  exit code — a stalled write-back never turns a successful handoff into a failure.
 
 ### Changed
 
@@ -73,11 +124,20 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- **Daemon false-ship guard: daemon no longer records shipped markers for outcomes missing verified PR evidence.** Done-outcomes with null prUrl or non-pr finishChoice now halt with HALT markers, DONE markers deleted, and worktrees kept for operator inspection (#337).
 - Backfilled the missing intake marker `.docs/intake/2026-06-30-background-intake-conduct-loop.md`
   (`Owner: jstoup111`): the spec landed without an owner stamp, so the post-cutover owner gate
   held it as `unowned-post-cutover` and the daemon never built it. With the marker committed on
   the default branch, `readSpecOwnerStamp` resolves the owner and the spec re-enters the
   dispatchable backlog.
+- **Engineer handoff write-back no longer spawns `gh` with `ENOENT` (recurring; ledger advanced
+  anyway) (#290).** `report()` in `src/engine/engineer/intake/github-issues.ts` previously fell
+  back to `process.cwd()` when the poll-cache had no entry for a repo (e.g. write-back invoked
+  without a prior `poll()`), spawning `gh` from whatever directory the daemon happened to be
+  running in — which could be missing/deleted and fail with `ENOENT`, or simply target the wrong
+  repo. The new `resolveReportCwd()` resolves cwd in order — poll-cache → registry lookup (matched
+  by `ghRepo`/`name`) → `os.homedir()` — with each candidate `existsSync`-checked; every `gh` call
+  already passes `-R <owner/repo>`, so any existing directory is sufficient.
 - **Daemon-lock handoff race can no longer end with zero daemons (ai-conductor#374).**
   `clearStaleLockForRestart` and `ensureRunning`'s acquire-then-unlink step briefly own the
   pidfile with their OWN live pid; a concurrent `ensureRunning` observing that transient

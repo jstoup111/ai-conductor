@@ -36,6 +36,7 @@ export interface LedgerEntry {
   prUrl?: string;
   capturedAt?: string;
   lastSeenAt?: string;
+  writebackPending?: boolean;
 }
 
 // ─── Ledger ───────────────────────────────────────────────────────────────────
@@ -58,7 +59,7 @@ export interface Ledger {
     source: string,
     sourceRef: string,
     status: LedgerStatus,
-    meta?: { branch?: string; prUrl?: string },
+    meta?: { branch?: string; prUrl?: string; writebackPending?: boolean },
   ): Promise<void>;
   get(source: string, sourceRef: string): Promise<LedgerEntry | undefined>;
   forget(source: string, sourceRef: string): Promise<void>;
@@ -135,7 +136,7 @@ export function createLedger(path: string): Ledger {
       source: string,
       sourceRef: string,
       status: LedgerStatus,
-      meta?: { branch?: string; prUrl?: string },
+      meta?: { branch?: string; prUrl?: string; writebackPending?: boolean },
     ): Promise<void> {
       const store = await loadStore(path);
       const key = makeKey(source, sourceRef);
@@ -145,13 +146,19 @@ export function createLedger(path: string): Ledger {
           `Ledger: no entry for (source="${source}", sourceRef="${sourceRef}") — call record() first`,
         );
       }
-      store[key] = {
+      const updated: LedgerEntry = {
         ...entry,
         status,
         lastSeenAt: new Date().toISOString(),
         ...(meta?.branch !== undefined ? { branch: meta.branch } : {}),
         ...(meta?.prUrl !== undefined ? { prUrl: meta.prUrl } : {}),
       };
+      if (meta?.writebackPending === true) {
+        updated.writebackPending = true;
+      } else if (meta?.writebackPending === false) {
+        delete updated.writebackPending;
+      }
+      store[key] = updated;
       await saveStore(path, store);
     },
 

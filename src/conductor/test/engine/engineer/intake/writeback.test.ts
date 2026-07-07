@@ -19,8 +19,8 @@ function fakePort(): { port: IntakePort; calls: Array<{ sourceRef: string; statu
   return { port, calls };
 }
 
-function fakeLedger(): { ledger: Ledger; transitions: Array<{ status: LedgerStatus; meta?: { branch?: string; prUrl?: string } }> } {
-  const transitions: Array<{ status: LedgerStatus; meta?: { branch?: string; prUrl?: string } }> = [];
+function fakeLedger(): { ledger: Ledger; transitions: Array<{ status: LedgerStatus; meta?: { branch?: string; prUrl?: string; writebackPending?: boolean } }> } {
+  const transitions: Array<{ status: LedgerStatus; meta?: { branch?: string; prUrl?: string; writebackPending?: boolean } }> = [];
   const ledger: Ledger = {
     known: async () => true,
     record: async () => {},
@@ -88,12 +88,62 @@ describe('reportDone', () => {
     expect(transitions).toEqual([{ status: 'done', meta: { prUrl: 'https://x/pull/9' } }]);
   });
 
-  it('is advisory: a throwing port never reverts a delivered PR', async () => {
+  it('is advisory: a throwing port never reverts a delivered PR, and marks writebackPending', async () => {
     const port: IntakePort = { report: vi.fn().mockRejectedValue(new Error('gh down')) };
     const { ledger, transitions } = fakeLedger();
     await expect(
       reportDone({ source: 'github-issues', sourceRef: 'o/a#1', port, ledger }, 'https://x/pull/9'),
     ).resolves.toBeUndefined();
+    expect(transitions).toEqual([
+      { status: 'done', meta: { prUrl: 'https://x/pull/9', writebackPending: true } },
+    ]);
+  });
+
+  it('sets writebackPending:true in the transition meta when the port reports ok:false', async () => {
+    const port: IntakePort = {
+      report: vi.fn().mockResolvedValue({ ok: false, remediation: ['re-authenticate gh'] }),
+    };
+    const { ledger, transitions } = fakeLedger();
+    await reportDone(
+      { source: 'github-issues', sourceRef: 'o/a#1', port, ledger },
+      'https://x/pull/9',
+      'spec/foo',
+    );
+    expect(transitions).toEqual([
+      {
+        status: 'done',
+        meta: { prUrl: 'https://x/pull/9', branch: 'spec/foo', writebackPending: true },
+      },
+    ]);
+  });
+
+  it('sets writebackPending:false (clearing a stale flag) when the port reports ok:true', async () => {
+    const port: IntakePort = { report: vi.fn().mockResolvedValue({ ok: true }) };
+    const { ledger, transitions } = fakeLedger();
+    await reportDone({ source: 'github-issues', sourceRef: 'o/a#1', port, ledger }, 'https://x/pull/9');
+    expect(transitions).toEqual([
+      { status: 'done', meta: { prUrl: 'https://x/pull/9', writebackPending: false } },
+    ]);
+  });
+
+  it('omits writebackPending from the transition meta when no port is present', async () => {
+    const { ledger, transitions } = fakeLedger();
+    await reportDone({ source: 'github-issues', sourceRef: 'o/a#1', ledger }, 'https://x/pull/9');
     expect(transitions).toEqual([{ status: 'done', meta: { prUrl: 'https://x/pull/9' } }]);
+  });
+
+  it('is advisory: a rejecting ledger.transition still resolves reportDone', async () => {
+    const port: IntakePort = { report: vi.fn().mockResolvedValue({ ok: false, remediation: [] }) };
+    const ledger: Ledger = {
+      known: async () => true,
+      record: async () => {},
+      transition: vi.fn().mockRejectedValue(new Error('no entry')),
+      get: async () => undefined,
+      forget: async () => {},
+      reopen: async () => {},
+    };
+    await expect(
+      reportDone({ source: 'github-issues', sourceRef: 'o/a#1', port, ledger }, 'https://x/pull/9'),
+    ).resolves.toBeUndefined();
   });
 });

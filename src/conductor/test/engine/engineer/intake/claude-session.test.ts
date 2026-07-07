@@ -116,14 +116,23 @@ describe('createClaudeSessionAdapter — Task 5: IntakePort contract (FR-14)', (
 
   it('report() resolves (no-op) without throwing', async () => {
     const adapter: IntakePort = createClaudeSessionAdapter();
-    await expect(adapter.report('turn-7', 'pending')).resolves.toBeUndefined();
+    await expect(adapter.report('turn-7', 'pending')).resolves.toEqual({ ok: true });
   });
 
   it('report() is a no-op — calling with any status resolves cleanly', async () => {
     const adapter: IntakePort = createClaudeSessionAdapter();
     for (const status of ['pending', 'routed', 'deciding', 'done'] as const) {
-      await expect(adapter.report('turn-1', status)).resolves.toBeUndefined();
+      await expect(adapter.report('turn-1', status)).resolves.toEqual({ ok: true });
     }
+  });
+});
+
+// ─── Task 2 (#290): report() returns a ReportOutcome ─────────────────────────
+
+describe('createClaudeSessionAdapter — Task 2 (#290): ReportOutcome contract', () => {
+  it('report() resolves to { ok: true } for the claude-session no-op', async () => {
+    const adapter: IntakePort = createClaudeSessionAdapter();
+    await expect(adapter.report('turn-7', 'pending')).resolves.toEqual({ ok: true });
   });
 });
 
@@ -186,19 +195,19 @@ describe('createClaudeSessionAdapter — T1 (FR-36): report with meta', () => {
     const adapter: IntakePort = createClaudeSessionAdapter();
     await expect(
       adapter.report('turn-7', 'routed', { repo: 'alpha', prUrl: 'https://github.com/org/alpha/pull/1' }),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ ok: true });
   });
 
   it('report() resolves when called with a partial meta object (repo only)', async () => {
     const adapter: IntakePort = createClaudeSessionAdapter();
     await expect(
       adapter.report('turn-7', 'done', { repo: 'beta' }),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ ok: true });
   });
 
   it('report() resolves when called without meta (backward-compatible)', async () => {
     const adapter: IntakePort = createClaudeSessionAdapter();
-    await expect(adapter.report('turn-7', 'pending')).resolves.toBeUndefined();
+    await expect(adapter.report('turn-7', 'pending')).resolves.toEqual({ ok: true });
   });
 });
 

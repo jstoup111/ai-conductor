@@ -63,7 +63,9 @@ function makeGhFake(opts: { labels?: string[]; throws?: boolean } = {}): {
           state: 'OPEN',
           mergeable: 'MERGEABLE',
           statusCheckRollup: [],
+          isDraft: false,
           labels: labelObjs,
+          body: 'Test PR body',
         }),
       };
     }
@@ -83,7 +85,12 @@ describe('FR-9: enrollWatch on done', () => {
 
     const run = makeRunFeature(
       baseDeps({
-        readOutcome: async () => ({ done: true, halted: false, prUrl: PR_URL }),
+        readOutcome: async () => ({
+          done: true,
+          halted: false,
+          finishChoice: 'pr',
+          prUrl: PR_URL,
+        }),
         projectRoot: '/project',
         enrollWatch: async (root, entry) => {
           enrollArgs.push({ root, prUrl: entry.prUrl, slug: entry.slug });
@@ -138,26 +145,37 @@ describe('FR-9: enrollWatch on done', () => {
     expect(enrollCalls).toHaveLength(0);
   });
 
-  it('done but no prUrl => enrollWatch NOT called', async () => {
+  it('done but no prUrl => false ship, enrollWatch NOT called', async () => {
     const enrollCalls: unknown[] = [];
     const run = makeRunFeature(
       baseDeps({
-        readOutcome: async () => ({ done: true, halted: false }), // no prUrl
+        readOutcome: async () => ({
+          done: true,
+          halted: false,
+          finishChoice: 'pr',
+          prUrl: undefined,
+        }), // no prUrl = false ship
         projectRoot: '/project',
         enrollWatch: async () => {
           enrollCalls.push(1);
         },
       }),
     );
-    await run(ITEM);
-    expect(enrollCalls).toHaveLength(0);
+    const out = await run(ITEM);
+    expect(out.status).toBe('halted'); // false ship → halted
+    expect(enrollCalls).toHaveLength(0); // ship path skipped
   });
 
   it('enroll failure is swallowed => teardown + markProcessed still run', async () => {
     const rec: { teardown?: boolean; processed?: boolean } = {};
     const run = makeRunFeature(
       baseDeps({
-        readOutcome: async () => ({ done: true, halted: false, prUrl: PR_URL }),
+        readOutcome: async () => ({
+          done: true,
+          halted: false,
+          finishChoice: 'pr',
+          prUrl: PR_URL,
+        }),
         projectRoot: '/project',
         enrollWatch: async () => {
           throw new Error('disk full');
@@ -186,7 +204,12 @@ describe('FR-16: clear-on-success', () => {
     const { runGh, calls } = makeGhFake({ labels: ['needs-remediation'] });
     const run = makeRunFeature(
       baseDeps({
-        readOutcome: async () => ({ done: true, halted: false, prUrl: PR_URL }),
+        readOutcome: async () => ({
+          done: true,
+          halted: false,
+          finishChoice: 'pr',
+          prUrl: PR_URL,
+        }),
         projectRoot: '/project',
         runGh,
         enrollWatch: async () => {}, // no-op to avoid disk I/O
@@ -213,7 +236,12 @@ describe('FR-16: clear-on-success', () => {
     const { runGh, calls } = makeGhFake({ labels: ['some-other-label'] });
     const run = makeRunFeature(
       baseDeps({
-        readOutcome: async () => ({ done: true, halted: false, prUrl: PR_URL }),
+        readOutcome: async () => ({
+          done: true,
+          halted: false,
+          finishChoice: 'pr',
+          prUrl: PR_URL,
+        }),
         projectRoot: '/project',
         runGh,
         enrollWatch: async () => {},
@@ -232,7 +260,12 @@ describe('FR-16: clear-on-success', () => {
     const rec: { teardown?: boolean } = {};
     const run = makeRunFeature(
       baseDeps({
-        readOutcome: async () => ({ done: true, halted: false, prUrl: PR_URL }),
+        readOutcome: async () => ({
+          done: true,
+          halted: false,
+          finishChoice: 'pr',
+          prUrl: PR_URL,
+        }),
         projectRoot: '/project',
         runGh,
         enrollWatch: async () => {
@@ -282,7 +315,12 @@ describe('FR-16: clear-on-success', () => {
     const order: string[] = [];
     const run = makeRunFeature(
       baseDeps({
-        readOutcome: async () => ({ done: true, halted: false, prUrl: PR_URL }),
+        readOutcome: async () => ({
+          done: true,
+          halted: false,
+          finishChoice: 'pr',
+          prUrl: PR_URL,
+        }),
         projectRoot: '/project',
         runGh: async (args, opts) => {
           if (args[0] === 'pr' && args[1] === 'view') {
@@ -360,7 +398,12 @@ describe('FR-14: sweep cadence in daemon-runner', () => {
   it('sweep throw is swallowed and does not disrupt feature processing', async () => {
     const run = makeRunFeature(
       baseDeps({
-        readOutcome: async () => ({ done: true, halted: false, prUrl: PR_URL }),
+        readOutcome: async () => ({
+          done: true,
+          halted: false,
+          finishChoice: 'pr',
+          prUrl: PR_URL,
+        }),
         projectRoot: '/project',
         sweepMergeableLabels: async () => {
           throw new Error('network error');

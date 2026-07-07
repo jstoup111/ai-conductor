@@ -106,7 +106,8 @@ import {
 import { writeIntakeMarker } from './engineer/intake-marker.js';
 import { readMachineOwnerConfig } from './owner-gate/machine-identity.js';
 import { resolveDaemonOwner, type GhRunner } from './owner-gate/identity.js';
-import { makeProductionGh } from './pr-labels.js';
+import { makeProductionGh, makeProductionGit, type GitRunner } from './pr-labels.js';
+import { headPushedToUpstream } from './push-evidence.js';
 
 export type CheckpointResponse = 'continue' | 'back' | 'quit';
 
@@ -346,6 +347,12 @@ export interface ConductorOptions {
    * operator identity for plan-step owner stamping (Slice B, D4).
    */
   gh?: GhRunner;
+  /**
+   * Shell runner for the `git` CLI (push-evidence verification). Injected for
+   * tests; defaults to the real production git. Used to verify push status
+   * in the finish gate (daemon false-ship guard).
+   */
+  git?: GitRunner;
 }
 
 /**
@@ -466,6 +473,8 @@ export class Conductor {
   private escalateBuildFailure: (opts: EscalateBuildFailureOpts) => Promise<EscalateBuildFailureResult>;
   /** gh CLI runner for owner identity resolution (plan-step stamping, Slice B D4). */
   private gh: GhRunner;
+  /** git CLI runner for push-evidence verification (daemon false-ship guard). */
+  private git: GitRunner;
   /**
    * The most recent engine-native rebase outcome. The `rebase` step is special:
    * its gate verdict is computed by the native handler (not from a file
@@ -478,7 +487,8 @@ export class Conductor {
    * The CompletionContext handed to every gate evaluation. `getHeadSha` feeds
    * the manual_test whitewash guard (#367); it resolves the worktree's real
    * HEAD and returns null (never throws) when there is no usable repo, which
-   * makes the guard fail open outside real runs.
+   * makes the guard fail open outside real runs. `daemon` and `isHeadPushed`
+   * feed the finish predicate for daemon false-ship guard (ADR-2026-07-06).
    */
   private completionCtx(state: ConductState): CompletionContext {
     return {
@@ -486,6 +496,16 @@ export class Conductor {
       featureDesc: state.feature_desc,
       config: this.config,
       getHeadSha: () => currentCommitSha(this.projectRoot),
+      daemon: this.daemon,
+      isHeadPushed: async () => {
+        if (!this.projectRoot) return null;
+        try {
+          return await headPushedToUpstream(this.git, this.projectRoot);
+        } catch {
+          // Log error, return null (indeterminate)
+          return null;
+        }
+      },
     };
   }
 
@@ -521,6 +541,7 @@ export class Conductor {
     this.onComplexityAssessment = opts.onComplexityAssessment;
     this.escalateBuildFailure = opts.escalateBuildFailure ?? defaultEscalateBuildFailure;
     this.gh = opts.gh ?? makeProductionGh();
+    this.git = opts.git ?? makeProductionGit();
   }
 
   /**

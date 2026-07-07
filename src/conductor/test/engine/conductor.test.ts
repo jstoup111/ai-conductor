@@ -30,7 +30,9 @@ import {
   buildRetryHint,
 } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
+import type { GitRunner } from '../../src/engine/pr-labels.js';
 import { writeFile, mkdir, readFile } from 'fs/promises';
+import { readState, writeState } from '../../src/engine/state.js';
 import { createHash } from 'crypto';
 
 function createMockStepRunner(result: StepRunResult = { success: true }): StepRunner {
@@ -1125,7 +1127,13 @@ describe('engine/conductor', () => {
               ],
             });
           } else if (step === 'finish' && buildFixed) {
-            await writeFile(join(dir, '.pipeline/finish-choice'), 'keep\n');
+            await writeFile(join(dir, '.pipeline/finish-choice'), 'pr\n');
+            const stateResult = await readState(statePath);
+            const state = stateResult.ok ? stateResult.value : {};
+            state.pr_url = 'https://github.com/org/repo/pull/1';
+            await writeState(statePath, state);
+            // Also write to the path the gate reads from
+            await writeState(join(dir, '.pipeline/conduct-state.json'), state);
           }
           return { success: true };
         }),
@@ -1138,6 +1146,10 @@ describe('engine/conductor', () => {
       events.on('loop_halt', () => {
         halted = true;
       });
+      const fakeGit: GitRunner = async (args) =>
+        args.includes('--symbolic-full-name')
+          ? { stdout: 'refs/remotes/origin/feature/x\n' }
+          : { stdout: '' };
       const conductor = new Conductor({
         stateFilePath: statePath,
         stepRunner: runner,
@@ -1149,6 +1161,7 @@ describe('engine/conductor', () => {
         fromStep: 'finish',
         maxRetries: 1,
         escalateBuildFailure: async () => ({}),
+        git: fakeGit,
       });
 
       await conductor.run();
@@ -5065,5 +5078,55 @@ describe('projectRoot is required', () => {
       pipelineExistsAfter = false;
     }
     expect(pipelineExistsAfter).toBe(false);
+  });
+
+  describe('completionCtx threading', () => {
+    it('includes daemon flag and isHeadPushed injectable in completion context', async () => {
+      const runner = createMockStepRunner();
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        daemon: true,
+      });
+
+      // Access private method via bracket notation for testing
+      const state: ConductState = {
+        worktree: 'pending',
+        session_started_at: Date.now(),
+      } as ConductState;
+      const ctx = (conductor as any)['completionCtx'](state);
+
+      // Verify daemon field is threaded
+      expect(ctx.daemon).toBe(true);
+
+      // Verify isHeadPushed is defined and callable
+      expect(ctx.isHeadPushed).toBeDefined();
+      expect(typeof ctx.isHeadPushed).toBe('function');
+    });
+
+    it('isHeadPushed injectable returns null when git runner fails', async () => {
+      const runner = createMockStepRunner();
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        daemon: true,
+      });
+
+      const state: ConductState = {
+        worktree: 'pending',
+        session_started_at: Date.now(),
+      } as ConductState;
+      const ctx = (conductor as any)['completionCtx'](state);
+
+      // Call isHeadPushed and verify it handles errors gracefully
+      // (returns null instead of throwing)
+      const result = await ctx.isHeadPushed!();
+      // In a non-git directory, it should return null (indeterminate)
+      expect(result).toBeNull();
+    });
   });
 });

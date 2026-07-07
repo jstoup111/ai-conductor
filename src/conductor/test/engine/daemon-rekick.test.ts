@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, readFile, access } from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -354,6 +354,7 @@ describe('engine/daemon-rekick — rekickSweep (FR-7/FR-9)', () => {
 // ── Real fs/git primitives (isolated repos) ───────────────────────────────────
 
 describe('engine/daemon-rekick — real primitives (isolated repo)', () => {
+  let base: string;
   let dir: string;
   async function git(...args: string[]): Promise<string> {
     const { stdout } = await execFileAsync('git', ['-C', dir, ...args]);
@@ -364,10 +365,12 @@ describe('engine/daemon-rekick — real primitives (isolated repo)', () => {
   }
 
   beforeEach(async () => {
-    dir = await mkdtemp(join(tmpdir(), 'rekick-prim-'));
+    base = await mkdtemp(join(tmpdir(), 'rekick-prim-'));
+    dir = join(base, 'wt-halted');
+    await mkdir(dir, { recursive: true });
   });
   afterEach(async () => {
-    await rm(dir, { recursive: true, force: true });
+    await rm(base, { recursive: true, force: true });
   });
 
   // Build a repo with a real conflicting rebase paused mid-flight.
@@ -425,9 +428,9 @@ describe('engine/daemon-rekick — real primitives (isolated repo)', () => {
     const p = join(dir, '.pipeline');
     await mkdir(p, { recursive: true });
     await writeFile(join(p, 'HALT'), 'prd-audit gap\nFR-3 missing\n', 'utf-8');
-    // worktreeBase = parent of `dir`; slug = basename(dir)
-    const worktreeBase = join(dir, '..');
-    const slug = dir.split('/').pop()!;
+    // worktreeBase = dedicated base dir (1 entry: wt-halted); slug = basename(dir)
+    const worktreeBase = base;
+    const slug = basename(dir);
     expect(await listHaltedWorktrees(worktreeBase)).toContain(slug);
     expect(await readHaltReason(worktreeBase, slug)).toBe('prd-audit gap');
 

@@ -332,6 +332,159 @@ describe('engine/artifacts', () => {
       expect(result.done).toBe(false);
       expect(result.reason).toMatch(/stale/);
     });
+
+    it('rejects finish-choice="keep" when running in daemon mode', async () => {
+      await createFile(FINISH_CHOICE_MARKER, 'keep');
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        daemon: true,
+      });
+      expect(result.done).toBe(false);
+      expect(result.reason).toMatch(/keep/);
+      expect(result.reason).toMatch(/daemon/i);
+    });
+
+    it('rejects finish-choice="merge-local" when running in daemon mode', async () => {
+      await createFile(FINISH_CHOICE_MARKER, 'merge-local');
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        daemon: true,
+      });
+      expect(result.done).toBe(false);
+      expect(result.reason).toMatch(/merge-local/);
+      expect(result.reason).toMatch(/daemon/i);
+    });
+
+    it('rejects finish-choice="discard" when running in daemon mode', async () => {
+      await createFile(FINISH_CHOICE_MARKER, 'discard');
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        daemon: true,
+      });
+      expect(result.done).toBe(false);
+      expect(result.reason).toMatch(/discard/);
+      expect(result.reason).toMatch(/daemon/i);
+    });
+
+    it('allows finish-choice="keep" in interactive mode (daemon: false)', async () => {
+      await createFile(FINISH_CHOICE_MARKER, 'keep');
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        daemon: false,
+      });
+      expect(result).toEqual({ done: true });
+    });
+
+    it('allows finish-choice="merge-local" in interactive mode (daemon: false)', async () => {
+      await createFile(FINISH_CHOICE_MARKER, 'merge-local');
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        daemon: false,
+      });
+      expect(result).toEqual({ done: true });
+    });
+
+    it('allows finish-choice="keep" when daemon property is absent (legacy interactive mode)', async () => {
+      await createFile(FINISH_CHOICE_MARKER, 'keep');
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        // daemon not set
+      });
+      expect(result).toEqual({ done: true });
+    });
+
+    it('allows finish-choice="pr" in daemon mode (pr is safe to ship autonomously)', async () => {
+      await createFile(FINISH_CHOICE_MARKER, 'pr');
+      await createFile(
+        '.pipeline/conduct-state.json',
+        JSON.stringify({ pr_url: 'https://github.com/foo/bar/pull/1' }),
+      );
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        daemon: true,
+      });
+      expect(result).toEqual({ done: true });
+    });
+
+    it('passes when finish-choice="pr" and isHeadPushed returns true (happy path: evidence pass)', async () => {
+      await createFile(FINISH_CHOICE_MARKER, 'pr');
+      await createFile(
+        '.pipeline/conduct-state.json',
+        JSON.stringify({ pr_url: 'https://github.com/foo/bar/pull/1' }),
+      );
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        isHeadPushed: async () => true,
+      });
+      expect(result).toEqual({ done: true });
+    });
+
+    it('fails when finish-choice="pr" and isHeadPushed returns false (evidence check)', async () => {
+      await createFile(FINISH_CHOICE_MARKER, 'pr');
+      await createFile(
+        '.pipeline/conduct-state.json',
+        JSON.stringify({ pr_url: 'https://github.com/foo/bar/pull/1' }),
+      );
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        isHeadPushed: async () => false,
+      });
+      expect(result.done).toBe(false);
+      expect(result.reason).toMatch(/push|push evidence|refs\/remotes/i);
+    });
+
+    it('fails when finish-choice="pr" and isHeadPushed returns null (indeterminate evidence)', async () => {
+      await createFile(FINISH_CHOICE_MARKER, 'pr');
+      await createFile(
+        '.pipeline/conduct-state.json',
+        JSON.stringify({ pr_url: 'https://github.com/foo/bar/pull/1' }),
+      );
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        isHeadPushed: async () => null,
+      });
+      expect(result.done).toBe(false);
+      expect(result.reason).toMatch(/indeterminate|cannot verify/i);
+    });
+
+    it('passes when finish-choice="pr" and isHeadPushed injectable is absent (fail-open legacy)', async () => {
+      await createFile(FINISH_CHOICE_MARKER, 'pr');
+      await createFile(
+        '.pipeline/conduct-state.json',
+        JSON.stringify({ pr_url: 'https://github.com/foo/bar/pull/1' }),
+      );
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        // isHeadPushed is undefined/absent
+      });
+      expect(result).toEqual({ done: true });
+    });
+
+    it('ignores isHeadPushed for non-PR choices (e.g., keep)', async () => {
+      await createFile(FINISH_CHOICE_MARKER, 'keep');
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        isHeadPushed: async () => false, // Would fail for PR, but ignored for keep
+      });
+      expect(result).toEqual({ done: true });
+    });
+
+    it('fails when finish-choice="pr" and isHeadPushed throws an error (corrupt repo)', async () => {
+      await createFile(FINISH_CHOICE_MARKER, 'pr');
+      await createFile(
+        '.pipeline/conduct-state.json',
+        JSON.stringify({ pr_url: 'https://github.com/foo/bar/pull/1' }),
+      );
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        isHeadPushed: async () => {
+          throw new Error('corrupt repo: .git/refs corrupted');
+        },
+      });
+      expect(result.done).toBe(false);
+      expect(result.reason).toMatch(/push evidence check failed/i);
+      expect(result.reason).toMatch(/corrupt repo/i);
+    });
   });
 
   describe('checkStepCompletion: build predicate (halt marker)', () => {

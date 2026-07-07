@@ -582,6 +582,24 @@ that need no setup (a static site, a pure library) simply ship no `bin/setup` an
 untouched. This is what lets one daemon serve **any** project setup, including consumer
 projects that use the harness.
 
+#### Daemon mode: false-ship guard (#337)
+
+When running in daemon mode, the engine enforces additional constraints at the finish and done-outcome boundaries to prevent recording false ships (issues #337):
+
+**1. Finish gate push-evidence check** — For PR-choice ships, the finish predicate verifies `HEAD` is an ancestor of `refs/remotes/origin/<branch>` before recording the PR URL. If push evidence is missing or indeterminate, convergence halts.
+
+**2. Daemon finish non-convergence** — Daemon mode rejects `keep`, `merge-local`, and `discard` finish choices (operator decisions) and only proceeds with autonomous `pr` choices.
+
+**3. Done-outcome verification** — A done-outcome is eligible for ship only if `finishChoice === 'pr'` AND `prUrl != null`. Ineligible outcomes (false ships) trigger:
+   - Delete any `.pipeline/DONE` marker (conflict resolution: DONE and HALT stay disjoint)
+   - Write `.pipeline/HALT` with the contradiction reason
+   - Keep the worktree for operator inspection and remediation
+   - Best-effort escalation: push the branch and create a draft "needs-remediation" PR
+
+**4. Escalation degradation (FR-7)** — If the escalation push fails (network, auth), the HALT is still written and the worktree still kept; surfacing degrades but protection does not.
+
+**Implementation:** `engine/done-outcome-validation.ts` (`validateDoneOutcome`), wired into the daemon runner (`daemon-runner.ts`) at the point where a feature reaches the `done` state, before any shipped-record write or worktree cleanup. The validation runs independently of the existing PR-labeling mechanism (`needs-remediation` is still written when applicable for debugging, but does not interfere with the core validation). See `.docs/decisions/adr-2026-07-06-daemon-false-ship-guard.md` for design details and requirements.
+
 #### PR labeling (`needs-remediation` + `mergeable`, daemon-only)
 
 Two GitHub labels give a human operator an at-a-glance signal on the daemon's PRs without
@@ -698,6 +716,66 @@ capped Tier-2 attempts; three independent acceptance guards; a fail-closed suite
 silent pass-through on error; a lease-protected push that cannot overwrite a concurrent
 change; and best-effort, non-blocking escalation on any failure so a bad resolution never
 reaches `main` unlabeled.
+
+#### Halt-PR presentation reliability (verify-after-write + reconciliation, ai-conductor#274)
+
+When a daemon feature HALTs irrecoverably, it escalates by opening a **draft PR labeled
+`needs-remediation`** so the operator can triage. A halt PR that loses its draft status or
+label becomes indistinguishable from a ready feature PR — the #268/#269 root cause.
+
+**Design** (`engine/pr-labels.ts`, `engine/halt-pr-reconciliation.ts`, `adr-2026-07-05-halt-pr-presentation-reliability`):
+
+The feature guarantees halt PRs reliably carry **three durable markers**:
+
+1. **Draft status** (`isDraft: true`) — unpublishable
+2. **`needs-remediation` label** — human-scannable signal
+3. **Body marker** (`<!-- conductor:needs-remediation -->`) — invisible durable enumeration
+   anchor for the reconciliation sweep when label/draft are lost
+
+**`ensureHaltPresentation(runGh, cwd, prUrl, log, sleep)`** (`pr-labels.ts`):
+
+- Single idempotent operation that asserts all three markers are present
+- Writes draft status, label, and body marker via existing `gh` primitives
+- **Verify-after-write:** re-reads to confirm all three after writing, retries bounded (3 attempts,
+  100ms backoff) on mismatch
+- On retry exhaustion, returns `'unconfirmed'` without throwing (best-effort contract maintained)
+- Label write uses REST endpoint (`gh api .../issues/N/labels`), never `gh pr edit --add-label`
+  (Projects-classic sunset, PR #172)
+- Idempotent body marker: no duplication on reuse or repeated calls
+- Converts already-ready PRs to draft via `gh pr ready --undo` when reused
+
+**`reconcileHaltPrs({projectRoot, log, runGh})`** (`engine/halt-pr-reconciliation.ts`):
+
+- Best-effort background sweep that enumerates **open** PRs and heals broken halt PRs
+- Filters to PRs carrying the body marker (`<!-- conductor:needs-remediation -->`)
+- For each marked PR missing draft or label, calls `ensureHaltPresentation` to repair it
+- Skips unmarked PRs (never converts ready feature PRs to draft or labels them)
+- Idempotent: skips conforming marked PRs (no writes), retries non-conforming PRs on next tick
+- Never throws; errors logged but never re-thrown
+- Wired into **daemon startup and each idle poll tick** (injected dep hook, ADR-013 pattern)
+
+**Finish cleanup** (`daemon-runner.ts`, `halt-pr-rehabilitation.ts`):
+
+- When a halt PR is successfully remediated and finished (reaches `done`), cleanup runs
+  verify-after-write removal of all three markers
+- `cleanupHaltPresentation()` removes `needs-remediation` label, converts to ready, strips
+  body marker, then re-reads to confirm all gone
+- Label removal and ready-conversion include bounded retry (3 attempts, 100ms backoff)
+- Returns `'confirmed'` if all three markers verified gone, `'partial'` if any residuals
+- Body marker removal is critical: once stripped, `reconcileHaltPrs` will no longer enumerate
+  the PR, so it cannot be re-halted by the sweep
+
+**Confluence:**
+
+- **Verify-after-write on escalation** catches most transient failures inline
+- **Reconciliation sweep** heals PRs broken before this code shipped (e.g. #268/#269 pre-existing
+  PRs) or drifted by concurrent checkouts
+- **Finish cleanup** removes all markers so finished PRs exit the halt state permanently
+- Together: a halt PR cannot present as mergeable; pre-existing broken PRs self-heal; the
+  two mechanisms cover each other's failure modes
+
+All operations are **best-effort, non-throwing**, and sit behind the injected `GhRunner` seam
+so they are fully unit-testable with the existing `makeFakeGh` pattern.
 
 ### Model availability fallback ladder (`engine/model-availability.ts`, #186)
 
@@ -1219,6 +1297,26 @@ through an injected `gh` runner — it never touches a registered repo's working
   on `land` (routed) and `handoff` (done); the shared `intake/writeback.ts` helper backs both the CLI
   primitives and the test-only loop. It is **non-fatal** (a `gh` outage never reverts a delivered spec
   PR) and **de-duplicated** per `(sourceRef, status)`.
+  - **`gh` cwd resolution never falls back to `process.cwd()`.** `report()`'s `gh` calls always pass
+    `-R <owner/repo>`, so any existing directory is a sufficient cwd — but a bare `process.cwd()`
+    fallback previously spawned `gh` from wherever the daemon happened to be running, which could hit
+    a deleted/missing directory and fail with `ENOENT`. `resolveReportCwd()` instead resolves, in
+    order: the poll-cache (`repoPaths`, populated by a prior `poll()`) → a registry lookup matched by
+    `ghRepo`/`name` → `os.homedir()` — each candidate `existsSync`-checked before use.
+  - **Failures return actionable remediation, not just a log line.** `report()` returns a
+    `ReportOutcome`: `{ ok: true }` on success, or `{ ok: false, remediation: string[] }` on failure,
+    where `remediation` is the fully-substituted `gh` command for the *specific* step that failed
+    (issue comment or label-add), ready to copy/paste-retry — e.g.
+    `gh issue comment 200 --repo o/e --body "..."`. `dispatchEngineer`'s `handoff`/`land` primitives
+    print that remediation to stderr; stdout (the `pr-opened`/`routed` envelope) and the exit code are
+    unaffected — a failed write-back never turns a successful handoff into a failure.
+  - **A failed `done` write-back sets `writebackPending: true` on the ledger entry** (`reportDone` in
+    `intake/writeback.ts`, threaded through `Ledger.transition`'s `meta`), so a stalled write-back is
+    visible in `ledger.json` for later reconciliation even though the spec PR itself was delivered. A
+    subsequent successful write-back (any later `report()` call for that `(source, sourceRef)` that
+    resolves `ok: true`) clears the flag; per TR-3 the flag is only ever cleared on an explicit
+    `ok: true` outcome — an absent port, or a port call that produced no outcome, leaves a
+    pre-existing flag untouched rather than silently dropping it.
 - **Issue ↔ PR linkage + auto-close (on implementation merge).** Commenting is not linking: GitHub's
   formal issue↔PR link and auto-close come from a closing keyword in a PR body. The issue reference
   travels WITH the spec via a committed **`.docs/intake/<plan-stem>.md`** marker (`Source-Ref: owner/repo#N`,
@@ -1238,6 +1336,85 @@ through an injected `gh` runner — it never touches a registered repo's working
 
 State lives under the engineer dir (`$AI_CONDUCTOR_ENGINEER_DIR`, default `~/.ai-conductor/engineer/`):
 `ledger.json` (dedup + lifecycle) and `inbox/` (the claimable queue).
+
+#### Intake Loop Automation
+
+The GitHub-issues poll above can run as a **standalone background loop** instead of (or in
+addition to) the launcher's pre-poll and an external cron job — a tmux-hosted, zero-token
+process managed via `conduct-ts brain start|stop|status` (see the root README's "Brain Loop
+Supervision" section for the operator-facing commands).
+
+- **CLI: `conduct-ts intake-loop`** (`intake-loop-cli.ts`, composition root, wraps
+  `engine/engineer/intake/intake-loop.ts`). Exactly one of two mode flags is required:
+  - **`--continuous`** — runs the poll→enqueue→notify tick forever, sleeping between ticks.
+    This is the mode `conduct-ts brain start` launches inside its tmux session.
+  - **`--once`** — runs a single tick and returns; useful for cron or manual invocation
+    without the tmux supervisor.
+  Supplying both or neither flag is rejected (prints usage guidance) rather than silently
+  falling back to a default mode.
+- **`--interval-ms <n>`** — sleep between ticks in continuous mode. CLI default is 5 minutes
+  (`DEFAULT_INTERVAL_MS`). The value must parse to a finite number `> 0`; a non-finite or
+  non-positive interval is rejected at the CLI layer, and the loop core additionally guards
+  against a bad interval reaching the sleep call by substituting its own 60-second fallback
+  (`INTAKE_INTERVAL_DEFAULT_MS`) — a defense-in-depth measure so a misconfigured interval
+  can never produce a zero/negative-delay busy-loop.
+- **Never spawns `claude`, never opens a PR.** The loop only calls `gh` (via the same
+  injected runner as the launcher's pre-poll) to list/enqueue issues and to push
+  best-effort notifications — it is a pure polling/bookkeeping process, so leaving it
+  running continuously costs no model tokens.
+- **Status surface (`<engineer-dir>/intake-status.json`).** Written on every tick that finds
+  new issues (skipped when there's nothing new to report). Shape:
+  ```json
+  {
+    "count": 3,
+    "sourceRefs": ["owner/repo#7", "owner/repo#9", "owner/repo#12"],
+    "timestamp": "2026-06-30T12:00:00.000Z",
+    "message": "3 new idea(s) captured from owner/repo#7, owner/repo#9, owner/repo#12"
+  }
+  ```
+  `conduct-ts brain status` reads this file for its `queued: <n>` line; a missing or
+  malformed file is treated as `count: 0` rather than an error.
+- **Durable de-dup across restarts.** The notifier tracks which `sourceRef`s it has already
+  notified so a loop restart doesn't re-announce issues already surfaced in a prior run;
+  when a tick finds nothing new, both the status write and the (optional) push are skipped
+  entirely.
+- **`intake_notifier` config (optional, best-effort push).** Mirrors the existing
+  `mermaid_renderer` config pattern (see `config.ts`) — an optional block that, when present,
+  lets the loop push a notification (e.g. to a webhook or external channel) alongside writing
+  the status file. Like `mermaid_renderer`, it is fully optional: omitting it leaves the loop
+  writing only the local status surface. A push failure is caught and logged — it never
+  blocks the tick, corrupts the status file, or crashes the loop.
+- **Single-writer deferral.** `engine/engineer/brain-liveness.ts`'s `brainLoopAlive()` checks
+  for a live tmux session (`cc-brain-*`) or pidfile. When the brain loop is alive, the
+  interactive `conduct-ts engineer` launcher's `prePoll` step (see "GitHub-issues intake"
+  above) is set to a no-op rather than running its own poll, so the background loop and the
+  interactive launcher never race the same ledger/inbox.
+
+#### Push Notifications
+
+When the intake loop (`--continuous` or `--once`) discovers new issues, it sends a desktop
+push notification via the **existing `sendNotification` transport**:
+
+- **Transport mechanism:**
+  - **macOS**: `osascript` via native notification API
+  - **Linux**: `notify-send` (freedesktop.org Desktop Notifications)
+  - **Fallback**: terminal bell (BEL character, audible on most terminals)
+
+- **Behavior:**
+  - Notifications fire only on **non-empty ticks** (when new issues are discovered)
+  - Transport failures are caught, logged, and **non-blocking** — they never interrupt the
+    intake tick or prevent the status file from being written
+  - The notification is **best-effort**: if the transport is unavailable (e.g., `notify-send`
+    not installed), the system falls back gracefully to the next transport in the chain
+  - The status file (`.../intake-status.json`) is always written, regardless of push success —
+    the two surfaces (durable file + best-effort notification) work together to surface new
+    captured ideas
+
+- **Configuration:** No explicit config needed beyond `intake_notifier` (see "Intake Loop
+  Automation" above). The transport is selected automatically by the platform at runtime.
+
+- **Applies to:** Both `brain start` (tmux-hosted continuous mode) and direct CLI invocation
+  (`--continuous` or `--once` flags)
 
 #### Delivery guard (engineer claim) and recovery (engineer resolve)
 

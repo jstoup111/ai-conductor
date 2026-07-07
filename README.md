@@ -346,6 +346,37 @@ for deployment.
 On failure, conduct sends a desktop notification and drops into an interactive Claude session
 to fix the issue. After you `/quit`, it rechecks artifacts and continues automatically.
 
+### Halt-PR presentation reliability
+
+When a daemon feature HALTs irrecoverably (build failure, unresolved gap, or gating step failure), it
+escalates by opening a **draft PR labeled `needs-remediation`** with a failure comment so the operator
+can triage. A halt PR that loses its draft status or label is indistinguishable from a ready feature PR
+and could slip past merge-order sweeps as mergeable — **a critical safety gap.**
+
+**Guarantee:** halt PRs now reliably carry three durable markers:
+
+1. **Draft status** — the PR is unpublishable (`isDraft: true`)
+2. **`needs-remediation` label** — human-scannable halt signal
+3. **Body marker** (`<!-- conductor:needs-remediation -->`) — durable enumeration anchor for
+   reconciliation when the label/draft are lost
+
+**Mechanism:**
+
+- **Verify-after-write:** when escalation opens or reuses a PR, it writes draft status, label, and
+  body marker, then **re-reads to confirm** all three are present, with bounded retry (3 attempts,
+  100ms backoff) before moving on.
+- **Reconciliation sweep:** on daemon startup and each idle poll tick, a background sweep enumerates
+  open PRs carrying the body marker, spots-checks draft + label, and heals any that drifted (converts
+  to draft, re-adds label) — so PRs broken before this code shipped or by concurrent checkouts
+  self-recover without operator intervention.
+- **Finish cleanup:** when a halt PR is successfully remediated and shipped, the finish phase removes
+  the `needs-remediation` label, converts the PR to ready, and strips the body marker (verify-after-write)
+  so the reconciliation sweep never re-halts it.
+
+All operations are **best-effort** and **non-throwing** — they never block daemon progress. The
+reconciliation sweep is idempotent (never removes halt markers, only re-asserts them). See
+`src/conductor/README.md` → "Halt-PR presentation reliability" for the implementation reference.
+
 Engineer mode (`conduct-ts` only) — an **agent-hosted, human-gated** loop that turns a free-form
 idea into a routed, lesson-informed **spec PR**. It never builds and never merges (a merged spec PR
 is the only idea→build handoff). As of Phase 9.3 there is no Node REPL and no spawned `claude` — the
@@ -401,6 +432,31 @@ The command is **idempotent** — running it multiple times on the same entry wi
 **Integration: resolve + claim compose.** After resolve marks an entry delivered, a subsequent `engineer claim` with a duplicate envelope for that entry invokes the delivery guard, which heals and drops it — completing the recovery cycle end-to-end.
 
 See `src/conductor/README.md` for the full implementation details.
+
+### Brain Loop Supervision
+
+`conduct-ts` can host the GitHub-issues intake poll as a **background daemon** instead of a
+cron job, so idea capture keeps running without a scheduled task or a live terminal:
+
+```bash
+conduct-ts brain start   # launch the intake loop in a detached tmux session
+conduct-ts brain status  # report whether it's running + how many issues are queued
+conduct-ts brain stop    # kill the session
+```
+
+- **`brain start`** launches a host-wide singleton tmux session (one per machine, not
+  per-repo) running `conduct-ts intake-loop --continuous`. Idempotent — calling it again
+  while already running prints `brain loop already running.` instead of spawning a duplicate.
+- **`brain status`** reports `brain loop: running|stopped` plus `queued: <n>` read from the
+  status surface written by the loop (see `src/conductor/README.md` → "Intake Loop Automation").
+- **`brain stop`** kills the tmux session; safe to call when nothing is running.
+- **Alternative to cron, zero-token execution.** The loop only polls GitHub via `gh` and
+  writes to the local ledger/inbox — it never spawns `claude` or opens a PR, so running it
+  continuously costs no model tokens.
+- **Single-writer guarantee.** When the brain loop is live, the interactive
+  `conduct-ts engineer` launcher's manual pre-poll is skipped (see
+  `src/conductor/README.md` → "Intake Loop Automation") so the two paths never race the
+  same ledger.
 
 ## Choosing a Conductor
 

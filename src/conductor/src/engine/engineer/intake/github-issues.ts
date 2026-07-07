@@ -9,8 +9,10 @@
 // intake filter.
 
 import { randomUUID } from 'node:crypto';
+import { existsSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { parseEnvelope } from './port.js';
-import type { Envelope, EnvelopeStatus, IntakePort, ReportMeta } from './port.js';
+import type { Envelope, EnvelopeStatus, IntakePort, ReportMeta, ReportOutcome } from './port.js';
 import type { IntakeSource } from './source.js';
 import type { Ledger } from './ledger.js';
 import { parseSourceRef } from '../issue-ref.js';
@@ -112,6 +114,33 @@ export function createGithubIssuesAdapter(deps: GithubIssuesDeps): IntakeSource 
   // Map repo name to local path for use as working directory in report() gh calls.
   // Populated during poll(); keyed by the ghRepo or name used in sourceRef.
   const repoPaths = new Map<string, string>();
+
+  /**
+   * Resolve the working directory for a report() gh call. Never falls back to
+   * process.cwd() — gh calls always target `-R <owner/repo>`, so any existing
+   * directory suffices as cwd. Resolution order:
+   *   1. poll-cache (repoPaths, populated by a prior poll())
+   *   2. registry lookup (matched by ghRepo or name)
+   *   3. os.homedir()
+   * Every candidate is existsSync-checked before use.
+   */
+  async function resolveReportCwd(repo: string): Promise<string> {
+    const cached = repoPaths.get(repo);
+    if (cached && existsSync(cached)) return cached;
+
+    try {
+      const repos = await registry.list();
+      const found = repos.find((r) => (r.ghRepo ?? r.name) === repo);
+      if (found && existsSync(found.path)) return found.path;
+    } catch (err: unknown) {
+      // Registry is unavailable — degrade gracefully to the homedir fallback
+      // rather than let a registry failure block write-back entirely.
+      const msg = err instanceof Error ? err.message : String(err);
+      log(`github-issues: registry lookup failed while resolving cwd for ${repo} — ${msg}`);
+    }
+
+    return homedir();
+  }
 
   // ── Re-eligibility (FR-39/40) ────────────────────────────────────────────────
   // A `done` issue still carrying the handled label is re-emitted iff its spec PR
@@ -234,45 +263,72 @@ export function createGithubIssuesAdapter(deps: GithubIssuesDeps): IntakeSource 
     },
 
     // ── report / write-back ─────────────────────────────────────────────────────
-    async report(sourceRef: string, status: EnvelopeStatus, meta?: ReportMeta): Promise<void> {
+    async report(
+      sourceRef: string,
+      status: EnvelopeStatus,
+      meta?: ReportMeta,
+    ): Promise<ReportOutcome> {
       const marker = `${sourceRef}\0${status}`;
-      if (postedMarkers.has(marker)) return; // FR-38: post once per (sourceRef,status).
+      if (postedMarkers.has(marker)) return { ok: true }; // FR-38: post once per (sourceRef,status).
 
       const parsed = parseSourceRef(sourceRef);
       if (!parsed) {
         // Unparseable ref → log and make no gh call (cannot target an issue).
         log(`github-issues: report() ignoring unparseable sourceRef "${sourceRef}"`);
-        return;
+        return { ok: true };
       }
       const { repo, number } = parsed;
-      const repoPath = repoPaths.get(repo) ?? process.cwd();
+      const repoPath = await resolveReportCwd(repo);
 
-      try {
-        if (status === 'routed') {
-          const body = `Routed to ${meta?.repo ?? '(unresolved)'}`;
-          await gh(['issue', 'comment', number, '-R', repo, '--body', body], { cwd: repoPath });
-        } else if (status === 'done') {
-          const body = `Spec PR opened: ${meta?.prUrl ?? '(unknown)'}`;
-          await gh(['issue', 'comment', number, '-R', repo, '--body', body], { cwd: repoPath });
-          // Ensure the label exists before applying it (auto-create; ignore "already exists").
-          try {
-            await gh(['label', 'create', HANDLED_LABEL, '-R', repo], { cwd: repoPath });
-          } catch {
-            // label already present — not an error.
-          }
-          await gh(restAddLabelArgs(repo, number, HANDLED_LABEL), { cwd: repoPath });
-        } else {
-          // No write-back marker for intermediate statuses (pending/deciding).
-          return;
-        }
-        postedMarkers.add(marker);
-      } catch (err: unknown) {
+      // Compose a single-command remediation for the step that failed, using
+      // real substituted values so an operator can copy/paste-retry it directly.
+      function fail(err: unknown, remediation: string[]): ReportOutcome {
         // FR-37: write-back is non-fatal. Log with the sourceRef and swallow so a
         // gh outage never rolls back a completed route/spec-PR. Marker is NOT set,
         // so a later poll/report can retry.
         const msg = err instanceof Error ? err.message : String(err);
         log(`github-issues: write-back failed for ${sourceRef} (${status}) — ${msg}`);
+        log(`github-issues: retry manually — ${remediation.join(' && ')}`);
+        return { ok: false, remediation };
       }
+
+      if (status === 'routed') {
+        const body = `Routed to ${meta?.repo ?? '(unresolved)'}`;
+        const commentCmd = `gh issue comment ${number} --repo ${repo} --body "${body}"`;
+        try {
+          await gh(['issue', 'comment', number, '-R', repo, '--body', body], { cwd: repoPath });
+        } catch (err) {
+          return fail(err, [commentCmd]);
+        }
+      } else if (status === 'done') {
+        const body = `Spec PR opened: ${meta?.prUrl ?? '(unknown)'}`;
+        const commentCmd = `gh issue comment ${number} --repo ${repo} --body "${body}"`;
+        try {
+          await gh(['issue', 'comment', number, '-R', repo, '--body', body], { cwd: repoPath });
+        } catch (err) {
+          return fail(err, [commentCmd]);
+        }
+
+        // Ensure the label exists before applying it (auto-create; ignore "already exists").
+        try {
+          await gh(['label', 'create', HANDLED_LABEL, '-R', repo], { cwd: repoPath });
+        } catch {
+          // label already present — not an error.
+        }
+
+        const labelCmd = `gh api repos/${repo}/issues/${number}/labels -f "labels[]=${HANDLED_LABEL}"`;
+        try {
+          await gh(restAddLabelArgs(repo, number, HANDLED_LABEL), { cwd: repoPath });
+        } catch (err) {
+          return fail(err, [labelCmd]);
+        }
+      } else {
+        // No write-back marker for intermediate statuses (pending/deciding).
+        return { ok: true };
+      }
+
+      postedMarkers.add(marker);
+      return { ok: true };
     },
   };
 }

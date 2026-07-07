@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, mkdir, writeFile } from 'fs/promises';
+import { mkdtemp, rm, mkdir, writeFile, readFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
@@ -9,6 +9,7 @@ import {
   isProcessed,
   readWorktreeOutcome,
   makeFeatureRunnerDeps,
+  repairProcessed,
 } from '../../src/engine/daemon-deps.js';
 
 describe('engine/daemon-deps', () => {
@@ -168,6 +169,50 @@ describe('engine/daemon-deps', () => {
       await mkdir(join(dir, '.daemon/processed'), { recursive: true });
       await writeFile(join(dir, '.daemon/processed/feat-x'), 'shipped\n');
       expect(await isProcessed(dir, 'feat-x')).toBe(true);
+    });
+  });
+
+  describe('repairProcessed (exemption regression pin)', () => {
+    it('writes {"status":"shipped","prUrl":null} when record has no pr field (malformed base-branch record)', async () => {
+      // Regression pin for ADR scope note (adr-2026-07-06-daemon-false-ship-guard):
+      // `repairProcessed` is exempt from the null-prUrl guard because it is a cache
+      // repair driven by a committed shipped record already merged on the base branch.
+      // The ship is proven by independent evidence; null prUrl only marks a
+      // malformed-but-proven record and is legitimate.
+      const marker = join(dir, '.daemon/processed', 'billing-export');
+      await repairProcessed(dir, 'billing-export', { malformed: true });
+      const contents = await readFile(marker, 'utf-8');
+      const parsed = JSON.parse(contents);
+      expect(parsed).toEqual({ status: 'shipped', prUrl: null });
+    });
+
+    it('writes {"status":"shipped","prUrl":null} when record has null pr field', async () => {
+      // Repair exemption: null prUrl is legitimate when repairing a committed
+      // record that exists on the base branch (shipped status proven independent
+      // of prUrl).
+      const marker = join(dir, '.daemon/processed', 'repair-test');
+      await repairProcessed(dir, 'repair-test', { pr: null as unknown as string });
+      const contents = await readFile(marker, 'utf-8');
+      const parsed = JSON.parse(contents);
+      expect(parsed).toEqual({ status: 'shipped', prUrl: null });
+    });
+
+    it('writes the prUrl when the record has a valid pr field', async () => {
+      const marker = join(dir, '.daemon/processed', 'good-record');
+      await repairProcessed(dir, 'good-record', { pr: 'https://github.com/x/y/pull/9' });
+      const contents = await readFile(marker, 'utf-8');
+      const parsed = JSON.parse(contents);
+      expect(parsed).toEqual({ status: 'shipped', prUrl: 'https://github.com/x/y/pull/9' });
+    });
+
+    it('creates .daemon/processed directory if missing', async () => {
+      // Clean slate — no .daemon directory
+      const newDir = join(dir, 'test-create-dir');
+      await mkdir(newDir, { recursive: true });
+      await repairProcessed(newDir, 'test-slug', { malformed: true });
+      const marker = join(newDir, '.daemon/processed', 'test-slug');
+      const contents = await readFile(marker, 'utf-8');
+      expect(contents).toBeTruthy();
     });
   });
 });

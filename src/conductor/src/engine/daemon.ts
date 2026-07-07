@@ -277,6 +277,14 @@ export interface DaemonDeps {
    */
   rekickSweep?: (sha: string) => Promise<void>;
   /**
+   * Task 18 (ADR-013): optional reconciliation hook for halt-PR state.
+   * Invoked on startup and once per idle poll tick, BEFORE sweepMergeableLabels
+   * so labels are correct when the mergeable sweep evaluates. Best-effort: a throw
+   * is caught and logged; the daemon loop is never disrupted. Absent → no-op.
+   */
+  reconcileHaltPrs?: () => Promise<void>;
+
+  /**
    * FR-14: sweep mergeable labels on startup (after reconciliation) and once per
    * idle poll tick. The caller binds projectRoot + log when wiring production
    * deps — this core accepts a pre-bound zero-arg function so it needs no
@@ -371,8 +379,13 @@ export async function runDaemon(
   const now = deps.now ?? (() => Date.now());
   const log = deps.log ?? (() => {});
 
-  /** FR-14: best-effort sweep; never throws, never disrupts the daemon loop. */
+  /** Task 18 + FR-14: best-effort sweep; reconcile halt-PRs before merge-sweep; never throws, never disrupts the daemon loop. */
   const sweepBestEffort = async (): Promise<void> => {
+    try {
+      await deps.reconcileHaltPrs?.();
+    } catch (err) {
+      log(`[daemon] reconcileHaltPrs error: ${err instanceof Error ? err.message : String(err)}`);
+    }
     try {
       await deps.sweepMergeableLabels?.();
     } catch (err) {
