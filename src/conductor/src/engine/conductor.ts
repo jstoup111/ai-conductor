@@ -44,6 +44,7 @@ import {
 import { checkGate } from './gates.js';
 import {
   findArtifactFiles as findArtifactFilesForStep,
+  resolveFeaturePlanPath,
   STEP_ARTIFACT_GLOBS,
   checkStepCompletion,
   CUSTOM_COMPLETION_PREDICATES,
@@ -510,13 +511,15 @@ export class Conductor {
    */
   private async completionCtx(state: ConductState): Promise<CompletionContext> {
     // For the build predicate, resolve the plan file to pass into the context.
+    // Scoped to THIS feature (#407): `.docs/plans/` is shared across in-flight
+    // features by design, so an unscoped glob's first entry can be another
+    // feature's plan — whose tasks then poison task-status.json and fail the
+    // gate forever. resolveFeaturePlanPath prefers the engine-recorded path,
+    // then the plan named after `feature_desc`, then a single plan; on true
+    // ambiguity it returns undefined and the gate fails closed.
     let planPath: string | undefined;
     try {
-      const planFiles = await findArtifactFilesForStep(this.projectRoot, 'plan');
-      if (planFiles.length > 0) {
-        // Use the first (or only) plan file; in practice, there's typically one per feature
-        planPath = planFiles[0];
-      }
+      planPath = await resolveFeaturePlanPath(this.projectRoot, state.feature_desc);
     } catch {
       // Plan file resolution failed — let the predicate handle missing plan
       planPath = undefined;
