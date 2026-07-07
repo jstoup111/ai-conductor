@@ -336,6 +336,23 @@ export interface DaemonDeps {
    * when confirmed gone, `null` otherwise. Absent → never checked.
    */
   repoRootMissing?: () => string | null;
+
+  // ── Task 20: Episode-caused HALT self-heal sweep ─────────────────────────
+  /**
+   * Called when a HALT marker is written (during feature execution).
+   * Used to track whether the HALT was written during an active rate-limit
+   * episode so it can be recovered automatically when the episode ends.
+   * @param slug - The feature slug
+   * @param episodeCaused - true if the HALT was written while an episode was active
+   */
+  onHaltWritten?: (slug: string, episodeCaused: boolean) => Promise<void>;
+  /**
+   * Sweep for and recover episode-caused HALTs when the rate-limit episode ends.
+   * Should iterate over all HALT markers that were written during the episode
+   * and recover them using existing rekick logic, respecting operator-park.
+   * @param isParked - Optional function to check if a slug is operator-parked
+   */
+  sweepEpisodeHalts?: (isParked?: (slug: string) => Promise<boolean>) => Promise<void>;
 }
 
 export interface DaemonOptions {
@@ -638,6 +655,9 @@ export async function runDaemon(
   };
 
   let stopReason: DaemonStopReason | null = null;
+  // Task 20: Track episode state to detect when it ends so we can sweep
+  // episode-caused HALTs and recover them via the existing rekick path.
+  let wasEpisodeActive = false;
 
   while (true) {
     const missingRoot = deps.repoRootMissing?.();
@@ -717,6 +737,8 @@ export async function runDaemon(
           stopReason = 'engine_restart';
           break;
         }
+        // Task 20: Update episode state when dispatching
+        wasEpisodeActive = episodeActive;
         dispatch(next);
         continue; // try to fill another slot before awaiting
       }
@@ -845,6 +867,21 @@ export async function runDaemon(
         await Promise.race([sleep(idlePollMs), waker.armed()]);
         // FR-14: sweep once per idle poll tick.
         await sweepBestEffort();
+
+        // Task 20: Episode-end sweep. Detect when an active episode becomes
+        // inactive and sweep for episode-caused HALTs to recover them via rekick.
+        const isEpisodeActive = deps.rateLimitEpisode?.active?.() ?? false;
+        if (wasEpisodeActive && !isEpisodeActive && deps.sweepEpisodeHalts) {
+          try {
+            await deps.sweepEpisodeHalts(deps.isParked);
+          } catch (err) {
+            log(
+              `[daemon] sweepEpisodeHalts error: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
+        }
+        wasEpisodeActive = isEpisodeActive;
+
         continue;
       }
       // Workers still running — wait for one, then re-evaluate.

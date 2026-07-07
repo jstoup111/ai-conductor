@@ -1379,4 +1379,177 @@ describe('engine/daemon — runDaemon', () => {
       // but in a live system it would cause pause to be bypassable by an active episode.
     });
   });
+
+  // ── Episode-caused HALT self-heal sweep (Task 20) ─────────────────────────
+  describe('episode-caused HALT self-heal sweep (Task 20)', () => {
+    it('HALT written while episode active is marked with episodeCausedHalt stamp', async () => {
+      // When a feature halts AND rateLimitEpisode is active, the onHaltWritten
+      // callback should receive a flag indicating the HALT is episode-caused.
+      let episodeActive = true;
+      const haltEventLog: Array<{ slug: string; episodeCaused: boolean }> = [];
+
+      const deps: DaemonDeps = {
+        discoverBacklog: staticBacklog(items(1)),
+        runFeature: async (it) => {
+          return { slug: it.slug, status: 'halted', reason: 'rate limited' };
+        },
+        isHalted: async (slug) => haltEventLog.some((e) => e.slug === slug),
+        rateLimitEpisode: {
+          active: () => episodeActive,
+          enter: () => {},
+          clear: () => Promise.resolve(),
+        },
+        onHaltWritten: async (slug, episodeCaused) => {
+          haltEventLog.push({ slug, episodeCaused });
+        },
+        sleep: async () => {},
+      };
+
+      await runDaemon(deps, { concurrency: 1, once: true });
+
+      // Verify that the HALT was recorded as episode-caused
+      expect(haltEventLog).toContainEqual({ slug: 'f0', episodeCaused: true });
+    });
+
+    it('unstamped HALT: written when episode not active', async () => {
+      // When a HALT is written with episode NOT active, it should be marked
+      // with episodeCaused: false.
+      let episodeActive = false;
+      const haltEventLog: Array<{ slug: string; episodeCaused: boolean }> = [];
+
+      const deps: DaemonDeps = {
+        discoverBacklog: staticBacklog(items(1)),
+        runFeature: async (it) => {
+          return { slug: it.slug, status: 'halted', reason: 'normal halt' };
+        },
+        isHalted: async (slug) => haltEventLog.some((e) => e.slug === slug),
+        rateLimitEpisode: {
+          active: () => episodeActive,
+          enter: () => {},
+          clear: () => Promise.resolve(),
+        },
+        onHaltWritten: async (slug, episodeCaused) => {
+          haltEventLog.push({ slug, episodeCaused });
+        },
+        sleep: async () => {},
+      };
+
+      await runDaemon(deps, { concurrency: 1, once: true });
+
+      // Verify that the HALT was recorded as NOT episode-caused
+      expect(haltEventLog).toContainEqual({ slug: 'f0', episodeCaused: false });
+    });
+
+    it('episode end triggers sweep of episode-caused HALTs via rekickHalt', async () => {
+      // When episode transitions from active to inactive, episode-caused HALTs
+      // should be recovered via rekickHalt (the existing recovery mechanism).
+      let episodeActive = true;
+      const haltedSlugs: { [key: string]: boolean } = {};
+      const episodeCausedSlugs: { [key: string]: boolean } = {};
+      const rekickedSlugs: string[] = [];
+      let pollCount = 0;
+
+      const deps: DaemonDeps = {
+        discoverBacklog: staticBacklog(items(1)),
+        runFeature: async (it) => {
+          return { slug: it.slug, status: 'halted', reason: 'episode halt' };
+        },
+        isHalted: async (slug) => haltedSlugs[slug] ?? false,
+        rateLimitEpisode: {
+          active: () => episodeActive,
+          enter: () => {},
+          clear: () => Promise.resolve(),
+        },
+        onHaltWritten: async (slug, episodeCaused) => {
+          haltedSlugs[slug] = true;
+          if (episodeCaused) {
+            episodeCausedSlugs[slug] = true;
+          }
+        },
+        sweepEpisodeHalts: async () => {
+          // When episode-end sweep is triggered, rekick all episode-caused HALTs
+          for (const slug of Object.keys(episodeCausedSlugs)) {
+            if (haltedSlugs[slug]) {
+              rekickedSlugs.push(slug);
+            }
+          }
+        },
+        sleep: async () => {
+          pollCount++;
+          if (pollCount === 2) {
+            // Clear episode to trigger sweep
+            episodeActive = false;
+          }
+        },
+      };
+
+      await runDaemon(deps, {
+        concurrency: 1,
+        once: false,
+        maxIdlePolls: 3,
+      });
+
+      // After episode clears, episode-caused HALT should be swept/rekicked
+      expect(rekickedSlugs).toContain('f0');
+    });
+
+    it('episode sweep respects operator-park: parked slug not recovered', async () => {
+      // Even if a HALT is episode-caused, if the operator has parked the slug,
+      // the episode sweep should NOT recover it. Operator intent overrides
+      // automatic recovery.
+      let episodeActive = true;
+      const haltedSlugs: { [key: string]: boolean } = {};
+      const episodeCausedSlugs: { [key: string]: boolean } = {};
+      const operatorParked = new Set<string>();
+      const rekickedSlugs: string[] = [];
+      let pollCount = 0;
+
+      const deps: DaemonDeps = {
+        discoverBacklog: staticBacklog(items(1)),
+        runFeature: async (it) => {
+          return { slug: it.slug, status: 'halted', reason: 'episode halt' };
+        },
+        isHalted: async (slug) => haltedSlugs[slug] ?? false,
+        isParked: async (slug) => operatorParked.has(slug),
+        rateLimitEpisode: {
+          active: () => episodeActive,
+          enter: () => {},
+          clear: () => Promise.resolve(),
+        },
+        onHaltWritten: async (slug, episodeCaused) => {
+          haltedSlugs[slug] = true;
+          if (episodeCaused) {
+            episodeCausedSlugs[slug] = true;
+          }
+        },
+        sweepEpisodeHalts: async (isParked) => {
+          // When sweeping, respect operator-park
+          for (const slug of Object.keys(episodeCausedSlugs)) {
+            if (haltedSlugs[slug] && !(await isParked?.(slug))) {
+              rekickedSlugs.push(slug);
+            }
+          }
+        },
+        sleep: async () => {
+          pollCount++;
+          if (pollCount === 1) {
+            // Operator parks the slug
+            operatorParked.add('f0');
+          } else if (pollCount === 2) {
+            // Clear episode
+            episodeActive = false;
+          }
+        },
+      };
+
+      await runDaemon(deps, {
+        concurrency: 1,
+        once: false,
+        maxIdlePolls: 3,
+      });
+
+      // Operator-parked HALT should NOT be rekicked even if episode-caused
+      expect(rekickedSlugs).not.toContain('f0');
+    });
+  });
 });

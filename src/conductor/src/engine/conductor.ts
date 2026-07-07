@@ -368,6 +368,12 @@ export interface ConductorOptions {
    * handling falls back to bare sleep (existing behavior).
    */
   rateLimitEpisode?: RateLimitEpisode;
+  /**
+   * Task 20: Called when a HALT marker is written. Used to track which HALTs
+   * were written during an active rate-limit episode so they can be recovered
+   * when the episode ends. Absent → no tracking (no-op).
+   */
+  onHaltWritten?: (slug: string, episodeCaused: boolean) => Promise<void>;
 }
 
 /**
@@ -506,6 +512,13 @@ export class Conductor {
   private rateLimitEpisode: RateLimitEpisode | undefined;
 
   /**
+   * Task 20: Optional callback when a HALT is written. Tracks whether the HALT
+   * was written during an active rate-limit episode so it can be recovered
+   * when the episode ends.
+   */
+  private onHaltWritten: ((slug: string, episodeCaused: boolean) => Promise<void>) | undefined;
+
+  /**
    * The CompletionContext handed to every gate evaluation. `getHeadSha` feeds
    * the manual_test whitewash guard (#367); it resolves the worktree's real
    * HEAD and returns null (never throws) when there is no usable repo, which
@@ -565,6 +578,7 @@ export class Conductor {
     this.gh = opts.gh ?? makeProductionGh();
     this.git = opts.git ?? makeProductionGit();
     this.rateLimitEpisode = opts.rateLimitEpisode;
+    this.onHaltWritten = opts.onHaltWritten;
   }
 
   /**
@@ -2640,6 +2654,14 @@ export class Conductor {
 
     if (outcome.kind === 'conflict_halt') {
       await writeHalt(this.projectRoot, outcome.conflicts, outcome.reason);
+      // Task 20: Track whether this HALT was written during an active episode
+      // so it can be recovered when the episode ends.
+      if (this.onHaltWritten && state.feature_desc) {
+        const episodeCaused = this.rateLimitEpisode?.active() ?? false;
+        await this.onHaltWritten(state.feature_desc, episodeCaused).catch(() => {
+          // Best-effort: don't let tracking failures affect the HALT flow
+        });
+      }
     }
 
     // The step itself "succeeds" (it ran); advanceTail/the HALT signal decide
