@@ -40,9 +40,11 @@ sequenceDiagram
 - **FIXED form** = `set-option -w -t =«name»: remain-on-exit on` — the prior invocation failed `no such window` and was swallowed, which is why the observed reproductions ended `session:down` even though the CLI restart path nominally set the option.
 - The `alt` fork replaces the old unconditional write-marker-and-exit: with a live tmux session the daemon respawns itself in place via the existing tested transport; the marker+exit path survives only as the headless fallback, now recoverable because the pane remains.
 - The skill relink happens **before** the respawn/exit so the successor process passes the non-interactive `ensureInstallFresh` gate.
+- **Amended 2026-07-07 (#400):** the session-hosted branch shown here stacked daemon generations — the trigger re-fired on every idle poll and the predecessor never exited after `respawnPane -k`. The hardened single-generation flow is `sequences/fix-400-stale-engine-respawn-in-place-stacks-daemo.md`.
 
 ## Change Log
 
 | Date | Change | Reason |
 |------|--------|--------|
 | 2026-07-06 | Initial generation | DECIDE phase for issue jstoup111/ai-conductor#353 |
+| 2026-07-07 | Legend note: session-hosted branch superseded by hardened single-generation flow | Issue #400 (generation stacking) |
