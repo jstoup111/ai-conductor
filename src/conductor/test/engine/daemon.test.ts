@@ -1385,12 +1385,19 @@ describe('engine/daemon — runDaemon', () => {
     it('HALT written while episode active is marked with episodeCausedHalt stamp', async () => {
       // When a feature halts AND rateLimitEpisode is active, the onHaltWritten
       // callback should receive a flag indicating the HALT is episode-caused.
-      let episodeActive = true;
+      //
+      // The realistic sequence: the feature is DISPATCHED while no episode is
+      // active (an active episode suppresses dispatch entirely), the episode
+      // begins while it is in flight (the rate-limited run itself triggers
+      // episode entry), and the halt lands during the active episode. The
+      // runFeature mock models that by flipping the episode on before halting.
+      let episodeActive = false;
       const haltEventLog: Array<{ slug: string; episodeCaused: boolean }> = [];
 
       const deps: DaemonDeps = {
         discoverBacklog: staticBacklog(items(1)),
         runFeature: async (it) => {
+          episodeActive = true; // rate-limit episode begins mid-run
           return { slug: it.slug, status: 'halted', reason: 'rate limited' };
         },
         isHalted: async (slug) => haltEventLog.some((e) => e.slug === slug),
@@ -1442,8 +1449,13 @@ describe('engine/daemon — runDaemon', () => {
 
     it('episode end triggers sweep of episode-caused HALTs via rekickHalt', async () => {
       // When episode transitions from active to inactive, episode-caused HALTs
-      // should be recovered via rekickHalt (the existing recovery mechanism).
-      let episodeActive = true;
+      // should be recovered via the injected sweep (the existing rekick path).
+      //
+      // Dispatch must happen while the episode is INACTIVE (an active episode
+      // suppresses dispatch); the episode begins mid-run, the halt lands
+      // stamped, and a later idle tick clears the episode — the daemon must
+      // detect the active→inactive transition and fire sweepEpisodeHalts.
+      let episodeActive = false;
       const haltedSlugs: { [key: string]: boolean } = {};
       const episodeCausedSlugs: { [key: string]: boolean } = {};
       const rekickedSlugs: string[] = [];
@@ -1452,6 +1464,7 @@ describe('engine/daemon — runDaemon', () => {
       const deps: DaemonDeps = {
         discoverBacklog: staticBacklog(items(1)),
         runFeature: async (it) => {
+          episodeActive = true; // rate-limit episode begins mid-run
           return { slug: it.slug, status: 'halted', reason: 'episode halt' };
         },
         isHalted: async (slug) => haltedSlugs[slug] ?? false,
@@ -1497,7 +1510,13 @@ describe('engine/daemon — runDaemon', () => {
       // Even if a HALT is episode-caused, if the operator has parked the slug,
       // the episode sweep should NOT recover it. Operator intent overrides
       // automatic recovery.
-      let episodeActive = true;
+      //
+      // Same choreography as the sweep test above (dispatch while inactive,
+      // episode begins mid-run, halt lands stamped) — but the operator parks
+      // the slug before the episode clears, so the sweep must skip it. Without
+      // a real dispatch+stamp first, the not-rekicked assertion would pass
+      // vacuously (nothing stamped, sweep empty).
+      let episodeActive = false;
       const haltedSlugs: { [key: string]: boolean } = {};
       const episodeCausedSlugs: { [key: string]: boolean } = {};
       const operatorParked = new Set<string>();
@@ -1507,6 +1526,7 @@ describe('engine/daemon — runDaemon', () => {
       const deps: DaemonDeps = {
         discoverBacklog: staticBacklog(items(1)),
         runFeature: async (it) => {
+          episodeActive = true; // rate-limit episode begins mid-run
           return { slug: it.slug, status: 'halted', reason: 'episode halt' };
         },
         isHalted: async (slug) => haltedSlugs[slug] ?? false,

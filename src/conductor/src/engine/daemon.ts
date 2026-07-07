@@ -362,11 +362,15 @@ export interface DaemonDeps {
 
   // ── Task 20: Episode-caused HALT self-heal sweep ─────────────────────────
   /**
-   * Called when a HALT marker is written (during feature execution).
-   * Used to track whether the HALT was written during an active rate-limit
-   * episode so it can be recovered automatically when the episode ends.
+   * Fired by the daemon when it parks a halted/error outcome (both leave a
+   * durable HALT marker in the worktree). This is the ONE choke point that
+   * sees every halt path — step halts, rebase conflict halts, diagnostic
+   * error HALTs — so causality is recorded here rather than at the many
+   * marker-write sites inside the conductor.
    * @param slug - The feature slug
-   * @param episodeCaused - true if the HALT was written while an episode was active
+   * @param episodeCaused - true if a rate-limit episode was active when the
+   *   outcome was collected (the daemon's best signal for "this HALT is
+   *   rate-limit fallout, recover it when the episode ends")
    */
   onHaltWritten?: (slug: string, episodeCaused: boolean) => Promise<void>;
   /**
@@ -570,6 +574,15 @@ export async function runDaemon(
       parked.add(slug);
       // Register a watcher for event-driven wake when this feature's HALT is cleared
       registerWatcher(slug);
+      // Task 20: stamp the park with the episode state at collection time so
+      // the episode-end sweep can recover episode-caused HALTs. Awaited so the
+      // tracker is consistent before the next pickEligible consults isHalted.
+      if (deps.onHaltWritten) {
+        const episodeCaused = deps.rateLimitEpisode?.active?.() ?? false;
+        await deps.onHaltWritten(slug, episodeCaused).catch(() => {
+          // Best-effort: tracking failures never disrupt the park/collect flow.
+        });
+      }
     }
     const ok = outcome.status === 'done';
     const marker = ok ? chalk.green('■') : chalk.red('■');

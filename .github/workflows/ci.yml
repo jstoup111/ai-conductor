@@ -27,25 +27,5 @@ jobs:
         working-directory: src/conductor
       - run: npm run build
         working-directory: src/conductor
-      # Suite-scale memory ceiling (2026-07-07): the suite passes, then a
-      # long-lived fork worker dies of V8 heap exhaustion — per-file memory
-      # accumulates in reused workers, and at 4500+ tests one worker crosses
-      # the cap no matter how the worker count/heap knobs are tuned. Sharding
-      # the run per test tree gives every shard FRESH workers, resetting the
-      # accumulation deterministically. Wall time is not a constraint here
-      # (operator directive). The durable fix is hunting the per-file leak —
-      # tracked separately.
-      # --logHeapUsage: per-file worker heap in the log — the OOM reproduces
-      # only under CI's file-set/partition, so CI itself names the balloon.
-      - run: |
-          npx vitest run --shard=1/4 --logHeapUsage
-          # shard 2 instrumented: one worker + verbose — the line after the
-          # last completed test names the ballooning file (it dies mid-file).
-          npx vitest run --shard=2/4 --logHeapUsage --minWorkers=1 --maxWorkers=1 --reporter=verbose
-          npx vitest run --shard=3/4 --logHeapUsage
-          npx vitest run --shard=4/4 --logHeapUsage
+      - run: npx vitest run
         working-directory: src/conductor
-        env:
-          # Headroom over V8's ~4GB default for the one CI-only balloon file
-          # (shard baseline is ~50MB/file, so a single spike has the space).
-          NODE_OPTIONS: --max-old-space-size=5632

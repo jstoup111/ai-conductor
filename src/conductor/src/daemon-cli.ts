@@ -83,6 +83,7 @@ import { createPriorityResolver, ghIssueLabelReader } from './engine/backlog-pri
 import { isPaused } from './engine/pause-marker.js';
 import { readRestartPending, consumeOnBoot, type RestartIntent } from './engine/restart-marker.js';
 import { create as createRateLimitEpisode } from './engine/rate-limit-episode.js';
+import { createEpisodeHaltTracker } from './engine/episode-halt-tracker.js';
 
 const execFile = promisify(execFileCb);
 
@@ -556,6 +557,9 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   // One shared provider + event bus across workers (rate limits are shared).
   const events = new ConductorEventEmitter();
   const rateLimitEpisode = createRateLimitEpisode();
+  // Task 20: track which parks were episode-caused so the episode-end sweep
+  // (runDaemon's active→inactive transition hook) can recover exactly those.
+  const episodeHaltTracker = createEpisodeHaltTracker();
   const registry = new PluginRegistry();
   // Surface per-step loop progress on the console. Without this the daemon was
   // silent between `▶ start` and `✓ shipped` (the no-op renderer threw every
@@ -955,6 +959,29 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       // resumes dispatch at the next boundary (no restart required).
       isPaused: () => isPaused(projectRoot),
       rateLimitEpisode,
+      // Task 20: record episode causality when the daemon parks a halted/error
+      // outcome, and recover exactly those parks when the episode ends. The
+      // sweep clears each stamped worktree's HALT non-destructively via the
+      // existing rekick primitive (reason → HALT.cleared + REKICK sentinel),
+      // which also fires the watchHaltCleared wake for immediate re-dispatch.
+      // NOTE: this binding must stay wired — removing it silently no-ops
+      // episode-caused HALT recovery (daemon.ts guards with ?.()).
+      onHaltWritten: async (slug, episodeCaused) =>
+        episodeHaltTracker.onHaltWritten(slug, episodeCaused),
+      sweepEpisodeHalts: async (isParkedDep) => {
+        const stamped = await episodeHaltTracker.getEpisodeHalts((slug) =>
+          isHalted(worktreeBase, slug),
+        );
+        for (const slug of stamped) {
+          // Operator intent outranks automatic recovery (same rule as rekickSweep).
+          if (isParkedDep && (await isParkedDep(slug))) {
+            log(`episode-end sweep: ${slug} operator-parked — left for a human`);
+            continue;
+          }
+          await clearMarker(join(worktreeBase, slug));
+          log(`episode-end sweep: re-kicked ${slug} (episode-caused HALT cleared)`);
+        }
+      },
       runFeature,
       log,
       staleEngineChecker,
