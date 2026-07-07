@@ -5,6 +5,96 @@ import { tmpdir } from 'os';
 import { execa } from 'execa';
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Unit tests for taskTrailerMatches (Task 1, alias helper with ambiguity guard).
+//
+// Tests trailer value matching against task IDs with guarded alias support.
+// Enables the evidence gate to disambiguate between `task-N` (alias) and bare `N`
+// (exact form) in commit trailers, preventing false matches when both forms
+// appear in a single plan.
+//
+// Acceptance criteria:
+// 1. Exact match: `taskTrailerMatches(['7'], '7', any) === true`
+// 2. Alias true (guarded): `taskTrailerMatches(['task-7'], '7', new Set(['7'])) === true`
+// 3. Alias false (ambiguous): `taskTrailerMatches(['task-7'], '7', new Set(['7', 'task-7'])) === false`
+// 4. Never invents ids: for foreign ids like `['task-42']`, don't check planIds
+// 5. Bare id: `taskTrailerMatches(['7'], '7', any) === true` regardless of planIds
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('taskTrailerMatches', () => {
+  it('returns true for exact match of taskId in trailerValues', async () => {
+    const mod = await loadAutoheal();
+
+    const result = mod.taskTrailerMatches(['7'], '7', new Set());
+    expect(result).toBe(true);
+  });
+
+  it('returns true for alias task-N when alias is NOT in planIds', async () => {
+    const mod = await loadAutoheal();
+
+    const result = mod.taskTrailerMatches(['task-7'], '7', new Set(['7']));
+    expect(result).toBe(true);
+  });
+
+  it('returns false for alias task-N when alias IS in planIds (guarded)', async () => {
+    const mod = await loadAutoheal();
+
+    const result = mod.taskTrailerMatches(['task-7'], '7', new Set(['7', 'task-7']));
+    expect(result).toBe(false);
+  });
+
+  it('does not check planIds for foreign ids like task-42', async () => {
+    const mod = await loadAutoheal();
+
+    // Foreign id (task-42) should not match taskId 7, regardless of planIds
+    const result = mod.taskTrailerMatches(['task-42'], '7', new Set(['task-42']));
+    expect(result).toBe(false);
+  });
+
+  it('returns true for bare id regardless of planIds content', async () => {
+    const mod = await loadAutoheal();
+
+    const result1 = mod.taskTrailerMatches(['7'], '7', new Set());
+    expect(result1).toBe(true);
+
+    const result2 = mod.taskTrailerMatches(['7'], '7', new Set(['7', 'task-7']));
+    expect(result2).toBe(true);
+  });
+
+  it('handles multiple trailer values and finds match', async () => {
+    const mod = await loadAutoheal();
+
+    const result = mod.taskTrailerMatches(['5', '6', '7', '8'], '7', new Set(['7']));
+    expect(result).toBe(true);
+  });
+
+  it('handles mixed exact and alias values in trailers', async () => {
+    const mod = await loadAutoheal();
+
+    // Should match the exact form
+    const result1 = mod.taskTrailerMatches(['7', 'task-7'], '7', new Set(['7']));
+    expect(result1).toBe(true);
+
+    // Should not match when alias is in planIds (exact form exists but is ambiguous)
+    const result2 = mod.taskTrailerMatches(['task-7'], '7', new Set(['7', 'task-7']));
+    expect(result2).toBe(false);
+  });
+
+  it('returns false when no matching trailer value found', async () => {
+    const mod = await loadAutoheal();
+
+    const result = mod.taskTrailerMatches(['5', '6', '8'], '7', new Set(['7']));
+    expect(result).toBe(false);
+  });
+
+  it('returns false for empty trailerValues', async () => {
+    const mod = await loadAutoheal();
+
+    const result = mod.taskTrailerMatches([], '7', new Set(['7']));
+    expect(result).toBe(false);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Unit tests for listCommitsWithTrailers (Task 2, autoheal trailer parsing).
 //
 // Tests parsing of Task: and Evidence: trailers from git commit bodies.
@@ -1072,6 +1162,170 @@ Update specific files.
 
     mockWarn.mockRestore();
   });
+
+  it('completes task with guarded task-N alias when alias is NOT in plan', async () => {
+    const autoheal = await loadAutoheal();
+    const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
+
+    // Create a plan with task 7 (bare numeric form only)
+    const planPath = join(gitDir, '.docs/plans/test-plan.md');
+    await mkdir(join(gitDir, '.docs/plans'), { recursive: true });
+    const planContent = `# Test Plan
+
+### Task 7: Implementation
+Update the implementation.
+
+- \`src/impl.ts\`
+`;
+    await writeFile(planPath, planContent);
+    await execa('git', ['add', '.docs/plans/test-plan.md'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: gitDir });
+
+    // Create a commit touching the plan file with Task: task-7 (aliased form)
+    await mkdir(join(gitDir, 'src'), { recursive: true });
+    await writeFile(join(gitDir, 'src/impl.ts'), 'export function impl() {}');
+    await execa('git', ['add', 'src/impl.ts'], { cwd: gitDir });
+    const commitMsg = 'feat: implementation\n\nTask: task-7\n';
+    await execa('git', ['commit', '-m', commitMsg], { cwd: gitDir });
+
+    // Get the commit SHA for assertion
+    const commitSha = (await execa('git', ['rev-parse', 'HEAD'], { cwd: gitDir })).stdout.trim();
+
+    const commits = await autoheal.listCommitsWithTrailers(gitDir);
+    const evidence = await createTaskEvidence(gitDir);
+
+    const result = await autoheal.deriveCompletion(gitDir, planPath, '', commits, evidence);
+
+    // Should mark task 7 as completed with the aliased task-7 trailer
+    expect(result).toHaveProperty('7');
+    expect(result['7']).toHaveProperty('completed', true);
+    expect(result['7']).toHaveProperty('evidencedBy', commitSha);
+    expect(result['7'].status).toBe('completed');
+
+    // Sidecar should have the evidence stamp
+    expect(evidence.evidenceStamps.has('7')).toBe(true);
+    const stamp = evidence.evidenceStamps.get('7');
+    expect(stamp).toBeDefined();
+    expect(stamp!.sha).toBe(commitSha);
+    expect(stamp!.form).toBe('trailer');
+  });
+
+  it('does NOT complete bare task when plan declares both bare and literal task-N (ambiguity guard)', async () => {
+    const autoheal = await loadAutoheal();
+    const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
+
+    // Create a plan with BOTH task 7 (bare) and task task-7 (literal) as separate tasks
+    const planPath = join(gitDir, '.docs/plans/test-plan.md');
+    await mkdir(join(gitDir, '.docs/plans'), { recursive: true });
+    const planContent = `# Test Plan
+
+### Task 7: Bare numeric form
+Work on the bare numeric task.
+
+- \`src/bare-task.ts\`
+
+### Task task-7: Literal task-N form
+Work on the literal task-N form.
+
+- \`src/literal-task.ts\`
+`;
+    await writeFile(planPath, planContent);
+    await execa('git', ['add', '.docs/plans/test-plan.md'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: gitDir });
+
+    // Create a commit touching task-7's declared path with Task: task-7 trailer
+    await mkdir(join(gitDir, 'src'), { recursive: true });
+    await writeFile(join(gitDir, 'src/literal-task.ts'), 'export function literalTask() {}');
+    await execa('git', ['add', 'src/literal-task.ts'], { cwd: gitDir });
+    const commitMsg = 'feat: literal task work\n\nTask: task-7\n';
+    await execa('git', ['commit', '-m', commitMsg], { cwd: gitDir });
+
+    // Get the commit SHA for assertions
+    const commitSha = (await execa('git', ['rev-parse', 'HEAD'], { cwd: gitDir })).stdout.trim();
+
+    const commits = await autoheal.listCommitsWithTrailers(gitDir);
+    const evidence = await createTaskEvidence(gitDir);
+
+    const result = await autoheal.deriveCompletion(gitDir, planPath, '', commits, evidence);
+
+    // Task task-7 should be COMPLETED (exact match in trailer vs plan ids)
+    expect(result).toHaveProperty('task-7');
+    expect(result['task-7']).toHaveProperty('completed', true);
+    expect(result['task-7']).toHaveProperty('evidencedBy', commitSha);
+    expect(result['task-7'].status).toBe('completed');
+
+    // Task 7 should remain INCOMPLETE (guard suppressed the alias, so no match)
+    expect(result).toHaveProperty('7');
+    expect(result['7']).toHaveProperty('completed', false);
+    // Task 7 should not have an evidencedBy stamp
+    expect(result['7']).not.toHaveProperty('evidencedBy', commitSha);
+
+    // Sidecar should only have evidence for task-7, not task 7
+    expect(evidence.evidenceStamps.has('task-7')).toBe(true);
+    expect(evidence.evidenceStamps.has('7')).toBe(false);
+    const stamp = evidence.evidenceStamps.get('task-7');
+    expect(stamp).toBeDefined();
+    expect(stamp!.sha).toBe(commitSha);
+    expect(stamp!.form).toBe('trailer');
+  });
+
+  it('parked-feature: 19-task plan resolves 16/19 via alias (16 completed, 3 unresolved)', async () => {
+    const autoheal = await loadAutoheal();
+    const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
+
+    // Create a plan with 19 tasks
+    const planPath = join(gitDir, '.docs/plans/parked-plan.md');
+    await mkdir(join(gitDir, '.docs/plans'), { recursive: true });
+    let planContent = '# Parked Feature Plan\n\n';
+    for (let i = 1; i <= 19; i++) {
+      planContent += `### Task ${i}: Task ${i} implementation\nWork on task ${i}.\n\n`;
+    }
+    await writeFile(planPath, planContent);
+    await execa('git', ['add', '.docs/plans/parked-plan.md'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'docs: add parked plan'], { cwd: gitDir });
+
+    // Create commits with Task: task-{id} trailers for tasks 1-4, 6-8, 11-19 (16 total)
+    // These are the tasks that will be resolved
+    const resolvedTasks = [1, 2, 3, 4, 6, 7, 8, 11, 12, 13, 14, 15, 16, 17, 18, 19];
+
+    await mkdir(join(gitDir, 'src'), { recursive: true });
+    for (const taskId of resolvedTasks) {
+      const filePath = join(gitDir, 'src', `task-${taskId}.ts`);
+      await writeFile(filePath, `export const task${taskId} = ${taskId};`);
+      await execa('git', ['add', `src/task-${taskId}.ts`], { cwd: gitDir });
+      const commitMsg = `feat: implement task ${taskId}\n\nTask: task-${taskId}\n`;
+      await execa('git', ['commit', '-m', commitMsg], { cwd: gitDir });
+    }
+
+    // Tasks 5, 9, 10 will NOT have commits (left unresolved)
+    // This creates the recovery boundary that Task 10 runbook will cite
+
+    const commits = await autoheal.listCommitsWithTrailers(gitDir);
+    const evidence = await createTaskEvidence(gitDir);
+
+    const result = await autoheal.deriveCompletion(gitDir, planPath, '', commits, evidence);
+
+    // Count completed and incomplete tasks
+    const completedTasks: string[] = [];
+    const incompleteTasks: string[] = [];
+
+    for (let i = 1; i <= 19; i++) {
+      const taskId = String(i);
+      if (result[taskId]?.completed) {
+        completedTasks.push(taskId);
+      } else {
+        incompleteTasks.push(taskId);
+      }
+    }
+
+    // Assert exactly 16 tasks are completed
+    expect(completedTasks).toHaveLength(16);
+    expect(completedTasks.sort((a, b) => Number(a) - Number(b))).toEqual(['1', '2', '3', '4', '6', '7', '8', '11', '12', '13', '14', '15', '16', '17', '18', '19']);
+
+    // Assert exactly 3 tasks remain incomplete
+    expect(incompleteTasks).toHaveLength(3);
+    expect(incompleteTasks.sort((a, b) => Number(a) - Number(b))).toEqual(['5', '9', '10']);
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1247,6 +1501,48 @@ Another task to skip.
     expect(result['11'].status).toBe('skipped');
   });
 
+  it('marks task completed with Evidence: satisfied-by and guarded task-N alias', async () => {
+    const autoheal = await loadAutoheal();
+    const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
+
+    // Create a plan with task 13 (bare numeric form only)
+    const planPath = join(gitDir, '.docs/plans/test-plan.md');
+    await mkdir(join(gitDir, '.docs/plans'), { recursive: true });
+    const planContent = `# Test Plan
+
+### Task 13: Aliased evidence task
+A task that will be completed by aliased evidence form.
+`;
+    await writeFile(planPath, planContent);
+    await execa('git', ['add', '.docs/plans/test-plan.md'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: gitDir });
+
+    // Create a commit that will be referenced as the evidence SHA
+    await writeFile(join(gitDir, 'src.ts'), 'export const x = 1;');
+    await execa('git', ['add', 'src.ts'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'feat: real work\n\nTask: 13\n'], { cwd: gitDir });
+
+    // Get the SHA of the work commit
+    const workCommitSha = (await execa('git', ['rev-parse', 'HEAD'], { cwd: gitDir })).stdout.trim();
+
+    // Create an empty no-op commit with aliased Task: task-13 form PLUS Evidence: satisfied-by
+    await execa('git', ['commit', '--allow-empty', '-m', `noop: aliased evidence commit\n\nTask: task-13\nEvidence: satisfied-by ${workCommitSha}\n`], { cwd: gitDir });
+
+    const commits = await autoheal.listCommitsWithTrailers(gitDir);
+    const evidence = await createTaskEvidence(gitDir);
+
+    const result = await autoheal.deriveCompletion(gitDir, planPath, '', commits, evidence);
+
+    expect(result).toHaveProperty('13');
+    expect(result['13']).toHaveProperty('completed', true);
+    expect(result['13']).toHaveProperty('evidencedBy', workCommitSha);
+    expect(result['13']).toHaveProperty('status', 'completed');
+    expect(evidence.evidenceStamps.has('13')).toBe(true);
+    const stamp = evidence.evidenceStamps.get('13');
+    expect(stamp).toBeDefined();
+    expect(stamp!.form).toBe('evidence:satisfied-by');
+  });
+
   it('preserves completed status when evidence commit is removed (never-demote pinned)', async () => {
     const autoheal = await loadAutoheal();
     const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
@@ -1362,5 +1658,120 @@ describe('attemptAutoHeal (H5 migration-only fallback)', () => {
     );
     const reseededTask = statusAfterReseed.tasks.find((t: any) => t.id === '1');
     expect(reseededTask.status).toBe('completed');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Regression: Alias inherits rejection rules (Task 5)
+//
+// Tests to verify that the guarded task-N alias feature does NOT loosen
+// existing rejection rules. These tests use the aliased form (task-N) in
+// trailers to ensure that empty commits, dangling SHAs, and path mismatches
+// are still properly rejected even when using the alias.
+//
+// Acceptance criteria:
+// 1. Empty commit without Evidence (using task-N alias) → incomplete + audit entry
+// 2. Dangling SHA in Evidence (using task-N alias) → incomplete + audit entry with "dangling"
+// 3. Path corroboration mismatch (using task-N alias) → incomplete + audit entry
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('Regression: alias inherits empty/dangling/path-corroboration rejections', () => {
+  it('rejects empty commit without Evidence trailer (using aliased task-N)', async () => {
+    const autoheal = await loadAutoheal();
+    const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
+
+    // Create a plan with task 9
+    const planPath = join(gitDir, '.docs/plans/test-plan.md');
+    await mkdir(join(gitDir, '.docs/plans'), { recursive: true });
+    const planContent = `# Test Plan
+
+### Task 9: Empty rejection
+A task that will be rejected for being empty.
+`;
+    await writeFile(planPath, planContent);
+    await execa('git', ['add', '.docs/plans/test-plan.md'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: gitDir });
+
+    // Create an empty commit with ONLY Task: task-9 trailer (aliased form, no Evidence:)
+    await execa('git', ['commit', '--allow-empty', '-m', 'noop: empty task\n\nTask: task-9\n'], { cwd: gitDir });
+
+    const commits = await autoheal.listCommitsWithTrailers(gitDir);
+    const evidence = await createTaskEvidence(gitDir);
+
+    const result = await autoheal.deriveCompletion(gitDir, planPath, '', commits, evidence);
+
+    // Should NOT mark as completed (empty without Evidence)
+    expect(result).toHaveProperty('9');
+    expect(result['9']).toHaveProperty('completed', false);
+    expect(result['9']).toHaveProperty('auditEntry');
+    expect(result['9'].auditEntry).toContain('empty commit');
+  });
+
+  it('rejects dangling SHA in Evidence trailer (using aliased task-N)', async () => {
+    const autoheal = await loadAutoheal();
+    const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
+
+    // Create a plan with task 4
+    const planPath = join(gitDir, '.docs/plans/test-plan.md');
+    await mkdir(join(gitDir, '.docs/plans'), { recursive: true });
+    const planContent = `# Test Plan
+
+### Task 4: Dangling evidence
+A task with dangling sha.
+`;
+    await writeFile(planPath, planContent);
+    await execa('git', ['add', '.docs/plans/test-plan.md'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: gitDir });
+
+    // Create a commit with a dangling sha using aliased task-4 form
+    const fakeSha = 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef';
+    await execa('git', ['commit', '--allow-empty', '-m', `noop: bad evidence\n\nTask: task-4\nEvidence: satisfied-by ${fakeSha}\n`], { cwd: gitDir });
+
+    const commits = await autoheal.listCommitsWithTrailers(gitDir);
+    const evidence = await createTaskEvidence(gitDir);
+
+    const result = await autoheal.deriveCompletion(gitDir, planPath, '', commits, evidence);
+
+    // Should NOT mark as completed (dangling SHA)
+    expect(result).toHaveProperty('4');
+    expect(result['4']).toHaveProperty('completed', false);
+    expect(result['4']).toHaveProperty('auditEntry');
+    expect(result['4'].auditEntry).toContain('dangling');
+  });
+
+  it('rejects path-corroboration mismatch (using aliased task-N)', async () => {
+    const autoheal = await loadAutoheal();
+    const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
+
+    // Create a plan with task 6 and specific path
+    const planPath = join(gitDir, '.docs/plans/test-plan.md');
+    await mkdir(join(gitDir, '.docs/plans'), { recursive: true });
+    const planContent = `# Test Plan
+
+### Task 6: Path specific
+Update specific file.
+
+- \`docs/path-a.md\`
+`;
+    await writeFile(planPath, planContent);
+    await execa('git', ['add', '.docs/plans/test-plan.md'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: gitDir });
+
+    // Create a commit with Task: task-6 (aliased form) that touches a DIFFERENT file
+    await mkdir(join(gitDir, 'docs'), { recursive: true });
+    await writeFile(join(gitDir, 'docs/path-b.md'), 'content');
+    await execa('git', ['add', 'docs/path-b.md'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'feat: wrong path\n\nTask: task-6\n'], { cwd: gitDir });
+
+    const commits = await autoheal.listCommitsWithTrailers(gitDir);
+    const evidence = await createTaskEvidence(gitDir);
+
+    const result = await autoheal.deriveCompletion(gitDir, planPath, '', commits, evidence);
+
+    // Should NOT mark as completed (path mismatch)
+    expect(result).toHaveProperty('6');
+    expect(result['6']).toHaveProperty('completed', false);
+    expect(result['6']).toHaveProperty('auditEntry');
+    expect(result['6'].auditEntry).toContain('path overlap');
   });
 });

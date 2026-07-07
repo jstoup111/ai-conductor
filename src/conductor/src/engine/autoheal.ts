@@ -35,6 +35,44 @@ function createEvidenceRangeLogger(): EvidenceRangeLogger {
 }
 
 /**
+ * Task trailer matcher with ambiguity-guarded alias support.
+ *
+ * Matches trailer values against a task ID, supporting both exact form (bare ID)
+ * and alias form (task-N). The alias form is only accepted if it's unambiguous
+ * in the plan's task namespace — i.e., if `task-${taskId}` is not also a plan
+ * task ID itself (which would make it ambiguous which task was intended).
+ *
+ * Use case: In a plan with both `Task 7` (bare numeric) and `Task task-7`
+ * (alphanumeric), a commit trailer `Task: task-7` is ambiguous. The guard
+ * ensures we only match the alias when it's the only possible interpretation.
+ *
+ * @param trailerValues - Parsed values from a `Task:` trailer (e.g., ['7', 'task-7'])
+ * @param taskId - The task ID to match against (e.g., '7')
+ * @param planIds - Set of all task IDs in the plan (used to detect ambiguity)
+ * @returns true if trailerValues contains taskId (exact or unambiguous alias), false otherwise
+ */
+export function taskTrailerMatches(trailerValues: string[], taskId: string, planIds: Set<string>): boolean {
+  // Check exact match first: if taskId is in trailerValues, return true
+  if (trailerValues.includes(taskId)) {
+    return true;
+  }
+
+  // Check guarded alias: if `task-${taskId}` is in trailerValues
+  const aliasForm = `task-${taskId}`;
+  if (trailerValues.includes(aliasForm)) {
+    // If alias is NOT in planIds, it's safe to use (not ambiguous)
+    if (!planIds.has(aliasForm)) {
+      return true;
+    }
+    // If alias IS in planIds, it's ambiguous, return false
+    return false;
+  }
+
+  // No match found
+  return false;
+}
+
+/**
  * Derive task completion from git evidence. Evaluates commits since a plan
  * anchor and marks tasks complete based on trailer evidence (Task: N),
  * explicit Evidence: forms, or pinned sidecar stamps.
@@ -477,6 +515,7 @@ async function deriveCompletionInternal(
   // the id, so parsePlanTaskPaths' more permissive header match is a safe and
   // more correct source of truth for "which task ids exist in this plan."
   const planPaths = parsePlanTaskPaths(planText);
+  const planIds = new Set(planPaths.keys());
 
   for (const taskId of planPaths.keys()) {
     result[taskId] = { completed: false };
@@ -487,7 +526,7 @@ async function deriveCompletionInternal(
     // must never complete/skip every task in the plan.
     const evidenceCommit = commits.find((c) => {
       const taskTrailers = c.trailers['Task'] || [];
-      if (!taskTrailers.includes(taskId)) return false;
+      if (!taskTrailerMatches(taskTrailers, taskId, planIds)) return false;
       const evidenceTrailers = c.trailers['Evidence'] || [];
       return evidenceTrailers.some((e) => e.startsWith(`satisfied-by `) || e.startsWith('skipped '));
     });
@@ -542,7 +581,7 @@ async function deriveCompletionInternal(
     // Look for a commit with Task: <taskId> trailer
     const matchingCommit = commits.find((c) => {
       const taskTrailers = c.trailers['Task'] || [];
-      return taskTrailers.includes(taskId);
+      return taskTrailerMatches(taskTrailers, taskId, planIds);
     });
 
     if (!matchingCommit) {
@@ -579,6 +618,7 @@ async function deriveCompletionInternal(
     if (!hasPlanFiles) {
       // Task has no specific paths; trailer alone is enough
       result[taskId].completed = true;
+      result[taskId].status = 'completed';
       result[taskId].evidencedBy = matchingCommit.sha;
       evidence.evidenceStamps.set(taskId, { sha: matchingCommit.sha, form: 'trailer' });
       continue;
@@ -599,6 +639,7 @@ async function deriveCompletionInternal(
 
     // Path overlap confirmed; mark completed
     result[taskId].completed = true;
+    result[taskId].status = 'completed';
     result[taskId].evidencedBy = matchingCommit.sha;
     evidence.evidenceStamps.set(taskId, { sha: matchingCommit.sha, form: 'trailer' });
   }
