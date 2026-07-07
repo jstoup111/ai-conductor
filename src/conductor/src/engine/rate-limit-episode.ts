@@ -8,6 +8,12 @@
  * Once the deadline passes or clear() is called, the episode is no longer active.
  */
 
+export interface TimerHandle {
+  cancel(): void;
+}
+
+export type SetTimer = (fn: () => void, delayMs: number) => void | TimerHandle | undefined;
+
 export interface RateLimitEpisode {
   /**
    * Enter a rate-limit episode, setting a deadline.
@@ -24,8 +30,11 @@ export interface RateLimitEpisode {
 
   /**
    * Exit the rate-limit episode, clearing the deadline.
+   * Returns a promise that resolves when the deadline is reached or the signal aborts.
+   * @param signal - Optional AbortSignal to cancel the wait early
+   * @returns Promise that resolves when timer fires or signal aborts
    */
-  clear(): void;
+  clear(signal?: AbortSignal): Promise<void>;
 }
 
 export interface CreateOptions {
@@ -34,6 +43,15 @@ export interface CreateOptions {
    * Defaults to Date.now().
    */
   now?: () => number;
+
+  /**
+   * Optional function to set a timer (for testing/injection).
+   * Defaults to setTimeout.
+   * @param fn - Callback to invoke when timer fires
+   * @param delayMs - Delay in milliseconds
+   * @returns A handle with a cancel() method, or undefined if timer cannot be cancelled
+   */
+  setTimer?: SetTimer;
 }
 
 /**
@@ -44,6 +62,17 @@ export interface CreateOptions {
 export function create(options?: CreateOptions): RateLimitEpisode {
   let deadline: number | null = null;
   const getNow = options?.now ?? (() => Date.now());
+
+  // Default setTimer uses setTimeout
+  const defaultSetTimer: SetTimer = (fn: () => void, delayMs: number) => {
+    const id = setTimeout(fn, delayMs);
+    return {
+      cancel: () => clearTimeout(id),
+    };
+  };
+
+  const setTimer = options?.setTimer ?? defaultSetTimer;
+  let currentTimerHandle: TimerHandle | void | undefined = undefined;
 
   return {
     enter(untilMs: number): void {
@@ -80,8 +109,50 @@ export function create(options?: CreateOptions): RateLimitEpisode {
       return now < deadline;
     },
 
-    clear(): void {
-      deadline = null;
+    clear(signal?: AbortSignal): Promise<void> {
+      // If signal is already aborted, resolve immediately
+      if (signal?.aborted) {
+        return Promise.resolve();
+      }
+
+      return new Promise<void>((resolve) => {
+        // Calculate delay from now until deadline
+        const now = getNow();
+        const delay = deadline !== null ? deadline - now : 0;
+
+        // Helper to resolve and clean up
+        const cleanup = () => {
+          // Cancel any pending timer
+          if (currentTimerHandle && typeof currentTimerHandle === 'object' && 'cancel' in currentTimerHandle) {
+            currentTimerHandle.cancel();
+          }
+          currentTimerHandle = undefined;
+          resolve();
+        };
+
+        // If delay <= 0, resolve immediately
+        if (delay <= 0) {
+          deadline = null;
+          resolve();
+          return;
+        }
+
+        // Arm the timer
+        currentTimerHandle = setTimer(() => {
+          deadline = null;
+          cleanup();
+        }, delay);
+
+        // If signal is provided, listen for abort
+        if (signal) {
+          signal.addEventListener('abort', () => {
+            cleanup();
+          }, { once: true });
+        }
+
+        // Clear the deadline
+        deadline = null;
+      });
     },
   };
 }

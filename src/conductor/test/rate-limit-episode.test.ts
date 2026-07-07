@@ -194,4 +194,164 @@ describe('rate-limit-episode', () => {
     episode.enter(baseTime); // Deadline exactly at now
     expect(episode.active(baseTime)).toBe(false);
   });
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Task 3: clear() resolves at deadline + abort (RED then GREEN)
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  it('clear() returns a promise that resolves when injected timer fires', async () => {
+    const mod = await load();
+    const create = requireFn(mod, 'create');
+
+    const baseTime = 1000;
+    const timers: Array<() => void> = [];
+    const setTimer = (fn: () => void, delayMs: number) => {
+      timers.push(fn);
+      return { cancel: () => timers.splice(timers.indexOf(fn), 1) };
+    };
+
+    const episode = create({ now: () => baseTime, setTimer });
+    const deadline = baseTime + 5000;
+    episode.enter(deadline);
+
+    // clear() should return a promise
+    const clearPromise = episode.clear();
+    expect(clearPromise).toBeDefined();
+    expect(clearPromise instanceof Promise).toBe(true);
+
+    // Timer should be armed
+    expect(timers.length).toBe(1);
+
+    // Simulate timer fire
+    timers[0]();
+    await clearPromise;
+    // Should resolve without error
+    expect(true).toBe(true);
+  });
+
+  it('clear() arms timer with (deadline - now) delay', async () => {
+    const mod = await load();
+    const create = requireFn(mod, 'create');
+
+    const baseTime = 1000;
+    let capturedDelay = -1;
+    const setTimer = (fn: () => void, delayMs: number) => {
+      capturedDelay = delayMs;
+      return { cancel: () => {} };
+    };
+
+    const episode = create({ now: () => baseTime, setTimer });
+    const deadline = baseTime + 3000; // 4000
+    episode.enter(deadline);
+
+    episode.clear();
+    expect(capturedDelay).toBe(3000); // 4000 - 1000
+  });
+
+  it('clear(signal) with pre-aborted signal settles promptly', async () => {
+    const mod = await load();
+    const create = requireFn(mod, 'create');
+
+    const baseTime = 1000;
+    let timerArmed = false;
+    const setTimer = (fn: () => void, delayMs: number) => {
+      timerArmed = true;
+      return { cancel: () => {} };
+    };
+
+    const episode = create({ now: () => baseTime, setTimer });
+    episode.enter(baseTime + 5000);
+
+    // Pre-aborted signal
+    const controller = new AbortController();
+    controller.abort();
+
+    const clearPromise = episode.clear(controller.signal);
+    await clearPromise;
+
+    // Should settle quickly without hanging
+    expect(clearPromise).toBeDefined();
+  });
+
+  it('clear(signal) with mid-episode abort settles promptly', async () => {
+    const mod = await load();
+    const create = requireFn(mod, 'create');
+
+    const baseTime = 1000;
+    const timers: Array<() => void> = [];
+    const setTimer = (fn: () => void, delayMs: number) => {
+      timers.push(fn);
+      return { cancel: () => timers.splice(timers.indexOf(fn), 1) };
+    };
+
+    const episode = create({ now: () => baseTime, setTimer });
+    const deadline = baseTime + 5000;
+    episode.enter(deadline);
+
+    const controller = new AbortController();
+    const clearPromise = episode.clear(controller.signal);
+
+    // Timer should be armed
+    expect(timers.length).toBe(1);
+
+    // Abort before timer fires
+    controller.abort();
+    await clearPromise;
+
+    // Promise should resolve after abort
+    expect(true).toBe(true);
+  });
+
+  it('after clear() resolves, no pending timer remains', async () => {
+    const mod = await load();
+    const create = requireFn(mod, 'create');
+
+    const baseTime = 1000;
+    const timers: Array<() => void> = [];
+    const setTimer = (fn: () => void, delayMs: number) => {
+      timers.push(fn);
+      return { cancel: () => timers.splice(timers.indexOf(fn), 1) };
+    };
+
+    const episode = create({ now: () => baseTime, setTimer });
+    const deadline = baseTime + 5000;
+    episode.enter(deadline);
+
+    const clearPromise = episode.clear();
+    expect(timers.length).toBe(1);
+
+    // Fire timer
+    timers[0]();
+    await clearPromise;
+
+    // Timer should be cleaned up
+    expect(timers.length).toBe(0);
+  });
+
+  it('clear() with delay <= 0 resolves immediately', async () => {
+    const mod = await load();
+    const create = requireFn(mod, 'create');
+
+    const baseTime = 1000;
+    const deadline = baseTime + 100; // Only 100ms
+    let timerArmed = false;
+    const setTimer = (fn: () => void, delayMs: number) => {
+      timerArmed = true;
+      return { cancel: () => {} };
+    };
+
+    const episode = create({ now: () => baseTime, setTimer });
+    episode.enter(deadline);
+
+    // Move time forward past deadline
+    const futureEpisode = create({ now: () => baseTime + 200, setTimer });
+    futureEpisode.enter(deadline);
+
+    const clearPromise = futureEpisode.clear();
+    await clearPromise;
+
+    // Should resolve without arming timer since delay <= 0
+    // This is implicit in the test passing without hanging
+    expect(clearPromise).toBeDefined();
+  });
 });
