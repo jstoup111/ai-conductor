@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { makeRunFeature, type FeatureRunnerDeps, type WorktreeOutcome } from '../../src/engine/daemon-runner.js';
@@ -220,6 +220,232 @@ describe('engine/daemon-runner — makeRunFeature', () => {
       );
       const out = await run(ITEM);
       expect(out.status).toBe('done');
+    });
+  });
+
+  describe('false-ship path (Task 10: #337)', () => {
+    // Story 3 acceptance criteria: outcome.done=true but fails ship-eligibility guard
+    // (finishChoice != 'pr' or prUrl null or finishChoice undefined).
+    // Expected: HALT written, DONE deleted, worktree kept, markProcessed NOT called,
+    // status='halted', reason names the contradiction.
+
+    it('done with null prUrl → halted (Story 3, null prUrl)', async () => {
+      const wt = await mkdtemp(join(tmpdir(), 'wt-false-ship-'));
+      try {
+        const rec: { teardownKeep?: boolean; processed?: boolean; escalated?: boolean } = {};
+        const run = makeRunFeature({
+          ...deps(
+            {
+              done: true,
+              halted: false,
+              finishChoice: 'pr',
+              prUrl: undefined, // null prUrl fails the guard
+              costTokens: 30,
+            },
+            rec,
+          ),
+          createWorktree: async (slug) => ({ path: wt, branch: `feat/${slug}` }),
+          escalateBuildFailure: async () => {
+            rec.escalated = true;
+            return {};
+          },
+        });
+        const out = await run(ITEM);
+        expect(out.status).toBe('halted');
+        expect(out.reason).toMatch(/prUrl is null/);
+        expect(out.costTokens).toBe(30);
+        expect(rec.processed).toBeUndefined(); // markProcessed NOT called
+        expect(rec.teardownKeep).toBe(true); // worktree kept
+        expect(rec.escalated).toBe(true); // escalateBuildFailure called
+        // HALT marker must exist
+        const halt = await readFile(join(wt, '.pipeline', 'HALT'), 'utf-8');
+        expect(halt).toMatch(/prUrl is null/);
+      } finally {
+        await rm(wt, { recursive: true, force: true });
+      }
+    });
+
+    it('done with undefined finishChoice → halted (Story 3, missing finishChoice)', async () => {
+      const wt = await mkdtemp(join(tmpdir(), 'wt-false-ship-'));
+      try {
+        const rec: { teardownKeep?: boolean; processed?: boolean } = {};
+        const run = makeRunFeature({
+          ...deps(
+            {
+              done: true,
+              halted: false,
+              finishChoice: undefined, // missing finishChoice fails the guard
+              prUrl: 'https://github.com/owner/repo/pull/123',
+              costTokens: 25,
+            },
+            rec,
+          ),
+          createWorktree: async (slug) => ({ path: wt, branch: `feat/${slug}` }),
+        });
+        const out = await run(ITEM);
+        expect(out.status).toBe('halted');
+        expect(out.reason).toMatch(/without a finish-choice marker/);
+        expect(rec.processed).toBeUndefined(); // markProcessed NOT called
+        expect(rec.teardownKeep).toBe(true); // worktree kept
+        // HALT marker must exist
+        const halt = await readFile(join(wt, '.pipeline', 'HALT'), 'utf-8');
+        expect(halt).toMatch(/without a finish-choice marker/);
+      } finally {
+        await rm(wt, { recursive: true, force: true });
+      }
+    });
+
+    it('done with finishChoice="keep" → halted', async () => {
+      const wt = await mkdtemp(join(tmpdir(), 'wt-false-ship-'));
+      try {
+        const rec: { teardownKeep?: boolean; processed?: boolean } = {};
+        const run = makeRunFeature({
+          ...deps(
+            {
+              done: true,
+              halted: false,
+              finishChoice: 'keep', // not 'pr' fails the guard
+              prUrl: 'https://github.com/owner/repo/pull/123',
+            },
+            rec,
+          ),
+          createWorktree: async (slug) => ({ path: wt, branch: `feat/${slug}` }),
+        });
+        const out = await run(ITEM);
+        expect(out.status).toBe('halted');
+        expect(out.reason).toMatch(/finish choice is "keep" not "pr"/);
+        expect(rec.processed).toBeUndefined();
+        expect(rec.teardownKeep).toBe(true);
+      } finally {
+        await rm(wt, { recursive: true, force: true });
+      }
+    });
+
+    it('false-ship deletes the DONE marker if it exists', async () => {
+      const wt = await mkdtemp(join(tmpdir(), 'wt-false-ship-'));
+      try {
+        // Pre-create the DONE marker (simulating an outcome that converged DONE before the guard)
+        await mkdir(join(wt, '.pipeline'), { recursive: true });
+        await writeFile(join(wt, '.pipeline', 'DONE'), 'marked\n', 'utf-8');
+
+        const rec: { teardownKeep?: boolean } = {};
+        const run = makeRunFeature({
+          ...deps(
+            {
+              done: true,
+              halted: false,
+              finishChoice: 'pr',
+              prUrl: undefined, // fails guard
+            },
+            rec,
+          ),
+          createWorktree: async (slug) => ({ path: wt, branch: `feat/${slug}` }),
+        });
+        const out = await run(ITEM);
+        expect(out.status).toBe('halted');
+
+        // DONE marker must be deleted (conflict resolution)
+        try {
+          await readFile(join(wt, '.pipeline', 'DONE'), 'utf-8');
+          throw new Error('DONE marker should have been deleted');
+        } catch (err) {
+          if ((err as any).code !== 'ENOENT') throw err;
+        }
+
+        // HALT marker must exist
+        const halt = await readFile(join(wt, '.pipeline', 'HALT'), 'utf-8');
+        expect(halt).toBeTruthy();
+      } finally {
+        await rm(wt, { recursive: true, force: true });
+      }
+    });
+
+    it('false-ship calls escalateBuildFailure with proper context', async () => {
+      const wt = await mkdtemp(join(tmpdir(), 'wt-false-ship-'));
+      try {
+        const escalateCalls: Array<{ projectRoot: string; failureReason: string }> = [];
+        const run = makeRunFeature({
+          ...deps(
+            {
+              done: true,
+              halted: false,
+              finishChoice: 'pr',
+              prUrl: undefined,
+            },
+            {},
+          ),
+          createWorktree: async (slug) => ({ path: wt, branch: `feat/${slug}` }),
+          escalateBuildFailure: async (opts) => {
+            escalateCalls.push(opts);
+            return {};
+          },
+        });
+        await run(ITEM);
+        expect(escalateCalls).toHaveLength(1);
+        expect(escalateCalls[0].projectRoot).toBe(wt);
+        expect(escalateCalls[0].failureReason).toMatch(/prUrl is null/);
+      } finally {
+        await rm(wt, { recursive: true, force: true });
+      }
+    });
+
+    it('false-ship continues even if escalateBuildFailure throws', async () => {
+      const wt = await mkdtemp(join(tmpdir(), 'wt-false-ship-'));
+      try {
+        const rec: { teardownKeep?: boolean; processed?: boolean } = {};
+        const run = makeRunFeature({
+          ...deps(
+            {
+              done: true,
+              halted: false,
+              finishChoice: 'pr',
+              prUrl: undefined,
+            },
+            rec,
+          ),
+          createWorktree: async (slug) => ({ path: wt, branch: `feat/${slug}` }),
+          escalateBuildFailure: async () => {
+            throw new Error('push failed');
+          },
+        });
+        const out = await run(ITEM);
+        // Must not throw; must complete the halted path
+        expect(out.status).toBe('halted');
+        expect(rec.teardownKeep).toBe(true); // still kept
+        // HALT marker still written
+        const halt = await readFile(join(wt, '.pipeline', 'HALT'), 'utf-8');
+        expect(halt).toBeTruthy();
+      } finally {
+        await rm(wt, { recursive: true, force: true });
+      }
+    });
+
+    it('false-ship runs maybeSweep (FR-14: sweep after every completion)', async () => {
+      const wt = await mkdtemp(join(tmpdir(), 'wt-false-ship-'));
+      try {
+        const sweepCalls: number[] = [];
+        const run = makeRunFeature({
+          ...deps(
+            {
+              done: true,
+              halted: false,
+              finishChoice: 'pr',
+              prUrl: undefined,
+            },
+            {},
+          ),
+          createWorktree: async (slug) => ({ path: wt, branch: `feat/${slug}` }),
+          projectRoot: '/proj',
+          sweepMergeableLabels: async () => {
+            sweepCalls.push(Date.now());
+          },
+        });
+        const out = await run(ITEM);
+        expect(out.status).toBe('halted');
+        expect(sweepCalls).toHaveLength(1); // sweep called
+      } finally {
+        await rm(wt, { recursive: true, force: true });
+      }
     });
   });
 });
