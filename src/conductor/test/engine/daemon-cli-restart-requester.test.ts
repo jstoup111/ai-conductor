@@ -301,6 +301,10 @@ describe('Task 14 — RestartRequester: marker → release → exit ordering', (
    * 4. Never call lock.releaseSync() or process.exit()
    *
    * Verifies exact call order via spy call counts and order
+   *
+   * Task 10 (non-autonomy): The hyphen marker (.daemon/RESTART-PENDING) is for CLI
+   * `daemon restart` queued restarts and must NEVER be touched by the stale-engine path.
+   * This assertion verifies that the hyphen marker is never created or modified.
    */
   it('session-hosted mode: relink → marker → triggerSelfRestart (no lock release, no exit)', async () => {
     const { createRestartRequester } = await import('../../src/daemon-cli.js');
@@ -333,6 +337,15 @@ describe('Task 14 — RestartRequester: marker → release → exit ordering', (
 
     const mockLog = () => {};
 
+    // Task 10: Ensure hyphen marker doesn't exist before the test
+    const hyphensMarkerPath = join(daemonDir, '.daemon', 'RESTART-PENDING');
+    // Clean up if it exists (should not on fresh tmpdir, but be explicit)
+    try {
+      await rm(hyphensMarkerPath, { force: true });
+    } catch {
+      // Ignore
+    }
+
     const requester = createRestartRequester(daemonDir, mockLog, mockLock, mockProcess, {
       relink: mockRelink,
       triggerSelfRestart: mockTriggerSelfRestart,
@@ -351,7 +364,7 @@ describe('Task 14 — RestartRequester: marker → release → exit ordering', (
     expect(releaseSyncCalled).toBe(false);
     expect(exitCalled).toBe(false);
 
-    // Verify marker was written
+    // Verify underscore marker was written (stale-engine marker)
     const markerPath = join(daemonDir, '.daemon', 'RESTART_PENDING');
     expect(existsSync(markerPath)).toBe(true);
 
@@ -359,6 +372,10 @@ describe('Task 14 — RestartRequester: marker → release → exit ordering', (
     expect(markerContent.reason).toBe('stale-engine');
     expect(markerContent.fromIdentity).toBe('daemon-id-123');
     expect(markerContent.targetIdentity).toBe('engine-id-456');
+
+    // Task 10 (non-autonomy): Verify hyphen marker was NEVER created/touched
+    // The hyphen marker is for CLI `daemon restart` queued restarts, not stale-engine
+    expect(existsSync(hyphensMarkerPath)).toBe(false);
   });
 
   /**
