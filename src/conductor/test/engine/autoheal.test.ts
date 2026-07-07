@@ -1209,6 +1209,65 @@ Update the implementation.
     expect(stamp!.sha).toBe(commitSha);
     expect(stamp!.form).toBe('trailer');
   });
+
+  it('does NOT complete bare task when plan declares both bare and literal task-N (ambiguity guard)', async () => {
+    const autoheal = await loadAutoheal();
+    const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
+
+    // Create a plan with BOTH task 7 (bare) and task task-7 (literal) as separate tasks
+    const planPath = join(gitDir, '.docs/plans/test-plan.md');
+    await mkdir(join(gitDir, '.docs/plans'), { recursive: true });
+    const planContent = `# Test Plan
+
+### Task 7: Bare numeric form
+Work on the bare numeric task.
+
+- \`src/bare-task.ts\`
+
+### Task task-7: Literal task-N form
+Work on the literal task-N form.
+
+- \`src/literal-task.ts\`
+`;
+    await writeFile(planPath, planContent);
+    await execa('git', ['add', '.docs/plans/test-plan.md'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: gitDir });
+
+    // Create a commit touching task-7's declared path with Task: task-7 trailer
+    await mkdir(join(gitDir, 'src'), { recursive: true });
+    await writeFile(join(gitDir, 'src/literal-task.ts'), 'export function literalTask() {}');
+    await execa('git', ['add', 'src/literal-task.ts'], { cwd: gitDir });
+    const commitMsg = 'feat: literal task work\n\nTask: task-7\n';
+    await execa('git', ['commit', '-m', commitMsg], { cwd: gitDir });
+
+    // Get the commit SHA for assertions
+    const commitSha = (await execa('git', ['rev-parse', 'HEAD'], { cwd: gitDir })).stdout.trim();
+
+    const commits = await autoheal.listCommitsWithTrailers(gitDir);
+    const evidence = await createTaskEvidence(gitDir);
+
+    const result = await autoheal.deriveCompletion(gitDir, planPath, '', commits, evidence);
+
+    // Task task-7 should be COMPLETED (exact match in trailer vs plan ids)
+    expect(result).toHaveProperty('task-7');
+    expect(result['task-7']).toHaveProperty('completed', true);
+    expect(result['task-7']).toHaveProperty('evidencedBy', commitSha);
+    expect(result['task-7'].status).toBe('completed');
+
+    // Task 7 should remain INCOMPLETE (guard suppressed the alias, so no match)
+    expect(result).toHaveProperty('7');
+    expect(result['7']).toHaveProperty('completed', false);
+    // Task 7 should not have an evidencedBy stamp
+    expect(result['7']).not.toHaveProperty('evidencedBy', commitSha);
+
+    // Sidecar should only have evidence for task-7, not task 7
+    expect(evidence.evidenceStamps.has('task-7')).toBe(true);
+    expect(evidence.evidenceStamps.has('7')).toBe(false);
+    const stamp = evidence.evidenceStamps.get('task-7');
+    expect(stamp).toBeDefined();
+    expect(stamp!.sha).toBe(commitSha);
+    expect(stamp!.form).toBe('trailer');
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
