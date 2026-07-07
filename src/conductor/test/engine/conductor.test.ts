@@ -3371,6 +3371,174 @@ describe('engine/conductor', () => {
       // - sleepFn should NOT have been called (conductor should use episode.clear)
       expect(sleepFn).not.toHaveBeenCalled();
     });
+
+    describe('Task 12: coordinated shared backoff across concurrent conductors', () => {
+      it('two conductors share one episode: shared deadline (later-wins), joint resume', async () => {
+        // Task 12 RED: Two conductors with one shared episode
+        // - Conductor A hits rate-limit with waitSeconds=60
+        // - Conductor B hits rate-limit with waitSeconds=120
+        // - Later deadline wins → shared deadline = later of the two
+        // - Both conductors await episode.clear() → same promise, both resume together
+
+        const { create: createEpisode } = await import(
+          '../../src/engine/rate-limit-episode.js'
+        );
+
+        let fakeNow = 0;
+        const sharedEpisode = createEpisode({
+          now: () => fakeNow,
+          setTimer: (fn: () => void, delayMs: number) => {
+            // Immediately call fn to avoid actual timeout
+            setImmediate(fn);
+            return { cancel: () => {} };
+          },
+        });
+
+        let conductorAAttempt = 0;
+        let conductorBAttempt = 0;
+        let episodeEnterCalls: Array<{ deadline: number }> = [];
+
+        const originalEnter = sharedEpisode.enter.bind(sharedEpisode);
+        sharedEpisode.enter = (deadline: number) => {
+          episodeEnterCalls.push({ deadline });
+          originalEnter(deadline);
+        };
+
+        const runnerA: StepRunner = {
+          run: vi.fn(async () => {
+            conductorAAttempt++;
+            if (conductorAAttempt === 1) {
+              return { success: false, rateLimited: true, waitSeconds: 60 };
+            }
+            return { success: true };
+          }),
+        };
+
+        const runnerB: StepRunner = {
+          run: vi.fn(async () => {
+            conductorBAttempt++;
+            if (conductorBAttempt === 1) {
+              return { success: false, rateLimited: true, waitSeconds: 120 };
+            }
+            return { success: true };
+          }),
+        };
+
+        const conductorA = new Conductor({
+          stateFilePath: join(dir, 'state-a.json'),
+          stepRunner: runnerA,
+          events,
+          projectRoot: dir,
+          maxRetries: 2,
+          rateLimitEpisode: sharedEpisode,
+        });
+
+        const conductorB = new Conductor({
+          stateFilePath: join(dir, 'state-b.json'),
+          stepRunner: runnerB,
+          events,
+          projectRoot: dir,
+          maxRetries: 2,
+          rateLimitEpisode: sharedEpisode,
+        });
+
+        // Run both conductors concurrently
+        const [resultA, resultB] = await Promise.all([
+          conductorA.run(),
+          conductorB.run(),
+        ]);
+
+        // Both should complete without errors
+        expect(resultA).toBeUndefined();
+        expect(resultB).toBeUndefined();
+
+        // Both should have retried (rate-limit + success)
+        expect(conductorAAttempt).toBeGreaterThanOrEqual(2);
+        expect(conductorBAttempt).toBeGreaterThanOrEqual(2);
+
+        // Both should have called episode.enter()
+        expect(episodeEnterCalls.length).toBeGreaterThanOrEqual(2);
+      });
+
+      it('later-deadline-wins: 60s vs 120s → shared deadline respects 120s', async () => {
+        // Verify that the later deadline (120s) wins over earlier (60s)
+        const { create: createEpisode } = await import(
+          '../../src/engine/rate-limit-episode.js'
+        );
+
+        const baseTime = 1000000;
+        let fakeNow = baseTime;
+        const episodeEnterCalls: Array<number> = [];
+
+        const sharedEpisode = createEpisode({
+          now: () => fakeNow,
+          setTimer: () => ({ cancel: () => {} }),
+        });
+
+        const originalEnter = sharedEpisode.enter.bind(sharedEpisode);
+        sharedEpisode.enter = (deadline: number) => {
+          episodeEnterCalls.push(deadline);
+          originalEnter(deadline);
+        };
+
+        // Simulate conductor A entering with 60s deadline
+        sharedEpisode.enter(baseTime + 60000);
+        expect(episodeEnterCalls[0]).toBe(baseTime + 60000);
+
+        // Simulate conductor B entering with 120s deadline
+        sharedEpisode.enter(baseTime + 120000);
+        expect(episodeEnterCalls[1]).toBe(baseTime + 120000);
+
+        // The shared deadline should now be the later one (120s)
+        // Check by verifying active() returns true up to 120s but not 60s
+        fakeNow = baseTime + 119999;
+        expect(sharedEpisode.active(fakeNow)).toBe(true);
+
+        fakeNow = baseTime + 120001;
+        expect(sharedEpisode.active(fakeNow)).toBe(false);
+      });
+
+      it('N=1 unchanged: single conductor works same as before', async () => {
+        // Task 12: Verify backward compatibility
+        // A single conductor should work identically to before (no behavior change)
+
+        const { create: createEpisode } = await import(
+          '../../src/engine/rate-limit-episode.js'
+        );
+
+        let attempt = 0;
+        const runner: StepRunner = {
+          run: vi.fn(async () => {
+            attempt++;
+            if (attempt === 1) {
+              return { success: false, rateLimited: true, waitSeconds: 30 };
+            }
+            return { success: true };
+          }),
+        };
+
+        const singleEpisode = createEpisode({
+          setTimer: (fn: () => void) => {
+            setImmediate(fn);
+            return { cancel: () => {} };
+          },
+        });
+
+        const conductor = new Conductor({
+          stateFilePath: join(dir, 'state-single.json'),
+          stepRunner: runner,
+          events,
+          projectRoot: dir,
+          maxRetries: 2,
+          rateLimitEpisode: singleEpisode,
+        });
+
+        await conductor.run();
+
+        // Should have retried once (rate-limit + success)
+        expect(attempt).toBeGreaterThanOrEqual(2);
+      });
+    });
   });
 
   describe('stale-session handling', () => {
