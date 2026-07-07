@@ -5,6 +5,96 @@ import { tmpdir } from 'os';
 import { execa } from 'execa';
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Unit tests for taskTrailerMatches (Task 1, alias helper with ambiguity guard).
+//
+// Tests trailer value matching against task IDs with guarded alias support.
+// Enables the evidence gate to disambiguate between `task-N` (alias) and bare `N`
+// (exact form) in commit trailers, preventing false matches when both forms
+// appear in a single plan.
+//
+// Acceptance criteria:
+// 1. Exact match: `taskTrailerMatches(['7'], '7', any) === true`
+// 2. Alias true (guarded): `taskTrailerMatches(['task-7'], '7', new Set(['7'])) === true`
+// 3. Alias false (ambiguous): `taskTrailerMatches(['task-7'], '7', new Set(['7', 'task-7'])) === false`
+// 4. Never invents ids: for foreign ids like `['task-42']`, don't check planIds
+// 5. Bare id: `taskTrailerMatches(['7'], '7', any) === true` regardless of planIds
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('taskTrailerMatches', () => {
+  it('returns true for exact match of taskId in trailerValues', async () => {
+    const mod = await loadAutoheal();
+
+    const result = mod.taskTrailerMatches(['7'], '7', new Set());
+    expect(result).toBe(true);
+  });
+
+  it('returns true for alias task-N when alias is NOT in planIds', async () => {
+    const mod = await loadAutoheal();
+
+    const result = mod.taskTrailerMatches(['task-7'], '7', new Set(['7']));
+    expect(result).toBe(true);
+  });
+
+  it('returns false for alias task-N when alias IS in planIds (guarded)', async () => {
+    const mod = await loadAutoheal();
+
+    const result = mod.taskTrailerMatches(['task-7'], '7', new Set(['7', 'task-7']));
+    expect(result).toBe(false);
+  });
+
+  it('does not check planIds for foreign ids like task-42', async () => {
+    const mod = await loadAutoheal();
+
+    // Foreign id (task-42) should not match taskId 7, regardless of planIds
+    const result = mod.taskTrailerMatches(['task-42'], '7', new Set(['task-42']));
+    expect(result).toBe(false);
+  });
+
+  it('returns true for bare id regardless of planIds content', async () => {
+    const mod = await loadAutoheal();
+
+    const result1 = mod.taskTrailerMatches(['7'], '7', new Set());
+    expect(result1).toBe(true);
+
+    const result2 = mod.taskTrailerMatches(['7'], '7', new Set(['7', 'task-7']));
+    expect(result2).toBe(true);
+  });
+
+  it('handles multiple trailer values and finds match', async () => {
+    const mod = await loadAutoheal();
+
+    const result = mod.taskTrailerMatches(['5', '6', '7', '8'], '7', new Set(['7']));
+    expect(result).toBe(true);
+  });
+
+  it('handles mixed exact and alias values in trailers', async () => {
+    const mod = await loadAutoheal();
+
+    // Should match the exact form
+    const result1 = mod.taskTrailerMatches(['7', 'task-7'], '7', new Set(['7']));
+    expect(result1).toBe(true);
+
+    // Should not match when alias is in planIds (exact form exists but is ambiguous)
+    const result2 = mod.taskTrailerMatches(['task-7'], '7', new Set(['7', 'task-7']));
+    expect(result2).toBe(false);
+  });
+
+  it('returns false when no matching trailer value found', async () => {
+    const mod = await loadAutoheal();
+
+    const result = mod.taskTrailerMatches(['5', '6', '8'], '7', new Set(['7']));
+    expect(result).toBe(false);
+  });
+
+  it('returns false for empty trailerValues', async () => {
+    const mod = await loadAutoheal();
+
+    const result = mod.taskTrailerMatches([], '7', new Set(['7']));
+    expect(result).toBe(false);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Unit tests for listCommitsWithTrailers (Task 2, autoheal trailer parsing).
 //
 // Tests parsing of Task: and Evidence: trailers from git commit bodies.
