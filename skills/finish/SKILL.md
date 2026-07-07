@@ -321,7 +321,6 @@ After executing the chosen option:
     then removes the worktree and prunes the branch
   - Option 4 (discard): agent removes the worktree and deletes the branch
   - Option 3 (keep): no cleanup — worktree stays for later
-- Update `.pipeline/task-status.json` if pipeline was active
 - Suggest next step: `/manual-test` → `/retro`
 
 ## Verification

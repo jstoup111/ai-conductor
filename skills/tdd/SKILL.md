@@ -123,7 +123,21 @@ inputs without failing open or closed). Has veto authority to send back to GREEN
 5. **Commit immediately** — do not defer commits to end of cycle or batch. Connection
    interruptions lose uncommitted work. Commit as soon as GREEN passes and linter is clean.
 6. Commit with descriptive message referencing the behavior added
-7. **Commit only to the current feature branch — never integrate upstream.** Do NOT run
+7. **Commit includes Task trailer** — All commits (feature, refactor, fixups) in this TDD
+   cycle must include `Task: <id>` as a trailer in the commit body. This anchors commits
+   to their implementation task and enables task-status tracking. Example:
+   ```
+   feat(auth): reject expired tokens at request boundary
+
+   Validates token expiry before processing request body. Stores expiry
+   time in secure cookie (not in header). Rejects with 401 if expired.
+
+   Task: 42
+   ```
+   Refactor commits within the same task also carry the same Task: <id> so the task
+   is atomically marked complete when the final commit lands.
+
+8. **Commit only to the current feature branch — never integrate upstream.** Do NOT run
    `git fetch`, `git pull`, `git rebase`, or switch branches during the cycle. Mid-build
    rebase onto a moved `origin/<default>` rewrites history under active work. The only
    sanctioned rebases are the daemon's finish-time rebase-onto-latest and the `/rebase`
@@ -131,6 +145,33 @@ inputs without failing open or closed). Has veto authority to send back to GREEN
 
 **After commit:** Return to RED for the next cycle, or stop if all criteria for the current
 task are covered.
+
+### Commit-less Completions: Evidence Trailers
+
+Not all tasks require code commits. Some tasks verify that existing behavior meets acceptance
+criteria, and some have no implementation work (documentation, architectural decisions, etc.).
+Use `Evidence:` trailers in the final task report to document completion:
+
+**Form 1: `Evidence: satisfied-by <sha>`**
+Use when a task's acceptance criteria are already met by existing code (discovered during
+pre-completion scan). Include the commit SHA that satisfies the criteria:
+```
+Task 7: Database connection pooling already implemented and tested
+Evidence: satisfied-by abc123def456
+```
+
+**Form 2: `Evidence: skipped <reason>`**
+Use when a task has no implementation work or is intentionally deferred. Provide a concise
+reason:
+```
+Task 12: Style documentation (no code changes required, awaiting designer feedback)
+Evidence: skipped awaiting_stakeholder_input
+```
+
+Both forms should appear in the task report sent to the conductor. The conductor recognizes
+these trailers and marks the task `completed` without requiring a commit. This enables
+honest tracking: a task that "completes" via verification is marked differently from one
+that completes via code delivery, supporting retro analysis and pipeline audits.
 
 ### Memory Checkpoint (Per-Cycle, Conditional)
 
@@ -158,6 +199,24 @@ At batch boundaries, run `/simplify` and check for:
    authorize differently. Only extract shared *behavior*, not shared *shape*.
 
 Refactoring gets its own commit(s) — separate from feature commits. Tests must still pass after.
+
+### User-Requested Exit During TDD
+
+If the user explicitly requests to stop, pause, or exit to the harness at any point during
+a TDD cycle (RED, GREEN, DOMAIN, or COMMIT), the orchestrator MUST:
+
+1. **Do NOT commit incomplete work.** If the cycle is mid-flight (test written but no code,
+   or code written but domain review not passed), do not attempt to force a commit.
+
+2. **Reset the task to `pending`** in `.pipeline/task-status.json` if you marked it `in_progress`.
+   The next session will re-enter this task and resume the cycle.
+
+3. **Write a halt marker** (`.pipeline/halt-user-input-required`) with a one-line summary
+   of the in-flight cycle state (e.g., "user requested exit; RED phase complete, awaiting GREEN").
+
+This contract ensures that user interruption is non-destructive: the task cleanly resets,
+and the next session resumes from the known state without losing work or creating orphaned
+commits.
 
 ### Structural Enforcement
 

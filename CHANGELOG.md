@@ -22,6 +22,10 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   malformed, or partial-coverage waiver still HALTs, and an undeterminable
   change set stays unwaivable. See CLAUDE.md's "Release & Update Gates" for
   the authoring format.
+- `conduct-ts --interactive` RunMode: conversational steps open a live REPL session
+  instead of headless print-mode dispatch (`step-runners.ts` respects the RunMode for
+  all conversational steps).
+
 - New `conduct-ts brain start|stop|status` verbs (`brain-supervisor-cli.ts`) host the
   GitHub-issues intake poll as a host-wide, tmux-hosted background loop — an alternative to
   cron for keeping idea capture running without a scheduled task or a live terminal. `start`
@@ -133,6 +137,26 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   section (sectionless files still scan whole, back-compat).
 
 ### Fixed
+
+- **Daemon restart no longer leaves the daemon stopped when origin is ahead (#353).** Stale-engine
+  restarts now respawn in place within the live tmux session: skills relinked via
+  `bin/install --update` before the handoff, `remain-on-exit` armed at session creation, and
+  the flow is detect drift → relink → write marker → respawn (no exit/pidfile-release/dead
+  session). An operator on `conduct-ts daemon connect` stays connected across the respawn.
+  Modules: `daemon-tmux.ts`, `daemon-cli.ts`, `daemon.ts`; capstone specs in
+  `daemon-stale-respawn-e2e.test.ts` + `daemon-tmux-smoke.test.ts`
+  (adr-2026-07-06-stale-engine-respawn-in-place).
+
+- Re-enabled bin/setup worktree smoke by invoking the worktree's own `bin/setup` (#334).
+
+- **Continuous daemon no longer dies silently at its first idle poll (#329 regression).**
+  `createDefaultSleep` unref'd its timer, so during an idle poll with no wake-watchers
+  registered (a fully drained backlog) the sleep timer was the process's only pending work —
+  the node event loop emptied and the daemon exited 0 mid-await with no log, no HALT, and no
+  restart marker (observed 2026-07-07: three consecutive silent boot-deaths ~10s after
+  startup). The idle-poll timer now holds the event loop; a regression test pins the timer's
+  ref via a test-only seam (an await-based test is a false green — the vitest runner itself
+  keeps the loop alive).
 
 - **Daemon false-ship guard: daemon no longer records shipped markers for outcomes missing verified PR evidence.** Done-outcomes with null prUrl or non-pr finishChoice now halt with HALT markers, DONE markers deleted, and worktrees kept for operator inspection (#337).
 - Backfilled the missing intake marker `.docs/intake/2026-06-30-background-intake-conduct-loop.md`
@@ -269,6 +293,27 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   the reused PR's title/body, and the finish completion gate fails (fail-open on gh
   read errors) while the recorded PR title still starts with `needs-remediation:`
   (adr-2026-07-03-halt-pr-rehabilitation-at-finish).
+- **Engine-owned task-status.json with git-evidence auto-heal (#302).** The conductor
+  engine is now the single authority for `.pipeline/task-status.json`, which tracks
+  per-task completion state across build retries. Completion evidence is derived from
+  git log (commits with `Task: <id>` trailers). The auto-heal step (`engine/autoheal.ts`)
+  reconciles stale in-flight state before a gate retry by matching commits to tasks via
+  trailer match and content-hash, flipping `pending` tasks to `completed` when evidence
+  is unambiguous (word-boundary name match + file-path overlap with plan). All
+  reconciliations logged to `.pipeline/audit-trail/` for audit. Engine seeds task-status
+  on merge/upsert from plan; the trailer contract (`Task: <id>` in commit messages) is
+  verified by the rebase completion gate (FR-9, commit preservation).
+- **Daemon auto-park on N-attempt trigger (#302).** When the daemon encounters N
+  consecutive no-evidence gate misses (a gate showing no new commit evidence since its
+  prior attempt) or an empty/missing plan at seed time, it auto-parks the feature instead
+  of re-kicking infinitely. Auto-park writes `.daemon/parked/<slug>` with provenance
+  `auto` and the reason in the marker body (e.g., `'empty plan'` or `'no evidence after
+  2 attempts'`), emits a `ConductorEvent` of type `auto_park`, and halts gracefully.
+  Unpark (`conduct daemon unpark <slug>`) removes the park marker and resets the
+  evidence counter. The daemon dashboard's PARKED group displays provenance (`— auto-parked`
+  for machine-triggered, `— operator` for human-placed), distinguishing the two halt
+  styles. Auto-park is deterministic (triggered after N consecutive no-evidence misses);
+  operator park is human-triggered via the `conduct daemon park` subcommand.
 
 ### Changed
 
@@ -845,6 +890,25 @@ else
 fi
 # Reminder: bare single-word feature descriptions are now rejected — quote
 # multi-word descriptions instead, e.g.:  conduct "add user auth"
+```
+
+The `post-commit-pipeline-sync.sh` hook has been removed (Task 15). Task-status.json completion is now
+owned by the engine; third-party writers are no longer registered. It has been replaced by
+`post-commit-derive-feedback.sh` (Task 28), which provides fast-feedback warnings on commits
+lacking a `Task: <id>` trailer. If you have the old hook from a prior harness version, it can be
+safely deleted — the engine will own task-status updates, and the new hook runs
+non-fatally to warn on missing evidence:
+
+```bash migration
+rm -f .claude/hooks/claude/post-commit-pipeline-sync.sh
+# Install the new fast-feedback derive hook in your project's .git/hooks:
+PROJECT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || echo '.')"
+HARNESS_ROOT="${PROJECT_ROOT}/.claude/harness"  # or wherever the harness is checked out
+if [ -d "$PROJECT_ROOT/.git" ] && [ -f "$HARNESS_ROOT/hooks/claude/post-commit-derive-feedback.sh" ]; then
+  cp "$HARNESS_ROOT/hooks/claude/post-commit-derive-feedback.sh" "$PROJECT_ROOT/.git/hooks/post-commit"
+  chmod +x "$PROJECT_ROOT/.git/hooks/post-commit"
+  echo "Installed fast-feedback post-commit hook"
+fi
 ```
 
 ### Changed

@@ -18,15 +18,30 @@ import type { ComplexityTier, Track } from '../types/index.js';
 import { Waker } from './waker.js';
 
 /**
- * Default sleep implementation that returns an unref'd timer.
- * The timer won't prevent the process from exiting when there's no other work.
- * Task 11: Ensure the idle poll timeout doesn't block process exit.
+ * Default sleep implementation whose timer HOLDS the event loop.
+ *
+ * This timer used to be unref'd ("don't block process exit") — but during an
+ * idle poll with no wake-watchers registered (a fully drained backlog: zero
+ * halted/parked features), the sleep timer is the process's ONLY pending
+ * work. Unref'd, the event loop emptied and the continuous daemon exited 0
+ * silently mid-await — no log, no HALT, no restart marker (observed live
+ * 2026-07-07: three consecutive silent boot-deaths ~10s after startup). An
+ * awaited idle-poll sleep IS the daemon's liveness; it must keep the process
+ * alive. There is no lingering-handle cost: the loop only exits via `break`
+ * paths that run after a sleep has already resolved, so no orphan timer can
+ * delay a normal shutdown.
+ *
+ * `onTimer` is a test-only seam: the ref property is unobservable otherwise
+ * (the vitest runner holds the loop itself, so an await-based test passes
+ * either way — a false green).
  */
-export function createDefaultSleep(): (ms: number) => Promise<void> {
+export function createDefaultSleep(
+  opts: { onTimer?: (timer: NodeJS.Timeout) => void } = {},
+): (ms: number) => Promise<void> {
   return (ms: number) =>
     new Promise<void>((r) => {
       const timer = setTimeout(r, ms);
-      timer.unref();
+      opts.onTimer?.(timer);
     });
 }
 
@@ -300,6 +315,14 @@ export interface DaemonDeps {
    * Returns true if the marker is present, false otherwise. Absent → no self-restart.
    */
   hasRestartPending?: () => Promise<boolean>;
+  /**
+   * Task 13 (queued-restart relink wiring): Relink harness skills before firing
+   * the self-restart trigger at the idle boundary. Called BEFORE triggerSelfRestart
+   * to ensure fresh skills are available in the restarted daemon. If relink fails,
+   * error is logged, trigger is NOT called, and the marker remains for retry at
+   * the next idle boundary. Absence → no relink (skip directly to trigger).
+   */
+  relink?: () => Promise<void>;
   /**
    * Fire the self-restart callback when a restart marker is pending and the daemon
    * reaches idle boundary with no in-flight work. This is the respawn hook injected
@@ -724,17 +747,33 @@ export async function runDaemon(
               // T28 path: supervisor mode — fire respawn trigger
               if (deps.triggerSelfRestart) {
                 log('[daemon] self-restart marker found at idle boundary; firing trigger');
-                try {
-                  await deps.triggerSelfRestart();
-                  // If trigger succeeds, it respawns the process and we never reach here.
-                  // But if it doesn't respawn immediately, track that we succeeded so we
-                  // don't retry (in production, the process exits on respawn).
-                  restartTriggeredSuccessfully = true;
-                  log('[daemon] self-restart trigger completed (no respawn yet)');
-                } catch (err) {
-                  log(
-                    `[daemon] self-restart trigger failed: ${err instanceof Error ? err.message : String(err)}; will retry at next idle boundary`,
-                  );
+                // Task 13: Call relink BEFORE firing trigger (queued-restart relink wiring)
+                let relinkFailed = false;
+                if (deps.relink) {
+                  try {
+                    await deps.relink();
+                  } catch (err) {
+                    log(
+                      `[daemon] relink failed: ${err instanceof Error ? err.message : String(err)}; will retry at next idle boundary`,
+                    );
+                    // Relink failure → do NOT fire trigger, marker remains for retry
+                    relinkFailed = true;
+                  }
+                }
+                // Only fire trigger if relink succeeded (or was absent)
+                if (!relinkFailed) {
+                  try {
+                    await deps.triggerSelfRestart();
+                    // If trigger succeeds, it respawns the process and we never reach here.
+                    // But if it doesn't respawn immediately, track that we succeeded so we
+                    // don't retry (in production, the process exits on respawn).
+                    restartTriggeredSuccessfully = true;
+                    log('[daemon] self-restart trigger completed (no respawn yet)');
+                  } catch (err) {
+                    log(
+                      `[daemon] self-restart trigger failed: ${err instanceof Error ? err.message : String(err)}; will retry at next idle boundary`,
+                    );
+                  }
                 }
               }
               // T30 path: bare-run mode — no supervisor, consume marker and exit cleanly

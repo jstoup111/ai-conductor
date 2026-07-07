@@ -294,7 +294,7 @@ describe('dispatchDaemonSupervisor restart verb — wired through clearStaleLock
 
     const code = await dispatchDaemonSupervisor(
       { verb: 'restart' } as any,
-      { supervisor, cwd: repoPath, out: () => {} },
+      { supervisor, cwd: repoPath, out: () => {}, relinkSkills: async () => {} },
     );
 
     expect(code).toBe(0);
@@ -319,7 +319,7 @@ describe('dispatchDaemonSupervisor restart verb — wired through clearStaleLock
 
     const code = await dispatchDaemonSupervisor(
       { verb: 'restart' } as any,
-      { supervisor, cwd: repoPath, out: () => {} },
+      { supervisor, cwd: repoPath, out: () => {}, relinkSkills: async () => {} },
     );
 
     expect(code).toBe(0);

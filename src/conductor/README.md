@@ -870,32 +870,89 @@ pidfile path and the O_EXCL create flag stay confined to `daemon-lock.ts`
 
 ### Daemon lifecycle controls: pause, resume, restart (adr-2026-07-04-durable-pause-marker / adr-2026-07-04-respawn-in-place-restart)
 
-**Pause/resume** (`engine/pause-marker.ts`, `engine/daemon.ts`) — operators can quiesce
-daemons before maintenance or upgrades without losing state. Pause writes a durable `.daemon/PAUSED`
-marker; the daemon's loop checks it before the dispatch boundary (`maybeDispatch`), so no new
-work starts while in-flight work finishes normally. Resume removes the marker. Both operations
-work per-repo or fleet-wide (`--all`) with per-repo outcome reporting. Pause is **reentrant**
-(pausing an already-paused repo is a no-op); resume does the same. Pause **persists across
-daemon restarts** — a stopped daemon starting up in a paused repo comes up paused. Automation
-(`ensureRunning`) never bypasses pause. The status surface (`daemon-observe-cli.ts`) shows
-pause state (running / paused / stopped / stale) and timestamp/operator who paused.
+#### Remain-on-exit semantics
 
-**Restart** (`daemon-supervisor-cli.ts`, `engine/daemon-tmux.ts`) — safe in-place restart
+When a tmux session is created for the daemon, **remain-on-exit is armed** via `setRemainOnExit` on
+the pane. This ensures that when the daemon process exits naturally (or is killed), the tmux pane
+survives with the exit status and logs visible. An operator watching a connected daemon stays
+connected through restart and can observe the output. This is critical for observability — the
+pane becomes a durable record of the daemon's lifecycle and any exit reason.
+
+Remain-on-exit is **armed unconditionally at session creation** — it applies to every restart
+scenario: manual operator restart (`restart`), queued-restart-at-idle (`RESTART-PENDING` marker),
+and stale-engine auto-restart. The goal is to ensure that whether the daemon exits cleanly or
+crashes, an operator with an attached PTY sees it happen rather than being mysteriously
+disconnected.
+
+#### Respawn-in-place stale-engine flow
+
+When the daemon (or an external monitor) detects that `dist/index.js` has changed (stale engine),
+the daemon writes a `.daemon/RESTART_PENDING` marker (underscore, stale-engine marker — distinct
+from the CLI restart queue marker `.daemon/RESTART-PENDING` which uses hyphen) with engine
+identity metadata and exits cleanly at the next idle point (before dispatching a new feature).
+The marker carries two engine identities: the identity when the restart was requested, and the
+target identity (the engine being transitioned to). It also records `reason`, `fromIdentity`,
+`targetIdentity`, and `at` timestamp.
+
+On restart, the daemon's startup handshake (`initStaleEngineState`, `stale-engine-init.ts`):
+1. Captures the fresh engine identity (sha256 of `dist/index.js`)
+2. Logs `ARMED` (if auto-restart is enabled and self-host mode is active) or `DISARMED`
+3. If a `RESTART_PENDING` marker is present:
+   - Logs the transition: "restarted for engine refresh — from `<old>` to `<target>`, fresh `<current>`"
+   - Detects non-convergence when fresh identity differs from the target (e.g., a rebuild didn't
+     finish), records a suppression, and prevents restart loops
+4. Clears the marker before dispatch so the backlog scan observes clean state
+
+**Headless fallback**: When the daemon runs in headless mode (bare-run, no tmux), the stale-engine
+flow operates identically — the daemon exits with code 0 on the stale verdict, and an external
+respawn mechanism (supervisor, systemd, etc.) relaunches it with the fresh engine. The marker
+persists on disk, so the fresh restart consumes it and completes the handshake.
+
+#### Relink-before-handoff
+
+Every daemon restart entry point — manual `restart`, queued restart at idle, or stale-engine
+respawn — runs a skill-relink preflight (`relinkSkillsForSelfBuild`, `install-freshness.ts`) in
+self-host mode **before any dispatch** occurs. This ensures skills are fresh on every restart,
+catching any edits to the harness that landed on main while the daemon was running. The relink
+failure (e.g., installer missing) aborts the build with an `InstallStaleError` and HALTs rather
+than proceeding with stale skills.
+
+#### Pause/resume
+
+Operators can quiesce daemons before maintenance or upgrades without losing state. Pause writes a
+durable `.daemon/PAUSED` marker; the daemon's loop checks it before the dispatch boundary
+(`maybeDispatch`), so no new work starts while in-flight work finishes normally. Resume removes
+the marker. Both operations work per-repo or fleet-wide (`--all`) with per-repo outcome reporting.
+Pause is **reentrant** (pausing an already-paused repo is a no-op); resume does the same. Pause
+**persists across daemon restarts** — a stopped daemon starting up in a paused repo comes up
+paused. Automation (`ensureRunning`) never bypasses pause. The status surface (`daemon-observe-cli.ts`)
+shows pause state (running / paused / stopped / stale) and timestamp/operator who paused.
+
+#### Restart (manual and queued)
+
+**Manual restart** (`daemon-supervisor-cli.ts`, `engine/daemon-tmux.ts`) — safe in-place restart
 preserves the daemon's tmux **session**, **window layout**, and any **operator windows** the
-operator may have opened. Implementation: `setRemainOnExit` (so the pane survives when the
-daemon exits) + `respawn-pane -k` (kills the existing process, re-runs the daemon command in
-the same pane). Unlike the old kill-session + new-session, an operator watching a connected
-daemon stays connected through restart. Restart respects **pause state** — restarting a paused
-daemon queues the restart (writes a `.daemon/RESTART-PENDING` marker) and fires when the daemon
-next goes idle, keeping the daemon paused. Fleet restart (`--all`) reports per-repo outcome:
-restarted / queued / started / error.
+operator may have opened. Implementation: `setRemainOnExit` arms the pane (documented above);
+`respawn-pane -k` kills the existing process and re-runs the daemon command in the same pane.
+Unlike the old kill-session + new-session, an operator watching a connected daemon stays
+connected through restart. Restart respects **pause state** — restarting a paused daemon queues
+the restart instead of firing immediately.
+
+**CLI restart flow** — when a restart is requested against a busy daemon (in-flight features),
+the restart cannot interrupt, so it queues durably by writing a `.daemon/RESTART-PENDING`
+marker (hyphen, CLI queue marker — distinct from the stale-engine marker `.daemon/RESTART_PENDING`
+which uses underscore). The marker carries the restart reason and optional metadata (`requestedBy`,
+`blockingSlug`). The daemon polls the marker and fires the restart at the next idle point
+(after in-flight work drains). This **prevents restart storms** — multiple writes coalesce into
+one fire — and **survives daemon crashes** — a crash before firing leaves the marker on disk to
+be consumed at the next boot.
 
 **Consume-once restart queuing** (`engine/restart-marker.ts`) — when a daemon starts up with
-a pending-restart marker, it consumes the marker (won't fire again) and, if idle, self-respawns
-as its final act (bare-run path: log + clean exit; supervisor path: supervisor sees the restart
-and respawns via the management interface). This **prevents restart storms** (multiple writes
-coalesce into one fire) and **survives daemon crashes** (a crash before fire doesn't lose the
-intent).
+a pending-restart marker (`.daemon/RESTART-PENDING`, hyphen format), it consumes the marker
+(won't fire again) and clears it. If the daemon is idle at boot, the restart fires as its
+final act: in supervisor mode, the supervisor sees the restart signal and respawns via tmux;
+in bare-run mode, a clean exit (code 0) signals the external respawn mechanism. In both cases,
+the restart relinks skills preflight before the respawn, ensuring skills are fresh.
 
 **Engine version pinning and safe rebuilds** — each daemon pins its engine version at startup
 (stores the pinned `engineDir` in the pidfile). Rebuilding or upgrading the shared engine does
@@ -1143,6 +1200,106 @@ a completion-gate retry, the conductor runs auto-heal once per session:
 
 See `engine/autoheal.ts` for the heuristic and `test/engine/conductor.test.ts` for the
 six auto-heal test scenarios.
+
+### Task Status (engine-owned)
+
+The conductor engine is the **single authority** for `.pipeline/task-status.json`, which
+tracks per-task completion state across build retries. The engine owns reads and writes;
+no other component modifies it.
+
+**Ownership model:**
+- Engine seeds the task-status on merge/upsert from the plan (`.pipeline/plan.json`)
+- Completion state is derived from **git evidence**: each pending task maps to commits by
+  trailer match (`Task: <id>` in the commit message) or by content-hash matching (when
+  trailers are absent).
+- Evidence sidecar (`autoheal.ts`) reconciles stale in-flight state against the live
+  git log before re-invoking a build step, flipping `pending` tasks to `completed` when
+  their commits are unambiguously matched (word-boundary name match + file-path overlap
+  with the plan's per-task file list).
+
+**Trailer contract:** Every task commit must carry a `Task: <id>` line in its message
+(or the older `#<id>` form for backward compatibility). The conductor reads this to
+correlate commits with tasks and to verify no intermediate work was dropped during rebase
+or conflict resolution (FR-9).
+
+**Audit trail:** All reconciliations are logged to `.pipeline/audit-trail/` so the
+operator can see how completion state evolved across a multi-attempt build.
+
+Key modules: `engine/autoheal.ts` (reconciliation logic), `engine/conductor.ts` (ownership,
+seed/upsert), `engine/artifacts.ts` (gate predicates on task-status shape).
+
+### Auto-park on N-attempt trigger
+
+The daemon auto-parks a feature after N consecutive **no-evidence** gate misses (a gate
+whose completion check found no new evidence of task completion since the prior attempt)
+or when the plan artifact is empty/missing at seed time. This replaces the prior
+infinite re-kick loop with a survivable, machine-placed halt.
+
+**Trigger:** After a gate evaluation, if:
+1. The plan is absent or empty → park immediately with reason `'empty plan'`
+2. The gate shows no new evidence AND `noEvidenceAttempts >= AUTO_PARK_THRESHOLD` (default
+   N=1, meaning "2 consecutive no-evidence misses") → park with reason `'no evidence
+   after N attempts'`
+
+**Behavior:**
+- Writes `.daemon/parked/<slug>` with provenance `auto` and the reason in the marker body
+- Emits a `ConductorEvent` of type `auto_park` with the slug and reason
+- Halts the feature gracefully instead of re-kicking
+- The feature is visible in the daemon dashboard's PARKED group with provenance shown
+  (`— auto-parked`)
+
+**Unpark (Task 24 — `conduct daemon unpark <slug>`):** Removes the park marker and resets
+the `noEvidenceAttempts` counter, allowing the daemon to re-dispatch the feature.
+Operator unpark and manual re-kick both resume from where they left off.
+
+**Distinction from operator park:** A human-placed operator park (`conduct daemon park`)
+places a different provenance marker and serves a different purpose (manual hold). Both
+are respected by the daemon's dispatch and re-kick logic, but auto-park is deterministic
+(machine-triggered after N attempts) while operator park is human-triggered.
+
+Key modules: `engine/park-marker.ts` (marker write/read), `engine/conductor.ts` (auto-park
+trigger check), `engine/daemon-park-cli.ts` (unpark subcommand), `daemon-dashboard.ts`
+(provenance display).
+
+### Remediation (agentic gap routing)
+
+When a SHIP-phase gate blocks the daemon (`prd_audit`, `finish` verification, or
+`architecture_review_as_built`), the conductor first dispatches the `/remediate` planner
+to reason over the gap and suggest routing. The planner writes `.pipeline/remediation.json`
+with per-gap dispositions.
+
+**Three remediation entry points:**
+
+1. **`prd_audit` blocking** — gap artifact is `.pipeline/prd-audit.md` (audit table with
+   FR-gap rows)
+2. **`finish` verification failure** — gap artifact is `.pipeline/test-failures.md` (written
+   by the finish skill after flake-checking a failing suite; distinguishes real bugs from
+   transient infra)
+3. **`architecture_review_as_built` BLOCKED** — gap artifact is
+   `.pipeline/architecture-review-as-built.md` (design conformance verdict)
+
+**Disposition model:** The planner categorizes each gap and proposes one of:
+- **`route_to: 'build'`** — a code gap the daemon owns; the conductor routes back to `build`
+  with a retry hint (the gap details) and re-verifies
+- **`route_to: 'stories'` or `route_to: 'plan'`** — a DECIDE-phase rework; routes back and
+  clears both artifacts
+- **`halt: 'architectural-clarity'` or `halt: 'product-scope'`** — genuinely human categories;
+  the conductor HALTs and opens a draft PR for triage
+
+**Bounds:** Remediation rounds are bounded by `MAX_KICKBACKS_PER_GATE` (default 3), so a
+cycle that's not converging HALTs eventually. Daemon prd_audit also has its own
+self-healing fallback: if every blocking row is `impl-gap` (code), the conductor auto-kicks
+back to `build` up to N times before giving up.
+
+**Deterministic plan routing:** When routing back to `plan` or `stories`, the conductor
+uses deterministic task-id assignment from `.pipeline/remediation.json` so re-opened stories
+inherit task ids, allowing `Task: <id>` trailers to bind any new work to the re-opened
+task. This keeps the task-status ledger coherent across DECIDE rework cycles.
+
+Key modules: `engine/conductor.ts` (dispatch, disposition routing), `engine/gate-verdicts.ts`
+(blocking gate detection), helpers in `engine/remediati
+
+on-append.ts` (deterministic routing).
 
 ### Pinned Node
 

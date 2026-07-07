@@ -128,7 +128,7 @@ describe('dispatchDaemonSupervisor: orphaned-process reconciliation (restart pat
 
     const code: number = await dispatch(
       { verb: 'restart' },
-      { supervisor, cwd: repo, out: (l: string) => out.push(l), kill: mockKill },
+      { supervisor, cwd: repo, out: (l: string) => out.push(l), kill: mockKill, relinkSkills: async () => {} },
     );
 
     // Restart succeeds (returns 0)
@@ -160,7 +160,7 @@ describe('dispatchDaemonSupervisor: orphaned-process reconciliation (restart pat
 
     const code: number = await dispatch(
       { verb: 'restart' },
-      { supervisor, cwd: repo, out: (l: string) => out.push(l), kill: mockKill },
+      { supervisor, cwd: repo, out: (l: string) => out.push(l), kill: mockKill, relinkSkills: async () => {} },
     );
 
     expect(code).toBe(0);
@@ -189,7 +189,7 @@ describe('dispatchDaemonSupervisor: orphaned-process reconciliation (restart pat
 
     const code: number = await dispatch(
       { verb: 'restart' },
-      { supervisor, cwd: repo, out: (l: string) => out.push(l) },
+      { supervisor, cwd: repo, out: (l: string) => out.push(l), relinkSkills: async () => {} },
     );
 
     expect(code).toBe(0);
@@ -239,7 +239,7 @@ describe('dispatchDaemonSupervisor: orphaned-process reconciliation (restart pat
 
     const code: number = await dispatch(
       { verb: 'restart' },
-      { supervisor, cwd: repo, out: (l: string) => out.push(l), kill: mockKill },
+      { supervisor, cwd: repo, out: (l: string) => out.push(l), kill: mockKill, relinkSkills: async () => {} },
     );
 
     expect(code).toBe(1); // error returns non-zero
@@ -272,7 +272,9 @@ describe('dispatchDaemonSupervisor: orphaned-process reconciliation (restart pat
     try {
       const code: number = await dispatch(
         { verb: 'restart' },
-        { cwd: repo, out: (l: string) => out.push(l) }, // no supervisor provided
+        // no supervisor provided; relink no-op'd — the default runs the REAL
+        // installer, which is minutes of work (or a #363 guard refusal) here
+        { cwd: repo, out: (l: string) => out.push(l), relinkSkills: async () => {} },
       );
       // Either succeeds with a code or throws a handled error
       expect(code).toBeLessThanOrEqual(1);

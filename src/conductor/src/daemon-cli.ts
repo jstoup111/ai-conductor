@@ -2,7 +2,7 @@ import chalk from 'chalk';
 import { v4 as uuidv4 } from 'uuid';
 import { join } from 'node:path';
 import { existsSync } from 'node:fs';
-import { mkdir, rm } from 'node:fs/promises';
+import { mkdir, rm, readFile } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { closeIssueOnImplementationMerge } from './engine/engineer/issue-ref.js';
@@ -14,7 +14,7 @@ import { PluginRegistry } from './engine/plugin-registry.js';
 import { registerBuiltins } from './engine/plugin-loader.js';
 import { ConductorEventEmitter } from './ui/events.js';
 import { DefaultStepRunner } from './engine/step-runners.js';
-import { ensureInstallFresh } from './engine/install-freshness.js';
+import { ensureInstallFresh, relinkSkillsForSelfBuild } from './engine/install-freshness.js';
 import { Conductor } from './engine/conductor.js';
 import { classifySelfHost, defaultSelfHostDetector } from './engine/self-host/detector.js';
 import { loadConfig, resolveMemoryProvider } from './engine/config.js';
@@ -56,7 +56,7 @@ import {
   makeWatchHaltClearedSeam,
 } from './engine/daemon-deps.js';
 import { isOperatorParked } from './engine/park-marker.js';
-import { listOperatorParkedSlugs } from './engine/park-marker.js';
+import { listOperatorParkedSlugs, getProvenanceType } from './engine/park-marker.js';
 import { readState, writeState, getStepStatus } from './engine/state.js';
 import { makeGitRunner, originDefaultBranch, type RebaseResolver } from './engine/rebase.js';
 import {
@@ -64,7 +64,7 @@ import {
   readPersistedBaseSha,
   writePersistedBaseSha,
 } from './engine/daemon-sha.js';
-import { scanInheritedState, renderDashboard } from './engine/daemon-dashboard.js';
+import { scanInheritedState, renderDashboard, type ParkedEntry } from './engine/daemon-dashboard.js';
 import { writeGatedSnapshot } from './engine/gated-snapshot.js';
 import { announceGatedPr, announceGatedIssue } from './engine/gate-writeback.js';
 import {
@@ -229,17 +229,34 @@ export function stripAnsi(s: string): string {
 }
 
 /**
- * Task 14: Create a RestartRequester that implements the restart sequence:
- * 1. Write a restart marker with identity metadata
- * 2. Release the lock
- * 3. Exit with code 0
+ * Task 4: RestartRequester accepts injected relink + trigger; session-hosted happy ordering
+ * Task 5: Handle relink failure with abort-alive semantics in session-hosted mode
  *
- * On error during marker write, a catch block ensures the lock is released and exit(1) is called.
+ * Create a RestartRequester that implements two flows:
+ *
+ * Session-hosted mode (triggerSelfRestart provided):
+ *   1. Call relink (if provided)
+ *   2. Write restart marker
+ *   3. Call triggerSelfRestart
+ *   4. Do NOT call lock.releaseSync() or process.exit()
+ *
+ * Headless mode (triggerSelfRestart not provided):
+ *   1. Call relink (if provided)
+ *   2. Write restart marker
+ *   3. Release lock
+ *   4. Exit with code 0
+ *
+ * Error handling:
+ * - If relink throws in session-hosted mode: log error, return alive (abort-alive)
+ * - If relink throws in headless mode: log error, release lock, exit(1)
+ * - If marker write throws in headless mode: release lock, exit(1)
+ * - If marker write throws in session-hosted mode: log error, return alive
  *
  * @param daemonDir - project root directory
  * @param log - logging function
  * @param lock - lock object with releaseSync method
  * @param process - Node process object (injected for testability)
+ * @param deps - optional dependencies: { relink, triggerSelfRestart }
  * @returns RestartRequester function
  */
 export function createRestartRequester(
@@ -247,10 +264,35 @@ export function createRestartRequester(
   log: (msg: string) => void,
   lock: { releaseSync(): void },
   process: NodeJS.Process,
+  deps?: {
+    relink?: () => Promise<void>;
+    triggerSelfRestart?: () => Promise<void>;
+  },
 ): RestartRequester {
   return async (opts: { fromIdentity: string | null; targetIdentity: string | null }) => {
+    const isSessionHosted = deps?.triggerSelfRestart !== undefined;
+
+    // Step 1: Call relink if provided (Task 5: separate error handling for relink)
+    if (deps?.relink) {
+      try {
+        await deps.relink();
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err);
+        log(`relink failed: ${detail}`);
+        // Task 5: abort-alive in session-hosted mode
+        if (isSessionHosted) {
+          // Don't release lock, don't exit, just return and stay alive
+          return;
+        }
+        // In headless mode: release lock and exit(1)
+        lock.releaseSync();
+        process.exit(1);
+        return; // Never reached but clarifies intent
+      }
+    }
+
     try {
-      // Step 1: Write marker (can fail)
+      // Step 2: Write marker (can fail)
       await writeRestartMarker(
         {
           reason: 'stale-engine',
@@ -263,16 +305,35 @@ export function createRestartRequester(
       );
     } catch (err) {
       // Backstop: ensure lock is released even if marker write fails
-      lock.releaseSync();
-      process.exit(1);
+      // Only applies to headless mode (session-hosted should not reach here)
+      const detail = err instanceof Error ? err.message : String(err);
+      log(`marker write failed: ${detail}`);
+      if (!isSessionHosted) {
+        lock.releaseSync();
+        process.exit(1);
+      }
       return; // Never reached in production, but clarifies intent
     }
 
-    // Step 2: Release lock (marker write succeeded)
-    lock.releaseSync();
-
-    // Step 3: Exit with 0 (marker and lock release succeeded)
-    process.exit(0);
+    // Step 3: Handle session-hosted vs headless paths
+    // (moved outside try-catch so exit(0) is not caught on failure in tests)
+    if (isSessionHosted) {
+      // Session-hosted: call triggerSelfRestart and don't exit
+      // Task 7: catch errors from trigger and stay alive (marker already written)
+      try {
+        await deps.triggerSelfRestart();
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err);
+        log(`triggerSelfRestart failed: ${detail}`);
+        // Stay alive: don't release lock, don't exit
+        // Marker is already written, so this can be retried at next idle boundary
+        return;
+      }
+    } else {
+      // Headless: release lock and exit(0)
+      lock.releaseSync();
+      process.exit(0);
+    }
   };
 }
 
@@ -831,8 +892,14 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       ),
   };
 
-  // Task 14: Create the real restart requester with injected lock + process
-  const requestRestart = createRestartRequester(projectRoot, log, lock, process);
+  // Task 4: Create the real restart requester with injected lock + process
+  // Task 9: Wire real deps (relink, triggerSelfRestart) at construction site
+  // relink rebuilds the harness skill symlinks before self-host dispatches
+  // triggerSelfRestart is injected from opts (respawn pane in session-hosted mode)
+  const requestRestart = createRestartRequester(projectRoot, log, lock, process, {
+    relink: () => relinkSkillsForSelfBuild({ log }),
+    triggerSelfRestart: opts.triggerSelfRestart,
+  });
 
   // Task 11: Create the suppression check wrapper that binds projectRoot
   const suppressionChecker = (currentIdentity: string | null) =>
@@ -906,12 +973,30 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
         for (const slug of await listOperatorParkedSlugs(projectRoot)) {
           candidateSlugs.add(slug);
         }
-        const parked: string[] = [];
+        const parked: ParkedEntry[] = [];
         for (const slug of candidateSlugs) {
           if (await isOperatorParked(projectRoot, slug, (err) =>
             log(`anomaly checking if ${slug} is parked: ${err.message}`),
           )) {
-            parked.push(slug);
+            // Fetch provenance (auto vs operator) and reason if available
+            const provenance = await getProvenanceType(projectRoot, slug);
+            let reason: string | undefined;
+
+            // For auto-parks, try to extract reason from marker body
+            if (provenance === 'auto') {
+              try {
+                const markerPath = join(projectRoot, '.daemon', 'parked', slug);
+                const content = await readFile(markerPath, 'utf-8');
+                const lines = content.split('\n');
+                if (lines[0]?.startsWith('auto-parked:')) {
+                  reason = lines[0].substring('auto-parked:'.length).trim();
+                }
+              } catch {
+                // Ignore read errors — marker exists but reason extraction failed
+              }
+            }
+
+            parked.push({ slug, provenance: provenance || undefined, reason });
           }
         }
         log(`\n${renderDashboard({ ...state, parked })}`);

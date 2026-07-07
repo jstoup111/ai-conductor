@@ -124,6 +124,31 @@ the shape of the work before reading individual tasks.]
 - [ ] Dependencies are explicit and acyclic
 ```
 
+### 5b. Task Header Format and ID Grammar
+
+**Task ID Grammar:** Task ids can be:
+- **Numeric:** `1`, `18`, `100` (legacy, still supported)
+- **Dotted:** `1.2`, `2.1.3` (for subtask notation)
+- **Alphanumeric with separators:** `task_1`, `rem-adr-001`, `task-name-02`
+- **Characters allowed:** `[A-Za-z0-9._-]` (letters, digits, dots, underscores, hyphens)
+
+Examples:
+```markdown
+### Task 1: Basic feature
+### Task 1.2: Subtask of task 1
+### Task rem-adr-001: Remediation for ADR-001
+### Task task_setup_1: Project setup
+```
+
+**Trailer matching:** Commit trailers use the same id grammar for consistency:
+```
+Task: 1.2
+Task: rem-adr-001
+```
+
+The parser and trailer matcher use identical grammar to ensure deterministic round-trip:
+parse plan → extract ids → emit trailers → re-parse → identical ids.
+
 ### 6. Scope Sanity Check
 
 After generating tasks, check the total count:

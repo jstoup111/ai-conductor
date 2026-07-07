@@ -151,4 +151,11 @@ export type ConductorEvent =
   | {
       /** All resolution attempts exhausted without success — feature is halted. */
       type: 'rebase_resolution_exhausted';
+    }
+  // ── Task 23: Daemon auto-park on no-evidence gate misses ──
+  | {
+      /** The daemon auto-parked due to N no-evidence gate misses or empty plan. */
+      type: 'auto_park';
+      slug: string;
+      reason: string;
     };

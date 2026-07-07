@@ -11,7 +11,8 @@
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { writeOperatorPark, removeOperatorPark, isOperatorParked } from './park-marker.js';
+import { writeOperatorPark, removeOperatorPark, isOperatorParked, getProvenanceType } from './park-marker.js';
+import { resetNoEvidenceAttempts } from './task-evidence.js';
 
 export type DaemonParkDispatch =
   | { kind: 'park'; slug: string }
@@ -99,8 +100,18 @@ export async function dispatchDaemonPark(
         out(`'${cmd.slug}' was not operator-parked — nothing to do.`);
         return 0;
       }
+
+      // Check if this is an auto-parked feature (not operator-parked)
+      // If so, reset the no-evidence counter when unparking
+      const provenance = await getProvenanceType(cwd, cmd.slug);
+      if (provenance === 'auto') {
+        await resetNoEvidenceAttempts(cwd);
+        out(`Unparked '${cmd.slug}' and reset no-evidence counter — normal dispatch and re-kick resume.`);
+      } else {
+        out(`Unparked '${cmd.slug}' — normal dispatch and re-kick resume.`);
+      }
+
       await removeOperatorPark(cwd, cmd.slug);
-      out(`Unparked '${cmd.slug}' — normal dispatch and re-kick resume.`);
     }
     return 0;
   } catch (err) {
