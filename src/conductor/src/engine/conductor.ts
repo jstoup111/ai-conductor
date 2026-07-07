@@ -214,6 +214,13 @@ export interface StepRunResult {
    */
   waitSeconds?: number;
   /**
+   * Task 18: Parsed absolute deadline (milliseconds since epoch) from rate-limit message.
+   * When set, represents a timezone-aware reset time extracted from the message
+   * (e.g., "resets 3:20pm (America/New_York)"). Used by the episode coordinator
+   * for deadline-first scheduling. Undefined if timezone is unknown or not present.
+   */
+  deadline?: number;
+  /**
    * Set when Claude reports "No conversation found" (session evaporated).
    * The conductor resets the session state and retries without burning budget.
    */
@@ -1237,13 +1244,20 @@ export class Conductor {
           // Rate limit: wait deterministically, then retry WITHOUT burning the
           // retry budget (matches bin/conduct:2248–2280 handle_rate_limit).
           // Task 10: Integrate episode coordinator for deadline-aware backoff.
+          // Task 18: Deadline-first — use parsed timezone-aware deadline if available.
           if (result.rateLimited) {
-            const waitSeconds = result.waitSeconds ?? 300;
+            // Task 18: Prefer deadline-first (parsed from message) over escalation (waitSeconds)
+            const deadline = result.deadline ?? Date.now() + (result.waitSeconds ?? 300) * 1000;
+            let waitMs = deadline - Date.now();
+            // Ensure waitMs is positive (defensive guard against clock skew or past deadlines)
+            if (waitMs <= 0) {
+              waitMs = 1;
+            }
+            const waitSeconds = Math.ceil(waitMs / 1000);
+
             await this.events.emit({ type: 'rate_limit', waitSeconds });
 
             // Enter episode with deadline for coordinated backoff
-            const waitMs = waitSeconds * 1000;
-            const deadline = Date.now() + waitMs;
             if (this.rateLimitEpisode) {
               this.rateLimitEpisode.enter(deadline);
             }

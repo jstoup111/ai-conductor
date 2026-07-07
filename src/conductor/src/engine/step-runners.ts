@@ -433,6 +433,7 @@ export class DefaultStepRunner implements StepRunner {
     }
 
     // Rate limit: surface wait seconds (from provider result, else fallback 300s).
+    // Task 18: Also surface deadline-first deadline if parsed from message.
     if (result.rateLimited) {
       const waitSeconds = result.waitSeconds ?? 300;
       return {
@@ -440,6 +441,7 @@ export class DefaultStepRunner implements StepRunner {
         output: result.output,
         rateLimited: true,
         waitSeconds,
+        deadline: result.deadline,
       };
     }
 

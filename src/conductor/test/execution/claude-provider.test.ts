@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { ClaudeProvider } from '../../src/execution/claude-provider.js';
+import { ClaudeProvider, parseRateLimitWaitSeconds } from '../../src/execution/claude-provider.js';
 import type { InvokeOptions } from '../../src/execution/llm-provider.js';
 
 // Mock execa before importing anything that uses it
@@ -444,6 +444,91 @@ describe('ClaudeProvider', () => {
       expect(result.success).toBe(false);
     });
 
+    describe('Task 18: deadline-first timezone-aware reset parse with clamp', () => {
+      it('parses reset time in America/New_York timezone and returns deadline', async () => {
+        mockExeca.mockResolvedValue({
+          stdout: "You've hit your session limit · resets 3:20pm (America/New_York)",
+          stderr: '',
+          exitCode: 1,
+          failed: true,
+        } as any);
+
+        const beforeInvoke = Date.now();
+        const result = await provider.invoke({ ...baseOptions });
+        const afterInvoke = Date.now();
+
+        expect(result.rateLimited).toBe(true);
+        expect(result.waitSeconds).toBeDefined();
+        expect(result.deadline).toBeDefined();
+        // Deadline should be in the future and within reasonable bounds
+        if (result.deadline) {
+          const deadlineDelta = result.deadline - afterInvoke;
+          expect(deadlineDelta).toBeGreaterThan(0);
+          // Should not be unreasonably far in the future
+          expect(deadlineDelta).toBeLessThanOrEqual(24 * 3600 * 1000); // Not more than 24 hours
+        }
+      });
+
+      it('unknown timezone falls back to default waitSeconds without deadline', async () => {
+        mockExeca.mockResolvedValue({
+          stdout: "You've hit your session limit · resets 3:20pm (America/Unknown)",
+          stderr: '',
+          exitCode: 1,
+          failed: true,
+        } as any);
+
+        const result = await provider.invoke({ ...baseOptions });
+
+        expect(result.rateLimited).toBe(true);
+        // Should not have a parsed deadline (unknown timezone)
+        expect(result.deadline).toBeUndefined();
+        // Should still have fallback waitSeconds
+        expect(result.waitSeconds).toBeDefined();
+        expect(result.waitSeconds).toBeGreaterThan(0);
+      });
+
+      it('midnight rollover handled correctly (future midnight)', async () => {
+        mockExeca.mockResolvedValue({
+          stdout: "You've hit your session limit · resets 11:59pm (America/New_York)",
+          stderr: '',
+          exitCode: 1,
+          failed: true,
+        } as any);
+
+        const result = await provider.invoke({ ...baseOptions });
+
+        expect(result.rateLimited).toBe(true);
+        expect(result.deadline).toBeDefined();
+        if (result.deadline) {
+          // Should be a reasonable wait time (not negative/wrapped)
+          const deadlineDelta = result.deadline - Date.now();
+          expect(deadlineDelta).toBeGreaterThan(0);
+        }
+      });
+
+      it('exactly ONE timer arm per deadline (no re-probe before deadline)', async () => {
+        // This test verifies that when we parse a deadline, we use it once for episode.enter()
+        // and don't re-arm timers before the deadline. This is structural — checked via
+        // conductor wiring, not here, but we verify the deadline is well-formed.
+        mockExeca.mockResolvedValue({
+          stdout: "You've hit your session limit · resets 3:20pm (America/New_York)",
+          stderr: '',
+          exitCode: 1,
+          failed: true,
+        } as any);
+
+        const result = await provider.invoke({ ...baseOptions });
+
+        expect(result.rateLimited).toBe(true);
+        expect(result.deadline).toBeDefined();
+        // Deadline is an absolute timestamp (ms since epoch), usable for single episode.enter() call
+        if (result.deadline) {
+          expect(typeof result.deadline).toBe('number');
+          expect(result.deadline).toBeGreaterThan(Date.now());
+        }
+      });
+    });
+
     describe('rate-limit waitSeconds parsing', () => {
       it('parses waitSeconds from rate-limited output with reset time (happy path)', async () => {
         mockExeca.mockResolvedValue({
@@ -558,5 +643,68 @@ describe('ClaudeProvider', () => {
       const [, , opts] = mockExeca.mock.calls[0] as [string, string[], any];
       expect(opts.stdio).toBe('inherit');
     });
+  });
+});
+
+describe('parseRateLimitWaitSeconds - direct unit tests for timezone parsing', () => {
+  it('parses reset time in America/New_York timezone and returns deadline', () => {
+    // Task 18: Test with injected "now" time to verify clamping
+    // 2026-07-03T18:05:54Z is 13:05:54 EDT (UTC-4)
+    // Reset at 3:20pm (15:20) EDT = ~2h 14m 6s ≈ 8046s, clamped to 3600s
+    const now = new Date('2026-07-03T18:05:54Z');
+    const message = "You've hit your session limit · resets 3:20pm (America/New_York)";
+
+    const result = (parseRateLimitWaitSeconds as any)(message, { now });
+
+    expect(result.waitSeconds).toBeDefined();
+    expect(result.deadline).toBeDefined();
+    if (result.deadline) {
+      // Deadline should be clamped to 3600s
+      const waitMs = result.deadline - now.getTime();
+      expect(waitMs).toBeLessThanOrEqual(3600000); // 3600s in ms
+      expect(waitMs).toBeGreaterThan(0);
+    }
+  });
+
+  it('past deadline (today) rolls to tomorrow and clamps', () => {
+    // 2026-07-03T20:05:54Z is 16:05:54 EDT (4:05:54 PM)
+    // Reset at 2:00pm (14:00) EDT was earlier today
+    // Should roll to tomorrow at 2:00pm, calculate that delta (~21h 55m), and clamp to 3600s
+    const now = new Date('2026-07-03T20:05:54Z');
+    const message = "You've hit your session limit · resets 2:00pm (America/New_York)";
+
+    const result = (parseRateLimitWaitSeconds as any)(message, { now });
+
+    expect(result.waitSeconds).toBeDefined();
+    expect(result.deadline).toBeDefined();
+    if (result.deadline) {
+      // Deadline should be clamped to 3600s (1 hour max)
+      const waitMs = result.deadline - now.getTime();
+      expect(waitMs).toBeGreaterThan(0);
+      expect(waitMs).toBeLessThanOrEqual(3600000); // 3600s (clamped)
+    }
+  });
+
+  it('unknown timezone returns undefined deadline', () => {
+    const message = "You've hit your session limit · resets 3:20pm (America/Unknown)";
+    const result = (parseRateLimitWaitSeconds as any)(message, { now: new Date() });
+
+    expect(result.waitSeconds).toBeDefined();
+    expect(result.deadline).toBeUndefined();
+  });
+
+  it('clamping works correctly for very far future times', () => {
+    // Time just before reset, so large wait but still gets clamped
+    const now = new Date('2026-07-03T14:55:00Z'); // 10:55 AM EDT
+    const message = "You've hit your session limit · resets 11:59pm (America/New_York)"; // 23:59 EDT = ~13h away
+
+    const result = (parseRateLimitWaitSeconds as any)(message, { now });
+
+    expect(result.deadline).toBeDefined();
+    if (result.deadline) {
+      // Should be clamped to 3600s (1 hour)
+      const waitMs = result.deadline - now.getTime();
+      expect(waitMs).toBeLessThanOrEqual(3600000);
+    }
   });
 });

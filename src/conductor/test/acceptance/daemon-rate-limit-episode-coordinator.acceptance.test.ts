@@ -211,6 +211,7 @@ describe('acceptance: the exact observed session-limit message routes to a coord
           success: result.success,
           rateLimited: result.rateLimited,
           waitSeconds: result.waitSeconds,
+          deadline: result.deadline,
           sessionExpired: result.sessionExpired,
         };
       },
