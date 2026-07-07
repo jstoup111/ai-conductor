@@ -157,7 +157,6 @@ describe('interrupted publish recovery', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const REPO_ROOT = resolve(join(process.cwd(), '..', '..'));
-const BIN_SETUP = join(REPO_ROOT, 'bin', 'setup');
 
 async function exists(path: string): Promise<boolean> {
   try {
@@ -173,11 +172,6 @@ describe('bin/setup worktree compatibility', () => {
     'creates a worktree-local dist/ symlink without touching the primary checkout',
     { timeout: 600_000 },
     async (ctx) => {
-    if (!(await exists(BIN_SETUP))) {
-      ctx.skip();
-      return;
-    }
-
     const primaryDistLink = join(REPO_ROOT, 'src', 'conductor', 'dist');
     const primaryStatBefore = await lstat(primaryDistLink).catch(() => undefined);
 
@@ -187,6 +181,11 @@ describe('bin/setup worktree compatibility', () => {
       await execa('git', ['worktree', 'add', '-b', branchName, worktreeDir, 'HEAD'], {
         cwd: REPO_ROOT,
       });
+
+      if (!(await exists(join(worktreeDir, 'bin', 'setup')))) {
+        ctx.skip();
+        return;
+      }
 
       await execa(join(worktreeDir, 'bin', 'setup'), [], {
         cwd: worktreeDir,
