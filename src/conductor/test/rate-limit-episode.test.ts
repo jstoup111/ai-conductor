@@ -71,23 +71,27 @@ describe('rate-limit-episode', () => {
     expect(episode.active(999999999)).toBe(false);
   });
 
-  it('clear() exits the episode, so active(now) returns false again', async () => {
+  it('clear() exits the episode once the deadline passes, so active(now) returns false again', async () => {
     const mod = await load();
     const create = requireFn(mod, 'create');
 
-    const baseTime = 1000;
-    const episode = create({ now: () => baseTime });
-    const deadline = baseTime + 5000;
+    const { now, setTimer, advanceTo } = createFakeClock(1000);
+    const episode = create({ now, setTimer, rng: () => 0 });
+    const deadline = 1000 + 5000;
 
     // Enter an episode
     episode.enter(deadline);
-    expect(episode.active(baseTime)).toBe(true);
+    expect(episode.active()).toBe(true);
 
-    // Clear the episode
-    episode.clear();
+    // Clear the episode — must not resolve (or flip active() to false) before
+    // the real deadline passes (ADR item 9: wake-recheck, not eager-clear).
+    const clearPromise = episode.clear();
+    expect(episode.active()).toBe(true);
 
-    // Now active should return false
-    expect(episode.active(baseTime)).toBe(false);
+    // Once the deadline actually passes, active() returns false.
+    advanceTo(deadline);
+    await clearPromise;
+    expect(episode.active()).toBe(false);
   });
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -203,15 +207,9 @@ describe('rate-limit-episode', () => {
     const mod = await load();
     const create = requireFn(mod, 'create');
 
-    const baseTime = 1000;
-    const timers: Array<() => void> = [];
-    const setTimer = (fn: () => void, delayMs: number) => {
-      timers.push(fn);
-      return { cancel: () => timers.splice(timers.indexOf(fn), 1) };
-    };
-
-    const episode = create({ now: () => baseTime, setTimer });
-    const deadline = baseTime + 5000;
+    const { now, setTimer, advanceTo } = createFakeClock(1000);
+    const episode = create({ now, setTimer, rng: () => 0 });
+    const deadline = 1000 + 5000;
     episode.enter(deadline);
 
     // clear() should return a promise
@@ -219,11 +217,8 @@ describe('rate-limit-episode', () => {
     expect(clearPromise).toBeDefined();
     expect(clearPromise instanceof Promise).toBe(true);
 
-    // Timer should be armed
-    expect(timers.length).toBe(1);
-
-    // Simulate timer fire
-    timers[0]();
+    // Simulate the deadline actually passing, then the timer firing.
+    advanceTo(deadline);
     await clearPromise;
     // Should resolve without error
     expect(true).toBe(true);
@@ -306,22 +301,16 @@ describe('rate-limit-episode', () => {
     const mod = await load();
     const create = requireFn(mod, 'create');
 
-    const baseTime = 1000;
-    const timers: Array<() => void> = [];
-    const setTimer = (fn: () => void, delayMs: number) => {
-      timers.push(fn);
-      return { cancel: () => timers.splice(timers.indexOf(fn), 1) };
-    };
-
-    const episode = create({ now: () => baseTime, setTimer });
-    const deadline = baseTime + 5000;
+    const { now, setTimer, advanceTo, timers } = createFakeClock(1000);
+    const episode = create({ now, setTimer, rng: () => 0 });
+    const deadline = 1000 + 5000;
     episode.enter(deadline);
 
     const clearPromise = episode.clear();
     expect(timers.length).toBe(1);
 
-    // Fire timer
-    timers[0]();
+    // Deadline passes, timer fires.
+    advanceTo(deadline);
     await clearPromise;
 
     // Timer should be cleaned up
@@ -499,14 +488,8 @@ describe('rate-limit-episode', () => {
     const mod = await load();
     const create = requireFn(mod, 'create');
 
-    const baseTime = 1000;
-    const timers: Array<() => void> = [];
-    const setTimer = (fn: () => void, delayMs: number) => {
-      timers.push(fn);
-      return { cancel: () => timers.splice(timers.indexOf(fn), 1) };
-    };
-
-    const episode = create({ now: () => baseTime, setTimer });
+    const { now, setTimer, advanceTo } = createFakeClock(1000);
+    const episode = create({ now, setTimer, rng: () => 0 });
 
     // Escalate multiple times
     let nextWait = episode.nextWaitSeconds(60);
@@ -519,17 +502,18 @@ describe('rate-limit-episode', () => {
     expect(nextWait).toBe(240);
 
     // Clear the episode
-    const deadline = baseTime + 5000;
+    const deadline = 1000 + 5000;
     episode.enter(deadline);
     const clearPromise = episode.clear();
 
-    // After clear, escalation should be reset
-    // (next call should return base again)
+    // Escalation counter resets synchronously when clear() is called (it does
+    // not need to wait for the deadline — it only guards future re-entry
+    // grace-period tracking, not the shared `active()`/deadline state).
     nextWait = episode.nextWaitSeconds(60);
     expect(nextWait).toBe(60);
 
-    // Fire the timer
-    timers[0]();
+    // Deadline passes, timer fires, clear() resolves.
+    advanceTo(deadline);
     await clearPromise;
   });
 
@@ -552,19 +536,14 @@ describe('rate-limit-episode', () => {
     const mod = await load();
     const create = requireFn(mod, 'create');
 
-    const baseTime = 1000;
-    const deadline = baseTime + 5000;
     const rngValues = [0.2, 0.5, 0.9]; // Deterministic values for 3 waiters
     let rngIndex = 0;
-    const rng = () => rngValues[rngIndex++];
+    const rng = () => rngValues[rngIndex++ % rngValues.length];
 
-    const timers: Array<{ fn: () => void; delayMs: number }> = [];
-    const setTimer = (fn: () => void, delayMs: number) => {
-      timers.push({ fn, delayMs });
-      return { cancel: () => timers.splice(timers.findIndex((t) => t.fn === fn), 1) };
-    };
+    const { now, setTimer, advanceTo, timers } = createFakeClock(1000);
+    const deadline = 1000 + 5000;
 
-    const episode = create({ now: () => baseTime, setTimer, rng });
+    const episode = create({ now, setTimer, rng });
     episode.enter(deadline);
 
     // Simulate 3 concurrent waiters calling clear()
@@ -574,23 +553,20 @@ describe('rate-limit-episode', () => {
     for (let i = 0; i < 3; i++) {
       promises.push(
         episode.clear().then(() => {
-          resumeTimes.push(Date.now());
+          resumeTimes.push(now());
         })
       );
     }
 
-    // Check that multiple timers were armed
+    // Multiple timers were armed — each waiter has its own jittered timer.
     expect(timers.length).toBeGreaterThan(0);
 
-    // Fire all timers
-    const timersCopy = [...timers];
-    timersCopy.forEach((t) => t.fn());
+    // Deadline passes; each waiter's jittered timer fires in turn.
+    advanceTo(deadline + 1000);
 
     await Promise.all(promises);
 
-    // Waiters should have different resume times (staggered)
-    // Note: in a real scenario with actual timers, resumeTimes would differ
-    // For now, verify that the test structure works
+    // All 3 waiters resolved once the real deadline passed.
     expect(resumeTimes.length).toBe(3);
   });
 
@@ -648,30 +624,28 @@ describe('rate-limit-episode', () => {
     const mod = await load();
     const create = requireFn(mod, 'create');
 
-    const baseTime = 1000;
-    const deadline = baseTime + 1000;
     const rng = () => 0.8; // High jitter
 
-    const timers: Array<{ fn: () => void; delayMs: number }> = [];
-    const setTimer = (fn: () => void, delayMs: number) => {
-      timers.push({ fn, delayMs });
-      return { cancel: () => {} };
-    };
+    const { now, setTimer, advanceTo, timers } = createFakeClock(1000);
+    const deadline = 1000 + 1000;
 
-    const episode = create({ now: () => baseTime, setTimer, rng });
+    const episode = create({ now, setTimer, rng });
     episode.enter(deadline);
 
     // Multiple concurrent clear() calls
     const promises = [episode.clear(), episode.clear(), episode.clear()];
 
-    // Fire timers
-    const timersCopy = [...timers];
-    timersCopy.forEach((t) => t.fn());
-
-    await Promise.all(promises);
-
     // At least one timer should have been armed
     expect(timers.length).toBeGreaterThan(0);
+
+    // The dispatch gate (active()) must stay true until the real deadline.
+    expect(episode.active()).toBe(true);
+
+    // Deadline passes — all waiters and the dispatch gate resolve/reopen.
+    advanceTo(deadline + 1000);
+
+    await Promise.all(promises);
+    expect(episode.active()).toBe(false);
   });
 
   it('jitter with RNG=0 produces minimal stagger', async () => {
@@ -718,5 +692,101 @@ describe('rate-limit-episode', () => {
     // With RNG close to 1, jitter should be substantial (close to max ~500ms)
     const expectedBase = deadline - baseTime;
     expect(capturedDelay).toBeGreaterThan(expectedBase + 400); // Near max jitter
+  });
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // Regression tests for wake-recheck/re-arm (ADR item 9): clear() must resolve
+  // only once `active(now)` is confirmed false AT WAKE TIME, never eagerly at
+  // call time — otherwise the dispatch gate's active() check (which reads the
+  // same `deadline` field) reopens before the real deadline passes, and
+  // concurrent clear() callers stop sharing the coordinated wait.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  function createFakeClock(startMs: number) {
+    let clock = startMs;
+    const timers: Array<{ fn: () => void; fireAt: number }> = [];
+    const now = () => clock;
+    const setTimer = (fn: () => void, delayMs: number) => {
+      const t = { fn, fireAt: clock + delayMs };
+      timers.push(t);
+      return {
+        cancel: () => {
+          const i = timers.indexOf(t);
+          if (i >= 0) timers.splice(i, 1);
+        },
+      };
+    };
+    const advanceTo = (target: number) => {
+      clock = target;
+      let fired = true;
+      while (fired) {
+        fired = false;
+        const due = timers.filter((t) => t.fireAt <= clock);
+        for (const t of due) {
+          const idx = timers.indexOf(t);
+          if (idx >= 0) timers.splice(idx, 1);
+          t.fn();
+          fired = true;
+        }
+      }
+    };
+    return { now, setTimer, advanceTo, timers };
+  }
+
+  it('concurrent clear() callers all wait for the real shared deadline — not resolved by a sibling call', async () => {
+    const mod = await load();
+    const create = requireFn(mod, 'create');
+
+    const { now, setTimer, advanceTo } = createFakeClock(1000);
+    const episode = create({ now, setTimer, rng: () => 0 });
+    episode.enter(1000 + 5000); // deadline = 6000
+
+    const resumeOrder: number[] = [];
+    const p1 = episode.clear().then(() => resumeOrder.push(1));
+    const p2 = episode.clear().then(() => resumeOrder.push(2));
+
+    // Well before the deadline: neither waiter has resolved, and the dispatch
+    // gate (active()) must still see the episode as active.
+    advanceTo(3000);
+    await Promise.resolve();
+    expect(resumeOrder).toEqual([]);
+    expect(episode.active()).toBe(true);
+
+    // Once the real deadline passes, both waiters resolve.
+    advanceTo(6000);
+    await Promise.all([p1, p2]);
+    expect(resumeOrder.slice().sort()).toEqual([1, 2]);
+    expect(episode.active()).toBe(false);
+  });
+
+  it('a late enter() mid-wait defers an in-flight clear() — wake-recheck re-arms to the extended deadline (no lost wakeup)', async () => {
+    const mod = await load();
+    const create = requireFn(mod, 'create');
+
+    const { now, setTimer, advanceTo } = createFakeClock(1000);
+    const episode = create({ now, setTimer, rng: () => 0 });
+    episode.enter(1000 + 1000); // deadline = 2000
+
+    let resolved = false;
+    const p = episode.clear().then(() => {
+      resolved = true;
+    });
+
+    // Extend the deadline well before the original one would fire.
+    advanceTo(1500);
+    episode.enter(1000 + 5000); // deadline = 6000 (later — wins)
+
+    // The original deadline (2000) has now passed, but the waiter must NOT
+    // resolve into a deadline the coordinator already knows is still live.
+    advanceTo(2100);
+    await Promise.resolve();
+    expect(resolved).toBe(false);
+    expect(episode.active()).toBe(true);
+
+    // Resolves only once the extended deadline actually passes.
+    advanceTo(6000);
+    await p;
+    expect(resolved).toBe(true);
+    expect(episode.active()).toBe(false);
   });
 });

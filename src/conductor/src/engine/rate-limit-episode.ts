@@ -100,7 +100,6 @@ export function create(options?: CreateOptions): RateLimitEpisode {
 
   const setTimer = options?.setTimer ?? defaultSetTimer;
   const getRandom = options?.rng ?? (() => Math.random());
-  let currentTimerHandle: TimerHandle | void | undefined = undefined;
 
   return {
     enter(untilMs: number): void {
@@ -152,47 +151,58 @@ export function create(options?: CreateOptions): RateLimitEpisode {
       }
 
       return new Promise<void>((resolve) => {
-        // Calculate delay from now until deadline
-        const now = getNow();
-        const delay = deadline !== null ? deadline - now : 0;
+        let handle: TimerHandle | void | undefined;
 
-        // Helper to resolve and clean up
         const cleanup = () => {
-          // Cancel any pending timer
-          if (currentTimerHandle && typeof currentTimerHandle === 'object' && 'cancel' in currentTimerHandle) {
-            currentTimerHandle.cancel();
+          if (handle && typeof handle === 'object' && 'cancel' in handle) {
+            handle.cancel();
           }
-          currentTimerHandle = undefined;
+          handle = undefined;
+          if (signal) {
+            signal.removeEventListener('abort', onAbort);
+          }
+        };
+
+        const onAbort = () => {
+          cleanup();
           resolve();
         };
 
-        // If delay <= 0, resolve immediately
-        if (delay <= 0) {
-          deadline = null;
-          resolve();
-          return;
-        }
+        // Wake-recheck loop: only resolve once `now >= deadline` is confirmed AT
+        // wake time. A concurrent enter() may have extended `deadline` while this
+        // waiter (or another) was sleeping — re-read it fresh and re-arm to the
+        // latest value instead of resolving into a deadline the coordinator
+        // already knows is still live. Never null out `deadline` preemptively:
+        // other in-flight clear() callers and the dispatch gate's active() check
+        // rely on it staying truthful until it has actually passed.
+        const scheduleCheck = () => {
+          const now = getNow();
 
-        // Apply jitter to delay: add random jitter up to MAX_JITTER_MS
-        // This staggers waiter resumption to prevent thundering herd
-        const jitterMs = getRandom() * MAX_JITTER_MS;
-        const jitteredDelay = delay + jitterMs;
-
-        // Arm the timer with jittered delay
-        currentTimerHandle = setTimer(() => {
-          deadline = null;
-          cleanup();
-        }, jitteredDelay);
-
-        // If signal is provided, listen for abort
-        if (signal) {
-          signal.addEventListener('abort', () => {
+          if (deadline === null || now >= deadline) {
+            if (deadline !== null && now >= deadline) {
+              deadline = null;
+            }
             cleanup();
-          }, { once: true });
+            resolve();
+            return;
+          }
+
+          // Apply jitter to the remaining delay: staggers waiter resumption to
+          // prevent a thundering herd when the deadline passes.
+          const remaining = deadline - now;
+          const jitterMs = getRandom() * MAX_JITTER_MS;
+
+          handle = setTimer(() => {
+            handle = undefined;
+            scheduleCheck();
+          }, remaining + jitterMs);
+        };
+
+        if (signal) {
+          signal.addEventListener('abort', onAbort, { once: true });
         }
 
-        // Clear the deadline
-        deadline = null;
+        scheduleCheck();
       });
     },
 
