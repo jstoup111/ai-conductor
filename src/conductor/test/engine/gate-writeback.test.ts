@@ -299,7 +299,21 @@ describe('gate-writeback (Task 17)', () => {
       await announceGatedPr(SPEC, '', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m) });
 
       expect(calls.length).toBe(0);
-      expect(logs.some((m) => m.includes('no PR known'))).toBe(true);
+      expect(logs.some((m) => m.includes('nothing to announce for gated spec') && m.includes('(no PR)'))).toBe(true);
+    });
+
+    it('NP-6: repeated no-PR skips for the same slug are deduped to one log line via a shared warnedSkips set', async () => {
+      const { gh, calls } = fakeGh([]);
+      const logs: string[] = [];
+      const warnedSkips = new Set<string>();
+
+      await announceGatedPr(SPEC, '', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips });
+      await announceGatedPr(SPEC, '', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips });
+
+      expect(calls.length).toBe(0);
+      const gateLines = logs.filter((m) => m.startsWith('[gate-writeback]'));
+      expect(gateLines.length).toBe(1);
+      expect(gateLines[0]).toContain(`nothing to announce for gated spec "${SPEC.slug}" (no PR)`);
     });
 
     it('NP-5: a label-add race (conflict error) is swallowed and the comment still lands', async () => {

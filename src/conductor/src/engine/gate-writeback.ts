@@ -63,6 +63,33 @@ export interface GateWritebackDeps {
   runGh?: GhRunner;
   cwd: string;
   log?: (msg: string) => void;
+  /**
+   * Shared across a daemon run (not per-call) to dedup skip notices per
+   * (slug, reason) key — see {@link logSkipOnce}. When omitted, every skip
+   * logs unconditionally (matches prior behavior for one-off/test callers).
+   */
+  warnedSkips?: Set<string>;
+}
+
+/**
+ * Log a skip notice at most once per (slug, reason) key for the lifetime of
+ * the given `warnedSkips` set. Repeated calls with the same key are silent
+ * no-ops after the first. When `warnedSkips` is undefined, always logs
+ * (no dedup state to track against).
+ */
+function logSkipOnce(
+  log: ((msg: string) => void) | undefined,
+  warnedSkips: Set<string> | undefined,
+  slug: string,
+  reason: string,
+  msg: string,
+): void {
+  if (warnedSkips) {
+    const key = `${slug}:${reason}`;
+    if (warnedSkips.has(key)) return;
+    warnedSkips.add(key);
+  }
+  log?.(msg);
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -149,11 +176,17 @@ export async function announceGatedPr(
   prUrl: string,
   deps: GateWritebackDeps,
 ): Promise<void> {
-  const { cwd, log } = deps;
+  const { cwd, log, warnedSkips } = deps;
   const runGh = deps.runGh ?? makeProductionGh();
 
   if (!prUrl) {
-    log?.(`[gate-writeback] no PR known for gated spec "${spec.slug}" — skipping label/comment`);
+    logSkipOnce(
+      log,
+      warnedSkips,
+      spec.slug,
+      'no-pr',
+      `[gate-writeback] nothing to announce for gated spec "${spec.slug}" (no PR)`,
+    );
     return;
   }
 
