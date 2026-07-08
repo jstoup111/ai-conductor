@@ -179,16 +179,36 @@ export async function dispatchFinishRecord(
   // Ordered writes — commit point last. For `pr`, read-modify-write
   // conduct-state.json (preserving unknown fields, adding pr_url) BEFORE
   // writing the finish-choice marker; `keep` skips state entirely and
-  // writes the marker only. Task 7 hardens the negative paths (write
-  // failure, corrupt existing state) around this same ordering.
+  // writes the marker only.
+  //
+  // Two guards protect against corrupting or partially committing state:
+  //   1. Existing state JSON must parse before any write is attempted —
+  //      corrupt JSON refuses immediately, leaving the file byte-identical
+  //      (never silently coerced to `{}` and overwritten).
+  //   2. If the state write throws (permissions, disk full, etc.), the
+  //      finish-choice marker is never written — the marker is the commit
+  //      point, and a failed state write means the commit never happened.
   const statePath = join(cmd.pipelineDir, 'conduct-state.json');
   const markerPath = join(cmd.pipelineDir, 'finish-choice');
 
   if (cmd.choice === 'pr') {
     const result = await readState(statePath);
-    const state = result.ok ? result.value : {};
+    if (!result.ok) {
+      console.error(
+        `finish-record: existing state file "${statePath}" is corrupt (${result.error.message}) — refusing to record; file left untouched`,
+      );
+      return 1;
+    }
+    const state = result.value;
     state.pr_url = cmd.prUrl;
-    await writeState(statePath, state);
+    try {
+      await writeState(statePath, state);
+    } catch (err) {
+      console.error(
+        `finish-record: failed to write state file "${statePath}" (${err instanceof Error ? err.message : String(err)}) — refusing to record; finish-choice marker not written`,
+      );
+      return 1;
+    }
   }
 
   await writeFile(markerPath, `${cmd.choice}\n`, 'utf-8');

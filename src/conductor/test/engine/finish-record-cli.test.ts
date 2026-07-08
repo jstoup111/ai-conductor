@@ -2,6 +2,45 @@ import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { mkdtemp, rm, readdir, readFile } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
+
+// Toggled by the "state-write fails" test to simulate an fs.writeFile
+// failure for conduct-state.json specifically, without redefining the
+// (non-configurable) ESM export directly.
+let failStateWriteFor: string | null = null;
+
+// `finish-record-cli.ts` imports from 'node:fs/promises'; `state.ts` (its
+// writeState dependency) imports from the bare 'fs/promises' specifier. Both
+// resolve to the same module at runtime but vi.mock keys by specifier
+// string, so both must be mocked for the state-write-failure test to work
+// regardless of which import style a given module uses. Note: vi.mock
+// factories are hoisted above top-level variable declarations, so the
+// wrapper logic must be inlined in each factory rather than shared via a
+// helper function.
+vi.mock('node:fs/promises', async () => {
+  const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+  return {
+    ...actual,
+    writeFile: async (path: unknown, ...rest: unknown[]) => {
+      if (typeof path === 'string' && failStateWriteFor && path.endsWith(failStateWriteFor)) {
+        throw new Error('EACCES: permission denied (simulated)');
+      }
+      return (actual.writeFile as (...a: unknown[]) => Promise<void>)(path, ...rest);
+    },
+  };
+});
+vi.mock('fs/promises', async () => {
+  const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+  return {
+    ...actual,
+    writeFile: async (path: unknown, ...rest: unknown[]) => {
+      if (typeof path === 'string' && failStateWriteFor && path.endsWith(failStateWriteFor)) {
+        throw new Error('EACCES: permission denied (simulated)');
+      }
+      return (actual.writeFile as (...a: unknown[]) => Promise<void>)(path, ...rest);
+    },
+  };
+});
+
 import {
   detectFinishRecordCommand,
   dispatchFinishRecordGuide,
@@ -458,6 +497,109 @@ describe('engine/finish-record-cli', () => {
       expect(marker.trim()).toBe('keep');
       const after = await readdir(existingAbsDir);
       expect(after).not.toContain('conduct-state.json');
+    });
+  });
+
+  describe('dispatchFinishRecord — commit-point and corrupt-state refusals', () => {
+    let scratchParent: string;
+    let existingAbsDir: string;
+    let passingRunners: FinishRecordRunners;
+
+    beforeEach(async () => {
+      scratchParent = await mkdtemp(join(tmpdir(), 'finish-record-commit-point-'));
+      existingAbsDir = await mkdtemp(join(scratchParent, 'pipeline-'));
+      passingRunners = {
+        runGh: vi.fn(async () => ({ stdout: 'https://github.com/org/repo/pull/1\n' })),
+        runGit: vi.fn(async (args: string[]) => {
+          if (args[0] === 'rev-parse' && args.includes('@{u}')) {
+            return { stdout: 'refs/remotes/origin/feat\n' };
+          }
+          if (args[0] === 'merge-base') {
+            return { stdout: '' };
+          }
+          throw new Error(`unexpected git args: ${args.join(' ')}`);
+        }),
+      };
+    });
+
+    afterEach(async () => {
+      vi.restoreAllMocks();
+      failStateWriteFor = null;
+      await rm(scratchParent, { recursive: true, force: true });
+    });
+
+    it('refuses when state-write fails: exit !=0, finish-choice marker never written (commit-point protection)', async () => {
+      const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      failStateWriteFor = 'conduct-state.json';
+
+      const code = await dispatchFinishRecord(
+        {
+          kind: 'record',
+          choice: 'pr',
+          prUrl: 'https://github.com/org/repo/pull/1',
+          pipelineDir: existingAbsDir,
+        },
+        scratchParent,
+        passingRunners,
+      );
+
+      expect(code).not.toBe(0);
+      const after = await readdir(existingAbsDir);
+      expect(after).not.toContain('finish-choice');
+      expect(errSpy.mock.calls.flat().join(' ')).toMatch(/state/i);
+      failStateWriteFor = null;
+    });
+
+    it('refuses on corrupt JSON in existing state file: file left byte-identical, no marker written', async () => {
+      const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const statePath = join(existingAbsDir, 'conduct-state.json');
+      const corrupt = '{ this is not valid json ';
+      const { writeFile } = await import('node:fs/promises');
+      await writeFile(statePath, corrupt, 'utf-8');
+
+      const code = await dispatchFinishRecord(
+        {
+          kind: 'record',
+          choice: 'pr',
+          prUrl: 'https://github.com/org/repo/pull/1',
+          pipelineDir: existingAbsDir,
+        },
+        scratchParent,
+        passingRunners,
+      );
+
+      expect(code).not.toBe(0);
+      const rawAfter = await readFile(statePath, 'utf-8');
+      expect(rawAfter).toBe(corrupt);
+      const after = await readdir(existingAbsDir);
+      expect(after).not.toContain('finish-choice');
+      expect(errSpy.mock.calls.flat().join(' ')).toMatch(/corrupt|invalid json/i);
+    });
+
+    it('leaves a prior valid finish-choice from an earlier attempt untouched by a later refusal', async () => {
+      const markerPath = join(existingAbsDir, 'finish-choice');
+      const statePath = join(existingAbsDir, 'conduct-state.json');
+      const { writeFile } = await import('node:fs/promises');
+      await writeFile(markerPath, 'keep\n', 'utf-8');
+      const corrupt = '{ broken ';
+      await writeFile(statePath, corrupt, 'utf-8');
+
+      const code = await dispatchFinishRecord(
+        {
+          kind: 'record',
+          choice: 'pr',
+          prUrl: 'https://github.com/org/repo/pull/1',
+          pipelineDir: existingAbsDir,
+        },
+        scratchParent,
+        passingRunners,
+      );
+
+      expect(code).not.toBe(0);
+      const markerAfter = await readFile(markerPath, 'utf-8');
+      expect(markerAfter).toBe('keep\n');
+      const rawStateAfter = await readFile(statePath, 'utf-8');
+      expect(rawStateAfter).toBe(corrupt);
     });
   });
 
