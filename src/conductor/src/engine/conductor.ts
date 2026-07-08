@@ -1665,6 +1665,11 @@ export class Conductor {
                     resolvedAfter: resolvedTasksAfter,
                   });
                   await clearHaltMarker(this.projectRoot);
+                  await this.events.emit({
+                    type: 'halt_cleared',
+                    step: step.name,
+                    cause: 'operator',
+                  });
 
                   // Hand off: open an interactive Claude session so the user
                   // can break the stall. After the REPL exits, re-check

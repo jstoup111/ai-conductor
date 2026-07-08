@@ -43,6 +43,7 @@ import { runProjectPrelude } from './engine/project-prelude.js';
 import { discoverPlugins, registerBuiltins } from './engine/plugin-loader.js';
 import { PluginRegistry } from './engine/plugin-registry.js';
 import { EventPersister } from './engine/event-persister.js';
+import { AuditTrailWriter } from './engine/audit-trail.js';
 import { renderReport, ReportError } from './engine/report-renderer.js';
 import type { LLMProvider } from "./execution/llm-provider.js";
 import type { UISubscriber } from "./ui/types.js";
@@ -766,6 +767,12 @@ async function main(): Promise<void> {
   const eventsLogPath = join(pipelineDir, 'events.jsonl');
   const persister = new EventPersister(eventsLogPath, events);
   persister.start();
+
+  // Wire AuditTrailWriter: appends friction/positive-evidence records to
+  // .pipeline/audit-trail/events.jsonl, rooted at the resolved projectRoot
+  // (never process.cwd()) so retro can reconstruct this run's history.
+  const auditWriter = new AuditTrailWriter(projectRoot);
+  auditWriter.subscribe(events);
 
   // Wire visualizer plugins (FR-1 gate: OTel visualizer only when enabled).
   const visualizerList: VisualizerPlugin[] = [];

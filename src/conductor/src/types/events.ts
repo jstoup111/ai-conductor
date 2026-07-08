@@ -87,6 +87,8 @@ export type ConductorEvent =
       step: StepName;
       satisfied: boolean;
       reason?: string;
+      /** Timestamp (ms epoch) the gate's verdict was computed, for audit non-divergence checks. */
+      checkedAt?: number;
     }
   | {
       /** A downstream step re-opened an upstream gate (plan/stories). */
@@ -158,4 +160,11 @@ export type ConductorEvent =
       type: 'auto_park';
       slug: string;
       reason: string;
+    }
+  // ── Audit-trail write-completeness: halt lifecycle closure ──
+  | {
+      /** A halt (operator park or daemon HALT) was cleared, resuming the feature. */
+      type: 'halt_cleared';
+      step?: StepName;
+      cause: 'operator' | 'rekick';
     };

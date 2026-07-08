@@ -16,6 +16,7 @@ import { ConductorEventEmitter } from './ui/events.js';
 import { DefaultStepRunner } from './engine/step-runners.js';
 import { ensureInstallFresh, relinkSkillsForSelfBuild } from './engine/install-freshness.js';
 import { Conductor } from './engine/conductor.js';
+import { AuditTrailWriter } from './engine/audit-trail.js';
 import { classifySelfHost, defaultSelfHostDetector } from './engine/self-host/detector.js';
 import { loadConfig, resolveMemoryProvider } from './engine/config.js';
 import { holdLock } from './engine/daemon-lock.js';
@@ -661,6 +662,15 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       config,
       mode: 'auto',
     });
+
+    // Wire AuditTrailWriter: appends friction/positive-evidence records to
+    // <worktree>/.pipeline/audit-trail/events.jsonl, rooted at the worktree
+    // path (never process.cwd() or the daemon's projectRoot) so retro can
+    // reconstruct this feature's run history from inside its own worktree.
+    // Daemon runs the engine in-process, so one writer per run covers all
+    // steps for this worktree.
+    const auditWriter = new AuditTrailWriter(wt.path);
+    auditWriter.subscribe(events);
 
     const conductor = new Conductor({
       stateFilePath,

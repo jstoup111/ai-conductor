@@ -36,6 +36,7 @@ import { writeFile, mkdir, readFile } from 'fs/promises';
 import { readState, writeState } from '../../src/engine/state.js';
 import { createHash } from 'crypto';
 import { createTaskEvidence } from '../../src/engine/task-evidence.js';
+import { AuditTrailWriter } from '../../src/engine/audit-trail.js';
 
 function createMockStepRunner(result: StepRunResult = { success: true }): StepRunner {
   return {
@@ -5880,6 +5881,54 @@ describe('build-step stall circuit breaker', () => {
       /* marker removed — expected */
     }
     expect(markerStillThere).toBe(false);
+  });
+
+  it('emits halt_cleared when the inline halt marker is cleared, and the audit writer records it', async () => {
+    await seedAllArtifactsExceptTaskStatus();
+    await writeTaskStatus(3, 10);
+    await writeFile(join(dir, '.pipeline/halt-user-input-required'), 'scope mismatch');
+
+    const runner: StepRunner & { runInteractive: ReturnType<typeof vi.fn> } = {
+      run: vi.fn().mockResolvedValue({ success: true }),
+      runInteractive: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const haltClearedEvents: Array<{ step?: StepName; cause: string }> = [];
+    events.on('halt_cleared', (e) => {
+      if (e.type === 'halt_cleared') haltClearedEvents.push({ step: e.step, cause: e.cause });
+    });
+
+    const auditWriter = new AuditTrailWriter(dir);
+    auditWriter.subscribe(events);
+
+    const onRecovery = vi.fn().mockResolvedValue('quit' as const);
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      verifyArtifacts: true,
+      maxRetries: 3,
+      onRecovery,
+    });
+
+    await conductor.run();
+
+    expect(haltClearedEvents).toHaveLength(1);
+    expect(haltClearedEvents[0].step).toBe('build');
+    expect(haltClearedEvents[0].cause).toBe('operator');
+
+    const eventsPath = join(dir, '.pipeline/audit-trail/events.jsonl');
+    const contents = await readFile(eventsPath, 'utf8');
+    const records = contents
+      .split('\n')
+      .filter((line) => line.length > 0)
+      .map((line) => JSON.parse(line) as { event: string; cause?: string; step: string });
+
+    const haltClearedRecord = records.find((r) => r.event === 'halt_cleared');
+    expect(haltClearedRecord).toBeDefined();
+    expect(haltClearedRecord?.cause).toBe('operator');
+    expect(haltClearedRecord?.step).toBe('build');
   });
 
   it('does NOT trigger build_stall when a retry produces new task completions', async () => {
