@@ -11,7 +11,8 @@ import type { GhRunner } from './pr-labels.js';
 import type { WatchEntry } from './mergeable-sweep.js';
 import type { PrMergeState } from './pr-labels.js';
 import type { HarnessConfig } from '../types/config.js';
-import { logOutcome, isResolutionInFlight } from './autoresolve.js';
+import { logOutcome, isResolutionInFlight, withResolveWorktree } from './autoresolve.js';
+import { execa } from 'execa';
 
 /**
  * Build a RETRY hint from failing checks and their logs.
@@ -220,4 +221,86 @@ async function evaluateEligibilityGates(
 
   // All gates passed
   return { eligible: true };
+}
+
+/**
+ * Result of a CI fix attempt.
+ */
+export type CiFixOutcome = { kind: 'changed' } | { kind: 'noop' } | { kind: 'branch-gone' };
+
+/**
+ * Resolver worktree lifecycle for CI fix execution.
+ *
+ * Story: TR-4 happy (isolated worktree, stale cleanup, teardown both outcomes);
+ * negative (worktree creation fails → non-throwing abort)
+ *
+ * Task 17: fetches origin, validates the PR branch exists, creates an isolated
+ * worktree at the branch tip via {@link withResolveWorktree}, runs the fix-runner
+ * callback inside, and cleans up the worktree both on success and on throw.
+ *
+ * If the branch doesn't exist after fetch, aborts with a logged reason and returns
+ * { kind: 'branch-gone' } without throwing, preserving the primary checkout.
+ *
+ * @param entry The watch entry for this PR
+ * @param branch The PR's source branch name (e.g., "feat/fix")
+ * @param hint A RETRY hint string to pass to the fix-runner (e.g., failing check names)
+ * @param deps Dependencies for the fix execution
+ * @param deps.fixRunner The injected fix-runner callback (worktreePath → CiFixOutcome)
+ * @param logger Optional logging function for abort/error messages
+ * @returns CiFixOutcome describing the result
+ */
+export async function runCiFix(
+  entry: WatchEntry,
+  branch: string,
+  hint: string,
+  deps: {
+    fixRunner: (worktreePath: string) => Promise<CiFixOutcome>;
+  },
+  logger?: (msg: string) => void,
+): Promise<CiFixOutcome> {
+  const log = logger ?? console.log;
+  const { repoCwd, slug, prUrl } = entry;
+
+  try {
+    // Step 1: Fetch origin to ensure we have the latest branches
+    try {
+      await execa('git', ['fetch', 'origin'], { cwd: repoCwd });
+    } catch (err) {
+      // Fetch failed, but continue — the branch might still be available locally
+      log(`${prUrl}: fetch origin failed (continuing): ${err}`);
+    }
+
+    // Step 2: Verify the branch exists
+    // Check both local and remote branches
+    const localCheck = await execa('git', ['rev-parse', '--verify', branch], {
+      cwd: repoCwd,
+      reject: false,
+    });
+
+    const remoteCheck = await execa('git', ['rev-parse', '--verify', `origin/${branch}`], {
+      cwd: repoCwd,
+      reject: false,
+    });
+
+    if (localCheck.exitCode !== 0 && remoteCheck.exitCode !== 0) {
+      // Branch doesn't exist anywhere
+      log(`${prUrl}: branch not found: ${branch} (branch-gone)`);
+      return { kind: 'branch-gone' };
+    }
+
+    // Step 3: Create a worktree at the branch tip and run the fix-runner
+    // Use the remote branch if it exists, otherwise use the local branch
+    const branchToUse = remoteCheck.exitCode === 0 ? `origin/${branch}` : branch;
+
+    const outcome = await withResolveWorktree(slug, branchToUse, repoCwd, async (worktreePath) => {
+      // Run the fix-runner callback inside the worktree
+      return await deps.fixRunner(worktreePath);
+    });
+
+    return outcome;
+  } catch (err) {
+    // Any unhandled error in worktree setup gets logged but re-thrown
+    log(`${prUrl}: unexpected error in ci-fix resolver: ${err}`);
+    throw err;
+  }
 }

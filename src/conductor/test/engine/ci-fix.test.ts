@@ -357,7 +357,7 @@ describe('ci-fix: isEligibleForCiFix eligibility gates (Task 14)', () => {
 
 // ── Tests for runCiFix (Task 17: resolver worktree lifecycle) ────────────────
 
-describe.skip('ci-fix: runCiFix resolver worktree lifecycle (Task 17)', () => {
+describe('ci-fix: runCiFix resolver worktree lifecycle (Task 17)', () => {
   const PR_URL = 'https://github.com/foo/bar/pull/42';
   const SLUG = 'foo/bar#42';
 
