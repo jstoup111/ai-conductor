@@ -329,7 +329,7 @@ export function createRestartRequester(
     // Step 3: Handle session-hosted vs headless paths
     // (moved outside try-catch so exit(0) is not caught on failure in tests)
     if (isSessionHosted && triggerSelfRestart) {
-      // Session-hosted: call triggerSelfRestart but do NOT exit or release lock
+      // Session-hosted: call triggerSelfRestart and release lock + exit on success
       // Task 7: catch errors from trigger and stay alive (marker already written)
       try {
         await triggerSelfRestart();
@@ -340,8 +340,9 @@ export function createRestartRequester(
         // Marker is already written, so this can be retried at next idle boundary
         return { fired: false };
       }
-      // Trigger succeeded: return without exiting or releasing lock
-      // The supervisor/respawn handler is responsible for the restart
+      // Trigger succeeded: release lock and exit (ADR Decision item 1)
+      lock.releaseSync();
+      process.exit(0);
       return { fired: true };
     } else {
       // Headless: release lock and exit(0)
@@ -441,7 +442,8 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   // ADR-010: claim the 1-per-repo pidfile so this daemon's liveness is observable
   // (the pidfile under .daemon/ holds our pid) and a second daemon for the same repo
   // refuses to start. A live owner → exit now; we release the lock on completion below.
-  const lock = await holdLock(projectRoot);
+  // ADR Decision item 3: enable bounded-wait polling for takeover scenario (10s/250ms)
+  const lock = await holdLock(projectRoot, { takeoverWaitMs: 10_000, pollMs: 250 });
   if (lock === null) {
     log(`another daemon is already running for ${projectRoot}; exiting (1-per-repo).`);
     const exitProcess = opts.exitProcess ?? process.exit;

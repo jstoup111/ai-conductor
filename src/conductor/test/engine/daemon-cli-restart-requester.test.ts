@@ -294,11 +294,11 @@ describe('Task 14 — RestartRequester: marker → release → exit ordering', (
   /**
    * Test: session-hosted mode with injected relink + triggerSelfRestart
    *
-   * Session-hosted flow:
+   * Session-hosted flow (ADR adr-2026-07-07-single-generation-stale-respawn, Decision item 1):
    * 1. Call relink
    * 2. Write underscore marker
    * 3. Call triggerSelfRestart
-   * 4. Do NOT call lock.releaseSync() or process.exit() — stay alive for supervisor
+   * 4. CALL lock.releaseSync() and process.exit(0) after successful trigger (predecessor terminates unconditionally on FIRED)
    *
    * Verifies exact call order via spy call counts and order
    *
@@ -306,7 +306,7 @@ describe('Task 14 — RestartRequester: marker → release → exit ordering', (
    * `daemon restart` queued restarts and must NEVER be touched by the stale-engine path.
    * This assertion verifies that the hyphen marker is never created or modified.
    */
-  it('session-hosted mode: relink → marker → triggerSelfRestart (no exit/lock release)', async () => {
+  it('session-hosted mode: relink → marker → triggerSelfRestart → release → exit(0)', async () => {
     const { createRestartRequester } = await import('../../src/daemon-cli.js');
 
     const callOrder: string[] = [];
@@ -351,7 +351,7 @@ describe('Task 14 — RestartRequester: marker → release → exit ordering', (
       triggerSelfRestart: mockTriggerSelfRestart,
     });
 
-    // Session-hosted mode should NOT exit on successful trigger fire
+    // Session-hosted mode should exit on successful trigger fire per ADR decision item 1
     const result = await requester({
       fromIdentity: 'daemon-id-123',
       targetIdentity: 'engine-id-456',
@@ -360,12 +360,13 @@ describe('Task 14 — RestartRequester: marker → release → exit ordering', (
     // Verify return value indicates successful fire
     expect(result).toEqual({ fired: true });
 
-    // Verify call order: relink → marker → triggerSelfRestart (no release, no exit)
-    expect(callOrder).toEqual(['relink', 'triggerSelfRestart']);
+    // Verify call order: relink → marker → triggerSelfRestart → release → exit(0)
+    // Per ADR: predecessor terminates unconditionally on FIRED trigger
+    expect(callOrder).toEqual(['relink', 'triggerSelfRestart', 'release', 'exit(0)']);
 
-    // Verify lock and exit were NOT called
-    expect(releaseSyncCalled).toBe(false);
-    expect(exitCalled).toBe(false);
+    // Verify lock and exit WERE called (predecessor exit on fired)
+    expect(releaseSyncCalled).toBe(true);
+    expect(exitCalled).toBe(true);
 
     // Verify underscore marker was written (stale-engine marker)
     const markerPath = join(daemonDir, '.daemon', 'RESTART_PENDING');

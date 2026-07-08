@@ -141,7 +141,7 @@ describe('daemon-stale-respawn-e2e — #353 capstone (TR-2/TR-3/TR-4)', () => {
     });
 
     it(
-      'relink -> marker write -> triggerSelfRestart fires (in order); lock is NOT released and process does NOT exit when session-hosted',
+      'relink -> marker write -> triggerSelfRestart fires (in order); predecessor exits and lock is released (ADR Decision 1)',
       async () => {
         const callOrder: string[] = [];
 
@@ -163,8 +163,16 @@ describe('daemon-stale-respawn-e2e — #353 capstone (TR-2/TR-3/TR-4)', () => {
           },
         );
 
-        const mockLock = { releaseSync: vi.fn() };
-        const mockProcess = { exit: vi.fn() } as unknown as NodeJS.Process;
+        const mockLock = {
+          releaseSync: vi.fn(() => {
+            callOrder.push('release');
+          }),
+        };
+        const mockProcess = {
+          exit: vi.fn((code: number) => {
+            callOrder.push(`exit(${code})`);
+          }),
+        } as unknown as NodeJS.Process;
         const mockLog = () => {};
 
         // The ADR's finished shape (plan Task 4): createRestartRequester gains
@@ -185,12 +193,13 @@ describe('daemon-stale-respawn-e2e — #353 capstone (TR-2/TR-3/TR-4)', () => {
 
         await requester({ fromIdentity: 'old-hash', targetIdentity: 'new-hash' });
 
-        // Desired (post-fix) ordering and outcome — FAILS today.
-        expect(callOrder).toEqual(['relink', 'marker-write', 'trigger']);
+        // ADR adr-2026-07-07-single-generation-stale-respawn Decision item 1:
+        // Predecessor must terminate unconditionally on FIRED trigger
+        expect(callOrder).toEqual(['relink', 'marker-write', 'trigger', 'release', 'exit(0)']);
         expect(relinkStub).toHaveBeenCalledTimes(1);
         expect(triggerSelfRestartStub).toHaveBeenCalledTimes(1);
-        expect(mockProcess.exit).not.toHaveBeenCalled();
-        expect(mockLock.releaseSync).not.toHaveBeenCalled();
+        expect(mockProcess.exit).toHaveBeenCalledWith(0);
+        expect(mockLock.releaseSync).toHaveBeenCalled();
 
         writeSpy.mockRestore();
       },
