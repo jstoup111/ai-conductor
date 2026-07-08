@@ -221,8 +221,8 @@ export async function announceGatedPr(
  *     silent skip.
  *   - `sourceRef` is present but fails to parse via {@link parseSourceRef}
  *     (the single parse source shared with the rest of the intake linkage) —
- *     skipped with a logged notice, never a `gh` call with garbage
- *     arguments.
+ *     skipped with a logged notice (deduped per `(slug, 'no-source-ref')` via
+ *     {@link logSkipOnce}), never a `gh` call with garbage arguments.
  *
  * Otherwise labels + upserts the marker comment on the issue. Commenting is
  * attempted regardless of the issue's open/closed state (a closed issue can
@@ -234,7 +234,7 @@ export async function announceGatedIssue(
   sourceRef: string | undefined,
   deps: GateWritebackDeps,
 ): Promise<void> {
-  const { cwd, log } = deps;
+  const { cwd, log, warnedSkips } = deps;
   const runGh = deps.runGh ?? makeProductionGh();
 
   if (spec.kind !== 'spec') {
@@ -243,9 +243,13 @@ export async function announceGatedIssue(
 
   const parsed = parseSourceRef(sourceRef);
   if (!parsed) {
-    log?.(
-      `[gate-writeback] no usable Source-Ref for gated spec "${spec.slug}" ` +
-        `("${sourceRef ?? ''}") — skipping issue announcement`,
+    logSkipOnce(
+      log,
+      warnedSkips,
+      spec.slug,
+      'no-source-ref',
+      `[gate-writeback] nothing to announce on an issue for gated spec "${spec.slug}" ` +
+        `(no usable Source-Ref, got "${sourceRef ?? ''}") — will retry when one exists`,
     );
     return;
   }

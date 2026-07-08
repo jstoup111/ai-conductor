@@ -556,7 +556,29 @@ describe('gate-writeback (Task 17)', () => {
       await announceGatedIssue(SPEC, 'not-a-ref', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m) });
 
       expect(ghCalled).toBe(false);
-      expect(logs.some((m) => m.toLowerCase().includes('skip'))).toBe(true);
+      expect(
+        logs.some((m) =>
+          m.includes(
+            `nothing to announce on an issue for gated spec "${SPEC.slug}" (no usable Source-Ref, got "not-a-ref") — will retry when one exists`,
+          ),
+        ),
+      ).toBe(true);
+    });
+
+    it('malformed Source-Ref skip is deduped across repeated calls with a shared warnedSkips set', async () => {
+      const gh: GhRunner = async () => ({ stdout: '' });
+      const logs: string[] = [];
+      const warnedSkips = new Set<string>();
+
+      await announceGatedIssue(SPEC, 'not-a-ref', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips });
+      await announceGatedIssue(SPEC, 'not-a-ref', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips });
+
+      const matches = logs.filter((m) =>
+        m.includes(
+          `nothing to announce on an issue for gated spec "${SPEC.slug}" (no usable Source-Ref, got "not-a-ref") — will retry when one exists`,
+        ),
+      );
+      expect(matches).toHaveLength(1);
     });
 
     it('closed issue still gets commented on', async () => {
