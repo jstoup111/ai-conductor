@@ -38,6 +38,8 @@ export interface WatchEntry {
   repoCwd: string;
   resolveAttempts?: number;
   lastResolveAt?: string;
+  ciFixAttempts?: number;
+  lastCiFixAt?: string;
 }
 
 const WATCH_FILE = '.daemon/mergeable-watch.jsonl';
@@ -90,6 +92,10 @@ export async function readWatch(projectRoot: string): Promise<WatchEntry[]> {
               resolveAttempts: typeof raw.resolveAttempts === 'number' ? raw.resolveAttempts : 0,
               // lastResolveAt is optional; only include if present
               ...(typeof raw.lastResolveAt === 'string' && { lastResolveAt: raw.lastResolveAt }),
+              // Zero-default normalization for ciFix fields
+              ciFixAttempts: typeof raw.ciFixAttempts === 'number' ? raw.ciFixAttempts : 0,
+              // lastCiFixAt is optional; only include if present
+              ...(typeof raw.lastCiFixAt === 'string' && { lastCiFixAt: raw.lastCiFixAt }),
             };
             return [entry];
           }

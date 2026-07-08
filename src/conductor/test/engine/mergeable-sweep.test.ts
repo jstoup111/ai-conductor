@@ -153,7 +153,7 @@ const PR_URL = 'https://github.com/foo/bar/pull/42';
 const PR_URL_2 = 'https://github.com/foo/bar/pull/43';
 
 function entry(prUrl = PR_URL): WatchEntry {
-  return { prUrl, slug: 'test-feature', repoCwd: '/fake/repo', resolveAttempts: 0 };
+  return { prUrl, slug: 'test-feature', repoCwd: '/fake/repo', resolveAttempts: 0, ciFixAttempts: 0 };
 }
 
 // ── Temp dir lifecycle ────────────────────────────────────────────────────────
@@ -269,7 +269,66 @@ describe('readWatch', () => {
     );
     const result = await readWatch(tmpDir);
     expect(result).toHaveLength(1);
-    expect(result[0]).toEqual(extendedEntry);
+    // Expected entry after normalization: legacy ciFix fields default to 0/undefined
+    const expected = { ...extendedEntry, ciFixAttempts: 0 };
+    expect(result[0]).toEqual(expected);
+  });
+
+  it('parses a legacy entry (without ciFix fields) with zero-defaults', async () => {
+    await mkdir(join(tmpDir, '.daemon'), { recursive: true });
+    // Legacy entry: no ciFixAttempts or lastCiFixAt
+    const legacyEntry = { prUrl: PR_URL, slug: 'test-feature', repoCwd: '/fake/repo' };
+    await writeFile(
+      join(tmpDir, '.daemon', 'mergeable-watch.jsonl'),
+      JSON.stringify(legacyEntry) + '\n',
+    );
+    const result = await readWatch(tmpDir);
+    expect(result).toHaveLength(1);
+    // Legacy entries should have ciFixAttempts = 0 and lastCiFixAt = undefined
+    expect(result[0].prUrl).toBe(PR_URL);
+    expect(result[0].ciFixAttempts).toBe(0);
+    expect(result[0].lastCiFixAt).toBeUndefined();
+  });
+
+  it('round-trips an entry with ciFix state fields unchanged', async () => {
+    const ciFix = {
+      prUrl: PR_URL,
+      slug: 'test-feature',
+      repoCwd: '/fake/repo',
+      ciFixAttempts: 1,
+      lastCiFixAt: '2026-07-04T10:35:00Z',
+    };
+    await mkdir(join(tmpDir, '.daemon'), { recursive: true });
+    await writeFile(
+      join(tmpDir, '.daemon', 'mergeable-watch.jsonl'),
+      JSON.stringify(ciFix) + '\n',
+    );
+    const result = await readWatch(tmpDir);
+    expect(result).toHaveLength(1);
+    // Expected entry after normalization: legacy resolve fields default to 0/undefined
+    const expected = { ...ciFix, resolveAttempts: 0 };
+    expect(result[0]).toEqual(expected);
+  });
+
+  it('round-trips a legacy entry (no ciFix fields) unchanged through rewriteWatch', async () => {
+    await mkdir(join(tmpDir, '.daemon'), { recursive: true });
+    const legacyEntry = { prUrl: PR_URL, slug: 'test-feature', repoCwd: '/fake/repo' };
+    await writeFile(
+      join(tmpDir, '.daemon', 'mergeable-watch.jsonl'),
+      JSON.stringify(legacyEntry) + '\n',
+    );
+    const read = await readWatch(tmpDir);
+    expect(read).toHaveLength(1);
+    // Entry should be normalized with zero defaults
+    expect(read[0].ciFixAttempts).toBe(0);
+    expect(read[0].lastCiFixAt).toBeUndefined();
+    // Round-trip through rewriteWatch
+    await rewriteWatch(tmpDir, read);
+    const reread = await readWatch(tmpDir);
+    expect(reread).toHaveLength(1);
+    // After round-trip, ciFixAttempts should still be 0 and lastCiFixAt should still be undefined
+    expect(reread[0].ciFixAttempts).toBe(0);
+    expect(reread[0].lastCiFixAt).toBeUndefined();
   });
 });
 
