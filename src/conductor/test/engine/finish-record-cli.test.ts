@@ -613,4 +613,21 @@ describe('engine/finish-record-cli', () => {
       expect(src).toMatch(/headPushedToUpstream/);
     });
   });
+
+  describe('index.ts CLI dispatch wiring', () => {
+    it('detects `finish-record` (no flags) as a guide dispatch via the same detector index.ts uses', () => {
+      expect(detectFinishRecordCommand(['node', 'conduct-ts', 'finish-record'])).toEqual({
+        kind: 'guide',
+      });
+    });
+
+    it('index.ts imports and dispatches detectFinishRecordCommand/dispatchFinishRecord adjacent to shipped-record', async () => {
+      const src = await readFile(new URL('../../src/index.ts', import.meta.url), 'utf8');
+      expect(src).toMatch(
+        /import\s*\{\s*detectFinishRecordCommand,\s*dispatchFinishRecord\s*\}\s*from\s*['"]\.\/engine\/finish-record-cli\.js['"]/,
+      );
+      expect(src).toMatch(/detectFinishRecordCommand\(process\.argv\)/);
+      expect(src).toMatch(/dispatchFinishRecord\(finishRecordCmd, process\.cwd\(\)\)/);
+    });
+  });
 });

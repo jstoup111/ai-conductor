@@ -64,6 +64,7 @@ import {
   detectShippedRecordCommand,
   dispatchShippedRecord,
 } from './engine/shipped-record-cli.js';
+import { detectFinishRecordCommand, dispatchFinishRecord } from './engine/finish-record-cli.js';
 import {
   detectDeriveFeedbackCommand,
   dispatchDeriveFeedback,
@@ -325,6 +326,18 @@ async function main(): Promise<void> {
   const shippedRecordCmd = detectShippedRecordCommand(process.argv);
   if (shippedRecordCmd) {
     const code = await dispatchShippedRecord(shippedRecordCmd, process.cwd());
+    process.exit(code);
+  }
+
+  // Finish-record subcommand (`finish-record --choice <pr|keep> [--pr-url
+  // <url>] --pipeline-dir <dir>`) runs NON-INTERACTIVELY and exits — records
+  // the operator's /finish choice (pr_url into conduct-state.json + the
+  // finish-choice marker) so the daemon's finish step stops failing try 1 on
+  // every ship. Detected before the pipeline fallthrough, mirroring the
+  // shipped-record dispatch pattern.
+  const finishRecordCmd = detectFinishRecordCommand(process.argv);
+  if (finishRecordCmd) {
+    const code = await dispatchFinishRecord(finishRecordCmd, process.cwd());
     process.exit(code);
   }
 
