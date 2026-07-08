@@ -255,12 +255,15 @@ describe('daemon-stale-respawn-e2e — #353 capstone (TR-2/TR-3/TR-4)', () => {
         });
 
         // Single-generation invariant (ADR Decisions 1 + 2): exactly one fire,
-        // the loop breaks instead of polling on. Session-hosted mode does NOT
-        // exit (supervisor handles restart), but requestRestart returns { fired: true }
-        // which signals the loop to stop with stopReason 'engine_restart'.
+        // the loop breaks instead of polling on. ADR Decision item 1: predecessor
+        // must terminate unconditionally on FIRED trigger, so process.exit(0) and
+        // lock.releaseSync() ARE called. In tests with mocked process.exit, the
+        // function still returns { fired: true } (after calling exit) which signals
+        // the loop to stop with stopReason 'engine_restart'. In production,
+        // process.exit(0) terminates before the return.
         expect(triggerSelfRestart).toHaveBeenCalledTimes(1);
-        expect(mockProcess.exit).not.toHaveBeenCalled(); // Session-hosted: no exit
-        expect(mockLock.releaseSync).not.toHaveBeenCalled(); // Session-hosted: no lock release
+        expect(mockProcess.exit).toHaveBeenCalledWith(0); // ADR: predecessor exits on FIRED
+        expect(mockLock.releaseSync).toHaveBeenCalled(); // ADR: predecessor releases lock on FIRED
         expect(res.stoppedReason).toBe('engine_restart');
       },
     );

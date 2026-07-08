@@ -242,13 +242,17 @@ export function stripAnsi(s: string): string {
  * Task 4: RestartRequester accepts injected relink + trigger; session-hosted happy ordering
  * Task 5: Handle relink failure with abort-alive semantics in session-hosted mode
  *
+ * ADR-2026-07-07-single-generation-stale-respawn Decision item 1:
+ * Predecessor must terminate unconditionally on FIRED trigger.
+ *
  * Create a RestartRequester that implements two flows:
  *
  * Session-hosted mode (triggerSelfRestart provided):
  *   1. Call relink (if provided)
  *   2. Write restart marker
  *   3. Call triggerSelfRestart
- *   4. Do NOT call lock.releaseSync() or process.exit()
+ *   4. On success (fired): Release lock and exit(0) — predecessor terminates unconditionally
+ *   5. On error: Stay alive, don't release lock, don't exit (abort-alive)
  *
  * Headless mode (triggerSelfRestart not provided):
  *   1. Call relink (if provided)

@@ -896,7 +896,7 @@ describe('Task 4 (RED) — RestartRequester returns { fired: boolean }', () => {
    *
    * Setup: relink succeeds, trigger succeeds, marker write succeeds
    * Expected: resolves with { fired: true }
-   * Verified: exit and lock release NOT called (supervisor handles restart)
+   * Verified: exit and lock release ARE called (ADR: predecessor terminates on FIRED trigger)
    */
   it('RED: returns { fired: true } on session-hosted success', async () => {
     const { createRestartRequester } = await import('../../src/daemon-cli.js');
@@ -904,14 +904,14 @@ describe('Task 4 (RED) — RestartRequester returns { fired: boolean }', () => {
     const mockRelink = vi.fn(async () => {});
     const mockTriggerSelfRestart = vi.fn(async () => {});
 
-    let exitCalled = false;
+    let exitCode: number | undefined;
     const mockLock = {
       releaseSync: vi.fn(),
     };
 
     const mockProcess = {
       exit: (code: number) => {
-        exitCalled = true;
+        exitCode = code;
         // RED phase: do NOT throw, allow function to return
       },
     } as unknown as NodeJS.Process;
@@ -931,9 +931,9 @@ describe('Task 4 (RED) — RestartRequester returns { fired: boolean }', () => {
 
     // RED: Assert return type is { fired: boolean }
     expect(result).toEqual({ fired: true });
-    // Verify exit and lock release were NOT called (supervisor handles restart)
-    expect(exitCalled).toBe(false);
-    expect(mockLock.releaseSync).not.toHaveBeenCalled();
+    // Verify exit and lock release WERE called (ADR: predecessor exits on FIRED trigger)
+    expect(exitCode).toBe(0);
+    expect(mockLock.releaseSync).toHaveBeenCalled();
     // Verify relink and trigger were called
     expect(mockRelink).toHaveBeenCalled();
     expect(mockTriggerSelfRestart).toHaveBeenCalled();
