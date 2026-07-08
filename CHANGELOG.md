@@ -10,6 +10,14 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ## [Unreleased]
 
+### Added
+
+- CLAUDE.md "Design Principles" section codifying deterministic-first design:
+  machinery (engine code, git hooks, gates) wherever possible, LLM agents only
+  for steps that genuinely need judgement; repeated agent rule violations get
+  fixed with enforcement at the point of violation, not stronger prompts
+  (precedents: #426, #433, the H6/H7 evidence gate).
+
 ### Fixed
 
 - Build evidence gate's path corroboration now sources each task's expected
