@@ -974,33 +974,134 @@ export function parsePlanTasks(text: string): Map<string, PlanTask> {
   return result;
 }
 
+// A task's **Files:** line is the authoritative declaration of which paths
+// corroborate its commits (#424). Plans write these as plain text (no
+// backticks) with `;`/`,` separators, and use `same` / `same as Task N`
+// shorthand to inherit an earlier task's set. Matches `**Files:**`,
+// `**Files**:`, and `**Files likely touched:**`, with an optional list bullet.
+const FILES_LINE = /^\s*(?:[-*]\s+)?\*\*Files(?:\s+[^*]*?)?\s*:?\s*\*\*\s*:?\s*(.*)$/i;
+
+/** Path-looking tokens from a **Files:** line (plain text or backticked). */
+function extractFilesLinePaths(rest: string): string[] {
+  const paths: string[] = [];
+  for (const raw of rest.replace(/`/g, ' ').split(/[;,\s]+/)) {
+    const token = raw.trim();
+    if (!token) continue;
+    if (!PATH_EXTENSIONS.test(token) && !token.includes('/')) continue;
+    const normalized = token.replace(/^\.\//, '');
+    if (!normalized || normalized.startsWith('-')) continue;
+    if (!paths.includes(normalized)) paths.push(normalized);
+  }
+  return paths;
+}
+
 export function parsePlanTaskPaths(text: string): Map<string, Set<string>> {
-  const result = new Map<string, Set<string>>();
-  const lines = text.split('\n');
-  let currentTaskIds: string[] = [];
+  interface TaskSection {
+    ids: string[];
+    filesPaths: Set<string>; // declared on **Files:** lines
+    sameRef: string | null; // 'prev' or an explicit task id to inherit from
+    hasFilesLine: boolean;
+    prosePaths: Set<string>; // legacy whole-section backtick scan
+  }
+  const sections: TaskSection[] = [];
+  let current: TaskSection | null = null;
+  // True while consuming list-item lines that continue a **Files:** header
+  // whose paths are written as bullets beneath it (the plan skill's template
+  // form: `**Files likely touched:**` followed by `- path — what changes`).
+  let inFilesBlock = false;
 
   // Match task headers and extract task ids (supports comma-separated ids, ranges like 1-3 for numeric)
   // Pattern allows: Task 1-3, rem-adr-001, 1.2: or Task 1-3, rem-adr-001, 1.2
   const taskHeader = /^#{1,6}\s+Task\s+([A-Za-z0-9._,\s-]+?)(?::|$)/;
+  const sameShorthand = new RegExp(`^same(?:\\s+as\\s+task\\s+(${TASK_ID_PATTERN}))?\\b`, 'i');
 
-  for (const line of lines) {
+  for (const line of text.split('\n')) {
     const headerMatch = line.match(taskHeader);
     if (headerMatch) {
-      currentTaskIds = expandTaskIds(headerMatch[1]);
-      for (const id of currentTaskIds) {
-        if (!result.has(id)) result.set(id, new Set());
+      current = {
+        ids: expandTaskIds(headerMatch[1]),
+        filesPaths: new Set(),
+        sameRef: null,
+        hasFilesLine: false,
+        prosePaths: new Set(),
+      };
+      sections.push(current);
+      inFilesBlock = false;
+      continue;
+    }
+    if (!current) continue;
+
+    const filesMatch = line.match(FILES_LINE);
+    if (filesMatch) {
+      current.hasFilesLine = true;
+      inFilesBlock = true;
+      const rest = filesMatch[1].trim();
+      const same = rest.match(sameShorthand);
+      if (same) {
+        current.sameRef = same[1] ?? 'prev';
+      } else if (!/^(?:none|n\/a)\b/i.test(rest)) {
+        for (const p of extractFilesLinePaths(rest)) current.filesPaths.add(p);
       }
       continue;
     }
-    if (currentTaskIds.length === 0) continue;
+
+    if (inFilesBlock) {
+      const bullet = line.match(/^\s*[-*]\s+(.*)$/);
+      if (bullet) {
+        for (const p of extractFilesLinePaths(bullet[1])) current.filesPaths.add(p);
+        continue;
+      }
+      inFilesBlock = false;
+    }
+
+    // Legacy fallback source: backtick tokens anywhere in the section. Only
+    // used when the section has no **Files:** line — Steps prose routinely
+    // backticks module-import strings and runtime artifacts that must not
+    // become required corroboration paths (#424).
     let m: RegExpExecArray | null;
     while ((m = BACKTICK_TOKEN.exec(line)) !== null) {
       const token = m[1];
       if (!PATH_EXTENSIONS.test(token) && !token.includes('/')) continue;
       const normalized = token.replace(/^\.\//, '');
       if (!normalized || normalized.startsWith('-')) continue;
-      for (const id of currentTaskIds) {
-        result.get(id)!.add(normalized);
+      current.prosePaths.add(normalized);
+    }
+  }
+
+  // Resolve in document order so `same` chains (1 ← 2 ← 3) terminate at the
+  // last explicit set. An unresolvable `same` (no predecessor / unknown id)
+  // resolves empty — trailer-alone corroboration, same as `none`.
+  const result = new Map<string, Set<string>>();
+  const resolvedBySection: Set<string>[] = [];
+  for (let i = 0; i < sections.length; i++) {
+    const s = sections[i];
+    let resolved: Set<string>;
+    if (s.hasFilesLine) {
+      resolved = new Set(s.filesPaths);
+      if (s.sameRef) {
+        let inherited: Set<string> | undefined;
+        if (s.sameRef === 'prev') {
+          inherited = resolvedBySection[i - 1];
+        } else {
+          for (let j = i - 1; j >= 0; j--) {
+            if (sections[j].ids.includes(s.sameRef)) {
+              inherited = resolvedBySection[j];
+              break;
+            }
+          }
+        }
+        for (const p of inherited ?? []) resolved.add(p);
+      }
+    } else {
+      resolved = s.prosePaths;
+    }
+    resolvedBySection.push(resolved);
+    for (const id of s.ids) {
+      const existing = result.get(id);
+      if (existing) {
+        for (const p of resolved) existing.add(p);
+      } else {
+        result.set(id, new Set(resolved));
       }
     }
   }

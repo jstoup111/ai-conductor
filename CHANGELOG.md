@@ -12,6 +12,16 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- Build evidence gate's path corroboration now sources each task's expected
+  paths from its `**Files:**` line (#424) instead of scanning the whole task
+  section for backtick tokens. Plain-text and backticked paths (`;`/`,`
+  separated), template-form bullets under `**Files likely touched:**`, the
+  `same` / `same as Task N` inheritance shorthand, and `none` (trailer-alone)
+  all resolve correctly; stray backtick tokens in Steps prose (module-import
+  strings, runtime artifact names) no longer become required corroboration
+  paths that false-halt builds with correct commits. Tasks without a Files
+  line keep the legacy whole-section scan (remediation-append blocks are
+  unaffected).
 - Build evidence gate's path corroboration no longer rejects real evidence when
   plans declare "Files likely touched" as basenames or partial paths (#425):
   commit files now match plan paths exactly OR by `/`-segment-anchored suffix
