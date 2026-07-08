@@ -1003,6 +1003,16 @@ frontmatter is now ignored (locked to `gating`).
   missing/empty audit trail despite executed steps must be reported INCOMPLETE rather than read
   as a clean run, and keeps raw `.pipeline/events.jsonl` as the retry-escalation source for Part
   C (issue #328, Story 7).
+- New `conduct-ts finish-record --choice pr|keep [--pr-url <url>] --pipeline-dir
+  <abs-path>` subcommand: the only supported way to record a finish outcome
+  (`.pipeline/finish-choice` marker, and for `pr`, `pr_url` in
+  `conduct-state.json`). Fail-closed — any gate failure (unverifiable PR,
+  unpushed `HEAD`, corrupt state, bad/missing flags) exits 1 with **no
+  writes**. Fixes the bug where the daemon's auto-mode finish step exited
+  without ever writing `.pipeline/finish-choice`, permanently stalling the
+  gate on try 1 of every ship. Invoked by `engine/step-runners.ts` in
+  daemon auto mode, and also runnable manually. See `src/conductor/README.md`
+  for the full flag reference.
 
 ## Migration
 

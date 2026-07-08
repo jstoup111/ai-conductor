@@ -158,6 +158,27 @@ at a time) so the live session shows exactly the feature building — `--concurr
 above 1 is clamped to 1 with a logged note (real concurrency is out of scope; see
 `.docs/plans/2026-06-29-daemon-tmux-supervisor.md`).
 
+**Finish-choice recording (`finish-record`).** The daemon's auto-mode finish step
+records its outcome by shelling out to a dedicated subcommand rather than writing
+`.pipeline/finish-choice` by hand:
+
+```bash
+conduct-ts finish-record --choice pr --pr-url <url> --pipeline-dir <abs-path>
+conduct-ts finish-record --choice keep --pipeline-dir <abs-path>
+```
+
+- `--choice pr|keep` — `pr` (requires `--pr-url <url>`) verifies the PR exists and
+  that `HEAD` was pushed before recording `pr_url` into `conduct-state.json` and
+  writing the marker; `keep` writes the marker only.
+- `--pipeline-dir <abs-path>` is required and must be an absolute, existing
+  directory.
+- **Fail-closed:** any gate failure (bad flags, unverifiable PR, unpushed `HEAD`,
+  corrupt state, etc.) exits 1 and writes nothing.
+
+It's invoked by the daemon's auto-mode finish step (`src/conductor/src/engine/step-runners.ts`)
+and can also be run manually in place of hand-editing the marker. See
+`src/conductor/README.md` for full detail.
+
 ### Priority scheduling for issue-labeled backlog items
 
 When a GitHub issue is labeled with priority metadata, the daemon orders eligible
