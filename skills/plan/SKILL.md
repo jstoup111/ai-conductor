@@ -71,6 +71,11 @@ Break stories into tasks at **2-5 minute granularity**. Each task follows the TD
 **Files likely touched:**
 - [file path] — [what changes]
 
+Write file paths **repo-relative** (e.g. `src/conductor/src/engine/foo.ts`, not
+`foo.ts`): the build evidence gate corroborates each task's commits against these
+paths. Basename/suffix forms are tolerated (matched at `/` boundaries, #425), but
+repo-relative paths corroborate precisely and never collide.
+
 **Dependencies:** [Task N that must complete first, or "none"]
 ```
 

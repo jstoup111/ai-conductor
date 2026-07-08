@@ -12,6 +12,15 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- Build evidence gate's path corroboration no longer rejects real evidence when
+  plans declare "Files likely touched" as basenames or partial paths (#425):
+  commit files now match plan paths exactly OR by `/`-segment-anchored suffix
+  (`push-evidence.ts` matches `src/conductor/src/engine/push-evidence.ts`;
+  `trail.ts` never matches `audit-trail.ts`). One helper backs all three
+  overlap sites. The plan skill now also instructs repo-relative paths.
+
+### Fixed
+
 - Derive diagnostics no longer flood the daemon pane (#405): the autoheal
   path-corroboration near-miss and pinned-stamp demotion-prevention notices
   now warn once per (task, commit) per daemon run instead of on every
