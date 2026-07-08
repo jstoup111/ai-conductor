@@ -8,6 +8,10 @@
  */
 
 import type { GhRunner } from './pr-labels.js';
+import type { WatchEntry } from './mergeable-sweep.js';
+import type { PrMergeState } from './pr-labels.js';
+import type { HarnessConfig } from '../types/config.js';
+import { logOutcome } from './autoresolve.js';
 
 /**
  * Build a RETRY hint from failing checks and their logs.
@@ -97,4 +101,94 @@ export async function buildCiFixHint(
     // If gh call fails, return empty hint
     return '';
   }
+}
+
+/**
+ * Result of eligibility check. When `eligible` is false, `reason` explains why.
+ */
+export interface EligibilityResult {
+  eligible: boolean;
+  reason?: string;
+}
+
+/**
+ * Determine if a PR is eligible for CI fix dispatch.
+ *
+ * Checks all eligibility gates in this order:
+ *   1. Attempts < 2 (cap gate)
+ *   2. PR does not have needs-remediation label (sticky)
+ *   3. PR mergeable !== 'CONFLICTING' (conflict resolution takes precedence)
+ *
+ * Each rejection is logged with a reason. The function returns early on the
+ * first rejection for efficiency.
+ *
+ * Story: Task 13 negative-path (cap reached → no dispatch; needs-remediation
+ * suppression; CONFLICTING → skip, no burn)
+ *
+ * @param entry The watch entry for this PR
+ * @param prState The current PR merge state (from gh)
+ * @param cfg The harness configuration (may be undefined)
+ * @param now The current timestamp for any time-based checks
+ * @param logger Optional logging function (default: console.log). When the PR
+ *               is deemed ineligible, one `skipped(<reason>)` outcome line
+ *               is emitted via {@link logOutcome}.
+ */
+export async function isEligibleForCiFix(
+  entry: WatchEntry,
+  prState: PrMergeState,
+  cfg: HarnessConfig | undefined,
+  now: Date,
+  logger?: (msg: string) => void,
+): Promise<EligibilityResult> {
+  const result = await evaluateEligibilityGates(entry, prState, cfg, now);
+
+  if (!result.eligible) {
+    const log = logger ?? console.log;
+    logOutcome(log, entry.prUrl, 'eligibility', `skipped(${result.reason})`);
+  }
+
+  return result;
+}
+
+/**
+ * Evaluate the eligibility gates without any logging side effect. Extracted
+ * from {@link isEligibleForCiFix} so the outcome line is emitted exactly
+ * once, at the single call site, regardless of which gate rejected the PR.
+ */
+async function evaluateEligibilityGates(
+  entry: WatchEntry,
+  prState: PrMergeState,
+  cfg: HarnessConfig | undefined,
+  now: Date,
+): Promise<EligibilityResult> {
+  // Gate 1: Attempts < 2 (cap gate)
+  // Task 13: cap reached → ineligible, no counter change
+  const attemptCap = 2;
+  if ((entry.ciFixAttempts ?? 0) >= attemptCap) {
+    return {
+      eligible: false,
+      reason: `attempt limit reached: ${entry.ciFixAttempts ?? 0} >= ${attemptCap} (cap)`,
+    };
+  }
+
+  // Gate 2: No needs-remediation label (sticky)
+  // Task 13: needs-remediation present → ineligible (sticky escalation)
+  if (prState.labels.includes('needs-remediation')) {
+    return {
+      eligible: false,
+      reason: `PR has needs-remediation label (sticky)`,
+    };
+  }
+
+  // Gate 3: Mergeable !== 'CONFLICTING' (conflict resolution takes precedence)
+  // Task 13: CONFLICTING → ineligible (conflict-precedence)
+  if (prState.mergeable === 'CONFLICTING') {
+    return {
+      eligible: false,
+      reason: `PR mergeable is CONFLICTING; conflict resolution takes precedence (conflict-precedence)`,
+    };
+  }
+
+  // All gates passed
+  return { eligible: true };
 }
