@@ -302,6 +302,20 @@ describe('gate-writeback (Task 17)', () => {
       expect(logs.some((m) => m.includes('nothing to announce for gated spec') && m.includes('(no PR)'))).toBe(true);
     });
 
+    it('NP-4b: without a warnedSkips set, repeated no-PR skips log on every call (no dedup)', async () => {
+      const { gh, calls } = fakeGh([]);
+      const logs: string[] = [];
+
+      await announceGatedPr(SPEC, '', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m) });
+      await announceGatedPr(SPEC, '', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m) });
+
+      expect(calls.length).toBe(0);
+      const gateLines = logs.filter((m) => m.startsWith('[gate-writeback]'));
+      expect(gateLines.length).toBe(2);
+      expect(gateLines[0]).toContain(`nothing to announce for gated spec "${SPEC.slug}" (no PR)`);
+      expect(gateLines[1]).toContain(`nothing to announce for gated spec "${SPEC.slug}" (no PR)`);
+    });
+
     it('NP-6: repeated no-PR skips for the same slug are deduped to one log line via a shared warnedSkips set', async () => {
       const { gh, calls } = fakeGh([]);
       const logs: string[] = [];
