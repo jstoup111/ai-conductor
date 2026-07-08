@@ -202,15 +202,38 @@ Wait for the user to choose. Do not assume.
 `--auto`, do NOT prompt — decide deterministically and **act** (do not merely
 describe the choice):
 - If the repo has a configured git remote and `gh` is authenticated → **Option 2:
-  Push & PR** (never merge). Record `pr_url` in `.pipeline/conduct-state.json`.
-  **Before writing `finish-choice=pr`, verify using the §5 Option 2 STOP gate** — if
-  the push did not land or the PR does not exist, do NOT write the markers; halt
-  for human review.
+  Push & PR** (never merge). **Before recording**, verify using the §5 Option 2
+  STOP gate — if the push did not land or the PR does not exist, do NOT run
+  `finish-record`; halt for human review.
 - Otherwise (no remote, or `gh` unavailable/unauthenticated) → **Option 3: Keep
   as-is** — leave the work committed on the branch.
 
-In both cases write the corresponding value to `.pipeline/finish-choice`. The
-conductor's finish completion gate (artifacts.ts) requires a fresh
+**The final act in auto mode is always `conduct-ts finish-record`** — it is the
+single source of truth for the `.pipeline/finish-choice` marker and (for `pr`)
+`state.pr_url`; do not hand-write these files yourself in auto mode. Use the
+absolute pipeline directory supplied in the step's system prompt:
+
+- PR variant (after the §5 Option 2 STOP gate passes):
+  ```
+  conduct-ts finish-record --choice pr --pr-url <PR_URL> --pipeline-dir /abs/path/to/.pipeline
+  ```
+- Keep variant (no remote, or `gh` unavailable/unauthenticated):
+  ```
+  conduct-ts finish-record --choice keep --pipeline-dir /abs/path/to/.pipeline
+  ```
+
+`finish-record` itself re-verifies the PR exists and that HEAD was pushed
+before writing anything — so it is safe to run as the terminal step even if
+your own verification was imperfect; it fails closed (exit 1, nothing
+written) rather than recording a false completion.
+
+**Refusal contract:** any gate above (GATE 0, fresh-verification failures, push
+staleness/lease failures, the §5 Option 2 STOP gate) that says STOP means do
+NOT run `conduct-ts finish-record` in that pass — an absent `finish-choice`
+marker IS the refusal signal the conductor watches for. Never write the marker
+by hand to paper over a blocked gate.
+
+The conductor's finish completion gate (artifacts.ts) requires a fresh
 `.pipeline/finish-choice` (and, for `pr`, `state.pr_url`); without it the
 feature is left "complete-but-unshipped" and the loop stalls.
 
@@ -229,15 +252,28 @@ exists, reuse it (`gh pr view --json url -q .url`) rather than failing.
 After executing any choice, **record the outcome** so the conductor's
 completion gate can verify the step actually did something:
 
-- **Always**: write the chosen option to `.pipeline/finish-choice` as one of
-  the literal strings `pr`, `merge-local`, `keep`, or `discard`.
-- **Option 2 (PR) only**: also write the resulting PR URL to
-  `.pipeline/conduct-state.json` as `pr_url` (the conductor will pick it up
-  from there; if the underlying `/pr` skill prints the URL to stdout the
-  conductor can also scrape it).
+- **Auto mode (`pr` or `keep`)**: the outcome MUST be recorded by running
+  `conduct-ts finish-record --choice <pr|keep> [--pr-url <url>] --pipeline-dir
+  /abs/path/to/.pipeline` (see §4) — this is the final act, and it writes both
+  `.pipeline/finish-choice` and, for `pr`, `state.pr_url` atomically after
+  re-verifying the PR/push. Do NOT hand-write these files yourself when
+  running auto/unattended.
+- **Interactive mode (Options 1–4, user chose manually)**: marker semantics
+  are unchanged — write the outcome by hand as described below:
+  - **Always**: write the chosen option to `.pipeline/finish-choice` as one of
+    the literal strings `pr`, `merge-local`, `keep`, or `discard`.
+  - **Option 2 (PR) only**: also write the resulting PR URL to
+    `.pipeline/conduct-state.json` as `pr_url` (the conductor will pick it up
+    from there; if the underlying `/pr` skill prints the URL to stdout the
+    conductor can also scrape it).
 
 Without one of these, the conductor will treat the step as failed and re-run
 it, even if the skill itself reports success.
+
+**Refusal contract:** if any gate blocked before reaching this step (see the
+refusal contract in §4), do NOT write `finish-choice` by hand and do NOT run
+`finish-record` — the absent marker is itself the refusal signal the
+conductor reads.
 
 **Option 1: Merge locally**
 - **Shipped record (before the merge):** on the feature branch, run
