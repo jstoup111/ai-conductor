@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { parseDirtyStatus, enumerateCandidates } from '../../src/engine/leak-triage.js';
+import { parseDirtyStatus, enumerateCandidates, classifyModifiedFiles } from '../../src/engine/leak-triage.js';
 import { makeGitRunner, type GitRunner } from '../../src/engine/rebase.js';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -180,6 +180,162 @@ M  src/file2.ts
 
       const result = await enumerateCandidates(git);
       expect(result).toEqual(['feat/daemon-x']);
+    });
+  });
+
+  describe('classifyModifiedFiles', () => {
+    let tempDir: string;
+    let git: GitRunner;
+
+    beforeEach(async () => {
+      // Create a temporary directory for the test repo
+      tempDir = await mkdtemp(join(tmpdir(), 'leak-triage-classify-test-'));
+      git = makeGitRunner(tempDir);
+
+      // Initialize a git repo with a main branch
+      await git(['init']);
+      await git(['config', 'user.email', 'test@example.com']);
+      await git(['config', 'user.name', 'Test User']);
+
+      // Create an initial commit on main
+      await git(['commit', '--allow-empty', '-m', 'Initial commit']);
+    });
+
+    afterEach(async () => {
+      // Clean up the temporary directory
+      await rm(tempDir, { recursive: true, force: true });
+    });
+
+    it('classifies a modified file as explained by a candidate branch when byte-identical', async () => {
+      // Create a feature branch with a file
+      await git(['checkout', '-b', 'feat/daemon-x']);
+      await mkdir(join(tempDir, 'src'), { recursive: true });
+      const filePath = join(tempDir, 'src', 'a.ts');
+      await writeFile(filePath, 'export const greeting = "hello world";', 'utf-8');
+      await git(['add', 'src/a.ts']);
+      await git(['commit', '-m', 'Add src/a.ts on feat/daemon-x']);
+
+      // Switch back to main and modify the file to match feat/daemon-x
+      await git(['checkout', 'main']);
+      await mkdir(join(tempDir, 'src'), { recursive: true });
+      await writeFile(filePath, 'export const greeting = "hello world";', 'utf-8');
+
+      // Classify the modified file
+      const result = await classifyModifiedFiles(git, ['feat/daemon-x'], ['src/a.ts']);
+
+      expect(result).toHaveLength(1);
+      expect(result[0]).toEqual({
+        path: 'src/a.ts',
+        explainedBy: 'feat/daemon-x',
+      });
+    });
+
+    it('returns classification without explainedBy when file content does not match any candidate', async () => {
+      // Create a feature branch with a file
+      await git(['checkout', '-b', 'feat/daemon-x']);
+      await mkdir(join(tempDir, 'src'), { recursive: true });
+      const filePath = join(tempDir, 'src', 'a.ts');
+      await writeFile(filePath, 'export const greeting = "hello world";', 'utf-8');
+      await git(['add', 'src/a.ts']);
+      await git(['commit', '-m', 'Add src/a.ts on feat/daemon-x']);
+
+      // Switch back to main with different content
+      await git(['checkout', 'main']);
+      await mkdir(join(tempDir, 'src'), { recursive: true });
+      await writeFile(filePath, 'export const greeting = "goodbye world";', 'utf-8');
+
+      // Classify the modified file
+      const result = await classifyModifiedFiles(git, ['feat/daemon-x'], ['src/a.ts']);
+
+      expect(result).toHaveLength(1);
+      expect(result[0]).toEqual({
+        path: 'src/a.ts',
+      });
+      expect(result[0].explainedBy).toBeUndefined();
+    });
+
+    it('checks multiple candidate branches in order and returns the first match', async () => {
+      // Create first candidate branch with a file
+      await git(['checkout', '-b', 'feat/daemon-x']);
+      await mkdir(join(tempDir, 'src'), { recursive: true });
+      const filePath = join(tempDir, 'src', 'a.ts');
+      await writeFile(filePath, 'content x', 'utf-8');
+      await git(['add', 'src/a.ts']);
+      await git(['commit', '-m', 'Add src/a.ts with content x']);
+
+      // Create second candidate branch with different content
+      await git(['checkout', 'main']);
+      await git(['checkout', '-b', 'feat/daemon-y']);
+      await mkdir(join(tempDir, 'src'), { recursive: true });
+      await writeFile(filePath, 'content y', 'utf-8');
+      await git(['add', 'src/a.ts']);
+      await git(['commit', '-m', 'Add src/a.ts with content y']);
+
+      // Switch back to main with content from feat/daemon-y
+      await git(['checkout', 'main']);
+      await mkdir(join(tempDir, 'src'), { recursive: true });
+      await writeFile(filePath, 'content y', 'utf-8');
+
+      // Classify with both candidates - should match feat/daemon-y (second in list)
+      const result = await classifyModifiedFiles(git, ['feat/daemon-x', 'feat/daemon-y'], ['src/a.ts']);
+
+      expect(result).toHaveLength(1);
+      expect(result[0]).toEqual({
+        path: 'src/a.ts',
+        explainedBy: 'feat/daemon-y',
+      });
+    });
+
+    it('handles file that does not exist in any candidate branch', async () => {
+      // Create a candidate branch with no src/a.ts
+      await git(['checkout', '-b', 'feat/daemon-x']);
+      await git(['commit', '--allow-empty', '-m', 'Empty commit on feat/daemon-x']);
+
+      // Switch back to main and create a file
+      await git(['checkout', 'main']);
+      await mkdir(join(tempDir, 'src'), { recursive: true });
+      const filePath = join(tempDir, 'src', 'a.ts');
+      await writeFile(filePath, 'export const greeting = "hello";', 'utf-8');
+
+      // Classify the file
+      const result = await classifyModifiedFiles(git, ['feat/daemon-x'], ['src/a.ts']);
+
+      expect(result).toHaveLength(1);
+      expect(result[0]).toEqual({
+        path: 'src/a.ts',
+      });
+      expect(result[0].explainedBy).toBeUndefined();
+    });
+
+    it('classifies multiple files with mixed results', async () => {
+      // Create feature branch with two files
+      await git(['checkout', '-b', 'feat/daemon-x']);
+      await mkdir(join(tempDir, 'src'), { recursive: true });
+      const file1Path = join(tempDir, 'src', 'a.ts');
+      const file2Path = join(tempDir, 'src', 'b.ts');
+      await writeFile(file1Path, 'content a', 'utf-8');
+      await writeFile(file2Path, 'content b', 'utf-8');
+      await git(['add', 'src/a.ts', 'src/b.ts']);
+      await git(['commit', '-m', 'Add files on feat/daemon-x']);
+
+      // Switch back to main and modify both files
+      await git(['checkout', 'main']);
+      await mkdir(join(tempDir, 'src'), { recursive: true });
+      await writeFile(file1Path, 'content a', 'utf-8'); // Matches feat/daemon-x
+      await writeFile(file2Path, 'different content', 'utf-8'); // Does not match
+
+      // Classify both files
+      const result = await classifyModifiedFiles(git, ['feat/daemon-x'], ['src/a.ts', 'src/b.ts']);
+
+      expect(result).toHaveLength(2);
+      expect(result[0]).toEqual({
+        path: 'src/a.ts',
+        explainedBy: 'feat/daemon-x',
+      });
+      expect(result[1]).toEqual({
+        path: 'src/b.ts',
+      });
+      expect(result[1].explainedBy).toBeUndefined();
     });
   });
 });

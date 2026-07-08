@@ -16,6 +16,13 @@ export interface DirtyStatus {
   untracked: string[];
 }
 
+export interface FileClassification {
+  /** Path to the modified file */
+  path: string;
+  /** Branch that explains this file (if any) */
+  explainedBy?: string;
+}
+
 /**
  * Parse `git status --porcelain` output into a dirty status classification.
  *
@@ -163,4 +170,64 @@ export async function enumerateCandidates(git: GitRunner): Promise<string[]> {
   }
 
   return result;
+}
+
+/**
+ * Classify modified files by comparing their content hash against candidate branches.
+ *
+ * For each modified file, computes its content hash via `git hash-object` and
+ * checks it against each candidate branch via `git rev-parse <branch>:<path>`.
+ * If a match is found, the file is "explained by" that branch.
+ *
+ * This helps identify which edits in the working tree may have leaked from
+ * worktree isolation — files byte-identical to a candidate branch indicate
+ * the source of the leak.
+ *
+ * @param git - GitRunner for executing git commands
+ * @param candidates - List of candidate branch names to check against
+ * @param modifiedFiles - List of file paths that have been modified
+ * @returns Array of classifications, one per modified file, with optional explainedBy
+ */
+export async function classifyModifiedFiles(
+  git: GitRunner,
+  candidates: string[],
+  modifiedFiles: string[],
+): Promise<FileClassification[]> {
+  const classifications: FileClassification[] = [];
+
+  for (const filePath of modifiedFiles) {
+    const classification: FileClassification = { path: filePath };
+
+    // Get the hash of the modified file in the working tree
+    const fileHashResult = await git(['hash-object', filePath]);
+    if (fileHashResult.exitCode !== 0) {
+      // File doesn't exist or can't be hashed, mark as unexplained
+      classifications.push(classification);
+      continue;
+    }
+
+    const fileHash = fileHashResult.stdout.trim();
+    if (!fileHash) {
+      classifications.push(classification);
+      continue;
+    }
+
+    // Check against each candidate branch in order
+    for (const branch of candidates) {
+      // Get the blob hash of the file in the candidate branch
+      const blobResult = await git(['rev-parse', `${branch}:${filePath}`]);
+      if (blobResult.exitCode === 0) {
+        const blobHash = blobResult.stdout.trim();
+        // Compare the hashes
+        if (fileHash === blobHash) {
+          classification.explainedBy = branch;
+          break;
+        }
+      }
+    }
+
+    classifications.push(classification);
+  }
+
+  return classifications;
 }
