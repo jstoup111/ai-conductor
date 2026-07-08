@@ -613,3 +613,26 @@ describe('sweepMergeableLabels — C3: rewrite failure does not propagate', () =
     ).resolves.toBeUndefined();
   });
 });
+
+// ── Task 6: sweep adds ci-failed label on failed rollup (idempotent) ───────
+
+describe('sweepMergeableLabels — Task 6: ci-failed label on failed checks', () => {
+  it('adds ci-failed label to a failed PR without the label', async () => {
+    const { gh, addLabelCalls, ensureLabelCalls } = makeFakeGh({
+      [PR_URL]: prViewJson('OPEN', 'MERGEABLE', [{ status: 'COMPLETED', conclusion: 'FAILURE' }], []),
+    });
+    await enrollWatch(tmpDir, entry());
+    await sweepMergeableLabels({ projectRoot: tmpDir, runGh: gh });
+    expect(ensureLabelCalls).toContainEqual({ name: 'ci-failed', color: 'E8451F' });
+    expect(addLabelCalls).toContainEqual({ prUrl: PR_URL, label: 'ci-failed' });
+  });
+
+  it('does NOT call addLabel when ci-failed is already present on a failed PR', async () => {
+    const { gh, addLabelCalls } = makeFakeGh({
+      [PR_URL]: prViewJson('OPEN', 'MERGEABLE', [{ status: 'COMPLETED', conclusion: 'FAILURE' }], ['ci-failed']),
+    });
+    await enrollWatch(tmpDir, entry());
+    await sweepMergeableLabels({ projectRoot: tmpDir, runGh: gh });
+    expect(addLabelCalls.filter((c) => c.label === 'ci-failed')).toHaveLength(0);
+  });
+});

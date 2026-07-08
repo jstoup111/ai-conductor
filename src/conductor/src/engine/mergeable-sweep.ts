@@ -228,6 +228,15 @@ export async function sweepMergeableLabels({
           continue;
         }
 
+        // Task 6: ci-failed label on failed checks (idempotent)
+        // Add `ci-failed` label when checks outcome is 'failed' and not already present.
+        if (state.checksOutcome === 'failed') {
+          if (!state.labels.includes('ci-failed')) {
+            await ensureLabel(gh, entry.repoCwd, 'ci-failed', 'E8451F', log);
+            await addLabel(gh, entry.repoCwd, entry.prUrl, 'ci-failed', log);
+          }
+        }
+
         // FR-10 / C2: add `mergeable` only when not already present.
         if (isMergeable(state)) {
           if (!state.labels.includes('mergeable')) {
