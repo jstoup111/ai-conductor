@@ -118,6 +118,10 @@ As the loop, I want a FAIL verdict to re-open `build` with the grader's reasons 
 - Given the build agent wipes `.pipeline/task-status.json` during kickback re-entry, when the build gate re-evaluates, then completion is still re-derived (structurally harmless per ADR 2026-07-05) — asserted by an integration test.
 - Given a FAIL verdict, when kickback is processed, then `manual_test` is NOT selectable until `build_review` passes again (stale cascade holds; no skipping past the gate).
 - Given a finish-time rebase resolution changed code and re-opened `build` (rebase-resolution re-verify path), when downstream steps are staled, then `build_review` is in the staled set and must re-pass before `manual_test` — the re-verify target set is `{build, build_review, manual_test}`, not the pre-build_review `{build, manual_test}` enumeration.
+  > **Amended 2026-07-08** by `adr-2026-07-08-post-rebase-gate-first-mechanical-reverify` (#420):
+  > `build`'s membership in that set is now evidence-conditional (mechanical pre-verify first);
+  > `build_review` and `manual_test` remain unconditional, so the guarantee this path protects —
+  > no jump to `manual_test` past a stale `build_review` — is unchanged.
 
 ### Done When
 - [ ] Integration test (fake grader FAIL-tautological): kickback verdict written, retry hints seeded, `build` re-selected, stale cascade asserted.

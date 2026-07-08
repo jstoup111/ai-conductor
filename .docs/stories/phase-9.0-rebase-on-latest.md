@@ -130,6 +130,12 @@ so that an unchanged feature goes straight to its PR without wasted build/test w
 
 **Requirement:** FR-5
 
+> **Amended 2026-07-08** by `adr-2026-07-08-post-rebase-gate-first-mechanical-reverify`
+> (issue #420): the `build` verdict write is now conditional — the gate's mechanical
+> completion predicate is evaluated against the rebased tree first, and `satisfied:false`
+> is written only when it fails. `build_review`/`manual_test` invalidation stays
+> unconditional. The fail-closed re-verify *semantics* of this story are unchanged.
+
 As the daemon, I want a clean rebase that **changed files** to invalidate the downstream gates
 the same way a kickback does, so that I never open a PR that was verified against the old base.
 
