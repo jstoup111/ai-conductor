@@ -350,6 +350,117 @@ describe('engine/finish-record-cli', () => {
     });
   });
 
+  describe('dispatchFinishRecord — ordered marker writes preserve state (happy paths)', () => {
+    let scratchParent: string;
+    let existingAbsDir: string;
+    let passingRunners: FinishRecordRunners;
+
+    beforeEach(async () => {
+      scratchParent = await mkdtemp(join(tmpdir(), 'finish-record-writes-'));
+      existingAbsDir = await mkdtemp(join(scratchParent, 'pipeline-'));
+      passingRunners = {
+        runGh: vi.fn(async () => ({ stdout: 'https://github.com/org/repo/pull/1\n' })),
+        runGit: vi.fn(async (args: string[]) => {
+          if (args[0] === 'rev-parse' && args.includes('@{u}')) {
+            return { stdout: 'refs/remotes/origin/feat\n' };
+          }
+          if (args[0] === 'merge-base') {
+            return { stdout: '' };
+          }
+          throw new Error(`unexpected git args: ${args.join(' ')}`);
+        }),
+      };
+    });
+
+    afterEach(async () => {
+      vi.restoreAllMocks();
+      await rm(scratchParent, { recursive: true, force: true });
+    });
+
+    it('choice=pr preserves pre-existing state fields and adds pr_url', async () => {
+      const statePath = join(existingAbsDir, 'conduct-state.json');
+      const { writeFile } = await import('node:fs/promises');
+      await writeFile(statePath, JSON.stringify({ feature: 'x', session_id: 'y' }, null, 2) + '\n');
+
+      const code = await dispatchFinishRecord(
+        {
+          kind: 'record',
+          choice: 'pr',
+          prUrl: 'https://github.com/org/repo/pull/1',
+          pipelineDir: existingAbsDir,
+        },
+        scratchParent,
+        passingRunners,
+      );
+
+      expect(code).toBe(0);
+      const state = JSON.parse(await readFile(statePath, 'utf-8'));
+      expect(state).toEqual({
+        feature: 'x',
+        session_id: 'y',
+        pr_url: 'https://github.com/org/repo/pull/1',
+      });
+    });
+
+    it('choice=pr writes finish-choice containing exactly the bare choice string', async () => {
+      const code = await dispatchFinishRecord(
+        {
+          kind: 'record',
+          choice: 'pr',
+          prUrl: 'https://github.com/org/repo/pull/1',
+          pipelineDir: existingAbsDir,
+        },
+        scratchParent,
+        passingRunners,
+      );
+
+      expect(code).toBe(0);
+      const marker = await readFile(join(existingAbsDir, 'finish-choice'), 'utf-8');
+      expect(marker.trim()).toBe('pr');
+    });
+
+    it('choice=pr with no pre-existing state file creates one containing pr_url', async () => {
+      const code = await dispatchFinishRecord(
+        {
+          kind: 'record',
+          choice: 'pr',
+          prUrl: 'https://github.com/org/repo/pull/1',
+          pipelineDir: existingAbsDir,
+        },
+        scratchParent,
+        passingRunners,
+      );
+
+      expect(code).toBe(0);
+      const state = JSON.parse(
+        await readFile(join(existingAbsDir, 'conduct-state.json'), 'utf-8'),
+      );
+      expect(state.pr_url).toBe('https://github.com/org/repo/pull/1');
+    });
+
+    it('choice=keep writes only the finish-choice marker (state.json untouched)', async () => {
+      const spyRunners: FinishRecordRunners = {
+        runGh: vi.fn(async () => {
+          throw new Error('runGh must not be called for choice=keep');
+        }),
+        runGit: vi.fn(async () => {
+          throw new Error('runGit must not be called for choice=keep');
+        }),
+      };
+      const code = await dispatchFinishRecord(
+        { kind: 'record', choice: 'keep', pipelineDir: existingAbsDir },
+        scratchParent,
+        spyRunners,
+      );
+
+      expect(code).toBe(0);
+      const marker = await readFile(join(existingAbsDir, 'finish-choice'), 'utf-8');
+      expect(marker.trim()).toBe('keep');
+      const after = await readdir(existingAbsDir);
+      expect(after).not.toContain('conduct-state.json');
+    });
+  });
+
   describe('dispatchFinishRecord — reuses push-evidence module (no local reimplementation)', () => {
     it('imports headPushedToUpstream from ./push-evidence.js instead of reimplementing merge-base logic', async () => {
       const src = await readFile(

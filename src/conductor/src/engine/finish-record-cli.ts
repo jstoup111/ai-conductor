@@ -2,10 +2,11 @@
 // — argv detection for the finish-record subcommand (flag parser copied from
 // shipped-record-cli.ts's `flag` helper).
 
-import { isAbsolute, dirname } from 'node:path';
-import { stat } from 'node:fs/promises';
+import { isAbsolute, dirname, join } from 'node:path';
+import { stat, writeFile } from 'node:fs/promises';
 import { makeProductionGh } from './pr-labels.js';
 import { headPushedToUpstream } from './push-evidence.js';
+import { readState, writeState } from './state.js';
 
 export type FinishRecordDispatch =
   | { kind: 'record'; choice: string; prUrl?: string; pipelineDir: string }
@@ -174,6 +175,23 @@ export async function dispatchFinishRecord(
       return 1;
     }
   }
+
+  // Ordered writes — commit point last. For `pr`, read-modify-write
+  // conduct-state.json (preserving unknown fields, adding pr_url) BEFORE
+  // writing the finish-choice marker; `keep` skips state entirely and
+  // writes the marker only. Task 7 hardens the negative paths (write
+  // failure, corrupt existing state) around this same ordering.
+  const statePath = join(cmd.pipelineDir, 'conduct-state.json');
+  const markerPath = join(cmd.pipelineDir, 'finish-choice');
+
+  if (cmd.choice === 'pr') {
+    const result = await readState(statePath);
+    const state = result.ok ? result.value : {};
+    state.pr_url = cmd.prUrl;
+    await writeState(statePath, state);
+  }
+
+  await writeFile(markerPath, `${cmd.choice}\n`, 'utf-8');
 
   return 0;
 }
