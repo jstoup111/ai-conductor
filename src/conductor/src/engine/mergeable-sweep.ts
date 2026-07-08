@@ -394,9 +394,15 @@ export async function sweepMergeableLabels({
         const idx = survivors.findIndex((s) => s.prUrl === entry.prUrl);
         if (idx >= 0) survivors[idx] = updated;
 
-        const dispatchResult = await ciFix.dispatch(updated);
-        if (dispatchResult?.kind === 'green-verified') {
-          survivors[idx] = { ...updated, ciFixAttempts: 0 };
+        try {
+          const dispatchResult = await ciFix.dispatch(updated);
+          if (dispatchResult?.kind === 'green-verified') {
+            survivors[idx] = { ...updated, ciFixAttempts: 0 };
+          }
+        } catch (err) {
+          // Task 11: dispatch error is logged but not propagated (AC1b)
+          // The bumped counter persists (already written to survivors[idx])
+          log?.(`[mergeable-sweep] ciFix dispatch error: ${err}`);
         }
       }
     }
