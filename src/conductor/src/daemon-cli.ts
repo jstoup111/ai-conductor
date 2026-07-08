@@ -880,7 +880,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   // or aborts the discovery pass that produced the gated list. Runs AFTER the
   // snapshot write (Task 12) so `.daemon/gated.json` is never delayed behind
   // network calls to GitHub.
-  const gatedWritebackDeps = { cwd: projectRoot, log };
+  const gatedWritebackDeps = { cwd: projectRoot, log, warnedSkips: new Set<string>() };
   const announceGated = async (gated: Awaited<ReturnType<typeof discoverBacklog>>['gated']) => {
     for (const entry of gated) {
       if (entry.kind !== 'spec') continue;
