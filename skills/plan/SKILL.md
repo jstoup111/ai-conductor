@@ -74,6 +74,14 @@ Break stories into tasks at **2-5 minute granularity**. Each task follows the TD
 **Dependencies:** [Task N that must complete first, or "none"]
 ```
 
+The `**Files:**` line is authoritative for the build evidence gate: each task's
+commits are corroborated against exactly these paths (#424). Paths may be
+plain text or backticked, `;`/`,` separated, on the line or as bullets under
+it. `same` inherits the previous task's set, `same as Task N` inherits task
+N's, and `none` means the task's commit trailer alone corroborates. Backticked
+file names elsewhere in the task (Steps prose) are only used when no Files
+line exists.
+
 ### 4. Task Ordering Rules
 
 1. **Infrastructure first** — Database migrations, model definitions, route setup
