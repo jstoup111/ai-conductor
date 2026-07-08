@@ -232,7 +232,7 @@ describe('DefaultStepRunner', () => {
   // genuinely created. The auto-finish prompt must direct writes to ABSOLUTE
   // worktree paths derived from pipelineDir.
 
-  it('auto-mode finish prompt uses ABSOLUTE pipelineDir paths for the markers', async () => {
+  it('auto-mode finish prompt uses the ABSOLUTE pipelineDir in the finish-record command', async () => {
     const provider = createMockProvider();
     const runner = new DefaultStepRunner(provider, 'session-1', '/wt/feature-x', {
       mode: 'auto',
@@ -242,13 +242,10 @@ describe('DefaultStepRunner', () => {
     await runner.run('finish', emptyState);
 
     const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
-    expect(opts.systemPrompt).toContain('/wt/feature-x/.pipeline/finish-choice');
-    expect(opts.systemPrompt).toContain('/wt/feature-x/.pipeline/conduct-state.json');
-    // Must not push the marker write to after cleanup.
-    expect(opts.systemPrompt).not.toContain('must be your final action');
+    expect(opts.systemPrompt).toContain('--pipeline-dir /wt/feature-x/.pipeline');
   });
 
-  it('auto-mode finish prompt falls back to relative paths when pipelineDir is unset', async () => {
+  it('auto-mode finish prompt falls back to the relative .pipeline dir when pipelineDir is unset', async () => {
     const provider = createMockProvider();
     const runner = new DefaultStepRunner(provider, 'session-1', '/wt/feature-x', {
       mode: 'auto',
@@ -257,8 +254,79 @@ describe('DefaultStepRunner', () => {
     await runner.run('finish', emptyState);
 
     const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
-    expect(opts.systemPrompt).toContain('`.pipeline/finish-choice`');
-    expect(opts.systemPrompt).not.toContain('/.pipeline/finish-choice');
+    expect(opts.systemPrompt).toContain('--pipeline-dir .pipeline');
+    expect(opts.systemPrompt).not.toContain('--pipeline-dir /.pipeline');
+  });
+
+  // --- Auto-mode finish: prompt ends with the one `finish-record` command ---
+  // The finish skill and engine prompt used to instruct Claude to hand-write
+  // the marker files, which drifted from the real gate contract (finish-record
+  // verifies the PR/push evidence before writing). The auto-mode prompt must
+  // instead end with the single `conduct-ts finish-record` command so the CLI
+  // — not free-form writes — is the source of truth.
+
+  it('auto-mode finish prompt with pipelineDir set contains the finish-record command with absolute --pipeline-dir', async () => {
+    const provider = createMockProvider();
+    const runner = new DefaultStepRunner(provider, 'session-1', '/wt/feature-x', {
+      mode: 'auto',
+      pipelineDir: '/wt/feature-x/.pipeline',
+    });
+
+    await runner.run('finish', emptyState);
+
+    const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    expect(opts.systemPrompt).toContain('conduct-ts finish-record --choice pr --pr-url');
+    expect(opts.systemPrompt).toContain('--pipeline-dir /wt/feature-x/.pipeline');
+    expect(opts.systemPrompt).toContain('conduct-ts finish-record --choice keep --pipeline-dir /wt/feature-x/.pipeline');
+  });
+
+  it('auto-mode finish prompt no longer contains the manual "write the single word" instructions', async () => {
+    const provider = createMockProvider();
+    const runner = new DefaultStepRunner(provider, 'session-1', '/wt/feature-x', {
+      mode: 'auto',
+      pipelineDir: '/wt/feature-x/.pipeline',
+    });
+
+    await runner.run('finish', emptyState);
+
+    const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    expect(opts.systemPrompt).not.toContain('write the single word');
+  });
+
+  it('auto-mode finish prompt without pipelineDir falls back to the relative .pipeline rendering', async () => {
+    const provider = createMockProvider();
+    const runner = new DefaultStepRunner(provider, 'session-1', '/wt/feature-x', {
+      mode: 'auto',
+    });
+
+    await runner.run('finish', emptyState);
+
+    const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    expect(opts.systemPrompt).toContain('conduct-ts finish-record --choice pr --pr-url');
+    expect(opts.systemPrompt).toContain('--pipeline-dir .pipeline');
+    expect(opts.systemPrompt).toContain('conduct-ts finish-record --choice keep --pipeline-dir .pipeline');
+  });
+
+  it('non-auto or non-finish prompts remain unchanged (no finish-record command)', async () => {
+    const provider = createMockProvider();
+    const runner = new DefaultStepRunner(provider, 'session-1', '/wt/feature-x', {
+      totalSteps: 14,
+    });
+
+    // finish, but not auto mode (collaborative path)
+    await runner.run('finish', emptyState);
+    const finishOpts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    expect(finishOpts.systemPrompt).not.toContain('finish-record');
+
+    vi.clearAllMocks();
+
+    const autoRunner = new DefaultStepRunner(provider, 'session-1', '/wt/feature-x', {
+      mode: 'auto',
+      totalSteps: 14,
+    });
+    await autoRunner.run('build', emptyState);
+    const buildOpts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    expect(buildOpts.systemPrompt).not.toContain('finish-record');
   });
 
   // --- Feature 2: Session creation marker ---
