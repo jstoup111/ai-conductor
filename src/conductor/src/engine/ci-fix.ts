@@ -11,7 +11,7 @@ import type { GhRunner } from './pr-labels.js';
 import type { WatchEntry } from './mergeable-sweep.js';
 import type { PrMergeState } from './pr-labels.js';
 import type { HarnessConfig } from '../types/config.js';
-import { logOutcome } from './autoresolve.js';
+import { logOutcome, isResolutionInFlight } from './autoresolve.js';
 
 /**
  * Build a RETRY hint from failing checks and their logs.
@@ -118,12 +118,15 @@ export interface EligibilityResult {
  *   1. Attempts < 2 (cap gate)
  *   2. PR does not have needs-remediation label (sticky)
  *   3. PR mergeable !== 'CONFLICTING' (conflict resolution takes precedence)
+ *   4. No resolution in flight (shared serial guard)
+ *   5. Cooldown elapsed since last CI fix attempt
  *
  * Each rejection is logged with a reason. The function returns early on the
  * first rejection for efficiency.
  *
  * Story: Task 13 negative-path (cap reached → no dispatch; needs-remediation
- * suppression; CONFLICTING → skip, no burn)
+ * suppression; CONFLICTING → skip, no burn); Task 14 negative-path (serial guard,
+ * cooldown)
  *
  * @param entry The watch entry for this PR
  * @param prState The current PR merge state (from gh)
@@ -187,6 +190,32 @@ async function evaluateEligibilityGates(
       eligible: false,
       reason: `PR mergeable is CONFLICTING; conflict resolution takes precedence (conflict-precedence)`,
     };
+  }
+
+  // Gate 4: Shared serial guard (Task 14)
+  // Task 14: any resolution in flight → defer without counter burn (serial)
+  if (isResolutionInFlight()) {
+    return {
+      eligible: false,
+      reason: `resolution already in flight for another PR; serial guard`,
+    };
+  }
+
+  // Gate 5: Cooldown elapsed (Task 14)
+  // Task 14: lastCiFixAt within cooldown → ineligible (cooldown)
+  if (entry.lastCiFixAt) {
+    const lastAttemptTime = new Date(entry.lastCiFixAt);
+    const cooldownMinutes = cfg?.ci_watch?.cooldownMinutes ?? 60;
+    const cooldownMs = cooldownMinutes * 60 * 1000;
+    const elapsedMs = now.getTime() - lastAttemptTime.getTime();
+
+    if (elapsedMs < cooldownMs) {
+      const remainingMinutes = Math.ceil((cooldownMs - elapsedMs) / (60 * 1000));
+      return {
+        eligible: false,
+        reason: `cooldown not elapsed: ${remainingMinutes} minutes remaining (cooldown)`,
+      };
+    }
   }
 
   // All gates passed

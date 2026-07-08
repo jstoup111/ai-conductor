@@ -262,29 +262,40 @@ export async function sweepMergeableLabels({
           conflictingCandidates.push({ entry, state });
         }
 
-        // Task 10 (AC1): track failed PRs for the post-label-pass
-        // ciFix dispatch below. Collected unconditionally (cheap) but
-        // only ever consulted when `ciFix` is configured, so a disabled
-        // config leaves the sweep's observable behavior unchanged (AC4).
-        if (state.checksOutcome === 'failed') {
-          failedCandidates.push({ entry, state });
-        }
-
         // FR-12: if the PR carries `needs-remediation`, ensure `mergeable` is absent.
-        if (state.labels.includes('needs-remediation')) {
+        const hasRemediation = state.labels.includes('needs-remediation');
+        if (hasRemediation) {
           if (state.labels.includes('mergeable')) {
             await removeLabel(gh, entry.repoCwd, entry.prUrl, 'mergeable', log);
           }
-          // Never add `mergeable` when `needs-remediation` is present.
-          continue;
+        } else {
+          // Task 10 (AC1): track failed PRs for the post-label-pass
+          // ciFix dispatch below. Only added when needs-remediation is NOT present
+          // (needs-remediation sticky label takes precedence over CI fix dispatch).
+          // Collected unconditionally (cheap) but only ever consulted when `ciFix`
+          // is configured, so a disabled config leaves the sweep's observable behavior
+          // unchanged (AC4).
+          if (state.checksOutcome === 'failed') {
+            failedCandidates.push({ entry, state });
+          }
         }
 
         // Task 6: ci-failed label on failed checks (idempotent)
         // Add `ci-failed` label when checks outcome is 'failed' and not already present.
+        // This happens regardless of needs-remediation status.
         if (state.checksOutcome === 'failed') {
           if (!state.labels.includes('ci-failed')) {
             await ensureLabel(gh, entry.repoCwd, 'ci-failed', 'E8451F', log);
             await addLabel(gh, entry.repoCwd, entry.prUrl, 'ci-failed', log);
+            // Task 8: emit ci_failed event on label-absent→present transition (detected phase)
+            onEvent?.({
+              type: 'ci_failed',
+              prUrl: entry.prUrl,
+              slug: entry.slug,
+              checks: state.statusCheckRollup?.map((c) => c.name ?? '?').filter(Boolean) ?? [],
+              attempts: (entry.ciFixAttempts ?? 0) + 1,
+              phase: 'detected',
+            });
           }
         }
 
@@ -301,16 +312,18 @@ export async function sweepMergeableLabels({
           }
         }
 
-        // FR-10 / C2: add `mergeable` only when not already present.
-        if (isMergeable(state)) {
-          if (!state.labels.includes('mergeable')) {
-            await ensureLabel(gh, entry.repoCwd, 'mergeable', '0E8A16', log);
-            await addLabel(gh, entry.repoCwd, entry.prUrl, 'mergeable', log);
-          }
-        } else {
-          // FR-11 / C2: remove `mergeable` only when currently present.
-          if (state.labels.includes('mergeable')) {
-            await removeLabel(gh, entry.repoCwd, entry.prUrl, 'mergeable', log);
+        // FR-10 / C2 / FR-12: add/remove `mergeable` only when needs-remediation is absent.
+        if (!hasRemediation) {
+          if (isMergeable(state)) {
+            if (!state.labels.includes('mergeable')) {
+              await ensureLabel(gh, entry.repoCwd, 'mergeable', '0E8A16', log);
+              await addLabel(gh, entry.repoCwd, entry.prUrl, 'mergeable', log);
+            }
+          } else {
+            // FR-11 / C2: remove `mergeable` only when currently present.
+            if (state.labels.includes('mergeable')) {
+              await removeLabel(gh, entry.repoCwd, entry.prUrl, 'mergeable', log);
+            }
           }
         }
       } catch (err) {
@@ -350,6 +363,40 @@ export async function sweepMergeableLabels({
         const dispatchResult = await autoresolve.dispatch(updated);
         if (dispatchResult?.kind === 'refreshed') {
           survivors[idx] = { ...updated, resolveAttempts: 0 };
+        }
+      }
+    }
+
+    // Task 10: after the label pass, dispatch CI fix for the first
+    // eligible failed PR this tick; any further eligible PR is deferred
+    // (AC2). Attempt counter + lastCiFixAt are bumped on the survivor entry
+    // BEFORE dispatch runs any git work (AC3). Entirely skipped when
+    // ciFix is absent or disabled, so the sweep stays byte-identical to
+    // today (AC4).
+    if (ciFix?.enabled) {
+      let dispatched = false;
+      for (const { entry, state } of failedCandidates) {
+        const elig = await ciFix.isEligible(entry, state);
+        if (!elig.eligible) continue;
+
+        if (dispatched) {
+          log?.(`[mergeable-sweep] deferring ${entry.prUrl} (skip reason: in-flight)`);
+          continue;
+        }
+
+        dispatched = true;
+        const now = ciFix.now ? ciFix.now() : new Date();
+        const updated: WatchEntry = {
+          ...entry,
+          ciFixAttempts: (entry.ciFixAttempts ?? 0) + 1,
+          lastCiFixAt: now.toISOString(),
+        };
+        const idx = survivors.findIndex((s) => s.prUrl === entry.prUrl);
+        if (idx >= 0) survivors[idx] = updated;
+
+        const dispatchResult = await ciFix.dispatch(updated);
+        if (dispatchResult?.kind === 'green-verified') {
+          survivors[idx] = { ...updated, ciFixAttempts: 0 };
         }
       }
     }

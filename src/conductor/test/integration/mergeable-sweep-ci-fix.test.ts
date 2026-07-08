@@ -23,6 +23,8 @@ import { tmpdir } from 'os';
 import { enrollWatch, sweepMergeableLabels } from '../../src/engine/mergeable-sweep.js';
 import type { WatchEntry } from '../../src/engine/mergeable-sweep.js';
 import type { GhRunner } from '../../src/engine/pr-labels.js';
+import { isEligibleForCiFix } from '../../src/engine/ci-fix.js';
+import type { PrMergeState } from '../../src/engine/pr-labels.js';
 
 type Check = { status?: string | null; conclusion?: string | null };
 
@@ -309,7 +311,10 @@ describe('mergeable-sweep ci-failed label lifecycle + bounded CI-fix dispatch', 
       // @ts-expect-error ciFix seam not yet on SweepOpts (RED, pre-implementation)
       ciFix: {
         enabled: true,
-        isEligible: async () => ({ eligible: true }),
+        isEligible: async (entry: WatchEntry, state: PrMergeState) => {
+          // Use the actual eligibility check which includes the needs-remediation gate
+          return isEligibleForCiFix(entry, state, {}, new Date());
+        },
         dispatch: async (entry: WatchEntry) => {
           dispatched.push(entry);
         },

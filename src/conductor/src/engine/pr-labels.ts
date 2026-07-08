@@ -197,6 +197,7 @@ export interface PrMergeState {
   hasFailingOrPendingChecks: boolean;
   labels: string[];
   checksOutcome: 'failed' | 'pending' | 'green' | 'none';
+  statusCheckRollup?: Array<{ status?: string | null; conclusion?: string | null; name?: string }>;
 }
 
 /** Safe sentinel returned when the gh runner fails with a transient/unknown error. */
@@ -350,7 +351,7 @@ export async function prMergeState(
       checks.length > 0 && checks.some(isCheckFailingOrPending);
     const labels = (data.labels ?? []).map((l) => l.name ?? '').filter(Boolean);
     const checksOutcome = classifyChecksOutcome(checks);
-    return { state, mergeable, hasFailingOrPendingChecks, labels, checksOutcome };
+    return { state, mergeable, hasFailingOrPendingChecks, labels, checksOutcome, statusCheckRollup: checks };
   } catch (err) {
     log?.(`[pr-labels] prMergeState(${prUrl}) error: ${err}`);
     // Classify the error: a genuinely gone PR returns NOTFOUND so the sweep can

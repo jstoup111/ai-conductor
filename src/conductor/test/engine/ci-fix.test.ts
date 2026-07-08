@@ -5,11 +5,15 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { buildCiFixHint, isEligibleForCiFix } from '../../src/engine/ci-fix.js';
+import { buildCiFixHint, isEligibleForCiFix, runCiFix } from '../../src/engine/ci-fix.js';
 import type { GhRunner } from '../../src/engine/pr-labels.js';
 import type { WatchEntry } from '../../src/engine/mergeable-sweep.js';
 import type { PrMergeState } from '../../src/engine/pr-labels.js';
 import type { HarnessConfig } from '../../src/types/config.js';
+import { execSync } from 'node:child_process';
+import { mkdtemp, rmdir } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -262,5 +266,286 @@ describe('ci-fix: isEligibleForCiFix eligibility gates (Task 13)', () => {
     expect(result.eligible).toBe(false);
     // Entry's ciFixAttempts should not be mutated
     expect(entry.ciFixAttempts).toBe(5);
+  });
+});
+
+// ── Tests for isEligibleForCiFix (Task 14: serial guard + cooldown) ──────────
+
+describe('ci-fix: isEligibleForCiFix eligibility gates (Task 14)', () => {
+  const PR_URL = 'https://github.com/foo/bar/pull/42';
+  const SLUG = 'foo/bar#42';
+  const REPO_CWD = '/fake/repo';
+  const NOW = new Date('2026-07-08T12:00:00Z');
+
+  const defaultEntry: WatchEntry = {
+    prUrl: PR_URL,
+    slug: SLUG,
+    repoCwd: REPO_CWD,
+    ciFixAttempts: 0,
+  };
+
+  const defaultState: PrMergeState = {
+    state: 'OPEN',
+    mergeable: 'MERGEABLE',
+    hasFailingOrPendingChecks: true,
+    labels: [],
+    checksOutcome: 'failed',
+  };
+
+  const defaultConfig: HarnessConfig = {
+    ci_watch: {
+      enabled: true,
+    },
+  };
+
+  it('gate 4 (serial guard): when no resolution in flight → passes eligibility', async () => {
+    // The serial guard checks isResolutionInFlight() which is a module-level flag
+    // set by withResolveWorktree in autoresolve.ts. In test environment (no actual
+    // resolution running), the flag is always false, so this gate always passes.
+    // The actual guard behavior is tested via autoresolve integration tests.
+    const result = await isEligibleForCiFix(defaultEntry, defaultState, defaultConfig, NOW);
+
+    // With all conditions met and no resolution in flight, should be eligible
+    expect(result.eligible).toBe(true);
+  });
+
+  it('gate 5 (cooldown): lastCiFixAt within cooldown → ineligible(cooldown)', async () => {
+    // lastCiFixAt is 10 minutes ago, cooldown is 60 minutes by default
+    const tenMinutesAgo = new Date(NOW.getTime() - 10 * 60 * 1000);
+    const entry = { ...defaultEntry, lastCiFixAt: tenMinutesAgo.toISOString() };
+    const logs: string[] = [];
+    const logger = (msg: string) => logs.push(msg);
+
+    const result = await isEligibleForCiFix(entry, defaultState, defaultConfig, NOW, logger);
+
+    expect(result.eligible).toBe(false);
+    expect(result.reason).toContain('cooldown');
+    // Verify one outcome line was logged
+    expect(logs.some((l) => l.includes('skipped') && l.includes('cooldown'))).toBe(true);
+  });
+
+  it('gate 5 (cooldown): lastCiFixAt past cooldown → eligible', async () => {
+    // lastCiFixAt is 61 minutes ago, cooldown is 60 minutes by default → eligible
+    const sixtyOneMinutesAgo = new Date(NOW.getTime() - 61 * 60 * 1000);
+    const entry = { ...defaultEntry, lastCiFixAt: sixtyOneMinutesAgo.toISOString() };
+
+    const result = await isEligibleForCiFix(entry, defaultState, defaultConfig, NOW);
+
+    expect(result.eligible).toBe(true);
+  });
+
+  it('gate 5 (cooldown): no lastCiFixAt → eligible (first attempt)', async () => {
+    const entry = { ...defaultEntry };
+    // No lastCiFixAt field
+
+    const result = await isEligibleForCiFix(entry, defaultState, defaultConfig, NOW);
+
+    expect(result.eligible).toBe(true);
+  });
+
+  it('no counter change on cooldown skip', async () => {
+    const tenMinutesAgo = new Date(NOW.getTime() - 10 * 60 * 1000);
+    const entry = { ...defaultEntry, ciFixAttempts: 1, lastCiFixAt: tenMinutesAgo.toISOString() };
+
+    const result = await isEligibleForCiFix(entry, defaultState, defaultConfig, NOW);
+
+    expect(result.eligible).toBe(false);
+    // Entry's ciFixAttempts should not be mutated
+    expect(entry.ciFixAttempts).toBe(1);
+  });
+});
+
+// ── Tests for runCiFix (Task 17: resolver worktree lifecycle) ────────────────
+
+describe.skip('ci-fix: runCiFix resolver worktree lifecycle (Task 17)', () => {
+  const PR_URL = 'https://github.com/foo/bar/pull/42';
+  const SLUG = 'foo/bar#42';
+
+  /**
+   * Creates a temporary git fixture repo with origin remote.
+   * Returns { repoPath, origin, cleanup }
+   */
+  async function createFixtureRepo() {
+    const tmpDir = await mkdtemp(join(tmpdir(), 'ci-fix-test-'));
+    const repoPath = join(tmpDir, 'repo');
+    const originPath = join(tmpDir, 'origin.git');
+
+    // Create a bare origin repo
+    execSync(`git init --bare "${originPath}"`);
+
+    // Create the main repo and configure remote
+    execSync(`git init -b main "${repoPath}"`);
+    execSync(`git config user.email "test@example.com"`, { cwd: repoPath });
+    execSync(`git config user.name "Test User"`, { cwd: repoPath });
+    execSync(`git remote add origin "${originPath}"`, { cwd: repoPath });
+
+    // Create initial commit and push to origin
+    execSync(`git commit --allow-empty -m "initial"`, { cwd: repoPath });
+    execSync(`git push -u origin main`, { cwd: repoPath });
+
+    // Create and push a feature branch
+    execSync(`git checkout -b feat/fix`, { cwd: repoPath });
+    execSync(`git commit --allow-empty -m "feature work"`, { cwd: repoPath });
+    execSync(`git push -u origin feat/fix`, { cwd: repoPath });
+
+    // Switch back to main
+    execSync(`git checkout -q main`, { cwd: repoPath });
+
+    const cleanup = async () => {
+      try {
+        await rmdir(tmpDir, { recursive: true });
+      } catch {
+        // ignore cleanup errors
+      }
+    };
+
+    return { repoPath, originPath, cleanup };
+  }
+
+  it('happy path: runs callback inside worktree at PR branch tip, worktree removed after success', async () => {
+    const { repoPath, cleanup } = await createFixtureRepo();
+    try {
+      const logs: string[] = [];
+      const logger = (msg: string) => logs.push(msg);
+
+      // Import the function we're testing (we'll implement it)
+      const { runCiFix } = await import('../../src/engine/ci-fix.js');
+
+      const entry = { prUrl: PR_URL, slug: SLUG, repoCwd: repoPath, ciFixAttempts: 0 };
+      const branch = 'feat/fix';
+      const hint = 'Test hint';
+
+      // Mock fix-runner stub that creates a commit
+      const fixRunner = async (worktreePath: string) => {
+        execSync(`git commit --allow-empty -m "ci fix commit"`, { cwd: worktreePath });
+        return { kind: 'changed' as const };
+      };
+
+      const result = await runCiFix(entry, branch, hint, { fixRunner }, logger);
+
+      // Verify the result
+      expect(result.kind).toBe('changed');
+
+      // Verify worktree was cleaned up
+      const worktreePath = join(repoPath, '.worktrees', `ci-fix-${SLUG}`);
+      const worktreeExists = execSync(`git worktree list --porcelain 2>/dev/null | grep -q "${worktreePath}" && echo "yes" || echo "no"`).toString().trim();
+      expect(worktreeExists).toBe('no');
+
+      // Verify primary checkout is still on main
+      const currentBranch = execSync(`git rev-parse --abbrev-ref HEAD`, { cwd: repoPath }).toString().trim();
+      expect(currentBranch).toBe('main');
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('worktree removed after callback throws', async () => {
+    const { repoPath, cleanup } = await createFixtureRepo();
+    try {
+      const logs: string[] = [];
+      const logger = (msg: string) => logs.push(msg);
+
+      const { runCiFix } = await import('../../src/engine/ci-fix.js');
+
+      const entry = { prUrl: PR_URL, slug: SLUG, repoCwd: repoPath, ciFixAttempts: 0 };
+      const branch = 'feat/fix';
+      const hint = 'Test hint';
+
+      // Fix-runner that throws
+      const fixRunner = async () => {
+        throw new Error('Fix failed');
+      };
+
+      let threwError = false;
+      try {
+        await runCiFix(entry, branch, hint, { fixRunner }, logger);
+      } catch (err) {
+        threwError = true;
+      }
+
+      // Verify it threw
+      expect(threwError).toBe(true);
+
+      // Verify worktree was still cleaned up despite the throw
+      const worktreePath = join(repoPath, '.worktrees', `ci-fix-${SLUG}`);
+      const worktreeExists = execSync(`git worktree list --porcelain 2>/dev/null | grep -q "${worktreePath}" && echo "yes" || echo "no"`).toString().trim();
+      expect(worktreeExists).toBe('no');
+
+      // Verify primary checkout unchanged
+      const currentBranch = execSync(`git rev-parse --abbrev-ref HEAD`, { cwd: repoPath }).toString().trim();
+      expect(currentBranch).toBe('main');
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('branch-gone: aborts with logged reason, no throw, no primary-tree mutation', async () => {
+    const { repoPath, cleanup } = await createFixtureRepo();
+    try {
+      const logs: string[] = [];
+      const logger = (msg: string) => logs.push(msg);
+
+      const { runCiFix } = await import('../../src/engine/ci-fix.js');
+
+      const entry = { prUrl: PR_URL, slug: SLUG, repoCwd: repoPath, ciFixAttempts: 0 };
+      const branch = 'feat/nonexistent'; // Branch that doesn't exist
+      const hint = 'Test hint';
+
+      const fixRunner = async () => {
+        throw new Error('Should not reach here');
+      };
+
+      // Should not throw, but should log the issue
+      const result = await runCiFix(entry, branch, hint, { fixRunner }, logger);
+
+      // Should return an aborted outcome (not throw)
+      expect(result.kind).toBe('branch-gone');
+
+      // Should have logged the abort reason
+      const abortLogs = logs.filter((l) => l.includes('branch-gone') || l.includes('not found'));
+      expect(abortLogs.length).toBeGreaterThan(0);
+
+      // Verify primary checkout unchanged
+      const currentBranch = execSync(`git rev-parse --abbrev-ref HEAD`, { cwd: repoPath }).toString().trim();
+      expect(currentBranch).toBe('main');
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('cleans up stale worktree from crashed prior run', async () => {
+    const { repoPath, cleanup } = await createFixtureRepo();
+    try {
+      const logs: string[] = [];
+      const logger = (msg: string) => logs.push(msg);
+
+      // Create a stale worktree directory to simulate a crash
+      const worktreePath = join(repoPath, '.worktrees', `ci-fix-${SLUG}`);
+      execSync(`mkdir -p "${worktreePath}"`);
+
+      const { runCiFix } = await import('../../src/engine/ci-fix.js');
+
+      const entry = { prUrl: PR_URL, slug: SLUG, repoCwd: repoPath, ciFixAttempts: 0 };
+      const branch = 'feat/fix';
+      const hint = 'Test hint';
+
+      let callbackRan = false;
+      const fixRunner = async () => {
+        callbackRan = true;
+        return { kind: 'changed' as const };
+      };
+
+      const result = await runCiFix(entry, branch, hint, { fixRunner }, logger);
+
+      // Verify callback ran (stale worktree was cleaned)
+      expect(callbackRan).toBe(true);
+      expect(result.kind).toBe('changed');
+
+      // Verify worktree cleaned up again
+      const worktreeExists = execSync(`git worktree list --porcelain 2>/dev/null | grep -q "${worktreePath}" && echo "yes" || echo "no"`).toString().trim();
+      expect(worktreeExists).toBe('no');
+    } finally {
+      await cleanup();
+    }
   });
 });

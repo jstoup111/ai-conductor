@@ -407,4 +407,6 @@ export interface BuildReviewConfig {
 export interface CiWatchConfig {
   /** Enable CI watch and auto-remediation. Default: true (on, fail-safe). */
   enabled?: boolean;
+  /** Polling cooldown in minutes between CI fix attempts. Default: 60. */
+  cooldownMinutes?: number;
 }
