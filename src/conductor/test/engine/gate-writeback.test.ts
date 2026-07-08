@@ -545,7 +545,7 @@ describe('gate-writeback (Task 17)', () => {
       expect(ghCalled).toBe(false);
     });
 
-    it('absent marker (sourceRef undefined) stays silent even with a shared warnedSkips set present — no NEW log lines', async () => {
+    it('absent marker (sourceRef undefined) behaves the same with a shared warnedSkips set present — one skip line, deduped on repeat, zero gh calls', async () => {
       let ghCalled = false;
       const gh: GhRunner = async () => {
         ghCalled = true;
@@ -554,13 +554,17 @@ describe('gate-writeback (Task 17)', () => {
       const logs: string[] = [];
       const warnedSkips = new Set<string>();
 
-      await expect(
-        announceGatedIssue(SPEC, undefined, { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips }),
-      ).resolves.toBeUndefined();
+      await announceGatedIssue(SPEC, undefined, { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips });
+      await announceGatedIssue(SPEC, undefined, { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips });
 
       expect(ghCalled).toBe(false);
-      expect(logs).toHaveLength(0);
-      expect(warnedSkips.size).toBe(0);
+      expect(
+        logs.filter((m) =>
+          m.includes(
+            `nothing to announce on an issue for gated spec "${SPEC.slug}" (no usable Source-Ref, got "") — will retry when one exists`,
+          ),
+        ),
+      ).toHaveLength(1);
     });
 
     it('without a warnedSkips set, repeated malformed Source-Ref skips log on every call (no dedup fallback)', async () => {
