@@ -33,7 +33,7 @@ async function git(args: string[], cwd: string): Promise<string> {
 // ---------------------------------------------------------------------------
 async function makeGitRepo(): Promise<{ repoPath: string; defaultBranch: string }> {
   const repoPath = await mkdtemp(join(tmpdir(), 'authoring-test-'));
-  await execFile('git', ['init', '-q'], { cwd: repoPath });
+  await execFile('git', ['init', '-b', 'main', '-q'], { cwd: repoPath });
   // Set a user so commits work in CI
   await execFile('git', ['config', 'user.email', 'test@test.com'], { cwd: repoPath });
   await execFile('git', ['config', 'user.name', 'Test'], { cwd: repoPath });

@@ -33,7 +33,7 @@ const execFile = promisify(execFileCb);
 async function makeRepo(parent: string, name: string): Promise<string> {
   const repoPath = join(parent, name);
   await mkdir(repoPath, { recursive: true });
-  await execFile('git', ['init', '-q'], { cwd: repoPath });
+  await execFile('git', ['init', '-b', 'main', '-q'], { cwd: repoPath });
   await execFile('git', ['config', 'user.email', 'test@test.com'], { cwd: repoPath });
   await execFile('git', ['config', 'user.name', 'Test'], { cwd: repoPath });
   await writeFile(join(repoPath, 'README.md'), `# ${name}\n`);
