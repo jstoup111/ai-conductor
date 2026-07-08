@@ -229,6 +229,41 @@ async function evaluateEligibilityGates(
 export type CiFixOutcome = { kind: 'changed' } | { kind: 'noop' } | { kind: 'branch-gone' };
 
 /**
+ * Injected fix-runner seam (pattern: {@link RebaseResolver} in rebase.ts).
+ *
+ * Story: TR-4 happy (fix run driven with RETRY hint)
+ *
+ * Task 18: `runCiFix` invokes this seam inside the isolated worktree created by
+ * Task 17, passing the worktree path, the RETRY hint (Task 16), and the watch
+ * entry. The runner's result becomes the dispatch outcome.
+ */
+export interface CiFixRunner {
+  run(opts: { worktreePath: string; hint: string; entry: WatchEntry }): Promise<CiFixOutcome>;
+}
+
+/**
+ * Production {@link CiFixRunner}: shells out to a fix session inside the
+ * worktree, injecting the hint. Guarded by the AI_CONDUCTOR_NO_REAL_EXEC
+ * kill-switch (used in tests/dry-run to avoid spawning real processes) — when
+ * set, it short-circuits to a no-op outcome without shelling out.
+ */
+export const productionCiFixRunner: CiFixRunner = {
+  async run({ worktreePath, hint, entry }): Promise<CiFixOutcome> {
+    if (process.env.AI_CONDUCTOR_NO_REAL_EXEC) {
+      return { kind: 'noop' };
+    }
+
+    await execa(
+      'claude',
+      ['--fix-session', '--pr-url', entry.prUrl, '--hint', hint],
+      { cwd: worktreePath },
+    );
+
+    return { kind: 'changed' };
+  },
+};
+
+/**
  * Resolver worktree lifecycle for CI fix execution.
  *
  * Story: TR-4 happy (isolated worktree, stale cleanup, teardown both outcomes);
@@ -245,7 +280,7 @@ export type CiFixOutcome = { kind: 'changed' } | { kind: 'noop' } | { kind: 'bra
  * @param branch The PR's source branch name (e.g., "feat/fix")
  * @param hint A RETRY hint string to pass to the fix-runner (e.g., failing check names)
  * @param deps Dependencies for the fix execution
- * @param deps.fixRunner The injected fix-runner callback (worktreePath → CiFixOutcome)
+ * @param deps.fixRunner The injected {@link CiFixRunner} seam
  * @param logger Optional logging function for abort/error messages
  * @returns CiFixOutcome describing the result
  */
@@ -254,7 +289,7 @@ export async function runCiFix(
   branch: string,
   hint: string,
   deps: {
-    fixRunner: (worktreePath: string) => Promise<CiFixOutcome>;
+    fixRunner: CiFixRunner;
   },
   logger?: (msg: string) => void,
 ): Promise<CiFixOutcome> {
@@ -293,8 +328,9 @@ export async function runCiFix(
     const branchToUse = remoteCheck.exitCode === 0 ? `origin/${branch}` : branch;
 
     const outcome = await withResolveWorktree(slug, branchToUse, repoCwd, async (worktreePath) => {
-      // Run the fix-runner callback inside the worktree
-      return await deps.fixRunner(worktreePath);
+      // Run the fix-runner seam inside the worktree, propagating its result
+      // as the dispatch outcome (Task 18).
+      return await deps.fixRunner.run({ worktreePath, hint, entry });
     });
 
     return outcome;

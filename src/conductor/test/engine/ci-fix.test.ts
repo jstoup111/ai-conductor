@@ -416,9 +416,11 @@ describe('ci-fix: runCiFix resolver worktree lifecycle (Task 17)', () => {
       const hint = 'Test hint';
 
       // Mock fix-runner stub that creates a commit
-      const fixRunner = async (worktreePath: string) => {
-        execSync(`git commit --allow-empty -m "ci fix commit"`, { cwd: worktreePath });
-        return { kind: 'changed' as const };
+      const fixRunner = {
+        run: async ({ worktreePath }: { worktreePath: string }) => {
+          execSync(`git commit --allow-empty -m "ci fix commit"`, { cwd: worktreePath });
+          return { kind: 'changed' as const };
+        },
       };
 
       const result = await runCiFix(entry, branch, hint, { fixRunner }, logger);
@@ -452,8 +454,10 @@ describe('ci-fix: runCiFix resolver worktree lifecycle (Task 17)', () => {
       const hint = 'Test hint';
 
       // Fix-runner that throws
-      const fixRunner = async () => {
-        throw new Error('Fix failed');
+      const fixRunner = {
+        run: async () => {
+          throw new Error('Fix failed');
+        },
       };
 
       let threwError = false;
@@ -491,8 +495,10 @@ describe('ci-fix: runCiFix resolver worktree lifecycle (Task 17)', () => {
       const branch = 'feat/nonexistent'; // Branch that doesn't exist
       const hint = 'Test hint';
 
-      const fixRunner = async () => {
-        throw new Error('Should not reach here');
+      const fixRunner = {
+        run: async () => {
+          throw new Error('Should not reach here');
+        },
       };
 
       // Should not throw, but should log the issue
@@ -530,9 +536,11 @@ describe('ci-fix: runCiFix resolver worktree lifecycle (Task 17)', () => {
       const hint = 'Test hint';
 
       let callbackRan = false;
-      const fixRunner = async () => {
-        callbackRan = true;
-        return { kind: 'changed' as const };
+      const fixRunner = {
+        run: async () => {
+          callbackRan = true;
+          return { kind: 'changed' as const };
+        },
       };
 
       const result = await runCiFix(entry, branch, hint, { fixRunner }, logger);
