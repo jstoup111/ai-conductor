@@ -102,7 +102,7 @@ async function commitSpec(slug: string, stories = APPROVED_STORIES): Promise<voi
 
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), 'shipped-dedup-acceptance-'));
-  await execFile('git', ['init', '-q'], { cwd: dir });
+  await execFile('git', ['init', '-b', 'main', '-q'], { cwd: dir });
   await execFile('git', ['config', 'user.email', 'test@test.com'], { cwd: dir });
   await execFile('git', ['config', 'user.name', 'Test'], { cwd: dir });
   await writeFile(join(dir, 'README.md'), 'init\n');
