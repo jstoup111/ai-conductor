@@ -1353,6 +1353,11 @@ export function renderDaemonEvent(event: ConductorEvent, log: (msg: string) => v
     case 'loop_converged':
       log(`${dot} ${chalk.green('✓')} ${chalk.green('gate loop converged')}`);
       break;
+    case 'ci_failed':
+      log(
+        `${dot} ${chalk.red('✋')} ${chalk.red(`ci_failed[${event.slug}]: phase=${event.phase} attempts=${event.attempts} checks=[${event.checks.join(',')}]`)}`,
+      );
+      break;
     case 'rate_limit':
       log(`${dot} ${chalk.yellow('⏳')} ${chalk.yellow(`rate limited: waiting ${event.waitSeconds}s`)}`);
       break;
