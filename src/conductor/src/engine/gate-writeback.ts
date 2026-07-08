@@ -192,8 +192,12 @@ export async function announceGatedPr(
 
   const state = await prMergeState(runGh, cwd, prUrl, log);
   if (TERMINAL_PR_STATES.has(state.state)) {
-    log?.(
-      `[gate-writeback] PR ${prUrl} for gated spec "${spec.slug}" is ${state.state} — skipping label/comment`,
+    logSkipOnce(
+      log,
+      warnedSkips,
+      spec.slug,
+      'pr-terminal',
+      `[gate-writeback] nothing to announce for gated spec "${spec.slug}" (PR ${prUrl} is ${state.state}) — will retry if it revives`,
     );
     return;
   }
