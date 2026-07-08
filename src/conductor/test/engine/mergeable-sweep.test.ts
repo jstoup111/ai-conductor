@@ -917,6 +917,51 @@ describe('sweepMergeableLabels — Task 11: bump-before-dispatch crash safety', 
   });
 });
 
+// ── Task 12: one dispatch per tick ───────────────────────────────────────
+
+describe('sweepMergeableLabels — Task 12: one dispatch per tick', () => {
+  it('dispatches exactly once when two failed eligible entries are present, defers the second with a logged reason, and does not bump its counter', async () => {
+    const dispatchCalls: WatchEntry[] = [];
+    const logs: string[] = [];
+    const { gh } = makeFakeGh({
+      [PR_URL]: prViewJson('OPEN', 'MERGEABLE', [{ status: 'COMPLETED', conclusion: 'FAILURE' }], []),
+      [PR_URL_2]: prViewJson('OPEN', 'MERGEABLE', [{ status: 'COMPLETED', conclusion: 'FAILURE' }], []),
+    });
+    await enrollWatch(tmpDir, entry(PR_URL));
+    await enrollWatch(tmpDir, entry(PR_URL_2));
+
+    await sweepMergeableLabels({
+      projectRoot: tmpDir,
+      runGh: gh,
+      log: (msg) => logs.push(msg),
+      ciFix: {
+        enabled: true,
+        isEligible: async () => ({ eligible: true }),
+        dispatch: async (updated) => {
+          dispatchCalls.push(updated);
+        },
+      },
+    });
+
+    // AC1: exactly one dispatch call
+    expect(dispatchCalls).toHaveLength(1);
+    expect(dispatchCalls[0].prUrl).toBe(PR_URL);
+
+    // AC2: second entry gets a defer log line
+    expect(logs.some((l) => l.includes(PR_URL_2) && l.includes('deferring'))).toBe(true);
+
+    // AC3: second entry's counter is NOT bumped
+    const result = await readWatch(tmpDir);
+    const second = result.find((e) => e.prUrl === PR_URL_2);
+    expect(second?.ciFixAttempts).toBe(0);
+    expect(second?.lastCiFixAt).toBeUndefined();
+
+    // First entry's counter IS bumped
+    const first = result.find((e) => e.prUrl === PR_URL);
+    expect(first?.ciFixAttempts).toBe(1);
+  });
+});
+
 // ── Task 8: pending no-op + transition-only event emission ────────────────
 
 describe('sweepMergeableLabels — Task 8: pending no-op and transition-only event emission', () => {
