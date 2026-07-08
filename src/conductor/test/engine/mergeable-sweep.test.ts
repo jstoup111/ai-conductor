@@ -824,6 +824,99 @@ describe('sweepMergeableLabels — Task 10: ciFix dispatch with disabled-config 
   });
 });
 
+// ── Task 11: bump-before-dispatch persistence ────────────────────────────
+
+describe('sweepMergeableLabels — Task 11: bump-before-dispatch crash safety', () => {
+  it('rewrites registry with bumped attempts and timestamp when dispatch resolves', async () => {
+    const dispatchCalls: WatchEntry[] = [];
+    const { gh } = makeFakeGh({
+      [PR_URL]: prViewJson('OPEN', 'MERGEABLE', [{ status: 'COMPLETED', conclusion: 'FAILURE' }], []),
+    });
+    const testEntry = { ...entry(), ciFixAttempts: 0 };
+    await enrollWatch(tmpDir, testEntry);
+
+    const now = new Date('2026-07-08T12:00:00Z');
+    await sweepMergeableLabels({
+      projectRoot: tmpDir,
+      runGh: gh,
+      ciFix: {
+        enabled: true,
+        isEligible: async () => ({ eligible: true }),
+        dispatch: async (updated) => {
+          dispatchCalls.push(updated);
+          return { kind: 'green-verified' as const };
+        },
+        now: () => now,
+      },
+    });
+
+    // Dispatch should have been called with bumped entry
+    expect(dispatchCalls).toHaveLength(1);
+    expect(dispatchCalls[0].ciFixAttempts).toBe(1);
+    expect(dispatchCalls[0].lastCiFixAt).toBe('2026-07-08T12:00:00.000Z');
+
+    // Registry should reflect bumped values (reset because dispatch returned 'green-verified')
+    const result = await readWatch(tmpDir);
+    expect(result).toHaveLength(1);
+    expect(result[0].ciFixAttempts).toBe(0); // reset because of green-verified outcome
+  });
+
+  it('rewrites registry with bumped attempts and timestamp even when dispatch throws', async () => {
+    const { gh } = makeFakeGh({
+      [PR_URL]: prViewJson('OPEN', 'MERGEABLE', [{ status: 'COMPLETED', conclusion: 'FAILURE' }], []),
+    });
+    const testEntry = { ...entry(), ciFixAttempts: 1 };
+    await enrollWatch(tmpDir, testEntry);
+
+    const now = new Date('2026-07-08T12:15:00Z');
+    const logs: string[] = [];
+    await sweepMergeableLabels({
+      projectRoot: tmpDir,
+      runGh: gh,
+      log: (msg) => logs.push(msg),
+      ciFix: {
+        enabled: true,
+        isEligible: async () => ({ eligible: true }),
+        dispatch: async () => {
+          throw new Error('dispatch failed');
+        },
+        now: () => now,
+      },
+    });
+
+    // Error should be logged
+    expect(logs.some((l) => l.includes('dispatch failed'))).toBe(true);
+
+    // Registry should still have bumped values (not reset because dispatch threw)
+    const result = await readWatch(tmpDir);
+    expect(result).toHaveLength(1);
+    expect(result[0].ciFixAttempts).toBe(2);
+    expect(result[0].lastCiFixAt).toBe('2026-07-08T12:15:00.000Z');
+  });
+
+  it('does not propagate dispatch throw to caller', async () => {
+    const { gh } = makeFakeGh({
+      [PR_URL]: prViewJson('OPEN', 'MERGEABLE', [{ status: 'COMPLETED', conclusion: 'FAILURE' }], []),
+    });
+    await enrollWatch(tmpDir, entry());
+
+    const sweepPromise = sweepMergeableLabels({
+      projectRoot: tmpDir,
+      runGh: gh,
+      ciFix: {
+        enabled: true,
+        isEligible: async () => ({ eligible: true }),
+        dispatch: async () => {
+          throw new Error('catastrophic failure');
+        },
+      },
+    });
+
+    // Should not throw
+    await expect(sweepPromise).resolves.toBeUndefined();
+  });
+});
+
 // ── Task 8: pending no-op + transition-only event emission ────────────────
 
 describe('sweepMergeableLabels — Task 8: pending no-op and transition-only event emission', () => {
