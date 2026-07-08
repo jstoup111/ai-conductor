@@ -545,6 +545,39 @@ describe('gate-writeback (Task 17)', () => {
       expect(ghCalled).toBe(false);
     });
 
+    it('absent marker (sourceRef undefined) stays silent even with a shared warnedSkips set present — no NEW log lines', async () => {
+      let ghCalled = false;
+      const gh: GhRunner = async () => {
+        ghCalled = true;
+        return { stdout: '' };
+      };
+      const logs: string[] = [];
+      const warnedSkips = new Set<string>();
+
+      await expect(
+        announceGatedIssue(SPEC, undefined, { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips }),
+      ).resolves.toBeUndefined();
+
+      expect(ghCalled).toBe(false);
+      expect(logs).toHaveLength(0);
+      expect(warnedSkips.size).toBe(0);
+    });
+
+    it('without a warnedSkips set, repeated malformed Source-Ref skips log on every call (no dedup fallback)', async () => {
+      const gh: GhRunner = async () => ({ stdout: '' });
+      const logs: string[] = [];
+
+      await announceGatedIssue(SPEC, 'not-a-ref', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m) });
+      await announceGatedIssue(SPEC, 'not-a-ref', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m) });
+
+      const matches = logs.filter((m) =>
+        m.includes(
+          `nothing to announce on an issue for gated spec "${SPEC.slug}" (no usable Source-Ref, got "not-a-ref") — will retry when one exists`,
+        ),
+      );
+      expect(matches).toHaveLength(2);
+    });
+
     it('malformed Source-Ref is logged and skipped — no gh call', async () => {
       let ghCalled = false;
       const gh: GhRunner = async () => {
@@ -579,6 +612,56 @@ describe('gate-writeback (Task 17)', () => {
         ),
       );
       expect(matches).toHaveLength(1);
+    });
+
+    it('RT-2: PR and issue skip reasons dedupe independently under a shared warnedSkips set — both lines log', async () => {
+      const warnedSkips = new Set<string>();
+      const logs: string[] = [];
+
+      // PR path: no PR yet for slug S — no-pr reason logged.
+      const { gh: noPrGh } = fakeGh([]);
+      await announceGatedPr(SPEC, '', { runGh: noPrGh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips });
+
+      // Issue path: same slug S, malformed Source-Ref — no-source-ref reason logged.
+      const issueGh: GhRunner = async () => ({ stdout: '' });
+      await announceGatedIssue(SPEC, 'not-a-ref', { runGh: issueGh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips });
+
+      const gateLines = logs.filter((m) => m.startsWith('[gate-writeback]'));
+      expect(gateLines.length).toBe(2);
+      expect(gateLines.some((m) => m.includes(`nothing to announce for gated spec "${SPEC.slug}" (no PR)`))).toBe(true);
+      expect(
+        gateLines.some((m) =>
+          m.includes(
+            `nothing to announce on an issue for gated spec "${SPEC.slug}" (no usable Source-Ref, got "not-a-ref") — will retry when one exists`,
+          ),
+        ),
+      ).toBe(true);
+
+      // Independent keys, not a shared per-slug key.
+      expect(warnedSkips.has(`${SPEC.slug}:no-pr`)).toBe(true);
+      expect(warnedSkips.has(`${SPEC.slug}:no-source-ref`)).toBe(true);
+      expect(warnedSkips.size).toBe(2);
+    });
+
+    it('RT-3: dedup never blocks a real announcement — a valid Source-Ref still announces after a prior no-source-ref skip for the same slug', async () => {
+      const warnedSkips = new Set<string>([`${SPEC.slug}:no-source-ref`]);
+      const calls: string[][] = [];
+      const gh: GhRunner = async (args) => {
+        calls.push([...args]);
+        if (args[0] === 'issue' && args[1] === 'view') {
+          return { stdout: JSON.stringify({ comments: [] }) };
+        }
+        return { stdout: '' };
+      };
+
+      await announceGatedIssue(SPEC, 'acme/repo#42', { runGh: gh, cwd: '/repo', warnedSkips });
+
+      const labelCall = calls.find((c) => c.join(' ').includes(OWNER_GATED_LABEL));
+      expect(labelCall).toBeDefined();
+      const commentCall = calls.find((c) => c[0] === 'issue' && c[1] === 'comment');
+      expect(commentCall).toBeDefined();
+      const body = commentCall![commentCall!.indexOf('--body') + 1];
+      expect(body).toContain(OWNER_GATED_MARKER);
     });
 
     it('closed issue still gets commented on', async () => {
