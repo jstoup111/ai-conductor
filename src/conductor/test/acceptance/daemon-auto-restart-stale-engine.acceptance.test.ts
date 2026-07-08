@@ -181,6 +181,7 @@ describe('acceptance: idle-boundary stale detection + restart request over the R
             at: Date.now(),
           }, repoPath);
           await lock!.release();
+          return { fired: true };
         },
       );
 
@@ -231,7 +232,7 @@ describe('acceptance: idle-boundary stale detection + restart request over the R
       const distA2 = await buildFixtureDist(workDir, FIXTURE_V1);
       const checker = createStaleEngineChecker(captured, distA2);
 
-      const requestRestart = vi.fn(async () => {});
+      const requestRestart = vi.fn(async () => ({ fired: true }));
       const deps: DaemonDeps = {
         discoverBacklog: async () => [],
         runFeature: async () => ({ slug: 'never', status: 'done' }),
@@ -258,7 +259,7 @@ describe('acceptance: idle-boundary stale detection + restart request over the R
   it('stale verdict with a pending feature: restart fires at the dispatch boundary BEFORE the stale engine builds it', async () => {
     await withLockedRepo(async () => {
       let dispatched = false;
-      const requestRestart = vi.fn(async () => {});
+      const requestRestart = vi.fn(async () => ({ fired: true }));
 
       const deps: DaemonDeps = {
         // A feature is always available → the daemon takes the dispatch branch,
@@ -309,6 +310,7 @@ describe('acceptance: idle-boundary stale detection + restart request over the R
         // The restart must never fire while a feature build is running.
         expect(inFlight).toBe(false);
         events.push('restart');
+        return { fired: true };
       });
 
       const deps: DaemonDeps = {
@@ -356,7 +358,7 @@ describe('acceptance: idle-boundary stale detection + restart request over the R
       capturedIdentity: () => 'captured-hash',
       targetIdentity: () => 'target-hash',
     };
-    const onceRequestRestart = vi.fn(async () => {});
+    const onceRequestRestart = vi.fn(async () => ({ fired: false }));
     const onceDeps: DaemonDeps = {
       discoverBacklog: async () => [],
       runFeature: async () => ({ slug: 'never', status: 'done' }),
@@ -376,7 +378,7 @@ describe('acceptance: idle-boundary stale detection + restart request over the R
     // Control: the identical checker verdict, in continuous mode, over an
     // otherwise-idle backlog, MUST request a restart — proving the once-mode
     // guard above is an actual gate, not an unimplemented no-op passing vacuously.
-    const continuousRequestRestart = vi.fn(async () => {});
+    const continuousRequestRestart = vi.fn(async () => ({ fired: true }));
     const continuousDeps: DaemonDeps = {
       discoverBacklog: async () => [],
       runFeature: async () => ({ slug: 'never', status: 'done' }),
@@ -407,7 +409,7 @@ describe('acceptance: idle-boundary stale detection + restart request over the R
 
       const warn = vi.fn();
       const checker = createStaleEngineChecker(captured, dist, warn);
-      const requestRestart = vi.fn(async () => {});
+      const requestRestart = vi.fn(async () => ({ fired: true }));
 
       const deps: DaemonDeps = {
         discoverBacklog: async () => [],

@@ -152,11 +152,12 @@ export function engineEntryPathForRepo(projectRoot: string): string {
  * Called when a stale engine is detected in the idle branch (Task 14+).
  * Implements: write marker → release lock → exit(0).
  * On error, the catch block ensures lock release + exit(1).
+ * Task 5: Returns { fired: boolean } to indicate if restart was fired (true) or aborted (false).
  */
 export type RestartRequester = (opts: {
   fromIdentity: string | null;
   targetIdentity: string | null;
-}) => Promise<void>;
+}) => Promise<{ fired: boolean }>;
 
 export interface DaemonModeOptions {
   projectRoot: string;
@@ -205,6 +206,12 @@ export interface DaemonModeOptions {
    * the daemon relies on polling alone.
    */
   watch?: boolean;
+  /**
+   * Task 14: Injectable exit seam for lock-loser explicit exit (default: process.exit).
+   * Called with exit code when another daemon holds the lock.
+   * Tests inject a fake to verify the exit call is made.
+   */
+  exitProcess?: (code: number) => void;
 }
 
 // Front-half steps the daemon treats as already done — the human authored the
@@ -235,13 +242,17 @@ export function stripAnsi(s: string): string {
  * Task 4: RestartRequester accepts injected relink + trigger; session-hosted happy ordering
  * Task 5: Handle relink failure with abort-alive semantics in session-hosted mode
  *
+ * ADR-2026-07-07-single-generation-stale-respawn Decision item 1:
+ * Predecessor must terminate unconditionally on FIRED trigger.
+ *
  * Create a RestartRequester that implements two flows:
  *
  * Session-hosted mode (triggerSelfRestart provided):
  *   1. Call relink (if provided)
  *   2. Write restart marker
  *   3. Call triggerSelfRestart
- *   4. Do NOT call lock.releaseSync() or process.exit()
+ *   4. On success (fired): Release lock and exit(0) — predecessor terminates unconditionally
+ *   5. On error: Stay alive, don't release lock, don't exit (abort-alive)
  *
  * Headless mode (triggerSelfRestart not provided):
  *   1. Call relink (if provided)
@@ -273,7 +284,8 @@ export function createRestartRequester(
   },
 ): RestartRequester {
   return async (opts: { fromIdentity: string | null; targetIdentity: string | null }) => {
-    const isSessionHosted = deps?.triggerSelfRestart !== undefined;
+    const triggerSelfRestart = deps?.triggerSelfRestart;
+    const isSessionHosted = triggerSelfRestart !== undefined;
 
     // Step 1: Call relink if provided (Task 5: separate error handling for relink)
     if (deps?.relink) {
@@ -285,12 +297,12 @@ export function createRestartRequester(
         // Task 5: abort-alive in session-hosted mode
         if (isSessionHosted) {
           // Don't release lock, don't exit, just return and stay alive
-          return;
+          return { fired: false };
         }
         // In headless mode: release lock and exit(1)
         lock.releaseSync();
         process.exit(1);
-        return; // Never reached but clarifies intent
+        return { fired: false }; // Never reached but clarifies intent
       }
     }
 
@@ -315,27 +327,32 @@ export function createRestartRequester(
         lock.releaseSync();
         process.exit(1);
       }
-      return; // Never reached in production, but clarifies intent
+      return { fired: false }; // Never reached in production, but clarifies intent
     }
 
     // Step 3: Handle session-hosted vs headless paths
     // (moved outside try-catch so exit(0) is not caught on failure in tests)
-    if (isSessionHosted) {
-      // Session-hosted: call triggerSelfRestart and don't exit
+    if (isSessionHosted && triggerSelfRestart) {
+      // Session-hosted: call triggerSelfRestart and release lock + exit on success
       // Task 7: catch errors from trigger and stay alive (marker already written)
       try {
-        await deps.triggerSelfRestart();
+        await triggerSelfRestart();
       } catch (err) {
         const detail = err instanceof Error ? err.message : String(err);
         log(`triggerSelfRestart failed: ${detail}`);
         // Stay alive: don't release lock, don't exit
         // Marker is already written, so this can be retried at next idle boundary
-        return;
+        return { fired: false };
       }
+      // Trigger succeeded: release lock and exit (ADR Decision item 1)
+      lock.releaseSync();
+      process.exit(0);
+      return { fired: true };
     } else {
       // Headless: release lock and exit(0)
       lock.releaseSync();
       process.exit(0);
+      return { fired: true };
     }
   };
 }
@@ -429,9 +446,12 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   // ADR-010: claim the 1-per-repo pidfile so this daemon's liveness is observable
   // (the pidfile under .daemon/ holds our pid) and a second daemon for the same repo
   // refuses to start. A live owner → exit now; we release the lock on completion below.
-  const lock = await holdLock(projectRoot);
+  // ADR Decision item 3: enable bounded-wait polling for takeover scenario (10s/250ms)
+  const lock = await holdLock(projectRoot, { takeoverWaitMs: 10_000, pollMs: 250 });
   if (lock === null) {
     log(`another daemon is already running for ${projectRoot}; exiting (1-per-repo).`);
+    const exitProcess = opts.exitProcess ?? process.exit;
+    exitProcess(0);
     return;
   }
   // We own the repo: open the activity log and start teeing. renderDaemonEvent and

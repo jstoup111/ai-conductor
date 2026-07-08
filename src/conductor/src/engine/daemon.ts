@@ -248,11 +248,12 @@ export interface DaemonDeps {
    * restart sequence: write marker → release lock → exit(0). Optional for
    * backward compatibility; tests inject a no-op to verify gate behavior.
    * Task 13 implements the real requester wiring in daemon-cli.ts.
+   * Task 5: Returns { fired: boolean } to indicate if restart was fired (true) or aborted (false).
    */
   requestRestart?: (opts: {
     fromIdentity: string | null;
     targetIdentity: string | null;
-  }) => Promise<void>;
+  }) => Promise<{ fired: boolean }>;
 
   /**
    * Task 11: Check if the current engine identity is suppressed due to
@@ -689,8 +690,8 @@ export async function runDaemon(
     const fromIdentity = deps.staleEngineChecker.capturedIdentity?.() ?? null;
     if (!deps.requestRestart) return false;
     log('[daemon] engine stale after rebuild — restarting before next task');
-    await deps.requestRestart({ fromIdentity, targetIdentity });
-    return true;
+    const result = await deps.requestRestart({ fromIdentity, targetIdentity });
+    return result.fired;
   };
 
   let stopReason: DaemonStopReason | null = null;
@@ -906,11 +907,17 @@ export async function runDaemon(
                   const fromIdentity = deps.staleEngineChecker.capturedIdentity?.() ?? null;
 
                   if (deps.requestRestart) {
-                    await deps.requestRestart({
+                    const result = await deps.requestRestart({
                       fromIdentity,
                       targetIdentity,
                     });
-                    staleEngineRestartRequested = true;
+                    // Only break if restart was actually fired. If fired: false,
+                    // the restart request was aborted and the loop retries at the next idle boundary.
+                    if (result.fired) {
+                      stopReason = 'engine_restart';
+                      break;
+                    }
+                    // If fired: false, fall through to continue idle polling and retry
                   }
                 }
               }
