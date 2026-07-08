@@ -263,6 +263,67 @@ describe('gate-writeback (Task 17)', () => {
       expect(warnedSkips.has(`${SPEC.slug}:pr-terminal`)).toBe(true);
     });
 
+    it('PT-2: never throws even when gh errors on a later pass with a shared warnedSkips set present', async () => {
+      const warnedSkips = new Set<string>();
+      const { gh: gh1 } = fakeGh([
+        { stdout: JSON.stringify({ state: 'CLOSED', mergeable: 'UNKNOWN', statusCheckRollup: [], labels: [] }) },
+      ]);
+      await announceGatedPr(SPEC, PR_URL, { runGh: gh1, cwd: '/repo', log: () => {}, warnedSkips });
+
+      const gh: GhRunner = async () => {
+        throw new Error('boom');
+      };
+      await expect(
+        announceGatedPr(SPEC, PR_URL, { runGh: gh, cwd: '/repo', log: () => {}, warnedSkips }),
+      ).resolves.toBeUndefined();
+    });
+
+    it('PT-3: without a warnedSkips set, repeated terminal-state skips log on every call (no dedup)', async () => {
+      const { gh, calls } = fakeGh([
+        { stdout: JSON.stringify({ state: 'CLOSED', mergeable: 'UNKNOWN', statusCheckRollup: [], labels: [] }) },
+        { stdout: JSON.stringify({ state: 'CLOSED', mergeable: 'UNKNOWN', statusCheckRollup: [], labels: [] }) },
+      ]);
+      const logs: string[] = [];
+
+      await announceGatedPr(SPEC, PR_URL, { runGh: gh, cwd: '/repo', log: (m) => logs.push(m) });
+      await announceGatedPr(SPEC, PR_URL, { runGh: gh, cwd: '/repo', log: (m) => logs.push(m) });
+
+      expect(calls.length).toBe(2);
+      const gateLines = logs.filter((m) => m.startsWith('[gate-writeback]'));
+      expect(gateLines.length).toBe(2);
+      expect(gateLines[0]).toContain(`(PR ${PR_URL} is CLOSED) — will retry if it revives`);
+      expect(gateLines[1]).toContain(`(PR ${PR_URL} is CLOSED) — will retry if it revives`);
+    });
+
+    it('RT-1: same slug, different reasons (no-pr then pr-terminal) each log once against a shared Set', async () => {
+      const logs: string[] = [];
+      const warnedSkips = new Set<string>();
+
+      // Pass 1: no PR yet for slug S — no-pr reason logged.
+      const { gh: noPrGh, calls: noPrCalls } = fakeGh([]);
+      await announceGatedPr(SPEC, '', { runGh: noPrGh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips });
+
+      // Pass 2: same slug S now has a CLOSED PR — pr-terminal reason logged.
+      const { gh: closedGh, calls: closedCalls } = fakeGh([
+        { stdout: JSON.stringify({ state: 'CLOSED', mergeable: 'UNKNOWN', statusCheckRollup: [], labels: [] }) },
+      ]);
+      await announceGatedPr(SPEC, PR_URL, { runGh: closedGh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips });
+
+      expect(noPrCalls.length).toBe(0);
+      expect(closedCalls.length).toBe(1);
+
+      const gateLines = logs.filter((m) => m.startsWith('[gate-writeback]'));
+      expect(gateLines.length).toBe(2);
+      expect(gateLines[0]).toContain(`nothing to announce for gated spec "${SPEC.slug}" (no PR)`);
+      expect(gateLines[1]).toContain(`(PR ${PR_URL} is CLOSED) — will retry if it revives`);
+
+      // Keyed by slug alone would only allow one line total; keying by
+      // `${slug}:${reason}` allows one line per distinct reason.
+      expect(warnedSkips.has(`${SPEC.slug}:no-pr`)).toBe(true);
+      expect(warnedSkips.has(`${SPEC.slug}:pr-terminal`)).toBe(true);
+      expect(warnedSkips.size).toBe(2);
+    });
+
     it('NP-2: gh non-zero on the merge-state lookup is logged once and does not retry or throw', async () => {
       let ghCalls = 0;
       const gh: GhRunner = async () => {
