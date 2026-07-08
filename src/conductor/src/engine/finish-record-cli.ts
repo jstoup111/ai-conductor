@@ -2,8 +2,9 @@
 // — argv detection for the finish-record subcommand (flag parser copied from
 // shipped-record-cli.ts's `flag` helper).
 
-import { isAbsolute } from 'node:path';
+import { isAbsolute, dirname } from 'node:path';
 import { stat } from 'node:fs/promises';
+import { makeProductionGh } from './pr-labels.js';
 
 export type FinishRecordDispatch =
   | { kind: 'record'; choice: string; prUrl?: string; pipelineDir: string }
@@ -65,8 +66,8 @@ export function dispatchFinishRecordGuide(cmd: FinishRecordDispatch): number {
 
 /** Injectable spawn points so tests can assert zero gh/git invocations on refusal. */
 export interface FinishRecordRunners {
-  runGh: (args: string[]) => Promise<unknown>;
-  runGit: (args: string[]) => Promise<unknown>;
+  runGh: (args: string[], opts?: { cwd: string }) => Promise<{ stdout: string } | unknown>;
+  runGit: (args: string[], opts?: { cwd: string }) => Promise<unknown>;
 }
 
 const noopRunners: FinishRecordRunners = {
@@ -77,6 +78,18 @@ const noopRunners: FinishRecordRunners = {
     throw new Error('runGit not implemented');
   },
 };
+
+/** Production runners: real gh/git, mirroring the pr-labels.ts injectable-seam
+ * pattern (single production factory, defaulted so call-sites need no wiring). */
+export function makeProductionFinishRecordRunners(): FinishRecordRunners {
+  const gh = makeProductionGh();
+  return {
+    runGh: async (args: string[], opts?: { cwd: string }) => gh(args, { cwd: opts?.cwd ?? process.cwd() }),
+    runGit: async () => {
+      throw new Error('runGit not implemented');
+    },
+  };
+}
 
 /**
  * Dispatches a `{kind:'record'}` finish-record command.
@@ -93,7 +106,7 @@ const noopRunners: FinishRecordRunners = {
 export async function dispatchFinishRecord(
   cmd: FinishRecordDispatch,
   _cwd: string,
-  _deps: FinishRecordRunners = noopRunners,
+  deps: FinishRecordRunners = noopRunners,
 ): Promise<number> {
   if (cmd.kind !== 'record') return dispatchFinishRecordGuide(cmd);
 
@@ -119,6 +132,32 @@ export async function dispatchFinishRecord(
       `finish-record: --pipeline-dir "${cmd.pipelineDir}" is not a directory; an absolute path to an existing directory is required`,
     );
     return 1;
+  }
+
+  // choice='pr' verification: the PR named by --pr-url must actually exist on
+  // GitHub before anything is written. Fail-closed on ANY error — empty
+  // stdout, a thrown gh error (missing binary → ENOENT, non-zero exit, etc.)
+  // — never falls back to writing the keep/finish-choice marker anyway.
+  if (cmd.choice === 'pr') {
+    let stdout: string | undefined;
+    try {
+      const result = await deps.runGh(['pr', 'view', '--json', 'url', '-q', '.url'], {
+        cwd: dirname(cmd.pipelineDir),
+      });
+      stdout = (result as { stdout?: string } | undefined)?.stdout;
+    } catch (err) {
+      console.error(
+        `finish-record: gh pr view failed (${err instanceof Error ? err.message : String(err)}) — cannot verify PR ${cmd.prUrl} exists; refusing to record`,
+      );
+      return 1;
+    }
+
+    if (!stdout || !stdout.trim()) {
+      console.error(
+        `finish-record: gh pr view returned no URL — cannot verify PR ${cmd.prUrl} exists; refusing to record`,
+      );
+      return 1;
+    }
   }
 
   return 0;

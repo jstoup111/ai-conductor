@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { mkdtemp, rm, readdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   detectFinishRecordCommand,
@@ -203,6 +203,91 @@ describe('engine/finish-record-cli', () => {
         spyRunners,
       );
       expect(code).toBe(0);
+    });
+  });
+
+  describe('dispatchFinishRecord — choice=pr PR-existence verification', () => {
+    let scratchParent: string;
+    let existingAbsDir: string;
+
+    beforeEach(async () => {
+      scratchParent = await mkdtemp(join(tmpdir(), 'finish-record-pr-'));
+      existingAbsDir = await mkdtemp(join(scratchParent, 'pipeline-'));
+    });
+
+    afterEach(async () => {
+      vi.restoreAllMocks();
+      await rm(scratchParent, { recursive: true, force: true });
+    });
+
+    const snapshotDir = async (dir: string) => (await readdir(dir)).sort();
+
+    it('refuses when gh returns empty stdout: exit !=0, zero writes, pipeline dir unchanged', async () => {
+      const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const before = await snapshotDir(existingAbsDir);
+      const runGh = vi.fn(async () => ({ stdout: '' }));
+      const runGit = vi.fn(async () => undefined);
+      const code = await dispatchFinishRecord(
+        {
+          kind: 'record',
+          choice: 'pr',
+          prUrl: 'https://github.com/org/repo/pull/1',
+          pipelineDir: existingAbsDir,
+        },
+        scratchParent,
+        { runGh, runGit },
+      );
+      expect(code).not.toBe(0);
+      expect(runGh).toHaveBeenCalledWith(
+        ['pr', 'view', '--json', 'url', '-q', '.url'],
+        { cwd: dirname(existingAbsDir) },
+      );
+      expect(errSpy.mock.calls.flat().join(' ')).toMatch(/gh pr view/i);
+      await expect(snapshotDir(existingAbsDir)).resolves.toEqual(before);
+    });
+
+    it('refuses when gh throws ENOENT (spawn failure): exit !=0, no keep fallback, zero writes', async () => {
+      const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const before = await snapshotDir(existingAbsDir);
+      const enoent = Object.assign(new Error('spawn gh ENOENT'), { code: 'ENOENT' });
+      const runGh = vi.fn(async () => {
+        throw enoent;
+      });
+      const runGit = vi.fn(async () => undefined);
+      const code = await dispatchFinishRecord(
+        {
+          kind: 'record',
+          choice: 'pr',
+          prUrl: 'https://github.com/org/repo/pull/1',
+          pipelineDir: existingAbsDir,
+        },
+        scratchParent,
+        { runGh, runGit },
+      );
+      expect(code).not.toBe(0);
+      expect(errSpy.mock.calls.flat().join(' ')).toMatch(/gh pr view failed/i);
+      expect(errSpy.mock.calls.flat().join(' ')).toMatch(/ENOENT/i);
+      await expect(snapshotDir(existingAbsDir)).resolves.toEqual(before);
+    });
+
+    it('passes the guard when gh succeeds with a URL', async () => {
+      const runGh = vi.fn(async () => ({ stdout: 'https://github.com/org/repo/pull/1\n' }));
+      const runGit = vi.fn(async () => undefined);
+      const code = await dispatchFinishRecord(
+        {
+          kind: 'record',
+          choice: 'pr',
+          prUrl: 'https://github.com/org/repo/pull/1',
+          pipelineDir: existingAbsDir,
+        },
+        scratchParent,
+        { runGh, runGit },
+      );
+      expect(code).toBe(0);
+      expect(runGh).toHaveBeenCalledWith(
+        ['pr', 'view', '--json', 'url', '-q', '.url'],
+        { cwd: dirname(existingAbsDir) },
+      );
     });
   });
 });
