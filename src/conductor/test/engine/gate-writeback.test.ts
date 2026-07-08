@@ -316,6 +316,70 @@ describe('gate-writeback (Task 17)', () => {
       expect(gateLines[0]).toContain(`nothing to announce for gated spec "${SPEC.slug}" (no PR)`);
     });
 
+    it('NP-7: dedup key is per-slug — two different slugs against one shared Set each log once', async () => {
+      const { gh, calls } = fakeGh([]);
+      const logs: string[] = [];
+      const warnedSkips = new Set<string>();
+      const OTHER_SPEC = { ...SPEC, slug: '2026-07-05-gizmo' };
+
+      await announceGatedPr(SPEC, '', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips });
+      await announceGatedPr(SPEC, '', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips });
+      await announceGatedPr(OTHER_SPEC, '', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips });
+      await announceGatedPr(OTHER_SPEC, '', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips });
+
+      expect(calls.length).toBe(0);
+      const gateLines = logs.filter((m) => m.startsWith('[gate-writeback]'));
+      expect(gateLines.length).toBe(2);
+      expect(gateLines[0]).toContain(`nothing to announce for gated spec "${SPEC.slug}" (no PR)`);
+      expect(gateLines[1]).toContain(`nothing to announce for gated spec "${OTHER_SPEC.slug}" (no PR)`);
+      expect(warnedSkips.has(`${SPEC.slug}:no-pr`)).toBe(true);
+      expect(warnedSkips.has(`${OTHER_SPEC.slug}:no-pr`)).toBe(true);
+      expect(warnedSkips.size).toBe(2);
+    });
+
+    it('NP-8: dedup is per-run — a fresh Set (simulated restart) resurfaces the notice for the same slug', async () => {
+      const { gh, calls } = fakeGh([]);
+      const logs: string[] = [];
+      const firstRunSkips = new Set<string>();
+      const secondRunSkips = new Set<string>();
+
+      await announceGatedPr(SPEC, '', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips: firstRunSkips });
+      await announceGatedPr(SPEC, '', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips: firstRunSkips });
+      // Simulated daemon restart: brand-new Set, same slug.
+      await announceGatedPr(SPEC, '', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips: secondRunSkips });
+
+      expect(calls.length).toBe(0);
+      const gateLines = logs.filter((m) => m.startsWith('[gate-writeback]'));
+      expect(gateLines.length).toBe(2);
+      expect(gateLines.every((m) => m.includes(`nothing to announce for gated spec "${SPEC.slug}" (no PR)`))).toBe(true);
+    });
+
+    it('NP-9: a suppressed no-PR skip never blocks a later real announcement for the same slug', async () => {
+      const warnedSkips = new Set<string>();
+      const logs: string[] = [];
+
+      // Pass 1: no PR yet — skip is logged and recorded in the shared Set.
+      const { gh: noPrGh, calls: noPrCalls } = fakeGh([]);
+      await announceGatedPr(SPEC, '', { runGh: noPrGh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips });
+      expect(noPrCalls.length).toBe(0);
+      expect(warnedSkips.has(`${SPEC.slug}:no-pr`)).toBe(true);
+
+      // Pass 2: same slug, same shared warnedSkips Set, but now a real PR
+      // exists. Dedup must guard only the log line, never the announce work.
+      const { gh: realGh, calls: realCalls } = fakeGh([
+        { stdout: JSON.stringify({ state: 'OPEN', mergeable: 'MERGEABLE', statusCheckRollup: [], labels: [] }) }, // prMergeState
+        { stdout: '' }, // ensureLabel
+        { stdout: '' }, // addLabel
+        { stdout: JSON.stringify({ comments: [] }) }, // upsertComment lookup
+        { stdout: '' }, // create comment
+      ]);
+      await announceGatedPr(SPEC, PR_URL, { runGh: realGh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips });
+
+      expect(realCalls.some((c) => c[0] === 'label' && c[1] === 'create')).toBe(true);
+      expect(realCalls.some((c) => c.join(' ').includes('labels[]=owner-gated'))).toBe(true);
+      expect(realCalls.some((c) => c[0] === 'pr' && c[1] === 'comment')).toBe(true);
+    });
+
     it('NP-5: a label-add race (conflict error) is swallowed and the comment still lands', async () => {
       const calls: string[][] = [];
       const gh: GhRunner = async (args) => {
