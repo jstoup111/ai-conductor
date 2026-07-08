@@ -21,6 +21,33 @@ function warnOnce(key: string, message: string): void {
   console.warn(message);
 }
 
+/**
+ * True when a commit-changed file satisfies a plan-declared task path (#425).
+ *
+ * Exact repo-relative match, or a path-segment-anchored suffix match — plans
+ * routinely write "Files likely touched" as basenames (`push-evidence.ts`) or
+ * partial paths (`engine/push-evidence.ts`), while git reports repo-relative
+ * paths (`src/conductor/src/engine/push-evidence.ts`). Requiring the match to
+ * align at a `/` boundary keeps this evidence-grade: `trail.ts` never matches
+ * `audit-trail.ts`. This is corroboration for a commit ALREADY carrying the
+ * task's trailer (or matching its subject), not free-standing evidence.
+ */
+export function fileMatchesPlanPath(file: string, planDeclaredPath: string): boolean {
+  const f = file.replace(/^\.\//, '');
+  const p = planDeclaredPath.replace(/^\.\//, '');
+  return f === p || f.endsWith('/' + p);
+}
+
+/** Commit files that satisfy at least one of the task's plan-declared paths (#425). */
+function filesOverlappingTaskPaths(files: string[], taskPaths: ReadonlySet<string>): string[] {
+  return files.filter((f) => {
+    for (const p of taskPaths) {
+      if (fileMatchesPlanPath(f, p)) return true;
+    }
+    return false;
+  });
+}
+
 // Simple logger interface for fail-closed operations
 interface EvidenceRangeLogger {
   anomalies: string[];
@@ -625,7 +652,7 @@ async function deriveCompletionInternal(
     }
 
     // Task has paths; verify commit touches at least one
-    const overlap = filesInCommit.filter((f) => taskPaths!.has(f.replace(/^\.\//, '')));
+    const overlap = filesOverlappingTaskPaths(filesInCommit, taskPaths!);
 
     if (overlap.length === 0) {
       // Path mismatch: log audit entry
@@ -890,7 +917,7 @@ export async function checkCommitEvidence(
       const planPaths = parsePlanTaskPaths(planText);
       const changedFiles = await filesForCommit(projectRoot, sha);
       for (const [taskId, paths] of planPaths.entries()) {
-        const overlap = changedFiles.filter((f) => paths.has(f.replace(/^\.\//, '')));
+        const overlap = filesOverlappingTaskPaths(changedFiles, paths);
         if (overlap.length > 0) {
           return { evidenced: true, taskId, reason: 'path-fallback' };
         }
@@ -1127,7 +1154,7 @@ async function findMatchingCommit(
     }
 
     const files = await filesForCommit(projectRoot, commit.sha);
-    const overlap = files.filter((f) => taskPaths!.has(f.replace(/^\.\//, '')));
+    const overlap = filesOverlappingTaskPaths(files, taskPaths!);
     if (overlap.length === 0) continue;
     return { commit: commit.sha, subject: commit.subject, matchedFiles: overlap };
   }
