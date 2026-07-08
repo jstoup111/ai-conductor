@@ -1,5 +1,9 @@
-import { describe, it, expect } from 'vitest';
-import { parseDirtyStatus } from '../../src/engine/leak-triage.js';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { parseDirtyStatus, enumerateCandidates } from '../../src/engine/leak-triage.js';
+import { makeGitRunner, type GitRunner } from '../../src/engine/rebase.js';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 describe('engine/leak-triage', () => {
   describe('parseDirtyStatus', () => {
@@ -84,6 +88,98 @@ M  src/file2.ts
       const result = parseDirtyStatus(output);
       expect(result.modified).toContain('src/file1.ts');
       expect(result.staged).toContain('src/file2.ts');
+    });
+  });
+
+  describe('enumerateCandidates', () => {
+    let tempDir: string;
+    let git: GitRunner;
+
+    beforeEach(async () => {
+      // Create a temporary directory for the test repo
+      tempDir = await mkdtemp(join(tmpdir(), 'leak-triage-test-'));
+      git = makeGitRunner(tempDir);
+
+      // Initialize a git repo with a main branch
+      await git(['init']);
+      await git(['config', 'user.email', 'test@example.com']);
+      await git(['config', 'user.name', 'Test User']);
+
+      // Create an initial commit on main
+      await git(['commit', '--allow-empty', '-m', 'Initial commit']);
+    });
+
+    afterEach(async () => {
+      // Clean up the temporary directory
+      await rm(tempDir, { recursive: true, force: true });
+    });
+
+    it('returns empty array when there are no feat branches', async () => {
+      const result = await enumerateCandidates(git);
+      expect(result).toEqual([]);
+    });
+
+    it('returns feat/* branches excluding worktree branches when there are no worktrees', async () => {
+      // Create local feat/y branch
+      await git(['branch', 'feat/y']);
+
+      const result = await enumerateCandidates(git);
+      expect(result).toEqual(['feat/y']);
+    });
+
+    it('returns worktree branches before other feat branches', async () => {
+      // Create a local feat/y branch
+      await git(['branch', 'feat/y']);
+
+      // Create a worktree on feat/daemon-x
+      await git(['checkout', '-b', 'feat/daemon-x']);
+      const worktreePath = join(tempDir, '..', 'worktree-daemon-x');
+      await git(['worktree', 'add', worktreePath, 'feat/daemon-x']);
+
+      const result = await enumerateCandidates(git);
+      // Worktree branch (feat/daemon-x) should come first, then feat/y
+      expect(result[0]).toBe('feat/daemon-x');
+      expect(result).toContain('feat/y');
+    });
+
+    it('returns multiple worktree branches before non-worktree branches', async () => {
+      // Create multiple feat branches
+      await git(['checkout', '-b', 'feat/y']);
+      await git(['checkout', 'main']);
+      await git(['checkout', '-b', 'feat/z']);
+
+      // Create worktrees on feat/daemon-x and feat/daemon-w
+      await git(['checkout', '-b', 'feat/daemon-x']);
+      const worktree1 = join(tempDir, '..', 'worktree-daemon-x');
+      await git(['worktree', 'add', worktree1, 'feat/daemon-x']);
+
+      await git(['checkout', 'main']);
+      await git(['checkout', '-b', 'feat/daemon-w']);
+      const worktree2 = join(tempDir, '..', 'worktree-daemon-w');
+      await git(['worktree', 'add', worktree2, 'feat/daemon-w']);
+
+      const result = await enumerateCandidates(git);
+
+      // All worktree branches should come first
+      const worktreeBranches = result.filter((b) => b.includes('daemon'));
+      expect(worktreeBranches.length).toBe(2);
+      expect(result.indexOf('feat/daemon-x')).toBeLessThan(result.indexOf('feat/y'));
+      expect(result.indexOf('feat/daemon-w')).toBeLessThan(result.indexOf('feat/z'));
+    });
+
+    it('handles repo with no feat branches at all', async () => {
+      const result = await enumerateCandidates(git);
+      expect(result).toEqual([]);
+    });
+
+    it('includes worktree branch even if no other feat branches exist', async () => {
+      // Create only a worktree branch
+      await git(['checkout', '-b', 'feat/daemon-x']);
+      const worktreePath = join(tempDir, '..', 'worktree-daemon-x');
+      await git(['worktree', 'add', worktreePath, 'feat/daemon-x']);
+
+      const result = await enumerateCandidates(git);
+      expect(result).toEqual(['feat/daemon-x']);
     });
   });
 });

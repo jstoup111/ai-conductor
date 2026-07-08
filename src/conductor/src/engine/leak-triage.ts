@@ -2,7 +2,10 @@
  * Triage for worktree isolation breaches ("dirty edit leaks" into MAIN checkout).
  *
  * Parses git status --porcelain output to extract dirty state classification.
+ * Enumerates candidate branches with worktrees prioritized for in-flight daemon build triage.
  */
+
+import type { GitRunner, GitResult } from './rebase.js';
 
 export interface DirtyStatus {
   /** Files modified in the working tree */
@@ -86,6 +89,78 @@ export function parseDirtyStatus(output: string): DirtyStatus {
   result.modified = Array.from(new Set(result.modified));
   result.staged = Array.from(new Set(result.staged));
   result.untracked = Array.from(new Set(result.untracked));
+
+  return result;
+}
+
+/**
+ * Enumerate candidate branches for leak triage, prioritizing worktree branches.
+ *
+ * Returns branches in this order:
+ * 1. Branches that have active worktrees (via `git worktree list --porcelain`)
+ * 2. Local `feat/*` branches without worktrees (via `git for-each-ref refs/heads/feat`)
+ *
+ * This prioritization ensures in-flight daemon build branches (which typically use
+ * worktrees) are evaluated before plain local feature branches.
+ *
+ * @param git - GitRunner for executing git commands
+ * @returns Array of branch names (without 'refs/heads/' prefix), worktree branches first
+ */
+export async function enumerateCandidates(git: GitRunner): Promise<string[]> {
+  // Get all active worktree branches
+  const worktreeResult = await git(['worktree', 'list', '--porcelain']);
+  const worktreeBranches = new Set<string>();
+
+  if (worktreeResult.exitCode === 0) {
+    // Parse worktree output: each line is "worktree <path>" or "detached"
+    // We need to get the branch name from the detached HEAD or follow the path
+    const worktreeLines = worktreeResult.stdout.split('\n').filter((l) => l.trim());
+
+    for (const line of worktreeLines) {
+      // Format: "worktree <path>" or "detached"
+      // We need to extract branch info. Let's use git branch -a --contains to find the branch
+      if (line.startsWith('worktree ')) {
+        const path = line.substring('worktree '.length).trim();
+        if (!path) continue;
+
+        // For each worktree, get the current branch using git -C
+        const branchResult = await git(['--work-tree', path, 'rev-parse', '--abbrev-ref', 'HEAD']);
+        if (branchResult.exitCode === 0) {
+          const branch = branchResult.stdout.trim();
+          // Only include feat/* branches
+          if (branch && branch !== 'HEAD' && branch.startsWith('feat/')) {
+            worktreeBranches.add(branch);
+          }
+        }
+      }
+    }
+  }
+
+  // Get all local feat/* branches via git for-each-ref
+  const refResult = await git(['for-each-ref', 'refs/heads/feat', '--format=%(refname:short)']);
+  const allFeatBranches = new Set<string>();
+
+  if (refResult.exitCode === 0) {
+    const lines = refResult.stdout.split('\n').filter((l) => l.trim());
+    for (const branch of lines) {
+      allFeatBranches.add(branch);
+    }
+  }
+
+  // Return worktree branches first, then other feat branches
+  const result: string[] = [];
+
+  // Add worktree branches in the order they were discovered
+  for (const branch of worktreeBranches) {
+    result.push(branch);
+  }
+
+  // Add non-worktree feat branches
+  for (const branch of allFeatBranches) {
+    if (!worktreeBranches.has(branch)) {
+      result.push(branch);
+    }
+  }
 
   return result;
 }
