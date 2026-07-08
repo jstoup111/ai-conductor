@@ -29,6 +29,7 @@ import {
   isMergeable,
   type PrMergeState,
 } from './pr-labels.js';
+import type { ConductorEvent } from '../types/events.js';
 
 // ── Watch entry ───────────────────────────────────────────────────────────────
 
@@ -157,12 +158,48 @@ export interface AutoresolveDispatchOpts {
   now?: () => Date;
 }
 
+/**
+ * Task 10: sweep-driven CI fix dispatch, injected so the sweep can pick
+ * the first eligible failed PR after the label pass and hand it off to
+ * the CI fix pipeline — without the sweep needing to know how that
+ * pipeline works (worktree prep, fix session, guards, etc. live elsewhere).
+ *
+ * `enabled` is read by the caller from `ci_watch.enabled` so the
+ * sweep stays byte-identical to today when the feature is off (AC4).
+ */
+export interface CiFixDispatchOpts {
+  /** Config gate — when false, the sweep runs exactly as before (no new work). */
+  enabled: boolean;
+  /**
+   * Eligibility check for a single entry (cooldown, attempt cap, sticky
+   * labels, etc. — see `ci-fix.ts#isEligibleForCiFix`). Injected so
+   * this module never imports the CI fix pipeline directly.
+   */
+  isEligible: (
+    entry: WatchEntry,
+    state: PrMergeState,
+  ) => Promise<{ eligible: boolean; reason?: string }>;
+  /**
+   * Dispatch CI fix for the chosen entry. Called with the entry AFTER
+   * its attempt counter has already been bumped and `lastCiFixAt` set
+   * (AC3) — the git work itself happens inside this callback.
+   * Returns the outcome kind so the sweep can reset the counter on success.
+   */
+  dispatch: (entry: WatchEntry) => Promise<{ kind: 'green-verified' } | void>;
+  /** Clock override for tests; defaults to `new Date()`. */
+  now?: () => Date;
+}
+
 export interface SweepOpts {
   projectRoot: string;
   log?: (msg: string) => void;
   runGh?: GhRunner;
   /** Task 17: optional autoresolve dispatch, run once per tick after the label pass. */
   autoresolve?: AutoresolveDispatchOpts;
+  /** Task 10: optional CI fix dispatch, run once per tick after the label pass. */
+  ciFix?: CiFixDispatchOpts;
+  /** Task 8: optional event callback for sweep events (e.g. ci_failed on transition). */
+  onEvent?: (event: ConductorEvent) => void;
 }
 
 /**
@@ -174,6 +211,8 @@ export async function sweepMergeableLabels({
   log,
   runGh,
   autoresolve,
+  ciFix,
+  onEvent,
 }: SweepOpts): Promise<void> {
   const gh = runGh ?? makeProductionGh();
   try {
@@ -183,6 +222,10 @@ export async function sweepMergeableLabels({
     // during the label pass so the autoresolve dispatch below never re-fetches
     // PR state. Only populated/consulted when autoresolve is configured.
     const conflictingCandidates: Array<{ entry: WatchEntry; state: PrMergeState }> = [];
+    // Task 10 (AC1/AC2): PRs whose `checksOutcome` is 'failed', gathered
+    // during the label pass so the ciFix dispatch below never re-fetches
+    // PR state. Only populated/consulted when ciFix is configured.
+    const failedCandidates: Array<{ entry: WatchEntry; state: PrMergeState }> = [];
 
     for (const entry of entries) {
       try {
@@ -219,6 +262,14 @@ export async function sweepMergeableLabels({
           conflictingCandidates.push({ entry, state });
         }
 
+        // Task 10 (AC1): track failed PRs for the post-label-pass
+        // ciFix dispatch below. Collected unconditionally (cheap) but
+        // only ever consulted when `ciFix` is configured, so a disabled
+        // config leaves the sweep's observable behavior unchanged (AC4).
+        if (state.checksOutcome === 'failed') {
+          failedCandidates.push({ entry, state });
+        }
+
         // FR-12: if the PR carries `needs-remediation`, ensure `mergeable` is absent.
         if (state.labels.includes('needs-remediation')) {
           if (state.labels.includes('mergeable')) {
@@ -234,6 +285,19 @@ export async function sweepMergeableLabels({
           if (!state.labels.includes('ci-failed')) {
             await ensureLabel(gh, entry.repoCwd, 'ci-failed', 'E8451F', log);
             await addLabel(gh, entry.repoCwd, entry.prUrl, 'ci-failed', log);
+          }
+        }
+
+        // Task 7: green path removes ci-failed and resets attempts (idempotent)
+        // When checks outcome is 'green', remove `ci-failed` if present and reset ciFixAttempts.
+        if (state.checksOutcome === 'green') {
+          if (state.labels.includes('ci-failed')) {
+            await removeLabel(gh, entry.repoCwd, entry.prUrl, 'ci-failed', log);
+          }
+          // Reset ciFixAttempts to 0 on green
+          const greenIdx = survivors.findIndex((s) => s.prUrl === entry.prUrl);
+          if (greenIdx >= 0) {
+            survivors[greenIdx] = { ...survivors[greenIdx], ciFixAttempts: 0 };
           }
         }
 

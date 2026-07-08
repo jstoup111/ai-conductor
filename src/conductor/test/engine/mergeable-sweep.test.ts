@@ -636,3 +636,241 @@ describe('sweepMergeableLabels — Task 6: ci-failed label on failed checks', ()
     expect(addLabelCalls.filter((c) => c.label === 'ci-failed')).toHaveLength(0);
   });
 });
+
+// ── Task 9: label operation error resilience ────────────────────────────
+
+describe('sweepMergeableLabels — Task 9: label gh-error resilience', () => {
+  it('handles GhRunner throw on label call: entry A stays in survivors, entry B processed, sweep resolves', async () => {
+    // Fake runner that throws on label operations for entry A, but not for entry B.
+    // Entry A is a green PR (will trigger mergeable label add).
+    // Entry B is also a green PR.
+    // GhRunner will throw when trying to add/remove/ensure labels for A,
+    // but should work normally for B.
+    let labelOpForA = false;
+    const gh: GhRunner = async (args, _opts) => {
+      // Detect if this is a label operation for PR_URL (entry A)
+      const isLabelOp =
+        (args[0] === 'api' && (args[2] === 'POST' || args[2] === 'DELETE') && /\/labels/.test(args[3] ?? '')) ||
+        (args[0] === 'label' && args[1] === 'create');
+
+      // Check if it's for PR_URL (the label path contains the PR number)
+      if (isLabelOp && args[3]?.includes('/42/')) {
+        labelOpForA = true;
+      }
+
+      if (labelOpForA && isLabelOp) {
+        throw new Error('GitHub label operation failed: rate limit');
+      }
+
+      // Return normal responses for pr view
+      if (args[0] === 'pr' && args[1] === 'view') {
+        const prUrl = args[2];
+        if (prUrl === PR_URL) {
+          return prViewJson('OPEN', 'MERGEABLE', [], []);
+        }
+        if (prUrl === PR_URL_2) {
+          return prViewJson('OPEN', 'MERGEABLE', [], []);
+        }
+      }
+
+      // Return empty for label operations that don't throw
+      return { stdout: '' };
+    };
+
+    const logs: string[] = [];
+    await enrollWatch(tmpDir, entry(PR_URL));
+    await enrollWatch(tmpDir, entry(PR_URL_2));
+
+    // Sweep should not throw even though GhRunner throws on labels for A
+    await expect(
+      sweepMergeableLabels({ projectRoot: tmpDir, runGh: gh, log: (m) => logs.push(m) }),
+    ).resolves.toBeUndefined();
+
+    // Both entries should remain in survivors
+    const remaining = await readWatch(tmpDir);
+    expect(remaining).toHaveLength(2);
+    expect(remaining.some((e) => e.prUrl === PR_URL)).toBe(true);
+    expect(remaining.some((e) => e.prUrl === PR_URL_2)).toBe(true);
+
+    // Error should be logged
+    expect(logs.some((l) => l.includes('error') && l.includes(PR_URL))).toBe(true);
+  });
+});
+
+// ── Task 7: sweep removes ci-failed + resets attempts on green ───────────────
+
+describe('sweepMergeableLabels — Task 7: green removes ci-failed label and resets attempts', () => {
+  it('removes ci-failed label from a green PR that has the label', async () => {
+    const { gh, removeLabelCalls } = makeFakeGh({
+      [PR_URL]: prViewJson('OPEN', 'MERGEABLE', [{ status: 'COMPLETED', conclusion: 'SUCCESS' }], ['ci-failed']),
+    });
+    const greenEntry = { ...entry(), ciFixAttempts: 2 };
+    await enrollWatch(tmpDir, greenEntry);
+    await sweepMergeableLabels({ projectRoot: tmpDir, runGh: gh });
+    expect(removeLabelCalls).toContainEqual({ prUrl: PR_URL, label: 'ci-failed' });
+  });
+
+  it('resets ciFixAttempts to 0 in the registry when a green PR has ci-failed label', async () => {
+    const { gh } = makeFakeGh({
+      [PR_URL]: prViewJson('OPEN', 'MERGEABLE', [{ status: 'COMPLETED', conclusion: 'SUCCESS' }], ['ci-failed']),
+    });
+    const greenEntry = { ...entry(), ciFixAttempts: 2 };
+    await enrollWatch(tmpDir, greenEntry);
+    await sweepMergeableLabels({ projectRoot: tmpDir, runGh: gh });
+    const result = await readWatch(tmpDir);
+    expect(result).toHaveLength(1);
+    expect(result[0].ciFixAttempts).toBe(0);
+  });
+
+  it('does NOT call removeLabel when ci-failed is already absent on a green PR', async () => {
+    const { gh, removeLabelCalls } = makeFakeGh({
+      [PR_URL]: prViewJson('OPEN', 'MERGEABLE', [{ status: 'COMPLETED', conclusion: 'SUCCESS' }], []),
+    });
+    await enrollWatch(tmpDir, entry());
+    await sweepMergeableLabels({ projectRoot: tmpDir, runGh: gh });
+    expect(removeLabelCalls.filter((c) => c.label === 'ci-failed')).toHaveLength(0);
+  });
+
+  it('does NOT make unnecessary ci-failed removal calls on a second sweep when already removed', async () => {
+    // Use trackLabelMutations so the fake runner reflects state changes.
+    const { gh, removeLabelCalls } = makeFakeGh(
+      { [PR_URL]: prViewJson('OPEN', 'MERGEABLE', [{ status: 'COMPLETED', conclusion: 'SUCCESS' }], ['ci-failed']) },
+      { trackLabelMutations: true },
+    );
+    const greenEntry = { ...entry(), ciFixAttempts: 2 };
+    await enrollWatch(tmpDir, greenEntry);
+
+    // First sweep: green PR has 'ci-failed' → removeLabel called once.
+    await sweepMergeableLabels({ projectRoot: tmpDir, runGh: gh });
+    expect(removeLabelCalls.filter((c) => c.label === 'ci-failed')).toHaveLength(1);
+
+    // Second sweep: 'ci-failed' is now absent (tracked by fake runner) → no new calls.
+    const removeBeforeSecond = removeLabelCalls.length;
+    await sweepMergeableLabels({ projectRoot: tmpDir, runGh: gh });
+    expect(removeLabelCalls.length).toBe(removeBeforeSecond);
+  });
+});
+
+// ── Task 10: CiFixDispatchOpts seam + disabled-config inertness ──────────────
+
+describe('sweepMergeableLabels — Task 10: ciFix dispatch with disabled-config gating', () => {
+  it('does not invoke dispatch when ciFix is absent and failed candidates present', async () => {
+    const dispatchCalls: string[] = [];
+    const { gh } = makeFakeGh({
+      [PR_URL]: prViewJson('OPEN', 'MERGEABLE', [{ status: 'COMPLETED', conclusion: 'FAILURE' }], []),
+    });
+    await enrollWatch(tmpDir, entry());
+    await sweepMergeableLabels({
+      projectRoot: tmpDir,
+      runGh: gh,
+      // ciFix is absent
+    });
+    expect(dispatchCalls).toHaveLength(0);
+  });
+
+  it('does not invoke dispatch when ciFix.enabled is false and failed candidates present', async () => {
+    const dispatchCalls: string[] = [];
+    const { gh } = makeFakeGh({
+      [PR_URL]: prViewJson('OPEN', 'MERGEABLE', [{ status: 'COMPLETED', conclusion: 'FAILURE' }], []),
+    });
+    await enrollWatch(tmpDir, entry());
+    await sweepMergeableLabels({
+      projectRoot: tmpDir,
+      runGh: gh,
+      ciFix: {
+        enabled: false,
+        isEligible: async () => ({ eligible: true }),
+        dispatch: async () => {
+          dispatchCalls.push('dispatched');
+        },
+      },
+    });
+    expect(dispatchCalls).toHaveLength(0);
+  });
+
+  it('registry writes are identical between ciFix absent and ciFix disabled runs', async () => {
+    const { gh: gh1 } = makeFakeGh({
+      [PR_URL]: prViewJson('OPEN', 'MERGEABLE', [{ status: 'COMPLETED', conclusion: 'FAILURE' }], []),
+    });
+    const { gh: gh2 } = makeFakeGh({
+      [PR_URL]: prViewJson('OPEN', 'MERGEABLE', [{ status: 'COMPLETED', conclusion: 'FAILURE' }], []),
+    });
+
+    // First run: no ciFix option
+    await enrollWatch(tmpDir, entry());
+    await sweepMergeableLabels({
+      projectRoot: tmpDir,
+      runGh: gh1,
+    });
+    const registryWithoutCiFix = await readWatch(tmpDir);
+
+    // Second run: ciFix disabled
+    await rewriteWatch(tmpDir, [entry()]); // reset
+    await sweepMergeableLabels({
+      projectRoot: tmpDir,
+      runGh: gh2,
+      ciFix: {
+        enabled: false,
+        isEligible: async () => ({ eligible: true }),
+        dispatch: async () => {
+          throw new Error('should not be called');
+        },
+      },
+    });
+    const registryWithCiFixDisabled = await readWatch(tmpDir);
+
+    // Both registry writes should be identical
+    expect(registryWithoutCiFix).toEqual(registryWithCiFixDisabled);
+  });
+});
+
+// ── Task 8: pending no-op + transition-only event emission ────────────────
+
+describe('sweepMergeableLabels — Task 8: pending no-op and transition-only event emission', () => {
+  it('pending entry produces zero label mutations and no events', async () => {
+    const events: Array<{ type: string; phase?: string }> = [];
+    const { gh, addLabelCalls, removeLabelCalls } = makeFakeGh({
+      [PR_URL]: prViewJson('OPEN', 'MERGEABLE', [{ status: 'RUNNING' }], []),
+    });
+    await enrollWatch(tmpDir, entry());
+    await sweepMergeableLabels({
+      projectRoot: tmpDir,
+      runGh: gh,
+      onEvent: (e) => events.push(e as any),
+    });
+    // No ci-failed label mutations for pending
+    expect(addLabelCalls.filter((c) => c.label === 'ci-failed')).toHaveLength(0);
+    expect(removeLabelCalls.filter((c) => c.label === 'ci-failed')).toHaveLength(0);
+    // No ci_failed events emitted for pending
+    expect(events.filter((e) => e.type === 'ci_failed')).toHaveLength(0);
+  });
+
+  it('ci_failed event emitted only on label-absent→present transition', async () => {
+    const events: Array<{ type: string; phase?: string }> = [];
+    const { gh } = makeFakeGh(
+      { [PR_URL]: prViewJson('OPEN', 'MERGEABLE', [{ status: 'COMPLETED', conclusion: 'FAILURE' }], []) },
+      { trackLabelMutations: true },
+    );
+    await enrollWatch(tmpDir, entry());
+
+    // First sweep: failed PR without ci-failed label → event emitted with phase='detected'
+    await sweepMergeableLabels({
+      projectRoot: tmpDir,
+      runGh: gh,
+      onEvent: (e) => events.push(e as any),
+    });
+    const ciFailedEvents = events.filter((e) => e.type === 'ci_failed');
+    expect(ciFailedEvents).toHaveLength(1);
+    expect((ciFailedEvents[0] as any).phase).toBe('detected');
+
+    // Second sweep: same failed PR but ci-failed label now present → no new event
+    const eventCountBeforeSecond = events.length;
+    await sweepMergeableLabels({
+      projectRoot: tmpDir,
+      runGh: gh,
+      onEvent: (e) => events.push(e as any),
+    });
+    const newCiFailedEvents = events.slice(eventCountBeforeSecond).filter((e) => e.type === 'ci_failed');
+    expect(newCiFailedEvents).toHaveLength(0);
+  });
+});
