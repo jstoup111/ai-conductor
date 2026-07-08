@@ -1,8 +1,13 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
+import { mkdtemp, rm, readdir } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import {
   detectFinishRecordCommand,
   dispatchFinishRecordGuide,
+  dispatchFinishRecord,
   FINISH_RECORD_USAGE,
+  type FinishRecordRunners,
 } from '../../src/engine/finish-record-cli.js';
 
 describe('engine/finish-record-cli', () => {
@@ -123,6 +128,81 @@ describe('engine/finish-record-cli', () => {
       expect(FINISH_RECORD_USAGE).toContain('--choice');
       expect(FINISH_RECORD_USAGE).toContain('--pr-url');
       expect(FINISH_RECORD_USAGE).toContain('--pipeline-dir');
+    });
+  });
+
+  describe('dispatchFinishRecord — absolute pipeline-dir guard', () => {
+    let scratchParent: string;
+    let existingAbsDir: string;
+    let spyRunners: FinishRecordRunners & { calls: string[] };
+
+    beforeEach(async () => {
+      scratchParent = await mkdtemp(join(tmpdir(), 'finish-record-guard-'));
+      existingAbsDir = await mkdtemp(join(scratchParent, 'pipeline-'));
+      const calls: string[] = [];
+      spyRunners = {
+        calls,
+        runGh: vi.fn(async (args: string[]) => {
+          calls.push(`gh:${args.join(' ')}`);
+          return undefined;
+        }),
+        runGit: vi.fn(async (args: string[]) => {
+          calls.push(`git:${args.join(' ')}`);
+          return undefined;
+        }),
+      };
+    });
+
+    afterEach(async () => {
+      vi.restoreAllMocks();
+      await rm(scratchParent, { recursive: true, force: true });
+    });
+
+    it('refuses a relative --pipeline-dir (.pipeline): exit !=0, no writes, no spawns, stderr says absolute required', async () => {
+      const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const code = await dispatchFinishRecord(
+        { kind: 'record', choice: 'keep', pipelineDir: '.pipeline' },
+        scratchParent,
+        spyRunners,
+      );
+      expect(code).not.toBe(0);
+      expect(spyRunners.calls).toEqual([]);
+      expect(errSpy.mock.calls.flat().join(' ')).toMatch(/absolute/i);
+    });
+
+    it('refuses a relative --pipeline-dir (../other/.pipeline): exit !=0, no writes, no spawns, stderr says absolute required', async () => {
+      const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const code = await dispatchFinishRecord(
+        { kind: 'record', choice: 'keep', pipelineDir: '../other/.pipeline' },
+        scratchParent,
+        spyRunners,
+      );
+      expect(code).not.toBe(0);
+      expect(spyRunners.calls).toEqual([]);
+      expect(errSpy.mock.calls.flat().join(' ')).toMatch(/absolute/i);
+    });
+
+    it('refuses a non-existent absolute --pipeline-dir: exit !=0, no mkdir, no spawns', async () => {
+      const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const missing = join(scratchParent, 'does-not-exist');
+      const code = await dispatchFinishRecord(
+        { kind: 'record', choice: 'keep', pipelineDir: missing },
+        scratchParent,
+        spyRunners,
+      );
+      expect(code).not.toBe(0);
+      expect(spyRunners.calls).toEqual([]);
+      await expect(readdir(scratchParent)).resolves.not.toContain('does-not-exist');
+      expect(errSpy).toHaveBeenCalled();
+    });
+
+    it('accepts an existing absolute --pipeline-dir and does not refuse on the guard', async () => {
+      const code = await dispatchFinishRecord(
+        { kind: 'record', choice: 'keep', pipelineDir: existingAbsDir },
+        scratchParent,
+        spyRunners,
+      );
+      expect(code).toBe(0);
     });
   });
 });
