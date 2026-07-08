@@ -327,9 +327,15 @@ export async function sweepMergeableLabels({
           }
         }
       } catch (err) {
-        // Per-PR exception: log + skip, continue with other entries (FR-15).
+        // Per-PR exception (including gh label ensure/add/remove failures):
+        // log + skip, continue with other entries (FR-15, Task 9). The entry
+        // may already be in survivors (pushed above once its state was read
+        // as live) — only push again here if it never made it in, so a
+        // label-operation error never duplicates the entry in the registry.
         log?.(`[mergeable-sweep] error processing ${entry.prUrl}: ${err}`);
-        survivors.push(entry);
+        if (!survivors.some((s) => s.prUrl === entry.prUrl)) {
+          survivors.push(entry);
+        }
       }
     }
 
