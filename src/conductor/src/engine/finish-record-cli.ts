@@ -5,6 +5,7 @@
 import { isAbsolute, dirname } from 'node:path';
 import { stat } from 'node:fs/promises';
 import { makeProductionGh } from './pr-labels.js';
+import { headPushedToUpstream } from './push-evidence.js';
 
 export type FinishRecordDispatch =
   | { kind: 'record'; choice: string; prUrl?: string; pipelineDir: string }
@@ -155,6 +156,20 @@ export async function dispatchFinishRecord(
     if (!stdout || !stdout.trim()) {
       console.error(
         `finish-record: gh pr view returned no URL — cannot verify PR ${cmd.prUrl} exists; refusing to record`,
+      );
+      return 1;
+    }
+
+    // choice='pr' verification, second guard: the current HEAD must actually
+    // have been pushed to its upstream tracking branch. Reuses the shared
+    // push-evidence gate (local git only, no network) rather than
+    // reimplementing merge-base ancestry logic here. Both `false` (not
+    // pushed) and `null` (indeterminate — git error, no upstream, etc.)
+    // refuse; fail-closed.
+    const pushed = await headPushedToUpstream(deps.runGit, dirname(cmd.pipelineDir));
+    if (pushed !== true) {
+      console.error(
+        `finish-record: HEAD has not been verified as pushed to its upstream branch (push-evidence check returned ${String(pushed)}) — refusing to record PR ${cmd.prUrl}`,
       );
       return 1;
     }

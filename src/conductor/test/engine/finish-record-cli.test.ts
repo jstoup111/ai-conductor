@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
-import { mkdtemp, rm, readdir } from 'node:fs/promises';
+import { mkdtemp, rm, readdir, readFile } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -270,9 +270,17 @@ describe('engine/finish-record-cli', () => {
       await expect(snapshotDir(existingAbsDir)).resolves.toEqual(before);
     });
 
-    it('passes the guard when gh succeeds with a URL', async () => {
+    it('passes the guard when gh succeeds with a URL and push-evidence confirms HEAD is pushed', async () => {
       const runGh = vi.fn(async () => ({ stdout: 'https://github.com/org/repo/pull/1\n' }));
-      const runGit = vi.fn(async () => undefined);
+      const runGit = vi.fn(async (args: string[]) => {
+        if (args[0] === 'rev-parse' && args.includes('@{u}')) {
+          return { stdout: 'refs/remotes/origin/feat\n' };
+        }
+        if (args[0] === 'merge-base') {
+          return { stdout: '' }; // exit 0 → is-ancestor → pushed
+        }
+        throw new Error(`unexpected git args: ${args.join(' ')}`);
+      });
       const code = await dispatchFinishRecord(
         {
           kind: 'record',
@@ -288,6 +296,68 @@ describe('engine/finish-record-cli', () => {
         ['pr', 'view', '--json', 'url', '-q', '.url'],
         { cwd: dirname(existingAbsDir) },
       );
+    });
+
+    it('refuses when headPushedToUpstream returns false: exit !=0, zero writes', async () => {
+      const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const before = await snapshotDir(existingAbsDir);
+      const runGh = vi.fn(async () => ({ stdout: 'https://github.com/org/repo/pull/1\n' }));
+      const runGit = vi.fn(async (args: string[]) => {
+        if (args[0] === 'rev-parse' && args.includes('@{u}')) {
+          return { stdout: 'refs/remotes/origin/feat\n' };
+        }
+        if (args[0] === 'merge-base') {
+          const notAncestor = Object.assign(new Error('not an ancestor'), { code: 1 });
+          throw notAncestor;
+        }
+        throw new Error(`unexpected git args: ${args.join(' ')}`);
+      });
+      const code = await dispatchFinishRecord(
+        {
+          kind: 'record',
+          choice: 'pr',
+          prUrl: 'https://github.com/org/repo/pull/1',
+          pipelineDir: existingAbsDir,
+        },
+        scratchParent,
+        { runGh, runGit },
+      );
+      expect(code).not.toBe(0);
+      expect(errSpy.mock.calls.flat().join(' ')).toMatch(/not.*verified as pushed|push-evidence/i);
+      await expect(snapshotDir(existingAbsDir)).resolves.toEqual(before);
+    });
+
+    it('refuses when headPushedToUpstream returns null (indeterminate): exit !=0, zero writes', async () => {
+      const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const before = await snapshotDir(existingAbsDir);
+      const runGh = vi.fn(async () => ({ stdout: 'https://github.com/org/repo/pull/1\n' }));
+      const runGit = vi.fn(async () => {
+        throw new Error('git not available');
+      });
+      const code = await dispatchFinishRecord(
+        {
+          kind: 'record',
+          choice: 'pr',
+          prUrl: 'https://github.com/org/repo/pull/1',
+          pipelineDir: existingAbsDir,
+        },
+        scratchParent,
+        { runGh, runGit },
+      );
+      expect(code).not.toBe(0);
+      expect(errSpy.mock.calls.flat().join(' ')).toMatch(/not.*verified as pushed|push-evidence/i);
+      await expect(snapshotDir(existingAbsDir)).resolves.toEqual(before);
+    });
+  });
+
+  describe('dispatchFinishRecord — reuses push-evidence module (no local reimplementation)', () => {
+    it('imports headPushedToUpstream from ./push-evidence.js instead of reimplementing merge-base logic', async () => {
+      const src = await readFile(
+        new URL('../../src/engine/finish-record-cli.ts', import.meta.url),
+        'utf8',
+      );
+      expect(src).toMatch(/from ['"]\.\/push-evidence\.js['"]/);
+      expect(src).toMatch(/headPushedToUpstream/);
     });
   });
 });
