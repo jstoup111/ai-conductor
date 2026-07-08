@@ -64,7 +64,11 @@ import {
   detectShippedRecordCommand,
   dispatchShippedRecord,
 } from './engine/shipped-record-cli.js';
-import { detectFinishRecordCommand, dispatchFinishRecord } from './engine/finish-record-cli.js';
+import {
+  detectFinishRecordCommand,
+  dispatchFinishRecord,
+  makeProductionFinishRecordRunners,
+} from './engine/finish-record-cli.js';
 import {
   detectDeriveFeedbackCommand,
   dispatchDeriveFeedback,
@@ -337,7 +341,7 @@ async function main(): Promise<void> {
   // shipped-record dispatch pattern.
   const finishRecordCmd = detectFinishRecordCommand(process.argv);
   if (finishRecordCmd) {
-    const code = await dispatchFinishRecord(finishRecordCmd, process.cwd());
+    const code = await dispatchFinishRecord(finishRecordCmd, process.cwd(), makeProductionFinishRecordRunners());
     process.exit(code);
   }
 

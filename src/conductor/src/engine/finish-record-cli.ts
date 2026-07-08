@@ -4,7 +4,7 @@
 
 import { isAbsolute, dirname, join } from 'node:path';
 import { stat, writeFile } from 'node:fs/promises';
-import { makeProductionGh } from './pr-labels.js';
+import { makeProductionGh, makeProductionGit } from './pr-labels.js';
 import { headPushedToUpstream } from './push-evidence.js';
 import { readState, writeState } from './state.js';
 
@@ -87,9 +87,7 @@ export function makeProductionFinishRecordRunners(): FinishRecordRunners {
   const gh = makeProductionGh();
   return {
     runGh: async (args: string[], opts?: { cwd: string }) => gh(args, { cwd: opts?.cwd ?? process.cwd() }),
-    runGit: async () => {
-      throw new Error('runGit not implemented');
-    },
+    runGit: async (args: string[], opts?: { cwd: string }) => makeProductionGit()(args, { cwd: opts?.cwd ?? process.cwd() }),
   };
 }
 
