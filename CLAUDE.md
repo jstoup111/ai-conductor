@@ -12,6 +12,20 @@ communication protocol, enforcement levels, and conventions — are defined in:
 
 Claude MUST read and follow HARNESS.md at the start of every session.
 
+## Design Principles
+
+**Deterministic where possible; LLM only where necessary.** When designing any fix or
+feature for this harness, first ask: can the engine, a git hook, a gate, or plain code
+do this mechanically? Dispatch an LLM agent only for the parts that genuinely require
+judgement (synthesis, code authoring, ambiguous resolution). Never rely on prompt
+discipline for something machinery can enforce or compute — prompt-level rules drift
+under long builds and cost operator interventions; deterministic enforcement is instant,
+token-free, and fails at the point of violation. When an agent repeatedly violates a
+rule, the fix is machinery that stamps/validates/rejects at the moment of the mistake —
+not a stronger prompt. (Precedents: the evidence gate derives completion from commits
+rather than trusting agent reports; #426 fixed path matching engine-side; #433 replaces
+trailer discipline with engine-stamped task ids and commit hooks.)
+
 ## Harness Architecture
 
 - **Skills** (`skills/`) — Each has a `SKILL.md` with YAML frontmatter. One skill, one responsibility.
