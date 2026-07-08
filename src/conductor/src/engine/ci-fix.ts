@@ -34,13 +34,13 @@ export async function buildCiFixHint(
     const checksData = JSON.parse(checksResult.stdout);
 
     // Extract failed checks with their run links
-    const failedChecks: Array<{ name: string; url: string }> = [];
+    const failedChecks: Array<{ name: string; url?: string }> = [];
 
     if (checksData.checkSuites && Array.isArray(checksData.checkSuites)) {
       for (const suite of checksData.checkSuites) {
         if (suite.checkRuns && Array.isArray(suite.checkRuns)) {
           for (const run of suite.checkRuns) {
-            if (run.conclusion === 'FAILURE' && run.detailsUrl) {
+            if (run.conclusion === 'FAILURE') {
               failedChecks.push({
                 name: run.name,
                 url: run.detailsUrl,
@@ -57,30 +57,42 @@ export async function buildCiFixHint(
     for (const check of failedChecks) {
       lines.push(`\n• ${check.name}`);
 
-      // Try to fetch logs for this check
-      try {
-        // Extract run ID from the details URL (GitHub Actions run URL format)
-        const runIdMatch = check.url.match(/\/runs\/(\d+)/);
-        if (runIdMatch) {
-          const runId = runIdMatch[1];
-          const logsResult = await gh(['run', 'view', runId, '--log-failed'], { cwd });
-          const logLines = logsResult.stdout.split('\n');
+      // Add the link if available
+      if (check.url) {
+        lines.push(`  ${check.url}`);
+      }
 
-          // Include first few log lines (bounded length)
-          const maxLogLines = 10;
-          const excerpt = logLines.slice(0, maxLogLines).join('\n');
-          if (excerpt.trim()) {
-            lines.push('  Log excerpt:');
-            lines.push('  ' + excerpt.split('\n').join('\n  '));
+      // Try to fetch logs for this check
+      if (check.url) {
+        try {
+          // Extract run ID from the details URL (GitHub Actions run URL format)
+          const runIdMatch = check.url.match(/\/runs\/(\d+)/);
+          if (runIdMatch) {
+            const runId = runIdMatch[1];
+            const logsResult = await gh(['run', 'view', runId, '--log-failed'], { cwd });
+            const logLines = logsResult.stdout.split('\n');
+
+            // Include first few log lines (bounded length)
+            const maxLogLines = 10;
+            const excerpt = logLines.slice(0, maxLogLines).join('\n');
+            if (excerpt.trim()) {
+              lines.push('  Log excerpt:');
+              lines.push('  ' + excerpt.split('\n').join('\n  '));
+            }
           }
+        } catch (err) {
+          // Degrade gracefully: log fetch failed, continue with just the check name and link
+          // (Task 16: negative path)
         }
-      } catch (err) {
-        // Degrade gracefully: log fetch failed, continue with just the check name
-        // (Task 16: negative path)
       }
     }
 
-    return lines.join('\n');
+    // Return non-empty hint even if all checks were added without logs
+    if (failedChecks.length > 0) {
+      return lines.join('\n');
+    }
+
+    return '';
   } catch (err) {
     // If gh call fails, return empty hint
     return '';

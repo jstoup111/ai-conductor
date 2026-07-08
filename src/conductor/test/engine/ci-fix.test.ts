@@ -15,20 +15,25 @@ import type { GhRunner } from '../../src/engine/pr-labels.js';
  *
  * When `gh pr checks --json` is called, returns the `prChecks` response.
  * When `gh run view --log-failed` is called, returns the `runLogs` response.
+ * Can optionally throw on specific commands.
  */
-function makeFakeGhForHints(
-  prChecks: { stdout: string },
-  runLogs: { stdout: string },
-): GhRunner {
+function makeFakeGhForHints(options: {
+  prChecks: { stdout: string };
+  runLogs?: { stdout: string };
+  throwOnRunView?: boolean;
+}): GhRunner {
   return async (args) => {
     // gh pr checks <url> --json
     if (args[0] === 'pr' && args[1] === 'checks' && args[args.length - 1] === '--json') {
-      return prChecks;
+      return options.prChecks;
     }
 
     // gh run view <run-id> --log-failed
     if (args[0] === 'run' && args[1] === 'view' && args.includes('--log-failed')) {
-      return runLogs;
+      if (options.throwOnRunView) {
+        throw new Error('gh run view failed');
+      }
+      return options.runLogs || { stdout: '' };
     }
 
     return { stdout: '' };
@@ -72,7 +77,7 @@ line 9 of error
 line 10 of error`,
     };
 
-    const gh = makeFakeGhForHints(prChecks, runLogs);
+    const gh = makeFakeGhForHints({ prChecks, runLogs });
     const hint = await buildCiFixHint(gh, CWD, PR_URL);
 
     expect(hint).toContain('unit-tests');
@@ -80,5 +85,61 @@ line 10 of error`,
     expect(hint).toContain('line 2 of error');
     // Should have bounded length, might not include all lines
     expect(hint.length).toBeLessThan(1000);
+  });
+
+  it('degradation: gh run view throws → hint contains check name + link, non-empty, no throw', async () => {
+    const prChecks = {
+      stdout: JSON.stringify({
+        checkSuites: [
+          {
+            checkRuns: [
+              {
+                name: 'lint-check',
+                conclusion: 'FAILURE',
+                detailsUrl: 'https://github.com/foo/bar/runs/456',
+              },
+            ],
+          },
+        ],
+      }),
+    };
+
+    const gh = makeFakeGhForHints({ prChecks, throwOnRunView: true });
+    const hint = await buildCiFixHint(gh, CWD, PR_URL);
+
+    // Hint must be non-empty
+    expect(hint).toBeTruthy();
+    expect(hint.length).toBeGreaterThan(0);
+    // Must contain check name
+    expect(hint).toContain('lint-check');
+    // Must contain the link
+    expect(hint).toContain('https://github.com/foo/bar/runs/456');
+  });
+
+  it('degradation: no run link present → hint contains check name, non-empty, no throw', async () => {
+    const prChecks = {
+      stdout: JSON.stringify({
+        checkSuites: [
+          {
+            checkRuns: [
+              {
+                name: 'test-suite',
+                conclusion: 'FAILURE',
+                // No detailsUrl
+              },
+            ],
+          },
+        ],
+      }),
+    };
+
+    const gh = makeFakeGhForHints({ prChecks });
+    const hint = await buildCiFixHint(gh, CWD, PR_URL);
+
+    // Hint must be non-empty
+    expect(hint).toBeTruthy();
+    expect(hint.length).toBeGreaterThan(0);
+    // Must contain check name
+    expect(hint).toContain('test-suite');
   });
 });
