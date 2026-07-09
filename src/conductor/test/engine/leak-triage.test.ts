@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { parseDirtyStatus, enumerateCandidates, classifyModifiedFiles, triageModifiedFiles } from '../../src/engine/leak-triage.js';
 import { makeGitRunner, type GitRunner } from '../../src/engine/rebase.js';
-import { mkdtemp, rm, writeFile, mkdir } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile, mkdir, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -488,6 +488,214 @@ M  src/file2.ts
         path: 'test/file2.ts.new',
       });
       expect(result[1].explainedBy).toBeUndefined();
+    });
+  });
+
+  describe('HealPlan (all-or-nothing composition with stray vetoes)', () => {
+    let tempDir: string;
+    let git: GitRunner;
+
+    beforeEach(async () => {
+      // Create a temporary directory for the test repo
+      tempDir = await mkdtemp(join(tmpdir(), 'leak-triage-healplan-test-'));
+      git = makeGitRunner(tempDir);
+
+      // Initialize a git repo with a main branch
+      await git(['init']);
+      await git(['config', 'user.email', 'test@example.com']);
+      await git(['config', 'user.name', 'Test User']);
+
+      // Create an initial commit on main
+      await git(['commit', '--allow-empty', '-m', 'Initial commit']);
+    });
+
+    afterEach(async () => {
+      // Clean up the temporary directory
+      await rm(tempDir, { recursive: true, force: true });
+    });
+
+    it('stray matching no culprit blob → whole heal vetoed', async () => {
+      // Create a feature branch with a file
+      await git(['checkout', '-b', 'feat/daemon-x']);
+      await mkdir(join(tempDir, 'src'), { recursive: true });
+      const filePath = join(tempDir, 'src', 'a.ts');
+      await writeFile(filePath, 'content a', 'utf-8');
+      await git(['add', 'src/a.ts']);
+      await git(['commit', '-m', 'Add src/a.ts on feat/daemon-x']);
+
+      // Switch back to main
+      await git(['checkout', 'main']);
+
+      // Create an untracked file with content NOT in any candidate branch
+      const untrackedPath = join(tempDir, 'stray.ts');
+      await writeFile(untrackedPath, 'unexplained stray content', 'utf-8');
+
+      // Get porcelain status with the untracked file
+      const porcelainResult = await git(['status', '--porcelain']);
+      const porcelain = porcelainResult.stdout;
+
+      // Import healPlan
+      const { healPlan } = await import('../../src/engine/leak-triage.js');
+
+      // Call healPlan
+      const plan = await healPlan(git, porcelain, ['feat/daemon-x']);
+
+      expect(plan.canHeal).toBe(false);
+      expect(plan.reason).toContain('unexplained');
+    });
+
+    it('stray matching only a different branch than modified files → vetoed (single-branch rule)', async () => {
+      // Create initial file on main
+      await mkdir(join(tempDir, 'src'), { recursive: true });
+      const file1Path = join(tempDir, 'src', 'file1.ts');
+      await writeFile(file1Path, 'initial content', 'utf-8');
+      await git(['add', 'src/file1.ts']);
+      await git(['commit', '-m', 'Initial commit with file1']);
+
+      // Create first branch with modified file1
+      await git(['checkout', '-b', 'feat/branch-a']);
+      await writeFile(file1Path, 'content for branch-a', 'utf-8');
+      await git(['add', 'src/file1.ts']);
+      await git(['commit', '-m', 'Modify file1 on feat/branch-a']);
+
+      // Create second branch from main
+      await git(['checkout', 'main']);
+      await git(['checkout', '-b', 'feat/branch-b']);
+      await mkdir(join(tempDir, 'test'), { recursive: true });
+      const file2Path = join(tempDir, 'test', 'file2.ts');
+      await writeFile(file2Path, 'unexplained content', 'utf-8');
+      await git(['add', 'test/file2.ts']);
+      await git(['commit', '-m', 'Add file2 on feat/branch-b']);
+
+      // Switch back to main
+      await git(['checkout', 'main']);
+
+      // Modify file1 to match branch-a
+      await writeFile(file1Path, 'content for branch-a', 'utf-8');
+
+      // Create an untracked file that doesn't match any branch
+      const untrackedPath = join(tempDir, 'unexplained.ts');
+      await writeFile(untrackedPath, 'this content is not in any branch', 'utf-8');
+
+      // Get porcelain status
+      const porcelainResult = await git(['status', '--porcelain']);
+      const porcelain = porcelainResult.stdout;
+
+      // Import healPlan
+      const { healPlan } = await import('../../src/engine/leak-triage.js');
+
+      // Call healPlan with both branches
+      const plan = await healPlan(git, porcelain, ['feat/branch-a', 'feat/branch-b']);
+
+      // Should veto because the unexplained stray file fails the no-match veto
+      expect(plan.canHeal).toBe(false);
+      expect(plan.reason).toContain('unexplained');
+    });
+
+    it('gitignored file absent from porcelain → never classified', async () => {
+      // Create a .gitignore
+      const gitignorePath = join(tempDir, '.gitignore');
+      await writeFile(gitignorePath, '*.ignored\n', 'utf-8');
+      await git(['add', '.gitignore']);
+      await git(['commit', '-m', 'Add .gitignore']);
+
+      // Create an ignored file (should not appear in porcelain status)
+      const ignoredPath = join(tempDir, 'file.ignored');
+      await writeFile(ignoredPath, 'this should be ignored', 'utf-8');
+
+      // Get porcelain status
+      const porcelainResult = await git(['status', '--porcelain']);
+      const porcelain = porcelainResult.stdout;
+
+      // Verify the ignored file is not in porcelain
+      expect(porcelain).not.toContain('file.ignored');
+
+      // Import healPlan
+      const { healPlan } = await import('../../src/engine/leak-triage.js');
+
+      // Call healPlan with empty candidates (should succeed since no files to heal)
+      const plan = await healPlan(git, porcelain, []);
+
+      expect(plan.canHeal).toBe(true);
+      expect(plan.filesToRestore).toHaveLength(0);
+      expect(plan.filesToDelete).toHaveLength(0);
+    });
+
+    it('all modified + strays explained by single branch → canHeal true, correct restore/delete lists', async () => {
+      // Create initial file on main that will be modified
+      await mkdir(join(tempDir, 'src'), { recursive: true });
+      const modifiedPath = join(tempDir, 'src', 'modified.ts');
+      await writeFile(modifiedPath, 'initial content', 'utf-8');
+      await git(['add', 'src/modified.ts']);
+      await git(['commit', '-m', 'Initial commit on main']);
+
+      // Create a feature branch with multiple files
+      await git(['checkout', '-b', 'feat/daemon-x']);
+      await writeFile(modifiedPath, 'modified content from branch', 'utf-8');
+      await mkdir(join(tempDir, 'extra'), { recursive: true });
+      const straySourcePath = join(tempDir, 'extra', 'source.ts');
+      await writeFile(straySourcePath, 'stray content from branch', 'utf-8');
+      await git(['add', 'src/modified.ts', 'extra/source.ts']);
+      await git(['commit', '-m', 'Modify and add files on feat/daemon-x']);
+
+      // Switch back to main
+      await git(['checkout', 'main']);
+
+      // Modify src/modified.ts to match branch content (modified file)
+      await writeFile(modifiedPath, 'modified content from branch', 'utf-8');
+
+      // Create an untracked file with content matching a file in the branch
+      const strayPath = join(tempDir, 'src', 'stray.ts');
+      await writeFile(strayPath, 'stray content from branch', 'utf-8');
+
+      // Get porcelain status
+      const porcelainResult = await git(['status', '--porcelain']);
+      const porcelain = porcelainResult.stdout;
+
+      // Import healPlan
+      const { healPlan } = await import('../../src/engine/leak-triage.js');
+
+      // Call healPlan
+      const plan = await healPlan(git, porcelain, ['feat/daemon-x']);
+
+      expect(plan.canHeal).toBe(true);
+      expect(plan.explainedBy).toBe('feat/daemon-x');
+      expect(plan.filesToRestore).toContain('src/modified.ts');
+      expect(plan.filesToDelete).toContain('src/stray.ts');
+    });
+
+    it('mixed scenario with some files explained, some not → canHeal false', async () => {
+      // Create a feature branch with one file
+      await git(['checkout', '-b', 'feat/daemon-x']);
+      await mkdir(join(tempDir, 'src'), { recursive: true });
+      const explainedPath = join(tempDir, 'src', 'explained.ts');
+      await writeFile(explainedPath, 'explained content', 'utf-8');
+      await git(['add', 'src/explained.ts']);
+      await git(['commit', '-m', 'Add explained.ts on feat/daemon-x']);
+
+      // Switch back to main
+      await git(['checkout', 'main']);
+
+      // Create one modified file that matches the branch
+      await mkdir(join(tempDir, 'src'), { recursive: true });
+      await writeFile(explainedPath, 'explained content', 'utf-8');
+
+      // Create an untracked file with unexplained content
+      const unexplainedPath = join(tempDir, 'src', 'unexplained.ts');
+      await writeFile(unexplainedPath, 'this content is not in any branch', 'utf-8');
+
+      // Get porcelain status
+      const porcelainResult = await git(['status', '--porcelain']);
+      const porcelain = porcelainResult.stdout;
+
+      // Import healPlan
+      const { healPlan } = await import('../../src/engine/leak-triage.js');
+
+      // Call healPlan
+      const plan = await healPlan(git, porcelain, ['feat/daemon-x']);
+
+      expect(plan.canHeal).toBe(false);
+      expect(plan.reason).toContain('unexplained');
     });
   });
 

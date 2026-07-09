@@ -32,6 +32,19 @@ export interface FileClassification {
   explainedBy?: string;
 }
 
+export interface HealPlan {
+  /** Whether all dirty state can be healed */
+  canHeal: boolean;
+  /** The single branch explaining everything (if canHeal is true) */
+  explainedBy?: string;
+  /** Files to restore via git restore */
+  filesToRestore: string[];
+  /** Untracked strays to delete */
+  filesToDelete: string[];
+  /** If canHeal is false, why healing is vetoed */
+  reason?: string;
+}
+
 /**
  * Parse `git status --porcelain` output into a dirty status classification.
  *
@@ -392,5 +405,139 @@ export async function triageModifiedFiles(
     healable: true,
     canHeal: allExplained,
     classifications,
+  };
+}
+
+/**
+ * Compose an all-or-nothing heal plan with stray vetoes.
+ *
+ * Orchestrates parseDirtyStatus, classifyModifiedFiles, and classifyStrays
+ * to determine whether all dirty state can be healed and what files need restoration/deletion.
+ *
+ * Returns early if any staged modifications are present, marking canHeal as false.
+ *
+ * Validates the heal plan with three vetoes:
+ * 1. **No-match veto**: If ANY untracked file is unexplained (no blob match in any branch),
+ *    set canHeal to false with reason "unexplained".
+ * 2. **Single-branch rule**: All explained files (modified and strays) must be explained
+ *    by the SAME branch. If files are explained by different branches, set canHeal to false
+ *    with reason mentioning the branch conflict.
+ * 3. **Gitignored exclusion**: Gitignored files are naturally absent from porcelain output,
+ *    so no extra validation is needed.
+ *
+ * If canHeal is true, compiles:
+ * - filesToRestore: modified files explained by the single branch
+ * - filesToDelete: untracked strays explained by the single branch
+ *
+ * @param git - GitRunner for executing git commands
+ * @param porcelain - Raw `git status --porcelain` output
+ * @param candidates - List of candidate branch names to check against
+ * @returns HealPlan with canHeal, explainedBy, restore/delete lists, and optional reason
+ */
+export async function healPlan(git: GitRunner, porcelain: string, candidates: string[]): Promise<HealPlan> {
+  const dirtyStatus = parseDirtyStatus(porcelain);
+
+  // Guard 1: Staged abort — if any staged modifications exist, reject healing
+  if (dirtyStatus.staged.length > 0) {
+    return {
+      canHeal: false,
+      filesToRestore: [],
+      filesToDelete: [],
+      reason: 'staged changes present',
+    };
+  }
+
+  // If no dirty files, healing is successful (nothing to do)
+  if (dirtyStatus.modified.length === 0 && dirtyStatus.untracked.length === 0) {
+    return {
+      canHeal: true,
+      explainedBy: undefined,
+      filesToRestore: [],
+      filesToDelete: [],
+    };
+  }
+
+  // If no candidates, all files are unexplained
+  if (candidates.length === 0) {
+    // Check if there are any untracked files that need explanation
+    if (dirtyStatus.untracked.length > 0) {
+      return {
+        canHeal: false,
+        filesToRestore: [],
+        filesToDelete: [],
+        reason: `untracked file ${dirtyStatus.untracked[0]} unexplained`,
+      };
+    }
+    // Check if there are any modified files
+    if (dirtyStatus.modified.length > 0) {
+      return {
+        canHeal: false,
+        filesToRestore: [],
+        filesToDelete: [],
+        reason: `modified file ${dirtyStatus.modified[0]} unexplained`,
+      };
+    }
+  }
+
+  // Classify modified files and strays
+  const modifiedClassifications = await classifyModifiedFiles(git, candidates, dirtyStatus.modified);
+  const strayClassifications = await classifyStrays(git, candidates, dirtyStatus.untracked);
+
+  // Combine all classifications
+  const allClassifications = [...modifiedClassifications, ...strayClassifications];
+
+  // Check for no-match veto: any unexplained file vetoes healing
+  for (const classification of allClassifications) {
+    if (classification.explainedBy === undefined) {
+      return {
+        canHeal: false,
+        filesToRestore: [],
+        filesToDelete: [],
+        reason: `untracked file ${classification.path} unexplained`,
+      };
+    }
+  }
+
+  // Check for single-branch rule: all files must be explained by the SAME branch
+  const explainedByBranches = new Set<string>();
+  for (const classification of allClassifications) {
+    if (classification.explainedBy !== undefined) {
+      explainedByBranches.add(classification.explainedBy);
+    }
+  }
+
+  if (explainedByBranches.size > 1) {
+    return {
+      canHeal: false,
+      filesToRestore: [],
+      filesToDelete: [],
+      reason: `files explained by different branches: ${Array.from(explainedByBranches).join(', ')}`,
+    };
+  }
+
+  // All validations passed, canHeal is true
+  const singleBranch = Array.from(explainedByBranches)[0];
+
+  // Compile restore/delete lists
+  const filesToRestore: string[] = [];
+  const filesToDelete: string[] = [];
+
+  for (const classification of modifiedClassifications) {
+    if (classification.explainedBy === singleBranch) {
+      filesToRestore.push(classification.path);
+    }
+  }
+
+  for (const classification of strayClassifications) {
+    if (classification.explainedBy === singleBranch) {
+      filesToDelete.push(classification.path);
+    }
+  }
+
+  return {
+    canHeal: true,
+    explainedBy: singleBranch,
+    filesToRestore,
+    filesToDelete,
   };
 }
