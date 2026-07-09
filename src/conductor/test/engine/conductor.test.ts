@@ -3,7 +3,11 @@ import { mkdtemp, rm, readdir } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
-vi.mock('execa', () => ({ execa: vi.fn() }));
+vi.mock('execa', () => ({
+  execa: vi.fn(() =>
+    Promise.resolve({ stdout: '', stderr: '', exitCode: 0 })
+  ),
+}));
 vi.mock('../../src/engine/self-host/operator-credentials.js', () => ({
   readOperatorCredentialsState: vi.fn().mockResolvedValue('fresh'),
   waitForCredentialsChange: vi.fn(),
@@ -14,6 +18,15 @@ vi.mock('../../src/engine/self-host/sandbox-build-env.js', () => ({
   realSandboxFs: {},
   SandboxProvisionError: class SandboxProvisionError extends Error {},
 }));
+vi.mock('../../src/engine/rebase.js', async () => {
+  const actual = await vi.importActual('../../src/engine/rebase.js');
+  return {
+    ...actual,
+    performRebase: vi.fn().mockResolvedValue({
+      kind: 'noop',
+    }),
+  };
+});
 import { execa } from 'execa';
 import type { ConductState } from '../../src/types/index.js';
 import type { StepName, RecoveryOption } from '../../src/types/index.js';
@@ -7030,4 +7043,152 @@ Initial task content.
       expect(blockingGapResolved).toBe(true);
     });
   });
+});
+
+describe('rebase_gate_reverified event (Task 7: Conductor injects capability and emits event)', () => {
+  let dir: string;
+  let statePath: string;
+  let events: ConductorEventEmitter;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'conductor-test-'));
+    statePath = join(dir, 'conduct-state.json');
+    events = new ConductorEventEmitter();
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('daemon mode: emits rebase_gate_reverified for build when pre-verify succeeds (evidence-complete)', async () => {
+    const { performRebase } = await import('../../src/engine/rebase.js');
+    const mockPerformRebase = performRebase as ReturnType<typeof vi.fn>;
+
+    // Stub performRebase to return 'changed' outcome
+    mockPerformRebase.mockResolvedValueOnce({
+      kind: 'changed',
+      changedCodePaths: ['src/a.ts'],
+    });
+
+    // Set up front-half completion state
+    await writeState(statePath, {
+        complexity_tier: 'S',
+        feature_desc: 'test feature',
+        worktree: 'done',
+        memory: 'done',
+        explore: 'done',
+        prd: 'done',
+        complexity: 'done',
+        stories: 'done',
+        conflict_check: 'skipped',
+        plan: 'done',
+        architecture_diagram: 'skipped',
+        architecture_review: 'skipped',
+        acceptance_specs: 'skipped',
+        as_built: 'done',
+        build: 'done',
+        manual_test: 'done',
+        retro: 'skipped',
+        rebase: 'pending',
+        last_step: 'manual_test',
+      } as ConductState);
+
+      // Set up evidence-complete completion machinery:
+      // Create .pipeline/gates directory
+      await mkdir(join(dir, '.pipeline/gates'), { recursive: true });
+
+      // Create plans to trigger ambiguity resolution in resolveFeaturePlanPath.
+      // When multiple plans exist, resolveFeaturePlanPath returns undefined, causing
+      // the build completion predicate to skip seedTaskStatus and use the raw task-status.json.
+      await mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await writeFile(
+        join(dir, '.docs/plans/test.md'),
+        '### Task 1\n**Files:** `src/a.ts`\n',
+      );
+      await writeFile(
+        join(dir, '.docs/plans/other.md'),
+        '# Dummy plan\n',
+      );
+
+      // Create task-status.json with task 1 completed
+      await writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({
+          planPath: '.docs/plans/test.md',
+          tasks: [
+            {
+              id: '1',
+              title: 'Task 1',
+              status: 'completed',
+              commit: 'abc1234',
+            },
+          ],
+        }, null, 2) + '\n',
+      );
+
+      // Create build evidence artifact
+      await mkdir(join(dir, 'dist'), { recursive: true });
+      await writeFile(join(dir, 'dist/index.js'), 'console.log("test");');
+
+      // Create build verdict file (to be overwritten by the rebase pre-verify)
+      await writeFile(
+        join(dir, '.pipeline/gates/build.json'),
+        JSON.stringify({
+          satisfied: true,
+          reason: 'previous build completed',
+          checkedAt: Date.now() - 10000,
+        }, null, 2) + '\n',
+      );
+
+      // Set up mock step runner for build and manual_test
+      const runner: StepRunner = {
+        run: async (step) => {
+          if (step === 'build' || step === 'manual_test') {
+            return { success: true };
+          }
+          return { success: true };
+        },
+      };
+
+      // Track emitted events
+      const reverifiedEvents: Array<{ step: string; skippedDispatch: boolean; reason?: string }> = [];
+      events.on('rebase_gate_reverified', (e) => {
+        if (e.type === 'rebase_gate_reverified') {
+          reverifiedEvents.push({
+            step: e.step,
+            skippedDispatch: e.skippedDispatch,
+            reason: e.reason,
+          });
+        }
+      });
+
+      // Create and run conductor in daemon mode, starting from rebase
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        daemon: true,
+        mode: 'auto',
+        fromStep: 'rebase',
+      });
+
+      await conductor.run();
+
+      // Assert: rebase_gate_reverified event was emitted for build
+      expect(reverifiedEvents).toContainEqual({
+        step: 'build',
+        skippedDispatch: true,
+        reason: expect.stringContaining('re-verified mechanically'),
+      });
+
+      // Assert: .pipeline/gates/build.json contains satisfied:true
+      const buildVerdictRaw = await readFile(
+        join(dir, '.pipeline/gates/build.json'),
+        'utf-8',
+      );
+      const buildVerdict = JSON.parse(buildVerdictRaw);
+      expect(buildVerdict.satisfied).toBe(true);
+      expect(buildVerdict.reason).toContain('re-verified mechanically');
+    });
 });
