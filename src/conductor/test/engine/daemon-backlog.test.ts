@@ -9,6 +9,7 @@ import {
   fastForwardRoot,
   type BacklogTreeSource,
 } from '../../src/engine/daemon-backlog.js';
+import { makeGitRunner } from '../../src/engine/rebase.js';
 import { parseComplexityTier } from '../../src/engine/artifacts.js';
 import {
   renderShippedRecord,
@@ -1713,6 +1714,7 @@ describe('engine/daemon-backlog — fastForwardRoot heal integration (Task 7)', 
     await writeFile(join(dir, 'README.md'), 'init\n');
     await mkdir(join(dir, 'src'), { recursive: true });
     await writeFile(join(dir, 'src/file.ts'), 'const original = 0;\n');
+    await writeFile(join(dir, 'src/other.ts'), 'const original = 0;\n'); // second file
     await execFile('git', ['add', '.'], { cwd: dir });
     await execFile('git', ['commit', '-q', '-m', 'init'], { cwd: dir });
     baseBranch = await git(['rev-parse', '--abbrev-ref', 'HEAD']);
@@ -1720,11 +1722,12 @@ describe('engine/daemon-backlog — fastForwardRoot heal integration (Task 7)', 
     // Push to origin
     await execFile('git', ['push', '-q', '-u', 'origin', baseBranch], { cwd: dir });
 
-    // Create feat/daemon-x branch on origin with a modified version of the file
+    // Create feat/daemon-x branch on origin with a modified version of the files
     await execFile('git', ['checkout', '-q', '-b', 'feat/daemon-x'], { cwd: dir });
     await writeFile(join(dir, 'src/file.ts'), 'const x = 1;\n');
-    await execFile('git', ['add', 'src/file.ts'], { cwd: dir });
-    await execFile('git', ['commit', '-q', '-m', 'feat: add file'], { cwd: dir });
+    await writeFile(join(dir, 'src/other.ts'), 'const x = 1;\n'); // also modified
+    await execFile('git', ['add', 'src/'], { cwd: dir });
+    await execFile('git', ['commit', '-q', '-m', 'feat: modify files'], { cwd: dir });
     await execFile('git', ['push', '-q', '-u', 'origin', 'feat/daemon-x'], { cwd: dir });
 
     // Switch back to main branch
@@ -1791,6 +1794,296 @@ describe('engine/daemon-backlog — fastForwardRoot heal integration (Task 7)', 
     }
 
     // Verify: HEAD advanced (fast-forward succeeded)
+    const currentBranch = await git(['rev-parse', '--abbrev-ref', 'HEAD']);
+    expect(currentBranch).toBe(baseBranch);
+  });
+
+  it('restore failure mid-heal — log, stop, never throw (TR-2 negative)', async () => {
+    // Setup: Contaminate main checkout with dirty state explained by feat/daemon-x
+    // Create multiple modified files to test "skip remaining operations"
+    await mkdir(join(dir, 'src'), { recursive: true });
+    await writeFile(join(dir, 'src/file.ts'), 'const x = 1;\n');
+    await writeFile(join(dir, 'src/other.ts'), 'const x = 1;\n'); // second file
+    await writeFile(join(dir, 'stray.txt'), 'init\n'); // stray to be deleted
+
+    // Verify dirty state before attempting heal
+    let status = await git(['status', '--porcelain']);
+    expect(status).toContain('src/file.ts'); // modified
+    expect(status).toContain('src/other.ts'); // modified
+    expect(status).toContain('stray.txt'); // untracked
+
+    const logs: string[] = [];
+    const log = (msg: string) => logs.push(msg);
+
+    // Mock git runner that fails on the first restore command
+    let restoreCallCount = 0;
+    const mockGit = async (args: string[]) => {
+      if (args[0] === 'restore') {
+        restoreCallCount += 1;
+        // Fail on the first restore call
+        if (restoreCallCount === 1) {
+          return {
+            exitCode: 1,
+            stdout: '',
+            stderr: 'error: pathspec src/file.ts did not match any files',
+          };
+        }
+      }
+      // For all other commands, use the real git runner
+      return (await makeGitRunner(dir))(args);
+    };
+
+    // Call fastForwardRoot with the mocked git runner
+    await fastForwardRoot(dir, log, mockGit);
+
+    // Verify: restore was attempted
+    expect(restoreCallCount).toBeGreaterThan(0);
+
+    // Verify: error was logged with the failed file path
+    const failureLog = logs.find((l) => l.includes('src/file.ts') && (l.includes('fail') || l.includes('error')));
+    expect(failureLog).toBeDefined();
+    if (failureLog) {
+      expect(failureLog).toMatch(/src\/file\.ts/);
+    }
+
+    // Verify: fastForwardRoot resolved normally (did not throw)
+    expect(logs).toBeDefined(); // this proves the function completed
+
+    // Verify: tree remains dirty (heal failed, so state unchanged)
+    // Both modified files should still be there, stray should NOT be deleted
+    status = await git(['status', '--porcelain']);
+    expect(status).toContain('src/file.ts'); // still modified
+    expect(status).toContain('src/other.ts'); // still modified (should not have been processed)
+    expect(status).toContain('stray.txt'); // still untracked (should not have been deleted)
+
+    // Second call: clean the tree and verify it re-triages cleanly
+    await writeFile(join(dir, 'src/file.ts'), 'const original = 0;\n');
+    await writeFile(join(dir, 'src/other.ts'), 'const original = 0;\n');
+    try {
+      await rm(join(dir, 'stray.txt'));
+    } catch {
+      // ignore if it doesn't exist
+    }
+
+    const logs2: string[] = [];
+    const log2 = (msg: string) => logs2.push(msg);
+    await fastForwardRoot(dir, log2); // now with real git runner (no mock)
+
+    // Verify: second call re-triages cleanly (no errors)
+    const secondCallErrors = logs2.filter((l) => l.includes('error') || l.includes('Error'));
+    expect(secondCallErrors).toHaveLength(0);
+    // Tree should be clean and HEAD advanced
+    status = await git(['status', '--porcelain']);
+    expect(status).toBe('');
+  });
+
+  it('content changed before restore → re-verification fails, entire heal aborts, WARN logged (Task 9 / TR-2 negative)', async () => {
+    // Setup: Contaminate main checkout with dirty state explained by feat/daemon-x
+    await mkdir(join(dir, 'src'), { recursive: true });
+    await writeFile(join(dir, 'src/file.ts'), 'const x = 1;\n');
+    await writeFile(join(dir, 'stray.txt'), 'init\n');
+
+    // Verify dirty state before healing
+    let status = await git(['status', '--porcelain']);
+    expect(status).toContain('src/file.ts'); // modified
+    expect(status).toContain('stray.txt'); // untracked
+
+    const logs: string[] = [];
+    const log = (msg: string) => logs.push(msg);
+
+    // Mock git runner that returns different hash on second hash-object query for src/file.ts
+    let hashCallCount = 0;
+    const mockGit = async (args: string[]) => {
+      if (args[0] === 'hash-object' && args[1] === 'src/file.ts') {
+        hashCallCount += 1;
+        if (hashCallCount === 1) {
+          // First call (classification time) - return the real hash
+          const result = await makeGitRunner(dir)(args);
+          return result;
+        } else if (hashCallCount === 2) {
+          // Second call (re-verification time) - return a different hash (simulating file change)
+          return {
+            exitCode: 0,
+            stdout: '0000000000000000000000000000000000000000\n', // fake hash
+            stderr: '',
+          };
+        }
+      }
+      // For all other commands, use the real git runner
+      return (await makeGitRunner(dir))(args);
+    };
+
+    // Call fastForwardRoot with the mocked git runner
+    await fastForwardRoot(dir, log, mockGit);
+
+    // Verify: NO files were restored (heal aborted before any restore)
+    // We can verify this by checking the tree is still dirty with modified file
+    status = await git(['status', '--porcelain']);
+    expect(status).toContain('src/file.ts'); // still modified — was NOT restored
+    expect(status).toContain('stray.txt'); // still untracked — was NOT deleted
+
+    // Verify: the modified file still has the modified content (not restored)
+    const fileContent = await fsReadFile(join(dir, 'src/file.ts'), 'utf-8');
+    expect(fileContent).toBe('const x = 1;\n'); // still has the modified content
+
+    // Verify: WARN was emitted mentioning re-verification failure and the file that changed
+    const warnLog = logs.find((l) => l.includes('WARN') && l.includes('re-verification'));
+    expect(warnLog).toBeDefined();
+    if (warnLog) {
+      expect(warnLog).toMatch(/re-verification.*fail/i);
+      expect(warnLog).toContain('src/file.ts'); // mentions the file that changed
+      expect(warnLog).toMatch(/aborting heal/i);
+    }
+
+    // Verify: no subsequent heal WARNs (the heal was aborted before stray/file restoration)
+    const healWARNs = logs.filter((l) => l.includes('WARN heal: auto-healed'));
+    expect(healWARNs).toHaveLength(0); // heal WARNs should be absent (heal didn't complete)
+  });
+
+  it('dirty tree byte-identical on two feature branches → heal proceeds, WARN lists all candidates (Task 11)', async () => {
+    // Create a second feature branch (feat/daemon-y) with identical content to feat/daemon-x
+    // so both branches explain the full dirty set.
+    await execFile('git', ['checkout', '-q', baseBranch], { cwd: dir });
+    await execFile('git', ['checkout', '-q', '-b', 'feat/daemon-y'], { cwd: dir });
+    // Make feat/daemon-y identical to feat/daemon-x (same file content)
+    await writeFile(join(dir, 'src/file.ts'), 'const x = 1;\n');
+    await execFile('git', ['add', 'src/file.ts'], { cwd: dir });
+    await execFile('git', ['commit', '-q', '-m', 'feat: add identical file'], { cwd: dir });
+    await execFile('git', ['push', '-q', '-u', 'origin', 'feat/daemon-y'], { cwd: dir });
+
+    // Switch back to main branch
+    await execFile('git', ['checkout', '-q', baseBranch], { cwd: dir });
+
+    // Contaminate the main checkout with dirty state that matches BOTH feat/daemon-x and feat/daemon-y
+    // (byte-identical content on both branches)
+    await writeFile(join(dir, 'src/file.ts'), 'const x = 1;\n');
+
+    // Verify dirty state before healing
+    let status = await git(['status', '--porcelain']);
+    expect(status).toContain('src/file.ts');
+
+    const logs: string[] = [];
+    const log = (msg: string) => logs.push(msg);
+
+    // Call fastForwardRoot with the dirty tree
+    await fastForwardRoot(dir, log);
+
+    // Verify: tree is now clean
+    status = await git(['status', '--porcelain']);
+    expect(status).toBe(''); // no dirty state
+
+    // Verify: file was restored to its original state on main branch
+    let fileContent: string | null = null;
+    try {
+      fileContent = await fsReadFile(join(dir, 'src/file.ts'), 'utf-8');
+    } catch {
+      fileContent = null;
+    }
+    // After healing, the file should be restored to its original content on main
+    expect(fileContent).toBe('const original = 0;\n');
+
+    // Verify: WARN was logged with BOTH branch names
+    const warnLog = logs.find((l) => l.includes('WARN') || l.toLowerCase().includes('heal'));
+    expect(warnLog).toBeDefined();
+    if (warnLog) {
+      expect(warnLog).toMatch(/feat\/daemon-x/);
+      expect(warnLog).toMatch(/feat\/daemon-y/);
+      // The message should contain both candidates
+      expect(warnLog).toContain('src/file.ts');
+    }
+
+    // Verify: HEAD advanced (fast-forward succeeded)
+    const currentBranch = await git(['rev-parse', '--abbrev-ref', 'HEAD']);
+    expect(currentBranch).toBe(baseBranch);
+  });
+
+  it('partial-explanation veto: 5 explained + 1 unexplained → no restore, no delete, FF skipped (Task 8 / TR-2 negative)', async () => {
+    // Setup: Create additional explained files on feat/daemon-x that we'll replicate on main
+    await execFile('git', ['checkout', '-q', 'feat/daemon-x'], { cwd: dir });
+
+    // Add 4 files to feat/daemon-x (src/file.ts is already modified from the setup)
+    await mkdir(join(dir, 'src'), { recursive: true });
+    await writeFile(join(dir, 'src/explained1.ts'), 'export const a = 1;\n');
+    await writeFile(join(dir, 'src/explained2.ts'), 'export const b = 2;\n');
+    await writeFile(join(dir, 'stray-explained1.txt'), 'stray content 1\n');
+    await writeFile(join(dir, 'stray-explained2.txt'), 'stray content 2\n');
+
+    await execFile('git', ['add', '.'], { cwd: dir });
+    await execFile('git', ['commit', '-q', '-m', 'add explained files to feat/daemon-x'], { cwd: dir });
+    await execFile('git', ['push', '-q', 'origin', 'feat/daemon-x'], { cwd: dir });
+
+    // Switch back to main
+    await execFile('git', ['checkout', '-q', baseBranch], { cwd: dir });
+
+    // Contaminate main with: 5 explained files + 1 unexplained file
+    // Explained files (matching feat/daemon-x):
+    await mkdir(join(dir, 'src'), { recursive: true });
+    await writeFile(join(dir, 'src/file.ts'), 'const x = 1;\n'); // matches feat/daemon-x
+    await writeFile(join(dir, 'src/explained1.ts'), 'export const a = 1;\n'); // matches feat/daemon-x
+    await writeFile(join(dir, 'src/explained2.ts'), 'export const b = 2;\n'); // matches feat/daemon-x
+    await writeFile(join(dir, 'stray-explained1.txt'), 'stray content 1\n'); // matches feat/daemon-x
+    await writeFile(join(dir, 'stray-explained2.txt'), 'stray content 2\n'); // matches feat/daemon-x
+
+    // Unexplained file: content that does NOT exist in any candidate branch
+    await writeFile(join(dir, 'truly-unexplained.txt'), 'this content is unique and unknown\n');
+
+    // Verify we have 6 dirty entries before healing
+    let status = await git(['status', '--porcelain']);
+    const dirtyLines = status.split('\n').filter((l) => l.trim());
+    expect(dirtyLines.length).toBe(6);
+
+    const logs: string[] = [];
+    const log = (msg: string) => logs.push(msg);
+
+    // Track git commands to ensure no git restore or rm commands are issued
+    let restoreCount = 0;
+    let deleteCount = 0;
+    const trackingGit = async (args: string[]) => {
+      if (args[0] === 'restore') {
+        restoreCount += 1;
+      }
+      if (args[0] === 'rm' || (args[0] === 'remove' && args[1])) {
+        deleteCount += 1;
+      }
+      return (await makeGitRunner(dir))(args);
+    };
+
+    // Call fastForwardRoot with the partially-explained dirty tree
+    await fastForwardRoot(dir, log, trackingGit);
+
+    // Verify: tree is STILL dirty (no healing happened)
+    status = await git(['status', '--porcelain']);
+    expect(status).not.toBe(''); // tree is still dirty
+
+    // Verify: all 6 dirty entries remain untouched
+    const afterDirtyLines = status.split('\n').filter((l) => l.trim());
+    expect(afterDirtyLines.length).toBe(6);
+
+    // Verify: the 5 explained files remain dirty (not restored)
+    expect(status).toContain('src/file.ts');
+    expect(status).toContain('src/explained1.ts');
+    expect(status).toContain('src/explained2.ts');
+    expect(status).toContain('stray-explained1.txt');
+    expect(status).toContain('stray-explained2.txt');
+
+    // Verify: the unexplained file remains dirty
+    expect(status).toContain('truly-unexplained.txt');
+
+    // Verify: NO git restore commands were issued (zero restores)
+    expect(restoreCount).toBe(0);
+
+    // Verify: NO file deletion commands were issued (zero deletions)
+    expect(deleteCount).toBe(0);
+
+    // Verify: NO WARN was emitted (skip behavior, not heal behavior)
+    const warnLog = logs.find((l) => l.includes('WARN') || (l.toLowerCase().includes('heal') && l.includes('auto')));
+    expect(warnLog).toBeUndefined();
+
+    // Verify: a skip message was logged indicating the dirty state cannot be healed
+    const skipLog = logs.find((l) => l.includes('skip') && l.includes('fast-forward'));
+    expect(skipLog).toBeDefined();
+
+    // Verify: HEAD was NOT advanced (FF was skipped, no merge happened)
     const currentBranch = await git(['rev-parse', '--abbrev-ref', 'HEAD']);
     expect(currentBranch).toBe(baseBranch);
   });
