@@ -287,6 +287,41 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     expect(manualTest?.satisfied).toBe(false);
     expect(manualTest?.kickback?.from).toBe('rebase');
   });
+
+  it('changed + preVerify(build) returns done:false → build kicked back (byte-identical to today)', async () => {
+    const outcome: RebaseOutcome = { kind: 'changed', changedCodePaths: ['src/a.ts', 'src/b.ts'] };
+    const preVerify = async (step: string) => {
+      if (step === 'build') {
+        return { done: false, reason: 'task 3 has no evidence' };
+      }
+      return { done: false };
+    };
+
+    const r = await applyRebaseVerdicts(dir, outcome, true, preVerify);
+
+    // Rebase gate satisfied
+    expect(r.satisfied).toBe(true);
+
+    // build is kicked back, NOT in reverified
+    expect(r.kickedBack).toEqual(['build', 'build_review', 'manual_test']);
+    expect(r.reverified).toEqual([]);
+
+    // build verdict is unsatisfied with kickback (byte-identical to today)
+    const build = await readVerdict(dir, 'build');
+    expect(build?.satisfied).toBe(false);
+    expect(build?.reason).toBe('invalidated by file-changing rebase');
+    expect(build?.kickback?.from).toBe('rebase');
+    expect(build?.kickback?.evidence).toContain('src/a.ts');
+    expect(build?.kickback?.evidence).toContain('src/b.ts');
+
+    // Verify the verdict shape is byte-identical to the capability-absent case
+    const withoutPreVerify: RebaseOutcome = { kind: 'changed', changedCodePaths: ['src/a.ts', 'src/b.ts'] };
+    await applyRebaseVerdicts(dir, withoutPreVerify, true, undefined);
+    const buildWithout = await readVerdict(dir, 'build');
+    expect(build?.satisfied).toBe(buildWithout?.satisfied);
+    expect(build?.reason).toBe(buildWithout?.reason);
+    expect(build?.kickback?.from).toBe(buildWithout?.kickback?.from);
+  });
 });
 
 describe('engine/rebase — emitRebaseEvent (FR-10)', () => {
