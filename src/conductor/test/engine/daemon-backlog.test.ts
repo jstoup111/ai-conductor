@@ -1705,7 +1705,7 @@ describe('engine/daemon-backlog — fastForwardRoot heal integration (Task 7)', 
     await execFile('git', ['init', '--bare', '-q'], { cwd: originDir });
 
     // Initialize main repo with initial commit
-    await execFile('git', ['init', '-q'], { cwd: dir });
+    await execFile('git', ['init', '-q', '-b', 'main'], { cwd: dir });
     await execFile('git', ['config', 'user.email', 'test@test.com'], { cwd: dir });
     await execFile('git', ['config', 'user.name', 'Test'], { cwd: dir });
     await execFile('git', ['remote', 'add', 'origin', originDir], { cwd: dir });

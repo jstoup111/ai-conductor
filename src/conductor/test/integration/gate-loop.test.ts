@@ -719,7 +719,7 @@ describe('integration/gate-loop', () => {
     }
 
     async function initRepo(): Promise<void> {
-      await git('init', '-q');
+      await git('init', '-q', '-b', 'main');
       await git('commit', '--allow-empty', '-q', '-m', 'init');
     }
 
@@ -1359,7 +1359,7 @@ describe('integration/gate-loop', () => {
     }
 
     async function initRepo(): Promise<void> {
-      await git('init', '-q');
+      await git('init', '-q', '-b', 'main');
       await git('commit', '--allow-empty', '-q', '-m', 'init');
     }
 

@@ -58,7 +58,7 @@ async function derive(planPath: string) {
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), 'warn-once-'));
   resetDeriveWarnOnce();
-  await git('init', '-q');
+  await git('init', '-q', '-b', 'main');
   await git('config', 'user.email', 't@t');
   await git('config', 'user.name', 't');
 });

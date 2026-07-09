@@ -15,33 +15,23 @@
  *   - The line carries a `// portability-ok: <reason>` marker (even empty reason)
  * - Includes falsifiability fixtures (known-bad and known-good patterns)
  *
- * Task 26: Structural guard scaffolding + git-init matcher
- * Currently skipped (.skip-gated) to keep tree green mid-plan.
- * Expected violations when enabled: ~22 sites (fixed in Tasks 27-28)
+ * Two additional matchers (Task 29):
+ * - unref matcher: flags `.unref()` timer calls in src/engine/** unless commented out
+ *   or annotated with `// portability-ok: <reason>`. Unref detaches timers from
+ *   keeping the process alive; legitimate uses must be reasoned about explicitly
+ *   since unref semantics/availability differ across runtimes.
+ * - tmp-outside-target-dir matcher: flags hardcoded absolute `/tmp/...` (or
+ *   `\tmp\...` on Windows-style paths) string literals used for file writes,
+ *   which escape the sandboxed target directory and break portability/sandboxing.
+ *   Using `os.tmpdir()` is the portable alternative and is not flagged.
  *
- * Un-skip in Task 29 after violations are fixed.
- * Expected worklist (22 violations found in initial scan):
- * - acceptance/engineer-authoring.test.ts
- * - acceptance/engineer-isolation.test.ts
- * - acceptance/rekick-shipped-skip.acceptance.test.ts
- * - acceptance/shipped-work-dedup.acceptance.test.ts
- * - acceptance/task-status-third-writers-eliminated.acceptance.test.ts
- * - engine/autoheal-warn-once.test.ts
- * - engine/daemon-backlog.test.ts
- * - engine/engineer/authoring-guards.test.ts
- * - engine/engineer/authoring.test.ts
- * - engine/engineer/cross-repo-isolation.test.ts
- * - engine/engineer/engineer-cli-handoff-branch-evidence.test.ts
- * - engine/engineer/engineer-cli-handoff-writeback-failure.test.ts
- * - engine/engineer/engineer-cli-land-owner.test.ts
- * - engine/engineer/intake-marker.test.ts
- * - engine/engineer/isolation.test.ts
- * - engine/engineer/land-spec.test.ts
- * - engine/engineer/track-marker.test.ts
- * - integration/empty-ledger-replay-guard.integration.test.ts
- * - integration/gate-loop.test.ts (2x)
- * - integration/remediation-extends-plan.test.ts
- * - integration/task-status-gate-recompute.test.ts
+ * Task 26: Structural guard scaffolding + git-init matcher
+ * Task 29: unref + tmp-outside-target-dir matchers; guard fully armed (un-skipped)
+ *
+ * All known violations from the initial 22-site worklist were fixed in Tasks 27-28.
+ * The single legitimate `.unref()` call (src/engine/daemon-log.ts:197) is annotated
+ * with a `// portability-ok:` marker. The tmp-outside-target-dir matcher currently
+ * finds zero violations in src/engine/** (all tmp usage goes through `os.tmpdir()`).
  */
 
 import { describe, it, expect } from 'vitest';
@@ -77,6 +67,36 @@ const KNOWN_GOOD_FIXTURES = [
   `  // await git('init', '-q');`, // commented out with indent
   `await execa('git', ['init', '-q'], { cwd: dir }); // portability-ok: explicit branch elsewhere`, // with marker and reason
   `await git('init', '-q'); // portability-ok: `, // empty reason marker
+];
+
+// Falsifiability fixtures for the unref matcher (src/engine/**)
+const KNOWN_BAD_UNREF_FIXTURES = [
+  `timer.unref();`, // bare unref call, no marker
+  `if (typeof timer.unref === 'function') timer.unref();`, // guarded but no marker
+  `this.pollTimer.unref();`, // member access unref, no marker
+];
+
+const KNOWN_GOOD_UNREF_FIXTURES = [
+  `// timer.unref();`, // commented out
+  `  // if (typeof timer.unref === 'function') timer.unref();`, // commented, indented
+  `timer.unref(); // portability-ok: detaches poll timer from process exit`, // annotated
+  `const x = 1; // no unref call here at all`, // no unref present
+  `if (typeof timer.unref === 'function') timer.unref(); // portability-ok:`, // annotated, empty reason
+];
+
+// Falsifiability fixtures for the tmp-outside-target-dir matcher (src/engine/**)
+const KNOWN_BAD_TMP_FIXTURES = [
+  `await writeFile('/tmp/scratch.json', data);`, // hardcoded /tmp path
+  `const dir = '/tmp/conduct-cache';`, // hardcoded /tmp assignment
+  `await mkdir(\`/tmp/run-\${id}\`);`, // hardcoded /tmp template literal
+];
+
+const KNOWN_GOOD_TMP_FIXTURES = [
+  `const dir = join(tmpdir(), 'conduct-mermaid');`, // uses os.tmpdir()
+  `const tempDir = await mkdtemp(join(tmpdir(), 'task-status-'));`, // uses os.tmpdir()
+  `// const dir = '/tmp/scratch.json';`, // commented out
+  `const dir = '/tmp/scratch.json'; // portability-ok: dev-only debug shim, never runs in prod`, // annotated
+  `const label = 'no tmp path here';`, // no /tmp path present
 ];
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -188,6 +208,77 @@ async function scanFileForViolations(filePath: string): Promise<Violation[]> {
 }
 
 /**
+ * Detect a non-portable `.unref()` call on a line. Returns true if the line
+ * calls `.unref()` and is not exempted by a `// portability-ok:` marker.
+ * Callers are expected to have already skipped commented-out lines.
+ */
+function isUnrefViolation(line: string): boolean {
+  if (!/\.unref\s*\(\s*\)/.test(line)) return false;
+  if (line.includes('// portability-ok:')) return false;
+  return true;
+}
+
+/**
+ * Detect a hardcoded absolute `/tmp/...` path literal used outside the
+ * sandboxed target directory. Returns true if the line contains a `/tmp/`
+ * string literal and is not exempted by a `// portability-ok:` marker.
+ * Callers are expected to have already skipped commented-out lines.
+ */
+function isTmpOutsideTargetDirViolation(line: string): boolean {
+  if (!/['"`]\/tmp\//.test(line)) return false;
+  if (line.includes('// portability-ok:')) return false;
+  return true;
+}
+
+/**
+ * Scan a file for non-portable unref() calls. Returns violations.
+ */
+async function scanFileForUnrefViolations(filePath: string): Promise<Violation[]> {
+  const content = await readFile(filePath, 'utf-8');
+  const lines = content.split('\n');
+  const violations: Violation[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (isCommented(line)) continue;
+    if (isUnrefViolation(line)) {
+      violations.push({
+        file: filePath,
+        line: i + 1,
+        content: line.trim(),
+        reason: 'unref() call without // portability-ok: marker',
+      });
+    }
+  }
+
+  return violations;
+}
+
+/**
+ * Scan a file for hardcoded /tmp paths outside the target directory. Returns violations.
+ */
+async function scanFileForTmpOutsideTargetDirViolations(filePath: string): Promise<Violation[]> {
+  const content = await readFile(filePath, 'utf-8');
+  const lines = content.split('\n');
+  const violations: Violation[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (isCommented(line)) continue;
+    if (isTmpOutsideTargetDirViolation(line)) {
+      violations.push({
+        file: filePath,
+        line: i + 1,
+        content: line.trim(),
+        reason: 'hardcoded /tmp path without // portability-ok: marker (use os.tmpdir() instead)',
+      });
+    }
+  }
+
+  return violations;
+}
+
+/**
  * Recursively glob all TypeScript files in a directory tree
  */
 async function globTestFiles(dir: string): Promise<string[]> {
@@ -215,7 +306,7 @@ async function globTestFiles(dir: string): Promise<string[]> {
 // Tests
 // ──────────────────────────────────────────────────────────────────────────────
 
-describe.skip('Structural guard: fixture portability (git-init pattern)', () => {
+describe('Structural guard: fixture portability (git-init pattern)', () => {
   it('known-bad fixtures trigger violations', () => {
     const violations: typeof KNOWN_BAD_FIXTURES = [];
 
@@ -355,5 +446,89 @@ describe.skip('Structural guard: fixture portability (git-init pattern)', () => 
 
     // Expected to fail: list violations for the worklist (Tasks 27-28 will fix these)
     expect(allViolations).toHaveLength(0, 'Fixture portability violations must be fixed (see list above)');
+  });
+});
+
+describe('Structural guard: unref matcher (src/engine/**)', () => {
+  it('known-bad fixtures trigger violations', () => {
+    for (const fixture of KNOWN_BAD_UNREF_FIXTURES) {
+      expect(isCommented(fixture)).toBe(false);
+      expect(isUnrefViolation(fixture)).toBe(true);
+    }
+  });
+
+  it('known-good fixtures pass (no violations)', () => {
+    for (const fixture of KNOWN_GOOD_UNREF_FIXTURES) {
+      if (isCommented(fixture)) continue;
+      expect(isUnrefViolation(fixture)).toBe(false);
+    }
+  });
+
+  it('scans src/engine/** and reports zero unexplained unref violations', async () => {
+    const engineDir = join(__dirname, '..', '..', 'src', 'engine');
+    const files = await globTestFiles(engineDir);
+    expect(files.length).toBeGreaterThan(0);
+
+    const allViolations: Violation[] = [];
+    for (const file of files) {
+      allViolations.push(...(await scanFileForUnrefViolations(file)));
+    }
+
+    if (allViolations.length > 0) {
+      console.log(`\n✗ Found ${allViolations.length} unref violations:\n`);
+      for (const v of allViolations) {
+        const relPath = relative(engineDir, v.file);
+        console.log(`  ${relPath}:${v.line}`);
+        console.log(`    ${v.content}`);
+        console.log(`    ${v.reason}\n`);
+      }
+    }
+
+    expect(allViolations).toHaveLength(
+      0,
+      'unref() calls must be commented out or carry a // portability-ok: marker'
+    );
+  });
+});
+
+describe('Structural guard: tmp-outside-target-dir matcher (src/engine/**)', () => {
+  it('known-bad fixtures trigger violations', () => {
+    for (const fixture of KNOWN_BAD_TMP_FIXTURES) {
+      expect(isCommented(fixture)).toBe(false);
+      expect(isTmpOutsideTargetDirViolation(fixture)).toBe(true);
+    }
+  });
+
+  it('known-good fixtures pass (no violations)', () => {
+    for (const fixture of KNOWN_GOOD_TMP_FIXTURES) {
+      if (isCommented(fixture)) continue;
+      expect(isTmpOutsideTargetDirViolation(fixture)).toBe(false);
+    }
+  });
+
+  it('scans src/engine/** and reports zero unexplained tmp-outside-target-dir violations', async () => {
+    const engineDir = join(__dirname, '..', '..', 'src', 'engine');
+    const files = await globTestFiles(engineDir);
+    expect(files.length).toBeGreaterThan(0);
+
+    const allViolations: Violation[] = [];
+    for (const file of files) {
+      allViolations.push(...(await scanFileForTmpOutsideTargetDirViolations(file)));
+    }
+
+    if (allViolations.length > 0) {
+      console.log(`\n✗ Found ${allViolations.length} tmp-outside-target-dir violations:\n`);
+      for (const v of allViolations) {
+        const relPath = relative(engineDir, v.file);
+        console.log(`  ${relPath}:${v.line}`);
+        console.log(`    ${v.content}`);
+        console.log(`    ${v.reason}\n`);
+      }
+    }
+
+    expect(allViolations).toHaveLength(
+      0,
+      'Hardcoded /tmp paths must use os.tmpdir() or carry a // portability-ok: marker'
+    );
   });
 });

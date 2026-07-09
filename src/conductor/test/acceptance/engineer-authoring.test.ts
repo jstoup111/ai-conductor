@@ -90,7 +90,7 @@ async function git(args: string[], cwd: string): Promise<string> {
 
 beforeEach(async () => {
   repoPath = await mkdtemp(join(tmpdir(), 'engineer-authoring-'));
-  await execFile('git', ['init', '-q'], { cwd: repoPath });
+  await execFile('git', ['init', '-q', '-b', 'main'], { cwd: repoPath });
   await execFile('git', ['config', 'user.email', 'test@test.com'], { cwd: repoPath });
   await execFile('git', ['config', 'user.name', 'Test'], { cwd: repoPath });
   await writeFile(join(repoPath, 'README.md'), '# repo\n');

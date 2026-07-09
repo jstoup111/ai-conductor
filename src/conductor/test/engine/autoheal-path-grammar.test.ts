@@ -64,7 +64,7 @@ describe('deriveCompletion path corroboration with basename plan paths (#425 inc
   beforeEach(async () => {
     root = await mkdtemp(join(tmpdir(), 'path-grammar-'));
     resetDeriveWarnOnce();
-    await git('init', '-q');
+    await git('init', '-q', '-b', 'main');
     await git('config', 'user.email', 't@t');
     await git('config', 'user.name', 't');
   });

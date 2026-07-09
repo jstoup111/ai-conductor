@@ -71,7 +71,7 @@ async function git(...args: string[]): Promise<string> {
 
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), 'third-writers-'));
-  await git('init', '-q');
+  await git('init', '-q', '-b', 'main');
   await writeFile(join(dir, 'README.md'), 'init\n');
   await git('add', 'README.md');
   await git('commit', '-q', '-m', 'init');

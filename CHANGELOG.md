@@ -30,6 +30,10 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- Structural fixture-portability guard extended with `unref` and
+  `tmp-outside-target-dir` matchers (with falsifiability fixtures) and armed
+  over the full `src/conductor` tree; the legitimate `.unref()` call in
+  `daemon-log.ts` is annotated with a `// portability-ok:` reason (Task 29).
 - CLAUDE.md "Design Principles" section codifying deterministic-first design:
   machinery (engine code, git hooks, gates) wherever possible, LLM agents only
   for steps that genuinely need judgement; repeated agent rule violations get
