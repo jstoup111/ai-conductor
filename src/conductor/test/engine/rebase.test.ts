@@ -17,7 +17,7 @@ import {
   type GitResult,
   type RebaseOutcome,
 } from '../../src/engine/rebase.js';
-import { readVerdict } from '../../src/engine/gate-verdicts.js';
+import { readVerdict, writeVerdict } from '../../src/engine/gate-verdicts.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 // A scripted GitRunner: matches argv prefixes to canned results.
@@ -244,6 +244,48 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     const build = await readVerdict(dir, 'build');
     expect(build?.satisfied).toBe(false);
     expect(build?.kickback?.from).toBe('rebase');
+  });
+
+  it('changed + preVerify(build) returns done:true → build re-verified, build_review/manual_test kicked back', async () => {
+    // Pre-seed a stale build verdict so we can verify checkedAt is newer
+    const staleTime = Date.now() - 10000;
+    await writeVerdict(dir, 'build', {
+      satisfied: false,
+      reason: 'stale old verdict',
+      checkedAt: staleTime,
+    });
+
+    const outcome: RebaseOutcome = { kind: 'changed', changedCodePaths: ['src/a.ts'] };
+    const preVerify = async (step: string) => {
+      if (step === 'build') {
+        return { done: true };
+      }
+      return { done: false };
+    };
+
+    const r = await applyRebaseVerdicts(dir, outcome, true, preVerify);
+
+    // Rebase gate satisfied
+    expect(r.satisfied).toBe(true);
+
+    // build is reverified, NOT in kickedBack
+    expect(r.kickedBack).toEqual(['build_review', 'manual_test']);
+    expect(r.reverified).toEqual(['build']);
+
+    // build verdict is fresh satisfied
+    const build = await readVerdict(dir, 'build');
+    expect(build?.satisfied).toBe(true);
+    expect(build?.reason).toContain('re-verified mechanically');
+    expect(build?.checkedAt).toBeGreaterThan(staleTime);
+
+    // build_review and manual_test are kicked back unconditionally
+    const buildReview = await readVerdict(dir, 'build_review');
+    expect(buildReview?.satisfied).toBe(false);
+    expect(buildReview?.kickback?.from).toBe('rebase');
+
+    const manualTest = await readVerdict(dir, 'manual_test');
+    expect(manualTest?.satisfied).toBe(false);
+    expect(manualTest?.kickback?.from).toBe('rebase');
   });
 });
 
