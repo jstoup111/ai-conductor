@@ -775,38 +775,33 @@ export class DefaultStepRunner implements StepRunner {
     // the loop stuck (the validation failure this addresses). Tell it to decide
     // deterministically and ACT, ending by writing the marker file.
     if (step === 'finish' && this.mode === 'auto') {
-      // Use ABSOLUTE worktree paths for the completion markers. In daemon mode
-      // the finish skill performs branch/PR/worktree cleanup that `cd`s into the
-      // main repo (see agents/worktree-manager.md), so relative `.pipeline/...`
-      // writes would land in the WRONG repo while the completion gate reads the
-      // worktree's `.pipeline` — leaving it unsatisfied and HALTing a feature
-      // whose PR was genuinely created. `this.pipelineDir` is the worktree's
-      // `.pipeline` (daemon-cli passes it); fall back to relative when unset.
-      const choicePath = this.pipelineDir
-        ? join(this.pipelineDir, 'finish-choice')
-        : '.pipeline/finish-choice';
-      const statePath = this.pipelineDir
-        ? join(this.pipelineDir, 'conduct-state.json')
-        : '.pipeline/conduct-state.json';
+      // Use the ABSOLUTE worktree pipeline dir for the `finish-record` command.
+      // In daemon mode the finish skill performs branch/PR/worktree cleanup
+      // that `cd`s into the main repo (see agents/worktree-manager.md), so a
+      // relative `.pipeline` dir would resolve against the WRONG repo after
+      // cleanup while the completion gate reads the worktree's `.pipeline` —
+      // leaving it unsatisfied and HALTing a feature whose PR was genuinely
+      // created. `this.pipelineDir` is the worktree's `.pipeline` (daemon-cli
+      // passes it); fall back to the relative `.pipeline` when unset.
+      const pipelineDirArg = this.pipelineDir ?? '.pipeline';
       prompt +=
         '\n\nUNATTENDED (auto) MODE — no user is present to choose a finish outcome, so do NOT prompt. ' +
         'Decide deterministically and ACT (do not merely describe):\n' +
         '- If the repo has a configured git remote and `gh` is authenticated: push the branch and open a ' +
         'PR with `gh pr create` (NEVER merge). If a PR for this branch already exists, reuse it instead ' +
-        'of failing (`gh pr view --json url -q .url`). Before recording `pr` and `pr_url`, verify the ' +
-        'STOP gate in §5 Option 2 of the finish skill: (1) the PR URL is non-empty (`gh pr view --json url`), ' +
-        'and (2) the branch was pushed (`git merge-base --is-ancestor HEAD refs/remotes/origin/<branch>`). ' +
-        'If EITHER check fails, do NOT write the markers — HALT for human review. If BOTH pass: Record ' +
-        'the PR URL as the `pr_url` field in ' +
-        `\`${statePath}\`, then write the single word \`pr\` to \`${choicePath}\`.\n` +
+        'of failing (`gh pr view --json url -q .url`). Before recording, verify the STOP gate in §5 ' +
+        'Option 2 of the finish skill: (1) the PR URL is non-empty (`gh pr view --json url`), and (2) the ' +
+        'branch was pushed (`git merge-base --is-ancestor HEAD refs/remotes/origin/<branch>`). If EITHER ' +
+        'check fails, do NOT run the command below — HALT for human review. If BOTH pass, run:\n' +
+        `  conduct-ts finish-record --choice pr --pr-url <url> --pipeline-dir ${pipelineDirArg}\n` +
         '- Otherwise (no remote, or `gh` unavailable/unauthenticated): leave the work committed on the ' +
-        `branch and write the single word \`keep\` to \`${choicePath}\`.\n` +
-        `IMPORTANT: write these two files at the EXACT absolute paths shown above (\`${choicePath}\` and ` +
-        `\`${statePath}\`). Do NOT use relative paths and do NOT \`cd\` elsewhere first — branch/PR/` +
-        'worktree cleanup may change the working directory, and the completion gate only reads these ' +
-        'absolute worktree paths. Write the marker(s) BEFORE any merge/cleanup step. The step is NOT ' +
-        `complete until \`${choicePath}\` exists with one of those exact values (and, for \`pr\`, ` +
-        `\`pr_url\` is set in \`${statePath}\`).`;
+        'branch and run:\n' +
+        `  conduct-ts finish-record --choice keep --pipeline-dir ${pipelineDirArg}\n` +
+        'IMPORTANT: `finish-record` performs its own verification (PR existence, push evidence) and is ' +
+        'the ONLY way to record the finish choice — do not write the marker or state files by hand. Do ' +
+        'NOT `cd` elsewhere before running it; the command above must use this exact `--pipeline-dir` ' +
+        'value regardless of the current working directory, since branch/PR/worktree cleanup may change ' +
+        'it. The step is NOT complete until `finish-record` exits 0.';
     }
 
     if (retryReason) {

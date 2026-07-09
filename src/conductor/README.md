@@ -716,6 +716,45 @@ When running in daemon mode, the engine enforces additional constraints at the f
 
 **Implementation:** `engine/done-outcome-validation.ts` (`validateDoneOutcome`), wired into the daemon runner (`daemon-runner.ts`) at the point where a feature reaches the `done` state, before any shipped-record write or worktree cleanup. The validation runs independently of the existing PR-labeling mechanism (`needs-remediation` is still written when applicable for debugging, but does not interfere with the core validation). See `.docs/decisions/adr-2026-07-06-daemon-false-ship-guard.md` for design details and requirements.
 
+#### `finish-record` subcommand — fail-closed finish-choice recording
+
+`conduct-ts finish-record --choice <pr|keep> [--pr-url <url>] --pipeline-dir <abs-path>`
+is the only supported way to record a finish outcome (the `.pipeline/finish-choice`
+marker and, for `pr`, the `pr_url` field in `conduct-state.json`). It replaces
+hand-written marker files with a command that verifies its own preconditions and
+refuses (exit 1, **no writes**) rather than recording anything it cannot prove:
+
+- `--choice pr` (requires `--pr-url <url>`): verifies the PR named by `--pr-url`
+  actually exists (`gh pr view --json url -q .url`) and that `HEAD` has been pushed
+  to its upstream tracking branch (the shared push-evidence gate, local git only —
+  see the false-ship guard above). Only if **both** checks pass does it
+  read-modify-write `conduct-state.json` (adding `pr_url`, preserving unknown
+  fields) and then write the `finish-choice` marker — state write is always
+  ordered before the marker, which is the commit point.
+- `--choice keep` (must **not** be paired with `--pr-url`): writes the
+  `finish-choice` marker only; no state file touched, no `gh`/`git` calls.
+- `--pipeline-dir <abs-path>` is **required** and must be an absolute path to an
+  existing directory — a relative path, or a missing/non-directory path, is
+  refused before any `gh`/`git` spawn or filesystem write.
+- **Fail-closed refusal semantics:** any gate failure (bad flags, non-absolute or
+  missing `--pipeline-dir`, PR-existence check fails, push-evidence check returns
+  `false`/`null`/indeterminate, corrupt existing state JSON, or a failed state
+  write) exits 1 and performs **zero writes** — never a partial marker with no
+  matching state, and never a corrupted state file left half-written.
+
+**Who invokes it:**
+- **Daemon auto-mode finish step** — `engine/step-runners.ts` instructs the
+  unattended finish dispatch to run `finish-record` (with the worktree's absolute
+  `.pipeline` dir) instead of writing the marker by hand; this is the fix for the
+  bug where the finish step exited without ever writing
+  `.pipeline/finish-choice` in auto mode, permanently stalling the gate.
+- **Manual/interactive use** — an operator or the `/finish` skill can run
+  `conduct-ts finish-record --choice pr --pr-url <url> --pipeline-dir <abs-path>`
+  (or `--choice keep`) directly from the CLI in place of hand-editing the marker.
+
+Implementation: `engine/finish-record-cli.ts` (`detectFinishRecordCommand`,
+`dispatchFinishRecord`); wired into the `conduct-ts` entrypoint in `src/index.ts`.
+
 #### Judgement gate at the build → manual_test seam (`build_review`)
 
 `build_review` is an opt-in, objective non-human reviewer verdict that sits strictly between
