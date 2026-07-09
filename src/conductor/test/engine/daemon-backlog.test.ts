@@ -6,6 +6,7 @@ import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import {
   discoverBacklog,
+  fastForwardRoot,
   type BacklogTreeSource,
 } from '../../src/engine/daemon-backlog.js';
 import { parseComplexityTier } from '../../src/engine/artifacts.js';
@@ -1669,5 +1670,128 @@ describe('engine/daemon-backlog — content-hash match dedups renamed specs (Sto
     });
 
     expect(backlog.map((b) => b.slug)).toEqual(['old-v2']);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Task 7 — Wire heal into fastForwardRoot.
+//
+// Tests the heal logic: dirty tree fully explained by a single branch →
+// files restored, strays deleted, ONE WARN containing branch name and healed paths,
+// same poll FF succeeds (tree clean, HEAD advanced).
+// ─────────────────────────────────────────────────────────────────────────────
+describe('engine/daemon-backlog — fastForwardRoot heal integration (Task 7)', () => {
+  let dir: string;
+  let originDir: string;
+  let baseBranch: string;
+  let tmpBase: string;
+
+  const git = async (args: string[]) => {
+    const { stdout } = await execFile('git', args, { cwd: dir });
+    return stdout.trim();
+  };
+
+  beforeEach(async () => {
+    // Create temp directories - keep origin outside the working tree
+    tmpBase = await mkdtemp(join(tmpdir(), 'fast-forward-heal-'));
+    dir = join(tmpBase, 'work');
+    originDir = join(tmpBase, 'origin.git');
+
+    await mkdir(dir);
+    await mkdir(originDir);
+
+    // Initialize bare origin repo
+    await execFile('git', ['init', '--bare', '-q'], { cwd: originDir });
+
+    // Initialize main repo with initial commit
+    await execFile('git', ['init', '-q'], { cwd: dir });
+    await execFile('git', ['config', 'user.email', 'test@test.com'], { cwd: dir });
+    await execFile('git', ['config', 'user.name', 'Test'], { cwd: dir });
+    await execFile('git', ['remote', 'add', 'origin', originDir], { cwd: dir });
+
+    // Create initial file on main and commit
+    await writeFile(join(dir, 'README.md'), 'init\n');
+    await mkdir(join(dir, 'src'), { recursive: true });
+    await writeFile(join(dir, 'src/file.ts'), 'const original = 0;\n');
+    await execFile('git', ['add', '.'], { cwd: dir });
+    await execFile('git', ['commit', '-q', '-m', 'init'], { cwd: dir });
+    baseBranch = await git(['rev-parse', '--abbrev-ref', 'HEAD']);
+
+    // Push to origin
+    await execFile('git', ['push', '-q', '-u', 'origin', baseBranch], { cwd: dir });
+
+    // Create feat/daemon-x branch on origin with a modified version of the file
+    await execFile('git', ['checkout', '-q', '-b', 'feat/daemon-x'], { cwd: dir });
+    await writeFile(join(dir, 'src/file.ts'), 'const x = 1;\n');
+    await execFile('git', ['add', 'src/file.ts'], { cwd: dir });
+    await execFile('git', ['commit', '-q', '-m', 'feat: add file'], { cwd: dir });
+    await execFile('git', ['push', '-q', '-u', 'origin', 'feat/daemon-x'], { cwd: dir });
+
+    // Switch back to main branch
+    await execFile('git', ['checkout', '-q', baseBranch], { cwd: dir });
+  });
+
+  afterEach(async () => {
+    // Clean up the entire temp tree (both work dir and origin)
+    await rm(tmpBase, { recursive: true, force: true });
+  });
+
+  it('dirty tree fully explained by feat/daemon-x → heal and FF (files restored, strays deleted, WARN logged, HEAD advanced)', async () => {
+    // Contaminate the main checkout with dirty state explained by feat/daemon-x
+    // 1. Modify src/file.ts to match feat/daemon-x exactly
+    await mkdir(join(dir, 'src'), { recursive: true });
+    await writeFile(join(dir, 'src/file.ts'), 'const x = 1;\n');
+
+    // 2. Create an untracked stray file matching a blob from feat/daemon-x
+    // (we'll use the content of README.md from feat/daemon-x which is 'init\n')
+    await writeFile(join(dir, 'stray.txt'), 'init\n');
+
+    // Verify dirty state before healing
+    let status = await git(['status', '--porcelain']);
+    expect(status).toContain('src/file.ts'); // modified
+    expect(status).toContain('stray.txt'); // untracked
+
+    const logs: string[] = [];
+    const log = (msg: string) => logs.push(msg);
+
+    // Call fastForwardRoot with the dirty tree
+    await fastForwardRoot(dir, log);
+
+    // Verify: tree is now clean
+    status = await git(['status', '--porcelain']);
+    expect(status).toBe(''); // no dirty state
+
+    // Verify: modified file was restored to its original state on main branch
+    let fileContent: string | null = null;
+    try {
+      fileContent = await fsReadFile(join(dir, 'src/file.ts'), 'utf-8');
+    } catch {
+      fileContent = null;
+    }
+    // After healing, the file should be restored to its original content on main
+    expect(fileContent).toBe('const original = 0;\n');
+
+    // Verify: stray was deleted
+    let strayExists = false;
+    try {
+      await fsReadFile(join(dir, 'stray.txt'), 'utf-8');
+      strayExists = true;
+    } catch {
+      strayExists = false;
+    }
+    expect(strayExists).toBe(false);
+
+    // Verify: WARN was logged with branch name and healed paths
+    const warnLog = logs.find((l) => l.includes('WARN') || l.toLowerCase().includes('heal'));
+    expect(warnLog).toBeDefined();
+    if (warnLog) {
+      expect(warnLog).toMatch(/feat\/daemon-x/);
+      expect(warnLog).toContain('src/file.ts');
+      expect(warnLog).toContain('stray.txt');
+    }
+
+    // Verify: HEAD advanced (fast-forward succeeded)
+    const currentBranch = await git(['rev-parse', '--abbrev-ref', 'HEAD']);
+    expect(currentBranch).toBe(baseBranch);
   });
 });

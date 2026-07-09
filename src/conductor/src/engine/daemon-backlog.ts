@@ -1,6 +1,7 @@
 import { execFile as execFileCb } from 'node:child_process';
-import { basename, isAbsolute, relative } from 'node:path';
+import { basename, isAbsolute, relative, join as pathJoin } from 'node:path';
 import { promisify } from 'node:util';
+import { rm } from 'node:fs/promises';
 import type { BacklogItem } from './daemon.js';
 import {
   planHasDependencyTree,
@@ -17,6 +18,7 @@ import { decideSpecGate, type GateDecision } from './owner-gate/gate.js';
 import type { BlockerResolver, BlockerVerdict } from './blocker-resolver.js';
 import { announceWaitingForRoot } from './daemon-waiting-announce.js';
 import { listShippedRecords, parseShippedRecord, specHash } from './shipped-record.js';
+import { healPlan, enumerateCandidates } from './leak-triage.js';
 
 const execFile = promisify(execFileCb);
 
@@ -172,15 +174,78 @@ export async function fastForwardRoot(
     return;
   }
 
-  // Refuse to touch a dirty working tree — a `--ff-only` merge could fail or
-  // clobber uncommitted/untracked operator changes.
+  // Check for dirty working tree and attempt to heal if possible.
   const status = await git(['status', '--porcelain']);
   if (status.exitCode !== 0 || status.stdout.trim() !== '') {
-    log(
-      `skip fast-forward: working tree at ${projectRoot} is not clean. Commit/stash ` +
-        `changes so the daemon can track origin/${defaultBranch}.`,
-    );
-    return;
+    // Tree is dirty — attempt to heal if it's fully explained by a candidate branch
+    try {
+      const candidates = await enumerateCandidates(git);
+      const plan = await healPlan(git, status.stdout, candidates);
+
+      if (plan.canHeal) {
+        // Execute the heal: restore files and delete strays
+        try {
+          // Restore modified files
+          for (const filePath of plan.filesToRestore) {
+            const restored = await git(['restore', filePath]);
+            if (restored.exitCode !== 0) {
+              log(
+                `heal: warning — failed to restore ${filePath}; ` +
+                  `continuing with fast-forward.`,
+              );
+            }
+          }
+
+          // Delete untracked strays
+          for (const filePath of plan.filesToDelete) {
+            try {
+              const absolutePath = pathJoin(projectRoot, filePath);
+              await rm(absolutePath);
+            } catch (err) {
+              log(
+                `heal: warning — failed to delete ${filePath}; ` +
+                  `continuing with fast-forward.`,
+              );
+            }
+          }
+
+          // Emit ONE WARN containing the branch name and all healed paths
+          const allHealedPaths = [...plan.filesToRestore, ...plan.filesToDelete];
+          if (allHealedPaths.length > 0 && plan.explainedBy) {
+            log(
+              `WARN heal: auto-healed worktree isolation leak from branch '${plan.explainedBy}' ` +
+                `(restored: ${plan.filesToRestore.join(', ') || 'none'}; ` +
+                `deleted: ${plan.filesToDelete.join(', ') || 'none'}); ` +
+                `fast-forward to origin/${defaultBranch} proceeding.`,
+            );
+          }
+
+          // Fall through to the fetch/merge logic below
+        } catch (err) {
+          // Heal execution failed — log the error and skip the fast-forward
+          log(
+            `heal error: ${err instanceof Error ? err.message : String(err)}; ` +
+              `skipping fast-forward.`,
+          );
+          return;
+        }
+      } else {
+        // Tree is dirty and cannot be healed — skip the fast-forward
+        log(
+          `skip fast-forward: working tree at ${projectRoot} is not clean and ` +
+            `dirty state cannot be healed (${plan.reason || 'unknown reason'}). ` +
+            `Commit/stash changes so the daemon can track origin/${defaultBranch}.`,
+        );
+        return;
+      }
+    } catch (err) {
+      // Triage/enumeration failed — log and skip the fast-forward
+      log(
+        `heal triage error: ${err instanceof Error ? err.message : String(err)}; ` +
+          `skipping fast-forward.`,
+      );
+      return;
+    }
   }
 
   // Best-effort fetch; offline/unreachable must NOT crash the poll loop.
