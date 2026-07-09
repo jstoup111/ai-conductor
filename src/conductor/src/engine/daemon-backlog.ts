@@ -18,7 +18,7 @@ import { decideSpecGate, type GateDecision } from './owner-gate/gate.js';
 import type { BlockerResolver, BlockerVerdict } from './blocker-resolver.js';
 import { announceWaitingForRoot } from './daemon-waiting-announce.js';
 import { listShippedRecords, parseShippedRecord, specHash } from './shipped-record.js';
-import { healPlan, enumerateCandidates } from './leak-triage.js';
+import { healPlan, enumerateCandidates, reVerifyHealPlan } from './leak-triage.js';
 
 const execFile = promisify(execFileCb);
 
@@ -185,39 +185,94 @@ export async function fastForwardRoot(
       if (plan.canHeal) {
         // Execute the heal: restore files and delete strays
         try {
-          // Restore modified files
+          // TOCTOU re-verification (Task 9): Before executing any restores, compute the current
+          // hashes of all files to restore. Then verify them immediately before restore execution
+          // to catch any changes that occurred between classification and restore time.
+          const expectedHashes = new Map<string, string>();
           for (const filePath of plan.filesToRestore) {
-            const restored = await git(['restore', filePath]);
-            if (restored.exitCode !== 0) {
-              log(
-                `heal: warning — failed to restore ${filePath}; ` +
-                  `continuing with fast-forward.`,
-              );
+            const hashResult = await git(['hash-object', filePath]);
+            if (hashResult.exitCode === 0) {
+              expectedHashes.set(filePath, hashResult.stdout.trim());
             }
           }
 
-          // Delete untracked strays
-          for (const filePath of plan.filesToDelete) {
+          // Re-verify that all files still have the expected content before restoring
+          const reVerifyResult = await reVerifyHealPlan(git, plan, expectedHashes);
+          if (!reVerifyResult.verified) {
+            // Re-verification failed — abort heal and skip fast-forward
+            log(
+              `WARN heal: re-verification failed — file '${reVerifyResult.failedFile}' ` +
+                `content changed between classification and restore; aborting heal. ` +
+                `Working tree remains dirty; skipping fast-forward.`,
+            );
+            return;
+          }
+
+          // Restore modified files
+          // Track failed files and abort heal on any restore failure (Task 10 / TR-2)
+          const failedFiles: string[] = [];
+          let healFailed = false;
+
+          for (const filePath of plan.filesToRestore) {
             try {
-              const absolutePath = pathJoin(projectRoot, filePath);
-              await rm(absolutePath);
+              const restored = await git(['restore', filePath]);
+              if (restored.exitCode !== 0) {
+                log(
+                  `heal: failed to restore ${filePath}: ${restored.stderr}; ` +
+                    `stopping heal attempt.`,
+                );
+                failedFiles.push(filePath);
+                healFailed = true;
+                break; // Skip remaining files on first failure
+              }
             } catch (err) {
               log(
-                `heal: warning — failed to delete ${filePath}; ` +
-                  `continuing with fast-forward.`,
+                `heal: failed to restore ${filePath}: ${err instanceof Error ? err.message : String(err)}; ` +
+                  `stopping heal attempt.`,
+              );
+              failedFiles.push(filePath);
+              healFailed = true;
+              break; // Skip remaining files on first failure
+            }
+          }
+
+          // Only proceed with deletes if restore succeeded
+          if (!healFailed) {
+            for (const filePath of plan.filesToDelete) {
+              try {
+                const absolutePath = pathJoin(projectRoot, filePath);
+                await rm(absolutePath);
+              } catch (err) {
+                log(
+                  `heal: failed to delete ${filePath}: ${err instanceof Error ? err.message : String(err)}; ` +
+                    `stopping heal attempt.`,
+                );
+                failedFiles.push(filePath);
+                healFailed = true;
+                break; // Skip remaining files on first failure
+              }
+            }
+
+            // Emit ONE WARN containing all candidate branch names and all healed paths
+            const allHealedPaths = [...plan.filesToRestore, ...plan.filesToDelete];
+            if (allHealedPaths.length > 0 && plan.explainedByAll) {
+              const candidateList = plan.explainedByAll.join(', ');
+              log(
+                `WARN heal: auto-healed worktree isolation leak explained by ${candidateList} ` +
+                  `(restored: ${plan.filesToRestore.join(', ') || 'none'}; ` +
+                  `deleted: ${plan.filesToDelete.join(', ') || 'none'}); ` +
+                  `fast-forward to origin/${defaultBranch} proceeding.`,
               );
             }
           }
 
-          // Emit ONE WARN containing the branch name and all healed paths
-          const allHealedPaths = [...plan.filesToRestore, ...plan.filesToDelete];
-          if (allHealedPaths.length > 0 && plan.explainedBy) {
+          // If heal failed, log a WARN and skip fast-forward (never throw)
+          if (healFailed) {
             log(
-              `WARN heal: auto-healed worktree isolation leak from branch '${plan.explainedBy}' ` +
-                `(restored: ${plan.filesToRestore.join(', ') || 'none'}; ` +
-                `deleted: ${plan.filesToDelete.join(', ') || 'none'}); ` +
-                `fast-forward to origin/${defaultBranch} proceeding.`,
+              `WARN heal: failed to heal file(s): ${failedFiles.join(', ')}; ` +
+                `tree remains dirty, skipping fast-forward.`,
             );
+            return;
           }
 
           // Fall through to the fetch/merge logic below

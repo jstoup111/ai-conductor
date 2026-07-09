@@ -1856,14 +1856,9 @@ describe('engine/daemon-backlog — fastForwardRoot heal integration (Task 7)', 
     expect(status).toContain('src/other.ts'); // still modified (should not have been processed)
     expect(status).toContain('stray.txt'); // still untracked (should not have been deleted)
 
-    // Second call: clean the tree and verify it re-triages cleanly
-    await writeFile(join(dir, 'src/file.ts'), 'const original = 0;\n');
-    await writeFile(join(dir, 'src/other.ts'), 'const original = 0;\n');
-    try {
-      await rm(join(dir, 'stray.txt'));
-    } catch {
-      // ignore if it doesn't exist
-    }
+    // Second call: restore tree to clean state and verify it re-triages cleanly
+    // First, reset the index and working tree to the current HEAD
+    await execFile('git', ['checkout', 'HEAD', '.'], { cwd: dir });
 
     const logs2: string[] = [];
     const log2 = (msg: string) => logs2.push(msg);

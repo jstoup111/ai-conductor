@@ -30,6 +30,8 @@ export interface FileClassification {
   path: string;
   /** Branch that explains this file (if any) */
   explainedBy?: string;
+  /** All branches that explain this file (if multiple match byte-for-byte) */
+  allExplainedBy?: string[];
 }
 
 export interface HealPlan {
@@ -37,12 +39,21 @@ export interface HealPlan {
   canHeal: boolean;
   /** The single branch explaining everything (if canHeal is true) */
   explainedBy?: string;
+  /** All branches that explain everything (if multiple candidates match byte-for-byte) */
+  explainedByAll?: string[];
   /** Files to restore via git restore */
   filesToRestore: string[];
   /** Untracked strays to delete */
   filesToDelete: string[];
   /** If canHeal is false, why healing is vetoed */
   reason?: string;
+}
+
+export interface ReVerificationResult {
+  /** Whether re-verification passed (all hashes match) */
+  verified: boolean;
+  /** The file that failed re-verification (if verified is false) */
+  failedFile?: string;
 }
 
 /**
@@ -219,6 +230,7 @@ export async function classifyStrays(
 
   for (const filePath of untrackedFiles) {
     const classification: FileClassification = { path: filePath };
+    const allMatching: string[] = [];
 
     // Get the hash of the untracked file in the working tree
     const fileHashResult = await git(['hash-object', filePath]);
@@ -234,7 +246,7 @@ export async function classifyStrays(
       continue;
     }
 
-    // Check against each candidate branch in order
+    // Check against each candidate branch to find ALL that match
     for (const branch of candidates) {
       // Get all blob hashes in the candidate branch tree
       const treeResult = await git(['ls-tree', '-r', branch]);
@@ -256,10 +268,17 @@ export async function classifyStrays(
 
         // Check if our file's hash is in this branch's blob set
         if (blobHashes.has(fileHash)) {
-          classification.explainedBy = branch;
-          break;
+          allMatching.push(branch);
+          if (!classification.explainedBy) {
+            classification.explainedBy = branch;
+          }
         }
       }
+    }
+
+    // Store all matching candidates if we found any
+    if (allMatching.length > 0) {
+      classification.allExplainedBy = allMatching;
     }
 
     classifications.push(classification);
@@ -293,6 +312,7 @@ export async function classifyModifiedFiles(
 
   for (const filePath of modifiedFiles) {
     const classification: FileClassification = { path: filePath };
+    const allMatching: string[] = [];
 
     // Get the hash of the modified file in the working tree
     const fileHashResult = await git(['hash-object', filePath]);
@@ -308,7 +328,7 @@ export async function classifyModifiedFiles(
       continue;
     }
 
-    // Check against each candidate branch in order
+    // Check against each candidate branch to find ALL that match
     for (const branch of candidates) {
       // Get the blob hash of the file in the candidate branch
       const blobResult = await git(['rev-parse', `${branch}:${filePath}`]);
@@ -316,10 +336,17 @@ export async function classifyModifiedFiles(
         const blobHash = blobResult.stdout.trim();
         // Compare the hashes
         if (fileHash === blobHash) {
-          classification.explainedBy = branch;
-          break;
+          allMatching.push(branch);
+          if (!classification.explainedBy) {
+            classification.explainedBy = branch;
+          }
         }
       }
+    }
+
+    // Store all matching candidates if we found any
+    if (allMatching.length > 0) {
+      classification.allExplainedBy = allMatching;
     }
 
     classifications.push(classification);
@@ -406,6 +433,54 @@ export async function triageModifiedFiles(
     canHeal: allExplained,
     classifications,
   };
+}
+
+/**
+ * Re-verify byte-identity of files in a heal plan immediately before restoration.
+ *
+ * Implements TOCTOU (Time-of-Check Time-of-Use) protection: computes the content hash
+ * of each file in filesToRestore via `git hash-object` and compares against the originally
+ * classified hash. This catches cases where a file's content changed between the initial
+ * classification (planHeal) and the actual restore execution (fastForwardRoot).
+ *
+ * If ANY file's current hash differs from its expected hash, the entire heal is aborted.
+ * This fail-closed approach ensures we never restore a file with unexpected content.
+ *
+ * @param git - GitRunner for executing git commands
+ * @param healPlan - The heal plan containing filesToRestore (the files that were classified)
+ * @param expectedHashes - Map of file path to its originally computed hash
+ * @returns ReVerificationResult with verified flag and optional failedFile
+ */
+export async function reVerifyHealPlan(
+  git: GitRunner,
+  healPlan: HealPlan,
+  expectedHashes: Map<string, string>,
+): Promise<ReVerificationResult> {
+  // Re-hash each file to restore and verify it still matches the original hash
+  for (const filePath of healPlan.filesToRestore) {
+    const currentHashResult = await git(['hash-object', filePath]);
+    if (currentHashResult.exitCode !== 0) {
+      // File disappeared or can't be hashed — treat as verification failure
+      return {
+        verified: false,
+        failedFile: filePath,
+      };
+    }
+
+    const currentHash = currentHashResult.stdout.trim();
+    const expectedHash = expectedHashes.get(filePath);
+
+    // If we don't have an expected hash or it doesn't match, fail verification
+    if (!expectedHash || currentHash !== expectedHash) {
+      return {
+        verified: false,
+        failedFile: filePath,
+      };
+    }
+  }
+
+  // All files verified successfully
+  return { verified: true };
 }
 
 /**
@@ -498,25 +573,50 @@ export async function healPlan(git: GitRunner, porcelain: string, candidates: st
     }
   }
 
-  // Check for single-branch rule: all files must be explained by the SAME branch
-  const explainedByBranches = new Set<string>();
+  // Find the intersection of candidates that explain ALL files.
+  // Start with the candidates that explain the first file, then intersect with others.
+  let commonCandidates: Set<string> | null = null;
+
   for (const classification of allClassifications) {
-    if (classification.explainedBy !== undefined) {
-      explainedByBranches.add(classification.explainedBy);
+    // Get all candidates that explain this file (from allExplainedBy, or fallback to explainedBy)
+    const fileCandidates = new Set<string>();
+    if (classification.allExplainedBy && classification.allExplainedBy.length > 0) {
+      for (const candidate of classification.allExplainedBy) {
+        fileCandidates.add(candidate);
+      }
+    } else if (classification.explainedBy) {
+      fileCandidates.add(classification.explainedBy);
+    }
+
+    // Initialize commonCandidates with the first file's candidates, then intersect
+    if (commonCandidates === null) {
+      commonCandidates = fileCandidates;
+    } else {
+      // Compute intersection: keep only candidates that are in both sets
+      const intersection = new Set<string>();
+      for (const candidate of commonCandidates) {
+        if (fileCandidates.has(candidate)) {
+          intersection.add(candidate);
+        }
+      }
+      commonCandidates = intersection;
     }
   }
 
-  if (explainedByBranches.size > 1) {
+  // If no common candidates, healing is impossible
+  if (!commonCandidates || commonCandidates.size === 0) {
     return {
       canHeal: false,
       filesToRestore: [],
       filesToDelete: [],
-      reason: `files explained by different branches: ${Array.from(explainedByBranches).join(', ')}`,
+      reason: 'no common candidate branch explains all files',
     };
   }
 
   // All validations passed, canHeal is true
-  const singleBranch = Array.from(explainedByBranches)[0];
+  // Use the first common candidate as the primary explainedBy
+  const singleBranch = Array.from(commonCandidates)[0];
+  const explainedByAll = Array.from(commonCandidates).sort();
 
   // Compile restore/delete lists
   const filesToRestore: string[] = [];
@@ -537,6 +637,7 @@ export async function healPlan(git: GitRunner, porcelain: string, candidates: st
   return {
     canHeal: true,
     explainedBy: singleBranch,
+    explainedByAll,
     filesToRestore,
     filesToDelete,
   };
