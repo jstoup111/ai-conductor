@@ -657,6 +657,93 @@ complexity:
     });
   });
 
+  // Task 3 (negative paths: TR-1): build_auth.mode validation — fail-closed for unknown/empty/non-string modes
+  describe('harness_self_host.build_auth.mode validation (Task 3: TR-1 negative paths)', () => {
+    it('accepts valid mode: daemon-token', () => {
+      const result = validateConfig({
+        harness_self_host: {
+          build_auth: {
+            mode: 'daemon-token',
+          },
+        },
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.harness_self_host?.build_auth?.mode).toBe('daemon-token');
+    });
+
+    it('accepts valid mode: api-key', () => {
+      const result = validateConfig({
+        harness_self_host: {
+          build_auth: {
+            mode: 'api-key',
+          },
+        },
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.harness_self_host?.build_auth?.mode).toBe('api-key');
+    });
+
+    it('accepts undefined mode (optional field)', () => {
+      const result = validateConfig({
+        harness_self_host: {
+          build_auth: {
+            token_path: '/path/to/token',
+          },
+        },
+      });
+      expect(result.ok).toBe(true);
+    });
+
+    it('REJECTS unknown mode: operator-oauth', () => {
+      const result = validateConfig({
+        harness_self_host: {
+          build_auth: {
+            mode: 'operator-oauth',
+          },
+        },
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.type).toBe('validation_error');
+      // Message should name the invalid value
+      expect(result.error.message).toContain('operator-oauth');
+      // Message should list valid options
+      expect(result.error.message).toMatch(/daemon-token.*api-key|api-key.*daemon-token/);
+    });
+
+    it('REJECTS empty string mode', () => {
+      const result = validateConfig({
+        harness_self_host: {
+          build_auth: {
+            mode: '',
+          },
+        },
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.type).toBe('validation_error');
+      // Message should list valid options
+      expect(result.error.message).toMatch(/daemon-token.*api-key|api-key.*daemon-token/);
+    });
+
+    it('REJECTS non-string mode (number)', () => {
+      const result = validateConfig({
+        harness_self_host: {
+          build_auth: {
+            mode: 42,
+          },
+        },
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.type).toBe('validation_error');
+      // Message should list valid options
+      expect(result.error.message).toMatch(/daemon-token.*api-key|api-key.*daemon-token/);
+    });
+  });
+
   // Task A10 (adr-2026-06-29-per-project-memory-provider-selection FR-1 negative): provider selection is per-project; no leakage.
   describe('A10: resolveMemoryProvider — per-project isolation, no leakage', () => {
     function registryWithLocal(provider: object): PluginRegistry {

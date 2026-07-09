@@ -669,11 +669,20 @@ function validateBuildAuthBlock(raw: unknown): ConfigError | null {
       };
     }
   }
-  if (obj.mode !== undefined && typeof obj.mode !== 'string') {
-    return {
-      type: 'validation_error',
-      message: 'harness_self_host.build_auth.mode must be a string',
-    };
+  if (obj.mode !== undefined) {
+    if (typeof obj.mode !== 'string') {
+      return {
+        type: 'validation_error',
+        message: `harness_self_host.build_auth.mode must be a string (one of: daemon-token | api-key), got ${typeof obj.mode}`,
+      };
+    }
+    const validModes = new Set(['daemon-token', 'api-key']);
+    if (obj.mode === '' || !validModes.has(obj.mode)) {
+      return {
+        type: 'validation_error',
+        message: `harness_self_host.build_auth.mode must be one of: daemon-token | api-key, got "${obj.mode}"`,
+      };
+    }
   }
   if (obj.token_path !== undefined && typeof obj.token_path !== 'string') {
     return {
