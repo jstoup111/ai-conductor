@@ -721,4 +721,37 @@ describe('acceptance: daemon build-auth isolation (isolate-daemon-build-auth-fro
       nowSpy.mockRestore();
     }
   });
+
+  it('TR-4 negative: successful (exit 0) run with "Not logged in" in output does NOT park — authFailure must be explicitly set by the provider, not inferred from text', async () => {
+    await writeToken('tok-v1');
+    const runner = tokenCapturingRunner([
+      () => ({
+        success: true,
+        output: 'Build completed. Note: "Not logged in" was mentioned somewhere in the process.',
+      }),
+    ]);
+    const guardrails = makeGuardrails();
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      fromStep: 'build',
+      mode: 'auto',
+      daemon: true,
+      selfHost: true,
+      maxRetries: 1,
+      sleepFn: vi.fn(async () => {}),
+      selfHostGuardrails: guardrails,
+      config: selfHostConfig(),
+    });
+
+    await conductor.run();
+
+    // No park engaged despite "Not logged in" in output — success is success
+    expect(await haltBody()).toBeNull();
+    expect(guardrails.provisionSandbox).toHaveBeenCalledTimes(1);
+    expect(tokensSeenByRunner).toEqual(['tok-v1']);
+  });
 });
