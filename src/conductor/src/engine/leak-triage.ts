@@ -47,6 +47,8 @@ export interface HealPlan {
   filesToDelete: string[];
   /** If canHeal is false, why healing is vetoed */
   reason?: string;
+  /** Per-file classifications with explanation status */
+  classifications?: FileClassification[];
 }
 
 export interface ReVerificationResult {
@@ -615,6 +617,14 @@ export function renderLeakSuspectWarn(porcelain: string, healPlan: HealPlan): st
     ...dirtyStatus.untracked,
   ]);
 
+  // Build a map from file path to classification for quick lookup
+  const classificationMap = new Map<string, FileClassification>();
+  if (healPlan.classifications) {
+    for (const classification of healPlan.classifications) {
+      classificationMap.set(classification.path, classification);
+    }
+  }
+
   // Build the per-file table
   const fileRows: string[] = [];
   const unexplainedFiles: string[] = [];
@@ -631,21 +641,18 @@ export function renderLeakSuspectWarn(porcelain: string, healPlan: HealPlan): st
     }
 
     // Find explanation status from classifications
-    const matchingClassification = healPlan.filesToRestore
-      ? null // filesToRestore won't have classifications, but we can infer from the heal plan
-      : null;
+    const matchingClassification = classificationMap.get(filePath);
+    let explanationStatus = '(unexplained)';
 
-    // For unexplained files, mark them accordingly
-    // Since healPlan.canHeal is false, we need to infer which files are unexplained
-    // by checking if they would have been in the heal's lists
-    let explanationStatus = '(none)';
+    if (matchingClassification && matchingClassification.explainedBy) {
+      explanationStatus = matchingClassification.explainedBy;
+    }
 
     // Build the row with path, status, and explanation
     fileRows.push(`  ${filePath.padEnd(40)} | ${status.padEnd(12)} | ${explanationStatus}`);
 
     // Track unexplained files
-    // Files not in filesToRestore and filesToDelete are unexplained
-    if (!healPlan.filesToRestore.includes(filePath) && !healPlan.filesToDelete.includes(filePath)) {
+    if (!matchingClassification || !matchingClassification.explainedBy) {
       unexplainedFiles.push(filePath);
     }
   }
@@ -706,6 +713,7 @@ export async function healPlan(git: GitRunner, porcelain: string, candidates: st
       filesToRestore: [],
       filesToDelete: [],
       reason: 'staged changes present',
+      classifications: dirtyStatus.modified.map((path) => ({ path })),
     };
   }
 
@@ -716,11 +724,18 @@ export async function healPlan(git: GitRunner, porcelain: string, candidates: st
       explainedBy: undefined,
       filesToRestore: [],
       filesToDelete: [],
+      classifications: [],
     };
   }
 
   // If no candidates, all files are unexplained
   if (candidates.length === 0) {
+    // Create classifications for unexplained files (no candidates to match against)
+    const unexplainedClassifications: FileClassification[] = [
+      ...dirtyStatus.modified.map((path) => ({ path })),
+      ...dirtyStatus.untracked.map((path) => ({ path })),
+    ];
+
     // Check if there are any untracked files that need explanation
     if (dirtyStatus.untracked.length > 0) {
       return {
@@ -728,6 +743,7 @@ export async function healPlan(git: GitRunner, porcelain: string, candidates: st
         filesToRestore: [],
         filesToDelete: [],
         reason: `untracked file ${dirtyStatus.untracked[0]} unexplained`,
+        classifications: unexplainedClassifications,
       };
     }
     // Check if there are any modified files
@@ -737,6 +753,7 @@ export async function healPlan(git: GitRunner, porcelain: string, candidates: st
         filesToRestore: [],
         filesToDelete: [],
         reason: `modified file ${dirtyStatus.modified[0]} unexplained`,
+        classifications: unexplainedClassifications,
       };
     }
   }
@@ -756,6 +773,7 @@ export async function healPlan(git: GitRunner, porcelain: string, candidates: st
         filesToRestore: [],
         filesToDelete: [],
         reason: `untracked file ${classification.path} unexplained`,
+        classifications: allClassifications,
       };
     }
   }
@@ -797,6 +815,7 @@ export async function healPlan(git: GitRunner, porcelain: string, candidates: st
       filesToRestore: [],
       filesToDelete: [],
       reason: 'no common candidate branch explains all files',
+      classifications: allClassifications,
     };
   }
 
@@ -832,5 +851,6 @@ export async function healPlan(git: GitRunner, porcelain: string, candidates: st
     explainedByAll,
     filesToRestore,
     filesToDelete,
+    classifications: allClassifications,
   };
 }

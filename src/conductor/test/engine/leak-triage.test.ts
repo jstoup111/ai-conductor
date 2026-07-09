@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { parseDirtyStatus, enumerateCandidates, classifyModifiedFiles, triageModifiedFiles } from '../../src/engine/leak-triage.js';
+import { parseDirtyStatus, enumerateCandidates, classifyModifiedFiles, triageModifiedFiles, renderLeakSuspectWarn } from '../../src/engine/leak-triage.js';
 import { makeGitRunner, type GitRunner } from '../../src/engine/rebase.js';
 import { mkdtemp, rm, writeFile, mkdir, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -753,6 +753,90 @@ M  src/file2.ts
       expect(plan.explainedBy).toBe('feat/branch-y');
       expect(plan.filesToRestore).toContain('src/a.ts');
       expect(plan.filesToRestore).toContain('src/b.ts');
+    });
+  });
+
+  describe('renderLeakSuspectWarn', () => {
+    it('surfaces per-file classification status with branch explanation for explained files', () => {
+      // Porcelain status with one modified tracked file
+      const porcelain = ' M src/explained.ts\n';
+
+      // Mock HealPlan with classifications showing which branch explains the file
+      const healPlan = {
+        canHeal: false,
+        filesToRestore: [],
+        filesToDelete: [],
+        classifications: [
+          {
+            path: 'src/explained.ts',
+            explainedBy: 'feat/daemon-x',
+            allExplainedBy: ['feat/daemon-x'],
+          },
+        ],
+      };
+
+      const output = renderLeakSuspectWarn(porcelain, healPlan);
+
+      // The output should mention the file and show it's explained by feat/daemon-x (not '(none)')
+      expect(output).toContain('src/explained.ts');
+      expect(output).toContain('feat/daemon-x');
+      expect(output).not.toContain('| (none)');
+    });
+
+    it('marks unexplained files with (unexplained) status when classification has no explainedBy', () => {
+      // Porcelain status with one modified tracked file
+      const porcelain = ' M src/unexplained.ts\n';
+
+      // Mock HealPlan with classifications showing file is unexplained
+      const healPlan = {
+        canHeal: false,
+        filesToRestore: [],
+        filesToDelete: [],
+        classifications: [
+          {
+            path: 'src/unexplained.ts',
+            // No explainedBy field → unexplained
+          },
+        ],
+      };
+
+      const output = renderLeakSuspectWarn(porcelain, healPlan);
+
+      // The output should show the file as unexplained
+      expect(output).toContain('src/unexplained.ts');
+      expect(output).toContain('(unexplained)');
+    });
+
+    it('shows per-file diff-stats for mixed explained and unexplained files', () => {
+      // Porcelain with multiple files: one modified, one untracked
+      const porcelain = ' M src/tracked.ts\n?? src/stray.ts\n';
+
+      const healPlan = {
+        canHeal: false,
+        filesToRestore: [],
+        filesToDelete: [],
+        classifications: [
+          {
+            path: 'src/tracked.ts',
+            explainedBy: 'feat/daemon-x',
+            allExplainedBy: ['feat/daemon-x'],
+          },
+          {
+            path: 'src/stray.ts',
+            // No explainedBy → unexplained
+          },
+        ],
+      };
+
+      const output = renderLeakSuspectWarn(porcelain, healPlan);
+
+      // Verify both files appear with their respective status
+      expect(output).toContain('src/tracked.ts');
+      expect(output).toContain('src/stray.ts');
+      expect(output).toContain('feat/daemon-x');
+      expect(output).toContain('(unexplained)');
+      // Total should show 1 unexplained out of 2
+      expect(output).toContain('1/2');
     });
   });
 
