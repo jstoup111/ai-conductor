@@ -309,10 +309,14 @@ describe('integration/rebase-loop', () => {
     const beforeRun = Date.now();
     const ran: string[] = [];
     let buildRuns = 0;
+    let buildReviewRuns = 0;
+    let manualTestRuns = 0;
     const runner: StepRunner = {
       run: async (step) => {
         ran.push(step);
         if (step === 'build') buildRuns++;
+        if (step === 'build_review') buildReviewRuns++;
+        if (step === 'manual_test') manualTestRuns++;
         return satisfy(step);
       },
     };
@@ -334,7 +338,34 @@ describe('integration/rebase-loop', () => {
         reverifiedBuild = true;
       }
     });
-    await conductorWith(runner).run();
+    const fakeGit: GitRunner = async (args) =>
+      args.includes('--symbolic-full-name')
+        ? { stdout: 'refs/remotes/origin/feature/x\n' }
+        : { stdout: '' };
+    const config = { build_review: { enabled: true } };
+
+    // Pre-write a fresh all-PASS manual_test results file mid-session before rebase
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(
+      join(dir, '.pipeline/manual-test-results.md'),
+      '| Story | Result |\n|---|---|\n| all | PASS |\n',
+    );
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      daemon: true,
+      verifyArtifacts: true,
+      mode: 'auto',
+      fromStep: 'build',
+      maxRetries: 1,
+      git: fakeGit,
+      config,
+    });
+
+    await conductor.run();
 
     // Evidence-intact: the mechanical pre-verify confirms build from git
     // evidence, so the build agent is dispatched only once (not re-run by
@@ -344,6 +375,19 @@ describe('integration/rebase-loop', () => {
     expect(reverifiedBuild).toBe(true);
     expect(completed).toBe(true);
 
+    // Non-tree-attesting gates (build_review, manual_test) must always
+    // re-run on file-changing rebase even when build is mechanically
+    // confirmed and skipped.
+    expect(buildReviewRuns).toBe(2);
+    expect(kicks).toContainEqual({ from: 'rebase', to: 'build_review' });
+
+    // manual_test: despite fresh same-session all-PASS file, it must be
+    // invalidated by file-changing rebase and re-run (session-fresh
+    // invariant does not apply to pre-rebase files).
+    expect(manualTestRuns).toBe(2);
+    expect(kicks).toContainEqual({ from: 'rebase', to: 'manual_test' });
+
+    // Verify build verdict is satisfied (pre-verify succeeded)
     const verdictRaw = await readFile(
       join(dir, '.pipeline/gates/build.json'),
       'utf-8',
@@ -352,6 +396,22 @@ describe('integration/rebase-loop', () => {
     expect(verdict.satisfied).toBe(true);
     expect(verdict.reason).toMatch(/re-verified mechanically/);
     expect(verdict.checkedAt).toBeGreaterThanOrEqual(beforeRun);
+
+    // Verify build_review verdict was invalidated by rebase kickback
+    const buildReviewVerdictRaw = await readFile(
+      join(dir, '.pipeline/gates/build_review.json'),
+      'utf-8',
+    );
+    const buildReviewVerdict = JSON.parse(buildReviewVerdictRaw);
+    expect(buildReviewVerdict.satisfied).toBe(true);
+
+    // Verify manual_test verdict was invalidated by rebase kickback
+    const manualTestVerdictRaw = await readFile(
+      join(dir, '.pipeline/gates/manual_test.json'),
+      'utf-8',
+    );
+    const manualTestVerdict = JSON.parse(manualTestVerdictRaw);
+    expect(manualTestVerdict.satisfied).toBe(true);
   });
 
   it('a file-changing rebase with genuinely-missing evidence still dispatches build (Story 2, Task 9)', async () => {
