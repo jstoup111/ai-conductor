@@ -101,7 +101,7 @@ M  src/file2.ts
       git = makeGitRunner(tempDir);
 
       // Initialize a git repo with a main branch
-      await git(['init']);
+      await git(['init', '-b', 'main']);
       await git(['config', 'user.email', 'test@example.com']);
       await git(['config', 'user.name', 'Test User']);
 
@@ -193,7 +193,7 @@ M  src/file2.ts
       git = makeGitRunner(tempDir);
 
       // Initialize a git repo with a main branch
-      await git(['init']);
+      await git(['init', '-b', 'main']);
       await git(['config', 'user.email', 'test@example.com']);
       await git(['config', 'user.name', 'Test User']);
 
@@ -352,7 +352,7 @@ M  src/file2.ts
       git = makeGitRunner(tempDir);
 
       // Initialize a git repo with a main branch
-      await git(['init']);
+      await git(['init', '-b', 'main']);
       await git(['config', 'user.email', 'test@example.com']);
       await git(['config', 'user.name', 'Test User']);
 
@@ -507,7 +507,7 @@ M  src/file2.ts
       git = makeGitRunner(tempDir);
 
       // Initialize a git repo with a main branch
-      await git(['init']);
+      await git(['init', '-b', 'main']);
       await git(['config', 'user.email', 'test@example.com']);
       await git(['config', 'user.name', 'Test User']);
 
@@ -850,7 +850,7 @@ M  src/file2.ts
       git = makeGitRunner(tempDir);
 
       // Initialize a git repo with a main branch
-      await git(['init']);
+      await git(['init', '-b', 'main']);
       await git(['config', 'user.email', 'test@example.com']);
       await git(['config', 'user.name', 'Test User']);
 
