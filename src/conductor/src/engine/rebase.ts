@@ -726,14 +726,15 @@ export async function applyRebaseVerdicts(
   projectRoot: string,
   outcome: RebaseOutcome,
   ranManualTest: boolean,
-): Promise<{ satisfied: boolean; kickedBack: StepName[] }> {
+  preVerify?: (step: StepName) => Promise<{ done: boolean; reason?: string }>,
+): Promise<{ satisfied: boolean; kickedBack: StepName[]; reverified: StepName[] }> {
   if (outcome.kind === 'conflict_halt') {
     await writeVerdict(projectRoot, 'rebase', {
       satisfied: false,
       reason: `rebase conflict: ${outcome.reason}`,
       checkedAt: Date.now(),
     });
-    return { satisfied: false, kickedBack: [] };
+    return { satisfied: false, kickedBack: [], reverified: [] };
   }
 
   // rebase gate is satisfied (branch now current with base).
@@ -750,7 +751,7 @@ export async function applyRebaseVerdicts(
   await writeVerdict(projectRoot, 'rebase', satisfiedVerdict);
 
   if (outcome.kind !== 'changed') {
-    return { satisfied: true, kickedBack: [] };
+    return { satisfied: true, kickedBack: [], reverified: [] };
   }
 
   // FR-5: code/test paths changed → invalidate downstream gates kickback-shaped.
@@ -778,7 +779,7 @@ export async function applyRebaseVerdicts(
     });
     kickedBack.push(target);
   }
-  return { satisfied: true, kickedBack };
+  return { satisfied: true, kickedBack, reverified: [] };
 }
 
 /** Map a rebase outcome to its structured event. Best-effort emission. */
