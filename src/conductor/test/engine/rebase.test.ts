@@ -358,6 +358,73 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     expect(manualTest?.satisfied).toBe(false);
     expect(manualTest?.kickback?.from).toBe('rebase');
   });
+
+  it('Task 6.1: changed + ranManualTest: false + preVerify(build) done:true → build_review only kicked back (no manual_test)', async () => {
+    const outcome: RebaseOutcome = { kind: 'changed', changedCodePaths: ['src/a.ts'] };
+    const preVerify = async (step: string) => {
+      if (step === 'build') {
+        return { done: true };
+      }
+      return { done: false };
+    };
+
+    const r = await applyRebaseVerdicts(dir, outcome, false, preVerify);
+
+    // Rebase gate satisfied
+    expect(r.satisfied).toBe(true);
+
+    // build is reverified (not in kickedBack), build_review kicked back, manual_test NOT present
+    expect(r.kickedBack).toEqual(['build_review']);
+    expect(r.reverified).toEqual(['build']);
+
+    // build verdict is fresh satisfied
+    const build = await readVerdict(dir, 'build');
+    expect(build?.satisfied).toBe(true);
+    expect(build?.reason).toContain('re-verified mechanically');
+
+    // build_review is kicked back
+    const buildReview = await readVerdict(dir, 'build_review');
+    expect(buildReview?.satisfied).toBe(false);
+    expect(buildReview?.kickback?.from).toBe('rebase');
+
+    // manual_test verdict should NOT be written (ranManualTest: false)
+    const manualTest = await readVerdict(dir, 'manual_test');
+    expect(manualTest).toBeNull();
+  });
+
+  it('Task 6.2: changed + ranManualTest: false + preVerify(build) done:false → build and build_review kicked back (no manual_test)', async () => {
+    const outcome: RebaseOutcome = { kind: 'changed', changedCodePaths: ['src/a.ts'] };
+    const preVerify = async (step: string) => {
+      if (step === 'build') {
+        return { done: false, reason: 'no evidence' };
+      }
+      return { done: false };
+    };
+
+    const r = await applyRebaseVerdicts(dir, outcome, false, preVerify);
+
+    // Rebase gate satisfied
+    expect(r.satisfied).toBe(true);
+
+    // build and build_review kicked back, manual_test NOT present
+    expect(r.kickedBack).toEqual(['build', 'build_review']);
+    expect(r.reverified).toEqual([]);
+
+    // build verdict is unsatisfied with kickback
+    const build = await readVerdict(dir, 'build');
+    expect(build?.satisfied).toBe(false);
+    expect(build?.reason).toBe('invalidated by file-changing rebase');
+    expect(build?.kickback?.from).toBe('rebase');
+
+    // build_review is kicked back
+    const buildReview = await readVerdict(dir, 'build_review');
+    expect(buildReview?.satisfied).toBe(false);
+    expect(buildReview?.kickback?.from).toBe('rebase');
+
+    // manual_test verdict should NOT be written (ranManualTest: false)
+    const manualTest = await readVerdict(dir, 'manual_test');
+    expect(manualTest).toBeNull();
+  });
 });
 
 describe('engine/rebase — emitRebaseEvent (FR-10)', () => {
