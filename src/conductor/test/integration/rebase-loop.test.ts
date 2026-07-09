@@ -479,7 +479,7 @@ describe('integration/rebase-loop', () => {
             await mkdir(join(dir, '.docs/plans'), { recursive: true });
             await writeFile(
               join(dir, '.docs/plans/p.md'),
-              '### Task 1\n**Files:** `src/feature.ts`\n\n### Task 2\n**Files:** `src/other.ts`\n',
+              '### Task 1: Implement feature\n**Files:** `src/feature.ts`\n\n### Task 2: Implement other\n**Files:** `src/other.ts`\n',
             );
             await writeFile(join(dir, 'src/feature.ts'), 'export const foo = 2;\n');
             await git('add', '.');
