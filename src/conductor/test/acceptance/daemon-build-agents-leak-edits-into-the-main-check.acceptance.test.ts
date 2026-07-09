@@ -30,6 +30,7 @@ import { promisify } from 'node:util';
 
 import { fastForwardRoot } from '../../src/engine/daemon-backlog.js';
 import { makeGitRunner, type GitRunner } from '../../src/engine/rebase.js';
+import type { LeakWarnState } from '../../src/engine/leak-triage.js';
 
 const execFile = promisify(execFileCb);
 
@@ -200,14 +201,15 @@ describe('acceptance: main-checkout leak auto-heal + escalation (#380, TR-2/TR-3
   it('unexplained dirty tree escalates to a full leak-suspect WARN on first sight, then throttles to a short line while unchanged', async () => {
     await writeFile(join(repoDir, 'src', 'a.ts'), 'export const mystery = true;\n');
 
+    const leakWarnState: LeakWarnState = { fingerprint: null };
     const logsFirst: string[] = [];
-    await fastForwardRoot(repoDir, (m) => logsFirst.push(m));
+    await fastForwardRoot(repoDir, (m) => logsFirst.push(m), undefined, undefined, leakWarnState);
     const firstJoined = logsFirst.join('\n');
     expect(firstJoined).toMatch(/src\/a\.ts/);
     expect(firstJoined.length).toBeGreaterThan(80); // a per-file table, not a one-liner
 
     const logsSecond: string[] = [];
-    await fastForwardRoot(repoDir, (m) => logsSecond.push(m));
+    await fastForwardRoot(repoDir, (m) => logsSecond.push(m), undefined, undefined, leakWarnState);
     const secondJoined = logsSecond.join('\n');
     // Same dirty fingerprint → short line, not the full table again.
     expect(secondJoined.length).toBeLessThan(firstJoined.length);

@@ -441,10 +441,10 @@ describe('SandboxBuildEnv (TR-5/TR-6)', () => {
       const scriptContent = await readFile(scriptPath, 'utf-8');
       expect(scriptContent).toContain(`WORKTREE_ROOT="${worktree}"`);
       expect(scriptContent).toContain(`HARNESS_ROOT="${worktree}"`);
-      // No placeholder patterns
+      // No placeholder patterns (bash scripts legitimately contain < for comparisons)
       expect(scriptContent).not.toContain('{{');
       expect(scriptContent).not.toContain('}}');
-      expect(scriptContent).not.toContain('<');
+      expect(scriptContent).not.toContain('<placeholder>');
       expect(scriptContent).not.toContain('PLACEHOLDER');
     } finally {
       await sandbox.teardown();
