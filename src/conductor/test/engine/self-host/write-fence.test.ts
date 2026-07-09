@@ -93,3 +93,155 @@ describe('write-fence — script generator + settings merge (TR-4)', () => {
     expect(result.exitCode).toBe(0);
   });
 });
+
+/**
+ * Real-binary smoke tests for write-fence allow cases (Task 17).
+ * These tests invoke the generated script with real bash binary and JSON payloads on stdin.
+ */
+describe('write-fence — real-binary smoke tests (allow cases)', () => {
+  const worktreeRoot = '/tmp/write-fence-smoke-worktree';
+  const harnessRoot = '/tmp/write-fence-smoke-harness';
+
+  it('ALLOW: edit inside worktree root → exit 0', async () => {
+    const script = generateFenceScript(worktreeRoot, harnessRoot);
+    const payload = JSON.stringify({
+      tool_name: 'Edit',
+      tool_input: {
+        file_path: `${worktreeRoot}/src/conductor/src/x.ts`,
+      },
+    });
+    const result = await execa('bash', [], {
+      input: script + '\n' + `echo '${payload.replace(/'/g, "'\\''")}'`,
+      reject: false,
+    });
+    expect(result.exitCode).toBe(0);
+  });
+
+  it('ALLOW: edit in unrelated repo (outside both worktree and harness) → exit 0', async () => {
+    const script = generateFenceScript(worktreeRoot, harnessRoot);
+    // Use a path that's clearly outside both roots
+    const unrelatedPath = '/home/user/other-project/src/app.ts';
+    const payload = JSON.stringify({
+      tool_name: 'Edit',
+      tool_input: {
+        file_path: unrelatedPath,
+      },
+    });
+    const result = await execa('bash', [], {
+      input: script + '\n' + `echo '${payload.replace(/'/g, "'\\''")}'`,
+      reject: false,
+    });
+    expect(result.exitCode).toBe(0);
+  });
+
+  it('ALLOW: edit in OS temp directory → exit 0', async () => {
+    const script = generateFenceScript(worktreeRoot, harnessRoot);
+    const tempPath = '/tmp/unrelated-edit/file.ts';
+    const payload = JSON.stringify({
+      tool_name: 'Edit',
+      tool_input: {
+        file_path: tempPath,
+      },
+    });
+    const result = await execa('bash', [], {
+      input: script + '\n' + `echo '${payload.replace(/'/g, "'\\''")}'`,
+      reject: false,
+    });
+    expect(result.exitCode).toBe(0);
+  });
+
+  it('ALLOW: Bash with read-only grep command → exit 0', async () => {
+    const script = generateFenceScript(worktreeRoot, harnessRoot);
+    const payload = JSON.stringify({
+      tool_name: 'Bash',
+      tool_input: {
+        command: `grep -r "pattern" ${worktreeRoot}/src`,
+      },
+    });
+    const result = await execa('bash', [], {
+      input: script + '\n' + `echo '${payload.replace(/'/g, "'\\''")}'`,
+      reject: false,
+    });
+    expect(result.exitCode).toBe(0);
+  });
+
+  it('ALLOW: Bash with read-only cat command → exit 0', async () => {
+    const script = generateFenceScript(worktreeRoot, harnessRoot);
+    const payload = JSON.stringify({
+      tool_name: 'Bash',
+      tool_input: {
+        command: 'cat /tmp/somefile.txt',
+      },
+    });
+    const result = await execa('bash', [], {
+      input: script + '\n' + `echo '${payload.replace(/'/g, "'\\''")}'`,
+      reject: false,
+    });
+    expect(result.exitCode).toBe(0);
+  });
+
+  it('ALLOW: empty stdin → exit 0, no stderr crash', async () => {
+    const script = generateFenceScript(worktreeRoot, harnessRoot);
+    const result = await execa('bash', [], {
+      input: script + '\n' + 'true',
+      reject: false,
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe('');
+  });
+
+  it('ALLOW: garbage JSON on stdin → exit 0, no stderr crash', async () => {
+    const script = generateFenceScript(worktreeRoot, harnessRoot);
+    const result = await execa('bash', [], {
+      input: script + '\n' + `echo 'not valid json at all {{{['`,
+      reject: false,
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe('');
+  });
+
+  it('ALLOW: malformed JSON (missing tool_name) → exit 0', async () => {
+    const script = generateFenceScript(worktreeRoot, harnessRoot);
+    const payload = JSON.stringify({
+      tool_input: {
+        file_path: '/some/path.ts',
+      },
+      // tool_name missing
+    });
+    const result = await execa('bash', [], {
+      input: script + '\n' + `echo '${payload.replace(/'/g, "'\\''")}'`,
+      reject: false,
+    });
+    expect(result.exitCode).toBe(0);
+  });
+
+  it('ALLOW: Bash with read-only diff command → exit 0', async () => {
+    const script = generateFenceScript(worktreeRoot, harnessRoot);
+    const payload = JSON.stringify({
+      tool_name: 'Bash',
+      tool_input: {
+        command: 'diff /file1.txt /file2.txt',
+      },
+    });
+    const result = await execa('bash', [], {
+      input: script + '\n' + `echo '${payload.replace(/'/g, "'\\''")}'`,
+      reject: false,
+    });
+    expect(result.exitCode).toBe(0);
+  });
+
+  it('ALLOW: Bash with read-only head command → exit 0', async () => {
+    const script = generateFenceScript(worktreeRoot, harnessRoot);
+    const payload = JSON.stringify({
+      tool_name: 'Bash',
+      tool_input: {
+        command: 'head -20 /tmp/large-file.log',
+      },
+    });
+    const result = await execa('bash', [], {
+      input: script + '\n' + `echo '${payload.replace(/'/g, "'\\''")}'`,
+      reject: false,
+    });
+    expect(result.exitCode).toBe(0);
+  });
+});
