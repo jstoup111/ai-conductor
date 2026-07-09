@@ -903,11 +903,17 @@ export class Conductor {
     // Pre-flight credential expiry check (TR-2): BEFORE provisioning, check if
     // the operator's credentials are expired. If so, park or HALT depending on
     // the timeout configuration. Never consumes the retry budget.
-    const operatorConfigDir = process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude');
-    const preflight = await this.preflightCredentialsCheck(operatorConfigDir);
-    if (preflight !== undefined) {
-      // Either HALT (timeout <= 0) or parking timeout reached (Task 14)
-      return preflight;
+    // Task 11: In daemon-token or api-key mode, skip operator credentials check
+    // (only applies when build_auth is explicitly configured; undefined/absent
+    // build_auth means backward-compat operator-credentials mode).
+    const buildAuthBlock = this.config?.harness_self_host?.build_auth;
+    if (!buildAuthBlock || (buildAuthBlock.mode !== 'daemon-token' && buildAuthBlock.mode !== 'api-key')) {
+      const operatorConfigDir = process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude');
+      const preflight = await this.preflightCredentialsCheck(operatorConfigDir);
+      if (preflight !== undefined) {
+        // Either HALT (timeout <= 0) or parking timeout reached (Task 14)
+        return preflight;
+      }
     }
 
     if (!this.activeSandbox) {

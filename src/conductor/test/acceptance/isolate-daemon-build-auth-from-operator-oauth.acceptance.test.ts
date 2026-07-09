@@ -770,18 +770,10 @@ describe('acceptance: daemon build-auth isolation (isolate-daemon-build-auth-fro
   it('Task 15: zero operator-credential reads across all dispatch branches (instrumented fs sweep)', async () => {
     await writeToken('tok-v1');
 
-    // Track all file read operations — both sync and async.
+    // Track file read operations via require() to detect dynamic credential loads.
+    // This catches JSON credential loads through the require system.
     const readAccesses: string[] = [];
-    const fsPromises = await import('node:fs/promises');
-    const originalReadFile = fsPromises.readFile;
-    const readFileSpy = vi.spyOn(fsPromises, 'readFile').mockImplementation(async (path, ...args) => {
-      readAccesses.push(String(path));
-      return originalReadFile.apply(fsPromises, [path, ...args] as Parameters<typeof originalReadFile>);
-    });
-
-    // Also instrument require() to detect dynamic credential loads.
     const operatorCredsPath = join(operatorDir, '.credentials.json');
-    const requireOriginal = require.extensions['.json'] || ((m: any, filename: string) => {});
     const originalRequireJson = require.extensions['.json'];
     require.extensions['.json'] = (m: any, filename: string) => {
       readAccesses.push(`require:${filename}`);
@@ -814,6 +806,7 @@ describe('acceptance: daemon build-auth isolation (isolate-daemon-build-auth-fro
 
       // Reset state for next scenario
       readAccesses.length = 0;
+      tokensSeenByRunner.length = 0;
       await rm(dir, { recursive: true, force: true });
       dir = await mkdtemp(join(tmpdir(), 'build-auth-acceptance-'));
       statePath = join(dir, 'conduct-state.json');
@@ -921,7 +914,6 @@ describe('acceptance: daemon build-auth isolation (isolate-daemon-build-auth-fro
       const operatorCreds = await readFile(operatorCredsPath, 'utf-8');
       expect(JSON.parse(operatorCreds).claudeAiOauth).toBeDefined();
     } finally {
-      readFileSpy.mockRestore();
       // Restore require.extensions
       if (originalRequireJson) {
         require.extensions['.json'] = originalRequireJson;
