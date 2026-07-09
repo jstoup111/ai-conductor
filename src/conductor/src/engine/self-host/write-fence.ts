@@ -74,7 +74,7 @@ extract_target_path() {
   return 1
 }
 
-# Check if a bash command has write-like patterns (> >> | sed/awk modifying, etc.)
+# Check if a bash command has write-like patterns (> >> | sed/awk modifying, mv, cp, tee, etc.)
 has_write_shape() {
   local cmd="\$1"
 
@@ -82,6 +82,7 @@ has_write_shape() {
   # - Redirection: > >> &>
   # - Pipes: | (used with writing tools like sed, awk, etc.)
   # - Tool patterns: sed 's/...' awk '...' (modifying operations)
+  # - File operations: mv, cp, tee, install, dd, etc.
 
   # Check for output redirection
   if [[ "\$cmd" =~ (^|[[:space:]])(\>|>>|&\>)([[:space:]]|\$) ]]; then
@@ -95,6 +96,11 @@ has_write_shape() {
 
   # sed with substitution (s/.../) is modifying even without output redirect
   if [[ "\$cmd" =~ (^|[[:space:]])sed[[:space:]].*s/ ]]; then
+    return 0
+  fi
+
+  # File manipulation tools: mv, cp, tee, install, dd, rsync
+  if [[ "\$cmd" =~ (^|[[:space:]])(mv|cp|tee|install|dd|rsync)[[:space:]] ]]; then
     return 0
   fi
 
@@ -114,10 +120,12 @@ resolve_path() {
   # Use cd + pwd to resolve the canonical path
   # We avoid subshells by using a temp approach
   local resolved
-  if resolved=\$(cd "\$path" 2>/dev/null && pwd) || \
-     resolved=\$(cd "\$(dirname "\$path")" 2>/dev/null && pwd) && [[ -d "\$resolved" ]]; then
-    # path or its parent resolved; use that
+  if resolved=\$(cd "\$path" 2>/dev/null && pwd); then
+    # The path itself is a directory and exists
     printf '%s' "\$resolved"
+  elif resolved=\$(cd "\$(dirname "\$path")" 2>/dev/null && pwd) && [[ -d "\$resolved" ]]; then
+    # The parent directory exists; append the filename
+    printf '%s/%s' "\$resolved" "\$(basename "\$path")"
   else
     # Path doesn't exist; canonicalize by removing .. and .
     # Remove trailing slashes and . components
@@ -127,6 +135,54 @@ resolve_path() {
     done
     printf '%s' "\$path"
   fi
+}
+
+# Extract the target path from a Bash command for write operations
+# Handles: > file, >> file, &> file, mv src dst, cp src dst, tee file, etc.
+extract_bash_target_path() {
+  local cmd="\$1"
+
+  # Try to extract path after redirection operators: > >> &>
+  # Match: ...redirection_op whitespace path
+  local target
+  target=\$(printf '%s' "\$cmd" | sed -n 's/.*[[:space:]]\\(>>\\|&>\\|>\\)[[:space:]]*\\([^[:space:]>|]*\\).*/\\2/p')
+  if [[ -n "\$target" ]]; then
+    printf '%s' "\$target"
+    return 0
+  fi
+
+  # For mv/cp commands, the last argument is the destination
+  if [[ "\$cmd" =~ (^|[[:space:]])(mv|cp)[[:space:]] ]]; then
+    # Extract the last word (destination path)
+    target=\$(printf '%s' "\$cmd" | awk '{print \$NF}')
+    if [[ -n "\$target" ]]; then
+      printf '%s' "\$target"
+      return 0
+    fi
+  fi
+
+  # For tee command, the first non-flag argument is the file path
+  if [[ "\$cmd" =~ (^|[[:space:]])tee([[:space:]]|$) ]]; then
+    # Use awk to find tee and extract the first non-flag argument after it
+    target=\$(printf '%s' "\$cmd" | awk '/tee/ {
+      found=0
+      for (i=1; i<=NF; i++) {
+        if (found && \$i !~ /^-/) {
+          print \$i
+          exit
+        }
+        if (\$i ~ /^tee$/) {
+          found=1
+        }
+      }
+    }')
+    if [[ -n "\$target" ]]; then
+      printf '%s' "\$target"
+      return 0
+    fi
+  fi
+
+  return 1
 }
 
 # Check if a path is under a root directory
@@ -165,12 +221,14 @@ main() {
   local target
   target=\$(extract_target_path "\$json" "\$tool_name")
 
-  # For Bash, check if it's read-only
+  # For Bash, check if it's read-only and extract the real target path
   if [[ "\$tool_name" == "Bash" ]]; then
     if ! has_write_shape "\$target"; then
       # Read-only Bash (grep, cat, diff, etc.) — allow
       exit 0
     fi
+    # This is a write-shaped Bash command, extract the actual target path
+    target=\$(extract_bash_target_path "\$target")
   fi
 
   # If no target path was found, allow
@@ -193,9 +251,10 @@ main() {
   # Check if the resolved path is under the harness root (but outside worktree)
   if path_under "\$resolved" "\$HARNESS_ROOT"; then
     # Inside harness, outside worktree — BLOCK
-    printf 'FENCE BLOCK: attempted edit outside worktree\\n' >&2
-    printf '  Target: %s\\n' "\$resolved" >&2
-    printf '  Worktree root: %s\\n' "\$WORKTREE_ROOT" >&2
+    printf 'FENCE BLOCK: attempted write to harness %s\\n' "\$resolved" >&2
+    printf '  worktree root: %s\\n' "\$WORKTREE_ROOT" >&2
+    printf '  harness root: %s\\n' "\$HARNESS_ROOT" >&2
+    printf '  rule: block write to harness paths outside worktree\\n' >&2
     exit 2
   fi
 
