@@ -30,24 +30,38 @@ describe('write-fence — script generator + settings merge (TR-4)', () => {
     expect(script).not.toContain('__HARNESS_ROOT__');
   });
 
-  it('mergeFenceIntoSettings(null) returns minimal valid settings.json with fence entry', () => {
-    const result = mergeFenceIntoSettings(null);
+  it('mergeFenceIntoSettings(null, fenceScriptPath) returns schema-correct fence entry', () => {
+    const fenceScriptPath = '/tmp/.claude/hooks/write-fence.sh';
+    const result = mergeFenceIntoSettings(null, fenceScriptPath);
     const parsed = JSON.parse(result);
     expect(parsed).toBeDefined();
     expect(parsed.hooks).toBeDefined();
     expect(parsed.hooks.PreToolUse).toBeDefined();
     expect(Array.isArray(parsed.hooks.PreToolUse)).toBe(true);
-    // Should have at least the fence entry
+
+    // Should have the fence entry with correct schema
     const fenceEntry = parsed.hooks.PreToolUse.find((e: unknown) =>
       typeof e === 'object' &&
       e !== null &&
-      'command' in e &&
-      (e as Record<string, unknown>).command?.toString().includes('write-fence')
+      'matcher' in e &&
+      'hooks' in e
     );
     expect(fenceEntry).toBeDefined();
+
+    // Verify the fence entry has the correct structure
+    if (fenceEntry) {
+      const entry = fenceEntry as Record<string, unknown>;
+      expect(entry.matcher).toBe('Edit|Write|MultiEdit|NotebookEdit|Bash');
+      expect(Array.isArray(entry.hooks)).toBe(true);
+      const hooks = entry.hooks as Array<Record<string, unknown>>;
+      expect(hooks.length).toBeGreaterThan(0);
+      expect(hooks[0].type).toBe('command');
+      expect(hooks[0].command).toBe(fenceScriptPath);
+    }
   });
 
   it('mergeFenceIntoSettings preserves existing operator hook entries byte-for-byte', () => {
+    const fenceScriptPath = '/tmp/.claude/hooks/write-fence.sh';
     const operatorSettings = JSON.stringify({
       hooks: {
         PreToolUse: [
@@ -56,7 +70,7 @@ describe('write-fence — script generator + settings merge (TR-4)', () => {
         ],
       },
     });
-    const result = mergeFenceIntoSettings(operatorSettings);
+    const result = mergeFenceIntoSettings(operatorSettings, fenceScriptPath);
     const parsed = JSON.parse(result);
     expect(parsed.hooks.PreToolUse).toContainEqual({
       command: '/home/operator/.claude/hooks/personal.sh',
@@ -66,9 +80,19 @@ describe('write-fence — script generator + settings merge (TR-4)', () => {
     });
     // Check that at least 3 entries exist (2 original + 1 fence)
     expect(parsed.hooks.PreToolUse.length).toBeGreaterThanOrEqual(3);
+
+    // Verify the fence entry is schema-correct
+    const fenceEntry = parsed.hooks.PreToolUse.find((e: unknown) =>
+      typeof e === 'object' &&
+      e !== null &&
+      'matcher' in e &&
+      'hooks' in e
+    );
+    expect(fenceEntry).toBeDefined();
   });
 
   it('mergeFenceIntoSettings handles multiple operator hook entries, all preserved', () => {
+    const fenceScriptPath = '/tmp/.claude/hooks/write-fence.sh';
     const operatorSettings = JSON.stringify({
       hooks: {
         PreToolUse: [
@@ -78,7 +102,7 @@ describe('write-fence — script generator + settings merge (TR-4)', () => {
         ],
       },
     });
-    const result = mergeFenceIntoSettings(operatorSettings);
+    const result = mergeFenceIntoSettings(operatorSettings, fenceScriptPath);
     const parsed = JSON.parse(result);
     expect(parsed.hooks.PreToolUse.length).toBeGreaterThanOrEqual(4); // 3 original + 1 fence
     expect(parsed.hooks.PreToolUse).toContainEqual({ command: '/path/to/hook1.sh' });

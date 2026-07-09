@@ -267,8 +267,8 @@ async function provisionWriteFence(
   const settingsPath = join(args.configDir, 'settings.json');
   const settingsJson = await fs.readFile(settingsPath);
 
-  // Merge the fence entry into settings.json
-  const updatedSettings = mergeFenceIntoSettings(settingsJson);
+  // Merge the fence entry into settings.json with the script path
+  const updatedSettings = mergeFenceIntoSettings(settingsJson, scriptPath);
 
   // Write the updated settings back to disk
   await fs.writeFile(settingsPath, updatedSettings);

@@ -272,9 +272,10 @@ main
  * byte-for-byte.
  *
  * @param operatorSettingsJson Operator's settings.json as a JSON string, or null for minimal
+ * @param fenceScriptPath Absolute path to the generated fence script
  * @returns Valid settings.json with fence entry added under hooks.PreToolUse
  */
-export function mergeFenceIntoSettings(operatorSettingsJson: string | null): string {
+export function mergeFenceIntoSettings(operatorSettingsJson: string | null, fenceScriptPath: string): string {
   let settings: Record<string, unknown>;
 
   if (operatorSettingsJson === null) {
@@ -312,16 +313,12 @@ export function mergeFenceIntoSettings(operatorSettingsJson: string | null): str
   // Append the fence entry
   const preToolUseArray = hooks.PreToolUse as Record<string, unknown>[];
 
-  // The fence script path is not yet known at merge time; it will be written
-  // during sandbox provision. For now, use a placeholder that the sandbox
-  // provisioner will know to replace. However, per the task description,
-  // the script is materialized separately, so we reference it by the standard
-  // sandbox path.
-  const fenceScriptPath = 'write-fence.sh'; // Relative to CLAUDE_CONFIG_DIR, or full path when provisioned
-
-  // Add the fence entry at the end to not disrupt existing entries
+  // Add the fence entry at the end to not disrupt existing entries.
+  // The entry matches Edit, Write, MultiEdit, NotebookEdit, and Bash tools,
+  // and invokes the fence script with the provided command hook.
   preToolUseArray.push({
-    command: fenceScriptPath,
+    matcher: 'Edit|Write|MultiEdit|NotebookEdit|Bash',
+    hooks: [{ type: 'command', command: fenceScriptPath }],
   });
 
   return JSON.stringify(settings, null, 2);

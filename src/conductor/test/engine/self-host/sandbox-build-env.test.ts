@@ -424,7 +424,20 @@ describe('SandboxBuildEnv (TR-5/TR-6)', () => {
       expect(settings.hooks).toBeDefined();
       expect(Array.isArray(settings.hooks.PreToolUse)).toBe(true);
       const fenceEntry = settings.hooks.PreToolUse.find(
-        (hook: Record<string, unknown>) => (hook.command as string)?.includes('write-fence.sh'),
+        (hook: Record<string, unknown>) =>
+          typeof hook === 'object' &&
+          hook !== null &&
+          'matcher' in hook &&
+          hook.matcher === 'Edit|Write|MultiEdit|NotebookEdit|Bash' &&
+          'hooks' in hook &&
+          Array.isArray(hook.hooks) &&
+          hook.hooks.some(
+            (h: unknown) =>
+              typeof h === 'object' &&
+              h !== null &&
+              'command' in h &&
+              (h as Record<string, unknown>).command?.toString().includes('write-fence.sh'),
+          ),
       );
       expect(fenceEntry).toBeDefined();
 
