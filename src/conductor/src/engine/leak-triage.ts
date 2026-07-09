@@ -182,6 +182,80 @@ export async function enumerateCandidates(git: GitRunner): Promise<string[]> {
 }
 
 /**
+ * Classify untracked (stray) files by checking if their content hash exists
+ * in the blob set of any candidate branch.
+ *
+ * For each untracked file, computes its content hash via `git hash-object` and
+ * checks it against the blob hashes in each candidate branch via `git ls-tree -r`.
+ * If a match is found, the file is "explained by" that branch.
+ *
+ * This helps identify which untracked files may have leaked from worktree isolation —
+ * files whose content matches a blob in a candidate branch indicate a potential source.
+ *
+ * @param git - GitRunner for executing git commands
+ * @param candidates - List of candidate branch names to check against
+ * @param untrackedFiles - List of untracked file paths
+ * @returns Array of classifications, one per untracked file, with optional explainedBy
+ */
+export async function classifyStrays(
+  git: GitRunner,
+  candidates: string[],
+  untrackedFiles: string[],
+): Promise<FileClassification[]> {
+  const classifications: FileClassification[] = [];
+
+  for (const filePath of untrackedFiles) {
+    const classification: FileClassification = { path: filePath };
+
+    // Get the hash of the untracked file in the working tree
+    const fileHashResult = await git(['hash-object', filePath]);
+    if (fileHashResult.exitCode !== 0) {
+      // File doesn't exist or can't be hashed, mark as unexplained
+      classifications.push(classification);
+      continue;
+    }
+
+    const fileHash = fileHashResult.stdout.trim();
+    if (!fileHash) {
+      classifications.push(classification);
+      continue;
+    }
+
+    // Check against each candidate branch in order
+    for (const branch of candidates) {
+      // Get all blob hashes in the candidate branch tree
+      const treeResult = await git(['ls-tree', '-r', branch]);
+      if (treeResult.exitCode === 0 && treeResult.stdout) {
+        // Parse ls-tree output: each line is "mode type hash\tpath"
+        // We extract the hash (third field)
+        const blobHashes = new Set<string>();
+        const lines = treeResult.stdout.split('\n').filter((l) => l.trim());
+
+        for (const line of lines) {
+          // Format: "100644 blob <hash>\t<path>"
+          const parts = line.split(/\s+/);
+          if (parts.length >= 3) {
+            // The hash is the third field
+            const blobHash = parts[2];
+            blobHashes.add(blobHash);
+          }
+        }
+
+        // Check if our file's hash is in this branch's blob set
+        if (blobHashes.has(fileHash)) {
+          classification.explainedBy = branch;
+          break;
+        }
+      }
+    }
+
+    classifications.push(classification);
+  }
+
+  return classifications;
+}
+
+/**
  * Classify modified files by comparing their content hash against candidate branches.
  *
  * For each modified file, computes its content hash via `git hash-object` and

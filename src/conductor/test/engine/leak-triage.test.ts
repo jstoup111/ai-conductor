@@ -339,6 +339,158 @@ M  src/file2.ts
     });
   });
 
+  describe('classifyStrays', () => {
+    let tempDir: string;
+    let git: GitRunner;
+
+    beforeEach(async () => {
+      // Create a temporary directory for the test repo
+      tempDir = await mkdtemp(join(tmpdir(), 'leak-triage-strays-test-'));
+      git = makeGitRunner(tempDir);
+
+      // Initialize a git repo with a main branch
+      await git(['init']);
+      await git(['config', 'user.email', 'test@example.com']);
+      await git(['config', 'user.name', 'Test User']);
+
+      // Create an initial commit on main
+      await git(['commit', '--allow-empty', '-m', 'Initial commit']);
+    });
+
+    afterEach(async () => {
+      // Clean up the temporary directory
+      await rm(tempDir, { recursive: true, force: true });
+    });
+
+    it('classifies an untracked file as explained by a candidate branch when content is in tree', async () => {
+      // Create a feature branch with a file
+      await git(['checkout', '-b', 'feat/daemon-x']);
+      await mkdir(join(tempDir, 'test'), { recursive: true });
+      const filePath = join(tempDir, 'test', 'daemon.test.ts');
+      await writeFile(filePath, 'export const testContent = "hello from feat/daemon-x";', 'utf-8');
+      await git(['add', 'test/daemon.test.ts']);
+      await git(['commit', '-m', 'Add test/daemon.test.ts on feat/daemon-x']);
+
+      // Switch back to main
+      await git(['checkout', 'main']);
+
+      // Create an untracked file with the same content
+      const untrackedPath = join(tempDir, 'test', 'daemon.test.ts.new');
+      await mkdir(join(tempDir, 'test'), { recursive: true });
+      await writeFile(untrackedPath, 'export const testContent = "hello from feat/daemon-x";', 'utf-8');
+
+      // Import and call classifyStrays
+      const { classifyStrays } = await import('../../src/engine/leak-triage.js');
+      const result = await classifyStrays(git, ['feat/daemon-x'], ['test/daemon.test.ts.new']);
+
+      expect(result).toHaveLength(1);
+      expect(result[0]).toEqual({
+        path: 'test/daemon.test.ts.new',
+        explainedBy: 'feat/daemon-x',
+      });
+    });
+
+    it('classifies untracked file as unexplained when content does not match any candidate', async () => {
+      // Create a feature branch with a file
+      await git(['checkout', '-b', 'feat/daemon-x']);
+      await mkdir(join(tempDir, 'test'), { recursive: true });
+      const filePath = join(tempDir, 'test', 'daemon.test.ts');
+      await writeFile(filePath, 'export const testContent = "hello from feat/daemon-x";', 'utf-8');
+      await git(['add', 'test/daemon.test.ts']);
+      await git(['commit', '-m', 'Add test/daemon.test.ts on feat/daemon-x']);
+
+      // Switch back to main
+      await git(['checkout', 'main']);
+
+      // Create an untracked file with different content
+      const untrackedPath = join(tempDir, 'test', 'daemon.test.ts.new');
+      await mkdir(join(tempDir, 'test'), { recursive: true });
+      await writeFile(untrackedPath, 'export const testContent = "different content";', 'utf-8');
+
+      // Import and call classifyStrays
+      const { classifyStrays } = await import('../../src/engine/leak-triage.js');
+      const result = await classifyStrays(git, ['feat/daemon-x'], ['test/daemon.test.ts.new']);
+
+      expect(result).toHaveLength(1);
+      expect(result[0]).toEqual({
+        path: 'test/daemon.test.ts.new',
+      });
+      expect(result[0].explainedBy).toBeUndefined();
+    });
+
+    it('checks multiple candidate branches and returns the first match', async () => {
+      // Create first candidate branch with a file
+      await git(['checkout', '-b', 'feat/daemon-x']);
+      await mkdir(join(tempDir, 'test'), { recursive: true });
+      const filePath = join(tempDir, 'test', 'daemon.test.ts');
+      await writeFile(filePath, 'content x', 'utf-8');
+      await git(['add', 'test/daemon.test.ts']);
+      await git(['commit', '-m', 'Add test/daemon.test.ts with content x']);
+
+      // Create second candidate branch with different content
+      await git(['checkout', 'main']);
+      await git(['checkout', '-b', 'feat/daemon-y']);
+      await mkdir(join(tempDir, 'test'), { recursive: true });
+      await writeFile(filePath, 'content y', 'utf-8');
+      await git(['add', 'test/daemon.test.ts']);
+      await git(['commit', '-m', 'Add test/daemon.test.ts with content y']);
+
+      // Switch back to main
+      await git(['checkout', 'main']);
+
+      // Create an untracked file with content from feat/daemon-y
+      const untrackedPath = join(tempDir, 'test', 'daemon.test.ts.new');
+      await mkdir(join(tempDir, 'test'), { recursive: true });
+      await writeFile(untrackedPath, 'content y', 'utf-8');
+
+      // Import and call classifyStrays
+      const { classifyStrays } = await import('../../src/engine/leak-triage.js');
+      const result = await classifyStrays(git, ['feat/daemon-x', 'feat/daemon-y'], ['test/daemon.test.ts.new']);
+
+      expect(result).toHaveLength(1);
+      expect(result[0]).toEqual({
+        path: 'test/daemon.test.ts.new',
+        explainedBy: 'feat/daemon-y',
+      });
+    });
+
+    it('classifies multiple untracked files with mixed results', async () => {
+      // Create a feature branch with two files
+      await git(['checkout', '-b', 'feat/daemon-x']);
+      await mkdir(join(tempDir, 'test'), { recursive: true });
+      const file1Path = join(tempDir, 'test', 'file1.ts');
+      const file2Path = join(tempDir, 'test', 'file2.ts');
+      await writeFile(file1Path, 'content 1', 'utf-8');
+      await writeFile(file2Path, 'content 2', 'utf-8');
+      await git(['add', 'test/file1.ts', 'test/file2.ts']);
+      await git(['commit', '-m', 'Add files on feat/daemon-x']);
+
+      // Switch back to main
+      await git(['checkout', 'main']);
+
+      // Create two untracked files - one matching, one not
+      const untracked1Path = join(tempDir, 'test', 'file1.ts.new');
+      const untracked2Path = join(tempDir, 'test', 'file2.ts.new');
+      await mkdir(join(tempDir, 'test'), { recursive: true });
+      await writeFile(untracked1Path, 'content 1', 'utf-8'); // Matches feat/daemon-x
+      await writeFile(untracked2Path, 'different content', 'utf-8'); // Does not match
+
+      // Import and call classifyStrays
+      const { classifyStrays } = await import('../../src/engine/leak-triage.js');
+      const result = await classifyStrays(git, ['feat/daemon-x'], ['test/file1.ts.new', 'test/file2.ts.new']);
+
+      expect(result).toHaveLength(2);
+      expect(result[0]).toEqual({
+        path: 'test/file1.ts.new',
+        explainedBy: 'feat/daemon-x',
+      });
+      expect(result[1]).toEqual({
+        path: 'test/file2.ts.new',
+      });
+      expect(result[1].explainedBy).toBeUndefined();
+    });
+  });
+
   describe('triageModifiedFiles (negative paths)', () => {
     let tempDir: string;
     let git: GitRunner;
