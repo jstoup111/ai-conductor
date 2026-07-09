@@ -1360,6 +1360,74 @@ a completion-gate retry, the conductor runs auto-heal once per session:
 See `engine/autoheal.ts` for the heuristic and `test/engine/conductor.test.ts` for the
 six auto-heal test scenarios.
 
+### Main-checkout leak triage and auto-heal
+
+When the daemon's base-tracking fast-forward (`maybeFastForward` in `daemon-backlog.ts`)
+discovers a dirty working tree in the main checkout, before giving up it now runs **leak triage**
+to classify every dirty entry and attempt deterministic auto-heal. The triage phase:
+
+1. **Classify dirty state:** Parse `git status --porcelain` to extract modified tracked files,
+   staged changes, and untracked strays.
+2. **Enumerate candidate branches:** Prioritize candidate heads — local branches with daemon
+   worktrees (`.worktrees/<slug>`), then local `feat/*` heads — to explain the dirty state.
+3. **Byte-identity matching:** For each candidate, check whether the dirty entry's working-tree
+   content is byte-identical to the same path's blob in that candidate's tree (tracked files
+   via `git cat-file`, untracked strays via content hash).
+4. **All-or-nothing heal gate:** If a SINGLE candidate explains EVERY dirty entry AND the
+   index has no staged changes, auto-heal runs:
+   - Restore modified tracked files via `git restore`
+   - Delete untracked strays
+   - Log one loud WARN naming the culprit branch and each healed path
+   - Proceed with the same poll's fast-forward
+5. **Unexplained dirty state escalation:** If no candidate explains everything, escalate from
+   a one-line skip to a loud LEAK-SUSPECT WARN with per-file diff-stat, logged once per unique
+   fingerprint (prevent spam across polls). Never heal ambiguous state.
+
+**Safety model:** Byte-identity to a known branch proves the content already exists in git, so
+restore loses nothing. Operator work is protected: the all-or-nothing gate means any ambiguity
+keeps hands off the tree. The deterministic half (classification + identity check) is fully
+testable and safe to automate.
+
+**Modules:** `engine/leak-triage.ts` (classification + fingerprinting + heal planning),
+`engine/daemon-backlog.ts` (wiring in `maybeFastForward`), test coverage in
+`test/engine/leak-triage.test.ts`.
+
+### Write-fence sandbox for self-host builds
+
+When a self-host daemon build runs against a throwaway sandbox `CLAUDE_CONFIG_DIR`
+(provisioned by `SandboxBuildEnv` in `engine/self-host/sandbox-build-env.ts`), the daemon
+provisions a PreToolUse hook that blocks writes to the harness main checkout outside the
+build worktree. The fence script (`engine/self-host/write-fence.ts`) is merged into the
+sandbox's copied `settings.json` and invoked on Edit, Write, MultiEdit, NotebookEdit, and
+Bash tools:
+
+**Allow logic (exit 0):**
+- Target path is under the build worktree root (`.worktrees/<slug>/...`)
+- Bash command is read-only (grep, cat, diff, ls, etc.)
+- Target is unrelated to the harness or lives in OS temp (`/tmp/`, etc.)
+- Malformed/empty JSON payload (safety default)
+
+**Block logic (exit 2):**
+- Target is under the harness root but outside the worktree (modification of live harness)
+- Bash command text references main-checkout paths outside worktree (heuristic screening)
+
+When blocked, the hook prints guidance: "Writes to the harness checkout are blocked in
+self-build sandbox. Use worktree paths instead" and exits 2.
+
+**Design rationale:** The fence is a cheap, best-effort second layer on the existing
+sandbox seam. It catches the observed leak vector (agent Bash write-then-rename). The
+deterministic layer (leak-triage/auto-heal) is the load-bearing backstop for anything
+the heuristic misses.
+
+**Scope:** Self-host builds only (enabled when `SelfHostDetector` classifies a self-build).
+Consumer-repo daemon builds keep the operator's global `block-default-branch-edits.sh`
+hook; extending the fence there is a follow-up.
+
+**Modules:** `engine/self-host/write-fence.ts` (script generation),
+`engine/self-host/sandbox-build-env.ts` (provisioning), test coverage in
+`test/engine/self-host/write-fence.test.ts` and real-binary acceptance test in
+`test/acceptance/write-fence-real-binary.acceptance.test.ts`.
+
 ### Task Status (engine-owned)
 
 The conductor engine is the **single authority** for `.pipeline/task-status.json`, which

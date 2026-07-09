@@ -359,6 +359,27 @@ deployment.
 On failure, conduct sends a desktop notification and drops into an interactive Claude session
 to fix the issue. After you `/quit`, it rechecks artifacts and continues automatically.
 
+**Main-checkout leak triage and auto-heal (self-host only).** Self-host builds in worktrees
+sometimes leak edits into the main checkout — a dirty tree that blocks base-tracking fast-forward.
+When fast-forward detects a dirty tree, leak triage now classifies every dirty file/untracked stray
+against candidate branch heads (daemon worktrees prioritized, then local `feat/*`). If a SINGLE
+branch explains ALL dirty entries via byte-identity match, auto-heal runs: `git restore` tracked
+files, delete untracked strays, log one WARN naming the culprit branch and healed paths, then
+proceed with fast-forward. Unexplained dirty trees escalate from a one-line skip to a loud
+LEAK-SUSPECT WARN with per-file diff-stat so stalls are never silent. Operator work is safe:
+heal requires whole-tree byte-identity to a known branch, so ambiguous dirtystate keeps hands off.
+See `src/conductor/README.md` → "Main-checkout leak triage and auto-heal" for the detailed
+implementation and guarantee model.
+
+**Write-fence sandbox for self-host builds (self-host only).** When a self-host build runs in a
+sandbox, it now has a daemon-owned PreToolUse hook that blocks writes to the harness main checkout
+outside the build worktree. Edit, Write, MultiEdit, and NotebookEdit targeting paths under the
+harness root but outside `.worktrees/` are blocked with guidance to use the worktree path; Bash
+commands referencing main-checkout paths are heuristically screened and blocked (the deterministic
+leak-triage/auto-heal layer backstops any misses). The fence never fires on worktree-internal
+paths, OS temp directories, or unrelated repos. See `src/conductor/README.md` → "Write-fence
+sandbox for self-host builds" for the implementation and boundary cases.
+
 ### Rate-Limit Episode Coordination
 
 API providers periodically enforce rate limits — sudden hard stops when usage hits ceilings.
