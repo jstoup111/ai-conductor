@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, mkdir, readFile, access } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, readFile, access, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { execa } from 'execa';
 
 import {
   resolveBase,
@@ -19,6 +20,7 @@ import {
 } from '../../src/engine/rebase.js';
 import { readVerdict, writeVerdict } from '../../src/engine/gate-verdicts.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
+import { checkStepCompletion } from '../../src/engine/artifacts.js';
 
 // A scripted GitRunner: matches argv prefixes to canned results.
 function fakeGit(
@@ -502,5 +504,121 @@ describe('engine/rebase — rebase_gate_reverified event', () => {
       skippedDispatch: true,
       reason: 'gate already satisfied',
     });
+  });
+});
+
+describe('Task 13: Evidence bar not lowered — corroboration + forged negatives', () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'task13-'));
+    // Initialize a minimal git repo for evidence extraction
+    await execa('git', ['init', '-q'], { cwd: dir });
+    await execa('git', ['config', 'user.email', 'test@test.com'], { cwd: dir });
+    await execa('git', ['config', 'user.name', 'Test User'], { cwd: dir });
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('(a) Evidence trailer exists but commit touches NONE of the task plan paths → pre-verify fails', async () => {
+    // Create a plan with Task 1 that has specific file paths
+    await mkdir(join(dir, '.docs/plans'), { recursive: true });
+    const planPath = join(dir, '.docs/plans/plan.md');
+    await writeFile(
+      planPath,
+      `
+# Implementation Plan
+
+### Task 1: Add feature
+**Story:** Feature 1
+**Files:**
+- src/feature.ts
+- src/feature.test.ts
+
+Task 1 implementation required.
+`,
+    );
+
+    // Create a commit with Task: 1 trailer but touch an unrelated file (does NOT touch plan paths)
+    await writeFile(join(dir, 'unrelated.txt'), 'unrelated content');
+    await execa('git', ['add', 'unrelated.txt'], { cwd: dir });
+    await execa('git',
+      ['commit', '-q', '-m', 'Commit with Task trailer\n\nTask: 1'],
+      { cwd: dir });
+
+    // Create pipeline directory and task-status.json with Task 1 marked completed
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(
+      join(dir, '.pipeline/task-status.json'),
+      JSON.stringify({ tasks: [{ id: '1', name: 'Task 1', status: 'completed' }] }),
+    );
+
+    // Create empty task-evidence.json (no evidence stamps)
+    await writeFile(
+      join(dir, '.pipeline/task-evidence.json'),
+      JSON.stringify({ evidenceStamps: {}, noEvidenceAttempts: 0, migrationGrandfather: [] }),
+    );
+
+    // Call pre-verify (checkStepCompletion) with seed + derive context
+    const ctx = { projectRoot: dir, planPath };
+    const result = await checkStepCompletion(dir, 'build', ctx);
+
+    // Pre-verify must fail: Task 1 has an evidence trailer but the commit touches
+    // NONE of the plan's declared paths (src/feature.ts, src/feature.test.ts).
+    // Path corroboration failed, so deriveCompletion must NOT resolve the task.
+    expect(result.done).toBe(false);
+    expect(result.reason).toMatch(/pending|not completed|no.*evidence/i);
+  });
+
+  it('(b) task-status.json forged with all completed but empty evidence sidecar → pre-verify fails', async () => {
+    // Create a plan with Task 1
+    await mkdir(join(dir, '.docs/plans'), { recursive: true });
+    const planPath = join(dir, '.docs/plans/plan.md');
+    await writeFile(
+      planPath,
+      `
+# Implementation Plan
+
+### Task 1: Add feature
+**Story:** Feature 1
+**Files:**
+- src/feature.ts
+
+Task 1 needs to be done.
+`,
+    );
+
+    // Create initial commit (establishes the anchor)
+    await writeFile(join(dir, 'README.md'), 'initial');
+    await execa('git', ['add', 'README.md'], { cwd: dir });
+    await execa('git', ['commit', '-q', '-m', 'Initial commit'], { cwd: dir });
+
+    // Create pipeline directory
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+
+    // Forge task-status.json with Task 1 marked completed (without evidence)
+    await writeFile(
+      join(dir, '.pipeline/task-status.json'),
+      JSON.stringify({ tasks: [{ id: '1', name: 'Task 1', status: 'completed' }] }),
+    );
+
+    // Create empty task-evidence.json (no evidenceStamps, no migrationGrandfather)
+    // This violates H6/H7: a "completed" row without sidecar evidence is demoted
+    await writeFile(
+      join(dir, '.pipeline/task-evidence.json'),
+      JSON.stringify({ evidenceStamps: {}, noEvidenceAttempts: 0, migrationGrandfather: [] }),
+    );
+
+    // Call pre-verify with seed + derive context
+    const ctx = { projectRoot: dir, planPath };
+    const result = await checkStepCompletion(dir, 'build', ctx);
+
+    // Pre-verify must fail: Task 1 is marked completed on disk but has no evidence
+    // sidecar entry (evidenceStamps or migrationGrandfather). The gate never trusts
+    // forged rows; H6/H7 enforcement requires real git-derived evidence.
+    expect(result.done).toBe(false);
+    expect(result.reason).toMatch(/pending|not completed|no.*evidence/i);
   });
 });
