@@ -7,6 +7,15 @@
 
 import type { GitRunner, GitResult } from './rebase.js';
 
+export interface TriageResult {
+  /** Whether the triage can proceed with healing (no staged changes present) */
+  healable: boolean;
+  /** Whether healing is possible given the current state (no unexplained modifications) */
+  canHeal: boolean;
+  /** File classifications with optional explainedBy branch */
+  classifications: FileClassification[];
+}
+
 export interface DirtyStatus {
   /** Files modified in the working tree */
   modified: string[];
@@ -230,4 +239,84 @@ export async function classifyModifiedFiles(
   }
 
   return classifications;
+}
+
+/**
+ * Triage workflow for modified files in the main checkout.
+ *
+ * Orchestrates parseDirtyStatus, enumerateCandidates, and classifyModifiedFiles
+ * to determine whether a dirty working tree can be healed (all modifications
+ * explained by candidate branches) and whether healing is feasible (no staged changes).
+ *
+ * Returns early if any staged modifications are present (staged abort), marking
+ * the result as not healable to prevent healing attempts while staged changes exist.
+ *
+ * @param git - GitRunner for executing git commands
+ * @param defaultBranchForStatus - Optional default branch name for status lookup (only used when git is a spied/mock runner)
+ * @param candidateOverride - Optional explicit candidate list (primarily for testing); when provided, skips enumerateCandidates
+ * @returns TriageResult with healable, canHeal flags and file classifications
+ */
+export async function triageModifiedFiles(
+  git: GitRunner,
+  defaultBranchForStatus?: string,
+  candidateOverride?: string[],
+): Promise<TriageResult> {
+  // Get the dirty status
+  const statusResult = await git(['status', '--porcelain']);
+  if (statusResult.exitCode !== 0) {
+    // If we can't get status, treat as not healable
+    return {
+      healable: false,
+      canHeal: false,
+      classifications: [],
+    };
+  }
+
+  const dirtyStatus = parseDirtyStatus(statusResult.stdout);
+
+  // Guard 1: Staged abort — if any staged modifications exist, return not-healable immediately
+  if (dirtyStatus.staged.length > 0) {
+    return {
+      healable: false,
+      canHeal: false,
+      classifications: dirtyStatus.modified.map((path) => ({ path })),
+    };
+  }
+
+  // If no modified files, nothing to triage
+  if (dirtyStatus.modified.length === 0) {
+    return {
+      healable: true,
+      canHeal: true,
+      classifications: [],
+    };
+  }
+
+  // Get candidates (or use override for testing)
+  let candidates: string[] = candidateOverride ?? [];
+  if (!candidateOverride) {
+    candidates = await enumerateCandidates(git);
+  }
+
+  // Guard 2 & 3: Zero candidates or missing path
+  // If there are no candidates, all modified files are unexplained
+  if (candidates.length === 0) {
+    return {
+      healable: true, // No staged changes, so technically healable
+      canHeal: false, // But no candidates to explain the modifications
+      classifications: dirtyStatus.modified.map((path) => ({ path })),
+    };
+  }
+
+  // Classify the modified files
+  const classifications = await classifyModifiedFiles(git, candidates, dirtyStatus.modified);
+
+  // Determine if all files are explained
+  const allExplained = classifications.every((c) => c.explainedBy !== undefined);
+
+  return {
+    healable: true,
+    canHeal: allExplained,
+    classifications,
+  };
 }

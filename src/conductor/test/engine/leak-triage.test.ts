@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { parseDirtyStatus, enumerateCandidates, classifyModifiedFiles } from '../../src/engine/leak-triage.js';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { parseDirtyStatus, enumerateCandidates, classifyModifiedFiles, triageModifiedFiles } from '../../src/engine/leak-triage.js';
 import { makeGitRunner, type GitRunner } from '../../src/engine/rebase.js';
 import { mkdtemp, rm, writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -336,6 +336,167 @@ M  src/file2.ts
         path: 'src/b.ts',
       });
       expect(result[1].explainedBy).toBeUndefined();
+    });
+  });
+
+  describe('triageModifiedFiles (negative paths)', () => {
+    let tempDir: string;
+    let git: GitRunner;
+
+    beforeEach(async () => {
+      // Create a temporary directory for the test repo
+      tempDir = await mkdtemp(join(tmpdir(), 'leak-triage-negative-test-'));
+      git = makeGitRunner(tempDir);
+
+      // Initialize a git repo with a main branch
+      await git(['init']);
+      await git(['config', 'user.email', 'test@example.com']);
+      await git(['config', 'user.name', 'Test User']);
+
+      // Create an initial commit on main
+      await git(['commit', '--allow-empty', '-m', 'Initial commit']);
+    });
+
+    afterEach(async () => {
+      // Clean up the temporary directory
+      await rm(tempDir, { recursive: true, force: true });
+    });
+
+    it('negative path 1: one-byte difference — file differs by one byte from candidate → unexplained', async () => {
+      // Create initial file on main
+      await mkdir(join(tempDir, 'src'), { recursive: true });
+      const filePath = join(tempDir, 'src', 'a.ts');
+      await writeFile(filePath, 'export const greeting = "hello world";', 'utf-8');
+      await git(['add', 'src/a.ts']);
+      await git(['commit', '-m', 'Initial commit with file on main']);
+
+      // Create a feature branch with the same file (different content)
+      await git(['checkout', '-b', 'feat/daemon-x']);
+      await writeFile(filePath, 'export const greeting = "hello world";', 'utf-8');
+      await git(['add', 'src/a.ts']);
+      await git(['commit', '-m', 'Add src/a.ts on feat/daemon-x']);
+
+      // Switch back to main and modify the file by one byte
+      await git(['checkout', 'main']);
+      await writeFile(filePath, 'export const greeting = "hello world!";', 'utf-8'); // added ! at end
+
+      // Triage the modified file
+      const result = await triageModifiedFiles(git);
+
+      expect(result.canHeal).toBe(false); // Modified file differs from candidates
+      expect(result.healable).toBe(true); // No staged changes
+      expect(result.classifications).toHaveLength(1);
+      expect(result.classifications[0]).toEqual({
+        path: 'src/a.ts',
+      });
+      expect(result.classifications[0].explainedBy).toBeUndefined();
+    });
+
+    it('negative path 2: missing path — file does not exist in any candidate → unexplained, no error', async () => {
+      // Create initial file on main
+      await mkdir(join(tempDir, 'src'), { recursive: true });
+      const filePath = join(tempDir, 'src', 'a.ts');
+      await writeFile(filePath, 'export const greeting = "hello";', 'utf-8');
+      await git(['add', 'src/a.ts']);
+      await git(['commit', '-m', 'Initial commit with file on main']);
+
+      // Create a feature branch with no src/a.ts
+      await git(['checkout', '-b', 'feat/daemon-x']);
+      await git(['commit', '--allow-empty', '-m', 'Empty commit on feat/daemon-x']);
+
+      // Switch back to main and modify the file
+      await git(['checkout', 'main']);
+      await writeFile(filePath, 'export const modified content = true;', 'utf-8');
+
+      // Triage the modified file
+      const result = await triageModifiedFiles(git);
+
+      expect(result.canHeal).toBe(false); // File doesn't exist in candidate
+      expect(result.healable).toBe(true); // No staged changes
+      expect(result.classifications).toHaveLength(1);
+      expect(result.classifications[0]).toEqual({
+        path: 'src/a.ts',
+      });
+      expect(result.classifications[0].explainedBy).toBeUndefined();
+    });
+
+    it('negative path 3: zero candidates — empty candidates array → all unexplained, no error', async () => {
+      // Create initial file on main
+      await mkdir(join(tempDir, 'src'), { recursive: true });
+      const filePath = join(tempDir, 'src', 'a.ts');
+      await writeFile(filePath, 'export const greeting = "hello";', 'utf-8');
+      await git(['add', 'src/a.ts']);
+      await git(['commit', '-m', 'Initial commit with file on main']);
+
+      // Modify the file
+      await writeFile(filePath, 'export const greeting = "hello modified";', 'utf-8');
+
+      // Triage with no candidates (pass empty override)
+      const result = await triageModifiedFiles(git, undefined, []);
+
+      expect(result.canHeal).toBe(false); // No candidates to explain the changes
+      expect(result.healable).toBe(true); // No staged changes
+      expect(result.classifications).toHaveLength(1);
+      expect(result.classifications[0]).toEqual({
+        path: 'src/a.ts',
+      });
+      expect(result.classifications[0].explainedBy).toBeUndefined();
+    });
+
+    it('negative path 4: staged abort — if any staged modifications exist, return not-healable immediately', async () => {
+      // Create initial file on main
+      await mkdir(join(tempDir, 'src'), { recursive: true });
+      const filePath = join(tempDir, 'src', 'a.ts');
+      await writeFile(filePath, 'export const greeting = "hello";', 'utf-8');
+      await git(['add', 'src/a.ts']);
+      await git(['commit', '-m', 'Initial commit with file on main']);
+
+      // Modify and stage the file (staged only, not further modified)
+      await writeFile(filePath, 'export const greeting = "hello staged";', 'utf-8');
+      await git(['add', 'src/a.ts']);
+
+      // Create a candidate branch BEFORE switching back
+      await git(['checkout', '-b', 'feat/daemon-x']);
+      await git(['commit', '--allow-empty', '-m', 'Empty commit on feat/daemon-x']);
+
+      // Switch back to main — at this point staged changes are preserved
+      // because we're on a branch that was created from main with staged changes
+      await git(['checkout', 'main']);
+
+      // The file should now be staged (M  in status)
+      // Verify status before calling triage
+      const statusCheck = await git(['status', '--porcelain']);
+      const hasStaged = statusCheck.stdout.includes('M');
+
+      if (!hasStaged) {
+        // If staged changes were lost during checkout, manually stage them
+        await writeFile(filePath, 'export const greeting = "hello staged";', 'utf-8');
+        await git(['add', 'src/a.ts']);
+      }
+
+      // Create a spy to track git calls
+      const callLog: string[][] = [];
+      const wrappedGit = vi.fn(async (args: string[]) => {
+        callLog.push(args);
+        return git(args);
+      });
+
+      // Copy all methods from original git
+      Object.assign(wrappedGit, git);
+
+      // Triage should abort immediately because of staged changes
+      const result = await triageModifiedFiles(wrappedGit);
+
+      expect(result.canHeal).toBe(false);
+      expect(result.healable).toBe(false); // staged changes present, not healable
+
+      // Verify that after status call, no additional non-status git commands were issued
+      const statusIndex = callLog.findIndex((args) => args[0] === 'status' && args[1] === '--porcelain');
+      expect(statusIndex).toBeGreaterThanOrEqual(0); // status was called
+
+      // After status, should return early without calling enumerate/classify commands
+      const afterStatusCalls = callLog.slice(statusIndex + 1);
+      expect(afterStatusCalls.length).toBe(0); // No further git calls after detecting staged changes
     });
   });
 });
