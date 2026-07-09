@@ -205,6 +205,36 @@ export async function resolveFeaturePlanPath(
 }
 
 /**
+ * Resolve the active feature's stories doc, mirroring resolveFeaturePlanPath's
+ * ladder (#407 → #441): a singleton corpus is unambiguous; otherwise match the
+ * featureDesc stem, then the resolved plan's stem. Returns undefined when the
+ * doc cannot be determined — callers must fail explicitly and must NEVER fall
+ * back to validating the whole corpus (legacy landed stories predate the
+ * structural convention and would make the gate permanently unsatisfiable).
+ */
+export async function resolveFeatureStoriesPath(
+  projectRoot: string,
+  featureDesc: string | undefined,
+): Promise<string | undefined> {
+  const storyFiles = await findArtifactFiles(projectRoot, 'stories');
+  if (storyFiles.length === 0) return undefined;
+  if (storyFiles.length === 1) return storyFiles[0];
+
+  if (featureDesc) {
+    const byDesc = storyFiles.find((s) => planStem(s) === featureDesc);
+    if (byDesc) return byDesc;
+  }
+
+  const planPath = await resolveFeaturePlanPath(projectRoot, featureDesc);
+  if (planPath) {
+    const stem = planStem(planPath);
+    const byPlanStem = storyFiles.find((s) => planStem(s) === stem);
+    if (byPlanStem) return byPlanStem;
+  }
+  return undefined;
+}
+
+/**
  * True if the step has at least one artifact on disk. True for steps that
  * produce no artifacts (nothing to verify).
  */
@@ -1204,11 +1234,22 @@ export const GATE_ONLY_PREDICATES: Partial<
   // section (each with ≥1 Given/When/Then bullet) and no DRAFT status.
   // Structural check against the repo convention (### Happy Path / ###
   // Negative Paths headings, **Status:** marker). See gate-audit-2026-06-23.md.
-  stories: async (dir): Promise<CompletionResult> => {
-    const files = await findArtifactFiles(dir, 'stories');
-    if (files.length === 0) {
+  // Scoped to the FEATURE's stories doc (#441): legacy landed stories predate
+  // the convention, so a corpus-wide scan is permanently unsatisfiable.
+  stories: async (dir, ctx): Promise<CompletionResult> => {
+    const corpus = await findArtifactFiles(dir, 'stories');
+    if (corpus.length === 0) {
       return { done: false, reason: 'no .docs/stories/**/*.md present' };
     }
+    const scoped = await resolveFeatureStoriesPath(dir, ctx.featureDesc);
+    if (!scoped) {
+      const desc = ctx.featureDesc ? ` for feature "${ctx.featureDesc}"` : '';
+      return {
+        done: false,
+        reason: `cannot resolve this feature's stories doc${desc} among ${corpus.length} stories files — expected .docs/stories/<plan-stem>.md; refusing to validate the whole stories corpus (#441)`,
+      };
+    }
+    const files = [scoped];
     for (const file of files) {
       const content = await readFile(file, 'utf-8');
       const rel = relative(dir, file);
@@ -1243,15 +1284,36 @@ export const GATE_ONLY_PREDICATES: Partial<
   // ≥1 task. Coverage is read from task `**Story:** <id> (happy|negative path)`
   // lines and the `## Coverage Check` table. Falls back to story-level coverage
   // when a plan has no path-type markers for a story. See gate-audit-2026-06-23.md.
-  plan: async (dir): Promise<CompletionResult> => {
-    const planFiles = await findArtifactFiles(dir, 'plan');
-    if (planFiles.length === 0) {
+  // Scoped to the FEATURE's plan + stories docs (#441): a corpus-wide scan
+  // both false-fails (legacy stories' units this plan can't cover) and
+  // false-passes (per-file numeric story IDs collide across features, so any
+  // legacy plan's "Story 1" reference covers every file's Story 1).
+  plan: async (dir, ctx): Promise<CompletionResult> => {
+    const anyPlans = await findArtifactFiles(dir, 'plan');
+    if (anyPlans.length === 0) {
       return { done: false, reason: 'no .docs/plans/*.md present' };
     }
-    const storyFiles = await findArtifactFiles(dir, 'stories');
-    if (storyFiles.length === 0) {
+    const scopedPlan = await resolveFeaturePlanPath(dir, ctx.featureDesc);
+    if (!scopedPlan) {
+      const desc = ctx.featureDesc ? ` for feature "${ctx.featureDesc}"` : '';
+      return {
+        done: false,
+        reason: `cannot resolve this feature's plan${desc} among ${anyPlans.length} plans — refusing corpus-wide coverage check (#441)`,
+      };
+    }
+    const planFiles = [scopedPlan];
+    const anyStories = await findArtifactFiles(dir, 'stories');
+    if (anyStories.length === 0) {
       return { done: false, reason: 'no .docs/stories to check plan coverage against' };
     }
+    const scopedStories = await resolveFeatureStoriesPath(dir, ctx.featureDesc);
+    if (!scopedStories) {
+      return {
+        done: false,
+        reason: `cannot resolve this feature's stories doc among ${anyStories.length} stories files — refusing corpus-wide coverage check (#441)`,
+      };
+    }
+    const storyFiles = [scopedStories];
 
     // Required coverage units: (storyId, pathType) for each path a story declares.
     const required: { id: string; type: 'happy' | 'negative' }[] = [];

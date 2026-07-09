@@ -10,6 +10,17 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ## [Unreleased]
 
+### Fixed
+
+- Stories and plan gate predicates now scope to the FEATURE's own docs
+  (`resolveFeatureStoriesPath`, mirroring #407's plan resolver) instead of
+  validating the entire `.docs/stories`/`.docs/plans` corpus (#441). Legacy
+  landed artifacts (49 story blocks predating the gate-audit-2026-06-23
+  structural convention) made any kickback-selected stories gate permanently
+  unsatisfiable, and cross-file numeric story-ID collisions let unrelated
+  plans falsely satisfy coverage. Unresolvable scoping now fails explicitly
+  and never falls back to a corpus-wide scan.
+
 ### Added
 
 - CLAUDE.md "Design Principles" section codifying deterministic-first design:
