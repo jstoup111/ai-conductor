@@ -322,6 +322,42 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     expect(build?.reason).toBe(buildWithout?.reason);
     expect(build?.kickback?.from).toBe(buildWithout?.kickback?.from);
   });
+
+  it('changed + preVerify(build) THROWS → fail-closed invalidation with no error escape', async () => {
+    const outcome: RebaseOutcome = { kind: 'changed', changedCodePaths: ['src/a.ts'] };
+    const preVerify = async (step: string) => {
+      if (step === 'build') {
+        throw new Error('git failed');
+      }
+      return { done: false };
+    };
+
+    // Should NOT throw; error is caught internally
+    const r = await applyRebaseVerdicts(dir, outcome, true, preVerify);
+
+    // Rebase gate satisfied
+    expect(r.satisfied).toBe(true);
+
+    // build is kicked back (fail-closed), NOT in reverified
+    expect(r.kickedBack).toEqual(['build', 'build_review', 'manual_test']);
+    expect(r.reverified).toEqual([]);
+
+    // build verdict is unsatisfied with fail-closed kickback
+    const build = await readVerdict(dir, 'build');
+    expect(build?.satisfied).toBe(false);
+    expect(build?.reason).toBe('invalidated by file-changing rebase');
+    expect(build?.kickback?.from).toBe('rebase');
+    expect(build?.kickback?.evidence).toContain('src/a.ts');
+
+    // build_review and manual_test also kicked back
+    const buildReview = await readVerdict(dir, 'build_review');
+    expect(buildReview?.satisfied).toBe(false);
+    expect(buildReview?.kickback?.from).toBe('rebase');
+
+    const manualTest = await readVerdict(dir, 'manual_test');
+    expect(manualTest?.satisfied).toBe(false);
+    expect(manualTest?.kickback?.from).toBe('rebase');
+  });
 });
 
 describe('engine/rebase — emitRebaseEvent (FR-10)', () => {

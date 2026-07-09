@@ -769,16 +769,22 @@ export async function applyRebaseVerdicts(
   // a fresh objective verdict and add it to reverified instead of kickedBack.
   let buildReVerified = false;
   if (preVerify) {
-    const buildPreVerify = await preVerify('build');
-    if (buildPreVerify.done) {
-      // Pre-verify succeeded — build is evidence-intact, write fresh verdict.
-      await writeVerdict(projectRoot, 'build', {
-        satisfied: true,
-        reason: 're-verified mechanically after file-changing rebase — evidence remains intact',
-        checkedAt: Date.now(),
-      });
-      reverified.push('build');
-      buildReVerified = true;
+    try {
+      const buildPreVerify = await preVerify('build');
+      if (buildPreVerify.done) {
+        // Pre-verify succeeded — build is evidence-intact, write fresh verdict.
+        await writeVerdict(projectRoot, 'build', {
+          satisfied: true,
+          reason: 're-verified mechanically after file-changing rebase — evidence remains intact',
+          checkedAt: Date.now(),
+        });
+        reverified.push('build');
+        buildReVerified = true;
+      }
+    } catch {
+      // Task 5: preVerify throw → fail-closed, no error escapes.
+      // Error is caught here; buildReVerified stays false, allowing normal
+      // kickback verdict write (lines below) to handle build as invalidated.
     }
   }
 
