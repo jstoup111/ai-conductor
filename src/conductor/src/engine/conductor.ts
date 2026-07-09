@@ -76,7 +76,7 @@ import {
 import type { SandboxBuildEnv } from './self-host/sandbox-build-env.js';
 import { waitForCredentialsChange, readOperatorCredentialsState } from './self-host/operator-credentials.js';
 import { preflightBuildAuthCheck as checkBuildAuth } from './self-host/build-auth-preflight.js';
-import { readDaemonBuildToken } from './self-host/daemon-build-token.js';
+import { readDaemonBuildToken, createDaemonTokenContentClassifier } from './self-host/daemon-build-token.js';
 import type { ChangedFile } from './self-host/release-gate.js';
 import type { GateVerdict } from './self-host/gate-halt.js';
 import { selectNextGate } from './selector.js';
@@ -1446,48 +1446,117 @@ export class Conductor {
           // branch gates the retry budget: attempt stays the same across
           // park-resume, so credentials expiry doesn't leak into the retry circuit.
           if (result.authFailure) {
-            // Operator credentials resolve through the globalConfigDir seam
-            // ($CLAUDE_CONFIG_DIR → ~/.claude), same as the pre-flight — never
-            // the project root (adr-2026-07-04-auth-failure-park-and-poll §5).
-            const operatorConfigDir =
-              process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude');
-            const credPath = join(operatorConfigDir, '.credentials.json');
-            const credState = await readOperatorCredentialsState(
-              operatorConfigDir,
-              Date.now(),
-            );
-
-            await this.events.emit({
-              type: 'credentials_park',
-              reason: 'operator OAuth token expired or invalid — waiting for refresh',
-            });
-
             const shPark = resolveSelfHostConfig(this.config);
-            const parkResult = await waitForCredentialsChange({
-              initialState: credState,
-              credentialsPath: credPath,
-              globalConfigDir: operatorConfigDir,
-              timeoutMs: shPark.authParkTimeoutMinutes * 60 * 1000,
-              sleep: this.sleep,
-              now: () => Date.now(),
-            });
 
-            if (parkResult.type === 'timeout') {
-              // Task 14: Auth-park timeout → credentials-specific HALT.
-              // The reason includes the credentials path and observed expiresAt, making
-              // it credentials-specific (not generic "retries exhausted").
-              const expiresAtStr = parkResult.expiresAt ?? 'unparseable';
-              const credReason =
-                `Operator credentials expired and refresh timed out.\n` +
-                `Credentials file: ${parkResult.credentialsPath}\n` +
-                `Expires at: ${expiresAtStr}\n` +
-                `Please refresh your OAuth token and re-queue this feature.`;
+            // Task 11 (TR-4): Retarget authFailure park to daemon token in daemon-token mode.
+            // Only applies when self-host mode is active. In daemon-token mode, watch the
+            // daemon token path for non-empty content. In operator mode, watch the operator
+            // credentials for expiresAt freshness. In api-key mode, do not park — HALT
+            // immediately with ANTHROPIC_API_KEY.
+            let parkResult: Awaited<ReturnType<typeof waitForCredentialsChange>>;
+            let haltReason: string;
+
+            if (this.selfHost && shPark.buildAuthMode === 'api-key') {
+              // Task 11: api-key mode does not support auth-failure park
+              haltReason =
+                `Auth failure in api-key mode — the ANTHROPIC_API_KEY environment variable\n` +
+                `is missing, invalid, or has insufficient permissions.\n` +
+                `Please set ANTHROPIC_API_KEY and re-queue this feature.`;
               await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(
                 () => {},
               );
               await writeFile(
                 join(this.projectRoot, LOOP_HALT_MARKER),
-                credReason + '\n',
+                haltReason + '\n',
+                'utf-8',
+              ).catch(() => {
+                /* best-effort marker */
+              });
+              await writeState(this.stateFilePath, state);
+              const prUrl = await this.surfaceRemediationPr(haltReason);
+              await this.events.emit({ type: 'loop_halt', reason: haltReason, prUrl });
+              process.off('SIGINT', sigintHandler);
+              process.off('SIGTERM', sigterm);
+              return;
+            } else if (this.selfHost && shPark.buildAuthMode === 'daemon-token') {
+              // Task 11: Park on daemon token path, check for non-empty content
+              const tokenPath = shPark.buildAuthTokenPath;
+              const daemonTokenClassifier = createDaemonTokenContentClassifier();
+
+              await this.events.emit({
+                type: 'credentials_park',
+                reason: 'daemon build token expired or invalid — waiting for refresh',
+              });
+
+              parkResult = await waitForCredentialsChange({
+                initialState: 'expired', // Start as expired (trigger polling)
+                credentialsPath: tokenPath,
+                globalConfigDir: '', // Not used in daemon-token mode
+                timeoutMs: shPark.authParkTimeoutMinutes * 60 * 1000,
+                sleep: this.sleep,
+                now: () => Date.now(),
+                contentClassifier: daemonTokenClassifier,
+              });
+
+              if (parkResult.type === 'timeout') {
+                // Task 11: Auth-park timeout with daemon token
+                haltReason =
+                  `Daemon build token expired and refresh timed out.\n` +
+                  `Token file: ${tokenPath}\n` +
+                  `Please run: ${(await import('./self-host/daemon-build-token.js')).DAEMON_BUILD_TOKEN_MINT_COMMAND}\n` +
+                  `Then re-queue this feature.`;
+              } else {
+                // Task 11 + Task 9: Park resolved, resume retry. On the next attempt,
+                // runSelfBuildDispatch will re-read the daemon token from the file
+                // (which was updated during the park interval) and re-inject it.
+                haltReason = ''; // Not halting on successful resume
+              }
+            } else {
+              // Operator credentials mode (backward compatibility)
+              const operatorConfigDir =
+                process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude');
+              const credPath = join(operatorConfigDir, '.credentials.json');
+              const credState = await readOperatorCredentialsState(
+                operatorConfigDir,
+                Date.now(),
+              );
+
+              await this.events.emit({
+                type: 'credentials_park',
+                reason: 'operator OAuth token expired or invalid — waiting for refresh',
+              });
+
+              parkResult = await waitForCredentialsChange({
+                initialState: credState,
+                credentialsPath: credPath,
+                globalConfigDir: operatorConfigDir,
+                timeoutMs: shPark.authParkTimeoutMinutes * 60 * 1000,
+                sleep: this.sleep,
+                now: () => Date.now(),
+              });
+
+              if (parkResult.type === 'timeout') {
+                // Operator mode: Auth-park timeout
+                const expiresAtStr = parkResult.expiresAt ?? 'unparseable';
+                haltReason =
+                  `Operator credentials expired and refresh timed out.\n` +
+                  `Credentials file: ${parkResult.credentialsPath}\n` +
+                  `Expires at: ${expiresAtStr}\n` +
+                  `Please refresh your OAuth token and re-queue this feature.`;
+              } else {
+                haltReason = ''; // Not halting on successful resume
+              }
+            }
+
+            // Handle park timeout
+            if (parkResult.type === 'timeout') {
+              // Task 14: Auth-park timeout → credentials-specific HALT.
+              await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(
+                () => {},
+              );
+              await writeFile(
+                join(this.projectRoot, LOOP_HALT_MARKER),
+                haltReason + '\n',
                 'utf-8',
               ).catch(() => {
                 /* best-effort marker */
@@ -1496,8 +1565,8 @@ export class Conductor {
               // so the daemon can classify the outcome even if escalation throws (C1).
               await writeState(this.stateFilePath, state);
               // Escalate with the credentials-specific reason (not generic "retries exhausted").
-              const prUrl = await this.surfaceRemediationPr(credReason);
-              await this.events.emit({ type: 'loop_halt', reason: credReason, prUrl });
+              const prUrl = await this.surfaceRemediationPr(haltReason);
+              await this.events.emit({ type: 'loop_halt', reason: haltReason, prUrl });
               process.off('SIGINT', sigintHandler);
               process.off('SIGTERM', sigterm);
               return;

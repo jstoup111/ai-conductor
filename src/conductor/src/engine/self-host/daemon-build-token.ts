@@ -13,6 +13,7 @@
 //   The detail string names the path for diagnostics.
 
 import { readFile } from 'node:fs/promises';
+import type { ContentClassifier } from './operator-credentials.js';
 
 /**
  * Command to mint a daemon build token.
@@ -69,4 +70,17 @@ export async function readDaemonBuildToken(
     const detail = `cannot read daemon build token: ${path} (${errorMsg})`;
     return { state: 'error', detail };
   }
+}
+
+/**
+ * Task 11 (TR-4): Returns a content classifier for daemon-token park-and-poll.
+ * Used by waitForCredentialsChange to determine if the daemon token is "fresh".
+ * A token is considered fresh if it contains non-empty trimmed content.
+ *
+ * @returns ContentClassifier that returns true if content is non-empty after trim
+ */
+export function createDaemonTokenContentClassifier(): ContentClassifier {
+  return (contents: string): boolean => {
+    return contents.trim().length > 0;
+  };
 }
