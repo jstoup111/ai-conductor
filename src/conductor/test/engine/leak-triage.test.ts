@@ -227,6 +227,7 @@ M  src/file2.ts
       expect(result[0]).toEqual({
         path: 'src/a.ts',
         explainedBy: 'feat/daemon-x',
+        allExplainedBy: ['feat/daemon-x'],
       });
     });
 
@@ -283,6 +284,7 @@ M  src/file2.ts
       expect(result[0]).toEqual({
         path: 'src/a.ts',
         explainedBy: 'feat/daemon-y',
+        allExplainedBy: ['feat/daemon-y'],
       });
     });
 
@@ -331,6 +333,7 @@ M  src/file2.ts
       expect(result[0]).toEqual({
         path: 'src/a.ts',
         explainedBy: 'feat/daemon-x',
+        allExplainedBy: ['feat/daemon-x'],
       });
       expect(result[1]).toEqual({
         path: 'src/b.ts',
@@ -387,6 +390,7 @@ M  src/file2.ts
       expect(result[0]).toEqual({
         path: 'test/daemon.test.ts.new',
         explainedBy: 'feat/daemon-x',
+        allExplainedBy: ['feat/daemon-x'],
       });
     });
 
@@ -451,6 +455,7 @@ M  src/file2.ts
       expect(result[0]).toEqual({
         path: 'test/daemon.test.ts.new',
         explainedBy: 'feat/daemon-y',
+        allExplainedBy: ['feat/daemon-y'],
       });
     });
 
@@ -483,6 +488,7 @@ M  src/file2.ts
       expect(result[0]).toEqual({
         path: 'test/file1.ts.new',
         explainedBy: 'feat/daemon-x',
+        allExplainedBy: ['feat/daemon-x'],
       });
       expect(result[1]).toEqual({
         path: 'test/file2.ts.new',
