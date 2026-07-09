@@ -57,6 +57,108 @@ export interface ReVerificationResult {
 }
 
 /**
+ * Fingerprint for throttling repeated LEAK-SUSPECT WARNs across polling cycles.
+ *
+ * Similar to DiscoveryLogger pattern: tracks the fingerprint of the current dirty state
+ * to identify when the state hasn't changed (unchanged → emit short line instead of full WARN).
+ * When the fingerprint changes (new file, removed file, content differs), emit the full WARN again.
+ *
+ * Used to suppress spam from repeated identical dirty-tree errors on every poll.
+ */
+export interface LeakWarnState {
+  /** Sorted array of {path, hash} pairs representing the current dirty state fingerprint. */
+  fingerprint: Array<{ path: string; hash: string }> | null;
+}
+
+/**
+ * File entry for leak fingerprint: path + content hash.
+ * Used to uniquely identify the dirty state across polls.
+ */
+export interface LeakFingerprint {
+  path: string;
+  hash: string;
+}
+
+/**
+ * Compute a fingerprint from porcelain output: sorted array of {path, hash} pairs.
+ *
+ * For each dirty file (modified or untracked), computes its content hash via `git hash-object`
+ * and stores {path, hash}. The array is sorted by path for deterministic comparison across polls.
+ *
+ * This fingerprint uniquely identifies the current dirty state. When the fingerprint is
+ * identical across two polls, the dirty state is unchanged and the short throttle line
+ * is emitted instead of the full LEAK-SUSPECT WARN.
+ *
+ * @param git - GitRunner for executing git commands
+ * @param porcelain - Raw `git status --porcelain` output
+ * @returns Sorted array of {path, hash} pairs, or empty array if no dirty files
+ */
+export async function computeFingerprint(
+  git: GitRunner,
+  porcelain: string,
+): Promise<LeakFingerprint[]> {
+  const dirtyStatus = parseDirtyStatus(porcelain);
+
+  // Collect all dirty files (modified and untracked)
+  const allDirtyFiles = new Set([...dirtyStatus.modified, ...dirtyStatus.untracked]);
+
+  const fingerprints: LeakFingerprint[] = [];
+
+  for (const filePath of allDirtyFiles) {
+    // Get the hash of the file in the working tree
+    const hashResult = await git(['hash-object', filePath]);
+    if (hashResult.exitCode === 0 && hashResult.stdout) {
+      const hash = hashResult.stdout.trim();
+      fingerprints.push({ path: filePath, hash });
+    }
+  }
+
+  // Sort by path for deterministic comparison
+  fingerprints.sort((a, b) => a.path.localeCompare(b.path));
+
+  return fingerprints;
+}
+
+/**
+ * Compare two fingerprints and determine if a full WARN should be emitted.
+ *
+ * Returns true (should emit full WARN) if:
+ * - The previous fingerprint is null (first call)
+ * - The current fingerprint differs from the previous one (dirty state changed)
+ *
+ * Returns false (emit short throttle line) if:
+ * - The current fingerprint is identical to the previous one (unchanged state)
+ *
+ * @param current - Current dirty state fingerprint
+ * @param previous - Previous dirty state fingerprint (null on first call)
+ * @returns true if full WARN should be emitted, false if short throttle line should be emitted
+ */
+export function shouldEmitFullWarn(
+  current: LeakFingerprint[],
+  previous: LeakFingerprint[] | null,
+): boolean {
+  // First call: always emit full WARN
+  if (previous === null) {
+    return true;
+  }
+
+  // Same length is necessary but not sufficient (same files, possibly different content)
+  if (current.length !== previous.length) {
+    return true;
+  }
+
+  // Compare element-by-element (both are sorted by path)
+  for (let i = 0; i < current.length; i++) {
+    if (current[i].path !== previous[i].path || current[i].hash !== previous[i].hash) {
+      return true;
+    }
+  }
+
+  // Fingerprints are identical
+  return false;
+}
+
+/**
  * Parse `git status --porcelain` output into a dirty status classification.
  *
  * Porcelain format (2 status chars + filename):

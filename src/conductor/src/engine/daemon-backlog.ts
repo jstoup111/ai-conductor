@@ -18,7 +18,15 @@ import { decideSpecGate, type GateDecision } from './owner-gate/gate.js';
 import type { BlockerResolver, BlockerVerdict } from './blocker-resolver.js';
 import { announceWaitingForRoot } from './daemon-waiting-announce.js';
 import { listShippedRecords, parseShippedRecord, specHash } from './shipped-record.js';
-import { healPlan, enumerateCandidates, reVerifyHealPlan, renderLeakSuspectWarn } from './leak-triage.js';
+import {
+  healPlan,
+  enumerateCandidates,
+  reVerifyHealPlan,
+  renderLeakSuspectWarn,
+  computeFingerprint,
+  shouldEmitFullWarn,
+  type LeakWarnState,
+} from './leak-triage.js';
 
 const execFile = promisify(execFileCb);
 
@@ -132,12 +140,18 @@ export type DiscoveryLogger = {
  * for fetch failures. When provided, calls onFetchFailed on fetch errors and
  * onFetchSucceeded on success, allowing the daemon to log fetch state changes
  * only once instead of spamming the log on every retry.
+ *
+ * Task 13: The `leakWarnState` parameter enables fingerprint-throttled LEAK-SUSPECT WARNs
+ * across polls. When provided, tracks the fingerprint of unexplained dirty state and emits
+ * only a short line on unchanged state (avoiding spam on identical errors every poll).
+ * When the dirty state changes, emits the full WARN again.
  */
 export async function fastForwardRoot(
   projectRoot: string,
   log: (msg: string) => void = () => {},
   gitOverride?: GitRunner,
   discoveryLogger?: DiscoveryLogger,
+  leakWarnState?: LeakWarnState,
 ): Promise<void> {
   const git = gitOverride ?? makeGitRunner(projectRoot);
 
@@ -175,10 +189,13 @@ export async function fastForwardRoot(
   }
 
   // Check for dirty working tree and attempt to heal if possible.
-  const status = await git(['status', '--porcelain']);
-  if (status.exitCode !== 0 || status.stdout.trim() !== '') {
-    // Tree is dirty — attempt to heal if it's fully explained by a candidate branch
-    try {
+  // Containment boundary (Task 14): Wrap the entire triage/heal flow in try/catch
+  // so that any triage error (status check, enumeration, planning, healing) is logged
+  // and skipped safely, never crashing the poll loop.
+  try {
+    const status = await git(['status', '--porcelain']);
+    if (status.exitCode !== 0 || status.stdout.trim() !== '') {
+      // Tree is dirty — attempt to heal if it's fully explained by a candidate branch
       const candidates = await enumerateCandidates(git);
       const plan = await healPlan(git, status.stdout, candidates);
 
@@ -285,19 +302,42 @@ export async function fastForwardRoot(
           return;
         }
       } else {
-        // Tree is dirty and cannot be healed — emit escalated LEAK-SUSPECT WARN with per-file details
-        const warnMsg = renderLeakSuspectWarn(status.stdout, plan);
-        log(warnMsg);
+        // Tree is dirty and cannot be healed — use fingerprinting to throttle spam (Task 13)
+        // Compute the current dirty state fingerprint (sorted path+hash pairs)
+        const currentFingerprint = await computeFingerprint(git, status.stdout);
+
+        // Check if fingerprint changed or if this is the first call
+        const shouldEmitFull = shouldEmitFullWarn(
+          currentFingerprint,
+          leakWarnState?.fingerprint ?? null,
+        );
+
+        // Update the state with the new fingerprint for next poll
+        if (leakWarnState) {
+          leakWarnState.fingerprint = currentFingerprint;
+        }
+
+        // Emit full WARN if fingerprint changed or if this is the first call
+        if (shouldEmitFull) {
+          const warnMsg = renderLeakSuspectWarn(status.stdout, plan);
+          log(warnMsg);
+        } else {
+          // Fingerprint unchanged: emit a short throttle line instead of full WARN
+          log(`dirty tree unchanged since last poll; remaining dirty; skipping fast-forward.`);
+        }
         return;
       }
-    } catch (err) {
-      // Triage/enumeration failed — log and skip the fast-forward
-      log(
-        `heal triage error: ${err instanceof Error ? err.message : String(err)}; ` +
-          `skipping fast-forward.`,
-      );
-      return;
     }
+  } catch (err) {
+    // Triage/enumeration/heal failed at any point — log and skip the fast-forward
+    // This is the outer containment boundary: ANY triage error is caught here and logged,
+    // so the poll loop never crashes due to triage failures. The working tree remains dirty,
+    // and the next poll will retry (fall-back: dirty tree blocks fast-forward safety).
+    log(
+      `ERROR triage: ${err instanceof Error ? err.message : String(err)}; ` +
+        `dirty tree (triage error) — skipping fast-forward.`,
+    );
+    return;
   }
 
   // Best-effort fetch; offline/unreachable must NOT crash the poll loop.
