@@ -197,7 +197,7 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
 
   it('noop → rebase satisfied, no kickback', async () => {
     const r = await applyRebaseVerdicts(dir, { kind: 'noop' }, true);
-    expect(r).toEqual({ satisfied: true, kickedBack: [] });
+    expect(r).toEqual({ satisfied: true, kickedBack: [], reverified: [] });
     expect((await readVerdict(dir, 'rebase'))?.satisfied).toBe(true);
   });
 
@@ -219,7 +219,7 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
 
   it('changelog_resolved (docs-only) → satisfied, NO kickback (FR-5×FR-7)', async () => {
     const r = await applyRebaseVerdicts(dir, { kind: 'changelog_resolved' }, true);
-    expect(r).toEqual({ satisfied: true, kickedBack: [] });
+    expect(r).toEqual({ satisfied: true, kickedBack: [], reverified: [] });
   });
 
   it('conflict_halt → rebase NOT satisfied', async () => {
@@ -231,6 +231,19 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     const r = await applyRebaseVerdicts(dir, outcome, true);
     expect(r.satisfied).toBe(false);
     expect((await readVerdict(dir, 'rebase'))?.satisfied).toBe(false);
+  });
+
+  it('preVerify capability absent (undefined) → byte-identical behavior, reverified: []', async () => {
+    const outcome: RebaseOutcome = { kind: 'changed', changedCodePaths: ['src/a.ts'] };
+    const r = await applyRebaseVerdicts(dir, outcome, true, undefined);
+    // Verify existing behavior is unchanged (byte-identical)
+    expect(r.satisfied).toBe(true);
+    expect(r.kickedBack).toEqual(['build', 'build_review', 'manual_test']);
+    // Verify new field is present and empty when preVerify is absent
+    expect(r.reverified).toEqual([]);
+    const build = await readVerdict(dir, 'build');
+    expect(build?.satisfied).toBe(false);
+    expect(build?.kickback?.from).toBe('rebase');
   });
 });
 
