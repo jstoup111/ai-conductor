@@ -22,6 +22,9 @@ import {
   realSandboxFs,
   type SandboxFs,
 } from '../../../src/engine/self-host/sandbox-build-env.js';
+// Task 10 & 11: refreshSandboxCredentials must not be exported
+// (Task 11 implements re-reading the daemon token on park-resume instead)
+import * as sandboxBuildEnvModule from '../../../src/engine/self-host/sandbox-build-env.js';
 
 // Phase 3 (TR-5/TR-6) — the safety core. A harness self-build must run against a
 // THROWAWAY CLAUDE_CONFIG_DIR linked to its worktree, and must NEVER mutate the
@@ -465,6 +468,13 @@ describe('SandboxBuildEnv (TR-5/TR-6)', () => {
 
     expect(existsSync(scriptPath)).toBe(false);
     expect(existsSync(sandbox.configDir)).toBe(false);
+  });
+
+  // Task 10: refreshSandboxCredentials must not be exported.
+  // The park-resume path (Task 11) re-reads the daemon token instead of
+  // re-copying stale credentials.
+  it('does not export refreshSandboxCredentials (Task 10, Task 11 pairing)', () => {
+    expect('refreshSandboxCredentials' in sandboxBuildEnvModule).toBe(false);
   });
 });
 

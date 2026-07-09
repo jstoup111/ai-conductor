@@ -74,9 +74,9 @@ import {
   type SelfHostGuardrails,
 } from './self-host/wiring.js';
 import type { SandboxBuildEnv } from './self-host/sandbox-build-env.js';
-import { refreshSandboxCredentials } from './self-host/sandbox-build-env.js';
 import { waitForCredentialsChange, readOperatorCredentialsState } from './self-host/operator-credentials.js';
 import { preflightBuildAuthCheck as checkBuildAuth } from './self-host/build-auth-preflight.js';
+import { readDaemonBuildToken } from './self-host/daemon-build-token.js';
 import type { ChangedFile } from './self-host/release-gate.js';
 import type { GateVerdict } from './self-host/gate-halt.js';
 import { selectNextGate } from './selector.js';
@@ -925,14 +925,35 @@ export class Conductor {
       });
     }
 
+    // Task 9 (TR-2): Read the daemon build token in daemon-token mode. The token
+    // is available after the buildAuthPreflight check above (which validates it
+    // exists and is readable). Extract it so we can inject it into the step runner env.
+    let daemonToken: string | undefined;
+    if (sh.buildAuthMode === 'daemon-token') {
+      const tokenResult = await readDaemonBuildToken(sh.buildAuthTokenPath);
+      if (tokenResult.state === 'ok') {
+        daemonToken = tokenResult.token;
+      }
+    }
+
     const hadKey = 'CLAUDE_CONFIG_DIR' in process.env;
     const prior = process.env.CLAUDE_CONFIG_DIR;
     process.env.CLAUDE_CONFIG_DIR = this.activeSandbox.configDir;
+
+    const hadToken = 'CLAUDE_CODE_OAUTH_TOKEN' in process.env;
+    const priorToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
+    if (daemonToken) {
+      process.env.CLAUDE_CODE_OAUTH_TOKEN = daemonToken;
+    }
+
     try {
       return await this.stepRunner.run(name, state, { retryReason: retryHint });
     } finally {
       if (hadKey) process.env.CLAUDE_CONFIG_DIR = prior;
       else delete process.env.CLAUDE_CONFIG_DIR;
+
+      if (hadToken) process.env.CLAUDE_CODE_OAUTH_TOKEN = priorToken;
+      else delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
     }
   }
 
@@ -1450,12 +1471,6 @@ export class Conductor {
               sleep: this.sleep,
               now: () => Date.now(),
             });
-
-            if (parkResult.type === 'refreshed' && this.activeSandbox) {
-              // Re-copy credentials from operator config into the sandbox so the
-              // retried build gets fresh auth.
-              await refreshSandboxCredentials(operatorConfigDir, this.activeSandbox.configDir);
-            }
 
             if (parkResult.type === 'timeout') {
               // Task 14: Auth-park timeout → credentials-specific HALT.

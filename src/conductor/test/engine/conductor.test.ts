@@ -9,7 +9,6 @@ vi.mock('../../src/engine/self-host/operator-credentials.js', () => ({
   waitForCredentialsChange: vi.fn(),
 }));
 vi.mock('../../src/engine/self-host/sandbox-build-env.js', () => ({
-  refreshSandboxCredentials: vi.fn(),
   provisionSandboxBuildEnv: vi.fn(),
   realSandboxFs: {},
   SandboxProvisionError: class SandboxProvisionError extends Error {},
@@ -4175,9 +4174,6 @@ describe('engine/conductor', () => {
       const { waitForCredentialsChange } = await import(
         '../../src/engine/self-host/operator-credentials.js'
       );
-      const { refreshSandboxCredentials } = await import(
-        '../../src/engine/self-host/sandbox-build-env.js'
-      );
       vi.clearAllMocks();
     });
 
@@ -4214,80 +4210,9 @@ describe('engine/conductor', () => {
       expect(attempt).toBeGreaterThanOrEqual(2);
     });
 
-    it('refreshes sandbox credentials before re-attempt after authFailure', async () => {
-      const { waitForCredentialsChange } = await import(
-        '../../src/engine/self-host/operator-credentials.js'
-      );
-      const { refreshSandboxCredentials } = await import(
-        '../../src/engine/self-host/sandbox-build-env.js'
-      );
-
-      let attempt = 0;
-      const callOrder: string[] = [];
-      const mockSandbox = {
-        configDir: join(dir, '.sandbox'),
-        childEnv: () => process.env,
-        teardown: vi.fn().mockResolvedValue(undefined),
-      };
-
-      const runner: StepRunner = {
-        run: vi.fn(async () => {
-          attempt++;
-          callOrder.push(`runner-attempt-${attempt}`);
-          if (attempt === 1) return { success: false, authFailure: true };
-          return { success: true };
-        }),
-      };
-
-      vi.mocked(waitForCredentialsChange).mockImplementation(async () => {
-        callOrder.push('waitForCredentialsChange');
-        return { type: 'refreshed' as const, credentialsPath: '/.credentials.json' };
-      });
-
-      vi.mocked(refreshSandboxCredentials).mockImplementation(async () => {
-        callOrder.push('refreshSandboxCredentials');
-      });
-
-      const mockGuardrails = {
-        provisionSandbox: vi.fn().mockResolvedValue(mockSandbox),
-        resolveHarnessRoot: vi.fn().mockResolvedValue(null),
-        relink: vi.fn().mockResolvedValue(undefined),
-        versionGate: vi.fn().mockResolvedValue({ ok: true }),
-        releaseGate: vi.fn().mockResolvedValue({ ok: true }),
-      };
-
-      const conductor = new Conductor({
-        stateFilePath: statePath,
-        stepRunner: runner,
-        events,
-        projectRoot: dir,
-        maxRetries: 2,
-        selfHostGuardrails: mockGuardrails as any,
-      });
-
-      // Set activeSandbox directly for testing purposes
-      (conductor as any).activeSandbox = mockSandbox;
-
-      await conductor.run();
-
-      // Verify the call order: auth-fail on attempt 1, then wait, then refresh, then retry
-      expect(callOrder).toContain('runner-attempt-1');
-      expect(callOrder).toContain('waitForCredentialsChange');
-      expect(callOrder).toContain('refreshSandboxCredentials');
-      expect(callOrder).toContain('runner-attempt-2');
-
-      // Refresh must come before the second attempt
-      const refreshIdx = callOrder.indexOf('refreshSandboxCredentials');
-      const attempt2Idx = callOrder.indexOf('runner-attempt-2');
-      expect(refreshIdx).toBeLessThan(attempt2Idx);
-    });
-
     it('re-enters park on subsequent authFailure without budget burn', async () => {
       const { waitForCredentialsChange } = await import(
         '../../src/engine/self-host/operator-credentials.js'
-      );
-      const { refreshSandboxCredentials } = await import(
-        '../../src/engine/self-host/sandbox-build-env.js'
       );
 
       let attempt = 0;

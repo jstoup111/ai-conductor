@@ -2045,11 +2045,9 @@ When credentials are detected as expired or auth failure occurs, the conductor i
   `claude login`).
 - **Checks freshness** — when mtime changes, re-reads the credentials and checks `expiresAt`:
   - Still expired → keeps polling
-  - Fresh (unexpired) → proceeds to **refresh sandbox**
-- **Refreshes sandbox** — calls `refreshSandboxCredentials()` (`src/conductor/src/engine/self-host/sandbox-build-env.ts`),
-  which **copies** the operator's newly-refreshed `.credentials.json` into the sandbox `CLAUDE_CONFIG_DIR`
-  (never symlinks, maintaining isolation; see TR-6). The next attempt re-invokes the step with the
-  new credentials.
+  - Fresh (unexpired) → proceeds to **resume the build**
+- **Resume build with fresh auth** (Task 11) — the sandboxed build re-reads the daemon's live `CLAUDE_CODE_OAUTH_TOKEN`
+  env var, obtaining fresh credentials without needing to copy them into the sandbox.
 - **Timeout** — configurable via `auth_park_timeout_minutes` (default **60 minutes**; `0` or negative =
   opt-out, HALT immediately). When timeout elapses without a successful refresh, the conductor
   `writeHaltMarker()` with a reason naming the credentials path + observed `expiresAt` (or "unparseable").
@@ -2083,8 +2081,7 @@ Park-and-poll HALTs follow the standard HALT remediation (no new process — see
 | `engine/self-host/operator-credentials.ts` | Reader (`readOperatorCredentialsState`, fail-open classification), wait primitive (`waitForCredentialsChange` with injected clock/sleep for testability) |
 | `execution/claude-provider.ts` | Classifier (`AUTH_FAILURE_RE`, `authFailure` flag on invoke result) |
 | `engine/step-runners.ts` | Thread `authFailure` through `StepRunResult` |
-| `engine/conductor.ts` | Pre-flight check (before sandbox provision), per-step retry-loop branch (auth failure → park), resume credentials re-copy, timeout branch → HALT with credentials reason |
-| `engine/self-host/sandbox-build-env.ts` | `refreshSandboxCredentials` export (copy-based, not symlink) |
+| `engine/conductor.ts` | Pre-flight check (before sandbox provision), per-step retry-loop branch (auth failure → park), timeout branch → HALT with credentials reason |
 | `engine/resolved-config.ts` | `auth_park_timeout_minutes` config field + validation (0/negative = opt-out) |
 
 See `.docs/plans/sandbox-auth-expiry-park.md` and `.docs/decisions/adr-2026-07-04-auth-failure-park-and-poll.md` for the full design.

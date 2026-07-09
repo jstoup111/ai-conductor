@@ -136,7 +136,14 @@ class ThrowawaySandbox implements SandboxBuildEnv {
 
   childEnv(): NodeJS.ProcessEnv {
     // Copy — never mutate the parent env (no bleed back into the daemon).
-    return { ...this.parentEnv, CLAUDE_CONFIG_DIR: this.configDir };
+    const env = { ...this.parentEnv, CLAUDE_CONFIG_DIR: this.configDir };
+    // Task 9 (TR-2): Include the current CLAUDE_CODE_OAUTH_TOKEN from process.env
+    // (if present). The token is set dynamically around step execution and may change
+    // during retries/parks, so we capture the current value at call time.
+    if (process.env.CLAUDE_CODE_OAUTH_TOKEN !== undefined) {
+      env.CLAUDE_CODE_OAUTH_TOKEN = process.env.CLAUDE_CODE_OAUTH_TOKEN;
+    }
+    return env;
   }
 
   async teardown(): Promise<void> {
@@ -385,21 +392,3 @@ export async function sandboxLinkTargets(
   };
 }
 
-/**
- * Re-copy `.credentials.json` from source config dir to sandbox config dir,
- * overwriting any existing sandbox credentials. Used when the operator's
- * credentials are refreshed (e.g., token expiry) and the running sandbox
- * build needs updated credentials without tearing down the sandbox.
- *
- * The copy is a regular file, never a symlink (TR-6 invariant). If the source
- * file does not exist, this is a no-op (no error thrown — the caller is
- * responsible for ensuring the source exists when needed).
- */
-export async function refreshSandboxCredentials(
-  sourceConfigDir: string,
-  sandboxConfigDir: string,
-): Promise<void> {
-  const src = join(sourceConfigDir, CREDENTIALS_FILE);
-  const dest = join(sandboxConfigDir, CREDENTIALS_FILE);
-  await copyIfPresent(realSandboxFs, src, dest);
-}
