@@ -76,6 +76,7 @@ import {
 import type { SandboxBuildEnv } from './self-host/sandbox-build-env.js';
 import { refreshSandboxCredentials } from './self-host/sandbox-build-env.js';
 import { waitForCredentialsChange, readOperatorCredentialsState } from './self-host/operator-credentials.js';
+import { preflightBuildAuthCheck as checkBuildAuth } from './self-host/build-auth-preflight.js';
 import type { ChangedFile } from './self-host/release-gate.js';
 import type { GateVerdict } from './self-host/gate-halt.js';
 import { selectNextGate } from './selector.js';
@@ -884,6 +885,19 @@ export class Conductor {
 
     if (!sh.sandboxBuildEnv) {
       return this.stepRunner.run(name, state, { retryReason: retryHint });
+    }
+
+    // Pre-flight daemon build-auth token check (Task 6, TR-3/TR-2): BEFORE provisioning,
+    // check if daemon-token mode is configured and the token file is readable.
+    // If missing or unreadable, HALT with mint instructions. For api-key mode, skip.
+    // Never consumes the retry budget.
+    const buildAuthPreflight = await checkBuildAuth(
+      sh.buildAuthMode,
+      sh.buildAuthTokenPath,
+      this.projectRoot,
+    );
+    if (buildAuthPreflight !== undefined) {
+      return buildAuthPreflight;
     }
 
     // Pre-flight credential expiry check (TR-2): BEFORE provisioning, check if

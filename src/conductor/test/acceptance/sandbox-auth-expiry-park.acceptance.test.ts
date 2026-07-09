@@ -25,6 +25,13 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, writeFile, readFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+
+// Mock the build auth preflight check so these operator credentials tests
+// don't fail on missing daemon token. Task 6 is tested separately.
+vi.mock('../../src/engine/self-host/build-auth-preflight.js', () => ({
+  preflightBuildAuthCheck: vi.fn().mockResolvedValue(undefined),
+}));
+
 import type { ConductState } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { writeState } from '../../src/engine/state.js';

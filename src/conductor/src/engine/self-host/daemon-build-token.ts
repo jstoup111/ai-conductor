@@ -58,7 +58,8 @@ export async function readDaemonBuildToken(
     }
 
     // Any other error (EACCES, EIO, etc.) is treated as unreadable
-    const detail = `cannot read daemon build token: ${path}`;
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    const detail = `cannot read daemon build token: ${path} (${errorMsg})`;
     return { state: 'error', detail };
   }
 }
