@@ -14,6 +14,13 @@
 
 import { readFile } from 'node:fs/promises';
 
+/**
+ * Command to mint a daemon build token.
+ * Used in HALT messages (Task 6) and migration blocks (Task 17).
+ * Kept as a constant to ensure consistency between both sites.
+ */
+export const DAEMON_BUILD_TOKEN_MINT_COMMAND = 'claude setup-token';
+
 /** Result of reading a daemon build token: discriminated union. */
 export type DaemonBuildTokenResult =
   | { state: 'ok'; token: string }

@@ -249,6 +249,18 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Changed
 
+- **Daemon now owns build-auth token separately from operator OAuth (Tasks 5–17, TR-2, TR-3).**
+  The daemon maintains its own build-auth token at a configured path
+  (`harness_self_host.build_auth.token_path`), independent of the operator's
+  `.credentials.json` OAuth token. Pre-flight validation (`build-auth-preflight.ts`,
+  Task 6) fails closed with mint instructions when the token is missing or
+  unreadable — operator runs `claude setup-token` to mint and configure the path.
+  The `BuildAuthProvider` seam (`daemon-build-token.ts`, Task 5) reads the token at
+  runtime, enabling future platform-identity swaps (EKS) without code changes. Token
+  state is classified as `ok` / `missing` / `error` with trimmed, fail-closed defaults;
+  sandbox builds inject the token via `--build-auth-token` CLI argument, preserving
+  the operator's OAuth for non-build steps. See HARNESS.md "Daemon Build Auth" and
+  `.docs/specs/2026-07-07-isolate-daemon-build-auth-from-operator-oauth.md`.
 - `--idle-poll` default raised: 5s → 60s (Task 18). Event-driven wake now handles the hot
   path (HALT clear detection), so the polling fallback can be slower. Override with
   `--idle-poll 5` to restore legacy behavior or when filesystem watch is unavailable.
@@ -543,6 +555,38 @@ fi
 
 Project-local manual-test skill overrides keep working, but an `enforcement:` value in their
 frontmatter is now ignored (locked to `gating`).
+
+**Daemon-owned build-auth token — guarded mint with no clobber (Tasks 5–17, TR-2/TR-3).**
+
+The daemon now owns its build-auth token separately from operator OAuth. Before any dispatch
+in daemon-token mode, run `claude setup-token` to mint a token and configure its path in
+`harness_self_host.build_auth.token_path`. The pre-flight check fails closed if the token is
+missing or unreadable, printing mint instructions.
+
+```bash migration
+# Set up daemon build-token if not already present
+BUILD_AUTH_TOKEN_PATH="${HOME}/.ai-conductor/build-auth"
+
+# Only mint if the file doesn't exist (no clobber of operator's existing token)
+if [ ! -f "$BUILD_AUTH_TOKEN_PATH" ]; then
+  echo "Setting up daemon build-auth token…"
+  claude setup-token
+  chmod 600 "$BUILD_AUTH_TOKEN_PATH"
+else
+  echo "Build-auth token already present at $BUILD_AUTH_TOKEN_PATH — no action needed."
+fi
+
+# Then configure the path in your harness config (.ai-conductor/config.yml):
+echo "Configure in your harness config:"
+echo "  harness_self_host:"
+echo "    build_auth:"
+echo "      token_path: $BUILD_AUTH_TOKEN_PATH"
+```
+
+If you use daemon-token mode, ensure `harness_self_host.build_auth.token_path` points to
+your build token file (default: `~/.ai-conductor/build-auth`). The daemon reads this on
+each dispatch; the pre-flight check will guide you if the token is missing. For api-key mode,
+no action needed — the token requirement is skipped.
 
 ### Fixed
 

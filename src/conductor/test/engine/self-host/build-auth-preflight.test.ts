@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { preflightBuildAuthCheck } from '../../../src/engine/self-host/build-auth-preflight.js';
 import { HALT_MARKER } from '../../../src/engine/halt-marker.js';
+import { DAEMON_BUILD_TOKEN_MINT_COMMAND } from '../../../src/engine/self-host/daemon-build-token.js';
 
 // Task 6 (TR-3, TR-2): fail-closed pre-flight — missing daemon token HALTs with mint instructions
 
@@ -224,6 +225,28 @@ describe('self-host/build-auth-preflight — preflightBuildAuthCheck (Task 6, TR
       const haltContent = await readFile(haltPath, 'utf-8');
 
       expect(haltContent.endsWith('\n')).toBe(true);
+    });
+  });
+
+  describe('HALT/Migration consistency (Task 17)', () => {
+    it('GREEN: HALT message uses DAEMON_BUILD_TOKEN_MINT_COMMAND constant', async () => {
+      // Verify that the HALT message uses the shared constant for the setup-token command
+      const result = await preflightBuildAuthCheck('daemon-token', tokenPath, projectRoot);
+
+      expect(result).toBeDefined();
+      const haltPath = join(projectRoot, HALT_MARKER);
+      const haltContent = await readFile(haltPath, 'utf-8');
+
+      // The HALT message should contain the exact command from the constant
+      expect(haltContent).toContain(DAEMON_BUILD_TOKEN_MINT_COMMAND);
+      // Verify it matches the expected string
+      expect(DAEMON_BUILD_TOKEN_MINT_COMMAND).toBe('claude setup-token');
+    });
+
+    it('GREEN: DAEMON_BUILD_TOKEN_MINT_COMMAND is exactly "claude setup-token"', () => {
+      // This constant is used in both HALT messages (Task 6) and CHANGELOG migration (Task 17)
+      // Verify consistency by checking the exact value
+      expect(DAEMON_BUILD_TOKEN_MINT_COMMAND).toBe('claude setup-token');
     });
   });
 });

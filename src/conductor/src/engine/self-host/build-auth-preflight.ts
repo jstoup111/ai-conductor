@@ -9,7 +9,7 @@
 import { writeFile, access as accessFile, mkdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { HALT_MARKER } from '../halt-marker.js';
-import { readDaemonBuildToken } from './daemon-build-token.js';
+import { readDaemonBuildToken, DAEMON_BUILD_TOKEN_MINT_COMMAND } from './daemon-build-token.js';
 import type { StepRunResult } from '../conductor.js';
 
 /**
@@ -41,7 +41,7 @@ export async function preflightBuildAuthCheck(
 
   // Token is missing or unreadable — HALT with mint instructions
   let haltReason = 'The daemon must mint a build-auth token before this dispatch can proceed.\n\n';
-  haltReason += 'Command: claude setup-token\n';
+  haltReason += `Command: ${DAEMON_BUILD_TOKEN_MINT_COMMAND}\n`;
   haltReason += `This creates a token at: ${buildAuthTokenPath}\n\n`;
   haltReason += 'Then configure the path in your harness config under:\n';
   haltReason += '  harness_self_host.build_auth:\n';
