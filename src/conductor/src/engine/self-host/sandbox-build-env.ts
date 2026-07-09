@@ -10,9 +10,8 @@
 // Fix: for a self-build only, run the build step with a THROWAWAY
 // CLAUDE_CONFIG_DIR that:
 //   - symlinks skills/ + hooks/ into the build worktree (the edited harness);
-//   - COPIES the operator's `.credentials.json` so the headless `claude -p` build
-//     can authenticate — a fresh CLAUDE_CONFIG_DIR has no auth, and the daemon
-//     cannot re-auth interactively (auth is subscription creds, not an env key);
+//   - Authenticates via CLAUDE_CODE_OAUTH_TOKEN env injection (daemon-provided
+//     token); no credential copy needed — the sandbox inherits the daemon's auth.
 //   - COPIES `settings.json` and RETARGETS every harness-checkout absolute path
 //     (hook commands, statusLine, …) to the worktree, so the build exercises its
 //     OWN edited hooks rather than the live checkout's. Personal `~/.claude/hooks`
@@ -26,9 +25,9 @@
 //     fabricates a trust grant the operator has not made.
 // The sandbox is torn down after the build (pass OR fail) under a try/finally
 // guarantee; global ~/.claude is never touched. Isolation is a contract:
-//   - Credentials/settings are COPIED, never symlinked — no sandbox symlink ever
-//     resolves to a global-config target (TR-6 invariant); the two symlinks
-//     (skills/hooks) resolve only into the worktree.
+//   - Settings are COPIED (not symlinked) — no sandbox symlink ever resolves to a
+//     global-config target (TR-6 invariant); the two symlinks (skills/hooks) resolve
+//     only into the worktree.
 //   - A missing worktree skills//hooks/ dir FAILS CLOSED (SandboxProvisionError) —
 //     a dangling-link sandbox is never launched (TR-5).
 //   - Teardown runs on the crash branch (withSandboxBuildEnv finally), asserted.
@@ -101,8 +100,8 @@ export interface ProvisionOptions {
    */
   harnessRoot: string;
   /**
-   * The operator's live config dir — the source of `.credentials.json` +
-   * `settings.json`. Defaults to `$CLAUDE_CONFIG_DIR` or `~/.claude`.
+   * The operator's live config dir — the source of `settings.json`.
+   * Defaults to `$CLAUDE_CONFIG_DIR` or `~/.claude`.
    */
   globalConfigDir?: string;
   /** Base dir for the throwaway config dir (defaults to the OS temp dir). */
@@ -123,7 +122,6 @@ export interface ProvisionOptions {
 /** The two links a sandbox exposes into the worktree. */
 const LINKED_DIRS = ['skills', 'hooks'] as const;
 /** Config files copied (never symlinked) from the operator's global config. */
-const CREDENTIALS_FILE = '.credentials.json';
 const SETTINGS_FILE = 'settings.json';
 /** Claude Code state file — holds per-project workspace-trust grants. */
 const STATE_FILE = '.claude.json';
@@ -151,10 +149,11 @@ class ThrowawaySandbox implements SandboxBuildEnv {
 
 /**
  * Provision a throwaway CLAUDE_CONFIG_DIR: skills/ + hooks/ symlinked into the
- * build worktree, with `.credentials.json` + a hook-retargeted `settings.json`
- * copied in. On ANY provisioning failure (including a missing worktree
- * skills//hooks/ dir), removes the partial sandbox and throws
- * SandboxProvisionError — the caller must not launch a build against it.
+ * build worktree, with a hook-retargeted `settings.json` copied in. Auth is via
+ * daemon-provided CLAUDE_CODE_OAUTH_TOKEN env injection; no credential copy.
+ * On ANY provisioning failure (including a missing worktree skills//hooks/ dir),
+ * removes the partial sandbox and throws SandboxProvisionError — the caller must
+ * not launch a build against it.
  */
 export async function provisionSandboxBuildEnv(opts: ProvisionOptions): Promise<SandboxBuildEnv> {
   const fs = opts.fs ?? realSandboxFs;
@@ -178,15 +177,6 @@ export async function provisionSandboxBuildEnv(opts: ProvisionOptions): Promise<
       }
       await fs.symlink(target, join(configDir, name));
     }
-
-    // Auth: copy the operator's credentials so the headless build authenticates.
-    // Copy (not symlink) keeps the TR-6 no-global-symlink invariant intact.
-    // Copy-if-present: an env-key auth (ANTHROPIC_API_KEY) needs no creds file.
-    await copyIfPresent(
-      fs,
-      join(globalConfigDir, CREDENTIALS_FILE),
-      join(configDir, CREDENTIALS_FILE),
-    );
 
     // settings.json: copy + retarget harness-checkout paths to the worktree, so
     // hooks declared by absolute path fire against the EDITED hooks.
