@@ -136,14 +136,15 @@ class ThrowawaySandbox implements SandboxBuildEnv {
 
   childEnv(): NodeJS.ProcessEnv {
     // Copy — never mutate the parent env (no bleed back into the daemon).
-    const env: NodeJS.ProcessEnv = { ...this.parentEnv, CLAUDE_CONFIG_DIR: this.configDir };
     // Task 9 (TR-2): Include the current CLAUDE_CODE_OAUTH_TOKEN from process.env
     // (if present). The token is set dynamically around step execution and may change
     // during retries/parks, so we capture the current value at call time.
+    const env: Record<string, string | undefined> = { ...this.parentEnv };
+    env.CLAUDE_CONFIG_DIR = this.configDir;
     if (process.env.CLAUDE_CODE_OAUTH_TOKEN !== undefined) {
       env.CLAUDE_CODE_OAUTH_TOKEN = process.env.CLAUDE_CODE_OAUTH_TOKEN;
     }
-    return env;
+    return env as NodeJS.ProcessEnv;
   }
 
   async teardown(): Promise<void> {
