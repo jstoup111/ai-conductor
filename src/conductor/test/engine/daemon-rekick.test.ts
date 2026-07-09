@@ -20,6 +20,7 @@ import {
 } from '../../src/engine/daemon-rekick.js';
 import { join as pjoin } from 'node:path';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
+import { readVerdict } from '../../src/engine/gate-verdicts.js';
 
 const execFileAsync = promisify(execFileCb);
 const SHA_B = 'b'.repeat(40);
@@ -635,6 +636,68 @@ describe('engine/daemon-rekick — resumeRebaseFirst (FR-12)', () => {
     expect(attempts).toBe(3); // exhausted the cap before parking
     expect(await fileExists(join(dir, HALT_MARKER))).toBe(true);
     expect(await fileExists(join(dir, REKICK_SENTINEL))).toBe(false);
+  });
+
+  // Task 12: Rekick call site ships capability-absent (fail-closed).
+  // When a play-forward rebase touches code paths, the full target set
+  // (build, build_review, manual_test) gets unconditionally invalidated kickback
+  // verdicts WITHOUT preVerify capability, preserving fail-closed default.
+  it('play-forward rebase with changed code paths → unconditionally fail-closed (no preVerify)', async () => {
+    await execFileAsync('git', ['init', '-b', 'main', dir]);
+    await git('config', 'user.email', 'test@example.com');
+    await git('config', 'user.name', 'Test');
+    await git('config', 'commit.gpgsign', 'false');
+    await mkdir(join(dir, 'src'), { recursive: true });
+
+    // Init commit: base state
+    await writeFile(join(dir, 'src/feature.ts'), 'export const v = 0;\n');
+    await git('add', '.');
+    await git('commit', '-m', 'init');
+
+    // Feature branch: modify feature code
+    await git('checkout', '-b', 'feature/foo');
+    await writeFile(join(dir, 'src/feature.ts'), 'export const v = 1;\n');
+    await git('add', '.');
+    await git('commit', '-m', 'feature work');
+
+    // Advance base: add new code file (non-conflicting)
+    await git('checkout', 'main');
+    await writeFile(join(dir, 'src/base-code.ts'), 'export const base = true;\n');
+    await git('add', '.');
+    await git('commit', '-m', 'base advance with code');
+
+    // Back to feature for rebase
+    await git('checkout', 'feature/foo');
+
+    // Write sentinel and run rebase-first
+    await writeSentinel();
+    const res = await resumeRebaseFirst({
+      worktreePath: dir,
+      localBase: 'main',
+      events,
+      ranManualTest: true,
+    });
+
+    // Clean rebase, no conflicts
+    expect(res).toBe('rebased');
+    expect(await fileExists(join(dir, REKICK_SENTINEL))).toBe(false);
+
+    // Crucial assertion: verdicts are UNCONDITIONALLY kicked back (fail-closed),
+    // NOT reverified via preVerify capability. The rekick call site deliberately
+    // omits preVerify, per ADR.
+    const build = await readVerdict(dir, 'build');
+    expect(build?.satisfied).toBe(false);
+    expect(build?.kickback?.from).toBe('rebase');
+    // Verify no preVerify-based reverification marker
+    expect(build?.reason).not.toContain('re-verified mechanically');
+
+    const buildReview = await readVerdict(dir, 'build_review');
+    expect(buildReview?.satisfied).toBe(false);
+    expect(buildReview?.kickback?.from).toBe('rebase');
+
+    const manualTest = await readVerdict(dir, 'manual_test');
+    expect(manualTest?.satisfied).toBe(false);
+    expect(manualTest?.kickback?.from).toBe('rebase');
   });
 });
 
