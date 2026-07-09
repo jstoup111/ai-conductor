@@ -143,6 +143,36 @@ describe('self-host/build-auth-preflight — preflightBuildAuthCheck (Task 6, TR
     });
   });
 
+  describe('EACCES negative path (Task 7, TR-3 negative)', () => {
+    it('RED: EACCES unreadable token file triggers reader error state → HALT with path and permission diagnostic', async () => {
+      // Setup: create token file with no read permissions (EACCES case)
+      await writeFile(tokenPath, 'sk_daemon_token_content', 'utf-8');
+      await chmod(tokenPath, 0o000);
+
+      // Execute preflight check
+      const result = await preflightBuildAuthCheck('daemon-token', tokenPath, projectRoot);
+
+      // Verify: returns failure (reader should have returned state='error')
+      expect(result).toBeDefined();
+      expect(result?.success).toBe(false);
+
+      // Verify: HALT marker is written (no spawn or budget burn)
+      const haltPath = join(projectRoot, HALT_MARKER);
+      const haltContent = await readFile(haltPath, 'utf-8');
+
+      // HALT must name the path
+      expect(haltContent).toContain(tokenPath);
+
+      // HALT must mention permission problem (diagnostic includes path + error)
+      expect(haltContent).toContain('cannot read');
+      expect(haltContent).toContain('Diagnostic:');
+
+      // HALT must NOT spawn sandbox or attempt to use token
+      expect(result?.output).not.toContain('spawn');
+      expect(result?.output).not.toContain('provision');
+    });
+  });
+
   describe('HALT message format', () => {
     it('RED: HALT message contains token path and config key reference', async () => {
       const result = await preflightBuildAuthCheck('daemon-token', tokenPath, projectRoot);
