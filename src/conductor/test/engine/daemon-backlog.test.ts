@@ -2070,15 +2070,83 @@ describe('engine/daemon-backlog — fastForwardRoot heal integration (Task 7)', 
     // Verify: NO file deletion commands were issued (zero deletions)
     expect(deleteCount).toBe(0);
 
-    // Verify: NO WARN was emitted (skip behavior, not heal behavior)
-    const warnLog = logs.find((l) => l.includes('WARN') || (l.toLowerCase().includes('heal') && l.includes('auto')));
-    expect(warnLog).toBeUndefined();
+    // Verify: LEAK-SUSPECT WARN was emitted (escalated from skip to WARN with Task 12)
+    const warnLog = logs.find((l) => l.includes('LEAK-SUSPECT'));
+    expect(warnLog).toBeDefined();
 
-    // Verify: a skip message was logged indicating the dirty state cannot be healed
-    const skipLog = logs.find((l) => l.includes('skip') && l.includes('fast-forward'));
-    expect(skipLog).toBeDefined();
+    if (warnLog) {
+      // Verify: WARN contains the unexplained file
+      expect(warnLog).toContain('truly-unexplained.txt');
+    }
 
     // Verify: HEAD was NOT advanced (FF was skipped, no merge happened)
+    const currentBranch = await git(['rev-parse', '--abbrev-ref', 'HEAD']);
+    expect(currentBranch).toBe(baseBranch);
+  });
+
+  it('unexplained dirty tree → escalated LEAK-SUSPECT WARN with per-file diff-stat and explanation status (Task 12)', async () => {
+    // Setup: Create files on feat/daemon-x that explain some modifications
+    await execFile('git', ['checkout', '-q', 'feat/daemon-x'], { cwd: dir });
+    await mkdir(join(dir, 'src'), { recursive: true });
+    await writeFile(join(dir, 'src/explained.ts'), 'export const explained = true;\n');
+    await execFile('git', ['add', '.'], { cwd: dir });
+    await execFile('git', ['commit', '-q', '-m', 'add explained file'], { cwd: dir });
+    await execFile('git', ['push', '-q', 'origin', 'feat/daemon-x'], { cwd: dir });
+
+    // Switch back to main branch
+    await execFile('git', ['checkout', '-q', baseBranch], { cwd: dir });
+
+    // Contaminate main checkout with:
+    // 1. A modified file that matches feat/daemon-x (explained)
+    await mkdir(join(dir, 'src'), { recursive: true });
+    await writeFile(join(dir, 'src/explained.ts'), 'export const explained = true;\n');
+
+    // 2. A modified file that doesn't match any branch (unexplained)
+    await writeFile(join(dir, 'src/unexplained.ts'), 'export const unexplained = "unique";\n');
+
+    // 3. An untracked file that doesn't match any branch (unexplained)
+    await writeFile(join(dir, 'stray-unknown.txt'), 'This content is unique and nowhere.\n');
+
+    // Verify dirty state before attempting heal
+    let status = await git(['status', '--porcelain']);
+    expect(status).toContain('src/explained.ts'); // explained
+    expect(status).toContain('src/unexplained.ts'); // unexplained modified
+    expect(status).toContain('stray-unknown.txt'); // unexplained untracked
+
+    const logs: string[] = [];
+    const log = (msg: string) => logs.push(msg);
+
+    // Call fastForwardRoot with the partially-unexplained dirty tree
+    await fastForwardRoot(dir, log);
+
+    // Verify: tree is STILL dirty (no healing happened)
+    status = await git(['status', '--porcelain']);
+    expect(status).not.toBe(''); // tree is still dirty
+
+    // Verify: no files were restored or deleted (all dirty files remain)
+    expect(status).toContain('src/explained.ts');
+    expect(status).toContain('src/unexplained.ts');
+    expect(status).toContain('stray-unknown.txt');
+
+    // Verify: WARN contains "LEAK-SUSPECT" header
+    const warnLog = logs.find((l) => l.includes('LEAK-SUSPECT'));
+    expect(warnLog).toBeDefined();
+
+    if (warnLog) {
+      // Verify: WARN contains per-file information
+      // - The explained file should be listed with its status
+      expect(warnLog).toContain('src/explained.ts');
+      // - The unexplained modified file should be listed
+      expect(warnLog).toContain('src/unexplained.ts');
+      // - The unexplained untracked file should be listed
+      expect(warnLog).toContain('stray-unknown.txt');
+
+      // Verify: WARN contains explanation status
+      // - Should indicate which files are unexplained
+      expect(warnLog).toMatch(/unexplained|unknown|none|—/i);
+    }
+
+    // Verify: HEAD was NOT advanced (FF was skipped)
     const currentBranch = await git(['rev-parse', '--abbrev-ref', 'HEAD']);
     expect(currentBranch).toBe(baseBranch);
   });

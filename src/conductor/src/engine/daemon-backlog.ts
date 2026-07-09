@@ -18,7 +18,7 @@ import { decideSpecGate, type GateDecision } from './owner-gate/gate.js';
 import type { BlockerResolver, BlockerVerdict } from './blocker-resolver.js';
 import { announceWaitingForRoot } from './daemon-waiting-announce.js';
 import { listShippedRecords, parseShippedRecord, specHash } from './shipped-record.js';
-import { healPlan, enumerateCandidates, reVerifyHealPlan } from './leak-triage.js';
+import { healPlan, enumerateCandidates, reVerifyHealPlan, renderLeakSuspectWarn } from './leak-triage.js';
 
 const execFile = promisify(execFileCb);
 
@@ -285,12 +285,9 @@ export async function fastForwardRoot(
           return;
         }
       } else {
-        // Tree is dirty and cannot be healed — skip the fast-forward
-        log(
-          `skip fast-forward: working tree at ${projectRoot} is not clean and ` +
-            `dirty state cannot be healed (${plan.reason || 'unknown reason'}). ` +
-            `Commit/stash changes so the daemon can track origin/${defaultBranch}.`,
-        );
+        // Tree is dirty and cannot be healed — emit escalated LEAK-SUSPECT WARN with per-file details
+        const warnMsg = renderLeakSuspectWarn(status.stdout, plan);
+        log(warnMsg);
         return;
       }
     } catch (err) {
