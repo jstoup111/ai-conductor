@@ -263,3 +263,51 @@ describe('engine/rebase — emitRebaseEvent (FR-10)', () => {
     await expect(emitRebaseEvent(events, { kind: 'noop' })).resolves.toBeUndefined();
   });
 });
+
+describe('engine/rebase — rebase_gate_reverified event', () => {
+  it('accepts rebase_gate_reverified event with step, skippedDispatch, and optional reason', async () => {
+    const events = new ConductorEventEmitter();
+    const seen: Array<{
+      type: string;
+      step?: string;
+      skippedDispatch?: boolean;
+      reason?: string;
+    }> = [];
+
+    events.on('rebase_gate_reverified', (e) => {
+      seen.push({
+        type: e.type,
+        step: e.step,
+        skippedDispatch: e.skippedDispatch,
+        reason: e.reason,
+      });
+    });
+
+    await events.emit({
+      type: 'rebase_gate_reverified',
+      step: 'build',
+      skippedDispatch: false,
+    });
+
+    await events.emit({
+      type: 'rebase_gate_reverified',
+      step: 'manual_test',
+      skippedDispatch: true,
+      reason: 'gate already satisfied',
+    });
+
+    expect(seen).toHaveLength(2);
+    expect(seen[0]).toEqual({
+      type: 'rebase_gate_reverified',
+      step: 'build',
+      skippedDispatch: false,
+      reason: undefined,
+    });
+    expect(seen[1]).toEqual({
+      type: 'rebase_gate_reverified',
+      step: 'manual_test',
+      skippedDispatch: true,
+      reason: 'gate already satisfied',
+    });
+  });
+});
