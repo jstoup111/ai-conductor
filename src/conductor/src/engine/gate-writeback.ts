@@ -63,6 +63,33 @@ export interface GateWritebackDeps {
   runGh?: GhRunner;
   cwd: string;
   log?: (msg: string) => void;
+  /**
+   * Shared across a daemon run (not per-call) to dedup skip notices per
+   * (slug, reason) key — see {@link logSkipOnce}. When omitted, every skip
+   * logs unconditionally (matches prior behavior for one-off/test callers).
+   */
+  warnedSkips?: Set<string>;
+}
+
+/**
+ * Log a skip notice at most once per (slug, reason) key for the lifetime of
+ * the given `warnedSkips` set. Repeated calls with the same key are silent
+ * no-ops after the first. When `warnedSkips` is undefined, always logs
+ * (no dedup state to track against).
+ */
+function logSkipOnce(
+  log: ((msg: string) => void) | undefined,
+  warnedSkips: Set<string> | undefined,
+  slug: string,
+  reason: string,
+  msg: string,
+): void {
+  if (warnedSkips) {
+    const key = `${slug}:${reason}`;
+    if (warnedSkips.has(key)) return;
+    warnedSkips.add(key);
+  }
+  log?.(msg);
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -149,18 +176,28 @@ export async function announceGatedPr(
   prUrl: string,
   deps: GateWritebackDeps,
 ): Promise<void> {
-  const { cwd, log } = deps;
+  const { cwd, log, warnedSkips } = deps;
   const runGh = deps.runGh ?? makeProductionGh();
 
   if (!prUrl) {
-    log?.(`[gate-writeback] no PR known for gated spec "${spec.slug}" — skipping label/comment`);
+    logSkipOnce(
+      log,
+      warnedSkips,
+      spec.slug,
+      'no-pr',
+      `[gate-writeback] nothing to announce for gated spec "${spec.slug}" (no PR)`,
+    );
     return;
   }
 
   const state = await prMergeState(runGh, cwd, prUrl, log);
   if (TERMINAL_PR_STATES.has(state.state)) {
-    log?.(
-      `[gate-writeback] PR ${prUrl} for gated spec "${spec.slug}" is ${state.state} — skipping label/comment`,
+    logSkipOnce(
+      log,
+      warnedSkips,
+      spec.slug,
+      'pr-terminal',
+      `[gate-writeback] nothing to announce for gated spec "${spec.slug}" (PR ${prUrl} is ${state.state}) — will retry if it revives`,
     );
     return;
   }
@@ -184,8 +221,8 @@ export async function announceGatedPr(
  *     silent skip.
  *   - `sourceRef` is present but fails to parse via {@link parseSourceRef}
  *     (the single parse source shared with the rest of the intake linkage) —
- *     skipped with a logged notice, never a `gh` call with garbage
- *     arguments.
+ *     skipped with a logged notice (deduped per `(slug, 'no-source-ref')` via
+ *     {@link logSkipOnce}), never a `gh` call with garbage arguments.
  *
  * Otherwise labels + upserts the marker comment on the issue. Commenting is
  * attempted regardless of the issue's open/closed state (a closed issue can
@@ -197,7 +234,7 @@ export async function announceGatedIssue(
   sourceRef: string | undefined,
   deps: GateWritebackDeps,
 ): Promise<void> {
-  const { cwd, log } = deps;
+  const { cwd, log, warnedSkips } = deps;
   const runGh = deps.runGh ?? makeProductionGh();
 
   if (spec.kind !== 'spec') {
@@ -206,9 +243,13 @@ export async function announceGatedIssue(
 
   const parsed = parseSourceRef(sourceRef);
   if (!parsed) {
-    log?.(
-      `[gate-writeback] no usable Source-Ref for gated spec "${spec.slug}" ` +
-        `("${sourceRef ?? ''}") — skipping issue announcement`,
+    logSkipOnce(
+      log,
+      warnedSkips,
+      spec.slug,
+      'no-source-ref',
+      `[gate-writeback] nothing to announce on an issue for gated spec "${spec.slug}" ` +
+        `(no usable Source-Ref, got "${sourceRef ?? ''}") — will retry when one exists`,
     );
     return;
   }

@@ -237,8 +237,91 @@ describe('gate-writeback (Task 17)', () => {
       const { gh, calls } = fakeGh([
         { stdout: JSON.stringify({ state: 'CLOSED', mergeable: 'UNKNOWN', statusCheckRollup: [], labels: [] }) },
       ]);
-      await announceGatedPr(SPEC, PR_URL, { runGh: gh, cwd: '/repo' });
+      const logs: string[] = [];
+      await announceGatedPr(SPEC, PR_URL, { runGh: gh, cwd: '/repo', log: (m) => logs.push(m) });
       expect(calls.length).toBe(1);
+      expect(
+        logs.some((m) => m.includes(`(PR ${PR_URL} is CLOSED) — will retry if it revives`)),
+      ).toBe(true);
+    });
+
+    it('PT-1: repeated terminal-state skips for the same slug are deduped to one log line via a shared warnedSkips set', async () => {
+      const { gh, calls } = fakeGh([
+        { stdout: JSON.stringify({ state: 'CLOSED', mergeable: 'UNKNOWN', statusCheckRollup: [], labels: [] }) },
+        { stdout: JSON.stringify({ state: 'CLOSED', mergeable: 'UNKNOWN', statusCheckRollup: [], labels: [] }) },
+      ]);
+      const logs: string[] = [];
+      const warnedSkips = new Set<string>();
+
+      await announceGatedPr(SPEC, PR_URL, { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips });
+      await announceGatedPr(SPEC, PR_URL, { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips });
+
+      expect(calls.length).toBe(2);
+      const gateLines = logs.filter((m) => m.startsWith('[gate-writeback]'));
+      expect(gateLines.length).toBe(1);
+      expect(gateLines[0]).toContain(`(PR ${PR_URL} is CLOSED) — will retry if it revives`);
+      expect(warnedSkips.has(`${SPEC.slug}:pr-terminal`)).toBe(true);
+    });
+
+    it('PT-2: never throws even when gh errors on a later pass with a shared warnedSkips set present', async () => {
+      const warnedSkips = new Set<string>();
+      const { gh: gh1 } = fakeGh([
+        { stdout: JSON.stringify({ state: 'CLOSED', mergeable: 'UNKNOWN', statusCheckRollup: [], labels: [] }) },
+      ]);
+      await announceGatedPr(SPEC, PR_URL, { runGh: gh1, cwd: '/repo', log: () => {}, warnedSkips });
+
+      const gh: GhRunner = async () => {
+        throw new Error('boom');
+      };
+      await expect(
+        announceGatedPr(SPEC, PR_URL, { runGh: gh, cwd: '/repo', log: () => {}, warnedSkips }),
+      ).resolves.toBeUndefined();
+    });
+
+    it('PT-3: without a warnedSkips set, repeated terminal-state skips log on every call (no dedup)', async () => {
+      const { gh, calls } = fakeGh([
+        { stdout: JSON.stringify({ state: 'CLOSED', mergeable: 'UNKNOWN', statusCheckRollup: [], labels: [] }) },
+        { stdout: JSON.stringify({ state: 'CLOSED', mergeable: 'UNKNOWN', statusCheckRollup: [], labels: [] }) },
+      ]);
+      const logs: string[] = [];
+
+      await announceGatedPr(SPEC, PR_URL, { runGh: gh, cwd: '/repo', log: (m) => logs.push(m) });
+      await announceGatedPr(SPEC, PR_URL, { runGh: gh, cwd: '/repo', log: (m) => logs.push(m) });
+
+      expect(calls.length).toBe(2);
+      const gateLines = logs.filter((m) => m.startsWith('[gate-writeback]'));
+      expect(gateLines.length).toBe(2);
+      expect(gateLines[0]).toContain(`(PR ${PR_URL} is CLOSED) — will retry if it revives`);
+      expect(gateLines[1]).toContain(`(PR ${PR_URL} is CLOSED) — will retry if it revives`);
+    });
+
+    it('RT-1: same slug, different reasons (no-pr then pr-terminal) each log once against a shared Set', async () => {
+      const logs: string[] = [];
+      const warnedSkips = new Set<string>();
+
+      // Pass 1: no PR yet for slug S — no-pr reason logged.
+      const { gh: noPrGh, calls: noPrCalls } = fakeGh([]);
+      await announceGatedPr(SPEC, '', { runGh: noPrGh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips });
+
+      // Pass 2: same slug S now has a CLOSED PR — pr-terminal reason logged.
+      const { gh: closedGh, calls: closedCalls } = fakeGh([
+        { stdout: JSON.stringify({ state: 'CLOSED', mergeable: 'UNKNOWN', statusCheckRollup: [], labels: [] }) },
+      ]);
+      await announceGatedPr(SPEC, PR_URL, { runGh: closedGh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips });
+
+      expect(noPrCalls.length).toBe(0);
+      expect(closedCalls.length).toBe(1);
+
+      const gateLines = logs.filter((m) => m.startsWith('[gate-writeback]'));
+      expect(gateLines.length).toBe(2);
+      expect(gateLines[0]).toContain(`nothing to announce for gated spec "${SPEC.slug}" (no PR)`);
+      expect(gateLines[1]).toContain(`(PR ${PR_URL} is CLOSED) — will retry if it revives`);
+
+      // Keyed by slug alone would only allow one line total; keying by
+      // `${slug}:${reason}` allows one line per distinct reason.
+      expect(warnedSkips.has(`${SPEC.slug}:no-pr`)).toBe(true);
+      expect(warnedSkips.has(`${SPEC.slug}:pr-terminal`)).toBe(true);
+      expect(warnedSkips.size).toBe(2);
     });
 
     it('NP-2: gh non-zero on the merge-state lookup is logged once and does not retry or throw', async () => {
@@ -299,7 +382,99 @@ describe('gate-writeback (Task 17)', () => {
       await announceGatedPr(SPEC, '', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m) });
 
       expect(calls.length).toBe(0);
-      expect(logs.some((m) => m.includes('no PR known'))).toBe(true);
+      expect(logs.some((m) => m.includes('nothing to announce for gated spec') && m.includes('(no PR)'))).toBe(true);
+    });
+
+    it('NP-4b: without a warnedSkips set, repeated no-PR skips log on every call (no dedup)', async () => {
+      const { gh, calls } = fakeGh([]);
+      const logs: string[] = [];
+
+      await announceGatedPr(SPEC, '', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m) });
+      await announceGatedPr(SPEC, '', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m) });
+
+      expect(calls.length).toBe(0);
+      const gateLines = logs.filter((m) => m.startsWith('[gate-writeback]'));
+      expect(gateLines.length).toBe(2);
+      expect(gateLines[0]).toContain(`nothing to announce for gated spec "${SPEC.slug}" (no PR)`);
+      expect(gateLines[1]).toContain(`nothing to announce for gated spec "${SPEC.slug}" (no PR)`);
+    });
+
+    it('NP-6: repeated no-PR skips for the same slug are deduped to one log line via a shared warnedSkips set', async () => {
+      const { gh, calls } = fakeGh([]);
+      const logs: string[] = [];
+      const warnedSkips = new Set<string>();
+
+      await announceGatedPr(SPEC, '', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips });
+      await announceGatedPr(SPEC, '', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips });
+
+      expect(calls.length).toBe(0);
+      const gateLines = logs.filter((m) => m.startsWith('[gate-writeback]'));
+      expect(gateLines.length).toBe(1);
+      expect(gateLines[0]).toContain(`nothing to announce for gated spec "${SPEC.slug}" (no PR)`);
+    });
+
+    it('NP-7: dedup key is per-slug — two different slugs against one shared Set each log once', async () => {
+      const { gh, calls } = fakeGh([]);
+      const logs: string[] = [];
+      const warnedSkips = new Set<string>();
+      const OTHER_SPEC = { ...SPEC, slug: '2026-07-05-gizmo' };
+
+      await announceGatedPr(SPEC, '', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips });
+      await announceGatedPr(SPEC, '', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips });
+      await announceGatedPr(OTHER_SPEC, '', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips });
+      await announceGatedPr(OTHER_SPEC, '', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips });
+
+      expect(calls.length).toBe(0);
+      const gateLines = logs.filter((m) => m.startsWith('[gate-writeback]'));
+      expect(gateLines.length).toBe(2);
+      expect(gateLines[0]).toContain(`nothing to announce for gated spec "${SPEC.slug}" (no PR)`);
+      expect(gateLines[1]).toContain(`nothing to announce for gated spec "${OTHER_SPEC.slug}" (no PR)`);
+      expect(warnedSkips.has(`${SPEC.slug}:no-pr`)).toBe(true);
+      expect(warnedSkips.has(`${OTHER_SPEC.slug}:no-pr`)).toBe(true);
+      expect(warnedSkips.size).toBe(2);
+    });
+
+    it('NP-8: dedup is per-run — a fresh Set (simulated restart) resurfaces the notice for the same slug', async () => {
+      const { gh, calls } = fakeGh([]);
+      const logs: string[] = [];
+      const firstRunSkips = new Set<string>();
+      const secondRunSkips = new Set<string>();
+
+      await announceGatedPr(SPEC, '', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips: firstRunSkips });
+      await announceGatedPr(SPEC, '', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips: firstRunSkips });
+      // Simulated daemon restart: brand-new Set, same slug.
+      await announceGatedPr(SPEC, '', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips: secondRunSkips });
+
+      expect(calls.length).toBe(0);
+      const gateLines = logs.filter((m) => m.startsWith('[gate-writeback]'));
+      expect(gateLines.length).toBe(2);
+      expect(gateLines.every((m) => m.includes(`nothing to announce for gated spec "${SPEC.slug}" (no PR)`))).toBe(true);
+    });
+
+    it('NP-9: a suppressed no-PR skip never blocks a later real announcement for the same slug', async () => {
+      const warnedSkips = new Set<string>();
+      const logs: string[] = [];
+
+      // Pass 1: no PR yet — skip is logged and recorded in the shared Set.
+      const { gh: noPrGh, calls: noPrCalls } = fakeGh([]);
+      await announceGatedPr(SPEC, '', { runGh: noPrGh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips });
+      expect(noPrCalls.length).toBe(0);
+      expect(warnedSkips.has(`${SPEC.slug}:no-pr`)).toBe(true);
+
+      // Pass 2: same slug, same shared warnedSkips Set, but now a real PR
+      // exists. Dedup must guard only the log line, never the announce work.
+      const { gh: realGh, calls: realCalls } = fakeGh([
+        { stdout: JSON.stringify({ state: 'OPEN', mergeable: 'MERGEABLE', statusCheckRollup: [], labels: [] }) }, // prMergeState
+        { stdout: '' }, // ensureLabel
+        { stdout: '' }, // addLabel
+        { stdout: JSON.stringify({ comments: [] }) }, // upsertComment lookup
+        { stdout: '' }, // create comment
+      ]);
+      await announceGatedPr(SPEC, PR_URL, { runGh: realGh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips });
+
+      expect(realCalls.some((c) => c[0] === 'label' && c[1] === 'create')).toBe(true);
+      expect(realCalls.some((c) => c.join(' ').includes('labels[]=owner-gated'))).toBe(true);
+      expect(realCalls.some((c) => c[0] === 'pr' && c[1] === 'comment')).toBe(true);
     });
 
     it('NP-5: a label-add race (conflict error) is swallowed and the comment still lands', async () => {
@@ -370,6 +545,43 @@ describe('gate-writeback (Task 17)', () => {
       expect(ghCalled).toBe(false);
     });
 
+    it('absent marker (sourceRef undefined) behaves the same with a shared warnedSkips set present — one skip line, deduped on repeat, zero gh calls', async () => {
+      let ghCalled = false;
+      const gh: GhRunner = async () => {
+        ghCalled = true;
+        return { stdout: '' };
+      };
+      const logs: string[] = [];
+      const warnedSkips = new Set<string>();
+
+      await announceGatedIssue(SPEC, undefined, { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips });
+      await announceGatedIssue(SPEC, undefined, { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips });
+
+      expect(ghCalled).toBe(false);
+      expect(
+        logs.filter((m) =>
+          m.includes(
+            `nothing to announce on an issue for gated spec "${SPEC.slug}" (no usable Source-Ref, got "") — will retry when one exists`,
+          ),
+        ),
+      ).toHaveLength(1);
+    });
+
+    it('without a warnedSkips set, repeated malformed Source-Ref skips log on every call (no dedup fallback)', async () => {
+      const gh: GhRunner = async () => ({ stdout: '' });
+      const logs: string[] = [];
+
+      await announceGatedIssue(SPEC, 'not-a-ref', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m) });
+      await announceGatedIssue(SPEC, 'not-a-ref', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m) });
+
+      const matches = logs.filter((m) =>
+        m.includes(
+          `nothing to announce on an issue for gated spec "${SPEC.slug}" (no usable Source-Ref, got "not-a-ref") — will retry when one exists`,
+        ),
+      );
+      expect(matches).toHaveLength(2);
+    });
+
     it('malformed Source-Ref is logged and skipped — no gh call', async () => {
       let ghCalled = false;
       const gh: GhRunner = async () => {
@@ -381,7 +593,79 @@ describe('gate-writeback (Task 17)', () => {
       await announceGatedIssue(SPEC, 'not-a-ref', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m) });
 
       expect(ghCalled).toBe(false);
-      expect(logs.some((m) => m.toLowerCase().includes('skip'))).toBe(true);
+      expect(
+        logs.some((m) =>
+          m.includes(
+            `nothing to announce on an issue for gated spec "${SPEC.slug}" (no usable Source-Ref, got "not-a-ref") — will retry when one exists`,
+          ),
+        ),
+      ).toBe(true);
+    });
+
+    it('malformed Source-Ref skip is deduped across repeated calls with a shared warnedSkips set', async () => {
+      const gh: GhRunner = async () => ({ stdout: '' });
+      const logs: string[] = [];
+      const warnedSkips = new Set<string>();
+
+      await announceGatedIssue(SPEC, 'not-a-ref', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips });
+      await announceGatedIssue(SPEC, 'not-a-ref', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips });
+
+      const matches = logs.filter((m) =>
+        m.includes(
+          `nothing to announce on an issue for gated spec "${SPEC.slug}" (no usable Source-Ref, got "not-a-ref") — will retry when one exists`,
+        ),
+      );
+      expect(matches).toHaveLength(1);
+    });
+
+    it('RT-2: PR and issue skip reasons dedupe independently under a shared warnedSkips set — both lines log', async () => {
+      const warnedSkips = new Set<string>();
+      const logs: string[] = [];
+
+      // PR path: no PR yet for slug S — no-pr reason logged.
+      const { gh: noPrGh } = fakeGh([]);
+      await announceGatedPr(SPEC, '', { runGh: noPrGh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips });
+
+      // Issue path: same slug S, malformed Source-Ref — no-source-ref reason logged.
+      const issueGh: GhRunner = async () => ({ stdout: '' });
+      await announceGatedIssue(SPEC, 'not-a-ref', { runGh: issueGh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips });
+
+      const gateLines = logs.filter((m) => m.startsWith('[gate-writeback]'));
+      expect(gateLines.length).toBe(2);
+      expect(gateLines.some((m) => m.includes(`nothing to announce for gated spec "${SPEC.slug}" (no PR)`))).toBe(true);
+      expect(
+        gateLines.some((m) =>
+          m.includes(
+            `nothing to announce on an issue for gated spec "${SPEC.slug}" (no usable Source-Ref, got "not-a-ref") — will retry when one exists`,
+          ),
+        ),
+      ).toBe(true);
+
+      // Independent keys, not a shared per-slug key.
+      expect(warnedSkips.has(`${SPEC.slug}:no-pr`)).toBe(true);
+      expect(warnedSkips.has(`${SPEC.slug}:no-source-ref`)).toBe(true);
+      expect(warnedSkips.size).toBe(2);
+    });
+
+    it('RT-3: dedup never blocks a real announcement — a valid Source-Ref still announces after a prior no-source-ref skip for the same slug', async () => {
+      const warnedSkips = new Set<string>([`${SPEC.slug}:no-source-ref`]);
+      const calls: string[][] = [];
+      const gh: GhRunner = async (args) => {
+        calls.push([...args]);
+        if (args[0] === 'issue' && args[1] === 'view') {
+          return { stdout: JSON.stringify({ comments: [] }) };
+        }
+        return { stdout: '' };
+      };
+
+      await announceGatedIssue(SPEC, 'acme/repo#42', { runGh: gh, cwd: '/repo', warnedSkips });
+
+      const labelCall = calls.find((c) => c.join(' ').includes(OWNER_GATED_LABEL));
+      expect(labelCall).toBeDefined();
+      const commentCall = calls.find((c) => c[0] === 'issue' && c[1] === 'comment');
+      expect(commentCall).toBeDefined();
+      const body = commentCall![commentCall!.indexOf('--body') + 1];
+      expect(body).toContain(OWNER_GATED_MARKER);
     });
 
     it('closed issue still gets commented on', async () => {

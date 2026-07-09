@@ -20,6 +20,8 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- Gate-writeback skip notices now log once per (slug, reason) per daemon run
+  with benign will-retry wording (#379).
 - Build evidence gate's path corroboration now sources each task's expected
   paths from its `**Files:**` line (#424) instead of scanning the whole task
   section for backtick tokens. Plain-text and backticked paths (`;`/`,`

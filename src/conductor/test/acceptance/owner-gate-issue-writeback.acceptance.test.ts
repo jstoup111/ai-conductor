@@ -118,7 +118,7 @@ describe('owner-gate Source-Ref issue write-back acceptance (Covers: FR-9, FR-10
     await mod.announceGatedIssue(INDETERMINATE_ENTRY, 'not-a-ref', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m) });
 
     expect(ghCalled).toBe(false);
-    expect(logs.some((l) => l.toLowerCase().includes('skip') || l.toLowerCase().includes('malformed'))).toBe(true);
+    expect(logs.some((l) => l.includes('nothing to announce on an issue') && l.includes('no usable Source-Ref'))).toBe(true);
   });
 
   it('the referenced issue is CLOSED: the comment still posts (commenting closed issues is valid)', async () => {
