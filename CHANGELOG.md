@@ -215,7 +215,10 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   byte-identity match, auto-heals by restoring tracked files and deleting strays, then proceeds
   with fast-forward. Operator work is protected: heal requires whole-tree explanation by one
   branch, so any ambiguity keeps hands off. Unexplained dirty files escalate from a one-line skip
-  to a loud LEAK-SUSPECT WARN with per-file diff-stat so the stall is never silent.
+  to a loud LEAK-SUSPECT WARN with per-file diff-stat so the stall is never silent. Restore/delete
+  selection matches a file's full `allExplainedBy` set against the chosen branch, not just its
+  first-matched candidate, so a file explained by more than one branch is never dropped from an
+  otherwise-valid all-or-nothing heal.
 - **Write-fence sandbox for self-host builds (#380, adr-2026-07-08).** A daemon-owned PreToolUse
   hook is provisioned into the self-build sandbox's `settings.json` to block writes targeting the
   harness main checkout outside the build worktree. Edit/Write/MultiEdit/NotebookEdit targeting

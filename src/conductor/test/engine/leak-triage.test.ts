@@ -703,6 +703,57 @@ M  src/file2.ts
       expect(plan.canHeal).toBe(false);
       expect(plan.reason).toContain('unexplained');
     });
+
+    it('file explained by multiple branches, intersection lands on a non-first match → still healed', async () => {
+      // Create initial files on main that will be modified
+      await mkdir(join(tempDir, 'src'), { recursive: true });
+      const pathA = join(tempDir, 'src', 'a.ts');
+      const pathB = join(tempDir, 'src', 'b.ts');
+      await writeFile(pathA, 'initial a', 'utf-8');
+      await writeFile(pathB, 'initial b', 'utf-8');
+      await git(['add', 'src/a.ts', 'src/b.ts']);
+      await git(['commit', '-m', 'Initial commit on main']);
+
+      // feat/branch-x: a.ts has shared content (also present on branch-y), b.ts has
+      // content that only branch-x has (not matching main's working tree).
+      await git(['checkout', '-b', 'feat/branch-x']);
+      await writeFile(pathA, 'shared content A', 'utf-8');
+      await writeFile(pathB, 'branch-x-only content B', 'utf-8');
+      await git(['add', 'src/a.ts', 'src/b.ts']);
+      await git(['commit', '-m', 'Modify files on feat/branch-x']);
+
+      // feat/branch-y: a.ts has the SAME shared content as branch-x (so a.ts is
+      // explained by both branches, with branch-x first in candidate order), b.ts
+      // has content that matches what main's working tree will be modified to.
+      await git(['checkout', 'main']);
+      await git(['checkout', '-b', 'feat/branch-y']);
+      await writeFile(pathA, 'shared content A', 'utf-8');
+      await writeFile(pathB, 'shared content B', 'utf-8');
+      await git(['add', 'src/a.ts', 'src/b.ts']);
+      await git(['commit', '-m', 'Modify files on feat/branch-y']);
+
+      // Switch back to main and dirty the tree to match branch-y for b.ts and the
+      // shared content for a.ts — so a.ts is explained by [branch-x, branch-y] but
+      // b.ts is explained only by [branch-y]. The all-files intersection is
+      // {branch-y}, which is NOT a.ts's first-matched (candidate-order) branch.
+      await git(['checkout', 'main']);
+      await writeFile(pathA, 'shared content A', 'utf-8');
+      await writeFile(pathB, 'shared content B', 'utf-8');
+
+      const porcelainResult = await git(['status', '--porcelain']);
+      const porcelain = porcelainResult.stdout;
+
+      const { healPlan } = await import('../../src/engine/leak-triage.js');
+
+      // Candidate order puts branch-x first, so a.ts's first match is branch-x —
+      // but the only branch explaining BOTH files is branch-y.
+      const plan = await healPlan(git, porcelain, ['feat/branch-x', 'feat/branch-y']);
+
+      expect(plan.canHeal).toBe(true);
+      expect(plan.explainedBy).toBe('feat/branch-y');
+      expect(plan.filesToRestore).toContain('src/a.ts');
+      expect(plan.filesToRestore).toContain('src/b.ts');
+    });
   });
 
   describe('triageModifiedFiles (negative paths)', () => {

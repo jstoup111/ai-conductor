@@ -809,14 +809,19 @@ export async function healPlan(git: GitRunner, porcelain: string, candidates: st
   const filesToRestore: string[] = [];
   const filesToDelete: string[] = [];
 
+  const explainsFile = (classification: { explainedBy?: string; allExplainedBy?: string[] }) =>
+    classification.allExplainedBy && classification.allExplainedBy.length > 0
+      ? classification.allExplainedBy.includes(singleBranch)
+      : classification.explainedBy === singleBranch;
+
   for (const classification of modifiedClassifications) {
-    if (classification.explainedBy === singleBranch) {
+    if (explainsFile(classification)) {
       filesToRestore.push(classification.path);
     }
   }
 
   for (const classification of strayClassifications) {
-    if (classification.explainedBy === singleBranch) {
+    if (explainsFile(classification)) {
       filesToDelete.push(classification.path);
     }
   }
