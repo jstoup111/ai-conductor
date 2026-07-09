@@ -246,12 +246,58 @@ describe('integration/rebase-loop', () => {
     expect(await branchContains(baseSha)).toBe(true);
   });
 
-  it('a file-changing rebase kicks back to build then reconverges (FR-5/FR-6)', async () => {
+  // ── #420: gate-first mechanical re-verify fixtures ──────────────────────
+  //
+  // Anchors a fake `origin/main` remote-tracking ref at the merge-base of
+  // BASE and feature/foo (the fork point) so autoheal's evidence-derivation
+  // (`git merge-base origin/main HEAD`) resolves and the feature branch's
+  // own commits land inside the scanned range — see
+  // task-status-gate-recompute.test.ts's `initRepo()` for the same idiom.
+  // Independent of which non-conflicting commits are later added to BASE
+  // (merge-base of two divergent branches is the fixed common ancestor).
+  async function anchorOriginMain(): Promise<void> {
+    const forkPoint = await git('merge-base', BASE, 'feature/foo');
+    await git('remote', 'add', 'origin', dir).catch(() => {});
+    await git('update-ref', 'refs/remotes/origin/main', forkPoint);
+    // Without this, `resolveBase`'s origin-default-branch discovery falls
+    // back to `git remote show origin` — which, for a self-referencing
+    // `origin` pointing at THIS SAME working tree, reports whatever branch
+    // happens to be checked out (feature/foo) as the "HEAD branch" instead of
+    // BASE. That makes the daemon rebase step target `origin/feature/foo`
+    // (always already current with itself) and silently classify every
+    // rebase as `noop` — no invalidation, no kickback, test never reaches the
+    // behavior under test. Pointing origin/HEAD at origin/main directly (as a
+    // real clone would have it) makes `originDefaultBranch` resolve BASE
+    // without ever falling through to the misleading `remote show` path.
+    await git('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main');
+  }
+
+  // Writes a single plan file whose one task's `Files:` path matches
+  // `src/feature.ts`, then commits real git evidence (a `Task: 1` trailer on
+  // a commit touching that path) on feature/foo, and anchors origin/main so
+  // the evidence is inside the derivation range. After this, the build gate's
+  // mechanical predicate (CUSTOM_COMPLETION_PREDICATES.build) derives
+  // evidence-complete against the CURRENT feature/foo tree.
+  async function seedEvidenceCompleteBuild(): Promise<void> {
+    await mkdir(join(dir, '.docs/plans'), { recursive: true });
+    await writeFile(
+      join(dir, '.docs/plans/p.md'),
+      '### Task 1\n**Files:** `src/feature.ts`\n',
+    );
+    await writeFile(join(dir, 'src/feature.ts'), 'export const foo = 2;\n');
+    await git('add', '.');
+    await git('commit', '-m', 'feat: implement task 1\n\nTask: 1');
+    await anchorOriginMain();
+  }
+
+  it('a file-changing rebase with intact git evidence confirms build mechanically — no build dispatch (Story 1, Task 8)', async () => {
     await initRepoOnFeatureBranch({
       path: 'src/feature.ts',
       content: 'export const foo = 1;\n',
     });
-    // Base advances with a code-path change → file-changing rebase → kickback.
+    await seedEvidenceCompleteBuild();
+
+    // Base advances with a code-path change → file-changing rebase.
     await git('checkout', BASE);
     await mkdir(join(dir, 'src'), { recursive: true });
     await writeFile(join(dir, 'src/sibling.ts'), 'export const sib = 2;\n');
@@ -260,6 +306,7 @@ describe('integration/rebase-loop', () => {
     await git('checkout', 'feature/foo');
 
     await writeState(statePath, { ...FRONT_DONE });
+    const beforeRun = Date.now();
     const ran: string[] = [];
     let buildRuns = 0;
     const runner: StepRunner = {
@@ -271,35 +318,165 @@ describe('integration/rebase-loop', () => {
     };
     let completed = false;
     const kicks: Array<{ from: string; to: string }> = [];
+    let reverifiedBuild = false;
     events.on('feature_complete', () => {
       completed = true;
     });
     events.on('kickback', (e) => {
       if (e.type === 'kickback') kicks.push({ from: e.from, to: e.to });
     });
+    // `rebase_gate_reverified` does not exist in the ConductorEvent union yet
+    // (Task 1 of the plan adds it to src/types/events.ts) — vitest's esbuild
+    // transform does not type-check, so the string literal runs fine even
+    // though `tsc` would reject it pre-implementation.
+    (events as any).on('rebase_gate_reverified', (e: any) => {
+      if (e?.type === 'rebase_gate_reverified' && e.step === 'build') {
+        reverifiedBuild = true;
+      }
+    });
+    await conductorWith(runner).run();
+
+    // Evidence-intact: the mechanical pre-verify confirms build from git
+    // evidence, so the build agent is dispatched only once (not re-run by
+    // the rebase kickback) — was `=== 2` before this feature.
+    expect(buildRuns).toBe(1);
+    expect(kicks).not.toContainEqual({ from: 'rebase', to: 'build' });
+    expect(reverifiedBuild).toBe(true);
+    expect(completed).toBe(true);
+
+    const verdictRaw = await readFile(
+      join(dir, '.pipeline/gates/build.json'),
+      'utf-8',
+    );
+    const verdict = JSON.parse(verdictRaw);
+    expect(verdict.satisfied).toBe(true);
+    expect(verdict.reason).toMatch(/re-verified mechanically/);
+    expect(verdict.checkedAt).toBeGreaterThanOrEqual(beforeRun);
+  });
+
+  it('a file-changing rebase with genuinely-missing evidence still dispatches build (Story 2, Task 9)', async () => {
+    await initRepoOnFeatureBranch({
+      path: 'src/feature.ts',
+      content: 'export const foo = 1;\n',
+    });
+    await anchorOriginMain();
+
+    await git('checkout', BASE);
+    await mkdir(join(dir, 'src'), { recursive: true });
+    await writeFile(join(dir, 'src/sibling.ts'), 'export const sib = 2;\n');
+    await git('add', '.');
+    await git('commit', '-m', 'sibling code merged to base');
+    await git('checkout', 'feature/foo');
+
+    await writeState(statePath, { ...FRONT_DONE });
+    const ran: string[] = [];
+    let buildRuns = 0;
+    let buildReviewRuns = 0;
+    let verdictAtSecondBuildDispatch: any = null;
+    const runner: StepRunner = {
+      run: async (step) => {
+        ran.push(step);
+        if (step === 'build') {
+          buildRuns++;
+          if (buildRuns === 2) {
+            // Capture the verdict the rebase step's invalidation wrote BEFORE
+            // this second dispatch's own completion write overwrites it —
+            // this is the intermediate on-disk shape the kickback produced.
+            try {
+              verdictAtSecondBuildDispatch = JSON.parse(
+                await readFile(join(dir, '.pipeline/gates/build.json'), 'utf-8'),
+              );
+            } catch {
+              verdictAtSecondBuildDispatch = null;
+            }
+            // The build agent's SECOND dispatch (post-rebase kickback) does
+            // the genuinely-pending work: task 2 finally gets its evidence
+            // trailer. Task 1's own evidence intentionally still does not
+            // exist at this point (see below) — the whole point of this
+            // fixture is that the build gate's FIRST-ever evaluation (right
+            // after this same runner's first dispatch, before any rebase
+            // even runs) must succeed WITHOUT a real plan/evidence-derivation
+            // check in play, so we don't introduce the plan file until the
+            // build_review step below — after that first check has already
+            // passed.
+            await writeFile(join(dir, 'src/other.ts'), 'export const other = 1;\n');
+            await git('add', '.');
+            await git('commit', '-m', 'feat: implement task 2\n\nTask: 2');
+          }
+        }
+        if (step === 'build_review') {
+          buildReviewRuns++;
+          if (buildReviewRuns === 1) {
+            // Introduce the plan (task 1 evidenced, task 2 NOT) only now —
+            // build's own FIRST completion check (right after its first
+            // dispatch above) already ran against a plan-less repo, where
+            // the build gate's real-git-evidence derivation is not engaged
+            // (no `.docs/plans/*.md` exists yet), so it passed on the
+            // ordinary artifact check. From here on the plan is on disk, so
+            // the REBASE step's mechanical pre-verify (once implemented) —
+            // and today's unconditional invalidation — both see the real,
+            // genuinely-incomplete evidence state for build's SECOND check.
+            await mkdir(join(dir, '.docs/plans'), { recursive: true });
+            await writeFile(
+              join(dir, '.docs/plans/p.md'),
+              '### Task 1\n**Files:** `src/feature.ts`\n\n### Task 2\n**Files:** `src/other.ts`\n',
+            );
+            await writeFile(join(dir, 'src/feature.ts'), 'export const foo = 2;\n');
+            await git('add', '.');
+            await git('commit', '-m', 'feat: implement task 1\n\nTask: 1');
+          }
+        }
+        return satisfy(step);
+      },
+    };
+    let completed = false;
+    const kicks: Array<{ from: string; to: string }> = [];
+    let reverifiedBuild = false;
+    events.on('feature_complete', () => {
+      completed = true;
+    });
+    events.on('kickback', (e) => {
+      if (e.type === 'kickback') kicks.push({ from: e.from, to: e.to });
+    });
+    (events as any).on('rebase_gate_reverified', (e: any) => {
+      if (e?.type === 'rebase_gate_reverified' && e.step === 'build') {
+        reverifiedBuild = true;
+      }
+    });
 
     await conductorWith(runner).run();
 
-    // A code/test-changing rebase invalidates build (kickback-shaped), so build
-    // runs a second time before the loop converges to finish.
+    // Task 2 has no evidence → build is genuinely incomplete → today's
+    // unconditional-invalidation behavior is preserved (C3).
     expect(buildRuns).toBe(2);
     expect(kicks).toContainEqual({ from: 'rebase', to: 'build' });
+    expect(reverifiedBuild).toBe(false);
     expect(completed).toBe(true);
+
+    expect(verdictAtSecondBuildDispatch).not.toBeNull();
+    expect(verdictAtSecondBuildDispatch.satisfied).toBe(false);
+    expect(verdictAtSecondBuildDispatch.kickback?.from).toBe('rebase');
+    expect(typeof verdictAtSecondBuildDispatch.kickback?.evidence).toBe('string');
+    expect(verdictAtSecondBuildDispatch.kickback.evidence).toMatch(
+      /rebase changed code\/test paths/,
+    );
   });
 
   it(
-    'a file-changing rebase kickback re-verifies build_review too, not just build/manual_test ' +
-      '(TS-5 negative 4, jstoup111/ai-conductor#324, Task 18)',
+    'a file-changing rebase kickback re-verifies build_review too, even when build itself is ' +
+      'mechanically confirmed and skipped (Story 3, Task 10, amends TS-5 negative 4 / #324 Task 18)',
     async () => {
-      // The re-verify target set for a code-changing rebase kickback must be
-      // {build, build_review, manual_test}: build_review grades the diff
-      // that the rebase just changed, so it must be invalidated and re-run
-      // alongside build and manual_test — the selector must never be able to
-      // pick manual_test on a stale build_review verdict.
+      // The re-verify target set for a code-changing rebase kickback must
+      // still include build_review even on the evidence-intact lap:
+      // build_review grades the diff that the rebase just changed, so it is
+      // NOT eligible for the mechanical pre-verify (ADR: not tree-attesting)
+      // and must re-run regardless of whether build itself was skipped.
       await initRepoOnFeatureBranch({
         path: 'src/feature.ts',
         content: 'export const foo = 1;\n',
       });
+      await seedEvidenceCompleteBuild();
+
       await git('checkout', BASE);
       await mkdir(join(dir, 'src'), { recursive: true });
       await writeFile(join(dir, 'src/sibling.ts'), 'export const sib = 2;\n');
@@ -313,9 +490,11 @@ describe('integration/rebase-loop', () => {
           ? { stdout: 'refs/remotes/origin/feature/x\n' }
           : { stdout: '' };
       const config = { build_review: { enabled: true } };
+      let buildRuns = 0;
       let buildReviewRuns = 0;
       const runner: StepRunner = {
         run: async (step) => {
+          if (step === 'build') buildRuns++;
           if (step === 'build_review') buildReviewRuns++;
           return satisfy(step);
         },
@@ -346,13 +525,186 @@ describe('integration/rebase-loop', () => {
       await conductor.run();
 
       // build_review ran once before the rebase and a second time as part of
-      // the rebase re-verify — the selector never jumped straight from build
-      // to manual_test on a stale build_review verdict.
+      // the rebase re-verify — even though build itself was mechanically
+      // confirmed and NOT re-dispatched (buildRuns stays 1), build_review is
+      // not eligible for the pre-verify and always re-runs.
+      expect(buildRuns).toBe(1);
       expect(buildReviewRuns).toBe(2);
       expect(kicks).toContainEqual({ from: 'rebase', to: 'build_review' });
+      expect(kicks).not.toContainEqual({ from: 'rebase', to: 'build' });
       expect(completed).toBe(true);
     },
   );
+
+  it('a file-changing rebase invalidates manual_test despite a fresh same-session all-PASS results file (Story 3 negative, Task 10)', async () => {
+    // manual_test's predicate is NOT tree-attesting (latest-attempt scan +
+    // session-freshness mtime) — a pre-rebase PASS file written earlier in
+    // the SAME daemon session must not satisfy the gate without a re-run.
+    await initRepoOnFeatureBranch({
+      path: 'src/feature.ts',
+      content: 'export const foo = 1;\n',
+    });
+    await seedEvidenceCompleteBuild();
+
+    await git('checkout', BASE);
+    await mkdir(join(dir, 'src'), { recursive: true });
+    await writeFile(join(dir, 'src/sibling.ts'), 'export const sib = 2;\n');
+    await git('add', '.');
+    await git('commit', '-m', 'sibling code merged to base');
+    await git('checkout', 'feature/foo');
+
+    await writeState(statePath, { ...FRONT_DONE });
+    let manualTestRuns = 0;
+    let verdictAtSecondManualTestRun: any = null;
+    const runner: StepRunner = {
+      run: async (step) => {
+        if (step === 'manual_test') {
+          manualTestRuns++;
+          if (manualTestRuns === 2) {
+            // Read the on-disk verdict BEFORE this run's own satisfy() call
+            // overwrites it — this is the state the rebase kickback left
+            // behind: the fresh all-PASS file from lap 1 must have already
+            // been invalidated, not trusted as still-current.
+            const raw = await readFile(
+              join(dir, '.pipeline/gates/manual_test.json'),
+              'utf-8',
+            );
+            verdictAtSecondManualTestRun = JSON.parse(raw);
+          }
+        }
+        return satisfy(step);
+      },
+    };
+    let completed = false;
+    events.on('feature_complete', () => {
+      completed = true;
+    });
+
+    await conductorWith(runner).run();
+
+    expect(manualTestRuns).toBe(2);
+    expect(verdictAtSecondManualTestRun).not.toBeNull();
+    expect(verdictAtSecondManualTestRun.satisfied).toBe(false);
+    expect(verdictAtSecondManualTestRun.kickback?.from).toBe('rebase');
+    expect(completed).toBe(true);
+  });
+
+  it('a file-changing rebase never kicks back a skipped manual_test, only build_review (Story 3 negative, Task 10)', async () => {
+    await initRepoOnFeatureBranch({
+      path: 'src/feature.ts',
+      content: 'export const foo = 1;\n',
+    });
+    await git('checkout', BASE);
+    await mkdir(join(dir, 'src'), { recursive: true });
+    await writeFile(join(dir, 'src/sibling.ts'), 'export const sib = 2;\n');
+    await git('add', '.');
+    await git('commit', '-m', 'sibling code merged to base');
+    await git('checkout', 'feature/foo');
+
+    // Pre-seed manual_test as 'skipped' for this feature (mirrors
+    // test/engine/conductor.test.ts's seedShipTail idiom) so the selector
+    // never dispatches it.
+    await writeState(statePath, { ...FRONT_DONE, manual_test: 'skipped' });
+    const ran: string[] = [];
+    let completed = false;
+    const kicks: Array<{ from: string; to: string }> = [];
+    events.on('feature_complete', () => {
+      completed = true;
+    });
+    events.on('kickback', (e) => {
+      if (e.type === 'kickback') kicks.push({ from: e.from, to: e.to });
+    });
+
+    await conductorWith(passthroughRunner(ran)).run();
+
+    expect(ran).not.toContain('manual_test');
+    expect(kicks).toContainEqual({ from: 'rebase', to: 'build_review' });
+    expect(kicks).not.toContainEqual({ from: 'rebase', to: 'manual_test' });
+    expect(completed).toBe(true);
+  });
+
+  it('regression: a build_review kickback re-opening build is dispatched despite intact git evidence (Story 4, Task 11 — expected: passes immediately)', async () => {
+    // The mechanical pre-verify lives ONLY inside the rebase invalidation
+    // path (applyRebaseVerdicts). This test never runs a rebase at all — it
+    // pins that a build_review-authored kickback (simulating a review
+    // requesting rework) always dispatches build, even though build's own
+    // git evidence still derives complete. No rebase step needs to exist for
+    // this to hold; it is a structural property of where the pre-verify is
+    // wired, so it should pass before and after the feature lands.
+    await initRepoOnFeatureBranch({
+      path: 'src/feature.ts',
+      content: 'export const foo = 1;\n',
+    });
+    await seedEvidenceCompleteBuild();
+
+    await writeState(statePath, { ...FRONT_DONE });
+    const fakeGit: GitRunner = async (args) =>
+      args.includes('--symbolic-full-name')
+        ? { stdout: 'refs/remotes/origin/feature/x\n' }
+        : { stdout: '' };
+    const config = { build_review: { enabled: true } };
+    let buildRuns = 0;
+    let reviewKickbackWritten = false;
+    const runner: StepRunner = {
+      run: async (step) => {
+        if (step === 'build') buildRuns++;
+        if (step === 'build_review' && !reviewKickbackWritten) {
+          reviewKickbackWritten = true;
+          // Simulate build_review authoring a kickback verdict re-opening
+          // build directly (kickback.from === 'build_review'), NOT a rebase
+          // invalidation — this is what a real review-FAIL write looks like
+          // on disk (see gate-verdicts.ts writeVerdict).
+          await mkdir(join(dir, '.pipeline/gates'), { recursive: true });
+          await writeFile(
+            join(dir, '.pipeline/gates/build.json'),
+            JSON.stringify({
+              satisfied: false,
+              reason: 'review requested rework',
+              checkedAt: Date.now(),
+              kickback: { from: 'build_review', evidence: 'rubric: scope violation' },
+            }),
+          );
+          // build_review's OWN objective completion (BUILD_REVIEW_VERDICT —
+          // .pipeline/build-review.json) must still pass, or the loop gets
+          // stuck retrying build_review itself and never reaches the build
+          // kickback it just wrote above.
+          return satisfy('build_review');
+        }
+        return satisfy(step);
+      },
+    };
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      daemon: true,
+      verifyArtifacts: true,
+      mode: 'auto',
+      fromStep: 'build',
+      maxRetries: 1,
+      git: fakeGit,
+      config,
+    });
+
+    let completed = false;
+    events.on('feature_complete', () => {
+      completed = true;
+    });
+
+    await conductor.run();
+
+    // build_review's kickback re-opened build — the loop must dispatch it
+    // for rework regardless of build's intact evidence. No mechanical
+    // pre-check anywhere intercepts a non-rebase kickback. (`build` is not a
+    // registered `kickbackTarget` step — unlike prd/architecture_review/
+    // stories/plan — so the selector reselects it purely off the verdict
+    // file's `satisfied: false`; no `kickback` event is emitted for this path
+    // today, only for the rebase-specific carve-out, so this pin does not
+    // assert on one.)
+    expect(buildRuns).toBe(2);
+    expect(completed).toBe(true);
+  });
 
   it('auto-resolves a CHANGELOG-only conflict keeping both entries exactly once (FR-7)', async () => {
     // Both base and branch append a DIFFERENT entry under ## [Unreleased] →
