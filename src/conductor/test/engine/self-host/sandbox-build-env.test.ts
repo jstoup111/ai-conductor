@@ -8,6 +8,8 @@ import {
   readdir,
   realpath,
   lstat,
+  chmod,
+  stat,
 } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -404,6 +406,103 @@ describe('SandboxBuildEnv (TR-5/TR-6)', () => {
     } finally {
       await sandbox.teardown();
     }
+  });
+
+  // ── Write-fence provisioning (TR-4) ─────────────────────────────────────────
+  // The sandbox provisions a write-fence script that blocks edits to the live
+  // harness checkout (outside the worktree) while permitting edits within the
+  // worktree and unrelated repositories. The script is wired into settings.json
+  // as a PreToolUse hook and materialized on disk with +x mode.
+
+  it('provisions the write-fence script into the sandbox: settings.json contains fence entry, script exists and is executable, no placeholder residue', async () => {
+    const sandbox = await provisionSandboxBuildEnv(opts());
+    try {
+      // settings.json contains the fence PreToolUse entry
+      const settingsPath = join(sandbox.configDir, 'settings.json');
+      const settingsContent = await readFile(settingsPath, 'utf-8');
+      const settings = JSON.parse(settingsContent);
+      expect(settings.hooks).toBeDefined();
+      expect(Array.isArray(settings.hooks.PreToolUse)).toBe(true);
+      const fenceEntry = settings.hooks.PreToolUse.find(
+        (hook: Record<string, unknown>) =>
+          typeof hook === 'object' &&
+          hook !== null &&
+          'matcher' in hook &&
+          hook.matcher === 'Edit|Write|MultiEdit|NotebookEdit|Bash' &&
+          'hooks' in hook &&
+          Array.isArray(hook.hooks) &&
+          hook.hooks.some(
+            (h: unknown) =>
+              typeof h === 'object' &&
+              h !== null &&
+              'command' in h &&
+              (h as Record<string, unknown>).command?.toString().includes('write-fence.sh'),
+          ),
+      );
+      expect(fenceEntry).toBeDefined();
+
+      // The write-fence.sh script exists
+      const scriptPath = join(sandbox.configDir, 'write-fence.sh');
+      expect(existsSync(scriptPath)).toBe(true);
+
+      // Script is executable (+x mode)
+      const stats = await stat(scriptPath);
+      // Check if the owner execute bit is set (mode & 0o100)
+      expect((stats.mode & 0o100) !== 0).toBe(true);
+
+      // Script content has no placeholder residue (baked roots verified)
+      const scriptContent = await readFile(scriptPath, 'utf-8');
+      expect(scriptContent).toContain(`WORKTREE_ROOT="${worktree}"`);
+      expect(scriptContent).toContain(`HARNESS_ROOT="${worktree}"`);
+      // No placeholder patterns (bash scripts legitimately contain < for comparisons)
+      expect(scriptContent).not.toContain('{{');
+      expect(scriptContent).not.toContain('}}');
+      expect(scriptContent).not.toContain('<placeholder>');
+      expect(scriptContent).not.toContain('PLACEHOLDER');
+    } finally {
+      await sandbox.teardown();
+    }
+  });
+
+  it('fails closed when fence script write fails (fs error): SandboxProvisionError thrown, partial sandbox cleaned up, build not launched', async () => {
+    let createdConfigDir = '';
+    const failingFs: SandboxFs = {
+      ...realSandboxFs,
+      mkdtemp: async (prefix) => {
+        createdConfigDir = await realSandboxFs.mkdtemp(prefix);
+        return createdConfigDir;
+      },
+      writeFile: async (path, data) => {
+        // Fail when writing the write-fence.sh script
+        if (path.includes('write-fence.sh')) {
+          throw Object.assign(new Error('ENOSPC: no space left on device'), {
+            code: 'ENOSPC',
+            path,
+          });
+        }
+        return realSandboxFs.writeFile(path, data);
+      },
+    };
+
+    const err = await provisionSandboxBuildEnv(opts({ fs: failingFs })).catch((e) => e);
+    expect(err).toBeInstanceOf(SandboxProvisionError);
+    expect(String(err.message)).toContain('write-fence.sh');
+
+    // Partial sandbox removed — never launched
+    expect(createdConfigDir).not.toBe('');
+    expect(existsSync(createdConfigDir)).toBe(false);
+    expect(await readdir(base)).toEqual([]);
+  });
+
+  it('teardown removes the write-fence.sh script (no residue after sandbox cleanup)', async () => {
+    const sandbox = await provisionSandboxBuildEnv(opts());
+    const scriptPath = join(sandbox.configDir, 'write-fence.sh');
+    expect(existsSync(scriptPath)).toBe(true);
+
+    await sandbox.teardown();
+
+    expect(existsSync(scriptPath)).toBe(false);
+    expect(existsSync(sandbox.configDir)).toBe(false);
   });
 });
 

@@ -137,7 +137,7 @@ describe('daemon-backlog — fastForwardRoot (per-poll root advance)', () => {
     await fastForwardRoot('/fake/repo', (m) => logs.push(m), git);
     expect(calls.some((c) => c[0] === 'fetch')).toBe(false);
     expect(calls.some((c) => c[0] === 'merge')).toBe(false);
-    expect(logs.join('\n')).toMatch(/not clean/);
+    expect(logs.join('\n')).toMatch(/LEAK-SUSPECT/);
   });
 
   it('does NOT merge and does NOT throw when fetch fails (offline)', async () => {
@@ -294,6 +294,6 @@ describe('daemon-backlog — fastForwardRoot (git integration)', () => {
     await fastForwardRoot(repoDir, (m) => logs.push(m));
 
     await expect(access(join(repoDir, '.docs/plans/remote-2.md'))).rejects.toThrow();
-    expect(logs.join('\n')).toMatch(/not clean/);
+    expect(logs.join('\n')).toMatch(/LEAK-SUSPECT/);
   });
 });

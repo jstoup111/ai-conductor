@@ -208,6 +208,24 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   substituted `gh` command for the specific step that failed (issue comment or label-add), which
   `dispatchEngineer`'s `handoff`/`land` primitives print to stderr without affecting stdout or the
   exit code — a stalled write-back never turns a successful handoff into a failure.
+- **Main-checkout leak triage with byte-identity-gated auto-heal (#380, adr-2026-07-08).** When
+  `maybeFastForward` discovers a dirty working tree, before giving up it now runs leak triage:
+  classifies every dirty file/untracked stray against candidate branch heads (daemon worktrees
+  prioritized, then local `feat/*`), and if a SINGLE candidate explains EVERY dirty entry via
+  byte-identity match, auto-heals by restoring tracked files and deleting strays, then proceeds
+  with fast-forward. Operator work is protected: heal requires whole-tree explanation by one
+  branch, so any ambiguity keeps hands off. Unexplained dirty files escalate from a one-line skip
+  to a loud LEAK-SUSPECT WARN with per-file diff-stat so the stall is never silent. Restore/delete
+  selection matches a file's full `allExplainedBy` set against the chosen branch, not just its
+  first-matched candidate, so a file explained by more than one branch is never dropped from an
+  otherwise-valid all-or-nothing heal.
+- **Write-fence sandbox for self-host builds (#380, adr-2026-07-08).** A daemon-owned PreToolUse
+  hook is provisioned into the self-build sandbox's `settings.json` to block writes targeting the
+  harness main checkout outside the build worktree. Edit/Write/MultiEdit/NotebookEdit targeting
+  paths under the harness root but outside `.worktrees/` are blocked with guidance to use the
+  worktree path; Bash commands referencing main-checkout paths are heuristically screened and
+  blocked (the deterministic leak-triage/auto-heal layer is the fallback). The fence never fires
+  on worktree-internal paths, temp directories, or unrelated repos (scoped to self-host builds).
 
 ### Changed
 

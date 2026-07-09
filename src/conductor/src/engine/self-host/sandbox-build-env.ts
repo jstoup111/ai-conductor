@@ -37,6 +37,7 @@
 import * as fsp from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
+import { generateFenceScript, mergeFenceIntoSettings } from './write-fence.js';
 
 /** Injectable filesystem seam so the adversarial branches are deterministic. */
 export interface SandboxFs {
@@ -51,6 +52,8 @@ export interface SandboxFs {
   writeFile(path: string, data: string): Promise<void>;
   /** Copy `src` → `dest`; callers guard with `pathExists` first. */
   copyFile(src: string, dest: string): Promise<void>;
+  /** Set file mode (permissions) — used to make scripts executable. */
+  chmod(path: string, mode: number): Promise<void>;
 }
 
 export const realSandboxFs: SandboxFs = {
@@ -62,6 +65,7 @@ export const realSandboxFs: SandboxFs = {
   readFile: (path) => fsp.readFile(path, 'utf-8').then((t) => t, () => null),
   writeFile: (path, data) => fsp.writeFile(path, data, 'utf-8'),
   copyFile: (src, dest) => fsp.copyFile(src, dest),
+  chmod: (path, mode) => fsp.chmod(path, mode),
 };
 
 /** Thrown when the sandbox cannot be provisioned; names the failed path. */
@@ -193,6 +197,15 @@ export async function provisionSandboxBuildEnv(opts: ProvisionOptions): Promise<
       worktreeRoot: opts.worktreeRoot,
     });
 
+    // write-fence.sh: provision the fence script that blocks edits to the live
+    // harness checkout. The script is materialized with +x mode and wired into
+    // settings.json as a PreToolUse hook.
+    await provisionWriteFence(fs, {
+      configDir,
+      harnessRoot: opts.harnessRoot,
+      worktreeRoot: opts.worktreeRoot,
+    });
+
     // .claude.json: propagate the operator's EXISTING workspace trust so the
     // headless build honors the repo's `.claude/settings.json` permissions.
     // Propagate-only — when the operator has not trusted the harness root,
@@ -233,6 +246,32 @@ async function provisionSettings(
   if (raw === null) return; // no global settings.json → nothing to provision
   const rewritten = await retargetHarnessPaths(fs, raw, args.harnessRoot, args.worktreeRoot);
   await fs.writeFile(args.dest, rewritten);
+}
+
+/** Generate and provision the write-fence script, then merge it into settings.json. */
+async function provisionWriteFence(
+  fs: SandboxFs,
+  args: { configDir: string; harnessRoot: string; worktreeRoot: string },
+): Promise<void> {
+  // Generate the fence script with baked-in roots
+  const scriptContent = generateFenceScript(args.worktreeRoot, args.harnessRoot);
+  const scriptPath = join(args.configDir, 'write-fence.sh');
+
+  // Write the script to disk
+  await fs.writeFile(scriptPath, scriptContent);
+
+  // Make it executable (mode 0o755 for rwxr-xr-x, but we only care about +x for owner)
+  await fs.chmod(scriptPath, 0o755);
+
+  // Read the settings.json that was just written
+  const settingsPath = join(args.configDir, 'settings.json');
+  const settingsJson = await fs.readFile(settingsPath);
+
+  // Merge the fence entry into settings.json with the script path
+  const updatedSettings = mergeFenceIntoSettings(settingsJson, scriptPath);
+
+  // Write the updated settings back to disk
+  await fs.writeFile(settingsPath, updatedSettings);
 }
 
 /**

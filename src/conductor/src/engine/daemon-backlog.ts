@@ -1,6 +1,7 @@
 import { execFile as execFileCb } from 'node:child_process';
-import { basename, isAbsolute, relative } from 'node:path';
+import { basename, isAbsolute, relative, join as pathJoin } from 'node:path';
 import { promisify } from 'node:util';
+import { rm } from 'node:fs/promises';
 import type { BacklogItem } from './daemon.js';
 import {
   planHasDependencyTree,
@@ -17,6 +18,15 @@ import { decideSpecGate, type GateDecision } from './owner-gate/gate.js';
 import type { BlockerResolver, BlockerVerdict } from './blocker-resolver.js';
 import { announceWaitingForRoot } from './daemon-waiting-announce.js';
 import { listShippedRecords, parseShippedRecord, specHash } from './shipped-record.js';
+import {
+  healPlan,
+  enumerateCandidates,
+  reVerifyHealPlan,
+  renderLeakSuspectWarn,
+  computeFingerprint,
+  shouldEmitFullWarn,
+  type LeakWarnState,
+} from './leak-triage.js';
 
 const execFile = promisify(execFileCb);
 
@@ -130,12 +140,18 @@ export type DiscoveryLogger = {
  * for fetch failures. When provided, calls onFetchFailed on fetch errors and
  * onFetchSucceeded on success, allowing the daemon to log fetch state changes
  * only once instead of spamming the log on every retry.
+ *
+ * Task 13: The `leakWarnState` parameter enables fingerprint-throttled LEAK-SUSPECT WARNs
+ * across polls. When provided, tracks the fingerprint of unexplained dirty state and emits
+ * only a short line on unchanged state (avoiding spam on identical errors every poll).
+ * When the dirty state changes, emits the full WARN again.
  */
 export async function fastForwardRoot(
   projectRoot: string,
   log: (msg: string) => void = () => {},
   gitOverride?: GitRunner,
   discoveryLogger?: DiscoveryLogger,
+  leakWarnState?: LeakWarnState,
 ): Promise<void> {
   const git = gitOverride ?? makeGitRunner(projectRoot);
 
@@ -172,13 +188,154 @@ export async function fastForwardRoot(
     return;
   }
 
-  // Refuse to touch a dirty working tree — a `--ff-only` merge could fail or
-  // clobber uncommitted/untracked operator changes.
-  const status = await git(['status', '--porcelain']);
-  if (status.exitCode !== 0 || status.stdout.trim() !== '') {
+  // Check for dirty working tree and attempt to heal if possible.
+  // Containment boundary (Task 14): Wrap the entire triage/heal flow in try/catch
+  // so that any triage error (status check, enumeration, planning, healing) is logged
+  // and skipped safely, never crashing the poll loop.
+  try {
+    const status = await git(['status', '--porcelain']);
+    if (status.exitCode !== 0 || status.stdout.trim() !== '') {
+      // Tree is dirty — attempt to heal if it's fully explained by a candidate branch
+      const candidates = await enumerateCandidates(git);
+      const plan = await healPlan(git, status.stdout, candidates);
+
+      if (plan.canHeal) {
+        // Execute the heal: restore files and delete strays
+        try {
+          // TOCTOU re-verification (Task 9): Before executing any restores, compute the current
+          // hashes of all files to restore. Then verify them immediately before restore execution
+          // to catch any changes that occurred between classification and restore time.
+          const expectedHashes = new Map<string, string>();
+          for (const filePath of plan.filesToRestore) {
+            const hashResult = await git(['hash-object', filePath]);
+            if (hashResult.exitCode === 0) {
+              expectedHashes.set(filePath, hashResult.stdout.trim());
+            }
+          }
+
+          // Re-verify that all files still have the expected content before restoring
+          const reVerifyResult = await reVerifyHealPlan(git, plan, expectedHashes);
+          if (!reVerifyResult.verified) {
+            // Re-verification failed — abort heal and skip fast-forward
+            log(
+              `WARN heal: re-verification failed — file '${reVerifyResult.failedFile}' ` +
+                `content changed between classification and restore; aborting heal. ` +
+                `Working tree remains dirty; skipping fast-forward.`,
+            );
+            return;
+          }
+
+          // Restore modified files
+          // Track failed files and abort heal on any restore failure (Task 10 / TR-2)
+          const failedFiles: string[] = [];
+          let healFailed = false;
+
+          for (const filePath of plan.filesToRestore) {
+            try {
+              const restored = await git(['restore', filePath]);
+              if (restored.exitCode !== 0) {
+                log(
+                  `heal: failed to restore ${filePath}: ${restored.stderr}; ` +
+                    `stopping heal attempt.`,
+                );
+                failedFiles.push(filePath);
+                healFailed = true;
+                break; // Skip remaining files on first failure
+              }
+            } catch (err) {
+              log(
+                `heal: failed to restore ${filePath}: ${err instanceof Error ? err.message : String(err)}; ` +
+                  `stopping heal attempt.`,
+              );
+              failedFiles.push(filePath);
+              healFailed = true;
+              break; // Skip remaining files on first failure
+            }
+          }
+
+          // Only proceed with deletes if restore succeeded
+          if (!healFailed) {
+            for (const filePath of plan.filesToDelete) {
+              try {
+                const absolutePath = pathJoin(projectRoot, filePath);
+                await rm(absolutePath);
+              } catch (err) {
+                log(
+                  `heal: failed to delete ${filePath}: ${err instanceof Error ? err.message : String(err)}; ` +
+                    `stopping heal attempt.`,
+                );
+                failedFiles.push(filePath);
+                healFailed = true;
+                break; // Skip remaining files on first failure
+              }
+            }
+
+            // Emit ONE WARN containing all candidate branch names and all healed paths
+            const allHealedPaths = [...plan.filesToRestore, ...plan.filesToDelete];
+            if (allHealedPaths.length > 0 && plan.explainedByAll) {
+              const candidateList = plan.explainedByAll.join(', ');
+              log(
+                `WARN heal: auto-healed worktree isolation leak explained by ${candidateList} ` +
+                  `(restored: ${plan.filesToRestore.join(', ') || 'none'}; ` +
+                  `deleted: ${plan.filesToDelete.join(', ') || 'none'}); ` +
+                  `fast-forward to origin/${defaultBranch} proceeding.`,
+              );
+            }
+          }
+
+          // If heal failed, log a WARN and skip fast-forward (never throw)
+          if (healFailed) {
+            log(
+              `WARN heal: failed to heal file(s): ${failedFiles.join(', ')}; ` +
+                `tree remains dirty, skipping fast-forward.`,
+            );
+            return;
+          }
+
+          // Fall through to the fetch/merge logic below
+        } catch (err) {
+          // Heal execution failed — log the error and skip the fast-forward
+          log(
+            `heal error: ${err instanceof Error ? err.message : String(err)}; ` +
+              `skipping fast-forward.`,
+          );
+          return;
+        }
+      } else {
+        // Tree is dirty and cannot be healed — use fingerprinting to throttle spam (Task 13)
+        // Compute the current dirty state fingerprint (sorted path+hash pairs)
+        const currentFingerprint = await computeFingerprint(git, status.stdout);
+
+        // Check if fingerprint changed or if this is the first call
+        const shouldEmitFull = shouldEmitFullWarn(
+          currentFingerprint,
+          leakWarnState?.fingerprint ?? null,
+        );
+
+        // Update the state with the new fingerprint for next poll
+        if (leakWarnState) {
+          leakWarnState.fingerprint = currentFingerprint;
+        }
+
+        // Emit full WARN if fingerprint changed or if this is the first call
+        if (shouldEmitFull) {
+          const warnMsg = renderLeakSuspectWarn(status.stdout, plan);
+          log(warnMsg);
+        } else {
+          // Fingerprint unchanged: emit a short throttle line instead of full WARN
+          log(`dirty tree unchanged since last poll; remaining dirty; skipping fast-forward.`);
+        }
+        return;
+      }
+    }
+  } catch (err) {
+    // Triage/enumeration/heal failed at any point — log and skip the fast-forward
+    // This is the outer containment boundary: ANY triage error is caught here and logged,
+    // so the poll loop never crashes due to triage failures. The working tree remains dirty,
+    // and the next poll will retry (fall-back: dirty tree blocks fast-forward safety).
     log(
-      `skip fast-forward: working tree at ${projectRoot} is not clean. Commit/stash ` +
-        `changes so the daemon can track origin/${defaultBranch}.`,
+      `ERROR triage: ${err instanceof Error ? err.message : String(err)}; ` +
+        `dirty tree (triage error) — skipping fast-forward.`,
     );
     return;
   }
