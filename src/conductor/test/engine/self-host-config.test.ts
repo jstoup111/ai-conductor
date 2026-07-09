@@ -1,3 +1,4 @@
+import { homedir } from 'os';
 import { describe, it, expect } from 'vitest';
 import { validateConfig } from '../../src/engine/config.js';
 import {
@@ -103,6 +104,8 @@ describe('resolved-config — resolveSelfHostConfig (TR-11 safe defaults)', () =
       releaseArtifactGate: true,
       versionFreeze: null,
       authParkTimeoutMinutes: 60,
+      buildAuthMode: 'daemon-token',
+      buildAuthTokenPath: `${homedir()}/.ai-conductor/build-auth`,
     });
   });
 
