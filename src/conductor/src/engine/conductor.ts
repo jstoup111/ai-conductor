@@ -1499,7 +1499,8 @@ export class Conductor {
               });
 
               if (parkResult.type === 'timeout') {
-                // Task 11: Auth-park timeout with daemon token
+                // Task 13 (TR-4): Daemon-token park timeout HALT names token path and re-mint instructions
+                // (never operator OAuth file, never "retries exhausted"). Preserves retry budget contract.
                 haltReason =
                   `Daemon build token expired and refresh timed out.\n` +
                   `Token file: ${tokenPath}\n` +

@@ -426,4 +426,148 @@ describe('conductor auth-park: daemon-token mode', () => {
       nowSpy.mockRestore();
     }
   });
+
+  it('park timeout HALT: does not mention expiresAt or retries exhausted (daemon-token specific)', async () => {
+    const runner: StepRunner = {
+      run: vi.fn(async (step: string): Promise<StepRunResult> => {
+        if (step !== 'build') return { success: true };
+        return { success: false, authFailure: true } as AuthResult;
+      }),
+    };
+
+    const mockGuardrails = {
+      resolveHarnessRoot: vi.fn().mockResolvedValue(dir),
+      resolveInstalledHarnessRoot: vi.fn().mockResolvedValue({ status: 'ok' as const, root: dir }),
+      relink: vi.fn(),
+      provisionSandbox: vi.fn(async () => ({
+        configDir: dir,
+        childEnv: () => process.env,
+        teardown: async () => {},
+      })),
+      versionGate: vi.fn().mockResolvedValue({ ok: true }),
+      releaseGate: vi.fn().mockResolvedValue({ ok: true }),
+    };
+
+    const realNow = Date.now();
+    let clockOffset = 0;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => realNow + clockOffset);
+
+    const sleepFn = vi.fn(async () => {
+      clockOffset += 120_000;
+    });
+
+    try {
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        fromStep: 'build',
+        mode: 'auto',
+        daemon: true,
+        selfHost: true,
+        maxRetries: 3,
+        sleepFn,
+        selfHostGuardrails: mockGuardrails as any,
+        config: selfHostConfig(),
+      });
+
+      const haltPath = join(dir, '.pipeline/HALT');
+      let haltBody: string | null = null;
+
+      await conductor.run();
+
+      // Read HALT marker
+      try {
+        const { readFile } = await import('node:fs/promises');
+        haltBody = await readFile(haltPath, 'utf-8');
+      } catch {
+        // HALT may not exist
+      }
+
+      expect(haltBody).not.toBeNull();
+      // Task 13: Must NOT mention expiresAt
+      expect(haltBody).not.toContain('expiresAt');
+      expect(haltBody).not.toContain('Expires at');
+      // Task 13: Must NOT mention "retries exhausted"
+      expect(haltBody).not.toContain('retries exhausted');
+      // Task 13: Must name daemon token path and setup command
+      expect(haltBody).toContain(tokenPath);
+      expect(haltBody).toContain('claude setup-token');
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('park timeout: retry budget not consumed (park does not count as a retry)', async () => {
+    let buildAttempts = 0;
+    const runner: StepRunner = {
+      run: vi.fn(async (step: string): Promise<StepRunResult> => {
+        if (step !== 'build') return { success: true };
+        buildAttempts++;
+        if (buildAttempts === 1) {
+          return { success: false, authFailure: true } as AuthResult;
+        }
+        return { success: true };
+      }),
+    };
+
+    const mockGuardrails = {
+      resolveHarnessRoot: vi.fn().mockResolvedValue(dir),
+      resolveInstalledHarnessRoot: vi.fn().mockResolvedValue({ status: 'ok' as const, root: dir }),
+      relink: vi.fn(),
+      provisionSandbox: vi.fn(async () => ({
+        configDir: dir,
+        childEnv: () => process.env,
+        teardown: async () => {},
+      })),
+      versionGate: vi.fn().mockResolvedValue({ ok: true }),
+      releaseGate: vi.fn().mockResolvedValue({ ok: true }),
+    };
+
+    const realNow = Date.now();
+    let clockOffset = 0;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => realNow + clockOffset);
+
+    let parkCalls = 0;
+    const sleepFn = vi.fn(async () => {
+      parkCalls++;
+      if (parkCalls === 1) {
+        // First park sleep: trigger resume
+        clockOffset += 10_000;
+        await utimes(tokenPath, new Date(), new Date());
+        await writeFile(tokenPath, 'tok-v2', 'utf-8');
+      } else {
+        clockOffset += 120_000;
+      }
+    });
+
+    try {
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        fromStep: 'build',
+        mode: 'auto',
+        daemon: true,
+        selfHost: true,
+        maxRetries: 1, // Only 1 retry budget
+        sleepFn,
+        selfHostGuardrails: mockGuardrails as any,
+        config: selfHostConfig(),
+      });
+
+      await conductor.run();
+
+      // Task 13: Park should NOT consume retry budget. With maxRetries=1:
+      // - Attempt 1: build fails with authFailure
+      // - Park (does not consume budget)
+      // - Attempt 2 (same attempt counter, retry budget consumed here): build succeeds
+      // So we should see exactly 2 build calls total, confirming park did not count as a separate retry.
+      expect(buildAttempts).toBe(2);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
 });
