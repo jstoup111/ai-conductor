@@ -611,7 +611,7 @@ function validateSelfHostBlock(raw: unknown): ConfigError | null {
     return { type: 'validation_error', message: 'harness_self_host must be an object' };
   }
   const obj = raw as Record<string, unknown>;
-  const allowed = new Set(['activation', 'version_freeze', ...SELF_HOST_GATE_KEYS]);
+  const allowed = new Set(['activation', 'version_freeze', 'auth_park_timeout_minutes', 'build_auth', ...SELF_HOST_GATE_KEYS]);
   for (const k of Object.keys(obj)) {
     // Reject unknown keys so a typo'd gate name surfaces instead of silently
     // leaving that gate at its (enabled) default — TR-11 negative path.
@@ -641,6 +641,45 @@ function validateSelfHostBlock(raw: unknown): ConfigError | null {
         message: `harness_self_host.${k} must be a boolean`,
       };
     }
+  }
+  if (obj.auth_park_timeout_minutes !== undefined && typeof obj.auth_park_timeout_minutes !== 'number') {
+    return {
+      type: 'validation_error',
+      message: 'harness_self_host.auth_park_timeout_minutes must be a number',
+    };
+  }
+  if (obj.build_auth !== undefined) {
+    const err = validateBuildAuthBlock(obj.build_auth);
+    if (err) return err;
+  }
+  return null;
+}
+
+function validateBuildAuthBlock(raw: unknown): ConfigError | null {
+  if (!isPlainObject(raw)) {
+    return { type: 'validation_error', message: 'harness_self_host.build_auth must be an object' };
+  }
+  const obj = raw as Record<string, unknown>;
+  const allowed = new Set(['mode', 'token_path']);
+  for (const k of Object.keys(obj)) {
+    if (!allowed.has(k)) {
+      return {
+        type: 'validation_error',
+        message: `Unknown key in harness_self_host.build_auth: "${k}"`,
+      };
+    }
+  }
+  if (obj.mode !== undefined && typeof obj.mode !== 'string') {
+    return {
+      type: 'validation_error',
+      message: 'harness_self_host.build_auth.mode must be a string',
+    };
+  }
+  if (obj.token_path !== undefined && typeof obj.token_path !== 'string') {
+    return {
+      type: 'validation_error',
+      message: 'harness_self_host.build_auth.token_path must be a string',
+    };
   }
   return null;
 }

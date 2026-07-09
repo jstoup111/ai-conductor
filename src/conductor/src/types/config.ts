@@ -259,6 +259,17 @@ export interface HarnessSelfHostConfig {
    * Omitted → 60.
    */
   auth_park_timeout_minutes?: number;
+  /**
+   * Daemon build authentication configuration (TR-1/2/3/4).
+   * Specifies the authentication mode and token path for daemon-owned build
+   * credentials. Omitted → defaults applied by resolveSelfHostConfig.
+   */
+  build_auth?: {
+    /** Authentication mode: 'daemon-token' or 'api-key'. Optional; defaults apply at resolution. */
+    mode?: string;
+    /** Path to the daemon build-auth token file. Optional; defaults apply at resolution. */
+    token_path?: string;
+  };
 }
 
 export interface HarnessConfig {
