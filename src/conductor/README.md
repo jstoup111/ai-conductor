@@ -262,10 +262,17 @@ stale base:
   no-op rebase is the satisfied state, so re-entry after a kickback finds the branch current
   and proceeds to `finish` without re-invalidating (no false `MAX_GATE_SELECTIONS` HALT). A
   genuinely stale branch is never satisfied.
-- **Invalidation (code/test only)** — a clean rebase that changed **code/test paths** writes
-  `{satisfied:false, kickback:{from:'rebase'}}` for `build` (+`manual_test` if it ran) via the
-  existing kickback machinery → the selector routes back to `build`. A **docs-only /
-  CHANGELOG-only** change does **not** invalidate.
+- **Gate-first mechanical re-verify (code/test only)** — a clean rebase that changed
+  **code/test paths** first pre-verifies the `build` gate's objective completion predicate
+  (git evidence trailers, `root-commit..HEAD`, re-derived fresh) against the rebased tree. If
+  pre-verify passes (evidence intact), build dispatch is skipped, `{satisfied:true}` is written
+  fresh, and a `rebase_gate_reverified` event is emitted (`skippedDispatch:true`). If pre-verify
+  fails or throws, identical to prior behavior: `{satisfied:false, kickback:{from:'rebase'}}` for
+  `build` (+`manual_test` if it ran) and the selector routes back to `build` (fail-closed).
+  Consequence: evidence-complete rebases drop from ~45–60 min build-agent dispatch to ~1–2 min
+  mechanical re-derivation; evidence-missing rebases re-dispatch normally. `build_review` and
+  `manual_test` remain unconditionally invalidated. A **docs-only / CHANGELOG-only** change does
+  **not** invalidate. See `.docs/decisions/adr-2026-07-08-post-rebase-gate-first-mechanical-reverify.md`.
 - **CHANGELOG auto-resolve** — when `CHANGELOG.md` is the **sole** conflict and it's inside
   `## [Unreleased]`, the resolver takes the base's merged entries and re-appends this
   feature's `[Unreleased]` lines (captured `base..HEAD` pre-rebase) exactly once, then
@@ -277,8 +284,11 @@ stale base:
   the rebase **paused** (no `--abort`, conflict markers intact), does **not** mark the feature
   processed, and opens **no PR**.
 - **Events** — each outcome emits a typed event: `rebase_noop`, `rebase_changed`,
-  `rebase_changelog_resolved`, `rebase_conflict_halt` (best-effort; emission failure never
-  affects the rebase result).
+  `rebase_changelog_resolved`, `rebase_conflict_halt`, `rebase_gate_reverified` (best-effort;
+  emission failure never affects the rebase result). `rebase_gate_reverified` records a
+  successful pre-verify with fields: `step` (the gate name, e.g., `'build'`), `skippedDispatch`
+  (boolean: true = dispatch was mechanically skipped, false = pre-verify failed, re-dispatch
+  fired), and optional `reason` (human-readable explanation).
 
 #### Gated conflict resolution
 

@@ -249,6 +249,17 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Changed
 
+- **Post-rebase gate-first mechanical re-verify (Task 14):** file-changing finish-time rebases
+  no longer unconditionally dispatch the build agent. Instead, the rebase step pre-verifies the
+  build gate's objective completion predicate against the freshly-rebased tree. If the predicate
+  (git evidence trailers, `root-commit..HEAD`) remains satisfied post-rebase, dispatch is skipped
+  and a `rebase_gate_reverified` event is emitted with the step and optional reason
+  (`skippedDispatch: false` for re-dispatch, `true` for mechanical skip). If pre-verify fails or
+  throws, build is kicked back and re-dispatched as before (fail-closed). Scope: **`build` only**
+  — `build_review` and `manual_test` remain unconditionally invalidated. Consequence: the ~45–60 min
+  build-agent lap on every evidence-complete file-changing rebase drops to ~1–2 min mechanical
+  derivation; evidence-missing rebases re-dispatch normally. See `.docs/decisions/adr-2026-07-08-post-rebase-gate-first-mechanical-reverify.md`.
+
 - `--idle-poll` default raised: 5s → 60s (Task 18). Event-driven wake now handles the hot
   path (HALT clear detection), so the polling fallback can be slower. Override with
   `--idle-poll 5` to restore legacy behavior or when filesystem watch is unavailable.

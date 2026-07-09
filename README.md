@@ -1144,17 +1144,22 @@ dedicated test coverage (950+ tests). See the feature comparison in
   rebases the worktree branch onto the **discovered** origin default branch (fetched; falls
   back to the local base — no hardcoded `main`) before the PR is opened, so it's never built
   on a stale base. Its verdict is *branch already current with base*, so a no-op goes straight
-  to finish. A clean rebase that changed **code/test paths** kicks back to `build` to
-  re-verify; a **CHANGELOG-only** `[Unreleased]` conflict is auto-resolved (both features'
-  entries kept, each once); any other / mixed conflict triggers the **gated resolution loop**
-  — the daemon dispatches the `/rebase` skill up to `rebase_resolution_attempts` times
-  (config key, default 3; set to 0 to disable) before HALTing. A resolution is accepted only
-  when the branch is genuinely current with the base (FR-8) and no feature commits were
-  dropped (FR-9); a code-changing resolution kicks back to `build`/`manual_test` as normal.
-  If the loop is exhausted, the engine writes `.pipeline/HALT`, leaves the rebase **paused**,
-  and opens no PR. The gated resolution loop is daemon-only; the `/rebase` skill is also
-  manually invokable by an operator. Resume: resolve → `git rebase --continue` →
-  `rm .pipeline/HALT` → re-queue.
+  to finish. **Gate-first mechanical re-verify (evidence-intact optimization):** when a clean
+  rebase changes **code/test paths**, the `build` gate's objective completion predicate (git
+  evidence trailers, fresh re-derivation) is pre-verified against the rebased tree **before**
+  kicking back. If pre-verify passes, dispatch is skipped (~1–2 min mechanical confirmation
+  vs. ~45–60 min agent) and the gate is satisfied; if pre-verify fails or throws, `build` is
+  kicked back normally (fail-closed). `build_review` and `manual_test` remain unconditionally
+  invalidated. See `.docs/decisions/adr-2026-07-08-post-rebase-gate-first-mechanical-reverify.md`.
+  A **CHANGELOG-only** `[Unreleased]` conflict is auto-resolved (both features' entries kept,
+  each once); any other / mixed conflict triggers the **gated resolution loop** — the daemon
+  dispatches the `/rebase` skill up to `rebase_resolution_attempts` times (config key, default
+  3; set to 0 to disable) before HALTing. A resolution is accepted only when the branch is
+  genuinely current with the base (FR-8) and no feature commits were dropped (FR-9); a
+  code-changing resolution kicks back to `build`/`manual_test` as normal. If the loop is
+  exhausted, the engine writes `.pipeline/HALT`, leaves the rebase **paused**, and opens no PR.
+  The gated resolution loop is daemon-only; the `/rebase` skill is also manually invokable by
+  an operator. Resume: resolve → `git rebase --continue` → `rm .pipeline/HALT` → re-queue.
 - **Daemon mode** (`conduct-ts daemon`): drains a backlog of features that already have
   stories **and** plans, running each in its own worktree (parallel via `--concurrency N`,
   bounded by `--max-items`), and opening a PR on finish. Per-feature failures are isolated;
