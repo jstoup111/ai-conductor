@@ -1810,7 +1810,7 @@ Work on the literal task-N form.
     // `git log --format=%H --reverse HEAD` to resolve a missing anchor has
     // been removed from deriveCompletion. Guard against regression by
     // asserting the source no longer contains that invocation.
-    const src = await readFile(join(process.cwd(), 'src/engine/autoheal.ts'), 'utf-8');
+    const src = await readFile(join(process.cwd(), 'src/conductor/src/engine/autoheal.ts'), 'utf-8');
     expect(src).not.toMatch(/--reverse/);
   });
 });
