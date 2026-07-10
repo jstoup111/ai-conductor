@@ -146,3 +146,108 @@ describe('Task 15: OTel maps the three build-progress event kinds', () => {
     expect(progressEvent).toBeDefined();
   });
 });
+
+describe('Task 16: OTel negative paths for build-progress events', () => {
+  it('OTel disabled: no visualizer subscribes, so build-progress events emit with no throw and no export', async () => {
+    // Simulate the production FR-1 gate: resolveOtelConfig({}) is disabled, so no
+    // OtelVisualizer is ever constructed and start() is never called — the
+    // emitter has zero listeners for these event types.
+    const resolved = resolveOtelConfig({}, pipelineDir);
+    expect(resolved.enabled).toBe(false);
+
+    // No vis.start(emitter) call here — mirrors the production no-op gate.
+    await expect(
+      emitter.emit({ type: 'step_started', step: 'build', index: 4 }),
+    ).resolves.toBeUndefined();
+    await expect(
+      emitter.emit({ type: 'build_progress', step: 'build', resolved: 1, total: 5 }),
+    ).resolves.toBeUndefined();
+    await expect(
+      emitter.emit({
+        type: 'build_no_progress',
+        step: 'build',
+        quietMinutes: 15,
+        resolved: 1,
+        total: 5,
+      }),
+    ).resolves.toBeUndefined();
+    await expect(
+      emitter.emit({
+        type: 'build_stall',
+        step: 'build',
+        reason: 'no_task_progress',
+        resolvedBefore: 1,
+        resolvedAfter: 1,
+      }),
+    ).resolves.toBeUndefined();
+
+    // No exporter ever received spans/metrics since nothing subscribed.
+    expect(spanExporter.getFinishedSpans()).toHaveLength(0);
+  });
+
+  it('build_no_progress with no active step or run span (before any step_started) no-ops synchronously without throwing', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+
+    // No step_started has fired yet, but ensureRunSpan() lazily opens a run
+    // span on first build-progress event — so this exercises the "attach to
+    // run span" fallback, not a true no-span case, and must never throw or block.
+    const start = Date.now();
+    await expect(
+      emitter.emit({
+        type: 'build_no_progress',
+        step: 'build',
+        quietMinutes: 15,
+        resolved: 1,
+        total: 5,
+      }),
+    ).resolves.toBeUndefined();
+    expect(Date.now() - start).toBeLessThan(50);
+
+    await emitter.emit({ type: 'feature_complete' });
+    await vis.stop();
+  });
+
+  it('build_stall with no active step or run span no-ops synchronously without throwing', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+
+    const start = Date.now();
+    await expect(
+      emitter.emit({
+        type: 'build_stall',
+        step: 'build',
+        reason: 'no_task_progress',
+        resolvedBefore: 1,
+        resolvedAfter: 1,
+      }),
+    ).resolves.toBeUndefined();
+    expect(Date.now() - start).toBeLessThan(50);
+
+    await emitter.emit({ type: 'feature_complete' });
+    await vis.stop();
+  });
+
+  it('step_retry for an unopened step no-ops synchronously (no state, no throw)', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+
+    // No step_started fired for 'build' — SpanManager.onStepRetry has no
+    // tracked state and must silently drop the event (no warn, no throw).
+    await expect(
+      emitter.emit({
+        type: 'step_retry',
+        step: 'build',
+        attempt: 1,
+        maxAttempts: 3,
+        reason: 'flaky',
+      }),
+    ).resolves.toBeUndefined();
+
+    await emitter.emit({ type: 'feature_complete' });
+    await vis.stop();
+
+    // No spans at all should have been created (no step ever started).
+    expect(spanExporter.getFinishedSpans()).toHaveLength(0);
+  });
+});
