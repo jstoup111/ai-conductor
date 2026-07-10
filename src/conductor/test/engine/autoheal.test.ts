@@ -1023,6 +1023,75 @@ describe('getEvidenceRange', () => {
     await rm(bareDir, { recursive: true, force: true });
     await rm(cloneDir, { recursive: true, force: true });
   });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Task 3: rung 4 of the ladder — fail-closed zero commits, no -n 100 window.
+  //
+  // If the origin default ref resolves but HEAD shares no merge-base with it
+  // (unrelated histories — e.g. a rewritten/orphaned history, or a clone that
+  // force-pushed a disjoint root), the old code silently fell back to
+  // `git log -n 100 HEAD`, which can return commits carrying valid `Task: N`
+  // trailers even though they were never actually range-corroborated against
+  // origin. That is a silent guess, not evidence. The ladder must instead
+  // fail closed: zero commits, with an anomaly naming the unrelated-histories
+  // resolution failure.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  it('fails closed with zero commits when origin default ref shares no merge-base with HEAD (unrelated histories)', async () => {
+    const mod = await loadAutoheal();
+    const mockErr = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    // Bare origin with its own unrelated root commit.
+    const bareDir = await mkdtemp(join(tmpdir(), 'origin-bare-unrelated-'));
+    await execa('git', ['init', '--bare', '-b', 'main'], { cwd: bareDir });
+
+    const seedDir = await mkdtemp(join(tmpdir(), 'origin-seed-unrelated-'));
+    await execa('git', ['init', '-b', 'main'], { cwd: seedDir });
+    await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: seedDir });
+    await execa('git', ['config', 'user.name', 'Test User'], { cwd: seedDir });
+    await writeFile(join(seedDir, 'origin-only.txt'), 'origin history');
+    await execa('git', ['add', 'origin-only.txt'], { cwd: seedDir });
+    await execa('git', ['commit', '-m', 'origin root commit'], { cwd: seedDir });
+    await execa('git', ['push', bareDir, 'main'], { cwd: seedDir });
+
+    await execa('git', ['remote', 'add', 'origin', bareDir], { cwd: gitDir });
+    await execa('git', ['fetch', 'origin'], { cwd: gitDir });
+    await execa('git', ['remote', 'set-head', 'origin', 'main'], { cwd: gitDir });
+
+    // gitDir's HEAD has its own root commit (from beforeEach) — an entirely
+    // disjoint history from origin/main's root, so no merge-base exists.
+    // Add more commits on top, each carrying a valid Task: N trailer, to
+    // prove the old -n 100 fallback would have returned them.
+    for (let i = 0; i < 3; i++) {
+      await writeFile(join(gitDir, `unrelated-${i}.txt`), `content ${i}`);
+      await execa('git', ['add', `unrelated-${i}.txt`], { cwd: gitDir });
+      await execa('git', ['commit', '-m', `feat: unrelated work ${i}\n\nTask: ${i + 1}\n`], {
+        cwd: gitDir,
+      });
+    }
+
+    // Sanity-check the premise directly against git: no merge-base exists.
+    const mergeBase = await execa('git', ['merge-base', 'origin/main', 'HEAD'], {
+      cwd: gitDir,
+      reject: false,
+    });
+    expect(mergeBase.exitCode).not.toBe(0);
+
+    const range = await mod.getEvidenceRange(gitDir, 'unreachable-anchor-sha');
+
+    // Must fail closed: zero commits, even though HEAD carries >0 commits
+    // with valid Task: N trailers. The old -n 100 HEAD fallback would have
+    // returned all of them.
+    expect(range.commits).toHaveLength(0);
+    expect(range.anomalies).toHaveLength(1);
+    // The anomaly must describe the unrelated-histories resolution failure,
+    // not just assert that origin/main is missing (it does exist here).
+    expect(range.anomalies[0]).toMatch(/no valid lower bound|unrelated|merge-base/i);
+
+    mockErr.mockRestore();
+    await rm(bareDir, { recursive: true, force: true });
+    await rm(seedDir, { recursive: true, force: true });
+  });
 });
 
 describe('listCommitsWithTrailers with anchor', () => {
