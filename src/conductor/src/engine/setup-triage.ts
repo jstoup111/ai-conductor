@@ -143,7 +143,7 @@ export async function quarantine(
   git: GitRunner,
   slug: string,
   logger?: Logger,
-): Promise<QuarantineResult> {
+): Promise<QuarantineResult | (TriageOutcome & { kind: 'park' })> {
   const quarantineRef = `wip/setup-quarantine-${slug}`;
 
   // Check if the quarantine branch already exists
@@ -159,20 +159,57 @@ export async function quarantine(
   const preservedPaths = parsePortcelainPaths(statusResult.stdout);
 
   // Stage all changes
-  await git(['add', '-A']);
+  const addResult = await git(['add', '-A']);
+  if (addResult.exitCode !== 0) {
+    return {
+      kind: 'park',
+      outputTail: addResult.stderr || `git add -A failed with code ${addResult.exitCode}`,
+    };
+  }
 
   // Commit the staged changes
-  await git(['commit', '-m', 'Quarantine before reset']);
+  const commitResult = await git(['commit', '-m', 'Quarantine before reset']);
+  if (commitResult.exitCode !== 0) {
+    // Commit failed — roll back the index
+    await git(['reset', '--mixed', 'HEAD']);
+    return {
+      kind: 'park',
+      outputTail: commitResult.stderr || `git commit failed with code ${commitResult.exitCode}`,
+    };
+  }
 
   // Get the SHA of the new commit
   const revResult = await git(['rev-parse', 'HEAD']);
+  if (revResult.exitCode !== 0) {
+    // rev-parse failed — roll back the index and return park
+    await git(['reset', '--mixed', 'HEAD']);
+    return {
+      kind: 'park',
+      outputTail: revResult.stderr || `git rev-parse HEAD failed with code ${revResult.exitCode}`,
+    };
+  }
   const quarantineSha = revResult.stdout.trim();
 
   // Create/force-move the quarantine branch at this commit
-  await git(['branch', '-f', quarantineRef, quarantineSha]);
+  const branchResult = await git(['branch', '-f', quarantineRef, quarantineSha]);
+  if (branchResult.exitCode !== 0) {
+    // branch failed — roll back the index and return park
+    await git(['reset', '--mixed', 'HEAD']);
+    return {
+      kind: 'park',
+      outputTail: branchResult.stderr || `git branch -f failed with code ${branchResult.exitCode}`,
+    };
+  }
 
   // Reset the working tree to the original HEAD (one commit back)
-  await git(['reset', '--hard', 'HEAD~1']);
+  const resetResult = await git(['reset', '--hard', 'HEAD~1']);
+  if (resetResult.exitCode !== 0) {
+    // reset failed — we're in a bad state, return park
+    return {
+      kind: 'park',
+      outputTail: resetResult.stderr || `git reset --hard HEAD~1 failed with code ${resetResult.exitCode}`,
+    };
+  }
 
   return {
     ref: quarantineRef,
@@ -225,23 +262,42 @@ export async function retryPrepareAfterQuarantine(
   // Preserve dirty state and reset working tree to clean
   const quarantineResult = await quarantine(git, slug, logger);
 
-  try {
-    // Retry the full prepare once on the clean tree
-    await runPrepare(worktreePath);
+  // If quarantine failed, return park immediately
+  if ('kind' in quarantineResult && quarantineResult.kind === 'park') {
+    return quarantineResult;
+  }
 
-    // Setup succeeded after retry
+  let outputTail = '';
+
+  // First retry attempt
+  try {
+    await runPrepare(worktreePath);
+    // Setup succeeded after first retry
     return {
       kind: 'quarantined-pass',
       outputTail: '',
       quarantineRef: quarantineResult.ref,
     };
   } catch (err) {
-    // Setup failed after retry (committed breakage)
-    const outputTail = extractErrorOutput(err);
+    // First retry failed, capture the output
+    outputTail = extractErrorOutput(err);
+  }
 
+  // Second retry attempt (check for committed breakage)
+  try {
+    await runPrepare(worktreePath);
+    // Setup succeeded after second retry
+    return {
+      kind: 'quarantined-pass',
+      outputTail,
+      quarantineRef: quarantineResult.ref,
+    };
+  } catch (err) {
+    // Both retries failed (committed breakage)
+    const secondOutputTail = extractErrorOutput(err);
     return {
       kind: 'park',
-      outputTail,
+      outputTail: secondOutputTail,
       quarantineRef: quarantineResult.ref,
     };
   }
@@ -260,4 +316,151 @@ function extractErrorOutput(err: unknown): string {
     return err.message;
   }
   return String(err);
+}
+
+/**
+ * Main entry point for setup-failure triage.
+ *
+ * Task 8 (zero-touch guarantees):
+ * - Constructor guard: requires SetupFailureError input (no triage without failure)
+ * - Happy path (clean tree): returns pass outcome with no side effects
+ * - Dirty tree + failure: quarantines, retries prepare, reports outcome
+ *
+ * Process:
+ * 1. Guard: require SetupFailureError as input (fail-closed if missing)
+ * 2. Classify the tree (clean vs dirty)
+ * 3. If tree is clean: return pass outcome (no quarantine needed)
+ * 4. If tree is dirty: quarantine and retry prepare via retryPrepareAfterQuarantine
+ *
+ * Parameters:
+ *   - git: GitRunner for accessing the repository
+ *   - worktreePath: path to the working tree
+ *   - slug: identifier for quarantine branch (e.g., feature branch name)
+ *   - setupError: the classified SetupFailureError (constructor guard)
+ *   - runPrepare: injected prepare function for retry (takes worktreePath, performs full setup)
+ *   - logger: optional Logger for recording triage events
+ *
+ * Returns:
+ *   - pass: tree was clean, no quarantine needed
+ *   - quarantined-pass: tree was dirty, quarantined, retried successfully
+ *   - park: tree was dirty, quarantined, but retry also failed
+ *
+ * Throws:
+ *   - Error if setupError is not provided (guard enforcement)
+ */
+export async function runTriage(
+  git: GitRunner,
+  worktreePath: string,
+  slug: string,
+  setupError: any, // Import SetupFailureError at call site for type checking
+  runPrepare: (worktreePath: string) => Promise<void>,
+  logger?: Logger,
+): Promise<TriageOutcome> {
+  // Task 8 guard: require SetupFailureError as input
+  if (!setupError) {
+    throw new Error('runTriage requires a SetupFailureError to enter; no triage without failure');
+  }
+
+  // Classify the working tree
+  const treeState = await classifyTree(git);
+
+  // Happy path: clean tree, no quarantine needed
+  if (treeState === 'clean') {
+    logger?.log('triage: tree is clean, no quarantine needed');
+    return {
+      kind: 'pass',
+      outputTail: setupError.outputTail || '',
+    };
+  }
+
+  // Dirty tree: quarantine and retry
+  logger?.log('triage: tree is dirty, quarantining and retrying');
+  return retryPrepareAfterQuarantine(git, worktreePath, slug, runPrepare, logger);
+}
+
+/**
+ * Fix-session stage: dispatch an LLM fix session, then mechanically verify the contract.
+ *
+ * Task 10 (fix-session stage — mechanical contract verification):
+ * - Dispatch the LLM fix-session (dispatchFixSession)
+ * - Verify contract: run prepare + check tree is clean
+ * - Engine-side verification only; LLM success is validated by prepare + porcelain
+ *
+ * Process:
+ * 1. Dispatch the LLM fix-session (dispatchFixSession)
+ * 2. On dispatch error: return park with error output
+ * 3. Retry the full prepare process (runPrepare)
+ * 4. If prepare fails: return park with contractOutcome 'setup-still-failing'
+ * 5. Check tree is clean (git status --porcelain)
+ * 6. If tree is dirty: return park with dirty paths named
+ * 7. If all checks pass: return fixed-pass
+ *
+ * Parameters:
+ *   - git: GitRunner for accessing the repository
+ *   - worktreePath: path to the working tree (passed to runPrepare)
+ *   - slug: identifier for logging/branching
+ *   - dispatchFixSession: injected LLM fix session dispatcher
+ *   - runPrepare: injected prepare function (takes worktreePath, performs full setup)
+ *
+ * Returns:
+ *   - fixed-pass: LLM fix succeeded, prepare passed, tree clean (ready for dispatch)
+ *   - park: any contract verification failure (dispatch error, prepare fails, tree dirty)
+ *
+ * Outcomes documented in union:
+ *   - (a) seam resolves, runPrepare passes, porcelain empty → fixed-pass
+ *   - (b) seam resolves but runPrepare fails → park with contractOutcome 'setup-still-failing'
+ *   - (c) runPrepare passes but porcelain dirty → park with dirty paths
+ *   - (d) seam throws → park, seam called exactly once
+ */
+export async function fixSession(
+  git: GitRunner,
+  worktreePath: string,
+  slug: string,
+  dispatchFixSession: () => Promise<void>,
+  runPrepare: (worktreePath: string) => Promise<void>,
+): Promise<TriageOutcome> {
+  try {
+    // Step 1: Dispatch the LLM fix-session
+    await dispatchFixSession();
+  } catch (err) {
+    // Step 2: Dispatch failed — park immediately
+    const outputTail = extractErrorOutput(err);
+    return {
+      kind: 'park',
+      outputTail,
+    };
+  }
+
+  try {
+    // Step 3: Retry prepare after the fix attempt
+    await runPrepare(worktreePath);
+  } catch (err) {
+    // Step 4: Prepare still fails after fix attempt — park with contract outcome
+    const outputTail = extractErrorOutput(err);
+    return {
+      kind: 'park',
+      outputTail,
+      contractOutcome: 'setup-still-failing',
+    };
+  }
+
+  // Step 5: Verify tree is clean after prepare succeeds
+  const porcelainResult = await git(['status', '--porcelain']);
+  const dirtyPaths = parsePortcelainPaths(porcelainResult.stdout);
+
+  if (dirtyPaths.length > 0) {
+    // Step 6: Tree is dirty after prepare succeeded — park with dirty paths
+    return {
+      kind: 'park',
+      outputTail: '',
+      preservedPaths: dirtyPaths,
+    };
+  }
+
+  // Step 7: All checks passed — fixed!
+  return {
+    kind: 'fixed-pass',
+    outputTail: '',
+    preservedPaths: [],
+  };
 }
