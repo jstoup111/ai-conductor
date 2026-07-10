@@ -7,6 +7,20 @@ import { PREPARE_COMMIT_MSG_HOOK, COMMIT_MSG_HOOK } from './git-hook-assets.js';
 export const SETUP_SCRIPT = join('bin', 'setup');
 
 /**
+ * Thrown when `bin/setup` fails to run or exits non-zero. Carries the tail of
+ * the script's output (last 50 lines) for triage.
+ */
+export class SetupFailureError extends Error {
+  outputTail: string;
+
+  constructor(message: string, outputTail: string) {
+    super(message);
+    this.name = 'SetupFailureError';
+    this.outputTail = outputTail;
+  }
+}
+
+/**
  * The env var the daemon writes into each worktree's `.env` to carry that
  * worktree's identity. Projects translate it into whatever per-worktree
  * resource naming they need (database name, redis namespace, …) in their own
@@ -200,6 +214,26 @@ async function runProjectSetup(
     log?.('setup: ok');
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
-    throw new Error(`project setup (${SETUP_SCRIPT}) failed: ${detail}`);
+    // Extract output tail from the error (last 50 lines of combined stdout/stderr).
+    // If there's no captured output (e.g., spawn failure), use the error message itself.
+    let outputText = (err as any).all || '';
+    if (!outputText.trim()) {
+      outputText = detail;
+    }
+    const outputTail = extractTail(outputText, 50);
+
+    throw new SetupFailureError(
+      `project setup (${SETUP_SCRIPT}) failed: ${detail}`,
+      outputTail,
+    );
   }
+}
+
+/**
+ * Extract the last `lines` lines from text, or all text if shorter.
+ */
+function extractTail(text: string, lines: number): string {
+  const allLines = text.split('\n');
+  const tail = allLines.slice(Math.max(0, allLines.length - lines));
+  return tail.join('\n');
 }
