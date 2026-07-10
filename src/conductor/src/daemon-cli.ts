@@ -854,6 +854,14 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       return triageOutcome;
     }
 
+    // A quarantined-pass outcome means stage-1 retry succeeded and setup is now
+    // passing at a clean HEAD. Per adr-2026-07-09-setup-failure-triage sub-decision 4,
+    // stage 2 (fix-session) should only run 'if setup still fails at a clean HEAD',
+    // so quarantined-pass skips directly to normal build dispatch.
+    if (triageOutcome.kind === 'quarantined-pass') {
+      return triageOutcome;
+    }
+
     // Triage stage 2: fix-session (Task 10)
     // For non-park outcomes, dispatch LLM fix session and mechanically verify
     const dispatchFixSession = async () => {
