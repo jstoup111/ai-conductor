@@ -180,7 +180,7 @@ export function createPriorityResolver(
  * low: 4
  * unlabeled: 5 (lowest priority)
  */
-const BAND_RANK: Record<PriorityBand, number> = {
+export const PRIORITY_BAND_RANK: Record<PriorityBand, number> = {
   'no-issue': 0,
   critical: 1,
   high: 2,
@@ -233,7 +233,7 @@ export function orderBacklog(items: BacklogItem[], res: PriorityResolution): Bac
 
   // Sort by band rank, using original index as tie-breaker for stable sort
   itemsWithBands.sort((a, b) => {
-    const rankDiff = BAND_RANK[a.band] - BAND_RANK[b.band];
+    const rankDiff = PRIORITY_BAND_RANK[a.band] - PRIORITY_BAND_RANK[b.band];
     if (rankDiff !== 0) {
       return rankDiff;
     }

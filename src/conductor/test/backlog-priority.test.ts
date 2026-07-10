@@ -4,10 +4,24 @@ import {
   createPriorityResolver,
   orderBacklog,
   ghIssueLabelReader,
+  PRIORITY_BAND_RANK,
   type PriorityResolution,
   type ExecRunner,
 } from '../src/engine/backlog-priority.js';
 import type { BacklogItem } from '../src/engine/daemon.js';
+
+describe('PRIORITY_BAND_RANK — exported band ranking', () => {
+  it('exports a single ranking with no-issue < critical < high < medium < low < unlabeled', () => {
+    expect(PRIORITY_BAND_RANK).toEqual({
+      'no-issue': 0,
+      critical: 1,
+      high: 2,
+      medium: 3,
+      low: 4,
+      unlabeled: 5,
+    });
+  });
+});
 
 describe('parsePriorityLabels — extract priority from issue labels', () => {
   describe('positive cases', () => {
