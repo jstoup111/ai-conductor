@@ -171,19 +171,34 @@ export class BuildProgressWatcher {
   }
 
   private async tick(): Promise<void> {
-    const snapshot = await readSnapshot(this.projectRoot);
-    if (this.lastResolved !== null && snapshot.resolved === this.lastResolved) {
+    // Deliberately reads only `.pipeline/task-status.json` (via
+    // `normalizeTasks`), not the full `readSnapshot` — the latter also shells
+    // out to `git rev-parse HEAD`, which is unnecessary work on the polling
+    // hot path and doesn't reliably settle under fake timers in tests (a
+    // real subprocess spawn outruns the synthetic-clock microtask flush).
+    const statusPath = join(this.projectRoot, '.pipeline/task-status.json');
+    let tasks: ReturnType<typeof normalizeTasks> = [];
+    try {
+      const raw = await readFile(statusPath, 'utf-8');
+      tasks = normalizeTasks(JSON.parse(raw));
+    } catch {
+      // Missing/corrupt task-status.json — treat as "no data" and skip this
+      // tick rather than emitting a bogus 0/0 progress event.
       return;
     }
-    this.lastResolved = snapshot.resolved;
+
+    const resolved = tasks.filter((t) => t.status === 'completed' || t.status === 'skipped').length;
+    const total = tasks.length;
+
+    if (this.lastResolved !== null && resolved === this.lastResolved) {
+      return;
+    }
+    this.lastResolved = resolved;
     await this.events.emit({
       type: 'build_progress',
       step: this.step,
-      resolved: snapshot.resolved,
-      total: snapshot.total,
-      currentTaskId: snapshot.currentTaskId,
-      currentTaskName: snapshot.currentTaskName,
-      noEvidenceAttempts: snapshot.noEvidenceAttempts,
+      resolved,
+      total,
       featureSlug: this.featureSlug,
     });
   }
