@@ -9,7 +9,7 @@
 // primitives are spelled once instead of being duplicated across the
 // conductor, the dashboard, and the daemon loop.
 
-import { mkdir, open, readdir, readFile, rm } from 'node:fs/promises';
+import { mkdir, open, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join } from 'node:path';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -288,3 +288,120 @@ export async function getProvenanceType(
  * Maintained for backward compatibility with acceptance tests.
  */
 export const readParkProvenance = getProvenanceType;
+
+/**
+ * Reconcile stranded park markers left in worktrees by pre-#486 builds.
+ *
+ * Scans .worktrees dir for markers that should have been written to the main root.
+ * For each stranded marker found:
+ * - If the main-root marker already exists, skips it (main copy wins)
+ * - Otherwise, reads the marker body and writes it to the main root
+ * - Deletes the worktree copy after successful reconciliation
+ *
+ * Per-marker failures (permission denied, I/O errors) are logged and skipped;
+ * the function does not throw. This enables seamless transition when the #486
+ * fix is deployed to a repo with pre-fix stranded markers.
+ *
+ * Idempotent: a second run finds no markers left to move (no-op).
+ *
+ * @param mainRoot The main repository root
+ * @param log Optional callback to receive reconciliation messages
+ */
+export async function reconcileStrandedParkMarkers(
+  mainRoot: string,
+  log?: (message: string) => void
+): Promise<void> {
+  const worktreesDir = join(mainRoot, '.worktrees');
+  let worktreeDirs: string[];
+
+  // Scan for linked worktrees
+  try {
+    const entries = await readdir(worktreesDir, { withFileTypes: true });
+    worktreeDirs = entries
+      .filter((e) => e.isDirectory())
+      .map((e) => join(worktreesDir, e.name));
+  } catch (err) {
+    // .worktrees directory doesn't exist or can't be read; no stranded markers
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+      if (log) {
+        log(`Failed to scan .worktrees: ${(err as Error).message}`);
+      }
+    }
+    return;
+  }
+
+  // For each worktree, check for stranded markers
+  for (const worktreeDir of worktreeDirs) {
+    const worktreeParkedDir = join(worktreeDir, '.daemon', OPERATOR_PARKED_SUBDIR);
+    let markerFilenames: string[];
+
+    try {
+      const entries = await readdir(worktreeParkedDir, { withFileTypes: true });
+      markerFilenames = entries
+        .filter((e) => e.isFile())
+        .map((e) => e.name);
+    } catch (err) {
+      // No parked directory in this worktree; skip
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+        if (log) {
+          log(`Failed to scan ${worktreeParkedDir}: ${(err as Error).message}`);
+        }
+      }
+      continue;
+    }
+
+    // For each stranded marker, reconcile it
+    for (const slug of markerFilenames) {
+      try {
+        const strandedMarkerPath = join(worktreeParkedDir, slug);
+        const mainMarkerPath = parkedMarkerPath(mainRoot, slug);
+
+        // Check if main marker already exists (main copy wins)
+        let mainMarkerExists = false;
+        try {
+          await readFile(mainMarkerPath);
+          mainMarkerExists = true;
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+            // Error reading main marker (not ENOENT); treat as exists (safe)
+            mainMarkerExists = true;
+          }
+        }
+
+        if (mainMarkerExists) {
+          // Main copy wins; skip this marker entirely (don't move, don't delete)
+          if (log) {
+            log(
+              `Skipped stranded marker ${slug} from ${worktreeDir} ` +
+              `(main copy already exists)`
+            );
+          }
+          continue;
+        }
+
+        // Read the stranded marker body
+        const markerBody = await readFile(strandedMarkerPath, 'utf-8');
+
+        // Write to main root
+        await mkdir(dirname(mainMarkerPath), { recursive: true });
+        await writeFile(mainMarkerPath, markerBody, 'utf-8');
+
+        // Delete from worktree
+        await rm(strandedMarkerPath, { force: true });
+
+        if (log) {
+          log(`Reconciled stranded marker ${slug} from ${worktreeDir}`);
+        }
+      } catch (err) {
+        // Per-marker error; log and skip
+        if (log) {
+          log(
+            `Failed to reconcile marker ${slug} from ${worktreeDir}: ${
+              (err as Error).message
+            }`
+          );
+        }
+      }
+    }
+  }
+}
