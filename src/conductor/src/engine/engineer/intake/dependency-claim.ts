@@ -147,7 +147,7 @@ export async function claimUnblocked(deps: DependencyClaimDeps): Promise<ClaimOu
       } catch (err) {
         // Sort failure must never fail the claim — fall back to drain order
         // and surface exactly one warning for operators.
-        log?.('claimUnblocked: resolveBands threw; falling back to drain order', err);
+        log?.('claimUnblocked: priority label resolution failed; falling back to drain order', err);
       }
 
       // Evaluate verdicts in band order

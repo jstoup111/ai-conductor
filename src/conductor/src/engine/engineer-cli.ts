@@ -46,9 +46,14 @@ import { createFileQueue } from './engineer/intake/queue.js';
 import { createGithubIssuesAdapter, GITHUB_ISSUES_SOURCE, HANDLED_LABEL } from './engineer/intake/github-issues.js';
 import { reportRouted, reportDone } from './engineer/intake/writeback.js';
 import { restRemoveLabelArgs } from './pr-labels.js';
-import { claimUnblocked, type DependencyClaimQueue } from './engineer/intake/dependency-claim.js';
+import {
+  claimUnblocked,
+  resolveClaimBands,
+  type DependencyClaimQueue,
+} from './engineer/intake/dependency-claim.js';
 import type { Envelope } from './engineer/intake/port.js';
 import { createBlockerResolver } from './blocker-resolver.js';
+import { ghIssueLabelReader } from './backlog-priority.js';
 import { createDeliveryGuardedQueue } from './engineer/intake/delivery-guard.js';
 import { parseDependencyProse, createDependencyLinks, runMigration } from './engineer/issue-dep-migration.js';
 
@@ -900,9 +905,16 @@ export async function dispatchEngineer(
       // to a single walk, so reusing one across calls would leak stale verdicts
       // (see daemon-backlog.ts:210-221 for the same rule on the daemon side).
       const resolver = createBlockerResolver({ run: (args) => gh(args, { cwd: process.cwd() }) });
+      // Claim-time label read — no cache: a relabel between claims must be
+      // honored on the very next claim (TR-1 happy 3). A throwing reader is
+      // handled inside claimUnblocked (falls back to drain order, warns once
+      // via `log`) — never caught here.
+      const labelReader = ghIssueLabelReader((args) => gh(args, { cwd: process.cwd() }));
       const outcome = await claimUnblocked({
         queue: guardedQueue as unknown as DependencyClaimQueue,
         resolveDependency: (sourceRef) => resolver.resolve(sourceRef ?? ''),
+        resolveBands: (refs) => resolveClaimBands(labelReader, refs),
+        log: (...args: unknown[]) => printErr(args.map((a) => String(a)).join(' ')),
       });
 
       if (outcome.kind === 'empty') {
