@@ -1516,6 +1516,332 @@ describe('engine/conductor', () => {
     });
   });
 
+  describe('daemon build stall remediation dispatch (Task 4)', () => {
+    const STALL_QUESTION = 'Need user decision: which auth provider — Auth0 or Cognito?';
+    const REMEDIATION_ANSWER = 'Use Auth0 — matches the existing SSO integration.';
+
+    // Seed state to build gate so the loop starts at build directly
+    async function seedToBuildStep(): Promise<void> {
+      const res = await readState(statePath);
+      const state = (res.ok ? res.value : {}) as Record<string, unknown>;
+      for (const s of ALL_STEPS) {
+        if (s.name === 'build') break;
+        state[s.name] = 'done';
+      }
+      state.complexity_tier = 'M';
+      state.feature_desc = 'daemon-stall-test';
+      await writeState(statePath, state as unknown as ConductState);
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await mkdir(join(dir, '.docs/plans'), { recursive: true });
+      // Single plan file so resolveFeaturePlanPath finds it unambiguously
+      await writeFile(
+        join(dir, '.docs/plans/daemon-stall-test.md'),
+        '# Plan\n\n### Task 1: Step 1\n',
+      );
+    }
+
+    it('daemon mode: dispatches /remediate on build stall with stall question in context', async () => {
+      await seedToBuildStep();
+
+      const calls: Array<{ step: StepName; retryReason?: string }> = [];
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName, _state: ConductState, opts?: { retryReason?: string }) => {
+          calls.push({ step, retryReason: opts?.retryReason });
+          if (step === 'build') {
+            const buildCalls = calls.filter((c) => c.step === 'build').length;
+            if (buildCalls === 1) {
+              // First attempt: write stall marker with a question
+              await writeFile(
+                join(dir, '.pipeline/halt-user-input-required'),
+                STALL_QUESTION,
+              );
+              // Write minimal task status so completion check fails
+              await writeFile(
+                join(dir, '.pipeline/task-status.json'),
+                JSON.stringify({ tasks: [{ id: 1, status: 'pending' }] }),
+              );
+            } else {
+              // Resumed attempt: complete the tasks to pass the gate
+              await writeFile(
+                join(dir, '.pipeline/task-status.json'),
+                JSON.stringify({ tasks: [{ id: 1, status: 'completed' }] }),
+              );
+            }
+          } else if (step === 'remediate') {
+            // Write remediation plan that routes back to build
+            await writeFile(
+              join(dir, '.pipeline/remediation.json'),
+              JSON.stringify({
+                dispositions: [
+                  {
+                    id: 'stall:auth-provider',
+                    disposition: 'build',
+                    category: null,
+                    rationale: REMEDIATION_ANSWER,
+                    tasks: [],
+                  },
+                ],
+              }),
+            );
+          }
+          return { success: true } as StepRunResult;
+        }),
+      };
+
+      const kickbacks: unknown[] = [];
+      const events = new ConductorEventEmitter();
+      events.on('kickback', (e) => kickbacks.push(e));
+
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 3,
+      });
+
+      await conductor.run();
+
+      const buildCalls = calls.filter((c) => c.step === 'build');
+      const remediateCalls = calls.filter((c) => c.step === 'remediate');
+
+      // Verify /remediate was dispatched exactly once with stall question in context
+      expect(remediateCalls).toHaveLength(1);
+      expect(remediateCalls[0].retryReason).toContain(STALL_QUESTION);
+
+      // Verify build was retried with remediation answer
+      expect(buildCalls).toHaveLength(2);
+      expect(buildCalls[1].retryReason).toContain(REMEDIATION_ANSWER);
+
+      // Verify kickback event was emitted
+      expect(kickbacks.length).toBeGreaterThan(0);
+      const kickback = kickbacks.find((k: unknown) => {
+        const evt = k as Record<string, unknown>;
+        return evt.type === 'kickback' && evt.from === 'build' && evt.to === 'build';
+      });
+      expect(kickback).toBeDefined();
+    });
+
+    it('daemon mode: respects remediation budget (MAX_KICKBACKS_PER_GATE)', async () => {
+      await seedToBuildStep();
+
+      let buildAttemptCount = 0;
+      const remediateCallCount: number[] = [];
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName, _state: ConductState, opts?: { retryReason?: string }) => {
+          if (step === 'build') {
+            buildAttemptCount++;
+            // Always write a stall marker to trigger remediation dispatch
+            await writeFile(
+              join(dir, '.pipeline/halt-user-input-required'),
+              `Stall ${buildAttemptCount}`,
+            );
+            await writeFile(
+              join(dir, '.pipeline/task-status.json'),
+              JSON.stringify({ tasks: [{ id: 1, status: 'pending' }] }),
+            );
+          } else if (step === 'remediate') {
+            remediateCallCount.push(buildAttemptCount);
+            // Return a route disposition to trigger a retry
+            await writeFile(
+              join(dir, '.pipeline/remediation.json'),
+              JSON.stringify({
+                dispositions: [
+                  {
+                    id: `stall:${buildAttemptCount}`,
+                    disposition: 'build',
+                    category: null,
+                    rationale: `Answer ${buildAttemptCount}`,
+                    tasks: [],
+                  },
+                ],
+              }),
+            );
+          }
+          return { success: true } as StepRunResult;
+        }),
+      };
+
+      const events = new ConductorEventEmitter();
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 10, // High retry count to test remediation budget
+      });
+
+      await conductor.run();
+
+      // Verify remediate was called at most MAX_KICKBACKS_PER_GATE (2) times
+      expect(remediateCallCount.length).toBeLessThanOrEqual(2);
+    });
+  });
+
+  describe('stall HALT carries the question (Task 6)', () => {
+    const STALL_QUESTION = 'Need user decision: which auth provider — Auth0 or Cognito?';
+
+    async function seedToBuildStep(): Promise<void> {
+      const res = await readState(statePath);
+      const state = (res.ok ? res.value : {}) as Record<string, unknown>;
+      for (const s of ALL_STEPS) {
+        if (s.name === 'build') break;
+        state[s.name] = 'done';
+      }
+      state.complexity_tier = 'M';
+      state.feature_desc = 'stall-halt-test';
+      await writeState(statePath, state as unknown as ConductState);
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await writeFile(
+        join(dir, '.docs/plans/stall-halt-test.md'),
+        '# Plan\n\n### Task 1: Step 1\n',
+      );
+    }
+
+    it('writes the question first, then disposition detail, when remediation halts the stall', async () => {
+      await seedToBuildStep();
+
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          if (step === 'build') {
+            // Write stall marker with question
+            await writeFile(
+              join(dir, '.pipeline/halt-user-input-required'),
+              STALL_QUESTION,
+            );
+            // Write minimal task status so completion check fails
+            await writeFile(
+              join(dir, '.pipeline/task-status.json'),
+              JSON.stringify({ tasks: [{ id: 1, status: 'pending' }] }),
+            );
+          } else if (step === 'remediate') {
+            // Write remediation with halt disposition
+            await writeFile(
+              join(dir, '.pipeline/remediation.json'),
+              JSON.stringify({
+                dispositions: [
+                  {
+                    id: 'stall:auth-provider',
+                    disposition: 'halt',
+                    category: 'product-scope',
+                    rationale: 'Choice of auth provider is a product decision.',
+                    tasks: [],
+                  },
+                ],
+              }),
+            );
+          }
+          return { success: true } as StepRunResult;
+        }),
+      };
+
+      let halted = false;
+      const events = new ConductorEventEmitter();
+      events.on('loop_halt', () => {
+        halted = true;
+      });
+
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 3,
+      });
+
+      await conductor.run();
+
+      expect(halted).toBe(true);
+      const haltContent = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+      const nonEmptyLines = haltContent.split('\n').filter((l) => l.trim().length > 0);
+      expect(nonEmptyLines[0]).toBe(STALL_QUESTION);
+      expect(haltContent).toContain('product-scope');
+      expect(haltContent).toContain('Choice of auth provider is a product decision.');
+      // Not the generic retries-exhausted writer
+      expect(haltContent).not.toMatch(/retries exhausted/);
+    });
+
+    it('fail-closes to HALT when remediation routes stall to a non-build step (Task 7)', async () => {
+      await seedToBuildStep();
+
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          if (step === 'build') {
+            // Write stall marker with question
+            await writeFile(
+              join(dir, '.pipeline/halt-user-input-required'),
+              STALL_QUESTION,
+            );
+            // Write minimal task status so completion check fails
+            await writeFile(
+              join(dir, '.pipeline/task-status.json'),
+              JSON.stringify({ tasks: [{ id: 1, status: 'pending' }] }),
+            );
+          } else if (step === 'remediate') {
+            // Write remediation that misroutes to 'plan' (non-build target)
+            await writeFile(
+              join(dir, '.pipeline/remediation.json'),
+              JSON.stringify({
+                dispositions: [
+                  {
+                    id: 'stall:auth-provider',
+                    disposition: 'plan',
+                    category: null,
+                    rationale: 'Needs a re-plan, not a build answer.',
+                    tasks: [],
+                  },
+                ],
+              }),
+            );
+          }
+          return { success: true } as StepRunResult;
+        }),
+      };
+
+      let halted = false;
+      const events = new ConductorEventEmitter();
+      events.on('loop_halt', () => {
+        halted = true;
+      });
+
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 3,
+      });
+
+      await conductor.run();
+
+      expect(halted).toBe(true);
+      const haltContent = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+      const nonEmptyLines = haltContent.split('\n').filter((l) => l.trim().length > 0);
+      // First non-empty line should be the question
+      expect(nonEmptyLines[0]).toBe(STALL_QUESTION);
+      // HALT detail should mention the misroute
+      expect(haltContent).toContain('plan');
+
+      // Verify build was never re-dispatched (only first attempt, no resume)
+      const runnerMock = vi.mocked(runner.run);
+      const buildCalls = runnerMock.mock.calls.filter((c) => c[0] === 'build');
+      expect(buildCalls).toHaveLength(1);
+    });
+  });
+
   describe('dashboard provenance + park visibility (Task 25)', () => {
     it('auto-parked feature appears on dashboard with provenance line "auto-parked"', async () => {
       const { writeAutoPark } = await import('../../src/engine/park-marker.js');
@@ -5920,6 +6246,80 @@ describe('build-step stall circuit breaker', () => {
     expect(haltClearedRecord).toBeDefined();
     expect(haltClearedRecord?.cause).toBe('operator');
     expect(haltClearedRecord?.step).toBe('build');
+  });
+
+  it('captures halt marker content to evidence file before clearing the marker', async () => {
+    await seedAllArtifactsExceptTaskStatus();
+    await writeTaskStatus(3, 10);
+    const markerContent = 'Need user decision: which auth provider — Auth0 or Cognito?';
+    await writeFile(join(dir, '.pipeline/halt-user-input-required'), markerContent);
+
+    const runner: StepRunner & { runInteractive: ReturnType<typeof vi.fn> } = {
+      run: vi.fn().mockResolvedValue({ success: true }),
+      runInteractive: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const eventOrder: string[] = [];
+    const stallEvents: Array<{ reason: string }> = [];
+    const haltClearedEvents: Array<{ step?: StepName; cause: string }> = [];
+
+    events.on('build_stall', (e) => {
+      if (e.type === 'build_stall') {
+        eventOrder.push('build_stall');
+        stallEvents.push({ reason: e.reason });
+      }
+    });
+
+    events.on('halt_cleared', (e) => {
+      if (e.type === 'halt_cleared') {
+        eventOrder.push('halt_cleared');
+        haltClearedEvents.push({ step: e.step, cause: e.cause });
+      }
+    });
+
+    const onRecovery = vi.fn().mockResolvedValue('quit' as const);
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      verifyArtifacts: true,
+      maxRetries: 3,
+      onRecovery,
+    });
+
+    await conductor.run();
+
+    // Verify events fired in order
+    expect(eventOrder).toEqual(['build_stall', 'halt_cleared']);
+
+    // Verify build_stall event contains halt_marker reason
+    expect(stallEvents).toHaveLength(1);
+    expect(stallEvents[0].reason).toBe('halt_marker');
+
+    // Verify halt_cleared event
+    expect(haltClearedEvents).toHaveLength(1);
+    expect(haltClearedEvents[0].step).toBe('build');
+    expect(haltClearedEvents[0].cause).toBe('operator');
+
+    // Verify the halt marker content was captured to evidence file
+    let capturedContent: string | null = null;
+    try {
+      capturedContent = await readFile(join(dir, '.pipeline/build-stall-question.md'), 'utf-8');
+    } catch {
+      // File doesn't exist — expected to fail if capture didn't happen
+    }
+    expect(capturedContent).toBe(markerContent);
+
+    // Verify the halt marker was actually cleared
+    let markerStillExists = false;
+    try {
+      await readFile(join(dir, '.pipeline/halt-user-input-required'));
+      markerStillExists = true;
+    } catch {
+      /* marker removed — expected */
+    }
+    expect(markerStillExists).toBe(false);
   });
 
   it('does NOT trigger build_stall when a retry produces new task completions', async () => {

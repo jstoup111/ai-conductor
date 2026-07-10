@@ -175,3 +175,31 @@ export async function writeStallQuestionEvidence(
 
   return effectiveText;
 }
+
+/**
+ * Write a fail-safe HALT marker for a degraded remediation exit. Combines
+ * the stall question with a detail about what went wrong (threw, malformed
+ * JSON, stale file, dispositions dropped, or budget exhausted). Always
+ * writes to `.pipeline/HALT` with the question on the first non-empty line,
+ * then the detail. Used when planRemediation fails or returns a degraded outcome.
+ *
+ * Creates the `.pipeline` directory if needed (mkdir -p semantics).
+ */
+export async function writeStallHalt(
+  projectRoot: string,
+  question: string | null,
+  detail: string,
+): Promise<void> {
+  const pipelineDir = join(projectRoot, '.pipeline');
+  await mkdir(pipelineDir, { recursive: true });
+
+  const effectiveQuestion =
+    question === null || (typeof question === 'string' && question.trim() === '')
+      ? '(agent wrote no reason into halt-user-input-required)'
+      : question;
+
+  const haltContent = [effectiveQuestion, detail].filter(Boolean).join('\n\n');
+
+  const haltPath = join(pipelineDir, 'HALT');
+  await writeFile(haltPath, haltContent + '\n', 'utf-8');
+}
