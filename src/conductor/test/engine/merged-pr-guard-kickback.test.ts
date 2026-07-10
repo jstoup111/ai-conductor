@@ -677,6 +677,7 @@ describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
       );
 
       const calls: StepName[] = [];
+      let manualTestRunCount = 0;
       const runner: StepRunner = {
         run: vi.fn(async (step: StepName) => {
           calls.push(step);
@@ -686,10 +687,19 @@ describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
               JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
             );
           } else if (step === 'manual_test') {
-            await writeFile(
-              join(dir, '.pipeline/manual-test-results.md'),
-              '# Results\n\n| Story | Result |\n|--|--|\n| s1 | FAIL |\n',
-            );
+            manualTestRunCount++;
+            // FAIL on first run, PASS on second run (to avoid multiple kickbacks)
+            if (manualTestRunCount === 1) {
+              await writeFile(
+                join(dir, '.pipeline/manual-test-results.md'),
+                '# Results\n\n| Story | Result |\n|--|--|\n| s1 | FAIL |\n',
+              );
+            } else {
+              await writeFile(
+                join(dir, '.pipeline/manual-test-results.md'),
+                '# Results\n\n| Story | Result |\n|--|--|\n| s1 | PASS |\n',
+              );
+            }
           }
           return { success: true };
         }),
