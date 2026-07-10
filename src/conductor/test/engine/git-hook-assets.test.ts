@@ -80,4 +80,75 @@ describe('git-hook-assets — embedding hook scripts', () => {
       expect(COMMIT_MSG_HOOK).not.toMatch(/conduct-ts/);
     });
   });
+
+  describe('Regression lock: no dist/CLI dependencies (#403 class)', () => {
+    /**
+     * Task 17: No-dist-dependency regression lock
+     *
+     * Hooks must be pure bash + POSIX tools, with no dependency on:
+     * - Compiled engine (dist/)
+     * - CLI tool (conduct/conduct-ts)
+     * - Package managers (npm/npx)
+     *
+     * Allowlist: git, node -e, POSIX tools (test, grep, cat, sed, etc.)
+     *
+     * This locks the #403-class bug: accidental introduction of engine or CLI
+     * dependencies into hook scripts, which breaks git workflows when the engine
+     * is not available (e.g., before a build, or in CI without node_modules).
+     */
+
+    const FORBIDDEN_PATTERNS = [
+      { pattern: /\bdist\//, name: 'dist/ reference' },
+      { pattern: /\bconduct\b/, name: 'conduct CLI invocation' },
+      { pattern: /\bnpm\b/, name: 'npm invocation' },
+      { pattern: /\bnpx\b/, name: 'npx invocation' },
+    ];
+
+    it('PREPARE_COMMIT_MSG_HOOK does not reference dist/, conduct, npm, or npx', () => {
+      for (const { pattern, name } of FORBIDDEN_PATTERNS) {
+        expect(
+          PREPARE_COMMIT_MSG_HOOK,
+          `PREPARE_COMMIT_MSG_HOOK should not contain ${name}`
+        ).not.toMatch(pattern);
+      }
+    });
+
+    it('COMMIT_MSG_HOOK does not reference dist/, conduct, npm, or npx', () => {
+      for (const { pattern, name } of FORBIDDEN_PATTERNS) {
+        expect(
+          COMMIT_MSG_HOOK,
+          `COMMIT_MSG_HOOK should not contain ${name}`
+        ).not.toMatch(pattern);
+      }
+    });
+
+    it('both hooks do not spawn CLI tools like conduct, npm, or npx', () => {
+      /**
+       * Check for invocations of forbidden CLI tools.
+       * We look for word boundaries to catch:
+       * - `conduct ...` or `$(conduct ...)`
+       * - `npm ...` or `$(npm ...)`
+       * - `npx ...` or `$(npx ...)`
+       *
+       * Note: `require()` inside `node -e` strings is allowed (not a CLI invocation).
+       * We're checking for shell invocations of these tools, which would be executed
+       * outside the `node -e` context.
+       */
+      const forbiddenCliPatterns = [
+        /\bconduct\b/,
+        /\bnpm\b/,
+        /\bnpx\b/,
+      ];
+
+      // For each hook, check against forbidden patterns
+      for (const { hookName, hook } of [
+        { hookName: 'PREPARE_COMMIT_MSG_HOOK', hook: PREPARE_COMMIT_MSG_HOOK },
+        { hookName: 'COMMIT_MSG_HOOK', hook: COMMIT_MSG_HOOK },
+      ]) {
+        for (const forbiddenPattern of forbiddenCliPatterns) {
+          expect(hook, `${hookName} should not invoke ${forbiddenPattern.source}`).not.toMatch(forbiddenPattern);
+        }
+      }
+    });
+  });
 });
