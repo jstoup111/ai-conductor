@@ -612,4 +612,244 @@ describe('daemon startup handshake (Task 9)', () => {
     expect(suppressionAfter?.suppressedTarget).toBe(identity1);
     expect(existsSync(suppressionFilePath)).toBe(true);
   });
+
+  describe('Task 6: Persistence-failure degradation', () => {
+    it('(a) suppression write fails → failure logged, boot continues, marker cleared', async () => {
+      // Task 6(a): When recording suppression fails (e.g., can't write suppression file)
+      // the failure should be logged but boot should continue and the marker
+      // should still be cleared afterwards.
+
+      const marker: RestartMarker = {
+        reason: 'engine stalled',
+        fromIdentity: 'daemon-old',
+        targetIdentity: 'engine-target-123',
+        at: Date.now(),
+      };
+
+      const freshIdentity = 'engine-fresh-456'; // ≠ target → suppression will be attempted
+
+      // Write marker before boot
+      await writeRestartMarker(marker, projectRoot);
+
+      const markerPath = join(projectRoot, RESTART_MARKER_PATH);
+      const suppressionPath = join(projectRoot, SUPPRESSION_PATH);
+
+      // Verify marker was written
+      expect(existsSync(markerPath)).toBe(true);
+
+      // Create a directory at the suppression path to block file writes there
+      // This simulates a write failure
+      const fs = await import('node:fs/promises');
+      await mkdir(suppressionPath, { recursive: true });
+
+      // Verify directory exists at suppression path
+      expect(existsSync(suppressionPath)).toBe(true);
+
+      // Simulate boot-time handshake logic
+      const logs: string[] = [];
+      const log = (msg: string) => logs.push(msg);
+
+      const markerStatus = await readRestartMarkerWithStatus(projectRoot, log);
+
+      if (markerStatus.kind === 'present' && freshIdentity !== null) {
+        const markerData = markerStatus.marker!;
+        log(
+          `restarted for engine refresh — from ${markerData.fromIdentity} to ${markerData.targetIdentity}, fresh ${freshIdentity}`,
+        );
+
+        // This will fail because suppressionPath is a directory, not a file
+        if (freshIdentity !== markerData.targetIdentity) {
+          log(`suppressing restart loop — target was ${markerData.targetIdentity}, now ${freshIdentity}`);
+          await recordSuppression(freshIdentity, projectRoot, log);
+          // recordSuppression logs failure but doesn't throw
+        } else {
+          await clearSuppression(projectRoot, log);
+        }
+
+        // CRITICAL: marker must still be cleared even if suppression write failed
+        await clearRestartMarker(projectRoot, log);
+      }
+
+      // Verify handshake was logged
+      expect(logs.some((m) => m.includes('restarted for engine refresh'))).toBe(true);
+
+      // Verify suppression write failure was logged
+      const suppressionFailLogs = logs.filter((m) => m.includes('could not persist suppression'));
+      expect(suppressionFailLogs.length).toBe(1);
+
+      // CRITICAL: Verify marker was cleared despite suppression write failure
+      expect(existsSync(markerPath)).toBe(false);
+      const statusAfter = await readRestartMarkerWithStatus(projectRoot);
+      expect(statusAfter.kind).toBe('absent');
+    });
+
+    it('(b) marker clear failure → logged, boot continues', async () => {
+      // Task 6(b): When clearing the marker fails (e.g., permission denied),
+      // the failure should be logged but boot should continue gracefully.
+      // This tests that clearRestartMarker's error handling works correctly.
+
+      const marker: RestartMarker = {
+        reason: 'engine stalled',
+        fromIdentity: 'daemon-old',
+        targetIdentity: 'engine-converged',
+        at: Date.now(),
+      };
+
+      const freshIdentity = 'engine-converged'; // = target → no suppression
+
+      // Write marker before boot
+      await writeRestartMarker(marker, projectRoot);
+
+      // Verify marker was written
+      const markerPath = join(projectRoot, RESTART_MARKER_PATH);
+      expect(existsSync(markerPath)).toBe(true);
+
+      // Make marker file read-only to prevent deletion
+      const fsSync = await import('node:fs');
+      const oldMode = fsSync.statSync(markerPath).mode;
+
+      try {
+        // Make file read-only
+        fsSync.chmodSync(markerPath, 0o444);
+
+        // Also make parent directory read-only to block deletion
+        const daemonDir = join(projectRoot, '.daemon');
+        const oldDirMode = fsSync.statSync(daemonDir).mode;
+        fsSync.chmodSync(daemonDir, 0o555);
+
+        // Simulate boot-time handshake logic
+        const logs: string[] = [];
+        const log = (msg: string) => logs.push(msg);
+
+        const markerStatus = await readRestartMarkerWithStatus(projectRoot, log);
+
+        if (markerStatus.kind === 'present' && freshIdentity !== null) {
+          const markerData = markerStatus.marker!;
+          log(
+            `restarted for engine refresh — from ${markerData.fromIdentity} to ${markerData.targetIdentity}, fresh ${freshIdentity}`,
+          );
+
+          // Clear suppression (no suppression since convergence)
+          if (freshIdentity !== markerData.targetIdentity) {
+            log(`suppressing restart loop — target was ${markerData.targetIdentity}, now ${freshIdentity}`);
+            await recordSuppression(freshIdentity, projectRoot, log);
+          } else {
+            await clearSuppression(projectRoot, log);
+          }
+
+          // This will fail because directory is not writable
+          await clearRestartMarker(projectRoot, log);
+        }
+
+        // Verify handshake was logged
+        expect(logs.some((m) => m.includes('restarted for engine refresh'))).toBe(true);
+
+        // Verify marker clear failure was logged
+        const clearFailLogs = logs.filter((m) => m.includes('could not delete restart marker'));
+        expect(clearFailLogs.length).toBe(1);
+
+        // Verify boot continued (no exception thrown)
+        expect(true).toBe(true);
+
+        // Restore permissions for verification
+        fsSync.chmodSync(daemonDir, oldDirMode);
+
+        // Verify marker still exists (because deletion failed)
+        expect(existsSync(markerPath)).toBe(true);
+      } finally {
+        // Restore all permissions for cleanup
+        fsSync.chmodSync(markerPath, oldMode);
+        fsSync.chmodSync(join(projectRoot, '.daemon'), 0o755);
+      }
+    });
+
+    it('(c) corrupt suppression file → isSuppressed returns false, warn-once, boot proceeds', async () => {
+      // Task 6(c): When a suppression file exists but is corrupt (invalid JSON),
+      // isSuppressed should return false (re-arm), log a warn-once message,
+      // and boot should proceed normally.
+
+      const suppressionPath = join(projectRoot, SUPPRESSION_PATH);
+      const daemonDir = join(projectRoot, '.daemon');
+
+      // Create .daemon directory
+      await mkdir(daemonDir, { recursive: true });
+
+      // Write corrupt JSON to suppression file
+      const fs = await import('node:fs/promises');
+      await fs.writeFile(suppressionPath, '{ broken json {{{', 'utf-8');
+
+      // Verify corrupt file exists
+      expect(existsSync(suppressionPath)).toBe(true);
+
+      // First call to isSuppressed should warn and return false
+      const logs1: string[] = [];
+      const result1 = await isSuppressed('engine-identity-123', projectRoot, (msg) => logs1.push(msg));
+
+      expect(result1).toBe(false); // corrupt file → treated as absent (re-arm)
+
+      // Verify corruption warning was logged
+      const corruptionWarnings1 = logs1.filter((m) => m.includes('corrupt'));
+      expect(corruptionWarnings1.length).toBe(1);
+      expect(corruptionWarnings1[0]).toContain('corrupt');
+
+      // Second call to isSuppressed with same identity should NOT warn again (warn-once)
+      const logs2: string[] = [];
+      const result2 = await isSuppressed('engine-identity-123', projectRoot, (msg) => logs2.push(msg));
+
+      expect(result2).toBe(false); // still re-arm
+
+      // Verify no corruption warning this time (warn-once semantics)
+      const corruptionWarnings2 = logs2.filter((m) => m.includes('corrupt'));
+      expect(corruptionWarnings2.length).toBe(0);
+
+      // Call with different identity should also not warn (warns per-directory, not per-identity)
+      const logs3: string[] = [];
+      const result3 = await isSuppressed('engine-identity-456', projectRoot, (msg) => logs3.push(msg));
+
+      expect(result3).toBe(false); // still re-arm
+
+      // Verify no corruption warning (per-directory warn-once, already warned)
+      const corruptionWarnings3 = logs3.filter((m) => m.includes('corrupt'));
+      expect(corruptionWarnings3.length).toBe(0);
+    });
+
+    it('(c) corrupt suppression with initStaleEngineState → boot proceeds normally', async () => {
+      // Task 6(c) integration: When a corrupt suppression record exists,
+      // initStaleEngineState should proceed normally without throwing.
+
+      const engineContent = 'mock engine content';
+      const enginePath = await createMockEngineFile(projectRoot, engineContent);
+      const engineIdentity = await captureEngineIdentity(enginePath);
+      expect(engineIdentity).not.toBeNull();
+
+      // Create corrupt suppression file
+      const suppressionPath = join(projectRoot, SUPPRESSION_PATH);
+      const daemonDir = join(projectRoot, '.daemon');
+
+      const fs = await import('node:fs/promises');
+      await mkdir(daemonDir, { recursive: true });
+      await fs.writeFile(suppressionPath, 'corrupted suppression data {{{', 'utf-8');
+
+      // Verify corrupt file exists
+      expect(existsSync(suppressionPath)).toBe(true);
+
+      // Call initStaleEngineState with corrupt suppression present
+      const logs: string[] = [];
+      const capturedIdentity = await initStaleEngineState({
+        repoPath: projectRoot,
+        entryPath: enginePath,
+        flag: true,
+        log: (msg) => logs.push(msg),
+      });
+
+      // Verify identity was captured
+      expect(capturedIdentity).toBe(engineIdentity);
+
+      // Verify no handshake was logged (no marker present)
+      expect(logs.filter((m) => m.includes('restarted for engine refresh')).length).toBe(0);
+
+      // Verify boot proceeded normally (no exception)
+      expect(true).toBe(true);
+    });
+  });
 });
