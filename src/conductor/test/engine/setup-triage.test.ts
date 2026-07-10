@@ -619,3 +619,66 @@ describe('engine/setup-triage — fixSession (Task 10: fix-session stage)', () =
     expect(result.outputTail).toContain('LLM session failed');
   });
 });
+
+describe('engine/setup-triage — quarantine sentinel surfacing (Task 14)', () => {
+  it('quarantined-pass outcome includes quarantine ref', async () => {
+    const { git } = fakeGit([
+      {
+        match: ['rev-parse', '--verify', 'wip/setup-quarantine-test-slug'],
+        result: { exitCode: 1 },
+      },
+      {
+        match: ['status', '--porcelain'],
+        result: { stdout: ' M src/foo.ts\n' },
+      },
+      { match: ['add', '-A'], result: { exitCode: 0 } },
+      {
+        match: ['commit', '-m'],
+        result: { stdout: '[feat-branch aaaaaaa] Quarantine before reset\n', exitCode: 0 },
+      },
+      {
+        match: ['rev-parse', 'HEAD'],
+        result: { stdout: 'aaaaaaa11111111111111111111111111111111\n' },
+      },
+      { match: ['branch', '-f'], result: { exitCode: 0 } },
+      {
+        match: ['reset', '--hard', 'HEAD~1'],
+        result: { stdout: 'HEAD is now at bbbbbb Original commit\n' },
+      },
+    ]);
+
+    let prepareCallCount = 0;
+    const runPrepare = async (worktreePath: string) => {
+      prepareCallCount++;
+      if (prepareCallCount === 1) {
+        throw new Error('setup failed (first attempt)');
+      }
+    };
+
+    const result = await retryPrepareAfterQuarantine(git, '/path/to/wt', 'test-slug', runPrepare);
+
+    expect(result.kind).toBe('quarantined-pass');
+    expect((result as any).quarantineRef).toBe('wip/setup-quarantine-test-slug');
+  });
+
+  it('no quarantine ref means no sentinel written', async () => {
+    const { git } = fakeGit([
+      {
+        match: ['status', '--porcelain'],
+        result: { stdout: '' },
+      },
+    ]);
+
+    const setupError = new SetupFailureError('setup failed', 'output tail');
+    let prepareCalled = false;
+    const runPrepare = async (_path: string) => {
+      prepareCalled = true;
+    };
+
+    const result = await runTriage(git, '/path/to/wt', 'test-slug', setupError, runPrepare);
+
+    expect(result.kind).toBe('pass');
+    expect((result as any).quarantineRef).toBeUndefined();
+    expect(prepareCalled).toBe(false);
+  });
+});
