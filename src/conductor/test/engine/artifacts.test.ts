@@ -643,6 +643,70 @@ describe('engine/artifacts', () => {
         expect(result.done).toBe(false);
         expect(result.reason).toMatch(/pending|not completed/i);
       });
+
+      it('rejects tasks resolved only via legacy migrationGrandfather, even with completed rows (#463)', async () => {
+        // Legacy sidecar: no evidenceStamps at all, but tasks 2 and 4 were
+        // grandfathered during the H8 migration. Their task-status.json rows
+        // are (forged/stale) 'completed'. Evidence stamps are the ONLY
+        // completion currency now — the grandfather escape hatch must be
+        // inert for gate resolution, regardless of row status.
+        await writePlan('### Task 2: Task two\n**Story:** 2\n\n### Task 4: Task four\n**Story:** 4\n');
+        await writeTasks([
+          { id: '2', name: 'Task two', status: 'completed' },
+          { id: '4', name: 'Task four', status: 'completed' },
+        ]);
+        await writeFile(
+          join(dir, '.pipeline/task-evidence.json'),
+          JSON.stringify({
+            evidenceStamps: {},
+            noEvidenceAttempts: 0,
+            migrationGrandfather: ['2', '4'],
+          }),
+        );
+
+        const ctx = { projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md') };
+        const result = await checkStepCompletion(dir, 'build', ctx);
+
+        expect(result.done).toBe(false);
+        expect(result.reason).toMatch(/2/);
+        expect(result.reason).toMatch(/4/);
+      });
+
+      it('loads a legacy sidecar with migrationGrandfather without error (backward-compat load)', async () => {
+        await mkdir(join(dir, '.pipeline'), { recursive: true });
+        await writeFile(
+          join(dir, '.pipeline/task-evidence.json'),
+          JSON.stringify({
+            evidenceStamps: {},
+            noEvidenceAttempts: 0,
+            migrationGrandfather: ['2', '4'],
+          }),
+        );
+
+        const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
+        const evidence = await createTaskEvidence(dir);
+
+        expect(evidence.migrationGrandfather.has('2')).toBe(true);
+        expect(evidence.migrationGrandfather.has('4')).toBe(true);
+      });
+
+      it('accepts a task with a real evidence stamp regardless of row status', async () => {
+        await writePlan('### Task 2: Task two\n**Story:** 2\n');
+        await writeTasks([{ id: '2', name: 'Task two', status: 'pending' }]);
+        await writeFile(
+          join(dir, '.pipeline/task-evidence.json'),
+          JSON.stringify({
+            evidenceStamps: { '2': { sha: 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef', form: 'trailer' } },
+            noEvidenceAttempts: 0,
+            migrationGrandfather: [],
+          }),
+        );
+
+        const ctx = { projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md') };
+        const result = await checkStepCompletion(dir, 'build', ctx);
+
+        expect(result).toEqual({ done: true });
+      });
     });
   });
 

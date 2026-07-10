@@ -717,42 +717,19 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
         };
       }
 
-      // Best-effort re-read of the (just re-seeded/derived) task-status.json
-      // rows. A migration-grandfather stamp only backs a row that is
-      // CURRENTLY 'completed'/'skipped' on disk — seedTaskStatus already
-      // demotes an unstamped forged 'completed' row back to 'pending' on
-      // reseed, so a grandfathered id whose row got demoted must NOT count
-      // as resolved. A real evidenceStamps entry (from deriveCompletion's own
-      // git-trailer scan) always counts regardless of the row's on-disk
-      // status, since it is independently re-derived from git every time —
-      // this is what makes a wiped/corrupt task-status.json non-terminal.
-      const rowStatusById = new Map<string, string | undefined>();
-      try {
-        const rawStatus = await readFile(join(ctx.projectRoot, '.pipeline/task-status.json'), 'utf-8');
-        const parsedStatus = JSON.parse(rawStatus) as unknown;
-        for (const t of extractTasks(parsedStatus)) {
-          if (t.id) rowStatusById.set(t.id, t.status);
-        }
-      } catch {
-        // Missing/corrupt — rowStatusById stays empty; only evidenceStamps
-        // (not migrationGrandfather) can resolve tasks in this case.
-      }
-
+      // evidenceStamps is the ONLY completion currency the gate accepts. A
+      // real evidenceStamps entry (from deriveCompletion's own git-trailer
+      // scan) always counts regardless of the row's on-disk status, since it
+      // is independently re-derived from git every time — this is what makes
+      // a wiped/corrupt task-status.json non-terminal. The legacy H8
+      // migrationGrandfather escape hatch is never consulted here: a
+      // grandfathered id with no evidence stamp is always unresolved,
+      // regardless of what task-status.json's row says.
       let unresolved: string[];
       try {
         const { createTaskEvidence } = await import('./task-evidence.js');
         const evidence = await createTaskEvidence(ctx.projectRoot);
-        unresolved = planTaskIds.filter((id) => {
-          if (evidence.evidenceStamps.has(id)) return false;
-          const rowStatus = rowStatusById.get(id);
-          if (
-            evidence.migrationGrandfather.has(id) &&
-            (rowStatus === 'completed' || rowStatus === 'skipped')
-          ) {
-            return false;
-          }
-          return true;
-        });
+        unresolved = planTaskIds.filter((id) => !evidence.evidenceStamps.has(id));
       } catch (err) {
         return {
           done: false,
