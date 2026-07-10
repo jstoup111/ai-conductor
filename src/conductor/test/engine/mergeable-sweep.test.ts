@@ -1079,3 +1079,86 @@ describe('sweepMergeableLabels — Task 21: exhaustion escalation exactly once',
     expect(newEvents.filter((e) => e.type === 'ci_failed' && e.phase === 'exhausted')).toHaveLength(0);
   });
 });
+
+// ── Task 22: exhaustion — failure and race negatives ───────────────────────
+
+describe('sweepMergeableLabels — Task 22: exhaustion failure and race negatives', () => {
+  it('escalation comment call throws → needs-remediation label is still applied, error logged, sweep does not throw', async () => {
+    const logs: string[] = [];
+    const { gh, addLabelCalls, ensureLabelCalls } = makeFakeGh(
+      {
+        [PR_URL]: prViewJson(
+          'OPEN',
+          'MERGEABLE',
+          [{ status: 'COMPLETED', conclusion: 'FAILURE', name: 'build' } as any],
+          [],
+        ),
+      },
+      { trackLabelMutations: true },
+    );
+    // Wrap the fake runner so the escalation `pr comment` call always throws,
+    // simulating a hard gh CLI failure that bypasses upsertComment's own
+    // internal try/catch (e.g. an unexpected crash rather than a normal
+    // gh-exit-code failure).
+    const throwingGh: GhRunner = async (args, opts) => {
+      if (args[0] === 'pr' && args[1] === 'comment') {
+        throw new Error('gh: connection reset');
+      }
+      return gh(args, opts);
+    };
+
+    await enrollWatch(tmpDir, { ...entry(), ciFixAttempts: 2 });
+
+    await expect(
+      sweepMergeableLabels({
+        projectRoot: tmpDir,
+        runGh: throwingGh,
+        log: (msg) => logs.push(msg),
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(ensureLabelCalls.some((c) => c.name === 'needs-remediation')).toBe(true);
+    expect(
+      addLabelCalls.some((c) => c.prUrl === PR_URL && c.label === 'needs-remediation'),
+    ).toBe(true);
+    expect(logs.some((l) => l.includes('gh: connection reset') || l.toLowerCase().includes('error'))).toBe(
+      true,
+    );
+  });
+
+  it('PR merged between detection and escalation → entry pruned, no escalation comment call made', async () => {
+    let viewCount = 0;
+    const commentCalls: string[][] = [];
+    const raceGh: GhRunner = async (args, _opts) => {
+      if (args[0] === 'pr' && args[1] === 'view' && args[3] === '--json') {
+        viewCount += 1;
+        // First read (detection, at top of sweep loop): still OPEN + failing.
+        // Second read (escalation re-check, right before commenting): MERGED.
+        if (viewCount === 1) {
+          return prViewJson(
+            'OPEN',
+            'MERGEABLE',
+            [{ status: 'COMPLETED', conclusion: 'FAILURE', name: 'build' } as any],
+            [],
+          );
+        }
+        return prViewJson('MERGED', 'UNKNOWN', [], []);
+      }
+      if (args[0] === 'pr' && args[1] === 'comment') {
+        commentCalls.push([...args]);
+      }
+      return { stdout: '' };
+    };
+
+    await enrollWatch(tmpDir, { ...entry(), ciFixAttempts: 2 });
+
+    await sweepMergeableLabels({
+      projectRoot: tmpDir,
+      runGh: raceGh,
+    });
+
+    expect(commentCalls).toHaveLength(0);
+    const survivors = await readWatch(tmpDir);
+    expect(survivors.some((e) => e.prUrl === PR_URL)).toBe(false);
+  });
+});

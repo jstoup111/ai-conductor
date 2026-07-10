@@ -303,21 +303,52 @@ export async function sweepMergeableLabels({
           state.checksOutcome === 'failed' &&
           (entry.ciFixAttempts ?? 0) >= CI_FIX_ATTEMPT_CAP
         ) {
-          await ensureLabel(gh, entry.repoCwd, 'needs-remediation', 'B60205', log);
-          await addLabel(gh, entry.repoCwd, entry.prUrl, 'needs-remediation', log);
-          await upsertComment(
-            gh,
-            entry.repoCwd,
-            entry.prUrl,
-            CI_EXHAUSTION_MARKER,
-            buildExhaustionComment(entry, state),
-            log,
-          );
+          // Task 22 (AC2): re-check PR state immediately before escalating —
+          // the PR may have been merged/closed by a human between the
+          // detection read above and this point in the sweep. Racing an
+          // escalation comment onto an already-resolved PR is pure noise, so
+          // prune the entry and skip the label/comment/event work entirely.
+          const freshState = await prMergeState(gh, entry.repoCwd, entry.prUrl, log);
+          if (
+            freshState.state === 'MERGED' ||
+            freshState.state === 'CLOSED' ||
+            freshState.state === 'NOTFOUND'
+          ) {
+            log?.(
+              `[mergeable-sweep] pruning ${entry.prUrl} (state changed to ${freshState.state} before escalation)`,
+            );
+            const idx = survivors.findIndex((s) => s.prUrl === entry.prUrl);
+            if (idx >= 0) survivors.splice(idx, 1);
+            continue;
+          }
+
+          // label-before-comment ordering (AC1/AC3): apply the sticky label
+          // first so it persists as evidence of exhaustion even if the
+          // escalation comment call throws — a hard failure here must never
+          // leave the PR silently unlabeled, and must never crash the sweep.
+          try {
+            await ensureLabel(gh, entry.repoCwd, 'needs-remediation', 'B60205', log);
+            await addLabel(gh, entry.repoCwd, entry.prUrl, 'needs-remediation', log);
+          } catch (err) {
+            log?.(`[mergeable-sweep] needs-remediation label error for ${entry.prUrl}: ${err}`);
+          }
+          try {
+            await upsertComment(
+              gh,
+              entry.repoCwd,
+              entry.prUrl,
+              CI_EXHAUSTION_MARKER,
+              buildExhaustionComment(entry, freshState),
+              log,
+            );
+          } catch (err) {
+            log?.(`[mergeable-sweep] exhaustion comment error for ${entry.prUrl}: ${err}`);
+          }
           onEvent?.({
             type: 'ci_failed',
             prUrl: entry.prUrl,
             slug: entry.slug,
-            checks: state.statusCheckRollup?.map((c) => c.name ?? '?').filter(Boolean) ?? [],
+            checks: freshState.statusCheckRollup?.map((c) => c.name ?? '?').filter(Boolean) ?? [],
             attempts: entry.ciFixAttempts ?? 0,
             phase: 'exhausted',
           });
