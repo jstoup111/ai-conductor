@@ -180,7 +180,7 @@ export const COMMIT_MSG_HOOK = [
   '            }',
   '          });',
   '',
-  '          if (mappedTasks.size > 1 && !mappedTasks.has(\'$TASK_TRAILER\')) {',
+  '          if (mappedTasks.size > 1) {',
   '            console.error(\'commit-msg: WARNING — staged diff spans files of multiple plan tasks\');',
   '          }',
   '        }',

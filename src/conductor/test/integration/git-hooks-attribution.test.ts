@@ -20,13 +20,13 @@ const execFileAsync = promisify(execFile);
 describe('integration/git-hooks-attribution', () => {
   let dir: string;
 
-  async function git(...args: string[]): Promise<{ stdout: string; code: number }> {
+  async function git(...args: string[]): Promise<{ stdout: string; stderr: string; code: number }> {
     try {
-      const { stdout } = await execFileAsync('git', ['-C', dir, ...args]);
-      return { stdout: stdout.trim(), code: 0 };
+      const { stdout, stderr } = await execFileAsync('git', ['-C', dir, ...args]);
+      return { stdout: stdout.trim(), stderr: stderr.trim(), code: 0 };
     } catch (err) {
-      const e = err as { code?: number; stdout?: string };
-      return { stdout: (e.stdout ?? '').trim(), code: e.code ?? 1 };
+      const e = err as { code?: number; stdout?: string; stderr?: string };
+      return { stdout: (e.stdout ?? '').trim(), stderr: (e.stderr ?? '').trim(), code: e.code ?? 1 };
     }
   }
 
@@ -236,11 +236,13 @@ describe('integration/git-hooks-attribution', () => {
       await git('add', 'one.txt', 'two.txt');
       const res = await git('commit', '-m', 'feat: bundled change\n\nTask: 1');
       expect(res.code).toBe(0);
+      expect(res.stderr).toContain('commit-msg: WARNING — staged diff spans files of multiple plan tasks');
     });
 
     it('warns (does not block) on a subject-vs-trailer task mismatch', async () => {
       const res = await commitFile('m.txt', 'm', 'fix Task 5 edge case\n\nTask: 7');
       expect(res.code).toBe(0);
+      expect(res.stderr).toContain('commit-msg: WARNING — subject references Task 5 but trailer is Task: 7');
     });
 
     it('does not reject a commit with no Task: trailer at all', async () => {
