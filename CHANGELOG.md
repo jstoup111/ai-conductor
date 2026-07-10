@@ -12,6 +12,13 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- Tests no longer park child processes on undrained stdio pipes.
+  `daemon-stale-respawn-e2e` spawned real daemons with `stdio: ['ignore',
+  'pipe', 'pipe']` and never read either stream, so a chatty daemon wedged
+  mid-write once the 64KB pipe buffer filled while `isProcessAlive` checks
+  still passed — the four spawn sites now use `'ignore'`.
+  `memory-store-concurrency` drained stderr but not stdout of its vite-node
+  children; stdout is now explicitly discarded with `resume()`.
 - Stories and plan gate predicates now scope to the FEATURE's own docs
   (`resolveFeatureStoriesPath`, mirroring #407's plan resolver) instead of
   validating the entire `.docs/stories`/`.docs/plans` corpus (#441). Legacy

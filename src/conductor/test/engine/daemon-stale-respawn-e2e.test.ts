@@ -521,7 +521,9 @@ describe('daemon-stale-respawn-e2e — #353 capstone (TR-2/TR-3/TR-4)', () => {
           ownerProcess = spawn('npx', ['tsx', conductorSrcPath, 'daemon', '--continuous'], {
             cwd: repoPath,
             detached: false,
-            stdio: ['ignore', 'pipe', 'pipe'],
+            // 'ignore' (not 'pipe'): nothing ever drains these streams, so a
+            // pipe would wedge the daemon once 64KB of output buffers.
+            stdio: ['ignore', 'ignore', 'ignore'],
           });
 
           const ownerPid = ownerProcess.pid;
@@ -539,7 +541,9 @@ describe('daemon-stale-respawn-e2e — #353 capstone (TR-2/TR-3/TR-4)', () => {
           loserProcess = spawn('npx', ['tsx', conductorSrcPath, 'daemon'], {
             cwd: repoPath,
             detached: false,
-            stdio: ['ignore', 'pipe', 'pipe'],
+            // 'ignore' (not 'pipe'): nothing ever drains these streams, so a
+            // pipe would wedge the daemon once 64KB of output buffers.
+            stdio: ['ignore', 'ignore', 'ignore'],
           });
 
           const loserPid = loserProcess.pid;
@@ -680,7 +684,9 @@ describe('daemon-stale-respawn-e2e — #353 capstone (TR-2/TR-3/TR-4)', () => {
           ownerProcess = spawn('npx', ['ts-node', '-O', '{"module":"esnext"}', './src/conductor/bin/index.ts', 'daemon', '--continuous'], {
             cwd: repoPath,
             detached: false,
-            stdio: ['ignore', 'pipe', 'pipe'],
+            // 'ignore' (not 'pipe'): nothing ever drains these streams, so a
+            // pipe would wedge the daemon once 64KB of output buffers.
+            stdio: ['ignore', 'ignore', 'ignore'],
           });
 
           const ownerPid = ownerProcess.pid;
@@ -699,7 +705,9 @@ describe('daemon-stale-respawn-e2e — #353 capstone (TR-2/TR-3/TR-4)', () => {
           loserProcess = spawn('npx', ['ts-node', '-O', '{"module":"esnext"}', './src/conductor/bin/index.ts', 'daemon'], {
             cwd: repoPath,
             detached: false,
-            stdio: ['ignore', 'pipe', 'pipe'],
+            // 'ignore' (not 'pipe'): nothing ever drains these streams, so a
+            // pipe would wedge the daemon once 64KB of output buffers.
+            stdio: ['ignore', 'ignore', 'ignore'],
           });
 
           const loserPid = loserProcess.pid;
