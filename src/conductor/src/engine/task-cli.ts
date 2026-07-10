@@ -114,7 +114,11 @@ export async function runTaskStart(projectRoot: string, id: string): Promise<num
   // Find the row with matching id
   const rowIndex = tasks.findIndex((t) => t.id === id);
   if (rowIndex === -1) {
-    console.error(`[task-cli] task id "${id}" not found in task-status.json`);
+    const validIds = tasks.map((t) => t.id).join(', ');
+    console.error(
+      `[task-cli] task id "${id}" not found in task-status.json\n` +
+        `[task-cli] valid ids: ${validIds}`,
+    );
     return 1;
   }
 
