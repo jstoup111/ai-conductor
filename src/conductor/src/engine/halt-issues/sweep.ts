@@ -143,6 +143,8 @@ export async function sweep(config: SweepConfig): Promise<SweepResult> {
   }
 
   // Step 4: Process each verdict entry
+  const plannedActions: string[] = [];
+
   for (const verdict of parseResult.entries) {
     const issue = verdict.issue;
 
@@ -159,33 +161,60 @@ export async function sweep(config: SweepConfig): Promise<SweepResult> {
       };
     }
 
-    try {
-      // Step 4a: Stamp the issue
-      const stampResult = await stampIssue(entry, config.gh);
+    // Quota discipline (C1): resolution is derived entirely from local fs state,
+    // never from gh — so this check costs zero gh calls regardless of outcome.
+    const resolution = await resolveEntry(entry, config.repoDir, config.fs);
+    const alreadyStamped = !!entry.stampedAt;
+    const needsGh = !alreadyStamped || resolution.resolvable;
 
-      if (stampResult.stamped) {
-        counts.stamped++;
-        entry.stampedAt = stampResult.stampedAt;
-      } else if (stampResult.closedBy === 'external') {
-        // Issue is externally closed (404 or not found)
-        entry.closedBy = 'external';
-        entry.closedAt = config.clock.now().toISOString();
-        entry.status = 'closed';
-      } else if (stampResult.lastError) {
-        // Stamp failed with error
-        entry.lastError = stampResult.lastError;
-        counts.errors++;
-        // Update ledger and continue to next entry
-        ledgerSchema.entries[issue] = entry;
-        continue;
-      } else if (stampResult.stampedAt) {
-        // Marker was already present
-        entry.stampedAt = stampResult.stampedAt;
+    if (!needsGh) {
+      // Nothing to do: already stamped, and not locally resolvable. Zero gh calls.
+      if (resolution.reason === 'mtime-not-gt-halt') {
+        counts.guarded++;
+      } else if (resolution.reason !== 'no-ship-evidence' && resolution.reason !== 'cleared-no-ship' && resolution.reason !== 'no-pr-url') {
+        counts.guarded++;
+      }
+      ledgerSchema.entries[issue] = entry;
+      continue;
+    }
+
+    if (config.dryRun) {
+      // Dry-run: describe the planned action(s) without issuing any gh calls.
+      const actions: string[] = [];
+      if (!alreadyStamped) actions.push('stamp');
+      if (resolution.resolvable) actions.push('close');
+      plannedActions.push(`issue #${issue}: planned ${actions.join('+')}`);
+      ledgerSchema.entries[issue] = entry;
+      continue;
+    }
+
+    try {
+      // Step 4a: Stamp the issue (only if not already stamped locally)
+      if (!alreadyStamped) {
+        const stampResult = await stampIssue(entry, config.gh);
+
+        if (stampResult.stamped) {
+          counts.stamped++;
+          entry.stampedAt = stampResult.stampedAt;
+        } else if (stampResult.closedBy === 'external') {
+          // Issue is externally closed (404 or not found)
+          entry.closedBy = 'external';
+          entry.closedAt = config.clock.now().toISOString();
+          entry.status = 'closed';
+        } else if (stampResult.lastError) {
+          // Stamp failed with error
+          entry.lastError = stampResult.lastError;
+          counts.errors++;
+          // Update ledger and continue to next entry
+          ledgerSchema.entries[issue] = entry;
+          continue;
+        } else if (stampResult.stampedAt) {
+          // Marker was already present
+          entry.stampedAt = stampResult.stampedAt;
+        }
       }
 
-      // Step 4b: Check if resolvable
-      const resolution = await resolveEntry(entry, config.repoDir, config.fs);
-
+      // Step 4b: Close if locally resolvable
       if (resolution.resolvable) {
         // Step 4c: Close the issue
         const closeResult = await closeIssue(entry, config.gh);
@@ -239,7 +268,13 @@ export async function sweep(config: SweepConfig): Promise<SweepResult> {
   }
 
   // Step 6: Generate summary
-  const summary = `halt-issues sweep: parsed ${counts.parsed}, stamped ${counts.stamped}, closed ${counts.closed}, guarded ${counts.guarded}, errors ${counts.errors}`;
+  let summary = `halt-issues sweep: parsed ${counts.parsed}, stamped ${counts.stamped}, closed ${counts.closed}, guarded ${counts.guarded}, errors ${counts.errors}`;
+
+  if (config.dryRun && plannedActions.length > 0) {
+    summary += ` [dry-run] planned: ${plannedActions.join('; ')}`;
+    // eslint-disable-next-line no-console
+    console.log(`halt-issues sweep (dry-run) planned actions:\n${plannedActions.join('\n')}`);
+  }
 
   // Collect parsed entries for reporting
   const entries: SweepResultEntry[] = parseResult.entries.map((entry) => ({
