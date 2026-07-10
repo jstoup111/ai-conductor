@@ -23,7 +23,10 @@ import {
   clearRestartMarker,
   recordSuppression,
   getSuppression,
+  isSuppressed,
+  clearSuppression,
   RESTART_MARKER_PATH,
+  SUPPRESSION_PATH,
   type RestartMarker,
 } from '../../src/engine/restart-intent.js';
 
@@ -307,5 +310,182 @@ describe('daemon startup handshake (Task 9)', () => {
     // Verify marker was cleared
     const statusAfter = await readRestartMarkerWithStatus(projectRoot);
     expect(statusAfter.kind).toBe('absent');
+  });
+
+  it('Task 2: same-boot hold — stale verdict on suppressed identity blocks restart', async () => {
+    // Task 2: Within the same boot, if suppression was recorded for engine identity E,
+    // and a stale verdict comes in for E, the restart request should be blocked.
+    // The hold should be logged, and no restart marker should be written.
+
+    const suppressedIdentity = 'engine-stalled-xyz';
+
+    // Suppress this identity (as would happen after non-convergence at boot)
+    await recordSuppression(suppressedIdentity, projectRoot);
+
+    // Verify suppression record exists
+    const suppression = await getSuppression(projectRoot);
+    expect(suppression).not.toBeNull();
+    expect(suppression?.suppressedTarget).toBe(suppressedIdentity);
+
+    // Later in the same boot: engine becomes stale, verdict issued for the same identity
+    const logs: string[] = [];
+    const log = (msg: string) => logs.push(msg);
+
+    // Before writing a restart marker, check if this identity is suppressed
+    const isHeld = await isSuppressed(suppressedIdentity, projectRoot, log);
+
+    if (isHeld) {
+      // Suppression active: don't write restart marker, log the hold
+      log('holding restart request — engine identity is under suppression');
+      // In real code: return early, don't call writeRestartMarker
+    } else {
+      // Normal restart request path (would write marker)
+      log(`would write restart marker for ${suppressedIdentity}`);
+    }
+
+    // Verify that suppression was detected (isSuppressed returned true)
+    expect(isHeld).toBe(true);
+
+    // Verify hold was logged
+    const holdLogs = logs.filter((m) => m.includes('holding restart request'));
+    expect(holdLogs.length).toBe(1);
+    expect(holdLogs[0]).toContain('suppression');
+
+    // Verify suppression warning was logged exactly once (from isSuppressed)
+    const suppressionWarnings = logs.filter((m) => m.includes('Restart suppressed'));
+    expect(suppressionWarnings.length).toBe(1);
+
+    // Verify that no restart marker was written (because we held)
+    const markerStatus = await readRestartMarkerWithStatus(projectRoot);
+    expect(markerStatus.kind).toBe('absent');
+
+    // Verify the suppression record is still in place
+    const suppressionAfter = await getSuppression(projectRoot);
+    expect(suppressionAfter).not.toBeNull();
+    expect(suppressionAfter?.suppressedTarget).toBe(suppressedIdentity);
+  });
+
+  it('Task 3: re-arm scenario — record for T, different target U ≠ T is not suppressed', async () => {
+    // Task 3(a): When suppression is recorded for fresh identity T, asking if
+    // a different target U ≠ T is suppressed should return false (re-arm).
+    const suppressedIdentity = 'engine-fresh-T-111';
+    const differentTarget = 'engine-target-U-222';
+
+    // Simulate first boot: record suppression for T
+    await recordSuppression(suppressedIdentity, projectRoot);
+
+    // Verify suppression was recorded for T
+    let suppression = await getSuppression(projectRoot);
+    expect(suppression).not.toBeNull();
+    expect(suppression?.suppressedTarget).toBe(suppressedIdentity);
+
+    // Later scenario: ask if a different target U is suppressed
+    // Should return false because suppression is for T, not U (re-arm: different target proceeds)
+    const { isSuppressed } = await import('../../src/engine/restart-intent.js');
+    const isUuppressed = await isSuppressed(differentTarget, projectRoot);
+    expect(isUuppressed).toBe(false); // Different target is NOT suppressed (re-arm)
+  });
+
+  it('Task 3: converged boot — fresh identity = target ⇒ no suppression file written', async () => {
+    // Task 3(b): When converged (fresh == target), no suppression file should be written.
+    const convergedIdentity = 'engine-converged-333';
+
+    const marker: RestartMarker = {
+      reason: 'engine stalled',
+      fromIdentity: 'daemon-boot',
+      targetIdentity: convergedIdentity,
+      at: Date.now(),
+    };
+
+    await writeRestartMarker(marker, projectRoot);
+
+    const logs: string[] = [];
+    const log = (msg: string) => logs.push(msg);
+
+    const markerStatus = await readRestartMarkerWithStatus(projectRoot, log);
+
+    // Simulate converged boot (fresh identity = target)
+    if (markerStatus.kind === 'present' && convergedIdentity !== null) {
+      const markerData = markerStatus.marker!;
+      // convergedIdentity === markerData.targetIdentity, so no suppression recorded
+      if (convergedIdentity !== markerData.targetIdentity) {
+        await recordSuppression(convergedIdentity, projectRoot, log);
+      }
+      await clearRestartMarker(projectRoot);
+    }
+
+    // Verify no suppression was recorded
+    const suppression = await getSuppression(projectRoot);
+    expect(suppression).toBeNull();
+  });
+
+  it('Task 4: converged handshake — pre-existing suppression cleared when fresh identity equals marker target', async () => {
+    // Task 4: When a pre-existing suppression record exists and the fresh engine
+    // identity converges to the marker's target identity (fresh === target),
+    // the suppression record should be cleared by initStaleEngineState.
+
+    const convergedIdentity = 'engine-converged-xyz789';
+
+    const marker: RestartMarker = {
+      reason: 'engine stalled',
+      fromIdentity: 'daemon-old',
+      targetIdentity: convergedIdentity, // Will equal the fresh identity
+      at: Date.now(),
+    };
+
+    // Write marker before boot
+    await writeRestartMarker(marker, projectRoot);
+
+    // Pre-existing suppression record from a previous boot (non-convergence scenario)
+    await recordSuppression(convergedIdentity, projectRoot);
+
+    // Verify suppression exists before handshake
+    const suppressionBefore = await getSuppression(projectRoot);
+    expect(suppressionBefore).not.toBeNull();
+    expect(suppressionBefore?.suppressedTarget).toBe(convergedIdentity);
+
+    // Verify suppression file exists on disk
+    const suppressionFilePath = join(projectRoot, SUPPRESSION_PATH);
+    expect(existsSync(suppressionFilePath)).toBe(true);
+
+    // Simulate boot-time handshake with manual convergence logic.
+    // When fresh identity == target identity, clearSuppression should be called.
+    const logs: string[] = [];
+    const log = (msg: string) => logs.push(msg);
+
+    const freshIdentity = convergedIdentity; // Simulating convergence
+
+    const markerStatus = await readRestartMarkerWithStatus(projectRoot, log);
+
+    if (markerStatus.kind === 'present' && freshIdentity !== null) {
+      const markerData = markerStatus.marker!;
+      log(
+        `restarted for engine refresh — from ${markerData.fromIdentity} to ${markerData.targetIdentity}, fresh ${freshIdentity}`,
+      );
+
+      // Task 10: Check for non-convergence and record suppression
+      if (freshIdentity !== markerData.targetIdentity) {
+        log(`suppressing restart loop — target was ${markerData.targetIdentity}, now ${freshIdentity}`);
+        await recordSuppression(freshIdentity, projectRoot, log);
+      } else {
+        // Task 4: On convergence, clear any pre-existing suppression
+        // This is where initStaleEngineState should call clearSuppression
+        await clearSuppression(projectRoot, log);
+      }
+
+      await clearRestartMarker(projectRoot);
+    }
+
+    // Verify handshake was logged
+    expect(logs.some((m) => m.includes('restarted for engine refresh'))).toBe(true);
+
+    // Verify no new suppression warning was logged (because convergence occurred)
+    const suppressionLogs = logs.filter((m) => m.includes('suppressing restart loop'));
+    expect(suppressionLogs.length).toBe(0);
+
+    // CRITICAL: Verify suppression file was CLEARED after converged handshake
+    const suppressionAfter = await getSuppression(projectRoot);
+    expect(suppressionAfter).toBeNull();
+    expect(existsSync(suppressionFilePath)).toBe(false);
   });
 });

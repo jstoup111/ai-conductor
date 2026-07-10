@@ -23,6 +23,7 @@ import {
   readRestartMarkerWithStatus,
   clearRestartMarker,
   recordSuppression,
+  clearSuppression,
 } from './restart-intent.js';
 
 /**
@@ -87,7 +88,11 @@ export async function initStaleEngineState(opts: InitStaleEngineStateOpts): Prom
         log(
           `suppressing restart loop — target was ${marker.targetIdentity}, now ${engineIdentity}`,
         );
-        await recordSuppression(marker.targetIdentity, repoPath, log);
+        await recordSuppression(engineIdentity, repoPath, log);
+      } else {
+        // Task 4: On convergence (fresh === target), clear any pre-existing suppression.
+        // This allows future restarts to proceed if the engine diverges again.
+        await clearSuppression(repoPath, log);
       }
 
       // Clear the marker before the dispatch loop begins
