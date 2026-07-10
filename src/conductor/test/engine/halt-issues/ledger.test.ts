@@ -240,10 +240,19 @@ describe('Ledger', () => {
       (mockFs.fileExists as any).mockResolvedValue(true);
       (mockFs.readFile as any).mockResolvedValue('{ invalid json }');
 
-      ledger = new Ledger(ledgerPath, mockFs);
+      const mockClock = {
+        now: () => new Date('2026-07-09T12:34:56.789Z')
+      };
 
-      // For now, we expect it to throw; Task 5 handles corruption recovery
-      await expect(ledger.read()).rejects.toThrow();
+      ledger = new Ledger(ledgerPath, mockFs, mockClock);
+
+      // Corruption handling: returns empty schema and renames file
+      const result = await ledger.read();
+      expect(result.version).toBe(1);
+      expect(result.entries).toEqual({});
+
+      // Verify rename was called to quarantine
+      expect(mockFs.rename).toHaveBeenCalled();
     });
   });
 
@@ -305,6 +314,201 @@ describe('Ledger', () => {
       const fileContent = JSON.parse(writeCall[1]);
 
       expect(fileContent.entries['297'].status).toBe('stamped');
+    });
+  });
+
+  describe('corruption recovery', () => {
+    it('renames corrupted JSON to .ledger.json.corrupt-<ts>', async () => {
+      (mockFs.fileExists as any).mockResolvedValue(true);
+      (mockFs.readFile as any).mockResolvedValue('{ invalid json }');
+
+      const mockClock = {
+        now: () => new Date('2026-07-09T12:34:56.789Z')
+      };
+
+      ledger = new Ledger(ledgerPath, mockFs, mockClock);
+
+      const result = await ledger.read();
+
+      // Should return empty schema after corruption
+      expect(result.version).toBe(1);
+      expect(result.entries).toEqual({});
+
+      // Verify rename was called with corrupt filename
+      expect(mockFs.rename).toHaveBeenCalled();
+      const renameCall = (mockFs.rename as any).mock.calls[0];
+      expect(renameCall[0]).toBe(ledgerPath);
+      expect(renameCall[1]).toContain('ledger.json.corrupt-');
+      expect(renameCall[1]).toContain('2026-07-09T12:34:56.789Z');
+    });
+
+    it('logs warning to stderr when corruption is detected', async () => {
+      (mockFs.fileExists as any).mockResolvedValue(true);
+      (mockFs.readFile as any).mockResolvedValue('{ invalid json }');
+
+      const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+      const mockClock = {
+        now: () => new Date('2026-07-09T12:34:56.789Z')
+      };
+
+      ledger = new Ledger(ledgerPath, mockFs, mockClock);
+
+      await ledger.read();
+
+      expect(stderrSpy).toHaveBeenCalled();
+      const stderrContent = (stderrSpy as any).mock.calls.map((call: any[]) => call[0]).join('');
+      expect(stderrContent).toContain('corrupted');
+      expect(stderrContent).toContain(ledgerPath);
+      expect(stderrContent).toContain('ledger.json.corrupt-2026-07-09T12:34:56.789Z');
+
+      stderrSpy.mockRestore();
+    });
+  });
+
+  describe('rebuild', () => {
+    it('rebuilds ledger from verdicts with closedIssueReader', async () => {
+      (mockFs.fileExists as any).mockResolvedValue(false);
+      (mockFs.readFile as any).mockResolvedValue('');
+
+      const mockClock = {
+        now: () => new Date('2026-07-09T12:00:00.000Z')
+      };
+
+      ledger = new Ledger(ledgerPath, mockFs, mockClock);
+
+      const verdicts: VerdictEntry[] = [
+        {
+          issue: '297',
+          slug: 'daemon-lifecycle-controls',
+          repo: 'jstoup111/james-stoup-agents',
+          haltAt: '2026-07-04T11:58:38.984Z'
+        },
+        {
+          issue: '300',
+          slug: 'other-issue',
+          repo: 'jstoup111/james-stoup-agents',
+          haltAt: '2026-07-04T12:00:00.000Z'
+        }
+      ];
+
+      const closedIssueReader = vi.fn(async (issue: string) => {
+        // Issue 297 is already closed, 300 is not
+        return issue === '297';
+      });
+
+      await ledger.rebuild(verdicts, closedIssueReader);
+
+      const writeCall = (mockFs.writeFile as any).mock.calls[0];
+      const fileContent = JSON.parse(writeCall[1]);
+
+      // Issue 297 should be marked as closed
+      expect(fileContent.entries['297'].status).toBe('closed');
+      expect(fileContent.entries['297'].closedBy).toBe('external');
+      expect(fileContent.entries['297'].closedAt).toBe('2026-07-09T12:00:00.000Z');
+
+      // Issue 300 should be pending
+      expect(fileContent.entries['300'].status).toBe('pending');
+      expect(fileContent.entries['300'].closedAt).toBeUndefined();
+
+      // Verify rename was called (atomic write)
+      expect(mockFs.rename).toHaveBeenCalled();
+    });
+
+    it('uses closedIssueReader to determine closed status', async () => {
+      (mockFs.fileExists as any).mockResolvedValue(false);
+
+      const mockClock = {
+        now: () => new Date('2026-07-09T12:00:00.000Z')
+      };
+
+      ledger = new Ledger(ledgerPath, mockFs, mockClock);
+
+      const verdicts: VerdictEntry[] = [
+        {
+          issue: '297',
+          slug: 'test',
+          repo: 'test/repo',
+          haltAt: '2026-07-04T11:58:38.984Z'
+        }
+      ];
+
+      const closedIssueReader = vi.fn(async (issue: string) => {
+        expect(issue).toBe('297');
+        return true;
+      });
+
+      await ledger.rebuild(verdicts, closedIssueReader);
+
+      expect(closedIssueReader).toHaveBeenCalledWith('297');
+    });
+
+    it('preserves other fields from verdicts during rebuild', async () => {
+      (mockFs.fileExists as any).mockResolvedValue(false);
+
+      const mockClock = {
+        now: () => new Date('2026-07-09T12:00:00.000Z')
+      };
+
+      ledger = new Ledger(ledgerPath, mockFs, mockClock);
+
+      const verdicts: VerdictEntry[] = [
+        {
+          issue: '297',
+          slug: 'daemon-lifecycle-controls',
+          repo: 'jstoup111/james-stoup-agents',
+          haltAt: '2026-07-04T11:58:38.984Z'
+        }
+      ];
+
+      const closedIssueReader = vi.fn(async () => false);
+
+      await ledger.rebuild(verdicts, closedIssueReader);
+
+      const writeCall = (mockFs.writeFile as any).mock.calls[0];
+      const fileContent = JSON.parse(writeCall[1]);
+
+      expect(fileContent.entries['297'].issue).toBe('297');
+      expect(fileContent.entries['297'].slug).toBe('daemon-lifecycle-controls');
+      expect(fileContent.entries['297'].repo).toBe('jstoup111/james-stoup-agents');
+      expect(fileContent.entries['297'].haltAt).toBe('2026-07-04T11:58:38.984Z');
+    });
+
+    it('writes atomically during rebuild', async () => {
+      (mockFs.fileExists as any).mockResolvedValue(false);
+
+      const mockClock = {
+        now: () => new Date('2026-07-09T12:00:00.000Z')
+      };
+
+      ledger = new Ledger(ledgerPath, mockFs, mockClock);
+
+      const verdicts: VerdictEntry[] = [
+        {
+          issue: '297',
+          slug: 'test',
+          repo: 'test/repo',
+          haltAt: '2026-07-04T11:58:38.984Z'
+        }
+      ];
+
+      const closedIssueReader = vi.fn(async () => false);
+
+      await ledger.rebuild(verdicts, closedIssueReader);
+
+      // Verify order: writeFile called first, then rename
+      const writeCallIndex = (mockFs.writeFile as any).mock.invocationCallOrder[0];
+      const renameCallIndex = (mockFs.rename as any).mock.invocationCallOrder[0];
+      expect(writeCallIndex).toBeLessThan(renameCallIndex);
+
+      // Verify tmp file is in same directory
+      const tmpPath = (mockFs.writeFile as any).mock.calls[0][0];
+      expect(tmpPath).toContain('/test/');
+      expect(tmpPath).toMatch(/\.ledger\.json\.tmp/);
+
+      // Verify rename moves tmp to ledger path
+      const renameCall = (mockFs.rename as any).mock.calls[0];
+      expect(renameCall[0]).toBe(tmpPath);
+      expect(renameCall[1]).toBe(ledgerPath);
     });
   });
 });
