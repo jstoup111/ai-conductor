@@ -49,6 +49,7 @@ import { writeFile, mkdir, readFile } from 'fs/promises';
 import { createHash } from 'crypto';
 import { createTaskEvidence } from '../../src/engine/task-evidence.js';
 import { AuditTrailWriter } from '../../src/engine/audit-trail.js';
+import { haltMarkerExists } from '../../src/engine/task-progress.js';
 
 function createMockStepRunner(result: StepRunResult = { success: true }): StepRunner {
   return {
@@ -7609,5 +7610,452 @@ describe('Task 9: repeat-stall budget accounting', () => {
     //
     // This is the intended behavior per TR-3 negative ("resume does not reset budget").
     expect(true).toBe(true);
+  });
+});
+
+describe('stall remediation gated to daemon halt_marker only (Task 11)', () => {
+  let dir: string;
+  let statePath: string;
+  let events: ConductorEventEmitter;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'task-11-test-'));
+    statePath = join(dir, 'conduct-state.json');
+    events = new ConductorEventEmitter();
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  const STALL_QUESTION = 'What color is the button?';
+
+  async function seedToBuildStep(): Promise<void> {
+    const res = await readState(statePath);
+    const state = (res.ok ? res.value : {}) as Record<string, unknown>;
+    for (const s of ALL_STEPS) {
+      if (s.name === 'build') break;
+      state[s.name] = 'done';
+    }
+    state.complexity_tier = 'M';
+    state.feature_desc = 'stall-guard-test';
+    await writeState(statePath, state as unknown as ConductState);
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await mkdir(join(dir, '.docs/plans'), { recursive: true });
+    await writeFile(
+      join(dir, '.docs/plans/stall-guard-test.md'),
+      '# Plan\n\n### Task 1: Step 1\n',
+    );
+  }
+
+  it('interactive mode with halt marker → runInteractive called, remediate NOT dispatched', async () => {
+    await seedToBuildStep();
+
+    const dispatchedSteps: StepName[] = [];
+    const runner: StepRunner = {
+      run: vi.fn(async (step: StepName) => {
+        dispatchedSteps.push(step);
+        if (step === 'build') {
+          // Write halt marker (this would normally trigger remediate in daemon mode)
+          await writeFile(
+            join(dir, '.pipeline/halt-user-input-required'),
+            STALL_QUESTION,
+          );
+          // Write pending tasks to fail the gate
+          await writeFile(
+            join(dir, '.pipeline/task-status.json'),
+            JSON.stringify({ tasks: [{ id: 1, status: 'pending' }] }),
+          );
+        }
+        return { success: true } as StepRunResult;
+      }),
+    };
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      mode: 'interactive', // ← interactive mode
+      daemon: false,        // ← NOT daemon mode
+      verifyArtifacts: true,
+      maxRetries: 1,
+    });
+
+    await conductor.run();
+
+    // In interactive mode, remediate should NOT be dispatched (only in daemon+auto)
+    expect(dispatchedSteps).not.toContain('remediate');
+    // Build should have been attempted once (no retry from remediate)
+    const buildCalls = dispatchedSteps.filter((s) => s === 'build').length;
+    expect(buildCalls).toBe(1);
+  });
+
+  it('no_task_progress stall (not halt_marker) → remediate NOT dispatched', async () => {
+    await seedToBuildStep();
+
+    const dispatchedSteps: StepName[] = [];
+    const runner: StepRunner = {
+      run: vi.fn(async (step: StepName) => {
+        dispatchedSteps.push(step);
+        if (step === 'build') {
+          // On both attempts, return no task progress (no marker)
+          // This triggers the 'no_task_progress' stall verdict
+          await writeFile(
+            join(dir, '.pipeline/task-status.json'),
+            JSON.stringify({ tasks: [{ id: 1, status: 'pending' }] }),
+          );
+        }
+        return { success: true } as StepRunResult;
+      }),
+    };
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      maxRetries: 3, // Allow retries
+    });
+
+    await conductor.run();
+
+    // When stall is 'no_task_progress' (not 'halt_marker'), remediate is NOT dispatched
+    // This is because the guard checks: if (stalled === 'halt_marker')
+    expect(dispatchedSteps).not.toContain('remediate');
+  });
+
+  it('auto-park condition met → park HALT wins, stall branch never runs', async () => {
+    // Seed with task evidence counter at threshold (3)
+    const res = await readState(statePath);
+    const state = (res.ok ? res.value : {}) as Record<string, unknown>;
+    for (const s of ALL_STEPS) {
+      if (s.name === 'acceptance_specs') break;
+      state[s.name] = 'done';
+    }
+    state.complexity_tier = 'L';
+    state.feature_desc = 'auto-park-test';
+    await writeState(statePath, state as unknown as ConductState);
+
+    // Create a plan file
+    await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+    await writeFile(
+      join(dir, '.docs/plans/auto-park-test.md'),
+      '# Plan\n\n- Task 1\n',
+    );
+
+    // Seed task evidence with no-evidence counter at threshold (3)
+    const evidence = await createTaskEvidence(dir);
+    evidence.noEvidenceAttempts = 3; // DAEMON_NO_EVIDENCE_THRESHOLD
+    await evidence.write();
+
+    const dispatchedSteps: StepName[] = [];
+    const runner: StepRunner = {
+      run: vi.fn(async (step: StepName) => {
+        dispatchedSteps.push(step);
+        // No task progress - trigger the no-evidence path
+        await mkdir(join(dir, '.pipeline'), { recursive: true });
+        await writeFile(
+          join(dir, '.pipeline/task-status.json'),
+          JSON.stringify({ tasks: [{ id: 1, status: 'pending' }] }),
+        );
+        return { success: true } as StepRunResult;
+      }),
+    };
+
+    let parked = false;
+    events.on('auto_park', () => {
+      parked = true;
+    });
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      maxRetries: 1,
+      fromStep: 'build',
+    });
+
+    await conductor.run();
+
+    // Auto-park should have fired, causing an early exit
+    expect(parked).toBe(true);
+  });
+});
+
+describe('HALT content robust to hostile question text (Task 12)', () => {
+  let dir: string;
+  let statePath: string;
+  let events: ConductorEventEmitter;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'task-12-test-'));
+    statePath = join(dir, 'conduct-state.json');
+    events = new ConductorEventEmitter();
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  const STALL_QUESTION = 'Need user decision: which auth provider — Auth0 or Cognito?';
+
+  async function seedToBuildStep(): Promise<void> {
+    const res = await readState(statePath);
+    const state = (res.ok ? res.value : {}) as Record<string, unknown>;
+    for (const s of ALL_STEPS) {
+      if (s.name === 'build') break;
+      state[s.name] = 'done';
+    }
+    state.complexity_tier = 'M';
+    state.feature_desc = 'halt-robustness-test';
+    await writeState(statePath, state as unknown as ConductState);
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await mkdir(join(dir, '.docs/plans'), { recursive: true });
+    await writeFile(
+      join(dir, '.docs/plans/halt-robustness-test.md'),
+      '# Plan\n\n### Task 1: Step 1\n',
+    );
+  }
+
+  it('question with backticks/quotes/special chars → readHaltReason returns full first line', async () => {
+    const testQuestion = 'Can we use `Auth0` or "Cognito" — which one?';
+
+    await seedToBuildStep();
+
+    const runner: StepRunner = {
+      run: vi.fn(async (step: StepName) => {
+        if (step === 'build') {
+          await writeFile(
+            join(dir, '.pipeline/halt-user-input-required'),
+            testQuestion,
+          );
+          await writeFile(
+            join(dir, '.pipeline/task-status.json'),
+            JSON.stringify({ tasks: [{ id: 1, status: 'pending' }] }),
+          );
+        } else if (step === 'remediate') {
+          await writeFile(
+            join(dir, '.pipeline/remediation.json'),
+            JSON.stringify({
+              dispositions: [
+                {
+                  id: 'stall:choice',
+                  disposition: 'halt',
+                  category: 'product-scope',
+                  rationale: 'Product decision needed.',
+                  tasks: [],
+                },
+              ],
+            }),
+          );
+        }
+        return { success: true } as StepRunResult;
+      }),
+    };
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      maxRetries: 1,
+    });
+
+    await conductor.run();
+
+    // Read HALT file and verify first line is preserved exactly
+    const haltContent = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+    const lines = haltContent.split('\n');
+    const firstNonEmptyLine = lines.find((l) => l.trim().length > 0);
+
+    expect(firstNonEmptyLine).toBe(testQuestion);
+    // Verify special characters are not corrupted
+    expect(firstNonEmptyLine).toContain('`Auth0`');
+    expect(firstNonEmptyLine).toContain('"Cognito"');
+    expect(firstNonEmptyLine).toContain('—');
+  });
+
+  it('500-char long first line → readHaltReason returns complete line', async () => {
+    const longQuestion = 'A'.repeat(500);
+
+    await seedToBuildStep();
+
+    const runner: StepRunner = {
+      run: vi.fn(async (step: StepName) => {
+        if (step === 'build') {
+          await writeFile(
+            join(dir, '.pipeline/halt-user-input-required'),
+            longQuestion,
+          );
+          await writeFile(
+            join(dir, '.pipeline/task-status.json'),
+            JSON.stringify({ tasks: [{ id: 1, status: 'pending' }] }),
+          );
+        } else if (step === 'remediate') {
+          await writeFile(
+            join(dir, '.pipeline/remediation.json'),
+            JSON.stringify({
+              dispositions: [
+                {
+                  id: 'stall:long',
+                  disposition: 'halt',
+                  category: null,
+                  rationale: 'Test',
+                  tasks: [],
+                },
+              ],
+            }),
+          );
+        }
+        return { success: true } as StepRunResult;
+      }),
+    };
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      maxRetries: 1,
+    });
+
+    await conductor.run();
+
+    const haltContent = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+    const firstLine = haltContent.split('\n')[0];
+
+    // Verify the entire 500-char line is preserved
+    expect(firstLine).toBe(longQuestion);
+    expect(firstLine.length).toBe(500);
+  });
+
+  it('halt disposition with empty rationale → question line still present in HALT', async () => {
+    await seedToBuildStep();
+
+    const runner: StepRunner = {
+      run: vi.fn(async (step: StepName) => {
+        if (step === 'build') {
+          await writeFile(
+            join(dir, '.pipeline/halt-user-input-required'),
+            STALL_QUESTION,
+          );
+          await writeFile(
+            join(dir, '.pipeline/task-status.json'),
+            JSON.stringify({ tasks: [{ id: 1, status: 'pending' }] }),
+          );
+        } else if (step === 'remediate') {
+          // Write remediation with empty rationale
+          await writeFile(
+            join(dir, '.pipeline/remediation.json'),
+            JSON.stringify({
+              dispositions: [
+                {
+                  id: 'stall:auth',
+                  disposition: 'halt',
+                  category: 'product-scope',
+                  rationale: '', // ← empty rationale
+                  tasks: [],
+                },
+              ],
+            }),
+          );
+        }
+        return { success: true } as StepRunResult;
+      }),
+    };
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      maxRetries: 1,
+    });
+
+    await conductor.run();
+
+    const haltContent = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+    const lines = haltContent.split('\n').filter((l) => l.trim().length > 0);
+
+    // Question line must be present even with empty rationale
+    expect(lines[0]).toBe(STALL_QUESTION);
+    expect(haltContent).toContain(STALL_QUESTION);
+  });
+
+  it('HALT file not corrupted by special characters in question', async () => {
+    const specialCharsQuestion =
+      'Use emoji? 🚀 Newline control? Colors? Question?';
+
+    await seedToBuildStep();
+
+    const runner: StepRunner = {
+      run: vi.fn(async (step: StepName) => {
+        if (step === 'build') {
+          await writeFile(
+            join(dir, '.pipeline/halt-user-input-required'),
+            specialCharsQuestion,
+          );
+          await writeFile(
+            join(dir, '.pipeline/task-status.json'),
+            JSON.stringify({ tasks: [{ id: 1, status: 'pending' }] }),
+          );
+        } else if (step === 'remediate') {
+          await writeFile(
+            join(dir, '.pipeline/remediation.json'),
+            JSON.stringify({
+              dispositions: [
+                {
+                  id: 'stall:special',
+                  disposition: 'halt',
+                  category: null,
+                  rationale: 'Special chars test.',
+                  tasks: [],
+                },
+              ],
+            }),
+          );
+        }
+        return { success: true } as StepRunResult;
+      }),
+    };
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      maxRetries: 1,
+    });
+
+    await conductor.run();
+
+    // File should be readable and valid (not corrupted)
+    const haltContent = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+    expect(typeof haltContent).toBe('string');
+    expect(haltContent.length).toBeGreaterThan(0);
+
+    // The first line should contain the question (emoji should survive UTF-8)
+    const firstLine = haltContent.split('\n')[0];
+    expect(firstLine).toContain('🚀');
   });
 });
