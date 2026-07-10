@@ -141,7 +141,17 @@ export interface BuildProgressWatcherOptions {
  * new commit landing on HEAD with no task delta, a current-task change, or a
  * bare noEvidenceAttempts bump all count as "changed". A HEAD change also
  * populates `commitCount` via `git rev-list --count <old>..<new>` (best
- * effort — omitted if that probe fails). An unchanged tick emits nothing.
+ * effort — omitted if that probe fails). An unchanged tick emits nothing
+ * (beyond the heartbeat/quiet-episode checks described below).
+ *
+ * Quiet-episode tracking (Task 7): the watcher also maintains a
+ * `build_no_progress` episode state machine — `lastChangeAt` (the timestamp
+ * of the most recent change-driven tick) and `quietFired` (whether this
+ * episode has already emitted). Once the time since `lastChangeAt` crosses
+ * `quiet_minutes`, `build_no_progress` fires exactly once (guarded by
+ * `quietFired`); continued quiet emits nothing further. Any subsequent
+ * change-driven tick re-arms the episode (`quietFired` reset to false,
+ * `lastChangeAt` bumped to now), so a later quiet stretch fires again.
  */
 
 /**
@@ -167,6 +177,18 @@ export class BuildProgressWatcher {
   private readonly resolvedConfig: ResolvedBuildProgressConfig;
   private timer: ReturnType<typeof setInterval> | null = null;
   private lastSnapshot: TickSnapshot | null = null;
+  private lastEmitAt: number | null = null;
+  private stopped = false;
+  /**
+   * Quiet-episode state (Task 7): `lastChangeAt` is the timestamp of the most
+   * recent change-driven tick (task delta, HEAD move, current-task change, or
+   * evidence-counter bump); `quietFired` guards against emitting
+   * `build_no_progress` more than once per quiet episode. Any subsequent
+   * change re-arms the episode (`quietFired` reset to false, `lastChangeAt`
+   * bumped) so a later quiet stretch can fire again.
+   */
+  private lastChangeAt: number | null = null;
+  private quietFired = false;
 
   constructor(opts: BuildProgressWatcherOptions) {
     this.projectRoot = opts.projectRoot;
@@ -179,6 +201,7 @@ export class BuildProgressWatcher {
   /** No-op if already started, or if `build_progress.enabled` is false. */
   start(): void {
     if (this.timer || !this.resolvedConfig.enabled) return;
+    this.stopped = false;
     const timer = setInterval(() => {
       void this.tick();
     }, this.resolvedConfig.poll_seconds * 1000);
@@ -187,8 +210,11 @@ export class BuildProgressWatcher {
   }
 
   /** Idempotent — safe to call even if `start()` was never called, or is
-   * called more than once. */
+   * called more than once. Also flips a `stopped` guard so any tick already
+   * in flight when stop() is called resolves as a no-op instead of emitting
+   * on a bus the caller has moved on from. */
   stop(): void {
+    this.stopped = true;
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;
@@ -254,6 +280,50 @@ export class BuildProgressWatcher {
       snapshot.noEvidenceAttempts !== previous.noEvidenceAttempts;
 
     if (!changed) {
+      if (this.stopped) return;
+
+      // Quiet-episode check (Task 7): fire build_no_progress exactly once
+      // per quiet episode once quiet_minutes has elapsed since the last
+      // observed change. `lastChangeAt` is only set once a baseline tick has
+      // established one (below / on the first changed tick), so this is a
+      // no-op until that happens.
+      if (this.lastChangeAt !== null && !this.quietFired) {
+        const quietMs = this.resolvedConfig.quiet_minutes * 60 * 1000;
+        const quietElapsed = Date.now() - this.lastChangeAt;
+        if (quietElapsed >= quietMs) {
+          this.quietFired = true;
+          await this.events.emit({
+            type: 'build_no_progress',
+            step: this.step,
+            quietMinutes: Math.floor(quietElapsed / 60000),
+            resolved,
+            total,
+            currentTaskId: snapshot.currentTaskId,
+            featureSlug: this.featureSlug,
+          });
+        }
+      }
+
+      // No change-driven emission this tick — check whether the heartbeat
+      // clock has elapsed since the last emission (change-driven OR
+      // heartbeat). A silent build still re-emits its current snapshot once
+      // per heartbeat period so subscribers (daemon-log, UI, OTel) see a
+      // liveness signal even when nothing moved.
+      const heartbeatMs = this.resolvedConfig.heartbeat_minutes * 60 * 1000;
+      if (!this.stopped && this.lastEmitAt !== null && Date.now() - this.lastEmitAt >= heartbeatMs) {
+        this.lastEmitAt = Date.now();
+        await this.events.emit({
+          type: 'build_progress',
+          step: this.step,
+          resolved,
+          total,
+          currentTaskId: snapshot.currentTaskId,
+          currentTaskName: snapshot.currentTaskName,
+          commitCount: undefined,
+          noEvidenceAttempts,
+          featureSlug: this.featureSlug,
+        });
+      }
       return;
     }
 
@@ -272,6 +342,24 @@ export class BuildProgressWatcher {
     }
 
     this.lastSnapshot = snapshot;
+
+    if (this.stopped) {
+      // stop() was called while this tick's async I/O (fs/git) was in
+      // flight — swallow the emission rather than firing on a bus the
+      // caller believes is quiescent.
+      return;
+    }
+
+    // Change-driven tick — (re-)arm the quiet episode: bump lastChangeAt and
+    // clear quietFired so a later quiet stretch can fire build_no_progress
+    // again.
+    this.lastChangeAt = Date.now();
+    this.quietFired = false;
+
+    // Change-driven emission resets the heartbeat clock so a heartbeat never
+    // fires immediately on the heels of a real change (no interleaved
+    // duplicates).
+    this.lastEmitAt = Date.now();
     await this.events.emit({
       type: 'build_progress',
       step: this.step,
