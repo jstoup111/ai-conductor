@@ -285,6 +285,8 @@ describe('A16-XP: cross-process concurrent index writes — O_APPEND atomicity p
             },
           });
 
+          // Discard stdout — an undrained pipe blocks the child once 64KB buffers.
+          child.stdout?.resume();
           let stderr = '';
           child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
           child.on('error', reject);
