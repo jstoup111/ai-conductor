@@ -126,6 +126,13 @@ export async function claimUnblocked(deps: DependencyClaimDeps): Promise<ClaimOu
           .map((e) => e.sourceRef)
           .filter((ref): ref is string => ref != null && ref !== '');
         const bands = await resolveBands(refs);
+        // TR-3: sort key is band rank ONLY. Ties within a band fall through
+        // to `originalIndex`, which mirrors the drain order the queue
+        // produced from its own receivedAt__id filename sort — so entries
+        // sharing a band stay strictly receivedAt-FIFO relative to each
+        // other, and Array.prototype.sort's ES2019+ stability guarantee
+        // makes that tie-break deterministic across runs (no reliance on an
+        // unstable sort to "happen" to preserve order).
         const withIndex = held.map((envelope, originalIndex) => ({ envelope, originalIndex }));
         withIndex.sort((a, b) => {
           const bandA = a.envelope.sourceRef
