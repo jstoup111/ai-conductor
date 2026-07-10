@@ -1458,6 +1458,33 @@ testable and safe to automate.
 `engine/daemon-backlog.ts` (wiring in `maybeFastForward`), test coverage in
 `test/engine/leak-triage.test.ts`.
 
+### Setup-failure triage
+
+When `bin/setup` fails during daemon worktree prepare, the daemon runs a bounded
+two-stage deterministic recovery instead of leaving the wedge for an agent to
+untangle blind:
+
+1. **Stage 1 — quarantine + retry:** if the working tree has uncommitted changes,
+   they are preserved to a quarantine branch (`wip/setup-quarantine-<slug>`) via
+   `git add -A` + commit, the tree is reset hard to clean HEAD, and `bin/setup`
+   is re-run exactly once. Success proceeds to build; failure advances to stage 2.
+2. **Stage 2 — bounded fix-session:** exactly one fresh fix-session is dispatched
+   with the setup stderr tail and an explicit success contract (`bin/setup` exits 0
+   AND the tree is clean). The engine verifies the contract mechanically — never
+   trusts the agent's self-report. Success proceeds to build; failure produces a
+   diagnostic HALT naming the error tail, the quarantine ref, and the contract
+   outcome.
+
+The `.pipeline/QUARANTINE` sentinel surfaces the preserved ref + paths to the
+resuming build agent so WIP can be recovered deliberately via
+`git show wip/setup-quarantine-<slug>`. This is daemon-only (no change to
+interactive `/conduct`) and zero-cost on the happy path (setup exit 0 ⇒ no triage).
+
+**Modules:** `engine/setup-triage.ts` (triage core, dependency-injected),
+`worktree-prepare.ts` (`SetupFailureError` classification), `daemon-runner.ts`
+(wiring at the prepare seam), `step-runners.ts` (fix-session dispatch + contract
+verification). See `.docs/decisions/adr-2026-07-09-setup-failure-triage.md`.
+
 ### Write-fence sandbox for self-host builds
 
 When a self-host daemon build runs against a throwaway sandbox `CLAUDE_CONFIG_DIR`
