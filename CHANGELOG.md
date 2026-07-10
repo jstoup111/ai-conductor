@@ -12,6 +12,12 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- Mid-run merged-PR guard (#358): when the daemon's kickback rewind discovers the feature's
+  recorded PR has been merged out-of-band (operator manual merge during a retry cycle), the daemon
+  stops the run at the earliest checkpoint (kickback re-entry, rebase entry, or rekick play-forward)
+  and records a synthetic verified ship, avoiding a wasted rebuild/audit cycle and spurious
+  rebase conflicts. Guard invoked at three sites: kickback routes, rebase entry, and rekick
+  play-forward.
 - Tests no longer park child processes on undrained stdio pipes.
   `daemon-stale-respawn-e2e` spawned real daemons with `stdio: ['ignore',
   'pipe', 'pipe']` and never read either stream, so a chatty daemon wedged
