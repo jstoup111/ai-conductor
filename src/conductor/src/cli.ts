@@ -141,6 +141,20 @@ export function createProgram(): Command {
     .option('--project <name>', 'Target project name (resolved from the registry)')
     .option('--branch <branch>', 'The spec/<slug> branch produced by `engineer land`');
 
+  // Task subcommand (Task 7). NON-INTERACTIVE: dispatched by index.ts
+  // (detectTaskCommand) before the pipeline boots. Routes to task start/done
+  // operations. Declared here so `--help` lists it.
+  program
+    .command('task <command> <id>')
+    .description('Manage task execution: task start <id> | task done <id>')
+    .addHelpText(
+      'after',
+      '\nExamples:\n' +
+        '  conduct task start 7               Start task 7 (flip status to in_progress)\n' +
+        '  conduct task done 7                Mark task 7 done (clear stamp file)\n' +
+        '  conduct task start rem-fr10-1      Start task with alphanumeric id\n',
+    );
+
   // Daemon subcommand (Phase 6; promoted from the `--daemon` flag). NON-INTERACTIVE:
   // dispatched by index.ts before the pipeline boots. The bare `daemon` RUNS the
   // daemon (detectDaemonCommand); `daemon status` / `daemon logs` are read-only
