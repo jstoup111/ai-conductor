@@ -944,6 +944,85 @@ describe('getEvidenceRange', () => {
 
     await rm(bareDir, { recursive: true, force: true });
   });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Task 2: rung 3 of the ladder — plain merge-base when fork-point fails.
+  //
+  // `merge-base --fork-point <ref> HEAD` only succeeds when the reflog of
+  // <ref> still records the commit the local branch actually forked from
+  // (see git-merge-base(1)). If the local branch was built on an older
+  // commit than any tip recorded in <ref>'s reflog (e.g. a fresh clone whose
+  // reflog only records the current tip, with local history reset to an
+  // earlier ancestor), fork-point exits non-zero with no output even though
+  // a plain `merge-base` still finds the common ancestor. The ladder must
+  // fall through to the plain merge-base in that case.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  it('falls through to plain merge-base when --fork-point fails to find a fork point', async () => {
+    const mod = await loadAutoheal();
+
+    // Bare origin.
+    const bareDir = await mkdtemp(join(tmpdir(), 'origin-bare-forkpoint-'));
+    await execa('git', ['init', '--bare', '-b', 'main'], { cwd: bareDir });
+
+    // gitDir (from beforeEach) already has one commit; push it as A, then
+    // advance origin/main past it with B and B2 so the reflog of a later
+    // clone's origin/main only records the B2 tip.
+    await execa('git', ['remote', 'add', 'origin', bareDir], { cwd: gitDir });
+    await execa('git', ['push', '-u', 'origin', 'main'], { cwd: gitDir });
+    const aSha = (await execa('git', ['rev-parse', 'HEAD'], { cwd: gitDir })).stdout.trim();
+
+    await writeFile(join(gitDir, 'b.txt'), 'B');
+    await execa('git', ['add', 'b.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'B'], { cwd: gitDir });
+    await execa('git', ['push', 'origin', 'main'], { cwd: gitDir });
+
+    await writeFile(join(gitDir, 'b2.txt'), 'B2');
+    await execa('git', ['add', 'b2.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'B2'], { cwd: gitDir });
+    await execa('git', ['push', 'origin', 'main'], { cwd: gitDir });
+
+    // Fresh clone: its origin/main reflog records only the B2 tip.
+    const cloneDir = await mkdtemp(join(tmpdir(), 'clone-forkpoint-'));
+    await execa('git', ['clone', bareDir, cloneDir]);
+    await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: cloneDir });
+    await execa('git', ['config', 'user.name', 'Test User'], { cwd: cloneDir });
+
+    // Rewind the clone's local main branch to A — an older commit than the
+    // tip its origin/main reflog knows about — then add local work on top.
+    // This reproduces "forked from an older commit than the tip" from
+    // git-merge-base(1), which is documented to make --fork-point fail.
+    await execa('git', ['update-ref', 'refs/heads/main', aSha], { cwd: cloneDir });
+    await execa('git', ['commit', '--allow-empty', '-m', 'local work'], { cwd: cloneDir });
+
+    // Sanity-check the premise directly against git: fork-point fails,
+    // plain merge-base succeeds.
+    const forkPoint = await execa('git', ['merge-base', '--fork-point', 'origin/main', 'HEAD'], {
+      cwd: cloneDir,
+      reject: false,
+    });
+    expect(forkPoint.exitCode).not.toBe(0);
+    const plainMergeBase = await execa('git', ['merge-base', 'origin/main', 'HEAD'], {
+      cwd: cloneDir,
+      reject: false,
+    });
+    expect(plainMergeBase.exitCode).toBe(0);
+    expect(plainMergeBase.stdout.trim()).toBe(aSha);
+
+    const range = await mod.getEvidenceRange(cloneDir, 'unreachable-anchor-sha');
+
+    // With --fork-point unreachable, the ladder must fall through to the
+    // plain merge-base and return exactly the branch's own commit(s) — no
+    // rung-4 (fail-closed) anomaly.
+    expect(range.anomalies).toHaveLength(0);
+    expect(range.commits).toHaveLength(1);
+    expect(range.commits[0].sha).toBe(
+      (await execa('git', ['rev-parse', 'HEAD'], { cwd: cloneDir })).stdout.trim(),
+    );
+
+    await rm(bareDir, { recursive: true, force: true });
+    await rm(cloneDir, { recursive: true, force: true });
+  });
 });
 
 describe('listCommitsWithTrailers with anchor', () => {
