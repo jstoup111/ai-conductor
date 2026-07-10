@@ -1611,6 +1611,74 @@ Work on the literal task-N form.
     await rm(bareDir, { recursive: true, force: true });
   });
 
+  // ───────────────────────────────────────────────────────────────────────
+  // Task 5: regression for #456 — a foreign, pre-base commit that coincidentally
+  // carries a `Task: N` trailer (with paths overlapping the plan's task Files:
+  // set) must never corroborate or stamp evidence for the current plan. Before
+  // Task 4's fix, the genesis fallback pulled the entire repo history — including
+  // commits from before the feature branch existed — into the evidence range,
+  // so a stray pre-base trailer could be picked up as if it were real evidence
+  // for the current build. After the fix, the no-anchor range is bounded to
+  // «merge-base(origin default branch, HEAD)»..HEAD, which excludes it.
+  // ───────────────────────────────────────────────────────────────────────
+  it('foreign pre-base trailer can never corroborate or stamp task evidence (#456)', async () => {
+    const autoheal = await loadAutoheal();
+
+    // Plan with task 2 Files: set that overlaps the foreign commit's paths.
+    const planPath = join(gitDir, '.docs/plans/test-plan.md');
+    await mkdir(join(gitDir, '.docs/plans'), { recursive: true });
+    await writeFile(
+      planPath,
+      `# Test Plan\n\n### Task 2: Branch work\nDo the branch work.\n\n- \`shared.txt\`\n`,
+    );
+    await execa('git', ['add', '.docs/plans/test-plan.md'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: gitDir });
+
+    // Foreign pre-base commit on the default branch, carrying a coincidental
+    // `Task: 2` trailer AND touching a path that overlaps the plan's task 2
+    // Files: set — this is the exact #456 bug scenario.
+    await writeFile(join(gitDir, 'shared.txt'), 'foreign content');
+    await execa('git', ['add', 'shared.txt'], { cwd: gitDir });
+    await execa(
+      'git',
+      ['commit', '-m', 'chore: unrelated pre-base work\n\nTask: 2\n'],
+      { cwd: gitDir },
+    );
+    const foreignLog = await execa('git', ['log', '--format=%H', '-1'], { cwd: gitDir });
+    const foreignSha = foreignLog.stdout.trim();
+
+    // Push this history as the base of `main` on a bare origin, then create
+    // the feature branch off of it (no new commits touching task 2 on the
+    // branch itself — the only Task: 2 trailer in the entire repo lives on
+    // the foreign, pre-base commit).
+    const bareDir = await mkdtemp(join(tmpdir(), 'origin-bare-'));
+    await execa('git', ['init', '--bare', '-b', 'main'], { cwd: bareDir });
+    await execa('git', ['remote', 'add', 'origin', bareDir], { cwd: gitDir });
+    await execa('git', ['push', '-u', 'origin', 'main'], { cwd: gitDir });
+
+    await writeFile(join(gitDir, 'unrelated.txt'), 'branch work');
+    await execa('git', ['add', 'unrelated.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'feat: unrelated branch commit'], { cwd: gitDir });
+
+    // No-anchor call form, matching the gate/engine's real usage.
+    const result = await autoheal.deriveCompletion(gitDir, planPath);
+
+    // Task 2 must NOT be completed, and must NOT be evidenced by the foreign sha.
+    expect(result).toHaveProperty('2');
+    expect(result['2'].completed).not.toBe(true);
+    expect(result['2'].evidencedBy).not.toBe(foreignSha);
+
+    // No audit entry or warning may reference the foreign commit's sha —
+    // it must be entirely absent from the evaluated range, not merely
+    // rejected after being considered.
+    if (result['2'].auditEntry) {
+      expect(result['2'].auditEntry).not.toContain(foreignSha);
+      expect(result['2'].auditEntry).not.toContain(foreignSha.slice(0, 7));
+    }
+
+    await rm(bareDir, { recursive: true, force: true });
+  });
+
   it('no code path invokes `git log --reverse` for anchor resolution', async () => {
     // Static assertion: the genesis-fallback block that shelled out to
     // `git log --format=%H --reverse HEAD` to resolve a missing anchor has
