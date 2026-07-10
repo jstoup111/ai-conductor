@@ -1881,6 +1881,14 @@ export class Conductor {
                       `the manual_test gate refuses a FAIL→PASS rewrite that adds no new ` +
                       `commits, and manual-test re-runs after this build.`,
                   );
+
+                  // Task 7: Merged-PR guard on manual_test kickback (TS-1).
+                  // Before committing the rewind, check if the recorded PR has been
+                  // merged out-of-band. If so, stop the run as a synthetic verified
+                  // ship and return successfully.
+                  if (await this.stopIfPrMerged(state, sigintHandler, sigterm)) {
+                    return;
+                  }
                   const nav = navigateBack(state, 'build', steps);
                   state = nav.state;
                   // markDownstreamStale only restages `done` steps; manual_test
@@ -1951,6 +1959,14 @@ export class Conductor {
                       `flagged issue(s) in build, then COMMIT — build_review re-runs after ` +
                       `this build.`,
                   );
+
+                  // Task 7: Merged-PR guard on build_review kickback (TS-1).
+                  // Before committing the rewind, check if the recorded PR has been
+                  // merged out-of-band. If so, stop the run as a synthetic verified
+                  // ship and return successfully.
+                  if (await this.stopIfPrMerged(state, sigintHandler, sigterm)) {
+                    return;
+                  }
                   const nav = navigateBack(state, 'build', steps);
                   state = nav.state;
                   // markDownstreamStale only restages `done` steps; build_review
@@ -2012,6 +2028,14 @@ export class Conductor {
                     count: remediationRounds,
                   });
                   pendingRetryHints.set(outcome.target, outcome.hint);
+
+                  // Task 7: Merged-PR guard on generic remediation kickback (TS-1).
+                  // Before committing the rewind, check if the recorded PR has been
+                  // merged out-of-band. If so, stop the run as a synthetic verified
+                  // ship and return successfully.
+                  if (await this.stopIfPrMerged(state, sigintHandler, sigterm)) {
+                    return;
+                  }
                   const nav = navigateBack(state, outcome.target, steps);
                   state = nav.state;
                   (state as Record<string, unknown>).prd_audit = 'stale';
@@ -2070,6 +2094,14 @@ export class Conductor {
                     `the task list being done. The as-built code is re-audited after ` +
                     `this build; an unaddressed gap will re-block.`,
                 );
+
+                // Task 7: Merged-PR guard on prd_audit fallback kickback (TS-1).
+                // Before committing the rewind, check if the recorded PR has been
+                // merged out-of-band. If so, stop the run as a synthetic verified
+                // ship and return successfully.
+                if (await this.stopIfPrMerged(state, sigintHandler, sigterm)) {
+                  return;
+                }
                 const nav = navigateBack(state, 'build', steps);
                 state = nav.state;
                 // markDownstreamStale only restages `done` steps; prd_audit is
