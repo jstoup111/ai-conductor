@@ -85,6 +85,10 @@ import {
 } from './engine/daemon-park-cli.js';
 import { detectTaskCommand, dispatchTaskCommand } from './engine/task-cli.js';
 import { detectEvidenceCommand, dispatchEvidence } from './engine/evidence-cli.js';
+import {
+  detectHaltIssuesSweepCommand,
+  dispatchHaltIssuesSweep,
+} from './engine/halt-issues-cli.js';
 import { hasSession, sessionNameForRepo, respawnPane } from './engine/daemon-tmux.js';
 import { resolveOtelConfig } from './engine/otel/otel-config.js';
 import { OtelVisualizer, type OtelVisualizerContext } from './engine/otel/otel-visualizer.js';
@@ -376,6 +380,16 @@ async function main(): Promise<void> {
   const evidenceCmd = detectEvidenceCommand(process.argv);
   if (evidenceCmd) {
     const code = await dispatchEvidence(evidenceCmd, { cwd: process.cwd() });
+    process.exit(code);
+  }
+
+  // Halt-issues subcommand (`halt-issues sweep --repo-dir ... --monitor-log ...
+  // --ledger ... --gh-repo ...`) runs NON-INTERACTIVELY and exits — orchestrates
+  // the sweep pipeline for processing filed halt-monitor issues. Mirrors the
+  // shipped-record dispatch pattern.
+  const haltIssuesCmd = detectHaltIssuesSweepCommand(process.argv);
+  if (haltIssuesCmd) {
+    const code = await dispatchHaltIssuesSweep(haltIssuesCmd, process.cwd());
     process.exit(code);
   }
 

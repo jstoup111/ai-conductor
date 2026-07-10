@@ -197,6 +197,21 @@ export function createProgram(): Command {
     .command('judge <slug>')
     .description('Resolve feature slug to worktree and run semantic attribution verification');
 
+  // Halt-issues subcommand (halt-monitor filed issues sweep). NON-INTERACTIVE:
+  // dispatched by index.ts before the pipeline boots. Orchestrates the sweep
+  // pipeline for processing filed halt-monitor issues. Declared here so `--help`
+  // lists it and its options alongside the other subcommands.
+  program
+    .command('halt-issues')
+    .description('Orchestrate halt-monitor filed issues processing')
+    .command('sweep')
+    .description('Parse, stamp, resolve, and close halt-monitor filed issues')
+    .option('--dry-run', 'Run without writing to ledger')
+    .option('--repo-dir <dir>', 'Repository directory (target for file searches)')
+    .option('--monitor-log <path>', 'Path to monitor.log file')
+    .option('--ledger <path>', 'Path to ledger.json file')
+    .option('--gh-repo <repo>', 'GitHub repository (owner/name)');
+
   // Daemon subcommand (Phase 6; promoted from the `--daemon` flag). NON-INTERACTIVE:
   // dispatched by index.ts before the pipeline boots. The bare `daemon` RUNS the
   // daemon (detectDaemonCommand); `daemon status` / `daemon logs` are read-only
