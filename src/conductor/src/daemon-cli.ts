@@ -1415,6 +1415,19 @@ export function renderDaemonEvent(event: ConductorEvent, log: (msg: string) => v
   // Colors mirror the TTY dashboard palette (ui/dashboard-text.ts): green ✓,
   // cyan ▶, red ✗, yellow warnings, dim chrome. chalk auto-disables under
   // NO_COLOR / non-TTY, so piped or redirected daemon logs stay plain text.
+  //
+  // Task 11: a throwing renderer must never crash the daemon run — the whole
+  // switch is wrapped defensively so a malformed/unexpected event payload
+  // (e.g. from a future event kind whose formatter assumes a field that
+  // isn't there) degrades to a dropped line, not a process crash.
+  try {
+    renderDaemonEventUnsafe(event, log);
+  } catch {
+    // Best-effort: rendering a daemon.log line must never disrupt the run.
+  }
+}
+
+function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => void): void {
   const dot = chalk.dim('·');
   switch (event.type) {
     case 'step_started':
@@ -1457,6 +1470,33 @@ export function renderDaemonEvent(event: ConductorEvent, log: (msg: string) => v
       break;
     case 'session_reset':
       log(`${dot} ${chalk.dim(`session reset: ${event.reason}`)}`);
+      break;
+    case 'build_progress': {
+      // Plain heartbeat line (adr-2026-07-10-intra-step-build-progress-events):
+      // step, N/total, current task, feature slug. No warning coloring —
+      // this is routine progress, kept visually distinct from no_progress/stall.
+      const task = event.currentTaskName
+        ? ` — ${event.currentTaskName}`
+        : event.currentTaskId
+          ? ` — task ${event.currentTaskId}`
+          : '';
+      const slug = event.featureSlug ? ` · ${event.featureSlug}` : '';
+      log(`${dot} ${chalk.cyan('▶')} ${event.step} ${event.resolved}/${event.total}${task}${slug}`);
+      break;
+    }
+    case 'build_no_progress': {
+      // Warning line: distinct glyph + yellow coloring so it stands out from
+      // the plain build_progress heartbeat above during a quiet episode.
+      const slug = event.featureSlug ? ` · ${event.featureSlug}` : '';
+      log(
+        `${dot} ${chalk.yellow('⚠')} ${chalk.yellow(`${event.step} quiet ${event.quietMinutes}m (${event.resolved}/${event.total})`)}${slug}`,
+      );
+      break;
+    }
+    case 'build_stall':
+      log(
+        `${dot} ${chalk.red('✋')} ${chalk.red(`${event.step} stall: ${event.reason} (${event.resolvedBefore} → ${event.resolvedAfter})`)}`,
+      );
       break;
     default:
       break;
