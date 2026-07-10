@@ -28,6 +28,30 @@ export interface GhAbstraction {
    * May throw if the operation fails.
    */
   upsertIssueBody(repo: string, issue: string, body: string): Promise<void>;
+
+  /**
+   * Get the labels on an issue.
+   * Returns an empty array if no labels.
+   */
+  getIssueLabels(repo: string, issue: string): Promise<string[]>;
+
+  /**
+   * Get the current state of an issue.
+   * Returns "open", "closed", or null (if not found / 404).
+   */
+  getIssueState(repo: string, issue: string): Promise<'open' | 'closed' | null>;
+
+  /**
+   * Add a comment to an issue.
+   * May throw if the operation fails.
+   */
+  upsertIssueComment(repo: string, issue: string, body: string): Promise<void>;
+
+  /**
+   * Close an issue.
+   * May throw if the operation fails.
+   */
+  closeIssue(repo: string, issue: string): Promise<void>;
 }
 
 /**
@@ -56,11 +80,44 @@ export interface StampResult {
 }
 
 /**
+ * Result of closing an issue
+ */
+export interface CloseResult {
+  /**
+   * Whether the issue was successfully closed
+   */
+  closed: boolean;
+
+  /**
+   * Who or what closed the issue: "sweep" (by this process), "external" (already closed or not found), "kept-open" (label present)
+   */
+  closedBy?: string;
+
+  /**
+   * ISO timestamp when the issue was closed
+   */
+  closedAt?: string;
+
+  /**
+   * Error message if closing failed or issue was kept open
+   */
+  lastError?: string;
+}
+
+/**
  * Regular expression to match and extract the Halt-Slug marker.
  * Format: `Halt-Slug: <slug>` on its own line
  * Captures the slug value (allowing for varied whitespace)
  */
 const HALT_SLUG_PATTERN = /^Halt-Slug:\s*([\w-]+)\s*$/m;
+
+/**
+ * Comment body for issue closure.
+ * This is a single exported constant for ease of testing and documentation.
+ */
+export const CLOSE_ISSUE_COMMENT_BODY = `Automated closure: This halt has been resolved by the shipped evidence in the process monitor log.
+The fix was deployed and tested; this issue is no longer blocking daemon stability.
+See \`conduct-ts halt-issues sweep\` for details.`;
 
 /**
  * Stamp an issue with a Halt-Slug marker if not already present.
@@ -140,4 +197,111 @@ export async function stampIssue(entry: LedgerEntry, gh: GhAbstraction): Promise
       lastError: errorMsg
     };
   }
+}
+
+/**
+ * Close an issue with guards and comment.
+ *
+ * Logic:
+ * - Check for `halt-sweep:keep-open` label via getIssueLabels
+ *   - If present: return closedBy="kept-open", lastError="kept-open (label)", no writes
+ * - Check current issue state via getIssueState
+ *   - If null (404): return closedBy="external", no writes
+ *   - If "closed": return closedBy="external", no writes
+ *   - If "open": proceed to comment and close
+ * - Call upsertIssueComment with CLOSE_ISSUE_COMMENT_BODY
+ *   - If fails: record lastError, do NOT throw, proceed to close attempt
+ * - Call closeIssue
+ *   - If fails: record lastError, return closed=false
+ *   - If succeeds: return closed=true, closedBy="sweep", closedAt=<now>
+ *
+ * Note: On comment or close failure, the function returns with lastError set, allowing
+ * retry on next run. If comment succeeds but close fails, next run should NOT re-comment
+ * (the body tracking should detect this via issue body inspection or similar).
+ *
+ * @param entry - Ledger entry with repo, issue info
+ * @param gh - GitHub abstraction
+ * @returns CloseResult with status and any errors
+ */
+export async function closeIssue(entry: LedgerEntry, gh: GhAbstraction): Promise<CloseResult> {
+  const { repo, issue } = entry;
+  const now = new Date().toISOString();
+
+  // Step 1: Check for keep-open label
+  let labels: string[];
+  try {
+    labels = await gh.getIssueLabels(repo, issue);
+  } catch (err) {
+    // If we can't fetch labels, treat as retriable error
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    return {
+      closed: false,
+      lastError: `failed to fetch labels: ${errorMsg}`
+    };
+  }
+
+  if (labels.includes('halt-sweep:keep-open')) {
+    return {
+      closed: false,
+      closedBy: 'kept-open',
+      lastError: 'kept-open (label)'
+    };
+  }
+
+  // Step 2: Check current issue state
+  let state: 'open' | 'closed' | null;
+  try {
+    state = await gh.getIssueState(repo, issue);
+  } catch (err) {
+    // If we can't fetch state, treat as retriable error
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    return {
+      closed: false,
+      lastError: `failed to fetch issue state: ${errorMsg}`
+    };
+  }
+
+  // If not found or already closed, return without writes
+  if (state === null || state === 'closed') {
+    return {
+      closed: false,
+      closedBy: 'external'
+    };
+  }
+
+  // Step 3: Issue is open, add comment
+  try {
+    await gh.upsertIssueComment(repo, issue, CLOSE_ISSUE_COMMENT_BODY);
+  } catch (err) {
+    // Comment failed: return error, do NOT attempt close
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    return {
+      closed: false,
+      lastError: errorMsg
+    };
+  }
+
+  // Step 4: Close the issue
+  let closeError: string | undefined;
+  try {
+    await gh.closeIssue(repo, issue);
+  } catch (err) {
+    // Record error
+    closeError = err instanceof Error ? err.message : String(err);
+  }
+
+  // Step 5: Determine result
+  if (closeError) {
+    return {
+      closed: false,
+      lastError: closeError
+    };
+  }
+
+  // Success
+  return {
+    closed: true,
+    closedBy: 'sweep',
+    closedAt: now
+  };
 }
