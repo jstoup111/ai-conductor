@@ -218,6 +218,99 @@ describe('acceptance: idle-boundary stale detection + restart request over the R
     });
   });
 
+  // ── #369 Story 2: stale verdict logs carry both identities ────────────────
+  it('idle-tick stale verdict: the log line carries BOTH the captured and target identities, logged before the restart request', async () => {
+    await withLockedRepo(async (repoPath) => {
+      const identityMod = await load(IDENTITY_MOD);
+      const captureEngineIdentity = requireFn(identityMod, 'captureEngineIdentity');
+      const createStaleEngineChecker = requireFn(identityMod, 'createStaleEngineChecker');
+
+      const workDir = await mkdtemp(join(tmpdir(), 'stale-engine-verdict-log-'));
+      const dist = await buildFixtureDist(workDir, FIXTURE_V1);
+      const captured = await captureEngineIdentity(dist);
+      await buildFixtureDist(workDir, FIXTURE_V2); // real content change ⇒ 'stale'
+      const target = await captureEngineIdentity(dist);
+      const checker = createStaleEngineChecker(captured, dist);
+
+      const log: string[] = [];
+      const callOrder: string[] = [];
+      const requestRestart = vi.fn(async () => {
+        callOrder.push('restart');
+        return { fired: true };
+      });
+
+      const deps: DaemonDeps = {
+        discoverBacklog: async () => [],
+        runFeature: async () => {
+          throw new Error('must never dispatch a feature in this scenario');
+        },
+        sleep: async () => {},
+        log: (msg) => {
+          if (/stale engine detected/.test(msg)) callOrder.push('verdict-log');
+          log.push(msg);
+        },
+        staleEngineChecker: checker,
+        requestRestart,
+      };
+
+      await runDaemon(deps, {
+        concurrency: 1,
+        once: false,
+        maxIdlePolls: 0,
+        isSelfHost: true,
+        autoRestartOnStaleEngine: true,
+      });
+
+      const verdictLines = log.filter((l) => /stale engine detected/.test(l));
+      expect(verdictLines).toHaveLength(1);
+      expect(verdictLines[0]).toContain(captured);
+      expect(verdictLines[0]).toContain(target);
+      // Verdict is logged before the restart is requested.
+      expect(callOrder).toEqual(['verdict-log', 'restart']);
+      await rm(workDir, { recursive: true, force: true });
+    });
+  });
+
+  it('idle-tick: a "current" verdict emits NO identity-pair verdict log line (no noise on healthy ticks)', async () => {
+    await withLockedRepo(async (repoPath) => {
+      const identityMod = await load(IDENTITY_MOD);
+      const captureEngineIdentity = requireFn(identityMod, 'captureEngineIdentity');
+      const createStaleEngineChecker = requireFn(identityMod, 'createStaleEngineChecker');
+      const { readRestartMarkerWithStatus } = { readRestartMarkerWithStatus: requireFn(await load(RESTART_MOD), 'readRestartMarkerWithStatus') };
+
+      const workDir = await mkdtemp(join(tmpdir(), 'stale-engine-verdict-nolog-'));
+      const distA = await buildFixtureDist(workDir, FIXTURE_V1);
+      const captured = await captureEngineIdentity(distA);
+      const distA2 = await buildFixtureDist(workDir, FIXTURE_V1); // byte-identical ⇒ 'current'
+      const checker = createStaleEngineChecker(captured, distA2);
+
+      const log: string[] = [];
+      const requestRestart = vi.fn(async () => ({ fired: true }));
+      const deps: DaemonDeps = {
+        discoverBacklog: async () => [],
+        runFeature: async () => ({ slug: 'never', status: 'done' }),
+        sleep: async () => {},
+        log: (msg) => log.push(msg),
+        staleEngineChecker: checker,
+        requestRestart,
+      };
+
+      await runDaemon(deps, {
+        concurrency: 1,
+        once: false,
+        maxIdlePolls: 1,
+        isSelfHost: true,
+        autoRestartOnStaleEngine: true,
+      });
+
+      expect(requestRestart).not.toHaveBeenCalled();
+      expect(log.filter((l) => /stale engine detected/.test(l))).toHaveLength(0);
+      const result = await readRestartMarkerWithStatus(repoPath);
+      expect(result.kind).toBe('absent');
+      await rm(workDir, { recursive: true, force: true });
+    });
+  });
+
   it('byte-identical rebuild: checker reports "current" — no marker is ever written, requestRestart never called', async () => {
     await withLockedRepo(async (repoPath) => {
       const identityMod = await load(IDENTITY_MOD);
@@ -297,6 +390,79 @@ describe('acceptance: idle-boundary stale detection + restart request over the R
       });
       expect(dispatched).toBe(false);
       expect(res.stoppedReason).toBe('engine_restart');
+    });
+  });
+
+  // ── #369 Story 2: rebuild-path verdict logs carry both identities ─────────
+  it('rebuild-path stale verdict ("engine stale after rebuild"): the log line carries both identities', async () => {
+    await withLockedRepo(async () => {
+      let dispatched = false;
+      const log: string[] = [];
+      const requestRestart = vi.fn(async () => ({ fired: true }));
+
+      const deps: DaemonDeps = {
+        discoverBacklog: async () => [{ slug: 'pending' }],
+        runFeature: async (item) => {
+          dispatched = true;
+          return { slug: item.slug, status: 'done' };
+        },
+        sleep: async () => {},
+        log: (msg) => log.push(msg),
+        staleEngineChecker: {
+          check: () => 'stale' as const,
+          capturedIdentity: () => 'captured-hash',
+          targetIdentity: () => 'target-hash',
+        },
+        requestRestart,
+      };
+
+      await runDaemon(deps, {
+        concurrency: 1,
+        once: false,
+        maxIdlePolls: 0,
+        isSelfHost: true,
+        autoRestartOnStaleEngine: true,
+      });
+
+      expect(dispatched).toBe(false);
+      const rebuildVerdictLines = log.filter((l) => /engine stale after rebuild/.test(l));
+      expect(rebuildVerdictLines).toHaveLength(1);
+      expect(rebuildVerdictLines[0]).toContain('captured-hash');
+      expect(rebuildVerdictLines[0]).toContain('target-hash');
+    });
+  });
+
+  it('rebuild-path stale verdict with a null identity: the log line renders "null" and never throws', async () => {
+    await withLockedRepo(async () => {
+      const log: string[] = [];
+      const requestRestart = vi.fn(async () => ({ fired: true }));
+
+      const deps: DaemonDeps = {
+        discoverBacklog: async () => [{ slug: 'pending' }],
+        runFeature: async (item) => ({ slug: item.slug, status: 'done' }),
+        sleep: async () => {},
+        log: (msg) => log.push(msg),
+        staleEngineChecker: {
+          check: () => 'stale' as const,
+          capturedIdentity: () => null,
+          targetIdentity: () => null,
+        },
+        requestRestart,
+      };
+
+      await expect(
+        runDaemon(deps, {
+          concurrency: 1,
+          once: false,
+          maxIdlePolls: 0,
+          isSelfHost: true,
+          autoRestartOnStaleEngine: true,
+        }),
+      ).resolves.not.toThrow();
+
+      const rebuildVerdictLines = log.filter((l) => /engine stale after rebuild/.test(l));
+      expect(rebuildVerdictLines).toHaveLength(1);
+      expect(rebuildVerdictLines[0]).toContain('null');
     });
   });
 
