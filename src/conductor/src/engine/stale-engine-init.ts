@@ -24,6 +24,7 @@ import {
   clearRestartMarker,
   recordSuppression,
   clearSuppression,
+  getSuppression,
 } from './restart-intent.js';
 
 /**
@@ -98,6 +99,15 @@ export async function initStaleEngineState(opts: InitStaleEngineStateOpts): Prom
       // Clear the marker before the dispatch loop begins
       // This ensures both boot paths observe the same on-disk state
       await clearRestartMarker(repoPath, log);
+    } else {
+      // Task 5: No marker present, but check if suppression exists.
+      // If the fresh identity matches the suppressed target, clear the suppression.
+      // This handles convergence without a marker (the engine reached the target
+      // identity on this boot without needing a restart).
+      const suppression = await getSuppression(repoPath);
+      if (suppression && suppression.suppressedTarget === engineIdentity) {
+        await clearSuppression(repoPath, log);
+      }
     }
   }
 

@@ -12,10 +12,11 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, mkdir, readFile } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { existsSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 
 import {
   writeRestartMarker,
@@ -29,6 +30,8 @@ import {
   SUPPRESSION_PATH,
   type RestartMarker,
 } from '../../src/engine/restart-intent.js';
+import { initStaleEngineState, type InitStaleEngineStateOpts } from '../../src/engine/stale-engine-init.js';
+import { captureEngineIdentity } from '../../src/engine/engine-identity.js';
 
 describe('daemon startup handshake (Task 9)', () => {
   let projectRoot: string;
@@ -40,6 +43,20 @@ describe('daemon startup handshake (Task 9)', () => {
   afterEach(async () => {
     await rm(projectRoot, { recursive: true, force: true });
   });
+
+  /**
+   * Helper: Create a mock engine entry point file.
+   * Returns the path to the engine file so captureEngineIdentity can compute its hash.
+   * Generates a unique subdirectory for each call to avoid conflicts.
+   */
+  let mockEngineCounter = 0;
+  async function createMockEngineFile(dir: string, content = 'mock engine'): Promise<string> {
+    const engineDir = join(dir, `dist-${mockEngineCounter++}`);
+    await mkdir(engineDir, { recursive: true });
+    const enginePath = join(engineDir, 'index.js');
+    await writeFile(enginePath, content, 'utf-8');
+    return enginePath;
+  }
 
   it('marker present at boot → logs handshake with identities, marker removed', async () => {
     const marker: RestartMarker = {
@@ -487,5 +504,112 @@ describe('daemon startup handshake (Task 9)', () => {
     const suppressionAfter = await getSuppression(projectRoot);
     expect(suppressionAfter).toBeNull();
     expect(existsSync(suppressionFilePath)).toBe(false);
+  });
+
+  it('Task 5: no-marker convergence — suppression cleared when boot runs the suppressed target', async () => {
+    // Task 5: When NO restart marker is present but a suppression record exists,
+    // and the fresh engine identity matches the suppressed target,
+    // the suppression should be cleared at boot (no marker handshake needed).
+    //
+    // This handles the scenario where:
+    // - Boot 1: marker present, fresh ≠ target → suppression recorded for fresh identity T
+    // - Marker cleared at end of boot 1
+    // - Boot 2: NO marker, but suppression for T still exists
+    // - Fresh identity at boot 2 is again T (converged without marker)
+    // - initStaleEngineState should clear the suppression
+
+    // Create a mock engine file with known content
+    const engineContent = 'mock engine for Task 5 convergence test';
+    const enginePath = await createMockEngineFile(projectRoot, engineContent);
+
+    // Capture the actual identity that will be computed from this file
+    const engineIdentity = await captureEngineIdentity(enginePath);
+    expect(engineIdentity).not.toBeNull();
+
+    // Record suppression for this identity (as would happen after non-convergence in a prior boot)
+    await recordSuppression(engineIdentity, projectRoot);
+
+    // Verify suppression exists before boot
+    const suppressionBefore = await getSuppression(projectRoot);
+    expect(suppressionBefore).not.toBeNull();
+    expect(suppressionBefore?.suppressedTarget).toBe(engineIdentity);
+
+    // Verify suppression file exists on disk
+    const suppressionFilePath = join(projectRoot, SUPPRESSION_PATH);
+    expect(existsSync(suppressionFilePath)).toBe(true);
+
+    // CRITICAL: No marker written — only suppression record exists
+
+    // Call initStaleEngineState (the function being tested)
+    const logs: string[] = [];
+    const capturedIdentity = await initStaleEngineState({
+      repoPath: projectRoot,
+      entryPath: enginePath,
+      flag: true,
+      log: (msg) => logs.push(msg),
+    });
+
+    // Verify that the engine identity was captured
+    expect(capturedIdentity).not.toBeNull();
+    expect(capturedIdentity).toBe(engineIdentity);
+
+    // Verify that suppression is now cleared
+    const suppressionAfter = await getSuppression(projectRoot);
+    expect(suppressionAfter).toBeNull();
+    expect(existsSync(suppressionFilePath)).toBe(false);
+  });
+
+  it('Task 5 non-match: no-marker with suppression for different identity → record left in place', async () => {
+    // Task 5 verification: When NO restart marker is present, suppression record exists
+    // for target T, but fresh engine identity is X ≠ T, the suppression should NOT be cleared.
+    //
+    // This ensures suppression only clears when the fresh identity matches the suppressed target.
+
+    // Create a mock engine file with one content
+    const engineContent1 = 'mock engine content 1';
+    const enginePath1 = await createMockEngineFile(projectRoot, engineContent1);
+    const identity1 = await captureEngineIdentity(enginePath1);
+    expect(identity1).not.toBeNull();
+
+    // Record suppression for identity1
+    await recordSuppression(identity1, projectRoot);
+
+    // Verify suppression exists before boot
+    const suppressionBefore = await getSuppression(projectRoot);
+    expect(suppressionBefore).not.toBeNull();
+    expect(suppressionBefore?.suppressedTarget).toBe(identity1);
+
+    // Verify suppression file exists on disk
+    const suppressionFilePath = join(projectRoot, SUPPRESSION_PATH);
+    expect(existsSync(suppressionFilePath)).toBe(true);
+
+    // Now create a DIFFERENT engine file with different content
+    const engineContent2 = 'mock engine content 2 - DIFFERENT';
+    const enginePath2 = await createMockEngineFile(projectRoot, engineContent2);
+    const identity2 = await captureEngineIdentity(enginePath2);
+    expect(identity2).not.toBeNull();
+    expect(identity2).not.toBe(identity1);
+
+    // CRITICAL: No marker written — only suppression record exists for identity1
+
+    // Call initStaleEngineState with the different engine identity (identity2)
+    const logs: string[] = [];
+    const capturedIdentity = await initStaleEngineState({
+      repoPath: projectRoot,
+      entryPath: enginePath2,
+      flag: true,
+      log: (msg) => logs.push(msg),
+    });
+
+    // Verify that the engine identity was captured (and is different from suppressed)
+    expect(capturedIdentity).not.toBeNull();
+    expect(capturedIdentity).toBe(identity2);
+    expect(capturedIdentity).not.toBe(identity1);
+
+    // Verify that suppression is STILL in place (not cleared, because identity doesn't match)
+    const suppressionAfter = await getSuppression(projectRoot);
+    expect(suppressionAfter).not.toBeNull();
+    expect(suppressionAfter?.suppressedTarget).toBe(identity1);
+    expect(existsSync(suppressionFilePath)).toBe(true);
   });
 });
