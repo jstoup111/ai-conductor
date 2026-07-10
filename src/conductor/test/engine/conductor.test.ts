@@ -32,6 +32,7 @@ import {
 } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import type { GitRunner } from '../../src/engine/pr-labels.js';
+import type { GhRunner } from '../../src/engine/owner-gate/identity.js';
 import { writeFile, mkdir, readFile } from 'fs/promises';
 import { readState, writeState } from '../../src/engine/state.js';
 import { createHash } from 'crypto';
@@ -231,6 +232,46 @@ describe('engine/conductor', () => {
     const lastIdx = (ALL_STEPS.length - 1) * 2;
     expect(emitted[lastIdx]).toEqual({ type: 'step_started', step: 'finish' });
     expect(emitted[lastIdx + 1]).toEqual({ type: 'step_completed', step: 'finish' });
+  });
+
+  describe('ConductorOptions.runGh injection (Task 3: merged-PR guard plumbing)', () => {
+    it('accepts an injected runGh option for the merged-PR guard', async () => {
+      const runner = createMockStepRunner();
+      const callCount = { value: 0 };
+      const fakeRunGh: GhRunner = async () => {
+        callCount.value++;
+        return { stdout: '' };
+      };
+
+      // Should not throw when constructing with runGh option
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        runGh: fakeRunGh,
+      });
+
+      expect(conductor).toBeDefined();
+    });
+
+    it('uses default makeProductionGh() factory when runGh is omitted', async () => {
+      const runner = createMockStepRunner();
+
+      // Should not throw when constructing without runGh option
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+      });
+
+      expect(conductor).toBeDefined();
+      // Verify the run completes successfully with default runGh
+      await conductor.run();
+      const result = await readState(statePath);
+      expect(result.ok).toBe(true);
+    });
   });
 
   it('enters recovery flow when step returns failure', async () => {

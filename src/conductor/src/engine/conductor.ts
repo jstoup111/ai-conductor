@@ -375,6 +375,13 @@ export interface ConductorOptions {
    */
   git?: GitRunner;
   /**
+   * Shell runner for the `gh` CLI (merged-PR guard). Injected for
+   * tests; defaults to the real production gh. Used by the merged-PR guard
+   * to check recorded PR merge state at kickback and rebase entry points
+   * (ADR-2026-07-09-mid-run-merged-pr-guard, Task 3-5).
+   */
+  runGh?: GhRunner;
+  /**
    * Optional rate-limit episode coordinator (Task 10). When provided and active,
    * enables coordinated episode-aware backoff during rate-limit waits, allowing
    * SIGTERM handling and deadline-coordinated redrives. If undefined, rate-limit
@@ -512,6 +519,8 @@ export class Conductor {
   private gh: GhRunner;
   /** git CLI runner for push-evidence verification (daemon false-ship guard). */
   private git: GitRunner;
+  /** gh CLI runner for merged-PR guard (kickback/rebase entry checks, ADR-2026-07-09). */
+  private runGh: GhRunner;
   /**
    * The most recent engine-native rebase outcome. The `rebase` step is special:
    * its gate verdict is computed by the native handler (not from a file
@@ -615,6 +624,7 @@ export class Conductor {
     this.escalateBuildFailure = opts.escalateBuildFailure ?? defaultEscalateBuildFailure;
     this.gh = opts.gh ?? makeProductionGh();
     this.git = opts.git ?? makeProductionGit();
+    this.runGh = opts.runGh ?? makeProductionGh();
     this.rateLimitEpisode = opts.rateLimitEpisode;
     this.registerAbortController = opts.registerAbortController;
   }
