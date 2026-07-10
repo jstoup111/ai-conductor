@@ -38,4 +38,15 @@ describe('session-hook-assets', () => {
   it.each(hooks)('%s passes bash -n syntax check', (name, script) => {
     expect(() => assertValidBash(name, script)).not.toThrow();
   });
+
+  const staleEngineReferencePatterns = [/dist\//, /conduct-ts/, /require\(['"]\.\//];
+
+  it.each(hooks)(
+    '%s contains no stale dynamic-module references (dist/, conduct-ts, require(\'./)',
+    (_name, script) => {
+      for (const pattern of staleEngineReferencePatterns) {
+        expect(script).not.toMatch(pattern);
+      }
+    },
+  );
 });
