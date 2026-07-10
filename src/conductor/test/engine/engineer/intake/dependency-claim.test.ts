@@ -244,6 +244,68 @@ describe('Task 3: dependency-claim — banded walk drains all, sorts band-first'
   });
 });
 
+describe('Task 6: dependency-claim — reader throw fails open to FIFO, one warning', () => {
+  it('resolveBands (backed by resolveClaimBands + a reader that throws mid-map) → claim still returns oldest unblocked, log called exactly once, never a partial band sort', async () => {
+    const { claimUnblocked, resolveClaimBands } = await loadClaimModule();
+    const A = makeEnvelope('acme/app#1', '2026-07-01T00:00:00.000Z'); // oldest
+    const B = makeEnvelope('acme/app#2', '2026-07-02T00:00:00.000Z'); // would be critical
+    const C = makeEnvelope('acme/app#3', '2026-07-03T00:00:00.000Z'); // would be low
+    const queue = makeFakeQueue([A, B, C]);
+    const resolveDependency = makeResolveDependency({});
+
+    // Reader is a single whole-batch call; it throws while "mid-map" over the
+    // refs it was given (on the 2nd ref) rather than ever returning a partial
+    // Map. This proves the walk sees either the whole map or a throw — never
+    // a half-populated band map driving a partial sort.
+    const reader = async (refs: string[]) => {
+      const result = new Map<string, string[] | 'not-found'>();
+      for (let i = 0; i < refs.length; i++) {
+        if (i === 1) {
+          throw new Error('reader boom mid-map');
+        }
+        result.set(refs[i], ['priority: critical']);
+      }
+      return result;
+    };
+    const resolveBands = (refs: string[]) => resolveClaimBands(reader, refs);
+
+    const warnings: unknown[][] = [];
+    const log = (...args: unknown[]) => warnings.push(args);
+
+    const outcome = await claimUnblocked({ queue, resolveDependency, resolveBands, log });
+
+    expect(outcome.kind).toBe('claim');
+    expect(outcome.envelope.sourceRef).toBe('acme/app#1');
+    expect(warnings.length).toBe(1);
+
+    const stillPending = (await queue.listPending()).map((e: any) => e.sourceRef);
+    expect(stillPending).toEqual(['acme/app#2', 'acme/app#3']);
+  });
+
+  it('a second later claim with the same throwing resolveBands logs again (one warning per claim cycle, not a global suppression)', async () => {
+    const { claimUnblocked, resolveClaimBands } = await loadClaimModule();
+    const A = makeEnvelope('acme/app#1', '2026-07-01T00:00:00.000Z');
+    const B = makeEnvelope('acme/app#2', '2026-07-02T00:00:00.000Z');
+    const queue = makeFakeQueue([A, B]);
+    const resolveDependency = makeResolveDependency({});
+    const reader = async (_refs: string[]) => {
+      throw new Error('reader boom');
+    };
+    const resolveBands = (refs: string[]) => resolveClaimBands(reader, refs);
+    const warnings: unknown[][] = [];
+    const log = (...args: unknown[]) => warnings.push(args);
+
+    const first = await claimUnblocked({ queue, resolveDependency, resolveBands, log });
+    expect(first.kind).toBe('claim');
+    expect(warnings.length).toBe(1);
+
+    await queue.enqueue(first.envelope as any);
+    const second = await claimUnblocked({ queue, resolveDependency, resolveBands, log });
+    expect(second.kind).toBe('claim');
+    expect(warnings.length).toBe(2);
+  });
+});
+
 describe('Task 4: dependency-claim — no-sourceRef parity (no-issue band ranks first)', () => {
   it('X (no sourceRef) beats Y (critical); reader receives only Y\'s ref', async () => {
     const { claimUnblocked } = await loadClaimModule();
