@@ -280,7 +280,7 @@ export function makeRunFeature(
         const reason = failureReasonForFalseShip(outcome);
         const doneMarker = join(worktree.path, '.pipeline', 'DONE');
         await rm(doneMarker, { force: true }).catch(() => {});
-        await writeErrorHalt(worktree, reason);
+        await writeErrorHalt(worktree, reason, log);
 
         // Escalate the false ship: push the branch and open a draft needs-remediation PR
         // (so even the failure path preserves the work on origin). Best-effort: logs any
@@ -326,7 +326,7 @@ export function makeRunFeature(
 
       // Loop ended without DONE or HALT — treat as an error, keep the worktree.
       const noMarkerReason = outcome.reason ?? 'loop ended without DONE or HALT marker';
-      await writeErrorHalt(worktree, noMarkerReason);
+      await writeErrorHalt(worktree, noMarkerReason, log);
       await deps.teardownWorktree(worktree, true);
       // FR-14: sweep mergeable labels after feature completes (error/no-marker).
       await maybeSweep();
@@ -343,7 +343,7 @@ export function makeRunFeature(
       // inspection instead of being silently excluded for the run's lifetime.
       const reason = err instanceof Error ? err.message : String(err);
       if (worktree) {
-        await writeErrorHalt(worktree, reason);
+        await writeErrorHalt(worktree, reason, log);
         await deps.teardownWorktree(worktree, true).catch(() => {});
       }
       return {
@@ -361,15 +361,43 @@ export function makeRunFeature(
  * parks for human inspection rather than being silently excluded. Best-effort:
  * a write failure must never mask the original error.
  */
-async function writeErrorHalt(worktree: FeatureWorktree, reason: string, log?: (msg: string) => void): Promise<void> {
-  const note =
-    `feature errored — parked for human inspection\n${reason}\n\n` +
-    `Resume procedure:\n` +
+async function writeErrorHalt(worktree: FeatureWorktree, reason: string, log?: (msg: string) => void, triageEvidence?: unknown): Promise<void> {
+  let note = `feature errored — parked for human inspection\n${reason}\n`;
+
+  // If triage evidence is present and it's a park outcome, render extended diagnostics
+  const triage = triageEvidence as any;
+  if (triage && typeof triage === 'object' && triage.kind === 'park') {
+    note += `\n──── Triage Evidence ────\n`;
+
+    // Output tail
+    if (triage.outputTail) {
+      note += `\nOutput tail:\n${triage.outputTail}\n`;
+    }
+
+    // Quarantine ref or explicit no-quarantine statement
+    if (triage.quarantineRef) {
+      note += `\nQuarantine ref: ${triage.quarantineRef}\n`;
+    } else {
+      note += `\nNo quarantine present (clean-HEAD case)\n`;
+    }
+
+    // Contract outcome
+    if (triage.contractOutcome) {
+      note += `\nContract outcome: ${triage.contractOutcome}\n`;
+    }
+  }
+
+  note +=
+    `\nResume procedure:\n` +
     `  1. Fix the cause of the error above (project setup / config / environment / a crashed step).\n` +
     `  2. rm .pipeline/HALT\n` +
     `  3. Re-queue the feature (restart the daemon if it was excluded this run).\n`;
-  await mkdir(join(worktree.path, '.pipeline'), { recursive: true }).catch(() => {});
-  await writeFile(join(worktree.path, '.pipeline', 'HALT'), note, 'utf-8').catch(() => {});
+  await mkdir(join(worktree.path, '.pipeline'), { recursive: true }).catch((err) => {
+    if (log) log(`[daemon-runner] HALT mkdir error: ${err instanceof Error ? err.message : String(err)}`);
+  });
+  await writeFile(join(worktree.path, '.pipeline', 'HALT'), note, 'utf-8').catch((err) => {
+    if (log) log(`[daemon-runner] HALT write error: ${err instanceof Error ? err.message : String(err)}`);
+  });
 }
 
 /**
