@@ -1,0 +1,173 @@
+2026-07-04T10:35:34Z halt-monitor started (pid 2734469, interval 180s, repo /home/jamesstoup/code/james-stoup-agents)
+2026-07-04T11:59:37Z NEW HALT: 2026-07-04T11:58:38.984Z [daemon] ✋ daemon-lifecycle-controls halted — worktree kept (step 'acceptance_specs' failed in auto mode (retries exhausted))
+2026-07-04T12:02:25Z RESULT: Diagnosis: the writing-system-tests skill committed the acceptance specs (1b1146f) but never executed them, so the RED-evidence gate from PR #181 correctly rejected the step; the ~9-second retries re-confirmed file existence without running anything and the daemon halted. An operator session had already hand-run the specs (9/9 genuinely RED), written the marker, and rekicked — proving no code change was needed. No existing issue covered this skill/marker (#281 is the same pattern but for finish/finish-choice), so I filed one citing #281, #181, and #280.
+
+HALT daemon-lifecycle-controls -> filed #297
+2026-07-04T13:50:54Z halt-monitor started (pid 3941125, interval 180s, repo /home/jamesstoup/code/james-stoup-agents)
+2026-07-04T14:32:56Z NEW HALT: 2026-07-04T14:30:27.193Z [daemon] ✋ daemon-lifecycle-controls halted — worktree kept (step 'build' failed in auto mode (retries exhausted))
+2026-07-04T14:32:58Z RESULT: You've hit your session limit · resets 11am (America/New_York)
+2026-07-04T14:35:58Z NEW HALT: 2026-07-04T14:30:52.094Z [daemon] ✋ daemon-lifecycle-controls halted — worktree kept (step 'build' failed in auto mode (retries exhausted))
+2026-07-04T14:36:00Z RESULT: You've hit your session limit · resets 11am (America/New_York)
+2026-07-04T14:39:00Z NEW HALT: 2026-07-04T14:31:10.103Z [daemon] ✋ test-spawned-daemons-leak-real-tmux-daemons-persis halted — worktree kept (step 'build' failed in auto mode (retries exhausted))
+2026-07-04T14:39:17Z RESULT: HALT test-spawned-daemons-leak-real-tmux-daemons-persis -> covered by #270
+2026-07-04T14:42:17Z NEW HALT: 2026-07-04T14:31:29.338Z [daemon] ✋ make-daemon-build-push-pr-timing-a-configurable-st halted — worktree kept (step 'build' failed in auto mode (retries exhausted))
+2026-07-04T14:42:19Z RESULT: You've hit your session limit · resets 11am (America/New_York)
+2026-07-04T14:54:20Z NEW HALT: 2026-07-04T14:51:45.858Z [daemon] ✋ daemon-lifecycle-controls halted — worktree kept (step 'build' failed in auto mode (retries exhausted))
+2026-07-04T14:54:23Z RESULT: You've hit your session limit · resets 11am (America/New_York)
+2026-07-04T14:57:23Z NEW HALT: 2026-07-04T14:52:05.066Z [daemon] ✋ test-spawned-daemons-leak-real-tmux-daemons-persis halted — worktree kept (step 'build' failed in auto mode (retries exhausted))
+2026-07-04T14:57:27Z RESULT: You've hit your session limit · resets 11am (America/New_York)
+2026-07-04T15:00:27Z NEW HALT: 2026-07-04T14:52:11.271Z [daemon] ✋ make-daemon-build-push-pr-timing-a-configurable-st halted — worktree kept (rebase conflict — parked for human resolution
+2026-07-04T15:02:02Z RESULT: HALT make-daemon-build-push-pr-timing-a-configurable-st -> filed #300
+2026-07-04T15:43:10Z [rekicker] lifecycle auto-rekicker started (pid 714937)
+2026-07-04T15:43:10Z [rekicker] re-kicked daemon-lifecycle-controls at 22/38 tasks (was -1)
+2026-07-04T16:54:10Z [rekicker] re-kicked daemon-lifecycle-controls at 35/38 tasks (was 22)
+2026-07-04T17:56:10Z NEW HALT: 2026-07-04T17:54:32.903Z [daemon] ✋ daemon-lifecycle-controls halted — worktree kept (step 'build' failed in auto mode (retries exhausted))
+2026-07-04T17:58:04Z RESULT: HALT daemon-lifecycle-controls -> filed #302
+2026-07-04T18:58:07Z NEW HALT: 2026-07-04T18:56:21.659Z [daemon] ✋ test-spawned-daemons-leak-real-tmux-daemons-persis halted — worktree kept (loop exited without a terminal verdict (last step: build) — no DONE/HALT marker was written; parking for inspection)
+2026-07-04T18:59:16Z RESULT: HALT test-spawned-daemons-leak-real-tmux-daemons-persis -> covered by #191
+2026-07-04T20:47:21Z NEW HALT: 2026-07-04T20:45:00.065Z [daemon] ✋ make-daemon-build-push-pr-timing-a-configurable-st halted — worktree kept (rebase conflict — parked for human resolution
+2026-07-04T20:48:01Z RESULT: This exact halt (2026-07-04T20:45:00.065Z, same slug, same conflicted file `src/conductor/src/engine/resolved-config.ts`, same `resumeRebaseFirst` bare-rebase root cause) is a repeat occurrence of the earlier 14:52 halt already filed as #300. No new remediation gap — filing again would be a duplicate.
+
+HALT make-daemon-build-push-pr-timing-a-configurable-st -> covered by #300
+2026-07-04T22:36:06Z NEW HALT: 2026-07-04T22:33:55.063Z [daemon] ✋ operator-park-a-human-placed-halt-must-survive-the halted — worktree kept (step 'architecture_review_as_built' failed in auto mode (retries exhausted))
+2026-07-04T22:36:38Z RESULT: This matches exactly: retries within seconds during an active rate-limit episode (`rate-limit-hit` marker written at 22:33:48Z, sandwiched between the retries), burning the retry budget and HALTing instead of pausing/backing off. #270 already describes this exact auto-remediation gap.
+
+HALT operator-park-a-human-placed-halt-must-survive-the -> covered by #270
+2026-07-04T23:09:40Z NEW HALT: 2026-07-04T23:06:40.619Z [daemon] ✋ make-daemon-build-push-pr-timing-a-configurable-st halted — worktree kept (step 'architecture_review_as_built' failed in auto mode (retries exhausted))
+2026-07-04T23:10:57Z RESULT: Root cause: the `architecture_review_as_built` step's 3 retries fired within ~4 seconds (23:06:34–23:06:38Z), and a `.pipeline/rate-limit-hit` marker (300s) was written at 23:06:39Z — the underlying API call was rate-limited, but the completion-check failure path (`checkStepCompletion` → missing `architecture-review-as-built.md`) doesn't route through the `result.rateLimited` branch in `conductor.ts`, so the retry budget was burned instantly instead of backing off, and the daemon halted needlessly.
+
+This is exactly the gap issue #270 already tracks: "A rate-limited/timeout API call must NOT consume the step retry budget; distinguish 'the API said wait' from 'the step failed'." Filing a new issue would be a near-duplicate.
+
+HALT make-daemon-build-push-pr-timing-a-configurable-st -> covered by #270
+2026-07-04T23:13:57Z NEW HALT: 2026-07-04T23:10:40.982Z [daemon] ✋ operator-park-a-human-placed-halt-must-survive-the halted — worktree kept (step 'architecture_review_as_built' failed in auto mode (retries exhausted))
+2026-07-04T23:14:40Z RESULT: This matches exactly — issue #270 already covers this failure mode (rate-limited API calls burning the retry budget instantly and halting the feature instead of pausing). Our evidence (`rate-limit-hit` marker born the same second as the failure, `retries exhausted` within ~4 seconds both times) is the same signature.
+
+HALT operator-park-a-human-placed-halt-must-survive-the -> covered by #270
+2026-07-04T23:17:40Z NEW HALT: 2026-07-04T23:10:49.052Z [daemon] ✋ make-daemon-build-push-pr-timing-a-configurable-st halted — worktree kept (rebase conflict — parked for human resolution
+2026-07-04T23:18:45Z RESULT: HALT make-daemon-build-push-pr-timing-a-configurable-st -> covered by #300
+2026-07-05T00:18:49Z NEW HALT: 2026-07-05T00:18:10.449Z [daemon] ✋ make-daemon-build-push-pr-timing-a-configurable-st halted — worktree kept (rebase conflict — parked for human resolution
+2026-07-05T00:19:49Z RESULT: This is the exact same slug and the exact same root cause (`resumeRebaseFirst` in `daemon-rekick.ts` bypassing the gated `/rebase` resolution loop) — it's just recurred again with a different conflicted file (`src/conductor/dist` this time vs. `resolved-config.ts` before). Issue #300 already covers it.
+
+HALT make-daemon-build-push-pr-timing-a-configurable-st -> covered by #300
+2026-07-05T01:31:53Z NEW HALT: 2026-07-05T01:30:50.684Z [daemon] ✋ make-daemon-build-push-pr-timing-a-configurable-st halted — worktree kept (rebase conflict — parked for human resolution
+2026-07-05T01:33:06Z RESULT: This is an exact match — issue #300 was filed for a prior halt of this same feature (2026-07-04T14:52:11Z, same `resumeRebaseFirst` bypass bug), and today's halt (2026-07-05T01:30:50.684Z) is the identical failure mode recurring (rebase re-conflict → immediate human park, no gated `/rebase` resolution attempt). No new issue needed.
+
+HALT make-daemon-build-push-pr-timing-a-configurable-st -> covered by #300
+2026-07-05T01:39:06Z NEW HALT: 2026-07-05T01:36:06.337Z [daemon] ✋ make-daemon-build-push-pr-timing-a-configurable-st halted — worktree kept (rebase conflict — parked for human resolution
+2026-07-05T01:39:48Z RESULT: This exact halt is a repeat occurrence of the same slug/mechanism as #300 (`resumeRebaseFirst` in daemon-rekick.ts bypasses the gated `/rebase` resolution loop and hard-halts on the first conflict during play-forward rebase), just now conflicting on `src/conductor/dist` instead of `resolved-config.ts`. No new issue needed.
+
+HALT make-daemon-build-push-pr-timing-a-configurable-st -> covered by #300
+2026-07-05T01:45:48Z NEW HALT: 2026-07-05T01:44:17.539Z [daemon] ✋ make-daemon-build-push-pr-timing-a-configurable-st halted — worktree kept (rebase conflict — parked for human resolution
+2026-07-05T01:46:21Z RESULT: This is an exact match — same slug, same `resumeRebaseFirst` bypass mechanism, same conflict-loop symptom (repeated re-park without invoking the gated `/rebase` resolution sub-loop). This new halt is just a later recurrence of #300, still open.
+
+HALT make-daemon-build-push-pr-timing-a-configurable-st -> covered by #300
+2026-07-05T13:08:24Z NEW HALT: 2026-07-05T13:00:25.153Z [daemon] ✋ auto-resolve-open-pr-conflicts halted — worktree kept (Operator credentials expired and refresh timed out after 60 minutes.
+2026-07-05T13:23:28Z RESULT: <empty — claude call failed or timed out>
+2026-07-05T18:50:56Z halt-monitor started (pid 1040094, interval 180s, repo /home/jamesstoup/code/james-stoup-agents)
+2026-07-05T18:50:57Z NEW HALT: 2026-07-05T13:56:41.612Z [daemon] ✋ daemon-event-driven-wake-for-parked-halted-feature halted — worktree kept (step 'acceptance_specs' failed in auto mode (retries exhausted))
+2026-07-05T18:51:55Z RESULT: HALT daemon-event-driven-wake-for-parked-halted-feature -> covered by #297
+2026-07-05T18:54:55Z NEW HALT: 2026-07-05T18:38:32.769Z [daemon] ✋ 2026-07-03-surface-owner-gated-specs-dashboard-status halted — worktree kept (step 'acceptance_specs' failed in auto mode (retries exhausted))
+2026-07-05T18:55:30Z RESULT: Exact match found — issue #297 already covers this precise gap (writing-system-tests never runs the specs / no RED evidence, retries can't recover).
+
+HALT 2026-07-03-surface-owner-gated-specs-dashboard-status -> covered by #297
+2026-07-05T18:58:30Z NEW HALT: 2026-07-05T18:39:15.628Z [daemon] ✋ 2026-07-03-surface-owner-gated-specs-dashboard-status halted — worktree kept (step 'acceptance_specs' failed in auto mode (retries exhausted))
+2026-07-05T18:59:42Z RESULT: This is an exact match to #297. My current halt on `2026-07-03-surface-owner-gated-specs-dashboard-status` is the same failure family: `writing-system-tests` skill fails to execute its authored specs and record `.pipeline/acceptance-specs-red.json`, and retries burn identically. No new filing needed.
+
+HALT 2026-07-03-surface-owner-gated-specs-dashboard-status -> covered by #297
+2026-07-05T19:11:43Z NEW HALT: 2026-07-05T19:10:46.455Z [daemon] ✋ drop-check-harness-config-consumer-claude-md-harne halted — worktree kept (Migration block required (self-host release gate) — breaking surface(s): bin/conduct CLI, but CHANGELOG has no runnable ```bash migration``` block under a `## Migration` section for `bin/migrate`.
+2026-07-05T19:12:32Z RESULT: The Migration-block gate HALT is the same root-cause class already tracked in #282: the build/CHANGELOG-authoring step doesn't enforce the `## Migration` + ` ```bash migration ` contract for breaking-surface changes at authoring time (task-5 "Changelog + integrity gate" completed without adding any Migration entry for the `bin/conduct` breaking change), so it only surfaces as a manual HALT at the self-host release gate. #282 already proposes the exact fix (format/content check at CHANGELOG-authoring, or route through `/remediate`), so this is a duplicate occurrence rather than a new gap.
+
+HALT drop-check-harness-config-consumer-claude-md-harne -> covered by #282
+2026-07-05T19:40:04Z NEW HALT: 2026-07-05T19:38:09.401Z [daemon] ✋ drop-check-harness-config-consumer-claude-md-harne halted — worktree kept (Migration block required (self-host release gate) — breaking surface(s): bin/conduct CLI, but CHANGELOG has no runnable ```bash migration``` block under a `## Migration` section for `bin/migrate`.
+2026-07-05T19:41:19Z RESULT: HALT drop-check-harness-config-consumer-claude-md-harne -> covered by #282
+2026-07-05T22:47:31Z NEW HALT: 2026-07-05T22:46:20.557Z [daemon] ✋ 2026-07-03-surface-owner-gated-specs-dashboard-status halted — worktree kept (Operator credentials expired and refresh timed out after 60 minutes.
+2026-07-05T22:47:33Z RESULT: Not logged in · Please run /login
+2026-07-05T23:11:34Z NEW HALT: 2026-07-05T13:00:25.153Z [daemon] ✋ auto-resolve-open-pr-conflicts halted — worktree kept (Operator credentials expired and refresh timed out after 60 minutes.
+2026-07-05T23:11:55Z halt-monitor started (pid 2511304, interval 180s, repo /home/jamesstoup/code/james-stoup-agents)
+2026-07-05T23:11:55Z NEW HALT: 2026-07-05T22:46:20.557Z [daemon] ✋ 2026-07-03-surface-owner-gated-specs-dashboard-status halted — worktree kept (Operator credentials expired and refresh timed out after 60 minutes.
+2026-07-05T23:12:36Z RESULT: Issue #351 already covers this exact halt — it explicitly lists the 22:46 `surface-owner-gated-specs-dashboard-status` episode among the three credential-expiry HALTs from 2026-07-05, with root cause (shared OAuth credential copy causing refresh-token rotation races between daemon and operator sessions) and proposed direction (isolate daemon auth from operator's interactive credential).
+
+HALT 2026-07-03-surface-owner-gated-specs-dashboard-status -> covered by #351
+2026-07-05T23:42:38Z NEW HALT: 2026-07-05T23:42:23.035Z [daemon] ✋ drop-check-harness-config-consumer-claude-md-harne halted — worktree kept (Migration block required (self-host release gate) — breaking surface(s): bin/conduct CLI, but CHANGELOG has no runnable ```bash migration``` block under a `## Migration` section for `bin/migrate`.
+2026-07-05T23:44:04Z RESULT: HALT drop-check-harness-config-consumer-claude-md-harne -> filed #354
+2026-07-06T00:26:07Z NEW HALT: 2026-07-06T00:24:05.135Z [daemon] ✋ 2026-07-03-surface-owner-gated-specs-dashboard-status halted — worktree kept (rebase conflict — parked for human resolution
+2026-07-06T00:30:29Z RESULT: HALT 2026-07-03-surface-owner-gated-specs-dashboard-status -> filed #358
+2026-07-06T00:51:30Z NEW HALT: 2026-07-06T00:50:21.245Z [daemon] ✋ daemon-event-driven-wake-for-parked-halted-feature halted — worktree kept (step 'build' failed in auto mode (retries exhausted))
+2026-07-06T00:52:26Z RESULT: This is an exact match — issue #188 already covers "retry 2/3 escalates model/effort instead of identical retries," which is precisely the gap that let this halt run two identical build retries on the stuck T6 task before exhausting budget. No new issue needed.
+
+HALT daemon-event-driven-wake-for-parked-halted-feature -> covered by #188
+2026-07-06T10:24:49Z NEW HALT: 2026-07-06T10:23:45.730Z [daemon] ✋ drop-check-harness-config-consumer-claude-md-harne halted — worktree kept (Migration block required (self-host release gate) — breaking surface(s): bin/conduct CLI, but CHANGELOG has no runnable ```bash migration``` block under a `## Migration` section for `bin/migrate`.
+2026-07-06T10:25:42Z RESULT: This is an exact match for the current halt — same slug, same two identical halt timestamps pattern, same root cause (`classifyBreakingSurfaces` in `release-gate.ts` flags any diff touching `bin/conduct` path-wise, not semantically). Already filed as #354 (priority: high). No need to file a duplicate.
+
+HALT drop-check-harness-config-consumer-claude-md-harne -> covered by #354
+2026-07-06T11:10:45Z NEW HALT: 2026-07-06T11:08:41.205Z [daemon] ✋ daemon-event-driven-wake-for-parked-halted-feature halted — worktree kept (step 'build' failed in auto mode (retries exhausted))
+2026-07-06T11:13:44Z RESULT: Root cause: `.pipeline/task-status.json` shows only T6 (of 18) as `in_progress`; the worktree's build gate (`gates/build.json`) says "invalidated by file-changing rebase" after the daemon's auto-rebase-before-resume touched 40+ files, forcing a full re-verify. Running the actual T6/T7/T9 acceptance tests shows real forward progress happened this dispatch (git log has fresh `feat(daemon,waker)` commits; 2 of the 4 previously-failing tests now pass — only the T7/T9-scoped ones still fail, which is expected since those tasks are still pending). The build step still hit "retries exhausted" and halted because its binary all-tasks-done check doesn't credit partial completion within the retry budget — the same gap already tracked in #280 ("Daemon halts a build that is making forward progress... halt only when a dispatch makes zero progress"). No new bug — filing another would duplicate #280.
+
+HALT daemon-event-driven-wake-for-parked-halted-feature -> covered by #280
+2026-07-06T11:16:44Z NEW HALT: 2026-07-06T11:13:31.320Z [daemon] ✋ halt-prs-must-reliably-carry-needs-remediation-lab halted — worktree kept (step 'acceptance_specs' failed in auto mode (retries exhausted))
+2026-07-06T11:17:18Z RESULT: Found #297 — exact match: "acceptance_specs halts in auto mode: writing-system-tests commits specs but never executes them — no .pipeline/acceptance-specs-red.json, retries can't recover." This is precisely the failure mode in this halt's log (3 retries, same missing-marker error each time).
+
+HALT halt-prs-must-reliably-carry-needs-remediation-lab -> covered by #297
+2026-07-06T14:05:39Z NEW HALT: 2026-07-06T14:05:25.461Z [daemon] ✋ daemon-event-driven-wake-for-parked-halted-feature halted — worktree kept (step 'finish' failed in auto mode (retries exhausted))
+2026-07-06T14:06:12Z RESULT: #281 is an exact match — the same "finish-choice missing on try 1" pattern that eventually exhausts retries and halts here. This present occurrence adds evidence (3 full-cycle retries exhausted, not just 1) but it's the same root cause and gap already tracked as open.
+
+HALT daemon-event-driven-wake-for-parked-halted-feature -> covered by #281
+2026-07-06T21:41:16Z NEW HALT: 2026-07-06T21:38:28.048Z [daemon] ✋ prd-audit-kickback-preserves-task-status halted — worktree kept (step 'manual_test' failed in auto mode (retries exhausted))
+2026-07-06T21:44:09Z RESULT: HALT prd-audit-kickback-preserves-task-status -> filed #385
+2026-07-06T23:34:44Z NEW HALT: 2026-07-06T23:33:49.467Z [daemon] ✋ prd-audit-kickback-preserves-task-status halted — worktree kept (step 'manual_test' failed in auto mode (retries exhausted))
+2026-07-06T23:37:08Z RESULT: HALT prd-audit-kickback-preserves-task-status -> filed #386
+2026-07-07T13:38:11Z NEW HALT: 2026-07-07T13:37:16.739Z [daemon] ✋ add-a-judgement-gate-at-the-build-manual-test-seam halted — worktree kept (manual-test FAIL unresolved after 2 build kickback(s) (cap 2): | fail-closed verdict predicate | N/A | SKIP | engine-internal, covered by predicate unit tests |)
+2026-07-07T13:41:32Z RESULT: HALT add-a-judgement-gate-at-the-build-manual-test-seam -> filed #403
+2026-07-07T14:56:37Z NEW HALT: 2026-07-07T14:54:51.310Z [daemon] ✋ audit-trail-write-completeness-for-retro-under-fre halted — worktree kept (step 'build' failed in auto mode (retries exhausted))
+2026-07-07T15:00:30Z RESULT: HALT audit-trail-write-completeness-for-retro-under-fre -> filed #407
+2026-07-07T15:03:30Z NEW HALT: 2026-07-07T15:00:39.296Z [daemon] ✋ audit-trail-write-completeness-for-retro-under-fre halted — worktree kept (auto-parked: no completion evidence after 3 attempts — unpark with `conduct daemon unpark audit-trail-write-completeness-for-retro-under-fre`)
+2026-07-07T15:05:07Z RESULT: This exact incident is already covered by an issue filed the same minute the halt occurred, with a precise root-cause trace matching what I found (plan_ref resolving to the wrong `.docs/plans/*.md` file alphabetically, merging an unrelated `/assess`-skill plan's 9 pending tasks into this feature's task-status.json).
+
+HALT audit-trail-write-completeness-for-retro-under-fre -> covered by #407
+2026-07-07T16:44:14Z NEW HALT: 2026-07-07T16:41:14.844Z [daemon] ✋ audit-trail-write-completeness-for-retro-under-fre halted — worktree kept (auto-parked: no completion evidence after 3 attempts — unpark with `conduct daemon unpark audit-trail-write-completeness-for-retro-under-fre`)
+2026-07-07T16:45:32Z RESULT: This exact bug is already covered. Issue #407 was filed for this very halt (same slug, same corrupted task-status.json with plan_ref pointing to the wrong `.docs/plans/2026-03-30-technical-assessment.md`), and it was closed just 34 seconds before this current halt occurred at 16:41:14 — meaning this halt is a repeat/residual manifestation of #407 (the worktree's corrupted state persisted through the fix landing, or the fix hadn't yet been applied to this in-flight worktree).
+
+No new issue needed.
+
+HALT audit-trail-write-completeness-for-retro-under-fre -> covered by #407
+2026-07-07T17:30:36Z NEW HALT: 2026-07-07T17:30:32.846Z [daemon] ✋ fix-400-stale-engine-respawn-in-place-stacks-daemo halted — worktree kept (step 'build' failed in auto mode (retries exhausted))
+2026-07-07T17:36:17Z RESULT: **Diagnosis:** `task-status.json` in the halted worktree has `plan_ref` pointing at the unrelated `2026-03-30-technical-assessment.md` plan (9 pending tasks: "Create specialist agent files...", "/assess SKILL.md", etc.), upserted alongside this feature's own 19 genuinely-completed tasks — triggering "9/9 tasks pending" and exhausting the build retry cap. `summary.json`/`progress.log` confirm the feature itself is 19/19 done and merge-ready; the gate's plan resolution just picked the wrong file.
+
+This is the identical symptom as issue #407 (fixed by PR #410, merged 2026-07-07T16:40:39Z — 38s before this feature's dispatch started). The recurrence traces to daemon self-host engine staleness: the daemon process last restarted at 15:05:49Z (pre-#410) and never restarted again before this feature's `task-status.json` was seeded (~16:48Z), so it was still running the pre-fix plan-resolution logic despite the fix being on `main`. That "an engine fix to the daemon's own gating logic isn't live in time for an adjacent/concurrent dispatch that needs it" gap is already documented (closed only because its own instance recovered on re-kick, not because the code was fixed) in issue #403.
+
+HALT fix-400-stale-engine-respawn-in-place-stacks-daemo -> covered by #403
+2026-07-07T17:39:17Z NEW HALT: 2026-07-07T17:30:44.762Z [daemon] ✋ audit-trail-write-completeness-for-retro-under-fre halted — worktree kept (rebase conflict — parked for human resolution
+2026-07-07T17:43:07Z RESULT: HALT audit-trail-write-completeness-for-retro-under-fre -> filed #415
+2026-07-07T17:49:07Z NEW HALT: 2026-07-07T17:47:52.450Z [daemon] ✋ fix-400-stale-engine-respawn-in-place-stacks-daemo halted — worktree kept (auto-parked: no completion evidence after 3 attempts — unpark with `conduct daemon unpark fix-400-stale-engine-respawn-in-place-stacks-daemo`)
+2026-07-07T17:51:27Z RESULT: HALT fix-400-stale-engine-respawn-in-place-stacks-daemo -> filed #416
+2026-07-07T17:54:27Z NEW HALT: 2026-07-07T17:51:55.129Z [daemon] ✋ audit-trail-write-completeness-for-retro-under-fre halted — worktree kept (auto-parked: no completion evidence after 3 attempts — unpark with `conduct daemon unpark audit-trail-write-completeness-for-retro-under-fre`)
+2026-07-07T17:54:49Z RESULT: Confirmed: this halt is the exact scenario already documented in issue #417 (evidence-gate id-grammar drift — bare plan ids `N` vs commit trailer `task-N`), which explicitly names `audit-trail-write-completeness-for-retro-under-fre` as one of the two parked features awaiting that fix. No new issue needed.
+
+HALT audit-trail-write-completeness-for-retro-under-fre -> covered by #417
+2026-07-07T23:04:13Z NEW HALT: 2026-07-07T23:01:17.550Z [daemon] ✋ audit-trail-write-completeness-for-retro-under-fre halted — worktree kept (auto-parked: no completion evidence after 3 attempts — unpark with `conduct daemon unpark audit-trail-write-completeness-for-retro-under-fre`)
+2026-07-07T23:07:32Z RESULT: Memory updated to flag that #417/#418 was spec-only and both parked features are actually blocked on the still-open #416 (the `task-N` vs bare-`N` duplicate-row gate bug), so future halts matching this signature should cite #416 rather than file anew.
+2026-07-07T23:07:32Z TRIAGE INCOMPLETE (left unseen; will retry next pass): 2026-07-07T23:01:17.550Z [daemon] ✋ audit-trail-write-completeness-for-retro-under-fre halted — worktree kept (auto-parked: no completion evidence after 3 attempts — unpark with `conduct daemon unpark audit-trail-write-completeness-for-retro-under-fre`)
+2026-07-07T23:10:32Z NEW HALT: 2026-07-07T23:01:17.550Z [daemon] ✋ audit-trail-write-completeness-for-retro-under-fre halted — worktree kept (auto-parked: no completion evidence after 3 attempts — unpark with `conduct daemon unpark audit-trail-write-completeness-for-retro-under-fre`)
+2026-07-07T23:11:19Z RESULT: Both halts are the same root cause: task-status.json in each worktree contains a duplicate task list — real completed entries under `task-N` ids (with commits) plus a second stale set under bare-numeric ids (`"1"`..`"19"`) all `"pending"`. The build-evidence gate matched against the bare-id set and saw no evidence, triggering the 3-attempt auto-park.
+
+This is exactly issue #417 ("Daemon builds can never satisfy the build evidence gate: agents stamp 'Task: task-N' trailers while plans declare bare ids 'N'"), whose fix landed in PR #418 (merged 2026-07-07T22:59:21Z — just before these halts). Per standing memory, these two are "the parked pair" flagged to unpark only after the #418 merge + runbook — confirming this isn't a new gap, just pending manual unpark.
+
+HALT audit-trail-write-completeness-for-retro-under-fre -> covered by #417
+HALT fix-400-stale-engine-respawn-in-place-stacks-daemo -> covered by #417
+2026-07-07T23:14:19Z NEW HALT: 2026-07-07T23:02:05.101Z [daemon] ✋ fix-400-stale-engine-respawn-in-place-stacks-daemo halted — worktree kept (auto-parked: no completion evidence after 3 attempts — unpark with `conduct daemon unpark fix-400-stale-engine-respawn-in-place-stacks-daemo`)
+2026-07-07T23:15:26Z RESULT: HALT fix-400-stale-engine-respawn-in-place-stacks-daemo -> covered by #417
+2026-07-07T23:24:27Z NEW HALT: 2026-07-07T23:22:16.818Z [daemon] ✋ 2026-07-07-evidence-gate-task-id-grammar halted — worktree kept (step 'build' failed in auto mode (retries exhausted))
+2026-07-07T23:27:28Z RESULT: Root cause: build failed the completion check because tasks 3, 5, 6, 12 had no matching `Task:` evidence trailer — not genuine incompleteness, but the exact "trailer coverage gap" class #417 documented (task 3's work landed in a shared commit with task 2; tasks 5/6/12 are test-only/verification tasks with no dedicated commit). #417 explicitly scoped this as requiring operator-verified backfill rather than auto-remediation ("guessed attribution... exactly what the evidence bar exists to prevent"), and this very spec's Task 10 shipped the `evidence-backfill-recovery.md` runbook for it. The operator already ran that runbook (4 local `evidence: Task N satisfied by...` commits at 23:24:58Z) and the daemon auto-resumed/re-kicked the build at 23:25:15Z — the sanctioned recovery path working as designed, not a gap to file.
+
+HALT 2026-07-07-evidence-gate-task-id-grammar -> covered by #417
+
+# ─────────────────────────────────────────────────────────────────────────
+# SYNTHETIC (hand-added, NOT verbatim log content) — the two lines below
+# cover Acceptance Criteria the live log excerpt above does not naturally
+# contain as of capture time: a single RESULT line embedding TWO verdicts,
+# and a malformed verdict with no slug/number. Fake slugs/issue numbers in
+# the 9xx range so they can never collide with a real filed issue.
+# ─────────────────────────────────────────────────────────────────────────
+2026-07-09T09:00:00Z RESULT: Two unrelated slugs converged in the same triage pass: HALT synthetic-double-verdict-a -> covered by #900 (duplicate of an existing gap), and separately HALT synthetic-double-verdict-b -> filed #901 (new gap, no prior issue covered it).
+2026-07-09T09:05:00Z NEW HALT: 2026-07-09T09:04:12.000Z [daemon] ✋ synthetic-malformed-verdict halted — worktree kept (synthetic fixture line for malformed-verdict negative path)
+2026-07-09T09:06:00Z RESULT: HALT -> filed #
