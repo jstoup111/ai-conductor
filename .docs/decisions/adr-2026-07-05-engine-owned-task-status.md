@@ -145,7 +145,10 @@ Fable-round additions (2026-07-05), equally binding:
   increase, so the park fires **across daemon re-kicks** (all current counters are per-run
   in-memory — without this the infinite loop survives). This counter is also #280's
   forward-progress delta.
-- **H8 — Migration grandfather + engine plan resolution:** at first engine seed, existing terminal
+- **H8 — Migration grandfather + engine plan resolution:** *(the migration-grandfather portion of
+  this hypothesis is SUPERSEDED by `adr-2026-07-10-retire-migration-grandfather` — the first-seed
+  stamp proved to be a forgery vector (#463) once the migration window closed; engine plan
+  resolution and never-demote for evidence-stamped rows remain authoritative)* at first engine seed, existing terminal
   rows are stamped `evidencedBy: migration-grandfather` (their pre-cutover commits carry no
   trailers); thereafter only engine-stamped rows are preserved/counted. **Never-demote** is an
   explicit constraint: derive never flips an evidenced `completed` back to `pending`; post-completion
