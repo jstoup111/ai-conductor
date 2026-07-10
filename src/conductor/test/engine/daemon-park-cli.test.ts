@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, mkdir, realpath } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, realpath, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFile as execFileCb } from 'node:child_process';
@@ -10,7 +10,7 @@ import {
   validateSlug,
   resolveMainRepoRoot,
 } from '../../src/engine/daemon-park-cli.js';
-import { isOperatorParked } from '../../src/engine/park-marker.js';
+import { isOperatorParked, __resetResolveCacheForTests } from '../../src/engine/park-marker.js';
 
 const execFile = promisify(execFileCb);
 
@@ -21,12 +21,39 @@ describe('engine/daemon-park-cli', () => {
     await mkdir(join(r, '.worktrees', slug), { recursive: true });
   };
 
+  /** Initialize a real git repo at root with a linked worktree. */
+  const initGitRepoWithWorktree = async (r: string, slug: string) => {
+    const g = (args: string[], cwd = r) => execFile('git', args, { cwd });
+    try {
+      // Initialize main repo
+      await g(['init', '-q', '-b', 'main']);
+      await g(['config', 'user.email', 't@t.com']);
+      await g(['config', 'user.name', 'T']);
+      await g(['config', 'commit.gpgsign', 'false']);
+      await writeFile(join(r, 'README.md'), '# base\n');
+      await g(['add', '.']);
+      await g(['commit', '-q', '-m', 'init']);
+
+      // Create worktree
+      const worktreeDir = join(r, '.worktrees', slug);
+      await mkdir(worktreeDir, { recursive: true });
+      await g(['worktree', 'add', '-b', `spec/${slug}`, worktreeDir, 'main']);
+      return worktreeDir;
+    } catch (err) {
+      // If git commands fail, just create the directory structure
+      await mkdir(join(r, '.worktrees', slug), { recursive: true });
+      return join(r, '.worktrees', slug);
+    }
+  };
+
   beforeEach(async () => {
     root = await mkdtemp(join(tmpdir(), 'daemon-park-cli-'));
+    __resetResolveCacheForTests();
   });
 
   afterEach(async () => {
     await rm(root, { recursive: true, force: true });
+    __resetResolveCacheForTests();
   });
 
   describe('resolveMainRepoRoot', () => {
@@ -271,6 +298,91 @@ describe('engine/daemon-park-cli', () => {
       );
       expect(code).toBe(0);
       expect(await isOperatorParked(root, 'fresh-checkout-slug')).toBe(true);
+    });
+
+    it('unpark resets the no-evidence counter in the worktree (Task 11)', async () => {
+      // Initialize real git repo with worktree
+      const worktreeDir = await initGitRepoWithWorktree(root, 'counter-reset-slug');
+
+      // Simulate an auto-parked feature: seed the counter in the worktree,
+      // then write an auto-park marker at the main root (resolved root).
+      const { incrementNoEvidenceAttempts, readNoEvidenceAttempts } = await import(
+        '../../src/engine/task-evidence.js'
+      );
+      const { writeAutoPark, getProvenanceType } = await import('../../src/engine/park-marker.js');
+
+      // Increment counter 3 times in the WORKTREE (where build agent runs)
+      await incrementNoEvidenceAttempts(worktreeDir);
+      await incrementNoEvidenceAttempts(worktreeDir);
+      await incrementNoEvidenceAttempts(worktreeDir);
+
+      // Write an auto-park marker at the main root (daemon's perspective)
+      await writeAutoPark(root, 'counter-reset-slug', 'no evidence after 3 attempts');
+
+      // Verify the counter is at 3 in the worktree before unpark
+      expect(await readNoEvidenceAttempts(worktreeDir)).toBe(3);
+
+      // Verify the marker is auto-parked
+      expect(await getProvenanceType(root, 'counter-reset-slug')).toBe('auto');
+      expect(await isOperatorParked(root, 'counter-reset-slug')).toBe(true);
+
+      // Unpark from the worktree directory (where the operator runs conduct)
+      const out: string[] = [];
+      const code = await dispatchDaemonPark(
+        { kind: 'unpark', slug: 'counter-reset-slug' },
+        { cwd: worktreeDir, out: (l) => out.push(l) },
+      );
+
+      // Verify exit success
+      expect(code).toBe(0);
+
+      // Verify counter reset message printed
+      const joined = out.join('\n');
+      expect(joined.toLowerCase()).toContain('reset');
+
+      // Verify marker removed from main root
+      expect(await isOperatorParked(root, 'counter-reset-slug')).toBe(false);
+
+      // Verify counter reset to 0 in the WORKTREE
+      expect(await readNoEvidenceAttempts(worktreeDir)).toBe(0);
+    });
+
+    it('unpark only resets counter for auto-parked features (not operator-parked)', async () => {
+      // Initialize real git repo with worktree
+      const worktreeDir = await initGitRepoWithWorktree(root, 'operator-park-slug');
+
+      // Park via operator verb (not auto-park)
+      const out1: string[] = [];
+      const code1 = await dispatchDaemonPark(
+        { kind: 'park', slug: 'operator-park-slug' },
+        { cwd: worktreeDir, out: (l) => out1.push(l) },
+      );
+      expect(code1).toBe(0);
+
+      // Seed a counter in the worktree (simulating failed attempts)
+      const { incrementNoEvidenceAttempts, readNoEvidenceAttempts } = await import(
+        '../../src/engine/task-evidence.js'
+      );
+      await incrementNoEvidenceAttempts(worktreeDir);
+      await incrementNoEvidenceAttempts(worktreeDir);
+      expect(await readNoEvidenceAttempts(worktreeDir)).toBe(2);
+
+      // Unpark the operator-parked feature
+      const out2: string[] = [];
+      const code2 = await dispatchDaemonPark(
+        { kind: 'unpark', slug: 'operator-park-slug' },
+        { cwd: worktreeDir, out: (l) => out2.push(l) },
+      );
+      expect(code2).toBe(0);
+
+      // Verify marker removed
+      expect(await isOperatorParked(root, 'operator-park-slug')).toBe(false);
+
+      // Counter should NOT be reset for operator-parked features
+      // (no message about counter reset, counter remains at 2)
+      const joined = out2.join('\n');
+      expect(joined.toLowerCase()).not.toContain('reset');
+      expect(await readNoEvidenceAttempts(worktreeDir)).toBe(2);
     });
 
     it('park from a non-git cwd falls back to cwd-anchored behavior (pre-#486 semantics): exit 0, marker at cwd', async () => {
