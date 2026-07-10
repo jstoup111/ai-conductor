@@ -621,15 +621,11 @@ describe('engine/setup-triage — fixSession (Task 10: fix-session stage)', () =
 });
 
 describe('engine/setup-triage — quarantine sentinel surfacing (Task 14)', () => {
-  it('quarantined-pass outcome includes quarantine ref', async () => {
+  it('quarantined-pass outcome includes quarantine ref and preserved paths', async () => {
     const { git } = fakeGit([
       {
-        match: ['rev-parse', '--verify', 'wip/setup-quarantine-test-slug'],
-        result: { exitCode: 1 },
-      },
-      {
         match: ['status', '--porcelain'],
-        result: { stdout: ' M src/foo.ts\n' },
+        result: { stdout: ' M src/foo.ts\n?? src/bar.ts\n' },
       },
       { match: ['add', '-A'], result: { exitCode: 0 } },
       {
@@ -650,9 +646,7 @@ describe('engine/setup-triage — quarantine sentinel surfacing (Task 14)', () =
     let prepareCallCount = 0;
     const runPrepare = async (worktreePath: string) => {
       prepareCallCount++;
-      if (prepareCallCount === 1) {
-        throw new Error('setup failed (first attempt)');
-      }
+      // Setup succeeds on the retry after quarantine
     };
 
     const result = await retryPrepareAfterQuarantine(git, '/path/to/wt', 'test-slug', runPrepare);
