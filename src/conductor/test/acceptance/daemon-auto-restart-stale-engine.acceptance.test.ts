@@ -738,10 +738,11 @@ describe('acceptance: startup restart handshake + suppression (Stories 3 & 4)', 
       const freshIdentity = await captureEngineIdentity(dist);
 
       // Marker's target was a DIFFERENT identity we never actually reached.
+      const markerTarget = 'a-target-we-never-reached';
       await writeRestartMarker({
         reason: 'stale-engine',
         fromIdentity: 'zzz',
-        targetIdentity: 'a-target-we-never-reached',
+        targetIdentity: markerTarget,
         at: Date.now(),
       }, repoPath);
 
@@ -753,13 +754,13 @@ describe('acceptance: startup restart handshake + suppression (Stories 3 & 4)', 
         log: (msg: string) => log.push(msg),
       });
 
-      // Suppression recorded against the identity we actually came back on.
+      // Suppression recorded against the marker target (the identity we were trying to reach).
       const getSuppression = requireFn(restartMod, 'getSuppression');
       const suppression = await getSuppression(repoPath);
       expect(suppression).not.toBeNull();
-      expect(suppression!.suppressedTarget).toBe(freshIdentity);
+      expect(suppression!.suppressedTarget).toBe(markerTarget);
       expect(log.filter((l) => /suppress/i.test(l))).toHaveLength(1);
-      expect(log.join('\n')).toContain('a-target-we-never-reached');
+      expect(log.join('\n')).toContain(markerTarget);
       expect(log.join('\n')).toContain(freshIdentity);
       await rm(workDir, { recursive: true, force: true });
     });

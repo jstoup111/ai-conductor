@@ -87,7 +87,7 @@ export async function initStaleEngineState(opts: InitStaleEngineStateOpts): Prom
         log(
           `suppressing restart loop — target was ${marker.targetIdentity}, now ${engineIdentity}`,
         );
-        await recordSuppression(engineIdentity, repoPath, log);
+        await recordSuppression(marker.targetIdentity, repoPath, log);
       }
 
       // Clear the marker before the dispatch loop begins
