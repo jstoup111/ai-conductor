@@ -158,6 +158,12 @@ that a distributed-pool backend is a drop-in with zero adapter/loop changes.
 
 ## Story 6: Atomic claim prevents double-processing
 
+> **Amended by #461** (`2026-07-10-priority-banded-intake-claim.md`,
+> `adr-2026-07-10-intake-claim-priority-banding`): the queue primitive `claim()` still returns
+> oldest-by-`receivedAt` (unchanged, asserted below), but the end-to-end `engineer claim`
+> selection above the queue is now priority-band-first, oldest-first within a band. "Oldest"
+> in Story 6/7 describes the primitive and pre-#461 CLI behavior respectively.
+
 **Requirement:** FR-30
 
 As the engineer core, I want the oldest pending Envelope claimed atomically before routing so that
