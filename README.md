@@ -226,14 +226,15 @@ features by priority band **after** passing the eligibility gate. This enables
 human-driven build prioritization without changing the gate logic.
 
 **Priority bands (highest to lowest):**
-- `priority: high` — highest priority (no-issue status escalated)
+- `priority: critical` — fixes for complete breakage or very severe degradation; dispatched first among issue-linked work
+- `priority: high` — highest routine priority
 - `priority: medium` — standard priority
 - `priority: low` — lower priority
 - Unlabeled (no priority label) — fallback chronological order
 
 **Label vocabulary:**
 The daemon reads GitHub issue labels via the REST API on each daemon scan.
-Label names are exact matches: `priority: high`, `priority: medium`, `priority: low`.
+Label names are exact matches: `priority: critical`, `priority: high`, `priority: medium`, `priority: low`.
 If an issue has multiple priority labels, the highest-priority one wins.
 Mixed or malformed labels are ignored (safe-fail).
 
