@@ -289,7 +289,7 @@ export async function retryPrepareAfterQuarantine(
     // Setup succeeded after second retry
     return {
       kind: 'quarantined-pass',
-      outputTail,
+      outputTail: '',
       quarantineRef: quarantineResult.ref,
     };
   } catch (err) {
