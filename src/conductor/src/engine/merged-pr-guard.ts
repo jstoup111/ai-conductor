@@ -9,6 +9,8 @@
  * Any gh error or non-MERGED verdict → proceed (fail-open, logged at debug).
  */
 
+import { writeFile, mkdir } from 'node:fs/promises';
+import { join } from 'node:path';
 import { prMergeState, type GhRunner } from './pr-labels.js';
 
 /**
@@ -41,4 +43,37 @@ export async function checkMergedPrGuard(
   }
 
   return 'proceed';
+}
+
+/**
+ * Idempotently writes the synthetic verified-ship markers when a recorded PR is
+ * detected merged out-of-band. Writes `.pipeline/finish-choice` = `pr` and
+ * `.pipeline/DONE`, leaves `conduct-state.json` untouched, and logs the event.
+ *
+ * @param projectRoot — the worktree root (for constructing `.pipeline` paths)
+ * @param headSha — the feature branch's current HEAD (40-char hex SHA)
+ * @param log — logging function for audit trail
+ *
+ * **Idempotent:** multiple invocations write identical content, no error.
+ */
+export async function writeSyntheticShipMarkers(
+  projectRoot: string,
+  headSha: string,
+  log: (message: string) => void,
+): Promise<void> {
+  const pipelineDir = join(projectRoot, '.pipeline');
+  const finishChoicePath = join(pipelineDir, 'finish-choice');
+  const donePath = join(pipelineDir, 'DONE');
+
+  // Ensure .pipeline directory exists
+  await mkdir(pipelineDir, { recursive: true });
+
+  // Write finish-choice marker (idempotent: exact same content each time)
+  await writeFile(finishChoicePath, 'pr', 'utf-8');
+
+  // Write DONE marker (idempotent: empty file, repeated writes are safe)
+  await writeFile(donePath, '', 'utf-8');
+
+  // Log the event with the retained SHA for audit trail
+  log(`already shipped out-of-band; local branch retained at ${headSha}`);
 }
