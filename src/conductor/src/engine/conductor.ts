@@ -28,6 +28,7 @@ import { evaluateWhen } from './when-expression.js';
 import type { HarnessConfig } from '../types/config.js';
 import { ConductorEventEmitter } from '../ui/events.js';
 import { BuildProgressWatcher } from './build-progress-watcher.js';
+import { resolveBuildProgressConfig } from './config.js';
 import {
   readState,
   writeState,
@@ -1500,8 +1501,13 @@ export class Conductor {
           // branch below actually resolves (self-build dispatch vs. the normal
           // stepRunner path) or whether that branch throws. Plan/finish/every
           // other step never constructs a watcher at all.
+          //
+          // Task 10: `build_progress.enabled: false` is a full escape hatch —
+          // no watcher instance is constructed at all (not merely started as
+          // a no-op), so operators who disable the feature pay zero overhead
+          // and the existing post-hoc stall-breaker (below) is unaffected.
           const buildWatcher: BuildProgressWatcher | null =
-            step.name === 'build'
+            step.name === 'build' && resolveBuildProgressConfig(this.config).enabled
               ? new BuildProgressWatcher({
                   projectRoot: this.projectRoot,
                   events: this.events,

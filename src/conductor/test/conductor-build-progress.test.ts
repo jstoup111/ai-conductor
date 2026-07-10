@@ -140,4 +140,25 @@ describe('conductor/build-progress-watcher wiring', () => {
     expect(starts.filter((s) => s === 'build').length).toBe(1);
     expect(stops.filter((s) => s === 'build').length).toBe(1);
   });
+
+  it('constructs no watcher at all when build_progress.enabled is false', async () => {
+    const callOrder: string[] = [];
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: makeSucceedingRunner(callOrder),
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      maxRetries: 1,
+      config: { build_progress: { enabled: false } },
+    });
+
+    await conductor.run();
+
+    expect(callOrder).toContain('build');
+    expect(constructedWith).toEqual([]);
+    expect(starts).toEqual([]);
+    expect(stops).toEqual([]);
+  });
 });
