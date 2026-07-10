@@ -2,7 +2,7 @@ import chalk from 'chalk';
 import { v4 as uuidv4 } from 'uuid';
 import { join } from 'node:path';
 import { existsSync } from 'node:fs';
-import { mkdir, rm, readFile } from 'node:fs/promises';
+import { mkdir, rm, readFile, writeFile } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { closeIssueOnImplementationMerge } from './engine/engineer/issue-ref.js';
@@ -752,9 +752,32 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       resolveConflict: stepRunner.resolveRebaseConflict
         ? (ctx) => stepRunner.resolveRebaseConflict(ctx)
         : undefined,
+      // ADR-2026-07-09-mid-run-merged-pr-guard: pass the gh runner and recorded PR URL
+      // so the guard can check if the feature was merged out-of-band before rebasing.
+      runGh: ownerGh,
+      prUrl: baseState.pr_url,
       log,
     });
     if (resume === 'halted') return; // re-parked: HALT re-written, do not resume the gate
+    if (resume === 'already_shipped') {
+      // ADR-2026-07-09: the recorded PR is merged out-of-band. Write the synthetic
+      // verified-ship markers and return without invoking conductor.run().
+      const headSha = await (async () => {
+        try {
+          const { stdout } = await execFile('git', ['rev-parse', 'HEAD'], { cwd: wt.path });
+          return stdout.trim();
+        } catch {
+          return 'unknown';
+        }
+      })();
+      await mkdir(join(wt.path, '.pipeline'), { recursive: true });
+      const finishChoicePath = join(wt.path, '.pipeline', 'finish-choice');
+      const donePath = join(wt.path, '.pipeline', 'DONE');
+      await writeFile(finishChoicePath, 'pr', 'utf-8');
+      await writeFile(donePath, '', 'utf-8');
+      log(`already shipped out-of-band; local branch retained at ${headSha}`);
+      return;
+    }
 
     await conductor.run();
 

@@ -20,6 +20,9 @@ import {
 } from '../../src/engine/daemon-rekick.js';
 import { join as pjoin } from 'node:path';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
+import { makeRunFeature, type FeatureRunnerDeps, type WorktreeOutcome } from '../../src/engine/daemon-runner.js';
+import type { BacklogItem } from '../../src/engine/daemon.js';
+import { readVerdict } from '../../src/engine/gate-verdicts.js';
 
 const execFileAsync = promisify(execFileCb);
 const SHA_B = 'b'.repeat(40);
@@ -636,6 +639,68 @@ describe('engine/daemon-rekick — resumeRebaseFirst (FR-12)', () => {
     expect(await fileExists(join(dir, HALT_MARKER))).toBe(true);
     expect(await fileExists(join(dir, REKICK_SENTINEL))).toBe(false);
   });
+
+  // Task 12: Rekick call site ships capability-absent (fail-closed).
+  // When a play-forward rebase touches code paths, the full target set
+  // (build, build_review, manual_test) gets unconditionally invalidated kickback
+  // verdicts WITHOUT preVerify capability, preserving fail-closed default.
+  it('play-forward rebase with changed code paths → unconditionally fail-closed (no preVerify)', async () => {
+    await execFileAsync('git', ['init', '-b', 'main', dir]);
+    await git('config', 'user.email', 'test@example.com');
+    await git('config', 'user.name', 'Test');
+    await git('config', 'commit.gpgsign', 'false');
+    await mkdir(join(dir, 'src'), { recursive: true });
+
+    // Init commit: base state
+    await writeFile(join(dir, 'src/feature.ts'), 'export const v = 0;\n');
+    await git('add', '.');
+    await git('commit', '-m', 'init');
+
+    // Feature branch: modify feature code
+    await git('checkout', '-b', 'feature/foo');
+    await writeFile(join(dir, 'src/feature.ts'), 'export const v = 1;\n');
+    await git('add', '.');
+    await git('commit', '-m', 'feature work');
+
+    // Advance base: add new code file (non-conflicting)
+    await git('checkout', 'main');
+    await writeFile(join(dir, 'src/base-code.ts'), 'export const base = true;\n');
+    await git('add', '.');
+    await git('commit', '-m', 'base advance with code');
+
+    // Back to feature for rebase
+    await git('checkout', 'feature/foo');
+
+    // Write sentinel and run rebase-first
+    await writeSentinel();
+    const res = await resumeRebaseFirst({
+      worktreePath: dir,
+      localBase: 'main',
+      events,
+      ranManualTest: true,
+    });
+
+    // Clean rebase, no conflicts
+    expect(res).toBe('rebased');
+    expect(await fileExists(join(dir, REKICK_SENTINEL))).toBe(false);
+
+    // Crucial assertion: verdicts are UNCONDITIONALLY kicked back (fail-closed),
+    // NOT reverified via preVerify capability. The rekick call site deliberately
+    // omits preVerify, per ADR.
+    const build = await readVerdict(dir, 'build');
+    expect(build?.satisfied).toBe(false);
+    expect(build?.kickback?.from).toBe('rebase');
+    // Verify no preVerify-based reverification marker
+    expect(build?.reason).not.toContain('re-verified mechanically');
+
+    const buildReview = await readVerdict(dir, 'build_review');
+    expect(buildReview?.satisfied).toBe(false);
+    expect(buildReview?.kickback?.from).toBe('rebase');
+
+    const manualTest = await readVerdict(dir, 'manual_test');
+    expect(manualTest?.satisfied).toBe(false);
+    expect(manualTest?.kickback?.from).toBe('rebase');
+  });
 });
 
 // ── Task 11 wiring: rekickSweep over the REAL primitives the CLI assembles ─────
@@ -722,5 +787,398 @@ describe('engine/daemon-rekick — real-primitive sweep composition (FR-7/FR-8/F
     const res2 = await rekickSweep(deps, SHA_B);
     expect(res2.cleared).toEqual([]);
     expect(res2.skipped).toContain('feat-a');
+  });
+});
+
+// ── TS-5 (#358): merged-PR guard on the rekick play-forward path ──────────────
+//
+// `resumeRebaseFirst` does not yet accept `runGh`/`prUrl` opts, and the
+// `'already_shipped'` outcome does not exist (plan Tasks 11/12,
+// .docs/decisions/adr-2026-07-09-mid-run-merged-pr-guard.md, amendment
+// 2026-07-09). Passing `runGh`/`prUrl` today is inert (unused options) — the
+// happy-path assertions below are expected to FAIL because `res` stays one of
+// the pre-existing `RekickResumeResult` values ('rebased'/'halted'), never
+// `'already_shipped'`, and the real rebase/HALT still runs over the merged PR.
+// The negative-path tests assert BYTE-IDENTICAL pass-through to the existing
+// gated rebase-resolution flow this file already covers above (FR-12,
+// #300) — those are expected to PASS today (fail-open by construction), which
+// pins the "no regression on non-MERGED verdicts" contract.
+describe('engine/daemon-rekick — resumeRebaseFirst merged-PR guard (#358, TS-5)', () => {
+  let dir: string;
+  let events: ConductorEventEmitter;
+  const PR_URL = 'https://github.com/jstoup111/ai-conductor/pull/358';
+
+  async function git(...args: string[]): Promise<string> {
+    const { stdout } = await execFileAsync('git', ['-C', dir, ...args]);
+    return stdout.trim();
+  }
+  async function fileExists(p: string): Promise<boolean> {
+    return access(p).then(
+      () => true,
+      () => false,
+    );
+  }
+
+  function makeGhFake(
+    opts: { state?: string; throws?: boolean } = {},
+  ): { runGh: (args: string[], o: { cwd: string }) => Promise<{ stdout: string }>; calls: string[][] } {
+    const calls: string[][] = [];
+    const runGh = async (args: string[]) => {
+      calls.push([...args]);
+      if (opts.throws) throw new Error('gh runner failed');
+      return {
+        stdout: JSON.stringify({
+          state: opts.state ?? 'OPEN',
+          mergeable: 'MERGEABLE',
+          statusCheckRollup: [],
+          labels: [],
+        }),
+      };
+    };
+    return { runGh, calls };
+  }
+
+  // Non-conflicting: advanced base, clean rebase (same shape as the FR-12
+  // "advanced base" test above).
+  async function initAdvancingRepo(): Promise<{ baseSha: string }> {
+    await execFileAsync('git', ['init', '-b', 'main', dir]);
+    await git('config', 'user.email', 'test@example.com');
+    await git('config', 'user.name', 'Test');
+    await git('config', 'commit.gpgsign', 'false');
+    await mkdir(join(dir, 'src'), { recursive: true });
+    await writeFile(join(dir, 'src/feature.ts'), 'export const foo = 1;\n');
+    await git('add', '.');
+    await git('commit', '-m', 'init');
+    await git('checkout', '-b', 'feature/foo');
+    await writeFile(join(dir, 'src/other.ts'), 'export const bar = 2;\n');
+    await git('add', '.');
+    await git('commit', '-m', 'feature work');
+    await git('checkout', 'main');
+    await writeFile(join(dir, 'SIBLING.md'), '# merged\n');
+    await git('add', '.');
+    await git('commit', '-m', 'sibling merged');
+    const baseSha = await git('rev-parse', 'HEAD');
+    await git('checkout', 'feature/foo');
+    return { baseSha };
+  }
+
+  async function writeSentinel(): Promise<void> {
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(join(dir, REKICK_SENTINEL), 'rekick\n', 'utf-8');
+  }
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'rekick-guard-'));
+    events = new ConductorEventEmitter();
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("happy: MERGED verdict — no performRebase-driven rebase, resumeRebaseFirst returns 'already_shipped', log names the out-of-band merge", async () => {
+    const { baseSha } = await initAdvancingRepo();
+    const branchBefore = await git('rev-parse', 'feature/foo');
+    await writeSentinel();
+    const { runGh } = makeGhFake({ state: 'MERGED' });
+
+    const res = await resumeRebaseFirst({
+      worktreePath: dir,
+      localBase: 'main',
+      events,
+      ranManualTest: false,
+      // Not yet declared options (Task 11) — expected to be inert today.
+      runGh,
+      prUrl: PR_URL,
+    } as never);
+
+    expect(res).toBe('already_shipped');
+    // The advanced base must NOT have been integrated — no rebase ran.
+    const branchAfter = await git('rev-parse', 'feature/foo');
+    expect(branchAfter).toBe(branchBefore);
+    expect(await fileExists(join(dir, HALT_MARKER))).toBe(false);
+    void baseSha;
+  });
+
+  it.each([
+    ['OPEN', { state: 'OPEN' }],
+    ['CLOSED', { state: 'CLOSED' }],
+    ['NOTFOUND', { state: 'NOTFOUND' }],
+    ['UNKNOWN', { state: 'UNKNOWN' }],
+    ['gh throws', { throws: true }],
+  ] as const)(
+    'negative: %s verdict — byte-identical pass-through to the existing gated rebase-resolution flow (rebases as today)',
+    async (_label, ghOpts) => {
+      const { baseSha } = await initAdvancingRepo();
+      await writeSentinel();
+      const { runGh } = makeGhFake(ghOpts);
+
+      const res = await resumeRebaseFirst({
+        worktreePath: dir,
+        localBase: 'main',
+        events,
+        ranManualTest: true,
+        runGh,
+        prUrl: PR_URL,
+      } as never);
+
+      // Existing flow: the advanced base IS integrated (rebased), unchanged.
+      expect(res).toBe('rebased');
+      const branchContainsBase = await execFileAsync('git', [
+        '-C',
+        dir,
+        'merge-base',
+        '--is-ancestor',
+        baseSha,
+        'feature/foo',
+      ]).then(
+        () => true,
+        () => false,
+      );
+      expect(branchContainsBase).toBe(true);
+      expect(await fileExists(join(dir, REKICK_SENTINEL))).toBe(false);
+    },
+  );
+
+  it('negative: no pr_url recorded — zero gh calls, existing flow proceeds unchanged', async () => {
+    const { baseSha } = await initAdvancingRepo();
+    await writeSentinel();
+    const { runGh, calls } = makeGhFake({ state: 'MERGED' });
+
+    const res = await resumeRebaseFirst({
+      worktreePath: dir,
+      localBase: 'main',
+      events,
+      ranManualTest: true,
+      runGh,
+      // prUrl deliberately omitted.
+    } as never);
+
+    expect(calls).toHaveLength(0);
+    expect(res).toBe('rebased');
+    const branchContainsBase = await execFileAsync('git', [
+      '-C',
+      dir,
+      'merge-base',
+      '--is-ancestor',
+      baseSha,
+      'feature/foo',
+    ]).then(
+      () => true,
+      () => false,
+    );
+    expect(branchContainsBase).toBe(true);
+  });
+
+  it('negative: no runGh recorded (backward compatibility) — zero gh calls, existing flow proceeds unchanged', async () => {
+    const { baseSha } = await initAdvancingRepo();
+    await writeSentinel();
+
+    const res = await resumeRebaseFirst({
+      worktreePath: dir,
+      localBase: 'main',
+      events,
+      ranManualTest: true,
+      prUrl: PR_URL,
+      // runGh deliberately omitted — backward-compatible case with no new options wired.
+    } as never);
+
+    // Existing flow: the advanced base IS integrated (rebased), unchanged.
+    expect(res).toBe('rebased');
+    const branchContainsBase = await execFileAsync('git', [
+      '-C',
+      dir,
+      'merge-base',
+      '--is-ancestor',
+      baseSha,
+      'feature/foo',
+    ]).then(
+      () => true,
+      () => false,
+    );
+    expect(branchContainsBase).toBe(true);
+    expect(await fileExists(join(dir, REKICK_SENTINEL))).toBe(false);
+  });
+});
+
+// ── TS-5 (#358) sweep-level: the caller that consumes resumeRebaseFirst's
+// outcome must write the processed marker, skip re-dispatch, and log the
+// out-of-band line ────────────────────────────────────────────────────────
+//
+// Per the ADR/plan (Task 11), `resumeRebaseFirst`'s `'already_shipped'`
+// outcome is consumed by daemon-cli.ts's `runConductorInWorktree` closure
+// (wired through `makeFeatureRunnerDeps`, daemon-deps.ts:62/99) — NOT by
+// `rekickSweep` (that function only ever clears/aborts HALT markers; it does
+// not call `resumeRebaseFirst` at all, confirmed by inspection). That closure
+// is unexported and requires a full daemon/provider/tmux harness to invoke
+// directly (see test/engine/daemon-cli-rekick-sentinel-park-guard.test.ts's
+// header comment, which documents the same constraint for a neighboring call
+// site and resorts to source-assembly assertions for that reason).
+//
+// This test instead drives the REAL production seam one layer down: the
+// `runConductor` injection point of `makeRunFeature` (daemon-runner.ts), fed
+// a `runConductor` that performs the EXACT sequence the plan specifies for
+// the daemon-cli.ts wiring once Task 11 lands — call `resumeRebaseFirst`
+// with the real merged-PR guard opts, and on `'already_shipped'` write the
+// synthetic ship markers and return without invoking a real conductor run
+// (no re-dispatch). Everything downstream of that point (`readOutcome` →
+// `isVerifiedShip` → `markProcessed`) is REAL production code, unmodified —
+// exactly the same integration TS-3 pins in daemon-runner.test.ts. Because
+// `resumeRebaseFirst` does not yet implement the guard, it returns 'rebased'
+// today instead of 'already_shipped', so the synthetic markers are never
+// written, `markProcessed` is never called, and the assertions below fail —
+// RED for the right reason (the guard's absence, not a fixture bug).
+describe('engine/daemon-rekick — sweep-level consumption of already_shipped (#358, TS-5)', () => {
+  let dir: string;
+  let worktreeBase: string;
+  let processedDir: string;
+  let events: ConductorEventEmitter;
+  const PR_URL = 'https://github.com/jstoup111/ai-conductor/pull/358';
+  const SLUG = 'merged-out-of-band';
+
+  async function git(...args: string[]): Promise<string> {
+    const { stdout } = await execFileAsync('git', ['-C', dir, ...args]);
+    return stdout.trim();
+  }
+  async function fileExists(p: string): Promise<boolean> {
+    return access(p).then(() => true, () => false);
+  }
+
+  function makeGhFake(
+    opts: { state?: string; throws?: boolean } = {},
+  ): { runGh: (args: string[], o: { cwd: string }) => Promise<{ stdout: string }>; calls: string[][] } {
+    const calls: string[][] = [];
+    const runGh = async (args: string[]) => {
+      calls.push([...args]);
+      if (opts.throws) throw new Error('gh runner failed');
+      return {
+        stdout: JSON.stringify({
+          state: opts.state ?? 'OPEN',
+          mergeable: 'MERGEABLE',
+          statusCheckRollup: [],
+          labels: [],
+        }),
+      };
+    };
+    return { runGh, calls };
+  }
+
+  async function initAdvancingRepo(): Promise<void> {
+    await execFileAsync('git', ['init', '-b', 'main', dir]);
+    await git('config', 'user.email', 'test@example.com');
+    await git('config', 'user.name', 'Test');
+    await git('config', 'commit.gpgsign', 'false');
+    await mkdir(join(dir, 'src'), { recursive: true });
+    await writeFile(join(dir, 'src/feature.ts'), 'export const foo = 1;\n');
+    await git('add', '.');
+    await git('commit', '-m', 'init');
+    await git('checkout', '-b', 'feature/foo');
+    await writeFile(join(dir, 'src/other.ts'), 'export const bar = 2;\n');
+    await git('add', '.');
+    await git('commit', '-m', 'feature work');
+    await git('checkout', 'main');
+    await writeFile(join(dir, 'SIBLING.md'), '# merged\n');
+    await git('add', '.');
+    await git('commit', '-m', 'sibling merged');
+    await git('checkout', 'feature/foo');
+  }
+
+  async function writeSentinel(): Promise<void> {
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(join(dir, REKICK_SENTINEL), 'rekick\n', 'utf-8');
+  }
+
+  beforeEach(async () => {
+    worktreeBase = await mkdtemp(join(tmpdir(), 'rekick-sweep-wt-'));
+    dir = join(worktreeBase, SLUG);
+    await mkdir(dir, { recursive: true });
+    processedDir = await mkdtemp(join(tmpdir(), 'rekick-sweep-processed-'));
+    events = new ConductorEventEmitter();
+  });
+  afterEach(async () => {
+    await rm(worktreeBase, { recursive: true, force: true });
+    await rm(processedDir, { recursive: true, force: true });
+  });
+
+  it("happy: MERGED verdict — sweep writes .daemon/processed/<slug> with prUrl, skips re-dispatch, logs 'already shipped out-of-band'", async () => {
+    await initAdvancingRepo();
+    await writeSentinel();
+    const branchBefore = await git('rev-parse', 'feature/foo');
+    const { runGh } = makeGhFake({ state: 'MERGED' });
+
+    const logs: string[] = [];
+    const log = (m: string) => logs.push(m);
+    let realConductorInvoked = false;
+
+    const deps: FeatureRunnerDeps = {
+      createWorktree: async () => ({ path: dir, branch: 'feature/foo' }),
+      // The exact sequence plan Task 11 specifies for daemon-cli.ts's
+      // runConductorInWorktree once wired: check the guard via
+      // resumeRebaseFirst BEFORE performRebase/conductor.run(); on
+      // 'already_shipped' write the synthetic ship markers and return —
+      // no real conductor dispatch.
+      runConductor: async (wt) => {
+        const res = await resumeRebaseFirst({
+          worktreePath: wt.path,
+          localBase: 'main',
+          events,
+          ranManualTest: false,
+          runGh,
+          prUrl: PR_URL,
+          log,
+        } as never);
+        if (res === 'already_shipped') {
+          await mkdir(join(wt.path, '.pipeline'), { recursive: true });
+          await writeFile(join(wt.path, '.pipeline', 'finish-choice'), 'pr', 'utf-8');
+          await writeFile(join(wt.path, '.pipeline', 'DONE'), '', 'utf-8');
+          log(`already shipped out-of-band; local branch retained at ${branchBefore}`);
+          return;
+        }
+        // Any non-'already_shipped' outcome means the feature is re-dispatched
+        // through the normal gate loop (today's behavior).
+        realConductorInvoked = true;
+      },
+      readOutcome: async (wt): Promise<WorktreeOutcome> => {
+        const done = await fileExists(join(wt.path, '.pipeline', 'DONE'));
+        if (!done) return { done: false, halted: false };
+        const finishChoice = (
+          await readFile(join(wt.path, '.pipeline', 'finish-choice'), 'utf-8').catch(() => '')
+        ).trim();
+        return {
+          done: true,
+          halted: false,
+          finishChoice: finishChoice as WorktreeOutcome['finishChoice'],
+          prUrl: PR_URL,
+        };
+      },
+      teardownWorktree: async () => {},
+      markProcessed: async (slug, prUrl) => {
+        await mkdir(processedDir, { recursive: true });
+        await writeFile(
+          join(processedDir, slug),
+          `${JSON.stringify({ status: 'shipped', prUrl: prUrl ?? null })}\n`,
+          'utf-8',
+        );
+      },
+      daemon: false,
+      provider: { invoke: async () => ({ success: true, output: '' }), invokeInteractive: async () => {} },
+      project: 'test-project',
+      log,
+    };
+
+    const run = makeRunFeature(deps);
+    const item: BacklogItem = { slug: SLUG };
+    const outcome = await run(item);
+
+    // Sweep-level side effect 1: the feature is NOT re-dispatched.
+    expect(realConductorInvoked).toBe(false);
+    // Sweep-level side effect 2: the processed marker is written with the
+    // recorded prUrl.
+    expect(await fileExists(join(processedDir, SLUG))).toBe(true);
+    const processedContent = JSON.parse(await readFile(join(processedDir, SLUG), 'utf-8'));
+    expect(processedContent.prUrl).toBe(PR_URL);
+    // Sweep-level side effect 3: the log carries the out-of-band line.
+    expect(logs.some((l) => /already shipped out-of-band/.test(l))).toBe(true);
+    // The daemon-runner's outcome status reflects a verified ship.
+    expect(outcome.status).toBe('done');
   });
 });

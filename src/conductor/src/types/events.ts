@@ -126,6 +126,13 @@ export type ConductorEvent =
       changedPaths: string[];
     }
   | {
+      /** A gate was re-verified post-rebase in gate-first mode. */
+      type: 'rebase_gate_reverified';
+      step: StepName;
+      skippedDispatch: boolean;
+      reason?: string;
+    }
+  | {
       /** A CHANGELOG-only conflict was auto-resolved (FR-7). */
       type: 'rebase_changelog_resolved';
     }

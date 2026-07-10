@@ -262,10 +262,17 @@ stale base:
   no-op rebase is the satisfied state, so re-entry after a kickback finds the branch current
   and proceeds to `finish` without re-invalidating (no false `MAX_GATE_SELECTIONS` HALT). A
   genuinely stale branch is never satisfied.
-- **Invalidation (code/test only)** — a clean rebase that changed **code/test paths** writes
-  `{satisfied:false, kickback:{from:'rebase'}}` for `build` (+`manual_test` if it ran) via the
-  existing kickback machinery → the selector routes back to `build`. A **docs-only /
-  CHANGELOG-only** change does **not** invalidate.
+- **Gate-first mechanical re-verify (code/test only)** — a clean rebase that changed
+  **code/test paths** first pre-verifies the `build` gate's objective completion predicate
+  (git evidence trailers, `root-commit..HEAD`, re-derived fresh) against the rebased tree. If
+  pre-verify passes (evidence intact), build dispatch is skipped, `{satisfied:true}` is written
+  fresh, and a `rebase_gate_reverified` event is emitted (`skippedDispatch:true`). If pre-verify
+  fails or throws, identical to prior behavior: `{satisfied:false, kickback:{from:'rebase'}}` for
+  `build` (+`manual_test` if it ran) and the selector routes back to `build` (fail-closed).
+  Consequence: evidence-complete rebases drop from ~45–60 min build-agent dispatch to ~1–2 min
+  mechanical re-derivation; evidence-missing rebases re-dispatch normally. `build_review` and
+  `manual_test` remain unconditionally invalidated. A **docs-only / CHANGELOG-only** change does
+  **not** invalidate. See `.docs/decisions/adr-2026-07-08-post-rebase-gate-first-mechanical-reverify.md`.
 - **CHANGELOG auto-resolve** — when `CHANGELOG.md` is the **sole** conflict and it's inside
   `## [Unreleased]`, the resolver takes the base's merged entries and re-appends this
   feature's `[Unreleased]` lines (captured `base..HEAD` pre-rebase) exactly once, then
@@ -277,8 +284,11 @@ stale base:
   the rebase **paused** (no `--abort`, conflict markers intact), does **not** mark the feature
   processed, and opens **no PR**.
 - **Events** — each outcome emits a typed event: `rebase_noop`, `rebase_changed`,
-  `rebase_changelog_resolved`, `rebase_conflict_halt` (best-effort; emission failure never
-  affects the rebase result).
+  `rebase_changelog_resolved`, `rebase_conflict_halt`, `rebase_gate_reverified` (best-effort;
+  emission failure never affects the rebase result). `rebase_gate_reverified` records a
+  successful pre-verify with fields: `step` (the gate name, e.g., `'build'`), `skippedDispatch`
+  (boolean: true = dispatch was mechanically skipped, false = pre-verify failed, re-dispatch
+  fired), and optional `reason` (human-readable explanation).
 
 #### Gated conflict resolution
 
@@ -665,6 +675,23 @@ on every base-SHA advance).
   halted worktree. A feature whose spec already shipped is skipped — it no longer goes
   through the abort-rebase / clear-marker / re-dispatch cycle on every subsequent base-SHA
   advance, eliminating the spurious re-kicks #205 reported.
+
+#### Merged-PR guard: out-of-band merge detection (#358)
+
+When the daemon's kickback rewind discovers the feature's recorded PR has been merged out-of-band
+(operator manual merge during a retry cycle), the daemon stops the run at the earliest checkpoint
+and records a synthetic verified ship, avoiding a wasted rebuild/audit cycle and spurious rebase
+conflicts. The guard is active at three insertion points: (1) kickback re-entry when any gate
+failure calls `navigateBack` to rewind to build, (2) rebase entry at the top of `runRebaseStep`
+before any rebase attempt, and (3) rekick play-forward in the main-advance re-kick path before
+its direct `performRebase` call. Each guard call checks the recorded `pr_url` via `prMergeState`
+and, on a `MERGED` verdict, synthesizes a finish-choice marker (`.pipeline/finish-choice` = `pr`)
+and DONE marker (`.pipeline/DONE`), then halts the run loop so the daemon-runner's existing ship
+path records the feature as processed and retires it cleanly. On any other verdict (OPEN, CLOSED,
+NOTFOUND, or gh failure) the guard is advisory — it logs at debug level and the run proceeds
+unchanged. The feature branch is never deleted by the guard; it stays retained for forensics or
+operator recovery. This is **internal behavior** — no new CLI flags, config options, or skills
+are introduced.
 
 #### Worktree preparation (`WORKTREE_NAMESPACE` + `bin/setup`)
 
@@ -1553,6 +1580,73 @@ hook; extending the fence there is a follow-up.
 `engine/self-host/sandbox-build-env.ts` (provisioning), test coverage in
 `test/engine/self-host/write-fence.test.ts` and real-binary acceptance test in
 `test/acceptance/write-fence-real-binary.acceptance.test.ts`.
+
+### Task Attribution Automation
+
+The conductor automates task progress tracking via `conduct-ts task` subcommands and deterministic git hooks.
+Task attribution is engine-owned, not prompt-discipline-dependent.
+
+#### `conduct-ts task start|done` CLI
+
+The pipeline orchestrator invokes these subcommands (during build step dispatch, not interactively):
+
+```bash
+conduct-ts task start <id>    # Flip task status to in_progress before dispatching subagent
+conduct-ts task done <id>     # Mark task completed after the subagent's commit lands
+```
+
+- `<id>` is the bare task ID from the plan (e.g., `7`, not `task-7`; alphanumeric ids like `rem-fr10-1` work).
+- `task start` updates `.pipeline/task-status.json` and writes `.pipeline/current-task` (the in-flight marker).
+- `task done` clears the in-flight marker and marks the task `completed` in the status file.
+- Both commands are **idempotent**: running them multiple times on the same task is safe (no corrupt state).
+- Failures are **non-fatal and logged**: if the status file is corrupt, the commands exit non-zero but do not halt the build (the engine's later evidence gate derives completion from git trailers).
+
+**Invocation by the conductor:** When the pipeline step dispatches a subagent (Task 0, DISPATCH phase),
+it first runs `conduct-ts task start <id>` to mark the task in-flight. When the subagent commits and
+the step's verification passes, it runs `conduct-ts task done <id>` to mark completion. The orchestrator
+MUST NOT hand-edit `.pipeline/task-status.json` — the CLI and the engine own it.
+
+#### Worktree-scoped git hooks (fail-open)
+
+When the daemon provisions a feature worktree (`prepareWorktree`), the conductor writes two deterministic
+**attribution hooks** and wires them via git config scoped to that worktree only. The host checkout and
+any other worktree are never affected.
+
+**Hook files:** `.pipeline/git-hooks/prepare-commit-msg` and `.pipeline/git-hooks/commit-msg`
+
+**Hook functions:**
+- **`prepare-commit-msg`** — Reads the task id from `.pipeline/current-task` and auto-injects a `Task: <id>`
+  trailer into every commit message. If a malformed trailer exists (empty id, wrong format), it's silently
+  amended to the correct format. The hook only runs in worktrees (via `core.hooksPath`); interactive developer
+  commits are unaffected.
+- **`commit-msg`** — Validates the `Task: <id>` trailer format. If it's missing or malformed and the
+  prepare-commit-msg hook didn't run (rare), the hook warns and allows the commit (fail-open).
+
+**Hook wiring:** `git config --worktree core.hooksPath <absolute-path>` points git to `.pipeline/git-hooks/`
+for this worktree only. The shared repository config remains unchanged. If git config fails (e.g., read-only
+worktree), provisioning continues without hooks and logs a skipped message; the build never fails because
+of hook provisioning failure.
+
+**Chaining:** If the repository already has its own hooks under `.git/hooks/`, the engine's hooks run first
+and exit codes propagate, so both the engine's and the repo's hooks are active. A failing chained hook will
+block the commit.
+
+**Engine-only:** Hooks run from the conductor's engine code (`worktree-prepare.ts`, `prepareWorktree()`) and
+are **never dispatched by prompt**. This makes them deterministic across sessions and immune to prompt-engineer
+drift.
+
+**Proof model:** The conductor's completion gate (`engine/artifacts.ts`) derives task completion from git commits
+carrying `Task: <id>` trailers. These trailers come from the engine's hooks in worktrees (auto-injected) or from
+the subagent's commits when hooks don't run (fallback). The engine never requires prompt discipline to inject
+trailers — the hooks do it automatically.
+
+**Asset provisioning:** Hook scripts are embedded as engine assets (`src/conductor/src/engine/git-hook-assets.ts`)
+and written fresh to each worktree during provisioning. This ensures they stay in sync with the engine version.
+Assets include shebang (`#!/bin/bash`), error handling, and a version header for debugging.
+
+**Modules:** `engine/worktree-prepare.ts` (provisioning), `engine/git-hook-assets.ts` (hook asset definitions),
+`engine/task-cli.ts` (task start/done logic), test coverage in `test/engine/git-hooks-attribution.test.ts`,
+`test/integration/git-hooks-attribution.test.ts`.
 
 ### Task Status (engine-owned)
 

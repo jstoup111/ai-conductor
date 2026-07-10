@@ -10,8 +10,44 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ## [Unreleased]
 
+### Added
+
+- **Deterministic task attribution automation via `conduct-ts task` CLI and worktree-scoped git hooks.** The
+  pipeline now automates task progress tracking via CLI subcommands owned by the conductor engine, not prompt
+  discipline. Two new subcommands: `conduct-ts task start <id>` (flip status to in_progress before dispatching
+  a subagent), `conduct-ts task done <id>` (mark task completed after subagent commit lands). Both are
+  idempotent and fail-open (never block the build on status-file corruption). Wired into the pipeline
+  orchestration step 0 (DISPATCH phase).
+- **Engine-provisioned worktree-scoped git hooks for task attribution.** When the daemon provisions a feature
+  worktree, the conductor writes two deterministic attribution hooks (`prepare-commit-msg`, `commit-msg`) to
+  `.pipeline/git-hooks/` and wires them via `git config --worktree core.hooksPath` scoped to that worktree
+  only. The `prepare-commit-msg` hook auto-injects the `Task: <id>` trailer from `.pipeline/current-task`
+  into every commit (amends malformed trailers). The `commit-msg` hook validates the trailer format. Both
+  hooks are fail-open (provisioning skips gracefully on errors, build never halts). Host checkout and
+  other worktrees are unaffected; if the repository has its own hooks, both run (engine's hooks first,
+  exit codes propagate for chaining). Hook scripts are embedded as engine assets, written fresh to each
+  worktree, and kept in sync with the engine version. The completion gate derives task completion from
+  git trailers, proving code commits are load-bearing (no stray empty-commit trailers).
+- Documentation added to README.md and src/conductor/README.md explaining task CLI and hook wiring
+  behavior (fail-open design, chaining with repo hooks, worktree-scoped wiring).
+
+### Changed
+
+- **Pipeline SKILL step 0 (DISPATCH) now uses `conduct-ts task start|done` for task progress tracking.**
+  The orchestrator no longer hand-edits `.pipeline/task-status.json` or relies on the subagent to inject
+  the task trailer via prompt discipline. The conductor runs `conduct-ts task start <id>` before dispatching
+  the subagent and `conduct-ts task done <id>` after the commit lands, ensuring deterministic and
+  repeatable task attribution independent of subagent behavior. See skills/pipeline/SKILL.md §Per-Task
+  Execution, steps 0 and 6.
+
 ### Fixed
 
+- Mid-run merged-PR guard (#358): when the daemon's kickback rewind discovers the feature's
+  recorded PR has been merged out-of-band (operator manual merge during a retry cycle), the daemon
+  stops the run at the earliest checkpoint (kickback re-entry, rebase entry, or rekick play-forward)
+  and records a synthetic verified ship, avoiding a wasted rebuild/audit cycle and spurious
+  rebase conflicts. Guard invoked at three sites: kickback routes, rebase entry, and rekick
+  play-forward.
 - Tests no longer park child processes on undrained stdio pipes.
   `daemon-stale-respawn-e2e` spawned real daemons with `stdio: ['ignore',
   'pipe', 'pipe']` and never read either stream, so a chatty daemon wedged
@@ -259,6 +295,17 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   on worktree-internal paths, temp directories, or unrelated repos (scoped to self-host builds).
 
 ### Changed
+
+- **Post-rebase gate-first mechanical re-verify (Task 14):** file-changing finish-time rebases
+  no longer unconditionally dispatch the build agent. Instead, the rebase step pre-verifies the
+  build gate's objective completion predicate against the freshly-rebased tree. If the predicate
+  (git evidence trailers, `root-commit..HEAD`) remains satisfied post-rebase, dispatch is skipped
+  and a `rebase_gate_reverified` event is emitted with the step and optional reason
+  (`skippedDispatch: false` for re-dispatch, `true` for mechanical skip). If pre-verify fails or
+  throws, build is kicked back and re-dispatched as before (fail-closed). Scope: **`build` only**
+  — `build_review` and `manual_test` remain unconditionally invalidated. Consequence: the ~45–60 min
+  build-agent lap on every evidence-complete file-changing rebase drops to ~1–2 min mechanical
+  derivation; evidence-missing rebases re-dispatch normally. See `.docs/decisions/adr-2026-07-08-post-rebase-gate-first-mechanical-reverify.md`.
 
 - `--idle-poll` default raised: 5s → 60s (Task 18). Event-driven wake now handles the hot
   path (HALT clear detection), so the polling fallback can be slower. Override with
