@@ -497,11 +497,14 @@ export async function listCommitsWithTrailers(
     return range.commits;
   }
 
-  // Legacy path: no anchor provided, use simple merge-base logic
-  const mergeBase = await execa('git', ['merge-base', 'origin/main', 'HEAD'], {
-    cwd: projectRoot,
-    reject: false,
-  });
+  // No anchor provided: derive the origin default branch and use merge-base
+  const defaultRef = await resolveOriginRef(projectRoot);
+  const mergeBase = defaultRef
+    ? await execa('git', ['merge-base', defaultRef, 'HEAD'], {
+        cwd: projectRoot,
+        reject: false,
+      })
+    : { exitCode: 1, stdout: '' };
 
   let range: string;
   if (mergeBase.exitCode === 0 && typeof mergeBase.stdout === 'string' && mergeBase.stdout.trim()) {
