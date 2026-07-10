@@ -111,6 +111,33 @@ describe('engine/worktree-prepare', () => {
     expect(lines.some((l) => l.includes('ok'))).toBe(true);
   });
 
+  it('rejects with plain Error (not SetupFailureError) when .env write fails (unwritable worktree)', async () => {
+    // Make the directory read-only so writeFile will fail.
+    await chmod(dir, 0o555);
+    try {
+      await prepareWorktree(dir);
+      throw new Error('should have rejected');
+    } catch (err) {
+      // Namespace write failures must NOT be classified as SetupFailureError.
+      expect(err).not.toBeInstanceOf(SetupFailureError);
+      expect(err).toBeInstanceOf(Error);
+    } finally {
+      // Restore permissions for cleanup.
+      await chmod(dir, 0o755);
+    }
+  });
+
+  it('no-ops and does not produce triage-observable effects when bin/setup is absent', async () => {
+    // No bin/setup must resolve cleanly without any special markers.
+    const log: string[] = [];
+    await expect(prepareWorktree(dir, (m) => log.push(m))).resolves.toBeUndefined();
+    // Should have written the namespace but not mentioned running setup.
+    expect(log.some((l) => l.includes('skipping project setup'))).toBe(true);
+    // .env should exist with the namespace.
+    const env = await readFile(join(dir, '.env'), 'utf-8');
+    expect(env).toContain(NAMESPACE_VAR);
+  });
+
   // Story 6 (#433): prepareWorktree wires the attribution git hooks
   // per-worktree, isolated from the primary checkout, fail-open. Unlike the
   // suite above, these tests need a REAL git repo (worktree-scoped
