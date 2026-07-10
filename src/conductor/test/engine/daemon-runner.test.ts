@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { makeRunFeature, type FeatureRunnerDeps, type WorktreeOutcome } from '../../src/engine/daemon-runner.js';
 import type { BacklogItem } from '../../src/engine/daemon.js';
+import type { TriageOutcome } from '../../src/engine/setup-triage.js';
 
 const ITEM: BacklogItem = { slug: 'feat-x' };
 
@@ -698,6 +699,88 @@ describe('engine/daemon-runner — makeRunFeature', () => {
         // repairProcessed, which is driven by committed evidence already on the branch.
         // See ADR adr-2026-07-06-daemon-false-ship-guard §2, scope note (amended).
         expect(true).toBe(true); // placeholder assertion
+      });
+    });
+
+    describe('Task 11: Park evidence — extended diagnostic HALT (TS-4)', () => {
+      // Story TS-4 happy: a `park` triage outcome produces a `.pipeline/HALT` whose
+      // content includes the output tail, the quarantine ref when taken, the literal
+      // statement that no quarantine exists in the clean-HEAD case, and the contract outcome.
+      // Park status/rekick eligibility identical to a plain errored feature.
+
+      it('park triage outcome with quarantine ref produces HALT with output tail, quarantine ref, and contract outcome (TS-4 happy)', async () => {
+        const wt = await mkdtemp(join(tmpdir(), 'wt-park-'));
+        try {
+          const triageEvidence: TriageOutcome = {
+            kind: 'park',
+            outputTail: 'setup failed: database connection timeout\nretrying...\nfailed again',
+            quarantineRef: 'wip/setup-quarantine-abc123',
+            contractOutcome: 'contract violation: schema mismatch',
+          };
+          const rec: { teardownKeep?: boolean; processed?: boolean } = {};
+          const run = makeRunFeature({
+            ...deps(
+              {
+                done: false,
+                halted: false,
+                triageEvidence,
+              },
+              rec,
+            ),
+            createWorktree: async (slug) => ({ path: wt, branch: `feat/${slug}` }),
+          });
+          const out = await run(ITEM);
+          // Park produces error status, keeps worktree, doesn't mark processed
+          expect(out.status).toBe('error');
+          expect(rec.processed).toBeUndefined();
+          expect(rec.teardownKeep).toBe(true);
+          // HALT must exist and contain all evidence
+          const halt = await readFile(join(wt, '.pipeline', 'HALT'), 'utf-8');
+          expect(halt).toContain('setup failed: database connection timeout');
+          expect(halt).toContain('retrying...');
+          expect(halt).toContain('failed again');
+          expect(halt).toContain('wip/setup-quarantine-abc123');
+          expect(halt).toContain('contract violation: schema mismatch');
+        } finally {
+          await rm(wt, { recursive: true, force: true });
+        }
+      });
+
+      it('park triage outcome without quarantine ref produces HALT with explicit no-quarantine statement (TS-4 negative)', async () => {
+        const wt = await mkdtemp(join(tmpdir(), 'wt-park-clean-'));
+        try {
+          const triageEvidence: TriageOutcome = {
+            kind: 'park',
+            outputTail: 'setup completed but validation failed\nerror: validation returned false',
+            contractOutcome: 'contract violation: test suite incomplete',
+          };
+          const rec: { teardownKeep?: boolean; processed?: boolean } = {};
+          const run = makeRunFeature({
+            ...deps(
+              {
+                done: false,
+                halted: false,
+                triageEvidence,
+              },
+              rec,
+            ),
+            createWorktree: async (slug) => ({ path: wt, branch: `feat/${slug}` }),
+          });
+          const out = await run(ITEM);
+          // Park produces error status, keeps worktree, doesn't mark processed
+          expect(out.status).toBe('error');
+          expect(rec.processed).toBeUndefined();
+          expect(rec.teardownKeep).toBe(true);
+          // HALT must exist and contain output tail and contract, plus explicit no-quarantine statement
+          const halt = await readFile(join(wt, '.pipeline', 'HALT'), 'utf-8');
+          expect(halt).toContain('setup completed but validation failed');
+          expect(halt).toContain('error: validation returned false');
+          expect(halt).toContain('contract violation: test suite incomplete');
+          // No-quarantine case must have explicit statement
+          expect(halt).toMatch(/no quarantine|clean-HEAD|quarantine.*not.*present/i);
+        } finally {
+          await rm(wt, { recursive: true, force: true });
+        }
       });
     });
   });
