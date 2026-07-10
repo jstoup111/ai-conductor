@@ -394,4 +394,96 @@ describe('runTaskStart', () => {
       });
     });
   });
+
+  describe('concurrent writes — atomicity under concurrent writers', () => {
+    it('handles N concurrent runTaskStart calls with distinct ids', async () => {
+      // Setup: seed task-status.json with 10 pending tasks
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      const tasks = Array.from({ length: 10 }, (_, i) => ({
+        id: String(i + 1),
+        name: `Task ${i + 1}`,
+        status: 'pending',
+      }));
+      await fsPromises.writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({ tasks }, null, 2),
+      );
+
+      // Fire 5 concurrent runTaskStart calls with distinct ids (1, 2, 3, 4, 5)
+      const results = await Promise.all([
+        runTaskStart(dir, '1'),
+        runTaskStart(dir, '2'),
+        runTaskStart(dir, '3'),
+        runTaskStart(dir, '4'),
+        runTaskStart(dir, '5'),
+      ]);
+
+      // All should succeed
+      expect(results).toEqual([0, 0, 0, 0, 0]);
+
+      // Verify task-status.json parses as valid JSON
+      const statusPath = join(dir, '.pipeline/task-status.json');
+      const content = await fsPromises.readFile(statusPath, 'utf-8');
+      let status: any;
+      expect(() => {
+        status = JSON.parse(content);
+      }).not.toThrow();
+
+      // Verify structure is intact and no partial/torn writes
+      expect(status.tasks).toBeDefined();
+      expect(Array.isArray(status.tasks)).toBe(true);
+      expect(status.tasks.length).toBe(10);
+
+      // The final state should represent one or more of the concurrent writes
+      // (exact outcome depends on timing/interleaving).
+      // Key invariant: no torn JSON, and all tasks have valid status fields
+      const inProgressCount = status.tasks.filter((t: any) => t.status === 'in_progress').length;
+      expect(inProgressCount).toBeGreaterThan(0);
+
+      // All tasks must have a valid status (not corrupted)
+      for (const task of status.tasks) {
+        expect(['pending', 'in_progress']).toContain(task.status);
+      }
+    });
+
+    it('never produces torn or corrupted JSON during concurrent writes', async () => {
+      // Setup: seed task-status.json with 5 tasks
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      const tasks = Array.from({ length: 5 }, (_, i) => ({
+        id: String(i + 1),
+        name: `Task ${i + 1}`,
+        status: 'pending',
+      }));
+      await fsPromises.writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({ tasks }, null, 2),
+      );
+
+      // Fire 3 concurrent writes
+      await Promise.all([
+        runTaskStart(dir, '1'),
+        runTaskStart(dir, '2'),
+        runTaskStart(dir, '3'),
+      ]);
+
+      // Even with concurrent writes, the JSON should be valid and parseable
+      const statusPath = join(dir, '.pipeline/task-status.json');
+      const content = await fsPromises.readFile(statusPath, 'utf-8');
+
+      // This must not throw — JSON must be valid
+      const status = JSON.parse(content);
+
+      // Verify structure is sound (not torn/corrupted)
+      expect(status).toBeDefined();
+      expect(status.tasks).toBeDefined();
+      expect(Array.isArray(status.tasks)).toBe(true);
+
+      // All tasks in the array should have id, name, and status fields
+      for (const task of status.tasks) {
+        expect(task).toHaveProperty('id');
+        expect(task).toHaveProperty('name');
+        expect(task).toHaveProperty('status');
+      }
+    });
+  });
 });
