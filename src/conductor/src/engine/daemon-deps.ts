@@ -18,6 +18,8 @@ import { FINISH_CHOICE_MARKER, FINISH_CHOICE_VALUES } from './artifacts.js';
 import { escalateBuildFailure } from './build-failure-escalation.js';
 import { makeGitRunner } from './rebase.js';
 import { surfaceQuarantine } from './setup-triage.js';
+import type { SetupFailureError } from './worktree-prepare.js';
+import type { TriageOutcome } from './setup-triage.js';
 
 export interface RealDepsConfig {
   /** The main checkout the daemon runs from. */
@@ -37,6 +39,12 @@ export interface RealDepsConfig {
    */
   memoryProvider?: unknown;
   log?: (msg: string) => void;
+  /** Deterministic setup-failure triage (adr-2026-07-09-setup-failure-triage), daemon-only. */
+  runSetupTriage?: (
+    error: SetupFailureError,
+    worktree: FeatureWorktree,
+    item: BacklogItem,
+  ) => Promise<TriageOutcome>;
 }
 
 const PROCESSED_SUBDIR = '.daemon/processed';

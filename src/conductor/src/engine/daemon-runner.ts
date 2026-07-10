@@ -462,12 +462,17 @@ async function writeErrorHalt(worktree: FeatureWorktree, reason: string, log?: (
     if (triage.quarantineRef) {
       note += `\nQuarantine ref: ${triage.quarantineRef}\n`;
     } else {
-      note += `\nNo quarantine present (clean-HEAD case)\n`;
+      note += `\nNo quarantine ref exists (clean-HEAD case)\n`;
     }
 
     // Contract outcome
     if (triage.contractOutcome) {
       note += `\nContract outcome: ${triage.contractOutcome}\n`;
+    }
+
+    // Dirty paths left behind by an unverifiable half-fix
+    if (Array.isArray(triage.preservedPaths) && triage.preservedPaths.length > 0) {
+      note += `\nDirty paths after fix-session:\n${triage.preservedPaths.map((p: string) => `  - ${p}`).join('\n')}\n`;
     }
   }
 
