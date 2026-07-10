@@ -63,6 +63,13 @@ export async function readOperatorCredentialsState(
 }
 
 /**
+ * Optional content classifier for daemon-token mode (Task 11, TR-4).
+ * When provided, replaces the default expiresAt-based freshness check.
+ * Returns true if content is considered "fresh" (non-empty for daemon tokens).
+ */
+export type ContentClassifier = (contents: string) => boolean;
+
+/**
  * Polls for credentials file changes until it becomes fresh or timeout elapses.
  * Used in Phase 3 (TR-3 & TR-4): park-and-poll mechanism.
  *
@@ -71,6 +78,10 @@ export async function readOperatorCredentialsState(
  * - If state remains 'expired' or 'unknown': keeps polling
  * - If file is deleted: keeps polling (fail-open, no crash)
  * - If timeout elapses: resolves with 'timeout' + last observed state + path
+ *
+ * When contentClassifier is provided (Task 11, TR-4: daemon-token mode),
+ * it is used to determine freshness by checking file content instead of
+ * the default expiresAt-based classification.
  *
  * @param config Configuration object with injected dependencies for testability
  * @returns Promise resolving to { type: 'refreshed' | 'timeout', ... }
@@ -83,6 +94,7 @@ export async function waitForCredentialsChange(config: {
   pollIntervalMs?: number;
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
+  contentClassifier?: ContentClassifier;
 }): Promise<{
   type: 'refreshed' | 'timeout';
   credentialsState?: 'fresh' | 'expired' | 'unknown';
@@ -98,6 +110,7 @@ export async function waitForCredentialsChange(config: {
     sleep = (ms: number) =>
       new Promise((resolve) => setTimeout(resolve, ms)),
     now = () => Date.now(),
+    contentClassifier,
   } = config;
 
   const startTime = now();
@@ -161,24 +174,42 @@ export async function waitForCredentialsChange(config: {
 
     // If mtime advanced, reclassify the credentials
     if (mtimeAdvanced) {
-      const newState = await readOperatorCredentialsState(globalConfigDir, now());
+      // Task 11 (TR-4): if contentClassifier provided (daemon-token mode),
+      // use it to determine freshness; otherwise use the default operator
+      // credentials state classification.
+      let isFresh = false;
 
-      // Update last observed expiresAt for timeout fallback
-      try {
-        const contents = await readFile(credentialsPath, 'utf-8');
-        const creds = JSON.parse(contents);
-        if (creds.claudeAiOauth?.expiresAt !== undefined) {
-          lastObservedExpiresAt = String(creds.claudeAiOauth.expiresAt);
+      if (contentClassifier) {
+        // Daemon-token mode: check for non-empty content
+        try {
+          const contents = await readFile(credentialsPath, 'utf-8');
+          isFresh = contentClassifier(contents);
+        } catch {
+          // Unreadable; keep polling (fail-open)
+          isFresh = false;
         }
-      } catch {
-        // Unreadable; keep the last observed value
+      } else {
+        // Operator credentials mode: check expiresAt
+        const newState = await readOperatorCredentialsState(globalConfigDir, now());
+        isFresh = newState === 'fresh';
+
+        // Update last observed expiresAt for timeout fallback
+        try {
+          const contents = await readFile(credentialsPath, 'utf-8');
+          const creds = JSON.parse(contents);
+          if (creds.claudeAiOauth?.expiresAt !== undefined) {
+            lastObservedExpiresAt = String(creds.claudeAiOauth.expiresAt);
+          }
+        } catch {
+          // Unreadable; keep the last observed value
+        }
       }
 
       // If fresh, resolve immediately
-      if (newState === 'fresh') {
+      if (isFresh) {
         return {
           type: 'refreshed',
-          credentialsState: newState,
+          credentialsState: 'fresh',
           credentialsPath,
         };
       }

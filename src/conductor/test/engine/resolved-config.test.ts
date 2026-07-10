@@ -396,4 +396,114 @@ describe('engine/resolved-config', () => {
       );
     });
   });
+
+  describe('resolveSelfHostConfig — build_auth defaults', () => {
+    it('absent block → buildAuthMode: daemon-token, buildAuthTokenPath: ~/.ai-conductor/build-auth', async () => {
+      const { resolveSelfHostConfig } = await import(
+        '../../src/engine/resolved-config.js'
+      );
+      const os = await import('os');
+      const config: HarnessConfig = {
+        harness_self_host: {},
+      };
+      const result = resolveSelfHostConfig(config);
+      expect(result.buildAuthMode).toBe('daemon-token');
+      expect(result.buildAuthTokenPath).toBe(`${os.homedir()}/.ai-conductor/build-auth`);
+    });
+
+    it('explicit api-key mode is honored', async () => {
+      const { resolveSelfHostConfig } = await import(
+        '../../src/engine/resolved-config.js'
+      );
+      const config: HarnessConfig = {
+        harness_self_host: {
+          build_auth: {
+            mode: 'api-key',
+          },
+        },
+      };
+      const result = resolveSelfHostConfig(config);
+      expect(result.buildAuthMode).toBe('api-key');
+    });
+
+    it('custom token_path is honored', async () => {
+      const { resolveSelfHostConfig } = await import(
+        '../../src/engine/resolved-config.js'
+      );
+      const config: HarnessConfig = {
+        harness_self_host: {
+          build_auth: {
+            token_path: '/custom/path/to/token',
+          },
+        },
+      };
+      const result = resolveSelfHostConfig(config);
+      expect(result.buildAuthTokenPath).toBe('/custom/path/to/token');
+    });
+
+    it('~ in token_path is expanded to home directory', async () => {
+      const { resolveSelfHostConfig } = await import(
+        '../../src/engine/resolved-config.js'
+      );
+      const os = await import('os');
+      const config: HarnessConfig = {
+        harness_self_host: {
+          build_auth: {
+            token_path: '~/.secrets/build-token',
+          },
+        },
+      };
+      const result = resolveSelfHostConfig(config);
+      expect(result.buildAuthTokenPath).toBe(`${os.homedir()}/.secrets/build-token`);
+    });
+
+    it('blank token_path defaults to ~/.ai-conductor/build-auth', async () => {
+      const { resolveSelfHostConfig } = await import(
+        '../../src/engine/resolved-config.js'
+      );
+      const os = await import('os');
+      const config: HarnessConfig = {
+        harness_self_host: {
+          build_auth: {
+            token_path: '',
+          },
+        },
+      };
+      const result = resolveSelfHostConfig(config);
+      expect(result.buildAuthTokenPath).toBe(`${os.homedir()}/.ai-conductor/build-auth`);
+    });
+
+    it('whitespace-only token_path defaults to ~/.ai-conductor/build-auth', async () => {
+      const { resolveSelfHostConfig } = await import(
+        '../../src/engine/resolved-config.js'
+      );
+      const os = await import('os');
+      const config: HarnessConfig = {
+        harness_self_host: {
+          build_auth: {
+            token_path: '   \t\n  ',
+          },
+        },
+      };
+      const result = resolveSelfHostConfig(config);
+      expect(result.buildAuthTokenPath).toBe(`${os.homedir()}/.ai-conductor/build-auth`);
+    });
+
+    it('happy path: explicit daemon-token with custom path', async () => {
+      const { resolveSelfHostConfig } = await import(
+        '../../src/engine/resolved-config.js'
+      );
+      const config: HarnessConfig = {
+        harness_self_host: {
+          build_auth: {
+            mode: 'daemon-token',
+            token_path: '/etc/daemon/token',
+          },
+        },
+      };
+      const result = resolveSelfHostConfig(config);
+      expect(result.buildAuthMode).toBe('daemon-token');
+      expect(result.buildAuthTokenPath).toBe('/etc/daemon/token');
+    });
+  });
 });

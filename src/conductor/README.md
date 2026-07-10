@@ -2148,6 +2148,72 @@ engineer-planned features (store ∩ authored-keys ledger). Registry/store paths
 `$AI_CONDUCTOR_REGISTRY` / `$AI_CONDUCTOR_ENGINEER_DIR`. Acceptance scenarios live in
 `test/acceptance/engineer.test.ts`.
 
+### Daemon build-auth: isolating daemon builds from operator OAuth (Tasks 5-17, TR-1..TR-4)
+
+Self-host daemon builds authenticate to Claude independently of the operator's own
+`.credentials.json` OAuth session, so a daemon build can never read, wait on, or exhaust the
+operator's interactive login. Configured under `harness_self_host.build_auth` in
+`.ai-conductor/config.yml` (`types/config.ts`, validated in `engine/config.ts`, resolved by
+`resolveSelfHostConfig` in `engine/resolved-config.ts`):
+
+```yaml
+harness_self_host:
+  build_auth:
+    mode: daemon-token        # "daemon-token" (default) | "api-key"
+    token_path: ~/.ai-conductor/build-auth   # daemon-token mode only; ~ expands to $HOME
+```
+
+**Modes:**
+
+- **`daemon-token` (default).** The daemon reads a token file at `token_path` (default
+  `~/.ai-conductor/build-auth`, resolved by `getDefaultBuildAuthTokenPath()` in
+  `resolved-config.ts`) that is entirely separate from the operator's `.credentials.json`. Mint
+  it once with:
+
+  ```bash
+  claude setup-token
+  chmod 600 ~/.ai-conductor/build-auth
+  ```
+
+  (`DAEMON_BUILD_TOKEN_MINT_COMMAND` in `self-host/daemon-build-token.ts` is the single source of
+  truth for this command string, reused by both the HALT message and the CHANGELOG migration
+  block.) On each sandboxed build dispatch the conductor reads the token
+  (`readDaemonBuildToken`) and injects it as `CLAUDE_CODE_OAUTH_TOKEN` into the sandboxed step's
+  environment only — the operator's own `CLAUDE_CODE_OAUTH_TOKEN` (if any) is restored in a
+  `finally` block afterward (`conductor.ts`, around the sandboxed `stepRunner.run` call).
+- **`api-key`.** The build authenticates via a pre-existing `ANTHROPIC_API_KEY` in the daemon
+  process's environment. The daemon-token preflight and the operator-credentials preflight are
+  both skipped in this mode — no token file is required.
+
+**Fail-closed pre-flight (`self-host/build-auth-preflight.ts`, Task 6).** Before a self-host build
+provisions its sandbox, `preflightBuildAuthCheck` runs in `daemon-token` mode only:
+
+- Token file present and non-empty → proceeds normally.
+- Token file missing, empty/whitespace-only, or unreadable (e.g. `chmod 000`) → writes
+  `.pipeline/HALT` (only if one doesn't already exist, so retries don't clobber an existing
+  reason) with the mint command, the resolved token path, and the `harness_self_host.build_auth`
+  config keys to set. The check runs **before** any sandbox is provisioned and never consumes the
+  step's retry budget.
+
+**Backward compatibility.** An absent `harness_self_host.build_auth` block (or one that isn't
+explicitly `daemon-token`/`api-key`) leaves the pre-#5-17 behavior unchanged: the conductor falls
+back to the operator-credentials preflight (`preflightCredentialsCheck`, which watches
+`~/.claude/.credentials.json` expiry) — see the park-and-poll section below. Once `build_auth.mode`
+is explicitly set to `daemon-token` or `api-key`, the operator-credentials preflight is skipped
+entirely (Task 11) — the two auth paths are mutually exclusive per build.
+
+**Auth-failure park in daemon-token mode (Task 11, TR-4).** If a step reports an auth failure
+mid-build, the daemon-token mode parks and polls the token file's mtime/content for a refresh
+(`createDaemonTokenContentClassifier` + `waitForCredentialsChange`), the same park-and-poll
+mechanism the operator-credentials path uses (see below), bounded by
+`auth_park_timeout_minutes`. In `api-key` mode there is no token file to watch, so an auth
+failure HALTs immediately with a reason naming `ANTHROPIC_API_KEY` and instructions to re-queue
+the feature after fixing it — parking never happens in `api-key` mode.
+
+**Migration.** See the `CHANGELOG.md` `[Unreleased]` migration block for the exact commands to
+mint a token and wire it into an existing project's config without clobbering a token that's
+already present.
+
 ### Sandbox auth-expiry park-and-poll (self-host daemon builds)
 
 Headless/sandbox daemon builds run against an operator's credentials file (`~/.claude/.credentials.json`)
@@ -2188,11 +2254,9 @@ When credentials are detected as expired or auth failure occurs, the conductor i
   `claude login`).
 - **Checks freshness** — when mtime changes, re-reads the credentials and checks `expiresAt`:
   - Still expired → keeps polling
-  - Fresh (unexpired) → proceeds to **refresh sandbox**
-- **Refreshes sandbox** — calls `refreshSandboxCredentials()` (`src/conductor/src/engine/self-host/sandbox-build-env.ts`),
-  which **copies** the operator's newly-refreshed `.credentials.json` into the sandbox `CLAUDE_CONFIG_DIR`
-  (never symlinks, maintaining isolation; see TR-6). The next attempt re-invokes the step with the
-  new credentials.
+  - Fresh (unexpired) → proceeds to **resume the build**
+- **Resume build with fresh auth** (Task 11) — the sandboxed build re-reads the daemon's live `CLAUDE_CODE_OAUTH_TOKEN`
+  env var, obtaining fresh credentials without needing to copy them into the sandbox.
 - **Timeout** — configurable via `auth_park_timeout_minutes` (default **60 minutes**; `0` or negative =
   opt-out, HALT immediately). When timeout elapses without a successful refresh, the conductor
   `writeHaltMarker()` with a reason naming the credentials path + observed `expiresAt` (or "unparseable").
@@ -2226,8 +2290,7 @@ Park-and-poll HALTs follow the standard HALT remediation (no new process — see
 | `engine/self-host/operator-credentials.ts` | Reader (`readOperatorCredentialsState`, fail-open classification), wait primitive (`waitForCredentialsChange` with injected clock/sleep for testability) |
 | `execution/claude-provider.ts` | Classifier (`AUTH_FAILURE_RE`, `authFailure` flag on invoke result) |
 | `engine/step-runners.ts` | Thread `authFailure` through `StepRunResult` |
-| `engine/conductor.ts` | Pre-flight check (before sandbox provision), per-step retry-loop branch (auth failure → park), resume credentials re-copy, timeout branch → HALT with credentials reason |
-| `engine/self-host/sandbox-build-env.ts` | `refreshSandboxCredentials` export (copy-based, not symlink) |
+| `engine/conductor.ts` | Pre-flight check (before sandbox provision), per-step retry-loop branch (auth failure → park), timeout branch → HALT with credentials reason |
 | `engine/resolved-config.ts` | `auth_park_timeout_minutes` config field + validation (0/negative = opt-out) |
 
 See `.docs/plans/sandbox-auth-expiry-park.md` and `.docs/decisions/adr-2026-07-04-auth-failure-park-and-poll.md` for the full design.

@@ -1,3 +1,4 @@
+import { homedir } from 'os';
 import type { StepName, Phase, ComplexityTier } from '../types/index.js';
 import type {
   HarnessConfig,
@@ -360,6 +361,17 @@ export function resolveAuthParkTimeoutMinutes(config?: HarnessConfig): number {
 
 export const DEFAULT_SELF_HOST_ACTIVATION: SelfHostActivation = 'auto';
 
+/** Default daemon build authentication mode (TR-1/2/3/4). */
+export const DEFAULT_BUILD_AUTH_MODE = 'daemon-token';
+
+/**
+ * Default path for daemon build-auth token file (TR-1/2/3/4).
+ * Resolves to ~/.ai-conductor/build-auth at resolution time.
+ */
+export function getDefaultBuildAuthTokenPath(): string {
+  return `${homedir()}/.ai-conductor/build-auth`;
+}
+
 /** Fully-resolved self-host guardrail settings (no optional fields). */
 export interface ResolvedSelfHostConfig {
   activation: SelfHostActivation;
@@ -371,6 +383,34 @@ export interface ResolvedSelfHostConfig {
   versionFreeze: string | null;
   /** Timeout in minutes for credentials park-and-poll (TR-2/3/4/5). */
   authParkTimeoutMinutes: number;
+  /** Daemon build authentication mode (TR-1/2/3/4). Defaults to 'daemon-token'. */
+  buildAuthMode: string;
+  /** Expanded path to daemon build-auth token file (TR-1/2/3/4). Defaults to ~/.ai-conductor/build-auth. */
+  buildAuthTokenPath: string;
+}
+
+/**
+ * Expand ~ to home directory in a path string.
+ * If the path starts with ~, it is replaced with the result of homedir().
+ * Otherwise, the path is returned unchanged.
+ */
+function expandTildePath(path: string): string {
+  if (path.startsWith('~')) {
+    return path.replace(/^~/, homedir());
+  }
+  return path;
+}
+
+/**
+ * Normalize a token path by trimming whitespace and expanding tilde.
+ * Returns the default path if the input is empty/whitespace.
+ */
+function resolveTokenPath(rawPath: string | undefined): string {
+  const trimmed = rawPath?.trim() || '';
+  if (!trimmed) {
+    return getDefaultBuildAuthTokenPath();
+  }
+  return expandTildePath(trimmed);
 }
 
 /**
@@ -381,11 +421,14 @@ export interface ResolvedSelfHostConfig {
  */
 export function resolveSelfHostConfig(config?: HarnessConfig): ResolvedSelfHostConfig {
   const block = config?.harness_self_host;
+  const buildAuthBlock = block?.build_auth;
+
   let timeoutMinutes = block?.auth_park_timeout_minutes ?? 60;
   // Negative or non-numeric values fall back to 60
   if (!Number.isInteger(timeoutMinutes) || timeoutMinutes < 0) {
     timeoutMinutes = 60;
   }
+
   return {
     activation: block?.activation ?? DEFAULT_SELF_HOST_ACTIVATION,
     skillRelinkPreflight: block?.skill_relink_preflight ?? true,
@@ -396,6 +439,10 @@ export function resolveSelfHostConfig(config?: HarnessConfig): ResolvedSelfHostC
     // empty VERSION read — safe-by-default like every other field here.
     versionFreeze: block?.version_freeze?.trim() || null,
     authParkTimeoutMinutes: timeoutMinutes,
+    // Daemon build authentication mode: explicit or default to daemon-token
+    buildAuthMode: buildAuthBlock?.mode || DEFAULT_BUILD_AUTH_MODE,
+    // Daemon build-auth token path: explicit, tilde-expanded, or default
+    buildAuthTokenPath: resolveTokenPath(buildAuthBlock?.token_path),
   };
 }
 

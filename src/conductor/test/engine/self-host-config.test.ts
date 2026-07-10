@@ -1,3 +1,4 @@
+import { homedir } from 'os';
 import { describe, it, expect } from 'vitest';
 import { validateConfig } from '../../src/engine/config.js';
 import {
@@ -103,6 +104,8 @@ describe('resolved-config — resolveSelfHostConfig (TR-11 safe defaults)', () =
       releaseArtifactGate: true,
       versionFreeze: null,
       authParkTimeoutMinutes: 60,
+      buildAuthMode: 'daemon-token',
+      buildAuthTokenPath: `${homedir()}/.ai-conductor/build-auth`,
     });
   });
 
@@ -144,5 +147,64 @@ describe('resolved-config — resolveSelfHostConfig (TR-11 safe defaults)', () =
     expect(
       resolveSelfHostConfig({ harness_self_host: { version_freeze: '   ' } }).versionFreeze,
     ).toBeNull();
+  });
+});
+
+describe('config — harness_self_host.build_auth (TR-1 raw types)', () => {
+  it('accepts a well-formed build_auth block with mode and token_path', () => {
+    const raw: HarnessConfig = {
+      harness_self_host: {
+        build_auth: {
+          mode: 'daemon-token',
+          token_path: '/home/user/.ai-conductor/build-auth',
+        },
+      },
+    };
+    const result = validateConfig(raw);
+    expect(result.ok).toBe(true);
+  });
+
+  it('accepts build_auth with only mode set', () => {
+    const raw: HarnessConfig = {
+      harness_self_host: {
+        build_auth: {
+          mode: 'api-key',
+        },
+      },
+    };
+    const result = validateConfig(raw);
+    expect(result.ok).toBe(true);
+  });
+
+  it('accepts build_auth with only token_path set', () => {
+    const raw: HarnessConfig = {
+      harness_self_host: {
+        build_auth: {
+          token_path: '/custom/token/path',
+        },
+      },
+    };
+    const result = validateConfig(raw);
+    expect(result.ok).toBe(true);
+  });
+
+  it('accepts an empty build_auth block', () => {
+    const raw: HarnessConfig = {
+      harness_self_host: {
+        build_auth: {},
+      },
+    };
+    const result = validateConfig(raw);
+    expect(result.ok).toBe(true);
+  });
+
+  it('accepts harness_self_host without build_auth', () => {
+    const raw: HarnessConfig = {
+      harness_self_host: {
+        activation: 'auto',
+      },
+    };
+    const result = validateConfig(raw);
+    expect(result.ok).toBe(true);
   });
 });
