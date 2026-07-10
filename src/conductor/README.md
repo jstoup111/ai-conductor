@@ -1984,7 +1984,8 @@ The daemon can reorder eligible features by GitHub issue priority labels, honori
 human-driven prioritization without changing the eligibility/deduplication logic.
 
 **Priority bands and label vocabulary:**
-- `priority: high` — highest-priority band (no-issue status escalated)
+- `priority: critical` — complete breakage / very severe degradation; dispatched first among issue-linked work
+- `priority: high` — highest routine band
 - `priority: medium` — standard priority band
 - `priority: low` — lower-priority band
 - Unlabeled — chronological fallback order

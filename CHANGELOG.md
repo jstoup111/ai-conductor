@@ -10,6 +10,15 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ## [Unreleased]
 
+### Added
+
+- `priority: critical` backlog band, above `high`: reserved for fixes to
+  things that completely break or cause very severe degradation. The daemon
+  dispatches critical-labeled work first among issue-linked items (unlinked
+  `no-issue` items still lead, unchanged). Parser accepts the exact label
+  `priority: critical`; band ladder is now no-issue → critical → high →
+  medium → low → unlabeled. READMEs document the new vocabulary.
+
 ### Fixed
 
 - `bin/install` never hard-fails on missing dependencies. Every optional phase

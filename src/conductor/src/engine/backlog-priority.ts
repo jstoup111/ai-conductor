@@ -15,7 +15,7 @@ export type ExecRunner = (args: string[], opts: { cwd: string }) => Promise<{ st
  * - 'low': Low priority (deferred)
  * - 'unlabeled': Issue has no priority label (default behavior)
  */
-export type PriorityBand = 'no-issue' | 'high' | 'medium' | 'low' | 'unlabeled';
+export type PriorityBand = 'no-issue' | 'critical' | 'high' | 'medium' | 'low' | 'unlabeled';
 
 /**
  * Resolution mode for priority-driven backlog ordering.
@@ -48,17 +48,19 @@ export type IssueLabelReader = (refs: string[]) => Promise<Map<string, string[] 
  * @param labels - Array of issue label strings
  * @returns The highest priority band found, or undefined if no valid priority labels exist
  */
-export function parsePriorityLabels(labels: string[]): 'high' | 'medium' | 'low' | undefined {
-  const priorityRank = { high: 3, medium: 2, low: 1 };
+export function parsePriorityLabels(
+  labels: string[],
+): 'critical' | 'high' | 'medium' | 'low' | undefined {
+  const priorityRank = { critical: 4, high: 3, medium: 2, low: 1 };
   let maxRank = 0;
-  let maxPriority: 'high' | 'medium' | 'low' | undefined = undefined;
+  let maxPriority: 'critical' | 'high' | 'medium' | 'low' | undefined = undefined;
 
   for (const label of labels) {
     // Match labels with the exact pattern 'priority: <band>'
     // Requires exactly one space after the colon, case-sensitive
-    const match = label.match(/^priority: (high|medium|low)$/);
+    const match = label.match(/^priority: (critical|high|medium|low)$/);
     if (match) {
-      const band = match[1] as 'high' | 'medium' | 'low';
+      const band = match[1] as 'critical' | 'high' | 'medium' | 'low';
       const rank = priorityRank[band];
       if (rank > maxRank) {
         maxRank = rank;
@@ -172,23 +174,25 @@ export function createPriorityResolver(
  * Band rank for stable sorting. Lower rank comes first.
  *
  * no-issue: 0 (unlinked items, highest priority)
- * high: 1
- * medium: 2
- * low: 3
- * unlabeled: 4 (lowest priority)
+ * critical: 1 (complete breakage / very severe degradation)
+ * high: 2
+ * medium: 3
+ * low: 4
+ * unlabeled: 5 (lowest priority)
  */
 const BAND_RANK: Record<PriorityBand, number> = {
   'no-issue': 0,
-  high: 1,
-  medium: 2,
-  low: 3,
-  unlabeled: 4,
+  critical: 1,
+  high: 2,
+  medium: 3,
+  low: 4,
+  unlabeled: 5,
 };
 
 /**
  * Order backlog items by priority bands in a stable sort.
  *
- * Items are sorted into bands: no-issue → high → medium → low → unlabeled.
+ * Items are sorted into bands: no-issue → critical → high → medium → low → unlabeled.
  * Within each band, items maintain their input order (stable sort).
  *
  * For 'banded' mode: items are reordered by band and annotated with their band.
