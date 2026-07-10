@@ -128,6 +128,11 @@ export function makeFeatureRunnerDeps(cfg: RealDepsConfig): FeatureRunnerDeps {
         log: cfg.log,
       });
     },
+
+    // Task 15: Thread the setup-triage handler when present (daemon mode only).
+    // The handler uses git runner for worktree, prepareWorktree for retry,
+    // and fix-session dispatcher constructing fresh DefaultStepRunner per dispatch.
+    runSetupTriage: cfg.runSetupTriage,
   };
 }
 
