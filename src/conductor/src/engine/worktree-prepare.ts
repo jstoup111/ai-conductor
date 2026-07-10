@@ -68,7 +68,88 @@ export async function prepareWorktree(
   // Write git hooks before setup so they exist even if setup fails
   await writeGitHooksAndWire(worktreePath, log);
   await writeSessionHooks(worktreePath, log);
+  await wireSessionHookSettings(worktreePath, log);
   await runProjectSetup(worktreePath, namespace, log);
+}
+
+/**
+ * Merge the session-lifecycle hook entries (pre-dispatch / post-dispatch) into
+ * the worktree's `.claude/settings.local.json`, preserving any unrelated
+ * settings already present. `.claude/settings.local.json` is untracked, so
+ * this is safe to write directly.
+ *
+ * Merge-preserve semantics: replace only the hook entries whose command
+ * points into `.pipeline/session-hooks/` (identified by matcher + command
+ * substring), leaving every other key and hook entry untouched. Re-running
+ * this is idempotent — a second pass replaces the same entries rather than
+ * duplicating them.
+ *
+ * Fail-open: logs and continues on any error, never throwing — provisioning
+ * failures here must never block worktree setup.
+ */
+async function wireSessionHookSettings(
+  worktreePath: string,
+  log?: (msg: string) => void,
+): Promise<void> {
+  try {
+    const claudeDir = join(worktreePath, '.claude');
+    await mkdir(claudeDir, { recursive: true });
+    const settingsPath = join(claudeDir, 'settings.local.json');
+
+    let settings: Record<string, unknown> = {};
+    try {
+      const raw = await readFile(settingsPath, 'utf-8');
+      settings = JSON.parse(raw);
+    } catch {
+      // No file yet, or malformed — start fresh.
+      settings = {};
+    }
+
+    if (!settings.hooks || typeof settings.hooks !== 'object') {
+      settings.hooks = {};
+    }
+    const hooks = settings.hooks as Record<string, unknown>;
+
+    const preDispatchPath = join(worktreePath, '.pipeline', 'session-hooks', 'pre-dispatch.sh');
+    const postDispatchPath = join(worktreePath, '.pipeline', 'session-hooks', 'post-dispatch.sh');
+
+    hooks.PreToolUse = replaceSessionHookEntry(
+      hooks.PreToolUse,
+      'session-hooks/',
+      { matcher: 'Task|Agent', hooks: [{ type: 'command', command: preDispatchPath }] },
+    );
+    hooks.PostToolUse = replaceSessionHookEntry(
+      hooks.PostToolUse,
+      'session-hooks/',
+      { matcher: 'Task|Agent', hooks: [{ type: 'command', command: postDispatchPath }] },
+    );
+
+    await writeFile(settingsPath, JSON.stringify(settings, null, 2), 'utf-8');
+    log?.('session hook settings: wired into .claude/settings.local.json');
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log?.(`session hook settings: skipped (${msg})`);
+  }
+}
+
+/**
+ * Return a copy of `existing` (a hooks array, or anything else on a fresh /
+ * malformed file) with any entry whose command contains `marker` removed,
+ * then `entry` appended. Non-matching entries (e.g. an operator's own hooks)
+ * are preserved untouched.
+ */
+function replaceSessionHookEntry(
+  existing: unknown,
+  marker: string,
+  entry: Record<string, unknown>,
+): Record<string, unknown>[] {
+  const arr = Array.isArray(existing) ? (existing as Record<string, unknown>[]) : [];
+  const kept = arr.filter((e) => {
+    const entryHooks = (e as { hooks?: Array<{ command?: string }> }).hooks;
+    return !entryHooks?.some((h) => typeof h.command === 'string' && h.command.includes(marker));
+  });
+  kept.push(entry);
+  return kept;
 }
 
 /**

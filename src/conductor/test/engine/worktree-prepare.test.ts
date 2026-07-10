@@ -287,4 +287,75 @@ describe('engine/worktree-prepare', () => {
       expect(postContent).toBe(POST_DISPATCH_HOOK);
     });
   });
+
+  // Task 13: prepareWorktree wires the session hooks into
+  // .claude/settings.local.json with merge-preserve semantics.
+  describe('settings.local.json hook wiring (Task 13)', () => {
+    const settingsPath = (worktreeDir: string) =>
+      join(worktreeDir, '.claude', 'settings.local.json');
+
+    function findEntry(arr: unknown[], substr: string): Record<string, unknown> | undefined {
+      return (arr as Record<string, unknown>[]).find((e) => {
+        const hooks = e.hooks as Array<{ command?: string }> | undefined;
+        return hooks?.some((h) => typeof h.command === 'string' && h.command.includes(substr));
+      });
+    }
+
+    it('writes PreToolUse and PostToolUse hook entries into a fresh worktree', async () => {
+      await prepareWorktree(dir);
+
+      const raw = await readFile(settingsPath(dir), 'utf-8');
+      const settings = JSON.parse(raw);
+
+      const preEntry = findEntry(settings.hooks.PreToolUse, 'pre-dispatch.sh');
+      expect(preEntry).toBeDefined();
+      expect(preEntry?.matcher).toBe('Task|Agent');
+      const preCmd = (preEntry?.hooks as Array<{ command: string }>)[0].command;
+      expect(preCmd).toBe(join(dir, '.pipeline', 'session-hooks', 'pre-dispatch.sh'));
+
+      const postEntry = findEntry(settings.hooks.PostToolUse, 'post-dispatch.sh');
+      expect(postEntry).toBeDefined();
+      expect(postEntry?.matcher).toBe('Task|Agent');
+      const postCmd = (postEntry?.hooks as Array<{ command: string }>)[0].command;
+      expect(postCmd).toBe(join(dir, '.pipeline', 'session-hooks', 'post-dispatch.sh'));
+    });
+
+    it('preserves unrelated pre-existing settings byte-for-byte while adding hook entries', async () => {
+      const claudeDir = join(dir, '.claude');
+      await mkdir(claudeDir, { recursive: true });
+      const preExisting = { permissions: { allow: ['Bash(ls:*)'] } };
+      await writeFile(settingsPath(dir), JSON.stringify(preExisting), 'utf-8');
+
+      await prepareWorktree(dir);
+
+      const raw = await readFile(settingsPath(dir), 'utf-8');
+      const settings = JSON.parse(raw);
+
+      expect(settings.permissions).toEqual({ allow: ['Bash(ls:*)'] });
+      expect(findEntry(settings.hooks.PreToolUse, 'pre-dispatch.sh')).toBeDefined();
+      expect(findEntry(settings.hooks.PostToolUse, 'post-dispatch.sh')).toBeDefined();
+    });
+
+    it('is idempotent across repeated provisioning runs', async () => {
+      await prepareWorktree(dir);
+      const first = await readFile(settingsPath(dir), 'utf-8');
+
+      await prepareWorktree(dir);
+      const second = await readFile(settingsPath(dir), 'utf-8');
+
+      expect(second).toBe(first);
+
+      const settings = JSON.parse(second);
+      expect(
+        (settings.hooks.PreToolUse as unknown[]).filter((e) =>
+          findEntry([e], 'pre-dispatch.sh'),
+        ).length,
+      ).toBe(1);
+      expect(
+        (settings.hooks.PostToolUse as unknown[]).filter((e) =>
+          findEntry([e], 'post-dispatch.sh'),
+        ).length,
+      ).toBe(1);
+    });
+  });
 });
