@@ -447,17 +447,25 @@ export async function getEvidenceRange(
   return result;
 }
 
-async function listCommits(projectRoot: string): Promise<CommitInfo[]> {
-  const mergeBase = await execa('git', ['merge-base', 'origin/main', 'HEAD'], {
-    cwd: projectRoot,
-    reject: false,
-  });
+/**
+ * List commits bounded to `origin/<default>..HEAD` when the origin default
+ * branch resolves (via the same ladder as {@link getEvidenceRange}), or a
+ * bounded local log (last 100 commits reachable from HEAD) when it does not
+ * (e.g. no remote configured).
+ */
+export async function listCommits(projectRoot: string): Promise<CommitInfo[]> {
+  const originRef = await resolveOriginRef(projectRoot);
 
-  let range: string;
-  if (mergeBase.exitCode === 0 && typeof mergeBase.stdout === 'string' && mergeBase.stdout.trim()) {
-    range = `${mergeBase.stdout.trim()}..HEAD`;
-  } else {
-    range = 'HEAD';
+  let range: string = 'HEAD';
+  if (originRef) {
+    const mergeBase = await execa('git', ['merge-base', originRef, 'HEAD'], {
+      cwd: projectRoot,
+      reject: false,
+    });
+
+    if (mergeBase.exitCode === 0 && typeof mergeBase.stdout === 'string' && mergeBase.stdout.trim()) {
+      range = `${mergeBase.stdout.trim()}..HEAD`;
+    }
   }
 
   const args =

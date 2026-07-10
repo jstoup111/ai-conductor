@@ -1167,6 +1167,59 @@ describe('getEvidenceRange', () => {
   });
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Task 7: listCommits derives the origin default branch instead of hardcoding
+// `origin/main`, via the same resolveOriginRef ladder as getEvidenceRange.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('listCommits', () => {
+  it('bounds commits to post-merge-base when origin default branch is master', async () => {
+    const mod = await loadAutoheal();
+
+    // Create a bare repo to act as origin, with its default branch as master.
+    const bareDir = await mkdtemp(join(tmpdir(), 'listcommits-bare-master-'));
+    await execa('git', ['init', '--bare', '-b', 'master'], { cwd: bareDir });
+
+    // Re-point the local repo's branch to master so it can push to origin/master.
+    await execa('git', ['branch', '-m', 'main', 'master'], { cwd: gitDir });
+    await execa('git', ['remote', 'add', 'origin', bareDir], { cwd: gitDir });
+    await execa('git', ['push', '-u', 'origin', 'master'], { cwd: gitDir });
+
+    // Record refs/remotes/origin/HEAD -> origin/master (as a real clone would).
+    await execa('git', ['remote', 'set-head', 'origin', 'master'], { cwd: gitDir });
+
+    // Additional commit after origin/master.
+    await writeFile(join(gitDir, 'after.txt'), 'content');
+    await execa('git', ['add', 'after.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'feat: after origin/master'], { cwd: gitDir });
+
+    const commits = await mod.listCommits(gitDir);
+
+    // Only the commit after the merge-base with origin/master should be
+    // returned — not the full bounded local log (which would include the
+    // initial commit made in beforeEach as well).
+    expect(commits.length).toBe(1);
+    expect(commits[0].subject).toBe('feat: after origin/master');
+
+    await rm(bareDir, { recursive: true, force: true });
+  });
+
+  it('falls back to the bounded local log when there is no remote', async () => {
+    const mod = await loadAutoheal();
+
+    // gitDir has no remote configured (set up fresh in beforeEach).
+    await writeFile(join(gitDir, 'file.txt'), 'content');
+    await execa('git', ['add', 'file.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'a commit with no remote'], { cwd: gitDir });
+
+    const commits = await mod.listCommits(gitDir);
+
+    // Degraded local-log path: bounded, not empty, includes the new commit.
+    expect(commits.length).toBeGreaterThan(0);
+    expect(commits.some((c) => c.subject === 'a commit with no remote')).toBe(true);
+  });
+});
+
 describe('listCommitsWithTrailers with anchor', () => {
   it('accepts an anchor parameter', async () => {
     const mod = await loadAutoheal();
