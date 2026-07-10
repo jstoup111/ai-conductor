@@ -783,6 +783,96 @@ describe('engine/daemon-runner — makeRunFeature', () => {
         }
       });
     });
+
+    describe('Task 12: HALT-write failure still parks (Story 4, negative path)', () => {
+      // Story 4 acceptance criteria: when HALT write fails (e.g., unwritable .pipeline),
+      // feature outcome is still `error` (parking unaffected), log sink receives the
+      // write-failure line, and no dispatch happens.
+
+      it('HALT write failure: feature still parked with error status (Task 12)', async () => {
+        const wt = await mkdtemp(join(tmpdir(), 'wt-halt-write-fail-'));
+        try {
+          const logCalls: string[] = [];
+          const rec: { teardownKeep?: boolean } = {};
+
+          const run = makeRunFeature({
+            ...deps(
+              {
+                done: true,
+                halted: false,
+                finishChoice: 'pr',
+                prUrl: 'https://github.com/owner/repo/pull/123',
+              },
+              rec,
+            ),
+            createWorktree: async (slug) => ({ path: wt, branch: `feat/${slug}` }),
+            prepareWorktree: async () => {
+              // Simulate a setup failure
+              throw new Error('bin/setup failed: database unreachable');
+            },
+            log: (msg: string) => {
+              logCalls.push(msg);
+            },
+          });
+
+          // Pre-create .pipeline as a file (not a directory) to force write failure
+          await writeFile(join(wt, '.pipeline'), 'this blocks the directory', 'utf-8');
+
+          const out = await run(ITEM);
+
+          // Verify outcome is error (parking maintained despite write failure)
+          expect(out.status).toBe('error');
+          expect(out.reason).toMatch(/bin\/setup failed/);
+
+          // Verify worktree is kept for inspection
+          expect(rec.teardownKeep).toBe(true);
+
+          // Verify log sink received the write-failure notification
+          const haltFailLog = logCalls.find(msg => msg.includes('HALT') && (msg.includes('error') || msg.includes('Error')));
+          expect(haltFailLog).toBeTruthy();
+        } finally {
+          await rm(wt, { recursive: true, force: true });
+        }
+      });
+
+      it('HALT write failure does not dispatch (no markProcessed or enrollWatch calls)', async () => {
+        const wt = await mkdtemp(join(tmpdir(), 'wt-halt-dispatch-'));
+        try {
+          const rec: TestRecorder = {};
+
+          const run = makeRunFeature({
+            ...deps(
+              {
+                done: true,
+                halted: false,
+                finishChoice: 'pr',
+                prUrl: 'https://github.com/owner/repo/pull/123',
+              },
+              rec,
+            ),
+            createWorktree: async (slug) => ({ path: wt, branch: `feat/${slug}` }),
+            prepareWorktree: async () => {
+              throw new Error('network timeout');
+            },
+          });
+
+          // Make .pipeline unwritable
+          await writeFile(join(wt, '.pipeline'), 'blocked', 'utf-8');
+
+          const out = await run(ITEM);
+
+          // Verify outcome is error (not shipped)
+          expect(out.status).toBe('error');
+
+          // Verify no dispatch side effects (must never ship despite any write outcome)
+          expect(rec.processedCalls).toHaveLength(0);
+          expect(rec.enrollCalls).toHaveLength(0);
+        } finally {
+          await rm(wt, { recursive: true, force: true });
+        }
+      });
+    });
+
   });
 
   // ── TS-3 (#358): the merged-PR guard's synthetic ship rides the EXISTING
