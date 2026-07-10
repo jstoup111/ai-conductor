@@ -386,6 +386,12 @@ export async function resumeRebaseFirst(opts: {
       ),
   });
 
+  // FR-5: Deliberate fail-closed: the rekick path NEVER receives preVerify
+  // capability. When a play-forward rebase touches code paths, the full
+  // downstream set (build, build_review, manual_test) gets unconditional
+  // invalidation kickback verdicts. This preserves fail-closed semantics —
+  // the daemon must re-verify from scratch, not trust stale evidence. Omitting
+  // preVerify here is intentional, per ADR.
   await applyRebaseVerdicts(opts.worktreePath, outcome, opts.ranManualTest);
   await emitRebaseEvent(opts.events, outcome);
 

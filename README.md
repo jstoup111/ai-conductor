@@ -179,6 +179,46 @@ It's invoked by the daemon's auto-mode finish step (`src/conductor/src/engine/st
 and can also be run manually in place of hand-editing the marker. See
 `src/conductor/README.md` for full detail.
 
+**Task attribution automation (`task start|done`)** — The pipeline now automates task progress tracking
+via `conduct-ts task` subcommands, which own the mechanics of updating `.pipeline/task-status.json`
+and git hook wiring. Instead of editing JSON by hand or relying on prompt discipline, the orchestrator
+calls:
+
+```bash
+# Before dispatching a subagent to work on a task
+conduct-ts task start <id>
+
+# After the subagent's commit lands (task complete)
+conduct-ts task done <id>
+```
+
+- `<id>` is the bare task ID from the plan header (e.g., `7`, not `task-7`).
+- `task start` flips the task status to `in_progress` in `.pipeline/task-status.json`.
+- `task done` marks the task `completed` and clears the in-flight marker.
+- Both commands are **deterministic and idempotent** — running them multiple times is safe.
+- They fail gracefully on missing/corrupt state; orchestrator can continue.
+
+**Git hook wiring (worktree-scoped, fail-open)** — When a daemon builds a feature worktree,
+the conductor provisions two **deterministic attribution hooks** (run from the engine, not the prompt)
+to capture proof that a task's code commits are load-bearing:
+
+- **`prepare-commit-msg` hook** — Auto-injects the `Task: <id>` trailer (or amends a malformed one)
+  from `.pipeline/current-task` so every commit carries the required attribution trailer.
+- **`commit-msg` hook** — Validates the trailer format (non-empty id, no false-positive noise).
+
+Both hooks are written to `.pipeline/git-hooks/` and wired via git config (`core.hooksPath`)
+scoped to the worktree only — the host checkout is never affected. **Fail-open design:**
+if hook provisioning fails, the build continues (hooks are logged as skipped, not fatal);
+the engine's later evidence gate will derive completion from git trailers whether hooks ran
+or not.
+
+**Chaining with repo's own hooks** — The wired hooks chain to the repository's own hooks
+(if any exist under `.git/hooks/`), so a repo's custom pre-commit linter or post-commit
+automation is not disabled. The engine's hooks run first, and exit codes propagate.
+
+For implementation details and hook asset definitions, see `src/conductor/src/engine/git-hook-assets.ts`
+and `src/conductor/README.md` → "Task attribution automation".
+
 ### Priority scheduling for issue-labeled backlog items
 
 When a GitHub issue is labeled with priority metadata, the daemon orders eligible
@@ -1144,17 +1184,22 @@ dedicated test coverage (950+ tests). See the feature comparison in
   rebases the worktree branch onto the **discovered** origin default branch (fetched; falls
   back to the local base — no hardcoded `main`) before the PR is opened, so it's never built
   on a stale base. Its verdict is *branch already current with base*, so a no-op goes straight
-  to finish. A clean rebase that changed **code/test paths** kicks back to `build` to
-  re-verify; a **CHANGELOG-only** `[Unreleased]` conflict is auto-resolved (both features'
-  entries kept, each once); any other / mixed conflict triggers the **gated resolution loop**
-  — the daemon dispatches the `/rebase` skill up to `rebase_resolution_attempts` times
-  (config key, default 3; set to 0 to disable) before HALTing. A resolution is accepted only
-  when the branch is genuinely current with the base (FR-8) and no feature commits were
-  dropped (FR-9); a code-changing resolution kicks back to `build`/`manual_test` as normal.
-  If the loop is exhausted, the engine writes `.pipeline/HALT`, leaves the rebase **paused**,
-  and opens no PR. The gated resolution loop is daemon-only; the `/rebase` skill is also
-  manually invokable by an operator. Resume: resolve → `git rebase --continue` →
-  `rm .pipeline/HALT` → re-queue.
+  to finish. **Gate-first mechanical re-verify (evidence-intact optimization):** when a clean
+  rebase changes **code/test paths**, the `build` gate's objective completion predicate (git
+  evidence trailers, fresh re-derivation) is pre-verified against the rebased tree **before**
+  kicking back. If pre-verify passes, dispatch is skipped (~1–2 min mechanical confirmation
+  vs. ~45–60 min agent) and the gate is satisfied; if pre-verify fails or throws, `build` is
+  kicked back normally (fail-closed). `build_review` and `manual_test` remain unconditionally
+  invalidated. See `.docs/decisions/adr-2026-07-08-post-rebase-gate-first-mechanical-reverify.md`.
+  A **CHANGELOG-only** `[Unreleased]` conflict is auto-resolved (both features' entries kept,
+  each once); any other / mixed conflict triggers the **gated resolution loop** — the daemon
+  dispatches the `/rebase` skill up to `rebase_resolution_attempts` times (config key, default
+  3; set to 0 to disable) before HALTing. A resolution is accepted only when the branch is
+  genuinely current with the base (FR-8) and no feature commits were dropped (FR-9); a
+  code-changing resolution kicks back to `build`/`manual_test` as normal. If the loop is
+  exhausted, the engine writes `.pipeline/HALT`, leaves the rebase **paused**, and opens no PR.
+  The gated resolution loop is daemon-only; the `/rebase` skill is also manually invokable by
+  an operator. Resume: resolve → `git rebase --continue` → `rm .pipeline/HALT` → re-queue.
 - **Daemon mode** (`conduct-ts daemon`): drains a backlog of features that already have
   stories **and** plans, running each in its own worktree (parallel via `--concurrency N`,
   bounded by `--max-items`), and opening a PR on finish. Per-feature failures are isolated;

@@ -3082,7 +3082,37 @@ export class Conductor {
     // manual_test counts as "ran" when it isn't skipped for this feature.
     const ranManualTest =
       getStepStatus(state, 'manual_test') !== 'skipped';
-    await applyRebaseVerdicts(this.projectRoot, outcome, ranManualTest);
+
+    // Task 7: Inject pre-verify capability for daemon build gate-first re-verify.
+    // Closure checks build completion objectively (via evidence) after file-changing rebase.
+    // Non-daemon call site (line 2872) keeps today's behavior with no preVerify.
+    const preVerify = async (step: string) => {
+      if (step !== 'build') return { done: false };
+      const ctx = await this.completionCtx(state);
+      if (!ctx.planPath) {
+        return { done: false, reason: 'no feature plan resolvable — evidence derivation not engaged; fail-closed' };
+      }
+      return checkStepCompletion(this.projectRoot, 'build', ctx);
+    };
+
+    const verdict = await applyRebaseVerdicts(
+      this.projectRoot,
+      outcome,
+      ranManualTest,
+      preVerify,
+    );
+
+    // Emit rebase_gate_reverified event for each step that was re-verified
+    // (dispatch skipped because gate is mechanically confirmed).
+    for (const step of verdict.reverified) {
+      await this.events.emit({
+        type: 'rebase_gate_reverified',
+        step,
+        skippedDispatch: true,
+        reason: 're-verified mechanically after file-changing rebase — evidence remains intact',
+      });
+    }
+
     await emitRebaseEvent(this.events, outcome);
 
     if (outcome.kind === 'conflict_halt') {

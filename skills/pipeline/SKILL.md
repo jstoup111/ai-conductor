@@ -44,8 +44,8 @@ Default to **Standard** unless the user specifies otherwise.
 
 ### Per-Task Execution
 
-The conductor marks the task as `in_progress` in `.pipeline/task-status.json`, then sends
-one prompt to Claude. Claude orchestrates the task through these steps:
+Before dispatching the subagent, the conductor runs `conduct-ts task start <id>` to mark
+the task as `in_progress`. Claude orchestrates the task through these steps:
 
 ```
 PLAN VALIDATION (at pipeline start):
@@ -56,7 +56,12 @@ PLAN VALIDATION (at pipeline start):
 DEPENDENCY ORDER — Dispatch tasks in topological order respecting declared dependencies.
   Never skip a task unless its acceptance criteria are already satisfied (verified by test run).
 
-0. UPDATE STATUS — Conductor marks task "in_progress" in .pipeline/task-status.json
+0. UPDATE STATUS — Run `conduct-ts task start <id>` to flip task status to `in_progress`
+                   BEFORE dispatching the subagent. If the task_id is not found in
+                   .pipeline/current-task after this command, it signals a configuration
+                   issue (halted by the forward-progress check). Crash recovery: if a
+                   session restarts mid-task, manually reset the task back to `pending`
+                   in .pipeline/task-status.json (same approach as before).
 1. DECOMPOSE    — Read task, identify files to touch, check dependencies met
 2. DISPATCH     — Send task to a TDD subagent via Agent tool with model="sonnet" (scoped context only)
                   Dispatch template injects Task: <id> in the prompt — <id> is the bare PLAN header id (e.g. 9, not task-9).
@@ -67,7 +72,9 @@ DEPENDENCY ORDER — Dispatch tasks in topological order respecting declared dep
 5. COMMIT       — Verify the subagent's commit carries the `Task: <id>` trailer with <id> as the bare plan id
                   (e.g. Task: 9, not Task: task-9). The engine derives completion from this trailer; the orchestrator
                   never writes `completed` itself. If the trailer uses task-N format, report FAIL and dispatch for fix
-6. REPORT       — Return PASS or FAIL with reason to the conductor
+6. DONE         — After the subagent's commit lands on the branch, run `conduct-ts task done <id>` to mark
+                  the task complete. The CLI updates .pipeline/task-status.json and .pipeline/current-task.
+7. REPORT       — Return PASS or FAIL with reason to the conductor
 ```
 
 **Pre-completion scan (at pipeline start):** Before dispatching any tasks, check each task's
@@ -110,10 +117,11 @@ dispatch, so the class fails fast. Pair it with the real-entry-point acceptance 
 `/writing-system-tests` (§3b): the acceptance test proves the new path runs; this grep proves
 the old one is gone.
 
-**Task status tracking:** The conductor (`bin/conduct`) reads `.pipeline/task-status.json` and
-updates task status automatically based on the subagent's commit. You (the orchestrator) do NOT
-write to this file — the engine owns it. You report the subagent's result (PASS/FAIL) to the
-conductor, which then updates the JSON.
+**Task status tracking:** The CLI (`conduct-ts task start/done`) and the conductor (`bin/conduct`)
+manage `.pipeline/task-status.json` automatically. You (the orchestrator) do NOT hand-edit this file —
+the engine owns it. Before dispatch, you instruct the conductor to run `conduct-ts task start <id>`.
+After the subagent's commit lands, you run `conduct-ts task done <id>`. The CLI updates the JSON;
+you report the subagent's result (PASS/FAIL) to inform the conductor's logging and audit trail.
 
 **Subagent context scoping:** The subagent receives ONLY:
 - The task description and acceptance criteria (from the plan)
@@ -308,10 +316,11 @@ as a halt — **not** as a successful exit. Before exiting, you MUST:
 
 1. Write `.pipeline/halt-user-input-required` with a one-line summary of the
    next action (e.g. `"user requested exit; 1 regression in test_X pending fix"`).
-2. Set the in-flight task back to `pending` in `.pipeline/task-status.json`
-   if you flipped it to `in_progress` for this run (so the conductor's
+2. If a task is currently in-flight (marked `in_progress` by `conduct-ts task start`),
+   reset it back to `pending` in `.pipeline/task-status.json` so the conductor's
    build gate will re-enter the task on resume rather than treating it as
-   completed).
+   completed (crash-recovery pattern: manually edit the JSON if a session
+   restarts mid-task).
 3. Do NOT mark unfinished tasks as `completed` or `skipped`. Only tasks
    that genuinely passed all TDD gates this run get `completed`.
 
