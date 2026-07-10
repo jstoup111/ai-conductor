@@ -19,6 +19,8 @@ import {
   type GhRunner,
 } from './pr-labels.js';
 import type { FinishChoice } from './artifacts.js';
+import type { TriageOutcome } from './setup-triage.js';
+import { SetupFailureError } from './worktree-prepare.js';
 
 /**
  * Outcome of running the gate loop inside a feature's worktree, read from the
@@ -37,6 +39,13 @@ export interface WorktreeOutcome {
    * skips the shipped-record commit for those choices (#204, #205).
    */
   finishChoice?: FinishChoice;
+  /**
+   * Setup-failure triage evidence: outcome of the triage engine when a
+   * SetupFailureError is caught in daemon mode. Contains classification
+   * and diagnostics (tree state, quarantine info, output tail) for routing
+   * and human inspection.
+   */
+  triageEvidence?: TriageOutcome;
 }
 
 export interface FeatureWorktree {
@@ -199,7 +208,42 @@ export function makeRunFeature(
       // the project's bin/setup. A project that ships no bin/setup still gets
       // the namespace written; a setup failure throws and is handled like any
       // other primitive throw (worktree kept, feature errored).
-      if (deps.prepareWorktree) await deps.prepareWorktree(worktree);
+      if (deps.prepareWorktree) {
+        try {
+          await deps.prepareWorktree(worktree);
+        } catch (prepareErr) {
+          // Check if error is a SetupFailureError (by name and presence of outputTail)
+          const isSetupFailure = prepareErr instanceof Error &&
+            (prepareErr.name === 'SetupFailureError' || (prepareErr.constructor?.name === 'SetupFailureError')) &&
+            typeof (prepareErr as any).outputTail === 'string';
+          if (
+            isSetupFailure &&
+            deps.daemon &&
+            deps.runSetupTriage
+          ) {
+            // Daemon mode with triage handler: classify and route the failure
+            const triageOutcome = await deps.runSetupTriage(prepareErr, worktree, item);
+            if (triageOutcome.kind === 'park') {
+              // Triage returned park: error outcome, worktree kept
+              log(
+                `[daemon-runner] triage outcome: park, erroring feature — ${triageOutcome.outputTail}`,
+              );
+              await writeErrorHalt(worktree, triageOutcome.outputTail, log, triageOutcome);
+              await deps.teardownWorktree(worktree, true);
+              return {
+                slug: item.slug,
+                status: 'error',
+                reason: triageOutcome.outputTail || 'setup failed and parked after triage',
+              };
+            }
+            // Other triage outcomes (pass, quarantined-pass, fixed-pass) → continue to runConductor
+            log(`[daemon-runner] triage outcome: ${triageOutcome.kind}, continuing to runConductor`);
+          } else {
+            // Not a SetupFailureError, or daemon=false, or no triage handler: today's path
+            throw prepareErr;
+          }
+        }
+      }
       await deps.runConductor(worktree, item);
       const outcome = await deps.readOutcome(worktree);
 
@@ -326,7 +370,12 @@ export function makeRunFeature(
 
       // Loop ended without DONE or HALT — treat as an error, keep the worktree.
       const noMarkerReason = outcome.reason ?? 'loop ended without DONE or HALT marker';
-      await writeErrorHalt(worktree, noMarkerReason, log);
+      // If triage evidence is present (and it's a park outcome), pass it to writeErrorHalt
+      const triageEvidenceForHalt =
+        outcome.triageEvidence && outcome.triageEvidence.kind === 'park'
+          ? outcome.triageEvidence
+          : undefined;
+      await writeErrorHalt(worktree, noMarkerReason, log, triageEvidenceForHalt);
       await deps.teardownWorktree(worktree, true);
       // FR-14: sweep mergeable labels after feature completes (error/no-marker).
       await maybeSweep();
