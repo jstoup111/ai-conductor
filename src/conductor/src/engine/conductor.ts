@@ -2926,7 +2926,11 @@ export class Conductor {
     // Non-daemon call site (line 2872) keeps today's behavior with no preVerify.
     const preVerify = async (step: string) => {
       if (step !== 'build') return { done: false };
-      return checkStepCompletion(this.projectRoot, 'build', await this.completionCtx(state));
+      const ctx = await this.completionCtx(state);
+      if (!ctx.planPath) {
+        return { done: false, reason: 'no feature plan resolvable — evidence derivation not engaged; fail-closed' };
+      }
+      return checkStepCompletion(this.projectRoot, 'build', ctx);
     };
 
     const verdict = await applyRebaseVerdicts(
