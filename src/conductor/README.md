@@ -676,6 +676,23 @@ on every base-SHA advance).
   through the abort-rebase / clear-marker / re-dispatch cycle on every subsequent base-SHA
   advance, eliminating the spurious re-kicks #205 reported.
 
+#### Merged-PR guard: out-of-band merge detection (#358)
+
+When the daemon's kickback rewind discovers the feature's recorded PR has been merged out-of-band
+(operator manual merge during a retry cycle), the daemon stops the run at the earliest checkpoint
+and records a synthetic verified ship, avoiding a wasted rebuild/audit cycle and spurious rebase
+conflicts. The guard is active at three insertion points: (1) kickback re-entry when any gate
+failure calls `navigateBack` to rewind to build, (2) rebase entry at the top of `runRebaseStep`
+before any rebase attempt, and (3) rekick play-forward in the main-advance re-kick path before
+its direct `performRebase` call. Each guard call checks the recorded `pr_url` via `prMergeState`
+and, on a `MERGED` verdict, synthesizes a finish-choice marker (`.pipeline/finish-choice` = `pr`)
+and DONE marker (`.pipeline/DONE`), then halts the run loop so the daemon-runner's existing ship
+path records the feature as processed and retires it cleanly. On any other verdict (OPEN, CLOSED,
+NOTFOUND, or gh failure) the guard is advisory — it logs at debug level and the run proceeds
+unchanged. The feature branch is never deleted by the guard; it stays retained for forensics or
+operator recovery. This is **internal behavior** — no new CLI flags, config options, or skills
+are introduced.
+
 #### Worktree preparation (`WORKTREE_NAMESPACE` + `bin/setup`)
 
 The daemon is **stack-agnostic**: it knows nothing about Docker, Postgres, or Redis. But an

@@ -701,4 +701,84 @@ describe('engine/daemon-runner — makeRunFeature', () => {
       });
     });
   });
+
+  // ── TS-3 (#358): the merged-PR guard's synthetic ship rides the EXISTING
+  // verified-ship path (readOutcome → isVerifiedShip → markProcessed). No
+  // production change is expected here (plan Task 10 step 3) — the guard's
+  // markers (`finish-choice` == 'pr', `DONE`, `pr_url` present) produce
+  // EXACTLY the WorktreeOutcome shape `writeSyntheticShipMarkers` (Task 2)
+  // will write, fed through the same `deps()`/`makeRunFeature` fixture the
+  // rest of this file already uses. These tests are expected to PASS today —
+  // they pin the integration contract the not-yet-written guard depends on.
+  describe('merged-PR guard synthetic ship (#358, TS-3)', () => {
+    const PR_URL = 'https://github.com/jstoup111/ai-conductor/pull/358';
+
+    it('a guard-shaped outcome (finish-choice=pr, DONE, pr_url present) rides isVerifiedShip → markProcessed called with slug + prUrl', async () => {
+      const rec: TestRecorder = {};
+      const run = makeRunFeature(
+        deps(
+          {
+            done: true,
+            halted: false,
+            finishChoice: 'pr',
+            prUrl: PR_URL,
+          },
+          rec,
+        ),
+      );
+      const out = await run(ITEM);
+
+      expect(out.status).toBe('done');
+      expect(rec.processed).toBe(true);
+      expect(rec.processedCalls).toHaveLength(1);
+      expect(rec.processedCalls![0]).toEqual({ slug: ITEM.slug, prUrl: PR_URL });
+      // Removed on success, same as any other verified ship — the guard's
+      // synthetic stop introduces no second ship pathway (ADR: "No second
+      // ship pathway is introduced; side-effects stay owned by the
+      // daemon-runner").
+      expect(rec.teardownKeep).toBe(false);
+    });
+
+    it('a halted (non-guard) outcome — isVerifiedShip false, no processed marker written', async () => {
+      const rec: TestRecorder = {};
+      const run = makeRunFeature(
+        deps(
+          {
+            done: false,
+            halted: true,
+            reason: 'unrelated gate failure',
+          },
+          rec,
+        ),
+      );
+      const out = await run(ITEM);
+
+      expect(out.status).toBe('halted');
+      expect(rec.processed).toBeUndefined();
+      expect(rec.processedCalls).toHaveLength(0);
+    });
+
+    it('idempotency: the guard-shaped outcome fed through run() twice — single ledger entry each time, stable content, no throw', async () => {
+      const rec: TestRecorder = {};
+      const outcome: WorktreeOutcome = {
+        done: true,
+        halted: false,
+        finishChoice: 'pr',
+        prUrl: PR_URL,
+      };
+      const run = makeRunFeature(deps(outcome, rec));
+
+      const first = await run(ITEM);
+      const second = await run(ITEM);
+
+      expect(first.status).toBe('done');
+      expect(second.status).toBe('done');
+      // Two separate feature runs each produce exactly one markProcessed call
+      // (one ledger entry per run) with byte-identical content — no throw,
+      // no duplicate-cleanup error surfaced through the outcome.
+      expect(rec.processedCalls).toHaveLength(2);
+      expect(rec.processedCalls![0]).toEqual({ slug: ITEM.slug, prUrl: PR_URL });
+      expect(rec.processedCalls![1]).toEqual({ slug: ITEM.slug, prUrl: PR_URL });
+    });
+  });
 });
