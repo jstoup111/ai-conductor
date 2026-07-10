@@ -353,4 +353,101 @@ describe('PRE_DISPATCH_HOOK behavior', () => {
       expect(existsSync(join(pipelineDir, 'current-task'))).toBe(false);
     });
   });
+
+  describe('idempotent re-stamp and overlap guard', () => {
+    it('is a no-op (state unchanged) when the stamped id matches the dispatched id', () => {
+      tempDir = mkdtempSync(join(tmpdir(), 'pre-dispatch-hook-'));
+      const pipelineDir = join(tempDir, '.pipeline');
+      mkdirSync(pipelineDir, { recursive: true });
+
+      const statusPath = join(pipelineDir, 'task-status.json');
+      const seededStatus = {
+        tasks: [
+          { id: '1', status: 'completed' },
+          { id: '7', status: 'in_progress' },
+        ],
+      };
+      writeFileSync(statusPath, JSON.stringify(seededStatus), 'utf-8');
+      const currentTaskPath = join(pipelineDir, 'current-task');
+      writeFileSync(currentTaskPath, '7', 'utf-8');
+
+      const hookPath = join(tempDir, 'pre-dispatch-hook.sh');
+      writeFileSync(hookPath, PRE_DISPATCH_HOOK, { mode: 0o755 });
+
+      const payload = loadPreDispatchPayload('pre-dispatch-task-id.json', {
+        prompt: 'Task: 7',
+      });
+
+      let exitCode = 0;
+      try {
+        execFileSync('bash', [hookPath], {
+          input: JSON.stringify(payload),
+          cwd: tempDir,
+          stdio: 'pipe',
+        });
+      } catch (err) {
+        const execErr = err as { status?: number };
+        exitCode = execErr.status ?? 1;
+      }
+
+      expect(exitCode).toBe(0);
+
+      const updated = JSON.parse(readFileSync(statusPath, 'utf-8')) as {
+        tasks: Array<{ id: string; status: string }>;
+      };
+      expect(updated.tasks.find((t) => t.id === '7')?.status).toBe('in_progress');
+      expect(updated.tasks.find((t) => t.id === '1')?.status).toBe('completed');
+
+      expect(existsSync(currentTaskPath)).toBe(true);
+      expect(readFileSync(currentTaskPath, 'utf-8')).toBe('7');
+    });
+
+    it('clears the stamp file (overlap guard) when the dispatched id differs from the stamped id', () => {
+      tempDir = mkdtempSync(join(tmpdir(), 'pre-dispatch-hook-'));
+      const pipelineDir = join(tempDir, '.pipeline');
+      mkdirSync(pipelineDir, { recursive: true });
+
+      const statusPath = join(pipelineDir, 'task-status.json');
+      const seededStatus = {
+        tasks: [
+          { id: '1', status: 'completed' },
+          { id: '7', status: 'in_progress' },
+          { id: '9', status: 'pending' },
+        ],
+      };
+      writeFileSync(statusPath, JSON.stringify(seededStatus), 'utf-8');
+      const currentTaskPath = join(pipelineDir, 'current-task');
+      writeFileSync(currentTaskPath, '7', 'utf-8');
+
+      const hookPath = join(tempDir, 'pre-dispatch-hook.sh');
+      writeFileSync(hookPath, PRE_DISPATCH_HOOK, { mode: 0o755 });
+
+      const payload = loadPreDispatchPayload('pre-dispatch-task-id.json', {
+        prompt: 'Task: 9',
+      });
+
+      let exitCode = 0;
+      try {
+        execFileSync('bash', [hookPath], {
+          input: JSON.stringify(payload),
+          cwd: tempDir,
+          stdio: 'pipe',
+        });
+      } catch (err) {
+        const execErr = err as { status?: number };
+        exitCode = execErr.status ?? 1;
+      }
+
+      expect(exitCode).toBe(0);
+
+      const updated = JSON.parse(readFileSync(statusPath, 'utf-8')) as {
+        tasks: Array<{ id: string; status: string }>;
+      };
+      expect(updated.tasks.find((t) => t.id === '9')?.status).toBe('in_progress');
+      expect(updated.tasks.find((t) => t.id === '7')?.status).toBe('in_progress');
+
+      // Overlap guard: stamp removed so the commit hook can't attribute
+      expect(existsSync(currentTaskPath)).toBe(false);
+    });
+  });
 });
