@@ -142,6 +142,14 @@ export interface FeatureRunnerDeps {
     projectRoot: string;
     failureReason: string;
   }) => Promise<{ prUrl?: string }>;
+  /**
+   * Task 13: Setup-failure triage dispatcher (daemon mode only). When present,
+   * the daemon catches SetupFailureError and routes it through the triage engine
+   * to classify the failure and decide whether to route to quarantine+retry or
+   * park. Optional; if absent, SetupFailureError behaves like any other error
+   * (worktree kept, feature marked error).
+   */
+  runSetupTriage?: (worktree: FeatureWorktree, error: SetupFailureError) => Promise<TriageOutcome>;
 }
 
 /**
@@ -222,7 +230,7 @@ export function makeRunFeature(
             deps.runSetupTriage
           ) {
             // Daemon mode with triage handler: classify and route the failure
-            const triageOutcome = await deps.runSetupTriage(prepareErr, worktree, item);
+            const triageOutcome = await deps.runSetupTriage(worktree, prepareErr as SetupFailureError);
             if (triageOutcome.kind === 'park') {
               // Triage returned park: error outcome, worktree kept
               log(
