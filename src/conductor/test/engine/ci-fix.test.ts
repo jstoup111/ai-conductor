@@ -5,13 +5,13 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { buildCiFixHint, isEligibleForCiFix, runCiFix } from '../../src/engine/ci-fix.js';
+import { buildCiFixHint, isEligibleForCiFix, runCiFix, productionCiFixRunner } from '../../src/engine/ci-fix.js';
 import type { GhRunner } from '../../src/engine/pr-labels.js';
 import type { WatchEntry } from '../../src/engine/mergeable-sweep.js';
 import type { PrMergeState } from '../../src/engine/pr-labels.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 import { execSync } from 'node:child_process';
-import { mkdtemp, rmdir } from 'node:fs/promises';
+import { mkdtemp, rmdir, writeFile, chmod } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -718,4 +718,87 @@ describe('ci-fix: runCiFix resolver worktree lifecycle (Task 17)', () => {
       await cleanup();
     }
   }, REAL_GIT_TIMEOUT_MS);
+});
+
+// ── Resolver real-binary smoke (Task 24) ──────────────────────────────────────
+//
+// Every other test in this file drives `productionCiFixRunner` through an
+// injected fake `CiFixRunner` (see `runCiFix` tests above) — that proves
+// `runCiFix`'s worktree lifecycle, but never actually calls
+// `productionCiFixRunner.run()` itself, so a bug in its argv construction
+// (wrong flag name, wrong arg order, wrong cwd) would pass every existing
+// test and only surface against a real `claude` binary in production. This
+// smoke test invokes `productionCiFixRunner.run()` directly against a real
+// `execa` spawn of a stub binary named `claude` on PATH, proving the argv
+// round-trips end-to-end through a real subprocess — no full Claude session
+// needed, just a stub script that records what it was invoked with.
+describe('ci-fix: productionCiFixRunner real-binary smoke (Task 24)', () => {
+  it('invokes a real spawn of the "claude" binary with the constructed argv and returns changed', async () => {
+    const tmpDir = await mkdtemp(join(tmpdir(), 'ci-fix-smoke-'));
+    const recordPath = join(tmpDir, 'invocation.json');
+
+    // Stub binary named `claude`: records argv + cwd to a file, exits 0.
+    // Placed on PATH ahead of any real `claude` so execa's PATH resolution
+    // picks this up — exercising the exact same spawn resolution the
+    // production code relies on.
+    const stubPath = join(tmpDir, 'claude');
+    const stubScript = [
+      '#!/usr/bin/env bash',
+      'set -euo pipefail',
+      `printf '%s\\n' "$@" > "${recordPath}.args"`,
+      `pwd > "${recordPath}.cwd"`,
+      'exit 0',
+    ].join('\n');
+    await writeFile(stubPath, stubScript, 'utf8');
+    await chmod(stubPath, 0o755);
+
+    // The global test setup (test/setup.ts) sets AI_CONDUCTOR_NO_REAL_EXEC=1
+    // to keep every OTHER test from spawning real processes. This is the
+    // intentional exception per TR-4 Done-When — lift the kill-switch and
+    // prepend the stub dir to PATH for this test's duration only, restoring
+    // both in the finally block.
+    const prevNoRealExec = process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+    const prevPath = process.env.PATH;
+    delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+    process.env.PATH = `${tmpDir}${prevPath ? `:${prevPath}` : ''}`;
+
+    try {
+      const entry = {
+        prUrl: 'https://github.com/foo/bar/pull/42',
+        slug: 'foo/bar#42',
+        repoCwd: tmpDir,
+        ciFixAttempts: 0,
+      };
+      const hint = 'CI checks failed: build';
+
+      const outcome = await productionCiFixRunner.run({
+        worktreePath: tmpDir,
+        hint,
+        entry,
+      });
+
+      expect(outcome).toEqual({ kind: 'changed' });
+
+      const recordedArgs = execSync(`cat "${recordPath}.args"`).toString();
+      const argv = recordedArgs.split('\n').filter((l) => l.length > 0);
+      expect(argv).toEqual([
+        '--fix-session',
+        '--pr-url',
+        entry.prUrl,
+        '--hint',
+        hint,
+      ]);
+
+      const recordedCwd = execSync(`cat "${recordPath}.cwd"`).toString().trim();
+      expect(recordedCwd).toBe(tmpDir);
+    } finally {
+      if (prevNoRealExec === undefined) {
+        delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+      } else {
+        process.env.AI_CONDUCTOR_NO_REAL_EXEC = prevNoRealExec;
+      }
+      process.env.PATH = prevPath;
+      await rmdir(tmpDir, { recursive: true });
+    }
+  });
 });
