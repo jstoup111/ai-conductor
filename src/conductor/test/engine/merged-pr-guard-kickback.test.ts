@@ -23,7 +23,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { Conductor } from '../../src/engine/conductor.js';
-import type { StepRunner, StepName } from '../../src/engine/conductor.js';
+import type { StepRunner, StepName, StepRunResult } from '../../src/engine/conductor.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { readState, writeState } from '../../src/engine/state.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
@@ -725,6 +725,114 @@ describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
       // companion rebase-entry query is exercised in
       // merged-pr-guard-rebase.test.ts; TS-4 is satisfied jointly).
       expect(ghCalls.length).toBe(1);
+    });
+  });
+
+  // ── TS-4: cost bound (full chain) — exactly 2 queries over kickback + rebase ───
+
+  describe('guard cost (TS-4, full chain kickback + rebase)', () => {
+    it('one kickback + one rebase entry over a non-MERGED PR performs exactly 2 guard queries, with no retry wrapper', async () => {
+      // Phase 1: Kickback entry — manual_test fails, triggers kickback to build.
+      // We use a call-counting fake gh runner across the entire test.
+      let stateRes = await readState(statePath);
+      const kickbackState = (stateRes.ok ? stateRes.value : {}) as Record<string, unknown>;
+      for (const s of ALL_STEPS) {
+        if (s.name === 'manual_test') break;
+        kickbackState[s.name] = 'done';
+      }
+      kickbackState.complexity_tier = 'L';
+      kickbackState.feature_desc = 'feat';
+      kickbackState.build_review = 'skipped';
+      kickbackState.pr_url = PR_URL;
+      await writeState(statePath, kickbackState as unknown as ConductState);
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
+      );
+
+      // Shared call-counting fake across both phases
+      const { runGh, calls: ghCalls } = makeGhFake({ state: 'OPEN' });
+
+      // Phase 1: Kickback — manual_test fails on first attempt, passes on retry
+      let manualTestRunCount = 0;
+      const kickbackRunner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          if (step === 'build') {
+            await writeFile(
+              join(dir, '.pipeline/task-status.json'),
+              JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
+            );
+          } else if (step === 'manual_test') {
+            manualTestRunCount++;
+            if (manualTestRunCount === 1) {
+              await writeFile(
+                join(dir, '.pipeline/manual-test-results.md'),
+                '# Results\n\n| Story | Result |\n|--|--|\n| s1 | FAIL |\n',
+              );
+            } else {
+              await writeFile(
+                join(dir, '.pipeline/manual-test-results.md'),
+                '# Results\n\n| Story | Result |\n|--|--|\n| s1 | PASS |\n',
+              );
+            }
+          }
+          return { success: true };
+        }),
+      };
+
+      const kickbackConductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: kickbackRunner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 1,
+        fromStep: 'manual_test',
+        runGh,
+      } as never);
+
+      // After this run, manual_test should pass on retry, and we should have
+      // made exactly 1 guard query at the kickback checkpoint.
+      await kickbackConductor.run();
+      const afterKickbackCount = ghCalls.length;
+      expect(afterKickbackCount).toBe(1);
+
+      // Phase 2: Rebase entry — seed state to rebase entry point
+      stateRes = await readState(statePath);
+      const rebaseState = (stateRes.ok ? stateRes.value : {}) as Record<string, unknown>;
+      for (const s of ALL_STEPS) {
+        if (s.name === 'rebase') break;
+        (rebaseState as Record<string, unknown>)[s.name] =
+          s.name === 'retro' ? 'skipped' : 'done';
+      }
+      rebaseState.pr_url = PR_URL;
+      await writeState(statePath, rebaseState as unknown as ConductState);
+
+      const rebaseRunner: StepRunner = {
+        run: vi.fn().mockResolvedValue({ success: true } satisfies StepRunResult),
+      };
+
+      const rebaseConductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: rebaseRunner,
+        events,
+        projectRoot: dir,
+        daemon: true,
+        mode: 'auto',
+        fromStep: 'rebase',
+        runGh,
+      } as never);
+
+      await rebaseConductor.run();
+
+      // After rebase entry, we should have exactly 2 total guard queries
+      // (1 from kickback, 1 from rebase entry), with NO retry wrapper—
+      // even though the gh runner succeeded, we made exactly one call per
+      // checkpoint, no loops or retries.
+      expect(ghCalls.length).toBe(2);
     });
   });
 });

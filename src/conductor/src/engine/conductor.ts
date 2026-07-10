@@ -872,13 +872,17 @@ export class Conductor {
       return false;
     }
 
-    // Query the recorded PR's current merge state.
-    const prState = await prMergeState(this.runGh, this.projectRoot, state.pr_url, (msg) => {
-      // Log at debug level; never fail on gh error (fail-open).
-    });
+    // Query the recorded PR's current merge state using the shared guard wrapper.
+    // Single-shot call, no retries: per TS-4 cost bound in adr-2026-07-09-mid-run-merged-pr-guard.
+    const guardVerdict = await checkMergedPrGuard(
+      this.runGh,
+      this.projectRoot,
+      state.pr_url,
+      (msg) => console.log(msg),
+    );
 
     // On non-MERGED verdicts, proceed with normal retry/rebase unchanged.
-    if (prState.state !== 'MERGED') {
+    if (guardVerdict !== 'merged') {
       return false;
     }
 
