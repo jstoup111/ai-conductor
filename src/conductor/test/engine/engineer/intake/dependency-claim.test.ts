@@ -244,6 +244,33 @@ describe('Task 3: dependency-claim — banded walk drains all, sorts band-first'
   });
 });
 
+describe('Task 4: dependency-claim — no-sourceRef parity (no-issue band ranks first)', () => {
+  it('X (no sourceRef) beats Y (critical); reader receives only Y\'s ref', async () => {
+    const { claimUnblocked } = await loadClaimModule();
+    const X = { ...makeEnvelope('unused', '2026-07-01T00:00:00.000Z'), sourceRef: undefined };
+    const Y = makeEnvelope('acme/app#2', '2026-07-05T00:00:00.000Z');
+    const queue = makeFakeQueue([X, Y]);
+    const resolveDependency = makeResolveDependency({});
+    let receivedRefs: string[] = [];
+    const resolveBands = async (refs: string[]) => {
+      receivedRefs = refs;
+      return new Map([['acme/app#2', 'critical']]);
+    };
+
+    const outcome = await claimUnblocked({ queue, resolveDependency, resolveBands });
+
+    expect(outcome.kind).toBe('claim');
+    expect(outcome.envelope.sourceRef).toBeUndefined();
+
+    expect(receivedRefs).toEqual(['acme/app#2']);
+    expect(receivedRefs).not.toContain(undefined);
+    expect(receivedRefs).not.toContain('');
+
+    const stillPending = (await queue.listPending()).map((e: any) => e.sourceRef);
+    expect(stillPending).toEqual(['acme/app#2']);
+  });
+});
+
 describe('Task 20: dependency-claim — deferral is free; indeterminate defers; walk continues', () => {
   it('deferred entry keeps status pending and attempts unchanged after deferral', async () => {
     const { claimUnblocked } = await loadClaimModule();
@@ -312,5 +339,75 @@ describe('Task 20: dependency-claim — deferral is free; indeterminate defers; 
     expect(a.attempts).toBe(0);
     expect(b.status).toBe('pending');
     expect(b.attempts).toBe(0);
+  });
+});
+
+describe('Task 7: composability — blocked critical defers to next banded candidate', () => {
+  it('critical(blocked), high(unblocked) → high claimed, critical released, no ledger write for deferred', async () => {
+    const { claimUnblocked } = await loadClaimModule();
+    const critical = makeEnvelope('acme/app#1', '2026-07-01T00:00:00.000Z');
+    const high = makeEnvelope('acme/app#2', '2026-07-02T00:00:00.000Z');
+    const queue = makeFakeQueue([critical, high]);
+    const resolveDependency = makeResolveDependency({
+      'acme/app#1': { kind: 'blocked', blockers: [{ repo: 'acme/app', number: '9' }] },
+      'acme/app#2': { kind: 'unblocked' },
+    });
+    const resolveBands = async (_refs: string[]) =>
+      new Map([
+        ['acme/app#1', 'critical'],
+        ['acme/app#2', 'high'],
+      ]);
+    const transitions: Array<{ source: string; sourceRef: string; status: string }> = [];
+    const ledger = {
+      async transition(source: string, sourceRef: string, status: string) {
+        transitions.push({ source, sourceRef, status });
+      },
+    };
+
+    const outcome = await claimUnblocked({ queue, resolveDependency, resolveBands, ledger });
+
+    expect(outcome.kind).toBe('claim');
+    expect((outcome as any).envelope.sourceRef).toBe('acme/app#2');
+
+    const stillPending = (await queue.listPending()).map((e: any) => e.sourceRef);
+    expect(stillPending).toEqual(['acme/app#1']);
+
+    expect(transitions.length).toBe(0);
+  });
+
+  it('all pending blocked (banded) → all-blocked outcome with entries in banded order', async () => {
+    const { claimUnblocked } = await loadClaimModule();
+    const low = makeEnvelope('acme/app#1', '2026-07-01T00:00:00.000Z');
+    const critical = makeEnvelope('acme/app#2', '2026-07-02T00:00:00.000Z');
+    const medium = makeEnvelope('acme/app#3', '2026-07-03T00:00:00.000Z');
+    const queue = makeFakeQueue([low, critical, medium]);
+    const resolveDependency = makeResolveDependency({
+      'acme/app#1': { kind: 'blocked', blockers: [{ repo: 'acme/app', number: '9' }] },
+      'acme/app#2': { kind: 'blocked', blockers: [{ repo: 'acme/app', number: '9' }] },
+      'acme/app#3': { kind: 'indeterminate', detail: 'unparseable' },
+    });
+    const resolveBands = async (_refs: string[]) =>
+      new Map([
+        ['acme/app#1', 'low'],
+        ['acme/app#2', 'critical'],
+        ['acme/app#3', 'medium'],
+      ]);
+    const transitions: unknown[] = [];
+    const ledger = {
+      async transition(...args: unknown[]) {
+        transitions.push(args);
+      },
+    };
+
+    const outcome = await claimUnblocked({ queue, resolveDependency, resolveBands, ledger });
+
+    expect(outcome.kind).toBe('all-blocked');
+    const refs = (outcome as any).entries.map((e: any) => e.envelope.sourceRef);
+    expect(refs).toEqual(['acme/app#2', 'acme/app#3', 'acme/app#1']);
+
+    const stillPending = (await queue.listPending()).map((e: any) => e.sourceRef);
+    expect(stillPending).toEqual(['acme/app#2', 'acme/app#3', 'acme/app#1']);
+
+    expect(transitions.length).toBe(0);
   });
 });

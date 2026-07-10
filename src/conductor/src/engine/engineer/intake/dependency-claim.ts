@@ -124,12 +124,16 @@ export async function claimUnblocked(deps: DependencyClaimDeps): Promise<ClaimOu
       try {
         const refs = held
           .map((e) => e.sourceRef)
-          .filter((ref): ref is string => ref != null);
+          .filter((ref): ref is string => ref != null && ref !== '');
         const bands = await resolveBands(refs);
         const withIndex = held.map((envelope, originalIndex) => ({ envelope, originalIndex }));
         withIndex.sort((a, b) => {
-          const bandA = (a.envelope.sourceRef && bands.get(a.envelope.sourceRef)) ?? 'unlabeled';
-          const bandB = (b.envelope.sourceRef && bands.get(b.envelope.sourceRef)) ?? 'unlabeled';
+          const bandA = a.envelope.sourceRef
+            ? (bands.get(a.envelope.sourceRef) ?? 'unlabeled')
+            : 'no-issue';
+          const bandB = b.envelope.sourceRef
+            ? (bands.get(b.envelope.sourceRef) ?? 'unlabeled')
+            : 'no-issue';
           const rankDiff = PRIORITY_BAND_RANK[bandA] - PRIORITY_BAND_RANK[bandB];
           return rankDiff !== 0 ? rankDiff : a.originalIndex - b.originalIndex;
         });
