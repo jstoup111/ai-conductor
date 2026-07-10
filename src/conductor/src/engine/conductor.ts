@@ -96,6 +96,7 @@ import {
   clearHaltMarker,
   readHaltMarkerContent,
   writeStallQuestionEvidence,
+  writeStallHalt,
 } from './task-progress.js';
 import {
   makeGitRunner,
