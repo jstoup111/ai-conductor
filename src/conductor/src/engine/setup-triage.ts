@@ -8,9 +8,16 @@
  * TS-3 (clean-HEAD routing): Additional triage outcomes for handling
  * setup results.
  *
+ * TS-5 (quarantine surfacing): After a successful triage that results in
+ * a quarantine-pass outcome, write a `.pipeline/QUARANTINE` sentinel file
+ * to surface the quarantine ref and preserved paths to the build dispatch.
+ *
  * Design constraint: GitRunner is injected so helpers are unit-testable
  * without a real repo.
  */
+
+import { writeFile, mkdir } from 'node:fs/promises';
+import { join } from 'node:path';
 
 /** Minimal git runner — injected so the helpers are unit-testable without a repo. */
 export interface GitRunner {
@@ -100,6 +107,64 @@ export async function classifyTree(git: GitRunner): Promise<TreeState> {
  */
 export interface Logger {
   log(message: string): void;
+}
+
+/**
+ * Sentinel file path for surfacing quarantine state to the build dispatch.
+ * Written by writeQuarantineSentinel after a successful quarantine-pass triage.
+ * Contains quarantine ref, preserved paths, and recovery instructions.
+ */
+export const QUARANTINE_SENTINEL = '.pipeline/QUARANTINE';
+
+/**
+ * Write a `.pipeline/QUARANTINE` sentinel file to surface quarantine state
+ * to the resuming agent's build dispatch context.
+ *
+ * The sentinel contains:
+ * - Quarantine ref name (e.g., 'wip/setup-quarantine-feat-x')
+ * - List of preserved paths (files that were committed to quarantine)
+ * - "Recover deliberately" instruction for the human operator
+ *
+ * Used in TS-5 (quarantine surfacing) — called after a quarantine-pass outcome
+ * to make the quarantine state visible to the build dispatch.
+ *
+ * Parameters:
+ *   - worktreePath: path to the feature's worktree
+ *   - quarantineRef: the quarantine branch ref name
+ *   - preservedPaths: array of file paths preserved in the quarantine
+ *
+ * Best-effort: write failures are logged but do not halt triage.
+ */
+export async function writeQuarantineSentinel(
+  worktreePath: string,
+  quarantineRef: string,
+  preservedPaths: string[],
+  logger?: Logger,
+): Promise<void> {
+  try {
+    await mkdir(join(worktreePath, '.pipeline'), { recursive: true });
+
+    const pathsLine = preservedPaths.length > 0 ? `Preserved paths:\n${preservedPaths.map(p => `  - ${p}`).join('\n')}\n\n` : '';
+    const content = `Quarantine ref: ${quarantineRef}
+
+${pathsLine}Recover deliberately:
+1. Review the changes in ${quarantineRef}
+2. Understand why setup failed and how the fix addresses it
+3. Commit the fix to the current branch
+4. Remove this marker: rm .pipeline/QUARANTINE
+5. Restart the daemon or re-run the feature
+`;
+
+    await writeFile(join(worktreePath, QUARANTINE_SENTINEL), content, 'utf-8');
+    if (logger) {
+      logger.log(`quarantine sentinel written: ${quarantineRef}, preserved ${preservedPaths.length} path(s)`);
+    }
+  } catch (err) {
+    // Best-effort: log but do not throw
+    if (logger) {
+      logger.log(`quarantine sentinel write failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
 }
 
 /**
