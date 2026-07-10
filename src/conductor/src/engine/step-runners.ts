@@ -363,7 +363,7 @@ export class DefaultStepRunner implements StepRunner {
     const autonomous = AUTONOMOUS_STEPS.has(step);
     const resolved = this.resolvedConfigFor(step, state.complexity_tier);
 
-    const systemPrompt = this.buildSystemPrompt(step, autonomous, opts?.retryReason);
+    const systemPrompt = await this.buildSystemPrompt(step, autonomous, opts?.retryReason);
 
     // Autonomous steps use invoke() (captured output) so we can detect rate
     // limits and stale sessions. Collaborative steps use invokeInteractive()

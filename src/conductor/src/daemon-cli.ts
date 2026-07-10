@@ -60,6 +60,8 @@ import { isOperatorParked } from './engine/park-marker.js';
 import { listOperatorParkedSlugs, getProvenanceType } from './engine/park-marker.js';
 import { readState, writeState, getStepStatus } from './engine/state.js';
 import { makeGitRunner, originDefaultBranch, type RebaseResolver } from './engine/rebase.js';
+import { prepareWorktree } from './engine/worktree-prepare.js';
+import { runTriage, fixSession, type GitRunner } from './engine/setup-triage.js';
 import {
   readBaseSha,
   readPersistedBaseSha,
@@ -842,8 +844,13 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     // Classify tree state and route: clean → pass, dirty → quarantine+retry
     const triageOutcome = await runTriage(git, worktree.path, item.slug, error, runPrepare, { log });
 
-    // If triage returned park (committed breakage), return park outcome
-    if (triageOutcome.kind === 'park') {
+    // A park with no quarantineRef is a genuine PRESERVATION failure (the
+    // quarantine commit/branch itself could not be created) — stop immediately,
+    // never risk a fix-session on top of an unsafe tree. A park WITH a
+    // quarantineRef means quarantine succeeded but the post-quarantine retry
+    // still failed (committed breakage at a now-clean HEAD) — per the ADR this
+    // must still proceed to the bounded fix-session (Stage 2), not stop here.
+    if (triageOutcome.kind === 'park' && !triageOutcome.quarantineRef) {
       return triageOutcome;
     }
 
@@ -857,13 +864,23 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
         config,
         mode: 'auto',
       });
-      // Dispatch to /fix skill (the stepRunner will route to conductor steps)
-      // For now, this is a placeholder for the skill dispatch
       log(`[setup-triage] fix-session dispatched for ${item.slug} (session ${sessionId})`);
+      await stepRunner.resolveSetupFailure({
+        worktreePath: worktree.path,
+        outputTail: error.outputTail ?? '',
+        slug: item.slug,
+      });
     };
 
     // Run fix-session: dispatch LLM, verify contract (prepare + clean tree)
     const fixOutcome = await fixSession(git, worktree.path, item.slug, dispatchFixSession, runPrepare);
+
+    // A stage-1 quarantine ref must never be lost from the final outcome —
+    // fixSession() doesn't know about it, so carry it forward if the fix
+    // itself also failed (park) and didn't already attach its own ref.
+    if (fixOutcome.kind === 'park' && !fixOutcome.quarantineRef && triageOutcome.quarantineRef) {
+      return { ...fixOutcome, quarantineRef: triageOutcome.quarantineRef };
+    }
 
     return fixOutcome;
   };

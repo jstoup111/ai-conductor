@@ -337,7 +337,7 @@ export async function quarantine(
     await git(['reset', '--mixed', 'HEAD']);
     return {
       kind: 'park',
-      outputTail: commitResult.stderr || `git commit failed with code ${commitResult.exitCode}`,
+      outputTail: commitResult.stderr || `quarantine commit failed with code ${commitResult.exitCode}`,
     };
   }
 
@@ -373,6 +373,8 @@ export async function quarantine(
       outputTail: resetResult.stderr || `git reset --hard HEAD~1 failed with code ${resetResult.exitCode}`,
     };
   }
+
+  logger?.log(`quarantine ${quarantineRef}: preserved ${preservedPaths.join(', ')}`);
 
   return {
     ref: quarantineRef,

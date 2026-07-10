@@ -42,6 +42,9 @@ import { randomUUID } from 'node:crypto';
 import { makeRunFeature, type FeatureRunnerDeps } from '../../src/engine/daemon-runner.js';
 import { prepareWorktree, SETUP_SCRIPT } from '../../src/engine/worktree-prepare.js';
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
+import { runTriage, fixSession as runFixSession, writeQuarantineSentinel } from '../../src/engine/setup-triage.js';
+import { makeGitRunner } from '../../src/engine/rebase.js';
+import type { SetupFailureError } from '../../src/engine/worktree-prepare.js';
 import type { LLMProvider } from '../../src/execution/llm-provider.js';
 import type { ConductState } from '../../src/types/index.js';
 import type { BacklogItem } from '../../src/engine/daemon.js';
@@ -144,6 +147,34 @@ fi
   }
 
   function baseDeps(overrides: Partial<FutureDeps> = {}): FeatureRunnerDeps {
+    const dispatchFixSession = overrides.dispatchFixSession ?? (async () => ({ attempted: true }));
+    const runSetupTriage = async (
+      error: SetupFailureError,
+      worktree: { path: string },
+      item: BacklogItem,
+    ) => {
+      const git = makeGitRunner(worktree.path);
+      const runPrepare = (worktreePath: string) => prepareWorktree(worktreePath);
+      const logFn = overrides.log ?? (() => {});
+      const triageOutcome = await runTriage(git, worktree.path, item.slug, error, runPrepare, {
+        log: logFn,
+      });
+      if (triageOutcome.kind === 'park' && !triageOutcome.quarantineRef) {
+        return triageOutcome;
+      }
+      const fixOutcome = await runFixSession(
+        git,
+        worktree.path,
+        item.slug,
+        () => dispatchFixSession(error, worktree, item) as Promise<void>,
+        runPrepare,
+      );
+      if (fixOutcome.kind === 'park' && !fixOutcome.quarantineRef && triageOutcome.quarantineRef) {
+        return { ...fixOutcome, quarantineRef: triageOutcome.quarantineRef };
+      }
+      return fixOutcome;
+    };
+
     const base: FutureDeps = {
       createWorktree: async (slug) => ({ path: dir, branch: `feat/${slug}` }),
       prepareWorktree: async (wt) => {
@@ -159,6 +190,7 @@ fi
       teardownWorktree: async () => {},
       markProcessed: async () => {},
       daemon: true,
+      runSetupTriage,
       provider: {
         invoke: async () => ({ success: true, output: '' }),
         invokeInteractive: async () => {},
@@ -217,12 +249,13 @@ fi
     );
     expect(quarantineTip).not.toBeNull();
 
-    // Its tip must contain the pre-reset dirty content byte-for-byte.
+    // Its tip must contain the pre-reset dirty content byte-for-byte (modulo
+    // the `git()` test helper's own trailing-newline trim()).
     expect(await gitOrNull('show', 'wip/setup-quarantine-feat-quarantine-happy:README.md')).toBe(
-      preReadme,
+      preReadme.trimEnd(),
     );
     expect(await gitOrNull('show', 'wip/setup-quarantine-feat-quarantine-happy:scratch.txt')).toBe(
-      preScratch,
+      preScratch.trimEnd(),
     );
 
     // Feature branch is reset back to the original HEAD, clean.
@@ -245,10 +278,13 @@ fi
 
     // Force every `git commit` in this repo to fail from here on — a real git
     // failure injected at the exact point triage's quarantine step must
-    // exercise (`git commit`), not a mocked GitRunner.
-    await mkdir(join(dir, '.git', 'hooks'), { recursive: true });
-    await writeFile(join(dir, '.git', 'hooks', 'pre-commit'), '#!/bin/sh\nexit 1\n', 'utf-8');
-    await chmod(join(dir, '.git', 'hooks', 'pre-commit'), 0o755);
+    // exercise (`git commit`), not a mocked GitRunner. `prepareWorktree` wires
+    // `core.hooksPath` to `.pipeline/git-hooks/` (the attribution-hook seam),
+    // which shadows `.git/hooks/` for the remainder of this process — the
+    // failing hook must be installed at the path that's actually active.
+    await mkdir(join(dir, '.pipeline', 'git-hooks'), { recursive: true });
+    await writeFile(join(dir, '.pipeline', 'git-hooks', 'pre-commit'), '#!/bin/sh\nexit 1\n', 'utf-8');
+    await chmod(join(dir, '.pipeline', 'git-hooks', 'pre-commit'), 0o755);
 
     await writeFile(join(dir, 'README.md'), '# base\nuncommitted mess\n');
     await writeFile(join(dir, 'stray.txt'), 'stray\n');
@@ -323,7 +359,14 @@ fi
     await writeSetupAlwaysFails('TAIL_MARKER_XYZ');
     await commitAll('add broken bin/setup (clean HEAD, committed breakage)');
 
-    const fixSession = vi.fn(async (...args: unknown[]) => ({ attempted: true, seen: args }));
+    // Simulate a real fix-session: it diagnoses the broken bin/setup and
+    // commits a fix, which is why the engine's post-dispatch re-run of
+    // `runPrepare` succeeds.
+    const fixSession = vi.fn(async (...args: unknown[]) => {
+      await writeSetupScript('#!/usr/bin/env bash\necho "fixed"\nexit 0\n');
+      await commitAll('fix-session: repair bin/setup');
+      return { attempted: true, seen: args };
+    });
     let conductorCalls = 0;
     const run = makeRunFeature(
       baseDeps({
@@ -479,12 +522,7 @@ fi
     }
 
     it('TS-5 happy: a quarantine ref exists ⇒ the build session context names the ref, the preserved paths, and states recovery is deliberate (inspect/cherry-pick/discard, never blind-merge)', async () => {
-      await mkdir(join(wt, '.pipeline'), { recursive: true });
-      await writeFile(
-        join(wt, '.pipeline', 'QUARANTINE'),
-        'ref: wip/setup-quarantine-feat-q\npaths: README.md, scratch.txt\n',
-        'utf-8',
-      );
+      await writeQuarantineSentinel(wt, 'wip/setup-quarantine-feat-q', ['README.md', 'scratch.txt']);
 
       const provider = makeProvider();
       const runner = new DefaultStepRunner(provider, 'session-1', wt, {
@@ -501,12 +539,7 @@ fi
     });
 
     it('TS-5 negative: the quarantine branch was deleted between rotations (external actor) ⇒ the notice states the ref is missing rather than failing the dispatch', async () => {
-      await mkdir(join(wt, '.pipeline'), { recursive: true });
-      await writeFile(
-        join(wt, '.pipeline', 'QUARANTINE'),
-        'ref: wip/setup-quarantine-feat-missing\npaths: README.md\n',
-        'utf-8',
-      );
+      await writeQuarantineSentinel(wt, 'wip/setup-quarantine-feat-missing', ['README.md']);
       // The sentinel exists, but no git repo/ref backs it here — resolving the
       // ref (as the surfacing code must, to report accurately) fails.
 
@@ -518,7 +551,7 @@ fi
       await expect(runner.run('build', {} as ConductState)).resolves.toBeDefined(); // dispatch never fails
       const opts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0];
       const seen = `${opts.systemPrompt ?? ''}\n${opts.prompt ?? ''}`;
-      expect(seen).toMatch(/ref is missing|no longer exists|ref not found/i);
+      expect(seen).toMatch(/ref is missing|no longer exists|no longer present|ref not found/i);
     });
   });
 });
