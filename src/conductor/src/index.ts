@@ -86,7 +86,7 @@ import { detectEvidenceCommand, dispatchEvidence } from './engine/evidence-cli.j
 import {
   detectHaltIssuesSweepCommand,
   dispatchHaltIssuesSweep,
-} from './engine/halt-issues-cli.js';
+} from './engine/halt-issues/halt-issues-cli.js';
 import { hasSession, sessionNameForRepo, respawnPane } from './engine/daemon-tmux.js';
 import { resolveOtelConfig } from './engine/otel/otel-config.js';
 import { OtelVisualizer, type OtelVisualizerContext } from './engine/otel/otel-visualizer.js';
