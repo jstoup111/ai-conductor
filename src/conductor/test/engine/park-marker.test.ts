@@ -456,4 +456,87 @@ describe('write/read primitives converge on main root (Task 4)', () => {
     // This is a placeholder to ensure removeOperatorPark is importable
     expect(typeof removeOperatorPark).toBe('function');
   });
+
+  it('concurrent writes from worktree + main produce exactly one marker (race-safe)', async () => {
+    const worktreeDir = await initRepoWithWorktree('feature-concurrent');
+    const slug = 'concurrent-race-test';
+    const reasonA = 'Attempt limit from worktree';
+    const reasonB = 'Attempt limit from main';
+
+    // Race two writes from different roots concurrently
+    const results = await Promise.all([
+      writeAutoPark(worktreeDir, slug, reasonA),
+      writeAutoPark(mainRoot, slug, reasonB),
+    ]);
+
+    // Both should resolve without throwing
+    expect(results).toHaveLength(2);
+
+    // Exactly one marker should exist at the main root
+    const mainMarkerPath = join(mainRoot, '.daemon', 'parked', slug);
+    const markerContent = await readFile(mainMarkerPath, 'utf-8');
+
+    // One of the two reasons should win; both produce valid auto-park format
+    expect(markerContent).toContain('auto-parked:');
+    expect(markerContent).toContain('timestamp:');
+
+    // No marker should exist at the worktree
+    const worktreeMarkerPath = join(worktreeDir, '.daemon', 'parked', slug);
+    try {
+      await readFile(worktreeMarkerPath);
+      throw new Error('worktree marker should not exist');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+        throw err;
+      }
+    }
+
+    // Both roots should see exactly one marker
+    const fromWorktree = await isOperatorParked(worktreeDir, slug);
+    const fromMain = await isOperatorParked(mainRoot, slug);
+    expect(fromWorktree).toBe(true);
+    expect(fromMain).toBe(true);
+
+    // Provenance should be 'auto' from both roots
+    const provenanceWorktree = await getProvenanceType(worktreeDir, slug);
+    const provenanceMain = await getProvenanceType(mainRoot, slug);
+    expect(provenanceWorktree).toBe('auto');
+    expect(provenanceMain).toBe('auto');
+  });
+
+  it('concurrent mixed writes (auto + operator) from different roots produce exactly one marker', async () => {
+    const worktreeDir = await initRepoWithWorktree('feature-mixed-concurrent');
+    const slug = 'mixed-race-test';
+
+    // Race writeAutoPark from worktree against writeOperatorPark from main
+    const results = await Promise.all([
+      writeAutoPark(worktreeDir, slug, 'Auto reason'),
+      writeOperatorPark(mainRoot, slug),
+    ]);
+
+    // Both should resolve without throwing
+    expect(results).toHaveLength(2);
+
+    // Exactly one marker should exist at the main root
+    const mainMarkerPath = join(mainRoot, '.daemon', 'parked', slug);
+    const markerContent = await readFile(mainMarkerPath, 'utf-8');
+    expect(markerContent).toBeTruthy();
+
+    // No marker at worktree
+    const worktreeMarkerPath = join(worktreeDir, '.daemon', 'parked', slug);
+    try {
+      await readFile(worktreeMarkerPath);
+      throw new Error('worktree marker should not exist');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+        throw err;
+      }
+    }
+
+    // Both roots see exactly one marker
+    const fromWorktree = await isOperatorParked(worktreeDir, slug);
+    const fromMain = await isOperatorParked(mainRoot, slug);
+    expect(fromWorktree).toBe(true);
+    expect(fromMain).toBe(true);
+  });
 });
