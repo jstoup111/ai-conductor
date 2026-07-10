@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { resolveBuildProgressConfig } from '../src/engine/config.js';
+import { resolveBuildProgressConfig, validateConfig } from '../src/engine/config.js';
 
 describe('resolveBuildProgressConfig', () => {
   it('resolves defaults when build_progress block is absent', () => {
@@ -61,5 +61,42 @@ describe('resolveBuildProgressConfig', () => {
       heartbeat_minutes: 2,
       enabled: false,
     });
+  });
+});
+
+describe('validateConfig — build_progress fail-closed validation', () => {
+  it('rejects poll_seconds: 0', () => {
+    const result = validateConfig({ build_progress: { poll_seconds: 0 } });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.message).toMatch(/poll_seconds/);
+    }
+  });
+
+  it('rejects quiet_minutes: -5', () => {
+    const result = validateConfig({ build_progress: { quiet_minutes: -5 } });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.message).toMatch(/quiet_minutes/);
+    }
+  });
+
+  it('rejects heartbeat_minutes: "fast"', () => {
+    const result = validateConfig({ build_progress: { heartbeat_minutes: 'fast' } });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.message).toMatch(/heartbeat_minutes/);
+    }
+  });
+
+  it('rejects poll_seconds exceeding the quiet_minutes window', () => {
+    const result = validateConfig({
+      build_progress: { poll_seconds: 1200, quiet_minutes: 15 },
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.message).toMatch(/poll_seconds/);
+      expect(result.error.message).toMatch(/quiet_minutes/);
+    }
   });
 });
