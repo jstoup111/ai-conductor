@@ -504,3 +504,132 @@ describe('BuildProgressWatcher heartbeat re-emission', () => {
     expect(buildProgressEvents()).toHaveLength(0);
   });
 });
+
+describe('BuildProgressWatcher quiet-episode build_no_progress', () => {
+  let dir: string;
+  let emitter: ConductorEventEmitter;
+  let emitSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'build-progress-watcher-quiet-test-'));
+    emitter = new ConductorEventEmitter();
+    emitSpy = vi.spyOn(emitter, 'emit');
+    vi.useFakeTimers();
+  });
+
+  afterEach(async () => {
+    vi.useRealTimers();
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  async function writeTasks(resolved: number, total: number): Promise<void> {
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    const tasks = Array.from({ length: total }, (_, i) => ({
+      id: String(i + 1),
+      status: i < resolved ? 'completed' : 'pending',
+    }));
+    await writeFile(join(dir, '.pipeline/task-status.json'), JSON.stringify({ tasks }));
+  }
+
+  function noProgressEvents(): Extract<ConductorEvent, { type: 'build_no_progress' }>[] {
+    return emitSpy.mock.calls
+      .map((call) => call[0] as ConductorEvent)
+      .filter((e): e is Extract<ConductorEvent, { type: 'build_no_progress' }> => e.type === 'build_no_progress');
+  }
+
+  function tick(watcher: BuildProgressWatcher): Promise<void> {
+    return (watcher as unknown as { tick(): Promise<void> }).tick();
+  }
+
+  function makeWatcher(): BuildProgressWatcher {
+    return new BuildProgressWatcher({
+      projectRoot: dir,
+      events: emitter,
+      step: 'build',
+      featureSlug: 'my-feature',
+      config: { build_progress: { quiet_minutes: 15 } },
+    });
+  }
+
+  it('emits build_no_progress exactly once once the quiet threshold is crossed, and not again while still quiet', async () => {
+    await writeTasks(5, 21);
+    const watcher = makeWatcher();
+    watcher.start();
+
+    // Baseline tick — establishes lastChangeAt.
+    await tick(watcher);
+    emitSpy.mockClear();
+
+    // Advance past the 15-minute quiet threshold with no task-status change.
+    await vi.advanceTimersByTimeAsync(16 * 60 * 1000);
+    await tick(watcher);
+
+    // Continued quiet — must not re-fire.
+    await vi.advanceTimersByTimeAsync(15 * 60 * 1000);
+    await tick(watcher);
+    await vi.advanceTimersByTimeAsync(15 * 60 * 1000);
+    await tick(watcher);
+    watcher.stop();
+
+    const events = noProgressEvents();
+    expect(events).toHaveLength(1);
+    const e = events[0];
+    expect(e.quietMinutes).toBeGreaterThanOrEqual(15);
+    expect(e.resolved).toBe(5);
+    expect(e.total).toBe(21);
+    expect(e.featureSlug).toBe('my-feature');
+  });
+
+  it('re-arms after a change, firing again on a later quiet episode', async () => {
+    await writeTasks(5, 21);
+    const watcher = makeWatcher();
+    watcher.start();
+
+    await tick(watcher);
+    emitSpy.mockClear();
+
+    await vi.advanceTimersByTimeAsync(16 * 60 * 1000);
+    await tick(watcher);
+    expect(noProgressEvents()).toHaveLength(1);
+
+    // Progress resumes — re-arms the episode.
+    await vi.advanceTimersByTimeAsync(60 * 1000);
+    await writeTasks(6, 21);
+    await tick(watcher);
+    emitSpy.mockClear();
+
+    // Quiet again past threshold — should fire again.
+    await vi.advanceTimersByTimeAsync(16 * 60 * 1000);
+    await tick(watcher);
+    watcher.stop();
+
+    expect(noProgressEvents()).toHaveLength(1);
+  });
+
+  it('a change one tick before threshold resets the quiet clock', async () => {
+    await writeTasks(5, 21);
+    const watcher = makeWatcher();
+    watcher.start();
+
+    await tick(watcher);
+    emitSpy.mockClear();
+
+    // Just before threshold, progress happens — resets the clock.
+    await vi.advanceTimersByTimeAsync(14 * 60 * 1000);
+    await writeTasks(6, 21);
+    await tick(watcher);
+    expect(noProgressEvents()).toHaveLength(0);
+
+    // 14 more minutes pass since the reset — must not fire yet.
+    await vi.advanceTimersByTimeAsync(14 * 60 * 1000);
+    await tick(watcher);
+    expect(noProgressEvents()).toHaveLength(0);
+
+    // Now past 15 minutes since the reset point.
+    await vi.advanceTimersByTimeAsync(2 * 60 * 1000);
+    await tick(watcher);
+    watcher.stop();
+
+    expect(noProgressEvents()).toHaveLength(1);
+  });
+});
