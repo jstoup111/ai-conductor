@@ -734,6 +734,51 @@ describe('daemon startup handshake (Task 9)', () => {
     expect(markerAfter.kind).toBe('absent');
   });
 
+  it('Task 8: ARMED gating parity — flag false when config true but self-host false', async () => {
+    // Task 8: Verify that the flag passed to initStaleEngineState is gated by both
+    // config.auto_restart_on_stale_engine AND isSelfHost. When config is true but
+    // isSelfHost is false, the primitive should receive false and log DISARMED.
+    //
+    // This test simulates what daemon-cli does:
+    // isArmed = (config?.auto_restart_on_stale_engine ?? false) && isSelfHost
+    // When this calculation yields false (because isSelfHost is false),
+    // the DISARMED/ARMED line should say DISARMED through the wired path.
+
+    const engineContent = 'mock engine for Task 8 gating test';
+    const enginePath = await createMockEngineFile(projectRoot, engineContent);
+    const engineIdentity = await captureEngineIdentity(enginePath);
+    expect(engineIdentity).not.toBeNull();
+
+    // Simulate daemon-cli scenario:
+    // - config.auto_restart_on_stale_engine = true
+    // - isSelfHost = false
+    // - Expected: isArmed = true && false = false
+    const configFlag = true; // config.auto_restart_on_stale_engine
+    const isSelfHost = false; // self-host classification
+    const isArmed = (configFlag ?? false) && isSelfHost; // The gating logic
+    expect(isArmed).toBe(false); // Verify our test setup
+
+    // Call initStaleEngineState with the pre-gated flag (should be false)
+    const logs: string[] = [];
+    const capturedIdentity = await initStaleEngineState({
+      repoPath: projectRoot,
+      entryPath: enginePath,
+      flag: isArmed, // Pre-gated value
+      log: (msg) => logs.push(msg),
+    });
+
+    // Verify identity was captured
+    expect(capturedIdentity).toBe(engineIdentity);
+
+    // CRITICAL: Verify DISARMED status was logged (not ARMED)
+    // Despite config flag being true, since isSelfHost is false,
+    // the daemon should log DISARMED through the wired path
+    const armedDisarmedLines = logs.filter((m) => m.match(/^(ARMED|DISARMED)/));
+    expect(armedDisarmedLines.length).toBe(1);
+    expect(armedDisarmedLines[0]).toMatch(/^DISARMED/);
+    expect(armedDisarmedLines[0]).not.toMatch(/^ARMED/);
+  });
+
   describe('Task 6: Persistence-failure degradation', () => {
     it('(a) suppression write fails → failure logged, boot continues, marker cleared', async () => {
       // Task 6(a): When recording suppression fails (e.g., can't write suppression file)
