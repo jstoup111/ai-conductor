@@ -1492,3 +1492,174 @@ describe('integration/gate-loop', () => {
     });
   });
 });
+
+// ── Task 12: gate and post-rebase pre-verify share one verdict basis ────────
+//
+// `checkStepCompletion(dir, 'build', ctx)` is the SAME function both the
+// build gate (during normal step evaluation) and the daemon's post-rebase
+// preVerify closure (conductor.ts's `runRebaseStep`, line ~3213) call — no
+// reimplementation, no parallel logic to drift. This suite exercises that
+// function directly against a REAL git repository so the merge-base-scoped
+// evidence range (deriveCompletion / #456, #463) is genuinely exercised,
+// rather than the hermetic sidecar-stamping used by the rest of this file.
+//
+// gate-loop.test.ts mocks the `execa` module at file scope (see the
+// `vi.mock('execa', …)` at the top) so the rest of the tail stays hermetic.
+// That mock would also swallow the real git-trailer scan this suite needs,
+// so each test here unmocks `execa` and resets the module registry before
+// dynamically importing `checkStepCompletion`, then restores the mock
+// afterward so it doesn't leak into any other test in this file.
+describe('build gate and post-rebase pre-verify share one verdict basis (Task 12)', () => {
+  const execFileP = promisify(execFile);
+  let repoDir: string;
+
+  async function git(...args: string[]): Promise<{ stdout: string }> {
+    const { stdout } = await execFileP(
+      'git',
+      ['-c', 'user.email=t@test', '-c', 'user.name=t', ...args],
+      { cwd: repoDir },
+    );
+    return { stdout };
+  }
+
+  async function headSha(): Promise<string> {
+    return (await git('rev-parse', 'HEAD')).stdout.trim();
+  }
+
+  beforeEach(async () => {
+    repoDir = await mkdtemp(join(tmpdir(), 'gate-preverify-'));
+    await git('init', '-q');
+    await mkdir(join(repoDir, '.docs/plans'), { recursive: true });
+    await mkdir(join(repoDir, '.pipeline'), { recursive: true });
+  });
+
+  afterEach(async () => {
+    await rm(repoDir, { recursive: true, force: true });
+    // Restore the file-scoped execa mock and drop the fresh (unmocked)
+    // module instances so later tests in this file get the hermetic mock
+    // back, unpolluted by this suite's real-execa import.
+    vi.doMock('execa', () => ({ execa: vi.fn() }));
+    vi.resetModules();
+  });
+
+  it('all tasks commit-evidenced → build gate passes → file-changing rebase → pre-verify(build) still passes (no kickback)', async () => {
+    vi.doUnmock('execa');
+    vi.resetModules();
+    const { checkStepCompletion } = await import('../../src/engine/artifacts.js');
+
+    const planPath = join(repoDir, '.docs/plans/p.md');
+    await writeFile(
+      planPath,
+      [
+        '# Implementation Plan',
+        '',
+        '### Task 1: add foo',
+        '**Files:**',
+        '- src/foo.ts',
+        '',
+        '### Task 2: add bar',
+        '**Files:**',
+        '- src/bar.ts',
+        '',
+      ].join('\n'),
+    );
+
+    // Establish the default-branch anchor BEFORE any feature work — this is
+    // the merge-base the evidence range is scoped against.
+    await writeFile(join(repoDir, 'README.md'), 'init');
+    await git('add', '.');
+    await git('commit', '-q', '-m', 'chore: init');
+    const mergeBaseBefore = await headSha();
+    // A local ref standing in for the origin default branch (no real remote
+    // needed — resolveOriginRef probes origin/main directly).
+    await git('update-ref', 'refs/remotes/origin/main', mergeBaseBefore);
+
+    // Feature-branch commits: real `Task: N` trailers touching the plan's
+    // declared paths — the evidence the build gate is supposed to accept.
+    await mkdir(join(repoDir, 'src'), { recursive: true });
+    await writeFile(join(repoDir, 'src/foo.ts'), 'export const foo = 1;\n');
+    await git('add', '.');
+    await git('commit', '-q', '-m', 'feat: implement task 1\n\nTask: 1');
+
+    await writeFile(join(repoDir, 'src/bar.ts'), 'export const bar = 1;\n');
+    await git('add', '.');
+    await git('commit', '-q', '-m', 'feat: implement task 2\n\nTask: 2');
+    const featureHead = await headSha();
+
+    const ctx = { projectRoot: repoDir, planPath };
+
+    // (a) Build gate: all tasks commit-evidenced within «merge-base»..HEAD.
+    const gateVerdict = await checkStepCompletion(repoDir, 'build', ctx);
+    expect(gateVerdict.done).toBe(true);
+
+    // File-changing rebase: the default branch advances with unrelated
+    // upstream work, and the feature branch is rebased onto it — a genuinely
+    // new merge-base, with the feature's own evidence commits replayed
+    // (new SHAs) on top. deriveCompletion must still resolve them from the
+    // replayed commits' trailers, not the (now-gone) original SHAs.
+    await git('checkout', '-q', '-b', 'feature', featureHead);
+    await git('checkout', '-q', '-b', 'origin-main', mergeBaseBefore);
+    await writeFile(join(repoDir, 'UPSTREAM.md'), 'unrelated upstream change\n');
+    await git('add', '.');
+    await git('commit', '-q', '-m', 'chore: unrelated upstream commit');
+    const newUpstreamHead = await headSha();
+    await git('update-ref', 'refs/remotes/origin/main', newUpstreamHead);
+
+    await git('checkout', '-q', 'feature');
+    await execFileP(
+      'git',
+      ['-c', 'user.email=t@test', '-c', 'user.name=t', 'rebase', 'origin-main'],
+      { cwd: repoDir },
+    );
+
+    // (b) Post-rebase pre-verify: the SAME checkStepCompletion('build', ctx)
+    // call the daemon's preVerify closure makes — must still pass. This is
+    // the load-bearing assertion: gate and pre-verify are one code path, so
+    // there is no logic to drift between them.
+    const preVerifyVerdict = await checkStepCompletion(repoDir, 'build', ctx);
+    expect(preVerifyVerdict.done).toBe(true);
+  });
+
+  it('upstream commits carrying coincidental Task: N trailers with overlapping paths are outside «merge-base»..HEAD and are never accepted as evidence', async () => {
+    vi.doUnmock('execa');
+    vi.resetModules();
+    const { checkStepCompletion } = await import('../../src/engine/artifacts.js');
+
+    const planPath = join(repoDir, '.docs/plans/p.md');
+    await writeFile(
+      planPath,
+      ['# Implementation Plan', '', '### Task 1: add foo', '**Files:**', '- src/foo.ts', ''].join(
+        '\n',
+      ),
+    );
+
+    await writeFile(join(repoDir, 'README.md'), 'init');
+    await git('add', '.');
+    await git('commit', '-q', '-m', 'chore: init');
+
+    // The default branch's own history carries a commit that coincidentally
+    // matches the feature's `Task: 1` trailer AND touches an overlapping
+    // path — but it predates the feature branch's divergence, so it must
+    // never satisfy the feature's Task 1.
+    await mkdir(join(repoDir, 'src'), { recursive: true });
+    await writeFile(join(repoDir, 'src/foo.ts'), 'export const foo = 0; // upstream\n');
+    await git('add', '.');
+    await git('commit', '-q', '-m', 'chore: unrelated upstream churn\n\nTask: 1');
+    const mergeBase = await headSha();
+    await git('update-ref', 'refs/remotes/origin/main', mergeBase);
+
+    // The feature branch itself never lands its own Task: 1 evidence.
+    await writeFile(join(repoDir, 'src/other.ts'), 'export const other = 1;\n');
+    await git('add', '.');
+    await git('commit', '-q', '-m', 'feat: unrelated feature work (no Task trailer)');
+
+    const ctx = { projectRoot: repoDir, planPath };
+    const verdict = await checkStepCompletion(repoDir, 'build', ctx);
+
+    // The upstream commit is outside «merge-base»..HEAD (it IS the merge
+    // base), so it can never be accepted as this branch's Task 1 evidence —
+    // the gate must report the task unresolved rather than pass.
+    expect(verdict.done).toBe(false);
+    expect(verdict.reason).toMatch(/pending|not completed/i);
+  });
+});
