@@ -349,6 +349,12 @@ single-authority claim is true in the wired system, not just in skill prose.
 
 ## Story: In-flight features migrate via the grandfather stamp; completed rows never demote
 
+> **SUPERSEDED (2026-07-10):** the migration-grandfather behavior this story pins is retired by
+> `adr-2026-07-10-retire-migration-grandfather` and the stories in
+> `unify-build-completion-evidence-derivation-fix-der.md` (#463 — the first-seed stamp became a
+> forgery vector after the migration window closed). Never-demote for *evidence-stamped* rows
+> still holds; grandfather-backed rows no longer count.
+
 **Requirement:** ADR H8
 
 As an operator with features mid-build at cutover, I want existing completed work honored without
