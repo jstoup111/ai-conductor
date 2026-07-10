@@ -58,6 +58,7 @@ import {
   readManualTestFailRows,
   BUILD_REVIEW_VERDICT,
   validateBuildReviewVerdict,
+  FINISH_CHOICE_MARKER,
   type RemediationGap,
   type CompletionContext,
 } from './artifacts.js';
@@ -111,13 +112,14 @@ import {
 import { writeIntakeMarker } from './engineer/intake-marker.js';
 import { readMachineOwnerConfig } from './owner-gate/machine-identity.js';
 import { resolveDaemonOwner, type GhRunner } from './owner-gate/identity.js';
-import { makeProductionGh, makeProductionGit, type GitRunner } from './pr-labels.js';
+import { makeProductionGh, makeProductionGit, prMergeState, type GitRunner } from './pr-labels.js';
 import { headPushedToUpstream } from './push-evidence.js';
 import {
   createTaskEvidence,
   type TaskEvidence,
 } from './task-evidence.js';
 import { seedTaskStatus } from './task-seed.js';
+import { checkMergedPrGuard, writeSyntheticShipMarkers } from './merged-pr-guard.js';
 
 export type CheckpointResponse = 'continue' | 'back' | 'quit';
 
@@ -843,6 +845,83 @@ export class Conductor {
     } catch {
       return false;
     }
+  }
+
+  /**
+   * Merged-PR guard: check if the recorded PR has been merged out-of-band.
+   * If so, write synthetic verified-ship markers, emit completion event, and
+   * return true to signal early exit from the run loop. Otherwise return false
+   * to proceed with normal retry/rebase flow.
+   *
+   * Daemon-mode only; inactive if `pr_url` is absent or daemon:false.
+   * Per ADR-2026-07-09-mid-run-merged-pr-guard, on MERGED verdict writes:
+   * - `.pipeline/finish-choice` = 'pr'
+   * - `.pipeline/DONE`
+   * - Leaves pr_url unchanged in conduct-state.json
+   * - Emits completion event with out-of-band merge message
+   * - Detaches signal handlers (mirroring loop_halt path shape)
+   * On OPEN/CLOSED/NOTFOUND/UNKNOWN or gh failure: logs at debug, returns false (fail-open).
+   */
+  private async stopIfPrMerged(
+    state: ConductState,
+    sigintHandler: () => Promise<void>,
+    sigterm: () => Promise<void>,
+  ): Promise<boolean> {
+    // Daemon-mode only; requires pr_url in state.
+    if (!this.daemon || !state.pr_url) {
+      return false;
+    }
+
+    // Query the recorded PR's current merge state.
+    const prState = await prMergeState(this.runGh, this.projectRoot, state.pr_url, (msg) => {
+      // Log at debug level; never fail on gh error (fail-open).
+    });
+
+    // On non-MERGED verdicts, proceed with normal retry/rebase unchanged.
+    if (prState.state !== 'MERGED') {
+      return false;
+    }
+
+    // MERGED verdict: stop the run as a synthetic verified ship.
+    // Write finish-choice marker (pr) and DONE marker.
+    await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(() => {
+      /* best-effort marker */
+    });
+
+    await writeFile(join(this.projectRoot, FINISH_CHOICE_MARKER), 'pr\n', 'utf-8').catch(() => {
+      /* best-effort marker */
+    });
+
+    await writeFile(join(this.projectRoot, DONE_MARKER), '', 'utf-8').catch(() => {
+      /* best-effort marker */
+    });
+
+    // Get the current HEAD SHA for the log message.
+    let sha = 'unknown';
+    try {
+      sha = await currentCommitSha(this.projectRoot);
+    } catch {
+      // Proceed even if we can't get the SHA; the markers are what matter.
+    }
+
+    // Emit a completion event that includes the out-of-band merge message.
+    await this.events.emit({
+      type: 'feature_complete',
+      prUrl: state.pr_url,
+      message: `already shipped out-of-band; local branch retained at ${sha}`,
+    } as any);
+
+    // Detach signal handlers (mirroring loop_halt return path at ~2010-2012).
+    process.off('SIGINT', sigintHandler);
+    if (this.daemon) {
+      // In daemon mode, the process-level SIGTERM handler is installed at daemon-cli.ts,
+      // not here, so we don't detach it.
+    } else {
+      process.off('SIGTERM', sigterm);
+    }
+
+    // Return true to signal that the run should terminate successfully.
+    return true;
   }
 
   /**
@@ -2053,6 +2132,15 @@ export class Conductor {
                   count: remediationRounds,
                 });
                 pendingRetryHints.set(outcome.target, outcome.hint);
+
+                // Task 4: Merged-PR guard on finish-remediation kickback (TS-1).
+                // Before committing the rewind, check if the recorded PR has been
+                // merged out-of-band. If so, stop the run as a synthetic verified
+                // ship and return successfully.
+                if (await this.stopIfPrMerged(state, sigintHandler, sigterm)) {
+                  return;
+                }
+
                 const nav = navigateBack(state, outcome.target, steps);
                 state = nav.state;
                 // markDownstreamStale only restages `done` steps; this gate is
@@ -2886,6 +2974,25 @@ export class Conductor {
 
     const git = makeGitRunner(this.projectRoot);
     const localBase = await this.discoverLocalBase(git);
+
+    // ── Merged-PR guard: rebase backstop (adr-2026-07-09-mid-run-merged-pr-guard) ────
+    // Check if the recorded PR is already merged (out-of-band), and if so, stop
+    // cleanly without rebasing. This prevents the duplicate-branch rebase HALT
+    // when a merge lands after the kickback guard but before rebase entry.
+    const prUrl = state.pr_url;
+    const guardVerdict = await checkMergedPrGuard(
+      this.runGh,
+      this.projectRoot,
+      prUrl,
+      (msg) => console.log(msg),
+    );
+
+    if (guardVerdict === 'merged') {
+      // PR is already merged — stop cleanly as a synthetic verified ship.
+      const headSha = (await git(['rev-parse', 'HEAD'])).stdout.trim();
+      await writeSyntheticShipMarkers(this.projectRoot, headSha, (msg) => console.log(msg));
+      return { success: true };
+    }
 
     let outcome: RebaseOutcome;
     try {
