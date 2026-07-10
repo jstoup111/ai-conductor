@@ -898,6 +898,46 @@ describe('acceptance: daemon build-auth isolation (isolate-daemon-build-auth-fro
       // This will error, which is expected — we just care that it never read the operator creds
       await conductor.run().catch(() => {});
 
+      // Reset for scenario 4
+      readAccesses.length = 0;
+      await rm(dir, { recursive: true, force: true });
+      dir = await mkdtemp(join(tmpdir(), 'build-auth-acceptance-'));
+      statePath = join(dir, 'conduct-state.json');
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeState(statePath, READY_STATE);
+      await writeOperatorCreds(Date.now() + 3_600_000);
+      // No daemon token file at all — proves api-key mode never touches it either.
+
+      // Scenario 4 (Task 14): api-key mode, pre-flight through an auth-failure HALT
+      runner = tokenCapturingRunner([
+        () => ({ success: false, authFailure: true }) as AuthResult,
+      ]);
+      guardrails = makeGuardrails();
+
+      conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        fromStep: 'build',
+        mode: 'auto',
+        daemon: true,
+        selfHost: true,
+        maxRetries: 1,
+        sleepFn: vi.fn(async () => {}),
+        selfHostGuardrails: guardrails,
+        config: selfHostConfig('api-key'),
+      });
+
+      await conductor.run();
+
+      // api-key mode: pre-flight proceeds without a token, dispatch runs, and the
+      // auth failure HALTs immediately (no park, no token poll) naming ANTHROPIC_API_KEY.
+      expect(guardrails.provisionSandbox).toHaveBeenCalledTimes(1);
+      const apiKeyHaltBody = await haltBody();
+      expect(apiKeyHaltBody).not.toBeNull();
+      expect(apiKeyHaltBody).toContain('ANTHROPIC_API_KEY');
+
       // Now verify: operator credentials file was NEVER accessed in any scenario
       const operatorCredsAccesses = readAccesses.filter((path) => {
         const pathStr = String(path);
