@@ -289,14 +289,11 @@ describe('engine/setup-triage — retryPrepareAfterQuarantine (TS-2 happy path: 
       },
     ]);
 
-    // Mock runPrepare that fails on first call, passes on second
+    // Mock runPrepare that succeeds on first (and only) call
     let prepareCallCount = 0;
     const runPrepare = async (worktreePath: string) => {
       prepareCallCount++;
-      if (prepareCallCount === 1) {
-        throw new Error('setup failed (first attempt)');
-      }
-      // Second call succeeds
+      // Setup succeeds
     };
 
     const result = await retryPrepareAfterQuarantine(git, '/path/to/wt', 'test-slug', runPrepare);
@@ -310,7 +307,7 @@ describe('engine/setup-triage — retryPrepareAfterQuarantine (TS-2 happy path: 
     });
   });
 
-  it('captures setup output tail from quarantine-time failure and returns it in quarantined-pass', async () => {
+  it('captures setup output tail from quarantine-time failure and returns it in park', async () => {
     const { git } = fakeGit([
       {
         match: ['status', '--porcelain'],
@@ -336,56 +333,16 @@ describe('engine/setup-triage — retryPrepareAfterQuarantine (TS-2 happy path: 
     const setupOutput = 'test error message\nmore output\nTAIL';
     const runPrepare = async (worktreePath: string) => {
       prepareCallCount++;
-      if (prepareCallCount === 1) {
-        const err = new Error('setup failed');
-        (err as any).output = setupOutput;
-        throw err;
-      }
+      const err = new Error('setup failed');
+      (err as any).output = setupOutput;
+      throw err;
     };
 
     const result = await retryPrepareAfterQuarantine(git, '/path/to/wt', 'test-slug', runPrepare);
 
-    expect(result.kind).toBe('quarantined-pass');
-    expect(result.quarantineRef).toBe('wip/setup-quarantine-test-slug');
-  });
-
-  it('falls through to park outcome when post-quarantine retry also fails (committed breakage)', async () => {
-    const { git } = fakeGit([
-      {
-        match: ['status', '--porcelain'],
-        result: { stdout: ' M src/broken.ts\n' },
-      },
-      { match: ['add', '-A'], result: { exitCode: 0 } },
-      {
-        match: ['commit', '-m'],
-        result: { stdout: '[feat-branch aaaaaaa] Quarantine before reset\n', exitCode: 0 },
-      },
-      {
-        match: ['rev-parse', 'HEAD'],
-        result: { stdout: 'aaaaaaa11111111111111111111111111111111\n' },
-      },
-      { match: ['branch', '-f'], result: { exitCode: 0 } },
-      {
-        match: ['reset', '--hard', 'HEAD~1'],
-        result: { stdout: 'HEAD is now at bbbbbb Original commit\n' },
-      },
-    ]);
-
-    let prepareCallCount = 0;
-    const runPrepare = async (worktreePath: string) => {
-      prepareCallCount++;
-      if (prepareCallCount === 1) {
-        throw new Error('dirty-tree setup failed');
-      }
-      // Second call also fails (committed breakage)
-      throw new Error('committed breakage still present');
-    };
-
-    const result = await retryPrepareAfterQuarantine(git, '/path/to/wt', 'test-slug', runPrepare);
-
-    expect(prepareCallCount).toBe(2);
+    expect(prepareCallCount).toBe(1);
     expect(result.kind).toBe('park');
-    expect(result).toHaveProperty('outputTail');
+    expect(result.outputTail).toBe(setupOutput);
     expect(result.quarantineRef).toBe('wip/setup-quarantine-test-slug');
   });
 

@@ -94,6 +94,33 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- **Setup-failure triage — two-stage deterministic recovery (#446).** The daemon now runs a
+  bounded two-stage recovery when `bin/setup` fails, eliminating the wedge pattern where a dead
+  agent corrupts the worktree and leaves no mechanism to dispatch a fix-session.
+  - **Stage 1: Deterministic quarantine + retry** — when setup exits nonzero, if the working tree
+    has uncommitted changes, the engine preserves them to a quarantine branch
+    (`wip/setup-quarantine-<slug>`) via `git add -A + commit`, then `reset --hard HEAD` to return
+    to clean HEAD, and re-runs `bin/setup` exactly once (full prepare flow). All dirty state is
+    committed and preserved before any reset, so a resuming agent can recover WIP deliberately via
+    `git show wip/setup-quarantine-<slug>`. If setup succeeds at clean HEAD, the feature proceeds;
+    if it still fails, advance to stage 2.
+  - **Stage 2: Bounded fix-session** — if setup still fails at clean HEAD, dispatch exactly ONE
+    fix-session with a fresh LLM session. Prompt carries the setup stderr tail (last 50 lines) and
+    an explicit success contract: `bin/setup` exits 0 AND the working tree is clean (fix committed).
+    The engine verifies the contract mechanically by re-running the full prepare flow — never trusts
+    the agent's claim. Success ⇒ proceed to build. Failure ⇒ diagnostic HALT naming the setup error
+    tail, the quarantine ref (where dirty state was preserved), and the contract verification outcome.
+  - **Surfacing:** daemon log records each stage with the quarantine ref and setup stderr tail.
+    `.pipeline/QUARANTINE` sentinel surfaces the ref + preserved paths to the resuming build agent.
+    HALT evidence includes the error, quarantine ref, and contract outcome.
+  - **Constraints:** exactly one retry (stage 1), exactly one fix-session (stage 2), all uncommitted
+    state preserved before any reset (no data loss), daemon-only (no change to interactive `/conduct`
+    or manual repair), zero cost to happy path (setup exit 0 ⇒ no triage).
+  - **Modules:** `engine/setup-triage.ts` (triage core, dependency-injected), `worktree-prepare.ts`
+    (SetupFailureError classification), `daemon-runner.ts` (wiring at prepare seam),
+    `step-runners.ts` (fix-session dispatch + contract verification).
+  - See `src/conductor/README.md` → "Setup-failure triage" and
+    `.docs/decisions/adr-2026-07-09-setup-failure-triage.md` (APPROVED).
 - CLAUDE.md "Design Principles" section codifying deterministic-first design:
   machinery (engine code, git hooks, gates) wherever possible, LLM agents only
   for steps that genuinely need judgement; repeated agent rule violations get
