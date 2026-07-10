@@ -1609,6 +1609,39 @@ no other component modifies it.
 correlate commits with tasks and to verify no intermediate work was dropped during rebase
 or conflict resolution (FR-9).
 
+**Evidence range derivation ladder (`getEvidenceRange`, `engine/autoheal.ts`, #456):**
+Before scanning commits for trailer/content-hash evidence, the engine must pick a lower
+bound for the range. It never falls back to repo genesis (`root-commit..HEAD`) or a
+hardcoded branch name — that made evidence ranges balloon on long-lived repos and drift
+if the default branch was renamed. Instead it walks a 4-rung ladder, taking the first
+rung that resolves:
+1. A reachable explicit `anchor` (the plan's seed SHA) is used as the lower bound directly.
+2. Otherwise, `git merge-base --fork-point origin/<default> HEAD` — the branch point,
+   including reflog-expired commits where fork-point still has evidence.
+3. Otherwise, a plain `git merge-base origin/<default> HEAD`.
+4. Otherwise, fail closed: zero commits plus a logged anomaly, never a silent guess.
+
+`origin/<default>` is itself derived — never hardcoded `origin/main` — via
+`originDefaultBranch` (reading `refs/remotes/origin/HEAD`), falling back to probing
+`origin/main` then `origin/master` if origin/HEAD is unset. All ladder failures are
+logged as anomalies/warnings but never thrown; the gate always gets a `done: false`
+verdict with a reason instead of an unhandled exception.
+
+**Completion currency — evidence stamps only, no grandfather (#463):** The build gate
+(`engine/artifacts.ts`, the H6/H7/H8 block) accepts exactly one form of proof that a
+task is done: an `evidenceStamps` entry in `.pipeline/task-evidence.json`, written by
+`deriveCompletion`'s own git-trailer/content-hash scan and independently re-derived on
+every gate evaluation. `task-status.json` rows are never trusted as-is — they're
+overwritten from the derived evidence before the verdict is decided, so a wiped or
+hand-edited status file can't fake completion and can't block it either. Earlier
+revisions of this gate additionally accepted a `migrationGrandfather` entry — a one-time
+stamp `task-seed.ts` wrote for terminal rows that already existed before the evidence
+gate was introduced, so pre-cutover work wouldn't be forced to backfill evidence it
+never had. That escape hatch is retired: `task-seed.ts` no longer writes new
+`migrationGrandfather` entries, and the gate no longer consults the field at all — a
+grandfathered id with no real evidence stamp is unresolved, full stop. This closes the
+gap where a forged or stale grandfather entry could pass the gate with zero git evidence.
+
 **Audit trail:** All reconciliations are logged to `.pipeline/audit-trail/` so the
 operator can see how completion state evolved across a multi-attempt build.
 
