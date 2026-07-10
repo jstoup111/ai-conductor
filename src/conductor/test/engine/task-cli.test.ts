@@ -1,5 +1,8 @@
-import { describe, it, expect } from 'vitest';
-import { detectTaskCommand } from '../../src/engine/task-cli.js';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { detectTaskCommand, runTaskStart } from '../../src/engine/task-cli.js';
+import * as fsPromises from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 describe('detectTaskCommand', () => {
   describe('start command', () => {
@@ -91,6 +94,123 @@ describe('detectTaskCommand', () => {
 
     it('returns null for arbitrary argv not containing task', () => {
       expect(detectTaskCommand(['some', 'other', 'command'])).toBeNull();
+    });
+  });
+});
+
+describe('runTaskStart', () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await fsPromises.mkdtemp(join(tmpdir(), 'task-cli-test-'));
+  });
+
+  afterEach(async () => {
+    await fsPromises.rm(dir, { recursive: true, force: true });
+  });
+
+  describe('happy path — start row 7', () => {
+    it('flips row 7 to in_progress and leaves others unchanged', async () => {
+      // Setup: seed task-status.json with 12 pending rows (1..12)
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      const tasks = Array.from({ length: 12 }, (_, i) => ({
+        id: String(i + 1),
+        name: `Task ${i + 1}`,
+        status: 'pending',
+      }));
+      await fsPromises.writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({ tasks }, null, 2),
+      );
+
+      // Call runTaskStart
+      const exitCode = await runTaskStart(dir, '7');
+      expect(exitCode).toBe(0);
+
+      // Verify row 7 is now in_progress
+      const statusPath = join(dir, '.pipeline/task-status.json');
+      const content = await fsPromises.readFile(statusPath, 'utf-8');
+      const status = JSON.parse(content);
+
+      const task7 = status.tasks.find((t: any) => t.id === '7');
+      expect(task7.status).toBe('in_progress');
+
+      // Verify other rows remain pending
+      const task1 = status.tasks.find((t: any) => t.id === '1');
+      expect(task1.status).toBe('pending');
+
+      const task6 = status.tasks.find((t: any) => t.id === '6');
+      expect(task6.status).toBe('pending');
+
+      const task8 = status.tasks.find((t: any) => t.id === '8');
+      expect(task8.status).toBe('pending');
+
+      const task12 = status.tasks.find((t: any) => t.id === '12');
+      expect(task12.status).toBe('pending');
+    });
+
+    it('creates .pipeline/current-task with exact id value', async () => {
+      // Setup: seed task-status.json
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      const tasks = Array.from({ length: 12 }, (_, i) => ({
+        id: String(i + 1),
+        name: `Task ${i + 1}`,
+        status: 'pending',
+      }));
+      await fsPromises.writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({ tasks }, null, 2),
+      );
+
+      // Call runTaskStart
+      const exitCode = await runTaskStart(dir, '7');
+      expect(exitCode).toBe(0);
+
+      // Verify stamp file exists with exact value
+      const stampPath = join(dir, '.pipeline/current-task');
+      const stampContent = await fsPromises.readFile(stampPath, 'utf-8');
+      expect(stampContent).toBe('7');
+    });
+
+    it('overwrites stamp on second call', async () => {
+      // Setup: seed task-status.json
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      const tasks = Array.from({ length: 12 }, (_, i) => ({
+        id: String(i + 1),
+        name: `Task ${i + 1}`,
+        status: 'pending',
+      }));
+      await fsPromises.writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({ tasks }, null, 2),
+      );
+
+      // First call: start task 7
+      const exitCode1 = await runTaskStart(dir, '7');
+      expect(exitCode1).toBe(0);
+
+      const stampPath = join(dir, '.pipeline/current-task');
+      let stampContent = await fsPromises.readFile(stampPath, 'utf-8');
+      expect(stampContent).toBe('7');
+
+      // Second call: start task 8
+      const exitCode2 = await runTaskStart(dir, '8');
+      expect(exitCode2).toBe(0);
+
+      // Verify stamp is now '8'
+      stampContent = await fsPromises.readFile(stampPath, 'utf-8');
+      expect(stampContent).toBe('8');
+
+      // Verify both rows are in_progress
+      const statusPath = join(dir, '.pipeline/task-status.json');
+      const content = await fsPromises.readFile(statusPath, 'utf-8');
+      const status = JSON.parse(content);
+
+      const task7 = status.tasks.find((t: any) => t.id === '7');
+      expect(task7.status).toBe('in_progress');
+
+      const task8 = status.tasks.find((t: any) => t.id === '8');
+      expect(task8.status).toBe('in_progress');
     });
   });
 });
