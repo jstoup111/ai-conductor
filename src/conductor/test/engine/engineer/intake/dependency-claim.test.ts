@@ -271,6 +271,88 @@ describe('Task 4: dependency-claim — no-sourceRef parity (no-issue band ranks 
   });
 });
 
+describe('Task 5: dependency-claim — within-band receivedAt FIFO stability', () => {
+  it('three same-band (high) entries with distinct receivedAt → three sequential claims serve strictly oldest-first', async () => {
+    const { claimUnblocked } = await loadClaimModule();
+    const A = makeEnvelope('acme/app#1', '2026-07-01T00:00:00.000Z'); // high, oldest
+    const B = makeEnvelope('acme/app#2', '2026-07-02T00:00:00.000Z'); // high, middle
+    const C = makeEnvelope('acme/app#3', '2026-07-03T00:00:00.000Z'); // high, newest
+    const queue = makeFakeQueue([A, B, C]);
+    const resolveDependency = makeResolveDependency({});
+    const bands = new Map([
+      ['acme/app#1', 'high'],
+      ['acme/app#2', 'high'],
+      ['acme/app#3', 'high'],
+    ]);
+    const resolveBands = async (_refs: string[]) => bands;
+
+    const first = await claimUnblocked({ queue, resolveDependency, resolveBands });
+    const second = await claimUnblocked({ queue, resolveDependency, resolveBands });
+    const third = await claimUnblocked({ queue, resolveDependency, resolveBands });
+
+    expect((first as any).envelope.sourceRef).toBe('acme/app#1');
+    expect((second as any).envelope.sourceRef).toBe('acme/app#2');
+    expect((third as any).envelope.sourceRef).toBe('acme/app#3');
+  });
+
+  it('mixed banded/unlabeled set → unlabeled entries keep their relative drain order (stable sort)', async () => {
+    const { claimUnblocked } = await loadClaimModule();
+    const A = makeEnvelope('acme/app#1', '2026-07-01T00:00:00.000Z'); // unlabeled, drain order 1
+    const B = makeEnvelope('acme/app#2', '2026-07-02T00:00:00.000Z'); // high
+    const C = makeEnvelope('acme/app#3', '2026-07-03T00:00:00.000Z'); // unlabeled, drain order 2
+    const D = makeEnvelope('acme/app#4', '2026-07-04T00:00:00.000Z'); // unlabeled, drain order 3
+    const queue = makeFakeQueue([A, B, C, D]);
+    const resolveDependency = makeResolveDependency({});
+    const bands = new Map([
+      ['acme/app#1', 'unlabeled'],
+      ['acme/app#2', 'high'],
+      ['acme/app#3', 'unlabeled'],
+      ['acme/app#4', 'unlabeled'],
+    ]);
+    const resolveBands = async (_refs: string[]) => bands;
+
+    const first = await claimUnblocked({ queue, resolveDependency, resolveBands });
+    const second = await claimUnblocked({ queue, resolveDependency, resolveBands });
+    const third = await claimUnblocked({ queue, resolveDependency, resolveBands });
+    const fourth = await claimUnblocked({ queue, resolveDependency, resolveBands });
+
+    // high band drains first; the three unlabeled entries then drain in
+    // their original relative (drain) order — A, C, D — never reordered
+    // amongst themselves by the stable sort.
+    expect((first as any).envelope.sourceRef).toBe('acme/app#2');
+    expect((second as any).envelope.sourceRef).toBe('acme/app#1');
+    expect((third as any).envelope.sourceRef).toBe('acme/app#3');
+    expect((fourth as any).envelope.sourceRef).toBe('acme/app#4');
+  });
+
+  it('two identical-receivedAt same-band entries → identical order across two runs (deterministic tie-break = drain order)', async () => {
+    const { claimUnblocked } = await loadClaimModule();
+    const sameTimestamp = '2026-07-01T00:00:00.000Z';
+    const resolveDependency = makeResolveDependency({});
+    const bands = new Map([
+      ['acme/app#1', 'high'],
+      ['acme/app#2', 'high'],
+    ]);
+    const resolveBands = async (_refs: string[]) => bands;
+
+    async function runOnce() {
+      const A = makeEnvelope('acme/app#1', sameTimestamp);
+      const B = makeEnvelope('acme/app#2', sameTimestamp);
+      const queue = makeFakeQueue([A, B]);
+      const first = await claimUnblocked({ queue, resolveDependency, resolveBands });
+      const second = await claimUnblocked({ queue, resolveDependency, resolveBands });
+      return [(first as any).envelope.sourceRef, (second as any).envelope.sourceRef];
+    }
+
+    const run1 = await runOnce();
+    const run2 = await runOnce();
+
+    expect(run1).toEqual(['acme/app#1', 'acme/app#2']);
+    expect(run2).toEqual(['acme/app#1', 'acme/app#2']);
+    expect(run1).toEqual(run2);
+  });
+});
+
 describe('Task 20: dependency-claim — deferral is free; indeterminate defers; walk continues', () => {
   it('deferred entry keeps status pending and attempts unchanged after deferral', async () => {
     const { claimUnblocked } = await loadClaimModule();
