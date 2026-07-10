@@ -294,6 +294,82 @@ describe('engine/setup-triage — quarantine (TS-2 negative, existing quarantine
   });
 });
 
+describe('engine/setup-triage — quarantine (TS-2 done-when, refreshed ref preserves lineage, real git repo)', () => {
+  let repoRoot: string;
+
+  async function git(cwd: string, args: string[]): Promise<GitResult> {
+    try {
+      const { stdout } = await execFileAsync('git', ['-C', cwd, ...args]);
+      return { exitCode: 0, stdout, stderr: '' };
+    } catch (err) {
+      const e = err as { code?: number; stdout?: string; stderr?: string };
+      return { exitCode: e.code ?? 1, stdout: e.stdout ?? '', stderr: e.stderr ?? '' };
+    }
+  }
+
+  afterEach(async () => {
+    if (repoRoot) await rm(repoRoot, { recursive: true, force: true });
+  });
+
+  it('force-moves an existing quarantine ref to a new commit without losing the old commit from history', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'quarantine-refresh-'));
+    const runGit: GitRunner = (args) => git(repoRoot, args);
+
+    await git(repoRoot, ['init', '-b', 'feat-branch']);
+    await git(repoRoot, ['config', 'user.email', 'test@example.com']);
+    await git(repoRoot, ['config', 'user.name', 'Test']);
+
+    const trackedPath = join(repoRoot, 'tracked.txt');
+    await writeFile(trackedPath, 'original content\n', 'utf-8');
+    await git(repoRoot, ['add', '.']);
+    await git(repoRoot, ['commit', '-m', 'chore: initial commit']);
+
+    const originalHead = (await git(repoRoot, ['rev-parse', 'HEAD'])).stdout.trim();
+
+    // First rotation: dirty the tree and quarantine it, creating the ref.
+    await writeFile(trackedPath, 'first dirty content\n', 'utf-8');
+    const firstResult = await quarantine(runGit, 'refresh-slug');
+    if (!('ref' in firstResult)) throw new Error('expected QuarantineResult');
+    const quarantineRef = firstResult.ref;
+    const firstCommitSha = (await git(repoRoot, ['rev-parse', quarantineRef])).stdout.trim();
+
+    // Feature branch is back at the original HEAD after the first rotation.
+    const headAfterFirst = (await git(repoRoot, ['rev-parse', 'HEAD'])).stdout.trim();
+    expect(headAfterFirst).toBe(originalHead);
+
+    // Second rotation: dirty the tree again, quarantine on top of the same ref.
+    await writeFile(trackedPath, 'second dirty content\n', 'utf-8');
+    const secondResult = await quarantine(runGit, 'refresh-slug');
+    if (!('ref' in secondResult)) throw new Error('expected QuarantineResult');
+    expect(secondResult.ref).toBe(quarantineRef);
+    const secondCommitSha = (await git(repoRoot, ['rev-parse', quarantineRef])).stdout.trim();
+
+    // The ref moved to a genuinely new commit.
+    expect(secondCommitSha).not.toBe(firstCommitSha);
+
+    // Feature branch HEAD is unchanged by the refresh.
+    const headAfterSecond = (await git(repoRoot, ['rev-parse', 'HEAD'])).stdout.trim();
+    expect(headAfterSecond).toBe(originalHead);
+
+    // The ref's ancestry (original commit + the new quarantine commit)
+    // never shrinks across rotations — git rev-list --count is stable at 2
+    // for both the first and second rotation's tip.
+    const revListResult = await git(repoRoot, ['rev-list', '--count', quarantineRef]);
+    expect(Number(revListResult.stdout.trim())).toBe(2);
+    const ancestryResult = await git(repoRoot, ['rev-list', quarantineRef]);
+    const ancestrySet = new Set(ancestryResult.stdout.trim().split('\n'));
+    expect(ancestrySet.has(secondCommitSha)).toBe(true);
+    expect(ancestrySet.has(originalHead)).toBe(true);
+
+    // The old quarantine tip is now dangling — unreachable from the
+    // (force-moved) ref — but git does not error resolving it; the object
+    // is still present, so history was never destructively discarded.
+    expect(ancestrySet.has(firstCommitSha)).toBe(false);
+    const oldTipResolve = await git(repoRoot, ['cat-file', '-t', firstCommitSha]);
+    expect(oldTipResolve.stdout.trim()).toBe('commit');
+  });
+});
+
 describe('engine/setup-triage — quarantine (TS-2 negative, preservation failure)', () => {
   it('aborts triage on git commit failure, rolls back staging, tree untouched', async () => {
     const { git, calls } = fakeGit([
