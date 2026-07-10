@@ -613,6 +613,127 @@ describe('daemon startup handshake (Task 9)', () => {
     expect(existsSync(suppressionFilePath)).toBe(true);
   });
 
+  it('Task 7: daemon boot runs initStaleEngineState end-to-end', async () => {
+    // Task 7: Verify that daemon boot calls initStaleEngineState and produces all expected effects:
+    // 1. Captures engine identity
+    // 2. Logs ARMED/DISARMED status
+    // 3. Logs handshake if marker present
+    // 4. Records/clears suppression as needed
+    // 5. Clears restart marker
+
+    const engineContent = 'mock engine for Task 7 boot test';
+    const enginePath = await createMockEngineFile(projectRoot, engineContent);
+    const engineIdentity = await captureEngineIdentity(enginePath);
+    expect(engineIdentity).not.toBeNull();
+
+    // Set up: marker present + non-convergence scenario (fresh ≠ target)
+    const targetIdentity = 'engine-target-old-xyz';
+    const marker: RestartMarker = {
+      reason: 'engine stalled',
+      fromIdentity: 'daemon-old',
+      targetIdentity,
+      at: Date.now(),
+    };
+
+    await writeRestartMarker(marker, projectRoot);
+
+    // Verify marker exists before boot
+    const markerBefore = await readRestartMarkerWithStatus(projectRoot);
+    expect(markerBefore.kind).toBe('present');
+
+    // Call initStaleEngineState (simulating daemon boot)
+    const logs: string[] = [];
+    const capturedIdentity = await initStaleEngineState({
+      repoPath: projectRoot,
+      entryPath: enginePath,
+      flag: true, // ARMED
+      log: (msg) => logs.push(msg),
+    });
+
+    // Verify all boot effects:
+
+    // 1. Identity captured
+    expect(capturedIdentity).toBe(engineIdentity);
+
+    // 2. Daemon identity logged
+    expect(logs.some((m) => m.includes('daemon identity'))).toBe(true);
+    expect(logs.some((m) => m.includes(engineIdentity))).toBe(true);
+
+    // 3. ARMED status logged
+    expect(logs.some((m) => m.includes('ARMED'))).toBe(true);
+    expect(logs.some((m) => m.includes('stale-engine auto-restart'))).toBe(true);
+
+    // 4. Handshake logged with both identities (fresh ≠ target)
+    expect(logs.some((m) => m.includes('restarted for engine refresh'))).toBe(true);
+    expect(logs.some((m) => m.includes(targetIdentity))).toBe(true);
+    expect(logs.some((m) => m.includes(engineIdentity))).toBe(true);
+
+    // 5. Suppression recorded (fresh ≠ target)
+    // Task 1: Suppression should be recorded against the TARGET identity, not the fresh identity
+    expect(logs.some((m) => m.includes('suppressing restart loop'))).toBe(true);
+    const suppression = await getSuppression(projectRoot);
+    expect(suppression).not.toBeNull();
+    expect(suppression?.suppressedTarget).toBe(targetIdentity);
+
+    // 6. Marker cleared
+    const markerAfter = await readRestartMarkerWithStatus(projectRoot);
+    expect(markerAfter.kind).toBe('absent');
+    const markerPath = join(projectRoot, RESTART_MARKER_PATH);
+    expect(existsSync(markerPath)).toBe(false);
+  });
+
+  it('Task 7: daemon boot convergence — initStaleEngineState clears suppression when fresh == target', async () => {
+    // Task 7: Verify convergence scenario where fresh identity matches target
+    // Suppression should be recorded then cleared
+
+    const engineContent = 'mock engine for Task 7 convergence test';
+    const enginePath = await createMockEngineFile(projectRoot, engineContent);
+    const engineIdentity = await captureEngineIdentity(enginePath);
+    expect(engineIdentity).not.toBeNull();
+
+    // Convergence scenario: target == fresh identity
+    const marker: RestartMarker = {
+      reason: 'engine stalled',
+      fromIdentity: 'daemon-old',
+      targetIdentity: engineIdentity, // Same as fresh
+      at: Date.now(),
+    };
+
+    await writeRestartMarker(marker, projectRoot);
+
+    // Pre-existing suppression from prior non-convergence
+    await recordSuppression(engineIdentity, projectRoot);
+
+    const suppressionBefore = await getSuppression(projectRoot);
+    expect(suppressionBefore).not.toBeNull();
+
+    // Call initStaleEngineState
+    const logs: string[] = [];
+    const capturedIdentity = await initStaleEngineState({
+      repoPath: projectRoot,
+      entryPath: enginePath,
+      flag: true,
+      log: (msg) => logs.push(msg),
+    });
+
+    // Verify identity captured
+    expect(capturedIdentity).toBe(engineIdentity);
+
+    // Verify handshake logged
+    expect(logs.some((m) => m.includes('restarted for engine refresh'))).toBe(true);
+
+    // Verify NO suppression recorded (fresh == target means convergence)
+    expect(logs.some((m) => m.includes('suppressing restart loop'))).toBe(false);
+
+    // CRITICAL: Verify suppression was CLEARED on convergence
+    const suppressionAfter = await getSuppression(projectRoot);
+    expect(suppressionAfter).toBeNull();
+
+    // Verify marker cleared
+    const markerAfter = await readRestartMarkerWithStatus(projectRoot);
+    expect(markerAfter.kind).toBe('absent');
+  });
+
   describe('Task 6: Persistence-failure degradation', () => {
     it('(a) suppression write fails → failure logged, boot continues, marker cleared', async () => {
       // Task 6(a): When recording suppression fails (e.g., can't write suppression file)

@@ -40,6 +40,7 @@ import { createBlockerResolver } from './engine/blocker-resolver.js';
 import { createGhBlockerRunner } from './engine/gh-blocker-runner.js';
 import { resolveSpecPrUrl } from './engine/pr-labels.js';
 import { captureEngineIdentity, createStaleEngineChecker } from './engine/engine-identity.js';
+import { initStaleEngineState } from './engine/stale-engine-init.js';
 import {
   readRestartMarkerWithStatus,
   clearRestartMarker,
@@ -558,47 +559,26 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     log('self-host mode active — harness self-build guardrails enabled for this daemon.');
   }
 
-  // Task 8: Capture engine identity at startup and log ARMED/DISARMED status
+  // Tasks 8-10: Boot sequence wired through initStaleEngineState primitive
+  // - Capture engine identity at startup
+  // - Log ARMED/DISARMED status (gated by config + self-host mode)
+  // - Startup handshake (read, log, clear RESTART_PENDING marker if present)
+  // - Handle non-convergence suppression (target ≠ fresh identity)
   const engineEntryPath = engineEntryPathForRepo(projectRoot);
-  const engineIdentity = await captureEngineIdentity(engineEntryPath);
-  if (engineIdentity) {
-    log(`daemon identity: ${engineIdentity}`);
-  }
+  const isArmed = (config?.auto_restart_on_stale_engine ?? false) && isSelfHost;
+  const engineIdentity = await initStaleEngineState({
+    repoPath: projectRoot,
+    entryPath: engineEntryPath,
+    flag: isArmed,
+    log,
+  });
+
   // Production stale-engine checker (adr-2026-07-03-daemon-auto-restart-stale-engine §1-2):
   // capture failure ⇒ permanently disabled checker (always 'current', warns once).
   const staleEngineChecker =
     engineIdentity !== null
       ? createStaleEngineChecker(engineIdentity, engineEntryPath, log)
       : createStaleEngineChecker(null, log);
-  const isArmed = (config?.auto_restart_on_stale_engine ?? false) && isSelfHost;
-  log(`${isArmed ? 'ARMED' : 'DISARMED'} — stale-engine auto-restart`);
-
-  // Task 9: Startup handshake — check for restart marker and log if present
-  // If engineIdentity is null, the check was disabled (capture failed), so skip handshake.
-  if (engineIdentity !== null) {
-    const markerStatus = await readRestartMarkerWithStatus(projectRoot, log);
-
-    if (markerStatus.kind === 'present') {
-      const marker = markerStatus.marker!;
-      log(
-        `restarted for engine refresh — from ${marker.fromIdentity} to ${marker.targetIdentity}, fresh ${engineIdentity}`,
-      );
-
-      // Task 10: Suppression — record when fresh identity differs from target
-      // (non-convergence at boot). This prevents restart loops when the engine
-      // identity hasn't reached the target yet.
-      if (engineIdentity !== marker.targetIdentity) {
-        log(
-          `suppressing restart loop — target was ${marker.targetIdentity}, now ${engineIdentity}`,
-        );
-        await recordSuppression(engineIdentity, projectRoot, log);
-      }
-
-      await clearRestartMarker(projectRoot);
-    }
-    // If absent or absent-corrupt: no handshake log.
-    // Task 6 (readRestartMarkerWithStatus) already logs + removes corrupt markers.
-  }
 
   // One shared provider + event bus across workers (rate limits are shared).
   const events = new ConductorEventEmitter();
