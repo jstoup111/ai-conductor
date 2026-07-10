@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, mkdir, writeFile, readFile } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, writeFile, readFile, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -9,6 +9,7 @@ import {
   haltMarkerPath,
   readHaltMarkerContent,
   writeStallQuestionEvidence,
+  writeStallHalt,
   HALT_MARKER_RELATIVE,
 } from '../../src/engine/task-progress.js';
 
@@ -201,6 +202,124 @@ describe('task-progress', () => {
       expect(result).toBe(contentWithWhitespace);
       const written = await readFile(join(dir, '.pipeline/build-stall-question.md'), 'utf-8');
       expect(written).toBe(contentWithWhitespace);
+    });
+  });
+
+  describe('negative paths (Task 10: stall capture negative paths)', () => {
+    it('readHaltMarkerContent gracefully handles ENOENT race (marker unlinked between check and read)', async () => {
+      // This test simulates a race condition where:
+      // 1. haltMarkerExists returns true (file exists)
+      // 2. File is deleted before readHaltMarkerContent runs
+      // 3. readHaltMarkerContent should return null (not crash)
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(join(dir, '.pipeline/halt-user-input-required'), 'transient marker');
+
+      // Verify marker exists
+      expect(await haltMarkerExists(dir)).toBe(true);
+
+      // Simulate deletion race: read should return null, not throw
+      const content = await readHaltMarkerContent(dir);
+      expect(content).toBe('transient marker');
+
+      // Now actually delete it and verify graceful null return
+      await rm(join(dir, '.pipeline/halt-user-input-required'));
+      const contentAfterDelete = await readHaltMarkerContent(dir);
+      expect(contentAfterDelete).toBeNull();
+    });
+
+    it('writeStallHalt writes empty marker as placeholder on first line', async () => {
+      const placeholder = '(agent wrote no reason into halt-user-input-required)';
+      const detail = 'remediation budget exhausted';
+
+      await writeStallHalt(dir, '', detail);
+
+      const written = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+      const firstLine = written.split('\n')[0];
+      expect(firstLine).toBe(placeholder);
+      expect(written).toContain(detail);
+    });
+
+    it('writeStallHalt writes whitespace-only marker as placeholder on first line', async () => {
+      const placeholder = '(agent wrote no reason into halt-user-input-required)';
+      const detail = 'remediation budget exhausted';
+
+      await writeStallHalt(dir, '   \n\t  ', detail);
+
+      const written = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+      const firstLine = written.split('\n')[0];
+      expect(firstLine).toBe(placeholder);
+      expect(written).toContain(detail);
+    });
+
+    it('writeStallHalt with multi-line marker writes first line verbatim to HALT', async () => {
+      const question = 'Should we use Auth0?\nOr Cognito?\nOr Okta?';
+      const detail = 'Need product decision';
+
+      await writeStallHalt(dir, question, detail);
+
+      const written = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+      const lines = written.split('\n').filter((l) => l.length > 0);
+      // First line should be the first line of the question (before newline)
+      expect(lines[0]).toBe('Should we use Auth0?');
+      expect(written).toContain(detail);
+    });
+
+    it('writeStallHalt with null question uses placeholder', async () => {
+      const placeholder = '(agent wrote no reason into halt-user-input-required)';
+      const detail = 'remediation failed';
+
+      await writeStallHalt(dir, null, detail);
+
+      const written = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+      const firstLine = written.split('\n')[0];
+      expect(firstLine).toBe(placeholder);
+      expect(written).toContain(detail);
+    });
+
+    it('writeStallHalt creates .pipeline directory if missing', async () => {
+      const question = 'Test question';
+      const detail = 'Test detail';
+
+      // Ensure .pipeline does not exist
+      expect(await haltMarkerExists(dir)).toBe(false);
+
+      await writeStallHalt(dir, question, detail);
+
+      const written = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+      expect(written).toContain(question);
+      expect(written).toContain(detail);
+    });
+
+    it('writeStallQuestionEvidence and writeStallHalt work together for capture/clear/evidence ordering', async () => {
+      const question = 'First line question\nSecond line context';
+
+      // Simulate stall capture flow (Task 3):
+      // 1. Marker is written by build step
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(join(dir, '.pipeline/halt-user-input-required'), question);
+
+      // 2. Read marker content
+      const markerContent = await readHaltMarkerContent(dir);
+      expect(markerContent).toBe(question);
+
+      // 3. Write evidence from marker
+      const evidence = await writeStallQuestionEvidence(dir, markerContent);
+      expect(evidence).toBe(question);
+      const evidenceFile = await readFile(join(dir, '.pipeline/build-stall-question.md'), 'utf-8');
+      expect(evidenceFile).toBe(question);
+
+      // 4. Clear marker
+      await clearHaltMarker(dir);
+      expect(await haltMarkerExists(dir)).toBe(false);
+
+      // 5. Write HALT for degraded remediation (uses the captured evidence)
+      const detail = 'remediation threw an error';
+      await writeStallHalt(dir, evidence, detail);
+
+      const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+      // HALT should have first line of the original question
+      expect(halt).toContain('First line question');
+      expect(halt).toContain(detail);
     });
   });
 });

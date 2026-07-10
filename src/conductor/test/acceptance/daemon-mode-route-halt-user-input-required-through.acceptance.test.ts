@@ -59,13 +59,28 @@ const QUESTION_3 = 'Need user decision: which cache TTL — 60s or 300s?';
 
 describe('daemon stall remediation — cross-module acceptance flows', () => {
   async function seedRepo(dir: string, statePath: string): Promise<void> {
-    // Every step BEFORE `build` seeded done so the loop starts at the build
-    // gate directly (mirrors the existing `seedToPrdAudit` convention).
+    // Seed steps BEFORE `build` as done so the loop starts at the build gate
+    // directly. Seed all steps AFTER `build` as skipped so only the build
+    // stall is tested (no downstream gates interfere with other remediation).
     const res = await readState(statePath);
     const state = (res.ok ? res.value : {}) as Record<string, unknown>;
+    let seenBuild = false;
     for (const s of ALL_STEPS) {
-      if (s.name === 'build') break;
-      state[s.name] = 'done';
+      if (s.name === 'build') {
+        seenBuild = true;
+        continue;
+      }
+      if (!seenBuild) {
+        // Before build: mark as done
+        state[s.name] = 'done';
+      } else {
+        // After build: mark as skipped (except engine-managed steps)
+        if (s.name !== 'complexity' && s.name !== 'worktree' && s.name !== 'rebase') {
+          state[s.name] = 'skipped';
+        } else {
+          state[s.name] = 'done';
+        }
+      }
     }
     state.complexity_tier = 'M';
     state.feature_desc = 'daemon-mode-route-halt-user-input-required-through';
