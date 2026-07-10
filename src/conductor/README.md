@@ -1467,6 +1467,73 @@ hook; extending the fence there is a follow-up.
 `test/engine/self-host/write-fence.test.ts` and real-binary acceptance test in
 `test/acceptance/write-fence-real-binary.acceptance.test.ts`.
 
+### Task Attribution Automation
+
+The conductor automates task progress tracking via `conduct-ts task` subcommands and deterministic git hooks.
+Task attribution is engine-owned, not prompt-discipline-dependent.
+
+#### `conduct-ts task start|done` CLI
+
+The pipeline orchestrator invokes these subcommands (during build step dispatch, not interactively):
+
+```bash
+conduct-ts task start <id>    # Flip task status to in_progress before dispatching subagent
+conduct-ts task done <id>     # Mark task completed after the subagent's commit lands
+```
+
+- `<id>` is the bare task ID from the plan (e.g., `7`, not `task-7`; alphanumeric ids like `rem-fr10-1` work).
+- `task start` updates `.pipeline/task-status.json` and writes `.pipeline/current-task` (the in-flight marker).
+- `task done` clears the in-flight marker and marks the task `completed` in the status file.
+- Both commands are **idempotent**: running them multiple times on the same task is safe (no corrupt state).
+- Failures are **non-fatal and logged**: if the status file is corrupt, the commands exit non-zero but do not halt the build (the engine's later evidence gate derives completion from git trailers).
+
+**Invocation by the conductor:** When the pipeline step dispatches a subagent (Task 0, DISPATCH phase),
+it first runs `conduct-ts task start <id>` to mark the task in-flight. When the subagent commits and
+the step's verification passes, it runs `conduct-ts task done <id>` to mark completion. The orchestrator
+MUST NOT hand-edit `.pipeline/task-status.json` — the CLI and the engine own it.
+
+#### Worktree-scoped git hooks (fail-open)
+
+When the daemon provisions a feature worktree (`prepareWorktree`), the conductor writes two deterministic
+**attribution hooks** and wires them via git config scoped to that worktree only. The host checkout and
+any other worktree are never affected.
+
+**Hook files:** `.pipeline/git-hooks/prepare-commit-msg` and `.pipeline/git-hooks/commit-msg`
+
+**Hook functions:**
+- **`prepare-commit-msg`** — Reads the task id from `.pipeline/current-task` and auto-injects a `Task: <id>`
+  trailer into every commit message. If a malformed trailer exists (empty id, wrong format), it's silently
+  amended to the correct format. The hook only runs in worktrees (via `core.hooksPath`); interactive developer
+  commits are unaffected.
+- **`commit-msg`** — Validates the `Task: <id>` trailer format. If it's missing or malformed and the
+  prepare-commit-msg hook didn't run (rare), the hook warns and allows the commit (fail-open).
+
+**Hook wiring:** `git config --worktree core.hooksPath <absolute-path>` points git to `.pipeline/git-hooks/`
+for this worktree only. The shared repository config remains unchanged. If git config fails (e.g., read-only
+worktree), provisioning continues without hooks and logs a skipped message; the build never fails because
+of hook provisioning failure.
+
+**Chaining:** If the repository already has its own hooks under `.git/hooks/`, the engine's hooks run first
+and exit codes propagate, so both the engine's and the repo's hooks are active. A failing chained hook will
+block the commit.
+
+**Engine-only:** Hooks run from the conductor's engine code (`worktree-prepare.ts`, `prepareWorktree()`) and
+are **never dispatched by prompt**. This makes them deterministic across sessions and immune to prompt-engineer
+drift.
+
+**Proof model:** The conductor's completion gate (`engine/artifacts.ts`) derives task completion from git commits
+carrying `Task: <id>` trailers. These trailers come from the engine's hooks in worktrees (auto-injected) or from
+the subagent's commits when hooks don't run (fallback). The engine never requires prompt discipline to inject
+trailers — the hooks do it automatically.
+
+**Asset provisioning:** Hook scripts are embedded as engine assets (`src/conductor/src/engine/git-hook-assets.ts`)
+and written fresh to each worktree during provisioning. This ensures they stay in sync with the engine version.
+Assets include shebang (`#!/bin/bash`), error handling, and a version header for debugging.
+
+**Modules:** `engine/worktree-prepare.ts` (provisioning), `engine/git-hook-assets.ts` (hook asset definitions),
+`engine/task-cli.ts` (task start/done logic), test coverage in `test/engine/git-hooks-attribution.test.ts`,
+`test/integration/git-hooks-attribution.test.ts`.
+
 ### Task Status (engine-owned)
 
 The conductor engine is the **single authority** for `.pipeline/task-status.json`, which
