@@ -15,6 +15,13 @@ import path from 'path';
 import { randomBytes } from 'crypto';
 
 /**
+ * Clock interface for injecting time in tests
+ */
+export interface Clock {
+  now(): Date;
+}
+
+/**
  * Schema for a single ledger entry
  */
 export interface LedgerEntry {
@@ -68,21 +75,30 @@ export interface LedgerFs {
  * Ledger class for managing halt-monitor filed issues
  */
 export class Ledger {
+  private clock: Clock;
+
   /**
    * Create a new Ledger instance
    *
    * @param filePath - Path to the ledger.json file
    * @param fs - File system abstraction (injected for testing)
+   * @param clock - Clock abstraction for injecting time (optional, defaults to real time)
    */
-  constructor(private filePath: string, private fs: LedgerFs) {}
+  constructor(private filePath: string, private fs: LedgerFs, clock?: Clock) {
+    this.clock = clock || {
+      now: () => new Date()
+    };
+  }
 
   /**
    * Read and parse the ledger file
    *
+   * If the file contains invalid JSON, it is renamed to ledger.json.corrupt-<ts>
+   * and an empty schema is returned to allow recovery.
+   *
    * Returns an empty schema if the file does not exist.
    *
    * @returns Parsed ledger schema
-   * @throws {SyntaxError} If the file exists but contains invalid JSON
    */
   async read(): Promise<LedgerSchema> {
     const exists = await this.fs.fileExists(this.filePath);
@@ -95,7 +111,31 @@ export class Ledger {
     }
 
     const content = await this.fs.readFile(this.filePath);
-    return JSON.parse(content) as LedgerSchema;
+
+    try {
+      return JSON.parse(content) as LedgerSchema;
+    } catch (error) {
+      // JSON parse error - quarantine the corrupted file
+      const timestamp = this.clock.now().toISOString();
+      const corruptPath = path.join(
+        path.dirname(this.filePath),
+        `ledger.json.corrupt-${timestamp}`
+      );
+
+      // Log warning to stderr
+      process.stderr.write(
+        `[halt-monitor] WARNING: ledger corrupted at ${this.filePath}, quarantined to ${path.basename(corruptPath)}\n`
+      );
+
+      // Rename corrupted file
+      await this.fs.rename(this.filePath, corruptPath);
+
+      // Return empty schema to allow rebuild
+      return {
+        version: 1,
+        entries: {}
+      };
+    }
   }
 
   /**
@@ -131,6 +171,55 @@ export class Ledger {
         haltAt: entry.haltAt || existing?.haltAt || '',
         // Set default status to "pending" if new entry
         status: existing?.status || 'pending'
+      };
+    }
+
+    // Write atomically: tmp file then rename
+    await this.writeAtomic(ledger);
+  }
+
+  /**
+   * Rebuild the ledger from verdicts after corruption
+   *
+   * For each verdict entry:
+   * - Check if the issue is already marked closed via closedIssueReader
+   * - If closed, set status to "closed" with closedBy="external" and closedAt=<now>
+   * - Otherwise, set status to "pending"
+   * - Upsert all entries and write atomically
+   *
+   * This is a recovery operation called after corruption is detected.
+   *
+   * @param entries - Array of verdict entries to rebuild from
+   * @param closedIssueReader - Async function to determine if an issue is already closed
+   * @throws {Error} If the rename operation fails during write
+   */
+  async rebuild(
+    entries: VerdictEntry[],
+    closedIssueReader: (issue: string) => Promise<boolean>
+  ): Promise<void> {
+    // Create a fresh ledger from verdicts
+    const ledger: LedgerSchema = {
+      version: 1,
+      entries: {}
+    };
+
+    const now = this.clock.now().toISOString();
+
+    // Process each verdict
+    for (const entry of entries) {
+      const issue = entry.issue;
+      const isClosed = await closedIssueReader(issue);
+
+      ledger.entries[issue] = {
+        issue: entry.issue,
+        repo: entry.repo || '',
+        slug: entry.slug,
+        haltAt: entry.haltAt || '',
+        status: isClosed ? 'closed' : 'pending',
+        ...(isClosed && {
+          closedAt: now,
+          closedBy: 'external'
+        })
       };
     }
 
