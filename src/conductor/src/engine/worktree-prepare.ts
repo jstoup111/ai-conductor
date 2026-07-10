@@ -97,28 +97,14 @@ async function writeGitHooks(
  * Wire the git hooks via git config: set extensions.worktreeConfig and core.hooksPath
  * to use the worktree-scoped .pipeline/git-hooks/ directory.
  *
- * Note: extensions.worktreeConfig must be enabled in the *main* repository (not the
- * worktree) before we can use --worktree flag. We find the common git dir and enable
- * it there, then set worktree-specific configs.
+ * Note: extensions.worktreeConfig must be enabled in the shared repository config
+ * before we can use --worktree flag to set worktree-scoped configs.
  */
 async function wireGitHooks(
   worktreePath: string,
   log?: (msg: string) => void,
 ): Promise<void> {
   try {
-    // Get the common git directory (shared by all worktrees)
-    const { stdout: commonDir } = await execa('git', ['-C', worktreePath, 'rev-parse', '--git-common-dir'], { all: true });
-    const gitCommonDir = commonDir.trim();
-
-    // Resolve relative path to absolute (git may return relative path like "../.git")
-    let commonDirAbs: string;
-    if (gitCommonDir.startsWith('/')) {
-      commonDirAbs = gitCommonDir;
-    } else {
-      // Relative path — make it absolute relative to the worktree
-      commonDirAbs = join(worktreePath, gitCommonDir);
-    }
-
     // Check if we have write access to the worktree's .git before attempting config changes.
     // This allows us to fail-open gracefully if .git is inaccessible or read-only.
     const worktreeGit = join(worktreePath, '.git');
@@ -128,20 +114,20 @@ async function wireGitHooks(
       throw new Error(`no write access to git: ${worktreeGit}`);
     }
 
-    // Enable extensions.worktreeConfig in the *main* repository config (not --worktree)
-    // This must be done once in the shared config, not per worktree
+    // Enable extensions.worktreeConfig in the shared repository config.
+    // This must be done once, not per worktree, before --worktree flags work.
     try {
-      // Use git to set it, but not with --worktree (set in the shared config)
+      // Set it without --worktree to enable it in the shared (local) config
       await execa('git', ['-C', worktreePath, 'config', 'extensions.worktreeConfig', 'true'], { all: true });
     } catch {
-      // If this fails, it might already be set or the repo might not support it
-      // We'll continue and try the worktree-scoped config anyway
+      // If this fails, it might already be set or the repo might not support it.
+      // We'll continue and ensure the worktree-scoped config is also set.
     }
 
-    // Now set worktree-scoped config with --worktree
+    // Set extensions.worktreeConfig in the worktree-scoped config (redundant safety measure)
     await execa('git', ['-C', worktreePath, 'config', '--worktree', 'extensions.worktreeConfig', 'true'], { all: true });
 
-    // Set core.hooksPath to the absolute path of the hooks directory (worktree-scoped)
+    // Set core.hooksPath to the absolute path of the hooks directory (worktree-scoped only)
     const hooksPath = join(worktreePath, '.pipeline', 'git-hooks');
     await execa('git', ['-C', worktreePath, 'config', '--worktree', 'core.hooksPath', hooksPath], { all: true });
 
