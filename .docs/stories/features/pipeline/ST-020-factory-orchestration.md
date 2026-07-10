@@ -13,6 +13,14 @@
 > writes. Criteria below referencing agent-written `completed` status describe the superseded
 > pre-2026-07-05 contract.
 
+> **Amended 2026-07-09 by `adr-2026-07-09-deterministic-evidence-attribution-enforcement.md`
+> (APPROVED, #433) and `.docs/stories/deterministic-evidence-attribution.md`:** the advisory
+> `pending`/`in_progress` scheduling writes are no longer hand-edits of
+> `.pipeline/task-status.json` — the orchestrator performs them via
+> `conduct-ts task start <id>` / `conduct-ts task done <id>`, which validate the id against the
+> seeded set, write atomically, and stamp/clear `.pipeline/current-task` for the commit hooks.
+> The scheduling semantics are unchanged; only the mechanism is engine-owned.
+
 As a developer building a Medium or Large feature, I want the pipeline skill to orchestrate
 task execution with quality gates, batch evaluation, and rework budgets so that the build
 phase is systematic and quality-controlled.
