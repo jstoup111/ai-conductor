@@ -792,7 +792,7 @@ describe('reconcileStrandedParkMarkers (Task 13)', () => {
     expect(mainContent).toBe(strandedBody);
   });
 
-  it('reconcileStrandedParkMarkers() skips if main-root marker already exists (main copy wins)', async () => {
+  it('reconcileStrandedParkMarkers() keeps main marker but deletes worktree marker on conflict', async () => {
     const worktreeDir = await initRepoWithWorktree('feature-conflict');
     const slug = 'conflict-marker';
     const strandedBody = 'auto-parked: stranded-reason\ntimestamp: 2026-01-01T00:00:00.000Z\n';
@@ -816,9 +816,15 @@ describe('reconcileStrandedParkMarkers (Task 13)', () => {
     const mainContent = await readFile(mainMarkerPath, 'utf-8');
     expect(mainContent).toBe(mainBody);
 
-    // Worktree marker should still exist (not deleted when main copy already exists)
-    const strandedContent = await readFile(strandedMarkerPath, 'utf-8');
-    expect(strandedContent).toBe(strandedBody);
+    // Worktree marker should be deleted (cleaned up during reconciliation)
+    try {
+      await readFile(strandedMarkerPath);
+      throw new Error('worktree marker should not exist after reconciliation');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+        throw err;
+      }
+    }
   });
 
   it('reconcileStrandedParkMarkers() handles multiple stranded markers', async () => {

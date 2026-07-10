@@ -369,12 +369,23 @@ export async function reconcileStrandedParkMarkers(
         }
 
         if (mainMarkerExists) {
-          // Main copy wins; skip this marker entirely (don't move, don't delete)
-          if (log) {
-            log(
-              `Skipped stranded marker ${slug} from ${worktreeDir} ` +
-              `(main copy already exists)`
-            );
+          // Main copy wins; delete the stranded copy to clean up
+          try {
+            await rm(strandedMarkerPath, { force: true });
+            if (log) {
+              log(
+                `Cleaned up stranded marker ${slug} from ${worktreeDir} ` +
+                `(main copy already exists)`
+              );
+            }
+          } catch (err) {
+            if (log) {
+              log(
+                `Failed to clean up stranded marker ${slug} from ${worktreeDir}: ${
+                  (err as Error).message
+                }`
+              );
+            }
           }
           continue;
         }
