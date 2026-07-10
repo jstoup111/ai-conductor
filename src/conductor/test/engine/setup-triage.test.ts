@@ -1,9 +1,18 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdtemp, rm, readFile, stat } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { createHash } from 'node:crypto';
 import { classifyTree, quarantine, retryPrepareAfterQuarantine, runTriage, fixSession, surfaceQuarantine, QUARANTINE_SENTINEL, type TriageOutcome, type GitRunner, type GitResult } from '../../src/engine/setup-triage.js';
 import { SetupFailureError } from '../../src/engine/worktree-prepare.js';
+
+const execFileAsync = promisify(execFile);
+
+function sha256(content: string): string {
+  return createHash('sha256').update(content).digest('hex');
+}
 
 async function exists(p: string): Promise<boolean> {
   try {
@@ -161,6 +170,68 @@ describe('engine/setup-triage — quarantine (TS-2 happy)', () => {
     expect(calls).toContainEqual(['rev-parse', 'HEAD']);
     expect(calls).toContainEqual(['branch', '-f', 'wip/setup-quarantine-test-slug', 'aaaaaaa11111111111111111111111111111111']);
     expect(calls).toContainEqual(['reset', '--hard', 'HEAD~1']);
+  });
+});
+
+describe('engine/setup-triage — quarantine (TS-2 happy, real git repo)', () => {
+  let repoRoot: string;
+
+  async function git(cwd: string, args: string[]): Promise<GitResult> {
+    try {
+      const { stdout } = await execFileAsync('git', ['-C', cwd, ...args]);
+      return { exitCode: 0, stdout, stderr: '' };
+    } catch (err) {
+      const e = err as { code?: number; stdout?: string; stderr?: string };
+      return { exitCode: e.code ?? 1, stdout: e.stdout ?? '', stderr: e.stderr ?? '' };
+    }
+  }
+
+  afterEach(async () => {
+    if (repoRoot) await rm(repoRoot, { recursive: true, force: true });
+  });
+
+  it('preserves ALL uncommitted+untracked files byte-for-byte in wip/setup-quarantine-<slug> before reset, leaving the feature branch clean at the original HEAD', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'quarantine-real-'));
+    const runGit: GitRunner = (args) => git(repoRoot, args);
+
+    await git(repoRoot, ['init', '-b', 'feat-branch']);
+    await git(repoRoot, ['config', 'user.email', 'test@example.com']);
+    await git(repoRoot, ['config', 'user.name', 'Test']);
+
+    const trackedPath = join(repoRoot, 'tracked.txt');
+    await writeFile(trackedPath, 'original content\n', 'utf-8');
+    await git(repoRoot, ['add', '.']);
+    await git(repoRoot, ['commit', '-m', 'chore: initial commit']);
+
+    const originalHead = (await git(repoRoot, ['rev-parse', 'HEAD'])).stdout.trim();
+
+    // Dirty the tree: modify the tracked file, add an untracked file.
+    const trackedModifiedContent = 'modified content\n';
+    await writeFile(trackedPath, trackedModifiedContent, 'utf-8');
+    const untrackedContent = 'brand new file\n';
+    const untrackedPath = join(repoRoot, 'untracked.txt');
+    await writeFile(untrackedPath, untrackedContent, 'utf-8');
+
+    const result = await quarantine(runGit, 'real-slug');
+
+    // Returned value names the ref and the preserved paths.
+    expect(result).toEqual({
+      ref: 'wip/setup-quarantine-real-slug',
+      preservedPaths: expect.arrayContaining(['tracked.txt', 'untracked.txt']),
+    });
+
+    // The quarantine branch tip must contain both files byte-for-byte.
+    const quarantineRef = 'wip/setup-quarantine-real-slug';
+    const trackedAtRef = await git(repoRoot, ['show', `${quarantineRef}:tracked.txt`]);
+    const untrackedAtRef = await git(repoRoot, ['show', `${quarantineRef}:untracked.txt`]);
+    expect(sha256(trackedAtRef.stdout)).toBe(sha256(trackedModifiedContent));
+    expect(sha256(untrackedAtRef.stdout)).toBe(sha256(untrackedContent));
+
+    // Feature branch ends clean at the original HEAD.
+    const headAfter = (await git(repoRoot, ['rev-parse', 'HEAD'])).stdout.trim();
+    expect(headAfter).toBe(originalHead);
+    const statusAfter = await git(repoRoot, ['status', '--porcelain']);
+    expect(statusAfter.stdout.trim()).toBe('');
   });
 });
 
