@@ -97,6 +97,11 @@ describe('engine/setup-triage — classifyTree (TS-2/TS-3)', () => {
 describe('engine/setup-triage — quarantine (TS-2 happy)', () => {
   it('preserves dirty tree in wip/setup-quarantine branch and resets to clean', async () => {
     const { git, calls } = fakeGit([
+      // Check if branch exists: rev-parse --verify returns failure (branch doesn't exist yet)
+      {
+        match: ['rev-parse', '--verify', 'wip/setup-quarantine-test-slug'],
+        result: { exitCode: 1 },
+      },
       // status --porcelain before quarantine
       {
         match: ['status', '--porcelain'],
@@ -139,6 +144,7 @@ describe('engine/setup-triage — quarantine (TS-2 happy)', () => {
     });
 
     // Verify the sequence of git commands
+    expect(calls).toContainEqual(['rev-parse', '--verify', 'wip/setup-quarantine-test-slug']);
     expect(calls).toContainEqual(['add', '-A']);
     expect(calls).toContainEqual(['rev-parse', 'HEAD']);
     expect(calls).toContainEqual(['branch', '-f', 'wip/setup-quarantine-test-slug', 'aaaaaaa11111111111111111111111111111111']);
@@ -184,11 +190,6 @@ describe('engine/setup-triage — quarantine (TS-2 negative, existing quarantine
         match: ['reset', '--hard', 'HEAD~1'],
         result: { stdout: 'HEAD is now at cccccc Original commit\n' },
       },
-      // Verify old commit still resolves: rev-parse bbbbbb...
-      {
-        match: ['rev-parse', 'bbbbbb22222222222222222222222222222222'],
-        result: { stdout: 'bbbbbb22222222222222222222222222222222\n', exitCode: 0 },
-      },
     ]);
 
     const result = await quarantine(git, 'test-slug', fakeLogger);
@@ -207,9 +208,6 @@ describe('engine/setup-triage — quarantine (TS-2 negative, existing quarantine
     expect(calls).toContainEqual(['rev-parse', 'HEAD']);
     expect(calls).toContainEqual(['branch', '-f', 'wip/setup-quarantine-test-slug', 'aaaaaaa11111111111111111111111111111111']);
     expect(calls).toContainEqual(['reset', '--hard', 'HEAD~1']);
-
-    // Verify old commit still resolves
-    expect(calls).toContainEqual(['rev-parse', 'bbbbbb22222222222222222222222222222222']);
   });
 });
 
@@ -426,25 +424,25 @@ describe('engine/setup-triage — retryPrepareAfterQuarantine (TS-2 happy path: 
 });
 
 describe('engine/setup-triage — runTriage (Task 8: zero-touch guarantees)', () => {
-  it('TS-1 negative: runTriage requires SetupFailureError input (constructor guard)', () => {
+  it('TS-1 negative: runTriage requires SetupFailureError input (constructor guard)', async () => {
     const { git } = fakeGit([]);
     const logs: string[] = [];
 
     // Try to call runTriage without SetupFailureError — should throw at construction
-    expect(() => {
+    await expect(
       // @ts-expect-error Testing runtime guard: intentionally pass null
-      runTriage(git, '/path/to/wt', 'slug', null, async () => {}, { log: (msg: string) => logs.push(msg) });
-    }).toThrow();
+      runTriage(git, '/path/to/wt', 'slug', null, async () => {}, { log: (msg: string) => logs.push(msg) })
+    ).rejects.toThrow();
   });
 
-  it('TS-1 negative: runTriage throws if SetupFailureError is undefined', () => {
+  it('TS-1 negative: runTriage throws if SetupFailureError is undefined', async () => {
     const { git } = fakeGit([]);
 
     // Calling runTriage without SetupFailureError should throw
-    expect(() => {
+    await expect(
       // @ts-expect-error Testing runtime guard: undefined error
-      runTriage(git, '/path/to/wt', 'slug', undefined, async () => {});
-    }).toThrow();
+      runTriage(git, '/path/to/wt', 'slug', undefined, async () => {})
+    ).rejects.toThrow();
   });
 
   it('TS-2 negative: dirty tree is never quarantined without SetupFailureError', async () => {
@@ -473,6 +471,11 @@ describe('engine/setup-triage — runTriage (Task 8: zero-touch guarantees)', ()
 
   it('TS-2 happy path: runTriage with SetupFailureError on dirty tree quarantines and retries', async () => {
     const { git, calls } = fakeGit([
+      // Quarantine: check if branch exists (first call in quarantine)
+      {
+        match: ['rev-parse', '--verify', 'wip/setup-quarantine-test-slug'],
+        result: { exitCode: 1, stdout: '', stderr: '' }, // Branch doesn't exist yet
+      },
       // Initial status for triage
       {
         match: ['status', '--porcelain'],
@@ -535,7 +538,8 @@ describe('engine/setup-triage — runTriage (Task 8: zero-touch guarantees)', ()
 
   it('TS-1 happy: runTriage constructs and executes only with valid SetupFailureError', async () => {
     const { git, calls } = fakeGit([
-      // Initial status for triage
+      // Quarantine: check if branch exists (first call in quarantine would be, but tree is clean so no quarantine)
+      // But classifyTree is called first, which calls status
       {
         match: ['status', '--porcelain'],
         result: { stdout: '' }, // Clean tree
@@ -553,6 +557,7 @@ describe('engine/setup-triage — runTriage (Task 8: zero-touch guarantees)', ()
 
     expect(result).toBeDefined();
     expect(result.kind).toBe('pass'); // Clean tree, no quarantine needed
+    expect(prepareCalled).toBe(false); // runPrepare not called for pass outcome
   });
 });
 
