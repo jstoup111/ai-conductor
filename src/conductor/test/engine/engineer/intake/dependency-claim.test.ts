@@ -555,3 +555,98 @@ describe('Task 7: composability — blocked critical defers to next banded candi
     expect(transitions.length).toBe(0);
   });
 });
+
+describe('Task 8: no-loss invariant — crash mid-walk releases every drained envelope', () => {
+  /** Fake queue that tracks claims vs releases explicitly — used to assert
+   * every drained-but-not-selected envelope is released even when the
+   * verdict loop throws. */
+  function makeAccountingQueue(envelopes: ReturnType<typeof makeEnvelope>[]) {
+    const pending = [...envelopes];
+    let claims = 0;
+    const released: any[] = [];
+    let claimed: any[] = [];
+    return {
+      queue: {
+        async claim() {
+          const e = pending.shift();
+          if (!e) return null;
+          claims += 1;
+          claimed.push(e);
+          return e;
+        },
+        async release(e: any) {
+          released.push(e);
+          claimed = claimed.filter((c) => c !== e);
+        },
+      },
+      stats: {
+        get claims() {
+          return claims;
+        },
+        get released() {
+          return released;
+        },
+        get stillClaimed() {
+          return claimed;
+        },
+      },
+    };
+  }
+
+  it('resolver throws on the 2nd candidate → throw propagates AND every drained, non-selected envelope was released', async () => {
+    const { claimUnblocked } = await loadClaimModule();
+    const A = makeEnvelope('acme/app#1', '2026-07-01T00:00:00.000Z');
+    const B = makeEnvelope('acme/app#2', '2026-07-02T00:00:00.000Z');
+    const C = makeEnvelope('acme/app#3', '2026-07-03T00:00:00.000Z');
+    const { queue, stats } = makeAccountingQueue([A, B, C]);
+
+    let calls = 0;
+    const resolveDependency = async (_sourceRef: string | undefined) => {
+      calls += 1;
+      if (calls === 1) {
+        return { kind: 'blocked', blockers: [{ repo: 'acme/app', number: '9' }] } as const;
+      }
+      throw new Error('resolver boom on 2nd candidate');
+    };
+
+    await expect(claimUnblocked({ queue, resolveDependency })).rejects.toThrow(
+      'resolver boom on 2nd candidate',
+    );
+
+    // All 3 entries were drained via claim() up front (drain-first shape).
+    expect(stats.claims).toBe(3);
+    // Nothing was ever selected (the throw happened during verdict
+    // evaluation), so all 3 drained entries — including C, which was never
+    // even evaluated — must be released. Losing C here would be exactly the
+    // "drained but never released" bug this test guards against.
+    expect(stats.released.length).toBe(3);
+    expect(stats.released).toContain(A);
+    expect(stats.released).toContain(B);
+    expect(stats.released).toContain(C);
+    expect(stats.stillClaimed.length).toBe(0);
+  });
+
+  it('a queue whose claim() returns null after the first drain (someone else drained) → empty outcome unchanged', async () => {
+    const { claimUnblocked } = await loadClaimModule();
+    let claimCalls = 0;
+    const released: any[] = [];
+    const queue = {
+      async claim() {
+        claimCalls += 1;
+        // Simulate a concurrent claimant: from this walk's perspective the
+        // queue is already empty on the very first call.
+        return null;
+      },
+      async release(e: any) {
+        released.push(e);
+      },
+    };
+    const resolveDependency = async () => ({ kind: 'unblocked' }) as const;
+
+    const outcome = await claimUnblocked({ queue, resolveDependency });
+
+    expect(outcome.kind).toBe('empty');
+    expect(claimCalls).toBe(1);
+    expect(released.length).toBe(0);
+  });
+});
