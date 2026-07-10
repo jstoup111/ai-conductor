@@ -7,6 +7,7 @@ import {
   haltMarkerExists,
   clearHaltMarker,
   haltMarkerPath,
+  readHaltMarkerContent,
   HALT_MARKER_RELATIVE,
 } from '../../src/engine/task-progress.js';
 
@@ -103,6 +104,41 @@ describe('task-progress', () => {
     it('clearHaltMarker is safe to call when the marker is absent', async () => {
       await clearHaltMarker(dir);
       expect(await haltMarkerExists(dir)).toBe(false);
+    });
+
+    it('readHaltMarkerContent returns null when the file does not exist', async () => {
+      const content = await readHaltMarkerContent(dir);
+      expect(content).toBeNull();
+    });
+
+    it('readHaltMarkerContent returns the raw string when the file exists', async () => {
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(join(dir, '.pipeline/halt-user-input-required'), 'blocker reason');
+      const content = await readHaltMarkerContent(dir);
+      expect(content).toBe('blocker reason');
+    });
+
+    it('readHaltMarkerContent returns exact multi-line content', async () => {
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      const multiLine = 'line 1\nline 2\nline 3';
+      await writeFile(join(dir, '.pipeline/halt-user-input-required'), multiLine);
+      const content = await readHaltMarkerContent(dir);
+      expect(content).toBe(multiLine);
+    });
+
+    it('readHaltMarkerContent returns empty string when file is empty', async () => {
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(join(dir, '.pipeline/halt-user-input-required'), '');
+      const content = await readHaltMarkerContent(dir);
+      expect(content).toBe('');
+    });
+
+    it('readHaltMarkerContent returns raw string with whitespace preserved', async () => {
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      const whitespaceContent = '  spaces  \n\ttabs\t  ';
+      await writeFile(join(dir, '.pipeline/halt-user-input-required'), whitespaceContent);
+      const content = await readHaltMarkerContent(dir);
+      expect(content).toBe(whitespaceContent);
     });
   });
 });

@@ -116,6 +116,22 @@ export async function haltMarkerExists(projectRoot: string): Promise<boolean> {
 }
 
 /**
+ * Read the content of the halt marker file exactly as written. Returns null
+ * if the file doesn't exist (ENOENT or any other error). Returns the raw
+ * string content (possibly empty) if the file exists.
+ *
+ * Used by skills to retrieve the reason or context for a stall from the
+ * halt marker body.
+ */
+export async function readHaltMarkerContent(projectRoot: string): Promise<string | null> {
+  try {
+    return await readFile(haltMarkerPath(projectRoot), 'utf-8');
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Clear the halt marker once the conductor has acknowledged it (handed off
  * to interactive mode). Silent on missing file — idempotent.
  */
