@@ -8,6 +8,7 @@ import type {
   EffortLevel,
   MarkdownViewerConfig,
   MermaidRendererConfig,
+  BuildProgressConfig,
 } from '../types/config.js';
 import type { StepName, EnforcementLevel } from '../types/index.js';
 import { ALL_STEPS } from './steps.js';
@@ -168,6 +169,8 @@ export function validateConfig(
     'memory_provider',
     // Observability
     'otel',
+    // Intra-step build progress events (poll/quiet/heartbeat cadence).
+    'build_progress',
     // Owner-gate (adr-2026-06-30-*): operator identity + grandfather cutover.
     'spec_owner',
     'owner_gate_cutover',
@@ -1158,4 +1161,44 @@ export async function resolveMemoryProvider(
   }
 
   return registry.tryGet('memory_provider', 'local');
+}
+
+/**
+ * Fully resolved build_progress config — all fields required. Every field
+ * falls back to its documented default when absent from the source config.
+ */
+export type ResolvedBuildProgressConfig = Required<BuildProgressConfig>;
+
+const BUILD_PROGRESS_DEFAULTS: ResolvedBuildProgressConfig = {
+  poll_seconds: 30,
+  quiet_minutes: 15,
+  heartbeat_minutes: 5,
+  enabled: true,
+};
+
+/**
+ * Resolve the `build_progress:` block from `config`, filling in defaults for
+ * any unset field. A wholly absent block resolves to all defaults
+ * (poll_seconds: 30, quiet_minutes: 15, heartbeat_minutes: 5, enabled: true).
+ * Never throws — unknown/malformed inputs simply fall back to defaults for
+ * the affected field.
+ *
+ * @param config - The HarnessConfig (or partial) to read `build_progress` from.
+ */
+export function resolveBuildProgressConfig(
+  config: Pick<HarnessConfig, 'build_progress'>,
+): ResolvedBuildProgressConfig {
+  const buildProgress = config.build_progress;
+
+  if (!buildProgress) {
+    return { ...BUILD_PROGRESS_DEFAULTS };
+  }
+
+  return {
+    poll_seconds: buildProgress.poll_seconds ?? BUILD_PROGRESS_DEFAULTS.poll_seconds,
+    quiet_minutes: buildProgress.quiet_minutes ?? BUILD_PROGRESS_DEFAULTS.quiet_minutes,
+    heartbeat_minutes:
+      buildProgress.heartbeat_minutes ?? BUILD_PROGRESS_DEFAULTS.heartbeat_minutes,
+    enabled: buildProgress.enabled ?? BUILD_PROGRESS_DEFAULTS.enabled,
+  };
 }
