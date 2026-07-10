@@ -124,7 +124,7 @@ describe('PRE_DISPATCH_HOOK behavior', () => {
     writeFileSync(hookPath, PRE_DISPATCH_HOOK, { mode: 0o755 });
 
     const payload = loadPreDispatchPayload('pre-dispatch-task-id.json', {
-      prompt: 'Task: none — reply with the single word done',
+      prompt: 'Task: none',
     });
 
     let exitCode = 0;
@@ -249,5 +249,108 @@ describe('PRE_DISPATCH_HOOK behavior', () => {
 
     expect(existsSync(join(pipelineDir, 'current-task'))).toBe(true);
     expect(readFileSync(join(pipelineDir, 'current-task'), 'utf-8')).toBe('7');
+  });
+
+  it('exits 2 and leaves state untouched when the task id is unknown', () => {
+    tempDir = mkdtempSync(join(tmpdir(), 'pre-dispatch-hook-'));
+    const pipelineDir = join(tempDir, '.pipeline');
+    mkdirSync(pipelineDir, { recursive: true });
+
+    const statusPath = join(pipelineDir, 'task-status.json');
+    const seededStatus = JSON.stringify({
+      tasks: [
+        { id: '1', status: 'completed' },
+        { id: '2', status: 'in_progress' },
+        { id: '7', status: 'pending' },
+      ],
+    });
+    writeFileSync(statusPath, seededStatus, 'utf-8');
+
+    const hookPath = join(tempDir, 'pre-dispatch-hook.sh');
+    writeFileSync(hookPath, PRE_DISPATCH_HOOK, { mode: 0o755 });
+
+    const payload = loadPreDispatchPayload('pre-dispatch-task-id.json', {
+      prompt: 'Task: 99',
+    });
+
+    let exitCode = 0;
+    let stderr = '';
+    try {
+      execFileSync('bash', [hookPath], {
+        input: JSON.stringify(payload),
+        cwd: tempDir,
+        stdio: 'pipe',
+      });
+    } catch (err) {
+      const execErr = err as { status?: number; stderr?: Buffer };
+      exitCode = execErr.status ?? 1;
+      stderr = execErr.stderr ? execErr.stderr.toString('utf-8') : '';
+    }
+
+    expect(exitCode).toBe(2);
+    expect(stderr).toContain('99');
+    expect(stderr).toContain('1');
+    expect(stderr).toContain('2');
+    expect(stderr).toContain('7');
+
+    expect(readFileSync(statusPath, 'utf-8')).toBe(seededStatus);
+    expect(existsSync(join(pipelineDir, 'current-task'))).toBe(false);
+  });
+
+  describe('malformed line-1 marker grammar', () => {
+    const seededStatus = {
+      tasks: [
+        { id: '1', status: 'pending' },
+        { id: '7', status: 'pending' },
+        { id: '8', status: 'pending' },
+      ],
+    };
+
+    const scenarios: Array<[string, string]> = [
+      [
+        'line 1 lacking any marker (body may contain Task: tokens)',
+        ['reply with the single word done', '', 'Task: 7'].join('\n'),
+      ],
+      ['line 1 "Task:7" (no space)', 'Task:7'],
+      ['line 1 "task: 7" (lowercase)', 'task: 7'],
+      ['line 1 "Task: 7 and Task: 8" (multiple markers)', 'Task: 7 and Task: 8'],
+    ];
+
+    it.each(scenarios)('blocks with exit 2 and an instructive stderr message: %s', (_label, prompt) => {
+      tempDir = mkdtempSync(join(tmpdir(), 'pre-dispatch-hook-'));
+      const pipelineDir = join(tempDir, '.pipeline');
+      mkdirSync(pipelineDir, { recursive: true });
+
+      const statusPath = join(pipelineDir, 'task-status.json');
+      const seededStatusJson = JSON.stringify(seededStatus);
+      writeFileSync(statusPath, seededStatusJson, 'utf-8');
+
+      const hookPath = join(tempDir, 'pre-dispatch-hook.sh');
+      writeFileSync(hookPath, PRE_DISPATCH_HOOK, { mode: 0o755 });
+
+      const payload = loadPreDispatchPayload('pre-dispatch-task-id.json', { prompt });
+
+      let exitCode = 0;
+      let stderr = '';
+      try {
+        execFileSync('bash', [hookPath], {
+          input: JSON.stringify(payload),
+          cwd: tempDir,
+          stdio: 'pipe',
+        });
+      } catch (err) {
+        const execErr = err as { status?: number; stderr?: Buffer };
+        exitCode = execErr.status ?? 1;
+        stderr = execErr.stderr ? execErr.stderr.toString('utf-8') : '';
+      }
+
+      expect(exitCode).toBe(2);
+      expect(stderr).toMatch(/Task: <id>/);
+      expect(stderr).toMatch(/Task: none/);
+
+      // Zero state change
+      expect(readFileSync(statusPath, 'utf-8')).toBe(seededStatusJson);
+      expect(existsSync(join(pipelineDir, 'current-task'))).toBe(false);
+    });
   });
 });
