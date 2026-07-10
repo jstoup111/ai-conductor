@@ -11,5 +11,7 @@ export default defineConfig({
     // .pipeline leak into the test cwd. This guards against the specific bug
     // where the conductor suite pollutes its own working directory.
     globalSetup: ['./test/global-setup.ts'],
+    pool: 'forks',
+    poolOptions: { forks: { maxForks: 3, minForks: 1 } },
   },
 });
