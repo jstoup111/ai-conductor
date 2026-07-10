@@ -106,21 +106,20 @@ export async function claimUnblocked(deps: DependencyClaimDeps): Promise<ClaimOu
   const deferred: AllBlockedEntry[] = [];
 
   try {
-    // Drain ALL pending entries up front via the queue's own atomic claim()
-    // primitive. This lets a band resolver see (and reorder) the full
-    // pending set before any verdict is evaluated — without it, the walk is
-    // exactly today's FIFO scan.
-    for (;;) {
-      const envelope = await queue.claim();
-      if (!envelope) break;
-      held.push(envelope);
-    }
-
-    if (held.length === 0) {
-      return { kind: 'empty' };
-    }
-
     if (resolveBands) {
+      // Drain ALL pending entries up front via the queue's own atomic claim()
+      // primitive. This lets a band resolver see (and reorder) the full
+      // pending set before any verdict is evaluated.
+      for (;;) {
+        const envelope = await queue.claim();
+        if (!envelope) break;
+        held.push(envelope);
+      }
+
+      if (held.length === 0) {
+        return { kind: 'empty' };
+      }
+
       try {
         const refs = held
           .map((e) => e.sourceRef)
@@ -150,21 +149,46 @@ export async function claimUnblocked(deps: DependencyClaimDeps): Promise<ClaimOu
         // and surface exactly one warning for operators.
         log?.('claimUnblocked: resolveBands threw; falling back to drain order', err);
       }
-    }
 
-    for (let i = 0; i < held.length; i++) {
-      const envelope = held[i];
-      const verdict = await resolveDependency(envelope.sourceRef);
-      if (verdict.kind === 'unblocked') {
-        held.splice(i, 1);
-        return { kind: 'claim', envelope };
+      // Evaluate verdicts in band order
+      for (let i = 0; i < held.length; i++) {
+        const envelope = held[i];
+        const verdict = await resolveDependency(envelope.sourceRef);
+        if (verdict.kind === 'unblocked') {
+          held.splice(i, 1);
+          return { kind: 'claim', envelope };
+        }
+
+        // blocked / indeterminate / cycle — defer, stateless, keep walking.
+        deferred.push({ envelope, verdict });
       }
 
-      // blocked / indeterminate / cycle — defer, stateless, keep walking.
-      deferred.push({ envelope, verdict });
-    }
+      return deferred.length > 0 ? { kind: 'all-blocked', entries: deferred } : { kind: 'empty' };
+    } else {
+      // Absent resolveBands: use the original claim-then-evaluate-inline loop,
+      // short-circuiting as soon as the first unblocked entry is found. This
+      // preserves the FIFO ordering and O(k) I/O cost (where k = position of
+      // first unblocked entry) of the pre-banding implementation.
+      for (;;) {
+        const envelope = await queue.claim();
+        if (!envelope) {
+          // Queue exhausted; return all-blocked if we deferred any, else empty
+          return deferred.length > 0
+            ? { kind: 'all-blocked', entries: deferred }
+            : { kind: 'empty' };
+        }
 
-    return deferred.length > 0 ? { kind: 'all-blocked', entries: deferred } : { kind: 'empty' };
+        held.push(envelope);
+        const verdict = await resolveDependency(envelope.sourceRef);
+        if (verdict.kind === 'unblocked') {
+          held.splice(held.indexOf(envelope), 1);
+          return { kind: 'claim', envelope };
+        }
+
+        // blocked / indeterminate / cycle — defer and continue
+        deferred.push({ envelope, verdict });
+      }
+    }
   } finally {
     // Release every remaining held entry back to the queue, regardless of
     // how the walk ended (claim found, empty, or an unexpected throw) — the

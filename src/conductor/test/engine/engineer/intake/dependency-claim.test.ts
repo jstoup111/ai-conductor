@@ -600,6 +600,7 @@ describe('Task 8: no-loss invariant — crash mid-walk releases every drained en
     const C = makeEnvelope('acme/app#3', '2026-07-03T00:00:00.000Z');
     const { queue, stats } = makeAccountingQueue([A, B, C]);
 
+    const resolveBands = async (refs: string[]) => new Map(refs.map((r) => [r, 'high' as const]));
     let calls = 0;
     const resolveDependency = async (_sourceRef: string | undefined) => {
       calls += 1;
@@ -609,7 +610,7 @@ describe('Task 8: no-loss invariant — crash mid-walk releases every drained en
       throw new Error('resolver boom on 2nd candidate');
     };
 
-    await expect(claimUnblocked({ queue, resolveDependency })).rejects.toThrow(
+    await expect(claimUnblocked({ queue, resolveDependency, resolveBands })).rejects.toThrow(
       'resolver boom on 2nd candidate',
     );
 
