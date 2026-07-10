@@ -754,12 +754,13 @@ describe('acceptance: startup restart handshake + suppression (Stories 3 & 4)', 
         log: (msg: string) => log.push(msg),
       });
 
-      // Suppression recorded against the fresh identity we actually booted to.
-      // This enables re-arm: different targets are not suppressed.
+      // Task 1: Suppression recorded against the marker's target identity.
+      // This prevents restart loops when the engine reaches the failed target.
+      // Enables re-arm: when the engine diverges to a different target, restart proceeds.
       const getSuppression = requireFn(restartMod, 'getSuppression');
       const suppression = await getSuppression(repoPath);
       expect(suppression).not.toBeNull();
-      expect(suppression!.suppressedTarget).toBe(freshIdentity);
+      expect(suppression!.suppressedTarget).toBe(markerTarget);
       expect(log.filter((l) => /suppress/i.test(l))).toHaveLength(1);
       expect(log.join('\n')).toContain(markerTarget);
       expect(log.join('\n')).toContain(freshIdentity);

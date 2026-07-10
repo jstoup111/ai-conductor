@@ -155,6 +155,7 @@ describe('acceptance: real-flow suppression breaks the restart loop within the s
         // suppression must not outlive its target: the restart now proceeds.
         await buildFixtureDist(distWorkDir, FIXTURE_V3);
         const checkerAtU = createStaleEngineChecker(bootIdentity, dist);
+        expect(checkerAtU.check()).toBe('stale'); // real content diverged from bootIdentity
         const uIdentity = checkerAtU.targetIdentity?.() ?? null;
         expect(uIdentity).not.toBe(targetIdentity);
 
