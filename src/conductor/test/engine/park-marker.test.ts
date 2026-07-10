@@ -929,4 +929,103 @@ describe('reconcileStrandedParkMarkers (Task 13)', () => {
       }
     }
   });
+
+  it('reconcileStrandedParkMarkers() failure isolation: readable marker moves, unreadable skipped', async () => {
+    const worktreeDir = await initRepoWithWorktree('feature-failure-isolation');
+    const readableSlug = 'readable-marker';
+    const unreadableSlug = 'unreadable-marker';
+    const readableBody = 'auto-parked: readable\ntimestamp: 2026-01-01T00:00:00.000Z\n';
+    const unreadableBody = 'auto-parked: unreadable\ntimestamp: 2026-01-01T00:00:00.000Z\n';
+
+    // Seed two stranded markers in worktree
+    const parkedDir = join(worktreeDir, '.daemon', 'parked');
+    await mkdir(parkedDir, { recursive: true });
+    const readableMarkerPath = join(parkedDir, readableSlug);
+    const unreadableMarkerPath = join(parkedDir, unreadableSlug);
+    await writeFile(readableMarkerPath, readableBody);
+    await writeFile(unreadableMarkerPath, unreadableBody);
+
+    // Make only the unreadable marker file inaccessible (chmod 000)
+    await chmod(unreadableMarkerPath, 0o000);
+
+    try {
+      // Run reconciliation with logging
+      const logs: string[] = [];
+      await reconcileStrandedParkMarkers(mainRoot, (msg) => logs.push(msg));
+
+      // The readable marker should have been reconciled to main root
+      const mainReadableMarkerPath = join(mainRoot, '.daemon', 'parked', readableSlug);
+      const mainReadableContent = await readFile(mainReadableMarkerPath, 'utf-8');
+      expect(mainReadableContent).toBe(readableBody);
+
+      // The readable marker should be deleted from worktree
+      try {
+        await readFile(readableMarkerPath);
+        throw new Error('readable marker should not exist in worktree after reconciliation');
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+          throw err;
+        }
+      }
+
+      // The unreadable marker should still exist in worktree (skipped)
+      // We can't read it because it's chmod 000, but we can verify the deletion attempt failed
+      try {
+        const stat = require('node:fs').statSync(unreadableMarkerPath);
+        expect(stat).toBeTruthy(); // file should still exist
+      } catch (err) {
+        // If stat fails, the file was successfully deleted - that's wrong
+        throw new Error('unreadable marker should remain in worktree (not deleted)');
+      }
+
+      // Logs should contain failure information for the unreadable marker
+      const failureLogs = logs.filter((log) => log.includes('Failed to') || log.includes('reconcile'));
+      expect(failureLogs.length).toBeGreaterThan(0);
+    } finally {
+      // Restore permissions for cleanup
+      await chmod(unreadableMarkerPath, 0o644);
+    }
+  });
+
+  it('reconcileStrandedParkMarkers() cross-slug stray: marker filename differs from worktree dirname', async () => {
+    const worktreeDir = await initRepoWithWorktree('feature-cross-slug');
+
+    // Create a marker with filename 'foo-bar' in a worktree named 'foo-baz'
+    const markerFilename = 'foo-bar';
+    const parkedDir = join(worktreeDir, '.daemon', 'parked');
+    await mkdir(parkedDir, { recursive: true });
+    const strandedMarkerPath = join(parkedDir, markerFilename);
+    const strandedBody = 'auto-parked: cross-slug-stray\ntimestamp: 2026-01-01T00:00:00.000Z\n';
+    await writeFile(strandedMarkerPath, strandedBody);
+
+    // Run reconciliation
+    const logs: string[] = [];
+    await reconcileStrandedParkMarkers(mainRoot, (msg) => logs.push(msg));
+
+    // Main marker should exist with key = markerFilename (not worktree dirname)
+    const mainMarkerPath = join(mainRoot, '.daemon', 'parked', markerFilename);
+    const mainContent = await readFile(mainMarkerPath, 'utf-8');
+    expect(mainContent).toBe(strandedBody);
+
+    // Verify no marker was created with the worktree dirname as key
+    const wrongMarkerPath = join(mainRoot, '.daemon', 'parked', 'feature-cross-slug');
+    try {
+      await readFile(wrongMarkerPath);
+      throw new Error('marker should not exist with worktree dirname as key');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+        throw err;
+      }
+    }
+
+    // Worktree marker should be gone
+    try {
+      await readFile(strandedMarkerPath);
+      throw new Error('worktree marker should not exist after reconciliation');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+        throw err;
+      }
+    }
+  });
 });
