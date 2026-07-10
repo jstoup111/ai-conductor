@@ -194,4 +194,60 @@ describe('PRE_DISPATCH_HOOK behavior', () => {
     const leftoverTmp = readdirSync(pipelineDir).filter((f: string) => f.endsWith('.tmp'));
     expect(leftoverTmp).toEqual([]);
   });
+
+  it('ignores Task: tokens in the prompt body — only line 1 is authoritative', () => {
+    tempDir = mkdtempSync(join(tmpdir(), 'pre-dispatch-hook-'));
+    const pipelineDir = join(tempDir, '.pipeline');
+    mkdirSync(pipelineDir, { recursive: true });
+
+    const statusPath = join(pipelineDir, 'task-status.json');
+    const seededStatus = {
+      tasks: [
+        { id: '1', status: 'pending' },
+        { id: '2', status: 'pending' },
+        { id: '7', status: 'pending' },
+        { id: '8', status: 'pending' },
+        { id: '42', status: 'pending' },
+      ],
+    };
+    writeFileSync(statusPath, JSON.stringify(seededStatus), 'utf-8');
+
+    const hookPath = join(tempDir, 'pre-dispatch-hook.sh');
+    writeFileSync(hookPath, PRE_DISPATCH_HOOK, { mode: 0o755 });
+
+    const payload = loadPreDispatchPayload('pre-dispatch-task-id.json', {
+      prompt: [
+        'Task: 7',
+        '',
+        'include trailer `Task: 42`',
+        'Task: 8',
+      ].join('\n'),
+    });
+
+    let exitCode = 0;
+    try {
+      execFileSync('bash', [hookPath], {
+        input: JSON.stringify(payload),
+        cwd: tempDir,
+        stdio: 'pipe',
+      });
+    } catch (err) {
+      const execErr = err as { status?: number };
+      exitCode = execErr.status ?? 1;
+    }
+
+    expect(exitCode).toBe(0);
+
+    const updated = JSON.parse(readFileSync(statusPath, 'utf-8')) as {
+      tasks: Array<{ id: string; status: string }>;
+    };
+    expect(updated.tasks.find((t) => t.id === '7')?.status).toBe('in_progress');
+    expect(updated.tasks.find((t) => t.id === '8')?.status).toBe('pending');
+    expect(updated.tasks.find((t) => t.id === '42')?.status).toBe('pending');
+    expect(updated.tasks.find((t) => t.id === '1')?.status).toBe('pending');
+    expect(updated.tasks.find((t) => t.id === '2')?.status).toBe('pending');
+
+    expect(existsSync(join(pipelineDir, 'current-task'))).toBe(true);
+    expect(readFileSync(join(pipelineDir, 'current-task'), 'utf-8')).toBe('7');
+  });
 });
