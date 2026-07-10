@@ -2086,6 +2086,27 @@ work it depends on.
   attempt increment) — and the walk continues to the next-oldest entry. The first `unblocked`
   entry found is claimed (oldest-unblocked-wins), even if older blocked entries were skipped
   over.
+- **Priority-banded claim ordering (`resolveClaimBands`, `PRIORITY_BAND_RANK` in
+  `backlog-priority.ts`).** When a band resolver is wired in, `claimUnblocked` first drains
+  **every** pending entry off the queue (via its own atomic `claim()`), then sorts the held
+  entries by priority band **before** evaluating any dependency verdict: `no-issue` (no
+  `sourceRef`) → `critical` → `high` → `medium` → `low` → `unlabeled`. The sort key is band
+  rank only; entries tied on band fall back to `originalIndex` — the drain order the queue
+  produced from its own `receivedAt__id` filename sort — so same-band entries stay strictly
+  oldest-first relative to each other (`Array.prototype.sort`'s ES2019+ stability guarantee
+  makes this deterministic across runs). Labels are read from GitHub **at claim time**, one
+  batched call per claim (never cached across claims), so a relabel between claims is honored
+  on the very next claim. Dependency verdicts are then evaluated in the resulting band order —
+  the walk still short-circuits on the first `unblocked` entry, defers the rest, and reports
+  `all-blocked` if none is unblocked — and every held entry not claimed is released back to the
+  queue in the `finally` block regardless of outcome. **Fail-open to FIFO on GitHub outage:** if
+  the band resolver throws (`gh` API error, auth failure, etc.), the sort step is skipped
+  entirely — `claimUnblocked` logs exactly one warning (`priority label resolution failed;
+  falling back to drain order`) and proceeds with the entries in plain oldest-first drain order.
+  A resolver failure never fails the claim itself. When no band resolver is injected at all, the
+  original oldest-first claim-then-evaluate-inline loop runs unchanged (byte-for-byte FIFO,
+  today's pre-banding behavior). The claimed envelope's JSON shape is unchanged:
+  `{kind, text, source, sourceRef}`.
 - **All-blocked outcome, distinct from empty.** If the walk exhausts the queue without finding
   an unblocked entry, the outcome is `{ kind: 'all-blocked', entries }` — listing every deferred
   entry and its verdict — rather than `{ kind: 'empty' }`. This lets an operator tell "nothing to
