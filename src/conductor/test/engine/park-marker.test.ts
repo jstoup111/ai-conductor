@@ -10,6 +10,8 @@ import {
   getProvenanceType,
   writeOperatorPark,
   resolveMainRepoRoot,
+  removeOperatorPark,
+  listOperatorParkedSlugs,
   __resetResolveCacheForTests,
 } from '../../src/engine/park-marker';
 
@@ -281,5 +283,177 @@ describe('resolveMainRepoRoot (Task 1)', () => {
     expect(resolved).toBe(nonExistentPath);
     // Error should be logged (git command failed)
     expect(errors.length).toBeGreaterThan(0);
+  });
+});
+
+describe('write/read primitives converge on main root (Task 4)', () => {
+  let mainRoot: string;
+
+  async function g(args: string[], cwd?: string) {
+    return execFile('git', args, { cwd: cwd || mainRoot });
+  }
+
+  /** Create a real git repo at mainRoot with a real linked worktree. */
+  async function initRepoWithWorktree(slug: string): Promise<string> {
+    await g(['init', '-q', '-b', 'main']);
+    await g(['config', 'user.email', 't@t.com']);
+    await g(['config', 'user.name', 'T']);
+    await g(['config', 'commit.gpgsign', 'false']);
+    await writeFile(join(mainRoot, 'README.md'), '# base\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'init']);
+    await mkdir(join(mainRoot, '.worktrees'), { recursive: true });
+    const worktreeDir = join(mainRoot, '.worktrees', slug);
+    await g(['worktree', 'add', '-b', `spec/${slug}`, worktreeDir, 'main']);
+    return worktreeDir;
+  }
+
+  beforeEach(async () => {
+    mainRoot = await mkdtemp(join(tmpdir(), 'task4-convergence-'));
+    __resetResolveCacheForTests?.();
+  });
+
+  afterEach(async () => {
+    await rm(mainRoot, { recursive: true, force: true });
+    __resetResolveCacheForTests?.();
+  });
+
+  it('writeAutoPark(worktreeDir) writes marker to main root, not worktree', async () => {
+    const worktreeDir = await initRepoWithWorktree('feature-a');
+    const slug = 'my-auto-park';
+    const reason = 'No evidence after 3 attempts';
+
+    await writeAutoPark(worktreeDir, slug, reason);
+
+    // Marker should exist at MAIN root, not worktree
+    const mainMarkerPath = join(mainRoot, '.daemon', 'parked', slug);
+    const worktreeMarkerPath = join(worktreeDir, '.daemon', 'parked', slug);
+
+    const mainContent = await readFile(mainMarkerPath, 'utf-8');
+    expect(mainContent).toContain('auto-parked: No evidence after 3 attempts');
+
+    // Worktree should NOT have a .daemon/parked directory
+    try {
+      await readFile(worktreeMarkerPath);
+      throw new Error('worktree marker should not exist');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+        throw err;
+      }
+    }
+  });
+
+  it('writeOperatorPark(worktreeDir) writes marker to main root, not worktree', async () => {
+    const worktreeDir = await initRepoWithWorktree('feature-b');
+    const slug = 'my-operator-park';
+
+    await writeOperatorPark(worktreeDir, slug);
+
+    // Marker should exist at MAIN root, not worktree
+    const mainMarkerPath = join(mainRoot, '.daemon', 'parked', slug);
+    const worktreeMarkerPath = join(worktreeDir, '.daemon', 'parked', slug);
+
+    const mainContent = await readFile(mainMarkerPath, 'utf-8');
+    expect(mainContent).toContain('parked by operator');
+
+    // Worktree should NOT have a .daemon/parked directory
+    try {
+      await readFile(worktreeMarkerPath);
+      throw new Error('worktree marker should not exist');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+        throw err;
+      }
+    }
+  });
+
+  it('isOperatorParked(worktreeDir) returns true for auto-parked marker at main root', async () => {
+    const worktreeDir = await initRepoWithWorktree('feature-c');
+    const slug = 'my-auto-park-2';
+
+    await writeAutoPark(worktreeDir, slug, 'Test reason');
+
+    // Both roots should see the marker as parked
+    const fromWorktree = await isOperatorParked(worktreeDir, slug);
+    const fromMain = await isOperatorParked(mainRoot, slug);
+
+    expect(fromWorktree).toBe(true);
+    expect(fromMain).toBe(true);
+  });
+
+  it('isOperatorParked(worktreeDir) returns true for operator-parked marker at main root', async () => {
+    const worktreeDir = await initRepoWithWorktree('feature-d');
+    const slug = 'my-operator-park-2';
+
+    await writeOperatorPark(worktreeDir, slug);
+
+    // Both roots should see the marker as parked
+    const fromWorktree = await isOperatorParked(worktreeDir, slug);
+    const fromMain = await isOperatorParked(mainRoot, slug);
+
+    expect(fromWorktree).toBe(true);
+    expect(fromMain).toBe(true);
+  });
+
+  it('getProvenanceType(worktreeDir) returns "auto" for auto-parked marker', async () => {
+    const worktreeDir = await initRepoWithWorktree('feature-e');
+    const slug = 'my-auto-provenance';
+
+    await writeAutoPark(worktreeDir, slug, 'Auto-park test');
+
+    // Both roots should see the same provenance
+    const fromWorktree = await getProvenanceType(worktreeDir, slug);
+    const fromMain = await getProvenanceType(mainRoot, slug);
+
+    expect(fromWorktree).toBe('auto');
+    expect(fromMain).toBe('auto');
+  });
+
+  it('getProvenanceType(worktreeDir) returns "operator" for operator-parked marker', async () => {
+    const worktreeDir = await initRepoWithWorktree('feature-f');
+    const slug = 'my-operator-provenance';
+
+    await writeOperatorPark(worktreeDir, slug);
+
+    // Both roots should see the same provenance
+    const fromWorktree = await getProvenanceType(worktreeDir, slug);
+    const fromMain = await getProvenanceType(mainRoot, slug);
+
+    expect(fromWorktree).toBe('operator');
+    expect(fromMain).toBe('operator');
+  });
+
+  it('listOperatorParkedSlugs(worktreeDir) includes markers from main root', async () => {
+    const worktreeDir = await initRepoWithWorktree('feature-g');
+    const slug1 = 'slug-1';
+    const slug2 = 'slug-2';
+
+    await writeAutoPark(worktreeDir, slug1, 'reason 1');
+    await writeOperatorPark(mainRoot, slug2);
+
+    // Both roots should list both slugs
+    const fromWorktree = await listOperatorParkedSlugs(worktreeDir);
+    const fromMain = await listOperatorParkedSlugs(mainRoot);
+
+    expect(fromWorktree).toContain(slug1);
+    expect(fromWorktree).toContain(slug2);
+    expect(fromMain).toContain(slug1);
+    expect(fromMain).toContain(slug2);
+  });
+
+  it('removeOperatorPark(worktreeDir) removes marker from main root', async () => {
+    const worktreeDir = await initRepoWithWorktree('feature-h');
+    const slug = 'my-removable-park';
+
+    await writeOperatorPark(worktreeDir, slug);
+    expect(await isOperatorParked(worktreeDir, slug)).toBe(true);
+
+    await removeOperatorPark(worktreeDir, slug);
+    expect(await isOperatorParked(mainRoot, slug)).toBe(false);
+  });
+
+  it('import: removeOperatorPark is exported for use in tests', async () => {
+    // This is a placeholder to ensure removeOperatorPark is importable
+    expect(typeof removeOperatorPark).toBe('function');
   });
 });
