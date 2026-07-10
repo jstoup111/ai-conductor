@@ -5,6 +5,7 @@
 // walk; the all-blocked outcome lands in Task 21.
 
 import type { BlockerVerdict } from '../../blocker-resolver.js';
+import { parsePriorityLabels, type IssueLabelReader, type PriorityBand } from '../../backlog-priority.js';
 
 /** Minimal envelope shape this module cares about. */
 export interface ClaimableEnvelope {
@@ -59,6 +60,33 @@ export type ClaimOutcome =
  *    (blocked, indeterminate, or cycle) — distinct from empty, so operators
  *    can see WHY the queue is stalled and by what.
  */
+/**
+ * Resolve the priority band for each of the given sourceRefs, via a single
+ * batched call to the injected IssueLabelReader. TR-1: a 404 (`not-found`)
+ * or a ref absent from the reader's result both default to `unlabeled`;
+ * when a ref carries multiple priority labels, the highest band wins (via
+ * parsePriorityLabels). A throwing reader propagates the throw untouched —
+ * this helper does not catch or degrade to a fallback mode.
+ */
+export async function resolveClaimBands(
+  reader: IssueLabelReader,
+  refs: string[],
+): Promise<Map<string, PriorityBand>> {
+  const uniqueRefs = [...new Set(refs)];
+  const readerResult = await reader(uniqueRefs);
+
+  const bands = new Map<string, PriorityBand>();
+  for (const ref of uniqueRefs) {
+    const labels = readerResult.get(ref);
+    if (!labels || labels === 'not-found') {
+      bands.set(ref, 'unlabeled');
+    } else {
+      bands.set(ref, parsePriorityLabels(labels) ?? 'unlabeled');
+    }
+  }
+  return bands;
+}
+
 export async function claimUnblocked(deps: DependencyClaimDeps): Promise<ClaimOutcome> {
   const { queue, resolveDependency } = deps;
   const held: ClaimableEnvelope[] = [];

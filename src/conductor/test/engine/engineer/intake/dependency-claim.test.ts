@@ -97,6 +97,75 @@ describe('Task 19: dependency-claim — oldest-unblocked wins', () => {
   });
 });
 
+describe('Task 2: resolveClaimBands — labels to band map', () => {
+  function makeFakeReader(byRef: Record<string, string[] | 'not-found'>) {
+    return async (refs: string[]) => {
+      const result = new Map<string, string[] | 'not-found'>();
+      for (const ref of refs) {
+        if (Object.prototype.hasOwnProperty.call(byRef, ref)) {
+          result.set(ref, byRef[ref]);
+        }
+      }
+      return result;
+    };
+  }
+
+  it('returns critical for a priority: critical ref', async () => {
+    const { resolveClaimBands } = await loadClaimModule();
+    const reader = makeFakeReader({ 'acme/app#1': ['priority: critical'] });
+
+    const bands = await resolveClaimBands(reader, ['acme/app#1']);
+
+    expect(bands.get('acme/app#1')).toBe('critical');
+  });
+
+  it('returns unlabeled for a not-found ref and for a ref absent from the reader result', async () => {
+    const { resolveClaimBands } = await loadClaimModule();
+    const reader = makeFakeReader({ 'acme/app#1': 'not-found' });
+
+    const bands = await resolveClaimBands(reader, ['acme/app#1', 'acme/app#2']);
+
+    expect(bands.get('acme/app#1')).toBe('unlabeled');
+    expect(bands.get('acme/app#2')).toBe('unlabeled');
+  });
+
+  it('returns highest band for a multi-label ref', async () => {
+    const { resolveClaimBands } = await loadClaimModule();
+    const reader = makeFakeReader({
+      'acme/app#1': ['priority: low', 'priority: high', 'priority: medium'],
+    });
+
+    const bands = await resolveClaimBands(reader, ['acme/app#1']);
+
+    expect(bands.get('acme/app#1')).toBe('high');
+  });
+
+  it('a throwing reader propagates the throw', async () => {
+    const { resolveClaimBands } = await loadClaimModule();
+    const reader = async () => {
+      throw new Error('reader boom');
+    };
+
+    await expect(resolveClaimBands(reader, ['acme/app#1'])).rejects.toThrow('reader boom');
+  });
+
+  it('calls the reader exactly once with unique refs', async () => {
+    const { resolveClaimBands } = await loadClaimModule();
+    let calls = 0;
+    let receivedRefs: string[] = [];
+    const reader = async (refs: string[]) => {
+      calls += 1;
+      receivedRefs = refs;
+      return new Map<string, string[] | 'not-found'>();
+    };
+
+    await resolveClaimBands(reader, ['acme/app#1', 'acme/app#2', 'acme/app#1']);
+
+    expect(calls).toBe(1);
+    expect(receivedRefs).toEqual(['acme/app#1', 'acme/app#2']);
+  });
+});
+
 describe('Task 20: dependency-claim — deferral is free; indeterminate defers; walk continues', () => {
   it('deferred entry keeps status pending and attempts unchanged after deferral', async () => {
     const { claimUnblocked } = await loadClaimModule();
