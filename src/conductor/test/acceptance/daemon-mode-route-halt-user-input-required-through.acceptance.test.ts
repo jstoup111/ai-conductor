@@ -171,6 +171,17 @@ describe('daemon stall remediation — cross-module acceptance flows', () => {
                 ],
               }),
             );
+          } else if (step === 'manual_test') {
+            await writeFile(
+              join(dir, '.pipeline/manual-test-results.md'),
+              '# Results\n\n| Story | Result |\n|--|--|\n| s | PASS |\n',
+            ).catch(async () => {
+              await mkdir(join(dir, '.docs'), { recursive: true });
+              await writeFile(
+                join(dir, '.pipeline/manual-test-results.md'),
+                '# Results\n\n| Story | Result |\n|--|--|\n| s | PASS |\n',
+              );
+            });
           }
           return { success: true } as StepRunResult;
         }),
