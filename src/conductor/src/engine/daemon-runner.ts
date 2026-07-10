@@ -229,7 +229,7 @@ export function makeRunFeature(
             deps.runSetupTriage
           ) {
             // Daemon mode with triage handler: classify and route the failure
-            const triageOutcome = await deps.runSetupTriage(worktree, prepareErr as SetupFailureError);
+            const triageOutcome = await deps.runSetupTriage(prepareErr as SetupFailureError, worktree, item);
             if (triageOutcome.kind === 'park') {
               // Triage returned park: error outcome, worktree kept
               log(
