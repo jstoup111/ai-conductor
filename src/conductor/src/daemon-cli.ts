@@ -8,6 +8,7 @@ import { promisify } from 'node:util';
 import { closeIssueOnImplementationMerge } from './engine/engineer/issue-ref.js';
 import { rehabilitateHaltPr } from './engine/halt-pr-rehabilitation.js';
 import { isEligibleForResolve, resolveConflictingPr } from './engine/autoresolve.js';
+import { isEligibleForCiFix, runCiFix, buildCiFixHint, productionCiFixRunner } from './engine/ci-fix.js';
 import { resolveRebaseResolutionAttempts } from './engine/resolved-config.js';
 import type { LLMProvider } from './execution/llm-provider.js';
 import { PluginRegistry } from './engine/plugin-registry.js';
@@ -1255,6 +1256,61 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
               } catch (err: any) {
                 log(`[autoresolve] error resolving ${entry.prUrl}: ${err?.message || err}`);
                 return { kind: 'escalated' };
+              }
+            },
+          },
+          // Task 23: dispatch ci-fix for the first eligible failed-CI PR after
+          // the label pass, gated on `ci_watch.enabled` (default true — fail-safe
+          // per CiWatchConfig) so a disabled config leaves the sweep unchanged
+          // (AC3), and mirrors the `autoresolve` binding above (AC4).
+          ciFix: {
+            enabled: config?.ci_watch?.enabled ?? true,
+            isEligible: (entry, state) =>
+              isEligibleForCiFix(entry, state, config, new Date(), log),
+            dispatch: async (entry) => {
+              log(`[mergeable-sweep] ci-fix dispatch: ${entry.prUrl} (attempt ${entry.ciFixAttempts})`);
+
+              try {
+                const prViewResult = await execFile('sh', [
+                  '-c',
+                  `gh pr view "${entry.prUrl}" --json headRefName --jq '.headRefName'`,
+                ], { cwd: entry.repoCwd });
+
+                const branch = (prViewResult.stdout || '').toString().trim();
+                if (!branch) {
+                  log(`[ci-fix] empty branch name for ${entry.prUrl}`);
+                  return;
+                }
+
+                const ghRunner = async (args: string[]) => {
+                  const result = await execFile('gh', args, {
+                    cwd: entry.repoCwd,
+                    encoding: 'utf-8',
+                  });
+                  return { stdout: result.stdout || '' };
+                };
+
+                const hint = await buildCiFixHint(ghRunner, entry.repoCwd, entry.prUrl);
+
+                const outcome = await runCiFix(
+                  entry,
+                  branch,
+                  hint,
+                  {
+                    fixRunner: productionCiFixRunner,
+                    suiteCommand: config?.mergeable_autoresolve?.suiteCommand,
+                  },
+                  log,
+                );
+
+                log(`[ci-fix] outcome for ${entry.prUrl}: ${outcome.kind}`);
+                if (outcome.kind === 'changed') {
+                  return { kind: 'green-verified' };
+                }
+                return;
+              } catch (err: any) {
+                log(`[ci-fix] error resolving ${entry.prUrl}: ${err?.message || err}`);
+                return;
               }
             },
           },
