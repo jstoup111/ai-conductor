@@ -1,6 +1,7 @@
 import { execa } from 'execa';
-import { access, readFile, writeFile } from 'node:fs/promises';
+import { access, readFile, writeFile, mkdir, chmod, constants } from 'node:fs/promises';
 import { basename, join } from 'node:path';
+import { PREPARE_COMMIT_MSG_HOOK, COMMIT_MSG_HOOK } from './git-hook-assets.js';
 
 /** Conventional, project-supplied setup entrypoint run before a feature build. */
 export const SETUP_SCRIPT = join('bin', 'setup');
@@ -49,7 +50,107 @@ export async function prepareWorktree(
 ): Promise<void> {
   const namespace = sanitizeNamespace(basename(worktreePath));
   await writeNamespaceEnv(worktreePath, namespace, log);
+  // Write git hooks before setup so they exist even if setup fails
+  await writeGitHooksAndWire(worktreePath, log);
   await runProjectSetup(worktreePath, namespace, log);
+}
+
+/**
+ * Write git hook scripts to the worktree and wire them via git config.
+ * Fail-open: logs and continues on any error, never throwing.
+ */
+async function writeGitHooksAndWire(
+  worktreePath: string,
+  log?: (msg: string) => void,
+): Promise<void> {
+  try {
+    await writeGitHooks(worktreePath, log);
+    await wireGitHooks(worktreePath, log);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log?.(`git hooks: skipped (${msg})`);
+  }
+}
+
+/**
+ * Write the two attribution hook scripts to .pipeline/git-hooks/ and make them executable.
+ */
+async function writeGitHooks(
+  worktreePath: string,
+  log?: (msg: string) => void,
+): Promise<void> {
+  const hooksDir = join(worktreePath, '.pipeline', 'git-hooks');
+  await mkdir(hooksDir, { recursive: true });
+
+  const prepareCommitMsgPath = join(hooksDir, 'prepare-commit-msg');
+  await writeFile(prepareCommitMsgPath, PREPARE_COMMIT_MSG_HOOK, 'utf-8');
+  await chmod(prepareCommitMsgPath, 0o755);
+
+  const commitMsgPath = join(hooksDir, 'commit-msg');
+  await writeFile(commitMsgPath, COMMIT_MSG_HOOK, 'utf-8');
+  await chmod(commitMsgPath, 0o755);
+
+  log?.('git hooks: written to .pipeline/git-hooks/');
+}
+
+/**
+ * Wire the git hooks via git config: set extensions.worktreeConfig and core.hooksPath
+ * to use the worktree-scoped .pipeline/git-hooks/ directory.
+ *
+ * Note: extensions.worktreeConfig must be enabled in the *main* repository (not the
+ * worktree) before we can use --worktree flag. We find the common git dir and enable
+ * it there, then set worktree-specific configs.
+ */
+async function wireGitHooks(
+  worktreePath: string,
+  log?: (msg: string) => void,
+): Promise<void> {
+  try {
+    // Get the common git directory (shared by all worktrees)
+    const { stdout: commonDir } = await execa('git', ['-C', worktreePath, 'rev-parse', '--git-common-dir'], { all: true });
+    const gitCommonDir = commonDir.trim();
+
+    // Resolve relative path to absolute (git may return relative path like "../.git")
+    let commonDirAbs: string;
+    if (gitCommonDir.startsWith('/')) {
+      commonDirAbs = gitCommonDir;
+    } else {
+      // Relative path — make it absolute relative to the worktree
+      commonDirAbs = join(worktreePath, gitCommonDir);
+    }
+
+    // Check if we have write access to the worktree's .git before attempting config changes.
+    // This allows us to fail-open gracefully if .git is inaccessible or read-only.
+    const worktreeGit = join(worktreePath, '.git');
+    try {
+      await access(worktreeGit, constants.W_OK);
+    } catch {
+      throw new Error(`no write access to git: ${worktreeGit}`);
+    }
+
+    // Enable extensions.worktreeConfig in the *main* repository config (not --worktree)
+    // This must be done once in the shared config, not per worktree
+    try {
+      // Use git to set it, but not with --worktree (set in the shared config)
+      await execa('git', ['-C', worktreePath, 'config', 'extensions.worktreeConfig', 'true'], { all: true });
+    } catch {
+      // If this fails, it might already be set or the repo might not support it
+      // We'll continue and try the worktree-scoped config anyway
+    }
+
+    // Now set worktree-scoped config with --worktree
+    await execa('git', ['-C', worktreePath, 'config', '--worktree', 'extensions.worktreeConfig', 'true'], { all: true });
+
+    // Set core.hooksPath to the absolute path of the hooks directory (worktree-scoped)
+    const hooksPath = join(worktreePath, '.pipeline', 'git-hooks');
+    await execa('git', ['-C', worktreePath, 'config', '--worktree', 'core.hooksPath', hooksPath], { all: true });
+
+    log?.('git hooks: wired via core.hooksPath');
+  } catch (err) {
+    // Re-throw so the caller (writeGitHooksAndWire) can catch and log fail-open
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(`git config failed: ${msg}`);
+  }
 }
 
 /** Reduce a worktree dir name to a token safe as a database / resource name. */
