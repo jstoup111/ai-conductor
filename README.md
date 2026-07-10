@@ -433,6 +433,14 @@ heal requires whole-tree byte-identity to a known branch, so ambiguous dirtystat
 See `src/conductor/README.md` → "Main-checkout leak triage and auto-heal" for the detailed
 implementation and guarantee model.
 
+**Setup-failure triage (self-host only).** When `bin/setup` fails while preparing a daemon
+worktree, a bounded two-stage recovery runs instead of leaving the wedge for an agent to
+untangle blind: dirty state is first quarantined to a `wip/setup-quarantine-<slug>` branch and
+setup is retried once at clean HEAD; if it still fails, exactly one fix-session is dispatched
+with the setup error tail, and the engine mechanically verifies the success contract (setup
+exits 0, tree clean) rather than trusting the agent's report. See `src/conductor/README.md` →
+"Setup-failure triage" for the detailed stage flow.
+
 **Write-fence sandbox for self-host builds (self-host only).** When a self-host build runs in a
 sandbox, it now has a daemon-owned PreToolUse hook that blocks writes to the harness main checkout
 outside the build worktree. Edit, Write, MultiEdit, and NotebookEdit targeting paths under the
