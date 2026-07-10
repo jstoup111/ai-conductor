@@ -1,4 +1,4 @@
-import { readFile, unlink } from 'node:fs/promises';
+import { readFile, unlink, mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 /**
@@ -139,4 +139,39 @@ export async function clearHaltMarker(projectRoot: string): Promise<void> {
   await unlink(haltMarkerPath(projectRoot)).catch(() => {
     // Marker absent — nothing to clear.
   });
+}
+
+/**
+ * Write the build stall question (the reason for the halt) to an evidence file
+ * at `.pipeline/build-stall-question.md`. If content is null, empty, or
+ * whitespace-only, writes a placeholder line instead. Creates the `.pipeline`
+ * directory if needed (mkdir -p semantics).
+ *
+ * Returns the exact string written (either the content or the placeholder),
+ * for reuse by callers (e.g. to include in the HALT marker body).
+ *
+ * Used by the build-stall logic to persist the question asked during halt
+ * for debugging and audit purposes.
+ */
+export async function writeStallQuestionEvidence(
+  projectRoot: string,
+  content: string | null,
+): Promise<string> {
+  const placeholder = '(agent wrote no reason into halt-user-input-required)';
+
+  // Determine the effective text: use placeholder if content is null, empty, or whitespace-only
+  const effectiveText =
+    content === null || (typeof content === 'string' && content.trim() === '')
+      ? placeholder
+      : content;
+
+  // Create .pipeline directory if needed
+  const pipelineDir = join(projectRoot, '.pipeline');
+  await mkdir(pipelineDir, { recursive: true });
+
+  // Write to .pipeline/build-stall-question.md
+  const evidencePath = join(pipelineDir, 'build-stall-question.md');
+  await writeFile(evidencePath, effectiveText, 'utf-8');
+
+  return effectiveText;
 }

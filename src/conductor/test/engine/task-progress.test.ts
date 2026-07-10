@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -8,6 +8,7 @@ import {
   clearHaltMarker,
   haltMarkerPath,
   readHaltMarkerContent,
+  writeStallQuestionEvidence,
   HALT_MARKER_RELATIVE,
 } from '../../src/engine/task-progress.js';
 
@@ -139,6 +140,67 @@ describe('task-progress', () => {
       await writeFile(join(dir, '.pipeline/halt-user-input-required'), whitespaceContent);
       const content = await readHaltMarkerContent(dir);
       expect(content).toBe(whitespaceContent);
+    });
+  });
+
+  describe('writeStallQuestionEvidence', () => {
+    it('writes multi-line content verbatim to .pipeline/build-stall-question.md and returns it', async () => {
+      const content = 'line 1\nline 2\nline 3';
+      const result = await writeStallQuestionEvidence(dir, content);
+      expect(result).toBe(content);
+      const written = await readFile(join(dir, '.pipeline/build-stall-question.md'), 'utf-8');
+      expect(written).toBe(content);
+    });
+
+    it('writes placeholder when content is null', async () => {
+      const placeholder = '(agent wrote no reason into halt-user-input-required)';
+      const result = await writeStallQuestionEvidence(dir, null);
+      expect(result).toBe(placeholder);
+      const written = await readFile(join(dir, '.pipeline/build-stall-question.md'), 'utf-8');
+      expect(written).toBe(placeholder);
+    });
+
+    it('writes placeholder when content is empty string', async () => {
+      const placeholder = '(agent wrote no reason into halt-user-input-required)';
+      const result = await writeStallQuestionEvidence(dir, '');
+      expect(result).toBe(placeholder);
+      const written = await readFile(join(dir, '.pipeline/build-stall-question.md'), 'utf-8');
+      expect(written).toBe(placeholder);
+    });
+
+    it('writes placeholder when content is whitespace-only', async () => {
+      const placeholder = '(agent wrote no reason into halt-user-input-required)';
+      const result = await writeStallQuestionEvidence(dir, '   \n\t  \n  ');
+      expect(result).toBe(placeholder);
+      const written = await readFile(join(dir, '.pipeline/build-stall-question.md'), 'utf-8');
+      expect(written).toBe(placeholder);
+    });
+
+    it('creates .pipeline directory if it does not exist', async () => {
+      const content = 'test content';
+      await writeStallQuestionEvidence(dir, content);
+      const written = await readFile(join(dir, '.pipeline/build-stall-question.md'), 'utf-8');
+      expect(written).toBe(content);
+    });
+
+    it('overwrites existing file (idempotent semantics)', async () => {
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(join(dir, '.pipeline/build-stall-question.md'), 'old content');
+
+      const newContent = 'new content';
+      const result = await writeStallQuestionEvidence(dir, newContent);
+
+      expect(result).toBe(newContent);
+      const written = await readFile(join(dir, '.pipeline/build-stall-question.md'), 'utf-8');
+      expect(written).toBe(newContent);
+    });
+
+    it('preserves exact whitespace in content (no trimming)', async () => {
+      const contentWithWhitespace = '  leading\nmiddle  \ntrailing  ';
+      const result = await writeStallQuestionEvidence(dir, contentWithWhitespace);
+      expect(result).toBe(contentWithWhitespace);
+      const written = await readFile(join(dir, '.pipeline/build-stall-question.md'), 'utf-8');
+      expect(written).toBe(contentWithWhitespace);
     });
   });
 });
