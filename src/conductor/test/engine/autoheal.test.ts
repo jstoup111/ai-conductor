@@ -879,6 +879,71 @@ describe('getEvidenceRange', () => {
     // (This is more of a type check, but we can verify it exists)
     expect(mod.getEvidenceRange).toBeDefined();
   });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Task 1: getEvidenceRange derives the origin default branch instead of
+  // hardcoding origin/main. Resolution ladder:
+  //   1. reachable explicit anchorArg
+  //   2. merge-base --fork-point origin/<default> HEAD
+  //   3. plain merge-base origin/<default> HEAD
+  //   4. fail-closed zero commits + anomaly
+  // ─────────────────────────────────────────────────────────────────────────
+
+  it('resolves a range against origin/master when origin default branch is master (refs/remotes/origin/HEAD)', async () => {
+    const mod = await loadAutoheal();
+
+    // Create a bare repo to act as origin, with its default branch as master.
+    const bareDir = await mkdtemp(join(tmpdir(), 'origin-bare-master-'));
+    await execa('git', ['init', '--bare', '-b', 'master'], { cwd: bareDir });
+
+    // Re-point the local repo's branch to master so it can push to origin/master.
+    await execa('git', ['branch', '-m', 'main', 'master'], { cwd: gitDir });
+    await execa('git', ['remote', 'add', 'origin', bareDir], { cwd: gitDir });
+    await execa('git', ['push', '-u', 'origin', 'master'], { cwd: gitDir });
+
+    // Record refs/remotes/origin/HEAD -> origin/master (as a real clone would).
+    await execa('git', ['remote', 'set-head', 'origin', 'master'], { cwd: gitDir });
+
+    // Additional commit after origin/master.
+    await writeFile(join(gitDir, 'after.txt'), 'content');
+    await execa('git', ['add', 'after.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'feat: after origin/master\n\nTask: 1\n'], { cwd: gitDir });
+
+    const range = await mod.getEvidenceRange(gitDir, 'unreachable-anchor-sha');
+
+    // Anchor is unreachable, so the ladder must fall back to merge-base
+    // against the resolved origin default branch (master) rather than
+    // failing with "origin/main does not exist".
+    expect(range.anomalies).toHaveLength(0);
+    expect(range.commits.length).toBeGreaterThan(0);
+
+    await rm(bareDir, { recursive: true, force: true });
+  });
+
+  it('fails closed with a default-branch resolution anomaly when origin/HEAD is unset and neither origin/main nor origin/master exist', async () => {
+    const mod = await loadAutoheal();
+
+    // Create a bare repo to act as origin, but push under a branch name that
+    // is neither `main` nor `master`, and never set refs/remotes/origin/HEAD.
+    const bareDir = await mkdtemp(join(tmpdir(), 'origin-bare-trunk-'));
+    await execa('git', ['init', '--bare', '-b', 'trunk'], { cwd: bareDir });
+
+    await execa('git', ['branch', '-m', 'main', 'trunk'], { cwd: gitDir });
+    await execa('git', ['remote', 'add', 'origin', bareDir], { cwd: gitDir });
+    await execa('git', ['push', '-u', 'origin', 'trunk'], { cwd: gitDir });
+    // Deliberately do NOT run `git remote set-head`, so refs/remotes/origin/HEAD
+    // stays unset — neither origin/main nor origin/master exist either.
+
+    const range = await mod.getEvidenceRange(gitDir, 'unreachable-anchor-sha');
+
+    expect(range.commits).toHaveLength(0);
+    expect(range.anomalies).toHaveLength(1);
+    // Must never silently guess `main` — the anomaly must name default-branch
+    // resolution failure, not just "origin/main does not exist".
+    expect(range.anomalies[0]).toMatch(/default branch/i);
+
+    await rm(bareDir, { recursive: true, force: true });
+  });
 });
 
 describe('listCommitsWithTrailers with anchor', () => {

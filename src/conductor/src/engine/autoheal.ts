@@ -1,6 +1,7 @@
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { execa } from 'execa';
+import { originDefaultBranch, makeGitRunner } from './rebase.js';
 
 // #405: near-miss derive diagnostics (path-corroboration miss, pinned-stamp
 // demotion prevention) repeat on EVERY build-gate evaluation — H7 deliberately
@@ -294,9 +295,46 @@ export interface EvidenceRangeResult {
 }
 
 /**
+ * Resolve the `origin/<default>` ref to evaluate evidence against.
+ *
+ * Ladder:
+ *   1. `originDefaultBranch` — origin's default branch via
+ *      `refs/remotes/origin/HEAD` (the authoritative source; never a guess).
+ *   2. Probe `origin/main`, then `origin/master` via `rev-parse --verify`
+ *      (migration aid for repos/CI checkouts that never set origin/HEAD).
+ *   3. null — resolution failed; caller must fail closed, never assume `main`.
+ */
+async function resolveOriginRef(projectRoot: string): Promise<string | null> {
+  const defaultBranch = await originDefaultBranch(makeGitRunner(projectRoot));
+  if (defaultBranch) {
+    return `origin/${defaultBranch}`;
+  }
+
+  for (const candidate of ['origin/main', 'origin/master']) {
+    const check = await execa('git', ['rev-parse', '--verify', candidate], {
+      cwd: projectRoot,
+      reject: false,
+    });
+    if (check.exitCode === 0) return candidate;
+  }
+
+  return null;
+}
+
+/**
  * Get evidence range for a task, anchored to a plan SHA.
- * Fails closed: if origin/main doesn't exist, returns zero commits.
- * If anchor is unreachable, falls back to merge-base.
+ *
+ * Resolution ladder:
+ *   1. A reachable explicit `anchor` is used as the lower bound directly.
+ *   2. Otherwise, `merge-base --fork-point origin/<default> HEAD`.
+ *   3. Otherwise, a plain `merge-base origin/<default> HEAD`.
+ *   4. Otherwise, fail closed: zero commits + a logged anomaly.
+ *
+ * `origin/<default>` is derived (never hardcoded `origin/main`) via
+ * `originDefaultBranch` (origin/HEAD), falling back to probing `origin/main`
+ * then `origin/master`. If none resolve, this fails closed rather than
+ * silently guessing `main`.
+ *
  * All failures are logged but never thrown.
  *
  * @param projectRoot - Root of the git repository
@@ -315,24 +353,16 @@ export async function getEvidenceRange(
   };
 
   try {
-    // Check if origin/main exists
-    const refCheck = await execa('git', ['rev-parse', '--verify', 'origin/main'], {
-      cwd: projectRoot,
-      reject: false,
-    });
+    // Resolve origin's default branch ref (never a hardcoded origin/main).
+    const originRef = await resolveOriginRef(projectRoot);
 
-    if (refCheck.exitCode !== 0) {
-      const msg = 'Evidence range: origin/main does not exist; returning zero commits (fail-closed)';
+    if (!originRef) {
+      const msg =
+        'Evidence range: could not resolve origin default branch (origin/HEAD unset; origin/main and origin/master do not exist); returning zero commits (fail-closed)';
       logger.anomalies.push(msg);
       console.error(msg);
       return result;
     }
-
-    // Try to get merge-base for fallback
-    const mergeBase = await execa('git', ['merge-base', '--fork-point', 'origin/main', 'HEAD'], {
-      cwd: projectRoot,
-      reject: false,
-    });
 
     let lowerBound: string | null = null;
 
@@ -351,25 +381,36 @@ export async function getEvidenceRange(
       logger.warnings.push(warningMsg);
       console.warn(warningMsg);
 
-      if (mergeBase.exitCode === 0 && mergeBase.stdout.trim()) {
-        lowerBound = mergeBase.stdout.trim();
+      // Try fork-point merge-base first, then plain merge-base.
+      const forkPoint = await execa('git', ['merge-base', '--fork-point', originRef, 'HEAD'], {
+        cwd: projectRoot,
+        reject: false,
+      });
+
+      if (forkPoint.exitCode === 0 && forkPoint.stdout.trim()) {
+        lowerBound = forkPoint.stdout.trim();
+      } else {
+        const plainMergeBase = await execa('git', ['merge-base', originRef, 'HEAD'], {
+          cwd: projectRoot,
+          reject: false,
+        });
+        if (plainMergeBase.exitCode === 0 && plainMergeBase.stdout.trim()) {
+          lowerBound = plainMergeBase.stdout.trim();
+        }
       }
     }
 
-    // Build the range
-    let range: string;
-    if (lowerBound) {
-      range = `${lowerBound}..HEAD`;
-    } else {
-      // No valid lower bound, use HEAD with limit
-      range = 'HEAD';
+    if (!lowerBound) {
+      const msg = `Evidence range: no valid lower bound resolvable against ${originRef}; returning zero commits (fail-closed)`;
+      logger.anomalies.push(msg);
+      console.error(msg);
+      return result;
     }
 
+    const range = `${lowerBound}..HEAD`;
+
     // Use %x1e (ASCII record separator) to delimit commits, since trailers can contain newlines
-    const args =
-      range === 'HEAD'
-        ? ['log', '-n', '100', '--format=%H%x09%s%x00%(trailers)%x1e', 'HEAD']
-        : ['log', '--format=%H%x09%s%x00%(trailers)%x1e', range];
+    const args = ['log', '--format=%H%x09%s%x00%(trailers)%x1e', range];
 
     const log = await execa('git', args, { cwd: projectRoot, reject: false });
     if (log.exitCode === 0 && typeof log.stdout === 'string') {
