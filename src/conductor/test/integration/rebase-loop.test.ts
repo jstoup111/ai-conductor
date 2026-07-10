@@ -414,6 +414,145 @@ describe('integration/rebase-loop', () => {
     expect(manualTestVerdict.satisfied).toBe(true);
   });
 
+  // Advance BASE with a coincidental commit that touches the SAME path the
+  // plan's task 1 declares (`src/feature.ts`) and carries a `Task: 1`
+  // trailer — it LOOKS exactly like real task-1 evidence, but it is foreign
+  // base history introduced independently of the feature branch's own work.
+  // Content is identical to the feature branch's own pre-existing content at
+  // that path so the subsequent real rebase auto-merges cleanly (no
+  // conflict): both sides having byte-identical content at the same path is
+  // a no-op hunk for git's 3-way merge. A SEPARATE new file (`sibling.ts`) is
+  // touched in the same commit purely to guarantee the rebase is classified
+  // as code/test-path-changing (matching Story 1/2's own trigger) — the
+  // `feature.ts`/`Task: 1` pairing is the thing actually under test.
+  async function advanceBaseWithCoincidentalTaskTrailer(): Promise<string> {
+    await git('checkout', BASE);
+    await mkdir(join(dir, 'src'), { recursive: true }).catch(() => {});
+    await writeFile(join(dir, 'src/sibling.ts'), 'export const sib = 2;\n');
+    await writeFile(join(dir, 'src/feature.ts'), 'export const foo = 1;\n');
+    await git('add', '.');
+    await git('commit', '-m', 'feat: unrelated base work touching feature path\n\nTask: 1');
+    const sha = await git('rev-parse', 'HEAD');
+    await git('checkout', 'feature/foo');
+    return sha;
+  }
+
+  it(
+    "a rebase pulling a coincidental base Task:1 trailer over the same declared path never substitutes for task 1's " +
+      'real evidence — build is genuinely re-dispatched, not falsely confirmed (#456/#463 story: gate and pre-verify share one anchor rule)',
+    async () => {
+      // No real per-task evidence exists on the feature branch at all — only
+      // the plain feature-add commit from initRepoOnFeatureBranch (no `Task:`
+      // trailer). This isolates the property under test: a FOREIGN commit
+      // that merely LOOKS like task-1 evidence (right trailer, right
+      // declared path) must never be accepted as a substitute for real work,
+      // even after it becomes reachable from HEAD via a real rebase.
+      await initRepoOnFeatureBranch({
+        path: 'src/feature.ts',
+        content: 'export const foo = 1;\n',
+      });
+      await mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await writeFile(
+        join(dir, '.docs/plans/p.md'),
+        '### Task 1\n**Files:** `src/feature.ts`\n',
+      );
+      await anchorOriginMain();
+
+      // Base advances BEFORE any daemon dispatch with the coincidental
+      // Task:1-trailer collision over the plan's own declared path.
+      const coincidentalSha = await advanceBaseWithCoincidentalTaskTrailer();
+
+      await writeState(statePath, { ...FRONT_DONE });
+      let buildRuns = 0;
+      const runner: StepRunner = {
+        run: async (step) => {
+          if (step === 'build') buildRuns++;
+          // The runner never performs any real work for task 1 — it only
+          // satisfies the ordinary artifact glob (satisfy('build') writes an
+          // UNRELATED task-status.json row, matching how Story 2's fixture
+          // separates "artifact present" from "git evidence present"). Task
+          // 1 must stay genuinely unevidenced throughout this run.
+          return satisfy(step);
+        },
+      };
+      let completed = false;
+      let halted = false;
+      events.on('feature_complete', () => {
+        completed = true;
+      });
+      events.on('loop_halt', () => {
+        halted = true;
+      });
+      const fakeGit: GitRunner = async (args) =>
+        args.includes('--symbolic-full-name')
+          ? { stdout: 'refs/remotes/origin/feature/x\n' }
+          : { stdout: '' };
+
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        daemon: true,
+        verifyArtifacts: true,
+        mode: 'auto',
+        fromStep: 'build',
+        maxRetries: 3,
+        git: fakeGit,
+      });
+
+      await conductor.run();
+
+      // Task 1 is never git-evidenced anywhere in this run — no commit on
+      // this branch's OWN work ever carried a real `Task: 1` trailer. The
+      // task-evidence sidecar must never gain a stamp for it, and in
+      // particular must never cite the coincidental foreign base commit's
+      // SHA as if it were real evidence — that is the precise #456
+      // manifestation: a poisoned (over-wide) evidence range lets a foreign
+      // commit that merely shares the trailer + declared path stand in for
+      // real branch work once a rebase makes it reachable from HEAD.
+      let evidenceStamp: { sha?: string; form?: string } | undefined;
+      try {
+        const evidenceRaw = await readFile(
+          join(dir, '.pipeline/task-evidence.json'),
+          'utf-8',
+        );
+        const evidence = JSON.parse(evidenceRaw);
+        evidenceStamp = evidence.evidenceStamps?.['1'];
+      } catch {
+        evidenceStamp = undefined;
+      }
+      if (evidenceStamp) {
+        // If some stamp exists at all, it must not be the foreign
+        // coincidental commit's SHA — pinning the exact bug shape rather
+        // than just "some stamp exists".
+        expect(evidenceStamp.sha).not.toBe(coincidentalSha);
+      }
+      expect(evidenceStamp).toBeFalsy();
+
+      // The build gate must never mechanically confirm task 1 from the
+      // coincidental commit — the loop must keep dispatching build (or HALT
+      // exhausted) rather than silently converge as if the work were done.
+      // A false-positive here (build "done" with zero real evidence, citing
+      // the foreign commit) is exactly the #456/#463 halt/rekick failure
+      // mode this feature closes.
+      expect(buildRuns).toBeGreaterThan(1);
+      if (completed) {
+        // If the run DID converge, the finish artifact must never have been
+        // produced off the back of an unevidenced task — this branch only
+        // exercises if some other mechanism (not git evidence) legitimately
+        // satisfied build; assert the coincidental sha specifically was
+        // never recorded as task 1's evidence (covered above), so this is
+        // a belt-and-suspenders check.
+        await expect(access(join(dir, '.pipeline/DONE'))).resolves.toBeUndefined();
+      } else {
+        // Exhausted retries without ever finding real evidence — the run
+        // must HALT rather than silently ship, and must never reach finish.
+        expect(halted).toBe(true);
+      }
+    },
+  );
+
   it('a file-changing rebase with genuinely-missing evidence still dispatches build (Story 2, Task 9)', async () => {
     await initRepoOnFeatureBranch({
       path: 'src/feature.ts',

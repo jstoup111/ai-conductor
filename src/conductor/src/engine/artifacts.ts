@@ -678,18 +678,22 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       }
     }
 
-    // H6/H7: the gate never trusts task-status.json rows. Every evaluation
+    // H6/H7/H8: the gate never trusts task-status.json rows. Every evaluation
     // recomputes completion from git evidence (deriveCompletion) and writes
     // it back (applyDerivedCompletion) so the on-disk file stays a fresh
     // cache, but the pass/fail verdict itself is decided against the
     // engine-only evidence sidecar (.pipeline/task-evidence.json): a task
     // only counts as resolved when it has an evidenceStamps entry (real
-    // git-derived evidence, stamped by deriveCompletion) or a
-    // migration-grandfather entry (H8, pre-cutover terminal rows stamped at
-    // first seed). A forged 'completed' row with neither is never counted,
-    // even if task-status.json says otherwise — and a missing/corrupt/wiped
-    // task-status.json is never a terminal failure, since nothing here reads
-    // it as the source of truth.
+    // git-derived evidence, stamped by deriveCompletion). H8's first-seed
+    // migration-grandfather escape hatch has been retired (#463): the gate
+    // no longer accepts a bare migrationGrandfather entry as resolution, and
+    // task-seed.ts no longer stamps new grandfather entries. Any legacy
+    // migrationGrandfather ids left over from before the retirement are read
+    // by task-seed.ts only to avoid re-flagging already-migrated rows — they
+    // are never consulted by this gate. A forged 'completed' row with no
+    // evidenceStamps entry is never counted, even if task-status.json says
+    // otherwise — and a missing/corrupt/wiped task-status.json is never a
+    // terminal failure, since nothing here reads it as the source of truth.
     if (ctx.projectRoot && ctx.planPath) {
       let planTaskIds: string[];
       try {
@@ -717,42 +721,19 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
         };
       }
 
-      // Best-effort re-read of the (just re-seeded/derived) task-status.json
-      // rows. A migration-grandfather stamp only backs a row that is
-      // CURRENTLY 'completed'/'skipped' on disk — seedTaskStatus already
-      // demotes an unstamped forged 'completed' row back to 'pending' on
-      // reseed, so a grandfathered id whose row got demoted must NOT count
-      // as resolved. A real evidenceStamps entry (from deriveCompletion's own
-      // git-trailer scan) always counts regardless of the row's on-disk
-      // status, since it is independently re-derived from git every time —
-      // this is what makes a wiped/corrupt task-status.json non-terminal.
-      const rowStatusById = new Map<string, string | undefined>();
-      try {
-        const rawStatus = await readFile(join(ctx.projectRoot, '.pipeline/task-status.json'), 'utf-8');
-        const parsedStatus = JSON.parse(rawStatus) as unknown;
-        for (const t of extractTasks(parsedStatus)) {
-          if (t.id) rowStatusById.set(t.id, t.status);
-        }
-      } catch {
-        // Missing/corrupt — rowStatusById stays empty; only evidenceStamps
-        // (not migrationGrandfather) can resolve tasks in this case.
-      }
-
+      // evidenceStamps is the ONLY completion currency the gate accepts (#463).
+      // A real evidenceStamps entry (from deriveCompletion's own git-trailer
+      // scan) always counts regardless of the row's on-disk status, since it
+      // is independently re-derived from git every time — this is what makes
+      // a wiped/corrupt task-status.json non-terminal. The retired H8
+      // migrationGrandfather escape hatch is never consulted here: a
+      // grandfathered id with no evidence stamp is always unresolved,
+      // regardless of what task-status.json's row says.
       let unresolved: string[];
       try {
         const { createTaskEvidence } = await import('./task-evidence.js');
         const evidence = await createTaskEvidence(ctx.projectRoot);
-        unresolved = planTaskIds.filter((id) => {
-          if (evidence.evidenceStamps.has(id)) return false;
-          const rowStatus = rowStatusById.get(id);
-          if (
-            evidence.migrationGrandfather.has(id) &&
-            (rowStatus === 'completed' || rowStatus === 'skipped')
-          ) {
-            return false;
-          }
-          return true;
-        });
+        unresolved = planTaskIds.filter((id) => !evidence.evidenceStamps.has(id));
       } catch (err) {
         return {
           done: false,

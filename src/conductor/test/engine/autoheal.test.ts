@@ -879,6 +879,345 @@ describe('getEvidenceRange', () => {
     // (This is more of a type check, but we can verify it exists)
     expect(mod.getEvidenceRange).toBeDefined();
   });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Task 6: explicit anchorArg is rung 1 of the ladder — pins that a
+  // reachable explicit anchor is used verbatim (no warning), and an
+  // unreachable explicit anchor falls through to the ladder with the
+  // existing "unreachable; falling back" diagnostic preserved.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  it('uses a reachable explicit anchorArg verbatim as the lower bound (rung 1), with no warning', async () => {
+    const mod = await loadAutoheal();
+
+    const bareDir = await mkdtemp(join(tmpdir(), 'origin-bare-explicit-'));
+    await execa('git', ['init', '--bare'], { cwd: bareDir });
+    await execa('git', ['remote', 'add', 'origin', bareDir], { cwd: gitDir });
+
+    for (let i = 0; i < 3; i++) {
+      await writeFile(join(gitDir, `explicit${i}.txt`), `content ${i}`);
+      await execa('git', ['add', `explicit${i}.txt`], { cwd: gitDir });
+      await execa('git', ['commit', '-m', `explicit commit ${i}`], { cwd: gitDir });
+    }
+    await execa('git', ['push', '-u', 'origin', 'main'], { cwd: gitDir });
+
+    // Additional commit after origin/main, so there is a range to derive.
+    await writeFile(join(gitDir, 'explicit-after.txt'), 'content');
+    await execa('git', ['add', 'explicit-after.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'feat: after origin/main\n\nTask: 6\n'], { cwd: gitDir });
+
+    const logOutput = await execa('git', ['log', '--format=%H'], { cwd: gitDir });
+    const allShas = logOutput.stdout.split('\n').filter(s => s.trim());
+    // A reachable, explicit anchor: the second-from-bottom commit (rung 1
+    // must use it verbatim rather than recomputing a merge-base).
+    const explicitAnchorSha = allShas[allShas.length - 2];
+
+    const range = await mod.getEvidenceRange(gitDir, explicitAnchorSha);
+
+    expect(range.anomalies).toHaveLength(0);
+    expect(range.warnings).toHaveLength(0);
+    expect(range.commits.length).toBeGreaterThan(0);
+    // No commit at or before the explicit anchor should be included.
+    expect(range.commits.some(c => c.sha === explicitAnchorSha)).toBe(false);
+
+    await rm(bareDir, { recursive: true, force: true });
+  });
+
+  it('falls back from an unreachable explicit anchorArg into the ladder, preserving the "unreachable; falling back" warning', async () => {
+    const mod = await loadAutoheal();
+
+    const bareDir = await mkdtemp(join(tmpdir(), 'origin-bare-explicit-unreachable-'));
+    await execa('git', ['init', '--bare'], { cwd: bareDir });
+    await execa('git', ['remote', 'add', 'origin', bareDir], { cwd: gitDir });
+
+    await writeFile(join(gitDir, 'file.txt'), 'content');
+    await execa('git', ['add', 'file.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'initial commit'], { cwd: gitDir });
+    await execa('git', ['push', '-u', 'origin', 'main'], { cwd: gitDir });
+
+    await writeFile(join(gitDir, 'file2.txt'), 'content2');
+    await execa('git', ['add', 'file2.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'new commit'], { cwd: gitDir });
+
+    const explicitUnreachableSha = 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef';
+
+    const range = await mod.getEvidenceRange(gitDir, explicitUnreachableSha);
+
+    // Falls through to the ladder (merge-base against origin default branch)
+    // rather than erroring or returning nothing.
+    expect(range.anomalies).toHaveLength(0);
+    expect(range.commits.length).toBeGreaterThan(0);
+    expect(range.warnings).toHaveLength(1);
+    expect(range.warnings[0]).toMatch(/unreachable; falling back/i);
+
+    await rm(bareDir, { recursive: true, force: true });
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Task 1: getEvidenceRange derives the origin default branch instead of
+  // hardcoding origin/main. Resolution ladder:
+  //   1. reachable explicit anchorArg
+  //   2. merge-base --fork-point origin/<default> HEAD
+  //   3. plain merge-base origin/<default> HEAD
+  //   4. fail-closed zero commits + anomaly
+  // ─────────────────────────────────────────────────────────────────────────
+
+  it('resolves a range against origin/master when origin default branch is master (refs/remotes/origin/HEAD)', async () => {
+    const mod = await loadAutoheal();
+
+    // Create a bare repo to act as origin, with its default branch as master.
+    const bareDir = await mkdtemp(join(tmpdir(), 'origin-bare-master-'));
+    await execa('git', ['init', '--bare', '-b', 'master'], { cwd: bareDir });
+
+    // Re-point the local repo's branch to master so it can push to origin/master.
+    await execa('git', ['branch', '-m', 'main', 'master'], { cwd: gitDir });
+    await execa('git', ['remote', 'add', 'origin', bareDir], { cwd: gitDir });
+    await execa('git', ['push', '-u', 'origin', 'master'], { cwd: gitDir });
+
+    // Record refs/remotes/origin/HEAD -> origin/master (as a real clone would).
+    await execa('git', ['remote', 'set-head', 'origin', 'master'], { cwd: gitDir });
+
+    // Additional commit after origin/master.
+    await writeFile(join(gitDir, 'after.txt'), 'content');
+    await execa('git', ['add', 'after.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'feat: after origin/master\n\nTask: 1\n'], { cwd: gitDir });
+
+    const range = await mod.getEvidenceRange(gitDir, 'unreachable-anchor-sha');
+
+    // Anchor is unreachable, so the ladder must fall back to merge-base
+    // against the resolved origin default branch (master) rather than
+    // failing with "origin/main does not exist".
+    expect(range.anomalies).toHaveLength(0);
+    expect(range.commits.length).toBeGreaterThan(0);
+
+    await rm(bareDir, { recursive: true, force: true });
+  });
+
+  it('fails closed with a default-branch resolution anomaly when origin/HEAD is unset and neither origin/main nor origin/master exist', async () => {
+    const mod = await loadAutoheal();
+
+    // Create a bare repo to act as origin, but push under a branch name that
+    // is neither `main` nor `master`, and never set refs/remotes/origin/HEAD.
+    const bareDir = await mkdtemp(join(tmpdir(), 'origin-bare-trunk-'));
+    await execa('git', ['init', '--bare', '-b', 'trunk'], { cwd: bareDir });
+
+    await execa('git', ['branch', '-m', 'main', 'trunk'], { cwd: gitDir });
+    await execa('git', ['remote', 'add', 'origin', bareDir], { cwd: gitDir });
+    await execa('git', ['push', '-u', 'origin', 'trunk'], { cwd: gitDir });
+    // Deliberately do NOT run `git remote set-head`, so refs/remotes/origin/HEAD
+    // stays unset — neither origin/main nor origin/master exist either.
+
+    const range = await mod.getEvidenceRange(gitDir, 'unreachable-anchor-sha');
+
+    expect(range.commits).toHaveLength(0);
+    expect(range.anomalies).toHaveLength(1);
+    // Must never silently guess `main` — the anomaly must name default-branch
+    // resolution failure, not just "origin/main does not exist".
+    expect(range.anomalies[0]).toMatch(/default branch/i);
+
+    await rm(bareDir, { recursive: true, force: true });
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Task 2: rung 3 of the ladder — plain merge-base when fork-point fails.
+  //
+  // `merge-base --fork-point <ref> HEAD` only succeeds when the reflog of
+  // <ref> still records the commit the local branch actually forked from
+  // (see git-merge-base(1)). If the local branch was built on an older
+  // commit than any tip recorded in <ref>'s reflog (e.g. a fresh clone whose
+  // reflog only records the current tip, with local history reset to an
+  // earlier ancestor), fork-point exits non-zero with no output even though
+  // a plain `merge-base` still finds the common ancestor. The ladder must
+  // fall through to the plain merge-base in that case.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  it('falls through to plain merge-base when --fork-point fails to find a fork point', async () => {
+    const mod = await loadAutoheal();
+
+    // Bare origin.
+    const bareDir = await mkdtemp(join(tmpdir(), 'origin-bare-forkpoint-'));
+    await execa('git', ['init', '--bare', '-b', 'main'], { cwd: bareDir });
+
+    // gitDir (from beforeEach) already has one commit; push it as A, then
+    // advance origin/main past it with B and B2 so the reflog of a later
+    // clone's origin/main only records the B2 tip.
+    await execa('git', ['remote', 'add', 'origin', bareDir], { cwd: gitDir });
+    await execa('git', ['push', '-u', 'origin', 'main'], { cwd: gitDir });
+    const aSha = (await execa('git', ['rev-parse', 'HEAD'], { cwd: gitDir })).stdout.trim();
+
+    await writeFile(join(gitDir, 'b.txt'), 'B');
+    await execa('git', ['add', 'b.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'B'], { cwd: gitDir });
+    await execa('git', ['push', 'origin', 'main'], { cwd: gitDir });
+
+    await writeFile(join(gitDir, 'b2.txt'), 'B2');
+    await execa('git', ['add', 'b2.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'B2'], { cwd: gitDir });
+    await execa('git', ['push', 'origin', 'main'], { cwd: gitDir });
+
+    // Fresh clone: its origin/main reflog records only the B2 tip.
+    const cloneDir = await mkdtemp(join(tmpdir(), 'clone-forkpoint-'));
+    await execa('git', ['clone', bareDir, cloneDir]);
+    await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: cloneDir });
+    await execa('git', ['config', 'user.name', 'Test User'], { cwd: cloneDir });
+
+    // Rewind the clone's local main branch to A — an older commit than the
+    // tip its origin/main reflog knows about — then add local work on top.
+    // This reproduces "forked from an older commit than the tip" from
+    // git-merge-base(1), which is documented to make --fork-point fail.
+    await execa('git', ['update-ref', 'refs/heads/main', aSha], { cwd: cloneDir });
+    await execa('git', ['commit', '--allow-empty', '-m', 'local work'], { cwd: cloneDir });
+
+    // Sanity-check the premise directly against git: fork-point fails,
+    // plain merge-base succeeds.
+    const forkPoint = await execa('git', ['merge-base', '--fork-point', 'origin/main', 'HEAD'], {
+      cwd: cloneDir,
+      reject: false,
+    });
+    expect(forkPoint.exitCode).not.toBe(0);
+    const plainMergeBase = await execa('git', ['merge-base', 'origin/main', 'HEAD'], {
+      cwd: cloneDir,
+      reject: false,
+    });
+    expect(plainMergeBase.exitCode).toBe(0);
+    expect(plainMergeBase.stdout.trim()).toBe(aSha);
+
+    const range = await mod.getEvidenceRange(cloneDir, 'unreachable-anchor-sha');
+
+    // With --fork-point unreachable, the ladder must fall through to the
+    // plain merge-base and return exactly the branch's own commit(s) — no
+    // rung-4 (fail-closed) anomaly.
+    expect(range.anomalies).toHaveLength(0);
+    expect(range.commits).toHaveLength(1);
+    expect(range.commits[0].sha).toBe(
+      (await execa('git', ['rev-parse', 'HEAD'], { cwd: cloneDir })).stdout.trim(),
+    );
+
+    await rm(bareDir, { recursive: true, force: true });
+    await rm(cloneDir, { recursive: true, force: true });
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Task 3: rung 4 of the ladder — fail-closed zero commits, no -n 100 window.
+  //
+  // If the origin default ref resolves but HEAD shares no merge-base with it
+  // (unrelated histories — e.g. a rewritten/orphaned history, or a clone that
+  // force-pushed a disjoint root), the old code silently fell back to
+  // `git log -n 100 HEAD`, which can return commits carrying valid `Task: N`
+  // trailers even though they were never actually range-corroborated against
+  // origin. That is a silent guess, not evidence. The ladder must instead
+  // fail closed: zero commits, with an anomaly naming the unrelated-histories
+  // resolution failure.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  it('fails closed with zero commits when origin default ref shares no merge-base with HEAD (unrelated histories)', async () => {
+    const mod = await loadAutoheal();
+    const mockErr = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    // Bare origin with its own unrelated root commit.
+    const bareDir = await mkdtemp(join(tmpdir(), 'origin-bare-unrelated-'));
+    await execa('git', ['init', '--bare', '-b', 'main'], { cwd: bareDir });
+
+    const seedDir = await mkdtemp(join(tmpdir(), 'origin-seed-unrelated-'));
+    await execa('git', ['init', '-b', 'main'], { cwd: seedDir });
+    await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: seedDir });
+    await execa('git', ['config', 'user.name', 'Test User'], { cwd: seedDir });
+    await writeFile(join(seedDir, 'origin-only.txt'), 'origin history');
+    await execa('git', ['add', 'origin-only.txt'], { cwd: seedDir });
+    await execa('git', ['commit', '-m', 'origin root commit'], { cwd: seedDir });
+    await execa('git', ['push', bareDir, 'main'], { cwd: seedDir });
+
+    await execa('git', ['remote', 'add', 'origin', bareDir], { cwd: gitDir });
+    await execa('git', ['fetch', 'origin'], { cwd: gitDir });
+    await execa('git', ['remote', 'set-head', 'origin', 'main'], { cwd: gitDir });
+
+    // gitDir's HEAD has its own root commit (from beforeEach) — an entirely
+    // disjoint history from origin/main's root, so no merge-base exists.
+    // Add more commits on top, each carrying a valid Task: N trailer, to
+    // prove the old -n 100 fallback would have returned them.
+    for (let i = 0; i < 3; i++) {
+      await writeFile(join(gitDir, `unrelated-${i}.txt`), `content ${i}`);
+      await execa('git', ['add', `unrelated-${i}.txt`], { cwd: gitDir });
+      await execa('git', ['commit', '-m', `feat: unrelated work ${i}\n\nTask: ${i + 1}\n`], {
+        cwd: gitDir,
+      });
+    }
+
+    // Sanity-check the premise directly against git: no merge-base exists.
+    const mergeBase = await execa('git', ['merge-base', 'origin/main', 'HEAD'], {
+      cwd: gitDir,
+      reject: false,
+    });
+    expect(mergeBase.exitCode).not.toBe(0);
+
+    const range = await mod.getEvidenceRange(gitDir, 'unreachable-anchor-sha');
+
+    // Must fail closed: zero commits, even though HEAD carries >0 commits
+    // with valid Task: N trailers. The old -n 100 HEAD fallback would have
+    // returned all of them.
+    expect(range.commits).toHaveLength(0);
+    expect(range.anomalies).toHaveLength(1);
+    // The anomaly must describe the unrelated-histories resolution failure,
+    // not just assert that origin/main is missing (it does exist here).
+    expect(range.anomalies[0]).toMatch(/no valid lower bound|unrelated|merge-base/i);
+
+    mockErr.mockRestore();
+    await rm(bareDir, { recursive: true, force: true });
+    await rm(seedDir, { recursive: true, force: true });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Task 7: listCommits derives the origin default branch instead of hardcoding
+// `origin/main`, via the same resolveOriginRef ladder as getEvidenceRange.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('listCommits', () => {
+  it('bounds commits to post-merge-base when origin default branch is master', async () => {
+    const mod = await loadAutoheal();
+
+    // Create a bare repo to act as origin, with its default branch as master.
+    const bareDir = await mkdtemp(join(tmpdir(), 'listcommits-bare-master-'));
+    await execa('git', ['init', '--bare', '-b', 'master'], { cwd: bareDir });
+
+    // Re-point the local repo's branch to master so it can push to origin/master.
+    await execa('git', ['branch', '-m', 'main', 'master'], { cwd: gitDir });
+    await execa('git', ['remote', 'add', 'origin', bareDir], { cwd: gitDir });
+    await execa('git', ['push', '-u', 'origin', 'master'], { cwd: gitDir });
+
+    // Record refs/remotes/origin/HEAD -> origin/master (as a real clone would).
+    await execa('git', ['remote', 'set-head', 'origin', 'master'], { cwd: gitDir });
+
+    // Additional commit after origin/master.
+    await writeFile(join(gitDir, 'after.txt'), 'content');
+    await execa('git', ['add', 'after.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'feat: after origin/master'], { cwd: gitDir });
+
+    const commits = await mod.listCommits(gitDir);
+
+    // Only the commit after the merge-base with origin/master should be
+    // returned — not the full bounded local log (which would include the
+    // initial commit made in beforeEach as well).
+    expect(commits.length).toBe(1);
+    expect(commits[0].subject).toBe('feat: after origin/master');
+
+    await rm(bareDir, { recursive: true, force: true });
+  });
+
+  it('falls back to the bounded local log when there is no remote', async () => {
+    const mod = await loadAutoheal();
+
+    // gitDir has no remote configured (set up fresh in beforeEach).
+    await writeFile(join(gitDir, 'file.txt'), 'content');
+    await execa('git', ['add', 'file.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'a commit with no remote'], { cwd: gitDir });
+
+    const commits = await mod.listCommits(gitDir);
+
+    // Degraded local-log path: bounded, not empty, includes the new commit.
+    expect(commits.length).toBeGreaterThan(0);
+    expect(commits.some((c) => c.subject === 'a commit with no remote')).toBe(true);
+  });
 });
 
 describe('listCommitsWithTrailers with anchor', () => {
@@ -1325,6 +1664,154 @@ Work on the literal task-N form.
     // Assert exactly 3 tasks remain incomplete
     expect(incompleteTasks).toHaveLength(3);
     expect(incompleteTasks.sort((a, b) => Number(a) - Number(b))).toEqual(['5', '9', '10']);
+  });
+
+  // ───────────────────────────────────────────────────────────────────────
+  // Task 4: deriveCompletion no-anchor path anchors at branch base (#456).
+  //
+  // Previously, calling deriveCompletion(root, planPath) with no anchor
+  // computed the repo's GENESIS commit via `git log --reverse` and used
+  // that as the evidence range boundary — so gate evaluation saw the
+  // entire repo history instead of just the current branch's commits.
+  // Now, an omitted anchor is passed through as '' to getEvidenceRange,
+  // whose resolution ladder derives the branch base (merge-base against
+  // the origin default branch) instead.
+  // ───────────────────────────────────────────────────────────────────────
+  it('with no anchor arg, evaluates a range equal to «merge-base»..HEAD (not repo genesis)', async () => {
+    const autoheal = await loadAutoheal();
+
+    // gitDir already has a "pre-base" commit from beforeEach (README.md).
+    // Set up a bare origin and push that commit as the base of main.
+    const bareDir = await mkdtemp(join(tmpdir(), 'origin-bare-'));
+    await execa('git', ['init', '--bare', '-b', 'main'], { cwd: bareDir });
+    await execa('git', ['remote', 'add', 'origin', bareDir], { cwd: gitDir });
+    await execa('git', ['push', '-u', 'origin', 'main'], { cwd: gitDir });
+
+    // Record the pre-base commit sha (should NOT be in the derived range).
+    const preBaseLog = await execa('git', ['log', '--format=%H'], { cwd: gitDir });
+    const preBaseSha = preBaseLog.stdout.trim();
+
+    // Create a plan with no specific paths for the task, so a bare trailer
+    // is sufficient corroboration.
+    const planPath = join(gitDir, '.docs/plans/test-plan.md');
+    await mkdir(join(gitDir, '.docs/plans'), { recursive: true });
+    await writeFile(
+      planPath,
+      `# Test Plan\n\n### Task 2: Branch work\nDo the branch work.\n`,
+    );
+    await execa('git', ['add', '.docs/plans/test-plan.md'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: gitDir });
+
+    // 3 commits on the branch, ahead of origin/main; the last one carries
+    // a corroborating Task: 2 trailer.
+    await writeFile(join(gitDir, 'a.txt'), 'a');
+    await execa('git', ['add', 'a.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'feat: branch commit a'], { cwd: gitDir });
+
+    await writeFile(join(gitDir, 'b.txt'), 'b');
+    await execa('git', ['add', 'b.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'feat: branch commit b'], { cwd: gitDir });
+
+    await writeFile(join(gitDir, 'c.txt'), 'c');
+    await execa('git', ['add', 'c.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'feat: branch commit c\n\nTask: 2\n'], { cwd: gitDir });
+
+    // Compute the expected merge-base..HEAD range independently.
+    const mergeBaseOut = await execa('git', ['merge-base', 'origin/main', 'HEAD'], { cwd: gitDir });
+    const mergeBase = mergeBaseOut.stdout.trim();
+    const expectedRangeOut = await execa('git', ['log', '--format=%H', `${mergeBase}..HEAD`], { cwd: gitDir });
+    const expectedShas = expectedRangeOut.stdout.split('\n').filter(Boolean);
+
+    // No-anchor call form: only root + planPath.
+    const result = await autoheal.deriveCompletion(gitDir, planPath);
+
+    // Task 2 has a corroborating trailer within the branch range → completed.
+    expect(result).toHaveProperty('2');
+    expect(result['2']).toHaveProperty('completed', true);
+    expect(result['2'].evidencedBy).toBeTruthy();
+    expect(expectedShas).toContain(result['2'].evidencedBy);
+
+    // The pre-base (origin) commit must NOT be part of the evaluated range.
+    expect(expectedShas).not.toContain(preBaseSha);
+
+    await rm(bareDir, { recursive: true, force: true });
+  });
+
+  // ───────────────────────────────────────────────────────────────────────
+  // Task 5: regression for #456 — a foreign, pre-base commit that coincidentally
+  // carries a `Task: N` trailer (with paths overlapping the plan's task Files:
+  // set) must never corroborate or stamp evidence for the current plan. Before
+  // Task 4's fix, the genesis fallback pulled the entire repo history — including
+  // commits from before the feature branch existed — into the evidence range,
+  // so a stray pre-base trailer could be picked up as if it were real evidence
+  // for the current build. After the fix, the no-anchor range is bounded to
+  // «merge-base(origin default branch, HEAD)»..HEAD, which excludes it.
+  // ───────────────────────────────────────────────────────────────────────
+  it('foreign pre-base trailer can never corroborate or stamp task evidence (#456)', async () => {
+    const autoheal = await loadAutoheal();
+
+    // Plan with task 2 Files: set that overlaps the foreign commit's paths.
+    const planPath = join(gitDir, '.docs/plans/test-plan.md');
+    await mkdir(join(gitDir, '.docs/plans'), { recursive: true });
+    await writeFile(
+      planPath,
+      `# Test Plan\n\n### Task 2: Branch work\nDo the branch work.\n\n- \`shared.txt\`\n`,
+    );
+    await execa('git', ['add', '.docs/plans/test-plan.md'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: gitDir });
+
+    // Foreign pre-base commit on the default branch, carrying a coincidental
+    // `Task: 2` trailer AND touching a path that overlaps the plan's task 2
+    // Files: set — this is the exact #456 bug scenario.
+    await writeFile(join(gitDir, 'shared.txt'), 'foreign content');
+    await execa('git', ['add', 'shared.txt'], { cwd: gitDir });
+    await execa(
+      'git',
+      ['commit', '-m', 'chore: unrelated pre-base work\n\nTask: 2\n'],
+      { cwd: gitDir },
+    );
+    const foreignLog = await execa('git', ['log', '--format=%H', '-1'], { cwd: gitDir });
+    const foreignSha = foreignLog.stdout.trim();
+
+    // Push this history as the base of `main` on a bare origin, then create
+    // the feature branch off of it (no new commits touching task 2 on the
+    // branch itself — the only Task: 2 trailer in the entire repo lives on
+    // the foreign, pre-base commit).
+    const bareDir = await mkdtemp(join(tmpdir(), 'origin-bare-'));
+    await execa('git', ['init', '--bare', '-b', 'main'], { cwd: bareDir });
+    await execa('git', ['remote', 'add', 'origin', bareDir], { cwd: gitDir });
+    await execa('git', ['push', '-u', 'origin', 'main'], { cwd: gitDir });
+
+    await writeFile(join(gitDir, 'unrelated.txt'), 'branch work');
+    await execa('git', ['add', 'unrelated.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'feat: unrelated branch commit'], { cwd: gitDir });
+
+    // No-anchor call form, matching the gate/engine's real usage.
+    const result = await autoheal.deriveCompletion(gitDir, planPath);
+
+    // Task 2 must NOT be completed, and must NOT be evidenced by the foreign sha.
+    expect(result).toHaveProperty('2');
+    expect(result['2'].completed).not.toBe(true);
+    expect(result['2'].evidencedBy).not.toBe(foreignSha);
+
+    // No audit entry or warning may reference the foreign commit's sha —
+    // it must be entirely absent from the evaluated range, not merely
+    // rejected after being considered.
+    if (result['2'].auditEntry) {
+      expect(result['2'].auditEntry).not.toContain(foreignSha);
+      expect(result['2'].auditEntry).not.toContain(foreignSha.slice(0, 7));
+    }
+
+    await rm(bareDir, { recursive: true, force: true });
+  });
+
+  it('no code path invokes `git log --reverse` for anchor resolution', async () => {
+    // Static assertion: the genesis-fallback block that shelled out to
+    // `git log --format=%H --reverse HEAD` to resolve a missing anchor has
+    // been removed from deriveCompletion. Guard against regression by
+    // asserting the source no longer contains that invocation.
+    const src = await readFile(join(process.cwd(), 'src/engine/autoheal.ts'), 'utf-8');
+    expect(src).not.toMatch(/--reverse/);
   });
 });
 

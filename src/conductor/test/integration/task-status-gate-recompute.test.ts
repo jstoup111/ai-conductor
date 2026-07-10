@@ -201,4 +201,95 @@ describe('integration: build gate recomputes completion on every evaluation (H6/
     // git, so `after` would incorrectly still show zero completions.
     expect(Object.values(after).filter((t) => t.completed).length).toBe(2);
   });
+
+  // ─── #463 forged-flip shape (plan Task 11) ───────────────────────────────
+  //
+  // 17-task plan: 5 tasks get REAL commit evidence (`Task: N` trailers on
+  // commits touching each task's declared path); the OTHER 12 are split —
+  // 9 are forged directly into `.pipeline/task-status.json` as `completed`
+  // with zero corroborating commits and no evidence sidecar entry, 3 are
+  // left untouched (genuinely pending). This mirrors the real #463 incident
+  // shape (agent-authored status flips outrunning actual git work) and
+  // proves two things against the REAL production gate entry point
+  // (`CUSTOM_COMPLETION_PREDICATES.build`): (a) the very FIRST evaluation
+  // fails and names the 9 forged ids — no grandfather/poisoned-range escape
+  // hatch lets them ride through — and (b) repeating the identical
+  // evaluation with no state changes produces a byte-identical failure
+  // reason, proving there is no cross-call memoization that could let the
+  // verdict oscillate between pass and fail across the halt/rekick loop.
+  async function write17TaskPlan(): Promise<string> {
+    const planPath = join(dir, '.docs/plans/p17.md');
+    const blocks: string[] = [];
+    for (let n = 1; n <= 17; n++) {
+      // Colon+title form: both parsePlanTaskPaths (artifacts.ts's plan
+      // validity/path check) AND parsePlanTasks (task-seed.ts's first-seed
+      // grandfather eligibility check, which requires a colon) recognize
+      // this id — needed so the grandfather escape path this test targets
+      // can actually engage against pre-fix code.
+      blocks.push(`### Task ${n}: Implement task ${n}\n**Files:** \`src/task-${n}.ts\`\n`);
+    }
+    await writeFile(planPath, blocks.join('\n'));
+    return planPath;
+  }
+
+  it('negative: 17-task plan, 5 real + 9 forged-completed with zero commits — first gate evaluation fails naming the forged ids, and a repeat evaluation is byte-identical (#463)', async () => {
+    const planPath = await write17TaskPlan();
+
+    // The exact #463 incident shape (see the "First seed never grandfathers"
+    // story's negative path): an agent forges `completed` rows for tasks
+    // 2,4-7,11-13,16 — 9 ids — with zero corroborating commits.
+    const forgedIds = ['2', '4', '5', '6', '7', '11', '12', '13', '16'];
+    // 5 REAL completions, each with a real evidencing commit + trailer, drawn
+    // from the ids NOT in forgedIds.
+    const realIds = ['1', '3', '8', '9', '10'];
+    for (const id of realIds) {
+      await commitTrailer(id, `src/task-${id}.ts`);
+    }
+    // Remaining ids (14,15,17 — 3 of them) are left completely untouched: no
+    // row, no evidence, genuinely pending. Combined with the 9 forged ids,
+    // the build gate's unresolved set is these 12 — the CompletionResult's
+    // `reason` string only names the first 3 (in plan order) plus a "+N more"
+    // count (see artifacts.ts's `unresolved.slice(0, 3)`), so the assertions
+    // below check that count/prefix shape rather than a full per-id listing.
+
+    await writeFile(
+      join(dir, '.pipeline/task-status.json'),
+      JSON.stringify({
+        tasks: [
+          ...realIds.map((id) => ({ id, status: 'completed' })),
+          ...forgedIds.map((id) => ({ id, status: 'completed' })),
+        ],
+      }),
+    );
+    // No .pipeline/task-evidence.json is written here at all — deriveCompletion
+    // (invoked inside the predicate) will create the real evidence stamps for
+    // the 5 real ids from git; the forged 9 must never gain a stamp since
+    // nothing corroborates them.
+
+    const ctx = ctxFor(planPath);
+
+    const first = await CUSTOM_COMPLETION_PREDICATES.build!(dir, ctx);
+    expect(first.done).toBe(false);
+    expect(typeof first.reason).toBe('string');
+    // 12 unresolved out of 17 (9 forged + 3 untouched) — never fewer, which
+    // would mean a forged id slipped through as resolved.
+    expect(first.reason).toMatch(/^12\/17 tasks pending\/not completed:/);
+    // The first 3 unresolved ids in plan order are forged ids (2, 4, 5) —
+    // proves the forged ids are the ones actually failing the gate, not
+    // coincidentally-absent real ones.
+    expect(first.reason).toContain('2, 4, 5');
+    expect(first.reason).toMatch(/\(\+9 more\)/);
+    // Real ids must never appear as pending in the named prefix.
+    for (const id of realIds) {
+      expect(first.reason).not.toMatch(new RegExp(`[:,]\\s*${id}\\b`));
+    }
+
+    // Repeat the IDENTICAL evaluation (same repo, same files, no state
+    // changes) — the failure reason must be byte-identical, proving there is
+    // no memoization letting the verdict oscillate between pass and fail
+    // across repeated evaluations of unchanged state.
+    const second = await CUSTOM_COMPLETION_PREDICATES.build!(dir, ctx);
+    expect(second.done).toBe(false);
+    expect(second.reason).toBe(first.reason);
+  });
 });

@@ -43,6 +43,18 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   wget, picking up `~/.local/bin` on PATH for the same run. Interactive-only
   (non-tty runs keep the previous skip-with-warning), and every rung is
   best-effort — a failed uv install degrades to the manual-install warning.
+- Evidence-range no-anchor derivation now anchors at branch base, not repo
+  genesis: `getEvidenceRange` walks a 4-rung ladder (reachable explicit
+  anchor → `merge-base --fork-point origin/<default> HEAD` → plain
+  `merge-base origin/<default> HEAD` → fail-closed zero commits + anomaly)
+  instead of falling back to `root-commit..HEAD` or a hardcoded `origin/main`
+  (#456).
+- Build gate now accepts evidence stamps only; first-seed grandfather
+  stamping retired. `engine/artifacts.ts`'s H6/H7/H8 completion check no
+  longer consults the legacy `migrationGrandfather` field — a task counts as
+  done only when it has a real `evidenceStamps` entry re-derived from git on
+  every gate pass. `task-seed.ts` no longer writes new grandfather entries
+  (#463).
 
 ### Added
 
