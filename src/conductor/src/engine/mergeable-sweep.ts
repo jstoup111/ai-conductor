@@ -27,9 +27,37 @@ import {
   removeLabel,
   prMergeState,
   isMergeable,
+  upsertComment,
   type PrMergeState,
 } from './pr-labels.js';
 import type { ConductorEvent } from '../types/events.js';
+
+// ── Task 21: exhaustion escalation ──────────────────────────────────────────
+
+/** Stable hidden marker identifying the CI-exhaustion escalation comment. */
+const CI_EXHAUSTION_MARKER = '<!-- conductor:ci-exhaustion -->';
+
+/** Attempt cap mirrored from `ci-fix.ts#evaluateEligibilityGates` (Gate 1). */
+const CI_FIX_ATTEMPT_CAP = 2;
+
+/**
+ * Build the escalation comment body: failing check names + attempt history.
+ */
+function buildExhaustionComment(entry: WatchEntry, state: PrMergeState): string {
+  const checkNames =
+    state.statusCheckRollup?.map((c) => c.name ?? '?').filter(Boolean) ?? [];
+  const attempts = entry.ciFixAttempts ?? 0;
+  return [
+    '## CI fix exhausted',
+    '',
+    `Automated CI-fix attempts exhausted after ${attempts} attempt(s).`,
+    '',
+    'Failing checks:',
+    ...(checkNames.length > 0 ? checkNames.map((n) => `- ${n}`) : ['- (none reported)']),
+    '',
+    'Manual remediation is required.',
+  ].join('\n');
+}
 
 // ── Watch entry ───────────────────────────────────────────────────────────────
 
@@ -263,7 +291,39 @@ export async function sweepMergeableLabels({
         }
 
         // FR-12: if the PR carries `needs-remediation`, ensure `mergeable` is absent.
-        const hasRemediation = state.labels.includes('needs-remediation');
+        let hasRemediation = state.labels.includes('needs-remediation');
+
+        // Task 21: exhaustion — escalate exactly once. Gated on the
+        // label-absent→present transition so a sweep that finds
+        // needs-remediation already present (sticky) performs zero new gh
+        // mutations or events, matching the Task 8 ci_failed transition
+        // pattern above.
+        if (
+          !hasRemediation &&
+          state.checksOutcome === 'failed' &&
+          (entry.ciFixAttempts ?? 0) >= CI_FIX_ATTEMPT_CAP
+        ) {
+          await ensureLabel(gh, entry.repoCwd, 'needs-remediation', 'B60205', log);
+          await addLabel(gh, entry.repoCwd, entry.prUrl, 'needs-remediation', log);
+          await upsertComment(
+            gh,
+            entry.repoCwd,
+            entry.prUrl,
+            CI_EXHAUSTION_MARKER,
+            buildExhaustionComment(entry, state),
+            log,
+          );
+          onEvent?.({
+            type: 'ci_failed',
+            prUrl: entry.prUrl,
+            slug: entry.slug,
+            checks: state.statusCheckRollup?.map((c) => c.name ?? '?').filter(Boolean) ?? [],
+            attempts: entry.ciFixAttempts ?? 0,
+            phase: 'exhausted',
+          });
+          hasRemediation = true;
+        }
+
         if (hasRemediation) {
           if (state.labels.includes('mergeable')) {
             await removeLabel(gh, entry.repoCwd, entry.prUrl, 'mergeable', log);

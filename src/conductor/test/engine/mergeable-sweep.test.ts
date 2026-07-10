@@ -1012,3 +1012,70 @@ describe('sweepMergeableLabels — Task 8: pending no-op and transition-only eve
     expect(newCiFailedEvents).toHaveLength(0);
   });
 });
+
+// ── Task 21: exhaustion — escalation exactly once ──────────────────────────
+
+describe('sweepMergeableLabels — Task 21: exhaustion escalation exactly once', () => {
+  it('failed entry with ciFixAttempts:2 → ensures+adds needs-remediation, upserts escalation comment, emits ci_failed(exhausted); repeat sweep is a no-op', async () => {
+    const events: Array<{ type: string; phase?: string; attempts?: number }> = [];
+    const { gh, addLabelCalls, ensureLabelCalls, allArgs } = makeFakeGh(
+      {
+        [PR_URL]: prViewJson(
+          'OPEN',
+          'MERGEABLE',
+          [{ status: 'COMPLETED', conclusion: 'FAILURE', name: 'build' } as any],
+          [],
+        ),
+      },
+      { trackLabelMutations: true },
+    );
+    await enrollWatch(tmpDir, { ...entry(), ciFixAttempts: 2 });
+
+    // First sweep: attempts exhausted → escalate exactly once.
+    await sweepMergeableLabels({
+      projectRoot: tmpDir,
+      runGh: gh,
+      onEvent: (e) => events.push(e as any),
+    });
+
+    // AC1: needs-remediation label ensured + added.
+    expect(ensureLabelCalls.some((c) => c.name === 'needs-remediation')).toBe(true);
+    expect(
+      addLabelCalls.some((c) => c.prUrl === PR_URL && c.label === 'needs-remediation'),
+    ).toBe(true);
+
+    // AC2: escalation comment upserted, content includes failing check name + attempt history.
+    const commentCall = allArgs.find(
+      (a) => a[0] === 'pr' && a[1] === 'comment' && a[2] === PR_URL,
+    );
+    expect(commentCall).toBeDefined();
+    const commentBody = commentCall![4];
+    expect(commentBody).toContain('build');
+    expect(commentBody).toMatch(/2/);
+
+    // AC3: ci_failed(exhausted) HALT-grade event emitted.
+    const exhaustedEvents = events.filter(
+      (e) => e.type === 'ci_failed' && e.phase === 'exhausted',
+    );
+    expect(exhaustedEvents).toHaveLength(1);
+
+    // AC4: next sweep with the label present → zero new gh mutations or events (sticky suppression).
+    const argsCountBefore = allArgs.length;
+    const eventsCountBefore = events.length;
+    await sweepMergeableLabels({
+      projectRoot: tmpDir,
+      runGh: gh,
+      onEvent: (e) => events.push(e as any),
+    });
+    // The only permitted new gh calls are read-only (pr view); no new label/comment mutations.
+    const newMutationArgs = allArgs.slice(argsCountBefore).filter(
+      (a) =>
+        (a[0] === 'api' && (a[2] === 'POST' || a[2] === 'PATCH' || a[2] === 'DELETE')) ||
+        (a[0] === 'label' && a[1] === 'create') ||
+        (a[0] === 'pr' && a[1] === 'comment'),
+    );
+    expect(newMutationArgs).toHaveLength(0);
+    const newEvents = events.slice(eventsCountBefore);
+    expect(newEvents.filter((e) => e.type === 'ci_failed' && e.phase === 'exhausted')).toHaveLength(0);
+  });
+});
